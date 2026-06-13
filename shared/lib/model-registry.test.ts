@@ -28,6 +28,7 @@ import {
   validateModelId,
 } from './model-registry.ts';
 import { clearConfigCache } from './config.ts';
+import { filterDisabledModels } from './disabled-models.ts';
 import {
   ModelPolicyResolutionError,
   resolveSelectorWithPolicy,
@@ -683,17 +684,19 @@ describe('model-registry', () => {
       writeConfig(repoDir, {});
       clearConfigCache(repoDir);
 
+      // Descriptor models are the ladder minus globally-disabled models, so
+      // filter the expected ladders the same way (robust to the disable set).
       assert.deepEqual(
         getConfiguredModelsForDescriptorStage(repoDir, 'planner'),
-        getLadder(getEffectiveRegistry(repoDir), 'planning'),
+        filterDisabledModels(getLadder(getEffectiveRegistry(repoDir), 'planning')),
       );
       assert.deepEqual(
         getConfiguredModelsForDescriptorStage(repoDir, 'coder'),
-        getLadder(getEffectiveRegistry(repoDir), 'coding'),
+        filterDisabledModels(getLadder(getEffectiveRegistry(repoDir), 'coding')),
       );
       assert.deepEqual(
         getConfiguredModelsForDescriptorStage(repoDir, 'reviewer'),
-        getLadder(getEffectiveRegistry(repoDir), 'review'),
+        filterDisabledModels(getLadder(getEffectiveRegistry(repoDir), 'review')),
       );
 
       const descriptorModels = getConfiguredModelsForDescriptor(repoDir);

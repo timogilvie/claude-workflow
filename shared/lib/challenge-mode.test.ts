@@ -38,18 +38,26 @@ console.log('\n--- Challenge Mode Tests ---\n');
 
 test('challenge model pool prefers explicit challenge.models', () => {
   const pool = getChallengeModelPool(
-    { models: ['claude-opus-4-6', 'gpt-5.3-codex', 'claude-opus-4-6'] },
+    { models: ['claude-opus-4-6', 'gpt-5.4', 'claude-opus-4-6'] },
     { models: ['claude-sonnet-4-5-20250929'] },
   );
-  assert.deepEqual(pool, ['claude-opus-4-6', 'gpt-5.3-codex']);
+  assert.deepEqual(pool, ['claude-opus-4-6', 'gpt-5.4']);
 });
 
 test('challenge model pool falls back to router models when challenge.models is null', () => {
   const pool = getChallengeModelPool(
     { models: null },
-    { models: ['claude-sonnet-4-5-20250929', 'gpt-5.3-codex'] },
+    { models: ['claude-sonnet-4-5-20250929', 'gpt-5.4'] },
   );
-  assert.deepEqual(pool, ['claude-sonnet-4-5-20250929', 'gpt-5.3-codex']);
+  assert.deepEqual(pool, ['claude-sonnet-4-5-20250929', 'gpt-5.4']);
+});
+
+test('challenge model pool excludes disabled models even when listed explicitly', () => {
+  const pool = getChallengeModelPool(
+    { models: ['claude-opus-4-6', 'gpt-5.3-codex'] },
+    { models: [] },
+  );
+  assert.deepEqual(pool, ['claude-opus-4-6']);
 });
 
 test('challenge model pool excludes DeepSeek by default', () => {

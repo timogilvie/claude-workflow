@@ -1320,46 +1320,48 @@ function priorNeighbors(modelId: string, count: number, planScore: number, recor
   }));
 }
 
-test('priors seed zero-record allowlisted models and rank claude-fable-5 first for planning', () => {
+test('priors seed zero-record allowlisted models and rank the high-prior model first for planning', () => {
+  // Uses claude-opus-4-8 as the high-prior example (claude-fable-5 would be a
+  // higher prior but is temporarily disabled — see disabled-models.ts).
   const neighbors = priorNeighbors('claude-sonnet-4-5-20250929', 3, 0.9);
   const allowlists = {
-    plannerModelsAvailable: ['claude-fable-5', 'claude-sonnet-4-5-20250929'],
-    coderModelsAvailable: ['claude-fable-5', 'claude-sonnet-4-5-20250929'],
-    reviewerModelsAvailable: ['claude-fable-5', 'claude-sonnet-4-5-20250929'],
+    plannerModelsAvailable: ['claude-opus-4-8', 'claude-sonnet-4-5-20250929'],
+    coderModelsAvailable: ['claude-opus-4-8', 'claude-sonnet-4-5-20250929'],
+    reviewerModelsAvailable: ['claude-opus-4-8', 'claude-sonnet-4-5-20250929'],
   };
 
   const withoutPriors = rankModelsPerStage(neighbors, allowlists, 0.3, 0);
-  assert.ok(!withoutPriors.rankings[0].candidates.some((candidate) => candidate.modelId === 'claude-fable-5'));
+  assert.ok(!withoutPriors.rankings[0].candidates.some((candidate) => candidate.modelId === 'claude-opus-4-8'));
 
   const withPriors = rankModelsPerStage(neighbors, allowlists, 0.3, 0, undefined, PRIORS_ON);
   const plannerCandidates = withPriors.rankings[0].candidates;
-  const fable = plannerCandidates.find((candidate) => candidate.modelId === 'claude-fable-5');
-  assert.ok(fable, 'zero-record fable-5 should be seeded into planner candidates');
-  assert.equal(fable!.support, 0);
-  // Zero support means pure registry prior (planning quality 99 -> 0.99)
-  assert.ok(Math.abs(fable!.score - 0.99) < 1e-9, `expected prior score 0.99, got ${fable!.score}`);
-  assert.equal(plannerCandidates[0].modelId, 'claude-fable-5');
-  assert.equal(withPriors.selection?.planner.modelId, 'claude-fable-5');
+  const seeded = plannerCandidates.find((candidate) => candidate.modelId === 'claude-opus-4-8');
+  assert.ok(seeded, 'zero-record opus-4-8 should be seeded into planner candidates');
+  assert.equal(seeded!.support, 0);
+  // Zero support means pure registry prior (planning quality 97 -> 0.97)
+  assert.ok(Math.abs(seeded!.score - 0.97) < 1e-9, `expected prior score 0.97, got ${seeded!.score}`);
+  assert.equal(plannerCandidates[0].modelId, 'claude-opus-4-8');
+  assert.equal(withPriors.selection?.planner.modelId, 'claude-opus-4-8');
 });
 
 test('blended score converges to empirical as support reaches blendSamples', () => {
   const neighbors = [
-    // 10 fable records with weak plan outcomes: support >= blendSamples -> pure empirical 0.5
-    ...priorNeighbors('claude-fable-5', 10, 0.5, 0.5),
+    // 10 opus-4-8 records with weak plan outcomes: support >= blendSamples -> pure empirical 0.5
+    ...priorNeighbors('claude-opus-4-8', 10, 0.5, 0.5),
     ...priorNeighbors('claude-sonnet-4-5-20250929', 3, 0.9),
   ];
   const allowlists = {
-    plannerModelsAvailable: ['claude-fable-5', 'claude-sonnet-4-5-20250929'],
-    coderModelsAvailable: ['claude-fable-5', 'claude-sonnet-4-5-20250929'],
-    reviewerModelsAvailable: ['claude-fable-5', 'claude-sonnet-4-5-20250929'],
+    plannerModelsAvailable: ['claude-opus-4-8', 'claude-sonnet-4-5-20250929'],
+    coderModelsAvailable: ['claude-opus-4-8', 'claude-sonnet-4-5-20250929'],
+    reviewerModelsAvailable: ['claude-opus-4-8', 'claude-sonnet-4-5-20250929'],
   };
 
   const { rankings, selection } = rankModelsPerStage(neighbors, allowlists, 0.3, 0, undefined, PRIORS_ON);
-  const fable = rankings[0].candidates.find((candidate) => candidate.modelId === 'claude-fable-5');
-  assert.ok(fable);
-  assert.equal(fable!.support, 10);
-  // Full support: the 0.99 registry prior no longer props up the weak empirical score
-  assert.ok(Math.abs(fable!.score - 0.5) < 1e-9, `expected converged empirical 0.5, got ${fable!.score}`);
+  const blended = rankings[0].candidates.find((candidate) => candidate.modelId === 'claude-opus-4-8');
+  assert.ok(blended);
+  assert.equal(blended!.support, 10);
+  // Full support: the registry planning prior no longer props up the weak empirical score
+  assert.ok(Math.abs(blended!.score - 0.5) < 1e-9, `expected converged empirical 0.5, got ${blended!.score}`);
   assert.equal(selection?.planner.modelId, 'claude-sonnet-4-5-20250929');
 });
 
@@ -1399,7 +1401,7 @@ test('routeStageAware with priors selects a zero-record allowlisted model end to
       stageBlendWeight: 0.3,
       defaultAgent: 'claude',
       availableModels: {
-        planner: ['claude-fable-5', 'claude-sonnet-4-5-20250929', 'gpt-5.4'],
+        planner: ['claude-opus-4-8', 'claude-sonnet-4-5-20250929', 'gpt-5.4'],
         coder: ['claude-sonnet-4-5-20250929', 'gpt-5.4'],
         reviewer: ['claude-sonnet-4-5-20250929', 'gpt-5.4'],
       },
@@ -1416,11 +1418,12 @@ test('routeStageAware with priors selects a zero-record allowlisted model end to
     });
     assert.ok(decision);
     assert.equal(decision?.routingMode, 'stage-aware');
-    // claude-fable-5 has zero eval records but the highest planning prior
-    assert.equal(decision?.planner, 'claude-fable-5');
-    // Stages without the new model in their allowlist keep empirical winners
-    assert.notEqual(decision?.coder, 'claude-fable-5');
-    assert.notEqual(decision?.reviewer, 'claude-fable-5');
+    // claude-opus-4-8 has zero eval records but the highest planning prior in
+    // the planner allowlist (claude-fable-5 would rank higher but is disabled).
+    assert.equal(decision?.planner, 'claude-opus-4-8');
+    // Stages without that model in their allowlist keep empirical winners
+    assert.notEqual(decision?.coder, 'claude-opus-4-8');
+    assert.notEqual(decision?.reviewer, 'claude-opus-4-8');
   } finally {
     cleanup();
   }
