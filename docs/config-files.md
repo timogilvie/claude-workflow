@@ -118,6 +118,35 @@ explore-vs-exploit attribution in `reasoning` and an `exploration` field that
 is persisted to route artifacts. Zero-record candidates get cost estimates
 from the pricing table instead of reporting zero cost.
 
+### Router Coverage Targets and Diversity Report
+
+`router.coverage` configures the diversity report
+(`npx tsx tools/router-diversity-report.ts`):
+
+```json
+{
+  "router": {
+    "coverage": {
+      "minRecordsPerModelStage": 15,
+      "maxStageShare": 0.7,
+      "window": 50
+    }
+  }
+}
+```
+
+- `minRecordsPerModelStage`: eval records each model should accumulate per
+  workflow stage; cells below the target are starred in the report.
+- `maxStageShare`: dominance threshold — the report warns when one model
+  exceeds this share of any stage over the window.
+- `window`: most recent eval records used for stage-share and routing-mode
+  breakdowns (coverage counts are cumulative).
+
+The challenge scheduler also consumes per-model-per-stage counts: `new-model`
+recommendations target the least-covered (model, stage) cell, and
+`low-data-stage` recommendations pick the least-tested model for the starved
+stage specifically.
+
 ## Local Paths Guidance
 
 - Relative paths shared by the team can live in `.wavemill-config.json`.

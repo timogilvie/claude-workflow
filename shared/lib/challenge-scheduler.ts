@@ -41,6 +41,20 @@ export interface EvalSummary {
   totalRecords: number;
   recordsByModel: Record<string, number>;
   recordsByStage: Record<string, number>;
+  /**
+   * Cross product of model x stage record counts, attributed from
+   * `taskDescriptor.stages.*.model`. Optional for hand-built summaries;
+   * `buildEvalSummary` always fills it. Missing cells count as zero.
+   */
+  recordsByModelStage?: Record<string, Partial<Record<ChallengeStage, number>>>;
+}
+
+export function modelStageCount(
+  summary: EvalSummary,
+  model: string,
+  stage: ChallengeStage,
+): number {
+  return summary.recordsByModelStage?.[model]?.[stage] ?? 0;
 }
 
 export interface ChallengeSchedulerInput {
@@ -142,6 +156,63 @@ function chooseLeastTestedModel(
     })[0];
 }
 
+function chooseLeastTestedModelForStage(
+  models: string[],
+  summary: EvalSummary,
+  stage: ChallengeStage,
+  excludedModels: string[],
+): string | undefined {
+  const excluded = new Set(excludedModels.filter(Boolean));
+  const candidates = [...new Set(models.filter((model) => !excluded.has(model)))];
+  return candidates
+    .sort((left, right) => {
+      const leftCount = modelStageCount(summary, left, stage);
+      const rightCount = modelStageCount(summary, right, stage);
+      if (leftCount !== rightCount) {
+        return leftCount - rightCount;
+      }
+      // Stage-blind counts as a secondary signal, then a stable name tiebreak
+      const leftTotal = summary.recordsByModel[left] ?? 0;
+      const rightTotal = summary.recordsByModel[right] ?? 0;
+      if (leftTotal !== rightTotal) {
+        return leftTotal - rightTotal;
+      }
+      return left.localeCompare(right);
+    })[0];
+}
+
+/**
+ * Find the least-covered (model, stage) cell among the available models,
+ * considering only cells below `maxRecords`. Ties break by lower count, then
+ * model name, then stage order — deterministic for tests and idempotent runs.
+ */
+function leastCoveredModelStage(
+  models: string[],
+  summary: EvalSummary,
+  maxRecords: number,
+  excludedModels: string[],
+): { model: string; stage: ChallengeStage; count: number } | null {
+  const excluded = new Set(excludedModels.filter(Boolean));
+  let best: { model: string; stage: ChallengeStage; count: number } | null = null;
+
+  for (const model of [...new Set(models)].sort()) {
+    if (excluded.has(model)) {
+      continue;
+    }
+    for (const stage of STAGES) {
+      const count = modelStageCount(summary, model, stage);
+      if (count >= maxRecords) {
+        continue;
+      }
+      if (!best || count < best.count) {
+        best = { model, stage, count };
+      }
+    }
+  }
+
+  return best;
+}
+
 function checkLowConfidence(
   routingDecision: WorkflowRouteDecision | StageAwareDecision,
   recordsByModel: Record<string, number>,
@@ -178,12 +249,32 @@ function checkLowConfidence(
 
 function checkNewModel(
   routingDecision: WorkflowRouteDecision | StageAwareDecision,
-  recordsByModel: Record<string, number>,
+  summary: EvalSummary,
   maxRecords: number,
   availableModels: string[],
   repoDir?: string,
 ): ChallengeRecommendation | null {
   const defaultModel = getDefaultModel(routingDecision, repoDir);
+
+  // Prefer the truly least-covered (model, stage) cell when per-stage counts
+  // are available; a model with 30 coder records but zero review records is
+  // still uncovered for review.
+  if (summary.recordsByModelStage) {
+    const cell = leastCoveredModelStage(availableModels, summary, maxRecords, [defaultModel]);
+    if (!cell) {
+      return null;
+    }
+    return {
+      shouldChallenge: true,
+      reason: 'new-model',
+      defaultModel,
+      challengerModel: cell.model,
+      stage: cell.stage,
+      priority: PRIORITY['new-model'],
+    };
+  }
+
+  const recordsByModel = summary.recordsByModel;
   const challengerModel = [...new Set(availableModels)]
     .filter((model) => model !== defaultModel && (recordsByModel[model] ?? 0) < maxRecords)
     .sort((left, right) => {
@@ -229,7 +320,11 @@ function checkLowDataStage(
   }
 
   const defaultModel = getDecisionModel(routingDecision, lowStage.stage);
-  const challengerModel = chooseLeastTestedModel(availableModels, summary.recordsByModel, [defaultModel]);
+  // Pick the least-tested model for the starved stage specifically, falling
+  // back to overall counts when per-stage attribution is unavailable.
+  const challengerModel = summary.recordsByModelStage
+    ? chooseLeastTestedModelForStage(availableModels, summary, lowStage.stage, [defaultModel])
+    : chooseLeastTestedModel(availableModels, summary.recordsByModel, [defaultModel]);
   if (!challengerModel) {
     return null;
   }
@@ -276,7 +371,7 @@ export function evaluateChallenge(input: ChallengeSchedulerInput): ChallengeReco
     ),
     checkNewModel(
       input.routingDecision,
-      input.evalSummary.recordsByModel,
+      input.evalSummary,
       config.newModelChallengeCount,
       availableModels,
       input.repoDir,
@@ -337,6 +432,23 @@ function getEvalFiles(repoDir: string): string[] {
 }
 
 /**
+ * Resolve the model that handled the given stage on this record. Plan and
+ * review attribution requires real per-stage descriptor data; the
+ * implementation stage falls back to `record.modelId`, which is the
+ * solution/coder model by definition.
+ */
+export function recordStageModel(record: EvalRecord, stage: ChallengeStage): string | undefined {
+  const stages = record.taskDescriptor?.stages;
+  if (stage === 'plan') {
+    return stages?.planner?.model || undefined;
+  }
+  if (stage === 'review') {
+    return stages?.reviewer?.model || undefined;
+  }
+  return stages?.coder?.model || record.modelId || undefined;
+}
+
+/**
  * Build a lightweight summary of historical eval coverage for challenge policy.
  *
  * Results are cached per repo for the lifetime of the process.
@@ -356,6 +468,7 @@ export function buildEvalSummary(repoDir?: string): EvalSummary {
       implementation: 0,
       review: 0,
     },
+    recordsByModelStage: {},
   };
 
   const seenRecordIds = new Set<string>();
@@ -375,6 +488,13 @@ export function buildEvalSummary(repoDir?: string): EvalSummary {
       for (const stage of STAGES) {
         if (recordStagePresence(record, stage)) {
           summary.recordsByStage[stage] = (summary.recordsByStage[stage] ?? 0) + 1;
+        }
+
+        const stageModel = recordStageModel(record, stage);
+        if (stageModel) {
+          const cells = summary.recordsByModelStage![stageModel] ?? {};
+          cells[stage] = (cells[stage] ?? 0) + 1;
+          summary.recordsByModelStage![stageModel] = cells;
         }
       }
     }

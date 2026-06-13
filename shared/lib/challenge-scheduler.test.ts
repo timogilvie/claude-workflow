@@ -342,6 +342,125 @@ test('buildEvalSummary counts models and stages once per unique record', () => {
   }
 });
 
+
+test('buildEvalSummary computes the model x stage cross product', () => {
+  const { repoDir, cleanup } = makeRepo();
+  try {
+    writeFileSync(
+      join(repoDir, '.wavemill', 'evals', 'records.jsonl'),
+      [
+        JSON.stringify({
+          id: 'cp-1',
+          modelId: 'gpt-5.4',
+          timestamp: '2026-04-06T12:00:00.000Z',
+          originalPrompt: 'Implement feature',
+          taskDescriptor: {
+            stages: {
+              planner: { model: 'claude-sonnet-4-5-20250929' },
+              coder: { model: 'gpt-5.4' },
+              reviewer: { model: 'claude-sonnet-4-5-20250929' },
+            },
+          },
+        }),
+        JSON.stringify({
+          id: 'cp-2',
+          modelId: 'gpt-5.4',
+          timestamp: '2026-04-06T12:05:00.000Z',
+          originalPrompt: 'Implement another feature',
+          taskDescriptor: {
+            stages: {
+              planner: { model: 'claude-sonnet-4-5-20250929' },
+              coder: { model: 'gpt-5.4' },
+              reviewer: { model: 'gpt-5.3-codex' },
+            },
+          },
+        }),
+        // Legacy record without per-stage attribution: only the coder
+        // (modelId) is attributable
+        JSON.stringify({
+          id: 'cp-3',
+          modelId: 'gpt-5.3-codex',
+          timestamp: '2026-04-06T12:10:00.000Z',
+          originalPrompt: 'Fix a bug',
+        }),
+      ].join('\n') + '\n',
+    );
+
+    const summary = buildEvalSummary(repoDir);
+
+    assert.equal(summary.recordsByModelStage?.['claude-sonnet-4-5-20250929']?.plan, 2);
+    assert.equal(summary.recordsByModelStage?.['claude-sonnet-4-5-20250929']?.review, 1);
+    assert.equal(summary.recordsByModelStage?.['claude-sonnet-4-5-20250929']?.implementation, undefined);
+    assert.equal(summary.recordsByModelStage?.['gpt-5.4']?.implementation, 2);
+    assert.equal(summary.recordsByModelStage?.['gpt-5.3-codex']?.review, 1);
+    // Legacy record falls back to modelId for the implementation stage only
+    assert.equal(summary.recordsByModelStage?.['gpt-5.3-codex']?.implementation, 1);
+    assert.equal(summary.recordsByModelStage?.['gpt-5.3-codex']?.plan, undefined);
+  } finally {
+    cleanup();
+  }
+});
+
+test('new-model recommendation targets the least-covered (model, stage) cell', () => {
+  const { repoDir, cleanup } = makeRepo();
+  try {
+    const result = evaluateChallenge({
+      routingDecision: makeDecision({ confidence: 0.95 }),
+      evalSummary: {
+        totalRecords: 60,
+        recordsByModel: { 'claude-sonnet-4-5-20250929': 40, 'gpt-5.4': 20 },
+        recordsByStage: { plan: 60, implementation: 60, review: 60 },
+        recordsByModelStage: {
+          'claude-sonnet-4-5-20250929': { plan: 40, implementation: 40, review: 40 },
+          // Plenty of plan/coder records but zero review coverage
+          'gpt-5.4': { plan: 20, implementation: 20 },
+        },
+      },
+      config: { enabled: true, confidenceThreshold: 0.5, newModelChallengeCount: 5, minEvalRecordsPerStage: 1 },
+      repoDir,
+    });
+
+    assert.equal(result.shouldChallenge, true);
+    assert.equal(result.reason, 'new-model');
+    assert.equal(result.challengerModel, 'gpt-5.4');
+    assert.equal(result.stage, 'review');
+  } finally {
+    cleanup();
+  }
+});
+
+test('low-data-stage recommendation picks the least-tested model for that stage', () => {
+  const { repoDir, cleanup } = makeRepo();
+  try {
+    const result = evaluateChallenge({
+      routingDecision: makeDecision({ confidence: 0.95, coder: 'claude-haiku-4-5-20251001' }),
+      evalSummary: {
+        totalRecords: 44,
+        recordsByModel: { 'claude-sonnet-4-5-20250929': 40, 'gpt-5.4': 31, 'claude-haiku-4-5-20251001': 10 },
+        recordsByStage: { plan: 4, implementation: 40, review: 40 },
+        recordsByModelStage: {
+          'claude-sonnet-4-5-20250929': { plan: 5, implementation: 30, review: 30 },
+          // haiku has fewer records overall, but MORE plan records than
+          // gpt-5.4; per-stage selection must pick gpt-5.4 for the starved
+          // plan stage (the overall-count heuristic would pick haiku)
+          'gpt-5.4': { plan: 1, implementation: 30, review: 30 },
+          'claude-haiku-4-5-20251001': { plan: 3, implementation: 3, review: 4 },
+        },
+      },
+      config: { enabled: true, confidenceThreshold: 0.5, newModelChallengeCount: 1, minEvalRecordsPerStage: 10 },
+      repoDir,
+    });
+
+    assert.equal(result.shouldChallenge, true);
+    assert.equal(result.reason, 'low-data-stage');
+    assert.equal(result.stage, 'plan');
+    assert.equal(result.challengerModel, 'gpt-5.4');
+  } finally {
+    cleanup();
+  }
+});
+
+
 console.log(`\n--- Results: ${passed} passed, ${failed} failed ---`);
 if (failed > 0) {
   process.exit(1);
