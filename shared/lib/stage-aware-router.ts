@@ -31,6 +31,7 @@ import { filterDisabledModels, isDisabledModel } from './disabled-models.ts';
 import {
   blendWithPrior,
   formatExplorationReasoning,
+  recencyMultiplier,
   resolveExplorationConfig,
   sampleCandidateIndex,
   ucbBonus,
@@ -766,6 +767,7 @@ function exploreSelection(
   config: ResolvedExplorationConfig,
   maxCostUsd: number | undefined,
   randomFn: () => number,
+  boostFor: (modelId: string) => number = () => 1,
 ): { selection: CombinationDecision; attribution: ExplorationAttribution } {
   const sampled: Record<'planner' | 'coder' | 'reviewer', ModelStageStats> = {
     planner: exploit.planner,
@@ -779,6 +781,7 @@ function exploreSelection(
       ranking.candidates.map((candidate) => candidate.selectionScore),
       config,
       randomFn,
+      ranking.candidates.map((candidate) => boostFor(candidate.modelId)),
     );
     const candidate = ranking.candidates[pick.index];
     const exploitModel = sampled[ranking.role].modelId;
@@ -786,7 +789,12 @@ function exploreSelection(
       continue;
     }
     sampled[ranking.role] = candidate;
-    explored.push({ role: ranking.role, sampled: candidate.modelId, argmax: exploitModel });
+    explored.push({
+      role: ranking.role,
+      sampled: candidate.modelId,
+      argmax: exploitModel,
+      ...(boostFor(candidate.modelId) > 1 ? { recencyBoosted: true } : {}),
+    });
   }
 
   if (explored.length === 0) {
@@ -1128,12 +1136,16 @@ export function routeStageAwareWithContext(
   let finalSelection = selection;
   let explorationAttribution: ExplorationAttribution | undefined;
   if (explorationConfig.enabled && hasModelDiversity) {
+    const boostRegistry = explorationConfig.boostMultiplier > 1 ? getEffectiveRegistry(repoDir) : null;
     const explorationResult = exploreSelection(
       rankings,
       selection,
       explorationConfig,
       options.maxCostUsd,
       options.randomFn || Math.random,
+      (modelId) => boostRegistry
+        ? recencyMultiplier(boostRegistry.models[modelId]?.releasedAt, explorationConfig)
+        : 1,
     );
     finalSelection = explorationResult.selection;
     explorationAttribution = explorationResult.attribution;

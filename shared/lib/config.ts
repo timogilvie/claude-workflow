@@ -162,6 +162,7 @@ export interface ModelCapabilitiesOverride {
   costPerMillionInputTokensUsd?: number;
   costPerMillionOutputTokensUsd?: number;
   agent?: string;
+  releasedAt?: string;
 }
 
 export interface ModelRegistryConfig {
@@ -247,6 +248,10 @@ export interface RouterConfig {
     priors?: {
       enabled?: boolean;
       blendSamples?: number;
+    };
+    newModelBoost?: {
+      windowDays?: number;
+      multiplier?: number;
     };
   };
   coverage?: {

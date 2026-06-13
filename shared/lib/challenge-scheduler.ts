@@ -9,8 +9,11 @@
 
 import { existsSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { getRouterConfig } from './config.ts';
 import type { EvalRecord } from './eval-schema.ts';
 import { readJsonlFile } from './jsonl-utils.ts';
+import { getEffectiveRegistry } from './model-registry.ts';
+import { isWithinRecencyWindow, resolveExplorationConfig } from './router-exploration.ts';
 import { loadConfiguredPricingTable } from './workflow-cost.ts';
 import type { StageAwareDecision } from './stage-aware-router.ts';
 import type { WorkflowRouteDecision } from './workflow-router.ts';
@@ -183,34 +186,54 @@ function chooseLeastTestedModelForStage(
 
 /**
  * Find the least-covered (model, stage) cell among the available models,
- * considering only cells below `maxRecords`. Ties break by lower count, then
- * model name, then stage order — deterministic for tests and idempotent runs.
+ * considering only cells below `maxRecords`.
+ *
+ * Recently released models (releasedAt inside the recency window) take
+ * priority over older under-covered models regardless of count — an old,
+ * deliberately unused model should not dominate exploration. Within the same
+ * recency class, ties break by lower count, then model name, then stage
+ * order — deterministic for tests and idempotent runs.
  */
 function leastCoveredModelStage(
   models: string[],
   summary: EvalSummary,
   maxRecords: number,
   excludedModels: string[],
-): { model: string; stage: ChallengeStage; count: number } | null {
+  isRecent: (model: string) => boolean = () => false,
+): { model: string; stage: ChallengeStage; count: number; recent: boolean } | null {
   const excluded = new Set(excludedModels.filter(Boolean));
-  let best: { model: string; stage: ChallengeStage; count: number } | null = null;
+  let best: { model: string; stage: ChallengeStage; count: number; recent: boolean } | null = null;
 
   for (const model of [...new Set(models)].sort()) {
     if (excluded.has(model)) {
       continue;
     }
+    const recent = isRecent(model);
     for (const stage of STAGES) {
       const count = modelStageCount(summary, model, stage);
       if (count >= maxRecords) {
         continue;
       }
-      if (!best || count < best.count) {
-        best = { model, stage, count };
+      if (
+        !best
+        || (recent && !best.recent)
+        || (recent === best.recent && count < best.count)
+      ) {
+        best = { model, stage, count, recent };
       }
     }
   }
 
   return best;
+}
+
+function makeRecencyChecker(repoDir?: string): (model: string) => boolean {
+  const explorationConfig = resolveExplorationConfig(getRouterConfig(repoDir).exploration);
+  const registry = getEffectiveRegistry(repoDir);
+  return (model: string) => isWithinRecencyWindow(
+    registry.models[model]?.releasedAt,
+    explorationConfig.boostWindowDays,
+  );
 }
 
 function checkLowConfidence(
@@ -258,9 +281,15 @@ function checkNewModel(
 
   // Prefer the truly least-covered (model, stage) cell when per-stage counts
   // are available; a model with 30 coder records but zero review records is
-  // still uncovered for review.
+  // still uncovered for review. Recently released models take priority.
   if (summary.recordsByModelStage) {
-    const cell = leastCoveredModelStage(availableModels, summary, maxRecords, [defaultModel]);
+    const cell = leastCoveredModelStage(
+      availableModels,
+      summary,
+      maxRecords,
+      [defaultModel],
+      makeRecencyChecker(repoDir),
+    );
     if (!cell) {
       return null;
     }

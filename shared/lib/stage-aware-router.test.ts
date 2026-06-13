@@ -1541,6 +1541,107 @@ test('records for disabled models never become stage candidates', () => {
 });
 
 
+
+function recencyBoostRepo(releasedDaysAgo: number, multiplier: number) {
+  const releasedAt = new Date(Date.now() - releasedDaysAgo * 86_400_000).toISOString().slice(0, 10);
+  const records = [
+    makeEvalRecord('a1', 'claude-opus-4-6', { plan: 0.9, implementation: 0.9, review: 0.9 }),
+    makeEvalRecord('a2', 'claude-opus-4-6', { plan: 0.91, implementation: 0.89, review: 0.9 }),
+    makeEvalRecord('b1', 'claude-sonnet-4-6', { plan: 0.8, implementation: 0.8, review: 0.8 }),
+    makeEvalRecord('b2', 'claude-sonnet-4-6', { plan: 0.81, implementation: 0.79, review: 0.8 }),
+    makeEvalRecord('c1', 'claude-sonnet-4-5-20250929', { plan: 0.7, implementation: 0.7, review: 0.7 }),
+    makeEvalRecord('c2', 'claude-sonnet-4-5-20250929', { plan: 0.71, implementation: 0.69, review: 0.7 }),
+  ];
+  return makeRepoWithStageAwareData(records, {
+    router: {
+      enabled: true,
+      mode: 'stage-aware',
+      minRecords: 2,
+      minModels: 2,
+      kNeighbors: 6,
+      stageBlendWeight: 0.3,
+      defaultAgent: 'claude',
+      exploration: {
+        enabled: true,
+        mode: 'epsilon',
+        rate: 0.9,
+        topK: 3,
+        newModelBoost: { windowDays: 45, multiplier },
+      },
+    },
+    modelRegistry: {
+      models: {
+        'claude-sonnet-4-6': { releasedAt },
+      },
+    },
+  });
+}
+
+// Explore only the planner: rate 0.9, rolls [explore, pick, skip, skip]
+const recencySequence = () => {
+  const values = [0, 0.6, 0.95, 0.95];
+  let index = 0;
+  return () => values[Math.min(index++, values.length - 1)];
+};
+
+test('recency boost steers exploration toward recently released models', () => {
+  const { repoDir, cleanup } = recencyBoostRepo(2, 5);
+  try {
+    const decision = routeStageAware('Build a backend feature with tests.', {
+      repoDir,
+      minRecords: 2,
+      minModels: 2,
+      kNeighbors: 6,
+      randomFn: recencySequence(),
+    });
+    assert.ok(decision);
+    // Boosted weights [~5, 1]: the 0.6 roll lands on the recent runner-up
+    assert.equal(decision?.planner, 'claude-sonnet-4-6');
+    assert.equal(decision?.exploration?.explored[0]?.recencyBoosted, true);
+    assert.ok(decision?.reasoning[0].includes('[recency-boosted]'));
+  } finally {
+    cleanup();
+  }
+});
+
+test('the same roll without the boost picks the older alternative', () => {
+  const { repoDir, cleanup } = recencyBoostRepo(2, 1);
+  try {
+    const decision = routeStageAware('Build a backend feature with tests.', {
+      repoDir,
+      minRecords: 2,
+      minModels: 2,
+      kNeighbors: 6,
+      randomFn: recencySequence(),
+    });
+    assert.ok(decision);
+    // Uniform weights [1, 1]: the 0.6 roll lands on the second alternative
+    assert.equal(decision?.planner, 'claude-sonnet-4-5-20250929');
+    assert.ok(!decision?.exploration?.explored[0]?.recencyBoosted);
+  } finally {
+    cleanup();
+  }
+});
+
+test('models outside the recency window get no boost', () => {
+  const { repoDir, cleanup } = recencyBoostRepo(100, 5);
+  try {
+    const decision = routeStageAware('Build a backend feature with tests.', {
+      repoDir,
+      minRecords: 2,
+      minModels: 2,
+      kNeighbors: 6,
+      randomFn: recencySequence(),
+    });
+    assert.ok(decision);
+    // releasedAt 100 days ago, window 45: identical to the no-boost outcome
+    assert.equal(decision?.planner, 'claude-sonnet-4-5-20250929');
+  } finally {
+    cleanup();
+  }
+});
+
+
 console.log(`\n--- Results: ${passed} passed, ${failed} failed ---`);
 if (failed > 0) {
   process.exit(1);
