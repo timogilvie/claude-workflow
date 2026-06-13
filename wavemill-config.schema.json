@@ -1565,6 +1565,32 @@
                     },
                     "additionalProperties": false
                 },
+                "coverage": {
+                    "type": "object",
+                    "description": "Per-model-per-stage coverage targets for the diversity report (tools/router-diversity-report.ts).",
+                    "properties": {
+                        "minRecordsPerModelStage": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "default": 15,
+                            "description": "Eval records each model should accumulate per workflow stage. Cells below this target are flagged in the diversity report."
+                        },
+                        "maxStageShare": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1,
+                            "default": 0.7,
+                            "description": "Dominance threshold: warn when a single model exceeds this share of any stage over the report window."
+                        },
+                        "window": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "default": 50,
+                            "description": "Number of most recent eval records used for stage-share and routing-mode breakdowns."
+                        }
+                    },
+                    "additionalProperties": false
+                },
                 "hokusai": {
                     "type": "object",
                     "description": "Hokusai API configuration for ML-based workflow routing. Hokusai is only available via API.",

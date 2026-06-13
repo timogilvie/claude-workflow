@@ -119,13 +119,12 @@ runTool({
 
     const forcedChallengerModel = launchDecision.forcedChallengerModel;
 
-    // A low-data-stage recommendation pins the varied stage; otherwise sample
-    // from the configured weights (implementation-only by default).
+    // A recommendation carrying a stage (low-data-stage, or new-model with a
+    // least-covered cell) pins the varied stage; otherwise sample from the
+    // configured weights (implementation-only by default).
     const challengeStage = chooseChallengeStage({
       weights: challenge.stageWeights,
-      recommendedStage: launchDecision.recommendation?.reason === 'low-data-stage'
-        ? launchDecision.recommendation.stage
-        : undefined,
+      recommendedStage: launchDecision.recommendation?.stage,
     });
 
     // If task file provided, use workflow routing for both sides

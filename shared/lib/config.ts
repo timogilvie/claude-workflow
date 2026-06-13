@@ -249,6 +249,11 @@ export interface RouterConfig {
       blendSamples?: number;
     };
   };
+  coverage?: {
+    minRecordsPerModelStage?: number;
+    maxStageShare?: number;
+    window?: number;
+  };
   hokusai?: HokusaiRouterConfig;
   difficulty?: DifficultyClassifierConfig;
 }
