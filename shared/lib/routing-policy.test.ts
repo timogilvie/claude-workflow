@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { clearConfigCache } from './config.ts';
+import { filterDisabledModels } from './disabled-models.ts';
 import { DEFAULT_MODEL_REGISTRY } from './model-registry.ts';
 import type { QuotaSnapshot, QuotaStatus } from './quota-state.ts';
 import { resolveModel, viableCandidatesInPool } from './routing-policy.ts';
@@ -740,13 +741,15 @@ describe('routing-policy integration', () => {
       assert.equal(decision.routingMode, 'hokusai');
       assert.ok(requestBody);
       const availableModels = (requestBody?.inputs as { routing?: Record<string, string[]> } | undefined)?.routing;
+      // Disabled models are filtered from the pools fed to Hokusai, so apply
+      // the same filter to the expected sets (robust to the disable set).
       assert.deepEqual(
         availableModels?.available_coder_models?.sort(),
-        ['claude-fable-5', 'claude-opus-4-6', 'claude-opus-4-7', 'claude-opus-4-8', 'gpt-5.4', 'gpt-5.5'].sort(),
+        filterDisabledModels(['claude-fable-5', 'claude-opus-4-6', 'claude-opus-4-7', 'claude-opus-4-8', 'gpt-5.4', 'gpt-5.5']).sort(),
       );
       assert.deepEqual(
         availableModels?.available_planner_models?.sort(),
-        ['claude-fable-5', 'claude-opus-4-6', 'claude-opus-4-7', 'claude-opus-4-8', 'gpt-5.4', 'gpt-5.5'].sort(),
+        filterDisabledModels(['claude-fable-5', 'claude-opus-4-6', 'claude-opus-4-7', 'claude-opus-4-8', 'gpt-5.4', 'gpt-5.5']).sort(),
       );
       assert.equal(decision.signals.taskDifficulty, 'critical');
     } finally {

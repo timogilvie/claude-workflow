@@ -835,7 +835,9 @@ await test('policy routing logs class downgrade without same-class metadata', as
         { repoDir, taskDifficulty: 'hard', skipDifficultyClassification: true }
       ))
     );
-    assert.match(stderr, /\[(planner|coder|reviewer)] policy adjustment: claude-fable-5 -> claude-sonnet-4-6 \(quota=degrading\)/);
+    // claude-fable-5 leads the ladder but is temporarily disabled and filtered
+    // from the pool, so the top viable frontier downgraded here is gpt-5.5.
+    assert.match(stderr, /\[(planner|coder|reviewer)] policy adjustment: gpt-5\.5 -> claude-sonnet-4-6 \(quota=degrading\)/);
     assert.doesNotMatch(stderr, /same-class=/);
   } finally {
     cleanup();

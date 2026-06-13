@@ -2,6 +2,7 @@ import type { ChallengeRecommendation, ChallengeStage } from './challenge-schedu
 export type { ChallengeStage } from './challenge-scheduler.ts';
 import { loadWavemillConfig, type ChallengeConfig, type RouterConfig } from './config.ts';
 import { isDeepSeekModel } from './deepseek-provider.ts';
+import { filterDisabledModels } from './disabled-models.ts';
 import { getEffectiveRegistry, getModel } from './model-registry.ts';
 import { resolveAgent } from './model-router.ts';
 export { routeChangedMaterially } from './route-artifact.ts';
@@ -139,11 +140,10 @@ export function getChallengeModelPool(
   routerConfig?: RouterConfig,
 ): string[] {
   const configured = challengeConfig?.models;
-  if (Array.isArray(configured)) {
-    return filterDeepSeekChallengeModels(configured, challengeConfig).models;
-  }
-
-  return filterDeepSeekChallengeModels(routerConfig?.models || [], challengeConfig).models;
+  // Disabled models must never enter the challenge pool, even when listed
+  // explicitly in challenge.models — the disable set is authoritative.
+  const source = Array.isArray(configured) ? configured : (routerConfig?.models || []);
+  return filterDisabledModels(filterDeepSeekChallengeModels(source, challengeConfig).models);
 }
 
 export function canRunChallenge(pool: string[]): boolean {
