@@ -461,6 +461,49 @@ test('low-data-stage recommendation picks the least-tested model for that stage'
 });
 
 
+
+test('new-model recommendation prioritizes recently released models over older under-covered ones', () => {
+  const releasedAt = new Date(Date.now() - 5 * 86_400_000).toISOString().slice(0, 10);
+  const { repoDir, cleanup } = makeRepo({
+    router: {
+      defaultModel: 'claude-sonnet-4-5-20250929',
+      models: ['claude-sonnet-4-5-20250929', 'gpt-5.4', 'fresh-model-9000'],
+    },
+    modelRegistry: {
+      models: {
+        'fresh-model-9000': { releasedAt },
+      },
+    },
+  });
+  try {
+    const result = evaluateChallenge({
+      routingDecision: makeDecision({ confidence: 0.95 }),
+      evalSummary: {
+        totalRecords: 100,
+        recordsByModel: { 'claude-sonnet-4-5-20250929': 90, 'gpt-5.4': 0, 'fresh-model-9000': 9 },
+        recordsByStage: { plan: 100, implementation: 100, review: 100 },
+        recordsByModelStage: {
+          'claude-sonnet-4-5-20250929': { plan: 90, implementation: 90, review: 90 },
+          // gpt-5.4 (no releasedAt) has FEWER records, but the recent model
+          // must win exploration priority
+          'gpt-5.4': {},
+          'fresh-model-9000': { plan: 3, implementation: 3, review: 3 },
+        },
+      },
+      config: { enabled: true, confidenceThreshold: 0.5, newModelChallengeCount: 5, minEvalRecordsPerStage: 1 },
+      repoDir,
+    });
+
+    assert.equal(result.shouldChallenge, true);
+    assert.equal(result.reason, 'new-model');
+    assert.equal(result.challengerModel, 'fresh-model-9000');
+    assert.equal(result.stage, 'plan');
+  } finally {
+    cleanup();
+  }
+});
+
+
 console.log(`\n--- Results: ${passed} passed, ${failed} failed ---`);
 if (failed > 0) {
   process.exit(1);

@@ -109,6 +109,15 @@ or undersampled models keep receiving routing traffic:
   pure prior, `blendSamples` records means pure empirical. This is how a
   brand-new registry model (e.g. a freshly released frontier model) becomes
   routable before any challenge runs produce eval data for it.
+- `newModelBoost` (default off, `multiplier: 1`): models whose registry
+  `releasedAt` falls within `windowDays` (default 45) get their exploration
+  sampling weight multiplied by `multiplier`, decaying linearly to 1.0 at the
+  window edge — a temporary thumb on the scale while a new model accumulates
+  data, never a permanent one. The same window also makes the challenge
+  scheduler prioritize recently released under-covered models over older
+  deliberately-unused ones. Set `releasedAt` per model in the registry
+  defaults or via `modelRegistry.models.<id>.releasedAt` config overrides.
+  Boosted picks are marked `[recency-boosted]` in decision reasoning.
 
 Sampling, the UCB bonus, and prior seeding all operate inside the
 already-filtered candidate set (allowlists, capability constraints, disabled

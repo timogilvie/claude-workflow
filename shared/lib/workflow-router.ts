@@ -17,6 +17,7 @@ import { compareLatencyTier, getEffectiveRegistry, getLadder, hasCapabilityConst
 import { readQuotaSnapshot, type QuotaSnapshot } from './quota-state.ts';
 import {
   formatExplorationReasoning,
+  recencyMultiplier,
   resolveExplorationConfig,
   sampleCandidateIndex,
   type ExplorationAttribution,
@@ -1584,6 +1585,9 @@ export function tryPolicyResolution(
   const randomFn = options?.randomFn || Math.random;
   const registry = getEffectiveRegistry(repoDir);
   const explorationEntries: ExplorationAttribution['explored'] = [];
+  const boostFor = (modelId: string): number => explorationConfig.boostMultiplier > 1
+    ? recencyMultiplier(registry.models[modelId]?.releasedAt, explorationConfig)
+    : 1;
   const samplePolicyModel = (
     candidates: string[],
     role: 'planner' | 'coder' | 'reviewer',
@@ -1594,10 +1598,15 @@ export function tryPolicyResolution(
       return argmax;
     }
     const scores = candidates.map((modelId) => (registry.models[modelId]?.qualityScores[taskType] ?? 0) / 100);
-    const pick = sampleCandidateIndex(scores, explorationConfig, randomFn);
+    const pick = sampleCandidateIndex(scores, explorationConfig, randomFn, candidates.map(boostFor));
     const sampled = candidates[pick.index] ?? argmax;
     if (pick.explored && sampled !== argmax) {
-      explorationEntries.push({ role, sampled, argmax });
+      explorationEntries.push({
+        role,
+        sampled,
+        argmax,
+        ...(boostFor(sampled) > 1 ? { recencyBoosted: true } : {}),
+      });
     }
     return sampled;
   };
