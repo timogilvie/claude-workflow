@@ -283,6 +283,40 @@ describe('route-tasks CLI', () => {
     }
   });
 
+  it('writes route-task --output as strict JSON without stdout capture', () => {
+    const repoDir = makeRepo();
+    try {
+      const packet = join(repoDir, 'budget-task.md');
+      writeFileSync(packet, 'Build routing flow with tests\n');
+      const outputFile = join(repoDir, 'route.output.json');
+
+      const result = spawnSync('npx', [
+        'tsx',
+        routeTaskTool,
+        '--json',
+        '--file',
+        packet,
+        '--repo-dir',
+        repoDir,
+        '--output',
+        outputFile,
+      ], {
+        encoding: 'utf-8',
+        cwd: resolve(__dirname, '..'),
+        env: { ...process.env },
+      });
+
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      assert.equal(result.stdout, '');
+      const artifact = readFileSync(outputFile, 'utf-8');
+      assert.doesNotThrow(() => JSON.parse(artifact));
+      assert.equal(artifact.includes('[hokusai-router]'), false);
+      assert.equal(artifact.includes('Router:'), false);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
   it('supports empty expanded input successfully', () => {
     const repoDir = makeRepo();
     try {
