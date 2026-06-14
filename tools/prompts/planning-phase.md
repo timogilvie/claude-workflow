@@ -17,8 +17,7 @@ Task context is pre-seeded at: {{TASK_CONTEXT_PATH}}
 
 2. **Re-route after expansion** (if task was expanded):
    - After expanding the task packet, re-run the router on the full specification:
-     npx tsx {{TOOLS_DIR}}/route-task.ts --json --file "{{FEATURE_DIR}}/task-packet.md" --repo-dir "{{WT_DIR}}"
-   - Save the result to: {{FEATURE_DIR}}/.post-expansion-route.json
+     npx tsx {{TOOLS_DIR}}/route-task.ts --json --file "{{FEATURE_DIR}}/task-packet.md" --repo-dir "{{ROUTER_REPO_DIR}}" --output "{{FEATURE_DIR}}/.post-expansion-route.json"
    - This captures how routing changes with richer context (compared to `.initial-route.json` from the raw `selected-task.json` metadata)
 
 3. **Detect migrations** (if not already assigned):
