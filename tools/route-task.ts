@@ -1,4 +1,6 @@
 #!/usr/bin/env -S npx tsx
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { runTool } from '../shared/lib/tool-runner.ts';
 import { getWavemillAdditionalEvalPaths, routeBatch } from '../shared/lib/route-batch.ts';
 import { readTaskPromptFromFile, summarizeWorkflowRoute } from '../shared/lib/workflow-router.ts';
@@ -14,6 +16,10 @@ runTool({
     json: {
       type: 'boolean',
       description: 'Output machine-readable JSON',
+    },
+    output: {
+      type: 'string',
+      description: 'Write machine-readable JSON to a file instead of stdout',
     },
     'repo-dir': {
       type: 'string',
@@ -112,8 +118,16 @@ runTool({
       console.error('  - Waiting for quota recovery\n');
     }
 
+    const jsonOutput = JSON.stringify(decision, null, 2);
+    if (args.output) {
+      const outputPath = resolve(args.output);
+      mkdirSync(dirname(outputPath), { recursive: true });
+      writeFileSync(outputPath, `${jsonOutput}\n`, 'utf-8');
+      return;
+    }
+
     if (args.json) {
-      console.log(JSON.stringify(decision, null, 2));
+      console.log(jsonOutput);
       return;
     }
 
