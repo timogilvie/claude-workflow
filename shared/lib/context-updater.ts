@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { callClaude } from './llm-cli.ts';
+import { callHeadlessLLM } from './headless-llm.ts';
 import { confirm } from './cli-prompt.ts';
 import { extractKeyFiles, readContextSpec } from './context-tool.ts';
 
@@ -104,16 +104,12 @@ ${opts.recentChanges}
 `;
   }
 
-  const claudeCmd = process.env.CLAUDE_CMD || 'claude';
-  const result = await callClaude(prompt, {
+  const result = await callHeadlessLLM(prompt, {
     mode: 'stream',
-    cliCmd: claudeCmd,
     taskType: 'classify',
-    cliFlags: [
-      '--tools', '',
-      '--append-system-prompt',
+    noTools: true,
+    systemInstruction:
       'You have NO tools available. Output ONLY the updated subsystem spec markdown. No conversational text, no preamble, no XML tags. Start directly with the heading.',
-    ],
   });
 
   return result.text;
