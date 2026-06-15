@@ -429,17 +429,18 @@ export function buildCalibration(recommendations: AuditRecommendation[]): Calibr
 
 function descriptorGroupValue(recommendation: AuditRecommendation, groupBy: string): string {
   const descriptor = buildReplayDescriptor(recommendation.originalRecord);
-  if (groupBy === 'taskType') {
+  const key = groupBy.replace('_descriptor', '');
+  if (key === 'taskType') {
     return descriptor.signals.heuristic.task_type || 'unknown';
   }
-  if (groupBy === 'complexity') {
+  if (key === 'complexity') {
     const complexity = descriptor.signals.learned.complexity;
     if (typeof complexity !== 'number') return 'unknown';
     if (complexity <= 2) return 'low';
     if (complexity >= 4) return 'high';
     return 'medium';
   }
-  if (groupBy === 'domain') {
+  if (key === 'domain') {
     return descriptor.signals.learned.domain || 'unknown';
   }
   return 'unknown';
