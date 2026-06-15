@@ -85,7 +85,8 @@ runTool({
       const reasonSummary = result.blockers
         .map((blocker) => `${blocker.openrouterId}:${blocker.reason}`)
         .join(', ');
-      throw new Error(`Catalog sync completed with blockers: ${reasonSummary}`);
+      console.error(`⚠️  Catalog has unresolved models: ${reasonSummary}`);
+      process.exitCode = 1;
     }
   },
 }).catch((error) => {
