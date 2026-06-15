@@ -541,6 +541,72 @@ function unwrapJsonEnvelope(raw: string): {
   }
 }
 
+/**
+ * Unwrap Codex `codex exec --json` output.
+ *
+ * Codex emits a JSONL event stream (one JSON object per line), unlike Claude's
+ * single JSON envelope. The shape (codex-cli 0.139.0):
+ *   {"type":"thread.started","thread_id":"..."}
+ *   {"type":"turn.started"}
+ *   {"type":"item.completed","item":{"type":"agent_message","text":"..."}}
+ *   {"type":"turn.completed","usage":{"input_tokens":N,"cached_input_tokens":N,
+ *                                     "output_tokens":N,"reasoning_output_tokens":N}}
+ *
+ * Extracts:
+ * - text: concatenation of all `agent_message` item texts in order (final answer)
+ * - usage: from the last `turn.completed` event (codex does not report cost)
+ *
+ * Falls back to the raw text if no agent_message events are present.
+ */
+function unwrapCodexJsonl(raw: string): {
+  text: string;
+  usage?: LLMCallResult['usage'];
+  costUsd?: number;
+} {
+  const messages: string[] = [];
+  let usage: LLMCallResult['usage'] | undefined;
+
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    let event: any;
+    try {
+      event = JSON.parse(trimmed);
+    } catch {
+      // Non-JSON line (e.g. a stray log); skip it.
+      continue;
+    }
+
+    if (
+      event?.type === 'item.completed' &&
+      event.item?.type === 'agent_message' &&
+      typeof event.item.text === 'string'
+    ) {
+      messages.push(event.item.text);
+    } else if (event?.type === 'turn.completed' && event.usage) {
+      const u = event.usage;
+      // `input_tokens` already includes cached input; `cached_input_tokens` is a
+      // subset, so it is not added again. Reasoning tokens are billed as output.
+      const inputTokens = u.input_tokens || 0;
+      const outputTokens = (u.output_tokens || 0) + (u.reasoning_output_tokens || 0);
+      usage = {
+        inputTokens,
+        outputTokens,
+        totalTokens: inputTokens + outputTokens,
+      };
+    }
+  }
+
+  if (messages.length === 0) {
+    // No structured agent message found — fall back to raw output.
+    return { text: raw.trim(), usage };
+  }
+
+  return { text: messages.join('\n').trim(), usage };
+}
+
 // ────────────────────────────────────────────────────────────────
 // Provider Configuration
 // ────────────────────────────────────────────────────────────────
@@ -574,9 +640,15 @@ const PROVIDER_CONFIGS: Record<LLMProvider, ProviderConfig> = {
   },
   codex: {
     defaultCmd: 'codex',
+    // Unset any inherited CODEX_API_KEY-style recursion guard is unnecessary here;
+    // codex exec reads auth from its own config. We only ensure no stray output
+    // override leaks in from a parent codex process.
     envVarName: 'CODEX_OUTPUT',
-    envVarValue: 'json',
-    defaultArgs: ['--output-format', 'json'],
+    envVarValue: undefined,
+    // `codex exec --json` runs non-interactively and prints JSONL events to stdout.
+    // Prompt is read from stdin (we pipe it via `< tmpfile`). read-only sandbox
+    // keeps single-shot utility calls from executing model-generated commands.
+    defaultArgs: ['exec', '--json', '--sandbox', 'read-only'],
   },
   openai: {
     defaultCmd: 'openai',
@@ -979,14 +1051,48 @@ async function executeStream(
  * }
  * ```
  */
-export async function checkClaudeAvailability(
+/**
+ * Provider-specific knobs for the generic availability check.
+ */
+interface CliAvailabilitySpec {
+  /** Human-facing label, e.g. "Claude" or "Codex" */
+  label: string;
+  /** Build the headless test-call command (a single trivial round-trip). */
+  buildTestCommand: (cliCmd: string, tmpFile: string) => string;
+}
+
+const CLI_AVAILABILITY_SPECS: Record<LLMProvider, CliAvailabilitySpec> = {
+  claude: {
+    label: 'Claude',
+    buildTestCommand: (cliCmd, tmpFile) =>
+      `${escapeShellArg(cliCmd)} -p --output-format json --model claude-haiku-4-5-20251001 < ${escapeShellArg(tmpFile)}`,
+  },
+  codex: {
+    label: 'Codex',
+    buildTestCommand: (cliCmd, tmpFile) =>
+      `${escapeShellArg(cliCmd)} exec --json --sandbox read-only --model gpt-5.4 < ${escapeShellArg(tmpFile)}`,
+  },
+  openai: {
+    label: 'OpenAI',
+    buildTestCommand: (cliCmd, tmpFile) =>
+      `${escapeShellArg(cliCmd)} --format json < ${escapeShellArg(tmpFile)}`,
+  },
+};
+
+/**
+ * Generic CLI availability probe: PATH → version → trivial round-trip.
+ * Provider-agnostic; see {@link checkClaudeAvailability} / {@link checkCodexAvailability}.
+ */
+async function checkCliAvailability(
+  provider: LLMProvider,
   options: { verbose?: boolean } = {}
 ): Promise<CliHealthCheck> {
   const verbose = options.verbose ?? false;
-  const cliCmd = getCliCommand('claude', {});
+  const cliCmd = getCliCommand(provider, {});
+  const { label, buildTestCommand } = CLI_AVAILABILITY_SPECS[provider];
 
   if (verbose) {
-    console.error(`Checking Claude CLI availability (command: ${cliCmd})...`);
+    console.error(`Checking ${label} CLI availability (command: ${cliCmd})...`);
   }
 
   // Check 1: Is command in PATH?
@@ -1007,7 +1113,7 @@ export async function checkClaudeAvailability(
     return {
       available: false,
       command: cliCmd,
-      error: `Claude CLI command '${cliCmd}' not found in PATH`,
+      error: `${label} CLI command '${cliCmd}' not found in PATH`,
       diagnostics: {
         inPath: false,
         executable: false,
@@ -1035,7 +1141,7 @@ export async function checkClaudeAvailability(
     return {
       available: false,
       command: cliCmd,
-      error: `Claude CLI found but not executable: ${(error as Error).message}`,
+      error: `${label} CLI found but not executable: ${(error as Error).message}`,
       diagnostics: {
         inPath,
         executable: false,
@@ -1052,15 +1158,12 @@ export async function checkClaudeAvailability(
     try {
       writeFileSync(tmpFile, testPrompt, 'utf-8');
 
-      const testResult = execShellCommand(
-        `${escapeShellArg(cliCmd)} -p --output-format json --model claude-haiku-4-5-20251001 < ${escapeShellArg(tmpFile)}`,
-        {
-          encoding: 'utf-8',
-          timeout: 30000,
-          maxBuffer: 1024 * 1024,
-          env: buildProviderEnv(getProviderConfig('claude')),
-        }
-      );
+      execShellCommand(buildTestCommand(cliCmd, tmpFile), {
+        encoding: 'utf-8',
+        timeout: 30000,
+        maxBuffer: 1024 * 1024,
+        env: buildProviderEnv(getProviderConfig(provider)),
+      });
 
       // If we got here, the test call succeeded
       authWorking = true;
@@ -1088,7 +1191,7 @@ export async function checkClaudeAvailability(
         available: false,
         command: cliCmd,
         version,
-        error: `Claude CLI authentication failed. Run 'claude login' to authenticate.`,
+        error: `${label} CLI authentication failed. Run '${cliCmd} login' to authenticate.`,
         diagnostics: {
           inPath,
           executable,
@@ -1102,7 +1205,7 @@ export async function checkClaudeAvailability(
       available: false,
       command: cliCmd,
       version,
-      error: `Claude CLI test call failed: ${errorMsg}`,
+      error: `${label} CLI test call failed: ${errorMsg}`,
       diagnostics: {
         inPath,
         executable,
@@ -1113,7 +1216,7 @@ export async function checkClaudeAvailability(
 
   // All checks passed
   if (verbose) {
-    console.error(`\n✓ Claude CLI is available and working`);
+    console.error(`\n✓ ${label} CLI is available and working`);
   }
 
   return {
@@ -1128,24 +1231,63 @@ export async function checkClaudeAvailability(
   };
 }
 
-export async function ensureClaudeAvailable(
-  options: {
-    verbose?: boolean;
-    reporter?: { emit(event: { event: string; message: string; level?: 'info' | 'warn' | 'error'; details?: Record<string, unknown> }): Promise<void> };
-  } = {}
+export async function checkClaudeAvailability(
+  options: { verbose?: boolean } = {}
+): Promise<CliHealthCheck> {
+  return checkCliAvailability('claude', options);
+}
+
+export async function checkCodexAvailability(
+  options: { verbose?: boolean } = {}
+): Promise<CliHealthCheck> {
+  return checkCliAvailability('codex', options);
+}
+
+interface PreflightReporter {
+  emit(event: { event: string; message: string; level?: 'info' | 'warn' | 'error'; details?: Record<string, unknown> }): Promise<void>;
+}
+
+const PREFLIGHT_TROUBLESHOOTING: Record<LLMProvider, string[]> = {
+  claude: [
+    '  1. Install Claude CLI: npm install -g @anthropic-ai/claude-cli',
+    '  2. Authenticate: claude login',
+    '  3. Test: echo "hello" | claude -p --model claude-haiku-4-5-20251001',
+    '  4. Check PATH: which claude',
+  ],
+  codex: [
+    '  1. Install Codex CLI: brew install codex (or npm install -g @openai/codex)',
+    '  2. Authenticate: codex login',
+    '  3. Test: echo "hello" | codex exec --json --sandbox read-only',
+    '  4. Check PATH: which codex',
+  ],
+  openai: [
+    '  1. Install the OpenAI CLI',
+    '  2. Authenticate per provider instructions',
+    '  3. Check PATH: which openai',
+  ],
+};
+
+/**
+ * Provider-agnostic preflight: throws with actionable diagnostics if the CLI is
+ * not available/working. See {@link ensureClaudeAvailable} / {@link ensureCodexAvailable}.
+ */
+async function ensureCliAvailable(
+  provider: LLMProvider,
+  options: { verbose?: boolean; reporter?: PreflightReporter } = {}
 ): Promise<void> {
   const reporter = options.reporter;
+  const { label } = CLI_AVAILABILITY_SPECS[provider];
 
   await reporter?.emit({
     event: 'preflight_start',
-    message: 'Checking Claude CLI availability',
+    message: `Checking ${label} CLI availability`,
   });
 
-  const healthCheck = await checkClaudeAvailability({ verbose: options.verbose });
+  const healthCheck = await checkCliAvailability(provider, { verbose: options.verbose });
 
   if (!healthCheck.available) {
     const errorLines = [
-      'Claude CLI is not available or not working properly.',
+      `${label} CLI is not available or not working properly.`,
       '',
       `Error: ${healthCheck.error}`,
       '',
@@ -1163,10 +1305,7 @@ export async function ensureClaudeAvailable(
     errorLines.push(
       '',
       'Troubleshooting:',
-      '  1. Install Claude CLI: npm install -g @anthropic-ai/claude-cli',
-      '  2. Authenticate: claude login',
-      '  3. Test: echo "hello" | claude -p --model claude-haiku-4-5-20251001',
-      '  4. Check PATH: which claude',
+      ...PREFLIGHT_TROUBLESHOOTING[provider],
       '',
       'To skip this check (not recommended): SKIP_PREFLIGHT_CHECK=1'
     );
@@ -1174,7 +1313,7 @@ export async function ensureClaudeAvailable(
     await reporter?.emit({
       event: 'error',
       level: 'error',
-      message: 'Claude CLI preflight failed',
+      message: `${label} CLI preflight failed`,
       details: { command: healthCheck.command },
     });
 
@@ -1183,12 +1322,24 @@ export async function ensureClaudeAvailable(
 
   await reporter?.emit({
     event: 'preflight_ok',
-    message: 'Claude CLI is available',
+    message: `${label} CLI is available`,
     details: {
       command: healthCheck.command,
       version: healthCheck.version,
     },
   });
+}
+
+export async function ensureClaudeAvailable(
+  options: { verbose?: boolean; reporter?: PreflightReporter } = {}
+): Promise<void> {
+  return ensureCliAvailable('claude', options);
+}
+
+export async function ensureCodexAvailable(
+  options: { verbose?: boolean; reporter?: PreflightReporter } = {}
+): Promise<void> {
+  return ensureCliAvailable('codex', options);
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -1226,11 +1377,11 @@ export async function ensureClaudeAvailable(
  *
  * @example
  * ```typescript
- * // Codex provider
+ * // Codex provider (codex exec --json, JSONL output)
  * const result = await callLLM(prompt, {
  *   provider: 'codex',
- *   mode: 'stream',
- *   model: 'codex-latest',
+ *   mode: 'sync',
+ *   model: 'gpt-5.5',
  * });
  * ```
  *
@@ -1329,8 +1480,10 @@ async function callLLMOnce(
       rawOutput = await executeStream(tmpFile, cliArgs, options, provider, attempt, maxAttempts);
     }
 
-    // Unwrap JSON envelope
-    const { text: unwrappedText, usage, costUsd } = unwrapJsonEnvelope(rawOutput);
+    // Unwrap provider output: Claude/OpenAI emit a single JSON envelope; Codex
+    // emits a JSONL event stream.
+    const { text: unwrappedText, usage, costUsd } =
+      provider === 'codex' ? unwrapCodexJsonl(rawOutput) : unwrapJsonEnvelope(rawOutput);
 
     // Strip tool calls if enabled
     const cleanedText = stripCalls ? stripToolCalls(unwrappedText) : unwrappedText;
