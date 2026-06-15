@@ -5,7 +5,10 @@ import { join } from 'node:path';
 import { after, beforeEach, describe, it } from 'node:test';
 import { clearConfigCache } from './config.ts';
 import { saveUserConfig } from './hokusai-consent.ts';
-import type { ContributionRow } from './hokusai-contribution-schema.ts';
+import {
+  TECHNICAL_TASK_ROUTER_ROW_SCHEMA_VERSION_V2,
+  type ContributionRow,
+} from './hokusai-contribution-schema.ts';
 import {
   enqueueContribution,
   hokusaiQueueStatus,
@@ -77,6 +80,64 @@ describe('hokusai-queue', () => {
     const pendingPath = join(repoDir, '.wavemill', 'hokusai', 'queue', 'pending.jsonl');
     const lines = readFileSync(pendingPath, 'utf-8').trim().split('\n');
     assert.equal(lines.length, 1);
+  });
+
+  it('records the v2 row shape for benchmark rows', async () => {
+    const { repoDir, configDir } = makeRepo();
+    const result = await enqueueContribution({
+      schema_version: TECHNICAL_TASK_ROUTER_ROW_SCHEMA_VERSION_V2,
+      task_descriptor: {
+        task_type: 'feature',
+        language: 'typescript',
+        domain: 'frontend',
+        complexity: 5,
+        repo_size_bucket: 'medium',
+        files_touched_bucket: '2_5',
+        description_length_bucket: 'medium',
+        is_greenfield: false,
+        is_migration: false,
+        requires_tests: true,
+        cross_service: false,
+        ui_heavy: true,
+        risk_level: 'medium',
+      },
+      allowed_models: ['planner-a', 'coder-a', 'reviewer-a'],
+      selected_models: {
+        planner: 'planner-a',
+        coder: 'coder-a',
+        reviewer: 'reviewer-a',
+      },
+      available_models: {
+        planner_models: ['planner-a'],
+        coder_models: ['coder-a'],
+        reviewer_models: ['reviewer-a'],
+      },
+      success_under_budget: true,
+      completion_result: 'success',
+      outcome_labels: {
+        budget_label: 'under_budget',
+        cost_label: 'medium',
+        time_label: 'fast',
+        success_label: 'success',
+      },
+      candidate_pool: {
+        scenario_id: 'challenger-a',
+        scenario_kind: 'challenger',
+        pool_size: 2,
+      },
+      sparse_cell: {
+        cell_id: 'cell-a',
+        descriptor_signature: 'frontend|medium|2_5',
+        observed_count: 1,
+        is_sparse: true,
+      },
+      observed_at: '2026-05-30T12:00:00.000Z',
+      task_id: 'redacted-task-v2',
+      harness: 'wavemill',
+    }, { repoDir, configDir });
+
+    assert.equal(result.status, 'enqueued');
+    assert.equal(result.entry?.rowShape, TECHNICAL_TASK_ROUTER_ROW_SCHEMA_VERSION_V2);
   });
 
   it('skips duplicate rows by idempotency key', async () => {
