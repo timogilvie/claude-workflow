@@ -438,6 +438,32 @@ function isModelCompatibleWithProvider(
   return true;
 }
 
+/**
+ * Resolve which CLI/provider should run a given model id, based on the model
+ * registry. Codex runs OpenAI/`gpt-*` models (or anything tagged `agent: 'codex'`);
+ * Claude runs everything else (anthropic, deepseek-via-claude, etc.).
+ *
+ * This is the seam that lets headless utility call sites follow their configured
+ * model to the right CLI instead of hardcoding `provider: 'claude'`. An unknown
+ * or undefined model falls back to 'claude' (with a `gpt-*`/`o<n>` name heuristic
+ * for ids not present in the registry).
+ */
+export function resolveProviderForModel(model?: string, repoDir?: string): LLMProvider {
+  if (!model) {
+    return 'claude';
+  }
+  const registry = getEffectiveRegistry(repoDir);
+  const entry = getModel(registry, model);
+  if (entry?.agent === 'codex' || entry?.vendor === 'openai') {
+    return 'codex';
+  }
+  if (entry) {
+    return 'claude';
+  }
+  // Not in the registry — fall back to a name heuristic.
+  return /^(gpt-|o\d|codex)/i.test(model) ? 'codex' : 'claude';
+}
+
 // ────────────────────────────────────────────────────────────────
 // Text Cleaning Utilities
 // ────────────────────────────────────────────────────────────────

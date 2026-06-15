@@ -10,7 +10,7 @@
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { callClaude } from './llm-cli.ts';
+import { callHeadlessLLM } from './headless-llm.ts';
 import type { Subsystem } from './subsystem-detector.ts';
 import { detectAffectedSubsystems } from './subsystem-mapper.ts';
 import { errorMessage } from './error-utils.ts';
@@ -160,22 +160,17 @@ async function generateSubsystemUpdate(opts: {
     .replace('{ISSUE_DESCRIPTION}', opts.issueDescription)
     .replace(/{TIMESTAMP}/g, timestamp);
 
-  const claudeCmd = process.env.CLAUDE_CMD || 'claude';
-  const result = await callClaude(prompt, {
+  const result = await callHeadlessLLM(prompt, {
     mode: 'stream',
-    cliCmd: claudeCmd,
-    model: 'claude-haiku-4-5-20251001',
     taskType: 'classify',
     timeout: opts.timeoutMs ?? 300_000,
     activityTimeout: opts.timeoutMs ?? 60_000,
     retry: (opts.maxRetries ?? 1) > 0,
     maxRetries: opts.maxRetries ?? 1,
     signal: opts.signal,
-    cliFlags: [
-      '--tools', '',
-      '--append-system-prompt',
+    noTools: true,
+    systemInstruction:
       'You have NO tools available. Output ONLY the updated subsystem spec markdown. No conversational text, no preamble, no XML tags. Start directly with the heading.',
-    ],
   });
 
   return result.text;

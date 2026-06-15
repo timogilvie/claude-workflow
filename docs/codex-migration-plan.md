@@ -52,22 +52,35 @@ tests + review-engine/runner consumers pass.
 
 ---
 
-## Phase 1 — Convert hot / automated call sites to Codex
+## Phase 1 — Convert hot / automated call sites to Codex ✅ DONE
 
 These run **unattended** during mill mode and post-completion — highest Claude
-burn. Route each to `provider:'codex'`, `model:'gpt-5.5'` (prefer reading from
-config rather than hardcoding — see Phase 3).
+burn. (HOK-2226 — implemented on `tim/hok-2226-codex-hot-paths`.)
 
-- [ ] `shared/lib/eval.ts:274` — eval judge (runs after **every** workflow).
-- [ ] `shared/lib/post-completion-hook.ts:968` — subsystem update analysis per PR.
-- [ ] `shared/lib/context-updater.ts:108` — subsystem spec regeneration.
-- [ ] `shared/lib/subsystem-updater.ts:164` — subsystem doc updates after merge.
-- [ ] `shared/lib/scope-shrinker.ts:174` — task-packet splitting (degraded mode).
+Approach: instead of hardcoding `provider:'codex'` per site, **the provider now
+follows the model**. Added `resolveProviderForModel()` in `llm-cli.ts` (registry
+maps `gpt-*`/OpenAI → codex, else claude) and a shared `callHeadlessLLM()` wrapper
+(`shared/lib/headless-llm.ts`) that derives the provider and translates the
+Claude-only `--tools ''` / `--append-system-prompt` flags (Codex has no
+equivalent, so the instruction is folded into the prompt and tool use is bounded
+by the codex `--sandbox read-only` default). Default headless model is `gpt-5.5`
+(overridable via `WAVEMILL_HEADLESS_MODEL`; Phase 3 will source from config).
+
+- [x] `shared/lib/eval.ts` — eval judge default model → `gpt-5.5` (provider
+      follows model; `EVAL_MODEL` / `eval.judge.model` route it back to Claude).
+      ⚠️ Baseline shift — see Risks.
+- [x] `shared/lib/post-completion-hook.ts` — subsystem update analysis per PR.
+- [x] `shared/lib/context-updater.ts` — subsystem spec regeneration.
+- [x] `shared/lib/subsystem-updater.ts` — subsystem doc updates after merge.
+- [x] `shared/lib/scope-shrinker.ts` — task-packet splitting (degraded mode); DI
+      seam renamed `callClaude` → `callHeadlessLLM`; dead `claudeCmd` option dropped.
+- [x] Tests: new `shared/lib/headless-llm.test.ts` (provider routing + flag
+      translation, both providers via mock CLIs) and `resolveProviderForModel`
+      coverage in `llm-cli`. All affected suites pass.
 
 **Note:** `shared/lib/dependency-classifier.ts:250` and `tools/plan-queue.ts:235`
 use `callLLM` with `taskType` and already route through the registry fallback
-ladder — they should follow Codex automatically once Phase 3 lands, with no
-per-file edit. Verify rather than change.
+ladder — they follow Codex once Phase 3 lands, with no per-file edit. Left as-is.
 
 ---
 
