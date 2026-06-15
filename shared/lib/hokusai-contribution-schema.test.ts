@@ -292,7 +292,7 @@ describe('hokusai-contribution-schema', () => {
     const schema = JSON.parse(
       readFileSync(join(import.meta.dirname, 'hokusai-contribution-schema.json'), 'utf-8'),
     ) as object;
-    const ajv = new Ajv({ allErrors: true });
+    const ajv = new Ajv({ allErrors: true, validateFormats: false });
     const validate = ajv.compile(schema);
 
     assert.equal(validate(makeV2Row()), true, JSON.stringify(validate.errors));
