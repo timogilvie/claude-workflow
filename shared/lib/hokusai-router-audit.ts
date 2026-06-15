@@ -779,7 +779,8 @@ export async function runHokusaiRouterAudit(options: HokusaiAuditOptions = {}): 
   });
 
   const sensitivityStrategies = await mapConcurrent(syntheticProbeRequests(requests), 2, async (entry) => {
-    const result = await callHokusai(options.redact === false ? entry.request : redactModel30Request(entry.request), { endpoint, token, timeoutMs, fetchFn });
+    const shouldRedact = options.redact !== false && !entry.evalId.startsWith('sensitivity-');
+    const result = await callHokusai(shouldRedact ? redactModel30Request(entry.request) : entry.request, { endpoint, token, timeoutMs, fetchFn });
     return result.response?.predictions.recommended_strategy;
   });
 
