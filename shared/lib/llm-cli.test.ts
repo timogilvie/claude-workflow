@@ -664,3 +664,129 @@ describe('quota fallback', () => {
     assert.deepEqual(readInvocations(logPath).map((entry) => entry.model), ['model-b']);
   });
 });
+
+// A mock `codex` CLI that emits the real `codex exec --json` JSONL event stream
+// (codex-cli 0.139.0 shape) instead of Claude's single JSON envelope.
+function createMockCodexCli(
+  name: string,
+  behavior: { messages?: string[]; usage?: Record<string, number>; extraLines?: string[] }
+): { cliPath: string; logPath: string } {
+  const cliPath = join(tempRoot, `${name}.mjs`);
+  const logPath = join(tempRoot, `${name}.log`);
+  const messages = behavior.messages ?? ['ok from codex'];
+  const usage = behavior.usage ?? {
+    input_tokens: 100,
+    cached_input_tokens: 20,
+    output_tokens: 10,
+    reasoning_output_tokens: 5,
+  };
+  const extraLines = behavior.extraLines ?? [];
+  const script = `#!/usr/bin/env node
+import { appendFileSync } from 'node:fs';
+const args = process.argv.slice(2);
+const stdinChunks = [];
+process.stdin.on('data', (c) => stdinChunks.push(c));
+process.stdin.on('end', () => {
+  appendFileSync(${JSON.stringify(logPath)}, JSON.stringify({ args, stdin: Buffer.concat(stdinChunks).toString('utf-8') }) + '\\n');
+  const lines = [];
+  lines.push(JSON.stringify({ type: 'thread.started', thread_id: 't-1' }));
+  lines.push(JSON.stringify({ type: 'turn.started' }));
+  for (const [i, text] of ${JSON.stringify(messages)}.entries()) {
+    lines.push(JSON.stringify({ type: 'item.completed', item: { id: 'item_' + i, type: 'agent_message', text } }));
+  }
+  for (const extra of ${JSON.stringify(extraLines)}) {
+    lines.push(extra);
+  }
+  lines.push(JSON.stringify({ type: 'turn.completed', usage: ${JSON.stringify(usage)} }));
+  process.stdout.write(lines.join('\\n') + '\\n');
+  process.exit(0);
+});
+process.stdin.resume();
+`;
+  writeFileSync(cliPath, script, 'utf-8');
+  chmodSync(cliPath, 0o755);
+  return { cliPath, logPath };
+}
+
+describe('codex provider', () => {
+  it('extracts the agent message text and token usage from JSONL output', async () => {
+    const { cliPath } = createMockCodexCli('codex-basic', {
+      messages: ['PONG'],
+      usage: { input_tokens: 16922, cached_input_tokens: 4992, output_tokens: 6, reasoning_output_tokens: 0 },
+    });
+
+    const result = await callLLM('ping', {
+      provider: 'codex',
+      mode: 'sync',
+      cliCmd: cliPath,
+      model: 'gpt-5.5',
+      repoDir,
+    });
+
+    assert.equal(result.text, 'PONG');
+    assert.equal(result.provider, 'codex');
+    // input_tokens already includes cached; cached is not double-counted.
+    assert.equal(result.usage?.inputTokens, 16922);
+    // reasoning tokens are billed as output.
+    assert.equal(result.usage?.outputTokens, 6);
+    assert.equal(result.usage?.totalTokens, 16928);
+    assert.equal(result.costUsd, undefined);
+  });
+
+  it('concatenates multiple agent_message items in order', async () => {
+    const { cliPath } = createMockCodexCli('codex-multi', {
+      messages: ['first part', 'second part'],
+    });
+
+    const result = await callLLM('multi', {
+      provider: 'codex',
+      mode: 'stream',
+      cliCmd: cliPath,
+      model: 'gpt-5.5',
+      repoDir,
+      stripToolCalls: false,
+    });
+
+    assert.equal(result.text, 'first part\nsecond part');
+    assert.equal(result.usage?.outputTokens, 15);
+  });
+
+  it('passes the codex exec/--json/sandbox args and the prompt via stdin', async () => {
+    const { cliPath, logPath } = createMockCodexCli('codex-args', { messages: ['done'] });
+
+    await callLLM('the actual prompt', {
+      provider: 'codex',
+      mode: 'sync',
+      cliCmd: cliPath,
+      model: 'gpt-5.5',
+      repoDir,
+    });
+
+    const [invocation] = readFileSync(logPath, 'utf-8').trim().split('\n').map((l) => JSON.parse(l));
+    assert.ok(invocation.args.includes('exec'), 'expected `exec` subcommand');
+    assert.ok(invocation.args.includes('--json'), 'expected `--json` flag');
+    const sandboxIdx = invocation.args.indexOf('--sandbox');
+    assert.equal(invocation.args[sandboxIdx + 1], 'read-only');
+    assert.equal(invocation.stdin, 'the actual prompt');
+  });
+
+  it('ignores non-agent_message events and stray non-JSON lines', async () => {
+    const { cliPath } = createMockCodexCli('codex-noise', {
+      messages: ['real answer'],
+      extraLines: [
+        JSON.stringify({ type: 'item.completed', item: { type: 'reasoning', text: 'thinking...' } }),
+        'not json at all',
+      ],
+    });
+
+    const result = await callLLM('noise', {
+      provider: 'codex',
+      mode: 'sync',
+      cliCmd: cliPath,
+      model: 'gpt-5.5',
+      repoDir,
+    });
+
+    assert.equal(result.text, 'real answer');
+  });
+});
