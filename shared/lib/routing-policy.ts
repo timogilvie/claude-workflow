@@ -156,8 +156,15 @@ export function resolveModel(
     registryOverride ?? getEffectiveRegistry(policy.repoDir),
     policy.repoDir,
   );
+  const ladderModelIds = new Set(getLadder(registry, policy.taskType));
+  const candidateModelIds = Object.entries(registry.models)
+    .filter(([modelId, capabilities]) =>
+      ladderModelIds.has(modelId) || capabilities.defaultLadderEligible !== false
+    )
+    .map(([modelId]) => modelId);
   const floor = getAllowedModelFloor(policy.difficulty);
-  const hasViableFrontier = Object.entries(registry.models).some(([modelId, capabilities]) => {
+  const hasViableFrontier = candidateModelIds.some((modelId) => {
+    const capabilities = registry.models[modelId];
     if (capabilities.class !== 'frontier') {
       return false;
     }
@@ -194,7 +201,8 @@ export function resolveModel(
   const shouldApplyCapabilityFiltering =
     capabilityFilteringEnabled && hasCapabilityConstraints(policy.capabilityConstraints);
 
-  const candidates = Object.entries(registry.models).map(([modelId, capabilities]) => {
+  const candidates = candidateModelIds.map((modelId) => {
+    const capabilities = registry.models[modelId];
     const qualityScore = capabilities.qualityScores[policy.taskType] ?? 0;
     const status = getQuotaStatus(policy.quotaState, modelId);
     const adjustedScore = computeAdjustedScore(qualityScore, status);
