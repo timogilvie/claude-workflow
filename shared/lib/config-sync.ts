@@ -95,14 +95,14 @@ export const CANONICAL_CONFIG_TEMPLATE: WavemillConfig = {
   } as WavemillConfig['review'] & { metricsLog: string; personas: string[] },
   router: {
     enabled: true,
-    defaultModel: 'claude-sonnet-4-6',
+    defaultModel: 'gpt-5.5',
     minRecords: 20,
     minModels: 2,
     models: [],
     availableModels: {
       planner: ['claude-opus-4-8', 'claude-opus-4-7', 'claude-sonnet-4-6', 'gpt-5.4', 'gpt-5.5'],
     },
-    defaultAgent: 'claude',
+    defaultAgent: 'codex',
     agentMap: {
       'claude-opus-4-8': 'claude',
       'claude-opus-4-7': 'claude',
@@ -124,8 +124,8 @@ export const CANONICAL_CONFIG_TEMPLATE: WavemillConfig = {
     },
     layer2: {
       enabled: true,
-      model: 'claude-haiku-4-5-20251001',
-      provider: 'claude-cli',
+      model: 'gpt-5.4',
+      provider: 'codex',
     },
     onFailure: 'conservative',
   },

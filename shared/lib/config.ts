@@ -269,7 +269,7 @@ export interface ValidationLayerConfig {
 
 export interface ValidationLayer2Config extends ValidationLayerConfig {
   model?: string;
-  provider?: 'claude-cli' | 'anthropic';
+  provider?: 'claude-cli' | 'anthropic' | 'codex';
 }
 
 export interface ValidationConfig {

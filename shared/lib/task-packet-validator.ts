@@ -12,7 +12,7 @@ import { resolve } from "node:path";
 import { sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
-import { callClaude, parseJsonFromLLM } from './llm-cli.ts';
+import { callClaude, callLLM, parseJsonFromLLM } from './llm-cli.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -82,7 +82,7 @@ export interface ValidationConfig {
   layer2: {
     enabled: boolean;
     model: string;
-    provider: 'claude-cli' | 'anthropic';
+    provider: 'claude-cli' | 'anthropic' | 'codex';
   };
   /** Behavior on validation failure */
   onFailure: 'conservative' | 'auto-fix' | 'proceed';
@@ -98,8 +98,8 @@ export const DEFAULT_VALIDATION_CONFIG: ValidationConfig = {
   },
   layer2: {
     enabled: true,
-    model: 'claude-haiku-4-5-20251001',
-    provider: 'claude-cli',
+    model: 'gpt-5.4',
+    provider: 'codex',
   },
   onFailure: 'conservative',
 };
@@ -541,21 +541,38 @@ interface LLMReviewResponse {
 }
 
 /**
- * Call Claude CLI with a prompt
+ * Call an LLM for validation, routing to the correct provider.
  */
-async function callClaudeCLI(prompt: string, model: string): Promise<string> {
+async function callValidationLLM(
+  prompt: string,
+  model: string,
+  provider: 'claude-cli' | 'anthropic' | 'codex'
+): Promise<string> {
+  if (provider === 'codex') {
+    const result = await callLLM(prompt, {
+      mode: 'sync',
+      provider: 'codex',
+      model,
+      taskType: 'classify',
+      timeout: TIMEOUT_MS,
+      maxBuffer: 5 * 1024 * 1024,
+    });
+    if (!result.text) {
+      throw new Error('Empty response from Codex');
+    }
+    return result.text;
+  }
+
   const result = await callClaude(prompt, {
     mode: 'sync',
     model,
     taskType: 'classify',
-    timeout: TIMEOUT_MS, // 30000
+    timeout: TIMEOUT_MS,
     maxBuffer: 5 * 1024 * 1024,
   });
-
   if (!result.text) {
     throw new Error('Empty response from Claude CLI');
   }
-
   return result.text;
 }
 
@@ -615,7 +632,7 @@ export async function runLayer2Validation(
   // Call LLM
   let response: string;
   try {
-    response = await callClaudeCLI(prompt, config.layer2.model);
+    response = await callValidationLLM(prompt, config.layer2.model, config.layer2.provider);
   } catch (error) {
     throw new Error(`LLM validation failed: ${error}`);
   }
