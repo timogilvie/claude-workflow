@@ -118,6 +118,21 @@ function writeMultiFrontierConfig(targetRepoDir: string): void {
           weaknesses: ['api dependency'],
           qualityScores: { planning: 92, coding: 90, review: 90, classify: 72, routing: 74 },
         },
+        'gpt-5': {
+          class: 'strong_generalist',
+        },
+        'deepseek-reasoner': {
+          class: 'strong_generalist',
+        },
+        'deepseek-r1': {
+          class: 'strong_generalist',
+        },
+        'kimi-k2': {
+          class: 'strong_generalist',
+        },
+        'gemini-2.5-pro': {
+          class: 'strong_generalist',
+        },
       },
       ladders: {
         planning: ['claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
@@ -140,6 +155,7 @@ describe('operating-mode', () => {
       `operating-mode-test-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     );
     repoDir = createRepoDir('repo');
+    writeMultiFrontierConfig(repoDir);
   });
 
   afterEach(() => {
@@ -386,6 +402,21 @@ describe('operating-mode', () => {
             vendor: 'openai',
             class: 'frontier',
           },
+          'gpt-5': {
+            class: 'strong_generalist',
+          },
+          'deepseek-reasoner': {
+            class: 'strong_generalist',
+          },
+          'deepseek-r1': {
+            class: 'strong_generalist',
+          },
+          'kimi-k2': {
+            class: 'strong_generalist',
+          },
+          'gemini-2.5-pro': {
+            class: 'strong_generalist',
+          },
         },
       },
     }, null, 2), 'utf-8');
@@ -410,6 +441,21 @@ describe('operating-mode', () => {
         models: {
           'claude-sonnet-4-6': {
             class: 'frontier',
+          },
+          'gpt-5': {
+            class: 'strong_generalist',
+          },
+          'deepseek-reasoner': {
+            class: 'strong_generalist',
+          },
+          'deepseek-r1': {
+            class: 'strong_generalist',
+          },
+          'kimi-k2': {
+            class: 'strong_generalist',
+          },
+          'gemini-2.5-pro': {
+            class: 'strong_generalist',
           },
         },
       },
@@ -499,13 +545,28 @@ describe('operating-mode', () => {
     it('returns multi-vendor counts when multiple frontier vendors are configured', () => {
       writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
         modelRegistry: {
-          models: {
-            'gpt-5.4': {
-              vendor: 'openai',
-              class: 'frontier',
-            },
+        models: {
+          'gpt-5.4': {
+            vendor: 'openai',
+            class: 'frontier',
+          },
+          'gpt-5': {
+            class: 'strong_generalist',
+          },
+          'deepseek-reasoner': {
+            class: 'strong_generalist',
+          },
+          'deepseek-r1': {
+            class: 'strong_generalist',
+          },
+          'kimi-k2': {
+            class: 'strong_generalist',
+          },
+          'gemini-2.5-pro': {
+            class: 'strong_generalist',
           },
         },
+      },
       }, null, 2), 'utf-8');
       clearConfigCache(repoDir);
       writeQuotaState({
@@ -541,6 +602,21 @@ describe('operating-mode', () => {
               class: 'strong_generalist',
             },
             'gpt-5.4': {
+              class: 'strong_generalist',
+            },
+            'gpt-5': {
+              class: 'strong_generalist',
+            },
+            'deepseek-reasoner': {
+              class: 'strong_generalist',
+            },
+            'deepseek-r1': {
+              class: 'strong_generalist',
+            },
+            'kimi-k2': {
+              class: 'strong_generalist',
+            },
+            'gemini-2.5-pro': {
               class: 'strong_generalist',
             },
           },

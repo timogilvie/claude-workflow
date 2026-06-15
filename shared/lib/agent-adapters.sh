@@ -42,6 +42,7 @@ agent_resolve_from_model() {
 agent_binary_for_cmd() {
   local cmd="$1"
   case "$cmd" in
+    claude-openrouter) echo "claude" ;;
     claude-deepseek) echo "claude" ;;
     *) echo "$cmd" ;;
   esac
@@ -124,6 +125,7 @@ agent_default_model_for_cmd() {
   case "$agent_cmd" in
     codex) echo "gpt-5.4" ;;
     claude) echo "claude-sonnet-4-6" ;;
+    claude-openrouter) echo "gpt-5" ;;
     claude-deepseek) echo "deepseek-v4-flash" ;;
     *) echo "" ;;
   esac
@@ -181,6 +183,19 @@ agent_model_is_deepseek() {
   [[ "$model" == deepseek-* ]]
 }
 
+agent_model_is_openrouter() {
+  local model="${1:-}"
+  local repo_dir="${2:-${REPO_DIR:-$(pwd)}}"
+  local provider_json enabled models
+
+  provider_json="$(agent_openrouter_config "$repo_dir" 2>/dev/null)" || return 1
+  enabled="$(agent_json_get "$provider_json" enabled)"
+  [[ "$enabled" == "true" ]] || return 1
+  models="$(agent_json_get "$provider_json" models)"
+
+  [[ ",$models," == *",$model,"* ]]
+}
+
 agent_json_get() {
   local json_input="$1"
   local field="$2"
@@ -210,6 +225,17 @@ agent_deepseek_config() {
   (
     cd "$lib_dir" &&
     agent_run_tsx_tool "deepseek-provider.ts" config-json "$repo_dir"
+  )
+}
+
+agent_openrouter_config() {
+  local repo_dir="${1:-${REPO_DIR:-$(pwd)}}"
+  local tools_dir="${TOOLS_DIR:-$repo_dir/tools}"
+  local lib_dir="${tools_dir%/tools}/shared/lib"
+
+  (
+    cd "$lib_dir" &&
+    agent_run_tsx_tool "openrouter-provider.ts" config-json "$repo_dir"
   )
 }
 
@@ -255,6 +281,38 @@ agent_validate_deepseek_launch() {
 
   if [[ "$has_api_key" != "true" ]]; then
     echo "Error: DeepSeek model '$model' requires ${api_key_env:-DEEPSEEK_API_KEY} to be set" >&2
+    return 1
+  fi
+
+  return 0
+}
+
+agent_validate_openrouter_launch() {
+  local model="$1"
+  local repo_dir="${2:-${REPO_DIR:-$(pwd)}}"
+  local provider_json api_key_env enabled has_api_key models
+
+  provider_json="$(agent_openrouter_config "$repo_dir")" || {
+    echo "Error: failed to load OpenRouter provider config" >&2
+    return 1
+  }
+  enabled="$(agent_json_get "$provider_json" enabled)"
+  api_key_env="$(agent_json_get "$provider_json" apiKeyEnv)"
+  has_api_key="$(agent_json_get "$provider_json" hasApiKey)"
+  models="$(agent_json_get "$provider_json" models)"
+
+  if [[ "$enabled" != "true" ]]; then
+    echo "Error: OpenRouter model '$model' requires providers.openrouter.enabled=true" >&2
+    return 1
+  fi
+
+  if [[ ",$models," != *",$model,"* ]]; then
+    echo "Error: OpenRouter model '$model' is not allowlisted in providers.openrouter.models" >&2
+    return 1
+  fi
+
+  if [[ "$has_api_key" != "true" ]]; then
+    echo "Error: OpenRouter model '$model' requires ${api_key_env:-OPENROUTER_API_KEY} to be set" >&2
     return 1
   fi
 
@@ -409,7 +467,21 @@ agent_check_auth() {
         return 1
       fi
       ;;
+    claude-openrouter)
+      if ! agent_validate_openrouter_launch "$model" "$repo_dir"; then
+        agent_auth_cache_set "$cache_key" 1
+        return 1
+      fi
+      ;;
     claude)
+      if agent_model_is_openrouter "$model" "$repo_dir"; then
+        if ! agent_validate_openrouter_launch "$model" "$repo_dir"; then
+          agent_auth_cache_set "$cache_key" 1
+          return 1
+        fi
+        agent_auth_cache_set "$cache_key" 0
+        return 0
+      fi
       if agent_model_is_deepseek "$model"; then
         if ! agent_validate_deepseek_launch "$model" "$repo_dir"; then
           agent_auth_cache_set "$cache_key" 1
@@ -1349,6 +1421,53 @@ agent_launch_autonomous() {
 
   # Wrap agent command so exit status is visible and the shell survives
   case "$agent_cmd" in
+    claude-openrouter)
+      local tools_dir="${TOOLS_DIR:-$repo_dir/tools}"
+      local lib_dir="${tools_dir%/tools}/shared/lib"
+      local launcher="/tmp/${session}-${issue}-autonomous-launcher.sh"
+      local env_block resolved_model
+
+      env_block="$(
+        cd "$lib_dir" &&
+        agent_run_tsx_tool "$tools_dir/launch-claude-openrouter.ts" \
+          --repo "$repo_dir" \
+          --session "$session" \
+          --issue "$issue" \
+          --model "$model"
+      )" || {
+        echo "Error: claude-openrouter pre-launch validation failed" >&2
+        return 1
+      }
+
+      resolved_model="$(printf '%s\n' "$env_block" | grep '^ANTHROPIC_MODEL=' | head -1 | sed "s/^ANTHROPIC_MODEL='//;s/'$//")"
+
+      cat > "$launcher" <<LAUNCHEOF
+#!/bin/bash
+set -euo pipefail
+export WAVEMILL_SESSION='$session'
+export WAVEMILL_ISSUE='$issue'
+export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
+export WAVEMILL_PHASE='$window'
+export WAVEMILL_RESOLVED_MODEL='${resolved_model:-$model}'
+tools_dir='$tools_dir'
+lib_dir='$lib_dir'
+env_block="\$(cd "\$lib_dir" && npx tsx "\$tools_dir/launch-claude-openrouter.ts" --repo '$repo_dir' --session '$session' --issue '$issue' --model '$model' 2>&1)"
+launch_rc=\$?
+if [[ "\$launch_rc" -eq 2 ]]; then
+  echo "Error: Missing OpenRouter API key. Set OPENROUTER_API_KEY before launching." >&2
+  exit 2
+elif [[ "\$launch_rc" -ne 0 ]]; then
+  echo "Error: claude-openrouter launcher failed (rc=\$launch_rc): \$env_block" >&2
+  exit 1
+fi
+eval "\$env_block"
+cat '$instr_file' | claude --dangerously-skip-permissions
+echo "[wavemill] Agent exited (\$?)"
+LAUNCHEOF
+      chmod +x "$launcher"
+      tmux send-keys -t "$target" -l -- "$launcher"
+      tmux send-keys -t "$target" C-m
+      ;;
     claude-deepseek)
       local tools_dir="${TOOLS_DIR:-$repo_dir/tools}"
       local lib_dir="${tools_dir%/tools}/shared/lib"
@@ -1404,7 +1523,52 @@ LAUNCHEOF
       tmux send-keys -t "$target" C-m
       ;;
     claude)
-      if agent_model_is_deepseek "$model"; then
+      if agent_model_is_openrouter "$model" "$repo_dir"; then
+        local tools_dir="${TOOLS_DIR:-$repo_dir/tools}"
+        local lib_dir="${tools_dir%/tools}/shared/lib"
+        local launcher="/tmp/${session}-${issue}-autonomous-launcher.sh"
+        local env_block resolved_model
+
+        env_block="$(
+          cd "$lib_dir" &&
+          agent_run_tsx_tool "$tools_dir/launch-claude-openrouter.ts" \
+            --repo "$repo_dir" \
+            --session "$session" \
+            --issue "$issue" \
+            --model "$model"
+        )" || {
+          echo "Error: claude-openrouter pre-launch validation failed" >&2
+          return 1
+        }
+
+        resolved_model="$(printf '%s\n' "$env_block" | grep '^ANTHROPIC_MODEL=' | head -1 | sed "s/^ANTHROPIC_MODEL='//;s/'$//")"
+        cat > "$launcher" <<LAUNCHEOF
+#!/bin/bash
+set -euo pipefail
+export WAVEMILL_SESSION='$session'
+export WAVEMILL_ISSUE='$issue'
+export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
+export WAVEMILL_PHASE='$window'
+export WAVEMILL_RESOLVED_MODEL='${resolved_model:-$model}'
+tools_dir='$tools_dir'
+lib_dir='$lib_dir'
+env_block="\$(cd "\$lib_dir" && npx tsx "\$tools_dir/launch-claude-openrouter.ts" --repo '$repo_dir' --session '$session' --issue '$issue' --model '$model' 2>&1)"
+launch_rc=\$?
+if [[ "\$launch_rc" -eq 2 ]]; then
+  echo "Error: Missing OpenRouter API key. Set OPENROUTER_API_KEY before launching." >&2
+  exit 2
+elif [[ "\$launch_rc" -ne 0 ]]; then
+  echo "Error: claude-openrouter launcher failed (rc=\$launch_rc): \$env_block" >&2
+  exit 1
+fi
+eval "\$env_block"
+cat '$instr_file' | claude --dangerously-skip-permissions
+echo "[wavemill] Agent exited (\$?)"
+LAUNCHEOF
+        chmod +x "$launcher"
+        tmux send-keys -t "$target" -l -- "$launcher"
+        tmux send-keys -t "$target" C-m
+      elif agent_model_is_deepseek "$model"; then
         if ! agent_validate_deepseek_launch "$model" "$repo_dir"; then
           return 1
         fi
@@ -1696,6 +1860,57 @@ agent_launch_interactive() {
 
   # Don't use exec — keep the shell alive so the window persists after agent exit
   case "$agent_cmd" in
+    claude-openrouter)
+      local tools_dir="${TOOLS_DIR:-$repo_dir/tools}"
+      local lib_dir="${tools_dir%/tools}/shared/lib"
+      local env_block resolved_model
+
+      env_block="$(
+        cd "$lib_dir" &&
+        agent_run_tsx_tool "$tools_dir/launch-claude-openrouter.ts" \
+          --repo "$repo_dir" \
+          --session "$session" \
+          --issue "$issue" \
+          --model "$model"
+      )" || {
+        local launch_rc=$?
+        if [[ "$launch_rc" -eq 2 ]]; then
+          echo "Error: Missing OpenRouter API key. Set OPENROUTER_API_KEY before launching." >&2
+        else
+          echo "Error: claude-openrouter pre-launch validation failed" >&2
+        fi
+        return 1
+      }
+
+      resolved_model="$(printf '%s\n' "$env_block" | grep '^ANTHROPIC_MODEL=' | head -1 | sed "s/^ANTHROPIC_MODEL='//;s/'$//")"
+
+      cat > "$launcher" <<LAUNCHEOF
+#!/bin/bash
+set -euo pipefail
+export WAVEMILL_SESSION='$session'
+export WAVEMILL_ISSUE='$issue'
+export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
+export WAVEMILL_PHASE='$window'
+export WAVEMILL_RESOLVED_MODEL='${resolved_model:-$model}'
+if [[ -n '$issue' ]]; then
+  printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
+fi
+tools_dir='$tools_dir'
+lib_dir='$lib_dir'
+env_block="\$(cd "\$lib_dir" && npx tsx "\$tools_dir/launch-claude-openrouter.ts" --repo '$repo_dir' --session '$session' --issue '$issue' --model '$model' 2>&1)"
+launch_rc=\$?
+if [[ "\$launch_rc" -eq 2 ]]; then
+  echo "Error: Missing OpenRouter API key. Set OPENROUTER_API_KEY before launching." >&2
+  exit 2
+elif [[ "\$launch_rc" -ne 0 ]]; then
+  echo "Error: claude-openrouter launcher failed (rc=\$launch_rc): \$env_block" >&2
+  exit 1
+fi
+eval "\$env_block"
+claude${agent_flags} --dangerously-skip-permissions "\$(cat '$prompt_file')"
+echo "[wavemill] Agent exited (\$?)"
+LAUNCHEOF
+      ;;
     claude-deepseek)
       local tools_dir="${TOOLS_DIR:-$repo_dir/tools}"
       local lib_dir="${tools_dir%/tools}/shared/lib"
@@ -1753,7 +1968,56 @@ echo "[wavemill] Agent exited (\$?)"
 LAUNCHEOF
       ;;
     claude)
-      if agent_model_is_deepseek "$model"; then
+      if agent_model_is_openrouter "$model" "$repo_dir"; then
+        local tools_dir="${TOOLS_DIR:-$repo_dir/tools}"
+        local lib_dir="${tools_dir%/tools}/shared/lib"
+        local env_block resolved_model
+
+        env_block="$(
+          cd "$lib_dir" &&
+          agent_run_tsx_tool "$tools_dir/launch-claude-openrouter.ts" \
+            --repo "$repo_dir" \
+            --session "$session" \
+            --issue "$issue" \
+            --model "$model"
+        )" || {
+          local launch_rc=$?
+          if [[ "$launch_rc" -eq 2 ]]; then
+            echo "Error: Missing OpenRouter API key. Set OPENROUTER_API_KEY before launching." >&2
+          else
+            echo "Error: claude-openrouter pre-launch validation failed" >&2
+          fi
+          return 1
+        }
+
+        resolved_model="$(printf '%s\n' "$env_block" | grep '^ANTHROPIC_MODEL=' | head -1 | sed "s/^ANTHROPIC_MODEL='//;s/'$//")"
+        cat > "$launcher" <<LAUNCHEOF
+#!/bin/bash
+set -euo pipefail
+export WAVEMILL_SESSION='$session'
+export WAVEMILL_ISSUE='$issue'
+export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
+export WAVEMILL_PHASE='$window'
+export WAVEMILL_RESOLVED_MODEL='${resolved_model:-$model}'
+if [[ -n '$issue' ]]; then
+  printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
+fi
+tools_dir='$tools_dir'
+lib_dir='$lib_dir'
+env_block="\$(cd "\$lib_dir" && npx tsx "\$tools_dir/launch-claude-openrouter.ts" --repo '$repo_dir' --session '$session' --issue '$issue' --model '$model' 2>&1)"
+launch_rc=\$?
+if [[ "\$launch_rc" -eq 2 ]]; then
+  echo "Error: Missing OpenRouter API key. Set OPENROUTER_API_KEY before launching." >&2
+  exit 2
+elif [[ "\$launch_rc" -ne 0 ]]; then
+  echo "Error: claude-openrouter launcher failed (rc=\$launch_rc): \$env_block" >&2
+  exit 1
+fi
+eval "\$env_block"
+claude${agent_flags} --dangerously-skip-permissions "\$(cat '$prompt_file')"
+echo "[wavemill] Agent exited (\$?)"
+LAUNCHEOF
+      elif agent_model_is_deepseek "$model"; then
         local provider_json base_url api_key_env effort_level provider_root provider_home xdg_config_home xdg_data_home
         provider_json="$(agent_deepseek_config "$repo_dir")" || return 1
         base_url="$(agent_json_get "$provider_json" baseUrl)"

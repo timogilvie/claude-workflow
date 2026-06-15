@@ -187,6 +187,25 @@ describe('hokusai-contribution-builder', () => {
     assert.equal(row.candidate_pool.scenario_kind, 'challenger');
   });
 
+  it('preserves wavemill aliases instead of OpenRouter ids in selected models', () => {
+    const row = buildTechnicalTaskRouterContributionRowV2(makeProjectionV2({
+      selectedModels: {
+        planner: 'gpt-5',
+        coder: 'gpt-4.1',
+        reviewer: 'gpt-5-mini',
+      },
+      availableModels: {
+        planner_models: ['gpt-5'],
+        coder_models: ['gpt-4.1'],
+        reviewer_models: ['gpt-5-mini'],
+      },
+    }));
+
+    assert.equal(row.selected_models.planner, 'gpt-5');
+    assert.equal(row.selected_models.coder, 'gpt-4.1');
+    assert.equal(row.selected_models.reviewer, 'gpt-5-mini');
+  });
+
   it('derives outcome labels from observed cost and time', () => {
     const labels = deriveOutcomeLabels(makeProjectionV2({
       budgetUsd: 2,

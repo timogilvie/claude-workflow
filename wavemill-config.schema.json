@@ -843,6 +843,71 @@
                             }
                         }
                     ]
+                },
+                "openrouter": {
+                    "type": "object",
+                    "description": "Run Claude Code against OpenRouter's Anthropic-compatible endpoint.",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": false
+                        },
+                        "apiKeyEnv": {
+                            "type": "string",
+                            "minLength": 1
+                        },
+                        "baseUrl": {
+                            "type": "string",
+                            "default": "https://openrouter.ai/api/v1"
+                        },
+                        "models": {
+                            "type": "array",
+                            "items": {
+                                "type": "string",
+                                "minLength": 1
+                            }
+                        },
+                        "stages": {
+                            "type": "array",
+                            "items": {
+                                "type": "string",
+                                "enum": [
+                                    "planner",
+                                    "coder",
+                                    "reviewer"
+                                ]
+                            }
+                        },
+                        "effortLevel": {
+                            "type": "string",
+                            "enum": [
+                                "low",
+                                "medium",
+                                "high"
+                            ],
+                            "default": "medium"
+                        }
+                    },
+                    "additionalProperties": false,
+                    "allOf": [
+                        {
+                            "if": {
+                                "properties": {
+                                    "enabled": {
+                                        "const": true
+                                    }
+                                },
+                                "required": [
+                                    "enabled"
+                                ]
+                            },
+                            "then": {
+                                "required": [
+                                    "apiKeyEnv"
+                                ]
+                            }
+                        }
+                    ]
                 }
             },
             "additionalProperties": false

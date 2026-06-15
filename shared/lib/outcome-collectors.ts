@@ -492,8 +492,8 @@ export function collectReworkOutcome(
 
     outcome.agentIterations = parseInt(commitsRaw, 10) || 0;
 
-    // Try to count tool failures from session files (Claude only)
-    if (agentType === 'claude' && worktreePath) {
+    // Try to count tool failures from Claude-backed session files
+    if ((agentType === 'claude' || agentType === 'claude-openrouter' || agentType === 'claude-deepseek') && worktreePath) {
       const sessionFiles = resolveProjectsDirs(worktreePath)
         .filter((projectsDir) => existsSync(projectsDir))
         .flatMap((projectsDir) =>

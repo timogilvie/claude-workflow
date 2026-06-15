@@ -40,6 +40,7 @@ import {
   getProjectContextConfig,
   getDeepSeekProviderConfig,
   getDeepSeekLauncherConfig,
+  getOpenRouterProviderConfig,
   getAgentsConfig,
   getHokusaiRouterConfig,
   getHokusaiSubmissionConfig,
@@ -706,6 +707,7 @@ test('missing providers block loads with empty provider accessors', () => {
     writeConfig(tmp, JSON.stringify({ router: { enabled: true } }));
     assert.deepEqual(getProvidersConfig(tmp), {});
     assert.deepEqual(getDeepSeekProviderConfig(tmp), {});
+    assert.deepEqual(getOpenRouterProviderConfig(tmp), {});
   } finally {
     cleanUp(tmp);
   }
@@ -845,6 +847,62 @@ test('deepseek provider accessor still returns typed config with launcher presen
     assert.equal(provider.enabled, true);
     assert.equal(provider.apiKeyEnv, 'DEEPSEEK_API_KEY');
     assert.deepEqual(provider.launcher, { model: 'deepseek-v4-flash' });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('enabled openrouter provider without apiKeyEnv fails validation', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      providers: {
+        openrouter: {
+          enabled: true,
+        },
+      },
+    }));
+
+    if (hasAjv) {
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /validation failed/);
+    } else {
+      assert.doesNotThrow(() => {
+        loadWavemillConfig(tmp);
+      });
+    }
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('openrouter provider accessor returns typed config', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      providers: {
+        openrouter: {
+          enabled: true,
+          apiKeyEnv: 'OPENROUTER_KEY',
+          baseUrl: 'https://openrouter.ai/api/v1',
+          models: ['qwen-3-coder', 'kimi-k2'],
+          stages: ['coder', 'reviewer'],
+          effortLevel: 'high',
+        },
+      },
+    }));
+
+    assert.deepEqual(getOpenRouterProviderConfig(tmp), {
+      enabled: true,
+      apiKeyEnv: 'OPENROUTER_KEY',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      models: ['qwen-3-coder', 'kimi-k2'],
+      stages: ['coder', 'reviewer'],
+      effortLevel: 'high',
+    });
   } finally {
     cleanUp(tmp);
   }

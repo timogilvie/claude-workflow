@@ -107,6 +107,9 @@ function writeMultiFrontierConfig(targetRepoDir: string): void {
   writeRepoConfig(targetRepoDir, {
     modelRegistry: {
       models: {
+        'gpt-5': {
+          class: 'strong_generalist',
+        },
         'gpt-5.4': {
           vendor: 'openai',
           class: 'frontier',
@@ -127,6 +130,15 @@ function writeMultiFrontierConfig(targetRepoDir: string): void {
           strengths: ['reasoning'],
           weaknesses: ['provider gate'],
           qualityScores: { planning: 86, coding: 84, review: 82, classify: 60, routing: 62 },
+        },
+        'deepseek-r1': {
+          class: 'strong_generalist',
+        },
+        'gemini-2.5-pro': {
+          class: 'strong_generalist',
+        },
+        'kimi-k2': {
+          class: 'strong_generalist',
         },
       },
       ladders: {
@@ -564,6 +576,18 @@ describe('quota-state', () => {
         models: {
           'claude-sonnet-4-6': {
             class: 'frontier',
+          },
+          'gpt-5': {
+            class: 'strong_generalist',
+          },
+          'deepseek-r1': {
+            class: 'strong_generalist',
+          },
+          'gemini-2.5-pro': {
+            class: 'strong_generalist',
+          },
+          'kimi-k2': {
+            class: 'strong_generalist',
           },
         },
       },

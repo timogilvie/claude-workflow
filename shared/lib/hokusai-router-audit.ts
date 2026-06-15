@@ -10,6 +10,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { getHokusaiRouterConfig, getRouterConfig } from './config.ts';
+import { loadLaunchPriorityList, type ModelFamily, type ModelStatus } from './openrouter-catalog.ts';
 import { resolveEnvValue } from './env-file.ts';
 import { errorMessage } from './error-utils.ts';
 import { toHokusaiModel30Request, type HokusaiModel30Response, type HokusaiModel30Request, type HokusaiRecommendedStrategy } from './hokusai-schema.ts';
@@ -134,6 +135,7 @@ export interface HokusaiAuditReport {
   calibration: CalibrationBucket[];
   regret: Record<AuditStageRole, RegretSummary>;
   groupBreakdowns: Record<string, AuditGroupBreakdown[]>;
+  launchPriorityCoverage: LaunchPriorityCoverageEntry[];
   hardFailures: string[];
   artifactPath?: string;
 }
@@ -149,6 +151,16 @@ export interface StageShareEntry {
   model: string;
   count: number;
   share: number;
+}
+
+export interface LaunchPriorityCoverageEntry {
+  wavemillAlias: string;
+  openrouterId: string;
+  family: ModelFamily;
+  status: ModelStatus;
+  priorityTier: number;
+  evidenceCount: number;
+  isZeroEvidence: boolean;
 }
 
 interface CoverageConfig {
@@ -495,6 +507,42 @@ export function buildGroupBreakdowns(recommendations: AuditRecommendation[]): Re
   })) as Record<string, AuditGroupBreakdown[]>;
 }
 
+export function buildLaunchPriorityCoverage(
+  recommendations: AuditRecommendation[],
+  launchPriorityList = loadLaunchPriorityList(),
+): LaunchPriorityCoverageEntry[] {
+  const evidenceCounts = new Map<string, number>();
+
+  for (const recommendation of recommendations) {
+    for (const model of [
+      recommendation.strategy.planner_model,
+      recommendation.strategy.coder_model,
+      recommendation.strategy.reviewer_model,
+    ]) {
+      evidenceCounts.set(model, (evidenceCounts.get(model) ?? 0) + 1);
+    }
+  }
+
+  return launchPriorityList
+    .filter((model) => model.status === 'active' || model.status === 'watchlist')
+    .map((model) => {
+      const evidenceCount = evidenceCounts.get(model.wavemillAlias) ?? 0;
+      return {
+        wavemillAlias: model.wavemillAlias,
+        openrouterId: model.openrouterId,
+        family: model.family,
+        status: model.status,
+        priorityTier: model.priorityTier,
+        evidenceCount,
+        isZeroEvidence: evidenceCount === 0,
+      };
+    })
+    .sort((left, right) =>
+      left.priorityTier - right.priorityTier
+      || Number(right.isZeroEvidence) - Number(left.isZeroEvidence)
+      || left.wavemillAlias.localeCompare(right.wavemillAlias));
+}
+
 function mean(values: number[]): number {
   if (values.length === 0) return 0;
   return values.reduce((sum, value) => sum + value, 0) / values.length;
@@ -731,6 +779,7 @@ export async function runHokusaiRouterAudit(options: HokusaiAuditOptions = {}): 
         complexity_descriptor: [],
         domain_descriptor: [],
       },
+      launchPriorityCoverage: buildLaunchPriorityCoverage([]),
     };
     return { ...reportWithoutFailures, hardFailures: [], artifactPath: persistAuditReport(reportWithoutFailures, options.output, repoDir) };
   }
@@ -813,6 +862,7 @@ export async function runHokusaiRouterAudit(options: HokusaiAuditOptions = {}): 
     calibration: buildCalibration(recommendations),
     regret: computeRegret(recommendations, corpus, options.kNeighbors ?? 20),
     groupBreakdowns: buildGroupBreakdowns(recommendations),
+    launchPriorityCoverage: buildLaunchPriorityCoverage(recommendations),
   };
   const completeReport = {
     ...reportWithoutFailures,
@@ -912,6 +962,17 @@ export function formatHokusaiAuditReport(report: HokusaiAuditReport): string {
         lines.push(`  ${group.group.padEnd(8)} n=${String(group.count).padStart(3)} planner=${topPlanner?.model || '-'} ${topPlanner ? formatPercent(topPlanner.share) : ''} coder=${topCoder?.model || '-'} ${topCoder ? formatPercent(topCoder.share) : ''} reviewer=${topReviewer?.model || '-'} ${topReviewer ? formatPercent(topReviewer.share) : ''}`);
       }
       lines.push('');
+    }
+  }
+
+  lines.push('Launch-priority coverage');
+  if (report.launchPriorityCoverage.length === 0) {
+    lines.push('  (no launch-priority models configured)');
+  } else {
+    for (const entry of report.launchPriorityCoverage) {
+      lines.push(
+        `  ${entry.wavemillAlias.padEnd(20)} evidence=${String(entry.evidenceCount).padStart(3)} tier=${entry.priorityTier} ${entry.status} ${entry.family} ${entry.isZeroEvidence ? 'ZERO' : entry.openrouterId}`,
+      );
     }
   }
 

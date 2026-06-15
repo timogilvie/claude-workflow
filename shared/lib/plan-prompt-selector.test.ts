@@ -13,6 +13,20 @@ import {
 
 let repoDir: string;
 
+function writeClassicFrontierConfig(): void {
+  writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
+    modelRegistry: {
+      models: {
+        'gpt-5': { class: 'strong_generalist' },
+        'deepseek-reasoner': { class: 'strong_generalist' },
+        'deepseek-r1': { class: 'strong_generalist' },
+        'kimi-k2': { class: 'strong_generalist' },
+        'gemini-2.5-pro': { class: 'strong_generalist' },
+      },
+    },
+  }, null, 2), 'utf-8');
+}
+
 function writeQuotaState(status: 'healthy' | 'degrading' | 'exhausted'): void {
   mkdirSync(join(repoDir, '.wavemill'), { recursive: true });
   writeFileSync(join(repoDir, '.wavemill', 'quota-state.json'), JSON.stringify({
@@ -80,6 +94,7 @@ describe('plan-prompt-selector', () => {
       `plan-prompt-selector-test-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     );
     mkdirSync(repoDir, { recursive: true });
+    writeClassicFrontierConfig();
   });
 
   afterEach(() => {

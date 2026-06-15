@@ -324,8 +324,18 @@ export interface DeepSeekProviderConfig {
   launcher?: DeepSeekLauncherConfig;
 }
 
+export interface OpenRouterProviderConfig {
+  enabled?: boolean;
+  apiKeyEnv?: string;
+  baseUrl?: string;
+  models?: string[];
+  stages?: DeepSeekProviderStage[];
+  effortLevel?: 'low' | 'medium' | 'high';
+}
+
 export interface ProvidersConfig {
   deepseek?: DeepSeekProviderConfig;
+  openrouter?: OpenRouterProviderConfig;
 }
 
 export interface IntegrationConfig {
@@ -1312,6 +1322,14 @@ export function getProvidersConfig(repoDir?: string): ProvidersConfig {
  */
 export function getDeepSeekProviderConfig(repoDir?: string): DeepSeekProviderConfig {
   return loadWavemillConfig(repoDir).providers?.deepseek || {};
+}
+
+/**
+ * Get the OpenRouter provider config section.
+ * Returns empty object if not configured.
+ */
+export function getOpenRouterProviderConfig(repoDir?: string): OpenRouterProviderConfig {
+  return loadWavemillConfig(repoDir).providers?.openrouter || {};
 }
 
 /**

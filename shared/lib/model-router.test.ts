@@ -24,6 +24,11 @@ describe('model-router resolveAgent', () => {
     assert.equal(resolveAgent('gpt-5.4', {}, 'claude'), 'codex');
   });
 
+  it('uses registry agent overrides for OpenRouter launch-priority models', () => {
+    assert.equal(resolveAgent('qwen-3-coder', {}, 'codex'), 'claude-openrouter');
+    assert.equal(resolveAgent('gpt-5', {}, 'codex'), 'claude-openrouter');
+  });
+
   it('computes success rate with the shared eval success policy', () => {
     const stats = aggregateEvalHistory([
       {

@@ -179,11 +179,16 @@ describe('routing-policy ranking', () => {
       taskType: 'coding',
       difficulty: 'critical',
       quotaState: makeSnapshot({
+        'gpt-5': 'exhausted',
         'claude-opus-4-7': 'exhausted',
         'claude-opus-4-6': 'exhausted',
         'gpt-5.5': 'exhausted',
         'gpt-5.4': 'exhausted',
         'claude-opus-4-8': 'exhausted',
+        'deepseek-reasoner': 'exhausted',
+        'deepseek-r1': 'exhausted',
+        'kimi-k2': 'exhausted',
+        'gemini-2.5-pro': 'exhausted',
       }),
     });
 
@@ -271,7 +276,7 @@ describe('routing-policy ranking', () => {
     assert.ok(frontier);
     assert.equal(frontier.viable, false);
     assert.equal(frontier.exclusionReason, 'exceeds-cost-tier');
-    assert.equal(ranked[0].modelId, 'claude-sonnet-4-6');
+    assert.equal(ranked[0].modelClass, 'strong_generalist');
   });
 
   it('applies minimum quality thresholds after floor and cost checks', () => {

@@ -21,7 +21,7 @@ import { resolveProjectsDirs } from './workflow-cost.ts';
 // ────────────────────────────────────────────────────────────────
 
 /** Supported agent identifiers. */
-export type AgentType = 'claude' | 'codex' | 'claude-deepseek';
+export type AgentType = 'claude' | 'codex' | 'claude-deepseek' | 'claude-openrouter';
 
 /** Per-model aggregated token usage (without cost — cost is computed later). */
 export interface SessionModelUsage {
@@ -448,6 +448,7 @@ export function getSessionAdapter(agentType?: AgentType | string): SessionAdapte
   switch (agentType) {
     case 'codex':
       return new CodexSessionAdapter();
+    case 'claude-openrouter':
     case 'claude-deepseek':
     case 'claude':
     default:

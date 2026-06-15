@@ -144,14 +144,37 @@ describe('model-registry', () => {
       'claude-sonnet-4-6',
       'claude-sonnet-4-5-20250929',
       'claude-haiku-4-5-20251001',
+      'deepseek-coder-v2',
       'deepseek-chat',
+      'deepseek-r1',
+      'deepseek-v3',
       'deepseek-reasoner',
       'deepseek-v4-flash',
       'deepseek-v4-pro',
       'deepseek-v4-pro[1m]',
+      'devstral-medium',
+      'devstral-small',
+      'gemini-2.0-flash',
+      'gemini-2.5-flash',
+      'gemini-2.5-pro',
+      'gpt-4.1',
+      'gpt-5',
+      'gpt-5-mini',
       'gpt-5.3-codex',
       'gpt-5.5',
       'gpt-5.4',
+      'grok-code-fast',
+      'kimi-k2',
+      'kimi-k2-thinking',
+      'llama-3.3-70b',
+      'llama-4-maverick',
+      'llama-4-scout',
+      'mistral-large-2',
+      'mistral-medium-3',
+      'qwen-2.5-72b',
+      'qwen-2.5-coder-32b',
+      'qwen-3-235b',
+      'qwen-3-coder',
     ];
 
     assert.deepEqual(Object.keys(DEFAULT_MODEL_REGISTRY.models).sort(), expectedModels.sort());
@@ -172,6 +195,25 @@ describe('model-registry', () => {
   it('getModel returns undefined for unknown or empty IDs', () => {
     assert.equal(getModel(DEFAULT_MODEL_REGISTRY, 'missing-model'), undefined);
     assert.equal(getModel(DEFAULT_MODEL_REGISTRY, ''), undefined);
+  });
+
+  it('registers launch-priority OpenRouter models as opt-in Claude-backed entries', () => {
+    for (const modelId of [
+      'gpt-5',
+      'gpt-5-mini',
+      'gpt-4.1',
+      'qwen-3-coder',
+      'kimi-k2',
+      'gemini-2.5-pro',
+      'deepseek-r1',
+      'grok-code-fast',
+    ]) {
+      const model = DEFAULT_MODEL_REGISTRY.models[modelId];
+      assert.ok(model, `${modelId} should exist`);
+      assert.equal(model.defaultLadderEligible, false);
+      assert.equal(model.agent, 'claude-openrouter');
+      assertCapabilityMetadata(modelId, model);
+    }
   });
 
   it('normalizes reviewer aliases deterministically', () => {
@@ -540,7 +582,10 @@ describe('model-registry', () => {
   it('recognizes configured DeepSeek IDs and validates bracket syntax', () => {
     assert.deepEqual(configuredDeepSeekModelIds(DEFAULT_MODEL_REGISTRY), [
       'deepseek-chat',
+      'deepseek-coder-v2',
+      'deepseek-r1',
       'deepseek-reasoner',
+      'deepseek-v3',
       'deepseek-v4-flash',
       'deepseek-v4-pro',
       'deepseek-v4-pro[1m]',

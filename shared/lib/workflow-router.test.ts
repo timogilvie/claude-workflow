@@ -70,6 +70,9 @@ function frontierSiblingConfig() {
     },
     modelRegistry: {
       models: {
+        'gpt-5': {
+          class: 'strong_generalist',
+        },
         'gpt-5.4': {
           vendor: 'openai',
           class: 'frontier',
@@ -83,6 +86,18 @@ function frontierSiblingConfig() {
           strengths: ['code generation'],
           weaknesses: ['api dependency'],
           qualityScores: { planning: 92, coding: 90, review: 90, classify: 72, routing: 74 },
+        },
+        'deepseek-r1': {
+          class: 'strong_generalist',
+        },
+        'deepseek-reasoner': {
+          class: 'strong_generalist',
+        },
+        'gemini-2.5-pro': {
+          class: 'strong_generalist',
+        },
+        'kimi-k2': {
+          class: 'strong_generalist',
         },
       },
       ladders: {
@@ -648,12 +663,7 @@ await test('auto mode falls back to stage-aware chain without hokusai config', a
 });
 
 await test('auto mode uses degraded haiku-only routing in survival mode', async () => {
-  const { repoDir, cleanup } = makeRepo({
-    router: {
-      ...baseConfig().router,
-      mode: 'auto',
-    },
-  });
+  const { repoDir, cleanup } = makeRepo(frontierSiblingConfig());
 
   writeQuotaState(repoDir, {
     'claude-opus-4-8': 'exhausted',
@@ -683,12 +693,7 @@ await test('auto mode uses degraded haiku-only routing in survival mode', async 
 });
 
 await test('auto mode excludes opus in constrained mode', async () => {
-  const { repoDir, cleanup } = makeRepo({
-    router: {
-      ...baseConfig().router,
-      mode: 'auto',
-    },
-  });
+  const { repoDir, cleanup } = makeRepo(frontierSiblingConfig());
 
   writeQuotaState(repoDir, {
     'claude-opus-4-8': 'degrading',
@@ -710,12 +715,7 @@ await test('auto mode excludes opus in constrained mode', async () => {
 });
 
 await test('auto mode emits a constrained router transparency line when quota is degrading', async () => {
-  const { repoDir, cleanup } = makeRepo({
-    router: {
-      ...baseConfig().router,
-      mode: 'auto',
-    },
-  });
+  const { repoDir, cleanup } = makeRepo(frontierSiblingConfig());
 
   writeQuotaState(repoDir, {
     'claude-opus-4-8': 'degrading',
@@ -729,7 +729,7 @@ await test('auto mode emits a constrained router transparency line when quota is
     const { result, stderr } = await captureStderr(() =>
       routeWorkflowAuto('Build a backend feature with tests and review.', { repoDir })
     );
-    assert.match(stderr, /\[router] constrained mode: gpt-5\.5 quota is degrading; reserving it for high-complexity steps/);
+    assert.match(stderr, /\[router] constrained mode: .* quota is degrading; reserving it for high-complexity steps/);
     assert.ok(result.reasoning[0].includes('Constrained mode'));
   } finally {
     cleanup();

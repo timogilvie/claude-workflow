@@ -717,4 +717,9 @@ describe('getSessionAdapter', () => {
     const adapter = getSessionAdapter('claude-deepseek');
     assert.ok(adapter instanceof ClaudeSessionAdapter);
   });
+
+  it('returns ClaudeSessionAdapter for "claude-openrouter"', () => {
+    const adapter = getSessionAdapter('claude-openrouter');
+    assert.ok(adapter instanceof ClaudeSessionAdapter);
+  });
 });

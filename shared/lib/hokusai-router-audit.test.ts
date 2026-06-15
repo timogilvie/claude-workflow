@@ -12,10 +12,12 @@ import type {
 import {
   buildCalibration,
   buildGroupBreakdowns,
+  buildLaunchPriorityCoverage,
   buildStageShares,
   classifyValidityViolations,
   computeRegret,
   effectiveModelCount,
+  formatHokusaiAuditReport,
   stratifiedSampleRecords,
   summarizeDeterminism,
   summarizeSensitivity,
@@ -258,6 +260,93 @@ test('buildGroupBreakdowns exposes request-normalized and descriptor-derived tas
   assert.deepEqual(breakdowns.taskType.map((entry) => entry.group), ['maintenance']);
   assert.equal(breakdowns.taskType_descriptor.length, 1);
   assert.notEqual(breakdowns.taskType_descriptor[0]?.group, breakdowns.taskType[0]?.group);
+});
+
+test('buildLaunchPriorityCoverage flags zero-evidence models', () => {
+  const record = makeRecord('a1', 'feature', '2026-06-01T00:00:00Z');
+  const coverage = buildLaunchPriorityCoverage(
+    [makeRecommendation(record, { planner: 'gpt-5', coder: 'qwen-3-coder', reviewer: 'kimi-k2' })],
+    [
+      {
+        wavemillAlias: 'gpt-5',
+        openrouterId: 'openai/gpt-5',
+        family: 'gpt',
+        status: 'active',
+        priorityTier: 1,
+        roleEligibility: ['planning', 'coding', 'review'],
+      },
+      {
+        wavemillAlias: 'qwen-3-coder',
+        openrouterId: 'qwen/qwen3-coder',
+        family: 'qwen',
+        status: 'active',
+        priorityTier: 1,
+        roleEligibility: ['coding'],
+      },
+      {
+        wavemillAlias: 'gemini-2.5-pro',
+        openrouterId: 'google/gemini-2.5-pro',
+        family: 'gemini',
+        status: 'watchlist',
+        priorityTier: 2,
+        roleEligibility: ['planning', 'coding', 'review'],
+      },
+    ],
+  );
+
+  assert.equal(coverage.find((entry) => entry.wavemillAlias === 'gpt-5')?.evidenceCount, 1);
+  assert.equal(coverage.find((entry) => entry.wavemillAlias === 'qwen-3-coder')?.isZeroEvidence, false);
+  assert.equal(coverage.find((entry) => entry.wavemillAlias === 'gemini-2.5-pro')?.isZeroEvidence, true);
+});
+
+test('formatHokusaiAuditReport prints the launch-priority coverage section', () => {
+  const report = formatHokusaiAuditReport({
+    generatedAt: '2026-06-15T00:00:00.000Z',
+    endpoint: 'https://example.test',
+    dryRun: false,
+    redacted: true,
+    corpusRecords: 10,
+    sampledRecords: 3,
+    successfulResponses: 2,
+    failures: [],
+    stageShares: { planner: [], coder: [], reviewer: [] },
+    effectiveModelCounts: { planner: 0, coder: 0, reviewer: 0 },
+    dominanceWarnings: [],
+    validityViolations: [],
+    validityViolationRate: 0,
+    determinism: { attempted: 0, stablePairs: 0, allStable: false },
+    sensitivity: { attempted: 0, distinctRecommendationCount: 0, allIdentical: false },
+    calibration: [],
+    regret: {
+      planner: { count: 0, meanRegret: 0, dominated: false },
+      coder: { count: 0, meanRegret: 0, dominated: false },
+      reviewer: { count: 0, meanRegret: 0, dominated: false },
+    },
+    groupBreakdowns: {
+      taskType: [],
+      complexity: [],
+      domain: [],
+      taskType_descriptor: [],
+      complexity_descriptor: [],
+      domain_descriptor: [],
+    },
+    launchPriorityCoverage: [
+      {
+        wavemillAlias: 'gpt-5',
+        openrouterId: 'openai/gpt-5',
+        family: 'gpt',
+        status: 'active',
+        priorityTier: 1,
+        evidenceCount: 0,
+        isZeroEvidence: true,
+      },
+    ],
+    hardFailures: [],
+  });
+
+  assert.match(report, /Launch-priority coverage/);
+  assert.match(report, /gpt-5/);
+  assert.match(report, /ZERO/);
 });
 
 test('computeRegret reports zero regret for best historical model', () => {
