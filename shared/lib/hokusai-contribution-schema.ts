@@ -298,7 +298,7 @@ function isTechnicalTaskRouterContributionRowV2(value: unknown): value is Techni
     return false;
   }
 
-  if (!Array.isArray(value.scenario) && !['production_pool', 'challenger_present', 'dominant_model_removed', 'low_budget', 'sparse_cell'].includes(value.scenario)) {
+  if (typeof value.scenario !== 'string' || !['production_pool', 'challenger_present', 'dominant_model_removed', 'low_budget', 'sparse_cell'].includes(value.scenario)) {
     return false;
   }
 

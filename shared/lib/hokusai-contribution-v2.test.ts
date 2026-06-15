@@ -1,7 +1,5 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import {
   validateContributionRow,
   TECHNICAL_TASK_ROUTER_BENCHMARK_SPEC_ID_V2,
