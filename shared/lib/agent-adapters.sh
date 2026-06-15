@@ -33,7 +33,7 @@ agent_resolve_from_model() {
     claude-*) echo "claude" ;;
     deepseek-*) echo "claude" ;;
     gpt-*|o[0-9]*) echo "codex" ;;
-    *) echo "${AGENT_CMD:-claude}" ;;
+    *) echo "${AGENT_CMD:-codex}" ;;
   esac
 }
 
@@ -682,9 +682,9 @@ You are in the **ROUTING PHASE** of a multi-phase workflow. Your job is to:
 
 3. Save the routing results to $routing_path as JSON:
    {
-     "planner": "claude-sonnet-4-6",
-     "coder": "claude-opus-4-8",
-     "reviewer": "claude-sonnet-4-6",
+     "planner": "gpt-5.4",
+     "coder": "gpt-5.5",
+     "reviewer": "gpt-5.4",
      "planDepth": "light",
      "codeDepth": "medium",
      "reviewMode": "static"
@@ -700,9 +700,9 @@ You are in the **ROUTING PHASE** of a multi-phase workflow. Your job is to:
 ### Important Notes
 - Use the routing tool's recommendations directly - don't override them
 - If the routing tool fails, use sensible defaults:
-  - planner: claude-sonnet-4-6
-  - coder: claude-opus-4-8
-  - reviewer: claude-sonnet-4-6
+  - planner: gpt-5.4
+  - coder: gpt-5.5
+  - reviewer: gpt-5.4
   - planDepth: light
   - codeDepth: medium
   - reviewMode: static
