@@ -18,7 +18,7 @@ import { detectAndFormatInterventions } from './intervention-detector.ts';
 import { computeWorkflowCost, loadPricingTable } from './workflow-cost.ts';
 import { getDeepSeekProviderMetadata } from './deepseek-provider.ts';
 import { runEvalAnalysis } from './eval-analysis.ts';
-import { callClaude } from './llm-cli.ts';
+import { callHeadlessLLM } from './headless-llm.ts';
 import { detectSubsystems } from './subsystem-detector.ts';
 import { formatLintResults, lintSubsystemSpecs } from './context-linter.ts';
 import { updateAffectedSubsystems } from './subsystem-updater.ts';
@@ -964,22 +964,17 @@ async function generateContextUpdate(opts: {
     .replace('{ISSUE_DESCRIPTION}', opts.issueContext)
     .replace('{PR_DIFF}', opts.prDiff.substring(0, 50000)); // Limit diff size
 
-  const claudeCmd = process.env.CLAUDE_CMD || 'claude';
-  const result = await callClaude(prompt, {
+  const result = await callHeadlessLLM(prompt, {
     mode: 'stream',
-    cliCmd: claudeCmd,
-    model: 'claude-haiku-4-5-20251001',
     taskType: 'classify',
     timeout: opts.timeoutMs ?? 300_000,
     activityTimeout: opts.timeoutMs ?? 60_000,
     retry: (opts.maxRetries ?? 1) > 0,
     maxRetries: opts.maxRetries ?? 1,
     signal: opts.signal,
-    cliFlags: [
-      '--tools', '',
-      '--append-system-prompt',
+    noTools: true,
+    systemInstruction:
       'You have NO tools available. Output ONLY the markdown summary in the exact format specified. No conversational text, no preamble, no XML tags. Start directly with the heading.',
-    ],
   });
 
   return result.text;
