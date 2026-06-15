@@ -801,9 +801,9 @@ $details_context"
   bootstrap_router_mode="$(npx tsx "$TOOLS_DIR/get-operating-mode.ts" global --repo-dir "$REPO_DIR" 2>/dev/null || echo "normal")"
 
   jq -n \
-    --arg planner "${planner_model:-claude-sonnet-4-6}" \
-    --arg coder "${coder_model:-claude-opus-4-7}" \
-    --arg reviewer "${reviewer_model:-claude-sonnet-4-6}" \
+    --arg planner "${planner_model:-gpt-5.4}" \
+    --arg coder "${coder_model:-gpt-5.5}" \
+    --arg reviewer "${reviewer_model:-gpt-5.4}" \
     --arg planDepth "$plan_depth" \
     --arg codeDepth "$code_depth" \
     --arg reviewMode "$review_mode" \
@@ -843,8 +843,8 @@ $details_context"
   fi
 
   local planner_agent
-  planner_agent="$(agent_resolve_from_model "${planner_model:-claude-sonnet-4-6}")"
-  write_stage_result_local "$feature_dir" "planning" "running" "$planner_agent" "${planner_model:-claude-sonnet-4-6}" "Startup handoff launched planning" || true
+  planner_agent="$(agent_resolve_from_model "${planner_model:-gpt-5.4}")"
+  write_stage_result_local "$feature_dir" "planning" "running" "$planner_agent" "${planner_model:-gpt-5.4}" "Startup handoff launched planning" || true
   startup_step "[4/7] Writing task artifacts...  ✓"
 
   # Persist launched tasks as active planning work in the initial state write so
@@ -888,14 +888,14 @@ $details_context"
   planning_prompt="/tmp/${SESSION}-${issue}-planning-prompt.txt"
   build_planning_prompt "$title" "$linear_issue" "$wt_dir" "$branch" "$BASE_BRANCH" \
     "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$plan_depth" "$planner_agent" > "$planning_prompt"
-  if ! planner_launch_model="$(agent_resolve_model "planner" "${planner_model:-claude-sonnet-4-6}" "$wt_dir" 2>/dev/null)"; then
-    planner_launch_model="${planner_model:-claude-sonnet-4-6}"
+  if ! planner_launch_model="$(agent_resolve_model "planner" "${planner_model:-gpt-5.4}" "$wt_dir" 2>/dev/null)"; then
+    planner_launch_model="${planner_model:-gpt-5.4}"
   fi
   export WAVEMILL_RESOLVED_MODEL="$planner_launch_model"
   tmux set-environment -t "$SESSION" WAVEMILL_RESOLVED_MODEL "$planner_launch_model" 2>/dev/null || true
   export WAVEMILL_FEATURE_SLUG="$slug"
   export WAVEMILL_FEATURE_DIR="$feature_dir"
-  if ! agent_launch_interactive "$SESSION" "${created_window_id:-$win}" "$planning_prompt" "$planner_agent" "${planner_model:-claude-sonnet-4-6}" "" "" "$issue"; then
+  if ! agent_launch_interactive "$SESSION" "${created_window_id:-$win}" "$planning_prompt" "$planner_agent" "${planner_model:-gpt-5.4}" "" "" "$issue"; then
     [[ -n "${state_written:-}" ]] && wavemill_lock_run "state" remove_task_state "$issue" >/dev/null 2>&1 || true
     tmux kill-window -t "${created_window_id:-$SESSION:$win}" >/dev/null 2>&1 || true
     startup_phase_failed "$startup_id" agent "$issue" "launching planning agent"
