@@ -57,6 +57,106 @@
         "observed_at"
       ],
       "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema_version": { "const": "technical_task_router_row/v2" },
+        "row_id": { "type": "string", "minLength": 1 },
+        "benchmark_spec_id": { "const": "technical_task_router.benchmark_score/v2" },
+        "eval_id": { "type": "string", "minLength": 1 },
+        "model_id": { "type": "string", "minLength": 1 },
+        "scenario": {
+          "type": "string",
+          "enum": [
+            "production_pool",
+            "challenger_present",
+            "dominant_model_removed",
+            "low_budget",
+            "sparse_cell"
+          ]
+        },
+        "candidate_pool_id": { "type": "string", "minLength": 1 },
+        "task_descriptor": { "type": "object" },
+        "allowed_models": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "selected_models": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "selected_strategy": {
+          "type": "object",
+          "properties": {
+            "planner_model": { "type": "string", "minLength": 1 },
+            "coder_model": { "type": "string", "minLength": 1 },
+            "reviewer_model": { "type": "string", "minLength": 1 },
+            "routing_objective": {
+              "type": "string",
+              "enum": [
+                "lowest_cost",
+                "fastest_completion",
+                "highest_reliability"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "max_cost_usd": { "type": "number", "exclusiveMinimum": 0 },
+        "actual_cost_usd": { "type": "number", "minimum": 0 },
+        "estimated_cost_usd": { "type": "number", "minimum": 0 },
+        "actual_time_seconds": { "type": ["number", "null"], "minimum": 0 },
+        "estimated_duration_seconds": { "type": ["number", "null"], "minimum": 0 },
+        "estimated_success_under_budget": { "type": "number", "minimum": 0, "maximum": 1 },
+        "completed_successfully": { "type": "boolean" },
+        "scorer_ref": { "const": "technical_task_router.benchmark_score/v2" },
+        "observed_at": { "type": "string" },
+        "metadata": { "type": "object" },
+        "neighbor_provenance": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "row_id": { "type": "string", "minLength": 1 },
+              "submission_id": { "type": "string", "minLength": 1 },
+              "wallet": { "type": ["string", "null"] },
+              "training_row_index": { "type": "integer", "minimum": 0 },
+              "distance": { "type": "number", "minimum": 0 },
+              "weight": { "type": "number", "minimum": 0 }
+            },
+            "required": [
+              "row_id",
+              "submission_id",
+              "wallet",
+              "training_row_index",
+              "distance",
+              "weight"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "schema_version",
+        "row_id",
+        "benchmark_spec_id",
+        "eval_id",
+        "model_id",
+        "scenario",
+        "candidate_pool_id",
+        "task_descriptor",
+        "allowed_models",
+        "selected_models",
+        "max_cost_usd",
+        "actual_cost_usd",
+        "completed_successfully",
+        "scorer_ref",
+        "observed_at"
+      ],
+      "additionalProperties": false
     }
   ]
 }
