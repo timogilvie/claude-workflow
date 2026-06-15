@@ -84,20 +84,31 @@ ladder — they follow Codex once Phase 3 lands, with no per-file edit. Left as-
 
 ---
 
-## Phase 2 — Flip mill-mode (autonomous) defaults to Codex
+## Phase 2 — Flip mill-mode (autonomous) defaults to Codex ✅ DONE
 
-The launcher already supports codex; only the hardcoded `claude` defaults need
+The launcher already supports codex; only the hardcoded `claude` defaults needed
 to change. Switching the default model to a `gpt-*` id makes the existing
-`agent_resolve_from_model` pick `codex` automatically.
+`agent_resolve_from_model` pick `codex` automatically. (HOK-2227 — implemented on
+`tim/hok-2227-codex-mill-defaults`.)
 
-- [ ] `shared/lib/agent-adapters.sh` — fallback `${AGENT_CMD:-claude}` (`:36`),
-      default-model branch `claude) → claude-sonnet-4-6` (`:126`), param
-      defaults `${1:-claude}` (`:455,462,469`).
-- [ ] `shared/lib/wavemill-startup-runner.sh:804-806` — bootstrap route defaults
-      (`planner`/`coder`/`reviewer` all `claude-*`); `:629` session-agent
-      inheritance.
-- [ ] `shared/lib/model-router.ts:289-292` — `DEFAULT_ROUTER_OPTIONS.defaultAgent`
-      / `defaultModel`.
+**Model mapping (tier-matched):** planner `gpt-5.4`, coder `gpt-5.5`, reviewer
+`gpt-5.4` — preserving today's shape (sonnet-class plan/review, opus-class code).
+
+- [x] `shared/lib/wavemill-startup-runner.sh` — per-stage default fallbacks
+      flipped: `planner`/`reviewer` `claude-sonnet-4-6` → `gpt-5.4`, `coder`
+      `claude-opus-4-7` → `gpt-5.5` (all occurrences: bootstrap + launch paths).
+- [x] `shared/lib/agent-adapters.sh` — `agent_resolve_from_model` fallback
+      `${AGENT_CMD:-claude}` → `${AGENT_CMD:-codex}`; legacy `build_routing_prompt`
+      template defaults updated to the gpt tier mapping.
+- [x] `shared/lib/model-router.ts` — `DEFAULT_ROUTER_OPTIONS.defaultModel` →
+      `gpt-5.4`, `defaultAgent` → `codex`.
+
+**Intentionally left:** `agent_default_model_for_cmd` already maps `codex →
+gpt-5.4`. The `agent_cmd="${1:-claude}"` param defaults in `agent-adapters.sh`
+(`agent_*_text` helpers, prompt builders) are agent-agnostic / always passed an
+explicit agent, so flipping them is a no-op. `pretrust_directory`'s `${AGENT_CMD:-claude}`
+guards a Claude-only helper that already no-ops for codex. The config-driven
+session default (`mill.agentCmd`, currently `claude` via config-sync) is Phase 3.
 
 ---
 
