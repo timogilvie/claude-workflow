@@ -1,0 +1,242 @@
+[
+  {
+    "openrouterId": "anthropic/claude-fable-5",
+    "wavemillAlias": "claude-fable-5",
+    "family": "claude",
+    "priorityTier": 1,
+    "status": "active",
+    "roleEligibility": ["planner", "coder", "reviewer"]
+  },
+  {
+    "openrouterId": "anthropic/claude-opus-4.8",
+    "wavemillAlias": "claude-opus-4-8",
+    "family": "claude",
+    "priorityTier": 1,
+    "status": "active",
+    "roleEligibility": ["planner", "coder", "reviewer"]
+  },
+  {
+    "openrouterId": "anthropic/claude-sonnet-4.6",
+    "wavemillAlias": "claude-sonnet-4-6",
+    "family": "claude",
+    "priorityTier": 1,
+    "status": "active",
+    "roleEligibility": ["planner", "coder", "reviewer"]
+  },
+  {
+    "openrouterId": "anthropic/claude-haiku-4.5",
+    "wavemillAlias": "claude-haiku-4-5-20251001",
+    "family": "claude",
+    "priorityTier": 1,
+    "status": "active",
+    "roleEligibility": ["coder", "reviewer"]
+  },
+  {
+    "openrouterId": "openai/gpt-5.5",
+    "wavemillAlias": "gpt-5.5",
+    "family": "gpt",
+    "priorityTier": 1,
+    "status": "active",
+    "roleEligibility": ["planner", "coder", "reviewer"]
+  },
+  {
+    "openrouterId": "openai/gpt-5.4",
+    "wavemillAlias": "gpt-5.4",
+    "family": "gpt",
+    "priorityTier": 1,
+    "status": "active",
+    "roleEligibility": ["planner", "coder", "reviewer"]
+  },
+  {
+    "openrouterId": "deepseek/deepseek-v4-pro",
+    "wavemillAlias": "deepseek-v4-pro",
+    "family": "deepseek",
+    "priorityTier": 1,
+    "status": "active",
+    "roleEligibility": ["planner", "coder", "reviewer"]
+  },
+  {
+    "openrouterId": "deepseek/deepseek-v4-flash",
+    "wavemillAlias": "deepseek-v4-flash",
+    "family": "deepseek",
+    "priorityTier": 1,
+    "status": "active",
+    "roleEligibility": ["coder", "reviewer"]
+  },
+  {
+    "openrouterId": "deepseek/deepseek-r1",
+    "wavemillAlias": "deepseek-r1",
+    "family": "deepseek",
+    "priorityTier": 2,
+    "status": "active",
+    "roleEligibility": ["planner", "coder", "reviewer"]
+  },
+  {
+    "openrouterId": "deepseek/deepseek-v3.2",
+    "wavemillAlias": "deepseek-v3",
+    "family": "deepseek",
+    "priorityTier": 2,
+    "status": "active",
+    "roleEligibility": ["coder", "reviewer"]
+  },
+  {
+    "openrouterId": "qwen/qwq-32b",
+    "wavemillAlias": "qwq-32b",
+    "family": "qwen",
+    "priorityTier": 2,
+    "status": "active",
+    "roleEligibility": ["planner", "coder", "reviewer"]
+  },
+  {
+    "openrouterId": "qwen/qwen-2.5-72b-instruct",
+    "wavemillAlias": "qwen-2.5-72b-instruct",
+    "family": "qwen",
+    "priorityTier": 2,
+    "status": "active",
+    "roleEligibility": ["coder", "reviewer"]
+  },
+  {
+    "openrouterId": "qwen/qwen-2.5-coder-32b-instruct",
+    "wavemillAlias": "qwen-2.5-coder-32b-instruct",
+    "family": "qwen",
+    "priorityTier": 2,
+    "status": "active",
+    "roleEligibility": ["coder", "reviewer"]
+  },
+  {
+    "openrouterId": "google/gemini-2.5-pro-preview",
+    "wavemillAlias": "gemini-2.5-pro-preview",
+    "family": "gemini",
+    "priorityTier": 3,
+    "status": "watchlist",
+    "roleEligibility": ["planner", "coder", "reviewer"]
+  },
+  {
+    "openrouterId": "google/gemini-2.5-flash-preview",
+    "wavemillAlias": "gemini-2.5-flash-preview",
+    "family": "gemini",
+    "priorityTier": 3,
+    "status": "watchlist",
+    "roleEligibility": ["coder", "reviewer"]
+  },
+  {
+    "openrouterId": "moonshot/moonshot-v1-128k",
+    "wavemillAlias": "kimi-v1-128k",
+    "family": "kimi",
+    "priorityTier": 3,
+    "status": "watchlist",
+    "roleEligibility": ["coder", "reviewer"]
+  },
+  {
+    "openrouterId": "meta-llama/llama-3.1-70b-instruct",
+    "wavemillAlias": "llama-3.1-70b-instruct",
+    "family": "llama",
+    "priorityTier": 3,
+    "status": "watchlist",
+    "roleEligibility": ["coder", "reviewer"]
+  },
+  {
+    "openrouterId": "mistralai/mistral-large",
+    "wavemillAlias": "mistral-large",
+    "family": "mistral",
+    "priorityTier": 3,
+    "status": "watchlist",
+    "roleEligibility": ["planner", "coder", "reviewer"]
+  },
+  {
+    "openrouterId": "cohere/command-r-plus",
+    "wavemillAlias": "command-r-plus",
+    "family": "cohere",
+    "priorityTier": 3,
+    "status": "watchlist",
+    "roleEligibility": ["coder", "reviewer"]
+  },
+  {
+    "openrouterId": "nousresearch/hermes-3-llama-3.1-405b",
+    "wavemillAlias": "hermes-3-llama-3.1-405b",
+    "family": "hermes",
+    "priorityTier": 3,
+    "status": "watchlist",
+    "roleEligibility": ["coder", "reviewer"]
+  },
+  {
+    "openrouterId": "x-ai/grok-2-1212",
+    "wavemillAlias": "grok-2-1212",
+    "family": "grok",
+    "priorityTier": 3,
+    "status": "watchlist",
+    "roleEligibility": ["planner", "coder", "reviewer"]
+  },
+  {
+    "openrouterId": "anthropic/claude-haiku-3.5",
+    "wavemillAlias": "claude-haiku-3-5",
+    "family": "claude",
+    "priorityTier": 3,
+    "status": "watchlist",
+    "roleEligibility": ["coder", "reviewer"]
+  },
+  {
+    "openrouterId": "google/gemma-2-27b-it",
+    "wavemillAlias": "gemma-2-27b-it",
+    "family": "gemma",
+    "priorityTier": 3,
+    "status": "watchlist",
+    "roleEligibility": ["coder", "reviewer"]
+  },
+  {
+    "openrouterId": "microsoft/phi-4",
+    "wavemillAlias": "phi-4",
+    "family": "phi",
+    "priorityTier": 3,
+    "status": "watchlist",
+    "roleEligibility": ["coder", "reviewer"]
+  },
+  {
+    "openrouterId": "openai/o1-mini",
+    "wavemillAlias": "o1-mini",
+    "family": "o1",
+    "priorityTier": 3,
+    "status": "watchlist",
+    "roleEligibility": ["planner", "coder", "reviewer"]
+  },
+  {
+    "openrouterId": "deepseek/deepseek-r1-zero",
+    "wavemillAlias": "deepseek-r1-zero",
+    "family": "deepseek",
+    "priorityTier": 3,
+    "status": "watchlist",
+    "roleEligibility": ["planner", "coder", "reviewer"]
+  },
+  {
+    "openrouterId": "01-ai/yi-large",
+    "wavemillAlias": "yi-large",
+    "family": "yi",
+    "priorityTier": 3,
+    "status": "watchlist",
+    "roleEligibility": ["coder", "reviewer"]
+  },
+  {
+    "openrouterId": "mistralai/codestral-2501",
+    "wavemillAlias": "codestral-2501",
+    "family": "mistral",
+    "priorityTier": 3,
+    "status": "watchlist",
+    "roleEligibility": ["coder", "reviewer"]
+  },
+  {
+    "openrouterId": "baichuan-inc/baichuan3-turbo",
+    "wavemillAlias": "baichuan3-turbo",
+    "family": "baichuan",
+    "priorityTier": 3,
+    "status": "watchlist",
+    "roleEligibility": ["coder", "reviewer"]
+  },
+  {
+    "openrouterId": "openai/gpt-5.3-codex",
+    "wavemillAlias": "gpt-5.3-codex",
+    "family": "gpt",
+    "priorityTier": 3,
+    "status": "watchlist",
+    "roleEligibility": ["coder", "reviewer"]
+  }
+]
