@@ -13,6 +13,7 @@ import {
   loadLaunchPriorityList,
   normalizeCatalog,
   OPENROUTER_MODELS_URL,
+  resolveWavemillAliasFromOpenRouterId,
   serializeSnapshot,
   type LaunchPriorityFixture,
   type LaunchPriorityModel,
@@ -131,6 +132,17 @@ describe('fetchOpenRouterModels', () => {
       json: async () => ({ wrong: 'shape' }),
     })) as unknown as typeof fetch;
     await assert.rejects(() => fetchOpenRouterModels(fakeFetch), /missing "data" array/);
+  });
+});
+
+describe('resolveWavemillAliasFromOpenRouterId', () => {
+  it('maps OpenRouter ids back to Wavemill aliases', () => {
+    assert.equal(resolveWavemillAliasFromOpenRouterId('openai/gpt-5.5'), 'gpt-5.5');
+    assert.equal(resolveWavemillAliasFromOpenRouterId('qwen/qwen3-coder'), 'qwen-3-coder');
+  });
+
+  it('returns null for unknown ids', () => {
+    assert.equal(resolveWavemillAliasFromOpenRouterId('vendor/missing'), null);
   });
 });
 

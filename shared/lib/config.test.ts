@@ -40,6 +40,7 @@ import {
   getProjectContextConfig,
   getDeepSeekProviderConfig,
   getDeepSeekLauncherConfig,
+  getOpenRouterProviderConfig,
   getAgentsConfig,
   getHokusaiRouterConfig,
   getHokusaiSubmissionConfig,
@@ -231,6 +232,12 @@ test('valid config passes validation', () => {
           models: ['deepseek-v4-pro'],
           stages: ['coder'],
         },
+        openrouter: {
+          enabled: true,
+          apiKeyEnv: 'OPENROUTER_API_KEY',
+          models: ['qwen-3-coder'],
+          stages: ['coder'],
+        },
       },
       eval: { evalsDir: '.wavemill/evals' },
       mill: { maxParallel: 5 },
@@ -242,6 +249,7 @@ test('valid config passes validation', () => {
     assert.equal(config.challenge?.allowDeepseek, true);
     assert.equal(config.challengeScheduler?.confidenceThreshold, 0.65);
     assert.equal(config.providers?.deepseek?.enabled, true);
+    assert.equal(config.providers?.openrouter?.enabled, true);
     assert.equal(config.modelRegistry?.models?.['claude-opus-4-7']?.qualityScores?.coding, 99);
     assert.equal(config.modelRegistry?.models?.['deepseek-v4-pro']?.pricing?.inputCostPerMTok, 0.435);
     assert.equal(config.modelRegistry?.models?.['deepseek-v4-pro']?.defaultLadderEligible, false);
@@ -845,6 +853,34 @@ test('deepseek provider accessor still returns typed config with launcher presen
     assert.equal(provider.enabled, true);
     assert.equal(provider.apiKeyEnv, 'DEEPSEEK_API_KEY');
     assert.deepEqual(provider.launcher, { model: 'deepseek-v4-flash' });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('openrouter provider accessor returns typed config', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      providers: {
+        openrouter: {
+          enabled: true,
+          apiKeyEnv: 'OPENROUTER_API_KEY',
+          baseUrl: 'https://openrouter.ai/api',
+          models: ['qwen-3-coder', 'kimi-k2'],
+          stages: ['planner', 'coder'],
+        },
+      },
+    }));
+
+    assert.deepEqual(getOpenRouterProviderConfig(tmp), {
+      enabled: true,
+      apiKeyEnv: 'OPENROUTER_API_KEY',
+      baseUrl: 'https://openrouter.ai/api',
+      models: ['qwen-3-coder', 'kimi-k2'],
+      stages: ['planner', 'coder'],
+    });
   } finally {
     cleanUp(tmp);
   }

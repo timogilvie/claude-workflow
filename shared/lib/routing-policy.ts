@@ -11,6 +11,7 @@ import {
   type CapabilityConstraints,
 } from './model-registry.ts';
 import { filterDeepSeekModels } from './deepseek-provider.ts';
+import { filterOpenRouterModels } from './openrouter-provider.ts';
 import { type QuotaSnapshot, type QuotaStatus } from './quota-state.ts';
 import { getAllowedModelFloor, type RoutingDifficulty } from './task-difficulty-classifier.ts';
 import { isRouterCapabilityFilteringEnabled } from './config.ts';
@@ -127,7 +128,12 @@ function filterProviderUnavailableModels(
   registry: ModelRegistry,
   repoDir?: string,
 ): ModelRegistry {
-  const allowedModelIds = new Set(filterDeepSeekModels(Object.keys(registry.models), repoDir).models);
+  const allowedModelIds = new Set(
+    filterOpenRouterModels(
+      filterDeepSeekModels(Object.keys(registry.models), repoDir).models,
+      repoDir,
+    ).models,
+  );
 
   return {
     models: Object.fromEntries(

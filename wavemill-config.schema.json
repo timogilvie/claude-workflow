@@ -68,7 +68,8 @@
                     "examples": [
                         "claude",
                         "codex",
-                        "claude-deepseek"
+                        "claude-deepseek",
+                        "claude-openrouter"
                     ]
                 },
                 "requireConfirm": {
@@ -843,6 +844,67 @@
                             }
                         }
                     ]
+                },
+                "openrouter": {
+                    "type": "object",
+                    "description": "Route launch-priority models through OpenRouter's API. Default-off until explicitly enabled.",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Enable OpenRouter as a Claude-compatible provider path for launch-priority models."
+                        },
+                        "apiKeyEnv": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "Environment variable name that holds the OpenRouter API key."
+                        },
+                        "baseUrl": {
+                            "type": "string",
+                            "default": "https://openrouter.ai/api",
+                            "description": "Anthropic-compatible base URL for Claude Code requests routed through OpenRouter."
+                        },
+                        "models": {
+                            "type": "array",
+                            "description": "Launch-priority model aliases that Wavemill may route through OpenRouter when the provider is enabled.",
+                            "items": {
+                                "type": "string",
+                                "minLength": 1
+                            }
+                        },
+                        "stages": {
+                            "type": "array",
+                            "description": "Workflow stages allowed to use OpenRouter.",
+                            "items": {
+                                "type": "string",
+                                "enum": [
+                                    "planner",
+                                    "coder",
+                                    "reviewer"
+                                ]
+                            }
+                        }
+                    },
+                    "additionalProperties": false,
+                    "allOf": [
+                        {
+                            "if": {
+                                "properties": {
+                                    "enabled": {
+                                        "const": true
+                                    }
+                                },
+                                "required": [
+                                    "enabled"
+                                ]
+                            },
+                            "then": {
+                                "required": [
+                                    "apiKeyEnv"
+                                ]
+                            }
+                        }
+                    ]
                 }
             },
             "additionalProperties": false
@@ -1381,7 +1443,8 @@
                         "type": "string",
                         "description": "Agent CLI command name (e.g. 'claude', 'codex').",
                         "examples": [
-                            "claude-deepseek"
+                            "claude-deepseek",
+                            "claude-openrouter"
                         ]
                     }
                 },

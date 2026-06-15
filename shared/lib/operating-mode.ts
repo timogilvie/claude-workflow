@@ -1,5 +1,6 @@
 import type { ModelClass } from './model-registry.ts';
 import { filterDeepSeekModels } from './deepseek-provider.ts';
+import { filterOpenRouterModels } from './openrouter-provider.ts';
 import { getEffectiveRegistry } from './model-registry.ts';
 import type { QuotaSnapshot, QuotaStatus, VendorQuotaStats } from './quota-state.ts';
 import { getVendorQuotaBreakdown, readQuotaSnapshot } from './quota-state.ts';
@@ -65,8 +66,11 @@ export function getOperatingModeResult(repoDir?: string): OperatingModeResult {
   const unfilteredFrontierModels = Object.entries(registry.models)
     .filter(([, capabilities]) => capabilities.class === PREMIUM_MODEL_CLASS)
     .map(([modelId, capabilities]) => ({ modelId, vendor: capabilities.vendor }));
-  const allowedModelIds = new Set(filterDeepSeekModels(
-    unfilteredFrontierModels.map(({ modelId }) => modelId),
+  const allowedModelIds = new Set(filterOpenRouterModels(
+    filterDeepSeekModels(
+      unfilteredFrontierModels.map(({ modelId }) => modelId),
+      repoDir,
+    ).models,
     repoDir,
   ).models);
   const frontierModels = unfilteredFrontierModels.filter(({ modelId }) => allowedModelIds.has(modelId));
@@ -81,7 +85,9 @@ export function getOperatingModeResult(repoDir?: string): OperatingModeResult {
 export function hasAnyHealthyModel(repoDir?: string): boolean {
   const snapshot = readQuotaSnapshot(repoDir);
   const registry = getEffectiveRegistry(repoDir);
-  const allowedModels = new Set(filterDeepSeekModels(Object.keys(registry.models), repoDir).models);
+  const allowedModels = new Set(
+    filterOpenRouterModels(filterDeepSeekModels(Object.keys(registry.models), repoDir).models, repoDir).models,
+  );
 
   for (const modelId of Object.keys(registry.models)) {
     if (!allowedModels.has(modelId)) {
