@@ -44,6 +44,8 @@ Use the `penaltyWeights` as a **floor** for score reduction. Apply judgment to i
 - **Any functional bug** that a human had to identify or fix (wrong behavior, runtime errors, broken queries, missing edge cases): Score **0.7 maximum**.
 - **Multiple functional bugs** or a bug requiring substantial rework: Score 0.5–0.6.
 - **Heavy intervention** (multiple manual edits, many review rounds, human had to redesign approach): Score 0.5 or below.
+- **Unverified predicted failure**: If the dominant reason the score moves from baseline is a reviewer claim that code "fails its own tests" without a reproduction transcript, verbatim test counts, or failing-test output, that claim may shift the overall score by at most ±0.1. Set `determinative_boundary = "unverified_prediction"`.
+- **Vacuous safety gate**: If a safety / conformance / CI gate's headline assertion is silently bypassable on the default path (for example via `continue-on-error` clone, off-by-one sibling skip, warn-and-pass branch, or unfalsifiable env flag), cap the overall score at 0.6. Set `determinative_boundary = "vacuous_safety_gate"`.
 
 ### Calibration for Assisted Success band (0.50–0.79)
 
@@ -58,6 +60,23 @@ Use the `penaltyWeights` as a **floor** for score reduction. Apply judgment to i
 The purpose of this eval is to measure **autonomous reliability**. An agent that completes most of the work but introduces a bug that breaks production is not nearly autonomous. Err on the side of penalizing too harshly rather than too leniently.
 
 **Important**: Always reference specific interventions in your rationale. If interventions are present, explain which ones most impacted the score and why. When a `manual_edit` or `post_pr_commit` fixes a functional issue, explicitly note that it caps the score at 0.7 or below.
+
+## Conformance / safety gate scoring (detection power)
+
+When the task is a conformance, safety, or CI-gate change, score primarily on **detection power**: would the gate actually go red if the failure class it exists to catch occurred?
+
+- Treat the failure class named by the task as the dominant axis. Examples: EIP-712 domain bump, typehash drift, wire-format change, signed-mint regression.
+- A complete-on-paper implementation that leaves its central failure axis structurally unverifiable scores **0.6 or below** even if it hits every checklist bullet.
+- A narrower implementation that directly pins the linchpin on-chain or fixture assertion can score higher than a broader but vacuous implementation.
+- Apply this rule only to conformance / safety / CI-gate tasks. Do not use it to down-rank ordinary feature work.
+
+## Verbatim test evidence requirement
+
+When PR review output claims that tests fail or pass, require verbatim evidence:
+
+- Prefer explicit counts, such as "`1696` tests passed" or "`2` tests failed".
+- Accept a short CI log excerpt or failing-test transcript when counts are not available.
+- If the review asserts a predicted failure without this evidence, treat it as an unreproduced hypothesis and apply the ±0.1 cap from the `unverified_prediction` boundary.
 
 ## Input
 
@@ -214,7 +233,7 @@ In addition to the overall score, always include a top-level `rubricEval` object
 ```json
 {
   "schema_version": "1.0",
-  "rubric_version": "1.0",
+  "rubric_version": "1.1",
   "criteria": {
     "completeness": { "score": 0.0, "rationale": "" },
     "correctness": { "score": 0.0, "rationale": "" },
@@ -222,9 +241,11 @@ In addition to the overall score, always include a top-level `rubricEval` object
     "intervention_impact": { "score": 0.0, "rationale": "" },
     "autonomy": { "score": 0.0, "rationale": "" }
   },
-  "determinative_boundary": "no_interventions"
+  "determinative_boundary": "unverified_prediction"
 }
 ```
+
+Rubric version `1.1` added the `unverified_prediction` and `vacuous_safety_gate` determinative boundaries; existing records using `1.0` remain valid.
 
 Do not add any extra keys inside `rubricEval`.
 
@@ -245,6 +266,8 @@ Choose the scoring-boundary rule that was the binding constraint on the final sc
 - `functional_bug`
 - `multiple_bugs`
 - `heavy_intervention`
+- `unverified_prediction`
+- `vacuous_safety_gate`
 
 ---
 
@@ -273,7 +296,7 @@ Schema requirements:
 - Each stage entry must include `score` and `rationale`, and may include `rubricCriteria`.
 - `rubricCriteria` must be an array of objects shaped as `{ "criterion": string, "score": number, "notes": string }`; `notes` is optional within each item.
 - `rubricEval.schema_version` must be `"1.0"`.
-- `rubricEval.rubric_version` must be `"1.0"`.
+- `rubricEval.rubric_version` should be `"1.1"` for new outputs; legacy `"1.0"` remains valid when parsing historical records.
 
 ### Output Template
 
@@ -321,7 +344,7 @@ Schema requirements:
   },
   "rubricEval": {
     "schema_version": "1.0",
-    "rubric_version": "1.0",
+    "rubric_version": "1.1",
     "criteria": {
       "completeness": { "score": 0.0, "rationale": "" },
       "correctness": { "score": 0.0, "rationale": "" },
@@ -412,7 +435,7 @@ This is an illustrative example of a mostly successful workflow where human revi
   },
   "rubricEval": {
     "schema_version": "1.0",
-    "rubric_version": "1.0",
+    "rubric_version": "1.1",
     "criteria": {
       "completeness": {
         "score": 0.9,
@@ -436,6 +459,63 @@ This is an illustrative example of a mostly successful workflow where human revi
       }
     },
     "determinative_boundary": "functional_bug"
+  }
+}
+```
+
+This second illustrative example shows how to score an unreproduced "fails its own tests" claim as a capped hypothesis rather than a decisive correctness failure.
+
+```json
+{
+  "score": 0.84,
+  "rationale": "The implementation evidence is largely positive, and the negative review claim is a prediction rather than a reproduced test failure. Because the dominant negative signal lacks verbatim failing output or explicit test counts, it can only move the score slightly. The result therefore stays in the minor-feedback band unless stronger defects are present.",
+  "interventionFlags": [
+    "review_comment:predicted test failure without transcript"
+  ],
+  "stageScores": {
+    "expansion": {
+      "score": 0.86,
+      "rationale": "Requirement coverage and validation guidance were clear enough to frame the task correctly."
+    },
+    "plan": {
+      "score": 0.83,
+      "rationale": "The plan identified the relevant verification surfaces and core gate behavior."
+    },
+    "implementation": {
+      "score": 0.87,
+      "rationale": "The implementation appears complete and aligned with the intended gate, with no reproduced failure in the evidence."
+    },
+    "review": {
+      "score": 0.62,
+      "rationale": "Review raised a plausible concern, but it did not supply the transcript needed to make the claim determinative."
+    }
+  },
+  "rubricEval": {
+    "schema_version": "1.0",
+    "rubric_version": "1.1",
+    "criteria": {
+      "completeness": {
+        "score": 0.88,
+        "rationale": "The task scope appears to be covered."
+      },
+      "correctness": {
+        "score": 0.82,
+        "rationale": "No failing transcript or direct fixture mismatch demonstrates the predicted defect."
+      },
+      "code_quality": {
+        "score": 0.84,
+        "rationale": "The change fits expected project patterns based on the available evidence."
+      },
+      "intervention_impact": {
+        "score": 0.8,
+        "rationale": "There was reviewer skepticism, but not a reproduced functional fix."
+      },
+      "autonomy": {
+        "score": 0.83,
+        "rationale": "The workflow remained mostly autonomous because the main negative claim was not verified."
+      }
+    },
+    "determinative_boundary": "unverified_prediction"
   }
 }
 ```
