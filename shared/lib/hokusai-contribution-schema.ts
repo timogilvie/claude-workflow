@@ -10,7 +10,11 @@ import type {
   HokusaiTaskDescriptor,
 } from './hokusai-schema.ts';
 
-export const TECHNICAL_TASK_ROUTER_ROW_SCHEMA_VERSION = 'technical_task_router_row/v1';
+export const TECHNICAL_TASK_ROUTER_ROW_SCHEMA_VERSION_V1 = 'technical_task_router_row/v1';
+export const TECHNICAL_TASK_ROUTER_ROW_SCHEMA_VERSION_V2 = 'technical_task_router_row/v2';
+
+// Backward compatibility alias
+export const TECHNICAL_TASK_ROUTER_ROW_SCHEMA_VERSION = TECHNICAL_TASK_ROUTER_ROW_SCHEMA_VERSION_V1;
 
 const FORBIDDEN_KEYS = new Set([
   'prompt',
@@ -40,7 +44,7 @@ export interface TechnicalTaskRouterSelectedModels {
 }
 
 export interface TechnicalTaskRouterContributionRowV1 {
-  schema_version: typeof TECHNICAL_TASK_ROUTER_ROW_SCHEMA_VERSION;
+  schema_version: typeof TECHNICAL_TASK_ROUTER_ROW_SCHEMA_VERSION_V1;
   task_descriptor: HokusaiTaskDescriptor;
   allowed_models: string[];
   selected_models: TechnicalTaskRouterSelectedModels;
@@ -55,9 +59,60 @@ export interface TechnicalTaskRouterContributionRowV1 {
   harness?: string;
 }
 
+export type BenchmarkScenario =
+  | 'production_pool'
+  | 'challenger_present'
+  | 'dominant_model_removed'
+  | 'low_budget'
+  | 'sparse_cell';
+
+export type RoutingObjective = 'lowest_cost' | 'fastest_completion' | 'highest_reliability';
+
+export interface SelectedStrategy {
+  planner_model?: string;
+  coder_model?: string;
+  reviewer_model?: string;
+  routing_objective?: RoutingObjective;
+}
+
+export interface TechnicalTaskRouterContributionRowV2 {
+  schema_version: typeof TECHNICAL_TASK_ROUTER_ROW_SCHEMA_VERSION_V2;
+  row_id: string;
+  benchmark_spec_id: typeof TECHNICAL_TASK_ROUTER_BENCHMARK_SPEC_ID_V2;
+  eval_id: string;
+  model_id: string;
+  scenario: BenchmarkScenario;
+  candidate_pool_id: string;
+  task_descriptor: HokusaiTaskDescriptor;
+  allowed_models: string[];
+  selected_models: string[];
+  selected_strategy?: SelectedStrategy;
+  max_cost_usd: number;
+  actual_cost_usd: number;
+  estimated_cost_usd?: number;
+  actual_time_seconds?: number | null;
+  estimated_duration_seconds?: number | null;
+  estimated_success_under_budget?: number;
+  completed_successfully: boolean;
+  scorer_ref: typeof TECHNICAL_TASK_ROUTER_BENCHMARK_SPEC_ID_V2;
+  observed_at: string;
+  metadata?: Record<string, unknown>;
+  neighbor_provenance?: Array<{
+    row_id: string;
+    submission_id: string;
+    wallet: string | null;
+    training_row_index: number;
+    distance: number;
+    weight: number;
+  }>;
+}
+
+export const TECHNICAL_TASK_ROUTER_BENCHMARK_SPEC_ID_V2 = 'technical_task_router.benchmark_score/v2';
+
 export type ContributionRow =
   | SubmitDataContributionRow
-  | TechnicalTaskRouterContributionRowV1;
+  | TechnicalTaskRouterContributionRowV1
+  | TechnicalTaskRouterContributionRowV2;
 
 type ContributionScalar = string | number | boolean | null;
 
@@ -143,12 +198,12 @@ function isSubmitDataContributionRow(value: unknown): value is SubmitDataContrib
   return !('schema_version' in value);
 }
 
-function isTechnicalTaskRouterContributionRow(value: unknown): value is TechnicalTaskRouterContributionRowV1 {
+function isTechnicalTaskRouterContributionRowV1(value: unknown): value is TechnicalTaskRouterContributionRowV1 {
   if (!isPlainObject(value)) {
     return false;
   }
 
-  if (value.schema_version !== TECHNICAL_TASK_ROUTER_ROW_SCHEMA_VERSION) {
+  if (value.schema_version !== TECHNICAL_TASK_ROUTER_ROW_SCHEMA_VERSION_V1) {
     return false;
   }
 
@@ -218,10 +273,173 @@ function isTechnicalTaskRouterContributionRow(value: unknown): value is Technica
   return true;
 }
 
+function isTechnicalTaskRouterContributionRowV2(value: unknown): value is TechnicalTaskRouterContributionRowV2 {
+  if (!isPlainObject(value)) {
+    return false;
+  }
+
+  if (value.schema_version !== TECHNICAL_TASK_ROUTER_ROW_SCHEMA_VERSION_V2) {
+    return false;
+  }
+
+  if (typeof value.row_id !== 'string' || value.row_id.length === 0) {
+    return false;
+  }
+
+  if (value.benchmark_spec_id !== TECHNICAL_TASK_ROUTER_BENCHMARK_SPEC_ID_V2) {
+    return false;
+  }
+
+  if (typeof value.eval_id !== 'string' || value.eval_id.length === 0) {
+    return false;
+  }
+
+  if (typeof value.model_id !== 'string' || value.model_id.length === 0) {
+    return false;
+  }
+
+  if (!Array.isArray(value.scenario) && !['production_pool', 'challenger_present', 'dominant_model_removed', 'low_budget', 'sparse_cell'].includes(value.scenario)) {
+    return false;
+  }
+
+  if (typeof value.candidate_pool_id !== 'string' || value.candidate_pool_id.length === 0) {
+    return false;
+  }
+
+  if (!isPlainObject(value.task_descriptor)) {
+    return false;
+  }
+
+  if (!Array.isArray(value.allowed_models) || value.allowed_models.length === 0) {
+    return false;
+  }
+
+  if (value.allowed_models.some((m) => typeof m !== 'string' || m.length === 0)) {
+    return false;
+  }
+
+  const uniqueAllowedModels = new Set(value.allowed_models);
+  if (uniqueAllowedModels.size !== value.allowed_models.length) {
+    return false;
+  }
+
+  if (!Array.isArray(value.selected_models)) {
+    return false;
+  }
+
+  if (value.selected_models.some((m) => typeof m !== 'string' || m.length === 0)) {
+    return false;
+  }
+
+  if (typeof value.max_cost_usd !== 'number' || !Number.isFinite(value.max_cost_usd) || value.max_cost_usd <= 0) {
+    return false;
+  }
+
+  if (typeof value.actual_cost_usd !== 'number' || !Number.isFinite(value.actual_cost_usd) || value.actual_cost_usd < 0) {
+    return false;
+  }
+
+  if (value.estimated_cost_usd !== undefined && !isFiniteNonNegativeNumber(value.estimated_cost_usd)) {
+    return false;
+  }
+
+  if (value.actual_time_seconds !== undefined && value.actual_time_seconds !== null && !isFiniteNonNegativeNumber(value.actual_time_seconds)) {
+    return false;
+  }
+
+  if (value.estimated_duration_seconds !== undefined && value.estimated_duration_seconds !== null && !isFiniteNonNegativeNumber(value.estimated_duration_seconds)) {
+    return false;
+  }
+
+  if (value.estimated_success_under_budget !== undefined) {
+    const val = value.estimated_success_under_budget;
+    if (typeof val !== 'number' || !Number.isFinite(val) || val < 0 || val > 1) {
+      return false;
+    }
+  }
+
+  if (typeof value.completed_successfully !== 'boolean') {
+    return false;
+  }
+
+  if (value.scorer_ref !== TECHNICAL_TASK_ROUTER_BENCHMARK_SPEC_ID_V2) {
+    return false;
+  }
+
+  if (!isIsoDateString(value.observed_at)) {
+    return false;
+  }
+
+  if (value.selected_strategy !== undefined) {
+    if (!isPlainObject(value.selected_strategy)) {
+      return false;
+    }
+
+    const objKeys = Object.keys(value.selected_strategy);
+    for (const key of objKeys) {
+      if (!['planner_model', 'coder_model', 'reviewer_model', 'routing_objective'].includes(key)) {
+        return false;
+      }
+    }
+
+    if (value.selected_strategy.planner_model !== undefined && typeof value.selected_strategy.planner_model !== 'string') {
+      return false;
+    }
+    if (value.selected_strategy.coder_model !== undefined && typeof value.selected_strategy.coder_model !== 'string') {
+      return false;
+    }
+    if (value.selected_strategy.reviewer_model !== undefined && typeof value.selected_strategy.reviewer_model !== 'string') {
+      return false;
+    }
+
+    if (value.selected_strategy.routing_objective !== undefined) {
+      const ro = value.selected_strategy.routing_objective;
+      if (!['lowest_cost', 'fastest_completion', 'highest_reliability'].includes(ro)) {
+        return false;
+      }
+    }
+  }
+
+  if (value.metadata !== undefined && !isPlainObject(value.metadata)) {
+    return false;
+  }
+
+  if (value.neighbor_provenance !== undefined) {
+    if (!Array.isArray(value.neighbor_provenance)) {
+      return false;
+    }
+    for (const entry of value.neighbor_provenance) {
+      if (!isPlainObject(entry)) {
+        return false;
+      }
+      if (typeof entry.row_id !== 'string' || entry.row_id.length === 0) {
+        return false;
+      }
+      if (typeof entry.submission_id !== 'string' || entry.submission_id.length === 0) {
+        return false;
+      }
+      if (entry.wallet !== null && typeof entry.wallet !== 'string') {
+        return false;
+      }
+      if (typeof entry.training_row_index !== 'number' || !Number.isInteger(entry.training_row_index) || entry.training_row_index < 0) {
+        return false;
+      }
+      if (!isFiniteNonNegativeNumber(entry.distance)) {
+        return false;
+      }
+      if (!isFiniteNonNegativeNumber(entry.weight)) {
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
 export function validateContributionRow(row: unknown): ContributionRow {
   assertNoForbiddenKeys(row);
 
-  if (isTechnicalTaskRouterContributionRow(row) || isSubmitDataContributionRow(row)) {
+  if (isTechnicalTaskRouterContributionRowV1(row) || isTechnicalTaskRouterContributionRowV2(row) || isSubmitDataContributionRow(row)) {
     return row;
   }
 
