@@ -375,6 +375,8 @@ const RUBRIC_DETERMINATIVE_BOUNDARIES = new Set<string>([
   'functional_bug',
   'multiple_bugs',
   'heavy_intervention',
+  'unverified_prediction',
+  'vacuous_safety_gate',
 ]);
 
 const RUBRIC_CRITERIA_KEYS = [
