@@ -241,7 +241,7 @@ In addition to the overall score, always include a top-level `rubricEval` object
     "intervention_impact": { "score": 0.0, "rationale": "" },
     "autonomy": { "score": 0.0, "rationale": "" }
   },
-  "determinative_boundary": "unverified_prediction"
+  "determinative_boundary": "no_interventions"
 }
 ```
 
