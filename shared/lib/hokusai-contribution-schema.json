@@ -57,6 +57,117 @@
         "observed_at"
       ],
       "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema_version": { "const": "technical_task_router_row/v2" },
+        "task_descriptor": { "type": "object" },
+        "allowed_models": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "selected_models": {
+          "type": "object",
+          "properties": {
+            "planner": { "type": "string" },
+            "coder": { "type": "string" },
+            "reviewer": { "type": "string" }
+          },
+          "required": ["coder", "reviewer"],
+          "additionalProperties": false
+        },
+        "available_models": {
+          "type": "object",
+          "properties": {
+            "planner_models": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "coder_models": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "reviewer_models": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          },
+          "required": ["planner_models", "coder_models", "reviewer_models"],
+          "additionalProperties": false
+        },
+        "budget_usd": { "type": "number", "minimum": 0 },
+        "actual_cost_usd": { "type": ["number", "null"], "minimum": 0 },
+        "wall_clock_seconds": { "type": "number", "minimum": 0 },
+        "success_under_budget": { "type": "boolean" },
+        "completion_result": {
+          "type": "string",
+          "enum": ["success", "failure"]
+        },
+        "outcome_labels": {
+          "type": "object",
+          "properties": {
+            "budget_label": {
+              "type": "string",
+              "enum": ["under_budget", "over_budget", "unknown"]
+            },
+            "cost_label": {
+              "type": "string",
+              "enum": ["free", "low", "medium", "high", "unknown"]
+            },
+            "time_label": {
+              "type": "string",
+              "enum": ["fast", "medium", "slow", "unknown"]
+            },
+            "success_label": {
+              "type": "string",
+              "enum": ["success", "failure"]
+            }
+          },
+          "required": ["budget_label", "cost_label", "time_label", "success_label"],
+          "additionalProperties": false
+        },
+        "candidate_pool": {
+          "type": "object",
+          "properties": {
+            "scenario_id": { "type": "string" },
+            "scenario_kind": { "type": "string" },
+            "pool_size": { "type": "number", "minimum": 0 },
+            "baseline_model": { "type": "string" }
+          },
+          "required": ["scenario_id", "scenario_kind", "pool_size"],
+          "additionalProperties": false
+        },
+        "sparse_cell": {
+          "type": "object",
+          "properties": {
+            "cell_id": { "type": "string" },
+            "descriptor_signature": { "type": "string" },
+            "observed_count": { "type": "number", "minimum": 0 },
+            "is_sparse": { "type": "boolean" }
+          },
+          "required": ["cell_id", "descriptor_signature", "observed_count", "is_sparse"],
+          "additionalProperties": false
+        },
+        "scorer_ref": { "type": "string" },
+        "observed_at": { "type": "string" },
+        "task_id": { "type": "string" },
+        "harness": { "type": "string" }
+      },
+      "required": [
+        "schema_version",
+        "task_descriptor",
+        "allowed_models",
+        "selected_models",
+        "available_models",
+        "success_under_budget",
+        "completion_result",
+        "outcome_labels",
+        "candidate_pool",
+        "sparse_cell",
+        "observed_at"
+      ],
+      "additionalProperties": false
     }
   ]
 }

@@ -130,6 +130,7 @@ Current supported row shapes are:
 
 - public Submit Data rows with required `success_under_budget`
 - stricter benchmark rows using `technical_task_router_row/v1`
+- richer benchmark rows using `technical_task_router_row/v2` with role pools and composite-metric metadata
 
 Optional compact `inputs`, cost, timing, harness, and benchmark metadata may be included when they pass the redaction allow-list. Raw eval payloads, task bodies, prompts, repository names before redaction, and secrets do not leave the machine.
 

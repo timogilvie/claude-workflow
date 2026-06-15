@@ -195,7 +195,9 @@ The documented production prediction endpoint is:
 }
 ```
 
-Wavemill can also emit stricter benchmark contribution rows under `technical_task_router_row/v1` for benchmark-style observations.
+Wavemill can also emit stricter benchmark contribution rows under `technical_task_router_row/v1` and `technical_task_router_row/v2` for benchmark-style observations.
+
+The v2 row adds role-specific `available_models`, `outcome_labels`, `candidate_pool`, and `sparse_cell` metadata so Hokusai can compute `technical_task_router.benchmark_score/v2` while keeping the existing redaction boundaries.
 
 Contribution uploads are asynchronous outcome data. They are not the same payload as the live `/predict` request, and Wavemill does not assume an immediate token receipt for every accepted row.
 

@@ -4,6 +4,7 @@ import { dirname } from 'node:path';
 import { getHokusaiContributionsConfig } from './config.ts';
 import {
   TECHNICAL_TASK_ROUTER_ROW_SCHEMA_VERSION,
+  TECHNICAL_TASK_ROUTER_ROW_SCHEMA_VERSION_V2,
   validateContributionRow,
   type ContributionRow,
 } from './hokusai-contribution-schema.ts';
@@ -15,7 +16,10 @@ import { mutateJsonState, StateParseError } from './state-mutex.ts';
 const STATE_SCHEMA_VERSION = '1.0';
 const MAX_RECENT_IDEMPOTENCY_KEYS = 1000;
 
-export type QueueRowShape = 'submit_data' | typeof TECHNICAL_TASK_ROUTER_ROW_SCHEMA_VERSION;
+export type QueueRowShape =
+  | 'submit_data'
+  | typeof TECHNICAL_TASK_ROUTER_ROW_SCHEMA_VERSION
+  | typeof TECHNICAL_TASK_ROUTER_ROW_SCHEMA_VERSION_V2;
 
 export interface HokusaiQueueEnvelope {
   schemaVersion: typeof STATE_SCHEMA_VERSION;
