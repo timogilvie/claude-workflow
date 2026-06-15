@@ -803,6 +803,7 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       reasoningTier: 'advanced',
       costPerMillionInputTokensUsd: 5,
       costPerMillionOutputTokensUsd: 30,
+      agent: 'codex',
     },
     'gpt-5.4': {
       vendor: 'openai',
@@ -822,6 +823,7 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       reasoningTier: 'advanced',
       costPerMillionInputTokensUsd: 2.5,
       costPerMillionOutputTokensUsd: 15,
+      agent: 'codex',
     },
     'gpt-5': {
       vendor: 'openai',
@@ -1421,7 +1423,7 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
     routing: ['claude-haiku-4-5-20251001', 'deepseek-v4-flash', 'claude-sonnet-4-6', 'gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-opus-4-8', 'claude-opus-4-7'],
     planning: ['gpt-5.5', 'claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.4', 'deepseek-reasoner', 'deepseek-v4-pro', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
     coding: ['gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-sonnet-4-6', 'claude-opus-4-8', 'claude-opus-4-7', 'deepseek-chat', 'deepseek-v4-flash', 'claude-haiku-4-5-20251001'],
-    review: ['claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-sonnet-4-6', 'deepseek-reasoner', 'claude-haiku-4-5-20251001'],
+    review: ['gpt-5.5', 'claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.4', 'deepseek-v4-pro', 'claude-sonnet-4-6', 'deepseek-reasoner', 'claude-haiku-4-5-20251001'],
     classify: ['claude-haiku-4-5-20251001', 'deepseek-v4-flash', 'claude-sonnet-4-6', 'gpt-5.5', 'gpt-5.4'],
   },
 };
