@@ -151,10 +151,6 @@ function isTechnicalTaskRouterSelectedModels(value: unknown): value is Technical
     return false;
   }
 
-  if (!hasOnlyAllowedKeys(value, ['planner', 'coder', 'reviewer'])) {
-    return false;
-  }
-
   if (typeof value.coder !== 'string' || typeof value.reviewer !== 'string') {
     return false;
   }
@@ -167,10 +163,6 @@ function isRoleAvailableModels(value: unknown): value is RoleAvailableModels {
     return false;
   }
 
-  if (!hasOnlyAllowedKeys(value, ['planner_models', 'coder_models', 'reviewer_models'])) {
-    return false;
-  }
-
   return (
     isStringArray(value.planner_models)
     && isStringArray(value.coder_models)
@@ -180,10 +172,6 @@ function isRoleAvailableModels(value: unknown): value is RoleAvailableModels {
 
 function isOutcomeLabels(value: unknown): value is OutcomeLabels {
   if (!isPlainObject(value)) {
-    return false;
-  }
-
-  if (!hasOnlyAllowedKeys(value, ['budget_label', 'cost_label', 'time_label', 'success_label'])) {
     return false;
   }
 
@@ -200,10 +188,6 @@ function isCandidatePoolMetadata(value: unknown): value is CandidatePoolMetadata
     return false;
   }
 
-  if (!hasOnlyAllowedKeys(value, ['scenario_id', 'scenario_kind', 'pool_size', 'baseline_model'])) {
-    return false;
-  }
-
   return (
     typeof value.scenario_id === 'string'
     && typeof value.scenario_kind === 'string'
@@ -214,10 +198,6 @@ function isCandidatePoolMetadata(value: unknown): value is CandidatePoolMetadata
 
 function isSparseCellMetadata(value: unknown): value is SparseCellMetadata {
   if (!isPlainObject(value)) {
-    return false;
-  }
-
-  if (!hasOnlyAllowedKeys(value, ['cell_id', 'descriptor_signature', 'observed_count', 'is_sparse'])) {
     return false;
   }
 
@@ -258,10 +238,6 @@ function isSubmitDataContributionRow(value: unknown): value is SubmitDataContrib
     return false;
   }
 
-  if (!hasOnlyAllowedKeys(value, ['success_under_budget', 'inputs', 'actual_cost_usd', 'wall_clock_seconds', 'task_id', 'harness'])) {
-    return false;
-  }
-
   if (typeof value.success_under_budget !== 'boolean') {
     return false;
   }
@@ -299,24 +275,6 @@ function isTechnicalTaskRouterContributionRowV1(value: unknown): value is Techni
   }
 
   if (value.schema_version !== TECHNICAL_TASK_ROUTER_ROW_SCHEMA_VERSION) {
-    return false;
-  }
-
-  if (!hasOnlyAllowedKeys(value, [
-    'schema_version',
-    'task_descriptor',
-    'allowed_models',
-    'selected_models',
-    'budget_usd',
-    'actual_cost_usd',
-    'wall_clock_seconds',
-    'success_under_budget',
-    'completion_result',
-    'scorer_ref',
-    'observed_at',
-    'task_id',
-    'harness',
-  ])) {
     return false;
   }
 
@@ -383,28 +341,6 @@ export function isTechnicalTaskRouterContributionRowV2(
   }
 
   if (value.schema_version !== TECHNICAL_TASK_ROUTER_ROW_SCHEMA_VERSION_V2) {
-    return false;
-  }
-
-  if (!hasOnlyAllowedKeys(value, [
-    'schema_version',
-    'task_descriptor',
-    'allowed_models',
-    'selected_models',
-    'available_models',
-    'budget_usd',
-    'actual_cost_usd',
-    'wall_clock_seconds',
-    'success_under_budget',
-    'completion_result',
-    'outcome_labels',
-    'candidate_pool',
-    'sparse_cell',
-    'scorer_ref',
-    'observed_at',
-    'task_id',
-    'harness',
-  ])) {
     return false;
   }
 

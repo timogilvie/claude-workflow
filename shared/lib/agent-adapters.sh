@@ -32,7 +32,7 @@ agent_resolve_from_model() {
     gpt-5.5|gpt-5.5-*|gemini-pro|gemini-pro-*) echo "codex" ;;
     claude-*) echo "claude" ;;
     deepseek-*) echo "claude" ;;
-    qwen-*|kimi-*|llama-*|mistral-*|devstral-*|grok-*) echo "claude-openrouter" ;;
+    gemini-2.5-*|gemini-2.0-*|qwen-*|kimi-*|llama-*|mistral-*|devstral-*|grok-*) echo "claude-openrouter" ;;
     gpt-*|o[0-9]*) echo "codex" ;;
     *) echo "${AGENT_CMD:-claude}" ;;
   esac
