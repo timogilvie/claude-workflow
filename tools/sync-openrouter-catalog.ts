@@ -39,17 +39,17 @@ runTool({
   name: 'sync-openrouter-catalog',
   description: 'Fetch and normalize the launch-priority OpenRouter model catalog',
   options: {
-    output: { type: 'string', description: 'Path to write the normalized JSON snapshot' },
+    output: { type: 'string', description: 'Path to write the normalized JSON snapshot (required unless --dry-run)' },
     fixture: { type: 'string', description: 'Override the launch-priority fixture path' },
-    'dry-run': { type: 'boolean', description: 'Print the snapshot instead of writing it to disk' },
+    'dry-run': { type: 'boolean', description: 'Print the snapshot to stdout instead of writing to disk' },
   },
   examples: [
     'npx tsx tools/sync-openrouter-catalog.ts --output .wavemill/hokusai/openrouter-catalog.json',
-    'npx tsx tools/sync-openrouter-catalog.ts --output /tmp/openrouter-catalog.json --dry-run',
+    'npx tsx tools/sync-openrouter-catalog.ts --dry-run',
   ],
   async run({ args }) {
-    if (typeof args.output !== 'string' || args.output.length === 0) {
-      throw new Error('--output is required');
+    if (!args['dry-run'] && (typeof args.output !== 'string' || args.output.length === 0)) {
+      throw new Error('--output is required (unless using --dry-run)');
     }
 
     const response = await fetch('https://openrouter.ai/api/v1/models');

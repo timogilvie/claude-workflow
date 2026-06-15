@@ -259,9 +259,10 @@ function isSubmitDataContributionRow(value: unknown): value is SubmitDataContrib
   }
 
   // Strict key validation: only allowed keys are accepted. This ensures schema compliance
-  // but may reject rows from older builds that had additional fields. Legacy rows with
-  // unknown fields will fail validation on read-back and should be handled by the queue
-  // drain path or filtered during ingestion.
+  // but is backward-incompatible: any submit-data rows persisted by older builds with extra
+  // fields will fail validation on read-back. This is not a risk for new catalogs, but if
+  // legacy data is present in queues, the drain path must gracefully handle
+  // schema_validation_failed errors (e.g., skip-and-log rather than crash-loop).
   if (!hasOnlyAllowedKeys(value, ['success_under_budget', 'inputs', 'actual_cost_usd', 'wall_clock_seconds', 'task_id', 'harness'])) {
     return false;
   }

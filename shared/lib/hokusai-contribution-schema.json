@@ -43,7 +43,7 @@
           "enum": ["success", "failure"]
         },
         "scorer_ref": { "type": "string" },
-        "observed_at": { "type": "string" },
+        "observed_at": { "type": "string", "format": "date-time" },
         "task_id": { "type": "string" },
         "harness": { "type": "string" }
       },
@@ -150,7 +150,7 @@
           "additionalProperties": false
         },
         "scorer_ref": { "type": "string" },
-        "observed_at": { "type": "string" },
+        "observed_at": { "type": "string", "format": "date-time" },
         "task_id": { "type": "string" },
         "harness": { "type": "string" }
       },
