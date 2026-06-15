@@ -199,7 +199,7 @@ describe('model-registry', () => {
   });
 
   it('getLadder returns configured default ladders', () => {
-    assert.equal(getLadder(DEFAULT_MODEL_REGISTRY, 'review')[0], 'claude-opus-4-8');
+    assert.equal(getLadder(DEFAULT_MODEL_REGISTRY, 'review')[0], 'gpt-5.5');
     assert.deepEqual(getLadder(DEFAULT_MODEL_REGISTRY, 'classify'), [
       'claude-haiku-4-5-20251001',
       'deepseek-v4-flash',
@@ -297,9 +297,9 @@ describe('model-registry', () => {
     });
 
     assert.deepEqual(once, [
+      'gpt-5.5',
       'claude-opus-4-8',
       'claude-opus-4-7',
-      'gpt-5.5',
       'gpt-5.4',
       'deepseek-v4-pro',
       'deepseek-reasoner',

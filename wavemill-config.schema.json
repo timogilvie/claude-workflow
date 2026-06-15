@@ -1376,7 +1376,7 @@
                 },
                 "defaultModel": {
                     "type": "string",
-                    "default": "claude-sonnet-4-6",
+                    "default": "gpt-5.5",
                     "description": "Fallback model selector when insufficient eval data exists for routing. Accepts a family alias such as 'sonnet', 'inherit', or a pinned model ID such as 'claude-sonnet-4-6'."
                 },
                 "minRecords": {
@@ -1429,7 +1429,7 @@
                 },
                 "defaultAgent": {
                     "type": "string",
-                    "default": "claude",
+                    "default": "codex",
                     "description": "Fallback agent CLI when router has insufficient data or no agentMap entry matches the recommended model.",
                     "examples": [
                         "claude",
@@ -1621,17 +1621,18 @@
                         },
                         "model": {
                             "type": "string",
-                            "default": "claude-haiku-4-5-20251001",
-                            "description": "Model selector to use for task packet review. Accepts a family alias such as 'haiku', 'inherit', or a pinned model ID such as 'claude-haiku-4-5-20251001'. Should be fast and cheap."
+                            "default": "gpt-5.4",
+                            "description": "Model selector to use for task packet review. Accepts a family alias such as 'haiku', 'inherit', or a pinned model ID such as 'gpt-5.4'. Should be fast and cheap."
                         },
                         "provider": {
                             "type": "string",
                             "enum": [
                                 "claude-cli",
-                                "anthropic"
+                                "anthropic",
+                                "codex"
                             ],
-                            "default": "claude-cli",
-                            "description": "LLM provider for Layer 2 validation. 'claude-cli' uses local subscription, 'anthropic' uses API key."
+                            "default": "codex",
+                            "description": "LLM provider for Layer 2 validation. 'claude-cli' uses local Claude subscription, 'anthropic' uses Anthropic API key, 'codex' uses the Codex CLI."
                         }
                     },
                     "additionalProperties": false
