@@ -17,6 +17,7 @@ import { execShellCommand } from './shell-utils.ts';
 import { detectAndFormatInterventions } from './intervention-detector.ts';
 import { computeWorkflowCost, loadPricingTable } from './workflow-cost.ts';
 import { getDeepSeekProviderMetadata } from './deepseek-provider.ts';
+import { getOpenRouterProviderMetadata } from './openrouter-provider.ts';
 import { runEvalAnalysis } from './eval-analysis.ts';
 import { callHeadlessLLM } from './headless-llm.ts';
 import { detectSubsystems } from './subsystem-detector.ts';
@@ -376,8 +377,10 @@ export function enrichPostCompletionRecord(
 
   enrichTrainingMetadata(record, {
     agentType: input.agentType,
-    provider: getDeepSeekProviderMetadata(record.modelId, input.repoDir)?.provider,
-    endpoint: getDeepSeekProviderMetadata(record.modelId, input.repoDir)?.endpoint,
+    provider: (getDeepSeekProviderMetadata(record.modelId, input.repoDir)
+      ?? getOpenRouterProviderMetadata(record.modelId, input.repoDir))?.provider,
+    endpoint: (getDeepSeekProviderMetadata(record.modelId, input.repoDir)
+      ?? getOpenRouterProviderMetadata(record.modelId, input.repoDir))?.endpoint,
     challengePairId: input.challengePairId,
     routeProvenance: deriveRouteProvenance(
       input.repoDir,

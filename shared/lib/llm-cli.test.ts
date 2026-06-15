@@ -561,7 +561,7 @@ describe('quota fallback', () => {
       'model-b': { type: 'success', text: 'fast fallback' },
     });
 
-    const startedAt = Date.now();
+    let retryEvents = 0;
     const result = await callLLM('timing prompt', {
       provider: 'claude',
       mode: 'stream',
@@ -571,11 +571,15 @@ describe('quota fallback', () => {
       maxRetries: 2,
       taskType: 'coding',
       fallbackModels: ['model-a', 'model-b'],
+      observer: {
+        onRetry: async () => {
+          retryEvents += 1;
+        },
+      },
     });
-    const elapsedMs = Date.now() - startedAt;
 
     assert.equal(result.model, 'model-b');
-    assert.ok(elapsedMs < 3500, `expected quota fallback without an added retry backoff, got ${elapsedMs}ms`);
+    assert.equal(retryEvents, 0, 'expected quota fallback without transient retry backoff');
   });
 
   it('treats DeepSeek 401 auth failures as non-quota and does not exhaust the model', async () => {

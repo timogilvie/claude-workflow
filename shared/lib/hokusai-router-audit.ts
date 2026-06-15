@@ -10,6 +10,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { getHokusaiRouterConfig, getRouterConfig } from './config.ts';
+import { loadLaunchPriorityList, type ModelFamily, type ModelStatus, type RoleEligibility } from './openrouter-catalog.ts';
 import { resolveEnvValue } from './env-file.ts';
 import { errorMessage } from './error-utils.ts';
 import { toHokusaiModel30Request, type HokusaiModel30Response, type HokusaiModel30Request, type HokusaiRecommendedStrategy } from './hokusai-schema.ts';
@@ -19,12 +20,13 @@ import { isDisabledModel } from './disabled-models.ts';
 import { buildTaskDescriptor } from './task-descriptor-builder.ts';
 import { findKNearest, loadStageAwareEvalRecords, type ScoredNeighbor } from './stage-aware-router.ts';
 import type { EvalRecord, TaskDescriptor } from './eval-schema.ts';
-import { recordStageModel, type ChallengeStage } from './challenge-scheduler.ts';
-import { DIVERSITY_STAGES, resolveCoverageConfig, type StageShareEntry } from './router-diversity.ts';
+import type { ChallengeStage } from './challenge-scheduler.ts';
 
 export type AuditStageRole = 'planner' | 'coder' | 'reviewer';
 
 const STAGE_ROLES: readonly AuditStageRole[] = ['planner', 'coder', 'reviewer'];
+const DIVERSITY_STAGES: readonly ChallengeStage[] = ['plan', 'implementation', 'review'];
+const DEFAULT_MAX_STAGE_SHARE = 0.7;
 
 const ROLE_TO_STAGE: Record<AuditStageRole, ChallengeStage> = {
   planner: 'plan',
@@ -75,6 +77,7 @@ export interface AuditRecommendation {
   issueId?: string;
   strategy: HokusaiRecommendedStrategy;
   response?: HokusaiModel30Response;
+  request: HokusaiModel30Request;
   candidatePools: Record<AuditStageRole, string[]>;
   originalRecord: EvalRecord;
   actualScore: number;
@@ -132,8 +135,28 @@ export interface HokusaiAuditReport {
   calibration: CalibrationBucket[];
   regret: Record<AuditStageRole, RegretSummary>;
   groupBreakdowns: Record<string, AuditGroupBreakdown[]>;
+  launchPriorityCoverage: LaunchPriorityCoverageReport;
   hardFailures: string[];
   artifactPath?: string;
+}
+
+export interface LaunchPriorityModelCoverage {
+  wavemillAlias: string;
+  family: ModelFamily;
+  status: ModelStatus;
+  priorityTier: number;
+  roleEligibility: RoleEligibility[];
+  evidenceCount: number;
+  inCandidatePool: boolean;
+  blocker?: string;
+}
+
+export interface LaunchPriorityCoverageReport {
+  totalModels: number;
+  coveredModels: number;
+  zeroEvidenceModels: number;
+  blockedModels: number;
+  models: LaunchPriorityModelCoverage[];
 }
 
 export interface AuditGroupBreakdown {
@@ -141,6 +164,27 @@ export interface AuditGroupBreakdown {
   count: number;
   stageShares: Record<AuditStageRole, StageShareEntry[]>;
   effectiveModelCounts: Record<AuditStageRole, number>;
+}
+
+export interface StageShareEntry {
+  model: string;
+  count: number;
+  share: number;
+}
+
+interface CoverageConfig {
+  maxStageShare?: number;
+}
+
+function resolveCoverageConfig(raw?: CoverageConfig): { maxStageShare: number } {
+  return {
+    maxStageShare: typeof raw?.maxStageShare === 'number'
+      && Number.isFinite(raw.maxStageShare)
+      && raw.maxStageShare > 0
+      && raw.maxStageShare <= 1
+      ? raw.maxStageShare
+      : DEFAULT_MAX_STAGE_SHARE,
+  };
 }
 
 function clampConcurrency(value: number | undefined): number {
@@ -196,12 +240,65 @@ export function stratifiedSampleRecords(
   return sampled;
 }
 
+export function buildLaunchPriorityCoverage(
+  recommendations: AuditRecommendation[],
+  candidatePoolModels: string[],
+  fixturePath?: string,
+): LaunchPriorityCoverageReport {
+  const evidenceCounts = new Map<string, number>();
+  for (const recommendation of recommendations) {
+    for (const model of Object.values(recommendation.actualStageModels)) {
+      if (!model) continue;
+      evidenceCounts.set(model, (evidenceCounts.get(model) ?? 0) + 1);
+    }
+  }
+
+  const candidatePool = new Set(candidatePoolModels);
+  const models = loadLaunchPriorityList(fixturePath)
+    .filter((entry) => entry.status !== 'deprecated')
+    .map((entry) => {
+      const evidenceCount = evidenceCounts.get(entry.wavemillAlias) ?? 0;
+      const inCandidatePool = candidatePool.has(entry.wavemillAlias);
+      return {
+        wavemillAlias: entry.wavemillAlias,
+        family: entry.family,
+        status: entry.status,
+        priorityTier: entry.priorityTier,
+        roleEligibility: [...entry.roleEligibility],
+        evidenceCount,
+        inCandidatePool,
+        ...(evidenceCount === 0 && !inCandidatePool
+          ? { blocker: 'not_in_candidate_pool' }
+          : {}),
+      };
+    })
+    .sort((left, right) => left.priorityTier - right.priorityTier || left.wavemillAlias.localeCompare(right.wavemillAlias));
+
+  return {
+    totalModels: models.length,
+    coveredModels: models.filter((entry) => entry.evidenceCount > 0).length,
+    zeroEvidenceModels: models.filter((entry) => entry.evidenceCount === 0).length,
+    blockedModels: models.filter((entry) => entry.blocker).length,
+    models,
+  };
+}
+
 function buildReplayDescriptor(record: EvalRecord): TaskDescriptor {
   return buildTaskDescriptor({
     originalPrompt: record.originalPrompt,
     taskContext: record.taskContext,
     repoContext: record.repoContext,
   });
+}
+
+function recordStageModel(record: EvalRecord, stage: ChallengeStage): string | undefined {
+  if (stage === 'plan') {
+    return record.taskDescriptor?.stages?.planner?.model;
+  }
+  if (stage === 'review') {
+    return record.taskDescriptor?.stages?.reviewer?.model;
+  }
+  return record.taskDescriptor?.stages?.coder?.model || record.modelId || undefined;
 }
 
 function redactModel30Request(request: HokusaiModel30Request): HokusaiModel30Request {
@@ -394,30 +491,51 @@ export function buildCalibration(recommendations: AuditRecommendation[]): Calibr
   return buckets;
 }
 
-function recommendationGroupValue(recommendation: AuditRecommendation, groupBy: string): string {
+function descriptorGroupValue(recommendation: AuditRecommendation, groupBy: string): string {
   const descriptor = buildReplayDescriptor(recommendation.originalRecord);
-  if (groupBy === 'taskType') {
+  const key = groupBy.replace('_descriptor', '');
+  if (key === 'taskType') {
     return descriptor.signals.heuristic.task_type || 'unknown';
   }
-  if (groupBy === 'complexity') {
+  if (key === 'complexity') {
     const complexity = descriptor.signals.learned.complexity;
     if (typeof complexity !== 'number') return 'unknown';
     if (complexity <= 2) return 'low';
     if (complexity >= 4) return 'high';
     return 'medium';
   }
-  if (groupBy === 'domain') {
+  if (key === 'domain') {
     return descriptor.signals.learned.domain || 'unknown';
   }
   return 'unknown';
 }
 
+function requestGroupValue(recommendation: AuditRecommendation, groupBy: string): string {
+  if (groupBy === 'taskType') {
+    return recommendation.request.inputs.task.task_type;
+  }
+  if (groupBy === 'complexity') {
+    return recommendation.request.inputs.context?.estimated_complexity ?? 'unknown';
+  }
+  if (groupBy === 'domain') {
+    return recommendation.request.inputs.context?.domain ?? 'unknown';
+  }
+  return 'unknown';
+}
+
 export function buildGroupBreakdowns(recommendations: AuditRecommendation[]): Record<string, AuditGroupBreakdown[]> {
-  const groups = ['taskType', 'complexity', 'domain'];
-  return Object.fromEntries(groups.map((groupBy) => {
+  const groups = [
+    ['taskType', requestGroupValue],
+    ['complexity', requestGroupValue],
+    ['domain', requestGroupValue],
+    ['taskType_descriptor', descriptorGroupValue],
+    ['complexity_descriptor', descriptorGroupValue],
+    ['domain_descriptor', descriptorGroupValue],
+  ] as const;
+  return Object.fromEntries(groups.map(([groupBy, groupValue]) => {
     const byValue = new Map<string, AuditRecommendation[]>();
     for (const recommendation of recommendations) {
-      const value = recommendationGroupValue(recommendation, groupBy);
+      const value = groupValue(recommendation, groupBy);
       const group = byValue.get(value) ?? [];
       group.push(recommendation);
       byValue.set(value, group);
@@ -673,7 +791,11 @@ export async function runHokusaiRouterAudit(options: HokusaiAuditOptions = {}): 
         taskType: [],
         complexity: [],
         domain: [],
+        taskType_descriptor: [],
+        complexity_descriptor: [],
+        domain_descriptor: [],
       },
+      launchPriorityCoverage: buildLaunchPriorityCoverage([], Object.values(candidatePools(repoDir)).flat()),
     };
     return { ...reportWithoutFailures, hardFailures: [], artifactPath: persistAuditReport(reportWithoutFailures, options.output, repoDir) };
   }
@@ -701,6 +823,7 @@ export async function runHokusaiRouterAudit(options: HokusaiAuditOptions = {}): 
         issueId: entry.issueId,
         strategy: result.response.predictions.recommended_strategy,
         response: result.response,
+        request: entry.request,
         candidatePools: entry.candidatePools,
         originalRecord: entry.originalRecord,
         actualScore: entry.originalRecord.score,
@@ -721,7 +844,8 @@ export async function runHokusaiRouterAudit(options: HokusaiAuditOptions = {}): 
   });
 
   const sensitivityStrategies = await mapConcurrent(syntheticProbeRequests(requests), 2, async (entry) => {
-    const result = await callHokusai(options.redact === false ? entry.request : redactModel30Request(entry.request), { endpoint, token, timeoutMs, fetchFn });
+    const shouldRedact = options.redact !== false && !entry.evalId.startsWith('sensitivity-');
+    const result = await callHokusai(shouldRedact ? redactModel30Request(entry.request) : entry.request, { endpoint, token, timeoutMs, fetchFn });
     return result.response?.predictions.recommended_strategy;
   });
 
@@ -754,6 +878,10 @@ export async function runHokusaiRouterAudit(options: HokusaiAuditOptions = {}): 
     calibration: buildCalibration(recommendations),
     regret: computeRegret(recommendations, corpus, options.kNeighbors ?? 20),
     groupBreakdowns: buildGroupBreakdowns(recommendations),
+    launchPriorityCoverage: buildLaunchPriorityCoverage(
+      recommendations,
+      Object.values(candidatePools(repoDir)).flat(),
+    ),
   };
   const completeReport = {
     ...reportWithoutFailures,
@@ -830,15 +958,36 @@ export function formatHokusaiAuditReport(report: HokusaiAuditReport): string {
     lines.push(`  ${role.padEnd(8)} n=${String(entry.count).padStart(3)} mean=${formatNumber(entry.meanRegret)}${entry.dominated ? ' dominated' : ''}`);
   }
 
-  if (report.groupBreakdowns.taskType.length > 0) {
+  const groupSections: Array<[string, string]> = [
+    ['taskType', 'Task type routing (request-normalized)'],
+    ['complexity', 'Complexity routing (request-normalized)'],
+    ['domain', 'Domain routing (request-normalized)'],
+    ['taskType_descriptor', 'Task type routing (descriptor-derived)'],
+    ['complexity_descriptor', 'Complexity routing (descriptor-derived)'],
+    ['domain_descriptor', 'Domain routing (descriptor-derived)'],
+  ];
+
+  const hasGroupBreakdowns = groupSections.some(([key]) => (report.groupBreakdowns[key] ?? []).length > 0);
+  if (hasGroupBreakdowns) {
     lines.push('');
-    lines.push('Task type routing');
-    for (const group of report.groupBreakdowns.taskType) {
-      const topCoder = group.stageShares.coder[0];
-      const topPlanner = group.stageShares.planner[0];
-      const topReviewer = group.stageShares.reviewer[0];
-      lines.push(`  ${group.group.padEnd(8)} n=${String(group.count).padStart(3)} planner=${topPlanner?.model || '-'} ${topPlanner ? formatPercent(topPlanner.share) : ''} coder=${topCoder?.model || '-'} ${topCoder ? formatPercent(topCoder.share) : ''} reviewer=${topReviewer?.model || '-'} ${topReviewer ? formatPercent(topReviewer.share) : ''}`);
+    for (const [key, label] of groupSections) {
+      const entries = report.groupBreakdowns[key] ?? [];
+      if (entries.length === 0) continue;
+      lines.push(label);
+      for (const group of entries) {
+        const topCoder = group.stageShares.coder[0];
+        const topPlanner = group.stageShares.planner[0];
+        const topReviewer = group.stageShares.reviewer[0];
+        lines.push(`  ${group.group.padEnd(8)} n=${String(group.count).padStart(3)} planner=${topPlanner?.model || '-'} ${topPlanner ? formatPercent(topPlanner.share) : ''} coder=${topCoder?.model || '-'} ${topCoder ? formatPercent(topCoder.share) : ''} reviewer=${topReviewer?.model || '-'} ${topReviewer ? formatPercent(topReviewer.share) : ''}`);
+      }
+      lines.push('');
     }
+  }
+
+  lines.push('Launch-priority coverage');
+  lines.push(`  covered=${report.launchPriorityCoverage.coveredModels}/${report.launchPriorityCoverage.totalModels} zero_evidence=${report.launchPriorityCoverage.zeroEvidenceModels} blocked=${report.launchPriorityCoverage.blockedModels}`);
+  for (const model of report.launchPriorityCoverage.models.filter((entry) => entry.evidenceCount === 0).slice(0, 15)) {
+    lines.push(`  ${model.wavemillAlias} pool=${model.inCandidatePool ? 'yes' : 'no'}${model.blocker ? ` blocker=${model.blocker}` : ''}`);
   }
 
   if (report.failures.length > 0) {

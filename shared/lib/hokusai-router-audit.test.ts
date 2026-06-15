@@ -4,9 +4,15 @@
 
 import assert from 'node:assert/strict';
 import type { EvalRecord } from './eval-schema.ts';
+import type {
+  HokusaiModel30EstimatedComplexity,
+  HokusaiModel30Request,
+  HokusaiModel30TaskType,
+} from './hokusai-schema.ts';
 import {
   buildCalibration,
   buildGroupBreakdowns,
+  buildLaunchPriorityCoverage,
   buildStageShares,
   classifyValidityViolations,
   computeRegret,
@@ -86,7 +92,35 @@ function makeRecord(id: string, taskType: string, timestamp: string, score = 0.8
   } as EvalRecord;
 }
 
-function makeRecommendation(record: EvalRecord, models: { planner: string; coder: string; reviewer: string }, estimated = 0.8): AuditRecommendation {
+function makeRequest(
+  taskType: HokusaiModel30TaskType,
+  complexity?: HokusaiModel30EstimatedComplexity,
+  domain?: string,
+): HokusaiModel30Request {
+  return {
+    inputs: {
+      task: {
+        description: 'test',
+        task_type: taskType,
+      },
+      ...((complexity || domain)
+        ? {
+          context: {
+            ...(complexity ? { estimated_complexity: complexity } : {}),
+            ...(domain ? { domain } : {}),
+          },
+        }
+        : {}),
+    },
+  };
+}
+
+function makeRecommendation(
+  record: EvalRecord,
+  models: { planner: string; coder: string; reviewer: string },
+  estimated = 0.8,
+  request: HokusaiModel30Request = makeRequest('feature'),
+): AuditRecommendation {
   return {
     evalId: record.id,
     strategy: {
@@ -95,6 +129,7 @@ function makeRecommendation(record: EvalRecord, models: { planner: string; coder
       reviewer_model: models.reviewer,
       estimated_success_under_budget: estimated,
     },
+    request,
     candidatePools: {
       planner: ['gpt-5.5', 'gpt-5.4'],
       coder: ['gpt-5.5', 'gpt-5.4'],
@@ -188,13 +223,60 @@ test('buildGroupBreakdowns exposes task-type-specific top recommendations', () =
   const feature = makeRecord('a1', 'feature', '2026-06-01T00:00:00Z');
   const docs = makeRecord('b1', 'docs', '2026-06-02T00:00:00Z');
   const breakdowns = buildGroupBreakdowns([
-    makeRecommendation(feature, { planner: 'gpt-5.5', coder: 'gpt-5.5', reviewer: 'gpt-5.4' }),
-    makeRecommendation(docs, { planner: 'gpt-5.4', coder: 'gpt-5.4', reviewer: 'gpt-5.5' }),
+    makeRecommendation(
+      feature,
+      { planner: 'gpt-5.5', coder: 'gpt-5.5', reviewer: 'gpt-5.4' },
+      0.8,
+      makeRequest('feature', 'high', 'backend'),
+    ),
+    makeRecommendation(
+      docs,
+      { planner: 'gpt-5.4', coder: 'gpt-5.4', reviewer: 'gpt-5.5' },
+      0.8,
+      makeRequest('maintenance', 'low', 'devops'),
+    ),
   ]);
   assert.equal(breakdowns.taskType.length, 2);
-  const docsBreakdown = breakdowns.taskType.find((entry) => entry.group === 'docs');
-  assert.equal(docsBreakdown?.stageShares.coder[0].model, 'gpt-5.4');
-  assert.equal(docsBreakdown?.effectiveModelCounts.coder, 1);
+  assert.deepEqual(breakdowns.taskType.map((entry) => entry.group).sort(), ['feature', 'maintenance']);
+  assert.deepEqual(breakdowns.complexity.map((entry) => entry.group).sort(), ['high', 'low']);
+  assert.deepEqual(breakdowns.domain.map((entry) => entry.group).sort(), ['backend', 'devops']);
+  const maintenanceBreakdown = breakdowns.taskType.find((entry) => entry.group === 'maintenance');
+  assert.equal(maintenanceBreakdown?.stageShares.coder[0].model, 'gpt-5.4');
+  assert.equal(maintenanceBreakdown?.effectiveModelCounts.coder, 1);
+});
+
+test('buildGroupBreakdowns exposes request-normalized and descriptor-derived task types separately', () => {
+  const docs = makeRecord('b1', 'docs', '2026-06-02T00:00:00Z');
+  docs.originalPrompt = 'Update documentation for the CLI and add examples.';
+  const breakdowns = buildGroupBreakdowns([
+    makeRecommendation(
+      docs,
+      { planner: 'gpt-5.4', coder: 'gpt-5.4', reviewer: 'gpt-5.5' },
+      0.8,
+      makeRequest('maintenance', 'low', 'devops'),
+    ),
+  ]);
+  assert.deepEqual(breakdowns.taskType.map((entry) => entry.group), ['maintenance']);
+  assert.equal(breakdowns.taskType_descriptor.length, 1);
+  assert.notEqual(breakdowns.taskType_descriptor[0]?.group, breakdowns.taskType[0]?.group);
+});
+
+test('buildLaunchPriorityCoverage reports zero-evidence models and candidate-pool blockers', () => {
+  const record = makeRecord('a1', 'feature', '2026-06-01T00:00:00Z');
+  record.taskDescriptor!.stages!.planner!.model = 'kimi-k2';
+  const coverage = buildLaunchPriorityCoverage(
+    [makeRecommendation(record, { planner: 'kimi-k2', coder: 'qwen-3-coder', reviewer: 'gpt-5.5' })],
+    ['kimi-k2', 'qwen-3-coder', 'gpt-5.5'],
+  );
+
+  const kimi = coverage.models.find((entry) => entry.wavemillAlias === 'kimi-k2');
+  const devstral = coverage.models.find((entry) => entry.wavemillAlias === 'devstral-small');
+  assert.ok(kimi);
+  assert.equal(kimi?.evidenceCount, 1);
+  assert.equal(kimi?.inCandidatePool, true);
+  assert.ok(devstral);
+  assert.equal(devstral?.evidenceCount, 0);
+  assert.equal(devstral?.blocker, 'not_in_candidate_pool');
 });
 
 test('computeRegret reports zero regret for best historical model', () => {

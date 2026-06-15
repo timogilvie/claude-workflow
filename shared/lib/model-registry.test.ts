@@ -28,7 +28,6 @@ import {
   validateModelId,
 } from './model-registry.ts';
 import { clearConfigCache } from './config.ts';
-import { filterDisabledModels } from './disabled-models.ts';
 import {
   ModelPolicyResolutionError,
   resolveSelectorWithPolicy,
@@ -139,7 +138,6 @@ function assertCapabilityMetadata(modelId: string, model: ModelRegistry['models'
 describe('model-registry', () => {
   it('seeds the canonical Claude defaults with complete metadata', () => {
     const expectedModels = [
-      'claude-fable-5',
       'claude-opus-4-8',
       'claude-opus-4-7',
       'claude-opus-4-6',
@@ -147,13 +145,29 @@ describe('model-registry', () => {
       'claude-sonnet-4-5-20250929',
       'claude-haiku-4-5-20251001',
       'deepseek-chat',
+      'deepseek-r1',
       'deepseek-reasoner',
+      'deepseek-v3',
       'deepseek-v4-flash',
       'deepseek-v4-pro',
       'deepseek-v4-pro[1m]',
+      'devstral-medium',
+      'devstral-small',
+      'gemini-2.5-flash',
+      'gemini-2.5-pro',
+      'gpt-5',
+      'gpt-5-mini',
       'gpt-5.3-codex',
       'gpt-5.5',
       'gpt-5.4',
+      'kimi-k2',
+      'kimi-k2-thinking',
+      'llama-3.3-70b',
+      'llama-4-maverick',
+      'mistral-large-2',
+      'qwen-2.5-coder-32b',
+      'qwen-3-235b',
+      'qwen-3-coder',
     ];
 
     assert.deepEqual(Object.keys(DEFAULT_MODEL_REGISTRY.models).sort(), expectedModels.sort());
@@ -177,22 +191,21 @@ describe('model-registry', () => {
   });
 
   it('normalizes reviewer aliases deterministically', () => {
-    assert.equal(REVIEWER_ALIAS_MAP.deep, 'claude-fable-5');
-    assert.equal(normalizeReviewerModelId(' deep ', DEFAULT_MODEL_REGISTRY), 'claude-fable-5');
+    assert.equal(REVIEWER_ALIAS_MAP.deep, 'claude-opus-4-8');
+    assert.equal(normalizeReviewerModelId(' deep ', DEFAULT_MODEL_REGISTRY), 'claude-opus-4-8');
     assert.equal(normalizeReviewerModelId('gpt-5.4', DEFAULT_MODEL_REGISTRY), 'gpt-5.4');
     assert.equal(normalizeReviewerModelId('unknown-reviewer', DEFAULT_MODEL_REGISTRY), null);
     assert.equal(normalizeReviewerModelId('   ', DEFAULT_MODEL_REGISTRY), null);
   });
 
   it('getLadder returns configured default ladders', () => {
-    assert.equal(getLadder(DEFAULT_MODEL_REGISTRY, 'review')[0], 'claude-fable-5');
+    assert.equal(getLadder(DEFAULT_MODEL_REGISTRY, 'review')[0], 'gpt-5.5');
     assert.deepEqual(getLadder(DEFAULT_MODEL_REGISTRY, 'classify'), [
       'claude-haiku-4-5-20251001',
       'deepseek-v4-flash',
       'claude-sonnet-4-6',
       'gpt-5.5',
       'gpt-5.4',
-      'claude-fable-5',
     ]);
   });
 
@@ -284,10 +297,9 @@ describe('model-registry', () => {
     });
 
     assert.deepEqual(once, [
-      'claude-fable-5',
+      'gpt-5.5',
       'claude-opus-4-8',
       'claude-opus-4-7',
-      'gpt-5.5',
       'gpt-5.4',
       'deepseek-v4-pro',
       'deepseek-reasoner',
@@ -307,7 +319,7 @@ describe('model-registry', () => {
   it('rankCandidates returns an empty ladder when every candidate is excluded', () => {
     assert.deepEqual(
       rankCandidates(DEFAULT_MODEL_REGISTRY, 'classify', {
-        excluded: ['claude-haiku-4-5-20251001', 'deepseek-v4-flash', 'claude-sonnet-4-6', 'gpt-5.5', 'gpt-5.4', 'claude-fable-5'],
+        excluded: ['claude-haiku-4-5-20251001', 'deepseek-v4-flash', 'claude-sonnet-4-6', 'gpt-5.5', 'gpt-5.4'],
       }),
       []
     );
@@ -315,7 +327,6 @@ describe('model-registry', () => {
 
   it('rankCandidates returns the full ladder when no exclusions are provided', () => {
     assert.deepEqual(rankCandidates(DEFAULT_MODEL_REGISTRY, 'coding'), [
-      'claude-fable-5',
       'gpt-5.5',
       'gpt-5.4',
       'deepseek-v4-pro',
@@ -336,6 +347,15 @@ describe('model-registry', () => {
   it('registers DeepSeek models with deepseek vendor metadata', () => {
     for (const modelId of ['deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-chat', 'deepseek-reasoner']) {
       assert.equal(DEFAULT_MODEL_REGISTRY.models[modelId]?.vendor, 'deepseek');
+    }
+  });
+
+  it('registers launch-priority OpenRouter models as opt-in with provider agents', () => {
+    for (const modelId of ['qwen-2.5-coder-32b', 'qwen-3-coder', 'kimi-k2', 'gemini-2.5-pro', 'devstral-small']) {
+      const model = DEFAULT_MODEL_REGISTRY.models[modelId];
+      assert.ok(model, `missing registry entry for ${modelId}`);
+      assert.equal(model.defaultLadderEligible, false);
+      assert.equal(model.agent, 'claude-openrouter');
     }
   });
 
@@ -545,7 +565,9 @@ describe('model-registry', () => {
   it('recognizes configured DeepSeek IDs and validates bracket syntax', () => {
     assert.deepEqual(configuredDeepSeekModelIds(DEFAULT_MODEL_REGISTRY), [
       'deepseek-chat',
+      'deepseek-r1',
       'deepseek-reasoner',
+      'deepseek-v3',
       'deepseek-v4-flash',
       'deepseek-v4-pro',
       'deepseek-v4-pro[1m]',
@@ -684,19 +706,17 @@ describe('model-registry', () => {
       writeConfig(repoDir, {});
       clearConfigCache(repoDir);
 
-      // Descriptor models are the ladder minus globally-disabled models, so
-      // filter the expected ladders the same way (robust to the disable set).
       assert.deepEqual(
         getConfiguredModelsForDescriptorStage(repoDir, 'planner'),
-        filterDisabledModels(getLadder(getEffectiveRegistry(repoDir), 'planning')),
+        getLadder(getEffectiveRegistry(repoDir), 'planning'),
       );
       assert.deepEqual(
         getConfiguredModelsForDescriptorStage(repoDir, 'coder'),
-        filterDisabledModels(getLadder(getEffectiveRegistry(repoDir), 'coding')),
+        getLadder(getEffectiveRegistry(repoDir), 'coding'),
       );
       assert.deepEqual(
         getConfiguredModelsForDescriptorStage(repoDir, 'reviewer'),
-        filterDisabledModels(getLadder(getEffectiveRegistry(repoDir), 'review')),
+        getLadder(getEffectiveRegistry(repoDir), 'review'),
       );
 
       const descriptorModels = getConfiguredModelsForDescriptor(repoDir);
@@ -770,7 +790,7 @@ describe('parseModelSelector', () => {
   it('exports the required family aliases as a frozen registry', () => {
     assert.equal(Object.isFrozen(FAMILY_ALIASES), true);
 
-    for (const family of ['fable', 'opus', 'sonnet', 'haiku', 'gpt-5.5', 'gemini-pro']) {
+    for (const family of ['opus', 'sonnet', 'haiku', 'gpt-5.5', 'gemini-pro']) {
       assert.ok(Object.hasOwn(FAMILY_ALIASES, family));
       assert.ok(Object.isFrozen(FAMILY_ALIASES[family].channels));
       assert.ok(FAMILY_ALIASES[family].channels.stable?.length);
@@ -778,7 +798,6 @@ describe('parseModelSelector', () => {
   });
 
   it('keeps the existing stable pins in the channel registry', () => {
-    assert.equal(FAMILY_ALIASES.fable.channels.stable, 'claude-fable-5');
     assert.equal(FAMILY_ALIASES.opus.channels.stable, 'claude-opus-4-8');
     assert.equal(FAMILY_ALIASES.sonnet.channels.stable, 'claude-sonnet-4-6');
     assert.equal(FAMILY_ALIASES.haiku.channels.stable, 'claude-haiku-4-5-20251001');

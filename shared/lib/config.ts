@@ -297,7 +297,7 @@ export interface ValidationLayerConfig {
 
 export interface ValidationLayer2Config extends ValidationLayerConfig {
   model?: string;
-  provider?: 'claude-cli' | 'anthropic';
+  provider?: 'claude-cli' | 'anthropic' | 'codex';
 }
 
 export interface ValidationConfig {
@@ -352,8 +352,17 @@ export interface DeepSeekProviderConfig {
   launcher?: DeepSeekLauncherConfig;
 }
 
+export interface OpenRouterProviderConfig {
+  enabled?: boolean;
+  apiKeyEnv?: string;
+  baseUrl?: string;
+  models?: string[];
+  stages?: DeepSeekProviderStage[];
+}
+
 export interface ProvidersConfig {
   deepseek?: DeepSeekProviderConfig;
+  openrouter?: OpenRouterProviderConfig;
 }
 
 export interface IntegrationConfig {
@@ -1340,6 +1349,10 @@ export function getProvidersConfig(repoDir?: string): ProvidersConfig {
  */
 export function getDeepSeekProviderConfig(repoDir?: string): DeepSeekProviderConfig {
   return loadWavemillConfig(repoDir).providers?.deepseek || {};
+}
+
+export function getOpenRouterProviderConfig(repoDir?: string): OpenRouterProviderConfig {
+  return loadWavemillConfig(repoDir).providers?.openrouter || {};
 }
 
 /**

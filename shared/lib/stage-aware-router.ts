@@ -17,6 +17,7 @@ import { computeModelCost, loadPricingTable } from './workflow-cost.ts';
 import type { WorkflowRouteDecision, PlanDepth, CodeDepth, ReviewMode } from './workflow-router.ts';
 import { getAvailableModelsForStage, getRouterConfig } from './config.ts';
 import { filterDeepSeekModels } from './deepseek-provider.ts';
+import { filterOpenRouterModels } from './openrouter-provider.ts';
 import {
   evaluateCapabilityConstraints,
   getConfiguredModelsForDescriptor,
@@ -974,40 +975,40 @@ export function routeStageAwareWithContext(
   options: StageAwareOptions = {},
 ): StageAwareDecision | null {
   const { repoDir, routerConfig, records } = context;
-  const plannerModels = filterDeepSeekModels(
+  const plannerModels = filterOpenRouterModels(filterDeepSeekModels(
     filterDisabledModels(getAvailableModelsForStage(routerConfig, 'planner') || []),
     repoDir,
     'planner',
-  ).models;
-  const coderModels = filterDeepSeekModels(
+  ).models, repoDir, 'planner').models;
+  const coderModels = filterOpenRouterModels(filterDeepSeekModels(
     filterDisabledModels(getAvailableModelsForStage(routerConfig, 'coder') || []),
     repoDir,
     'coder',
-  ).models;
-  const reviewerModels = filterDeepSeekModels(
+  ).models, repoDir, 'coder').models;
+  const reviewerModels = filterOpenRouterModels(filterDeepSeekModels(
     filterDisabledModels(getAvailableModelsForStage(routerConfig, 'reviewer') || []),
     repoDir,
     'reviewer',
-  ).models;
-  const filteredModelsAvailable = filterDeepSeekModels(
+  ).models, repoDir, 'reviewer').models;
+  const filteredModelsAvailable = filterOpenRouterModels(filterDeepSeekModels(
     filterDisabledModels(options.modelsAvailable || []),
     repoDir,
-  ).models;
-  const filteredPlannerOptions = filterDeepSeekModels(
+  ).models, repoDir).models;
+  const filteredPlannerOptions = filterOpenRouterModels(filterDeepSeekModels(
     filterDisabledModels(options.plannerModelsAvailable || []),
     repoDir,
     'planner',
-  ).models;
-  const filteredCoderOptions = filterDeepSeekModels(
+  ).models, repoDir, 'planner').models;
+  const filteredCoderOptions = filterOpenRouterModels(filterDeepSeekModels(
     filterDisabledModels(options.coderModelsAvailable || []),
     repoDir,
     'coder',
-  ).models;
-  const filteredReviewerOptions = filterDeepSeekModels(
+  ).models, repoDir, 'coder').models;
+  const filteredReviewerOptions = filterOpenRouterModels(filterDeepSeekModels(
     filterDisabledModels(options.reviewerModelsAvailable || []),
     repoDir,
     'reviewer',
-  ).models;
+  ).models, repoDir, 'reviewer').models;
   const kNeighbors = options.kNeighbors || routerConfig.kNeighbors || DEFAULT_K_NEIGHBORS;
   const minRecords = options.minRecords || routerConfig.minRecords || DEFAULT_MIN_RECORDS;
   const minModels = options.minModels || routerConfig.minModels || DEFAULT_MIN_MODELS;
