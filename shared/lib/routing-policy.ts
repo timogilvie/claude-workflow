@@ -11,6 +11,7 @@ import {
   type CapabilityConstraints,
 } from './model-registry.ts';
 import { filterDeepSeekModels } from './deepseek-provider.ts';
+import { filterOpenRouterModels } from './openrouter-provider.ts';
 import { type QuotaSnapshot, type QuotaStatus } from './quota-state.ts';
 import { getAllowedModelFloor, type RoutingDifficulty } from './task-difficulty-classifier.ts';
 import { isRouterCapabilityFilteringEnabled } from './config.ts';
@@ -127,7 +128,12 @@ function filterProviderUnavailableModels(
   registry: ModelRegistry,
   repoDir?: string,
 ): ModelRegistry {
-  const allowedModelIds = new Set(filterDeepSeekModels(Object.keys(registry.models), repoDir).models);
+  const allowedModelIds = new Set(
+    filterOpenRouterModels(
+      filterDeepSeekModels(Object.keys(registry.models), repoDir).models,
+      repoDir,
+    ).models,
+  );
 
   return {
     models: Object.fromEntries(
@@ -150,8 +156,15 @@ export function resolveModel(
     registryOverride ?? getEffectiveRegistry(policy.repoDir),
     policy.repoDir,
   );
+  const ladderModelIds = new Set(getLadder(registry, policy.taskType));
+  const candidateModelIds = Object.entries(registry.models)
+    .filter(([modelId, capabilities]) =>
+      ladderModelIds.has(modelId) || capabilities.defaultLadderEligible !== false
+    )
+    .map(([modelId]) => modelId);
   const floor = getAllowedModelFloor(policy.difficulty);
-  const hasViableFrontier = Object.entries(registry.models).some(([modelId, capabilities]) => {
+  const hasViableFrontier = candidateModelIds.some((modelId) => {
+    const capabilities = registry.models[modelId];
     if (capabilities.class !== 'frontier') {
       return false;
     }
@@ -188,7 +201,8 @@ export function resolveModel(
   const shouldApplyCapabilityFiltering =
     capabilityFilteringEnabled && hasCapabilityConstraints(policy.capabilityConstraints);
 
-  const candidates = Object.entries(registry.models).map(([modelId, capabilities]) => {
+  const candidates = candidateModelIds.map((modelId) => {
+    const capabilities = registry.models[modelId];
     const qualityScore = capabilities.qualityScores[policy.taskType] ?? 0;
     const status = getQuotaStatus(policy.quotaState, modelId);
     const adjustedScore = computeAdjustedScore(qualityScore, status);

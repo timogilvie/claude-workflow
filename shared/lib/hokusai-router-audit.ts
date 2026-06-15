@@ -10,6 +10,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { getHokusaiRouterConfig, getRouterConfig } from './config.ts';
+import { loadLaunchPriorityList, type ModelFamily, type ModelStatus, type RoleEligibility } from './openrouter-catalog.ts';
 import { resolveEnvValue } from './env-file.ts';
 import { errorMessage } from './error-utils.ts';
 import { toHokusaiModel30Request, type HokusaiModel30Response, type HokusaiModel30Request, type HokusaiRecommendedStrategy } from './hokusai-schema.ts';
@@ -134,8 +135,28 @@ export interface HokusaiAuditReport {
   calibration: CalibrationBucket[];
   regret: Record<AuditStageRole, RegretSummary>;
   groupBreakdowns: Record<string, AuditGroupBreakdown[]>;
+  launchPriorityCoverage: LaunchPriorityCoverageReport;
   hardFailures: string[];
   artifactPath?: string;
+}
+
+export interface LaunchPriorityModelCoverage {
+  wavemillAlias: string;
+  family: ModelFamily;
+  status: ModelStatus;
+  priorityTier: number;
+  roleEligibility: RoleEligibility[];
+  evidenceCount: number;
+  inCandidatePool: boolean;
+  blocker?: string;
+}
+
+export interface LaunchPriorityCoverageReport {
+  totalModels: number;
+  coveredModels: number;
+  zeroEvidenceModels: number;
+  blockedModels: number;
+  models: LaunchPriorityModelCoverage[];
 }
 
 export interface AuditGroupBreakdown {
@@ -217,6 +238,49 @@ export function stratifiedSampleRecords(
   }
 
   return sampled;
+}
+
+export function buildLaunchPriorityCoverage(
+  recommendations: AuditRecommendation[],
+  candidatePoolModels: string[],
+  fixturePath?: string,
+): LaunchPriorityCoverageReport {
+  const evidenceCounts = new Map<string, number>();
+  for (const recommendation of recommendations) {
+    for (const model of Object.values(recommendation.actualStageModels)) {
+      if (!model) continue;
+      evidenceCounts.set(model, (evidenceCounts.get(model) ?? 0) + 1);
+    }
+  }
+
+  const candidatePool = new Set(candidatePoolModels);
+  const models = loadLaunchPriorityList(fixturePath)
+    .filter((entry) => entry.status !== 'deprecated')
+    .map((entry) => {
+      const evidenceCount = evidenceCounts.get(entry.wavemillAlias) ?? 0;
+      const inCandidatePool = candidatePool.has(entry.wavemillAlias);
+      return {
+        wavemillAlias: entry.wavemillAlias,
+        family: entry.family,
+        status: entry.status,
+        priorityTier: entry.priorityTier,
+        roleEligibility: [...entry.roleEligibility],
+        evidenceCount,
+        inCandidatePool,
+        ...(evidenceCount === 0 && !inCandidatePool
+          ? { blocker: 'not_in_candidate_pool' }
+          : {}),
+      };
+    })
+    .sort((left, right) => left.priorityTier - right.priorityTier || left.wavemillAlias.localeCompare(right.wavemillAlias));
+
+  return {
+    totalModels: models.length,
+    coveredModels: models.filter((entry) => entry.evidenceCount > 0).length,
+    zeroEvidenceModels: models.filter((entry) => entry.evidenceCount === 0).length,
+    blockedModels: models.filter((entry) => entry.blocker).length,
+    models,
+  };
 }
 
 function buildReplayDescriptor(record: EvalRecord): TaskDescriptor {
@@ -731,6 +795,7 @@ export async function runHokusaiRouterAudit(options: HokusaiAuditOptions = {}): 
         complexity_descriptor: [],
         domain_descriptor: [],
       },
+      launchPriorityCoverage: buildLaunchPriorityCoverage([], Object.values(candidatePools(repoDir)).flat()),
     };
     return { ...reportWithoutFailures, hardFailures: [], artifactPath: persistAuditReport(reportWithoutFailures, options.output, repoDir) };
   }
@@ -813,6 +878,10 @@ export async function runHokusaiRouterAudit(options: HokusaiAuditOptions = {}): 
     calibration: buildCalibration(recommendations),
     regret: computeRegret(recommendations, corpus, options.kNeighbors ?? 20),
     groupBreakdowns: buildGroupBreakdowns(recommendations),
+    launchPriorityCoverage: buildLaunchPriorityCoverage(
+      recommendations,
+      Object.values(candidatePools(repoDir)).flat(),
+    ),
   };
   const completeReport = {
     ...reportWithoutFailures,
@@ -913,6 +982,12 @@ export function formatHokusaiAuditReport(report: HokusaiAuditReport): string {
       }
       lines.push('');
     }
+  }
+
+  lines.push('Launch-priority coverage');
+  lines.push(`  covered=${report.launchPriorityCoverage.coveredModels}/${report.launchPriorityCoverage.totalModels} zero_evidence=${report.launchPriorityCoverage.zeroEvidenceModels} blocked=${report.launchPriorityCoverage.blockedModels}`);
+  for (const model of report.launchPriorityCoverage.models.filter((entry) => entry.evidenceCount === 0).slice(0, 15)) {
+    lines.push(`  ${model.wavemillAlias} pool=${model.inCandidatePool ? 'yes' : 'no'}${model.blocker ? ` blocker=${model.blocker}` : ''}`);
   }
 
   if (report.failures.length > 0) {

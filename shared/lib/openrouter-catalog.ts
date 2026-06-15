@@ -138,6 +138,19 @@ export function loadLaunchPriorityList(fixturePath?: string): LaunchPriorityMode
   return loadLaunchPriorityFixture(fixturePath).models;
 }
 
+export function resolveWavemillAliasFromOpenRouterId(
+  openrouterId: string | null | undefined,
+  fixturePath?: string,
+): string | null {
+  if (typeof openrouterId !== 'string' || openrouterId.trim().length === 0) {
+    return null;
+  }
+
+  const model = loadLaunchPriorityList(fixturePath)
+    .find((entry) => entry.openrouterId === openrouterId);
+  return model?.wavemillAlias ?? null;
+}
+
 /**
  * Hash the launch-priority fixture for snapshot auditability. Hashes the
  * raw file bytes so any whitespace or ordering change yields a new hash.

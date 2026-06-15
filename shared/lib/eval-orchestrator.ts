@@ -18,6 +18,7 @@ import { errorMessage } from './error-utils.ts';
 import { finalizeEvalSuccess } from './eval-success-policy.ts';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 import { getDeepSeekProviderMetadata } from './deepseek-provider.ts';
+import { getOpenRouterProviderMetadata } from './openrouter-provider.ts';
 import {
   autoDetectContext,
   computeWallClockSeconds,
@@ -480,7 +481,8 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
     effectiveRoutingDecision,
     stageArtifacts.executionModel,
   );
-  const providerMetadata = getDeepSeekProviderMetadata(executionModel, repoDir);
+  const providerMetadata = getDeepSeekProviderMetadata(executionModel, repoDir)
+    ?? getOpenRouterProviderMetadata(executionModel, repoDir);
   try {
     // Derive feature slug from branch or issue ID
     const slug = branch.replace(/^(task|bug)\//, '') || issueId.toLowerCase();

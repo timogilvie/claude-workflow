@@ -12,6 +12,7 @@ import type {
 import {
   buildCalibration,
   buildGroupBreakdowns,
+  buildLaunchPriorityCoverage,
   buildStageShares,
   classifyValidityViolations,
   computeRegret,
@@ -258,6 +259,24 @@ test('buildGroupBreakdowns exposes request-normalized and descriptor-derived tas
   assert.deepEqual(breakdowns.taskType.map((entry) => entry.group), ['maintenance']);
   assert.equal(breakdowns.taskType_descriptor.length, 1);
   assert.notEqual(breakdowns.taskType_descriptor[0]?.group, breakdowns.taskType[0]?.group);
+});
+
+test('buildLaunchPriorityCoverage reports zero-evidence models and candidate-pool blockers', () => {
+  const record = makeRecord('a1', 'feature', '2026-06-01T00:00:00Z');
+  record.taskDescriptor!.stages!.planner!.model = 'kimi-k2';
+  const coverage = buildLaunchPriorityCoverage(
+    [makeRecommendation(record, { planner: 'kimi-k2', coder: 'qwen-3-coder', reviewer: 'gpt-5.5' })],
+    ['kimi-k2', 'qwen-3-coder', 'gpt-5.5'],
+  );
+
+  const kimi = coverage.models.find((entry) => entry.wavemillAlias === 'kimi-k2');
+  const devstral = coverage.models.find((entry) => entry.wavemillAlias === 'devstral-small');
+  assert.ok(kimi);
+  assert.equal(kimi?.evidenceCount, 1);
+  assert.equal(kimi?.inCandidatePool, true);
+  assert.ok(devstral);
+  assert.equal(devstral?.evidenceCount, 0);
+  assert.equal(devstral?.blocker, 'not_in_candidate_pool');
 });
 
 test('computeRegret reports zero regret for best historical model', () => {
