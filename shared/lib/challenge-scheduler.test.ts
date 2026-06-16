@@ -471,7 +471,14 @@ test('new-model recommendation prioritizes recently released models over older u
     },
     modelRegistry: {
       models: {
-        'fresh-model-9000': { releasedAt },
+        'fresh-model-9000': {
+          vendor: 'openai',
+          class: 'frontier',
+          strengths: ['freshness'],
+          weaknesses: [],
+          qualityScores: { planning: 90, coding: 90, review: 90, classify: 75, routing: 75 },
+          releasedAt,
+        },
       },
     },
   });

@@ -364,11 +364,13 @@ describe('model-registry', () => {
       models: {
         'claude-opus-4-7': {
           qualityScores: { coding: 99 },
+          releasedAt: '2026-06-01',
         },
       },
     });
 
     assert.equal(merged.models['claude-opus-4-7'].qualityScores.coding, 99);
+    assert.equal(merged.models['claude-opus-4-7'].releasedAt, '2026-06-01');
     assert.equal(merged.models['claude-opus-4-7'].vendor, DEFAULT_MODEL_REGISTRY.models['claude-opus-4-7'].vendor);
     assert.deepEqual(
       merged.models['claude-opus-4-7'].strengths,
@@ -420,12 +422,14 @@ describe('model-registry', () => {
           reasoningTier: 'advanced',
           costPerMillionInputTokensUsd: 6,
           costPerMillionOutputTokensUsd: 36,
+          releasedAt: '2026-06-15',
         },
       },
     });
 
     assert.equal(merged.models['gpt-5.6'].vendor, 'openai');
     assert.equal(merged.models['gpt-5.6'].qualityScores.planning, 90);
+    assert.equal(merged.models['gpt-5.6'].releasedAt, '2026-06-15');
   });
 
   it('mergeModelRegistry merges and clones capability metadata overrides', () => {

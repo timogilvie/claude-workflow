@@ -50,6 +50,7 @@ export interface ModelCapabilities {
   costPerMillionInputTokensUsd: number;
   costPerMillionOutputTokensUsd: number;
   agent?: string;
+  releasedAt?: string;
 }
 
 export interface ModelRegistry {
@@ -246,6 +247,7 @@ function makeDefaultCapabilities(override?: ModelCapabilitiesOverride): ModelCap
     costPerMillionInputTokensUsd: override?.costPerMillionInputTokensUsd ?? 0,
     costPerMillionOutputTokensUsd: override?.costPerMillionOutputTokensUsd ?? 0,
     agent: override?.agent,
+    releasedAt: override?.releasedAt,
   };
 }
 
@@ -275,6 +277,7 @@ function mergeCapabilities(
     costPerMillionInputTokensUsd: override.costPerMillionInputTokensUsd ?? seed.costPerMillionInputTokensUsd,
     costPerMillionOutputTokensUsd: override.costPerMillionOutputTokensUsd ?? seed.costPerMillionOutputTokensUsd,
     agent: override.agent ?? seed.agent,
+    releasedAt: override.releasedAt ?? seed.releasedAt,
   };
 }
 

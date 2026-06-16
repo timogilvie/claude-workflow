@@ -1580,9 +1580,9 @@ function recencyBoostRepo(releasedDaysAgo: number, multiplier: number) {
   });
 }
 
-// Explore only the planner: rate 0.9, rolls [explore, pick, skip, skip]
-const recencySequence = () => {
-  const values = [0, 0.6, 0.95, 0.95];
+// Explore only the planner: rate 0.9, rolls [explore, pick, skip, skip].
+const recencySequence = (pickRoll = 0.6) => {
+  const values = [0, pickRoll, 0.95, 0.95];
   let index = 0;
   return () => values[Math.min(index++, values.length - 1)];
 };
@@ -1595,10 +1595,10 @@ test('recency boost steers exploration toward recently released models', () => {
       minRecords: 2,
       minModels: 2,
       kNeighbors: 6,
-      randomFn: recencySequence(),
+      randomFn: recencySequence(0.1),
     });
     assert.ok(decision);
-    // Boosted weights [~5, 1]: the 0.6 roll lands on the recent runner-up
+    // Boosted weights [~5, 1]: this roll lands on the recent runner-up.
     assert.equal(decision?.planner, 'claude-sonnet-4-6');
     assert.equal(decision?.exploration?.explored[0]?.recencyBoosted, true);
     assert.ok(decision?.reasoning[0].includes('[recency-boosted]'));
