@@ -29,7 +29,17 @@ export type ReadyWatchdogClassificationKind =
   | 'waiting-on-ci'
   | 'stable-failing-safe'
   | 'waiting-on-eval-comparison'
+  | 'waiting-on-merge-lane'
   | 'needs-user';
+
+/**
+ * A PR parked in the merge lane (queueState === 'ready-stale') is idle on
+ * purpose: it already passed ready and is waiting its turn to merge. We only
+ * escalate such a PR to needs-user once it has been idle for this multiple of
+ * the idle threshold without the lane advancing, which indicates the queue
+ * itself is stalled rather than this PR simply waiting.
+ */
+const MERGE_LANE_STALL_ESCALATE_MULTIPLIER = 3;
 
 export interface ReadyTaskSnapshot {
   issueId: string;
@@ -331,6 +341,7 @@ function displayLabel(kind: Exclude<ReadyWatchdogClassificationKind, 'fresh'>): 
   if (kind === 'waiting-on-ci') return 'waiting on CI';
   if (kind === 'stable-failing-safe') return 'stable failing safe';
   if (kind === 'waiting-on-eval-comparison') return 'waiting on eval/comparison';
+  if (kind === 'waiting-on-merge-lane') return 'waiting on merge lane';
   if (kind === 'needs-user') return 'needs user';
   return 'stuck';
 }
@@ -609,6 +620,28 @@ export function classifyReadyTask(
   }
 
   if (isCleanMergeState(githubTruth) && checkSummary.successes > 0) {
+    // A PR parked in the merge lane (it already passed ready, then main
+    // advanced and it wasn't the selected merge candidate) is idle on purpose.
+    // Re-running its ready checks does nothing useful — it's the queue, not the
+    // PR, that hasn't advanced — and "recovering" it resets the ready clock,
+    // which re-arms this very check ~every threshold minutes (observed: one PR
+    // auto-recovered 30 times while clean and green). Treat normal lane-waiting
+    // as benign; only escalate to needs-user once the wait is long enough to
+    // signal the lane itself is stalled.
+    if (snapshot.readyArtifacts?.queueState === 'ready-stale') {
+      const escalateMinutes = normalizedConfig.thresholdMinutes * MERGE_LANE_STALL_ESCALATE_MULTIPLIER;
+      if (snapshot.idleMinutes >= escalateMinutes) {
+        return {
+          kind: 'needs-user',
+          detail: `Merge lane appears stalled: PR #${snapshot.prNumber} passed ready and has waited ${snapshot.idleMinutes}m for its merge turn without the lane advancing.`,
+        };
+      }
+      return {
+        kind: 'waiting-on-merge-lane',
+        detail: `PR #${snapshot.prNumber} passed ready and is waiting its turn in the merge lane (idle ${snapshot.idleMinutes}m).`,
+      };
+    }
+
     const remediationInFlight = snapshot.hasConflictMarker
       && snapshot.readyResultStatus === 'running'
       && snapshot.remediationLaunchHead !== null
