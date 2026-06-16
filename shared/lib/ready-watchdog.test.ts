@@ -121,6 +121,51 @@ test('classify clean green stale ready as stuck', () => {
   assert.equal(classification.autoRecoverable, true);
 });
 
+test('classify clean green PR parked in merge lane as waiting-on-merge-lane (not stuck)', () => {
+  const classification = classifyReadyTask(
+    makeSnapshot({
+      idleMinutes: 15,
+      readyArtifacts: { type: 'ready', verdict: 'pass', queueState: 'ready-stale' },
+    }),
+    makeTruth(),
+    new Date('2026-05-05T12:30:00.000Z'),
+    WATCHDOG_CONFIG,
+  );
+
+  // Parked-and-waiting must not be auto-recovered (no needless ready re-run).
+  assert.equal(classification.kind, 'waiting-on-merge-lane');
+  assert.notEqual(classification.autoRecoverable, true);
+});
+
+test('escalate a long-parked merge-lane PR to needs-user (lane stalled)', () => {
+  const classification = classifyReadyTask(
+    makeSnapshot({
+      idleMinutes: 35, // >= thresholdMinutes(10) * 3
+      readyArtifacts: { type: 'ready', verdict: 'pass', queueState: 'ready-stale' },
+    }),
+    makeTruth(),
+    new Date('2026-05-05T12:30:00.000Z'),
+    WATCHDOG_CONFIG,
+  );
+
+  assert.equal(classification.kind, 'needs-user');
+  assert.match(classification.detail, /merge lane appears stalled/i);
+});
+
+test('a selected merge candidate that is clean green still classifies as stuck', () => {
+  const classification = classifyReadyTask(
+    makeSnapshot({
+      idleMinutes: 15,
+      readyArtifacts: { type: 'ready', verdict: 'pass', queueState: 'merge-candidate' },
+    }),
+    makeTruth(),
+    new Date('2026-05-05T12:30:00.000Z'),
+    WATCHDOG_CONFIG,
+  );
+
+  assert.equal(classification.kind, 'stuck');
+});
+
 test('classify failing CI as waiting-on-ci', () => {
   const classification = classifyReadyTask(
     makeSnapshot(),
