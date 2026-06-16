@@ -6142,7 +6142,7 @@ maybe_run_challenge_comparison() {
   local pair_id primary_key challenger_key compared primary_pr challenger_pr primary_eval challenger_eval linear_issue primary_model challenger_model
   local primary_planner primary_reviewer primary_plan_depth primary_code_depth primary_review_mode
   local challenger_planner challenger_reviewer challenger_plan_depth challenger_code_depth challenger_review_mode
-  local job_id job_status job_dir log_path result_path pid
+  local job_id job_status job_reason pairing_repaired job_dir log_path result_path pid
   pair_id=$(get_task_meta "$issue" "challengePairId")
   [[ -z "$pair_id" ]] && return 0
   primary_key="$pair_id"
@@ -6157,7 +6157,28 @@ maybe_run_challenge_comparison() {
   [[ -z "$primary_pr" || -z "$challenger_pr" || "$primary_eval" != "true" || "$challenger_eval" != "true" ]] && return 0
   job_id=$(build_comparison_job_id "$pair_id" "$primary_pr" "$challenger_pr")
   job_status=$(read_job_state_value "$job_id" "" '.jobs[$id].status // empty')
-  [[ -n "$job_status" ]] && return 0
+  if [[ -n "$job_status" ]]; then
+    # A prior comparison already ran. By default that's terminal: succeeded /
+    # running need no action, and genuinely failing comparisons (LLM errors,
+    # invalid scores) must not relaunch every poll and burn repeated LLM calls.
+    #
+    # The one exception is a failure caused by drifted challenge pairing
+    # metadata ("Missing eval records"): the eval scores exist but the
+    # challenger record is filed under the wrong pair id. We attempt a single
+    # self-healing repair + retry, gated by a one-shot flag so a pair can never
+    # loop here. launch_tracked_job upserts by job id, overwriting the failed
+    # entry when we proceed below.
+    job_reason=$(read_job_state_value "$job_id" "" '.jobs[$id].reason // empty')
+    pairing_repaired=$(read_state_value "false" --arg i "$primary_key" '.tasks[$i].comparisonPairingRepaired // false')
+    if [[ "$job_status" == "failed" && "$job_reason" == *"Missing eval records"* && "$pairing_repaired" != "true" ]]; then
+      log "status" "  ⚖ $pair_id comparison failed on eval pairing; attempting one-shot repair + retry"
+      npx tsx "$TOOLS_DIR/repair-challenge-pairing.ts" --pair-id "$pair_id" --repo-dir "$REPO_DIR" >/dev/null 2>&1 || \
+        log_warn "challenge pairing repair failed for $pair_id (continuing to retry comparison)"
+      state_mutate "$STATE_FILE" '.tasks[$i].comparisonPairingRepaired = true' --arg i "$primary_key" >/dev/null || true
+    else
+      return 0
+    fi
+  fi
 
   linear_issue=$(get_linear_issue_id "$primary_key")
   primary_model=$(get_task_meta "$primary_key" "challengeModel")
@@ -9170,9 +9191,22 @@ monitor_issue_state() {
               [[ -z "$coder_model" ]] && coder_model=$(get_task_meta "$ISSUE" "coderModel")
               challenge_coder=$(get_task_meta "$ISSUE" "challengeModel")
               challenge_stage_meta=$(get_task_meta "$ISSUE" "challengeStage")
+              challenge_role_meta=$(get_task_meta "$ISSUE" "challengeRole")
               # Post-expansion refresh re-pairs by coder; stage-varied pairs
               # (plan/review) keep their original pairing.
-              if [[ -n "$challenge_coder" ]] && [[ -z "$challenge_stage_meta" || "$challenge_stage_meta" == "implementation" ]] && [[ -f "$FEATURE_DIR/.post-expansion-route.json" ]]; then
+              #
+              # CRITICAL: only the primary may run this refresh. It re-saves
+              # BOTH sides of the pair (primary as challengePairId=$ISSUE/primary
+              # and the challenger as challengePairId=$ISSUE/challenger). If a
+              # challenger task ever reaches this block it would call
+              # resolve-challenge-task with --issue <challenger_key> and re-save
+              # ITSELF as challengePairId=<challenger_key>/role=primary, severing
+              # the link to its real primary. That mislabels the challenger's
+              # eval record (it runs as side=primary under the wrong pair id) and
+              # makes compare-prs fail with "Missing eval records", stalling the
+              # challenge before evaluation. Guard challengers out entirely — the
+              # primary's refresh already re-pairs them correctly.
+              if [[ "$challenge_role_meta" != "challenger" ]] && [[ -n "$challenge_coder" ]] && [[ -z "$challenge_stage_meta" || "$challenge_stage_meta" == "implementation" ]] && [[ -f "$FEATURE_DIR/.post-expansion-route.json" ]]; then
                 refresh_title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
                 if [[ -z "$refresh_title" ]]; then
                   issue_json=$(cat "/tmp/${SESSION}-${ISSUE}-issue.json" 2>/dev/null || echo "{}")
