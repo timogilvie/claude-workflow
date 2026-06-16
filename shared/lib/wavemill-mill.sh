@@ -6171,7 +6171,7 @@ maybe_run_challenge_comparison() {
     job_reason=$(read_job_state_value "$job_id" "" '.jobs[$id].reason // empty')
     pairing_repaired=$(read_state_value "false" --arg i "$primary_key" '.tasks[$i].comparisonPairingRepaired // false')
     if [[ "$job_status" == "failed" && "$job_reason" == *"Missing eval records"* && "$pairing_repaired" != "true" ]]; then
-      log "status" "  ⚖ $pair_id comparison failed on eval pairing; attempting one-shot repair + retry"
+      log "status" "  ⚖ $pair_id comparison failed on eval pairing — attempting one-shot repair and retry"
       npx tsx "$TOOLS_DIR/repair-challenge-pairing.ts" --pair-id "$pair_id" --repo-dir "$REPO_DIR" >/dev/null 2>&1 || \
         log_warn "challenge pairing repair failed for $pair_id (continuing to retry comparison)"
       state_mutate "$STATE_FILE" '.tasks[$i].comparisonPairingRepaired = true' --arg i "$primary_key" >/dev/null || true
