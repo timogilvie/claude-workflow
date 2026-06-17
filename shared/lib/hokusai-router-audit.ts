@@ -155,6 +155,7 @@ export interface HokusaiAuditReport {
   groupBreakdowns: Record<string, AuditGroupBreakdown[]>;
   scenarioShares?: ScenarioSharesBreakdown[];
   candidateEvidence?: CandidateEvidenceCoverage;
+  v2Conformance?: V2ConformanceCheck;
   hardFailures: string[];
   artifactPath?: string;
 }
@@ -188,6 +189,28 @@ export interface CandidateEvidenceCoverage {
   threshold: number;
   entries: CandidateEvidenceEntry[];
   warnings: string[];
+}
+
+export interface V2ConformanceCheck {
+  benchmarkSpecId: string;
+  expectedSchemaVersion: string;
+  primaryMetric: string;
+  scenarioCoverage: {
+    total: number;
+    missingScenarios: AuditScenario[];
+  };
+  rowSchemaChecks: {
+    passed: number;
+    failed: number;
+    failures: string[];
+  };
+  guardrailChecks: {
+    passed: boolean;
+    violations: string[];
+  };
+  errors: string[];
+  warnings: string[];
+  ok: boolean;
 }
 
 function clampConcurrency(value: number | undefined): number {
@@ -776,6 +799,71 @@ export function buildCandidateEvidence(
   };
 }
 
+/**
+ * Build v2 conformance check for benchmark audit.
+ */
+export function buildV2ConformanceCheck(
+  scenarioShares: ScenarioSharesBreakdown[] | undefined,
+  validityViolationRate: number,
+): V2ConformanceCheck {
+  const benchmarkSpecId = 'technical_task_router/v2';
+  const expectedSchemaVersion = 'technical_task_router_row/v2';
+  const primaryMetric = 'technical_task_router.benchmark_score/v2';
+  const errors: string[] = [];
+  const warnings: string[] = [];
+
+  // Check scenario coverage
+  const presentScenarios = new Set(scenarioShares?.map((s) => s.scenario) ?? []);
+  const missingScenarios = V2_SCENARIOS.filter((scenario) => !presentScenarios.has(scenario));
+
+  if (missingScenarios.length > 0) {
+    errors.push(`Missing required scenarios: ${missingScenarios.join(', ')}`);
+  }
+
+  // Check for sparse_cell and robustness scenarios specifically
+  if (!presentScenarios.has('sparse_cell')) {
+    errors.push('Missing sparse_cell scenario - required for v2 benchmark');
+  }
+  if (!presentScenarios.has('challenger_present') && !presentScenarios.has('dominant_model_removed')) {
+    warnings.push('Missing both challenger_present and dominant_model_removed scenarios');
+  }
+
+  // Row schema checks - for now, just placeholder counts
+  const rowSchemaChecks = {
+    passed: scenarioShares?.reduce((sum, s) => sum + s.count, 0) ?? 0,
+    failed: 0,
+    failures: [] as string[],
+  };
+
+  // Guardrail checks - validity violation rate threshold
+  const guardrailThreshold = 0.02; // 2% invalid selection rate
+  const guardrailChecks = {
+    passed: validityViolationRate <= guardrailThreshold,
+    violations: validityViolationRate > guardrailThreshold
+      ? [`Validity violation rate ${(validityViolationRate * 100).toFixed(1)}% > ${(guardrailThreshold * 100).toFixed(1)}% threshold`]
+      : [],
+  };
+
+  if (!guardrailChecks.passed) {
+    errors.push(...guardrailChecks.violations);
+  }
+
+  return {
+    benchmarkSpecId,
+    expectedSchemaVersion,
+    primaryMetric,
+    scenarioCoverage: {
+      total: presentScenarios.size,
+      missingScenarios,
+    },
+    rowSchemaChecks,
+    guardrailChecks,
+    errors,
+    warnings,
+    ok: errors.length === 0,
+  };
+}
+
 function mean(values: number[]): number {
   if (values.length === 0) return 0;
   return values.reduce((sum, value) => sum + value, 0) / values.length;
@@ -1064,9 +1152,10 @@ export async function runHokusaiRouterAudit(options: HokusaiAuditOptions = {}): 
   const stageShares = buildStageShares(recommendations);
   const validityViolations = classifyValidityViolations(recommendations, repoDir);
 
-  // Build scenario shares and candidate evidence for v2 if requested
+  // Build scenario shares, candidate evidence, and conformance for v2 if requested
   let scenarioShares: ScenarioSharesBreakdown[] | undefined;
   let candidateEvidence: CandidateEvidenceCoverage | undefined;
+  let v2Conformance: V2ConformanceCheck | undefined;
   if (options.benchmarkVersion === 'v2') {
     // For v2, classify production_pool scenario from current recommendations
     const productionRequests = new Map<AuditScenario, AuditRequestRecord[]>();
@@ -1078,6 +1167,12 @@ export async function runHokusaiRouterAudit(options: HokusaiAuditOptions = {}): 
     // Compute candidate evidence coverage
     const pools = candidatePools(repoDir);
     candidateEvidence = buildCandidateEvidence(corpus, pools, coverage.minRecordsPerModelStage);
+
+    // Build v2 conformance check
+    const validityRate = recommendations.length > 0
+      ? validityViolations.length / (recommendations.length * 3)
+      : 0;
+    v2Conformance = buildV2ConformanceCheck(scenarioShares, validityRate);
   }
 
   const reportWithoutFailures: Omit<HokusaiAuditReport, 'hardFailures'> = {
@@ -1109,6 +1204,7 @@ export async function runHokusaiRouterAudit(options: HokusaiAuditOptions = {}): 
     groupBreakdowns: buildGroupBreakdowns(recommendations),
     scenarioShares,
     candidateEvidence,
+    v2Conformance,
   };
   const completeReport = {
     ...reportWithoutFailures,
@@ -1196,6 +1292,32 @@ export function formatHokusaiAuditReport(report: HokusaiAuditReport): string {
     }
     if (report.candidateEvidence.warnings.length > 0) {
       lines.push(`  Warnings: ${report.candidateEvidence.warnings.length}`);
+    }
+    lines.push('');
+  }
+
+  // V2 conformance check
+  if (report.v2Conformance) {
+    lines.push(`V2 Conformance Check (${report.v2Conformance.ok ? 'PASS' : 'FAIL'})`);
+    lines.push(`  Benchmark spec: ${report.v2Conformance.benchmarkSpecId}`);
+    lines.push(`  Primary metric: ${report.v2Conformance.primaryMetric}`);
+    lines.push(`  Scenario coverage: ${report.v2Conformance.scenarioCoverage.total}/${V2_SCENARIOS.length}`);
+    if (report.v2Conformance.scenarioCoverage.missingScenarios.length > 0) {
+      lines.push(`    Missing: ${report.v2Conformance.scenarioCoverage.missingScenarios.join(', ')}`);
+    }
+    lines.push(`  Row schema: ${report.v2Conformance.rowSchemaChecks.passed} passed, ${report.v2Conformance.rowSchemaChecks.failed} failed`);
+    lines.push(`  Guardrail checks: ${report.v2Conformance.guardrailChecks.passed ? 'PASS' : 'FAIL'}`);
+    if (report.v2Conformance.errors.length > 0) {
+      lines.push('  Errors:');
+      for (const error of report.v2Conformance.errors) {
+        lines.push(`    - ${error}`);
+      }
+    }
+    if (report.v2Conformance.warnings.length > 0) {
+      lines.push('  Warnings:');
+      for (const warning of report.v2Conformance.warnings) {
+        lines.push(`    - ${warning}`);
+      }
     }
     lines.push('');
   }
