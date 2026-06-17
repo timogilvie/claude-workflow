@@ -1,6 +1,7 @@
 #!/usr/bin/env -S npx tsx
 
 import { runTool } from '../shared/lib/tool-runner.ts';
+import { auditHokusaiContributions, renderHokusaiAuditReport } from '../shared/lib/hokusai-audit.ts';
 import {
   disableSubmission,
   enableSubmission,
@@ -11,6 +12,19 @@ import {
 import { summarizeHokusaiLedger } from '../shared/lib/hokusai-ledger.ts';
 import { hokusaiQueueStatus } from '../shared/lib/hokusai-queue.ts';
 
+function parseOptionalNumber(value: string | undefined, name: string): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`Invalid numeric value for --${name}: ${value}`);
+  }
+
+  return parsed;
+}
+
 runTool({
   name: 'hokusai-manage',
   description: 'Manage Hokusai data submission opt-in',
@@ -19,6 +33,13 @@ runTool({
     yes: { type: 'boolean', description: 'Skip the interactive consent prompt when enabling' },
     'config-dir': { type: 'string', description: 'Override the user config directory (defaults to ~/.wavemill)' },
     'repo-dir': { type: 'string', description: 'Override the repo directory used to read .wavemill-config.json' },
+    input: { type: 'string', description: 'JSONL file to audit instead of the local pending queue' },
+    queue: { type: 'boolean', description: 'Audit the local pending queue (.wavemill/hokusai/queue/pending.jsonl)' },
+    'coverage-threshold': { type: 'string', description: 'Candidate-pool coverage threshold between 0 and 1' },
+    'max-invalid-rate': { type: 'string', description: 'Maximum allowed conformance-invalid rate between 0 and 1' },
+    'threshold-mode': { type: 'string', description: 'Threshold handling mode: warn or fail' },
+    'low-budget-threshold': { type: 'string', description: 'Budget threshold in USD for low-budget scenario inference' },
+    'sparse-cell-min-evidence': { type: 'string', description: 'Minimum row count before a cell stops counting as sparse' },
   },
   positional: {
     name: 'command',
@@ -31,6 +52,7 @@ runTool({
     'npx tsx tools/hokusai-manage.ts enable',
     'npx tsx tools/hokusai-manage.ts disable',
     'npx tsx tools/hokusai-manage.ts check-consent',
+    'npx tsx tools/hokusai-manage.ts audit --input path/to/contributions.jsonl --json',
   ],
   async run({ args, positional }) {
     const command = positional[0];
@@ -113,9 +135,35 @@ runTool({
         return;
       }
 
+      case 'audit': {
+        const coverageThreshold = parseOptionalNumber(args['coverage-threshold'], 'coverage-threshold');
+        const maxInvalidRate = parseOptionalNumber(args['max-invalid-rate'], 'max-invalid-rate');
+        const lowBudgetThresholdUsd = parseOptionalNumber(args['low-budget-threshold'], 'low-budget-threshold');
+        const sparseCellMinEvidence = parseOptionalNumber(args['sparse-cell-min-evidence'], 'sparse-cell-min-evidence');
+        const report = auditHokusaiContributions({
+          repoDir: args['repo-dir'],
+          inputPath: args.input,
+          queue: args.queue,
+          coverageThreshold,
+          maxInvalidRate,
+          lowBudgetThresholdUsd,
+          sparseCellMinEvidence,
+          thresholdMode: args['threshold-mode'] === 'fail' ? 'fail' : 'warn',
+        });
+
+        if (args.json) {
+          console.log(JSON.stringify(report, null, 2));
+        } else {
+          process.stdout.write(renderHokusaiAuditReport(report));
+        }
+
+        process.exitCode = report.failures.length > 0 ? 1 : 0;
+        return;
+      }
+
       default:
         throw new Error(
-          `Unknown command "${command}"\nValid commands: enable, disable, status, check-consent`,
+          `Unknown command "${command}"\nValid commands: enable, disable, status, check-consent, audit`,
         );
     }
   },

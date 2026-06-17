@@ -195,7 +195,7 @@ The documented production prediction endpoint is:
 }
 ```
 
-Wavemill can also emit stricter benchmark contribution rows under `technical_task_router_row/v1` for benchmark-style observations.
+Wavemill can also emit stricter benchmark contribution rows under `technical_task_router_row/v1` for benchmark-style observations. The local row validator remains compatible with legacy `technical_task_router.success_under_budget/v1` rows, while the Hokusai audit command layers additive conformance checks for cross-repo benchmark exports and the target `technical_task_router.benchmark_score/v2` policy.
 
 Contribution uploads are asynchronous outcome data. They are not the same payload as the live `/predict` request, and Wavemill does not assume an immediate token receipt for every accepted row.
 
@@ -211,4 +211,4 @@ DeltaOne = BenchmarkScore_new − BenchmarkScore_baseline
 
 ## 8. Summary
 
-This model predicts workflow configurations that maximize successful task completion within budget using real execution data. The benchmark is measured by `hokusai.scorers.wavemill.success_rate_under_budget:v1` and persisted as `workflow_success_rate_under_budget` plus coverage and diagnostics fields.
+This model predicts workflow configurations that maximize successful task completion within budget using real execution data. Reward logic remains tied to predefined DeltaOne improvement, while benchmark exports are transitioning toward `technical_task_router.benchmark_score/v2`, a bounded composite over success-under-budget plus additional robustness checks surfaced by `wavemill hokusai audit`.
