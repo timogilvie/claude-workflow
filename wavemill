@@ -15,6 +15,9 @@ SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
 LIB_DIR="$SCRIPT_DIR/shared/lib"
 DEFAULT_TOOLS_DIR="$SCRIPT_DIR/tools"
 export TOOLS_DIR="$DEFAULT_TOOLS_DIR"
+CONFIG_VERSION="$(
+  sed -n "s/.*CURRENT_CONFIG_VERSION = '\([^']*\)'.*/\1/p" "$LIB_DIR/config.ts" 2>/dev/null | head -n 1
+)"
 
 # Colors for output
 CYAN=$'\033[0;36m'
@@ -344,6 +347,10 @@ check_config_version() {
   local check_message current_version prompt_version
   check_message=$(extract_json_field "$check_output" "message")
   current_version=$(extract_json_field "$check_output" "currentVersion")
+  current_version="${current_version:-${CONFIG_VERSION:-}}"
+  if [[ -z "$check_message" && -n "$current_version" ]]; then
+    check_message="Config version check did not return details (current: $current_version)."
+  fi
   prompt_version="${current_version:-$(extract_json_field "$check_output" "configVersion")}"
 
   if [[ $check_status -eq 2 || $check_status -ne 1 ]]; then
@@ -355,7 +362,7 @@ check_config_version() {
   echo -e "${YELLOW}Notice:${NC} ${check_message:-$check_output}"
   echo -e "  The latest config includes features like eval, review, router, and permissions."
   echo ""
-  echo -e "Upgrade config to version ${prompt_version:-$VERSION}? This will preserve your existing settings."
+  echo -e "Upgrade config to version ${prompt_version:-${CONFIG_VERSION:-$VERSION}}? This will preserve your existing settings."
   read -p "[Y/n] " -n 1 -r
   echo
 
@@ -676,7 +683,7 @@ try {
   # Create config file
   cat > "$target" <<INIT_EOF
 {
-  "configVersion": "1.4.0",
+  "configVersion": "1.4.1",
   "linear": {
     "project": "$linear_project_json"
   },
@@ -713,7 +720,9 @@ try {
       "provider": "anthropic"
     },
     "pricing": {
+      "claude-fable-5": { "inputCostPerMTok": 10, "outputCostPerMTok": 50, "cacheWriteCostPerMTok": 12.50, "cacheReadCostPerMTok": 1.00 },
       "claude-opus-4-6": { "inputCostPerMTok": 5, "outputCostPerMTok": 25, "cacheWriteCostPerMTok": 6.25, "cacheReadCostPerMTok": 0.50 },
+      "claude-opus-4-8": { "inputCostPerMTok": 5, "outputCostPerMTok": 25, "cacheWriteCostPerMTok": 6.25, "cacheReadCostPerMTok": 0.50 },
       "claude-opus-4-7": { "inputCostPerMTok": 5, "outputCostPerMTok": 25, "cacheWriteCostPerMTok": 6.25, "cacheReadCostPerMTok": 0.50 },
       "claude-sonnet-4-6": { "inputCostPerMTok": 3, "outputCostPerMTok": 15, "cacheWriteCostPerMTok": 3.75, "cacheReadCostPerMTok": 0.30 },
       "claude-sonnet-4-5-20250929": { "inputCostPerMTok": 3, "outputCostPerMTok": 15, "cacheWriteCostPerMTok": 3.75, "cacheReadCostPerMTok": 0.30 },
@@ -754,8 +763,16 @@ try {
   },
   "challenge": {
     "enabled": true,
-    "rate": 0.10,
+    "rate": 0.50,
+    "recommendationRate": 1,
+    "stageWeights": {
+      "plan": 0.25,
+      "implementation": 0.50,
+      "review": 0.25
+    },
     "models": [
+      "claude-fable-5",
+      "claude-opus-4-8",
       "claude-sonnet-4-6",
       "claude-sonnet-4-5-20250929",
       "claude-opus-4-7",
@@ -773,11 +790,30 @@ try {
     "minRecords": 20,
     "minModels": 2,
     "models": [],
-    "availableModels": {
-      "planner": ["claude-opus-4-7", "claude-sonnet-4-6", "gpt-5.4", "gpt-5.5"]
+    "exploration": {
+      "enabled": true,
+      "mode": "epsilon",
+      "rate": 0.20,
+      "topK": 4,
+      "ucbConstant": 0.08,
+      "priors": {
+        "enabled": true,
+        "blendSamples": 10
+      },
+      "newModelBoost": {
+        "windowDays": 45,
+        "multiplier": 3
+      }
+    },
+    "coverage": {
+      "minRecordsPerModelStage": 15,
+      "maxStageShare": 0.70,
+      "window": 50
     },
     "defaultAgent": "claude",
     "agentMap": {
+      "claude-fable-5": "claude",
+      "claude-opus-4-8": "claude",
       "claude-opus-4-7": "claude",
       "claude-sonnet-4-6": "claude",
       "claude-opus-4-6": "claude",
@@ -789,6 +825,10 @@ try {
     "mode": "$hokusai_router_mode",
     "llmModel": "gpt-4o-mini",
     "llmProvider": "openai"$router_hokusai_block
+  },
+  "challengeScheduler": {
+    "enabled": true,
+    "newModelChallengeCount": 25
   },
   "integration": {
     "enabled": $integration_enabled,

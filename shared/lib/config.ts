@@ -31,7 +31,7 @@ import type {
  * Current config format version.
  * Increment when making breaking changes to config structure.
  */
-export const CURRENT_CONFIG_VERSION = '1.4.0';
+export const CURRENT_CONFIG_VERSION = '1.4.1';
 
 export interface MillConfig {
   session?: string;

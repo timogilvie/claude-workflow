@@ -231,7 +231,7 @@ test('recommends stage-specific challenge when a stage lacks data', () => {
   }
 });
 
-test('prioritizes low-confidence over new-model and low-data-stage triggers', () => {
+test('prioritizes exploration coverage over low-confidence triggers', () => {
   const { repoDir, cleanup } = makeRepo();
   try {
     const result = evaluateChallenge({
@@ -252,7 +252,7 @@ test('prioritizes low-confidence over new-model and low-data-stage triggers', ()
       repoDir,
     });
 
-    assert.equal(result.reason, 'low-confidence');
+    assert.equal(result.reason, 'new-model');
     assert.equal(result.priority, 300);
   } finally {
     cleanup();
