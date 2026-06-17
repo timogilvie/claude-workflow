@@ -26,6 +26,24 @@ export type AuditStageRole = 'planner' | 'coder' | 'reviewer';
 
 const STAGE_ROLES: readonly AuditStageRole[] = ['planner', 'coder', 'reviewer'];
 
+/**
+ * V2 scenario taxonomy for composite benchmark coverage.
+ */
+export type AuditScenario =
+  | 'production_pool'
+  | 'challenger_present'
+  | 'dominant_model_removed'
+  | 'low_budget'
+  | 'sparse_cell';
+
+export const V2_SCENARIOS: readonly AuditScenario[] = [
+  'production_pool',
+  'challenger_present',
+  'dominant_model_removed',
+  'low_budget',
+  'sparse_cell',
+] as const;
+
 const ROLE_TO_STAGE: Record<AuditStageRole, ChallengeStage> = {
   planner: 'plan',
   coder: 'implementation',
@@ -53,6 +71,7 @@ export interface HokusaiAuditOptions {
   kNeighbors?: number;
   fetchFn?: typeof fetch;
   now?: Date;
+  benchmarkVersion?: 'v1' | 'v2';
 }
 
 export interface AuditRequestRecord {
@@ -62,6 +81,7 @@ export interface AuditRequestRecord {
   descriptor: TaskDescriptor;
   originalRecord: EvalRecord;
   candidatePools: Record<AuditStageRole, string[]>;
+  scenario?: AuditScenario;
 }
 
 export interface AuditFailure {
@@ -132,6 +152,7 @@ export interface HokusaiAuditReport {
   calibration: CalibrationBucket[];
   regret: Record<AuditStageRole, RegretSummary>;
   groupBreakdowns: Record<string, AuditGroupBreakdown[]>;
+  scenarioShares?: ScenarioSharesBreakdown[];
   hardFailures: string[];
   artifactPath?: string;
 }
@@ -141,6 +162,14 @@ export interface AuditGroupBreakdown {
   count: number;
   stageShares: Record<AuditStageRole, StageShareEntry[]>;
   effectiveModelCounts: Record<AuditStageRole, number>;
+}
+
+export interface ScenarioSharesBreakdown {
+  scenario: AuditScenario;
+  count: number;
+  stageShares: Record<AuditStageRole, StageShareEntry[]>;
+  effectiveModelCounts: Record<AuditStageRole, number>;
+  candidatePools: Record<AuditStageRole, string[]>;
 }
 
 function clampConcurrency(value: number | undefined): number {
@@ -223,6 +252,101 @@ function candidatePools(repoDir?: string): Record<AuditStageRole, string[]> {
     coder: getConfiguredModelsForDescriptorStage(repoDir, 'coder'),
     reviewer: getConfiguredModelsForDescriptorStage(repoDir, 'reviewer'),
   };
+}
+
+/**
+ * Apply scenario-specific transformations to candidate pools and budget.
+ */
+function applyScenarioContext(
+  scenario: AuditScenario,
+  basePools: Record<AuditStageRole, string[]>,
+  baseMaxCostUsd: number,
+  corpusRecords: EvalRecord[],
+  descriptor: TaskDescriptor,
+): { pools: Record<AuditStageRole, string[]>; maxCostUsd: number } {
+  switch (scenario) {
+    case 'production_pool':
+      return { pools: basePools, maxCostUsd: baseMaxCostUsd };
+
+    case 'challenger_present': {
+      // Include zero-evidence challenger models if available
+      // For now, just use production pools (challengers would come from config)
+      return { pools: basePools, maxCostUsd: baseMaxCostUsd };
+    }
+
+    case 'dominant_model_removed': {
+      // Remove dominant model from each role's pool
+      const modifiedPools: Record<AuditStageRole, string[]> = {} as Record<AuditStageRole, string[]>;
+      for (const role of STAGE_ROLES) {
+        const rolePools = basePools[role];
+        if (rolePools.length <= 1) {
+          modifiedPools[role] = rolePools;
+          continue;
+        }
+        // Find dominant model by counting usage in corpus for this role
+        const counts = new Map<string, number>();
+        for (const record of corpusRecords) {
+          const model = recordStageModel(record, ROLE_TO_STAGE[role]);
+          if (model && rolePools.includes(model)) {
+            counts.set(model, (counts.get(model) ?? 0) + 1);
+          }
+        }
+        const dominant = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+        modifiedPools[role] = dominant ? rolePools.filter((m) => m !== dominant) : rolePools;
+        // Fallback: if removing dominant leaves no candidates, keep the pool
+        if (modifiedPools[role].length === 0) {
+          modifiedPools[role] = rolePools;
+        }
+      }
+      return { pools: modifiedPools, maxCostUsd: baseMaxCostUsd };
+    }
+
+    case 'low_budget': {
+      // Reduce max cost to 50% of baseline
+      return { pools: basePools, maxCostUsd: baseMaxCostUsd * 0.5 };
+    }
+
+    case 'sparse_cell': {
+      // Mark task/domain/complexity cells with limited historical evidence
+      // This scenario uses production pools but flags sparse coverage
+      return { pools: basePools, maxCostUsd: baseMaxCostUsd };
+    }
+
+    default:
+      return { pools: basePools, maxCostUsd: baseMaxCostUsd };
+  }
+}
+
+/**
+ * Determine if a record represents a sparse cell based on corpus evidence.
+ */
+function isSparseCell(
+  descriptor: TaskDescriptor,
+  corpusRecords: EvalRecord[],
+  threshold = 15,
+): boolean {
+  const taskType = descriptor.signals.heuristic.task_type || 'unknown';
+  const domain = descriptor.signals.learned.domain || 'unknown';
+  const complexity = descriptor.signals.learned.complexity;
+  const complexityBucket = typeof complexity === 'number'
+    ? complexity <= 2 ? 'low' : complexity >= 4 ? 'high' : 'medium'
+    : 'unknown';
+
+  const matches = corpusRecords.filter((record) => {
+    const recordDescriptor = buildReplayDescriptor(record);
+    const recordTaskType = recordDescriptor.signals.heuristic.task_type || 'unknown';
+    const recordDomain = recordDescriptor.signals.learned.domain || 'unknown';
+    const recordComplexity = recordDescriptor.signals.learned.complexity;
+    const recordComplexityBucket = typeof recordComplexity === 'number'
+      ? recordComplexity <= 2 ? 'low' : recordComplexity >= 4 ? 'high' : 'medium'
+      : 'unknown';
+
+    return recordTaskType === taskType
+      && recordDomain === domain
+      && recordComplexityBucket === complexityBucket;
+  });
+
+  return matches.length < threshold;
 }
 
 export function buildAuditRequests(records: EvalRecord[], options: { repoDir?: string; redact?: boolean } = {}): AuditRequestRecord[] {
@@ -439,6 +563,38 @@ export function buildGroupBreakdowns(recommendations: AuditRecommendation[]): Re
       .sort((left, right) => right.count - left.count || left.group.localeCompare(right.group));
     return [groupBy, breakdowns];
   })) as Record<string, AuditGroupBreakdown[]>;
+}
+
+/**
+ * Build scenario-specific breakdown of stage shares.
+ */
+export function buildScenarioShares(
+  scenarioRequests: Map<AuditScenario, AuditRequestRecord[]>,
+  scenarioRecommendations: Map<AuditScenario, AuditRecommendation[]>,
+): ScenarioSharesBreakdown[] {
+  return V2_SCENARIOS.map((scenario) => {
+    const recommendations = scenarioRecommendations.get(scenario) ?? [];
+    const requests = scenarioRequests.get(scenario) ?? [];
+    const stageShares = buildStageShares(recommendations);
+    // Extract candidate pools from first request (all requests in scenario share same pools)
+    const firstRequest = requests[0];
+    const candidatePools: Record<AuditStageRole, string[]> = firstRequest?.candidatePools ?? {
+      planner: [],
+      coder: [],
+      reviewer: [],
+    };
+    return {
+      scenario,
+      count: recommendations.length,
+      stageShares,
+      effectiveModelCounts: {
+        planner: effectiveModelCount(stageShares.planner),
+        coder: effectiveModelCount(stageShares.coder),
+        reviewer: effectiveModelCount(stageShares.reviewer),
+      },
+      candidatePools,
+    };
+  }).filter((breakdown) => breakdown.count > 0);
 }
 
 function mean(values: number[]): number {
