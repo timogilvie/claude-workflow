@@ -665,28 +665,13 @@ function recommendationGroupValue(recommendation: AuditRecommendation, groupBy: 
     return recommendation.request.inputs.context?.domain || 'unknown';
   }
 
-  // Legacy support (backward compatibility)
-  if (groupBy === 'taskType') {
-    return descriptor.signals.heuristic.task_type || 'unknown';
-  }
-  if (groupBy === 'complexity') {
-    const complexity = descriptor.signals.learned.complexity;
-    if (typeof complexity !== 'number') return 'unknown';
-    if (complexity <= 2) return 'low';
-    if (complexity >= 4) return 'high';
-    return 'medium';
-  }
-  if (groupBy === 'domain') {
-    return descriptor.signals.learned.domain || 'unknown';
-  }
-
   return 'unknown';
 }
 
 export function buildGroupBreakdowns(recommendations: AuditRecommendation[]): Record<string, AuditGroupBreakdown[]> {
-  // Descriptor-based groups (original)
-  const descriptorGroups = ['taskType', 'complexity', 'domain'];
-  // Request-based groups (v2)
+  // Explicit descriptor- and request-sourced groups so consumers can tell which
+  // upstream field a breakdown was computed from.
+  const descriptorGroups = ['descriptor.taskType', 'descriptor.complexity', 'descriptor.domain'];
   const requestGroups = ['request.taskType', 'request.complexity', 'request.domain'];
   const allGroups = [...descriptorGroups, ...requestGroups];
 
@@ -817,11 +802,24 @@ export function buildCandidateEvidence(
 }
 
 /**
+ * Per-row metadata used to validate v2 schema conformance. Callers extract this
+ * from exported benchmark rows (e.g. TechnicalTaskRouterContributionRow* shapes
+ * or any row-shaped object emitted alongside the audit).
+ */
+export interface V2RowCheckInput {
+  rowId?: string;
+  schema_version?: string;
+  scorer_ref?: string;
+  primary_metric?: string;
+}
+
+/**
  * Build v2 conformance check for benchmark audit.
  */
 export function buildV2ConformanceCheck(
   scenarioShares: ScenarioSharesBreakdown[] | undefined,
   validityViolationRate: number,
+  rows?: V2RowCheckInput[],
 ): V2ConformanceCheck {
   const benchmarkSpecId = 'technical_task_router/v2';
   const expectedSchemaVersion = 'technical_task_router_row/v2';
@@ -844,12 +842,46 @@ export function buildV2ConformanceCheck(
     warnings.push('Missing both challenger_present and dominant_model_removed scenarios');
   }
 
-  // Row schema checks - for now, just placeholder counts
-  const rowSchemaChecks = {
-    passed: scenarioShares?.reduce((sum, s) => sum + s.count, 0) ?? 0,
-    failed: 0,
-    failures: [] as string[],
-  };
+  // Row schema checks. When rows are provided, each is validated against the v2
+  // contract (schema_version, scorer_ref, primary_metric). When no rows are
+  // provided the audit cannot make a positive claim about row conformance and
+  // we surface that explicitly as a warning rather than a silent pass.
+  const rowSchemaChecks = (() => {
+    if (!rows || rows.length === 0) {
+      warnings.push('No rows supplied to v2 conformance check; row schema validation skipped');
+      return {
+        passed: 0,
+        failed: 0,
+        failures: [] as string[],
+      };
+    }
+    const failures: string[] = [];
+    let passed = 0;
+    let failed = 0;
+    for (const row of rows) {
+      const id = row.rowId ?? '<unknown>';
+      const rowFailures: string[] = [];
+      if (row.schema_version !== expectedSchemaVersion) {
+        rowFailures.push(`schema_version=${row.schema_version ?? 'missing'} (expected ${expectedSchemaVersion})`);
+      }
+      if (row.scorer_ref !== undefined && row.scorer_ref !== primaryMetric) {
+        rowFailures.push(`scorer_ref=${row.scorer_ref} (expected ${primaryMetric})`);
+      }
+      if (row.primary_metric !== undefined && row.primary_metric !== primaryMetric) {
+        rowFailures.push(`primary_metric=${row.primary_metric} (expected ${primaryMetric})`);
+      }
+      if (rowFailures.length === 0) {
+        passed += 1;
+      } else {
+        failed += 1;
+        failures.push(`${id}: ${rowFailures.join('; ')}`);
+      }
+    }
+    return { passed, failed, failures };
+  })();
+  if (rowSchemaChecks.failed > 0) {
+    errors.push(`Row schema: ${rowSchemaChecks.failed} of ${rowSchemaChecks.passed + rowSchemaChecks.failed} rows fail v2 conformance`);
+  }
 
   // Guardrail checks - validity violation rate threshold
   const guardrailThreshold = 0.02; // 2% invalid selection rate
@@ -1123,9 +1155,9 @@ export async function runHokusaiRouterAudit(options: HokusaiAuditOptions = {}): 
         reviewer: { count: 0, meanRegret: 0, dominated: false },
       },
       groupBreakdowns: {
-        taskType: [],
-        complexity: [],
-        domain: [],
+        'descriptor.taskType': [],
+        'descriptor.complexity': [],
+        'descriptor.domain': [],
         'request.taskType': [],
         'request.complexity': [],
         'request.domain': [],
@@ -1423,10 +1455,11 @@ export function formatHokusaiAuditReport(report: HokusaiAuditReport): string {
     lines.push(`  ${role.padEnd(8)} n=${String(entry.count).padStart(3)} mean=${formatNumber(entry.meanRegret)}${entry.dominated ? ' dominated' : ''}`);
   }
 
-  if (report.groupBreakdowns.taskType.length > 0) {
+  const descriptorTaskType = report.groupBreakdowns['descriptor.taskType'] || [];
+  if (descriptorTaskType.length > 0) {
     lines.push('');
-    lines.push('Task type routing');
-    for (const group of report.groupBreakdowns.taskType) {
+    lines.push('Task type routing (descriptor)');
+    for (const group of descriptorTaskType) {
       const topCoder = group.stageShares.coder[0];
       const topPlanner = group.stageShares.planner[0];
       const topReviewer = group.stageShares.reviewer[0];

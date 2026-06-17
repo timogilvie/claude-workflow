@@ -216,8 +216,8 @@ test('buildGroupBreakdowns exposes task-type-specific top recommendations', () =
     makeRecommendation(feature, { planner: 'gpt-5.5', coder: 'gpt-5.5', reviewer: 'gpt-5.4' }),
     makeRecommendation(docs, { planner: 'gpt-5.4', coder: 'gpt-5.4', reviewer: 'gpt-5.5' }),
   ]);
-  assert.equal(breakdowns.taskType.length, 2);
-  const docsBreakdown = breakdowns.taskType.find((entry) => entry.group === 'docs');
+  assert.equal(breakdowns['descriptor.taskType'].length, 2);
+  const docsBreakdown = breakdowns['descriptor.taskType'].find((entry) => entry.group === 'docs');
   assert.equal(docsBreakdown?.stageShares.coder[0].model, 'gpt-5.4');
   assert.equal(docsBreakdown?.effectiveModelCounts.coder, 1);
 });
@@ -304,9 +304,9 @@ test('buildGroupBreakdowns separates request-field grouping from descriptor grou
   const breakdowns = buildGroupBreakdowns([recommendation]);
 
   // Descriptor grouping uses the EvalRecord's descriptor (feature/backend/medium)
-  assert.equal(breakdowns.taskType[0].group, 'feature');
-  assert.equal(breakdowns.domain[0].group, 'backend');
-  assert.equal(breakdowns.complexity[0].group, 'medium');
+  assert.equal(breakdowns['descriptor.taskType'][0].group, 'feature');
+  assert.equal(breakdowns['descriptor.domain'][0].group, 'backend');
+  assert.equal(breakdowns['descriptor.complexity'][0].group, 'medium');
 
   // Request grouping uses the Model 30 request payload (bugfix/frontend/high)
   assert.equal(breakdowns['request.taskType'][0].group, 'bugfix');
@@ -314,9 +314,9 @@ test('buildGroupBreakdowns separates request-field grouping from descriptor grou
   assert.equal(breakdowns['request.complexity'][0].group, 'high');
 
   // The two groupings must produce different group labels for this row.
-  assert.notEqual(breakdowns.taskType[0].group, breakdowns['request.taskType'][0].group);
-  assert.notEqual(breakdowns.domain[0].group, breakdowns['request.domain'][0].group);
-  assert.notEqual(breakdowns.complexity[0].group, breakdowns['request.complexity'][0].group);
+  assert.notEqual(breakdowns['descriptor.taskType'][0].group, breakdowns['request.taskType'][0].group);
+  assert.notEqual(breakdowns['descriptor.domain'][0].group, breakdowns['request.domain'][0].group);
+  assert.notEqual(breakdowns['descriptor.complexity'][0].group, breakdowns['request.complexity'][0].group);
 });
 
 test('buildV2ConformanceCheck reports each missing scenario only once', () => {
@@ -343,7 +343,62 @@ test('buildV2ConformanceCheck passes with all scenarios and low violation rate',
   const conformance = buildV2ConformanceCheck(scenarioShares, 0.005);
   assert.equal(conformance.scenarioCoverage.missingScenarios.length, 0);
   assert.ok(conformance.guardrailChecks.passed, 'Guardrails should pass with 0.5% violation rate');
+  // No rows supplied → row schema validation is skipped (warning), but the
+  // conformance result is still "ok" since there are no errors.
   assert.ok(conformance.ok, 'Should pass with all scenarios and low violations');
+  assert.ok(
+    conformance.warnings.some((w) => w.includes('No rows supplied')),
+    'Should warn when rows are not supplied',
+  );
+});
+
+test('buildV2ConformanceCheck fails when a v1 row is exported under a v2 audit', () => {
+  const scenarioShares = V2_SCENARIOS.map((scenario) => ({
+    scenario,
+    count: 10,
+    stageShares: {} as any,
+    effectiveModelCounts: {} as any,
+    candidatePools: {} as any,
+  }));
+
+  const rows = [
+    {
+      rowId: 'row-1',
+      schema_version: 'technical_task_router_row/v1',
+      scorer_ref: 'technical_task_router.success_under_budget/v1',
+    },
+    {
+      rowId: 'row-2',
+      schema_version: 'technical_task_router_row/v2',
+      scorer_ref: 'technical_task_router.benchmark_score/v2',
+    },
+  ];
+  const conformance = buildV2ConformanceCheck(scenarioShares, 0.005, rows);
+  assert.equal(conformance.rowSchemaChecks.passed, 1);
+  assert.equal(conformance.rowSchemaChecks.failed, 1);
+  assert.ok(conformance.rowSchemaChecks.failures.some((f) => f.includes('row-1')));
+  assert.ok(!conformance.ok, 'v2 conformance must fail when v1 rows are exported');
+});
+
+test('buildV2ConformanceCheck fails when a v2 row carries a v1 scorer_ref', () => {
+  const scenarioShares = V2_SCENARIOS.map((scenario) => ({
+    scenario,
+    count: 10,
+    stageShares: {} as any,
+    effectiveModelCounts: {} as any,
+    candidatePools: {} as any,
+  }));
+
+  const rows = [
+    {
+      rowId: 'mismatch-1',
+      schema_version: 'technical_task_router_row/v2',
+      scorer_ref: 'technical_task_router.success_under_budget/v1',
+    },
+  ];
+  const conformance = buildV2ConformanceCheck(scenarioShares, 0.005, rows);
+  assert.equal(conformance.rowSchemaChecks.failed, 1);
+  assert.ok(!conformance.ok, 'scorer_ref drift must fail v2 conformance');
 });
 
 if (failed > 0) {
