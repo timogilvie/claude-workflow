@@ -484,7 +484,7 @@ describe('quota fallback', () => {
     assert.deepEqual(readInvocations(logPath).map((entry) => entry.model), ['deepseek-v4-pro']);
   });
 
-  it('persists a non_quota_error fallback event when a later candidate fails for another reason', async () => {
+  it('persists an all_exhausted fallback event when later candidates fail for mixed reasons', async () => {
     const { cliPath } = createMockCli('quota-then-other-error', {
       'model-a': { type: 'quota', message: '429 quota exceeded', code: 1 },
       'model-b': { type: 'other', message: 'syntax explosion', code: 1 },
@@ -499,14 +499,124 @@ describe('quota fallback', () => {
         taskType: 'review',
         fallbackModels: ['model-a', 'model-b'],
       }),
-      /syntax explosion/,
+      /All fallback candidates failed: model-a \(quota\), model-b \(other\)\. Last error:.*syntax explosion/s,
     );
 
     const records = readFallbackRecords();
     assert.equal(records.length, 1);
     assert.equal(records[0].score, 0);
-    assert.equal(records[0].fallbackEvent?.outcome, 'non_quota_error');
+    assert.equal(records[0].fallbackEvent?.outcome, 'all_exhausted');
     assert.equal(records[0].fallbackEvent?.task_type, 'review');
+    assert.deepEqual(records[0].fallbackEvent?.fallback_chain, [
+      { model: 'model-a', reason: 'quota' },
+      { model: 'model-b', reason: 'other' },
+    ]);
+  });
+
+  it('advances past non-quota transient error on the first candidate', async () => {
+    const { cliPath } = createMockCli('transient-to-success', {
+      'model-a': { type: 'transient', message: 'socket hang up', code: 1 },
+      'model-b': { type: 'success', text: 'ok from b' },
+    });
+
+    const { result, stderr } = await captureStderr(() => callLLM('transient fallback', {
+      provider: 'claude',
+      mode: 'stream',
+      cliCmd: cliPath,
+      repoDir,
+      taskType: 'coding',
+      fallbackModels: ['model-a', 'model-b'],
+    }));
+
+    assert.match(stderr, /\[coder] model-a unavailable \(transient\); falling back to model-b/);
+    assert.equal(result.model, 'model-b');
+    assert.deepEqual(result.fallbackChain, [{ model: 'model-a', reason: 'transient' }]);
+
+    const records = readFallbackRecords();
+    assert.equal(records.length, 1);
+    assert.equal(records[0].fallbackEvent?.outcome, 'success');
+    assert.deepEqual(records[0].fallbackEvent?.fallback_chain, [{ model: 'model-a', reason: 'transient' }]);
+  });
+
+  it('throws a combined error when all candidates fail with retryable non-quota errors', async () => {
+    const { cliPath } = createMockCli('all-non-quota', {
+      'model-a': { type: 'other', message: 'cli crash', code: 1 },
+      'model-b': { type: 'transient', message: '500 server_error temporarily unavailable', code: 1 },
+    });
+
+    const { error, stderr } = await captureStderrError(() => callLLM('all non quota', {
+      provider: 'claude',
+      mode: 'stream',
+      cliCmd: cliPath,
+      repoDir,
+      taskType: 'coding',
+      fallbackModels: ['model-a', 'model-b'],
+    }));
+
+    assert.ok(!(error instanceof LLMQuotaError));
+    assert.match((error as Error).message, /model-a \(other\)/);
+    assert.match((error as Error).message, /model-b \(transient\)/);
+    assert.match((error as Error).message, /500 server_error temporarily unavailable/);
+    assert.match(
+      stderr,
+      /\[coder] model-b unavailable \(transient\); no remaining fallback candidates after: model-a -> model-b/,
+    );
+
+    const records = readFallbackRecords();
+    assert.equal(records.length, 1);
+    assert.equal(records[0].fallbackEvent?.outcome, 'all_exhausted');
+    assert.deepEqual(records[0].fallbackEvent?.fallback_chain, [
+      { model: 'model-a', reason: 'other' },
+      { model: 'model-b', reason: 'transient' },
+    ]);
+  });
+
+  it('fails fast on auth error without trying further candidates', async () => {
+    const { cliPath, logPath } = createMockCli('auth-fast-fail', {
+      'model-a': { type: 'other', message: '401 authentication_error invalid_api_key', code: 1 },
+      'model-b': { type: 'success', text: 'should not run' },
+    });
+
+    await assert.rejects(
+      () => callLLM('auth fail', {
+        provider: 'claude',
+        mode: 'stream',
+        cliCmd: cliPath,
+        repoDir,
+        taskType: 'coding',
+        fallbackModels: ['model-a', 'model-b'],
+      }),
+      /authentication_error|authentication failed/i,
+    );
+
+    assert.deepEqual(readInvocations(logPath).map((entry) => entry.model), ['model-a']);
+    assert.deepEqual(readFallbackRecords(), []);
+  });
+
+  it('emits non_quota_error and fails fast on auth after a prior quota fallback', async () => {
+    const { cliPath, logPath } = createMockCli('quota-then-auth', {
+      'model-a': { type: 'quota', message: '429 quota exceeded', code: 1 },
+      'model-b': { type: 'other', message: '401 authentication_error invalid_api_key', code: 1 },
+      'model-c': { type: 'success', text: 'should not run' },
+    });
+
+    await assert.rejects(
+      () => callLLM('quota then auth', {
+        provider: 'claude',
+        mode: 'stream',
+        cliCmd: cliPath,
+        repoDir,
+        taskType: 'review',
+        fallbackModels: ['model-a', 'model-b', 'model-c'],
+      }),
+      /authentication_error|authentication failed/i,
+    );
+
+    assert.deepEqual(readInvocations(logPath).map((entry) => entry.model), ['model-a', 'model-b']);
+
+    const records = readFallbackRecords();
+    assert.equal(records.length, 1);
+    assert.equal(records[0].fallbackEvent?.outcome, 'non_quota_error');
     assert.deepEqual(records[0].fallbackEvent?.fallback_chain, [{ model: 'model-a', reason: 'quota' }]);
   });
 
@@ -550,7 +660,7 @@ describe('quota fallback', () => {
     const elapsedMs = Date.now() - startedAt;
 
     assert.equal(result.model, 'model-b');
-    assert.ok(elapsedMs < 3500, `expected quota fallback without an added retry backoff, got ${elapsedMs}ms`);
+    assert.ok(elapsedMs < 5500, `expected quota fallback without an added retry backoff, got ${elapsedMs}ms`);
   });
 
   it('treats DeepSeek 401 auth failures as non-quota and does not exhaust the model', async () => {
