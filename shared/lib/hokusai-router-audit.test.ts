@@ -91,8 +91,13 @@ function makeRecord(id: string, taskType: string, timestamp: string, score = 0.8
   } as EvalRecord;
 }
 
-function makeRecommendation(record: EvalRecord, models: { planner: string; coder: string; reviewer: string }, estimated = 0.8): AuditRecommendation {
-  return {
+function makeRecommendation(
+  record: EvalRecord,
+  models: { planner: string; coder: string; reviewer: string },
+  estimated = 0.8,
+  requestOverride?: { task_type?: string; complexity?: string; domain?: string },
+): AuditRecommendation {
+  const recommendation: AuditRecommendation = {
     evalId: record.id,
     strategy: {
       planner_model: models.planner,
@@ -113,6 +118,21 @@ function makeRecommendation(record: EvalRecord, models: { planner: string; coder
       review: record.taskDescriptor?.stages?.reviewer?.model,
     },
   };
+  if (requestOverride) {
+    recommendation.request = {
+      inputs: {
+        task: {
+          description: record.originalPrompt ?? '',
+          task_type: requestOverride.task_type ?? 'unknown',
+        },
+        context: {
+          estimated_complexity: requestOverride.complexity ?? 'unknown',
+          domain: requestOverride.domain ?? 'unknown',
+        },
+      },
+    } as any;
+  }
+  return recommendation;
 }
 
 console.log('\n--- hokusai-router-audit Tests ---\n');
@@ -268,6 +288,47 @@ test('buildV2ConformanceCheck validates scenario coverage', () => {
   assert.equal(conformance.scenarioCoverage.total, 2);
   assert.ok(conformance.scenarioCoverage.missingScenarios.length > 0, 'Should flag missing scenarios');
   assert.ok(!conformance.ok, 'Should fail when scenarios are missing');
+});
+
+test('buildGroupBreakdowns separates request-field grouping from descriptor grouping', () => {
+  // Record's descriptor classifies as feature/backend/complexity=3 (medium),
+  // but the request that was actually sent to the router carries different
+  // task_type/domain/complexity fields. The audit must group by both.
+  const record = makeRecord('a1', 'feature', '2026-06-01T00:00:00Z');
+  const recommendation = makeRecommendation(
+    record,
+    { planner: 'gpt-5.5', coder: 'gpt-5.5', reviewer: 'gpt-5.4' },
+    0.8,
+    { task_type: 'bugfix', complexity: 'high', domain: 'frontend' },
+  );
+  const breakdowns = buildGroupBreakdowns([recommendation]);
+
+  // Descriptor grouping uses the EvalRecord's descriptor (feature/backend/medium)
+  assert.equal(breakdowns.taskType[0].group, 'feature');
+  assert.equal(breakdowns.domain[0].group, 'backend');
+  assert.equal(breakdowns.complexity[0].group, 'medium');
+
+  // Request grouping uses the Model 30 request payload (bugfix/frontend/high)
+  assert.equal(breakdowns['request.taskType'][0].group, 'bugfix');
+  assert.equal(breakdowns['request.domain'][0].group, 'frontend');
+  assert.equal(breakdowns['request.complexity'][0].group, 'high');
+
+  // The two groupings must produce different group labels for this row.
+  assert.notEqual(breakdowns.taskType[0].group, breakdowns['request.taskType'][0].group);
+  assert.notEqual(breakdowns.domain[0].group, breakdowns['request.domain'][0].group);
+  assert.notEqual(breakdowns.complexity[0].group, breakdowns['request.complexity'][0].group);
+});
+
+test('buildV2ConformanceCheck reports each missing scenario only once', () => {
+  // When sparse_cell is absent, the generic missingScenarios block already
+  // covers it. The specific check must not emit a second error for the same
+  // condition.
+  const partialShares = [
+    { scenario: 'production_pool' as const, count: 10, stageShares: {} as any, effectiveModelCounts: {} as any, candidatePools: {} as any },
+  ];
+  const conformance = buildV2ConformanceCheck(partialShares, 0.001);
+  const sparseMentions = conformance.errors.filter((err) => err.includes('sparse_cell'));
+  assert.equal(sparseMentions.length, 1, 'sparse_cell missing should be reported exactly once');
 });
 
 test('buildV2ConformanceCheck passes with all scenarios and low violation rate', () => {

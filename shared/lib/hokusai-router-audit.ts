@@ -14,7 +14,7 @@ import { resolveEnvValue } from './env-file.ts';
 import { errorMessage } from './error-utils.ts';
 import { toHokusaiModel30Request, type HokusaiModel30Response, type HokusaiModel30Request, type HokusaiRecommendedStrategy } from './hokusai-schema.ts';
 import { classifyHokusaiFailure, DEFAULT_HOKUSAI_MODEL30_ENDPOINT, DEFAULT_HOKUSAI_TIMEOUT_MS, isHokusaiModel30Response, type HokusaiFailureClassification } from './hokusai-router.ts';
-import { getConfiguredModelsForDescriptorStage, getEffectiveRegistry } from './model-registry.ts';
+import { getConfiguredModelsForDescriptorStage, getEffectiveRegistry, isModelEnabled } from './model-registry.ts';
 import { isDisabledModel } from './disabled-models.ts';
 import { buildTaskDescriptor } from './task-descriptor-builder.ts';
 import { findKNearest, loadStageAwareEvalRecords, type ScoredNeighbor } from './stage-aware-router.ts';
@@ -310,9 +310,25 @@ function applyScenarioContext(
       return { pools: basePools, maxCostUsd: baseMaxCostUsd };
 
     case 'challenger_present': {
-      // Include zero-evidence challenger models if available
-      // For now, just use production pools (challengers would come from config)
-      return { pools: basePools, maxCostUsd: baseMaxCostUsd };
+      // Inject zero-evidence challenger models drawn from the model registry but
+      // absent from the production pool. This exposes candidates with no
+      // historical evidence to the router so robustness against unknown
+      // challengers can be measured.
+      const registry = getEffectiveRegistry();
+      const allRegistryModels = Object.keys(registry.models).filter((modelId) => {
+        const capabilities = registry.models[modelId];
+        return !isDisabledModel(modelId) && (capabilities === undefined || isModelEnabled(capabilities));
+      });
+      const augmentedPools: Record<AuditStageRole, string[]> = {} as Record<AuditStageRole, string[]>;
+      for (const role of STAGE_ROLES) {
+        const existing = basePools[role];
+        const challengers = allRegistryModels.filter((modelId) => !existing.includes(modelId));
+        augmentedPools[role] = [...existing, ...challengers];
+      }
+      // If no challengers were available across any role, fall back to production
+      // pools so the scenario still produces requests.
+      const anyChallenger = STAGE_ROLES.some((role) => augmentedPools[role].length > basePools[role].length);
+      return { pools: anyChallenger ? augmentedPools : basePools, maxCostUsd: baseMaxCostUsd };
     }
 
     case 'dominant_model_removed': {
@@ -348,8 +364,9 @@ function applyScenarioContext(
     }
 
     case 'sparse_cell': {
-      // Mark task/domain/complexity cells with limited historical evidence
-      // This scenario uses production pools but flags sparse coverage
+      // Sparse-cell isolation is achieved by record filtering in
+      // buildAuditRequestsWithScenarios (isSparseCell), so pools/budget remain
+      // the production baseline.
       return { pools: basePools, maxCostUsd: baseMaxCostUsd };
     }
 
@@ -820,10 +837,9 @@ export function buildV2ConformanceCheck(
     errors.push(`Missing required scenarios: ${missingScenarios.join(', ')}`);
   }
 
-  // Check for sparse_cell and robustness scenarios specifically
-  if (!presentScenarios.has('sparse_cell')) {
-    errors.push('Missing sparse_cell scenario - required for v2 benchmark');
-  }
+  // Robustness coverage: at least one challenger-style scenario must be present.
+  // sparse_cell is already covered by the missingScenarios block above; we avoid
+  // emitting a second error for the same condition.
   if (!presentScenarios.has('challenger_present') && !presentScenarios.has('dominant_model_removed')) {
     warnings.push('Missing both challenger_present and dominant_model_removed scenarios');
   }
@@ -1052,6 +1068,20 @@ function hardFailures(report: Omit<HokusaiAuditReport, 'hardFailures'>, threshol
   if (report.determinism.allStable && report.sensitivity.allIdentical) {
     failures.push('constant-output detector fired');
   }
+  // Candidate-pool evidence hard-fails when any current (non-challenger) candidate
+  // has zero evidence in the corpus. Below-threshold-but-nonzero entries remain
+  // warnings (report.candidateEvidence.warnings).
+  if (report.candidateEvidence) {
+    const zeroEvidence = report.candidateEvidence.entries.filter((entry) => entry.isZeroEvidence);
+    if (zeroEvidence.length > 0) {
+      const summary = zeroEvidence
+        .slice(0, 5)
+        .map((entry) => `${entry.role}/${entry.model}`)
+        .join(', ');
+      const suffix = zeroEvidence.length > 5 ? ` (+${zeroEvidence.length - 5} more)` : '';
+      failures.push(`candidate-pool zero-evidence: ${summary}${suffix}`);
+    }
+  }
   return failures;
 }
 
@@ -1096,6 +1126,9 @@ export async function runHokusaiRouterAudit(options: HokusaiAuditOptions = {}): 
         taskType: [],
         complexity: [],
         domain: [],
+        'request.taskType': [],
+        'request.complexity': [],
+        'request.domain': [],
       },
     };
     return { ...reportWithoutFailures, hardFailures: [], artifactPath: persistAuditReport(reportWithoutFailures, options.output, repoDir) };
@@ -1157,12 +1190,51 @@ export async function runHokusaiRouterAudit(options: HokusaiAuditOptions = {}): 
   let candidateEvidence: CandidateEvidenceCoverage | undefined;
   let v2Conformance: V2ConformanceCheck | undefined;
   if (options.benchmarkVersion === 'v2') {
-    // For v2, classify production_pool scenario from current recommendations
-    const productionRequests = new Map<AuditScenario, AuditRequestRecord[]>();
-    const productionRecommendations = new Map<AuditScenario, AuditRecommendation[]>();
-    productionRequests.set('production_pool', requests);
-    productionRecommendations.set('production_pool', recommendations);
-    scenarioShares = buildScenarioShares(productionRequests, productionRecommendations);
+    // Generate request variants across all v2 scenarios. production_pool is
+    // reused from the recommendations already computed above to avoid duplicate
+    // API calls; the other scenarios run live through the router.
+    const scenarioRequestMap = buildAuditRequestsWithScenarios(sampled, corpus, {
+      repoDir,
+      redact: options.redact !== false,
+    });
+    scenarioRequestMap.set('production_pool', requests);
+    const scenarioRecommendationMap = new Map<AuditScenario, AuditRecommendation[]>();
+    scenarioRecommendationMap.set('production_pool', recommendations);
+
+    for (const scenario of V2_SCENARIOS) {
+      if (scenario === 'production_pool') continue;
+      const scenarioReqs = scenarioRequestMap.get(scenario);
+      if (!scenarioReqs || scenarioReqs.length === 0) continue;
+      const scenarioResults = await mapConcurrent(
+        scenarioReqs,
+        clampConcurrency(options.concurrency),
+        async (entry) => {
+          const result = await callHokusai(entry.request, { endpoint, token, timeoutMs, fetchFn });
+          return { entry, result };
+        },
+      );
+      const scenarioRecs: AuditRecommendation[] = [];
+      for (const { entry, result } of scenarioResults) {
+        if (result.response) {
+          scenarioRecs.push({
+            evalId: entry.evalId,
+            issueId: entry.issueId,
+            strategy: result.response.predictions.recommended_strategy,
+            response: result.response,
+            request: entry.request,
+            candidatePools: entry.candidatePools,
+            originalRecord: entry.originalRecord,
+            actualScore: entry.originalRecord.score,
+            actualStageModels: actualStageModels(entry.originalRecord),
+          });
+        } else if (result.failure) {
+          failures.push({ evalId: entry.evalId, ...result.failure });
+        }
+      }
+      scenarioRecommendationMap.set(scenario, scenarioRecs);
+    }
+
+    scenarioShares = buildScenarioShares(scenarioRequestMap, scenarioRecommendationMap);
 
     // Compute candidate evidence coverage
     const pools = candidatePools(repoDir);
