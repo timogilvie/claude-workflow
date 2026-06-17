@@ -373,6 +373,66 @@ export function buildAuditRequests(records: EvalRecord[], options: { repoDir?: s
   });
 }
 
+/**
+ * Build audit requests with v2 scenario variants.
+ */
+export function buildAuditRequestsWithScenarios(
+  records: EvalRecord[],
+  corpus: EvalRecord[],
+  options: { repoDir?: string; redact?: boolean } = {},
+): Map<AuditScenario, AuditRequestRecord[]> {
+  const basePools = candidatePools(options.repoDir);
+  const baseMaxCostUsd = 5.0; // Default budget
+  const scenarioRequests = new Map<AuditScenario, AuditRequestRecord[]>();
+
+  for (const scenario of V2_SCENARIOS) {
+    const requests: AuditRequestRecord[] = [];
+    for (const record of records.filter((r) => r.originalPrompt?.trim())) {
+      const descriptor = buildReplayDescriptor(record);
+
+      // Apply scenario-specific transformations
+      const { pools, maxCostUsd } = applyScenarioContext(
+        scenario,
+        basePools,
+        baseMaxCostUsd,
+        corpus,
+        descriptor,
+      );
+
+      // Skip sparse_cell scenario for records that don't meet sparse criteria
+      if (scenario === 'sparse_cell' && !isSparseCell(descriptor, corpus)) {
+        continue;
+      }
+
+      const request = toHokusaiModel30Request(descriptor, descriptor.repoContext, {
+        description: record.originalPrompt,
+        externalTaskId: `${record.id}-${scenario}`,
+        plannerModels: pools.planner,
+        coderModels: pools.coder,
+        reviewerModels: pools.reviewer,
+        modelsAvailable: [...new Set([...pools.planner, ...pools.coder, ...pools.reviewer])],
+        workflowStages: ['plan', 'code', 'review'],
+        maxCostUsd,
+      });
+
+      requests.push({
+        evalId: `${record.id}-${scenario}`,
+        issueId: record.issueId,
+        request: options.redact === false ? request : redactModel30Request(request),
+        descriptor,
+        originalRecord: record,
+        candidatePools: pools,
+        scenario,
+      });
+    }
+    if (requests.length > 0) {
+      scenarioRequests.set(scenario, requests);
+    }
+  }
+
+  return scenarioRequests;
+}
+
 function requestConstructionFailures(records: EvalRecord[]): AuditFailure[] {
   return records
     .filter((record) => !record.originalPrompt?.trim())
@@ -883,6 +943,18 @@ export async function runHokusaiRouterAudit(options: HokusaiAuditOptions = {}): 
 
   const stageShares = buildStageShares(recommendations);
   const validityViolations = classifyValidityViolations(recommendations, repoDir);
+
+  // Build scenario shares for v2 if requested
+  let scenarioShares: ScenarioSharesBreakdown[] | undefined;
+  if (options.benchmarkVersion === 'v2') {
+    // For v2, classify production_pool scenario from current recommendations
+    const productionRequests = new Map<AuditScenario, AuditRequestRecord[]>();
+    const productionRecommendations = new Map<AuditScenario, AuditRecommendation[]>();
+    productionRequests.set('production_pool', requests);
+    productionRecommendations.set('production_pool', recommendations);
+    scenarioShares = buildScenarioShares(productionRequests, productionRecommendations);
+  }
+
   const reportWithoutFailures: Omit<HokusaiAuditReport, 'hardFailures'> = {
     generatedAt,
     endpoint,
@@ -910,6 +982,7 @@ export async function runHokusaiRouterAudit(options: HokusaiAuditOptions = {}): 
     calibration: buildCalibration(recommendations),
     regret: computeRegret(recommendations, corpus, options.kNeighbors ?? 20),
     groupBreakdowns: buildGroupBreakdowns(recommendations),
+    scenarioShares,
   };
   const completeReport = {
     ...reportWithoutFailures,
@@ -952,6 +1025,22 @@ export function formatHokusaiAuditReport(report: HokusaiAuditReport): string {
       const width = Math.max(5, ...entries.map((entry) => entry.model.length));
       for (const entry of entries) {
         lines.push(`  ${entry.model.padEnd(width)}  ${String(entry.count).padStart(4)}  ${formatPercent(entry.share).padStart(6)}`);
+      }
+    }
+    lines.push('');
+  }
+
+  // V2 scenario shares
+  if (report.scenarioShares && report.scenarioShares.length > 0) {
+    lines.push('V2 Scenario Shares');
+    for (const scenario of report.scenarioShares) {
+      lines.push(`  ${scenario.scenario} (n=${scenario.count})`);
+      for (const role of STAGE_ROLES) {
+        const entries = scenario.stageShares[role];
+        if (entries.length > 0) {
+          const top = entries[0];
+          lines.push(`    ${role.padEnd(8)}: ${top.model} ${formatPercent(top.share)} (eff=${formatNumber(scenario.effectiveModelCounts[role])})`);
+        }
       }
     }
     lines.push('');
