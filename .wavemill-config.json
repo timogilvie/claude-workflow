@@ -1,5 +1,5 @@
 {
-  "configVersion": "1.4.0",
+  "configVersion": "1.4.1",
   "linear": {
     "project": "wavemill"
   },
@@ -129,6 +129,12 @@
   "challenge": {
     "enabled": true,
     "rate": 0.5,
+    "recommendationRate": 1,
+    "stageWeights": {
+      "plan": 0.25,
+      "implementation": 0.5,
+      "review": 0.25
+    },
     "models": [
       "claude-fable-5",
       "claude-opus-4-8",
@@ -157,6 +163,26 @@
     "minRecords": 20,
     "minModels": 2,
     "models": [],
+    "exploration": {
+      "enabled": true,
+      "mode": "epsilon",
+      "rate": 0.2,
+      "topK": 4,
+      "ucbConstant": 0.08,
+      "priors": {
+        "enabled": true,
+        "blendSamples": 10
+      },
+      "newModelBoost": {
+        "windowDays": 45,
+        "multiplier": 3
+      }
+    },
+    "coverage": {
+      "minRecordsPerModelStage": 15,
+      "maxStageShare": 0.7,
+      "window": 50
+    },
     "defaultAgent": "claude",
     "agentMap": {
       "claude-fable-5": "claude",
@@ -174,6 +200,10 @@
     "mode": "auto",
     "llmModel": "gpt-4o-mini",
     "llmProvider": "openai"
+  },
+  "challengeScheduler": {
+    "enabled": true,
+    "newModelChallengeCount": 25
   },
   "validation": {
     "enabled": true,

@@ -738,8 +738,8 @@ test('routeWorkflowStageAware attaches a challenge recommendation when policy tr
   try {
     const decision = routeWorkflowStageAware('Build a backend feature with tests and review.', { repoDir });
     assert.equal(decision.challengeRecommendation?.shouldChallenge, true);
-    assert.equal(decision.challengeRecommendation?.reason, 'low-confidence');
-    assert.match(summarizeWorkflowRoute(decision, repoDir), /Challenge:\s+low-confidence/);
+    assert.equal(decision.challengeRecommendation?.reason, 'new-model');
+    assert.match(summarizeWorkflowRoute(decision, repoDir), /Challenge:\s+new-model/);
   } finally {
     cleanup();
   }

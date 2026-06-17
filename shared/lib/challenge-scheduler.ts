@@ -77,9 +77,9 @@ const DEFAULT_CHALLENGE_SCHEDULER_CONFIG: Required<ChallengeSchedulerConfig> = {
 };
 
 const PRIORITY = {
-  'low-confidence': 300,
-  'new-model': 200,
-  'low-data-stage': 100,
+  'new-model': 300,
+  'low-data-stage': 200,
+  'low-confidence': 100,
   disabled: 0,
 } as const satisfies Record<ChallengeReason, number>;
 
