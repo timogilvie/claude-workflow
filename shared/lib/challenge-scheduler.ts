@@ -396,3 +396,14 @@ export function clearChallengeSchedulerCache(repoDir?: string): void {
   }
   evalSummaryCache.clear();
 }
+
+export function recordStageModel(record: EvalRecord, stage: ChallengeStage): string | undefined {
+  const stages = record.taskDescriptor?.stages;
+  if (stage === 'plan') {
+    return stages?.planner?.model || undefined;
+  }
+  if (stage === 'review') {
+    return stages?.reviewer?.model || undefined;
+  }
+  return stages?.coder?.model || record.modelId || undefined;
+}

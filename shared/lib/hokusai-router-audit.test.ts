@@ -6,15 +6,20 @@ import assert from 'node:assert/strict';
 import type { EvalRecord } from './eval-schema.ts';
 import {
   buildCalibration,
+  buildCandidateEvidence,
   buildGroupBreakdowns,
+  buildScenarioShares,
   buildStageShares,
+  buildV2ConformanceCheck,
   classifyValidityViolations,
   computeRegret,
   effectiveModelCount,
   stratifiedSampleRecords,
   summarizeDeterminism,
   summarizeSensitivity,
+  V2_SCENARIOS,
   type AuditRecommendation,
+  type AuditRequestRecord,
 } from './hokusai-router-audit.ts';
 
 let passed = 0;
@@ -209,6 +214,75 @@ test('computeRegret reports zero regret for best historical model', () => {
   ], [strong, weak], 2);
   assert.equal(regret.planner.meanRegret, 0);
   assert.equal(regret.coder.meanRegret, 0);
+});
+
+// V2 scenario tests
+
+test('buildScenarioShares includes all five v2 scenarios', () => {
+  const record = makeRecord('a1', 'feature', '2026-06-01T00:00:00Z');
+  const pools = { planner: ['gpt-5.5'], coder: ['gpt-5.5'], reviewer: ['gpt-5.5'] };
+  const scenarioRequests = new Map<any, AuditRequestRecord[]>();
+  const scenarioRecommendations = new Map<any, AuditRecommendation[]>();
+
+  for (const scenario of V2_SCENARIOS) {
+    scenarioRequests.set(scenario, [{
+      evalId: `test-${scenario}`,
+      request: { inputs: { task: { description: 'test', task_type: 'feature' } } } as any,
+      descriptor: record.taskDescriptor!,
+      originalRecord: record,
+      candidatePools: pools,
+      scenario,
+    }]);
+    scenarioRecommendations.set(scenario, [makeRecommendation(record, pools)]);
+  }
+
+  const shares = buildScenarioShares(scenarioRequests, scenarioRecommendations);
+  assert.equal(shares.length, 5);
+  assert.equal(shares[0].scenario, 'production_pool');
+  assert.equal(shares[4].scenario, 'sparse_cell');
+});
+
+test('buildCandidateEvidence reports zero-evidence candidates', () => {
+  const record = makeRecord('a1', 'feature', '2026-06-01T00:00:00Z');
+  record.taskDescriptor!.stages!.planner!.model = 'gpt-5.5';
+  const corpus = [record];
+  const pools = { planner: ['gpt-5.5', 'gpt-5.4'], coder: ['gpt-5.5'], reviewer: ['gpt-5.5'] };
+
+  const evidence = buildCandidateEvidence(corpus, pools, 10);
+  assert.equal(evidence.threshold, 10);
+
+  const zeroEvidence = evidence.entries.filter((e) => e.isZeroEvidence);
+  assert.ok(zeroEvidence.length > 0, 'Should have zero-evidence entries');
+  assert.ok(zeroEvidence.some((e) => e.model === 'gpt-5.4'), 'gpt-5.4 should have zero evidence');
+});
+
+test('buildV2ConformanceCheck validates scenario coverage', () => {
+  const scenarioShares = [
+    { scenario: 'production_pool' as const, count: 10, stageShares: {} as any, effectiveModelCounts: {} as any, candidatePools: {} as any },
+    { scenario: 'sparse_cell' as const, count: 5, stageShares: {} as any, effectiveModelCounts: {} as any, candidatePools: {} as any },
+  ];
+
+  const conformance = buildV2ConformanceCheck(scenarioShares, 0.01);
+  assert.equal(conformance.benchmarkSpecId, 'technical_task_router/v2');
+  assert.equal(conformance.primaryMetric, 'technical_task_router.benchmark_score/v2');
+  assert.equal(conformance.scenarioCoverage.total, 2);
+  assert.ok(conformance.scenarioCoverage.missingScenarios.length > 0, 'Should flag missing scenarios');
+  assert.ok(!conformance.ok, 'Should fail when scenarios are missing');
+});
+
+test('buildV2ConformanceCheck passes with all scenarios and low violation rate', () => {
+  const scenarioShares = V2_SCENARIOS.map((scenario) => ({
+    scenario,
+    count: 10,
+    stageShares: {} as any,
+    effectiveModelCounts: {} as any,
+    candidatePools: {} as any,
+  }));
+
+  const conformance = buildV2ConformanceCheck(scenarioShares, 0.005);
+  assert.equal(conformance.scenarioCoverage.missingScenarios.length, 0);
+  assert.ok(conformance.guardrailChecks.passed, 'Guardrails should pass with 0.5% violation rate');
+  assert.ok(conformance.ok, 'Should pass with all scenarios and low violations');
 });
 
 if (failed > 0) {
