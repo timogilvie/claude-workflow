@@ -154,6 +154,21 @@ Contribution lifecycle history is stored in an append-only ledger at `.wavemill/
 
 Ledger summary deduplicates by idempotency key and returned job/submission IDs to avoid double-counting duplicate accepts or retries. Awarded totals are local known awards only, not a live Hokusai account balance.
 
+### Contribution Audit
+
+`wavemill hokusai audit` inspects exported contribution JSONL or the local pending queue and emits:
+
+- row-level conformance diagnostics, including malformed JSON and legacy-vs-v2 scorer coverage
+- candidate-pool support coverage by role, descriptor grouping, and normalized Model `30` grouping
+- scenario shares for `production`, `challenger-present`, `dominant-model-removed`, `low-budget`, and `sparse-cell`
+- threshold warnings or hard failures when coverage or conformance-invalid rates fall below policy
+
+Examples:
+
+- `wavemill hokusai audit --input path/to/contributions.jsonl`
+- `wavemill hokusai audit --input path/to/contributions.jsonl --json`
+- `wavemill hokusai audit --threshold-mode fail`
+
 ## Related Commands
 
 - `wavemill mill` runs routing as part of the main factory loop
