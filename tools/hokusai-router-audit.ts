@@ -29,6 +29,7 @@ runTool({
     'max-share': { type: 'string', description: 'Hard-failure dominance threshold 0-1 (default from router.coverage.maxStageShare)' },
     'k-neighbors': { type: 'string', description: 'Nearest neighbors for hindsight regret (default: 20)' },
     'token-env': { type: 'string', description: 'Read Hokusai API token from this environment variable' },
+    'benchmark-version': { type: 'string', description: 'Benchmark version: v1 or v2 (default: v1)' },
     'dry-run': { type: 'boolean', description: 'Build requests and artifact without calling the API' },
     json: { type: 'boolean', description: 'Emit JSON report to stdout' },
     redact: { type: 'boolean', description: 'Redact task descriptions before sending (default)' },
@@ -40,6 +41,7 @@ runTool({
   ],
   async run({ args }) {
     const tokenEnv = args['token-env'] ? process.env[String(args['token-env'])] : undefined;
+    const benchmarkVersion = args['benchmark-version'] === 'v2' ? 'v2' : 'v1';
     const report = await runHokusaiRouterAudit({
       repoDir: (args['repo-dir'] as string) || process.cwd(),
       sample: parsePositiveInt(args.sample),
@@ -52,6 +54,7 @@ runTool({
       token: tokenEnv,
       dryRun: Boolean(args['dry-run']),
       redact: args['no-redact'] ? false : true,
+      benchmarkVersion,
     });
 
     if (args.json) {
