@@ -44,6 +44,7 @@ export const CANONICAL_CONFIG_TEMPLATE: WavemillConfig = {
       provider: 'anthropic',
     },
     pricing: {
+      'claude-fable-5': { inputCostPerMTok: 10, outputCostPerMTok: 50, cacheWriteCostPerMTok: 12.5, cacheReadCostPerMTok: 1 },
       'claude-opus-4-6': { inputCostPerMTok: 5, outputCostPerMTok: 25, cacheWriteCostPerMTok: 6.25, cacheReadCostPerMTok: 0.5 },
       'claude-opus-4-8': { inputCostPerMTok: 5, outputCostPerMTok: 25, cacheWriteCostPerMTok: 6.25, cacheReadCostPerMTok: 0.5 },
       'claude-opus-4-7': { inputCostPerMTok: 5, outputCostPerMTok: 25, cacheWriteCostPerMTok: 6.25, cacheReadCostPerMTok: 0.5 },
@@ -73,13 +74,20 @@ export const CANONICAL_CONFIG_TEMPLATE: WavemillConfig = {
   },
   challenge: {
     enabled: true,
-    rate: 0.1,
+    rate: 0.5,
+    recommendationRate: 1,
+    stageWeights: {
+      plan: 0.25,
+      implementation: 0.5,
+      review: 0.25,
+    },
     models: [
-      'claude-sonnet-4-6',
-      'claude-sonnet-4-5-20250929',
+      'claude-fable-5',
       'claude-opus-4-8',
-      'claude-opus-4-7',
+      'claude-sonnet-4-5-20250929',
+      'claude-sonnet-4-6',
       'claude-opus-4-6',
+      'claude-opus-4-7',
       'claude-haiku-4-5-20251001',
       'gpt-5.4',
       'gpt-5.5',
@@ -99,11 +107,29 @@ export const CANONICAL_CONFIG_TEMPLATE: WavemillConfig = {
     minRecords: 20,
     minModels: 2,
     models: [],
-    availableModels: {
-      planner: ['claude-opus-4-8', 'claude-opus-4-7', 'claude-sonnet-4-6', 'gpt-5.4', 'gpt-5.5'],
+    exploration: {
+      enabled: true,
+      mode: 'epsilon',
+      rate: 0.2,
+      topK: 4,
+      ucbConstant: 0.08,
+      priors: {
+        enabled: true,
+        blendSamples: 10,
+      },
+      newModelBoost: {
+        windowDays: 45,
+        multiplier: 3,
+      },
+    },
+    coverage: {
+      minRecordsPerModelStage: 15,
+      maxStageShare: 0.7,
+      window: 50,
     },
     defaultAgent: 'claude',
     agentMap: {
+      'claude-fable-5': 'claude',
       'claude-opus-4-8': 'claude',
       'claude-opus-4-7': 'claude',
       'claude-sonnet-4-6': 'claude',
@@ -116,6 +142,10 @@ export const CANONICAL_CONFIG_TEMPLATE: WavemillConfig = {
     mode: 'auto',
     llmModel: 'gpt-4o-mini',
     llmProvider: 'openai',
+  },
+  challengeScheduler: {
+    enabled: true,
+    newModelChallengeCount: 25,
   },
   validation: {
     enabled: true,

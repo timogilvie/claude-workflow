@@ -3,6 +3,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import {
   getReadyRemediationConfig,
   getReadyWatchdogConfig,
@@ -11,12 +12,15 @@ import {
 import { errorMessage } from './error-utils.ts';
 import { normalizeJobs, type MillJob, type WorkflowStateLike } from './job-tracker.ts';
 import { updateBranchWithBase, type BranchBaseUpdateResult } from './promotion-controller.ts';
+import { escapeShellArg } from './shell-utils.ts';
 import { mutateJsonState } from './state-mutex.ts';
 import { readStageResult, updateStageResult, type ReadyArtifacts, type StageResult } from './stage-result.ts';
 
 const execFileAsync = promisify(execFile);
 const MAX_AUTO_UPDATE_ATTEMPTS = 3;
 const FAILING_CHECK_STABILITY_THRESHOLD = 2;
+const WAVEMILL_TOOLS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'tools');
+const READY_WATCHDOG_TOOL_PATH = path.join(WAVEMILL_TOOLS_DIR, 'ready-watchdog.ts');
 
 export type ReadyWatchdogClassificationKind =
   | 'fresh'
@@ -25,7 +29,17 @@ export type ReadyWatchdogClassificationKind =
   | 'waiting-on-ci'
   | 'stable-failing-safe'
   | 'waiting-on-eval-comparison'
+  | 'waiting-on-merge-lane'
   | 'needs-user';
+
+/**
+ * A PR parked in the merge lane (queueState === 'ready-stale') is idle on
+ * purpose: it already passed ready and is waiting its turn to merge. We only
+ * escalate such a PR to needs-user once it has been idle for this multiple of
+ * the idle threshold without the lane advancing, which indicates the queue
+ * itself is stalled rather than this PR simply waiting.
+ */
+const MERGE_LANE_STALL_ESCALATE_MULTIPLIER = 3;
 
 export interface ReadyTaskSnapshot {
   issueId: string;
@@ -140,6 +154,7 @@ export interface ReadyWatchdogDeps {
     attemptNumber: number,
     maxAttempts: number,
     repoDir: string,
+    readyWatchdogToolPath: string,
   ) => Promise<ReadyRemediationLaunchResult>;
   now: () => Date;
 }
@@ -157,6 +172,7 @@ export interface TickReadyWatchdogOptions {
   config?: ReadyWatchdogConfig;
   issueFilter?: string;
   forceRecover?: boolean;
+  readyWatchdogToolPath?: string;
   deps?: Partial<ReadyWatchdogDeps>;
 }
 
@@ -227,14 +243,13 @@ const defaultDeps: ReadyWatchdogDeps = {
 
     return updateBranchWithBase(branch, baseBranch, snapshot.worktree);
   },
-  async launchReadyRemediation(snapshot, failedCheckSummary, failedCheckNames, attemptNumber, maxAttempts, repoDir) {
-    const toolPath = path.join(repoDir, 'tools', 'ready-watchdog.ts');
+  async launchReadyRemediation(snapshot, failedCheckSummary, failedCheckNames, attemptNumber, maxAttempts, repoDir, readyWatchdogToolPath) {
     try {
       const { stdout } = await execFileAsync(
         'npx',
         [
           'tsx',
-          toolPath,
+          readyWatchdogToolPath,
           '--repo-dir',
           repoDir,
           '--launch-remediation',
@@ -326,6 +341,7 @@ function displayLabel(kind: Exclude<ReadyWatchdogClassificationKind, 'fresh'>): 
   if (kind === 'waiting-on-ci') return 'waiting on CI';
   if (kind === 'stable-failing-safe') return 'stable failing safe';
   if (kind === 'waiting-on-eval-comparison') return 'waiting on eval/comparison';
+  if (kind === 'waiting-on-merge-lane') return 'waiting on merge lane';
   if (kind === 'needs-user') return 'needs user';
   return 'stuck';
 }
@@ -452,8 +468,19 @@ function normalizeDetailFingerprint(detail: string): string {
   return detail.trim().replace(/\s+/g, ' ');
 }
 
-function makeRecoveryCommand(repoDir: string, stateFile: string, issueId: string): string {
-  return `npx tsx ${path.join(repoDir, 'tools/ready-watchdog.ts')} --repo-dir ${repoDir} --state-file ${stateFile} --recover ${issueId} --json`;
+function makeRecoveryCommand(repoDir: string, stateFile: string, issueId: string, readyWatchdogToolPath: string): string {
+  return [
+    'npx',
+    'tsx',
+    escapeShellArg(readyWatchdogToolPath),
+    '--repo-dir',
+    escapeShellArg(repoDir),
+    '--state-file',
+    escapeShellArg(stateFile),
+    '--recover',
+    escapeShellArg(issueId),
+    '--json',
+  ].join(' ');
 }
 
 export function classifyReadyTask(
@@ -593,6 +620,28 @@ export function classifyReadyTask(
   }
 
   if (isCleanMergeState(githubTruth) && checkSummary.successes > 0) {
+    // A PR parked in the merge lane (it already passed ready, then main
+    // advanced and it wasn't the selected merge candidate) is idle on purpose.
+    // Re-running its ready checks does nothing useful — it's the queue, not the
+    // PR, that hasn't advanced — and "recovering" it resets the ready clock,
+    // which re-arms this very check ~every threshold minutes (observed: one PR
+    // auto-recovered 30 times while clean and green). Treat normal lane-waiting
+    // as benign; only escalate to needs-user once the wait is long enough to
+    // signal the lane itself is stalled.
+    if (snapshot.readyArtifacts?.queueState === 'ready-stale') {
+      const escalateMinutes = normalizedConfig.thresholdMinutes * MERGE_LANE_STALL_ESCALATE_MULTIPLIER;
+      if (snapshot.idleMinutes >= escalateMinutes) {
+        return {
+          kind: 'needs-user',
+          detail: `Merge lane appears stalled: PR #${snapshot.prNumber} passed ready and has waited ${snapshot.idleMinutes}m for its merge turn without the lane advancing.`,
+        };
+      }
+      return {
+        kind: 'waiting-on-merge-lane',
+        detail: `PR #${snapshot.prNumber} passed ready and is waiting its turn in the merge lane (idle ${snapshot.idleMinutes}m).`,
+      };
+    }
+
     const remediationInFlight = snapshot.hasConflictMarker
       && snapshot.readyResultStatus === 'running'
       && snapshot.remediationLaunchHead !== null
@@ -872,6 +921,7 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
   const priorTasks = priorState?.tasks ?? {};
   const nextTasks = { ...priorTasks };
   const remediationConfig = getReadyRemediationConfig(options.repoDir);
+  const readyWatchdogToolPath = options.readyWatchdogToolPath ?? READY_WATCHDOG_TOOL_PATH;
   const workflowState = await deps.readWorkflowState(options.stateFile);
   const tasks = workflowState.tasks ?? {};
   const jobs = normalizeJobs(workflowState);
@@ -1037,6 +1087,7 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
             attempts + 1,
             remediationConfig.maxAttempts,
             options.repoDir,
+            readyWatchdogToolPath,
           );
 
           if (launchResult.status === 'launched') {
@@ -1055,7 +1106,7 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
           };
         }
       } else if (classification.kind === 'stuck') {
-        recoveryCommand = makeRecoveryCommand(options.repoDir, options.stateFile, issueId);
+        recoveryCommand = makeRecoveryCommand(options.repoDir, options.stateFile, issueId, readyWatchdogToolPath);
         const canRecover = (options.forceRecover || config.autoRecover)
           && classification.autoRecoverable
           && githubTruth !== null;

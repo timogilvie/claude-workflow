@@ -50,6 +50,12 @@ export interface ModelCapabilities {
   costPerMillionInputTokensUsd: number;
   costPerMillionOutputTokensUsd: number;
   agent?: string;
+  /**
+   * ISO date the model became generally available. Drives the recency-aware
+   * exploration boost (router.exploration.newModelBoost) and challenge
+   * scheduler prioritization. Unset means no recency treatment.
+   */
+  releasedAt?: string;
 }
 
 export interface ModelRegistry {
@@ -115,6 +121,7 @@ function cloneCapabilities(capabilities: ModelCapabilities): ModelCapabilities {
     costPerMillionInputTokensUsd: capabilities.costPerMillionInputTokensUsd,
     costPerMillionOutputTokensUsd: capabilities.costPerMillionOutputTokensUsd,
     agent: capabilities.agent,
+    releasedAt: capabilities.releasedAt,
   };
 }
 
@@ -246,6 +253,7 @@ function makeDefaultCapabilities(override?: ModelCapabilitiesOverride): ModelCap
     costPerMillionInputTokensUsd: override?.costPerMillionInputTokensUsd ?? 0,
     costPerMillionOutputTokensUsd: override?.costPerMillionOutputTokensUsd ?? 0,
     agent: override?.agent,
+    releasedAt: override?.releasedAt,
   };
 }
 
@@ -275,6 +283,7 @@ function mergeCapabilities(
     costPerMillionInputTokensUsd: override.costPerMillionInputTokensUsd ?? seed.costPerMillionInputTokensUsd,
     costPerMillionOutputTokensUsd: override.costPerMillionOutputTokensUsd ?? seed.costPerMillionOutputTokensUsd,
     agent: override.agent ?? seed.agent,
+    releasedAt: override.releasedAt ?? seed.releasedAt,
   };
 }
 
@@ -383,6 +392,12 @@ export class ModelResolutionError extends Error {
 }
 
 export const FAMILY_ALIASES = Object.freeze({
+  fable: Object.freeze({
+    channels: Object.freeze({
+      stable: 'claude-fable-5',
+    }),
+    description: 'Stable Anthropic frontier alias for the Fable family.',
+  }),
   opus: Object.freeze({
     channels: Object.freeze({
       stable: 'claude-opus-4-8',
@@ -418,7 +433,7 @@ export const FAMILY_ALIASES = Object.freeze({
 >;
 
 export const REVIEWER_ALIAS_MAP = Object.freeze({
-  deep: 'claude-opus-4-8',
+  deep: 'claude-fable-5',
 }) satisfies Readonly<Record<string, string>>;
 
 function makeModelSelectorParseError(
@@ -665,11 +680,35 @@ export function resolveSelector(selector: ModelSelector, context?: ResolutionCon
 
 export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
   models: {
+    'claude-fable-5': {
+      vendor: 'anthropic',
+      class: 'frontier',
+      strengths: ['frontier reasoning', 'long-horizon agentic work', 'code review', 'architecture'],
+      weaknesses: ['highest cost', 'slower', 'minutes-long turns on hard tasks'],
+      // Seed dates are approximate; override via modelRegistry config if exact
+      // launch dates matter for the recency boost window.
+      releasedAt: '2026-06-10',
+      qualityScores: scores(62, 99, 95, 98, 62),
+      pricing: {
+        inputCostPerMTok: 10,
+        outputCostPerMTok: 50,
+        cacheWriteCostPerMTok: 12.5,
+        cacheReadCostPerMTok: 1,
+      },
+      contextWindowTokens: 1_000_000,
+      toolSupport: 'full',
+      multimodal: { text: true, image: true },
+      latencyTier: 'slow',
+      reasoningTier: 'advanced',
+      costPerMillionInputTokensUsd: 10,
+      costPerMillionOutputTokensUsd: 50,
+    },
     'claude-opus-4-8': {
       vendor: 'anthropic',
       class: 'frontier',
       strengths: ['long-horizon reasoning', 'code review', 'architecture', 'agentic coding'],
       weaknesses: ['higher cost', 'slower'],
+      releasedAt: '2026-05-20',
       qualityScores: scores(62, 97, 88, 96, 62),
       pricing: {
         inputCostPerMTok: 5,
@@ -791,6 +830,7 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       class: 'frontier',
       strengths: ['frontier reasoning', 'code generation', 'architecture'],
       weaknesses: ['higher cost'],
+      releasedAt: '2026-05-01',
       qualityScores: scores(62, 96, 92, 94, 62),
       pricing: {
         inputCostPerMTok: 5,
@@ -958,11 +998,11 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
     },
   },
   ladders: {
-    routing: ['claude-haiku-4-5-20251001', 'deepseek-v4-flash', 'claude-sonnet-4-6', 'gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-opus-4-8', 'claude-opus-4-7'],
-    planning: ['gpt-5.5', 'claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.4', 'deepseek-reasoner', 'deepseek-v4-pro', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-    coding: ['gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-sonnet-4-6', 'claude-opus-4-8', 'claude-opus-4-7', 'deepseek-chat', 'deepseek-v4-flash', 'claude-haiku-4-5-20251001'],
-    review: ['claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-sonnet-4-6', 'deepseek-reasoner', 'claude-haiku-4-5-20251001'],
-    classify: ['claude-haiku-4-5-20251001', 'deepseek-v4-flash', 'claude-sonnet-4-6', 'gpt-5.5', 'gpt-5.4'],
+    routing: ['claude-haiku-4-5-20251001', 'deepseek-v4-flash', 'claude-sonnet-4-6', 'gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7'],
+    planning: ['claude-fable-5', 'gpt-5.5', 'claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.4', 'deepseek-reasoner', 'deepseek-v4-pro', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+    coding: ['claude-fable-5', 'gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-sonnet-4-6', 'claude-opus-4-8', 'claude-opus-4-7', 'deepseek-chat', 'deepseek-v4-flash', 'claude-haiku-4-5-20251001'],
+    review: ['claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-sonnet-4-6', 'deepseek-reasoner', 'claude-haiku-4-5-20251001'],
+    classify: ['claude-haiku-4-5-20251001', 'deepseek-v4-flash', 'claude-sonnet-4-6', 'gpt-5.5', 'gpt-5.4', 'claude-fable-5'],
   },
 };
 

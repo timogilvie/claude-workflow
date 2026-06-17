@@ -25,7 +25,8 @@ import {
   type RubricCriterionScore,
   type RubricDeterminativeBoundary,
 } from './eval-schema.ts';
-import { callClaude, parseJsonFromLLM } from './llm-cli.ts';
+import { parseJsonFromLLM } from './llm-cli.ts';
+import { callHeadlessLLM } from './headless-llm.ts';
 import { getEvalConfig } from './config.ts';
 import { loadPricingTable } from './workflow-cost.ts';
 import { createPromptArtifact, type PromptArtifact } from './prompt-hash.ts';
@@ -44,7 +45,11 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const DEFAULT_MODEL = 'claude-sonnet-4-6';
+// Headless eval judge runs on Codex/gpt-5.5 by default (HOK-2226). The provider
+// follows the model, so configuring eval.judge.model (or EVAL_MODEL) to a
+// claude-* id routes the judge back to Claude. Baseline note: changing the judge
+// model shifts eval scores — see docs/codex-migration-plan.md.
+const DEFAULT_MODEL = 'gpt-5.5';
 const DEFAULT_PROVIDER = 'claude-cli';
 const SUPPORTED_PROVIDERS = ['claude-cli', 'anthropic'] as const;
 const MAX_RETRIES = 2;
@@ -270,8 +275,8 @@ function fillJudgePrompt(template: string, components: PromptComponents): string
     .replace('{{SELF_REVIEW_SUMMARY}}', components.selfReviewSummary ?? '');
 }
 
-async function callClaudeWithRetry(prompt: string, model: string): Promise<LLMCallResult> {
-  const result = await callClaude(prompt, {
+async function callJudgeLLM(prompt: string, model: string): Promise<LLMCallResult> {
+  const result = await callHeadlessLLM(prompt, {
     mode: 'sync',
     model,
     taskType: 'classify',
@@ -685,7 +690,7 @@ export async function evaluateTask(
     return record;
   }
 
-  const callFn = _callFn || callClaudeWithRetry;
+  const callFn = _callFn || callJudgeLLM;
 
   // Call Claude (with retry built-in)
   const response = await callFn(prompt, model);

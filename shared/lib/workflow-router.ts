@@ -13,8 +13,15 @@ import { getAvailableModelsForStage, getBudgetConfig, getChallengeSchedulerConfi
 import { filterDeepSeekModels, type DeepSeekPoolFilterResult } from './deepseek-provider.ts';
 import { routeViaHokusai } from './hokusai-router.ts';
 import { analyzePrompt, loadRouterConfig, recommendModel, resolveAgent, type PromptCharacteristics, type TaskType } from './model-router.ts';
-import { compareLatencyTier, getEffectiveRegistry, getLadder, hasCapabilityConstraints, type CapabilityConstraints, type LatencyTier, type RegistryTaskType } from './model-registry.ts';
+import { compareLatencyTier, getEffectiveRegistry, getLadder, hasCapabilityConstraints, isModelEnabled, type CapabilityConstraints, type LatencyTier, type RegistryTaskType } from './model-registry.ts';
 import { readQuotaSnapshot, type QuotaSnapshot } from './quota-state.ts';
+import {
+  formatExplorationReasoning,
+  recencyMultiplier,
+  resolveExplorationConfig,
+  sampleCandidateIndex,
+  type ExplorationAttribution,
+} from './router-exploration.ts';
 import { resolveModel, viableCandidatesInPool } from './routing-policy.ts';
 import { classifyTaskDifficulty, getAllowedModelFloor, type DifficultyFloor, type RoutingDifficulty } from './task-difficulty-classifier.ts';
 import { loadPricingTable, computeModelCost } from './workflow-cost.ts';
@@ -103,6 +110,7 @@ export interface RouteWorkflowOptions {
   packetContent?: string;
   skipDifficultyClassification?: boolean;
   additionalEvalsPaths?: string[];
+  randomFn?: () => number;
 }
 
 function withSignals(
@@ -149,20 +157,35 @@ function withChallengeRecommendation<T extends WorkflowRouteDecision>(decision: 
   };
 }
 
-const DEFAULT_MODEL_POOL = [
-  'claude-opus-4-8',
-  'claude-opus-4-7',
-  'claude-sonnet-4-6',
-  'claude-opus-4-6',
-  'claude-sonnet-4-5-20250929',
-  'claude-haiku-4-5-20251001',
-  'deepseek-v4-pro',
-  'deepseek-v4-flash',
-  'deepseek-chat',
-  'deepseek-reasoner',
-  'gpt-5.4',
-  'gpt-5.5',
-];
+const STAGE_ROLE_TASK_TYPE: Record<'planner' | 'coder' | 'reviewer', RegistryTaskType> = {
+  planner: 'planning',
+  coder: 'coding',
+  reviewer: 'review',
+};
+
+function registryModelPool(repoDir?: string): string[] {
+  return Object.entries(getEffectiveRegistry(repoDir).models)
+    .filter(([, capabilities]) => isModelEnabled(capabilities))
+    .map(([modelId]) => modelId);
+}
+
+/**
+ * Task-type ladder grouped by model class, preserving ladder order within
+ * each class. Encodes tier-shaped preferences (e.g. "frontier first, then
+ * strong generalists") without hardcoding model IDs, so registry or config
+ * changes propagate to heuristic routing automatically.
+ */
+function ladderByClass(
+  taskType: RegistryTaskType,
+  classes: ModelClass[],
+  repoDir?: string,
+): string[] {
+  const registry = getEffectiveRegistry(repoDir);
+  const ladder = getLadder(registry, taskType);
+  return classes.flatMap((modelClass) =>
+    ladder.filter((modelId) => registry.models[modelId]?.class === modelClass)
+  );
+}
 
 const REPO_RISK_PATTERNS = [
   /\bauth(entication|orization)?\b/i,
@@ -445,7 +468,7 @@ function getModelPool(repoDir?: string): ResolvedModelPool {
   return filterProviderPool([...new Set([
     ...(routerConfig.models || []),
     ...pricingModels,
-    ...DEFAULT_MODEL_POOL,
+    ...registryModelPool(repoDir),
   ])], repoDir);
 }
 
@@ -791,7 +814,7 @@ export function estimateStageCost(
 
 /**
  * Compute the absolute cheapest viable model combination from the available pool.
- * Returns null if the pool doesn't contain the minimum viable model (haiku).
+ * Returns null if the pool doesn't contain a fast-economy model.
  */
 function getCheapestOption(
   pool: string[],
@@ -800,21 +823,22 @@ function getCheapestOption(
   reviewMode: ReviewMode,
   repoDir?: string,
 ): { planner: string; coder: string; reviewer: string; totalCost: number } | null {
-  const haiku = 'claude-haiku-4-5-20251001';
-  if (!pool.includes(haiku)) {
+  const economy = ladderByClass('coding', ['fast_economy'], repoDir)
+    .find((modelId) => pool.includes(modelId));
+  if (!economy) {
     return null;
   }
 
-  const planCost = estimateStageCost(haiku, PLAN_TOKENS[planDepth], repoDir);
-  const codeCost = estimateStageCost(haiku, CODE_TOKENS[codeDepth], repoDir);
+  const planCost = estimateStageCost(economy, PLAN_TOKENS[planDepth], repoDir);
+  const codeCost = estimateStageCost(economy, CODE_TOKENS[codeDepth], repoDir);
   const reviewCost = reviewMode === 'none'
     ? 0
-    : estimateStageCost(haiku, REVIEW_TOKENS[reviewMode as Exclude<ReviewMode, 'none'>], repoDir);
+    : estimateStageCost(economy, REVIEW_TOKENS[reviewMode as Exclude<ReviewMode, 'none'>], repoDir);
 
   return {
-    planner: haiku,
-    coder: haiku,
-    reviewer: haiku,
+    planner: economy,
+    coder: economy,
+    reviewer: economy,
     totalCost: planCost + codeCost + reviewCost,
   };
 }
@@ -834,22 +858,22 @@ function downgradeModelsForBudget(params: {
 }): { planner: string; coder: string; reviewer: string } | null {
   const { planner, coder, reviewer, planDepth, codeDepth, reviewMode, plannerPool, coderPool, reviewerPool, maxCostUsd, repoDir } = params;
 
-  // Define downgrade tiers for each role (most expensive to cheapest)
+  // Downgrade tiers per role, from highest model class to cheapest
   const coderTiers = [
-    ['gpt-5.5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'gpt-5.4'],
-    ['claude-sonnet-4-6', 'claude-sonnet-4-5-20250929'],
-    ['claude-haiku-4-5-20251001'],
+    ladderByClass('coding', ['frontier'], repoDir),
+    ladderByClass('coding', ['strong_generalist'], repoDir),
+    ladderByClass('coding', ['fast_economy'], repoDir),
   ];
 
   const plannerTiers = [
-    ['gpt-5.5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'gpt-5.4'],
-    ['claude-sonnet-4-6', 'claude-sonnet-4-5-20250929'],
-    ['claude-haiku-4-5-20251001'],
+    ladderByClass('planning', ['frontier'], repoDir),
+    ladderByClass('planning', ['strong_generalist'], repoDir),
+    ladderByClass('planning', ['fast_economy'], repoDir),
   ];
 
   const reviewerTiers = [
-    ['gpt-5.5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250929'],
-    ['claude-haiku-4-5-20251001'],
+    ladderByClass('review', ['frontier', 'strong_generalist'], repoDir),
+    ladderByClass('review', ['fast_economy'], repoDir),
   ];
 
   // Try all combinations, starting with minimal downgrades
@@ -885,55 +909,47 @@ function downgradeModelsForBudget(params: {
 /**
  * Enforce a difficulty floor on a selected model.
  *
- * If the floor disallows haiku, upgrades to sonnet or opus from the pool.
- * If the floor prefers opus, upgrades when opus is available.
+ * If the floor disallows the fast-economy class, upgrades to a frontier or
+ * strong-generalist model from the pool, following the role's registry ladder.
+ * If the floor prefers frontier ("opus"), upgrades when one is available.
+ * Models unknown to the registry are treated as strong generalists.
  */
 export function applyDifficultyFloor(
   model: string,
   floor: DifficultyFloor,
   pool: string[],
   role: 'planner' | 'coder' | 'reviewer',
+  repoDir?: string,
 ): string {
-  const isHaiku = model.toLowerCase().includes('haiku');
-  const isSonnetOrBelow = isHaiku || model.toLowerCase().includes('sonnet');
+  const registry = getEffectiveRegistry(repoDir);
+  const taskType = STAGE_ROLE_TASK_TYPE[role];
+  const modelClass = registry.models[model]?.class ?? 'strong_generalist';
 
-  if (!floor.allowHaiku && isHaiku) {
-    // When opus is preferred (e.g. critical), try opus before sonnet
+  if (!floor.allowHaiku && modelClass === 'fast_economy') {
+    // When frontier is preferred (e.g. critical), try frontier before generalist
     if (floor.preferOpus) {
-      const opus = pickAvailableModel(
-        pool,
-        ['gpt-5.5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'gpt-5.4'],
-        model,
-      );
-      if (!opus.toLowerCase().includes('haiku')) {
+      const frontier = pickAvailableModel(pool, ladderByClass(taskType, ['frontier'], repoDir), model);
+      if (registry.models[frontier]?.class === 'frontier') {
         console.warn(
-          `[workflow-router] Haiku rejected for ${role} (difficulty floor). Upgraded to ${opus}.`,
+          `[workflow-router] ${model} rejected for ${role} (difficulty floor). Upgraded to ${frontier}.`,
         );
-        return opus;
+        return frontier;
       }
     }
 
-    // Fall back to sonnet upgrade
-    const upgraded = pickAvailableModel(
-      pool,
-      ['claude-sonnet-4-6', 'claude-sonnet-4-5-20250929'],
-      model,
-    );
+    // Fall back to strong-generalist upgrade
+    const upgraded = pickAvailableModel(pool, ladderByClass(taskType, ['strong_generalist'], repoDir), model);
     console.warn(
-      `[workflow-router] Haiku rejected for ${role} (difficulty floor). Upgraded to ${upgraded}.`,
+      `[workflow-router] ${model} rejected for ${role} (difficulty floor). Upgraded to ${upgraded}.`,
     );
     return upgraded;
   }
 
-  if (floor.preferOpus && isSonnetOrBelow) {
-    const opus = pickAvailableModel(
-      pool,
-      ['gpt-5.5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'gpt-5.4'],
-      model,
-    );
-    // Only upgrade if opus is actually in the pool
-    if (!opus.toLowerCase().includes('haiku') && !opus.toLowerCase().includes('sonnet')) {
-      return opus;
+  if (floor.preferOpus && modelClass !== 'frontier') {
+    const frontier = pickAvailableModel(pool, ladderByClass(taskType, ['frontier'], repoDir), model);
+    // Only upgrade if a frontier model is actually in the pool
+    if (registry.models[frontier]?.class === 'frontier') {
+      return frontier;
     }
   }
 
@@ -1066,20 +1082,20 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
   });
 
   const planner = planDepth === 'deep'
-    ? pickAvailableModel(plannerPool, ['gpt-5.5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250929', coderRecommendation.recommendedModel], coderRecommendation.recommendedModel)
-    : pickAvailableModel(plannerPool, ['claude-sonnet-4-6', 'claude-sonnet-4-5-20250929', 'claude-haiku-4-5-20251001', coderRecommendation.recommendedModel], coderRecommendation.recommendedModel);
+    ? pickAvailableModel(plannerPool, [...ladderByClass('planning', ['frontier', 'strong_generalist'], repoDir), coderRecommendation.recommendedModel], coderRecommendation.recommendedModel)
+    : pickAvailableModel(plannerPool, [...ladderByClass('planning', ['strong_generalist', 'fast_economy'], repoDir), coderRecommendation.recommendedModel], coderRecommendation.recommendedModel);
 
   const coder = codeDepth === 'deep'
-    ? pickAvailableModel(coderPool, [coderRecommendation.recommendedModel, 'gpt-5.5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'gpt-5.4'], coderRecommendation.recommendedModel)
+    ? pickAvailableModel(coderPool, [coderRecommendation.recommendedModel, ...ladderByClass('coding', ['frontier'], repoDir)], coderRecommendation.recommendedModel)
     : codeDepth === 'medium'
-      ? pickAvailableModel(coderPool, [coderRecommendation.recommendedModel, 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250929'], coderRecommendation.recommendedModel)
-      : pickAvailableModel(coderPool, [coderRecommendation.recommendedModel, 'claude-haiku-4-5-20251001'], coderRecommendation.recommendedModel);
+      ? pickAvailableModel(coderPool, [coderRecommendation.recommendedModel, ...ladderByClass('coding', ['strong_generalist'], repoDir)], coderRecommendation.recommendedModel)
+      : pickAvailableModel(coderPool, [coderRecommendation.recommendedModel, ...ladderByClass('coding', ['fast_economy'], repoDir)], coderRecommendation.recommendedModel);
 
   const reviewer = reviewRecommended === 'static+llm'
-    ? pickAvailableModel(reviewerPool, ['claude-sonnet-4-6', 'claude-sonnet-4-5-20250929', 'gpt-5.5', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'gpt-5.4', planner], planner)
+    ? pickAvailableModel(reviewerPool, [...ladderByClass('review', ['strong_generalist', 'frontier'], repoDir), planner], planner)
     : reviewRecommended === 'llm'
-      ? pickAvailableModel(reviewerPool, ['claude-sonnet-4-6', 'claude-sonnet-4-5-20250929', 'claude-haiku-4-5-20251001', planner], planner)
-      : pickAvailableModel(reviewerPool, ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-sonnet-4-5-20250929', planner], planner);
+      ? pickAvailableModel(reviewerPool, [...ladderByClass('review', ['strong_generalist', 'fast_economy'], repoDir), planner], planner)
+      : pickAvailableModel(reviewerPool, [...ladderByClass('review', ['fast_economy', 'strong_generalist'], repoDir), planner], planner);
 
   // Enforce difficulty floor
   const taskDifficulty = resolveTaskDifficulty(options || {}, repoDir);
@@ -1090,9 +1106,9 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
 
   if (taskDifficulty) {
     const floor = getAllowedModelFloor(taskDifficulty);
-    const newPlanner = applyDifficultyFloor(planner, floor, plannerPool, 'planner');
-    const newCoder = applyDifficultyFloor(coder, floor, coderPool, 'coder');
-    const newReviewer = applyDifficultyFloor(reviewer, floor, reviewerPool, 'reviewer');
+    const newPlanner = applyDifficultyFloor(planner, floor, plannerPool, 'planner', repoDir);
+    const newCoder = applyDifficultyFloor(coder, floor, coderPool, 'coder', repoDir);
+    const newReviewer = applyDifficultyFloor(reviewer, floor, reviewerPool, 'reviewer', repoDir);
 
     if (newPlanner !== planner || newCoder !== coder || newReviewer !== reviewer) {
       difficultyFloorApplied = true;
@@ -1267,6 +1283,7 @@ function routeWorkflowStageAwareInternal(
       reviewerCapabilityConstraints: policyResolution?.stageCapabilityConstraints.reviewer,
       maxCostUsd: options?.maxCostUsd,
       additionalEvalsPaths: options?.additionalEvalsPaths,
+      randomFn: options?.randomFn,
       queryInput: {
         capabilityConstraints: combineStageCapabilityConstraints(policyResolution?.stageCapabilityConstraints || {}),
       },
@@ -1322,9 +1339,9 @@ function routeWorkflowStageAwareInternal(
             ]),
           ], repoDir).models
         : getModelPool(repoDir).models;
-      finalPlanner = applyDifficultyFloor(fallback.planner, floor, floorPool, 'planner');
-      finalCoder = applyDifficultyFloor(fallback.coder, floor, floorPool, 'coder');
-      finalReviewer = applyDifficultyFloor(fallback.reviewer, floor, floorPool, 'reviewer');
+      finalPlanner = applyDifficultyFloor(fallback.planner, floor, floorPool, 'planner', repoDir);
+      finalCoder = applyDifficultyFloor(fallback.coder, floor, floorPool, 'coder', repoDir);
+      finalReviewer = applyDifficultyFloor(fallback.reviewer, floor, floorPool, 'reviewer', repoDir);
     }
 
     decision = {
@@ -1352,9 +1369,9 @@ function routeWorkflowStageAwareInternal(
             ]),
           ], repoDir).models
         : getModelPool(repoDir).models;
-      saPlanner = applyDifficultyFloor(stageAwareDecision.planner, floor, floorPool, 'planner');
-      saCoder = applyDifficultyFloor(stageAwareDecision.coder, floor, floorPool, 'coder');
-      saReviewer = applyDifficultyFloor(stageAwareDecision.reviewer, floor, floorPool, 'reviewer');
+      saPlanner = applyDifficultyFloor(stageAwareDecision.planner, floor, floorPool, 'planner', repoDir);
+      saCoder = applyDifficultyFloor(stageAwareDecision.coder, floor, floorPool, 'coder', repoDir);
+      saReviewer = applyDifficultyFloor(stageAwareDecision.reviewer, floor, floorPool, 'reviewer', repoDir);
     }
 
     decision = {
@@ -1561,9 +1578,42 @@ export function tryPolicyResolution(
     taskType: 'review',
     capabilityConstraints: stageCapabilityConstraints.reviewer,
   }, pool);
-  const plannerModel = plannerCandidates.modelIds[0] ?? null;
-  const coderModel = coderCandidates.modelIds[0] ?? null;
-  const reviewerModel = reviewerCandidates.modelIds[0] ?? null;
+  // Exploration sampling: pick from the ranked viable candidates instead of
+  // always taking the argmax. Scores come from registry quality for the task
+  // type, matching the ordering produced by the policy resolver.
+  const explorationConfig = resolveExplorationConfig(getRouterConfig(repoDir).exploration);
+  const randomFn = options?.randomFn || Math.random;
+  const registry = getEffectiveRegistry(repoDir);
+  const explorationEntries: ExplorationAttribution['explored'] = [];
+  const boostFor = (modelId: string): number => explorationConfig.boostMultiplier > 1
+    ? recencyMultiplier(registry.models[modelId]?.releasedAt, explorationConfig)
+    : 1;
+  const samplePolicyModel = (
+    candidates: string[],
+    role: 'planner' | 'coder' | 'reviewer',
+    taskType: 'planning' | 'coding' | 'review',
+  ): string | null => {
+    const argmax = candidates[0] ?? null;
+    if (!explorationConfig.enabled || !argmax || candidates.length <= 1) {
+      return argmax;
+    }
+    const scores = candidates.map((modelId) => (registry.models[modelId]?.qualityScores[taskType] ?? 0) / 100);
+    const pick = sampleCandidateIndex(scores, explorationConfig, randomFn, candidates.map(boostFor));
+    const sampled = candidates[pick.index] ?? argmax;
+    if (pick.explored && sampled !== argmax) {
+      explorationEntries.push({
+        role,
+        sampled,
+        argmax,
+        ...(boostFor(sampled) > 1 ? { recencyBoosted: true } : {}),
+      });
+    }
+    return sampled;
+  };
+
+  const plannerModel = samplePolicyModel(plannerCandidates.modelIds, 'planner', 'planning');
+  const coderModel = samplePolicyModel(coderCandidates.modelIds, 'coder', 'coding');
+  const reviewerModel = samplePolicyModel(reviewerCandidates.modelIds, 'reviewer', 'review');
 
   if (!plannerModel || !coderModel || !reviewerModel) {
     console.warn(
@@ -1571,6 +1621,10 @@ export function tryPolicyResolution(
     );
     return null;
   }
+
+  const explorationAttribution: ExplorationAttribution | undefined = explorationConfig.enabled
+    ? { mode: explorationConfig.mode, explored: explorationEntries }
+    : undefined;
 
   logPolicyAdjustment('planning', plannerModel, pool, quotaState, repoDir);
   logPolicyAdjustment('coding', coderModel, pool, quotaState, repoDir);
@@ -1611,6 +1665,9 @@ export function tryPolicyResolution(
     expectedCostCode,
     expectedCostReview,
     reasoning: [
+      ...(explorationAttribution && explorationAttribution.explored.length > 0
+        ? [formatExplorationReasoning(explorationAttribution, explorationConfig)]
+        : []),
       'Policy resolver selected models using registry capability scores and quota state.',
       `Task difficulty ${taskDifficulty} applied the routing floor before ranking candidates.`,
       `Planner=${plannerModel}, coder=${coderModel}, reviewer=${reviewerModel} are the top viable in-pool candidates.`,
@@ -1634,6 +1691,7 @@ export function tryPolicyResolution(
     constraints: options?.maxCostUsd === undefined
       ? undefined
       : { maxCostUsd: options.maxCostUsd },
+    ...(explorationAttribution ? { exploration: explorationAttribution } : {}),
   };
 }
 

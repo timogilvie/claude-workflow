@@ -121,6 +121,51 @@ test('classify clean green stale ready as stuck', () => {
   assert.equal(classification.autoRecoverable, true);
 });
 
+test('classify clean green PR parked in merge lane as waiting-on-merge-lane (not stuck)', () => {
+  const classification = classifyReadyTask(
+    makeSnapshot({
+      idleMinutes: 15,
+      readyArtifacts: { type: 'ready', verdict: 'pass', queueState: 'ready-stale' },
+    }),
+    makeTruth(),
+    new Date('2026-05-05T12:30:00.000Z'),
+    WATCHDOG_CONFIG,
+  );
+
+  // Parked-and-waiting must not be auto-recovered (no needless ready re-run).
+  assert.equal(classification.kind, 'waiting-on-merge-lane');
+  assert.notEqual(classification.autoRecoverable, true);
+});
+
+test('escalate a long-parked merge-lane PR to needs-user (lane stalled)', () => {
+  const classification = classifyReadyTask(
+    makeSnapshot({
+      idleMinutes: 35, // >= thresholdMinutes(10) * 3
+      readyArtifacts: { type: 'ready', verdict: 'pass', queueState: 'ready-stale' },
+    }),
+    makeTruth(),
+    new Date('2026-05-05T12:30:00.000Z'),
+    WATCHDOG_CONFIG,
+  );
+
+  assert.equal(classification.kind, 'needs-user');
+  assert.match(classification.detail, /merge lane appears stalled/i);
+});
+
+test('a selected merge candidate that is clean green still classifies as stuck', () => {
+  const classification = classifyReadyTask(
+    makeSnapshot({
+      idleMinutes: 15,
+      readyArtifacts: { type: 'ready', verdict: 'pass', queueState: 'merge-candidate' },
+    }),
+    makeTruth(),
+    new Date('2026-05-05T12:30:00.000Z'),
+    WATCHDOG_CONFIG,
+  );
+
+  assert.equal(classification.kind, 'stuck');
+});
+
 test('classify failing CI as waiting-on-ci', () => {
   const classification = classifyReadyTask(
     makeSnapshot(),
@@ -438,7 +483,8 @@ test('tick auto-recovers stale local state for clean green PRs', async () => {
 
 test('tick launches remediation on stable completed failure', async () => {
   const { repoDir, stateDir, stateFile } = setupReadyTask('HOK-2039', 2039);
-  const launches: Array<{ summary: string; names: string[]; attemptNumber: number; maxAttempts: number }> = [];
+  const readyWatchdogToolPath = '/opt/wavemill/tools/ready-watchdog.ts';
+  const launches: Array<{ summary: string; names: string[]; attemptNumber: number; maxAttempts: number; toolPath: string }> = [];
 
   try {
     const deps = {
@@ -452,8 +498,10 @@ test('tick launches remediation on stable completed failure', async () => {
         failedCheckNames: string[],
         attemptNumber: number,
         maxAttempts: number,
+        _repoDir: string,
+        toolPath: string,
       ) => {
-        launches.push({ summary: failedCheckSummary, names: failedCheckNames, attemptNumber, maxAttempts });
+        launches.push({ summary: failedCheckSummary, names: failedCheckNames, attemptNumber, maxAttempts, toolPath });
         return {
           status: 'launched' as const,
           detail: `Launched ready remediation attempt ${attemptNumber}/${maxAttempts} for failing checks: ${failedCheckSummary}.`,
@@ -473,6 +521,7 @@ test('tick launches remediation on stable completed failure', async () => {
       repoDir,
       stateFile,
       config: WATCHDOG_CONFIG,
+      readyWatchdogToolPath,
       deps: { ...deps, now: () => new Date('2030-05-05T12:31:00.000Z') },
     });
     assert.equal(second.findings.length, 1);
@@ -483,6 +532,7 @@ test('tick launches remediation on stable completed failure', async () => {
       names: ['Alembic Check'],
       attemptNumber: 1,
       maxAttempts: 3,
+      toolPath: readyWatchdogToolPath,
     });
 
     const watchdogState = JSON.parse(readFileSync(path.join(stateDir, 'ready-watchdog-state.json'), 'utf-8')) as {
@@ -952,6 +1002,7 @@ test('tick ignores merged tasks still held in ready phase for review', async () 
 
 test('tick surfaces a manual recovery command when auto-recover is disabled', async () => {
   const repoDir = mkdtempSync(path.join(os.tmpdir(), 'ready-watchdog-'));
+  const readyWatchdogToolPath = '/opt/wavemill/tools/ready-watchdog.ts';
   const stateDir = path.join(repoDir, '.wavemill');
   const worktree = path.join(repoDir, 'worktrees', 'ready-watchdog-task');
   const featureDir = path.join(worktree, 'features', 'ready-watchdog-task');
@@ -996,6 +1047,7 @@ test('tick surfaces a manual recovery command when auto-recover is disabled', as
       autoRecover: false,
       timeoutSeconds: 30,
     },
+    readyWatchdogToolPath,
     deps: {
       fetchGitHubTruth: async () => makeTruth(),
       getCurrentHead: async () => 'head',
@@ -1004,7 +1056,12 @@ test('tick surfaces a manual recovery command when auto-recover is disabled', as
   });
 
   assert.equal(result.findings[0].action, 'recovery-command');
-  assert.match(result.findings[0].recoveryCommand ?? '', /--recover HOK-1579/);
+  assert.match(result.findings[0].recoveryCommand ?? '', /--recover 'HOK-1579'/);
+  assert.match(result.findings[0].recoveryCommand ?? '', /'\/opt\/wavemill\/tools\/ready-watchdog\.ts'/);
+  assert.ok(
+    !(result.findings[0].recoveryCommand ?? '').includes(path.join(repoDir, 'tools', 'ready-watchdog.ts')),
+    'recovery command should not point at the target repo tools directory',
+  );
 
   await rm(repoDir, { recursive: true, force: true });
 });

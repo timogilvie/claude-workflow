@@ -317,6 +317,38 @@ describe('ready-stage', () => {
       assert.equal(result.name, 'migration-chain-integrity');
     });
 
+    it('supports annotated Alembic revision identifiers', async () => {
+      await writeRepoFiles(repoDir, {
+        'migrations/versions/001_base.py': [
+          'revision: str = "001"',
+          'down_revision: Union[str, None] = None',
+          '',
+        ].join('\n'),
+        'migrations/versions/002_next.py': [
+          'revision: str = "002"',
+          'down_revision: Union[str, None] = "001"',
+          '',
+        ].join('\n'),
+      });
+
+      const result = await checkMigrationChainIntegrity(repoDir);
+      assert.equal(result.status, 'pass');
+      assert.equal(result.name, 'migration-chain-integrity');
+    });
+
+    it('supports Alembic merge revisions with multiple down revisions', async () => {
+      await writeRepoFiles(repoDir, {
+        'migrations/versions/001_base.py': 'revision = "001"\ndown_revision = None\n',
+        'migrations/versions/002_a.py': 'revision = "002_a"\ndown_revision = "001"\n',
+        'migrations/versions/002_b.py': 'revision = "002_b"\ndown_revision = "001"\n',
+        'migrations/versions/003_merge.py': 'revision = "003"\ndown_revision = ("002_a", "002_b")\n',
+      });
+
+      const result = await checkMigrationChainIntegrity(repoDir);
+      assert.equal(result.status, 'pass');
+      assert.equal(result.name, 'migration-chain-integrity');
+    });
+
     it('ignores Alembic support files outside the versions directory', async () => {
       await writeRepoFiles(repoDir, {
         'migrations/env.py': 'from alembic import context\n',

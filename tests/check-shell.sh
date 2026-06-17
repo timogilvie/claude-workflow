@@ -1317,6 +1317,17 @@ build_planning_prompt "Test title" "HOK-1130" "$REPO_DIR" "branch" "main" \
   "Issue Description:
 Test
 " "/tmp/status.txt" "$REPO_DIR/tools" "test-slug" "medium" "codex" > "$PROMPT_RENDER_DIR/planning-codex.txt"
+mkdir -p "$PROMPT_RENDER_DIR/worktree"
+build_planning_prompt "Test title" "HOK-1130" "$PROMPT_RENDER_DIR/worktree" "branch" "main" \
+  "Issue Description:
+Test
+" "/tmp/status.txt" "$REPO_DIR/tools" "test-slug" "medium" "codex" > "$PROMPT_RENDER_DIR/planning-worktree.txt"
+if grep -q -- '--repo-dir "'"$REPO_DIR"'"' "$PROMPT_RENDER_DIR/planning-worktree.txt" \
+  && grep -q -- '--output "'"$PROMPT_RENDER_DIR/worktree"'/features/test-slug/.post-expansion-route.json"' "$PROMPT_RENDER_DIR/planning-worktree.txt"; then
+  pass "planning reroute uses base repo for router config while writing worktree artifact"
+else
+  fail "planning reroute should use base repo dir for router config and worktree output path"
+fi
 build_planning_prompt "Test title" "HOK-1130" "$REPO_DIR" "branch" "main" \
   "Issue Description:
 Test

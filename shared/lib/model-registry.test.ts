@@ -28,6 +28,7 @@ import {
   validateModelId,
 } from './model-registry.ts';
 import { clearConfigCache } from './config.ts';
+import { filterDisabledModels } from './disabled-models.ts';
 import {
   ModelPolicyResolutionError,
   resolveSelectorWithPolicy,
@@ -138,6 +139,7 @@ function assertCapabilityMetadata(modelId: string, model: ModelRegistry['models'
 describe('model-registry', () => {
   it('seeds the canonical Claude defaults with complete metadata', () => {
     const expectedModels = [
+      'claude-fable-5',
       'claude-opus-4-8',
       'claude-opus-4-7',
       'claude-opus-4-6',
@@ -175,21 +177,22 @@ describe('model-registry', () => {
   });
 
   it('normalizes reviewer aliases deterministically', () => {
-    assert.equal(REVIEWER_ALIAS_MAP.deep, 'claude-opus-4-8');
-    assert.equal(normalizeReviewerModelId(' deep ', DEFAULT_MODEL_REGISTRY), 'claude-opus-4-8');
+    assert.equal(REVIEWER_ALIAS_MAP.deep, 'claude-fable-5');
+    assert.equal(normalizeReviewerModelId(' deep ', DEFAULT_MODEL_REGISTRY), 'claude-fable-5');
     assert.equal(normalizeReviewerModelId('gpt-5.4', DEFAULT_MODEL_REGISTRY), 'gpt-5.4');
     assert.equal(normalizeReviewerModelId('unknown-reviewer', DEFAULT_MODEL_REGISTRY), null);
     assert.equal(normalizeReviewerModelId('   ', DEFAULT_MODEL_REGISTRY), null);
   });
 
   it('getLadder returns configured default ladders', () => {
-    assert.equal(getLadder(DEFAULT_MODEL_REGISTRY, 'review')[0], 'claude-opus-4-8');
+    assert.equal(getLadder(DEFAULT_MODEL_REGISTRY, 'review')[0], 'claude-fable-5');
     assert.deepEqual(getLadder(DEFAULT_MODEL_REGISTRY, 'classify'), [
       'claude-haiku-4-5-20251001',
       'deepseek-v4-flash',
       'claude-sonnet-4-6',
       'gpt-5.5',
       'gpt-5.4',
+      'claude-fable-5',
     ]);
   });
 
@@ -281,6 +284,7 @@ describe('model-registry', () => {
     });
 
     assert.deepEqual(once, [
+      'claude-fable-5',
       'claude-opus-4-8',
       'claude-opus-4-7',
       'gpt-5.5',
@@ -303,7 +307,7 @@ describe('model-registry', () => {
   it('rankCandidates returns an empty ladder when every candidate is excluded', () => {
     assert.deepEqual(
       rankCandidates(DEFAULT_MODEL_REGISTRY, 'classify', {
-        excluded: ['claude-haiku-4-5-20251001', 'deepseek-v4-flash', 'claude-sonnet-4-6', 'gpt-5.5', 'gpt-5.4'],
+        excluded: ['claude-haiku-4-5-20251001', 'deepseek-v4-flash', 'claude-sonnet-4-6', 'gpt-5.5', 'gpt-5.4', 'claude-fable-5'],
       }),
       []
     );
@@ -311,6 +315,7 @@ describe('model-registry', () => {
 
   it('rankCandidates returns the full ladder when no exclusions are provided', () => {
     assert.deepEqual(rankCandidates(DEFAULT_MODEL_REGISTRY, 'coding'), [
+      'claude-fable-5',
       'gpt-5.5',
       'gpt-5.4',
       'deepseek-v4-pro',
@@ -679,17 +684,19 @@ describe('model-registry', () => {
       writeConfig(repoDir, {});
       clearConfigCache(repoDir);
 
+      // Descriptor models are the ladder minus globally-disabled models, so
+      // filter the expected ladders the same way (robust to the disable set).
       assert.deepEqual(
         getConfiguredModelsForDescriptorStage(repoDir, 'planner'),
-        getLadder(getEffectiveRegistry(repoDir), 'planning'),
+        filterDisabledModels(getLadder(getEffectiveRegistry(repoDir), 'planning')),
       );
       assert.deepEqual(
         getConfiguredModelsForDescriptorStage(repoDir, 'coder'),
-        getLadder(getEffectiveRegistry(repoDir), 'coding'),
+        filterDisabledModels(getLadder(getEffectiveRegistry(repoDir), 'coding')),
       );
       assert.deepEqual(
         getConfiguredModelsForDescriptorStage(repoDir, 'reviewer'),
-        getLadder(getEffectiveRegistry(repoDir), 'review'),
+        filterDisabledModels(getLadder(getEffectiveRegistry(repoDir), 'review')),
       );
 
       const descriptorModels = getConfiguredModelsForDescriptor(repoDir);
@@ -763,7 +770,7 @@ describe('parseModelSelector', () => {
   it('exports the required family aliases as a frozen registry', () => {
     assert.equal(Object.isFrozen(FAMILY_ALIASES), true);
 
-    for (const family of ['opus', 'sonnet', 'haiku', 'gpt-5.5', 'gemini-pro']) {
+    for (const family of ['fable', 'opus', 'sonnet', 'haiku', 'gpt-5.5', 'gemini-pro']) {
       assert.ok(Object.hasOwn(FAMILY_ALIASES, family));
       assert.ok(Object.isFrozen(FAMILY_ALIASES[family].channels));
       assert.ok(FAMILY_ALIASES[family].channels.stable?.length);
@@ -771,6 +778,7 @@ describe('parseModelSelector', () => {
   });
 
   it('keeps the existing stable pins in the channel registry', () => {
+    assert.equal(FAMILY_ALIASES.fable.channels.stable, 'claude-fable-5');
     assert.equal(FAMILY_ALIASES.opus.channels.stable, 'claude-opus-4-8');
     assert.equal(FAMILY_ALIASES.sonnet.channels.stable, 'claude-sonnet-4-6');
     assert.equal(FAMILY_ALIASES.haiku.channels.stable, 'claude-haiku-4-5-20251001');
