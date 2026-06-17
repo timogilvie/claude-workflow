@@ -622,7 +622,7 @@ function isV2CompliantBenchmarkRow(
     isPlainObject(row.audit_metadata) ? row.audit_metadata.scenarios : undefined,
   ];
   for (const value of scenarios) {
-    if (value === undefined) {
+    if (value == null) {
       continue;
     }
 
