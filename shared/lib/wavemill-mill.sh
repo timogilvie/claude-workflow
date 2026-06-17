@@ -2068,8 +2068,16 @@ for t in "${TASKS[@]}"; do
     challenger_agent=$(echo "$challenge_plan" | jq -r '.entries[1].agent // empty' 2>/dev/null)
     primary_agent=$(echo "$challenge_plan" | jq -r '.entries[0].agent // empty' 2>/dev/null)
     challenge_stage=$(echo "$challenge_plan" | jq -r '.challengeStage // "implementation"' 2>/dev/null || echo "implementation")
+    primary_entry_planner=$(echo "$challenge_plan" | jq -r '.entries[0].planner // empty' 2>/dev/null)
+    primary_entry_reviewer=$(echo "$challenge_plan" | jq -r '.entries[0].reviewer // empty' 2>/dev/null)
+    primary_entry_plan_depth=$(echo "$challenge_plan" | jq -r '.entries[0].planDepth // empty' 2>/dev/null)
+    primary_entry_code_depth=$(echo "$challenge_plan" | jq -r '.entries[0].codeDepth // empty' 2>/dev/null)
+    primary_entry_review_mode=$(echo "$challenge_plan" | jq -r '.entries[0].reviewMode // empty' 2>/dev/null)
     challenger_entry_planner=$(echo "$challenge_plan" | jq -r '.entries[1].planner // empty' 2>/dev/null)
     challenger_entry_reviewer=$(echo "$challenge_plan" | jq -r '.entries[1].reviewer // empty' 2>/dev/null)
+    challenger_entry_plan_depth=$(echo "$challenge_plan" | jq -r '.entries[1].planDepth // empty' 2>/dev/null)
+    challenger_entry_code_depth=$(echo "$challenge_plan" | jq -r '.entries[1].codeDepth // empty' 2>/dev/null)
+    challenger_entry_review_mode=$(echo "$challenge_plan" | jq -r '.entries[1].reviewMode // empty' 2>/dev/null)
 
     cp "/tmp/${SESSION}-${ISSUE}-taskpacket.md" "/tmp/${SESSION}-${challenger_key}-taskpacket.md" 2>/dev/null || true
     cp "/tmp/${SESSION}-${ISSUE}-issue.json" "/tmp/${SESSION}-${challenger_key}-issue.json" 2>/dev/null || true
@@ -2082,12 +2090,12 @@ for t in "${TASKS[@]}"; do
     TASK_CHALLENGE_MODEL_BY_ISSUE["$ISSUE"]="$primary_model"
     TASK_CHALLENGE_STAGE_BY_ISSUE["$ISSUE"]="$challenge_stage"
     TASK_AGENT_BY_ISSUE["$ISSUE"]="${primary_agent:-$rec_agent}"
-    TASK_PLANNER_MODEL_BY_ISSUE["$ISSUE"]="$route_planner"
+    TASK_PLANNER_MODEL_BY_ISSUE["$ISSUE"]="${primary_entry_planner:-$route_planner}"
     TASK_CODER_MODEL_BY_ISSUE["$ISSUE"]="$primary_model"
-    TASK_REVIEWER_MODEL_BY_ISSUE["$ISSUE"]="$route_reviewer"
-    TASK_PLAN_DEPTH_BY_ISSUE["$ISSUE"]="$route_plan_depth"
-    TASK_CODE_DEPTH_BY_ISSUE["$ISSUE"]="$route_code_depth"
-    TASK_REVIEW_MODE_BY_ISSUE["$ISSUE"]="$route_review_mode"
+    TASK_REVIEWER_MODEL_BY_ISSUE["$ISSUE"]="${primary_entry_reviewer:-$route_reviewer}"
+    TASK_PLAN_DEPTH_BY_ISSUE["$ISSUE"]="${primary_entry_plan_depth:-$route_plan_depth}"
+    TASK_CODE_DEPTH_BY_ISSUE["$ISSUE"]="${primary_entry_code_depth:-$route_code_depth}"
+    TASK_REVIEW_MODE_BY_ISSUE["$ISSUE"]="${primary_entry_review_mode:-$route_review_mode}"
 
     TASK_LINEAR_ISSUE_BY_ISSUE["$challenger_key"]="$ISSUE"
     TASK_CHALLENGE_BY_ISSUE["$challenger_key"]="true"
@@ -2100,9 +2108,9 @@ for t in "${TASKS[@]}"; do
     TASK_PLANNER_MODEL_BY_ISSUE["$challenger_key"]="${challenger_entry_planner:-$route_planner}"
     TASK_CODER_MODEL_BY_ISSUE["$challenger_key"]="$challenger_model"
     TASK_REVIEWER_MODEL_BY_ISSUE["$challenger_key"]="${challenger_entry_reviewer:-$route_reviewer}"
-    TASK_PLAN_DEPTH_BY_ISSUE["$challenger_key"]="$route_plan_depth"
-    TASK_CODE_DEPTH_BY_ISSUE["$challenger_key"]="$route_code_depth"
-    TASK_REVIEW_MODE_BY_ISSUE["$challenger_key"]="$route_review_mode"
+    TASK_PLAN_DEPTH_BY_ISSUE["$challenger_key"]="${challenger_entry_plan_depth:-$route_plan_depth}"
+    TASK_CODE_DEPTH_BY_ISSUE["$challenger_key"]="${challenger_entry_code_depth:-$route_code_depth}"
+    TASK_REVIEW_MODE_BY_ISSUE["$challenger_key"]="${challenger_entry_review_mode:-$route_review_mode}"
 
     FINAL_LAUNCH_ARGS+=("$ISSUE|$SLUG|$TITLE")
     FINAL_LAUNCH_ARGS+=("$challenger_key|$challenger_slug|$TITLE")
@@ -5894,16 +5902,37 @@ render_challenge_comparison_summary() {
   auto_c=$(echo "$compare_json" | jq -r '.dimensions.autonomy.challenger // "—"' 2>/dev/null)
 
   local disp_primary disp_challenger disp_winner
+  local primary_planner challenger_planner primary_reviewer challenger_reviewer
+  local disp_primary_planner disp_challenger_planner disp_primary_reviewer disp_challenger_reviewer
+  local model_row_label has_routing
   disp_primary=$(echo "$primary_model" | sed 's/-[0-9]\{8\}$//')
   disp_challenger=$(echo "$challenger_model" | sed 's/-[0-9]\{8\}$//')
   disp_winner=$(echo "$winner_model" | sed 's/-[0-9]\{8\}$//')
+  primary_planner=$(echo "$compare_json" | jq -r '.comparison.primaryRouting.planner // .primaryRouting.planner // empty' 2>/dev/null)
+  challenger_planner=$(echo "$compare_json" | jq -r '.comparison.challengerRouting.planner // .challengerRouting.planner // empty' 2>/dev/null)
+  primary_reviewer=$(echo "$compare_json" | jq -r '.comparison.primaryRouting.reviewer // .primaryRouting.reviewer // empty' 2>/dev/null)
+  challenger_reviewer=$(echo "$compare_json" | jq -r '.comparison.challengerRouting.reviewer // .challengerRouting.reviewer // empty' 2>/dev/null)
+  disp_primary_planner=$(echo "$primary_planner" | sed 's/-[0-9]\{8\}$//')
+  disp_challenger_planner=$(echo "$challenger_planner" | sed 's/-[0-9]\{8\}$//')
+  disp_primary_reviewer=$(echo "$primary_reviewer" | sed 's/-[0-9]\{8\}$//')
+  disp_challenger_reviewer=$(echo "$challenger_reviewer" | sed 's/-[0-9]\{8\}$//')
+  has_routing="false"
+  if [[ -n "$primary_planner$challenger_planner$primary_reviewer$challenger_reviewer" ]]; then
+    has_routing="true"
+  fi
+  model_row_label="Model"
+  [[ "$has_routing" == "true" ]] && model_row_label="Coder"
 
   log "status" ""
   log "status" "  ┌────────────────────────────────────────────────────────────┐"
   log "status" "  │  ⚖  Challenge Comparison: $pair_id"
   log "status" "  ├────────────────────────────────────────────────────────────┤"
   log "status" "  │                    Primary            Challenger           │"
-  log "status" "  │  Model          $(printf '%-20s' "$disp_primary") $(printf '%-19s' "$disp_challenger")│"
+  log "status" "  │  $(printf '%-14s' "$model_row_label")$(printf '%-20s' "$disp_primary") $(printf '%-19s' "$disp_challenger")│"
+  if [[ "$has_routing" == "true" ]]; then
+    log "status" "  │  Planner        $(printf '%-20s' "${disp_primary_planner:-—}") $(printf '%-19s' "${disp_challenger_planner:-—}")│"
+    log "status" "  │  Reviewer       $(printf '%-20s' "${disp_primary_reviewer:-—}") $(printf '%-19s' "${disp_challenger_reviewer:-—}")│"
+  fi
   log "status" "  │  PR              #$(printf '%-19s' "$primary_pr") #$(printf '%-18s' "$challenger_pr")│"
   log "status" "  │  Eval Score      $(printf '%-20s' "$primary_eval_score") $(printf '%-19s' "$challenger_eval_score")│"
   log "status" "  ├────────────────────────────────────────────────────────────┤"
