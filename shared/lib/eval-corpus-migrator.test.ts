@@ -129,7 +129,7 @@ describe('eval-corpus-migrator', () => {
 
     const kept = readFileSync(evalsFile, 'utf-8').trim().split('\n').map((line) => JSON.parse(line));
     assert.equal(kept.length, 2);
-    assert.equal(kept[1].taskDescriptor.stages.reviewer.model, 'claude-opus-4-8');
+    assert.equal(kept[1].taskDescriptor.stages.reviewer.model, 'claude-fable-5');
 
     const quarantined = readFileSync(quarantineFile, 'utf-8').trim().split('\n').map((line) => JSON.parse(line));
     assert.equal(quarantined.length, 3);

@@ -76,7 +76,7 @@ describe('splitPacketIntoSubPackets', () => {
   });
 
   it('returns parsed packet content from a valid JSON response', async () => {
-    mock.method(scopeShrinkerDeps, 'callClaude', async () => ({
+    mock.method(scopeShrinkerDeps, 'callHeadlessLLM', async () => ({
       text: JSON.stringify([
         { title: 'Packet 1', content: '## 1. Objective\n\nPacket one' },
         { title: 'Packet 2', content: '## 1. Objective\n\nPacket two' },
@@ -93,7 +93,7 @@ describe('splitPacketIntoSubPackets', () => {
   it('falls back to the original packet when splitting throws', async () => {
     const fullContent = buildPacket(8);
 
-    mock.method(scopeShrinkerDeps, 'callClaude', async () => {
+    mock.method(scopeShrinkerDeps, 'callHeadlessLLM', async () => {
       throw new Error('boom');
     });
 

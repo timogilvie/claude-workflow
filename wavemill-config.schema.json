@@ -657,6 +657,38 @@
                     "maximum": 1,
                     "description": "Probability that a selected mill task becomes a challenge task."
                 },
+                "recommendationRate": {
+                    "type": "number",
+                    "default": 1,
+                    "minimum": 0,
+                    "maximum": 1,
+                    "description": "Probability applied instead of 'rate' when the routing decision carries an exploration challenge recommendation (new-model or low-data-stage). Default 1 launches every recommended challenge when slots allow."
+                },
+                "stageWeights": {
+                    "type": "object",
+                    "description": "Relative weights for which workflow stage a challenge pair varies. Exactly one stage's model differs between primary and challenger. With no weights configured, challenges always vary the implementation (coder) stage, preserving legacy behavior. A low-data-stage scheduler recommendation overrides the weighted choice.",
+                    "properties": {
+                        "plan": {
+                            "type": "number",
+                            "minimum": 0,
+                            "default": 0,
+                            "description": "Relative weight for planner-varied challenges."
+                        },
+                        "implementation": {
+                            "type": "number",
+                            "minimum": 0,
+                            "default": 1,
+                            "description": "Relative weight for coder-varied challenges."
+                        },
+                        "review": {
+                            "type": "number",
+                            "minimum": 0,
+                            "default": 0,
+                            "description": "Relative weight for reviewer-varied challenges."
+                        }
+                    },
+                    "additionalProperties": false
+                },
                 "models": {
                     "description": "Pool of model selectors eligible for challenge. Entries may be family aliases, 'inherit', or pinned model IDs. Null means use router.models.",
                     "oneOf": [
@@ -1258,6 +1290,11 @@
                             "agent": {
                                 "type": "string",
                                 "minLength": 1
+                            },
+                            "releasedAt": {
+                                "type": "string",
+                                "pattern": "^\\d{4}-\\d{2}-\\d{2}",
+                                "description": "ISO date the model became generally available. Drives the recency-aware exploration boost (router.exploration.newModelBoost) and challenge scheduler prioritization."
                             }
                         },
                         "additionalProperties": false
@@ -1463,6 +1500,118 @@
                             "type": "boolean",
                             "default": false,
                             "description": "Enable capability-aware candidate filtering inside Layer 3 policy and stage-aware routing."
+                        }
+                    },
+                    "additionalProperties": false
+                },
+                "exploration": {
+                    "type": "object",
+                    "description": "Stochastic exploration for stage-aware and policy model selection. When enabled, per-stage picks are sampled from the top candidates instead of always taking the argmax, so newer or undersampled models keep receiving traffic.",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Master toggle for exploration sampling. When false, routing is byte-identical to deterministic argmax selection."
+                        },
+                        "mode": {
+                            "type": "string",
+                            "enum": [
+                                "softmax",
+                                "epsilon"
+                            ],
+                            "default": "epsilon",
+                            "description": "Sampling strategy: 'epsilon' picks a non-argmax candidate from the top-K window with probability 'rate'; 'softmax' samples the top-K window with probability proportional to exp(score / temperature)."
+                        },
+                        "rate": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1,
+                            "default": 0.15,
+                            "description": "Per-stage exploration probability for epsilon mode."
+                        },
+                        "temperature": {
+                            "type": "number",
+                            "minimum": 0.01,
+                            "maximum": 10,
+                            "default": 0.7,
+                            "description": "Softmax temperature. Higher values flatten the distribution toward uniform sampling."
+                        },
+                        "topK": {
+                            "type": "integer",
+                            "minimum": 2,
+                            "default": 3,
+                            "description": "Number of top-ranked candidates eligible for sampling per stage."
+                        },
+                        "ucbConstant": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1,
+                            "default": 0,
+                            "description": "UCB-style uncertainty bonus constant. Candidate ranking adds c * sqrt(ln(totalObservations + 1) / max(support, 1)) so undersampled models get a temporary boost that decays as evidence accumulates. 0 disables the bonus."
+                        },
+                        "priors": {
+                            "type": "object",
+                            "description": "Registry-prior blending and candidate seeding for stage-aware routing. Seeds every eligible stage model into the candidate set (even with zero eval records) and blends empirical KNN scores with registry quality-score priors.",
+                            "properties": {
+                                "enabled": {
+                                    "type": "boolean",
+                                    "default": false,
+                                    "description": "Enable prior blending and zero-record candidate seeding."
+                                },
+                                "blendSamples": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "default": 10,
+                                    "description": "Records needed before a model's score is fully empirical. Blend weight is min(support / blendSamples, 1); zero records means pure registry prior."
+                                }
+                            },
+                            "additionalProperties": false
+                        },
+                        "newModelBoost": {
+                            "type": "object",
+                            "description": "Recency-aware exploration boost. Models whose registry releasedAt falls inside the window get a selection-probability multiplier during exploration sampling, decaying linearly to 1.0 at the window edge. Long-term ranking always comes from accumulated evals.",
+                            "properties": {
+                                "windowDays": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "default": 45,
+                                    "description": "Days after releasedAt during which a model counts as recent. Also used by the challenge scheduler to prioritize recent under-covered models."
+                                },
+                                "multiplier": {
+                                    "type": "number",
+                                    "minimum": 1,
+                                    "maximum": 10,
+                                    "default": 1,
+                                    "description": "Sampling-weight multiplier at release time. 1 disables the sampling boost (scheduler recency prioritization still applies)."
+                                }
+                            },
+                            "additionalProperties": false
+                        }
+                    },
+                    "additionalProperties": false
+                },
+                "coverage": {
+                    "type": "object",
+                    "description": "Per-model-per-stage coverage targets for the diversity report (tools/router-diversity-report.ts).",
+                    "properties": {
+                        "minRecordsPerModelStage": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "default": 15,
+                            "description": "Eval records each model should accumulate per workflow stage. Cells below this target are flagged in the diversity report."
+                        },
+                        "maxStageShare": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1,
+                            "default": 0.7,
+                            "description": "Dominance threshold: warn when a single model exceeds this share of any stage over the report window."
+                        },
+                        "window": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "default": 50,
+                            "description": "Number of most recent eval records used for stage-share and routing-mode breakdowns."
                         }
                     },
                     "additionalProperties": false

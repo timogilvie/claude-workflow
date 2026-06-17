@@ -100,13 +100,20 @@ function mapExclusionReasonToFallbackReason(exclusionReason: string | undefined)
   return 'disabled-by-policy' as const;
 }
 
+// Last-resort model when no selector, parent, or inherit chain applies. This
+// path fires with unknown real difficulty, so it stays on the Opus tier rather
+// than tracking the ladder head onto premium-priced frontier models like Fable.
+const DEFAULT_FALLBACK_MODEL_ID = 'claude-opus-4-8';
+
 function selectDefaultResolution(
   policyContext: ResolveEffectiveModelPolicyContext,
 ): SelectedResolution {
-  // Default selection follows the existing ranked viable ordering so the
-  // no-selector path stays aligned with Layer 3 policy and quota constraints.
+  // Default selection still honors Layer 3 policy and quota constraints: the
+  // pinned fallback is used only while it is a viable ranked candidate.
   const rankedCandidates = resolveModel(policyContext, policyContext.registryOverride);
-  const viableCandidate = rankedCandidates.find((candidate) => candidate.viable);
+  const viableCandidate =
+    rankedCandidates.find((candidate) => candidate.viable && candidate.modelId === DEFAULT_FALLBACK_MODEL_ID)
+    ?? rankedCandidates.find((candidate) => candidate.viable);
   if (!viableCandidate) {
     const requestedModelId = rankedCandidates[0]?.modelId ?? '__default__';
     throw new ModelPolicyResolutionError(

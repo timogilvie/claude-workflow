@@ -16,6 +16,7 @@ import {
   routeStageAware,
   vectorizeDescriptor,
 } from './stage-aware-router.ts';
+import { resolveExplorationConfig } from './router-exploration.ts';
 import { clearConfigCache } from './config.ts';
 import { routeWorkflowAuto, routeWorkflowStageAware, summarizeWorkflowRoute } from './workflow-router.ts';
 
@@ -166,7 +167,7 @@ function makeRouterConfigWithRubricAware(rubricAware: Record<string, unknown>) {
         'claude-opus-4-6': 'claude',
         'claude-sonnet-4-6': 'claude',
         'claude-haiku-4-5-20251001': 'claude',
-        'gpt-5.3-codex': 'codex',
+        'gpt-5.4': 'codex',
         'gpt-5.4': 'codex',
       },
       rubricAware,
@@ -248,7 +249,7 @@ function makeRepoWithStageAwareData(
         'claude-sonnet-4-6': 'claude',
         'claude-sonnet-4-5-20250929': 'claude',
         'claude-haiku-4-5-20251001': 'claude',
-        'gpt-5.3-codex': 'codex',
+        'gpt-5.4': 'codex',
         'gpt-5.4': 'codex',
       },
     },
@@ -259,7 +260,7 @@ function makeRepoWithStageAwareData(
         'claude-sonnet-4-6': { inputCostPerMTok: 3, outputCostPerMTok: 15, cacheWriteCostPerMTok: 3.75, cacheReadCostPerMTok: 0.3 },
         'claude-sonnet-4-5-20250929': { inputCostPerMTok: 3, outputCostPerMTok: 15, cacheWriteCostPerMTok: 3.75, cacheReadCostPerMTok: 0.3 },
         'claude-haiku-4-5-20251001': { inputCostPerMTok: 0.8, outputCostPerMTok: 4, cacheWriteCostPerMTok: 1, cacheReadCostPerMTok: 0.08 },
-        'gpt-5.3-codex': { inputCostPerMTok: 1.75, outputCostPerMTok: 14, cacheWriteCostPerMTok: 2.1875, cacheReadCostPerMTok: 0.44 },
+        'gpt-5.4': { inputCostPerMTok: 1.75, outputCostPerMTok: 14, cacheWriteCostPerMTok: 2.1875, cacheReadCostPerMTok: 0.44 },
         'gpt-5.4': { inputCostPerMTok: 1.75, outputCostPerMTok: 14, cacheWriteCostPerMTok: 2.1875, cacheReadCostPerMTok: 0.44 },
       },
     },
@@ -305,7 +306,7 @@ test('cosineSimilarity handles identical and orthogonal vectors', () => {
 test('findKNearest sorts records by descriptor similarity', () => {
   const query = makeDescriptor();
   const exact = makeEvalRecord('1', 'claude-sonnet-4-5-20250929', { plan: 0.8, implementation: 0.8, review: 0.8 });
-  const different = makeEvalRecord('2', 'gpt-5.3-codex', { plan: 0.7, implementation: 0.7, review: 0.7 }, {
+  const different = makeEvalRecord('2', 'gpt-5.4', { plan: 0.7, implementation: 0.7, review: 0.7 }, {
     taskDescriptor: makeDescriptor({
       signals: {
         heuristic: {
@@ -338,33 +339,33 @@ test('findKNearest sorts records by descriptor similarity', () => {
 test('rankModelsPerStage picks the best model combination under constraints', () => {
   const neighbors = [
     { record: makeEvalRecord('1', 'claude-opus-4-6', { plan: 0.95, implementation: 0.82, review: 0.93 }), descriptor: makeDescriptor(), similarity: 0.99 },
-    { record: makeEvalRecord('2', 'gpt-5.3-codex', { plan: 0.7, implementation: 0.96, review: 0.65 }), descriptor: makeDescriptor(), similarity: 0.98 },
+    { record: makeEvalRecord('2', 'gpt-5.4', { plan: 0.7, implementation: 0.96, review: 0.65 }), descriptor: makeDescriptor(), similarity: 0.98 },
     { record: makeEvalRecord('3', 'claude-haiku-4-5-20251001', { plan: 0.65, implementation: 0.6, review: 0.94 }), descriptor: makeDescriptor(), similarity: 0.97 },
   ];
 
   const unconstrained = rankModelsPerStage(neighbors);
   assert.equal(unconstrained.selection?.planner.modelId, 'claude-opus-4-6');
-  assert.equal(unconstrained.selection?.coder.modelId, 'gpt-5.3-codex');
+  assert.equal(unconstrained.selection?.coder.modelId, 'gpt-5.4');
   assert.equal(unconstrained.selection?.reviewer.modelId, 'claude-haiku-4-5-20251001');
 
-  const allowlist = rankModelsPerStage(neighbors, { modelsAvailable: ['claude-opus-4-6', 'gpt-5.3-codex'] });
+  const allowlist = rankModelsPerStage(neighbors, { modelsAvailable: ['claude-opus-4-6', 'gpt-5.4'] });
   assert.equal(allowlist.selection?.reviewer.modelId, 'claude-opus-4-6');
 });
 
 test('rankModelsPerStage supports per-stage model allowlists', () => {
   const neighbors = [
     { record: makeEvalRecord('1', 'claude-opus-4-6', { plan: 0.95, implementation: 0.82, review: 0.93 }), descriptor: makeDescriptor(), similarity: 0.99 },
-    { record: makeEvalRecord('2', 'gpt-5.3-codex', { plan: 0.7, implementation: 0.96, review: 0.65 }), descriptor: makeDescriptor(), similarity: 0.98 },
+    { record: makeEvalRecord('2', 'gpt-5.4', { plan: 0.7, implementation: 0.96, review: 0.65 }), descriptor: makeDescriptor(), similarity: 0.98 },
     { record: makeEvalRecord('3', 'claude-haiku-4-5-20251001', { plan: 0.65, implementation: 0.6, review: 0.94 }), descriptor: makeDescriptor(), similarity: 0.97 },
   ];
 
   const constrained = rankModelsPerStage(neighbors, {
-    plannerModelsAvailable: ['gpt-5.3-codex'],
+    plannerModelsAvailable: ['gpt-5.4'],
     coderModelsAvailable: ['claude-opus-4-6'],
-    reviewerModelsAvailable: ['claude-opus-4-6', 'gpt-5.3-codex'],
+    reviewerModelsAvailable: ['claude-opus-4-6', 'gpt-5.4'],
   });
 
-  assert.equal(constrained.selection?.planner.modelId, 'gpt-5.3-codex');
+  assert.equal(constrained.selection?.planner.modelId, 'gpt-5.4');
   assert.equal(constrained.selection?.coder.modelId, 'claude-opus-4-6');
   assert.equal(constrained.selection?.reviewer.modelId, 'claude-opus-4-6');
 });
@@ -372,14 +373,14 @@ test('rankModelsPerStage supports per-stage model allowlists', () => {
 test('rankModelsPerStage gives runtime flat allowlist precedence over per-stage defaults', () => {
   const neighbors = [
     { record: makeEvalRecord('1', 'claude-opus-4-6', { plan: 0.95, implementation: 0.82, review: 0.93 }), descriptor: makeDescriptor(), similarity: 0.99 },
-    { record: makeEvalRecord('2', 'gpt-5.3-codex', { plan: 0.7, implementation: 0.96, review: 0.65 }), descriptor: makeDescriptor(), similarity: 0.98 },
+    { record: makeEvalRecord('2', 'gpt-5.4', { plan: 0.7, implementation: 0.96, review: 0.65 }), descriptor: makeDescriptor(), similarity: 0.98 },
     { record: makeEvalRecord('3', 'claude-haiku-4-5-20251001', { plan: 0.65, implementation: 0.6, review: 0.94 }), descriptor: makeDescriptor(), similarity: 0.97 },
   ];
 
   const constrained = rankModelsPerStage(neighbors, {
     modelsAvailable: ['claude-haiku-4-5-20251001'],
     plannerModelsAvailable: ['claude-opus-4-6'],
-    coderModelsAvailable: ['gpt-5.3-codex'],
+    coderModelsAvailable: ['gpt-5.4'],
     reviewerModelsAvailable: ['claude-opus-4-6'],
   });
 
@@ -391,7 +392,7 @@ test('rankModelsPerStage gives runtime flat allowlist precedence over per-stage 
 test('rankModelsPerStage applies per-role capability filters without affecting other roles', () => {
   const neighbors = [
     { record: makeEvalRecord('1', 'claude-opus-4-6', { plan: 0.95, implementation: 0.82, review: 0.93 }), descriptor: makeDescriptor(), similarity: 0.99 },
-    { record: makeEvalRecord('2', 'gpt-5.3-codex', { plan: 0.7, implementation: 0.96, review: 0.65 }), descriptor: makeDescriptor(), similarity: 0.98 },
+    { record: makeEvalRecord('2', 'gpt-5.4', { plan: 0.7, implementation: 0.96, review: 0.65 }), descriptor: makeDescriptor(), similarity: 0.98 },
     { record: makeEvalRecord('3', 'claude-haiku-4-5-20251001', { plan: 0.65, implementation: 0.6, review: 0.94 }), descriptor: makeDescriptor(), similarity: 0.97 },
   ];
   const { repoDir, cleanup } = makeRepoWithStageAwareData([]);
@@ -408,7 +409,7 @@ test('rankModelsPerStage applies per-role capability filters without affecting o
     }, 0.3, 0, repoDir);
 
     assert.equal(constrained.selection?.planner.modelId, 'claude-opus-4-6');
-    assert.equal(constrained.selection?.coder.modelId, 'gpt-5.3-codex');
+    assert.equal(constrained.selection?.coder.modelId, 'gpt-5.4');
     assert.equal(constrained.selection?.reviewer.modelId, 'claude-haiku-4-5-20251001');
   } finally {
     cleanup();
@@ -418,7 +419,7 @@ test('rankModelsPerStage applies per-role capability filters without affecting o
 test('rankModelsPerStage falls back when capability filtering empties a role', () => {
   const neighbors = [
     { record: makeEvalRecord('1', 'claude-opus-4-6', { plan: 0.95, implementation: 0.82, review: 0.93 }), descriptor: makeDescriptor(), similarity: 0.99 },
-    { record: makeEvalRecord('2', 'gpt-5.3-codex', { plan: 0.7, implementation: 0.96, review: 0.65 }), descriptor: makeDescriptor(), similarity: 0.98 },
+    { record: makeEvalRecord('2', 'gpt-5.4', { plan: 0.7, implementation: 0.96, review: 0.65 }), descriptor: makeDescriptor(), similarity: 0.98 },
   ];
   const { repoDir, cleanup } = makeRepoWithStageAwareData([]);
 
@@ -441,7 +442,7 @@ test('rankModelsPerStage falls back when capability filtering empties a role', (
 test('routeStageAware returns a stage-aware decision from backfilled evals', () => {
   const records = [
     makeEvalRecord('1', 'claude-opus-4-6', { plan: 0.96, implementation: 0.83, review: 0.91 }),
-    makeEvalRecord('2', 'gpt-5.3-codex', { plan: 0.72, implementation: 0.97, review: 0.68 }),
+    makeEvalRecord('2', 'gpt-5.4', { plan: 0.72, implementation: 0.97, review: 0.68 }),
     makeEvalRecord('3', 'claude-haiku-4-5-20251001', { plan: 0.66, implementation: 0.63, review: 0.95 }),
   ];
   const { repoDir, cleanup } = makeRepoWithStageAwareData(records);
@@ -451,7 +452,7 @@ test('routeStageAware returns a stage-aware decision from backfilled evals', () 
     assert.ok(decision);
     assert.equal(decision?.routingMode, 'stage-aware');
     assert.equal(decision?.planner, 'claude-opus-4-6');
-    assert.equal(decision?.coder, 'gpt-5.3-codex');
+    assert.equal(decision?.coder, 'gpt-5.4');
     assert.equal(decision?.reviewer, 'claude-haiku-4-5-20251001');
     assert.equal(decision?.neighborCount, 3);
     assert.ok((decision?.expectedCost || 0) > 0);
@@ -464,7 +465,7 @@ test('routeStageAware returns a stage-aware decision from backfilled evals', () 
 test('routeStageAware records capability fallback reasoning when a role filter empties out', () => {
   const records = [
     makeEvalRecord('1', 'claude-opus-4-6', { plan: 0.96, implementation: 0.83, review: 0.91 }),
-    makeEvalRecord('2', 'gpt-5.3-codex', { plan: 0.72, implementation: 0.97, review: 0.68 }),
+    makeEvalRecord('2', 'gpt-5.4', { plan: 0.72, implementation: 0.97, review: 0.68 }),
   ];
   const { repoDir, cleanup } = makeRepoWithStageAwareData(records, {
     router: {
@@ -558,7 +559,7 @@ test('routeStageAware falls back to router.models when a stage list is empty', (
 test('routeStageAware carries maxCostUsd through the decision', () => {
   const records = [
     makeEvalRecord('1', 'claude-opus-4-6', { plan: 0.96, implementation: 0.83, review: 0.91 }),
-    makeEvalRecord('2', 'gpt-5.3-codex', { plan: 0.72, implementation: 0.97, review: 0.68 }),
+    makeEvalRecord('2', 'gpt-5.4', { plan: 0.72, implementation: 0.97, review: 0.68 }),
     makeEvalRecord('3', 'claude-haiku-4-5-20251001', { plan: 0.66, implementation: 0.63, review: 0.95 }),
   ];
   const { repoDir, cleanup } = makeRepoWithStageAwareData(records);
@@ -581,9 +582,9 @@ test('loadStageAwareEvalRecords merges sources and prefers richer local duplicat
     metadata: undefined,
     workflowTokenUsage: undefined,
   });
-  const duplicateLocal = makeEvalRecord('dup', 'gpt-5.3-codex', { plan: 0.9, implementation: 0.95, review: 0.92 }, {
+  const duplicateLocal = makeEvalRecord('dup', 'gpt-5.4', { plan: 0.9, implementation: 0.95, review: 0.92 }, {
     workflowTokenUsage: {
-      'gpt-5.3-codex': { inputTokens: 10, outputTokens: 20, cacheCreationTokens: 0, cacheReadTokens: 0, costUsd: 3.25 },
+      'gpt-5.4': { inputTokens: 10, outputTokens: 20, cacheCreationTokens: 0, cacheReadTokens: 0, costUsd: 3.25 },
     },
   });
   const uniqueBackfilled = makeEvalRecord('unique', 'claude-haiku-4-5-20251001', { plan: 0.7, implementation: 0.72, review: 0.91 });
@@ -597,7 +598,7 @@ test('loadStageAwareEvalRecords merges sources and prefers richer local duplicat
     const records = loadStageAwareEvalRecords({ repoDir });
     assert.equal(records.length, 2);
     const deduped = records.find((record) => record.id === 'dup');
-    assert.equal(deduped?.modelId, 'gpt-5.3-codex');
+    assert.equal(deduped?.modelId, 'gpt-5.4');
     assert.ok(deduped?.workflowTokenUsage);
     assert.ok(records.some((record) => record.id === 'unique'));
   } finally {
@@ -638,8 +639,8 @@ test('routeStageAware uses fresh local evals even when aggregate history exists'
     makeEvalRecord('3', 'claude-opus-4-6', { plan: 0.94, implementation: 0.63, review: 0.94 }),
   ];
   const local = [
-    makeEvalRecord('4', 'gpt-5.3-codex', { plan: 0.7, implementation: 0.98, review: 0.68 }),
-    makeEvalRecord('5', 'gpt-5.3-codex', { plan: 0.69, implementation: 0.97, review: 0.67 }),
+    makeEvalRecord('4', 'gpt-5.4', { plan: 0.7, implementation: 0.98, review: 0.68 }),
+    makeEvalRecord('5', 'gpt-5.4', { plan: 0.69, implementation: 0.97, review: 0.67 }),
   ];
   const { repoDir, cleanup } = makeRepoWithStageAwareData({ local, backfilled: aggregated });
 
@@ -651,7 +652,7 @@ test('routeStageAware uses fresh local evals even when aggregate history exists'
       kNeighbors: 5,
     });
     assert.ok(decision);
-    assert.equal(decision?.coder, 'gpt-5.3-codex');
+    assert.equal(decision?.coder, 'gpt-5.4');
     assert.equal(decision?.planner, 'claude-opus-4-6');
   } finally {
     cleanup();
@@ -660,7 +661,7 @@ test('routeStageAware uses fresh local evals even when aggregate history exists'
 
 test('routeStageAware does not overweight duplicate records across sources', () => {
   const opus = makeEvalRecord('opus-1', 'claude-opus-4-6', { plan: 0.96, implementation: 0.82, review: 0.93 });
-  const codex = makeEvalRecord('codex-1', 'gpt-5.3-codex', { plan: 0.74, implementation: 0.97, review: 0.7 });
+  const codex = makeEvalRecord('codex-1', 'gpt-5.4', { plan: 0.74, implementation: 0.97, review: 0.7 });
   const haiku = makeEvalRecord('haiku-1', 'claude-haiku-4-5-20251001', { plan: 0.68, implementation: 0.62, review: 0.95 });
   const { repoDir, cleanup } = makeRepoWithStageAwareData({
     local: [codex],
@@ -679,7 +680,7 @@ test('routeStageAware does not overweight duplicate records across sources', () 
       kNeighbors: 5,
     });
     assert.ok(decision);
-    assert.equal(decision?.coder, 'gpt-5.3-codex');
+    assert.equal(decision?.coder, 'gpt-5.4');
     assert.equal(decision?.neighborCount, 3);
   } finally {
     cleanup();
@@ -689,7 +690,7 @@ test('routeStageAware does not overweight duplicate records across sources', () 
 test('routeStageAware still uses aggregate history when local evals are empty', () => {
   const backfilled = [
     makeEvalRecord('1', 'claude-opus-4-6', { plan: 0.96, implementation: 0.83, review: 0.91 }),
-    makeEvalRecord('2', 'gpt-5.3-codex', { plan: 0.72, implementation: 0.97, review: 0.68 }),
+    makeEvalRecord('2', 'gpt-5.4', { plan: 0.72, implementation: 0.97, review: 0.68 }),
     makeEvalRecord('3', 'claude-haiku-4-5-20251001', { plan: 0.66, implementation: 0.63, review: 0.95 }),
   ];
   const { repoDir, cleanup } = makeRepoWithStageAwareData({ local: [], backfilled });
@@ -707,7 +708,7 @@ test('routeStageAware still uses aggregate history when local evals are empty', 
 test('routeWorkflowStageAware attaches a challenge recommendation when policy triggers', () => {
   const records = [
     makeEvalRecord('1', 'claude-opus-4-6', { plan: 0.96, implementation: 0.83, review: 0.91 }),
-    makeEvalRecord('2', 'gpt-5.3-codex', { plan: 0.72, implementation: 0.97, review: 0.68 }),
+    makeEvalRecord('2', 'gpt-5.4', { plan: 0.72, implementation: 0.97, review: 0.68 }),
     makeEvalRecord('3', 'claude-haiku-4-5-20251001', { plan: 0.66, implementation: 0.63, review: 0.95 }),
   ];
   const { repoDir, cleanup } = makeRepoWithStageAwareData(records, {
@@ -722,7 +723,7 @@ test('routeWorkflowStageAware attaches a challenge recommendation when policy tr
         'claude-opus-4-6',
         'claude-sonnet-4-5-20250929',
         'claude-haiku-4-5-20251001',
-        'gpt-5.3-codex',
+        'gpt-5.4',
       ],
       defaultAgent: 'claude',
     },
@@ -737,8 +738,8 @@ test('routeWorkflowStageAware attaches a challenge recommendation when policy tr
   try {
     const decision = routeWorkflowStageAware('Build a backend feature with tests and review.', { repoDir });
     assert.equal(decision.challengeRecommendation?.shouldChallenge, true);
-    assert.equal(decision.challengeRecommendation?.reason, 'low-confidence');
-    assert.match(summarizeWorkflowRoute(decision, repoDir), /Challenge:\s+low-confidence/);
+    assert.equal(decision.challengeRecommendation?.reason, 'new-model');
+    assert.match(summarizeWorkflowRoute(decision, repoDir), /Challenge:\s+new-model/);
   } finally {
     cleanup();
   }
@@ -918,7 +919,7 @@ test('loadStageAwareEvalRecords merges additionalEvalsPaths into final record se
   const additionalDir = mkdtempSync(join(tmpdir(), 'stage-aware-additional-'));
   mkdirSync(join(additionalDir, '.wavemill', 'evals'), { recursive: true });
   const additionalRecords = [
-    makeEvalRecord('additional-1', 'gpt-5.3-codex', { plan: 0.88, implementation: 0.97, review: 0.7 }),
+    makeEvalRecord('additional-1', 'gpt-5.4', { plan: 0.88, implementation: 0.97, review: 0.7 }),
     makeEvalRecord('additional-2', 'claude-haiku-4-5-20251001', { plan: 0.68, implementation: 0.62, review: 0.95 }),
   ];
   const additionalPath = join(additionalDir, '.wavemill', 'evals', 'aggregated-evals.jsonl');
@@ -944,7 +945,7 @@ test('loadStageAwareEvalRecords merges additionalEvalsPaths into final record se
 test('rubric-aware: mode=off is byte-identical to baseline', () => {
   const records = [
     makeRubricEvalRecord('rubric-off-1', 'claude-opus-4-6', { plan: 0.96, implementation: 0.83, review: 0.91 }, 0.2),
-    makeEvalRecord('rubric-off-2', 'gpt-5.3-codex', { plan: 0.72, implementation: 0.97, review: 0.68 }),
+    makeEvalRecord('rubric-off-2', 'gpt-5.4', { plan: 0.72, implementation: 0.97, review: 0.68 }),
     makeRubricEvalRecord('rubric-off-3', 'claude-haiku-4-5-20251001', { plan: 0.66, implementation: 0.63, review: 0.95 }, 0.9),
   ];
   const baseline = makeRepoWithStageAwareData(records);
@@ -969,7 +970,7 @@ test('rubric-aware: records without rubric participate via scalar path', () => {
     )),
     ...Array.from({ length: 10 }, (_, index) => makeRubricEvalRecord(
       `rubric-mixed-aware-${index}`,
-      'gpt-5.3-codex',
+      'gpt-5.4',
       { plan: 0.78, implementation: 0.78, review: 0.78 },
       0.9,
     )),
@@ -989,7 +990,7 @@ test('rubric-aware: sparse coverage triggers fallback with rationale', () => {
   const records = [
     ...Array.from({ length: 45 }, (_, index) => makeEvalRecord(
       `rubric-sparse-legacy-${index}`,
-      index % 2 === 0 ? 'claude-opus-4-6' : 'gpt-5.3-codex',
+      index % 2 === 0 ? 'claude-opus-4-6' : 'gpt-5.4',
       { plan: 0.85, implementation: 0.85, review: 0.85 },
     )),
     ...Array.from({ length: 5 }, (_, index) => makeRubricEvalRecord(
@@ -1032,7 +1033,7 @@ test('rubric-aware: mode=on with sufficient coverage uses rubric scores', () => 
     )),
     ...Array.from({ length: 15 }, (_, index) => makeRubricEvalRecord(
       `rubric-on-codex-${index}`,
-      'gpt-5.3-codex',
+      'gpt-5.4',
       { plan: 0.7, implementation: 0.7, review: 0.7 },
       1,
     )),
@@ -1057,7 +1058,7 @@ test('rubric-aware: mode=on with sufficient coverage uses rubric scores', () => 
   try {
     const decision = routeStageAware('Build a backend feature with tests and review.', { repoDir, kNeighbors: 30 });
     assert.ok(decision);
-    assert.equal(decision?.planner, 'gpt-5.3-codex');
+    assert.equal(decision?.planner, 'gpt-5.4');
     assert.match(decision?.reasoning[0] || '', /rubric-aware \(mode=on/);
   } finally {
     cleanup();
@@ -1074,7 +1075,7 @@ test('rubric-aware: shadow mode emits scalar decision + side-channel', () => {
     )),
     ...Array.from({ length: 10 }, (_, index) => makeRubricEvalRecord(
       `rubric-shadow-codex-${index}`,
-      'gpt-5.3-codex',
+      'gpt-5.4',
       { plan: 0.7, implementation: 0.7, review: 0.7 },
       1,
     )),
@@ -1095,7 +1096,7 @@ test('rubric-aware: shadow mode emits scalar decision + side-channel', () => {
     assert.equal(shadowDecision?.coder, offDecision?.coder);
     assert.equal(shadowDecision?.reviewer, offDecision?.reviewer);
     assert.ok(shadowDecision?.shadowDecision);
-    assert.equal(shadowDecision?.shadowDecision?.planner, 'gpt-5.3-codex');
+    assert.equal(shadowDecision?.shadowDecision?.planner, 'gpt-5.4');
     assert.match(shadowDecision?.reasoning[0] || '', /rubric-aware \(mode=shadow/);
   } finally {
     off.cleanup();
@@ -1106,7 +1107,7 @@ test('rubric-aware: shadow mode emits scalar decision + side-channel', () => {
 test('rubric-aware: schema config loads with partial rubricAware section', () => {
   const records = [
     makeRubricEvalRecord('rubric-partial-1', 'claude-opus-4-6', { plan: 0.9, implementation: 0.9, review: 0.9 }, 0.8),
-    makeRubricEvalRecord('rubric-partial-2', 'gpt-5.3-codex', { plan: 0.8, implementation: 0.8, review: 0.8 }, 0.8),
+    makeRubricEvalRecord('rubric-partial-2', 'gpt-5.4', { plan: 0.8, implementation: 0.8, review: 0.8 }, 0.8),
   ];
   const { repoDir, cleanup } = makeRepoWithStageAwareData(records, makeRouterConfigWithRubricAware({ mode: 'on' }));
 
@@ -1120,7 +1121,7 @@ test('rubric-aware: schema config loads with partial rubricAware section', () =>
 });
 
 test('rubric-aware: comparison test non-regression on mixed dataset', () => {
-  const models = ['claude-opus-4-6', 'gpt-5.3-codex', 'claude-haiku-4-5-20251001'];
+  const models = ['claude-opus-4-6', 'gpt-5.4', 'claude-haiku-4-5-20251001'];
   const records = Array.from({ length: 100 }, (_, index) => {
     const modelId = models[index % models.length];
     const score = 0.72 + ((index % 9) * 0.02);
@@ -1167,6 +1168,482 @@ test('rubric-aware: comparison test non-regression on mixed dataset', () => {
     rubric.cleanup();
   }
 });
+
+
+function explorationRouterConfig(exploration: Record<string, unknown>) {
+  return {
+    router: {
+      enabled: true,
+      mode: 'stage-aware',
+      minRecords: 2,
+      minModels: 2,
+      kNeighbors: 6,
+      stageBlendWeight: 0.3,
+      defaultAgent: 'claude',
+      agentMap: {
+        'claude-opus-4-6': 'claude',
+        'claude-sonnet-4-5-20250929': 'claude',
+      },
+      exploration,
+    },
+  };
+}
+
+function explorationRecords(): EvalRecord[] {
+  return [
+    makeEvalRecord('a1', 'claude-opus-4-6', { plan: 0.92, implementation: 0.9, review: 0.91 }),
+    makeEvalRecord('a2', 'claude-opus-4-6', { plan: 0.9, implementation: 0.88, review: 0.9 }),
+    makeEvalRecord('a3', 'claude-opus-4-6', { plan: 0.91, implementation: 0.89, review: 0.92 }),
+    makeEvalRecord('b1', 'claude-sonnet-4-5-20250929', { plan: 0.7, implementation: 0.68, review: 0.69 }),
+    makeEvalRecord('b2', 'claude-sonnet-4-5-20250929', { plan: 0.72, implementation: 0.7, review: 0.71 }),
+    makeEvalRecord('b3', 'claude-sonnet-4-5-20250929', { plan: 0.71, implementation: 0.69, review: 0.7 }),
+  ];
+}
+
+test('exploration disabled keeps stage-aware routing argmax with no attribution', () => {
+  const { repoDir, cleanup } = makeRepoWithStageAwareData(
+    explorationRecords(),
+    explorationRouterConfig({ enabled: false }),
+  );
+
+  try {
+    const decision = routeStageAware('Build a backend feature with tests.', {
+      repoDir,
+      minRecords: 2,
+      minModels: 2,
+      kNeighbors: 6,
+    });
+    assert.ok(decision);
+    assert.equal(decision?.routingMode, 'stage-aware');
+    assert.equal(decision?.planner, 'claude-opus-4-6');
+    assert.equal(decision?.coder, 'claude-opus-4-6');
+    assert.equal(decision?.reviewer, 'claude-opus-4-6');
+    assert.equal(decision?.exploration, undefined);
+    assert.ok(!decision?.reasoning.some((line) => line.startsWith('exploration(')));
+  } finally {
+    cleanup();
+  }
+});
+
+test('exploration samples non-argmax candidates with a seeded randomFn', () => {
+  const { repoDir, cleanup } = makeRepoWithStageAwareData(
+    explorationRecords(),
+    explorationRouterConfig({ enabled: true, mode: 'epsilon', rate: 1, topK: 2 }),
+  );
+
+  try {
+    const decision = routeStageAware('Build a backend feature with tests.', {
+      repoDir,
+      minRecords: 2,
+      minModels: 2,
+      kNeighbors: 6,
+      randomFn: () => 0,
+    });
+    assert.ok(decision);
+    assert.equal(decision?.routingMode, 'stage-aware');
+    // rate=1 with two candidates per stage: every role samples the runner-up
+    assert.equal(decision?.planner, 'claude-sonnet-4-5-20250929');
+    assert.equal(decision?.coder, 'claude-sonnet-4-5-20250929');
+    assert.equal(decision?.reviewer, 'claude-sonnet-4-5-20250929');
+    assert.equal(decision?.exploration?.mode, 'epsilon');
+    assert.equal(decision?.exploration?.explored.length, 3);
+    for (const entry of decision?.exploration?.explored ?? []) {
+      assert.equal(entry.sampled, 'claude-sonnet-4-5-20250929');
+      assert.equal(entry.argmax, 'claude-opus-4-6');
+    }
+    assert.ok(decision?.reasoning[0].startsWith('exploration(epsilon'));
+  } finally {
+    cleanup();
+  }
+});
+
+test('exploration cost guard reverts to exploit when the sampled combo exceeds maxCostUsd', () => {
+  const expensiveDescriptor = (modelId: string) => makeDescriptor({
+    stages: {
+      planner: { model: modelId, cost_usd: 20 },
+      coder: { model: modelId, cost_usd: 60 },
+      reviewer: { model: modelId, cost_usd: 20 },
+    },
+  });
+  const records = [
+    ...explorationRecords().slice(0, 3),
+    makeEvalRecord('b1', 'claude-sonnet-4-5-20250929', { plan: 0.7, implementation: 0.68, review: 0.69 }, {
+      taskDescriptor: expensiveDescriptor('claude-sonnet-4-5-20250929'),
+    }),
+    makeEvalRecord('b2', 'claude-sonnet-4-5-20250929', { plan: 0.72, implementation: 0.7, review: 0.71 }, {
+      taskDescriptor: expensiveDescriptor('claude-sonnet-4-5-20250929'),
+    }),
+    makeEvalRecord('b3', 'claude-sonnet-4-5-20250929', { plan: 0.71, implementation: 0.69, review: 0.7 }, {
+      taskDescriptor: expensiveDescriptor('claude-sonnet-4-5-20250929'),
+    }),
+  ];
+  const { repoDir, cleanup } = makeRepoWithStageAwareData(
+    records,
+    explorationRouterConfig({ enabled: true, mode: 'epsilon', rate: 1, topK: 2 }),
+  );
+
+  try {
+    const decision = routeStageAware('Build a backend feature with tests.', {
+      repoDir,
+      minRecords: 2,
+      minModels: 2,
+      kNeighbors: 6,
+      maxCostUsd: 20,
+      randomFn: () => 0,
+    });
+    assert.ok(decision);
+    // Sampled combo costs ~100; exploit combo costs ~9 and stays selected.
+    assert.equal(decision?.planner, 'claude-opus-4-6');
+    assert.equal(decision?.coder, 'claude-opus-4-6');
+    assert.equal(decision?.reviewer, 'claude-opus-4-6');
+    assert.equal(decision?.exploration?.costGuardReverted, true);
+    assert.equal(decision?.exploration?.explored.length, 0);
+    assert.ok(decision?.reasoning.some((line) => line.includes('exploration(epsilon) reverted')));
+  } finally {
+    cleanup();
+  }
+});
+
+
+
+const PRIORS_ON = resolveExplorationConfig({ priors: { enabled: true, blendSamples: 10 } });
+
+function priorNeighbors(modelId: string, count: number, planScore: number, recordScore = 0.8) {
+  return Array.from({ length: count }, (_, index) => ({
+    record: makeEvalRecord(`${modelId}-${index}`, modelId, {
+      plan: planScore,
+      implementation: planScore,
+      review: planScore,
+    }, { score: recordScore }),
+    descriptor: makeDescriptor(),
+    similarity: 0.95,
+  }));
+}
+
+test('priors seed zero-record allowlisted models and rank the high-prior model first for planning', () => {
+  // Uses claude-opus-4-8 as the high-prior example (claude-fable-5 would be a
+  // higher prior but is temporarily disabled — see disabled-models.ts).
+  const neighbors = priorNeighbors('claude-sonnet-4-5-20250929', 3, 0.9);
+  const allowlists = {
+    plannerModelsAvailable: ['claude-opus-4-8', 'claude-sonnet-4-5-20250929'],
+    coderModelsAvailable: ['claude-opus-4-8', 'claude-sonnet-4-5-20250929'],
+    reviewerModelsAvailable: ['claude-opus-4-8', 'claude-sonnet-4-5-20250929'],
+  };
+
+  const withoutPriors = rankModelsPerStage(neighbors, allowlists, 0.3, 0);
+  assert.ok(!withoutPriors.rankings[0].candidates.some((candidate) => candidate.modelId === 'claude-opus-4-8'));
+
+  const withPriors = rankModelsPerStage(neighbors, allowlists, 0.3, 0, undefined, PRIORS_ON);
+  const plannerCandidates = withPriors.rankings[0].candidates;
+  const seeded = plannerCandidates.find((candidate) => candidate.modelId === 'claude-opus-4-8');
+  assert.ok(seeded, 'zero-record opus-4-8 should be seeded into planner candidates');
+  assert.equal(seeded!.support, 0);
+  // Zero support means pure registry prior (planning quality 97 -> 0.97)
+  assert.ok(Math.abs(seeded!.score - 0.97) < 1e-9, `expected prior score 0.97, got ${seeded!.score}`);
+  assert.equal(plannerCandidates[0].modelId, 'claude-opus-4-8');
+  assert.equal(withPriors.selection?.planner.modelId, 'claude-opus-4-8');
+});
+
+test('blended score converges to empirical as support reaches blendSamples', () => {
+  const neighbors = [
+    // 10 opus-4-8 records with weak plan outcomes: support >= blendSamples -> pure empirical 0.5
+    ...priorNeighbors('claude-opus-4-8', 10, 0.5, 0.5),
+    ...priorNeighbors('claude-sonnet-4-5-20250929', 3, 0.9),
+  ];
+  const allowlists = {
+    plannerModelsAvailable: ['claude-opus-4-8', 'claude-sonnet-4-5-20250929'],
+    coderModelsAvailable: ['claude-opus-4-8', 'claude-sonnet-4-5-20250929'],
+    reviewerModelsAvailable: ['claude-opus-4-8', 'claude-sonnet-4-5-20250929'],
+  };
+
+  const { rankings, selection } = rankModelsPerStage(neighbors, allowlists, 0.3, 0, undefined, PRIORS_ON);
+  const blended = rankings[0].candidates.find((candidate) => candidate.modelId === 'claude-opus-4-8');
+  assert.ok(blended);
+  assert.equal(blended!.support, 10);
+  // Full support: the registry planning prior no longer props up the weak empirical score
+  assert.ok(Math.abs(blended!.score - 0.5) < 1e-9, `expected converged empirical 0.5, got ${blended!.score}`);
+  assert.equal(selection?.planner.modelId, 'claude-sonnet-4-5-20250929');
+});
+
+test('ucbConstant boosts undersampled candidates in ranking without inflating reported score', () => {
+  const neighbors = [
+    ...priorNeighbors('claude-sonnet-4-5-20250929', 10, 0.8),
+    ...priorNeighbors('claude-opus-4-6', 1, 0.75),
+  ];
+  const ucbConfig = resolveExplorationConfig({ ucbConstant: 0.3 });
+
+  const baseline = rankModelsPerStage(neighbors, {}, 0.3, 0);
+  assert.equal(baseline.rankings[0].candidates[0].modelId, 'claude-sonnet-4-5-20250929');
+
+  const boosted = rankModelsPerStage(neighbors, {}, 0.3, 0, undefined, ucbConfig);
+  const [first, second] = boosted.rankings[0].candidates;
+  assert.equal(first.modelId, 'claude-opus-4-6');
+  // The bonus reorders selection, but the reported score stays bonus-free
+  assert.ok(first.score < second.score);
+  assert.equal(boosted.selection?.planner.modelId, 'claude-opus-4-6');
+  assert.ok(boosted.selection!.expectedSuccess <= 1);
+});
+
+test('routeStageAware with priors selects a zero-record allowlisted model end to end', () => {
+  const records = [
+    makeEvalRecord('s1', 'claude-sonnet-4-5-20250929', { plan: 0.85, implementation: 0.84, review: 0.86 }),
+    makeEvalRecord('s2', 'claude-sonnet-4-5-20250929', { plan: 0.86, implementation: 0.83, review: 0.85 }),
+    makeEvalRecord('g1', 'gpt-5.4', { plan: 0.8, implementation: 0.82, review: 0.79 }),
+    makeEvalRecord('g2', 'gpt-5.4', { plan: 0.81, implementation: 0.8, review: 0.8 }),
+  ];
+  const { repoDir, cleanup } = makeRepoWithStageAwareData(records, {
+    router: {
+      enabled: true,
+      mode: 'stage-aware',
+      minRecords: 2,
+      minModels: 2,
+      kNeighbors: 6,
+      stageBlendWeight: 0.3,
+      defaultAgent: 'claude',
+      availableModels: {
+        planner: ['claude-opus-4-8', 'claude-sonnet-4-5-20250929', 'gpt-5.4'],
+        coder: ['claude-sonnet-4-5-20250929', 'gpt-5.4'],
+        reviewer: ['claude-sonnet-4-5-20250929', 'gpt-5.4'],
+      },
+      exploration: { priors: { enabled: true, blendSamples: 10 } },
+    },
+  });
+
+  try {
+    const decision = routeStageAware('Build a backend feature with tests.', {
+      repoDir,
+      minRecords: 2,
+      minModels: 2,
+      kNeighbors: 6,
+    });
+    assert.ok(decision);
+    assert.equal(decision?.routingMode, 'stage-aware');
+    // claude-opus-4-8 has zero eval records but the highest planning prior in
+    // the planner allowlist (claude-fable-5 would rank higher but is disabled).
+    assert.equal(decision?.planner, 'claude-opus-4-8');
+    // Stages without that model in their allowlist keep empirical winners
+    assert.notEqual(decision?.coder, 'claude-opus-4-8');
+    assert.notEqual(decision?.reviewer, 'claude-opus-4-8');
+  } finally {
+    cleanup();
+  }
+});
+
+
+
+test('stage-less records do not crowd usable neighbors out of the KNN window', () => {
+  // Stage-less legacy records whose pre-task-style descriptors (empty
+  // languages, zero counts) are near-identical to fresh query descriptors —
+  // these used to win the whole neighbor window and force a null selection.
+  const queryLikeDescriptor = () => makeDescriptor({
+    signals: {
+      heuristic: {
+        task_type: 'feature',
+        languages: [],
+        framework_tags: [],
+        files_touched: 0,
+        repo_size_loc: 0,
+        description_tokens: 10,
+        is_greenfield: false,
+        has_migration: false,
+        has_ui: false,
+        has_tests: false,
+        cross_service: false,
+      },
+      learned: { complexity: 3, domain: 'backend', risk_flags: [] },
+    },
+    stages: undefined,
+  } as Parameters<typeof makeDescriptor>[0]);
+
+  const records = [
+    ...Array.from({ length: 10 }, (_, index) => makeEvalRecord(
+      `legacy-${index}`,
+      'claude-opus-4-6',
+      { plan: 0.9, implementation: 0.9, review: 0.9 },
+      { taskDescriptor: queryLikeDescriptor() },
+    )),
+    // Attributed records with realistic (less query-similar) descriptors
+    makeEvalRecord('a1', 'claude-opus-4-6', { plan: 0.92, implementation: 0.85, review: 0.9 }),
+    makeEvalRecord('a2', 'claude-opus-4-6', { plan: 0.9, implementation: 0.84, review: 0.91 }),
+    makeEvalRecord('b1', 'claude-sonnet-4-5-20250929', { plan: 0.7, implementation: 0.72, review: 0.7 }),
+    makeEvalRecord('b2', 'claude-sonnet-4-5-20250929', { plan: 0.71, implementation: 0.7, review: 0.72 }),
+  ];
+  const { repoDir, cleanup } = makeRepoWithStageAwareData(records);
+
+  try {
+    const decision = routeStageAware('Build a backend feature with tests.', {
+      repoDir,
+      minRecords: 2,
+      minModels: 2,
+      kNeighbors: 4,
+    });
+    assert.ok(decision, 'expected a stage-aware decision, not null');
+    assert.equal(decision?.routingMode, 'stage-aware');
+    assert.equal(decision?.planner, 'claude-opus-4-6');
+    assert.equal(decision?.neighborCount, 4);
+  } finally {
+    cleanup();
+  }
+});
+
+test('KNN keeps the full pool when too few records carry stage attribution', () => {
+  const records = [
+    ...Array.from({ length: 5 }, (_, index) => makeEvalRecord(
+      `legacy-${index}`,
+      'claude-opus-4-6',
+      { plan: 0.9, implementation: 0.9, review: 0.9 },
+      { taskDescriptor: makeSchemaV1Descriptor() },
+    )),
+    makeEvalRecord('a1', 'claude-opus-4-6', { plan: 0.92, implementation: 0.85, review: 0.9 }),
+  ];
+  const { repoDir, cleanup } = makeRepoWithStageAwareData(records);
+
+  try {
+    // rankable (1) < minRecords (3): the full pool is used, and with every
+    // neighbor stage-less the selection is null as before
+    const decision = routeStageAware('Build a backend feature with tests.', {
+      repoDir,
+      minRecords: 3,
+      minModels: 2,
+      kNeighbors: 5,
+    });
+    // Single rankable record cannot satisfy the previous behavior contract:
+    // decision may be null (no constraints configured in this fixture)
+    assert.equal(decision, null);
+  } finally {
+    cleanup();
+  }
+});
+
+test('records for disabled models never become stage candidates', () => {
+  const records = [
+    makeEvalRecord('d1', 'gpt-5.3-codex', { plan: 0.99, implementation: 0.99, review: 0.99 }),
+    makeEvalRecord('d2', 'gpt-5.3-codex', { plan: 0.98, implementation: 0.98, review: 0.98 }),
+    makeEvalRecord('a1', 'claude-opus-4-6', { plan: 0.8, implementation: 0.8, review: 0.8 }),
+    makeEvalRecord('a2', 'claude-opus-4-6', { plan: 0.81, implementation: 0.79, review: 0.8 }),
+    makeEvalRecord('b1', 'claude-sonnet-4-5-20250929', { plan: 0.7, implementation: 0.72, review: 0.7 }),
+  ];
+  const { repoDir, cleanup } = makeRepoWithStageAwareData(records);
+
+  try {
+    const decision = routeStageAware('Build a backend feature with tests.', {
+      repoDir,
+      minRecords: 2,
+      minModels: 2,
+      kNeighbors: 5,
+    });
+    assert.ok(decision);
+    // gpt-5.3-codex has the best historical scores but is disabled
+    assert.notEqual(decision?.planner, 'gpt-5.3-codex');
+    assert.notEqual(decision?.coder, 'gpt-5.3-codex');
+    assert.notEqual(decision?.reviewer, 'gpt-5.3-codex');
+    assert.equal(decision?.planner, 'claude-opus-4-6');
+  } finally {
+    cleanup();
+  }
+});
+
+
+
+function recencyBoostRepo(releasedDaysAgo: number, multiplier: number) {
+  const releasedAt = new Date(Date.now() - releasedDaysAgo * 86_400_000).toISOString().slice(0, 10);
+  const records = [
+    makeEvalRecord('a1', 'claude-opus-4-6', { plan: 0.9, implementation: 0.9, review: 0.9 }),
+    makeEvalRecord('a2', 'claude-opus-4-6', { plan: 0.91, implementation: 0.89, review: 0.9 }),
+    makeEvalRecord('b1', 'claude-sonnet-4-6', { plan: 0.8, implementation: 0.8, review: 0.8 }),
+    makeEvalRecord('b2', 'claude-sonnet-4-6', { plan: 0.81, implementation: 0.79, review: 0.8 }),
+    makeEvalRecord('c1', 'claude-sonnet-4-5-20250929', { plan: 0.7, implementation: 0.7, review: 0.7 }),
+    makeEvalRecord('c2', 'claude-sonnet-4-5-20250929', { plan: 0.71, implementation: 0.69, review: 0.7 }),
+  ];
+  return makeRepoWithStageAwareData(records, {
+    router: {
+      enabled: true,
+      mode: 'stage-aware',
+      minRecords: 2,
+      minModels: 2,
+      kNeighbors: 6,
+      stageBlendWeight: 0.3,
+      defaultAgent: 'claude',
+      exploration: {
+        enabled: true,
+        mode: 'epsilon',
+        rate: 0.9,
+        topK: 3,
+        newModelBoost: { windowDays: 45, multiplier },
+      },
+    },
+    modelRegistry: {
+      models: {
+        'claude-sonnet-4-6': { releasedAt },
+      },
+    },
+  });
+}
+
+// Explore only the planner: rate 0.9, rolls [explore, pick, skip, skip]
+const recencySequence = () => {
+  const values = [0, 0.6, 0.95, 0.95];
+  let index = 0;
+  return () => values[Math.min(index++, values.length - 1)];
+};
+
+test('recency boost steers exploration toward recently released models', () => {
+  const { repoDir, cleanup } = recencyBoostRepo(2, 5);
+  try {
+    const decision = routeStageAware('Build a backend feature with tests.', {
+      repoDir,
+      minRecords: 2,
+      minModels: 2,
+      kNeighbors: 6,
+      randomFn: recencySequence(),
+    });
+    assert.ok(decision);
+    // Boosted weights [~5, 1]: the 0.6 roll lands on the recent runner-up
+    assert.equal(decision?.planner, 'claude-sonnet-4-6');
+    assert.equal(decision?.exploration?.explored[0]?.recencyBoosted, true);
+    assert.ok(decision?.reasoning[0].includes('[recency-boosted]'));
+  } finally {
+    cleanup();
+  }
+});
+
+test('the same roll without the boost picks the older alternative', () => {
+  const { repoDir, cleanup } = recencyBoostRepo(2, 1);
+  try {
+    const decision = routeStageAware('Build a backend feature with tests.', {
+      repoDir,
+      minRecords: 2,
+      minModels: 2,
+      kNeighbors: 6,
+      randomFn: recencySequence(),
+    });
+    assert.ok(decision);
+    // Uniform weights [1, 1]: the 0.6 roll lands on the second alternative
+    assert.equal(decision?.planner, 'claude-sonnet-4-5-20250929');
+    assert.ok(!decision?.exploration?.explored[0]?.recencyBoosted);
+  } finally {
+    cleanup();
+  }
+});
+
+test('models outside the recency window get no boost', () => {
+  const { repoDir, cleanup } = recencyBoostRepo(100, 5);
+  try {
+    const decision = routeStageAware('Build a backend feature with tests.', {
+      repoDir,
+      minRecords: 2,
+      minModels: 2,
+      kNeighbors: 6,
+      randomFn: recencySequence(),
+    });
+    assert.ok(decision);
+    // releasedAt 100 days ago, window 45: identical to the no-boost outcome
+    assert.equal(decision?.planner, 'claude-sonnet-4-5-20250929');
+  } finally {
+    cleanup();
+  }
+});
+
 
 console.log(`\n--- Results: ${passed} passed, ${failed} failed ---`);
 if (failed > 0) {

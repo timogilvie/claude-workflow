@@ -792,7 +792,7 @@ is_actionable_state() {
         echo "actionable"
         return
         ;;
-      waiting-on-ci|waiting-on-eval-comparison)
+      waiting-on-ci|waiting-on-eval-comparison|waiting-on-merge-lane)
         echo "active"
         return
         ;;

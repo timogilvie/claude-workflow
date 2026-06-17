@@ -1,5 +1,4 @@
-import type { LLMCallOptions } from './llm-cli.ts';
-import { callClaude } from './llm-cli.ts';
+import { callHeadlessLLM, type HeadlessLLMOptions } from './headless-llm.ts';
 import type { OperatingMode } from './operating-mode.ts';
 
 const SURVIVAL_MAX_FILES = 5;
@@ -91,7 +90,7 @@ function parseSplitResponse(text: string): string[] {
 }
 
 export const scopeShrinkerDeps = {
-  callClaude,
+  callHeadlessLLM,
 };
 
 export type { OperatingMode } from './operating-mode.ts';
@@ -151,27 +150,24 @@ export function shouldSplitPacket(fullContent: string, mode: OperatingMode): boo
 export async function splitPacketIntoSubPackets(
   fullContent: string,
   mode: OperatingMode,
-  options: { claudeCmd?: string; repoDir?: string } = {}
+  options: { repoDir?: string } = {}
 ): Promise<string[]> {
   if (mode === 'normal') {
     return [fullContent];
   }
 
   const prompt = buildSplitPrompt(fullContent, mode);
-  const callOptions: Omit<LLMCallOptions, 'provider'> = {
+  const callOptions: HeadlessLLMOptions = {
     mode: 'stream',
-    cliCmd: options.claudeCmd || process.env.CLAUDE_CMD || 'claude',
     repoDir: options.repoDir,
     cwd: options.repoDir,
     taskType: 'planning',
-    cliFlags: [
-      '--append-system-prompt',
+    systemInstruction:
       'Return only raw JSON. Do not include markdown fences, commentary, or explanations.',
-    ],
   };
 
   try {
-    const result = await scopeShrinkerDeps.callClaude(prompt, callOptions);
+    const result = await scopeShrinkerDeps.callHeadlessLLM(prompt, callOptions);
     const packets = parseSplitResponse(result.text);
     return packets.length > 0 ? packets : [fullContent];
   } catch (error) {

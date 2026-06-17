@@ -15,6 +15,9 @@ SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
 LIB_DIR="$SCRIPT_DIR/shared/lib"
 DEFAULT_TOOLS_DIR="$SCRIPT_DIR/tools"
 export TOOLS_DIR="$DEFAULT_TOOLS_DIR"
+CONFIG_VERSION="$(
+  sed -n "s/.*CURRENT_CONFIG_VERSION = '\([^']*\)'.*/\1/p" "$LIB_DIR/config.ts" 2>/dev/null | head -n 1
+)"
 
 # Colors for output
 CYAN=$'\033[0;36m'
@@ -344,6 +347,10 @@ check_config_version() {
   local check_message current_version prompt_version
   check_message=$(extract_json_field "$check_output" "message")
   current_version=$(extract_json_field "$check_output" "currentVersion")
+  current_version="${current_version:-${CONFIG_VERSION:-}}"
+  if [[ -z "$check_message" && -n "$current_version" ]]; then
+    check_message="Config version check did not return details (current: $current_version)."
+  fi
   prompt_version="${current_version:-$(extract_json_field "$check_output" "configVersion")}"
 
   if [[ $check_status -eq 2 || $check_status -ne 1 ]]; then
@@ -355,7 +362,7 @@ check_config_version() {
   echo -e "${YELLOW}Notice:${NC} ${check_message:-$check_output}"
   echo -e "  The latest config includes features like eval, review, router, and permissions."
   echo ""
-  echo -e "Upgrade config to version ${prompt_version:-$VERSION}? This will preserve your existing settings."
+  echo -e "Upgrade config to version ${prompt_version:-${CONFIG_VERSION:-$VERSION}}? This will preserve your existing settings."
   read -p "[Y/n] " -n 1 -r
   echo
 
@@ -455,6 +462,21 @@ run_mill() {
 run_init() {
   local target=".wavemill-config.json"
   local context_exists=false
+  local linear_api_status="not found"
+  local hokusai_api_status="not found"
+  local detected_linear_project=""
+  local linear_project=""
+  local max_parallel="3"
+  local use_hokusai_routing="false"
+  local hokusai_router_mode="auto"
+  local hokusai_data_submission="false"
+  local hokusai_contributions_enabled="false"
+  local review_enabled="true"
+  local integration_enabled="false"
+  local merge_queue_enabled="false"
+  local auto_eval="true"
+  local linear_project_json=""
+  local router_hokusai_block=""
 
   # Check if config already exists
   if [[ -f "$target" ]]; then
@@ -464,16 +486,210 @@ run_init() {
     [[ $REPLY =~ ^[Yy]$ ]] || exit 0
   fi
 
+  has_env_or_dotenv_var() {
+    local var_name="$1"
+    if [[ -n "${!var_name:-}" ]]; then
+      return 0
+    fi
+    if [[ -f ".env" ]] && grep -Eq "^[[:space:]]*(export[[:space:]]+)?${var_name}=" ".env"; then
+      return 0
+    fi
+    return 1
+  }
+
+  get_env_or_dotenv_var() {
+    local var_name="$1"
+    local line=""
+    local value=""
+    if [[ -n "${!var_name:-}" ]]; then
+      printf '%s' "${!var_name}"
+      return 0
+    fi
+    if [[ ! -f ".env" ]]; then
+      return 0
+    fi
+    line="$(grep -E "^[[:space:]]*(export[[:space:]]+)?${var_name}=" ".env" 2>/dev/null | tail -n 1 || true)"
+    [[ -n "$line" ]] || return 0
+    value="${line#*=}"
+    value="${value%$'\r'}"
+    if [[ "$value" == \"*\" && "$value" == *\" ]]; then
+      value="${value#\"}"
+      value="${value%\"}"
+    elif [[ "$value" == \'*\' && "$value" == *\' ]]; then
+      value="${value#\'}"
+      value="${value%\'}"
+    fi
+    printf '%s' "$value"
+  }
+
+  json_escape() {
+    local value="$1"
+    value="${value//\\/\\\\}"
+    value="${value//\"/\\\"}"
+    value="${value//$'\n'/\\n}"
+    printf '%s' "$value"
+  }
+
+  prompt_line() {
+    local prompt="$1"
+    local default_value="$2"
+    local answer=""
+    if [[ -n "$default_value" ]]; then
+      read -r -p "$prompt [$default_value] " answer
+      printf '%s' "${answer:-$default_value}"
+    else
+      read -r -p "$prompt " answer
+      printf '%s' "$answer"
+    fi
+  }
+
+  prompt_yes_no() {
+    local prompt="$1"
+    local default_value="$2"
+    local answer=""
+    local suffix="[y/N]"
+    [[ "$default_value" == "true" ]] && suffix="[Y/n]"
+    while true; do
+      read -r -p "$prompt $suffix " answer
+      if [[ -z "$answer" ]]; then
+        [[ "$default_value" == "true" ]] && return 0 || return 1
+      fi
+      case "$answer" in
+        [Yy]|[Yy][Ee][Ss]) return 0 ;;
+        [Nn]|[Nn][Oo]) return 1 ;;
+        *) echo "Please answer y or n." ;;
+      esac
+    done
+  }
+
+  prompt_positive_int() {
+    local prompt="$1"
+    local default_value="$2"
+    local answer=""
+    while true; do
+      answer="$(prompt_line "$prompt" "$default_value")"
+      if [[ "$answer" =~ ^[1-9][0-9]*$ ]]; then
+        printf '%s' "$answer"
+        return 0
+      fi
+      echo "Please enter a positive whole number."
+    done
+  }
+
+  detect_linear_project() {
+    local api_key
+    local response=""
+    local project=""
+    api_key="$(get_env_or_dotenv_var "LINEAR_API_KEY")"
+    if [[ -z "$api_key" ]]; then
+      return 0
+    fi
+    if ! command -v curl >/dev/null 2>&1 || ! command -v node >/dev/null 2>&1; then
+      return 0
+    fi
+    response="$(curl -fsS --max-time 3 https://api.linear.app/graphql \
+      -H "Content-Type: application/json" \
+      -H "Authorization: $api_key" \
+      --data '{"query":"query { projects(first: 20) { nodes { name state teams { nodes { key name } } } } }"}' 2>/dev/null || true)"
+    [[ -n "$response" ]] || return 0
+    project="$(printf '%s' "$response" | node -e '
+const fs = require("fs");
+const input = fs.readFileSync(0, "utf8");
+try {
+  const data = JSON.parse(input);
+  const projects = data?.data?.projects?.nodes || [];
+  const active = projects.find((project) => String(project.state || "").toLowerCase() !== "completed");
+  const selected = active || projects[0];
+  if (selected?.name) process.stdout.write(selected.name);
+} catch {}
+' 2>/dev/null || true)"
+    printf '%s' "$project"
+  }
+
+  if has_env_or_dotenv_var "LINEAR_API_KEY"; then
+    linear_api_status="found"
+  fi
+  if has_env_or_dotenv_var "HOKUSAI_API_TOKEN" || has_env_or_dotenv_var "HOKUSAI_API_KEY"; then
+    hokusai_api_status="found"
+  fi
+  if [[ -n "${LINEAR_PROJECT:-}" ]]; then
+    detected_linear_project="$LINEAR_PROJECT"
+  elif [[ "$linear_api_status" == "found" ]]; then
+    detected_linear_project="$(detect_linear_project)"
+  fi
+
+  echo -e "${CYAN}Wavemill setup${NC}"
+  echo "Wavemill can run Linear-backed tasks through expand, plan, code, review, and merge stages."
+  echo "Press Enter to accept the recommended defaults. API keys are read from your shell or .env and are not written to config."
+  echo ""
+  echo -e "${CYAN}Detected:${NC}"
+  echo "  LINEAR_API_KEY: $linear_api_status"
+  echo "  HOKUSAI_API_TOKEN/HOKUSAI_API_KEY: $hokusai_api_status"
+  echo ""
+
+  if [[ "$linear_api_status" != "found" ]]; then
+    echo -e "${YELLOW}Linear API key not found.${NC} Add LINEAR_API_KEY to your shell or .env before running Linear-backed commands."
+  fi
+  linear_project="$(prompt_line "Linear project name for backlog, expand, and plan" "$detected_linear_project")"
+  echo ""
+
+  echo -e "${CYAN}Workflow defaults${NC}"
+  max_parallel="$(prompt_positive_int "How many tasks should mill run at once?" "$max_parallel")"
+  if prompt_yes_no "Enable review stage after coding?" "$review_enabled"; then
+    review_enabled="true"
+  else
+    review_enabled="false"
+  fi
+  if prompt_yes_no "Enable autonomous merge/integration queue?" "$integration_enabled"; then
+    integration_enabled="true"
+    merge_queue_enabled="true"
+  else
+    integration_enabled="false"
+    merge_queue_enabled="false"
+  fi
+  echo ""
+
+  echo -e "${CYAN}Routing and learning${NC}"
+  if [[ "$hokusai_api_status" == "found" ]]; then
+    if prompt_yes_no "Use Hokusai for routing when available?" "true"; then
+      use_hokusai_routing="true"
+      hokusai_router_mode="hokusai"
+    fi
+  else
+    if prompt_yes_no "Use Hokusai for routing later if HOKUSAI_API_TOKEN is added?" "false"; then
+      use_hokusai_routing="true"
+      hokusai_router_mode="auto"
+    fi
+  fi
+  if prompt_yes_no "Contribute redacted workflow outcome data to Hokusai?" "$hokusai_data_submission"; then
+    hokusai_data_submission="true"
+    hokusai_contributions_enabled="true"
+  else
+    hokusai_data_submission="false"
+    hokusai_contributions_enabled="false"
+  fi
+  echo ""
+
+  linear_project_json="$(json_escape "$linear_project")"
+  if [[ "$use_hokusai_routing" == "true" ]]; then
+    router_hokusai_block=',
+    "hokusai": {
+      "endpoint": "https://api.hokus.ai/api/v1/models/30/predict",
+      "apiKeyEnv": "HOKUSAI_API_TOKEN",
+      "timeout": 5000
+    }'
+  fi
+
   # Create config file
-  cat > "$target" <<'INIT_EOF'
+  cat > "$target" <<INIT_EOF
 {
-  "configVersion": "1.4.0",
+  "configVersion": "1.4.1",
   "linear": {
-    "project": ""
+    "project": "$linear_project_json"
   },
   "mill": {
     "session": "wavemill",
-    "maxParallel": 7,
+    "maxParallel": $max_parallel,
     "pollSeconds": 10,
     "baseBranch": "main",
     "worktreeRoot": "../worktrees",
@@ -504,7 +720,9 @@ run_init() {
       "provider": "anthropic"
     },
     "pricing": {
+      "claude-fable-5": { "inputCostPerMTok": 10, "outputCostPerMTok": 50, "cacheWriteCostPerMTok": 12.50, "cacheReadCostPerMTok": 1.00 },
       "claude-opus-4-6": { "inputCostPerMTok": 5, "outputCostPerMTok": 25, "cacheWriteCostPerMTok": 6.25, "cacheReadCostPerMTok": 0.50 },
+      "claude-opus-4-8": { "inputCostPerMTok": 5, "outputCostPerMTok": 25, "cacheWriteCostPerMTok": 6.25, "cacheReadCostPerMTok": 0.50 },
       "claude-opus-4-7": { "inputCostPerMTok": 5, "outputCostPerMTok": 25, "cacheWriteCostPerMTok": 6.25, "cacheReadCostPerMTok": 0.50 },
       "claude-sonnet-4-6": { "inputCostPerMTok": 3, "outputCostPerMTok": 15, "cacheWriteCostPerMTok": 3.75, "cacheReadCostPerMTok": 0.30 },
       "claude-sonnet-4-5-20250929": { "inputCostPerMTok": 3, "outputCostPerMTok": 15, "cacheWriteCostPerMTok": 3.75, "cacheReadCostPerMTok": 0.30 },
@@ -523,24 +741,38 @@ run_init() {
       "selfReviewBlocker": 0.20
     }
   },
-  "autoEval": true,
+  "autoEval": $auto_eval,
   "hokusai": {
     "dataSubmission": {
-      "enabled": false,
+      "enabled": $hokusai_data_submission,
       "consentVersion": "1.0",
       "endpoint": "https://api.hokusai.dev/v1/submit"
+    },
+    "contributions": {
+      "enabled": $hokusai_contributions_enabled,
+      "endpoint": null,
+      "endpointTokenEnv": "HOKUSAI_API_TOKEN",
+      "exportPath": ".wavemill/hokusai/contributions.jsonl"
     }
   },
   "review": {
     "maxIterations": 3,
-    "enabled": true,
+    "enabled": $review_enabled,
     "metricsLog": ".wavemill/review-log.json",
     "personas": ["general"]
   },
   "challenge": {
     "enabled": true,
-    "rate": 0.10,
+    "rate": 0.50,
+    "recommendationRate": 1,
+    "stageWeights": {
+      "plan": 0.25,
+      "implementation": 0.50,
+      "review": 0.25
+    },
     "models": [
+      "claude-fable-5",
+      "claude-opus-4-8",
       "claude-sonnet-4-6",
       "claude-sonnet-4-5-20250929",
       "claude-opus-4-7",
@@ -558,11 +790,30 @@ run_init() {
     "minRecords": 20,
     "minModels": 2,
     "models": [],
-    "availableModels": {
-      "planner": ["claude-opus-4-7", "claude-sonnet-4-6", "gpt-5.4", "gpt-5.5"]
+    "exploration": {
+      "enabled": true,
+      "mode": "epsilon",
+      "rate": 0.20,
+      "topK": 4,
+      "ucbConstant": 0.08,
+      "priors": {
+        "enabled": true,
+        "blendSamples": 10
+      },
+      "newModelBoost": {
+        "windowDays": 45,
+        "multiplier": 3
+      }
+    },
+    "coverage": {
+      "minRecordsPerModelStage": 15,
+      "maxStageShare": 0.70,
+      "window": 50
     },
     "defaultAgent": "claude",
     "agentMap": {
+      "claude-fable-5": "claude",
+      "claude-opus-4-8": "claude",
       "claude-opus-4-7": "claude",
       "claude-sonnet-4-6": "claude",
       "claude-opus-4-6": "claude",
@@ -571,9 +822,28 @@ run_init() {
       "gpt-5.4": "codex",
       "gpt-5.5": "codex"
     },
-    "mode": "auto",
+    "mode": "$hokusai_router_mode",
     "llmModel": "gpt-4o-mini",
-    "llmProvider": "openai"
+    "llmProvider": "openai"$router_hokusai_block
+  },
+  "challengeScheduler": {
+    "enabled": true,
+    "newModelChallengeCount": 25
+  },
+  "integration": {
+    "enabled": $integration_enabled,
+    "integrationBranch": "auto/integration",
+    "promotionBranch": "main",
+    "mergeMethod": "squash",
+    "deleteBranchAfterMerge": true,
+    "haltOnRed": true,
+    "requiredChecks": [],
+    "highRiskPolicy": "manual",
+    "useMillSession": true
+  },
+  "mergeQueue": {
+    "enabled": $merge_queue_enabled,
+    "maxConcurrentCandidates": 1
   },
   "validation": {
     "enabled": true,
@@ -630,7 +900,17 @@ run_init() {
 INIT_EOF
 
   echo -e "${GREEN}✓${NC} Created $target"
-  echo -e "  Edit ${CYAN}linear.project${NC} to set your Linear project name."
+  if [[ -n "$linear_project" ]]; then
+    echo -e "  Linear project: ${CYAN}$linear_project${NC}"
+  else
+    echo -e "  Set ${CYAN}linear.project${NC} later, or use ${CYAN}LINEAR_PROJECT${NC} for a one-off override."
+  fi
+  echo -e "  Parallel tasks: ${CYAN}$max_parallel${NC}"
+  if [[ "$use_hokusai_routing" == "true" ]]; then
+    echo -e "  Hokusai routing: ${CYAN}$hokusai_router_mode${NC}"
+  else
+    echo -e "  Hokusai routing: ${CYAN}not preferred; local auto routing remains enabled${NC}"
+  fi
   echo ""
 
   # Check if project context already exists

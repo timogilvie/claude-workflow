@@ -28,12 +28,12 @@ agent_tmux_target() {
 agent_resolve_from_model() {
   local model="$1"
   case "$model" in
-    opus|sonnet|haiku|opus-*|sonnet-*|haiku-*) echo "claude" ;;
+    fable|opus|sonnet|haiku|fable-*|opus-*|sonnet-*|haiku-*) echo "claude" ;;
     gpt-5.5|gpt-5.5-*|gemini-pro|gemini-pro-*) echo "codex" ;;
     claude-*) echo "claude" ;;
     deepseek-*) echo "claude" ;;
     gpt-*|o[0-9]*) echo "codex" ;;
-    *) echo "${AGENT_CMD:-claude}" ;;
+    *) echo "${AGENT_CMD:-codex}" ;;
   esac
 }
 
@@ -682,9 +682,9 @@ You are in the **ROUTING PHASE** of a multi-phase workflow. Your job is to:
 
 3. Save the routing results to $routing_path as JSON:
    {
-     "planner": "claude-sonnet-4-6",
-     "coder": "claude-opus-4-8",
-     "reviewer": "claude-sonnet-4-6",
+     "planner": "gpt-5.4",
+     "coder": "gpt-5.5",
+     "reviewer": "gpt-5.4",
      "planDepth": "light",
      "codeDepth": "medium",
      "reviewMode": "static"
@@ -700,9 +700,9 @@ You are in the **ROUTING PHASE** of a multi-phase workflow. Your job is to:
 ### Important Notes
 - Use the routing tool's recommendations directly - don't override them
 - If the routing tool fails, use sensible defaults:
-  - planner: claude-sonnet-4-6
-  - coder: claude-opus-4-8
-  - reviewer: claude-sonnet-4-6
+  - planner: gpt-5.4
+  - coder: gpt-5.5
+  - reviewer: gpt-5.4
   - planDepth: light
   - codeDepth: medium
   - reviewMode: static
@@ -733,6 +733,7 @@ build_planning_prompt() {
   local issue_context="$6" status_file="$7" tools_dir="$8" slug="$9"
   local plan_depth="${10:-light}" agent_cmd="${11:-claude}" operating_mode="${12:-normal}"
   local feature_dir="$wt_dir/features/$slug"
+  local routing_repo_dir="${REPO_DIR:-$wt_dir}"
   local task_context_path="$feature_dir/selected-task.json"
   local plan_path="$feature_dir/plan.md"
   local rubric_snippet=""
@@ -803,6 +804,7 @@ Scope the plan to the minimum viable change:
     template_content="${template_content//\{\{TOOLS_DIR\}\}/$tools_dir}"
     template_content="${template_content//\{\{ISSUE\}\}/$issue}"
     template_content="${template_content//\{\{WT_DIR\}\}/$wt_dir}"
+    template_content="${template_content//\{\{ROUTER_REPO_DIR\}\}/$routing_repo_dir}"
     template_content="${template_content//\{\{FEATURE_DIR\}\}/$feature_dir}"
     template_content="${template_content//\{\{TASK_CONTEXT_PATH\}\}/$task_context_path}"
     template_content="${template_content//\{\{PLAN_PATH\}\}/$plan_path}"

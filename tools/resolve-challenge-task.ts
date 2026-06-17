@@ -8,6 +8,10 @@ import {
   pickChallengeWorkflowsWithContext,
   getChallengeModelPool,
   canRunChallenge,
+  chooseChallengeStage,
+  decideChallengeLaunch,
+  extractChallengeRecommendation,
+  variedModelForStage,
 } from '../shared/lib/challenge-mode.ts';
 import { resolveAgent } from '../shared/lib/model-router.ts';
 import { readBothRouteArtifacts } from '../shared/lib/route-artifact.ts';
@@ -91,22 +95,49 @@ runTool({
       return;
     }
 
-    const rate = challenge.rate ?? 0.10;
-    if (Math.random() >= rate) {
-      console.log(JSON.stringify({ ...base, reason: 'roll_not_selected' }));
+    const routeArtifacts = featureDir
+      ? readBothRouteArtifacts(featureDir)
+      : { bootstrap: null, expanded: null };
+    const recommendation = extractChallengeRecommendation(routeArtifacts);
+
+    const launchDecision = decideChallengeLaunch({
+      pool,
+      primaryModel,
+      rate: challenge.rate ?? 0.10,
+      recommendationRate: challenge.recommendationRate,
+      recommendation,
+    });
+
+    if (!launchDecision.launch) {
+      console.log(JSON.stringify({
+        ...base,
+        reason: 'roll_not_selected',
+        selectionPath: launchDecision.selectionPath,
+      }));
       return;
     }
+
+    const forcedChallengerModel = launchDecision.forcedChallengerModel;
+
+    // A recommendation carrying a stage (low-data-stage, or new-model with a
+    // least-covered cell) pins the varied stage; otherwise sample from the
+    // configured weights (implementation-only by default).
+    const challengeStage = chooseChallengeStage({
+      weights: challenge.stageWeights,
+      recommendedStage: launchDecision.recommendation?.stage,
+    });
 
     // If task file provided, use workflow routing for both sides
     let pair;
     if (featureDir) {
-      const routeArtifacts = readBothRouteArtifacts(featureDir);
       pair = pickChallengeWorkflowsWithContext(pool, {
         pairId: issue,
         issueId: issue,
         slug,
         prompt: title,
         primaryModel,
+        forcedChallengerModel,
+        challengeStage,
         agentMap: router.agentMap,
         defaultAgent,
         repoDir,
@@ -122,6 +153,8 @@ runTool({
           slug,
           prompt,
           primaryModel,
+          forcedChallengerModel,
+          challengeStage,
           agentMap: router.agentMap,
           defaultAgent,
           repoDir,
@@ -134,17 +167,19 @@ runTool({
           issueId: issue,
           slug,
           primaryModel,
+          forcedChallengerModel,
           agentMap: router.agentMap,
           defaultAgent,
         });
       }
-    } else {
+    } else if (!pair) {
       // No task file provided - use model-only selection (backward compatibility)
       pair = pickChallengeModels(pool, {
         pairId: issue,
         issueId: issue,
         slug,
         primaryModel,
+        forcedChallengerModel,
         agentMap: router.agentMap,
         defaultAgent,
       });
@@ -155,6 +190,14 @@ runTool({
       return;
     }
 
+    // The pair may have fallen back to coder variation (no route context, or
+    // route missing the requested stage model) — report the effective stage.
+    const effectiveStage = pair.challengeStage || 'implementation';
+    const challengerVaried = variedModelForStage(pair.challenger, effectiveStage);
+    const challengerSource = forcedChallengerModel && challengerVaried === forcedChallengerModel
+      ? 'recommendation'
+      : 'random';
+
     console.log(JSON.stringify({
       issue,
       slug,
@@ -164,8 +207,24 @@ runTool({
       decisionSource: pair.routeContext?.decisionSource || 'bootstrap',
       reason: 'selected',
       primaryModel,
+      selectionPath: launchDecision.selectionPath,
+      challengerSource,
+      challengeStage: effectiveStage,
+      ...(launchDecision.recommendation
+        ? {
+            challengeRecommendation: {
+              reason: launchDecision.recommendation.reason,
+              challengerModel: launchDecision.recommendation.challengerModel,
+              defaultModel: launchDecision.recommendation.defaultModel,
+              stage: launchDecision.recommendation.stage,
+            },
+          }
+        : {}),
       routeContext: pair.routeContext,
-      entries: [pair.primary, pair.challenger],
+      entries: [
+        { ...pair.primary, variedModel: variedModelForStage(pair.primary, effectiveStage) },
+        { ...pair.challenger, variedModel: challengerVaried },
+      ],
     }));
   },
 });

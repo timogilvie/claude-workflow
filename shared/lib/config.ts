@@ -31,7 +31,7 @@ import type {
  * Current config format version.
  * Increment when making breaking changes to config structure.
  */
-export const CURRENT_CONFIG_VERSION = '1.4.0';
+export const CURRENT_CONFIG_VERSION = '1.4.1';
 
 export interface MillConfig {
   session?: string;
@@ -162,6 +162,7 @@ export interface ModelCapabilitiesOverride {
   costPerMillionInputTokensUsd?: number;
   costPerMillionOutputTokensUsd?: number;
   agent?: string;
+  releasedAt?: string;
 }
 
 export interface ModelRegistryConfig {
@@ -237,6 +238,27 @@ export interface RouterConfig {
   capabilityFiltering?: {
     enabled?: boolean;
   };
+  exploration?: {
+    enabled?: boolean;
+    mode?: 'softmax' | 'epsilon';
+    rate?: number;
+    temperature?: number;
+    topK?: number;
+    ucbConstant?: number;
+    priors?: {
+      enabled?: boolean;
+      blendSamples?: number;
+    };
+    newModelBoost?: {
+      windowDays?: number;
+      multiplier?: number;
+    };
+  };
+  coverage?: {
+    minRecordsPerModelStage?: number;
+    maxStageShare?: number;
+    window?: number;
+  };
   hokusai?: HokusaiRouterConfig;
   difficulty?: DifficultyClassifierConfig;
 }
@@ -248,11 +270,17 @@ export interface ChallengeGateConfig {
 export interface ChallengeConfig {
   enabled?: boolean;
   rate?: number;
+  recommendationRate?: number;
   models?: string[] | null;
   allowDeepseek?: boolean;
   comparisonModel?: string;
   autoMergeWinner?: boolean;
   gate?: ChallengeGateConfig;
+  stageWeights?: {
+    plan?: number;
+    implementation?: number;
+    review?: number;
+  };
 }
 
 export interface ChallengeSchedulerConfig {

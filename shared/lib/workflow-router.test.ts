@@ -386,6 +386,7 @@ await test('policy routing can return DeepSeek when explicitly configured', () =
   process.env.TEST_DEEPSEEK_KEY = 'test-key';
   try {
     writeQuotaState(repoDir, {
+      'claude-fable-5': 'exhausted',
       'claude-opus-4-8': 'exhausted',
       'claude-opus-4-7': 'exhausted',
       'claude-opus-4-6': 'exhausted',
@@ -656,6 +657,7 @@ await test('auto mode uses degraded haiku-only routing in survival mode', async 
   });
 
   writeQuotaState(repoDir, {
+    'claude-fable-5': 'exhausted',
     'claude-opus-4-8': 'exhausted',
     'claude-opus-4-7': 'exhausted',
     'claude-opus-4-6': 'exhausted',
@@ -691,6 +693,7 @@ await test('auto mode excludes opus in constrained mode', async () => {
   });
 
   writeQuotaState(repoDir, {
+    'claude-fable-5': 'degrading',
     'claude-opus-4-8': 'degrading',
     'claude-opus-4-7': 'degrading',
     'claude-opus-4-6': 'degrading',
@@ -718,6 +721,7 @@ await test('auto mode emits a constrained router transparency line when quota is
   });
 
   writeQuotaState(repoDir, {
+    'claude-fable-5': 'degrading',
     'claude-opus-4-8': 'degrading',
     'claude-opus-4-7': 'degrading',
     'claude-opus-4-6': 'degrading',
@@ -729,7 +733,7 @@ await test('auto mode emits a constrained router transparency line when quota is
     const { result, stderr } = await captureStderr(() =>
       routeWorkflowAuto('Build a backend feature with tests and review.', { repoDir })
     );
-    assert.match(stderr, /\[router] constrained mode: gpt-5\.5 quota is degrading; reserving it for high-complexity steps/);
+    assert.match(stderr, /\[router] constrained mode: claude-fable-5 quota is degrading; reserving it for high-complexity steps/);
     assert.ok(result.reasoning[0].includes('Constrained mode'));
   } finally {
     cleanup();
@@ -784,6 +788,7 @@ await test('policy routing logs same-class frontier substitution distinctly', as
   const { repoDir, cleanup } = makeRepo(frontierSiblingConfig());
 
   writeQuotaState(repoDir, {
+    'claude-fable-5': 'exhausted',
     'claude-opus-4-8': 'exhausted',
     'claude-opus-4-7': 'exhausted',
     'claude-opus-4-6': 'exhausted',
@@ -815,6 +820,7 @@ await test('policy routing logs class downgrade without same-class metadata', as
   });
 
   writeQuotaState(repoDir, {
+    'claude-fable-5': 'degrading',
     'claude-opus-4-8': 'degrading',
     'claude-opus-4-7': 'degrading',
     'claude-opus-4-6': 'degrading',
@@ -829,6 +835,8 @@ await test('policy routing logs class downgrade without same-class metadata', as
         { repoDir, taskDifficulty: 'hard', skipDifficultyClassification: true }
       ))
     );
+    // claude-fable-5 leads the ladder but is temporarily disabled and filtered
+    // from the pool, so the top viable frontier downgraded here is gpt-5.5.
     assert.match(stderr, /\[(planner|coder|reviewer)] policy adjustment: gpt-5\.5 -> claude-sonnet-4-6 \(quota=degrading\)/);
     assert.doesNotMatch(stderr, /same-class=/);
   } finally {
@@ -880,6 +888,7 @@ await test('auto mode logs frontier substitution without constrained banner when
   });
 
   writeQuotaState(repoDir, {
+    'claude-fable-5': 'exhausted',
     'claude-opus-4-8': 'exhausted',
     'claude-opus-4-7': 'exhausted',
     'claude-opus-4-6': 'exhausted',
@@ -921,6 +930,7 @@ await test('auto mode routes to healthy frontier sibling when anthropic frontier
   const { repoDir, cleanup } = makeRepo(frontierSiblingConfig());
 
   writeQuotaState(repoDir, {
+    'claude-fable-5': 'exhausted',
     'claude-opus-4-8': 'exhausted',
     'claude-opus-4-7': 'exhausted',
     'claude-opus-4-6': 'exhausted',
@@ -947,6 +957,7 @@ await test('tryPolicyResolution pools select healthy frontier for all three role
   const { repoDir, cleanup } = makeRepo(frontierSiblingConfig());
 
   writeQuotaState(repoDir, {
+    'claude-fable-5': 'exhausted',
     'claude-opus-4-8': 'exhausted',
     'claude-opus-4-7': 'exhausted',
     'claude-opus-4-6': 'exhausted',
@@ -973,6 +984,7 @@ await test('emits same-class substitution log for every role and no constrained 
   const { repoDir, cleanup } = makeRepo(frontierSiblingConfig());
 
   writeQuotaState(repoDir, {
+    'claude-fable-5': 'exhausted',
     'claude-opus-4-8': 'exhausted',
     'claude-opus-4-7': 'exhausted',
     'claude-opus-4-6': 'exhausted',
@@ -1005,6 +1017,7 @@ await test('emits constrained-mode banner when every frontier vendor is degradin
   const { repoDir, cleanup } = makeRepo(frontierSiblingConfig());
 
   writeQuotaState(repoDir, {
+    'claude-fable-5': 'degrading',
     'claude-opus-4-8': 'degrading',
     'claude-opus-4-7': 'degrading',
     'claude-opus-4-6': 'degrading',
@@ -1028,6 +1041,7 @@ await test('emits survival-mode banner when every frontier vendor is exhausted (
   const { repoDir, cleanup } = makeRepo(frontierSiblingConfig());
 
   writeQuotaState(repoDir, {
+    'claude-fable-5': 'exhausted',
     'claude-opus-4-8': 'exhausted',
     'claude-opus-4-7': 'exhausted',
     'claude-opus-4-6': 'exhausted',
@@ -1188,6 +1202,35 @@ await test('applyDifficultyFloor upgrades haiku to opus for critical difficulty 
   );
 });
 
+await test('registry-only model addition reaches heuristic routing without code changes', () => {
+  const { repoDir, cleanup } = makeRepo({
+    modelRegistry: {
+      models: {
+        'acme-frontier-1': {
+          vendor: 'acme',
+          class: 'frontier',
+          strengths: ['planning'],
+          weaknesses: [],
+          qualityScores: { planning: 99, coding: 99, review: 99, classify: 50, routing: 50 },
+        },
+      },
+      ladders: {
+        planning: ['acme-frontier-1', 'claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+      },
+    },
+  });
+  try {
+    const decision = routeWorkflow(
+      'Plan a complex infrastructure migration across services with database changes and a security review.',
+      { repoDir, skipDifficultyClassification: true },
+    );
+    assert.equal(decision.planDepth, 'deep');
+    assert.equal(decision.planner, 'acme-frontier-1');
+  } finally {
+    cleanup();
+  }
+});
+
 await test('routeWorkflow without difficulty options has no taskDifficulty in signals', () => {
   const { repoDir, cleanup } = makeRepo();
   try {
@@ -1308,6 +1351,61 @@ await test('includes budget rule in reasoning when triggered', () => {
     cleanup();
   }
 });
+
+
+await test('tryPolicyResolution samples non-argmax candidates when exploration is enabled', () => {
+  const { repoDir, cleanup } = makeRepo({
+    router: {
+      ...baseConfig().router,
+      mode: 'auto',
+      exploration: { enabled: true, mode: 'epsilon', rate: 1, topK: 2 },
+    },
+  });
+  writeQuotaState(repoDir, {});
+
+  try {
+    const decision = tryPolicyResolution('Implement a backend feature with tests and review.', {
+      repoDir,
+      taskDifficulty: 'moderate',
+      skipDifficultyClassification: true,
+      randomFn: () => 0,
+    });
+    assert.equal(decision?.routingMode, 'policy');
+    assert.equal(decision?.exploration?.mode, 'epsilon');
+    assert.ok((decision?.exploration?.explored.length ?? 0) > 0);
+    for (const entry of decision?.exploration?.explored ?? []) {
+      assert.notEqual(entry.sampled, entry.argmax);
+    }
+    assert.ok(decision?.reasoning[0].startsWith('exploration(epsilon'));
+  } finally {
+    cleanup();
+  }
+});
+
+await test('tryPolicyResolution stays deterministic with exploration disabled', () => {
+  const { repoDir, cleanup } = makeRepo({
+    router: {
+      ...baseConfig().router,
+      mode: 'auto',
+    },
+  });
+  writeQuotaState(repoDir, {});
+
+  try {
+    const decision = tryPolicyResolution('Implement a backend feature with tests and review.', {
+      repoDir,
+      taskDifficulty: 'moderate',
+      skipDifficultyClassification: true,
+      randomFn: () => 0,
+    });
+    assert.equal(decision?.routingMode, 'policy');
+    assert.equal(decision?.exploration, undefined);
+    assert.ok(!decision?.reasoning.some((line) => line.startsWith('exploration(')));
+  } finally {
+    cleanup();
+  }
+});
+
 
 console.log(`\n--- Results: ${passed} passed, ${failed} failed ---`);
 if (failed > 0) {
