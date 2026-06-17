@@ -153,6 +153,7 @@ export interface HokusaiAuditReport {
   regret: Record<AuditStageRole, RegretSummary>;
   groupBreakdowns: Record<string, AuditGroupBreakdown[]>;
   scenarioShares?: ScenarioSharesBreakdown[];
+  candidateEvidence?: CandidateEvidenceCoverage;
   hardFailures: string[];
   artifactPath?: string;
 }
@@ -170,6 +171,22 @@ export interface ScenarioSharesBreakdown {
   stageShares: Record<AuditStageRole, StageShareEntry[]>;
   effectiveModelCounts: Record<AuditStageRole, number>;
   candidatePools: Record<AuditStageRole, string[]>;
+}
+
+export interface CandidateEvidenceEntry {
+  model: string;
+  role: AuditStageRole;
+  totalRecords: number;
+  byTaskType: Record<string, number>;
+  byDomain: Record<string, number>;
+  byComplexity: Record<string, number>;
+  isZeroEvidence: boolean;
+}
+
+export interface CandidateEvidenceCoverage {
+  threshold: number;
+  entries: CandidateEvidenceEntry[];
+  warnings: string[];
 }
 
 function clampConcurrency(value: number | undefined): number {
@@ -657,6 +674,73 @@ export function buildScenarioShares(
   }).filter((breakdown) => breakdown.count > 0);
 }
 
+/**
+ * Compute candidate-pool evidence coverage from corpus records.
+ */
+export function buildCandidateEvidence(
+  corpus: EvalRecord[],
+  candidatePools: Record<AuditStageRole, string[]>,
+  threshold: number,
+): CandidateEvidenceCoverage {
+  const entries: CandidateEvidenceEntry[] = [];
+  const warnings: string[] = [];
+
+  for (const role of STAGE_ROLES) {
+    const stage = ROLE_TO_STAGE[role];
+    const candidates = candidatePools[role];
+
+    for (const model of candidates) {
+      const matchingRecords = corpus.filter((record) => recordStageModel(record, stage) === model);
+      const totalRecords = matchingRecords.length;
+
+      // Break down by task type, domain, and complexity
+      const byTaskType: Record<string, number> = {};
+      const byDomain: Record<string, number> = {};
+      const byComplexity: Record<string, number> = {};
+
+      for (const record of matchingRecords) {
+        const descriptor = buildReplayDescriptor(record);
+        const taskType = descriptor.signals.heuristic.task_type || 'unknown';
+        const domain = descriptor.signals.learned.domain || 'unknown';
+        const complexity = descriptor.signals.learned.complexity;
+        const complexityBucket = typeof complexity === 'number'
+          ? complexity <= 2 ? 'low' : complexity >= 4 ? 'high' : 'medium'
+          : 'unknown';
+
+        byTaskType[taskType] = (byTaskType[taskType] ?? 0) + 1;
+        byDomain[domain] = (byDomain[domain] ?? 0) + 1;
+        byComplexity[complexityBucket] = (byComplexity[complexityBucket] ?? 0) + 1;
+      }
+
+      const isZeroEvidence = totalRecords === 0;
+      entries.push({
+        model,
+        role,
+        totalRecords,
+        byTaskType,
+        byDomain,
+        byComplexity,
+        isZeroEvidence,
+      });
+
+      if (totalRecords < threshold) {
+        warnings.push(
+          `${role}/${model}: ${totalRecords} records < ${threshold} threshold`,
+        );
+      }
+    }
+  }
+
+  return {
+    threshold,
+    entries: entries.sort((a, b) => {
+      if (a.role !== b.role) return a.role.localeCompare(b.role);
+      return b.totalRecords - a.totalRecords;
+    }),
+    warnings,
+  };
+}
+
 function mean(values: number[]): number {
   if (values.length === 0) return 0;
   return values.reduce((sum, value) => sum + value, 0) / values.length;
@@ -944,8 +1028,9 @@ export async function runHokusaiRouterAudit(options: HokusaiAuditOptions = {}): 
   const stageShares = buildStageShares(recommendations);
   const validityViolations = classifyValidityViolations(recommendations, repoDir);
 
-  // Build scenario shares for v2 if requested
+  // Build scenario shares and candidate evidence for v2 if requested
   let scenarioShares: ScenarioSharesBreakdown[] | undefined;
+  let candidateEvidence: CandidateEvidenceCoverage | undefined;
   if (options.benchmarkVersion === 'v2') {
     // For v2, classify production_pool scenario from current recommendations
     const productionRequests = new Map<AuditScenario, AuditRequestRecord[]>();
@@ -953,6 +1038,10 @@ export async function runHokusaiRouterAudit(options: HokusaiAuditOptions = {}): 
     productionRequests.set('production_pool', requests);
     productionRecommendations.set('production_pool', recommendations);
     scenarioShares = buildScenarioShares(productionRequests, productionRecommendations);
+
+    // Compute candidate evidence coverage
+    const pools = candidatePools(repoDir);
+    candidateEvidence = buildCandidateEvidence(corpus, pools, coverage.minRecordsPerModelStage);
   }
 
   const reportWithoutFailures: Omit<HokusaiAuditReport, 'hardFailures'> = {
@@ -983,6 +1072,7 @@ export async function runHokusaiRouterAudit(options: HokusaiAuditOptions = {}): 
     regret: computeRegret(recommendations, corpus, options.kNeighbors ?? 20),
     groupBreakdowns: buildGroupBreakdowns(recommendations),
     scenarioShares,
+    candidateEvidence,
   };
   const completeReport = {
     ...reportWithoutFailures,
@@ -1042,6 +1132,34 @@ export function formatHokusaiAuditReport(report: HokusaiAuditReport): string {
           lines.push(`    ${role.padEnd(8)}: ${top.model} ${formatPercent(top.share)} (eff=${formatNumber(scenario.effectiveModelCounts[role])})`);
         }
       }
+    }
+    lines.push('');
+  }
+
+  // V2 candidate evidence coverage
+  if (report.candidateEvidence) {
+    lines.push(`Candidate Evidence Coverage (threshold: ${report.candidateEvidence.threshold})`);
+    const zeroEvidenceEntries = report.candidateEvidence.entries.filter((e) => e.isZeroEvidence);
+    if (zeroEvidenceEntries.length > 0) {
+      lines.push('  Zero-evidence candidates:');
+      for (const entry of zeroEvidenceEntries) {
+        lines.push(`    ${entry.role}/${entry.model}: 0 records`);
+      }
+    }
+    const belowThreshold = report.candidateEvidence.entries.filter((e) => !e.isZeroEvidence && e.totalRecords < report.candidateEvidence.threshold);
+    if (belowThreshold.length > 0) {
+      lines.push('  Below-threshold candidates:');
+      for (const entry of belowThreshold.slice(0, 10)) {
+        const topTask = Object.entries(entry.byTaskType).sort((a, b) => b[1] - a[1])[0];
+        const topDomain = Object.entries(entry.byDomain).sort((a, b) => b[1] - a[1])[0];
+        lines.push(`    ${entry.role}/${entry.model}: ${entry.totalRecords} records (task:${topTask?.[0] || 'none'} domain:${topDomain?.[0] || 'none'})`);
+      }
+      if (belowThreshold.length > 10) {
+        lines.push(`    ... ${belowThreshold.length - 10} more`);
+      }
+    }
+    if (report.candidateEvidence.warnings.length > 0) {
+      lines.push(`  Warnings: ${report.candidateEvidence.warnings.length}`);
     }
     lines.push('');
   }
