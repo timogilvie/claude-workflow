@@ -37,6 +37,8 @@ for f in \
   eval-schema.test.ts \
   hokusai-adapter.test.ts \
   hokusai-router.test.ts \
+  hokusai-router-audit.test.ts \
+  router-diversity.test.ts \
   context-linter.test.ts \
   config-sync.test.ts \
   sync-config-classifier.test.ts \
