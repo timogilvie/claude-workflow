@@ -171,6 +171,7 @@ interface ClassifiedLLMError {
   kind: LLMErrorKind;
   reason: string;
   resetAt: string | null;
+  retryable: boolean;
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -227,22 +228,22 @@ function classifyLLMError(error: unknown): ClassifiedLLMError {
     /\b(429|rate[_ -]?limit(?:[_ -]?(?:exceeded|error))?|quota|resource_exhausted|insufficient_quota|too many requests)\b/i.test(message)
     || /exited with code 429/i.test(message)
   ) {
-    return { kind: 'quota', reason: 'quota', resetAt };
+    return { kind: 'quota', reason: 'quota', resetAt, retryable: true };
   }
 
   if (/\b(401|403|authentication(?:_error)?|unauthorized|forbidden|invalid[_ ]api[_ ]key|permission denied)\b/i.test(lowered)) {
-    return { kind: 'auth', reason: 'auth', resetAt };
+    return { kind: 'auth', reason: 'auth', resetAt, retryable: false };
   }
 
   if (/\b(etimedout|timed out|timeout|inactivity)\b/i.test(lowered)) {
-    return { kind: 'timeout', reason: 'timeout', resetAt };
+    return { kind: 'timeout', reason: 'timeout', resetAt, retryable: true };
   }
 
   if (/\b(econnreset|econnrefused|enotfound|socket hang up|temporar(?:y|ily)|overloaded|unavailable|server_error|5\d\d)\b/i.test(lowered)) {
-    return { kind: 'transient', reason: 'transient', resetAt };
+    return { kind: 'transient', reason: 'transient', resetAt, retryable: true };
   }
 
-  return { kind: 'other', reason: 'other', resetAt };
+  return { kind: 'other', reason: 'other', resetAt, retryable: true };
 }
 
 function repoDirForOptions(options: LLMCallOptions): string {
@@ -1621,6 +1622,7 @@ async function callLLMWithFallback(
 
   const fallbackChain: Array<{ model: string; reason: string }> = [];
   const exhausted: Array<{ model: string; resetAt: string | null }> = [];
+  let lastError: unknown;
 
   for (let index = 0; index < candidates.length; index += 1) {
     const candidate = candidates[index];
@@ -1653,8 +1655,9 @@ async function callLLMWithFallback(
         fallbackChain: fallbackChain.length > 0 ? fallbackChain : undefined,
       };
     } catch (error) {
+      lastError = error;
       const classified = classifyLLMError(error);
-      if (classified.kind !== 'quota') {
+      if (!classified.retryable) {
         if (fallbackChain.length > 0 && shouldLogFallbackEvents) {
           emitFallbackEvent({
             prompt,
@@ -1673,29 +1676,33 @@ async function callLLMWithFallback(
         throw error;
       }
 
-      markExhausted({
-        modelId: candidate,
-        reason: classified.reason,
-        resetAt: classified.resetAt,
-      }, repoDir);
       fallbackChain.push({ model: candidate, reason: classified.reason });
-      exhausted.push({ model: candidate, resetAt: classified.resetAt });
-
       const nextModel = candidates[index + 1];
-      await options.observer?.onQuotaFallback?.({
-        failedModel: candidate,
-        nextModel,
-        reason: classified.reason,
-        resetAt: classified.resetAt,
-      });
 
-      if (!options.observer?.onQuotaFallback && nextModel) {
-        fallbackLog({
-          taskType,
+      if (classified.kind === 'quota') {
+        markExhausted({
+          modelId: candidate,
+          reason: classified.reason,
+          resetAt: classified.resetAt,
+        }, repoDir);
+        exhausted.push({ model: candidate, resetAt: classified.resetAt });
+
+        await options.observer?.onQuotaFallback?.({
           failedModel: candidate,
           nextModel,
           reason: classified.reason,
           resetAt: classified.resetAt,
+        });
+      }
+
+      if (!options.observer?.onQuotaFallback || classified.kind !== 'quota') {
+        fallbackLog({
+          taskType,
+          failedModel: candidate,
+          nextModel: nextModel ?? null,
+          reason: classified.reason,
+          resetAt: classified.resetAt,
+          exhaustedChain: nextModel ? undefined : fallbackChain.map(({ model }) => model),
         });
       }
     }
@@ -1727,6 +1734,15 @@ async function callLLMWithFallback(
       resetAt: lastExhausted.resetAt,
       exhaustedChain: exhausted.map(({ model }) => model),
     });
+  }
+
+  if (fallbackChain.length > 0 && exhausted.length !== fallbackChain.length) {
+    const lastErrorMessage = lastError instanceof Error ? lastError.message : String(lastError);
+    throw new Error(
+      `All fallback candidates failed: ${
+        fallbackChain.map(({ model, reason }) => `${model} (${reason})`).join(', ')
+      }. Last error: ${lastErrorMessage}`
+    );
   }
 
   throw new LLMQuotaError(
