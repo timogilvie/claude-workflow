@@ -95,6 +95,7 @@ export interface AuditRecommendation {
   issueId?: string;
   strategy: HokusaiRecommendedStrategy;
   response?: HokusaiModel30Response;
+  request?: HokusaiModel30Request;
   candidatePools: Record<AuditStageRole, string[]>;
   originalRecord: EvalRecord;
   actualScore: number;
@@ -597,6 +598,34 @@ export function buildCalibration(recommendations: AuditRecommendation[]): Calibr
 
 function recommendationGroupValue(recommendation: AuditRecommendation, groupBy: string): string {
   const descriptor = buildReplayDescriptor(recommendation.originalRecord);
+
+  // Descriptor-based grouping (original behavior)
+  if (groupBy === 'descriptor.taskType') {
+    return descriptor.signals.heuristic.task_type || 'unknown';
+  }
+  if (groupBy === 'descriptor.complexity') {
+    const complexity = descriptor.signals.learned.complexity;
+    if (typeof complexity !== 'number') return 'unknown';
+    if (complexity <= 2) return 'low';
+    if (complexity >= 4) return 'high';
+    return 'medium';
+  }
+  if (groupBy === 'descriptor.domain') {
+    return descriptor.signals.learned.domain || 'unknown';
+  }
+
+  // Request-based grouping (v2)
+  if (groupBy === 'request.taskType' && recommendation.request) {
+    return recommendation.request.inputs.task.task_type || 'unknown';
+  }
+  if (groupBy === 'request.complexity' && recommendation.request) {
+    return recommendation.request.inputs.context?.estimated_complexity || 'unknown';
+  }
+  if (groupBy === 'request.domain' && recommendation.request) {
+    return recommendation.request.inputs.context?.domain || 'unknown';
+  }
+
+  // Legacy support (backward compatibility)
   if (groupBy === 'taskType') {
     return descriptor.signals.heuristic.task_type || 'unknown';
   }
@@ -610,12 +639,18 @@ function recommendationGroupValue(recommendation: AuditRecommendation, groupBy: 
   if (groupBy === 'domain') {
     return descriptor.signals.learned.domain || 'unknown';
   }
+
   return 'unknown';
 }
 
 export function buildGroupBreakdowns(recommendations: AuditRecommendation[]): Record<string, AuditGroupBreakdown[]> {
-  const groups = ['taskType', 'complexity', 'domain'];
-  return Object.fromEntries(groups.map((groupBy) => {
+  // Descriptor-based groups (original)
+  const descriptorGroups = ['taskType', 'complexity', 'domain'];
+  // Request-based groups (v2)
+  const requestGroups = ['request.taskType', 'request.complexity', 'request.domain'];
+  const allGroups = [...descriptorGroups, ...requestGroups];
+
+  return Object.fromEntries(allGroups.map((groupBy) => {
     const byValue = new Map<string, AuditRecommendation[]>();
     for (const recommendation of recommendations) {
       const value = recommendationGroupValue(recommendation, groupBy);
@@ -1001,6 +1036,7 @@ export async function runHokusaiRouterAudit(options: HokusaiAuditOptions = {}): 
         issueId: entry.issueId,
         strategy: result.response.predictions.recommended_strategy,
         response: result.response,
+        request: entry.request,
         candidatePools: entry.candidatePools,
         originalRecord: entry.originalRecord,
         actualScore: entry.originalRecord.score,
