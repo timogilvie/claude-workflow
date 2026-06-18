@@ -2265,8 +2265,13 @@ trace_get_or_create() {
   local tmp
   tmp=$(mktemp "$feature_dir/.tmp-trace-ctx-XXXXXX" 2>/dev/null) || tmp=""
   if [[ -n "$tmp" ]]; then
-    printf '{"schemaVersion":"1.0","traceId":"%s","issueId":"%s","slug":"%s","createdAt":"%s"}\n' \
-      "$new_id" "$issue_id" "$slug" "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '')" > "$tmp" 2>/dev/null || true
+    jq -cn \
+      --arg sv "1.0" \
+      --arg tid "$new_id" \
+      --arg iid "$issue_id" \
+      --arg sl "$slug" \
+      --arg createdAt "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '')" \
+      '{schemaVersion:$sv,traceId:$tid,issueId:$iid,slug:$sl,createdAt:$createdAt}' > "$tmp" 2>/dev/null || true
     mv "$tmp" "$ctx_file" 2>/dev/null || rm -f "$tmp" 2>/dev/null || true
   fi
 
