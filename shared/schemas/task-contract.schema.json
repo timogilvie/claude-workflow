@@ -1,0 +1,231 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "task-contract.schema.json",
+  "title": "TaskContract",
+  "description": "Deterministic projection of task packet and plan artifacts into stable structured fields for eval/router/Hokusai consumers.",
+  "type": "object",
+  "required": ["schemaVersion", "issueId", "slug", "sources", "fields", "routingHints", "warnings"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "description": "Schema version, e.g. 1.0.0"
+    },
+    "issueId": {
+      "type": ["string", "null"],
+      "description": "Issue ID from selected-task.json, e.g. HOK-2257"
+    },
+    "slug": {
+      "type": "string",
+      "description": "Feature slug derived from selected-task.json or feature directory basename"
+    },
+    "sources": {
+      "type": "array",
+      "description": "Candidate source artifact entries in deterministic order",
+      "items": { "$ref": "#/$defs/taskContractSource" }
+    },
+    "fields": { "$ref": "#/$defs/taskContractFields" },
+    "routingHints": { "$ref": "#/$defs/routingHints" },
+    "warnings": {
+      "type": "array",
+      "description": "Missing-but-expected field warnings emitted during extraction",
+      "items": { "type": "string" }
+    }
+  },
+  "$defs": {
+    "taskContractSource": {
+      "type": "object",
+      "required": ["path", "exists", "sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Feature-dir-relative path using /"
+        },
+        "exists": {
+          "type": "boolean"
+        },
+        "sha256": {
+          "type": ["string", "null"],
+          "description": "Lowercase hex SHA-256 of raw file bytes, null when missing or unreadable"
+        }
+      }
+    },
+    "stringField": {
+      "type": "object",
+      "required": ["present", "value", "source"],
+      "additionalProperties": false,
+      "properties": {
+        "present": { "type": "boolean" },
+        "value": { "type": ["string", "null"] },
+        "source": { "type": ["string", "null"] },
+        "missingReason": { "type": "string" }
+      }
+    },
+    "stringArrayField": {
+      "type": "object",
+      "required": ["present", "value", "source"],
+      "additionalProperties": false,
+      "properties": {
+        "present": { "type": "boolean" },
+        "value": {
+          "oneOf": [
+            { "type": "array", "items": { "type": "string" } },
+            { "type": "null" }
+          ]
+        },
+        "source": { "type": ["string", "null"] },
+        "missingReason": { "type": "string" }
+      }
+    },
+    "dbRiskField": {
+      "type": "object",
+      "required": ["present", "value", "source"],
+      "additionalProperties": false,
+      "properties": {
+        "present": { "type": "boolean" },
+        "value": {
+          "oneOf": [
+            { "enum": ["none", "possible", "required"] },
+            { "type": "null" }
+          ]
+        },
+        "source": { "type": ["string", "null"] },
+        "missingReason": { "type": "string" }
+      }
+    },
+    "successCriterion": {
+      "type": "object",
+      "required": ["checked", "id", "text"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "text": { "type": "string" },
+        "checked": { "type": "boolean" }
+      }
+    },
+    "successCriteriaField": {
+      "type": "object",
+      "required": ["present", "value", "source"],
+      "additionalProperties": false,
+      "properties": {
+        "present": { "type": "boolean" },
+        "value": {
+          "oneOf": [
+            {
+              "type": "array",
+              "items": { "$ref": "#/$defs/successCriterion" }
+            },
+            { "type": "null" }
+          ]
+        },
+        "source": { "type": ["string", "null"] },
+        "missingReason": { "type": "string" }
+      }
+    },
+    "releaseReadinessProjection": {
+      "type": "object",
+      "required": ["configChanges", "databaseChangeRisk", "envChanges", "manualSteps"],
+      "additionalProperties": false,
+      "properties": {
+        "databaseChangeRisk": { "$ref": "#/$defs/dbRiskField" },
+        "envChanges": { "$ref": "#/$defs/stringArrayField" },
+        "configChanges": { "$ref": "#/$defs/stringArrayField" },
+        "manualSteps": { "$ref": "#/$defs/stringArrayField" }
+      }
+    },
+    "taskContractFields": {
+      "type": "object",
+      "required": [
+        "allowedPaths",
+        "componentLabels",
+        "expectedPaths",
+        "objectiveSummary",
+        "outOfScope",
+        "releaseReadiness",
+        "riskLevel",
+        "riskReasons",
+        "subsystems",
+        "successCriteria",
+        "taskType",
+        "verificationCommands",
+        "verificationScenarios"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "objectiveSummary": { "$ref": "#/$defs/stringField" },
+        "taskType": { "$ref": "#/$defs/stringField" },
+        "subsystems": { "$ref": "#/$defs/stringArrayField" },
+        "componentLabels": { "$ref": "#/$defs/stringArrayField" },
+        "riskLevel": { "$ref": "#/$defs/stringField" },
+        "riskReasons": { "$ref": "#/$defs/stringArrayField" },
+        "allowedPaths": { "$ref": "#/$defs/stringArrayField" },
+        "expectedPaths": { "$ref": "#/$defs/stringArrayField" },
+        "outOfScope": { "$ref": "#/$defs/stringArrayField" },
+        "successCriteria": { "$ref": "#/$defs/successCriteriaField" },
+        "verificationCommands": { "$ref": "#/$defs/stringArrayField" },
+        "verificationScenarios": { "$ref": "#/$defs/stringArrayField" },
+        "releaseReadiness": { "$ref": "#/$defs/releaseReadinessProjection" }
+      }
+    },
+    "routeArtifactSummary": {
+      "type": "object",
+      "required": ["initial", "postExpansion"],
+      "additionalProperties": false,
+      "properties": {
+        "initial": {
+          "oneOf": [
+            { "type": "object" },
+            { "type": "null" }
+          ]
+        },
+        "postExpansion": {
+          "oneOf": [
+            { "type": "object" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "routingHints": {
+      "type": "object",
+      "required": [
+        "expectedFileTypes",
+        "hasMigration",
+        "hasUi",
+        "requiresTests",
+        "riskFlags",
+        "riskLevel",
+        "routeArtifacts",
+        "subsystems",
+        "taskType"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "taskType": { "type": ["string", "null"] },
+        "riskLevel": { "type": ["string", "null"] },
+        "riskFlags": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "subsystems": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "expectedFileTypes": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "hasMigration": { "type": "boolean" },
+        "hasUi": { "type": "boolean" },
+        "requiresTests": { "type": "boolean" },
+        "routeArtifacts": {
+          "oneOf": [
+            { "$ref": "#/$defs/routeArtifactSummary" },
+            { "type": "null" }
+          ]
+        }
+      }
+    }
+  }
+}
