@@ -151,6 +151,7 @@ interface ResolvedIdentity {
   taskId: string | null;
   slug: string | null;
   ambiguous?: boolean;
+  candidates?: string[];
 }
 
 function resolveIdentity(opts: DiagnoseArtifactsOptions): ResolvedIdentity {
@@ -211,7 +212,7 @@ function resolveIdentity(opts: DiagnoseArtifactsOptions): ResolvedIdentity {
         return { featureDir: matches[0], taskId: opts.taskId, slug };
       }
       if (matches.length > 1) {
-        return { featureDir: null, taskId: opts.taskId, slug: null, ambiguous: true };
+        return { featureDir: null, taskId: opts.taskId, slug: null, ambiguous: true, candidates: matches };
       }
     }
 
@@ -360,7 +361,6 @@ function checkFeatureOutcomeStateMismatch(
 
   const findings: ArtifactDiagnosticFinding[] = [];
   const statePath = join(featureDir, 'feature-state.json');
-  const workflowStatePath = join((workflowState as unknown as Record<string, string>).__path ?? '', '.wavemill', 'workflow-state.json');
 
   // Phase mismatch check
   if (workflowPhase && featurePhase !== 'unknown' && workflowPhase !== featurePhase) {
@@ -669,14 +669,18 @@ export function diagnoseArtifacts(options: DiagnoseArtifactsOptions): ArtifactDi
   let stateMeta = { path: statePath, present: false, malformed: false };
   let traceMeta = { path: tracePath, present: false, malformedLines: 0 };
 
-  // Ambiguous feature dir warning
+  // Ambiguous feature dir warning — emit candidates and return early
   if (identity.ambiguous) {
     findings.push(makeFinding(
       'coverage_gap',
       'warn',
       `Multiple feature directories match taskId "${taskId ?? ''}" — cannot determine which to inspect`,
-      { taskId: taskId ?? undefined },
+      {
+        taskId: taskId ?? undefined,
+        details: { candidates: identity.candidates ?? [] },
+      },
     ));
+    return buildReport(repoDir, null, taskId, slug, generatedAt, contractMeta, stateMeta, traceMeta, findings);
   }
 
   // Coverage gap for repo-level: no feature dir resolved
