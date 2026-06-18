@@ -93,7 +93,8 @@ export interface RoutingHints {
 export interface TaskContract {
   schemaVersion: string;
   issueId: string | null;
-  slug: string | null;
+  /** Always derived (from selected-task.json, override, or directory basename). */
+  slug: string;
   sources: TaskContractSource[];
   fields: TaskContractFields;
   routingHints: RoutingHints;
@@ -286,11 +287,14 @@ function extractCommands(text: string): string[] {
 
 /**
  * Parse success criteria checklist items.
- * Preserves explicit [REQ-FX] IDs; synthesizes SC-001, SC-002 otherwise.
+ * Preserves explicit [REQ-FX] IDs; synthesizes SC-001, SC-002, etc. for unnamed
+ * items. The synthesized counter advances only across unnamed items, so SC-001
+ * is always the first unnamed criterion regardless of position relative to
+ * explicitly-tagged items.
  */
 function parseSuccessCriteria(text: string): SuccessCriterion[] {
   const criteria: SuccessCriterion[] = [];
-  let ordinalCounter = 1;
+  let unnamedCounter = 1;
 
   for (const line of text.split('\n')) {
     const m = line.match(/^\s*[-*]\s+\[([ xX])\]\s*(.+)/);
@@ -308,12 +312,12 @@ function parseSuccessCriteria(text: string): SuccessCriterion[] {
       id = idMatch[1];
       criterionText = rawText.substring(idMatch[0].length).trim();
     } else {
-      id = `SC-${String(ordinalCounter).padStart(3, '0')}`;
+      id = `SC-${String(unnamedCounter).padStart(3, '0')}`;
       criterionText = rawText;
+      unnamedCounter++;
     }
 
     criteria.push({ id, text: criterionText, checked });
-    ordinalCounter++;
   }
 
   return criteria;

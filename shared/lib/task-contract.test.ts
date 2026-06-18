@@ -703,6 +703,27 @@ describe('task-contract — success criteria ID stability', () => {
     assert.equal(sc.value![1].checked, false);
     rmSync(dir, { recursive: true, force: true });
   });
+
+  it('numbers SC-XXX only among unnamed items, regardless of position', () => {
+    const dir = makeTempDir();
+    writeFile(dir, 'task-packet.md', `# Task
+
+## Success Criteria
+
+- [ ] **[REQ-F1]** Tagged item first
+- [ ] First unnamed item
+- [ ] **[REQ-F2]** Another tagged item
+- [ ] Second unnamed item
+`);
+    const { contract } = buildTaskContract({ featureDir: dir });
+    const sc = contract.fields.successCriteria;
+    assert.equal(sc.present, true);
+    assert.equal(sc.value![0].id, 'REQ-F1');
+    assert.equal(sc.value![1].id, 'SC-001');
+    assert.equal(sc.value![2].id, 'REQ-F2');
+    assert.equal(sc.value![3].id, 'SC-002');
+    rmSync(dir, { recursive: true, force: true });
+  });
 });
 
 describe('task-contract — slug resolution', () => {

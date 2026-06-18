@@ -16,7 +16,7 @@
       "description": "Issue ID from selected-task.json, e.g. HOK-2257"
     },
     "slug": {
-      "type": ["string", "null"],
+      "type": "string",
       "description": "Feature slug derived from selected-task.json or feature directory basename"
     },
     "sources": {
