@@ -211,7 +211,7 @@ function resolveIdAndSlug(
  */
 function extractSection(markdown: string, headingRegex: RegExp): string | null {
   const match = headingRegex.exec(markdown);
-  if (!match || match.index === undefined) return null;
+  if (!match) return null;
 
   const levelMatch = match[0].match(/^(#+)/);
   const headingLevel = levelMatch ? levelMatch[1].length : 2;

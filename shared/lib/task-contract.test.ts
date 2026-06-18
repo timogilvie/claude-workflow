@@ -549,8 +549,8 @@ describe('task-contract — deterministic serialization [REQ-F5]', () => {
     writeFile(dir2, 'selected-task.json', SELECTED_TASK_JSON);
     const r1 = buildTaskContract({ featureDir: dir });
     const r2 = buildTaskContract({ featureDir: dir2 });
-    // Hashes will differ because the files are at different paths but same content
-    // The source hashes should be equal (same content)
+    // Source hashes are computed from file bytes, so identical content at
+    // different absolute paths must produce identical hashes.
     const hash1 = r1.contract.sources.find(s => s.path === 'task-packet.md')!.sha256;
     const hash2 = r2.contract.sources.find(s => s.path === 'task-packet.md')!.sha256;
     assert.equal(hash1, hash2, 'same content should produce same hash regardless of dir');
