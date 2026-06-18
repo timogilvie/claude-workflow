@@ -647,13 +647,18 @@ function buildRoutingHints(contract: Omit<TaskContract, 'routingHints' | 'missin
     ? contract.releaseReadiness.database_change_risk !== 'none'
     : null;
 
-  // Detect UI from labels/subsystems
+  // Detect UI from labels/subsystems. Return null only when no label signal exists at all,
+  // so downstream consumers can distinguish "definitively no UI" from "unknown".
   const uiKeywords = /\b(ui|frontend|react|component|css|tailwind|html|browser)\b/i;
-  const hasUiLabel = [...contract.componentLabels, ...contract.subsystems].some((s) => uiKeywords.test(s));
-  const hasUi = hasUiLabel || null;
+  const labelSignals = [...contract.componentLabels, ...contract.subsystems];
+  const hasUi = labelSignals.length === 0
+    ? null
+    : labelSignals.some((s) => uiKeywords.test(s));
 
-  // Detect cross-service
-  const crossService = contract.componentLabels.some((l) => /cross.?service/i.test(l)) || null;
+  // Detect cross-service. Same null-vs-false distinction as hasUi.
+  const crossService = contract.componentLabels.length === 0
+    ? null
+    : contract.componentLabels.some((l) => /cross.?service/i.test(l));
 
   // Expected file types from paths
   const extensions = new Set<string>();
