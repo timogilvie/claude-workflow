@@ -12,7 +12,7 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { basename, dirname, join, relative, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { extractReleaseReadiness } from './task-packet-utils.ts';
 
 // ────────────────────────────────────────────────────────────────
@@ -454,13 +454,11 @@ function extractOutOfScope(content: string): string[] {
 
   const bullets = scopeOutSection.matchAll(/^[-*]\s+(.+)$/gm);
   for (const m of bullets) {
-    const text = m[1].replace(/^\*{1,2}No\*{1,2}\s+/i, '').trim();
-    // Remove markdown emphasis from leading "No" bullets: "**No** replacement..."
+    // Normalize markdown emphasis on leading "No" bullets: "**No** replacement..." → "No replacement..."
     const cleaned = m[1].replace(/^\*{1,2}No\*{1,2}\s+/i, 'No ').trim();
     if (cleaned) {
       items.push(cleaned);
     }
-    void text;
   }
 
   return items;
@@ -671,6 +669,15 @@ export interface BuildTaskContractOptions {
   repoDir?: string;
 }
 
+function assertWithinRepoFeatures(absFeatureDir: string, repoDir: string): void {
+  const featuresRoot = join(repoDir, 'features');
+  if (absFeatureDir !== featuresRoot && !absFeatureDir.startsWith(featuresRoot + sep)) {
+    throw new Error(
+      `Feature directory must be under <repoDir>/features/: ${absFeatureDir} is not under ${featuresRoot}`,
+    );
+  }
+}
+
 /**
  * Build a deterministic task contract projection from existing task packet and
  * plan artifacts in a feature directory.
@@ -688,6 +695,7 @@ export async function buildTaskContract(
 ): Promise<TaskContract> {
   const absFeatureDir = resolve(featureDir);
   const repoDir = resolve(options.repoDir ?? process.cwd());
+  assertWithinRepoFeatures(absFeatureDir, repoDir);
   const slug = basename(absFeatureDir);
 
   const artifacts = await discoverArtifacts(absFeatureDir);
@@ -803,6 +811,8 @@ export async function writeTaskContract(
   options: BuildTaskContractOptions = {},
 ): Promise<string> {
   const absFeatureDir = resolve(featureDir);
+  const repoDir = resolve(options.repoDir ?? process.cwd());
+  assertWithinRepoFeatures(absFeatureDir, repoDir);
   const resolved = contract ?? await buildTaskContract(absFeatureDir, options);
   const outPath = join(absFeatureDir, 'task-contract.json');
   const tmpPath = join(absFeatureDir, `.tmp-task-contract-${process.pid}`);
