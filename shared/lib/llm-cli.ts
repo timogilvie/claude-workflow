@@ -23,6 +23,7 @@ import { randomUUID } from 'node:crypto';
 import { attachFallbackEvent } from './eval-record-builder.ts';
 import { appendEvalRecord } from './eval-persistence.ts';
 import { resolveEvalsDir } from './evals-paths.ts';
+import { loadTraceContext, appendTraceEvent } from './trace-event.ts';
 import { SCHEMA_VERSION, getScoreBand, type DifficultyBand, type EvalRecord, type FallbackEventMetadata, type FallbackOutcome } from './eval-schema.ts';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 import { getEffectiveRegistry, getLadder, getModel, rankCandidates, type RegistryTaskType } from './model-registry.ts';
@@ -81,6 +82,8 @@ export interface LLMCallOptions {
   fallbackModels?: string[];
   /** Disable best-effort eval emission for fallback events */
   logFallbackEvents?: boolean;
+  /** Feature directory for trace event emission (HOK-2259) */
+  featureDir?: string;
   /** Lifecycle hooks for progress reporting */
   observer?: LLMCallObserver;
   /** Optional abort signal to terminate the spawned CLI process. */
@@ -371,7 +374,10 @@ function buildFallbackEventRecord(input: {
   return record;
 }
 
-function emitFallbackEvent(input: Parameters<typeof buildFallbackEventRecord>[0]): void {
+function emitFallbackEvent(
+  input: Parameters<typeof buildFallbackEventRecord>[0],
+  featureDir?: string,
+): void {
   try {
     const record = buildFallbackEventRecord(input);
     const evalsDir = resolveEvalsDir(undefined, input.repoDir).dir;
@@ -380,6 +386,25 @@ function emitFallbackEvent(input: Parameters<typeof buildFallbackEventRecord>[0]
     console.warn(
       `[llm-cli] failed to persist fallback eval: ${error instanceof Error ? error.message : String(error)}`,
     );
+  }
+
+  // Emit fallback_used trace event (HOK-2259) — best-effort
+  if (featureDir) {
+    const traceCtx = loadTraceContext(featureDir);
+    if (traceCtx) {
+      appendTraceEvent(traceCtx, {
+        phase: 'coding',
+        event: 'fallback_used',
+        status: input.outcome === 'success' ? 'ok' : 'failed',
+        model: input.fallbackModel ?? undefined,
+        meta: {
+          preferredModel: input.preferredModel,
+          fallbackModel: input.fallbackModel,
+          outcome: input.outcome,
+          fallbackChain: input.fallbackChain,
+        },
+      }).catch(() => undefined);
+    }
   }
 }
 
@@ -1652,7 +1677,7 @@ async function callLLMWithFallback(
           startedAt,
           endedAt: Date.now(),
           costUsd: result.costUsd ?? null,
-        });
+        }, options.featureDir);
       }
       return {
         ...result,
@@ -1676,7 +1701,7 @@ async function callLLMWithFallback(
             startedAt,
             endedAt: Date.now(),
             costUsd: null,
-          });
+          }, options.featureDir);
         }
         throw error;
       }
@@ -1726,7 +1751,7 @@ async function callLLMWithFallback(
       startedAt,
       endedAt: Date.now(),
       costUsd: null,
-    });
+    }, options.featureDir);
   }
 
   if (!options.observer?.onQuotaFallback && exhausted.length > 0) {

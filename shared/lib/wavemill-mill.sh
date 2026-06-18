@@ -2612,6 +2612,16 @@ save_task_state() {
   local linear_issue="${8:-$issue}" challenge="${9:-}" challenge_pair="${10:-}" challenge_role="${11:-}" challenge_model="${12:-}"
   local planner_model="${13:-}" coder_model="${14:-}" reviewer_model="${15:-}" plan_depth="${16:-}" code_depth="${17:-}" review_mode="${18:-}"
 
+  # Resolve traceId from feature directory (HOK-2259) — best-effort, never fails
+  local _trace_id_for_state=""
+  for _dir_prefix in features bugs; do
+    local _ctx_candidate="$worktree/$_dir_prefix/$slug/.trace-context.json"
+    if [[ -f "$_ctx_candidate" ]]; then
+      _trace_id_for_state=$(jq -r '.traceId // empty' "$_ctx_candidate" 2>/dev/null || true)
+      break
+    fi
+  done
+
   if ! state_mutate "$STATE_FILE" \
      '(.tasks[$issue].agent // "") as $old_agent |
       (.tasks[$issue].phase // "executing") as $old_phase |
@@ -2631,6 +2641,7 @@ save_task_state() {
       (.tasks[$issue].planDepth // "") as $old_planDepth |
       (.tasks[$issue].codeDepth // "") as $old_codeDepth |
       (.tasks[$issue].reviewMode // "") as $old_reviewMode |
+      (.tasks[$issue].traceId // "") as $old_traceId |
       .tasks[$issue] = {
         slug: $slug,
         branch: $branch,
@@ -2649,6 +2660,7 @@ save_task_state() {
         planDepth: (if $planDepth != "" then $planDepth else $old_planDepth end),
         codeDepth: (if $codeDepth != "" then $codeDepth else $old_codeDepth end),
         reviewMode: (if $reviewMode != "" then $reviewMode else $old_reviewMode end),
+        traceId: (if $traceId != "" then $traceId else $old_traceId end),
         phase: $old_phase,
         evalCompleted: $old_eval,
         evalFailed: $old_eval_failed,
@@ -2663,7 +2675,8 @@ save_task_state() {
      --arg challengePair "$challenge_pair" --arg challengeRole "$challenge_role" \
      --arg challengeModel "$challenge_model" \
      --arg plannerModel "$planner_model" --arg coderModel "$coder_model" --arg reviewerModel "$reviewer_model" \
-     --arg planDepth "$plan_depth" --arg codeDepth "$code_depth" --arg reviewMode "$review_mode"; then
+     --arg planDepth "$plan_depth" --arg codeDepth "$code_depth" --arg reviewMode "$review_mode" \
+     --arg traceId "$_trace_id_for_state"; then
     log_warn "save_task_state: failed to save $issue"
   fi
 }
@@ -2860,6 +2873,7 @@ write_stage_result() {
     [[ -n "$artifacts_json" ]] && cli_args+=(--artifacts "$artifacts_json")
 
     if npx tsx "$TOOLS_DIR/stage-result-cli.ts" write "${cli_args[@]}" 2>/dev/null; then
+      _write_stage_result_trace_event "$feature_dir" "$stage" "$status" "$agent" "$model"
       return 0
     fi
     log_warn "write_stage_result: TypeScript CLI failed, falling back to shell"
@@ -2898,6 +2912,32 @@ write_stage_result() {
 }
 EOF
   mv "$tmp" "$result_file"
+  _write_stage_result_trace_event "$feature_dir" "$stage" "$status" "$agent" "$model"
+}
+
+# Emit trace events when a stage result is written (HOK-2259).
+# Best-effort — never fails. Reads trace context from the feature directory.
+_write_stage_result_trace_event() {
+  local feature_dir="$1" stage="$2" status="$3" agent="${4:-}" model="${5:-}"
+  local _tid _iid _sl
+  _tid=$(trace_read_id "$feature_dir" 2>/dev/null || true)
+  [[ -n "$_tid" ]] || return 0
+  _iid=$(jq -r '.issueId // empty' "$feature_dir/.trace-context.json" 2>/dev/null || true)
+  _sl=$(jq -r '.slug // empty' "$feature_dir/.trace-context.json" 2>/dev/null || true)
+  [[ -n "$_iid" && -n "$_sl" ]] || return 0
+
+  case "$status" in
+    running)
+      trace_append_event "$feature_dir" "$_tid" "$_iid" "$_sl" "$stage" "phase_started" "ok" "$model" "$agent" 2>/dev/null || true
+      ;;
+    completed)
+      trace_append_event "$feature_dir" "$_tid" "$_iid" "$_sl" "$stage" "phase_completed" "ok" "$model" "$agent" 2>/dev/null || true
+      ;;
+    failed|aborted)
+      trace_append_event "$feature_dir" "$_tid" "$_iid" "$_sl" "$stage" "phase_completed" "failed" "$model" "$agent" \
+        "$(jq -cn --arg st "$status" '{meta:{stageStatus:$st}}' 2>/dev/null || echo '{}')" 2>/dev/null || true
+      ;;
+  esac
 }
 
 clear_stage_result() {
@@ -6318,6 +6358,25 @@ archive_stage_artifacts() {
     if [[ -f "$feature_dir/routing.jsonl" ]]; then
       cp "$feature_dir/routing.jsonl" "$archive_dir/routing.jsonl" 2>/dev/null || true
     fi
+
+    # Trace JSONL (HOK-2259)
+    if [[ -f "$feature_dir/trace.jsonl" ]]; then
+      cp "$feature_dir/trace.jsonl" "$archive_dir/trace.jsonl" 2>/dev/null || true
+    fi
+
+    # Emit cleanup_archived trace event (HOK-2259) — after archive copy so the event lands in the copy
+    local _tid _iid _sl
+    _tid=$(trace_read_id "$feature_dir" 2>/dev/null || true)
+    if [[ -n "$_tid" ]]; then
+      _iid=$(jq -r '.issueId // empty' "$feature_dir/.trace-context.json" 2>/dev/null || true)
+      _sl=$(jq -r '.slug // empty' "$feature_dir/.trace-context.json" 2>/dev/null || true)
+      if [[ -n "$_iid" && -n "$_sl" ]]; then
+        trace_append_event "$feature_dir" "$_tid" "$_iid" "$_sl" "cleanup" "cleanup_archived" "ok" "" "" \
+          "$(jq -cn --arg dir "$archive_dir" '{meta:{archiveDir:$dir}}' 2>/dev/null || echo '{}')" 2>/dev/null || true
+        # Also copy the updated trace.jsonl (with the cleanup_archived event) to archive
+        [[ -f "$feature_dir/trace.jsonl" ]] && cp "$feature_dir/trace.jsonl" "$archive_dir/trace.jsonl" 2>/dev/null || true
+      fi
+    fi
   fi
 
   # Count archived files for logging
@@ -7479,6 +7538,10 @@ launch_task() {
   fi
   mkdir -p "$feature_dir"
 
+  # ── Trace correlation (HOK-2259) — resolve or create stable traceId ──
+  local _trace_id
+  _trace_id=$(trace_get_or_create "$feature_dir" "$issue" "$slug" 2>/dev/null || true)
+
   # Set Linear state
   if should_update_linear_state "$issue"; then
     linear_set_state "$linear_issue" "In Progress"
@@ -8040,6 +8103,18 @@ Implement from the issue description plus direct codebase analysis."
   bootstrap_route="$(route_lifecycle_route_id "$feature_dir/.initial-route.json" 2>/dev/null || true)"
   if [[ -n "$bootstrap_route" ]]; then
     log_route_lifecycle "bootstrap_assigned" "issue=$issue" "route=\"$bootstrap_route\""
+  fi
+
+  # Emit task_launched trace event (best-effort)
+  trace_append_event "$feature_dir" "$_trace_id" "$issue" "$slug" "launch" "task_launched" "ok" "" "$AGENT_CMD" \
+    "$(jq -cn --arg agent "$AGENT_CMD" --arg coder "${task_model:-}" --arg planner "${planner_model:-}" \
+      --arg reviewer "${reviewer_model:-}" --arg mode "${PLANNING_MODE:-}" \
+      '{meta:{agentCmd:$agent,coderModel:$coder,plannerModel:$planner,reviewerModel:$reviewer,planningMode:$mode}}' 2>/dev/null || echo '{}')" 2>/dev/null || true
+
+  # Emit route_assigned trace event (best-effort)
+  if [[ -n "$bootstrap_route" ]]; then
+    trace_append_event "$feature_dir" "$_trace_id" "$issue" "$slug" "launch" "route_assigned" "ok" "${task_model:-}" "$AGENT_CMD" \
+      "$(jq -cn --arg rt "$bootstrap_route" --arg src "bootstrap" '{meta:{routeId:$rt,routeSource:$src}}' 2>/dev/null || echo '{}')" 2>/dev/null || true
   fi
 
   # Launch planning phase directly with the routed model (skip routing agent)
@@ -9252,8 +9327,18 @@ monitor_issue_state() {
                 refreshed_source=$(echo "$refreshed_plan" | jq -r '.decisionSource // "bootstrap"' 2>/dev/null || echo "bootstrap")
                 if [[ "$refreshed_source" == "expanded" ]]; then
                   new_primary=$(echo "$refreshed_plan" | jq -r '.entries[0].model // empty' 2>/dev/null)
+                  new_primary_planner=$(echo "$refreshed_plan" | jq -r '.entries[0].planner // empty' 2>/dev/null)
+                  new_primary_reviewer=$(echo "$refreshed_plan" | jq -r '.entries[0].reviewer // empty' 2>/dev/null)
+                  new_primary_plan_depth=$(echo "$refreshed_plan" | jq -r '.entries[0].planDepth // empty' 2>/dev/null)
+                  new_primary_code_depth=$(echo "$refreshed_plan" | jq -r '.entries[0].codeDepth // empty' 2>/dev/null)
+                  new_primary_review_mode=$(echo "$refreshed_plan" | jq -r '.entries[0].reviewMode // empty' 2>/dev/null)
                   new_challenger_key=$(echo "$refreshed_plan" | jq -r '.entries[1].key // empty' 2>/dev/null)
                   new_challenger_model=$(echo "$refreshed_plan" | jq -r '.entries[1].model // empty' 2>/dev/null)
+                  new_challenger_planner=$(echo "$refreshed_plan" | jq -r '.entries[1].planner // empty' 2>/dev/null)
+                  new_challenger_reviewer=$(echo "$refreshed_plan" | jq -r '.entries[1].reviewer // empty' 2>/dev/null)
+                  new_challenger_plan_depth=$(echo "$refreshed_plan" | jq -r '.entries[1].planDepth // empty' 2>/dev/null)
+                  new_challenger_code_depth=$(echo "$refreshed_plan" | jq -r '.entries[1].codeDepth // empty' 2>/dev/null)
+                  new_challenger_review_mode=$(echo "$refreshed_plan" | jq -r '.entries[1].reviewMode // empty' 2>/dev/null)
 
                   if [[ -n "$new_primary" ]]; then
                     current_pr=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].pr // ""')
@@ -9261,7 +9346,7 @@ monitor_issue_state() {
                     current_agent=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].agent // ""')
                     current_linear_issue=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].linearIssueId // ""')
                     save_task_state "$ISSUE" "$SLUG" "$BRANCH" "${WORKTREE_ROOT}/${SLUG}" "$current_pr" "$current_status" "$current_agent" "$current_linear_issue" \
-                      "true" "$ISSUE" "primary" "$new_primary"
+                      "true" "$ISSUE" "primary" "$new_primary" "$new_primary_planner" "$new_primary" "$new_primary_reviewer" "$new_primary_plan_depth" "$new_primary_code_depth" "$new_primary_review_mode"
                     challenge_coder="$new_primary"
                   fi
 
@@ -9275,7 +9360,7 @@ monitor_issue_state() {
                     challenger_linear_issue=$(read_state_value "" --arg i "$new_challenger_key" '.tasks[$i].linearIssueId // ""')
                     if [[ -n "$challenger_slug" ]] && [[ -n "$challenger_branch" ]] && [[ -n "$challenger_worktree" ]]; then
                       save_task_state "$new_challenger_key" "$challenger_slug" "$challenger_branch" "$challenger_worktree" "$challenger_pr" "$challenger_status" "$challenger_agent" "$challenger_linear_issue" \
-                        "true" "$ISSUE" "challenger" "$new_challenger_model"
+                        "true" "$ISSUE" "challenger" "$new_challenger_model" "$new_challenger_planner" "$new_challenger_model" "$new_challenger_reviewer" "$new_challenger_plan_depth" "$new_challenger_code_depth" "$new_challenger_review_mode"
                     fi
                   fi
 
