@@ -98,6 +98,8 @@
  *   `routeSource`, `routerMode`, `routingMode`, `expectedMetrics`). Old
  *   `RouteArtifact` mirrored an early stale snapshot that never got updated
  *   to match `ChallengeRouteArtifact`.
+ * - **1.29.0**: Added optional `traceId` field (HOK-2259) so eval records can
+ *   be joined to the task lifecycle event stream in `trace.jsonl`.
  *
  * @module eval-schema
  */
@@ -107,7 +109,7 @@ import type { ModelSelector, RegistryTaskType } from './model-registry.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
 
 /** Current eval schema version for newly emitted records. */
-export const SCHEMA_VERSION = '1.28.0';
+export const SCHEMA_VERSION = '1.29.0';
 
 export type RoutingRole = 'planner' | 'coder' | 'reviewer';
 
@@ -1599,6 +1601,14 @@ export interface EvalRecord {
 
   /** Wavemill router scorer metadata for replay/prospective measurement. */
   wavemill_router_scoring?: WavemillRouterScoringMetadata;
+
+  /**
+   * Task trace correlation ID linking this eval record to the lifecycle
+   * event stream in `features/<slug>/trace.jsonl` (HOK-2259).
+   *
+   * @since 1.29.0
+   */
+  traceId?: string;
 
   /** Optional extensibility bag for additional metadata */
   metadata?: Record<string, unknown>;
