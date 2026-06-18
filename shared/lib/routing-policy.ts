@@ -11,9 +11,10 @@ import {
   type CapabilityConstraints,
 } from './model-registry.ts';
 import { filterDeepSeekModels } from './deepseek-provider.ts';
+import { filterOpenRouterModels } from './openrouter-provider.ts';
 import { type QuotaSnapshot, type QuotaStatus } from './quota-state.ts';
 import { getAllowedModelFloor, type RoutingDifficulty } from './task-difficulty-classifier.ts';
-import { isRouterCapabilityFilteringEnabled } from './config.ts';
+import { getAvailableModelsForStage, getRouterConfig, isRouterCapabilityFilteringEnabled } from './config.ts';
 
 export interface RoutingPolicy {
   taskType: RegistryTaskType;
@@ -51,6 +52,11 @@ export interface ViableCandidatePool {
 }
 
 const DEGRADING_SCORE_PENALTY = 0.85;
+const TASK_TYPE_TO_STAGE = {
+  planning: 'planner',
+  coding: 'coder',
+  review: 'reviewer',
+} as const satisfies Partial<Record<RegistryTaskType, 'planner' | 'coder' | 'reviewer'>>;
 
 function getQuotaStatus(snapshot: QuotaSnapshot, modelId: string): QuotaStatus {
   return snapshot.models[modelId]?.status ?? 'healthy';
@@ -127,7 +133,8 @@ function filterProviderUnavailableModels(
   registry: ModelRegistry,
   repoDir?: string,
 ): ModelRegistry {
-  const allowedModelIds = new Set(filterDeepSeekModels(Object.keys(registry.models), repoDir).models);
+  const deepSeekAllowed = filterDeepSeekModels(Object.keys(registry.models), repoDir).models;
+  const allowedModelIds = new Set(filterOpenRouterModels(deepSeekAllowed, repoDir).models);
 
   return {
     models: Object.fromEntries(
@@ -142,6 +149,38 @@ function filterProviderUnavailableModels(
   };
 }
 
+function getActiveModelIds(
+  registry: ModelRegistry,
+  taskType: RegistryTaskType,
+  repoDir?: string,
+  includeAllModels = false,
+): Set<string> {
+  if (includeAllModels) {
+    return new Set(Object.keys(registry.models));
+  }
+
+  const activeModelIds = new Set<string>();
+  for (const [modelId, capabilities] of Object.entries(registry.models)) {
+    if (capabilities.defaultLadderEligible !== false) {
+      activeModelIds.add(modelId);
+    }
+  }
+  for (const modelId of getLadder(registry, taskType)) {
+    activeModelIds.add(modelId);
+  }
+  const stage = TASK_TYPE_TO_STAGE[taskType];
+  if (stage) {
+    const routerConfig = getRouterConfig(repoDir);
+    for (const modelId of getAvailableModelsForStage(routerConfig, stage) ?? []) {
+      if (registry.models[modelId]) {
+        activeModelIds.add(modelId);
+      }
+    }
+  }
+
+  return activeModelIds;
+}
+
 export function resolveModel(
   policy: RoutingPolicy,
   registryOverride?: ModelRegistry,
@@ -150,8 +189,18 @@ export function resolveModel(
     registryOverride ?? getEffectiveRegistry(policy.repoDir),
     policy.repoDir,
   );
+  const activeModelIds = getActiveModelIds(
+    registry,
+    policy.taskType,
+    policy.repoDir,
+    registryOverride !== undefined,
+  );
   const floor = getAllowedModelFloor(policy.difficulty);
   const hasViableFrontier = Object.entries(registry.models).some(([modelId, capabilities]) => {
+    if (!activeModelIds.has(modelId)) {
+      return false;
+    }
+
     if (capabilities.class !== 'frontier') {
       return false;
     }
@@ -188,7 +237,9 @@ export function resolveModel(
   const shouldApplyCapabilityFiltering =
     capabilityFilteringEnabled && hasCapabilityConstraints(policy.capabilityConstraints);
 
-  const candidates = Object.entries(registry.models).map(([modelId, capabilities]) => {
+  const candidates = Object.entries(registry.models)
+    .filter(([modelId]) => activeModelIds.has(modelId))
+    .map(([modelId, capabilities]) => {
     const qualityScore = capabilities.qualityScores[policy.taskType] ?? 0;
     const status = getQuotaStatus(policy.quotaState, modelId);
     const adjustedScore = computeAdjustedScore(qualityScore, status);

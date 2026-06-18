@@ -96,6 +96,15 @@ function frontierSiblingConfig() {
   };
 }
 
+function restoredFrontierQuotaState(status: QuotaStatus): Record<string, QuotaStatus> {
+  return {
+    'deepseek-r1': status,
+    'gemini-2.5-pro': status,
+    'qwen-3-235b': status,
+    'kimi-k2-thinking': status,
+  };
+}
+
 function makeRepo(configOverride?: Record<string, unknown>): { repoDir: string; cleanup: () => void } {
   const repoDir = mkdtempSync(join(tmpdir(), 'workflow-router-test-'));
   mkdirSync(join(repoDir, '.wavemill', 'evals'), { recursive: true });
@@ -394,8 +403,12 @@ await test('policy routing can return DeepSeek when explicitly configured', () =
       'claude-sonnet-4-5-20250929': 'exhausted',
       'claude-haiku-4-5-20251001': 'exhausted',
       'gpt-5.3-codex': 'exhausted',
+      'gpt-5': 'exhausted',
+      'gpt-5-mini': 'exhausted',
       'gpt-5.5': 'exhausted',
       'gpt-5.4': 'exhausted',
+      'deepseek-r1': 'exhausted',
+      'deepseek-v3': 'exhausted',
       'deepseek-v4-pro': 'healthy',
     });
     const decision = tryPolicyResolution(
@@ -663,6 +676,7 @@ await test('auto mode uses degraded haiku-only routing in survival mode', async 
     'claude-opus-4-6': 'exhausted',
     'gpt-5.5': 'exhausted',
     'gpt-5.4': 'exhausted',
+    ...restoredFrontierQuotaState('exhausted'),
   });
 
   try {
@@ -699,6 +713,7 @@ await test('auto mode excludes opus in constrained mode', async () => {
     'claude-opus-4-6': 'degrading',
     'gpt-5.5': 'degrading',
     'gpt-5.4': 'degrading',
+    ...restoredFrontierQuotaState('degrading'),
   });
 
   try {
@@ -727,6 +742,7 @@ await test('auto mode emits a constrained router transparency line when quota is
     'claude-opus-4-6': 'degrading',
     'gpt-5.5': 'degrading',
     'gpt-5.4': 'degrading',
+    ...restoredFrontierQuotaState('degrading'),
   });
 
   try {
@@ -826,6 +842,7 @@ await test('policy routing logs class downgrade without same-class metadata', as
     'claude-opus-4-6': 'degrading',
     'gpt-5.5': 'degrading',
     'gpt-5.4': 'degrading',
+    ...restoredFrontierQuotaState('degrading'),
   });
 
   try {
@@ -1023,6 +1040,7 @@ await test('emits constrained-mode banner when every frontier vendor is degradin
     'claude-opus-4-6': 'degrading',
     'gpt-5.5': 'degrading',
     'gpt-5.4': 'degrading',
+    ...restoredFrontierQuotaState('degrading'),
   });
 
   try {
@@ -1047,6 +1065,7 @@ await test('emits survival-mode banner when every frontier vendor is exhausted (
     'claude-opus-4-6': 'exhausted',
     'gpt-5.5': 'exhausted',
     'gpt-5.4': 'exhausted',
+    ...restoredFrontierQuotaState('exhausted'),
   });
 
   try {

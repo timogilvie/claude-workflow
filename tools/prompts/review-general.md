@@ -77,6 +77,28 @@ Focus your review on these categories:
 
 - Cross-PR revert protection: If the diff removes files or behavior from another recent PR on `auto/integration`, compare against the merge base with `auto/integration`, not just the current working tree. Require an explicit acknowledgement such as `Reverts #N` or `Intentionally reverts #N` for each affected PR.
 
+#### Predicted test failures: hypothesis vs. observation
+
+- If you are predicting that tests will fail based only on reading code, treat that as an inference, not an observation.
+- Prefix the finding `description` with `Hypothesis (not reproduced):` when you do not have a cited CI log, verbatim failing output, or a literal mismatch against a committed fixture in the diff.
+- Unreproduced predicted failures must use `severity: "warning"`, not `blocker`.
+- Only reproduced failures may use `severity: "blocker"` for a "fails its own tests" claim.
+
+**Examples**:
+- ✅ Report as blocker: "Line 88: `pnpm test` fails with `Expected digest 0xabc..., received 0xdef...` after this fixture update; the committed known-answer no longer matches the generated output."
+- ✅ Report as warning: "Hypothesis (not reproduced): Line 88 may fail `pnpm test` because the fixture update changes the digest format, but no failing output or CI transcript is provided in the diff."
+
+#### Vacuous CI gates (skip-as-pass)
+
+- Flag CI/safety gates whose headline assertion is silently bypassable on the default path.
+- High-signal skip-as-pass patterns include:
+  - `continue-on-error: true` on the clone/fixture-fetch step that the gate depends on
+  - sibling/path fallbacks that silently no-op when the expected repo or fixture directory is missing
+  - `if: success() || ...` or equivalent logic that converts skipped work into a passing gate
+  - env-flag gates whose enabling flag cannot actually be set true by the workflow
+- Use `severity: "blocker"` when the default path makes the headline assertion unreachable.
+- Use `severity: "warning"` only for documented debug or operator-only escape hatches that do not affect the default gate path.
+
 #### 1. Logical Errors and Edge Cases
 - **Off-by-one errors** - Array indexing, loop boundaries
 - **Null/undefined handling** - Missing checks that will cause runtime errors

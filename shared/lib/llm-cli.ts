@@ -27,6 +27,7 @@ import { SCHEMA_VERSION, getScoreBand, type DifficultyBand, type EvalRecord, typ
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 import { getEffectiveRegistry, getLadder, getModel, rankCandidates, type RegistryTaskType } from './model-registry.ts';
 import { getModelStatus, markExhausted, readQuotaSnapshot, recordSuccess } from './quota-state.ts';
+import { filterDisabledModels } from './disabled-models.ts';
 import { fallbackLog } from './router-log.ts';
 import { buildTaskDescriptor } from './task-descriptor-builder.ts';
 
@@ -392,7 +393,9 @@ function resolveCandidateModels(
 
   if (options.fallbackModels && options.fallbackModels.length > 0) {
     const initial = options.model ? [options.model, ...options.fallbackModels] : options.fallbackModels;
-    const deduped = uniqueModels(initial).filter(isCompatible);
+    // Exclude globally disabled models (e.g. access-restricted upstream) — same
+    // lever every other routing path honors via filterDisabledModels.
+    const deduped = filterDisabledModels(uniqueModels(initial).filter(isCompatible));
     const available = deduped.filter((modelId) => getModelStatus(modelId, repoDir) !== 'exhausted');
     return {
       taskType: options.taskType ?? FALLBACK_DEFAULT_TASK_TYPE,
@@ -410,7 +413,9 @@ function resolveCandidateModels(
     ladder = rankCandidates(registry, taskType);
   }
 
-  const deduped = uniqueModels(options.model ? [options.model, ...ladder] : ladder).filter(isCompatible);
+  const deduped = filterDisabledModels(
+    uniqueModels(options.model ? [options.model, ...ladder] : ladder).filter(isCompatible),
+  );
   const available = deduped.filter((modelId) => getModelStatus(modelId, repoDir) !== 'exhausted');
   return {
     taskType,
