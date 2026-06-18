@@ -2226,3 +2226,100 @@ wavemill_pane_repaint() {
   frame_bytes+=$'\033[J'
   printf '%s' "$frame_bytes"
 }
+
+# ============================================================================
+# TRACE CORRELATION HELPERS (HOK-2259)
+# ============================================================================
+# Best-effort task lifecycle event stream written to features/<slug>/trace.jsonl.
+# All functions are no-ops on error and never fail the calling workflow.
+
+# Generate a trace ID: trc_<8-hex-unix-seconds>_<16-hex-random>
+_trace_generate_id() {
+  local ts rnd
+  ts=$(printf '%08x' "$(date +%s)" 2>/dev/null || printf '%08x' 0)
+  rnd=$(od -vAn -N8 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n' | head -c 16 || printf '%016x' 0)
+  printf 'trc_%s_%s\n' "$ts" "$rnd"
+}
+
+# Get or create a stable trace ID for a task feature directory.
+# Usage: trace_get_or_create <feature_dir> <issue_id> <slug>
+# Output: the traceId on stdout
+# Never fails — returns a transient ID if persistence is unavailable.
+trace_get_or_create() {
+  local feature_dir="$1" issue_id="$2" slug="$3"
+  local ctx_file="$feature_dir/.trace-context.json"
+
+  if [[ -f "$ctx_file" ]]; then
+    local existing
+    existing=$(jq -r '.traceId // empty' "$ctx_file" 2>/dev/null || true)
+    if [[ -n "$existing" ]]; then
+      printf '%s\n' "$existing"
+      return 0
+    fi
+  fi
+
+  local new_id
+  new_id=$(_trace_generate_id)
+  mkdir -p "$feature_dir" 2>/dev/null || true
+
+  local tmp
+  tmp=$(mktemp "$feature_dir/.tmp-trace-ctx-XXXXXX" 2>/dev/null) || tmp=""
+  if [[ -n "$tmp" ]]; then
+    printf '{"schemaVersion":"1.0","traceId":"%s","issueId":"%s","slug":"%s","createdAt":"%s"}\n' \
+      "$new_id" "$issue_id" "$slug" "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo '')" > "$tmp" 2>/dev/null || true
+    mv "$tmp" "$ctx_file" 2>/dev/null || rm -f "$tmp" 2>/dev/null || true
+  fi
+
+  printf '%s\n' "$new_id"
+}
+
+# Read the existing trace ID from a feature directory without creating one.
+# Output: traceId or empty string if not found.
+trace_read_id() {
+  local feature_dir="$1"
+  local ctx_file="$feature_dir/.trace-context.json"
+  [[ -f "$ctx_file" ]] || return 0
+  jq -r '.traceId // empty' "$ctx_file" 2>/dev/null || true
+}
+
+# Append a trace event to features/<slug>/trace.jsonl.
+# Usage: trace_append_event <feature_dir> <trace_id> <issue_id> <slug> <phase> <event> [status] [model] [agent] [extra_json]
+# Best-effort — never fails or prints errors.
+trace_append_event() {
+  local feature_dir="$1" trace_id="$2" issue_id="$3" slug="$4"
+  local phase="$5" event="$6"
+  local status="${7:-}" model="${8:-}" agent="${9:-}"
+  local extra_json="${10:-}"
+
+  [[ -n "$feature_dir" && -d "$feature_dir" && -n "$trace_id" ]] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+
+  local now
+  now=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "")
+
+  local base_line
+  base_line=$(jq -cn \
+    --arg sv "1.0" \
+    --arg tid "$trace_id" \
+    --arg iid "$issue_id" \
+    --arg sl "$slug" \
+    --arg ts "$now" \
+    --arg ph "$phase" \
+    --arg ev "$event" \
+    --arg st "$status" \
+    --arg mo "$model" \
+    --arg ag "$agent" \
+    '{schemaVersion:$sv,traceId:$tid,issueId:$iid,slug:$sl,timestamp:$ts,phase:$ph,event:$ev}
+     | if $st != "" then .status=$st else . end
+     | if $mo != "" then .model=$mo else . end
+     | if $ag != "" then .agent=$ag else . end' 2>/dev/null) || return 0
+
+  local line="$base_line"
+  if [[ -n "$extra_json" ]]; then
+    line=$(jq -n --argjson base "$base_line" --argjson extra "$extra_json" \
+      '$base + $extra' 2>/dev/null) || line="$base_line"
+  fi
+
+  [[ -n "$line" ]] || return 0
+  printf '%s\n' "$line" >> "$feature_dir/trace.jsonl" 2>/dev/null || true
+}
