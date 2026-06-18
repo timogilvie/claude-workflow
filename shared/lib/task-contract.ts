@@ -531,7 +531,8 @@ function extractVerificationItems(sources: SourceText[]): {
       ? present(scenarios, path)
       : absent('no verification scenarios found in section');
 
-    // Return once we have a section, even if fields within it are absent
+    // Return as soon as we find a section that yields at least one field; an
+    // empty section falls through so later source files can supply content.
     if (commands.length > 0 || scenarios.length > 0) {
       return { commands: commandField, scenarios: scenarioField };
     }
