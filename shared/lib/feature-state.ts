@@ -78,6 +78,7 @@ export type BlockerCode =
   | 'baseline_tests_failing'
   | 'repo_verification_blocked'
   | 'environment_blocked'
+  | 'stage_failed'
   | 'workflow_aborted'
   | 'unknown_blocker';
 
@@ -429,7 +430,7 @@ function deriveBlockers(
       } else if (stage === 'coding') {
         blockers.push({ code: 'coding_blocked', stage, detail: result.failureReason ?? undefined });
       } else {
-        blockers.push({ code: 'stage_failed' as BlockerCode, stage, detail: result.failureReason ?? undefined });
+        blockers.push({ code: 'stage_failed', stage, detail: result.failureReason ?? undefined });
       }
     }
 
