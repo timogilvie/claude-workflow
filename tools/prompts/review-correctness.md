@@ -67,6 +67,12 @@ These are NOT correctness issues and should not be flagged:
 
 Focus your review on these correctness categories:
 
+#### Predicted failures require reproduction or downgrade
+
+- If you think the code will fail a test or throw at runtime based only on static inspection, treat that as a hypothesis unless you can cite failing output, a CI log, or a literal fixture mismatch visible in the diff.
+- Prefix unreproduced findings with `Hypothesis (not reproduced):` and cap them at `severity: "warning"`.
+- Reserve `severity: "blocker"` for correctness failures you can reproduce or directly observe from the provided evidence.
+
 #### 1. Off-By-One Errors
 
 - **Array indexing** - Accessing items[items.length] instead of items[items.length - 1]

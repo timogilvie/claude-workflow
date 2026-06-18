@@ -2,9 +2,12 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { getMintEligibilityConfig } from './config.ts';
 import {
+  TECHNICAL_TASK_ROUTER_ROW_SCHEMA_VERSION,
+  TECHNICAL_TASK_ROUTER_ROW_SCHEMA_VERSION_V2,
   validateContributionRow,
   type ContributionRow,
   type TechnicalTaskRouterContributionRowV1,
+  type TechnicalTaskRouterContributionRowV2,
 } from './hokusai-contribution-schema.ts';
 import {
   type HokusaiDomain,
@@ -36,8 +39,11 @@ const REQUIRED_SCENARIOS = [
 
 type RequiredScenarioName = typeof REQUIRED_SCENARIOS[number];
 type AuditLineSource = 'export' | 'queue';
-type RowShape = 'submit_data' | 'technical_task_router_row/v1';
+type RowShape = 'submit_data' | 'technical_task_router_row/v1' | 'technical_task_router_row/v2';
 type CoverageRole = 'planner' | 'coder' | 'reviewer';
+type TechnicalTaskRouterBenchmarkRow =
+  | TechnicalTaskRouterContributionRowV1
+  | TechnicalTaskRouterContributionRowV2;
 type ThresholdMode = 'warn' | 'fail';
 
 export interface AuditThresholds {
@@ -145,8 +151,8 @@ interface LoadedAuditLine {
 
 interface AuditedBenchmarkRow {
   line: number;
-  shape: 'technical_task_router_row/v1';
-  row: TechnicalTaskRouterContributionRowV1 & Record<string, unknown>;
+  shape: 'technical_task_router_row/v1' | 'technical_task_router_row/v2';
+  row: TechnicalTaskRouterBenchmarkRow & Record<string, unknown>;
   descriptorGrouping: DescriptorGrouping;
   model30Grouping: Model30Grouping;
   explicitScenarios: Set<RequiredScenarioName>;
@@ -345,7 +351,7 @@ function extractExplicitScenarios(row: Record<string, unknown>): Set<RequiredSce
   return new Set();
 }
 
-function getDescriptorGrouping(row: TechnicalTaskRouterContributionRowV1): DescriptorGrouping {
+function getDescriptorGrouping(row: TechnicalTaskRouterBenchmarkRow): DescriptorGrouping {
   return {
     taskType: row.task_descriptor.task_type,
     domain: row.task_descriptor.domain,
@@ -363,7 +369,7 @@ function toModel30Complexity(complexity: number): HokusaiModel30EstimatedComplex
   return 'low';
 }
 
-function getModel30Grouping(row: TechnicalTaskRouterContributionRowV1): Model30Grouping {
+function getModel30Grouping(row: TechnicalTaskRouterBenchmarkRow): Model30Grouping {
   return {
     taskType: mapTaskTypeToModel30(row.task_descriptor.task_type, {
       hasMigration: row.task_descriptor.is_migration,
@@ -375,7 +381,7 @@ function getModel30Grouping(row: TechnicalTaskRouterContributionRowV1): Model30G
 }
 
 function extractCandidatePool(
-  row: TechnicalTaskRouterContributionRowV1 & Record<string, unknown>,
+  row: TechnicalTaskRouterBenchmarkRow & Record<string, unknown>,
   role: CoverageRole,
 ): string[] {
   const sources: unknown[] = [];
@@ -384,6 +390,7 @@ function extractCandidatePool(
     ? row.audit_metadata.candidate_pools
     : undefined;
   const currentPools = isPlainObject(row.current_candidate_pools) ? row.current_candidate_pools : undefined;
+  const availableModels = isPlainObject(row.available_models) ? row.available_models : undefined;
 
   if (rootPools) {
     sources.push(rootPools[role]);
@@ -399,6 +406,9 @@ function extractCandidatePool(
   }
   if (currentPools) {
     sources.push(currentPools[role]);
+  }
+  if (availableModels) {
+    sources.push(availableModels[`${role}_models`]);
   }
   sources.push(row.allowed_models);
 
@@ -591,7 +601,7 @@ function buildScenarioShares(rows: AuditedBenchmarkRow[], thresholds: AuditThres
 }
 
 function isV2CompliantBenchmarkRow(
-  row: TechnicalTaskRouterContributionRowV1 & Record<string, unknown>,
+  row: TechnicalTaskRouterBenchmarkRow & Record<string, unknown>,
 ): { ok: true; legacy: boolean } | { ok: false; reason: string } {
   if (!ACCEPTED_SCORER_REFS.has(row.scorer_ref ?? '')) {
     return {
@@ -639,7 +649,8 @@ function isV2CompliantBenchmarkRow(
 
   return {
     ok: true,
-    legacy: row.scorer_ref !== 'technical_task_router.benchmark_score/v2',
+    legacy: row.schema_version !== TECHNICAL_TASK_ROUTER_ROW_SCHEMA_VERSION_V2
+      && row.scorer_ref !== 'technical_task_router.benchmark_score/v2',
   };
 }
 
@@ -689,11 +700,17 @@ function summarizeReport(
       continue;
     }
 
-    if (!('schema_version' in validated) || validated.schema_version !== 'technical_task_router_row/v1') {
+    if (
+      !('schema_version' in validated)
+      || (
+        validated.schema_version !== TECHNICAL_TASK_ROUTER_ROW_SCHEMA_VERSION
+        && validated.schema_version !== TECHNICAL_TASK_ROUTER_ROW_SCHEMA_VERSION_V2
+      )
+    ) {
       continue;
     }
 
-    const row = validated as TechnicalTaskRouterContributionRowV1 & Record<string, unknown>;
+    const row = validated as TechnicalTaskRouterBenchmarkRow & Record<string, unknown>;
     const v2 = isV2CompliantBenchmarkRow(row);
     if (!v2.ok) {
       diagnostics.push({
@@ -713,7 +730,7 @@ function summarizeReport(
     const model30Grouping = getModel30Grouping(row);
     benchmarkRows.push({
       line: line.line,
-      shape: 'technical_task_router_row/v1',
+      shape: row.schema_version,
       row,
       descriptorGrouping,
       model30Grouping,

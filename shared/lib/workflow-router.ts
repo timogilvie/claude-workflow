@@ -11,6 +11,7 @@ import { readFileSync } from 'node:fs';
 import { buildEvalSummary, evaluateChallenge, type ChallengeRecommendation } from './challenge-scheduler.ts';
 import { getAvailableModelsForStage, getBudgetConfig, getChallengeSchedulerConfig, getDifficultyClassifierConfig, getHokusaiRouterConfig, getRouterConfig, isRouterCapabilityFilteringEnabled } from './config.ts';
 import { filterDeepSeekModels, type DeepSeekPoolFilterResult } from './deepseek-provider.ts';
+import { filterOpenRouterModels, type OpenRouterPoolFilterResult } from './openrouter-provider.ts';
 import { routeViaHokusai } from './hokusai-router.ts';
 import { analyzePrompt, loadRouterConfig, recommendModel, resolveAgent, type PromptCharacteristics, type TaskType } from './model-router.ts';
 import { compareLatencyTier, getEffectiveRegistry, getLadder, hasCapabilityConstraints, isModelEnabled, type CapabilityConstraints, type LatencyTier, type RegistryTaskType } from './model-registry.ts';
@@ -446,7 +447,7 @@ function buildStageCapabilityConstraints(
   };
 }
 
-function mergePoolWarnings(...results: DeepSeekPoolFilterResult[]): string[] {
+function mergePoolWarnings(...results: Array<DeepSeekPoolFilterResult | OpenRouterPoolFilterResult>): string[] {
   return [...new Set(results.flatMap((result) => result.warnings))];
 }
 
@@ -455,10 +456,11 @@ function filterProviderPool(
   repoDir?: string,
   stage?: 'planner' | 'coder' | 'reviewer',
 ): ResolvedModelPool {
-  const filtered = filterDeepSeekModels(filterDisabledModels(models), repoDir, stage);
+  const deepSeekFiltered = filterDeepSeekModels(filterDisabledModels(models), repoDir, stage);
+  const openRouterFiltered = filterOpenRouterModels(deepSeekFiltered.models, repoDir, stage);
   return {
-    models: filtered.models,
-    warnings: filtered.warnings,
+    models: openRouterFiltered.models,
+    warnings: mergePoolWarnings(deepSeekFiltered, openRouterFiltered),
   };
 }
 

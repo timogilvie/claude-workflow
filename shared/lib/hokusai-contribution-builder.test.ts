@@ -3,8 +3,13 @@ import { describe, it } from 'node:test';
 import {
   buildSubmitDataContributionRow,
   buildTechnicalTaskRouterContributionRow,
+  buildTechnicalTaskRouterContributionRowV2,
+  deriveOutcomeLabels,
 } from './hokusai-contribution-builder.ts';
-import type { RedactedEvalContributionProjection } from './hokusai-contribution-builder.ts';
+import type {
+  RedactedEvalContributionProjection,
+  RedactedEvalContributionProjectionV2,
+} from './hokusai-contribution-builder.ts';
 
 function makeProjection(
   overrides: Partial<RedactedEvalContributionProjection> = {},
@@ -50,6 +55,32 @@ function makeProjection(
     },
     budgetUsd: 10,
     scorerRef: 'router-benchmark/v1',
+    ...overrides,
+  };
+}
+
+function makeProjectionV2(
+  overrides: Partial<RedactedEvalContributionProjectionV2> = {},
+): RedactedEvalContributionProjectionV2 {
+  return {
+    ...makeProjection(),
+    availableModels: {
+      planner_models: ['planner-a'],
+      coder_models: ['coder-a', 'deepseek-coder-v2'],
+      reviewer_models: ['reviewer-a'],
+    },
+    candidatePool: {
+      scenario_id: 'challenger-qwen',
+      scenario_kind: 'challenger',
+      pool_size: 2,
+      baseline_model: 'gpt-5.4',
+    },
+    sparseCell: {
+      cell_id: 'frontend-medium-2_5',
+      descriptor_signature: 'frontend|medium|2_5',
+      observed_count: 2,
+      is_sparse: true,
+    },
     ...overrides,
   };
 }
@@ -126,6 +157,93 @@ describe('hokusai-contribution-builder', () => {
 
     assert.deepEqual(row.inputs, {
       safe: 'kept',
+    });
+  });
+
+  it('builds a full v2 benchmark row', () => {
+    const row = buildTechnicalTaskRouterContributionRowV2(makeProjectionV2());
+
+    assert.equal(row.schema_version, 'technical_task_router_row/v2');
+    assert.equal(row.available_models.coder_models[1], 'deepseek-coder-v2');
+    assert.equal(row.candidate_pool.baseline_model, 'gpt-5.4');
+    assert.equal(row.sparse_cell.is_sparse, true);
+  });
+
+  it('supports challenger rows with Qwen coder ids', () => {
+    const row = buildTechnicalTaskRouterContributionRowV2(makeProjectionV2({
+      selectedModels: {
+        planner: 'planner-a',
+        coder: 'qwen2.5-coder-32b',
+        reviewer: 'reviewer-a',
+      },
+      availableModels: {
+        planner_models: ['planner-a'],
+        coder_models: ['qwen2.5-coder-32b', 'deepseek-coder-v2'],
+        reviewer_models: ['reviewer-a'],
+      },
+    }));
+
+    assert.equal(row.selected_models.coder, 'qwen2.5-coder-32b');
+    assert.equal(row.candidate_pool.scenario_kind, 'challenger');
+  });
+
+  it('derives outcome labels from observed cost and time', () => {
+    const labels = deriveOutcomeLabels(makeProjectionV2({
+      budgetUsd: 2,
+      actualCostUsd: 6,
+      wallClockSeconds: 3600,
+      observedSuccess: false,
+    }));
+
+    assert.deepEqual(labels, {
+      budget_label: 'over_budget',
+      cost_label: 'high',
+      time_label: 'slow',
+      success_label: 'failure',
+    });
+  });
+
+  it('applies role-pool fallback when role-specific pools are missing', () => {
+    const row = buildTechnicalTaskRouterContributionRowV2(makeProjectionV2({
+      availableModels: undefined,
+      selectedModels: {
+        coder: 'coder-a',
+        reviewer: 'reviewer-a',
+      },
+    }));
+
+    assert.deepEqual(row.available_models, {
+      planner_models: [],
+      coder_models: ['planner-a', 'coder-a', 'reviewer-a'],
+      reviewer_models: ['planner-a', 'coder-a', 'reviewer-a'],
+    });
+  });
+
+  it('fills default v2 metadata when optional scenario fields are absent', () => {
+    const row = buildTechnicalTaskRouterContributionRowV2(makeProjectionV2({
+      candidatePool: undefined,
+      sparseCell: undefined,
+      actualCostUsd: null,
+      wallClockSeconds: undefined,
+      budgetUsd: undefined,
+    }));
+
+    assert.deepEqual(row.candidate_pool, {
+      scenario_id: 'unknown',
+      scenario_kind: 'unknown',
+      pool_size: 3,
+    });
+    assert.deepEqual(row.sparse_cell, {
+      cell_id: 'unknown',
+      descriptor_signature: 'unknown',
+      observed_count: 0,
+      is_sparse: false,
+    });
+    assert.deepEqual(row.outcome_labels, {
+      budget_label: 'unknown',
+      cost_label: 'unknown',
+      time_label: 'unknown',
+      success_label: 'success',
     });
   });
 });

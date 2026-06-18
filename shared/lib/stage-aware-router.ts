@@ -17,6 +17,7 @@ import { computeModelCost, loadPricingTable } from './workflow-cost.ts';
 import type { WorkflowRouteDecision, PlanDepth, CodeDepth, ReviewMode } from './workflow-router.ts';
 import { getAvailableModelsForStage, getRouterConfig } from './config.ts';
 import { filterDeepSeekModels } from './deepseek-provider.ts';
+import { filterOpenRouterModels } from './openrouter-provider.ts';
 import {
   evaluateCapabilityConstraints,
   getConfiguredModelsForDescriptor,
@@ -581,21 +582,26 @@ const STAGE_KEY_TO_COST_STAGE: Record<'plan' | 'implementation' | 'review', 'pla
   review: 'review',
 };
 
+function filterProviderModels(
+  models: string[],
+  repoDir?: string,
+  stage?: 'planner' | 'coder' | 'reviewer',
+): string[] {
+  const deepSeekFiltered = filterDeepSeekModels(filterDisabledModels(models), repoDir, stage);
+  return filterOpenRouterModels(deepSeekFiltered.models, repoDir, stage).models;
+}
+
 function resolveSeedModelsForRole(
   allowedModels: Set<string> | null,
   role: 'planner' | 'coder' | 'reviewer',
   repoDir?: string,
 ): string[] {
   if (allowedModels) {
-    // Upstream stage pools are already disabled/DeepSeek filtered.
+    // Upstream stage pools are already provider filtered.
     return [...allowedModels];
   }
 
-  return filterDeepSeekModels(
-    filterDisabledModels(getConfiguredModelsForDescriptorStage(repoDir, role)),
-    repoDir,
-    role,
-  ).models;
+  return filterProviderModels(getConfiguredModelsForDescriptorStage(repoDir, role), repoDir, role);
 }
 
 function aggregateRoleRanking(
@@ -974,40 +980,13 @@ export function routeStageAwareWithContext(
   options: StageAwareOptions = {},
 ): StageAwareDecision | null {
   const { repoDir, routerConfig, records } = context;
-  const plannerModels = filterDeepSeekModels(
-    filterDisabledModels(getAvailableModelsForStage(routerConfig, 'planner') || []),
-    repoDir,
-    'planner',
-  ).models;
-  const coderModels = filterDeepSeekModels(
-    filterDisabledModels(getAvailableModelsForStage(routerConfig, 'coder') || []),
-    repoDir,
-    'coder',
-  ).models;
-  const reviewerModels = filterDeepSeekModels(
-    filterDisabledModels(getAvailableModelsForStage(routerConfig, 'reviewer') || []),
-    repoDir,
-    'reviewer',
-  ).models;
-  const filteredModelsAvailable = filterDeepSeekModels(
-    filterDisabledModels(options.modelsAvailable || []),
-    repoDir,
-  ).models;
-  const filteredPlannerOptions = filterDeepSeekModels(
-    filterDisabledModels(options.plannerModelsAvailable || []),
-    repoDir,
-    'planner',
-  ).models;
-  const filteredCoderOptions = filterDeepSeekModels(
-    filterDisabledModels(options.coderModelsAvailable || []),
-    repoDir,
-    'coder',
-  ).models;
-  const filteredReviewerOptions = filterDeepSeekModels(
-    filterDisabledModels(options.reviewerModelsAvailable || []),
-    repoDir,
-    'reviewer',
-  ).models;
+  const plannerModels = filterProviderModels(getAvailableModelsForStage(routerConfig, 'planner') || [], repoDir, 'planner');
+  const coderModels = filterProviderModels(getAvailableModelsForStage(routerConfig, 'coder') || [], repoDir, 'coder');
+  const reviewerModels = filterProviderModels(getAvailableModelsForStage(routerConfig, 'reviewer') || [], repoDir, 'reviewer');
+  const filteredModelsAvailable = filterProviderModels(options.modelsAvailable || [], repoDir);
+  const filteredPlannerOptions = filterProviderModels(options.plannerModelsAvailable || [], repoDir, 'planner');
+  const filteredCoderOptions = filterProviderModels(options.coderModelsAvailable || [], repoDir, 'coder');
+  const filteredReviewerOptions = filterProviderModels(options.reviewerModelsAvailable || [], repoDir, 'reviewer');
   const kNeighbors = options.kNeighbors || routerConfig.kNeighbors || DEFAULT_K_NEIGHBORS;
   const minRecords = options.minRecords || routerConfig.minRecords || DEFAULT_MIN_RECORDS;
   const minModels = options.minModels || routerConfig.minModels || DEFAULT_MIN_MODELS;
