@@ -44,7 +44,8 @@ import {
   collectDeliveryOutcome,
 } from './outcome-collectors.ts';
 import { evaluateTask } from './eval.ts';
-import { attachPhaseDurations, attachStageOutcomes, enrichTrainingMetadata } from './eval-record-builder.ts';
+import { attachPhaseDurations, attachStageOutcomes, attachTraceId, enrichTrainingMetadata } from './eval-record-builder.ts';
+import { loadTraceContext, appendTraceEvent } from './trace-event.ts';
 import { appendEvalRecord } from './eval-persistence.ts';
 import { buildTaskDescriptor } from './task-descriptor-builder.ts';
 import { getMaxCostUsd } from './config.ts';
@@ -540,6 +541,22 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
     constraints: evalConstraints,
   });
 
+  // 10a. Attach trace correlation ID (HOK-2259) — best-effort
+  const slug = branch.replace(/^(task|bug)\//, '') || issueId.toLowerCase();
+  let traceCtx = null;
+  if (worktreePath && slug) {
+    for (const dir of ['features', 'bugs']) {
+      const featureDir = path.join(worktreePath, dir, slug);
+      traceCtx = loadTraceContext(featureDir);
+      if (traceCtx) {
+        break;
+      }
+    }
+  }
+  if (traceCtx) {
+    attachTraceId(record, traceCtx.traceId);
+  }
+
   // 11. Persist eval record to disk
   let persisted = false;
   try {
@@ -548,6 +565,21 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
   } catch (err) {
     const errorMsg = errorMessage(err);
     console.error(`Warning: failed to persist eval record: ${errorMsg}`);
+  }
+
+  // 11a. Emit eval_recorded trace event (HOK-2259) — best-effort
+  if (persisted && traceCtx) {
+    appendTraceEvent(traceCtx, {
+      phase: 'eval',
+      event: 'eval_recorded',
+      status: 'ok',
+      meta: {
+        evalId: record.id,
+        score: record.score,
+        scoreBand: record.scoreBand,
+        interventionCount: record.interventionCount,
+      },
+    }).catch(() => undefined);
   }
 
   if (persisted) {

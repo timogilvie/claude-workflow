@@ -155,6 +155,7 @@ harness_extract_real_functions() {
     resolve_stage_result_model \
     approve_plan \
     write_stage_result \
+    _write_stage_result_trace_event \
     read_stage_status \
     read_stage_result \
     check_stage_complete \

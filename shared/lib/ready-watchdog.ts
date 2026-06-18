@@ -1,6 +1,7 @@
 import { appendFile, readFile, rm } from 'node:fs/promises';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
+import { loadTraceContext, appendTraceEvent } from './trace-event.ts';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -900,6 +901,20 @@ function buildExhaustedAutoUpdateEntry(
   });
 }
 
+/** Emit a ready-phase trace event from the feature directory — best-effort, never throws. */
+function emitReadyTraceEvent(
+  featureDir: string,
+  event: 'check_passed' | 'check_failed' | 'remediation_started' | 'remediation_completed',
+  status: 'ok' | 'failed',
+  meta?: Record<string, unknown>,
+): void {
+  const ctx = loadTraceContext(featureDir);
+  if (!ctx) {
+    return;
+  }
+  appendTraceEvent(ctx, { phase: 'ready', event, status, meta }).catch(() => undefined);
+}
+
 export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Promise<TickReadyWatchdogResult> {
   const deps: ReadyWatchdogDeps = {
     ...defaultDeps,
@@ -1153,6 +1168,27 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
         recoveryCommand: entry.recoveryCommand,
         error: fetchError,
       });
+
+      // Emit trace events for material check state changes (HOK-2259) — best-effort
+      const traceAction = entry.action;
+      const traceKind = entry.classification;
+      const traceMeta = { prNumber: snapshot.prNumber, slug: snapshot.slug, detail: entry.detail };
+      if (traceAction === 'launched-remediation') {
+        emitReadyTraceEvent(snapshot.readyStateDir, 'remediation_started', 'ok', traceMeta);
+      } else if (traceKind === 'waiting-on-merge-lane') {
+        emitReadyTraceEvent(snapshot.readyStateDir, 'check_passed', 'ok', traceMeta);
+      } else if (
+        traceAction === 'remediation-exhausted'
+        || (traceKind === 'needs-user' && prior?.classification === 'waiting-on-ci')
+      ) {
+        emitReadyTraceEvent(snapshot.readyStateDir, 'remediation_completed', 'failed', traceMeta);
+      } else if (traceKind === 'needs-user' || traceAction === 'reported') {
+        emitReadyTraceEvent(snapshot.readyStateDir, 'check_failed', 'failed', {
+          ...traceMeta,
+          classification: traceKind,
+          action: traceAction,
+        });
+      }
     }
   }
 
