@@ -428,9 +428,11 @@ describe('quota fallback', () => {
   });
 
   it('filters task ladders to models supported by the selected provider', async () => {
+    // claude-fable-5 is ladder-first for planning but globally disabled, so the
+    // first surviving claude-compatible candidate (claude-opus-4-8) should win.
     const { cliPath, logPath } = createMockCli('provider-filter', {
       'gpt-5.5': { type: 'other', message: 'invalid model for claude cli', code: 1 },
-      'claude-fable-5': { type: 'success', text: 'anthropic planning winner' },
+      'claude-opus-4-8': { type: 'success', text: 'anthropic planning winner' },
     });
 
     const result = await callLLM('planning prompt', {
@@ -441,8 +443,31 @@ describe('quota fallback', () => {
       taskType: 'planning',
     });
 
-    assert.equal(result.model, 'claude-fable-5');
-    assert.deepEqual(readInvocations(logPath).map((entry) => entry.model), ['claude-fable-5']);
+    assert.equal(result.model, 'claude-opus-4-8');
+    assert.deepEqual(readInvocations(logPath).map((entry) => entry.model), ['claude-opus-4-8']);
+  });
+
+  it('excludes globally disabled models from the fallback ladder', async () => {
+    // claude-fable-5 is disabled upstream (DISABLED_MODEL_IDS). Even though it is
+    // ladder-first for planning, it must never be invoked — the resolver should
+    // skip straight to claude-opus-4-8. Regression guard for the silent exit-1
+    // expansion failures when fable access was restricted.
+    const { cliPath, logPath } = createMockCli('disabled-filter', {
+      'claude-fable-5': { type: 'other', message: 'fable access restricted', code: 1 },
+      'claude-opus-4-8': { type: 'success', text: 'planning winner' },
+    });
+
+    const result = await callLLM('planning prompt', {
+      provider: 'claude',
+      mode: 'stream',
+      cliCmd: cliPath,
+      repoDir,
+      taskType: 'planning',
+    });
+
+    assert.equal(result.model, 'claude-opus-4-8');
+    const invoked = readInvocations(logPath).map((entry) => entry.model);
+    assert.ok(!invoked.includes('claude-fable-5'), 'disabled model must not be invoked');
   });
 
   it('keeps DeepSeek Claude-compatible models in provider-filtered ladders', async () => {

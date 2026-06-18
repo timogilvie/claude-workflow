@@ -341,6 +341,151 @@ describe('evaluateTask', () => {
     });
   });
 
+  it('accepts rubricEval with determinative_boundary "unverified_prediction"', async () => {
+    const validResponse = JSON.stringify({
+      score: 0.84,
+      rationale: 'Unreproduced predicted failures only slightly affected the score.',
+      interventionFlags: [],
+      rubricEval: {
+        schema_version: '1.0',
+        rubric_version: '1.1',
+        criteria: {
+          completeness: { score: 0.88, rationale: 'Scope was covered.' },
+          correctness: { score: 0.82, rationale: 'No reproduced failure was shown.' },
+          code_quality: { score: 0.84, rationale: 'The change fit project conventions.' },
+          intervention_impact: { score: 0.8, rationale: 'No functional fix was required.' },
+          autonomy: { score: 0.83, rationale: 'The workflow remained mostly autonomous.' },
+        },
+        determinative_boundary: 'unverified_prediction',
+      },
+    });
+
+    const result = await evaluateTask(
+      {
+        taskPrompt: 'Cap unreproduced predicted failures',
+        prReviewOutput: 'Predicted issue was not reproduced',
+      },
+      undefined,
+      { _callFn: mockCallFn(validResponse) }
+    );
+
+    assert.equal(result.rubricEval?.determinative_boundary, 'unverified_prediction');
+    assert.equal(result.rubricEval?.rubric_version, '1.1');
+  });
+
+  it('accepts rubricEval with determinative_boundary "vacuous_safety_gate"', async () => {
+    const validResponse = JSON.stringify({
+      score: 0.58,
+      rationale: 'The gate was structurally bypassable on the default path.',
+      interventionFlags: [],
+      rubricEval: {
+        schema_version: '1.0',
+        rubric_version: '1.1',
+        criteria: {
+          completeness: { score: 0.7, rationale: 'Most requested pieces were present.' },
+          correctness: { score: 0.55, rationale: 'The gate could not enforce its main assertion.' },
+          code_quality: { score: 0.74, rationale: 'The code was readable but structurally weak.' },
+          intervention_impact: { score: 0.6, rationale: 'The defect materially reduced confidence.' },
+          autonomy: { score: 0.58, rationale: 'The workflow shipped a vacuous gate.' },
+        },
+        determinative_boundary: 'vacuous_safety_gate',
+      },
+    });
+
+    const result = await evaluateTask(
+      {
+        taskPrompt: 'Score vacuous CI gates correctly',
+        prReviewOutput: 'Gate passes by skipping enforcement',
+      },
+      undefined,
+      { _callFn: mockCallFn(validResponse) }
+    );
+
+    assert.equal(result.rubricEval?.determinative_boundary, 'vacuous_safety_gate');
+    assert.equal(result.rubricEval?.rubric_version, '1.1');
+  });
+
+  it('drops unknown rubricEval determinative boundaries while preserving the rest', async () => {
+    const validResponse = JSON.stringify({
+      score: 0.8,
+      rationale: 'Unknown boundary labels should not poison rubric parsing.',
+      interventionFlags: [],
+      rubricEval: {
+        schema_version: '1.0',
+        rubric_version: '1.1',
+        criteria: {
+          completeness: { score: 0.85, rationale: 'Scope was covered.' },
+          correctness: { score: 0.8, rationale: 'Behavior appears correct.' },
+          code_quality: { score: 0.82, rationale: 'The change fit the codebase.' },
+          intervention_impact: { score: 0.79, rationale: 'Interventions were limited.' },
+          autonomy: { score: 0.8, rationale: 'Execution was mostly autonomous.' },
+        },
+        determinative_boundary: 'totally_unknown_boundary',
+      },
+    });
+
+    const result = await evaluateTask(
+      {
+        taskPrompt: 'Ignore invalid determinative boundary values',
+        prReviewOutput: 'Boundary label is invalid',
+      },
+      undefined,
+      { _callFn: mockCallFn(validResponse) }
+    );
+
+    assert.deepEqual(result.rubricEval, {
+      schema_version: '1.0',
+      rubric_version: '1.1',
+      criteria: {
+        completeness: { score: 0.85, rationale: 'Scope was covered.' },
+        correctness: { score: 0.8, rationale: 'Behavior appears correct.' },
+        code_quality: { score: 0.82, rationale: 'The change fit the codebase.' },
+        intervention_impact: { score: 0.79, rationale: 'Interventions were limited.' },
+        autonomy: { score: 0.8, rationale: 'Execution was mostly autonomous.' },
+      },
+    });
+  });
+
+  it('accepts rubricEval with no determinative_boundary', async () => {
+    const validResponse = JSON.stringify({
+      score: 0.89,
+      rationale: 'determinative_boundary remains optional.',
+      interventionFlags: [],
+      rubricEval: {
+        schema_version: '1.0',
+        rubric_version: '1.1',
+        criteria: {
+          completeness: { score: 0.9, rationale: 'Scope was fully covered.' },
+          correctness: { score: 0.88, rationale: 'No functional defects were reported.' },
+          code_quality: { score: 0.9, rationale: 'The code was well integrated.' },
+          intervention_impact: { score: 0.87, rationale: 'Intervention burden was low.' },
+          autonomy: { score: 0.88, rationale: 'The workflow was nearly autonomous.' },
+        },
+      },
+    });
+
+    const result = await evaluateTask(
+      {
+        taskPrompt: 'Keep determinative boundary optional',
+        prReviewOutput: 'Clean verification evidence',
+      },
+      undefined,
+      { _callFn: mockCallFn(validResponse) }
+    );
+
+    assert.deepEqual(result.rubricEval, {
+      schema_version: '1.0',
+      rubric_version: '1.1',
+      criteria: {
+        completeness: { score: 0.9, rationale: 'Scope was fully covered.' },
+        correctness: { score: 0.88, rationale: 'No functional defects were reported.' },
+        code_quality: { score: 0.9, rationale: 'The code was well integrated.' },
+        intervention_impact: { score: 0.87, rationale: 'Intervention burden was low.' },
+        autonomy: { score: 0.88, rationale: 'The workflow was nearly autonomous.' },
+      },
+    });
+  });
+
   it('stores rubricCriteria from stageScores and enriches stageOutcomes', async () => {
     const validResponse = JSON.stringify({
       score: 0.86,
@@ -933,13 +1078,13 @@ describe('evaluateTask', () => {
         undefined,
         {
           _callFn: callFn,
-          _promptSizeConfig: { maxPromptBytes: 25_000, oversizePolicy: 'truncate' },
+          _promptSizeConfig: { maxPromptBytes: 26_000, oversizePolicy: 'truncate' },
         }
       );
 
       assert.equal(callFn.mock.callCount(), 1);
       const sentPrompt = callFn.mock.calls[0].arguments[0];
-      assert.ok(Buffer.byteLength(sentPrompt, 'utf8') <= 25_000);
+      assert.ok(Buffer.byteLength(sentPrompt, 'utf8') <= 26_000);
       assert.match(sentPrompt, /TRUNCATED \d+ bytes from prReviewOutput/);
       assert.equal(result.promptSizeDiagnostic.action, 'truncated');
       assert.equal(result.failureReason, undefined);
