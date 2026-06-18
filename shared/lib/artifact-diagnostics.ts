@@ -138,7 +138,12 @@ function readWorkflowState(repoDir: string): Record<string, unknown> | null {
 }
 
 function readEvalRecordsTolerant(repoDir: string): { records: EvalRecord[]; malformedLines: Array<{ line: number; reason: string }> } {
-  const { dir: evalsDir } = resolveEvalsDir(undefined, repoDir);
+  let evalsDir: string;
+  try {
+    evalsDir = resolveEvalsDir(undefined, repoDir).dir;
+  } catch {
+    return { records: [], malformedLines: [] };
+  }
   const evalsPath = join(evalsDir, 'evals.jsonl');
   const result = readJsonlTolerant<EvalRecord>(evalsPath);
   return { records: result.records, malformedLines: result.malformedLines };
@@ -482,10 +487,14 @@ function checkEvalWithoutOutcome(
   traceId: string | null,
   repoDir: string,
 ): ArtifactDiagnosticFinding[] {
-  // Find matching eval records
+  // Find matching eval records. Match by traceId, issueId, or challengePairId
+  // derived from the taskId (the `<id>_c` challenger convention) so challenge
+  // pair evals are not silently missed.
+  const challengePairId = taskId ? `${taskId}_c` : null;
   const matchingEvals = evalRecords.filter(r => {
     if (traceId && r.traceId === traceId) return true;
     if (taskId && r.issueId === taskId) return true;
+    if (challengePairId && r.challengePairId === challengePairId) return true;
     return false;
   });
 
@@ -497,7 +506,12 @@ function checkEvalWithoutOutcome(
 
   // Also check archive dir for archived feature-state
   if (!isFinal && taskId) {
-    const archiveDir = resolveRouteArtifactArchiveDir(taskId, repoDir);
+    let archiveDir: string | undefined;
+    try {
+      archiveDir = resolveRouteArtifactArchiveDir(taskId, repoDir);
+    } catch {
+      archiveDir = undefined;
+    }
     if (archiveDir) {
       const archivedStatePath = join(archiveDir, 'feature-state.json');
       const archivedResult = readJsonTolerant<FeatureState>(archivedStatePath);
