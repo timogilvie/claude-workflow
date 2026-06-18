@@ -470,10 +470,19 @@ function extractSuccessCriteria(content: string): TaskContractCriterion[] {
   const section = extractSection(content, 'Success Criteria');
   if (!section) return [];
 
-  const criteria: TaskContractCriterion[] = [];
-  let syntheticCounter = 0;
-
+  // First pass: collect authored REQ-* IDs so synthesized IDs can avoid collisions.
+  const authoredIds = new Set<string>();
   const lines = section.split('\n');
+  for (const line of lines) {
+    const m = /^[-*]\s+(?:\[[ x?]\]\s+)?(.+)$/.exec(line.trim());
+    if (!m) continue;
+    const idMatch = REQ_ID_RE.exec(m[1]);
+    if (idMatch) authoredIds.add(`REQ-${idMatch[1].toUpperCase()}`);
+  }
+
+  const criteria: TaskContractCriterion[] = [];
+  let nextSynthetic = 1;
+
   for (const line of lines) {
     const trimmed = line.trim();
     // Accept checkbox bullets `- [ ] ...` or plain bullets `- ...`
@@ -498,8 +507,14 @@ function extractSuccessCriteria(content: string): TaskContractCriterion[] {
       if (!text) continue;
       criteria.push({ id: `REQ-${idMatch[1]}`, text, synthesized: false });
     } else {
-      syntheticCounter += 1;
-      criteria.push({ id: `REQ-F${syntheticCounter}`, text, synthesized: true });
+      // Find the next REQ-F<n> that does not collide with an authored ID.
+      let synthId = `REQ-F${nextSynthetic}`;
+      while (authoredIds.has(synthId.toUpperCase())) {
+        nextSynthetic += 1;
+        synthId = `REQ-F${nextSynthetic}`;
+      }
+      nextSynthetic += 1;
+      criteria.push({ id: synthId, text, synthesized: true });
     }
   }
 

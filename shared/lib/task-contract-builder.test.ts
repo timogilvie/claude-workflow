@@ -385,6 +385,41 @@ test('progressive-disclosure: details-only fields extracted from details file', 
     // Third criterion has no tag → synthesized
     const synthesized = contract.successCriteria.filter((c) => c.synthesized);
     assert.ok(synthesized.length > 0, 'at least one synthesized criterion');
+    // All criterion IDs must be unique — synthesized IDs cannot collide with authored ones.
+    assert.equal(new Set(ids).size, ids.length, `duplicate criterion IDs: ${ids.join(', ')}`);
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('success criteria: synthesized IDs skip authored REQ-F numbers to avoid collisions', async () => {
+  const PACKET = `# Task
+
+**Issue ID**: HOK-9999
+
+## 1. Complete Objective & Scope
+
+Do stuff that needs to be done correctly.
+
+## 4. Success Criteria
+
+- [ ] **[REQ-F1]** Authored criterion one with enough length.
+- [ ] **[REQ-F2]** Authored criterion two with enough length.
+- [ ] Untagged criterion without an explicit REQ tag here.
+- [ ] Another untagged criterion that also has no tag here.
+`;
+  const { tmpDir, featureDir } = makeTempFeatureDir('synth-collision', {
+    'task-packet.md': PACKET,
+  });
+  try {
+    const contract = await buildTaskContract(featureDir, { repoDir: tmpDir });
+    const ids = contract.successCriteria.map((c) => c.id);
+    assert.equal(new Set(ids).size, ids.length, `duplicate criterion IDs: ${ids.join(', ')}`);
+    // Authored REQ-F1 and REQ-F2 should remain; synthesized IDs must skip them.
+    const synthesized = contract.successCriteria.filter((c) => c.synthesized).map((c) => c.id);
+    for (const id of synthesized) {
+      assert.ok(!['REQ-F1', 'REQ-F2'].includes(id), `synthesized id ${id} collides with authored`);
+    }
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
   }
