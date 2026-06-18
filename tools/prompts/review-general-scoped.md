@@ -66,6 +66,10 @@ Review the diff against the plan and task packet (if provided), but evaluate ONL
    - New control-flow branches with no coverage
    - Removed tests without replacement
 
+Predicted test failures must stay scoped: if you infer "this will fail tests" from code inspection alone, label it `Hypothesis (not reproduced):` and keep it at `warning` until you have failing output, CI evidence, or a literal fixture mismatch.
+
+Vacuous CI gates are in scope even for degraded review: treat skip-as-pass patterns such as `continue-on-error` on required clone steps, missing-sibling no-ops, warn-and-pass branches, or unreachable env-flag enforcement as concrete regressions when they make the gate's headline assertion unreachable on the default path.
+
 Do NOT report:
 - Architectural critique
 - Naming or abstraction preferences

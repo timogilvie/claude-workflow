@@ -842,7 +842,9 @@ export type RubricDeterminativeBoundary =
   | 'cosmetic_only'
   | 'functional_bug'
   | 'multiple_bugs'
-  | 'heavy_intervention';
+  | 'heavy_intervention'
+  | 'unverified_prediction'
+  | 'vacuous_safety_gate';
 
 /**
  * Score and rationale for a single rubric criterion.
@@ -879,6 +881,8 @@ export interface RubricCriteria {
  *
  * Captures per-criterion scores as durable training signal and records
  * which scoring boundary was the binding constraint on the final score.
+ * Rubric version 1.1 added the `unverified_prediction` and
+ * `vacuous_safety_gate` boundary names while keeping the field optional.
  *
  * @since 1.10.0
  */

@@ -597,6 +597,22 @@ describe('quota-state', () => {
             status: 'degrading',
             reason: 'aggregate frontier capacity check',
           },
+          'deepseek-r1': {
+            status: 'degrading',
+            reason: 'aggregate frontier capacity check',
+          },
+          'gemini-2.5-pro': {
+            status: 'degrading',
+            reason: 'aggregate frontier capacity check',
+          },
+          'qwen-3-235b': {
+            status: 'degrading',
+            reason: 'aggregate frontier capacity check',
+          },
+          'kimi-k2-thinking': {
+            status: 'degrading',
+            reason: 'aggregate frontier capacity check',
+          },
         },
       },
     });
@@ -689,6 +705,22 @@ describe('quota-state', () => {
       modelId: 'deepseek-v4-pro',
       reason: '429 rate_limit',
     }, repoDir);
+    recordLimitError({
+      modelId: 'deepseek-r1',
+      reason: '429 rate_limit',
+    }, repoDir);
+    recordLimitError({
+      modelId: 'gemini-2.5-pro',
+      reason: '429 rate_limit',
+    }, repoDir);
+    recordLimitError({
+      modelId: 'qwen-3-235b',
+      reason: '429 rate_limit',
+    }, repoDir);
+    recordLimitError({
+      modelId: 'kimi-k2-thinking',
+      reason: '429 rate_limit',
+    }, repoDir);
 
     assert.equal(getCurrentOperatingMode(repoDir), 'constrained');
   });
@@ -703,6 +735,10 @@ describe('quota-state', () => {
     markExhausted({ modelId: 'gpt-5.5', reason: 'quota_exhausted' }, repoDir);
     markExhausted({ modelId: 'gpt-5.4', reason: 'quota_exhausted' }, repoDir);
     markExhausted({ modelId: 'deepseek-v4-pro', reason: 'quota_exhausted' }, repoDir);
+    markExhausted({ modelId: 'deepseek-r1', reason: 'quota_exhausted' }, repoDir);
+    markExhausted({ modelId: 'gemini-2.5-pro', reason: 'quota_exhausted' }, repoDir);
+    markExhausted({ modelId: 'qwen-3-235b', reason: 'quota_exhausted' }, repoDir);
+    markExhausted({ modelId: 'kimi-k2-thinking', reason: 'quota_exhausted' }, repoDir);
 
     assert.equal(getCurrentOperatingMode(repoDir), 'survival');
   });

@@ -102,6 +102,38 @@
         "inputCostPerMTok": 5,
         "outputCostPerMTok": 30
       },
+      "qwen-3-coder": {
+        "inputCostPerMTok": 0.35,
+        "outputCostPerMTok": 1.05
+      },
+      "qwen-2.5-coder-32b": {
+        "inputCostPerMTok": 0.2,
+        "outputCostPerMTok": 0.6
+      },
+      "kimi-k2": {
+        "inputCostPerMTok": 1,
+        "outputCostPerMTok": 3
+      },
+      "gemini-2.5-pro": {
+        "inputCostPerMTok": 1.25,
+        "outputCostPerMTok": 10
+      },
+      "gemini-2.5-flash": {
+        "inputCostPerMTok": 0.3,
+        "outputCostPerMTok": 2.5
+      },
+      "llama-3.3-70b": {
+        "inputCostPerMTok": 0.12,
+        "outputCostPerMTok": 0.3
+      },
+      "mistral-large-2": {
+        "inputCostPerMTok": 2,
+        "outputCostPerMTok": 6
+      },
+      "devstral-small": {
+        "inputCostPerMTok": 0.1,
+        "outputCostPerMTok": 0.25
+      },
       "gpt-5.3-codex-spark": {
         "inputCostPerMTok": 1.75,
         "outputCostPerMTok": 14,
@@ -126,6 +158,28 @@
       "endpoint": "https://api.hokusai.dev/v1/submit"
     }
   },
+  "providers": {
+    "openrouter": {
+      "enabled": true,
+      "apiKeyEnv": "OPENROUTER_API_KEY",
+      "baseUrl": "https://openrouter.ai/api",
+      "models": [
+        "qwen-3-coder",
+        "qwen-2.5-coder-32b",
+        "kimi-k2",
+        "gemini-2.5-pro",
+        "gemini-2.5-flash",
+        "llama-3.3-70b",
+        "mistral-large-2",
+        "devstral-small"
+      ],
+      "stages": [
+        "planner",
+        "coder",
+        "reviewer"
+      ]
+    }
+  },
   "challenge": {
     "enabled": true,
     "rate": 0.5,
@@ -144,7 +198,15 @@
       "claude-opus-4-7",
       "claude-haiku-4-5-20251001",
       "gpt-5.4",
-      "gpt-5.5"
+      "gpt-5.5",
+      "qwen-3-coder",
+      "qwen-2.5-coder-32b",
+      "kimi-k2",
+      "gemini-2.5-pro",
+      "gemini-2.5-flash",
+      "llama-3.3-70b",
+      "mistral-large-2",
+      "devstral-small"
     ],
     "comparisonModel": "claude-opus-4-7",
     "autoMergeWinner": false
@@ -159,7 +221,7 @@
   },
   "router": {
     "enabled": true,
-    "defaultModel": "claude-sonnet-4-6",
+    "defaultModel": "gpt-5.5",
     "minRecords": 20,
     "minModels": 2,
     "models": [],
@@ -183,7 +245,46 @@
       "maxStageShare": 0.7,
       "window": 50
     },
-    "defaultAgent": "claude",
+    "availableModels": {
+      "planner": [
+        "claude-fable-5",
+        "claude-opus-4-8",
+        "claude-opus-4-7",
+        "gpt-5.5",
+        "gpt-5.4",
+        "kimi-k2",
+        "gemini-2.5-pro",
+        "mistral-large-2"
+      ],
+      "coder": [
+        "claude-fable-5",
+        "claude-sonnet-4-6",
+        "gpt-5.5",
+        "gpt-5.4",
+        "qwen-3-coder",
+        "qwen-2.5-coder-32b",
+        "kimi-k2",
+        "gemini-2.5-pro",
+        "gemini-2.5-flash",
+        "llama-3.3-70b",
+        "mistral-large-2",
+        "devstral-small"
+      ],
+      "reviewer": [
+        "claude-fable-5",
+        "claude-opus-4-8",
+        "claude-opus-4-7",
+        "gpt-5.5",
+        "gpt-5.4",
+        "qwen-3-coder",
+        "kimi-k2",
+        "gemini-2.5-pro",
+        "gemini-2.5-flash",
+        "llama-3.3-70b",
+        "mistral-large-2"
+      ]
+    },
+    "defaultAgent": "codex",
     "agentMap": {
       "claude-fable-5": "claude",
       "claude-opus-4-8": "claude",
@@ -195,7 +296,15 @@
       "gpt-5.3-codex": "codex",
       "gpt-5.4": "codex",
       "gpt-5.5": "codex",
-      "gpt-5.3-codex-spark": "codex"
+      "gpt-5.3-codex-spark": "codex",
+      "qwen-3-coder": "claude-openrouter",
+      "qwen-2.5-coder-32b": "claude-openrouter",
+      "kimi-k2": "claude-openrouter",
+      "gemini-2.5-pro": "claude-openrouter",
+      "gemini-2.5-flash": "claude-openrouter",
+      "llama-3.3-70b": "claude-openrouter",
+      "mistral-large-2": "claude-openrouter",
+      "devstral-small": "claude-openrouter"
     },
     "mode": "auto",
     "llmModel": "gpt-4o-mini",
