@@ -2,6 +2,7 @@ import { mkdirSync, chmodSync, writeFileSync } from 'node:fs';
 import { join, resolve, normalize } from 'node:path';
 import { homedir } from 'node:os';
 import { getOpenRouterProviderConfig } from './config.ts';
+import { readDotEnvFile } from './env-file.ts';
 import { OPENROUTER_BASE_URL, isOpenRouterModel, resolveOpenRouterModelId } from './openrouter-provider.ts';
 
 const DEFAULT_API_KEY_ENV = 'OPENROUTER_API_KEY';
@@ -87,8 +88,10 @@ export function resolveOpenRouterLauncherStateDir(
 function resolveApiKey(
   apiKeyEnv: string,
   processEnv: Record<string, string | undefined>,
+  repoDir: string,
 ): string {
-  const key = (processEnv[apiKeyEnv] || '').trim();
+  const envFile = readDotEnvFile(repoDir);
+  const key = (processEnv[apiKeyEnv] || envFile[apiKeyEnv] || '').trim();
   if (!key) {
     throw new MissingOpenRouterApiKeyError(apiKeyEnv);
   }
@@ -109,7 +112,7 @@ export function buildOpenRouterLauncherEnv(
   const processEnv = opts.processEnv ?? (process.env as Record<string, string | undefined>);
   const providerConfig = getOpenRouterProviderConfig(repoDir);
   const apiKeyEnv = providerConfig.apiKeyEnv?.trim() || DEFAULT_API_KEY_ENV;
-  const apiKey = resolveApiKey(apiKeyEnv, processEnv);
+  const apiKey = resolveApiKey(apiKeyEnv, processEnv, repoDir);
   const wavemillModel = resolveModel(opts.model);
   const openrouterId = resolveOpenRouterModelId(wavemillModel);
   if (!openrouterId) {

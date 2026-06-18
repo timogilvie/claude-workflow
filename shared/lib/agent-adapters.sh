@@ -355,7 +355,7 @@ _agent_check_deepseek_api_key() {
 # Returns: 0 if key present, 1 if missing
 _agent_check_openrouter_api_key() {
   local repo_dir="${1:-$(pwd)}"
-  local provider_json api_key_env key_value
+  local provider_json api_key_env has_api_key
 
   provider_json="$(agent_openrouter_config "$repo_dir" 2>/dev/null)" || {
     if [[ -z "${OPENROUTER_API_KEY:-}" ]]; then
@@ -367,9 +367,9 @@ _agent_check_openrouter_api_key() {
 
   api_key_env="$(agent_json_get "$provider_json" apiKeyEnv)"
   api_key_env="${api_key_env:-OPENROUTER_API_KEY}"
+  has_api_key="$(agent_json_get "$provider_json" hasApiKey)"
 
-  key_value="${!api_key_env:-}"
-  if [[ -z "$key_value" ]]; then
+  if [[ "$has_api_key" != "true" ]]; then
     echo "Error: ${api_key_env} is not set. Set it before launching a claude-openrouter agent." >&2
     return 1
   fi

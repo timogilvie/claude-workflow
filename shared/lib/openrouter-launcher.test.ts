@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -82,6 +82,24 @@ test('defaults to qwen-3-coder when model is omitted', () => {
       processEnv: { OPENROUTER_API_KEY: 'sk-test' },
     });
     assert.equal(env.ANTHROPIC_MODEL, 'qwen/qwen3-coder');
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('builds env using API key from repo .env', () => {
+  const tmp = makeTempRepo();
+  try {
+    writeFileSync(join(tmp, '.env'), 'OPENROUTER_API_KEY=sk-from-env-file\n');
+    const env = buildOpenRouterLauncherEnv({
+      repoDir: tmp,
+      session: 'sess1',
+      issue: 'HOK-123',
+      model: 'qwen-3-coder',
+      processEnv: {},
+    });
+    assert.equal(env.ANTHROPIC_API_KEY, 'sk-from-env-file');
+    assert.equal(env.ANTHROPIC_AUTH_TOKEN, 'sk-from-env-file');
   } finally {
     cleanUp(tmp);
   }
