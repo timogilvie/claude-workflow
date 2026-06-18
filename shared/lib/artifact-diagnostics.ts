@@ -509,13 +509,12 @@ function checkEvalWithoutOutcome(
   }
 
   if (!isFinal) {
-    const statePath = join(featureDir, 'feature-state.json');
     return [makeFinding(
       'eval_without_outcome',
       'warn',
       `${matchingEvals.length} eval record(s) found but feature-state is absent or non-final`,
       {
-        file: featureStateResult.status === 'missing' ? statePath : join(featureDir, 'feature-state.json'),
+        file: join(featureDir, 'feature-state.json'),
         details: {
           evalCount: matchingEvals.length,
           featureStatePresent: featureStateResult.status !== 'missing',

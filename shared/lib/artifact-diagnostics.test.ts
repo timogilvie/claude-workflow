@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, before, after } from 'node:test';
@@ -117,8 +117,7 @@ function writeTraceEvent(featureDir: string, event: Record<string, unknown>): vo
     ...event,
   });
   const tracePath = join(featureDir, 'trace.jsonl');
-  const existing = existsSync(tracePath) ? '' : '';
-  writeFileSync(tracePath, existing + line + '\n', { flag: 'a' });
+  writeFileSync(tracePath, line + '\n', { flag: 'a' });
 }
 
 function writeTraceContext(featureDir: string, traceId = 'trc_test_1234'): void {
