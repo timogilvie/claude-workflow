@@ -2015,8 +2015,17 @@ blocked_completion_artifact_path() {
   printf '%s\n' "$feature_dir/.coding-blocked-completion.json"
 }
 
+coding_uncommitted_output_artifact_path() {
+  local feature_dir="$1"
+  printf '%s\n' "$feature_dir/.coding-uncommitted-output.json"
+}
+
 blocked_completion_default_summary() {
   printf 'coding done; verification blocked\n'
+}
+
+coding_uncommitted_output_default_summary() {
+  printf 'coding completed marker detected, but review cannot start until the coding output is committed\n'
 }
 
 sanitize_blocked_completion_text() {
@@ -2056,6 +2065,39 @@ read_blocked_completion() {
   fi
 
   printf '%s%s%s%s%s\n' "$summary_raw" "$separator" "$reason_raw" "$separator" "$mtime"
+}
+
+read_coding_uncommitted_output() {
+  local feature_dir="$1"
+  local artifact mtime summary reason action summary_raw reason_raw action_raw
+  local separator=$'\001'
+
+  artifact="$(coding_uncommitted_output_artifact_path "$feature_dir")"
+  [[ -f "$artifact" ]] || return 0
+
+  mtime="$(portable_file_mtime_epoch "$artifact" 2>/dev/null || echo "")"
+  summary="$(coding_uncommitted_output_default_summary)"
+  summary="$(sanitize_blocked_completion_text "$summary")"
+  reason=""
+  action="Commit the coding output, then retry review."
+
+  if [[ ! -s "$artifact" ]] || ! command -v jq >/dev/null 2>&1 || ! jq empty "$artifact" >/dev/null 2>&1; then
+    printf '%s%s%s%s%s%s%s\n' "$summary" "$separator" "$reason" "$separator" "$action" "$separator" "$mtime"
+    return 0
+  fi
+
+  summary_raw="$(jq -r '.summary // empty' "$artifact" 2>/dev/null || true)"
+  reason_raw="$(jq -r '.reason // empty' "$artifact" 2>/dev/null || true)"
+  action_raw="$(jq -r '.action // empty' "$artifact" 2>/dev/null || true)"
+  summary_raw="$(sanitize_blocked_completion_text "$summary_raw")"
+  reason_raw="$(sanitize_blocked_completion_text "$reason_raw")"
+  action_raw="$(sanitize_blocked_completion_text "$action_raw")"
+
+  [[ -n "$summary_raw" ]] && summary="$summary_raw"
+  [[ -n "$reason_raw" ]] && reason="$reason_raw"
+  [[ -n "$action_raw" ]] && action="$action_raw"
+
+  printf '%s%s%s%s%s%s%s\n' "$summary" "$separator" "$reason" "$separator" "$action" "$separator" "$mtime"
 }
 
 project_context_suggestion_set() {

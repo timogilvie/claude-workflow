@@ -498,6 +498,36 @@ else
   fail "coding blocked-completion did not use the generic fallback summary"
 fi
 
+cat > "$WORKTREES_DIR/coding-task/features/coding-task/.coding-uncommitted-output.json" <<'EOF'
+{
+  "summary": "coding completed marker detected, but branch has no commits beyond auto/integration and worktree still contains uncommitted coding output",
+  "action": "Commit the coding output, then retry review."
+}
+EOF
+
+UNCOMMITTED_CODING_DETAIL_OUTPUT="$(run_blocked_detail "$WORKTREES_DIR" "HOK-1642" "coding-task")"
+if [[ "$UNCOMMITTED_CODING_DETAIL_OUTPUT" == *'branch has no commits beyond auto/integ'* ]] \
+  && [[ "$UNCOMMITTED_CODING_DETAIL_OUTPUT" == *'Commit the coding output, then retry review.'* ]] \
+  && [[ "$UNCOMMITTED_CODING_DETAIL_OUTPUT" != *'advance HOK-1642'* ]]; then
+  pass "formats uncommitted coding-output detail distinctly from review failures"
+else
+  fail "uncommitted coding-output detail formatting is incorrect"
+fi
+
+OUTPUT_CODING_UNCOMMITTED="$TMP_DIR/output-coding-uncommitted.txt"
+run_render "$STATE_FILE_CODING_BLOCKED" "$WORKTREES_DIR" "$BEHAVIOR_CODING_BLOCKED" "$OUTPUT_CODING_UNCOMMITTED"
+
+if grep -q '📥 INBOX (1)' "$OUTPUT_CODING_UNCOMMITTED" \
+  && grep -q 'HOK-1642.*coding-task.*⚠ coding.*● running' "$OUTPUT_CODING_UNCOMMITTED" \
+  && grep -q 'coding completed marker detected' "$OUTPUT_CODING_UNCOMMITTED" \
+  && ! grep -q 'full verification blocked by Docker' "$OUTPUT_CODING_UNCOMMITTED"; then
+  pass "uncommitted coding-output artifact takes dashboard precedence"
+else
+  fail "uncommitted coding-output artifact did not render as the actionable coding detail"
+fi
+
+rm -f "$WORKTREES_DIR/coding-task/features/coding-task/.coding-uncommitted-output.json"
+
 cat > "$WORKTREES_DIR/coding-task/features/coding-task/.coding-auto-advance.json" <<'EOF'
 {
   "reason": "automatic advance from valid blocked-completion artifact"
