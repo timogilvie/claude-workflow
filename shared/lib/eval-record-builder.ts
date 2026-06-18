@@ -1068,6 +1068,21 @@ export function attachRubricEval(record: EvalRecord, rubricEval?: RubricEval): v
   record.rubric_provenance = 'judge';
 }
 
+/**
+ * Attach a trace correlation ID to an eval record (HOK-2259).
+ *
+ * Links the eval record to the task lifecycle event stream so route decisions,
+ * phase durations, check outcomes, and fallbacks can be attributed to the same
+ * task execution.
+ *
+ * No-op when `traceId` is falsy.
+ */
+export function attachTraceId(record: EvalRecord, traceId: string | undefined | null): void {
+  if (traceId && typeof traceId === 'string' && traceId.trim().length > 0) {
+    record.traceId = traceId.trim();
+  }
+}
+
 // ────────────────────────────────────────────────────────────────
 // Main Orchestrator
 // ────────────────────────────────────────────────────────────────
