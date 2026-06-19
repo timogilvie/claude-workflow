@@ -66,6 +66,7 @@ PR_TTL=15
 WAVEMILL_STATUS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WAVEMILL_REPO_DIR="$(cd "$WAVEMILL_STATUS_DIR/../.." && pwd)"
 declare -Ag WAVEMILL_ROUTING_DISPLAY_CACHE=()
+declare -Ag WAVEMILL_ARTIFACT_STATUS_CACHE=()
 
 # Colors
 G='\033[32m'; Y='\033[33m'; R='\033[31m'; D='\033[90m'; B='\033[1m'; N='\033[0m'
@@ -498,6 +499,175 @@ render_plan_model_routing() {
   fi
   WAVEMILL_ROUTING_DISPLAY_CACHE["$cache_key"]="$rendered"
   printf '%s' "$rendered"
+}
+
+# ── Normalized task artifact status (HOK-2261) ───────────────────────────
+# Read-only, best-effort helpers that inspect normalized task artifacts
+# (task-contract.json, feature-state.json, .trace-context.json, trace.jsonl)
+# and compose a compact per-task status segment.  All functions degrade
+# silently on missing or malformed input — never error, never write files.
+
+# Extract contract status for a feature directory.
+# Returns: "present", "stale" (source-hash drift), or "missing".
+_artifact_contract_status() {
+  local feature_dir="$1"
+  local contract_file="$feature_dir/task-contract.json"
+
+  command -v jq >/dev/null 2>&1 || { printf 'missing'; return; }
+  [[ -f "$contract_file" ]] || { printf 'missing'; return; }
+  jq -e '.' "$contract_file" >/dev/null 2>&1 || { printf 'missing'; return; }
+
+  # Check every source whose hash was recorded for drift.
+  local drift=0
+  while IFS= read -r entry; do
+    [[ -n "$entry" ]] || continue
+    local src_path src_sha256
+    src_path=$(jq -r '.path // empty' <<< "$entry" 2>/dev/null) || continue
+    src_sha256=$(jq -r '.sha256 // empty' <<< "$entry" 2>/dev/null) || continue
+    [[ -n "$src_path" && -n "$src_sha256" ]] || continue
+    local abs="$feature_dir/$src_path"
+    [[ -f "$abs" ]] || continue
+    local current=""
+    if command -v shasum >/dev/null 2>&1; then
+      current=$(shasum -a 256 "$abs" 2>/dev/null | cut -d' ' -f1)
+    elif command -v sha256sum >/dev/null 2>&1; then
+      current=$(sha256sum "$abs" 2>/dev/null | cut -d' ' -f1)
+    fi
+    [[ -z "$current" ]] && continue
+    if [[ "$current" != "$src_sha256" ]]; then
+      drift=1; break
+    fi
+  done < <(jq -c '.sources[]? | select((.exists // false) == true and .sha256 != null and .sha256 != "")' "$contract_file" 2>/dev/null || true)
+
+  [[ "$drift" -eq 1 ]] && printf 'stale' || printf 'present'
+}
+
+# Extract normalized outcome state from feature-state.json.
+# Returns: short state string or "-".
+_artifact_outcome_state() {
+  local feature_dir="$1"
+  local state_file="$feature_dir/feature-state.json"
+
+  command -v jq >/dev/null 2>&1 || { printf '-'; return; }
+  [[ -f "$state_file" ]] || { printf '-'; return; }
+
+  local normalized
+  normalized=$(jq -r '.normalizedState // empty' "$state_file" 2>/dev/null) || normalized=""
+  [[ -z "$normalized" || "$normalized" == "unknown" ]] && { printf '-'; return; }
+
+  if [[ "$normalized" == "failed" ]]; then
+    local reason
+    reason=$(jq -r '.failureReason // empty' "$state_file" 2>/dev/null) || reason=""
+    if [[ -n "$reason" ]]; then
+      printf 'fail:%s' "${reason:0:10}"
+      return
+    fi
+    printf 'failed'
+    return
+  fi
+
+  case "$normalized" in
+    running)       printf 'running' ;;
+    completed)     printf 'done' ;;
+    aborted)       printf 'abort' ;;
+    awaiting_user) printf 'waiting' ;;
+    *)             printf '%s' "${normalized:0:8}" ;;
+  esac
+}
+
+# Extract evidence record count from feature-state.json.
+# Returns: integer string or "-".
+_artifact_evidence_count() {
+  local feature_dir="$1"
+  local state_file="$feature_dir/feature-state.json"
+
+  command -v jq >/dev/null 2>&1 || { printf '-'; return; }
+  [[ -f "$state_file" ]] || { printf '-'; return; }
+
+  local count
+  count=$(jq -r '(.evidence // []) | length' "$state_file" 2>/dev/null) || { printf '-'; return; }
+  [[ "$count" =~ ^[0-9]+$ ]] && printf '%s' "$count" || printf '-'
+}
+
+# Extract trace status from .trace-context.json + trace.jsonl.
+# Returns: latest phase from trace events, "active" if traceId present but no
+# events yet, or "-" if trace context is absent.
+_artifact_trace_status() {
+  local feature_dir="$1"
+  local ctx_file="$feature_dir/.trace-context.json"
+  local jsonl_file="$feature_dir/trace.jsonl"
+
+  command -v jq >/dev/null 2>&1 || { printf '-'; return; }
+  [[ -f "$ctx_file" ]] || { printf '-'; return; }
+
+  local trace_id
+  trace_id=$(jq -r '.traceId // empty' "$ctx_file" 2>/dev/null) || trace_id=""
+  [[ -n "$trace_id" ]] || { printf '-'; return; }
+
+  if [[ -f "$jsonl_file" ]]; then
+    local last_phase=""
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      [[ -n "$line" ]] || continue
+      local ph
+      ph=$(jq -r '.phase // empty' <<< "$line" 2>/dev/null) || continue
+      [[ -n "$ph" ]] && last_phase="$ph"
+    done < "$jsonl_file"
+    [[ -n "$last_phase" ]] && { printf '%s' "${last_phase:0:8}"; return; }
+  fi
+
+  printf 'active'
+}
+
+# Render a compact artifact status segment for one feature directory.
+# Output: e.g. "C✓ O:done E:3 T:review"  or  "C- O:- E:- T:-" for legacy tasks.
+# Returns empty string if the feature directory does not exist.
+# Uses a mtime-keyed in-memory cache to avoid redundant reads within one render
+# cycle and across refreshes when files have not changed.
+render_artifact_status_segment() {
+  local feature_dir="$1"
+
+  [[ -d "$feature_dir" ]] || {
+    WAVEMILL_ARTIFACT_STATUS_CACHE["legacy:${feature_dir}"]=""
+    return 0
+  }
+  command -v jq >/dev/null 2>&1 || return 0
+
+  # Build a cache key from the mtimes of all four artifact files.
+  local cache_key="" mtime
+  for candidate in \
+    "$feature_dir/task-contract.json" \
+    "$feature_dir/feature-state.json" \
+    "$feature_dir/.trace-context.json" \
+    "$feature_dir/trace.jsonl"
+  do
+    if [[ -f "$candidate" ]]; then
+      mtime=$(stat -f %m "$candidate" 2>/dev/null || stat -c %Y "$candidate" 2>/dev/null || echo 0)
+      cache_key+="${candidate}:${mtime}|"
+    fi
+  done
+  [[ -z "$cache_key" ]] && cache_key="legacy:${feature_dir}"
+
+  if [[ -v WAVEMILL_ARTIFACT_STATUS_CACHE["$cache_key"] ]]; then
+    printf '%s' "${WAVEMILL_ARTIFACT_STATUS_CACHE["$cache_key"]}"
+    return 0
+  fi
+
+  local contract_status outcome evidence trace
+  contract_status=$(_artifact_contract_status "$feature_dir")
+  outcome=$(_artifact_outcome_state "$feature_dir")
+  evidence=$(_artifact_evidence_count "$feature_dir")
+  trace=$(_artifact_trace_status "$feature_dir")
+
+  local contract_glyph
+  case "$contract_status" in
+    present)  contract_glyph="C✓" ;;
+    stale)    contract_glyph="C⚠" ;;
+    *)        contract_glyph="C-" ;;
+  esac
+
+  local segment="${contract_glyph} O:${outcome} E:${evidence} T:${trace}"
+  WAVEMILL_ARTIFACT_STATUS_CACHE["$cache_key"]="$segment"
+  printf '%s' "$segment"
 }
 
 # ── Elapsed time from directory birth ─────────────────────────────────────
@@ -1058,6 +1228,17 @@ render_task_row() {
 
   if [[ "$task_phase" == "planning" ]] && plan_waiting_for_review "$task_phase" "$agent_state" "$worktree" "$slug"; then
     render_task_detail_lines "$(render_plan_model_routing "$worktree" "$slug")"
+  fi
+
+  # Compact normalized artifact status (HOK-2261) — best-effort, read-only.
+  if [[ -n "$worktree" && -n "$slug" ]]; then
+    local _artifact_dir _artifact_seg
+    _artifact_dir="$worktree/features/$slug"
+    [[ -d "$_artifact_dir" ]] || _artifact_dir="$worktree/bugs/$slug"
+    if [[ -d "$_artifact_dir" ]]; then
+      _artifact_seg="$(render_artifact_status_segment "$_artifact_dir")"
+      [[ -n "$_artifact_seg" ]] && render_task_detail_lines "artifacts: ${_artifact_seg}"
+    fi
   fi
 }
 
