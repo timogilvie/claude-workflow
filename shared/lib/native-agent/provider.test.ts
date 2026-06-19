@@ -12,7 +12,6 @@ import {
   createToolCallingProvider,
   registerMockProvider,
 } from './provider.ts';
-import { buildPiContext } from './messages.ts';
 
 // ─── 1. Usage mapping ─────────────────────────────────────────────────────────
 
@@ -121,10 +120,16 @@ describe('createToolCallingProvider (text-only mock turn)', () => {
   });
 });
 
-describe('buildPiContext', () => {
-  it('throws for unsupported non-user history roles in the single-turn seam', () => {
-    assert.throws(
-      () => buildPiContext({ messages: [{ role: 'assistant', content: 'Earlier answer.' }] }),
+describe('createToolCallingProvider (unsupported history)', () => {
+  it('throws for unsupported non-user history roles in the single-turn seam', async () => {
+    const provider = createToolCallingProvider({
+      api: 'hokusai-unused-history-role-test',
+      modelId: 'hokusai-mini',
+      providerName: 'hokusai',
+    });
+
+    await assert.rejects(
+      provider.createTurn({ messages: [{ role: 'assistant', content: 'Earlier answer.' }] }),
       /Unsupported native-agent message role/,
     );
   });
@@ -222,7 +227,7 @@ describe('seam isolation', () => {
       return results;
     }
 
-    const searchDirs = ['shared', 'tools'].map((d) => join(repoRoot, d));
+    const searchDirs = ['shared', 'src', 'tools'].map((d) => join(repoRoot, d));
     const sources: string[] = [];
     for (const d of searchDirs) {
       sources.push(...collectSources(d));
@@ -263,7 +268,7 @@ describe('seam isolation', () => {
       '--no-heading', '--with-filename', '--line-number',
       '-e', 'from.*@earendil-works/pi-ai',
       '-e', 'from.*@earendil-works/pi-agent-core',
-      'shared', 'tools',
+      'shared', 'src', 'tools',
       '--glob', '*.ts',
       '--glob', '!*.test.ts',
     ], { cwd: repoRoot, encoding: 'utf8' });
