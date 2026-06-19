@@ -10,6 +10,7 @@ import {
 
 export const OPENROUTER_BASE_URL = 'https://openrouter.ai/api';
 export const OPENROUTER_DEFAULT_STAGES = ['planner', 'coder', 'reviewer'] as const satisfies readonly DeepSeekProviderStage[];
+export const OPENROUTER_DIRECT_AGENTS_ENABLED = false;
 
 export interface ResolvedOpenRouterProviderConfig {
   enabled: boolean;
@@ -98,6 +99,13 @@ export function filterOpenRouterModels(
   const openRouterRequested = requested.filter((modelId) => isOpenRouterModel(modelId));
   if (openRouterRequested.length === 0) {
     return { models: requested, warnings: [] };
+  }
+
+  if (!OPENROUTER_DIRECT_AGENTS_ENABLED) {
+    return {
+      models: requested.filter((modelId) => !isOpenRouterModel(modelId)),
+      warnings: ['OpenRouter models were ignored because direct OpenRouter agents are temporarily disabled.'],
+    };
   }
 
   const provider = resolveOpenRouterProviderConfig(repoDir);

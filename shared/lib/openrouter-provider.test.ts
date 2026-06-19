@@ -62,14 +62,15 @@ describe('openrouter-provider', () => {
     assert.equal(isOpenRouterModel('deepseek-r1'), false);
   });
 
-  it('filterOpenRouterModels filters by config and stage', () => {
+  it('filterOpenRouterModels excludes OpenRouter models while direct agents are disabled', () => {
     const tmp = makeTempRepo();
     try {
       writeConfig(tmp, { providers: { openrouter: { enabled: true, apiKeyEnv: 'OPENROUTER_API_KEY', models: ['qwen-3-coder'], stages: ['coder'] } } });
       process.env.OPENROUTER_API_KEY = 'sk-test';
       const filtered = filterOpenRouterModels(['qwen-3-coder', 'kimi-k2', 'gpt-5'], tmp, 'coder');
-      assert.deepEqual(filtered.models, ['qwen-3-coder', 'gpt-5']);
+      assert.deepEqual(filtered.models, ['gpt-5']);
       assert.equal(filtered.warnings.length, 1);
+      assert.match(filtered.warnings[0] || '', /temporarily disabled/);
     } finally {
       delete process.env.OPENROUTER_API_KEY;
       cleanUp(tmp);
@@ -83,7 +84,7 @@ describe('openrouter-provider', () => {
       process.env.OPENROUTER_API_KEY = 'sk-test';
       const filtered = filterOpenRouterModels(['qwen-3-coder'], tmp, 'coder');
       assert.deepEqual(filtered.models, []);
-      assert.match(filtered.warnings[0] || '', /that stage is not enabled/);
+      assert.match(filtered.warnings[0] || '', /temporarily disabled/);
     } finally {
       delete process.env.OPENROUTER_API_KEY;
       cleanUp(tmp);
