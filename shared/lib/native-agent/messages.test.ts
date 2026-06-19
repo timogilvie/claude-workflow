@@ -9,6 +9,16 @@ import {
   type NativeUserMessage,
 } from './messages.ts';
 
+declare module './messages.ts' {
+  interface CustomAgentMessages {
+    artifact: {
+      role: 'artifact';
+      artifactId: string;
+      title?: string;
+    };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Pi-shaped fixtures (plain objects matching Pi structural types)
 // ---------------------------------------------------------------------------
@@ -227,9 +237,13 @@ describe('native-agent messages adapter', () => {
   describe('declaration merging widens AgentMessage', () => {
     it('a custom message variant is assignable to AgentMessage', () => {
       // This is a compile-time type test. If it compiles, declaration merging works.
-      // We use a type assertion to confirm the shape is accepted.
-      const customMsg: AgentMessage = { role: 'user', content: 'hello' };
-      assert.equal(customMsg.role, 'user');
+      const customMsg: AgentMessage = {
+        role: 'artifact',
+        artifactId: 'artifact-1',
+        title: 'Trace output',
+      };
+      assert.equal(customMsg.role, 'artifact');
+      assert.equal(customMsg.artifactId, 'artifact-1');
 
       // Confirm that the standard variants remain assignable too.
       const userMsg: AgentMessage = { role: 'user', content: 'test' };

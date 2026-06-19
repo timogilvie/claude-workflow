@@ -3206,9 +3206,12 @@ PI_PACKAGES=(
 
 pi_seam_ok=true
 for pkg in "${PI_PACKAGES[@]}"; do
-  # Search all TS/JS files, excluding allowed seam files, spike/, and node_modules/
-  leaks=$(grep -rn --include="*.ts" --include="*.js" \
-    -e "from '${pkg}" -e "from \"${pkg}" \
+  # Search all TS/JS files for static, dynamic, and CommonJS imports,
+  # excluding allowed seam files, spike/, and node_modules/.
+  leaks=$(grep -rnE --include="*.ts" --include="*.js" \
+    -e "from[[:space:]]+['\"]${pkg}(['\"/]|$)" \
+    -e "import[[:space:]]*\\([[:space:]]*['\"]${pkg}(['\"/]|$)" \
+    -e "require[[:space:]]*\\([[:space:]]*['\"]${pkg}(['\"/]|$)" \
     --exclude-dir=node_modules \
     --exclude-dir=spike \
     "$REPO_DIR" 2>/dev/null \

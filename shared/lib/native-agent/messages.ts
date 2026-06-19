@@ -19,6 +19,8 @@ function assertNever(x: never): never {
   throw new Error(`Unhandled variant: ${JSON.stringify(x)}`);
 }
 
+const DEFAULT_PI_TIMESTAMP = 0;
+
 // ---------------------------------------------------------------------------
 // Native content types
 // ---------------------------------------------------------------------------
@@ -340,7 +342,7 @@ function toPiUserMessage(message: NativeUserMessage): UserMessage {
   return {
     role: 'user',
     content,
-    timestamp: message.timestamp ?? Date.now(),
+    timestamp: message.timestamp ?? DEFAULT_PI_TIMESTAMP,
   };
 }
 
@@ -391,7 +393,7 @@ function toPiToolResultMessage(message: NativeToolResultMessage): ToolResultMess
     toolName: message.toolName,
     content: message.content.map((c) => ({ type: 'text', text: c.text }) satisfies TextContent),
     isError: message.isError,
-    timestamp: message.timestamp ?? Date.now(),
+    timestamp: message.timestamp ?? DEFAULT_PI_TIMESTAMP,
   };
   if (message.details !== undefined) piMsg.details = message.details;
   return piMsg;
@@ -435,7 +437,7 @@ function nativeAgentMessageToPi(message: NativeAgentMessage): Message {
       return {
         role: 'user',
         content: toPiUserContent(message.content),
-        timestamp: message.timestamp ?? Date.now(),
+        timestamp: message.timestamp ?? DEFAULT_PI_TIMESTAMP,
       } satisfies UserMessage;
     case 'assistant':
       return nativeAgentAssistantToPi(message);
@@ -488,7 +490,7 @@ function nativeAgentAssistantToPi(message: NativeAgentMessage): AssistantMessage
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
     stopReason: 'stop',
-    timestamp: message.timestamp ?? Date.now(),
+    timestamp: message.timestamp ?? DEFAULT_PI_TIMESTAMP,
   };
 }
 
@@ -503,7 +505,7 @@ function nativeAgentToolResultToPi(message: NativeAgentMessage): ToolResultMessa
     toolName: result.toolName,
     content: result.content.map((item) => ({ type: 'text', text: item.text }) satisfies TextContent),
     isError: result.isError ?? false,
-    timestamp: message.timestamp ?? Date.now(),
+    timestamp: message.timestamp ?? DEFAULT_PI_TIMESTAMP,
   };
 }
 
