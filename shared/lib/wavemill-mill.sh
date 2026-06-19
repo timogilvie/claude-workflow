@@ -7181,6 +7181,25 @@ log_fetch_queue_plan_failure() {
   [[ -n "$details" ]] && log "debug" "[fetch_queue_plan] failed $details"
 }
 
+classify_queue_failure_reason() {
+  local step="$1"
+  case "$step" in
+    cache_empty)               echo "cache_empty" ;;
+    jq_massage_failed)         echo "dependency_planning_failed" ;;
+    plan_queue_failed)         echo "cache_refresh_failed" ;;
+    validation_failed)         echo "unexpected_output" ;;
+    *)                         echo "unknown" ;;
+  esac
+}
+
+get_queue_failure_reason() {
+  local diagnostics_file="${1:-}" details step
+  [[ -s "$diagnostics_file" ]] || { echo "unknown"; return 0; }
+  details="$(cat "$diagnostics_file" 2>/dev/null || true)"
+  step="$(printf '%s' "$details" | sed 's/step=\([^ ]*\).*/\1/')"
+  classify_queue_failure_reason "$step"
+}
+
 build_queue_plan_once() {
   local backlog_json="$1"
   local plan_input queue_plan tmp_stderr stderr_text cache_key
@@ -10736,7 +10755,8 @@ while :; do
           if [[ -z "$GROUPED_DISPLAY" ]]; then
             USING_GROUPED_VIEW=false
             if [[ -z "$queue_plan_json" ]]; then
-              log_warn "queue analysis unavailable, falling back to flat list"
+              _queue_reason="$(get_queue_failure_reason "${queue_plan_diag_file:-}")"
+              log_warn "queue analysis unavailable (reason: ${_queue_reason:-unknown}), falling back to flat list"
               [[ -n "$queue_plan_diag_file" ]] && log_fetch_queue_plan_failure "$queue_plan_diag_file"
             fi
           fi
