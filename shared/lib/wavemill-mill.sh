@@ -6221,11 +6221,18 @@ poll_challenge_jobs() {
       continue
     fi
 
-    if [[ "$kind" == "eval" && "$reason" == "no_result_file" && -n "$issue_id" ]]; then
+    if [[ "$kind" == "eval" && ( "$reason" == "no_result_file" || "$reason" == "timed_out" ) && -n "$issue_id" ]]; then
       local pr_num
       pr_num=$(echo "$job_json" | jq -r '.prNumbers[0] // empty')
+      if [[ -n "$result_path" ]] && [[ -f "$result_path" ]] \
+        && [[ "$(jq -r '.ok // .persisted // false' "$result_path" 2>/dev/null || echo "false")" == "true" ]]; then
+        log_warn "challenge eval for $issue_id ${reason}: result was persisted, marking completed"
+        mark_eval_completed "$issue_id"
+        settle_tracked_job "$job_id"
+        continue
+      fi
       if [[ -n "$pr_num" ]] && eval_record_exists_for_issue_pr "$issue_id" "$pr_num"; then
-        log_warn "challenge eval for $issue_id had no result file but eval record was persisted; marking completed"
+        log_warn "challenge eval for $issue_id ${reason}: eval record was persisted, marking completed"
         mark_eval_completed "$issue_id"
         settle_tracked_job "$job_id"
         continue
@@ -6247,7 +6254,7 @@ poll_challenge_jobs() {
 
 maybe_run_challenge_eval() {
   local issue="$1" pr="$2" branch="$3" slug="$4"
-  local eval_completed eval_failed pair_id solution_model linear_issue eval_agent side job_id job_status job_dir log_path result_path pid
+  local eval_completed eval_failed pair_id solution_model linear_issue eval_agent side job_id job_status job_dir log_path result_path pid eval_timeout
   eval_completed=$(read_state_value "false" --arg i "$issue" '.tasks[$i].evalCompleted // false')
   [[ "$eval_completed" == "true" ]] && return 0
   eval_failed=$(read_state_value "false" --arg i "$issue" '.tasks[$i].evalFailed // false')
@@ -6286,7 +6293,8 @@ maybe_run_challenge_eval() {
     >"$log_path" 2>&1 &
   pid=$!
 
-  launch_tracked_job "eval" "$job_id" "$issue" "$side" "$pair_id" "$pr" "$pid" "420" "$log_path" "$result_path"
+  eval_timeout="$(post_merge_eval_timeout_seconds)"
+  launch_tracked_job "eval" "$job_id" "$issue" "$side" "$pair_id" "$pr" "$pid" "$eval_timeout" "$log_path" "$result_path"
   log "status" "  📊 Challenge eval running in background for $issue (pid $pid)"
 }
 

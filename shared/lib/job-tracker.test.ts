@@ -138,6 +138,32 @@ test('pollJobs times out long-running jobs', async () => {
   }
 });
 
+test('pollJobs treats timed-out jobs with persisted results as succeeded', async () => {
+  const { root, statePath, cleanup } = makeTempState();
+  const child = spawn('sh', ['-c', 'sleep 10']);
+  try {
+    const logPath = join(root, 'eval.log');
+    const resultPath = join(root, 'eval.result.json');
+    writeFileSync(logPath, 'persisted before timeout\n');
+    writeFileSync(resultPath, JSON.stringify({ ok: true, persisted: true, exitCode: 143 }, null, 2));
+    const job = makeJob({
+      pid: child.pid ?? 0,
+      logPath,
+      resultPath,
+      startedAt: new Date(Date.now() - 5_000).toISOString(),
+      timeoutSeconds: 1,
+    });
+    await launchJob({ statePath, job });
+
+    const polled = await pollJobs({ statePath, timeoutGraceMs: 100 });
+    assert.equal(polled.jobs[job.id].status, 'succeeded');
+    assert.equal(polled.jobs[job.id].exitCode, 143);
+  } finally {
+    child.kill('SIGKILL');
+    cleanup();
+  }
+});
+
 test('markJobSettled updates eval completion state', async () => {
   const { statePath, cleanup } = makeTempState();
   try {
