@@ -131,6 +131,16 @@ for fn in \
   clear_transient_mergeability_state \
   reroute_expanded_packets_for_coding_handoff \
   recover_missing_expansion_artifact \
+  recover_misplaced_coding_complete_marker \
+  guard_coding_complete_handoff \
+  clear_coding_uncommitted_output_attention \
+  coding_output_dirty_paths \
+  blocked_completion_auto_allowed_dirty_path \
+  coding_compare_commit_counts \
+  coding_uncommitted_output_announce_marker \
+  coding_uncommitted_output_should_announce \
+  mark_coding_uncommitted_output_announced \
+  write_coding_uncommitted_output_artifact \
   resolve_stage_result_model \
   ready_queue_state \
   merge_queue_enabled \
