@@ -3188,6 +3188,50 @@ fi
 unset advance_command_status
 
 # ============================================================================
+# HOK-2289: Pi vendor adapter seam guard
+# Ensure Pi package imports are confined to messages.ts and provider.ts.
+# ============================================================================
+echo ""
+echo "=== HOK-2289: Pi Vendor Adapter Seam Guard ==="
+
+PI_ALLOWED_FILES=(
+  "shared/lib/native-agent/messages.ts"
+  "shared/lib/native-agent/provider.ts"
+)
+
+PI_PACKAGES=(
+  "@earendil-works/pi-ai"
+  "@earendil-works/pi-agent-core"
+)
+
+pi_seam_ok=true
+for pkg in "${PI_PACKAGES[@]}"; do
+  # Search all TS/JS files for static, dynamic, and CommonJS imports,
+  # excluding allowed seam files, spike/, and node_modules/.
+  leaks=$(grep -rnE --include="*.ts" --include="*.js" \
+    -e "from[[:space:]]+['\"]${pkg}(['\"/]|$)" \
+    -e "import[[:space:]]*\\([[:space:]]*['\"]${pkg}(['\"/]|$)" \
+    -e "require[[:space:]]*\\([[:space:]]*['\"]${pkg}(['\"/]|$)" \
+    --exclude-dir=node_modules \
+    --exclude-dir=spike \
+    "$REPO_DIR" 2>/dev/null \
+    | grep -v "spike/" \
+    | grep -v "/spike/" \
+    || true)
+  for allowed_file in "${PI_ALLOWED_FILES[@]}"; do
+    leaks=$(printf '%s\n' "$leaks" | grep -vF "$allowed_file" || true)
+  done
+  if [[ -n "$leaks" ]]; then
+    pi_seam_ok=false
+    fail "Pi vendor import '${pkg}' found outside seam:"$'\n'"${leaks}"
+  fi
+done
+
+if [[ "$pi_seam_ok" == "true" ]]; then
+  pass "Pi vendor imports confined to adapter seam (messages.ts, provider.ts)"
+fi
+
+# ============================================================================
 # RESULTS
 # ============================================================================
 echo ""
