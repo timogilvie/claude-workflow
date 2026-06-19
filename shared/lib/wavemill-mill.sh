@@ -10377,7 +10377,7 @@ monitor_issue_state() {
       fi
 
       if merge_queue_enabled && [[ "$queue_state" == "merge-candidate" ]]; then
-        log "debug" "✓ $ISSUE → PR #$PR is a clean/green merge candidate (base current, waiting for merge)"
+        log "debug" "✓ $ISSUE → PR #$PR is a clean/green merge candidate (waiting in merge lane)"
       fi
       set_window_attention_state "$WIN" "clear"
       active_count=$((active_count + 1))
