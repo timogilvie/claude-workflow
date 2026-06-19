@@ -42,6 +42,20 @@ describe('openrouter-provider', () => {
     }
   });
 
+  it('resolveOpenRouterProviderConfig reads API key from repo .env', () => {
+    const tmp = makeTempRepo();
+    try {
+      writeConfig(tmp, { providers: { openrouter: { enabled: true, apiKeyEnv: 'OPENROUTER_API_KEY', models: ['qwen-3-coder'], stages: ['coder'] } } });
+      writeFileSync(join(tmp, '.env'), 'OPENROUTER_API_KEY=sk-from-env-file\n');
+      delete process.env.OPENROUTER_API_KEY;
+      const config = resolveOpenRouterProviderConfig(tmp);
+      assert.equal(config.hasApiKey, true);
+    } finally {
+      delete process.env.OPENROUTER_API_KEY;
+      cleanUp(tmp);
+    }
+  });
+
   it('isOpenRouterModel identifies OpenRouter models', () => {
     assert.equal(isOpenRouterModel('qwen-3-coder'), true);
     assert.equal(isOpenRouterModel('gpt-5'), false);

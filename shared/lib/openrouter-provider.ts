@@ -2,6 +2,7 @@ import {
   getOpenRouterProviderConfig,
   type DeepSeekProviderStage,
 } from './config.ts';
+import { resolveEnvValue } from './env-file.ts';
 import {
   loadLaunchPriorityList,
   resolveWavemillAliasFromOpenRouterId,
@@ -76,7 +77,7 @@ export function resolveOpenRouterModelId(modelId: string | null | undefined): st
 export function resolveOpenRouterProviderConfig(repoDir?: string): ResolvedOpenRouterProviderConfig {
   const config = getOpenRouterProviderConfig(repoDir);
   const apiKeyEnv = config.apiKeyEnv?.trim() || 'OPENROUTER_API_KEY';
-  const hasApiKey = (process.env[apiKeyEnv] || '').trim().length > 0;
+  const hasApiKey = Boolean(resolveEnvValue([apiKeyEnv], repoDir));
 
   return {
     enabled: config.enabled === true,
