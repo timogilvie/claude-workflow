@@ -1513,6 +1513,259 @@ else
 fi
 
 echo ""
+echo "=== Artifact Status Segment (HOK-2261) ==="
+
+# Helper: call render_artifact_status_segment in an isolated subshell.
+run_artifact_segment() {
+  local feature_dir="$1"
+  (
+    set -- test-session "$TMP_DIR"
+    # Silence startup side-effects (tput civis, etc.)
+    exec 3>&1
+    exec >/dev/null 2>&1
+    source "$REPO_DIR/shared/lib/wavemill-status.sh"
+    trap - EXIT
+    render_artifact_status_segment "$feature_dir" >&3
+  )
+}
+
+# Helper: call render_artifact_status_segment and capture only stderr.
+run_artifact_segment_stderr() {
+  local feature_dir="$1"
+  (
+    set -- test-session "$TMP_DIR"
+    exec >/dev/null
+    source "$REPO_DIR/shared/lib/wavemill-status.sh" 2>/dev/null
+    trap - EXIT
+    render_artifact_status_segment "$feature_dir" >/dev/null
+  ) 2>&1
+}
+
+# ── Test 1: All artifacts present ──────────────────────────────────────────
+ART_DIR_ALL="$TMP_DIR/artifact-all"
+mkdir -p "$ART_DIR_ALL"
+
+printf 'plan content' > "$ART_DIR_ALL/plan.md"
+PLAN_HASH=$(shasum -a 256 "$ART_DIR_ALL/plan.md" 2>/dev/null | cut -d' ' -f1 \
+  || sha256sum "$ART_DIR_ALL/plan.md" 2>/dev/null | cut -d' ' -f1)
+
+cat > "$ART_DIR_ALL/task-contract.json" <<EOF
+{
+  "schemaVersion": "1.0.0",
+  "sources": [
+    {"path": "plan.md", "exists": true, "sha256": "$PLAN_HASH"}
+  ]
+}
+EOF
+
+cat > "$ART_DIR_ALL/feature-state.json" <<'EOF'
+{
+  "normalizedState": "done",
+  "currentPhase": "done",
+  "failureReason": null,
+  "evidence": [
+    {"kind": "review_passed", "status": "pass"},
+    {"kind": "ci_passed", "status": "pass"},
+    {"kind": "merged", "status": "pass"}
+  ]
+}
+EOF
+
+cat > "$ART_DIR_ALL/.trace-context.json" <<'EOF'
+{"traceId": "abc123def456"}
+EOF
+
+cat > "$ART_DIR_ALL/trace.jsonl" <<'EOF'
+{"traceId": "abc123def456", "phase": "coding", "event": "phase_started"}
+{"traceId": "abc123def456", "phase": "review", "event": "phase_started"}
+EOF
+
+SEG_ALL=$(run_artifact_segment "$ART_DIR_ALL")
+if [[ "$SEG_ALL" == *"C✓"* ]] \
+  && [[ "$SEG_ALL" == *"O:done"* ]] \
+  && [[ "$SEG_ALL" == *"E:3"* ]] \
+  && [[ "$SEG_ALL" == *"T:review"* ]]; then
+  pass "all artifacts present: segment shows C✓, outcome, evidence count, trace phase"
+else
+  fail "all artifacts present: unexpected segment '$SEG_ALL'"
+fi
+
+# ── Test 2: Contract missing, other artifacts present ──────────────────────
+ART_DIR_NO_CONTRACT="$TMP_DIR/artifact-no-contract"
+mkdir -p "$ART_DIR_NO_CONTRACT"
+
+cat > "$ART_DIR_NO_CONTRACT/feature-state.json" <<'EOF'
+{
+  "normalizedState": "running",
+  "currentPhase": "coding",
+  "failureReason": null,
+  "evidence": [{"kind": "planning_passed", "status": "pass"}]
+}
+EOF
+
+cat > "$ART_DIR_NO_CONTRACT/.trace-context.json" <<'EOF'
+{"traceId": "xyz789"}
+EOF
+
+SEG_NO_CONTRACT=$(run_artifact_segment "$ART_DIR_NO_CONTRACT")
+if [[ "$SEG_NO_CONTRACT" == *"C-"* ]] && [[ "$SEG_NO_CONTRACT" == *"O:running"* ]]; then
+  pass "contract missing: segment shows C- with other fields populated"
+else
+  fail "contract missing: unexpected segment '$SEG_NO_CONTRACT'"
+fi
+
+# ── Test 3: Stale contract (source hash drift) ─────────────────────────────
+ART_DIR_STALE="$TMP_DIR/artifact-stale"
+mkdir -p "$ART_DIR_STALE"
+
+printf 'original content' > "$ART_DIR_STALE/plan.md"
+
+cat > "$ART_DIR_STALE/task-contract.json" <<'EOF'
+{
+  "schemaVersion": "1.0.0",
+  "sources": [
+    {"path": "plan.md", "exists": true, "sha256": "0000000000000000000000000000000000000000000000000000000000000000"}
+  ]
+}
+EOF
+
+SEG_STALE=$(run_artifact_segment "$ART_DIR_STALE")
+if [[ "$SEG_STALE" == *"C⚠"* ]]; then
+  pass "stale contract (hash mismatch): segment shows C⚠ marker"
+else
+  fail "stale contract: unexpected segment '$SEG_STALE'"
+fi
+
+# ── Test 4: Legacy task (no artifacts at all) ──────────────────────────────
+ART_DIR_LEGACY="$TMP_DIR/artifact-legacy"
+mkdir -p "$ART_DIR_LEGACY"
+
+SEG_LEGACY=$(run_artifact_segment "$ART_DIR_LEGACY")
+if [[ "$SEG_LEGACY" == "C- O:- E:- T:-" ]]; then
+  pass "legacy task (no artifacts): segment shows all dashes"
+else
+  fail "legacy task: unexpected segment '$SEG_LEGACY'"
+fi
+
+# ── Test 5: Malformed JSON contract treated as missing ─────────────────────
+ART_DIR_MALFORMED="$TMP_DIR/artifact-malformed"
+mkdir -p "$ART_DIR_MALFORMED"
+printf 'not valid json {' > "$ART_DIR_MALFORMED/task-contract.json"
+
+SEG_MALFORMED=$(run_artifact_segment "$ART_DIR_MALFORMED" 2>/dev/null)
+if [[ "$SEG_MALFORMED" == *"C-"* ]]; then
+  pass "malformed contract JSON: treated as missing (C-)"
+else
+  fail "malformed contract JSON: unexpected segment '$SEG_MALFORMED'"
+fi
+
+# ── Test 6: Segment width fits 80-column pane ─────────────────────────────
+SEG_LEN=${#SEG_ALL}
+# Dashboard detail line prefix is ~21 chars ("          └─ artifacts: ")
+# leaving ~59 chars. Segment target is ≤40 chars per plan.
+if [[ $SEG_LEN -le 40 ]]; then
+  pass "artifact segment width ($SEG_LEN chars) fits 80-column pane (≤40)"
+else
+  fail "artifact segment width ($SEG_LEN chars) exceeds 40-char target"
+fi
+
+# ── Test 7: No stderr noise for missing artifacts (announce-once) ──────────
+STDERR_LEGACY=$(run_artifact_segment_stderr "$ART_DIR_LEGACY")
+STDERR_LEGACY2=$(run_artifact_segment_stderr "$ART_DIR_LEGACY")
+if [[ -z "$STDERR_LEGACY" && -z "$STDERR_LEGACY2" ]]; then
+  pass "no stderr warnings for legacy task (two consecutive render calls)"
+else
+  fail "unexpected stderr output for legacy task: '$STDERR_LEGACY'"
+fi
+
+# ── Test 8: Segment appears in full dashboard output ──────────────────────
+ART_WT="$TMP_DIR/artifact-worktree"
+mkdir -p "$ART_WT/features/artifact-task"
+cp "$ART_DIR_ALL/task-contract.json" "$ART_WT/features/artifact-task/"
+cp "$ART_DIR_ALL/plan.md"            "$ART_WT/features/artifact-task/"
+cp "$ART_DIR_ALL/feature-state.json" "$ART_WT/features/artifact-task/"
+cp "$ART_DIR_ALL/.trace-context.json" "$ART_WT/features/artifact-task/"
+cp "$ART_DIR_ALL/trace.jsonl"         "$ART_WT/features/artifact-task/"
+
+STATE_ARTIFACT="$TMP_DIR/state-artifact.json"
+cat > "$STATE_ARTIFACT" <<EOF
+{
+  "tasks": {
+    "HOK-9001": {
+      "slug": "artifact-task",
+      "branch": "task/artifact-task",
+      "worktree": "$ART_WT",
+      "status": "",
+      "phase": "coding",
+      "pr": ""
+    }
+  }
+}
+EOF
+
+BEHAVIOR_ARTIFACT="$TMP_DIR/behavior-artifact.json"
+cat > "$BEHAVIOR_ARTIFACT" <<'EOF'
+{
+  "pane": {"HOK-9001-artifact-task": "7"},
+  "hook": {},
+  "reported": {},
+  "planning": {},
+  "pr": {},
+  "checks": {}
+}
+EOF
+
+OUTPUT_ARTIFACT="$TMP_DIR/output-artifact.txt"
+run_render "$STATE_ARTIFACT" "$TMP_DIR" "$BEHAVIOR_ARTIFACT" "$OUTPUT_ARTIFACT"
+
+if grep -q 'artifacts:' "$OUTPUT_ARTIFACT" && grep -q 'C✓' "$OUTPUT_ARTIFACT"; then
+  pass "artifact segment appears in rendered dashboard output"
+else
+  fail "artifact segment missing from dashboard output"
+fi
+
+# ── Test 9: Legacy task shows all-dashes segment in dashboard ─────────────
+ART_LEGACY_WT="$TMP_DIR/legacy-artifact-worktree"
+mkdir -p "$ART_LEGACY_WT/features/legacy-art-task"
+
+STATE_LEGACY_ART="$TMP_DIR/state-legacy-art.json"
+cat > "$STATE_LEGACY_ART" <<EOF
+{
+  "tasks": {
+    "HOK-9002": {
+      "slug": "legacy-art-task",
+      "branch": "task/legacy-art-task",
+      "worktree": "$ART_LEGACY_WT",
+      "status": "",
+      "phase": "coding",
+      "pr": ""
+    }
+  }
+}
+EOF
+
+BEHAVIOR_LEGACY_ART="$TMP_DIR/behavior-legacy-art.json"
+cat > "$BEHAVIOR_LEGACY_ART" <<'EOF'
+{
+  "pane": {"HOK-9002-legacy-art-task": "8"},
+  "hook": {},
+  "reported": {},
+  "planning": {},
+  "pr": {},
+  "checks": {}
+}
+EOF
+
+OUTPUT_LEGACY_ART="$TMP_DIR/output-legacy-art.txt"
+run_render "$STATE_LEGACY_ART" "$TMP_DIR" "$BEHAVIOR_LEGACY_ART" "$OUTPUT_LEGACY_ART"
+
+if grep -q 'artifacts: C- O:- E:- T:-' "$OUTPUT_LEGACY_ART"; then
+  pass "legacy task shows all-dashes artifact segment in dashboard"
+else
+  fail "legacy task artifact segment missing or malformed in dashboard output"
+fi
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 
 if (( FAIL > 0 )); then
