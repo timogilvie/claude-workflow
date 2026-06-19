@@ -141,6 +141,65 @@ EOF
 }
 
 {
+  mapfile -t fixture < <(new_fixture "expansion-handshake-resolve-primary")
+  root="${fixture[0]}"; feature_dir="${fixture[1]}"
+  STATE_FILE="$root/.wavemill/state.json"
+  mkdir -p "$(dirname "$STATE_FILE")"
+  printf '{"tasks":{}}\n' > "$STATE_FILE"
+  resolved="$(resolve_expansion_recovery_issue_id "HOK-2280")"
+  if [[ "$resolved" == "HOK-2280" ]]; then
+    pass "primary recovery identifier stays unchanged"
+  else
+    fail "primary recovery identifier should stay unchanged"
+  fi
+  rm -rf "$root"
+}
+
+{
+  mapfile -t fixture < <(new_fixture "expansion-handshake-resolve-challenger")
+  root="${fixture[0]}"; feature_dir="${fixture[1]}"
+  STATE_FILE="$root/.wavemill/state.json"
+  mkdir -p "$(dirname "$STATE_FILE")"
+  cat > "$STATE_FILE" <<'EOF'
+{"tasks":{"HOK-2265_c":{"linearIssueId":"HOK-2265"}}}
+EOF
+  get_task_meta() {
+    jq -r --arg issue "$1" --arg field "$2" '.tasks[$issue][$field] // empty' "$STATE_FILE"
+  }
+  resolved="$(resolve_expansion_recovery_issue_id "HOK-2265_c")"
+  unset -f get_task_meta
+  if [[ "$resolved" == "HOK-2265" ]]; then
+    pass "challenger recovery identifier uses linearIssueId"
+  else
+    fail "challenger recovery identifier should use linearIssueId"
+  fi
+  rm -rf "$root"
+}
+
+{
+  mapfile -t fixture < <(new_fixture "expansion-handshake-resolve-missing")
+  root="${fixture[0]}"; feature_dir="${fixture[1]}"
+  STATE_FILE="$root/.wavemill/state.json"
+  mkdir -p "$(dirname "$STATE_FILE")"
+  cat > "$STATE_FILE" <<'EOF'
+{"tasks":{"HOK-2299_c":{"linearIssueId":null},"HOK-2300_c":{"linearIssueId":""},"HOK-2301_c_extra":{"linearIssueId":"HOK-2301"}}}
+EOF
+  get_task_meta() {
+    jq -r --arg issue "$1" --arg field "$2" '.tasks[$issue][$field] // empty' "$STATE_FILE"
+  }
+  missing_null="$(resolve_expansion_recovery_issue_id "HOK-2299_c")"
+  missing_empty="$(resolve_expansion_recovery_issue_id "HOK-2300_c")"
+  not_synthetic="$(resolve_expansion_recovery_issue_id "HOK-2301_c_extra")"
+  unset -f get_task_meta
+  if [[ -z "$missing_null" && -z "$missing_empty" && "$not_synthetic" == "HOK-2301_c_extra" ]]; then
+    pass "edge guards handle null empty and non-suffix keys"
+  else
+    fail "edge guards should handle null empty and non-suffix keys"
+  fi
+  rm -rf "$root"
+}
+
+{
   mapfile -t fixture < <(new_fixture "expansion-handshake-task-packet")
   root="${fixture[0]}"; feature_dir="${fixture[1]}"
   cat > "$feature_dir/task-packet.md" <<'EOF'

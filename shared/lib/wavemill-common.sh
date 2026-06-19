@@ -1227,6 +1227,36 @@ expansion_recovery_already_attempted() {
   jq -e '.attempted == true' "$state_file" >/dev/null 2>&1
 }
 
+is_synthetic_challenger_issue_key() {
+  local issue="${1:-}"
+  [[ "$issue" == *_c ]]
+}
+
+resolve_expansion_recovery_issue_id() {
+  local issue="$1"
+  local linear_issue=""
+
+  if ! is_synthetic_challenger_issue_key "$issue"; then
+    printf '%s\n' "$issue"
+    return 0
+  fi
+
+  if declare -F get_task_meta >/dev/null 2>&1; then
+    linear_issue="$(get_task_meta "$issue" "linearIssueId" 2>/dev/null || true)"
+  elif [[ -n "${STATE_FILE:-}" && -f "${STATE_FILE:-}" ]]; then
+    linear_issue="$(jq -r --arg issue "$issue" '.tasks[$issue].linearIssueId // empty' "$STATE_FILE" 2>/dev/null || true)"
+  fi
+
+  linear_issue="${linear_issue#"${linear_issue%%[![:space:]]*}"}"
+  linear_issue="${linear_issue%"${linear_issue##*[![:space:]]}"}"
+
+  if [[ -z "$linear_issue" || "$linear_issue" == "null" ]]; then
+    return 0
+  fi
+
+  printf '%s\n' "$linear_issue"
+}
+
 expansion_recovery_mark_attempted() {
   local feature_dir="$1" issue="$2" reason="$3"
   local state_file

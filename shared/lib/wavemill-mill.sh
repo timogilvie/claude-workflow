@@ -6995,7 +6995,7 @@ recover_missing_expansion_artifact() {
   local recovery_log_dir="$REPO_DIR/.wavemill/logs"
   local recovery_log_file="$recovery_log_dir/expansion-recovery-${issue}.log"
   local recovery_timeout=""
-  local packet_content="" detail="" rc=0
+  local packet_content="" detail="" rc=0 recovery_issue=""
 
   if expansion_recovery_already_attempted "$feature_dir"; then
     log "warn" "[expansion-handshake] RECOVERY_SKIPPED_ALREADY_ATTEMPTED issue=$issue"
@@ -7016,8 +7016,31 @@ recover_missing_expansion_artifact() {
     return 1
   fi
 
+  recovery_issue="$(resolve_expansion_recovery_issue_id "$issue")"
+  if [[ -z "$recovery_issue" ]]; then
+    detail="synthetic-challenger-missing-linear-issue-id"
+    state_mutate "$(expansion_recovery_state_file "$feature_dir")" \
+      '.attempted = true
+       | .issue = $issue
+       | .status = "skipped"
+       | .detail = $detail
+       | .skippedReason = $skippedReason
+       | .completedAt = (now | todateiso8601)
+       | .exitCode = null
+       | del(.recoveryIssue)' \
+      --arg issue "$issue" \
+      --arg detail "$detail" \
+      --arg skippedReason "Synthetic challenger recovery skipped because linearIssueId is missing." >/dev/null || true
+    log "warn" "[expansion-handshake] RECOVERY_SKIPPED issue=$issue detail=$detail"
+    return 1
+  fi
+
+  state_mutate "$(expansion_recovery_state_file "$feature_dir")" \
+    '.recoveryIssue = $recoveryIssue' \
+    --arg recoveryIssue "$recovery_issue" >/dev/null || true
+
   recovery_timeout="$(get_expansion_handshake_timeout_seconds "$REPO_DIR")"
-  if _with_timeout "$recovery_timeout" npx tsx "$expand_tool" "$issue" --output "$packet_file" >"$recovery_log_file" 2>&1; then
+  if _with_timeout "$recovery_timeout" npx tsx "$expand_tool" "$recovery_issue" --output "$packet_file" >"$recovery_log_file" 2>&1; then
     :
   else
     rc=$?
@@ -7072,6 +7095,9 @@ recover_missing_expansion_artifact() {
   fi
 
   expansion_recovery_mark_result "$feature_dir" "$issue" "succeeded" "expanded-route-recovered" "0" || true
+  state_mutate "$(expansion_recovery_state_file "$feature_dir")" \
+    '.recoveryIssue = $recoveryIssue' \
+    --arg recoveryIssue "$recovery_issue" >/dev/null || true
   log "info" "[expansion-handshake] RECOVERY_OK issue=$issue log=\"$recovery_log_file\""
   return 0
 }
