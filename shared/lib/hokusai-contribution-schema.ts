@@ -41,6 +41,14 @@ export interface SubmitDataContributionRow {
   wall_clock_seconds?: number;
   task_id?: string;
   harness?: string;
+  outcome_diagnostic?: 'eligible' | 'ineligible_missing_outcome' | 'ineligible_failed_outcome' | 'unknown';
+  outcome_source?: 'feature_outcome_artifact' | 'reconstructed' | 'unknown';
+  outcome_artifact_present?: boolean;
+  outcome_artifact_valid?: boolean;
+  outcome_artifact_used?: boolean;
+  outcome_missing_fields?: string[];
+  outcome_invalid_fields?: string[];
+  outcome_failure_reason?: string;
 }
 
 export interface TechnicalTaskRouterSelectedModels {
@@ -253,12 +261,40 @@ function assertNoForbiddenKeys(value: unknown, path: string[] = []): void {
   }
 }
 
-function isSubmitDataContributionRow(value: unknown): value is SubmitDataContributionRow {
+const OUTCOME_DIAGNOSTIC_VALUES = new Set([
+  'eligible',
+  'ineligible_missing_outcome',
+  'ineligible_failed_outcome',
+  'unknown',
+]);
+
+const OUTCOME_SOURCE_VALUES = new Set([
+  'feature_outcome_artifact',
+  'reconstructed',
+  'unknown',
+]);
+
+export function isSubmitDataContributionRow(value: unknown): value is SubmitDataContributionRow {
   if (!isPlainObject(value)) {
     return false;
   }
 
-  if (!hasOnlyAllowedKeys(value, ['success_under_budget', 'inputs', 'actual_cost_usd', 'wall_clock_seconds', 'task_id', 'harness'])) {
+  if (!hasOnlyAllowedKeys(value, [
+    'success_under_budget',
+    'inputs',
+    'actual_cost_usd',
+    'wall_clock_seconds',
+    'task_id',
+    'harness',
+    'outcome_diagnostic',
+    'outcome_source',
+    'outcome_artifact_present',
+    'outcome_artifact_valid',
+    'outcome_artifact_used',
+    'outcome_missing_fields',
+    'outcome_invalid_fields',
+    'outcome_failure_reason',
+  ])) {
     return false;
   }
 
@@ -287,6 +323,38 @@ function isSubmitDataContributionRow(value: unknown): value is SubmitDataContrib
   }
 
   if (value.harness !== undefined && typeof value.harness !== 'string') {
+    return false;
+  }
+
+  if (value.outcome_diagnostic !== undefined && !OUTCOME_DIAGNOSTIC_VALUES.has(value.outcome_diagnostic as string)) {
+    return false;
+  }
+
+  if (value.outcome_source !== undefined && !OUTCOME_SOURCE_VALUES.has(value.outcome_source as string)) {
+    return false;
+  }
+
+  if (value.outcome_artifact_present !== undefined && typeof value.outcome_artifact_present !== 'boolean') {
+    return false;
+  }
+
+  if (value.outcome_artifact_valid !== undefined && typeof value.outcome_artifact_valid !== 'boolean') {
+    return false;
+  }
+
+  if (value.outcome_artifact_used !== undefined && typeof value.outcome_artifact_used !== 'boolean') {
+    return false;
+  }
+
+  if (value.outcome_missing_fields !== undefined && !isStringArray(value.outcome_missing_fields)) {
+    return false;
+  }
+
+  if (value.outcome_invalid_fields !== undefined && !isStringArray(value.outcome_invalid_fields)) {
+    return false;
+  }
+
+  if (value.outcome_failure_reason !== undefined && typeof value.outcome_failure_reason !== 'string') {
     return false;
   }
 
