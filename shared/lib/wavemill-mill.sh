@@ -4468,6 +4468,9 @@ _restore_inflight_task_window_if_missing() {
         "$model" "$agent_cmd" "$depth" || rc=$?
       ;;
     coding)
+      # REROUTE_EXPANDED_LAST_REASON contract (non-zero exit):
+      #   "disabled" or "not_eligible" = expected skip, no warning needed
+      #   any other value = routing failure, emit warning for the caller
       if ! reroute_expanded_packets_for_coding_handoff "$issue" "$slug" "$feature_dir"; then
         if [[ "${REROUTE_EXPANDED_LAST_REASON:-}" == "disabled" || "${REROUTE_EXPANDED_LAST_REASON:-}" == "not_eligible" ]]; then
           log_route_lifecycle "expansion_skipped" \
@@ -4479,8 +4482,8 @@ _restore_inflight_task_window_if_missing() {
             "issue=$issue" \
             "reason=${REROUTE_EXPANDED_LAST_REASON:-routing_error}" \
             "active_route=\"$(route_lifecycle_route_id "$feature_dir/.routing-complete" 2>/dev/null || true)\""
+          log_warn "$issue → expanded reroute helper failed, attempting promotion from existing artifacts"
         fi
-        log_warn "$issue → expanded reroute helper failed, attempting promotion from existing artifacts"
       fi
       if ! apply_expanded_route_if_present "$feature_dir" "$issue" "$slug" "$wt_dir" "$STATE_FILE"; then
         log_warn "$issue → expanded route invalid; using existing execution state for coding relaunch"
@@ -9373,6 +9376,9 @@ monitor_issue_state() {
             # Record approval via approve_plan (HOK-1193: controller-owned stage result)
             approve_plan "$FEATURE_DIR" "$current_agent" ""
 
+            # REROUTE_EXPANDED_LAST_REASON contract (non-zero exit):
+            #   "disabled" or "not_eligible" = expected skip, no warning needed
+            #   any other value = routing failure, emit warning for the caller
             if ! reroute_expanded_packets_for_coding_handoff "$ISSUE" "$SLUG" "$FEATURE_DIR"; then
               if [[ "${REROUTE_EXPANDED_LAST_REASON:-}" == "disabled" || "${REROUTE_EXPANDED_LAST_REASON:-}" == "not_eligible" ]]; then
                 log_route_lifecycle "expansion_skipped" \
@@ -9384,8 +9390,8 @@ monitor_issue_state() {
                   "issue=$ISSUE" \
                   "reason=${REROUTE_EXPANDED_LAST_REASON:-routing_error}" \
                   "active_route=\"$(route_lifecycle_route_id "$FEATURE_DIR/.routing-complete" 2>/dev/null || true)\""
+                log_warn "$ISSUE → expanded reroute helper failed, attempting promotion from existing artifacts"
               fi
-              log_warn "$ISSUE → expanded reroute helper failed, attempting promotion from existing artifacts"
             fi
             if ! apply_expanded_route_if_present "$FEATURE_DIR" "$ISSUE" "$SLUG" "${WORKTREE_ROOT}/${SLUG}" "$STATE_FILE"; then
               log_warn "$ISSUE → expanded route invalid; using bootstrap execution route for coding"
