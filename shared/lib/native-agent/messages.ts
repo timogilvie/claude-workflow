@@ -133,7 +133,7 @@ export interface AgentTurn {
   stopReason: string;
   errorMessage?: string;
   timestamp: number;
-  raw?: unknown;
+  raw: unknown;
 }
 
 export interface NativeToolResultMessage {
@@ -309,6 +309,7 @@ function fromPiAssistantMessage(message: AssistantMessage): AgentTurn {
     usage: message.usage,
     stopReason: message.stopReason,
     timestamp: message.timestamp,
+    raw: message,
   };
   if (message.responseModel !== undefined) turn.responseModel = message.responseModel;
   if (message.responseId !== undefined) turn.responseId = message.responseId;

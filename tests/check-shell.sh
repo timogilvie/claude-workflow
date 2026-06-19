@@ -3215,11 +3215,12 @@ for pkg in "${PI_PACKAGES[@]}"; do
     --exclude-dir=node_modules \
     --exclude-dir=spike \
     "$REPO_DIR" 2>/dev/null \
-    | grep -v "shared/lib/native-agent/messages.ts" \
-    | grep -v "shared/lib/native-agent/provider.ts" \
     | grep -v "spike/" \
     | grep -v "/spike/" \
     || true)
+  for allowed_file in "${PI_ALLOWED_FILES[@]}"; do
+    leaks=$(printf '%s\n' "$leaks" | grep -vF "$allowed_file" || true)
+  done
   if [[ -n "$leaks" ]]; then
     pi_seam_ok=false
     fail "Pi vendor import '${pkg}' found outside seam:"$'\n'"${leaks}"
