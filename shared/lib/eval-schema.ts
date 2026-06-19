@@ -100,6 +100,13 @@
  *   to match `ChallengeRouteArtifact`.
  * - **1.29.0**: Added optional `traceId` field (HOK-2259) so eval records can
  *   be joined to the task lifecycle event stream in `trace.jsonl`.
+ * - **1.30.0**: Added optional `featureOutcomeDiagnostics` field (HOK-2262) so
+ *   eval records retain feature-outcome artifact presence, validity, source
+ *   hash, normalized fields, and eligibility diagnostics; eval/export paths
+ *   can distinguish ineligible-due-to-missing-outcome from
+ *   ineligible-due-to-failed-outcome without changing existing reconstruction
+ *   logic. New `EligibilityErrorCode` values: `missing_feature_outcome`,
+ *   `invalid_feature_outcome`, `failed_feature_outcome`.
  *
  * @module eval-schema
  */
@@ -109,7 +116,7 @@ import type { ModelSelector, RegistryTaskType } from './model-registry.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
 
 /** Current eval schema version for newly emitted records. */
-export const SCHEMA_VERSION = '1.29.0';
+export const SCHEMA_VERSION = '1.30.0';
 
 export type RoutingRole = 'planner' | 'coder' | 'reviewer';
 
@@ -300,6 +307,7 @@ export type InterventionSeverity = 'low' | 'med' | 'high';
  * Stable eligibility error codes for downstream training and budget export.
  *
  * @since 1.14.0
+ * @since 1.30.0 added missing_feature_outcome, invalid_feature_outcome, failed_feature_outcome
  */
 export type EligibilityErrorCode =
   | 'missing_routing'
@@ -308,7 +316,97 @@ export type EligibilityErrorCode =
   | 'missing_budget_snapshot'
   | 'missing_outcome'
   | 'missing_task_descriptor'
-  | 'missing_model_identity';
+  | 'missing_model_identity'
+  | 'missing_feature_outcome'
+  | 'invalid_feature_outcome'
+  | 'failed_feature_outcome';
+
+// ────────────────────────────────────────────────────────────────
+// Feature Outcome Diagnostics (HOK-2262)
+// ────────────────────────────────────────────────────────────────
+
+/**
+ * Machine-readable eligibility classification from the feature outcome artifact.
+ *
+ * @since 1.30.0
+ */
+export type FeatureOutcomeEligibilityDiagnostic =
+  | 'eligible'
+  | 'ineligible_missing_outcome'
+  | 'ineligible_failed_outcome'
+  | 'unknown';
+
+/**
+ * Reason for the current diagnostic state of the feature outcome artifact.
+ *
+ * @since 1.30.0
+ */
+export type FeatureOutcomeDiagnosticReason =
+  | 'artifact_absent'
+  | 'malformed_json'
+  | 'invalid_root'
+  | 'incomplete_outcome'
+  | 'invalid_outcome'
+  | 'loaded';
+
+/**
+ * Normalized outcome fields extracted from the feature-state artifact.
+ * All fields are optional; presence indicates the artifact contained them.
+ *
+ * @since 1.30.0
+ */
+export interface FeatureOutcomeNormalizedFields {
+  completed?: boolean;
+  merged?: boolean | null;
+  ciPassed?: boolean | null;
+  reviewPassed?: boolean | null;
+  readyPassed?: boolean | null;
+  manualIntervention?: boolean | null;
+  interventionCount?: number | null;
+  reverted?: boolean | null;
+  evalScore?: number | null;
+  costUsd?: number | null;
+  durationSeconds?: number | null;
+}
+
+/**
+ * Structured diagnostics for the feature outcome artifact consumption path.
+ *
+ * Attached to eval records so eval/export consumers can observe artifact
+ * presence, validity, source provenance, normalized fields, missing/invalid
+ * field reasons, eligibility classification, and conflicts with reconstructed
+ * outcome state — without changing existing reconstruction behavior.
+ *
+ * @since 1.30.0
+ */
+export interface FeatureOutcomeDiagnostics {
+  /** Whether a feature-state or feature-outcome artifact file was found on disk. */
+  present: boolean;
+  /** Whether the artifact was parseable and had a valid outcome object. */
+  valid: boolean;
+  /** Whether the artifact was actually used (valid and all required fields present). */
+  used: boolean;
+  /** Basename of the resolved artifact file. */
+  sourceFile?: string;
+  /** SHA-256 hex hash of the raw artifact bytes. */
+  sourceHash?: string;
+  /** schemaVersion field from the artifact root. */
+  schemaVersion?: string;
+  /** Reason for the current diagnostic state. */
+  reason?: FeatureOutcomeDiagnosticReason;
+  /** Normalized outcome fields from the artifact. */
+  normalizedFields?: FeatureOutcomeNormalizedFields;
+  /** Keys that were absent from the artifact outcome object. */
+  missingFields?: string[];
+  /** Keys that were present but had unexpected types. */
+  invalidFields?: string[];
+  /** Machine-readable eligibility classification from the artifact. */
+  eligibilityDiagnostic?: FeatureOutcomeEligibilityDiagnostic;
+  /** True when at least one field conflicts with the reconstructed outcome. */
+  conflictsWithReconstruction?: boolean;
+  /** Names of fields that differ between artifact and reconstruction. */
+  conflictingFields?: string[];
+}
 
 export type EvalFailureReason = 'eval_prompt_too_large';
 
@@ -1613,6 +1711,18 @@ export interface EvalRecord {
    * @since 1.29.0
    */
   traceId?: string;
+
+  /**
+   * Diagnostics for the feature-outcome artifact consumption path (HOK-2262).
+   *
+   * Records whether a feature-state or feature-outcome artifact was found,
+   * whether it was valid, and what normalized outcome fields it contained.
+   * Allows export consumers to distinguish ineligible-due-to-missing-outcome
+   * from ineligible-due-to-failed-outcome without altering reconstruction logic.
+   *
+   * @since 1.30.0
+   */
+  featureOutcomeDiagnostics?: FeatureOutcomeDiagnostics;
 
   /** Optional extensibility bag for additional metadata */
   metadata?: Record<string, unknown>;

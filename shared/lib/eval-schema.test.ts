@@ -767,7 +767,7 @@ function validPromptSizeDiagnostic() {
 }
 
 test('SCHEMA_VERSION is bumped for eval schema updates', () => {
-  assert.equal(SCHEMA_VERSION, '1.29.0');
+  assert.equal(SCHEMA_VERSION, '1.30.0');
 });
 
 test('Record without prompt size fields still validates', () => {
@@ -1488,6 +1488,9 @@ test('Eligibility fields validate and schema stays in parity', () => {
     'missing_outcome',
     'missing_task_descriptor',
     'missing_model_identity',
+    'missing_feature_outcome',
+    'invalid_feature_outcome',
+    'failed_feature_outcome',
   ]);
   assert.equal(properties.enrichmentDiagnostics?.type, 'array');
   assert.equal(properties.enrichmentDiagnostics?.items?.type, 'string');
@@ -1752,7 +1755,7 @@ test('Wavemill router fields validate and schema stays in parity', () => {
 });
 
 test('Schema version constant is 1.29.0', () => {
-  assert.equal(SCHEMA_VERSION, '1.29.0');
+  assert.equal(SCHEMA_VERSION, '1.30.0');
 });
 
 test('Record with resolved-model routing validates', () => {
@@ -1822,6 +1825,89 @@ test('Records reject nonRewardReason when message is missing', () => {
     result.errors.some((error) => error.includes('nonRewardReason.message')),
     'Should mention nonRewardReason.message in error',
   );
+});
+
+// ────────────────────────────────────────────────────────────────
+// featureOutcomeDiagnostics tests (HOK-2262)
+// ────────────────────────────────────────────────────────────────
+
+test('featureOutcomeDiagnostics optional field validates when present', () => {
+  const record: EvalRecord = {
+    ...scenarios[0].record,
+    schemaVersion: '1.30.0',
+    featureOutcomeDiagnostics: {
+      present: true,
+      valid: true,
+      used: true,
+      sourceFile: 'feature-state.json',
+      sourceHash: 'a'.repeat(64),
+      schemaVersion: '1.0',
+      reason: 'loaded',
+      eligibilityDiagnostic: 'eligible',
+      missingFields: [],
+      invalidFields: [],
+      conflictsWithReconstruction: false,
+      conflictingFields: [],
+    },
+  };
+
+  const result = validateAgainstSchema(record as unknown as Record<string, unknown>);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
+test('featureOutcomeDiagnostics validates when absent (optional field)', () => {
+  const record: EvalRecord = {
+    ...scenarios[0].record,
+    schemaVersion: '1.30.0',
+  };
+  delete (record as Record<string, unknown>).featureOutcomeDiagnostics;
+
+  const result = validateAgainstSchema(record as unknown as Record<string, unknown>);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
+test('featureOutcomeDiagnostics rejects unknown eligibilityDiagnostic enum value', () => {
+  const bad = {
+    ...scenarios[0].record,
+    schemaVersion: '1.30.0',
+    featureOutcomeDiagnostics: {
+      present: true,
+      valid: false,
+      used: false,
+      reason: 'artifact_absent',
+      eligibilityDiagnostic: 'bad_value_not_in_enum',
+    },
+  } as unknown as Record<string, unknown>;
+
+  const result = validateAgainstSchema(bad);
+  assert.ok(!result.valid, 'Should fail with unknown eligibilityDiagnostic enum value');
+});
+
+test('featureOutcomeDiagnostics rejects missing required fields (present, valid, used)', () => {
+  const bad = {
+    ...scenarios[0].record,
+    schemaVersion: '1.30.0',
+    featureOutcomeDiagnostics: {
+      // missing: present, valid, used
+      reason: 'artifact_absent',
+      eligibilityDiagnostic: 'unknown',
+    },
+  } as unknown as Record<string, unknown>;
+
+  const result = validateAgainstSchema(bad);
+  assert.ok(!result.valid, 'Should fail when required sub-fields missing');
+});
+
+test('featureOutcomeDiagnostics: new eligibility error codes validate', () => {
+  const record: EvalRecord = {
+    ...scenarios[0].record,
+    schemaVersion: '1.30.0',
+    budgetEvalEligibilityError: 'missing_feature_outcome',
+    eligibilityErrors: ['missing_feature_outcome', 'invalid_feature_outcome', 'failed_feature_outcome'],
+  };
+
+  const result = validateAgainstSchema(record as unknown as Record<string, unknown>);
+  assert.ok(result.valid, `New eligibility codes should validate: ${result.errors.join('; ')}`);
 });
 
 // ────────────────────────────────────────────────────────────────

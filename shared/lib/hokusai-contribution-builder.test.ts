@@ -247,3 +247,76 @@ describe('hokusai-contribution-builder', () => {
     });
   });
 });
+
+// ────────────────────────────────────────────────────────────────
+// Feature outcome diagnostic columns in buildSubmitDataContributionRow (HOK-2262)
+// ────────────────────────────────────────────────────────────────
+
+describe('buildSubmitDataContributionRow – outcome diagnostic fields (HOK-2262)', () => {
+  it('includes outcome diagnostic fields when all set on projection', () => {
+    const projection = makeProjection({
+      outcomeDiagnostic: 'eligible',
+      outcomeSource: 'feature_outcome_artifact',
+      outcomeArtifactPresent: true,
+      outcomeArtifactValid: true,
+      outcomeArtifactUsed: true,
+      outcomeMissingFields: [],
+      outcomeInvalidFields: [],
+      outcomeFailureReason: undefined,
+    });
+    const row = buildSubmitDataContributionRow(projection);
+    assert.equal(row.outcome_diagnostic, 'eligible');
+    assert.equal(row.outcome_source, 'feature_outcome_artifact');
+    assert.equal(row.outcome_artifact_present, true);
+    assert.equal(row.outcome_artifact_valid, true);
+    assert.equal(row.outcome_artifact_used, true);
+    assert.deepEqual(row.outcome_missing_fields, []);
+    assert.deepEqual(row.outcome_invalid_fields, []);
+    assert.equal(row.outcome_failure_reason, undefined);
+  });
+
+  it('omits outcome diagnostic fields when not set on projection', () => {
+    const projection = makeProjection({
+      outcomeDiagnostic: undefined,
+      outcomeSource: undefined,
+      outcomeArtifactPresent: undefined,
+    });
+    const row = buildSubmitDataContributionRow(projection);
+    assert.equal(row.outcome_diagnostic, undefined);
+    assert.equal(row.outcome_source, undefined);
+    assert.equal(row.outcome_artifact_present, undefined);
+  });
+
+  it('includes failure reason when artifact is invalid', () => {
+    const projection = makeProjection({
+      outcomeDiagnostic: 'unknown',
+      outcomeSource: 'unknown',
+      outcomeArtifactPresent: true,
+      outcomeArtifactValid: false,
+      outcomeArtifactUsed: false,
+      outcomeMissingFields: ['merged', 'ciPassed'],
+      outcomeFailureReason: 'incomplete_outcome',
+    });
+    const row = buildSubmitDataContributionRow(projection);
+    assert.equal(row.outcome_diagnostic, 'unknown');
+    assert.equal(row.outcome_artifact_valid, false);
+    assert.deepEqual(row.outcome_missing_fields, ['merged', 'ciPassed']);
+    assert.equal(row.outcome_failure_reason, 'incomplete_outcome');
+  });
+
+  it('ineligible_failed_outcome flows through', () => {
+    const projection = makeProjection({
+      outcomeDiagnostic: 'ineligible_failed_outcome',
+      outcomeSource: 'feature_outcome_artifact',
+      outcomeArtifactPresent: true,
+      outcomeArtifactValid: true,
+      outcomeArtifactUsed: true,
+      outcomeMissingFields: [],
+      outcomeInvalidFields: [],
+      outcomeFailureReason: 'ineligible_failed_outcome',
+    });
+    const row = buildSubmitDataContributionRow(projection);
+    assert.equal(row.outcome_diagnostic, 'ineligible_failed_outcome');
+    assert.equal(row.outcome_failure_reason, 'ineligible_failed_outcome');
+  });
+});
