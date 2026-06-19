@@ -3888,10 +3888,17 @@ recover_misplaced_coding_complete_marker() {
       -path "$expected_marker" -prune -o \
       -path "*/features/$slug/.coding-complete" -type f -print -quit 2>/dev/null || true
   )"
+  if [[ -z "$misplaced_marker" && -f "$worktree/.coding-complete" ]]; then
+    misplaced_marker="$worktree/.coding-complete"
+  fi
   [[ -n "$misplaced_marker" ]] || return 1
   [[ "$misplaced_marker" != "$expected_marker" ]] || return 1
 
-  rel_marker="${misplaced_marker#"$worktree"/}"
+  if [[ "$misplaced_marker" == "$worktree/.coding-complete" ]]; then
+    rel_marker=".coding-complete"
+  else
+    rel_marker="${misplaced_marker#"$worktree"/}"
+  fi
   recovered_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   audit_path="$feature_dir/.coding-marker-recovered.json"
   audit_tmp="$(mktemp "$audit_path.tmp.XXXXXX" 2>/dev/null)" || {
