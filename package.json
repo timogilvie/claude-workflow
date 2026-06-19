@@ -38,6 +38,8 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
+    "@earendil-works/pi-agent-core": "0.79.8",
+    "@earendil-works/pi-ai": "0.79.8",
     "ajv": "^8.18.0"
   },
   "devDependencies": {
