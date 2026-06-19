@@ -7158,7 +7158,7 @@ fetch_queue_plan() {
 
 # fetch_queue_plan runs in command substitution, so diagnostics use a caller-owned file.
 record_fetch_queue_plan_failure() {
-  local step="$1" stderr_text="${2-}" diagnostics_file="${FETCH_QUEUE_PLAN_DIAGNOSTICS_FILE:-}"
+  local step="$1" stderr_text="${2-}" exit_code="${3:-1}" diagnostics_file="${FETCH_QUEUE_PLAN_DIAGNOSTICS_FILE:-}"
   [[ -n "$diagnostics_file" ]] || return 0
 
   local bounded
@@ -7169,25 +7169,27 @@ record_fetch_queue_plan_failure() {
     bounded="(no stderr captured)"
   fi
 
-  printf 'step=%s stderr=%s\n' "$step" "$bounded" > "$diagnostics_file" 2>/dev/null || true
+  printf 'step=%s exit=%s stderr=%s\n' "$step" "$exit_code" "$bounded" > "$diagnostics_file" 2>/dev/null || true
 }
 
 log_fetch_queue_plan_failure() {
   local diagnostics_file="$1"
   [[ -s "$diagnostics_file" ]] || return 0
 
-  local details
+  local details step reason
   details="$(cat "$diagnostics_file" 2>/dev/null || true)"
-  [[ -n "$details" ]] && log "debug" "[fetch_queue_plan] failed $details"
+  step="$(printf '%s' "$details" | sed -n 's/.*step=\([^ ]*\).*/\1/p')"
+  reason="$(classify_queue_failure_reason "$step")"
+  [[ -n "$details" ]] && log "debug" "[fetch_queue_plan] failed reason=$reason $details"
 }
 
 classify_queue_failure_reason() {
   local step="$1"
   case "$step" in
-    cache_empty)               echo "cache_empty" ;;
-    jq_massage_failed)         echo "dependency_planning_failed" ;;
+    cache_empty|empty_queue)   echo "empty_queue" ;;
+    jq_massage_failed)         echo "invalid_input" ;;
     plan_queue_failed)         echo "cache_refresh_failed" ;;
-    validation_failed)         echo "unexpected_output" ;;
+    validation_failed)         echo "invalid_input" ;;
     *)                         echo "unknown" ;;
   esac
 }
@@ -7244,25 +7246,34 @@ build_queue_plan_once() {
   if [[ -n "${PROJECT_NAME:-}" ]]; then
     cache_key="$PROJECT_NAME"
     queue_plan=$(printf '%s\n' "$plan_input" | _with_timeout 60 npx tsx "$TOOLS_DIR/plan-queue.ts" --stdin --json --cache-key "$cache_key" --refresh-missing-cache 2>"$tmp_stderr") || {
+      local exit_code=$?
       stderr_text="$(cat "$tmp_stderr" 2>/dev/null || true)"
       rm -f "$tmp_stderr"
-      record_fetch_queue_plan_failure "plan_queue_failed" "$stderr_text"
+      record_fetch_queue_plan_failure "plan_queue_failed" "$stderr_text" "$exit_code"
       return 1
     }
   else
     queue_plan=$(printf '%s\n' "$plan_input" | _with_timeout 15 npx tsx "$TOOLS_DIR/plan-queue.ts" --stdin --json 2>"$tmp_stderr") || {
+      local exit_code=$?
       stderr_text="$(cat "$tmp_stderr" 2>/dev/null || true)"
       rm -f "$tmp_stderr"
-      record_fetch_queue_plan_failure "plan_queue_failed" "$stderr_text"
+      record_fetch_queue_plan_failure "plan_queue_failed" "$stderr_text" "$exit_code"
       return 1
     }
   fi
 
+  if [[ -z "${queue_plan//[[:space:]]/}" ]]; then
+    rm -f "$tmp_stderr"
+    record_fetch_queue_plan_failure "empty_queue" "" 0
+    return 1
+  fi
+
   : > "$tmp_stderr"
   jq -e 'has("availableNow")' >/dev/null 2>"$tmp_stderr" <<<"$queue_plan" || {
+    local exit_code=$?
     stderr_text="$(cat "$tmp_stderr" 2>/dev/null || true)"
     rm -f "$tmp_stderr"
-    record_fetch_queue_plan_failure "validation_failed" "$stderr_text"
+    record_fetch_queue_plan_failure "validation_failed" "$stderr_text" "$exit_code"
     return 1
   }
 
