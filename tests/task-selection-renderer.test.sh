@@ -94,6 +94,10 @@ FUNCTIONS_FILE="$TEST_TMP/task-selection-renderer-funcs.sh"
   echo
   extract_function "$MONITOR_BODY" "log_fetch_queue_plan_failure"
   echo
+  extract_function "$MONITOR_BODY" "classify_queue_failure_reason"
+  echo
+  extract_function "$MONITOR_BODY" "get_queue_failure_reason"
+  echo
   extract_function "$MONITOR_BODY" "build_queue_plan_once"
   echo
   extract_function "$MONITOR_BODY" "invoke_first_wave_helper"
@@ -147,7 +151,9 @@ render_prompt_under_test() {
   if [[ -z "$GROUPED_DISPLAY" ]]; then
     USING_GROUPED_VIEW=false
     if [[ -z "$queue_plan_json" ]]; then
-      log_warn "queue analysis unavailable, falling back to flat list"
+      local _queue_reason
+      _queue_reason="$(get_queue_failure_reason "${queue_plan_diag_file:-}")"
+      log_warn "queue analysis unavailable (reason: ${_queue_reason:-unknown}), falling back to flat list"
       [[ -n "$queue_plan_diag_file" ]] && log_fetch_queue_plan_failure "$queue_plan_diag_file"
     fi
     if [[ -n "$avail_unblocked" ]]; then
@@ -534,7 +540,14 @@ run_queue_plan_failure_case() {
     plan_queue_failed)
       cat > "$bin_dir/npx" <<'EOF'
 #!/usr/bin/env bash
-echo "STUBBED ERROR" >&2
+echo "CACHE REFRESH ERROR" >&2
+exit 1
+EOF
+      ;;
+    plan_queue_dependency_failed)
+      cat > "$bin_dir/npx" <<'EOF'
+#!/usr/bin/env bash
+echo "DEPENDENCY PLANNING ERROR" >&2
 exit 1
 EOF
       ;;
@@ -542,6 +555,12 @@ EOF
       cat > "$bin_dir/npx" <<'EOF'
 #!/usr/bin/env bash
 printf '{"unexpected":"shape"}\n'
+EOF
+      ;;
+    empty_queue)
+      cat > "$bin_dir/npx" <<'EOF'
+#!/usr/bin/env bash
+printf '   \n'
 EOF
       ;;
     *)
@@ -602,8 +621,12 @@ test_fetch_queue_plan_failure_diagnostics_cache_empty() {
   stderr_text="$(cat "$stderr")"
 
   check_contains "cache-empty fallback still renders flat list" "$(cat "$stdout")" "1. HOK-10 - Foundation task (score: 98)"
-  check_contains "cache-empty warns once" "$stderr_text" "WARN:queue analysis unavailable, falling back to flat list"
+  check_contains "cache-empty warns once" "$stderr_text" "WARN:queue analysis unavailable"
+  check_contains "cache-empty warning includes reason" "$stderr_text" "(reason: empty_queue)"
+  check_contains "cache-empty warning ends with fallback" "$stderr_text" "falling back to flat list"
   check_contains "cache-empty debug names step" "$stderr_text" "step=cache_empty"
+  check_contains "cache-empty debug includes reason" "$stderr_text" "reason=empty_queue"
+  check_contains "cache-empty debug includes exit" "$stderr_text" "exit=1"
   check_contains "cache-empty debug marks empty stderr" "$stderr_text" "(no stderr captured)"
   check_eq "cache-empty warning count" "1" "$(grep -c 'queue analysis unavailable' "$stderr" || true)"
   check_eq "cache-empty debug count" "1" "$(grep -F -c 'DEBUG:[fetch_queue_plan]' "$stderr" || true)"
@@ -617,7 +640,9 @@ test_fetch_queue_plan_failure_diagnostics_jq_massage() {
   tmp_dir="$(sed -n '3p' <<<"$result")"
   stderr_text="$(cat "$stderr")"
 
+  check_contains "jq-massage warning includes reason" "$stderr_text" "(reason: invalid_input)"
   check_contains "jq-massage debug names step" "$stderr_text" "step=jq_massage_failed"
+  check_contains "jq-massage debug includes reason" "$stderr_text" "reason=invalid_input"
   check_contains "jq-massage debug includes jq stderr" "$stderr_text" "parse error"
   check_eq "jq-massage warning count" "1" "$(grep -c 'queue analysis unavailable' "$stderr" || true)"
   check_eq "jq-massage debug count" "1" "$(grep -F -c 'DEBUG:[fetch_queue_plan]' "$stderr" || true)"
@@ -631,11 +656,30 @@ test_fetch_queue_plan_failure_diagnostics_plan_queue() {
   tmp_dir="$(sed -n '3p' <<<"$result")"
   stderr_text="$(cat "$stderr")"
 
+  check_contains "plan-queue warning includes reason" "$stderr_text" "(reason: cache_refresh_failed)"
   check_contains "plan-queue debug names step" "$stderr_text" "step=plan_queue_failed"
-  check_contains "plan-queue debug includes stderr" "$stderr_text" "STUBBED ERROR"
+  check_contains "plan-queue debug includes reason" "$stderr_text" "reason=cache_refresh_failed"
+  check_contains "plan-queue debug includes exit" "$stderr_text" "exit=1"
+  check_contains "plan-queue debug includes stderr" "$stderr_text" "CACHE REFRESH ERROR"
   check_eq "plan-queue warning count" "1" "$(grep -c 'queue analysis unavailable' "$stderr" || true)"
   check_eq "plan-queue debug count" "1" "$(grep -F -c 'DEBUG:[fetch_queue_plan]' "$stderr" || true)"
   assert_no_queue_plan_temp_files "plan-queue temp files cleaned" "$tmp_dir"
+}
+
+test_fetch_queue_plan_failure_diagnostics_dependency_planning() {
+  local result stderr tmp_dir stderr_text
+  result="$(run_queue_plan_failure_case "plan_queue_dependency_failed" "$LINEAR_BACKLOG_JSON")"
+  stderr="$(sed -n '2p' <<<"$result")"
+  tmp_dir="$(sed -n '3p' <<<"$result")"
+  stderr_text="$(cat "$stderr")"
+
+  check_contains "dependency-planning warning includes reason" "$stderr_text" "(reason: dependency_planning_failed)"
+  check_contains "dependency-planning debug names step" "$stderr_text" "step=plan_queue_failed"
+  check_contains "dependency-planning debug includes reason" "$stderr_text" "reason=dependency_planning_failed"
+  check_contains "dependency-planning debug includes stderr" "$stderr_text" "DEPENDENCY PLANNING ERROR"
+  check_eq "dependency-planning warning count" "1" "$(grep -c 'queue analysis unavailable' "$stderr" || true)"
+  check_eq "dependency-planning debug count" "1" "$(grep -F -c 'DEBUG:[fetch_queue_plan]' "$stderr" || true)"
+  assert_no_queue_plan_temp_files "dependency-planning temp files cleaned" "$tmp_dir"
 }
 
 test_fetch_queue_plan_failure_diagnostics_validation() {
@@ -645,11 +689,29 @@ test_fetch_queue_plan_failure_diagnostics_validation() {
   tmp_dir="$(sed -n '3p' <<<"$result")"
   stderr_text="$(cat "$stderr")"
 
+  check_contains "validation warning includes reason" "$stderr_text" "(reason: invalid_input)"
   check_contains "validation debug names step" "$stderr_text" "step=validation_failed"
+  check_contains "validation debug includes reason" "$stderr_text" "reason=invalid_input"
   check_contains "validation debug marks empty stderr" "$stderr_text" "(no stderr captured)"
   check_eq "validation warning count" "1" "$(grep -c 'queue analysis unavailable' "$stderr" || true)"
   check_eq "validation debug count" "1" "$(grep -F -c 'DEBUG:[fetch_queue_plan]' "$stderr" || true)"
   assert_no_queue_plan_temp_files "validation temp files cleaned" "$tmp_dir"
+}
+
+test_fetch_queue_plan_failure_diagnostics_empty_queue() {
+  local result stderr tmp_dir stderr_text
+  result="$(run_queue_plan_failure_case "empty_queue" "$LINEAR_BACKLOG_JSON")"
+  stderr="$(sed -n '2p' <<<"$result")"
+  tmp_dir="$(sed -n '3p' <<<"$result")"
+  stderr_text="$(cat "$stderr")"
+
+  check_contains "empty-queue warning includes reason" "$stderr_text" "(reason: empty_queue)"
+  check_contains "empty-queue debug names step" "$stderr_text" "step=empty_queue"
+  check_contains "empty-queue debug includes exit" "$stderr_text" "exit=0"
+  check_contains "empty-queue debug marks empty stderr" "$stderr_text" "(no stderr captured)"
+  check_eq "empty-queue warning count" "1" "$(grep -c 'queue analysis unavailable' "$stderr" || true)"
+  check_eq "empty-queue debug count" "1" "$(grep -F -c 'DEBUG:[fetch_queue_plan]' "$stderr" || true)"
+  assert_no_queue_plan_temp_files "empty-queue temp files cleaned" "$tmp_dir"
 }
 
 test_fetch_queue_plan_warning_stays_quiet_without_debug() {
@@ -659,8 +721,10 @@ test_fetch_queue_plan_warning_stays_quiet_without_debug() {
   tmp_dir="$(sed -n '3p' <<<"$result")"
   stderr_text="$(cat "$stderr")"
 
-  check_contains "non-debug fallback warns" "$stderr_text" "WARN:queue analysis unavailable, falling back to flat list"
-  check_not_contains "non-debug omits captured stderr" "$stderr_text" "STUBBED ERROR"
+  check_contains "non-debug fallback warns" "$stderr_text" "WARN:queue analysis unavailable"
+  check_contains "non-debug warning includes reason" "$stderr_text" "(reason: cache_refresh_failed)"
+  check_contains "non-debug warning ends with fallback" "$stderr_text" "falling back to flat list"
+  check_not_contains "non-debug omits captured stderr" "$stderr_text" "CACHE REFRESH ERROR"
   check_not_contains "non-debug omits diagnostic step" "$stderr_text" "step=plan_queue_failed"
   check_eq "non-debug warning count" "1" "$(grep -c 'queue analysis unavailable' "$stderr" || true)"
   assert_no_queue_plan_temp_files "non-debug temp files cleaned" "$tmp_dir"
@@ -680,7 +744,9 @@ test_fallback_when_grouped_plan_has_no_renderable_tasks
 test_fetch_queue_plan_failure_diagnostics_cache_empty
 test_fetch_queue_plan_failure_diagnostics_jq_massage
 test_fetch_queue_plan_failure_diagnostics_plan_queue
+test_fetch_queue_plan_failure_diagnostics_dependency_planning
 test_fetch_queue_plan_failure_diagnostics_validation
+test_fetch_queue_plan_failure_diagnostics_empty_queue
 test_fetch_queue_plan_warning_stays_quiet_without_debug
 
 echo
