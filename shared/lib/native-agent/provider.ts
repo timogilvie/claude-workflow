@@ -18,8 +18,10 @@ import {
   createPiContext,
   mapPiUsageToSessionModelUsage,
   toNativeAssistantMessage,
+  type AgentToolSchema,
   type NativeAgentMessage,
   type NativeAssistantMessage,
+  type NativeToolCall,
 } from './messages.ts';
 
 export type ProviderFinishReason =
@@ -30,17 +32,11 @@ export type ProviderFinishReason =
   | 'aborted'
   | 'unknown';
 
-export interface NativeToolCall {
-  id: string;
-  name: string;
-  arguments: Record<string, unknown>;
-}
+/** Re-export for callers that import NativeToolCall from provider.ts */
+export type { NativeToolCall } from './messages.ts';
 
-export interface NativeToolSchema {
-  name: string;
-  description: string;
-  parameters: unknown;
-}
+/** @deprecated Use AgentToolSchema from messages.ts */
+export type NativeToolSchema = AgentToolSchema;
 
 export interface ProviderConversationState {
   messages: NativeAgentMessage[];
