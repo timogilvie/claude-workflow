@@ -6,6 +6,7 @@ import {
   appendChallengeComparison,
   readChallengeComparisons,
   detectVariedDimensions,
+  hasAnyVariedDimension,
   classifyChallengeType,
   type ChallengeComparison,
   type ChallengeRoutingMeta,
@@ -253,6 +254,25 @@ test('classifyChallengeType returns "multi-variable" when only depth fields diff
   };
   const result = classifyChallengeType(varied);
   assert.equal(result, 'multi-variable');
+});
+
+test('classifyChallengeType rejects records with no varied dimensions', () => {
+  const varied = {
+    planner: false,
+    coder: false,
+    reviewer: false,
+    planDepth: false,
+    codeDepth: false,
+    reviewMode: false,
+    routerVariant: false,
+    plannerPromptVariant: false,
+    reviewerPromptVariant: false,
+  };
+  assert.equal(hasAnyVariedDimension(varied), false);
+  assert.throws(
+    () => classifyChallengeType(varied),
+    /no routing dimensions varied/,
+  );
 });
 
 console.log('\n--- Routing Persistence Tests ---\n');

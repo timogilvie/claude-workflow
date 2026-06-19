@@ -9552,7 +9552,17 @@ monitor_issue_state() {
                   new_challenger_code_depth=$(echo "$refreshed_plan" | jq -r '.entries[1].codeDepth // empty' 2>/dev/null)
                   new_challenger_review_mode=$(echo "$refreshed_plan" | jq -r '.entries[1].reviewMode // empty' 2>/dev/null)
 
-                  if [[ -n "$new_primary" ]]; then
+                  refresh_identical="false"
+                  if [[ -n "$new_primary" ]] \
+                    && [[ "$new_primary" == "$new_challenger_model" ]] \
+                    && [[ "$new_primary_planner" == "$new_challenger_planner" ]] \
+                    && [[ "$new_primary_reviewer" == "$new_challenger_reviewer" ]] \
+                    && [[ "$new_primary_plan_depth" == "$new_challenger_plan_depth" ]] \
+                    && [[ "$new_primary_code_depth" == "$new_challenger_code_depth" ]] \
+                    && [[ "$new_primary_review_mode" == "$new_challenger_review_mode" ]]; then
+                    refresh_identical="true"
+                    log_warn "$ISSUE → expanded challenge refresh produced identical primary/challenger routing, preserving existing challenge participants"
+                  elif [[ -n "$new_primary" ]]; then
                     current_pr=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].pr // ""')
                     current_status=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].status // ""')
                     current_agent=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].agent // ""')
@@ -9562,7 +9572,7 @@ monitor_issue_state() {
                     challenge_coder="$new_primary"
                   fi
 
-                  if [[ -n "$new_challenger_key" ]] && [[ -n "$new_challenger_model" ]]; then
+                  if [[ "$refresh_identical" != "true" ]] && [[ -n "$new_challenger_key" ]] && [[ -n "$new_challenger_model" ]]; then
                     challenger_slug=$(read_state_value "" --arg i "$new_challenger_key" '.tasks[$i].slug // ""')
                     challenger_branch=$(read_state_value "" --arg i "$new_challenger_key" '.tasks[$i].branch // ""')
                     challenger_worktree=$(read_state_value "" --arg i "$new_challenger_key" '.tasks[$i].worktree // ""')
