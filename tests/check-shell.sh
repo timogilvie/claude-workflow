@@ -40,6 +40,7 @@ for f in \
   "$REPO_DIR"/tests/wavemill-dependency-queue-filter.test.sh \
   "$REPO_DIR"/tests/wavemill-backlog-pane-no-flash.test.sh \
   "$REPO_DIR"/tests/wavemill-mill-model-flags.test.sh \
+  "$REPO_DIR"/tests/merge-queue-progress.test.sh \
   "$REPO_DIR"/tests/model-inheritance-chain.test.sh \
   "$REPO_DIR"/tests/wavemill-background-jobs-cleanup.test.sh \
   "$REPO_DIR"/tests/notification-waiting.test.sh \

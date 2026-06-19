@@ -4884,7 +4884,8 @@ merge_queue_enrich_ready_artifacts() {
 
 refresh_ready_merge_queue_tick() {
   local now input_file output_file input_json output_json config_json
-  local issue phase slug pr state_dir ready_status ready_verdict stored_base current_main queue_state wt_dir
+  local issue phase slug pr state_dir stored_base current_main queue_state wt_dir
+  local ready_allows_merge current_queue_state
   local ready_prs='[]'
 
   : > "$MERGE_QUEUE_SELECTION_FILE"
@@ -4905,18 +4906,21 @@ refresh_ready_merge_queue_tick() {
     state_dir="$(ready_state_dir "$wt_dir" "$slug")"
     [[ -f "$state_dir/.ready-result.json" ]] || continue
 
-    ready_status=$(read_stage_status "$state_dir" "ready")
-    ready_verdict=$(ready_stage_pending_verdict "$state_dir")
     queue_state=$(ready_queue_state "$state_dir")
     stored_base=$(ready_base_sha "$state_dir")
     current_main=$(get_main_head_sha "$wt_dir" "$BASE_BRANCH")
+    if ready_stage_allows_merge "$state_dir"; then
+      ready_allows_merge="true"
+    else
+      ready_allows_merge="false"
+    fi
 
-    if [[ "$ready_status" == "completed" && ( "$ready_verdict" == "pass" || "$ready_verdict" == "warn" ) && -n "$current_main" && "$stored_base" != "$current_main" && "$queue_state" != "merge-candidate" ]]; then
+    if [[ "$ready_allows_merge" == "true" && -n "$current_main" && "$stored_base" != "$current_main" && "$queue_state" != "merge-candidate" ]]; then
       mark_ready_stale "$issue" "$state_dir" "$stored_base" "$current_main"
       queue_state="ready-stale"
     fi
 
-    if [[ "$ready_status" == "completed" && ( "$ready_verdict" == "pass" || "$ready_verdict" == "warn" ) ]] || [[ "$queue_state" == "merge-candidate" || "$queue_state" == "ready-stale" ]]; then
+    if [[ "$ready_allows_merge" == "true" ]] || [[ "$queue_state" == "merge-candidate" || "$queue_state" == "ready-stale" ]]; then
       ready_prs=$(jq -cn \
         --argjson prs "$ready_prs" \
         --arg issue "$issue" \
@@ -4989,8 +4993,10 @@ refresh_ready_merge_queue_tick() {
     state_dir="$(ready_state_dir "$wt_dir" "$slug")"
     current_main=$(get_main_head_sha "$wt_dir" "$BASE_BRANCH")
     [[ -n "$current_main" ]] || continue
-    if [[ "$(ready_queue_state "$state_dir")" != "merge-candidate" ]]; then
-      promote_merge_candidate "$issue" "$state_dir" "$current_main"
+    current_queue_state=$(ready_queue_state "$state_dir")
+    promote_merge_candidate "$issue" "$state_dir" "$current_main"
+    if [[ "$current_queue_state" != "merge-candidate" ]]; then
+      log_merge_candidate_advance_once "$issue" "${PR_BY_ISSUE[$issue]:-}" "$current_main"
     fi
   done
 }
@@ -8203,6 +8209,7 @@ LAST_DISPLAY=""       # fingerprint of what was last printed
 LAST_ACTIVE_COUNT=-1  # force first render
 LAST_WAITING_MSG=""   # track last waiting message to avoid repetition
 READY_STALE_MERGE_LANE_LOG_KEYS=$'\n'
+READY_MERGE_CANDIDATE_ADVANCE_LOG_KEYS=$'\n'
 TASK_LIST_RENDERED=0  # track task list cursor region in control pane
 SELECT_SHOW_ALL=false
 USING_GROUPED_VIEW=false
@@ -8232,6 +8239,19 @@ log_ready_stale_merge_lane_once() {
 
   READY_STALE_MERGE_LANE_LOG_KEYS="${logged_keys}${key}"$'\n'
   log "status" "⚠ $issue → Ready marked stale; waiting for merge lane (PR #$pr)"
+}
+
+log_merge_candidate_advance_once() {
+  local issue="$1" pr="$2" target_base_sha="$3"
+  local key="${issue}|${pr}|${target_base_sha}"
+  local logged_keys="${READY_MERGE_CANDIDATE_ADVANCE_LOG_KEYS:-$'\n'}"
+
+  if [[ "$logged_keys" == *$'\n'"$key"$'\n'* ]]; then
+    return 0
+  fi
+
+  READY_MERGE_CANDIDATE_ADVANCE_LOG_KEYS="${logged_keys}${key}"$'\n'
+  log "status" "→ $issue → Advanced through merge lane (PR #$pr)"
 }
 
 monitor_command_timestamp() {
