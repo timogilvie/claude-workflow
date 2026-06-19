@@ -12,6 +12,7 @@ import {
   createToolCallingProvider,
   registerMockProvider,
 } from './provider.ts';
+import { buildPiContext } from './messages.ts';
 
 // ─── 1. Usage mapping ─────────────────────────────────────────────────────────
 
@@ -120,6 +121,15 @@ describe('createToolCallingProvider (text-only mock turn)', () => {
   });
 });
 
+describe('buildPiContext', () => {
+  it('throws for unsupported non-user history roles in the single-turn seam', () => {
+    assert.throws(
+      () => buildPiContext({ messages: [{ role: 'assistant', content: 'Earlier answer.' }] }),
+      /Unsupported native-agent message role/,
+    );
+  });
+});
+
 // ─── 3. Tool-call normalization ───────────────────────────────────────────────
 
 describe('createToolCallingProvider (tool-call mock turn)', () => {
@@ -154,6 +164,28 @@ describe('createToolCallingProvider (tool-call mock turn)', () => {
     assert.equal(result.usage?.outputTokens, 40);
     assert.equal(result.usage?.cacheReadTokens, 0);
     assert.equal(result.usage?.cacheCreationTokens, 0);
+  });
+});
+
+describe('registerMockProvider', () => {
+  it('throws when the mock finish reason cannot be emitted as a Pi done event', async () => {
+    const API = 'hokusai-mock-error-finish-test';
+
+    registerMockProvider(API, () => ({
+      text: 'failed',
+      finishReason: 'error',
+    }));
+
+    const provider = createToolCallingProvider({
+      api: API,
+      modelId: 'hokusai-mini',
+      providerName: 'hokusai',
+    });
+
+    await assert.rejects(
+      provider.createTurn({ messages: [{ role: 'user', content: 'Trigger an error.' }] }),
+      /Unsupported mock provider finish reason/,
+    );
   });
 });
 

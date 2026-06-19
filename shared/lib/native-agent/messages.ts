@@ -155,8 +155,7 @@ function convertNeutralMessage(msg: AgentMessage, timestamp: number): Message {
   if (msg.role === 'user') {
     return { role: 'user', content: msg.content, timestamp };
   }
-  // assistant and toolResult roles are not needed for a simple single-turn seam
-  return { role: 'user', content: msg.content, timestamp };
+  throw new Error(`Unsupported native-agent message role for single-turn Pi context: ${msg.role}`);
 }
 
 // ─── Result normalization ─────────────────────────────────────────────────────

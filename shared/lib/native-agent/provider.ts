@@ -123,7 +123,7 @@ export function registerMockProvider(
     stream.push({ type: 'start', partial: piMsg });
     stream.push({
       type: 'done',
-      reason: mapFinishReasonToStopReason(result.finishReason ?? 'stop') as 'stop' | 'toolUse' | 'length',
+      reason: mapMockDoneReason(result.finishReason ?? 'stop'),
       message: piMsg,
     });
 
@@ -148,4 +148,14 @@ function buildPiModel(config: NativeProviderConfig) {
     contextWindow: 200_000,
     maxTokens: 8_192,
   };
+}
+
+function mapMockDoneReason(
+  reason: import('./messages.ts').FinishReason,
+): 'stop' | 'toolUse' | 'length' {
+  const stopReason = mapFinishReasonToStopReason(reason);
+  if (stopReason === 'stop' || stopReason === 'toolUse' || stopReason === 'length') {
+    return stopReason;
+  }
+  throw new Error(`Unsupported mock provider finish reason for Pi done event: ${reason}`);
 }
