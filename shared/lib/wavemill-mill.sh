@@ -4013,6 +4013,9 @@ recover_misplaced_coding_complete_marker() {
       -path "*/features/$slug/.coding-complete" -type f -print -quit 2>/dev/null || true
   )"
   if [[ -z "$misplaced_marker" && -f "$worktree/.coding-complete" ]]; then
+    if git -C "$worktree" ls-files --error-unmatch .coding-complete >/dev/null 2>&1; then
+      return 1
+    fi
     misplaced_marker="$worktree/.coding-complete"
   fi
   [[ -n "$misplaced_marker" ]] || return 1
