@@ -23,6 +23,8 @@ import type {
   RoutePrediction,
   EvalRecord,
   EligibilityErrorCode,
+  FeatureOutcomeDiagnostics,
+  OutcomeEligibilityReason,
   PlanCritique,
   RubricEval,
   TaskContext,
@@ -38,6 +40,7 @@ import type {
   RoutingDecision,
   RubricCriterion,
 } from './eval-schema.ts';
+import type { FeatureOutcomeArtifactResult } from './feature-state.ts';
 import type { DifficultyAnalysis } from './difficulty-analyzer.ts';
 import type { ChallengeRouteContext } from './challenge-mode.ts';
 import type { WorkflowCostOutcome, WorkflowCostResult, WorkflowCostFailure } from './workflow-cost.ts';
@@ -98,6 +101,8 @@ export interface EvalRecordMetadata {
   rubricEval?: RubricEval | null;
   /** Resolved-model routing decisions emitted during execution. */
   routing?: EvalRouting | null;
+  /** Feature outcome artifact loaded from feature-state.json / feature-outcome.json (HOK-2262). */
+  featureOutcomeArtifact?: FeatureOutcomeArtifactResult | null;
 }
 
 /** Richer eval metadata attachment used by training-facing eval entrypoints. */
@@ -605,6 +610,152 @@ export function computeRouteCalibration(
   }
 
   return hasObjectValues(calibration as Record<string, unknown>) ? calibration : undefined;
+}
+
+// ────────────────────────────────────────────────────────────────
+// Feature Outcome Diagnostics (HOK-2262)
+// ────────────────────────────────────────────────────────────────
+
+/**
+ * Attach feature-outcome artifact diagnostics to an eval record.
+ *
+ * Compares valid artifact outcome values against reconstructed record fields
+ * and sets `featureOutcome`, `outcomeSource`, and `outcomeEligibilityReason`.
+ * Never changes `score`, `outcomes`, or any existing training-label fields.
+ *
+ * No-op when `artifactResult` is null or undefined.
+ */
+export function attachFeatureOutcomeDiagnostics(
+  record: EvalRecord,
+  artifactResult: FeatureOutcomeArtifactResult | null | undefined,
+): void {
+  if (!artifactResult) {
+    return;
+  }
+
+  if (!artifactResult.present) {
+    record.featureOutcome = {
+      present: false,
+      valid: false,
+      used: false,
+      source: 'none',
+    };
+    record.outcomeSource = 'reconstructed';
+    // Missing artifact only becomes a reason when reconstruction is also absent
+    if (!record.outcomes) {
+      record.outcomeEligibilityReason = 'missing_outcome_data';
+    }
+    return;
+  }
+
+  if (!artifactResult.valid) {
+    const diag: FeatureOutcomeDiagnostics = {
+      present: true,
+      valid: false,
+      used: false,
+      source: artifactResult.source,
+      artifactPath: artifactResult.artifactPath,
+      ...(artifactResult.sourceHash ? { sourceHash: artifactResult.sourceHash } : {}),
+      ...(artifactResult.parseError ? { parseError: artifactResult.parseError } : {}),
+      ...(artifactResult.missingFields ? { missingFields: artifactResult.missingFields } : {}),
+    };
+    record.featureOutcome = diag;
+    record.outcomeSource = 'reconstructed';
+    if (!record.outcomes) {
+      record.outcomeEligibilityReason = 'missing_outcome_data';
+    }
+    return;
+  }
+
+  // Valid artifact: build normalized snapshot and check for conflicts
+  const outcome = artifactResult.outcome;
+  const normalized: FeatureOutcomeDiagnostics['normalized'] = {
+    completed: outcome.completed,
+    merged: outcome.merged,
+    ciPassed: outcome.ciPassed,
+    reviewPassed: outcome.reviewPassed,
+    readyPassed: outcome.readyPassed,
+    manualIntervention: outcome.manualIntervention,
+    interventionCount: outcome.interventionCount,
+    reverted: outcome.reverted,
+    evalScore: outcome.evalScore,
+    costUsd: outcome.costUsd,
+    durationSeconds: outcome.durationSeconds,
+  };
+
+  // Detect conflicts with reconstructed record values
+  const conflictingFields: string[] = [];
+
+  if (
+    typeof outcome.manualIntervention === 'boolean'
+    && typeof record.interventionRequired === 'boolean'
+    && outcome.manualIntervention !== record.interventionRequired
+  ) {
+    conflictingFields.push('manualIntervention');
+  }
+  if (
+    typeof outcome.interventionCount === 'number'
+    && typeof record.interventionCount === 'number'
+    && outcome.interventionCount !== record.interventionCount
+  ) {
+    conflictingFields.push('interventionCount');
+  }
+  if (
+    typeof outcome.evalScore === 'number'
+    && typeof record.score === 'number'
+    && Math.abs(outcome.evalScore - record.score) > 0.001
+  ) {
+    conflictingFields.push('evalScore');
+  }
+  if (
+    typeof outcome.costUsd === 'number'
+    && typeof record.workflowCost === 'number'
+    && Math.abs(outcome.costUsd - record.workflowCost) > 0.0001
+  ) {
+    conflictingFields.push('costUsd');
+  }
+  if (
+    typeof outcome.durationSeconds === 'number'
+    && typeof record.timeSeconds === 'number'
+    && record.timeSeconds !== null
+    && Math.abs(outcome.durationSeconds - record.timeSeconds) > 1
+  ) {
+    conflictingFields.push('durationSeconds');
+  }
+  if (
+    typeof outcome.merged === 'boolean'
+    && typeof record.outcomes?.delivery?.merged === 'boolean'
+    && outcome.merged !== record.outcomes.delivery.merged
+  ) {
+    conflictingFields.push('merged');
+  }
+
+  const conflictWithReconstructed = conflictingFields.length > 0;
+  conflictingFields.sort();
+
+  const diag: FeatureOutcomeDiagnostics = {
+    present: true,
+    valid: true,
+    used: true,
+    source: artifactResult.source,
+    artifactPath: artifactResult.artifactPath,
+    sourceHash: artifactResult.sourceHash,
+    schemaVersion: artifactResult.schemaVersion,
+    normalized,
+    ...(conflictWithReconstructed
+      ? { conflictWithReconstructed, conflictingFields }
+      : {}),
+  };
+
+  record.featureOutcome = diag;
+  record.outcomeSource = 'artifact';
+
+  // Set outcome eligibility reason based on artifact outcome
+  if (!outcome.completed && !outcome.merged) {
+    record.outcomeEligibilityReason = 'failed_outcome';
+  } else {
+    record.outcomeEligibilityReason = null;
+  }
 }
 
 const TRAINING_METADATA_DIAGNOSTIC_CHECKS = [
@@ -1128,6 +1279,7 @@ export function enrichEvalRecord(record: EvalRecord, metadata: EvalRecordMetadat
   }
   attachManifestRef(record, process.env.WAVEMILL_SESSION, undefined);
   attachResourceSelections(record);
+  attachFeatureOutcomeDiagnostics(record, metadata.featureOutcomeArtifact);
   attachEligibility(record);
 
   // Extract stageScores from record metadata (set by evaluateTask)
@@ -1171,6 +1323,7 @@ export function enrichTrainingMetadata(
   }
   attachManifestRef(record, process.env.WAVEMILL_SESSION, undefined);
   attachResourceSelections(record);
+  attachFeatureOutcomeDiagnostics(record, metadata.featureOutcomeArtifact);
   attachEnrichmentDiagnostics(record);
   attachEligibility(record);
 

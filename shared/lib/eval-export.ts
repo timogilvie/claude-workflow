@@ -79,6 +79,17 @@ export interface ExportRow {
   rubric_intervention_impact: number | null;
   rubric_autonomy: number | null;
   rubric_determinative_boundary: string;
+
+  // Feature outcome diagnostics (HOK-2262)
+  feature_outcome_present: boolean | null;
+  feature_outcome_valid: boolean | null;
+  feature_outcome_used: boolean | null;
+  feature_outcome_source: string;
+  feature_outcome_source_hash: string;
+  feature_outcome_missing_fields: string;
+  feature_outcome_conflict: boolean | null;
+  outcome_source: string;
+  outcome_eligibility_reason: string;
 }
 
 /** Column order for CSV output. */
@@ -125,6 +136,15 @@ const COLUMNS: (keyof ExportRow)[] = [
   'rubric_intervention_impact',
   'rubric_autonomy',
   'rubric_determinative_boundary',
+  'feature_outcome_present',
+  'feature_outcome_valid',
+  'feature_outcome_used',
+  'feature_outcome_source',
+  'feature_outcome_source_hash',
+  'feature_outcome_missing_fields',
+  'feature_outcome_conflict',
+  'outcome_source',
+  'outcome_eligibility_reason',
 ];
 
 // ────────────────────────────────────────────────────────────────
@@ -240,6 +260,19 @@ export function flattenRecord(
     rubric_intervention_impact: rubric?.criteria.intervention_impact.score ?? null,
     rubric_autonomy: rubric?.criteria.autonomy.score ?? null,
     rubric_determinative_boundary: rubric?.determinative_boundary ?? '',
+
+    // Feature outcome diagnostics (HOK-2262)
+    feature_outcome_present: record.featureOutcome?.present ?? null,
+    feature_outcome_valid: record.featureOutcome?.valid ?? null,
+    feature_outcome_used: record.featureOutcome?.used ?? null,
+    feature_outcome_source: record.featureOutcome?.source ?? '',
+    feature_outcome_source_hash: record.featureOutcome?.sourceHash ?? '',
+    feature_outcome_missing_fields: record.featureOutcome?.missingFields?.length
+      ? JSON.stringify(record.featureOutcome.missingFields)
+      : '',
+    feature_outcome_conflict: record.featureOutcome?.conflictWithReconstructed ?? null,
+    outcome_source: record.outcomeSource ?? '',
+    outcome_eligibility_reason: record.outcomeEligibilityReason ?? '',
   };
 }
 

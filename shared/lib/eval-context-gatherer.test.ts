@@ -863,4 +863,93 @@ describe('eval-context-gatherer', () => {
       }
     });
   });
+
+  describe('gatherEvalContext with feature outcome artifact (HOK-2262)', () => {
+    const minimalValidArtifact = {
+      schemaVersion: '1.0',
+      issueId: 'HOK-9999',
+      slug: 'test-feature',
+      derivedAt: new Date().toISOString(),
+      currentPhase: 'done',
+      normalizedState: 'completed',
+      failureReason: null,
+      blockers: [],
+      outcome: {
+        completed: true,
+        merged: true,
+        ciPassed: true,
+        reviewPassed: true,
+        readyPassed: true,
+        manualIntervention: false,
+        interventionCount: 0,
+        reverted: null,
+        evalScore: null,
+        costUsd: null,
+        durationSeconds: null,
+      },
+    };
+
+    it('includes featureOutcomeArtifact=not-present when no slug or archiveDir', () => {
+      vi.mocked(shellUtils.execShellCommand).mockReturnValue('');
+      const result = gatherEvalContext({ prNumber: '1', repoDir: '/nonexistent-repo' });
+      expect(result.featureOutcomeArtifact).toBeUndefined();
+    });
+
+    it('loads featureOutcomeArtifact from featureDir when slug is given', () => {
+      const repoDir = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'eval-ctx-test-'));
+      const slug = 'my-feature';
+      const featureDir = nodePath.join(repoDir, 'features', slug);
+      fs.mkdirSync(featureDir, { recursive: true });
+      fs.writeFileSync(
+        nodePath.join(featureDir, 'feature-state.json'),
+        JSON.stringify(minimalValidArtifact),
+      );
+
+      vi.mocked(shellUtils.execShellCommand).mockReturnValue('');
+
+      try {
+        const result = gatherEvalContext({
+          prNumber: '1',
+          repoDir,
+          slug,
+        });
+        expect(result.featureOutcomeArtifact).toBeDefined();
+        expect(result.featureOutcomeArtifact?.present).toBe(true);
+        expect(result.featureOutcomeArtifact?.valid).toBe(true);
+        expect(result.featureOutcomeArtifact?.source).toBe('feature-state');
+      } finally {
+        fs.rmSync(repoDir, { recursive: true, force: true });
+      }
+    });
+
+    it('returns present=false artifact when feature dir has no artifact', () => {
+      const repoDir = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'eval-ctx-test-'));
+      const slug = 'missing-feature';
+
+      vi.mocked(shellUtils.execShellCommand).mockReturnValue('');
+
+      try {
+        const result = gatherEvalContext({
+          prNumber: '1',
+          repoDir,
+          slug,
+        });
+        expect(result.featureOutcomeArtifact?.present).toBe(false);
+      } finally {
+        fs.rmSync(repoDir, { recursive: true, force: true });
+      }
+    });
+
+    it('never throws when artifact loading fails', () => {
+      vi.mocked(shellUtils.execShellCommand).mockReturnValue('');
+      // Passing a non-existent repo dir — should still return without throwing
+      const result = gatherEvalContext({
+        prNumber: '1',
+        repoDir: '/totally-nonexistent-dir-xyz',
+        slug: 'some-feature',
+      });
+      // featureOutcomeArtifact may be present=false or undefined — both are ok
+      expect(() => result).not.toThrow();
+    });
+  });
 });

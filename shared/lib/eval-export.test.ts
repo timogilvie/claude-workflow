@@ -364,7 +364,7 @@ test('toCsv column count matches header count', () => {
   const lines = csv.trim().split('\n');
   const headerCols = lines[0].split(',').length;
 
-  assert.equal(headerCols, 42);
+  assert.equal(headerCols, 51); // 42 original + 9 feature-outcome columns (HOK-2262)
 });
 
 // ────────────────────────────────────────────────────────────────
@@ -455,6 +455,98 @@ test('exportEvalDataset applies redaction', () => {
   const redacted = exportEvalDataset({ format: 'jsonl', records, redact: true });
   assert.ok(!redacted.includes('admin@test.com'));
   assert.ok(redacted.includes('[EMAIL]'));
+});
+
+// ────────────────────────────────────────────────────────────────
+// Feature Outcome Diagnostics Export (HOK-2262)
+// ────────────────────────────────────────────────────────────────
+
+test('feature_outcome columns default to null/empty when featureOutcome absent', () => {
+  const row = flattenRecord(makeRecord());
+  assert.equal(row.feature_outcome_present, null);
+  assert.equal(row.feature_outcome_valid, null);
+  assert.equal(row.feature_outcome_used, null);
+  assert.equal(row.feature_outcome_source, '');
+  assert.equal(row.feature_outcome_source_hash, '');
+  assert.equal(row.feature_outcome_missing_fields, '');
+  assert.equal(row.feature_outcome_conflict, null);
+  assert.equal(row.outcome_source, '');
+  assert.equal(row.outcome_eligibility_reason, '');
+});
+
+test('feature_outcome columns populate from valid featureOutcome', () => {
+  const record = makeRecord({
+    featureOutcome: {
+      present: true,
+      valid: true,
+      used: true,
+      source: 'feature-state',
+      artifactPath: '/tmp/feat/feature-state.json',
+      sourceHash: 'abc123',
+      schemaVersion: '1.0',
+      conflictWithReconstructed: false,
+      conflictingFields: [],
+    },
+    outcomeSource: 'artifact',
+    outcomeEligibilityReason: null,
+  });
+  const row = flattenRecord(record);
+  assert.equal(row.feature_outcome_present, true);
+  assert.equal(row.feature_outcome_valid, true);
+  assert.equal(row.feature_outcome_used, true);
+  assert.equal(row.feature_outcome_source, 'feature-state');
+  assert.equal(row.feature_outcome_source_hash, 'abc123');
+  assert.equal(row.feature_outcome_conflict, false);
+  assert.equal(row.outcome_source, 'artifact');
+  assert.equal(row.outcome_eligibility_reason, '');
+});
+
+test('feature_outcome columns populate for not-present artifact', () => {
+  const record = makeRecord({
+    featureOutcome: {
+      present: false,
+      valid: false,
+      used: false,
+      source: 'none',
+    },
+    outcomeSource: 'reconstructed',
+    outcomeEligibilityReason: 'missing_outcome_data',
+  });
+  const row = flattenRecord(record);
+  assert.equal(row.feature_outcome_present, false);
+  assert.equal(row.feature_outcome_valid, false);
+  assert.equal(row.outcome_source, 'reconstructed');
+  assert.equal(row.outcome_eligibility_reason, 'missing_outcome_data');
+});
+
+test('feature_outcome_missing_fields is JSON array string when missing fields present', () => {
+  const record = makeRecord({
+    featureOutcome: {
+      present: true,
+      valid: false,
+      used: false,
+      source: 'feature-state',
+      artifactPath: '/tmp/x.json',
+      missingFields: ['ciPassed', 'merged'],
+    },
+  });
+  const row = flattenRecord(record);
+  assert.equal(row.feature_outcome_missing_fields, '["ciPassed","merged"]');
+});
+
+test('feature_outcome columns appear in CSV header', () => {
+  const row = flattenRecord(makeRecord());
+  const csv = toCsv([row]);
+  const header = csv.split('\n')[0];
+  assert.ok(header.includes('feature_outcome_present'));
+  assert.ok(header.includes('feature_outcome_valid'));
+  assert.ok(header.includes('feature_outcome_used'));
+  assert.ok(header.includes('feature_outcome_source'));
+  assert.ok(header.includes('feature_outcome_source_hash'));
+  assert.ok(header.includes('feature_outcome_missing_fields'));
+  assert.ok(header.includes('feature_outcome_conflict'));
+  assert.ok(header.includes('outcome_source'));
+  assert.ok(header.includes('outcome_eligibility_reason'));
 });
 
 // ────────────────────────────────────────────────────────────────

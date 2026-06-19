@@ -1958,6 +1958,82 @@
           "$ref": "#/$defs/ResolvedModelRoutingDecision"
         }
       }
+    },
+    "traceId": {
+      "type": "string",
+      "description": "Task trace correlation ID linking this eval record to the lifecycle event stream (HOK-2259)."
+    },
+    "featureOutcome": {
+      "type": "object",
+      "description": "Diagnostic provenance block for the feature-outcome artifact (HOK-2262).",
+      "additionalProperties": false,
+      "properties": {
+        "present": {
+          "type": "boolean"
+        },
+        "valid": {
+          "type": "boolean"
+        },
+        "used": {
+          "type": "boolean"
+        },
+        "source": {
+          "type": "string",
+          "enum": ["feature-state", "feature-outcome", "none"]
+        },
+        "artifactPath": {
+          "type": "string"
+        },
+        "sourceHash": {
+          "type": "string"
+        },
+        "schemaVersion": {
+          "type": "string"
+        },
+        "parseError": {
+          "type": "string"
+        },
+        "missingFields": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "conflictingFields": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "conflictWithReconstructed": {
+          "type": "boolean"
+        },
+        "normalized": {
+          "type": "object",
+          "description": "Normalized outcome snapshot from the artifact.",
+          "additionalProperties": false,
+          "properties": {
+            "completed": { "type": "boolean" },
+            "merged": { "type": ["boolean", "null"] },
+            "ciPassed": { "type": ["boolean", "null"] },
+            "reviewPassed": { "type": ["boolean", "null"] },
+            "readyPassed": { "type": ["boolean", "null"] },
+            "manualIntervention": { "type": ["boolean", "null"] },
+            "interventionCount": { "type": ["number", "null"], "minimum": 0 },
+            "reverted": { "type": ["boolean", "null"] },
+            "evalScore": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+            "costUsd": { "type": ["number", "null"], "minimum": 0 },
+            "durationSeconds": { "type": ["number", "null"], "minimum": 0 }
+          }
+        }
+      },
+      "required": ["present", "valid", "used", "source"]
+    },
+    "outcomeSource": {
+      "type": "string",
+      "enum": ["artifact", "reconstructed"],
+      "description": "Whether the outcome data came from an artifact or was reconstructed (HOK-2262)."
+    },
+    "outcomeEligibilityReason": {
+      "type": ["string", "null"],
+      "enum": ["missing_outcome_data", "failed_outcome", null],
+      "description": "Stable reason why outcome data is unavailable or indicates failure (HOK-2262)."
     }
   },
   "$defs": {

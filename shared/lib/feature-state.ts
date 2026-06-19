@@ -44,6 +44,8 @@ import { resolveRouteArtifactArchiveDir } from './evals-paths.ts';
 
 export const FEATURE_STATE_SCHEMA_VERSION = '1.0';
 export const FEATURE_STATE_FILENAME = 'feature-state.json';
+/** Compatibility alias filename for the feature outcome artifact. */
+export const FEATURE_OUTCOME_FILENAME = 'feature-outcome.json';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -899,6 +901,216 @@ export async function materializeFeatureState(
   await fs.rename(tmpPath, targetPath);
 
   return targetPath;
+}
+
+// ────────────────────────────────────────────────────────────────
+// Feature Outcome Artifact Loader
+// ────────────────────────────────────────────────────────────────
+
+/** Required fields in FeatureOutcome for a loader result to be considered valid. */
+const REQUIRED_OUTCOME_FIELDS: readonly (keyof FeatureOutcome)[] = [
+  'completed',
+  'merged',
+  'ciPassed',
+  'reviewPassed',
+  'readyPassed',
+  'manualIntervention',
+  'interventionCount',
+] as const;
+
+/**
+ * The result of attempting to load a feature outcome artifact.
+ *
+ * All three top-level discriminants (present, valid, used) are always present.
+ * Richer diagnostic fields are only populated when present is true.
+ */
+export type FeatureOutcomeArtifactResult =
+  | {
+      present: false;
+      valid: false;
+      used: false;
+      source: 'none';
+    }
+  | {
+      present: true;
+      valid: false;
+      used: false;
+      source: 'feature-state' | 'feature-outcome';
+      artifactPath: string;
+      sourceHash?: string;
+      reason: 'read_error' | 'parse_error' | 'incomplete';
+      parseError?: string;
+      missingFields?: string[];
+    }
+  | {
+      present: true;
+      valid: true;
+      used: true;
+      source: 'feature-state' | 'feature-outcome';
+      artifactPath: string;
+      sourceHash: string;
+      schemaVersion: string;
+      state: FeatureState;
+      outcome: FeatureOutcome;
+      missingFields?: string[];
+    };
+
+/** Options for loading a feature outcome artifact. */
+export interface LoadFeatureOutcomeArtifactOptions {
+  /** Active worktree feature directory, e.g. `<repo>/features/<slug>`. */
+  featureDir?: string;
+  /** Active worktree bug directory, e.g. `<repo>/bugs/<slug>`. */
+  bugDir?: string;
+  /** Eval archive directory, e.g. `.wavemill/evals/artifacts/<issueId>/`. */
+  archiveDir?: string;
+}
+
+/**
+ * Load and validate a feature outcome artifact without throwing.
+ *
+ * Search order (each tries feature-state.json then feature-outcome.json):
+ *   1. featureDir (active worktree feature directory)
+ *   2. bugDir (active worktree bug directory)
+ *   3. archiveDir (eval archive)
+ *
+ * Returns a structured result describing presence, validity, and provenance.
+ * Never throws; read/parse errors produce present=true, valid=false results.
+ */
+export function loadFeatureOutcomeArtifact(
+  options: LoadFeatureOutcomeArtifactOptions,
+): FeatureOutcomeArtifactResult {
+  const searchRoots: Array<{ dir: string; label: 'worktree' | 'archive' }> = [];
+
+  if (options.featureDir) {
+    searchRoots.push({ dir: options.featureDir, label: 'worktree' });
+  }
+  if (options.bugDir) {
+    searchRoots.push({ dir: options.bugDir, label: 'worktree' });
+  }
+  if (options.archiveDir) {
+    searchRoots.push({ dir: options.archiveDir, label: 'archive' });
+  }
+
+  const filenames: Array<{ name: string; source: 'feature-state' | 'feature-outcome' }> = [
+    { name: FEATURE_STATE_FILENAME, source: 'feature-state' },
+    { name: FEATURE_OUTCOME_FILENAME, source: 'feature-outcome' },
+  ];
+
+  for (const root of searchRoots) {
+    for (const { name, source } of filenames) {
+      const artifactPath = path.join(root.dir, name);
+      if (!existsSync(artifactPath)) {
+        continue;
+      }
+
+      let raw: Buffer;
+      try {
+        raw = readFileSync(artifactPath);
+      } catch {
+        return {
+          present: true,
+          valid: false,
+          used: false,
+          source,
+          artifactPath,
+          reason: 'read_error',
+        };
+      }
+
+      const hash = createHash('sha256').update(raw).digest('hex');
+
+      let parsed: Record<string, unknown>;
+      try {
+        const text = raw.toString('utf-8');
+        if (!text.trim()) {
+          return {
+            present: true,
+            valid: false,
+            used: false,
+            source,
+            artifactPath,
+            sourceHash: hash,
+            reason: 'parse_error',
+            parseError: 'empty file',
+          };
+        }
+        const candidate = JSON.parse(text);
+        if (typeof candidate !== 'object' || candidate === null || Array.isArray(candidate)) {
+          return {
+            present: true,
+            valid: false,
+            used: false,
+            source,
+            artifactPath,
+            sourceHash: hash,
+            reason: 'parse_error',
+            parseError: 'root value is not an object',
+          };
+        }
+        parsed = candidate as Record<string, unknown>;
+      } catch (err) {
+        return {
+          present: true,
+          valid: false,
+          used: false,
+          source,
+          artifactPath,
+          sourceHash: hash,
+          reason: 'parse_error',
+          parseError: err instanceof Error ? err.message : String(err),
+        };
+      }
+
+      const outcome = parsed.outcome as Partial<FeatureOutcome> | undefined;
+      if (!outcome || typeof outcome !== 'object') {
+        return {
+          present: true,
+          valid: false,
+          used: false,
+          source,
+          artifactPath,
+          sourceHash: hash,
+          reason: 'incomplete',
+          missingFields: ['outcome'],
+        };
+      }
+
+      const missingFields = REQUIRED_OUTCOME_FIELDS.filter(
+        (field) => outcome[field] === undefined,
+      ).sort();
+
+      const schemaVersion =
+        typeof parsed.schemaVersion === 'string' ? parsed.schemaVersion : 'unknown';
+
+      if (missingFields.length > 0) {
+        return {
+          present: true,
+          valid: false,
+          used: false,
+          source,
+          artifactPath,
+          sourceHash: hash,
+          reason: 'incomplete',
+          missingFields,
+        };
+      }
+
+      return {
+        present: true,
+        valid: true,
+        used: true,
+        source,
+        artifactPath,
+        sourceHash: hash,
+        schemaVersion,
+        state: parsed as unknown as FeatureState,
+        outcome: outcome as FeatureOutcome,
+        missingFields: [],
+      };
+    }
+  }
+
+  return { present: false, valid: false, used: false, source: 'none' };
 }
 
 /**

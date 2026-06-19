@@ -1054,4 +1054,67 @@ describe('hokusai-schema', () => {
       ]);
     });
   });
+
+  describe('toHokusaiSubmission outcome eligibility diagnostics (HOK-2262)', () => {
+    it('includes missing_outcome_data in not_eligible reasons when outcomeEligibilityReason is missing_outcome_data', () => {
+      const record = makeRecord({
+        trainingEligible: false,
+        eligibilityErrors: ['missing_outcome'],
+        outcomeEligibilityReason: 'missing_outcome_data',
+      });
+      const result = toHokusaiSubmission(record);
+      assert.equal(result.ok, false);
+      assert.ok(!result.ok && result.reasons.includes('missing_outcome_data'));
+      assert.ok(!result.ok && result.reasons.includes('missing_outcome'));
+    });
+
+    it('does not duplicate missing_outcome_data reason if already in eligibilityErrors', () => {
+      // outcomeEligibilityReason guards against duplicates
+      const record = makeRecord({
+        trainingEligible: false,
+        eligibilityErrors: ['missing_outcome'],
+        outcomeEligibilityReason: 'missing_outcome_data',
+      });
+      const result = toHokusaiSubmission(record);
+      assert.equal(result.ok, false);
+      const reasons = !result.ok ? result.reasons : [];
+      const count = reasons.filter((r) => r === 'missing_outcome_data').length;
+      assert.equal(count, 1, 'missing_outcome_data should appear exactly once');
+    });
+
+    it('attaches outcome_eligibility_reason to submission when valid', () => {
+      const record = makeRecord({
+        outcomeEligibilityReason: 'failed_outcome',
+      });
+      const result = toHokusaiSubmission(record);
+      assert.equal(result.ok, true);
+      assert.ok(result.ok && result.submission.outcome_eligibility_reason === 'failed_outcome');
+    });
+
+    it('attaches outcome_eligibility_reason=null to submission when outcome present and passing', () => {
+      const record = makeRecord({
+        outcomeEligibilityReason: null,
+      });
+      const result = toHokusaiSubmission(record);
+      assert.equal(result.ok, true);
+      assert.ok(result.ok && result.submission.outcome_eligibility_reason === null);
+    });
+
+    it('omits outcome_eligibility_reason from submission when not set on record', () => {
+      const record = makeRecord({
+        outcomeEligibilityReason: undefined,
+      });
+      const result = toHokusaiSubmission(record);
+      assert.equal(result.ok, true);
+      assert.ok(result.ok && !('outcome_eligibility_reason' in result.submission));
+    });
+
+    it('valid successful outcome remains eligible when all required fields present', () => {
+      const record = makeRecord({
+        outcomeEligibilityReason: null,
+        outcomeSource: 'artifact',
+      });
+      expectSuccess(toHokusaiSubmission(record));
+    });
+  });
 });

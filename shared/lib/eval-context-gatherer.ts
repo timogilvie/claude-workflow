@@ -32,6 +32,11 @@ import {
   buildRoutePrediction,
   resolveRouterPolicyVersion,
 } from './route-artifact.ts';
+import {
+  loadFeatureOutcomeArtifact,
+  type FeatureOutcomeArtifactResult,
+} from './feature-state.ts';
+import { resolveRouteArtifactArchiveDir } from './evals-paths.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -58,6 +63,8 @@ export interface EvalContext {
   selfReviewSummary?: string;
   /** Routing decision loaded from .routing-complete (if available) */
   routingDecision?: RoutingDecision;
+  /** Feature outcome artifact diagnostics (if available) */
+  featureOutcomeArtifact?: FeatureOutcomeArtifactResult;
 }
 
 /** Input parameters for gathering context. */
@@ -70,6 +77,10 @@ export interface GatherContextParams {
   prUrl?: string;
   /** Repository directory */
   repoDir: string;
+  /** Feature slug (e.g. "my-feature-slug"); used for artifact discovery */
+  slug?: string;
+  /** Optional worktree path to search first for feature artifacts */
+  worktreePath?: string;
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -188,7 +199,7 @@ export function computeWallClockSeconds(
  * @returns Complete eval context
  */
 export function gatherEvalContext(params: GatherContextParams): EvalContext {
-  const { issueId, prNumber, prUrl, repoDir } = params;
+  const { issueId, prNumber, prUrl, repoDir, slug, worktreePath } = params;
 
   // Fetch issue data
   let issueData: any | null = null;
@@ -206,11 +217,45 @@ export function gatherEvalContext(params: GatherContextParams): EvalContext {
     if (!finalPrUrl) finalPrUrl = prCtx.url;
   }
 
+  // Load feature outcome artifact (best-effort; never prevents context gathering)
+  let featureOutcomeArtifact: FeatureOutcomeArtifactResult | undefined;
+  try {
+    const archiveDir = issueId
+      ? resolveRouteArtifactArchiveDir(issueId, repoDir)
+      : undefined;
+
+    if (slug || archiveDir) {
+      // Build ordered candidate dirs: worktree first, then repoDir, using both features/ and bugs/
+      const featureDirCandidates: string[] = [];
+      const bugDirCandidates: string[] = [];
+
+      for (const root of [worktreePath, repoDir].filter(Boolean) as string[]) {
+        if (slug) {
+          featureDirCandidates.push(path.join(root, 'features', slug));
+          bugDirCandidates.push(path.join(root, 'bugs', slug));
+        }
+      }
+
+      // Use the first existing candidate for featureDir and bugDir
+      const featureDir = featureDirCandidates.find((d) => existsSync(d));
+      const bugDir = bugDirCandidates.find((d) => existsSync(d));
+
+      featureOutcomeArtifact = loadFeatureOutcomeArtifact({
+        featureDir,
+        bugDir,
+        archiveDir: archiveDir && existsSync(archiveDir) ? archiveDir : undefined,
+      });
+    }
+  } catch {
+    // Best-effort: artifact load failure must not prevent issue/PR context gathering
+  }
+
   return {
     taskPrompt,
     prDiff,
     prUrl: finalPrUrl,
     issueData,
+    ...(featureOutcomeArtifact ? { featureOutcomeArtifact } : {}),
   };
 }
 

@@ -100,6 +100,10 @@
  *   to match `ChallengeRouteArtifact`.
  * - **1.29.0**: Added optional `traceId` field (HOK-2259) so eval records can
  *   be joined to the task lifecycle event stream in `trace.jsonl`.
+ * - **1.30.0**: Added optional `featureOutcome`, `outcomeSource`, and
+ *   `outcomeEligibilityReason` fields (HOK-2262) so eval/export paths can
+ *   consume feature-outcome artifacts for eligibility diagnostics and
+ *   Hokusai export provenance.
  *
  * @module eval-schema
  */
@@ -109,7 +113,7 @@ import type { ModelSelector, RegistryTaskType } from './model-registry.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
 
 /** Current eval schema version for newly emitted records. */
-export const SCHEMA_VERSION = '1.29.0';
+export const SCHEMA_VERSION = '1.30.0';
 
 export type RoutingRole = 'planner' | 'coder' | 'reviewer';
 
@@ -1268,6 +1272,88 @@ export interface RouteCalibration {
 }
 
 // ────────────────────────────────────────────────────────────────
+// Feature Outcome Diagnostics (HOK-2262)
+// ────────────────────────────────────────────────────────────────
+
+/**
+ * Source of the outcome data attached to this eval record.
+ *
+ * `artifact` means a feature-state.json or feature-outcome.json was found
+ * and used for diagnostics. `reconstructed` means existing eval fields were
+ * used instead.
+ *
+ * @since 1.30.0
+ */
+export type OutcomeSource = 'artifact' | 'reconstructed';
+
+/**
+ * High-level reason why outcome data was unavailable or invalid.
+ *
+ * Distinct from `EligibilityErrorCode` because the outcome gate is about
+ * training-label quality, not missing export fields.
+ *
+ * @since 1.30.0
+ */
+export type OutcomeEligibilityReason = 'missing_outcome_data' | 'failed_outcome';
+
+/**
+ * Normalized outcome snapshot derived from the feature-outcome artifact.
+ *
+ * All fields are optional because incomplete artifacts still attach whatever
+ * fields are present.
+ *
+ * @since 1.30.0
+ */
+export interface NormalizedOutcome {
+  completed?: boolean;
+  merged?: boolean | null;
+  ciPassed?: boolean | null;
+  reviewPassed?: boolean | null;
+  readyPassed?: boolean | null;
+  manualIntervention?: boolean | null;
+  interventionCount?: number | null;
+  reverted?: boolean | null;
+  evalScore?: number | null;
+  costUsd?: number | null;
+  durationSeconds?: number | null;
+}
+
+/**
+ * Diagnostic provenance block for the feature-outcome artifact.
+ *
+ * Records whether the artifact was present, valid, and used, along with
+ * any parse/validation errors and comparison against reconstructed state.
+ *
+ * @since 1.30.0
+ */
+export interface FeatureOutcomeDiagnostics {
+  /** Whether a feature-state.json or feature-outcome.json artifact was found. */
+  present: boolean;
+  /** Whether the artifact parsed and passed required-field validation. */
+  valid: boolean;
+  /** Whether the artifact was actually used for diagnostics/enrichment. */
+  used: boolean;
+  /** Which file was the artifact source, or 'none' when not found. */
+  source: 'feature-state' | 'feature-outcome' | 'none';
+  /** Absolute path to the artifact file when present. */
+  artifactPath?: string;
+  /** SHA-256 hash of the raw artifact bytes when present. */
+  sourceHash?: string;
+  /** Schema version declared inside the artifact when present. */
+  schemaVersion?: string;
+  /** Parse/read error message when present is true but valid is false. */
+  parseError?: string;
+  /** Sorted list of required outcome fields that were missing or undefined. */
+  missingFields?: string[];
+  /** Sorted list of fields whose artifact values differ from reconstructed values. */
+  conflictingFields?: string[];
+  /** True when at least one artifact value conflicts with reconstructed state. */
+  conflictWithReconstructed?: boolean;
+  /** Normalized outcome snapshot from the artifact when valid is true. */
+  normalized?: NormalizedOutcome;
+}
+
+// ────────────────────────────────────────────────────────────────
 // Eval Record
 // ────────────────────────────────────────────────────────────────
 
@@ -1613,6 +1699,32 @@ export interface EvalRecord {
    * @since 1.29.0
    */
   traceId?: string;
+
+  /**
+   * Provenance diagnostics for the feature-outcome artifact (HOK-2262).
+   *
+   * Records whether a feature-state.json / feature-outcome.json was found,
+   * parsed, and used, along with conflict detection against reconstructed state.
+   *
+   * @since 1.30.0
+   */
+  featureOutcome?: FeatureOutcomeDiagnostics;
+
+  /**
+   * Whether the outcome data came from an artifact or was reconstructed from
+   * existing eval fields (HOK-2262).
+   *
+   * @since 1.30.0
+   */
+  outcomeSource?: OutcomeSource;
+
+  /**
+   * Stable reason why outcome data is unavailable or indicates failure.
+   * Null means outcome data is present and passes (or outcome is not the failing gate).
+   *
+   * @since 1.30.0
+   */
+  outcomeEligibilityReason?: OutcomeEligibilityReason | null;
 
   /** Optional extensibility bag for additional metadata */
   metadata?: Record<string, unknown>;

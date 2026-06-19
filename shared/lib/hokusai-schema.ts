@@ -302,11 +302,18 @@ export interface HokusaiSubmission {
   rubric_signals?: HokusaiSubmissionRubricSignals;
   route_prediction?: RoutePrediction;
   route_calibration?: RouteCalibration;
+  /**
+   * Outcome eligibility diagnostic from the feature-outcome artifact (HOK-2262).
+   * 'missing_outcome_data' = outcome artifact absent/invalid and no reconstruction.
+   * 'failed_outcome' = artifact present but outcome indicates failure.
+   * null = outcome data present and passing.
+   */
+  outcome_eligibility_reason?: string | null;
 }
 
 export type HokusaiSubmissionResult =
   | { ok: true; submission: HokusaiSubmission }
-  | { ok: false; reasons: EligibilityErrorCode[] };
+  | { ok: false; reasons: string[] };
 
 // ============================================================================
 // Input Schema Adapters
@@ -770,10 +777,16 @@ export function toHokusaiSubmission(
   record: EvalRecord,
 ): HokusaiSubmissionResult {
   if (record.trainingEligible === false) {
-    return {
-      ok: false,
-      reasons: uniqueSortedCodes(record.eligibilityErrors ?? []),
-    };
+    // Augment standard eligibility reasons with outcome diagnostics when available
+    const baseReasons: string[] = uniqueSortedCodes(record.eligibilityErrors ?? []);
+    const outcomeReason = record.outcomeEligibilityReason;
+    if (
+      outcomeReason === 'missing_outcome_data'
+      && !baseReasons.includes('missing_outcome_data')
+    ) {
+      baseReasons.push('missing_outcome_data');
+    }
+    return { ok: false, reasons: baseReasons.sort() };
   }
 
   if (!isNonEmptyString(record.id) || !isNonEmptyString(record.issueId)) {
@@ -811,6 +824,9 @@ export function toHokusaiSubmission(
       ? '1.1'
       : '1.0';
 
+  // Distinguish null (explicitly passing) from undefined (not set) — do not coerce with ??
+  const outcomeEligibilityReason = record.outcomeEligibilityReason;
+
   return {
     ok: true,
     submission: {
@@ -833,6 +849,9 @@ export function toHokusaiSubmission(
       ...(rubricSignals && { rubric_signals: rubricSignals }),
       ...(routePrediction && { route_prediction: routePrediction }),
       ...(routeCalibration && { route_calibration: routeCalibration }),
+      ...(outcomeEligibilityReason !== undefined
+        ? { outcome_eligibility_reason: outcomeEligibilityReason }
+        : {}),
     },
   };
 }

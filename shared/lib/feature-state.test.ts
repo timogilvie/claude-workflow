@@ -7,8 +7,10 @@ import {
   deriveFeatureState,
   materializeFeatureState,
   deriveAndMaterialize,
+  loadFeatureOutcomeArtifact,
   FEATURE_STATE_SCHEMA_VERSION,
   FEATURE_STATE_FILENAME,
+  FEATURE_OUTCOME_FILENAME,
   type DeriveFeatureStateOptions,
 } from './feature-state.ts';
 import { writeStageResult, type StageResult } from './stage-result.ts';
@@ -667,4 +669,211 @@ test('full happy path produces done phase with readyPassed=true', async () => {
   } finally {
     cleanup([featureDir]);
   }
+});
+
+// ────────────────────────────────────────────────────────────────
+// loadFeatureOutcomeArtifact tests (HOK-2262)
+// ────────────────────────────────────────────────────────────────
+
+/** Minimal valid FeatureOutcome fields (all REQUIRED_OUTCOME_FIELDS set). */
+function minimalOutcome() {
+  return {
+    completed: true,
+    merged: true,
+    ciPassed: true,
+    reviewPassed: true,
+    readyPassed: true,
+    manualIntervention: false,
+    interventionCount: 0,
+    reverted: null,
+    evalScore: null,
+    costUsd: null,
+    durationSeconds: null,
+  };
+}
+
+/** Minimal valid feature-state JSON wrapping a valid outcome. */
+function minimalFeatureStateJson(overrides: Record<string, unknown> = {}): string {
+  return JSON.stringify({
+    schemaVersion: '1.0',
+    issueId: 'HOK-9999',
+    slug: 'test-feature',
+    derivedAt: new Date().toISOString(),
+    currentPhase: 'done',
+    normalizedState: 'completed',
+    failureReason: null,
+    blockers: [],
+    outcome: minimalOutcome(),
+    ...overrides,
+  });
+}
+
+test('loadFeatureOutcomeArtifact returns not-present when no dirs given', () => {
+  const result = loadFeatureOutcomeArtifact({});
+  assert.equal(result.present, false);
+  assert.equal(result.valid, false);
+  assert.equal(result.used, false);
+  assert.equal(result.source, 'none');
+});
+
+test('loadFeatureOutcomeArtifact returns not-present when dirs exist but no files', () => {
+  const dir = makeTempDir();
+  try {
+    const result = loadFeatureOutcomeArtifact({ featureDir: dir });
+    assert.equal(result.present, false);
+    assert.equal(result.source, 'none');
+  } finally {
+    cleanup([dir]);
+  }
+});
+
+test('loadFeatureOutcomeArtifact loads valid feature-state.json', () => {
+  const dir = makeTempDir();
+  try {
+    writeFileSync(join(dir, FEATURE_STATE_FILENAME), minimalFeatureStateJson());
+    const result = loadFeatureOutcomeArtifact({ featureDir: dir });
+    assert.equal(result.present, true);
+    assert.equal(result.valid, true);
+    assert.equal(result.used, true);
+    assert.equal(result.source, 'feature-state');
+    assert.ok(result.valid && result.sourceHash, 'sourceHash should be set');
+    assert.ok(result.valid && result.outcome.completed === true);
+  } finally {
+    cleanup([dir]);
+  }
+});
+
+test('loadFeatureOutcomeArtifact prefers feature-state.json over feature-outcome.json', () => {
+  const dir = makeTempDir();
+  try {
+    writeFileSync(join(dir, FEATURE_STATE_FILENAME), minimalFeatureStateJson());
+    const outcomeOnly = JSON.stringify({ schemaVersion: '1.0', outcome: minimalOutcome() });
+    writeFileSync(join(dir, FEATURE_OUTCOME_FILENAME), outcomeOnly);
+    const result = loadFeatureOutcomeArtifact({ featureDir: dir });
+    assert.equal(result.source, 'feature-state');
+  } finally {
+    cleanup([dir]);
+  }
+});
+
+test('loadFeatureOutcomeArtifact falls back to feature-outcome.json alias', () => {
+  const dir = makeTempDir();
+  try {
+    const outcomeOnly = JSON.stringify({ schemaVersion: '1.0', outcome: minimalOutcome() });
+    writeFileSync(join(dir, FEATURE_OUTCOME_FILENAME), outcomeOnly);
+    const result = loadFeatureOutcomeArtifact({ featureDir: dir });
+    assert.equal(result.present, true);
+    assert.equal(result.valid, true);
+    assert.equal(result.source, 'feature-outcome');
+  } finally {
+    cleanup([dir]);
+  }
+});
+
+test('loadFeatureOutcomeArtifact returns parse_error for malformed JSON', () => {
+  const dir = makeTempDir();
+  try {
+    writeFileSync(join(dir, FEATURE_STATE_FILENAME), 'not valid json {{{');
+    const result = loadFeatureOutcomeArtifact({ featureDir: dir });
+    assert.equal(result.present, true);
+    assert.equal(result.valid, false);
+    assert.ok(!result.valid && result.reason === 'parse_error');
+    assert.ok(!result.valid && result.parseError != null);
+  } finally {
+    cleanup([dir]);
+  }
+});
+
+test('loadFeatureOutcomeArtifact returns parse_error for empty file', () => {
+  const dir = makeTempDir();
+  try {
+    writeFileSync(join(dir, FEATURE_STATE_FILENAME), '');
+    const result = loadFeatureOutcomeArtifact({ featureDir: dir });
+    assert.equal(result.present, true);
+    assert.equal(result.valid, false);
+    assert.ok(!result.valid && result.reason === 'parse_error');
+    assert.ok(!result.valid && result.parseError === 'empty file');
+  } finally {
+    cleanup([dir]);
+  }
+});
+
+test('loadFeatureOutcomeArtifact returns incomplete when outcome is missing', () => {
+  const dir = makeTempDir();
+  try {
+    writeFileSync(join(dir, FEATURE_STATE_FILENAME), JSON.stringify({ schemaVersion: '1.0' }));
+    const result = loadFeatureOutcomeArtifact({ featureDir: dir });
+    assert.equal(result.present, true);
+    assert.equal(result.valid, false);
+    assert.ok(!result.valid && result.reason === 'incomplete');
+    assert.ok(!result.valid && result.missingFields?.includes('outcome'));
+  } finally {
+    cleanup([dir]);
+  }
+});
+
+test('loadFeatureOutcomeArtifact returns incomplete with sorted missing fields', () => {
+  const dir = makeTempDir();
+  try {
+    const partial = { schemaVersion: '1.0', outcome: { completed: true } };
+    writeFileSync(join(dir, FEATURE_STATE_FILENAME), JSON.stringify(partial));
+    const result = loadFeatureOutcomeArtifact({ featureDir: dir });
+    assert.equal(result.present, true);
+    assert.equal(result.valid, false);
+    assert.ok(!result.valid && result.reason === 'incomplete');
+    const missing = (!result.valid && result.missingFields) ?? [];
+    assert.ok(missing.includes('merged'), 'should list merged as missing');
+    assert.ok(missing.includes('ciPassed'), 'should list ciPassed as missing');
+    // Fields should be sorted
+    assert.deepEqual(missing, [...missing].sort());
+  } finally {
+    cleanup([dir]);
+  }
+});
+
+test('loadFeatureOutcomeArtifact searches archive dir when worktree dir absent', () => {
+  const archiveDir = makeTempDir();
+  try {
+    writeFileSync(join(archiveDir, FEATURE_STATE_FILENAME), minimalFeatureStateJson());
+    const result = loadFeatureOutcomeArtifact({ archiveDir });
+    assert.equal(result.present, true);
+    assert.equal(result.valid, true);
+  } finally {
+    cleanup([archiveDir]);
+  }
+});
+
+test('loadFeatureOutcomeArtifact prefers featureDir over archiveDir', () => {
+  const featureDir = makeTempDir();
+  const archiveDir = makeTempDir();
+  try {
+    // featureDir has valid artifact; archiveDir has different (invalid) artifact
+    writeFileSync(join(featureDir, FEATURE_STATE_FILENAME), minimalFeatureStateJson());
+    writeFileSync(join(archiveDir, FEATURE_STATE_FILENAME), 'bad json');
+    const result = loadFeatureOutcomeArtifact({ featureDir, archiveDir });
+    assert.equal(result.present, true);
+    assert.equal(result.valid, true);
+    assert.ok(result.valid && result.artifactPath.startsWith(featureDir));
+  } finally {
+    cleanup([featureDir, archiveDir]);
+  }
+});
+
+test('loadFeatureOutcomeArtifact sourceHash is sha256 hex string', () => {
+  const dir = makeTempDir();
+  try {
+    const content = minimalFeatureStateJson();
+    writeFileSync(join(dir, FEATURE_STATE_FILENAME), content);
+    const result = loadFeatureOutcomeArtifact({ featureDir: dir });
+    assert.ok(result.valid);
+    assert.ok(result.valid && /^[0-9a-f]{64}$/.test(result.sourceHash));
+  } finally {
+    cleanup([dir]);
+  }
+});
+
+test('loadFeatureOutcomeArtifact never throws on filesystem errors (bugDir path missing)', () => {
+  // Bug dir path doesn't exist - should not throw
+  const result = loadFeatureOutcomeArtifact({ bugDir: '/tmp/nonexistent-dir-abc123' });
+  assert.equal(result.present, false);
 });

@@ -16,6 +16,7 @@ import {
   attachDifficultyMetadata,
   attachExecutedPlanning,
   attachFallbackEvent,
+  attachFeatureOutcomeDiagnostics,
   attachPhaseDurations,
   attachRouteProvenance,
   attachRouterPolicyMetadata,
@@ -1292,6 +1293,168 @@ describe('eval-record-builder', () => {
       baseRecord.routePrediction = { expectedSuccess: 0.5 };
       attachRoutePrediction(baseRecord, undefined);
       expect(baseRecord.routePrediction).toEqual({ expectedSuccess: 0.5 });
+    });
+  });
+
+  describe('attachFeatureOutcomeDiagnostics (HOK-2262)', () => {
+    const validOutcome = {
+      completed: true,
+      merged: true,
+      ciPassed: true,
+      reviewPassed: true,
+      readyPassed: true,
+      manualIntervention: false,
+      interventionCount: 0,
+      reverted: null,
+      evalScore: 0.85,
+      costUsd: 1.2,
+      durationSeconds: 3600,
+    };
+
+    const validArtifact = {
+      present: true as const,
+      valid: true as const,
+      used: true as const,
+      source: 'feature-state' as const,
+      artifactPath: '/tmp/features/hok-9999/feature-state.json',
+      sourceHash: 'deadbeef'.repeat(8),
+      schemaVersion: '1.0',
+      state: {} as any,
+      outcome: validOutcome,
+      missingFields: [] as string[],
+    };
+
+    it('is no-op when artifact is null', () => {
+      attachFeatureOutcomeDiagnostics(baseRecord, null);
+      assert.equal(baseRecord.featureOutcome, undefined);
+      assert.equal(baseRecord.outcomeSource, undefined);
+    });
+
+    it('is no-op when artifact is undefined', () => {
+      attachFeatureOutcomeDiagnostics(baseRecord, undefined);
+      assert.equal(baseRecord.featureOutcome, undefined);
+    });
+
+    it('sets diagnostics for present=false (no artifact)', () => {
+      const artifact = { present: false as const, valid: false as const, used: false as const, source: 'none' as const };
+      attachFeatureOutcomeDiagnostics(baseRecord, artifact);
+      assert.equal(baseRecord.featureOutcome?.present, false);
+      assert.equal(baseRecord.featureOutcome?.valid, false);
+      assert.equal(baseRecord.featureOutcome?.used, false);
+      assert.equal(baseRecord.outcomeSource, 'reconstructed');
+    });
+
+    it('sets missing_outcome_data when no artifact and no reconstructed outcomes', () => {
+      const artifact = { present: false as const, valid: false as const, used: false as const, source: 'none' as const };
+      attachFeatureOutcomeDiagnostics(baseRecord, artifact);
+      assert.equal(baseRecord.outcomeEligibilityReason, 'missing_outcome_data');
+    });
+
+    it('does not override outcomeEligibilityReason when reconstructed outcomes exist', () => {
+      baseRecord.outcomes = { delivery: { merged: true } } as any;
+      const artifact = { present: false as const, valid: false as const, used: false as const, source: 'none' as const };
+      attachFeatureOutcomeDiagnostics(baseRecord, artifact);
+      assert.equal(baseRecord.outcomeEligibilityReason, undefined);
+    });
+
+    it('sets diagnostics for present=true, valid=false (parse error)', () => {
+      const artifact = {
+        present: true as const,
+        valid: false as const,
+        used: false as const,
+        source: 'feature-state' as const,
+        artifactPath: '/tmp/x.json',
+        reason: 'parse_error' as const,
+        parseError: 'unexpected token',
+      };
+      attachFeatureOutcomeDiagnostics(baseRecord, artifact);
+      assert.equal(baseRecord.featureOutcome?.present, true);
+      assert.equal(baseRecord.featureOutcome?.valid, false);
+      assert.equal(baseRecord.featureOutcome?.used, false);
+      assert.equal(baseRecord.featureOutcome?.source, 'feature-state');
+    });
+
+    it('sets diagnostics for present=true, valid=false (incomplete)', () => {
+      const artifact = {
+        present: true as const,
+        valid: false as const,
+        used: false as const,
+        source: 'feature-outcome' as const,
+        artifactPath: '/tmp/x.json',
+        reason: 'incomplete' as const,
+        missingFields: ['ciPassed', 'merged'],
+      };
+      attachFeatureOutcomeDiagnostics(baseRecord, artifact);
+      assert.deepEqual(baseRecord.featureOutcome?.missingFields, ['ciPassed', 'merged']);
+    });
+
+    it('sets outcomeSource=artifact and normalized for valid artifact', () => {
+      attachFeatureOutcomeDiagnostics(baseRecord, validArtifact);
+      assert.equal(baseRecord.outcomeSource, 'artifact');
+      assert.equal(baseRecord.featureOutcome?.present, true);
+      assert.equal(baseRecord.featureOutcome?.valid, true);
+      assert.equal(baseRecord.featureOutcome?.used, true);
+      const norm = baseRecord.featureOutcome?.normalized;
+      assert.equal(norm?.completed, true);
+      assert.equal(norm?.merged, true);
+      assert.equal(norm?.evalScore, 0.85);
+    });
+
+    it('sets outcomeEligibilityReason=null when completed+merged', () => {
+      attachFeatureOutcomeDiagnostics(baseRecord, validArtifact);
+      assert.equal(baseRecord.outcomeEligibilityReason, null);
+    });
+
+    it('sets outcomeEligibilityReason=failed_outcome when !completed && !merged', () => {
+      const failedArtifact = {
+        ...validArtifact,
+        outcome: { ...validOutcome, completed: false, merged: false },
+      };
+      attachFeatureOutcomeDiagnostics(baseRecord, failedArtifact);
+      assert.equal(baseRecord.outcomeEligibilityReason, 'failed_outcome');
+    });
+
+    it('detects conflict between artifact manualIntervention and record.interventionRequired', () => {
+      baseRecord.interventionRequired = true;
+      const noInterventionArtifact = {
+        ...validArtifact,
+        outcome: { ...validOutcome, manualIntervention: false },
+      };
+      attachFeatureOutcomeDiagnostics(baseRecord, noInterventionArtifact);
+      assert.equal(baseRecord.featureOutcome?.conflictWithReconstructed, true);
+      assert.ok(baseRecord.featureOutcome?.conflictingFields?.includes('manualIntervention'));
+    });
+
+    it('does not flag evalScore conflict within tolerance (< 0.001 diff)', () => {
+      baseRecord.score = 0.85;
+      const closeArtifact = {
+        ...validArtifact,
+        outcome: { ...validOutcome, evalScore: 0.8505 },
+      };
+      attachFeatureOutcomeDiagnostics(baseRecord, closeArtifact);
+      // 0.0005 difference is within the 0.001 tolerance
+      const conflict = baseRecord.featureOutcome?.conflictingFields ?? [];
+      assert.ok(!conflict.includes('evalScore'), 'no conflict within tolerance');
+    });
+
+    it('detects conflict on evalScore outside tolerance', () => {
+      baseRecord.score = 0.85;
+      const farArtifact = {
+        ...validArtifact,
+        outcome: { ...validOutcome, evalScore: 0.5 },
+      };
+      attachFeatureOutcomeDiagnostics(baseRecord, farArtifact);
+      assert.ok(baseRecord.featureOutcome?.conflictingFields?.includes('evalScore'));
+    });
+
+    it('does not modify record.score', () => {
+      baseRecord.score = 0.85;
+      const artifact = {
+        ...validArtifact,
+        outcome: { ...validOutcome, evalScore: 0.99 },
+      };
+      attachFeatureOutcomeDiagnostics(baseRecord, artifact);
+      assert.equal(baseRecord.score, 0.85, 'score must not change');
     });
   });
 });
