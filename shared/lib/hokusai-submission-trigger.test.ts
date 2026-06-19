@@ -242,4 +242,79 @@ describe('hokusai-submission-trigger', () => {
     assert.equal(result, 'resolved');
     resolveDrain?.();
   });
+
+  // HOK-2262: feature outcome diagnostics threaded through contribution row
+  it('passes feature outcome diagnostics to the contribution row when present on record', async () => {
+    const { repoDir, configDir } = makeRepo(true);
+    const capturedRows: unknown[] = [];
+
+    mock.method(hokusaiSubmissionTriggerDeps, 'buildSubmitDataContributionRow', (projection: unknown) => {
+      capturedRows.push(projection);
+      return { success_under_budget: true };
+    });
+    mock.method(hokusaiSubmissionTriggerDeps, 'enqueueContribution', async () => ({
+      status: 'enqueued' as const,
+      entry: { entryId: 'e1' },
+    }));
+    mock.method(hokusaiSubmissionTriggerDeps, 'drainContributionQueue', async () => ({}));
+
+    const record = makeEligibleRecord({
+      featureOutcomeDiagnostics: {
+        present: true,
+        valid: true,
+        used: true,
+        sourceFile: 'feature-state.json',
+        sourceHash: 'a'.repeat(64),
+        reason: 'loaded',
+        eligibilityDiagnostic: 'eligible',
+        missingFields: [],
+        invalidFields: [],
+        conflictsWithReconstruction: false,
+      },
+    } as unknown as Partial<EvalRecord>);
+
+    await triggerHokusaiSubmission(record, {
+      repoDir,
+      configDir,
+      redactionSalt: '1'.repeat(64),
+    });
+
+    assert.equal(capturedRows.length, 1);
+    const proj = capturedRows[0] as Record<string, unknown>;
+    assert.equal(proj.outcomeDiagnostic, 'eligible');
+    assert.equal(proj.outcomeSource, 'feature_outcome_artifact');
+    assert.equal(proj.outcomeArtifactPresent, true);
+    assert.equal(proj.outcomeArtifactValid, true);
+    assert.equal(proj.outcomeArtifactUsed, true);
+  });
+
+  it('omits outcome diagnostic fields from projection when record has no featureOutcomeDiagnostics', async () => {
+    const { repoDir, configDir } = makeRepo(true);
+    const capturedRows: unknown[] = [];
+
+    mock.method(hokusaiSubmissionTriggerDeps, 'buildSubmitDataContributionRow', (projection: unknown) => {
+      capturedRows.push(projection);
+      return { success_under_budget: true };
+    });
+    mock.method(hokusaiSubmissionTriggerDeps, 'enqueueContribution', async () => ({
+      status: 'enqueued' as const,
+      entry: { entryId: 'e2' },
+    }));
+    mock.method(hokusaiSubmissionTriggerDeps, 'drainContributionQueue', async () => ({}));
+
+    const record = makeEligibleRecord();
+    delete (record as Record<string, unknown>).featureOutcomeDiagnostics;
+
+    await triggerHokusaiSubmission(record, {
+      repoDir,
+      configDir,
+      redactionSalt: '2'.repeat(64),
+    });
+
+    assert.equal(capturedRows.length, 1);
+    const proj = capturedRows[0] as Record<string, unknown>;
+    assert.equal(proj.outcomeDiagnostic, undefined);
+    assert.equal(proj.outcomeSource, undefined);
+    assert.equal(proj.outcomeArtifactPresent, undefined);
+  });
 });

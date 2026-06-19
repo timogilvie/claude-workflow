@@ -364,7 +364,7 @@ test('toCsv column count matches header count', () => {
   const lines = csv.trim().split('\n');
   const headerCols = lines[0].split(',').length;
 
-  assert.equal(headerCols, 42);
+  assert.equal(headerCols, 56);
 });
 
 // ────────────────────────────────────────────────────────────────
@@ -455,6 +455,69 @@ test('exportEvalDataset applies redaction', () => {
   const redacted = exportEvalDataset({ format: 'jsonl', records, redact: true });
   assert.ok(!redacted.includes('admin@test.com'));
   assert.ok(redacted.includes('[EMAIL]'));
+});
+
+// ────────────────────────────────────────────────────────────────
+// featureOutcomeDiagnostics export columns (HOK-2262)
+// ────────────────────────────────────────────────────────────────
+
+test('flattenRecord with featureOutcomeDiagnostics populates all feature_outcome columns', () => {
+  const record = makeRecord({
+    featureOutcomeDiagnostics: {
+      present: true,
+      valid: true,
+      used: true,
+      sourceFile: 'feature-state.json',
+      sourceHash: 'a'.repeat(64),
+      reason: 'loaded',
+      eligibilityDiagnostic: 'eligible',
+      missingFields: [],
+      invalidFields: [],
+      conflictsWithReconstruction: false,
+      conflictingFields: [],
+    },
+  } as unknown as Partial<EvalRecord>);
+
+  const row = flattenRecord(record);
+  assert.equal(row.feature_outcome_present, true);
+  assert.equal(row.feature_outcome_valid, true);
+  assert.equal(row.feature_outcome_used, true);
+  assert.equal(row.feature_outcome_source_file, 'feature-state.json');
+  assert.equal(row.feature_outcome_source_hash, 'a'.repeat(64));
+  assert.equal(row.feature_outcome_reason, 'loaded');
+  assert.equal(row.feature_outcome_eligibility_diagnostic, 'eligible');
+  assert.equal(row.feature_outcome_missing_fields, '[]');
+  assert.equal(row.feature_outcome_invalid_fields, '[]');
+  assert.equal(row.feature_outcome_conflicts, false);
+  assert.equal(row.feature_outcome_conflicting_fields, '[]');
+});
+
+test('flattenRecord without featureOutcomeDiagnostics emits safe defaults', () => {
+  const record = makeRecord();
+  delete (record as Record<string, unknown>).featureOutcomeDiagnostics;
+
+  const row = flattenRecord(record);
+  assert.equal(row.feature_outcome_present, false);
+  assert.equal(row.feature_outcome_valid, false);
+  assert.equal(row.feature_outcome_used, false);
+  assert.equal(row.feature_outcome_source_file, '');
+  assert.equal(row.feature_outcome_source_hash, '');
+  assert.equal(row.feature_outcome_reason, '');
+  assert.equal(row.feature_outcome_eligibility_diagnostic, '');
+  assert.equal(row.feature_outcome_conflicts, false);
+});
+
+test('flattenRecord with eligibilityErrors and training eligibility', () => {
+  const record = makeRecord({
+    eligibilityErrors: ['missing_feature_outcome', 'missing_cost'],
+    trainingEligible: false,
+    budgetEvalEligible: true,
+  });
+
+  const row = flattenRecord(record);
+  assert.ok(row.eligibility_errors.includes('missing_feature_outcome'));
+  assert.equal(row.training_eligible, false);
+  assert.equal(row.budget_eval_eligible, true);
 });
 
 // ────────────────────────────────────────────────────────────────

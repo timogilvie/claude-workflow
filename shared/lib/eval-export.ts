@@ -79,6 +79,24 @@ export interface ExportRow {
   rubric_intervention_impact: number | null;
   rubric_autonomy: number | null;
   rubric_determinative_boundary: string;
+
+  // Feature outcome artifact diagnostics (HOK-2262)
+  feature_outcome_present: boolean;
+  feature_outcome_valid: boolean;
+  feature_outcome_used: boolean;
+  feature_outcome_source_file: string;
+  feature_outcome_source_hash: string;
+  feature_outcome_reason: string;
+  feature_outcome_missing_fields: string;
+  feature_outcome_invalid_fields: string;
+  feature_outcome_eligibility_diagnostic: string;
+  feature_outcome_conflicts: boolean;
+  feature_outcome_conflicting_fields: string;
+
+  // Eligibility summary columns
+  eligibility_errors: string;
+  training_eligible: boolean | null;
+  budget_eval_eligible: boolean | null;
 }
 
 /** Column order for CSV output. */
@@ -125,6 +143,20 @@ const COLUMNS: (keyof ExportRow)[] = [
   'rubric_intervention_impact',
   'rubric_autonomy',
   'rubric_determinative_boundary',
+  'feature_outcome_present',
+  'feature_outcome_valid',
+  'feature_outcome_used',
+  'feature_outcome_source_file',
+  'feature_outcome_source_hash',
+  'feature_outcome_reason',
+  'feature_outcome_missing_fields',
+  'feature_outcome_invalid_fields',
+  'feature_outcome_eligibility_diagnostic',
+  'feature_outcome_conflicts',
+  'feature_outcome_conflicting_fields',
+  'eligibility_errors',
+  'training_eligible',
+  'budget_eval_eligible',
 ];
 
 // ────────────────────────────────────────────────────────────────
@@ -175,6 +207,7 @@ export function flattenRecord(
   const linesRemoved = typeof meta.linesRemoved === 'number' ? meta.linesRemoved : null;
   const resourceVariants = summarizeResourceVariants(record);
   const rubric = record.rubricEval;
+  const fod = record.featureOutcomeDiagnostics;
 
   const timeSeconds =
     typeof record.timeSeconds === 'number' && Number.isFinite(record.timeSeconds) && record.timeSeconds >= 0
@@ -240,6 +273,22 @@ export function flattenRecord(
     rubric_intervention_impact: rubric?.criteria.intervention_impact.score ?? null,
     rubric_autonomy: rubric?.criteria.autonomy.score ?? null,
     rubric_determinative_boundary: rubric?.determinative_boundary ?? '',
+
+    feature_outcome_present: fod?.present ?? false,
+    feature_outcome_valid: fod?.valid ?? false,
+    feature_outcome_used: fod?.used ?? false,
+    feature_outcome_source_file: fod?.sourceFile ?? '',
+    feature_outcome_source_hash: fod?.sourceHash ?? '',
+    feature_outcome_reason: fod?.reason ?? '',
+    feature_outcome_missing_fields: fod?.missingFields ? JSON.stringify(fod.missingFields) : '',
+    feature_outcome_invalid_fields: fod?.invalidFields ? JSON.stringify(fod.invalidFields) : '',
+    feature_outcome_eligibility_diagnostic: fod?.eligibilityDiagnostic ?? '',
+    feature_outcome_conflicts: fod?.conflictsWithReconstruction ?? false,
+    feature_outcome_conflicting_fields: fod?.conflictingFields ? JSON.stringify(fod.conflictingFields) : '',
+
+    eligibility_errors: record.eligibilityErrors ? JSON.stringify(record.eligibilityErrors) : '',
+    training_eligible: record.trainingEligible ?? null,
+    budget_eval_eligible: record.budgetEvalEligible ?? null,
   };
 }
 
