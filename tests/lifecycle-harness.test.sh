@@ -1370,6 +1370,25 @@ test_misplaced_coding_complete_marker_is_recovered() {
   check_contains "misplaced marker: warning logged" "$(kv_value "$tick" warn_output)" "Recovered misplaced .coding-complete"
 }
 
+test_root_level_coding_complete_marker_is_recovered() {
+  local slug="root-level-coding-complete"
+  local issue="HOK-2264-ROOT"
+  local repo feature_dir tick
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  feature_dir="$repo/features/$slug"
+  touch "$repo/.coding-complete"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
+
+  check_eq "root marker: coding stage becomes completed" "completed" "$(harness_read_stage_status "$repo" "$slug" coding)"
+  check_file_exists "root marker: expected marker recovered" "$feature_dir/.coding-complete"
+  check_file_exists "root marker: recovery audit written" "$feature_dir/.coding-marker-recovered.json"
+  check_eq "root marker: audit found path" ".coding-complete" "$(jq -r '.found' "$feature_dir/.coding-marker-recovered.json")"
+  check_contains "root marker: warning logged" "$(kv_value "$tick" warn_output)" "Recovered misplaced .coding-complete from .coding-complete"
+}
+
 echo "=== Mill Lifecycle: Planning to Coding Handoff ==="
 harness_extract_real_functions
 
@@ -1399,6 +1418,7 @@ test_coding_blocked_completion_stale_commit_does_not_auto_advance
 test_coding_blocked_completion_dirty_worktree_does_not_auto_advance
 test_coding_blocked_completion_dedupes_when_stat_unavailable
 test_misplaced_coding_complete_marker_is_recovered
+test_root_level_coding_complete_marker_is_recovered
 
 echo ""
 if [[ "$FAIL" -eq 0 ]]; then
