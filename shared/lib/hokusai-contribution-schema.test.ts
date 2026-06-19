@@ -8,6 +8,7 @@ import {
   TECHNICAL_TASK_ROUTER_ROW_SCHEMA_VERSION_V2,
   ContributionValidationError,
   validateContributionRow,
+  isSubmitDataContributionRow,
 } from './hokusai-contribution-schema.ts';
 import type { HokusaiTaskDescriptor } from './hokusai-schema.ts';
 
@@ -296,5 +297,72 @@ describe('hokusai-contribution-schema', () => {
     const validate = ajv.compile(schema);
 
     assert.equal(validate(makeV2Row()), true, JSON.stringify(validate.errors));
+  });
+});
+
+// ────────────────────────────────────────────────────────────────
+// isSubmitDataContributionRow – outcome diagnostic fields (HOK-2262)
+// ────────────────────────────────────────────────────────────────
+
+describe('isSubmitDataContributionRow – outcome diagnostic optional fields (HOK-2262)', () => {
+  const baseRow = { success_under_budget: true };
+
+  it('accepts row without any outcome diagnostic fields', () => {
+    assert.equal(isSubmitDataContributionRow(baseRow), true);
+  });
+
+  it('accepts row with valid outcome_diagnostic enum values', () => {
+    for (const value of ['eligible', 'ineligible_missing_outcome', 'ineligible_failed_outcome', 'unknown']) {
+      assert.equal(isSubmitDataContributionRow({ ...baseRow, outcome_diagnostic: value }), true, value);
+    }
+  });
+
+  it('rejects row with invalid outcome_diagnostic enum value', () => {
+    assert.equal(isSubmitDataContributionRow({ ...baseRow, outcome_diagnostic: 'bad_value' }), false);
+  });
+
+  it('accepts row with valid outcome_source enum values', () => {
+    for (const value of ['feature_outcome_artifact', 'reconstructed', 'unknown']) {
+      assert.equal(isSubmitDataContributionRow({ ...baseRow, outcome_source: value }), true, value);
+    }
+  });
+
+  it('rejects row with invalid outcome_source enum value', () => {
+    assert.equal(isSubmitDataContributionRow({ ...baseRow, outcome_source: 'not_a_source' }), false);
+  });
+
+  it('accepts row with boolean outcome_artifact_present', () => {
+    assert.equal(isSubmitDataContributionRow({ ...baseRow, outcome_artifact_present: true }), true);
+    assert.equal(isSubmitDataContributionRow({ ...baseRow, outcome_artifact_present: false }), true);
+  });
+
+  it('rejects non-boolean outcome_artifact_present', () => {
+    assert.equal(isSubmitDataContributionRow({ ...baseRow, outcome_artifact_present: 'yes' }), false);
+    assert.equal(isSubmitDataContributionRow({ ...baseRow, outcome_artifact_present: 1 }), false);
+  });
+
+  it('accepts row with string[] outcome_missing_fields', () => {
+    assert.equal(isSubmitDataContributionRow({ ...baseRow, outcome_missing_fields: ['merged', 'ciPassed'] }), true);
+    assert.equal(isSubmitDataContributionRow({ ...baseRow, outcome_missing_fields: [] }), true);
+  });
+
+  it('rejects outcome_missing_fields when not an array of strings', () => {
+    assert.equal(isSubmitDataContributionRow({ ...baseRow, outcome_missing_fields: 'merged' }), false);
+    assert.equal(isSubmitDataContributionRow({ ...baseRow, outcome_missing_fields: [1, 2] }), false);
+  });
+
+  it('accepts row with valid outcome_failure_reason string', () => {
+    assert.equal(
+      isSubmitDataContributionRow({ ...baseRow, outcome_failure_reason: 'incomplete_outcome' }),
+      true,
+    );
+  });
+
+  it('rejects outcome_failure_reason when non-string', () => {
+    assert.equal(isSubmitDataContributionRow({ ...baseRow, outcome_failure_reason: 42 }), false);
+  });
+
+  it('rejects row with unknown extra key', () => {
+    assert.equal(isSubmitDataContributionRow({ ...baseRow, unknown_key: 'oops' }), false);
   });
 });
