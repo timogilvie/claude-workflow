@@ -1513,6 +1513,244 @@ else
 fi
 
 echo ""
+echo "=== Artifact status dashboard integration ==="
+
+# ── helper: override task_artifact_status_field in render harness ─────────────
+run_render_with_artifact_override() {
+  local state_file="$1"
+  local workspace_root="$2"
+  local behavior_file="$3"
+  local output_file="$4"
+  local artifact_override="${5:-}"  # value to return from task_artifact_status_field; empty = real call
+
+  (
+    export WAVEMILL_TIP_INDEX=0
+    set -- test-session "$workspace_root" "$state_file"
+    source "$REPO_DIR/shared/lib/wavemill-status.sh"
+
+    refresh_pr_cache() { :; }
+    clear_dashboard_scrollback() { :; }
+    redraw_dashboard_frame() { :; }
+
+    elapsed() {
+      local dir="$1"
+      case "$(basename "$dir")" in
+        *) echo "1m" ;;
+      esac
+    }
+
+    is_active() { return 0; }
+
+    agent_status() { echo "running"; }
+
+    window_index() { echo "5"; }
+
+    agent_hook_detail() { :; }
+
+    agent_reported_status() { :; }
+
+    get_planning_display_status() { :; }
+
+    pr_for_branch() { :; }
+    pr_checks() { :; }
+
+    if [[ -n "$artifact_override" ]]; then
+      task_artifact_status_field() { printf '%s\n' "$artifact_override"; }
+    fi
+
+    render_dashboard
+    cp "$FRAME" "${output_file}.raw"
+    strip_ansi < "$FRAME" > "$output_file"
+  )
+}
+
+# Set up a state file with one task that has normalized artifacts
+ARTIFACT_STATE_DIR="$TMP_DIR/artifact-worktrees"
+mkdir -p "$ARTIFACT_STATE_DIR/art-task/features/art-task"
+mkdir -p "$ARTIFACT_STATE_DIR/legacy-task/features/legacy-task"
+
+STATE_FILE_ARTIFACT="$TMP_DIR/state-artifact.json"
+cat > "$STATE_FILE_ARTIFACT" <<EOF
+{
+  "tasks": {
+    "HOK-2261": {
+      "slug": "art-task",
+      "branch": "task/art-task",
+      "worktree": "$ARTIFACT_STATE_DIR/art-task",
+      "status": "",
+      "phase": "coding",
+      "pr": ""
+    },
+    "HOK-2262": {
+      "slug": "legacy-task",
+      "branch": "task/legacy-task",
+      "worktree": "$ARTIFACT_STATE_DIR/legacy-task",
+      "status": "",
+      "phase": "coding",
+      "pr": ""
+    }
+  }
+}
+EOF
+
+BEHAVIOR_ARTIFACT="$TMP_DIR/behavior-artifact.json"
+cat > "$BEHAVIOR_ARTIFACT" <<'EOF'
+{
+  "hook": {},
+  "pane": {
+    "HOK-2261-art-task": "3",
+    "HOK-2262-legacy-task": "4"
+  },
+  "reported": {},
+  "planning": {},
+  "pr": {},
+  "checks": {}
+}
+EOF
+
+# Write normalized artifacts for art-task
+cat > "$ARTIFACT_STATE_DIR/art-task/features/art-task/task-contract.json" <<'EOF'
+{
+  "schemaVersion": "1.0.0",
+  "issueId": "HOK-2261",
+  "slug": "art-task",
+  "sources": [],
+  "fields": {},
+  "routingHints": {},
+  "warnings": []
+}
+EOF
+
+cat > "$ARTIFACT_STATE_DIR/art-task/features/art-task/feature-state.json" <<'EOF'
+{
+  "schemaVersion": "1.0",
+  "issueId": "HOK-2261",
+  "slug": "art-task",
+  "branch": null,
+  "prNumber": null,
+  "prUrl": null,
+  "currentPhase": "coding",
+  "normalizedState": "running",
+  "contract": null,
+  "route": null,
+  "stages": {"planning": null, "coding": null, "review": null, "ready": null},
+  "evidence": [{"kind": "stage_completion", "label": "planning_stage", "status": "pass"}],
+  "blockers": [],
+  "failureReason": null,
+  "outcome": {
+    "completed": false, "merged": null, "ciPassed": null, "reviewPassed": null,
+    "readyPassed": null, "manualIntervention": null, "interventionCount": null,
+    "reverted": null, "evalScore": null, "costUsd": null, "durationSeconds": null
+  },
+  "artifactSources": {
+    "stagesFromWorktree": false, "stagesFromArchive": false,
+    "routeFromWorktree": false, "routeFromArchive": false, "evalRecordUsed": false
+  },
+  "derivedAt": "2026-01-01T00:00:00.000Z"
+}
+EOF
+
+# Test: task with artifacts shows compact artifact field
+OUTPUT_ARTIFACT_REAL="$TMP_DIR/output-artifact-real.txt"
+# Use override to avoid slow npx startup in dashboard render
+run_render_with_artifact_override \
+  "$STATE_FILE_ARTIFACT" "$ARTIFACT_STATE_DIR" "$BEHAVIOR_ARTIFACT" "$OUTPUT_ARTIFACT_REAL" \
+  "art:ctr=ok out=running ev=1 tr=-"
+
+if grep -q 'HOK-2261.*art:ctr=ok' "$OUTPUT_ARTIFACT_REAL"; then
+  pass "dashboard row includes compact artifact field when override is set"
+else
+  fail "dashboard row is missing artifact field with override"
+fi
+
+# Test: legacy task row (no artifacts) shows no art: token when task_artifact_status_field returns empty
+# Use a state file with only the legacy task to isolate
+STATE_FILE_LEGACY_ONLY="$TMP_DIR/state-legacy-only.json"
+cat > "$STATE_FILE_LEGACY_ONLY" <<EOF
+{
+  "tasks": {
+    "HOK-2262": {
+      "slug": "legacy-task",
+      "branch": "task/legacy-task",
+      "worktree": "$ARTIFACT_STATE_DIR/legacy-task",
+      "status": "",
+      "phase": "coding",
+      "pr": ""
+    }
+  }
+}
+EOF
+OUTPUT_LEGACY_ONLY="$TMP_DIR/output-legacy-only.txt"
+run_render_with_artifact_override \
+  "$STATE_FILE_LEGACY_ONLY" "$ARTIFACT_STATE_DIR" "$BEHAVIOR_ARTIFACT" "$OUTPUT_LEGACY_ONLY" \
+  ""
+
+if grep -q 'HOK-2262' "$OUTPUT_LEGACY_ONLY" \
+  && ! grep -q 'art:' "$OUTPUT_LEGACY_ONLY"; then
+  pass "legacy task row with no artifacts has no art: token"
+else
+  fail "unexpected art: token in legacy task row"
+fi
+
+# Test: artifact_feature_dir_for_task resolves correctly
+# Source with stdout suppressed; clear EXIT trap before calling function so tput
+# cursor-restore sequences do not contaminate the captured output.
+ARTFDIR_TEST="$(
+  set -- test-session "$ARTIFACT_STATE_DIR"
+  source "$REPO_DIR/shared/lib/wavemill-status.sh" >/dev/null 2>&1
+  trap - EXIT
+  artifact_feature_dir_for_task "$ARTIFACT_STATE_DIR/art-task" "art-task"
+)"
+ARTFDIR_TEST_CLEAN="$(printf '%s' "$ARTFDIR_TEST" | strip_ansi | tr -d '\r\n')"
+if [[ "$ARTFDIR_TEST_CLEAN" == "$ARTIFACT_STATE_DIR/art-task/features/art-task" ]]; then
+  pass "artifact_feature_dir_for_task resolves features/<slug> subdirectory"
+else
+  fail "artifact_feature_dir_for_task did not resolve features/<slug>: got '$ARTFDIR_TEST_CLEAN'"
+fi
+
+# Test: artifact_feature_dir_for_task returns empty for missing dir
+ARTFDIR_EMPTY="$(
+  set -- test-session "$ARTIFACT_STATE_DIR"
+  source "$REPO_DIR/shared/lib/wavemill-status.sh" >/dev/null 2>&1
+  trap - EXIT
+  artifact_feature_dir_for_task "$ARTIFACT_STATE_DIR/nonexistent-task" "nonexistent-task"
+)"
+ARTFDIR_EMPTY_CLEAN="$(printf '%s' "$ARTFDIR_EMPTY" | strip_ansi | tr -d '\r\n')"
+if [[ -z "$ARTFDIR_EMPTY_CLEAN" ]]; then
+  pass "artifact_feature_dir_for_task returns empty for nonexistent worktree"
+else
+  fail "artifact_feature_dir_for_task returned unexpected value: '$ARTFDIR_EMPTY_CLEAN'"
+fi
+
+# Test: task_artifact_status_field returns empty for legacy task (no artifacts)
+LEGACY_FIELD="$(
+  set -- test-session "$ARTIFACT_STATE_DIR"
+  source "$REPO_DIR/shared/lib/wavemill-status.sh" >/dev/null 2>&1
+  trap - EXIT
+  task_artifact_status_field "HOK-2262" "legacy-task" "$ARTIFACT_STATE_DIR/legacy-task"
+)"
+LEGACY_FIELD_CLEAN="$(printf '%s' "$LEGACY_FIELD" | strip_ansi | tr -d '\r\n')"
+if [[ -z "$LEGACY_FIELD_CLEAN" ]]; then
+  pass "task_artifact_status_field returns empty for legacy task with no artifacts"
+else
+  fail "task_artifact_status_field returned unexpected output for legacy task: '$LEGACY_FIELD_CLEAN'"
+fi
+
+# Test: task_artifact_status_field returns compact status for task with artifacts
+ARTIFACT_FIELD="$(
+  set -- test-session "$ARTIFACT_STATE_DIR"
+  source "$REPO_DIR/shared/lib/wavemill-status.sh" >/dev/null 2>&1
+  trap - EXIT
+  task_artifact_status_field "HOK-2261" "art-task" "$ARTIFACT_STATE_DIR/art-task"
+)"
+ARTIFACT_FIELD_CLEAN="$(printf '%s' "$ARTIFACT_FIELD" | strip_ansi | tr -d '\r\n')"
+if [[ "$ARTIFACT_FIELD_CLEAN" == art:* ]]; then
+  pass "task_artifact_status_field returns compact art: line for task with artifacts"
+else
+  fail "task_artifact_status_field did not return art: line for artifact task: '$ARTIFACT_FIELD_CLEAN'"
+fi
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 
 if (( FAIL > 0 )); then

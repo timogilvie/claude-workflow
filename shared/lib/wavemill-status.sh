@@ -658,6 +658,93 @@ render_task_detail_lines() {
   done <<< "$detail_block"
 }
 
+# ── Normalized artifact status integration ────────────────────────────────
+
+# Resolve the feature directory for a task given its worktree and slug.
+# Prefers <worktree>/features/<slug>; falls back to worktree itself when it
+# directly contains normalized artifact files.
+artifact_feature_dir_for_task() {
+  local worktree="${1:-}" slug="${2:-}"
+  [[ -n "$worktree" && -n "$slug" ]] || return 0
+
+  local candidate="$worktree/features/$slug"
+  if [[ -d "$candidate" ]]; then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+
+  # Only use the worktree itself when it has at least one artifact file
+  for f in task-contract.json feature-state.json trace.jsonl .trace-context.json; do
+    if [[ -f "$worktree/$f" ]]; then
+      printf '%s\n' "$worktree"
+      return 0
+    fi
+  done
+}
+
+# Run a command with a wall-clock timeout (macOS-compatible).
+# Returns the command's exit code, or 124 on timeout.
+artifact_status_with_timeout() {
+  local secs="$1"
+  shift
+
+  if command -v timeout &>/dev/null; then
+    timeout "$secs" "$@"
+    return $?
+  fi
+  if command -v gtimeout &>/dev/null; then
+    gtimeout "$secs" "$@"
+    return $?
+  fi
+
+  # Fallback: background + watchdog (no sleep loop in caller)
+  "$@" &
+  local pid=$!
+  ( sleep "$secs" && kill "$pid" 2>/dev/null ) >/dev/null 2>&1 &
+  local wd=$!
+  wait "$pid" 2>/dev/null
+  local rc=$?
+  kill "$wd" 2>/dev/null || true
+  return "$rc"
+}
+
+# Get the compact artifact status field for a task row.
+# Returns empty when no feature directory or no artifact files are found.
+# Invokes the TypeScript tool with a short timeout to keep the dashboard fast.
+task_artifact_status_field() {
+  local issue="${1:-}" slug="${2:-}" worktree="${3:-}"
+
+  local feature_dir
+  feature_dir="$(artifact_feature_dir_for_task "$worktree" "$slug")"
+  [[ -n "$feature_dir" ]] || return 0
+
+  # Skip the tool invocation when no artifact files are present
+  local found=0
+  for f in task-contract.json feature-state.json trace.jsonl .trace-context.json; do
+    [[ -f "$feature_dir/$f" ]] && found=1 && break
+  done
+  (( found )) || return 0
+
+  local result
+  result=$(
+    NO_UPDATE_NOTIFIER=1 npm_config_update_notifier=false \
+    artifact_status_with_timeout 5 \
+      npx tsx "$WAVEMILL_REPO_DIR/tools/artifact-status.ts" \
+        --feature-dir "$feature_dir" \
+        --repo "${worktree:-$feature_dir}" \
+        ${issue:+--issue "$issue"} \
+        ${slug:+--slug "$slug"} \
+        --max-width 44 \
+      2>/dev/null
+  ) || true
+
+  # Sanitize: take first line, strip control chars, truncate
+  result="$(printf '%s' "$result" | head -1 | tr -d '\r\000-\010\013-\037\177')"
+  [[ -n "$result" ]] || return 0
+
+  printf '%s\n' "$(truncate_cell "$result" 44)"
+}
+
 truncate_cell() {
   local text="${1:-}" max_len="${2:-0}"
   if (( max_len <= 0 )); then
@@ -1024,8 +1111,16 @@ render_task_row() {
   (( ${#ds} > 22 )) && ds="${ds:0:19}..."
   pane=$(window_index "$issue" "$slug" "$worktree")
 
-  printf "%-10s  %4s  %-22s  %6s  %-12b  %-11b  %b${EL}\n" \
-    "$issue" "$pane" "$ds" "$t" "$phase_str" "$st_str" "$pr_str" >> "$FRAME"
+  local artifact_str=""
+  artifact_str="$(task_artifact_status_field "$issue" "$slug" "$worktree")" || true
+
+  if [[ -n "$artifact_str" ]]; then
+    printf "%-10s  %4s  %-22s  %6s  %-12b  %-11b  %-12b  %s${EL}\n" \
+      "$issue" "$pane" "$ds" "$t" "$phase_str" "$st_str" "$pr_str" "$artifact_str" >> "$FRAME"
+  else
+    printf "%-10s  %4s  %-22s  %6s  %-12b  %-11b  %b${EL}\n" \
+      "$issue" "$pane" "$ds" "$t" "$phase_str" "$st_str" "$pr_str" >> "$FRAME"
+  fi
 
   if [[ -n "$coding_auto_detail" ]]; then
     reported="$coding_auto_detail"
