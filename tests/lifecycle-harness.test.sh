@@ -141,9 +141,17 @@ harness_extract_real_functions() {
     blocked_completion_should_announce \
     mark_blocked_completion_announced \
     blocked_completion_current_head \
+    coding_output_dirty_paths \
     blocked_completion_commit_matches_head \
     blocked_completion_auto_allowed_dirty_path \
     blocked_completion_worktree_clean_for_auto \
+    coding_uncommitted_output_announce_marker \
+    coding_uncommitted_output_should_announce \
+    mark_coding_uncommitted_output_announced \
+    clear_coding_uncommitted_output_attention \
+    coding_compare_commit_counts \
+    write_coding_uncommitted_output_artifact \
+    guard_coding_complete_handoff \
     blocked_completion_validate_for_advance \
     complete_coding_advance \
     auto_advance_blocked_completion \
@@ -1161,6 +1169,30 @@ EOF
   check_not_contains "coding complete wins: no blocked-attention log" "$(kv_value "$tick" log_output)" "needs attention:"
 }
 
+test_coding_complete_dirty_worktree_without_commits_needs_attention() {
+  local slug="coding-complete-uncommitted-output"
+  local issue="HOK-2266-UNCOMMITTED"
+  local repo tick feature_dir
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  feature_dir="$repo/features/$slug"
+
+  touch "$feature_dir/.coding-complete"
+  printf 'pending implementation\n' > "$repo/src-uncommitted.ts"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
+
+  check_eq "uncommitted output: phase stays coding" "coding" "$(kv_value "$tick" phase)"
+  check_eq "uncommitted output: coding stage stays running" "running" "$(harness_read_stage_status "$repo" "$slug" coding)"
+  check_eq "uncommitted output: needs-user attention set" "needs-user" "$(kv_value "$tick" attention)"
+  check_eq "uncommitted output: task remains active" "1" "$(kv_value "$tick" active_count)"
+  check_not_contains "uncommitted output: review does not launch" "$(kv_value "$tick" log_output)" "Launching review phase"
+  check_contains "uncommitted output: actionable log emitted" "$(kv_value "$tick" log_output)" "branch has no commits beyond main and worktree still contains uncommitted coding output"
+  check_file_exists "uncommitted output: artifact written" "$feature_dir/.coding-uncommitted-output.json"
+  check_file_exists "uncommitted output: dedupe marker written" "$feature_dir/.coding-uncommitted-output-announced"
+}
+
 test_coding_blocked_completion_malformed_json_falls_back() {
   local slug="coding-blocked-completion-malformed"
   local issue="HOK-1642-MALFORMED"
@@ -1370,6 +1402,25 @@ test_misplaced_coding_complete_marker_is_recovered() {
   check_contains "misplaced marker: warning logged" "$(kv_value "$tick" warn_output)" "Recovered misplaced .coding-complete"
 }
 
+test_root_level_coding_complete_marker_is_recovered() {
+  local slug="root-level-coding-complete"
+  local issue="HOK-2264-ROOT"
+  local repo feature_dir tick
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  feature_dir="$repo/features/$slug"
+  touch "$repo/.coding-complete"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
+
+  check_eq "root marker: coding stage becomes completed" "completed" "$(harness_read_stage_status "$repo" "$slug" coding)"
+  check_file_exists "root marker: expected marker recovered" "$feature_dir/.coding-complete"
+  check_file_exists "root marker: recovery audit written" "$feature_dir/.coding-marker-recovered.json"
+  check_eq "root marker: audit found path" ".coding-complete" "$(jq -r '.found' "$feature_dir/.coding-marker-recovered.json")"
+  check_contains "root marker: warning logged" "$(kv_value "$tick" warn_output)" "Recovered misplaced .coding-complete from .coding-complete"
+}
+
 echo "=== Mill Lifecycle: Planning to Coding Handoff ==="
 harness_extract_real_functions
 
@@ -1392,6 +1443,7 @@ test_coding_blocked_completion_auto_advances_when_valid
 test_coding_blocked_completion_dedupes_same_artifact
 test_coding_blocked_completion_reannounces_on_mtime_change
 test_coding_complete_wins_over_blocked_completion
+test_coding_complete_dirty_worktree_without_commits_needs_attention
 test_coding_blocked_completion_malformed_json_falls_back
 test_coding_blocked_completion_missing_required_field_does_not_auto_advance
 test_coding_blocked_completion_empty_passing_checks_does_not_auto_advance
@@ -1399,6 +1451,7 @@ test_coding_blocked_completion_stale_commit_does_not_auto_advance
 test_coding_blocked_completion_dirty_worktree_does_not_auto_advance
 test_coding_blocked_completion_dedupes_when_stat_unavailable
 test_misplaced_coding_complete_marker_is_recovered
+test_root_level_coding_complete_marker_is_recovered
 
 echo ""
 if [[ "$FAIL" -eq 0 ]]; then

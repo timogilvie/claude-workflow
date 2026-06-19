@@ -305,8 +305,7 @@ const DEFAULT_ROUTER_OPTIONS = {
  *
  * Resolution order:
  *   1. Explicit agentMap entry
- *   2. Prefix heuristic (claude- prefix = claude, gpt-/o prefix = codex,
- *      OpenRouter launch-priority prefixes = claude-openrouter)
+ *   2. Prefix heuristic (claude- prefix = claude, gpt-/o prefix = codex)
  *   3. defaultAgent fallback
  */
 export function resolveAgent(
@@ -315,14 +314,11 @@ export function resolveAgent(
   defaultAgent: string,
   repoDir?: string,
 ): string {
-  if (agentMap[modelId]) return agentMap[modelId];
+  if (agentMap[modelId] && agentMap[modelId] !== 'claude-openrouter') return agentMap[modelId];
   const registry = repoDir ? getEffectiveRegistry(repoDir) : DEFAULT_MODEL_REGISTRY;
   const capabilities = getModel(registry, modelId);
-  if (capabilities?.agent) return capabilities.agent;
+  if (capabilities?.agent && capabilities.agent !== 'claude-openrouter') return capabilities.agent;
   if (modelId.startsWith('claude-')) return 'claude';
-  if (/^(qwen|kimi|llama|mistral|devstral|grok|mimo)-/.test(modelId) || /^gemini-2\.[05]-/.test(modelId)) {
-    return 'claude-openrouter';
-  }
   if (modelId.startsWith('gpt-') || /^o\d/.test(modelId)) return 'codex';
   if (isDeepSeekLikeModelId(modelId)) {
     const configured = configuredDeepSeekModelIds(registry);

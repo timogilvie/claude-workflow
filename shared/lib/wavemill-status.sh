@@ -292,10 +292,16 @@ coding_blocked_completion_detail() {
   local worktree="$1" slug="$2" issue="$3"
   local feature_dir="$worktree/features/$slug"
   local artifact_record summary reason artifact_mtime
-  local auto_detail
+  local auto_detail uncommitted_detail
 
   auto_detail="$(coding_auto_advance_detail "$worktree" "$slug" "$issue")"
   [[ -z "$auto_detail" ]] || return 0
+
+  uncommitted_detail="$(coding_uncommitted_output_detail "$worktree" "$slug" "$issue")"
+  if [[ -n "$uncommitted_detail" ]]; then
+    printf '%s\n' "$uncommitted_detail"
+    return 0
+  fi
 
   artifact_record="$(read_blocked_completion "$feature_dir" "$issue")"
   [[ -n "$artifact_record" ]] || return 0
@@ -303,6 +309,19 @@ coding_blocked_completion_detail() {
   IFS=$'\001' read -r summary reason artifact_mtime <<< "$artifact_record"
   summary="$(truncate_blocked_completion_summary "$summary")"
   printf '%s needs attention: %s. Type "advance %s" to launch review.\n' "$issue" "$summary" "$issue"
+}
+
+coding_uncommitted_output_detail() {
+  local worktree="$1" slug="$2" issue="$3"
+  local feature_dir="$worktree/features/$slug"
+  local artifact_record summary reason action artifact_mtime
+
+  artifact_record="$(read_coding_uncommitted_output "$feature_dir")"
+  [[ -n "$artifact_record" ]] || return 0
+
+  IFS=$'\001' read -r summary reason action artifact_mtime <<< "$artifact_record"
+  summary="$(truncate_blocked_completion_summary "$summary")"
+  printf '%s needs attention: %s. %s\n' "$issue" "$summary" "$action"
 }
 
 coding_auto_advance_detail() {

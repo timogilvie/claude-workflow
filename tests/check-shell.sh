@@ -1567,6 +1567,55 @@ else
   fail "review prompt is missing route provenance guidance"
 fi
 
+# HOK-2265: portable timeout guidance — source files must omit the ambiguous phrase
+for src_file in \
+  "$REPO_DIR/tools/prompts/review-phase.md" \
+  "$REPO_DIR/tools/prompts/self-review-instructions.md" \
+  "$REPO_DIR/commands/bugfix.md" \
+; do
+  src_name="$(basename "$(dirname "$src_file")")/$(basename "$src_file")"
+  if grep -q 'set a 600s timeout on your Bash tool call' "$src_file"; then
+    fail "$src_name still contains ambiguous 'set a 600s timeout on your Bash tool call'"
+  else
+    pass "$src_name omits ambiguous 600s timeout phrasing"
+  fi
+  if grep -q 'timeout 600s' "$src_file"; then
+    fail "$src_name still contains 'timeout 600s' command-prefix pattern"
+  else
+    pass "$src_name omits 'timeout 600s' command-prefix pattern"
+  fi
+done
+
+# HOK-2265: rendered review prompts must use portable timeout guidance
+for rendered in \
+  "$PROMPT_RENDER_DIR/review-codex.txt" \
+  "$PROMPT_RENDER_DIR/review-claude.txt" \
+  "$PROMPT_RENDER_DIR/review-survival.txt" \
+  "$PROMPT_RENDER_DIR/review-constrained.txt" \
+; do
+  rname="$(basename "$rendered")"
+  if grep -q 'set a 600s timeout on your Bash tool call' "$rendered"; then
+    fail "$rname still contains ambiguous 'set a 600s timeout on your Bash tool call'"
+  else
+    pass "$rname omits ambiguous 600s timeout phrasing"
+  fi
+  if grep -q 'timeout 600s' "$rendered"; then
+    fail "$rname still contains 'timeout 600s' command-prefix pattern"
+  else
+    pass "$rname omits 'timeout 600s' command-prefix pattern"
+  fi
+  if grep -q 'built-in timeout' "$rendered" && grep -q 'timeout: 600000' "$rendered"; then
+    pass "$rname contains portable built-in timeout guidance"
+  else
+    fail "$rname is missing portable built-in timeout guidance"
+  fi
+  if grep -q 'not installed by default on macOS' "$rendered"; then
+    pass "$rname contains macOS portability warning"
+  else
+    fail "$rname is missing macOS portability warning"
+  fi
+done
+
 TMUX_CAPTURE=()
 tmux() {
   if [[ "${1:-}" == "send-keys" ]]; then

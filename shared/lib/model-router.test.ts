@@ -24,6 +24,11 @@ describe('model-router resolveAgent', () => {
     assert.equal(resolveAgent('gpt-5.4', {}, 'claude'), 'codex');
   });
 
+  it('does not route OpenRouter aliases through the disabled claude-openrouter shim', () => {
+    assert.equal(resolveAgent('qwen-3-coder', {}, 'codex'), 'codex');
+    assert.equal(resolveAgent('qwen-3-coder', { 'qwen-3-coder': 'claude-openrouter' }, 'codex'), 'codex');
+  });
+
   it('computes success rate with the shared eval success policy', () => {
     const stats = aggregateEvalHistory([
       {

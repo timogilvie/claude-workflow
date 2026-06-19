@@ -3533,6 +3533,29 @@ blocked_completion_current_head() {
   git -C "$worktree" rev-parse HEAD 2>/dev/null || true
 }
 
+coding_output_dirty_paths() {
+  local worktree="$1" slug="$2"
+  local status_lines line path normalized_path
+
+  status_lines="$(git -C "$worktree" status --porcelain --untracked-files=all 2>/dev/null || true)"
+  [[ -z "$status_lines" ]] && return 0
+
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    path="${line#?? }"
+    if [[ "$path" == *" -> "* ]]; then
+      path="${path##* -> }"
+    fi
+    normalized_path="${path#./}"
+
+    if blocked_completion_auto_allowed_dirty_path "$normalized_path" "$slug"; then
+      continue
+    fi
+
+    printf '%s\n' "$normalized_path"
+  done <<< "$status_lines"
+}
+
 blocked_completion_commit_matches_head() {
   local artifact_commit="${1:-}" head="${2:-}"
 
@@ -3573,26 +3596,127 @@ blocked_completion_auto_allowed_dirty_path() {
 
 blocked_completion_worktree_clean_for_auto() {
   local worktree="$1" slug="$2"
-  local status_lines line path normalized_path
+  [[ -z "$(coding_output_dirty_paths "$worktree" "$slug")" ]]
+}
 
-  status_lines="$(git -C "$worktree" status --porcelain --untracked-files=all 2>/dev/null || true)"
-  [[ -z "$status_lines" ]] && return 0
+coding_uncommitted_output_announce_marker() {
+  local feature_dir="$1"
+  printf '%s\n' "$feature_dir/.coding-uncommitted-output-announced"
+}
 
-  while IFS= read -r line; do
-    [[ -z "$line" ]] && continue
-    path="${line#?? }"
-    if [[ "$path" == *" -> "* ]]; then
-      path="${path##* -> }"
-    fi
-    normalized_path="${path#./}"
+coding_uncommitted_output_should_announce() {
+  local feature_dir="$1" artifact_mtime="${2:-}"
+  local marker last_announced effective_mtime
 
-    if blocked_completion_auto_allowed_dirty_path "$normalized_path" "$slug"; then
-      continue
-    fi
+  effective_mtime="${artifact_mtime:-UNKNOWN}"
+  marker="$(coding_uncommitted_output_announce_marker "$feature_dir")"
+  [[ -f "$marker" ]] || return 0
 
+  last_announced="$(head -1 "$marker" 2>/dev/null | tr -d '\r')"
+  [[ "$last_announced" != "$effective_mtime" ]]
+}
+
+mark_coding_uncommitted_output_announced() {
+  local feature_dir="$1" artifact_mtime="${2:-}"
+  local marker tmp_file effective_mtime
+
+  effective_mtime="${artifact_mtime:-UNKNOWN}"
+  marker="$(coding_uncommitted_output_announce_marker "$feature_dir")"
+  tmp_file="$(mktemp "$feature_dir/.coding-uncommitted-output-announced.tmp.XXXXXX" 2>/dev/null)" || return 0
+  printf '%s\n' "$effective_mtime" > "$tmp_file" && mv "$tmp_file" "$marker" 2>/dev/null || rm -f "$tmp_file"
+}
+
+clear_coding_uncommitted_output_attention() {
+  local feature_dir="$1"
+  rm -f "$(coding_uncommitted_output_artifact_path "$feature_dir")" "$(coding_uncommitted_output_announce_marker "$feature_dir")"
+}
+
+coding_compare_commit_counts() {
+  local worktree="$1" base_branch="$2"
+  git -C "$worktree" rev-list --left-right --count "$base_branch...HEAD" 2>/dev/null || printf '0\t0\n'
+}
+
+write_coding_uncommitted_output_artifact() {
+  local issue="$1" feature_dir="$2" base_branch="$3" ahead_count="$4" behind_count="$5" dirty_paths_raw="${6:-}"
+  local artifact slug artifact_tmp first_path dirty_paths_json
+
+  artifact="$(coding_uncommitted_output_artifact_path "$feature_dir")"
+  slug="$(basename "$feature_dir")"
+  artifact_tmp="$(mktemp "$artifact.tmp.XXXXXX" 2>/dev/null)" || return 1
+  first_path="$(printf '%s\n' "$dirty_paths_raw" | head -1)"
+  dirty_paths_json="$(printf '%s\n' "$dirty_paths_raw" | jq -R . | jq -s . 2>/dev/null || printf '[]')"
+
+  if ! jq -n \
+    --arg issue "$issue" \
+    --arg slug "$slug" \
+    --arg baseBranch "$base_branch" \
+    --arg reason "coding_output_not_committed" \
+    --arg summary "coding completed marker detected, but branch has no commits beyond $base_branch and worktree still contains uncommitted coding output" \
+    --arg action "Commit the coding output, then retry review." \
+    --arg firstDirtyPath "$first_path" \
+    --argjson aheadCount "$ahead_count" \
+    --argjson behindCount "$behind_count" \
+    --argjson dirtyPaths "$dirty_paths_json" \
+    --arg detectedAt "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+    '{
+      issue: $issue,
+      slug: $slug,
+      reason: $reason,
+      baseBranch: $baseBranch,
+      aheadCount: $aheadCount,
+      behindCount: $behindCount,
+      dirtyPaths: $dirtyPaths,
+      firstDirtyPath: (if ($firstDirtyPath | length) > 0 then $firstDirtyPath else null end),
+      summary: $summary,
+      action: $action,
+      detectedAt: $detectedAt
+    }' > "$artifact_tmp"; then
+    rm -f "$artifact_tmp"
     return 1
-  done <<< "$status_lines"
+  fi
 
+  mv "$artifact_tmp" "$artifact" 2>/dev/null || {
+    rm -f "$artifact_tmp"
+    return 1
+  }
+}
+
+guard_coding_complete_handoff() {
+  local issue="$1" feature_dir="$2" worktree="$3" base_branch="$4"
+  local slug dirty_paths compare_counts behind_count ahead_count artifact_record summary reason action artifact_mtime
+  local win
+
+  slug="$(basename "$feature_dir")"
+  dirty_paths="$(coding_output_dirty_paths "$worktree" "$slug")"
+  if [[ -z "$dirty_paths" ]]; then
+    clear_coding_uncommitted_output_attention "$feature_dir"
+    return 1
+  fi
+
+  compare_counts="$(coding_compare_commit_counts "$worktree" "$base_branch")"
+  behind_count="${compare_counts%%[[:space:]]*}"
+  ahead_count="${compare_counts##*[[:space:]]}"
+  [[ "$behind_count" =~ ^[0-9]+$ ]] || behind_count=0
+  [[ "$ahead_count" =~ ^[0-9]+$ ]] || ahead_count=0
+
+  if [[ "$ahead_count" != "0" ]]; then
+    clear_coding_uncommitted_output_attention "$feature_dir"
+    return 1
+  fi
+
+  write_coding_uncommitted_output_artifact "$issue" "$feature_dir" "$base_branch" "$ahead_count" "$behind_count" "$dirty_paths" || true
+  artifact_record="$(read_coding_uncommitted_output "$feature_dir")"
+  IFS=$'\001' read -r summary reason action artifact_mtime <<< "$artifact_record"
+  win="$issue-$slug"
+
+  if coding_uncommitted_output_should_announce "$feature_dir" "$artifact_mtime"; then
+    log "status" "$issue needs attention: $summary. $action"
+    mark_coding_uncommitted_output_announced "$feature_dir" "$artifact_mtime"
+  fi
+
+  write_stage_result "$feature_dir" "coding" "running" "${current_agent:-}" "$(resolve_stage_result_model "$feature_dir" "coding" "claude-opus-4-7")" "Awaiting committed coding output before review"
+  set_window_attention_state "$win" "needs-user"
+  active_count=$((active_count + 1))
   return 0
 }
 
@@ -3888,10 +4012,17 @@ recover_misplaced_coding_complete_marker() {
       -path "$expected_marker" -prune -o \
       -path "*/features/$slug/.coding-complete" -type f -print -quit 2>/dev/null || true
   )"
+  if [[ -z "$misplaced_marker" && -f "$worktree/.coding-complete" ]]; then
+    misplaced_marker="$worktree/.coding-complete"
+  fi
   [[ -n "$misplaced_marker" ]] || return 1
   [[ "$misplaced_marker" != "$expected_marker" ]] || return 1
 
-  rel_marker="${misplaced_marker#"$worktree"/}"
+  if [[ "$misplaced_marker" == "$worktree/.coding-complete" ]]; then
+    rel_marker=".coding-complete"
+  else
+    rel_marker="${misplaced_marker#"$worktree"/}"
+  fi
   recovered_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   audit_path="$feature_dir/.coding-marker-recovered.json"
   audit_tmp="$(mktemp "$audit_path.tmp.XXXXXX" 2>/dev/null)" || {
@@ -3926,6 +4057,8 @@ recover_misplaced_coding_complete_marker() {
     log_warn "$issue → Found misplaced .coding-complete at $rel_marker but could not create expected marker"
     return 1
   fi
+
+  rm -f "$misplaced_marker" 2>/dev/null || true
 
   log_warn "$issue → Recovered misplaced .coding-complete from $rel_marker"
   return 0
@@ -4991,6 +5124,9 @@ refresh_ready_merge_queue_tick() {
     [[ -n "$current_main" ]] || continue
     if [[ "$(ready_queue_state "$state_dir")" != "merge-candidate" ]]; then
       promote_merge_candidate "$issue" "$state_dir" "$current_main"
+      local pr_for_log
+      pr_for_log="${PR_BY_ISSUE[$issue]:-}"
+      log "status" "✓ $issue → PR ${pr_for_log:+#$pr_for_log }promoted to merge candidate (clean/green, base current)"
     fi
   done
 }
@@ -9507,7 +9643,11 @@ monitor_issue_state() {
           fi
 
           if [[ "$resolved_phase" == "review" ]]; then
+            if guard_coding_complete_handoff "$ISSUE" "$FEATURE_DIR" "${WORKTREE_ROOT}/${SLUG}" "$BASE_BRANCH"; then
+              return 0
+            fi
             validate_coding_phase_output "$BRANCH"
+            clear_coding_uncommitted_output_attention "$FEATURE_DIR"
             # Mark coding as completed (HOK-1177)
             write_stage_result "$FEATURE_DIR" "coding" "completed" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "coding" "claude-opus-4-7")"
 
@@ -9561,8 +9701,12 @@ monitor_issue_state() {
           if [[ "$coding_status" == "running" ]]; then
             recover_misplaced_coding_complete_marker "$ISSUE" "${WORKTREE_ROOT}/${SLUG}" "$FEATURE_DIR" "$SLUG" || true
             if [[ -f "$FEATURE_DIR/.coding-complete" ]]; then
+              if guard_coding_complete_handoff "$ISSUE" "$FEATURE_DIR" "${WORKTREE_ROOT}/${SLUG}" "$BASE_BRANCH"; then
+                return 0
+              fi
               validate_coding_phase_output "$BRANCH"
               log "status" "$ISSUE → .coding-complete detected, marking coding as completed"
+              clear_coding_uncommitted_output_attention "$FEATURE_DIR"
               write_stage_result "$FEATURE_DIR" "coding" "completed" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "coding" "claude-opus-4-7")"
               # Next iteration will detect resolved_phase == "review" and launch review
               active_count=$((active_count + 1))
@@ -10232,6 +10376,9 @@ monitor_issue_state() {
         return 0
       fi
 
+      if merge_queue_enabled && [[ "$queue_state" == "merge-candidate" ]]; then
+        log "debug" "✓ $ISSUE → PR #$PR is a clean/green merge candidate (waiting in merge lane)"
+      fi
       set_window_attention_state "$WIN" "clear"
       active_count=$((active_count + 1))
       return 0
