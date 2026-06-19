@@ -3,6 +3,7 @@ import type {
   Context,
   Message,
   TextContent,
+  ThinkingContent,
   ToolCall,
   ToolResultMessage,
   Usage,
@@ -10,11 +11,28 @@ import type {
 } from '@earendil-works/pi-ai';
 import type { SessionModelUsage } from '../session-adapters.ts';
 
-export type NativeAgentRole = 'system' | 'user' | 'assistant' | 'tool_result';
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function assertNever(x: never): never {
+  throw new Error(`Unhandled variant: ${JSON.stringify(x)}`);
+}
+
+// ---------------------------------------------------------------------------
+// Native content types
+// ---------------------------------------------------------------------------
 
 export interface NativeTextContent {
   type: 'text';
   text: string;
+}
+
+export interface NativeThinkingContent {
+  type: 'thinking';
+  thinking: string;
+  thinkingSignature?: string;
+  redacted?: boolean;
 }
 
 export interface NativeToolCallContent {
@@ -22,6 +40,7 @@ export interface NativeToolCallContent {
   id: string;
   name: string;
   arguments: Record<string, unknown>;
+  thoughtSignature?: string;
 }
 
 export interface NativeToolResultContent {
@@ -34,8 +53,150 @@ export interface NativeToolResultContent {
 
 export type NativeMessageContent =
   | NativeTextContent
+  | NativeThinkingContent
   | NativeToolCallContent
   | NativeToolResultContent;
+
+// ---------------------------------------------------------------------------
+// Standalone tool types  (canonical; moved from provider.ts)
+// ---------------------------------------------------------------------------
+
+export interface NativeToolCall {
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+}
+
+export interface NativeToolResult {
+  toolCallId: string;
+  toolName: string;
+  content: NativeTextContent[];
+  details?: unknown;
+  isError?: boolean;
+  timestamp?: number;
+}
+
+export interface AgentToolSchema {
+  name: string;
+  description: string;
+  parameters: unknown;
+}
+
+/** Backward-compatible alias; prefer AgentToolSchema for new code. */
+export type NativeToolSchema = AgentToolSchema;
+
+// ---------------------------------------------------------------------------
+// Native usage – structurally matches Pi Usage to keep round-trips lossless
+// ---------------------------------------------------------------------------
+
+export interface NativeUsage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  cacheWrite1h?: number;
+  totalTokens: number;
+  cost: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    total: number;
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Canonical AgentMessage variants
+// ---------------------------------------------------------------------------
+
+export interface NativeUserMessage {
+  role: 'user';
+  content: string | NativeTextContent[];
+  timestamp?: number;
+}
+
+/**
+ * AgentTurn is the canonical Wavemill representation of an assistant response.
+ * It preserves all Pi metadata fields needed for a lossless round-trip.
+ */
+export interface AgentTurn {
+  role: 'assistant';
+  content: (NativeTextContent | NativeThinkingContent | NativeToolCallContent)[];
+  api: string;
+  provider: string;
+  model: string;
+  responseModel?: string;
+  responseId?: string;
+  usage: NativeUsage;
+  stopReason: string;
+  errorMessage?: string;
+  timestamp: number;
+  raw?: unknown;
+}
+
+export interface NativeToolResultMessage {
+  role: 'tool_result';
+  toolCallId: string;
+  toolName: string;
+  content: NativeTextContent[];
+  details?: unknown;
+  isError: boolean;
+  timestamp?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Declaration-merging extension hook for Wavemill-specific message types
+// ---------------------------------------------------------------------------
+
+/**
+ * Augment this interface to add custom message variants to AgentMessage.
+ *
+ * @example
+ * ```ts
+ * declare module './messages.ts' {
+ *   interface CustomAgentMessages {
+ *     artifact: { role: 'artifact'; artifactId: string };
+ *   }
+ * }
+ * ```
+ */
+export interface CustomAgentMessages {}
+
+// ---------------------------------------------------------------------------
+// Canonical AgentMessage union
+// ---------------------------------------------------------------------------
+
+export type AgentMessage =
+  | NativeUserMessage
+  | AgentTurn
+  | NativeToolResultMessage
+  | CustomAgentMessages[keyof CustomAgentMessages];
+
+// ---------------------------------------------------------------------------
+// Session-level types
+// ---------------------------------------------------------------------------
+
+export interface NativeAgentSessionHeader {
+  sessionId: string;
+  model: string;
+  api: string;
+  provider: string;
+  timestamp: number;
+}
+
+export type NativeAgentEvent =
+  | { type: 'start'; raw: unknown }
+  | { type: 'text_delta'; text: string; raw: unknown }
+  | { type: 'tool_call'; toolCall: NativeToolCall; raw: unknown }
+  | { type: 'done'; finishReason: string; raw: unknown }
+  | { type: 'error'; finishReason: string; raw: unknown };
+
+// ---------------------------------------------------------------------------
+// Backward-compatible "history" types used by createPiContext
+// (include system role and simpler content shape)
+// ---------------------------------------------------------------------------
+
+export type NativeAgentRole = 'system' | 'user' | 'assistant' | 'tool_result';
 
 export interface NativeAgentMessage {
   role: NativeAgentRole;
@@ -43,12 +204,15 @@ export interface NativeAgentMessage {
   timestamp?: number;
 }
 
-export interface NativeAssistantMessage {
-  role: 'assistant';
-  content: (NativeTextContent | NativeToolCallContent)[];
-  timestamp: number;
-  raw: unknown;
-}
+/**
+ * Backward-compatible alias; AgentTurn is the canonical name.
+ * provider.ts ProviderTurnResult.message continues to use this name.
+ */
+export type NativeAssistantMessage = AgentTurn;
+
+// ---------------------------------------------------------------------------
+// Usage helpers
+// ---------------------------------------------------------------------------
 
 export function mapPiUsageToSessionModelUsage(
   usage: Partial<Usage> | null | undefined,
@@ -59,6 +223,186 @@ export function mapPiUsageToSessionModelUsage(
     cacheReadTokens: usage?.cacheRead ?? 0,
     outputTokens: usage?.output ?? 0,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Bidirectional Pi ↔ Native mapping
+// ---------------------------------------------------------------------------
+
+export function fromPiMessage(message: Message): AgentMessage {
+  switch (message.role) {
+    case 'user':
+      return fromPiUserMessage(message);
+    case 'assistant':
+      return fromPiAssistantMessage(message);
+    case 'toolResult':
+      return fromPiToolResultMessage(message);
+    default:
+      return assertNever(message);
+  }
+}
+
+export function toPiMessage(message: AgentMessage): Message {
+  switch (message.role) {
+    case 'user':
+      return toPiUserMessage(message);
+    case 'assistant':
+      return toPiAssistantMessage(message);
+    case 'tool_result':
+      return toPiToolResultMessage(message);
+    default:
+      throw new Error(
+        `toPiMessage: no Pi representation for custom message variant with role "${(message as { role: unknown }).role}"`,
+      );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// fromPi helpers
+// ---------------------------------------------------------------------------
+
+function fromPiUserMessage(message: UserMessage): NativeUserMessage {
+  if (typeof message.content === 'string') {
+    return { role: 'user', content: message.content, timestamp: message.timestamp };
+  }
+  return {
+    role: 'user',
+    content: message.content
+      .filter((c) => c.type === 'text')
+      .map((c) => ({ type: 'text', text: c.text }) satisfies NativeTextContent),
+    timestamp: message.timestamp,
+  };
+}
+
+function fromPiAssistantMessage(message: AssistantMessage): AgentTurn {
+  const turn: AgentTurn = {
+    role: 'assistant',
+    content: message.content.flatMap(
+      (c): (NativeTextContent | NativeThinkingContent | NativeToolCallContent)[] => {
+        if (c.type === 'text') {
+          return [{ type: 'text', text: c.text }];
+        }
+        if (c.type === 'thinking') {
+          const block: NativeThinkingContent = { type: 'thinking', thinking: c.thinking };
+          if (c.thinkingSignature !== undefined) block.thinkingSignature = c.thinkingSignature;
+          if (c.redacted !== undefined) block.redacted = c.redacted;
+          return [block];
+        }
+        if (c.type === 'toolCall') {
+          const block: NativeToolCallContent = {
+            type: 'tool_call',
+            id: c.id,
+            name: c.name,
+            arguments: c.arguments as Record<string, unknown>,
+          };
+          if (c.thoughtSignature !== undefined) block.thoughtSignature = c.thoughtSignature;
+          return [block];
+        }
+        return [];
+      },
+    ),
+    api: message.api,
+    provider: message.provider,
+    model: message.model,
+    usage: message.usage,
+    stopReason: message.stopReason,
+    timestamp: message.timestamp,
+  };
+  if (message.responseModel !== undefined) turn.responseModel = message.responseModel;
+  if (message.responseId !== undefined) turn.responseId = message.responseId;
+  if (message.errorMessage !== undefined) turn.errorMessage = message.errorMessage;
+  return turn;
+}
+
+function fromPiToolResultMessage(message: ToolResultMessage): NativeToolResultMessage {
+  const result: NativeToolResultMessage = {
+    role: 'tool_result',
+    toolCallId: message.toolCallId,
+    toolName: message.toolName,
+    content: message.content
+      .filter((c) => c.type === 'text')
+      .map((c) => ({ type: 'text', text: c.text }) satisfies NativeTextContent),
+    isError: message.isError,
+    timestamp: message.timestamp,
+  };
+  if (message.details !== undefined) result.details = message.details;
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// toPi helpers
+// ---------------------------------------------------------------------------
+
+function toPiUserMessage(message: NativeUserMessage): UserMessage {
+  const content = typeof message.content === 'string'
+    ? message.content
+    : message.content.map((c) => ({ type: 'text', text: c.text }) satisfies TextContent);
+  return {
+    role: 'user',
+    content,
+    timestamp: message.timestamp ?? Date.now(),
+  };
+}
+
+function toPiAssistantMessage(message: AgentTurn): AssistantMessage {
+  const piMsg: AssistantMessage = {
+    role: 'assistant',
+    content: message.content.flatMap(
+      (c): (TextContent | ThinkingContent | ToolCall)[] => {
+        if (c.type === 'text') {
+          return [{ type: 'text', text: c.text }];
+        }
+        if (c.type === 'thinking') {
+          const block: ThinkingContent = { type: 'thinking', thinking: c.thinking };
+          if (c.thinkingSignature !== undefined) block.thinkingSignature = c.thinkingSignature;
+          if (c.redacted !== undefined) block.redacted = c.redacted;
+          return [block];
+        }
+        if (c.type === 'tool_call') {
+          const block: ToolCall = {
+            type: 'toolCall',
+            id: c.id,
+            name: c.name,
+            arguments: c.arguments as Record<string, unknown>,
+          };
+          if (c.thoughtSignature !== undefined) block.thoughtSignature = c.thoughtSignature;
+          return [block];
+        }
+        return assertNever(c);
+      },
+    ),
+    api: message.api,
+    provider: message.provider,
+    model: message.model,
+    usage: message.usage as Usage,
+    stopReason: message.stopReason as AssistantMessage['stopReason'],
+    timestamp: message.timestamp,
+  };
+  if (message.responseModel !== undefined) piMsg.responseModel = message.responseModel;
+  if (message.responseId !== undefined) piMsg.responseId = message.responseId;
+  if (message.errorMessage !== undefined) piMsg.errorMessage = message.errorMessage;
+  return piMsg;
+}
+
+function toPiToolResultMessage(message: NativeToolResultMessage): ToolResultMessage {
+  const piMsg: ToolResultMessage = {
+    role: 'toolResult',
+    toolCallId: message.toolCallId,
+    toolName: message.toolName,
+    content: message.content.map((c) => ({ type: 'text', text: c.text }) satisfies TextContent),
+    isError: message.isError,
+    timestamp: message.timestamp ?? Date.now(),
+  };
+  if (message.details !== undefined) piMsg.details = message.details;
+  return piMsg;
+}
+
+// ---------------------------------------------------------------------------
+// Backward-compatible helpers for createPiContext / provider seam
+// ---------------------------------------------------------------------------
+
+export function toNativeAssistantMessage(message: AssistantMessage): NativeAssistantMessage {
+  return fromPiAssistantMessage(message);
 }
 
 export function createPiContext(
@@ -75,39 +419,17 @@ export function createPiContext(
       continue;
     }
 
-    piMessages.push(toPiMessage(message));
+    piMessages.push(nativeAgentMessageToPi(message));
   }
 
-  return {
-    systemPrompt,
-    messages: piMessages,
-    tools,
-  };
+  return { systemPrompt, messages: piMessages, tools };
 }
 
-export function toNativeAssistantMessage(message: AssistantMessage): NativeAssistantMessage {
-  return {
-    role: 'assistant',
-    content: message.content.flatMap((content) => {
-      if (content.type === 'text') {
-        return [{ type: 'text', text: content.text } satisfies NativeTextContent];
-      }
-      if (content.type === 'toolCall') {
-        return [{
-          type: 'tool_call',
-          id: content.id,
-          name: content.name,
-          arguments: content.arguments,
-        } satisfies NativeToolCallContent];
-      }
-      return [];
-    }),
-    timestamp: message.timestamp,
-    raw: message,
-  };
-}
+// ---------------------------------------------------------------------------
+// Internal helpers for NativeAgentMessage → Pi (thin/history-context path)
+// ---------------------------------------------------------------------------
 
-function toPiMessage(message: NativeAgentMessage): Message {
+function nativeAgentMessageToPi(message: NativeAgentMessage): Message {
   switch (message.role) {
     case 'user':
       return {
@@ -116,11 +438,13 @@ function toPiMessage(message: NativeAgentMessage): Message {
         timestamp: message.timestamp ?? Date.now(),
       } satisfies UserMessage;
     case 'assistant':
-      return toPiAssistantMessage(message);
+      return nativeAgentAssistantToPi(message);
     case 'tool_result':
-      return toPiToolResultMessage(message);
+      return nativeAgentToolResultToPi(message);
     case 'system':
       throw new Error('System messages are represented as Pi context.systemPrompt');
+    default:
+      return assertNever(message.role);
   }
 }
 
@@ -128,28 +452,27 @@ function toPiUserContent(content: NativeAgentMessage['content']): UserMessage['c
   if (typeof content === 'string') {
     return content;
   }
-
   return content
     .filter((item): item is NativeTextContent => item.type === 'text')
     .map((item) => ({ type: 'text', text: item.text }) satisfies TextContent);
 }
 
-function toPiAssistantMessage(message: NativeAgentMessage): AssistantMessage {
-  const content = Array.isArray(message.content) ? message.content : [{ type: 'text', text: message.content }];
+function nativeAgentAssistantToPi(message: NativeAgentMessage): AssistantMessage {
+  const content = Array.isArray(message.content)
+    ? message.content
+    : [{ type: 'text' as const, text: message.content }];
 
   return {
     role: 'assistant',
-    content: content.flatMap((item): (TextContent | ToolCall)[] => {
+    content: content.flatMap((item): (TextContent | ThinkingContent | ToolCall)[] => {
       if (item.type === 'text') {
         return [{ type: 'text', text: item.text }];
       }
+      if (item.type === 'thinking') {
+        return [{ type: 'thinking', thinking: item.thinking, thinkingSignature: item.thinkingSignature, redacted: item.redacted }];
+      }
       if (item.type === 'tool_call') {
-        return [{
-          type: 'toolCall',
-          id: item.id,
-          name: item.name,
-          arguments: item.arguments,
-        }];
+        return [{ type: 'toolCall', id: item.id, name: item.name, arguments: item.arguments as Record<string, unknown> }];
       }
       return [];
     }),
@@ -169,17 +492,16 @@ function toPiAssistantMessage(message: NativeAgentMessage): AssistantMessage {
   };
 }
 
-function toPiToolResultMessage(message: NativeAgentMessage): ToolResultMessage {
+function nativeAgentToolResultToPi(message: NativeAgentMessage): ToolResultMessage {
   const result = firstToolResult(message.content);
   if (!result) {
     throw new Error('tool_result messages require tool_result content');
   }
-
   return {
     role: 'toolResult',
     toolCallId: result.toolCallId,
     toolName: result.toolName,
-    content: result.content.map((item) => ({ type: 'text', text: item.text })),
+    content: result.content.map((item) => ({ type: 'text', text: item.text }) satisfies TextContent),
     isError: result.isError ?? false,
     timestamp: message.timestamp ?? Date.now(),
   };
@@ -189,7 +511,6 @@ function firstToolResult(content: NativeAgentMessage['content']): NativeToolResu
   if (!Array.isArray(content)) {
     return undefined;
   }
-
   return content.find((item): item is NativeToolResultContent => item.type === 'tool_result');
 }
 
@@ -197,7 +518,6 @@ function nativeContentToText(content: NativeAgentMessage['content']): string {
   if (typeof content === 'string') {
     return content;
   }
-
   return content
     .filter((item): item is NativeTextContent => item.type === 'text')
     .map((item) => item.text)
