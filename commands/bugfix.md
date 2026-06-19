@@ -84,7 +84,7 @@ This is a REQUIRED step — do not skip it or substitute your own review.
 
 1. Run the self-review tool (up to 3 iterations):
    IMPORTANT: Run from your current directory (the worktree). Do NOT change directories.
-   IMPORTANT: This tool calls the Claude API and takes 2-5 minutes. You MUST set a 600s timeout on your Bash tool call.
+   IMPORTANT: This tool calls the Claude API and takes 2-5 minutes. Configure your tool's built-in timeout (for Claude Code's Bash tool: `timeout: 600000` — 600000 ms = 10 minutes) so the call is not killed at the default cap. Do NOT prefix the command with the external `timeout` binary — it is not installed by default on macOS and will fail with `command not found: timeout`.
    `npx tsx tools/review-changes.ts main --json`
    - Exit code 0 = review passed → proceed to step 3
    - Exit code 1 = issues found → fix blockers and re-run (step 2)
