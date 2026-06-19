@@ -7179,16 +7179,23 @@ log_fetch_queue_plan_failure() {
   local details step reason
   details="$(cat "$diagnostics_file" 2>/dev/null || true)"
   step="$(printf '%s' "$details" | sed -n 's/.*step=\([^ ]*\).*/\1/p')"
-  reason="$(classify_queue_failure_reason "$step")"
+  reason="$(classify_queue_failure_reason "$step" "$details")"
   [[ -n "$details" ]] && log "debug" "[fetch_queue_plan] failed reason=$reason $details"
 }
 
 classify_queue_failure_reason() {
-  local step="$1"
+  local step="$1" details="${2:-}" lowered
   case "$step" in
     cache_empty|empty_queue)   echo "empty_queue" ;;
     jq_massage_failed)         echo "invalid_input" ;;
-    plan_queue_failed)         echo "cache_refresh_failed" ;;
+    plan_queue_failed)
+      lowered="$(printf '%s' "$details" | tr '[:upper:]' '[:lower:]')"
+      if [[ "$lowered" == *cache* || "$lowered" == *refresh* ]]; then
+        echo "cache_refresh_failed"
+      else
+        echo "dependency_planning_failed"
+      fi
+      ;;
     validation_failed)         echo "invalid_input" ;;
     *)                         echo "unknown" ;;
   esac
@@ -7198,8 +7205,8 @@ get_queue_failure_reason() {
   local diagnostics_file="${1:-}" details step
   [[ -s "$diagnostics_file" ]] || { echo "unknown"; return 0; }
   details="$(cat "$diagnostics_file" 2>/dev/null || true)"
-  step="$(printf '%s' "$details" | sed 's/step=\([^ ]*\).*/\1/')"
-  classify_queue_failure_reason "$step"
+  step="$(printf '%s' "$details" | sed -n 's/.*step=\([^ ]*\).*/\1/p')"
+  classify_queue_failure_reason "$step" "$details"
 }
 
 build_queue_plan_once() {
