@@ -99,6 +99,7 @@ for fn in \
   blocked_completion_current_head \
   blocked_completion_commit_matches_head \
   blocked_completion_auto_allowed_dirty_path \
+  coding_output_dirty_paths \
   blocked_completion_worktree_clean_for_auto \
   blocked_completion_validate_for_advance \
   complete_coding_advance \
