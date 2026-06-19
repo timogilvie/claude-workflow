@@ -103,6 +103,8 @@ run_monitor_case() {
     SAVE_TASK_STATE_CALLS=""
     LOG_OUTPUT=""
     MAIN_SHA_RETURN="current-main-sha"
+    MERGE_QUEUE_ON="false"
+    QUEUE_STATE="ready"
 
     mkdir -p "$WORKTREE_ROOT/$SLUG/features/$SLUG" "$REPO_DIR"
     FEATURE_DIR="$WORKTREE_ROOT/$SLUG/features/$SLUG"
@@ -252,6 +254,30 @@ JSON
 {"stage":"ready","status":"completed","artifacts":{"verdict":"pass","readyBaseSha":"old-sha"}}
 JSON
         ;;
+      ready_merge_candidate_current_base)
+        # HOK-2267: clean/green merge-candidate with current base should NOT re-run
+        # ready checks — the PR is waiting in the merge lane for its turn to merge.
+        CURRENT_PHASE="ready"
+        READY_STATUS="completed"
+        MAIN_SHA_RETURN="same-sha"
+        MERGE_QUEUE_ON="true"
+        QUEUE_STATE="merge-candidate"
+        cat > "$READY_DIR/.ready-result.json" <<JSON
+{"stage":"ready","status":"completed","artifacts":{"verdict":"pass","readyBaseSha":"same-sha","queueState":"merge-candidate"}}
+JSON
+        ;;
+      ready_merge_candidate_main_advanced_not_selected)
+        # When main has advanced and the PR is merge-candidate but NOT currently
+        # selected, the controller marks it stale and waits (no ready re-run).
+        CURRENT_PHASE="ready"
+        READY_STATUS="completed"
+        MAIN_SHA_RETURN="new-sha"
+        MERGE_QUEUE_ON="true"
+        QUEUE_STATE="merge-candidate"
+        cat > "$READY_DIR/.ready-result.json" <<JSON
+{"stage":"ready","status":"completed","artifacts":{"verdict":"pass","readyBaseSha":"old-sha","queueState":"merge-candidate"}}
+JSON
+        ;;
       *)
         echo "unknown case: $CASE_NAME" >&2
         exit 1
@@ -330,8 +356,8 @@ JSON
       return 1
     }
     get_main_head_sha() { printf "%s\n" "$MAIN_SHA_RETURN"; }
-    merge_queue_enabled() { return 1; }
-    ready_queue_state() { printf "%s\n" "ready"; }
+    merge_queue_enabled() { [[ "$MERGE_QUEUE_ON" == "true" ]]; }
+    ready_queue_state() { printf "%s\n" "$QUEUE_STATE"; }
     mark_ready_stale() { :; }
     ready_candidate_selected() { return 1; }
     should_cleanup_closed_pr() { [[ "$CLEANUP_CLOSED_PR" == "true" ]]; }
@@ -481,6 +507,18 @@ check_contains "empty baseSha (legacy record) treated as stale" "$ready_empty_ba
 ready_main_sha_fetch_fails_output="$(run_monitor_case ready_main_sha_fetch_fails)"
 check_contains "main SHA fetch failure skips re-check" "$ready_main_sha_fetch_fails_output" "ready_launches=0"
 check_contains "main SHA fetch failure keeps task active" "$ready_main_sha_fetch_fails_output" "active_count=1"
+
+# HOK-2267: clean/green merge-candidate with current base must not re-run checks
+ready_merge_candidate_current_base_output="$(run_monitor_case ready_merge_candidate_current_base)"
+check_contains "merge-candidate current-base does not re-run ready" "$ready_merge_candidate_current_base_output" "ready_launches=0"
+check_contains "merge-candidate current-base keeps task active" "$ready_merge_candidate_current_base_output" "active_count=1"
+check_contains "merge-candidate current-base clears attention" "$ready_merge_candidate_current_base_output" "attention=clear"
+check_contains "merge-candidate current-base logs clean/green status" "$ready_merge_candidate_current_base_output" "clean/green merge candidate"
+
+ready_merge_candidate_main_advanced_not_selected_output="$(run_monitor_case ready_merge_candidate_main_advanced_not_selected)"
+check_contains "merge-candidate main-advanced not-selected does not re-run ready" "$ready_merge_candidate_main_advanced_not_selected_output" "ready_launches=0"
+check_contains "merge-candidate main-advanced not-selected keeps task active" "$ready_merge_candidate_main_advanced_not_selected_output" "active_count=1"
+check_contains "merge-candidate main-advanced not-selected clears attention" "$ready_merge_candidate_main_advanced_not_selected_output" "attention=clear"
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"

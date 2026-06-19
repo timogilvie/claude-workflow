@@ -152,7 +152,7 @@ test('escalate a long-parked merge-lane PR to needs-user (lane stalled)', () => 
   assert.match(classification.detail, /merge lane appears stalled/i);
 });
 
-test('a selected merge candidate that is clean green still classifies as stuck', () => {
+test('a selected merge candidate that is clean green classifies as waiting-on-merge-lane (not stuck)', () => {
   const classification = classifyReadyTask(
     makeSnapshot({
       idleMinutes: 15,
@@ -163,6 +163,60 @@ test('a selected merge candidate that is clean green still classifies as stuck',
     WATCHDOG_CONFIG,
   );
 
+  // A merge-candidate PR is in the lane waiting for the merge — auto-recovering
+  // it just re-runs ready checks that will pass again, re-arming the watchdog
+  // every 10 minutes indefinitely.
+  assert.equal(classification.kind, 'waiting-on-merge-lane');
+  assert.notEqual(classification.autoRecoverable, true);
+});
+
+test('a long-idle merge candidate escalates to needs-user (lane stalled)', () => {
+  const classification = classifyReadyTask(
+    makeSnapshot({
+      idleMinutes: 35, // >= thresholdMinutes(10) * 3
+      readyArtifacts: { type: 'ready', verdict: 'pass', queueState: 'merge-candidate' },
+    }),
+    makeTruth(),
+    new Date('2026-05-05T12:30:00.000Z'),
+    WATCHDOG_CONFIG,
+  );
+
+  assert.equal(classification.kind, 'needs-user');
+  assert.match(classification.detail, /merge lane appears stalled/i);
+});
+
+test('a completed-ready PR (queueState=ready) with clean green classifies as waiting-on-merge-lane', () => {
+  const classification = classifyReadyTask(
+    makeSnapshot({
+      idleMinutes: 15,
+      readyResultStatus: 'completed',
+      readyArtifacts: { type: 'ready', verdict: 'pass', queueState: 'ready' },
+    }),
+    makeTruth(),
+    new Date('2026-05-05T12:30:00.000Z'),
+    WATCHDOG_CONFIG,
+  );
+
+  // PR passed checks against current base, not yet selected by the merge queue.
+  // Auto-recovering it is needless — the queue will select it on the next tick.
+  assert.equal(classification.kind, 'waiting-on-merge-lane');
+  assert.notEqual(classification.autoRecoverable, true);
+});
+
+test('a running-ready PR with queueState=ready and clean green still classifies as stuck', () => {
+  const classification = classifyReadyTask(
+    makeSnapshot({
+      idleMinutes: 15,
+      readyResultStatus: 'running',
+      readyArtifacts: { type: 'ready', verdict: 'pending', queueState: 'ready' },
+    }),
+    makeTruth(),
+    new Date('2026-05-05T12:30:00.000Z'),
+    WATCHDOG_CONFIG,
+  );
+
+  // A running (not completed) ready stage with queueState=ready is unexpected
+  // for a clean/green PR — classify as stuck so the controller can recover it.
   assert.equal(classification.kind, 'stuck');
 });
 

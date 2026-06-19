@@ -34,11 +34,12 @@ export type ReadyWatchdogClassificationKind =
   | 'needs-user';
 
 /**
- * A PR parked in the merge lane (queueState === 'ready-stale') is idle on
- * purpose: it already passed ready and is waiting its turn to merge. We only
- * escalate such a PR to needs-user once it has been idle for this multiple of
- * the idle threshold without the lane advancing, which indicates the queue
- * itself is stalled rather than this PR simply waiting.
+ * A PR in the merge lane (queueState 'ready-stale', 'merge-candidate', or
+ * 'ready' with a completed result) is idle on purpose: it already passed ready
+ * and is waiting its turn to merge. We only escalate such a PR to needs-user
+ * once it has been idle for this multiple of the idle threshold without the
+ * lane advancing, which indicates the queue itself is stalled rather than this
+ * PR simply waiting.
  */
 const MERGE_LANE_STALL_ESCALATE_MULTIPLIER = 3;
 
@@ -621,15 +622,24 @@ export function classifyReadyTask(
   }
 
   if (isCleanMergeState(githubTruth) && checkSummary.successes > 0) {
-    // A PR parked in the merge lane (it already passed ready, then main
-    // advanced and it wasn't the selected merge candidate) is idle on purpose.
-    // Re-running its ready checks does nothing useful — it's the queue, not the
-    // PR, that hasn't advanced — and "recovering" it resets the ready clock,
-    // which re-arms this very check ~every threshold minutes (observed: one PR
-    // auto-recovered 30 times while clean and green). Treat normal lane-waiting
-    // as benign; only escalate to needs-user once the wait is long enough to
-    // signal the lane itself is stalled.
-    if (snapshot.readyArtifacts?.queueState === 'ready-stale') {
+    // A PR in the merge lane is idle on purpose: it already passed ready and is
+    // waiting its turn to merge. Re-running its ready checks does nothing useful
+    // — it's the queue, not the PR, that hasn't advanced — and "recovering" it
+    // resets the ready clock, which re-arms this very check ~every threshold
+    // minutes (observed: one PR auto-recovered 30 times while clean and green).
+    // Treat normal lane-waiting as benign; only escalate to needs-user once the
+    // wait is long enough to signal the lane itself is stalled.
+    //
+    // Three queue states represent legitimate lane-waiting:
+    //   ready-stale      — passed ready, main advanced before it was selected
+    //   merge-candidate  — selected as the next PR to merge, waiting for the merge
+    //   ready (completed)— passed ready against the current base, not yet selected
+    const queueState = snapshot.readyArtifacts?.queueState;
+    const inMergeLane = queueState === 'ready-stale'
+      || queueState === 'merge-candidate'
+      || (queueState === 'ready' && snapshot.readyResultStatus === 'completed');
+
+    if (inMergeLane) {
       const escalateMinutes = normalizedConfig.thresholdMinutes * MERGE_LANE_STALL_ESCALATE_MULTIPLIER;
       if (snapshot.idleMinutes >= escalateMinutes) {
         return {

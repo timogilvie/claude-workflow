@@ -5124,6 +5124,9 @@ refresh_ready_merge_queue_tick() {
     [[ -n "$current_main" ]] || continue
     if [[ "$(ready_queue_state "$state_dir")" != "merge-candidate" ]]; then
       promote_merge_candidate "$issue" "$state_dir" "$current_main"
+      local pr_for_log
+      pr_for_log="${PR_BY_ISSUE[$issue]:-}"
+      log "status" "✓ $issue → PR ${pr_for_log:+#$pr_for_log }promoted to merge candidate (clean/green, base current)"
     fi
   done
 }
@@ -10373,6 +10376,9 @@ monitor_issue_state() {
         return 0
       fi
 
+      if merge_queue_enabled && [[ "$queue_state" == "merge-candidate" ]]; then
+        log "debug" "✓ $ISSUE → PR #$PR is a clean/green merge candidate (base current, waiting for merge)"
+      fi
       set_window_attention_state "$WIN" "clear"
       active_count=$((active_count + 1))
       return 0
