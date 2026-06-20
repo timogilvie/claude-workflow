@@ -242,6 +242,7 @@ describe('deriveTranscriptEvents – event family derivation', () => {
     assert.equal(ev.isError, false);
     assert.equal(ev.content, 'File content here.');
     assert.deepEqual(ev.details, { bytes: 18 });
+    assert.equal(ev.redacted, false);
   });
 
   it('tool_execution_end redacts secret keys in details', () => {
@@ -264,6 +265,7 @@ describe('deriveTranscriptEvents – event family derivation', () => {
     const details = ev.details as { authorization: string; status: number };
     assert.equal(details.authorization, '[REDACTED]');
     assert.equal(details.status, 200);
+    assert.equal(ev.redacted, true);
   });
 
   it('agent_end emits session_ended with message count', () => {

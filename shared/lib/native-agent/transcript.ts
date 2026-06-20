@@ -30,6 +30,7 @@
 
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import type { AgentEvent } from '@earendil-works/pi-agent-core';
 import type { AssistantMessage } from '@earendil-works/pi-ai';
 
@@ -396,7 +397,7 @@ export class TranscriptWriter {
           toolName: event.toolName,
           isError: event.isError,
           content: firstText,
-          redacted: redactedDetails !== resultObj?.details,
+          redacted: redactedDetails !== undefined && !isDeepStrictEqual(redactedDetails, resultObj?.details),
         };
         if (redactedDetails !== undefined) toolResult.details = redactedDetails;
         return toolResult;
