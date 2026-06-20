@@ -1,0 +1,687 @@
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
+import type { AgentContext, AgentTool, AgentToolResult } from '@earendil-works/pi-agent-core';
+import type { Message, TextContent } from '@earendil-works/pi-ai';
+import { registerScriptedPiProvider, type ScriptedProviderContext } from './provider.ts';
+import { runWavemillLoop, HEARTBEAT_AGENT, type HeartbeatEvent, type WavemillLoopConfig } from './loop.ts';
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+let apiSeq = 0;
+function uniqueApi(prefix = 'loop-test') {
+  return `${prefix}-${++apiSeq}`;
+}
+
+/** Minimal Pi-compatible user message for context. */
+function userMsg(text: string) {
+  return { role: 'user' as const, content: text, timestamp: 0 };
+}
+
+/** Minimal AgentContext for tests. */
+function makeContext(tools: AgentTool<any, any>[] = []): AgentContext {
+  return {
+    systemPrompt: 'You are a test agent.',
+    messages: [userMsg('Go.')],
+    tools,
+  };
+}
+
+/**
+ * Identity convertToLlm for tests where context uses Pi's native message types.
+ * Pi's own messages (user/assistant/toolResult) are already LLM-compatible; no conversion needed.
+ */
+const piIdentity = (messages: any[]): Message[] => messages as Message[];
+
+/** Base loop config using identity convertToLlm. */
+function baseConfig(api: string, tools: AgentTool<any, any>[] = []): WavemillLoopConfig {
+  return {
+    model: { id: 'test-model', api, provider: 'test-provider' },
+    context: makeContext(tools),
+    convertToLlm: piIdentity,
+  };
+}
+
+/** Create a simple AgentTool. The executor receives the abort signal. */
+function makeTool(
+  name: string,
+  executionMode: 'parallel' | 'sequential',
+  executor: (toolCallId: string, signal?: AbortSignal) => Promise<string | Error>,
+): AgentTool<any, void> {
+  return {
+    name,
+    description: `Test tool: ${name}`,
+    parameters: { type: 'object', properties: {} } as any,
+    label: name,
+    executionMode,
+    async execute(
+      toolCallId: string,
+      _params: unknown,
+      signal?: AbortSignal,
+    ): Promise<AgentToolResult<void>> {
+      const result = await executor(toolCallId, signal);
+      if (result instanceof Error) throw result;
+      return { content: [{ type: 'text', text: result } satisfies TextContent], details: undefined as void };
+    },
+  } as unknown as AgentTool<any, void>;
+}
+
+// ---------------------------------------------------------------------------
+// Budget stop tests
+// ---------------------------------------------------------------------------
+
+describe('loop — budget stops', () => {
+  it('stops after maxTurns is reached', async () => {
+    // Two scripted turns; maxTurns: 1 should stop after the first.
+    // First turn emits a tool call so the loop would otherwise continue.
+    const tool = makeTool('noop', 'parallel', async () => 'done');
+    const api = uniqueApi('budget-turns');
+    registerScriptedPiProvider({
+      api,
+      turns: [
+        {
+          content: [{ type: 'tool_call', id: 'tc1', name: 'noop', arguments: {} }],
+          usage: { input: 10, output: 5 },
+          stopReason: 'tool_calls',
+        },
+        { content: [{ type: 'text', text: 'Second turn' }], stopReason: 'stop' },
+      ],
+    });
+
+    const result = await runWavemillLoop({
+      ...baseConfig(api, [tool]),
+      budget: { maxTurns: 1 },
+    });
+
+    assert.equal(result.stopReason, 'turn_limit');
+    assert.equal(result.turnsCompleted, 1);
+  });
+
+  it('stops when maxInputTokens is exceeded', async () => {
+    // First (and only) turn uses 600 input tokens; budget is 500.
+    // shouldStopAfterTurn fires after the turn and detects the excess.
+    const api = uniqueApi('budget-input-tokens');
+    registerScriptedPiProvider({
+      api,
+      turns: [
+        {
+          content: [{ type: 'text', text: 'Done' }],
+          usage: { input: 600, output: 10 },
+          stopReason: 'stop',
+        },
+      ],
+    });
+
+    const result = await runWavemillLoop({
+      ...baseConfig(api),
+      budget: { maxInputTokens: 500 },
+    });
+
+    assert.equal(result.stopReason, 'token_limit');
+    assert.equal(result.turnsCompleted, 1);
+    assert.equal(result.totalInputTokens, 600);
+  });
+
+  it('stops when maxOutputTokens is exceeded', async () => {
+    const api = uniqueApi('budget-output-tokens');
+    registerScriptedPiProvider({
+      api,
+      turns: [
+        {
+          content: [{ type: 'text', text: 'Big output' }],
+          usage: { input: 10, output: 500 },
+          stopReason: 'stop',
+        },
+      ],
+    });
+
+    const result = await runWavemillLoop({
+      ...baseConfig(api),
+      budget: { maxOutputTokens: 250 },
+    });
+
+    assert.equal(result.stopReason, 'token_limit');
+    assert.equal(result.turnsCompleted, 1);
+    assert.equal(result.totalOutputTokens, 500);
+  });
+
+  it('stops when maxTotalTokens is exceeded', async () => {
+    const api = uniqueApi('budget-total-tokens');
+    registerScriptedPiProvider({
+      api,
+      turns: [
+        {
+          content: [{ type: 'text', text: 'T1' }],
+          usage: { input: 400, output: 400 },
+          stopReason: 'stop',
+        },
+      ],
+    });
+
+    // Total = 800; budget = 700
+    const result = await runWavemillLoop({
+      ...baseConfig(api),
+      budget: { maxTotalTokens: 700 },
+    });
+
+    assert.equal(result.stopReason, 'token_limit');
+    assert.equal(result.totalInputTokens + result.totalOutputTokens, 800);
+  });
+
+  it('stops when maxToolCalls is reached after one tool execution', async () => {
+    const executionLog: string[] = [];
+    const tool = makeTool('read_notes', 'parallel', async (id) => {
+      executionLog.push(id);
+      return 'contents';
+    });
+
+    const api = uniqueApi('budget-tool-calls');
+    registerScriptedPiProvider({
+      api,
+      turns: [
+        {
+          content: [{ type: 'tool_call', id: 'tc1', name: 'read_notes', arguments: {} }],
+          stopReason: 'tool_calls',
+        },
+        {
+          content: [{ type: 'tool_call', id: 'tc2', name: 'read_notes', arguments: {} }],
+          stopReason: 'tool_calls',
+        },
+        { content: [{ type: 'text', text: 'Done' }], stopReason: 'stop' },
+      ],
+    });
+
+    const result = await runWavemillLoop({
+      model: { id: 'test-model', api, provider: 'test-provider' },
+      context: makeContext([tool]),
+      convertToLlm: piIdentity,
+      budget: { maxToolCalls: 1 },
+    });
+
+    assert.equal(result.stopReason, 'tool_call_limit');
+    assert.equal(result.toolCallsExecuted, 1);
+    assert.equal(executionLog.length, 1);
+  });
+
+  it('stops when maxCostUsd is exceeded', async () => {
+    // Pricing: $1 per 1M input tokens.
+    // Turn 1 uses 600 input tokens → 600/1e6 * 1 = $0.0006; budget is $0.0005.
+    const api = uniqueApi('budget-cost');
+    registerScriptedPiProvider({
+      api,
+      turns: [
+        {
+          content: [{ type: 'text', text: 'Expensive' }],
+          usage: { input: 600, output: 0 },
+          stopReason: 'stop',
+        },
+      ],
+    });
+
+    const result = await runWavemillLoop({
+      ...baseConfig(api),
+      modelPricing: { inputCostPerMTok: 1.0, outputCostPerMTok: 0 },
+      budget: { maxCostUsd: 0.0005 },
+    });
+
+    assert.equal(result.stopReason, 'cost_limit');
+    assert.equal(result.turnsCompleted, 1);
+  });
+
+  it('wall-clock budget fires abort signal', async () => {
+    const api = uniqueApi('budget-wall-clock');
+    const tool = makeTool('slow_tool', 'sequential', async (_id, signal) => {
+      // Honor the abort signal; exit quickly when fired (check already-aborted too).
+      await new Promise<void>((resolve, reject) => {
+        if (signal?.aborted) { reject(new Error('aborted')); return; }
+        const timer = setTimeout(resolve, 10_000);
+        signal?.addEventListener('abort', () => { clearTimeout(timer); reject(new Error('aborted')); }, { once: true });
+      });
+      return 'never';
+    });
+
+    registerScriptedPiProvider({
+      api,
+      turns: [
+        {
+          content: [{ type: 'tool_call', id: 'sl1', name: 'slow_tool', arguments: {} }],
+          stopReason: 'tool_calls',
+        },
+      ],
+    });
+
+    const result = await runWavemillLoop({
+      model: { id: 'test-model', api, provider: 'test-provider' },
+      context: makeContext([tool]),
+      convertToLlm: piIdentity,
+      budget: { maxWallClockMs: 100 },
+    });
+
+    assert.equal(result.stopReason, 'wall_clock_limit');
+    assert.ok(result.wallClockMs >= 100);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Blocked / abort stops
+// ---------------------------------------------------------------------------
+
+describe('loop — blocked stops', () => {
+  it('returns aborted immediately when signal is already aborted', async () => {
+    const api = uniqueApi('blocked-pre-abort');
+    registerScriptedPiProvider({
+      api,
+      turns: [{ content: [{ type: 'text', text: 'Should not run' }], stopReason: 'stop' }],
+    });
+
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await runWavemillLoop({
+      ...baseConfig(api),
+      signal: controller.signal,
+    });
+
+    assert.equal(result.stopReason, 'aborted');
+    assert.equal(result.turnsCompleted, 0);
+    assert.equal(result.wallClockMs, 0);
+  });
+
+  it('returns aborted when signal fires during tool execution in turn 1', async () => {
+    const controller = new AbortController();
+
+    const api = uniqueApi('blocked-between-turns');
+    // The tool fires the caller abort signal during execution. Pi then detects the
+    // aborted signal before starting turn 2 and exits the loop.
+    const tool = makeTool('quick_read', 'parallel', async () => {
+      controller.abort();
+      return 'data';
+    });
+
+    registerScriptedPiProvider({
+      api,
+      turns: [
+        {
+          content: [{ type: 'tool_call', id: 'qr1', name: 'quick_read', arguments: {} }],
+          stopReason: 'tool_calls',
+        },
+        { content: [{ type: 'text', text: 'Turn 2 — should not run' }], stopReason: 'stop' },
+      ],
+    });
+
+    const result = await runWavemillLoop({
+      model: { id: 'test-model', api, provider: 'test-provider' },
+      context: makeContext([tool]),
+      convertToLlm: piIdentity,
+      signal: controller.signal,
+    });
+
+    assert.equal(result.stopReason, 'aborted');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Continuation: turn N+1 replays prior-turn signatures
+// ---------------------------------------------------------------------------
+
+describe('loop — continuation', () => {
+  it('preserves thinkingSignature and responseId across turns', async () => {
+    const api = uniqueApi('continuation');
+    let capturedMessages: unknown[] | undefined;
+
+    registerScriptedPiProvider({
+      api,
+      turns: (ctx: ScriptedProviderContext) => {
+        capturedMessages = ctx.messages as unknown[];
+        return { content: [{ type: 'text', text: 'OK' }], stopReason: 'stop' };
+      },
+    });
+
+    // Context includes a prior-turn assistant message carrying continuation metadata.
+    const priorAssistant = {
+      role: 'assistant' as const,
+      content: [
+        { type: 'thinking' as const, thinking: 'reasoning...', thinkingSignature: 'sig-abc' },
+        { type: 'text' as const, text: 'Prior answer.' },
+      ],
+      api,
+      provider: 'test-provider',
+      model: 'test-model',
+      responseId: 'resp-xyz',
+      usage: {
+        input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: 'stop' as const,
+      timestamp: 0,
+    };
+
+    await runWavemillLoop({
+      model: { id: 'test-model', api, provider: 'test-provider' },
+      context: {
+        systemPrompt: 'Test agent.',
+        messages: [userMsg('Original question.'), priorAssistant, userMsg('Follow-up.')],
+        tools: [],
+      },
+      // Identity convertToLlm: Pi messages pass through to the scripted provider.
+      convertToLlm: piIdentity,
+    });
+
+    assert.ok(capturedMessages, 'convertToLlm/ScriptedProvider must have seen messages');
+
+    const assistantInLlm = capturedMessages!.find((m: any) => m.role === 'assistant') as any;
+    assert.ok(assistantInLlm, 'prior assistant message must appear in LLM input');
+
+    const thinkingBlock = assistantInLlm.content?.find((c: any) => c.type === 'thinking');
+    assert.ok(thinkingBlock, 'thinking block must be in assistant content');
+    assert.equal(thinkingBlock.thinkingSignature, 'sig-abc');
+    assert.equal(assistantInLlm.responseId, 'resp-xyz');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Heartbeat events
+// ---------------------------------------------------------------------------
+
+describe('loop — heartbeat events', () => {
+  it('emits working heartbeats on turn_start and message_update', async () => {
+    const api = uniqueApi('heartbeat');
+    registerScriptedPiProvider({
+      api,
+      turns: [{ content: [{ type: 'text', text: 'Hello' }], stopReason: 'stop' }],
+    });
+
+    const heartbeats: HeartbeatEvent[] = [];
+    await runWavemillLoop({
+      ...baseConfig(api),
+      onHeartbeat: (evt) => heartbeats.push(evt),
+    });
+
+    assert.ok(heartbeats.length > 0, 'at least one heartbeat should be emitted');
+    for (const h of heartbeats) {
+      assert.equal(h.state, 'working');
+      assert.equal(h.agent, HEARTBEAT_AGENT);
+      assert.equal(typeof h.event, 'string');
+    }
+
+    assert.ok(heartbeats.some((h) => h.event === 'turn_start'), 'turn_start heartbeat expected');
+  });
+
+  it('emits tool_execution_start heartbeats with tool name as detail', async () => {
+    const api = uniqueApi('heartbeat-tool');
+    const tool = makeTool('fetch_data', 'parallel', async () => 'data');
+
+    registerScriptedPiProvider({
+      api,
+      turns: [
+        {
+          content: [{ type: 'tool_call', id: 'tc-hb1', name: 'fetch_data', arguments: {} }],
+          stopReason: 'tool_calls',
+        },
+        { content: [{ type: 'text', text: 'Done.' }], stopReason: 'stop' },
+      ],
+    });
+
+    const heartbeats: HeartbeatEvent[] = [];
+    await runWavemillLoop({
+      model: { id: 'test-model', api, provider: 'test-provider' },
+      context: makeContext([tool]),
+      convertToLlm: piIdentity,
+      onHeartbeat: (evt) => heartbeats.push(evt),
+    });
+
+    const toolHb = heartbeats.find(
+      (h) => h.event === 'tool_execution_start' && h.detail === 'fetch_data',
+    );
+    assert.ok(toolHb, 'tool_execution_start heartbeat with tool name expected');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tool-call batch semantics
+// ---------------------------------------------------------------------------
+
+describe('loop — batch semantics', () => {
+  it('all-read batch: both tools execute and results are collected', async () => {
+    const ranTools: string[] = [];
+
+    const readA = makeTool('read_a', 'parallel', async () => {
+      ranTools.push('A');
+      return 'A-result';
+    });
+    const readB = makeTool('read_b', 'parallel', async () => {
+      ranTools.push('B');
+      return 'B-result';
+    });
+
+    const api = uniqueApi('batch-reads');
+    registerScriptedPiProvider({
+      api,
+      turns: [
+        {
+          content: [
+            { type: 'tool_call', id: 'ra1', name: 'read_a', arguments: {} },
+            { type: 'tool_call', id: 'rb1', name: 'read_b', arguments: {} },
+          ],
+          stopReason: 'tool_calls',
+        },
+        { content: [{ type: 'text', text: 'Done' }], stopReason: 'stop' },
+      ],
+    });
+
+    const result = await runWavemillLoop({
+      model: { id: 'test-model', api, provider: 'test-provider' },
+      context: makeContext([readA, readB]),
+      convertToLlm: piIdentity,
+    });
+
+    assert.equal(result.stopReason, 'stop');
+    assert.equal(result.toolCallsExecuted, 2);
+    assert.ok(ranTools.includes('A') && ranTools.includes('B'), 'both reads should execute');
+  });
+
+  it('mutation tools execute one at a time in provider order', async () => {
+    const executionOrder: string[] = [];
+
+    const patchA = makeTool('patch_a', 'sequential', async () => {
+      executionOrder.push('A-start');
+      await new Promise<void>((r) => setTimeout(r, 5));
+      executionOrder.push('A-end');
+      return 'patched-A';
+    });
+
+    const patchB = makeTool('patch_b', 'sequential', async () => {
+      executionOrder.push('B-start');
+      await new Promise<void>((r) => setTimeout(r, 5));
+      executionOrder.push('B-end');
+      return 'patched-B';
+    });
+
+    const api = uniqueApi('batch-mutations');
+    registerScriptedPiProvider({
+      api,
+      turns: [
+        {
+          content: [
+            { type: 'tool_call', id: 'pa1', name: 'patch_a', arguments: {} },
+            { type: 'tool_call', id: 'pb1', name: 'patch_b', arguments: {} },
+          ],
+          stopReason: 'tool_calls',
+        },
+        { content: [{ type: 'text', text: 'Done' }], stopReason: 'stop' },
+      ],
+    });
+
+    const result = await runWavemillLoop({
+      model: { id: 'test-model', api, provider: 'test-provider' },
+      context: makeContext([patchA, patchB]),
+      convertToLlm: piIdentity,
+    });
+
+    assert.equal(result.stopReason, 'stop');
+    assert.equal(result.toolCallsExecuted, 2);
+    // A must fully finish before B starts (sequential ordering).
+    assert.deepEqual(executionOrder, ['A-start', 'A-end', 'B-start', 'B-end']);
+  });
+
+  it('mixed batch: read executes before mutation in provider order', async () => {
+    const executionOrder: string[] = [];
+
+    const readTool = makeTool('read_file', 'parallel', async () => {
+      executionOrder.push('read');
+      return 'contents';
+    });
+
+    const mutTool = makeTool('patch_file', 'sequential', async () => {
+      executionOrder.push('mutation');
+      return 'patched';
+    });
+
+    const api = uniqueApi('batch-mixed');
+    registerScriptedPiProvider({
+      api,
+      turns: [
+        {
+          content: [
+            { type: 'tool_call', id: 'r1', name: 'read_file', arguments: {} },
+            { type: 'tool_call', id: 'm1', name: 'patch_file', arguments: {} },
+          ],
+          stopReason: 'tool_calls',
+        },
+        { content: [{ type: 'text', text: 'Done' }], stopReason: 'stop' },
+      ],
+    });
+
+    const result = await runWavemillLoop({
+      model: { id: 'test-model', api, provider: 'test-provider' },
+      context: makeContext([readTool, mutTool]),
+      convertToLlm: piIdentity,
+    });
+
+    assert.equal(result.stopReason, 'stop');
+    assert.equal(result.toolCallsExecuted, 2);
+    // Read must execute before mutation (provider order preserved).
+    assert.ok(
+      executionOrder.indexOf('read') < executionOrder.indexOf('mutation'),
+      'read should precede mutation in provider order',
+    );
+  });
+
+  it('fail-fast: a tool failure skips subsequent calls in the same batch', async () => {
+    const executionLog: string[] = [];
+
+    const failTool = makeTool('fail_tool', 'sequential', async () => {
+      executionLog.push('fail');
+      return new Error('Intentional failure');
+    });
+
+    // next_tool records if it ran; Pi catches throws so we use a flag instead of throw.
+    let nextExecuted = false;
+    const nextTool = makeTool('next_tool', 'sequential', async () => {
+      nextExecuted = true;
+      return 'should-not-run';
+    });
+
+    const api = uniqueApi('batch-fail-fast');
+    registerScriptedPiProvider({
+      api,
+      turns: [
+        {
+          content: [
+            { type: 'tool_call', id: 'f1', name: 'fail_tool', arguments: {} },
+            { type: 'tool_call', id: 'n1', name: 'next_tool', arguments: {} },
+          ],
+          stopReason: 'tool_calls',
+        },
+        { content: [{ type: 'text', text: 'Done' }], stopReason: 'stop' },
+      ],
+    });
+
+    const afterCallLog: Array<{ name: string; isError: boolean }> = [];
+    const result = await runWavemillLoop({
+      model: { id: 'test-model', api, provider: 'test-provider' },
+      context: makeContext([failTool, nextTool]),
+      convertToLlm: piIdentity,
+      afterToolCall: async (ctx) => {
+        afterCallLog.push({ name: ctx.toolCall.name, isError: ctx.isError });
+        return undefined;
+      },
+    });
+
+    assert.ok(executionLog.includes('fail'), 'failing tool should have executed');
+    assert.ok(!nextExecuted, 'next tool must NOT execute (fail-fast)');
+    assert.ok(
+      afterCallLog.some((e) => e.name === 'fail_tool' && e.isError),
+      'failed tool reported as error via afterToolCall',
+    );
+    // Pi does NOT call afterToolCall for blocked tools (only for executed tools).
+    assert.ok(
+      afterCallLog.every((e) => e.name !== 'next_tool'),
+      'blocked tool must not appear in afterToolCall (Pi skips it)',
+    );
+    // The skipped tool result IS in the final messages with 'skipped_after_failure' content.
+    const skippedMsg = result.messages.find(
+      (m: any) => m.role === 'toolResult' && m.toolName === 'next_tool',
+    ) as any;
+    assert.ok(skippedMsg, 'skipped tool result must appear in final messages');
+    assert.equal(
+      skippedMsg.content?.[0]?.text,
+      'skipped_after_failure',
+      'skipped tool result content must be "skipped_after_failure"',
+    );
+  });
+
+  it('skipped_after_failure: all subsequent calls are blocked and routed as errors', async () => {
+    // Use flags instead of throws since Pi catches tool errors gracefully.
+    let skipAExecuted = false;
+    let skipBExecuted = false;
+
+    const failFirst = makeTool('fail_first', 'sequential', async () => new Error('First failed'));
+    const skipA = makeTool('skip_a', 'sequential', async () => {
+      skipAExecuted = true;
+      return 'should-not-run';
+    });
+    const skipB = makeTool('skip_b', 'sequential', async () => {
+      skipBExecuted = true;
+      return 'should-not-run';
+    });
+
+    const api = uniqueApi('batch-skipped');
+    registerScriptedPiProvider({
+      api,
+      turns: [
+        {
+          content: [
+            { type: 'tool_call', id: 'ff1', name: 'fail_first', arguments: {} },
+            { type: 'tool_call', id: 'sa1', name: 'skip_a', arguments: {} },
+            { type: 'tool_call', id: 'sb1', name: 'skip_b', arguments: {} },
+          ],
+          stopReason: 'tool_calls',
+        },
+        { content: [{ type: 'text', text: 'Done' }], stopReason: 'stop' },
+      ],
+    });
+
+    const result = await runWavemillLoop({
+      model: { id: 'test-model', api, provider: 'test-provider' },
+      context: makeContext([failFirst, skipA, skipB]),
+      convertToLlm: piIdentity,
+    });
+
+    assert.ok(!skipAExecuted, 'skip_a must not have executed');
+    assert.ok(!skipBExecuted, 'skip_b must not have executed');
+
+    // Both skipped tool results appear in final messages with 'skipped_after_failure' content.
+    const skipAMsg = result.messages.find(
+      (m: any) => m.role === 'toolResult' && m.toolName === 'skip_a',
+    ) as any;
+    const skipBMsg = result.messages.find(
+      (m: any) => m.role === 'toolResult' && m.toolName === 'skip_b',
+    ) as any;
+    assert.ok(skipAMsg, 'skip_a tool result must appear in final messages');
+    assert.ok(skipBMsg, 'skip_b tool result must appear in final messages');
+    assert.equal(skipAMsg.content?.[0]?.text, 'skipped_after_failure');
+    assert.equal(skipBMsg.content?.[0]?.text, 'skipped_after_failure');
+  });
+});
