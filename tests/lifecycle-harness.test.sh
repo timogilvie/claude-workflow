@@ -808,6 +808,71 @@ EOF
   check_not_contains "challenger recover real id: no invalid identifier log" "$(kv_value "$tick" warn_output)" "Invalid issue identifier"
 }
 
+test_challenger_missing_expansion_recovery_extracts_linear_issue_id_from_url() {
+  local slug="challenger-missing-expansion-recovery-url-id"
+  local issue="HOK-2265_c"
+  local repo tick overrides npx_args
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_planning_state "$repo" "$slug" "completed"
+  harness_setup_runtime_artifacts "$repo"
+  harness_seed_bootstrap_route "$repo" "$slug"
+  printf 'raw issue text\n' > "$repo/features/$slug/task-packet.md"
+
+  overrides="$(harness_common_route_overrides)
+    source \"\$REAL_FUNC_FILE\"
+    TOOLS_DIR=\"/tmp/\${SESSION}-\${ISSUE}-tools\"
+    mkdir -p \"\$TOOLS_DIR\"
+    : > \"\$TOOLS_DIR/expand-issue.ts\"
+    get_task_meta() {
+      local issue_key=\"\$1\" field=\"\$2\"
+      case \"\$issue_key.\$field\" in
+        HOK-2265_c.linearIssueId) printf '%s\\n' 'https://linear.app/wavemill/issue/HOK-2265?utm_source=test' ;;
+        HOK-2265_c.challenge) printf '%s\\n' 'true' ;;
+        HOK-2265_c.challengeRole) printf '%s\\n' 'challenger' ;;
+        *) printf '\\n' ;;
+      esac
+    }
+    npx() {
+      printf '%s\\n' \"\$*\" >> \"\$REPO_UNDER_TEST/.wavemill/npx-args.log\"
+      [[ \"\$*\" == *\"expand-issue.ts\"* ]] || return 0
+      cat > \"\$REPO_UNDER_TEST/features/$slug/task-packet.md\" <<'EOF'
+## 1. Objective
+
+Recover the missing expanded routing artifact.
+EOF
+    }
+    reroute_expanded_packets_for_coding_handoff() {
+      local packet_content=""
+      REROUTE_CALLED=\"true\"
+      packet_content=\"\$(cat \"\$3/task-packet.md\" 2>/dev/null || echo '')\"
+      is_task_packet \"\$packet_content\" || {
+        REROUTE_EXPANDED_LAST_REASON=\"not_eligible\"
+        return 1
+      }
+      cat > \"\$3/.post-expansion-route.json\" <<'EOF'
+{
+  \"planner\": \"expanded-planner\",
+  \"coder\": \"gpt-5.4\",
+  \"reviewer\": \"claude-sonnet-4-6\",
+  \"planDepth\": \"deep\",
+  \"codeDepth\": \"deep\",
+  \"reviewMode\": \"static+llm\",
+  \"provenance\": {
+    \"source\": \"expanded-test\"
+  }
+}
+EOF
+      return 0
+    }
+  "
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" "$overrides")"
+  npx_args="$(cat "$repo/.wavemill/npx-args.log")"
+
+  check_eq "challenger recover url id: coding launches" "true" "$(kv_value "$tick" coding_launched)"
+  check_contains "challenger recover url id: extracts real Linear issue id" "$npx_args" "expand-issue.ts HOK-2265 --output $repo/features/$slug/task-packet.md"
+  check_not_contains "challenger recover url id: does not pass Linear URL" "$npx_args" "expand-issue.ts https://linear.app/wavemill/issue/HOK-2265"
+}
+
 test_challenger_missing_expansion_recovery_skips_without_linear_issue_id() {
   local slug="challenger-missing-expansion-recovery-skip"
   local issue="HOK-2265_c"

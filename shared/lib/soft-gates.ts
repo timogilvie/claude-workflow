@@ -564,17 +564,27 @@ export async function emitSoftGates(
   const logPath = join(repoDir, SOFT_GATES_LOG);
   const seenPath = join(repoDir, SOFT_GATES_SEEN);
 
-  // Load existing seen fingerprints
   let seenFingerprints: Set<string>;
-  try {
-    const current = await mutateJsonState<Record<string, boolean>>(
-      seenPath,
-      s => s,
-      { createIfMissing: true, initial: {} },
-    );
-    seenFingerprints = new Set(Object.keys(current));
-  } catch {
-    seenFingerprints = new Set();
+  if (options.noEmit) {
+    try {
+      const current = existsSync(seenPath)
+        ? JSON.parse(readFileSync(seenPath, 'utf-8')) as Record<string, boolean>
+        : {};
+      seenFingerprints = new Set(Object.keys(current));
+    } catch {
+      seenFingerprints = new Set();
+    }
+  } else {
+    try {
+      const current = await mutateJsonState<Record<string, boolean>>(
+        seenPath,
+        s => s,
+        { createIfMissing: true, initial: {} },
+      );
+      seenFingerprints = new Set(Object.keys(current));
+    } catch {
+      seenFingerprints = new Set();
+    }
   }
 
   let written = 0;

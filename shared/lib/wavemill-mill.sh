@@ -5937,8 +5937,8 @@ expansion_recovery_resolve_issue_id() {
     return 0
   fi
 
-  if [[ "$linear_issue" =~ ^https?://linear\.app/[^/]+/issue/[A-Z][A-Z0-9]*-[0-9]+([/?#].*)?$ ]]; then
-    printf '%s\n' "$linear_issue"
+  if [[ "$linear_issue" =~ ^https?://linear\.app/[^/]+/issue/([A-Z][A-Z0-9]*-[0-9]+)([/?#].*)?$ ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
     return 0
   fi
 

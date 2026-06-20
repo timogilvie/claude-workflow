@@ -567,6 +567,8 @@ describe('soft-gates', () => {
       // Log file should NOT exist because noEmit=true
       const logPath = join(tmpRepo, '.wavemill', 'logs', 'soft-gates.jsonl');
       assert.equal(existsSync(logPath), false, 'log file should not be created with --no-emit');
+      const seenPath = join(tmpRepo, '.wavemill', 'logs', '.soft-gates-seen.json');
+      assert.equal(existsSync(seenPath), false, 'seen fingerprints should not be created with --no-emit');
     });
 
     it('never throws on malformed or missing artifacts', () => {
