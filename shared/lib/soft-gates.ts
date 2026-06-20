@@ -132,7 +132,9 @@ function checkEvalExportInconsistency(
   const evalRecords = readEvalRecords(repoDir);
   if (evalRecords.length === 0) return [];
 
-  const challengePairId = taskId ? `${taskId}_c` : null;
+  const challengePairId = taskId
+    ? (taskId.endsWith('_c') ? taskId : `${taskId}_c`)
+    : null;
   const traceContextPath = join(featureDir, '.trace-context.json');
   const traceCtx = readJsonTolerant<Record<string, unknown>>(traceContextPath);
   const traceId = typeof traceCtx?.traceId === 'string' ? traceCtx.traceId : null;

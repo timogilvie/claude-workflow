@@ -62,7 +62,7 @@ function toContributionProjection(
   observedAt: string,
   record?: EvalRecord,
 ): RedactedEvalContributionProjection {
-  const fod = record?.featureOutcomeDiagnostics;
+  const fod = record?.featureOutcomeDiagnostics ?? undefined;
 
   const projection: RedactedEvalContributionProjection = {
     taskId: submission.task_id,
