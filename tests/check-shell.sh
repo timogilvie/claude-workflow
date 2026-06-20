@@ -3198,6 +3198,10 @@ echo "=== HOK-2289: Pi Vendor Adapter Seam Guard ==="
 PI_ALLOWED_FILES=(
   "shared/lib/native-agent/messages.ts"
   "shared/lib/native-agent/provider.ts"
+  "shared/lib/native-agent/transcript.ts"
+  "shared/lib/native-agent/fixtures/blocked-session.ts"
+  "shared/lib/native-agent/fixtures/malformed-tool-call-session.ts"
+  "shared/lib/native-agent/fixtures/success-session.ts"
 )
 
 PI_PACKAGES=(
@@ -3229,7 +3233,7 @@ for pkg in "${PI_PACKAGES[@]}"; do
 done
 
 if [[ "$pi_seam_ok" == "true" ]]; then
-  pass "Pi vendor imports confined to adapter seam (messages.ts, provider.ts)"
+  pass "Pi vendor imports confined to native-agent adapter/transcript seam"
 fi
 
 # ============================================================================

@@ -873,6 +873,23 @@ EOF
   check_not_contains "challenger recover url id: does not pass Linear URL" "$npx_args" "expand-issue.ts https://linear.app/wavemill/issue/HOK-2265"
 }
 
+test_expansion_recovery_resolve_issue_id_normalizes_linear_issue_url() {
+  local resolved
+  resolved="$(
+    source "$REAL_FUNC_FILE"
+    get_task_meta() {
+      local issue_key="$1" field="$2"
+      case "$issue_key.$field" in
+        HOK-2265_c.linearIssueId) printf '%s\n' 'https://linear.app/hokusai/issue/HOK-2265/native-runtime' ;;
+        *) printf '\n' ;;
+      esac
+    }
+    expansion_recovery_resolve_issue_id HOK-2265_c
+  )"
+
+  check_eq "challenger recover url: resolves Linear issue URL to issue id" "HOK-2265" "$resolved"
+}
+
 test_challenger_missing_expansion_recovery_skips_without_linear_issue_id() {
   local slug="challenger-missing-expansion-recovery-skip"
   local issue="HOK-2265_c"
@@ -1762,6 +1779,7 @@ test_claude_local_settings_allowed
 test_coding_uses_expanded_route_over_bootstrap
 test_missing_expansion_recovery_success_launches_with_expanded_route
 test_challenger_missing_expansion_recovery_uses_linear_issue_id
+test_expansion_recovery_resolve_issue_id_normalizes_linear_issue_url
 test_challenger_missing_expansion_recovery_skips_without_linear_issue_id
 test_missing_expansion_recovery_non_challenger_uses_issue_key
 test_missing_expansion_recovery_failure_launches_with_bootstrap
