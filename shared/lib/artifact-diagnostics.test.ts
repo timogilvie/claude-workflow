@@ -270,6 +270,10 @@ describe('diagnoseArtifacts', () => {
     const driftFindings = report.findings.filter(f => f.code === 'contract_hash_drift');
     assert.ok(driftFindings.length > 0, 'Expected contract_hash_drift finding');
     assert.equal(driftFindings[0].severity, 'warn');
+    assert.equal(driftFindings[0].gateId, 'contract_source_hash_mismatch');
+    assert.match(driftFindings[0].expected || '', /^hash /);
+    assert.match(driftFindings[0].actual || '', /^hash /);
+    assert.ok(driftFindings[0].recommendedAction);
     assert.ok(driftFindings[0].details?.sourcePath === 'task-packet.md');
     assert.ok(typeof driftFindings[0].details?.storedSha256 === 'string');
     assert.ok(typeof driftFindings[0].details?.currentSha256 === 'string');
@@ -467,6 +471,153 @@ describe('diagnoseArtifacts', () => {
     for (const f of [...traceIdFindings, ...unreflectedFindings]) {
       assert.equal(f.severity, 'info');
     }
+  });
+
+  it('9. route artifact hash mismatch — route_contract_mismatch warning', () => {
+    const tmpRepo = makeTempRepo();
+    tempDirs.push(tmpRepo);
+    const slug = 'route-contract-mismatch';
+    const featureDir = makeFeatureDir(tmpRepo, slug);
+    writeSelectedTask(featureDir, 'HOK-0009', slug);
+
+    writeFileSync(join(featureDir, 'task-packet.md'), 'contract source content', 'utf-8');
+    const packetHash = createHash('sha256').update('contract source content').digest('hex');
+
+    writeTaskContract(featureDir, {
+      issueId: 'HOK-0009',
+      slug,
+      sources: [
+        { path: 'task-packet.md', exists: true, sha256: packetHash },
+      ],
+    });
+
+    writeFileSync(
+      join(featureDir, '.post-expansion-route.json'),
+      JSON.stringify({
+        coder: 'claude-opus-4-6',
+        codeDepth: 'medium',
+        reviewer: 'claude-opus-4-6',
+        reviewMode: 'normal',
+        provenance: {
+          inputPath: join(featureDir, 'task-packet.md'),
+          inputHash: 'f'.repeat(64),
+          source: 'expanded',
+          routerMode: 'normal',
+        },
+      }),
+      'utf-8',
+    );
+
+    const report = diagnoseArtifacts({ repoDir: tmpRepo, featureDir });
+    const findings = report.findings.filter((finding) => finding.code === 'route_contract_mismatch');
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].gateId, 'route_contract_mismatch');
+    assert.match(findings[0].expected || '', /task-packet\.md/);
+    assert.match(findings[0].actual || '', /route provenance/);
+  });
+
+  it('10. ready pass disagreement — ready_inconsistency warning', () => {
+    const tmpRepo = makeTempRepo();
+    tempDirs.push(tmpRepo);
+    const slug = 'ready-inconsistency';
+    const featureDir = makeFeatureDir(tmpRepo, slug);
+    writeSelectedTask(featureDir, 'HOK-0010', slug);
+
+    writeFileSync(
+      join(featureDir, '.ready-result.json'),
+      JSON.stringify({
+        stage: 'ready',
+        status: 'completed',
+        startedAt: '2026-01-01T00:00:00Z',
+        finishedAt: '2026-01-01T00:10:00Z',
+        agent: 'codex',
+        model: 'claude-opus-4-6',
+        notes: '',
+        artifacts: { type: 'ready', verdict: 'pass', checksRun: 3, checksPassed: 3 },
+      }),
+      'utf-8',
+    );
+
+    writeFeatureState(featureDir, {
+      issueId: 'HOK-0010',
+      slug,
+      currentPhase: 'done',
+      normalizedState: 'completed',
+      evidence: [
+        { kind: 'ready_check', label: 'ready_verdict', status: 'fail', detail: 'stale state' },
+      ],
+      outcome: {
+        completed: true,
+        readyPassed: false,
+      },
+    });
+
+    const report = diagnoseArtifacts({ repoDir: tmpRepo, featureDir });
+    const findings = report.findings.filter((finding) => finding.code === 'ready_inconsistency');
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].gateId, 'ready_inconsistency');
+    assert.match(findings[0].actual || '', /readyPassed=false/);
+  });
+
+  it('11. training-eligible eval with incomplete normalized outcome — eval_export_inconsistency warning', () => {
+    const tmpRepo = makeTempRepo();
+    tempDirs.push(tmpRepo);
+    const slug = 'eval-export-inconsistency';
+    const featureDir = makeFeatureDir(tmpRepo, slug);
+    writeSelectedTask(featureDir, 'HOK-0011', slug);
+
+    writeFileSync(
+      join(featureDir, 'feature-state.json'),
+      JSON.stringify({
+        schemaVersion: '1.0',
+        derivedAt: new Date().toISOString(),
+        issueId: 'HOK-0011',
+        slug,
+        currentPhase: 'done',
+        normalizedState: 'completed',
+        outcome: {
+          completed: true,
+          merged: true,
+        },
+      }),
+      'utf-8',
+    );
+    writeTraceContext(featureDir, 'trc_test_0011');
+    writeEvalRecord(tmpRepo, {
+      id: 'eval-0011',
+      issueId: 'HOK-0011',
+      traceId: 'trc_test_0011',
+      trainingEligible: true,
+    });
+
+    const report = diagnoseArtifacts({ repoDir: tmpRepo, featureDir });
+    const findings = report.findings.filter((finding) => finding.code === 'eval_export_inconsistency');
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].gateId, 'eval_export_inconsistency');
+    assert.match(findings[0].actual || '', /missing fields/);
+  });
+
+  it('12. fallback without safeguards — fallback_verification_mismatch warning', () => {
+    const tmpRepo = makeTempRepo();
+    tempDirs.push(tmpRepo);
+    const slug = 'fallback-verification-mismatch';
+    const featureDir = makeFeatureDir(tmpRepo, slug);
+    writeSelectedTask(featureDir, 'HOK-0012', slug);
+
+    writeTraceContext(featureDir, 'trc_test_0012');
+    writeTraceEvent(featureDir, { event: 'fallback_used', phase: 'coding', traceId: 'trc_test_0012' });
+    writeFeatureState(featureDir, {
+      issueId: 'HOK-0012',
+      slug,
+      blockers: [],
+      failureReason: null,
+      evidence: [],
+    });
+
+    const report = diagnoseArtifacts({ repoDir: tmpRepo, featureDir });
+    const findings = report.findings.filter((finding) => finding.code === 'fallback_verification_mismatch');
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].gateId, 'fallback_verification_mismatch');
   });
 
   it('no feature dir resolved — returns repo-level coverage gap, no throw', () => {

@@ -3225,6 +3225,36 @@ run_ready_watchdog_tick() {
   done < <(printf '%s' "$watchdog_output" | jq -c '.findings[]?' 2>/dev/null)
 }
 
+run_soft_gates_tick() {
+  local throttle_seconds="${WAVEMILL_SOFT_GATES_TICK_SECONDS:-120}"
+  [[ "$throttle_seconds" =~ ^[0-9]+$ ]] || throttle_seconds=120
+
+  local stamp_file="$STATE_DIR/.soft-gates-last-run"
+  local suppress_window="${WAVEMILL_SOFT_GATES_SUPPRESS_SECONDS:-21600}"
+  local check_soft_gates_cmd=(
+    npx tsx "$TOOLS_DIR/check-soft-gates.ts"
+    --repo "$REPO_DIR"
+    --all
+    --suppress-window "$suppress_window"
+  )
+  local now_cmd=(date +%s)
+  local last_run_cmd=(cat "$stamp_file")
+
+  local now="$("${now_cmd[@]}" 2>/dev/null || echo "0")"
+  local last_run="$("${last_run_cmd[@]}" 2>/dev/null || echo "0")"
+  [[ "$last_run" =~ ^[0-9]+$ ]] || last_run=0
+
+  if (( now > 0 && last_run > 0 && now - last_run < throttle_seconds )); then
+    return 0
+  fi
+
+  printf '%s\n' "$now" > "$stamp_file" 2>/dev/null || true
+
+  [[ "$suppress_window" =~ ^[0-9]+$ ]] || suppress_window=21600
+
+  "${check_soft_gates_cmd[@]}" >/dev/null 2>&1 || true
+}
+
 ready_remediation_enabled() {
   local wt_dir="$1"
   local remediation_json
@@ -10665,6 +10695,7 @@ while :; do
   done
   poll_challenge_jobs
   run_ready_watchdog_tick
+  run_soft_gates_tick
   check_mill_pane_health
   wavemill_pr_cache_refresh
   refresh_ready_merge_queue_tick
