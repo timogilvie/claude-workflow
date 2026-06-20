@@ -3196,6 +3196,8 @@ echo ""
 echo "=== HOK-2289: Pi Vendor Adapter Seam Guard ==="
 
 PI_ALLOWED_FILES=(
+  "shared/lib/native-agent/loop.test.ts"
+  "shared/lib/native-agent/loop.ts"
   "shared/lib/native-agent/messages.ts"
   "shared/lib/native-agent/provider.ts"
 )
