@@ -317,4 +317,44 @@ describe('hokusai-submission-trigger', () => {
     assert.equal(proj.outcomeSource, undefined);
     assert.equal(proj.outcomeArtifactPresent, undefined);
   });
+
+  it('uses unknown outcomeSource when an artifact is present but unusable', async () => {
+    const { repoDir, configDir } = makeRepo(true);
+    const capturedRows: unknown[] = [];
+
+    mock.method(hokusaiSubmissionTriggerDeps, 'buildSubmitDataContributionRow', (projection: unknown) => {
+      capturedRows.push(projection);
+      return { success_under_budget: true };
+    });
+    mock.method(hokusaiSubmissionTriggerDeps, 'enqueueContribution', async () => ({
+      status: 'enqueued' as const,
+      entry: { entryId: 'e3' },
+    }));
+    mock.method(hokusaiSubmissionTriggerDeps, 'drainContributionQueue', async () => ({}));
+
+    const record = makeEligibleRecord({
+      featureOutcomeDiagnostics: {
+        present: true,
+        valid: false,
+        used: false,
+        sourceFile: 'feature-state.json',
+        sourceHash: 'b'.repeat(64),
+        reason: 'invalid_outcome',
+        eligibilityDiagnostic: 'unknown' as const,
+        missingFields: [],
+        invalidFields: ['merged'],
+        conflictsWithReconstruction: false,
+      },
+    } as unknown as Partial<EvalRecord>);
+
+    await triggerHokusaiSubmission(record, {
+      repoDir,
+      configDir,
+      redactionSalt: '3'.repeat(64),
+    });
+
+    assert.equal(capturedRows.length, 1);
+    const proj = capturedRows[0] as Record<string, unknown>;
+    assert.equal(proj.outcomeSource, 'unknown');
+  });
 });

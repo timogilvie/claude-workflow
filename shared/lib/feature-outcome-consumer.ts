@@ -165,13 +165,8 @@ function validateNormalizedFields(outcome: Record<string, unknown>): {
     } else {
       // Boolean or null fields
       if (value !== null && typeof value !== 'boolean') {
-        if (nullable) {
-          invalidFields.push(field);
-          continue;
-        } else {
-          invalidFields.push(field);
-          continue;
-        }
+        invalidFields.push(field);
+        continue;
       }
       (normalizedFields as Record<string, unknown>)[field] = value;
     }

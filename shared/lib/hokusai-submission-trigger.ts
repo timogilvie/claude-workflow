@@ -89,7 +89,7 @@ function toContributionProjection(
       ? { outcomeDiagnostic: fod.eligibilityDiagnostic }
       : {}),
     ...(fod !== undefined
-      ? { outcomeSource: fod.used ? 'feature_outcome_artifact' : 'reconstructed' as const }
+      ? { outcomeSource: fod.used ? 'feature_outcome_artifact' : (fod.present ? 'unknown' : 'reconstructed') as const }
       : {}),
     ...(fod !== undefined
       ? { outcomeArtifactPresent: fod.present }

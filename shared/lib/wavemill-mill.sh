@@ -3231,6 +3231,7 @@ run_soft_gates_tick() {
 
   local stamp_file="$STATE_DIR/.soft-gates-last-run"
   local suppress_window="${WAVEMILL_SOFT_GATES_SUPPRESS_SECONDS:-21600}"
+  [[ "$suppress_window" =~ ^[0-9]+$ ]] || suppress_window=21600
   local check_soft_gates_cmd=(
     npx tsx "$TOOLS_DIR/check-soft-gates.ts"
     --repo "$REPO_DIR"
@@ -3249,8 +3250,6 @@ run_soft_gates_tick() {
   fi
 
   printf '%s\n' "$now" > "$stamp_file" 2>/dev/null || true
-
-  [[ "$suppress_window" =~ ^[0-9]+$ ]] || suppress_window=21600
 
   "${check_soft_gates_cmd[@]}" >/dev/null 2>&1 || true
 }

@@ -37,7 +37,13 @@ function listTargetsFromWorkflowState(repoDir: string): SoftGateTarget[] {
     }
     const task = rawTask as Record<string, unknown>;
     const slug = typeof task.slug === 'string' ? task.slug : undefined;
-    const featureDir = typeof task.worktree === 'string' ? task.worktree : undefined;
+    const featureDir = slug
+      ? join(
+        typeof task.worktree === 'string' ? task.worktree : repoDir,
+        'features',
+        slug,
+      )
+      : undefined;
     targets.push({ taskId, slug, featureDir });
   }
   return targets;
