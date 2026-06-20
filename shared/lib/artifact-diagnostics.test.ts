@@ -597,6 +597,52 @@ describe('diagnoseArtifacts', () => {
     assert.match(findings[0].actual || '', /missing fields/);
   });
 
+  it('11b. training-eligible eval with invalid normalized outcome field reports invalid fields', () => {
+    const tmpRepo = makeTempRepo();
+    tempDirs.push(tmpRepo);
+    const slug = 'eval-export-invalid-field';
+    const featureDir = makeFeatureDir(tmpRepo, slug);
+    writeSelectedTask(featureDir, 'HOK-0011B', slug);
+
+    writeFileSync(
+      join(featureDir, 'feature-state.json'),
+      JSON.stringify({
+        schemaVersion: '1.0',
+        derivedAt: new Date().toISOString(),
+        issueId: 'HOK-0011B',
+        slug,
+        currentPhase: 'done',
+        normalizedState: 'completed',
+        outcome: {
+          completed: true,
+          merged: 'yes',
+          ciPassed: true,
+          reviewPassed: true,
+          readyPassed: true,
+          manualIntervention: false,
+          interventionCount: 0,
+          evalScore: 0.9,
+          costUsd: 1.2,
+          durationSeconds: 30,
+        },
+      }),
+      'utf-8',
+    );
+    writeTraceContext(featureDir, 'trc_test_0011b');
+    writeEvalRecord(tmpRepo, {
+      id: 'eval-0011b',
+      issueId: 'HOK-0011B',
+      traceId: 'trc_test_0011b',
+      trainingEligible: true,
+    });
+
+    const report = diagnoseArtifacts({ repoDir: tmpRepo, featureDir });
+    const findings = report.findings.filter((finding) => finding.code === 'eval_export_inconsistency');
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].gateId, 'eval_export_inconsistency');
+    assert.match(findings[0].actual || '', /invalid fields merged/);
+  });
+
   it('12. fallback without safeguards — fallback_verification_mismatch warning', () => {
     const tmpRepo = makeTempRepo();
     tempDirs.push(tmpRepo);

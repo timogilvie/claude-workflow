@@ -949,9 +949,14 @@ function checkEvalExportInconsistency(
   }
   const diagnostics = loadFeatureOutcomeDiagnostics({ featureDir, archiveDir });
   const missingFields = diagnostics.missingFields ?? [];
-  if (!diagnostics.present || (diagnostics.used !== false && missingFields.length === 0)) {
+  const invalidFields = diagnostics.invalidFields ?? [];
+  if (!diagnostics.present || (diagnostics.used !== false && missingFields.length === 0 && invalidFields.length === 0)) {
     return [];
   }
+
+  const fieldSummary = missingFields.length > 0
+    ? `missing fields ${missingFields.join(',')}`
+    : `invalid fields ${invalidFields.join(',') || 'unknown'}`;
 
   return [makeFinding(
     'eval_export_inconsistency',
@@ -962,13 +967,14 @@ function checkEvalExportInconsistency(
       gateId: 'eval_export_inconsistency',
       expected: 'training-eligible evals backed by complete normalized outcome fields',
       actual: diagnostics.present
-        ? `feature outcome ${diagnostics.reason ?? 'incomplete'} with missing fields ${missingFields.join(',') || 'unknown'}`
+        ? `feature outcome ${diagnostics.reason ?? 'incomplete'} with ${fieldSummary}`
         : 'feature outcome artifact absent',
       recommendedAction: 'Materialize a complete feature-state.json before using the eval record for export or training diagnostics',
       details: {
         evalIds: matchingEvals.map((record) => record.id),
         reason: diagnostics.reason,
         missingFields,
+        invalidFields,
         used: diagnostics.used,
       },
     },

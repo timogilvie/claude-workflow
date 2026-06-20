@@ -165,7 +165,7 @@ describe('runSoftGates', () => {
     }
   });
 
-  it('emits completion_without_evidence warnings', () => {
+  it('emits completion_without_evidence warnings', async () => {
     const repoDir = makeTempRepo();
     tempDirs.push(repoDir);
     const featureDir = makeFeatureDir(repoDir, 'completion-no-evidence');
@@ -177,14 +177,14 @@ describe('runSoftGates', () => {
     writeFileSync(join(featureDir, '.coding-complete'), '', 'utf-8');
 
     const stderr = new CaptureStream();
-    const result = runSoftGates({ repoDir, featureDir, stderr });
+    const result = await runSoftGates({ repoDir, featureDir, stderr });
 
     assert.equal(result.emitted, 1);
     assert.equal(result.emittedWarnings[0].gate, 'completion_without_evidence');
     assert.match(stderr.output, /soft-gate\.warning issue=HOK-2001 gate=completion_without_evidence/);
   });
 
-  it('emits contract_source_hash_mismatch warnings', () => {
+  it('emits contract_source_hash_mismatch warnings', async () => {
     const repoDir = makeTempRepo();
     tempDirs.push(repoDir);
     const featureDir = makeFeatureDir(repoDir, 'contract-hash-drift');
@@ -193,11 +193,11 @@ describe('runSoftGates', () => {
     writeFeatureState(featureDir, 'HOK-2002', 'contract-hash-drift');
     writeFileSync(join(featureDir, 'task-packet.md'), 'changed', 'utf-8');
 
-    const result = runSoftGates({ repoDir, featureDir, dryRun: true });
+    const result = await runSoftGates({ repoDir, featureDir, dryRun: true });
     assert.equal(result.warnings[0].gate, 'contract_source_hash_mismatch');
   });
 
-  it('emits trace_linkage_missing warnings', () => {
+  it('emits trace_linkage_missing warnings', async () => {
     const repoDir = makeTempRepo();
     tempDirs.push(repoDir);
     const slug = 'trace-linkage-missing';
@@ -212,11 +212,11 @@ describe('runSoftGates', () => {
       'utf-8',
     );
 
-    const result = runSoftGates({ repoDir, featureDir, dryRun: true });
+    const result = await runSoftGates({ repoDir, featureDir, dryRun: true });
     assert.ok(result.warnings.some((warning) => warning.gate === 'trace_linkage_missing'));
   });
 
-  it('emits eval_export_inconsistency warnings', () => {
+  it('emits eval_export_inconsistency warnings', async () => {
     const repoDir = makeTempRepo();
     tempDirs.push(repoDir);
     const slug = 'eval-export-inconsistency';
@@ -238,11 +238,11 @@ describe('runSoftGates', () => {
     );
     writeEvalRecord(repoDir, { id: 'eval-2004', issueId: 'HOK-2004', traceId: 'trc_test_2004', trainingEligible: true });
 
-    const result = runSoftGates({ repoDir, featureDir, dryRun: true });
+    const result = await runSoftGates({ repoDir, featureDir, dryRun: true });
     assert.ok(result.warnings.some((warning) => warning.gate === 'eval_export_inconsistency'));
   });
 
-  it('writes no log file on a happy path', () => {
+  it('writes no log file on a happy path', async () => {
     const repoDir = makeTempRepo();
     tempDirs.push(repoDir);
     const slug = 'soft-gates-happy-path';
@@ -257,13 +257,13 @@ describe('runSoftGates', () => {
     writeTraceContext(featureDir, 'HOK-2005', slug, 'trc_test_2005');
     writeTraceEvent(featureDir, 'HOK-2005', slug, 'trc_test_2005', 'phase_started');
 
-    const result = runSoftGates({ repoDir, featureDir });
+    const result = await runSoftGates({ repoDir, featureDir });
     assert.equal(result.emitted, 0);
     assert.equal(result.checked, 0);
     assert.equal(existsSync(join(repoDir, '.wavemill', 'logs', 'soft-gates.jsonl')), false);
   });
 
-  it('suppresses duplicate warnings within the configured window', () => {
+  it('suppresses duplicate warnings within the configured window', async () => {
     const repoDir = makeTempRepo();
     tempDirs.push(repoDir);
     const featureDir = makeFeatureDir(repoDir, 'dedup-test');
@@ -272,8 +272,8 @@ describe('runSoftGates', () => {
     writeFileSync(join(featureDir, '.coding-complete'), '', 'utf-8');
 
     const stderr = new CaptureStream();
-    const first = runSoftGates({ repoDir, featureDir, suppressWindowSeconds: 3600, stderr });
-    const second = runSoftGates({ repoDir, featureDir, suppressWindowSeconds: 3600, stderr });
+    const first = await runSoftGates({ repoDir, featureDir, suppressWindowSeconds: 3600, stderr });
+    const second = await runSoftGates({ repoDir, featureDir, suppressWindowSeconds: 3600, stderr });
 
     assert.equal(first.emitted, 1);
     assert.equal(second.emitted, 0);
@@ -282,9 +282,10 @@ describe('runSoftGates', () => {
       .trim()
       .split('\n');
     assert.equal(logLines.length, 1);
+    assert.equal(existsSync(join(repoDir, '.wavemill', 'logs', '.soft-gates-seen.json')), true);
   });
 
-  it('is best-effort on malformed or missing inputs', () => {
+  it('is best-effort on malformed or missing inputs', async () => {
     const repoDir = makeTempRepo();
     tempDirs.push(repoDir);
     const featureDir = makeFeatureDir(repoDir, 'best-effort');
@@ -292,8 +293,8 @@ describe('runSoftGates', () => {
     writeFileSync(join(featureDir, 'task-contract.json'), '{invalid', 'utf-8');
 
     const stderr = new CaptureStream();
-    assert.doesNotThrow(() => runSoftGates({ repoDir, featureDir, stderr }));
-    const result = runSoftGates({ repoDir, featureDir, stderr });
+    await assert.doesNotReject(() => runSoftGates({ repoDir, featureDir, stderr }));
+    const result = await runSoftGates({ repoDir, featureDir, stderr });
     assert.ok(result.warnings.some((warning) => warning.gate === 'artifact_malformed'));
   });
 });

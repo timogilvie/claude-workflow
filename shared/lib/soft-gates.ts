@@ -9,6 +9,7 @@ import {
   type DiagnoseArtifactsOptions,
 } from './artifact-diagnostics.ts';
 import { appendJsonlRecord } from './jsonl-utils.ts';
+import { mutateJsonState } from './state-mutex.ts';
 
 export type SoftGateSeverity = 'warn' | 'error';
 
@@ -46,9 +47,9 @@ export interface SoftGateRunResult {
   logPath: string;
 }
 
-interface LoggedSoftGateRecord {
-  timestamp?: string;
-  fingerprint?: string;
+interface SoftGateSeenState {
+  version: 1;
+  fingerprints: Record<string, string>;
 }
 
 const DEFAULT_SUPPRESS_WINDOW_SECONDS = 21600;
@@ -116,44 +117,45 @@ function resolveLogPath(repoDir: string, explicitPath?: string): string {
   return join(resolve(repoDir), '.wavemill', 'logs', 'soft-gates.jsonl');
 }
 
-function parseJsonlSafely<T>(filePath: string): T[] {
-  if (!existsSync(filePath)) {
-    return [];
-  }
-  try {
-    const content = readFileSync(filePath, 'utf-8');
-    const records: T[] = [];
-    for (const line of content.split('\n')) {
-      if (!line.trim()) continue;
-      try {
-        records.push(JSON.parse(line) as T);
-      } catch {
-        // Ignore malformed historical lines.
-      }
-    }
-    return records;
-  } catch {
-    return [];
-  }
+function resolveSeenStatePath(logPath: string): string {
+  return join(dirname(logPath), '.soft-gates-seen.json');
 }
 
-function collectSuppressedFingerprints(
-  logPath: string,
+function readSeenStateFingerprints(
+  seenStatePath: string,
   suppressWindowSeconds: number,
   nowMs: number,
 ): Set<string> {
   const fingerprints = new Set<string>();
   const minTimestamp = nowMs - (suppressWindowSeconds * 1000);
 
-  for (const record of parseJsonlSafely<LoggedSoftGateRecord>(logPath)) {
-    if (typeof record.fingerprint !== 'string' || !record.fingerprint) {
+  if (!existsSync(seenStatePath)) {
+    return fingerprints;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(seenStatePath, 'utf-8'));
+  } catch {
+    return fingerprints;
+  }
+
+  const records = (parsed && typeof parsed === 'object' && !Array.isArray(parsed))
+    ? (parsed as { fingerprints?: Record<string, unknown> }).fingerprints
+    : undefined;
+  if (!records || typeof records !== 'object' || Array.isArray(records)) {
+    return fingerprints;
+  }
+
+  for (const [fingerprint, timestamp] of Object.entries(records)) {
+    if (!fingerprint) {
       continue;
     }
-    const timestampMs = typeof record.timestamp === 'string' ? Date.parse(record.timestamp) : Number.NaN;
+    const timestampMs = typeof timestamp === 'string' ? Date.parse(timestamp) : Number.NaN;
     if (!Number.isFinite(timestampMs) || timestampMs < minTimestamp) {
       continue;
     }
-    fingerprints.add(record.fingerprint);
+    fingerprints.add(fingerprint);
   }
 
   return fingerprints;
@@ -181,36 +183,78 @@ export function evaluateSoftGates(options: EvaluateSoftGatesOptions): SoftGateWa
   return warnings;
 }
 
-export function runSoftGates(options: RunSoftGatesOptions): SoftGateRunResult {
+export async function runSoftGates(options: RunSoftGatesOptions): Promise<SoftGateRunResult> {
   const repoDir = resolve(options.repoDir);
   const logPath = resolveLogPath(repoDir, options.logPath);
+  const seenStatePath = resolveSeenStatePath(logPath);
   const warnings = evaluateSoftGates(options);
   const suppressWindowSeconds = resolveSuppressWindowSeconds(options.suppressWindowSeconds);
   const stderr = options.stderr ?? process.stderr;
-  const existingFingerprints = collectSuppressedFingerprints(logPath, suppressWindowSeconds, Date.now());
-
   const emittedWarnings: SoftGateWarning[] = [];
   const suppressedWarnings: SoftGateWarning[] = [];
+  const nowMs = Date.now();
+  const minTimestamp = nowMs - (suppressWindowSeconds * 1000);
 
   if (!options.dryRun) {
     mkdirSync(dirname(logPath), { recursive: true });
   }
 
-  for (const warning of warnings) {
-    if (existingFingerprints.has(warning.fingerprint)) {
-      suppressedWarnings.push(warning);
-      continue;
+  if (options.dryRun) {
+    const existingFingerprints = readSeenStateFingerprints(seenStatePath, suppressWindowSeconds, nowMs);
+    for (const warning of warnings) {
+      if (existingFingerprints.has(warning.fingerprint)) {
+        suppressedWarnings.push(warning);
+        continue;
+      }
+      emittedWarnings.push(warning);
+    }
+  } else {
+    try {
+      await mutateJsonState<SoftGateSeenState>(
+        seenStatePath,
+        (current) => {
+          const fingerprints = { ...(current.fingerprints ?? {}) };
+
+          for (const [fingerprint, timestamp] of Object.entries(fingerprints)) {
+            const timestampMs = Date.parse(timestamp);
+            if (!Number.isFinite(timestampMs) || timestampMs < minTimestamp) {
+              delete fingerprints[fingerprint];
+            }
+          }
+
+          for (const warning of warnings) {
+            const previousTimestamp = fingerprints[warning.fingerprint];
+            const previousMs = previousTimestamp ? Date.parse(previousTimestamp) : Number.NaN;
+            if (Number.isFinite(previousMs) && previousMs >= minTimestamp) {
+              suppressedWarnings.push(warning);
+              continue;
+            }
+
+            try {
+              appendJsonlRecord(logPath, warning);
+              fingerprints[warning.fingerprint] = warning.timestamp;
+              emittedWarnings.push(warning);
+            } catch {
+              // Non-blocking by design.
+            }
+          }
+
+          return { version: 1, fingerprints };
+        },
+        { createIfMissing: true, initial: { version: 1, fingerprints: {} } },
+      );
+    } catch {
+      for (const warning of warnings) {
+        emittedWarnings.push(warning);
+        try {
+          appendJsonlRecord(logPath, warning);
+        } catch {
+          // Non-blocking by design.
+        }
+      }
     }
 
-    emittedWarnings.push(warning);
-    existingFingerprints.add(warning.fingerprint);
-
-    if (!options.dryRun) {
-      try {
-        appendJsonlRecord(logPath, warning);
-      } catch {
-        // Non-blocking by design.
-      }
+    for (const warning of emittedWarnings) {
       try {
         printStderrWarning(stderr, warning);
       } catch {

@@ -87,7 +87,7 @@ runTool({
     'npx tsx tools/check-soft-gates.ts --all',
     'npx tsx tools/check-soft-gates.ts --all --dry-run --json',
   ],
-  run({ args, positional }) {
+  async run({ args, positional }) {
     const repoDir = resolve((args.repo as string | undefined) ?? process.cwd());
     const dryRun = args['dry-run'] === true;
     const asJson = args.json === true;
@@ -102,12 +102,12 @@ runTool({
         featureDir: args['feature-dir'] as string | undefined,
       }];
 
-    const results = targets.map((target) => runSoftGates({
+    const results = await Promise.all(targets.map((target) => runSoftGates({
       repoDir,
       ...target,
       dryRun,
       suppressWindowSeconds,
-    }));
+    })));
 
     if (asJson) {
       console.log(JSON.stringify({
