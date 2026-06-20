@@ -130,6 +130,7 @@ for fn in \
   dispatch_queued_children_for_parent \
   clear_transient_mergeability_state \
   reroute_expanded_packets_for_coding_handoff \
+  handle_expanded_reroute_handoff_failure \
   recover_missing_expansion_artifact \
   recover_misplaced_coding_complete_marker \
   guard_coding_complete_handoff \
