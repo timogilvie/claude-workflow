@@ -5967,7 +5967,9 @@ expansion_recovery_resolve_issue_id() {
   fi
 
   if [[ "$linear_issue" =~ ^https?://linear\.app/[^/]+/issue/[A-Z][A-Z0-9]*-[0-9]+([/?#].*)?$ ]]; then
-    printf '%s\n' "$linear_issue"
+    local linear_url_path="${linear_issue#*://linear.app/}"
+    linear_url_path="${linear_url_path#*/issue/}"
+    printf '%s\n' "${linear_url_path%%[/?#]*}"
     return 0
   fi
 
