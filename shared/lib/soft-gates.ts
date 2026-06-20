@@ -209,8 +209,9 @@ export async function runSoftGates(options: RunSoftGatesOptions): Promise<SoftGa
       emittedWarnings.push(warning);
     }
   } else {
+    const preexistingFingerprints = readSeenStateFingerprints(seenStatePath, suppressWindowSeconds, nowMs);
     try {
-      await mutateJsonState<SoftGateSeenState>(
+      const nextState = await mutateJsonState<SoftGateSeenState>(
         seenStatePath,
         (current) => {
           const fingerprints = { ...(current.fingerprints ?? {}) };
@@ -225,17 +226,8 @@ export async function runSoftGates(options: RunSoftGatesOptions): Promise<SoftGa
           for (const warning of warnings) {
             const previousTimestamp = fingerprints[warning.fingerprint];
             const previousMs = previousTimestamp ? Date.parse(previousTimestamp) : Number.NaN;
-            if (Number.isFinite(previousMs) && previousMs >= minTimestamp) {
-              suppressedWarnings.push(warning);
-              continue;
-            }
-
-            try {
-              appendJsonlRecord(logPath, warning);
+            if (!Number.isFinite(previousMs) || previousMs < minTimestamp) {
               fingerprints[warning.fingerprint] = warning.timestamp;
-              emittedWarnings.push(warning);
-            } catch {
-              // Non-blocking by design.
             }
           }
 
@@ -243,6 +235,25 @@ export async function runSoftGates(options: RunSoftGatesOptions): Promise<SoftGa
         },
         { createIfMissing: true, initial: { version: 1, fingerprints: {} } },
       );
+
+      for (const warning of warnings) {
+        if (preexistingFingerprints.has(warning.fingerprint)) {
+          suppressedWarnings.push(warning);
+          continue;
+        }
+
+        if (nextState.fingerprints[warning.fingerprint] !== warning.timestamp) {
+          suppressedWarnings.push(warning);
+          continue;
+        }
+
+        try {
+          appendJsonlRecord(logPath, warning);
+          emittedWarnings.push(warning);
+        } catch {
+          // Non-blocking by design.
+        }
+      }
     } catch {
       for (const warning of warnings) {
         emittedWarnings.push(warning);
