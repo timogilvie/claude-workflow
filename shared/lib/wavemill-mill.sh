@@ -4469,18 +4469,7 @@ _restore_inflight_task_window_if_missing() {
       ;;
     coding)
       if ! reroute_expanded_packets_for_coding_handoff "$issue" "$slug" "$feature_dir"; then
-        if [[ "${REROUTE_EXPANDED_LAST_REASON:-}" == "disabled" || "${REROUTE_EXPANDED_LAST_REASON:-}" == "not_eligible" ]]; then
-          log_route_lifecycle "expansion_skipped" \
-            "issue=$issue" \
-            "reason=${REROUTE_EXPANDED_LAST_REASON:-not_eligible}" \
-            "active_route=\"$(route_lifecycle_route_id "$feature_dir/.routing-complete" 2>/dev/null || true)\""
-        else
-          log_route_lifecycle "expansion_failed" \
-            "issue=$issue" \
-            "reason=${REROUTE_EXPANDED_LAST_REASON:-routing_error}" \
-            "active_route=\"$(route_lifecycle_route_id "$feature_dir/.routing-complete" 2>/dev/null || true)\""
-        fi
-        log_warn "$issue → expanded reroute helper failed, attempting promotion from existing artifacts"
+        handle_expanded_reroute_handoff_failure "$issue" "$feature_dir"
       fi
       if ! apply_expanded_route_if_present "$feature_dir" "$issue" "$slug" "$wt_dir" "$STATE_FILE"; then
         log_warn "$issue → expanded route invalid; using existing execution state for coding relaunch"
@@ -7012,6 +7001,30 @@ reroute_expanded_packets_for_coding_handoff() {
   return 0
 }
 
+handle_expanded_reroute_handoff_failure() {
+  local issue="$1" feature_dir="$2"
+  local reason="${REROUTE_EXPANDED_LAST_REASON:-routing_error}"
+  local active_route
+  active_route="$(route_lifecycle_route_id "$feature_dir/.routing-complete" 2>/dev/null || true)"
+
+  case "$reason" in
+    disabled|not_eligible)
+      log_route_lifecycle "expansion_skipped" \
+        "issue=$issue" \
+        "reason=$reason" \
+        "active_route=\"$active_route\""
+      log "info" "$issue → expanded reroute skipped ($reason), attempting promotion from existing artifacts"
+      ;;
+    *)
+      log_route_lifecycle "expansion_failed" \
+        "issue=$issue" \
+        "reason=$reason" \
+        "active_route=\"$active_route\""
+      log_warn "$issue → expanded reroute helper failed, attempting promotion from existing artifacts"
+      ;;
+  esac
+}
+
 recover_missing_expansion_artifact() {
   local issue="$1" slug="$2" feature_dir="$3"
   local expand_tool="$TOOLS_DIR/expand-issue.ts"
@@ -9443,18 +9456,7 @@ monitor_issue_state() {
             approve_plan "$FEATURE_DIR" "$current_agent" ""
 
             if ! reroute_expanded_packets_for_coding_handoff "$ISSUE" "$SLUG" "$FEATURE_DIR"; then
-              if [[ "${REROUTE_EXPANDED_LAST_REASON:-}" == "disabled" || "${REROUTE_EXPANDED_LAST_REASON:-}" == "not_eligible" ]]; then
-                log_route_lifecycle "expansion_skipped" \
-                  "issue=$ISSUE" \
-                  "reason=${REROUTE_EXPANDED_LAST_REASON:-not_eligible}" \
-                  "active_route=\"$(route_lifecycle_route_id "$FEATURE_DIR/.routing-complete" 2>/dev/null || true)\""
-              else
-                log_route_lifecycle "expansion_failed" \
-                  "issue=$ISSUE" \
-                  "reason=${REROUTE_EXPANDED_LAST_REASON:-routing_error}" \
-                  "active_route=\"$(route_lifecycle_route_id "$FEATURE_DIR/.routing-complete" 2>/dev/null || true)\""
-              fi
-              log_warn "$ISSUE → expanded reroute helper failed, attempting promotion from existing artifacts"
+              handle_expanded_reroute_handoff_failure "$ISSUE" "$FEATURE_DIR"
             fi
             if ! apply_expanded_route_if_present "$FEATURE_DIR" "$ISSUE" "$SLUG" "${WORKTREE_ROOT}/${SLUG}" "$STATE_FILE"; then
               log_warn "$ISSUE → expanded route invalid; using bootstrap execution route for coding"

@@ -175,7 +175,8 @@ harness_extract_real_functions() {
     ready_conflict_launch_head \
     _persist_phase \
     expansion_recovery_resolve_issue_id \
-    recover_missing_expansion_artifact
+    recover_missing_expansion_artifact \
+    handle_expanded_reroute_handoff_failure
   do
     local extracted
     extracted="$(extract_function "$MILL_SCRIPT" "$func")"
@@ -1607,6 +1608,84 @@ test_tracked_root_level_coding_complete_marker_is_ignored() {
   check_not_contains "tracked root marker: no recovery warning logged" "$(kv_value "$tick" warn_output)" "Recovered misplaced .coding-complete"
 }
 
+test_not_eligible_expanded_reroute_does_not_emit_helper_failure_warn() {
+  local slug="not-eligible-expanded-reroute"
+  local issue="HOK-2274-NOT-ELIGIBLE"
+  local repo tick
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_planning_state "$repo" "$slug" "completed"
+  harness_setup_runtime_artifacts "$repo"
+  harness_seed_bootstrap_route "$repo" "$slug"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" '
+    log_route_lifecycle() { LOG_OUTPUT+="route.lifecycle event=$1 $*\n"; }
+    reroute_expanded_packets_for_coding_handoff() {
+      REROUTE_CALLED="true"
+      REROUTE_EXPANDED_LAST_REASON="not_eligible"
+      return 1
+    }
+  ')"
+
+  check_eq "not_eligible: coding launches" "true" "$(kv_value "$tick" coding_launched)"
+  check_eq "not_eligible: reroute was called" "true" "$(kv_value "$tick" reroute_called)"
+  check_eq "not_eligible: apply was called" "true" "$(kv_value "$tick" apply_called)"
+  check_contains "not_eligible: expansion_skipped lifecycle event emitted" "$(kv_value "$tick" log_output)" "expansion_skipped"
+  check_contains "not_eligible: reason logged" "$(kv_value "$tick" log_output)" "reason=not_eligible"
+  check_not_contains "not_eligible: no helper-failed warning" "$(kv_value "$tick" warn_output)" "expanded reroute helper failed"
+}
+
+test_disabled_expanded_reroute_does_not_emit_helper_failure_warn() {
+  local slug="disabled-expanded-reroute"
+  local issue="HOK-2274-DISABLED"
+  local repo tick
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_planning_state "$repo" "$slug" "completed"
+  harness_setup_runtime_artifacts "$repo"
+  harness_seed_bootstrap_route "$repo" "$slug"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" '
+    log_route_lifecycle() { LOG_OUTPUT+="route.lifecycle event=$1 $*\n"; }
+    reroute_expanded_packets_for_coding_handoff() {
+      REROUTE_CALLED="true"
+      REROUTE_EXPANDED_LAST_REASON="disabled"
+      return 1
+    }
+  ')"
+
+  check_eq "disabled: coding launches" "true" "$(kv_value "$tick" coding_launched)"
+  check_eq "disabled: reroute was called" "true" "$(kv_value "$tick" reroute_called)"
+  check_eq "disabled: apply was called" "true" "$(kv_value "$tick" apply_called)"
+  check_contains "disabled: expansion_skipped lifecycle event emitted" "$(kv_value "$tick" log_output)" "expansion_skipped"
+  check_contains "disabled: reason logged" "$(kv_value "$tick" log_output)" "reason=disabled"
+  check_not_contains "disabled: no helper-failed warning" "$(kv_value "$tick" warn_output)" "expanded reroute helper failed"
+}
+
+test_routing_error_expanded_reroute_emits_helper_failure_warn() {
+  local slug="routing-error-expanded-reroute"
+  local issue="HOK-2274-ROUTING-ERROR"
+  local repo tick
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_planning_state "$repo" "$slug" "completed"
+  harness_setup_runtime_artifacts "$repo"
+  harness_seed_bootstrap_route "$repo" "$slug"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" '
+    log_route_lifecycle() { LOG_OUTPUT+="route.lifecycle event=$1 $*\n"; }
+    reroute_expanded_packets_for_coding_handoff() {
+      REROUTE_CALLED="true"
+      REROUTE_EXPANDED_LAST_REASON="routing_error"
+      return 1
+    }
+  ')"
+
+  check_eq "routing_error: coding launches" "true" "$(kv_value "$tick" coding_launched)"
+  check_eq "routing_error: reroute was called" "true" "$(kv_value "$tick" reroute_called)"
+  check_eq "routing_error: apply was called" "true" "$(kv_value "$tick" apply_called)"
+  check_contains "routing_error: expansion_failed lifecycle event emitted" "$(kv_value "$tick" log_output)" "expansion_failed"
+  check_contains "routing_error: reason logged" "$(kv_value "$tick" log_output)" "reason=routing_error"
+  check_contains "routing_error: helper-failed warning emitted" "$(kv_value "$tick" warn_output)" "expanded reroute helper failed"
+}
+
 echo "=== Mill Lifecycle: Planning to Coding Handoff ==="
 harness_extract_real_functions
 
@@ -1642,6 +1721,9 @@ test_coding_blocked_completion_dedupes_when_stat_unavailable
 test_misplaced_coding_complete_marker_is_recovered
 test_root_level_coding_complete_marker_is_recovered
 test_tracked_root_level_coding_complete_marker_is_ignored
+test_not_eligible_expanded_reroute_does_not_emit_helper_failure_warn
+test_disabled_expanded_reroute_does_not_emit_helper_failure_warn
+test_routing_error_expanded_reroute_emits_helper_failure_warn
 
 echo ""
 if [[ "$FAIL" -eq 0 ]]; then
