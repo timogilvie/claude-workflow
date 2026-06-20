@@ -5920,6 +5920,31 @@ get_linear_issue_id() {
   [[ -n "$linear_issue" ]] && echo "$linear_issue" || echo "$issue"
 }
 
+expansion_recovery_resolve_issue_id() {
+  local issue="$1"
+  local linear_issue=""
+
+  if [[ "$issue" != *_c ]]; then
+    printf '%s\n' "$issue"
+    return 0
+  fi
+
+  linear_issue="$(get_task_meta "$issue" "linearIssueId")"
+  linear_issue="${linear_issue#"${linear_issue%%[![:space:]]*}"}"
+  linear_issue="${linear_issue%"${linear_issue##*[![:space:]]}"}"
+  if [[ "$linear_issue" =~ ^[A-Z][A-Z0-9]*-[0-9]+$ ]]; then
+    printf '%s\n' "$linear_issue"
+    return 0
+  fi
+
+  if [[ "$linear_issue" =~ ^https?://linear\.app/[^/]+/issue/[A-Z][A-Z0-9]*-[0-9]+([/?#].*)?$ ]]; then
+    printf '%s\n' "$linear_issue"
+    return 0
+  fi
+
+  return 1
+}
+
 should_update_linear_state() {
   local issue="$1"
   local role
@@ -7007,7 +7032,7 @@ recover_missing_expansion_artifact() {
   local route_file="$feature_dir/.post-expansion-route.json"
   local recovery_log_dir="$REPO_DIR/.wavemill/logs"
   local recovery_log_file="$recovery_log_dir/expansion-recovery-${issue}.log"
-  local recovery_timeout=""
+  local recovery_timeout="" recovery_issue=""
   local packet_content="" detail="" rc=0
 
   if expansion_recovery_already_attempted "$feature_dir"; then
@@ -7029,8 +7054,15 @@ recover_missing_expansion_artifact() {
     return 1
   fi
 
+  if ! recovery_issue="$(expansion_recovery_resolve_issue_id "$issue")"; then
+    detail="synthetic-challenger-linear-issue-id-missing-or-invalid"
+    expansion_recovery_mark_result "$feature_dir" "$issue" "skipped" "$detail" "0" || true
+    log "warn" "[expansion-handshake] RECOVERY_SKIPPED issue=$issue detail=$detail"
+    return 1
+  fi
+
   recovery_timeout="$(get_expansion_handshake_timeout_seconds "$REPO_DIR")"
-  if _with_timeout "$recovery_timeout" npx tsx "$expand_tool" "$issue" --output "$packet_file" >"$recovery_log_file" 2>&1; then
+  if _with_timeout "$recovery_timeout" npx tsx "$expand_tool" "$recovery_issue" --output "$packet_file" >"$recovery_log_file" 2>&1; then
     :
   else
     rc=$?
