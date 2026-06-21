@@ -126,6 +126,22 @@ describe('native-agent compaction', () => {
     assert.equal(transformContext([over], { ...CONFIG, maxOutputTokens: 1_000 }).events.length, 1);
   });
 
+  it('compacts one token over the token cap but not exactly at the cap', () => {
+    const exactTokenText = 'a'.repeat(CONFIG.maxOutputTokens * 4);
+    const overTokenText = `${exactTokenText}a`;
+    const tokenOnlyConfig = { ...CONFIG, maxOutputBytes: 1_000 };
+
+    assert.equal(transformContext([nativeToolResult('read_file', exactTokenText)], tokenOnlyConfig).events.length, 0);
+    assert.equal(transformContext([nativeToolResult('read_file', overTokenText)], tokenOnlyConfig).events.length, 1);
+  });
+
+  it('throws when caps are too small for the compaction marker', () => {
+    assert.throws(
+      () => transformContext([nativeToolResult('read_file', 'aa')], { maxOutputBytes: 1, maxOutputTokens: 1 }),
+      /Compaction caps are too small for the required marker/,
+    );
+  });
+
   it('leaves non-compactible tools unchanged', () => {
     const message = nativeToolResult('write_file', longText('write'));
     const result = transformContext([message], CONFIG);

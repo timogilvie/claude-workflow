@@ -248,7 +248,7 @@ function shrinkMarkerOnly(
 ): string {
   let marker = buildMarker(metadata, 0, 0);
   if (fitsCaps(marker, config)) return marker;
-  while (marker.length > 0 && !fitsCaps(marker, config)) {
+  while (marker.length > COMPACTION_MARKER.length && !fitsCaps(marker, config)) {
     marker = marker.slice(0, -1);
   }
   return marker;
