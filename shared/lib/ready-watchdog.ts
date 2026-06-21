@@ -399,14 +399,24 @@ async function inspectWorktreeMergeState(worktree: string): Promise<WorktreeMerg
       encoding: 'utf-8',
       maxBuffer: 1024 * 1024,
     });
-    const entries = stdout.split('\0').filter(Boolean);
-    for (const entry of entries) {
+    // In `--porcelain=v1 -z`, each entry is `XY <path>\0`. Rename/copy entries
+    // additionally emit the original path as a separate trailing `<path>\0`
+    // token with no status code, which must be consumed rather than parsed.
+    const entries = stdout.split('\0');
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i];
+      if (!entry) {
+        continue;
+      }
       const rawCode = entry.slice(0, 2);
-      const pathText = entry.slice(3);
-      const pathName = pathText.includes(' -> ') ? pathText.split(' -> ').pop() || pathText : pathText;
+      const pathName = entry.slice(3);
       state.rawStatus.push(`${rawCode} ${pathName}`);
 
       const [indexStatus, worktreeStatus] = rawCode;
+      if (indexStatus === 'R' || indexStatus === 'C' || worktreeStatus === 'R' || worktreeStatus === 'C') {
+        // Skip the original-path token that follows a rename/copy entry.
+        i += 1;
+      }
       const isUnmerged = indexStatus === 'U'
         || worktreeStatus === 'U'
         || rawCode === 'AA'
