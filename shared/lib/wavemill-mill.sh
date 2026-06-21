@@ -2753,13 +2753,13 @@ save_task_state() {
       (.tasks[$issue].challengeModel // "") as $old_challenge_model |
       (.tasks[$issue].evalRunning // null) as $old_eval_running |
       (.tasks[$issue].comparisonRunning // null) as $old_comparison_running |
-      (.tasks[$issue].comparisonState // "") as $old_comparison_state |
-      (.tasks[$issue].comparisonBlockedReason // "") as $old_comparison_blocked_reason |
+      (.tasks[$issue].comparisonState // null) as $old_comparison_state |
+      (.tasks[$issue].comparisonBlockedReason // null) as $old_comparison_blocked_reason |
       (.tasks[$issue].comparisonRetryCount // null) as $old_comparison_retry_count |
       (.tasks[$issue].comparisonRetryMaxAttempts // null) as $old_comparison_retry_max_attempts |
-      (.tasks[$issue].comparisonRetryTargetIssue // "") as $old_comparison_retry_target_issue |
+      (.tasks[$issue].comparisonRetryTargetIssue // null) as $old_comparison_retry_target_issue |
       (.tasks[$issue].comparisonTimedOutSides // null) as $old_comparison_timed_out_sides |
-      (.tasks[$issue].manualComparisonArtifact // "") as $old_manual_comparison_artifact |
+      (.tasks[$issue].manualComparisonArtifact // null) as $old_manual_comparison_artifact |
       (.tasks[$issue].linearIssueId // $issue) as $old_linear_issue |
       (.tasks[$issue].coderModel // "") as $old_coderModel |
       (.tasks[$issue].plannerModel // "") as $old_plannerModel |
@@ -6497,7 +6497,7 @@ poll_challenge_jobs() {
     fi
     if [[ "$kind" == "eval" && "$reason" == "timed_out" && -n "$issue_id" && -n "$pair_id" ]]; then
       local retry_max retry_count timed_out_sides_csv timeout_reason primary_key challenger_key artifact_path
-      local issue_pr issue_branch issue_slug current_state
+      local issue_pr issue_branch issue_slug
       primary_key="$pair_id"
       challenger_key="${pair_id}_c"
       settle_tracked_job "$job_id"
@@ -6514,12 +6514,9 @@ poll_challenge_jobs() {
       fi
       timed_out_sides_csv="${timed_out_sides_csv#,}"
       timeout_reason=$(challenge_pair_timeout_reason "$timed_out_sides_csv")
-      current_state=$(read_state_value "" --arg i "$primary_key" '.tasks[$i].comparisonState // empty')
 
       if (( retry_count < retry_max )); then
-        if [[ "$current_state" != "retrying_eval" ]]; then
-          retry_count=$((retry_count + 1))
-        fi
+        retry_count=$((retry_count + 1))
         write_challenge_pair_state "$pair_id" "retrying_eval" "$timeout_reason" "$retry_count" "$retry_max" "$issue_id" "$timed_out_sides_csv" ""
         state_mutate "$STATE_FILE" '
           .tasks[$issue].evalFailed = false
@@ -10718,11 +10715,6 @@ monitor_issue_state() {
       challenge_comparison_state=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].comparisonState // empty')
       case "$challenge_comparison_state" in
         manual_comparison_needed)
-          set_window_attention_state "$WIN" "needs-user"
-          active_count=$((active_count + 1))
-          return 0
-          ;;
-        comparison_blocked)
           set_window_attention_state "$WIN" "needs-user"
           active_count=$((active_count + 1))
           return 0

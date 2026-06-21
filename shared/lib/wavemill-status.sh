@@ -958,7 +958,7 @@ task_running_detail() {
     retrying_eval)
       printf 'comparison retrying: timed_out=%s attempt=%s/%s reason=%s\n' "${timed_out_sides:-unknown}" "${retry_count:-0}" "${retry_max:-0}" "${blocked_reason:-eval_timed_out}"
       ;;
-    manual_comparison_needed|comparison_blocked)
+    manual_comparison_needed)
       printf 'manual comparison needed: timed_out=%s artifact=%s\n' "${timed_out_sides:-unknown}" "${manual_artifact:-missing}"
       ;;
   esac

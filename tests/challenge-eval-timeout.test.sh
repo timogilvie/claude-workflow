@@ -119,6 +119,7 @@ POLL_JSON=""
 mkdir -p "$REPO_DIR" "$WORKTREE_ROOT" "$TOOLS_DIR"
 
 log() { printf -v LOG_OUTPUT "%s%s\n" "$LOG_OUTPUT" "$2"; }
+challenge_eval_retry_max_attempts() { printf '%s\n' "${RETRY_MAX_OVERRIDE:-1}"; }
 log_warn() { printf -v LOG_OUTPUT "%sWARN: %s\n" "$LOG_OUTPUT" "$1"; }
 settle_tracked_job() {
   local job_id="$1"
@@ -210,6 +211,130 @@ JSON
   printf 'retry_calls=%s\n' "$(printf '%s' "$RETRY_CALLS" | tr '\n' ';')"
 }
 
+run_second_retry_case() {
+  cat > "$STATE_FILE" <<JSON
+{
+  "tasks": {
+    "HOK-2269": {
+      "slug": "hok-2269",
+      "branch": "task/hok-2269",
+      "worktree": "$WORKTREE_ROOT/hok-2269",
+      "pr": "754",
+      "status": "ready",
+      "phase": "ready",
+      "evalCompleted": false,
+      "evalFailed": false,
+      "challenge": true,
+      "challengePairId": "HOK-2269",
+      "challengeRole": "primary",
+      "comparisonState": "retrying_eval",
+      "comparisonRetryCount": 1,
+      "comparisonRetryMaxAttempts": 2,
+      "comparisonTimedOutSides": ["primary"]
+    },
+    "HOK-2269_c": {
+      "slug": "hok-2269-c",
+      "branch": "task/hok-2269-c",
+      "worktree": "$WORKTREE_ROOT/hok-2269-c",
+      "pr": "755",
+      "status": "ready",
+      "phase": "ready",
+      "evalCompleted": true,
+      "evalFailed": false,
+      "challenge": true,
+      "challengePairId": "HOK-2269",
+      "challengeRole": "challenger",
+      "comparisonState": "retrying_eval",
+      "comparisonRetryCount": 1,
+      "comparisonRetryMaxAttempts": 2,
+      "comparisonTimedOutSides": ["primary"]
+    }
+  },
+  "jobs": {
+    "eval-HOK-2269-primary-754": {
+      "id": "eval-HOK-2269-primary-754",
+      "kind": "eval",
+      "issueId": "HOK-2269",
+      "pairId": "HOK-2269",
+      "side": "primary",
+      "status": "timeout"
+    }
+  }
+}
+JSON
+  mkdir -p "$WORKTREE_ROOT/hok-2269/features/hok-2269/ready"
+  mkdir -p "$WORKTREE_ROOT/hok-2269-c/features/hok-2269-c/ready"
+  POLL_JSON='{"unsettled":[{"id":"eval-HOK-2269-primary-754","kind":"eval","status":"timeout","issueId":"HOK-2269","pairId":"HOK-2269","side":"primary","reason":"timed_out","logPath":"/tmp/primary.log"}]}'
+  SETTLE_ISSUE="HOK-2269"
+  poll_challenge_jobs
+  printf 'second_state=%s\n' "$(jq -r '.tasks["HOK-2269"].comparisonState' "$STATE_FILE")"
+  printf 'second_count=%s\n' "$(jq -r '.tasks["HOK-2269"].comparisonRetryCount' "$STATE_FILE")"
+  printf 'second_max=%s\n' "$(jq -r '.tasks["HOK-2269"].comparisonRetryMaxAttempts' "$STATE_FILE")"
+  printf 'second_calls=%s\n' "$(printf '%s' "$RETRY_CALLS" | tr '\n' ';')"
+}
+
+run_exhausted_retry_case() {
+  cat > "$STATE_FILE" <<JSON
+{
+  "tasks": {
+    "HOK-2269": {
+      "slug": "hok-2269",
+      "branch": "task/hok-2269",
+      "worktree": "$WORKTREE_ROOT/hok-2269",
+      "pr": "754",
+      "status": "ready",
+      "phase": "ready",
+      "evalCompleted": false,
+      "evalFailed": false,
+      "challenge": true,
+      "challengePairId": "HOK-2269",
+      "challengeRole": "primary",
+      "comparisonState": "retrying_eval",
+      "comparisonRetryCount": 2,
+      "comparisonRetryMaxAttempts": 2,
+      "comparisonTimedOutSides": ["primary"]
+    },
+    "HOK-2269_c": {
+      "slug": "hok-2269-c",
+      "branch": "task/hok-2269-c",
+      "worktree": "$WORKTREE_ROOT/hok-2269-c",
+      "pr": "755",
+      "status": "ready",
+      "phase": "ready",
+      "evalCompleted": true,
+      "evalFailed": false,
+      "challenge": true,
+      "challengePairId": "HOK-2269",
+      "challengeRole": "challenger",
+      "comparisonState": "retrying_eval",
+      "comparisonRetryCount": 2,
+      "comparisonRetryMaxAttempts": 2,
+      "comparisonTimedOutSides": ["primary"]
+    }
+  },
+  "jobs": {
+    "eval-HOK-2269-primary-754": {
+      "id": "eval-HOK-2269-primary-754",
+      "kind": "eval",
+      "issueId": "HOK-2269",
+      "pairId": "HOK-2269",
+      "side": "primary",
+      "status": "timeout"
+    }
+  }
+}
+JSON
+  mkdir -p "$WORKTREE_ROOT/hok-2269/features/hok-2269/ready"
+  mkdir -p "$WORKTREE_ROOT/hok-2269-c/features/hok-2269-c/ready"
+  POLL_JSON='{"unsettled":[{"id":"eval-HOK-2269-primary-754","kind":"eval","status":"timeout","issueId":"HOK-2269","pairId":"HOK-2269","side":"primary","reason":"timed_out","logPath":"/tmp/primary.log"}]}'
+  SETTLE_ISSUE="HOK-2269"
+  poll_challenge_jobs
+  printf 'exhausted_state=%s\n' "$(jq -r '.tasks["HOK-2269"].comparisonState' "$STATE_FILE")"
+  printf 'exhausted_count=%s\n' "$(jq -r '.tasks["HOK-2269"].comparisonRetryCount' "$STATE_FILE")"
+  printf 'exhausted_max=%s\n' "$(jq -r '.tasks["HOK-2269"].comparisonRetryMaxAttempts' "$STATE_FILE")"
+  printf 'exhausted_calls=%s\n' "$(printf '%s' "$RETRY_CALLS" | tr '\n' ';')"
+}
+
 run_manual_case() {
   cat > "$STATE_FILE" <<JSON
 {
@@ -281,6 +406,8 @@ chmod +x "$TEST_TMP/run-case.sh"
 echo "=== Challenge Eval Timeout State ==="
 
 retry_output="$(CASE_NAME=retry CASE_DIR="$TEST_TMP/retry" REPO_DIR="$REPO_DIR" FUNCTION_FILE="$FUNCTION_FILE" STATUS_FUNCTION_FILE="$STATUS_FUNCTION_FILE" "$TEST_TMP/run-case.sh")"
+second_retry_output="$(CASE_NAME=second_retry RETRY_MAX_OVERRIDE=2 CASE_DIR="$TEST_TMP/second_retry" REPO_DIR="$REPO_DIR" FUNCTION_FILE="$FUNCTION_FILE" STATUS_FUNCTION_FILE="$STATUS_FUNCTION_FILE" "$TEST_TMP/run-case.sh")"
+exhausted_retry_output="$(CASE_NAME=exhausted_retry RETRY_MAX_OVERRIDE=2 CASE_DIR="$TEST_TMP/exhausted_retry" REPO_DIR="$REPO_DIR" FUNCTION_FILE="$FUNCTION_FILE" STATUS_FUNCTION_FILE="$STATUS_FUNCTION_FILE" "$TEST_TMP/run-case.sh")"
 manual_output="$(CASE_NAME=manual CASE_DIR="$TEST_TMP/manual" REPO_DIR="$REPO_DIR" FUNCTION_FILE="$FUNCTION_FILE" STATUS_FUNCTION_FILE="$STATUS_FUNCTION_FILE" "$TEST_TMP/run-case.sh")"
 
 check_contains "primary timeout enters retrying state" "$retry_output" "retry_state=retrying_eval"
@@ -290,6 +417,16 @@ check_contains "primary timeout records retry max" "$retry_output" "retry_max=1"
 check_contains "primary timeout clears evalFailed for retry launch" "$retry_output" "retry_failed=false"
 check_contains "primary timeout relaunches eval" "$retry_output" "retry_calls=HOK-2269|754|task/hok-2269|hok-2269;"
 check_contains "primary timeout logs pair retry" "$retry_output" "challenge comparison retrying for HOK-2269: primary eval timed out"
+
+check_contains "second retry stays in retrying_eval" "$second_retry_output" "second_state=retrying_eval"
+check_contains "second retry increments count (1->2)" "$second_retry_output" "second_count=2"
+check_contains "second retry preserves retry_max=2" "$second_retry_output" "second_max=2"
+check_contains "second retry relaunches eval" "$second_retry_output" "second_calls=HOK-2269|754|task/hok-2269|hok-2269;"
+
+check_contains "exhausted retry exits to manual_comparison_needed" "$exhausted_retry_output" "exhausted_state=manual_comparison_needed"
+check_contains "exhausted retry preserves count at retry_max" "$exhausted_retry_output" "exhausted_count=2"
+check_contains "exhausted retry does not relaunch eval" "$exhausted_retry_output" "exhausted_calls=
+"
 
 check_contains "challenger timeout exhausts into manual state" "$manual_output" "manual_state=manual_comparison_needed"
 check_contains "challenger timeout records both timed out sides" "$manual_output" "manual_sides=primary,challenger"
