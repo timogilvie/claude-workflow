@@ -251,7 +251,10 @@
         "missing_budget_snapshot",
         "missing_outcome",
         "missing_task_descriptor",
-        "missing_model_identity"
+        "missing_model_identity",
+        "missing_feature_outcome",
+        "invalid_feature_outcome",
+        "failed_feature_outcome"
       ],
       "description": "Primary stable reason why the record is ineligible for budget-eval export."
     },
@@ -266,7 +269,10 @@
           "missing_budget_snapshot",
           "missing_outcome",
           "missing_task_descriptor",
-          "missing_model_identity"
+          "missing_model_identity",
+          "missing_feature_outcome",
+          "invalid_feature_outcome",
+          "failed_feature_outcome"
         ]
       },
       "description": "Stable machine-readable reasons why the record is ineligible for exports."
@@ -1937,6 +1943,97 @@
     },
     "wavemill_router_scoring": {
       "$ref": "#/$defs/WavemillRouterScoringMetadata"
+    },
+    "featureOutcomeDiagnostics": {
+      "type": "object",
+      "description": "Diagnostics for the feature-outcome artifact consumption path (HOK-2262).",
+      "additionalProperties": false,
+      "required": ["present", "valid", "used"],
+      "properties": {
+        "present": {
+          "type": "boolean",
+          "description": "Whether a feature-state or feature-outcome artifact file was found on disk."
+        },
+        "valid": {
+          "type": "boolean",
+          "description": "Whether the artifact was parseable and had a valid outcome object."
+        },
+        "used": {
+          "type": "boolean",
+          "description": "Whether the artifact was actually used (valid and all required fields present)."
+        },
+        "sourceFile": {
+          "type": "string",
+          "description": "Basename of the resolved artifact file."
+        },
+        "sourceHash": {
+          "type": "string",
+          "description": "SHA-256 hex hash of the raw artifact bytes."
+        },
+        "schemaVersion": {
+          "type": "string",
+          "description": "schemaVersion field from the artifact root."
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "artifact_absent",
+            "malformed_json",
+            "invalid_root",
+            "incomplete_outcome",
+            "invalid_outcome",
+            "loaded"
+          ],
+          "description": "Reason for the current diagnostic state."
+        },
+        "normalizedFields": {
+          "type": "object",
+          "description": "Normalized outcome fields from the artifact.",
+          "additionalProperties": false,
+          "properties": {
+            "completed": { "type": "boolean" },
+            "merged": { "type": ["boolean", "null"] },
+            "ciPassed": { "type": ["boolean", "null"] },
+            "reviewPassed": { "type": ["boolean", "null"] },
+            "readyPassed": { "type": ["boolean", "null"] },
+            "manualIntervention": { "type": ["boolean", "null"] },
+            "interventionCount": { "type": ["number", "null"] },
+            "reverted": { "type": ["boolean", "null"] },
+            "evalScore": { "type": ["number", "null"] },
+            "costUsd": { "type": ["number", "null"] },
+            "durationSeconds": { "type": ["number", "null"] }
+          }
+        },
+        "missingFields": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Keys that were absent from the artifact outcome object."
+        },
+        "invalidFields": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Keys that were present but had unexpected types."
+        },
+        "eligibilityDiagnostic": {
+          "type": "string",
+          "enum": [
+            "eligible",
+            "ineligible_missing_outcome",
+            "ineligible_failed_outcome",
+            "unknown"
+          ],
+          "description": "Machine-readable eligibility classification from the artifact."
+        },
+        "conflictsWithReconstruction": {
+          "type": "boolean",
+          "description": "True when at least one field conflicts with the reconstructed outcome."
+        },
+        "conflictingFields": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Names of fields that differ between artifact and reconstruction."
+        }
+      }
     },
     "metadata": {
       "type": "object",

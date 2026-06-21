@@ -57,7 +57,13 @@ function toBudgetCompliant(submission: HokusaiSubmission): boolean {
   return actualCostUsd <= maxCostUsd;
 }
 
-function toContributionProjection(submission: HokusaiSubmission, observedAt: string): RedactedEvalContributionProjection {
+function toContributionProjection(
+  submission: HokusaiSubmission,
+  observedAt: string,
+  record?: EvalRecord,
+): RedactedEvalContributionProjection {
+  const fod = record?.featureOutcomeDiagnostics ?? undefined;
+
   const projection: RedactedEvalContributionProjection = {
     taskId: submission.task_id,
     runId: submission.run_id,
@@ -77,6 +83,40 @@ function toContributionProjection(submission: HokusaiSubmission, observedAt: str
       rubric_mean_score: submission.rubric_signals?.mean_score,
       determinative_boundary: submission.rubric_signals?.determinative_boundary,
     },
+    // Feature outcome artifact diagnostics (HOK-2262)
+    // Only safe scalar/enum/array-of-string fields; no raw paths or issue IDs
+    ...(fod?.eligibilityDiagnostic !== undefined
+      ? { outcomeDiagnostic: fod.eligibilityDiagnostic }
+      : {}),
+    ...(fod !== undefined
+      ? {
+        outcomeSource: (
+          fod.used
+            ? 'feature_outcome_artifact'
+            : fod.present
+              ? 'unknown'
+              : 'reconstructed'
+        ) as const,
+      }
+      : {}),
+    ...(fod !== undefined
+      ? { outcomeArtifactPresent: fod.present }
+      : {}),
+    ...(fod !== undefined
+      ? { outcomeArtifactValid: fod.valid }
+      : {}),
+    ...(fod !== undefined
+      ? { outcomeArtifactUsed: fod.used }
+      : {}),
+    ...(fod?.missingFields !== undefined
+      ? { outcomeMissingFields: fod.missingFields }
+      : {}),
+    ...(fod?.invalidFields !== undefined
+      ? { outcomeInvalidFields: fod.invalidFields }
+      : {}),
+    ...(fod?.reason !== undefined && fod.reason !== 'loaded'
+      ? { outcomeFailureReason: fod.reason }
+      : {}),
   };
 
   return projection;
@@ -113,7 +153,7 @@ export async function triggerHokusaiSubmission(
       salt: options.redactionSalt,
     });
     const row = hokusaiSubmissionTriggerDeps.buildSubmitDataContributionRow(
-      toContributionProjection(redactedSubmission, record.timestamp),
+      toContributionProjection(redactedSubmission, record.timestamp, record),
     );
     const enqueueResult = await hokusaiSubmissionTriggerDeps.enqueueContribution(row, {
       repoDir: options.repoDir,
