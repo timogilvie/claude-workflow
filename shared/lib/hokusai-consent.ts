@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { getHokusaiContributionsConfig, getHokusaiSubmissionConfig } from './config.ts';
 import { errorMessage } from './error-utils.ts';
+import { hokusaiQueueStatus } from './hokusai-queue.ts';
 
 export const CURRENT_CONSENT_VERSION = '1.0';
 
@@ -54,6 +55,17 @@ export interface ContributionConsentStatus {
   consentValid: boolean;
   contributionsEnabled: boolean;
   submissionAllowed: boolean;
+}
+
+export type ContributionMode = 'uploading' | 'export-only' | 'disabled';
+
+export interface ContributionStatus {
+  consent: 'enabled' | 'disabled';
+  queue: 'enabled' | 'disabled';
+  uploadEndpoint: 'configured' | 'missing';
+  mode: ContributionMode;
+  pendingCount: number;
+  warning?: string;
 }
 
 export interface EnableSubmissionOptions {
@@ -244,8 +256,47 @@ export function isHokusaiContributionsEnabled(
   return getContributionConsentStatus(options).submissionAllowed;
 }
 
+export function getContributionStatus(
+  options: { configDir?: string; repoDir?: string } = {},
+): ContributionStatus {
+  const submissionStatus = getSubmissionStatus(options);
+  const contributionsConfig = getHokusaiContributionsConfig(options.repoDir);
+  const queueStatus = hokusaiQueueStatus(options);
+
+  const consent: 'enabled' | 'disabled' = submissionStatus.enabled && submissionStatus.consentValid
+    ? 'enabled'
+    : 'disabled';
+  const queue: 'enabled' | 'disabled' = contributionsConfig.enabled ? 'enabled' : 'disabled';
+  const uploadEndpoint: 'configured' | 'missing' = contributionsConfig.endpoint
+    ? 'configured'
+    : 'missing';
+
+  let mode: ContributionMode;
+  if (!contributionsConfig.enabled || consent === 'disabled') {
+    mode = 'disabled';
+  } else if (contributionsConfig.endpoint) {
+    mode = 'uploading';
+  } else {
+    mode = 'export-only';
+  }
+
+  const pendingCount = queueStatus.pendingCount;
+  let warning: string | undefined;
+  if (pendingCount > 0 && mode === 'export-only') {
+    warning =
+      `${pendingCount} pending row${pendingCount === 1 ? '' : 's'} cannot upload because` +
+      ` hokusai.contributions.endpoint is not configured.` +
+      ` Add it to .wavemill-config.local.json or run \`wavemill hokusai configure\`.`;
+  } else if (pendingCount > 0 && mode === 'disabled') {
+    warning = `${pendingCount} pending row${pendingCount === 1 ? '' : 's'} are queued but contributions are disabled.`;
+  }
+
+  return { consent, queue, uploadEndpoint, mode, pendingCount, warning };
+}
+
 export function getStatusDisplay(options: { configDir?: string; repoDir?: string } = {}): string {
   const status = getSubmissionStatus(options);
+  const contrib = getContributionStatus(options);
   const lines = [
     `Hokusai data submission: ${status.enabled ? 'enabled' : 'disabled'}`,
     `Submission allowed: ${status.submissionAllowed ? 'yes' : 'no'}`,
@@ -253,10 +304,20 @@ export function getStatusDisplay(options: { configDir?: string; repoDir?: string
     `Consent version: ${status.consentVersion ?? 'none'} (current: ${status.currentVersion})`,
     `Consented at: ${status.consentedAt ?? 'never'}`,
     `Endpoint: ${status.endpoint ?? 'not configured'}`,
+    '',
+    `Consent: ${contrib.consent}`,
+    `Contribution queue: ${contrib.queue}`,
+    `Upload endpoint: ${contrib.uploadEndpoint}`,
+    `Mode: ${contrib.mode}`,
   ];
 
   if (!status.submissionAllowed) {
     lines.push('Run `wavemill hokusai enable` to opt in, or `wavemill hokusai disable` to stay opted out.');
+  }
+
+  if (contrib.warning) {
+    lines.push('');
+    lines.push(`Warning: ${contrib.warning}`);
   }
 
   return lines.join('\n');

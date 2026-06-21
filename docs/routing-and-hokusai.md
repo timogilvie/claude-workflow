@@ -137,13 +137,52 @@ Optional compact `inputs`, cost, timing, harness, and benchmark metadata may be 
 
 Outcome and benchmark contribution uploads are separate from live Model 30 routing. Live prediction calls stay synchronous and continue to fall back to local routing when Hokusai is unavailable; Wavemill does not enqueue stale route requests.
 
-When `hokusai.contributions.enabled` is `true` and user consent is valid, Wavemill stores redacted contribution rows under `.wavemill/hokusai/` and later drains them to an explicitly configured contribution endpoint. There is no public default upload endpoint in repo config. If Hokusai has not published a stable contribution API for your environment, leave the endpoint unset and export rows for manual handling instead.
+When `hokusai.contributions.enabled` is `true` and user consent is valid, Wavemill stores redacted contribution rows under `.wavemill/hokusai/`. Rows are only uploaded when `hokusai.contributions.endpoint` is explicitly set. Setting `endpoint: null` (or leaving it unset) selects **export-only mode**: rows accumulate locally and are never uploaded.
 
-If no explicit contribution endpoint is configured, drain can export pending rows for manual submission instead of pretending upload succeeded. Transient failures such as timeouts, `429`, and `5xx` responses are retried with persisted backoff; permanent failures such as auth, schema, or malformed-row errors move to dead-letter with redacted operator-facing details only.
+To enable uploads, add the endpoint to `.wavemill-config.local.json` (never commit API settings to the shared config):
+
+```json
+{
+  "hokusai": {
+    "contributions": {
+      "endpoint": "https://api.hokus.ai/api/v1/contributions",
+      "endpointTokenEnv": "HOKUSAI_API_TOKEN",
+      "batchSize": 50
+    }
+  }
+}
+```
+
+Or run the first-class configure command:
+
+```
+wavemill hokusai configure
+```
+
+This writes the standard endpoint to `.wavemill-config.local.json` (deep-merging any existing content) and adds `.wavemill-config.local.json` to `.gitignore`.
+
+If no explicit contribution endpoint is configured, drain exports pending rows for manual submission instead of pretending upload succeeded. Transient failures such as timeouts, `429`, and `5xx` responses are retried with persisted backoff; permanent failures such as auth, schema, or malformed-row errors move to dead-letter with redacted operator-facing details only.
+
+To drain the local queue manually:
+
+```
+wavemill hokusai drain
+```
+
+`drain` reports the outcome clearly: `uploaded N rows`, `exported N rows (export-only mode)`, `empty`, `waiting for retry backoff`, or `disabled`.
 
 Contribution lifecycle history is stored in an append-only ledger at `.wavemill/hokusai/ledger.jsonl`. Accepted and rejected terminal events track idempotency key, Model `30`, row count, timestamps, job/submission identifiers when present, and reward state (`pending`, `none`, `awarded`, `unknown`). Missing rewards are never inferred as zero.
 
-`wavemill hokusai status` includes queue and ledger summary fields:
+`wavemill hokusai status` shows structured facets:
+
+- **Consent**: enabled/disabled
+- **Contribution queue**: enabled/disabled
+- **Upload endpoint**: configured/missing
+- **Mode**: uploading, export-only, or disabled
+
+When pending rows exist but the upload endpoint is missing, status emits an explicit warning with the count and instructions to fix.
+
+The status command also includes queue and ledger summary fields:
 
 - pending queue count
 - accepted submission count

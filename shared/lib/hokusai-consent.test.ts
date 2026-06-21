@@ -7,6 +7,7 @@ import { after, describe, it } from 'node:test';
 import {
   disableSubmission,
   enableSubmission,
+  getContributionStatus,
   getStatusDisplay,
   getContributionConsentStatus,
   getConsentState,
@@ -401,6 +402,131 @@ describe('hokusai-consent', () => {
         submissionAllowed: false,
       });
       assert.equal(isHokusaiContributionsEnabled({ configDir, repoDir }), false);
+    });
+  });
+
+  describe('getContributionStatus', () => {
+    function makeEnabledConsent(configDir: string): void {
+      saveUserConfig({
+        hokusai: {
+          enabled: true,
+          consentedAt: '2026-04-14T12:00:00.000Z',
+          consentVersion: '1.0',
+        },
+      }, configDir);
+    }
+
+    it('returns disabled mode when contributions are off', () => {
+      const configDir = makeTempDir('hokusai-contrib-status-');
+      const repoDir = makeTempRepo({
+        hokusai: {
+          dataSubmission: { consentVersion: '1.0' },
+          contributions: { enabled: false },
+        },
+      });
+      makeEnabledConsent(configDir);
+
+      const s = getContributionStatus({ configDir, repoDir });
+      assert.equal(s.queue, 'disabled');
+      assert.equal(s.mode, 'disabled');
+    });
+
+    it('returns export-only mode when contributions are enabled but endpoint is missing', () => {
+      const configDir = makeTempDir('hokusai-contrib-status-');
+      const repoDir = makeTempRepo({
+        hokusai: {
+          dataSubmission: { consentVersion: '1.0' },
+          contributions: { enabled: true, exportPath: '.wavemill/hokusai/contributions.jsonl' },
+        },
+      });
+      makeEnabledConsent(configDir);
+
+      const s = getContributionStatus({ configDir, repoDir });
+      assert.equal(s.queue, 'enabled');
+      assert.equal(s.uploadEndpoint, 'missing');
+      assert.equal(s.mode, 'export-only');
+    });
+
+    it('returns uploading mode when contributions are enabled and endpoint is set', () => {
+      const configDir = makeTempDir('hokusai-contrib-status-');
+      const repoDir = makeTempRepo({
+        hokusai: {
+          dataSubmission: { consentVersion: '1.0' },
+          contributions: {
+            enabled: true,
+            endpoint: 'https://api.hokus.ai/api/v1/contributions',
+            exportPath: '.wavemill/hokusai/contributions.jsonl',
+          },
+        },
+      });
+      makeEnabledConsent(configDir);
+
+      const s = getContributionStatus({ configDir, repoDir });
+      assert.equal(s.queue, 'enabled');
+      assert.equal(s.uploadEndpoint, 'configured');
+      assert.equal(s.mode, 'uploading');
+    });
+
+    it('returns disabled mode when consent is not valid', () => {
+      const configDir = makeTempDir('hokusai-contrib-status-');
+      const repoDir = makeTempRepo({
+        hokusai: {
+          dataSubmission: { consentVersion: '1.0' },
+          contributions: { enabled: true, endpoint: 'https://example.com' },
+        },
+      });
+      // No consent saved
+
+      const s = getContributionStatus({ configDir, repoDir });
+      assert.equal(s.consent, 'disabled');
+      assert.equal(s.mode, 'disabled');
+    });
+  });
+
+  describe('getStatusDisplay with contribution facets', () => {
+    it('includes contribution queue and mode lines', () => {
+      const configDir = makeTempDir('hokusai-status-display-');
+      const repoDir = makeTempRepo({
+        hokusai: {
+          dataSubmission: { consentVersion: '1.0' },
+          contributions: { enabled: true },
+        },
+      });
+      saveUserConfig({
+        hokusai: {
+          enabled: true,
+          consentedAt: '2026-04-14T12:00:00.000Z',
+          consentVersion: '1.0',
+        },
+      }, configDir);
+
+      const display = getStatusDisplay({ configDir, repoDir });
+      assert.match(display, /Consent: enabled/);
+      assert.match(display, /Contribution queue: enabled/);
+      assert.match(display, /Upload endpoint: missing/);
+      assert.match(display, /Mode: export-only/);
+    });
+
+    it('shows uploading mode when endpoint is configured', () => {
+      const configDir = makeTempDir('hokusai-status-display-');
+      const repoDir = makeTempRepo({
+        hokusai: {
+          dataSubmission: { consentVersion: '1.0' },
+          contributions: { enabled: true, endpoint: 'https://api.hokus.ai/api/v1/contributions' },
+        },
+      });
+      saveUserConfig({
+        hokusai: {
+          enabled: true,
+          consentedAt: '2026-04-14T12:00:00.000Z',
+          consentVersion: '1.0',
+        },
+      }, configDir);
+
+      const display = getStatusDisplay({ configDir, repoDir });
+      assert.match(display, /Consent: enabled/);
+      assert.match(display, /Upload endpoint: configured/);
+      assert.match(display, /Mode: uploading/);
     });
   });
 });
