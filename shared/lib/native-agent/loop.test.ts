@@ -378,6 +378,76 @@ describe('loop — continuation', () => {
     assert.equal(thinkingBlock.thinkingSignature, 'sig-abc');
     assert.equal(assistantInLlm.responseId, 'resp-xyz');
   });
+
+  it('compacts replay tool results before provider conversion without dropping continuation metadata', async () => {
+    const api = uniqueApi('continuation-compaction');
+    let capturedMessages: unknown[] | undefined;
+
+    registerScriptedPiProvider({
+      api,
+      turns: (ctx: ScriptedProviderContext) => {
+        capturedMessages = ctx.messages as unknown[];
+        return { content: [{ type: 'text', text: 'OK' }], stopReason: 'stop' };
+      },
+    });
+
+    const priorAssistant = {
+      role: 'assistant' as const,
+      content: [
+        { type: 'thinking' as const, thinking: 'reasoning...', thinkingSignature: 'sig-compact' },
+        { type: 'text' as const, text: 'Prior answer.' },
+      ],
+      api,
+      provider: 'test-provider',
+      model: 'test-model',
+      responseId: 'resp-compact',
+      usage: {
+        input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: 'stop' as const,
+      timestamp: 0,
+    };
+    const largeToolResult = {
+      role: 'toolResult' as const,
+      toolCallId: 'tc-large',
+      toolName: 'read_file',
+      content: [{ type: 'text' as const, text: 'large-output '.repeat(80) }],
+      isError: false,
+      timestamp: 0,
+    };
+    const compactionEvents: unknown[] = [];
+
+    await runWavemillLoop({
+      model: { id: 'test-model', api, provider: 'test-provider' },
+      context: {
+        systemPrompt: 'Test agent.',
+        messages: [userMsg('Original question.'), priorAssistant, largeToolResult, userMsg('Follow-up.')],
+        tools: [],
+      },
+      convertToLlm: piIdentity,
+      compaction: { maxOutputBytes: 260, maxOutputTokens: 80, headBytes: 48, tailBytes: 48 },
+      onCompaction: (event) => compactionEvents.push(event),
+    });
+
+    assert.ok(capturedMessages, 'provider must have seen transformed messages');
+    assert.equal(compactionEvents.length, 1);
+
+    const assistantInLlm = capturedMessages!.find((m: any) => m.role === 'assistant') as any;
+    assert.ok(assistantInLlm);
+    assert.equal(assistantInLlm.responseId, 'resp-compact');
+    assert.equal(
+      assistantInLlm.content?.find((c: any) => c.type === 'thinking')?.thinkingSignature,
+      'sig-compact',
+    );
+
+    const toolResultInLlm = capturedMessages!.find((m: any) => m.role === 'tool_result') as any;
+    assert.ok(toolResultInLlm, 'tool result should reach provider context');
+    const compactedText = toolResultInLlm.content?.[0]?.content?.[0]?.text;
+    assert.equal(typeof compactedText, 'string');
+    assert.ok(compactedText.includes('[wavemill replay compaction]'));
+    assert.ok(Buffer.byteLength(compactedText, 'utf8') <= 260);
+  });
 });
 
 // ---------------------------------------------------------------------------

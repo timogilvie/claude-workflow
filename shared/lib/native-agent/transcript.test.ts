@@ -13,6 +13,7 @@ import {
   parseTranscriptJsonl,
   TranscriptParseError,
   type TranscriptAssistantMessage,
+  type TranscriptCompaction,
   type TranscriptEvent,
   type TranscriptSessionEnded,
   type TranscriptSessionStarted,
@@ -371,6 +372,37 @@ describe('TranscriptWriter', () => {
     assert.equal(ev.details, '[ALL_REDACTED]');
     removeTempDir();
   });
+
+  it('writes compaction events with writer-owned sequencing metadata', () => {
+    const path = makeTempPath();
+    const writer = new TranscriptWriter({ ...BASE_OPTS, path });
+
+    writer.handleEvent({ type: 'agent_start' });
+    const event = writer.writeCompactionEvent({
+      toolName: 'read_file',
+      toolCallId: 'tc1',
+      originalBytes: 1024,
+      originalTokens: 256,
+      compactedBytes: 256,
+      compactedTokens: 64,
+      maxOutputBytes: 256,
+      maxOutputTokens: 64,
+      reason: 'tool_result_output_cap',
+    });
+
+    assert.equal(event.type, 'compaction');
+    assert.equal(event.seq, 1);
+    assert.equal(event.sessionId, BASE_OPTS.sessionId);
+
+    const parsed = parseTranscriptJsonl(readFileSync(path, 'utf-8'));
+    const compaction = parsed.find((item): item is TranscriptCompaction => item.type === 'compaction');
+    assert.ok(compaction);
+    assert.equal(compaction.toolName, 'read_file');
+    assert.equal(compaction.toolCallId, 'tc1');
+    assert.equal(compaction.originalBytes, 1024);
+    assert.equal(compaction.compactedTokens, 64);
+    removeTempDir();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -507,6 +539,26 @@ describe('redaction before write', () => {
     assert.ok(!content.includes('sk-1234'), 'secret token leaked into transcript');
     assert.ok(content.includes('[REDACTED]'), 'expected [REDACTED] placeholder in transcript');
     removeTempDir();
+  });
+
+  it('raw tool_result transcript content remains full text after compaction support', () => {
+    const fullText = 'full raw tool output '.repeat(20);
+    const events = deriveTranscriptEvents(
+      [
+        {
+          type: 'tool_execution_end',
+          toolCallId: 'tc-full',
+          toolName: 'read_file',
+          result: { content: [{ type: 'text', text: fullText }] },
+          isError: false,
+        },
+      ],
+      BASE_OPTS,
+    );
+
+    const toolResult = events.find((event): event is TranscriptToolResult => event.type === 'tool_result');
+    assert.ok(toolResult);
+    assert.equal(toolResult.content, fullText);
   });
 });
 

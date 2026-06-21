@@ -10,7 +10,9 @@ import {
 } from '@earendil-works/pi-agent-core';
 import type { AssistantMessage, Model } from '@earendil-works/pi-ai';
 import { computeModelCost, type ModelPricing } from '../workflow-cost.ts';
+import { transformContext as compactReplayContext, type CompactionConfig, type CompactionEventInput } from './compaction.ts';
 import type { ProviderModelConfig } from './provider.ts';
+import type { TranscriptWriter } from './transcript.ts';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -75,6 +77,12 @@ export interface WavemillLoopConfig {
   signal?: AbortSignal;
   /** Invoked on Pi progress events so the dashboard sees a live agent. */
   onHeartbeat?: (event: HeartbeatEvent) => void;
+  /** Replay-history compaction applied before each LLM conversion. */
+  compaction?: CompactionConfig;
+  /** Optional transcript writer for additive compaction telemetry. */
+  transcriptWriter?: Pick<TranscriptWriter, 'writeCompactionEvent'>;
+  /** Optional callback for tests/integrations that consume compaction telemetry directly. */
+  onCompaction?: (event: CompactionEventInput) => void;
   /** Required when `budget.maxCostUsd` is set; used to compute turn cost. */
   modelPricing?: ModelPricing;
   temperature?: number;
@@ -198,6 +206,27 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
   const piConfig: AgentLoopConfig = {
     model: toPiModel(config.model),
     convertToLlm,
+    transformContext: config.compaction
+      ? async (messages: AgentMessage[], signal?: AbortSignal): Promise<AgentMessage[]> => {
+        if (signal?.aborted) return messages;
+        try {
+          const result = compactReplayContext(messages, config.compaction!);
+          for (const event of result.events) {
+            config.onCompaction?.(event);
+            config.transcriptWriter?.writeCompactionEvent(event);
+          }
+          return result.messages as AgentMessage[];
+        } catch (err) {
+          onHeartbeat?.({
+            state: 'working',
+            event: 'compaction_error',
+            detail: err instanceof Error ? err.message : String(err),
+            agent: HEARTBEAT_AGENT,
+          });
+          return messages;
+        }
+      }
+      : undefined,
     temperature,
     maxTokens,
 
