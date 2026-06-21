@@ -129,6 +129,7 @@ harness_extract_real_functions() {
   local func
   : > "$REAL_FUNC_FILE"
   for func in \
+    trim_outer_whitespace \
     ready_stage_allows_merge \
     ready_stage_pending_verdict \
     log_ready_stale_merge_lane_once \
@@ -172,7 +173,10 @@ harness_extract_real_functions() {
     phase_should_remain_active_without_pr \
     stage_result_is_in_progress \
     ready_conflict_launch_head \
-    _persist_phase
+    _persist_phase \
+    expansion_recovery_resolve_issue_id \
+    recover_missing_expansion_artifact \
+    handle_expanded_reroute_handoff_failure
   do
     local extracted
     extracted="$(extract_function "$MILL_SCRIPT" "$func")"
@@ -735,6 +739,251 @@ EOF
   check_eq "recover ok: recovery state succeeded" "succeeded" "$(jq -r '.status' "$repo/features/$slug/.expansion-recovery-state.json")"
   check_eq "recover ok: recovery attempted once" "1" "$(cat "$repo/.wavemill/recovery-count")"
   check_not_contains "recover ok: no blocked warning" "$(kv_value "$tick" warn_output)" "[expansion-handshake] BLOCKED"
+}
+
+test_challenger_missing_expansion_recovery_uses_linear_issue_id() {
+  local slug="challenger-missing-expansion-recovery-real-id"
+  local issue="HOK-2265_c"
+  local repo tick overrides npx_args
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_planning_state "$repo" "$slug" "completed"
+  harness_setup_runtime_artifacts "$repo"
+  harness_seed_bootstrap_route "$repo" "$slug"
+  printf 'raw issue text\n' > "$repo/features/$slug/task-packet.md"
+
+  overrides="$(harness_common_route_overrides)
+    source \"\$REAL_FUNC_FILE\"
+    TOOLS_DIR=\"/tmp/\${SESSION}-\${ISSUE}-tools\"
+    mkdir -p \"\$TOOLS_DIR\"
+    : > \"\$TOOLS_DIR/expand-issue.ts\"
+    get_task_meta() {
+      local issue_key=\"\$1\" field=\"\$2\"
+      case \"\$issue_key.\$field\" in
+        HOK-2265_c.linearIssueId) printf '%s\\n' '  HOK-2265  ' ;;
+        HOK-2265_c.challenge) printf '%s\\n' 'true' ;;
+        HOK-2265_c.challengeRole) printf '%s\\n' 'challenger' ;;
+        *) printf '\\n' ;;
+      esac
+    }
+    npx() {
+      printf '%s\\n' \"\$*\" >> \"\$REPO_UNDER_TEST/.wavemill/npx-args.log\"
+      [[ \"\$*\" == *\"expand-issue.ts\"* ]] || return 0
+      cat > \"\$REPO_UNDER_TEST/features/$slug/task-packet.md\" <<'EOF'
+## 1. Objective
+
+Recover the missing expanded routing artifact.
+EOF
+    }
+    reroute_expanded_packets_for_coding_handoff() {
+      local packet_content=""
+      REROUTE_CALLED=\"true\"
+      packet_content=\"\$(cat \"\$3/task-packet.md\" 2>/dev/null || echo '')\"
+      is_task_packet \"\$packet_content\" || {
+        REROUTE_EXPANDED_LAST_REASON=\"not_eligible\"
+        return 1
+      }
+      cat > \"\$3/.post-expansion-route.json\" <<'EOF'
+{
+  \"planner\": \"expanded-planner\",
+  \"coder\": \"gpt-5.4\",
+  \"reviewer\": \"claude-sonnet-4-6\",
+  \"planDepth\": \"deep\",
+  \"codeDepth\": \"deep\",
+  \"reviewMode\": \"static+llm\",
+  \"provenance\": {
+    \"source\": \"expanded-test\"
+  }
+}
+EOF
+      return 0
+    }
+  "
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" "$overrides")"
+  npx_args="$(cat "$repo/.wavemill/npx-args.log")"
+
+  check_eq "challenger recover real id: coding launches" "true" "$(kv_value "$tick" coding_launched)"
+  check_eq "challenger recover real id: coding model from expanded route" "gpt-5.4" "$(kv_value "$tick" coding_model)"
+  check_contains "challenger recover real id: uses real Linear issue id" "$npx_args" "expand-issue.ts HOK-2265 --output $repo/features/$slug/task-packet.md"
+  check_not_contains "challenger recover real id: does not use synthetic issue id" "$npx_args" "expand-issue.ts HOK-2265_c --output"
+  check_not_contains "challenger recover real id: no invalid identifier log" "$(kv_value "$tick" warn_output)" "Invalid issue identifier"
+}
+
+test_challenger_missing_expansion_recovery_extracts_linear_issue_id_from_url() {
+  local slug="challenger-missing-expansion-recovery-url-id"
+  local issue="HOK-2265_c"
+  local repo tick overrides npx_args
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_planning_state "$repo" "$slug" "completed"
+  harness_setup_runtime_artifacts "$repo"
+  harness_seed_bootstrap_route "$repo" "$slug"
+  printf 'raw issue text\n' > "$repo/features/$slug/task-packet.md"
+
+  overrides="$(harness_common_route_overrides)
+    source \"\$REAL_FUNC_FILE\"
+    TOOLS_DIR=\"/tmp/\${SESSION}-\${ISSUE}-tools\"
+    mkdir -p \"\$TOOLS_DIR\"
+    : > \"\$TOOLS_DIR/expand-issue.ts\"
+    get_task_meta() {
+      local issue_key=\"\$1\" field=\"\$2\"
+      case \"\$issue_key.\$field\" in
+        HOK-2265_c.linearIssueId) printf '%s\\n' 'https://linear.app/wavemill/issue/HOK-2265?utm_source=test' ;;
+        HOK-2265_c.challenge) printf '%s\\n' 'true' ;;
+        HOK-2265_c.challengeRole) printf '%s\\n' 'challenger' ;;
+        *) printf '\\n' ;;
+      esac
+    }
+    npx() {
+      printf '%s\\n' \"\$*\" >> \"\$REPO_UNDER_TEST/.wavemill/npx-args.log\"
+      [[ \"\$*\" == *\"expand-issue.ts\"* ]] || return 0
+      cat > \"\$REPO_UNDER_TEST/features/$slug/task-packet.md\" <<'EOF'
+## 1. Objective
+
+Recover the missing expanded routing artifact.
+EOF
+    }
+    reroute_expanded_packets_for_coding_handoff() {
+      local packet_content=""
+      REROUTE_CALLED=\"true\"
+      packet_content=\"\$(cat \"\$3/task-packet.md\" 2>/dev/null || echo '')\"
+      is_task_packet \"\$packet_content\" || {
+        REROUTE_EXPANDED_LAST_REASON=\"not_eligible\"
+        return 1
+      }
+      cat > \"\$3/.post-expansion-route.json\" <<'EOF'
+{
+  \"planner\": \"expanded-planner\",
+  \"coder\": \"gpt-5.4\",
+  \"reviewer\": \"claude-sonnet-4-6\",
+  \"planDepth\": \"deep\",
+  \"codeDepth\": \"deep\",
+  \"reviewMode\": \"static+llm\",
+  \"provenance\": {
+    \"source\": \"expanded-test\"
+  }
+}
+EOF
+      return 0
+    }
+  "
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" "$overrides")"
+  npx_args="$(cat "$repo/.wavemill/npx-args.log")"
+
+  check_eq "challenger recover url id: coding launches" "true" "$(kv_value "$tick" coding_launched)"
+  check_contains "challenger recover url id: extracts real Linear issue id" "$npx_args" "expand-issue.ts HOK-2265 --output $repo/features/$slug/task-packet.md"
+  check_not_contains "challenger recover url id: does not pass Linear URL" "$npx_args" "expand-issue.ts https://linear.app/wavemill/issue/HOK-2265"
+}
+
+test_expansion_recovery_resolve_issue_id_normalizes_linear_issue_url() {
+  local resolved
+  resolved="$(
+    source "$REAL_FUNC_FILE"
+    get_task_meta() {
+      local issue_key="$1" field="$2"
+      case "$issue_key.$field" in
+        HOK-2265_c.linearIssueId) printf '%s\n' 'https://linear.app/hokusai/issue/HOK-2265/native-runtime' ;;
+        *) printf '\n' ;;
+      esac
+    }
+    expansion_recovery_resolve_issue_id HOK-2265_c
+  )"
+
+  check_eq "challenger recover url: resolves Linear issue URL to issue id" "HOK-2265" "$resolved"
+}
+
+test_challenger_missing_expansion_recovery_skips_without_linear_issue_id() {
+  local slug="challenger-missing-expansion-recovery-skip"
+  local issue="HOK-2265_c"
+  local repo tick overrides
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_planning_state "$repo" "$slug" "completed"
+  harness_setup_runtime_artifacts "$repo"
+  harness_seed_bootstrap_route "$repo" "$slug"
+  printf 'raw issue text\n' > "$repo/features/$slug/task-packet.md"
+
+  overrides="$(harness_common_route_overrides)
+    source \"\$REAL_FUNC_FILE\"
+    TOOLS_DIR=\"/tmp/\${SESSION}-\${ISSUE}-tools\"
+    mkdir -p \"\$TOOLS_DIR\"
+    : > \"\$TOOLS_DIR/expand-issue.ts\"
+    get_task_meta() {
+      local issue_key=\"\$1\" field=\"\$2\"
+      case \"\$issue_key.\$field\" in
+        HOK-2265_c.linearIssueId) printf '%s\\n' ' HOK-2265_c ' ;;
+        HOK-2265_c.challenge) printf '%s\\n' 'true' ;;
+        HOK-2265_c.challengeRole) printf '%s\\n' 'challenger' ;;
+        *) printf '\\n' ;;
+      esac
+    }
+    npx() {
+      printf '%s\\n' \"\$*\" >> \"\$REPO_UNDER_TEST/.wavemill/npx-args.log\"
+      return 0
+    }
+  "
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" "$overrides")"
+
+  check_eq "challenger recover skip: coding launches" "true" "$(kv_value "$tick" coding_launched)"
+  check_eq "challenger recover skip: coding stays bootstrap" "bootstrap-coder" "$(kv_value "$tick" coding_model)"
+  check_eq "challenger recover skip: recovery state skipped" "skipped" "$(jq -r '.status' "$repo/features/$slug/.expansion-recovery-state.json")"
+  check_eq "challenger recover skip: skipped detail stable" "synthetic-challenger-linear-issue-id-missing-or-invalid" "$(jq -r '.detail' "$repo/features/$slug/.expansion-recovery-state.json")"
+  check_not_contains "challenger recover skip: expand tool not invoked" "$(cat "$repo/.wavemill/npx-args.log")" "expand-issue.ts"
+  check_contains "challenger recover skip: warning includes skipped" "$(kv_value "$tick" warn_output)" "RECOVERY_SKIPPED"
+  check_contains "challenger recover skip: warning includes bootstrap fallback" "$(kv_value "$tick" warn_output)" "RECOVERY_FALLBACK_BOOTSTRAP"
+  check_not_contains "challenger recover skip: no invalid identifier log" "$(kv_value "$tick" warn_output)" "Invalid issue identifier"
+}
+
+test_missing_expansion_recovery_non_challenger_uses_issue_key() {
+  local slug="missing-expansion-recovery-non-challenger"
+  local issue="HOK-2300"
+  local repo tick overrides npx_args
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_planning_state "$repo" "$slug" "completed"
+  harness_setup_runtime_artifacts "$repo"
+  harness_seed_bootstrap_route "$repo" "$slug"
+  printf 'raw issue text\n' > "$repo/features/$slug/task-packet.md"
+
+  overrides="$(harness_common_route_overrides)
+    source \"\$REAL_FUNC_FILE\"
+    TOOLS_DIR=\"/tmp/\${SESSION}-\${ISSUE}-tools\"
+    mkdir -p \"\$TOOLS_DIR\"
+    : > \"\$TOOLS_DIR/expand-issue.ts\"
+    npx() {
+      printf '%s\\n' \"\$*\" >> \"\$REPO_UNDER_TEST/.wavemill/npx-args.log\"
+      [[ \"\$*\" == *\"expand-issue.ts\"* ]] || return 0
+      cat > \"\$REPO_UNDER_TEST/features/$slug/task-packet.md\" <<'EOF'
+## 1. Objective
+
+Recover the missing expanded routing artifact.
+EOF
+    }
+    reroute_expanded_packets_for_coding_handoff() {
+      local packet_content=""
+      REROUTE_CALLED=\"true\"
+      packet_content=\"\$(cat \"\$3/task-packet.md\" 2>/dev/null || echo '')\"
+      is_task_packet \"\$packet_content\" || {
+        REROUTE_EXPANDED_LAST_REASON=\"not_eligible\"
+        return 1
+      }
+      cat > \"\$3/.post-expansion-route.json\" <<'EOF'
+{
+  \"planner\": \"expanded-planner\",
+  \"coder\": \"gpt-5.4\",
+  \"reviewer\": \"claude-sonnet-4-6\",
+  \"planDepth\": \"deep\",
+  \"codeDepth\": \"deep\",
+  \"reviewMode\": \"static+llm\",
+  \"provenance\": {
+    \"source\": \"expanded-test\"
+  }
+}
+EOF
+      return 0
+    }
+  "
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" "$overrides")"
+  npx_args="$(cat "$repo/.wavemill/npx-args.log")"
+
+  check_eq "non-challenger recover: coding launches" "true" "$(kv_value "$tick" coding_launched)"
+  check_contains "non-challenger recover: uses original issue id" "$npx_args" "expand-issue.ts HOK-2300 --output $repo/features/$slug/task-packet.md"
 }
 
 test_missing_expansion_recovery_failure_launches_with_bootstrap() {
@@ -1441,6 +1690,84 @@ test_tracked_root_level_coding_complete_marker_is_ignored() {
   check_not_contains "tracked root marker: no recovery warning logged" "$(kv_value "$tick" warn_output)" "Recovered misplaced .coding-complete"
 }
 
+test_not_eligible_expanded_reroute_does_not_emit_helper_failure_warn() {
+  local slug="not-eligible-expanded-reroute"
+  local issue="HOK-2274-NOT-ELIGIBLE"
+  local repo tick
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_planning_state "$repo" "$slug" "completed"
+  harness_setup_runtime_artifacts "$repo"
+  harness_seed_bootstrap_route "$repo" "$slug"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" '
+    log_route_lifecycle() { LOG_OUTPUT+="route.lifecycle event=$1 $*\n"; }
+    reroute_expanded_packets_for_coding_handoff() {
+      REROUTE_CALLED="true"
+      REROUTE_EXPANDED_LAST_REASON="not_eligible"
+      return 1
+    }
+  ')"
+
+  check_eq "not_eligible: coding launches" "true" "$(kv_value "$tick" coding_launched)"
+  check_eq "not_eligible: reroute was called" "true" "$(kv_value "$tick" reroute_called)"
+  check_eq "not_eligible: apply was called" "true" "$(kv_value "$tick" apply_called)"
+  check_contains "not_eligible: expansion_skipped lifecycle event emitted" "$(kv_value "$tick" log_output)" "expansion_skipped"
+  check_contains "not_eligible: reason logged" "$(kv_value "$tick" log_output)" "reason=not_eligible"
+  check_not_contains "not_eligible: no helper-failed warning" "$(kv_value "$tick" warn_output)" "expanded reroute helper failed"
+}
+
+test_disabled_expanded_reroute_does_not_emit_helper_failure_warn() {
+  local slug="disabled-expanded-reroute"
+  local issue="HOK-2274-DISABLED"
+  local repo tick
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_planning_state "$repo" "$slug" "completed"
+  harness_setup_runtime_artifacts "$repo"
+  harness_seed_bootstrap_route "$repo" "$slug"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" '
+    log_route_lifecycle() { LOG_OUTPUT+="route.lifecycle event=$1 $*\n"; }
+    reroute_expanded_packets_for_coding_handoff() {
+      REROUTE_CALLED="true"
+      REROUTE_EXPANDED_LAST_REASON="disabled"
+      return 1
+    }
+  ')"
+
+  check_eq "disabled: coding launches" "true" "$(kv_value "$tick" coding_launched)"
+  check_eq "disabled: reroute was called" "true" "$(kv_value "$tick" reroute_called)"
+  check_eq "disabled: apply was called" "true" "$(kv_value "$tick" apply_called)"
+  check_contains "disabled: expansion_skipped lifecycle event emitted" "$(kv_value "$tick" log_output)" "expansion_skipped"
+  check_contains "disabled: reason logged" "$(kv_value "$tick" log_output)" "reason=disabled"
+  check_not_contains "disabled: no helper-failed warning" "$(kv_value "$tick" warn_output)" "expanded reroute helper failed"
+}
+
+test_routing_error_expanded_reroute_emits_helper_failure_warn() {
+  local slug="routing-error-expanded-reroute"
+  local issue="HOK-2274-ROUTING-ERROR"
+  local repo tick
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_planning_state "$repo" "$slug" "completed"
+  harness_setup_runtime_artifacts "$repo"
+  harness_seed_bootstrap_route "$repo" "$slug"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" '
+    log_route_lifecycle() { LOG_OUTPUT+="route.lifecycle event=$1 $*\n"; }
+    reroute_expanded_packets_for_coding_handoff() {
+      REROUTE_CALLED="true"
+      REROUTE_EXPANDED_LAST_REASON="routing_error"
+      return 1
+    }
+  ')"
+
+  check_eq "routing_error: coding launches" "true" "$(kv_value "$tick" coding_launched)"
+  check_eq "routing_error: reroute was called" "true" "$(kv_value "$tick" reroute_called)"
+  check_eq "routing_error: apply was called" "true" "$(kv_value "$tick" apply_called)"
+  check_contains "routing_error: expansion_failed lifecycle event emitted" "$(kv_value "$tick" log_output)" "expansion_failed"
+  check_contains "routing_error: reason logged" "$(kv_value "$tick" log_output)" "reason=routing_error"
+  check_contains "routing_error: helper-failed warning emitted" "$(kv_value "$tick" warn_output)" "expanded reroute helper failed"
+}
+
 echo "=== Mill Lifecycle: Planning to Coding Handoff ==="
 harness_extract_real_functions
 
@@ -1451,6 +1778,10 @@ test_mixed_artifacts_source_edit_wins
 test_claude_local_settings_allowed
 test_coding_uses_expanded_route_over_bootstrap
 test_missing_expansion_recovery_success_launches_with_expanded_route
+test_challenger_missing_expansion_recovery_uses_linear_issue_id
+test_expansion_recovery_resolve_issue_id_normalizes_linear_issue_url
+test_challenger_missing_expansion_recovery_skips_without_linear_issue_id
+test_missing_expansion_recovery_non_challenger_uses_issue_key
 test_missing_expansion_recovery_failure_launches_with_bootstrap
 test_missing_expansion_recovery_not_repeated
 test_invalid_expanded_route_blocks_lifecycle_handoff
@@ -1473,6 +1804,9 @@ test_coding_blocked_completion_dedupes_when_stat_unavailable
 test_misplaced_coding_complete_marker_is_recovered
 test_root_level_coding_complete_marker_is_recovered
 test_tracked_root_level_coding_complete_marker_is_ignored
+test_not_eligible_expanded_reroute_does_not_emit_helper_failure_warn
+test_disabled_expanded_reroute_does_not_emit_helper_failure_warn
+test_routing_error_expanded_reroute_emits_helper_failure_warn
 
 echo ""
 if [[ "$FAIL" -eq 0 ]]; then

@@ -37,6 +37,7 @@ import type {
   PromptSizeDiagnostic,
   RoutingDecision,
   RubricCriterion,
+  FeatureOutcomeDiagnostics,
 } from './eval-schema.ts';
 import type { DifficultyAnalysis } from './difficulty-analyzer.ts';
 import type { ChallengeRouteContext } from './challenge-mode.ts';
@@ -98,6 +99,8 @@ export interface EvalRecordMetadata {
   rubricEval?: RubricEval | null;
   /** Resolved-model routing decisions emitted during execution. */
   routing?: EvalRouting | null;
+  /** Feature outcome artifact diagnostics (HOK-2262). */
+  featureOutcomeDiagnostics?: FeatureOutcomeDiagnostics | null;
 }
 
 /** Richer eval metadata attachment used by training-facing eval entrypoints. */
@@ -1083,6 +1086,23 @@ export function attachTraceId(record: EvalRecord, traceId: string | undefined | 
   }
 }
 
+/**
+ * Attach feature outcome artifact diagnostics to an eval record (HOK-2262).
+ *
+ * Records artifact presence, validity, source provenance, normalized outcome
+ * fields, and eligibility classification from the feature-state artifact.
+ * No-op when diagnostics is null or undefined; does not erase existing data.
+ */
+export function attachFeatureOutcomeDiagnostics(
+  record: EvalRecord,
+  diagnostics: FeatureOutcomeDiagnostics | null | undefined,
+): void {
+  if (!diagnostics) {
+    return;
+  }
+  record.featureOutcomeDiagnostics = diagnostics;
+}
+
 // ────────────────────────────────────────────────────────────────
 // Main Orchestrator
 // ────────────────────────────────────────────────────────────────
@@ -1169,6 +1189,7 @@ export function enrichTrainingMetadata(
   if (metadata.rubricEval) {
     attachRubricEval(record, metadata.rubricEval);
   }
+  attachFeatureOutcomeDiagnostics(record, metadata.featureOutcomeDiagnostics ?? null);
   attachManifestRef(record, process.env.WAVEMILL_SESSION, undefined);
   attachResourceSelections(record);
   attachEnrichmentDiagnostics(record);

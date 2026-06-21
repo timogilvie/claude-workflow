@@ -22,7 +22,18 @@ import {
 
 type InputScalar = string | number | boolean | null;
 
-export interface RedactedEvalContributionProjection {
+export interface FeatureOutcomeDiagnosticProjection {
+  outcomeDiagnostic?: 'eligible' | 'ineligible_missing_outcome' | 'ineligible_failed_outcome' | 'unknown';
+  outcomeSource?: 'feature_outcome_artifact' | 'reconstructed' | 'unknown';
+  outcomeArtifactPresent?: boolean;
+  outcomeArtifactValid?: boolean;
+  outcomeArtifactUsed?: boolean;
+  outcomeMissingFields?: string[];
+  outcomeInvalidFields?: string[];
+  outcomeFailureReason?: string;
+}
+
+export interface RedactedEvalContributionProjection extends FeatureOutcomeDiagnosticProjection {
   taskId?: string;
   runId?: string;
   harness?: string;
@@ -233,6 +244,30 @@ export function buildSubmitDataContributionRow(
       : {}),
     ...(projection.taskId ? { task_id: projection.taskId } : {}),
     ...(projection.harness ? { harness: projection.harness } : {}),
+    ...(projection.outcomeDiagnostic !== undefined
+      ? { outcome_diagnostic: projection.outcomeDiagnostic }
+      : {}),
+    ...(projection.outcomeSource !== undefined
+      ? { outcome_source: projection.outcomeSource }
+      : {}),
+    ...(projection.outcomeArtifactPresent !== undefined
+      ? { outcome_artifact_present: projection.outcomeArtifactPresent }
+      : {}),
+    ...(projection.outcomeArtifactValid !== undefined
+      ? { outcome_artifact_valid: projection.outcomeArtifactValid }
+      : {}),
+    ...(projection.outcomeArtifactUsed !== undefined
+      ? { outcome_artifact_used: projection.outcomeArtifactUsed }
+      : {}),
+    ...(projection.outcomeMissingFields !== undefined
+      ? { outcome_missing_fields: projection.outcomeMissingFields }
+      : {}),
+    ...(projection.outcomeInvalidFields !== undefined
+      ? { outcome_invalid_fields: projection.outcomeInvalidFields }
+      : {}),
+    ...(projection.outcomeFailureReason !== undefined
+      ? { outcome_failure_reason: projection.outcomeFailureReason }
+      : {}),
   };
 
   const inputs = toCompactInputs(projection.inputs);

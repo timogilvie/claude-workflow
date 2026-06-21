@@ -4469,18 +4469,7 @@ _restore_inflight_task_window_if_missing() {
       ;;
     coding)
       if ! reroute_expanded_packets_for_coding_handoff "$issue" "$slug" "$feature_dir"; then
-        if [[ "${REROUTE_EXPANDED_LAST_REASON:-}" == "disabled" || "${REROUTE_EXPANDED_LAST_REASON:-}" == "not_eligible" ]]; then
-          log_route_lifecycle "expansion_skipped" \
-            "issue=$issue" \
-            "reason=${REROUTE_EXPANDED_LAST_REASON:-not_eligible}" \
-            "active_route=\"$(route_lifecycle_route_id "$feature_dir/.routing-complete" 2>/dev/null || true)\""
-        else
-          log_route_lifecycle "expansion_failed" \
-            "issue=$issue" \
-            "reason=${REROUTE_EXPANDED_LAST_REASON:-routing_error}" \
-            "active_route=\"$(route_lifecycle_route_id "$feature_dir/.routing-complete" 2>/dev/null || true)\""
-        fi
-        log_warn "$issue → expanded reroute helper failed, attempting promotion from existing artifacts"
+        handle_expanded_reroute_handoff_failure "$issue" "$feature_dir"
       fi
       if ! apply_expanded_route_if_present "$feature_dir" "$issue" "$slug" "$wt_dir" "$STATE_FILE"; then
         log_warn "$issue → expanded route invalid; using existing execution state for coding relaunch"
@@ -5931,6 +5920,33 @@ get_linear_issue_id() {
   [[ -n "$linear_issue" ]] && echo "$linear_issue" || echo "$issue"
 }
 
+expansion_recovery_resolve_issue_id() {
+  local issue="$1"
+  local linear_issue=""
+
+  if [[ "$issue" != *_c ]]; then
+    printf '%s\n' "$issue"
+    return 0
+  fi
+
+  linear_issue="$(get_task_meta "$issue" "linearIssueId")"
+  linear_issue="${linear_issue#"${linear_issue%%[![:space:]]*}"}"
+  linear_issue="${linear_issue%"${linear_issue##*[![:space:]]}"}"
+  if [[ "$linear_issue" =~ ^[A-Z][A-Z0-9]*-[0-9]+$ ]]; then
+    printf '%s\n' "$linear_issue"
+    return 0
+  fi
+
+  if [[ "$linear_issue" =~ ^https?://linear\.app/[^/]+/issue/[A-Z][A-Z0-9]*-[0-9]+([/?#].*)?$ ]]; then
+    local linear_url_path="${linear_issue#*://linear.app/}"
+    linear_url_path="${linear_url_path#*/issue/}"
+    printf '%s\n' "${linear_url_path%%[/?#]*}"
+    return 0
+  fi
+
+  return 1
+}
+
 should_update_linear_state() {
   local issue="$1"
   local role
@@ -6987,6 +7003,30 @@ reroute_expanded_packets_for_coding_handoff() {
   return 0
 }
 
+handle_expanded_reroute_handoff_failure() {
+  local issue="$1" feature_dir="$2"
+  local reason="${REROUTE_EXPANDED_LAST_REASON:-routing_error}"
+  local active_route
+  active_route="$(route_lifecycle_route_id "$feature_dir/.routing-complete" 2>/dev/null || true)"
+
+  case "$reason" in
+    disabled|not_eligible)
+      log_route_lifecycle "expansion_skipped" \
+        "issue=$issue" \
+        "reason=$reason" \
+        "active_route=\"$active_route\""
+      log "info" "$issue → expanded reroute skipped ($reason), attempting promotion from existing artifacts"
+      ;;
+    *)
+      log_route_lifecycle "expansion_failed" \
+        "issue=$issue" \
+        "reason=$reason" \
+        "active_route=\"$active_route\""
+      log_warn "$issue → expanded reroute helper failed, attempting promotion from existing artifacts"
+      ;;
+  esac
+}
+
 recover_missing_expansion_artifact() {
   local issue="$1" slug="$2" feature_dir="$3"
   local expand_tool="$TOOLS_DIR/expand-issue.ts"
@@ -6994,7 +7034,7 @@ recover_missing_expansion_artifact() {
   local route_file="$feature_dir/.post-expansion-route.json"
   local recovery_log_dir="$REPO_DIR/.wavemill/logs"
   local recovery_log_file="$recovery_log_dir/expansion-recovery-${issue}.log"
-  local recovery_timeout=""
+  local recovery_timeout="" recovery_issue=""
   local packet_content="" detail="" rc=0
 
   if expansion_recovery_already_attempted "$feature_dir"; then
@@ -7016,8 +7056,15 @@ recover_missing_expansion_artifact() {
     return 1
   fi
 
+  if ! recovery_issue="$(expansion_recovery_resolve_issue_id "$issue")"; then
+    detail="synthetic-challenger-linear-issue-id-missing-or-invalid"
+    expansion_recovery_mark_result "$feature_dir" "$issue" "skipped" "$detail" "0" || true
+    log "warn" "[expansion-handshake] RECOVERY_SKIPPED issue=$issue detail=$detail"
+    return 1
+  fi
+
   recovery_timeout="$(get_expansion_handshake_timeout_seconds "$REPO_DIR")"
-  if _with_timeout "$recovery_timeout" npx tsx "$expand_tool" "$issue" --output "$packet_file" >"$recovery_log_file" 2>&1; then
+  if _with_timeout "$recovery_timeout" npx tsx "$expand_tool" "$recovery_issue" --output "$packet_file" >"$recovery_log_file" 2>&1; then
     :
   else
     rc=$?
@@ -7158,7 +7205,7 @@ fetch_queue_plan() {
 
 # fetch_queue_plan runs in command substitution, so diagnostics use a caller-owned file.
 record_fetch_queue_plan_failure() {
-  local step="$1" stderr_text="${2-}" diagnostics_file="${FETCH_QUEUE_PLAN_DIAGNOSTICS_FILE:-}"
+  local step="$1" stderr_text="${2-}" exit_code="${3:-1}" diagnostics_file="${FETCH_QUEUE_PLAN_DIAGNOSTICS_FILE:-}"
   [[ -n "$diagnostics_file" ]] || return 0
 
   local bounded
@@ -7169,16 +7216,44 @@ record_fetch_queue_plan_failure() {
     bounded="(no stderr captured)"
   fi
 
-  printf 'step=%s stderr=%s\n' "$step" "$bounded" > "$diagnostics_file" 2>/dev/null || true
+  printf 'step=%s exit=%s stderr=%s\n' "$step" "$exit_code" "$bounded" > "$diagnostics_file" 2>/dev/null || true
 }
 
 log_fetch_queue_plan_failure() {
   local diagnostics_file="$1"
   [[ -s "$diagnostics_file" ]] || return 0
 
-  local details
+  local details step reason
   details="$(cat "$diagnostics_file" 2>/dev/null || true)"
-  [[ -n "$details" ]] && log "debug" "[fetch_queue_plan] failed $details"
+  step="$(printf '%s' "$details" | sed -n 's/.*step=\([^ ]*\).*/\1/p')"
+  reason="$(classify_queue_failure_reason "$step" "$details")"
+  [[ -n "$details" ]] && log "debug" "[fetch_queue_plan] failed reason=$reason $details"
+}
+
+classify_queue_failure_reason() {
+  local step="$1" details="${2:-}" lowered
+  case "$step" in
+    cache_empty|empty_queue)   echo "empty_queue" ;;
+    jq_massage_failed)         echo "invalid_input" ;;
+    plan_queue_failed)
+      lowered="$(printf '%s' "$details" | tr '[:upper:]' '[:lower:]')"
+      if [[ "$lowered" == *cache* || "$lowered" == *refresh* ]]; then
+        echo "cache_refresh_failed"
+      else
+        echo "dependency_planning_failed"
+      fi
+      ;;
+    validation_failed)         echo "invalid_input" ;;
+    *)                         echo "unknown" ;;
+  esac
+}
+
+get_queue_failure_reason() {
+  local diagnostics_file="${1:-}" details step
+  [[ -s "$diagnostics_file" ]] || { echo "unknown"; return 0; }
+  details="$(cat "$diagnostics_file" 2>/dev/null || true)"
+  step="$(printf '%s' "$details" | sed -n 's/.*step=\([^ ]*\).*/\1/p')"
+  classify_queue_failure_reason "$step" "$details"
 }
 
 build_queue_plan_once() {
@@ -7225,25 +7300,34 @@ build_queue_plan_once() {
   if [[ -n "${PROJECT_NAME:-}" ]]; then
     cache_key="$PROJECT_NAME"
     queue_plan=$(printf '%s\n' "$plan_input" | _with_timeout 60 npx tsx "$TOOLS_DIR/plan-queue.ts" --stdin --json --cache-key "$cache_key" --refresh-missing-cache 2>"$tmp_stderr") || {
+      local exit_code=$?
       stderr_text="$(cat "$tmp_stderr" 2>/dev/null || true)"
       rm -f "$tmp_stderr"
-      record_fetch_queue_plan_failure "plan_queue_failed" "$stderr_text"
+      record_fetch_queue_plan_failure "plan_queue_failed" "$stderr_text" "$exit_code"
       return 1
     }
   else
     queue_plan=$(printf '%s\n' "$plan_input" | _with_timeout 15 npx tsx "$TOOLS_DIR/plan-queue.ts" --stdin --json 2>"$tmp_stderr") || {
+      local exit_code=$?
       stderr_text="$(cat "$tmp_stderr" 2>/dev/null || true)"
       rm -f "$tmp_stderr"
-      record_fetch_queue_plan_failure "plan_queue_failed" "$stderr_text"
+      record_fetch_queue_plan_failure "plan_queue_failed" "$stderr_text" "$exit_code"
       return 1
     }
   fi
 
+  if [[ -z "${queue_plan//[[:space:]]/}" ]]; then
+    rm -f "$tmp_stderr"
+    record_fetch_queue_plan_failure "empty_queue" "" 0
+    return 1
+  fi
+
   : > "$tmp_stderr"
   jq -e 'has("availableNow")' >/dev/null 2>"$tmp_stderr" <<<"$queue_plan" || {
+    local exit_code=$?
     stderr_text="$(cat "$tmp_stderr" 2>/dev/null || true)"
     rm -f "$tmp_stderr"
-    record_fetch_queue_plan_failure "validation_failed" "$stderr_text"
+    record_fetch_queue_plan_failure "validation_failed" "$stderr_text" "$exit_code"
     return 1
   }
 
@@ -9374,18 +9458,7 @@ monitor_issue_state() {
             approve_plan "$FEATURE_DIR" "$current_agent" ""
 
             if ! reroute_expanded_packets_for_coding_handoff "$ISSUE" "$SLUG" "$FEATURE_DIR"; then
-              if [[ "${REROUTE_EXPANDED_LAST_REASON:-}" == "disabled" || "${REROUTE_EXPANDED_LAST_REASON:-}" == "not_eligible" ]]; then
-                log_route_lifecycle "expansion_skipped" \
-                  "issue=$ISSUE" \
-                  "reason=${REROUTE_EXPANDED_LAST_REASON:-not_eligible}" \
-                  "active_route=\"$(route_lifecycle_route_id "$FEATURE_DIR/.routing-complete" 2>/dev/null || true)\""
-              else
-                log_route_lifecycle "expansion_failed" \
-                  "issue=$ISSUE" \
-                  "reason=${REROUTE_EXPANDED_LAST_REASON:-routing_error}" \
-                  "active_route=\"$(route_lifecycle_route_id "$FEATURE_DIR/.routing-complete" 2>/dev/null || true)\""
-              fi
-              log_warn "$ISSUE → expanded reroute helper failed, attempting promotion from existing artifacts"
+              handle_expanded_reroute_handoff_failure "$ISSUE" "$FEATURE_DIR"
             fi
             if ! apply_expanded_route_if_present "$FEATURE_DIR" "$ISSUE" "$SLUG" "${WORKTREE_ROOT}/${SLUG}" "$STATE_FILE"; then
               log_warn "$ISSUE → expanded route invalid; using bootstrap execution route for coding"
@@ -10736,7 +10809,8 @@ while :; do
           if [[ -z "$GROUPED_DISPLAY" ]]; then
             USING_GROUPED_VIEW=false
             if [[ -z "$queue_plan_json" ]]; then
-              log_warn "queue analysis unavailable, falling back to flat list"
+              _queue_reason="$(get_queue_failure_reason "${queue_plan_diag_file:-}")"
+              log_warn "queue analysis unavailable (reason: ${_queue_reason:-unknown}), falling back to flat list"
               [[ -n "$queue_plan_diag_file" ]] && log_fetch_queue_plan_failure "$queue_plan_diag_file"
             fi
           fi

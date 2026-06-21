@@ -45,6 +45,7 @@ import {
 } from './outcome-collectors.ts';
 import { evaluateTask } from './eval.ts';
 import { attachPhaseDurations, attachStageOutcomes, attachTraceId, enrichTrainingMetadata } from './eval-record-builder.ts';
+import { loadFeatureOutcomeDiagnostics } from './feature-outcome-consumer.ts';
 import { loadTraceContext, appendTraceEvent } from './trace-event.ts';
 import { appendEvalRecord } from './eval-persistence.ts';
 import { buildTaskDescriptor } from './task-descriptor-builder.ts';
@@ -522,6 +523,61 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
     record.modelVersion = executionModel;
   }
 
+  // 9d. Load feature outcome artifact diagnostics (HOK-2262) — best-effort
+  let featureOutcomeDiagnostics = null;
+  try {
+    const fSlug = branch.replace(/^(task|bug)\//, '') || issueId.toLowerCase();
+    const featureDirs: string[] = [];
+    if (worktreePath && fSlug) {
+      featureDirs.push(
+        path.join(worktreePath, 'features', fSlug),
+        path.join(worktreePath, 'bugs', fSlug),
+      );
+    }
+    if (repoDir && fSlug) {
+      featureDirs.push(
+        path.join(repoDir, 'features', fSlug),
+        path.join(repoDir, 'bugs', fSlug),
+      );
+    }
+    const archiveDir = issueId ? resolveRouteArtifactArchiveDir(issueId, repoDir) : undefined;
+
+    // Build a reconstructed comparison shape from current eval state
+    const reconstructed = {
+      completed: record.outcomes?.success,
+      merged: record.outcomes?.delivery?.merged,
+      ciPassed: record.outcomes?.ci?.passed ?? null,
+      reviewPassed: (() => {
+        const r = record.outcomes?.review;
+        if (!r) return null;
+        return r.changeRequests === 0 && r.approvals > 0 ? true : r.changeRequests > 0 ? false : null;
+      })(),
+      manualIntervention: record.interventionRequired,
+      interventionCount: record.interventionCount,
+      evalScore: record.score,
+      costUsd: typeof record.workflowCost === 'number' ? record.workflowCost : null,
+      durationSeconds: typeof record.timeSeconds === 'number' ? record.timeSeconds : null,
+    };
+
+    // Try each feature directory until diagnostics are loaded
+    let resolved = false;
+    for (const featureDir of featureDirs) {
+      const diag = loadFeatureOutcomeDiagnostics({ featureDir, archiveDir, reconstructed });
+      if (diag.present) {
+        featureOutcomeDiagnostics = diag;
+        resolved = true;
+        break;
+      }
+    }
+    if (!resolved) {
+      // Artifact absent — still record that we looked
+      featureOutcomeDiagnostics = loadFeatureOutcomeDiagnostics({ archiveDir, reconstructed });
+    }
+  } catch (err) {
+    // Never fail eval due to diagnostic loading errors
+    console.warn(`Warning: failed to load feature outcome diagnostics: ${errorMessage(err)}`);
+  }
+
   // 10. Enrich record with metadata
   enrichTrainingMetadata(record, {
     agentType,
@@ -539,6 +595,7 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
     workflowCost: workflowCostOutcome,
     taskDescriptor,
     constraints: evalConstraints,
+    featureOutcomeDiagnostics,
   });
 
   // 10a. Attach trace correlation ID (HOK-2259) — best-effort

@@ -26,6 +26,7 @@ import {
   attachTaskContextMetadata,
   attachRepoContextMetadata,
   attachWorkflowCostMetadata,
+  attachFeatureOutcomeDiagnostics,
   computeRouteCalibration,
   computeEligibility,
   enrichEvalRecord,
@@ -1292,6 +1293,77 @@ describe('eval-record-builder', () => {
       baseRecord.routePrediction = { expectedSuccess: 0.5 };
       attachRoutePrediction(baseRecord, undefined);
       expect(baseRecord.routePrediction).toEqual({ expectedSuccess: 0.5 });
+    });
+  });
+
+  describe('attachFeatureOutcomeDiagnostics (HOK-2262)', () => {
+    it('attaches valid diagnostics to the record', () => {
+      const diag = {
+        present: true,
+        valid: true,
+        used: true,
+        sourceFile: 'feature-state.json',
+        sourceHash: 'a'.repeat(64),
+        reason: 'loaded' as const,
+        eligibilityDiagnostic: 'eligible' as const,
+        missingFields: [],
+        invalidFields: [],
+        conflictsWithReconstruction: false,
+      };
+      attachFeatureOutcomeDiagnostics(baseRecord, diag);
+      assert.deepEqual(baseRecord.featureOutcomeDiagnostics, diag);
+    });
+
+    it('does nothing when diagnostics is null', () => {
+      delete baseRecord.featureOutcomeDiagnostics;
+      attachFeatureOutcomeDiagnostics(baseRecord, null);
+      assert.equal(baseRecord.featureOutcomeDiagnostics, undefined);
+    });
+
+    it('does nothing when diagnostics is undefined', () => {
+      delete baseRecord.featureOutcomeDiagnostics;
+      attachFeatureOutcomeDiagnostics(baseRecord, undefined);
+      assert.equal(baseRecord.featureOutcomeDiagnostics, undefined);
+    });
+
+    it('overwrites existing diagnostics when called again', () => {
+      const first = {
+        present: false,
+        valid: false,
+        used: false,
+        reason: 'artifact_absent' as const,
+        eligibilityDiagnostic: 'unknown' as const,
+      };
+      const second = {
+        present: true,
+        valid: true,
+        used: true,
+        sourceFile: 'feature-state.json',
+        sourceHash: 'b'.repeat(64),
+        reason: 'loaded' as const,
+        eligibilityDiagnostic: 'eligible' as const,
+      };
+      attachFeatureOutcomeDiagnostics(baseRecord, first);
+      attachFeatureOutcomeDiagnostics(baseRecord, second);
+      assert.equal(baseRecord.featureOutcomeDiagnostics?.present, true);
+      assert.equal(baseRecord.featureOutcomeDiagnostics?.sourceHash, 'b'.repeat(64));
+    });
+
+    it('enrichTrainingMetadata threads featureOutcomeDiagnostics onto record', () => {
+      const diag = {
+        present: true,
+        valid: true,
+        used: true,
+        sourceFile: 'feature-state.json',
+        sourceHash: 'c'.repeat(64),
+        reason: 'loaded' as const,
+        eligibilityDiagnostic: 'eligible' as const,
+        missingFields: [],
+        invalidFields: [],
+      };
+      enrichTrainingMetadata(baseRecord, { featureOutcomeDiagnostics: diag });
+      assert.equal(baseRecord.featureOutcomeDiagnostics?.present, true);
+      assert.equal(baseRecord.featureOutcomeDiagnostics?.sourceHash, 'c'.repeat(64));
     });
   });
 });
