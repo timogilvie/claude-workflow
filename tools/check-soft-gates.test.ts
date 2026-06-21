@@ -89,8 +89,8 @@ describe('check-soft-gates --all', () => {
     writeFileSync(join(featureDir, '.coding-complete'), '', 'utf-8');
 
     const stdout = execFileSync(
-      'pnpm',
-      ['exec', 'tsx', 'tools/check-soft-gates.ts', '--repo', repoDir, '--all', '--dry-run', '--json'],
+      'npx',
+      ['tsx', 'tools/check-soft-gates.ts', '--repo', repoDir, '--all', '--dry-run', '--json'],
       { cwd: process.cwd(), encoding: 'utf-8' },
     );
     const result = JSON.parse(stdout) as {
