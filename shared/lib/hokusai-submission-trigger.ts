@@ -62,7 +62,7 @@ function toContributionProjection(
   observedAt: string,
   record?: EvalRecord,
 ): RedactedEvalContributionProjection {
-  const fod = record?.featureOutcomeDiagnostics;
+  const fod = record?.featureOutcomeDiagnostics ?? undefined;
 
   const projection: RedactedEvalContributionProjection = {
     taskId: submission.task_id,
@@ -89,7 +89,15 @@ function toContributionProjection(
       ? { outcomeDiagnostic: fod.eligibilityDiagnostic }
       : {}),
     ...(fod !== undefined
-      ? { outcomeSource: fod.used ? 'feature_outcome_artifact' : 'reconstructed' as const }
+      ? {
+        outcomeSource: (
+          fod.used
+            ? 'feature_outcome_artifact'
+            : fod.present
+              ? 'unknown'
+              : 'reconstructed'
+        ) as const,
+      }
       : {}),
     ...(fod !== undefined
       ? { outcomeArtifactPresent: fod.present }
