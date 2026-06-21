@@ -237,6 +237,10 @@ describe('wavemill CLI', () => {
         const out = run(['hokusai', 'status', '--json', '--repo-dir', repoDir], { HOME: fakeHome });
         const parsed = JSON.parse(out) as {
           contributions?: {
+            consent: string;
+            queue: string;
+            uploadEndpoint: string;
+            mode: string;
             pendingQueueCount: number;
             acceptedSubmissionCount: number;
             acceptedRowCount: number;
@@ -249,6 +253,66 @@ describe('wavemill CLI', () => {
         assert.equal(typeof parsed.contributions?.acceptedRowCount, 'number');
         assert.deepEqual(parsed.contributions?.tokenRewards, { awarded: 0, pending: 0, none: 0, unknown: 0 });
         assert.equal(parsed.contributions?.historyReadOnly, true);
+        // New structured facets
+        assert.ok(['enabled', 'disabled'].includes(parsed.contributions?.consent ?? ''), 'consent should be enabled or disabled');
+        assert.ok(['enabled', 'disabled'].includes(parsed.contributions?.queue ?? ''), 'queue should be enabled or disabled');
+        assert.ok(['configured', 'missing'].includes(parsed.contributions?.uploadEndpoint ?? ''), 'uploadEndpoint should be configured or missing');
+        assert.ok(['uploading', 'export-only', 'disabled'].includes(parsed.contributions?.mode ?? ''), 'mode should be a known value');
+      } finally {
+        rmSync(fakeHome, { recursive: true, force: true });
+        rmSync(repoDir, { recursive: true, force: true });
+      }
+    });
+
+    it('status shows contribution facets in text output', () => {
+      const fakeHome = mkdtempSync(join(tmpdir(), 'wavemill-hokusai-home-'));
+      const repoDir = mkdtempSync(join(tmpdir(), 'wavemill-hokusai-repo-'));
+      try {
+        const out = run(['hokusai', 'status', '--repo-dir', repoDir], { HOME: fakeHome });
+        assert.match(out, /Contribution queue:/);
+        assert.match(out, /Upload endpoint:/);
+        assert.match(out, /Mode:/);
+      } finally {
+        rmSync(fakeHome, { recursive: true, force: true });
+        rmSync(repoDir, { recursive: true, force: true });
+      }
+    });
+
+    it('configure creates .wavemill-config.local.json with upload settings', () => {
+      const fakeHome = mkdtempSync(join(tmpdir(), 'wavemill-hokusai-home-'));
+      const repoDir = mkdtempSync(join(tmpdir(), 'wavemill-hokusai-repo-'));
+      try {
+        const out = run(['hokusai', 'configure', '--repo-dir', repoDir], { HOME: fakeHome });
+        assert.match(out, /Created|Updated|already configured/);
+        assert.match(out, /Upload endpoint:/);
+      } finally {
+        rmSync(fakeHome, { recursive: true, force: true });
+        rmSync(repoDir, { recursive: true, force: true });
+      }
+    });
+
+    it('configure --json returns structured result', () => {
+      const fakeHome = mkdtempSync(join(tmpdir(), 'wavemill-hokusai-home-'));
+      const repoDir = mkdtempSync(join(tmpdir(), 'wavemill-hokusai-repo-'));
+      try {
+        const out = run(['hokusai', 'configure', '--json', '--repo-dir', repoDir], { HOME: fakeHome });
+        const parsed = JSON.parse(out) as { action: string; endpoint: string; localConfigPath: string };
+        assert.ok(['created', 'updated', 'unchanged'].includes(parsed.action), `unexpected action: ${parsed.action}`);
+        assert.ok(parsed.endpoint.startsWith('https://'), `endpoint should be a URL: ${parsed.endpoint}`);
+        assert.ok(parsed.localConfigPath.endsWith('.wavemill-config.local.json'));
+      } finally {
+        rmSync(fakeHome, { recursive: true, force: true });
+        rmSync(repoDir, { recursive: true, force: true });
+      }
+    });
+
+    it('drain reports empty queue when nothing is queued', () => {
+      const fakeHome = mkdtempSync(join(tmpdir(), 'wavemill-hokusai-home-'));
+      const repoDir = mkdtempSync(join(tmpdir(), 'wavemill-hokusai-repo-'));
+      try {
+        // contributions disabled by default, so drain returns disabled
+        const out = run(['hokusai', 'drain', '--repo-dir', repoDir], { HOME: fakeHome });
+        assert.match(out, /disabled|empty/i);
       } finally {
         rmSync(fakeHome, { recursive: true, force: true });
         rmSync(repoDir, { recursive: true, force: true });
