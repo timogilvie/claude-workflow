@@ -1,4 +1,4 @@
-import { appendFile, readFile, rm } from 'node:fs/promises';
+import { appendFile, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { loadTraceContext, appendTraceEvent } from './trace-event.ts';
@@ -26,6 +26,7 @@ const READY_WATCHDOG_TOOL_PATH = path.join(WAVEMILL_TOOLS_DIR, 'ready-watchdog.t
 export type ReadyWatchdogClassificationKind =
   | 'fresh'
   | 'auto-update'
+  | 'disconnected-remediation'
   | 'stuck'
   | 'waiting-on-ci'
   | 'stable-failing-safe'
@@ -64,9 +65,21 @@ export interface ReadyTaskSnapshot {
   hasConflictMarker: boolean;
   remediationLaunchHead: string | null;
   currentHead: string | null;
+  remediationPaneActive: boolean | null;
+  worktreeMergeState: WorktreeMergeState;
   relevantJobs: MillJob[];
   lastProgressAt: string | null;
   idleMinutes: number | null;
+}
+
+export interface WorktreeMergeState {
+  mergeHead: string | null;
+  unmergedPaths: string[];
+  stagedPaths: string[];
+  unstagedPaths: string[];
+  untrackedPaths: string[];
+  rawStatus: string[];
+  inspectError?: string;
 }
 
 export interface NormalizedCheckSummary {
@@ -144,6 +157,13 @@ export interface ReadyWatchdogDeps {
   readWorkflowState: (stateFile: string) => Promise<WorkflowStateLike>;
   fetchGitHubTruth: (prNumber: number, repoDir: string) => Promise<GitHubPRTruth>;
   getCurrentHead: (worktree: string) => Promise<string | null>;
+  getWorktreeMergeState: (worktree: string) => Promise<WorktreeMergeState>;
+  isTaskPaneActive: (task: WorkflowTaskRecord) => Promise<boolean | null>;
+  resumeResolvedConflictRemediation: (
+    snapshot: ReadyTaskSnapshot,
+    githubTruth: GitHubPRTruth,
+    repoDir: string,
+  ) => Promise<ResolvedConflictResumeResult>;
   updateBehindBranch: (
     snapshot: ReadyTaskSnapshot,
     githubTruth: GitHubPRTruth,
@@ -159,6 +179,11 @@ export interface ReadyWatchdogDeps {
     readyWatchdogToolPath: string,
   ) => Promise<ReadyRemediationLaunchResult>;
   now: () => Date;
+}
+
+export interface ResolvedConflictResumeResult {
+  status: 'completed' | 'failed';
+  detail: string;
 }
 
 export interface ReadyRemediationLaunchResult {
@@ -178,7 +203,7 @@ export interface TickReadyWatchdogOptions {
   deps?: Partial<ReadyWatchdogDeps>;
 }
 
-interface WorkflowTaskRecord extends Record<string, unknown> {
+export interface WorkflowTaskRecord extends Record<string, unknown> {
   slug?: string;
   branch?: string;
   worktree?: string;
@@ -189,6 +214,7 @@ interface WorkflowTaskRecord extends Record<string, unknown> {
   agent?: string;
   model?: string;
   challengePairId?: string;
+  windowId?: string;
 }
 
 const defaultDeps: ReadyWatchdogDeps = {
@@ -231,6 +257,71 @@ const defaultDeps: ReadyWatchdogDeps = {
       return stdout.trim() || null;
     } catch {
       return null;
+    }
+  },
+  async getWorktreeMergeState(worktree) {
+    return inspectWorktreeMergeState(worktree);
+  },
+  async isTaskPaneActive(task) {
+    const target = typeof task.windowId === 'string' && task.windowId.trim()
+      ? task.windowId.trim()
+      : null;
+    if (!target) {
+      return null;
+    }
+
+    try {
+      const { stdout } = await execFileAsync(
+        'tmux',
+        ['display-message', '-p', '-t', target, '#{pane_dead}|#{pane_current_command}|#{pane_pid}'],
+        {
+          encoding: 'utf-8',
+          maxBuffer: 1024 * 1024,
+        },
+      );
+      const [paneDead, command, panePid] = stdout.trim().split('|');
+      if (paneDead === '1') {
+        return false;
+      }
+      if (command && !['bash', 'zsh', 'fish', 'sh'].includes(command)) {
+        return true;
+      }
+      if (panePid && /^\d+$/.test(panePid)) {
+        try {
+          const { stdout: childStdout } = await execFileAsync('pgrep', ['-P', panePid], {
+            encoding: 'utf-8',
+            maxBuffer: 1024 * 1024,
+          });
+          return childStdout.trim().length > 0;
+        } catch {
+          return false;
+        }
+      }
+      return false;
+    } catch {
+      return null;
+    }
+  },
+  async resumeResolvedConflictRemediation(snapshot, githubTruth) {
+    const baseBranch = githubTruth.baseRefName || 'base branch';
+    try {
+      await execFileAsync('git', ['-C', snapshot.worktree, 'commit', '-m', `fix: Resolve merge conflicts with ${baseBranch}`], {
+        encoding: 'utf-8',
+        maxBuffer: 1024 * 1024,
+      });
+      await execFileAsync('git', ['-C', snapshot.worktree, 'push', 'origin', snapshot.branch], {
+        encoding: 'utf-8',
+        maxBuffer: 1024 * 1024,
+      });
+      return {
+        status: 'completed',
+        detail: `Committed and pushed resolved conflict remediation for PR #${snapshot.prNumber}.`,
+      };
+    } catch (error) {
+      return {
+        status: 'failed',
+        detail: `Could not commit/push resolved conflict remediation for PR #${snapshot.prNumber}: ${errorMessage(error)}`,
+      };
     }
   },
   async updateBehindBranch(snapshot, githubTruth) {
@@ -282,6 +373,65 @@ const defaultDeps: ReadyWatchdogDeps = {
   },
   now: () => new Date(),
 };
+
+async function inspectWorktreeMergeState(worktree: string): Promise<WorktreeMergeState> {
+  const state: WorktreeMergeState = {
+    mergeHead: null,
+    unmergedPaths: [],
+    stagedPaths: [],
+    unstagedPaths: [],
+    untrackedPaths: [],
+    rawStatus: [],
+  };
+
+  try {
+    const { stdout } = await execFileAsync('git', ['-C', worktree, 'rev-parse', '-q', '--verify', 'MERGE_HEAD'], {
+      encoding: 'utf-8',
+      maxBuffer: 1024 * 1024,
+    });
+    state.mergeHead = stdout.trim() || null;
+  } catch {
+    state.mergeHead = null;
+  }
+
+  try {
+    const { stdout } = await execFileAsync('git', ['-C', worktree, 'status', '--porcelain=v1', '-z'], {
+      encoding: 'utf-8',
+      maxBuffer: 1024 * 1024,
+    });
+    const entries = stdout.split('\0').filter(Boolean);
+    for (const entry of entries) {
+      const rawCode = entry.slice(0, 2);
+      const pathText = entry.slice(3);
+      const pathName = pathText.includes(' -> ') ? pathText.split(' -> ').pop() || pathText : pathText;
+      state.rawStatus.push(`${rawCode} ${pathName}`);
+
+      const [indexStatus, worktreeStatus] = rawCode;
+      const isUnmerged = indexStatus === 'U'
+        || worktreeStatus === 'U'
+        || rawCode === 'AA'
+        || rawCode === 'DD';
+      if (isUnmerged) {
+        state.unmergedPaths.push(pathName);
+        continue;
+      }
+      if (rawCode === '??') {
+        state.untrackedPaths.push(pathName);
+        continue;
+      }
+      if (indexStatus && indexStatus !== ' ' && indexStatus !== '?' && indexStatus !== '!') {
+        state.stagedPaths.push(pathName);
+      }
+      if (worktreeStatus && worktreeStatus !== ' ' && worktreeStatus !== '?' && worktreeStatus !== '!') {
+        state.unstagedPaths.push(pathName);
+      }
+    }
+  } catch (error) {
+    state.inspectError = errorMessage(error);
+  }
+
+  return state;
+}
 
 export function normalizeStatusCheckRollup(raw: unknown): NormalizedCheckSummary[] {
   if (!Array.isArray(raw)) {
@@ -340,6 +490,7 @@ function buildFailingChecksFingerprint(checks: NormalizedCheckSummary[]): string
 
 function displayLabel(kind: Exclude<ReadyWatchdogClassificationKind, 'fresh'>): string {
   if (kind === 'auto-update') return 'auto update';
+  if (kind === 'disconnected-remediation') return 'disconnected remediation';
   if (kind === 'waiting-on-ci') return 'waiting on CI';
   if (kind === 'stable-failing-safe') return 'stable failing safe';
   if (kind === 'waiting-on-eval-comparison') return 'waiting on eval/comparison';
@@ -450,6 +601,65 @@ function isCleanMergeState(githubTruth: GitHubPRTruth): boolean {
     && ['CLEAN', 'HAS_HOOKS'].includes(githubTruth.mergeStateStatus);
 }
 
+function hasLocalMergeResidue(state: WorktreeMergeState): boolean {
+  return state.mergeHead !== null
+    || state.unmergedPaths.length > 0
+    || state.stagedPaths.length > 0
+    || state.unstagedPaths.length > 0;
+}
+
+function canSafelyResumeResolvedMerge(snapshot: ReadyTaskSnapshot): boolean {
+  const state = snapshot.worktreeMergeState;
+  return snapshot.hasConflictMarker
+    && snapshot.readyResultStatus === 'running'
+    && snapshot.remediationPaneActive === false
+    && snapshot.remediationLaunchHead !== null
+    && snapshot.currentHead !== null
+    && snapshot.remediationLaunchHead === snapshot.currentHead
+    && state.mergeHead !== null
+    && state.inspectError === undefined
+    && state.unmergedPaths.length === 0
+    && state.stagedPaths.length > 0
+    && state.unstagedPaths.length === 0;
+}
+
+function disconnectedMergeResidueDetected(snapshot: ReadyTaskSnapshot): boolean {
+  if (!snapshot.hasConflictMarker || snapshot.readyResultStatus !== 'running') {
+    return false;
+  }
+  if (snapshot.remediationPaneActive === true) {
+    return false;
+  }
+  return hasLocalMergeResidue(snapshot.worktreeMergeState);
+}
+
+function summarizeMergeState(state: WorktreeMergeState): string {
+  const parts = [
+    `MERGE_HEAD=${state.mergeHead ? state.mergeHead.slice(0, 12) : 'absent'}`,
+    `unmerged=${state.unmergedPaths.length ? state.unmergedPaths.join(',') : 'none'}`,
+    `staged=${state.stagedPaths.length ? state.stagedPaths.join(',') : 'none'}`,
+    `unstaged=${state.unstagedPaths.length ? state.unstagedPaths.join(',') : 'none'}`,
+  ];
+  if (state.untrackedPaths.length > 0) {
+    parts.push(`untracked=${state.untrackedPaths.join(',')}`);
+  }
+  if (state.inspectError) {
+    parts.push(`inspectError=${state.inspectError}`);
+  }
+  return parts.join('; ');
+}
+
+function nextCommandForMergeState(snapshot: ReadyTaskSnapshot): string {
+  const worktree = escapeShellArg(snapshot.worktree);
+  if (snapshot.worktreeMergeState.unmergedPaths.length > 0) {
+    return `cd ${worktree} && git status --short && git diff --check`;
+  }
+  if (!snapshot.worktreeMergeState.mergeHead) {
+    return `cd ${worktree} && git status --short`;
+  }
+  return `cd ${worktree} && git status --short && git commit -m ${escapeShellArg('fix: Resolve merge conflicts')} && git push origin ${escapeShellArg(snapshot.branch)}`;
+}
+
 function isBehindMergeState(githubTruth: GitHubPRTruth): boolean {
   return githubTruth.state === 'OPEN'
     && githubTruth.mergeable === 'MERGEABLE'
@@ -523,6 +733,22 @@ export function classifyReadyTask(
     return {
       kind: 'waiting-on-eval-comparison',
       detail: `Background jobs still running: ${runningJobs.join(', ')}.`,
+    };
+  }
+
+  if (canSafelyResumeResolvedMerge(snapshot)) {
+    return {
+      kind: 'disconnected-remediation',
+      detail: `Conflict remediation worker exited after resolving conflicts for PR #${snapshot.prNumber}; ${summarizeMergeState(snapshot.worktreeMergeState)}.`,
+      autoRecoverable: true,
+    };
+  }
+
+  if (disconnectedMergeResidueDetected(snapshot)) {
+    const paneState = snapshot.remediationPaneActive === null ? 'unknown' : 'inactive';
+    return {
+      kind: 'needs-user',
+      detail: `Conflict remediation worker is ${paneState} and the worktree is unsafe to mutate automatically for PR #${snapshot.prNumber}: ${summarizeMergeState(snapshot.worktreeMergeState)}. Next command: ${nextCommandForMergeState(snapshot)}`,
     };
   }
 
@@ -739,8 +965,10 @@ async function buildSnapshot(
     readyAttentionDetail: readAttentionDetail(stateDir),
     hasNeedsAttention: existsSync(path.join(stateDir, '.needs-attention')),
     hasConflictMarker: existsSync(path.join(stateDir, '.conflict-detected')),
-    remediationLaunchHead: readyArtifacts?.remediationLaunchHead ?? null,
+    remediationLaunchHead: readyArtifacts?.remediationLaunchHead ?? readyArtifacts?.launchHead ?? null,
     currentHead: await deps.getCurrentHead(worktree),
+    remediationPaneActive: await deps.isTaskPaneActive(task),
+    worktreeMergeState: await deps.getWorktreeMergeState(worktree),
     relevantJobs,
     lastProgressAt,
     idleMinutes: computeIdleMinutes(lastProgressAt, now),
@@ -768,6 +996,7 @@ async function recoverReadyState(
     mergeConflict: githubTruth.mergeStateStatus,
   };
   delete nextArtifacts.remediationLaunchHead;
+  delete nextArtifacts.launchHead;
 
   await updateStageResult(snapshot.readyStateDir, 'ready', {
     status: 'running',
@@ -793,6 +1022,11 @@ async function recoverReadyState(
       updated: deps.now().toISOString(),
     };
   });
+}
+
+async function writeReadyAttention(snapshot: ReadyTaskSnapshot, detail: string): Promise<void> {
+  const firstLine = detail.split(/\r?\n/, 1)[0]?.trim() || detail;
+  await writeFile(path.join(snapshot.readyStateDir, '.needs-attention'), `${firstLine}\n`, 'utf-8');
 }
 
 async function writeAuditRecord(repoDir: string, record: ReadyWatchdogAuditRecord): Promise<void> {
@@ -1068,9 +1302,45 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
           });
         }
       }
+    } else if (classification.kind === 'disconnected-remediation' && githubTruth) {
+      const resumeResult = await deps.resumeResolvedConflictRemediation(snapshot, githubTruth, options.repoDir);
+      if (resumeResult.status === 'completed') {
+        await recoverReadyState(
+          snapshot,
+          githubTruth,
+          options.stateFile,
+          deps,
+          `${resumeResult.detail} Ready checks will be re-polled.`,
+        );
+        entry = buildFindingEntry({
+          issueId,
+          snapshot,
+          classification: 'disconnected-remediation',
+          detail: resumeResult.detail,
+          action: 'completed-conflict-remediation',
+          now,
+          githubTruth,
+        });
+      } else {
+        const detail = `${resumeResult.detail}. Git state: ${summarizeMergeState(snapshot.worktreeMergeState)}. Next command: ${nextCommandForMergeState(snapshot)}`;
+        await writeReadyAttention(snapshot, detail);
+        entry = buildFindingEntry({
+          issueId,
+          snapshot,
+          classification: 'needs-user',
+          detail,
+          action: 'needs-user',
+          now,
+          githubTruth,
+        });
+      }
     } else {
       let action = 'reported';
       let recoveryCommand = classification.recoveryCommand;
+      if (classification.kind === 'needs-user' && disconnectedMergeResidueDetected(snapshot)) {
+        await writeReadyAttention(snapshot, classification.detail);
+        action = 'needs-user';
+      }
       if (
         (classification.kind === 'waiting-on-ci' || classification.kind === 'stable-failing-safe')
         && classification.autoRemediable

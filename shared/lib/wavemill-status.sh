@@ -1197,6 +1197,15 @@ render_task_row() {
   printf "%-10s  %4s  %-22s  %6s  %-12b  %-11b  %b${EL}\n" \
     "$issue" "$pane" "$ds" "$t" "$phase_str" "$st_str" "$pr_str" >> "$FRAME"
 
+  attention_detail=$(ready_attention_detail "$worktree" "$slug")
+  if [[ "$agent_state" != "running" && "$task_phase" == "ready" ]]; then
+    if [[ -n "$attention_detail" ]]; then
+      reported="$attention_detail"
+    elif [[ -n "$watchdog_detail" ]]; then
+      reported="$watchdog_detail"
+    fi
+  fi
+
   if [[ -n "$coding_auto_detail" ]]; then
     reported="$coding_auto_detail"
   elif [[ -n "$coding_blocked_detail" ]]; then
@@ -1208,7 +1217,6 @@ render_task_row() {
   elif [[ -z "$reported" ]] && plan_waiting_for_review "$task_phase" "$agent_state" "$worktree" "$slug"; then
     reported="Plan ready — waiting for approval"
   fi
-  attention_detail=$(ready_attention_detail "$worktree" "$slug")
   if [[ -z "$reported" && -n "$attention_detail" ]]; then
     reported="$attention_detail"
   fi
