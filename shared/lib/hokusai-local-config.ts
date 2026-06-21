@@ -36,8 +36,12 @@ function readLocalConfig(path: string): Record<string, unknown> {
 }
 
 function writeLocalConfig(path: string, config: Record<string, unknown>): void {
+  writeTextFileAtomic(path, `${JSON.stringify(config, null, 2)}\n`);
+}
+
+function writeTextFileAtomic(path: string, content: string): void {
   const tempPath = `${path}.tmp-${process.pid}`;
-  writeFileSync(tempPath, `${JSON.stringify(config, null, 2)}\n`, 'utf-8');
+  writeFileSync(tempPath, content, 'utf-8');
   renameSync(tempPath, path);
 }
 
@@ -87,7 +91,7 @@ export function ensureGitignoreEntry(repoDir: string, entry: string): 'added' | 
   const gitignorePath = join(repoDir, '.gitignore');
 
   if (!existsSync(gitignorePath)) {
-    writeFileSync(gitignorePath, `${entry}\n`, 'utf-8');
+    writeTextFileAtomic(gitignorePath, `${entry}\n`);
     return 'added';
   }
 
@@ -98,6 +102,6 @@ export function ensureGitignoreEntry(repoDir: string, entry: string): 'added' | 
   }
 
   const appended = content.endsWith('\n') ? `${content}${entry}\n` : `${content}\n${entry}\n`;
-  writeFileSync(gitignorePath, appended, 'utf-8');
+  writeTextFileAtomic(gitignorePath, appended);
   return 'added';
 }

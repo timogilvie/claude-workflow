@@ -269,6 +269,7 @@ describe('wavemill CLI', () => {
       const repoDir = mkdtempSync(join(tmpdir(), 'wavemill-hokusai-repo-'));
       try {
         const out = run(['hokusai', 'status', '--repo-dir', repoDir], { HOME: fakeHome });
+        assert.match(out, /Consent:/);
         assert.match(out, /Contribution queue:/);
         assert.match(out, /Upload endpoint:/);
         assert.match(out, /Mode:/);

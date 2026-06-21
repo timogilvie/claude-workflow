@@ -501,6 +501,7 @@ describe('hokusai-consent', () => {
       }, configDir);
 
       const display = getStatusDisplay({ configDir, repoDir });
+      assert.match(display, /Consent: enabled/);
       assert.match(display, /Contribution queue: enabled/);
       assert.match(display, /Upload endpoint: missing/);
       assert.match(display, /Mode: export-only/);
@@ -523,6 +524,7 @@ describe('hokusai-consent', () => {
       }, configDir);
 
       const display = getStatusDisplay({ configDir, repoDir });
+      assert.match(display, /Consent: enabled/);
       assert.match(display, /Upload endpoint: configured/);
       assert.match(display, /Mode: uploading/);
     });

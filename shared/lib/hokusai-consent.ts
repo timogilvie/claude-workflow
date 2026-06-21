@@ -305,6 +305,7 @@ export function getStatusDisplay(options: { configDir?: string; repoDir?: string
     `Consented at: ${status.consentedAt ?? 'never'}`,
     `Endpoint: ${status.endpoint ?? 'not configured'}`,
     '',
+    `Consent: ${contrib.consent}`,
     `Contribution queue: ${contrib.queue}`,
     `Upload endpoint: ${contrib.uploadEndpoint}`,
     `Mode: ${contrib.mode}`,
