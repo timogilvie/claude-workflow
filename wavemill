@@ -924,59 +924,7 @@ INIT_EOF
   if [[ "$hokusai_contributions_enabled" == "true" ]]; then
     if [[ "$hokusai_contribution_upload" == "true" ]]; then
       if [[ "$hokusai_api_status" == "found" ]]; then
-        # Write upload settings to .wavemill-config.local.json
-        local local_config=".wavemill-config.local.json"
-        local local_config_content='{
-  "hokusai": {
-    "contributions": {
-      "endpoint": "https://api.hokus.ai/api/v1/contributions",
-      "endpointTokenEnv": "HOKUSAI_API_TOKEN",
-      "batchSize": 50
-    }
-  }
-}'
-        if [[ -f "$local_config" ]]; then
-          # Deep-merge: use node to merge rather than overwrite
-          local merged
-          merged="$(node -e "
-const fs = require('fs');
-const existing = JSON.parse(fs.readFileSync('$local_config', 'utf-8'));
-const patch = $local_config_content;
-function deepMerge(base, overlay) {
-  if (typeof base !== 'object' || base === null || Array.isArray(base)) return overlay;
-  const result = { ...base };
-  for (const key of Object.keys(overlay)) {
-    result[key] = (key in result && typeof result[key] === 'object' && !Array.isArray(result[key]))
-      ? deepMerge(result[key], overlay[key])
-      : overlay[key];
-  }
-  return result;
-}
-process.stdout.write(JSON.stringify(deepMerge(existing, patch), null, 2) + '\n');
-" 2>/dev/null)" || true
-          if [[ -n "$merged" ]]; then
-            echo "$merged" > "$local_config"
-            echo -e "${GREEN}✓${NC} Updated $local_config with Hokusai contribution upload settings"
-          else
-            echo "$local_config_content" > "$local_config"
-            echo -e "${GREEN}✓${NC} Created $local_config with Hokusai contribution upload settings"
-          fi
-        else
-          echo "$local_config_content" > "$local_config"
-          echo -e "${GREEN}✓${NC} Created $local_config with Hokusai contribution upload settings"
-        fi
-        echo -e "  Upload endpoint: ${CYAN}https://api.hokus.ai/api/v1/contributions${NC}"
-        echo -e "  Token env: ${CYAN}HOKUSAI_API_TOKEN${NC}"
-        # Add to .gitignore if not already there
-        if [[ -f ".gitignore" ]]; then
-          if ! grep -qxF ".wavemill-config.local.json" .gitignore; then
-            echo ".wavemill-config.local.json" >> .gitignore
-            echo -e "${GREEN}✓${NC} Added .wavemill-config.local.json to .gitignore"
-          fi
-        else
-          echo ".wavemill-config.local.json" > .gitignore
-          echo -e "${GREEN}✓${NC} Created .gitignore with .wavemill-config.local.json"
-        fi
+        npx tsx "$TOOLS_DIR/hokusai-manage.ts" configure --repo-dir "$PWD"
         echo -e "  Contribution mode: ${CYAN}uploading${NC}"
       else
         # Upload requested but no token found

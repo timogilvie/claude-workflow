@@ -83,7 +83,7 @@ export function configureContributionUpload(
   };
 }
 
-export function ensureGitignoreEntry(repoDir: string, entry: string): 'added' | 'exists' | 'no_gitignore' {
+export function ensureGitignoreEntry(repoDir: string, entry: string): 'added' | 'exists' {
   const gitignorePath = join(repoDir, '.gitignore');
 
   if (!existsSync(gitignorePath)) {
