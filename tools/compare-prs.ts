@@ -7,6 +7,7 @@ import { hasChallengeEvalRecordPair, readEvalRecords } from '../shared/lib/eval-
 import {
   appendChallengeComparison,
   detectVariedDimensions,
+  hasAnyVariedDimension,
   classifyChallengeType,
   type ChallengeComparison,
   type ChallengeRoutingMeta,
@@ -127,6 +128,12 @@ runTool({
         reviewMode: (args['challenger-review-mode'] as string) || '',
       } : undefined;
 
+      const variedDimensions = detectVariedDimensions(primaryRouting, challengerRouting);
+      if (variedDimensions && !hasAnyVariedDimension(variedDimensions)) {
+        throw new Error('Challenge comparison has no varied routing dimensions; refusing to compare identical workflows');
+      }
+      const challengeType = variedDimensions ? classifyChallengeType(variedDimensions) : undefined;
+
       const promptLimit = Number.parseInt(process.env.CHALLENGE_COMPARISON_MAX_PROMPT_BYTES || '500000', 10);
       const cappedPrompt = buildCappedComparisonPrompt({
         issuePrompt,
@@ -176,9 +183,6 @@ Return a raw JSON object with no code fences, no comments, and no JavaScript syn
         });
         verdict = validateComparisonJson(parseJsonFromLLM(response.text));
       }
-      // Compute enrichment fields
-      const variedDimensions = detectVariedDimensions(primaryRouting, challengerRouting);
-      const challengeType = variedDimensions ? classifyChallengeType(variedDimensions) : undefined;
 
       // Attribute the win to the varied stage's model. For planner/reviewer
       // challenges the coder is shared, so crediting it would be meaningless.

@@ -316,6 +316,19 @@ export async function pollJobs({
     const elapsedMs = Number.isFinite(startedAtMs) ? now.getTime() - startedAtMs : 0;
 
     if (elapsedMs > job.timeoutSeconds * 1000) {
+      const result = readResultFile(job.resultPath);
+      const completion = classifyJobCompletion(job, result);
+      if (completion.status === 'succeeded') {
+        updates.set(job.id, {
+          ...completion,
+          finishedAt: now.toISOString(),
+          excerpt: null,
+          settled: false,
+        });
+        changedIds.add(job.id);
+        continue;
+      }
+
       await terminateProcess(job.pid, timeoutGraceMs);
       updates.set(job.id, {
         status: 'timeout',
