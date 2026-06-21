@@ -33,6 +33,7 @@ import { dirname } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import type { AgentEvent } from '@earendil-works/pi-agent-core';
 import type { AssistantMessage } from '@earendil-works/pi-ai';
+import type { ReplayCompactionEvent } from './compaction.ts';
 
 // ---------------------------------------------------------------------------
 // Transcript event types
@@ -121,6 +122,8 @@ export interface TranscriptToolResult extends TranscriptEventBase {
   redacted: boolean;
 }
 
+export interface TranscriptCompactionEvent extends TranscriptEventBase, ReplayCompactionEvent {}
+
 export interface TranscriptSessionEnded extends TranscriptEventBase {
   type: 'session_ended';
   messageCount: number;
@@ -133,6 +136,7 @@ export type TranscriptEvent =
   | TranscriptAssistantMessage
   | TranscriptToolStarted
   | TranscriptToolResult
+  | TranscriptCompactionEvent
   | TranscriptSessionEnded;
 
 // ---------------------------------------------------------------------------
@@ -302,6 +306,15 @@ export class TranscriptWriter {
    */
   write(event: TranscriptEvent): void {
     this.append(event);
+  }
+
+  writeCompactionEvent(event: ReplayCompactionEvent): TranscriptCompactionEvent {
+    const transcriptEvent: TranscriptCompactionEvent = {
+      ...this.base(),
+      ...event,
+    };
+    this.append(transcriptEvent);
+    return transcriptEvent;
   }
 
   private nextSeq(): number {

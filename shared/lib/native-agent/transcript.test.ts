@@ -13,6 +13,7 @@ import {
   parseTranscriptJsonl,
   TranscriptParseError,
   type TranscriptAssistantMessage,
+  type TranscriptCompactionEvent,
   type TranscriptEvent,
   type TranscriptSessionEnded,
   type TranscriptSessionStarted,
@@ -371,6 +372,30 @@ describe('TranscriptWriter', () => {
     assert.equal(ev.details, '[ALL_REDACTED]');
     removeTempDir();
   });
+
+  it('writes compaction events with transcript metadata', () => {
+    const path = makeTempPath();
+    const writer = new TranscriptWriter({ ...BASE_OPTS, path });
+
+    const event = writer.writeCompactionEvent({
+      type: 'context_compacted',
+      toolCallId: 'tc1',
+      toolName: 'read_file',
+      originalBytes: 100,
+      retainedBytes: 20,
+      originalEstimatedTokens: 25,
+      retainedEstimatedTokens: 5,
+      reason: 'byte_limit',
+    });
+
+    assert.equal(event.type, 'context_compacted');
+    assert.equal(event.seq, 0);
+    assert.equal(event.sessionId, BASE_OPTS.sessionId);
+
+    const parsed = parseTranscriptJsonl(readFileSync(path, 'utf-8'));
+    assert.deepEqual(parsed, [event]);
+    removeTempDir();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -409,6 +434,26 @@ describe('parseTranscriptJsonl', () => {
   it('parses empty string as empty array', () => {
     const events = parseTranscriptJsonl('');
     assert.deepEqual(events, []);
+  });
+
+  it('accepts context_compacted events', () => {
+    const event: TranscriptCompactionEvent = {
+      seq: 0,
+      sessionId: 's',
+      timestamp: 1,
+      type: 'context_compacted',
+      toolCallId: 'tc1',
+      toolName: 'search_text',
+      originalBytes: 90,
+      retainedBytes: 12,
+      originalEstimatedTokens: 23,
+      retainedEstimatedTokens: 3,
+      reason: 'token_limit',
+    };
+
+    const parsed = parseTranscriptJsonl(`${JSON.stringify(event)}\n`);
+
+    assert.deepEqual(parsed, [event]);
   });
 });
 
@@ -463,6 +508,25 @@ describe('extractRawHistory / extractReplayHistory', () => {
     assert.equal(thinkingBlock.thinking, 'deep thought');
     assert.equal(thinkingBlock.thinkingSignature, 'sig');
   });
+
+  it('ignores context_compacted events', () => {
+    const event: TranscriptCompactionEvent = {
+      seq: 0,
+      sessionId: 's',
+      timestamp: 1,
+      type: 'context_compacted',
+      toolCallId: 'tc1',
+      toolName: 'read_file',
+      originalBytes: 100,
+      retainedBytes: 20,
+      originalEstimatedTokens: 25,
+      retainedEstimatedTokens: 5,
+      reason: 'byte_limit',
+    };
+
+    assert.deepEqual(extractReplayHistory([event]), []);
+    assert.deepEqual(extractRawHistory([event]), []);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -506,6 +570,39 @@ describe('redaction before write', () => {
     const content = readFileSync(path, 'utf-8');
     assert.ok(!content.includes('sk-1234'), 'secret token leaked into transcript');
     assert.ok(content.includes('[REDACTED]'), 'expected [REDACTED] placeholder in transcript');
+    removeTempDir();
+  });
+
+  it('keeps raw tool_result content when a compaction event is present', () => {
+    const path = makeTempPath();
+    const writer = new TranscriptWriter({ ...BASE_OPTS, path });
+    const fullContent = 'full raw result '.repeat(20);
+
+    writer.handleEvent({
+      type: 'tool_execution_end',
+      toolCallId: 'tc1',
+      toolName: 'read_file',
+      result: { content: [{ type: 'text', text: fullContent }] },
+      isError: false,
+    });
+    writer.writeCompactionEvent({
+      type: 'context_compacted',
+      toolCallId: 'tc1',
+      toolName: 'read_file',
+      originalBytes: Buffer.byteLength(fullContent),
+      retainedBytes: 12,
+      originalEstimatedTokens: Math.ceil(Buffer.byteLength(fullContent) / 4),
+      retainedEstimatedTokens: 3,
+      reason: 'byte_limit',
+    });
+
+    const parsed = parseTranscriptJsonl(readFileSync(path, 'utf-8'));
+    const toolResult = parsed.find((e): e is TranscriptToolResult => e.type === 'tool_result');
+    const compaction = parsed.find((e): e is TranscriptCompactionEvent => e.type === 'context_compacted');
+    assert.ok(toolResult);
+    assert.ok(compaction);
+    assert.equal(toolResult.content, fullContent);
+    assert.ok(!JSON.stringify(compaction).includes(fullContent));
     removeTempDir();
   });
 });
