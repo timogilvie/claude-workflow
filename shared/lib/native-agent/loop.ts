@@ -1,6 +1,7 @@
 import {
   runAgentLoopContinue,
   type AgentContext,
+  type AgentEvent,
   type AgentEventSink,
   type AgentLoopConfig,
   type AgentMessage,
@@ -92,6 +93,12 @@ export interface WavemillLoopConfig {
   compaction?: ReplayCompactionOptions;
   /** Receives metadata for replay compaction events emitted by transformContext. */
   onCompactionEvents?: (events: ReplayCompactionEvent[]) => void;
+  /**
+   * Optional sink that receives every Pi AgentEvent before the loop's own
+   * handling. Use to wire a TranscriptWriter or other event observer without
+   * modifying the loop internals.
+   */
+  eventSink?: (event: AgentEvent) => void;
   /** Required when `budget.maxCostUsd` is set; used to compute turn cost. */
   modelPricing?: ModelPricing;
   temperature?: number;
@@ -180,7 +187,7 @@ function composeAbortSignal(
  * heartbeat emission, and deterministic fail-fast batch semantics.
  */
 export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopResult> {
-  const { context, convertToLlm, budget, signal: callerSignal, onHeartbeat, modelPricing, temperature, maxTokens } = config;
+  const { context, convertToLlm, budget, signal: callerSignal, onHeartbeat, modelPricing, temperature, maxTokens, eventSink } = config;
 
   const startTime = Date.now();
   const composed = composeAbortSignal(callerSignal, budget?.maxWallClockMs);
@@ -335,6 +342,9 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
   let loopError: unknown;
 
   const emit: AgentEventSink = (event) => {
+    // Forward to optional external event sink first (e.g. TranscriptWriter).
+    eventSink?.(event);
+
     switch (event.type) {
       case 'turn_start':
         onHeartbeat?.({ state: 'working', event: 'turn_start', agent: HEARTBEAT_AGENT });

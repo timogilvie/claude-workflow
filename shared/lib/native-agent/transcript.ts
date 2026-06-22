@@ -34,6 +34,7 @@ import { isDeepStrictEqual } from 'node:util';
 import type { AgentEvent } from '@earendil-works/pi-agent-core';
 import type { AssistantMessage } from '@earendil-works/pi-ai';
 import type { ReplayCompactionEvent } from './compaction.ts';
+import { redactString, redactPayload } from './tools/redaction.ts';
 
 // ---------------------------------------------------------------------------
 // Transcript event types
@@ -143,39 +144,18 @@ export type TranscriptEvent =
 // Redaction
 // ---------------------------------------------------------------------------
 
-const SECRET_KEYS = new Set([
-  'authorization',
-  'apikey',
-  'api_key',
-  'token',
-  'secret',
-  'password',
-  'passwd',
-  'key',
-  'bearer',
-  'credential',
-  'credentials',
-  'x-api-key',
-]);
-
-/** Redact sensitive keys in a plain-object tree. Arrays are traversed but not keyed. */
-function redactObjectKeys(value: unknown, depth = 0): unknown {
-  if (depth > 10 || value === null || typeof value !== 'object') {
-    return value;
-  }
-  if (Array.isArray(value)) {
-    return value.map((item) => redactObjectKeys(item, depth + 1));
-  }
-  const result: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-    result[k] = SECRET_KEYS.has(k.toLowerCase()) ? '[REDACTED]' : redactObjectKeys(v, depth + 1);
-  }
-  return result;
-}
-
-/** Default redaction function. Replace to customize policy without changing transcript code. */
+/**
+ * Default redaction function.
+ *
+ * Delegates to `redactPayload` from the native-agent redaction module, which
+ * combines key-name-based value replacement (authorization, token, secret,
+ * etc.) with pattern-based string redaction (Bearer tokens, AWS keys,
+ * sk-… tokens, inline assignment forms).
+ *
+ * Replace the `redact` option on TranscriptWriterOptions to override.
+ */
 export function defaultRedact(value: unknown): unknown {
-  return redactObjectKeys(value);
+  return redactPayload(value);
 }
 
 // ---------------------------------------------------------------------------
@@ -223,6 +203,56 @@ function extractReplayContent(message: AssistantMessage): TranscriptReplayConten
     // thinking blocks are intentionally omitted from replay content
   }
   return blocks;
+}
+
+/** Apply redaction to text/thinking blocks in raw content. Does not mutate input. */
+function redactRawContent(
+  blocks: TranscriptRawContentBlock[],
+  redactFn: RedactFn,
+): TranscriptRawContentBlock[] {
+  return blocks.map((block) => {
+    if (block.type === 'text') {
+      const redacted = redactFn(block.text);
+      return { ...block, text: typeof redacted === 'string' ? redacted : block.text };
+    }
+    if (block.type === 'thinking') {
+      const redacted = redactFn(block.thinking);
+      return { ...block, thinking: typeof redacted === 'string' ? redacted : block.thinking };
+    }
+    if (block.type === 'tool_call') {
+      const redactedArgs = redactFn(block.arguments);
+      return {
+        ...block,
+        arguments: typeof redactedArgs === 'object' && redactedArgs !== null
+          ? (redactedArgs as Record<string, unknown>)
+          : block.arguments,
+      };
+    }
+    return block;
+  });
+}
+
+/** Apply redaction to text blocks and tool-call arguments in replay content. Does not mutate input. */
+function redactReplayContent(
+  blocks: TranscriptReplayContentBlock[],
+  redactFn: RedactFn,
+): TranscriptReplayContentBlock[] {
+  return blocks.map((block) => {
+    if (block.type === 'text') {
+      const redacted = redactFn(block.text);
+      return { ...block, text: typeof redacted === 'string' ? redacted : block.text };
+    }
+    if (block.type === 'tool_call') {
+      const redactedArgs = redactFn(block.arguments);
+      return {
+        ...block,
+        arguments: typeof redactedArgs === 'object' && redactedArgs !== null
+          ? (redactedArgs as Record<string, unknown>)
+          : block.arguments,
+      };
+    }
+    return block;
+  });
 }
 
 function extractUsage(message: AssistantMessage): TranscriptUsage | undefined {
@@ -367,8 +397,8 @@ export class TranscriptWriter {
         const msg = event.message;
         if ((msg as { role?: string }).role !== 'assistant') return null;
         const assistantMsg = msg as AssistantMessage;
-        const rawContent = extractRawContent(assistantMsg);
-        const replayContent = extractReplayContent(assistantMsg);
+        const rawContent = redactRawContent(extractRawContent(assistantMsg), this.redactFn);
+        const replayContent = redactReplayContent(extractReplayContent(assistantMsg), this.redactFn);
         const usage = extractUsage(assistantMsg);
         const result: TranscriptAssistantMessage = {
           ...this.base(),
@@ -399,18 +429,22 @@ export class TranscriptWriter {
           content?: Array<{ type?: string; text?: string }>;
           details?: unknown;
         } | null | undefined;
-        const firstText = resultObj?.content?.find((c) => c?.type === 'text')?.text ?? '';
-        const redactedDetails = resultObj?.details !== undefined
-          ? this.redactFn(resultObj.details)
+        const rawFirstText = resultObj?.content?.find((c) => c?.type === 'text')?.text ?? '';
+        // Redact content text using pattern-based string redaction.
+        const { text: redactedFirstText, applied: contentRedacted } = redactString(rawFirstText);
+        const originalDetails = resultObj?.details;
+        const redactedDetails = originalDetails !== undefined
+          ? this.redactFn(originalDetails)
           : undefined;
+        const detailsRedacted = redactedDetails !== undefined && !isDeepStrictEqual(redactedDetails, originalDetails);
         const toolResult: TranscriptToolResult = {
           ...this.base(),
           type: 'tool_result',
           toolCallId: event.toolCallId,
           toolName: event.toolName,
           isError: event.isError,
-          content: firstText,
-          redacted: redactedDetails !== undefined && !isDeepStrictEqual(redactedDetails, resultObj?.details),
+          content: redactedFirstText,
+          redacted: contentRedacted || detailsRedacted,
         };
         if (redactedDetails !== undefined) toolResult.details = redactedDetails;
         return toolResult;
@@ -429,8 +463,44 @@ export class TranscriptWriter {
     }
   }
 
+  /**
+   * Apply a final redaction pass before serialization.
+   *
+   * Events that came through `derive()` are already partially redacted
+   * (details via redactFn, content text via redactString). This method
+   * provides a fail-closed guarantee for events written via `write()` that
+   * bypass derivation. Double-redaction is idempotent for [REDACTED] values.
+   */
+  private sanitizeEvent(event: TranscriptEvent): TranscriptEvent {
+    if (event.type === 'tool_result') {
+      const redactedContent = redactString(event.content).text;
+      const originalDetails = event.details;
+      const redactedDetails = originalDetails !== undefined
+        ? this.redactFn(originalDetails)
+        : undefined;
+      const changed =
+        redactedContent !== event.content ||
+        (redactedDetails !== undefined && !isDeepStrictEqual(redactedDetails, originalDetails));
+      return {
+        ...event,
+        content: redactedContent,
+        ...(redactedDetails !== undefined && { details: redactedDetails }),
+        redacted: event.redacted || changed,
+      };
+    }
+    if (event.type === 'assistant_message') {
+      return {
+        ...event,
+        rawContent: redactRawContent(event.rawContent, this.redactFn),
+        replayContent: redactReplayContent(event.replayContent, this.redactFn),
+      };
+    }
+    return event;
+  }
+
   private append(event: TranscriptEvent): void {
-    appendFileSync(this.options.path, JSON.stringify(event) + '\n', 'utf-8');
+    const sanitized = this.sanitizeEvent(event);
+    appendFileSync(this.options.path, JSON.stringify(sanitized) + '\n', 'utf-8');
   }
 }
 
