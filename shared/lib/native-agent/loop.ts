@@ -10,6 +10,11 @@ import {
 } from '@earendil-works/pi-agent-core';
 import type { AssistantMessage, Model } from '@earendil-works/pi-ai';
 import { computeModelCost, type ModelPricing } from '../workflow-cost.ts';
+import {
+  transformContext,
+  type ReplayCompactionEvent,
+  type ReplayCompactionOptions,
+} from './compaction.ts';
 import type { ProviderModelConfig } from './provider.ts';
 
 // ---------------------------------------------------------------------------
@@ -75,6 +80,10 @@ export interface WavemillLoopConfig {
   signal?: AbortSignal;
   /** Invoked on Pi progress events so the dashboard sees a live agent. */
   onHeartbeat?: (event: HeartbeatEvent) => void;
+  /** Optional replay-history compaction applied only to provider context. */
+  compaction?: ReplayCompactionOptions;
+  /** Receives metadata for replay compaction events emitted by transformContext. */
+  onCompactionEvents?: (events: ReplayCompactionEvent[]) => void;
   /** Required when `budget.maxCostUsd` is set; used to compute turn cost. */
   modelPricing?: ModelPricing;
   temperature?: number;
@@ -286,6 +295,21 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
       return undefined;
     },
   };
+
+  if (config.compaction) {
+    piConfig.transformContext = async (messages: AgentMessage[]) => {
+      const result = transformContext(messages, config.compaction!);
+      if (result.events.length > 0) {
+        try {
+          config.onCompactionEvents?.(result.events);
+        } catch {
+          // Compaction event sinks are diagnostic; replay compaction should not
+          // fail an otherwise valid provider request.
+        }
+      }
+      return result.messages;
+    };
+  }
 
   let finalMessages: AgentMessage[] = [];
   let loopError: unknown;

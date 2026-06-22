@@ -6,11 +6,17 @@ import {
   disableSubmission,
   enableSubmission,
   getContributionConsentStatus,
+  getContributionStatus,
   getStatusDisplay,
   getSubmissionStatus,
 } from '../shared/lib/hokusai-consent.ts';
 import { summarizeHokusaiLedger } from '../shared/lib/hokusai-ledger.ts';
+import {
+  configureContributionUpload,
+  ensureGitignoreEntry,
+} from '../shared/lib/hokusai-local-config.ts';
 import { hokusaiQueueStatus } from '../shared/lib/hokusai-queue.ts';
+import { drainContributionQueue } from '../shared/lib/hokusai-queue-drain.ts';
 
 function parseOptionalNumber(value: string | undefined, name: string): number | undefined {
   if (value === undefined) {
@@ -52,6 +58,8 @@ runTool({
     'npx tsx tools/hokusai-manage.ts enable',
     'npx tsx tools/hokusai-manage.ts disable',
     'npx tsx tools/hokusai-manage.ts check-consent',
+    'npx tsx tools/hokusai-manage.ts configure',
+    'npx tsx tools/hokusai-manage.ts drain',
     'npx tsx tools/hokusai-manage.ts audit --input path/to/contributions.jsonl --json',
   ],
   async run({ args, positional }) {
@@ -92,10 +100,15 @@ runTool({
       case 'status': {
         const status = getSubmissionStatus(options);
         const contributionConsent = getContributionConsentStatus(options);
+        const contribStatus = getContributionStatus(options);
         const queue = hokusaiQueueStatus(options);
         const summary = summarizeHokusaiLedger(options);
         const historyReadOnly = !contributionConsent.submissionAllowed;
         const contributions = {
+          consent: contribStatus.consent,
+          queue: contribStatus.queue,
+          uploadEndpoint: contribStatus.uploadEndpoint,
+          mode: contribStatus.mode,
           pendingQueueCount: queue.pendingCount,
           acceptedSubmissionCount: summary.acceptedSubmissionCount,
           acceptedRowCount: summary.acceptedRowCount,
@@ -161,9 +174,81 @@ runTool({
         return;
       }
 
+      case 'configure': {
+        const repoDir = args['repo-dir'] ?? process.cwd();
+        const result = configureContributionUpload({ repoDir });
+        const gitignoreResult = ensureGitignoreEntry(repoDir, '.wavemill-config.local.json');
+        if (args.json) {
+          console.log(JSON.stringify({
+            action: result.action,
+            localConfigPath: result.localConfigPath,
+            endpoint: result.endpoint,
+            gitignore: gitignoreResult,
+          }, null, 2));
+        } else {
+          if (result.action === 'unchanged') {
+            console.log(`Contribution upload already configured in ${result.localConfigPath}`);
+          } else {
+            console.log(`${result.action === 'created' ? 'Created' : 'Updated'} ${result.localConfigPath} with Hokusai contribution upload settings`);
+          }
+          console.log(`  Upload endpoint: ${result.endpoint}`);
+          console.log(`  Token env: HOKUSAI_API_TOKEN`);
+          if (gitignoreResult === 'added') {
+            console.log(`  Added .wavemill-config.local.json to .gitignore`);
+          }
+        }
+        return;
+      }
+
+      case 'drain': {
+        const result = await drainContributionQueue(options);
+        if (args.json) {
+          console.log(JSON.stringify(result, null, 2));
+        } else {
+          switch (result.status) {
+            case 'uploaded':
+              console.log(`Uploaded ${result.uploadedCount ?? 0} contribution row${(result.uploadedCount ?? 0) === 1 ? '' : 's'} to Hokusai.${result.jobIds?.length ? ` Job IDs: ${result.jobIds.join(', ')}` : ''}`);
+              break;
+            case 'exported':
+              console.log(`Exported ${result.exportedCount ?? 0} contribution row${(result.exportedCount ?? 0) === 1 ? '' : 's'} to local JSONL (export-only mode — no endpoint configured).`);
+              break;
+            case 'empty':
+              console.log('Contribution queue is empty. Nothing to drain.');
+              break;
+            case 'waiting':
+              console.log(`Queue is waiting for retry backoff. Next attempt: ${result.nextAttemptAt ?? 'unknown'}`);
+              break;
+            case 'disabled':
+              console.log('Contribution queue is disabled. Enable with `wavemill hokusai enable` and ensure hokusai.contributions.enabled is true in .wavemill-config.json.');
+              break;
+            case 'unconfigured':
+              console.log('No export path or upload endpoint configured. Add hokusai.contributions.endpoint to .wavemill-config.local.json or run `wavemill hokusai configure`.');
+              break;
+            case 'retry_scheduled':
+              console.log(`Upload failed (transient). Retry scheduled at ${result.nextAttemptAt ?? 'unknown'}.${result.error ? ` Error: ${result.error}` : ''}`);
+              break;
+            case 'dead_lettered':
+              console.log(`Upload retries exhausted. Batch moved to dead-letter.${result.error ? ` Last error: ${result.error}` : ''}`);
+              process.exitCode = 1;
+              break;
+            case 'permanent_failure':
+              console.log(`Upload failed permanently.${result.error ? ` Error: ${result.error}` : ''}`);
+              process.exitCode = 1;
+              break;
+            case 'corrupt_state':
+              console.log(`Queue state is corrupt.${result.error ? ` Details: ${result.error}` : ''}`);
+              process.exitCode = 1;
+              break;
+            default:
+              console.log(`Drain result: ${result.status}`);
+          }
+        }
+        return;
+      }
+
       default:
         throw new Error(
-          `Unknown command "${command}"\nValid commands: enable, disable, status, check-consent, audit`,
+          `Unknown command "${command}"\nValid commands: enable, disable, status, check-consent, configure, drain, audit`,
         );
     }
   },
