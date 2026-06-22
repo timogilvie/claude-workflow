@@ -95,6 +95,8 @@ if [[ -n "$EXPANDED_REFRESH_BLOCK" ]]; then
   check_contains "challenger save_task_state passes planDepth" "$EXPANDED_REFRESH_BLOCK" 'new_challenger_plan_depth'
   check_contains "challenger save_task_state passes codeDepth" "$EXPANDED_REFRESH_BLOCK" 'new_challenger_code_depth'
   check_contains "challenger save_task_state passes reviewMode" "$EXPANDED_REFRESH_BLOCK" 'new_challenger_review_mode'
+  check_contains "refresh block detects identical primary/challenger routing" "$EXPANDED_REFRESH_BLOCK" 'expanded challenge refresh produced identical primary/challenger routing, preserving'
+  check_contains "refresh block compares primary/challenger planner" "$EXPANDED_REFRESH_BLOCK" 'new_primary_planner" == "$new_challenger_planner'
 else
   fail "could not extract expanded refresh block from monitor path"
 fi

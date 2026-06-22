@@ -117,10 +117,18 @@ export function detectVariedDimensions(
   };
 }
 
+export function hasAnyVariedDimension(varied: VariedDimensions): boolean {
+  return Object.values(varied).some(Boolean);
+}
+
 /**
  * Classify the challenge type based on which dimensions varied.
  */
 export function classifyChallengeType(varied: VariedDimensions): ChallengeType {
+  if (!hasAnyVariedDimension(varied)) {
+    throw new Error('Cannot classify challenge type: no routing dimensions varied');
+  }
+
   const roleChanges = [varied.planner, varied.coder, varied.reviewer].filter(Boolean).length;
   // Base config dimensions are the original 3; new variant dimensions are additive.
   // Keep them separate so legacy records (which lack variant fields) can still reach 'full-stack'.
