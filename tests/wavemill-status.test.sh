@@ -58,6 +58,7 @@ run_render() {
     agent_status() {
       case "$1" in
         HOK-1220) echo "exited" ;;
+        HOK-1310) echo "exited" ;;
         HOK-1230) echo "running" ;;
         HOK-1221) echo "waiting" ;;
         HOK-1222) echo "running" ;;
@@ -1408,6 +1409,72 @@ if grep -q 'Checks still pending: build (PENDING).' "$OUTPUT_READY_WATCHDOG" \
   pass "watchdog detail lines render all ready classifications"
 else
   fail "watchdog detail lines are missing one or more ready classifications"
+fi
+
+STATE_FILE_READY_EXITED="$TMP_DIR/state-ready-exited.json"
+cat > "$STATE_FILE_READY_EXITED" <<EOF
+{
+  "tasks": {
+    "HOK-1310": {
+      "slug": "ready-task",
+      "branch": "task/ready-task",
+      "worktree": "$WORKTREES_DIR/ready-task",
+      "status": "",
+      "phase": "ready",
+      "pr": "tracked"
+    }
+  }
+}
+EOF
+
+cat > "$TMP_DIR/ready-watchdog-state.json" <<'EOF'
+{
+  "updatedAt": "2026-05-05T12:30:00.000Z",
+  "tasks": {
+    "HOK-1310": {
+      "issueId": "HOK-1310",
+      "slug": "ready-task",
+      "prNumber": 414,
+      "classification": "needs-user",
+      "displayLabel": "needs user",
+      "detail": "Conflict remediation worker is inactive and the worktree is unsafe to mutate automatically for PR #414: MERGE_HEAD=base-sha; unmerged=package.json. Next command: cd /tmp/worktree && git status --short && git diff --check",
+      "action": "needs-user",
+      "updatedAt": "2026-05-05T12:30:00.000Z",
+      "idleMinutes": 20,
+      "lastProgressAt": "2026-05-05T12:10:00.000Z"
+    }
+  }
+}
+EOF
+
+BEHAVIOR_READY_EXITED="$TMP_DIR/behavior-ready-exited.json"
+cat > "$BEHAVIOR_READY_EXITED" <<'EOF'
+{
+  "pane": {
+    "HOK-1310-ready-task": "14"
+  },
+  "hook": {},
+  "reported": {
+    "HOK-1310": "staging and lint passed"
+  },
+  "planning": {},
+  "pr": {
+    "task/ready-task": "414|OPEN"
+  },
+  "checks": {
+    "task/ready-task": "pending"
+  }
+}
+EOF
+
+OUTPUT_READY_EXITED="$TMP_DIR/output-ready-exited.txt"
+run_render "$STATE_FILE_READY_EXITED" "$WORKTREES_DIR" "$BEHAVIOR_READY_EXITED" "$OUTPUT_READY_EXITED"
+
+if grep -q 'Conflict remediation worker is inactive' "$OUTPUT_READY_EXITED" \
+  && ! grep -q 'staging and lint passed' "$OUTPUT_READY_EXITED"; then
+  pass "exited ready pane prefers watchdog git truth over stale status text"
+else
+  fail "exited ready pane did not override stale status text"
 fi
 
 echo ""

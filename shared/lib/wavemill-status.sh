@@ -942,6 +942,28 @@ task_running_detail() {
     else
       printf 'comparison running: pair=%s prs=#%s/#%s\n' "$pair_id" "$primary_pr" "$challenger_pr"
     fi
+    return 0
+  fi
+
+  local comparison_state blocked_reason retry_count retry_max timed_out_sides manual_artifact
+  comparison_state=$(jq -r --arg issue "$issue" '.tasks[$issue].comparisonState // empty' "$STATE_FILE" 2>/dev/null || true)
+  [[ -n "$comparison_state" ]] || return 0
+  blocked_reason=$(jq -r --arg issue "$issue" '.tasks[$issue].comparisonBlockedReason // empty' "$STATE_FILE" 2>/dev/null || true)
+  retry_count=$(jq -r --arg issue "$issue" '.tasks[$issue].comparisonRetryCount // empty' "$STATE_FILE" 2>/dev/null || true)
+  retry_max=$(jq -r --arg issue "$issue" '.tasks[$issue].comparisonRetryMaxAttempts // empty' "$STATE_FILE" 2>/dev/null || true)
+  timed_out_sides=$(jq -r --arg issue "$issue" '.tasks[$issue].comparisonTimedOutSides // [] | join("/")' "$STATE_FILE" 2>/dev/null || true)
+  manual_artifact=$(jq -r --arg issue "$issue" '.tasks[$issue].manualComparisonArtifact // empty' "$STATE_FILE" 2>/dev/null || true)
+
+  case "$comparison_state" in
+    retrying_eval)
+      printf 'comparison retrying: timed_out=%s attempt=%s/%s reason=%s\n' "${timed_out_sides:-unknown}" "${retry_count:-0}" "${retry_max:-0}" "${blocked_reason:-eval_timed_out}"
+      ;;
+    manual_comparison_needed)
+      printf 'manual comparison needed: timed_out=%s artifact=%s\n' "${timed_out_sides:-unknown}" "${manual_artifact:-missing}"
+      ;;
+  esac
+  if [[ -n "$blocked_reason" && "$comparison_state" != "retrying_eval" ]]; then
+    printf 'comparison blocker: %s\n' "$blocked_reason"
   fi
 }
 
@@ -1197,6 +1219,15 @@ render_task_row() {
   printf "%-10s  %4s  %-22s  %6s  %-12b  %-11b  %b${EL}\n" \
     "$issue" "$pane" "$ds" "$t" "$phase_str" "$st_str" "$pr_str" >> "$FRAME"
 
+  attention_detail=$(ready_attention_detail "$worktree" "$slug")
+  if [[ "$agent_state" != "running" && "$task_phase" == "ready" ]]; then
+    if [[ -n "$attention_detail" ]]; then
+      reported="$attention_detail"
+    elif [[ -n "$watchdog_detail" ]]; then
+      reported="$watchdog_detail"
+    fi
+  fi
+
   if [[ -n "$coding_auto_detail" ]]; then
     reported="$coding_auto_detail"
   elif [[ -n "$coding_blocked_detail" ]]; then
@@ -1208,7 +1239,6 @@ render_task_row() {
   elif [[ -z "$reported" ]] && plan_waiting_for_review "$task_phase" "$agent_state" "$worktree" "$slug"; then
     reported="Plan ready — waiting for approval"
   fi
-  attention_detail=$(ready_attention_detail "$worktree" "$slug")
   if [[ -z "$reported" && -n "$attention_detail" ]]; then
     reported="$attention_detail"
   fi

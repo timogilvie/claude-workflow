@@ -33,6 +33,15 @@ function makeSnapshot(overrides: Partial<ReadyTaskSnapshot> = {}): ReadyTaskSnap
     hasConflictMarker: false,
     remediationLaunchHead: null,
     currentHead: 'head-sha',
+    remediationPaneActive: null,
+    worktreeMergeState: {
+      mergeHead: null,
+      unmergedPaths: [],
+      stagedPaths: [],
+      unstagedPaths: [],
+      untrackedPaths: [],
+      rawStatus: [],
+    },
     relevantJobs: [],
     lastProgressAt: '2026-05-05T12:00:00.000Z',
     idleMinutes: 30,
@@ -437,6 +446,61 @@ test('classify real conflict as needs-user', () => {
   assert.match(classification.detail, /merge conflicts/);
 });
 
+test('classify disconnected resolved merge remediation as auto-resumable', () => {
+  const classification = classifyReadyTask(
+    makeSnapshot({
+      hasConflictMarker: true,
+      readyResultStatus: 'running',
+      remediationLaunchHead: 'head-sha',
+      currentHead: 'head-sha',
+      remediationPaneActive: false,
+      worktreeMergeState: {
+        mergeHead: 'base-sha',
+        unmergedPaths: [],
+        stagedPaths: ['package.json'],
+        unstagedPaths: [],
+        untrackedPaths: [],
+        rawStatus: ['M  package.json'],
+      },
+    }),
+    makeTruth({ mergeStateStatus: 'DIRTY' }),
+    new Date('2026-05-05T12:30:00.000Z'),
+    WATCHDOG_CONFIG,
+  );
+
+  assert.equal(classification.kind, 'disconnected-remediation');
+  assert.equal(classification.autoRecoverable, true);
+  assert.match(classification.detail, /package\.json/);
+});
+
+test('classify disconnected unresolved merge remediation as needs-user with next command', () => {
+  const classification = classifyReadyTask(
+    makeSnapshot({
+      hasConflictMarker: true,
+      readyResultStatus: 'running',
+      remediationLaunchHead: 'head-sha',
+      currentHead: 'head-sha',
+      remediationPaneActive: false,
+      worktreeMergeState: {
+        mergeHead: 'base-sha',
+        unmergedPaths: ['package.json'],
+        stagedPaths: [],
+        unstagedPaths: [],
+        untrackedPaths: [],
+        rawStatus: ['UU package.json'],
+      },
+    }),
+    makeTruth({ mergeStateStatus: 'DIRTY' }),
+    new Date('2026-05-05T12:30:00.000Z'),
+    WATCHDOG_CONFIG,
+  );
+
+  assert.equal(classification.kind, 'needs-user');
+  assert.match(classification.detail, /MERGE_HEAD=base-sha/);
+  assert.match(classification.detail, /unmerged=package\.json/);
+  assert.match(classification.detail, /Next command: cd/);
+});
+
 test('classify mergeable behind PR as auto-update eligible', () => {
   const classification = classifyReadyTask(
     makeSnapshot(),
@@ -533,6 +597,132 @@ test('tick auto-recovers stale local state for clean green PRs', async () => {
   assert.equal(watchdogState.tasks['HOK-1579'].failingChecksFingerprint, undefined);
 
   await rm(repoDir, { recursive: true, force: true });
+});
+
+test('tick completes disconnected resolved conflict remediation', async () => {
+  const { repoDir, stateDir, stateFile, featureDir } = setupReadyTask('HOK-2268', 2268);
+  writeFileSync(path.join(featureDir, '.conflict-detected'), '');
+  writeFileSync(path.join(featureDir, '.needs-attention'), 'stale conflict detail\n');
+  writeFileSync(path.join(featureDir, '.ready-result.json'), JSON.stringify({
+    stage: 'ready',
+    status: 'running',
+    startedAt: '2026-05-05T11:55:00.000Z',
+    finishedAt: null,
+    agent: 'codex',
+    model: 'gpt-5.5',
+    notes: 'Conflict remediation in progress',
+    artifacts: {
+      type: 'ready',
+      verdict: 'pending',
+      prNumber: 2268,
+      mergeConflict: 'CONFLICTED',
+      launchHead: 'head-1',
+    },
+  }, null, 2));
+  let resumed = false;
+
+  try {
+    const result = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: WATCHDOG_CONFIG,
+      deps: {
+        fetchGitHubTruth: async () => makeTruth({ mergeStateStatus: 'DIRTY' }),
+        getCurrentHead: async () => 'head-1',
+        getWorktreeMergeState: async () => ({
+          mergeHead: 'base-sha',
+          unmergedPaths: [],
+          stagedPaths: ['package.json'],
+          unstagedPaths: [],
+          untrackedPaths: [],
+          rawStatus: ['M  package.json'],
+        }),
+        isTaskPaneActive: async () => false,
+        resumeResolvedConflictRemediation: async () => {
+          resumed = true;
+          return { status: 'completed', detail: 'Committed and pushed resolved conflict remediation for PR #2268.' };
+        },
+        now: () => new Date('2030-05-05T12:30:00.000Z'),
+      },
+    });
+
+    assert.equal(resumed, true);
+    assert.equal(result.findings.length, 1);
+    assert.equal(result.findings[0].classification, 'disconnected-remediation');
+    assert.equal(result.findings[0].action, 'completed-conflict-remediation');
+    assert.equal(existsSync(path.join(featureDir, '.conflict-detected')), false);
+    assert.equal(existsSync(path.join(featureDir, '.needs-attention')), false);
+
+    const readyResult = JSON.parse(readFileSync(path.join(featureDir, '.ready-result.json'), 'utf-8')) as {
+      status: string;
+      artifacts: { verdict: string; launchHead?: string };
+    };
+    assert.equal(readyResult.status, 'running');
+    assert.equal(readyResult.artifacts.verdict, 'pending');
+    assert.equal(readyResult.artifacts.launchHead, undefined);
+
+    const watchdogState = JSON.parse(readFileSync(path.join(stateDir, 'ready-watchdog-state.json'), 'utf-8')) as {
+      tasks: Record<string, { action: string }>;
+    };
+    assert.equal(watchdogState.tasks['HOK-2268'].action, 'completed-conflict-remediation');
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('tick writes needs-attention for disconnected unsafe merge remediation', async () => {
+  const { repoDir, stateFile, featureDir } = setupReadyTask('HOK-2268', 2268);
+  writeFileSync(path.join(featureDir, '.conflict-detected'), '');
+  writeFileSync(path.join(featureDir, '.ready-result.json'), JSON.stringify({
+    stage: 'ready',
+    status: 'running',
+    startedAt: '2026-05-05T11:55:00.000Z',
+    finishedAt: null,
+    agent: 'codex',
+    model: 'gpt-5.5',
+    notes: 'Conflict remediation in progress',
+    artifacts: {
+      type: 'ready',
+      verdict: 'pending',
+      prNumber: 2268,
+      mergeConflict: 'CONFLICTED',
+      launchHead: 'head-1',
+    },
+  }, null, 2));
+
+  try {
+    const result = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: WATCHDOG_CONFIG,
+      deps: {
+        fetchGitHubTruth: async () => makeTruth({ mergeStateStatus: 'DIRTY' }),
+        getCurrentHead: async () => 'head-1',
+        getWorktreeMergeState: async () => ({
+          mergeHead: 'base-sha',
+          unmergedPaths: ['package.json'],
+          stagedPaths: [],
+          unstagedPaths: [],
+          untrackedPaths: [],
+          rawStatus: ['UU package.json'],
+        }),
+        isTaskPaneActive: async () => false,
+        resumeResolvedConflictRemediation: async () => {
+          throw new Error('should not resume unsafe merge');
+        },
+        now: () => new Date('2030-05-05T12:30:00.000Z'),
+      },
+    });
+
+    assert.equal(result.findings.length, 1);
+    assert.equal(result.findings[0].classification, 'needs-user');
+    assert.equal(result.findings[0].action, 'needs-user');
+    const attention = readFileSync(path.join(featureDir, '.needs-attention'), 'utf-8');
+    assert.match(attention, /unmerged=package\.json/);
+    assert.match(attention, /Next command:/);
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
 });
 
 test('tick launches remediation on stable completed failure', async () => {

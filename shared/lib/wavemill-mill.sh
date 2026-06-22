@@ -713,6 +713,123 @@ clear_challenge_eval_running() {
   ' --arg issue "$issue"
 }
 
+challenge_eval_retry_max_attempts() {
+  local max_attempts
+  max_attempts=$(wavemill_load_config "$REPO_DIR" | jq -r '.challenge.eval.retryMaxAttempts // 1' 2>/dev/null || echo "1")
+  if [[ "$max_attempts" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$max_attempts"
+  else
+    printf '1\n'
+  fi
+}
+
+clear_challenge_pair_state() {
+  local pair_id="$1"
+  state_mutate "$STATE_FILE" '
+    .tasks |= with_entries(
+      if (.value.challengePairId // "") == $pair then
+        .value |= (
+          del(
+            .comparisonState,
+            .comparisonBlockedReason,
+            .comparisonRetryCount,
+            .comparisonRetryMaxAttempts,
+            .comparisonRetryTargetIssue,
+            .comparisonTimedOutSides,
+            .manualComparisonArtifact
+          ) |
+          .updated = (now | todateiso8601)
+        )
+      else
+        .
+      end
+    )
+  ' --arg pair "$pair_id"
+}
+
+write_challenge_pair_state() {
+  local pair_id="$1" state="$2" reason="${3:-}" retry_count="${4:-0}" retry_max="${5:-0}" retry_target="${6:-}" timed_out_sides_csv="${7:-}" artifact_path="${8:-}"
+  state_mutate "$STATE_FILE" '
+    ($timedOutSidesCsv
+      | split(",")
+      | map(gsub("^\\s+|\\s+$"; ""))
+      | map(select(length > 0))) as $timedOutSides
+    | .tasks |= with_entries(
+        if (.value.challengePairId // "") == $pair then
+          .value.comparisonState = $state
+          | .value.comparisonRetryCount = $retryCount
+          | .value.comparisonRetryMaxAttempts = $retryMax
+          | .value.updated = (now | todateiso8601)
+          | if $reason != "" then .value.comparisonBlockedReason = $reason else .value |= del(.comparisonBlockedReason) end
+          | if $retryTarget != "" then .value.comparisonRetryTargetIssue = $retryTarget else .value |= del(.comparisonRetryTargetIssue) end
+          | if ($timedOutSides | length) > 0 then .value.comparisonTimedOutSides = $timedOutSides else .value |= del(.comparisonTimedOutSides) end
+          | if $artifactPath != "" then .value.manualComparisonArtifact = $artifactPath else .value |= del(.manualComparisonArtifact) end
+        else
+          .
+        end
+      )
+  ' \
+    --arg pair "$pair_id" \
+    --arg state "$state" \
+    --arg reason "$reason" \
+    --arg retryTarget "$retry_target" \
+    --arg timedOutSidesCsv "$timed_out_sides_csv" \
+    --arg artifactPath "$artifact_path" \
+    --argjson retryCount "$retry_count" \
+    --argjson retryMax "$retry_max"
+}
+
+challenge_pair_timed_out_sides_csv() {
+  local issue="$1"
+  read_state_value "" --arg i "$issue" '.tasks[$i].comparisonTimedOutSides // [] | join(",")'
+}
+
+challenge_pair_timeout_reason() {
+  local timed_out_sides_csv="$1"
+  case ",$timed_out_sides_csv," in
+    *,primary,challenger,*|*,challenger,primary,*) printf 'both_eval_timed_out\n' ;;
+    *,primary,*) printf 'primary_eval_timed_out\n' ;;
+    *,challenger,*) printf 'challenger_eval_timed_out\n' ;;
+    *) printf 'eval_timed_out\n' ;;
+  esac
+}
+
+challenge_pair_manual_artifact_path() {
+  local primary_key="$1"
+  local slug worktree
+  slug=$(read_state_value "" --arg i "$primary_key" '.tasks[$i].slug // empty')
+  worktree=$(read_state_value "" --arg i "$primary_key" '.tasks[$i].worktree // empty')
+  [[ -z "$worktree" && -n "$slug" ]] && worktree="${WORKTREE_ROOT}/${slug}"
+  [[ -n "$slug" && -n "$worktree" ]] || return 1
+  printf '%s/features/%s/ready/challenge-comparison-needed.md\n' "$worktree" "$slug"
+}
+
+write_manual_challenge_comparison_artifact() {
+  local pair_id="$1" primary_key="$2" challenger_key="$3" timed_out_sides_csv="$4" retry_count="$5" retry_max="$6"
+  local artifact_path primary_pr challenger_pr
+  artifact_path=$(challenge_pair_manual_artifact_path "$primary_key") || return 1
+  primary_pr=$(read_state_value "" --arg i "$primary_key" '.tasks[$i].pr // empty')
+  challenger_pr=$(read_state_value "" --arg i "$challenger_key" '.tasks[$i].pr // empty')
+  mkdir -p "$(dirname "$artifact_path")"
+  cat > "$artifact_path" <<EOF
+# Challenge Comparison Needs Manual Action
+
+Pair ID: $pair_id
+Primary issue: $primary_key
+Challenger issue: $challenger_key
+Primary PR: ${primary_pr:-unknown}
+Challenger PR: ${challenger_pr:-unknown}
+Timed out member(s): ${timed_out_sides_csv:-unknown}
+Retry count: $retry_count/$retry_max
+
+Next action:
+1. Re-run the timed-out eval job(s) manually when infrastructure is healthy.
+2. If eval cannot be recovered quickly, compare PRs #${primary_pr:-?} and #${challenger_pr:-?} manually.
+3. Close the losing PR and proceed with the winner.
+EOF
+  printf '%s\n' "$artifact_path"
+}
+
 mark_challenge_comparison_running() {
   local pair_id="$1" primary_pr="$2" challenger_pr="$3"
   state_mutate "$STATE_FILE" '
@@ -724,6 +841,8 @@ mark_challenge_comparison_running() {
           challengerPr: ($challengerPr | tonumber),
           startedAt: (now | todateiso8601)
         } |
+        .value.comparisonState = "comparison_running" |
+        .value |= del(.comparisonBlockedReason, .comparisonRetryTargetIssue, .comparisonTimedOutSides, .manualComparisonArtifact) |
         .value.updated = (now | todateiso8601)
       else
         .
@@ -2634,6 +2753,13 @@ save_task_state() {
       (.tasks[$issue].challengeModel // "") as $old_challenge_model |
       (.tasks[$issue].evalRunning // null) as $old_eval_running |
       (.tasks[$issue].comparisonRunning // null) as $old_comparison_running |
+      (.tasks[$issue].comparisonState // null) as $old_comparison_state |
+      (.tasks[$issue].comparisonBlockedReason // null) as $old_comparison_blocked_reason |
+      (.tasks[$issue].comparisonRetryCount // null) as $old_comparison_retry_count |
+      (.tasks[$issue].comparisonRetryMaxAttempts // null) as $old_comparison_retry_max_attempts |
+      (.tasks[$issue].comparisonRetryTargetIssue // null) as $old_comparison_retry_target_issue |
+      (.tasks[$issue].comparisonTimedOutSides // null) as $old_comparison_timed_out_sides |
+      (.tasks[$issue].manualComparisonArtifact // null) as $old_manual_comparison_artifact |
       (.tasks[$issue].linearIssueId // $issue) as $old_linear_issue |
       (.tasks[$issue].coderModel // "") as $old_coderModel |
       (.tasks[$issue].plannerModel // "") as $old_plannerModel |
@@ -2667,6 +2793,13 @@ save_task_state() {
         challengeCompared: $old_challenge_compared,
         evalRunning: $old_eval_running,
         comparisonRunning: $old_comparison_running,
+        comparisonState: $old_comparison_state,
+        comparisonBlockedReason: $old_comparison_blocked_reason,
+        comparisonRetryCount: $old_comparison_retry_count,
+        comparisonRetryMaxAttempts: $old_comparison_retry_max_attempts,
+        comparisonRetryTargetIssue: $old_comparison_retry_target_issue,
+        comparisonTimedOutSides: $old_comparison_timed_out_sides,
+        manualComparisonArtifact: $old_manual_comparison_artifact,
         updated: (now | todate)
       }' \
      --arg issue "$issue" --arg slug "$slug" --arg branch "$branch" \
@@ -2796,6 +2929,8 @@ mark_challenge_comparison_running() {
           challengerPr: ($challengerPr | tonumber),
           startedAt: (now | todateiso8601)
         } |
+        .value.comparisonState = "comparison_running" |
+        .value |= del(.comparisonBlockedReason, .comparisonRetryTargetIssue, .comparisonTimedOutSides, .manualComparisonArtifact) |
         .value.updated = (now | todateiso8601)
       else
         .
@@ -2805,6 +2940,123 @@ mark_challenge_comparison_running() {
     --arg pair "$pair_id" \
     --arg primaryPr "$primary_pr" \
     --arg challengerPr "$challenger_pr"
+}
+
+challenge_eval_retry_max_attempts() {
+  local max_attempts
+  max_attempts=$(wavemill_load_config "$REPO_DIR" | jq -r '.challenge.eval.retryMaxAttempts // 1' 2>/dev/null || echo "1")
+  if [[ "$max_attempts" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$max_attempts"
+  else
+    printf '1\n'
+  fi
+}
+
+clear_challenge_pair_state() {
+  local pair_id="$1"
+  state_mutate "$STATE_FILE" '
+    .tasks |= with_entries(
+      if (.value.challengePairId // "") == $pair then
+        .value |= (
+          del(
+            .comparisonState,
+            .comparisonBlockedReason,
+            .comparisonRetryCount,
+            .comparisonRetryMaxAttempts,
+            .comparisonRetryTargetIssue,
+            .comparisonTimedOutSides,
+            .manualComparisonArtifact
+          ) |
+          .updated = (now | todateiso8601)
+        )
+      else
+        .
+      end
+    )
+  ' --arg pair "$pair_id"
+}
+
+write_challenge_pair_state() {
+  local pair_id="$1" state="$2" reason="${3:-}" retry_count="${4:-0}" retry_max="${5:-0}" retry_target="${6:-}" timed_out_sides_csv="${7:-}" artifact_path="${8:-}"
+  state_mutate "$STATE_FILE" '
+    ($timedOutSidesCsv
+      | split(",")
+      | map(gsub("^\\s+|\\s+$"; ""))
+      | map(select(length > 0))) as $timedOutSides
+    | .tasks |= with_entries(
+        if (.value.challengePairId // "") == $pair then
+          .value.comparisonState = $state
+          | .value.comparisonRetryCount = $retryCount
+          | .value.comparisonRetryMaxAttempts = $retryMax
+          | .value.updated = (now | todateiso8601)
+          | if $reason != "" then .value.comparisonBlockedReason = $reason else .value |= del(.comparisonBlockedReason) end
+          | if $retryTarget != "" then .value.comparisonRetryTargetIssue = $retryTarget else .value |= del(.comparisonRetryTargetIssue) end
+          | if ($timedOutSides | length) > 0 then .value.comparisonTimedOutSides = $timedOutSides else .value |= del(.comparisonTimedOutSides) end
+          | if $artifactPath != "" then .value.manualComparisonArtifact = $artifactPath else .value |= del(.manualComparisonArtifact) end
+        else
+          .
+        end
+      )
+  ' \
+    --arg pair "$pair_id" \
+    --arg state "$state" \
+    --arg reason "$reason" \
+    --arg retryTarget "$retry_target" \
+    --arg timedOutSidesCsv "$timed_out_sides_csv" \
+    --arg artifactPath "$artifact_path" \
+    --argjson retryCount "$retry_count" \
+    --argjson retryMax "$retry_max"
+}
+
+challenge_pair_timed_out_sides_csv() {
+  local issue="$1"
+  read_state_value "" --arg i "$issue" '.tasks[$i].comparisonTimedOutSides // [] | join(",")'
+}
+
+challenge_pair_timeout_reason() {
+  local timed_out_sides_csv="$1"
+  case ",$timed_out_sides_csv," in
+    *,primary,challenger,*|*,challenger,primary,*) printf 'both_eval_timed_out\n' ;;
+    *,primary,*) printf 'primary_eval_timed_out\n' ;;
+    *,challenger,*) printf 'challenger_eval_timed_out\n' ;;
+    *) printf 'eval_timed_out\n' ;;
+  esac
+}
+
+challenge_pair_manual_artifact_path() {
+  local primary_key="$1"
+  local slug worktree
+  slug=$(read_state_value "" --arg i "$primary_key" '.tasks[$i].slug // empty')
+  worktree=$(read_state_value "" --arg i "$primary_key" '.tasks[$i].worktree // empty')
+  [[ -z "$worktree" && -n "$slug" ]] && worktree="${WORKTREE_ROOT}/${slug}"
+  [[ -n "$slug" && -n "$worktree" ]] || return 1
+  printf '%s/features/%s/ready/challenge-comparison-needed.md\n' "$worktree" "$slug"
+}
+
+write_manual_challenge_comparison_artifact() {
+  local pair_id="$1" primary_key="$2" challenger_key="$3" timed_out_sides_csv="$4" retry_count="$5" retry_max="$6"
+  local artifact_path primary_pr challenger_pr
+  artifact_path=$(challenge_pair_manual_artifact_path "$primary_key") || return 1
+  primary_pr=$(read_state_value "" --arg i "$primary_key" '.tasks[$i].pr // empty')
+  challenger_pr=$(read_state_value "" --arg i "$challenger_key" '.tasks[$i].pr // empty')
+  mkdir -p "$(dirname "$artifact_path")"
+  cat > "$artifact_path" <<EOF
+# Challenge Comparison Needs Manual Action
+
+Pair ID: $pair_id
+Primary issue: $primary_key
+Challenger issue: $challenger_key
+Primary PR: ${primary_pr:-unknown}
+Challenger PR: ${challenger_pr:-unknown}
+Timed out member(s): ${timed_out_sides_csv:-unknown}
+Retry count: $retry_count/$retry_max
+
+Next action:
+1. Re-run the timed-out eval job(s) manually when infrastructure is healthy.
+2. If eval cannot be recovered quickly, compare PRs #${primary_pr:-?} and #${challenger_pr:-?} manually.
+3. Close the losing PR and proceed with the winner.
+EOF
+  printf '%s\n' "$artifact_path"
 }
 
 eval_record_exists_for_issue_pr() {
@@ -6004,7 +6256,19 @@ mark_challenge_compared() {
     .tasks |= with_entries(
       if (.value.challengePairId // "") == $pair then
         .value.challengeCompared = true |
-        .value |= (del(.comparisonRunning) | .updated = (now | todateiso8601))
+        .value |= (
+          del(
+            .comparisonRunning,
+            .comparisonState,
+            .comparisonBlockedReason,
+            .comparisonRetryCount,
+            .comparisonRetryMaxAttempts,
+            .comparisonRetryTargetIssue,
+            .comparisonTimedOutSides,
+            .manualComparisonArtifact
+          ) |
+          .updated = (now | todateiso8601)
+        )
       else
         .
       end
@@ -6238,6 +6502,52 @@ poll_challenge_jobs() {
         continue
       fi
     fi
+    if [[ "$kind" == "eval" && "$reason" == "timed_out" && -n "$issue_id" && -n "$pair_id" ]]; then
+      local retry_max retry_count timed_out_sides_csv timeout_reason primary_key challenger_key artifact_path
+      local issue_pr issue_branch issue_slug
+      primary_key="$pair_id"
+      challenger_key="${pair_id}_c"
+      settle_tracked_job "$job_id"
+      retry_max=$(challenge_eval_retry_max_attempts)
+      retry_count=$(read_state_value "0" --arg i "$primary_key" '.tasks[$i].comparisonRetryCount // 0')
+      timed_out_sides_csv=$(challenge_pair_timed_out_sides_csv "$primary_key")
+      if [[ -n "$timed_out_sides_csv" ]]; then
+        case ",$timed_out_sides_csv," in
+          *,"$side",*) ;;
+          *) timed_out_sides_csv="${timed_out_sides_csv},${side}" ;;
+        esac
+      else
+        timed_out_sides_csv="$side"
+      fi
+      timed_out_sides_csv="${timed_out_sides_csv#,}"
+      timeout_reason=$(challenge_pair_timeout_reason "$timed_out_sides_csv")
+
+      if (( retry_count < retry_max )); then
+        retry_count=$((retry_count + 1))
+        write_challenge_pair_state "$pair_id" "retrying_eval" "$timeout_reason" "$retry_count" "$retry_max" "$issue_id" "$timed_out_sides_csv" ""
+        state_mutate "$STATE_FILE" '
+          .tasks[$issue].evalFailed = false
+          | .tasks[$issue].evalCompleted = false
+          | .tasks[$issue].updated = (now | todateiso8601)
+        ' --arg issue "$issue_id" >/dev/null || true
+        issue_pr=$(read_state_value "" --arg i "$issue_id" '.tasks[$i].pr // empty')
+        issue_branch=$(read_state_value "" --arg i "$issue_id" '.tasks[$i].branch // empty')
+        issue_slug=$(read_state_value "" --arg i "$issue_id" '.tasks[$i].slug // empty')
+        log "status" "challenge comparison retrying for $pair_id: $side eval timed out (attempt $retry_count/$retry_max)"
+        if [[ -n "$issue_pr" && -n "$issue_branch" && -n "$issue_slug" ]]; then
+          maybe_run_challenge_eval "$issue_id" "$issue_pr" "$issue_branch" "$issue_slug"
+        else
+          log_warn "challenge eval retry launch skipped for $issue_id: missing PR/branch/slug"
+        fi
+        continue
+      fi
+
+      artifact_path=$(write_manual_challenge_comparison_artifact "$pair_id" "$primary_key" "$challenger_key" "$timed_out_sides_csv" "$retry_count" "$retry_max" || true)
+      write_challenge_pair_state "$pair_id" "manual_comparison_needed" "$timeout_reason" "$retry_count" "$retry_max" "" "$timed_out_sides_csv" "$artifact_path"
+      log_warn "challenge comparison blocked for $pair_id: ${timed_out_sides_csv} eval timed out. manual comparison needed${artifact_path:+ ($artifact_path)}"
+      continue
+    fi
+
     if [[ "$kind" == "eval" ]]; then
       log_warn "challenge eval failed for $issue_id (${reason:-$status}); log: $log_path"
     else
@@ -6381,6 +6691,9 @@ maybe_run_challenge_comparison() {
   challenger_key="${pair_id}_c"
   compared=$(read_state_value "false" --arg i "$primary_key" '.tasks[$i].challengeCompared // false')
   [[ "$compared" == "true" ]] && return 0
+  if [[ "$(read_state_value "" --arg i "$primary_key" '.tasks[$i].comparisonState // empty')" == "manual_comparison_needed" ]]; then
+    return 0
+  fi
 
   primary_pr=$(read_state_value "" --arg i "$primary_key" '.tasks[$i].pr // empty')
   challenger_pr=$(read_state_value "" --arg i "$challenger_key" '.tasks[$i].pr // empty')
@@ -10415,6 +10728,26 @@ monitor_issue_state() {
         maybe_run_challenge_eval "$ISSUE" "$PR" "$BRANCH" "$SLUG"
         maybe_run_challenge_comparison "$ISSUE"
       fi
+
+      local challenge_comparison_state
+      challenge_comparison_state=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].comparisonState // empty')
+      case "$challenge_comparison_state" in
+        manual_comparison_needed)
+          set_window_attention_state "$WIN" "needs-user"
+          active_count=$((active_count + 1))
+          return 0
+          ;;
+        retrying_eval)
+          set_window_attention_state "$WIN" "clear"
+          active_count=$((active_count + 1))
+          return 0
+          ;;
+        comparison_running)
+          set_window_attention_state "$WIN" "clear"
+          active_count=$((active_count + 1))
+          return 0
+          ;;
+      esac
 
       # Re-run ready if main has advanced since the pass was recorded (HOK-1359)
       local stored_base_sha current_main_sha queue_state

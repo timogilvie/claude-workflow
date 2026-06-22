@@ -180,9 +180,23 @@ export function settleJobSuccess<T extends WorkflowStateLike>(state: T, job: Mil
           ...task,
           challengeCompared: true,
           comparisonRunning: undefined,
+          comparisonState: undefined,
+          comparisonBlockedReason: undefined,
+          comparisonRetryCount: undefined,
+          comparisonRetryMaxAttempts: undefined,
+          comparisonRetryTargetIssue: undefined,
+          comparisonTimedOutSides: undefined,
+          manualComparisonArtifact: undefined,
           updated: updatedAt,
         };
         delete tasks[taskId].comparisonRunning;
+        delete tasks[taskId].comparisonState;
+        delete tasks[taskId].comparisonBlockedReason;
+        delete tasks[taskId].comparisonRetryCount;
+        delete tasks[taskId].comparisonRetryMaxAttempts;
+        delete tasks[taskId].comparisonRetryTargetIssue;
+        delete tasks[taskId].comparisonTimedOutSides;
+        delete tasks[taskId].manualComparisonArtifact;
       }
     }
   }

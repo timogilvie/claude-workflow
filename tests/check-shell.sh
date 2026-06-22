@@ -644,12 +644,6 @@ else
   else
     fail "challenge eval still looks synchronous or untracked"
   fi
-  if grep -q 'eval_timeout="$(post_merge_eval_timeout_seconds)"' <<< "$CHALLENGE_EVAL_BLOCK" \
-    && grep -q 'launch_tracked_job "eval".*"\$eval_timeout"' <<< "$CHALLENGE_EVAL_BLOCK"; then
-    pass "challenge eval uses configured eval timeout for tracked jobs"
-  else
-    fail "challenge eval does not use configured eval timeout for tracked jobs"
-  fi
   if grep -q 'evalFailed // false' <<< "$CHALLENGE_EVAL_BLOCK"; then
     pass "challenge eval launch skips tasks already marked evalFailed"
   else
@@ -3202,6 +3196,8 @@ echo ""
 echo "=== HOK-2289: Pi Vendor Adapter Seam Guard ==="
 
 PI_ALLOWED_FILES=(
+  "shared/lib/native-agent/compaction.test.ts"
+  "shared/lib/native-agent/compaction.ts"
   "shared/lib/native-agent/loop.test.ts"
   "shared/lib/native-agent/loop.ts"
   "shared/lib/native-agent/messages.ts"

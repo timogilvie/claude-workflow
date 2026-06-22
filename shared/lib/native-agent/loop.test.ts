@@ -381,6 +381,86 @@ describe('loop — continuation', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Replay compaction
+// ---------------------------------------------------------------------------
+
+describe('loop — replay compaction', () => {
+  it('sends compacted tool results to the provider while final messages retain raw content', async () => {
+    const rawToolOutput = 'raw-file-content-'.repeat(20);
+    const tool = makeTool('read_file', 'parallel', async () => rawToolOutput);
+    const api = uniqueApi('compaction');
+    let secondTurnMessages: unknown[] | undefined;
+
+    registerScriptedPiProvider({
+      api,
+      turns: (ctx: ScriptedProviderContext) => {
+        if (ctx.sawToolResults) {
+          secondTurnMessages = ctx.messages as unknown[];
+          return { content: [{ type: 'text', text: 'Done' }], stopReason: 'stop' };
+        }
+        return {
+          content: [{ type: 'tool_call', id: 'read-1', name: 'read_file', arguments: {} }],
+          stopReason: 'tool_calls',
+        };
+      },
+    });
+
+    const compactionEvents: unknown[] = [];
+    const result = await runWavemillLoop({
+      model: { id: 'test-model', api, provider: 'test-provider' },
+      context: makeContext([tool]),
+      convertToLlm: piIdentity,
+      compaction: { maxOutputBytes: 24 },
+      onCompactionEvents: (events) => compactionEvents.push(...events),
+    });
+
+    assert.ok(secondTurnMessages, 'second provider turn must have received replay messages');
+    const replayToolResult = secondTurnMessages!.find((m: any) => m.role === 'tool_result') as any;
+    assert.ok(replayToolResult, 'tool result must be in provider replay context');
+    const replayText = replayToolResult.content[0].content[0].text;
+    assert.notEqual(replayText, rawToolOutput);
+    assert.ok(replayText.includes('[Replay compaction:'));
+
+    const canonicalToolResult = result.messages.find((m: any) => m.role === 'toolResult') as any;
+    assert.ok(canonicalToolResult, 'canonical final messages must retain tool result');
+    assert.equal(canonicalToolResult.content[0].text, rawToolOutput);
+
+    assert.equal(compactionEvents.length, 1);
+    assert.equal((compactionEvents[0] as any).toolName, 'read_file');
+  });
+
+  it('leaves provider replay context unchanged when compaction is omitted', async () => {
+    const rawToolOutput = 'small raw output';
+    const tool = makeTool('read_file', 'parallel', async () => rawToolOutput);
+    const api = uniqueApi('no-compaction');
+    let secondTurnMessages: unknown[] | undefined;
+
+    registerScriptedPiProvider({
+      api,
+      turns: (ctx: ScriptedProviderContext) => {
+        if (ctx.sawToolResults) {
+          secondTurnMessages = ctx.messages as unknown[];
+          return { content: [{ type: 'text', text: 'Done' }], stopReason: 'stop' };
+        }
+        return {
+          content: [{ type: 'tool_call', id: 'read-2', name: 'read_file', arguments: {} }],
+          stopReason: 'tool_calls',
+        };
+      },
+    });
+
+    await runWavemillLoop({
+      model: { id: 'test-model', api, provider: 'test-provider' },
+      context: makeContext([tool]),
+      convertToLlm: piIdentity,
+    });
+
+    const replayToolResult = secondTurnMessages!.find((m: any) => m.role === 'tool_result') as any;
+    assert.equal(replayToolResult.content[0].content[0].text, rawToolOutput);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Heartbeat events
 // ---------------------------------------------------------------------------
 

@@ -180,11 +180,15 @@ ${GREEN}Commands:${NC}
   ${CYAN}hokusai${NC}   Manage Hokusai data submission opt-in
              - enable: show consent flow and opt in
              - disable: stop future submissions
-             - status: show current consent state
+             - status: show consent, queue, endpoint, and mode details
+             - configure: write upload endpoint settings to .wavemill-config.local.json
+             - drain: drain the local contribution queue (upload or export pending rows)
              Usage:
                ${CYAN}wavemill hokusai status${NC}
                ${CYAN}wavemill hokusai enable${NC}
                ${CYAN}wavemill hokusai disable${NC}
+               ${CYAN}wavemill hokusai configure${NC}
+               ${CYAN}wavemill hokusai drain${NC}
 
   ${CYAN}quota${NC}     Manage model quota state and overrides
              - status: show current quota snapshot and manual overrides
@@ -262,9 +266,10 @@ ${GREEN}Examples:${NC}
 ${GREEN}Configuration:${NC}
   Settings are loaded in this order (later wins):
     1. Hardcoded defaults
-    2. ${CYAN}~/.wavemill/config.json${NC}    (user-level, shared across repos)
-    3. ${CYAN}.wavemill-config.json${NC}      (per-repo, in project root)
-    4. Environment variables          (always override)
+    2. ${CYAN}~/.wavemill/config.json${NC}         (user-level, shared across repos)
+    3. ${CYAN}.wavemill-config.json${NC}           (per-repo, committed defaults)
+    4. ${CYAN}.wavemill-config.local.json${NC}     (per-developer overrides, gitignored)
+    5. Environment variables                (always override)
 
   Run ${CYAN}wavemill init${NC} to generate a template config file.
   See ${CYAN}wavemill-config.schema.json${NC} for full schema documentation.
@@ -471,6 +476,7 @@ run_init() {
   local hokusai_router_mode="auto"
   local hokusai_data_submission="false"
   local hokusai_contributions_enabled="false"
+  local hokusai_contribution_upload="false"
   local review_enabled="true"
   local integration_enabled="false"
   local merge_queue_enabled="false"
@@ -661,9 +667,12 @@ try {
       hokusai_router_mode="auto"
     fi
   fi
-  if prompt_yes_no "Contribute redacted workflow outcome data to Hokusai?" "$hokusai_data_submission"; then
+  if prompt_yes_no "Store redacted workflow outcome rows locally (export-only mode)?" "$hokusai_data_submission"; then
     hokusai_data_submission="true"
     hokusai_contributions_enabled="true"
+    if prompt_yes_no "Also upload those rows to Hokusai when an endpoint is configured?" "false"; then
+      hokusai_contribution_upload="true"
+    fi
   else
     hokusai_data_submission="false"
     hokusai_contributions_enabled="false"
@@ -750,7 +759,6 @@ try {
     },
     "contributions": {
       "enabled": $hokusai_contributions_enabled,
-      "endpoint": null,
       "endpointTokenEnv": "HOKUSAI_API_TOKEN",
       "exportPath": ".wavemill/hokusai/contributions.jsonl"
     }
@@ -910,6 +918,24 @@ INIT_EOF
     echo -e "  Hokusai routing: ${CYAN}$hokusai_router_mode${NC}"
   else
     echo -e "  Hokusai routing: ${CYAN}not preferred; local auto routing remains enabled${NC}"
+  fi
+
+  # Handle contribution upload configuration
+  if [[ "$hokusai_contributions_enabled" == "true" ]]; then
+    if [[ "$hokusai_contribution_upload" == "true" ]]; then
+      if [[ "$hokusai_api_status" == "found" ]]; then
+        npx tsx "$TOOLS_DIR/hokusai-manage.ts" configure --repo-dir "$PWD"
+        echo -e "  Contribution mode: ${CYAN}uploading${NC}"
+      else
+        # Upload requested but no token found
+        echo -e "${YELLOW}Note:${NC} Contribution upload selected but HOKUSAI_API_TOKEN was not found."
+        echo -e "  Rows will be stored locally (export-only) until an endpoint is configured."
+        echo -e "  Run ${CYAN}wavemill hokusai configure${NC} after setting HOKUSAI_API_TOKEN to enable uploads."
+        echo -e "  Contribution mode: ${CYAN}export-only${NC} (upload not yet configured)"
+      fi
+    else
+      echo -e "  Contribution mode: ${CYAN}export-only${NC} (rows saved to .wavemill/hokusai/contributions.jsonl, no uploads)"
+    fi
   fi
   echo ""
 
