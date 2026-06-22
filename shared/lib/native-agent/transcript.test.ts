@@ -24,7 +24,7 @@ import {
 } from './transcript.ts';
 
 import { successSessionInput } from './fixtures/success-session.ts';
-import { blockedSessionInput } from './fixtures/blocked-session.ts';
+import { blockedSessionInput, phaseDeniedSessionInput } from './fixtures/blocked-session.ts';
 import { malformedToolCallSessionInput } from './fixtures/malformed-tool-call-session.ts';
 
 // ---------------------------------------------------------------------------
@@ -709,6 +709,14 @@ describe('blocked session fixture', () => {
 
   it('does not throw during derivation', () => {
     assert.doesNotThrow(() => deriveTranscriptEvents(blockedSessionInput, BASE_OPTS));
+  });
+
+  it('records phase_denied tool results as errors', () => {
+    const events = deriveTranscriptEvents(phaseDeniedSessionInput, BASE_OPTS);
+    const toolResult = events.find((e): e is TranscriptToolResult => e.type === 'tool_result');
+    assert.ok(toolResult);
+    assert.equal(toolResult.isError, true);
+    assert.ok(toolResult.content.includes('phase_denied'), 'expected error reason in content');
   });
 });
 

@@ -4,6 +4,7 @@ import type { AgentContext, AgentTool, AgentToolResult } from '@earendil-works/p
 import type { Message, TextContent } from '@earendil-works/pi-ai';
 import { registerScriptedPiProvider, type ScriptedProviderContext } from './provider.ts';
 import { runWavemillLoop, HEARTBEAT_AGENT, type HeartbeatEvent, type WavemillLoopConfig } from './loop.ts';
+import type { ToolMetadata } from './tools/types.ts';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -65,6 +66,20 @@ function makeTool(
       return { content: [{ type: 'text', text: result } satisfies TextContent], details: undefined as void };
     },
   } as unknown as AgentTool<any, void>;
+}
+
+function makeToolMetadata(
+  name: string,
+  toolClass: ToolMetadata['class'],
+): ToolMetadata {
+  return {
+    name,
+    description: `Test tool: ${name}`,
+    class: toolClass,
+    allowedPhases: ['planning', 'coding', 'review'],
+    executionMode: 'sequential',
+    outputCapPolicy: { strategy: 'none' },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -268,6 +283,91 @@ describe('loop — budget stops', () => {
 // ---------------------------------------------------------------------------
 
 describe('loop — blocked stops', () => {
+  it('blocks mutation tools in planning before execution', async () => {
+    let executed = false;
+    const tool = makeTool('patch_file', 'sequential', async () => {
+      executed = true;
+      return 'patched';
+    });
+
+    const api = uniqueApi('phase-denied');
+    registerScriptedPiProvider({
+      api,
+      turns: [
+        {
+          content: [{ type: 'tool_call', id: 'pd1', name: 'patch_file', arguments: { path: 'notes.md' } }],
+          stopReason: 'tool_calls',
+        },
+        { content: [{ type: 'text', text: 'Denied' }], stopReason: 'stop' },
+      ],
+    });
+
+    const result = await runWavemillLoop({
+      model: { id: 'test-model', api, provider: 'test-provider' },
+      context: makeContext([tool]),
+      convertToLlm: piIdentity,
+      toolPolicy: {
+        phase: 'planning',
+        worktreePath: '/repo',
+        registry: [makeToolMetadata('patch_file', 'mutation')],
+      },
+    });
+
+    assert.equal(executed, false);
+    assert.equal(result.toolCallsExecuted, 0);
+    const toolResult = result.messages.find(
+      (message: any) => message.role === 'toolResult' && message.toolName === 'patch_file',
+    ) as any;
+    assert.ok(toolResult);
+    assert.equal(
+      toolResult.content?.[0]?.text,
+      'phase_denied: tool "patch_file" is not allowed in planning',
+    );
+  });
+
+  it('blocks worktree-escaping paths before execution', async () => {
+    let executed = false;
+    const tool = makeTool('read_file', 'sequential', async () => {
+      executed = true;
+      return 'contents';
+    });
+
+    const api = uniqueApi('path-denied');
+    registerScriptedPiProvider({
+      api,
+      turns: [
+        {
+          content: [{ type: 'tool_call', id: 'wd1', name: 'read_file', arguments: { path: '../secret.txt' } }],
+          stopReason: 'tool_calls',
+        },
+        { content: [{ type: 'text', text: 'Denied' }], stopReason: 'stop' },
+      ],
+    });
+
+    const result = await runWavemillLoop({
+      model: { id: 'test-model', api, provider: 'test-provider' },
+      context: makeContext([tool]),
+      convertToLlm: piIdentity,
+      toolPolicy: {
+        phase: 'coding',
+        worktreePath: '/repo',
+        registry: [makeToolMetadata('read_file', 'read-only')],
+        config: { pathFieldsByTool: { read_file: ['path'] } },
+      },
+    });
+
+    assert.equal(executed, false);
+    assert.equal(result.toolCallsExecuted, 0);
+    const toolResult = result.messages.find(
+      (message: any) => message.role === 'toolResult' && message.toolName === 'read_file',
+    ) as any;
+    assert.ok(toolResult);
+    assert.equal(
+      toolResult.content?.[0]?.text,
+      "path_denied: '../secret.txt' resolves outside the worktree",
+    );
+  });
+
   it('returns aborted immediately when signal is already aborted', async () => {
     const api = uniqueApi('blocked-pre-abort');
     registerScriptedPiProvider({
