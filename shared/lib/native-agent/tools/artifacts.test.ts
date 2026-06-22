@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, describe, it } from 'node:test';
@@ -557,6 +557,63 @@ describe('lifecycle — planning artifact inspection', () => {
       assert.ok(tool.metadata.allowedPhases.includes('planning'));
       assert.ok(tool.metadata.allowedPhases.includes('coding'));
       assert.ok(tool.metadata.allowedPhases.includes('review'));
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Resolve-error classification — non-not_found codes must surface immediately
+// rather than being silently treated as 'not_found' on alias/root fall-through.
+// ---------------------------------------------------------------------------
+
+describe('read_task_packet — surfaces non-not_found resolve errors', () => {
+  // chmod-based permission tests are skipped when running as root because
+  // root bypasses mode bits.
+  const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+
+  it('permission_denied on parent dir surfaces, does not fall through to not_found', async (t) => {
+    if (isRoot) {
+      t.skip('cannot exercise EACCES as root');
+      return;
+    }
+    const wt = makeWorktree();
+    const featureDir = makeFeatureDir(wt, 'locked-feature');
+    writeFileSync(path.join(featureDir, 'task-packet.md'), VALID_TASK_PACKET);
+
+    // Remove all access from the feature dir so realpath() returns EACCES
+    // for everything underneath. Restore mode in cleanup so rm can recurse.
+    chmodSync(featureDir, 0o000);
+    try {
+      const tool = createReadTaskPacketTool(wt);
+      const result = await tool.execute('call-1', { slug: 'locked-feature' });
+      const details = result.details as ToolErrorDetails;
+      assert.equal(details.error, 'permission_denied');
+    } finally {
+      chmodSync(featureDir, 0o700);
+    }
+  });
+});
+
+describe('read_plan — surfaces non-not_found resolve errors', () => {
+  const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+
+  it('permission_denied on parent dir surfaces, does not fall through to not_found', async (t) => {
+    if (isRoot) {
+      t.skip('cannot exercise EACCES as root');
+      return;
+    }
+    const wt = makeWorktree();
+    const featureDir = makeFeatureDir(wt, 'locked-plan');
+    writeFileSync(path.join(featureDir, 'plan.md'), VALID_PLAN);
+
+    chmodSync(featureDir, 0o000);
+    try {
+      const tool = createReadPlanTool(wt);
+      const result = await tool.execute('call-1', { slug: 'locked-plan' });
+      const details = result.details as ToolErrorDetails;
+      assert.equal(details.error, 'permission_denied');
+    } finally {
+      chmodSync(featureDir, 0o700);
     }
   });
 });

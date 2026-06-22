@@ -6,7 +6,7 @@
 import fsPromises from 'node:fs/promises';
 import path from 'node:path';
 import type { ToolDescriptor, WavemillToolResult } from './types.ts';
-import { resolveInsideWorktree } from './read-only.ts';
+import { resolveInsideWorktree, type PathErr } from './read-only.ts';
 import { getTaskPacketArtifactPaths, isTaskPacketContent } from '../../task-packet-utils.ts';
 
 // ---------------------------------------------------------------------------
@@ -92,6 +92,21 @@ interface SlugError {
   message: string;
 }
 
+/**
+ * Map a resolveInsideWorktree error to a fatal artifact-reader response, or
+ * return null to indicate the artifact is simply absent at this candidate path
+ * (so the caller can try the next alias / root).
+ *
+ * Only 'not_found' is treated as fall-through. Any other code (io_error,
+ * permission_denied, path_outside_worktree, invalid_params) is surfaced
+ * immediately so genuine filesystem failures are not masked as 'not_found'.
+ */
+function classifyResolveError(err: PathErr): WavemillToolResult<ToolErrorDetails> | null {
+  if (err.code === 'not_found') return null;
+  if (err.code === 'path_outside_worktree') return makeError('path_denied', err.message);
+  return makeError(err.code, err.message);
+}
+
 function validateSlug(slug: unknown): SlugError | null {
   if (!slug || typeof slug !== 'string') {
     return { code: 'invalid_params', message: 'slug must be a non-empty string' };
@@ -153,8 +168,9 @@ async function executeReadTaskPacket(
 
     // --- Try full task-packet.md ---
     const fullResolved = await resolveInsideWorktree(worktreeAbs, artifactPaths.full);
-    if (fullResolved.kind === 'error' && fullResolved.code === 'path_outside_worktree') {
-      return makeError('path_denied', fullResolved.message);
+    if (fullResolved.kind === 'error') {
+      const surfaced = classifyResolveError(fullResolved);
+      if (surfaced) return surfaced;
     }
 
     if (fullResolved.kind === 'ok') {
@@ -179,12 +195,14 @@ async function executeReadTaskPacket(
 
     // --- Try split: header + details ---
     const headerResolved = await resolveInsideWorktree(worktreeAbs, artifactPaths.header);
-    if (headerResolved.kind === 'error' && headerResolved.code === 'path_outside_worktree') {
-      return makeError('path_denied', headerResolved.message);
+    if (headerResolved.kind === 'error') {
+      const surfaced = classifyResolveError(headerResolved);
+      if (surfaced) return surfaced;
     }
     const detailsResolved = await resolveInsideWorktree(worktreeAbs, artifactPaths.details);
-    if (detailsResolved.kind === 'error' && detailsResolved.code === 'path_outside_worktree') {
-      return makeError('path_denied', detailsResolved.message);
+    if (detailsResolved.kind === 'error') {
+      const surfaced = classifyResolveError(detailsResolved);
+      if (surfaced) return surfaced;
     }
 
     if (headerResolved.kind === 'ok' && detailsResolved.kind === 'ok') {
@@ -268,8 +286,9 @@ async function executeReadPlan(
     const planRelPath = path.join(root, slug, 'plan.md');
 
     const resolved = await resolveInsideWorktree(worktreeAbs, planRelPath);
-    if (resolved.kind === 'error' && resolved.code === 'path_outside_worktree') {
-      return makeError('path_denied', resolved.message);
+    if (resolved.kind === 'error') {
+      const surfaced = classifyResolveError(resolved);
+      if (surfaced) return surfaced;
     }
 
     if (resolved.kind === 'ok') {
