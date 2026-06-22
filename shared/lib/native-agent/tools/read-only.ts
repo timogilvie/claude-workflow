@@ -347,7 +347,6 @@ async function executeListFiles(
 
   const globPattern = params.glob ?? '**';
   const entries: string[] = [];
-  let truncated = false;
 
   try {
     for await (const entry of nodeGlob(globPattern, {
@@ -367,26 +366,25 @@ async function executeListFiles(
 
       const relFromWorktree = path.relative(realWorktree, absPath);
       entries.push(relFromWorktree);
-
-      if (entries.length >= maxResults) {
-        truncated = true;
-        break;
-      }
     }
   } catch (err: unknown) {
     return makeError('io_error', `Error listing files: ${(err as Error).message}`);
   }
 
+  // Sort before truncating so the returned subset is deterministic across runs
+  // regardless of filesystem traversal order (REQ Determinism).
   entries.sort();
+  const truncated = entries.length > maxResults;
+  const returned = truncated ? entries.slice(0, maxResults) : entries;
 
-  const text = entries.join('\n');
+  const text = returned.join('\n');
 
   return {
     content: [{ type: 'text', text }],
     details: {
       path: rootInputPath,
       glob: params.glob ?? null,
-      count: entries.length,
+      count: returned.length,
       truncated,
       maxResults,
     },
