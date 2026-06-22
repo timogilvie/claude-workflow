@@ -1,4 +1,4 @@
-import { glob, lstat, readFile, readdir, realpath, stat } from 'node:fs/promises';
+import { readFile, readdir, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { ToolDescriptor, WavemillToolResult } from './types.ts';
 
@@ -73,6 +73,12 @@ export interface ToolErrorDetails {
   path?: string;
 }
 
+interface WalkEntry {
+  relativePath: string;
+  absolutePath: string;
+  kind: 'file' | 'directory';
+}
+
 // ---------------------------------------------------------------------------
 // Path safety helpers
 // ---------------------------------------------------------------------------
@@ -95,6 +101,91 @@ function truncateUtf8Safe(text: string, maxBytes: number): string {
     }
   }
   return text.slice(0, lo);
+}
+
+function normalizeGlobPattern(pattern: string): string {
+  const normalized = pattern.replace(/\\/g, '/').replace(/^\.\/+/, '');
+  return normalized.replace(/\/+/g, '/');
+}
+
+function escapeRegex(text: string): string {
+  return text.replace(/[|\\{}()[\]^$+?.]/g, '\\$&');
+}
+
+function globToRegExp(pattern: string): RegExp {
+  const normalized = normalizeGlobPattern(pattern);
+  let source = '^';
+
+  for (let i = 0; i < normalized.length; i++) {
+    const char = normalized[i];
+    const next = normalized[i + 1];
+
+    if (char === '*') {
+      if (next === '*') {
+        const nextAfterGlobstar = normalized[i + 2];
+        if (nextAfterGlobstar === '/') {
+          source += '(?:.*/)?';
+          i += 2;
+        } else {
+          source += '.*';
+          i += 1;
+        }
+      } else {
+        source += '[^/]*';
+      }
+      continue;
+    }
+
+    if (char === '?') {
+      source += '[^/]';
+      continue;
+    }
+
+    source += escapeRegex(char);
+  }
+
+  source += '$';
+  return new RegExp(source);
+}
+
+async function walkEntries(rootPath: string, resolvedRoot: string, signal?: AbortSignal): Promise<WalkEntry[]> {
+  const entries: WalkEntry[] = [];
+  const stack = [rootPath];
+
+  while (stack.length > 0) {
+    if (signal?.aborted) break;
+
+    const currentDir = stack.pop();
+    if (!currentDir) break;
+
+    const dirEntries = await readdir(currentDir, { withFileTypes: true });
+    dirEntries.sort((left, right) => left.name.localeCompare(right.name));
+
+    for (const dirEntry of dirEntries) {
+      if (signal?.aborted) break;
+      if (dirEntry.isSymbolicLink()) continue;
+
+      const absolutePath = path.join(currentDir, dirEntry.name);
+      if (!isInsideWorktree(resolvedRoot, absolutePath)) continue;
+
+      const relativePath = path.relative(resolvedRoot, absolutePath);
+      if (dirEntry.isDirectory()) {
+        entries.push({ relativePath, absolutePath, kind: 'directory' });
+        stack.push(absolutePath);
+        continue;
+      }
+      if (dirEntry.isFile()) {
+        entries.push({ relativePath, absolutePath, kind: 'file' });
+      }
+    }
+  }
+
+  return entries;
+}
+
+function filterEntriesByGlob(entries: readonly WalkEntry[], pattern: string): WalkEntry[] {
+  const matcher = globToRegExp(pattern);
+  return entries.filter((entry) => matcher.test(entry.relativePath.replace(/\\/g, '/')));
 }
 
 function isInsideWorktree(resolvedRoot: string, resolvedCandidate: string): boolean {
@@ -337,20 +428,15 @@ async function executeListFiles(
   const allPaths: string[] = [];
 
   try {
+    const walkedEntries = await walkEntries(absolutePath, resolvedRoot);
+
     if (params.glob !== undefined) {
-      for await (const entry of glob(params.glob, { cwd: absolutePath })) {
-        if (entry === '.') continue;
-        const full = path.join(absolutePath, entry as string);
-        if (isInsideWorktree(resolvedRoot, full)) {
-          allPaths.push(path.relative(resolvedRoot, full));
-        }
+      for (const entry of filterEntriesByGlob(walkedEntries, params.glob)) {
+        allPaths.push(entry.relativePath);
       }
     } else {
-      // readdir includes all entries (hidden files included); both files and directories.
-      const rawEntries = await readdir(absolutePath, { recursive: true });
-      for (const entry of rawEntries) {
-        const full = path.join(absolutePath, entry as string);
-        allPaths.push(path.relative(resolvedRoot, full));
+      for (const entry of walkedEntries) {
+        allPaths.push(entry.relativePath);
       }
     }
   } catch (err: unknown) {
@@ -403,33 +489,10 @@ async function collectFilesToSearch(
   globPattern: string | undefined,
   signal?: AbortSignal,
 ): Promise<string[]> {
-  const files: string[] = [];
-
-  if (globPattern !== undefined) {
-    for await (const entry of glob(globPattern, { cwd: absolutePath })) {
-      if (signal?.aborted) break;
-      if (entry === '.') continue;
-      const full = path.join(absolutePath, entry as string);
-      if (!isInsideWorktree(resolvedRoot, full)) continue;
-      try {
-        const s = await lstat(full);
-        // lstat semantics: isFile() is false for symlinks — skip them
-        if (s.isFile()) files.push(full);
-      } catch {
-        // skip unstateable entries
-      }
-    }
-  } else {
-    // withFileTypes uses lstat semantics: isFile() returns false for symlinks
-    const entries = await readdir(absolutePath, { recursive: true, withFileTypes: true });
-    for (const entry of entries) {
-      if (signal?.aborted) break;
-      if (!entry.isFile()) continue;
-      files.push(path.join(entry.parentPath, entry.name));
-    }
-  }
-
-  return files;
+  const walkedEntries = await walkEntries(absolutePath, resolvedRoot, signal);
+  const scopedEntries =
+    globPattern !== undefined ? filterEntriesByGlob(walkedEntries, globPattern) : walkedEntries;
+  return scopedEntries.filter((entry) => entry.kind === 'file').map((entry) => entry.absolutePath);
 }
 
 async function executeSearchText(

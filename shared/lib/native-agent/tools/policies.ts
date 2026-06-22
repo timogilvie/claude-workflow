@@ -51,7 +51,12 @@ export function evaluateBeforeToolCallPolicy(input: ToolPolicyInput): ToolPolicy
 
   const pathFields = input.config?.pathFieldsByTool?.[input.toolCall.name] ?? [];
   for (const field of pathFields) {
-    for (const candidate of getConfiguredPaths(input.toolCall, field)) {
+    const configuredPaths = getConfiguredPaths(input.toolCall, field);
+    if ('error' in configuredPaths) {
+      return deny('path_denied', configuredPaths.error);
+    }
+
+    for (const candidate of configuredPaths.paths) {
       const resolved = resolveCandidatePath(worktreeRoot, candidate);
       if (resolved.kind === 'outside') {
         return deny(
@@ -80,20 +85,23 @@ function normalizeWorktreeRoot(worktreePath: string): string {
   return path.posix.resolve('/', toComparablePath(worktreePath));
 }
 
-function getConfiguredPaths(toolCall: ToolPolicyCall, field: string): string[] {
+function getConfiguredPaths(
+  toolCall: ToolPolicyCall,
+  field: string,
+): { paths: string[] } | { error: string } {
   const value = toolCall.arguments[field];
   if (value === undefined) {
-    return [];
+    return { paths: [] };
   }
   if (typeof value === 'string') {
-    return [value];
+    return { paths: [value] };
   }
   if (Array.isArray(value) && value.every((item) => typeof item === 'string')) {
-    return value;
+    return { paths: value };
   }
-  throw new Error(
-    `Tool policy path field "${field}" for "${toolCall.name}" must be a string or string[]`,
-  );
+  return {
+    error: `path_denied: tool "${toolCall.name}" field "${field}" must be a string or string[]`,
+  };
 }
 
 function resolveCandidatePath(

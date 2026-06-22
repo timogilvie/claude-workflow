@@ -148,6 +148,22 @@ describe('native-agent tool policies', () => {
     });
   });
 
+  it('denies malformed configured path values without throwing', () => {
+    const decision = evaluate({
+      phase: 'coding',
+      name: 'read_file',
+      arguments: { path: null },
+      registry: [makeMetadata('read_file', 'read-only')],
+      config: { pathFieldsByTool: { read_file: ['path'] } },
+    });
+
+    assert.deepEqual(decision, {
+      kind: 'deny',
+      reason: 'path_denied',
+      message: 'path_denied: tool "read_file" field "path" must be a string or string[]',
+    });
+  });
+
   it('throws for a missing worktree path', () => {
     assert.throws(
       () => evaluate({ phase: 'coding', name: 'read_file', worktreePath: '   ' }),
