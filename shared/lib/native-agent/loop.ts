@@ -1,5 +1,7 @@
+import { createHash } from 'node:crypto';
 import {
   runAgentLoopContinue,
+  type AfterToolCallResult,
   type AgentContext,
   type AgentEventSink,
   type AgentLoopConfig,
@@ -8,6 +10,7 @@ import {
   type BeforeToolCallContext,
   type ShouldStopAfterTurnContext,
 } from '@earendil-works/pi-agent-core';
+import type { AgentEvent } from '@earendil-works/pi-agent-core';
 import type { AssistantMessage, Model } from '@earendil-works/pi-ai';
 import { computeModelCost, type ModelPricing } from '../workflow-cost.ts';
 import {
@@ -17,7 +20,16 @@ import {
 } from './compaction.ts';
 import type { ProviderModelConfig } from './provider.ts';
 import { evaluateBeforeToolCallPolicy, type ToolPolicyConfig } from './tools/policies.ts';
-import type { ToolMetadata, ToolPhase } from './tools/types.ts';
+import { redactSecrets, redactSecretsInValue } from './tools/redaction.ts';
+import type {
+  OutputCapPolicy,
+  ToolMetadata,
+  ToolOutputCapMetadata,
+  ToolPhase,
+  ToolProvenanceMetadata,
+  ToolRedactionMetadata,
+  ToolResultMetadata,
+} from './tools/types.ts';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -88,6 +100,8 @@ export interface WavemillLoopConfig {
   signal?: AbortSignal;
   /** Invoked on Pi progress events so the dashboard sees a live agent. */
   onHeartbeat?: (event: HeartbeatEvent) => void;
+  /** Optional sink for all Pi AgentEvents. Used for transcript writing and monitoring. */
+  onEvent?: (event: AgentEvent) => void;
   /** Optional replay-history compaction applied only to provider context. */
   compaction?: ReplayCompactionOptions;
   /** Receives metadata for replay compaction events emitted by transformContext. */
@@ -112,6 +126,57 @@ export interface LoopResult {
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
+
+function stableStringify(value: unknown): string {
+  if (value === null || value === undefined) return JSON.stringify(value);
+  if (typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    return '[' + (value as unknown[]).map(stableStringify).join(',') + ']';
+  }
+  const sorted = Object.keys(value as Record<string, unknown>).sort();
+  const pairs = sorted.map(
+    (k) => `${JSON.stringify(k)}:${stableStringify((value as Record<string, unknown>)[k])}`,
+  );
+  return '{' + pairs.join(',') + '}';
+}
+
+function computeArgsFingerprint(args: unknown): string {
+  const stable = stableStringify(args ?? {});
+  return createHash('sha256').update(stable).digest('hex').slice(0, 16);
+}
+
+function deriveOutputCapMetadata(
+  policy: OutputCapPolicy | undefined,
+  redactedDetails: unknown,
+): ToolOutputCapMetadata {
+  const d: Record<string, unknown> =
+    redactedDetails !== null &&
+    redactedDetails !== undefined &&
+    typeof redactedDetails === 'object' &&
+    !Array.isArray(redactedDetails)
+      ? (redactedDetails as Record<string, unknown>)
+      : {};
+
+  const capped = d.truncated === true;
+  const result: ToolOutputCapMetadata = { capped };
+
+  if (policy && policy.strategy !== 'none') {
+    result.strategy = policy.strategy;
+    if (policy.maxBytes !== undefined) {
+      result.limit = policy.maxBytes;
+      result.limitKind = 'bytes';
+      if (typeof d.originalBytes === 'number') result.originalLength = d.originalBytes;
+      if (typeof d.retainedBytes === 'number') result.retainedLength = d.retainedBytes;
+    } else if (policy.maxItems !== undefined) {
+      result.limit = policy.maxItems;
+      result.limitKind = 'items';
+      if (typeof d.totalLines === 'number') result.originalLength = d.totalLines;
+      if (typeof d.returnedLines === 'number') result.retainedLength = d.returnedLines;
+    }
+  }
+
+  return result;
+}
 
 function toPiModel(config: ProviderModelConfig): Model<string> {
   return {
@@ -184,6 +249,11 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
 
   const startTime = Date.now();
   const composed = composeAbortSignal(callerSignal, budget?.maxWallClockMs);
+
+  // Build a name→metadata map for quick lookup inside afterToolCall.
+  const toolMetadataByName = new Map<string, ToolMetadata>(
+    (config.toolPolicy?.registry ?? []).map((m) => [m.name, m]),
+  );
 
   if (composed.signal.aborted) {
     composed.cleanup();
@@ -309,10 +379,82 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
         }
       }
 
+      // Run caller override first so gitAfterToolCall etc. can adjust isError/details.
+      let callerOverride: AfterToolCallResult | undefined;
       if (config.afterToolCall) {
-        return config.afterToolCall(ctx, signal);
+        callerOverride = await config.afterToolCall(ctx, signal);
       }
-      return undefined;
+
+      // Compute effective content and details after caller override.
+      type ContentBlock = { type: string; text: string };
+      const baseResult = ctx.result as { content?: ContentBlock[]; details?: unknown } | null | undefined;
+      const effectiveContent = ((callerOverride?.content ?? baseResult?.content ?? []) as ContentBlock[]);
+      const effectiveDetails: unknown =
+        callerOverride?.details !== undefined ? callerOverride.details : baseResult?.details;
+
+      // Redact content text blocks before Pi appends them to replay context.
+      let contentMatchCount = 0;
+      let contentRedacted = false;
+      const contentCategories: string[] = [];
+      const redactedContent = effectiveContent.map((block) => {
+        if (block.type === 'text') {
+          const r = redactSecrets(block.text);
+          if (r.redacted) {
+            contentRedacted = true;
+            contentMatchCount += r.matchCount;
+            for (const c of r.categories) contentCategories.push(c);
+          }
+          return { type: 'text' as const, text: r.text };
+        }
+        return block;
+      });
+
+      // Redact details value tree.
+      const detailsResult =
+        effectiveDetails !== undefined && effectiveDetails !== null
+          ? redactSecretsInValue(effectiveDetails)
+          : { value: effectiveDetails, redacted: false, matchCount: 0, categories: [] as string[] };
+
+      // Build provenance fingerprint.
+      const provenance: ToolProvenanceMetadata = {
+        tool: ctx.toolCall.name,
+        argsFingerprint: computeArgsFingerprint(ctx.args),
+      };
+
+      // Derive output cap metadata from policy + actual truncation fields.
+      const toolMeta = toolMetadataByName.get(ctx.toolCall.name);
+      const outputCap = deriveOutputCapMetadata(toolMeta?.outputCapPolicy, detailsResult.value);
+
+      // Aggregate redaction status.
+      const allCategories = [...new Set([...contentCategories, ...detailsResult.categories])];
+      const redaction: ToolRedactionMetadata = {
+        redacted: contentRedacted || detailsResult.redacted,
+        matchCount: contentMatchCount + detailsResult.matchCount,
+        categories: allCategories,
+      };
+
+      const metadata: ToolResultMetadata = { provenance, outputCap, redaction };
+
+      // Embed __wavemill metadata in details (plain-object only; transcript extracts it).
+      const baseDetails = detailsResult.value;
+      const enrichedDetails: unknown =
+        baseDetails !== null &&
+        baseDetails !== undefined &&
+        typeof baseDetails === 'object' &&
+        !Array.isArray(baseDetails)
+          ? { ...(baseDetails as Record<string, unknown>), __wavemill: metadata }
+          : baseDetails === undefined
+            ? { __wavemill: metadata }
+            : baseDetails;
+
+      const override: AfterToolCallResult = {
+        ...(callerOverride?.isError !== undefined ? { isError: callerOverride.isError } : {}),
+        ...(callerOverride?.terminate !== undefined ? { terminate: callerOverride.terminate } : {}),
+        content: redactedContent as AfterToolCallResult['content'],
+        details: enrichedDetails,
+      };
+
+      return override;
     },
   };
 
@@ -335,6 +477,7 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
   let loopError: unknown;
 
   const emit: AgentEventSink = (event) => {
+    config.onEvent?.(event);
     switch (event.type) {
       case 'turn_start':
         onHeartbeat?.({ state: 'working', event: 'turn_start', agent: HEARTBEAT_AGENT });
