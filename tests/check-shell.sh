@@ -3206,6 +3206,8 @@ PI_ALLOWED_FILES=(
   "shared/lib/native-agent/fixtures/blocked-session.ts"
   "shared/lib/native-agent/fixtures/malformed-tool-call-session.ts"
   "shared/lib/native-agent/fixtures/success-session.ts"
+  "shared/lib/native-agent/tools/pi-adapter.ts"
+  "shared/lib/native-agent/tools/registry.test.ts"
 )
 
 PI_PACKAGES=(

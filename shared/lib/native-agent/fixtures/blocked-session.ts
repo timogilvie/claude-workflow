@@ -28,6 +28,23 @@ const USAGE_TURN_2 = {
   cost: { input: 0.0013, output: 0.00035, cacheRead: 0, cacheWrite: 0, total: 0.00165 },
 };
 
+function makeBlockedToolResult(
+  toolCallId: string,
+  toolName: string,
+  text: string,
+  timestamp: number,
+) {
+  return {
+    role: 'toolResult' as const,
+    toolCallId,
+    toolName,
+    content: [{ type: 'text' as const, text }],
+    details: { blocked: true },
+    isError: true,
+    timestamp,
+  };
+}
+
 const assistantTurn1 = {
   role: 'assistant' as const,
   content: [
@@ -41,15 +58,12 @@ const assistantTurn1 = {
   timestamp: T,
 };
 
-const blockedToolResult = {
-  role: 'toolResult' as const,
-  toolCallId: 'call_blocked_1',
-  toolName: 'read_file',
-  content: [{ type: 'text' as const, text: "path_denied: '../secrets.env' resolves outside the worktree" }],
-  details: { blocked: true },
-  isError: true,
-  timestamp: T + 50,
-};
+const blockedToolResult = makeBlockedToolResult(
+  'call_blocked_1',
+  'read_file',
+  "path_denied: '../secrets.env' resolves outside the worktree",
+  T + 50,
+);
 
 const assistantTurn2 = {
   role: 'assistant' as const,
@@ -91,4 +105,66 @@ export const blockedSessionInput: AgentEvent[] = [
   { type: 'message_end', message: assistantTurn2 },
   { type: 'turn_end', message: assistantTurn2, toolResults: [] },
   { type: 'agent_end', messages: [assistantTurn1, blockedToolResult, assistantTurn2] },
+];
+
+const phaseDeniedAssistantTurn1 = {
+  role: 'assistant' as const,
+  content: [
+    { type: 'toolCall' as const, id: 'call_blocked_2', name: 'patch_file', arguments: { path: 'notes.md' } },
+  ],
+  api: 'hokusai-mock',
+  provider: 'hokusai',
+  model: 'hokusai-mini',
+  usage: USAGE_TURN_1,
+  stopReason: 'toolUse' as const,
+  timestamp: T + 500,
+};
+
+const phaseDeniedToolResult = makeBlockedToolResult(
+  'call_blocked_2',
+  'patch_file',
+  'phase_denied: tool "patch_file" is not allowed in planning',
+  T + 550,
+);
+
+const phaseDeniedAssistantTurn2 = {
+  role: 'assistant' as const,
+  content: [
+    { type: 'text' as const, text: 'The patch request was denied during the planning phase.' },
+  ],
+  api: 'hokusai-mock',
+  provider: 'hokusai',
+  model: 'hokusai-mini',
+  usage: USAGE_TURN_2,
+  stopReason: 'stop' as const,
+  timestamp: T + 650,
+};
+
+export const phaseDeniedSessionInput: AgentEvent[] = [
+  { type: 'agent_start' },
+  { type: 'turn_start' },
+  { type: 'message_start', message: phaseDeniedAssistantTurn1 },
+  { type: 'message_end', message: phaseDeniedAssistantTurn1 },
+  {
+    type: 'tool_execution_start',
+    toolCallId: 'call_blocked_2',
+    toolName: 'patch_file',
+    args: { path: 'notes.md' },
+  },
+  {
+    type: 'tool_execution_end',
+    toolCallId: 'call_blocked_2',
+    toolName: 'patch_file',
+    result: {
+      content: [{ type: 'text', text: 'phase_denied: tool "patch_file" is not allowed in planning' }],
+      details: { blocked: true },
+    },
+    isError: true,
+  },
+  { type: 'turn_end', message: phaseDeniedAssistantTurn1, toolResults: [phaseDeniedToolResult] },
+  { type: 'turn_start' },
+  { type: 'message_start', message: phaseDeniedAssistantTurn2 },
+  { type: 'message_end', message: phaseDeniedAssistantTurn2 },
+  { type: 'turn_end', message: phaseDeniedAssistantTurn2, toolResults: [] },
+  { type: 'agent_end', messages: [phaseDeniedAssistantTurn1, phaseDeniedToolResult, phaseDeniedAssistantTurn2] },
 ];
