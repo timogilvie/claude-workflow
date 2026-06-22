@@ -465,7 +465,7 @@ describe('search_text — result truncation', () => {
     const details = result.details as SearchTextDetails;
     assert.equal(details.returned, 1);
     assert.equal(details.truncatedByResults, true);
-    assert.ok(details.totalMatches >= 1);
+    assert.equal(details.totalMatches, 3);
   });
 });
 

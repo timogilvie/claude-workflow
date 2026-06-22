@@ -565,7 +565,7 @@ async function executeSearchText(
   let truncatedByResults = false;
 
   for (const filePath of filesToSearch) {
-    if (signal?.aborted || truncatedByResults) break;
+    if (signal?.aborted) break;
 
     let fileContent: string;
     try {
@@ -584,7 +584,6 @@ async function executeSearchText(
           matches.push({ file: path.relative(resolvedRoot, filePath), line: i + 1, text: line });
         } else {
           truncatedByResults = true;
-          break;
         }
       }
     }
