@@ -249,6 +249,7 @@ async function executeReadFile(
   worktreeAbsolute: string,
   _toolCallId: string,
   params: ReadFileParams,
+  signal?: AbortSignal,
 ): Promise<WavemillToolResult<ReadFileDetails | ToolErrorDetails>> {
   if (!params.path || typeof params.path !== 'string') {
     return makeError('invalid_params', 'path is required');
@@ -265,7 +266,7 @@ async function executeReadFile(
 
   let buf: Buffer;
   try {
-    buf = await fsPromises.readFile(resolved.absolutePath);
+    buf = await fsPromises.readFile(resolved.absolutePath, { signal });
   } catch (err: unknown) {
     return makeError('io_error', `Cannot read '${params.path}': ${(err as Error).message}`);
   }
@@ -600,7 +601,7 @@ export function createReadOnlyTools(worktreePath: string): ToolDescriptor[] {
       },
       parameters: READ_FILE_SCHEMA,
       async execute(toolCallId, params, signal) {
-        return executeReadFile(absWorktree, toolCallId, params as ReadFileParams);
+        return executeReadFile(absWorktree, toolCallId, params as ReadFileParams, signal);
       },
     } as ToolDescriptor<ReadFileParams, ReadFileDetails | ToolErrorDetails>,
 
