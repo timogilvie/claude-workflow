@@ -16,6 +16,8 @@ import {
   type ReplayCompactionOptions,
 } from './compaction.ts';
 import type { ProviderModelConfig } from './provider.ts';
+import { evaluateBeforeToolCallPolicy, type ToolPolicyConfig } from './tools/policies.ts';
+import type { ToolMetadata, ToolPhase } from './tools/types.ts';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -73,6 +75,12 @@ export interface WavemillLoopConfig {
    * Epic 2 wires in real phase policy here; stub it out or omit in Epic 1.
    */
   beforeToolCall?: AgentLoopConfig['beforeToolCall'];
+  toolPolicy?: {
+    phase: ToolPhase;
+    config?: ToolPolicyConfig;
+    worktreePath: string;
+    registry: readonly ToolMetadata[];
+  };
   /** Optional prior-session state; passed as AgentContext messages and is sufficient
    *  for continuation via replayed thinkingSignature / responseId metadata. */
   priorState?: { messages: AgentMessage[] };
@@ -269,6 +277,18 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
       if (batchFailed.get(ctx.assistantMessage)) {
         skippedCallIds.add(ctx.toolCall.id);
         return { block: true, reason: 'skipped_after_failure' };
+      }
+      if (config.toolPolicy) {
+        const decision = evaluateBeforeToolCallPolicy({
+          ...config.toolPolicy,
+          toolCall: {
+            name: ctx.toolCall.name,
+            arguments: ctx.args as Record<string, unknown>,
+          },
+        });
+        if (decision.kind === 'deny') {
+          return { block: true, reason: decision.message };
+        }
       }
       // Caller-supplied policy (Epic 2). Pass-through stub in Epic 1.
       if (config.beforeToolCall) {
