@@ -16,6 +16,7 @@ import {
 import { resolveAgent } from '../shared/lib/model-router.ts';
 import { readBothRouteArtifacts } from '../shared/lib/route-artifact.ts';
 import { readTaskPromptFromFile } from '../shared/lib/workflow-router.ts';
+import { detectVariedDimensions, hasVariedRoutingDimension } from '../shared/lib/challenge-dimensions.ts';
 
 runTool({
   name: 'resolve-challenge-task',
@@ -186,7 +187,7 @@ runTool({
     }
 
     if (!pair) {
-      console.log(JSON.stringify({ ...base, reason: 'selection_failed' }));
+      console.log(JSON.stringify({ ...base, reason: 'identical_unrepairable' }));
       return;
     }
 
@@ -197,6 +198,8 @@ runTool({
     const challengerSource = forcedChallengerModel && challengerVaried === forcedChallengerModel
       ? 'recommendation'
       : 'random';
+    const variedDimensions = detectVariedDimensions(pair.primary, pair.challenger);
+    const hasVariedDimensions = hasVariedRoutingDimension(pair.primary, pair.challenger);
 
     console.log(JSON.stringify({
       issue,
@@ -221,6 +224,8 @@ runTool({
           }
         : {}),
       routeContext: pair.routeContext,
+      hasVariedDimensions,
+      variedDimensions,
       entries: [
         { ...pair.primary, variedModel: variedModelForStage(pair.primary, effectiveStage) },
         { ...pair.challenger, variedModel: challengerVaried },

@@ -9859,6 +9859,7 @@ monitor_issue_state() {
                   --feature-dir "$FEATURE_DIR" 2>/dev/null || echo "")
                 refreshed_source=$(echo "$refreshed_plan" | jq -r '.decisionSource // "bootstrap"' 2>/dev/null || echo "bootstrap")
                 if [[ "$refreshed_source" == "expanded" ]]; then
+                  refresh_has_varied=$(echo "$refreshed_plan" | jq -r '.hasVariedDimensions // false' 2>/dev/null || echo "false")
                   new_primary=$(echo "$refreshed_plan" | jq -r '.entries[0].model // empty' 2>/dev/null)
                   new_primary_planner=$(echo "$refreshed_plan" | jq -r '.entries[0].planner // empty' 2>/dev/null)
                   new_primary_reviewer=$(echo "$refreshed_plan" | jq -r '.entries[0].reviewer // empty' 2>/dev/null)
@@ -9874,15 +9875,9 @@ monitor_issue_state() {
                   new_challenger_review_mode=$(echo "$refreshed_plan" | jq -r '.entries[1].reviewMode // empty' 2>/dev/null)
 
                   refresh_identical="false"
-                  if [[ -n "$new_primary" ]] \
-                    && [[ "$new_primary" == "$new_challenger_model" ]] \
-                    && [[ "$new_primary_planner" == "$new_challenger_planner" ]] \
-                    && [[ "$new_primary_reviewer" == "$new_challenger_reviewer" ]] \
-                    && [[ "$new_primary_plan_depth" == "$new_challenger_plan_depth" ]] \
-                    && [[ "$new_primary_code_depth" == "$new_challenger_code_depth" ]] \
-                    && [[ "$new_primary_review_mode" == "$new_challenger_review_mode" ]]; then
+                  if [[ "$refresh_has_varied" != "true" ]]; then
                     refresh_identical="true"
-                    log_warn "$ISSUE → expanded challenge refresh produced identical primary/challenger routing, preserving existing challenge participants"
+                    log_warn "$ISSUE → expanded challenge refresh is not canonically varied, preserving existing challenge participants"
                   elif [[ -n "$new_primary" ]]; then
                     current_pr=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].pr // ""')
                     current_status=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].status // ""')

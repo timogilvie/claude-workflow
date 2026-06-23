@@ -7,6 +7,7 @@ Challenge pairs now persist an explicit comparison state on both tasks in the pa
 - `comparison_running`: comparison job is in flight.
 - `retrying_eval`: at least one eval timed out and wavemill is retrying within the configured cap.
 - `manual_comparison_needed`: automatic comparison could not complete after bounded retries.
+- `skipped_identical`: legacy pair reached comparison with identical canonical routing dimensions; comparison is recorded as a deterministic primary win without invoking the judge.
 
 ## Stored Fields
 
@@ -27,5 +28,9 @@ Challenge pairs now persist an explicit comparison state on both tasks in the pa
 
 ## Merge-Lane Expectations
 
+- Challenge launch must vary at least one canonical routing dimension across planner, coder, reviewer, plan depth, code depth, or review mode.
+- Launch-time repair is bounded and idempotent: try the configured stage first, then a deterministic alternative model on another canonical stage, otherwise fall back to a single run before work starts.
+- Unrepairable launch plans must downgrade to single-mode rather than launching a challenger that cannot be compared.
+- `skipped_identical` is terminal. The persisted comparison record resolves ready/tend gates, primary wins by policy, and challenger cleanup follows the existing loser path.
 - `retrying_eval` should remain an active, non-terminal wait.
 - `manual_comparison_needed` is a `needs-user` condition. The pair should not look merge-ready until an operator resolves the comparison manually.

@@ -1,5 +1,6 @@
 import type { ChallengeRecommendation, ChallengeStage } from './challenge-scheduler.ts';
 export type { ChallengeStage } from './challenge-scheduler.ts';
+import { hasVariedRoutingDimension, repairChallengePairSelection } from './challenge-dimensions.ts';
 import { loadWavemillConfig, type ChallengeConfig, type RouterConfig } from './config.ts';
 import { isDeepSeekModel } from './deepseek-provider.ts';
 import { filterDisabledModels } from './disabled-models.ts';
@@ -307,10 +308,15 @@ export function pickChallengeModels(
     return null;
   }
 
-  return {
+  return finalizeChallengePair({
     ...buildChallengeEntries(opts, agentMap, defaultAgent, primaryModel, challengerModel),
     challengeStage: 'implementation',
-  };
+  }, uniquePool, {
+    forcedChallengerModel: opts.forcedChallengerModel,
+    requestedStage: 'implementation',
+    agentMap,
+    defaultAgent,
+  });
 }
 
 /**
@@ -402,6 +408,83 @@ function applyStageVariation(
   return { ...pair, challengeStage: stage };
 }
 
+function forceStageModel(
+  pair: ChallengePairSelection,
+  stage: string,
+  challengerModel: string,
+  agentMap: Record<string, string>,
+  defaultAgent: string,
+  repoDir?: string,
+): ChallengePairSelection {
+  if (stage === 'plan') {
+    return {
+      ...pair,
+      challengeStage: 'plan',
+      challenger: {
+        ...pair.challenger,
+        planner: challengerModel,
+        plannerAgent: resolveOptionalAgent(challengerModel, agentMap, defaultAgent, repoDir),
+      },
+    };
+  }
+
+  if (stage === 'review') {
+    return {
+      ...pair,
+      challengeStage: 'review',
+      challenger: {
+        ...pair.challenger,
+        reviewer: challengerModel,
+        reviewerAgent: resolveOptionalAgent(challengerModel, agentMap, defaultAgent, repoDir),
+      },
+    };
+  }
+
+  return {
+    ...pair,
+    challengeStage: 'implementation',
+    challenger: {
+      ...pair.challenger,
+      model: challengerModel,
+      agent: resolveAgent(challengerModel, agentMap, defaultAgent, repoDir),
+    },
+  };
+}
+
+function finalizeChallengePair(
+  pair: ChallengePairSelection | null,
+  pool: string[],
+  opts: {
+    forcedChallengerModel?: string;
+    requestedStage?: ChallengeStage;
+    agentMap: Record<string, string>;
+    defaultAgent: string;
+    repoDir?: string;
+  },
+): ChallengePairSelection | null {
+  if (!pair) {
+    return null;
+  }
+
+  if (hasVariedRoutingDimension(pair.primary, pair.challenger)) {
+    return pair;
+  }
+
+  return repairChallengePairSelection(pair, {
+    allowedModels: pool,
+    forcedChallengerModel: opts.forcedChallengerModel,
+    candidateStages: [opts.requestedStage || 'implementation', 'implementation', 'plan', 'review'],
+    applyStageModel: (candidatePair, stage, challengerModel) => forceStageModel(
+      candidatePair,
+      stage,
+      challengerModel,
+      opts.agentMap,
+      opts.defaultAgent,
+      opts.repoDir,
+    ),
+  });
+}
+
 export function pickChallengeWorkflows(
   pool: string[],
   opts: {
@@ -468,7 +551,7 @@ export function pickChallengeWorkflows(
   const primarySlug = deriveChallengeSlug(opts.slug, 'primary');
   const challengerSlug = deriveChallengeSlug(opts.slug, 'challenger');
 
-  return {
+  return finalizeChallengePair({
     pairId: opts.pairId,
     challengeStage: stage,
     primary: {
@@ -503,7 +586,13 @@ export function pickChallengeWorkflows(
       codeDepth: routing.codeDepth,
       reviewMode: routing.reviewRecommended,
     },
-  };
+  }, uniquePool, {
+    forcedChallengerModel: opts.forcedChallengerModel,
+    requestedStage,
+    agentMap,
+    defaultAgent,
+    repoDir: opts.repoDir,
+  });
 }
 
 function resolveOptionalAgent(
@@ -596,7 +685,17 @@ function buildPairFromRouteSnapshot(
       return null;
     }
 
-    return applyRouteSnapshot(pair, route, agentMap, defaultAgent, opts.repoDir, fallback);
+    return finalizeChallengePair(
+      applyRouteSnapshot(pair, route, agentMap, defaultAgent, opts.repoDir, fallback),
+      uniqueNonEmpty(pool),
+      {
+        forcedChallengerModel: opts.forcedChallengerModel,
+        requestedStage,
+        agentMap,
+        defaultAgent,
+        repoDir: opts.repoDir,
+      },
+    );
   }
 
   const challengerVaried = resolveChallengerModel(
@@ -619,7 +718,17 @@ function buildPairFromRouteSnapshot(
     opts.repoDir,
     fallback,
   );
-  return applyStageVariation(pair, stage, challengerVaried, agentMap, defaultAgent, opts.repoDir);
+  return finalizeChallengePair(
+    applyStageVariation(pair, stage, challengerVaried, agentMap, defaultAgent, opts.repoDir),
+    uniqueNonEmpty(pool),
+    {
+      forcedChallengerModel: opts.forcedChallengerModel,
+      requestedStage,
+      agentMap,
+      defaultAgent,
+      repoDir: opts.repoDir,
+    },
+  );
 }
 
 export function pickChallengeWorkflowsWithContext(

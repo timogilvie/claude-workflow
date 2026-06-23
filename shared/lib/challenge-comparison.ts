@@ -1,30 +1,13 @@
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { appendJsonlRecord, readJsonlFile } from './jsonl-utils.ts';
-
-export interface ChallengeRoutingMeta {
-  planner: string;
-  coder: string;
-  reviewer: string;
-  planDepth: string;
-  codeDepth: string;
-  reviewMode: string;
-  routerVariant?: string;
-  plannerPromptVariant?: string;
-  reviewerPromptVariant?: string;
-}
-
-export interface VariedDimensions {
-  planner: boolean;
-  coder: boolean;
-  reviewer: boolean;
-  planDepth: boolean;
-  codeDepth: boolean;
-  reviewMode: boolean;
-  routerVariant: boolean;
-  plannerPromptVariant: boolean;
-  reviewerPromptVariant: boolean;
-}
+import {
+  detectVariedDimensions as detectVariedRoutingDimensions,
+  type ChallengeRoutingMeta,
+  type VariedDimensions,
+} from './challenge-dimensions.ts';
+export { detectVariedDimensions } from './challenge-dimensions.ts';
+export type { ChallengeRoutingMeta, VariedDimensions } from './challenge-dimensions.ts';
 
 export type ChallengeType =
   | 'coder-only'
@@ -78,43 +61,6 @@ const CHALLENGE_RECORDS_FILENAME = 'challenge-records.jsonl';
 function resolveRecordsFile(dir?: string): string {
   const baseDir = resolve(dir || DEFAULT_EVALS_DIR);
   return join(baseDir, CHALLENGE_RECORDS_FILENAME);
-}
-
-/**
- * Detect which dimensions varied between primary and challenger routing.
- * Returns undefined if either routing is missing.
- */
-export function detectVariedDimensions(
-  primaryRouting: ChallengeRoutingMeta | undefined,
-  challengerRouting: ChallengeRoutingMeta | undefined,
-): VariedDimensions | undefined {
-  if (!primaryRouting || !challengerRouting) {
-    return undefined;
-  }
-
-  // Treat empty strings as equivalent to missing values
-  const normalize = (val: string) => val.trim() || '';
-
-  // For optional variant fields introduced post-feature-ship: only flag as varied when
-  // both sides have a defined value. A legacy record (undefined) vs a new record ('baseline')
-  // would otherwise produce cross-boundary false positives in variant win-rate statistics.
-  const variantDiffers = (a: string | undefined, b: string | undefined): boolean => {
-    const na = normalize(a || '');
-    const nb = normalize(b || '');
-    return na !== '' && nb !== '' && na !== nb;
-  };
-
-  return {
-    planner: normalize(primaryRouting.planner) !== normalize(challengerRouting.planner),
-    coder: normalize(primaryRouting.coder) !== normalize(challengerRouting.coder),
-    reviewer: normalize(primaryRouting.reviewer) !== normalize(challengerRouting.reviewer),
-    planDepth: normalize(primaryRouting.planDepth) !== normalize(challengerRouting.planDepth),
-    codeDepth: normalize(primaryRouting.codeDepth) !== normalize(challengerRouting.codeDepth),
-    reviewMode: normalize(primaryRouting.reviewMode) !== normalize(challengerRouting.reviewMode),
-    routerVariant: variantDiffers(primaryRouting.routerVariant, challengerRouting.routerVariant),
-    plannerPromptVariant: variantDiffers(primaryRouting.plannerPromptVariant, challengerRouting.plannerPromptVariant),
-    reviewerPromptVariant: variantDiffers(primaryRouting.reviewerPromptVariant, challengerRouting.reviewerPromptVariant),
-  };
 }
 
 export function hasAnyVariedDimension(varied: VariedDimensions): boolean {

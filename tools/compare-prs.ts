@@ -10,6 +10,7 @@ import {
   hasAnyVariedDimension,
   classifyChallengeType,
   type ChallengeComparison,
+  type ChallengeComparisonDimensions,
   type ChallengeRoutingMeta,
 } from '../shared/lib/challenge-comparison.ts';
 import { loadWavemillConfig } from '../shared/lib/config.ts';
@@ -26,6 +27,16 @@ import {
   type ValidatedComparisonResult,
 } from '../shared/lib/pr-comparison.ts';
 import { writeJobResultFile } from '../shared/lib/job-tracker.ts';
+
+function buildSkippedIdenticalDimensions(): ChallengeComparisonDimensions {
+  return {
+    completeness: { primary: 5, challenger: 5 },
+    correctness: { primary: 5, challenger: 5 },
+    code_quality: { primary: 5, challenger: 5 },
+    intervention_impact: { primary: 5, challenger: 5 },
+    autonomy: { primary: 5, challenger: 5 },
+  };
+}
 
 runTool({
   name: 'compare-prs',
@@ -130,7 +141,35 @@ runTool({
 
       const variedDimensions = detectVariedDimensions(primaryRouting, challengerRouting);
       if (variedDimensions && !hasAnyVariedDimension(variedDimensions)) {
-        throw new Error('Challenge comparison has no varied routing dimensions; refusing to compare identical workflows');
+        const record: ChallengeComparison = {
+          challengePairId: pairId,
+          primaryModel,
+          challengerModel,
+          primaryPrUrl,
+          challengerPrUrl,
+          primaryEvalScore: primaryEval.score,
+          challengerEvalScore: challengerEval.score,
+          winner: 'primary',
+          winnerModel: primaryModel,
+          rationale: 'Skipped comparison because primary and challenger routing dimensions are identical; primary selected by policy.',
+          dimensions: buildSkippedIdenticalDimensions(),
+          timestamp: new Date().toISOString(),
+          primaryRouting,
+          challengerRouting,
+          variedDimensions,
+          workflowInsight: 'No LLM judge was invoked because both workflows resolved to the same routing dimensions.',
+        };
+        recordForResult = record;
+        appendChallengeComparison(record);
+        console.log(JSON.stringify(record, null, 2));
+        if (resultFile) {
+          writeJobResultFile(resultFile, {
+            ok: true,
+            exitCode,
+            comparison: record,
+          });
+        }
+        return;
       }
       const challengeType = variedDimensions ? classifyChallengeType(variedDimensions) : undefined;
 

@@ -17,6 +17,7 @@ import {
   pickChallengeWorkflows,
   variedModelForStage,
 } from './challenge-mode.ts';
+import { hasVariedRoutingDimension } from './challenge-dimensions.ts';
 import type { RouteArtifactSnapshot } from './route-artifact.ts';
 
 let passed = 0;
@@ -468,6 +469,36 @@ test('pickChallengeWorkflowsWithContext refreshes participants when expanded rou
   assert.equal(pair!.primary.codeDepth, 'deep');
   assert.equal(pair!.primary.planner, 'claude-opus-4-6');
   assert.equal(pair!.primary.planDepth, 'deep');
+  assert.equal(hasVariedRoutingDimension(pair!.primary, pair!.challenger), true);
+});
+
+test('pickChallengeWorkflowsWithContext repairs identical expanded-route pairs when a challenger alternative exists', () => {
+  const bootstrap: RouteArtifactSnapshot = {
+    planner: 'claude-opus-4-7',
+    coder: 'claude-sonnet-4-6',
+    reviewer: 'claude-opus-4-7',
+    planDepth: 'medium',
+    codeDepth: 'medium',
+    reviewMode: 'llm',
+  };
+  const expanded: RouteArtifactSnapshot = { ...bootstrap };
+
+  const pair = pickChallengeWorkflowsWithContext(
+    ['claude-sonnet-4-6', 'gpt-5.4'],
+    {
+      pairId: 'HOK-2298',
+      issueId: 'HOK-2298',
+      slug: 'identical-expanded',
+      prompt: 'irrelevant',
+      primaryModel: 'claude-sonnet-4-6',
+      randomFn: () => 0,
+    },
+    { bootstrap, expanded },
+  );
+
+  assert.ok(pair);
+  assert.equal(hasVariedRoutingDimension(pair!.primary, pair!.challenger), true);
+  assert.notEqual(pair!.primary.model, pair!.challenger.model);
 });
 
 test('pickChallengeWorkflowsWithContext carries expanded route context to both challenge entries', () => {
@@ -741,6 +772,55 @@ test('pickChallengeModels falls back to random when the forced challenger is unu
     },
   );
   assert.equal(notInPool?.challenger.model, 'gpt-5.4');
+});
+
+test('pickChallengeModels repairs a forced challenger equal to the primary when possible', () => {
+  const pair = pickChallengeModels(
+    ['gpt-5.4', 'claude-sonnet-4-6'],
+    {
+      pairId: 'HOK-2301',
+      issueId: 'HOK-2301',
+      slug: 'forced-equal',
+      primaryModel: 'gpt-5.4',
+      forcedChallengerModel: 'gpt-5.4',
+      randomFn: () => 0,
+    },
+  );
+
+  assert.ok(pair);
+  assert.equal(pair!.primary.model, 'gpt-5.4');
+  assert.equal(pair!.challenger.model, 'claude-sonnet-4-6');
+});
+
+test('pickChallengeWorkflows returns null when no varied alternative can be repaired', () => {
+  const pair = pickChallengeWorkflows(
+    ['gpt-5.4'],
+    {
+      pairId: 'HOK-2301b',
+      issueId: 'HOK-2301b',
+      slug: 'no-repair',
+      prompt: 'irrelevant',
+      primaryModel: 'gpt-5.4',
+      forcedChallengerModel: 'gpt-5.4',
+      challengeStage: 'implementation',
+      routeFn: () => ({
+        planner: 'gpt-5.4',
+        coder: 'gpt-5.4',
+        reviewer: 'gpt-5.4',
+        planDepth: 'medium',
+        codeDepth: 'medium',
+        reviewRecommended: 'llm',
+        expectedSuccess: 0.5,
+        expectedCostPlan: 1,
+        expectedCostCode: 1,
+        expectedCostReview: 1,
+        reasoning: [],
+        signals: {},
+      }),
+    },
+  );
+
+  assert.equal(pair, null);
 });
 
 test('pickChallengeWorkflowsWithContext threads the forced challenger through route snapshots', () => {

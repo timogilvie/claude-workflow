@@ -11,6 +11,11 @@ import {
   type ChallengeComparison,
   type ChallengeRoutingMeta,
 } from './challenge-comparison.ts';
+import {
+  extractRoutingDimensions,
+  hasVariedRoutingDimension,
+  repairChallengePairSelection,
+} from './challenge-dimensions.ts';
 
 let passed = 0;
 let failed = 0;
@@ -159,6 +164,89 @@ test('detectVariedDimensions treats empty strings as equivalent', () => {
   assert.ok(result);
   assert.equal(result.reviewer, false);
   assert.equal(result.reviewerPromptVariant, false);
+});
+
+test('extractRoutingDimensions ignores unknown keys and normalizes model aliases', () => {
+  const result = extractRoutingDimensions({
+    challengeModel: ' gpt-5.4 ',
+    plannerModel: ' claude-opus-4-7 ',
+    reviewerModel: '',
+    planDepth: ' medium ',
+    codeDepth: 'medium',
+    reviewMode: 'llm',
+    unknown: 'ignored',
+  } as ChallengeRoutingMeta & { unknown: string });
+  assert.deepEqual(result, {
+    planner: 'claude-opus-4-7',
+    coder: 'gpt-5.4',
+    reviewer: '',
+    planDepth: 'medium',
+    codeDepth: 'medium',
+    reviewMode: 'llm',
+    routerVariant: '',
+    plannerPromptVariant: '',
+    reviewerPromptVariant: '',
+  });
+});
+
+test('hasVariedRoutingDimension returns false for HOK-2297 identical tuple', () => {
+  const primary = {
+    plannerModel: 'claude-opus-4-7',
+    challengeModel: 'claude-sonnet-4-6',
+    reviewerModel: 'claude-opus-4-7',
+    planDepth: 'medium',
+    codeDepth: 'medium',
+    reviewMode: 'llm',
+  };
+  const challenger = {
+    plannerModel: 'claude-opus-4-7',
+    challengeModel: 'claude-sonnet-4-6',
+    reviewerModel: 'claude-opus-4-7',
+    planDepth: 'medium',
+    codeDepth: 'medium',
+    reviewMode: 'llm',
+  };
+  assert.equal(hasVariedRoutingDimension(primary, challenger), false);
+});
+
+test('repairChallengePairSelection changes at least one dimension when an alternative exists', () => {
+  const repaired = repairChallengePairSelection({
+    challengeStage: 'implementation',
+    primary: makeRouting({ coder: 'gpt-5.4' }),
+    challenger: makeRouting({ coder: 'gpt-5.4' }),
+  }, {
+    allowedModels: ['gpt-5.4', 'claude-sonnet-4-6'],
+    applyStageModel: (pair, stage, challengerModel) => ({
+      ...pair,
+      challengeStage: stage,
+      challenger: {
+        ...pair.challenger,
+        coder: challengerModel,
+      },
+    }),
+  });
+  assert.ok(repaired);
+  assert.equal(repaired!.challenger.coder, 'claude-sonnet-4-6');
+  assert.equal(hasVariedRoutingDimension(repaired!.primary, repaired!.challenger), true);
+});
+
+test('repairChallengePairSelection returns null when the pool has no alternative', () => {
+  const repaired = repairChallengePairSelection({
+    challengeStage: 'implementation',
+    primary: makeRouting({ coder: 'gpt-5.4' }),
+    challenger: makeRouting({ coder: 'gpt-5.4' }),
+  }, {
+    allowedModels: ['gpt-5.4'],
+    applyStageModel: (pair, stage, challengerModel) => ({
+      ...pair,
+      challengeStage: stage,
+      challenger: {
+        ...pair.challenger,
+        coder: challengerModel,
+      },
+    }),
+  });
+  assert.equal(repaired, null);
 });
 
 console.log('\n--- Challenge Type Classification Tests ---\n');
