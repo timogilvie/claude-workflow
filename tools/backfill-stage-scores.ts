@@ -12,6 +12,7 @@
  *   npx tsx tools/backfill-stage-scores.ts --dry-run --limit 5
  *   npx tsx tools/backfill-stage-scores.ts --limit 50
  *   npx tsx tools/backfill-stage-scores.ts --input .wavemill/evals/aggregated-evals.jsonl
+ *   npx tsx tools/backfill-stage-scores.ts --model claude-sonnet-4-6   # override to Claude
  */
 
 import { readFileSync, writeFileSync, existsSync, appendFileSync, mkdirSync } from 'node:fs';
@@ -19,6 +20,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runTool } from '../shared/lib/tool-runner.ts';
 import { loadPromptTemplate } from '../shared/lib/prompt-utils.ts';
+import { callLLM } from '../shared/lib/llm-cli.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -115,30 +117,6 @@ function parseJudgeOutput(raw: string): JudgeStageResponse | null {
   return null;
 }
 
-async function callClaude(prompt: string, model: string): Promise<string> {
-  const { execSync } = await import('node:child_process');
-  const env = { ...process.env };
-  delete env.CLAUDECODE; // Avoid recursion
-
-  const result = execSync(
-    `claude -p --output-format json --model ${model}`,
-    {
-      input: prompt,
-      encoding: 'utf-8',
-      timeout: 180_000,
-      env,
-      maxBuffer: 10 * 1024 * 1024,
-    }
-  );
-
-  try {
-    const data = JSON.parse(result.trim());
-    return data.result || result.trim();
-  } catch {
-    return result.trim();
-  }
-}
-
 runTool({
   name: 'backfill-stage-scores',
   description: 'Backfill missing plan/review stageScores in eval records',
@@ -146,7 +124,7 @@ runTool({
     input: { type: 'string', description: 'Input JSONL file (default: aggregated-evals.jsonl)' },
     output: { type: 'string', description: 'Output JSONL file (default: <input>.backfilled.jsonl)' },
     limit: { type: 'string', description: 'Max records to process (number)' },
-    model: { type: 'string', description: 'Judge model (default: claude-sonnet-4-6)' },
+    model: { type: 'string', description: 'Judge model (default: gpt-5.5; use claude-sonnet-4-6 to route via Claude)' },
     'dry-run': { type: 'boolean', description: 'Show what would be processed without making LLM calls' },
     'skip-has-impl': { type: 'boolean', description: 'Skip records that already have implementation stageScores (only backfill records with no stage scores at all)' },
   },
@@ -154,7 +132,7 @@ runTool({
     const inputPath = args.input || join(process.cwd(), '.wavemill/evals/aggregated-evals.jsonl');
     const outputPath = args.output || inputPath.replace('.jsonl', '.backfilled.jsonl');
     const limit = args.limit ? Number(args.limit) : Infinity;
-    const model = (args.model as string) || 'claude-sonnet-4-6';
+    const model = (args.model as string) || 'gpt-5.5';
     const dryRun = !!args['dry-run'];
     const skipHasImpl = !!args['skip-has-impl'];
 
@@ -223,7 +201,13 @@ runTool({
 
       try {
         const prompt = buildBackfillPrompt(template, record);
-        const response = await callClaude(prompt, model);
+        const result = await callLLM(prompt, {
+          model,
+          mode: 'sync',
+          timeout: 180_000,
+          stripToolCalls: true,
+        });
+        const response = result.text;
         const parsed = parseJudgeOutput(response);
 
         if (parsed?.stageScores) {
