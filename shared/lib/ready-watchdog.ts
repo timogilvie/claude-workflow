@@ -20,6 +20,7 @@ import { readStageResult, updateStageResult, type ReadyArtifacts, type StageResu
 const execFileAsync = promisify(execFile);
 const MAX_AUTO_UPDATE_ATTEMPTS = 3;
 const FAILING_CHECK_STABILITY_THRESHOLD = 2;
+const DEFAULT_RELOG_SECONDS = 3600;
 const WAVEMILL_TOOLS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'tools');
 const READY_WATCHDOG_TOOL_PATH = path.join(WAVEMILL_TOOLS_DIR, 'ready-watchdog.ts');
 
@@ -141,6 +142,8 @@ export interface ReadyWatchdogStateEntry {
   consecutiveFailurePolls?: number;
   failingChecksFingerprint?: string;
   failingChecksObservedCount?: number;
+  lastLoggedFingerprint?: string;
+  lastLoggedAt?: string;
 }
 
 export interface ReadyWatchdogStateFile {
@@ -686,8 +689,59 @@ function buildPrStateKey(githubTruth: GitHubPRTruth | null): string | undefined 
     .join('|');
 }
 
-function normalizeDetailFingerprint(detail: string): string {
+function normalizeWhitespace(detail: string): string {
   return detail.trim().replace(/\s+/g, ' ');
+}
+
+export function normalizeDetailFingerprint(detail: string): string {
+  const normalized = normalizeWhitespace(detail);
+  if (normalized.startsWith('Merge lane appears stalled: PR #')) {
+    return normalized.replace(/has waited \d+m/, 'has waited <idle>m');
+  }
+  if (normalized.startsWith('PR #') && normalized.includes('is waiting its turn in the merge lane')) {
+    return normalized.replace(/\(idle \d+m\)/, '(idle <idle>m)');
+  }
+  return normalized;
+}
+
+function getReadyWatchdogRelogSeconds(): number {
+  const raw = process.env.READY_WATCHDOG_RELOG_SECONDS;
+  if (raw === undefined) {
+    return DEFAULT_RELOG_SECONDS;
+  }
+
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return DEFAULT_RELOG_SECONDS;
+  }
+
+  return parsed;
+}
+
+function shouldEmitFinding(
+  prior: ReadyWatchdogStateEntry | undefined,
+  next: ReadyWatchdogStateEntry,
+  now: Date,
+  relogSeconds: number,
+): boolean {
+  if (!prior || materiallyChanged(prior, next)) {
+    return true;
+  }
+
+  if (!prior.lastLoggedAt || prior.lastLoggedFingerprint !== next.detailFingerprint) {
+    return true;
+  }
+
+  if (relogSeconds === 0) {
+    return false;
+  }
+
+  const lastLoggedAt = parseIsoDate(prior.lastLoggedAt);
+  if (!lastLoggedAt) {
+    return true;
+  }
+
+  return now.getTime() - lastLoggedAt.getTime() >= relogSeconds * 1000;
 }
 
 function makeRecoveryCommand(repoDir: string, stateFile: string, issueId: string, readyWatchdogToolPath: string): string {
@@ -1081,6 +1135,7 @@ function materiallyChanged(
   }
 
   return prior.classification !== next.classification
+    || prior.displayLabel !== next.displayLabel
     || prior.detailFingerprint !== next.detailFingerprint
     || prior.prStateKey !== next.prStateKey
     || prior.autoUpdateAttempts !== next.autoUpdateAttempts
@@ -1179,6 +1234,7 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
     ...getReadyWatchdogConfig(options.repoDir),
     ...(options.config ?? {}),
   };
+  const relogSeconds = getReadyWatchdogRelogSeconds();
   const newFindings: ReadyWatchdogStateEntry[] = [];
 
   if (!config.enabled && !options.forceRecover) {
@@ -1444,8 +1500,17 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
       continue;
     }
 
+    const shouldEmit = shouldEmitFinding(prior, entry, now, relogSeconds);
+    if (shouldEmit) {
+      entry.lastLoggedFingerprint = entry.detailFingerprint;
+      entry.lastLoggedAt = now.toISOString();
+    } else {
+      entry.lastLoggedFingerprint = prior?.lastLoggedFingerprint;
+      entry.lastLoggedAt = prior?.lastLoggedAt;
+    }
+
     nextTasks[issueId] = entry;
-    if (materiallyChanged(prior, entry)) {
+    if (shouldEmit) {
       newFindings.push(entry);
       await writeAuditRecord(options.repoDir, {
         timestamp: now.toISOString(),

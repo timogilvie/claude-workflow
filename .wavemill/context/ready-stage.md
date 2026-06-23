@@ -5,6 +5,8 @@ The ready subsystem has two cooperating loops:
 - `tools/ready.ts` runs the local readiness checks and writes structured results.
 - `tools/ready-watchdog.ts` compares local ready state against GitHub truth during monitor ticks.
 
+The watchdog refreshes `.wavemill/ready-watchdog-state.json` on every tick so dashboard data like `idleMinutes` stays current, but it only emits returned findings and appends `.wavemill/ready-watchdog.jsonl` when a finding is newly actionable, materially reclassified, or the optional `READY_WATCHDOG_RELOG_SECONDS` heartbeat interval expires. Merge-lane waiting/stalled fingerprints intentionally ignore the changing idle-minute text so repeated monitor ticks do not spam logs.
+
 ## Watchdog Classifications
 
 - `fresh`: local ready state has progressed recently enough.

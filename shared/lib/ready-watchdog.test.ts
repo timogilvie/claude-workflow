@@ -6,6 +6,7 @@ import path from 'node:path';
 import os from 'node:os';
 import {
   classifyReadyTask,
+  normalizeDetailFingerprint,
   tickReadyWatchdog,
   type GitHubPRTruth,
   type ReadyTaskSnapshot,
@@ -128,6 +129,28 @@ test('classify clean green stale ready as stuck', () => {
 
   assert.equal(classification.kind, 'stuck');
   assert.equal(classification.autoRecoverable, true);
+});
+
+test('normalizeDetailFingerprint stabilizes merge-lane idle minutes but keeps PR identity', () => {
+  const stalled83 = normalizeDetailFingerprint(
+    'Merge lane appears stalled: PR #805 passed ready and has waited 83m for its merge turn without the lane advancing.',
+  );
+  const stalled84 = normalizeDetailFingerprint(
+    'Merge lane appears stalled: PR #805 passed ready and has waited 84m for its merge turn without the lane advancing.',
+  );
+  const stalledOtherPr = normalizeDetailFingerprint(
+    'Merge lane appears stalled: PR #806 passed ready and has waited 84m for its merge turn without the lane advancing.',
+  );
+  const waiting83 = normalizeDetailFingerprint(
+    'PR #805 passed ready and is waiting its turn in the merge lane (idle 83m).',
+  );
+  const waiting84 = normalizeDetailFingerprint(
+    'PR #805 passed ready and is waiting its turn in the merge lane (idle 84m).',
+  );
+
+  assert.equal(stalled83, stalled84);
+  assert.notEqual(stalled83, stalledOtherPr);
+  assert.equal(waiting83, waiting84);
 });
 
 test('classify clean green PR parked in merge lane as waiting-on-merge-lane (not stuck)', () => {
@@ -1105,6 +1128,190 @@ test('tick suppresses repeated needs-user when classification and detail are unc
   assert.equal(second.findings.length, 0, 'repeated needs-user should be suppressed on second tick');
 
   await rm(repoDir, { recursive: true, force: true });
+});
+
+test('tick suppresses repeated stalled merge-lane findings while keeping state fresh', async () => {
+  const { repoDir, stateDir, stateFile, featureDir } = setupReadyTask('HOK-2298', 805);
+  writeFileSync(path.join(featureDir, '.ready-result.json'), JSON.stringify({
+    stage: 'ready',
+    status: 'completed',
+    startedAt: '2030-05-05T11:00:00.000Z',
+    finishedAt: '2030-05-05T11:01:00.000Z',
+    agent: 'codex',
+    model: 'gpt-5.5',
+    notes: null,
+    artifacts: { type: 'ready', verdict: 'pass', prNumber: 805, queueState: 'ready-stale' },
+  }, null, 2));
+
+  try {
+    const baseDeps = {
+      fetchGitHubTruth: async () => makeTruth(),
+      getCurrentHead: async () => 'head',
+    };
+
+    const first = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: WATCHDOG_CONFIG,
+      deps: {
+        ...baseDeps,
+        now: () => new Date('2030-05-05T11:35:00.000Z'),
+      },
+    });
+    assert.equal(first.findings.length, 1);
+    assert.equal(first.findings[0].classification, 'needs-user');
+
+    const second = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: WATCHDOG_CONFIG,
+      deps: {
+        ...baseDeps,
+        now: () => new Date('2030-05-05T11:36:00.000Z'),
+      },
+    });
+    assert.equal(second.findings.length, 0);
+
+    const auditRows = readFileSync(path.join(stateDir, 'ready-watchdog.jsonl'), 'utf-8').trim().split('\n');
+    assert.equal(auditRows.length, 1);
+
+    const watchdogState = JSON.parse(readFileSync(path.join(stateDir, 'ready-watchdog-state.json'), 'utf-8')) as {
+      tasks: Record<string, ReadyWatchdogStateEntry>;
+    };
+    assert.match(watchdogState.tasks['HOK-2298'].detail, /35m/);
+    assert.equal(watchdogState.tasks['HOK-2298'].lastLoggedAt, '2030-05-05T11:35:00.000Z');
+    assert.equal(
+      watchdogState.tasks['HOK-2298'].lastLoggedFingerprint,
+      normalizeDetailFingerprint(first.findings[0].detail),
+    );
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('tick suppresses repeated waiting-on-merge-lane findings while keeping state fresh', async () => {
+  const { repoDir, stateDir, stateFile, featureDir } = setupReadyTask('HOK-2298_c', 806);
+  writeFileSync(path.join(featureDir, '.ready-result.json'), JSON.stringify({
+    stage: 'ready',
+    status: 'completed',
+    startedAt: '2030-05-05T11:00:00.000Z',
+    finishedAt: '2030-05-05T11:01:00.000Z',
+    agent: 'codex',
+    model: 'gpt-5.5',
+    notes: null,
+    artifacts: { type: 'ready', verdict: 'pass', prNumber: 806, queueState: 'merge-candidate' },
+  }, null, 2));
+
+  try {
+    const baseDeps = {
+      fetchGitHubTruth: async () => makeTruth(),
+      getCurrentHead: async () => 'head',
+    };
+
+    const first = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: WATCHDOG_CONFIG,
+      deps: {
+        ...baseDeps,
+        now: () => new Date('2030-05-05T11:16:00.000Z'),
+      },
+    });
+    assert.equal(first.findings.length, 1);
+    assert.equal(first.findings[0].classification, 'waiting-on-merge-lane');
+
+    const second = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: WATCHDOG_CONFIG,
+      deps: {
+        ...baseDeps,
+        now: () => new Date('2030-05-05T11:17:00.000Z'),
+      },
+    });
+    assert.equal(second.findings.length, 0);
+
+    const auditRows = readFileSync(path.join(stateDir, 'ready-watchdog.jsonl'), 'utf-8').trim().split('\n');
+    assert.equal(auditRows.length, 1);
+
+    const watchdogState = JSON.parse(readFileSync(path.join(stateDir, 'ready-watchdog-state.json'), 'utf-8')) as {
+      tasks: Record<string, ReadyWatchdogStateEntry>;
+    };
+    assert.match(watchdogState.tasks['HOK-2298_c'].detail, /16m/);
+    assert.equal(watchdogState.tasks['HOK-2298_c'].lastLoggedAt, '2030-05-05T11:16:00.000Z');
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('tick re-emits merge-lane findings after the relog interval', async () => {
+  const originalRelogSeconds = process.env.READY_WATCHDOG_RELOG_SECONDS;
+  process.env.READY_WATCHDOG_RELOG_SECONDS = '3600';
+  const { repoDir, stateDir, stateFile, featureDir } = setupReadyTask('HOK-2298', 805);
+  writeFileSync(path.join(featureDir, '.ready-result.json'), JSON.stringify({
+    stage: 'ready',
+    status: 'completed',
+    startedAt: '2030-05-05T11:00:00.000Z',
+    finishedAt: '2030-05-05T11:01:00.000Z',
+    agent: 'codex',
+    model: 'gpt-5.5',
+    notes: null,
+    artifacts: { type: 'ready', verdict: 'pass', prNumber: 805, queueState: 'ready-stale' },
+  }, null, 2));
+
+  try {
+    const baseDeps = {
+      fetchGitHubTruth: async () => makeTruth(),
+      getCurrentHead: async () => 'head',
+    };
+
+    const first = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: WATCHDOG_CONFIG,
+      deps: {
+        ...baseDeps,
+        now: () => new Date('2030-05-05T11:35:00.000Z'),
+      },
+    });
+    assert.equal(first.findings.length, 1);
+
+    const second = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: WATCHDOG_CONFIG,
+      deps: {
+        ...baseDeps,
+        now: () => new Date('2030-05-05T12:34:59.000Z'),
+      },
+    });
+    assert.equal(second.findings.length, 0);
+
+    const third = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: WATCHDOG_CONFIG,
+      deps: {
+        ...baseDeps,
+        now: () => new Date('2030-05-05T12:35:00.000Z'),
+      },
+    });
+    assert.equal(third.findings.length, 1);
+
+    const auditRows = readFileSync(path.join(stateDir, 'ready-watchdog.jsonl'), 'utf-8').trim().split('\n');
+    assert.equal(auditRows.length, 2);
+    const watchdogState = JSON.parse(readFileSync(path.join(stateDir, 'ready-watchdog-state.json'), 'utf-8')) as {
+      tasks: Record<string, ReadyWatchdogStateEntry>;
+    };
+    assert.equal(watchdogState.tasks['HOK-2298'].lastLoggedAt, '2030-05-05T12:35:00.000Z');
+  } finally {
+    if (originalRelogSeconds === undefined) {
+      delete process.env.READY_WATCHDOG_RELOG_SECONDS;
+    } else {
+      process.env.READY_WATCHDOG_RELOG_SECONDS = originalRelogSeconds;
+    }
+    await rm(repoDir, { recursive: true, force: true });
+  }
 });
 
 test('tick re-surfaces needs-user when detail changes', async () => {
