@@ -274,7 +274,7 @@ test('markJobSettled clears comparison running state on success', async () => {
   }
 });
 
-test('markJobSettled clears comparison running state on failure', async () => {
+test('markJobSettled sets manual_comparison_needed on failure', async () => {
   const { statePath, cleanup } = makeTempState();
   try {
     writeFileSync(statePath, JSON.stringify({
@@ -285,6 +285,7 @@ test('markJobSettled clears comparison running state on failure', async () => {
           comparisonRunning: {
             startedAt: new Date().toISOString(),
           },
+          comparisonState: 'comparison_running',
         },
         'PAIR-1_c': {
           challengePairId: 'PAIR-1',
@@ -292,6 +293,7 @@ test('markJobSettled clears comparison running state on failure', async () => {
           comparisonRunning: {
             startedAt: new Date().toISOString(),
           },
+          comparisonState: 'comparison_running',
         },
       },
       jobs: {
@@ -305,7 +307,7 @@ test('markJobSettled clears comparison running state on failure', async () => {
             prNumbers: [101, 102],
           }),
           status: 'failed',
-          reason: 'job_failed',
+          reason: 'Challenge comparison has no varied routing dimensions',
         },
       },
     }, null, 2));
@@ -316,6 +318,10 @@ test('markJobSettled clears comparison running state on failure', async () => {
     assert.equal(next.tasks['PAIR-1_c'].challengeCompared, false);
     assert.equal('comparisonRunning' in next.tasks['PAIR-1'], false);
     assert.equal('comparisonRunning' in next.tasks['PAIR-1_c'], false);
+    assert.equal(next.tasks['PAIR-1'].comparisonState, 'manual_comparison_needed');
+    assert.equal(next.tasks['PAIR-1_c'].comparisonState, 'manual_comparison_needed');
+    assert.equal(next.tasks['PAIR-1'].comparisonBlockedReason, 'Challenge comparison has no varied routing dimensions');
+    assert.equal(next.tasks['PAIR-1_c'].comparisonBlockedReason, 'Challenge comparison has no varied routing dimensions');
   } finally {
     cleanup();
   }

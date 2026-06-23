@@ -443,10 +443,13 @@ export async function markJobSettled({
       delete nextState.tasks?.[existing.issueId]?.evalRunning;
     } else if (existing.kind === 'comparison' && existing.pairId && nextState.tasks) {
       const tasks = { ...nextState.tasks };
+      const failureReason = existing.reason || 'comparison_failed';
       for (const [taskId, task] of Object.entries(tasks)) {
         if ((task.challengePairId as string | undefined) === existing.pairId) {
           tasks[taskId] = {
             ...task,
+            comparisonState: 'manual_comparison_needed',
+            comparisonBlockedReason: failureReason,
             comparisonRunning: undefined,
             updated: now.toISOString(),
           };
