@@ -5,6 +5,7 @@ import { isDeepSeekModel } from './deepseek-provider.ts';
 import { filterDisabledModels } from './disabled-models.ts';
 import { getEffectiveRegistry, getModel } from './model-registry.ts';
 import { resolveAgent } from './model-router.ts';
+import { listVariedRoutingDimensions, routingMetaFromChallengeEntry } from './challenge-comparison.ts';
 export { routeChangedMaterially } from './route-artifact.ts';
 import { routeChangedMaterially, type RouteArtifactSnapshot } from './route-artifact.ts';
 import { routeWorkflow, type WorkflowRouteDecision } from './workflow-router.ts';
@@ -50,6 +51,7 @@ export interface ChallengeStageWeights {
 }
 
 const CHALLENGE_STAGES: readonly ChallengeStage[] = ['plan', 'implementation', 'review'];
+const NO_VALID_CHALLENGE_DIVERGENCE_REASON = 'no_valid_challenge_divergence';
 
 /**
  * Choose which stage a challenge pair should vary.
@@ -189,6 +191,30 @@ function resolveChallengerModel(
   return chooseDistinctChallengerModel(pool, primaryModel, randomFn);
 }
 
+function chooseDistinctStageModel(
+  pool: string[],
+  primaryModel: string,
+  forced: string | undefined,
+  randomFn: () => number,
+): string | null {
+  const uniquePool = uniqueNonEmpty(pool);
+  const trimmedForced = forced?.trim();
+  if (trimmedForced && trimmedForced !== primaryModel && uniquePool.includes(trimmedForced)) {
+    return trimmedForced;
+  }
+
+  const candidates = uniquePool.filter((model) => model !== primaryModel);
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  if (trimmedForced && trimmedForced === primaryModel) {
+    return candidates[0] || null;
+  }
+
+  return resolveChallengerModel(uniquePool, primaryModel, undefined, randomFn);
+}
+
 export type ChallengeSelectionPath = 'recommendation-driven' | 'random-roll';
 
 export interface ChallengeLaunchDecision {
@@ -307,10 +333,17 @@ export function pickChallengeModels(
     return null;
   }
 
-  return {
-    ...buildChallengeEntries(opts, agentMap, defaultAgent, primaryModel, challengerModel),
-    challengeStage: 'implementation',
-  };
+  return finalizeChallengePair(
+    {
+      ...buildChallengeEntries(opts, agentMap, defaultAgent, primaryModel, challengerModel),
+      challengeStage: 'implementation',
+    },
+    uniquePool,
+    opts.forcedChallengerModel,
+    agentMap,
+    defaultAgent,
+    randomFn,
+  );
 }
 
 /**
@@ -402,6 +435,113 @@ function applyStageVariation(
   return { ...pair, challengeStage: stage };
 }
 
+function buildStageVariedPair(
+  pair: ChallengePairSelection,
+  stage: ChallengeStage,
+  challengerVaried: string,
+  agentMap: Record<string, string>,
+  defaultAgent: string,
+  repoDir?: string,
+): ChallengePairSelection {
+  const nextChallenger: ChallengeTaskEntry = {
+    ...pair.challenger,
+    model: pair.primary.model,
+    agent: pair.primary.agent,
+    planner: pair.primary.planner,
+    plannerAgent: pair.primary.plannerAgent,
+    reviewer: pair.primary.reviewer,
+    reviewerAgent: pair.primary.reviewerAgent,
+  };
+
+  if (stage === 'implementation') {
+    nextChallenger.model = challengerVaried;
+    nextChallenger.agent = resolveAgent(challengerVaried, agentMap, defaultAgent, repoDir);
+    return {
+      ...pair,
+      challengeStage: stage,
+      challenger: nextChallenger,
+    };
+  }
+
+  return applyStageVariation(
+    {
+      ...pair,
+      challengeStage: stage,
+      challenger: nextChallenger,
+    },
+    stage,
+    challengerVaried,
+    agentMap,
+    defaultAgent,
+    repoDir,
+  );
+}
+
+function candidateStages(pair: ChallengePairSelection): ChallengeStage[] {
+  const preferred = pair.challengeStage || 'implementation';
+  return [...new Set([preferred, 'implementation', 'plan', 'review'])];
+}
+
+function primaryVariedModelForStage(pair: ChallengePairSelection, stage: ChallengeStage): string {
+  if (stage === 'plan') {
+    return pair.primary.planner.trim();
+  }
+  if (stage === 'review') {
+    return pair.primary.reviewer.trim();
+  }
+  return pair.primary.model.trim();
+}
+
+function finalizeChallengePair(
+  pair: ChallengePairSelection,
+  pool: string[],
+  forcedChallengerModel: string | undefined,
+  agentMap: Record<string, string>,
+  defaultAgent: string,
+  randomFn: () => number,
+  repoDir?: string,
+): ChallengePairSelection | null {
+  if (
+    listVariedRoutingDimensions(
+      routingMetaFromChallengeEntry(pair.primary),
+      routingMetaFromChallengeEntry(pair.challenger),
+    ).length > 0
+  ) {
+    return pair;
+  }
+
+  for (const stage of candidateStages(pair)) {
+    const primaryVaried = primaryVariedModelForStage(pair, stage);
+    if (!primaryVaried) {
+      continue;
+    }
+
+    const challengerVaried = chooseDistinctStageModel(pool, primaryVaried, forcedChallengerModel, randomFn);
+    if (!challengerVaried) {
+      continue;
+    }
+
+    const repaired = buildStageVariedPair(
+      pair,
+      stage,
+      challengerVaried,
+      agentMap,
+      defaultAgent,
+      repoDir,
+    );
+    if (
+      listVariedRoutingDimensions(
+        routingMetaFromChallengeEntry(repaired.primary),
+        routingMetaFromChallengeEntry(repaired.challenger),
+      ).length > 0
+    ) {
+      return repaired;
+    }
+  }
+
+  return null;
+}
+
 export function pickChallengeWorkflows(
   pool: string[],
   opts: {
@@ -468,42 +608,50 @@ export function pickChallengeWorkflows(
   const primarySlug = deriveChallengeSlug(opts.slug, 'primary');
   const challengerSlug = deriveChallengeSlug(opts.slug, 'challenger');
 
-  return {
-    pairId: opts.pairId,
-    challengeStage: stage,
-    primary: {
-      key: opts.issueId,
-      issueId: opts.issueId,
-      slug: primarySlug,
-      branch: deriveChallengeBranch(opts.slug, 'primary'),
-      role: 'primary',
-      model: primaryModel,
-      agent: resolveAgent(primaryModel, agentMap, defaultAgent),
-      planner: routing.planner,
-      plannerAgent: resolveAgent(routing.planner, agentMap, defaultAgent),
-      reviewer: routing.reviewer,
-      reviewerAgent: resolveAgent(routing.reviewer, agentMap, defaultAgent),
-      planDepth: routing.planDepth,
-      codeDepth: routing.codeDepth,
-      reviewMode: routing.reviewRecommended,
+  return finalizeChallengePair(
+    {
+      pairId: opts.pairId,
+      challengeStage: stage,
+      primary: {
+        key: opts.issueId,
+        issueId: opts.issueId,
+        slug: primarySlug,
+        branch: deriveChallengeBranch(opts.slug, 'primary'),
+        role: 'primary',
+        model: primaryModel,
+        agent: resolveAgent(primaryModel, agentMap, defaultAgent),
+        planner: routing.planner,
+        plannerAgent: resolveAgent(routing.planner, agentMap, defaultAgent),
+        reviewer: routing.reviewer,
+        reviewerAgent: resolveAgent(routing.reviewer, agentMap, defaultAgent),
+        planDepth: routing.planDepth,
+        codeDepth: routing.codeDepth,
+        reviewMode: routing.reviewRecommended,
+      },
+      challenger: {
+        key: deriveChallengerKey(opts.issueId),
+        issueId: opts.issueId,
+        slug: challengerSlug,
+        branch: deriveChallengeBranch(opts.slug, 'challenger'),
+        role: 'challenger',
+        model: challengerCoder,
+        agent: resolveAgent(challengerCoder, agentMap, defaultAgent),
+        planner: challengerPlanner,
+        plannerAgent: resolveAgent(challengerPlanner, agentMap, defaultAgent),
+        reviewer: challengerReviewer,
+        reviewerAgent: resolveAgent(challengerReviewer, agentMap, defaultAgent),
+        planDepth: routing.planDepth,
+        codeDepth: routing.codeDepth,
+        reviewMode: routing.reviewRecommended,
+      },
     },
-    challenger: {
-      key: deriveChallengerKey(opts.issueId),
-      issueId: opts.issueId,
-      slug: challengerSlug,
-      branch: deriveChallengeBranch(opts.slug, 'challenger'),
-      role: 'challenger',
-      model: challengerCoder,
-      agent: resolveAgent(challengerCoder, agentMap, defaultAgent),
-      planner: challengerPlanner,
-      plannerAgent: resolveAgent(challengerPlanner, agentMap, defaultAgent),
-      reviewer: challengerReviewer,
-      reviewerAgent: resolveAgent(challengerReviewer, agentMap, defaultAgent),
-      planDepth: routing.planDepth,
-      codeDepth: routing.codeDepth,
-      reviewMode: routing.reviewRecommended,
-    },
-  };
+    uniquePool,
+    opts.forcedChallengerModel,
+    agentMap,
+    defaultAgent,
+    randomFn,
+    opts.repoDir,
+  );
 }
 
 function resolveOptionalAgent(
@@ -596,7 +744,15 @@ function buildPairFromRouteSnapshot(
       return null;
     }
 
-    return applyRouteSnapshot(pair, route, agentMap, defaultAgent, opts.repoDir, fallback);
+    return finalizeChallengePair(
+      applyRouteSnapshot(pair, route, agentMap, defaultAgent, opts.repoDir, fallback),
+      pool,
+      opts.forcedChallengerModel,
+      agentMap,
+      defaultAgent,
+      opts.randomFn || Math.random,
+      opts.repoDir,
+    );
   }
 
   const challengerVaried = resolveChallengerModel(
@@ -619,7 +775,15 @@ function buildPairFromRouteSnapshot(
     opts.repoDir,
     fallback,
   );
-  return applyStageVariation(pair, stage, challengerVaried, agentMap, defaultAgent, opts.repoDir);
+  return finalizeChallengePair(
+    applyStageVariation(pair, stage, challengerVaried, agentMap, defaultAgent, opts.repoDir),
+    pool,
+    opts.forcedChallengerModel,
+    agentMap,
+    defaultAgent,
+    opts.randomFn || Math.random,
+    opts.repoDir,
+  );
 }
 
 export function pickChallengeWorkflowsWithContext(
@@ -715,4 +879,8 @@ export function pickChallengeWorkflowsWithContext(
       refreshRationale: 'expanded route matches bootstrap on coder class/depth',
     },
   };
+}
+
+export function getNoValidChallengeDivergenceReason(): string {
+  return NO_VALID_CHALLENGE_DIVERGENCE_REASON;
 }

@@ -945,6 +945,90 @@ test('pickChallengeWorkflowsWithContext keeps coder variation by default', () =>
   assert.equal(pair!.primary.reviewer, pair!.challenger.reviewer);
 });
 
+test('pickChallengeWorkflows repairs a forced review challenger that matches the primary reviewer', () => {
+  const pair = pickChallengeWorkflows(
+    ['gpt-5.4', 'claude-opus-4-7', 'claude-sonnet-4-6'],
+    {
+      pairId: 'HOK-2301-A',
+      issueId: 'HOK-2301-A',
+      slug: 'repair-review-stage',
+      prompt: 'irrelevant',
+      primaryModel: 'gpt-5.4',
+      challengeStage: 'review',
+      forcedChallengerModel: 'claude-opus-4-7',
+      randomFn: () => 0,
+      routeFn: () => ({
+        planner: 'claude-opus-4-7',
+        coder: 'gpt-5.4',
+        reviewer: 'claude-opus-4-7',
+        planDepth: 'medium',
+        codeDepth: 'medium',
+        reviewRecommended: 'llm',
+        expectedSuccess: 0.9,
+        expectedCostPlan: 1,
+        expectedCostCode: 1,
+        expectedCostReview: 1,
+        reasoning: [],
+        signals: {},
+      }),
+    },
+  );
+
+  assert.ok(pair);
+  assert.equal(pair!.challengeStage, 'review');
+  assert.equal(pair!.primary.reviewer, 'claude-opus-4-7');
+  assert.notEqual(pair!.challenger.reviewer, pair!.primary.reviewer);
+  assert.equal(pair!.challenger.reviewer, 'gpt-5.4');
+});
+
+test('pickChallengeModels returns null when no routing divergence can be created', () => {
+  const pair = pickChallengeModels(
+    ['claude-opus-4-7'],
+    {
+      pairId: 'HOK-2301-B',
+      issueId: 'HOK-2301-B',
+      slug: 'no-divergence',
+      primaryModel: 'claude-opus-4-7',
+      forcedChallengerModel: 'claude-opus-4-7',
+      randomFn: () => 0,
+    },
+  );
+
+  assert.equal(pair, null);
+});
+
+test('pickChallengeWorkflowsWithContext preserves route context while repairing identical review dimensions', () => {
+  const expanded: RouteArtifactSnapshot = {
+    planner: 'claude-opus-4-7',
+    coder: 'gpt-5.4',
+    reviewer: 'claude-opus-4-7',
+    planDepth: 'medium',
+    codeDepth: 'medium',
+    reviewMode: 'llm',
+  };
+
+  const pair = pickChallengeWorkflowsWithContext(
+    ['gpt-5.4', 'claude-opus-4-7', 'claude-sonnet-4-6'],
+    {
+      pairId: 'HOK-2301-C',
+      issueId: 'HOK-2301-C',
+      slug: 'context-repair',
+      prompt: 'irrelevant',
+      challengeStage: 'review',
+      forcedChallengerModel: 'claude-opus-4-7',
+      randomFn: () => 0,
+    },
+    { bootstrap: null, expanded },
+  );
+
+  assert.ok(pair);
+  assert.equal(pair!.routeContext.decisionSource, 'expanded');
+  assert.equal(pair!.primary.reviewer, 'claude-opus-4-7');
+  assert.notEqual(pair!.challenger.reviewer, pair!.primary.reviewer);
+  assert.equal(pair!.challenger.codeDepth, 'medium');
+  assert.equal(pair!.challenger.reviewMode, 'llm');
+});
+
 
 process.on('exit', () => {
   console.log(`\nPassed: ${passed}`);

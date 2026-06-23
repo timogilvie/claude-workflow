@@ -11,6 +11,7 @@ import {
   chooseChallengeStage,
   decideChallengeLaunch,
   extractChallengeRecommendation,
+  getNoValidChallengeDivergenceReason,
   variedModelForStage,
 } from '../shared/lib/challenge-mode.ts';
 import { resolveAgent } from '../shared/lib/model-router.ts';
@@ -186,7 +187,7 @@ runTool({
     }
 
     if (!pair) {
-      console.log(JSON.stringify({ ...base, reason: 'selection_failed' }));
+      console.log(JSON.stringify({ ...base, reason: getNoValidChallengeDivergenceReason() }));
       return;
     }
 
