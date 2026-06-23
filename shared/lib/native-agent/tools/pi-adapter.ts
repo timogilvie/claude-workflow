@@ -7,6 +7,10 @@ import type { AgentTool, AgentToolResult } from '@earendil-works/pi-agent-core';
 import type { TSchema } from 'typebox';
 import type { ToolDescriptor } from './types.ts';
 
+// Re-export Pi tool types through the adapter seam so callers (e.g. smoke
+// harnesses) that build Pi tools can stay free of direct Pi vendor imports.
+export type { AgentTool, AgentToolResult } from '@earendil-works/pi-agent-core';
+
 /**
  * Convert a Wavemill ToolDescriptor into a Pi AgentTool.
  *

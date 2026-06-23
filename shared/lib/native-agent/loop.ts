@@ -12,6 +12,10 @@ import {
 } from '@earendil-works/pi-agent-core';
 import type { AgentEvent } from '@earendil-works/pi-agent-core';
 import type { AssistantMessage, Model } from '@earendil-works/pi-ai';
+
+// Re-export the Pi agent context type through the loop seam so loop callers can
+// construct an AgentContext without importing Pi vendor packages directly.
+export type { AgentContext } from '@earendil-works/pi-agent-core';
 import { computeModelCost, type ModelPricing } from '../workflow-cost.ts';
 import {
   transformContext,

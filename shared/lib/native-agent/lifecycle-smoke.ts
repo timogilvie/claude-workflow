@@ -17,14 +17,13 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { AgentContext, AgentTool, AgentToolResult } from '@earendil-works/pi-agent-core';
-import type { Message, TextContent } from '@earendil-works/pi-ai';
 import { registerScriptedPiProvider, type ScriptedPiProviderTurn } from './provider.ts';
-import { runWavemillLoop, type WavemillLoopConfig } from './loop.ts';
+import { runWavemillLoop, type WavemillLoopConfig, type AgentContext } from './loop.ts';
 import { TranscriptWriter } from './transcript.ts';
+import type { Message, TextContent } from './messages.ts';
 import { gitAfterToolCall, createGitTools } from './tools/git.ts';
 import { createReadOnlyTools, READ_ONLY_PATH_FIELDS } from './tools/read-only.ts';
-import { toPiAgentTool } from './tools/pi-adapter.ts';
+import { toPiAgentTool, type AgentTool, type AgentToolResult } from './tools/pi-adapter.ts';
 import { createToolRegistry } from './tools/registry.ts';
 import type { ToolDescriptor } from './tools/types.ts';
 
