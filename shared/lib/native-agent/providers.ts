@@ -1,0 +1,277 @@
+import {
+  getNativeAgentConfig,
+  type NativeAgentConfig,
+  type NativeAgentProviderConfig,
+  type NativeAgentProviderName,
+} from '../config.ts';
+import { resolveEnvValue } from '../env-file.ts';
+import {
+  buildPiModel,
+  getRegisteredPiProviderForModel,
+  type PiModel,
+} from './tools/pi-adapter.ts';
+export { getRegisteredPiProviderForModel } from './tools/pi-adapter.ts';
+
+export const OPENAI_NATIVE_PROVIDER = 'openai' as const;
+export const OPENROUTER_NATIVE_PROVIDER = 'openrouter' as const;
+
+export const OPENAI_DEFAULT_API_KEY_ENV = 'OPENAI_API_KEY';
+export const OPENROUTER_DEFAULT_API_KEY_ENV = 'OPENROUTER_API_KEY';
+
+export const OPENAI_DEFAULT_BASE_URL = 'https://api.openai.com/v1';
+export const OPENROUTER_DEFAULT_BASE_URL = 'https://openrouter.ai/api/v1';
+
+export const OPENAI_DEFAULT_MODELS = ['gpt-4o'] as const;
+export const OPENROUTER_DEFAULT_MODELS = ['openai/gpt-4o-mini'] as const;
+
+export type NativeProviderStatus = 'ready' | 'unavailable' | 'skipped';
+
+export interface NativeProviderEntryBase {
+  providerName: NativeAgentProviderName;
+  modelId: string;
+  status: NativeProviderStatus;
+  apiKeyEnv: string;
+  baseUrl: string;
+  headers: Record<string, string>;
+}
+
+export interface ReadyNativeProviderEntry extends NativeProviderEntryBase {
+  status: 'ready';
+  model: PiModel;
+}
+
+export interface UnavailableNativeProviderEntry extends NativeProviderEntryBase {
+  status: 'unavailable';
+  reason: string;
+}
+
+export interface SkippedNativeProviderEntry extends NativeProviderEntryBase {
+  status: 'skipped';
+  reason: string;
+}
+
+export type ResolvedNativeProviderEntry =
+  | ReadyNativeProviderEntry
+  | UnavailableNativeProviderEntry
+  | SkippedNativeProviderEntry;
+
+export interface ResolveNativeAgentProvidersOptions {
+  env?: Record<string, string | undefined>;
+  repoDir?: string;
+}
+
+const DEFAULT_PROVIDER_ORDER: readonly NativeAgentProviderName[] = [
+  OPENAI_NATIVE_PROVIDER,
+  OPENROUTER_NATIVE_PROVIDER,
+] as const;
+
+const READY_ENTRY_API_KEY = Symbol('ready-native-provider-api-key');
+
+export function resolveNativeAgentProviders(
+  configOrRepoDir?: NativeAgentConfig | string,
+  options: ResolveNativeAgentProvidersOptions = {},
+): ResolvedNativeProviderEntry[] {
+  const { config, repoDir } = resolveConfigSource(configOrRepoDir, options.repoDir);
+  const providers = config.providers ?? {};
+  const resolved: ResolvedNativeProviderEntry[] = [];
+
+  for (const providerName of DEFAULT_PROVIDER_ORDER) {
+    const providerConfig = providers[providerName];
+    if (!providerConfig) {
+      continue;
+    }
+
+    const apiKeyEnv = normalizeApiKeyEnv(providerName, providerConfig.apiKeyEnv);
+    const baseUrl = normalizeBaseUrl(providerName, providerConfig.baseUrl);
+    const headers = normalizeHeaders(providerConfig.headers);
+    const modelIds = normalizeModels(providerName, providerConfig.models);
+
+    if (providerConfig.enabled === false) {
+      for (const modelId of modelIds) {
+        resolved.push({
+          providerName,
+          modelId,
+          status: 'skipped',
+          apiKeyEnv,
+          baseUrl,
+          headers,
+          reason: `nativeAgent.providers.${providerName}.enabled is false`,
+        });
+      }
+      continue;
+    }
+
+    const apiKey = resolveApiKeyValue(apiKeyEnv, repoDir, options.env);
+    if (!apiKey) {
+      for (const modelId of modelIds) {
+        resolved.push({
+          providerName,
+          modelId,
+          status: 'unavailable',
+          apiKeyEnv,
+          baseUrl,
+          headers,
+          reason: `${apiKeyEnv} is not set`,
+        });
+      }
+      continue;
+    }
+
+    for (const modelId of modelIds) {
+      const readyEntry: ReadyNativeProviderEntry = {
+        providerName,
+        modelId,
+        status: 'ready',
+        apiKeyEnv,
+        baseUrl,
+        headers,
+        model: providerName === OPENAI_NATIVE_PROVIDER
+          ? buildOpenAiResponsesModel({ modelId, baseUrl, headers })
+          : buildOpenRouterModel({ modelId, baseUrl, headers }),
+      };
+      attachApiKey(readyEntry, apiKey);
+      resolved.push(readyEntry);
+    }
+  }
+
+  return resolved;
+}
+
+export function getNativeProviderApiKey(entry: ReadyNativeProviderEntry): string | undefined {
+  return (entry as ReadyNativeProviderEntry & { [READY_ENTRY_API_KEY]?: string })[READY_ENTRY_API_KEY];
+}
+
+export function buildOpenAiResponsesModel({
+  modelId,
+  baseUrl = OPENAI_DEFAULT_BASE_URL,
+  headers = {},
+}: {
+  modelId: string;
+  baseUrl?: string;
+  headers?: Record<string, string>;
+}): PiModel {
+  return buildPiModel({
+    id: `${OPENAI_NATIVE_PROVIDER}:${modelId}`,
+    name: modelId,
+    api: 'openai-responses',
+    provider: OPENAI_NATIVE_PROVIDER,
+    baseUrl,
+    headers,
+  });
+}
+
+export function buildOpenRouterModel({
+  modelId,
+  baseUrl = OPENROUTER_DEFAULT_BASE_URL,
+  headers = {},
+}: {
+  modelId: string;
+  baseUrl?: string;
+  headers?: Record<string, string>;
+}): PiModel {
+  return buildPiModel({
+    id: `${OPENROUTER_NATIVE_PROVIDER}:${modelId}`,
+    name: modelId,
+    api: 'openai-completions',
+    provider: OPENROUTER_NATIVE_PROVIDER,
+    baseUrl,
+    headers,
+    compat: {
+      thinkingFormat: 'openrouter',
+    },
+  });
+}
+
+function resolveConfigSource(
+  configOrRepoDir: NativeAgentConfig | string | undefined,
+  repoDir: string | undefined,
+): { config: NativeAgentConfig; repoDir: string | undefined } {
+  if (typeof configOrRepoDir === 'string' || configOrRepoDir === undefined) {
+    const effectiveRepoDir = configOrRepoDir ?? repoDir;
+    return {
+      config: getNativeAgentConfig(effectiveRepoDir),
+      repoDir: effectiveRepoDir,
+    };
+  }
+
+  return { config: configOrRepoDir, repoDir };
+}
+
+function normalizeApiKeyEnv(
+  providerName: NativeAgentProviderName,
+  apiKeyEnv: string | undefined,
+): string {
+  const normalized = apiKeyEnv?.trim();
+  if (normalized) {
+    return normalized;
+  }
+
+  return providerName === OPENAI_NATIVE_PROVIDER
+    ? OPENAI_DEFAULT_API_KEY_ENV
+    : OPENROUTER_DEFAULT_API_KEY_ENV;
+}
+
+function normalizeBaseUrl(
+  providerName: NativeAgentProviderName,
+  baseUrl: string | undefined,
+): string {
+  const normalized = baseUrl?.trim();
+  if (normalized) {
+    return normalized;
+  }
+
+  return providerName === OPENAI_NATIVE_PROVIDER
+    ? OPENAI_DEFAULT_BASE_URL
+    : OPENROUTER_DEFAULT_BASE_URL;
+}
+
+function normalizeModels(
+  providerName: NativeAgentProviderName,
+  models: string[] | undefined,
+): string[] {
+  const candidates = models && models.length > 0
+    ? models
+    : providerName === OPENAI_NATIVE_PROVIDER
+      ? [...OPENAI_DEFAULT_MODELS]
+      : [...OPENROUTER_DEFAULT_MODELS];
+
+  return [...new Set(
+    candidates
+      .map((modelId) => modelId.trim())
+      .filter((modelId) => modelId.length > 0),
+  )];
+}
+
+function normalizeHeaders(headers: NativeAgentProviderConfig['headers']): Record<string, string> {
+  if (!headers) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(headers)
+      .map(([name, value]) => [name.trim(), value])
+      .filter(([name]) => name.length > 0),
+  );
+}
+
+function resolveApiKeyValue(
+  apiKeyEnv: string,
+  repoDir: string | undefined,
+  env: Record<string, string | undefined> | undefined,
+): string | undefined {
+  const inlineValue = env?.[apiKeyEnv]?.trim();
+  if (inlineValue) {
+    return inlineValue;
+  }
+
+  return resolveEnvValue([apiKeyEnv], repoDir);
+}
+
+function attachApiKey(entry: ReadyNativeProviderEntry, apiKey: string): void {
+  Object.defineProperty(entry, READY_ENTRY_API_KEY, {
+    value: apiKey,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  });
+}
