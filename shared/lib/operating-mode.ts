@@ -1,7 +1,7 @@
 import type { ModelClass } from './model-registry.ts';
 import { getAvailableModelsForStage, getRouterConfig } from './config.ts';
 import { filterDeepSeekModels } from './deepseek-provider.ts';
-import { getEffectiveRegistry } from './model-registry.ts';
+import { getEffectiveRegistry, isModelEnabled } from './model-registry.ts';
 import type { QuotaSnapshot, QuotaStatus, VendorQuotaStats } from './quota-state.ts';
 import { getVendorQuotaBreakdown, readQuotaSnapshot } from './quota-state.ts';
 
@@ -67,6 +67,9 @@ export function getOperatingModeResult(repoDir?: string): OperatingModeResult {
   const routerConfig = getRouterConfig(repoDir);
   const activeModelIds = new Set<string>();
   for (const [modelId, capabilities] of Object.entries(registry.models)) {
+    if (!isModelEnabled(capabilities)) {
+      continue;
+    }
     if (capabilities.defaultLadderEligible !== false) {
       activeModelIds.add(modelId);
     }
@@ -83,6 +86,7 @@ export function getOperatingModeResult(repoDir?: string): OperatingModeResult {
   }
   const unfilteredFrontierModels = Object.entries(registry.models)
     .filter(([modelId]) => activeModelIds.has(modelId))
+    .filter(([, capabilities]) => isModelEnabled(capabilities))
     .filter(([, capabilities]) => capabilities.class === PREMIUM_MODEL_CLASS)
     .map(([modelId, capabilities]) => ({ modelId, vendor: capabilities.vendor }));
   const allowedModelIds = new Set(filterDeepSeekModels(

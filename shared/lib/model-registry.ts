@@ -877,7 +877,8 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       vendor: 'anthropic',
       class: 'frontier',
       strengths: ['frontier reasoning', 'long-horizon agentic work', 'code review', 'architecture'],
-      weaknesses: ['highest cost', 'slower', 'minutes-long turns on hard tasks'],
+      weaknesses: ['highest cost', 'slower', 'minutes-long turns on hard tasks', 'temporarily unavailable upstream'],
+      disabled: true,
       // Seed dates are approximate; override via modelRegistry config if exact
       // launch dates matter for the recency boost window.
       releasedAt: '2026-06-10',
