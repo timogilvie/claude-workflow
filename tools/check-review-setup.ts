@@ -13,7 +13,7 @@
  */
 
 import { runTool } from '../shared/lib/tool-runner.ts';
-import { checkClaudeAvailability } from '../shared/lib/llm-cli.ts';
+import { checkClaudeAvailability, checkCodexAvailability } from '../shared/lib/llm-cli.ts';
 import { execShellCommand } from '../shared/lib/shell-utils.ts';
 import { GREEN, RED, NC } from '../shared/lib/colors.ts';
 
@@ -27,7 +27,7 @@ interface CheckResult {
 /**
  * Check Claude CLI availability
  */
-async function checkCLI(): Promise<CheckResult> {
+async function checkClaudeCLI(): Promise<CheckResult> {
   try {
     const health = await checkClaudeAvailability({ verbose: false });
 
@@ -59,6 +59,47 @@ async function checkCLI(): Promise<CheckResult> {
   } catch (error) {
     return {
       name: 'Claude CLI',
+      passed: false,
+      message: `Check failed: ${(error as Error).message}`,
+    };
+  }
+}
+
+/**
+ * Check Codex CLI availability
+ */
+async function checkCodexCLI(): Promise<CheckResult> {
+  try {
+    const health = await checkCodexAvailability({ verbose: false });
+
+    if (health.available) {
+      return {
+        name: 'Codex CLI',
+        passed: true,
+        message: `Available (${health.version || 'version unknown'})`,
+        details: [
+          `Command: ${health.command}`,
+          `In PATH: ${health.diagnostics?.inPath ? 'Yes' : 'No'}`,
+          `Executable: ${health.diagnostics?.executable ? 'Yes' : 'No'}`,
+          `Auth working: ${health.diagnostics?.authWorking ? 'Yes' : 'No'}`,
+        ],
+      };
+    } else {
+      return {
+        name: 'Codex CLI',
+        passed: false,
+        message: health.error || 'Not available',
+        details: [
+          `Command: ${health.command}`,
+          `In PATH: ${health.diagnostics?.inPath ? 'Yes' : 'No'}`,
+          `Executable: ${health.diagnostics?.executable ? 'Yes' : 'No'}`,
+          'See troubleshooting steps below',
+        ],
+      };
+    }
+  } catch (error) {
+    return {
+      name: 'Codex CLI',
       passed: false,
       message: `Check failed: ${(error as Error).message}`,
     };
@@ -219,7 +260,7 @@ function printTroubleshooting(results: CheckResult[]): void {
   console.log('Troubleshooting');
   console.log('─'.repeat(60));
 
-  // CLI check failed
+  // Claude CLI check failed
   const cliFailed = failedChecks.find(r => r.name === 'Claude CLI');
   if (cliFailed) {
     console.log('\nClaude CLI is not available:');
@@ -229,7 +270,18 @@ function printTroubleshooting(results: CheckResult[]): void {
     console.log('  4. Verify: which claude');
   }
 
+  // Codex CLI check failed
+  const codexFailed = failedChecks.find(r => r.name === 'Codex CLI');
+  if (codexFailed) {
+    console.log('\nCodex CLI is not available:');
+    console.log('  1. Install: brew install codex (or npm install -g @openai/codex)');
+    console.log('  2. Authenticate: codex login');
+    console.log('  3. Test: echo "hello" | codex exec --json --sandbox read-only');
+    console.log('  4. Verify: which codex');
+  }
+
   // Network check failed
+  // Note: network check probes api.anthropic.com (Claude provider); Codex auth is local CLI state, not an outbound probe.
   const networkFailed = failedChecks.find(r => r.name === 'Network Connectivity');
   if (networkFailed) {
     console.log('\nNetwork connectivity issues:');
@@ -272,7 +324,8 @@ runTool({
     // Run all checks
     results.push(await checkGit());
     results.push(await checkGitRepo());
-    results.push(await checkCLI());
+    results.push(await checkClaudeCLI());
+    results.push(await checkCodexCLI());
     results.push(await checkNetwork());
 
     // Print results
