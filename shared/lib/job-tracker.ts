@@ -37,6 +37,9 @@ export interface JobResultFile {
     winner?: 'primary' | 'challenger';
     winnerModel?: string;
     rationale?: string;
+    comparisonOutcome?: 'compared' | 'skipped';
+    skipReason?: 'identical-routing-dimensions';
+    cleanupPolicy?: 'primary-wins-close-challenger';
     primaryModel?: string;
     challengerModel?: string;
     primaryPrUrl?: string;
@@ -443,14 +446,27 @@ export async function markJobSettled({
       delete nextState.tasks?.[existing.issueId]?.evalRunning;
     } else if (existing.kind === 'comparison' && existing.pairId && nextState.tasks) {
       const tasks = { ...nextState.tasks };
+      const comparisonBlockedReason = existing.reason || existing.error || 'job_failed';
       for (const [taskId, task] of Object.entries(tasks)) {
         if ((task.challengePairId as string | undefined) === existing.pairId) {
           tasks[taskId] = {
             ...task,
+            comparisonState: 'manual_comparison_needed',
+            comparisonBlockedReason,
             comparisonRunning: undefined,
+            comparisonRetryCount: undefined,
+            comparisonRetryMaxAttempts: undefined,
+            comparisonRetryTargetIssue: undefined,
+            comparisonTimedOutSides: undefined,
+            manualComparisonArtifact: undefined,
             updated: now.toISOString(),
           };
           delete tasks[taskId].comparisonRunning;
+          delete tasks[taskId].comparisonRetryCount;
+          delete tasks[taskId].comparisonRetryMaxAttempts;
+          delete tasks[taskId].comparisonRetryTargetIssue;
+          delete tasks[taskId].comparisonTimedOutSides;
+          delete tasks[taskId].manualComparisonArtifact;
         }
       }
       nextState = {

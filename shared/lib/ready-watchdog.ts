@@ -141,6 +141,10 @@ export interface ReadyWatchdogStateEntry {
   consecutiveFailurePolls?: number;
   failingChecksFingerprint?: string;
   failingChecksObservedCount?: number;
+  lastLoggedAt?: string;
+  lastLoggedFingerprint?: string;
+  lastLoggedClassification?: Exclude<ReadyWatchdogClassificationKind, 'fresh'>;
+  lastLoggedAction?: string;
 }
 
 export interface ReadyWatchdogStateFile {
@@ -690,6 +694,98 @@ function normalizeDetailFingerprint(detail: string): string {
   return detail.trim().replace(/\s+/g, ' ');
 }
 
+/** Stable fingerprint for watchdog entries that ignores volatile idle-minute counts in merge-lane details. */
+function buildReadyWatchdogFingerprint(input: {
+  classification: Exclude<ReadyWatchdogClassificationKind, 'fresh'>;
+  detail: string;
+}): string {
+  // Strip volatile "idle Nm" and "waited Nm" tokens from merge-lane details so
+  // the fingerprint stays stable across ticks that only differ in elapsed minutes.
+  if (
+    input.classification === 'waiting-on-merge-lane' ||
+    (input.classification === 'needs-user' && /\b(?:idle|waited)\s+\d+m\b/i.test(input.detail))
+  ) {
+    return normalizeDetailFingerprint(
+      input.detail
+        .replace(/\bidle\s+\d+m\b/gi, 'idle Xm')
+        .replace(/\bwaited\s+\d+m\b/gi, 'waited Xm'),
+    );
+  }
+  return normalizeDetailFingerprint(input.detail);
+}
+
+function getReportIntervalSeconds(): number {
+  const DEFAULT = 3600;
+  const raw = process.env.WAVEMILL_READY_WATCHDOG_REPORT_INTERVAL_SECONDS;
+  if (!raw) {
+    return DEFAULT;
+  }
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    return DEFAULT;
+  }
+  return parsed;
+}
+
+/**
+ * Determines whether a watchdog finding should be emitted (logged to the control
+ * pane and appended to the audit JSONL). Separates "is the state materially
+ * different from the last logged entry" from "has time elapsed enough to remind".
+ *
+ * Suppression rule: when classification, action, and stable fingerprint all match
+ * the last logged entry AND action is "reported", suppress until the report
+ * interval has elapsed.
+ */
+function shouldEmitReadyWatchdogFinding(
+  prior: ReadyWatchdogStateEntry | undefined,
+  next: ReadyWatchdogStateEntry,
+  now: Date,
+  reportIntervalSeconds: number,
+): boolean {
+  // No prior logged record (first ever tick or old state file without lastLogged* fields).
+  if (!prior || !prior.lastLoggedAt) {
+    return true;
+  }
+
+  // Classification changed since last logged entry.
+  if (prior.lastLoggedClassification !== next.classification) {
+    return true;
+  }
+
+  // Action changed since last logged entry.
+  if (prior.lastLoggedAction !== next.action) {
+    return true;
+  }
+
+  // Stable fingerprint changed since last logged entry.
+  if (prior.lastLoggedFingerprint !== next.detailFingerprint) {
+    return true;
+  }
+
+  // Other material changes from non-volatile structured fields.
+  if (prior.prStateKey !== next.prStateKey) return true;
+  if (prior.autoUpdateAttempts !== next.autoUpdateAttempts) return true;
+  if (prior.lastAutoUpdateError !== next.lastAutoUpdateError) return true;
+  if (prior.consecutiveFailurePolls !== next.consecutiveFailurePolls) return true;
+  if (prior.recoveryCommand !== next.recoveryCommand) return true;
+  if (JSON.stringify(prior.remediationCategories ?? []) !== JSON.stringify(next.remediationCategories ?? [])) return true;
+  if (prior.failingChecksFingerprint !== next.failingChecksFingerprint) return true;
+  if (prior.failingChecksObservedCount !== next.failingChecksObservedCount) return true;
+
+  // Same classification/action/fingerprint: rate-limit repeated "reported" findings.
+  if (next.action === 'reported') {
+    const lastLoggedDate = parseIsoDate(prior.lastLoggedAt);
+    if (!lastLoggedDate) {
+      return true; // unparseable timestamp — emit to be safe
+    }
+    const elapsedSeconds = (now.getTime() - lastLoggedDate.getTime()) / 1000;
+    return elapsedSeconds >= reportIntervalSeconds;
+  }
+
+  // No material change and not a rate-limited action: suppress.
+  return false;
+}
+
 function makeRecoveryCommand(repoDir: string, stateFile: string, issueId: string, readyWatchdogToolPath: string): string {
   return [
     'npx',
@@ -1123,7 +1219,7 @@ function buildFindingEntry(input: {
     idleMinutes: input.snapshot.idleMinutes,
     lastProgressAt: input.snapshot.lastProgressAt,
     prStateKey: buildPrStateKey(input.githubTruth ?? null),
-    detailFingerprint: normalizeDetailFingerprint(input.detail),
+    detailFingerprint: buildReadyWatchdogFingerprint({ classification: input.classification, detail: input.detail }),
     autoUpdateAttempts: input.autoUpdateAttempts,
     lastAutoUpdateError: input.lastAutoUpdateError,
     lastReportedAction: input.action,
@@ -1444,8 +1540,15 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
       continue;
     }
 
-    nextTasks[issueId] = entry;
-    if (materiallyChanged(prior, entry)) {
+    const reportIntervalSeconds = getReportIntervalSeconds();
+    if (shouldEmitReadyWatchdogFinding(prior, entry, now, reportIntervalSeconds)) {
+      entry = {
+        ...entry,
+        lastLoggedAt: now.toISOString(),
+        lastLoggedFingerprint: entry.detailFingerprint,
+        lastLoggedClassification: entry.classification,
+        lastLoggedAction: entry.action,
+      };
       newFindings.push(entry);
       await writeAuditRecord(options.repoDir, {
         timestamp: now.toISOString(),
@@ -1459,7 +1562,7 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
         error: fetchError,
       });
 
-      // Emit trace events for material check state changes (HOK-2259) — best-effort
+      // Emit trace events for emitted findings (HOK-2259) — best-effort
       const traceAction = entry.action;
       const traceKind = entry.classification;
       const traceMeta = { prNumber: snapshot.prNumber, slug: snapshot.slug, detail: entry.detail };
@@ -1479,7 +1582,19 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
           action: traceAction,
         });
       }
+    } else {
+      // Suppressed: carry over lastLogged* fields from prior state so future
+      // ticks continue to compare against the last actual emission, not the
+      // stale prior-tick snapshot.
+      entry = {
+        ...entry,
+        lastLoggedAt: prior?.lastLoggedAt,
+        lastLoggedFingerprint: prior?.lastLoggedFingerprint,
+        lastLoggedClassification: prior?.lastLoggedClassification,
+        lastLoggedAction: prior?.lastLoggedAction,
+      };
     }
+    nextTasks[issueId] = entry;
   }
 
   if (!options.issueFilter) {

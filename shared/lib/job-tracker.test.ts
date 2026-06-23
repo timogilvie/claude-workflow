@@ -282,16 +282,28 @@ test('markJobSettled clears comparison running state on failure', async () => {
         'PAIR-1': {
           challengePairId: 'PAIR-1',
           challengeCompared: false,
+          comparisonState: 'comparison_running',
           comparisonRunning: {
             startedAt: new Date().toISOString(),
           },
+          comparisonRetryCount: 2,
+          comparisonRetryMaxAttempts: 3,
+          comparisonRetryTargetIssue: 'PAIR-1',
+          comparisonTimedOutSides: ['challenger'],
+          manualComparisonArtifact: 'ready/challenge-comparison-needed.md',
         },
         'PAIR-1_c': {
           challengePairId: 'PAIR-1',
           challengeCompared: false,
+          comparisonState: 'comparison_running',
           comparisonRunning: {
             startedAt: new Date().toISOString(),
           },
+          comparisonRetryCount: 2,
+          comparisonRetryMaxAttempts: 3,
+          comparisonRetryTargetIssue: 'PAIR-1',
+          comparisonTimedOutSides: ['challenger'],
+          manualComparisonArtifact: 'ready/challenge-comparison-needed.md',
         },
       },
       jobs: {
@@ -316,6 +328,22 @@ test('markJobSettled clears comparison running state on failure', async () => {
     assert.equal(next.tasks['PAIR-1_c'].challengeCompared, false);
     assert.equal('comparisonRunning' in next.tasks['PAIR-1'], false);
     assert.equal('comparisonRunning' in next.tasks['PAIR-1_c'], false);
+    assert.equal(next.tasks['PAIR-1'].comparisonState, 'manual_comparison_needed');
+    assert.equal(next.tasks['PAIR-1_c'].comparisonState, 'manual_comparison_needed');
+    assert.equal(next.tasks['PAIR-1'].comparisonBlockedReason, 'job_failed');
+    assert.equal(next.tasks['PAIR-1_c'].comparisonBlockedReason, 'job_failed');
+    assert.equal(next.tasks['PAIR-1'].challengeCompared, false);
+    assert.equal(next.tasks['PAIR-1_c'].challengeCompared, false);
+    assert.equal('comparisonRetryCount' in next.tasks['PAIR-1'], false);
+    assert.equal('comparisonRetryMaxAttempts' in next.tasks['PAIR-1'], false);
+    assert.equal('comparisonRetryTargetIssue' in next.tasks['PAIR-1'], false);
+    assert.equal('comparisonTimedOutSides' in next.tasks['PAIR-1'], false);
+    assert.equal('manualComparisonArtifact' in next.tasks['PAIR-1'], false);
+    assert.equal('comparisonRetryCount' in next.tasks['PAIR-1_c'], false);
+    assert.equal('comparisonRetryMaxAttempts' in next.tasks['PAIR-1_c'], false);
+    assert.equal('comparisonRetryTargetIssue' in next.tasks['PAIR-1_c'], false);
+    assert.equal('comparisonTimedOutSides' in next.tasks['PAIR-1_c'], false);
+    assert.equal('manualComparisonArtifact' in next.tasks['PAIR-1_c'], false);
   } finally {
     cleanup();
   }
