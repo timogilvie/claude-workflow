@@ -26,6 +26,14 @@ export interface VariedDimensions {
   reviewerPromptVariant: boolean;
 }
 
+export type RoutingDimensionKey =
+  | 'planner'
+  | 'coder'
+  | 'reviewer'
+  | 'planDepth'
+  | 'codeDepth'
+  | 'reviewMode';
+
 export type ChallengeType =
   | 'coder-only'
   | 'planner-only'
@@ -51,6 +59,9 @@ export interface ChallengeComparison {
   variedDimensions?: VariedDimensions;
   challengeType?: ChallengeType;
   workflowInsight?: string;
+  comparisonOutcome?: 'compared' | 'skipped';
+  skipReason?: 'identical-routing-dimensions';
+  cleanupPolicy?: 'primary-wins-close-challenger';
 }
 
 export interface ChallengeComparisonDimensions {
@@ -74,10 +85,61 @@ export type StoredChallengeComparison = Omit<ChallengeComparison, 'dimensions'> 
 
 const DEFAULT_EVALS_DIR = '.wavemill/evals';
 const CHALLENGE_RECORDS_FILENAME = 'challenge-records.jsonl';
+const ROUTING_DIMENSION_KEYS: readonly RoutingDimensionKey[] = [
+  'planner',
+  'coder',
+  'reviewer',
+  'planDepth',
+  'codeDepth',
+  'reviewMode',
+];
+
+type ChallengeEntryLike = {
+  planner?: string;
+  model?: string;
+  reviewer?: string;
+  planDepth?: string;
+  codeDepth?: string;
+  reviewMode?: string;
+};
 
 function resolveRecordsFile(dir?: string): string {
   const baseDir = resolve(dir || DEFAULT_EVALS_DIR);
   return join(baseDir, CHALLENGE_RECORDS_FILENAME);
+}
+
+function normalize(value: string | undefined): string {
+  return value?.trim() || '';
+}
+
+function variantDiffers(a: string | undefined, b: string | undefined): boolean {
+  const na = normalize(a);
+  const nb = normalize(b);
+  return na !== '' && nb !== '' && na !== nb;
+}
+
+export function routingMetaFromChallengeEntry(entry: ChallengeEntryLike): ChallengeRoutingMeta {
+  return {
+    planner: normalize(entry.planner),
+    coder: normalize(entry.model),
+    reviewer: normalize(entry.reviewer),
+    planDepth: normalize(entry.planDepth),
+    codeDepth: normalize(entry.codeDepth),
+    reviewMode: normalize(entry.reviewMode),
+  };
+}
+
+export function listVariedRoutingDimensions(
+  primaryRouting: ChallengeRoutingMeta | undefined,
+  challengerRouting: ChallengeRoutingMeta | undefined,
+): RoutingDimensionKey[] {
+  if (!primaryRouting || !challengerRouting) {
+    return [];
+  }
+
+  return ROUTING_DIMENSION_KEYS.filter(
+    (key) => normalize(primaryRouting[key]) !== normalize(challengerRouting[key]),
+  );
 }
 
 /**
@@ -91,26 +153,15 @@ export function detectVariedDimensions(
   if (!primaryRouting || !challengerRouting) {
     return undefined;
   }
-
-  // Treat empty strings as equivalent to missing values
-  const normalize = (val: string) => val.trim() || '';
-
-  // For optional variant fields introduced post-feature-ship: only flag as varied when
-  // both sides have a defined value. A legacy record (undefined) vs a new record ('baseline')
-  // would otherwise produce cross-boundary false positives in variant win-rate statistics.
-  const variantDiffers = (a: string | undefined, b: string | undefined): boolean => {
-    const na = normalize(a || '');
-    const nb = normalize(b || '');
-    return na !== '' && nb !== '' && na !== nb;
-  };
+  const variedRoutingDimensions = new Set(listVariedRoutingDimensions(primaryRouting, challengerRouting));
 
   return {
-    planner: normalize(primaryRouting.planner) !== normalize(challengerRouting.planner),
-    coder: normalize(primaryRouting.coder) !== normalize(challengerRouting.coder),
-    reviewer: normalize(primaryRouting.reviewer) !== normalize(challengerRouting.reviewer),
-    planDepth: normalize(primaryRouting.planDepth) !== normalize(challengerRouting.planDepth),
-    codeDepth: normalize(primaryRouting.codeDepth) !== normalize(challengerRouting.codeDepth),
-    reviewMode: normalize(primaryRouting.reviewMode) !== normalize(challengerRouting.reviewMode),
+    planner: variedRoutingDimensions.has('planner'),
+    coder: variedRoutingDimensions.has('coder'),
+    reviewer: variedRoutingDimensions.has('reviewer'),
+    planDepth: variedRoutingDimensions.has('planDepth'),
+    codeDepth: variedRoutingDimensions.has('codeDepth'),
+    reviewMode: variedRoutingDimensions.has('reviewMode'),
     routerVariant: variantDiffers(primaryRouting.routerVariant, challengerRouting.routerVariant),
     plannerPromptVariant: variantDiffers(primaryRouting.plannerPromptVariant, challengerRouting.plannerPromptVariant),
     reviewerPromptVariant: variantDiffers(primaryRouting.reviewerPromptVariant, challengerRouting.reviewerPromptVariant),
@@ -157,6 +208,48 @@ export function classifyChallengeType(varied: VariedDimensions): ChallengeType {
 
 export function appendChallengeComparison(record: ChallengeComparison, dir?: string): void {
   appendJsonlRecord(resolveRecordsFile(dir), record);
+}
+
+export function buildSkippedIdenticalComparison(input: {
+  challengePairId: string;
+  primaryModel: string;
+  challengerModel: string;
+  primaryPrUrl: string;
+  challengerPrUrl: string;
+  primaryEvalScore: number;
+  challengerEvalScore: number;
+  primaryRouting?: ChallengeRoutingMeta;
+  challengerRouting?: ChallengeRoutingMeta;
+  timestamp?: string;
+}): ChallengeComparison {
+  const variedDimensions = detectVariedDimensions(input.primaryRouting, input.challengerRouting);
+  return {
+    challengePairId: input.challengePairId,
+    primaryModel: input.primaryModel,
+    challengerModel: input.challengerModel,
+    primaryPrUrl: input.primaryPrUrl,
+    challengerPrUrl: input.challengerPrUrl,
+    primaryEvalScore: input.primaryEvalScore,
+    challengerEvalScore: input.challengerEvalScore,
+    winner: 'primary',
+    winnerModel: input.primaryRouting?.coder || input.primaryModel,
+    rationale: 'Comparison skipped because primary and challenger used identical routing dimensions.',
+    dimensions: {
+      completeness: { primary: 0, challenger: 0 },
+      correctness: { primary: 0, challenger: 0 },
+      code_quality: { primary: 0, challenger: 0 },
+      intervention_impact: { primary: 0, challenger: 0 },
+      autonomy: { primary: 0, challenger: 0 },
+    },
+    timestamp: input.timestamp || new Date().toISOString(),
+    primaryRouting: input.primaryRouting,
+    challengerRouting: input.challengerRouting,
+    variedDimensions,
+    workflowInsight: 'No LLM comparison was run because both workflows resolved to identical routing dimensions.',
+    comparisonOutcome: 'skipped',
+    skipReason: 'identical-routing-dimensions',
+    cleanupPolicy: 'primary-wins-close-challenger',
+  };
 }
 
 export function readChallengeComparisons(dir?: string): StoredChallengeComparison[] {
