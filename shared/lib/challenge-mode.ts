@@ -52,6 +52,12 @@ export interface ChallengeStageWeights {
 
 const CHALLENGE_STAGES: readonly ChallengeStage[] = ['plan', 'implementation', 'review'];
 const NO_VALID_CHALLENGE_DIVERGENCE_REASON = 'no_valid_challenge_divergence';
+export type ChallengeSelectionFailureReason = 'selection_failed' | typeof NO_VALID_CHALLENGE_DIVERGENCE_REASON;
+
+export interface ChallengePairSelectionResult<T extends ChallengePairSelection = ChallengePairSelection> {
+  pair: T | null;
+  failureReason?: ChallengeSelectionFailureReason;
+}
 
 /**
  * Choose which stage a challenge pair should vary.
@@ -310,6 +316,22 @@ export function pickChallengeModels(
     randomFn?: () => number;
   },
 ): ChallengePairSelection | null {
+  return pickChallengeModelsWithReason(pool, opts).pair;
+}
+
+export function pickChallengeModelsWithReason(
+  pool: string[],
+  opts: {
+    pairId: string;
+    issueId: string;
+    slug: string;
+    primaryModel?: string;
+    forcedChallengerModel?: string;
+    agentMap?: Record<string, string>;
+    defaultAgent?: string;
+    randomFn?: () => number;
+  },
+): ChallengePairSelectionResult {
   const uniquePool = uniqueNonEmpty(pool);
   const randomFn = opts.randomFn || Math.random;
   const defaultAgent = opts.defaultAgent || 'claude';
@@ -318,22 +340,22 @@ export function pickChallengeModels(
   let primaryModel = opts.primaryModel?.trim() || '';
   if (!primaryModel) {
     if (!canRunChallenge(uniquePool)) {
-      return null;
+      return { pair: null, failureReason: 'selection_failed' };
     }
     const primaryIndex = Math.floor(randomFn() * uniquePool.length);
     primaryModel = uniquePool[primaryIndex] || '';
   }
 
   if (!primaryModel) {
-    return null;
+    return { pair: null, failureReason: 'selection_failed' };
   }
 
   const challengerModel = resolveChallengerModel(uniquePool, primaryModel, opts.forcedChallengerModel, randomFn);
   if (!challengerModel) {
-    return null;
+    return { pair: null, failureReason: 'selection_failed' };
   }
 
-  return finalizeChallengePair(
+  return finalizeChallengePairWithReason(
     {
       ...buildChallengeEntries(opts, agentMap, defaultAgent, primaryModel, challengerModel),
       challengeStage: 'implementation',
@@ -501,13 +523,33 @@ function finalizeChallengePair(
   randomFn: () => number,
   repoDir?: string,
 ): ChallengePairSelection | null {
+  return finalizeChallengePairWithReason(
+    pair,
+    pool,
+    forcedChallengerModel,
+    agentMap,
+    defaultAgent,
+    randomFn,
+    repoDir,
+  ).pair;
+}
+
+function finalizeChallengePairWithReason(
+  pair: ChallengePairSelection,
+  pool: string[],
+  forcedChallengerModel: string | undefined,
+  agentMap: Record<string, string>,
+  defaultAgent: string,
+  randomFn: () => number,
+  repoDir?: string,
+): ChallengePairSelectionResult {
   if (
     listVariedRoutingDimensions(
       routingMetaFromChallengeEntry(pair.primary),
       routingMetaFromChallengeEntry(pair.challenger),
     ).length > 0
   ) {
-    return pair;
+    return { pair };
   }
 
   for (const stage of candidateStages(pair)) {
@@ -535,11 +577,11 @@ function finalizeChallengePair(
         routingMetaFromChallengeEntry(repaired.challenger),
       ).length > 0
     ) {
-      return repaired;
+      return { pair: repaired };
     }
   }
 
-  return null;
+  return { pair: null, failureReason: NO_VALID_CHALLENGE_DIVERGENCE_REASON };
 }
 
 export function pickChallengeWorkflows(
@@ -559,6 +601,26 @@ export function pickChallengeWorkflows(
     routeFn?: (prompt: string, options?: { repoDir?: string }) => WorkflowRouteDecision;
   },
 ): ChallengePairSelection | null {
+  return pickChallengeWorkflowsWithReason(pool, opts).pair;
+}
+
+export function pickChallengeWorkflowsWithReason(
+  pool: string[],
+  opts: {
+    pairId: string;
+    issueId: string;
+    slug: string;
+    prompt: string;
+    primaryModel?: string;
+    forcedChallengerModel?: string;
+    challengeStage?: ChallengeStage;
+    agentMap?: Record<string, string>;
+    defaultAgent?: string;
+    randomFn?: () => number;
+    repoDir?: string;
+    routeFn?: (prompt: string, options?: { repoDir?: string }) => WorkflowRouteDecision;
+  },
+): ChallengePairSelectionResult {
   const uniquePool = uniqueNonEmpty(pool);
   const randomFn = opts.randomFn || Math.random;
   const defaultAgent = opts.defaultAgent || 'claude';
@@ -570,14 +632,14 @@ export function pickChallengeWorkflows(
   let primaryModel = opts.primaryModel?.trim() || '';
   if (!primaryModel) {
     if (!canRunChallenge(uniquePool)) {
-      return null;
+      return { pair: null, failureReason: 'selection_failed' };
     }
     const primaryIndex = Math.floor(randomFn() * uniquePool.length);
     primaryModel = uniquePool[primaryIndex] || '';
   }
 
   if (!primaryModel) {
-    return null;
+    return { pair: null, failureReason: 'selection_failed' };
   }
 
   // Route the workflow once to get planner/reviewer/depths
@@ -597,7 +659,7 @@ export function pickChallengeWorkflows(
 
   const challengerVaried = resolveChallengerModel(uniquePool, primaryVaried, opts.forcedChallengerModel, randomFn);
   if (!challengerVaried) {
-    return null;
+    return { pair: null, failureReason: 'selection_failed' };
   }
 
   // Exactly one stage differs between primary and challenger; the other two
@@ -608,7 +670,7 @@ export function pickChallengeWorkflows(
   const primarySlug = deriveChallengeSlug(opts.slug, 'primary');
   const challengerSlug = deriveChallengeSlug(opts.slug, 'challenger');
 
-  return finalizeChallengePair(
+  return finalizeChallengePairWithReason(
     {
       pairId: opts.pairId,
       challengeStage: stage,
@@ -712,6 +774,26 @@ function buildPairFromRouteSnapshot(
   route: RouteArtifactSnapshot,
   fallback?: RouteArtifactSnapshot | null,
 ): ChallengePairSelection | null {
+  return buildPairFromRouteSnapshotWithReason(pool, opts, route, fallback).pair;
+}
+
+function buildPairFromRouteSnapshotWithReason(
+  pool: string[],
+  opts: {
+    pairId: string;
+    issueId: string;
+    slug: string;
+    primaryModel?: string;
+    forcedChallengerModel?: string;
+    challengeStage?: ChallengeStage;
+    agentMap?: Record<string, string>;
+    defaultAgent?: string;
+    randomFn?: () => number;
+    repoDir?: string;
+  },
+  route: RouteArtifactSnapshot,
+  fallback?: RouteArtifactSnapshot | null,
+): ChallengePairSelectionResult {
   const agentMap = opts.agentMap || {};
   const defaultAgent = opts.defaultAgent || 'claude';
   const requestedStage = opts.challengeStage || 'implementation';
@@ -729,7 +811,7 @@ function buildPairFromRouteSnapshot(
     : 'implementation';
 
   if (stage === 'implementation') {
-    const pair = pickChallengeModels(pool, {
+    const selection = pickChallengeModelsWithReason(pool, {
       pairId: opts.pairId,
       issueId: opts.issueId,
       slug: opts.slug,
@@ -740,12 +822,12 @@ function buildPairFromRouteSnapshot(
       randomFn: opts.randomFn,
     });
 
-    if (!pair) {
-      return null;
+    if (!selection.pair) {
+      return selection;
     }
 
-    return finalizeChallengePair(
-      applyRouteSnapshot(pair, route, agentMap, defaultAgent, opts.repoDir, fallback),
+    return finalizeChallengePairWithReason(
+      applyRouteSnapshot(selection.pair, route, agentMap, defaultAgent, opts.repoDir, fallback),
       pool,
       opts.forcedChallengerModel,
       agentMap,
@@ -762,7 +844,7 @@ function buildPairFromRouteSnapshot(
     opts.randomFn || Math.random,
   );
   if (!challengerVaried) {
-    return null;
+    return { pair: null, failureReason: 'selection_failed' };
   }
 
   // Same coder on both sides; route fields applied, then the varied stage
@@ -775,7 +857,7 @@ function buildPairFromRouteSnapshot(
     opts.repoDir,
     fallback,
   );
-  return finalizeChallengePair(
+  return finalizeChallengePairWithReason(
     applyStageVariation(pair, stage, challengerVaried, agentMap, defaultAgent, opts.repoDir),
     pool,
     opts.forcedChallengerModel,
@@ -807,76 +889,108 @@ export function pickChallengeWorkflowsWithContext(
     expanded: RouteArtifactSnapshot | null;
   },
 ): (ChallengePairSelection & { routeContext: ChallengeRouteContext }) | null {
+  return pickChallengeWorkflowsWithContextAndReason(pool, opts, routeArtifacts).pair;
+}
+
+export function pickChallengeWorkflowsWithContextAndReason(
+  pool: string[],
+  opts: {
+    pairId: string;
+    issueId: string;
+    slug: string;
+    prompt: string;
+    primaryModel?: string;
+    forcedChallengerModel?: string;
+    challengeStage?: ChallengeStage;
+    agentMap?: Record<string, string>;
+    defaultAgent?: string;
+    randomFn?: () => number;
+    repoDir?: string;
+    routeFn?: (prompt: string, options?: { repoDir?: string }) => WorkflowRouteDecision;
+  },
+  routeArtifacts: {
+    bootstrap: RouteArtifactSnapshot | null;
+    expanded: RouteArtifactSnapshot | null;
+  },
+): ChallengePairSelectionResult<ChallengePairSelection & { routeContext: ChallengeRouteContext }> {
   const bootstrapRoute = routeArtifacts.bootstrap || undefined;
   const expandedRoute = routeArtifacts.expanded || undefined;
 
   if (!expandedRoute) {
-    const pair = bootstrapRoute
-      ? buildPairFromRouteSnapshot(pool, opts, bootstrapRoute)
-      : pickChallengeWorkflows(pool, opts);
-    if (!pair) {
-      return null;
+    const selection = bootstrapRoute
+      ? buildPairFromRouteSnapshotWithReason(pool, opts, bootstrapRoute)
+      : pickChallengeWorkflowsWithReason(pool, opts);
+    if (!selection.pair) {
+      return selection;
     }
     return {
-      ...pair,
-      routeContext: {
-        decisionSource: 'bootstrap',
-        ...(bootstrapRoute ? { bootstrapRoute } : {}),
+      pair: {
+        ...selection.pair,
+        routeContext: {
+          decisionSource: 'bootstrap',
+          ...(bootstrapRoute ? { bootstrapRoute } : {}),
+        },
       },
     };
   }
 
   if (!bootstrapRoute) {
-    const pair = buildPairFromRouteSnapshot(pool, {
+    const selection = buildPairFromRouteSnapshotWithReason(pool, {
       ...opts,
       primaryModel: expandedRoute.coder,
     }, expandedRoute);
-    if (!pair) {
-      return null;
+    if (!selection.pair) {
+      return selection;
     }
     return {
-      ...pair,
-      routeContext: {
-        decisionSource: 'expanded',
-        expandedRoute,
+      pair: {
+        ...selection.pair,
+        routeContext: {
+          decisionSource: 'expanded',
+          expandedRoute,
+        },
       },
     };
   }
 
   const materiality = routeChangedMaterially(bootstrapRoute, expandedRoute, opts.repoDir);
   if (materiality.changed) {
-    const pair = buildPairFromRouteSnapshot(pool, {
+    const selection = buildPairFromRouteSnapshotWithReason(pool, {
       ...opts,
       primaryModel: expandedRoute.coder,
     }, expandedRoute, bootstrapRoute);
-    if (!pair) {
-      return null;
+    if (!selection.pair) {
+      return selection;
     }
     return {
-      ...pair,
-      routeContext: {
-        decisionSource: 'expanded',
-        bootstrapRoute,
-        expandedRoute,
+      pair: {
+        ...selection.pair,
+        routeContext: {
+          decisionSource: 'expanded',
+          bootstrapRoute,
+          expandedRoute,
+        },
       },
     };
   }
 
-  const pair = buildPairFromRouteSnapshot(pool, {
+  const selection = buildPairFromRouteSnapshotWithReason(pool, {
     ...opts,
     primaryModel: opts.primaryModel?.trim() || bootstrapRoute.coder,
   }, bootstrapRoute);
-  if (!pair) {
-    return null;
+  if (!selection.pair) {
+    return selection;
   }
 
   return {
-    ...pair,
-    routeContext: {
-      decisionSource: 'preserved',
-      bootstrapRoute,
-      expandedRoute,
-      refreshRationale: 'expanded route matches bootstrap on coder class/depth',
+    pair: {
+      ...selection.pair,
+      routeContext: {
+        decisionSource: 'preserved',
+        bootstrapRoute,
+        expandedRoute,
+        refreshRationale: 'expanded route matches bootstrap on coder class/depth',
+      },
     },
   };
 }

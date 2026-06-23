@@ -13,7 +13,9 @@ import {
   filterDeepSeekChallengeModels,
   getChallengeModelPool,
   pickChallengeWorkflowsWithContext,
+  pickChallengeWorkflowsWithContextAndReason,
   pickChallengeModels,
+  pickChallengeModelsWithReason,
   pickChallengeWorkflows,
   variedModelForStage,
 } from './challenge-mode.ts';
@@ -155,6 +157,17 @@ test('pickChallengeModels returns null when fewer than two distinct models exist
     slug: 'challenge-mode',
   });
   assert.equal(pair, null);
+});
+
+test('reason-aware model selection preserves generic selection failures', () => {
+  const selection = pickChallengeModelsWithReason(['claude-opus-4-6'], {
+    pairId: 'HOK-970R',
+    issueId: 'HOK-970R',
+    slug: 'challenge-mode-reason',
+  });
+
+  assert.equal(selection.pair, null);
+  assert.equal(selection.failureReason, 'selection_failed');
 });
 
 test('all-DeepSeek pool becomes not runnable when allowDeepseek is not enabled', () => {
@@ -1027,6 +1040,32 @@ test('pickChallengeWorkflowsWithContext preserves route context while repairing 
   assert.notEqual(pair!.challenger.reviewer, pair!.primary.reviewer);
   assert.equal(pair!.challenger.codeDepth, 'medium');
   assert.equal(pair!.challenger.reviewMode, 'llm');
+});
+
+test('reason-aware context selection preserves selection_failed diagnostics', () => {
+  const expanded: RouteArtifactSnapshot = {
+    planner: 'claude-opus-4-7',
+    coder: 'claude-opus-4-7',
+    reviewer: 'claude-opus-4-7',
+    planDepth: 'medium',
+    codeDepth: 'medium',
+    reviewMode: 'llm',
+  };
+
+  const selection = pickChallengeWorkflowsWithContextAndReason(
+    ['claude-opus-4-7'],
+    {
+      pairId: 'HOK-2301-D',
+      issueId: 'HOK-2301-D',
+      slug: 'context-selection-failed',
+      prompt: 'irrelevant',
+      randomFn: () => 0,
+    },
+    { bootstrap: null, expanded },
+  );
+
+  assert.equal(selection.pair, null);
+  assert.equal(selection.failureReason, 'selection_failed');
 });
 
 
