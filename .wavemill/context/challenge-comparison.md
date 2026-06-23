@@ -8,7 +8,7 @@ Launch invariant: non-control challenge pairs must differ on at least one routin
 
 - `comparison_running`: comparison job is in flight.
 - `retrying_eval`: at least one eval timed out and wavemill is retrying within the configured cap.
-- `manual_comparison_needed`: automatic comparison could not complete after bounded retries.
+- `manual_comparison_needed`: automatic comparison reached a terminal manual-attention state, including bounded retry exhaustion and settled comparison job failures.
 
 ## Stored Fields
 
@@ -31,5 +31,6 @@ Launch invariant: non-control challenge pairs must differ on at least one routin
 
 - `retrying_eval` should remain an active, non-terminal wait.
 - `manual_comparison_needed` is a `needs-user` condition. The pair should not look merge-ready until an operator resolves the comparison manually.
+- Failed comparison jobs must not leave `comparison_running` behind after settlement. They transition the pair to `manual_comparison_needed` and preserve the failure in `comparisonBlockedReason`.
 - Identical-routing pairs are a terminal skipped-comparison outcome, not a failed comparison job. The compare backstop records `comparisonOutcome=skipped`, `skipReason=identical-routing-dimensions`, and `cleanupPolicy=primary-wins-close-challenger`.
 - Skipped identical pairs deterministically declare the primary as winner and the challenger as the cleanup target. This keeps the merge lane moving and prevents watchdog retry spam.
