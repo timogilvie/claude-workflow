@@ -941,6 +941,81 @@
             },
             "additionalProperties": false
         },
+        "nativeAgent": {
+            "type": "object",
+            "description": "Native-agent provider configuration resolved into Pi provider models.",
+            "properties": {
+                "providers": {
+                    "type": "object",
+                    "properties": {
+                        "openai": {
+                            "type": "object",
+                            "properties": {
+                                "enabled": {
+                                    "type": "boolean",
+                                    "default": true
+                                },
+                                "apiKeyEnv": {
+                                    "type": "string",
+                                    "minLength": 1
+                                },
+                                "baseUrl": {
+                                    "type": "string",
+                                    "minLength": 1
+                                },
+                                "headers": {
+                                    "type": "object",
+                                    "additionalProperties": {
+                                        "type": "string"
+                                    }
+                                },
+                                "models": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "string",
+                                        "minLength": 1
+                                    }
+                                }
+                            },
+                            "additionalProperties": false
+                        },
+                        "openrouter": {
+                            "type": "object",
+                            "properties": {
+                                "enabled": {
+                                    "type": "boolean",
+                                    "default": true
+                                },
+                                "apiKeyEnv": {
+                                    "type": "string",
+                                    "minLength": 1
+                                },
+                                "baseUrl": {
+                                    "type": "string",
+                                    "minLength": 1
+                                },
+                                "headers": {
+                                    "type": "object",
+                                    "additionalProperties": {
+                                        "type": "string"
+                                    }
+                                },
+                                "models": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "string",
+                                        "minLength": 1
+                                    }
+                                }
+                            },
+                            "additionalProperties": false
+                        }
+                    },
+                    "additionalProperties": false
+                }
+            },
+            "additionalProperties": false
+        },
         "ready": {
             "type": "object",
             "description": "Settings for the ready stage (merge-readiness checks)",

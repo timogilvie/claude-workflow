@@ -365,6 +365,25 @@ export interface ProvidersConfig {
   openrouter?: OpenRouterProviderConfig;
 }
 
+export type NativeAgentProviderName = 'openai' | 'openrouter';
+
+export interface NativeAgentProviderConfig {
+  enabled?: boolean;
+  apiKeyEnv?: string;
+  baseUrl?: string;
+  headers?: Record<string, string>;
+  models?: string[];
+}
+
+export interface NativeAgentProvidersConfig {
+  openai?: NativeAgentProviderConfig;
+  openrouter?: NativeAgentProviderConfig;
+}
+
+export interface NativeAgentConfig {
+  providers?: NativeAgentProvidersConfig;
+}
+
 export interface IntegrationConfig {
   enabled: boolean;
   integrationBranch: string;
@@ -568,6 +587,7 @@ export interface WavemillConfig {
   review?: ReviewConfig;
   reviewMerge?: ReviewMergeConfig;
   providers?: ProvidersConfig;
+  nativeAgent?: NativeAgentConfig;
   integration?: Partial<IntegrationConfig>;
   promotion?: Partial<PromotionConfig>;
   ready?: ReadyConfig;
@@ -1341,6 +1361,10 @@ export function getProjectContextConfig(repoDir?: string): Required<ProjectConte
  */
 export function getProvidersConfig(repoDir?: string): ProvidersConfig {
   return loadWavemillConfig(repoDir).providers || {};
+}
+
+export function getNativeAgentConfig(repoDir?: string): NativeAgentConfig {
+  return loadWavemillConfig(repoDir).nativeAgent || {};
 }
 
 /**
