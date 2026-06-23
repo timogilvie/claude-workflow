@@ -34,6 +34,8 @@ import { isDeepStrictEqual } from 'node:util';
 import type { AgentEvent } from '@earendil-works/pi-agent-core';
 import type { AssistantMessage } from '@earendil-works/pi-ai';
 import type { ReplayCompactionEvent } from './compaction.ts';
+import type { ToolResultMetadata } from './tools/types.ts';
+import { redactSecrets, redactSecretsInValue } from './tools/redaction.ts';
 
 // ---------------------------------------------------------------------------
 // Transcript event types
@@ -120,6 +122,8 @@ export interface TranscriptToolResult extends TranscriptEventBase {
   /** Redacted structured details, if present. */
   details?: unknown;
   redacted: boolean;
+  /** Optional enrichment metadata extracted from details.__wavemill by the loop. */
+  metadata?: ToolResultMetadata;
 }
 
 export interface TranscriptCompactionEvent extends TranscriptEventBase, ReplayCompactionEvent {}
@@ -143,39 +147,17 @@ export type TranscriptEvent =
 // Redaction
 // ---------------------------------------------------------------------------
 
-const SECRET_KEYS = new Set([
-  'authorization',
-  'apikey',
-  'api_key',
-  'token',
-  'secret',
-  'password',
-  'passwd',
-  'key',
-  'bearer',
-  'credential',
-  'credentials',
-  'x-api-key',
-]);
-
-/** Redact sensitive keys in a plain-object tree. Arrays are traversed but not keyed. */
-function redactObjectKeys(value: unknown, depth = 0): unknown {
-  if (depth > 10 || value === null || typeof value !== 'object') {
-    return value;
-  }
-  if (Array.isArray(value)) {
-    return value.map((item) => redactObjectKeys(item, depth + 1));
-  }
-  const result: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-    result[k] = SECRET_KEYS.has(k.toLowerCase()) ? '[REDACTED]' : redactObjectKeys(v, depth + 1);
-  }
-  return result;
-}
-
-/** Default redaction function. Replace to customize policy without changing transcript code. */
+/**
+ * Default redaction function.
+ *
+ * Delegates to redactSecretsInValue which:
+ * - Masks values under known secret key names (authorization, apiKey, token, …)
+ * - Pattern-redacts all string leaves using high-confidence secret regexes.
+ *
+ * Replace to customize policy without changing transcript code.
+ */
 export function defaultRedact(value: unknown): unknown {
-  return redactObjectKeys(value);
+  return redactSecretsInValue(value).value;
 }
 
 // ---------------------------------------------------------------------------
@@ -186,11 +168,11 @@ function extractRawContent(message: AssistantMessage): TranscriptRawContentBlock
   const blocks: TranscriptRawContentBlock[] = [];
   for (const block of message.content) {
     if (block.type === 'text') {
-      blocks.push({ type: 'text', text: block.text });
+      blocks.push({ type: 'text', text: redactSecrets(block.text).text });
     } else if (block.type === 'thinking') {
       const tb: TranscriptRawContentBlock & { type: 'thinking' } = {
         type: 'thinking',
-        thinking: block.thinking,
+        thinking: redactSecrets(block.thinking).text,
       };
       if (block.thinkingSignature !== undefined) tb.thinkingSignature = block.thinkingSignature;
       if (block.redacted !== undefined) tb.redacted = block.redacted;
@@ -200,7 +182,7 @@ function extractRawContent(message: AssistantMessage): TranscriptRawContentBlock
         type: 'tool_call',
         id: block.id,
         name: block.name,
-        arguments: block.arguments as Record<string, unknown>,
+        arguments: redactSecretsInValue(block.arguments as Record<string, unknown>).value as Record<string, unknown>,
       });
     }
   }
@@ -211,13 +193,13 @@ function extractReplayContent(message: AssistantMessage): TranscriptReplayConten
   const blocks: TranscriptReplayContentBlock[] = [];
   for (const block of message.content) {
     if (block.type === 'text') {
-      blocks.push({ type: 'text', text: block.text });
+      blocks.push({ type: 'text', text: redactSecrets(block.text).text });
     } else if (block.type === 'toolCall') {
       blocks.push({
         type: 'tool_call',
         id: block.id,
         name: block.name,
-        arguments: block.arguments as Record<string, unknown>,
+        arguments: redactSecretsInValue(block.arguments as Record<string, unknown>).value as Record<string, unknown>,
       });
     }
     // thinking blocks are intentionally omitted from replay content
@@ -399,20 +381,49 @@ export class TranscriptWriter {
           content?: Array<{ type?: string; text?: string }>;
           details?: unknown;
         } | null | undefined;
-        const firstText = resultObj?.content?.find((c) => c?.type === 'text')?.text ?? '';
-        const redactedDetails = resultObj?.details !== undefined
-          ? this.redactFn(resultObj.details)
+
+        // Redact content text before transcript persistence.
+        const rawText = resultObj?.content?.find((c) => c?.type === 'text')?.text ?? '';
+        const contentRedaction = redactSecrets(rawText);
+        const redactedText = contentRedaction.text;
+
+        // Extract __wavemill metadata block embedded by the loop's afterToolCall.
+        let metadata: ToolResultMetadata | undefined;
+        let rawDetailsForRedact = resultObj?.details;
+        if (
+          rawDetailsForRedact !== null &&
+          rawDetailsForRedact !== undefined &&
+          typeof rawDetailsForRedact === 'object' &&
+          !Array.isArray(rawDetailsForRedact) &&
+          '__wavemill' in (rawDetailsForRedact as Record<string, unknown>)
+        ) {
+          const d = rawDetailsForRedact as Record<string, unknown>;
+          metadata = d.__wavemill as ToolResultMetadata;
+          // Strip __wavemill so it is not stored in transcript details.
+          const { __wavemill: _dropped, ...rest } = d;
+          rawDetailsForRedact = Object.keys(rest).length > 0 ? rest : undefined;
+        }
+
+        // Apply caller-supplied redact fn (default: defaultRedact via redactSecretsInValue).
+        const redactedDetails = rawDetailsForRedact !== undefined
+          ? this.redactFn(rawDetailsForRedact)
           : undefined;
+
+        const anyRedacted =
+          contentRedaction.redacted ||
+          (redactedDetails !== undefined && !isDeepStrictEqual(redactedDetails, rawDetailsForRedact));
+
         const toolResult: TranscriptToolResult = {
           ...this.base(),
           type: 'tool_result',
           toolCallId: event.toolCallId,
           toolName: event.toolName,
           isError: event.isError,
-          content: firstText,
-          redacted: redactedDetails !== undefined && !isDeepStrictEqual(redactedDetails, resultObj?.details),
+          content: redactedText,
+          redacted: anyRedacted,
         };
         if (redactedDetails !== undefined) toolResult.details = redactedDetails;
+        if (metadata !== undefined) toolResult.metadata = metadata;
         return toolResult;
       }
 

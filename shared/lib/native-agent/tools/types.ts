@@ -33,6 +33,41 @@ export interface ToolMetadata {
   outputCapPolicy: OutputCapPolicy;
 }
 
+// ---------------------------------------------------------------------------
+// Tool result metadata (attached additively; optional on all consumers)
+// ---------------------------------------------------------------------------
+
+/** Output cap status derived from tool policy and actual details. */
+export interface ToolOutputCapMetadata {
+  capped: boolean;
+  strategy?: OutputCapStrategy;
+  limit?: number;
+  limitKind?: 'bytes' | 'items' | 'lines';
+  originalLength?: number;
+  retainedLength?: number;
+}
+
+/** Stable provenance fingerprint for a tool invocation. */
+export interface ToolProvenanceMetadata {
+  tool: string;
+  /** First 16 hex chars of SHA-256 over stable-JSON-encoded args. */
+  argsFingerprint: string;
+}
+
+/** Redaction status for a tool result (content + details). */
+export interface ToolRedactionMetadata {
+  redacted: boolean;
+  matchCount: number;
+  categories: string[];
+}
+
+/** Aggregate tool result metadata embedded in details.__wavemill and transcript events. */
+export interface ToolResultMetadata {
+  outputCap?: ToolOutputCapMetadata;
+  provenance?: ToolProvenanceMetadata;
+  redaction?: ToolRedactionMetadata;
+}
+
 /** Minimal result shape returned by a Wavemill tool executor. */
 export interface WavemillToolResult<TDetails = unknown> {
   /** Text content returned to the model. */
@@ -41,6 +76,8 @@ export interface WavemillToolResult<TDetails = unknown> {
   details: TDetails;
   /** Hint to stop the agent loop after this tool batch. */
   terminate?: boolean;
+  /** Optional enrichment metadata — attached by the loop, not by executors. */
+  metadata?: ToolResultMetadata;
 }
 
 /** Tool executor function — Wavemill-owned, compatible with Pi AgentTool.execute. */
