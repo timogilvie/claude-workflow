@@ -1314,6 +1314,78 @@ test('tick re-emits merge-lane findings after the relog interval', async () => {
   }
 });
 
+test('tick re-emits and refreshes log fingerprint when a material classification change occurs', async () => {
+  const { repoDir, stateDir, stateFile, featureDir } = setupReadyTask('HOK-2298', 805);
+  writeFileSync(path.join(featureDir, '.ready-result.json'), JSON.stringify({
+    stage: 'ready',
+    status: 'completed',
+    startedAt: '2030-05-05T11:00:00.000Z',
+    finishedAt: '2030-05-05T11:01:00.000Z',
+    agent: 'codex',
+    model: 'gpt-5.5',
+    notes: null,
+    artifacts: { type: 'ready', verdict: 'pass', prNumber: 805, queueState: 'ready-stale' },
+  }, null, 2));
+
+  const priorWaitingDetail = 'PR #805 passed ready and is waiting its turn in the merge lane (idle 15m).';
+  const priorFingerprint = normalizeDetailFingerprint(priorWaitingDetail);
+  const watchdogStatePath = path.join(stateDir, 'ready-watchdog-state.json');
+  writeFileSync(watchdogStatePath, JSON.stringify({
+    updatedAt: '2030-05-05T11:16:00.000Z',
+    tasks: {
+      'HOK-2298': {
+        issueId: 'HOK-2298',
+        slug: 'ready-watchdog-task',
+        prNumber: 805,
+        classification: 'waiting-on-merge-lane',
+        displayLabel: 'waiting on merge lane',
+        detail: priorWaitingDetail,
+        action: 'reported',
+        updatedAt: '2030-05-05T11:16:00.000Z',
+        idleMinutes: 15,
+        lastProgressAt: '2030-05-05T11:01:00.000Z',
+        prStateKey: 'OPEN|MERGEABLE|CLEAN',
+        detailFingerprint: priorFingerprint,
+        lastReportedAction: 'reported',
+        lastLoggedFingerprint: priorFingerprint,
+        lastLoggedAt: '2030-05-05T11:16:00.000Z',
+      },
+    },
+  }, null, 2));
+
+  try {
+    // 35m idle is past the 3x escalation threshold, so the classification
+    // must flip from waiting-on-merge-lane to needs-user. That material change
+    // has to bypass suppression, re-emit, and refresh lastLoggedFingerprint
+    // and lastLoggedAt to reflect the new finding.
+    const result = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: WATCHDOG_CONFIG,
+      deps: {
+        fetchGitHubTruth: async () => makeTruth(),
+        getCurrentHead: async () => 'head',
+        now: () => new Date('2030-05-05T11:36:00.000Z'),
+      },
+    });
+
+    assert.equal(result.findings.length, 1);
+    assert.equal(result.findings[0].classification, 'needs-user');
+    assert.match(result.findings[0].detail, /merge lane appears stalled/i);
+
+    const watchdogState = JSON.parse(readFileSync(watchdogStatePath, 'utf-8')) as {
+      tasks: Record<string, ReadyWatchdogStateEntry>;
+    };
+    const entry = watchdogState.tasks['HOK-2298'];
+    assert.equal(entry.classification, 'needs-user');
+    assert.equal(entry.lastLoggedAt, '2030-05-05T11:36:00.000Z');
+    assert.notEqual(entry.lastLoggedFingerprint, priorFingerprint);
+    assert.equal(entry.lastLoggedFingerprint, normalizeDetailFingerprint(result.findings[0].detail));
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
 test('tick re-surfaces needs-user when detail changes', async () => {
   const repoDir = mkdtempSync(path.join(os.tmpdir(), 'ready-watchdog-'));
   const stateDir = path.join(repoDir, '.wavemill');
