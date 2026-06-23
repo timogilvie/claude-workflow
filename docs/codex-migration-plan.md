@@ -196,5 +196,5 @@ config key remain as escape hatches to revert to the Claude judge mid-window.
 
 **Behavior change from Phase 4:** `tools/check-review-setup.ts` now exits
 non-zero if Codex auth is missing (both providers validated). Operators in
-Claude-only environments should pass `--skip-codex` (to be added if requested)
-or accept the stricter check.
+Claude-only environments should pass `--skip-codex` or accept the stricter
+check.

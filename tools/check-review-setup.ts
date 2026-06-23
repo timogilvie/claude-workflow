@@ -311,12 +311,18 @@ function printTroubleshooting(results: CheckResult[]): void {
 runTool({
   name: 'check-review-setup',
   description: 'Health check for review tool setup',
-  options: {},
+  options: {
+    'skip-codex': {
+      type: 'boolean',
+      description: 'Skip Codex CLI availability check',
+    },
+  },
   examples: [
     'npx tsx tools/check-review-setup.ts',
+    'npx tsx tools/check-review-setup.ts --skip-codex',
     'npm run check:review',
   ],
-  async run() {
+  async run({ args }) {
     console.log('🔍 Checking review tool setup...\n');
 
     const results: CheckResult[] = [];
@@ -325,7 +331,9 @@ runTool({
     results.push(await checkGit());
     results.push(await checkGitRepo());
     results.push(await checkClaudeCLI());
-    results.push(await checkCodexCLI());
+    if (!args['skip-codex']) {
+      results.push(await checkCodexCLI());
+    }
     results.push(await checkNetwork());
 
     // Print results
