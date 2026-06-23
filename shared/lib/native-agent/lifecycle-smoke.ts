@@ -292,12 +292,13 @@ async function main() {
       const any = m as Record<string, unknown>;
       return any.role === 'toolResult' && any.toolName === 'patch_file';
     });
-    // Pi may not surface blocked calls in final messages in the same way — log a note if absent
-    if (patchFileMsg) {
-      console.log('[smoke] OK: patch_file result present in messages (policy-blocked)');
-    } else {
-      console.log('[smoke] NOTE: patch_file not found in final messages (Pi may suppress blocked-tool results)');
-    }
+    assert.ok(patchFileMsg, 'patch_file must appear in messages as a policy-blocked tool error');
+    assert.equal(
+      (patchFileMsg as { content?: TextContent[] }).content?.[0]?.text,
+      'phase_denied: tool "patch_file" is not allowed in planning',
+    );
+    assert.equal((patchFileMsg as { isError?: boolean }).isError, true);
+    console.log('[smoke] OK: patch_file result present in messages (policy-blocked)');
 
     console.log('\n[smoke] All assertions passed. Native read-only lifecycle smoke PASSED.');
 
