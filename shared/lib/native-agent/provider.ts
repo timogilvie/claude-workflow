@@ -62,6 +62,8 @@ export interface ProviderModelConfig {
   api: string;
   provider: string;
   baseUrl?: string;
+  headers?: Record<string, string>;
+  compat?: unknown;
   reasoning?: boolean;
   input?: ('text' | 'image')[];
   contextWindow?: number;
@@ -239,6 +241,8 @@ function toPiModel(config: ProviderModelConfig): Model<Api> {
     api: config.api,
     provider: config.provider,
     baseUrl: config.baseUrl ?? 'http://localhost:0/mock',
+    headers: config.headers ?? {},
+    ...(config.compat !== undefined ? { compat: config.compat } : {}),
     reasoning: config.reasoning ?? false,
     input: config.input ?? ['text'],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },

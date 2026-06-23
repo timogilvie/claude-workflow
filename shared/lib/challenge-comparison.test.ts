@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   appendChallengeComparison,
+  buildSkippedIdenticalComparison,
+  listVariedRoutingDimensions,
   readChallengeComparisons,
   detectVariedDimensions,
   hasAnyVariedDimension,
@@ -159,6 +161,45 @@ test('detectVariedDimensions treats empty strings as equivalent', () => {
   assert.ok(result);
   assert.equal(result.reviewer, false);
   assert.equal(result.reviewerPromptVariant, false);
+});
+
+test('listVariedRoutingDimensions reports no launchable differences for identical HOK-2297 routing', () => {
+  const routing = makeRouting({
+    planner: 'claude-opus-4-7',
+    coder: 'gpt-5.4',
+    reviewer: 'claude-opus-4-7',
+    planDepth: 'medium',
+    codeDepth: 'medium',
+    reviewMode: 'llm',
+  });
+  assert.deepEqual(listVariedRoutingDimensions(routing, routing), []);
+});
+
+test('listVariedRoutingDimensions reports no launchable differences for identical HOK-2298 routing', () => {
+  const routing = makeRouting({
+    planner: 'gpt-5.5',
+    coder: 'claude-sonnet-4-6',
+    reviewer: 'gpt-5.5',
+    planDepth: 'medium',
+    codeDepth: 'medium',
+    reviewMode: 'llm',
+  });
+  assert.deepEqual(listVariedRoutingDimensions(routing, routing), []);
+});
+
+test('listVariedRoutingDimensions reports each canonical launch dimension', () => {
+  const primary = makeRouting();
+  assert.deepEqual(
+    listVariedRoutingDimensions(primary, makeRouting({
+      planner: 'other-planner',
+      coder: 'other-coder',
+      reviewer: 'other-reviewer',
+      planDepth: 'light',
+      codeDepth: 'deep',
+      reviewMode: 'llm',
+    })),
+    ['planner', 'coder', 'reviewer', 'planDepth', 'codeDepth', 'reviewMode'],
+  );
 });
 
 console.log('\n--- Challenge Type Classification Tests ---\n');
@@ -325,6 +366,42 @@ test('record without routing metadata (old format) parses correctly', () => {
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
+});
+
+test('buildSkippedIdenticalComparison returns deterministic primary-wins metadata', () => {
+  const record = buildSkippedIdenticalComparison({
+    challengePairId: 'HOK-2301',
+    primaryModel: 'gpt-5.4',
+    challengerModel: 'gpt-5.4',
+    primaryPrUrl: 'https://github.com/org/repo/pull/1',
+    challengerPrUrl: 'https://github.com/org/repo/pull/2',
+    primaryEvalScore: 0.7,
+    challengerEvalScore: 0.7,
+    primaryRouting: makeRouting({
+      planner: 'claude-opus-4-7',
+      coder: 'gpt-5.4',
+      reviewer: 'claude-opus-4-7',
+      planDepth: 'medium',
+      codeDepth: 'medium',
+      reviewMode: 'llm',
+    }),
+    challengerRouting: makeRouting({
+      planner: 'claude-opus-4-7',
+      coder: 'gpt-5.4',
+      reviewer: 'claude-opus-4-7',
+      planDepth: 'medium',
+      codeDepth: 'medium',
+      reviewMode: 'llm',
+    }),
+    timestamp: '2026-06-23T12:00:00.000Z',
+  });
+
+  assert.equal(record.winner, 'primary');
+  assert.equal(record.comparisonOutcome, 'skipped');
+  assert.equal(record.skipReason, 'identical-routing-dimensions');
+  assert.equal(record.cleanupPolicy, 'primary-wins-close-challenger');
+  assert.equal(record.challengeType, undefined);
+  assert.equal(record.workflowInsight, 'No LLM comparison was run because both workflows resolved to identical routing dimensions.');
 });
 
 process.on('exit', () => {

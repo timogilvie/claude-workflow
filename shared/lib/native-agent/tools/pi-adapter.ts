@@ -3,6 +3,12 @@
 // Callers can import toPiAgentTool directly from this file; registry.ts itself
 // does not re-export it, keeping Pi imports out of the registry seam.
 // ---------------------------------------------------------------------------
+import {
+  getApiProvider,
+  registerBuiltInApiProviders,
+  type Api,
+  type Model,
+} from '@earendil-works/pi-ai';
 import type { AgentTool, AgentToolResult } from '@earendil-works/pi-agent-core';
 import type { TSchema } from 'typebox';
 import type { ToolDescriptor } from './types.ts';
@@ -10,6 +16,9 @@ import type { ToolDescriptor } from './types.ts';
 // Re-export Pi tool types through the adapter seam so callers (e.g. smoke
 // harnesses) that build Pi tools can stay free of direct Pi vendor imports.
 export type { AgentTool, AgentToolResult } from '@earendil-works/pi-agent-core';
+export type PiModel = Model<Api>;
+
+let builtInProvidersRegistered = false;
 
 /**
  * Convert a Wavemill ToolDescriptor into a Pi AgentTool.
@@ -40,4 +49,66 @@ export function toPiAgentTool(descriptor: ToolDescriptor): AgentTool<TSchema, un
       };
     },
   } as unknown as AgentTool<TSchema, unknown>;
+}
+
+export function buildPiModel({
+  id,
+  name,
+  api,
+  provider,
+  baseUrl,
+  headers = {},
+  compat,
+}: {
+  id: string;
+  name: string;
+  api: string;
+  provider: string;
+  baseUrl: string;
+  headers?: Record<string, string>;
+  compat?: unknown;
+}): PiModel {
+  return {
+    id,
+    name,
+    api,
+    provider,
+    baseUrl,
+    headers,
+    ...(compat !== undefined ? { compat } : {}),
+    reasoning: false,
+    input: ['text'],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200_000,
+    maxTokens: 8192,
+  } as PiModel;
+}
+
+export function getRegisteredPiProviderForModel(
+  model: Pick<PiModel, 'api'>,
+): ReturnType<typeof getApiProvider> | undefined {
+  ensureBuiltInApiProvidersRegistered();
+
+  try {
+    return getApiProvider(model.api);
+  } catch {
+    return undefined;
+  }
+}
+
+function ensureBuiltInApiProvidersRegistered(): void {
+  if (builtInProvidersRegistered) {
+    return;
+  }
+
+  try {
+    registerBuiltInApiProviders();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/already registered|duplicate/i.test(message)) {
+      throw error;
+    }
+  }
+
+  builtInProvidersRegistered = true;
 }
