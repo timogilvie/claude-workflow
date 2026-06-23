@@ -428,9 +428,11 @@ describe('quota fallback', () => {
   });
 
   it('filters task ladders to models supported by the selected provider', async () => {
-    // claude-fable-5 is ladder-first for planning but globally disabled, so the
-    // first surviving claude-compatible candidate (claude-opus-4-8) should win.
+    // claude-fable-5 is ladder-first for planning and claude-compatible, so it
+    // wins directly. gpt-5.5 is skipped by the provider filter (not supported by
+    // the claude CLI).
     const { cliPath, logPath } = createMockCli('provider-filter', {
+      'claude-fable-5': { type: 'success', text: 'anthropic planning winner' },
       'gpt-5.5': { type: 'other', message: 'invalid model for claude cli', code: 1 },
       'claude-opus-4-8': { type: 'success', text: 'anthropic planning winner' },
     });
@@ -443,17 +445,28 @@ describe('quota fallback', () => {
       taskType: 'planning',
     });
 
-    assert.equal(result.model, 'claude-opus-4-8');
-    assert.deepEqual(readInvocations(logPath).map((entry) => entry.model), ['claude-opus-4-8']);
+    assert.equal(result.model, 'claude-fable-5');
+    assert.deepEqual(readInvocations(logPath).map((entry) => entry.model), ['claude-fable-5']);
   });
 
   it('excludes globally disabled models from the fallback ladder', async () => {
-    // claude-fable-5 is disabled upstream (DISABLED_MODEL_IDS). Even though it is
-    // ladder-first for planning, it must never be invoked — the resolver should
-    // skip straight to claude-opus-4-8. Regression guard for the silent exit-1
-    // expansion failures when fable access was restricted.
+    // gpt-5.3-codex is permanently in DISABLED_MODEL_IDS. Override its registry
+    // entry to clear disabled:true and set vendor:anthropic so it passes both
+    // getLadder and the provider filter — filterDisabledModels must still gate it
+    // out. Regression guard for the disabled-model filtering mechanism in callLLM.
+    writeRegistryConfig({
+      configVersion: '1.3.0',
+      modelRegistry: {
+        models: {
+          'gpt-5.3-codex': { disabled: false, vendor: 'anthropic' },
+        },
+        ladders: {
+          planning: ['gpt-5.3-codex', 'claude-opus-4-8'],
+        },
+      },
+    });
     const { cliPath, logPath } = createMockCli('disabled-filter', {
-      'claude-fable-5': { type: 'other', message: 'fable access restricted', code: 1 },
+      'gpt-5.3-codex': { type: 'other', message: 'model is disabled', code: 1 },
       'claude-opus-4-8': { type: 'success', text: 'planning winner' },
     });
 
@@ -467,7 +480,7 @@ describe('quota fallback', () => {
 
     assert.equal(result.model, 'claude-opus-4-8');
     const invoked = readInvocations(logPath).map((entry) => entry.model);
-    assert.ok(!invoked.includes('claude-fable-5'), 'disabled model must not be invoked');
+    assert.ok(!invoked.includes('gpt-5.3-codex'), 'disabled model must not be invoked');
   });
 
   it('keeps DeepSeek Claude-compatible models in provider-filtered ladders', async () => {
