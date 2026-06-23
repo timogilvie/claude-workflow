@@ -37,6 +37,9 @@ export interface JobResultFile {
     winner?: 'primary' | 'challenger';
     winnerModel?: string;
     rationale?: string;
+    comparisonOutcome?: 'compared' | 'skipped';
+    skipReason?: 'identical-routing-dimensions';
+    cleanupPolicy?: 'primary-wins-close-challenger';
     primaryModel?: string;
     challengerModel?: string;
     primaryPrUrl?: string;
