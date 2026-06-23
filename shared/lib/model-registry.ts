@@ -4,6 +4,7 @@ import {
   getRouterConfig,
   type ModelCapabilitiesOverride,
   type ModelRegistryConfig,
+  type NativeCapabilityOverride,
 } from './config.ts';
 import { filterDisabledModels } from './disabled-models.ts';
 
@@ -15,6 +16,9 @@ export type LatencyTier = 'fast' | 'standard' | 'slow';
 export type ReasoningTier = 'basic' | 'standard' | 'advanced';
 export type Channel = 'stable' | 'preview' | 'experimental';
 export const CHANNELS: readonly Channel[] = Object.freeze(['stable', 'preview', 'experimental'] as const);
+export type NativeProviderName = 'openai' | 'openrouter';
+export type PiTransportKind = 'openai-responses' | 'openai-completions';
+export type ReadOnlyNativeCapability = 'certified' | 'unsupported' | 'partial';
 export type CapabilityConstraintName =
   | 'minContextWindow'
   | 'requiresTools'
@@ -26,6 +30,28 @@ export interface MultimodalSupport {
   image: boolean;
   audio?: boolean;
   video?: boolean;
+}
+
+export interface PiCompatFlags {
+  thinkingFormat?: 'openrouter';
+  [key: string]: unknown;
+}
+
+/**
+ * Registry-native metadata for Pi-backed providers.
+ *
+ * Mapping table:
+ * - `openai` + `openai-responses` => `certified`
+ * - `openrouter` + `openai-completions` + `thinkingFormat=openrouter` => `certified`
+ * - `openrouter` + `openai-completions` without that compat flag => `partial`
+ * - all other combinations => `unsupported`
+ */
+export interface NativeCapability {
+  nativeProvider: NativeProviderName;
+  piTransportKind: PiTransportKind;
+  readOnlyNative: ReadOnlyNativeCapability;
+  compatFlags?: PiCompatFlags;
+  limitations?: string[];
 }
 
 export interface ModelCapabilities {
@@ -50,6 +76,7 @@ export interface ModelCapabilities {
   costPerMillionInputTokensUsd: number;
   costPerMillionOutputTokensUsd: number;
   agent?: string;
+  nativeCapability?: NativeCapability;
   /**
    * ISO date the model became generally available. Drives the recency-aware
    * exploration boost (router.exploration.newModelBoost) and challenge
@@ -92,6 +119,49 @@ const DESCRIPTOR_STAGE_TO_TASK_TYPE: Record<DescriptorModelStage, RegistryTaskTy
   coder: 'coding',
   reviewer: 'review',
 };
+const READ_ONLY_NATIVE_CAPABILITIES: readonly ReadOnlyNativeCapability[] = ['certified', 'unsupported', 'partial'];
+const PI_TRANSPORT_KINDS: readonly PiTransportKind[] = ['openai-responses', 'openai-completions'];
+
+function cloneCompatFlags(compatFlags: PiCompatFlags | undefined): PiCompatFlags | undefined {
+  return compatFlags ? { ...compatFlags } : undefined;
+}
+
+function cloneNativeCapability(
+  capability: NativeCapability | undefined,
+): NativeCapability | undefined {
+  if (!capability) {
+    return undefined;
+  }
+
+  return {
+    nativeProvider: capability.nativeProvider,
+    piTransportKind: capability.piTransportKind,
+    readOnlyNative: capability.readOnlyNative,
+    compatFlags: cloneCompatFlags(capability.compatFlags),
+    limitations: capability.limitations ? [...capability.limitations] : undefined,
+  };
+}
+
+function mergeNativeCapability(
+  seed: NativeCapability | undefined,
+  override: NativeCapabilityOverride,
+): NativeCapability {
+  const merged: Partial<NativeCapability> = {
+    nativeProvider: override.nativeProvider ?? seed?.nativeProvider,
+    piTransportKind: override.piTransportKind ?? seed?.piTransportKind,
+    readOnlyNative: override.readOnlyNative ?? seed?.readOnlyNative,
+    compatFlags: override.compatFlags
+      ? cloneCompatFlags(override.compatFlags)
+      : cloneCompatFlags(seed?.compatFlags),
+    limitations: override.limitations
+      ? [...override.limitations]
+      : seed?.limitations
+      ? [...seed.limitations]
+      : undefined,
+  };
+
+  return merged as NativeCapability;
+}
 
 function scores(
   routing: number,
@@ -121,6 +191,7 @@ function cloneCapabilities(capabilities: ModelCapabilities): ModelCapabilities {
     costPerMillionInputTokensUsd: capabilities.costPerMillionInputTokensUsd,
     costPerMillionOutputTokensUsd: capabilities.costPerMillionOutputTokensUsd,
     agent: capabilities.agent,
+    nativeCapability: cloneNativeCapability(capabilities.nativeCapability),
     releasedAt: capabilities.releasedAt,
   };
 }
@@ -283,7 +354,55 @@ function mergeCapabilities(
     costPerMillionInputTokensUsd: override.costPerMillionInputTokensUsd ?? seed.costPerMillionInputTokensUsd,
     costPerMillionOutputTokensUsd: override.costPerMillionOutputTokensUsd ?? seed.costPerMillionOutputTokensUsd,
     agent: override.agent ?? seed.agent,
+    nativeCapability: override.nativeCapability
+      ? mergeNativeCapability(seed.nativeCapability, override.nativeCapability)
+      : cloneNativeCapability(seed.nativeCapability),
     releasedAt: override.releasedAt ?? seed.releasedAt,
+  };
+}
+
+/**
+ * Pure derivation for native read-only capability from provider metadata.
+ *
+ * Mapping table:
+ * - `openai` + `openai-responses` => `certified`
+ * - `openrouter` + `openai-completions` + `thinkingFormat=openrouter` => `certified`
+ * - `openrouter` + `openai-completions` without that compat flag => `partial`
+ * - missing provider or transport, or any other combination => `unsupported`
+ */
+export function deriveReadOnlyNativeCapability(input: {
+  nativeProvider?: NativeProviderName;
+  piTransportKind?: PiTransportKind;
+  compatFlags?: PiCompatFlags;
+}): { capability: ReadOnlyNativeCapability; limitations: string[] } {
+  if (!input.nativeProvider) {
+    return { capability: 'unsupported', limitations: ['missing nativeProvider'] };
+  }
+
+  if (!input.piTransportKind) {
+    return { capability: 'unsupported', limitations: ['missing piTransportKind'] };
+  }
+
+  if (input.nativeProvider === 'openai' && input.piTransportKind === 'openai-responses') {
+    return { capability: 'certified', limitations: [] };
+  }
+
+  if (input.nativeProvider === 'openrouter' && input.piTransportKind === 'openai-completions') {
+    if (input.compatFlags?.thinkingFormat === 'openrouter') {
+      return { capability: 'certified', limitations: [] };
+    }
+
+    return {
+      capability: 'partial',
+      limitations: ['missing thinkingFormat=openrouter compat flag'],
+    };
+  }
+
+  return {
+    capability: 'unsupported',
+    limitations: [
+      `unsupported native provider/transport combination: ${input.nativeProvider}/${input.piTransportKind}`,
+    ],
   };
 }
 
@@ -613,6 +732,80 @@ export function validateModelId(modelId: string): void {
       modelId,
       `Error: Invalid model ID "${modelId}"\n\nModel IDs must be lowercase and may include digits, hyphens, dots, and a single bracket suffix like [1m].`,
     );
+  }
+}
+
+function isReadOnlyNativeCapabilityValue(value: unknown): value is ReadOnlyNativeCapability {
+  return typeof value === 'string' && (READ_ONLY_NATIVE_CAPABILITIES as readonly string[]).includes(value);
+}
+
+function isPiTransportKindValue(value: unknown): value is PiTransportKind {
+  return typeof value === 'string' && (PI_TRANSPORT_KINDS as readonly string[]).includes(value);
+}
+
+export function validateNativeCapability(
+  modelId: string,
+  capabilities: Pick<ModelCapabilities, 'nativeCapability'>,
+): void {
+  const nativeCapability = capabilities.nativeCapability;
+  if (!nativeCapability) {
+    return;
+  }
+
+  if (!isReadOnlyNativeCapabilityValue(nativeCapability.readOnlyNative)) {
+    throw new ModelValidationError(
+      modelId,
+      `model ${modelId}: nativeCapability.readOnlyNative must be one of ${READ_ONLY_NATIVE_CAPABILITIES.join(', ')}`,
+    );
+  }
+
+  if (
+    (nativeCapability.readOnlyNative === 'certified' || nativeCapability.readOnlyNative === 'partial')
+    && !nativeCapability.nativeProvider
+  ) {
+    throw new ModelValidationError(
+      modelId,
+      `model ${modelId}: nativeCapability.readOnlyNative=${nativeCapability.readOnlyNative} requires nativeProvider`,
+    );
+  }
+
+  if (
+    (nativeCapability.readOnlyNative === 'certified' || nativeCapability.readOnlyNative === 'partial')
+    && !nativeCapability.piTransportKind
+  ) {
+    throw new ModelValidationError(
+      modelId,
+      `model ${modelId}: nativeCapability.readOnlyNative=${nativeCapability.readOnlyNative} requires piTransportKind`,
+    );
+  }
+
+  if (
+    nativeCapability.piTransportKind !== undefined
+    && !isPiTransportKindValue(nativeCapability.piTransportKind)
+  ) {
+    throw new ModelValidationError(
+      modelId,
+      `model ${modelId}: nativeCapability.piTransportKind must be one of ${PI_TRANSPORT_KINDS.join(', ')}`,
+    );
+  }
+
+  const derived = deriveReadOnlyNativeCapability({
+    nativeProvider: nativeCapability.nativeProvider,
+    piTransportKind: nativeCapability.piTransportKind,
+    compatFlags: nativeCapability.compatFlags,
+  });
+
+  if (nativeCapability.readOnlyNative !== derived.capability) {
+    throw new ModelValidationError(
+      modelId,
+      `model ${modelId}: nativeCapability.readOnlyNative=${nativeCapability.readOnlyNative} contradicts compat flags (derived: ${derived.capability})`,
+    );
+  }
+}
+
+export function assertRegistryConsistency(registry: ModelRegistry): void {
+  for (const [modelId, capabilities] of Object.entries(registry.models)) {
+    validateNativeCapability(modelId, capabilities);
   }
 }
 
@@ -1351,11 +1544,28 @@ export function mergeModelRegistry(
     }
   }
 
+  assertRegistryConsistency(merged);
   return merged;
 }
 
 export function getEffectiveRegistry(repoDir?: string): ModelRegistry {
   return mergeModelRegistry(DEFAULT_MODEL_REGISTRY, getModelRegistryConfig(repoDir));
+}
+
+/**
+ * Use this guard at any native read-only selection site. Mere model availability
+ * does not imply native read-only certification.
+ */
+export function isReadOnlyNativeCapable(
+  modelId: string,
+  opts?: { registry?: ModelRegistry; allowPartial?: boolean },
+): boolean {
+  const registry = opts?.registry ?? getEffectiveRegistry();
+  const capability = registry.models[modelId]?.nativeCapability?.readOnlyNative;
+  if (capability === 'certified') {
+    return true;
+  }
+  return capability === 'partial' && opts?.allowPartial === true;
 }
 
 export function getConfiguredModelsForDescriptorStage(
