@@ -19,6 +19,7 @@ import {
   pickChallengeWorkflows,
   variedModelForStage,
 } from './challenge-mode.ts';
+import { listVariedRoutingDimensions, routingMetaFromChallengeEntry } from './challenge-comparison.ts';
 import type { RouteArtifactSnapshot } from './route-artifact.ts';
 
 let passed = 0;
@@ -956,6 +957,87 @@ test('pickChallengeWorkflowsWithContext keeps coder variation by default', () =>
   assert.notEqual(pair!.challenger.model, pair!.primary.model);
   assert.equal(pair!.primary.planner, pair!.challenger.planner);
   assert.equal(pair!.primary.reviewer, pair!.challenger.reviewer);
+});
+
+test('implementation-stage pair remains unchanged when coder differs', () => {
+  const pair = pickChallengeWorkflows(
+    ['claude-opus-4-6', 'gpt-5.3-codex', 'claude-sonnet-4-5-20250929'],
+    {
+      pairId: 'HOK-2301-I',
+      issueId: 'HOK-2301-I',
+      slug: 'implementation-already-varied',
+      prompt: 'irrelevant',
+      primaryModel: 'claude-opus-4-6',
+      challengeStage: 'implementation',
+      forcedChallengerModel: 'gpt-5.3-codex',
+      randomFn: () => 0,
+      routeFn: mockRouteFn,
+    },
+  );
+
+  assert.ok(pair);
+  assert.equal(pair!.challengeStage, 'implementation');
+  assert.equal(pair!.primary.model, 'claude-opus-4-6');
+  assert.equal(pair!.challenger.model, 'gpt-5.3-codex');
+  assert.deepEqual(
+    listVariedRoutingDimensions(
+      routingMetaFromChallengeEntry(pair!.primary),
+      routingMetaFromChallengeEntry(pair!.challenger),
+    ),
+    ['coder'],
+  );
+});
+
+test('already-varied plan and review pairs remain single-variable', () => {
+  const planPair = pickChallengeWorkflows(
+    ['claude-opus-4-6', 'gpt-5.3-codex', 'claude-sonnet-4-5-20250929'],
+    {
+      pairId: 'HOK-2301-P',
+      issueId: 'HOK-2301-P',
+      slug: 'plan-already-varied',
+      prompt: 'irrelevant',
+      primaryModel: 'claude-opus-4-6',
+      challengeStage: 'plan',
+      forcedChallengerModel: 'gpt-5.3-codex',
+      randomFn: () => 0,
+      routeFn: mockRouteFn,
+    },
+  );
+
+  assert.ok(planPair);
+  assert.equal(planPair!.challengeStage, 'plan');
+  assert.deepEqual(
+    listVariedRoutingDimensions(
+      routingMetaFromChallengeEntry(planPair!.primary),
+      routingMetaFromChallengeEntry(planPair!.challenger),
+    ),
+    ['planner'],
+  );
+
+  const reviewPair = pickChallengeWorkflows(
+    ['claude-opus-4-6', 'gpt-5.3-codex', 'claude-sonnet-4-5-20250929'],
+    {
+      pairId: 'HOK-2301-R',
+      issueId: 'HOK-2301-R',
+      slug: 'review-already-varied',
+      prompt: 'irrelevant',
+      primaryModel: 'claude-opus-4-6',
+      challengeStage: 'review',
+      forcedChallengerModel: 'gpt-5.3-codex',
+      randomFn: () => 0,
+      routeFn: mockRouteFn,
+    },
+  );
+
+  assert.ok(reviewPair);
+  assert.equal(reviewPair!.challengeStage, 'review');
+  assert.deepEqual(
+    listVariedRoutingDimensions(
+      routingMetaFromChallengeEntry(reviewPair!.primary),
+      routingMetaFromChallengeEntry(reviewPair!.challenger),
+    ),
+    ['reviewer'],
+  );
 });
 
 test('pickChallengeWorkflows repairs a forced review challenger that matches the primary reviewer', () => {

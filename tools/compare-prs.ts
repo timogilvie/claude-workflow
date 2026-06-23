@@ -142,7 +142,6 @@ runTool({
           primaryRouting,
           challengerRouting,
         });
-        recordForResult = skippedRecord;
         appendChallengeComparison(skippedRecord, evalsDir);
 
         const routingSummary = formatRoutingSummary(
