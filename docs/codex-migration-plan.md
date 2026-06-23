@@ -128,13 +128,31 @@ with minimal per-call edits.
 
 ---
 
-## Phase 4 — Direct-shellout cleanups (bypass the abstraction)
+## Phase 4 — Direct-shellout cleanups (bypass the abstraction) ✅ DONE
 
-- [ ] `tools/backfill-stage-scores.ts:118-124` — replace the local
-      `execSync('claude -p ...')` with the shared `callLLM`, then route to codex.
-- [ ] `tools/check-review-setup.ts` (`:73,226-239`) — diagnostics hardwired to
-      `claude` / `api.anthropic.com`; add a codex-aware equivalent (mirror the
-      guidance block at `llm-cli.ts:1160-1170`).
+- [x] `tools/backfill-stage-scores.ts:118-124` — replaced the local
+      `execSync('claude -p ...')` with `callLLM` from `shared/lib/llm-cli.ts`;
+      default model flipped to `gpt-5.5` (provider resolved from model via
+      `resolveProviderForModel`); `--model claude-sonnet-4-6` preserves prior behavior.
+- [x] `tools/check-review-setup.ts` — renamed `checkCLI()` → `checkClaudeCLI()`;
+      added parallel `checkCodexCLI()` using `checkCodexAvailability`; both checks
+      run in `run()` so exit code 1 fires when either provider is unavailable;
+      added Codex troubleshooting block mirroring the Claude one; network check
+      stays Anthropic-only with asymmetry documented in an inline comment.
+
+### Phase 4 inventory (audit results — HOK-2229)
+
+| File | Disposition | Rationale |
+|---|---|---|
+| `tools/backfill-stage-scores.ts:124` | **migrated** | Direct `execSync('claude -p --output-format json --model …')` replaced by `callLLM`; default model → `gpt-5.5`. |
+| `tools/check-review-setup.ts:228` | **doc-only / Codex parity added** | `checkCodexCLI()` added alongside `checkClaudeCLI()`; troubleshooting block added for Codex. |
+| `shared/lib/llm-cli.ts:1311` | **left** | Inside `PREFLIGHT_TROUBLESHOOTING.claude` — Claude provider troubleshooting string. Correct as-is. |
+| `shared/lib/review-engine.ts:94` | **left** | Comment explaining `DEFAULT_TIMEOUT_MS`. No code change needed. |
+| `dspy/claude_cli_lm.py`, `dspy/evaluators/llm_caller.py` | **out of scope** | Python DSPy training/eval pipeline run manually by humans; not an unattended hot path. |
+| `shared/lib/agent-adapters.sh` references | **out of scope** | Mill-mode agent launch layer (not single-shot LLM calls); codex resolution from model prefix already works (Phase 2). |
+| `shared/hooks/claude-status-hook.sh` | **out of scope** | Claude-specific status adapter; Codex has its own `codex-status-monitor.sh`. |
+
+**Re-audit result:** `rg -n 'execSync.*claude|spawn.*claude'` → zero matches in `tools/`. Only `leave`-classified hits remain for `claude -p` patterns.
 
 ---
 
@@ -162,3 +180,21 @@ Phase 0 is proven and config-driven provider selection is in place:
 - The DeepSeek launcher still drives the `claude` binary (via Anthropic-compatible
   base URL); not addressed here — decide separately whether that counts as
   "headless Claude" to reduce.
+
+### Eval-judge re-baseline decision
+
+**Decision:** dual-run for a 14-day window (2026-06-23 through 2026-07-07).
+
+Run both the Claude judge and the Codex judge in parallel for all new workflow
+completions during this window. Compare score deltas at the window boundary;
+if deltas are within ±0.05 on average, cut over to the Codex judge exclusively.
+
+**Rationale:** Avoids retroactive re-scoring of historical records (out of scope)
+while providing a forward-looking baseline comparison before permanently replacing
+the Claude judge. The `EVAL_MODEL` environment variable and `eval.judge.model`
+config key remain as escape hatches to revert to the Claude judge mid-window.
+
+**Behavior change from Phase 4:** `tools/check-review-setup.ts` now exits
+non-zero if Codex auth is missing (both providers validated). Operators in
+Claude-only environments should pass `--skip-codex` (to be added if requested)
+or accept the stricter check.
