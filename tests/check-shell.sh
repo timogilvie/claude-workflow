@@ -40,6 +40,7 @@ for f in \
   "$REPO_DIR"/tests/wavemill-dependency-queue-filter.test.sh \
   "$REPO_DIR"/tests/wavemill-backlog-pane-no-flash.test.sh \
   "$REPO_DIR"/tests/wavemill-mill-model-flags.test.sh \
+  "$REPO_DIR"/tests/wavemill-mill-challenge.test.sh \
   "$REPO_DIR"/tests/model-inheritance-chain.test.sh \
   "$REPO_DIR"/tests/wavemill-background-jobs-cleanup.test.sh \
   "$REPO_DIR"/tests/notification-waiting.test.sh \
@@ -3187,6 +3188,18 @@ else
   fail "advance command lifecycle: $advance_command_output"
 fi
 unset advance_command_status
+
+echo ""
+echo "=== Challenge Mode Routing Guards (HOK-2272) ==="
+
+challenge_mode_output="$(bash "$REPO_DIR/tests/wavemill-mill-challenge.test.sh" 2>&1)" || challenge_mode_status=$?
+challenge_mode_status="${challenge_mode_status:-0}"
+if [[ "$challenge_mode_status" -eq 0 ]]; then
+  pass "challenge mode routing guards"
+else
+  fail "challenge mode routing guards: $challenge_mode_output"
+fi
+unset challenge_mode_status
 
 # ============================================================================
 # HOK-2289: Pi vendor adapter seam guard

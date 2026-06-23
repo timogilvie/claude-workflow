@@ -27,6 +27,28 @@ Launch invariant: non-control challenge pairs must differ on at least one routin
 3. If `challenge.eval.retryMaxAttempts` has not been exhausted, the pair moves to `retrying_eval` and the timed-out eval is relaunched through the normal eval path.
 4. If retries are exhausted, the pair moves to `manual_comparison_needed` and wavemill writes `ready/challenge-comparison-needed.md` under the primary task feature directory.
 
+## Coder Override Contract (HOK-2272)
+
+When launching the coding phase for a challenge task, `challengeModel` overrides the
+phase-config/expanded coder route ONLY when the challenge varied the implementation/coding
+stage (`challengeStage == "implementation"` or absent for legacy tasks).
+
+For plan-stage and review-stage challenges, `challengeModel` refers to the varied stage's
+model (planner or reviewer), not the coder. The coding handoff honors the expanded/refreshed
+`coderModel` from `.phase-config.json.coding.model` or task metadata in these cases.
+
+### Stage-Aware Override Logic
+
+- `challengeStage == "implementation"` OR `challengeStage` is absent → `challengeModel` overrides coder
+- `challengeStage == "plan"` → honor expanded coder route (challengeModel is the varied planner)
+- `challengeStage == "review"` → honor expanded coder route (challengeModel is the varied reviewer)
+
+### Related Issues
+
+- **HOK-2237**: Established full routing field persistence on challenge refresh
+- **HOK-2272**: Gated coder override on `challengeStage` to fix route-to-launch mismatch
+  for non-coder-stage challenges
+
 ## Merge-Lane Expectations
 
 - `retrying_eval` should remain an active, non-terminal wait.

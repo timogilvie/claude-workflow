@@ -9912,9 +9912,18 @@ monitor_issue_state() {
                   log "debug" "  $ISSUE: Challenge participants preserved after expanded routing"
                 fi
               fi
-              # For challenge tasks, the challenge model MUST override the routed coder
+              # For challenge tasks, the challenge model overrides the routed coder
+              # ONLY when the challenge varied the implementation/coding stage.
+              # For plan-stage and review-stage challenges, honor the expanded coder route.
               if [[ -n "$challenge_coder" ]]; then
-                coder_model="$challenge_coder"
+                if [[ -z "$challenge_stage_meta" || "$challenge_stage_meta" == "implementation" ]]; then
+                  # Implementation-stage challenge OR legacy task without challengeStage
+                  coder_model="$challenge_coder"
+                  log "debug" "  $ISSUE: Challenge stage=${challenge_stage_meta:-absent} (or absent), applying challengeModel override to coder"
+                else
+                  # Plan-stage or review-stage challenge: honor phase-config/expanded coder
+                  log "debug" "  $ISSUE: Challenge stage=$challenge_stage_meta, honoring phase-config coder (not challengeModel)"
+                fi
               fi
             fi
             coder_model="$(resolve_phase_model "coding" "$coder_model" "claude-opus-4-7")"

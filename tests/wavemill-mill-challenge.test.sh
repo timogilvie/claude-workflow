@@ -333,6 +333,103 @@ bash -lc '
   || fail "missing entries[1].model incorrectly triggered challenger save"
 
 echo ""
+echo "=== Challenge Stage-Aware Coder Override (HOK-2272) ==="
+
+# Extract the coder override block from wavemill-mill.sh:
+# the block starting with the outer `if [[ -n "$challenge_coder" ]]` and ending
+# after the closing fi that contains the stage-conditional logic.
+OVERRIDE_BLOCK="$(awk '
+  /# For challenge tasks, the challenge model overrides the routed coder/ { capture=1 }
+  capture { print }
+  capture && /^[[:space:]]*fi$/ && saw_inner_fi { capture=0; exit }
+  capture && /^[[:space:]]*fi$/ { saw_inner_fi=1 }
+' "$MILL_SCRIPT")"
+
+if [[ -n "$OVERRIDE_BLOCK" ]]; then
+  check_contains "override conditional checks challengeStage" "$OVERRIDE_BLOCK" 'challenge_stage_meta'
+  check_contains "override only applies for implementation stage" "$OVERRIDE_BLOCK" '"implementation"'
+  check_contains "override skips for non-implementation stage (else branch)" "$OVERRIDE_BLOCK" 'honoring phase-config coder'
+  check_contains "override applied log emitted for implementation/legacy" "$OVERRIDE_BLOCK" 'applying challengeModel override to coder'
+  check_contains "empty challengeStage falls through to override (backward compat)" "$OVERRIDE_BLOCK" '-z "$challenge_stage_meta"'
+else
+  fail "could not extract coder override block from wavemill-mill.sh"
+fi
+
+# Test Case 1 & 2: Review-stage and plan-stage challenges must NOT apply override
+# Simulate the conditional logic inline for both stages
+for test_stage in "review" "plan"; do
+  challenge_coder_val="claude-sonnet-4-6"
+  challenge_stage_val="$test_stage"
+  coder_model_val="gpt-5.4"
+  override_applied="false"
+
+  if [[ -n "$challenge_coder_val" ]]; then
+    if [[ -z "$challenge_stage_val" || "$challenge_stage_val" == "implementation" ]]; then
+      coder_model_val="$challenge_coder_val"
+      override_applied="true"
+    fi
+  fi
+
+  if [[ "$override_applied" == "false" && "$coder_model_val" == "gpt-5.4" ]]; then
+    pass "${test_stage}-stage challenge: coder honors phase-config route (not challengeModel)"
+  else
+    echo "    expected: coder=gpt-5.4 (override skipped), got: coder=$coder_model_val override=$override_applied"
+    fail "${test_stage}-stage challenge: coder override incorrectly applied"
+  fi
+done
+
+# Test Case 3: Implementation-stage challenge MUST apply override
+challenge_coder_val="claude-sonnet-4-6"
+challenge_stage_val="implementation"
+coder_model_val="gpt-5.4"
+
+if [[ -n "$challenge_coder_val" ]]; then
+  if [[ -z "$challenge_stage_val" || "$challenge_stage_val" == "implementation" ]]; then
+    coder_model_val="$challenge_coder_val"
+  fi
+fi
+
+if [[ "$coder_model_val" == "claude-sonnet-4-6" ]]; then
+  pass "implementation-stage challenge: challengeModel override applied to coder"
+else
+  echo "    expected: coder=claude-sonnet-4-6, got: coder=$coder_model_val"
+  fail "implementation-stage challenge: challengeModel override not applied"
+fi
+
+# Test Case 4: Legacy task without challengeStage MUST apply override (backward compat)
+challenge_coder_val="claude-sonnet-4-6"
+challenge_stage_val=""
+coder_model_val="gpt-5.4"
+
+if [[ -n "$challenge_coder_val" ]]; then
+  if [[ -z "$challenge_stage_val" || "$challenge_stage_val" == "implementation" ]]; then
+    coder_model_val="$challenge_coder_val"
+  fi
+fi
+
+if [[ "$coder_model_val" == "claude-sonnet-4-6" ]]; then
+  pass "legacy task (no challengeStage): challengeModel override applied for backward compat"
+else
+  echo "    expected: coder=claude-sonnet-4-6, got: coder=$coder_model_val"
+  fail "legacy task (no challengeStage): backward compat override not applied"
+fi
+
+# Test Case 5: Non-challenge task — override block must not be entered when challenge_coder is empty
+challenge_coder_val=""
+coder_model_val="gpt-5.4"
+
+if [[ -n "$challenge_coder_val" ]]; then
+  coder_model_val="$challenge_coder_val"
+fi
+
+if [[ "$coder_model_val" == "gpt-5.4" ]]; then
+  pass "non-challenge task: phase-config coder honored when challengeModel is absent"
+else
+  echo "    expected: coder=gpt-5.4, got: coder=$coder_model_val"
+  fail "non-challenge task: coder unexpectedly overridden"
+fi
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 
 if (( FAIL > 0 )); then
