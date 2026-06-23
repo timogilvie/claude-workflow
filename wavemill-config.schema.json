@@ -941,6 +941,224 @@
             },
             "additionalProperties": false
         },
+        "nativeAgent": {
+            "type": "object",
+            "description": "Native runtime provider configuration for Pi-backed live models.",
+            "properties": {
+                "providers": {
+                    "type": "object",
+                    "description": "Opt-in live providers exposed through Pi's built-in provider registry.",
+                    "properties": {
+                        "openai": {
+                            "type": "object",
+                            "description": "OpenAI Responses provider configuration for the native agent runtime.",
+                            "properties": {
+                                "enabled": {
+                                    "type": "boolean",
+                                    "default": false
+                                },
+                                "apiKeyEnv": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "default": "OPENAI_API_KEY"
+                                },
+                                "baseUrl": {
+                                    "type": "string",
+                                    "default": "https://api.openai.com/v1"
+                                },
+                                "headers": {
+                                    "type": "object",
+                                    "additionalProperties": {
+                                        "type": "string"
+                                    }
+                                },
+                                "models": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "id": {
+                                                "type": "string",
+                                                "minLength": 1
+                                            },
+                                            "api": {
+                                                "type": "string",
+                                                "enum": [
+                                                    "openai-completions",
+                                                    "openai-responses"
+                                                ]
+                                            },
+                                            "name": {
+                                                "type": "string",
+                                                "minLength": 1
+                                            },
+                                            "reasoning": {
+                                                "type": "boolean"
+                                            },
+                                            "input": {
+                                                "type": "array",
+                                                "items": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                        "text",
+                                                        "image"
+                                                    ]
+                                                }
+                                            },
+                                            "contextWindow": {
+                                                "type": "integer",
+                                                "minimum": 1
+                                            },
+                                            "maxTokens": {
+                                                "type": "integer",
+                                                "minimum": 1
+                                            },
+                                            "compat": {
+                                                "type": "object"
+                                            }
+                                        },
+                                        "required": [
+                                            "id",
+                                            "api"
+                                        ],
+                                        "additionalProperties": false
+                                    }
+                                }
+                            },
+                            "additionalProperties": false,
+                            "allOf": [
+                                {
+                                    "if": {
+                                        "properties": {
+                                            "enabled": {
+                                                "const": true
+                                            }
+                                        },
+                                        "required": [
+                                            "enabled"
+                                        ]
+                                    },
+                                    "then": {
+                                        "required": [
+                                            "models"
+                                        ],
+                                        "properties": {
+                                            "models": {
+                                                "minItems": 1
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        },
+                        "openrouter": {
+                            "type": "object",
+                            "description": "OpenRouter provider configuration for OpenAI-compatible Pi models.",
+                            "properties": {
+                                "enabled": {
+                                    "type": "boolean",
+                                    "default": false
+                                },
+                                "apiKeyEnv": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "default": "OPENROUTER_API_KEY"
+                                },
+                                "baseUrl": {
+                                    "type": "string",
+                                    "default": "https://openrouter.ai/api/v1"
+                                },
+                                "headers": {
+                                    "type": "object",
+                                    "additionalProperties": {
+                                        "type": "string"
+                                    }
+                                },
+                                "models": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "id": {
+                                                "type": "string",
+                                                "minLength": 1
+                                            },
+                                            "api": {
+                                                "type": "string",
+                                                "enum": [
+                                                    "openai-completions",
+                                                    "openai-responses"
+                                                ]
+                                            },
+                                            "name": {
+                                                "type": "string",
+                                                "minLength": 1
+                                            },
+                                            "reasoning": {
+                                                "type": "boolean"
+                                            },
+                                            "input": {
+                                                "type": "array",
+                                                "items": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                        "text",
+                                                        "image"
+                                                    ]
+                                                }
+                                            },
+                                            "contextWindow": {
+                                                "type": "integer",
+                                                "minimum": 1
+                                            },
+                                            "maxTokens": {
+                                                "type": "integer",
+                                                "minimum": 1
+                                            },
+                                            "compat": {
+                                                "type": "object"
+                                            }
+                                        },
+                                        "required": [
+                                            "id",
+                                            "api"
+                                        ],
+                                        "additionalProperties": false
+                                    }
+                                }
+                            },
+                            "additionalProperties": false,
+                            "allOf": [
+                                {
+                                    "if": {
+                                        "properties": {
+                                            "enabled": {
+                                                "const": true
+                                            }
+                                        },
+                                        "required": [
+                                            "enabled"
+                                        ]
+                                    },
+                                    "then": {
+                                        "required": [
+                                            "models"
+                                        ],
+                                        "properties": {
+                                            "models": {
+                                                "minItems": 1
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "additionalProperties": false
+                }
+            },
+            "additionalProperties": false
+        },
         "ready": {
             "type": "object",
             "description": "Settings for the ready stage (merge-readiness checks)",

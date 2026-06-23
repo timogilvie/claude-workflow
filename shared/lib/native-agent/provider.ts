@@ -1,5 +1,6 @@
 import {
   createAssistantMessageEventStream,
+  getApiProvider,
   registerApiProvider,
   streamSimple,
   type Api,
@@ -12,6 +13,8 @@ import {
   type StreamFunction,
   type Tool,
   type Usage,
+  type OpenAICompletionsCompat,
+  type OpenAIResponsesCompat,
 } from '@earendil-works/pi-ai';
 import type { SessionModelUsage } from '../session-adapters.ts';
 import {
@@ -34,6 +37,12 @@ export type ProviderFinishReason =
 
 /** Re-export for callers that import NativeToolCall from provider.ts */
 export type { NativeToolCall } from './messages.ts';
+export type {
+  Api,
+  Model,
+  OpenAICompletionsCompat,
+  OpenAIResponsesCompat,
+} from '@earendil-works/pi-ai';
 
 /** @deprecated Use AgentToolSchema from messages.ts */
 export type NativeToolSchema = AgentToolSchema;
@@ -113,6 +122,10 @@ export interface ScriptedProviderContext {
 
 export function createPiToolCallingProvider(): ToolCallingProvider {
   return new PiToolCallingProvider();
+}
+
+export function getRegisteredPiApiProvider(api: Api) {
+  return getApiProvider(api);
 }
 
 export function registerScriptedPiProvider(definition: ScriptedPiProviderDefinition): void {

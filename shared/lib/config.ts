@@ -365,6 +365,36 @@ export interface ProvidersConfig {
   openrouter?: OpenRouterProviderConfig;
 }
 
+export type NativeAgentProviderApi = 'openai-completions' | 'openai-responses';
+
+export interface NativeAgentModelConfig {
+  id: string;
+  api: NativeAgentProviderApi;
+  name?: string;
+  reasoning?: boolean;
+  input?: Array<'text' | 'image'>;
+  contextWindow?: number;
+  maxTokens?: number;
+  compat?: Record<string, unknown>;
+}
+
+export interface NativeAgentProviderConfig {
+  enabled?: boolean;
+  apiKeyEnv?: string;
+  baseUrl?: string;
+  headers?: Record<string, string>;
+  models?: NativeAgentModelConfig[];
+}
+
+export interface NativeAgentProvidersConfig {
+  openai?: NativeAgentProviderConfig;
+  openrouter?: NativeAgentProviderConfig;
+}
+
+export interface NativeAgentConfig {
+  providers?: NativeAgentProvidersConfig;
+}
+
 export interface IntegrationConfig {
   enabled: boolean;
   integrationBranch: string;
@@ -568,6 +598,7 @@ export interface WavemillConfig {
   review?: ReviewConfig;
   reviewMerge?: ReviewMergeConfig;
   providers?: ProvidersConfig;
+  nativeAgent?: NativeAgentConfig;
   integration?: Partial<IntegrationConfig>;
   promotion?: Partial<PromotionConfig>;
   ready?: ReadyConfig;
@@ -1341,6 +1372,14 @@ export function getProjectContextConfig(repoDir?: string): Required<ProjectConte
  */
 export function getProvidersConfig(repoDir?: string): ProvidersConfig {
   return loadWavemillConfig(repoDir).providers || {};
+}
+
+/**
+ * Get the native agent config section.
+ * Returns empty object if not configured.
+ */
+export function getNativeAgentConfig(repoDir?: string): NativeAgentConfig {
+  return loadWavemillConfig(repoDir).nativeAgent || {};
 }
 
 /**
