@@ -45,6 +45,7 @@ import {
   getHokusaiSubmissionConfig,
   getHokusaiContributionsConfig,
   getProvidersConfig,
+  getNativeAgentConfig,
   getReadyConfig,
   getReadyWatchdogConfig,
   getMigrationChecksConfig,
@@ -2989,6 +2990,108 @@ test('malformed local overlay throws a clear parse error', () => {
     assert.throws(() => {
       loadWavemillConfig(tmp);
     }, /Failed to parse.*\.wavemill-config\.local\.json/);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('missing nativeAgent config returns an empty object', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({}));
+
+    assert.deepEqual(getNativeAgentConfig(tmp), {});
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('valid nativeAgent provider config validates and is returned by the accessor', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      nativeAgent: {
+        providers: {
+          openai: {
+            apiKeyEnv: 'OPENAI_API_KEY',
+            baseUrl: 'https://api.openai.com/v1',
+            headers: {
+              'X-Trace': 'wavemill',
+            },
+            models: ['gpt-4o'],
+          },
+          openrouter: {
+            enabled: true,
+            apiKeyEnv: 'OPENROUTER_API_KEY',
+            baseUrl: 'https://openrouter.ai/api/v1',
+            models: ['openai/gpt-4o-mini'],
+          },
+        },
+      },
+    }));
+
+    assert.deepEqual(getNativeAgentConfig(tmp), {
+      providers: {
+        openai: {
+          apiKeyEnv: 'OPENAI_API_KEY',
+          baseUrl: 'https://api.openai.com/v1',
+          headers: {
+            'X-Trace': 'wavemill',
+          },
+          models: ['gpt-4o'],
+        },
+        openrouter: {
+          enabled: true,
+          apiKeyEnv: 'OPENROUTER_API_KEY',
+          baseUrl: 'https://openrouter.ai/api/v1',
+          models: ['openai/gpt-4o-mini'],
+        },
+      },
+    });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('unsupported nativeAgent provider names fail schema validation', () => {
+  if (!hasAjv) return;
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      nativeAgent: {
+        providers: {
+          foobar: {
+            apiKeyEnv: 'NOPE',
+          },
+        },
+      },
+    }));
+
+    assert.throws(() => {
+      loadWavemillConfig(tmp);
+    }, /validation failed/);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('configs that omit nativeAgent providers still validate', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      nativeAgent: {},
+      integration: {
+        enabled: false,
+      },
+    }));
+
+    const config = loadWavemillConfig(tmp);
+    assert.deepEqual(config.nativeAgent, {});
+    assert.equal(config.integration?.enabled, false);
   } finally {
     cleanUp(tmp);
   }
