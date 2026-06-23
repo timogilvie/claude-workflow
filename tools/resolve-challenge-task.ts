@@ -3,9 +3,9 @@
 import { runTool } from '../shared/lib/tool-runner.ts';
 import { loadWavemillConfig } from '../shared/lib/config.ts';
 import {
-  pickChallengeModels,
-  pickChallengeWorkflows,
-  pickChallengeWorkflowsWithContext,
+  pickChallengeModelsWithReason,
+  pickChallengeWorkflowsWithContextAndReason,
+  pickChallengeWorkflowsWithReason,
   getChallengeModelPool,
   canRunChallenge,
   chooseChallengeStage,
@@ -128,9 +128,10 @@ runTool({
     });
 
     // If task file provided, use workflow routing for both sides
+    let selectionFailureReason = 'selection_failed';
     let pair;
     if (featureDir) {
-      pair = pickChallengeWorkflowsWithContext(pool, {
+      const selection = pickChallengeWorkflowsWithContextAndReason(pool, {
         pairId: issue,
         issueId: issue,
         slug,
@@ -142,12 +143,14 @@ runTool({
         defaultAgent,
         repoDir,
       }, routeArtifacts);
+      pair = selection.pair;
+      selectionFailureReason = selection.failureReason || selectionFailureReason;
     }
 
     if (!pair && taskFile) {
       try {
         const prompt = readTaskPromptFromFile(taskFile);
-        pair = pickChallengeWorkflows(pool, {
+        const selection = pickChallengeWorkflowsWithReason(pool, {
           pairId: issue,
           issueId: issue,
           slug,
@@ -159,10 +162,12 @@ runTool({
           defaultAgent,
           repoDir,
         });
+        pair = selection.pair;
+        selectionFailureReason = selection.failureReason || selectionFailureReason;
       } catch (error) {
         // Fall back to model-only selection if task file is unreadable
         console.error(`Warning: Failed to read task file for routing: ${error}`);
-        pair = pickChallengeModels(pool, {
+        const selection = pickChallengeModelsWithReason(pool, {
           pairId: issue,
           issueId: issue,
           slug,
@@ -171,10 +176,12 @@ runTool({
           agentMap: router.agentMap,
           defaultAgent,
         });
+        pair = selection.pair;
+        selectionFailureReason = selection.failureReason || selectionFailureReason;
       }
     } else if (!pair) {
       // No task file provided - use model-only selection (backward compatibility)
-      pair = pickChallengeModels(pool, {
+      const selection = pickChallengeModelsWithReason(pool, {
         pairId: issue,
         issueId: issue,
         slug,
@@ -183,10 +190,12 @@ runTool({
         agentMap: router.agentMap,
         defaultAgent,
       });
+      pair = selection.pair;
+      selectionFailureReason = selection.failureReason || selectionFailureReason;
     }
 
     if (!pair) {
-      console.log(JSON.stringify({ ...base, reason: 'selection_failed' }));
+      console.log(JSON.stringify({ ...base, reason: selectionFailureReason }));
       return;
     }
 
