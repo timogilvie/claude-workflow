@@ -1626,3 +1626,336 @@ test('tick prunes retained watchdog state when a task leaves ready', async () =>
     await rm(repoDir, { recursive: true, force: true });
   }
 });
+
+// HOK-2300: stable merge-lane waiting fingerprint (idle minutes must not trigger re-emission)
+test('tick suppresses repeated waiting-on-merge-lane findings when only idle minutes changed', async () => {
+  // Use far-future now so file mtime (real current time) doesn't win the lastProgressAt MAX.
+  // finishedAt is 13 minutes before now: qualifies as waiting-on-merge-lane (>=10m, <30m).
+  const { repoDir, stateDir, stateFile, featureDir } = setupReadyTask('HOK-2298', 805);
+  writeFileSync(path.join(featureDir, '.ready-result.json'), JSON.stringify({
+    stage: 'ready',
+    status: 'completed',
+    startedAt: '2030-06-23T12:00:00.000Z',
+    finishedAt: '2030-06-23T12:10:00.000Z',
+    agent: 'claude',
+    model: 'claude-sonnet-4-6',
+    notes: null,
+    artifacts: { type: 'ready', verdict: 'pass', prNumber: 805, queueState: 'ready-stale' },
+  }, null, 2));
+
+  try {
+    const baseDeps = {
+      fetchGitHubTruth: async () => makeTruth({ mergeStateStatus: 'CLEAN' }),
+      getCurrentHead: async () => 'head-1',
+      getWorktreeMergeState: async () => ({
+        mergeHead: null, unmergedPaths: [], stagedPaths: [], unstagedPaths: [], untrackedPaths: [], rawStatus: [],
+      }),
+      isTaskPaneActive: async () => null,
+      now: () => new Date('2030-06-23T12:23:00.000Z'),
+    };
+
+    const first = await tickReadyWatchdog({ repoDir, stateFile, config: WATCHDOG_CONFIG, deps: baseDeps });
+    assert.equal(first.findings.length, 1, 'first tick must emit waiting-on-merge-lane');
+    assert.equal(first.findings[0].classification, 'waiting-on-merge-lane');
+    assert.match(first.findings[0].detail, /idle 13m/);
+
+    // State file must reflect lastLoggedAt and current idle minutes.
+    const stateAfterFirst = JSON.parse(readFileSync(path.join(stateDir, 'ready-watchdog-state.json'), 'utf-8')) as {
+      tasks: Record<string, { idleMinutes: number; detail: string; lastLoggedAt?: string }>;
+    };
+    assert.ok(stateAfterFirst.tasks['HOK-2298'].lastLoggedAt, 'lastLoggedAt should be set after first emission');
+
+    // Second tick: same conditions but a minute later — only idle minutes changed.
+    const secondDeps = { ...baseDeps, now: () => new Date('2030-06-23T12:24:00.000Z') };
+    const second = await tickReadyWatchdog({ repoDir, stateFile, config: WATCHDOG_CONFIG, deps: secondDeps });
+    assert.equal(second.findings.length, 0, 'second tick must be suppressed — only idle minutes changed');
+
+    // Dashboard fields must still be updated in state file despite suppression.
+    const stateAfterSecond = JSON.parse(readFileSync(path.join(stateDir, 'ready-watchdog-state.json'), 'utf-8')) as {
+      tasks: Record<string, { idleMinutes: number; detail: string; lastLoggedAt?: string }>;
+    };
+    assert.match(stateAfterSecond.tasks['HOK-2298'].detail, /idle 14m/, 'detail should reflect current idle minutes');
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
+// HOK-2300: stable merge-lane stall (needs-user) fingerprint
+test('tick suppresses repeated merge-lane stall needs-user when only waited minutes changed', async () => {
+  // finishedAt is 83 minutes before now: >= escalateMinutes (30m) so classifies as needs-user stall.
+  const { repoDir, stateFile, featureDir } = setupReadyTask('HOK-2298', 805);
+  writeFileSync(path.join(featureDir, '.ready-result.json'), JSON.stringify({
+    stage: 'ready',
+    status: 'completed',
+    startedAt: '2030-06-23T10:00:00.000Z',
+    finishedAt: '2030-06-23T11:00:00.000Z',
+    agent: 'claude',
+    model: 'claude-sonnet-4-6',
+    notes: null,
+    artifacts: { type: 'ready', verdict: 'pass', prNumber: 805, queueState: 'merge-candidate' },
+  }, null, 2));
+
+  const escalateConfig = { ...WATCHDOG_CONFIG, thresholdMinutes: 10 };
+  const baseDeps = {
+    fetchGitHubTruth: async () => makeTruth({ mergeStateStatus: 'CLEAN' }),
+    getCurrentHead: async () => 'head-1',
+    getWorktreeMergeState: async () => ({
+      mergeHead: null, unmergedPaths: [], stagedPaths: [], unstagedPaths: [], untrackedPaths: [], rawStatus: [],
+    }),
+    isTaskPaneActive: async () => null,
+    now: () => new Date('2030-06-23T12:23:00.000Z'),
+  };
+
+  try {
+    const first = await tickReadyWatchdog({ repoDir, stateFile, config: escalateConfig, deps: baseDeps });
+    assert.equal(first.findings.length, 1, 'first tick must emit stall needs-user');
+    assert.equal(first.findings[0].classification, 'needs-user');
+    assert.match(first.findings[0].detail, /merge lane appears stalled/i);
+    assert.match(first.findings[0].detail, /waited 83m/i);
+
+    const secondDeps = { ...baseDeps, now: () => new Date('2030-06-23T12:24:00.000Z') };
+    const second = await tickReadyWatchdog({ repoDir, stateFile, config: escalateConfig, deps: secondDeps });
+    assert.equal(second.findings.length, 0, 'second tick must be suppressed — only waited minutes changed');
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
+// HOK-2300: rate-limit repeated reported findings
+test('rate-limits repeated reported findings using WAVEMILL_READY_WATCHDOG_REPORT_INTERVAL_SECONDS', async () => {
+  const { repoDir, stateFile, featureDir } = setupReadyTask('HOK-2300', 900);
+  writeFileSync(path.join(featureDir, '.ready-result.json'), JSON.stringify({
+    stage: 'ready',
+    status: 'running',
+    startedAt: '2026-06-23T10:00:00.000Z',
+    finishedAt: null,
+    agent: 'claude',
+    model: 'claude-sonnet-4-6',
+    notes: null,
+    artifacts: { type: 'ready', verdict: 'pending', prNumber: 900 },
+  }, null, 2));
+
+  const savedEnv = process.env.WAVEMILL_READY_WATCHDOG_REPORT_INTERVAL_SECONDS;
+  process.env.WAVEMILL_READY_WATCHDOG_REPORT_INTERVAL_SECONDS = '3600';
+
+  try {
+    const t0 = new Date('2030-06-23T10:00:00.000Z');
+    const baseDeps = {
+      fetchGitHubTruth: async () => makeTruth({ state: 'MERGED' }),
+      getCurrentHead: async () => 'head-1',
+      now: () => t0,
+    };
+
+    const first = await tickReadyWatchdog({ repoDir, stateFile, config: WATCHDOG_CONFIG, deps: baseDeps });
+    assert.equal(first.findings.length, 1, 'first tick emits');
+    assert.equal(first.findings[0].action, 'reported');
+
+    // Within interval (1800s elapsed < 3600s): suppress
+    const t1 = new Date(t0.getTime() + 1800 * 1000);
+    const withinInterval = await tickReadyWatchdog({
+      repoDir, stateFile, config: WATCHDOG_CONFIG,
+      deps: { ...baseDeps, now: () => t1 },
+    });
+    assert.equal(withinInterval.findings.length, 0, 'within interval must be suppressed');
+
+    // At interval boundary (3600s elapsed): emit
+    const t2 = new Date(t0.getTime() + 3600 * 1000);
+    const atInterval = await tickReadyWatchdog({
+      repoDir, stateFile, config: WATCHDOG_CONFIG,
+      deps: { ...baseDeps, now: () => t2 },
+    });
+    assert.equal(atInterval.findings.length, 1, 'at interval must emit');
+
+    // Immediately after re-emission: suppress again
+    const t3 = new Date(t2.getTime() + 1000);
+    const afterReemit = await tickReadyWatchdog({
+      repoDir, stateFile, config: WATCHDOG_CONFIG,
+      deps: { ...baseDeps, now: () => t3 },
+    });
+    assert.equal(afterReemit.findings.length, 0, 'immediately after re-emission must be suppressed again');
+  } finally {
+    if (savedEnv === undefined) {
+      delete process.env.WAVEMILL_READY_WATCHDOG_REPORT_INTERVAL_SECONDS;
+    } else {
+      process.env.WAVEMILL_READY_WATCHDOG_REPORT_INTERVAL_SECONDS = savedEnv;
+    }
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
+// HOK-2300: classification/action changes bypass rate limit
+test('classification or action change emits immediately regardless of report interval', async () => {
+  const { repoDir, stateDir, stateFile, featureDir } = setupReadyTask('HOK-2300', 900);
+  writeFileSync(path.join(featureDir, '.ready-result.json'), JSON.stringify({
+    stage: 'ready',
+    status: 'running',
+    startedAt: '2026-06-23T10:00:00.000Z',
+    finishedAt: null,
+    agent: 'claude',
+    model: 'claude-sonnet-4-6',
+    notes: null,
+    artifacts: { type: 'ready', verdict: 'pending', prNumber: 900 },
+  }, null, 2));
+
+  // Seed prior state as if we logged a 'reported' finding 1 minute ago
+  const t0 = new Date('2030-06-23T10:00:00.000Z');
+  writeFileSync(path.join(stateDir, 'ready-watchdog-state.json'), JSON.stringify({
+    updatedAt: t0.toISOString(),
+    tasks: {
+      'HOK-2300': {
+        issueId: 'HOK-2300',
+        slug: 'ready-watchdog-task',
+        prNumber: 900,
+        classification: 'needs-user',
+        displayLabel: 'needs user',
+        detail: 'PR #900 is merged, so ready cannot advance automatically.',
+        action: 'reported',
+        updatedAt: t0.toISOString(),
+        idleMinutes: 200,
+        lastProgressAt: '2026-06-23T10:00:00.000Z',
+        detailFingerprint: 'PR #900 is merged, so ready cannot advance automatically.',
+        lastLoggedAt: t0.toISOString(),
+        lastLoggedFingerprint: 'PR #900 is merged, so ready cannot advance automatically.',
+        lastLoggedClassification: 'needs-user',
+        lastLoggedAction: 'reported',
+      },
+    },
+  }, null, 2));
+
+  try {
+    // Now the state changes (PR closed instead of merged)
+    const t1 = new Date(t0.getTime() + 60_000);
+    const result = await tickReadyWatchdog({
+      repoDir, stateFile, config: WATCHDOG_CONFIG,
+      deps: {
+        fetchGitHubTruth: async () => makeTruth({ state: 'CLOSED' }),
+        getCurrentHead: async () => 'head-1',
+        now: () => t1,
+      },
+    });
+    assert.equal(result.findings.length, 1, 'changed detail must emit immediately even within interval');
+    assert.match(result.findings[0].detail, /closed/i);
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
+// HOK-2300: backward compatibility — old state files without lastLogged* fields
+test('first tick on old state file without lastLogged* fields emits and backfills', async () => {
+  const { repoDir, stateDir, stateFile, featureDir } = setupReadyTask('HOK-2300', 900);
+  writeFileSync(path.join(featureDir, '.ready-result.json'), JSON.stringify({
+    stage: 'ready',
+    status: 'running',
+    startedAt: '2026-06-23T10:00:00.000Z',
+    finishedAt: null,
+    agent: 'claude',
+    model: 'claude-sonnet-4-6',
+    notes: null,
+    artifacts: { type: 'ready', verdict: 'pending', prNumber: 900 },
+  }, null, 2));
+
+  // Old-format state file: has detailFingerprint and lastReportedAction but no lastLogged* fields
+  writeFileSync(path.join(stateDir, 'ready-watchdog-state.json'), JSON.stringify({
+    updatedAt: '2030-06-23T10:00:00.000Z',
+    tasks: {
+      'HOK-2300': {
+        issueId: 'HOK-2300',
+        slug: 'ready-watchdog-task',
+        prNumber: 900,
+        classification: 'needs-user',
+        displayLabel: 'needs user',
+        detail: 'PR #900 is merged, so ready cannot advance automatically.',
+        action: 'reported',
+        updatedAt: '2030-06-23T10:00:00.000Z',
+        idleMinutes: 200,
+        lastProgressAt: '2026-06-23T10:00:00.000Z',
+        detailFingerprint: 'PR #900 is merged, so ready cannot advance automatically.',
+        lastReportedAction: 'reported',
+        // Intentionally NO lastLoggedAt / lastLoggedFingerprint / etc.
+      },
+    },
+  }, null, 2));
+
+  try {
+    const result = await tickReadyWatchdog({
+      repoDir, stateFile, config: WATCHDOG_CONFIG,
+      deps: {
+        fetchGitHubTruth: async () => makeTruth({ state: 'MERGED' }),
+        getCurrentHead: async () => 'head-1',
+        now: () => new Date('2030-06-23T10:01:00.000Z'),
+      },
+    });
+    assert.equal(result.findings.length, 1, 'old state without lastLogged* must emit on first tick');
+
+    const stateAfter = JSON.parse(readFileSync(path.join(stateDir, 'ready-watchdog-state.json'), 'utf-8')) as {
+      tasks: Record<string, { lastLoggedAt?: string; lastLoggedClassification?: string; lastLoggedAction?: string }>;
+    };
+    assert.ok(stateAfter.tasks['HOK-2300'].lastLoggedAt, 'lastLoggedAt should be backfilled');
+    assert.equal(stateAfter.tasks['HOK-2300'].lastLoggedClassification, 'needs-user');
+    assert.equal(stateAfter.tasks['HOK-2300'].lastLoggedAction, 'reported');
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
+// HOK-2300: env variable validation
+test('WAVEMILL_READY_WATCHDOG_REPORT_INTERVAL_SECONDS validation falls back to 3600 for invalid values', async () => {
+  const { repoDir, stateFile, featureDir } = setupReadyTask('HOK-2300', 900);
+  writeFileSync(path.join(featureDir, '.ready-result.json'), JSON.stringify({
+    stage: 'ready',
+    status: 'running',
+    startedAt: '2026-06-23T10:00:00.000Z',
+    finishedAt: null,
+    agent: 'claude',
+    model: 'claude-sonnet-4-6',
+    notes: null,
+    artifacts: { type: 'ready', verdict: 'pending', prNumber: 900 },
+  }, null, 2));
+
+  const savedEnv = process.env.WAVEMILL_READY_WATCHDOG_REPORT_INTERVAL_SECONDS;
+  const invalidValues = ['abc', '0', '-1', '12.5', ''];
+
+  try {
+    for (const invalidValue of invalidValues) {
+      // Reset state for each sub-test by re-running with a fresh repo state
+      const { repoDir: r, stateFile: sf, featureDir: fd } = setupReadyTask('HOK-2300', 900);
+      writeFileSync(path.join(fd, '.ready-result.json'), JSON.stringify({
+        stage: 'ready', status: 'running', startedAt: '2026-06-23T10:00:00.000Z', finishedAt: null,
+        agent: 'claude', model: 'claude-sonnet-4-6', notes: null,
+        artifacts: { type: 'ready', verdict: 'pending', prNumber: 900 },
+      }, null, 2));
+
+      if (invalidValue === '') {
+        delete process.env.WAVEMILL_READY_WATCHDOG_REPORT_INTERVAL_SECONDS;
+      } else {
+        process.env.WAVEMILL_READY_WATCHDOG_REPORT_INTERVAL_SECONDS = invalidValue;
+      }
+
+      const t0 = new Date('2030-06-23T10:00:00.000Z');
+      const baseDeps = {
+        fetchGitHubTruth: async () => makeTruth({ state: 'MERGED' }),
+        getCurrentHead: async () => 'head-1',
+        now: () => t0,
+      };
+
+      // First tick must always emit
+      const first = await tickReadyWatchdog({ repoDir: r, stateFile: sf, config: WATCHDOG_CONFIG, deps: baseDeps });
+      assert.equal(first.findings.length, 1, `should emit on first tick with env="${invalidValue}"`);
+
+      // One second later must be suppressed (defaults to 3600s interval)
+      const second = await tickReadyWatchdog({
+        repoDir: r, stateFile: sf, config: WATCHDOG_CONFIG,
+        deps: { ...baseDeps, now: () => new Date(t0.getTime() + 1000) },
+      });
+      assert.equal(second.findings.length, 0, `should suppress within default interval for env="${invalidValue}"`);
+      await rm(r, { recursive: true, force: true });
+    }
+  } finally {
+    if (savedEnv === undefined) {
+      delete process.env.WAVEMILL_READY_WATCHDOG_REPORT_INTERVAL_SECONDS;
+    } else {
+      process.env.WAVEMILL_READY_WATCHDOG_REPORT_INTERVAL_SECONDS = savedEnv;
+    }
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
