@@ -13,10 +13,13 @@ import {
   filterDeepSeekChallengeModels,
   getChallengeModelPool,
   pickChallengeWorkflowsWithContext,
+  pickChallengeWorkflowsWithContextAndReason,
   pickChallengeModels,
+  pickChallengeModelsWithReason,
   pickChallengeWorkflows,
   variedModelForStage,
 } from './challenge-mode.ts';
+import { listVariedRoutingDimensions, routingMetaFromChallengeEntry } from './challenge-comparison.ts';
 import type { RouteArtifactSnapshot } from './route-artifact.ts';
 
 let passed = 0;
@@ -155,6 +158,17 @@ test('pickChallengeModels returns null when fewer than two distinct models exist
     slug: 'challenge-mode',
   });
   assert.equal(pair, null);
+});
+
+test('reason-aware model selection preserves generic selection failures', () => {
+  const selection = pickChallengeModelsWithReason(['claude-opus-4-6'], {
+    pairId: 'HOK-970R',
+    issueId: 'HOK-970R',
+    slug: 'challenge-mode-reason',
+  });
+
+  assert.equal(selection.pair, null);
+  assert.equal(selection.failureReason, 'selection_failed');
 });
 
 test('all-DeepSeek pool becomes not runnable when allowDeepseek is not enabled', () => {
@@ -943,6 +957,197 @@ test('pickChallengeWorkflowsWithContext keeps coder variation by default', () =>
   assert.notEqual(pair!.challenger.model, pair!.primary.model);
   assert.equal(pair!.primary.planner, pair!.challenger.planner);
   assert.equal(pair!.primary.reviewer, pair!.challenger.reviewer);
+});
+
+test('implementation-stage pair remains unchanged when coder differs', () => {
+  const pair = pickChallengeWorkflows(
+    ['claude-opus-4-6', 'gpt-5.3-codex', 'claude-sonnet-4-5-20250929'],
+    {
+      pairId: 'HOK-2301-I',
+      issueId: 'HOK-2301-I',
+      slug: 'implementation-already-varied',
+      prompt: 'irrelevant',
+      primaryModel: 'claude-opus-4-6',
+      challengeStage: 'implementation',
+      forcedChallengerModel: 'gpt-5.3-codex',
+      randomFn: () => 0,
+      routeFn: mockRouteFn,
+    },
+  );
+
+  assert.ok(pair);
+  assert.equal(pair!.challengeStage, 'implementation');
+  assert.equal(pair!.primary.model, 'claude-opus-4-6');
+  assert.equal(pair!.challenger.model, 'gpt-5.3-codex');
+  assert.deepEqual(
+    listVariedRoutingDimensions(
+      routingMetaFromChallengeEntry(pair!.primary),
+      routingMetaFromChallengeEntry(pair!.challenger),
+    ),
+    ['coder'],
+  );
+});
+
+test('already-varied plan and review pairs remain single-variable', () => {
+  const planPair = pickChallengeWorkflows(
+    ['claude-opus-4-6', 'gpt-5.3-codex', 'claude-sonnet-4-5-20250929'],
+    {
+      pairId: 'HOK-2301-P',
+      issueId: 'HOK-2301-P',
+      slug: 'plan-already-varied',
+      prompt: 'irrelevant',
+      primaryModel: 'claude-opus-4-6',
+      challengeStage: 'plan',
+      forcedChallengerModel: 'gpt-5.3-codex',
+      randomFn: () => 0,
+      routeFn: mockRouteFn,
+    },
+  );
+
+  assert.ok(planPair);
+  assert.equal(planPair!.challengeStage, 'plan');
+  assert.deepEqual(
+    listVariedRoutingDimensions(
+      routingMetaFromChallengeEntry(planPair!.primary),
+      routingMetaFromChallengeEntry(planPair!.challenger),
+    ),
+    ['planner'],
+  );
+
+  const reviewPair = pickChallengeWorkflows(
+    ['claude-opus-4-6', 'gpt-5.3-codex', 'claude-sonnet-4-5-20250929'],
+    {
+      pairId: 'HOK-2301-R',
+      issueId: 'HOK-2301-R',
+      slug: 'review-already-varied',
+      prompt: 'irrelevant',
+      primaryModel: 'claude-opus-4-6',
+      challengeStage: 'review',
+      forcedChallengerModel: 'gpt-5.3-codex',
+      randomFn: () => 0,
+      routeFn: mockRouteFn,
+    },
+  );
+
+  assert.ok(reviewPair);
+  assert.equal(reviewPair!.challengeStage, 'review');
+  assert.deepEqual(
+    listVariedRoutingDimensions(
+      routingMetaFromChallengeEntry(reviewPair!.primary),
+      routingMetaFromChallengeEntry(reviewPair!.challenger),
+    ),
+    ['reviewer'],
+  );
+});
+
+test('pickChallengeWorkflows repairs a forced review challenger that matches the primary reviewer', () => {
+  const pair = pickChallengeWorkflows(
+    ['gpt-5.4', 'claude-opus-4-7', 'claude-sonnet-4-6'],
+    {
+      pairId: 'HOK-2301-A',
+      issueId: 'HOK-2301-A',
+      slug: 'repair-review-stage',
+      prompt: 'irrelevant',
+      primaryModel: 'gpt-5.4',
+      challengeStage: 'review',
+      forcedChallengerModel: 'claude-opus-4-7',
+      randomFn: () => 0,
+      routeFn: () => ({
+        planner: 'claude-opus-4-7',
+        coder: 'gpt-5.4',
+        reviewer: 'claude-opus-4-7',
+        planDepth: 'medium',
+        codeDepth: 'medium',
+        reviewRecommended: 'llm',
+        expectedSuccess: 0.9,
+        expectedCostPlan: 1,
+        expectedCostCode: 1,
+        expectedCostReview: 1,
+        reasoning: [],
+        signals: {},
+      }),
+    },
+  );
+
+  assert.ok(pair);
+  assert.equal(pair!.challengeStage, 'review');
+  assert.equal(pair!.primary.reviewer, 'claude-opus-4-7');
+  assert.notEqual(pair!.challenger.reviewer, pair!.primary.reviewer);
+  assert.equal(pair!.challenger.reviewer, 'gpt-5.4');
+});
+
+test('pickChallengeModels returns null when no routing divergence can be created', () => {
+  const pair = pickChallengeModels(
+    ['claude-opus-4-7'],
+    {
+      pairId: 'HOK-2301-B',
+      issueId: 'HOK-2301-B',
+      slug: 'no-divergence',
+      primaryModel: 'claude-opus-4-7',
+      forcedChallengerModel: 'claude-opus-4-7',
+      randomFn: () => 0,
+    },
+  );
+
+  assert.equal(pair, null);
+});
+
+test('pickChallengeWorkflowsWithContext preserves route context while repairing identical review dimensions', () => {
+  const expanded: RouteArtifactSnapshot = {
+    planner: 'claude-opus-4-7',
+    coder: 'gpt-5.4',
+    reviewer: 'claude-opus-4-7',
+    planDepth: 'medium',
+    codeDepth: 'medium',
+    reviewMode: 'llm',
+  };
+
+  const pair = pickChallengeWorkflowsWithContext(
+    ['gpt-5.4', 'claude-opus-4-7', 'claude-sonnet-4-6'],
+    {
+      pairId: 'HOK-2301-C',
+      issueId: 'HOK-2301-C',
+      slug: 'context-repair',
+      prompt: 'irrelevant',
+      challengeStage: 'review',
+      forcedChallengerModel: 'claude-opus-4-7',
+      randomFn: () => 0,
+    },
+    { bootstrap: null, expanded },
+  );
+
+  assert.ok(pair);
+  assert.equal(pair!.routeContext.decisionSource, 'expanded');
+  assert.equal(pair!.primary.reviewer, 'claude-opus-4-7');
+  assert.notEqual(pair!.challenger.reviewer, pair!.primary.reviewer);
+  assert.equal(pair!.challenger.codeDepth, 'medium');
+  assert.equal(pair!.challenger.reviewMode, 'llm');
+});
+
+test('reason-aware context selection preserves selection_failed diagnostics', () => {
+  const expanded: RouteArtifactSnapshot = {
+    planner: 'claude-opus-4-7',
+    coder: 'claude-opus-4-7',
+    reviewer: 'claude-opus-4-7',
+    planDepth: 'medium',
+    codeDepth: 'medium',
+    reviewMode: 'llm',
+  };
+
+  const selection = pickChallengeWorkflowsWithContextAndReason(
+    ['claude-opus-4-7'],
+    {
+      pairId: 'HOK-2301-D',
+      issueId: 'HOK-2301-D',
+      slug: 'context-selection-failed',
+      prompt: 'irrelevant',
+      randomFn: () => 0,
+    },
+    { bootstrap: null, expanded },
+  );
+
+  assert.equal(selection.pair, null);
+  assert.equal(selection.failureReason, 'selection_failed');
 });
 
 

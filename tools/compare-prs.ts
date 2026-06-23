@@ -6,6 +6,7 @@ import { fetchIssueData, formatIssueAsPrompt, fetchPrContext } from '../shared/l
 import { hasChallengeEvalRecordPair, readEvalRecords } from '../shared/lib/eval-persistence.ts';
 import {
   appendChallengeComparison,
+  buildSkippedIdenticalComparison,
   detectVariedDimensions,
   hasAnyVariedDimension,
   classifyChallengeType,
@@ -130,7 +131,67 @@ runTool({
 
       const variedDimensions = detectVariedDimensions(primaryRouting, challengerRouting);
       if (variedDimensions && !hasAnyVariedDimension(variedDimensions)) {
-        throw new Error('Challenge comparison has no varied routing dimensions; refusing to compare identical workflows');
+        const skippedRecord = buildSkippedIdenticalComparison({
+          challengePairId: pairId,
+          primaryModel,
+          challengerModel,
+          primaryPrUrl,
+          challengerPrUrl,
+          primaryEvalScore: primaryEval.score,
+          challengerEvalScore: challengerEval.score,
+          primaryRouting,
+          challengerRouting,
+        });
+        appendChallengeComparison(skippedRecord, evalsDir);
+
+        const routingSummary = formatRoutingSummary(
+          primaryRouting,
+          challengerRouting,
+          skippedRecord.challengeType,
+        );
+        const primaryCommentBody = buildChallengeCommentBody({
+          pairId,
+          winner: skippedRecord.winner,
+          winnerModel: skippedRecord.winnerModel,
+          rationale: skippedRecord.rationale,
+          otherPrUrl: challengerPrUrl,
+          routingSummary,
+        });
+        const challengerCommentBody = buildChallengeCommentBody({
+          pairId,
+          winner: skippedRecord.winner,
+          winnerModel: skippedRecord.winnerModel,
+          rationale: skippedRecord.rationale,
+          otherPrUrl: primaryPrUrl,
+          routingSummary,
+        });
+
+        if (args.comment || config.challenge?.autoMergeWinner) {
+          withBodyFile(primaryCommentBody, (bodyFile) => {
+            tryGh(['pr', 'comment', primaryNumber, '--body-file', bodyFile], repoDir, `comment primary PR ${primaryNumber}`);
+          });
+          withBodyFile(challengerCommentBody, (bodyFile) => {
+            tryGh(['pr', 'comment', challengerNumber, '--body-file', bodyFile], repoDir, `comment challenger PR ${challengerNumber}`);
+          });
+        }
+
+        if (args['auto-merge'] || config.challenge?.autoMergeWinner) {
+          tryGh(['pr', 'merge', primaryNumber, '--merge', '--delete-branch=false'], repoDir, `merge winner PR ${primaryNumber}`);
+          withBodyFile('Closing after skipped challenge comparison. Routing dimensions were identical.', (bodyFile) => {
+            tryGh(['pr', 'comment', challengerNumber, '--body-file', bodyFile], repoDir, `comment loser PR ${challengerNumber}`);
+          });
+          tryGh(['pr', 'close', challengerNumber], repoDir, `close loser PR ${challengerNumber}`);
+        }
+
+        console.log(JSON.stringify(skippedRecord, null, 2));
+        if (resultFile) {
+          writeJobResultFile(resultFile, {
+            ok: true,
+            exitCode,
+            comparison: skippedRecord,
+          });
+        }
+        return;
       }
       const challengeType = variedDimensions ? classifyChallengeType(variedDimensions) : undefined;
 
@@ -215,7 +276,7 @@ Return a raw JSON object with no code fences, no comments, and no JavaScript syn
       };
       recordForResult = record;
 
-      appendChallengeComparison(record);
+      appendChallengeComparison(record, evalsDir);
 
       const routingSummary = formatRoutingSummary(primaryRouting, challengerRouting, challengeType);
       const primaryCommentBody = buildChallengeCommentBody({
