@@ -140,18 +140,18 @@ function looksLikeBinary(buf: Buffer): boolean {
 // Path resolution (lexical + realpath containment check)
 // ---------------------------------------------------------------------------
 
-interface PathOk {
+export interface PathOk {
   kind: 'ok';
   absolutePath: string;
   relativePath: string;
 }
-interface PathErr {
+export interface PathErr {
   kind: 'error';
   code: string;
   message: string;
 }
 
-async function resolveInsideWorktree(
+export async function resolveInsideWorktree(
   worktreeAbsolute: string,
   inputPath: string,
 ): Promise<PathOk | PathErr> {
