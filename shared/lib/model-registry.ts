@@ -4,6 +4,7 @@ import {
   getRouterConfig,
   type ModelCapabilitiesOverride,
   type ModelRegistryConfig,
+  type NativeCapabilityOverride,
 } from './config.ts';
 import { filterDisabledModels } from './disabled-models.ts';
 
@@ -139,6 +140,27 @@ function cloneNativeCapability(
     compatFlags: cloneCompatFlags(capability.compatFlags),
     limitations: capability.limitations ? [...capability.limitations] : undefined,
   };
+}
+
+function mergeNativeCapability(
+  seed: NativeCapability | undefined,
+  override: NativeCapabilityOverride,
+): NativeCapability {
+  const merged: Partial<NativeCapability> = {
+    nativeProvider: override.nativeProvider ?? seed?.nativeProvider,
+    piTransportKind: override.piTransportKind ?? seed?.piTransportKind,
+    readOnlyNative: override.readOnlyNative ?? seed?.readOnlyNative,
+    compatFlags: override.compatFlags
+      ? cloneCompatFlags(override.compatFlags)
+      : cloneCompatFlags(seed?.compatFlags),
+    limitations: override.limitations
+      ? [...override.limitations]
+      : seed?.limitations
+      ? [...seed.limitations]
+      : undefined,
+  };
+
+  return merged as NativeCapability;
 }
 
 function scores(
@@ -333,13 +355,7 @@ function mergeCapabilities(
     costPerMillionOutputTokensUsd: override.costPerMillionOutputTokensUsd ?? seed.costPerMillionOutputTokensUsd,
     agent: override.agent ?? seed.agent,
     nativeCapability: override.nativeCapability
-      ? {
-        nativeProvider: override.nativeCapability.nativeProvider as NativeProviderName,
-        piTransportKind: override.nativeCapability.piTransportKind as PiTransportKind,
-        readOnlyNative: override.nativeCapability.readOnlyNative as ReadOnlyNativeCapability,
-        compatFlags: cloneCompatFlags(override.nativeCapability.compatFlags),
-        limitations: override.nativeCapability.limitations ? [...override.nativeCapability.limitations] : undefined,
-      }
+      ? mergeNativeCapability(seed.nativeCapability, override.nativeCapability)
       : cloneNativeCapability(seed.nativeCapability),
     releasedAt: override.releasedAt ?? seed.releasedAt,
   };
