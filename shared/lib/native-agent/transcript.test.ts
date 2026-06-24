@@ -42,6 +42,8 @@ const BASE_OPTS = {
   model: 'hokusai-mini',
   api: 'hokusai-mock',
   provider: 'hokusai',
+  worktreePath: '/tmp/test-worktree',
+  gitBranch: 'task/native-session-costs',
   clock,
 };
 
@@ -109,7 +111,7 @@ describe('defaultRedact', () => {
 // ---------------------------------------------------------------------------
 
 describe('deriveTranscriptEvents – event family derivation', () => {
-  it('agent_start emits session_started with model/api/provider', () => {
+  it('agent_start emits session_started with model/api/provider and native session metadata', () => {
     const events = deriveTranscriptEvents([{ type: 'agent_start' }], BASE_OPTS);
     assert.equal(events.length, 1);
     const ev = events[0] as TranscriptSessionStarted;
@@ -117,6 +119,8 @@ describe('deriveTranscriptEvents – event family derivation', () => {
     assert.equal(ev.model, 'hokusai-mini');
     assert.equal(ev.api, 'hokusai-mock');
     assert.equal(ev.provider, 'hokusai');
+    assert.equal(ev.worktreePath, '/tmp/test-worktree');
+    assert.equal(ev.gitBranch, 'task/native-session-costs');
     assert.equal(ev.sessionId, 'test-session-1');
     assert.equal(ev.seq, 0);
     assert.equal(ev.timestamp, FIXED_TIME);

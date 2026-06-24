@@ -205,6 +205,7 @@ await test('routes broad CLI workflow work to deep planning and medium-or-higher
       'claude-sonnet-4-5-20250929',
       'claude-opus-4-6',
       'claude-opus-4-7',
+      'claude-opus-4-8',
     ].includes(decision.coder));
     assert.ok(['llm', 'static+llm'].includes(decision.reviewRecommended));
     assert.ok(['medium', 'deep'].includes(decision.codeDepth));
@@ -749,7 +750,7 @@ await test('auto mode emits a constrained router transparency line when quota is
     const { result, stderr } = await captureStderr(() =>
       routeWorkflowAuto('Build a backend feature with tests and review.', { repoDir })
     );
-    assert.match(stderr, /\[router] constrained mode: claude-fable-5 quota is degrading; reserving it for high-complexity steps/);
+    assert.match(stderr, /\[router] constrained mode: gpt-5\.5 quota is degrading; reserving it for high-complexity steps/);
     assert.ok(result.reasoning[0].includes('Constrained mode'));
   } finally {
     cleanup();
@@ -852,9 +853,7 @@ await test('policy routing logs class downgrade without same-class metadata', as
         { repoDir, taskDifficulty: 'hard', skipDifficultyClassification: true }
       ))
     );
-    // claude-fable-5 leads the ladder and is re-enabled, so it is the top
-    // viable frontier downgraded here to claude-sonnet-4-6.
-    assert.match(stderr, /\[(planner|coder|reviewer)] policy adjustment: claude-fable-5 -> claude-sonnet-4-6 \(quota=degrading\)/);
+    assert.match(stderr, /\[(planner|coder|reviewer)] policy adjustment: gpt-5\.5 -> claude-sonnet-4-6 \(quota=degrading\)/);
     assert.doesNotMatch(stderr, /same-class=/);
   } finally {
     cleanup();
@@ -1330,8 +1329,12 @@ await test('uses survival mode budget when in survival', () => {
 
   // Write quota state showing survival mode
   writeQuotaState(repoDir, {
+    'gpt-5.5': 'exhausted',
+    'gpt-5.4': 'exhausted',
+    'claude-opus-4-8': 'exhausted',
     'claude-opus-4-7': 'exhausted',
     'claude-opus-4-6': 'exhausted',
+    ...restoredFrontierQuotaState('exhausted'),
   });
 
   try {
