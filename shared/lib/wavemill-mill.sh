@@ -5377,7 +5377,23 @@ refresh_ready_merge_queue_tick() {
 
 get_main_head_sha() {
   local wt_dir="$1" base_branch="$2"
-  git -C "$wt_dir" ls-remote origin "refs/heads/${base_branch}" 2>/dev/null | awk '{print $1}' || echo ""
+  local timeout_seconds probe_output
+  timeout_seconds="$(wavemill_git_probe_timeout_seconds)"
+  probe_output="$(
+    wavemill_git_remote_probe \
+      "$timeout_seconds" \
+      "$wt_dir" \
+      "origin" \
+      "refs/heads/${base_branch}" \
+      "ls-remote" \
+      "base freshness unknown; continuing monitor tick" \
+      -- ls-remote origin "refs/heads/${base_branch}"
+  )" || {
+    printf '\n'
+    return 0
+  }
+
+  awk 'NR == 1 { print $1 }' <<< "$probe_output"
 }
 
 ready_stage_allows_merge() {

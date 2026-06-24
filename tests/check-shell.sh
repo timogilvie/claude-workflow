@@ -331,7 +331,7 @@ else
       | grep -vE '^(bad|internal|marking|rate|reduce|service|timed|too|using|wavemill|waiting)$' \
       | grep -vE '^(advance|review)$' \
       | grep -vE '^(not_eligible|routing_error)$' \
-      | grep -vE '^(a|aborted|already|available|blocked_by_count|break|coding|cp|debug|empty_queue|execute|file|fresh|gtimeout|id|launch|length|main|mapfile|missing|not|overloaded|plan|ready|required|reservation|slots|the|they|timeout|todate|todateiso8601|tonumber|tracked|user)$')
+      | grep -vE '^(a|aborted|already|available|blocked_by_count|break|coding|continuing|cp|debug|empty_queue|execute|file|fresh|gtimeout|id|launch|length|main|mapfile|missing|not|overloaded|plan|ready|required|reservation|slots|the|they|timeout|todate|todateiso8601|tonumber|tracked|user)$')
 
     # Check which called names look like they could be custom functions
     # and verify they're defined
@@ -425,6 +425,13 @@ else
   fail "wavemill-common.sh is missing wavemill_fetch_base_branch helper"
 fi
 
+if grep -q '^wavemill_git_remote_probe()' "$COMMON_SCRIPT" \
+  && grep -q '^wavemill_git_probe_timeout_seconds()' "$COMMON_SCRIPT"; then
+  pass "remote git probe timeout helpers are defined"
+else
+  fail "wavemill-common.sh is missing remote git probe timeout helpers"
+fi
+
 if grep -q 'baseBranchFetchCache' "$COMMON_SCRIPT" && grep -q 'last_fetch_at' "$COMMON_SCRIPT"; then
   pass "fetch cache stores per-branch last_fetch_at state"
 else
@@ -514,6 +521,12 @@ if grep -q 'git -C "\$REPO_DIR" fetch origin "\$BASE_BRANCH"' <<< "$LAUNCH_TASK_
   fail "launch_task still has raw git fetch"
 else
   pass "launch_task no longer performs raw git fetch"
+fi
+
+if grep -q 'git -C "\$wt_dir" ls-remote origin "refs/heads/\${base_branch}"' "$MILL_SCRIPT"; then
+  fail "get_main_head_sha still has raw git ls-remote"
+else
+  pass "get_main_head_sha no longer performs raw git ls-remote"
 fi
 
 # ============================================================================

@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
+COMMON_LIB="$REPO_DIR/shared/lib/wavemill-common.sh"
 
 PASS=0
 FAIL=0
@@ -55,9 +56,10 @@ run_monitor_case() {
   local case_dir="$TEST_TMP/$case_name"
   mkdir -p "$case_dir"
 
-  CASE_NAME="$case_name" CASE_DIR="$case_dir" MONITOR_FUNC_FILE="$MONITOR_FUNC_FILE" bash -lc '
+  CASE_NAME="$case_name" CASE_DIR="$case_dir" MONITOR_FUNC_FILE="$MONITOR_FUNC_FILE" COMMON_LIB="$COMMON_LIB" bash -lc '
     set -euo pipefail
     shopt -s expand_aliases
+    source "$COMMON_LIB"
     source "$MONITOR_FUNC_FILE"
 
     declare -Ag BRANCH_BY_ISSUE=()

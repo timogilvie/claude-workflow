@@ -485,6 +485,161 @@ log_debug_json() {
   return 0
 }
 
+wavemill_git_probe_timeout_seconds() {
+  local timeout="${WAVEMILL_GIT_PROBE_TIMEOUT_SECONDS:-30}"
+
+  if [[ "$timeout" =~ ^[0-9]+$ ]] && (( timeout >= 1 && timeout <= 300 )); then
+    printf '%s\n' "$timeout"
+    return 0
+  fi
+
+  printf '30\n'
+}
+
+wavemill_log_remote_probe_warning() {
+  local worktree_dir="${1:-}"
+  local remote_name="${2:-origin}"
+  local ref_name="${3:-}"
+  local timeout_seconds="${4:-30}"
+  local exit_code="${5:-1}"
+  local operation="${6:-git-remote}"
+  local degraded_action="${7:-continuing monitor tick}"
+
+  local message
+  message="git remote probe failed: operation=${operation} worktree=${worktree_dir} remote=${remote_name} ref=${ref_name} timeout=${timeout_seconds}s exit=${exit_code}; ${degraded_action}"
+  if [[ "$exit_code" == "124" ]]; then
+    message="git remote probe timed out: operation=${operation} worktree=${worktree_dir} remote=${remote_name} ref=${ref_name} timeout=${timeout_seconds}s exit=${exit_code}; ${degraded_action}"
+  fi
+
+  if declare -F log_warn >/dev/null 2>&1; then
+    log_warn "$message"
+  else
+    printf 'WARN: %s\n' "$message" >&2
+  fi
+}
+
+_wavemill_kill_process_descendants() {
+  local parent_pid="${1:-}"
+  [[ -n "$parent_pid" ]] || return 0
+  command -v pgrep >/dev/null 2>&1 || return 0
+
+  local child_pid
+  while IFS= read -r child_pid; do
+    [[ -n "$child_pid" ]] || continue
+    _wavemill_kill_process_descendants "$child_pid"
+    kill -TERM "$child_pid" 2>/dev/null || true
+  done < <(pgrep -P "$parent_pid" 2>/dev/null || true)
+}
+
+_wavemill_terminate_process_tree() {
+  local root_pid="${1:-}"
+  [[ -n "$root_pid" ]] || return 0
+
+  kill -TERM -- "-$root_pid" 2>/dev/null || true
+  _wavemill_kill_process_descendants "$root_pid"
+  kill -TERM "$root_pid" 2>/dev/null || true
+  sleep 0.2
+  kill -KILL -- "-$root_pid" 2>/dev/null || true
+  _wavemill_kill_process_descendants "$root_pid"
+  kill -KILL "$root_pid" 2>/dev/null || true
+}
+
+_wavemill_run_with_timeout() {
+  local timeout_seconds="${1:-}"
+  shift || true
+
+  [[ -n "$timeout_seconds" ]] || return 1
+  (( $# > 0 )) || return 1
+
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$timeout_seconds" "$@"
+    return $?
+  fi
+  if command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$timeout_seconds" "$@"
+    return $?
+  fi
+
+  local stdout_file stderr_file
+  stdout_file="$(mktemp "${TMPDIR:-/tmp}/wavemill-git-probe-out.XXXXXX")" || return 1
+  stderr_file="$(mktemp "${TMPDIR:-/tmp}/wavemill-git-probe-err.XXXXXX")" || {
+    rm -f "$stdout_file"
+    return 1
+  }
+
+  local cmd_pid="" start_ts="" now_ts="" timed_out="false"
+  start_ts="$(date +%s)"
+
+  if command -v setsid >/dev/null 2>&1; then
+    setsid "$@" >"$stdout_file" 2>"$stderr_file" &
+  else
+    "$@" >"$stdout_file" 2>"$stderr_file" &
+  fi
+  cmd_pid=$!
+
+  while kill -0 "$cmd_pid" 2>/dev/null; do
+    now_ts="$(date +%s)"
+    if (( now_ts - start_ts >= timeout_seconds )); then
+      timed_out="true"
+      break
+    fi
+    sleep 0.1
+  done
+
+  if [[ "$timed_out" == "true" ]]; then
+    _wavemill_terminate_process_tree "$cmd_pid"
+    wait "$cmd_pid" 2>/dev/null || true
+    rm -f "$stdout_file" "$stderr_file"
+    return 124
+  fi
+
+  local rc=0
+  if wait "$cmd_pid"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  if (( rc == 0 )); then
+    cat "$stdout_file"
+  fi
+  rm -f "$stdout_file" "$stderr_file"
+  return "$rc"
+}
+
+wavemill_git_remote_probe() {
+  local timeout_seconds="${1:-}"
+  local worktree_dir="${2:-}"
+  local remote_name="${3:-origin}"
+  local ref_name="${4:-}"
+  local operation="${5:-git-remote}"
+  local degraded_action="${6:-continuing monitor tick}"
+  shift 6 || true
+
+  if [[ "${1:-}" == "--" ]]; then
+    shift
+  fi
+
+  (( $# > 0 )) || return 1
+
+  local rc=0
+  if _wavemill_run_with_timeout "$timeout_seconds" git -C "$worktree_dir" "$@"; then
+    return 0
+  else
+    rc=$?
+  fi
+
+  wavemill_log_remote_probe_warning \
+    "$worktree_dir" \
+    "$remote_name" \
+    "$ref_name" \
+    "$timeout_seconds" \
+    "$rc" \
+    "$operation" \
+    "$degraded_action"
+
+  return "$rc"
+}
+
 wavemill_fetch_base_branch() {
   local base_branch="${1:-}"
   shift || true
@@ -520,8 +675,16 @@ wavemill_fetch_base_branch() {
     fi
   fi
 
-  local fetch_rc=0
-  git -C "$REPO_DIR" fetch origin "$base_branch" || fetch_rc=$?
+  local fetch_timeout fetch_rc=0
+  fetch_timeout="$(wavemill_git_probe_timeout_seconds)"
+  wavemill_git_remote_probe \
+    "$fetch_timeout" \
+    "$REPO_DIR" \
+    "origin" \
+    "refs/heads/${base_branch}" \
+    "fetch" \
+    "skipping base branch fetch cache update; continuing monitor tick" \
+    -- fetch origin "$base_branch" || fetch_rc=$?
   if (( fetch_rc != 0 )); then
     return "$fetch_rc"
   fi
