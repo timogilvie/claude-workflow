@@ -34,3 +34,7 @@ Launch invariant: non-control challenge pairs must differ on at least one routin
 - Failed comparison jobs must not leave `comparison_running` behind after settlement. They transition the pair to `manual_comparison_needed` and preserve the failure in `comparisonBlockedReason`.
 - Identical-routing pairs are a terminal skipped-comparison outcome, not a failed comparison job. The compare backstop records `comparisonOutcome=skipped`, `skipReason=identical-routing-dimensions`, and `cleanupPolicy=primary-wins-close-challenger`.
 - Skipped identical pairs deterministically declare the primary as winner and the challenger as the cleanup target. This keeps the merge lane moving and prevents watchdog retry spam.
+
+## Coder-override Contract (HOK-2272)
+
+The coding-phase handoff in `shared/lib/wavemill-mill.sh` resolves the coder from `.phase-config.json.coding.model` (or `coderModel` in task state) and only substitutes `challengeModel` when the persisted `challengeStage` is `implementation`. Plan-stage and review-stage challenges keep the route's coder; their `challengeModel` names the varied stage's model, not the coder. Missing/unparseable `challengeStage` for a challenge task fails safe to the phase-config coder with a warning log.
