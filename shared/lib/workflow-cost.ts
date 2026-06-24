@@ -248,11 +248,9 @@ export function computeWorkflowCost(opts: {
     if (debug) {
       console.log('[DEBUG_COST]   Using native session scan result');
     }
-  }
+  } else {
+    let adapter = getSessionAdapter(agentType);
 
-  let adapter = getSessionAdapter(agentType);
-
-  if (!scanResult || scanResult.turnCount === 0) {
     if (debug) {
       console.log(`[DEBUG_COST]   Selected adapter: ${adapter.constructor.name}`);
     }

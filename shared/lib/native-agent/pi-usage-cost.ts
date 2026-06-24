@@ -78,7 +78,7 @@ export class NativeSessionAdapter implements SessionAdapter {
     return { models, sessionCount, turnCount };
   }
 
-  discoverSessionsRoot(worktreePath: string): string {
+  private discoverSessionsRoot(worktreePath: string): string {
     return join(resolve(worktreePath), '.wavemill', 'sessions');
   }
 
