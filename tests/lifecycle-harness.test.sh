@@ -2052,6 +2052,8 @@ test_coding_capacity_recovery_positive() {
   check_eq "capacity positive: task remains active" "1" "$(kv_value "$tick" active_count)"
   check_file_absent "capacity positive: no .coding-complete created" "$repo/features/$slug/.coding-complete"
   check_contains "capacity positive: log mentions capacity error" "$(kv_value "$tick" log_output)" "capacity error detected"
+  check_eq "capacity positive: coding-result.json status flipped to awaiting_user" "awaiting_user" "$(jq -r '.status // ""' "$repo/features/$slug/.coding-result.json")"
+  check_contains "capacity positive: coding-result.json notes mention capacity" "$(jq -r '.notes // ""' "$repo/features/$slug/.coding-result.json")" "capacity"
 }
 
 test_coding_capacity_recovery_active_worker_vetoes() {

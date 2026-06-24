@@ -4479,10 +4479,10 @@ recover_coding_capacity_blocked() {
 
   result_path="$feature_dir/.coding-result.json"
   if [[ -f "$result_path" ]]; then
-    tmp="$(mktemp "$result_path.tmp.XXXXXX" 2>/dev/null)" && \
-      jq --arg notes "Blocked by Codex model capacity error - awaiting user intervention" \
-        '.status = "awaiting_user" | .notes = $notes' "$result_path" > "$tmp" 2>/dev/null && \
-      mv "$tmp" "$result_path" 2>/dev/null || rm -f "${tmp:-}"
+    state_mutate "$result_path" \
+      '.status = "awaiting_user" | .notes = $notes' \
+      --arg notes "Blocked by Codex model capacity error - awaiting user intervention" \
+      >/dev/null 2>&1 || true
   fi
 
   local hook_protocol
