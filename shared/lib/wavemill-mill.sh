@@ -10951,6 +10951,50 @@ monitor_issue_state() {
 # visible so we can detect and respawn them without losing the layout.
 LAST_DASHBOARD_HEALTH_CHECK=0
 DASHBOARD_HEALTH_INTERVAL=30  # seconds between checks
+LAST_CONTROL_PANE_HEALTH_STATUS=""
+
+classify_control_pane_input_path() {
+  local pane_details="${1-}"
+  local session_name="${2:-$SESSION}"
+
+  if [[ -z "$pane_details" ]]; then
+    printf 'unknown\n'
+    return 0
+  fi
+
+  if [[ "$pane_details" == *"wavemill-input-reader.sh"* ]]; then
+    printf 'healthy\n'
+    return 0
+  fi
+
+  if [[ "$pane_details" == *"/tmp/${session_name}-monitor.sh"* ]] || [[ "$pane_details" == *"wavemill-monitor.sh"* ]]; then
+    printf 'drifted-monitor\n'
+    return 0
+  fi
+
+  printf 'unknown\n'
+}
+
+probe_control_pane_input_path() {
+  tmux display-message -p -t "$SESSION:$WAVEMILL_WINDOW_MILL.0" \
+    '#{pane_id} #{pane_pid} #{pane_current_command} #{pane_start_command}'
+}
+
+recover_control_pane_input_path() {
+  local cmd_file monitor_cmd
+  cmd_file="$(wavemill_command_file_path "$SESSION")"
+  monitor_cmd="$(wavemill_build_control_pane_command recovery "$SESSION" "$MONITOR_SCRIPT" "$MONITOR_ENV" "$LIB_DIR")" || {
+    log_warn "Control pane recovery command build failed. Append 'quit' to $cmd_file to exit safely."
+    return 1
+  }
+
+  tmux respawn-pane -k -t "$SESSION:$WAVEMILL_WINDOW_MILL.0" "$monitor_cmd" 2>/dev/null || {
+    log_warn "Control pane recovery failed. Append 'quit' to $cmd_file to exit safely."
+    return 1
+  }
+
+  return 0
+}
 
 check_mill_pane_health() {
   local now
@@ -10989,8 +11033,8 @@ check_mill_pane_health() {
       log "status" "Control panes rebuilt successfully"
     else
       log_warn "Failed to rebuild mill panes (got $pane_count)"
+      return 0
     fi
-    return 0
   fi
 
   # All 3 panes exist — check for dead ones and respawn in place.
@@ -11017,6 +11061,56 @@ check_mill_pane_health() {
         ;;
     esac
   done <<<"$dead_panes"
+
+  local pane_probe pane_status status_key cmd_file
+  cmd_file="$(wavemill_command_file_path "$SESSION")"
+  if ! pane_probe=$(probe_control_pane_input_path 2>/dev/null); then
+    status_key="probe-failed"
+    if [[ "$LAST_CONTROL_PANE_HEALTH_STATUS" != "$status_key" ]]; then
+      log_warn "Unable to inspect control pane input path. If quit input is stuck, append 'quit' to $cmd_file."
+    fi
+    LAST_CONTROL_PANE_HEALTH_STATUS="$status_key"
+    return 0
+  fi
+
+  pane_status="$(classify_control_pane_input_path "$pane_probe" "$SESSION")"
+  case "$pane_status" in
+    healthy)
+      LAST_CONTROL_PANE_HEALTH_STATUS="healthy"
+      return 0
+      ;;
+    drifted-monitor)
+      if [[ "$LAST_CONTROL_PANE_HEALTH_STATUS" != "drifted-monitor" ]]; then
+        log_warn "Control pane drift detected (pane 0 is running the monitor directly). Recovering input reader..."
+      fi
+      LAST_CONTROL_PANE_HEALTH_STATUS="drifted-monitor"
+      recover_control_pane_input_path || true
+      return 0
+      ;;
+    *)
+      if [[ "$LAST_CONTROL_PANE_HEALTH_STATUS" != "unknown" ]]; then
+        log_warn "Control pane input path is unknown. If quit input is stuck, append 'quit' to $cmd_file."
+      fi
+      LAST_CONTROL_PANE_HEALTH_STATUS="unknown"
+      return 0
+      ;;
+  esac
+}
+
+handle_monitor_quit_command() {
+  local active_count="${1:-0}"
+  if [[ "$QUIT_REQUESTED" == "true" ]]; then
+    if (( active_count == 0 )); then
+      quit_and_kill_session "Quitting (all tasks complete)."
+    else
+      quit_and_kill_session "Force quitting (${active_count} task(s) still active)."
+    fi
+  elif (( active_count == 0 )); then
+    quit_and_kill_session "Quitting."
+  else
+    log "status" "Will quit after ${active_count} active task(s) finish. Press q again to force quit."
+    QUIT_REQUESTED=true
+  fi
 }
 
 while :; do
@@ -11027,14 +11121,7 @@ while :; do
   while consume_next_command; do
     case "$REPLY" in
       quit)
-        if [[ "$QUIT_REQUESTED" == "true" ]]; then
-          quit_and_kill_session "Force quitting (${_active_count_prev} task(s) still active)."
-        elif (( _active_count_prev == 0 )); then
-          quit_and_kill_session "Quitting."
-        else
-          log "status" "Will quit after ${_active_count_prev} active task(s) finish. Press q again to force quit."
-          QUIT_REQUESTED=true
-        fi
+        handle_monitor_quit_command "${_active_count_prev}"
         ;;
       *)
         requeue_consumed_command_front
@@ -11086,7 +11173,7 @@ while :; do
     # Still have active tasks — keep monitoring but accept 'q' for force-quit
     if consume_next_command; then
       if [[ "$REPLY" == "quit" ]]; then
-        quit_and_kill_session "Force quitting ($active_count task(s) still active)."
+        handle_monitor_quit_command "$active_count"
       fi
     fi
     poll_sleep "$POLL_SECONDS"
@@ -11248,14 +11335,7 @@ while :; do
         fi
 
         if [[ "$REPLY" =~ ^[Qq]$ ]]; then
-          if (( active_count == 0 )); then
-            quit_and_kill_session "Quitting."
-          elif [[ "$QUIT_REQUESTED" == "true" ]]; then
-            quit_and_kill_session "Force quitting ($active_count task(s) still active)."
-          else
-            log "status" "Will quit after $active_count active task(s) finish. Press q again to force quit."
-            QUIT_REQUESTED=true
-          fi
+          handle_monitor_quit_command "$active_count"
         elif [[ "$REPLY" =~ ^[mM]$ ]]; then
           if [[ "$USING_GROUPED_VIEW" == "true" ]]; then
             state_mutate "$STATE_FILE" \

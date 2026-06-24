@@ -373,6 +373,10 @@ write_monitor_env() {
     write_shell_assignment "TASKS_FILE" "$tasks_file"
     write_shell_assignment "CHALLENGE_AUTO_MERGE" "${CHALLENGE_AUTO_MERGE:-false}"
     write_shell_assignment "WAVEMILL_WINDOW_MILL" "$WAVEMILL_WINDOW_MILL"
+    # Plumb the monitor's own script/env paths so the control-pane health
+    # watchdog can rebuild its launch command during recovery.
+    write_shell_assignment "MONITOR_SCRIPT" "$MONITOR_SCRIPT"
+    write_shell_assignment "MONITOR_ENV" "$MONITOR_ENV"
   } > "$MONITOR_ENV"
 }
 
@@ -1097,12 +1101,8 @@ main() {
     startup_log "[DRY-RUN] Skipping mill dashboard, backstage window, and monitor startup."
     return 0
   fi
-  local input_reader_script cmd_file offset_file
-  input_reader_script="$LIB_DIR/wavemill-input-reader.sh"
-  cmd_file="$(wavemill_command_file_path "$SESSION")"
-  offset_file="$(wavemill_command_offset_path "$SESSION")"
-  printf -v monitor_cmd '%q -lc %q' "/opt/homebrew/bin/bash" \
-    "clear; : > $(printf '%q' "$cmd_file"); printf '0\\n' > $(printf '%q' "$offset_file"); $(printf '%q %q' "$MONITOR_SCRIPT" "$MONITOR_ENV") </dev/null & monitor_pid=\$!; trap 'kill \"\$monitor_pid\" >/dev/null 2>&1 || true' EXIT INT TERM; exec env WAVEMILL_SESSION=$(printf '%q' "$SESSION") $(printf '%q %q' "$input_reader_script" "$SESSION")"
+  local monitor_cmd
+  monitor_cmd="$(wavemill_build_control_pane_command startup "$SESSION" "$MONITOR_SCRIPT" "$MONITOR_ENV" "$LIB_DIR")"
   tmux respawn-pane -k -t "$SESSION:$WAVEMILL_WINDOW_MILL.0" "$monitor_cmd"
 }
 
