@@ -17,6 +17,8 @@ import type { AssistantMessage, Model } from '@earendil-works/pi-ai';
 // construct an AgentContext without importing Pi vendor packages directly.
 export type { AgentContext } from '@earendil-works/pi-agent-core';
 import { computeModelCost, type ModelPricing } from '../workflow-cost.ts';
+import type { ModelRegistry } from '../model-registry.ts';
+import { assertToolCompat } from './tool-compat-validator.ts';
 import {
   transformContext,
   type ReplayCompactionEvent,
@@ -112,6 +114,8 @@ export interface WavemillLoopConfig {
   onCompactionEvents?: (events: ReplayCompactionEvent[]) => void;
   /** Required when `budget.maxCostUsd` is set; used to compute turn cost. */
   modelPricing?: ModelPricing;
+  /** Optional registry override for tool compatibility validation. */
+  compatRegistry?: ModelRegistry;
   temperature?: number;
   maxTokens?: number;
 }
@@ -287,6 +291,27 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
   const batchFailed = new WeakMap<AssistantMessage, boolean>();
   // Tool call ids that were skipped by beforeToolCall (not real failures).
   const skippedCallIds = new Set<string>();
+
+  const toolsForCompat = config.toolPolicy?.registry.length
+    ? config.toolPolicy.registry
+    : (context.tools ?? []).map((tool) => ({
+      name: tool.name,
+      description: tool.description ?? tool.name,
+      executionMode: tool.executionMode ?? 'sequential',
+    }));
+
+  if (toolsForCompat.length > 0 && isNativeCompatProvider(config.model.provider)) {
+    // Native providers must always be validated. Unknown transports throw via
+    // `assertToolCompat`'s transport-capability lookup, so adding a new transport
+    // to `ProviderModelConfig` cannot silently bypass the fail-fast gate.
+    assertToolCompat({
+      model: resolveRegistryModelId(config.model),
+      provider: config.model.provider as 'openai' | 'openrouter',
+      transport: config.model.api,
+      tools: toolsForCompat,
+      registry: config.compatRegistry,
+    });
+  }
 
   const piConfig: AgentLoopConfig = {
     model: toPiModel(config.model),
@@ -541,4 +566,17 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
     totalCostUsd,
     wallClockMs,
   };
+}
+
+function resolveRegistryModelId(model: ProviderModelConfig): string {
+  if (model.name && model.name.trim().length > 0) {
+    return model.name.trim();
+  }
+
+  const separator = model.id.indexOf(':');
+  return separator === -1 ? model.id : model.id.slice(separator + 1);
+}
+
+function isNativeCompatProvider(provider: string): boolean {
+  return provider === 'openai' || provider === 'openrouter';
 }

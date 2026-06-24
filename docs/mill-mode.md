@@ -61,6 +61,7 @@ Accepted selector forms are:
 
 `WAVEMILL_DASHBOARD_REFRESH_SECONDS` accepts integer values from `1` through `10`. Invalid values fall back to the default `2` second dashboard refresh cadence.
 `WAVEMILL_TIP_REFRESH_SECONDS` accepts integer values from `1` through `3600`. Invalid values fall back to the default `60` second tip refresh cadence. This only controls the usage tip rotation and does not change any other dashboard refresh behavior.
+`WAVEMILL_GIT_REMOTE_TIMEOUT_SECONDS` accepts integer values from `1` through `600`. Invalid values fall back to `15`. When a remote `git fetch` or `git ls-remote` probe times out or fails, mill logs the repo/worktree, ref, timeout, and exit code, then continues the monitor tick in degraded mode instead of blocking planning/coding handoffs.
 
 ## Startup Progress Table
 

@@ -1,0 +1,94 @@
+import { createGitTools } from '../../tools/git.ts';
+
+const tool = createGitTools('/tmp/wavemill-compat-fixtures').find(
+  (descriptor) => descriptor.metadata.name === 'git_diff',
+);
+
+if (!tool) {
+  throw new Error('Missing git_diff tool descriptor');
+}
+
+export default {
+  tool: 'git_diff',
+  transport: 'openai-completions',
+  modelId: 'openai/gpt-4o-mini',
+  nativeProvider: 'openrouter',
+  toolDescriptor: {
+    name: tool.metadata.name,
+    description: tool.metadata.description,
+    parameters: tool.parameters,
+  },
+  request: {
+    invocationArgs: {
+      base: 'HEAD',
+      path: 'shared/lib/native-agent/loop.ts',
+      maxBytes: 4096,
+    },
+    expectedPayload: {
+      model: 'openrouter:openai/gpt-4o-mini',
+      messages: [
+        { role: 'system', content: 'You are a fixture harness.' },
+        { role: 'user', content: 'Use the available tool.' },
+      ],
+      stream: true,
+      stream_options: { include_usage: true },
+      store: false,
+      tools: [
+        {
+          type: 'function',
+          function: {
+            name: tool.metadata.name,
+            description: tool.metadata.description,
+            parameters: tool.parameters,
+            strict: false,
+          },
+        },
+      ],
+    },
+  },
+  response: {
+    rawProviderResponse: [
+      {
+        id: 'chatcmpl-git-diff',
+        model: 'openrouter:openai/gpt-4o-mini',
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: 'call_git_diff',
+                  type: 'function',
+                  function: {
+                    name: 'git_diff',
+                    arguments: '{"base":"HEAD","path":"shared/lib/native-agent/loop.ts","maxBytes":4096}',
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+      {
+        id: 'chatcmpl-git-diff',
+        choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }],
+        usage: {
+          prompt_tokens: 12,
+          completion_tokens: 7,
+          total_tokens: 19,
+        },
+      },
+      '[DONE]',
+    ],
+    expectedToolCall: {
+      id: 'call_git_diff',
+      name: 'git_diff',
+      arguments: {
+        base: 'HEAD',
+        path: 'shared/lib/native-agent/loop.ts',
+        maxBytes: 4096,
+      },
+    },
+  },
+} as const;

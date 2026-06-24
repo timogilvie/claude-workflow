@@ -34,6 +34,7 @@ import { errorMessage } from './error-utils.ts';
 import { getLatestSession } from './session.ts';
 import { attachEligibility, attachManifestRef } from './eval-record-builder.ts';
 import { attachPromptSizeDiagnostic } from './eval-record-builder.ts';
+import { parseAndRepairJsonFromLlm } from './json-repair.ts';
 import {
   applyEvalPromptSizeEnv,
   enforcePromptSizeLimit,
@@ -155,6 +156,49 @@ interface LLMCallResult {
 interface PricingEntry {
   inputCostPerMTok: number;
   outputCostPerMTok: number;
+}
+
+interface JudgeResponsePayload {
+  score?: number;
+  rationale?: string;
+  interventionFlags?: string[];
+  stageScores?: Record<string, { score?: number; rationale?: string; rubricCriteria?: unknown }>;
+  planCritique?: unknown;
+  rubricEval?: unknown;
+}
+
+interface JudgeParseAttempt {
+  rawText: string;
+  parseError: string;
+  repairError?: string;
+}
+
+interface ParsedJudgeResponse {
+  response: JudgeResponse;
+  recovered: boolean;
+}
+
+export class JudgeResponseRecoveryError extends Error {
+  readonly firstAttempt: JudgeParseAttempt;
+  readonly retryAttempt?: JudgeParseAttempt;
+  readonly retryRawText?: string;
+
+  constructor(
+    message: string,
+    firstAttempt: JudgeParseAttempt,
+    retryAttempt?: JudgeParseAttempt,
+    retryRawText?: string,
+  ) {
+    super(message);
+    this.name = 'JudgeResponseRecoveryError';
+    this.firstAttempt = firstAttempt;
+    this.retryAttempt = retryAttempt;
+    this.retryRawText = retryRawText;
+  }
+}
+
+export function isJudgeResponseRecoveryError(error: unknown): error is JudgeResponseRecoveryError {
+  return error instanceof JudgeResponseRecoveryError;
 }
 
 function normalizeTimeSeconds(value: number | null | undefined): number | null {
@@ -490,15 +534,7 @@ function parseStageRubricCriteria(
   return parsedCriteria.length > 0 ? parsedCriteria : undefined;
 }
 
-function parseJudgeResponse(raw: string): JudgeResponse {
-  const parsed = parseJsonFromLLM(raw) as {
-    score?: number;
-    rationale?: string;
-    interventionFlags?: string[];
-    stageScores?: Record<string, { score?: number; rationale?: string; rubricCriteria?: unknown }>;
-    planCritique?: unknown;
-    rubricEval?: unknown;
-  };
+function validateJudgeResponse(parsed: JudgeResponsePayload): JudgeResponse {
 
   if (typeof parsed.score !== 'number' || parsed.score < 0 || parsed.score > 1) {
     throw new Error(`Invalid score: ${parsed.score}. Must be a number between 0 and 1.`);
@@ -548,6 +584,122 @@ function parseJudgeResponse(raw: string): JudgeResponse {
     ...(planCritique && { planCritique }),
     ...(rubricEval && { rubricEval }),
   };
+}
+
+function parseJudgeResponse(raw: string): JudgeResponse {
+  return validateJudgeResponse(parseJsonFromLLM(raw) as JudgeResponsePayload);
+}
+
+function isRecoverableJudgeParseError(error: unknown): boolean {
+  return error instanceof Error && error.message.includes('Failed to parse JSON from LLM output');
+}
+
+function tryParseJudgeResponse(raw: string): ParsedJudgeResponse {
+  try {
+    return {
+      response: parseJudgeResponse(raw),
+      recovered: false,
+    };
+  } catch (error) {
+    if (!isRecoverableJudgeParseError(error)) {
+      throw error;
+    }
+
+    const repaired = parseAndRepairJsonFromLlm<JudgeResponsePayload>(raw);
+    if (!repaired.ok) {
+      const repairFailure = new Error(repaired.errorSummary);
+      repairFailure.name = 'JudgeJsonRepairFailure';
+      throw Object.assign(repairFailure, {
+        parseError: errorMessage(error),
+        repairError: repaired.errorSummary,
+      });
+    }
+
+    return {
+      response: validateJudgeResponse(repaired.value),
+      recovered: true,
+    };
+  }
+}
+
+function buildJudgeRepairPrompt(rawOutput: string): string {
+  return [
+    'Return exactly one valid JSON object and no prose.',
+    'Preserve the intended values from the malformed judge response below.',
+    'Schema requirements:',
+    '{',
+    '  "score": number between 0 and 1,',
+    '  "rationale": string,',
+    '  "interventionFlags": string[],',
+    '  "stageScores": {',
+    '    "expansion": { "score": number, "rationale": string, "rubricCriteria"?: [{ "criterion": string, "score": number, "notes"?: string }] },',
+    '    "plan": { "score": number, "rationale": string, "rubricCriteria"?: [{ "criterion": string, "score": number, "notes"?: string }] },',
+    '    "implementation": { "score": number, "rationale": string, "rubricCriteria"?: [{ "criterion": string, "score": number, "notes"?: string }] },',
+    '    "review": { "score": number, "rationale": string, "rubricCriteria"?: [{ "criterion": string, "score": number, "notes"?: string }] }',
+    '  },',
+    '  "planCritique"?: object,',
+    '  "rubricEval"?: object',
+    '}',
+    '',
+    'Malformed judge response:',
+    rawOutput,
+  ].join('\n');
+}
+
+function summarizeJudgeAttempt(rawText: string, error: unknown): JudgeParseAttempt {
+  const summary = {
+    rawText,
+    parseError: errorMessage(error),
+  } as JudgeParseAttempt;
+
+  if (error && typeof error === 'object' && 'repairError' in error && typeof error.repairError === 'string') {
+    summary.repairError = error.repairError;
+  }
+
+  return summary;
+}
+
+function combineTokenUsage(
+  responses: LLMCallResult[],
+): TokenUsage | undefined {
+  const withUsage = responses.filter((response) => response.usage);
+  if (withUsage.length === 0) {
+    return undefined;
+  }
+
+  return withUsage.reduce<TokenUsage>(
+    (acc, response) => ({
+      inputTokens: acc.inputTokens + (response.usage?.inputTokens || 0),
+      outputTokens: acc.outputTokens + (response.usage?.outputTokens || 0),
+      totalTokens: acc.totalTokens + (response.usage?.totalTokens || 0),
+    }),
+    { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+  );
+}
+
+function computeCombinedCost(
+  responses: LLMCallResult[],
+  modelId: string,
+  pricingTable: Record<string, PricingEntry>,
+): number | undefined {
+  let total = 0;
+  let sawCost = false;
+
+  for (const response of responses) {
+    if (response.costUsd !== undefined) {
+      total += response.costUsd;
+      sawCost = true;
+      continue;
+    }
+
+    const estimated = computeCost(modelId, response.usage, pricingTable);
+    if (estimated !== undefined) {
+      total += estimated;
+      sawCost = true;
+    }
+  }
+
+  return sawCost ? total : undefined;
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -694,18 +846,43 @@ export async function evaluateTask(
 
   const callFn = _callFn || callJudgeLLM;
 
-  // Call Claude (with retry built-in)
+  const responses: LLMCallResult[] = [];
   const response = await callFn(prompt, model);
+  responses.push(response);
 
-  // Parse response
-  const { score, rationale, interventionFlags, stageScores, planCritique, rubricEval } = parseJudgeResponse(response.text);
+  let parsedJudge: ParsedJudgeResponse;
+  try {
+    parsedJudge = tryParseJudgeResponse(response.text);
+  } catch (error) {
+    if (!isRecoverableJudgeParseError(error) && !(error && typeof error === 'object' && 'repairError' in error)) {
+      throw error;
+    }
+
+    const firstAttempt = summarizeJudgeAttempt(response.text, error);
+    const repairPrompt = buildJudgeRepairPrompt(response.text);
+    const retryResponse = await callFn(repairPrompt, model);
+    responses.push(retryResponse);
+
+    try {
+      parsedJudge = tryParseJudgeResponse(retryResponse.text);
+    } catch (retryError) {
+      if (!isRecoverableJudgeParseError(retryError) && !(retryError && typeof retryError === 'object' && 'repairError' in retryError)) {
+        throw retryError;
+      }
+      throw new JudgeResponseRecoveryError(
+        'Judge returned malformed JSON after bounded recovery attempts.',
+        firstAttempt,
+        summarizeJudgeAttempt(retryResponse.text, retryError),
+        retryResponse.text,
+      );
+    }
+  }
+
+  const { score, rationale, interventionFlags, stageScores, planCritique, rubricEval } = parsedJudge.response;
   const band = getScoreBand(score);
 
-  const tokenUsage = response.usage || undefined;
-  // Prefer the CLI's authoritative cost; fall back to pricing table estimate
-  const estimatedCost = response.costUsd !== undefined
-    ? response.costUsd
-    : computeCost(model, tokenUsage, pricingTable);
+  const tokenUsage = combineTokenUsage(responses);
+  const estimatedCost = computeCombinedCost(responses, model, pricingTable);
 
   const record: EvalRecord = {
     id: randomUUID(),
@@ -737,6 +914,7 @@ export async function evaluateTask(
     metadata: {
       ...metadata,
       interventionFlags,
+      ...(parsedJudge.recovered && { judgeJsonRecovered: true }),
       ...(stageScores && { stageScores }),
       ...(planCritique && { planCritique }),
     },

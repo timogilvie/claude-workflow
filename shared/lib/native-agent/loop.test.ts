@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { AgentContext, AgentTool, AgentToolResult } from '@earendil-works/pi-agent-core';
 import type { Message, TextContent } from '@earendil-works/pi-ai';
+import type { ModelRegistry } from '../model-registry.ts';
 import { registerScriptedPiProvider, type ScriptedProviderContext } from './provider.ts';
 import { runWavemillLoop, HEARTBEAT_AGENT, type HeartbeatEvent, type WavemillLoopConfig } from './loop.ts';
+import { ToolCompatError } from './tool-compat-validator.ts';
 import type { ToolMetadata } from './tools/types.ts';
 
 // ---------------------------------------------------------------------------
@@ -79,6 +81,44 @@ function makeToolMetadata(
     allowedPhases: ['planning', 'coding', 'review'],
     executionMode: 'sequential',
     outputCapPolicy: { strategy: 'none' },
+  };
+}
+
+function makeCompatRegistry(
+  modelId: string,
+  readOnlyNative: 'certified' | 'partial' | 'unsupported',
+  provider: 'openai' | 'openrouter',
+  transport: 'openai-responses' | 'openai-completions',
+  compatFlags?: Record<string, unknown>,
+): ModelRegistry {
+  return {
+    models: {
+      [modelId]: {
+        vendor: 'test',
+        class: 'strong_generalist',
+        strengths: ['balanced'],
+        weaknesses: ['none'],
+        qualityScores: { routing: 0, planning: 0, coding: 0, review: 0, classify: 0 },
+        defaultLadderEligible: true,
+        contextWindowTokens: 128_000,
+        toolSupport: 'full',
+        multimodal: { text: true, image: false },
+        latencyTier: 'standard',
+        reasoningTier: 'standard',
+        costPerMillionInputTokensUsd: 0,
+        costPerMillionOutputTokensUsd: 0,
+        nativeCapability: {
+          nativeProvider: provider,
+          piTransportKind: transport,
+          readOnlyNative,
+          compatFlags,
+          limitations: readOnlyNative === 'partial'
+            ? ['missing thinkingFormat=openrouter compat flag']
+            : undefined,
+        },
+      },
+    },
+    ladders: {},
   };
 }
 
@@ -275,6 +315,159 @@ describe('loop — budget stops', () => {
 
     assert.equal(result.stopReason, 'wall_clock_limit');
     assert.ok(result.wallClockMs >= 100);
+  });
+});
+
+describe('loop — tool compat gate', () => {
+  it('passes the full tool set through unchanged for supported models', async () => {
+    const recordedToolNames: string[][] = [];
+
+    registerScriptedPiProvider({
+      api: 'openai-completions',
+      turns: (context: ScriptedProviderContext) => {
+        const rawContext = context.rawContext as { tools?: Array<{ name: string }> };
+        recordedToolNames.push((rawContext.tools ?? []).map((tool) => tool.name));
+        return {
+          content: [{ type: 'text', text: 'Done' }],
+          stopReason: 'stop',
+        };
+      },
+    });
+
+    const tools = [
+      makeTool('read_file', 'parallel', async () => 'unused'),
+      makeTool('list_files', 'parallel', async () => 'unused'),
+      makeTool('search_text', 'parallel', async () => 'unused'),
+    ];
+
+    const result = await runWavemillLoop({
+      model: {
+        id: 'openrouter:openai/gpt-4o-mini',
+        name: 'openai/gpt-4o-mini',
+        api: 'openai-completions',
+        provider: 'openrouter',
+        compat: { thinkingFormat: 'openrouter' },
+      },
+      context: makeContext(tools),
+      convertToLlm: piIdentity,
+      compatRegistry: makeCompatRegistry(
+        'openai/gpt-4o-mini',
+        'certified',
+        'openrouter',
+        'openai-completions',
+        { thinkingFormat: 'openrouter' },
+      ),
+      toolPolicy: {
+        phase: 'coding',
+        worktreePath: '/tmp/wavemill-loop-test',
+        registry: [
+          makeToolMetadata('read_file', 'read-only'),
+          makeToolMetadata('list_files', 'read-only'),
+          makeToolMetadata('search_text', 'read-only'),
+        ],
+      },
+    });
+
+    assert.equal(result.stopReason, 'stop');
+    assert.deepEqual(recordedToolNames, [['read_file', 'list_files', 'search_text']]);
+  });
+
+  it('throws when a native provider is paired with an unknown transport', async () => {
+    let invocationCount = 0;
+
+    registerScriptedPiProvider({
+      api: 'experimental-transport',
+      turns: () => {
+        invocationCount++;
+        return {
+          content: [{ type: 'text', text: 'unexpected' }],
+          stopReason: 'stop',
+        };
+      },
+    });
+
+    await assert.rejects(
+      () => runWavemillLoop({
+        model: {
+          id: 'openai:gpt-future',
+          name: 'gpt-future',
+          api: 'experimental-transport',
+          provider: 'openai',
+        },
+        context: makeContext([
+          makeTool('read_file', 'parallel', async () => 'unused'),
+        ]),
+        convertToLlm: piIdentity,
+        toolPolicy: {
+          phase: 'coding',
+          worktreePath: '/tmp/wavemill-loop-test',
+          registry: [makeToolMetadata('read_file', 'read-only')],
+        },
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.equal(invocationCount, 0);
+        assert.match(error.message, /Unknown provider transport "experimental-transport"/);
+        return true;
+      },
+    );
+  });
+
+  it('fails before any provider call for unsupported tool compatibility', async () => {
+    let invocationCount = 0;
+
+    registerScriptedPiProvider({
+      api: 'openai-completions',
+      turns: () => {
+        invocationCount++;
+        return {
+          content: [{ type: 'text', text: 'unexpected' }],
+          stopReason: 'stop',
+        };
+      },
+    });
+
+    await assert.rejects(
+      () => runWavemillLoop({
+        model: {
+          id: 'openrouter:openai/gpt-4o-mini',
+          name: 'openai/gpt-4o-mini',
+          api: 'openai-completions',
+          provider: 'openrouter',
+        },
+        context: makeContext([
+          makeTool('read_file', 'parallel', async () => 'unused'),
+          makeTool('list_files', 'parallel', async () => 'unused'),
+          makeTool('search_text', 'parallel', async () => 'unused'),
+        ]),
+        convertToLlm: piIdentity,
+        compatRegistry: makeCompatRegistry(
+          'openai/gpt-4o-mini',
+          'partial',
+          'openrouter',
+          'openai-completions',
+        ),
+        toolPolicy: {
+          phase: 'coding',
+          worktreePath: '/tmp/wavemill-loop-test',
+          registry: [
+            makeToolMetadata('read_file', 'read-only'),
+            makeToolMetadata('list_files', 'read-only'),
+            makeToolMetadata('search_text', 'read-only'),
+          ],
+        },
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof ToolCompatError);
+        assert.equal(invocationCount, 0);
+        assert.match(error.message, /model=openai\/gpt-4o-mini/);
+        assert.match(error.message, /provider=openrouter/);
+        assert.match(error.message, /transport=openai-completions/);
+        assert.match(error.message, /tool=read_file/);
+        assert.match(error.message, /capability=read_only_native/);
+        return true;
+      },
+    );
   });
 });
 
