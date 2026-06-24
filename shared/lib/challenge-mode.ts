@@ -2,7 +2,7 @@ import type { ChallengeRecommendation, ChallengeStage } from './challenge-schedu
 export type { ChallengeStage } from './challenge-scheduler.ts';
 import { loadWavemillConfig, type ChallengeConfig, type RouterConfig } from './config.ts';
 import { isDeepSeekModel } from './deepseek-provider.ts';
-import { filterDisabledModels } from './disabled-models.ts';
+import { filterDisabledModels, isDisabledModel } from './disabled-models.ts';
 import { getEffectiveRegistry, getModel } from './model-registry.ts';
 import { resolveAgent } from './model-router.ts';
 import { listVariedRoutingDimensions, routingMetaFromChallengeEntry } from './challenge-comparison.ts';
@@ -175,7 +175,7 @@ export function chooseDistinctChallengerModel(
   primaryModel: string,
   randomFn: () => number = Math.random,
 ): string | null {
-  const candidates = uniqueNonEmpty(pool).filter((model) => model !== primaryModel);
+  const candidates = filterDisabledModels(uniqueNonEmpty(pool)).filter((model) => model !== primaryModel);
   if (candidates.length === 0) {
     return null;
   }
@@ -190,11 +190,12 @@ function resolveChallengerModel(
   forced: string | undefined,
   randomFn: () => number,
 ): string | null {
+  const enabledPool = filterDisabledModels(uniqueNonEmpty(pool));
   const trimmed = forced?.trim();
-  if (trimmed && trimmed !== primaryModel && pool.includes(trimmed)) {
+  if (trimmed && trimmed !== primaryModel && !isDisabledModel(trimmed) && enabledPool.includes(trimmed)) {
     return trimmed;
   }
-  return chooseDistinctChallengerModel(pool, primaryModel, randomFn);
+  return chooseDistinctChallengerModel(enabledPool, primaryModel, randomFn);
 }
 
 function chooseDistinctStageModel(
@@ -203,9 +204,9 @@ function chooseDistinctStageModel(
   forced: string | undefined,
   randomFn: () => number,
 ): string | null {
-  const uniquePool = uniqueNonEmpty(pool);
+  const uniquePool = filterDisabledModels(uniqueNonEmpty(pool));
   const trimmedForced = forced?.trim();
-  if (trimmedForced && trimmedForced !== primaryModel && uniquePool.includes(trimmedForced)) {
+  if (trimmedForced && trimmedForced !== primaryModel && !isDisabledModel(trimmedForced) && uniquePool.includes(trimmedForced)) {
     return trimmedForced;
   }
 
@@ -291,7 +292,8 @@ export function decideChallengeLaunch(opts: {
   const challenger = recommendation.challengerModel?.trim();
   const challengerUsable = Boolean(
     challenger
-    && uniqueNonEmpty(opts.pool).includes(challenger as string)
+    && !isDisabledModel(challenger)
+    && filterDisabledModels(uniqueNonEmpty(opts.pool)).includes(challenger as string)
     && challenger !== (opts.primaryModel?.trim() || ''),
   );
 
@@ -332,12 +334,15 @@ export function pickChallengeModelsWithReason(
     randomFn?: () => number;
   },
 ): ChallengePairSelectionResult {
-  const uniquePool = uniqueNonEmpty(pool);
+  const uniquePool = filterDisabledModels(uniqueNonEmpty(pool));
   const randomFn = opts.randomFn || Math.random;
   const defaultAgent = opts.defaultAgent || 'claude';
   const agentMap = opts.agentMap || {};
 
   let primaryModel = opts.primaryModel?.trim() || '';
+  if (isDisabledModel(primaryModel)) {
+    primaryModel = '';
+  }
   if (!primaryModel) {
     if (!canRunChallenge(uniquePool)) {
       return { pair: null, failureReason: 'selection_failed' };

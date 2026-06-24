@@ -14,6 +14,8 @@ import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { readJsonlFile } from './jsonl-utils.ts';
+import { piUsageToSessionModelUsage } from './native-agent/pi-usage-cost.ts';
+import type { TranscriptEvent } from './native-agent/transcript.ts';
 import { resolveProjectsDirs } from './workflow-cost.ts';
 
 // ────────────────────────────────────────────────────────────────
@@ -21,7 +23,7 @@ import { resolveProjectsDirs } from './workflow-cost.ts';
 // ────────────────────────────────────────────────────────────────
 
 /** Supported agent identifiers. */
-export type AgentType = 'claude' | 'codex' | 'claude-deepseek';
+export type AgentType = 'claude' | 'codex' | 'claude-deepseek' | 'native';
 
 /** Per-model aggregated token usage (without cost — cost is computed later). */
 export interface SessionModelUsage {
@@ -391,6 +393,105 @@ export class CodexSessionAdapter implements SessionAdapter {
 }
 
 // ────────────────────────────────────────────────────────────────
+// Native adapter
+// ────────────────────────────────────────────────────────────────
+
+/**
+ * Reads native runtime transcript files from worktree-local run directories.
+ *
+ * Native transcripts are worktree-scoped, so branchName is not currently used
+ * for discovery. Assistant message usage is aggregated per model, preferring
+ * the event's model and falling back to the session_started model when needed.
+ */
+export class NativeSessionAdapter implements SessionAdapter {
+  scan(opts: SessionScanOptions): SessionUsageResult | null {
+    const runsDir = join(resolve(opts.worktreePath), '.wavemill', 'runs');
+    if (!existsSync(runsDir)) {
+      return null;
+    }
+
+    let sessionFiles: string[] = [];
+    try {
+      for (const runEntry of readdirSync(runsDir, { withFileTypes: true })) {
+        if (!runEntry.isDirectory()) {
+          continue;
+        }
+        const nativeSessionsDir = join(runsDir, runEntry.name, 'native-sessions');
+        if (!existsSync(nativeSessionsDir)) {
+          continue;
+        }
+        sessionFiles.push(
+          ...readdirSync(nativeSessionsDir)
+            .filter((fileName) => fileName.endsWith('.jsonl'))
+            .map((fileName) => join(nativeSessionsDir, fileName)),
+        );
+      }
+    } catch {
+      return null;
+    }
+
+    if (sessionFiles.length === 0) {
+      return null;
+    }
+
+    sessionFiles = [...new Set(sessionFiles)];
+
+    const models: Record<string, SessionModelUsage> = {};
+    let sessionCount = 0;
+    let turnCount = 0;
+
+    for (const filePath of sessionFiles) {
+      let sessionModel = 'unknown';
+      let sessionHadTurns = false;
+
+      try {
+        for (const entry of readJsonlFile<TranscriptEvent>(filePath)) {
+          if (entry.type === 'session_started') {
+            sessionModel = entry.model || sessionModel;
+            continue;
+          }
+
+          if (entry.type !== 'assistant_message') {
+            continue;
+          }
+
+          const modelId = entry.model || sessionModel || 'unknown';
+          const usage = piUsageToSessionModelUsage(entry.usage);
+          if (!models[modelId]) {
+            models[modelId] = {
+              inputTokens: 0,
+              cacheCreationTokens: 0,
+              cacheReadTokens: 0,
+              outputTokens: 0,
+            };
+          }
+
+          models[modelId].inputTokens += usage.inputTokens;
+          models[modelId].cacheCreationTokens += usage.cacheCreationTokens;
+          models[modelId].cacheReadTokens += usage.cacheReadTokens;
+          models[modelId].outputTokens += usage.outputTokens;
+
+          turnCount++;
+          sessionHadTurns = true;
+        }
+      } catch {
+        continue;
+      }
+
+      if (sessionHadTurns) {
+        sessionCount++;
+      }
+    }
+
+    if (turnCount === 0) {
+      return null;
+    }
+
+    return { models, sessionCount, turnCount };
+  }
+}
+
+// ────────────────────────────────────────────────────────────────
 // Auto-detection
 // ────────────────────────────────────────────────────────────────
 
@@ -446,6 +547,8 @@ export function detectAgentType(opts: SessionScanOptions): AgentType | null {
  */
 export function getSessionAdapter(agentType?: AgentType | string): SessionAdapter {
   switch (agentType) {
+    case 'native':
+      return new NativeSessionAdapter();
     case 'codex':
       return new CodexSessionAdapter();
     case 'claude-deepseek':

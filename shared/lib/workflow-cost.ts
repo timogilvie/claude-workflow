@@ -12,7 +12,7 @@
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
-import { getSessionAdapter, detectAgentType, type AgentType } from './session-adapters.ts';
+import { NativeSessionAdapter, getSessionAdapter, detectAgentType, type AgentType } from './session-adapters.ts';
 import { loadWavemillConfig } from './config.ts';
 import { getEffectiveRegistry } from './model-registry.ts';
 
@@ -235,14 +235,20 @@ export function computeWorkflowCost(opts: {
     console.log(`[DEBUG_COST]   agentType: ${agentType || '(undefined, will default to claude)'}`);
   }
 
-  // Delegate session scanning to the appropriate adapter
+  const nativeScanResult = new NativeSessionAdapter().scan({ worktreePath, branchName });
+  let scanResult = nativeScanResult && nativeScanResult.turnCount > 0 ? nativeScanResult : null;
   let adapter = getSessionAdapter(agentType);
 
   if (debug) {
     console.log(`[DEBUG_COST]   Selected adapter: ${adapter.constructor.name}`);
+    if (scanResult) {
+      console.log('[DEBUG_COST]   Native sessions found; skipping adapter fallback');
+    }
   }
 
-  let scanResult = adapter.scan({ worktreePath, branchName });
+  if (!scanResult) {
+    scanResult = adapter.scan({ worktreePath, branchName });
+  }
 
   // If no sessions found, try auto-detection as a fallback
   if (!scanResult || scanResult.turnCount === 0) {

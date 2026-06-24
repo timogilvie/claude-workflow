@@ -9912,9 +9912,24 @@ monitor_issue_state() {
                   log "debug" "  $ISSUE: Challenge participants preserved after expanded routing"
                 fi
               fi
-              # For challenge tasks, the challenge model MUST override the routed coder
+              # For challenge tasks, the challengeModel only names the coder when the
+              # challenge varied the implementation stage. Plan-stage and review-stage
+              # challenges leave the coder route untouched (see HOK-2272).
               if [[ -n "$challenge_coder" ]]; then
-                coder_model="$challenge_coder"
+                case "$challenge_stage_meta" in
+                  implementation)
+                    coder_model="$challenge_coder"
+                    ;;
+                  plan|review)
+                    log "debug" "  $ISSUE: challenge stage=$challenge_stage_meta — honoring phase-config coder ($coder_model) over challengeModel ($challenge_coder)"
+                    ;;
+                  "")
+                    log_warn "  $ISSUE: challenge has no challengeStage signal — fail-safe to phase-config coder ($coder_model); challengeModel ($challenge_coder) ignored"
+                    ;;
+                  *)
+                    log_warn "  $ISSUE: unrecognized challengeStage=$challenge_stage_meta — fail-safe to phase-config coder ($coder_model); challengeModel ($challenge_coder) ignored"
+                    ;;
+                esac
               fi
             fi
             coder_model="$(resolve_phase_model "coding" "$coder_model" "claude-opus-4-7")"
