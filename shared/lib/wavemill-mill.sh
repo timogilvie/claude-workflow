@@ -2529,6 +2529,159 @@ is_transient_error() {
   return 1
 }
 
+CODEX_CAPACITY_MESSAGE="Selected model is at capacity. Please try a different model."
+CODEX_CAPACITY_REASON="model_at_capacity"
+
+wavemill_capacity_stall_seconds() {
+  local raw="${WAVEMILL_CAPACITY_STALL_SECONDS:-45}"
+
+  if [[ ! "$raw" =~ ^[0-9]+$ ]]; then
+    printf '45\n'
+    return 0
+  fi
+
+  if (( raw > 299 )); then
+    printf '299\n'
+    return 0
+  fi
+
+  printf '%s\n' "$raw"
+}
+
+codex_capacity_recovery_marker() {
+  local feature_dir="$1"
+  printf '%s\n' "$feature_dir/.coding-capacity-recovery.json"
+}
+
+codex_capacity_dwell_marker() {
+  local feature_dir="$1"
+  printf '%s\n' "$feature_dir/.coding-capacity-dwell.json"
+}
+
+codex_capacity_clear_dwell_marker() {
+  local feature_dir="$1"
+  rm -f "$(codex_capacity_dwell_marker "$feature_dir")" 2>/dev/null || true
+}
+
+codex_capacity_pane_tail() {
+  local issue="$1" slug="$2" worktree="$3"
+  local target=""
+
+  target="$(_tmux_task_window_target "$SESSION" "$issue" "$slug" "${STATE_FILE:-}" "$worktree" 2>/dev/null || true)"
+  [[ -n "$target" ]] || return 1
+
+  tmux capture-pane -p -t "$target" -S -80 2>/dev/null || return 1
+}
+
+codex_capacity_tail_has_terminal_prompt() {
+  local tail="${1-}"
+  local last_nonempty=""
+  local line=""
+  local capacity_message="${CODEX_CAPACITY_MESSAGE:-Selected model is at capacity. Please try a different model.}"
+
+  [[ -n "$tail" ]] || return 1
+  printf '%s\n' "$tail" | grep -Fq "$capacity_message" || return 1
+
+  while IFS= read -r line; do
+    [[ -n "${line//[[:space:]]/}" ]] || continue
+    last_nonempty="$line"
+  done <<< "$tail"
+
+  [[ -n "$last_nonempty" ]] || return 1
+  [[ "$last_nonempty" != "$capacity_message" ]] || return 1
+
+  if [[ "$last_nonempty" =~ ^[[:space:]]*(>|›|❯|\$|%|>>>)[[:space:]]*$ ]]; then
+    return 0
+  fi
+
+  return 1
+}
+
+codex_capacity_hook_status() {
+  local issue="$1"
+  local hook_file="/tmp/wavemill-${SESSION}-${issue}.hook"
+  local hook_state hook_agent hook_detail hook_ts now staleness
+  local capacity_message="${CODEX_CAPACITY_MESSAGE:-Selected model is at capacity. Please try a different model.}"
+  local capacity_reason="${CODEX_CAPACITY_REASON:-model_at_capacity}"
+
+  [[ -f "$hook_file" ]] || return 1
+
+  hook_state=$(jq -r '.state // empty' "$hook_file" 2>/dev/null || echo "")
+  hook_agent=$(jq -r '.agent // empty' "$hook_file" 2>/dev/null || echo "")
+  hook_detail=$(jq -r '.detail // empty' "$hook_file" 2>/dev/null || echo "")
+  hook_ts=$(jq -r '.timestamp // 0' "$hook_file" 2>/dev/null || echo "0")
+
+  [[ "$hook_state" == "error" ]] || return 1
+  [[ -z "$hook_agent" || "$hook_agent" == "codex" ]] || return 1
+
+  now="$(date +%s)"
+  staleness=$(( now - hook_ts ))
+  (( staleness >= 0 && staleness < 300 )) || return 1
+
+  if [[ "$hook_detail" == ${capacity_reason}:* ]] || [[ "$hook_detail" == *"$capacity_message"* ]]; then
+    return 0
+  fi
+
+  return 1
+}
+
+codex_capacity_record_dwell() {
+  local feature_dir="$1" source="$2"
+  local marker tmp_file now existing_first_seen existing_source first_seen
+
+  marker="$(codex_capacity_dwell_marker "$feature_dir")"
+  tmp_file="$(mktemp "$marker.tmp.XXXXXX" 2>/dev/null)" || return 1
+  now="$(date +%s)"
+  existing_first_seen="$(jq -r '.firstSeen // empty' "$marker" 2>/dev/null || echo "")"
+  existing_source="$(jq -r '.source // empty' "$marker" 2>/dev/null || echo "")"
+
+  if [[ -n "$existing_first_seen" && "$existing_first_seen" =~ ^[0-9]+$ && "$existing_source" == "$source" ]]; then
+    first_seen="$existing_first_seen"
+  else
+    first_seen="$now"
+  fi
+
+  if ! jq -n \
+    --arg source "$source" \
+    --argjson firstSeen "$first_seen" \
+    --argjson lastSeen "$now" \
+    '{source: $source, firstSeen: $firstSeen, lastSeen: $lastSeen}' > "$tmp_file" 2>/dev/null; then
+    rm -f "$tmp_file"
+    return 1
+  fi
+
+  mv "$tmp_file" "$marker" 2>/dev/null || {
+    rm -f "$tmp_file"
+    return 1
+  }
+
+  printf '%s\n' "$first_seen"
+}
+
+codex_capacity_idle_confirmed() {
+  local issue="$1" slug="$2" feature_dir="$3" worktree="$4"
+  local source="" first_seen="" now dwell_seconds tail=""
+
+  if codex_capacity_hook_status "$issue"; then
+    source="hook"
+  else
+    tail="$(codex_capacity_pane_tail "$issue" "$slug" "$worktree" 2>/dev/null || true)"
+    if codex_capacity_tail_has_terminal_prompt "$tail"; then
+      source="pane"
+    else
+      codex_capacity_clear_dwell_marker "$feature_dir"
+      return 1
+    fi
+  fi
+
+  first_seen="$(codex_capacity_record_dwell "$feature_dir" "$source" 2>/dev/null || true)"
+  [[ "$first_seen" =~ ^[0-9]+$ ]] || return 1
+
+  now="$(date +%s)"
+  dwell_seconds="$(wavemill_capacity_stall_seconds)"
+  (( now - first_seen >= dwell_seconds ))
+}
+
 retry_state_file() {
   local session="$1"
   local issue="$2"
@@ -3778,6 +3931,88 @@ emit_blocked_completion_attention() {
   set_window_attention_state "$win" "needs-user"
   active_count=$((active_count + 1))
   return 0
+}
+
+write_codex_capacity_blocked_completion() {
+  local issue="$1" feature_dir="$2" model="${3:-}" source="${4:-unknown}"
+  local artifact recovery_marker artifact_tmp recovery_tmp slug timestamp
+  local capacity_message="${CODEX_CAPACITY_MESSAGE:-Selected model is at capacity. Please try a different model.}"
+  local capacity_reason="${CODEX_CAPACITY_REASON:-model_at_capacity}"
+
+  artifact="$(blocked_completion_artifact_path "$feature_dir")"
+  recovery_marker="$(codex_capacity_recovery_marker "$feature_dir")"
+  slug="$(basename "$feature_dir")"
+  timestamp="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+  [[ -f "$artifact" ]] && return 1
+  [[ -f "$recovery_marker" ]] && return 0
+
+  artifact_tmp="$(mktemp "$artifact.tmp.XXXXXX" 2>/dev/null)" || return 1
+  if ! jq -n \
+    --arg reason "$capacity_reason" \
+    --arg blockingReason "${capacity_reason}: $capacity_message" \
+    --arg evidence "Codex pane was idle at the terminal capacity prompt after confirmation dwell." \
+    --arg recommendedAction "retry_with_available_model_or_relaunch_coding" \
+    --arg summary "coding blocked: Codex model at capacity" \
+    --arg detectedAt "$timestamp" \
+    --arg issue "$issue" \
+    --arg slug "$slug" \
+    --arg model "$model" \
+    --arg source "$source" \
+    '{
+      stage: "coding",
+      implementationComplete: false,
+      committed: false,
+      passingChecks: [],
+      blockingChecks: ["codex_model_capacity"],
+      blockingReason: $blockingReason,
+      evidence: $evidence,
+      recommendedAction: $recommendedAction,
+      summary: $summary,
+      reason: $reason,
+      detectedAt: $detectedAt,
+      issue: $issue,
+      slug: $slug,
+      model: (if ($model | length) > 0 then $model else null end),
+      source: $source
+    }' > "$artifact_tmp"; then
+    rm -f "$artifact_tmp"
+    return 1
+  fi
+
+  mv "$artifact_tmp" "$artifact" 2>/dev/null || {
+    rm -f "$artifact_tmp"
+    return 1
+  }
+
+  recovery_tmp="$(mktemp "$recovery_marker.tmp.XXXXXX" 2>/dev/null)" || return 1
+  if ! jq -n \
+    --arg issue "$issue" \
+    --arg slug "$slug" \
+    --arg model "$model" \
+    --arg source "$source" \
+    --arg action "wrote_blocked_completion" \
+    --arg reason "$capacity_reason" \
+    --arg detectedAt "$timestamp" \
+    '{
+      issue: $issue,
+      slug: $slug,
+      model: (if ($model | length) > 0 then $model else null end),
+      source: $source,
+      action: $action,
+      reason: $reason,
+      detectedAt: $detectedAt
+    }' > "$recovery_tmp"; then
+    rm -f "$recovery_tmp"
+    return 1
+  fi
+
+  mv "$recovery_tmp" "$recovery_marker" 2>/dev/null || {
+    rm -f "$recovery_tmp"
+    return 1
+  }
+
+  codex_capacity_clear_dwell_marker "$feature_dir"
 }
 
 blocked_completion_current_head() {
@@ -10144,6 +10379,15 @@ monitor_issue_state() {
               # Next iteration will detect resolved_phase == "review" and launch review
               active_count=$((active_count + 1))
               return 0
+            fi
+            if [[ ! -f "$FEATURE_DIR/.coding-blocked-completion.json" ]] \
+              && [[ "${current_agent:-}" == "codex" || "${AGENT_CMD:-}" == "codex" ]] \
+              && codex_capacity_idle_confirmed "$ISSUE" "$SLUG" "$FEATURE_DIR" "${WORKTREE_ROOT}/${SLUG}"; then
+              local codex_capacity_source codex_capacity_model
+              codex_capacity_source="$(jq -r '.source // "unknown"' "$(codex_capacity_dwell_marker "$FEATURE_DIR")" 2>/dev/null || echo "unknown")"
+              codex_capacity_model="$(jq -r '.model // empty' "$FEATURE_DIR/.coding-result.json" 2>/dev/null || echo "")"
+              write_codex_capacity_blocked_completion "$ISSUE" "$FEATURE_DIR" "$codex_capacity_model" "$codex_capacity_source" || true
+              write_stage_result "$FEATURE_DIR" "coding" "running" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "coding" "claude-opus-4-7")" "Blocked: Codex model at capacity"
             fi
             if auto_advance_blocked_completion "$ISSUE" "$FEATURE_DIR"; then
               set_window_attention_state "$WIN" "clear"
