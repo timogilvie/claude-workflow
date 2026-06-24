@@ -1569,6 +1569,100 @@ export function isReadOnlyNativeCapable(
   return capability === 'partial' && opts?.allowPartial === true;
 }
 
+export type NativeReadOnlyRoutingMode = 'task' | 'certification';
+
+export interface NativeReadOnlyRoutingDecision {
+  routable: boolean;
+  certified: boolean;
+  mode: NativeReadOnlyRoutingMode;
+  phase: string;
+  modelId: string;
+  capability: ReadOnlyNativeCapability | 'unregistered';
+  reason?: string;
+}
+
+export class NativeReadOnlyCertificationError extends Error {
+  readonly modelId: string;
+  readonly phase: string;
+  readonly capability: ReadOnlyNativeCapability | 'unregistered';
+
+  constructor(modelId: string, phase: string, capability: ReadOnlyNativeCapability | 'unregistered', message: string) {
+    super(message);
+    this.name = 'NativeReadOnlyCertificationError';
+    this.modelId = modelId;
+    this.phase = phase;
+    this.capability = capability;
+  }
+}
+
+export function evaluateNativeReadOnlyRouting(input: {
+  modelId: string;
+  phase: string;
+  mode?: NativeReadOnlyRoutingMode;
+  registry?: ModelRegistry;
+  allowPartial?: boolean;
+}): NativeReadOnlyRoutingDecision {
+  const mode = input.mode ?? 'task';
+  const registry = input.registry ?? getEffectiveRegistry();
+  const nativeCapability = registry.models[input.modelId]?.nativeCapability;
+  const capability: ReadOnlyNativeCapability | 'unregistered' = nativeCapability?.readOnlyNative ?? 'unregistered';
+  const certified = isReadOnlyNativeCapable(input.modelId, { registry, allowPartial: input.allowPartial });
+
+  if (mode === 'certification') {
+    return {
+      routable: false,
+      certified,
+      mode,
+      phase: input.phase,
+      modelId: input.modelId,
+      capability,
+    };
+  }
+
+  if (!certified) {
+    const reason = capability === 'unregistered'
+      ? `Refusing native read-only routing: model "${input.modelId}" is not registered in the model registry for the "${input.phase}" phase (capability: unregistered; required: certified). Native execution is disabled for this model — certify it via the smoke/certification path before routing.`
+      : `Refusing native read-only routing: model "${input.modelId}" is not read-only-native certified for the "${input.phase}" phase (capability: ${capability}; required: certified). Native execution is disabled for this model — certify it via the smoke/certification path before routing.`;
+
+    return {
+      routable: false,
+      certified: false,
+      mode,
+      phase: input.phase,
+      modelId: input.modelId,
+      capability,
+      reason,
+    };
+  }
+
+  return {
+    routable: true,
+    certified: true,
+    mode,
+    phase: input.phase,
+    modelId: input.modelId,
+    capability,
+  };
+}
+
+export function assertNativeReadOnlyRoutable(input: {
+  modelId: string;
+  phase: string;
+  mode?: NativeReadOnlyRoutingMode;
+  registry?: ModelRegistry;
+  allowPartial?: boolean;
+}): void {
+  const decision = evaluateNativeReadOnlyRouting(input);
+  if (decision.mode === 'task' && !decision.routable && decision.reason) {
+    throw new NativeReadOnlyCertificationError(
+      decision.modelId,
+      decision.phase,
+      decision.capability,
+      decision.reason,
+    );
+  }
+}
+
 export function getConfiguredModelsForDescriptorStage(
   repoDir: string | undefined,
   stage: DescriptorModelStage,

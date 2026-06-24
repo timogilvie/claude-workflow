@@ -6,6 +6,12 @@ import {
 } from '../config.ts';
 import { resolveEnvValue } from '../env-file.ts';
 import {
+  evaluateNativeReadOnlyRouting,
+  getEffectiveRegistry,
+  type ModelRegistry,
+  type ReadOnlyNativeCapability,
+} from '../model-registry.ts';
+import {
   buildPiModel,
   getRegisteredPiProviderForModel,
   type PiModel,
@@ -24,7 +30,7 @@ export const OPENROUTER_DEFAULT_BASE_URL = 'https://openrouter.ai/api/v1';
 export const OPENAI_DEFAULT_MODELS = ['gpt-4o'] as const;
 export const OPENROUTER_DEFAULT_MODELS = ['openai/gpt-4o-mini'] as const;
 
-export type NativeProviderStatus = 'ready' | 'unavailable' | 'skipped';
+export type NativeProviderStatus = 'ready' | 'unavailable' | 'skipped' | 'uncertified';
 
 export interface NativeProviderEntryBase {
   providerName: NativeAgentProviderName;
@@ -38,6 +44,7 @@ export interface NativeProviderEntryBase {
 export interface ReadyNativeProviderEntry extends NativeProviderEntryBase {
   status: 'ready';
   model: PiModel;
+  certificationOnly?: boolean;
 }
 
 export interface UnavailableNativeProviderEntry extends NativeProviderEntryBase {
@@ -50,14 +57,25 @@ export interface SkippedNativeProviderEntry extends NativeProviderEntryBase {
   reason: string;
 }
 
+export interface UncertifiedNativeProviderEntry extends NativeProviderEntryBase {
+  status: 'uncertified';
+  reason: string;
+  capability: ReadOnlyNativeCapability | 'unregistered';
+}
+
 export type ResolvedNativeProviderEntry =
   | ReadyNativeProviderEntry
   | UnavailableNativeProviderEntry
-  | SkippedNativeProviderEntry;
+  | SkippedNativeProviderEntry
+  | UncertifiedNativeProviderEntry;
 
 export interface ResolveNativeAgentProvidersOptions {
   env?: Record<string, string | undefined>;
   repoDir?: string;
+  phase?: string;
+  certificationMode?: boolean;
+  allowPartial?: boolean;
+  registry?: ModelRegistry;
 }
 
 const DEFAULT_PROVIDER_ORDER: readonly NativeAgentProviderName[] = [
@@ -74,6 +92,10 @@ export function resolveNativeAgentProviders(
   const { config, repoDir } = resolveConfigSource(configOrRepoDir, options.repoDir);
   const providers = config.providers ?? {};
   const resolved: ResolvedNativeProviderEntry[] = [];
+  const phase = options.phase ?? 'planning';
+  const certificationMode = options.certificationMode ?? false;
+  const allowPartial = options.allowPartial ?? false;
+  const registry = options.registry ?? getEffectiveRegistry(repoDir);
 
   for (const providerName of DEFAULT_PROVIDER_ORDER) {
     const providerConfig = providers[providerName];
@@ -118,6 +140,28 @@ export function resolveNativeAgentProviders(
     }
 
     for (const modelId of modelIds) {
+      const decision = evaluateNativeReadOnlyRouting({
+        modelId,
+        phase,
+        mode: certificationMode ? 'certification' : 'task',
+        registry,
+        allowPartial,
+      });
+
+      if (!certificationMode && !decision.routable) {
+        resolved.push({
+          providerName,
+          modelId,
+          status: 'uncertified',
+          apiKeyEnv,
+          baseUrl,
+          headers,
+          reason: decision.reason!,
+          capability: decision.capability,
+        });
+        continue;
+      }
+
       const readyEntry: ReadyNativeProviderEntry = {
         providerName,
         modelId,
@@ -128,6 +172,7 @@ export function resolveNativeAgentProviders(
         model: providerName === OPENAI_NATIVE_PROVIDER
           ? buildOpenAiResponsesModel({ modelId, baseUrl, headers })
           : buildOpenRouterModel({ modelId, baseUrl, headers }),
+        certificationOnly: certificationMode ? !decision.certified : false,
       };
       attachApiKey(readyEntry, apiKey);
       resolved.push(readyEntry);

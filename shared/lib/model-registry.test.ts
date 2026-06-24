@@ -5,11 +5,13 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import type { ModelRegistry } from './model-registry.ts';
 import {
+  assertNativeReadOnlyRoutable,
   assertRegistryConsistency,
   CHANNELS,
   compareLatencyTier,
   deriveReadOnlyNativeCapability,
   evaluateCapabilityConstraints,
+  evaluateNativeReadOnlyRouting,
   FAMILY_ALIASES,
   getConfiguredModelsForDescriptor,
   getConfiguredModelsForDescriptorStage,
@@ -23,6 +25,7 @@ import {
   mergeModelRegistry,
   ModelResolutionError,
   ModelValidationError,
+  NativeReadOnlyCertificationError,
   normalizeReviewerModelId,
   parseModelSelector,
   rankCandidates,
@@ -1089,6 +1092,157 @@ describe('model-registry', () => {
         clearConfigCache(repoDir);
         cleanUp(repoDir);
       }
+    });
+  });
+
+  describe('evaluateNativeReadOnlyRouting and assertNativeReadOnlyRoutable', () => {
+    function makeCertifiedRegistry(): ModelRegistry {
+      return {
+        models: {
+          'certified-model': makeCapabilities({
+            nativeCapability: {
+              nativeProvider: 'openai',
+              piTransportKind: 'openai-responses',
+              readOnlyNative: 'certified',
+            },
+          }),
+          'partial-model': makeCapabilities({
+            nativeCapability: {
+              nativeProvider: 'openrouter',
+              piTransportKind: 'openai-completions',
+              readOnlyNative: 'partial',
+              limitations: ['missing thinkingFormat=openrouter compat flag'],
+            } as any,
+          }),
+          'unsupported-model': makeCapabilities({
+            nativeCapability: {
+              nativeProvider: 'openai',
+              piTransportKind: 'openai-responses',
+              readOnlyNative: 'unsupported',
+            } as any,
+          }),
+        },
+        ladders: {},
+      };
+    }
+
+    it('task mode: certified model is routable', () => {
+      const registry = makeCertifiedRegistry();
+      const decision = evaluateNativeReadOnlyRouting({ modelId: 'certified-model', phase: 'planning', registry });
+
+      assert.equal(decision.routable, true);
+      assert.equal(decision.certified, true);
+      assert.equal(decision.mode, 'task');
+      assert.equal(decision.phase, 'planning');
+      assert.equal(decision.modelId, 'certified-model');
+      assert.equal(decision.capability, 'certified');
+      assert.equal(decision.reason, undefined);
+    });
+
+    it('task mode: unsupported model is refused with actionable reason naming model, phase, and capability', () => {
+      const registry = makeCertifiedRegistry();
+      const decision = evaluateNativeReadOnlyRouting({ modelId: 'unsupported-model', phase: 'expansion', registry });
+
+      assert.equal(decision.routable, false);
+      assert.equal(decision.certified, false);
+      assert.equal(decision.capability, 'unsupported');
+      assert.ok(decision.reason, 'should have a reason');
+      assert.match(decision.reason!, /unsupported-model/);
+      assert.match(decision.reason!, /expansion/);
+      assert.match(decision.reason!, /unsupported/);
+      assert.match(decision.reason!, /certified/);
+    });
+
+    it('task mode: unregistered model is refused with capability: unregistered', () => {
+      const registry = makeCertifiedRegistry();
+      const decision = evaluateNativeReadOnlyRouting({ modelId: 'nonexistent-model', phase: 'planning', registry });
+
+      assert.equal(decision.routable, false);
+      assert.equal(decision.capability, 'unregistered');
+      assert.ok(decision.reason);
+      assert.match(decision.reason!, /nonexistent-model/);
+      assert.match(decision.reason!, /unregistered/);
+    });
+
+    it('task mode: partial model is refused by default, routable with allowPartial', () => {
+      const registry = makeCertifiedRegistry();
+
+      const refused = evaluateNativeReadOnlyRouting({ modelId: 'partial-model', phase: 'planning', registry });
+      assert.equal(refused.routable, false);
+      assert.equal(refused.certified, false);
+      assert.equal(refused.capability, 'partial');
+
+      const allowed = evaluateNativeReadOnlyRouting({
+        modelId: 'partial-model',
+        phase: 'planning',
+        registry,
+        allowPartial: true,
+      });
+      assert.equal(allowed.routable, true);
+      assert.equal(allowed.certified, true);
+    });
+
+    it('certification mode: routable is always false, certified reflects actual state, no reason set', () => {
+      const registry = makeCertifiedRegistry();
+
+      const certifiedDecision = evaluateNativeReadOnlyRouting({
+        modelId: 'certified-model',
+        phase: 'planning',
+        mode: 'certification',
+        registry,
+      });
+      assert.equal(certifiedDecision.routable, false);
+      assert.equal(certifiedDecision.certified, true);
+      assert.equal(certifiedDecision.mode, 'certification');
+      assert.equal(certifiedDecision.reason, undefined);
+
+      const uncertifiedDecision = evaluateNativeReadOnlyRouting({
+        modelId: 'unsupported-model',
+        phase: 'planning',
+        mode: 'certification',
+        registry,
+      });
+      assert.equal(uncertifiedDecision.routable, false);
+      assert.equal(uncertifiedDecision.certified, false);
+      assert.equal(uncertifiedDecision.reason, undefined);
+    });
+
+    it('assertNativeReadOnlyRoutable throws NativeReadOnlyCertificationError for uncertified task mode', () => {
+      const registry = makeCertifiedRegistry();
+
+      assert.throws(
+        () => assertNativeReadOnlyRoutable({ modelId: 'unsupported-model', phase: 'planning', registry }),
+        (error: unknown) => {
+          assert.ok(error instanceof NativeReadOnlyCertificationError);
+          assert.equal(error.modelId, 'unsupported-model');
+          assert.equal(error.phase, 'planning');
+          assert.equal(error.capability, 'unsupported');
+          assert.match(error.message, /unsupported-model/);
+          assert.match(error.message, /planning/);
+          return true;
+        },
+      );
+    });
+
+    it('assertNativeReadOnlyRoutable does not throw for certified task mode', () => {
+      const registry = makeCertifiedRegistry();
+
+      assert.doesNotThrow(() => assertNativeReadOnlyRoutable({
+        modelId: 'certified-model',
+        phase: 'planning',
+        registry,
+      }));
+    });
+
+    it('assertNativeReadOnlyRoutable does not throw in certification mode even for uncertified model', () => {
+      const registry = makeCertifiedRegistry();
+
+      assert.doesNotThrow(() => assertNativeReadOnlyRoutable({
+        modelId: 'unsupported-model',
+        phase: 'planning',
+        mode: 'certification',
+        registry,
+      }));
     });
   });
 });
