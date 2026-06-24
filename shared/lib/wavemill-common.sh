@@ -1380,6 +1380,12 @@ wavemill_command_file_path() {
   printf '/tmp/wavemill-%s-commands\n' "$session"
 }
 
+wavemill_control_pane_bash() {
+  local shell_bin="/opt/homebrew/bin/bash"
+  [[ -x "$shell_bin" ]] || shell_bin="bash"
+  printf '%s\n' "$shell_bin"
+}
+
 # Output the merged wavemill config JSON for a repo dir, applying
 # .wavemill-config.local.json (gitignored) on top of .wavemill-config.json.
 # Mirrors loadWavemillConfig() in shared/lib/config.ts: objects are recursively
@@ -1405,6 +1411,32 @@ wavemill_load_config() {
 wavemill_command_offset_path() {
   local session="$1"
   printf '/tmp/wavemill-%s-commands.offset\n' "$session"
+}
+
+wavemill_build_control_pane_command() {
+  local mode="$1" session="$2" monitor_script="$3" monitor_env="$4" lib_dir="$5"
+  local input_reader_script cmd_file offset_file shell_bin setup_cmd command_string
+
+  input_reader_script="$lib_dir/wavemill-input-reader.sh"
+  cmd_file="$(wavemill_command_file_path "$session")"
+  offset_file="$(wavemill_command_offset_path "$session")"
+  shell_bin="$(wavemill_control_pane_bash)"
+
+  case "$mode" in
+    startup)
+      setup_cmd=": > $(printf '%q' "$cmd_file"); printf '0\\n' > $(printf '%q' "$offset_file"); "
+      ;;
+    recovery)
+      setup_cmd=""
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+
+  printf -v command_string '%q -lc %q' "$shell_bin" \
+    "clear; ${setup_cmd}$(printf '%q %q' "$monitor_script" "$monitor_env") </dev/null & monitor_pid=\$!; trap 'kill \"\$monitor_pid\" >/dev/null 2>&1 || true' EXIT INT TERM; exec env WAVEMILL_SESSION=$(printf '%q' "$session") $(printf '%q %q' "$input_reader_script" "$session")"
+  printf '%s\n' "$command_string"
 }
 
 # ============================================================================
