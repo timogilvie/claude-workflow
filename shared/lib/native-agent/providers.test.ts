@@ -10,7 +10,6 @@ import {
   getNativeProviderApiKey,
   getRegisteredPiProviderForModel,
   OPENAI_DEFAULT_BASE_URL,
-  OPENAI_DEFAULT_MODELS,
   OPENROUTER_DEFAULT_BASE_URL,
   resolveNativeAgentProviders,
 } from './providers.ts';
@@ -323,21 +322,6 @@ describe('native-agent certification gate', () => {
     assert.equal(entries.length, 1);
     const [entry] = entries;
     assert.equal(entry.status, 'ready');
-    assert.equal(entry.certificationOnly, false);
-  });
-
-  it('synthesized default OpenAI pilot resolves to ready from the seeded registry', () => {
-    const [entry] = resolveNativeAgentProviders({
-      providers: {
-        openai: {},
-      },
-    }, {
-      env: { OPENAI_API_KEY: 'sk-test' },
-    });
-
-    assert(entry);
-    assert.equal(entry.status, 'ready');
-    assert.equal(entry.modelId, OPENAI_DEFAULT_MODELS[0]);
     assert.equal(entry.certificationOnly, false);
   });
 

@@ -4,21 +4,24 @@ Date: 2026-06-24
 Issue: HOK-2308
 Status: blocker
 
-## Pilot target
+## Pilot target attempted
 
 - Provider: OpenAI
 - Model: `gpt-4o`
 - API surface: Responses (`v1/responses`)
-- Native provider metadata: `nativeProvider=openai`, `piTransportKind=openai-responses`, `readOnlyNative=certified`
+- Intended native provider metadata: `nativeProvider=openai`, `piTransportKind=openai-responses`
 - Key env var: `OPENAI_API_KEY`
 - Repo default path used by smoke: synthesized `nativeAgent.providers.openai.models[0] = gpt-4o`
 
+## Outcome
+
+Per REQ-F1, when no live run is possible no model is certified. No model is registered as `nativeCapability.readOnlyNative: 'certified'` in `shared/lib/model-registry.ts` as part of this change. The fail-closed default remains intact: uncertified and unregistered models are still refused for native read-only routing.
+
 ## What was implemented
 
-- Seeded `gpt-4o` into the default model registry as the single certified native read-only pilot.
-- Preserved fail-closed routing for uncertified and unregistered models.
-- Tightened live smoke so it fails when the provider does not complete a turn, does not execute the required read-only tool call, or returns zero usage needed for cost capture.
-- Verified native-session cost ingestion against `gpt-4o` session data.
+- Tightened the live smoke so it fails when the provider does not complete a turn, does not execute the required read-only tool call, or returns zero usage needed for cost capture (`shared/lib/native-agent/smoke.ts`).
+- Added a unit test covering the new fail-closed semantics on the smoke path (`shared/lib/native-agent/smoke.test.ts`).
+- Left `shared/lib/model-registry.ts` unchanged with respect to certification: no model carries `readOnlyNative: 'certified'` by default.
 
 ## Live smoke attempt
 
@@ -43,24 +46,34 @@ Transcript summary:
 - `turn_ended` with `stopReason: "error"`
 - `session_ended`
 
-This is a blocker for certification because the provider/runtime path did not produce a successful read-only tool-using turn or billable usage, so cost capture cannot be certified from the live run.
+This is the blocker condition: the provider/runtime path did not produce a successful read-only tool-using turn or billable usage, so cost capture cannot be certified from the live run.
 
 ## Router gate verification
 
-- Certified pilot allowed: `evaluateNativeReadOnlyRouting({ modelId: 'gpt-4o', phase: 'planning' })` is routable in tests.
-- Uncertified model refused: existing registry/provider gate tests still reject uncertified or unregistered models.
+- Uncertified and unregistered models are refused via existing `evaluateNativeReadOnlyRouting` checks (`shared/lib/model-registry.test.ts`).
+- Provider-side gating in `resolveNativeAgentProviders` continues to reject uncertified models in task mode (`shared/lib/native-agent/providers.test.ts`).
 - Certification mode remains diagnostic-only and non-routable.
+- No model is admitted by the read-only routing gate from the seeded default registry. The gate is fully fail-closed for native read-only routing in this repo today.
 
 ## Cost and compat verification
 
-- Compat fixtures already cover every read-only tool on `openai-responses`, including `gpt-4o` fixtures for:
+- Compat fixtures already cover every read-only tool on `openai-responses`, including fixtures for the attempted pilot:
   - `read_file`
   - `list_files`
   - `search_text`
   - `git_status`
   - `git_diff`
-- Native-session cost scanner coverage was updated to price `gpt-4o` native session usage successfully.
-- Because the live provider returned zero usage, no live cost figure could be certified from the provider run itself.
+- Native-session cost scanner coverage continues to price an authored `pi-priced-model` session, proving the scanner consumes native session JSONLs and attributes positive cost; no live `gpt-4o` cost line was certifiable because the provider returned zero usage.
+
+## Completion command
+
+Once the OpenAI runtime/provider path produces a successful read-only tool-using turn with positive usage, re-run:
+
+```bash
+npx tsx tools/smoke-native-agent.ts --provider openai --phase planning --live --json
+```
+
+If the smoke succeeds with non-zero usage and at least one read-only tool call, certification can proceed by adding the chosen model to `DEFAULT_MODEL_REGISTRY` in `shared/lib/model-registry.ts` with `nativeCapability.readOnlyNative: 'certified'` and matching the provider/transport (OpenAI Responses → `nativeProvider: 'openai'`, `piTransportKind: 'openai-responses'`).
 
 ## Verification commands
 
@@ -74,4 +87,4 @@ All passed on 2026-06-24.
 
 ## Conclusion
 
-`gpt-4o` is now the checked-in native read-only pilot candidate and is admitted by the router gate exactly as intended, but live provider certification is blocked by the OpenAI runtime/provider response path returning an immediate error turn with zero usage and no tool call. Epic 4 planning can proceed with this blocker artifact, but the live certification itself still requires a successful provider round-trip.
+The HOK-2308 implementation hardens the live smoke contract and confirms the registry/router stay fail-closed, but live provider certification for `gpt-4o` is blocked: the OpenAI runtime/provider response path returned an immediate error turn with zero usage and no tool call. Per REQ-F1, no model is certified by this change. Epic 4 planning can use this blocker artifact to plan provider remediation; the live certification itself still requires a successful provider round-trip captured by the completion command above.

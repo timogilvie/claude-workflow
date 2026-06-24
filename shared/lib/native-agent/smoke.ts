@@ -101,6 +101,15 @@ export interface RunNativeSmokeOptions {
    * real network access. Do not use in production code paths.
    */
   _modelOverride?: WavemillLoopConfig['model'];
+  /**
+   * Test-only: registry override used during provider entry resolution.
+   *
+   * When set, the certification gate evaluates against this registry instead of the
+   * effective default. Allows scripted-provider tests to certify their stub model
+   * without depending on any production model being certified. Do not use in
+   * production code paths.
+   */
+  _registryOverride?: ModelRegistry;
 }
 
 // ---------------------------------------------------------------------------
@@ -120,8 +129,9 @@ function resolveProviderEntry(
   provider: SmokeProvider,
   repoDir: string | undefined,
   env?: Record<string, string | undefined>,
+  registry?: ModelRegistry,
 ): ResolvedNativeProviderEntry {
-  const existingEntries = resolveNativeAgentProviders(repoDir, { env });
+  const existingEntries = resolveNativeAgentProviders(repoDir, { env, registry });
   const existing = existingEntries.find((e) => e.providerName === provider);
   if (existing) {
     return existing;
@@ -132,7 +142,7 @@ function resolveProviderEntry(
   const defaultConfig: NativeAgentConfig = {
     providers: { [provider]: {} },
   };
-  const defaultEntries = resolveNativeAgentProviders(defaultConfig, { env, repoDir });
+  const defaultEntries = resolveNativeAgentProviders(defaultConfig, { env, repoDir, registry });
   const fallback = defaultEntries.find((e) => e.providerName === provider);
   if (!fallback) {
     // Should not happen — we just added the provider to the config.
@@ -200,7 +210,7 @@ export async function runNativeAgentDryRun(
 ): Promise<NativeSmokeResult> {
   const { provider, phase, repoDir, env, transcriptDir } = options;
 
-  const entry = resolveProviderEntry(provider, repoDir, env);
+  const entry = resolveProviderEntry(provider, repoDir, env, options._registryOverride);
 
   // Build registry bound to repoDir (or cwd) to report real tool names.
   // In dry-run we never execute any tools, so the path just needs to be valid.
@@ -270,7 +280,7 @@ export async function runNativeAgentLive(
 ): Promise<NativeSmokeResult> {
   const { provider, phase, repoDir, env, transcriptDir } = options;
 
-  const entry = resolveProviderEntry(provider, repoDir, env);
+  const entry = resolveProviderEntry(provider, repoDir, env, options._registryOverride);
 
   if (entry.status !== 'ready') {
     const reason = (entry as UnavailableNativeProviderEntry | SkippedNativeProviderEntry).reason;

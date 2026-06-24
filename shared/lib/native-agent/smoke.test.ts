@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
+import type { ModelRegistry } from '../model-registry.ts';
 import { registerScriptedPiProvider } from './provider.ts';
 import {
   SMOKE_PROVIDERS,
@@ -11,6 +12,33 @@ import {
   runNativeAgentLive,
   type RunNativeSmokeOptions,
 } from './smoke.ts';
+
+function makeCertifiedScriptedRegistry(modelId = 'gpt-4o'): ModelRegistry {
+  return {
+    models: {
+      [modelId]: {
+        vendor: 'openai',
+        class: 'strong_generalist',
+        strengths: ['scripted'],
+        weaknesses: [],
+        qualityScores: { routing: 0, planning: 0, coding: 0, review: 0, classify: 0 },
+        contextWindowTokens: 128_000,
+        toolSupport: 'full',
+        multimodal: { text: true, image: false },
+        latencyTier: 'standard',
+        reasoningTier: 'standard',
+        costPerMillionInputTokensUsd: 1,
+        costPerMillionOutputTokensUsd: 2,
+        nativeCapability: {
+          nativeProvider: 'openai',
+          piTransportKind: 'openai-responses',
+          readOnlyNative: 'certified',
+        },
+      },
+    },
+    ladders: {},
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -286,6 +314,7 @@ describe('runNativeAgentLive — scripted provider', () => {
           baseUrl: 'http://localhost:0/mock',
           headers: {},
         },
+        _registryOverride: makeCertifiedScriptedRegistry(),
       };
 
       const result = await runNativeAgentLive(options);
@@ -342,6 +371,7 @@ describe('runNativeAgentLive — scripted provider', () => {
             baseUrl: 'http://localhost:0/mock',
             headers: {},
           },
+          _registryOverride: makeCertifiedScriptedRegistry(),
         }),
         /did not execute the required read-only tool call|returned zero usage|did not complete any turns/,
       );
@@ -386,6 +416,7 @@ describe('runNativeAgentLive — scripted provider', () => {
           baseUrl: 'http://localhost:0/mock',
           headers: {},
         },
+        _registryOverride: makeCertifiedScriptedRegistry(),
       });
 
       // API key must not appear in result JSON
