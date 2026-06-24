@@ -3232,6 +3232,7 @@ PI_ALLOWED_FILES=(
   "shared/lib/native-agent/loop.ts"
   "shared/lib/native-agent/messages.ts"
   "shared/lib/native-agent/provider.ts"
+  "shared/lib/native-agent/tool-compat-fixtures.test.ts"
   "shared/lib/native-agent/transcript.ts"
   "shared/lib/native-agent/fixtures/blocked-session.ts"
   "shared/lib/native-agent/fixtures/malformed-tool-call-session.ts"

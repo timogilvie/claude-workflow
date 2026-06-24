@@ -181,6 +181,16 @@ describe('native-agent provider resolution', () => {
 });
 
 describe('native-agent Pi provider lookup', () => {
+  it('builds validator-recognized provider/api pairs', () => {
+    const openAiModel = buildOpenAiResponsesModel({ modelId: 'gpt-4o' });
+    const openRouterModel = buildOpenRouterModel({ modelId: 'openai/gpt-4o-mini' });
+
+    assert.equal(openAiModel.provider, 'openai');
+    assert.equal(openAiModel.api, 'openai-responses');
+    assert.equal(openRouterModel.provider, 'openrouter');
+    assert.equal(openRouterModel.api, 'openai-completions');
+  });
+
   it('resolves built-in Pi providers for OpenAI and OpenRouter models', () => {
     const openAiProvider = getRegisteredPiProviderForModel(buildOpenAiResponsesModel({
       modelId: 'gpt-4o',
