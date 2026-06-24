@@ -8,6 +8,15 @@ function mockCallFn(responseText, usage = null, costUsd = undefined) {
   return mock.fn(() => Promise.resolve({ text: responseText, usage, costUsd }));
 }
 
+function sequenceCallFn(...responses) {
+  let index = 0;
+  return mock.fn(() => {
+    const next = responses[Math.min(index, responses.length - 1)];
+    index += 1;
+    return Promise.resolve(typeof next === 'string' ? { text: next, usage: null } : next);
+  });
+}
+
 async function withMockSession(fn) {
   const previousSession = process.env.WAVEMILL_SESSION;
   process.env.WAVEMILL_SESSION = 'test-session';
@@ -753,8 +762,50 @@ describe('evaluateTask', () => {
     assert.equal('planCritique' in result.metadata, false);
   });
 
-  it('throws immediately on malformed JSON response', async () => {
-    const callFn = mockCallFn('not json at all');
+  it('recovers malformed JSON locally before retrying', async () => {
+    const malformedResponse = '{"score":0.6,"rationale":"Line one\nHe said "ship it" yesterday.","interventionFlags":[]}';
+    const callFn = mockCallFn(malformedResponse);
+
+    const result = await evaluateTask(
+      {
+        taskPrompt: 'Do something',
+        prReviewOutput: 'Did something',
+      },
+      undefined,
+      { _callFn: callFn }
+    );
+
+    assert.equal(result.score, 0.6);
+    assert.equal(result.rationale, 'Line one\nHe said "ship it" yesterday.');
+    assert.equal(result.metadata.judgeJsonRecovered, true);
+    assert.equal(callFn.mock.callCount(), 1);
+  });
+
+  it('retries the judge once when local repair fails', async () => {
+    const callFn = sequenceCallFn(
+      'not json at all',
+      JSON.stringify({
+        score: 0.77,
+        rationale: 'Recovered after a single retry.',
+        interventionFlags: [],
+      })
+    );
+
+    const result = await evaluateTask(
+      {
+        taskPrompt: 'Do something',
+        prReviewOutput: 'Did something',
+      },
+      undefined,
+      { _callFn: callFn }
+    );
+
+    assert.equal(result.score, 0.77);
+    assert.equal(callFn.mock.callCount(), 2);
+  });
+
+  it('throws bounded recovery error on unrecoverable malformed JSON response', async () => {
+    const callFn = sequenceCallFn('not json at all', 'still not json');
 
     await assert.rejects(
       () =>
@@ -767,12 +818,13 @@ describe('evaluateTask', () => {
           { _callFn: callFn }
         ),
       (err) => {
-        assert.ok(err.message.includes('Failed to parse JSON from LLM output'));
+        assert.equal(err.name, 'JudgeResponseRecoveryError');
+        assert.ok(err.message.includes('bounded recovery attempts'));
         return true;
       }
     );
 
-    assert.equal(callFn.mock.callCount(), 1);
+    assert.equal(callFn.mock.callCount(), 2);
   });
 
   it('throws immediately on scores outside 0-1 range', async () => {
@@ -799,8 +851,8 @@ describe('evaluateTask', () => {
     assert.equal(callFn.mock.callCount(), 1);
   });
 
-  it('propagates parse error after a single attempt', async () => {
-    const callFn = mockCallFn('This is not JSON at all');
+  it('caps recovery at one extra judge call', async () => {
+    const callFn = sequenceCallFn('This is not JSON at all', 'still invalid JSON');
 
     await assert.rejects(
       () =>
@@ -813,12 +865,12 @@ describe('evaluateTask', () => {
           { _callFn: callFn }
         ),
       (err) => {
-        assert.ok(err.message.includes('Failed to parse JSON from LLM output'));
+        assert.equal(err.name, 'JudgeResponseRecoveryError');
         return true;
       }
     );
 
-    assert.equal(callFn.mock.callCount(), 1);
+    assert.equal(callFn.mock.callCount(), 2);
   });
 
   it('throws immediately on CLI error (no retry)', async () => {

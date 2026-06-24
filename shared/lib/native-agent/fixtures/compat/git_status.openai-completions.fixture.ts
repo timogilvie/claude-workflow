@@ -1,0 +1,86 @@
+import { createGitTools } from '../../tools/git.ts';
+
+const tool = createGitTools('/tmp/wavemill-compat-fixtures').find(
+  (descriptor) => descriptor.metadata.name === 'git_status',
+);
+
+if (!tool) {
+  throw new Error('Missing git_status tool descriptor');
+}
+
+export default {
+  tool: 'git_status',
+  transport: 'openai-completions',
+  modelId: 'openai/gpt-4o-mini',
+  nativeProvider: 'openrouter',
+  toolDescriptor: {
+    name: tool.metadata.name,
+    description: tool.metadata.description,
+    parameters: tool.parameters,
+  },
+  request: {
+    invocationArgs: {},
+    expectedPayload: {
+      model: 'openrouter:openai/gpt-4o-mini',
+      messages: [
+        { role: 'system', content: 'You are a fixture harness.' },
+        { role: 'user', content: 'Use the available tool.' },
+      ],
+      stream: true,
+      stream_options: { include_usage: true },
+      store: false,
+      tools: [
+        {
+          type: 'function',
+          function: {
+            name: tool.metadata.name,
+            description: tool.metadata.description,
+            parameters: tool.parameters,
+            strict: false,
+          },
+        },
+      ],
+    },
+  },
+  response: {
+    rawProviderResponse: [
+      {
+        id: 'chatcmpl-git-status',
+        model: 'openrouter:openai/gpt-4o-mini',
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: 'call_git_status',
+                  type: 'function',
+                  function: {
+                    name: 'git_status',
+                    arguments: '{}',
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+      {
+        id: 'chatcmpl-git-status',
+        choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }],
+        usage: {
+          prompt_tokens: 9,
+          completion_tokens: 4,
+          total_tokens: 13,
+        },
+      },
+      '[DONE]',
+    ],
+    expectedToolCall: {
+      id: 'call_git_status',
+      name: 'git_status',
+      arguments: {},
+    },
+  },
+} as const;
