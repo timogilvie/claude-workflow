@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { EvalRecord } from './eval-schema.ts';
@@ -11,6 +11,7 @@ import {
   postCompletionHookDeps,
   runPostCompletionEval,
 } from './post-completion-hook.ts';
+import { JudgeResponseRecoveryError } from './eval.ts';
 
 let passed = 0;
 let failed = 0;
@@ -117,6 +118,16 @@ function readWarningLines(repoDir: string): Array<Record<string, unknown>> {
     .split('\n')
     .filter(Boolean)
     .map((line) => JSON.parse(line));
+}
+
+function listJudgeFailureArtifacts(repoDir: string, issueId: string): string[] {
+  const artifactDir = join(repoDir, '.wavemill', 'evals', 'artifacts', issueId);
+  if (!existsSync(artifactDir)) {
+    return [];
+  }
+  return readdirSync(artifactDir)
+    .filter((name) => name.startsWith('judge-json-failure-'))
+    .map((name) => join(artifactDir, name));
 }
 
 function timeoutError(message: string): Error {
@@ -829,6 +840,63 @@ await test('runPostCompletionEval returns false when judge times out before pers
     assert.equal(existsSync(join(repoDir, '.wavemill', 'evals', 'evals.jsonl')), false);
     assert.deepEqual(readWarningLines(repoDir), []);
   } finally {
+    clearConfigCache(repoDir);
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+await test('runPostCompletionEval writes durable artifact for unrecoverable judge JSON', async () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-judge-json-artifact-'));
+  makeContextUpdateRepo(repoDir, 'judge-json-artifact', 'HOK-2320');
+  clearConfigCache(repoDir);
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+
+  try {
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.map(String).join(' '));
+    };
+    await withMockedPostCompletionDeps(async () => {
+      stubBaseEvalDeps();
+      postCompletionHookDeps.evaluateTask = async () => {
+        throw new JudgeResponseRecoveryError(
+          'Judge returned malformed JSON after bounded recovery attempts.',
+          {
+            rawText: '{"score":0.6,"rationale":"broken',
+            parseError: 'Failed to parse JSON from LLM output',
+            repairError: 'Unexpected end of JSON input',
+          },
+          {
+            rawText: 'still not json',
+            parseError: 'Failed to parse JSON from LLM output',
+            repairError: 'No JSON object found in LLM output.',
+          },
+          'still not json',
+        );
+      };
+
+      const persisted = await runPostCompletionEval({
+        issueId: 'HOK-2320',
+        prNumber: '2320',
+        workflowType: 'mill',
+        repoDir,
+        branchName: 'task/judge-json-artifact',
+        worktreePath: repoDir,
+        agentType: 'codex',
+      });
+
+      assert.equal(persisted, false);
+    });
+
+    assert.equal(existsSync(join(repoDir, '.wavemill', 'evals', 'evals.jsonl')), false);
+    const artifacts = listJudgeFailureArtifacts(repoDir, 'HOK-2320');
+    assert.equal(artifacts.length, 1);
+    const artifactBody = readFileSync(artifacts[0], 'utf8');
+    assert.match(artifactBody, /first-attempt-raw/);
+    assert.match(artifactBody, /still not json/);
+    assert.ok(warnings.some((line) => line.includes('raw judge output saved to')));
+  } finally {
+    console.warn = originalWarn;
     clearConfigCache(repoDir);
     rmSync(repoDir, { recursive: true, force: true });
   }

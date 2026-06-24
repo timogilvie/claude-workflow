@@ -5,12 +5,13 @@
  * Non-blocking: eval failures log a warning but never fail the workflow.
  */
 
-import { readFileSync, existsSync, appendFileSync, mkdirSync } from "node:fs";
+import { readFileSync, existsSync, appendFileSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
-import { evaluateTask } from './eval.ts';
+import { evaluateTask, isJudgeResponseRecoveryError } from './eval.ts';
 import { appendEvalRecord } from './eval-persistence.ts';
 import { resolveEvalsDir, resolveRouteArtifactArchiveDir } from './evals-paths.ts';
 import { execShellCommand } from './shell-utils.ts';
@@ -165,6 +166,38 @@ function safeCollectOutcome<T>(
     console.warn(`Post-completion eval: failed to collect ${label} outcome - ${errorMessage(err)}`);
     return fallback;
   }
+}
+
+function persistJudgeFailureArtifact(
+  repoDir: string,
+  issueId: string | undefined,
+  error: import('./eval.ts').JudgeResponseRecoveryError,
+): string {
+  const issueSegment = issueId || 'unknown-issue';
+  const artifactDir = join(resolveEvalsDir(undefined, repoDir).dir, 'artifacts', issueSegment);
+  mkdirSync(artifactDir, { recursive: true });
+  const filename = `judge-json-failure-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}.log`;
+  const artifactPath = join(artifactDir, filename);
+  const tmpPath = join(artifactDir, `.tmp-${filename}`);
+  const payload = [
+    `timestamp: ${new Date().toISOString()}`,
+    `issueId: ${issueId || ''}`,
+    `error: ${error.message}`,
+    `firstAttempt.parseError: ${error.firstAttempt.parseError}`,
+    `firstAttempt.repairError: ${error.firstAttempt.repairError || ''}`,
+    `retryAttempt.parseError: ${error.retryAttempt?.parseError || ''}`,
+    `retryAttempt.repairError: ${error.retryAttempt?.repairError || ''}`,
+    '',
+    '--- first-attempt-raw ---',
+    error.firstAttempt.rawText,
+    '',
+    '--- retry-attempt-raw ---',
+    error.retryRawText || '',
+    '',
+  ].join('\n');
+  writeFileSync(tmpPath, payload, 'utf8');
+  renameSync(tmpPath, artifactPath);
+  return artifactPath;
 }
 
 export const postCompletionHookDeps = {
@@ -654,7 +687,15 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
     printEvalSummary(record);
     return true;
   } catch (error: unknown) {
-    const message = errorMessage(error);
+    let message = errorMessage(error);
+    if (isJudgeResponseRecoveryError(error)) {
+      try {
+        const artifactPath = persistJudgeFailureArtifact(repoDir, ctx.issueId, error);
+        message = `${message}; raw judge output saved to ${artifactPath}`;
+      } catch (artifactError) {
+        message = `${message}; also failed to persist judge artifact (${errorMessage(artifactError)})`;
+      }
+    }
     console.warn(`Post-completion eval: failed (workflow unaffected) — ${message}`);
     return persisted;
   }
