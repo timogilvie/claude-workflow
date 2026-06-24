@@ -675,6 +675,7 @@ test_remote_probe_timeout_does_not_block_plan_approval() {
   mkdir -p "$ready_worktree"
 
   overrides='
+    WAVEMILL_GIT_REMOTE_TIMEOUT_SECONDS=15
     refresh_ready_merge_queue_tick() {
       get_main_head_sha "'"$ready_worktree"'" "$BASE_BRANCH" >/dev/null
       return 0
