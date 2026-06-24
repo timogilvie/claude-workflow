@@ -926,8 +926,9 @@ else
     fail "monitor does not eagerly handle queued quit commands"
   fi
 
-  if grep -qF 'Press q again to force quit.' <<< "$HEREDOC_CONTENT" \
-    && grep -qF 'Force quitting (${_active_count_prev} task(s) still active).' <<< "$HEREDOC_CONTENT"; then
+  if grep -qE '^handle_monitor_quit_command\(\) \{' <<< "$HEREDOC_CONTENT" \
+    && grep -qF 'Press q again to force quit.' <<< "$HEREDOC_CONTENT" \
+    && grep -qF 'Force quitting (${active_count} task(s) still active).' <<< "$HEREDOC_CONTENT"; then
     pass "monitor restores double-q force quit messaging and handling"
   else
     fail "monitor is missing double-q force quit handling"
@@ -1159,9 +1160,11 @@ else
 fi
 
 if [[ -f "$LIB_DIR/wavemill-startup-runner.sh" ]] \
-  && grep -q 'WAVEMILL_SESSION=' "$LIB_DIR/wavemill-startup-runner.sh" \
-  && grep -q 'wavemill-input-reader.sh' "$LIB_DIR/wavemill-startup-runner.sh" \
-  && grep -q '</dev/null &' "$LIB_DIR/wavemill-startup-runner.sh"; then
+  && [[ -f "$LIB_DIR/wavemill-common.sh" ]] \
+  && grep -q 'wavemill_build_control_pane_command startup' "$LIB_DIR/wavemill-startup-runner.sh" \
+  && grep -q 'WAVEMILL_SESSION=' "$LIB_DIR/wavemill-common.sh" \
+  && grep -q 'wavemill-input-reader.sh' "$LIB_DIR/wavemill-common.sh" \
+  && grep -q '</dev/null &' "$LIB_DIR/wavemill-common.sh"; then
   pass "mill.0 launches monitor non-interactively plus input reader"
 else
   fail "mill.0 does not launch the monitor/input-reader wrapper"

@@ -239,6 +239,27 @@ function readResultFile(path: string): JobResultFile | null {
   }
 }
 
+function hasExplicitTerminalResult(result: JobResultFile | null): result is JobResultFile {
+  if (!result) {
+    return false;
+  }
+
+  return typeof result.ok === 'boolean' || result.persisted === true;
+}
+
+function readTerminalResultFile(path: string): JobResultFile | null {
+  if (!existsSync(path)) {
+    return null;
+  }
+
+  try {
+    const result = JSON.parse(readFileSync(path, 'utf-8')) as JobResultFile;
+    return hasExplicitTerminalResult(result) ? result : null;
+  } catch {
+    return null;
+  }
+}
+
 function isProcessAlive(pid: number): boolean {
   if (!Number.isFinite(pid) || pid <= 0) {
     return false;
@@ -357,6 +378,21 @@ export async function pollJobs({
       });
       changedIds.add(job.id);
       continue;
+    }
+
+    if (job.kind === 'comparison') {
+      const result = readTerminalResultFile(job.resultPath);
+      if (result) {
+        const completion = classifyJobCompletion(job, result);
+        updates.set(job.id, {
+          ...completion,
+          finishedAt: now.toISOString(),
+          excerpt: completion.status === 'succeeded' ? null : extractLogExcerpt(job.logPath),
+          settled: false,
+        });
+        changedIds.add(job.id);
+        continue;
+      }
     }
 
     if (isProcessAlive(job.pid)) {
