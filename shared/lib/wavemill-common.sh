@@ -21,6 +21,10 @@ declare -a WAVEMILL_USAGE_TIPS=(
   "constraints.cleanupAfterMerge=true: clean merged constraints"
 )
 
+WAVEMILL_GIT_REMOTE_TIMEOUT_DEFAULT=15
+WAVEMILL_GIT_REMOTE_TIMEOUT_MIN=1
+WAVEMILL_GIT_REMOTE_TIMEOUT_MAX=600
+
 wavemill_pick_usage_tip() {
   local tip_count="${#WAVEMILL_USAGE_TIPS[@]}"
   local tip_index="${WAVEMILL_TIP_INDEX:-}"
@@ -520,9 +524,11 @@ wavemill_fetch_base_branch() {
     fi
   fi
 
-  local fetch_rc=0
-  git -C "$REPO_DIR" fetch origin "$base_branch" || fetch_rc=$?
+  local remote_timeout fetch_rc=0
+  remote_timeout="$(wavemill_git_remote_timeout_seconds)"
+  wavemill_git_remote_with_timeout "$remote_timeout" -C "$REPO_DIR" fetch origin "$base_branch" || fetch_rc=$?
   if (( fetch_rc != 0 )); then
+    wavemill_warn "git fetch origin $base_branch failed for repo=$REPO_DIR timeout=${remote_timeout}s exit=$fetch_rc; continuing without refreshing base-branch cache"
     return "$fetch_rc"
   fi
 
@@ -545,6 +551,110 @@ wavemill_fetch_base_branch() {
       rm -f "$tmp"
     fi
   fi
+}
+
+wavemill_warn() {
+  local message="$*"
+  if declare -F log_warn >/dev/null 2>&1; then
+    log_warn "$message"
+  else
+    printf 'WARN: %s\n' "$message" >&2
+  fi
+}
+
+wavemill_git_remote_timeout_seconds() {
+  local raw="${WAVEMILL_GIT_REMOTE_TIMEOUT_SECONDS:-}"
+
+  if [[ -z "$raw" ]]; then
+    printf '%s\n' "$WAVEMILL_GIT_REMOTE_TIMEOUT_DEFAULT"
+    return 0
+  fi
+
+  if [[ "$raw" =~ ^[0-9]+$ ]] \
+    && (( raw >= WAVEMILL_GIT_REMOTE_TIMEOUT_MIN )) \
+    && (( raw <= WAVEMILL_GIT_REMOTE_TIMEOUT_MAX )); then
+    printf '%s\n' "$raw"
+    return 0
+  fi
+
+  if [[ "${__WAVEMILL_GIT_REMOTE_TIMEOUT_INVALID_WARNED:-false}" != "true" ]]; then
+    wavemill_warn "Invalid WAVEMILL_GIT_REMOTE_TIMEOUT_SECONDS=$raw; using default ${WAVEMILL_GIT_REMOTE_TIMEOUT_DEFAULT}s"
+    __WAVEMILL_GIT_REMOTE_TIMEOUT_INVALID_WARNED="true"
+  fi
+
+  printf '%s\n' "$WAVEMILL_GIT_REMOTE_TIMEOUT_DEFAULT"
+}
+
+_wavemill_kill_process_tree() {
+  local pid="${1:-}"
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 0
+
+  if command -v pgrep >/dev/null 2>&1; then
+    local child_pid
+    while IFS= read -r child_pid; do
+      [[ "$child_pid" =~ ^[0-9]+$ ]] || continue
+      _wavemill_kill_process_tree "$child_pid"
+    done < <(pgrep -P "$pid" 2>/dev/null || true)
+  fi
+
+  kill -TERM "$pid" 2>/dev/null || true
+  sleep 1
+  kill -KILL "$pid" 2>/dev/null || true
+}
+
+wavemill_git_remote_with_timeout() {
+  local timeout_seconds="${1:-}"
+  shift || true
+
+  [[ "$timeout_seconds" =~ ^[0-9]+$ ]] || return 1
+  (( $# > 0 )) || return 1
+
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$timeout_seconds" git "$@"
+    return $?
+  fi
+  if command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$timeout_seconds" git "$@"
+    return $?
+  fi
+
+  local marker_dir timeout_marker cmd_pid watchdog_pid rc=0
+  local process_group_pid=""
+  marker_dir="${TMPDIR:-/tmp}"
+  timeout_marker="$(mktemp "${marker_dir%/}/wavemill-git-timeout.XXXXXX")" || return 1
+  rm -f "$timeout_marker"
+
+  if command -v setsid >/dev/null 2>&1; then
+    setsid git "$@" &
+    cmd_pid=$!
+    process_group_pid="$cmd_pid"
+  else
+    git "$@" &
+    cmd_pid=$!
+  fi
+
+  (
+    sleep "$timeout_seconds"
+    : > "$timeout_marker"
+    if [[ -n "$process_group_pid" ]]; then
+      kill -TERM -- "-$process_group_pid" 2>/dev/null || true
+      sleep 1
+      kill -KILL -- "-$process_group_pid" 2>/dev/null || true
+    else
+      _wavemill_kill_process_tree "$cmd_pid"
+    fi
+  ) >/dev/null 2>&1 &
+  watchdog_pid=$!
+
+  wait "$cmd_pid" 2>/dev/null || rc=$?
+  kill "$watchdog_pid" 2>/dev/null || true
+
+  if [[ -f "$timeout_marker" ]]; then
+    rc=124
+  fi
+  rm -f "$timeout_marker"
+
+  return "$rc"
 }
 
 # Backwards-compatible wrapper for callers that haven't migrated to load_config()

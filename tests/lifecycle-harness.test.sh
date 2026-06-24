@@ -130,6 +130,8 @@ harness_extract_real_functions() {
   : > "$REAL_FUNC_FILE"
   for func in \
     trim_outer_whitespace \
+    refresh_ready_merge_queue_tick \
+    get_main_head_sha \
     ready_stage_allows_merge \
     ready_stage_pending_verdict \
     log_ready_stale_merge_lane_once \
@@ -366,6 +368,7 @@ harness_run_tick() {
     BRANCH="task/$SLUG"
     WORKTREE_ROOT="$(dirname "$REPO_UNDER_TEST")"
     REPO_DIR="$REPO_UNDER_TEST"
+    TOOLS_DIR=""
     SESSION="lifecycle-harness"
     BASE_BRANCH="main"
     AGENT_CMD="codex"
@@ -390,6 +393,7 @@ harness_run_tick() {
     LOG_OUTPUT=""
     WARN_OUTPUT=""
     ATTENTION_STATE=""
+    MERGE_QUEUE_SELECTION_FILE="$REPO_UNDER_TEST/.wavemill/merge-queue-selection.json"
 
     active_count=0
     BRANCH_BY_ISSUE["$ISSUE"]="$BRANCH"
@@ -465,7 +469,11 @@ harness_run_tick() {
     check_routing_complete() { return 1; }
     merge_queue_enabled() { return 1; }
     ready_queue_state() { printf "\n"; }
+    ready_queue_field() { printf "\n"; }
+    ready_changed_files_json() { printf "[]\n"; }
     mark_ready_stale() { :; }
+    promote_merge_candidate() { :; }
+    demote_merge_candidate() { :; }
     ready_candidate_selected() { return 1; }
     is_challenge_task() { return 1; }
     maybe_run_challenge_eval() { :; }
@@ -482,6 +490,7 @@ harness_run_tick() {
     # extracted real functions are loaded.
     source "$EXTRA_SETUP_FILE"
 
+    refresh_ready_merge_queue_tick
     monitor_issue_state "$ISSUE"
 
     printf "phase=%s\n" "$CURRENT_PHASE"
@@ -651,6 +660,41 @@ test_claude_local_settings_allowed() {
   check_eq "claude settings: no coding launch on same tick" "false" "$(kv_value "$tick" coding_launched)"
   check_eq "claude settings: no overreach warning" "" "$(kv_value "$tick" warn_output)"
   check_contains "claude settings: tracked file remains modified" "$(git -C "$repo" status --short .claude/settings.local.json)" "M .claude/settings.local.json"
+}
+
+test_remote_probe_timeout_does_not_block_plan_approval() {
+  local slug="planning-approval-after-remote-timeout"
+  local issue="HOK-2322-PLAN"
+  local repo tick overrides ready_slug ready_worktree
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_planning_state "$repo" "$slug" "awaiting_user"
+  harness_setup_runtime_artifacts "$repo"
+
+  ready_slug="ready-merge-candidate"
+  ready_worktree="$(dirname "$repo")/$ready_slug"
+  mkdir -p "$ready_worktree"
+
+  overrides='
+    refresh_ready_merge_queue_tick() {
+      get_main_head_sha "'"$ready_worktree"'" "$BASE_BRANCH" >/dev/null
+      return 0
+    }
+    wavemill_git_remote_with_timeout() {
+      sleep 2
+      return 124
+    }
+  '
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" "$overrides")"
+
+  check_eq "remote timeout: planning transitions to completed" "completed" "$(harness_read_stage_status "$repo" "$slug" planning)"
+  check_file_exists "remote timeout: .plan-approved preserved" "$repo/features/$slug/.plan-approved"
+  check_eq "remote timeout: coding launch not invoked on same tick" "false" "$(kv_value "$tick" coding_launched)"
+  check_contains "remote timeout: warning names ready worktree" "$(kv_value "$tick" warn_output)" "worktree=$ready_worktree"
+  check_contains "remote timeout: warning names remote ref" "$(kv_value "$tick" warn_output)" "ref=refs/heads/main"
+  check_contains "remote timeout: warning names timeout" "$(kv_value "$tick" warn_output)" "timeout=15s"
+  check_contains "remote timeout: warning names exit" "$(kv_value "$tick" warn_output)" "exit=124"
+  check_contains "remote timeout: warning names degraded action" "$(kv_value "$tick" warn_output)" "skipping base-branch freshness this tick"
 }
 
 test_coding_uses_expanded_route_over_bootstrap() {
@@ -1950,6 +1994,7 @@ test_source_edit_blocks_handoff
 test_regression_without_wavemill_allowance
 test_mixed_artifacts_source_edit_wins
 test_claude_local_settings_allowed
+test_remote_probe_timeout_does_not_block_plan_approval
 test_coding_uses_expanded_route_over_bootstrap
 test_missing_expansion_recovery_success_launches_with_expanded_route
 test_challenger_missing_expansion_recovery_uses_linear_issue_id
