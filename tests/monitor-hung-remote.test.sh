@@ -175,8 +175,9 @@ ls_remote_output="$(
     cat > "$TEST_ROOT/bin/git" <<'"'"'EOF'"'"'
 #!/usr/bin/env bash
 set -euo pipefail
-if [[ "${4:-}" == "ls-remote" ]]; then
-  sleep 2
+# git -C <dir> ls-remote origin <ref> -> $3 == "ls-remote"
+if [[ "${3:-}" == "ls-remote" ]]; then
+  sleep 30
   exit 0
 fi
 exit 1
@@ -202,6 +203,8 @@ EOF
 check_contains "ls-remote timeout returns empty sha" "$ls_remote_output" "sha="
 check_contains "ls-remote timeout warning includes ref" "$ls_remote_output" "ref=refs/heads/auto/integration"
 check_contains "ls-remote timeout warning includes degraded behavior" "$ls_remote_output" "base freshness unknown; continuing monitor tick"
+check_contains "ls-remote timeout fires bounded timeout (exit=124)" "$ls_remote_output" "exit=124"
+check_contains "ls-remote timeout warning labels operation as timed out" "$ls_remote_output" "git remote probe timed out"
 
 loop_output="$(
   TEST_ROOT="$TEST_TMP/loop-continue" COMMON_LIB="$COMMON_LIB" MONITOR_FUNC_FILE="$MONITOR_FUNC_FILE" bash -lc '
@@ -210,11 +213,13 @@ loop_output="$(
     cat > "$TEST_ROOT/bin/git" <<'"'"'EOF'"'"'
 #!/usr/bin/env bash
 set -euo pipefail
-if [[ "${4:-}" == "ls-remote" ]]; then
-  sleep 2
+# git -C <dir> ls-remote ... -> $3 == "ls-remote"
+if [[ "${3:-}" == "ls-remote" ]]; then
+  sleep 30
   exit 0
 fi
-if [[ "${4:-}" == "rev-parse" && "${5:-}" == "HEAD" ]]; then
+# git -C <dir> rev-parse HEAD -> $3 == "rev-parse", $4 == "HEAD"
+if [[ "${3:-}" == "rev-parse" && "${4:-}" == "HEAD" ]]; then
   printf "%s\n" "current-head"
   exit 0
 fi
@@ -409,6 +414,7 @@ EOF
   '
 )"
 check_contains "ready timeout logs degraded probe warning" "$loop_output" "operation=ls-remote"
+check_contains "loop ls-remote hits bounded timeout (exit=124)" "$loop_output" "exit=124"
 check_contains "plan-approved marker is consumed despite degraded freshness" "$loop_output" "plan_status=completed"
 check_contains "planning task advances into coding on later tick" "$loop_output" "coding_launched=true"
 check_contains "coding launch targets approved task" "$loop_output" "coding_issue=HOK-PLAN"
