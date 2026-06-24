@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
+import type { ModelRegistry } from '../model-registry.ts';
 import { registerScriptedPiProvider } from './provider.ts';
 import {
   SMOKE_PROVIDERS,
@@ -11,6 +12,33 @@ import {
   runNativeAgentLive,
   type RunNativeSmokeOptions,
 } from './smoke.ts';
+
+function makeCertifiedScriptedRegistry(modelId = 'gpt-4o'): ModelRegistry {
+  return {
+    models: {
+      [modelId]: {
+        vendor: 'openai',
+        class: 'strong_generalist',
+        strengths: ['scripted'],
+        weaknesses: [],
+        qualityScores: { routing: 0, planning: 0, coding: 0, review: 0, classify: 0 },
+        contextWindowTokens: 128_000,
+        toolSupport: 'full',
+        multimodal: { text: true, image: false },
+        latencyTier: 'standard',
+        reasoningTier: 'standard',
+        costPerMillionInputTokensUsd: 1,
+        costPerMillionOutputTokensUsd: 2,
+        nativeCapability: {
+          nativeProvider: 'openai',
+          piTransportKind: 'openai-responses',
+          readOnlyNative: 'certified',
+        },
+      },
+    },
+    ladders: {},
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -260,10 +288,12 @@ describe('runNativeAgentLive — scripted provider', () => {
       turns: [
         {
           content: [{ type: 'tool_call', id: 'tc-smoke-1', name: 'list_files', arguments: { path: '.' } }],
+          usage: { input: 120, output: 20 },
           stopReason: 'toolUse',
         },
         {
           content: [{ type: 'text', text: 'Files listed. Smoke complete.' }],
+          usage: { input: 80, output: 30 },
           stopReason: 'stop',
         },
       ],
@@ -284,6 +314,7 @@ describe('runNativeAgentLive — scripted provider', () => {
           baseUrl: 'http://localhost:0/mock',
           headers: {},
         },
+        _registryOverride: makeCertifiedScriptedRegistry(),
       };
 
       const result = await runNativeAgentLive(options);
@@ -296,6 +327,7 @@ describe('runNativeAgentLive — scripted provider', () => {
       assert.ok(result.usage !== undefined, 'usage must be present on ok live result');
       assert.ok(result.usage!.turnsCompleted > 0, 'must have completed at least one turn');
       assert.ok(result.usage!.toolCallsExecuted > 0, 'must have executed at least one tool call');
+      assert.ok(result.usage!.totalTokens > 0, 'must report positive usage for cost capture');
 
       // Verify transcript was written with real events
       const events = parseTranscriptLines(result.transcriptPath);
@@ -304,6 +336,45 @@ describe('runNativeAgentLive — scripted provider', () => {
       const types = events.map((e) => (e as Record<string, unknown>).type);
       assert.ok(types.includes('session_started'), 'transcript must include session_started');
       assert.ok(types.includes('session_ended'), 'transcript must include session_ended');
+    } finally {
+      cleanupDir(transcriptDir);
+    }
+  });
+
+  it('throws when the provider returns no completed tool-backed usage', async () => {
+    const transcriptDir = makeTempTranscriptDir();
+    const scriptedApi = uniqueApi();
+
+    registerScriptedPiProvider({
+      api: scriptedApi,
+      turns: [
+        {
+          content: [{ type: 'text', text: 'No tool call, no usage.' }],
+          stopReason: 'stop',
+        },
+      ],
+    });
+
+    try {
+      await assert.rejects(
+        () => runNativeAgentLive({
+          provider: 'openai',
+          phase: 'planning',
+          env: { OPENAI_API_KEY: 'sk-stub-key-for-scripted-provider' },
+          transcriptDir,
+          sessionId: 'live-scripted-empty',
+          _modelOverride: {
+            id: `scripted:${scriptedApi}`,
+            name: 'scripted-model',
+            api: scriptedApi,
+            provider: 'scripted',
+            baseUrl: 'http://localhost:0/mock',
+            headers: {},
+          },
+          _registryOverride: makeCertifiedScriptedRegistry(),
+        }),
+        /did not execute the required read-only tool call|returned zero usage|did not complete any turns/,
+      );
     } finally {
       cleanupDir(transcriptDir);
     }
@@ -318,7 +389,13 @@ describe('runNativeAgentLive — scripted provider', () => {
       api: scriptedApi,
       turns: [
         {
+          content: [{ type: 'tool_call', id: 'tc-smoke-2', name: 'list_files', arguments: { path: '.' } }],
+          usage: { input: 20, output: 10 },
+          stopReason: 'toolUse',
+        },
+        {
           content: [{ type: 'text', text: 'Smoke complete.' }],
+          usage: { input: 10, output: 15 },
           stopReason: 'stop',
         },
       ],
@@ -339,6 +416,7 @@ describe('runNativeAgentLive — scripted provider', () => {
           baseUrl: 'http://localhost:0/mock',
           headers: {},
         },
+        _registryOverride: makeCertifiedScriptedRegistry(),
       });
 
       // API key must not appear in result JSON
