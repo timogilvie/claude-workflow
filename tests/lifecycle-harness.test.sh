@@ -160,6 +160,14 @@ harness_extract_real_functions() {
     auto_advance_blocked_completion \
     emit_blocked_completion_attention \
     recover_misplaced_coding_complete_marker \
+    coding_capacity_detect_enabled \
+    coding_capacity_grace_seconds \
+    coding_capacity_artifact_path \
+    coding_capacity_pane_text \
+    coding_capacity_terminal_text_detected \
+    coding_capacity_worker_idle \
+    coding_capacity_grace_ready \
+    recover_coding_capacity_blocked \
     handle_planning_overreach_rejection \
     validate_coding_phase_output \
     resolve_phase \
@@ -485,6 +493,7 @@ harness_run_tick() {
     transient_error_recovery_pending() { return 1; }
     codex_has_pending_approval() { return 1; }
     launch_background_post_merge_eval() { :; }
+    persist_task_window_id() { :; }
 
     # Scenario-specific function overrides must run after default stubs and
     # extracted real functions are loaded.
@@ -1987,6 +1996,172 @@ EOF
   check_contains "missing stage: warn log includes issue id" "$(kv_value "$tick" warn_output)" "HOK-2272-MISS"
 }
 
+_capacity_codex_overrides() {
+  local detect="${1:-1}" grace="${2:-0}" pane_text="${3:-Selected model is at capacity. Please try a different model.}" idle="${4:-0}"
+  # Override read_state_value to return "codex" for agent field queries.
+  # Match on ".agent" substring to avoid bash expanding jq variable names.
+  cat <<EOF
+    CURRENT_PHASE="coding"
+    WAVEMILL_CODING_CAPACITY_DETECT="$detect"
+    WAVEMILL_CODING_CAPACITY_GRACE_SECONDS="$grace"
+    WAVEMILL_CODING_CAPACITY_PANE_TEXT="$pane_text"
+    read_state_value() {
+      local default="\$1"; shift
+      case "\${*}" in
+        *".agent"*) printf '%s\n' "codex" ;;
+        *) printf '%s\n' "\$default" ;;
+      esac
+    }
+    _pane_is_dead_or_idle() { return $idle; }
+EOF
+}
+
+_capacity_claude_overrides() {
+  local detect="${1:-1}" grace="${2:-0}" pane_text="${3:-Selected model is at capacity. Please try a different model.}"
+  cat <<EOF
+    CURRENT_PHASE="coding"
+    WAVEMILL_CODING_CAPACITY_DETECT="$detect"
+    WAVEMILL_CODING_CAPACITY_GRACE_SECONDS="$grace"
+    WAVEMILL_CODING_CAPACITY_PANE_TEXT="$pane_text"
+    read_state_value() {
+      local default="\$1"; shift
+      case "\${*}" in
+        *".agent"*) printf '%s\n' "claude" ;;
+        *) printf '%s\n' "\$default" ;;
+      esac
+    }
+    _pane_is_dead_or_idle() { return 0; }
+EOF
+}
+
+test_coding_capacity_recovery_positive() {
+  local slug="coding-capacity-positive"
+  local issue="HOK-2318-POS"
+  local repo tick
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" "$(_capacity_codex_overrides 1 0)")"
+
+  check_file_exists "capacity positive: .coding-blocked-completion.json written" "$repo/features/$slug/.coding-blocked-completion.json"
+  check_eq "capacity positive: blockingReason is model_capacity" "model_capacity" "$(jq -r '.blockingReason // ""' "$repo/features/$slug/.coding-blocked-completion.json")"
+  check_eq "capacity positive: recommendedAction is needs_user" "needs_user" "$(jq -r '.recommendedAction // ""' "$repo/features/$slug/.coding-blocked-completion.json")"
+  check_file_exists "capacity positive: audit marker written" "$repo/features/$slug/.coding-capacity-recovery.json"
+  check_eq "capacity positive: attention set to needs-user" "needs-user" "$(kv_value "$tick" attention)"
+  check_eq "capacity positive: task remains active" "1" "$(kv_value "$tick" active_count)"
+  check_file_absent "capacity positive: no .coding-complete created" "$repo/features/$slug/.coding-complete"
+  check_contains "capacity positive: log mentions capacity error" "$(kv_value "$tick" log_output)" "capacity error detected"
+}
+
+test_coding_capacity_recovery_active_worker_vetoes() {
+  local slug="coding-capacity-active-veto"
+  local issue="HOK-2318-VETO"
+  local repo tick
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+
+  # idle=1 means _pane_is_dead_or_idle returns 1 (not idle = active worker)
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" "$(_capacity_codex_overrides 1 0 'Selected model is at capacity. Please try a different model.' 1)")"
+
+  check_file_absent "capacity veto: no blocked artifact when worker active" "$repo/features/$slug/.coding-blocked-completion.json"
+  check_file_absent "capacity veto: no audit marker written" "$repo/features/$slug/.coding-capacity-recovery.json"
+  check_eq "capacity veto: attention remains clear" "clear" "$(kv_value "$tick" attention)"
+}
+
+test_coding_capacity_recovery_idle_no_capacity_text() {
+  local slug="coding-capacity-idle-no-text"
+  local issue="HOK-2318-NOTEXT"
+  local repo tick
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" "$(_capacity_codex_overrides 1 0 'Codex is ready. Enter your message.')")"
+
+  check_file_absent "capacity no-text: no blocked artifact" "$repo/features/$slug/.coding-blocked-completion.json"
+  check_eq "capacity no-text: attention remains clear" "clear" "$(kv_value "$tick" attention)"
+}
+
+test_coding_capacity_recovery_grace_not_elapsed() {
+  local slug="coding-capacity-grace"
+  local issue="HOK-2318-GRACE"
+  local repo tick1
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+
+  tick1="$(harness_run_tick "$repo" "$slug" "$issue" "$(_capacity_codex_overrides 1 9999)")"
+
+  check_file_absent "capacity grace: no blocked artifact before grace elapses" "$repo/features/$slug/.coding-blocked-completion.json"
+  check_file_exists "capacity grace: detection timestamp written" "$repo/features/$slug/.coding-capacity-detected-at"
+  check_eq "capacity grace: attention remains clear" "clear" "$(kv_value "$tick1" attention)"
+  check_contains "capacity grace: log mentions grace period" "$(kv_value "$tick1" log_output)" "grace period"
+}
+
+test_coding_capacity_recovery_idempotent() {
+  local slug="coding-capacity-idempotent"
+  local issue="HOK-2318-IDEM"
+  local repo tick1 tick2
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+
+  local overrides
+  overrides="$(_capacity_codex_overrides 1 0)"
+
+  tick1="$(harness_run_tick "$repo" "$slug" "$issue" "$overrides")"
+  tick2="$(harness_run_tick "$repo" "$slug" "$issue" "$overrides")"
+
+  check_file_exists "capacity idempotent: blocked artifact present after tick 1" "$repo/features/$slug/.coding-blocked-completion.json"
+  check_eq "capacity idempotent: tick 2 attention stays needs-user" "needs-user" "$(kv_value "$tick2" attention)"
+  check_eq "capacity idempotent: tick 2 task stays active" "1" "$(kv_value "$tick2" active_count)"
+}
+
+test_coding_capacity_recovery_coding_complete_wins() {
+  local slug="coding-capacity-complete-wins"
+  local issue="HOK-2318-COMPLETE"
+  local repo tick
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  touch "$repo/features/$slug/.coding-complete"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" "$(_capacity_codex_overrides 1 0)")"
+
+  check_file_absent "capacity complete-wins: no blocked artifact when .coding-complete present" "$repo/features/$slug/.coding-blocked-completion.json"
+  check_eq "capacity complete-wins: coding stage becomes completed" "completed" "$(harness_read_stage_status "$repo" "$slug" coding)"
+}
+
+test_coding_capacity_recovery_disabled() {
+  local slug="coding-capacity-disabled"
+  local issue="HOK-2318-OFF"
+  local repo tick
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" "$(_capacity_codex_overrides 0 0)")"
+
+  check_file_absent "capacity disabled: no blocked artifact" "$repo/features/$slug/.coding-blocked-completion.json"
+  check_eq "capacity disabled: attention remains clear" "clear" "$(kv_value "$tick" attention)"
+}
+
+test_coding_capacity_recovery_non_codex_skipped() {
+  local slug="coding-capacity-non-codex"
+  local issue="HOK-2318-CLAUDE"
+  local repo tick
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" "$(_capacity_claude_overrides 1 0)")"
+
+  check_file_absent "capacity non-codex: no blocked artifact for claude agent" "$repo/features/$slug/.coding-blocked-completion.json"
+  check_eq "capacity non-codex: attention remains clear" "clear" "$(kv_value "$tick" attention)"
+}
+
 echo "=== Mill Lifecycle: Planning to Coding Handoff ==="
 harness_extract_real_functions
 
@@ -2031,6 +2206,14 @@ test_review_stage_challenge_honors_phase_config_coder
 test_plan_stage_challenge_honors_phase_config_coder
 test_implementation_stage_challenge_applies_override
 test_missing_challenge_stage_fails_safe_to_phase_config
+test_coding_capacity_recovery_positive
+test_coding_capacity_recovery_active_worker_vetoes
+test_coding_capacity_recovery_idle_no_capacity_text
+test_coding_capacity_recovery_grace_not_elapsed
+test_coding_capacity_recovery_idempotent
+test_coding_capacity_recovery_coding_complete_wins
+test_coding_capacity_recovery_disabled
+test_coding_capacity_recovery_non_codex_skipped
 
 echo ""
 if [[ "$FAIL" -eq 0 ]]; then

@@ -4319,6 +4319,190 @@ recover_misplaced_coding_complete_marker() {
   return 0
 }
 
+# ── Codex capacity-terminal idle recovery (HOK-2318) ─────────────────────────
+
+coding_capacity_detect_enabled() {
+  local val="${WAVEMILL_CODING_CAPACITY_DETECT:-}"
+  case "$val" in
+    no|0|false) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+coding_capacity_grace_seconds() {
+  local val="${WAVEMILL_CODING_CAPACITY_GRACE_SECONDS:-}"
+  if [[ "$val" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$val"
+  else
+    printf '120\n'
+  fi
+}
+
+coding_capacity_artifact_path() {
+  local feature_dir="$1"
+  printf '%s/.coding-capacity-recovery.json\n' "$feature_dir"
+}
+
+coding_capacity_pane_text() {
+  local pane_target="$1"
+  if [[ -n "${WAVEMILL_CODING_CAPACITY_PANE_TEXT:-}" ]]; then
+    printf '%s\n' "$WAVEMILL_CODING_CAPACITY_PANE_TEXT"
+    return 0
+  fi
+  if [[ -n "${WAVEMILL_CODING_CAPACITY_CAPTURE_FILE:-}" && -f "$WAVEMILL_CODING_CAPACITY_CAPTURE_FILE" ]]; then
+    cat "$WAVEMILL_CODING_CAPACITY_CAPTURE_FILE"
+    return 0
+  fi
+  tmux capture-pane -p -S -80 -t "$pane_target" 2>/dev/null || return 1
+}
+
+coding_capacity_terminal_text_detected() {
+  local text="$1"
+  [[ -n "$text" ]] || return 1
+  if printf '%s\n' "$text" | grep -iqF 'selected model is at capacity'; then
+    return 0
+  fi
+  if printf '%s\n' "$text" | grep -iqF 'please try a different model'; then
+    return 0
+  fi
+  return 1
+}
+
+coding_capacity_worker_idle() {
+  local issue="$1" pane_target="$2"
+  local hook_file hook_state hook_ts now staleness
+
+  hook_file="/tmp/wavemill-${SESSION}-${issue}.hook"
+  if [[ -f "$hook_file" ]]; then
+    hook_state=$(jq -r '.state // empty' "$hook_file" 2>/dev/null || echo "")
+    hook_ts=$(jq -r '.timestamp // 0' "$hook_file" 2>/dev/null || echo "0")
+    now="$(date +%s)"
+    staleness=$(( now - hook_ts ))
+    if (( staleness < 300 )); then
+      case "$hook_state" in
+        working) return 1 ;;
+        error|idle|waiting) return 0 ;;
+      esac
+    fi
+  fi
+
+  if command -v _pane_is_dead_or_idle >/dev/null 2>&1; then
+    _pane_is_dead_or_idle "$pane_target" && return 0
+    return 1
+  fi
+  return 1
+}
+
+coding_capacity_grace_ready() {
+  local feature_dir="$1"
+  local marker grace now first_detected elapsed
+
+  marker="$feature_dir/.coding-capacity-detected-at"
+  grace="$(coding_capacity_grace_seconds)"
+  now="$(date +%s)"
+
+  if [[ ! -f "$marker" ]]; then
+    printf '%s\n' "$now" > "$marker" 2>/dev/null || true
+    if [[ "$grace" -eq 0 ]]; then
+      return 0
+    fi
+    return 1
+  fi
+
+  first_detected="$(head -1 "$marker" 2>/dev/null | tr -d '[:space:]')"
+  if ! [[ "$first_detected" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$now" > "$marker" 2>/dev/null || true
+    return 1
+  fi
+
+  elapsed=$(( now - first_detected ))
+  (( elapsed >= grace ))
+}
+
+recover_coding_capacity_blocked() {
+  local issue="$1" feature_dir="$2" pane_target="$3" agent="${4:-codex}"
+  local audit_path blocked_path result_path tmp detected_at
+
+  coding_capacity_detect_enabled || return 0
+
+  audit_path="$(coding_capacity_artifact_path "$feature_dir")"
+  [[ ! -f "$audit_path" ]] || return 0
+
+  [[ ! -f "$feature_dir/.coding-complete" ]] || return 0
+
+  blocked_path="$feature_dir/.coding-blocked-completion.json"
+  [[ ! -f "$blocked_path" ]] || return 0
+
+  detected_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  tmp="$(mktemp "$blocked_path.tmp.XXXXXX" 2>/dev/null)" || return 1
+  jq -n \
+    --arg stage "coding" \
+    --arg summary "coding blocked by Codex model capacity" \
+    --arg reason "Codex reported: Selected model is at capacity. Please try a different model." \
+    --arg blockingReason "model_capacity" \
+    --arg recommendedAction "needs_user" \
+    --argjson implementationComplete false \
+    --argjson committed false \
+    --arg detectedAt "$detected_at" \
+    --arg issue "$issue" \
+    --arg source "coding-watchdog" \
+    '{
+      stage: $stage,
+      summary: $summary,
+      reason: $reason,
+      blockingReason: $blockingReason,
+      recommendedAction: $recommendedAction,
+      implementationComplete: $implementationComplete,
+      committed: $committed,
+      detectedAt: $detectedAt,
+      issue: $issue,
+      source: $source
+    }' > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 1; }
+  mv "$tmp" "$blocked_path" 2>/dev/null || { rm -f "$tmp"; return 1; }
+
+  local grace
+  grace="$(coding_capacity_grace_seconds)"
+  tmp="$(mktemp "$audit_path.tmp.XXXXXX" 2>/dev/null)" || return 0
+  jq -n \
+    --arg detectedAt "$detected_at" \
+    --arg issue "$issue" \
+    --arg agent "$agent" \
+    --argjson graceSeconds "$grace" \
+    --arg source "coding-watchdog" \
+    '{
+      detectedAt: $detectedAt,
+      issue: $issue,
+      agent: $agent,
+      graceSeconds: $graceSeconds,
+      source: $source
+    }' > "$tmp" 2>/dev/null && mv "$tmp" "$audit_path" 2>/dev/null || rm -f "$tmp"
+
+  result_path="$feature_dir/.coding-result.json"
+  if [[ -f "$result_path" ]]; then
+    tmp="$(mktemp "$result_path.tmp.XXXXXX" 2>/dev/null)" && \
+      jq --arg notes "Blocked by Codex model capacity error - awaiting user intervention" \
+        '.status = "awaiting_user" | .notes = $notes' "$result_path" > "$tmp" 2>/dev/null && \
+      mv "$tmp" "$result_path" 2>/dev/null || rm -f "${tmp:-}"
+  fi
+
+  local hook_protocol
+  hook_protocol="${LIB_DIR:-}/../hooks/wavemill-hook-protocol.sh"
+  if [[ -f "$hook_protocol" ]]; then
+    (
+      WAVEMILL_SESSION="${SESSION:-}"
+      WAVEMILL_ISSUE="$issue"
+      source "$hook_protocol" 2>/dev/null || true
+      wavemill_hook_write "error" "model_capacity" \
+        "Selected model is at capacity. Please try a different model." "$agent" 2>/dev/null || true
+    ) 2>/dev/null || true
+  fi
+
+  log "status" "$issue → Codex capacity error detected, writing blocked-completion artifact"
+  return 0
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+
 # Reject a plan: transition planning from awaiting_user to failed.
 # Usage: reject_plan <feature_dir> [agent] [model]
 reject_plan() {
@@ -10152,6 +10336,30 @@ monitor_issue_state() {
             fi
             if emit_blocked_completion_attention "$ISSUE" "$FEATURE_DIR"; then
               return 0
+            fi
+            # HOK-2318: Detect Codex capacity-terminal idle panes and write
+            # blocked-completion artifact so the task surfaces as needs-user
+            # instead of waiting indefinitely for .coding-complete.
+            if [[ "${current_agent:-}" == "codex" ]]; then
+              if coding_capacity_detect_enabled && coding_capacity_worker_idle "$ISSUE" "$WIN_TARGET"; then
+                local _cap_pane_text
+                _cap_pane_text="$(coding_capacity_pane_text "$WIN_TARGET" 2>/dev/null || true)"
+                if coding_capacity_terminal_text_detected "$_cap_pane_text"; then
+                  if coding_capacity_grace_ready "$FEATURE_DIR"; then
+                    if recover_coding_capacity_blocked "$ISSUE" "$FEATURE_DIR" "$WIN_TARGET" "${current_agent:-codex}"; then
+                      if emit_blocked_completion_attention "$ISSUE" "$FEATURE_DIR"; then
+                        return 0
+                      fi
+                    fi
+                  else
+                    log "debug" "$ISSUE → Codex capacity error detected, waiting for grace period"
+                  fi
+                else
+                  rm -f "$FEATURE_DIR/.coding-capacity-detected-at" 2>/dev/null || true
+                fi
+              else
+                rm -f "$FEATURE_DIR/.coding-capacity-detected-at" 2>/dev/null || true
+              fi
             fi
             log "debug" "$ISSUE → Coding still running: waiting for .coding-complete"
           fi

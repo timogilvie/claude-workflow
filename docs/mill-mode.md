@@ -218,6 +218,27 @@ Configuration (`.wavemill-config.json`):
 - Root `prompt-registry.jsonl` is intentionally treated as Wavemill-owned generated metadata for this guardrail only. Unknown source changes and unknown non-dotfiles under `features/<slug>/` still block auto-advance and require user review or manual `advance <issue-id>`.
 - `advance <issue-id>` remains the manual fallback for tracked coding tasks with a valid blocked-completion artifact. It writes `features/<slug>/.coding-advance-override.json` and creates `features/<slug>/.coding-complete` so review launches on the next monitor tick.
 
+### Codex Capacity-Terminal Idle Recovery
+
+When the coding watchdog sees an idle Codex pane whose recent output contains the Codex capacity-terminal message (`Selected model is at capacity. Please try a different model.`), it writes `.coding-blocked-completion.json` automatically and surfaces the task as `needs-user`. The task stays recoverable via the normal `advance <issue-id>` path once the operator selects an available model or retries.
+
+Recovery is deterministic and does not retry automatically. It requires:
+- `current_agent == codex`
+- A fresh or stale hook file (or fallback pane-liveness check) that confirms the worker is idle
+- The capacity terminal text to appear continuously for the configured grace period
+
+**Environment variables:**
+
+| Variable | Default | Description |
+|---|---|---|
+| `WAVEMILL_CODING_CAPACITY_DETECT` | enabled | Set to `0`, `false`, or `no` to disable capacity-terminal recovery entirely |
+| `WAVEMILL_CODING_CAPACITY_GRACE_SECONDS` | `120` | Seconds of continuous idle+capacity detection required before writing the blocked artifact. Set to `0` to trigger immediately. |
+
+**Artifacts written:**
+- `features/<slug>/.coding-blocked-completion.json` — blocked-completion classifier with `blockingReason: model_capacity`
+- `features/<slug>/.coding-capacity-recovery.json` — idempotency/audit marker; presence prevents repeated recovery runs
+- `features/<slug>/.coding-capacity-detected-at` — first-detection timestamp used for grace period tracking; cleared when capacity text disappears
+
 ## When to Prefer Mill Mode
 
 Use mill mode when your backlog has many independent tasks and your team is comfortable reviewing multiple agent-generated PRs in parallel.
