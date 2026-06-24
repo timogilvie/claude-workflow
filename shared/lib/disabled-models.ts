@@ -1,4 +1,5 @@
 export const DISABLED_MODEL_IDS = new Set<string>([
+  'claude-fable-5',
   'gpt-5.3-codex',
 ]);
 

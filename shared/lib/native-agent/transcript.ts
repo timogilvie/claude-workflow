@@ -53,6 +53,8 @@ export interface TranscriptSessionStarted extends TranscriptEventBase {
   model: string;
   api: string;
   provider: string;
+  worktreePath?: string;
+  gitBranch?: string;
 }
 
 export interface TranscriptTurnStarted extends TranscriptEventBase {
@@ -243,6 +245,8 @@ export interface TranscriptWriterOptions {
   model: string;
   api: string;
   provider: string;
+  worktreePath?: string;
+  gitBranch?: string;
   /** Absolute path to the JSONL transcript file. Parent directory is created if needed. */
   path: string;
   /** Override to pin timestamps in tests. Defaults to Date.now. */
@@ -320,6 +324,8 @@ export class TranscriptWriter {
           model: this.options.model,
           api: this.options.api,
           provider: this.options.provider,
+          ...(this.options.worktreePath !== undefined && { worktreePath: this.options.worktreePath }),
+          ...(this.options.gitBranch !== undefined && { gitBranch: this.options.gitBranch }),
         } satisfies TranscriptSessionStarted;
 
       case 'turn_start':

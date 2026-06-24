@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { piUsageToSessionModelUsage } from './pi-usage-cost.ts';
 import { computeModelCost } from '../workflow-cost.ts';
+import { piUsageToSessionModelUsage } from './pi-usage-cost.ts';
 
 describe('piUsageToSessionModelUsage', () => {
   it('maps transcript usage fields to session model usage', () => {

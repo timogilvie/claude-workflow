@@ -144,6 +144,22 @@ export interface AvailableModelsConfig {
 }
 
 export type ModelRegistryClass = 'frontier' | 'strong_generalist' | 'fast_economy';
+export type NativeProviderName = 'openai' | 'openrouter';
+export type PiTransportKind = 'openai-responses' | 'openai-completions';
+export type ReadOnlyNativeCapability = 'certified' | 'unsupported' | 'partial';
+
+export interface PiCompatFlagsOverride {
+  thinkingFormat?: 'openrouter';
+  [key: string]: unknown;
+}
+
+export interface NativeCapabilityOverride {
+  nativeProvider?: NativeProviderName;
+  piTransportKind?: PiTransportKind;
+  readOnlyNative?: ReadOnlyNativeCapability;
+  compatFlags?: PiCompatFlagsOverride;
+  limitations?: string[];
+}
 
 export interface ModelCapabilitiesOverride {
   vendor?: string;
@@ -162,6 +178,7 @@ export interface ModelCapabilitiesOverride {
   costPerMillionInputTokensUsd?: number;
   costPerMillionOutputTokensUsd?: number;
   agent?: string;
+  nativeCapability?: NativeCapabilityOverride;
   releasedAt?: string;
 }
 
