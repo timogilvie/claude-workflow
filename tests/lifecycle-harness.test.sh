@@ -2162,6 +2162,97 @@ test_coding_capacity_recovery_non_codex_skipped() {
   check_eq "capacity non-codex: attention remains clear" "clear" "$(kv_value "$tick" attention)"
 }
 
+test_coding_capacity_terminal_text_case_insensitive() {
+  local upper mixed_phrase_two empty_text generic_text
+  upper="$(
+    source "$REAL_FUNC_FILE"
+    if coding_capacity_terminal_text_detected 'SELECTED MODEL IS AT CAPACITY. PLEASE TRY A DIFFERENT MODEL.'; then
+      printf '%s\n' detected
+    else
+      printf '%s\n' missed
+    fi
+  )"
+  check_eq "capacity helper: uppercase phrase detected" "detected" "$upper"
+
+  mixed_phrase_two="$(
+    source "$REAL_FUNC_FILE"
+    if coding_capacity_terminal_text_detected 'noise above
+Please Try A Different Model
+noise below'; then
+      printf '%s\n' detected
+    else
+      printf '%s\n' missed
+    fi
+  )"
+  check_eq "capacity helper: mixed-case second phrase detected" "detected" "$mixed_phrase_two"
+
+  empty_text="$(
+    source "$REAL_FUNC_FILE"
+    if coding_capacity_terminal_text_detected ''; then
+      printf '%s\n' detected
+    else
+      printf '%s\n' missed
+    fi
+  )"
+  check_eq "capacity helper: empty text not detected" "missed" "$empty_text"
+
+  generic_text="$(
+    source "$REAL_FUNC_FILE"
+    if coding_capacity_terminal_text_detected 'we are running at capacity, please wait'; then
+      printf '%s\n' detected
+    else
+      printf '%s\n' missed
+    fi
+  )"
+  check_eq "capacity helper: generic capacity phrase not detected" "missed" "$generic_text"
+}
+
+test_coding_capacity_grace_seconds_invalid_falls_back() {
+  local default_val abc neg float plus zero large
+  default_val="$(
+    source "$REAL_FUNC_FILE"
+    unset WAVEMILL_CODING_CAPACITY_GRACE_SECONDS
+    coding_capacity_grace_seconds
+  )"
+  check_eq "capacity grace: unset falls back to 120" "120" "$default_val"
+
+  abc="$(
+    source "$REAL_FUNC_FILE"
+    WAVEMILL_CODING_CAPACITY_GRACE_SECONDS="abc" coding_capacity_grace_seconds
+  )"
+  check_eq "capacity grace: non-numeric 'abc' falls back to 120" "120" "$abc"
+
+  neg="$(
+    source "$REAL_FUNC_FILE"
+    WAVEMILL_CODING_CAPACITY_GRACE_SECONDS="-5" coding_capacity_grace_seconds
+  )"
+  check_eq "capacity grace: negative '-5' falls back to 120" "120" "$neg"
+
+  float="$(
+    source "$REAL_FUNC_FILE"
+    WAVEMILL_CODING_CAPACITY_GRACE_SECONDS="12.5" coding_capacity_grace_seconds
+  )"
+  check_eq "capacity grace: float '12.5' falls back to 120" "120" "$float"
+
+  plus="$(
+    source "$REAL_FUNC_FILE"
+    WAVEMILL_CODING_CAPACITY_GRACE_SECONDS="+30" coding_capacity_grace_seconds
+  )"
+  check_eq "capacity grace: signed '+30' falls back to 120" "120" "$plus"
+
+  zero="$(
+    source "$REAL_FUNC_FILE"
+    WAVEMILL_CODING_CAPACITY_GRACE_SECONDS="0" coding_capacity_grace_seconds
+  )"
+  check_eq "capacity grace: '0' is accepted as-is" "0" "$zero"
+
+  large="$(
+    source "$REAL_FUNC_FILE"
+    WAVEMILL_CODING_CAPACITY_GRACE_SECONDS="600" coding_capacity_grace_seconds
+  )"
+  check_eq "capacity grace: '600' is accepted as-is" "600" "$large"
+}
+
 echo "=== Mill Lifecycle: Planning to Coding Handoff ==="
 harness_extract_real_functions
 
@@ -2214,6 +2305,8 @@ test_coding_capacity_recovery_idempotent
 test_coding_capacity_recovery_coding_complete_wins
 test_coding_capacity_recovery_disabled
 test_coding_capacity_recovery_non_codex_skipped
+test_coding_capacity_terminal_text_case_insensitive
+test_coding_capacity_grace_seconds_invalid_falls_back
 
 echo ""
 if [[ "$FAIL" -eq 0 ]]; then
