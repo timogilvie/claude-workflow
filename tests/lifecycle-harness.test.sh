@@ -1768,6 +1768,178 @@ test_routing_error_expanded_reroute_emits_helper_failure_warn() {
   check_contains "routing_error: helper-failed warning emitted" "$(kv_value "$tick" warn_output)" "expanded reroute helper failed"
 }
 
+test_review_stage_challenge_honors_phase_config_coder() {
+  local slug="challenge-review-stage"
+  local issue="HOK-2272-REV"
+  local repo tick overrides
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_planning_state "$repo" "$slug" "completed"
+  harness_setup_runtime_artifacts "$repo"
+  harness_seed_bootstrap_route "$repo" "$slug"
+
+  cat > "$repo/features/$slug/.post-expansion-route.json" <<'EOF'
+{
+  "planner": "expanded-planner",
+  "coder": "gpt-5.4",
+  "reviewer": "claude-sonnet-4-6",
+  "planDepth": "deep",
+  "codeDepth": "deep",
+  "reviewMode": "static+llm",
+  "provenance": {
+    "source": "expanded-test"
+  }
+}
+EOF
+
+  overrides="$(harness_common_route_overrides)
+    is_challenge_task() { return 0; }
+    get_task_meta() {
+      local issue_key=\"\$1\" field=\"\$2\"
+      case \"\$issue_key.\$field\" in
+        HOK-2272-REV.challengeModel) printf '%s\\n' 'claude-sonnet-4-6' ;;
+        HOK-2272-REV.challengeStage) printf '%s\\n' 'review' ;;
+        *) printf '\\n' ;;
+      esac
+    }
+  "
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" "$overrides")"
+
+  check_eq "review challenge: coding launches" "true" "$(kv_value "$tick" coding_launched)"
+  check_eq "review challenge: phase-config coder honored (not challengeModel)" "gpt-5.4" "$(kv_value "$tick" coding_model)"
+  check_contains "review challenge: debug log records challenge stage" "$(kv_value "$tick" log_output)" "challenge stage=review"
+  check_eq "review challenge: coding-result.json records phase-config model" "gpt-5.4" "$(jq -r '.model // ""' "$repo/features/$slug/.coding-result.json")"
+}
+
+test_plan_stage_challenge_honors_phase_config_coder() {
+  local slug="challenge-plan-stage"
+  local issue="HOK-2272-PLAN"
+  local repo tick overrides
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_planning_state "$repo" "$slug" "completed"
+  harness_setup_runtime_artifacts "$repo"
+  harness_seed_bootstrap_route "$repo" "$slug"
+
+  cat > "$repo/features/$slug/.post-expansion-route.json" <<'EOF'
+{
+  "planner": "expanded-planner",
+  "coder": "gpt-5.4",
+  "reviewer": "claude-sonnet-4-6",
+  "planDepth": "deep",
+  "codeDepth": "deep",
+  "reviewMode": "static+llm",
+  "provenance": {
+    "source": "expanded-test"
+  }
+}
+EOF
+
+  overrides="$(harness_common_route_overrides)
+    is_challenge_task() { return 0; }
+    get_task_meta() {
+      local issue_key=\"\$1\" field=\"\$2\"
+      case \"\$issue_key.\$field\" in
+        HOK-2272-PLAN.challengeModel) printf '%s\\n' 'claude-sonnet-4-6' ;;
+        HOK-2272-PLAN.challengeStage) printf '%s\\n' 'plan' ;;
+        *) printf '\\n' ;;
+      esac
+    }
+  "
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" "$overrides")"
+
+  check_eq "plan challenge: coding launches" "true" "$(kv_value "$tick" coding_launched)"
+  check_eq "plan challenge: phase-config coder honored (not challengeModel)" "gpt-5.4" "$(kv_value "$tick" coding_model)"
+  check_contains "plan challenge: debug log records challenge stage" "$(kv_value "$tick" log_output)" "challenge stage=plan"
+  check_eq "plan challenge: coding-result.json records phase-config model" "gpt-5.4" "$(jq -r '.model // ""' "$repo/features/$slug/.coding-result.json")"
+}
+
+test_implementation_stage_challenge_applies_override() {
+  local slug="challenge-impl-stage"
+  local issue="HOK-2272-IMPL"
+  local repo tick overrides
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_planning_state "$repo" "$slug" "completed"
+  harness_setup_runtime_artifacts "$repo"
+  harness_seed_bootstrap_route "$repo" "$slug"
+
+  cat > "$repo/features/$slug/.post-expansion-route.json" <<'EOF'
+{
+  "planner": "expanded-planner",
+  "coder": "gpt-5.4",
+  "reviewer": "claude-sonnet-4-6",
+  "planDepth": "deep",
+  "codeDepth": "deep",
+  "reviewMode": "static+llm",
+  "provenance": {
+    "source": "expanded-test"
+  }
+}
+EOF
+
+  # challengeRole=challenger skips the primary-only refresh block so the test
+  # focuses solely on the override decision.
+  overrides="$(harness_common_route_overrides)
+    is_challenge_task() { return 0; }
+    get_task_meta() {
+      local issue_key=\"\$1\" field=\"\$2\"
+      case \"\$issue_key.\$field\" in
+        HOK-2272-IMPL.challengeModel) printf '%s\\n' 'claude-sonnet-4-6' ;;
+        HOK-2272-IMPL.challengeStage) printf '%s\\n' 'implementation' ;;
+        HOK-2272-IMPL.challengeRole) printf '%s\\n' 'challenger' ;;
+        *) printf '\\n' ;;
+      esac
+    }
+  "
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" "$overrides")"
+
+  check_eq "impl challenge: coding launches" "true" "$(kv_value "$tick" coding_launched)"
+  check_eq "impl challenge: challengeModel overrides phase-config coder" "claude-sonnet-4-6" "$(kv_value "$tick" coding_model)"
+  check_eq "impl challenge: coding-result.json records challengeModel" "claude-sonnet-4-6" "$(jq -r '.model // ""' "$repo/features/$slug/.coding-result.json")"
+}
+
+test_missing_challenge_stage_fails_safe_to_phase_config() {
+  local slug="challenge-missing-stage"
+  local issue="HOK-2272-MISS"
+  local repo tick overrides
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_planning_state "$repo" "$slug" "completed"
+  harness_setup_runtime_artifacts "$repo"
+  harness_seed_bootstrap_route "$repo" "$slug"
+
+  cat > "$repo/features/$slug/.post-expansion-route.json" <<'EOF'
+{
+  "planner": "expanded-planner",
+  "coder": "gpt-5.4",
+  "reviewer": "claude-sonnet-4-6",
+  "planDepth": "deep",
+  "codeDepth": "deep",
+  "reviewMode": "static+llm",
+  "provenance": {
+    "source": "expanded-test"
+  }
+}
+EOF
+
+  # challengeStage intentionally absent; refresh block may fire but its npx
+  # call fails gracefully, leaving challenge_coder unchanged.
+  overrides="$(harness_common_route_overrides)
+    is_challenge_task() { return 0; }
+    npx() { return 1; }
+    get_task_meta() {
+      local issue_key=\"\$1\" field=\"\$2\"
+      case \"\$issue_key.\$field\" in
+        HOK-2272-MISS.challengeModel) printf '%s\\n' 'claude-sonnet-4-6' ;;
+        *) printf '\\n' ;;
+      esac
+    }
+  "
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" "$overrides")"
+
+  check_eq "missing stage: coding launches" "true" "$(kv_value "$tick" coding_launched)"
+  check_eq "missing stage: phase-config coder honored (fail-safe)" "gpt-5.4" "$(kv_value "$tick" coding_model)"
+  check_contains "missing stage: warn log records fail-safe message" "$(kv_value "$tick" warn_output)" "fail-safe to phase-config coder"
+  check_contains "missing stage: warn log includes issue id" "$(kv_value "$tick" warn_output)" "HOK-2272-MISS"
+}
+
 echo "=== Mill Lifecycle: Planning to Coding Handoff ==="
 harness_extract_real_functions
 
@@ -1807,6 +1979,10 @@ test_tracked_root_level_coding_complete_marker_is_ignored
 test_not_eligible_expanded_reroute_does_not_emit_helper_failure_warn
 test_disabled_expanded_reroute_does_not_emit_helper_failure_warn
 test_routing_error_expanded_reroute_emits_helper_failure_warn
+test_review_stage_challenge_honors_phase_config_coder
+test_plan_stage_challenge_honors_phase_config_coder
+test_implementation_stage_challenge_applies_override
+test_missing_challenge_stage_fails_safe_to_phase_config
 
 echo ""
 if [[ "$FAIL" -eq 0 ]]; then
