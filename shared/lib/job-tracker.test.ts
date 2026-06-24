@@ -115,6 +115,107 @@ test('pollJobs marks missing result files as failed with excerpts', async () => 
   }
 });
 
+test('pollJobs settles running comparison jobs from terminal failed results before pid exit', async () => {
+  const { root, statePath, cleanup } = makeTempState();
+  const child = spawn('sh', ['-c', 'sleep 10']);
+  try {
+    const logPath = join(root, 'comparison.log');
+    const resultPath = join(root, 'comparison.result.json');
+    writeFileSync(logPath, 'comparison failed\n');
+    writeFileSync(resultPath, JSON.stringify({
+      ok: false,
+      exitCode: 1,
+      reason: 'Challenge comparison has no varied routing dimensions',
+    }, null, 2));
+
+    const job = makeJob({
+      id: buildJobId({ kind: 'comparison', pairId: 'PAIR-1', prNumbers: [101, 102] }),
+      kind: 'comparison',
+      issueId: undefined,
+      side: undefined,
+      pairId: 'PAIR-1',
+      prNumbers: [101, 102],
+      pid: child.pid ?? 0,
+      logPath,
+      resultPath,
+    });
+    await launchJob({ statePath, job });
+
+    const polled = await pollJobs({ statePath });
+    assert.equal(polled.jobs[job.id].status, 'failed');
+    assert.equal(polled.jobs[job.id].reason, 'Challenge comparison has no varied routing dimensions');
+    assert.equal(polled.jobs[job.id].settled, false);
+    assert.deepEqual(polled.unsettled.map((item) => item.id), [job.id]);
+  } finally {
+    child.kill('SIGKILL');
+    cleanup();
+  }
+});
+
+test('pollJobs settles running comparison jobs from terminal success results before pid exit', async () => {
+  const { root, statePath, cleanup } = makeTempState();
+  const child = spawn('sh', ['-c', 'sleep 10']);
+  try {
+    const logPath = join(root, 'comparison.log');
+    const resultPath = join(root, 'comparison.result.json');
+    writeFileSync(logPath, 'comparison done\n');
+    writeFileSync(resultPath, JSON.stringify({ ok: true, exitCode: 0 }, null, 2));
+
+    const job = makeJob({
+      id: buildJobId({ kind: 'comparison', pairId: 'PAIR-1', prNumbers: [101, 102] }),
+      kind: 'comparison',
+      issueId: undefined,
+      side: undefined,
+      pairId: 'PAIR-1',
+      prNumbers: [101, 102],
+      pid: child.pid ?? 0,
+      logPath,
+      resultPath,
+    });
+    await launchJob({ statePath, job });
+
+    const polled = await pollJobs({ statePath });
+    assert.equal(polled.jobs[job.id].status, 'succeeded');
+    assert.equal(polled.jobs[job.id].exitCode, 0);
+    assert.equal(polled.jobs[job.id].settled, false);
+    assert.deepEqual(polled.unsettled.map((item) => item.id), [job.id]);
+  } finally {
+    child.kill('SIGKILL');
+    cleanup();
+  }
+});
+
+test('pollJobs keeps running comparison jobs active when live pid only has partial result', async () => {
+  const { root, statePath, cleanup } = makeTempState();
+  const child = spawn('sh', ['-c', 'sleep 10']);
+  try {
+    const logPath = join(root, 'comparison.log');
+    const resultPath = join(root, 'comparison.result.json');
+    writeFileSync(logPath, 'comparison still running\n');
+    writeFileSync(resultPath, JSON.stringify({ exitCode: 1 }, null, 2));
+
+    const job = makeJob({
+      id: buildJobId({ kind: 'comparison', pairId: 'PAIR-1', prNumbers: [101, 102] }),
+      kind: 'comparison',
+      issueId: undefined,
+      side: undefined,
+      pairId: 'PAIR-1',
+      prNumbers: [101, 102],
+      pid: child.pid ?? 0,
+      logPath,
+      resultPath,
+    });
+    await launchJob({ statePath, job });
+
+    const polled = await pollJobs({ statePath });
+    assert.equal(polled.jobs[job.id].status, 'running');
+    assert.deepEqual(polled.unsettled, []);
+  } finally {
+    child.kill('SIGKILL');
+    cleanup();
+  }
+});
+
 test('pollJobs times out long-running jobs', async () => {
   const { root, statePath, cleanup } = makeTempState();
   const child = spawn('sh', ['-c', 'sleep 10']);
@@ -317,7 +418,7 @@ test('markJobSettled clears comparison running state on failure', async () => {
             prNumbers: [101, 102],
           }),
           status: 'failed',
-          reason: 'job_failed',
+          reason: 'Challenge comparison has no varied routing dimensions',
         },
       },
     }, null, 2));
@@ -330,8 +431,8 @@ test('markJobSettled clears comparison running state on failure', async () => {
     assert.equal('comparisonRunning' in next.tasks['PAIR-1_c'], false);
     assert.equal(next.tasks['PAIR-1'].comparisonState, 'manual_comparison_needed');
     assert.equal(next.tasks['PAIR-1_c'].comparisonState, 'manual_comparison_needed');
-    assert.equal(next.tasks['PAIR-1'].comparisonBlockedReason, 'job_failed');
-    assert.equal(next.tasks['PAIR-1_c'].comparisonBlockedReason, 'job_failed');
+    assert.equal(next.tasks['PAIR-1'].comparisonBlockedReason, 'Challenge comparison has no varied routing dimensions');
+    assert.equal(next.tasks['PAIR-1_c'].comparisonBlockedReason, 'Challenge comparison has no varied routing dimensions');
     assert.equal(next.tasks['PAIR-1'].challengeCompared, false);
     assert.equal(next.tasks['PAIR-1_c'].challengeCompared, false);
     assert.equal('comparisonRetryCount' in next.tasks['PAIR-1'], false);

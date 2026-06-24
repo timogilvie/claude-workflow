@@ -83,9 +83,80 @@ JSON
   rm -rf "$tmp_dir"
 }
 
+run_failed_comparison_case() {
+  local tmp_dir state_file log_path result_path pid job_id status blocked_primary blocked_challenger
+  tmp_dir="$(mktemp -d)"
+  state_file="$tmp_dir/workflow-state.json"
+  log_path="$tmp_dir/comparison.log"
+  result_path="$tmp_dir/comparison.result.json"
+  job_id="comparison-HOK-1564-101-102"
+  cat > "$state_file" <<'JSON'
+{"tasks":{"HOK-1564":{"challengePairId":"HOK-1564","challengeRole":"primary","challengeCompared":false,"comparisonState":"comparison_running","comparisonRunning":{"startedAt":"2026-06-23T00:00:00.000Z"}},"HOK-1564_c":{"challengePairId":"HOK-1564","challengeRole":"challenger","challengeCompared":false,"comparisonState":"comparison_running","comparisonRunning":{"startedAt":"2026-06-23T00:00:00.000Z"}}}}
+JSON
+  printf 'comparison failed\n' > "$log_path"
+
+  (
+    sleep 0.2
+    cat > "$result_path" <<'JSON'
+{"ok":false,"exitCode":1,"reason":"Challenge comparison has no varied routing dimensions"}
+JSON
+    sleep 5
+  ) &
+  pid=$!
+
+  npx tsx "$REPO_DIR/tools/job-tracker.ts" launch \
+    --state-file "$state_file" \
+    --kind comparison \
+    --job-id "$job_id" \
+    --pair-id HOK-1564 \
+    --pr-numbers 101,102 \
+    --pid "$pid" \
+    --timeout-seconds 30 \
+    --log-path "$log_path" \
+    --result-path "$result_path" >/dev/null
+
+  sleep 0.4
+  npx tsx "$REPO_DIR/tools/job-tracker.ts" poll --state-file "$state_file" >/dev/null
+  status=$(jq -r --arg id "$job_id" '.jobs[$id].status // "running"' "$state_file")
+
+  if [[ "$status" == "failed" ]]; then
+    pass "comparison job fails from terminal result before pid exit"
+  else
+    fail "comparison job did not fail while pid was still alive"
+  fi
+
+  if kill -0 "$pid" 2>/dev/null; then
+    pass "comparison worker remains alive after terminal result"
+  else
+    fail "comparison worker exited before live-pid poll check"
+  fi
+
+  npx tsx "$REPO_DIR/tools/job-tracker.ts" mark-settled --state-file "$state_file" --job-id "$job_id" >/dev/null
+  blocked_primary=$(jq -r '.tasks["HOK-1564"].comparisonState // ""' "$state_file")
+  blocked_challenger=$(jq -r '.tasks["HOK-1564_c"].comparisonState // ""' "$state_file")
+
+  if [[ "$blocked_primary" == "manual_comparison_needed" && "$blocked_challenger" == "manual_comparison_needed" ]]; then
+    pass "comparison settlement moves both sides to manual comparison"
+  else
+    fail "comparison settlement did not update both sides"
+  fi
+
+  if [[ "$(jq -r '.tasks["HOK-1564"].comparisonRunning == null' "$state_file")" == "true" \
+    && "$(jq -r '.tasks["HOK-1564_c"].comparisonRunning == null' "$state_file")" == "true" ]]; then
+    pass "comparison settlement clears running markers"
+  else
+    fail "comparison settlement did not clear running markers"
+  fi
+
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  rm -rf "$tmp_dir"
+}
+
 echo "=== Challenge Job Monitor Loop ==="
 run_case eval
 run_case comparison
+run_failed_comparison_case
 
 echo ""
 echo "Passed: $PASS"
