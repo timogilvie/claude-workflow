@@ -11080,8 +11080,10 @@ check_mill_pane_health() {
       return 0
       ;;
     drifted-monitor)
+      if [[ "$LAST_CONTROL_PANE_HEALTH_STATUS" != "drifted-monitor" ]]; then
+        log_warn "Control pane drift detected (pane 0 is running the monitor directly). Recovering input reader..."
+      fi
       LAST_CONTROL_PANE_HEALTH_STATUS="drifted-monitor"
-      log_warn "Control pane drift detected (pane 0 is running the monitor directly). Recovering input reader..."
       recover_control_pane_input_path || true
       return 0
       ;;
@@ -11098,7 +11100,11 @@ check_mill_pane_health() {
 handle_monitor_quit_command() {
   local active_count="${1:-0}"
   if [[ "$QUIT_REQUESTED" == "true" ]]; then
-    quit_and_kill_session "Force quitting (${active_count} task(s) still active)."
+    if (( active_count == 0 )); then
+      quit_and_kill_session "Quitting (all tasks complete)."
+    else
+      quit_and_kill_session "Force quitting (${active_count} task(s) still active)."
+    fi
   elif (( active_count == 0 )); then
     quit_and_kill_session "Quitting."
   else
