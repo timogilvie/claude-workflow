@@ -372,6 +372,47 @@ describe('loop — tool compat gate', () => {
     assert.deepEqual(recordedToolNames, [['read_file', 'list_files', 'search_text']]);
   });
 
+  it('throws when a native provider is paired with an unknown transport', async () => {
+    let invocationCount = 0;
+
+    registerScriptedPiProvider({
+      api: 'experimental-transport',
+      turns: () => {
+        invocationCount++;
+        return {
+          content: [{ type: 'text', text: 'unexpected' }],
+          stopReason: 'stop',
+        };
+      },
+    });
+
+    await assert.rejects(
+      () => runWavemillLoop({
+        model: {
+          id: 'openai:gpt-future',
+          name: 'gpt-future',
+          api: 'experimental-transport',
+          provider: 'openai',
+        },
+        context: makeContext([
+          makeTool('read_file', 'parallel', async () => 'unused'),
+        ]),
+        convertToLlm: piIdentity,
+        toolPolicy: {
+          phase: 'coding',
+          worktreePath: '/tmp/wavemill-loop-test',
+          registry: [makeToolMetadata('read_file', 'read-only')],
+        },
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.equal(invocationCount, 0);
+        assert.match(error.message, /Unknown provider transport "experimental-transport"/);
+        return true;
+      },
+    );
+  });
+
   it('fails before any provider call for unsupported tool compatibility', async () => {
     let invocationCount = 0;
 

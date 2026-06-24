@@ -300,10 +300,10 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
       executionMode: tool.executionMode ?? 'sequential',
     }));
 
-  if (
-    toolsForCompat.length > 0
-    && isSupportedCompatTransport(config.model.provider, config.model.api)
-  ) {
+  if (toolsForCompat.length > 0 && isNativeCompatProvider(config.model.provider)) {
+    // Native providers must always be validated. Unknown transports throw via
+    // `assertToolCompat`'s transport-capability lookup, so adding a new transport
+    // to `ProviderModelConfig` cannot silently bypass the fail-fast gate.
     assertToolCompat({
       model: resolveRegistryModelId(config.model),
       provider: config.model.provider as 'openai' | 'openrouter',
@@ -577,9 +577,6 @@ function resolveRegistryModelId(model: ProviderModelConfig): string {
   return separator === -1 ? model.id : model.id.slice(separator + 1);
 }
 
-function isSupportedCompatTransport(provider: string, transport: string): boolean {
-  return (
-    (provider === 'openai' && transport === 'openai-responses')
-    || (provider === 'openrouter' && transport === 'openai-completions')
-  );
+function isNativeCompatProvider(provider: string): boolean {
+  return provider === 'openai' || provider === 'openrouter';
 }

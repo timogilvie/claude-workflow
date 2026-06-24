@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { streamSimpleOpenAICompletions } from '../../../node_modules/@earendil-works/pi-ai/dist/providers/openai-completions.js';
-import { streamSimpleOpenAIResponses } from '../../../node_modules/@earendil-works/pi-ai/dist/providers/openai-responses.js';
+import { streamSimpleOpenAICompletions } from '@earendil-works/pi-ai/openai-completions';
+import { streamSimpleOpenAIResponses } from '@earendil-works/pi-ai/openai-responses';
 import { createPiContext } from './messages.ts';
 import { buildOpenAiResponsesModel, buildOpenRouterModel } from './providers.ts';
 import { getToolCompatFixtures, type ToolCompatFixture } from './fixtures/compat/index.ts';
