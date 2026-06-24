@@ -5,6 +5,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=shared/hooks/wavemill-hook-protocol.sh
 source "$SCRIPT_DIR/wavemill-hook-protocol.sh"
 
+CODEX_CAPACITY_MESSAGE="Selected model is at capacity. Please try a different model."
+CODEX_CAPACITY_REASON="model_at_capacity"
+
 # Outside a wavemill-launched environment, act as a sink instead of exiting
 # immediately. Exiting here would close the downstream side of the Codex JSON
 # pipeline and can cause Codex to abort with a broken pipe.
@@ -59,7 +62,11 @@ while IFS= read -r line; do
       if [[ -z "$detail" ]]; then
         detail=$(printf '%s\n' "$line" | jq -r '.error // empty' 2>/dev/null | head -c 200 || true)
       fi
-      wavemill_hook_write "error" "$event" "$detail" "codex"
+      if [[ "$detail" == "$CODEX_CAPACITY_MESSAGE" || "$detail" == *"$CODEX_CAPACITY_MESSAGE"* ]]; then
+        wavemill_hook_write "error" "model_capacity" "${CODEX_CAPACITY_REASON}: $CODEX_CAPACITY_MESSAGE" "codex"
+      else
+        wavemill_hook_write "error" "$event" "$detail" "codex"
+      fi
       last_state="error"
       ;;
     task_complete|agent_turn_complete|response.completed|response_complete)
