@@ -100,6 +100,36 @@ else
   fail "launcher tmux attach is not guarded against normal shutdown exit codes"
 fi
 
+echo ""
+echo "=== Remote Git Timeout Guards ==="
+
+if grep -q 'wavemill_git_remote_with_timeout()' "$LIB_DIR/wavemill-common.sh" \
+  && grep -q 'wavemill_git_remote_timeout_seconds()' "$LIB_DIR/wavemill-common.sh"; then
+  pass "shared remote git timeout helper exists"
+else
+  fail "shared remote git timeout helper is missing"
+fi
+
+if grep -q 'wavemill_git_remote_with_timeout .*fetch origin' "$LIB_DIR/wavemill-common.sh" \
+  && ! grep -q 'git -C "\$REPO_DIR" fetch origin "\$base_branch"' "$LIB_DIR/wavemill-common.sh"; then
+  pass "base branch fetch uses timeout helper"
+else
+  fail "base branch fetch is missing the timeout helper"
+fi
+
+if grep -q 'wavemill_git_remote_with_timeout .*ls-remote origin' "$LIB_DIR/wavemill-mill.sh" \
+  && ! grep -q 'git -C "\$wt_dir" ls-remote origin "refs/heads/\${base_branch}"' "$LIB_DIR/wavemill-mill.sh"; then
+  pass "main head probe uses timeout helper"
+else
+  fail "main head probe is missing the timeout helper"
+fi
+
+if grep -q 'write_shell_assignment "WAVEMILL_GIT_REMOTE_TIMEOUT_SECONDS"' "$REPO_DIR/shared/lib/wavemill-startup-runner.sh"; then
+  pass "monitor env exports WAVEMILL_GIT_REMOTE_TIMEOUT_SECONDS"
+else
+  fail "monitor env does not export WAVEMILL_GIT_REMOTE_TIMEOUT_SECONDS"
+fi
+
 # ============================================================================
 # TEST 1B: State mutation helper behavior
 # ============================================================================
@@ -328,7 +358,7 @@ else
       | grep -vE '^(env|stdin|stdout|stderr|json|txt|csv|pid|utf)$' \
       | grep -vE '^(true|false|yes|string|number|empty|null|undefined)$' \
       | grep -vE '^(try|catch|fromjson|rollout_path|thread_id|thread_row|updated_at|exits|setting|falling|tostring)$' \
-      | grep -vE '^(bad|internal|marking|rate|reduce|service|timed|too|using|wavemill|waiting)$' \
+      | grep -vE '^(bad|internal|marking|rate|reduce|service|skipping|timed|too|using|wavemill|waiting)$' \
       | grep -vE '^(advance|review)$' \
       | grep -vE '^(not_eligible|routing_error)$' \
       | grep -vE '^(a|aborted|already|available|blocked_by_count|break|coding|cp|debug|empty_queue|execute|file|fresh|gtimeout|id|launch|length|main|mapfile|missing|not|overloaded|plan|ready|required|reservation|slots|the|they|timeout|todate|todateiso8601|tonumber|tracked|user)$')
