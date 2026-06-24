@@ -376,6 +376,25 @@ export async function runNativeAgentLive(
     );
   }
 
+  const totalTokens = loopResult.totalInputTokens + loopResult.totalOutputTokens;
+  if (loopResult.turnsCompleted === 0) {
+    throw new Error(
+      'Native agent live smoke failed: provider did not complete any turns.',
+    );
+  }
+
+  if (loopResult.toolCallsExecuted === 0) {
+    throw new Error(
+      'Native agent live smoke failed: provider did not execute the required read-only tool call.',
+    );
+  }
+
+  if (totalTokens === 0) {
+    throw new Error(
+      'Native agent live smoke failed: provider returned zero usage, so cost capture cannot be certified.',
+    );
+  }
+
   return {
     outcome: 'ok',
     provider,
@@ -387,7 +406,7 @@ export async function runNativeAgentLive(
     usage: {
       inputTokens: loopResult.totalInputTokens,
       outputTokens: loopResult.totalOutputTokens,
-      totalTokens: loopResult.totalInputTokens + loopResult.totalOutputTokens,
+      totalTokens,
       turnsCompleted: loopResult.turnsCompleted,
       toolCallsExecuted: loopResult.toolCallsExecuted,
       wallClockMs: loopResult.wallClockMs,

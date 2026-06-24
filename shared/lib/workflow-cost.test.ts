@@ -384,7 +384,7 @@ test('computeWorkflowCost prices DeepSeek transcripts from configured aliases wi
   }
 });
 
-test('computeWorkflowCost includes native session JSONL in workflow totals', () => {
+test('computeWorkflowCost includes gpt-4o native session JSONL in workflow totals', () => {
   const base = join(tmpdir(), `wavemill-test-${randomUUID()}`);
   const worktreePath = join(base, 'fake-worktree');
   const nativeSessionsDir = join(
@@ -400,9 +400,9 @@ test('computeWorkflowCost includes native session JSONL in workflow totals', () 
     writeFileSync(
       join(nativeSessionsDir, 'session.jsonl'),
       [
-        nativeSessionStarted('pi-priced-model'),
-        nativeAssistantMessage({ input: 1_000_000, output: 500_000, cacheRead: 250_000, cacheWrite: 100_000 }),
-        nativeAssistantMessage({ model: 'pi-priced-model', input: 500_000, output: 250_000, cacheRead: 50_000, cacheWrite: 25_000 }),
+        nativeSessionStarted('gpt-4o'),
+        nativeAssistantMessage({ input: 1_000_000, output: 500_000, cacheRead: 250_000 }),
+        nativeAssistantMessage({ model: 'gpt-4o', input: 500_000, output: 250_000, cacheRead: 50_000 }),
       ].join('\n'),
     );
 
@@ -410,11 +410,10 @@ test('computeWorkflowCost includes native session JSONL in workflow totals', () 
       worktreePath,
       branchName: 'task/test',
       pricingTable: {
-        'pi-priced-model': {
-          inputCostPerMTok: 2,
-          outputCostPerMTok: 8,
-          cacheReadCostPerMTok: 0.2,
-          cacheWriteCostPerMTok: 2.5,
+        'gpt-4o': {
+          inputCostPerMTok: 2.5,
+          outputCostPerMTok: 10,
+          cacheReadCostPerMTok: 1.25,
         },
       },
       agentType: 'claude',
@@ -424,11 +423,11 @@ test('computeWorkflowCost includes native session JSONL in workflow totals', () 
     if (result.status === 'success') {
       assert.equal(result.sessionCount, 1);
       assert.equal(result.turnCount, 2);
-      assert.equal(result.models['pi-priced-model'].inputTokens, 1_500_000);
-      assert.equal(result.models['pi-priced-model'].cacheCreationTokens, 125_000);
-      assert.equal(result.models['pi-priced-model'].cacheReadTokens, 300_000);
-      assert.equal(result.models['pi-priced-model'].outputTokens, 750_000);
-      assert.ok(Math.abs(result.totalCostUsd - 9.3725) < 0.0001);
+      assert.equal(result.models['gpt-4o'].inputTokens, 1_500_000);
+      assert.equal(result.models['gpt-4o'].cacheCreationTokens, 0);
+      assert.equal(result.models['gpt-4o'].cacheReadTokens, 300_000);
+      assert.equal(result.models['gpt-4o'].outputTokens, 750_000);
+      assert.ok(Math.abs(result.totalCostUsd - 11.625) < 0.0001);
     }
   } finally {
     rmSync(base, { recursive: true, force: true });

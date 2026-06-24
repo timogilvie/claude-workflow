@@ -175,6 +175,7 @@ describe('model-registry', () => {
       'gemini-2.5-flash',
       'gemini-2.5-pro',
       'gpt-5',
+      'gpt-4o',
       'gpt-5-mini',
       'gpt-5.3-codex',
       'gpt-5.5',
@@ -781,8 +782,13 @@ describe('model-registry', () => {
   });
 
   describe('native capability', () => {
-    it('keeps non-native entries unset and preserves authored native metadata', () => {
+    it('seeds the native read-only pilot and preserves authored native metadata', () => {
       assert.equal(DEFAULT_MODEL_REGISTRY.models['gpt-5.5'].nativeCapability, undefined);
+      assert.deepEqual(DEFAULT_MODEL_REGISTRY.models['gpt-4o'].nativeCapability, {
+        nativeProvider: 'openai',
+        piTransportKind: 'openai-responses',
+        readOnlyNative: 'certified',
+      });
 
       const merged = mergeModelRegistry(DEFAULT_MODEL_REGISTRY, {
         models: {
@@ -1135,6 +1141,19 @@ describe('model-registry', () => {
       assert.equal(decision.mode, 'task');
       assert.equal(decision.phase, 'planning');
       assert.equal(decision.modelId, 'certified-model');
+      assert.equal(decision.capability, 'certified');
+      assert.equal(decision.reason, undefined);
+    });
+
+    it('task mode: seeded gpt-4o pilot is routable from the default registry', () => {
+      const decision = evaluateNativeReadOnlyRouting({
+        modelId: 'gpt-4o',
+        phase: 'planning',
+        registry: DEFAULT_MODEL_REGISTRY,
+      });
+
+      assert.equal(decision.routable, true);
+      assert.equal(decision.certified, true);
       assert.equal(decision.capability, 'certified');
       assert.equal(decision.reason, undefined);
     });

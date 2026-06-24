@@ -260,10 +260,12 @@ describe('runNativeAgentLive — scripted provider', () => {
       turns: [
         {
           content: [{ type: 'tool_call', id: 'tc-smoke-1', name: 'list_files', arguments: { path: '.' } }],
+          usage: { input: 120, output: 20 },
           stopReason: 'toolUse',
         },
         {
           content: [{ type: 'text', text: 'Files listed. Smoke complete.' }],
+          usage: { input: 80, output: 30 },
           stopReason: 'stop',
         },
       ],
@@ -296,6 +298,7 @@ describe('runNativeAgentLive — scripted provider', () => {
       assert.ok(result.usage !== undefined, 'usage must be present on ok live result');
       assert.ok(result.usage!.turnsCompleted > 0, 'must have completed at least one turn');
       assert.ok(result.usage!.toolCallsExecuted > 0, 'must have executed at least one tool call');
+      assert.ok(result.usage!.totalTokens > 0, 'must report positive usage for cost capture');
 
       // Verify transcript was written with real events
       const events = parseTranscriptLines(result.transcriptPath);
@@ -304,6 +307,44 @@ describe('runNativeAgentLive — scripted provider', () => {
       const types = events.map((e) => (e as Record<string, unknown>).type);
       assert.ok(types.includes('session_started'), 'transcript must include session_started');
       assert.ok(types.includes('session_ended'), 'transcript must include session_ended');
+    } finally {
+      cleanupDir(transcriptDir);
+    }
+  });
+
+  it('throws when the provider returns no completed tool-backed usage', async () => {
+    const transcriptDir = makeTempTranscriptDir();
+    const scriptedApi = uniqueApi();
+
+    registerScriptedPiProvider({
+      api: scriptedApi,
+      turns: [
+        {
+          content: [{ type: 'text', text: 'No tool call, no usage.' }],
+          stopReason: 'stop',
+        },
+      ],
+    });
+
+    try {
+      await assert.rejects(
+        () => runNativeAgentLive({
+          provider: 'openai',
+          phase: 'planning',
+          env: { OPENAI_API_KEY: 'sk-stub-key-for-scripted-provider' },
+          transcriptDir,
+          sessionId: 'live-scripted-empty',
+          _modelOverride: {
+            id: `scripted:${scriptedApi}`,
+            name: 'scripted-model',
+            api: scriptedApi,
+            provider: 'scripted',
+            baseUrl: 'http://localhost:0/mock',
+            headers: {},
+          },
+        }),
+        /did not execute the required read-only tool call|returned zero usage|did not complete any turns/,
+      );
     } finally {
       cleanupDir(transcriptDir);
     }
@@ -318,7 +359,13 @@ describe('runNativeAgentLive — scripted provider', () => {
       api: scriptedApi,
       turns: [
         {
+          content: [{ type: 'tool_call', id: 'tc-smoke-2', name: 'list_files', arguments: { path: '.' } }],
+          usage: { input: 20, output: 10 },
+          stopReason: 'toolUse',
+        },
+        {
           content: [{ type: 'text', text: 'Smoke complete.' }],
+          usage: { input: 10, output: 15 },
           stopReason: 'stop',
         },
       ],
