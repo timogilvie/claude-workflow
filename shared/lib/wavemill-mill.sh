@@ -5377,7 +5377,18 @@ refresh_ready_merge_queue_tick() {
 
 get_main_head_sha() {
   local wt_dir="$1" base_branch="$2"
-  git -C "$wt_dir" ls-remote origin "refs/heads/${base_branch}" 2>/dev/null | awk '{print $1}' || echo ""
+  local remote_ref="refs/heads/${base_branch}"
+  local remote_timeout remote_output remote_rc=0
+  remote_timeout="$(wavemill_git_remote_timeout_seconds)"
+  remote_output="$(wavemill_git_remote_with_timeout "$remote_timeout" -C "$wt_dir" ls-remote origin "$remote_ref" 2>/dev/null)" || remote_rc=$?
+
+  if (( remote_rc != 0 )); then
+    log_warn "git ls-remote failed for worktree=$wt_dir remote=origin ref=$remote_ref timeout=${remote_timeout}s exit=$remote_rc; skipping base-branch freshness this tick"
+    printf '\n'
+    return 0
+  fi
+
+  awk '{print $1}' <<< "$remote_output"
 }
 
 ready_stage_allows_merge() {
@@ -11483,7 +11494,9 @@ log "info" "Fetching latest $BASE_BRANCH from remote..."
 if [[ "$DRY_RUN" == "true" ]]; then
   log "info" "Dry-run: skipping forced base-branch fetch."
 else
-  wavemill_fetch_base_branch "$BASE_BRANCH" --force
+  if ! wavemill_fetch_base_branch "$BASE_BRANCH" --force; then
+    log_warn "Startup fetch for $BASE_BRANCH degraded; continuing mill startup with local base-branch state"
+  fi
 fi
 
 : > "$STATUS_LOG_FILE"
