@@ -93,6 +93,49 @@ function userTurn(branch: string): string {
   });
 }
 
+function nativeSessionStarted(model = 'pi-model'): string {
+  return JSON.stringify({
+    seq: 1,
+    sessionId: 'native-session',
+    timestamp: 1,
+    type: 'session_started',
+    model,
+    api: 'responses',
+    provider: 'pi',
+  });
+}
+
+function nativeAssistantMessage(opts: {
+  model?: string;
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+} = {}): string {
+  return JSON.stringify({
+    seq: 2,
+    sessionId: 'native-session',
+    timestamp: 2,
+    type: 'assistant_message',
+    model: opts.model,
+    stopReason: 'end_turn',
+    usage: {
+      input: opts.input ?? 0,
+      output: opts.output ?? 0,
+      cacheRead: opts.cacheRead ?? 0,
+      cacheWrite: opts.cacheWrite ?? 0,
+      totalTokens:
+        (opts.input ?? 0) +
+        (opts.output ?? 0) +
+        (opts.cacheRead ?? 0) +
+        (opts.cacheWrite ?? 0),
+    },
+    rawContent: [],
+    replayContent: [],
+    redacted: false,
+  });
+}
+
 // ────────────────────────────────────────────────────────────────
 // Tests: encodeProjectDir
 // ────────────────────────────────────────────────────────────────
@@ -334,6 +377,149 @@ test('computeWorkflowCost prices DeepSeek transcripts from configured aliases wi
       assert.ok(result.totalCostUsd > 0);
       assert.ok(result.models['deepseek-chat'].costUsd > 0);
       assert.deepEqual(result.pricingUsed['deepseek-chat'], { inputCostPerMTok: 2, outputCostPerMTok: 8 });
+    }
+  } finally {
+    process.env.HOME = originalHome;
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test('computeWorkflowCost includes native session JSONL in workflow totals', () => {
+  const base = join(tmpdir(), `wavemill-test-${randomUUID()}`);
+  const worktreePath = join(base, 'fake-worktree');
+  const nativeSessionsDir = join(
+    worktreePath,
+    '.wavemill',
+    'runs',
+    'HOK-2305',
+    'native-sessions',
+  );
+  mkdirSync(nativeSessionsDir, { recursive: true });
+
+  try {
+    writeFileSync(
+      join(nativeSessionsDir, 'session.jsonl'),
+      [
+        nativeSessionStarted('pi-priced-model'),
+        nativeAssistantMessage({ input: 1_000_000, output: 500_000, cacheRead: 250_000, cacheWrite: 100_000 }),
+        nativeAssistantMessage({ model: 'pi-priced-model', input: 500_000, output: 250_000, cacheRead: 50_000, cacheWrite: 25_000 }),
+      ].join('\n'),
+    );
+
+    const result = computeWorkflowCost({
+      worktreePath,
+      branchName: 'task/test',
+      pricingTable: {
+        'pi-priced-model': {
+          inputCostPerMTok: 2,
+          outputCostPerMTok: 8,
+          cacheReadCostPerMTok: 0.2,
+          cacheWriteCostPerMTok: 2.5,
+        },
+      },
+      agentType: 'claude',
+    });
+
+    assert.equal(result.status, 'success');
+    if (result.status === 'success') {
+      assert.equal(result.sessionCount, 1);
+      assert.equal(result.turnCount, 2);
+      assert.equal(result.models['pi-priced-model'].inputTokens, 1_500_000);
+      assert.equal(result.models['pi-priced-model'].cacheCreationTokens, 125_000);
+      assert.equal(result.models['pi-priced-model'].cacheReadTokens, 300_000);
+      assert.equal(result.models['pi-priced-model'].outputTokens, 750_000);
+      assert.ok(Math.abs(result.totalCostUsd - 9.3725) < 0.0001);
+    }
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test('computeWorkflowCost returns zero cost for unknown native model pricing', () => {
+  const base = join(tmpdir(), `wavemill-test-${randomUUID()}`);
+  const worktreePath = join(base, 'fake-worktree');
+  const nativeSessionsDir = join(
+    worktreePath,
+    '.wavemill',
+    'runs',
+    'HOK-2305',
+    'native-sessions',
+  );
+  mkdirSync(nativeSessionsDir, { recursive: true });
+
+  try {
+    writeFileSync(
+      join(nativeSessionsDir, 'session.jsonl'),
+      [
+        nativeSessionStarted('unknown-native-model'),
+        nativeAssistantMessage({ input: 100, output: 50, cacheRead: 25, cacheWrite: 10 }),
+      ].join('\n'),
+    );
+
+    const result = computeWorkflowCost({
+      worktreePath,
+      branchName: 'task/test',
+      pricingTable: {},
+    });
+
+    assert.equal(result.status, 'success');
+    if (result.status === 'success') {
+      assert.equal(result.totalCostUsd, 0);
+      assert.equal(result.models['unknown-native-model'].costUsd, 0);
+    }
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test('computeWorkflowCost prefers native sessions over Claude fallback', () => {
+  const base = join(tmpdir(), `wavemill-test-${randomUUID()}`);
+  const worktreePath = join(base, 'fake-worktree');
+  const originalHome = process.env.HOME;
+  process.env.HOME = join(base, 'home');
+
+  try {
+    const nativeSessionsDir = join(
+      worktreePath,
+      '.wavemill',
+      'runs',
+      'HOK-2305',
+      'native-sessions',
+    );
+    mkdirSync(nativeSessionsDir, { recursive: true });
+    writeFileSync(
+      join(nativeSessionsDir, 'session.jsonl'),
+      [
+        nativeSessionStarted('pi-priced-model'),
+        nativeAssistantMessage({ input: 100, output: 20 }),
+      ].join('\n'),
+    );
+
+    const encoded = encodeProjectDir(worktreePath);
+    const claudeProjectsDir = join(process.env.HOME, '.claude', 'projects', encoded);
+    mkdirSync(claudeProjectsDir, { recursive: true });
+    writeFileSync(
+      join(claudeProjectsDir, 'session1.jsonl'),
+      assistantTurn({ branch: 'task/test', model: 'claude-opus-4-6', inputTokens: 9_999_999, outputTokens: 9_999_999 }),
+    );
+
+    const result = computeWorkflowCost({
+      worktreePath,
+      branchName: 'task/test',
+      pricingTable: {
+        'pi-priced-model': { inputCostPerMTok: 1, outputCostPerMTok: 2 },
+        'claude-opus-4-6': { inputCostPerMTok: 15, outputCostPerMTok: 75 },
+      },
+      agentType: 'claude',
+    });
+
+    assert.equal(result.status, 'success');
+    if (result.status === 'success') {
+      assert.deepEqual(Object.keys(result.models), ['pi-priced-model']);
+      assert.equal(result.models['pi-priced-model'].inputTokens, 100);
+      assert.equal(result.models['pi-priced-model'].outputTokens, 20);
+      assert.equal(result.sessionCount, 1);
+      assert.equal(result.turnCount, 1);
     }
   } finally {
     process.env.HOME = originalHome;
