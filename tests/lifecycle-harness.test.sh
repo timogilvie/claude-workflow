@@ -2102,6 +2102,26 @@ test_coding_capacity_recovery_grace_not_elapsed() {
   check_contains "capacity grace: log mentions grace period" "$(kv_value "$tick1" log_output)" "grace period"
 }
 
+test_coding_capacity_recovery_grace_elapsed_promotes() {
+  local slug="coding-capacity-grace-elapsed"
+  local issue="HOK-2318-GRACE-OK"
+  local repo tick past_ts
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+
+  past_ts=$(( $(date +%s) - 9999 ))
+  printf '%s\n' "$past_ts" > "$repo/features/$slug/.coding-capacity-detected-at"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" "$(_capacity_codex_overrides 1 120)")"
+
+  check_file_exists "capacity grace elapsed: blocked artifact written after grace" "$repo/features/$slug/.coding-blocked-completion.json"
+  check_eq "capacity grace elapsed: blockingReason is model_capacity" "model_capacity" "$(jq -r '.blockingReason // ""' "$repo/features/$slug/.coding-blocked-completion.json")"
+  check_file_exists "capacity grace elapsed: audit marker written" "$repo/features/$slug/.coding-capacity-recovery.json"
+  check_eq "capacity grace elapsed: audit graceSeconds matches override" "120" "$(jq -r '.graceSeconds // ""' "$repo/features/$slug/.coding-capacity-recovery.json")"
+  check_eq "capacity grace elapsed: attention set to needs-user" "needs-user" "$(kv_value "$tick" attention)"
+}
+
 test_coding_capacity_recovery_idempotent() {
   local slug="coding-capacity-idempotent"
   local issue="HOK-2318-IDEM"
@@ -2303,6 +2323,7 @@ test_coding_capacity_recovery_positive
 test_coding_capacity_recovery_active_worker_vetoes
 test_coding_capacity_recovery_idle_no_capacity_text
 test_coding_capacity_recovery_grace_not_elapsed
+test_coding_capacity_recovery_grace_elapsed_promotes
 test_coding_capacity_recovery_idempotent
 test_coding_capacity_recovery_coding_complete_wins
 test_coding_capacity_recovery_disabled
