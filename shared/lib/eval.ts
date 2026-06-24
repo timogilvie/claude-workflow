@@ -175,7 +175,7 @@ interface JudgeParseAttempt {
 
 interface ParsedJudgeResponse {
   response: JudgeResponse;
-  repaired: boolean;
+  recovered: boolean;
 }
 
 export class JudgeResponseRecoveryError extends Error {
@@ -598,7 +598,7 @@ function tryParseJudgeResponse(raw: string): ParsedJudgeResponse {
   try {
     return {
       response: parseJudgeResponse(raw),
-      repaired: false,
+      recovered: false,
     };
   } catch (error) {
     if (!isRecoverableJudgeParseError(error)) {
@@ -617,7 +617,7 @@ function tryParseJudgeResponse(raw: string): ParsedJudgeResponse {
 
     return {
       response: validateJudgeResponse(repaired.value),
-      repaired: repaired.repaired,
+      recovered: true,
     };
   }
 }
@@ -914,7 +914,7 @@ export async function evaluateTask(
     metadata: {
       ...metadata,
       interventionFlags,
-      ...(parsedJudge.repaired && { judgeJsonRecovered: true }),
+      ...(parsedJudge.recovered && { judgeJsonRecovered: true }),
       ...(stageScores && { stageScores }),
       ...(planCritique && { planCritique }),
     },

@@ -11,7 +11,7 @@ import {
   postCompletionHookDeps,
   runPostCompletionEval,
 } from './post-completion-hook.ts';
-import { JudgeResponseRecoveryError } from './eval.ts';
+import { evaluateTask, JudgeResponseRecoveryError } from './eval.ts';
 
 let passed = 0;
 let failed = 0;
@@ -839,6 +839,48 @@ await test('runPostCompletionEval returns false when judge times out before pers
 
     assert.equal(existsSync(join(repoDir, '.wavemill', 'evals', 'evals.jsonl')), false);
     assert.deepEqual(readWarningLines(repoDir), []);
+  } finally {
+    clearConfigCache(repoDir);
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+await test('runPostCompletionEval persists locally recovered judge JSON', async () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-judge-json-recovered-'));
+  makeContextUpdateRepo(repoDir, 'judge-json-recovered', 'HOK-2320');
+  clearConfigCache(repoDir);
+
+  try {
+    await withMockedPostCompletionDeps(async () => {
+      stubBaseEvalDeps();
+      postCompletionHookDeps.evaluateTask = async (input, outcomes) =>
+        evaluateTask(input, outcomes, {
+          _callFn: async () => ({
+            text: '{"score":0.6,"rationale":"Line one\nHe said "ship it" yesterday.","interventionFlags":[]}',
+          }),
+        });
+      postCompletionHookDeps.runContextUpdateWork = async () => {};
+
+      const persisted = await runPostCompletionEval({
+        issueId: 'HOK-2320',
+        prNumber: '2320',
+        workflowType: 'mill',
+        repoDir,
+        branchName: 'task/judge-json-recovered',
+        worktreePath: repoDir,
+        agentType: 'codex',
+      });
+
+      assert.equal(persisted, true);
+    });
+
+    const evalsPath = join(repoDir, '.wavemill', 'evals', 'evals.jsonl');
+    const persistedLines = readFileSync(evalsPath, 'utf8').trim().split('\n');
+    const record = JSON.parse(persistedLines.at(-1) || '{}');
+
+    assert.equal(record.score, 0.6);
+    assert.equal(record.rationale, 'Line one\nHe said "ship it" yesterday.');
+    assert.equal(record.metadata.judgeJsonRecovered, true);
   } finally {
     clearConfigCache(repoDir);
     rmSync(repoDir, { recursive: true, force: true });
