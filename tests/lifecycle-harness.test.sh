@@ -1923,6 +1923,8 @@ EOF
   # call fails gracefully, leaving challenge_coder unchanged.
   overrides="$(harness_common_route_overrides)
     is_challenge_task() { return 0; }
+    TOOLS_DIR=\"/tmp/\${SESSION}-\${ISSUE}-tools\"
+    mkdir -p \"\$TOOLS_DIR\"
     npx() { return 1; }
     get_task_meta() {
       local issue_key=\"\$1\" field=\"\$2\"
