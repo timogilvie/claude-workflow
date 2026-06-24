@@ -310,6 +310,7 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
       transport: config.model.api,
       tools: toolsForCompat,
       registry: config.compatRegistry,
+      phase: config.toolPolicy?.phase,
     });
   }
 

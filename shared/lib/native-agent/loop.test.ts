@@ -469,6 +469,45 @@ describe('loop — tool compat gate', () => {
       },
     );
   });
+
+  it('includes the configured phase in the ToolCompatError for uncertified native models', async () => {
+    registerScriptedPiProvider({
+      api: 'openai-responses',
+      turns: () => ({ content: [{ type: 'text', text: 'unexpected' }], stopReason: 'stop' }),
+    });
+
+    await assert.rejects(
+      () => runWavemillLoop({
+        model: {
+          id: 'openrouter:openai/gpt-4o-mini',
+          name: 'openai/gpt-4o-mini',
+          api: 'openai-responses',
+          provider: 'openrouter',
+        },
+        context: makeContext([
+          makeTool('read_file', 'sequential', async () => 'unused'),
+        ]),
+        convertToLlm: piIdentity,
+        compatRegistry: makeCompatRegistry(
+          'openai/gpt-4o-mini',
+          'unsupported',
+          'openrouter',
+          'openai-responses',
+        ),
+        toolPolicy: {
+          phase: 'planning',
+          worktreePath: '/tmp/wavemill-loop-test',
+          registry: [makeToolMetadata('read_file', 'read-only')],
+        },
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof ToolCompatError);
+        assert.match(error.message, /planning/);
+        assert.ok(error.diagnostics[0]?.phase === 'planning');
+        return true;
+      },
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------

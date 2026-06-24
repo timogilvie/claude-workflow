@@ -205,4 +205,69 @@ describe('tool-compat-validator', () => {
 
     assert.deepEqual(result, { ok: true });
   });
+
+  it('includes phase in read_only_native diagnostics and messages when phase is supplied', () => {
+    const result = validateToolCompat({
+      model: 'missing-model',
+      provider: 'openrouter',
+      transport: 'openai-completions',
+      registry: { models: {}, ladders: {} },
+      tools: [makeTool('read_file')],
+      phase: 'planning',
+    });
+
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.equal(result.diagnostics.length, 1);
+    assert.equal(result.diagnostics[0]!.phase, 'planning');
+    assert.match(result.diagnostics[0]!.message, /planning/);
+  });
+
+  it('includes phase in unsupported capability diagnostics when phase is supplied', () => {
+    const result = validateToolCompat({
+      model: 'openai/gpt-4o-mini',
+      provider: 'openai',
+      transport: 'openai-completions',
+      registry: makeRegistry('unsupported'),
+      tools: [makeTool('read_file')],
+      phase: 'expansion',
+    });
+
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.equal(result.diagnostics[0]!.phase, 'expansion');
+    assert.match(result.diagnostics[0]!.message, /expansion/);
+  });
+
+  it('includes phase in partial capability diagnostics when phase is supplied', () => {
+    const result = validateToolCompat({
+      model: 'openai/gpt-4o-mini',
+      provider: 'openrouter',
+      transport: 'openai-completions',
+      registry: makeRegistry('partial'),
+      tools: [makeTool('read_file')],
+      phase: 'read-only-review',
+    });
+
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.equal(result.diagnostics[0]!.phase, 'read-only-review');
+    assert.match(result.diagnostics[0]!.message, /read-only-review/);
+  });
+
+  it('omits phase from diagnostics and messages when phase is not supplied (backward compat)', () => {
+    const result = validateToolCompat({
+      model: 'missing-model',
+      provider: 'openrouter',
+      transport: 'openai-completions',
+      registry: { models: {}, ladders: {} },
+      tools: [makeTool('read_file')],
+    });
+
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.equal(result.diagnostics[0]!.phase, undefined);
+    assert.doesNotMatch(result.diagnostics[0]!.message, /phase/);
+    assert.match(result.diagnostics[0]!.message, /not registered in the capability registry/);
+  });
 });

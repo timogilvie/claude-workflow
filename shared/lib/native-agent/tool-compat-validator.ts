@@ -5,7 +5,8 @@ import {
   type NativeProviderName,
   type PiTransportKind,
 } from '../model-registry.ts';
-import type { ToolMetadata } from './tools/types.ts';
+import type { NativeRoutingPhase } from './read-only-routing.ts';
+import type { ToolMetadata, ToolPhase } from './tools/types.ts';
 
 export type ToolCompatCapabilityName =
   | 'function_calling'
@@ -20,6 +21,8 @@ export interface ToolCompatDiagnostic {
   tool: string;
   unsupportedCapability: ToolCompatCapabilityName;
   message: string;
+  /** Phase in which the incompatibility was detected. Omitted when not provided by the caller. */
+  phase?: string;
 }
 
 export type ToolCompatResult =
@@ -33,6 +36,8 @@ export interface ToolCompatInput {
   tools: readonly Pick<ToolMetadata, 'name' | 'description' | 'executionMode'>[];
   registry?: ModelRegistry;
   allowPartial?: boolean;
+  /** When provided, the phase is included in read_only_native diagnostic messages. */
+  phase?: NativeRoutingPhase | ToolPhase;
 }
 
 interface TransportCapabilitySurface {
@@ -126,37 +131,43 @@ export function validateToolCompat(input: ToolCompatInput): ToolCompatResult {
     }
 
     if (!modelCapabilities?.nativeCapability) {
+      const phaseClause = input.phase ? ` during phase "${input.phase}"` : '';
       diagnostics.push({
         model: input.model,
         provider: input.provider,
         transport: input.transport,
         tool: tool.name,
         unsupportedCapability: 'read_only_native',
-        message: `Tool "${tool.name}" is not supported because model "${input.model}" is not registered in the capability registry with native read-only metadata.`,
+        message: `Tool "${tool.name}" is not supported because model "${input.model}" is not registered in the capability registry with native read-only metadata${phaseClause}.`,
+        ...(input.phase !== undefined ? { phase: input.phase } : {}),
       });
       continue;
     }
 
     if (capability.capability === 'unsupported') {
+      const phaseClause = input.phase ? ` during phase "${input.phase}"` : '';
       diagnostics.push({
         model: input.model,
         provider: input.provider,
         transport: input.transport,
         tool: tool.name,
         unsupportedCapability: 'read_only_native',
-        message: `Tool "${tool.name}" is not supported for model "${input.model}" on ${input.provider}/${input.transport}: ${capability.limitations.join('; ')}.`,
+        message: `Tool "${tool.name}" is not supported for model "${input.model}" on ${input.provider}/${input.transport}${phaseClause}: ${capability.limitations.join('; ')}.`,
+        ...(input.phase !== undefined ? { phase: input.phase } : {}),
       });
       continue;
     }
 
     if (capability.capability === 'partial' && input.allowPartial !== true) {
+      const phaseClause = input.phase ? ` during phase "${input.phase}"` : '';
       diagnostics.push({
         model: input.model,
         provider: input.provider,
         transport: input.transport,
         tool: tool.name,
         unsupportedCapability: 'read_only_native',
-        message: `Tool "${tool.name}" requires certified native read-only support for model "${input.model}" on ${input.provider}/${input.transport}: ${capability.limitations.join('; ')}.`,
+        message: `Tool "${tool.name}" requires certified native read-only support for model "${input.model}" on ${input.provider}/${input.transport}${phaseClause}: ${capability.limitations.join('; ')}.`,
+        ...(input.phase !== undefined ? { phase: input.phase } : {}),
       });
     }
   }
