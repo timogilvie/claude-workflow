@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import {
   ClaudeSessionAdapter,
   CodexSessionAdapter,
+  NativeSessionAdapter,
   getSessionAdapter,
   detectAgentType,
 } from './session-adapters.ts';
@@ -123,6 +124,28 @@ function setupHybridClaudeSessionDir() {
   };
 }
 
+function setupNativeSessionDir() {
+  const tmpHome = mkdtempSync(join(tmpdir(), 'adapter-native-'));
+  const worktreePath = join(tmpHome, 'fake-worktree');
+  const nativeSessionsDir = join(
+    worktreePath,
+    '.wavemill',
+    'runs',
+    'HOK-2305',
+    'native-sessions',
+  );
+  mkdirSync(nativeSessionsDir, { recursive: true });
+
+  return {
+    tmpHome,
+    worktreePath,
+    nativeSessionsDir,
+    cleanup: () => {
+      rmSync(tmpHome, { recursive: true, force: true });
+    },
+  };
+}
+
 /** Set up a fake ~/.codex/sessions/ directory for Codex adapter tests. */
 function setupCodexSessionDir() {
   const tmpHome = mkdtempSync(join(tmpdir(), 'adapter-codex-'));
@@ -226,6 +249,49 @@ function codexTokenCount(opts: {
       },
       rate_limits: {},
     },
+  });
+}
+
+function nativeSessionStarted(model = 'pi-model'): string {
+  return JSON.stringify({
+    seq: 1,
+    sessionId: 'native-session',
+    timestamp: 1,
+    type: 'session_started',
+    model,
+    api: 'responses',
+    provider: 'pi',
+  });
+}
+
+function nativeAssistantMessage(opts: {
+  model?: string;
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+} = {}): string {
+  return JSON.stringify({
+    seq: 2,
+    sessionId: 'native-session',
+    timestamp: 2,
+    type: 'assistant_message',
+    model: opts.model,
+    stopReason: 'end_turn',
+    usage: {
+      input: opts.input ?? 0,
+      output: opts.output ?? 0,
+      cacheRead: opts.cacheRead ?? 0,
+      cacheWrite: opts.cacheWrite ?? 0,
+      totalTokens:
+        (opts.input ?? 0) +
+        (opts.output ?? 0) +
+        (opts.cacheRead ?? 0) +
+        (opts.cacheWrite ?? 0),
+    },
+    rawContent: [],
+    replayContent: [],
+    redacted: false,
   });
 }
 
@@ -594,6 +660,70 @@ describe('CodexSessionAdapter', () => {
   });
 });
 
+describe('NativeSessionAdapter', () => {
+  it('returns null when no native runs directory exists', () => {
+    const adapter = new NativeSessionAdapter();
+    const result = adapter.scan({
+      worktreePath: '/nonexistent/path',
+      branchName: 'task/test',
+    });
+    assert.equal(result, null);
+  });
+
+  it('aggregates assistant message usage across native session files', () => {
+    const { worktreePath, nativeSessionsDir, cleanup } = setupNativeSessionDir();
+    try {
+      const lines = [
+        nativeSessionStarted('pi-model'),
+        nativeAssistantMessage({ input: 100, output: 25, cacheRead: 20, cacheWrite: 10 }),
+        nativeAssistantMessage({ model: 'pi-model', input: 200, output: 50, cacheRead: 40, cacheWrite: 30 }),
+      ].join('\n');
+
+      writeFileSync(join(nativeSessionsDir, 'session.jsonl'), lines);
+
+      const adapter = new NativeSessionAdapter();
+      const result = adapter.scan({ worktreePath, branchName: 'task/test' });
+
+      assert.ok(result);
+      assert.equal(result.sessionCount, 1);
+      assert.equal(result.turnCount, 2);
+      assert.deepEqual(result.models['pi-model'], {
+        inputTokens: 300,
+        cacheCreationTokens: 40,
+        cacheReadTokens: 60,
+        outputTokens: 75,
+      });
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('uses session_started model when assistant_message omits model', () => {
+    const { worktreePath, nativeSessionsDir, cleanup } = setupNativeSessionDir();
+    try {
+      const lines = [
+        nativeSessionStarted('fallback-model'),
+        nativeAssistantMessage({ input: 100, output: 10 }),
+      ].join('\n');
+
+      writeFileSync(join(nativeSessionsDir, 'session.jsonl'), lines);
+
+      const adapter = new NativeSessionAdapter();
+      const result = adapter.scan({ worktreePath, branchName: 'task/test' });
+
+      assert.ok(result);
+      assert.deepEqual(result.models['fallback-model'], {
+        inputTokens: 100,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+        outputTokens: 10,
+      });
+    } finally {
+      cleanup();
+    }
+  });
+});
+
 // ── Auto-Detection Tests ───────────────────────────────────────
 
 describe('detectAgentType', () => {
@@ -706,6 +836,11 @@ describe('getSessionAdapter', () => {
   it('returns CodexSessionAdapter for "codex"', () => {
     const adapter = getSessionAdapter('codex');
     assert.ok(adapter instanceof CodexSessionAdapter);
+  });
+
+  it('returns NativeSessionAdapter for "native"', () => {
+    const adapter = getSessionAdapter('native');
+    assert.ok(adapter instanceof NativeSessionAdapter);
   });
 
   it('returns ClaudeSessionAdapter for unknown agent type', () => {

@@ -12,8 +12,7 @@
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
-import { getSessionAdapter, detectAgentType, type AgentType } from './session-adapters.ts';
-import { NativeSessionAdapter } from './native-agent/pi-usage-cost.ts';
+import { NativeSessionAdapter, getSessionAdapter, detectAgentType, type AgentType } from './session-adapters.ts';
 import { loadWavemillConfig } from './config.ts';
 import { getEffectiveRegistry } from './model-registry.ts';
 
@@ -236,51 +235,44 @@ export function computeWorkflowCost(opts: {
     console.log(`[DEBUG_COST]   agentType: ${agentType || '(undefined, will default to claude)'}`);
   }
 
-  // Delegate session scanning to the appropriate adapter
-  const nativeAdapter = new NativeSessionAdapter();
-  let scanResult = nativeAdapter.scan({ worktreePath, branchName });
+  const nativeScanResult = new NativeSessionAdapter().scan({ worktreePath, branchName });
+  let scanResult = nativeScanResult && nativeScanResult.turnCount > 0 ? nativeScanResult : null;
+  let adapter = getSessionAdapter(agentType);
 
   if (debug) {
-    console.log(`[DEBUG_COST]   Native adapter result: ${scanResult ? `${scanResult.turnCount} turns` : 'none'}`);
+    console.log(`[DEBUG_COST]   Selected adapter: ${adapter.constructor.name}`);
+    if (scanResult) {
+      console.log('[DEBUG_COST]   Native sessions found; skipping adapter fallback');
+    }
   }
 
-  if (scanResult && scanResult.turnCount > 0) {
-    if (debug) {
-      console.log('[DEBUG_COST]   Using native session scan result');
-    }
-  } else {
-    let adapter = getSessionAdapter(agentType);
-
-    if (debug) {
-      console.log(`[DEBUG_COST]   Selected adapter: ${adapter.constructor.name}`);
-    }
-
+  if (!scanResult) {
     scanResult = adapter.scan({ worktreePath, branchName });
+  }
 
-    // If no sessions found, try auto-detection as a fallback
-    if (!scanResult || scanResult.turnCount === 0) {
+  // If no sessions found, try auto-detection as a fallback
+  if (!scanResult || scanResult.turnCount === 0) {
+    if (debug) {
+      console.log(`[DEBUG_COST]   No sessions found for agentType '${agentType || 'claude'}', attempting auto-detection`);
+    }
+
+    const detectedAgent = detectAgentType({ worktreePath, branchName });
+
+    if (detectedAgent && detectedAgent !== agentType) {
+      // WARNING: Auto-detection was needed - this indicates a bug in agent assignment
+      console.warn(
+        `[COST] WARNING: Agent type mismatch detected! ` +
+        `Expected '${agentType || 'claude'}' but found '${detectedAgent}' sessions. ` +
+        `This indicates a bug in agent assignment logic. ` +
+        `Using auto-detected agent for cost computation.`
+      );
+
       if (debug) {
-        console.log(`[DEBUG_COST]   No sessions found for agentType '${agentType || 'claude'}', attempting auto-detection`);
+        console.log(`[DEBUG_COST]   Retrying with detected agent: ${detectedAgent}`);
       }
 
-      const detectedAgent = detectAgentType({ worktreePath, branchName });
-
-      if (detectedAgent && detectedAgent !== agentType) {
-        // WARNING: Auto-detection was needed - this indicates a bug in agent assignment
-        console.warn(
-          `[COST] WARNING: Agent type mismatch detected! ` +
-          `Expected '${agentType || 'claude'}' but found '${detectedAgent}' sessions. ` +
-          `This indicates a bug in agent assignment logic. ` +
-          `Using auto-detected agent for cost computation.`
-        );
-
-        if (debug) {
-          console.log(`[DEBUG_COST]   Retrying with detected agent: ${detectedAgent}`);
-        }
-
-        adapter = getSessionAdapter(detectedAgent);
-        scanResult = adapter.scan({ worktreePath, branchName });
-      }
+      adapter = getSessionAdapter(detectedAgent);
+      scanResult = adapter.scan({ worktreePath, branchName });
     }
   }
 
