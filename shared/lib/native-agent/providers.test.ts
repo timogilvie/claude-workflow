@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
+import type { ModelRegistry } from '../model-registry.ts';
 import {
   buildOpenAiResponsesModel,
   buildOpenRouterModel,
@@ -12,6 +13,31 @@ import {
   OPENROUTER_DEFAULT_BASE_URL,
   resolveNativeAgentProviders,
 } from './providers.ts';
+
+function makeCertifiedRegistry(modelId: string, provider: 'openai' | 'openrouter'): ModelRegistry {
+  return {
+    models: {
+      [modelId]: {
+        vendor: 'test',
+        class: 'strong_generalist',
+        strengths: ['testing'],
+        weaknesses: [],
+        qualityScores: { routing: 0, planning: 0, coding: 0, review: 0, classify: 0 },
+        contextWindowTokens: 128_000,
+        toolSupport: 'full',
+        multimodal: { text: true, image: false },
+        latencyTier: 'standard',
+        reasoningTier: 'standard',
+        costPerMillionInputTokensUsd: 1,
+        costPerMillionOutputTokensUsd: 2,
+        nativeCapability: provider === 'openai'
+          ? { nativeProvider: 'openai', piTransportKind: 'openai-responses', readOnlyNative: 'certified' }
+          : { nativeProvider: 'openrouter', piTransportKind: 'openai-completions', readOnlyNative: 'certified', compatFlags: { thinkingFormat: 'openrouter' } },
+      },
+    },
+    ladders: {},
+  };
+}
 
 describe('native-agent provider resolution', () => {
   it('builds a ready OpenAI responses model', () => {
@@ -23,6 +49,7 @@ describe('native-agent provider resolution', () => {
       },
     }, {
       env: { OPENAI_API_KEY: 'sk-openai-test' },
+      registry: makeCertifiedRegistry('gpt-4o', 'openai'),
     });
 
     assert(entry);
@@ -46,11 +73,12 @@ describe('native-agent provider resolution', () => {
             'HTTP-Referer': 'https://wavemill.test',
             'X-Title': 'Wavemill',
           },
-          models: ['openai/gpt-4o-mini'],
+          models: ['openrouter-test-model'],
         },
       },
     }, {
       env: { OPENROUTER_API_KEY: 'sk-openrouter-test' },
+      registry: makeCertifiedRegistry('openrouter-test-model', 'openrouter'),
     });
 
     assert(entry);
@@ -78,7 +106,10 @@ describe('native-agent provider resolution', () => {
             apiKeyEnv: 'WAVEMILL_TEST_OPENAI_KEY',
           },
         },
-      }, { repoDir });
+      }, {
+        repoDir,
+        registry: makeCertifiedRegistry('gpt-4o', 'openai'),
+      });
 
       assert(entry);
       assert.equal(entry.status, 'ready');
@@ -170,6 +201,7 @@ describe('native-agent provider resolution', () => {
       },
     }, {
       env: { OPENAI_API_KEY: 'sk-secret-value' },
+      registry: makeCertifiedRegistry('gpt-4o', 'openai'),
     });
 
     assert(entry);
@@ -210,5 +242,150 @@ describe('native-agent Pi provider lookup', () => {
     } as ReturnType<typeof buildOpenAiResponsesModel>);
 
     assert.equal(provider, undefined);
+  });
+});
+
+describe('native-agent certification gate', () => {
+  it('uncertified model in task mode resolves to uncertified with actionable reason, no API key leaked', () => {
+    const emptyRegistry = { models: {}, ladders: {} };
+
+    const consoleLog = console.log;
+    const consoleWarn = console.warn;
+    const consoleError = console.error;
+    const events: string[] = [];
+    console.log = (...args: unknown[]) => { events.push(`log:${args.join(' ')}`); };
+    console.warn = (...args: unknown[]) => { events.push(`warn:${args.join(' ')}`); };
+    console.error = (...args: unknown[]) => { events.push(`error:${args.join(' ')}`); };
+
+    try {
+      const entries = resolveNativeAgentProviders({
+        providers: {
+          openai: {
+            models: ['uncertified-model'],
+          },
+        },
+      }, {
+        env: { OPENAI_API_KEY: 'sk-secret-should-not-leak' },
+        registry: emptyRegistry,
+      });
+
+      assert.equal(entries.length, 1);
+      const [entry] = entries;
+      assert.equal(entry.status, 'uncertified');
+      assert.equal(entry.modelId, 'uncertified-model');
+      assert.match(entry.reason, /uncertified-model/);
+      assert.match(entry.reason, /planning/);
+
+      const serialized = JSON.stringify(entry);
+      assert(!serialized.includes('sk-secret-should-not-leak'), 'API key must not appear in serialized output');
+      assert.deepEqual(events, []);
+    } finally {
+      console.log = consoleLog;
+      console.warn = consoleWarn;
+      console.error = consoleError;
+    }
+  });
+
+  it('same uncertified model under certificationMode resolves to ready with certificationOnly: true', () => {
+    const emptyRegistry = { models: {}, ladders: {} };
+
+    const entries = resolveNativeAgentProviders({
+      providers: {
+        openai: {
+          models: ['uncertified-model'],
+        },
+      },
+    }, {
+      env: { OPENAI_API_KEY: 'sk-test' },
+      registry: emptyRegistry,
+      certificationMode: true,
+    });
+
+    assert.equal(entries.length, 1);
+    const [entry] = entries;
+    assert.equal(entry.status, 'ready');
+    assert.equal(entry.certificationOnly, true);
+  });
+
+  it('certified model resolves to ready with certificationOnly: false', () => {
+    const entries = resolveNativeAgentProviders({
+      providers: {
+        openai: {
+          models: ['certified-model'],
+        },
+      },
+    }, {
+      env: { OPENAI_API_KEY: 'sk-test' },
+      registry: makeCertifiedRegistry('certified-model', 'openai'),
+    });
+
+    assert.equal(entries.length, 1);
+    const [entry] = entries;
+    assert.equal(entry.status, 'ready');
+    assert.equal(entry.certificationOnly, false);
+  });
+
+  it('certified model in certificationMode resolves to ready with certificationOnly: false', () => {
+    const entries = resolveNativeAgentProviders({
+      providers: {
+        openai: {
+          models: ['certified-model'],
+        },
+      },
+    }, {
+      env: { OPENAI_API_KEY: 'sk-test' },
+      registry: makeCertifiedRegistry('certified-model', 'openai'),
+      certificationMode: true,
+    });
+
+    assert.equal(entries.length, 1);
+    const [entry] = entries;
+    assert.equal(entry.status, 'ready');
+    assert.equal(entry.certificationOnly, false);
+  });
+
+  it('distinct models are judged independently — no silent substitution', () => {
+    const registry: import('../model-registry.ts').ModelRegistry = {
+      models: {
+        'certified-a': {
+          vendor: 'test',
+          class: 'strong_generalist',
+          strengths: ['testing'],
+          weaknesses: [],
+          qualityScores: { routing: 0, planning: 0, coding: 0, review: 0, classify: 0 },
+          contextWindowTokens: 128_000,
+          toolSupport: 'full',
+          multimodal: { text: true, image: false },
+          latencyTier: 'standard',
+          reasoningTier: 'standard',
+          costPerMillionInputTokensUsd: 1,
+          costPerMillionOutputTokensUsd: 2,
+          nativeCapability: { nativeProvider: 'openai', piTransportKind: 'openai-responses', readOnlyNative: 'certified' },
+        },
+      },
+      ladders: {},
+    };
+
+    const entries = resolveNativeAgentProviders({
+      providers: {
+        openai: {
+          models: ['certified-a', 'uncertified-b'],
+        },
+      },
+    }, {
+      env: { OPENAI_API_KEY: 'sk-test' },
+      registry,
+    });
+
+    assert.equal(entries.length, 2);
+    const certifiedEntry = entries.find((e) => e.modelId === 'certified-a');
+    const uncertifiedEntry = entries.find((e) => e.modelId === 'uncertified-b');
+
+    assert(certifiedEntry);
+    assert.equal(certifiedEntry.status, 'ready');
+
+    assert(uncertifiedEntry);
+    assert.equal(uncertifiedEntry.status, 'uncertified');
+    assert.match(uncertifiedEntry.reason, /uncertified-b/);
   });
 });
