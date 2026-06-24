@@ -5,8 +5,10 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import type { ModelRegistry } from './model-registry.ts';
 import {
+  assertRegistryConsistency,
   CHANNELS,
   compareLatencyTier,
+  deriveReadOnlyNativeCapability,
   evaluateCapabilityConstraints,
   FAMILY_ALIASES,
   getConfiguredModelsForDescriptor,
@@ -17,14 +19,17 @@ import {
   getLadder,
   getModel,
   isKnownModelId,
+  isReadOnlyNativeCapable,
   mergeModelRegistry,
   ModelResolutionError,
+  ModelValidationError,
   normalizeReviewerModelId,
   parseModelSelector,
   rankCandidates,
   REVIEWER_ALIAS_MAP,
   resolveSelector,
   satisfiesCapabilities,
+  validateNativeCapability,
   validateModelId,
 } from './model-registry.ts';
 import { clearConfigCache } from './config.ts';
@@ -90,6 +95,15 @@ function makeCapabilities(
     costPerMillionInputTokensUsd: overrides.costPerMillionInputTokensUsd ?? 1,
     costPerMillionOutputTokensUsd: overrides.costPerMillionOutputTokensUsd ?? 2,
     agent: overrides.agent,
+    nativeCapability: overrides.nativeCapability
+      ? {
+        nativeProvider: overrides.nativeCapability.nativeProvider!,
+        piTransportKind: overrides.nativeCapability.piTransportKind!,
+        readOnlyNative: overrides.nativeCapability.readOnlyNative!,
+        compatFlags: overrides.nativeCapability.compatFlags ? { ...overrides.nativeCapability.compatFlags } : undefined,
+        limitations: overrides.nativeCapability.limitations ? [...overrides.nativeCapability.limitations] : undefined,
+      }
+      : undefined,
   };
 }
 
@@ -208,7 +222,6 @@ describe('model-registry', () => {
       'claude-sonnet-4-6',
       'gpt-5.5',
       'gpt-5.4',
-      'claude-fable-5',
     ]);
   });
 
@@ -301,7 +314,6 @@ describe('model-registry', () => {
 
     assert.deepEqual(once, [
       'gpt-5.5',
-      'claude-fable-5',
       'claude-opus-4-8',
       'claude-opus-4-7',
       'gpt-5.4',
@@ -331,7 +343,6 @@ describe('model-registry', () => {
 
   it('rankCandidates returns the full ladder when no exclusions are provided', () => {
     assert.deepEqual(rankCandidates(DEFAULT_MODEL_REGISTRY, 'coding'), [
-      'claude-fable-5',
       'gpt-5.5',
       'gpt-5.4',
       'deepseek-v4-pro',
@@ -347,6 +358,8 @@ describe('model-registry', () => {
   it('filters disabled models from configured and derived ladders', () => {
     assert.ok(!getLadder(DEFAULT_MODEL_REGISTRY, 'coding').includes('gpt-5.3-codex'));
     assert.ok(!rankCandidates(DEFAULT_MODEL_REGISTRY, 'coding').includes('gpt-5.3-codex'));
+    assert.ok(!getLadder(DEFAULT_MODEL_REGISTRY, 'coding').includes('claude-fable-5'));
+    assert.ok(!rankCandidates(DEFAULT_MODEL_REGISTRY, 'coding').includes('claude-fable-5'));
   });
 
   it('registers DeepSeek models with deepseek vendor metadata', () => {
@@ -762,6 +775,321 @@ describe('model-registry', () => {
       clearConfigCache(repoDir);
       cleanUp(repoDir);
     }
+  });
+
+  describe('native capability', () => {
+    it('keeps non-native entries unset and preserves authored native metadata', () => {
+      assert.equal(DEFAULT_MODEL_REGISTRY.models['gpt-5.5'].nativeCapability, undefined);
+
+      const merged = mergeModelRegistry(DEFAULT_MODEL_REGISTRY, {
+        models: {
+          'native-openai': {
+            vendor: 'openai',
+            class: 'frontier',
+            strengths: ['native read-only'],
+            weaknesses: ['none'],
+            qualityScores: { planning: 95, review: 94 },
+            contextWindowTokens: 400_000,
+            toolSupport: 'full',
+            multimodal: { text: true, image: true },
+            latencyTier: 'standard',
+            reasoningTier: 'advanced',
+            costPerMillionInputTokensUsd: 5,
+            costPerMillionOutputTokensUsd: 15,
+            nativeCapability: {
+              nativeProvider: 'openai',
+              piTransportKind: 'openai-responses',
+              readOnlyNative: 'certified',
+            },
+          },
+        },
+      });
+
+      assert.deepEqual(merged.models['native-openai'].nativeCapability, {
+        nativeProvider: 'openai',
+        piTransportKind: 'openai-responses',
+        readOnlyNative: 'certified',
+        compatFlags: undefined,
+        limitations: undefined,
+      });
+    });
+
+    it('derives certified capability for openai responses transport', () => {
+      assert.deepEqual(
+        deriveReadOnlyNativeCapability({
+          nativeProvider: 'openai',
+          piTransportKind: 'openai-responses',
+        }),
+        { capability: 'certified', limitations: [] },
+      );
+    });
+
+    it('derives certified capability for openrouter completions with compat flag', () => {
+      assert.deepEqual(
+        deriveReadOnlyNativeCapability({
+          nativeProvider: 'openrouter',
+          piTransportKind: 'openai-completions',
+          compatFlags: { thinkingFormat: 'openrouter' },
+        }),
+        { capability: 'certified', limitations: [] },
+      );
+    });
+
+    it('derives partial capability for openrouter completions without compat flag', () => {
+      const derived = deriveReadOnlyNativeCapability({
+        nativeProvider: 'openrouter',
+        piTransportKind: 'openai-completions',
+      });
+
+      assert.equal(derived.capability, 'partial');
+      assert.ok(derived.limitations.length > 0);
+      assert.match(derived.limitations[0] ?? '', /thinkingFormat=openrouter/);
+    });
+
+    it('derives unsupported capability when pi transport is missing', () => {
+      const derived = deriveReadOnlyNativeCapability({
+        nativeProvider: 'openai',
+      });
+
+      assert.equal(derived.capability, 'unsupported');
+      assert.match(derived.limitations[0] ?? '', /piTransportKind/);
+    });
+
+    it('ignores unknown compat flags during derivation', () => {
+      assert.deepEqual(
+        deriveReadOnlyNativeCapability({
+          nativeProvider: 'openrouter',
+          piTransportKind: 'openai-completions',
+          compatFlags: { thinkingFormat: 'openrouter', someUnknownKey: true },
+        }),
+        { capability: 'certified', limitations: [] },
+      );
+    });
+
+    it('rejects certified entries that omit nativeProvider', () => {
+      assert.throws(
+        () => validateNativeCapability('m', {
+          nativeCapability: {
+            readOnlyNative: 'certified',
+            piTransportKind: 'openai-responses',
+          } as any,
+        }),
+        (error: unknown) => {
+          assert.ok(error instanceof ModelValidationError);
+          assert.equal(error.modelId, 'm');
+          assert.match(error.message, /nativeProvider/);
+          return true;
+        },
+      );
+    });
+
+    it('rejects certified entries that omit piTransportKind', () => {
+      assert.throws(
+        () => validateNativeCapability('m', {
+          nativeCapability: {
+            nativeProvider: 'openai',
+            readOnlyNative: 'certified',
+          } as any,
+        }),
+        (error: unknown) => {
+          assert.ok(error instanceof ModelValidationError);
+          assert.equal(error.modelId, 'm');
+          assert.match(error.message, /piTransportKind/);
+          return true;
+        },
+      );
+    });
+
+    it('rejects contradictory certified entries', () => {
+      assert.throws(
+        () => validateNativeCapability('m', {
+          nativeCapability: {
+            nativeProvider: 'openrouter',
+            piTransportKind: 'openai-responses',
+            readOnlyNative: 'certified',
+          } as any,
+        }),
+        /contradicts compat flags \(derived: unsupported\)/,
+      );
+    });
+
+    it('asserts registry-level consistency for native capability metadata', () => {
+      assert.throws(
+        () => assertRegistryConsistency({
+          models: {
+            bad: makeCapabilities({
+              nativeCapability: {
+                nativeProvider: 'openrouter',
+                piTransportKind: 'openai-responses',
+                readOnlyNative: 'certified',
+              } as any,
+            }),
+          },
+          ladders: {},
+        }),
+        /contradicts compat flags/,
+      );
+
+      assert.doesNotThrow(() => assertRegistryConsistency({
+        models: {
+          good: makeCapabilities({
+            nativeCapability: {
+              nativeProvider: 'openrouter',
+              piTransportKind: 'openai-completions',
+              readOnlyNative: 'partial',
+              limitations: ['missing thinkingFormat=openrouter compat flag'],
+            } as any,
+          }),
+        },
+        ladders: {},
+      }));
+    });
+
+    it('returns true for certified native read-only capability', () => {
+      const registry: ModelRegistry = {
+        models: {
+          A: makeCapabilities({
+            nativeCapability: {
+              nativeProvider: 'openai',
+              piTransportKind: 'openai-responses',
+              readOnlyNative: 'certified',
+            },
+          }),
+        },
+        ladders: {},
+      };
+
+      assert.equal(isReadOnlyNativeCapable('A', { registry }), true);
+    });
+
+    it('returns false for unsupported native read-only capability', () => {
+      const registry: ModelRegistry = {
+        models: {
+          A: makeCapabilities({
+            nativeCapability: {
+              nativeProvider: 'openai',
+              piTransportKind: 'openai-responses',
+              readOnlyNative: 'unsupported',
+            } as any,
+          }),
+        },
+        ladders: {},
+      };
+
+      assert.equal(isReadOnlyNativeCapable('A', { registry }), false);
+    });
+
+    it('keeps partial capability gated off by default', () => {
+      const registry: ModelRegistry = {
+        models: {
+          A: makeCapabilities({
+            nativeCapability: {
+              nativeProvider: 'openrouter',
+              piTransportKind: 'openai-completions',
+              readOnlyNative: 'partial',
+              limitations: ['missing thinkingFormat=openrouter compat flag'],
+            } as any,
+          }),
+        },
+        ladders: {},
+      };
+
+      assert.equal(isReadOnlyNativeCapable('A', { registry }), false);
+      assert.equal(isReadOnlyNativeCapable('A', { registry, allowPartial: true }), true);
+    });
+
+    it('returns false for unknown model ids without throwing', () => {
+      assert.equal(isReadOnlyNativeCapable('missing', { registry: DEFAULT_MODEL_REGISTRY }), false);
+    });
+
+    it('keeps model availability distinct from certification', () => {
+      const registry = mergeModelRegistry(DEFAULT_MODEL_REGISTRY, {
+        models: {
+          'native-unsupported': {
+            vendor: 'openai',
+            class: 'frontier',
+            strengths: ['available'],
+            weaknesses: ['not certified'],
+            qualityScores: { review: 96 },
+            contextWindowTokens: 400_000,
+            toolSupport: 'full',
+            multimodal: { text: true, image: true },
+            latencyTier: 'standard',
+            reasoningTier: 'advanced',
+            costPerMillionInputTokensUsd: 5,
+            costPerMillionOutputTokensUsd: 15,
+            nativeCapability: {
+              nativeProvider: 'openai',
+              piTransportKind: 'openai-completions',
+              readOnlyNative: 'unsupported',
+            } as any,
+          },
+        },
+        ladders: {
+          review: ['native-unsupported', 'gpt-5.5'],
+        },
+      });
+
+      assert.ok(getLadder(registry, 'review').includes('native-unsupported'));
+      assert.equal(isReadOnlyNativeCapable('native-unsupported', { registry }), false);
+    });
+
+    it('keeps default registry validation backward compatible', () => {
+      assert.doesNotThrow(() => getEffectiveRegistry());
+    });
+
+    it('merges config-provided native capability metadata and validates it', () => {
+      const repoDir = makeTempRepo();
+
+      try {
+        writeConfig(repoDir, {
+          modelRegistry: {
+            models: {
+              'gpt-5.5': {
+                nativeCapability: {
+                  nativeProvider: 'openai',
+                  piTransportKind: 'openai-responses',
+                  readOnlyNative: 'certified',
+                },
+              },
+            },
+          },
+        });
+        clearConfigCache(repoDir);
+
+        const registry = getEffectiveRegistry(repoDir);
+        assert.equal(registry.models['gpt-5.5'].nativeCapability?.readOnlyNative, 'certified');
+      } finally {
+        clearConfigCache(repoDir);
+        cleanUp(repoDir);
+      }
+    });
+
+    it('rejects invalid config-provided native capability metadata', () => {
+      const repoDir = makeTempRepo();
+
+      try {
+        writeConfig(repoDir, {
+          modelRegistry: {
+            models: {
+              'gpt-5.5': {
+                nativeCapability: {
+                  nativeProvider: 'openrouter',
+                  piTransportKind: 'openai-responses',
+                  readOnlyNative: 'certified',
+                },
+              },
+            },
+          },
+        });
+        clearConfigCache(repoDir);
+
+        assert.throws(() => getEffectiveRegistry(repoDir), /contradicts compat flags/);
+      } finally {
+        clearConfigCache(repoDir);
+        cleanUp(repoDir);
+      }
+    });
   });
 });
 
