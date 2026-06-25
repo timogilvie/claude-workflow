@@ -442,21 +442,6 @@ for fixture in "$REPO_DIR"/tests/fixtures/startup/*.sh; do
 done
 
 # ============================================================================
-# TEST 2E: Native hook-state reuse fixtures
-# ============================================================================
-echo ""
-echo "=== Native Hook-State Reuse ==="
-
-native_hook_states_output="$(bash "$REPO_DIR/tests/native-stage-hook-states.test.sh" 2>&1)" || native_hook_states_status=$?
-native_hook_states_status="${native_hook_states_status:-0}"
-if [[ "$native_hook_states_status" -eq 0 ]]; then
-  pass "native hook-state reuse fixtures"
-else
-  fail "native hook-state reuse fixtures: $native_hook_states_output"
-fi
-unset native_hook_states_status
-
-# ============================================================================
 # TEST 2D: Base-branch fetch cache guards
 # ============================================================================
 echo ""
@@ -560,6 +545,32 @@ if grep -q 'git -C "\$REPO_DIR" fetch origin "\$BASE_BRANCH"' <<< "$LAUNCH_TASK_
 else
   pass "launch_task no longer performs raw git fetch"
 fi
+
+# ============================================================================
+# TEST 2F: Native hook-state reuse fixtures
+# ============================================================================
+echo ""
+echo "=== Native Hook-State Reuse ==="
+
+STATUS_SCRIPT="$LIB_DIR/wavemill-status.sh"
+if [[ -f "$STATUS_SCRIPT" ]]; then
+  if grep -qiE 'native[-_]?(liveness|state|branch|adapter)' "$STATUS_SCRIPT"; then
+    fail "wavemill-status.sh contains a native-specific liveness branch"
+  else
+    pass "wavemill-status.sh has no native-specific liveness branch"
+  fi
+else
+  fail "wavemill-status.sh not found for native liveness branch check"
+fi
+
+native_hook_states_output="$(bash "$REPO_DIR/tests/native-stage-hook-states.test.sh" 2>&1)" || native_hook_states_status=$?
+native_hook_states_status="${native_hook_states_status:-0}"
+if [[ "$native_hook_states_status" -eq 0 ]]; then
+  pass "native hook-state reuse fixtures"
+else
+  fail "native hook-state reuse fixtures: $native_hook_states_output"
+fi
+unset native_hook_states_status
 
 # ============================================================================
 # TEST 3: Monitor PR-detection regression guards
