@@ -11,10 +11,9 @@
  * API keys are never written into the result object or the transcript JSONL.
  */
 
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import type { Message } from './messages.ts';
 import type { AgentContext } from './loop.ts';
 import { runWavemillLoop, type WavemillLoopConfig } from './loop.ts';
@@ -35,14 +34,9 @@ import { createReadOnlyTools, READ_ONLY_PATH_FIELDS } from './tools/read-only.ts
 import { createGitTools, gitAfterToolCall } from './tools/git.ts';
 import { createToolRegistry } from './tools/registry.ts';
 import { toPiAgentTool } from './tools/pi-adapter.ts';
+import { loadNativePhasePrompt, registerAndRecordNativeProvenance } from './prompts.ts';
 import type { NativeAgentConfig } from '../config.ts';
 import type { ModelCapabilities, ModelRegistry, PiCompatFlags } from '../model-registry.ts';
-import { logPromptUsage } from '../prompt-registry.ts';
-import { registerNativeRuntime } from '../resource-adapters/native-runtime-adapter.ts';
-import { recordUse } from '../resource-manifest.ts';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const NATIVE_PHASE_PROMPT_PATH = resolve(__dirname, '../../../tools/prompts/native-read-only-phase.md');
 
 // ---------------------------------------------------------------------------
 // Public constants
@@ -201,79 +195,6 @@ function makeTranscriptPath(
   return join(dir, `${prefix}-${sessionId}.jsonl`);
 }
 
-/**
- * Load the native read-only phase system prompt and register it.
- *
- * Reads from the canonical template file and logs usage to the prompt registry.
- * Falls back to a minimal inline prompt if the template file is unavailable.
- * Returns the loaded content and the registered ResourceRef for manifest recording.
- */
-function loadNativePhasePrompt(repoDir?: string): {
-  content: string;
-  promptRef: import('../resource-registry.ts').ResourceRef | null;
-} {
-  let content: string;
-  try {
-    if (existsSync(NATIVE_PHASE_PROMPT_PATH)) {
-      content = readFileSync(NATIVE_PHASE_PROMPT_PATH, 'utf-8');
-    } else {
-      // Inline fallback — registered with the canonical path name so the registry
-      // records a meaningful template identity even without the file on disk.
-      content = [
-        'You are a read-only native planning agent.',
-        'Investigate the codebase using read-only tools and produce an implementation plan.',
-        'Do not modify any files.',
-      ].join('\n');
-    }
-  } catch (err) {
-    console.warn(`[native-smoke] Failed to read native phase prompt template: ${(err as Error).message}`);
-    content = [
-      'You are a read-only native planning agent.',
-      'Investigate the codebase using read-only tools and produce an implementation plan.',
-      'Do not modify any files.',
-    ].join('\n');
-  }
-
-  const promptRef = logPromptUsage(NATIVE_PHASE_PROMPT_PATH, content, { dir: repoDir });
-  return { content, promptRef };
-}
-
-/**
- * Register native runtime provenance resources and record them in the manifest.
- *
- * Non-fatal: all errors are caught and warned so resource registration failures
- * never block the agent loop.
- */
-function registerAndRecordNativeProvenance(options: {
-  phase: string;
-  provider: string;
-  model: string;
-  api: string;
-  tools: readonly { name: string; class: string }[];
-  promptRef: import('../resource-registry.ts').ResourceRef | null | undefined;
-  repoDir?: string;
-}): void {
-  try {
-    const refs = registerNativeRuntime({
-      phase: options.phase,
-      provider: options.provider,
-      model: options.model,
-      api: options.api,
-      tools: options.tools,
-      promptRef: options.promptRef ?? undefined,
-      repoDir: options.repoDir,
-    });
-
-    const sessionId = process.env.WAVEMILL_SESSION;
-    if (sessionId) {
-      if (refs.runtime) recordUse(sessionId, options.phase, refs.runtime, options.repoDir);
-      if (refs.toolSet) recordUse(sessionId, options.phase, refs.toolSet, options.repoDir);
-    }
-  } catch (err) {
-    console.warn(`[native-smoke] Failed to register native provenance: ${(err as Error).message}`);
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Dry-run
 // ---------------------------------------------------------------------------
@@ -302,6 +223,7 @@ export async function runNativeAgentDryRun(
   // Register prompt and runtime provenance resources.
   const { promptRef } = loadNativePhasePrompt(repoDir);
   registerAndRecordNativeProvenance({
+    sessionId: process.env.WAVEMILL_SESSION || `native-smoke-dry-${provider}-${phase}`,
     phase,
     provider,
     model: entry.modelId,
@@ -428,6 +350,7 @@ export async function runNativeAgentLive(
 
   // Register runtime provenance resources for manifest traceability.
   registerAndRecordNativeProvenance({
+    sessionId,
     phase,
     provider,
     model: readyEntry.modelId,
