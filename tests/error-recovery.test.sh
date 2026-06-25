@@ -274,6 +274,22 @@ WAVEMILL_SESSION="$TEST_SESSION" WAVEMILL_ISSUE="$CODEX_ISSUE" \
 EOF
 check_eq "codex hook records api errors" "error|Rate limit exceeded" "$(jq -r '.state + "|" + .detail' "/tmp/wavemill-${TEST_SESSION}-${CODEX_ISSUE}.hook")"
 
+CODEX_CAPACITY_ISSUE="HOK-5A"
+WAVEMILL_SESSION="$TEST_SESSION" WAVEMILL_ISSUE="$CODEX_CAPACITY_ISSUE" \
+  bash "$REPO_DIR/shared/hooks/codex-status-monitor.sh" <<'EOF'
+{"type":"api_error","error":{"message":"Selected model is at capacity. Please try a different model."}}
+EOF
+check_eq "codex hook classifies capacity errors" "error|model_at_capacity: Selected model is at capacity. Please try a different model." "$(jq -r '.state + "|" + .detail' "/tmp/wavemill-${TEST_SESSION}-${CODEX_CAPACITY_ISSUE}.hook")"
+check_eq "codex hook rewrites capacity event" "model_capacity" "$(jq -r '.event' "/tmp/wavemill-${TEST_SESSION}-${CODEX_CAPACITY_ISSUE}.hook")"
+
+CODEX_CAPACITY_OUTPUT_ISSUE="HOK-5B"
+WAVEMILL_SESSION="$TEST_SESSION" WAVEMILL_ISSUE="$CODEX_CAPACITY_OUTPUT_ISSUE" \
+  bash "$REPO_DIR/shared/hooks/codex-status-monitor.sh" <<'EOF'
+{"type":"notification","message":"Selected model is at capacity. Please try a different model."}
+{"type":"task_complete"}
+EOF
+check_eq "codex hook does not misclassify non-error capacity text" "idle|stream_end" "$(jq -r '.state + "|" + .event' "/tmp/wavemill-${TEST_SESSION}-${CODEX_CAPACITY_OUTPUT_ISSUE}.hook")"
+
 CODEX_CRASH_ISSUE="HOK-7"
 WAVEMILL_SESSION="$TEST_SESSION" WAVEMILL_ISSUE="$CODEX_CRASH_ISSUE" \
   bash "$REPO_DIR/shared/hooks/codex-status-monitor.sh" <<'EOF'
