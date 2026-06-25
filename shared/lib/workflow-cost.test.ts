@@ -435,6 +435,46 @@ test('computeWorkflowCost includes native session JSONL in workflow totals', () 
   }
 });
 
+test('computeWorkflowCost accepts native provider agent labels', () => {
+  const base = join(tmpdir(), `wavemill-test-${randomUUID()}`);
+  const worktreePath = join(base, 'fake-worktree');
+  const nativeSessionsDir = join(
+    worktreePath,
+    '.wavemill',
+    'runs',
+    'HOK-2305',
+    'native-sessions',
+  );
+  mkdirSync(nativeSessionsDir, { recursive: true });
+
+  try {
+    writeFileSync(
+      join(nativeSessionsDir, 'session.jsonl'),
+      [
+        nativeSessionStarted('gpt-5.1'),
+        nativeAssistantMessage({ input: 1_000, output: 500 }),
+      ].join('\n'),
+    );
+
+    const result = computeWorkflowCost({
+      worktreePath,
+      branchName: 'task/test',
+      agentType: 'native-openai',
+      pricingTable: {
+        'gpt-5.1': { inputCostPerMTok: 2, outputCostPerMTok: 8 },
+      },
+    });
+
+    assert.equal(result.status, 'success');
+    if (result.status === 'success') {
+      assert.ok(result.models['gpt-5.1']);
+      assert.deepEqual(result.pricingUsed['gpt-5.1'], { inputCostPerMTok: 2, outputCostPerMTok: 8 });
+    }
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
 test('computeWorkflowCost returns zero cost for unknown native model pricing', () => {
   const base = join(tmpdir(), `wavemill-test-${randomUUID()}`);
   const worktreePath = join(base, 'fake-worktree');
@@ -466,6 +506,9 @@ test('computeWorkflowCost returns zero cost for unknown native model pricing', (
     if (result.status === 'success') {
       assert.equal(result.totalCostUsd, 0);
       assert.equal(result.models['unknown-native-model'].costUsd, 0);
+      assert.equal(result.models['unknown-native-model'].inputTokens, 100);
+      assert.equal(result.models['unknown-native-model'].outputTokens, 50);
+      assert.deepEqual(result.pricingUsed, {});
     }
   } finally {
     rmSync(base, { recursive: true, force: true });

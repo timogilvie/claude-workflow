@@ -23,7 +23,13 @@ import { resolveProjectsDirs } from './workflow-cost.ts';
 // ────────────────────────────────────────────────────────────────
 
 /** Supported agent identifiers. */
-export type AgentType = 'claude' | 'codex' | 'claude-deepseek' | 'native';
+export type AgentType =
+  | 'claude'
+  | 'codex'
+  | 'claude-deepseek'
+  | 'native'
+  | 'native-openai'
+  | 'native-openrouter';
 
 /** Per-model aggregated token usage (without cost — cost is computed later). */
 export interface SessionModelUsage {
@@ -491,6 +497,10 @@ export class NativeSessionAdapter implements SessionAdapter {
   }
 }
 
+function isNativeAgentTypeLabel(agentType?: string): boolean {
+  return typeof agentType === 'string' && agentType.startsWith('native');
+}
+
 // ────────────────────────────────────────────────────────────────
 // Auto-detection
 // ────────────────────────────────────────────────────────────────
@@ -501,13 +511,20 @@ export class NativeSessionAdapter implements SessionAdapter {
  * This is a fallback mechanism for when the recorded agent type might be
  * incorrect (e.g., due to bugs in agent assignment logic).
  *
- * @returns 'claude' | 'codex' | null
+ * @returns detected agent label or null when no sessions exist
  */
 export function detectAgentType(opts: SessionScanOptions): AgentType | null {
   const debug = process.env.DEBUG_COST === '1' || process.env.DEBUG_COST === 'true';
 
+  const nativeAdapter = new NativeSessionAdapter();
   const claudeAdapter = new ClaudeSessionAdapter();
   const codexAdapter = new CodexSessionAdapter();
+
+  const nativeResult = nativeAdapter.scan(opts);
+  if (nativeResult && nativeResult.turnCount > 0) {
+    if (debug) console.log('[DEBUG_COST] Auto-detected agent: native');
+    return 'native';
+  }
 
   const claudeResult = claudeAdapter.scan(opts);
   const codexResult = codexAdapter.scan(opts);
@@ -546,9 +563,11 @@ export function detectAgentType(opts: SessionScanOptions): AgentType | null {
  * Defaults to Claude adapter for backwards compatibility.
  */
 export function getSessionAdapter(agentType?: AgentType | string): SessionAdapter {
+  if (isNativeAgentTypeLabel(agentType)) {
+    return new NativeSessionAdapter();
+  }
+
   switch (agentType) {
-    case 'native':
-      return new NativeSessionAdapter();
     case 'codex':
       return new CodexSessionAdapter();
     case 'claude-deepseek':

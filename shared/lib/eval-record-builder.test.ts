@@ -141,6 +141,36 @@ describe('eval-record-builder', () => {
       expect(baseRecord.provider).toBeUndefined();
       expect(baseRecord.endpoint).toBeUndefined();
     });
+
+    it('enrichEvalRecord infers native provider from agent type', () => {
+      enrichEvalRecord(baseRecord, {
+        agentType: 'native-openai',
+        executedPlanning: {
+          agent: 'native-openai',
+          model: 'gpt-5.1',
+          status: 'completed',
+          source: '.planning-result.json',
+        },
+      });
+
+      expect(baseRecord.agentType).toBe('native-openai');
+      expect(baseRecord.provider).toBe('openai');
+      expect(baseRecord.executedPlanning).toEqual({
+        agent: 'native-openai',
+        model: 'gpt-5.1',
+        status: 'completed',
+        source: '.planning-result.json',
+      });
+    });
+
+    it('prefers explicit provider over native provider inference', () => {
+      enrichEvalRecord(baseRecord, {
+        agentType: 'native-openrouter',
+        provider: 'custom-provider',
+      });
+
+      expect(baseRecord.provider).toBe('custom-provider');
+    });
   });
 
   describe('attachTaskContextMetadata', () => {

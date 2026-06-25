@@ -326,6 +326,23 @@ describe('artifacts round-trip', () => {
     assert.deepEqual(read?.artifacts, artifacts);
   });
 
+  it('round-trips native stage identity for planning artifacts', async () => {
+    const result = makeResult({
+      status: 'completed',
+      finishedAt: '2026-04-09T11:00:00Z',
+      agent: 'native-openai',
+      model: 'gpt-5.1',
+      notes: 'Native planning completed',
+      artifacts: { type: 'planning', planFile: 'features/native/plan.md' },
+    });
+    await writeStageResult(testDir, result);
+
+    const read = await readStageResult(testDir, 'planning');
+    assert.equal(read?.agent, 'native-openai');
+    assert.equal(read?.model, 'gpt-5.1');
+    assert.deepEqual(read?.artifacts, { type: 'planning', planFile: 'features/native/plan.md' });
+  });
+
   it('handles result without artifacts (backward compat)', async () => {
     // Write a result without artifacts (simulating old format)
     const result = makeResult();

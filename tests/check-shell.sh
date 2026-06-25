@@ -442,6 +442,21 @@ for fixture in "$REPO_DIR"/tests/fixtures/startup/*.sh; do
 done
 
 # ============================================================================
+# TEST 2E: Native hook-state reuse fixtures
+# ============================================================================
+echo ""
+echo "=== Native Hook-State Reuse ==="
+
+native_hook_states_output="$(bash "$REPO_DIR/tests/native-stage-hook-states.test.sh" 2>&1)" || native_hook_states_status=$?
+native_hook_states_status="${native_hook_states_status:-0}"
+if [[ "$native_hook_states_status" -eq 0 ]]; then
+  pass "native hook-state reuse fixtures"
+else
+  fail "native hook-state reuse fixtures: $native_hook_states_output"
+fi
+unset native_hook_states_status
+
+# ============================================================================
 # TEST 2D: Base-branch fetch cache guards
 # ============================================================================
 echo ""

@@ -727,6 +727,36 @@ describe('NativeSessionAdapter', () => {
 // ── Auto-Detection Tests ───────────────────────────────────────
 
 describe('detectAgentType', () => {
+  it('detects native when native sessions exist', () => {
+    const { worktreePath, nativeSessionsDir, cleanup } = setupNativeSessionDir();
+    try {
+      writeFileSync(
+        join(nativeSessionsDir, 'session.jsonl'),
+        [
+          nativeSessionStarted('gpt-5.1'),
+          nativeAssistantMessage({ model: 'gpt-5.1', input: 100, output: 50 }),
+        ].join('\n'),
+      );
+
+      const detected = detectAgentType({ worktreePath, branchName: 'task/test' });
+      assert.equal(detected, 'native');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('does not detect native for empty native session files', () => {
+    const { worktreePath, nativeSessionsDir, cleanup } = setupNativeSessionDir();
+    try {
+      writeFileSync(join(nativeSessionsDir, 'session.jsonl'), nativeSessionStarted('gpt-5.1'));
+
+      const detected = detectAgentType({ worktreePath, branchName: 'task/test' });
+      assert.equal(detected, null);
+    } finally {
+      cleanup();
+    }
+  });
+
   it('detects claude when only Claude sessions exist', () => {
     const { worktreePath, projectsDir, cleanup } = setupClaudeSessionDir();
     try {
@@ -841,6 +871,11 @@ describe('getSessionAdapter', () => {
   it('returns NativeSessionAdapter for "native"', () => {
     const adapter = getSessionAdapter('native');
     assert.ok(adapter instanceof NativeSessionAdapter);
+  });
+
+  it('returns NativeSessionAdapter for native provider labels', () => {
+    assert.ok(getSessionAdapter('native-openai') instanceof NativeSessionAdapter);
+    assert.ok(getSessionAdapter('native-openrouter') instanceof NativeSessionAdapter);
   });
 
   it('returns ClaudeSessionAdapter for unknown agent type', () => {

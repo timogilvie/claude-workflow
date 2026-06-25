@@ -132,6 +132,17 @@ export function attachProviderMetadata(
   }
 }
 
+function inferProviderFromAgentType(agentType?: string): string | undefined {
+  switch (agentType) {
+    case 'native-openai':
+      return 'openai';
+    case 'native-openrouter':
+      return 'openrouter';
+    default:
+      return undefined;
+  }
+}
+
 export function attachChallengePairId(record: EvalRecord, challengePairId?: string): void {
   if (challengePairId) {
     record.challengePairId = challengePairId;
@@ -1124,7 +1135,11 @@ export function attachFeatureOutcomeDiagnostics(
  */
 export function enrichEvalRecord(record: EvalRecord, metadata: EvalRecordMetadata): void {
   attachAgentType(record, metadata.agentType);
-  attachProviderMetadata(record, metadata.provider, metadata.endpoint);
+  attachProviderMetadata(
+    record,
+    metadata.provider ?? inferProviderFromAgentType(metadata.agentType),
+    metadata.endpoint,
+  );
   attachChallengePairId(record, metadata.challengePairId);
   attachChallengeRouteContext(record, metadata.challengeRouteContext);
   attachRouteProvenance(record, metadata.routeProvenance);
@@ -1169,7 +1184,11 @@ export function enrichTrainingMetadata(
   metadata: EnrichTrainingMetadataInput,
 ): void {
   attachAgentType(record, metadata.agentType);
-  attachProviderMetadata(record, metadata.provider, metadata.endpoint);
+  attachProviderMetadata(
+    record,
+    metadata.provider ?? inferProviderFromAgentType(metadata.agentType),
+    metadata.endpoint,
+  );
   attachChallengePairId(record, metadata.challengePairId);
   attachChallengeRouteContext(record, metadata.challengeRouteContext);
   attachRouteProvenance(record, metadata.routeProvenance);

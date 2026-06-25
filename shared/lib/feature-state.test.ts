@@ -251,6 +251,65 @@ test('coding-complete: blocked-completion artifact contributes blocker', async (
   }
 });
 
+test('native stage results preserve agent/model and reuse existing lifecycle states', async () => {
+  const featureDir = makeTempDir();
+  try {
+    await writeStageResult(featureDir, {
+      stage: 'planning',
+      status: 'awaiting_user',
+      startedAt: '2026-06-01T10:00:00.000Z',
+      finishedAt: null,
+      agent: 'native-openai',
+      model: 'gpt-5.1',
+      notes: 'Native plan ready for approval',
+      artifacts: { type: 'planning', planFile: 'features/native/plan.md' },
+    });
+
+    const awaitingState = await deriveFeatureState({ featureDir, issueId: 'HOK-2310', slug: 'native-state' });
+    assert.equal(awaitingState.currentPhase, 'planning');
+    assert.equal(awaitingState.normalizedState, 'awaiting_user');
+    assert.equal(awaitingState.stages.planning?.agent, 'native-openai');
+    assert.equal(awaitingState.stages.planning?.model, 'gpt-5.1');
+
+    await writeStageResult(featureDir, {
+      stage: 'coding',
+      status: 'running',
+      startedAt: '2026-06-01T10:05:00.000Z',
+      finishedAt: null,
+      agent: 'native-openrouter',
+      model: 'openai/gpt-5-mini',
+      notes: 'Native coding in progress',
+      artifacts: { type: 'coding', filesChanged: 1 },
+    });
+
+    const runningState = await deriveFeatureState({ featureDir, issueId: 'HOK-2310', slug: 'native-state' });
+    assert.equal(runningState.currentPhase, 'coding');
+    assert.equal(runningState.normalizedState, 'running');
+    assert.equal(runningState.stages.coding?.agent, 'native-openrouter');
+    assert.equal(runningState.stages.coding?.model, 'openai/gpt-5-mini');
+
+    await writeStageResult(featureDir, {
+      stage: 'review',
+      status: 'failed',
+      startedAt: '2026-06-01T10:30:00.000Z',
+      finishedAt: '2026-06-01T10:35:00.000Z',
+      agent: 'native-openai',
+      model: 'gpt-5.1',
+      notes: 'Native review failed',
+      failureReason: 'missing edge-case coverage',
+      artifacts: { type: 'review', findingsCount: 1, blockingIssues: 1 },
+    });
+
+    const failedState = await deriveFeatureState({ featureDir, issueId: 'HOK-2310', slug: 'native-state' });
+    assert.equal(failedState.currentPhase, 'review');
+    assert.equal(failedState.normalizedState, 'failed');
+    assert.equal(failedState.stages.review?.agent, 'native-openai');
+    assert.equal(failedState.stages.review?.model, 'gpt-5.1');
+  } finally {
+    cleanup([featureDir]);
+  }
+});
+
 // ────────────────────────────────────────────────────────────────
 // Test: ready-failed
 // ────────────────────────────────────────────────────────────────
