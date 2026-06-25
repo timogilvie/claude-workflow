@@ -109,7 +109,7 @@ async function checkCodexCLI(): Promise<CheckResult> {
 /**
  * Check network connectivity to Anthropic API
  */
-async function checkNetwork(): Promise<CheckResult> {
+async function checkAnthropicNetwork(): Promise<CheckResult> {
   try {
     const result = execShellCommand('curl -I -s -o /dev/null -w "%{http_code}" https://api.anthropic.com --max-time 10', {
       encoding: 'utf-8',
@@ -121,13 +121,13 @@ async function checkNetwork(): Promise<CheckResult> {
     // 200-299 = success, 401 = auth issue but network is working
     if (statusCode.match(/^[23]\d{2}$/) || statusCode === '401') {
       return {
-        name: 'Network Connectivity',
+        name: 'Anthropic API Connectivity',
         passed: true,
         message: `Can reach Anthropic API (HTTP ${statusCode})`,
       };
     } else {
       return {
-        name: 'Network Connectivity',
+        name: 'Anthropic API Connectivity',
         passed: false,
         message: `Unexpected status: HTTP ${statusCode}`,
         details: [
@@ -138,7 +138,7 @@ async function checkNetwork(): Promise<CheckResult> {
     }
   } catch (error) {
     return {
-      name: 'Network Connectivity',
+      name: 'Anthropic API Connectivity',
       passed: false,
       message: `Cannot reach Anthropic API: ${(error as Error).message}`,
       details: [
@@ -280,11 +280,12 @@ function printTroubleshooting(results: CheckResult[]): void {
     console.log('  4. Verify: which codex');
   }
 
-  // Network check failed
-  // Note: network check probes api.anthropic.com (Claude provider); Codex auth is local CLI state, not an outbound probe.
-  const networkFailed = failedChecks.find(r => r.name === 'Network Connectivity');
+  // Anthropic network check failed
+  // Note: This only checks Anthropic API connectivity. Claude CLI auth is checked separately.
+  // Codex auth is checked via local CLI state (checkCodexCLI), not via network probes.
+  const networkFailed = failedChecks.find(r => r.name === 'Anthropic API Connectivity');
   if (networkFailed) {
-    console.log('\nNetwork connectivity issues:');
+    console.log('\nAnthropic API connectivity issues:');
     console.log('  1. Check internet connection');
     console.log('  2. Test: curl -I https://api.anthropic.com');
     console.log('  3. Check firewall/proxy settings');
@@ -326,7 +327,7 @@ runTool({
     results.push(await checkGitRepo());
     results.push(await checkClaudeCLI());
     results.push(await checkCodexCLI());
-    results.push(await checkNetwork());
+    results.push(await checkAnthropicNetwork());
 
     // Print results
     console.log();

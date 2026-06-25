@@ -20,7 +20,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runTool } from '../shared/lib/tool-runner.ts';
 import { loadPromptTemplate } from '../shared/lib/prompt-utils.ts';
-import { callLLM } from '../shared/lib/llm-cli.ts';
+import { callLLM, resolveProviderForModel } from '../shared/lib/llm-cli.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -172,7 +172,9 @@ runTool({
     console.log(`Total records: ${records.length}`);
     console.log(`Need backfill: ${toBackfill.length}`);
     console.log(`Will process: ${processCount}`);
+    const provider = resolveProviderForModel(model, process.cwd());
     console.log(`Model: ${model}`);
+    console.log(`Provider: ${provider}`);
     console.log();
 
     if (dryRun) {
@@ -201,8 +203,10 @@ runTool({
 
       try {
         const prompt = buildBackfillPrompt(template, record);
+        const provider = resolveProviderForModel(model, process.cwd());
         const result = await callLLM(prompt, {
           model,
+          provider,
           mode: 'sync',
           timeout: 180_000,
           stripToolCalls: true,
