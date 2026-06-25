@@ -484,7 +484,7 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
     stageArtifacts.executionModel,
   );
 
-  // Resolve provider metadata: prefer native when agentType is native or native sessions exist
+  // Resolve provider metadata: prefer native when agentType is native; fall back to DeepSeek
   let providerMetadata: { provider: string; endpoint?: string } | null = null;
   if (agentType === 'native' && worktreePath) {
     providerMetadata = getNativeProviderMetadata(worktreePath);

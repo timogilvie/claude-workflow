@@ -690,8 +690,7 @@ test('native agent/model: stage results with native agent round-trip through fea
     const state = await deriveFeatureState({
       featureDir,
       issueId: 'HOK-2310',
-      featureSlug: 'native-test',
-      archiveDir: undefined,
+      slug: 'native-test',
     });
 
     // Planning phase should be captured with native agent
