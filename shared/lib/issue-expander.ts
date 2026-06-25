@@ -19,6 +19,7 @@ import { detectSubsystems } from './subsystem-detector.ts';
 import { detectDriftForIssue, formatDriftWarning } from './drift-detector.ts';
 import { errorMessage } from './error-utils.ts';
 import { buildScopeConstraintContext, type OperatingMode } from './scope-shrinker.ts';
+import { getNativeExpansionConfig } from './config.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Public API
@@ -143,6 +144,78 @@ export function buildIssueExpansionCallOptions(cliCmd?: string): LLMCallOptions 
   };
 }
 
+export interface NativeExpansionDeniedToolCall {
+  tool: string;
+  reason: string;
+}
+
+export interface NativeExpansionMetadata {
+  agent: 'native-openai' | 'native-openrouter';
+  model: string;
+  provider: 'openai' | 'openrouter';
+  api: string;
+  transcriptPath: string;
+  cost: number;
+  durationMs: number;
+  stopReason: string;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  deniedToolCalls: ReadonlyArray<NativeExpansionDeniedToolCall>;
+}
+
+export interface ExpandIssueOptions {
+  promptTemplate: string;
+  issueContext: string;
+  codebaseContext?: string;
+  claudeCmd?: string;
+  mode?: OperatingMode;
+  repoDir?: string;
+  issueId?: string;
+  env?: Record<string, string | undefined>;
+}
+
+export interface ExpandIssueResult {
+  text: string;
+  native?: NativeExpansionMetadata;
+}
+
+interface ExpansionDispatchDecision {
+  kind: 'default' | 'native';
+  fallbackOnUnavailable: boolean;
+}
+
+export interface ExpandIssueInternals {
+  expandIssueWithClaude?: typeof expandIssueWithClaude;
+  runNativeExpansion?: (options: {
+    promptTemplate: string;
+    issueContext: string;
+    codebaseContext: string;
+    mode: OperatingMode;
+    repoDir: string;
+    issueId?: string;
+    env?: Record<string, string | undefined>;
+  }) => Promise<ExpandIssueResult>;
+  importNativeExpansion?: () => Promise<{
+    NativeExpansionUnavailableError: typeof Error;
+    runNativeExpansion: NonNullable<ExpandIssueInternals['runNativeExpansion']>;
+  }>;
+}
+
+export function resolveExpansionDispatch(repoDir?: string): ExpansionDispatchDecision {
+  const nativeExpansion = getNativeExpansionConfig(repoDir);
+  if (!nativeExpansion.enabled || !nativeExpansion.allowedForExpansion) {
+    return {
+      kind: 'default',
+      fallbackOnUnavailable: nativeExpansion.fallbackOnUnavailable,
+    };
+  }
+
+  return {
+    kind: 'native',
+    fallbackOnUnavailable: nativeExpansion.fallbackOnUnavailable,
+  };
+}
+
 /**
  * Expand issue with Claude LLM.
  *
@@ -181,6 +254,56 @@ export async function expandIssueWithClaude(
   const result = await callClaude(fullPrompt, buildIssueExpansionCallOptions(claudeCmd));
 
   return result.text;
+}
+
+export async function expandIssue(
+  options: ExpandIssueOptions,
+  internals: ExpandIssueInternals = {},
+): Promise<ExpandIssueResult> {
+  const repoDir = options.repoDir ?? process.cwd();
+  const codebaseContext = options.codebaseContext ?? '';
+  const mode = options.mode ?? 'normal';
+  const dispatch = resolveExpansionDispatch(repoDir);
+  const callClaudeImpl = internals.expandIssueWithClaude ?? expandIssueWithClaude;
+
+  if (dispatch.kind === 'native') {
+    const loadNativeExpansion = internals.importNativeExpansion
+      ?? (async () => await import('./native-expansion.ts'));
+    const nativeModule = await loadNativeExpansion();
+
+    try {
+      const runNativeExpansion = internals.runNativeExpansion ?? nativeModule.runNativeExpansion;
+      return await runNativeExpansion({
+        promptTemplate: options.promptTemplate,
+        issueContext: options.issueContext,
+        codebaseContext,
+        mode,
+        repoDir,
+        issueId: options.issueId,
+        env: options.env,
+      });
+    } catch (error) {
+      const NativeExpansionUnavailableError = nativeModule.NativeExpansionUnavailableError;
+      if (error instanceof NativeExpansionUnavailableError) {
+        if (dispatch.fallbackOnUnavailable) {
+          console.warn(`[native-expansion] ${error.message}; falling back to Claude expansion`);
+        } else {
+          throw error;
+        }
+      } else {
+        throw error;
+      }
+    }
+  }
+
+  const text = await callClaudeImpl(
+    options.promptTemplate,
+    options.issueContext,
+    codebaseContext,
+    options.claudeCmd,
+    mode,
+  );
+  return { text };
 }
 
 /**
