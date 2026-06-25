@@ -305,6 +305,7 @@ export async function runNativeReview(
       ...(provider.entry.model.headers ?? {}),
       Authorization: `Bearer ${apiKey}`,
     },
+    // model.compat is provider-specific opaque config; runtime treats it as unknown.
     compat: provider.entry.model.compat as unknown,
   };
 
@@ -322,6 +323,8 @@ export async function runNativeReview(
   const loopResult = await nativeReviewDeps.runWavemillLoop({
     model: modelConfig,
     context: loopContext,
+    // AgentMessage and Message are structurally compatible at runtime; pi-agent-core
+    // exports diverged nominal types so a direct cast is required.
     convertToLlm: (messages) => messages as unknown as Message[],
     afterToolCall: gitAfterToolCall,
     toolPolicy: {
