@@ -13,6 +13,8 @@ export interface MergeQueuePr {
   candidatePromotedAt?: string;
   candidateLastProgressAt?: string;
   candidateSkippedAt?: string;
+  workflowStatus?: string;
+  prState?: string;
 }
 
 export interface MergeQueueConfigResolved {
@@ -27,6 +29,8 @@ export interface MergeQueueTickPlan {
   stuckIssues: string[];
   selectedIssues: string[];
 }
+
+export const TERMINAL_WORKFLOW_STATUSES = ['merged', 'completed-external', 'aborted'] as const;
 
 function timestampMs(value?: string): number {
   if (!value) return 0;
@@ -55,6 +59,24 @@ function comparePriority(left: MergeQueuePr, right: MergeQueuePr): number {
   if (readyDelta !== 0) return readyDelta;
 
   return left.issue.localeCompare(right.issue);
+}
+
+export function isTerminalWorkflowStatus(status?: string): boolean {
+  if (!status) return false;
+  return (TERMINAL_WORKFLOW_STATUSES as readonly string[]).includes(status);
+}
+
+function normalizedPrState(prState?: string): string {
+  return prState?.trim().toUpperCase() ?? '';
+}
+
+export function isKnownClosedOrMergedPr(pr: Pick<MergeQueuePr, 'prState'>): boolean {
+  const prState = normalizedPrState(pr.prState);
+  return prState === 'CLOSED' || prState === 'MERGED';
+}
+
+export function isEligibleMergeCandidate(pr: Pick<MergeQueuePr, 'workflowStatus' | 'prState'>): boolean {
+  return !isTerminalWorkflowStatus(pr.workflowStatus) && !isKnownClosedOrMergedPr(pr);
 }
 
 export function computeConflictGroups(prs: MergeQueuePr[]): MergeQueuePr[][] {
@@ -115,10 +137,14 @@ export function selectMergeCandidates(options: {
   config: MergeQueueConfigResolved;
 }): MergeQueuePr[] {
   const { readyPrs, activeCandidates, now, config } = options;
-  const selected = [...activeCandidates].sort(comparePriority).slice(0, config.maxConcurrentCandidates);
+  const eligibleActiveCandidates = activeCandidates
+    .filter((pr) => isEligibleMergeCandidate(pr));
+  const eligibleReadyPrs = readyPrs
+    .filter((pr) => isEligibleMergeCandidate(pr));
+  const selected = [...eligibleActiveCandidates].sort(comparePriority).slice(0, config.maxConcurrentCandidates);
   const selectedIssues = new Set(selected.map((pr) => pr.issue));
 
-  const eligible = readyPrs
+  const eligible = eligibleReadyPrs
     .filter((pr) => !selectedIssues.has(pr.issue))
     .filter((pr) => !coolingDown(pr, now, config))
     .sort(comparePriority);
@@ -181,18 +207,19 @@ export function planMergeQueueTick(options: {
   config: MergeQueueConfigResolved;
 }): MergeQueueTickPlan {
   const { readyPrs, now, config } = options;
-  const stuckIssues = readyPrs
+  const eligibleReadyPrs = readyPrs.filter((pr) => isEligibleMergeCandidate(pr));
+  const stuckIssues = eligibleReadyPrs
     .filter((pr) => pr.queueState === 'merge-candidate')
     .filter((pr) => isCandidateStuck(pr, now, config))
     .map((pr) => pr.issue);
 
-  const activeCandidates = readyPrs
+  const activeCandidates = eligibleReadyPrs
     .filter((pr) => pr.queueState === 'merge-candidate')
     .filter((pr) => !stuckIssues.includes(pr.issue));
-  const eligibleReadyPrs = readyPrs.filter((pr) => !stuckIssues.includes(pr.issue));
+  const selectableReadyPrs = eligibleReadyPrs.filter((pr) => !stuckIssues.includes(pr.issue));
 
   const selectedIssues = selectMergeCandidates({
-    readyPrs: eligibleReadyPrs,
+    readyPrs: selectableReadyPrs,
     activeCandidates,
     now,
     config,

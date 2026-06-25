@@ -1309,6 +1309,166 @@ EOF
   check_eq "merge queue disabled: task remains active" "1" "$(kv_value "$tick" active_count)"
 }
 
+test_merge_queue_ignores_preserved_merged_tasks() {
+  local slug="merge-queue-preserved-merged"
+  local issue="HOK-2309"
+  local repo tick sibling_root merged_slug_one merged_slug_two
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+
+  sibling_root="$(dirname "$repo")"
+  merged_slug_one="merge-queue-preserved-merged-one"
+  merged_slug_two="merge-queue-preserved-merged-two"
+
+  mkdir -p "$repo/features/$slug/ready"
+  mkdir -p "$sibling_root/$merged_slug_one/features/$merged_slug_one/ready"
+  mkdir -p "$sibling_root/$merged_slug_two/features/$merged_slug_two/ready"
+
+  cat > "$repo/features/$slug/ready/.ready-result.json" <<'EOF'
+{
+  "stage": "ready",
+  "status": "completed",
+  "startedAt": "2026-06-25T11:50:00Z",
+  "finishedAt": "2026-06-25T12:00:00Z",
+  "artifacts": {
+    "type": "ready",
+    "verdict": "pass",
+    "prNumber": 841,
+    "readyBaseSha": "sha-main",
+    "queueState": "ready-stale"
+  }
+}
+EOF
+
+  cat > "$sibling_root/$merged_slug_one/features/$merged_slug_one/ready/.ready-result.json" <<'EOF'
+{
+  "stage": "ready",
+  "status": "completed",
+  "startedAt": "2026-06-25T11:30:00Z",
+  "finishedAt": "2026-06-25T11:40:00Z",
+  "artifacts": {
+    "type": "ready",
+    "verdict": "pass",
+    "prNumber": 839,
+    "readyBaseSha": "sha-main",
+    "queueState": "merge-candidate"
+  }
+}
+EOF
+
+  cat > "$sibling_root/$merged_slug_two/features/$merged_slug_two/ready/.ready-result.json" <<'EOF'
+{
+  "stage": "ready",
+  "status": "completed",
+  "startedAt": "2026-06-25T11:35:00Z",
+  "finishedAt": "2026-06-25T11:45:00Z",
+  "artifacts": {
+    "type": "ready",
+    "verdict": "pass",
+    "prNumber": 838,
+    "readyBaseSha": "sha-main",
+    "queueState": "merge-candidate"
+  }
+}
+EOF
+
+  cat > "$repo/.wavemill/state.json" <<'EOF'
+{
+  "tasks": {
+    "HOK-2308": {
+      "slug": "merge-queue-preserved-merged-one",
+      "branch": "task/merge-queue-preserved-merged-one",
+      "worktree": "ignored",
+      "phase": "ready",
+      "status": "merged",
+      "pr": "839"
+    },
+    "HOK-2318": {
+      "slug": "merge-queue-preserved-merged-two",
+      "branch": "task/merge-queue-preserved-merged-two",
+      "worktree": "ignored",
+      "phase": "ready",
+      "status": "merged",
+      "pr": "838"
+    },
+    "HOK-2309": {
+      "slug": "merge-queue-preserved-merged",
+      "branch": "task/merge-queue-preserved-merged",
+      "worktree": "ignored",
+      "phase": "ready",
+      "status": "running",
+      "pr": "841"
+    }
+  }
+}
+EOF
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" '
+    CURRENT_PHASE="ready"
+    TOOLS_DIR="$PWD/tools"
+    MERGE_QUEUE_MAX_CONCURRENT=2
+    BRANCH_BY_ISSUE["HOK-2308"]="task/merge-queue-preserved-merged-one"
+    BRANCH_BY_ISSUE["HOK-2318"]="task/merge-queue-preserved-merged-two"
+    SLUG_BY_ISSUE["HOK-2308"]="merge-queue-preserved-merged-one"
+    SLUG_BY_ISSUE["HOK-2318"]="merge-queue-preserved-merged-two"
+    PR_BY_ISSUE["HOK-2308"]="839"
+    PR_BY_ISSUE["HOK-2318"]="838"
+    PR_BY_ISSUE["HOK-2309"]="841"
+    get_task_phase() { printf "%s\n" "ready"; }
+    read_state_value() {
+      local default="$1"
+      shift
+      local value
+      if value=$(jq -r "$@" "$STATE_FILE" 2>/dev/null); then
+        printf "%s\n" "$value"
+      else
+        printf "%s\n" "$default"
+      fi
+    }
+    merge_queue_enabled() { return 0; }
+    ready_queue_state() { jq -r ".artifacts.queueState // \"\"" "$1/.ready-result.json" 2>/dev/null || true; }
+    ready_base_sha() { jq -r ".artifacts.readyBaseSha // \"\"" "$1/.ready-result.json" 2>/dev/null || true; }
+    ready_queue_field() {
+      local state_dir="$1" field="$2"
+      jq -r --arg field "$field" ".artifacts[\$field] // \"\"" "$state_dir/.ready-result.json" 2>/dev/null || true
+    }
+    ready_changed_files_json() {
+      case "$3" in
+        839) printf "[\"merged-one.ts\"]\n" ;;
+        838) printf "[\"merged-two.ts\"]\n" ;;
+        841) printf "[\"open-ready.ts\"]\n" ;;
+        *) printf "[]\n" ;;
+      esac
+    }
+    get_main_head_sha() { printf "%s\n" "sha-main"; }
+    ready_candidate_selected() {
+      jq -e --arg issue "$1" ".selectedIssues // [] | index(\$issue) != null" "$MERGE_QUEUE_SELECTION_FILE" >/dev/null 2>&1
+    }
+    promote_merge_candidate() {
+      local state_dir="$2" new_sha="$3" tmp
+      tmp="$(mktemp)"
+      jq --arg new_sha "$new_sha" ".artifacts.queueState = \"merge-candidate\" | .artifacts.targetBaseSha = \$new_sha" "$state_dir/.ready-result.json" > "$tmp"
+      mv "$tmp" "$state_dir/.ready-result.json"
+    }
+    demote_merge_candidate() {
+      local state_dir="$2" reason="$3" tmp
+      tmp="$(mktemp)"
+      jq --arg reason "$reason" ".artifacts.queueState = \"ready-stale\" | .artifacts.candidateSkipReason = \$reason" "$state_dir/.ready-result.json" > "$tmp"
+      mv "$tmp" "$state_dir/.ready-result.json"
+    }
+    launch_ready_phase() { printf "%s\n" "launched" > "$REPO_UNDER_TEST/.wavemill/launched"; return 0; }
+  ')"
+
+  check_contains "merge queue preserved: selected open issue" "$(cat "$repo/.wavemill/merge-queue-selection.json")" '"HOK-2309"'
+  check_not_contains "merge queue preserved: excludes first merged issue" "$(cat "$repo/.wavemill/merge-queue-selection.json")" '"HOK-2308"'
+  check_not_contains "merge queue preserved: excludes second merged issue" "$(cat "$repo/.wavemill/merge-queue-selection.json")" '"HOK-2318"'
+  check_eq "merge queue preserved: open task promoted" "merge-candidate" "$(jq -r '.artifacts.queueState' "$repo/features/$slug/ready/.ready-result.json")"
+  check_eq "merge queue preserved: merged task one artifact unchanged" "merge-candidate" "$(jq -r '.artifacts.queueState' "$sibling_root/$merged_slug_one/features/$merged_slug_one/ready/.ready-result.json")"
+  check_eq "merge queue preserved: merged task two artifact unchanged" "merge-candidate" "$(jq -r '.artifacts.queueState' "$sibling_root/$merged_slug_two/features/$merged_slug_two/ready/.ready-result.json")"
+  check_file_absent "merge queue preserved: open task not rerun" "$repo/.wavemill/launched"
+  check_eq "merge queue preserved: task remains active" "1" "$(kv_value "$tick" active_count)"
+}
+
 test_coding_blocked_completion_needs_user_without_advancing() {
   local slug="coding-blocked-completion"
   local issue="HOK-1642-BLOCKED"
@@ -2184,6 +2344,7 @@ test_already_expanded_packet_skips_mandatory_expansion
 test_resume_uses_expanded_phase_config_over_stale_state
 test_merge_queue_marks_non_candidate_stale_without_rerun
 test_merge_queue_disabled_keeps_legacy_rerun
+test_merge_queue_ignores_preserved_merged_tasks
 test_coding_blocked_completion_needs_user_without_advancing
 test_coding_blocked_completion_auto_advances_when_valid
 test_coding_blocked_completion_auto_advances_with_wavemill_metadata_noise

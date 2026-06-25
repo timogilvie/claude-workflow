@@ -6,6 +6,8 @@ import {
   isCandidateStuck,
   demoteCandidate,
   planMergeQueueTick,
+  isEligibleMergeCandidate,
+  TERMINAL_WORKFLOW_STATUSES,
   type MergeQueueConfigResolved,
   type MergeQueuePr,
 } from './merge-queue.ts';
@@ -147,4 +149,122 @@ test('tick planner demotes stuck candidate and promotes disjoint replacement', (
   });
   assert.deepEqual(plan.stuckIssues, ['HOK-1']);
   assert.deepEqual(plan.selectedIssues, ['HOK-2']);
+});
+
+test('terminal active candidates do not consume merge queue slots', () => {
+  const selected = selectMergeCandidates({
+    readyPrs: [
+      pr({
+        issue: 'HOK-1',
+        queueState: 'merge-candidate',
+        workflowStatus: 'merged',
+        changedFiles: ['a.ts'],
+      }),
+      pr({
+        issue: 'HOK-2',
+        prNumber: 2,
+        branch: 'task/two',
+        queueState: 'merge-candidate',
+        workflowStatus: 'merged',
+        changedFiles: ['b.ts'],
+      }),
+      pr({
+        issue: 'HOK-3',
+        prNumber: 3,
+        branch: 'task/three',
+        queueState: 'ready-stale',
+        changedFiles: ['c.ts'],
+      }),
+    ],
+    activeCandidates: [
+      pr({
+        issue: 'HOK-1',
+        queueState: 'merge-candidate',
+        workflowStatus: 'merged',
+        changedFiles: ['a.ts'],
+      }),
+      pr({
+        issue: 'HOK-2',
+        prNumber: 2,
+        branch: 'task/two',
+        queueState: 'merge-candidate',
+        workflowStatus: 'merged',
+        changedFiles: ['b.ts'],
+      }),
+    ],
+    now: '2026-05-06T12:30:00.000Z',
+    config,
+  });
+
+  assert.deepEqual(selected.map((item) => item.issue), ['HOK-3']);
+});
+
+test('all terminal workflow statuses are ineligible merge candidates', () => {
+  for (const workflowStatus of TERMINAL_WORKFLOW_STATUSES) {
+    assert.equal(isEligibleMergeCandidate(pr({ workflowStatus })), false);
+  }
+
+  const plan = planMergeQueueTick({
+    readyPrs: TERMINAL_WORKFLOW_STATUSES.map((workflowStatus, index) => pr({
+      issue: `HOK-${index + 1}`,
+      prNumber: index + 1,
+      branch: `task/${index + 1}`,
+      queueState: 'merge-candidate',
+      workflowStatus,
+      candidatePromotedAt: '2026-05-06T12:00:00.000Z',
+      changedFiles: [`${index}.ts`],
+    })),
+    now: '2026-05-06T12:30:00.000Z',
+    config,
+  });
+
+  assert.deepEqual(plan.stuckIssues, []);
+  assert.deepEqual(plan.selectedIssues, []);
+});
+
+test('known closed or merged prs are excluded from selection', () => {
+  const plan = planMergeQueueTick({
+    readyPrs: [
+      pr({
+        issue: 'HOK-1',
+        queueState: 'merge-candidate',
+        prState: 'merged',
+        changedFiles: ['a.ts'],
+      }),
+      pr({
+        issue: 'HOK-2',
+        prNumber: 2,
+        branch: 'task/two',
+        queueState: 'ready-stale',
+        prState: 'CLOSED',
+        changedFiles: ['b.ts'],
+      }),
+      pr({
+        issue: 'HOK-3',
+        prNumber: 3,
+        branch: 'task/three',
+        queueState: 'ready-stale',
+        prState: 'OPEN',
+        changedFiles: ['c.ts'],
+      }),
+    ],
+    now: '2026-05-06T12:30:00.000Z',
+    config,
+  });
+
+  assert.deepEqual(plan.selectedIssues, ['HOK-3']);
+});
+
+test('missing workflow status and pr state remain backward compatible', () => {
+  const selected = selectMergeCandidates({
+    readyPrs: [
+      pr({ issue: 'HOK-1', changedFiles: ['a.ts'] }),
+      pr({ issue: 'HOK-2', prNumber: 2, branch: 'task/two', changedFiles: ['b.ts'] }),
+    ],
+    activeCandidates: [],
+    now: '2026-05-06T12:30:00.000Z',
+    config,
+  });
+
+  assert.deepEqual(selected.map((item) => item.issue), ['HOK-1', 'HOK-2']);
 });

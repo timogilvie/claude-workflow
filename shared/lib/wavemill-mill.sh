@@ -5496,7 +5496,7 @@ merge_queue_enrich_ready_artifacts() {
 
 refresh_ready_merge_queue_tick() {
   local now input_file output_file input_json output_json config_json
-  local issue phase slug pr state_dir ready_status ready_verdict stored_base current_main queue_state wt_dir
+  local issue phase slug pr state_dir ready_status ready_verdict stored_base current_main queue_state wt_dir workflow_status
   local ready_prs='[]'
 
   : > "$MERGE_QUEUE_SELECTION_FILE"
@@ -5513,6 +5513,12 @@ refresh_ready_merge_queue_tick() {
     slug="${SLUG_BY_ISSUE[$issue]}"
     pr="${PR_BY_ISSUE[$issue]:-}"
     [[ -n "$pr" ]] || continue
+    workflow_status="$(read_state_value "" --arg issue "$issue" '.tasks[$issue].status // ""')"
+    case "$workflow_status" in
+      merged|completed-external|aborted)
+        continue
+        ;;
+    esac
     wt_dir="${WORKTREE_ROOT}/${slug}"
     state_dir="$(ready_state_dir "$wt_dir" "$slug")"
     [[ -f "$state_dir/.ready-result.json" ]] || continue
@@ -5537,6 +5543,7 @@ refresh_ready_merge_queue_tick() {
         --argjson pr_number "$pr" \
         --arg ready_base_sha "$stored_base" \
         --arg queue_state "$queue_state" \
+        --arg workflow_status "$workflow_status" \
         --arg ready_at "$(jq -r '.finishedAt // .startedAt // empty' "$state_dir/.ready-result.json" 2>/dev/null || echo "")" \
         --arg candidate_promoted_at "$(ready_queue_field "$state_dir" candidatePromotedAt)" \
         --arg candidate_last_progress_at "$(ready_queue_field "$state_dir" candidateLastProgressAt)" \
@@ -5549,6 +5556,7 @@ refresh_ready_merge_queue_tick() {
             branch: $branch,
             readyBaseSha: $ready_base_sha,
             queueState: (if $queue_state == "" then null else $queue_state end),
+            workflowStatus: (if $workflow_status == "" then null else $workflow_status end),
             changedFiles: $changed_files,
             readyAt: (if $ready_at == "" then null else $ready_at end),
             unblocksCount: 0,
