@@ -46,6 +46,7 @@ import {
   getHokusaiContributionsConfig,
   getProvidersConfig,
   getNativeAgentConfig,
+  getNativeExpansionConfig,
   getReadyConfig,
   getReadyWatchdogConfig,
   getMigrationChecksConfig,
@@ -3043,6 +3044,68 @@ test('valid nativeAgent allowedPhases validate and are returned by the accessor'
       enabled: true,
       allowedPhases: ['task-expansion', 'planning', 'review'],
     });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('native expansion config defaults to disabled and no fallback', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({}));
+
+    assert.deepEqual(getNativeExpansionConfig(tmp), {
+      enabled: false,
+      allowedForExpansion: false,
+      fallbackOnUnavailable: false,
+    });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('native expansion config returns enabled, allowed, and fallback values', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      nativeAgent: {
+        enabled: true,
+        allowedPhases: ['task-expansion'],
+        expansion: {
+          fallbackOnUnavailable: true,
+        },
+      },
+    }));
+
+    assert.deepEqual(getNativeExpansionConfig(tmp), {
+      enabled: true,
+      allowedForExpansion: true,
+      fallbackOnUnavailable: true,
+    });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('invalid nativeAgent expansion keys are rejected by schema validation', () => {
+  if (!hasAjv) return;
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      nativeAgent: {
+        expansion: {
+          fallbackOnUnavailable: true,
+          extra: true,
+        },
+      },
+    }));
+
+    assert.throws(() => {
+      loadWavemillConfig(tmp);
+    }, /validation failed/i);
   } finally {
     cleanUp(tmp);
   }
