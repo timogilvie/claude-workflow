@@ -108,6 +108,65 @@ describe('native-agent tool policies', () => {
     assert.deepEqual(decision, { kind: 'allow' });
   });
 
+  it('denies mutation paths outside the worktree', () => {
+    const decision = evaluate({
+      phase: 'coding',
+      name: 'write_file',
+      arguments: { path: '../outside.ts', content: 'export const leaked = true;\n' },
+      registry: [makeMetadata('write_file', 'mutation')],
+      config: { pathFieldsByTool: { write_file: ['path'] } },
+    });
+
+    assert.deepEqual(decision, {
+      kind: 'deny',
+      reason: 'path_denied',
+      message: "path_denied: '../outside.ts' resolves outside the worktree",
+    });
+  });
+
+  it('denies whole-file source writes by default', () => {
+    const decision = evaluate({
+      phase: 'coding',
+      name: 'write_file',
+      arguments: { path: 'src/app.ts', content: 'export const value = 1;\n' },
+      registry: [makeMetadata('write_file', 'mutation')],
+      config: { pathFieldsByTool: { write_file: ['path'] } },
+    });
+
+    assert.deepEqual(decision, {
+      kind: 'deny',
+      reason: 'write_denied',
+      message: 'write_denied: whole-file source writes require a generated or Wavemill-owned allowlist path (src/app.ts)',
+    });
+  });
+
+  it('allows allowlisted generated whole-file source writes', () => {
+    const decision = evaluate({
+      phase: 'coding',
+      name: 'write_file',
+      arguments: { path: './src/generated/client.ts', content: 'export const generated = true;\n' },
+      registry: [makeMetadata('write_file', 'mutation')],
+      config: {
+        pathFieldsByTool: { write_file: ['path'] },
+        wholeFileWriteAllowlist: { generatedPaths: ['./src/generated/client.ts'] },
+      },
+    });
+
+    assert.deepEqual(decision, { kind: 'allow' });
+  });
+
+  it('allows patch-style source edits', () => {
+    const decision = evaluate({
+      phase: 'coding',
+      name: 'patch_file',
+      arguments: { path: 'src/app.ts', diff: '@@ -1 +1 @@\n-old\n+new\n' },
+      registry: [makeMetadata('patch_file', 'mutation')],
+      config: { pathFieldsByTool: { patch_file: ['path'] } },
+    });
+
+    assert.deepEqual(decision, { kind: 'allow' });
+  });
+
   it('allows the worktree root path', () => {
     const decision = evaluate({
       phase: 'coding',
@@ -152,6 +211,21 @@ describe('native-agent tool policies', () => {
     assert.throws(
       () => evaluate({ phase: 'coding', name: 'read_file', worktreePath: '   ' }),
       /non-empty worktreePath/,
+    );
+  });
+
+  it('throws for an invalid whole-file allowlist config', () => {
+    assert.throws(
+      () => evaluate({
+        phase: 'coding',
+        name: 'write_file',
+        arguments: { path: 'src/app.ts', content: 'export const value = 1;\n' },
+        registry: [makeMetadata('write_file', 'mutation')],
+        config: {
+          wholeFileWriteAllowlist: { generatedPaths: ['../bad.ts'] },
+        },
+      }),
+      /repo-relative POSIX path without traversal/,
     );
   });
 });

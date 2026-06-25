@@ -4125,21 +4125,30 @@ coding_compare_commit_counts() {
 
 write_coding_uncommitted_output_artifact() {
   local issue="$1" feature_dir="$2" base_branch="$3" ahead_count="$4" behind_count="$5" dirty_paths_raw="${6:-}"
-  local artifact slug artifact_tmp first_path dirty_paths_json
+  local artifact slug artifact_tmp first_path dirty_paths_json reason summary action
 
   artifact="$(coding_uncommitted_output_artifact_path "$feature_dir")"
   slug="$(basename "$feature_dir")"
   artifact_tmp="$(mktemp "$artifact.tmp.XXXXXX" 2>/dev/null)" || return 1
   first_path="$(printf '%s\n' "$dirty_paths_raw" | head -1)"
   dirty_paths_json="$(printf '%s\n' "$dirty_paths_raw" | jq -R . | jq -s . 2>/dev/null || printf '[]')"
+  if [[ "$ahead_count" == "0" ]]; then
+    reason="coding_output_not_committed"
+    summary="coding completed marker detected, but branch has no commits beyond $base_branch and worktree still contains uncommitted coding output"
+    action="Commit the coding output, then retry review."
+  else
+    reason="coding_output_dirty_tree"
+    summary="coding completed marker detected, but worktree still contains uncommitted changes that must be resolved before review"
+    action="Commit or remove the remaining changes, or replace .coding-complete with .coding-blocked-completion.json for an explicit blocked-completion handoff, then retry review."
+  fi
 
   if ! jq -n \
     --arg issue "$issue" \
     --arg slug "$slug" \
     --arg baseBranch "$base_branch" \
-    --arg reason "coding_output_not_committed" \
-    --arg summary "coding completed marker detected, but branch has no commits beyond $base_branch and worktree still contains uncommitted coding output" \
-    --arg action "Commit the coding output, then retry review." \
+    --arg reason "$reason" \
+    --arg summary "$summary" \
+    --arg action "$action" \
     --arg firstDirtyPath "$first_path" \
     --argjson aheadCount "$ahead_count" \
     --argjson behindCount "$behind_count" \
@@ -4185,11 +4194,6 @@ guard_coding_complete_handoff() {
   ahead_count="${compare_counts##*[[:space:]]}"
   [[ "$behind_count" =~ ^[0-9]+$ ]] || behind_count=0
   [[ "$ahead_count" =~ ^[0-9]+$ ]] || ahead_count=0
-
-  if [[ "$ahead_count" != "0" ]]; then
-    clear_coding_uncommitted_output_attention "$feature_dir"
-    return 1
-  fi
 
   write_coding_uncommitted_output_artifact "$issue" "$feature_dir" "$base_branch" "$ahead_count" "$behind_count" "$dirty_paths" || true
   artifact_record="$(read_coding_uncommitted_output "$feature_dir")"

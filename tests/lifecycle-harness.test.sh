@@ -1641,6 +1641,34 @@ test_coding_complete_dirty_worktree_without_commits_needs_attention() {
   check_file_exists "uncommitted output: dedupe marker written" "$feature_dir/.coding-uncommitted-output-announced"
 }
 
+test_coding_complete_dirty_worktree_with_commits_still_needs_attention() {
+  local slug="coding-complete-dirty-committed"
+  local issue="HOK-2345-DIRTY"
+  local repo tick feature_dir
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  feature_dir="$repo/features/$slug"
+
+  git -C "$repo" checkout -q -b "task/$slug"
+  printf 'committed implementation\n' > "$repo/src-committed.ts"
+  git -C "$repo" add src-committed.ts
+  git -C "$repo" commit -q -m "Add committed coding output"
+  touch "$feature_dir/.coding-complete"
+  printf 'still dirty\n' >> "$repo/src-committed.ts"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
+
+  check_eq "dirty committed output: phase stays coding" "coding" "$(kv_value "$tick" phase)"
+  check_eq "dirty committed output: coding stage stays running" "running" "$(harness_read_stage_status "$repo" "$slug" coding)"
+  check_eq "dirty committed output: needs-user attention set" "needs-user" "$(kv_value "$tick" attention)"
+  check_eq "dirty committed output: task remains active" "1" "$(kv_value "$tick" active_count)"
+  check_not_contains "dirty committed output: review does not launch" "$(kv_value "$tick" log_output)" "Launching review phase"
+  check_contains "dirty committed output: actionable log emitted" "$(kv_value "$tick" log_output)" "worktree still contains uncommitted changes that must be resolved before review"
+  check_eq "dirty committed output: artifact reason recorded" "coding_output_dirty_tree" "$(jq -r '.reason' "$feature_dir/.coding-uncommitted-output.json")"
+  check_file_exists "dirty committed output: dedupe marker written" "$feature_dir/.coding-uncommitted-output-announced"
+}
+
 test_coding_blocked_completion_malformed_json_falls_back() {
   local slug="coding-blocked-completion-malformed"
   local issue="HOK-1642-MALFORMED"
@@ -2336,6 +2364,7 @@ test_coding_blocked_completion_dedupes_same_artifact
 test_coding_blocked_completion_reannounces_on_mtime_change
 test_coding_complete_wins_over_blocked_completion
 test_coding_complete_dirty_worktree_without_commits_needs_attention
+test_coding_complete_dirty_worktree_with_commits_still_needs_attention
 test_coding_blocked_completion_malformed_json_falls_back
 test_coding_blocked_completion_missing_required_field_does_not_auto_advance
 test_coding_blocked_completion_empty_passing_checks_does_not_auto_advance
