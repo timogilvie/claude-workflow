@@ -13,9 +13,25 @@
  */
 
 import { runTool } from '../shared/lib/tool-runner.ts';
-import { checkClaudeAvailability, checkCodexAvailability } from '../shared/lib/llm-cli.ts';
+import {
+  checkClaudeAvailability,
+  checkCodexAvailability,
+  resolveProviderForModel,
+  type LLMProvider,
+} from '../shared/lib/llm-cli.ts';
 import { execShellCommand } from '../shared/lib/shell-utils.ts';
 import { GREEN, RED, NC } from '../shared/lib/colors.ts';
+
+/**
+ * Determine the active review provider from the environment.
+ * Falls back to `gpt-5.5` (Codex) unless overridden.
+ * Exported for testing.
+ */
+export function getReviewProvider(): LLMProvider {
+  const model =
+    process.env.WAVEMILL_REVIEW_MODEL || process.env.WAVEMILL_HEADLESS_MODEL || 'gpt-5.5';
+  return resolveProviderForModel(model, process.cwd());
+}
 
 interface CheckResult {
   name: string;
@@ -107,9 +123,9 @@ async function checkCodexCLI(): Promise<CheckResult> {
 }
 
 /**
- * Check network connectivity to Anthropic API
+ * Check network connectivity to Anthropic API (Claude provider only).
  */
-async function checkNetwork(): Promise<CheckResult> {
+async function checkAnthropicNetwork(): Promise<CheckResult> {
   try {
     const result = execShellCommand('curl -I -s -o /dev/null -w "%{http_code}" https://api.anthropic.com --max-time 10', {
       encoding: 'utf-8',
@@ -247,9 +263,10 @@ function printResult(result: CheckResult): void {
 }
 
 /**
- * Print troubleshooting section
+ * Print troubleshooting section.
+ * Only shows provider-specific guidance for the active provider.
  */
-function printTroubleshooting(results: CheckResult[]): void {
+export function printTroubleshooting(results: CheckResult[], provider: LLMProvider): void {
   const failedChecks = results.filter(r => !r.passed);
 
   if (failedChecks.length === 0) {
@@ -260,38 +277,39 @@ function printTroubleshooting(results: CheckResult[]): void {
   console.log('Troubleshooting');
   console.log('─'.repeat(60));
 
-  // Claude CLI check failed
-  const cliFailed = failedChecks.find(r => r.name === 'Claude CLI');
-  if (cliFailed) {
-    console.log('\nClaude CLI is not available:');
-    console.log('  1. Install: npm install -g @anthropic-ai/claude-cli');
-    console.log('  2. Authenticate: claude login');
-    console.log('  3. Test: echo "hello" | claude -p --model claude-haiku-4-5-20251001');
-    console.log('  4. Verify: which claude');
+  if (provider === 'claude') {
+    // Claude CLI check failed
+    const cliFailed = failedChecks.find(r => r.name === 'Claude CLI');
+    if (cliFailed) {
+      console.log('\nClaude CLI is not available:');
+      console.log('  1. Install: npm install -g @anthropic-ai/claude-cli');
+      console.log('  2. Authenticate: claude login');
+      console.log('  3. Test: echo "hello" | claude -p --model claude-haiku-4-5-20251001');
+      console.log('  4. Check PATH: which claude');
+    }
+
+    // Network check failed (Claude-only: probes api.anthropic.com)
+    const networkFailed = failedChecks.find(r => r.name === 'Network Connectivity');
+    if (networkFailed) {
+      console.log('\nNetwork connectivity issues:');
+      console.log('  1. Check internet connection');
+      console.log('  2. Test: curl -I https://api.anthropic.com');
+      console.log('  3. Check firewall/proxy settings');
+      console.log('  4. Check service status: https://status.anthropic.com');
+    }
+  } else {
+    // Codex CLI check failed
+    const codexFailed = failedChecks.find(r => r.name === 'Codex CLI');
+    if (codexFailed) {
+      console.log('\nCodex CLI is not available:');
+      console.log('  1. Install Codex CLI: brew install codex (or npm install -g @openai/codex)');
+      console.log('  2. Authenticate: codex login');
+      console.log('  3. Test: echo "hello" | codex exec --json --sandbox read-only');
+      console.log('  4. Check PATH: which codex');
+    }
   }
 
-  // Codex CLI check failed
-  const codexFailed = failedChecks.find(r => r.name === 'Codex CLI');
-  if (codexFailed) {
-    console.log('\nCodex CLI is not available:');
-    console.log('  1. Install: brew install codex (or npm install -g @openai/codex)');
-    console.log('  2. Authenticate: codex login');
-    console.log('  3. Test: echo "hello" | codex exec --json --sandbox read-only');
-    console.log('  4. Verify: which codex');
-  }
-
-  // Network check failed
-  // Note: network check probes api.anthropic.com (Claude provider); Codex auth is local CLI state, not an outbound probe.
-  const networkFailed = failedChecks.find(r => r.name === 'Network Connectivity');
-  if (networkFailed) {
-    console.log('\nNetwork connectivity issues:');
-    console.log('  1. Check internet connection');
-    console.log('  2. Test: curl -I https://api.anthropic.com');
-    console.log('  3. Check firewall/proxy settings');
-    console.log('  4. Check service status: https://status.anthropic.com');
-  }
-
-  // Git check failed
+  // Git check failed (always shown)
   const gitFailed = failedChecks.find(r => r.name === 'Git');
   if (gitFailed) {
     console.log('\nGit is not installed:');
@@ -299,7 +317,7 @@ function printTroubleshooting(results: CheckResult[]): void {
     console.log('  2. Verify: git --version');
   }
 
-  // Git repo check failed
+  // Git repo check failed (always shown)
   const repoFailed = failedChecks.find(r => r.name === 'Git Repository');
   if (repoFailed) {
     console.log('\nNot in a git repository:');
@@ -317,16 +335,22 @@ runTool({
     'npm run check:review',
   ],
   async run() {
-    console.log('🔍 Checking review tool setup...\n');
+    const provider = getReviewProvider();
+    console.log(`🔍 Checking review tool setup (provider: ${provider})...\n`);
 
     const results: CheckResult[] = [];
 
-    // Run all checks
+    // Git checks are always run
     results.push(await checkGit());
     results.push(await checkGitRepo());
-    results.push(await checkClaudeCLI());
-    results.push(await checkCodexCLI());
-    results.push(await checkNetwork());
+
+    // Provider-specific checks
+    if (provider === 'claude') {
+      results.push(await checkClaudeCLI());
+      results.push(await checkAnthropicNetwork());
+    } else {
+      results.push(await checkCodexCLI());
+    }
 
     // Print results
     console.log();
@@ -343,7 +367,7 @@ runTool({
       console.log('Run: npx tsx tools/review-changes.ts main');
     } else {
       console.log(`${RED}✗ ${total - passed}/${total} checks failed${NC}`);
-      printTroubleshooting(results);
+      printTroubleshooting(results, provider);
     }
     console.log('─'.repeat(60));
 
