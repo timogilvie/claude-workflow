@@ -19,6 +19,12 @@ export const CHANNELS: readonly Channel[] = Object.freeze(['stable', 'preview', 
 export type NativeProviderName = 'openai' | 'openrouter';
 export type PiTransportKind = 'openai-responses' | 'openai-completions';
 export type ReadOnlyNativeCapability = 'certified' | 'unsupported' | 'partial';
+export type AgentType =
+  | 'claude'
+  | 'codex'
+  | 'claude-openrouter'
+  | 'native-openai'
+  | 'native-openrouter';
 export type CapabilityConstraintName =
   | 'minContextWindow'
   | 'requiresTools'
@@ -75,7 +81,7 @@ export interface ModelCapabilities {
   reasoningTier: ReasoningTier;
   costPerMillionInputTokensUsd: number;
   costPerMillionOutputTokensUsd: number;
-  agent?: string;
+  agent?: AgentType;
   nativeCapability?: NativeCapability;
   /**
    * ISO date the model became generally available. Drives the recency-aware
@@ -1570,6 +1576,14 @@ export function isReadOnlyNativeCapable(
 }
 
 export type NativeReadOnlyRoutingMode = 'task' | 'certification';
+
+export function isNativeAgentType(agent: AgentType | string): agent is Extract<AgentType, `native-${string}`> {
+  return agent === 'native-openai' || agent === 'native-openrouter';
+}
+
+export function nativeAgentTypeForProvider(provider: NativeProviderName): Extract<AgentType, `native-${string}`> {
+  return provider === 'openai' ? 'native-openai' : 'native-openrouter';
+}
 
 export interface NativeReadOnlyRoutingDecision {
   routable: boolean;

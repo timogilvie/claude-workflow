@@ -16,18 +16,22 @@ import type { EvalRecord } from './eval-schema.ts';
 import { isEvalSuccess } from './eval-success-policy.ts';
 import { readJsonlFile } from './jsonl-utils.ts';
 import { recommendModelLLM } from './llm-router.ts';
-import { loadWavemillConfig } from './config.ts';
+import { getNativeAgentConfig, loadWavemillConfig, type NativeAgentAllowedPhase } from './config.ts';
 import { aggregateEvals } from './eval-aggregator.ts';
 import { resolveFromMainRepo } from './git-utils.ts';
 import { errorMessage } from './error-utils.ts';
 import { resolveGlobalAggregatedEvalsPath } from './evals-paths.ts';
 import {
+  evaluateNativeReadOnlyRouting,
   configuredDeepSeekModelIds,
   DEFAULT_MODEL_REGISTRY,
   getEffectiveRegistry,
   getModel,
+  isNativeAgentType,
+  nativeAgentTypeForProvider,
   isDeepSeekLikeModelId,
   ModelValidationError,
+  type AgentType,
 } from './model-registry.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
 
@@ -261,9 +265,9 @@ export interface RouterOptions {
   /** Candidate model IDs to consider (if set, only these models are scored) */
   models?: string[];
   /** Map of model ID -> agent CLI command (e.g. "claude", "codex") */
-  agentMap?: Record<string, string>;
+  agentMap?: Record<string, AgentType>;
   /** Fallback agent when no agentMap match (default: 'claude') */
-  defaultAgent?: string;
+  defaultAgent?: AgentType;
   /** Routing mode: 'heuristic' (regex), 'llm' (DSPy artifact), 'stage-aware' (historical KNN), 'hokusai' (ML endpoint), 'auto' (best available) */
   mode?: 'heuristic' | 'llm' | 'auto' | 'stage-aware' | 'hokusai';
   /** Repository directory (for finding artifacts and config) */
@@ -282,13 +286,15 @@ export interface RouterOptions {
   stageBlendWeight?: number;
 }
 
+export type AgentResolutionPhase = NativeAgentAllowedPhase | 'coding';
+
 const DEFAULT_ROUTER_OPTIONS = {
   evalsDir: '',
   minRecords: 20,
   minModels: 2,
   defaultModel: 'gpt-5.4',
   models: [] as string[],
-  agentMap: {} as Record<string, string>,
+  agentMap: {} as Record<string, AgentType>,
   defaultAgent: 'codex',
   mode: 'auto' as const,
   repoDir: '',
@@ -300,6 +306,45 @@ const DEFAULT_ROUTER_OPTIONS = {
   stageBlendWeight: 0.3,
 } satisfies Required<RouterOptions>;
 
+const READ_ONLY_NATIVE_PHASES: readonly NativeAgentAllowedPhase[] = [
+  'task-expansion',
+  'planning',
+  'review',
+] as const;
+
+function isReadOnlyNativePhase(phase: AgentResolutionPhase | undefined): phase is NativeAgentAllowedPhase {
+  return phase !== undefined && READ_ONLY_NATIVE_PHASES.includes(phase as NativeAgentAllowedPhase);
+}
+
+function canResolveNativeAgent(
+  candidate: AgentType,
+  modelId: string,
+  repoDir: string | undefined,
+  phase: AgentResolutionPhase | undefined,
+): boolean {
+  if (!isNativeAgentType(candidate) || !repoDir || !isReadOnlyNativePhase(phase)) {
+    return false;
+  }
+
+  const config = getNativeAgentConfig(repoDir);
+  if (config.enabled !== true || !config.allowedPhases?.includes(phase)) {
+    return false;
+  }
+
+  const registry = getEffectiveRegistry(repoDir);
+  const capabilities = getModel(registry, modelId);
+  const provider = capabilities?.nativeCapability?.nativeProvider;
+  if (!provider || nativeAgentTypeForProvider(provider) !== candidate) {
+    return false;
+  }
+
+  return evaluateNativeReadOnlyRouting({
+    modelId,
+    phase,
+    registry,
+  }).routable;
+}
+
 /**
  * Resolve which agent CLI should run a given model.
  *
@@ -310,14 +355,24 @@ const DEFAULT_ROUTER_OPTIONS = {
  */
 export function resolveAgent(
   modelId: string,
-  agentMap: Record<string, string>,
-  defaultAgent: string,
+  agentMap: Record<string, AgentType>,
+  defaultAgent: AgentType,
   repoDir?: string,
-): string {
-  if (agentMap[modelId] && agentMap[modelId] !== 'claude-openrouter') return agentMap[modelId];
+  phase?: AgentResolutionPhase,
+): AgentType {
+  const mappedAgent = agentMap[modelId];
+  if (mappedAgent && mappedAgent !== 'claude-openrouter') {
+    if (!isNativeAgentType(mappedAgent) || canResolveNativeAgent(mappedAgent, modelId, repoDir, phase)) {
+      return mappedAgent;
+    }
+  }
   const registry = repoDir ? getEffectiveRegistry(repoDir) : DEFAULT_MODEL_REGISTRY;
   const capabilities = getModel(registry, modelId);
-  if (capabilities?.agent && capabilities.agent !== 'claude-openrouter') return capabilities.agent;
+  if (capabilities?.agent && capabilities.agent !== 'claude-openrouter') {
+    if (!isNativeAgentType(capabilities.agent) || canResolveNativeAgent(capabilities.agent, modelId, repoDir, phase)) {
+      return capabilities.agent;
+    }
+  }
   if (modelId.startsWith('claude-')) return 'claude';
   if (modelId.startsWith('gpt-') || /^o\d/.test(modelId)) return 'codex';
   if (isDeepSeekLikeModelId(modelId)) {

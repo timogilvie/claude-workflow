@@ -945,6 +945,19 @@
             "type": "object",
             "description": "Native-agent provider configuration resolved into Pi provider models.",
             "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Master toggle for native read-only agent routing. Defaults to disabled even when provider settings are present."
+                },
+                "allowedPhases": {
+                    "type": "array",
+                    "description": "Read-only workflow phases where native agents may be selected.",
+                    "items": {
+                        "type": "string",
+                        "enum": ["task-expansion", "planning", "review"]
+                    }
+                },
                 "providers": {
                     "type": "object",
                     "properties": {
@@ -1426,7 +1439,7 @@
                             },
                             "agent": {
                                 "type": "string",
-                                "minLength": 1
+                                "enum": ["claude", "codex", "claude-openrouter", "native-openai", "native-openrouter"]
                             },
                             "nativeCapability": {
                                 "type": "object",
@@ -1571,10 +1584,12 @@
                     "type": "string",
                     "default": "codex",
                     "description": "Fallback agent CLI when router has insufficient data or no agentMap entry matches the recommended model.",
-                    "examples": [
+                    "enum": [
                         "claude",
                         "codex",
-                        "claude-openrouter"
+                        "claude-openrouter",
+                        "native-openai",
+                        "native-openrouter"
                     ]
                 },
                 "agentMap": {
@@ -1582,10 +1597,13 @@
                     "description": "Maps model IDs to agent CLI commands. Used to determine which agent CLI to launch when the router recommends a model.",
                     "additionalProperties": {
                         "type": "string",
-                        "description": "Agent CLI command name (e.g. 'claude', 'codex', 'claude-openrouter').",
-                        "examples": [
-                            "claude-deepseek",
-                            "claude-openrouter"
+                        "description": "Agent CLI command name.",
+                        "enum": [
+                            "claude",
+                            "codex",
+                            "claude-openrouter",
+                            "native-openai",
+                            "native-openrouter"
                         ]
                     }
                 },
