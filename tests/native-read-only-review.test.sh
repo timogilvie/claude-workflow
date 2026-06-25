@@ -15,17 +15,13 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 1
 fi
 
-TSX_LOADER="$(npm root)/tsx/dist/loader.mjs"
-if [[ ! -f "$TSX_LOADER" ]]; then
-  TSX_LOADER="$(npm root -g)/tsx/dist/loader.mjs"
-fi
-if [[ ! -f "$TSX_LOADER" ]]; then
-  echo "tsx loader not found" >&2
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "python3 is required" >&2
   exit 1
 fi
 
 TMP_ROOT="$(mktemp -d)"
-HARNESS="$REPO_DIR/.tmp-native-review-harness.ts"
+HARNESS="$REPO_DIR/.tmp-native-review-harness-$$.ts"
 TEST_REPO="$TMP_ROOT/repo"
 trap 'rm -rf "$TMP_ROOT"; rm -f "$HARNESS"' EXIT
 
