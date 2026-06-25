@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { logPromptUsage, loadAndRegisterTemplate, type PromptRegistryEntry } from './prompt-registry.ts';
+import { openManifest, getManifest } from './resource-manifest.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Test Fixtures
@@ -195,6 +196,53 @@ describe('prompt-registry', () => {
 
       const duration = Date.now() - start;
       assert.ok(duration < 150, `Should complete in <150ms (took ${duration}ms)`);
+    });
+  });
+
+  describe('native prompt usage', () => {
+    it('records native-read-only-phase template name and hash', () => {
+      const content = 'You are a read-only native planning agent.\nDo not modify any files.';
+      const ref = logPromptUsage('tools/prompts/native-read-only-phase.md', content, { dir: TEST_DIR });
+
+      assert.ok(ref, 'logPromptUsage must return a ResourceRef for native prompt');
+
+      const entries = readRegistry();
+      assert.equal(entries.length, 1, 'exactly one registry entry');
+      assert.equal(entries[0].templateName, 'native-read-only-phase', 'template name must be extracted from path');
+      assert.ok(entries[0].templateHash, 'hash must be present');
+      assert.equal(entries[0].templateContent, content, 'content must be stored for new hash');
+    });
+
+    it('records native manifest usage when WAVEMILL_SESSION is set', () => {
+      // Open a manifest so recordUse (called inside logPromptUsage) can attach a phase ref.
+      const sessionId = 'native-prompt-test-session';
+      openManifest(sessionId, { workflowType: 'feature', repoDir: TEST_DIR });
+
+      const origSession = process.env.WAVEMILL_SESSION;
+      const origPhase = process.env.WAVEMILL_PHASE;
+      try {
+        process.env.WAVEMILL_SESSION = sessionId;
+        process.env.WAVEMILL_PHASE = 'planning';
+
+        const content = 'Native planning system prompt content';
+        logPromptUsage('tools/prompts/native-read-only-phase.md', content, { dir: TEST_DIR });
+
+        const manifest = getManifest(sessionId, TEST_DIR);
+        assert.ok(manifest, 'manifest must exist');
+        const planningRefs = manifest?.phases.planning ?? [];
+        assert.ok(planningRefs.length > 0, 'planning phase must have at least one resource ref');
+      } finally {
+        if (origSession === undefined) {
+          delete process.env.WAVEMILL_SESSION;
+        } else {
+          process.env.WAVEMILL_SESSION = origSession;
+        }
+        if (origPhase === undefined) {
+          delete process.env.WAVEMILL_PHASE;
+        } else {
+          process.env.WAVEMILL_PHASE = origPhase;
+        }
+      }
     });
   });
 });
