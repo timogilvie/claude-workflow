@@ -3,6 +3,7 @@ import {
   validateWholeFileWriteAllowlistInput,
   type WholeFileWriteAllowlistInput,
 } from '../coding-artifacts.ts';
+import { matchesAnyPattern } from '../../permission-patterns.ts';
 import type { ToolMetadata, ToolPhase } from './types.ts';
 
 export type ToolPolicyReason = 'phase_denied' | 'path_denied' | 'write_denied';
@@ -211,8 +212,8 @@ function isAllowlistedWholeFilePath(repoRelativePath: string, config: ToolPolicy
     throw new Error(result.errors[0]?.message ?? 'Whole-file write allowlist is invalid');
   }
 
-  return result.value.generatedPaths.includes(repoRelativePath)
-    || result.value.wavemillOwnedPaths.includes(repoRelativePath);
+  return matchesAnyPattern(repoRelativePath, result.value.generatedPaths)
+    || matchesAnyPattern(repoRelativePath, result.value.wavemillOwnedPaths);
 }
 
 const SOURCE_FILE_EXTENSIONS = new Set([

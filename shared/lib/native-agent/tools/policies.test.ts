@@ -155,6 +155,55 @@ describe('native-agent tool policies', () => {
     assert.deepEqual(decision, { kind: 'allow' });
   });
 
+  it('allows whole-file source writes matching a glob allowlist pattern', () => {
+    const decision = evaluate({
+      phase: 'coding',
+      name: 'write_file',
+      arguments: { path: 'shared/lib/foo.generated.ts', content: 'export const generated = true;\n' },
+      registry: [makeMetadata('write_file', 'mutation')],
+      config: {
+        pathFieldsByTool: { write_file: ['path'] },
+        wholeFileWriteAllowlist: { generatedPaths: ['**/*.generated.ts', 'dist/*'] },
+      },
+    });
+
+    assert.deepEqual(decision, { kind: 'allow' });
+  });
+
+  it('rejects whole-file source writes not matching any glob allowlist pattern', () => {
+    const decision = evaluate({
+      phase: 'coding',
+      name: 'write_file',
+      arguments: { path: 'shared/lib/foo.ts', content: 'export const value = 1;\n' },
+      registry: [makeMetadata('write_file', 'mutation')],
+      config: {
+        pathFieldsByTool: { write_file: ['path'] },
+        wholeFileWriteAllowlist: { generatedPaths: ['**/*.generated.ts'] },
+      },
+    });
+
+    assert.deepEqual(decision, {
+      kind: 'deny',
+      reason: 'write_denied',
+      message: 'write_denied: whole-file source writes require a generated or Wavemill-owned allowlist path (shared/lib/foo.ts)',
+    });
+  });
+
+  it('matches glob patterns against wavemillOwnedPaths', () => {
+    const decision = evaluate({
+      phase: 'coding',
+      name: 'write_file',
+      arguments: { path: 'features/foo/plan.md', content: '# Plan\n' },
+      registry: [makeMetadata('write_file', 'mutation')],
+      config: {
+        pathFieldsByTool: { write_file: ['path'] },
+        wholeFileWriteAllowlist: { wavemillOwnedPaths: ['features/*'] },
+      },
+    });
+
+    assert.deepEqual(decision, { kind: 'allow' });
+  });
+
   it('allows patch-style source edits', () => {
     const decision = evaluate({
       phase: 'coding',
