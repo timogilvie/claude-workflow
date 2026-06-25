@@ -76,6 +76,18 @@ describe('writeStageResult and readStageResult', () => {
     assert.deepEqual(read, result);
   });
 
+  it('round-trips native agent and model fields', async () => {
+    const result = makeResult({
+      agent: 'native',
+      model: 'pi-standard-20260101',
+    });
+    await writeStageResult(testDir, result);
+
+    const read = await readStageResult(testDir, 'planning');
+    assert.equal(read?.agent, 'native');
+    assert.equal(read?.model, 'pi-standard-20260101');
+  });
+
   it('overwrites existing file completely', async () => {
     const first = makeResult({ notes: 'first' });
     await writeStageResult(testDir, first);
@@ -283,6 +295,26 @@ describe('updateStageResult', () => {
 
     const read = await readStageResult(testDir, 'coding');
     assert.equal(read?.failureReason, null);
+  });
+
+  it('updates stage with native agent and model', async () => {
+    await writeStageResult(testDir, makeResult({
+      stage: 'coding',
+      status: 'running',
+      agent: 'claude',
+      model: 'opus-4-6',
+    }));
+
+    await updateStageResult(testDir, 'coding', {
+      status: 'completed',
+      agent: 'native',
+      model: 'pi-reasoning-20260201',
+    });
+
+    const read = await readStageResult(testDir, 'coding');
+    assert.equal(read?.status, 'completed');
+    assert.equal(read?.agent, 'native');
+    assert.equal(read?.model, 'pi-reasoning-20260201');
   });
 });
 

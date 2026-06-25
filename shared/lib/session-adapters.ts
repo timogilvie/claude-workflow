@@ -492,6 +492,63 @@ export class NativeSessionAdapter implements SessionAdapter {
 }
 
 // ────────────────────────────────────────────────────────────────
+// Native provider metadata
+// ────────────────────────────────────────────────────────────────
+
+/**
+ * Extract provider metadata from the latest native session_started event.
+ *
+ * Returns the provider and optional endpoint (api) from the first
+ * session_started event found in any native session file for this worktree.
+ *
+ * @returns Provider metadata or null if no native sessions exist
+ */
+export function getNativeProviderMetadata(
+  worktreePath: string,
+): { provider: string; endpoint?: string } | null {
+  const runsDir = join(resolve(worktreePath), '.wavemill', 'runs');
+  if (!existsSync(runsDir)) {
+    return null;
+  }
+
+  try {
+    for (const runEntry of readdirSync(runsDir, { withFileTypes: true })) {
+      if (!runEntry.isDirectory()) {
+        continue;
+      }
+      const nativeSessionsDir = join(runsDir, runEntry.name, 'native-sessions');
+      if (!existsSync(nativeSessionsDir)) {
+        continue;
+      }
+
+      const sessionFiles = readdirSync(nativeSessionsDir)
+        .filter((fileName) => fileName.endsWith('.jsonl'))
+        .map((fileName) => join(nativeSessionsDir, fileName));
+
+      for (const filePath of sessionFiles) {
+        try {
+          for (const entry of readJsonlFile<TranscriptEvent>(filePath)) {
+            if (entry.type === 'session_started') {
+              return {
+                provider: entry.provider,
+                ...(entry.api ? { endpoint: entry.api } : {}),
+              };
+            }
+          }
+        } catch {
+          // Skip malformed session files
+          continue;
+        }
+      }
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+// ────────────────────────────────────────────────────────────────
 // Auto-detection
 // ────────────────────────────────────────────────────────────────
 
@@ -501,40 +558,57 @@ export class NativeSessionAdapter implements SessionAdapter {
  * This is a fallback mechanism for when the recorded agent type might be
  * incorrect (e.g., due to bugs in agent assignment logic).
  *
- * @returns 'claude' | 'codex' | null
+ * @returns 'claude' | 'codex' | 'native' | null
  */
 export function detectAgentType(opts: SessionScanOptions): AgentType | null {
   const debug = process.env.DEBUG_COST === '1' || process.env.DEBUG_COST === 'true';
 
   const claudeAdapter = new ClaudeSessionAdapter();
   const codexAdapter = new CodexSessionAdapter();
+  const nativeAdapter = new NativeSessionAdapter();
 
   const claudeResult = claudeAdapter.scan(opts);
   const codexResult = codexAdapter.scan(opts);
+  const nativeResult = nativeAdapter.scan(opts);
 
-  if (claudeResult && !codexResult) {
-    if (debug) console.log('[DEBUG_COST] Auto-detected agent: claude');
-    return 'claude';
+  // Count how many adapters found sessions
+  const results = [
+    { type: 'claude' as const, result: claudeResult },
+    { type: 'codex' as const, result: codexResult },
+    { type: 'native' as const, result: nativeResult },
+  ].filter(({ result }) => result !== null);
+
+  if (results.length === 0) {
+    if (debug) console.log('[DEBUG_COST] No sessions found for any agent');
+    return null;
   }
-  if (codexResult && !claudeResult) {
-    if (debug) console.log('[DEBUG_COST] Auto-detected agent: codex');
-    return 'codex';
-  }
-  if (claudeResult && codexResult) {
-    // Both exist - pick the one with more turns
-    const detected = claudeResult.turnCount >= codexResult.turnCount ? 'claude' : 'codex';
-    if (debug) {
-      console.log(
-        `[DEBUG_COST] Both agents have sessions - choosing ${detected} ` +
-        `(${detected === 'claude' ? claudeResult.turnCount : codexResult.turnCount} turns ` +
-        `vs ${detected === 'claude' ? codexResult.turnCount : claudeResult.turnCount})`
-      );
-    }
+
+  if (results.length === 1) {
+    const detected = results[0].type;
+    if (debug) console.log(`[DEBUG_COST] Auto-detected agent: ${detected}`);
     return detected;
   }
 
-  if (debug) console.log('[DEBUG_COST] No sessions found for either agent');
-  return null;
+  // Multiple agents have sessions - pick the one with the most turns
+  const winner = results.reduce((prev, curr) => {
+    const prevTurns = prev.result!.turnCount;
+    const currTurns = curr.result!.turnCount;
+    return currTurns > prevTurns ? curr : prev;
+  });
+
+  if (debug) {
+    const winnerTurns = winner.result!.turnCount;
+    const others = results
+      .filter(({ type }) => type !== winner.type)
+      .map(({ type, result }) => `${type}=${result!.turnCount}`)
+      .join(', ');
+    console.log(
+      `[DEBUG_COST] Multiple agents have sessions - choosing ${winner.type} ` +
+      `(${winnerTurns} turns vs ${others})`
+    );
+  }
+
+  return winner.type;
 }
 
 // ────────────────────────────────────────────────────────────────

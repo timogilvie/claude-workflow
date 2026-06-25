@@ -136,6 +136,12 @@ describe('eval-record-builder', () => {
       expect(baseRecord.endpoint).toBe('https://api.deepseek.com/anthropic');
     });
 
+    it('should attach native provider metadata', () => {
+      attachProviderMetadata(baseRecord, 'pi', 'responses');
+      expect(baseRecord.provider).toBe('pi');
+      expect(baseRecord.endpoint).toBe('responses');
+    });
+
     it('should no-op when provider metadata is absent', () => {
       attachProviderMetadata(baseRecord, undefined, undefined);
       expect(baseRecord.provider).toBeUndefined();

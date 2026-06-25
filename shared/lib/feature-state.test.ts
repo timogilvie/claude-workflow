@@ -668,3 +668,46 @@ test('full happy path produces done phase with readyPassed=true', async () => {
     cleanup([featureDir]);
   }
 });
+
+test('native agent/model: stage results with native agent round-trip through feature state', async () => {
+  const featureDir = makeTempDir();
+  try {
+    mkdirSync(featureDir, { recursive: true });
+
+    // Write stage results with native agent and model
+    writePlanningResult(featureDir, {
+      agent: 'native',
+      model: 'pi-standard-20260101',
+    });
+
+    writeCodingResult(featureDir, {
+      agent: 'native',
+      model: 'pi-reasoning-20260201',
+      status: 'running',
+      finishedAt: null,
+    });
+
+    const state = await deriveFeatureState({
+      featureDir,
+      issueId: 'HOK-2310',
+      featureSlug: 'native-test',
+      archiveDir: undefined,
+    });
+
+    // Planning phase should be captured with native agent
+    assert.equal(state.stages.planning?.status, 'completed');
+    assert.equal(state.stages.planning?.agent, 'native');
+    assert.equal(state.stages.planning?.model, 'pi-standard-20260101');
+
+    // Coding phase should be captured with native agent
+    assert.equal(state.stages.coding?.status, 'running');
+    assert.equal(state.stages.coding?.agent, 'native');
+    assert.equal(state.stages.coding?.model, 'pi-reasoning-20260201');
+
+    // Current phase should be coding (running)
+    assert.equal(state.currentPhase, 'coding');
+    assert.equal(state.normalizedState, 'running');
+  } finally {
+    cleanup([featureDir]);
+  }
+});
