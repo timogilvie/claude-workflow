@@ -711,3 +711,65 @@ test('native agent/model: stage results with native agent round-trip through fea
     cleanup([featureDir]);
   }
 });
+
+test('native agent/model: failed status maps to existing failed normalized state without native-specific path', async () => {
+  const featureDir = makeTempDir();
+  try {
+    mkdirSync(featureDir, { recursive: true });
+
+    writePlanningResult(featureDir, {
+      agent: 'native',
+      model: 'pi-standard-20260101',
+      status: 'failed',
+      failureReason: 'planner_error',
+      notes: 'Native planner failed',
+    });
+
+    const state = await deriveFeatureState({
+      featureDir,
+      issueId: 'HOK-2310',
+      slug: 'native-failed',
+    });
+
+    // Failed native phase reuses the same normalized state mapping as other agents
+    assert.equal(state.currentPhase, 'planning');
+    assert.equal(state.normalizedState, 'failed');
+    assert.equal(state.stages.planning?.agent, 'native');
+    assert.equal(state.stages.planning?.model, 'pi-standard-20260101');
+    assert.equal(state.stages.planning?.status, 'failed');
+    assert.equal(state.failureReason, 'stage_failed');
+    assert.ok(state.blockers.some((b) => b.code === 'stage_failed' && b.stage === 'planning'));
+  } finally {
+    cleanup([featureDir]);
+  }
+});
+
+test('native agent/model: awaiting_user status maps through existing hook-state machine', async () => {
+  const featureDir = makeTempDir();
+  try {
+    mkdirSync(featureDir, { recursive: true });
+
+    writePlanningResult(featureDir, {
+      agent: 'native',
+      model: 'pi-reasoning-20260201',
+      status: 'awaiting_user',
+      finishedAt: null,
+      notes: 'Native planner awaiting clarification',
+    });
+
+    const state = await deriveFeatureState({
+      featureDir,
+      issueId: 'HOK-2310',
+      slug: 'native-awaiting',
+    });
+
+    // awaiting_user must round-trip through the same normalized state used by Claude/Codex
+    assert.equal(state.currentPhase, 'planning');
+    assert.equal(state.normalizedState, 'awaiting_user');
+    assert.equal(state.stages.planning?.agent, 'native');
+    assert.equal(state.stages.planning?.model, 'pi-reasoning-20260201');
+    assert.equal(state.stages.planning?.status, 'awaiting_user');
+  } finally {
+    cleanup([featureDir]);
+  }
+});
