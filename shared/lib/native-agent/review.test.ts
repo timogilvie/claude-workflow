@@ -1,0 +1,254 @@
+import assert from 'node:assert/strict';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, it } from 'node:test';
+import { runNativeReview, nativeReviewTestUtils } from './review.ts';
+import type { ReviewContext } from '../review-context-gatherer.ts';
+import { parseTranscriptJsonl } from './transcript.ts';
+import type { ReadyNativeProviderEntry } from './providers.ts';
+
+describe('native review', () => {
+  const originalOpenAiApiKey = process.env.OPENAI_API_KEY;
+
+  afterEach(() => {
+    nativeReviewTestUtils.resetDeps();
+    if (originalOpenAiApiKey === undefined) {
+      delete process.env.OPENAI_API_KEY;
+    } else {
+      process.env.OPENAI_API_KEY = originalOpenAiApiKey;
+    }
+  });
+
+  it('returns parsed review results from the native loop', async () => {
+    const repoDir = makeTempRepo();
+    setReadyProvider();
+
+    nativeReviewTestUtils.setRunWavemillLoop(async (config) => {
+      const message = assistantMessage(JSON.stringify({
+        verdict: 'ready',
+        codeReviewFindings: [],
+      }));
+      emitCommonEvents(config, message);
+      return {
+        messages: [message],
+        stopReason: 'stop',
+        turnsCompleted: 1,
+        toolCallsExecuted: 0,
+        totalInputTokens: 10,
+        totalOutputTokens: 10,
+        totalCostUsd: 0,
+        wallClockMs: 5,
+      };
+    });
+
+    try {
+      const result = await runNativeReview(makeReviewContext(), repoDir, {});
+      assert.equal(result.verdict, 'ready');
+      assert.deepEqual(result.codeReviewFindings, []);
+      assert.deepEqual(result.metadata?.deniedTools, []);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('records denied tools from transcript events', async () => {
+    const repoDir = makeTempRepo();
+    setReadyProvider();
+
+    nativeReviewTestUtils.setRunWavemillLoop(async (config) => {
+      config.onEvent?.({ type: 'agent_start' });
+      config.onEvent?.({ type: 'turn_start' });
+      config.onEvent?.({
+        type: 'tool_execution_end',
+        toolCallId: 'tool-1',
+        toolName: 'apply_patch',
+        isError: true,
+        result: {
+          content: [{ type: 'text', text: 'phase_denied: tool "apply_patch" is not allowed in review' }],
+        },
+      });
+      const message = assistantMessage(JSON.stringify({
+        verdict: 'not_ready',
+        codeReviewFindings: [{
+          severity: 'warning',
+          location: 'file.ts:1',
+          category: 'style',
+          description: 'Example finding',
+        }],
+      }));
+      config.onEvent?.({ type: 'message_end', message });
+      config.onEvent?.({ type: 'turn_end', message, toolResults: [] });
+      config.onEvent?.({ type: 'agent_end', messages: [message] });
+
+      return {
+        messages: [message],
+        stopReason: 'stop',
+        turnsCompleted: 1,
+        toolCallsExecuted: 0,
+        totalInputTokens: 10,
+        totalOutputTokens: 10,
+        totalCostUsd: 0,
+        wallClockMs: 5,
+      };
+    });
+
+    try {
+      const result = await runNativeReview(makeReviewContext(), repoDir, {});
+      assert.equal(result.metadata?.deniedTools?.length, 1);
+      assert.deepEqual(result.metadata?.deniedTools?.[0], {
+        tool: 'apply_patch',
+        reason: 'phase_denied',
+        message: 'phase_denied: tool "apply_patch" is not allowed in review',
+      });
+
+      const transcript = loadTranscript(repoDir);
+      const toolResult = transcript.find((event) => event.type === 'tool_result');
+      assert.equal(toolResult?.type, 'tool_result');
+      if (toolResult?.type === 'tool_result') {
+        assert.equal(toolResult.isError, true);
+        assert.match(toolResult.content, /phase_denied/);
+      }
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('maps malformed native output to a blocker finding', async () => {
+    const repoDir = makeTempRepo();
+    setReadyProvider();
+
+    nativeReviewTestUtils.setRunWavemillLoop(async (config) => {
+      const message = assistantMessage('this is not json');
+      emitCommonEvents(config, message);
+      return {
+        messages: [message],
+        stopReason: 'stop',
+        turnsCompleted: 1,
+        toolCallsExecuted: 0,
+        totalInputTokens: 10,
+        totalOutputTokens: 10,
+        totalCostUsd: 0,
+        wallClockMs: 5,
+      };
+    });
+
+    try {
+      const result = await runNativeReview(makeReviewContext(), repoDir, {});
+      assert.equal(result.verdict, 'not_ready');
+      assert.equal(result.codeReviewFindings[0].category, 'native-review-malformed-response');
+      assert.deepEqual(result.metadata?.deniedTools, []);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('maps turn-limit exits to a blocker finding', async () => {
+    const repoDir = makeTempRepo();
+    setReadyProvider();
+
+    nativeReviewTestUtils.setRunWavemillLoop(async (config) => {
+      config.onEvent?.({ type: 'agent_start' });
+      config.onEvent?.({ type: 'agent_end', messages: [] });
+      return {
+        messages: [],
+        stopReason: 'turn_limit',
+        turnsCompleted: 2,
+        toolCallsExecuted: 1,
+        totalInputTokens: 10,
+        totalOutputTokens: 10,
+        totalCostUsd: 0,
+        wallClockMs: 5,
+      };
+    });
+
+    try {
+      const result = await runNativeReview(makeReviewContext(), repoDir, {});
+      assert.equal(result.verdict, 'not_ready');
+      assert.equal(result.codeReviewFindings[0].category, 'native-review-failed');
+      assert.match(result.codeReviewFindings[0].description, /iteration limit/i);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+});
+
+function makeTempRepo(): string {
+  const repoDir = mkdtempSync(join(tmpdir(), 'native-review-test-'));
+  writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({}), 'utf-8');
+  return repoDir;
+}
+
+function makeReviewContext(): ReviewContext {
+  return {
+    diff: 'diff --git a/file.ts b/file.ts',
+    plan: 'Plan',
+    taskPacket: 'Task packet',
+    designContext: null,
+    metadata: {
+      branch: 'feature/native-review',
+      files: ['file.ts'],
+      hasUiChanges: false,
+    },
+  };
+}
+
+function assistantMessage(text: string) {
+  return {
+    role: 'assistant' as const,
+    content: [{ type: 'text' as const, text }],
+    api: 'openai-responses',
+    provider: 'openai',
+    model: 'gpt-4o',
+    usage: {
+      input: 10,
+      output: 10,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 20,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: 'stop' as const,
+    timestamp: Date.now(),
+  };
+}
+
+function setReadyProvider() {
+  const provider: ReadyNativeProviderEntry = {
+    providerName: 'openai',
+    modelId: 'gpt-4o',
+    status: 'ready',
+    apiKeyEnv: 'OPENAI_API_KEY',
+    baseUrl: 'https://api.openai.com/v1',
+    headers: {},
+    model: {
+      id: 'openai:gpt-4o',
+      name: 'gpt-4o',
+      api: 'openai-responses',
+      provider: 'openai',
+      baseUrl: 'https://api.openai.com/v1',
+      headers: {},
+    } as ReadyNativeProviderEntry['model'],
+  };
+
+  nativeReviewTestUtils.setSelectReviewProvider(() => ({ ok: true, entry: provider }));
+  nativeReviewTestUtils.setGetNativeProviderApiKey(() => 'test-key');
+}
+
+function emitCommonEvents(config: { onEvent?: (event: any) => void }, message: ReturnType<typeof assistantMessage>) {
+  config.onEvent?.({ type: 'agent_start' });
+  config.onEvent?.({ type: 'turn_start' });
+  config.onEvent?.({ type: 'message_end', message });
+  config.onEvent?.({ type: 'turn_end', message, toolResults: [] });
+  config.onEvent?.({ type: 'agent_end', messages: [message] });
+}
+
+function loadTranscript(repoDir: string) {
+  const runsDir = join(repoDir, '.wavemill', 'runs');
+  const runId = readdirSync(runsDir)[0];
+  const nativeSessionsDir = join(runsDir, runId, 'native-sessions');
+  const transcriptFile = readdirSync(nativeSessionsDir).find((file) => file.endsWith('.jsonl'));
+  assert.ok(transcriptFile, 'expected a native transcript file');
+  const transcriptPath = join(nativeSessionsDir, transcriptFile);
+  return parseTranscriptJsonl(readFileSync(transcriptPath, 'utf-8'));
+}
