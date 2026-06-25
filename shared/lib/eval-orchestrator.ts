@@ -484,7 +484,10 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
     stageArtifacts.executionModel,
   );
 
-  // Resolve provider metadata: prefer native when agentType is native; fall back to DeepSeek
+  // Resolve provider metadata: prefer native when agentType is native; fall back to DeepSeek.
+  // 'native' is the eval-layer canonical agent value (as written to stage-result.agent);
+  // routing-config sub-types like 'native-openai' / 'native-openrouter' are normalized to
+  // 'native' before reaching this layer.
   let providerMetadata: { provider: string; endpoint?: string } | null = null;
   if (agentType === 'native' && worktreePath) {
     providerMetadata = getNativeProviderMetadata(worktreePath);
