@@ -29,7 +29,8 @@
         "tool",
         "memory",
         "agent-config",
-        "environment"
+        "environment",
+        "runtime"
       ]
     },
     "name": {
