@@ -1460,7 +1460,7 @@ function registerWorkflowDecisionResources(
     const ref = registerAgentConfig({
       phase,
       model,
-      cliCmd: resolveAgent(model, agentMap, defaultAgent),
+      cliCmd: resolveAgent(model, agentMap, defaultAgent, repoDir, phase),
       repoDir,
     });
     if (ref) {
@@ -1791,9 +1791,9 @@ export function summarizeWorkflowRoute(decision: WorkflowRouteDecision, repoDir?
   const defaultAgent = routerConfig.defaultAgent || 'claude';
   const agentMap = routerConfig.agentMap || {};
 
-  const plannerAgent = resolveAgent(decision.planner, agentMap, defaultAgent, repoDir);
-  const coderAgent = resolveAgent(decision.coder, agentMap, defaultAgent, repoDir);
-  const reviewerAgent = resolveAgent(decision.reviewer, agentMap, defaultAgent, repoDir);
+  const plannerAgent = resolveAgent(decision.planner, agentMap, defaultAgent, repoDir, 'planning');
+  const coderAgent = resolveAgent(decision.coder, agentMap, defaultAgent, repoDir, 'coding');
+  const reviewerAgent = resolveAgent(decision.reviewer, agentMap, defaultAgent, repoDir, 'review');
 
   const difficultySuffix = decision.signals.taskDifficulty
     ? `  difficulty=${decision.signals.taskDifficulty}`

@@ -3007,12 +3007,75 @@ test('missing nativeAgent config returns an empty object', () => {
   }
 });
 
+test('nativeAgent remains default-off when only providers are configured', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      nativeAgent: {
+        providers: {
+          openai: {
+            apiKeyEnv: 'OPENAI_API_KEY',
+          },
+        },
+      },
+    }));
+
+    assert.equal(getNativeAgentConfig(tmp).enabled, undefined);
+    assert.equal(loadWavemillConfig(tmp).nativeAgent?.enabled, undefined);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('valid nativeAgent allowedPhases validate and are returned by the accessor', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      nativeAgent: {
+        enabled: true,
+        allowedPhases: ['task-expansion', 'planning', 'review'],
+      },
+    }));
+
+    assert.deepEqual(getNativeAgentConfig(tmp), {
+      enabled: true,
+      allowedPhases: ['task-expansion', 'planning', 'review'],
+    });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('invalid nativeAgent allowedPhases are rejected by schema validation', () => {
+  if (!hasAjv) return;
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      nativeAgent: {
+        enabled: true,
+        allowedPhases: ['planning', 'coding'],
+      },
+    }));
+
+    assert.throws(() => {
+      loadWavemillConfig(tmp);
+    }, /validation failed/);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
 test('valid nativeAgent provider config validates and is returned by the accessor', () => {
   const tmp = makeTempRepo();
   try {
     clearConfigCache();
     writeConfig(tmp, JSON.stringify({
       nativeAgent: {
+        enabled: true,
+        allowedPhases: ['planning', 'review'],
         providers: {
           openai: {
             apiKeyEnv: 'OPENAI_API_KEY',
@@ -3033,6 +3096,8 @@ test('valid nativeAgent provider config validates and is returned by the accesso
     }));
 
     assert.deepEqual(getNativeAgentConfig(tmp), {
+      enabled: true,
+      allowedPhases: ['planning', 'review'],
       providers: {
         openai: {
           apiKeyEnv: 'OPENAI_API_KEY',
