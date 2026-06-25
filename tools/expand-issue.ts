@@ -13,7 +13,7 @@ import { confirm } from '../shared/lib/cli-prompt.ts';
 import {
   parseIssueInput,
   formatIssueContext,
-  expandIssueWithClaude,
+  expandIssue,
   checkSubsystemDrift,
 } from '../shared/lib/issue-expander.ts';
 import { autoLabelIssue } from '../shared/lib/issue-labeler.ts';
@@ -116,13 +116,15 @@ runTool({
     // Expand with Claude
     console.log('Expanding issue with Claude...\n');
     console.log('─'.repeat(80));
-    const expandedDescription = await expandIssueWithClaude(
+    const expansionResult = await expandIssue({
       promptTemplate,
       issueContext,
       codebaseContext,
-      undefined,
       mode,
-    );
+      repoDir: repoPath,
+      issueId: issue.identifier,
+    });
+    const expandedDescription = expansionResult.text;
     console.log('─'.repeat(80));
     console.log('\n');
 
@@ -167,6 +169,12 @@ runTool({
             console.log(`✓ Sub-packet ${index + 1} saved to: ${packetPaths.full}`);
           }
         }
+
+        if (expansionResult.native) {
+          const { writeNativeExpansionSidecar } = await import('../shared/lib/native-expansion.ts');
+          const sidecarPath = await writeNativeExpansionSidecar(outputFile, expansionResult.native);
+          console.log(`✓ Native expansion metadata saved to: ${sidecarPath}`);
+        }
       } catch (writeError) {
         const errorMsg = errorMessage(writeError);
         console.warn(`⚠️  Failed to write output files: ${errorMsg}`);
@@ -176,6 +184,13 @@ runTool({
       console.log(header);
       console.log('\n');
       console.log('(Full details available in details section)\n');
+    }
+
+    if (expansionResult.native) {
+      console.log(
+        `✓ Native expansion: agent=${expansionResult.native.agent} model=${expansionResult.native.model} ` +
+        `cost=$${expansionResult.native.cost.toFixed(4)} denied=${expansionResult.native.deniedToolCalls.length}`
+      );
     }
 
     // Validate output before updating Linear (use full content for validation)
