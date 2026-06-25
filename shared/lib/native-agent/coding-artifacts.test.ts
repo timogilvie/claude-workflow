@@ -32,15 +32,21 @@ describe('coding-artifacts', () => {
       });
     });
 
-    it('accepts payloads with missing metric fields', () => {
-      const result = validateCodingArtifacts({ type: 'coding' });
-      assert.deepEqual(result, {
-        ok: true,
-        value: { type: 'coding' },
-      });
+    it('rejects payloads with missing metric fields with per-field missing_field codes', () => {
+      const result = validateCodingArtifacts({ type: 'coding', filesChanged: 1 });
+      assert.equal(result.ok, false);
+      if (result.ok) return;
+      assert.deepEqual(
+        result.errors.map((error) => ({ code: error.code, path: error.path })),
+        [
+          { code: 'missing_field', path: '$.linesAdded' },
+          { code: 'missing_field', path: '$.linesRemoved' },
+          { code: 'missing_field', path: '$.commitCount' },
+        ],
+      );
     });
 
-    it('rejects negative and non-integer counts', () => {
+    it('rejects negative and non-integer counts with deterministic codes', () => {
       const result = validateCodingArtifacts({
         type: 'coding',
         filesChanged: -1,
@@ -52,8 +58,13 @@ describe('coding-artifacts', () => {
       assert.equal(result.ok, false);
       if (result.ok) return;
       assert.deepEqual(
-        result.errors.map((error) => error.path),
-        ['$.filesChanged', '$.linesAdded', '$.linesRemoved', '$.commitCount'],
+        result.errors.map((error) => ({ code: error.code, path: error.path })),
+        [
+          { code: 'negative_value', path: '$.filesChanged' },
+          { code: 'non_integer_value', path: '$.linesAdded' },
+          { code: 'non_integer_value', path: '$.linesRemoved' },
+          { code: 'non_integer_value', path: '$.commitCount' },
+        ],
       );
     });
   });

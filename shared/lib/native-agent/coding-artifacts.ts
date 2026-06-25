@@ -9,12 +9,21 @@ export interface CodingComplete {
 
 export interface CodingArtifacts {
   type: 'coding';
-  filesChanged?: number;
-  linesAdded?: number;
-  linesRemoved?: number;
-  commitCount?: number;
+  filesChanged: number;
+  linesAdded: number;
+  linesRemoved: number;
+  commitCount: number;
   [futureField: string]: unknown;
 }
+
+const CODING_ARTIFACT_METRIC_FIELDS = [
+  'filesChanged',
+  'linesAdded',
+  'linesRemoved',
+  'commitCount',
+] as const;
+
+type CodingArtifactMetricField = (typeof CODING_ARTIFACT_METRIC_FIELDS)[number];
 
 /**
  * Whole-file write allowlist inputs are kept separate from mutation policy so
@@ -31,7 +40,14 @@ export interface NormalizedWholeFileWriteAllowlistInput {
 }
 
 export interface CodingArtifactsValidationError {
-  code: 'invalid_type' | 'invalid_metric' | 'invalid_confidence' | 'missing_confidence' | 'invalid_allowlist';
+  code:
+    | 'invalid_type'
+    | 'missing_field'
+    | 'negative_value'
+    | 'non_integer_value'
+    | 'invalid_confidence'
+    | 'missing_confidence'
+    | 'invalid_allowlist';
   path: string;
   message: string;
 }
@@ -78,22 +94,21 @@ export function parseCodingComplete(input: string): ParseCodingCompleteResult {
     fields[key] = value;
   }
 
-  const confidence = fields.confidence;
-  if (!confidence) {
+  const rawConfidence = fields.confidence;
+  if (!rawConfidence) {
     errors.push({
       code: 'missing_confidence',
       path: '$.confidence',
       message: 'Coding completion marker must include confidence=<high|medium|low>.',
     });
-  } else if (!isCodingCompleteConfidence(confidence)) {
+    return { ok: false, errors };
+  }
+  if (!isCodingCompleteConfidence(rawConfidence)) {
     errors.push({
       code: 'invalid_confidence',
       path: '$.confidence',
       message: 'Coding completion confidence must be high, medium, or low.',
     });
-  }
-
-  if (errors.length > 0) {
     return { ok: false, errors };
   }
 
@@ -102,7 +117,7 @@ export function parseCodingComplete(input: string): ParseCodingCompleteResult {
   return {
     ok: true,
     value: {
-      confidence,
+      confidence: rawConfidence,
       ...(Object.keys(fields).length > 0 ? { fields } : {}),
     },
   };
@@ -134,10 +149,9 @@ export function validateCodingArtifacts(input: unknown): ValidateCodingArtifacts
     });
   }
 
-  validateMetric(input.filesChanged, '$.filesChanged', errors);
-  validateMetric(input.linesAdded, '$.linesAdded', errors);
-  validateMetric(input.linesRemoved, '$.linesRemoved', errors);
-  validateMetric(input.commitCount, '$.commitCount', errors);
+  for (const field of CODING_ARTIFACT_METRIC_FIELDS) {
+    validateMetric(field, input[field], errors);
+  }
 
   if (errors.length > 0) {
     return { ok: false, errors };
@@ -174,24 +188,34 @@ export function validateWholeFileWriteAllowlistInput(
 }
 
 function validateMetric(
+  field: CodingArtifactMetricField,
   input: unknown,
-  path: string,
   errors: CodingArtifactsValidationError[],
 ): void {
+  const path = `$.${field}`;
   if (input === undefined) {
+    errors.push({
+      code: 'missing_field',
+      path,
+      message: `${path} is required.`,
+    });
     return;
   }
 
-  if (
-    typeof input !== 'number'
-    || !Number.isInteger(input)
-    || !Number.isFinite(input)
-    || input < 0
-  ) {
+  if (typeof input !== 'number' || !Number.isInteger(input)) {
     errors.push({
-      code: 'invalid_metric',
+      code: 'non_integer_value',
       path,
-      message: `${path} must be a non-negative integer when provided.`,
+      message: `${path} must be a finite integer.`,
+    });
+    return;
+  }
+
+  if (input < 0) {
+    errors.push({
+      code: 'negative_value',
+      path,
+      message: `${path} must be non-negative.`,
     });
   }
 }
