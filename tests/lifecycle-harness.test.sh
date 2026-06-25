@@ -1641,6 +1641,34 @@ test_coding_complete_dirty_worktree_without_commits_needs_attention() {
   check_file_exists "uncommitted output: dedupe marker written" "$feature_dir/.coding-uncommitted-output-announced"
 }
 
+test_coding_complete_dirty_worktree_with_commits_needs_attention() {
+  local slug="coding-complete-dirty-tree"
+  local issue="HOK-2345-DIRTY"
+  local repo tick feature_dir
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  feature_dir="$repo/features/$slug"
+
+  printf 'committed change\n' >> "$repo/README.md"
+  git -C "$repo" add README.md
+  git -C "$repo" commit -m "feat: committed coding output" >/dev/null 2>&1
+
+  touch "$feature_dir/.coding-complete"
+  printf 'still dirty\n' >> "$repo/src-dirty.ts"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
+
+  check_eq "dirty tree: phase stays coding" "coding" "$(kv_value "$tick" phase)"
+  check_eq "dirty tree: coding stage stays running" "running" "$(harness_read_stage_status "$repo" "$slug" coding)"
+  check_eq "dirty tree: needs-user attention set" "needs-user" "$(kv_value "$tick" attention)"
+  check_eq "dirty tree: task remains active" "1" "$(kv_value "$tick" active_count)"
+  check_not_contains "dirty tree: review does not launch" "$(kv_value "$tick" log_output)" "Launching review phase"
+  check_contains "dirty tree: actionable log emitted" "$(kv_value "$tick" log_output)" "worktree still contains uncommitted coding output"
+  check_file_exists "dirty tree: artifact written" "$feature_dir/.coding-uncommitted-output.json"
+  check_file_exists "dirty tree: dedupe marker written" "$feature_dir/.coding-uncommitted-output-announced"
+}
+
 test_coding_blocked_completion_malformed_json_falls_back() {
   local slug="coding-blocked-completion-malformed"
   local issue="HOK-1642-MALFORMED"
