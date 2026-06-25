@@ -64,6 +64,44 @@ export type ValidateWholeFileWriteAllowlistResult =
   | { ok: true; value: NormalizedWholeFileWriteAllowlistInput }
   | { ok: false; errors: CodingArtifactsValidationError[] };
 
+export type CompletionGateViolationCode =
+  | 'dirty_tree_uncommitted'
+  | 'checks_not_satisfied';
+
+export interface CompletionGatePolicy {
+  requireCleanOrCommitted?: boolean;
+  requireChecksPassed?: boolean;
+}
+
+export interface CompletionGateInput {
+  dirtyEntries: readonly string[];
+  allChangesCommitted: boolean;
+  requiredChecksPassed: boolean;
+  policy?: CompletionGatePolicy;
+}
+
+export type CompletionGateDecision =
+  | { allowed: true }
+  | { allowed: false; code: CompletionGateViolationCode; detail: string };
+
+export interface AcceptCodingCompletionInput {
+  marker: string;
+  artifacts: unknown;
+  gate?: CompletionGateInput;
+}
+
+export type CodingCompletionAcceptance =
+  | { status: 'accepted'; complete: CodingComplete; artifacts: CodingArtifacts }
+  | {
+      status: 'blocked';
+      code: CompletionGateViolationCode;
+      detail: string;
+    }
+  | {
+      status: 'invalid';
+      errors: CodingArtifactsValidationError[];
+    };
+
 const CODING_COMPLETE_CONFIDENCE_VALUES: readonly CodingCompleteConfidence[] = ['high', 'medium', 'low'] as const;
 
 export function isCodingCompleteConfidence(value: string): value is CodingCompleteConfidence {
@@ -158,6 +196,60 @@ export function validateCodingArtifacts(input: unknown): ValidateCodingArtifacts
   }
 
   return { ok: true, value: input as CodingArtifacts };
+}
+
+export function evaluateCompletionGate(input: CompletionGateInput): CompletionGateDecision {
+  const requireCleanOrCommitted = input.policy?.requireCleanOrCommitted ?? false;
+  const requireChecksPassed = input.policy?.requireChecksPassed ?? false;
+
+  if (requireCleanOrCommitted) {
+    const hasDirtyEntries = input.dirtyEntries.length > 0;
+    if (hasDirtyEntries && !input.allChangesCommitted) {
+      const detail = `dirty_tree_uncommitted: ${input.dirtyEntries.join(', ')}`;
+      return { allowed: false, code: 'dirty_tree_uncommitted', detail };
+    }
+  }
+
+  if (requireChecksPassed && !input.requiredChecksPassed) {
+    return {
+      allowed: false,
+      code: 'checks_not_satisfied',
+      detail: 'checks_not_satisfied: required checks have not been recorded as passed',
+    };
+  }
+
+  return { allowed: true };
+}
+
+export function acceptCodingCompletion(input: AcceptCodingCompletionInput): CodingCompletionAcceptance {
+  const errors: CodingArtifactsValidationError[] = [];
+
+  const completeResult = parseCodingComplete(input.marker);
+  if (!completeResult.ok) {
+    errors.push(...completeResult.errors);
+  }
+
+  const artifactsResult = validateCodingArtifacts(input.artifacts);
+  if (!artifactsResult.ok) {
+    errors.push(...artifactsResult.errors);
+  }
+
+  if (!completeResult.ok || !artifactsResult.ok) {
+    return { status: 'invalid', errors };
+  }
+
+  if (input.gate) {
+    const decision = evaluateCompletionGate(input.gate);
+    if (!decision.allowed) {
+      return { status: 'blocked', code: decision.code, detail: decision.detail };
+    }
+  }
+
+  return {
+    status: 'accepted',
+    complete: completeResult.value,
+    artifacts: artifactsResult.value,
+  };
 }
 
 export function validateWholeFileWriteAllowlistInput(

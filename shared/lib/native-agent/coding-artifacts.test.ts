@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  acceptCodingCompletion,
+  evaluateCompletionGate,
   isCodingCompleteConfidence,
   parseCodingComplete,
   serializeCodingComplete,
@@ -103,6 +105,153 @@ describe('coding-artifacts', () => {
         }),
         'confidence=low\nproducer=native-agent\n',
       );
+    });
+  });
+
+  describe('evaluateCompletionGate', () => {
+    it('rejects when policy requires clean/committed tree and dirty entries are uncommitted', () => {
+      const decision = evaluateCompletionGate({
+        dirtyEntries: ['shared/lib/foo.ts'],
+        allChangesCommitted: false,
+        requiredChecksPassed: true,
+        policy: { requireCleanOrCommitted: true },
+      });
+
+      assert.equal(decision.allowed, false);
+      if (decision.allowed) return;
+      assert.equal(decision.code, 'dirty_tree_uncommitted');
+      assert.match(decision.detail, /shared\/lib\/foo\.ts/);
+    });
+
+    it('allows when tree is clean and required checks have passed', () => {
+      const decision = evaluateCompletionGate({
+        dirtyEntries: [],
+        allChangesCommitted: true,
+        requiredChecksPassed: true,
+        policy: { requireCleanOrCommitted: true, requireChecksPassed: true },
+      });
+
+      assert.deepEqual(decision, { allowed: true });
+    });
+
+    it('allows dirty entries when policy accepts fully committed state', () => {
+      const decision = evaluateCompletionGate({
+        dirtyEntries: ['shared/lib/foo.ts'],
+        allChangesCommitted: true,
+        requiredChecksPassed: true,
+        policy: { requireCleanOrCommitted: true },
+      });
+
+      assert.deepEqual(decision, { allowed: true });
+    });
+
+    it('rejects when required checks are not satisfied', () => {
+      const decision = evaluateCompletionGate({
+        dirtyEntries: [],
+        allChangesCommitted: true,
+        requiredChecksPassed: false,
+        policy: { requireChecksPassed: true },
+      });
+
+      assert.equal(decision.allowed, false);
+      if (decision.allowed) return;
+      assert.equal(decision.code, 'checks_not_satisfied');
+    });
+
+    it('treats missing policy as gate disabled', () => {
+      const decision = evaluateCompletionGate({
+        dirtyEntries: ['shared/lib/foo.ts'],
+        allChangesCommitted: false,
+        requiredChecksPassed: false,
+      });
+
+      assert.deepEqual(decision, { allowed: true });
+    });
+  });
+
+  describe('acceptCodingCompletion', () => {
+    const validMarker = 'confidence=high\n';
+    const validArtifacts = {
+      type: 'coding',
+      filesChanged: 1,
+      linesAdded: 4,
+      linesRemoved: 0,
+      commitCount: 1,
+    } as const;
+
+    it('returns blocked when the completion gate rejects a dirty uncommitted tree', () => {
+      const result = acceptCodingCompletion({
+        marker: validMarker,
+        artifacts: validArtifacts,
+        gate: {
+          dirtyEntries: ['shared/lib/foo.ts'],
+          allChangesCommitted: false,
+          requiredChecksPassed: true,
+          policy: { requireCleanOrCommitted: true },
+        },
+      });
+
+      assert.equal(result.status, 'blocked');
+      if (result.status !== 'blocked') return;
+      assert.equal(result.code, 'dirty_tree_uncommitted');
+      assert.match(result.detail, /shared\/lib\/foo\.ts/);
+    });
+
+    it('returns blocked idempotently for repeated dirty calls', () => {
+      const input = {
+        marker: validMarker,
+        artifacts: validArtifacts,
+        gate: {
+          dirtyEntries: ['shared/lib/foo.ts'],
+          allChangesCommitted: false,
+          requiredChecksPassed: true,
+          policy: { requireCleanOrCommitted: true },
+        },
+      };
+
+      const first = acceptCodingCompletion(input);
+      const second = acceptCodingCompletion(input);
+      assert.deepEqual(first, second);
+    });
+
+    it('accepts when the gate is satisfied and emits the parsed completion marker', () => {
+      const result = acceptCodingCompletion({
+        marker: validMarker,
+        artifacts: validArtifacts,
+        gate: {
+          dirtyEntries: [],
+          allChangesCommitted: true,
+          requiredChecksPassed: true,
+          policy: { requireCleanOrCommitted: true, requireChecksPassed: true },
+        },
+      });
+
+      assert.equal(result.status, 'accepted');
+      if (result.status !== 'accepted') return;
+      assert.deepEqual(result.complete, { confidence: 'high' });
+      assert.deepEqual(result.artifacts, validArtifacts);
+    });
+
+    it('returns invalid when the marker or artifacts do not parse', () => {
+      const result = acceptCodingCompletion({
+        marker: 'confidence=certain\n',
+        artifacts: { type: 'coding' },
+      });
+
+      assert.equal(result.status, 'invalid');
+      if (result.status !== 'invalid') return;
+      const codes = result.errors.map((e) => e.code);
+      assert.ok(codes.includes('invalid_confidence'));
+      assert.ok(codes.includes('missing_field'));
+    });
+
+    it('accepts when no gate is provided (additive default)', () => {
+      const result = acceptCodingCompletion({
+        marker: validMarker,
+        artifacts: validArtifacts,
+      });
+
+      assert.equal(result.status, 'accepted');
     });
   });
 

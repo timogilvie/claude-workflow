@@ -204,6 +204,21 @@ describe('native-agent tool policies', () => {
     assert.deepEqual(decision, { kind: 'allow' });
   });
 
+  it('denies patch-style mutation edits outside the worktree even without pathFieldsByTool', () => {
+    const decision = evaluate({
+      phase: 'coding',
+      name: 'patch_file',
+      arguments: { path: '../escape.ts', diff: '@@ -1 +1 @@\n-old\n+new\n' },
+      registry: [makeMetadata('patch_file', 'mutation')],
+    });
+
+    assert.deepEqual(decision, {
+      kind: 'deny',
+      reason: 'path_denied',
+      message: "path_denied: '../escape.ts' resolves outside the worktree",
+    });
+  });
+
   it('allows patch-style source edits', () => {
     const decision = evaluate({
       phase: 'coding',

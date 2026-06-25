@@ -139,10 +139,6 @@ function evaluateMutationPolicy(
   toolCall: ToolPolicyCall,
   config: ToolPolicyConfig | undefined,
 ): ToolPolicyDecision | null {
-  if (!isWholeFileWrite(toolCall)) {
-    return null;
-  }
-
   const pathValue = getMutationTargetPath(toolCall);
   if (!pathValue) {
     return null;
@@ -154,6 +150,10 @@ function evaluateMutationPolicy(
       'path_denied',
       `path_denied: '${resolved.displayPath}' resolves outside the worktree`,
     );
+  }
+
+  if (!isWholeFileWrite(toolCall)) {
+    return null;
   }
 
   if (!isSourceLikePath(resolved.repoRelativePath) || isAllowlistedWholeFilePath(resolved.repoRelativePath, config)) {
