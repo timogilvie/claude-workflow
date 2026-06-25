@@ -799,6 +799,7 @@ describe('model-registry', () => {
             reasoningTier: 'advanced',
             costPerMillionInputTokensUsd: 5,
             costPerMillionOutputTokensUsd: 15,
+            agent: 'native-openai',
             nativeCapability: {
               nativeProvider: 'openai',
               piTransportKind: 'openai-responses',
@@ -808,6 +809,7 @@ describe('model-registry', () => {
         },
       });
 
+      assert.equal(merged.models['native-openai'].agent, 'native-openai');
       assert.deepEqual(merged.models['native-openai'].nativeCapability, {
         nativeProvider: 'openai',
         piTransportKind: 'openai-responses',

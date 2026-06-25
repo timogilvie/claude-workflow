@@ -5,6 +5,10 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { aggregateEvalHistory, recommendModel, resolveAgent } from './model-router.ts';
 
+function writeRepoConfig(repoDir: string, config: unknown): void {
+  writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify(config), 'utf-8');
+}
+
 describe('model-router resolveAgent', () => {
   it('routes known DeepSeek models to claude', () => {
     assert.equal(resolveAgent('deepseek-v4-pro', {}, 'codex'), 'claude');
@@ -27,6 +31,121 @@ describe('model-router resolveAgent', () => {
   it('does not route OpenRouter aliases through the disabled claude-openrouter shim', () => {
     assert.equal(resolveAgent('qwen-3-coder', {}, 'codex'), 'codex');
     assert.equal(resolveAgent('qwen-3-coder', { 'qwen-3-coder': 'claude-openrouter' }, 'codex'), 'codex');
+  });
+
+  it('resolves native-openai only when native config is enabled and the phase is allowed', () => {
+    const repoDir = mkdtempSync(join(tmpdir(), 'model-router-native-openai-'));
+
+    try {
+      writeRepoConfig(repoDir, {
+        nativeAgent: {
+          enabled: true,
+          allowedPhases: ['planning', 'review'],
+          providers: {
+            openai: {
+              apiKeyEnv: 'OPENAI_API_KEY',
+            },
+          },
+        },
+        modelRegistry: {
+          models: {
+            'gpt-5.4': {
+              agent: 'native-openai',
+              nativeCapability: {
+                nativeProvider: 'openai',
+                piTransportKind: 'openai-responses',
+                readOnlyNative: 'certified',
+              },
+            },
+          },
+        },
+      });
+
+      assert.equal(resolveAgent('gpt-5.4', {}, 'codex', repoDir, 'planning'), 'native-openai');
+      assert.equal(resolveAgent('gpt-5.4', {}, 'codex', repoDir, 'review'), 'native-openai');
+      assert.equal(resolveAgent('gpt-5.4', {}, 'codex', repoDir, 'coding'), 'codex');
+      assert.equal(resolveAgent('gpt-5.4', {}, 'codex', repoDir), 'codex');
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps legacy resolution when native config is absent or disabled', () => {
+    const repoDir = mkdtempSync(join(tmpdir(), 'model-router-native-default-off-'));
+
+    try {
+      writeRepoConfig(repoDir, {
+        nativeAgent: {
+          enabled: false,
+          allowedPhases: ['planning', 'review'],
+          providers: {
+            openai: {
+              apiKeyEnv: 'OPENAI_API_KEY',
+            },
+          },
+        },
+        modelRegistry: {
+          models: {
+            'gpt-5.4': {
+              agent: 'native-openai',
+              nativeCapability: {
+                nativeProvider: 'openai',
+                piTransportKind: 'openai-responses',
+                readOnlyNative: 'certified',
+              },
+            },
+          },
+        },
+      });
+
+      assert.equal(resolveAgent('gpt-5.4', {}, 'codex', repoDir, 'planning'), 'codex');
+      assert.equal(resolveAgent('gpt-5.4', {}, 'codex', repoDir, 'review'), 'codex');
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('blocks native resolution when the model capability does not allow the mapped provider', () => {
+    const repoDir = mkdtempSync(join(tmpdir(), 'model-router-native-provider-mismatch-'));
+
+    try {
+      writeRepoConfig(repoDir, {
+        nativeAgent: {
+          enabled: true,
+          allowedPhases: ['planning'],
+          providers: {
+            openrouter: {
+              apiKeyEnv: 'OPENROUTER_API_KEY',
+            },
+          },
+        },
+        modelRegistry: {
+          models: {
+            'qwen-3-coder': {
+              nativeCapability: {
+                nativeProvider: 'openrouter',
+                piTransportKind: 'openai-completions',
+                readOnlyNative: 'certified',
+                compatFlags: {
+                  thinkingFormat: 'openrouter',
+                },
+              },
+            },
+          },
+        },
+      });
+
+      assert.equal(
+        resolveAgent('qwen-3-coder', { 'qwen-3-coder': 'native-openai' }, 'codex', repoDir, 'planning'),
+        'codex',
+      );
+      assert.equal(
+        resolveAgent('qwen-3-coder', { 'qwen-3-coder': 'native-openrouter' }, 'codex', repoDir, 'planning'),
+        'native-openrouter',
+      );
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
   });
 
   it('computes success rate with the shared eval success policy', () => {

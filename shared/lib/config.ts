@@ -16,6 +16,7 @@ import { createRequire } from 'node:module';
 import { errorMessage } from './error-utils.ts';
 import { parseModelSelector } from './model-registry.ts';
 import type {
+  AgentType,
   LatencyTier,
   MultimodalSupport,
   ReasoningTier,
@@ -177,7 +178,7 @@ export interface ModelCapabilitiesOverride {
   reasoningTier?: ReasoningTier;
   costPerMillionInputTokensUsd?: number;
   costPerMillionOutputTokensUsd?: number;
-  agent?: string;
+  agent?: AgentType;
   nativeCapability?: NativeCapabilityOverride;
   releasedAt?: string;
 }
@@ -239,8 +240,8 @@ export interface RouterConfig {
   minModels?: number;
   models?: string[];
   availableModels?: AvailableModelsConfig;
-  defaultAgent?: string;
-  agentMap?: Record<string, string>;
+  defaultAgent?: AgentType;
+  agentMap?: Record<string, AgentType>;
   mode?: 'heuristic' | 'llm' | 'auto' | 'stage-aware' | 'hokusai';
   llmModel?: string;
   llmProvider?: 'openai' | 'anthropic';
@@ -383,6 +384,7 @@ export interface ProvidersConfig {
 }
 
 export type NativeAgentProviderName = 'openai' | 'openrouter';
+export type NativeAgentAllowedPhase = 'task-expansion' | 'planning' | 'review';
 
 export interface NativeAgentProviderConfig {
   enabled?: boolean;
@@ -398,6 +400,8 @@ export interface NativeAgentProvidersConfig {
 }
 
 export interface NativeAgentConfig {
+  enabled?: boolean;
+  allowedPhases?: NativeAgentAllowedPhase[];
   providers?: NativeAgentProvidersConfig;
 }
 
