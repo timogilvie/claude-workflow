@@ -180,6 +180,76 @@ describe('patch-contract', () => {
     );
   });
 
+  it('rejects edit operations whose oldText equals newText', () => {
+    const result = validateNativePatch({
+      version: NATIVE_PATCH_VERSION,
+      atomic: true,
+      operations: [
+        { op: 'edit', path: 'src/a.ts', oldText: 'x', newText: 'x' },
+      ],
+    });
+
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.deepEqual(
+      result.errors.map((error) => ({ code: error.code, operationIndex: error.operationIndex })),
+      [{ code: 'identical_old_new', operationIndex: 0 }],
+    );
+  });
+
+  it('accepts and validates expectedOccurrences', () => {
+    const result = validateNativePatch({
+      version: NATIVE_PATCH_VERSION,
+      atomic: true,
+      operations: [
+        {
+          op: 'edit',
+          path: 'src/a.ts',
+          oldText: 'foo',
+          newText: 'bar',
+          expectedOccurrences: 3,
+        },
+      ],
+    });
+
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.value.operations[0]?.expectedOccurrences, 3);
+  });
+
+  it('rejects negative or non-integer expectedOccurrences', () => {
+    const result = validateNativePatch({
+      version: NATIVE_PATCH_VERSION,
+      atomic: true,
+      operations: [
+        {
+          op: 'edit',
+          path: 'src/a.ts',
+          oldText: 'foo',
+          newText: 'bar',
+          expectedOccurrences: 0,
+        },
+        {
+          op: 'edit',
+          path: 'src/b.ts',
+          oldText: 'foo',
+          newText: 'bar',
+          expectedOccurrences: 1.5,
+        },
+      ],
+    });
+
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.deepEqual(
+      result.errors.map((error) => ({ code: error.code, operationIndex: error.operationIndex })),
+      [
+        { code: 'invalid_expected_occurrences', operationIndex: 0 },
+        { code: 'invalid_expected_occurrences', operationIndex: 1 },
+      ],
+    );
+  });
+
   it('returns deterministic error ordering', () => {
     const result = validateNativePatch({
       version: 3,

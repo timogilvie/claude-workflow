@@ -12,6 +12,8 @@ export type NativePatchValidationErrorCode =
   | 'invalid_path'
   | 'invalid_text'
   | 'invalid_context'
+  | 'invalid_expected_occurrences'
+  | 'identical_old_new'
   | 'invalid_fuzzy_match';
 
 export interface NativePatchValidationError {
@@ -24,6 +26,7 @@ export interface NativePatchValidationError {
 export interface NativePatchContextAnchors {
   anchorBefore?: string;
   anchorAfter?: string;
+  expectedOccurrences?: number;
 }
 
 export interface NativePatchFuzzyMatch {
@@ -283,7 +286,18 @@ function validateOperation(
   if (input.op === 'edit') {
     const oldText = validateRequiredNonEmptyString(input.oldText, `${basePath}.oldText`, index, errors, 'invalid_text');
     const newText = validateRequiredString(input.newText, `${basePath}.newText`, index, errors, 'invalid_text');
+    if (oldText !== null && newText !== null && oldText === newText) {
+      errors.push({
+        code: 'identical_old_new',
+        path: `${basePath}.newText`,
+        message: `${basePath}.newText must differ from oldText.`,
+        operationIndex: index,
+      });
+    }
     if (!normalizedPath || oldText === null || newText === null) {
+      return null;
+    }
+    if (oldText === newText) {
       return null;
     }
     return { op: 'edit', path: normalizedPath, oldText, newText, ...anchors };
@@ -370,6 +384,19 @@ function validateContextAnchors(
     }
   }
 
+  if ('expectedOccurrences' in input) {
+    validateOptionalNumber(
+      input.expectedOccurrences,
+      `${basePath}.expectedOccurrences`,
+      errors,
+      { code: 'invalid_expected_occurrences', integer: true, min: 1 },
+      (value) => {
+        anchors.expectedOccurrences = value;
+      },
+      index,
+    );
+  }
+
   return anchors;
 }
 
@@ -451,6 +478,7 @@ function validateOptionalNumber(
     max?: number;
   },
   onValid: (value: number) => void,
+  operationIndex?: number,
 ): void {
   if (input === undefined) {
     return;
@@ -467,11 +495,15 @@ function validateOptionalNumber(
     const rangeMessage = options.max === undefined
       ? `>= ${options.min}`
       : `between ${options.min} and ${options.max}`;
-    errors.push({
+    const error: NativePatchValidationError = {
       code: options.code,
       path: pathKey,
       message: `${pathKey} must be ${options.integer ? 'an integer' : 'a number'} ${rangeMessage} when provided.`,
-    });
+    };
+    if (operationIndex !== undefined) {
+      error.operationIndex = operationIndex;
+    }
+    errors.push(error);
     return;
   }
 
