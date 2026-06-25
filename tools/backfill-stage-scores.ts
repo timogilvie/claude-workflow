@@ -20,12 +20,13 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runTool } from '../shared/lib/tool-runner.ts';
 import { loadPromptTemplate } from '../shared/lib/prompt-utils.ts';
-import { callLLM, resolveProviderForModel } from '../shared/lib/llm-cli.ts';
+import { callLLM, resolveProviderForModel, type LLMCallOptions, type LLMCallResult, type LLMProvider } from '../shared/lib/llm-cli.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+const isMainModule = process.argv[1] === __filename;
 
-interface EvalRecord {
+export interface EvalRecord {
   id: string;
   score: number;
   scoreBand: string;
@@ -41,12 +42,12 @@ interface EvalRecord {
   [key: string]: any;
 }
 
-interface StageScore {
+export interface StageScore {
   score: number;
   rationale: string;
 }
 
-interface JudgeStageResponse {
+export interface JudgeStageResponse {
   score: number;
   rationale: string;
   interventionFlags: string[];
@@ -58,13 +59,13 @@ interface JudgeStageResponse {
   };
 }
 
-function needsBackfill(record: EvalRecord): boolean {
+export function needsBackfill(record: EvalRecord): boolean {
   const stages = record.metadata?.stageScores || {};
   // Need backfill if missing plan OR review stageScores
   return !stages.plan || !stages.review;
 }
 
-function buildBackfillPrompt(template: string, record: EvalRecord): string {
+export function buildBackfillPrompt(template: string, record: EvalRecord): string {
   const taskPrompt = record.originalPrompt?.slice(0, 3000) || 'Not available';
 
   // Build intervention metadata from the record
@@ -89,7 +90,7 @@ function buildBackfillPrompt(template: string, record: EvalRecord): string {
     .replace('{{SELF_REVIEW_SUMMARY}}', 'Not available for this workflow.');
 }
 
-function parseJudgeOutput(raw: string): JudgeStageResponse | null {
+export function parseJudgeOutput(raw: string): JudgeStageResponse | null {
   // Strip markdown fences
   let cleaned = raw.trim();
   cleaned = cleaned.replace(/^```(?:json)?\s*/, '');
@@ -117,6 +118,74 @@ function parseJudgeOutput(raw: string): JudgeStageResponse | null {
   return null;
 }
 
+export function applyJudgeResponse(record: EvalRecord, rawResponse: string, backfilledAt = new Date().toISOString()): boolean {
+  const parsed = parseJudgeOutput(rawResponse);
+
+  if (!parsed?.stageScores) {
+    return false;
+  }
+
+  // Merge new stage scores into existing metadata
+  const existingStages = record.metadata?.stageScores || {};
+  const mergedStages = { ...existingStages };
+
+  // Only fill in missing stages (don't overwrite existing ones)
+  for (const [stage, data] of Object.entries(parsed.stageScores)) {
+    if (!mergedStages[stage] && data && typeof data.score === 'number') {
+      mergedStages[stage] = data;
+    }
+  }
+
+  record.metadata = record.metadata || {};
+  record.metadata.stageScores = mergedStages;
+  record.metadata.backfilledAt = backfilledAt;
+
+  return true;
+}
+
+export interface ProcessRecordDeps {
+  callLLM: (prompt: string, options: LLMCallOptions) => Promise<LLMCallResult>;
+  resolveProviderForModel: (model?: string, repoDir?: string) => LLMProvider;
+  now: () => string;
+  cwd: () => string;
+}
+
+const defaultProcessRecordDeps: ProcessRecordDeps = {
+  callLLM,
+  resolveProviderForModel,
+  now: () => new Date().toISOString(),
+  cwd: () => process.cwd(),
+};
+
+export async function processBackfillRecord(
+  record: EvalRecord,
+  template: string,
+  model: string,
+  deps: ProcessRecordDeps = defaultProcessRecordDeps
+): Promise<{ ok: boolean; message: string }> {
+  try {
+    const prompt = buildBackfillPrompt(template, record);
+    const provider = deps.resolveProviderForModel(model, deps.cwd());
+    const result = await deps.callLLM(prompt, {
+      model,
+      provider,
+      mode: 'sync',
+      timeout: 180_000,
+      stripToolCalls: true,
+    });
+
+    if (applyJudgeResponse(record, result.text, deps.now())) {
+      const stageNames = Object.keys(record.metadata?.stageScores || {}).join(', ');
+      return { ok: true, message: `OK (stages: ${stageNames})` };
+    }
+
+    return { ok: false, message: 'PARSE_ERROR' };
+  } catch (err: any) {
+    return { ok: false, message: `ERROR: ${err.message?.slice(0, 80)}` };
+  }
+}
+
+if (isMainModule) {
 runTool({
   name: 'backfill-stage-scores',
   description: 'Backfill missing plan/review stageScores in eval records',
@@ -201,44 +270,11 @@ runTool({
       const id = record.issueId || record.id?.slice(0, 8) || `record-${processed}`;
       process.stdout.write(`[${processed}/${processCount}] ${id}... `);
 
-      try {
-        const prompt = buildBackfillPrompt(template, record);
-        const provider = resolveProviderForModel(model, process.cwd());
-        const result = await callLLM(prompt, {
-          model,
-          provider,
-          mode: 'sync',
-          timeout: 180_000,
-          stripToolCalls: true,
-        });
-        const response = result.text;
-        const parsed = parseJudgeOutput(response);
-
-        if (parsed?.stageScores) {
-          // Merge new stage scores into existing metadata
-          const existingStages = record.metadata?.stageScores || {};
-          const mergedStages = { ...existingStages };
-
-          // Only fill in missing stages (don't overwrite existing ones)
-          for (const [stage, data] of Object.entries(parsed.stageScores)) {
-            if (!mergedStages[stage] && data && typeof data.score === 'number') {
-              mergedStages[stage] = data;
-            }
-          }
-
-          record.metadata = record.metadata || {};
-          record.metadata.stageScores = mergedStages;
-          record.metadata.backfilledAt = new Date().toISOString();
-
-          const stageNames = Object.keys(mergedStages).join(', ');
-          console.log(`OK (stages: ${stageNames})`);
-          succeeded++;
-        } else {
-          console.log('PARSE_ERROR');
-          failed++;
-        }
-      } catch (err: any) {
-        console.log(`ERROR: ${err.message?.slice(0, 80)}`);
+      const result = await processBackfillRecord(record, template, model);
+      console.log(result.message);
+      if (result.ok) {
+        succeeded++;
+      } else {
         failed++;
       }
 
@@ -260,3 +296,4 @@ runTool({
     console.log(`Output: ${outputPath}`);
   },
 });
+}

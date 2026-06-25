@@ -16,8 +16,9 @@ import { runTool } from '../shared/lib/tool-runner.ts';
 import { checkClaudeAvailability, checkCodexAvailability } from '../shared/lib/llm-cli.ts';
 import { execShellCommand } from '../shared/lib/shell-utils.ts';
 import { GREEN, RED, NC } from '../shared/lib/colors.ts';
+import { fileURLToPath } from 'node:url';
 
-interface CheckResult {
+export interface CheckResult {
   name: string;
   passed: boolean;
   message: string;
@@ -249,7 +250,7 @@ function printResult(result: CheckResult): void {
 /**
  * Print troubleshooting section
  */
-function printTroubleshooting(results: CheckResult[]): void {
+export function printTroubleshooting(results: CheckResult[]): void {
   const failedChecks = results.filter(r => !r.passed);
 
   if (failedChecks.length === 0) {
@@ -309,6 +310,9 @@ function printTroubleshooting(results: CheckResult[]): void {
   }
 }
 
+const isMainModule = process.argv[1] === fileURLToPath(import.meta.url);
+
+if (isMainModule) {
 runTool({
   name: 'check-review-setup',
   description: 'Health check for review tool setup',
@@ -352,3 +356,4 @@ runTool({
     process.exitCode = passed === total ? 0 : 1;
   },
 });
+}

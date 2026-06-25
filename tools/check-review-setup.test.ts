@@ -1,60 +1,57 @@
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { describe, it, mock } from 'node:test';
+import { printTroubleshooting, type CheckResult } from './check-review-setup.ts';
 
-describe('check-review-setup', () => {
-  it('has provider-aware diagnostic guidance', () => {
-    // This test verifies that the check-review-setup tool includes
-    // guidance for both Claude and Codex providers.
-    // The tool should show:
-    // - Claude troubleshooting when Claude CLI check fails
-    // - Codex troubleshooting when Codex CLI check fails
-    // - Anthropic network troubleshooting (not generic "Network Connectivity")
-
-    // The checks are:
-    // 1. checkClaudeCLI() - uses checkClaudeAvailability
-    // 2. checkCodexCLI() - uses checkCodexAvailability
-    // 3. checkAnthropicNetwork() - probes https://api.anthropic.com
-    // 4. checkGit() and checkGitRepo() - independent of LLM provider
-
-    // Verify that the tool provides appropriate remediation for each provider:
-    // - Claude: install claude-cli, authenticate with 'claude login', test with 'claude -p'
-    // - Codex: install codex, authenticate with 'codex login', test with 'codex exec --json --sandbox read-only'
-    // - Anthropic API: check internet, curl endpoint, firewall, status.anthropic.com
-
-    assert.ok(true, 'Provider-aware diagnostic structure verified in code');
+function captureTroubleshooting(results: CheckResult[]): string {
+  const lines: string[] = [];
+  const log = mock.method(console, 'log', (...args: unknown[]) => {
+    lines.push(args.map(String).join(' '));
   });
 
-  it('distinguishes Claude and Codex CLI failures independently', () => {
-    // checkClaudeCLI() and checkCodexCLI() are separate checks
-    // Failure of one does not require failure of the other
-    // This allows users to have one or the other (or both) CLI available
+  try {
+    printTroubleshooting(results);
+  } finally {
+    log.mock.restore();
+  }
 
-    assert.ok(true, 'Claude and Codex checks are independent');
+  return lines.join('\n');
+}
+
+describe('check-review-setup troubleshooting', () => {
+  it('prints Codex readiness guidance when the Codex CLI check fails', () => {
+    const output = captureTroubleshooting([
+      { name: 'Codex CLI', passed: false, message: 'not found' },
+    ]);
+
+    assert.match(output, /Codex CLI is not available:/);
+    assert.match(output, /brew install codex \(or npm install -g @openai\/codex\)/);
+    assert.match(output, /codex login/);
+    assert.match(output, /echo "hello" \| codex exec --json --sandbox read-only/);
+    assert.match(output, /which codex/);
+    assert.doesNotMatch(output, /Claude CLI is not available:/);
   });
 
-  it('separates Anthropic network check from Codex auth check', () => {
-    // checkAnthropicNetwork() probes api.anthropic.com
-    // checkCodexCLI() checks Codex auth via CLI (local state, not network)
-    // These are separate concerns and should fail independently
+  it('prints Claude guidance independently from Codex guidance', () => {
+    const output = captureTroubleshooting([
+      { name: 'Claude CLI', passed: false, message: 'not found' },
+    ]);
 
-    assert.ok(true, 'Network checks are provider-specific');
+    assert.match(output, /Claude CLI is not available:/);
+    assert.match(output, /npm install -g @anthropic-ai\/claude-cli/);
+    assert.match(output, /claude login/);
+    assert.match(output, /echo "hello" \| claude -p --model claude-haiku-4-5-20251001/);
+    assert.match(output, /which claude/);
+    assert.doesNotMatch(output, /Codex CLI is not available:/);
   });
 
-  it('includes Codex readiness guidance in troubleshooting', () => {
-    // When Codex CLI check fails, the troubleshooting should include:
-    // - Install instructions
-    // - Authentication step (codex login)
-    // - Test command: codex exec --json --sandbox read-only
-    // - Verification: which codex
+  it('keeps Anthropic network troubleshooting separate from Codex auth', () => {
+    const output = captureTroubleshooting([
+      { name: 'Anthropic API Connectivity', passed: false, message: 'HTTP 000' },
+    ]);
 
-    const codexGuidance = [
-      '  1. Install: brew install codex (or npm install -g @openai/codex)',
-      '  2. Authenticate: codex login',
-      '  3. Test: echo "hello" | codex exec --json --sandbox read-only',
-      '  4. Verify: which codex',
-    ];
-
-    // These strings should appear in troubleshooting output for Codex failures
-    assert.ok(codexGuidance.length > 0, 'Codex guidance is defined');
+    assert.match(output, /Anthropic API connectivity issues:/);
+    assert.match(output, /curl -I https:\/\/api\.anthropic\.com/);
+    assert.match(output, /https:\/\/status\.anthropic\.com/);
+    assert.doesNotMatch(output, /codex login/);
   });
 });
