@@ -5496,7 +5496,7 @@ merge_queue_enrich_ready_artifacts() {
 
 refresh_ready_merge_queue_tick() {
   local now input_file output_file input_json output_json config_json
-  local issue phase slug pr state_dir ready_status ready_verdict stored_base current_main queue_state wt_dir
+  local issue phase slug pr state_dir ready_status ready_verdict stored_base current_main queue_state wt_dir workflow_status
   local ready_prs='[]'
 
   : > "$MERGE_QUEUE_SELECTION_FILE"
@@ -5522,6 +5522,12 @@ refresh_ready_merge_queue_tick() {
     queue_state=$(ready_queue_state "$state_dir")
     stored_base=$(ready_base_sha "$state_dir")
     current_main=$(get_main_head_sha "$wt_dir" "$BASE_BRANCH")
+    workflow_status=$(read_state_value "" --arg i "$issue" '.tasks[$i].status // ""')
+
+    # Skip terminal tasks early (authoritative guard is in merge-queue.ts)
+    if [[ "$workflow_status" == "merged" || "$workflow_status" == "completed-external" || "$workflow_status" == "aborted" ]]; then
+      continue
+    fi
 
     if [[ "$ready_status" == "completed" && ( "$ready_verdict" == "pass" || "$ready_verdict" == "warn" ) && -n "$current_main" && "$stored_base" != "$current_main" && "$queue_state" != "merge-candidate" ]]; then
       mark_ready_stale "$issue" "$state_dir" "$stored_base" "$current_main"
@@ -5537,6 +5543,7 @@ refresh_ready_merge_queue_tick() {
         --argjson pr_number "$pr" \
         --arg ready_base_sha "$stored_base" \
         --arg queue_state "$queue_state" \
+        --arg workflow_status "$workflow_status" \
         --arg ready_at "$(jq -r '.finishedAt // .startedAt // empty' "$state_dir/.ready-result.json" 2>/dev/null || echo "")" \
         --arg candidate_promoted_at "$(ready_queue_field "$state_dir" candidatePromotedAt)" \
         --arg candidate_last_progress_at "$(ready_queue_field "$state_dir" candidateLastProgressAt)" \
@@ -5554,7 +5561,8 @@ refresh_ready_merge_queue_tick() {
             unblocksCount: 0,
             candidatePromotedAt: (if $candidate_promoted_at == "" then null else $candidate_promoted_at end),
             candidateLastProgressAt: (if $candidate_last_progress_at == "" then null else $candidate_last_progress_at end),
-            candidateSkippedAt: (if $candidate_skipped_at == "" then null else $candidate_skipped_at end)
+            candidateSkippedAt: (if $candidate_skipped_at == "" then null else $candidate_skipped_at end),
+            workflowStatus: (if $workflow_status == "" then null else $workflow_status end)
           }]
         ')
     fi

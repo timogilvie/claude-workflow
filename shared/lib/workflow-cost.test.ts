@@ -527,6 +527,60 @@ test('computeWorkflowCost prefers native sessions over Claude fallback', () => {
   }
 });
 
+test('computeWorkflowCost auto-detects native sessions without explicit agentType', () => {
+  const base = join(tmpdir(), `wavemill-test-${randomUUID()}`);
+  const worktreePath = join(base, 'fake-worktree');
+  const nativeSessionsDir = join(
+    worktreePath,
+    '.wavemill',
+    'runs',
+    'HOK-2305',
+    'native-sessions',
+  );
+  mkdirSync(nativeSessionsDir, { recursive: true });
+
+  try {
+    writeFileSync(
+      join(nativeSessionsDir, 'session.jsonl'),
+      [
+        nativeSessionStarted('pi-custom-model'),
+        nativeAssistantMessage({ model: 'pi-custom-model', input: 1000, output: 500, cacheRead: 200, cacheWrite: 100 }),
+      ].join('\n'),
+    );
+
+    // Call computeWorkflowCost WITHOUT specifying agentType
+    const result = computeWorkflowCost({
+      worktreePath,
+      branchName: 'task/test',
+      pricingTable: {
+        'pi-custom-model': {
+          inputCostPerMTok: 1,
+          outputCostPerMTok: 2,
+          cacheReadCostPerMTok: 0.1,
+          cacheWriteCostPerMTok: 1.5,
+        },
+      },
+      // agentType is intentionally omitted - should auto-detect native
+    });
+
+    assert.equal(result.status, 'success');
+    if (result.status === 'success') {
+      // Verify native model ID is preserved in the breakdown
+      assert.ok('pi-custom-model' in result.models, 'Native model should be present in cost breakdown');
+      assert.equal(result.models['pi-custom-model'].inputTokens, 1000);
+      assert.equal(result.models['pi-custom-model'].outputTokens, 500);
+      assert.equal(result.models['pi-custom-model'].cacheReadTokens, 200);
+      assert.equal(result.models['pi-custom-model'].cacheCreationTokens, 100);
+
+      // Verify cost is calculated correctly for the native model
+      const expectedCost = (1000 / 1_000_000) * 1 + (500 / 1_000_000) * 2 + (200 / 1_000_000) * 0.1 + (100 / 1_000_000) * 1.5;
+      assert.ok(Math.abs(result.models['pi-custom-model'].costUsd - expectedCost) < 0.0001);
+    }
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
 test('Handles malformed JSONL lines gracefully', () => {
   const branch = 'task/test';
   const lines = [

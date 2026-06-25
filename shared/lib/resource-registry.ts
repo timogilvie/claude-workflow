@@ -14,7 +14,8 @@ export type ResourceType =
   | 'tool'
   | 'memory'
   | 'agent-config'
-  | 'environment';
+  | 'environment'
+  | 'runtime';
 
 export interface ResourceRef {
   id: string;
