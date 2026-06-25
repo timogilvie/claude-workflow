@@ -53,8 +53,8 @@ export function evaluateMutationWritePolicy(input: MutationPolicyInput): Mutatio
   }
 
   const allowlist = normalizeWholeFileAllowlist(input.wholeFileAllowlist);
-  if (allowlist.generatedPaths.includes(resolved.relativePath)
-    || allowlist.wavemillOwnedPaths.includes(resolved.relativePath)) {
+  if (matchesAllowlistPattern(allowlist.generatedPaths, resolved.relativePath)
+    || matchesAllowlistPattern(allowlist.wavemillOwnedPaths, resolved.relativePath)) {
     return {
       kind: 'allow',
       resolvedPath: resolved.relativePath,
@@ -78,4 +78,66 @@ function normalizeWholeFileAllowlist(
     throw new Error(firstError?.message ?? 'Whole-file allowlist input is invalid.');
   }
   return result.value;
+}
+
+function matchesAllowlistPattern(patterns: readonly string[], candidate: string): boolean {
+  for (const pattern of patterns) {
+    if (pattern === candidate) {
+      return true;
+    }
+    if (containsGlobChar(pattern) && matchesGlob(pattern, candidate)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function containsGlobChar(pattern: string): boolean {
+  return pattern.includes('*') || pattern.includes('?');
+}
+
+/**
+ * Match a POSIX glob pattern against a normalized POSIX path.
+ *
+ * Supports `*` (no `/`), `**` (any path including `/`), and `?` (single char,
+ * no `/`). Patterns and candidates are assumed to be repo-relative POSIX paths
+ * already normalized by `normalizePatchPath`.
+ */
+function matchesGlob(pattern: string, candidate: string): boolean {
+  const regex = globPatternToRegex(pattern);
+  return regex.test(candidate);
+}
+
+function globPatternToRegex(pattern: string): RegExp {
+  let regex = '';
+  let i = 0;
+  while (i < pattern.length) {
+    const ch = pattern[i];
+    if (ch === '*') {
+      if (pattern[i + 1] === '*') {
+        regex += '.*';
+        i += 2;
+        if (pattern[i] === '/') {
+          i += 1;
+        }
+        continue;
+      }
+      regex += '[^/]*';
+      i += 1;
+      continue;
+    }
+    if (ch === '?') {
+      regex += '[^/]';
+      i += 1;
+      continue;
+    }
+    if (/[.+^${}()|[\]\\]/.test(ch)) {
+      regex += `\\${ch}`;
+      i += 1;
+      continue;
+    }
+    regex += ch;
+    i += 1;
+  }
+  return new RegExp(`^${regex}$`);
 }
