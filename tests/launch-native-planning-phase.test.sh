@@ -82,6 +82,23 @@ else
   pass "coding phase isolation"
 fi
 
+CODING_GUARD_REPO="$TMPDIR_TEST/coding-guard-repo"
+mkdir -p "$CODING_GUARD_REPO"
+cat > "$CODING_GUARD_REPO/.wavemill-config.json" <<'EOF'
+{
+  "nativeAgent": {
+    "enabled": true,
+    "allowedPhases": ["task-expansion", "planning", "review"]
+  }
+}
+EOF
+
+if npx tsx "$REPO_DIR/tools/check-native-eligibility.ts" "$CODING_GUARD_REPO" "coding" >/dev/null 2>&1; then
+  fail "native opt-in still excludes coding"
+else
+  pass "native opt-in still excludes coding"
+fi
+
 if agent_native_planning_eligible "$REPO_DIR" "planning"; then
   fail "disabled config stays ineligible"
 else
