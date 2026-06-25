@@ -133,6 +133,8 @@ describe('launchNativePlanning', () => {
       });
 
       assert.equal(result.stopReason, 'stop');
+      assert.equal(result.provider, 'scripted');
+      assert.equal(result.model, `scripted:${api}`);
       const planPath = join(featureDir, 'plan.md');
       const plan = readFileSync(planPath, 'utf-8');
       assert.match(plan, /# Implementation Plan/);
@@ -174,7 +176,7 @@ describe('launchNativePlanning', () => {
         ],
       });
 
-      await launchNativePlanning({
+      const result = await launchNativePlanning({
         session: 'sess',
         issue: 'HOK-2313',
         slug: 'demo',
@@ -187,6 +189,10 @@ describe('launchNativePlanning', () => {
 
       assert.equal(executed.value, false);
       assert.equal(readFileSync(sourcePath, 'utf-8'), 'export const value = 1;\n');
+      const hook = JSON.parse(readFileSync(result.hookPath, 'utf-8')) as Record<string, unknown>;
+      assert.equal(hook.state, 'idle');
+      assert.equal(hook.event, 'process_exit');
+      assert.equal(hook.detail, 'planning_completed');
     } finally {
       cleanup(wtDir);
     }

@@ -241,6 +241,18 @@ else
   fail "native provider metadata is discoverable" "$(cat "$ENABLED_JSON")"
 fi
 
+if [[ "$(jq -r '.providerMetadata.endpoint' "$ENABLED_JSON")" == "openai-responses" ]]; then
+  pass "native provider endpoint is discoverable"
+else
+  fail "native provider endpoint is discoverable" "$(cat "$ENABLED_JSON")"
+fi
+
+if [[ "$(jq -r '.scan.models["gpt-4o"].inputTokens' "$ENABLED_JSON")" == "10" ]]; then
+  pass "native session scan preserves model identity"
+else
+  fail "native session scan preserves model identity" "$(cat "$ENABLED_JSON")"
+fi
+
 if [[ "$(jq -r '.transcriptContainsPhaseDenied' "$ENABLED_JSON")" == "true" ]]; then
   pass "phase denial is preserved in transcript"
 else

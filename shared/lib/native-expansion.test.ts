@@ -150,6 +150,8 @@ describe('runNativeExpansion', () => {
       assert.match(result.text, /## 1\. Objective/);
       assert.equal(result.native.agent, 'native-openai');
       assert.equal(result.native.model, 'gpt-4o');
+      assert.equal(result.native.provider, 'openai');
+      assert.equal(result.native.api, api);
       assert.equal(result.native.deniedToolCalls.length, 0);
       assert.ok(result.native.transcriptPath.endsWith('.jsonl'));
       assert.ok(readFileSync(result.native.transcriptPath, 'utf-8').includes('"tool_result"'));
@@ -215,6 +217,8 @@ describe('runNativeExpansion', () => {
       });
 
       assert.equal(result.native.deniedToolCalls.length, 1);
+      assert.equal(result.native.provider, 'openai');
+      assert.equal(result.native.api, api);
       assert.match(result.native.deniedToolCalls[0].reason, /^phase_denied:/);
       assert.equal(readFileSync(notesPath, 'utf-8'), before);
       assert.equal(statSync(notesPath).mtimeMs, beforeMtime);
