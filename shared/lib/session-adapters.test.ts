@@ -16,6 +16,7 @@ import {
   NativeSessionAdapter,
   getSessionAdapter,
   detectAgentType,
+  getNativeProviderMetadata,
 } from './session-adapters.ts';
 import { encodeProjectDir } from './workflow-cost.ts';
 
@@ -724,6 +725,94 @@ describe('NativeSessionAdapter', () => {
   });
 });
 
+// ── Native Provider Metadata Tests ─────────────────────────────
+
+describe('getNativeProviderMetadata', () => {
+  it('returns null when no native sessions exist', () => {
+    const result = getNativeProviderMetadata('/nonexistent/path');
+    assert.equal(result, null);
+  });
+
+  it('extracts provider and api from session_started event', () => {
+    const { worktreePath, nativeSessionsDir, cleanup } = setupNativeSessionDir();
+    try {
+      const lines = [
+        nativeSessionStarted('pi-model'),
+        nativeAssistantMessage({ input: 100, output: 50 }),
+      ].join('\n');
+
+      writeFileSync(join(nativeSessionsDir, 'session.jsonl'), lines);
+
+      const result = getNativeProviderMetadata(worktreePath);
+      assert.ok(result);
+      assert.equal(result.provider, 'pi');
+      assert.equal(result.endpoint, 'responses');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('returns provider without endpoint when api is missing', () => {
+    const { worktreePath, nativeSessionsDir, cleanup } = setupNativeSessionDir();
+    try {
+      // Create a session_started event without 'api' field
+      const sessionStartedNoApi = JSON.stringify({
+        seq: 1,
+        sessionId: 'native-session',
+        timestamp: 1,
+        type: 'session_started',
+        model: 'pi-model',
+        provider: 'custom-provider',
+      });
+      const lines = [
+        sessionStartedNoApi,
+        nativeAssistantMessage({ input: 100, output: 50 }),
+      ].join('\n');
+
+      writeFileSync(join(nativeSessionsDir, 'session.jsonl'), lines);
+
+      const result = getNativeProviderMetadata(worktreePath);
+      assert.ok(result);
+      assert.equal(result.provider, 'custom-provider');
+      assert.equal(result.endpoint, undefined);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('returns first session_started event when multiple sessions exist', () => {
+    const { worktreePath, nativeSessionsDir, cleanup } = setupNativeSessionDir();
+    try {
+      const lines1 = [
+        nativeSessionStarted('first-model'),
+        nativeAssistantMessage({ input: 100, output: 50 }),
+      ].join('\n');
+      const lines2 = [
+        JSON.stringify({
+          seq: 1,
+          sessionId: 'second-session',
+          timestamp: 2,
+          type: 'session_started',
+          model: 'second-model',
+          api: 'other-api',
+          provider: 'other-provider',
+        }),
+        nativeAssistantMessage({ input: 200, output: 100 }),
+      ].join('\n');
+
+      writeFileSync(join(nativeSessionsDir, 'session1.jsonl'), lines1);
+      writeFileSync(join(nativeSessionsDir, 'session2.jsonl'), lines2);
+
+      const result = getNativeProviderMetadata(worktreePath);
+      assert.ok(result);
+      // Should return the first one found (order may vary by filesystem)
+      assert.ok(['pi', 'other-provider'].includes(result.provider));
+    } finally {
+      cleanup();
+    }
+  });
+});
+
 // ── Auto-Detection Tests ───────────────────────────────────────
 
 describe('detectAgentType', () => {
@@ -813,6 +902,118 @@ describe('detectAgentType', () => {
         branchName: 'task/test',
       });
       assert.equal(detected, null);
+    } finally {
+      process.env.HOME = origHome;
+      rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  it('detects native when only native sessions exist', () => {
+    const { worktreePath, nativeSessionsDir, cleanup } = setupNativeSessionDir();
+    try {
+      const lines = [
+        nativeSessionStarted('pi-model'),
+        nativeAssistantMessage({ input: 100, output: 50 }),
+      ].join('\n');
+      writeFileSync(join(nativeSessionsDir, 'session.jsonl'), lines);
+
+      const detected = detectAgentType({ worktreePath, branchName: 'task/test' });
+      assert.equal(detected, 'native');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('picks native over claude when native has more turns', () => {
+    const tmpHome = mkdtempSync(join(tmpdir(), 'adapter-native-claude-'));
+    const origHome = process.env.HOME;
+    process.env.HOME = tmpHome;
+
+    try {
+      const worktreePath = join(tmpHome, 'test-worktree');
+      const branch = 'task/test';
+
+      // Set up Claude session with 1 turn
+      const encoded = encodeProjectDir(worktreePath);
+      const claudeDir = join(tmpHome, '.claude', 'projects', encoded);
+      mkdirSync(claudeDir, { recursive: true });
+      const claudeLines = [
+        claudeAssistantTurn({ branch, inputTokens: 100, outputTokens: 50 }),
+      ].join('\n');
+      writeFileSync(join(claudeDir, 'session1.jsonl'), claudeLines);
+
+      // Set up native session with 2 assistant messages (2 turns)
+      const nativeSessionsDir = join(
+        worktreePath,
+        '.wavemill',
+        'runs',
+        'HOK-2305',
+        'native-sessions',
+      );
+      mkdirSync(nativeSessionsDir, { recursive: true });
+      const nativeLines = [
+        nativeSessionStarted('pi-model'),
+        nativeAssistantMessage({ input: 100, output: 50 }),
+        nativeAssistantMessage({ input: 200, output: 100 }),
+      ].join('\n');
+      writeFileSync(join(nativeSessionsDir, 'session.jsonl'), nativeLines);
+
+      const detected = detectAgentType({ worktreePath, branchName: branch });
+      assert.equal(detected, 'native'); // Native has 2 turns vs Claude's 1
+    } finally {
+      process.env.HOME = origHome;
+      rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  it('picks winner from all three agents based on turn count', () => {
+    const tmpHome = mkdtempSync(join(tmpdir(), 'adapter-all-three-'));
+    const origHome = process.env.HOME;
+    process.env.HOME = tmpHome;
+
+    try {
+      const worktreePath = join(tmpHome, 'test-worktree');
+      const branch = 'task/test';
+
+      // Set up Claude session with 1 turn
+      const encoded = encodeProjectDir(worktreePath);
+      const claudeDir = join(tmpHome, '.claude', 'projects', encoded);
+      mkdirSync(claudeDir, { recursive: true });
+      const claudeLines = [
+        claudeAssistantTurn({ branch, inputTokens: 100, outputTokens: 50 }),
+      ].join('\n');
+      writeFileSync(join(claudeDir, 'session1.jsonl'), claudeLines);
+
+      // Set up Codex session with 2 files (2 turns)
+      const codexDir = join(tmpHome, '.codex', 'sessions', '2026', '02', '20');
+      mkdirSync(codexDir, { recursive: true });
+      const codexLines = [
+        codexSessionMeta({ cwd: worktreePath, branch }),
+        codexTurnContext('gpt-5.3-codex'),
+        codexTokenCount({ inputTokens: 1000, cachedInputTokens: 500, outputTokens: 100, reasoningOutputTokens: 20 }),
+      ].join('\n');
+      writeFileSync(join(codexDir, 'session1.jsonl'), codexLines);
+      writeFileSync(join(codexDir, 'session2.jsonl'), codexLines);
+
+      // Set up native session with 3 assistant messages (3 turns)
+      const nativeSessionsDir = join(
+        worktreePath,
+        '.wavemill',
+        'runs',
+        'HOK-2305',
+        'native-sessions',
+      );
+      mkdirSync(nativeSessionsDir, { recursive: true });
+      const nativeLines = [
+        nativeSessionStarted('pi-model'),
+        nativeAssistantMessage({ input: 100, output: 50 }),
+        nativeAssistantMessage({ input: 200, output: 100 }),
+        nativeAssistantMessage({ input: 300, output: 150 }),
+      ].join('\n');
+      writeFileSync(join(nativeSessionsDir, 'session.jsonl'), nativeLines);
+
+      const detected = detectAgentType({ worktreePath, branchName: branch });
+      assert.equal(detected, 'native'); // Native has 3 turns vs Codex's 2 vs Claude's 1
     } finally {
       process.env.HOME = origHome;
       rmSync(tmpHome, { recursive: true, force: true });

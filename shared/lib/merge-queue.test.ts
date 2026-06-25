@@ -6,6 +6,9 @@ import {
   isCandidateStuck,
   demoteCandidate,
   planMergeQueueTick,
+  isTerminalWorkflowStatus,
+  isClosedOrMergedPrState,
+  isSelectableMergeQueuePr,
   type MergeQueueConfigResolved,
   type MergeQueuePr,
 } from './merge-queue.ts';
@@ -147,4 +150,137 @@ test('tick planner demotes stuck candidate and promotes disjoint replacement', (
   });
   assert.deepEqual(plan.stuckIssues, ['HOK-1']);
   assert.deepEqual(plan.selectedIssues, ['HOK-2']);
+});
+
+// --- Terminal workflow status predicate tests ---
+
+test('isTerminalWorkflowStatus: merged is terminal', () => {
+  assert.equal(isTerminalWorkflowStatus('merged'), true);
+});
+
+test('isTerminalWorkflowStatus: completed-external is terminal', () => {
+  assert.equal(isTerminalWorkflowStatus('completed-external'), true);
+});
+
+test('isTerminalWorkflowStatus: aborted is terminal', () => {
+  assert.equal(isTerminalWorkflowStatus('aborted'), true);
+});
+
+test('isTerminalWorkflowStatus: undefined is not terminal', () => {
+  assert.equal(isTerminalWorkflowStatus(undefined), false);
+});
+
+test('isTerminalWorkflowStatus: unknown status is not terminal', () => {
+  assert.equal(isTerminalWorkflowStatus('coding'), false);
+});
+
+test('isClosedOrMergedPrState: MERGED is closed/merged', () => {
+  assert.equal(isClosedOrMergedPrState('MERGED'), true);
+});
+
+test('isClosedOrMergedPrState: CLOSED is closed/merged', () => {
+  assert.equal(isClosedOrMergedPrState('CLOSED'), true);
+});
+
+test('isClosedOrMergedPrState: lowercase merged is closed/merged', () => {
+  assert.equal(isClosedOrMergedPrState('merged'), true);
+});
+
+test('isClosedOrMergedPrState: undefined is not closed/merged', () => {
+  assert.equal(isClosedOrMergedPrState(undefined), false);
+});
+
+test('isClosedOrMergedPrState: OPEN is not closed/merged', () => {
+  assert.equal(isClosedOrMergedPrState('OPEN'), false);
+});
+
+test('isSelectableMergeQueuePr: missing both fields is selectable', () => {
+  assert.equal(isSelectableMergeQueuePr({}), true);
+});
+
+test('isSelectableMergeQueuePr: merged workflow status is not selectable', () => {
+  assert.equal(isSelectableMergeQueuePr({ workflowStatus: 'merged' }), false);
+});
+
+test('isSelectableMergeQueuePr: CLOSED prState is not selectable', () => {
+  assert.equal(isSelectableMergeQueuePr({ prState: 'CLOSED' }), false);
+});
+
+// --- Selection: terminal active candidates do not block ready PRs ---
+
+test('terminal active candidates are excluded before slot accounting', () => {
+  const selected = selectMergeCandidates({
+    readyPrs: [
+      pr({ issue: 'HOK-3', prNumber: 3, branch: 'task/three', changedFiles: ['c.ts'], queueState: 'ready-stale' }),
+    ],
+    activeCandidates: [
+      pr({ issue: 'HOK-1', queueState: 'merge-candidate', workflowStatus: 'merged', changedFiles: ['a.ts'] }),
+      pr({ issue: 'HOK-2', prNumber: 2, branch: 'task/two', queueState: 'merge-candidate', workflowStatus: 'merged', changedFiles: ['b.ts'] }),
+    ],
+    now: '2026-05-06T12:30:00.000Z',
+    config: { ...config, maxConcurrentCandidates: 2 },
+  });
+  assert.deepEqual(selected.map((item) => item.issue), ['HOK-3']);
+});
+
+test('with maxConcurrentCandidates=1, terminal candidates still allow a clean PR', () => {
+  const selected = selectMergeCandidates({
+    readyPrs: [
+      pr({ issue: 'HOK-3', prNumber: 3, branch: 'task/three', changedFiles: ['c.ts'], queueState: 'ready-stale' }),
+    ],
+    activeCandidates: [
+      pr({ issue: 'HOK-1', queueState: 'merge-candidate', workflowStatus: 'merged', changedFiles: ['a.ts'] }),
+    ],
+    now: '2026-05-06T12:30:00.000Z',
+    config: { ...config, maxConcurrentCandidates: 1 },
+  });
+  assert.deepEqual(selected.map((item) => item.issue), ['HOK-3']);
+});
+
+test('healthy non-terminal candidates select in priority order', () => {
+  const selected = selectMergeCandidates({
+    readyPrs: [
+      pr({ issue: 'HOK-3', prNumber: 3, branch: 'task/three', changedFiles: ['c.ts'], queueState: 'ready-stale' }),
+    ],
+    activeCandidates: [
+      pr({ issue: 'HOK-1', queueState: 'merge-candidate', changedFiles: ['a.ts'] }),
+    ],
+    now: '2026-05-06T12:30:00.000Z',
+    config: { ...config, maxConcurrentCandidates: 2 },
+  });
+  assert.deepEqual(selected.map((item) => item.issue), ['HOK-1', 'HOK-3']);
+});
+
+// --- Planner: terminal candidates excluded from selectedIssues and stuckIssues ---
+
+test('planMergeQueueTick excludes terminal candidates from selectedIssues', () => {
+  const plan = planMergeQueueTick({
+    readyPrs: [
+      pr({ issue: 'HOK-1', queueState: 'merge-candidate', workflowStatus: 'merged', changedFiles: ['a.ts'], candidatePromotedAt: '2026-05-06T12:20:00.000Z' }),
+      pr({ issue: 'HOK-2', prNumber: 2, branch: 'task/two', queueState: 'merge-candidate', workflowStatus: 'completed-external', changedFiles: ['b.ts'], candidatePromotedAt: '2026-05-06T12:20:00.000Z' }),
+      pr({ issue: 'HOK-3', prNumber: 3, branch: 'task/three', queueState: 'ready-stale', changedFiles: ['c.ts'] }),
+    ],
+    now: '2026-05-06T12:30:00.000Z',
+    config,
+  });
+  assert.deepEqual(plan.selectedIssues, ['HOK-3']);
+  assert.deepEqual(plan.stuckIssues, []);
+});
+
+test('terminal stale active candidates do not appear in stuckIssues', () => {
+  const plan = planMergeQueueTick({
+    readyPrs: [
+      pr({
+        issue: 'HOK-1',
+        queueState: 'merge-candidate',
+        workflowStatus: 'merged',
+        candidatePromotedAt: '2026-05-06T12:00:00.000Z',
+        changedFiles: ['a.ts'],
+      }),
+    ],
+    now: '2026-05-06T12:30:00.000Z',
+    config,
+  });
+  assert.deepEqual(plan.stuckIssues, []);
+  assert.deepEqual(plan.selectedIssues, []);
 });

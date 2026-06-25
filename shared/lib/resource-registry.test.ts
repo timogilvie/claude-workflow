@@ -93,4 +93,21 @@ describe('resource-registry', () => {
     assert.equal(result, null);
     assert.equal(existsSync(resolveRegistryFile(tempDir)), false);
   });
+
+  it('registers and reads back a runtime resource', () => {
+    const resource = registerResource({
+      type: 'runtime',
+      name: 'openai:gpt-4o',
+      content: JSON.stringify({ provider: 'openai', model: 'gpt-4o', api: 'openai-responses' }),
+      metadata: { provider: 'openai', model: 'gpt-4o', api: 'openai-responses' },
+    }, { repoDir: tempDir });
+
+    assert.ok(resource, 'runtime resource must be registered');
+    assert.equal(resource?.type, 'runtime');
+    assert.equal(resource?.name, 'openai:gpt-4o');
+
+    const listed = listResources({ type: 'runtime' }, tempDir);
+    assert.equal(listed.length, 1, 'exactly one runtime resource');
+    assert.equal(listed[0].metadata?.provider, 'openai');
+  });
 });

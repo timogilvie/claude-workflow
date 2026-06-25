@@ -1853,6 +1853,16 @@ else
   fail "legacy task artifact segment missing or malformed in dashboard output"
 fi
 
+# ── Test 10: REQ-F3 — wavemill-status.sh has no native-specific liveness branch
+# Native phases must reuse the existing hook/pane liveness path; no native-only
+# fallback or branch should be introduced.
+WAVEMILL_STATUS_SH="$REPO_DIR/shared/lib/wavemill-status.sh"
+if ! grep -Eq '(agent[ _-]?type|provider|adapter)[^\n]{0,40}=[^\n]{0,40}native|case[^\n]{0,40}native\)|if[^\n]{0,40}native' "$WAVEMILL_STATUS_SH"; then
+  pass "wavemill-status.sh has no native-specific liveness branch (REQ-F3)"
+else
+  fail "wavemill-status.sh contains a native-specific branch — native phases must reuse existing hook states"
+fi
+
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 

@@ -1309,6 +1309,150 @@ EOF
   check_eq "merge queue disabled: task remains active" "1" "$(kv_value "$tick" active_count)"
 }
 
+test_merge_queue_preserved_merged_tasks_do_not_block_ready_pr() {
+  local slug="merge-queue-terminal"
+  local issue="HOK-CLEAN"
+  local repo tick worktree_root
+  repo="$(harness_init_repo "$slug")"
+  worktree_root="$(dirname "$repo")"
+
+  # Create ready artifacts for the clean PR
+  mkdir -p "$repo/features/$slug/ready"
+  cat > "$repo/features/$slug/ready/.ready-result.json" <<'EOF'
+{
+  "stage": "ready",
+  "status": "completed",
+  "startedAt": "2026-06-25T10:00:00Z",
+  "finishedAt": "2026-06-25T10:05:00Z",
+  "artifacts": {
+    "type": "ready",
+    "verdict": "pass",
+    "readyBaseSha": "sha-current",
+    "queueState": "ready-stale"
+  }
+}
+EOF
+
+  # Create sibling worktree dirs for preserved-merged tasks
+  # WORKTREE_ROOT = dirname(REPO_UNDER_TEST), so wt_dir = WORKTREE_ROOT/slug
+  mkdir -p "$worktree_root/preserved-merged-a/features/preserved-merged-a/ready"
+  cat > "$worktree_root/preserved-merged-a/features/preserved-merged-a/ready/.ready-result.json" <<'EOF'
+{
+  "stage": "ready",
+  "status": "completed",
+  "startedAt": "2026-06-25T09:00:00Z",
+  "finishedAt": "2026-06-25T09:05:00Z",
+  "artifacts": {
+    "type": "ready",
+    "verdict": "pass",
+    "readyBaseSha": "sha-current",
+    "queueState": "merge-candidate",
+    "candidatePromotedAt": "2026-06-25T09:10:00Z",
+    "candidateLastProgressAt": "2026-06-25T09:15:00Z"
+  }
+}
+EOF
+
+  mkdir -p "$worktree_root/preserved-merged-b/features/preserved-merged-b/ready"
+  cat > "$worktree_root/preserved-merged-b/features/preserved-merged-b/ready/.ready-result.json" <<'EOF'
+{
+  "stage": "ready",
+  "status": "completed",
+  "startedAt": "2026-06-25T09:00:00Z",
+  "finishedAt": "2026-06-25T09:05:00Z",
+  "artifacts": {
+    "type": "ready",
+    "verdict": "pass",
+    "readyBaseSha": "sha-current",
+    "queueState": "merge-candidate",
+    "candidatePromotedAt": "2026-06-25T09:10:00Z",
+    "candidateLastProgressAt": "2026-06-25T09:15:00Z"
+  }
+}
+EOF
+
+  # Interpolate TOOLS_DIR from outer REPO_DIR (wavemill root) so npx tsx can find merge-queue-select.ts
+  local extra_setup
+  extra_setup="TOOLS_DIR=\"${REPO_DIR}/tools\""
+  extra_setup+=$'\n'
+  extra_setup+='
+    CURRENT_PHASE="ready"
+    PR_BY_ISSUE["$ISSUE"]="900"
+    BRANCH_BY_ISSUE["HOK-MERGED-A"]="task/preserved-merged-a"
+    SLUG_BY_ISSUE["HOK-MERGED-A"]="preserved-merged-a"
+    PR_BY_ISSUE["HOK-MERGED-A"]="838"
+    BRANCH_BY_ISSUE["HOK-MERGED-B"]="task/preserved-merged-b"
+    SLUG_BY_ISSUE["HOK-MERGED-B"]="preserved-merged-b"
+    PR_BY_ISSUE["HOK-MERGED-B"]="839"
+
+    get_task_phase() { printf "%s\n" "ready"; }
+    get_main_head_sha() { printf "%s\n" "sha-current"; }
+    merge_queue_enabled() { return 0; }
+    ready_queue_state() {
+      local state_dir="$1"
+      jq -r ".artifacts.queueState // empty" "$state_dir/.ready-result.json" 2>/dev/null || printf "\n"
+    }
+    ready_base_sha() {
+      local state_dir="$1"
+      jq -r ".artifacts.readyBaseSha // empty" "$state_dir/.ready-result.json" 2>/dev/null || printf "\n"
+    }
+    ready_queue_field() {
+      local state_dir="$1" field="$2"
+      jq -r ".artifacts.$field // empty" "$state_dir/.ready-result.json" 2>/dev/null || printf "\n"
+    }
+    ready_changed_files_json() {
+      local state_dir="$1"
+      if [[ "$state_dir" == *"preserved-merged-a"* ]]; then
+        printf "[\"x.ts\"]\n"
+      elif [[ "$state_dir" == *"preserved-merged-b"* ]]; then
+        printf "[\"y.ts\"]\n"
+      else
+        printf "[\"z.ts\"]\n"
+      fi
+    }
+    read_state_value() {
+      local arg_issue=""
+      local i
+      for i in "$@"; do
+        if [[ "$i" == "HOK-MERGED-A" || "$i" == "HOK-MERGED-B" || "$i" == "HOK-CLEAN" ]]; then
+          arg_issue="$i"
+          break
+        fi
+      done
+      case "$arg_issue" in
+        HOK-MERGED-A|HOK-MERGED-B) printf "%s\n" "merged" ;;
+        *) printf "\n" ;;
+      esac
+    }
+    promote_merge_candidate() {
+      local promo_issue="$1"
+      printf "%s\n" "$promo_issue" >> "$REPO_UNDER_TEST/.wavemill/promoted-issues"
+    }
+    demote_merge_candidate() {
+      local demo_issue="$1"
+      printf "%s\n" "$demo_issue" >> "$REPO_UNDER_TEST/.wavemill/demoted-issues"
+    }
+  '
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" "$extra_setup")"
+
+  # The clean PR should be selected (promoted)
+  check_file_exists "preserved-merged: promoted file exists" "$repo/.wavemill/promoted-issues"
+  check_contains "preserved-merged: clean PR promoted" "$(cat "$repo/.wavemill/promoted-issues" 2>/dev/null || true)" "HOK-CLEAN"
+  check_not_contains "preserved-merged: merged-A not promoted" "$(cat "$repo/.wavemill/promoted-issues" 2>/dev/null || true)" "HOK-MERGED-A"
+  check_not_contains "preserved-merged: merged-B not promoted" "$(cat "$repo/.wavemill/promoted-issues" 2>/dev/null || true)" "HOK-MERGED-B"
+
+  # Merged issues should not be in selectedIssues
+  local selected
+  selected="$(jq -r '.selectedIssues[]?' "$repo/.wavemill/merge-queue-selection.json" 2>/dev/null || true)"
+  check_contains "preserved-merged: selection includes clean PR" "$selected" "HOK-CLEAN"
+  check_not_contains "preserved-merged: selection excludes merged-A" "$selected" "HOK-MERGED-A"
+  check_not_contains "preserved-merged: selection excludes merged-B" "$selected" "HOK-MERGED-B"
+
+  # Demoted issues should not include the merged tasks (they were never selected)
+  check_file_absent "preserved-merged: no demotions written" "$repo/.wavemill/demoted-issues"
+}
+
 test_coding_blocked_completion_needs_user_without_advancing() {
   local slug="coding-blocked-completion"
   local issue="HOK-1642-BLOCKED"
@@ -2184,6 +2328,7 @@ test_already_expanded_packet_skips_mandatory_expansion
 test_resume_uses_expanded_phase_config_over_stale_state
 test_merge_queue_marks_non_candidate_stale_without_rerun
 test_merge_queue_disabled_keeps_legacy_rerun
+test_merge_queue_preserved_merged_tasks_do_not_block_ready_pr
 test_coding_blocked_completion_needs_user_without_advancing
 test_coding_blocked_completion_auto_advances_when_valid
 test_coding_blocked_completion_auto_advances_with_wavemill_metadata_noise

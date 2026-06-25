@@ -18,6 +18,7 @@ import { errorMessage } from './error-utils.ts';
 import { finalizeEvalSuccess } from './eval-success-policy.ts';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 import { getDeepSeekProviderMetadata } from './deepseek-provider.ts';
+import { getNativeProviderMetadata } from './session-adapters.ts';
 import {
   autoDetectContext,
   computeWallClockSeconds,
@@ -482,7 +483,18 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
     effectiveRoutingDecision,
     stageArtifacts.executionModel,
   );
-  const providerMetadata = getDeepSeekProviderMetadata(executionModel, repoDir);
+
+  // Resolve provider metadata: prefer native when agentType is native; fall back to DeepSeek.
+  // 'native' is the eval-layer canonical agent value (as written to stage-result.agent);
+  // routing-config sub-types like 'native-openai' / 'native-openrouter' are normalized to
+  // 'native' before reaching this layer.
+  let providerMetadata: { provider: string; endpoint?: string } | null = null;
+  if (agentType === 'native' && worktreePath) {
+    providerMetadata = getNativeProviderMetadata(worktreePath);
+  }
+  if (!providerMetadata) {
+    providerMetadata = getDeepSeekProviderMetadata(executionModel, repoDir);
+  }
   try {
     // Derive feature slug from branch or issue ID
     const slug = branch.replace(/^(task|bug)\//, '') || issueId.toLowerCase();
