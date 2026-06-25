@@ -8,16 +8,16 @@
  * @module review-engine
  */
 
-import { readFileSync } from 'node:fs';
 import {
   type ReviewContext,
   type DesignContext,
 } from './review-context-gatherer.ts';
 import { callClaude, parseJsonFromLLM, ensureClaudeAvailable } from './llm-cli.ts';
-import { loadWavemillConfig } from './config.ts';
+import { getNativeAgentConfig, loadWavemillConfig } from './config.ts';
 import type { ReviewProgressReporter } from './review-progress.ts';
 import type { OperatingMode } from './operating-mode.ts';
 import { loadPromptResourceSync, resolveRuntimeResource } from './resource-retrieval.ts';
+import type { runNativeReview as runNativeReviewFn } from './native-agent/review.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Module-level cache
@@ -52,6 +52,7 @@ export interface ReviewResult {
     hasUiChanges: boolean;
     designContextAvailable: boolean;
     uiVerificationRun: boolean;
+    deniedTools?: Array<{ tool: string; reason: string; message: string }>;
   };
 }
 
@@ -83,6 +84,10 @@ interface JudgeConfig {
 
 interface Config {
   judge: JudgeConfig;
+}
+
+interface NativeReviewModule {
+  runNativeReview: typeof runNativeReviewFn;
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -252,7 +257,7 @@ function formatDesignContext(ctx: DesignContext): string {
  * - {{TASK_PACKET_CONTEXT}}
  * - {{DESIGN_CONTEXT}}
  */
-function fillPromptTemplate(
+export function fillReviewPromptTemplate(
   template: string,
   context: ReviewContext,
   skipDesignContext: boolean
@@ -394,7 +399,7 @@ async function invokeLLMWithRetry(
  * This is a quick heuristic check to detect conversational responses
  * before expensive parsing attempts.
  */
-function looksLikeJson(text: string): boolean {
+export function looksLikeJson(text: string): boolean {
   let trimmed = text.trim();
 
   // Strip markdown code fences if present
@@ -440,7 +445,7 @@ function looksLikeJson(text: string): boolean {
  *   "uiFindings": [...]  // optional
  * }
  */
-function parseReviewResponse(
+export function parseNativeReviewResponse(
   responseText: string,
   context: ReviewContext,
   operatingMode: OperatingMode = 'normal'
@@ -623,7 +628,7 @@ async function runReviewWithRetry(
       attempt,
       maxAttempts,
     });
-    return parseReviewResponse(responseText, context, options.operatingMode ?? 'normal');
+    return parseNativeReviewResponse(responseText, context, options.operatingMode ?? 'normal');
   } catch (error) {
     if (attempt < maxAttempts) {
       await options.reporter?.emit({
@@ -757,7 +762,7 @@ async function runPersonaReview(
 
   // Design persona needs design context, others skip it
   const skipDesignContext = persona !== 'design';
-  const prompt = fillPromptTemplate(template, context, skipDesignContext);
+  const prompt = fillReviewPromptTemplate(template, context, skipDesignContext);
 
   // Run review with retry logic
   const result = await runReviewWithRetry(
@@ -805,13 +810,33 @@ async function runPersonaReview(
  * @param options - Optional overrides for model, timeout, reviewers, etc.
  * @returns ReviewResult with deduplicated findings and persona attribution
  */
+const reviewEngineDeps = {
+  ensureClaudeAvailable,
+  filterEnabledPersonas,
+  loadConfig,
+  async loadNativeReviewModule(): Promise<NativeReviewModule> {
+    return import('./native-agent/review.ts');
+  },
+  runPersonaReview,
+};
+
+export function isNativeReviewOptedIn(repoDir: string): boolean {
+  const config = getNativeAgentConfig(repoDir);
+  return config.enabled === true && (config.allowedPhases ?? []).includes('review');
+}
+
 export async function runReview(
   context: ReviewContext,
   repoDir: string,
   options: ReviewEngineOptions = {}
 ): Promise<ReviewResult> {
+  if (isNativeReviewOptedIn(repoDir)) {
+    const nativeReview = await reviewEngineDeps.loadNativeReviewModule();
+    return nativeReview.runNativeReview(context, repoDir, options);
+  }
+
   // Load configuration
-  const config = loadConfig(repoDir);
+  const config = reviewEngineDeps.loadConfig(repoDir);
 
   // Determine effective settings (options override config)
   const model = options.model || config.judge.model;
@@ -821,7 +846,7 @@ export async function runReview(
 
   // Determine reviewers to run (default: ['general'])
   const requestedReviewers = options.reviewers || ['general'];
-  const enabledReviewers = filterEnabledPersonas(
+  const enabledReviewers = reviewEngineDeps.filterEnabledPersonas(
     requestedReviewers,
     repoDir,
     context.metadata.hasUiChanges,
@@ -855,7 +880,7 @@ export async function runReview(
       console.error('=== Pre-Flight Check ===');
     }
 
-    await ensureClaudeAvailable({
+    await reviewEngineDeps.ensureClaudeAvailable({
       verbose: options.verbose,
       reporter: options.reporter,
     });
@@ -879,7 +904,7 @@ export async function runReview(
       reviewer: persona,
     });
 
-    const result = await runPersonaReview(
+    const result = await reviewEngineDeps.runPersonaReview(
       persona,
       context,
       repoDir,
@@ -982,6 +1007,20 @@ export async function runReview(
 }
 
 export const reviewEngineTestUtils = {
+  fillReviewPromptTemplate,
   getPersonaPromptPath,
+  isNativeReviewOptedIn,
   loadPersonaPromptTemplate,
+  looksLikeJson,
+  parseNativeReviewResponse,
+  setLoadNativeReviewModule(loader: typeof reviewEngineDeps.loadNativeReviewModule) {
+    reviewEngineDeps.loadNativeReviewModule = loader;
+  },
+  setRunPersonaReview(fn: typeof reviewEngineDeps.runPersonaReview) {
+    reviewEngineDeps.runPersonaReview = fn;
+  },
+  resetDeps() {
+    reviewEngineDeps.loadNativeReviewModule = async () => import('./native-agent/review.ts');
+    reviewEngineDeps.runPersonaReview = runPersonaReview;
+  },
 };

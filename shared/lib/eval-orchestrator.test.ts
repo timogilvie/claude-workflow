@@ -228,6 +228,56 @@ describe('eval-orchestrator', () => {
     assert.equal(record.enrichmentDiagnostics, undefined);
   });
 
+  it('enriches eval records with native provider metadata for native runs', async () => {
+    const nativeSessionsDir = join(repoDir, '.wavemill', 'runs', 'HOK-1495', 'native-sessions');
+    mkdirSync(nativeSessionsDir, { recursive: true });
+    writeFileSync(
+      join(nativeSessionsDir, 'review.jsonl'),
+      [
+        JSON.stringify({
+          seq: 1,
+          sessionId: 'native-review',
+          timestamp: 1,
+          type: 'session_started',
+          model: 'gpt-4o',
+          api: 'openai-responses',
+          provider: 'openai',
+        }),
+        JSON.stringify({
+          seq: 2,
+          sessionId: 'native-review',
+          timestamp: 2,
+          type: 'assistant_message',
+          model: 'gpt-4o',
+          stopReason: 'stop',
+          usage: {
+            input: 10,
+            output: 5,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 15,
+          },
+          rawContent: [],
+          replayContent: [],
+          redacted: false,
+        }),
+      ].join('\n'),
+    );
+
+    const record = await runEvaluation({
+      issueId: 'HOK-1495',
+      prNumber: '1495',
+      repoDir,
+      worktreePath: repoDir,
+      agentType: 'native',
+    });
+
+    assert.equal(record.provider, 'openai');
+    assert.equal(record.endpoint, 'openai-responses');
+    assert.equal(record.modelId, 'gpt-5.4');
+    assert.equal(record.workflowCost, 3.75);
+  });
+
   it('preserves null duration when git history is indeterminate', async () => {
     mock.method(evalOrchestratorDeps, 'gatherStageArtifacts', () => ({
       taskPacket: undefined,

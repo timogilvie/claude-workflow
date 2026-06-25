@@ -181,6 +181,21 @@ agent_model_helper_available() {
   command -v tsx >/dev/null 2>&1 || command -v npx >/dev/null 2>&1
 }
 
+agent_native_planning_eligible() {
+  local repo_dir="${1:-${REPO_DIR:-$(pwd)}}"
+  local phase="${2:-${WAVEMILL_PHASE:-planning}}"
+  local model=""
+
+  [[ "$phase" == "planning" ]] || return 1
+  agent_model_helper_available || return 1
+
+  model="$(cd "$repo_dir" 2>/dev/null && agent_run_tsx_tool "tools/check-native-eligibility.ts" "$repo_dir" "$phase" 2>/dev/null)" || return 1
+  [[ -n "$model" ]] || return 1
+
+  AGENT_NATIVE_PLANNING_MODEL="$model"
+  return 0
+}
+
 
 agent_model_is_deepseek() {
   local model="${1:-}"
@@ -1414,6 +1429,47 @@ agent_launch_autonomous() {
   agent_write_initial_status "$session" "$issue"
   if [[ -n "$role" && -n "$model" ]]; then
     routing_emit_phase "$role" "$model" "$repo_dir" "$feature_dir" || true
+  fi
+
+  local native_phase="${WAVEMILL_PHASE:-$window}"
+  local native_model=""
+  local worktree_dir="${feature_dir%/features/*}"
+  local feature_slug="${WAVEMILL_FEATURE_SLUG:-${WAVEMILL_SLUG:-}}"
+  if agent_native_planning_eligible "$repo_dir" "$native_phase"; then
+    native_model="${AGENT_NATIVE_PLANNING_MODEL:-native}"
+    local launcher="/tmp/${session}-${issue}-autonomous-launcher.sh"
+    cat > "$launcher" <<LAUNCHEOF
+#!/bin/bash
+set -euo pipefail
+export WAVEMILL_SESSION='$session'
+export WAVEMILL_ISSUE='$issue'
+export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
+export WAVEMILL_PHASE='$window'
+export WAVEMILL_RESOLVED_MODEL='$native_model'
+export WAVEMILL_REPO_DIR='$repo_dir'
+export WAVEMILL_WT_DIR='$worktree_dir'
+export WAVEMILL_FEATURE_SLUG='$feature_slug'
+export WAVEMILL_SLUG='$feature_slug'
+export WAVEMILL_PLAN_DEPTH='${WAVEMILL_PLAN_DEPTH:-}'
+export WAVEMILL_OPERATING_MODE='${WAVEMILL_OPERATING_MODE:-}'
+export WAVEMILL_BRANCH='${WAVEMILL_BRANCH:-}'
+export WAVEMILL_BASE_BRANCH='${WAVEMILL_BASE_BRANCH:-}'
+export WAVEMILL_TITLE='${WAVEMILL_TITLE:-}'
+if [[ -n '$issue' ]]; then
+  printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
+fi
+npx tsx '$repo_dir/tools/launch-native-planning.ts' --session '$session' --issue '$issue' --slug '$feature_slug' --wt-dir '$worktree_dir' --repo-dir '$repo_dir'
+native_rc=\$?
+if [[ -n "\${STATUS_LOG_FILE:-}" ]]; then
+  printf '%s\n' "[wavemill] native planning exit code native=\${native_rc} issue='$issue'" >> "\$STATUS_LOG_FILE" 2>/dev/null || true
+fi
+echo "[wavemill] Agent exited (native=\${native_rc})"
+exit "\$native_rc"
+LAUNCHEOF
+    chmod +x "$launcher"
+    tmux send-keys -t "$target" -l -- "$launcher"
+    tmux send-keys -t "$target" C-m
+    return 0
   fi
 
   # Wrap agent command so exit status is visible and the shell survives

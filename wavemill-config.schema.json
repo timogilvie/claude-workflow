@@ -958,6 +958,18 @@
                         "enum": ["task-expansion", "planning", "review"]
                     }
                 },
+                "expansion": {
+                    "type": "object",
+                    "description": "Task-expansion-specific native-agent behavior.",
+                    "properties": {
+                        "fallbackOnUnavailable": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "When true, task expansion falls back to the default Claude path if native prerequisites are unavailable."
+                        }
+                    },
+                    "additionalProperties": false
+                },
                 "providers": {
                     "type": "object",
                     "properties": {

@@ -67,6 +67,14 @@ When new model/router config fields are added in future versions:
 - Keep personal model trials and developer-specific provider preferences in `.wavemill-config.local.json`.
 - Keep provider credentials in environment variables, not config files.
 
+### Native Read-Only Opt-In
+
+Use `.wavemill-config.json` for the shared `nativeAgent.enabled`, `nativeAgent.allowedPhases`, and provider model allow-list values that define whether a repo opts into native read-only expansion, planning, or review.
+
+Keep native provider secrets such as `OPENAI_API_KEY` and `OPENROUTER_API_KEY` in environment variables only.
+
+See [Native Read-Only Runtime](./native-read-only-runtime.md) for the exact config shape and phase examples.
+
 ### Router Exploration Sampling
 
 `router.exploration` converts deterministic argmax model selection (stage-aware
