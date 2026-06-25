@@ -326,52 +326,54 @@ export function printTroubleshooting(results: CheckResult[], provider: LLMProvid
   }
 }
 
-runTool({
-  name: 'check-review-setup',
-  description: 'Health check for review tool setup',
-  options: {},
-  examples: [
-    'npx tsx tools/check-review-setup.ts',
-    'npm run check:review',
-  ],
-  async run() {
-    const provider = getReviewProvider();
-    console.log(`🔍 Checking review tool setup (provider: ${provider})...\n`);
+if (import.meta.main) {
+  runTool({
+    name: 'check-review-setup',
+    description: 'Health check for review tool setup',
+    options: {},
+    examples: [
+      'npx tsx tools/check-review-setup.ts',
+      'npm run check:review',
+    ],
+    async run() {
+      const provider = getReviewProvider();
+      console.log(`🔍 Checking review tool setup (provider: ${provider})...\n`);
 
-    const results: CheckResult[] = [];
+      const results: CheckResult[] = [];
 
-    // Git checks are always run
-    results.push(await checkGit());
-    results.push(await checkGitRepo());
+      // Git checks are always run
+      results.push(await checkGit());
+      results.push(await checkGitRepo());
 
-    // Provider-specific checks
-    if (provider === 'claude') {
-      results.push(await checkClaudeCLI());
-      results.push(await checkAnthropicNetwork());
-    } else {
-      results.push(await checkCodexCLI());
-    }
+      // Provider-specific checks
+      if (provider === 'claude') {
+        results.push(await checkClaudeCLI());
+        results.push(await checkAnthropicNetwork());
+      } else {
+        results.push(await checkCodexCLI());
+      }
 
-    // Print results
-    console.log();
-    results.forEach(printResult);
+      // Print results
+      console.log();
+      results.forEach(printResult);
 
-    // Print summary
-    const passed = results.filter(r => r.passed).length;
-    const total = results.length;
+      // Print summary
+      const passed = results.filter(r => r.passed).length;
+      const total = results.length;
 
-    console.log('\n' + '─'.repeat(60));
-    if (passed === total) {
-      console.log(`${GREEN}✓ All checks passed!${NC}`);
-      console.log('\nReview tool is ready to use.');
-      console.log('Run: npx tsx tools/review-changes.ts main');
-    } else {
-      console.log(`${RED}✗ ${total - passed}/${total} checks failed${NC}`);
-      printTroubleshooting(results, provider);
-    }
-    console.log('─'.repeat(60));
+      console.log('\n' + '─'.repeat(60));
+      if (passed === total) {
+        console.log(`${GREEN}✓ All checks passed!${NC}`);
+        console.log('\nReview tool is ready to use.');
+        console.log('Run: npx tsx tools/review-changes.ts main');
+      } else {
+        console.log(`${RED}✗ ${total - passed}/${total} checks failed${NC}`);
+        printTroubleshooting(results, provider);
+      }
+      console.log('─'.repeat(60));
 
-    // Exit with appropriate code
-    process.exitCode = passed === total ? 0 : 1;
-  },
-});
+      // Exit with appropriate code
+      process.exitCode = passed === total ? 0 : 1;
+    },
+  });
+}
