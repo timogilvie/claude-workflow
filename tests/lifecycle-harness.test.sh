@@ -143,6 +143,16 @@ harness_extract_real_functions() {
     blocked_completion_announce_marker \
     blocked_completion_should_announce \
     mark_blocked_completion_announced \
+    wavemill_capacity_stall_seconds \
+    codex_capacity_recovery_marker \
+    codex_capacity_dwell_marker \
+    codex_capacity_clear_dwell_marker \
+    codex_capacity_pane_tail \
+    codex_capacity_tail_has_terminal_prompt \
+    codex_capacity_hook_status \
+    codex_capacity_record_dwell \
+    codex_capacity_idle_confirmed \
+    write_codex_capacity_blocked_completion \
     blocked_completion_current_head \
     coding_output_dirty_paths \
     blocked_completion_commit_matches_head \
@@ -1675,6 +1685,170 @@ EOF
   check_not_contains "no-stat dedupe: second poll emits no duplicate log" "$(kv_value "$tick2" log_output)" "needs attention:"
 }
 
+test_coding_capacity_hook_writes_blocked_completion() {
+  local slug="coding-capacity-hook"
+  local issue="HOK-2318-HOOK"
+  local repo tick feature_dir hook_file
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  feature_dir="$repo/features/$slug"
+  hook_file="/tmp/wavemill-lifecycle-harness-${issue}.hook"
+  cat > "$hook_file" <<EOF
+{"state":"error","event":"model_capacity","detail":"model_at_capacity: Selected model is at capacity. Please try a different model.","agent":"codex","timestamp":$(date +%s)}
+EOF
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"; WAVEMILL_CAPACITY_STALL_SECONDS=0')"
+
+  check_file_exists "capacity hook: blocked completion written" "$feature_dir/.coding-blocked-completion.json"
+  check_file_exists "capacity hook: recovery audit written" "$feature_dir/.coding-capacity-recovery.json"
+  check_eq "capacity hook: needs-user attention set" "needs-user" "$(kv_value "$tick" attention)"
+  check_eq "capacity hook: task remains active" "1" "$(kv_value "$tick" active_count)"
+  check_eq "capacity hook: stage remains running" "running" "$(harness_read_stage_status "$repo" "$slug" coding)"
+  check_contains "capacity hook: attention log emitted" "$(kv_value "$tick" log_output)" "coding blocked: Codex model at capacity"
+}
+
+test_coding_capacity_prompt_writes_blocked_completion() {
+  local slug="coding-capacity-pane"
+  local issue="HOK-2318-PANE"
+  local repo tick feature_dir
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  feature_dir="$repo/features/$slug"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" '
+    CURRENT_PHASE="coding"
+    WAVEMILL_CAPACITY_STALL_SECONDS=0
+    _tmux_task_window_target() { printf "%s\n" "@7"; }
+    tmux() {
+      if [[ "${1:-}" == "capture-pane" ]]; then
+        printf "%s\n\n%s\n" "Selected model is at capacity. Please try a different model." ">"
+        return 0
+      fi
+      return 1
+    }
+  ')"
+
+  check_file_exists "capacity pane: blocked completion written" "$feature_dir/.coding-blocked-completion.json"
+  check_file_exists "capacity pane: recovery audit written" "$feature_dir/.coding-capacity-recovery.json"
+  check_eq "capacity pane: needs-user attention set" "needs-user" "$(kv_value "$tick" attention)"
+  check_eq "capacity pane: artifact reason set" "model_at_capacity" "$(jq -r '.reason' "$feature_dir/.coding-blocked-completion.json")"
+}
+
+test_coding_complete_wins_over_capacity_prompt() {
+  local slug="coding-complete-over-capacity"
+  local issue="HOK-2318-COMPLETE"
+  local repo tick feature_dir
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  feature_dir="$repo/features/$slug"
+  touch "$feature_dir/.coding-complete"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" '
+    CURRENT_PHASE="coding"
+    WAVEMILL_CAPACITY_STALL_SECONDS=0
+    _tmux_task_window_target() { printf "%s\n" "@7"; }
+    tmux() {
+      if [[ "${1:-}" == "capture-pane" ]]; then
+        printf "%s\n%s\n" "Selected model is at capacity. Please try a different model." ">"
+        return 0
+      fi
+      return 1
+    }
+  ')"
+
+  check_eq "complete over capacity: stage becomes completed" "completed" "$(harness_read_stage_status "$repo" "$slug" coding)"
+  check_file_absent "complete over capacity: no capacity artifact" "$feature_dir/.coding-blocked-completion.json"
+  check_eq "complete over capacity: no needs-user attention" "" "$(kv_value "$tick" attention)"
+}
+
+test_coding_capacity_prompt_ignores_active_output() {
+  local slug="coding-capacity-active-output"
+  local issue="HOK-2318-ACTIVE"
+  local repo tick feature_dir
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  feature_dir="$repo/features/$slug"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" '
+    CURRENT_PHASE="coding"
+    WAVEMILL_CAPACITY_STALL_SECONDS=0
+    _tmux_task_window_target() { printf "%s\n" "@7"; }
+    tmux() {
+      if [[ "${1:-}" == "capture-pane" ]]; then
+        printf "%s\n%s\n" "Selected model is at capacity. Please try a different model." "Retrying request with backoff..."
+        return 0
+      fi
+      return 1
+    }
+  ')"
+
+  check_file_absent "capacity active output: no blocked completion written" "$feature_dir/.coding-blocked-completion.json"
+  check_eq "capacity active output: attention remains clear" "clear" "$(kv_value "$tick" attention)"
+}
+
+test_coding_capacity_recovery_is_idempotent() {
+  local slug="coding-capacity-idempotent"
+  local issue="HOK-2318-IDEMP"
+  local repo tick1 tick2 feature_dir
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  feature_dir="$repo/features/$slug"
+
+  tick1="$(harness_run_tick "$repo" "$slug" "$issue" '
+    CURRENT_PHASE="coding"
+    WAVEMILL_CAPACITY_STALL_SECONDS=0
+    _tmux_task_window_target() { printf "%s\n" "@7"; }
+    tmux() {
+      if [[ "${1:-}" == "capture-pane" ]]; then
+        printf "%s\n%s\n" "Selected model is at capacity. Please try a different model." ">"
+        return 0
+      fi
+      return 1
+    }
+  ')"
+  tick2="$(harness_run_tick "$repo" "$slug" "$issue" '
+    CURRENT_PHASE="coding"
+    WAVEMILL_CAPACITY_STALL_SECONDS=0
+    _tmux_task_window_target() { printf "%s\n" "@7"; }
+    tmux() {
+      if [[ "${1:-}" == "capture-pane" ]]; then
+        printf "%s\n%s\n" "Selected model is at capacity. Please try a different model." ">"
+        return 0
+      fi
+      return 1
+    }
+  ')"
+
+  check_eq "capacity idempotent: first tick sets needs-user" "needs-user" "$(kv_value "$tick1" attention)"
+  check_eq "capacity idempotent: second tick keeps needs-user attention" "needs-user" "$(kv_value "$tick2" attention)"
+  check_not_contains "capacity idempotent: second tick does not duplicate log" "$(kv_value "$tick2" log_output)" "needs attention: coding blocked: Codex model at capacity"
+  check_file_exists "capacity idempotent: recovery audit still present" "$feature_dir/.coding-capacity-recovery.json"
+}
+
+test_coding_capacity_hook_ignores_stale_signal() {
+  local slug="coding-capacity-stale-hook"
+  local issue="HOK-2318-STALE-HOOK"
+  local repo tick feature_dir stale_ts
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  feature_dir="$repo/features/$slug"
+  stale_ts=$(( $(date +%s) - 400 ))
+  cat > "/tmp/wavemill-lifecycle-harness-${issue}.hook" <<EOF
+{"state":"error","event":"model_capacity","detail":"model_at_capacity: Selected model is at capacity. Please try a different model.","agent":"codex","timestamp":$stale_ts}
+EOF
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"; WAVEMILL_CAPACITY_STALL_SECONDS=0')"
+
+  check_file_absent "capacity stale hook: no blocked completion written" "$feature_dir/.coding-blocked-completion.json"
+  check_eq "capacity stale hook: attention remains clear" "clear" "$(kv_value "$tick" attention)"
+}
+
 test_misplaced_coding_complete_marker_is_recovered() {
   local slug="misplaced-coding-complete"
   local issue="HOK-1642-MISPLACED"
@@ -2000,6 +2174,7 @@ test_coding_uses_expanded_route_over_bootstrap
 test_missing_expansion_recovery_success_launches_with_expanded_route
 test_challenger_missing_expansion_recovery_uses_linear_issue_id
 test_expansion_recovery_resolve_issue_id_normalizes_linear_issue_url
+test_challenger_missing_expansion_recovery_extracts_linear_issue_id_from_url
 test_challenger_missing_expansion_recovery_skips_without_linear_issue_id
 test_missing_expansion_recovery_non_challenger_uses_issue_key
 test_missing_expansion_recovery_failure_launches_with_bootstrap
@@ -2011,6 +2186,7 @@ test_merge_queue_marks_non_candidate_stale_without_rerun
 test_merge_queue_disabled_keeps_legacy_rerun
 test_coding_blocked_completion_needs_user_without_advancing
 test_coding_blocked_completion_auto_advances_when_valid
+test_coding_blocked_completion_auto_advances_with_wavemill_metadata_noise
 test_coding_blocked_completion_dedupes_same_artifact
 test_coding_blocked_completion_reannounces_on_mtime_change
 test_coding_complete_wins_over_blocked_completion
@@ -2020,7 +2196,14 @@ test_coding_blocked_completion_missing_required_field_does_not_auto_advance
 test_coding_blocked_completion_empty_passing_checks_does_not_auto_advance
 test_coding_blocked_completion_stale_commit_does_not_auto_advance
 test_coding_blocked_completion_dirty_worktree_does_not_auto_advance
+test_coding_blocked_completion_unknown_feature_file_does_not_auto_advance
 test_coding_blocked_completion_dedupes_when_stat_unavailable
+test_coding_capacity_hook_writes_blocked_completion
+test_coding_capacity_prompt_writes_blocked_completion
+test_coding_complete_wins_over_capacity_prompt
+test_coding_capacity_prompt_ignores_active_output
+test_coding_capacity_recovery_is_idempotent
+test_coding_capacity_hook_ignores_stale_signal
 test_misplaced_coding_complete_marker_is_recovered
 test_root_level_coding_complete_marker_is_recovered
 test_tracked_root_level_coding_complete_marker_is_ignored

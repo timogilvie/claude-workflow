@@ -420,6 +420,27 @@ else
   fail "coding blocked-completion detail formatting is incorrect"
 fi
 
+cat > "$WORKTREES_DIR/coding-task/features/coding-task/.coding-blocked-completion.json" <<'EOF'
+{
+  "summary": "coding blocked: Codex model at capacity",
+  "reason": "model_at_capacity"
+}
+EOF
+
+CAPACITY_CODING_DETAIL_OUTPUT="$(run_blocked_detail "$WORKTREES_DIR" "HOK-1642" "coding-task")"
+if [[ "$CAPACITY_CODING_DETAIL_OUTPUT" == 'HOK-1642 needs attention: coding blocked: Codex model at capacity. Type "advance HOK-1642" to launch review.' ]]; then
+  pass "formats coding capacity blocked-completion detail"
+else
+  fail "coding capacity blocked-completion detail formatting is incorrect"
+fi
+
+cat > "$WORKTREES_DIR/coding-task/features/coding-task/.coding-blocked-completion.json" <<'EOF'
+{
+  "summary": "coding done; full verification blocked by Docker and baseline tests",
+  "reason": "The task is ready for review, but local verification cannot finish in this environment."
+}
+EOF
+
 STATE_FILE_CODING_BLOCKED="$TMP_DIR/state-coding-blocked.json"
 cat > "$STATE_FILE_CODING_BLOCKED" <<EOF
 {
