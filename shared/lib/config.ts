@@ -402,7 +402,16 @@ export interface NativeAgentProvidersConfig {
 export interface NativeAgentConfig {
   enabled?: boolean;
   allowedPhases?: NativeAgentAllowedPhase[];
+  expansion?: {
+    fallbackOnUnavailable?: boolean;
+  };
   providers?: NativeAgentProvidersConfig;
+}
+
+export interface NativeExpansionConfig {
+  enabled: boolean;
+  allowedForExpansion: boolean;
+  fallbackOnUnavailable: boolean;
 }
 
 export interface IntegrationConfig {
@@ -1386,6 +1395,15 @@ export function getProvidersConfig(repoDir?: string): ProvidersConfig {
 
 export function getNativeAgentConfig(repoDir?: string): NativeAgentConfig {
   return loadWavemillConfig(repoDir).nativeAgent || {};
+}
+
+export function getNativeExpansionConfig(repoDir?: string): NativeExpansionConfig {
+  const config = getNativeAgentConfig(repoDir);
+  return {
+    enabled: config.enabled === true,
+    allowedForExpansion: config.allowedPhases?.includes('task-expansion') === true,
+    fallbackOnUnavailable: config.expansion?.fallbackOnUnavailable ?? false,
+  };
 }
 
 /**
