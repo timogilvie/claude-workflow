@@ -4124,7 +4124,7 @@ coding_compare_commit_counts() {
 }
 
 write_coding_uncommitted_output_artifact() {
-  local issue="$1" feature_dir="$2" base_branch="$3" ahead_count="$4" behind_count="$5" dirty_paths_raw="${6:-}"
+  local issue="$1" feature_dir="$2" base_branch="$3" ahead_count="$4" behind_count="$5" dirty_paths_raw="${6:-}" summary="$7" action="$8" reason="${9:-coding_output_not_committed}"
   local artifact slug artifact_tmp first_path dirty_paths_json
 
   artifact="$(coding_uncommitted_output_artifact_path "$feature_dir")"
@@ -4137,9 +4137,9 @@ write_coding_uncommitted_output_artifact() {
     --arg issue "$issue" \
     --arg slug "$slug" \
     --arg baseBranch "$base_branch" \
-    --arg reason "coding_output_not_committed" \
-    --arg summary "coding completed marker detected, but branch has no commits beyond $base_branch and worktree still contains uncommitted coding output" \
-    --arg action "Commit the coding output, then retry review." \
+    --arg reason "$reason" \
+    --arg summary "$summary" \
+    --arg action "$action" \
     --arg firstDirtyPath "$first_path" \
     --argjson aheadCount "$ahead_count" \
     --argjson behindCount "$behind_count" \
@@ -4171,6 +4171,7 @@ write_coding_uncommitted_output_artifact() {
 guard_coding_complete_handoff() {
   local issue="$1" feature_dir="$2" worktree="$3" base_branch="$4"
   local slug dirty_paths compare_counts behind_count ahead_count artifact_record summary reason action artifact_mtime
+  local handoff_summary handoff_action handoff_reason
   local win
 
   slug="$(basename "$feature_dir")"
@@ -4186,12 +4187,17 @@ guard_coding_complete_handoff() {
   [[ "$behind_count" =~ ^[0-9]+$ ]] || behind_count=0
   [[ "$ahead_count" =~ ^[0-9]+$ ]] || ahead_count=0
 
-  if [[ "$ahead_count" != "0" ]]; then
-    clear_coding_uncommitted_output_attention "$feature_dir"
-    return 1
+  if [[ "$ahead_count" == "0" ]]; then
+    handoff_reason="coding_output_not_committed"
+    handoff_summary="coding completed marker detected, but branch has no commits beyond $base_branch and worktree still contains uncommitted coding output"
+    handoff_action="Commit the coding output, then retry review."
+  else
+    handoff_reason="coding_output_dirty_tree"
+    handoff_summary="coding completed marker detected, but worktree still contains uncommitted coding output"
+    handoff_action="Clean the dirty paths, then retry review."
   fi
 
-  write_coding_uncommitted_output_artifact "$issue" "$feature_dir" "$base_branch" "$ahead_count" "$behind_count" "$dirty_paths" || true
+  write_coding_uncommitted_output_artifact "$issue" "$feature_dir" "$base_branch" "$ahead_count" "$behind_count" "$dirty_paths" "$handoff_summary" "$handoff_action" "$handoff_reason" || true
   artifact_record="$(read_coding_uncommitted_output "$feature_dir")"
   IFS=$'\001' read -r summary reason action artifact_mtime <<< "$artifact_record"
   win="$issue-$slug"
