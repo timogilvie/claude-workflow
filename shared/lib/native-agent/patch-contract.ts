@@ -64,7 +64,8 @@ export type NativePatchRuntimeRejectionCode =
   | 'old_text_not_found'
   | 'ambiguous_anchor'
   | 'anchor_mismatch'
-  | 'phase_denied';
+  | 'phase_denied'
+  | 'fuzzy_below_threshold';
 
 export interface NativePatchRuntimeRejectionContext {
   path: string;
@@ -82,6 +83,7 @@ export interface NativePatchRuntimeRejection {
     diff?: string;
     anchorBefore?: string;
     anchorAfter?: string;
+    normalizedOldText?: string;
   };
   liveContext?: NativePatchRuntimeRejectionContext;
   hint: string;
