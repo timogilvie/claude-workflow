@@ -31,7 +31,12 @@ import {
   type ResolvedNativeProviderEntry,
 } from './providers.ts';
 import { createReadOnlyTools, READ_ONLY_PATH_FIELDS } from './tools/read-only.ts';
-import { createGitTools, gitAfterToolCall } from './tools/git.ts';
+import { createGitTools, gitAfterToolCall, gitToolPolicyConfig } from './tools/git.ts';
+import {
+  createCodingMutationTools,
+  codingMutationAfterToolCall,
+  codingMutationPolicyConfig,
+} from './tools/mutation-tools.ts';
 import { createToolRegistry } from './tools/registry.ts';
 import { toPiAgentTool } from './tools/pi-adapter.ts';
 import { loadNativePhasePrompt, registerAndRecordNativeProvenance } from './prompts.ts';
@@ -47,7 +52,7 @@ export const SMOKE_PROVIDERS = [
   OPENROUTER_NATIVE_PROVIDER,
 ] as const;
 
-export const SMOKE_PHASES = ['planning'] as const;
+export const SMOKE_PHASES = ['planning', 'coding'] as const;
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -183,7 +188,34 @@ function buildSmokeCompatRegistry(
 function buildSmokeToolRegistry(worktreePath: string) {
   const readOnlyDescriptors = createReadOnlyTools(worktreePath);
   const gitDescriptors = createGitTools(worktreePath);
-  return createToolRegistry([...readOnlyDescriptors, ...gitDescriptors]);
+  const codingMutationDescriptors = createCodingMutationTools(worktreePath);
+  return createToolRegistry([...readOnlyDescriptors, ...gitDescriptors, ...codingMutationDescriptors]);
+}
+
+async function smokeAfterToolCall(context: Parameters<NonNullable<WavemillLoopConfig['afterToolCall']>>[0]) {
+  const gitResult = await gitAfterToolCall(context);
+  if (gitResult?.isError) {
+    return gitResult;
+  }
+  return codingMutationAfterToolCall(context);
+}
+
+function buildSmokeToolPolicyConfig(phase: SmokePhase) {
+  if (phase === 'coding') {
+    return {
+      pathFieldsByTool: {
+        ...READ_ONLY_PATH_FIELDS,
+        ...gitToolPolicyConfig.pathFieldsByTool,
+        ...codingMutationPolicyConfig.pathFieldsByTool,
+      },
+    };
+  }
+  return {
+    pathFieldsByTool: {
+      ...READ_ONLY_PATH_FIELDS,
+      ...gitToolPolicyConfig.pathFieldsByTool,
+    },
+  };
 }
 
 function makeTranscriptPath(
@@ -389,12 +421,12 @@ export async function runNativeAgentLive(
     model: modelConfig,
     context,
     convertToLlm: (messages) => messages as unknown as Message[],
-    afterToolCall: gitAfterToolCall,
+    afterToolCall: smokeAfterToolCall,
     toolPolicy: {
-      phase: 'planning',
+      phase,
       worktreePath,
       registry: registry.list(),
-      config: { pathFieldsByTool: READ_ONLY_PATH_FIELDS },
+      config: buildSmokeToolPolicyConfig(phase),
     },
     onEvent: (event) => writer.handleEvent(event),
     budget: {
