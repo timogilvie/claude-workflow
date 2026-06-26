@@ -7,10 +7,17 @@ import { spawn } from 'node:child_process';
 
 import { classifyCommand } from './command-classifier.ts';
 import { runCommand } from './command-substrate.ts';
+import { TranscriptWriter, parseTranscriptJsonl } from './transcript.ts';
 
 const tempDirs: string[] = [];
 const TEST_SECRET_KEY = 'WAVEMILL_TEST_SECRET';
 const TRUNCATION_MARKER = '[output truncated]';
+const TRANSCRIPT_BASE_OPTS = {
+  sessionId: 'command-substrate-test',
+  model: 'hokusai-mini',
+  api: 'hokusai-mock',
+  provider: 'hokusai',
+};
 
 function makeTempDir(prefix: string): string {
   const dir = mkdtempSync(path.join(tmpdir(), prefix));
@@ -361,5 +368,80 @@ describe('class and approval exposure', () => {
 
     assert.equal(result.commandClass, 'dangerous');
     assert.equal(result.approval, 'rejected');
+  });
+});
+
+describe('transcript logging', () => {
+  it('writes an approved command transcript event with metadata', async () => {
+    const cwd = makeTempDir('command-substrate-transcript-approved-');
+    const transcriptPath = path.join(cwd, 'native-transcript.jsonl');
+    const writer = new TranscriptWriter({ ...TRANSCRIPT_BASE_OPTS, path: transcriptPath });
+
+    await runCommand({
+      command: ['node', '-e', 'process.stdout.write("hello")'],
+      cwd,
+      allowedRoots: [cwd],
+      transcriptWriter: writer,
+      toolName: 'test',
+    });
+
+    const parsed = parseTranscriptJsonl(readFileSync(transcriptPath, 'utf-8'));
+    assert.equal(parsed.length, 1);
+    assert.equal(parsed[0]?.type, 'command_result');
+    if (parsed[0]?.type !== 'command_result') {
+      throw new Error('expected command_result transcript event');
+    }
+    assert.equal(parsed[0].toolName, 'test');
+    assert.equal(parsed[0].approval, 'approved');
+    assert.equal(parsed[0].cwd, realpathSync(cwd));
+    assert.equal(parsed[0].exitCode, 0);
+    assert.equal(parsed[0].stdout, 'hello');
+    assert.equal(parsed[0].truncation.stdout.truncated, false);
+  });
+
+  it('writes a rejected command transcript event without spawning', async () => {
+    const cwd = makeTempDir('command-substrate-transcript-rejected-');
+    const transcriptPath = path.join(cwd, 'native-transcript.jsonl');
+    const writer = new TranscriptWriter({ ...TRANSCRIPT_BASE_OPTS, path: transcriptPath });
+
+    await runCommand({
+      command: 'sudo ls',
+      cwd,
+      allowedRoots: [cwd],
+      transcriptWriter: writer,
+      toolName: 'git',
+    });
+
+    const parsed = parseTranscriptJsonl(readFileSync(transcriptPath, 'utf-8'));
+    assert.equal(parsed.length, 1);
+    assert.equal(parsed[0]?.type, 'command_result');
+    if (parsed[0]?.type !== 'command_result') {
+      throw new Error('expected command_result transcript event');
+    }
+    assert.equal(parsed[0].toolName, 'git');
+    assert.equal(parsed[0].approval, 'rejected');
+    assert.equal(parsed[0].exitCode, null);
+    assert.equal(parsed[0].rejectionReason, 'dangerous-command-pattern');
+  });
+
+  it('does not persist allowlisted env secrets or output secrets in transcript content', async () => {
+    const cwd = makeTempDir('command-substrate-transcript-redaction-');
+    const transcriptPath = path.join(cwd, 'native-transcript.jsonl');
+    const writer = new TranscriptWriter({ ...TRANSCRIPT_BASE_OPTS, path: transcriptPath });
+    process.env[TEST_SECRET_KEY] = 'supersecret';
+
+    await runCommand({
+      command: ['node', '-e', `process.stdout.write(process.env.${TEST_SECRET_KEY} ?? "")`],
+      cwd,
+      allowedRoots: [cwd],
+      allowedEnvKeys: [TEST_SECRET_KEY],
+      redactValues: ['supersecret'],
+      transcriptWriter: writer,
+      toolName: 'command',
+    });
+
+    const rawTranscript = readFileSync(transcriptPath, 'utf-8');
+    assert.ok(!rawTranscript.includes('supersecret'));
+    assert.ok(rawTranscript.includes('«redacted»'));
   });
 });
