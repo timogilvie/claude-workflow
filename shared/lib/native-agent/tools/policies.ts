@@ -33,6 +33,13 @@ export interface ToolPolicyDenyDecision {
 
 export type ToolPolicyDecision = ToolPolicyAllowDecision | ToolPolicyDenyDecision;
 
+export interface ComparablePathResolution {
+  kind: 'inside' | 'outside';
+  displayPath: string;
+  absolutePath: string;
+  relativePath: string;
+}
+
 const ALLOW: ToolPolicyAllowDecision = { kind: 'allow' };
 const DEFAULT_READ_ONLY_PHASES: readonly ToolPhase[] = ['planning', 'review'];
 
@@ -73,7 +80,7 @@ function isReadOnlyPhase(phase: ToolPhase, config: ToolPolicyConfig | undefined)
   return (config?.readOnlyPhases ?? DEFAULT_READ_ONLY_PHASES).includes(phase);
 }
 
-function normalizeWorktreeRoot(worktreePath: string): string {
+export function normalizeWorktreeRoot(worktreePath: string): string {
   if (worktreePath.trim() === '') {
     throw new Error('Tool policy requires a non-empty worktreePath');
   }
@@ -96,10 +103,10 @@ function getConfiguredPaths(toolCall: ToolPolicyCall, field: string): string[] {
   );
 }
 
-function resolveCandidatePath(
+export function resolveCandidatePath(
   worktreeRoot: string,
   candidatePath: string,
-): { kind: 'inside'; displayPath: string } | { kind: 'outside'; displayPath: string } {
+): ComparablePathResolution {
   const comparable = toComparablePath(candidatePath);
   const displayPath = toDisplayPath(candidatePath);
   const absoluteCandidate = path.posix.isAbsolute(comparable)
@@ -111,13 +118,23 @@ function resolveCandidatePath(
     relativePath === '' ||
     (!relativePath.startsWith('../') && relativePath !== '..' && !path.posix.isAbsolute(relativePath))
   ) {
-    return { kind: 'inside', displayPath };
+    return {
+      kind: 'inside',
+      displayPath,
+      absolutePath: absoluteCandidate,
+      relativePath: relativePath === '' ? '.' : relativePath,
+    };
   }
 
-  return { kind: 'outside', displayPath };
+  return {
+    kind: 'outside',
+    displayPath,
+    absolutePath: absoluteCandidate,
+    relativePath,
+  };
 }
 
-function toComparablePath(rawPath: string): string {
+export function toComparablePath(rawPath: string): string {
   const normalizedSeparators = rawPath.replace(/\\/g, '/');
   const driveQualified = /^[A-Za-z]:($|\/)/.test(normalizedSeparators)
     ? `/${normalizedSeparators}`
@@ -125,7 +142,7 @@ function toComparablePath(rawPath: string): string {
   return path.posix.normalize(driveQualified);
 }
 
-function toDisplayPath(rawPath: string): string {
+export function toDisplayPath(rawPath: string): string {
   const normalized = path.posix.normalize(rawPath.replace(/\\/g, '/'));
   return normalized === '' ? '.' : normalized;
 }
