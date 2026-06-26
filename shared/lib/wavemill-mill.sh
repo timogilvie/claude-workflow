@@ -1019,13 +1019,27 @@ cleanup_completed_task() {
   local issue="$1"
   local slug="$2"
   local completion_reason="${3:-}"
-
-  # Kill tmux window (unconditional - no race condition)
   local win="$issue-$slug"
-  local target
+  local target=""
+  local target_gone="false"
+
+  # Kill tmux window only when the target is confirmed gone afterward.
   target="$(_tmux_task_window_target "$SESSION" "$issue" "$slug" "${STATE_FILE:-}" "${WORKTREE_ROOT}/${slug}" 2>/dev/null || true)"
-  [[ -n "$target" ]] || target="$win"
-  execute tmux kill-window -t "$(_tmux_target_join "$SESSION" "$target")" 2>/dev/null || true
+  if [[ -z "$target" ]] || ! command -v tmux >/dev/null 2>&1; then
+    target_gone="true"
+  else
+    execute tmux kill-window -t "$(_tmux_target_join "$SESSION" "$target")" 2>/dev/null || true
+    if ! _tmux_window_target_exists "$SESSION" "$target"; then
+      target_gone="true"
+    fi
+  fi
+
+  if [[ "$target_gone" != "true" ]]; then
+    set_window_attention_state "$win" "needs-user"
+    log_warn "  $issue cleanup could not close tmux window; keeping task state"
+    return 1
+  fi
+
   log "debug" "Closed window: $win"
 
   # Remove worktree
@@ -4816,13 +4830,18 @@ _ensure_window_exists() {
 
 _tmux_window_target_exists() {
   local session="$1" target="$2" expected_path="${3:-}"
-  local target_session target_path expected_real target_real
+  local target_session target_path expected_real target_real pane_dead
 
   [[ -n "$session" && -n "$target" ]] || return 1
   target_session="$(tmux display-message -p -t "$target" '#{session_name}' 2>/dev/null || true)"
   [[ "$target_session" == "$session" ]] || return 1
   if [[ -n "$expected_path" ]]; then
     target_path="$(tmux display-message -p -t "$target" '#{pane_current_path}' 2>/dev/null || true)"
+    if [[ -z "$target_path" ]]; then
+      pane_dead="$(tmux list-panes -t "$target" -F '#{pane_dead}' 2>/dev/null | head -1 || true)"
+      [[ "$pane_dead" == "1" ]] && return 0
+      return 1
+    fi
     expected_real="$(cd -P "$expected_path" 2>/dev/null && printf '%s\n' "$PWD" || printf '%s\n' "$expected_path")"
     target_real="$(cd -P "$target_path" 2>/dev/null && printf '%s\n' "$PWD" || printf '%s\n' "$target_path")"
     [[ "$target_real" == "$expected_real" ]] || return 1
@@ -4841,13 +4860,26 @@ _tmux_target_join() {
 
 _tmux_task_window_target() {
   local session="$1" issue="$2" slug="$3" state_file="${4:-${STATE_FILE:-}}" wt_dir="${5:-}"
-  local stored_target="" canonical target
+  local stored_target="" canonical target issue_number renamed_target
 
   if [[ -n "$state_file" && -f "$state_file" ]]; then
     stored_target="$(jq -r --arg issue "$issue" '.tasks[$issue].windowId // empty' "$state_file" 2>/dev/null || true)"
   fi
   if _tmux_window_target_exists "$session" "$stored_target" "$wt_dir"; then
     printf '%s\n' "$stored_target"
+    return 0
+  fi
+
+  issue_number="${issue##*-}"
+  renamed_target="$(tmux list-windows -t "$session" -F '#{window_id}|#{window_name}' 2>/dev/null \
+    | awk -F'|' -v issue="$issue" -v issue_number="$issue_number" -v slug="$slug" '
+        index($2, issue_number " · " slug " ·") == 1 { print $1; exit }
+        index($2, issue_number " · " slug) == 1 { print $1; exit }
+        index($2, issue " · " slug " ·") == 1 { print $1; exit }
+        index($2, issue " · " slug) == 1 { print $1; exit }
+      ')"
+  if _tmux_window_target_exists "$session" "$renamed_target" "$wt_dir"; then
+    printf '%s\n' "$renamed_target"
     return 0
   fi
 
@@ -7127,16 +7159,30 @@ cleanup_completed_task() {
   local issue="$1"
   local slug="$2"
   local completion_reason="${3:-}"
+  local win="$issue-$slug"
+  local target=""
+  local target_gone="false"
 
   # Archive stage artifacts before removing worktree (for eval judge attribution)
   archive_stage_artifacts "$issue" "$slug"
 
-  # Kill tmux window (unconditional - no race condition)
-  local win="$issue-$slug"
-  local target
+  # Kill tmux window only when the target is confirmed gone afterward.
   target="$(_tmux_task_window_target "$SESSION" "$issue" "$slug" "${STATE_FILE:-}" "${WORKTREE_ROOT}/${slug}" 2>/dev/null || true)"
-  [[ -n "$target" ]] || target="$win"
-  tmux kill-window -t "$(_tmux_target_join "$SESSION" "$target")" 2>/dev/null || true
+  if [[ -z "$target" ]] || ! command -v tmux >/dev/null 2>&1; then
+    target_gone="true"
+  else
+    tmux kill-window -t "$(_tmux_target_join "$SESSION" "$target")" 2>/dev/null || true
+    if ! _tmux_window_target_exists "$SESSION" "$target"; then
+      target_gone="true"
+    fi
+  fi
+
+  if [[ "$target_gone" != "true" ]]; then
+    set_window_attention_state "$win" "needs-user"
+    log_warn "  $issue cleanup could not close tmux window; keeping task state"
+    return 1
+  fi
+
   log "debug" "Closed window: $win"
 
   # Remove worktree
