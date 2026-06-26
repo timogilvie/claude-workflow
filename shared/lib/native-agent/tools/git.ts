@@ -5,8 +5,10 @@ import type { ToolDescriptor, WavemillToolResult } from './types.ts';
 
 const DEFAULT_DIFF_MAX_BYTES = 64 * 1024;
 const MIN_DIFF_MAX_BYTES = 1;
+const DEFAULT_LOG_MAX_COUNT = 20;
+const MAX_LOG_MAX_COUNT = 100;
 
-type GitToolName = 'git_status' | 'git_diff';
+type GitToolName = 'git_status' | 'git_diff' | 'git_diff_stat' | 'git_log';
 
 export interface GitStatusParams {}
 
@@ -14,6 +16,16 @@ export interface GitDiffParams {
   base?: string;
   path?: string;
   maxBytes?: number;
+}
+
+export interface GitDiffStatParams {
+  base?: string;
+  path?: string;
+}
+
+export interface GitLogParams {
+  maxCount?: number;
+  path?: string;
 }
 
 export interface GitFileStatus {
@@ -58,6 +70,45 @@ export interface GitDiffSuccessDetails {
   truncated: boolean;
 }
 
+export interface GitDiffStatFile {
+  path: string;
+  additions: number | null;
+  deletions: number | null;
+  binary: boolean;
+}
+
+export interface GitDiffStatSuccessDetails {
+  ok: true;
+  tool: 'git_diff_stat';
+  repoRoot: string;
+  base: string;
+  path: string | null;
+  files: GitDiffStatFile[];
+  totals: {
+    filesChanged: number;
+    additions: number;
+    deletions: number;
+  };
+}
+
+export interface GitLogCommit {
+  oid: string;
+  author: string;
+  email: string;
+  date: string;
+  subject: string;
+}
+
+export interface GitLogSuccessDetails {
+  ok: true;
+  tool: 'git_log';
+  repoRoot: string;
+  maxCount: number;
+  path: string | null;
+  commits: GitLogCommit[];
+  truncated: boolean;
+}
+
 export interface GitToolErrorDetails {
   ok: false;
   tool: GitToolName;
@@ -72,7 +123,9 @@ export interface GitToolErrorDetails {
 
 export type GitStatusDetails = GitStatusSuccessDetails | GitToolErrorDetails;
 export type GitDiffDetails = GitDiffSuccessDetails | GitToolErrorDetails;
-type GitToolDetails = GitStatusDetails | GitDiffDetails;
+export type GitDiffStatDetails = GitDiffStatSuccessDetails | GitToolErrorDetails;
+export type GitLogDetails = GitLogSuccessDetails | GitToolErrorDetails;
+type GitToolDetails = GitStatusDetails | GitDiffDetails | GitDiffStatDetails | GitLogDetails;
 
 interface GitCommandResult {
   stdout: string;
@@ -114,12 +167,35 @@ const gitDiffParameters = {
   additionalProperties: false,
 };
 
+const gitDiffStatParameters = {
+  type: 'object',
+  properties: {
+    base: { type: 'string' },
+    path: { type: 'string' },
+  },
+  additionalProperties: false,
+};
+
+const gitLogParameters = {
+  type: 'object',
+  properties: {
+    maxCount: { type: 'integer', minimum: 1, maximum: MAX_LOG_MAX_COUNT },
+    path: { type: 'string' },
+  },
+  additionalProperties: false,
+};
+
 export const gitToolPolicyConfig: ToolPolicyConfig = {
-  pathFieldsByTool: { git_diff: ['path'] },
+  pathFieldsByTool: { git_diff: ['path'], git_diff_stat: ['path'], git_log: ['path'] },
 };
 
 export function createGitTools(worktreePath: string): readonly ToolDescriptor[] {
-  return [createGitStatusTool(worktreePath), createGitDiffTool(worktreePath)];
+  return [
+    createGitStatusTool(worktreePath),
+    createGitDiffTool(worktreePath),
+    createGitDiffStatTool(worktreePath),
+    createGitLogTool(worktreePath),
+  ];
 }
 
 export function createGitStatusTool(worktreePath: string): ToolDescriptor<GitStatusParams, GitStatusDetails> {
@@ -156,10 +232,51 @@ export function createGitDiffTool(worktreePath: string): ToolDescriptor<GitDiffP
   };
 }
 
+export function createGitDiffStatTool(
+  worktreePath: string,
+): ToolDescriptor<GitDiffStatParams, GitDiffStatDetails> {
+  return {
+    metadata: {
+      name: 'git_diff_stat',
+      description: 'Inspect structured diff statistics, optionally against a base ref or limited to a path.',
+      class: 'read-only',
+      allowedPhases: ['planning', 'coding', 'review'],
+      executionMode: 'parallel',
+      outputCapPolicy: { strategy: 'none' },
+    },
+    parameters: gitDiffStatParameters,
+    async execute(_toolCallId, params, signal) {
+      return runGitDiffStat(worktreePath, params, signal);
+    },
+  };
+}
+
+export function createGitLogTool(worktreePath: string): ToolDescriptor<GitLogParams, GitLogDetails> {
+  return {
+    metadata: {
+      name: 'git_log',
+      description: 'Inspect recent commit history for the current worktree, optionally limited to a path.',
+      class: 'read-only',
+      allowedPhases: ['planning', 'coding', 'review'],
+      executionMode: 'parallel',
+      outputCapPolicy: { strategy: 'none' },
+    },
+    parameters: gitLogParameters,
+    async execute(_toolCallId, params, signal) {
+      return runGitLog(worktreePath, params, signal);
+    },
+  };
+}
+
 export async function gitAfterToolCall(
   context: GitAfterToolCallContext,
 ): Promise<GitAfterToolCallResult | undefined> {
-  if (context.toolCall.name !== 'git_status' && context.toolCall.name !== 'git_diff') {
+  if (
+    context.toolCall.name !== 'git_status' &&
+    context.toolCall.name !== 'git_diff' &&
+    context.toolCall.name !== 'git_diff_stat' &&
+    context.toolCall.name !== 'git_log'
+  ) {
     return undefined;
   }
   const details = context.result.details as GitToolDetails | undefined;
@@ -198,9 +315,9 @@ async function runGitDiff(
   params: GitDiffParams,
   signal?: AbortSignal,
 ): Promise<WavemillToolResult<GitDiffDetails>> {
-  const base = typeof params.base === 'string' ? params.base.trim() : '';
-  if (params.base !== undefined && base === '') {
-    return invalidInputResult('git_diff', 'base must be a non-empty string');
+  const base = sanitizeRevision('git_diff', params.base);
+  if (!base.ok) {
+    return base.result;
   }
   if (params.maxBytes !== undefined && (!Number.isInteger(params.maxBytes) || params.maxBytes < MIN_DIFF_MAX_BYTES)) {
     return invalidInputResult('git_diff', `maxBytes must be an integer >= ${MIN_DIFF_MAX_BYTES}`);
@@ -213,7 +330,7 @@ async function runGitDiff(
 
   const maxBytes = params.maxBytes ?? DEFAULT_DIFF_MAX_BYTES;
   const gitArgs = ['diff', '--no-ext-diff', '--no-color'];
-  const compareBase = base === '' ? 'HEAD' : base;
+  const compareBase = base.value ?? 'HEAD';
   gitArgs.push(compareBase);
 
   const scopedPath = normalizeGitPath(repoRoot.repoRoot, params.path);
@@ -248,6 +365,109 @@ async function runGitDiff(
   };
 }
 
+async function runGitDiffStat(
+  worktreePath: string,
+  params: GitDiffStatParams,
+  signal?: AbortSignal,
+): Promise<WavemillToolResult<GitDiffStatDetails>> {
+  const base = sanitizeRevision('git_diff_stat', params.base);
+  if (!base.ok) {
+    return base.result;
+  }
+
+  const repoRoot = await resolveRepoRoot(worktreePath, 'git_diff_stat', signal);
+  if (!repoRoot.ok) {
+    return repoRoot.result;
+  }
+
+  const compareBase = base.value ?? 'HEAD';
+  const gitArgs = ['diff', '--no-ext-diff', '--no-color', '--numstat', compareBase];
+  const scopedPath = normalizeGitPath(repoRoot.repoRoot, params.path);
+  if (scopedPath !== undefined) {
+    gitArgs.push('--', scopedPath);
+  }
+
+  const diffStat = await runGit(repoRoot.repoRoot, gitArgs, signal);
+  if (!diffStat.ok) {
+    return errorResult('git_diff_stat', gitArgs, diffStat);
+  }
+
+  const files = parseGitDiffStatOutput(diffStat.stdout);
+  const totals = files.reduce(
+    (acc, file) => ({
+      filesChanged: acc.filesChanged + 1,
+      additions: acc.additions + (file.additions ?? 0),
+      deletions: acc.deletions + (file.deletions ?? 0),
+    }),
+    { filesChanged: 0, additions: 0, deletions: 0 },
+  );
+  const details: GitDiffStatSuccessDetails = {
+    ok: true,
+    tool: 'git_diff_stat',
+    repoRoot: repoRoot.repoRoot,
+    base: compareBase,
+    path: scopedPath ?? null,
+    files,
+    totals,
+  };
+
+  return {
+    content: [{ type: 'text', text: JSON.stringify(details, null, 2) }],
+    details,
+  };
+}
+
+async function runGitLog(
+  worktreePath: string,
+  params: GitLogParams,
+  signal?: AbortSignal,
+): Promise<WavemillToolResult<GitLogDetails>> {
+  if (params.maxCount !== undefined && (!Number.isInteger(params.maxCount) || params.maxCount < 1)) {
+    return invalidInputResult('git_log', 'maxCount must be an integer >= 1');
+  }
+  if (params.maxCount !== undefined && params.maxCount > MAX_LOG_MAX_COUNT) {
+    return invalidInputResult('git_log', `maxCount must be <= ${MAX_LOG_MAX_COUNT}`);
+  }
+
+  const repoRoot = await resolveRepoRoot(worktreePath, 'git_log', signal);
+  if (!repoRoot.ok) {
+    return repoRoot.result;
+  }
+
+  const maxCount = params.maxCount ?? DEFAULT_LOG_MAX_COUNT;
+  const scopedPath = normalizeGitPath(repoRoot.repoRoot, params.path);
+  const gitArgs = [
+    'log',
+    '--no-color',
+    `--max-count=${maxCount + 1}`,
+    '--format=%H%x1f%an%x1f%ae%x1f%aI%x1f%s%x1e',
+  ];
+  if (scopedPath !== undefined) {
+    gitArgs.push('--', scopedPath);
+  }
+
+  const logResult = await runGit(repoRoot.repoRoot, gitArgs, signal);
+  if (!logResult.ok) {
+    return errorResult('git_log', gitArgs, logResult);
+  }
+
+  const commits = parseGitLogOutput(logResult.stdout);
+  const details: GitLogSuccessDetails = {
+    ok: true,
+    tool: 'git_log',
+    repoRoot: repoRoot.repoRoot,
+    maxCount,
+    path: scopedPath ?? null,
+    commits: commits.slice(0, maxCount),
+    truncated: commits.length > maxCount,
+  };
+
+  return {
+    content: [{ type: 'text', text: JSON.stringify(details, null, 2) }],
+    details,
+  };
+}
+
 async function resolveRepoRoot(
   worktreePath: string,
   tool: GitToolName,
@@ -273,7 +493,7 @@ async function runGit(
   | ({ ok: false; code: GitToolErrorDetails['error']['code'] } & Partial<GitCommandResult>)
 > {
   const subcommand = args[0];
-  if (subcommand !== 'rev-parse' && subcommand !== 'status' && subcommand !== 'diff') {
+  if (subcommand !== 'rev-parse' && subcommand !== 'status' && subcommand !== 'diff' && subcommand !== 'log') {
     return {
       ok: false,
       code: 'invalid_input',
@@ -405,6 +625,34 @@ function parseGitStatusOutput(repoRoot: string, output: string): GitStatusSucces
   };
 }
 
+function parseGitDiffStatOutput(output: string): GitDiffStatFile[] {
+  return output
+    .split('\n')
+    .map((line) => line.trimEnd())
+    .filter((line) => line !== '')
+    .map((line) => {
+      const [additionsField = '', deletionsField = '', ...pathParts] = line.split('\t');
+      const binary = additionsField === '-' && deletionsField === '-';
+      return {
+        path: pathParts.join('\t'),
+        additions: binary ? null : Number.parseInt(additionsField, 10),
+        deletions: binary ? null : Number.parseInt(deletionsField, 10),
+        binary,
+      };
+    });
+}
+
+function parseGitLogOutput(output: string): GitLogCommit[] {
+  return output
+    .split('\x1e')
+    .map((record) => record.trim())
+    .filter((record) => record !== '')
+    .map((record) => {
+      const [oid = '', author = '', email = '', date = '', subject = ''] = record.split('\x1f');
+      return { oid, author, email, date, subject };
+    });
+}
+
 function parseBranchToken(branch: ParsedBranchState, token: string): void {
   if (token.startsWith('branch.oid ')) {
     const oid = token.slice('branch.oid '.length);
@@ -525,6 +773,28 @@ function normalizeGitPath(repoRoot: string, toolPath: string | undefined): strin
   const absolute = path.resolve(repoRoot, comparable);
   const relative = path.relative(repoRoot, absolute).replace(/\\/g, '/');
   return relative === '' ? '.' : relative;
+}
+
+function sanitizeRevision(
+  tool: 'git_diff' | 'git_diff_stat',
+  revision: string | undefined,
+):
+  | { ok: true; value: string | undefined }
+  | { ok: false; result: WavemillToolResult<GitToolErrorDetails> } {
+  if (revision === undefined) {
+    return { ok: true, value: undefined };
+  }
+  const trimmed = revision.trim();
+  if (trimmed === '') {
+    return { ok: false, result: invalidInputResult(tool, 'base must be a non-empty string') };
+  }
+  if (/[\u0000-\u001f\u007f]/.test(trimmed)) {
+    return { ok: false, result: invalidInputResult(tool, 'base contains control characters') };
+  }
+  if (trimmed.startsWith('-')) {
+    return { ok: false, result: invalidInputResult(tool, 'base must not start with "-"') };
+  }
+  return { ok: true, value: trimmed };
 }
 
 function truncateUtf8(text: string, maxBytes: number): string {
