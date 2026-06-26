@@ -363,6 +363,86 @@ describe('native-agent git tools', () => {
     }
   });
 
+  it('rejects revisions with range syntax, NUL bytes, whitespace, and shell metacharacters', async () => {
+    const repo = createRepo('git-invalid-revision-');
+    writeFile(repo, 'tracked.txt', 'base\n');
+    git(repo, ['add', 'tracked.txt']);
+    git(repo, ['commit', '-m', 'initial']);
+
+    const diffStatTool = createGitDiffStatTool(repo);
+    const logTool = createGitLogTool(repo);
+
+    const rangeResult = await diffStatTool.execute('rev-1', { base: 'main..feature' });
+    const rangeDetails = rangeResult.details as GitDiffStatDetails;
+    assert.equal(rangeDetails.ok, false);
+    if (!rangeDetails.ok) {
+      assert.equal(rangeDetails.error.code, 'invalid_input');
+      assert.match(rangeDetails.error.message, /"\.\." range syntax/);
+    }
+
+    const triDotRange = await logTool.execute('rev-2', { base: 'main...feature' });
+    const triDotDetails = triDotRange.details as GitLogDetails;
+    assert.equal(triDotDetails.ok, false);
+    if (!triDotDetails.ok) {
+      assert.equal(triDotDetails.error.code, 'invalid_input');
+      assert.match(triDotDetails.error.message, /"\.\." range syntax/);
+    }
+
+    const nulRevision = await diffStatTool.execute('rev-3', { base: 'main\u0000injected' });
+    const nulDetails = nulRevision.details as GitDiffStatDetails;
+    assert.equal(nulDetails.ok, false);
+    if (!nulDetails.ok) {
+      assert.equal(nulDetails.error.code, 'invalid_input');
+      assert.match(nulDetails.error.message, /NUL bytes/);
+    }
+
+    const whitespaceRevision = await logTool.execute('rev-4', { base: 'main HEAD' });
+    const whitespaceDetails = whitespaceRevision.details as GitLogDetails;
+    assert.equal(whitespaceDetails.ok, false);
+    if (!whitespaceDetails.ok) {
+      assert.equal(whitespaceDetails.error.code, 'invalid_input');
+      assert.match(whitespaceDetails.error.message, /whitespace/);
+    }
+
+    const metacharRevision = await diffStatTool.execute('rev-5', { base: 'main;evil' });
+    const metacharDetails = metacharRevision.details as GitDiffStatDetails;
+    assert.equal(metacharDetails.ok, false);
+    if (!metacharDetails.ok) {
+      assert.equal(metacharDetails.error.code, 'invalid_input');
+      assert.match(metacharDetails.error.message, /shell metacharacters/);
+    }
+
+    const cleanRevision = await diffStatTool.execute('rev-6', { base: 'HEAD' });
+    const cleanDetails = cleanRevision.details as GitDiffStatDetails;
+    assert.equal(cleanDetails.ok, true);
+  });
+
+  it('rejects path inputs containing NUL bytes or a leading dash', async () => {
+    const repo = createRepo('git-invalid-path-');
+    writeFile(repo, 'tracked.txt', 'base\n');
+    git(repo, ['add', 'tracked.txt']);
+    git(repo, ['commit', '-m', 'initial']);
+
+    const diffStatTool = createGitDiffStatTool(repo);
+    const diffTool = createGitDiffTool(repo);
+
+    const nulPath = await diffStatTool.execute('path-1', { path: 'tracked\u0000.txt' });
+    const nulPathDetails = nulPath.details as GitDiffStatDetails;
+    assert.equal(nulPathDetails.ok, false);
+    if (!nulPathDetails.ok) {
+      assert.equal(nulPathDetails.error.code, 'invalid_input');
+      assert.match(nulPathDetails.error.message, /NUL bytes/);
+    }
+
+    const dashPath = await diffTool.execute('path-2', { path: '--exec=evil' });
+    const dashPathDetails = dashPath.details as GitDiffDetails;
+    assert.equal(dashPathDetails.ok, false);
+    if (!dashPathDetails.ok) {
+      assert.equal(dashPathDetails.error.code, 'invalid_input');
+      assert.match(dashPathDetails.error.message, /must not begin with "-"/);
+    }
+  });
+
   it('returns structured not-a-repo errors', async () => {
     const nonRepo = mkdtempSync(path.join(tmpdir(), 'git-not-repo-'));
     reposToClean.add(nonRepo);

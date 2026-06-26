@@ -321,6 +321,8 @@ async function runGitDiff(
 ): Promise<WavemillToolResult<GitDiffDetails>> {
   const validatedBase = validateRevisionInput('git_diff', params.base);
   if (!validatedBase.ok) return validatedBase.result;
+  const validatedPath = validatePathInput('git_diff', params.path);
+  if (!validatedPath.ok) return validatedPath.result;
   if (params.maxBytes !== undefined && (!Number.isInteger(params.maxBytes) || params.maxBytes < MIN_DIFF_MAX_BYTES)) {
     return invalidInputResult('git_diff', `maxBytes must be an integer >= ${MIN_DIFF_MAX_BYTES}`);
   }
@@ -335,7 +337,7 @@ async function runGitDiff(
   const compareBase = validatedBase.value ?? 'HEAD';
   gitArgs.push(compareBase);
 
-  const scopedPath = normalizeGitPath(repoRoot.repoRoot, params.path);
+  const scopedPath = normalizeGitPath(repoRoot.repoRoot, validatedPath.value);
   if (scopedPath !== undefined) {
     gitArgs.push('--', scopedPath);
   }
@@ -374,6 +376,8 @@ async function runGitDiffStat(
 ): Promise<WavemillToolResult<GitDiffStatDetails>> {
   const validatedBase = validateRevisionInput('git_diff_stat', params.base);
   if (!validatedBase.ok) return validatedBase.result;
+  const validatedPath = validatePathInput('git_diff_stat', params.path);
+  if (!validatedPath.ok) return validatedPath.result;
   if (params.maxBytes !== undefined && (!Number.isInteger(params.maxBytes) || params.maxBytes < MIN_DIFF_MAX_BYTES)) {
     return invalidInputResult('git_diff_stat', `maxBytes must be an integer >= ${MIN_DIFF_MAX_BYTES}`);
   }
@@ -386,7 +390,7 @@ async function runGitDiffStat(
   const maxBytes = params.maxBytes ?? DEFAULT_DIFF_MAX_BYTES;
   const compareBase = validatedBase.value ?? 'HEAD';
   const gitArgs = ['diff', '--no-ext-diff', '--no-color', '--numstat', compareBase];
-  const scopedPath = normalizeGitPath(repoRoot.repoRoot, params.path);
+  const scopedPath = normalizeGitPath(repoRoot.repoRoot, validatedPath.value);
   if (scopedPath !== undefined) {
     gitArgs.push('--', scopedPath);
   }
@@ -810,6 +814,24 @@ function normalizeGitPath(repoRoot: string, toolPath: string | undefined): strin
   return relative === '' ? '.' : relative;
 }
 
+const REVISION_SHELL_METACHARACTERS = /[;&|<>`$()\\{}*?"'\[\]!#]/;
+
+function validatePathInput(
+  tool: GitToolName,
+  rawPath: string | undefined,
+): { ok: true; value: string | undefined } | { ok: false; result: WavemillToolResult<GitToolErrorDetails> } {
+  if (rawPath === undefined) {
+    return { ok: true, value: undefined };
+  }
+  if (rawPath.includes('\u0000')) {
+    return { ok: false, result: invalidInputResult(tool, 'path must not contain NUL bytes') };
+  }
+  if (rawPath.startsWith('-')) {
+    return { ok: false, result: invalidInputResult(tool, 'path must not begin with "-"') };
+  }
+  return { ok: true, value: rawPath };
+}
+
 function validateRevisionInput(
   tool: GitToolName,
   rawBase: string | undefined,
@@ -818,12 +840,25 @@ function validateRevisionInput(
     return { ok: true, value: undefined };
   }
 
+  if (rawBase.includes('\u0000')) {
+    return { ok: false, result: invalidInputResult(tool, 'base must not contain NUL bytes') };
+  }
+
   const base = rawBase.trim();
   if (base === '') {
     return { ok: false, result: invalidInputResult(tool, 'base must be a non-empty string') };
   }
   if (base.startsWith('-')) {
     return { ok: false, result: invalidInputResult(tool, 'base must not begin with "-"') };
+  }
+  if (/\s/.test(base)) {
+    return { ok: false, result: invalidInputResult(tool, 'base must not contain whitespace') };
+  }
+  if (base.includes('..')) {
+    return { ok: false, result: invalidInputResult(tool, 'base must not contain ".." range syntax') };
+  }
+  if (REVISION_SHELL_METACHARACTERS.test(base)) {
+    return { ok: false, result: invalidInputResult(tool, 'base must not contain shell metacharacters') };
   }
 
   return { ok: true, value: base };
