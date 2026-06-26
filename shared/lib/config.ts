@@ -148,6 +148,7 @@ export type ModelRegistryClass = 'frontier' | 'strong_generalist' | 'fast_econom
 export type NativeProviderName = 'openai' | 'openrouter';
 export type PiTransportKind = 'openai-responses' | 'openai-completions';
 export type ReadOnlyNativeCapability = 'certified' | 'unsupported' | 'partial';
+export type PatchCodingAlphaCapability = 'certified' | 'uncertified';
 
 export interface PiCompatFlagsOverride {
   thinkingFormat?: 'openrouter';
@@ -158,6 +159,7 @@ export interface NativeCapabilityOverride {
   nativeProvider?: NativeProviderName;
   piTransportKind?: PiTransportKind;
   readOnlyNative?: ReadOnlyNativeCapability;
+  patchCodingAlpha?: PatchCodingAlphaCapability;
   compatFlags?: PiCompatFlagsOverride;
   limitations?: string[];
 }
@@ -399,6 +401,11 @@ export interface NativeAgentProvidersConfig {
   openrouter?: NativeAgentProviderConfig;
 }
 
+export interface NativePatchCodingConfig {
+  enabled?: boolean;
+  certificationPath?: string;
+}
+
 export interface NativeAgentConfig {
   enabled?: boolean;
   allowedPhases?: NativeAgentAllowedPhase[];
@@ -406,6 +413,7 @@ export interface NativeAgentConfig {
     fallbackOnUnavailable?: boolean;
   };
   providers?: NativeAgentProvidersConfig;
+  patchCoding?: NativePatchCodingConfig;
 }
 
 export interface NativeExpansionConfig {
@@ -1395,6 +1403,10 @@ export function getProvidersConfig(repoDir?: string): ProvidersConfig {
 
 export function getNativeAgentConfig(repoDir?: string): NativeAgentConfig {
   return loadWavemillConfig(repoDir).nativeAgent || {};
+}
+
+export function getNativePatchCodingConfig(repoDir?: string): NativePatchCodingConfig {
+  return getNativeAgentConfig(repoDir).patchCoding ?? {};
 }
 
 export function getNativeExpansionConfig(repoDir?: string): NativeExpansionConfig {

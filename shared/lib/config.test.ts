@@ -46,6 +46,7 @@ import {
   getHokusaiContributionsConfig,
   getProvidersConfig,
   getNativeAgentConfig,
+  getNativePatchCodingConfig,
   getNativeExpansionConfig,
   getReadyConfig,
   getReadyWatchdogConfig,
@@ -3029,6 +3030,41 @@ test('nativeAgent remains default-off when only providers are configured', () =>
   }
 });
 
+test('native patch coding config defaults to empty when absent', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({}));
+
+    assert.deepEqual(getNativePatchCodingConfig(tmp), {});
+    assert.equal(getNativePatchCodingConfig(tmp).enabled, undefined);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('native patch coding config validates and is returned by the accessor', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      nativeAgent: {
+        patchCoding: {
+          enabled: true,
+          certificationPath: '.wavemill/native/patch-coding-certification.json',
+        },
+      },
+    }));
+
+    assert.deepEqual(getNativePatchCodingConfig(tmp), {
+      enabled: true,
+      certificationPath: '.wavemill/native/patch-coding-certification.json',
+    });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
 test('valid nativeAgent allowedPhases validate and are returned by the accessor', () => {
   const tmp = makeTempRepo();
   try {
@@ -3099,6 +3135,27 @@ test('invalid nativeAgent expansion keys are rejected by schema validation', () 
         expansion: {
           fallbackOnUnavailable: true,
           extra: true,
+        },
+      },
+    }));
+
+    assert.throws(() => {
+      loadWavemillConfig(tmp);
+    }, /validation failed/i);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('invalid native patch coding types are rejected by schema validation', () => {
+  if (!hasAjv) return;
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      nativeAgent: {
+        patchCoding: {
+          enabled: 'yes',
         },
       },
     }));

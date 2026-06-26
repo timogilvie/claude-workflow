@@ -75,6 +75,26 @@ Keep native provider secrets such as `OPENAI_API_KEY` and `OPENROUTER_API_KEY` i
 
 See [Native Read-Only Runtime](./native-read-only-runtime.md) for the exact config shape and phase examples.
 
+### Native Patch Coding Alpha
+
+Use `.wavemill-config.json` for the shared `nativeAgent.patchCoding` block when a repo wants to opt into native patch coding alpha:
+
+```json
+{
+  "nativeAgent": {
+    "patchCoding": {
+      "enabled": true,
+      "certificationPath": ".wavemill/native/patch-coding-certification.json"
+    }
+  }
+}
+```
+
+- `enabled` defaults to `false`
+- `certificationPath` is optional and points to the emitted certification record for smoke evidence and handoff tracking
+
+This flag does not replace the model-level certification gate. A model must still carry `nativeCapability.patchCodingAlpha: "certified"` before coding routes to a native agent.
+
 ### Router Exploration Sampling
 
 `router.exploration` converts deterministic argmax model selection (stage-aware

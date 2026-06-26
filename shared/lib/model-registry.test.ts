@@ -20,6 +20,7 @@ import {
   getEffectiveRegistry,
   getLadder,
   getModel,
+  isPatchCodingAlphaCapable,
   isKnownModelId,
   isReadOnlyNativeCapable,
   mergeModelRegistry,
@@ -103,6 +104,7 @@ function makeCapabilities(
         nativeProvider: overrides.nativeCapability.nativeProvider!,
         piTransportKind: overrides.nativeCapability.piTransportKind!,
         readOnlyNative: overrides.nativeCapability.readOnlyNative!,
+        patchCodingAlpha: overrides.nativeCapability.patchCodingAlpha,
         compatFlags: overrides.nativeCapability.compatFlags ? { ...overrides.nativeCapability.compatFlags } : undefined,
         limitations: overrides.nativeCapability.limitations ? [...overrides.nativeCapability.limitations] : undefined,
       }
@@ -814,6 +816,7 @@ describe('model-registry', () => {
         nativeProvider: 'openai',
         piTransportKind: 'openai-responses',
         readOnlyNative: 'certified',
+        patchCodingAlpha: undefined,
         compatFlags: undefined,
         limitations: undefined,
       });
@@ -1005,6 +1008,81 @@ describe('model-registry', () => {
 
     it('returns false for unknown model ids without throwing', () => {
       assert.equal(isReadOnlyNativeCapable('missing', { registry: DEFAULT_MODEL_REGISTRY }), false);
+    });
+
+    it('returns true for certified patch coding alpha capability', () => {
+      const registry: ModelRegistry = {
+        models: {
+          A: makeCapabilities({
+            nativeCapability: {
+              nativeProvider: 'openai',
+              piTransportKind: 'openai-responses',
+              readOnlyNative: 'certified',
+              patchCodingAlpha: 'certified',
+            },
+          }),
+        },
+        ladders: {},
+      };
+
+      assert.equal(isPatchCodingAlphaCapable('A', { registry }), true);
+    });
+
+    it('returns false for uncertified patch coding alpha capability', () => {
+      const registry: ModelRegistry = {
+        models: {
+          A: makeCapabilities({
+            nativeCapability: {
+              nativeProvider: 'openai',
+              piTransportKind: 'openai-responses',
+              readOnlyNative: 'certified',
+              patchCodingAlpha: 'uncertified',
+            },
+          }),
+        },
+        ladders: {},
+      };
+
+      assert.equal(isPatchCodingAlphaCapable('A', { registry }), false);
+    });
+
+    it('returns false when patch coding alpha capability is absent', () => {
+      const registry: ModelRegistry = {
+        models: {
+          A: makeCapabilities({
+            nativeCapability: {
+              nativeProvider: 'openai',
+              piTransportKind: 'openai-responses',
+              readOnlyNative: 'certified',
+            },
+          }),
+        },
+        ladders: {},
+      };
+
+      assert.equal(isPatchCodingAlphaCapable('A', { registry }), false);
+    });
+
+    it('returns false for unknown patch coding alpha models without throwing', () => {
+      assert.equal(isPatchCodingAlphaCapable('missing', { registry: DEFAULT_MODEL_REGISTRY }), false);
+    });
+
+    it('keeps patch coding alpha distinct from read-only certification', () => {
+      const registry: ModelRegistry = {
+        models: {
+          A: makeCapabilities({
+            nativeCapability: {
+              nativeProvider: 'openai',
+              piTransportKind: 'openai-responses',
+              readOnlyNative: 'certified',
+            },
+          }),
+        },
+        ladders: {},
+      };
+
+      assert.equal(isReadOnlyNativeCapable('A', { registry }), true);
+      assert.equal(isPatchCodingAlphaCapable('A', { registry }), false);
     });
 
     it('keeps model availability distinct from certification', () => {

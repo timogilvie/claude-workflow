@@ -16,7 +16,12 @@ import type { EvalRecord } from './eval-schema.ts';
 import { isEvalSuccess } from './eval-success-policy.ts';
 import { readJsonlFile } from './jsonl-utils.ts';
 import { recommendModelLLM } from './llm-router.ts';
-import { getNativeAgentConfig, loadWavemillConfig, type NativeAgentAllowedPhase } from './config.ts';
+import {
+  getNativeAgentConfig,
+  getNativePatchCodingConfig,
+  loadWavemillConfig,
+  type NativeAgentAllowedPhase,
+} from './config.ts';
 import { aggregateEvals } from './eval-aggregator.ts';
 import { resolveFromMainRepo } from './git-utils.ts';
 import { errorMessage } from './error-utils.ts';
@@ -28,6 +33,7 @@ import {
   getEffectiveRegistry,
   getModel,
   isNativeAgentType,
+  isPatchCodingAlphaCapable,
   nativeAgentTypeForProvider,
   isDeepSeekLikeModelId,
   ModelValidationError,
@@ -316,13 +322,46 @@ function isReadOnlyNativePhase(phase: AgentResolutionPhase | undefined): phase i
   return phase !== undefined && READ_ONLY_NATIVE_PHASES.includes(phase as NativeAgentAllowedPhase);
 }
 
+function canResolveNativeCodingAgent(
+  candidate: AgentType,
+  modelId: string,
+  repoDir: string,
+): boolean {
+  const nativeConfig = getNativeAgentConfig(repoDir);
+  if (nativeConfig.enabled !== true) {
+    return false;
+  }
+
+  const patchCodingConfig = getNativePatchCodingConfig(repoDir);
+  if (patchCodingConfig.enabled !== true) {
+    return false;
+  }
+
+  const registry = getEffectiveRegistry(repoDir);
+  const capabilities = getModel(registry, modelId);
+  const provider = capabilities?.nativeCapability?.nativeProvider;
+  if (!provider || nativeAgentTypeForProvider(provider) !== candidate) {
+    return false;
+  }
+
+  return isPatchCodingAlphaCapable(modelId, { registry });
+}
+
 function canResolveNativeAgent(
   candidate: AgentType,
   modelId: string,
   repoDir: string | undefined,
   phase: AgentResolutionPhase | undefined,
 ): boolean {
-  if (!isNativeAgentType(candidate) || !repoDir || !isReadOnlyNativePhase(phase)) {
+  if (!isNativeAgentType(candidate) || !repoDir) {
+    return false;
+  }
+
+  if (phase === 'coding') {
+    return canResolveNativeCodingAgent(candidate, modelId, repoDir);
+  }
+
+  if (!isReadOnlyNativePhase(phase)) {
     return false;
   }
 

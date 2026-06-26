@@ -148,6 +148,229 @@ describe('model-router resolveAgent', () => {
     }
   });
 
+  it('keeps coding native routing disabled by default when patchCoding config is absent', () => {
+    const repoDir = mkdtempSync(join(tmpdir(), 'model-router-native-coding-default-off-'));
+
+    try {
+      writeRepoConfig(repoDir, {
+        nativeAgent: {
+          enabled: true,
+          allowedPhases: ['planning', 'review'],
+          providers: {
+            openai: {
+              apiKeyEnv: 'OPENAI_API_KEY',
+            },
+          },
+        },
+        modelRegistry: {
+          models: {
+            'gpt-5.4': {
+              agent: 'native-openai',
+              nativeCapability: {
+                nativeProvider: 'openai',
+                piTransportKind: 'openai-responses',
+                readOnlyNative: 'certified',
+                patchCodingAlpha: 'certified',
+              },
+            },
+          },
+        },
+      });
+
+      assert.equal(resolveAgent('gpt-5.4', {}, 'codex', repoDir, 'coding'), 'codex');
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps coding native routing disabled when patch coding certification is absent', () => {
+    const repoDir = mkdtempSync(join(tmpdir(), 'model-router-native-coding-uncertified-'));
+
+    try {
+      writeRepoConfig(repoDir, {
+        nativeAgent: {
+          enabled: true,
+          allowedPhases: ['planning', 'review'],
+          patchCoding: {
+            enabled: true,
+          },
+          providers: {
+            openai: {
+              apiKeyEnv: 'OPENAI_API_KEY',
+            },
+          },
+        },
+        modelRegistry: {
+          models: {
+            'gpt-5.4': {
+              agent: 'native-openai',
+              nativeCapability: {
+                nativeProvider: 'openai',
+                piTransportKind: 'openai-responses',
+                readOnlyNative: 'certified',
+              },
+            },
+          },
+        },
+      });
+
+      assert.equal(resolveAgent('gpt-5.4', {}, 'codex', repoDir, 'coding'), 'codex');
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('resolves native-openai for coding only when both patch coding gates are enabled', () => {
+    const repoDir = mkdtempSync(join(tmpdir(), 'model-router-native-coding-enabled-'));
+
+    try {
+      writeRepoConfig(repoDir, {
+        nativeAgent: {
+          enabled: true,
+          allowedPhases: ['planning', 'review'],
+          patchCoding: {
+            enabled: true,
+          },
+          providers: {
+            openai: {
+              apiKeyEnv: 'OPENAI_API_KEY',
+            },
+          },
+        },
+        modelRegistry: {
+          models: {
+            'gpt-5.4': {
+              agent: 'native-openai',
+              nativeCapability: {
+                nativeProvider: 'openai',
+                piTransportKind: 'openai-responses',
+                readOnlyNative: 'certified',
+                patchCodingAlpha: 'certified',
+              },
+            },
+          },
+        },
+      });
+
+      assert.equal(resolveAgent('gpt-5.4', {}, 'codex', repoDir, 'coding'), 'native-openai');
+      assert.equal(resolveAgent('gpt-5.4', {}, 'codex', repoDir, 'planning'), 'native-openai');
+      assert.equal(resolveAgent('gpt-5.4', {}, 'codex', repoDir, 'review'), 'native-openai');
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps coding native routing off when nativeAgent.enabled is false', () => {
+    const repoDir = mkdtempSync(join(tmpdir(), 'model-router-native-coding-master-off-'));
+
+    try {
+      writeRepoConfig(repoDir, {
+        nativeAgent: {
+          enabled: false,
+          patchCoding: {
+            enabled: true,
+          },
+          providers: {
+            openai: {
+              apiKeyEnv: 'OPENAI_API_KEY',
+            },
+          },
+        },
+        modelRegistry: {
+          models: {
+            'gpt-5.4': {
+              agent: 'native-openai',
+              nativeCapability: {
+                nativeProvider: 'openai',
+                piTransportKind: 'openai-responses',
+                readOnlyNative: 'certified',
+                patchCodingAlpha: 'certified',
+              },
+            },
+          },
+        },
+      });
+
+      assert.equal(resolveAgent('gpt-5.4', {}, 'codex', repoDir, 'coding'), 'codex');
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps coding native routing off when patchCoding.enabled is false', () => {
+    const repoDir = mkdtempSync(join(tmpdir(), 'model-router-native-coding-gate-off-'));
+
+    try {
+      writeRepoConfig(repoDir, {
+        nativeAgent: {
+          enabled: true,
+          patchCoding: {
+            enabled: false,
+          },
+          providers: {
+            openai: {
+              apiKeyEnv: 'OPENAI_API_KEY',
+            },
+          },
+        },
+        modelRegistry: {
+          models: {
+            'gpt-5.4': {
+              agent: 'native-openai',
+              nativeCapability: {
+                nativeProvider: 'openai',
+                piTransportKind: 'openai-responses',
+                readOnlyNative: 'certified',
+                patchCodingAlpha: 'certified',
+              },
+            },
+          },
+        },
+      });
+
+      assert.equal(resolveAgent('gpt-5.4', {}, 'codex', repoDir, 'coding'), 'codex');
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps coding native routing off when only read-only certification exists', () => {
+    const repoDir = mkdtempSync(join(tmpdir(), 'model-router-native-coding-readonly-only-'));
+
+    try {
+      writeRepoConfig(repoDir, {
+        nativeAgent: {
+          enabled: true,
+          patchCoding: {
+            enabled: true,
+          },
+          providers: {
+            openai: {
+              apiKeyEnv: 'OPENAI_API_KEY',
+            },
+          },
+        },
+        modelRegistry: {
+          models: {
+            'gpt-5.4': {
+              agent: 'native-openai',
+              nativeCapability: {
+                nativeProvider: 'openai',
+                piTransportKind: 'openai-responses',
+                readOnlyNative: 'certified',
+              },
+            },
+          },
+        },
+      });
+
+      assert.equal(resolveAgent('gpt-5.4', {}, 'codex', repoDir, 'coding'), 'codex');
+      assert.equal(resolveAgent('gpt-5.4', {}, 'codex', repoDir), 'codex');
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
   it('computes success rate with the shared eval success policy', () => {
     const stats = aggregateEvalHistory([
       {

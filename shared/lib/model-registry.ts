@@ -19,6 +19,7 @@ export const CHANNELS: readonly Channel[] = Object.freeze(['stable', 'preview', 
 export type NativeProviderName = 'openai' | 'openrouter';
 export type PiTransportKind = 'openai-responses' | 'openai-completions';
 export type ReadOnlyNativeCapability = 'certified' | 'unsupported' | 'partial';
+export type PatchCodingAlphaCapability = 'certified' | 'uncertified';
 export type AgentType =
   | 'claude'
   | 'codex'
@@ -56,6 +57,7 @@ export interface NativeCapability {
   nativeProvider: NativeProviderName;
   piTransportKind: PiTransportKind;
   readOnlyNative: ReadOnlyNativeCapability;
+  patchCodingAlpha?: PatchCodingAlphaCapability;
   compatFlags?: PiCompatFlags;
   limitations?: string[];
 }
@@ -126,6 +128,7 @@ const DESCRIPTOR_STAGE_TO_TASK_TYPE: Record<DescriptorModelStage, RegistryTaskTy
   reviewer: 'review',
 };
 const READ_ONLY_NATIVE_CAPABILITIES: readonly ReadOnlyNativeCapability[] = ['certified', 'unsupported', 'partial'];
+const PATCH_CODING_ALPHA_CAPABILITIES: readonly PatchCodingAlphaCapability[] = ['certified', 'uncertified'];
 const PI_TRANSPORT_KINDS: readonly PiTransportKind[] = ['openai-responses', 'openai-completions'];
 
 function cloneCompatFlags(compatFlags: PiCompatFlags | undefined): PiCompatFlags | undefined {
@@ -143,6 +146,7 @@ function cloneNativeCapability(
     nativeProvider: capability.nativeProvider,
     piTransportKind: capability.piTransportKind,
     readOnlyNative: capability.readOnlyNative,
+    patchCodingAlpha: capability.patchCodingAlpha,
     compatFlags: cloneCompatFlags(capability.compatFlags),
     limitations: capability.limitations ? [...capability.limitations] : undefined,
   };
@@ -156,6 +160,7 @@ function mergeNativeCapability(
     nativeProvider: override.nativeProvider ?? seed?.nativeProvider,
     piTransportKind: override.piTransportKind ?? seed?.piTransportKind,
     readOnlyNative: override.readOnlyNative ?? seed?.readOnlyNative,
+    patchCodingAlpha: override.patchCodingAlpha ?? seed?.patchCodingAlpha,
     compatFlags: override.compatFlags
       ? cloneCompatFlags(override.compatFlags)
       : cloneCompatFlags(seed?.compatFlags),
@@ -745,6 +750,10 @@ function isReadOnlyNativeCapabilityValue(value: unknown): value is ReadOnlyNativ
   return typeof value === 'string' && (READ_ONLY_NATIVE_CAPABILITIES as readonly string[]).includes(value);
 }
 
+function isPatchCodingAlphaCapabilityValue(value: unknown): value is PatchCodingAlphaCapability {
+  return typeof value === 'string' && (PATCH_CODING_ALPHA_CAPABILITIES as readonly string[]).includes(value);
+}
+
 function isPiTransportKindValue(value: unknown): value is PiTransportKind {
   return typeof value === 'string' && (PI_TRANSPORT_KINDS as readonly string[]).includes(value);
 }
@@ -792,6 +801,16 @@ export function validateNativeCapability(
     throw new ModelValidationError(
       modelId,
       `model ${modelId}: nativeCapability.piTransportKind must be one of ${PI_TRANSPORT_KINDS.join(', ')}`,
+    );
+  }
+
+  if (
+    nativeCapability.patchCodingAlpha !== undefined
+    && !isPatchCodingAlphaCapabilityValue(nativeCapability.patchCodingAlpha)
+  ) {
+    throw new ModelValidationError(
+      modelId,
+      `model ${modelId}: nativeCapability.patchCodingAlpha must be one of ${PATCH_CODING_ALPHA_CAPABILITIES.join(', ')}`,
     );
   }
 
@@ -1573,6 +1592,14 @@ export function isReadOnlyNativeCapable(
     return true;
   }
   return capability === 'partial' && opts?.allowPartial === true;
+}
+
+export function isPatchCodingAlphaCapable(
+  modelId: string,
+  opts?: { registry?: ModelRegistry },
+): boolean {
+  const registry = opts?.registry ?? getEffectiveRegistry();
+  return registry.models[modelId]?.nativeCapability?.patchCodingAlpha === 'certified';
 }
 
 export type NativeReadOnlyRoutingMode = 'task' | 'certification';

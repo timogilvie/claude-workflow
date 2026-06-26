@@ -10,7 +10,7 @@ Wavemill can opt into the native runtime for read-only phases only:
 - planning
 - review
 
-Coding is not part of this opt-in. Even when native read-only phases are enabled, coding continues to use the existing non-native path.
+Coding is not part of this opt-in by default. Even when native read-only phases are enabled, coding continues to use the existing non-native path unless the separate patch-coding alpha gate is enabled and certified.
 
 ## Required Config
 
@@ -70,6 +70,47 @@ Native routing is fail-closed. A model must be registered as certified for nativ
 - review
 
 If a model is configured but not certified, the native eligibility checks reject it instead of silently routing it.
+
+## Patch Coding Alpha
+
+Patch coding is gated separately from read-only native phases. Native coding only becomes routable when both of these are true:
+
+- `nativeAgent.enabled` is `true`
+- `nativeAgent.patchCoding.enabled` is `true`
+- the selected model is marked with `nativeCapability.patchCodingAlpha: "certified"` in the model registry
+
+Example:
+
+```json
+{
+  "nativeAgent": {
+    "enabled": true,
+    "allowedPhases": ["planning", "review"],
+    "patchCoding": {
+      "enabled": true,
+      "certificationPath": ".wavemill/native/patch-coding-certification.json"
+    },
+    "providers": {
+      "openai": {
+        "apiKeyEnv": "OPENAI_API_KEY",
+        "models": ["gpt-4o"]
+      },
+      "openrouter": {
+        "apiKeyEnv": "OPENROUTER_API_KEY",
+        "models": ["openai/gpt-4o-mini"]
+      }
+    }
+  }
+}
+```
+
+The smoke and certification flow is fail-closed:
+
+- patch coding stays disabled when `patchCoding` is absent
+- patch coding stays disabled when the model lacks `patchCodingAlpha: "certified"`
+- certification output records the exact provider/model pairs and smoke suite revision
+
+Use `npx tsx tools/smoke-native-patch-coding.ts --output <path>` to generate a certification record. This is the handoff point for HOK-2283 structured command, test, and git tooling.
 
 ## Phase Examples
 

@@ -970,6 +970,23 @@
                     },
                     "additionalProperties": false
                 },
+                "patchCoding": {
+                    "type": "object",
+                    "description": "Opt-in gate for native patch-based coding alpha. Disabled by default.",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Enable native patch coding alpha routing. Requires model certification."
+                        },
+                        "certificationPath": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "Optional path to an external certification record file."
+                        }
+                    },
+                    "additionalProperties": false
+                },
                 "providers": {
                     "type": "object",
                     "properties": {
@@ -1467,6 +1484,10 @@
                                     "readOnlyNative": {
                                         "type": "string",
                                         "enum": ["certified", "unsupported", "partial"]
+                                    },
+                                    "patchCodingAlpha": {
+                                        "type": "string",
+                                        "enum": ["certified", "uncertified"]
                                     },
                                     "compatFlags": {
                                         "type": "object",
