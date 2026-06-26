@@ -970,6 +970,17 @@
                     },
                     "additionalProperties": false
                 },
+                "patchCoding": {
+                    "type": "object",
+                    "description": "Explicit gate for native patch-coding alpha. Config alone is insufficient without certification.",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": false
+                        }
+                    },
+                    "additionalProperties": false
+                },
                 "providers": {
                     "type": "object",
                     "properties": {

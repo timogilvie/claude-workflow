@@ -10,7 +10,7 @@ Wavemill can opt into the native runtime for read-only phases only:
 - planning
 - review
 
-Coding is not part of this opt-in. Even when native read-only phases are enabled, coding continues to use the existing non-native path.
+Coding is not part of this opt-in. Even when native read-only phases are enabled, coding continues to use the existing non-native path unless the separate patch-coding alpha gate is enabled and certified.
 
 ## Required Config
 
@@ -52,6 +52,27 @@ Optional expansion-only behavior:
 
 When `fallbackOnUnavailable` is `true`, task expansion falls back to the legacy path if native prerequisites are unavailable. Planning and review remain explicit opt-in native runs and do not use that fallback.
 
+## Patch-Coding Alpha Gate
+
+Native patch coding stays disabled by default. The config gate is separate from the read-only phase opt-in:
+
+```json
+{
+  "nativeAgent": {
+    "patchCoding": {
+      "enabled": true
+    }
+  }
+}
+```
+
+This flag is necessary but not sufficient. Wavemill only enables native patch coding when both of these are true:
+
+- `nativeAgent.patchCoding.enabled` is `true`
+- `.wavemill/native-agent/patch-coding-certification.json` exists and matches the current smoke-suite revision
+
+The runtime gate is exported from `shared/lib/native-agent/coding-gate.ts` as `isPatchCodingEnabled()` and `evaluatePatchCodingGate()`. That is the handoff seam for the follow-up command/test/git runtime work.
+
 ## Supported Providers
 
 The schema currently allows:
@@ -70,6 +91,21 @@ Native routing is fail-closed. A model must be registered as certified for nativ
 - review
 
 If a model is configured but not certified, the native eligibility checks reject it instead of silently routing it.
+
+Patch-coding alpha uses its own certification artifact. Run:
+
+```bash
+npx tsx tools/certify-patch-coding.ts --provider openai:gpt-4o --provider openrouter:openai/gpt-4o-mini
+```
+
+Certification requirements:
+
+- at least two distinct provider/model pairs must pass the coding smoke suite
+- the artifact records the exact provider/model pairs that passed
+- the artifact records the exact smoke-suite revision
+- stale revisions fail closed until recertified
+
+The artifact path is `.wavemill/native-agent/patch-coding-certification.json`. The current coding smoke-suite revision constant lives in `shared/lib/native-agent/smoke.ts` as `PATCH_CODING_SMOKE_SUITE_REVISION`.
 
 ## Phase Examples
 
