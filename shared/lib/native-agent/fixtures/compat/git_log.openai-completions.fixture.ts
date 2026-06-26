@@ -1,0 +1,92 @@
+import { createGitTools } from '../../tools/git.ts';
+
+const tool = createGitTools('/tmp/wavemill-compat-fixtures').find(
+  (descriptor) => descriptor.metadata.name === 'git_log',
+);
+
+if (!tool) {
+  throw new Error('Missing git_log tool descriptor');
+}
+
+export default {
+  tool: 'git_log',
+  transport: 'openai-completions',
+  modelId: 'openai/gpt-4o-mini',
+  nativeProvider: 'openrouter',
+  toolDescriptor: {
+    name: tool.metadata.name,
+    description: tool.metadata.description,
+    parameters: tool.parameters,
+  },
+  request: {
+    invocationArgs: {
+      maxCount: 10,
+      base: 'HEAD',
+    },
+    expectedPayload: {
+      model: 'openrouter:openai/gpt-4o-mini',
+      messages: [
+        { role: 'system', content: 'You are a fixture harness.' },
+        { role: 'user', content: 'Use the available tool.' },
+      ],
+      stream: true,
+      stream_options: { include_usage: true },
+      store: false,
+      tools: [
+        {
+          type: 'function',
+          function: {
+            name: tool.metadata.name,
+            description: tool.metadata.description,
+            parameters: tool.parameters,
+            strict: false,
+          },
+        },
+      ],
+    },
+  },
+  response: {
+    rawProviderResponse: [
+      {
+        id: 'chatcmpl-git-log',
+        model: 'openrouter:openai/gpt-4o-mini',
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: 'call_git_log',
+                  type: 'function',
+                  function: {
+                    name: 'git_log',
+                    arguments: '{"maxCount":10,"base":"HEAD"}',
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+      {
+        id: 'chatcmpl-git-log',
+        choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }],
+        usage: {
+          prompt_tokens: 11,
+          completion_tokens: 6,
+          total_tokens: 17,
+        },
+      },
+      '[DONE]',
+    ],
+    expectedToolCall: {
+      id: 'call_git_log',
+      name: 'git_log',
+      arguments: {
+        maxCount: 10,
+        base: 'HEAD',
+      },
+    },
+  },
+} as const;
