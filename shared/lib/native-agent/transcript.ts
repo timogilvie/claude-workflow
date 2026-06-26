@@ -34,6 +34,7 @@ import { isDeepStrictEqual } from 'node:util';
 import type { AgentEvent } from '@earendil-works/pi-agent-core';
 import type { AssistantMessage } from '@earendil-works/pi-ai';
 import type { ReplayCompactionEvent } from './compaction.ts';
+import type { CommandTranscriptEventData } from './command-transcript.ts';
 import type { ToolResultMetadata } from './tools/types.ts';
 import { redactSecrets, redactSecretsInValue } from './tools/redaction.ts';
 
@@ -128,6 +129,8 @@ export interface TranscriptToolResult extends TranscriptEventBase {
   metadata?: ToolResultMetadata;
 }
 
+export interface TranscriptCommandResult extends TranscriptEventBase, CommandTranscriptEventData {}
+
 export interface TranscriptCompactionEvent extends TranscriptEventBase, ReplayCompactionEvent {}
 
 export interface TranscriptSessionEnded extends TranscriptEventBase {
@@ -142,6 +145,7 @@ export type TranscriptEvent =
   | TranscriptAssistantMessage
   | TranscriptToolStarted
   | TranscriptToolResult
+  | TranscriptCommandResult
   | TranscriptCompactionEvent
   | TranscriptSessionEnded;
 
@@ -292,6 +296,15 @@ export class TranscriptWriter {
    */
   write(event: TranscriptEvent): void {
     this.append(event);
+  }
+
+  writeCommandEvent(event: CommandTranscriptEventData): TranscriptCommandResult {
+    const transcriptEvent: TranscriptCommandResult = {
+      ...this.base(),
+      ...event,
+    };
+    this.append(transcriptEvent);
+    return transcriptEvent;
   }
 
   writeCompactionEvent(event: ReplayCompactionEvent): TranscriptCompactionEvent {
