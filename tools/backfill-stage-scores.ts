@@ -20,7 +20,12 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runTool } from '../shared/lib/tool-runner.ts';
 import { loadPromptTemplate } from '../shared/lib/prompt-utils.ts';
-import { callLLM } from '../shared/lib/llm-cli.ts';
+import { callLLM, resolveProviderForModel, type LLMProvider } from '../shared/lib/llm-cli.ts';
+
+/** Exported for testing: derive provider from a backfill model name. */
+export function getBackfillProvider(model: string, repoDir: string): LLMProvider {
+  return resolveProviderForModel(model, repoDir);
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -133,6 +138,7 @@ runTool({
     const outputPath = args.output || inputPath.replace('.jsonl', '.backfilled.jsonl');
     const limit = args.limit ? Number(args.limit) : Infinity;
     const model = (args.model as string) || 'gpt-5.5';
+    const provider = getBackfillProvider(model, process.cwd());
     const dryRun = !!args['dry-run'];
     const skipHasImpl = !!args['skip-has-impl'];
 
@@ -173,6 +179,7 @@ runTool({
     console.log(`Need backfill: ${toBackfill.length}`);
     console.log(`Will process: ${processCount}`);
     console.log(`Model: ${model}`);
+    console.log(`Provider: ${provider}`);
     console.log();
 
     if (dryRun) {
@@ -203,6 +210,8 @@ runTool({
         const prompt = buildBackfillPrompt(template, record);
         const result = await callLLM(prompt, {
           model,
+          provider,
+          repoDir: process.cwd(),
           mode: 'sync',
           timeout: 180_000,
           stripToolCalls: true,

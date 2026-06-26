@@ -17,6 +17,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import type { CodingArtifacts } from './native-agent/coding-artifacts.ts';
+export type { CodingArtifacts } from './native-agent/coding-artifacts.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -41,15 +43,6 @@ export interface PlanningArtifacts {
   type: 'planning';
   planFile?: string;
   taskPacketFile?: string;
-}
-
-/** Artifacts produced during the coding stage. */
-export interface CodingArtifacts {
-  type: 'coding';
-  filesChanged?: number;
-  linesAdded?: number;
-  linesRemoved?: number;
-  commitCount?: number;
 }
 
 /** Artifacts produced during the review stage. */
