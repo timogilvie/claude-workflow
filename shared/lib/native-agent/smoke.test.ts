@@ -133,13 +133,35 @@ describe('runNativeAgentDryRun', () => {
       assert.ok(result.exposedTools.includes('git_diff'), 'git_diff must be exposed');
 
       // Must not include any mutation tool names
-      const mutationTools = ['patch_file', 'write_file', 'apply_patch'];
+      const mutationTools = ['patch_file', 'write_file', 'apply_patch', 'write_artifact', 'create_marker', 'update_status'];
       for (const mut of mutationTools) {
         assert.ok(
           !result.exposedTools.includes(mut),
           `Mutation tool "${mut}" must not be exposed in planning phase`,
         );
       }
+    } finally {
+      cleanupDir(transcriptDir);
+    }
+  });
+
+  it('exposes coding mutation tools during coding dry-run', async () => {
+    const transcriptDir = makeTempTranscriptDir();
+    try {
+      const result = await runNativeAgentDryRun({
+        provider: 'openai',
+        phase: 'coding',
+        env: {},
+        transcriptDir,
+        sessionId: 'dry-tools-coding-check',
+      });
+
+      assert.ok(result.exposedTools.includes('apply_patch'));
+      assert.ok(result.exposedTools.includes('write_artifact'));
+      assert.ok(result.exposedTools.includes('create_marker'));
+      assert.ok(result.exposedTools.includes('update_status'));
+      assert.ok(result.exposedTools.includes('git_status'));
+      assert.ok(result.exposedTools.includes('read_file'));
     } finally {
       cleanupDir(transcriptDir);
     }
