@@ -13,6 +13,7 @@ import {
   parseTranscriptJsonl,
   TranscriptParseError,
   type TranscriptAssistantMessage,
+  type TranscriptCommandResult,
   type TranscriptCompactionEvent,
   type TranscriptEvent,
   type TranscriptSessionEnded,
@@ -400,6 +401,57 @@ describe('TranscriptWriter', () => {
     assert.deepEqual(parsed, [event]);
     removeTempDir();
   });
+
+  it('writes command transcript events with base metadata', () => {
+    const path = makeTempPath();
+    const writer = new TranscriptWriter({ ...BASE_OPTS, path });
+
+    const event = writer.writeCommandEvent({
+      type: 'command_result',
+      toolName: 'command',
+      commandClass: 'safe',
+      approval: 'approved',
+      command: 'pwd',
+      cwd: '/tmp/test-worktree',
+      env: { PATH: '/usr/bin' },
+      durationMs: 15,
+      exitCode: 0,
+      signal: null,
+      timedOut: false,
+      stdout: '/tmp/test-worktree',
+      stderr: '',
+      truncation: {
+        stdout: {
+          text: '/tmp/test-worktree',
+          originalBytes: 18,
+          retainedBytes: 18,
+          truncated: false,
+          redacted: false,
+        },
+        stderr: {
+          text: '',
+          originalBytes: 0,
+          retainedBytes: 0,
+          truncated: false,
+          redacted: false,
+        },
+      },
+      redaction: {
+        marker: '«redacted»',
+        command: false,
+        env: false,
+        stdout: false,
+        stderr: false,
+      },
+    });
+
+    assert.equal(event.type, 'command_result');
+    assert.equal(event.seq, 0);
+
+    const parsed = parseTranscriptJsonl(readFileSync(path, 'utf-8'));
+    assert.deepEqual(parsed, [event]);
+    removeTempDir();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -453,6 +505,54 @@ describe('parseTranscriptJsonl', () => {
       originalEstimatedTokens: 23,
       retainedEstimatedTokens: 3,
       reason: 'token_limit',
+    };
+
+    const parsed = parseTranscriptJsonl(`${JSON.stringify(event)}\n`);
+
+    assert.deepEqual(parsed, [event]);
+  });
+
+  it('accepts command_result events', () => {
+    const event: TranscriptCommandResult = {
+      seq: 0,
+      sessionId: 's',
+      timestamp: 1,
+      type: 'command_result',
+      toolName: 'git',
+      commandClass: 'safe',
+      approval: 'approved',
+      command: 'git status',
+      cwd: '/tmp/project',
+      env: { PATH: '/usr/bin' },
+      durationMs: 20,
+      exitCode: 0,
+      signal: null,
+      timedOut: false,
+      stdout: 'clean',
+      stderr: '',
+      truncation: {
+        stdout: {
+          text: 'clean',
+          originalBytes: 5,
+          retainedBytes: 5,
+          truncated: false,
+          redacted: false,
+        },
+        stderr: {
+          text: '',
+          originalBytes: 0,
+          retainedBytes: 0,
+          truncated: false,
+          redacted: false,
+        },
+      },
+      redaction: {
+        marker: '«redacted»',
+        command: false,
+        env: false,
+        stdout: false,
+        stderr: false,
+      },
     };
 
     const parsed = parseTranscriptJsonl(`${JSON.stringify(event)}\n`);
