@@ -319,10 +319,10 @@ export async function runScopedCommand(
     return rejectedResult(details);
   }
 
-  const rawStdout = stripSubstrateTruncationMarker(result.stdout);
-  const rawStderr = stripSubstrateTruncationMarker(result.stderr);
-  const stdout = middleTruncateUtf8(rawStdout, maxOutputBytes);
-  const stderr = middleTruncateUtf8(rawStderr, maxOutputBytes);
+  const stdoutStripped = stripSubstrateTruncationMarker(result.stdout);
+  const stderrStripped = stripSubstrateTruncationMarker(result.stderr);
+  const stdout = middleTruncateUtf8(stdoutStripped.text, maxOutputBytes);
+  const stderr = middleTruncateUtf8(stderrStripped.text, maxOutputBytes);
   const details: RunCommandSuccessDetails = {
     ok: true,
     tool: input.tool,
@@ -340,11 +340,11 @@ export async function runScopedCommand(
     stderr: stderr.text,
     stdoutMeta: {
       originalByteLength: stdout.originalByteLength,
-      truncated: result.truncated || stdout.truncated,
+      truncated: stdoutStripped.substrateTruncated || stdout.truncated,
     },
     stderrMeta: {
       originalByteLength: stderr.originalByteLength,
-      truncated: result.truncated || stderr.truncated,
+      truncated: stderrStripped.substrateTruncated || stderr.truncated,
     },
     truncated: result.truncated || stdout.truncated || stderr.truncated,
   };
@@ -415,14 +415,20 @@ function internalCap(callerMaxBytes: number): number {
   return Math.max(callerMaxBytes * INTERNAL_CAP_MULTIPLIER, INTERNAL_CAP_FLOOR_BYTES);
 }
 
-function stripSubstrateTruncationMarker(text: string): string {
+function stripSubstrateTruncationMarker(text: string): { text: string; substrateTruncated: boolean } {
   if (text.endsWith(`\n${SUBSTRATE_TRUNCATION_MARKER}`)) {
-    return text.slice(0, -(`\n${SUBSTRATE_TRUNCATION_MARKER}`.length));
+    return {
+      text: text.slice(0, -(`\n${SUBSTRATE_TRUNCATION_MARKER}`.length)),
+      substrateTruncated: true,
+    };
   }
   if (text.endsWith(SUBSTRATE_TRUNCATION_MARKER)) {
-    return text.slice(0, -SUBSTRATE_TRUNCATION_MARKER.length).trimEnd();
+    return {
+      text: text.slice(0, -SUBSTRATE_TRUNCATION_MARKER.length).trimEnd(),
+      substrateTruncated: true,
+    };
   }
-  return text;
+  return { text, substrateTruncated: false };
 }
 
 function middleTruncateUtf8(
