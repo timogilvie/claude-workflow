@@ -1,8 +1,6 @@
 import type { ScriptedPiProviderTurn } from '../provider.ts';
 import { serializeCodingComplete, type CodingArtifacts } from '../coding-artifacts.ts';
 
-const T = 4_000_000_000;
-
 const USAGE_TURN_1 = {
   input: 1800,
   output: 80,
@@ -164,5 +162,3 @@ export const codingLifecycleSessionTurns: ScriptedPiProviderTurn[] = [
     stopReason: 'stop',
   },
 ];
-
-export const CODING_FIXTURE_TIMESTAMP = T;
