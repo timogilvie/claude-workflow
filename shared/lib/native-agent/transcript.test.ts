@@ -758,3 +758,283 @@ describe('malformed-tool-call session fixture', () => {
     removeTempDir();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Command/test tool details in transcript events (HOK-2353 acceptance)
+// ---------------------------------------------------------------------------
+
+describe('command tool details in transcript events', () => {
+  it('successful command details survive to transcript tool_result', () => {
+    const commandDetails = {
+      commandClass: 'safe',
+      approval: 'approved',
+      cwd: '/worktree',
+      exitCode: 0,
+      timedOut: false,
+      durationMs: 42,
+      truncated: false,
+      retainedBytes: 11,
+      stdout: 'hello world',
+      stderr: '',
+    };
+
+    const events = deriveTranscriptEvents(
+      [
+        {
+          type: 'tool_execution_end',
+          toolCallId: 'tc-cmd-1',
+          toolName: 'run_command',
+          result: {
+            content: [{ type: 'text', text: 'hello world' }],
+            details: commandDetails,
+          },
+          isError: false,
+        },
+      ],
+      BASE_OPTS,
+    );
+
+    const ev = events[0] as TranscriptToolResult;
+    assert.equal(ev.type, 'tool_result');
+    assert.equal(ev.toolName, 'run_command');
+    assert.equal(ev.isError, false);
+
+    const d = ev.details as typeof commandDetails;
+    assert.equal(d.commandClass, 'safe');
+    assert.equal(d.approval, 'approved');
+    assert.equal(d.cwd, '/worktree');
+    assert.equal(d.exitCode, 0);
+    assert.equal(d.durationMs, 42);
+    assert.equal(d.truncated, false);
+    assert.equal(d.retainedBytes, 11);
+  });
+
+  it('rejected command details survive to transcript tool_result', () => {
+    const commandDetails = {
+      commandClass: 'dangerous',
+      approval: 'rejected',
+      rejectionReason: 'dangerous-command-pattern',
+      cwd: '/worktree',
+      exitCode: null,
+      timedOut: false,
+      durationMs: 1,
+      truncated: false,
+      retainedBytes: 0,
+      stdout: '',
+      stderr: '',
+    };
+
+    const events = deriveTranscriptEvents(
+      [
+        {
+          type: 'tool_execution_end',
+          toolCallId: 'tc-cmd-2',
+          toolName: 'run_command',
+          result: {
+            content: [{ type: 'text', text: 'Command rejected: dangerous-command-pattern' }],
+            details: commandDetails,
+          },
+          isError: false,
+        },
+      ],
+      BASE_OPTS,
+    );
+
+    const ev = events[0] as TranscriptToolResult;
+    const d = ev.details as typeof commandDetails;
+    assert.equal(d.approval, 'rejected');
+    assert.equal(d.rejectionReason, 'dangerous-command-pattern');
+    assert.equal(d.exitCode, null);
+    assert.equal(d.retainedBytes, 0);
+  });
+
+  it('truncation metadata is present in transcript for oversized command output', () => {
+    const commandDetails = {
+      commandClass: 'safe',
+      approval: 'approved',
+      cwd: '/worktree',
+      exitCode: 0,
+      timedOut: false,
+      durationMs: 200,
+      truncated: true,
+      retainedBytes: 1024,
+      stdout: 'x'.repeat(1020) + '\n[output truncated]',
+      stderr: '',
+    };
+
+    const events = deriveTranscriptEvents(
+      [
+        {
+          type: 'tool_execution_end',
+          toolCallId: 'tc-cmd-3',
+          toolName: 'run_command',
+          result: {
+            content: [{ type: 'text', text: commandDetails.stdout }],
+            details: commandDetails,
+          },
+          isError: false,
+        },
+      ],
+      BASE_OPTS,
+    );
+
+    const ev = events[0] as TranscriptToolResult;
+    const d = ev.details as typeof commandDetails;
+    assert.equal(d.truncated, true);
+    assert.equal(d.retainedBytes, 1024);
+  });
+
+  it('secret in command stdout is redacted in transcript JSONL', () => {
+    const secretKey = 'sk-abcdefghij1234567890ABCDEF';
+    const commandDetails = {
+      commandClass: 'safe',
+      approval: 'approved',
+      cwd: '/worktree',
+      exitCode: 0,
+      timedOut: false,
+      durationMs: 10,
+      truncated: false,
+      retainedBytes: Buffer.byteLength(secretKey, 'utf8'),
+      stdout: secretKey,
+      stderr: '',
+    };
+
+    const path = makeTempPath();
+    const writer = new TranscriptWriter({ ...BASE_OPTS, path });
+    writer.handleEvent({
+      type: 'tool_execution_end',
+      toolCallId: 'tc-cmd-4',
+      toolName: 'run_command',
+      result: {
+        content: [{ type: 'text', text: secretKey }],
+        details: commandDetails,
+      },
+      isError: false,
+    });
+
+    const written = readFileSync(path, 'utf-8');
+    assert.ok(!written.includes(secretKey), 'secret key must not appear in transcript JSONL');
+    assert.ok(written.includes('[REDACTED'), 'expected a REDACTED placeholder in transcript');
+    removeTempDir();
+  });
+
+  it('transcript tool_result has redacted=true when command stdout contains a secret', () => {
+    const secretKey = 'sk-abcdefghij1234567890ABCDEF';
+    const commandDetails = {
+      commandClass: 'safe',
+      approval: 'approved',
+      cwd: '/worktree',
+      exitCode: 0,
+      timedOut: false,
+      durationMs: 10,
+      truncated: false,
+      retainedBytes: Buffer.byteLength(secretKey, 'utf8'),
+      stdout: secretKey,
+      stderr: '',
+    };
+
+    const events = deriveTranscriptEvents(
+      [
+        {
+          type: 'tool_execution_end',
+          toolCallId: 'tc-cmd-5',
+          toolName: 'run_command',
+          result: {
+            content: [{ type: 'text', text: secretKey }],
+            details: commandDetails,
+          },
+          isError: false,
+        },
+      ],
+      BASE_OPTS,
+    );
+
+    const ev = events[0] as TranscriptToolResult;
+    assert.equal(ev.redacted, true);
+  });
+
+  it('__wavemill metadata is extracted and stored as transcript metadata field', () => {
+    const wavemillMeta = {
+      provenance: { tool: 'run_command', argsFingerprint: 'abc123' },
+      outputCap: { capped: true, strategy: 'truncate', limit: 262144, limitKind: 'bytes', retainedLength: 1024 },
+      redaction: { redacted: false, matchCount: 0, categories: [] },
+    };
+
+    const details = {
+      commandClass: 'safe',
+      approval: 'approved',
+      cwd: '/worktree',
+      exitCode: 0,
+      timedOut: false,
+      durationMs: 42,
+      truncated: true,
+      retainedBytes: 1024,
+      stdout: 'truncated output',
+      stderr: '',
+      __wavemill: wavemillMeta,
+    };
+
+    const events = deriveTranscriptEvents(
+      [
+        {
+          type: 'tool_execution_end',
+          toolCallId: 'tc-cmd-6',
+          toolName: 'run_command',
+          result: {
+            content: [{ type: 'text', text: 'truncated output' }],
+            details,
+          },
+          isError: false,
+        },
+      ],
+      BASE_OPTS,
+    );
+
+    const ev = events[0] as TranscriptToolResult;
+    assert.ok(ev.metadata !== undefined, 'metadata must be extracted from __wavemill');
+    assert.equal(ev.metadata!.outputCap?.capped, true);
+    assert.equal(ev.metadata!.outputCap?.retainedLength, 1024);
+
+    // __wavemill must not appear in persisted details
+    const d = ev.details as Record<string, unknown>;
+    assert.equal(d.__wavemill, undefined, '__wavemill must be stripped from transcript details');
+    assert.equal(d.commandClass, 'safe');
+  });
+
+  it('run_tests tool result details survive transcript path with same shape', () => {
+    const commandDetails = {
+      commandClass: 'safe',
+      approval: 'approved',
+      cwd: '/worktree',
+      exitCode: 0,
+      timedOut: false,
+      durationMs: 3200,
+      truncated: false,
+      retainedBytes: 24,
+      stdout: 'Tests passed: 12 of 12',
+      stderr: '',
+    };
+
+    const events = deriveTranscriptEvents(
+      [
+        {
+          type: 'tool_execution_end',
+          toolCallId: 'tc-cmd-7',
+          toolName: 'run_tests',
+          result: {
+            content: [{ type: 'text', text: commandDetails.stdout }],
+            details: commandDetails,
+          },
+          isError: false,
+        },
+      ],
+      BASE_OPTS,
+    );
+
+    const ev = events[0] as TranscriptToolResult;
+    assert.equal(ev.toolName, 'run_tests');
+    const d = ev.details as typeof commandDetails;
+    assert.equal(d.approval, 'approved');
+    assert.equal(d.durationMs, 3200);
+  });
+});
