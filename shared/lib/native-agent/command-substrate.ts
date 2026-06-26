@@ -5,13 +5,13 @@ import type { ChildProcess, SpawnOptions } from 'node:child_process';
 
 import type { CommandClass } from './command-classifier.ts';
 import { classifyCommand } from './command-classifier.ts';
+import { buildCommandTranscript } from './command-transcript.ts';
+import type { TranscriptWriter } from './transcript.ts';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024;
 const KILL_GRACE_MS = 2_000;
 const DEFAULT_ENV_KEYS = ['PATH', 'HOME', 'LANG'] as const;
-const TRUNCATION_MARKER = '[output truncated]';
-const REDACTION_TEXT = '«redacted»';
 
 export type ApprovalOutcome = 'approved' | 'rejected';
 
@@ -31,6 +31,8 @@ export interface RunCommandOptions {
   shell?: boolean;
   spawnFn?: typeof spawn;
   signal?: AbortSignal;
+  toolName?: string;
+  transcriptWriter?: Pick<TranscriptWriter, 'writeCommandEvent'>;
 }
 
 export interface CommandResult {
@@ -110,12 +112,24 @@ export async function runCommand(options: RunCommandOptions): Promise<CommandRes
   const startedAt = Date.now();
   const classification = classifyCommand(options.command);
   if (classification.commandClass === 'dangerous') {
-    return rejectionResult(classification.commandClass, classification.rejectionReason ?? 'dangerous-command-pattern', startedAt);
+    return rejectionResult(
+      options,
+      classification.commandClass,
+      classification.rejectionReason ?? 'dangerous-command-pattern',
+      startedAt,
+      classification.normalizedCommand,
+    );
   }
 
   const cwdResolution = resolveAllowedCwd(options.cwd, options.allowedRoots);
   if (cwdResolution.kind === 'outside') {
-    return rejectionResult(classification.commandClass, 'cwd-outside-allowed-roots', startedAt);
+    return rejectionResult(
+      options,
+      classification.commandClass,
+      'cwd-outside-allowed-roots',
+      startedAt,
+      classification.normalizedCommand,
+    );
   }
 
   const env = buildChildEnv(options.allowedEnvKeys, process.env);
@@ -130,12 +144,17 @@ export async function runCommand(options: RunCommandOptions): Promise<CommandRes
   const child = spawnFn(spawnSpec.file, spawnSpec.args, spawnOptions);
   return await waitForProcess({
     child,
+    command: classification.normalizedCommand,
     commandClass: classification.commandClass,
     maxOutputBytes,
     timeoutMs,
+    cwd: cwdResolution.resolved,
+    env,
     redactValues: options.redactValues,
     signal: options.signal,
     startedAt,
+    toolName: options.toolName,
+    transcriptWriter: options.transcriptWriter,
   });
 }
 
@@ -149,18 +168,43 @@ function validatePositiveInteger(value: number | undefined, fallback: number, la
   return value;
 }
 
-function rejectionResult(commandClass: CommandClass, rejectionReason: RejectionReason, startedAt: number): CommandResult {
+function rejectionResult(
+  options: RunCommandOptions,
+  commandClass: CommandClass,
+  rejectionReason: RejectionReason,
+  startedAt: number,
+  normalizedCommand: string,
+): CommandResult {
+  const durationMs = Date.now() - startedAt;
+  const built = buildCommandTranscript({
+    toolName: options.toolName,
+    command: normalizedCommand,
+    commandClass,
+    approval: 'rejected',
+    cwd: options.cwd,
+    env: {},
+    redactValues: options.redactValues,
+    durationMs,
+    exitCode: null,
+    signal: null,
+    timedOut: false,
+    rejectionReason,
+    stdout: '',
+    stderr: '',
+    maxOutputBytes: validatePositiveInteger(options.maxOutputBytes, DEFAULT_MAX_OUTPUT_BYTES, 'maxOutputBytes'),
+  });
+  options.transcriptWriter?.writeCommandEvent(built.event);
   return {
     commandClass,
     approval: 'rejected',
     rejectionReason,
     exitCode: null,
     signal: null,
-    stdout: '',
-    stderr: '',
-    truncated: false,
+    stdout: built.stdout,
+    stderr: built.stderr,
+    truncated: built.truncated,
     timedOut: false,
-    durationMs: Date.now() - startedAt,
+    durationMs,
   };
 }
 
@@ -196,18 +240,21 @@ function buildSpawnSpec(command: string | readonly string[], shell: boolean): { 
 
 function waitForProcess(input: {
   child: ChildProcess;
+  command: string;
   commandClass: CommandClass;
   maxOutputBytes: number;
   timeoutMs: number;
+  cwd: string;
+  env: NodeJS.ProcessEnv;
   redactValues?: readonly string[];
   signal?: AbortSignal;
   startedAt: number;
+  toolName?: string;
+  transcriptWriter?: Pick<TranscriptWriter, 'writeCommandEvent'>;
 }): Promise<CommandResult> {
   return new Promise<CommandResult>((resolve) => {
     let stdout = '';
     let stderr = '';
-    let stdoutTruncated = false;
-    let stderrTruncated = false;
     let timedOut = false;
     let exitCode: number | null = null;
     let exitSignal: NodeJS.Signals | null = null;
@@ -239,21 +286,15 @@ function waitForProcess(input: {
     }
 
     input.child.stdout?.on('data', (chunk: Buffer | string) => {
-      const next = chunkToString(chunk);
-      const captured = captureOutput(stdout, next, input.maxOutputBytes);
-      stdout = captured.text;
-      stdoutTruncated = stdoutTruncated || captured.truncated;
+      stdout += chunkToString(chunk);
     });
 
     input.child.stderr?.on('data', (chunk: Buffer | string) => {
-      const next = chunkToString(chunk);
-      const captured = captureOutput(stderr, next, input.maxOutputBytes);
-      stderr = captured.text;
-      stderrTruncated = stderrTruncated || captured.truncated;
+      stderr += chunkToString(chunk);
     });
 
     input.child.on('error', (error) => {
-      stderr = captureOutput(stderr, error.message, input.maxOutputBytes).text;
+      stderr += error.message;
     });
 
     input.child.on('close', (code, signal) => {
@@ -275,17 +316,33 @@ function waitForProcess(input: {
         input.signal.removeEventListener('abort', abortHandler);
       }
 
-      const truncated = stdoutTruncated || stderrTruncated;
+      const built = buildCommandTranscript({
+        toolName: input.toolName,
+        command: input.command,
+        commandClass: input.commandClass,
+        approval: 'approved',
+        cwd: input.cwd,
+        env: input.env,
+        redactValues: input.redactValues,
+        durationMs: Date.now() - input.startedAt,
+        exitCode,
+        signal: exitSignal,
+        timedOut,
+        stdout,
+        stderr,
+        maxOutputBytes: input.maxOutputBytes,
+      });
+      input.transcriptWriter?.writeCommandEvent(built.event);
       const result: CommandResult = {
         commandClass: input.commandClass,
         approval: 'approved',
         exitCode,
         signal: exitSignal,
-        stdout: redactOutput(appendTruncationMarker(stdout, stdoutTruncated), input.redactValues),
-        stderr: redactOutput(appendTruncationMarker(stderr, stderrTruncated), input.redactValues),
-        truncated,
+        stdout: built.stdout,
+        stderr: built.stderr,
+        truncated: built.truncated,
         timedOut,
-        durationMs: Date.now() - input.startedAt,
+        durationMs: built.event.durationMs,
       };
 
       resolve(result);
@@ -295,44 +352,4 @@ function waitForProcess(input: {
 
 function chunkToString(chunk: Buffer | string): string {
   return typeof chunk === 'string' ? chunk : chunk.toString('utf8');
-}
-
-function captureOutput(current: string, chunk: string, maxOutputBytes: number): { text: string; truncated: boolean } {
-  const currentBytes = Buffer.byteLength(current, 'utf8');
-  if (currentBytes >= maxOutputBytes) {
-    return { text: current, truncated: true };
-  }
-
-  const remainingBytes = maxOutputBytes - currentBytes;
-  const chunkBytes = Buffer.byteLength(chunk, 'utf8');
-  if (chunkBytes <= remainingBytes) {
-    return { text: current + chunk, truncated: false };
-  }
-
-  const retained = chunk.slice(0, remainingBytes);
-  return {
-    text: current + retained,
-    truncated: true,
-  };
-}
-
-function appendTruncationMarker(text: string, truncated: boolean): string {
-  if (!truncated) {
-    return text;
-  }
-  if (text.endsWith(TRUNCATION_MARKER)) {
-    return text;
-  }
-  return `${text}${text.length > 0 ? '\n' : ''}${TRUNCATION_MARKER}`;
-}
-
-function redactOutput(text: string, redactValues?: readonly string[]): string {
-  let next = text;
-  for (const value of redactValues ?? []) {
-    if (value.trim().length === 0) {
-      continue;
-    }
-    next = next.split(value).join(REDACTION_TEXT);
-  }
-  return next;
 }
