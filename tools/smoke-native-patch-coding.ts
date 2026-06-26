@@ -32,8 +32,7 @@ runTool({
   name: 'smoke-native-patch-coding',
   description: 'Run patch coding smoke across providers and emit a certification record.',
   options: {
-    'dry-run': { type: 'boolean', description: 'Run the scripted smoke without external API calls.' },
-    live: { type: 'boolean', description: 'Run live provider smoke. Skips cleanly when keys are absent.' },
+    live: { type: 'boolean', description: 'Run live provider smoke. Defaults to a scripted dry-run; skips cleanly when keys are absent.' },
     output: { type: 'string', description: 'Write the certification record to this path.' },
     json: { type: 'boolean', description: 'Emit machine-readable JSON output.' },
     repo: { type: 'string', description: 'Repository directory. Defaults to the current working directory.' },

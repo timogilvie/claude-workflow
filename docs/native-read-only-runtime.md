@@ -73,7 +73,7 @@ If a model is configured but not certified, the native eligibility checks reject
 
 ## Patch Coding Alpha
 
-Patch coding is gated separately from read-only native phases. Native coding only becomes routable when both of these are true:
+Patch coding is gated separately from read-only native phases. Native coding only becomes routable when all of the following are true:
 
 - `nativeAgent.enabled` is `true`
 - `nativeAgent.patchCoding.enabled` is `true`
