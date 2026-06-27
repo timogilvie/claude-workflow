@@ -127,3 +127,67 @@ export function writeStageResultKey(input: WriteStageResultDedupeInput): string 
   const id = input.issueOrFeature.trim();
   return `write_stage_result:${id}:${input.stage.trim()}:${input.status.trim()}`;
 }
+
+// ---------------------------------------------------------------------------
+// expand_issue
+// ---------------------------------------------------------------------------
+
+export interface ExpandIssueDedupeInput {
+  /** Linear issue ID or key. */
+  issue: string;
+  phase: WorkflowPhase;
+  sessionId: string;
+  /** SHA-256 prefix of the prior expansion output (or empty string on first run). */
+  contentHash: string;
+}
+
+/**
+ * Derive the dedupe key for expand_issue.
+ * Key changes when the issue, phase, session, or expansion content changes.
+ */
+export function expandIssueKey(input: ExpandIssueDedupeInput): string {
+  const issue = input.issue.trim();
+  return `expand_issue:${issue}:${input.phase}:${input.sessionId.trim()}:${input.contentHash.trim()}`;
+}
+
+// ---------------------------------------------------------------------------
+// In-memory dedupe registry
+// ---------------------------------------------------------------------------
+
+import type { IdempotencyOutcome, ExternalRef } from './contracts.ts';
+
+export type DedupeOutcome = IdempotencyOutcome;
+
+export interface DedupeRecord<TRef extends ExternalRef = ExternalRef> {
+  key: string;
+  outcome: DedupeOutcome;
+  ref: TRef | null;
+  reason?: string;
+  recordedAt?: number;
+}
+
+export interface DedupeRegistry {
+  get(key: string): DedupeRecord | undefined;
+  record(key: string, rec: DedupeRecord): void;
+  size(): number;
+}
+
+/**
+ * Create a process-scoped in-memory dedupe registry.
+ * Denials and errors must NOT call record() — only the tool layer writes entries.
+ */
+export function createInMemoryDedupeRegistry(opts?: { clock?: () => number }): DedupeRegistry {
+  const clock = opts?.clock ?? (() => Date.now());
+  const store = new Map<string, DedupeRecord>();
+  return {
+    get(key: string) {
+      return store.get(key);
+    },
+    record(key: string, rec: DedupeRecord) {
+      store.set(key, { ...rec, recordedAt: rec.recordedAt ?? clock() });
+    },
+    size() {
+      return store.size;
+    },
+  };
+}
