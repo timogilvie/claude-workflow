@@ -8,6 +8,7 @@ import {
   type ChallengeComparison,
   type ChallengeRoutingMeta,
 } from './challenge-comparison.ts';
+import type { ChallengeStageEval } from './eval-schema.ts';
 import { formatRubricForJudgePrompt } from './rubric.ts';
 import { errorMessage } from './error-utils.ts';
 
@@ -26,7 +27,20 @@ export type ValidatedComparisonResult = Omit<
   | 'challengerRouting'
   | 'variedDimensions'
   | 'challengeType'
+  | 'variedStage'
+  | 'stageEvidenceMode'
 >;
+
+function formatStageEvidenceBlock(
+  side: 'Primary' | 'Challenger',
+  evidence: ChallengeStageEval,
+): string {
+  const items = evidence.evidence
+    .slice(0, 6)
+    .map((item) => `- ${item.label}: ${item.summary}${item.source ? ` [${item.source}]` : ''}`)
+    .join('\n');
+  return `${side} ${evidence.stage} evidence (${evidence.provenance}): ${evidence.summary}${evidence.fallbackReason ? ` Fallback: ${evidence.fallbackReason}.` : ''}\n${items}`;
+}
 
 /**
  * Resolve a pull request number to its GitHub URL.
@@ -65,8 +79,12 @@ export function buildComparisonPrompt(input: {
   challengerEvalScore: number;
   primaryRouting?: ChallengeRoutingMeta;
   challengerRouting?: ChallengeRoutingMeta;
+  challengeType?: string;
+  primaryStageEval?: ChallengeStageEval;
+  challengerStageEval?: ChallengeStageEval;
 }): string {
   let workflowContext = '';
+  let stageEvidenceContext = '';
 
   if (input.primaryRouting && input.challengerRouting) {
     const variedDimensions = detectVariedDimensions(input.primaryRouting, input.challengerRouting);
@@ -98,6 +116,23 @@ Consider whether routing differences (not just code differences) may have influe
 `;
   }
 
+  if (
+    (input.challengeType === 'planner-only' || input.challengeType === 'reviewer-only')
+    && input.primaryStageEval?.provenance === 'direct'
+    && input.challengerStageEval?.provenance === 'direct'
+  ) {
+    stageEvidenceContext = `
+
+## Direct Stage Evidence
+
+Use this evidence as the primary signal for the varied stage.
+
+${formatStageEvidenceBlock('Primary', input.primaryStageEval)}
+
+${formatStageEvidenceBlock('Challenger', input.challengerStageEval)}
+`;
+  }
+
   return `You are judging two pull requests for the same task.
 
 Return JSON only with this exact structure:
@@ -120,6 +155,8 @@ Use these criterion definitions exactly:
 ${formatRubricForJudgePrompt()}
 
 ${workflowContext}
+
+${stageEvidenceContext}
 
 Task context:
 ${input.issuePrompt}
