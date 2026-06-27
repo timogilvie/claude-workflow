@@ -2993,6 +2993,7 @@ for fixture in \
   "$REPO_DIR/tests/fixtures/lifecycle/integration_window_created.sh" \
   "$REPO_DIR/tests/fixtures/lifecycle/integration_window_clean_shutdown.sh" \
   "$REPO_DIR/tests/fixtures/lifecycle/integration_window_disabled.sh" \
+  "$REPO_DIR/tests/fixtures/lifecycle/integration_window_recovers_missing_tend.sh" \
 ; do
   if [[ ! -f "$fixture" ]]; then
     fail "Missing lifecycle fixture $(basename "$fixture")"
