@@ -86,9 +86,9 @@ export function buildComparisonPrompt(input: {
     }
 
     let perStageContext = '';
-    const primaryStages = input.primaryPerStageScores;
-    const challengerStages = input.challengerPerStageScores;
-    if (primaryStages && challengerStages && Object.keys(primaryStages).length > 0) {
+    const primaryStages = input.primaryPerStageScores ?? {};
+    const challengerStages = input.challengerPerStageScores ?? {};
+    if (Object.keys({ ...primaryStages, ...challengerStages }).length > 0) {
       const stageLines = Object.keys({ ...primaryStages, ...challengerStages }).sort().map((stage) => {
         const p = primaryStages[stage] !== undefined ? primaryStages[stage].toFixed(2) : 'n/a';
         const c = challengerStages[stage] !== undefined ? challengerStages[stage].toFixed(2) : 'n/a';
