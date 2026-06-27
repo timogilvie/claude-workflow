@@ -411,7 +411,7 @@ type MutationRecord<TResult> =
 
 ## Schema Versioning
 
-The schema version is `1.0.0`, exposed as:
+The schema version is `1.1.0`, exposed as:
 - TypeScript: `WORKFLOW_TOOL_SCHEMA_VERSION` in `contracts.ts`
 - JSON Schema: `x-schema-version` in `contracts.json`
 

@@ -108,11 +108,21 @@ export interface LinearToolsDeps {
   clock?: () => number;
 }
 
+export interface ExpandIssueDeps {
+  registry: DedupeRegistry;
+  transcript: { append(event: WorkflowToolTranscriptEvent): void };
+  stageArtifact: { append(entry: WorkflowToolStageArtifactEntry): void };
+  sessionId: string;
+  phase: WorkflowPhase;
+  expander?: ExpanderFn;
+  clock?: () => number;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function now(deps: LinearToolsDeps): number {
+function now(deps: Pick<LinearToolsDeps, 'clock'>): number {
   return deps.clock ? deps.clock() : Date.now();
 }
 
@@ -265,7 +275,7 @@ export async function executeLinearComment(
 
 export async function executeExpandIssue(
   params: { issue: string; outputDir?: string },
-  deps: LinearToolsDeps,
+  deps: ExpandIssueDeps,
 ): Promise<ExpandIssueResult> {
   const ts = now(deps);
   const phase = deps.phase;

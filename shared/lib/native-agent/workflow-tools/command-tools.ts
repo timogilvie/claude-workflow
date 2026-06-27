@@ -142,7 +142,7 @@ function normalizeReviewFindings(
   }
   return Buffer.byteLength(text, 'utf8') <= maxOutputBytes
     ? text
-    : text.slice(0, maxOutputBytes);
+    : Buffer.from(text, 'utf8').subarray(0, maxOutputBytes).toString('utf8');
 }
 
 function countFindings(result: ReviewResult): { findingCount: number; blockingCount: number } {
@@ -621,7 +621,7 @@ export function createCommandTools(deps: CommandToolsDeps) {
     routeTask: (params: { taskPacketPath: string; repoDir?: string; routeMode?: string }) =>
       executeRouteTask(params, deps),
     expandIssue: (params: { issue: string; outputDir?: string }) =>
-      executeExpandIssue(params, deps as never),
+      executeExpandIssue(params, deps),
     writeStageResult: (params: {
       featureDir: string;
       issueId: string;
