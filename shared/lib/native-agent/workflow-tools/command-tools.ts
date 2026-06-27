@@ -331,7 +331,7 @@ export async function executeReviewChanges(
 }
 
 export async function executeRouteTask(
-  params: { taskPacketPath: string; repoDir?: string; routeMode?: string },
+  params: { taskPacketPath: string; repoDir?: string; routeMode?: string; modelsAvailable?: string[] },
   deps: CommandToolsDeps,
 ): Promise<RouteTaskResult> {
   const ts = now(deps);
@@ -352,7 +352,11 @@ export async function executeRouteTask(
       action: 'read',
       details: actionDetails({
         command: 'route_task',
-        invocation: { taskPacketPath: params.taskPacketPath, routeMode: params.routeMode ?? null },
+        invocation: {
+          taskPacketPath: params.taskPacketPath,
+          routeMode: params.routeMode ?? null,
+          modelsAvailable: params.modelsAvailable ?? null,
+        },
         outcome: 'denied',
         diagnostics: { error: 'policy_denied', message: policy.reason },
       }),
@@ -369,7 +373,11 @@ export async function executeRouteTask(
     const prompt = await readFileImpl(params.taskPacketPath, 'utf8');
     const [routed] = await routeBatchImpl(
       [{ prompt, file: params.taskPacketPath, source: 'expanded', inputKind: 'task-packet' }],
-      { repoDir, mode: (params.routeMode as 'auto' | 'stage-aware' | 'heuristic' | 'hokusai' | undefined) ?? 'auto' },
+      {
+        repoDir,
+        mode: (params.routeMode as 'auto' | 'stage-aware' | 'heuristic' | 'hokusai' | undefined) ?? 'auto',
+        modelsAvailable: params.modelsAvailable,
+      },
     );
     if (!routed?.decision) {
       throw new Error('Routing returned no decision');
@@ -382,7 +390,12 @@ export async function executeRouteTask(
       action: 'read',
       details: actionDetails({
         command: 'route_task',
-        invocation: { taskPacketPath: params.taskPacketPath, repoDir, routeMode: params.routeMode ?? 'auto' },
+        invocation: {
+          taskPacketPath: params.taskPacketPath,
+          repoDir,
+          routeMode: params.routeMode ?? 'auto',
+          modelsAvailable: params.modelsAvailable ?? null,
+        },
         outcome: 'success',
         diagnostics: {
           routeDecision: routed.decision,
@@ -408,7 +421,12 @@ export async function executeRouteTask(
       action: 'read',
       details: actionDetails({
         command: 'route_task',
-        invocation: { taskPacketPath: params.taskPacketPath, repoDir, routeMode: params.routeMode ?? 'auto' },
+        invocation: {
+          taskPacketPath: params.taskPacketPath,
+          repoDir,
+          routeMode: params.routeMode ?? 'auto',
+          modelsAvailable: params.modelsAvailable ?? null,
+        },
         outcome: 'error',
         diagnostics: { error: errorCode, message },
       }),
@@ -618,7 +636,7 @@ export function createCommandTools(deps: CommandToolsDeps) {
   return {
     reviewChanges: (params: { base: string; worktree?: string; json?: boolean; maxOutputBytes?: number }) =>
       executeReviewChanges(params, deps),
-    routeTask: (params: { taskPacketPath: string; repoDir?: string; routeMode?: string }) =>
+    routeTask: (params: { taskPacketPath: string; repoDir?: string; routeMode?: string; modelsAvailable?: string[] }) =>
       executeRouteTask(params, deps),
     expandIssue: (params: { issue: string; outputDir?: string }) =>
       executeExpandIssue(params, deps),

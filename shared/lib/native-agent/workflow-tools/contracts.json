@@ -323,7 +323,11 @@
       "properties": {
         "taskPacketPath": { "type": "string" },
         "repoDir":        { "type": "string" },
-        "routeMode":      { "type": "string" }
+        "routeMode":      { "type": "string" },
+        "modelsAvailable": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
       },
       "required": ["taskPacketPath"],
       "additionalProperties": false

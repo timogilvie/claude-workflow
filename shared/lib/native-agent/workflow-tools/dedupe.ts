@@ -16,7 +16,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import type { WorkflowPhase } from './contracts.ts';
+import type { ExternalRef, IdempotencyOutcome, WorkflowPhase } from './contracts.ts';
 
 // ---------------------------------------------------------------------------
 // Normalization helpers
@@ -153,8 +153,6 @@ export function expandIssueKey(input: ExpandIssueDedupeInput): string {
 // ---------------------------------------------------------------------------
 // In-memory dedupe registry
 // ---------------------------------------------------------------------------
-
-import type { IdempotencyOutcome, ExternalRef } from './contracts.ts';
 
 export type DedupeOutcome = IdempotencyOutcome;
 

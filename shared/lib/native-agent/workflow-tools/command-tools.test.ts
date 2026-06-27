@@ -6,7 +6,7 @@ import { beforeEach, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import type { ReviewResult } from '../../review-runner.ts';
-import type { RouteBatchResult } from '../../route-batch.ts';
+import type { RouteBatchOptions, RouteBatchResult } from '../../route-batch.ts';
 import { createInMemoryDedupeRegistry } from './dedupe.ts';
 import {
   createCommandTools,
@@ -146,17 +146,27 @@ describe('executeRouteTask', () => {
     const taskPacketPath = join(repoDir, 'task-packet.md');
     writeFileSync(taskPacketPath, loadFixtureText('task-packet.md'));
     const decision = loadFixture<RouteBatchResult['decision']>('route-decision.json');
+    let capturedOptions: RouteBatchOptions | undefined;
     const deps = makeDeps({
       phase: 'planning',
       repoDir,
-      routeBatchImpl: async () => [{ task: { prompt: 'x' }, decision }],
+      routeBatchImpl: async (_tasks, options) => {
+        capturedOptions = options;
+        return [{ task: { prompt: 'x' }, decision }];
+      },
     });
 
-    const result = await executeRouteTask({ taskPacketPath, repoDir, routeMode: 'stage-aware' }, deps);
+    const result = await executeRouteTask({
+      taskPacketPath,
+      repoDir,
+      routeMode: 'stage-aware',
+      modelsAvailable: ['gpt-5.5', 'claude-sonnet-4-6'],
+    }, deps);
     assert.ok(result.ok);
     assert.equal(result.route.model, 'openai/gpt-5-codex');
     assert.equal(result.route.mode, 'stage-aware');
     assert.match(result.route.rationale ?? '', /runtime wiring/);
+    assert.deepEqual(capturedOptions?.modelsAvailable, ['gpt-5.5', 'claude-sonnet-4-6']);
     assert.equal((deps.transcriptEvents[0].details as { diagnostics: { routeDecision: { coder: string } } }).diagnostics.routeDecision.coder, 'openai/gpt-5-codex');
   });
 
