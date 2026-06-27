@@ -187,9 +187,14 @@ if (import.meta.main) {
       }
 
       if (!report.certified) {
+        const isDryRun = args['dry-run'] === true;
+        const dryRunPassed = isDryRun && report.providers.every((provider) => provider.passed);
+        if (dryRunPassed) {
+          return;
+        }
         throw new Error(
-          args['dry-run'] === true
-            ? 'Dry-run completed. Certification artifact not written.'
+          isDryRun
+            ? 'Patch coding dry-run failed. One or more smoke checks did not pass.'
             : 'Patch coding certification failed. No valid certification artifact was written.',
         );
       }
