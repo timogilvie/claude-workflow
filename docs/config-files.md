@@ -69,9 +69,11 @@ When new model/router config fields are added in future versions:
 
 ### Native Read-Only Opt-In
 
-Use `.wavemill-config.json` for the shared `nativeAgent.enabled`, `nativeAgent.allowedPhases`, and provider model allow-list values that define whether a repo opts into native read-only expansion, planning, or review.
+Use `.wavemill-config.json` for the shared `nativeAgent.enabled`, `nativeAgent.allowedPhases`, `nativeAgent.patchCoding.enabled`, and provider model allow-list values that define whether a repo opts into native read-only expansion, planning, review, or patch-coding alpha.
 
 Keep native provider secrets such as `OPENAI_API_KEY` and `OPENROUTER_API_KEY` in environment variables only.
+
+`nativeAgent.patchCoding.enabled` is fail-closed and defaults to `false`. Setting it to `true` does not enable native patch coding by itself; Wavemill also requires a current certification artifact at `.wavemill/native-agent/patch-coding-certification.json`.
 
 See [Native Read-Only Runtime](./native-read-only-runtime.md) for the exact config shape and phase examples.
 

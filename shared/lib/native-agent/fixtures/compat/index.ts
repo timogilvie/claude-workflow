@@ -1,5 +1,9 @@
 import gitDiffOpenAiCompletionsFixture from './git_diff.openai-completions.fixture.ts';
 import gitDiffOpenAiResponsesFixture from './git_diff.openai-responses.fixture.ts';
+import gitDiffStatOpenAiCompletionsFixture from './git_diff_stat.openai-completions.fixture.ts';
+import gitDiffStatOpenAiResponsesFixture from './git_diff_stat.openai-responses.fixture.ts';
+import gitLogOpenAiCompletionsFixture from './git_log.openai-completions.fixture.ts';
+import gitLogOpenAiResponsesFixture from './git_log.openai-responses.fixture.ts';
 import gitStatusOpenAiCompletionsFixture from './git_status.openai-completions.fixture.ts';
 import gitStatusOpenAiResponsesFixture from './git_status.openai-responses.fixture.ts';
 import listFilesOpenAiCompletionsFixture from './list_files.openai-completions.fixture.ts';
@@ -42,6 +46,10 @@ const FIXTURES: readonly ToolCompatFixture[] = [
   gitStatusOpenAiResponsesFixture,
   gitDiffOpenAiCompletionsFixture,
   gitDiffOpenAiResponsesFixture,
+  gitDiffStatOpenAiCompletionsFixture,
+  gitDiffStatOpenAiResponsesFixture,
+  gitLogOpenAiCompletionsFixture,
+  gitLogOpenAiResponsesFixture,
 ];
 
 export function getToolCompatFixtures(): ToolCompatFixture[] {

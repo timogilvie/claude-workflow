@@ -13,6 +13,10 @@ import {
   type ChallengeComparison,
   type ChallengeRoutingMeta,
 } from '../shared/lib/challenge-comparison.ts';
+import {
+  selectChallengeEvalScore,
+  collectPerStageScores,
+} from '../shared/lib/challenge-score-selector.ts';
 import { loadWavemillConfig } from '../shared/lib/config.ts';
 import { resolveEvalsDir } from '../shared/lib/evals-paths.ts';
 import {
@@ -130,6 +134,7 @@ runTool({
       } : undefined;
 
       const variedDimensions = detectVariedDimensions(primaryRouting, challengerRouting);
+
       if (variedDimensions && !hasAnyVariedDimension(variedDimensions)) {
         const skippedRecord = buildSkippedIdenticalComparison({
           challengePairId: pairId,
@@ -194,16 +199,63 @@ runTool({
         return;
       }
       const challengeType = variedDimensions ? classifyChallengeType(variedDimensions) : undefined;
+      const primarySelected = selectChallengeEvalScore(primaryEval, challengeType);
+      const challengerSelected = selectChallengeEvalScore(challengerEval, challengeType);
+
+      const dataQualityWarnings: string[] = [];
+      if (primarySelected.warning) dataQualityWarnings.push(`primary: ${primarySelected.warning}`);
+      if (challengerSelected.warning) dataQualityWarnings.push(`challenger: ${challengerSelected.warning}`);
+      if (dataQualityWarnings.length > 0) {
+        console.warn(`[compare-prs] Data quality warnings for ${pairId}:`);
+        for (const w of dataQualityWarnings) console.warn(`  ${w}`);
+      }
+
+      // For multi-variable/full-stack include per-stage scores in prompt context
+      const isMultiStage = !challengeType || challengeType === 'multi-variable' || challengeType === 'full-stack';
+      const primaryPerStageScores = isMultiStage ? collectPerStageScores(primaryEval) : undefined;
+      const challengerPerStageScores = isMultiStage ? collectPerStageScores(challengerEval) : undefined;
+
+      const variedStage = challengeType === 'planner-only'
+        ? 'plan'
+        : challengeType === 'reviewer-only'
+          ? 'review'
+          : challengeType === 'coder-only'
+            ? 'implementation'
+            : undefined;
+      const primaryStageEval = primaryEval.challengeStageEval;
+      const challengerStageEval = challengerEval.challengeStageEval;
+      const stageEvidenceMode = (
+        (challengeType === 'planner-only' || challengeType === 'reviewer-only')
+          ? (
+              primaryStageEval?.provenance === 'direct' && challengerStageEval?.provenance === 'direct'
+                ? 'direct'
+                : 'inferred-fallback'
+            )
+          : 'not-applicable'
+      ) as const;
+
+      if (challengeType === 'planner-only' || challengeType === 'reviewer-only') {
+        console.log(
+          `[compare-prs] pair=${pairId} varied_stage=${variedStage} stage_evidence=${stageEvidenceMode} primary_pr=${primaryNumber} challenger_pr=${challengerNumber}`
+        );
+      }
 
       const promptLimit = Number.parseInt(process.env.CHALLENGE_COMPARISON_MAX_PROMPT_BYTES || '500000', 10);
       const cappedPrompt = buildCappedComparisonPrompt({
         issuePrompt,
         primaryDiff,
         challengerDiff,
-        primaryEvalScore: primaryEval.score,
-        challengerEvalScore: challengerEval.score,
+        primaryEvalScore: primarySelected.score,
+        challengerEvalScore: challengerSelected.score,
         primaryRouting,
         challengerRouting,
+        primaryEvalScoreSource: primarySelected.source,
+        challengerEvalScoreSource: challengerSelected.source,
+        primaryPerStageScores,
+        challengerPerStageScores,
+        challengeType,
+        primaryStageEval,
+        challengerStageEval,
       }, Number.isFinite(promptLimit) ? promptLimit : 500000);
       if (cappedPrompt.truncated) {
         console.warn(
@@ -261,8 +313,8 @@ Return a raw JSON object with no code fences, no comments, and no JavaScript syn
         challengerModel,
         primaryPrUrl,
         challengerPrUrl,
-        primaryEvalScore: primaryEval.score,
-        challengerEvalScore: challengerEval.score,
+        primaryEvalScore: primarySelected.score,
+        challengerEvalScore: challengerSelected.score,
         winner: verdict.winner,
         winnerModel,
         rationale: verdict.rationale,
@@ -272,7 +324,12 @@ Return a raw JSON object with no code fences, no comments, and no JavaScript syn
         challengerRouting,
         variedDimensions,
         challengeType,
+        variedStage,
+        stageEvidenceMode,
         workflowInsight: verdict.workflowInsight,
+        primaryEvalScoreSource: primarySelected.source,
+        challengerEvalScoreSource: challengerSelected.source,
+        ...(dataQualityWarnings.length > 0 ? { dataQualityWarnings } : {}),
       };
       recordForResult = record;
 

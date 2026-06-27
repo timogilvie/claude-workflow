@@ -399,12 +399,17 @@ export interface NativeAgentProvidersConfig {
   openrouter?: NativeAgentProviderConfig;
 }
 
+export interface NativePatchCodingConfig {
+  enabled?: boolean;
+}
+
 export interface NativeAgentConfig {
   enabled?: boolean;
   allowedPhases?: NativeAgentAllowedPhase[];
   expansion?: {
     fallbackOnUnavailable?: boolean;
   };
+  patchCoding?: NativePatchCodingConfig;
   providers?: NativeAgentProvidersConfig;
 }
 
@@ -412,6 +417,10 @@ export interface NativeExpansionConfig {
   enabled: boolean;
   allowedForExpansion: boolean;
   fallbackOnUnavailable: boolean;
+}
+
+export interface ResolvedNativePatchCodingConfig {
+  enabled: boolean;
 }
 
 export interface IntegrationConfig {
@@ -1403,6 +1412,13 @@ export function getNativeExpansionConfig(repoDir?: string): NativeExpansionConfi
     enabled: config.enabled === true,
     allowedForExpansion: config.allowedPhases?.includes('task-expansion') === true,
     fallbackOnUnavailable: config.expansion?.fallbackOnUnavailable ?? false,
+  };
+}
+
+export function getNativePatchCodingConfig(repoDir?: string): ResolvedNativePatchCodingConfig {
+  const config = getNativeAgentConfig(repoDir);
+  return {
+    enabled: config.patchCoding?.enabled === true,
   };
 }
 

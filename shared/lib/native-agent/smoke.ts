@@ -31,11 +31,16 @@ import {
   type ResolvedNativeProviderEntry,
 } from './providers.ts';
 import { createReadOnlyTools, READ_ONLY_PATH_FIELDS } from './tools/read-only.ts';
-import { createGitTools, gitAfterToolCall } from './tools/git.ts';
+import { createGitTools, gitAfterToolCall, gitToolPolicyConfig } from './tools/git.ts';
+import {
+  createCodingMutationTools,
+  codingMutationAfterToolCall,
+  codingMutationPolicyConfig,
+} from './tools/mutation-tools.ts';
 import { createToolRegistry } from './tools/registry.ts';
 import { toPiAgentTool } from './tools/pi-adapter.ts';
 import { loadNativePhasePrompt, registerAndRecordNativeProvenance } from './prompts.ts';
-import type { NativeAgentConfig } from '../config.ts';
+import { getNativeAgentConfig, type NativeAgentConfig } from '../config.ts';
 import type { ModelCapabilities, ModelRegistry, PiCompatFlags } from '../model-registry.ts';
 
 // ---------------------------------------------------------------------------
@@ -47,7 +52,8 @@ export const SMOKE_PROVIDERS = [
   OPENROUTER_NATIVE_PROVIDER,
 ] as const;
 
-export const SMOKE_PHASES = ['planning'] as const;
+export const SMOKE_PHASES = ['planning', 'coding'] as const;
+export const PATCH_CODING_SMOKE_SUITE_REVISION = 'patch-coding-smoke-v1';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -111,6 +117,15 @@ export interface RunNativeSmokeOptions {
    * production code paths.
    */
   _registryOverride?: ModelRegistry;
+  /**
+   * Test/certification-only: resolve and run a specific model for the provider
+   * instead of the configured/default first model.
+   */
+  _modelIdOverride?: string;
+  /**
+   * Test/certification-only: allow provider resolution in certification mode.
+   */
+  _certificationMode?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -131,8 +146,23 @@ function resolveProviderEntry(
   repoDir: string | undefined,
   env?: Record<string, string | undefined>,
   registry?: ModelRegistry,
+  modelIdOverride?: string,
+  certificationMode = false,
 ): ResolvedNativeProviderEntry {
-  const existingEntries = resolveNativeAgentProviders(repoDir, { env, registry });
+  const existingConfig = repoDir ? getNativeAgentConfig(repoDir) : {};
+  const providerConfig = existingConfig.providers?.[provider] ?? {};
+  const config: NativeAgentConfig = {
+    ...existingConfig,
+    providers: {
+      ...existingConfig.providers,
+      [provider]: {
+        ...providerConfig,
+        ...(modelIdOverride ? { models: [modelIdOverride] } : {}),
+      },
+    },
+  };
+
+  const existingEntries = resolveNativeAgentProviders(config, { env, repoDir, registry, certificationMode });
   const existing = existingEntries.find((e) => e.providerName === provider);
   if (existing) {
     return existing;
@@ -141,9 +171,11 @@ function resolveProviderEntry(
   // No explicit config for this provider — synthesize with defaults so dry-run
   // and live can still report correct model and env var names.
   const defaultConfig: NativeAgentConfig = {
-    providers: { [provider]: {} },
+    providers: {
+      [provider]: modelIdOverride ? { models: [modelIdOverride] } : {},
+    },
   };
-  const defaultEntries = resolveNativeAgentProviders(defaultConfig, { env, repoDir, registry });
+  const defaultEntries = resolveNativeAgentProviders(defaultConfig, { env, repoDir, registry, certificationMode });
   const fallback = defaultEntries.find((e) => e.providerName === provider);
   if (!fallback) {
     // Should not happen — we just added the provider to the config.
@@ -183,7 +215,34 @@ function buildSmokeCompatRegistry(
 function buildSmokeToolRegistry(worktreePath: string) {
   const readOnlyDescriptors = createReadOnlyTools(worktreePath);
   const gitDescriptors = createGitTools(worktreePath);
-  return createToolRegistry([...readOnlyDescriptors, ...gitDescriptors]);
+  const codingMutationDescriptors = createCodingMutationTools(worktreePath);
+  return createToolRegistry([...readOnlyDescriptors, ...gitDescriptors, ...codingMutationDescriptors]);
+}
+
+async function smokeAfterToolCall(context: Parameters<NonNullable<WavemillLoopConfig['afterToolCall']>>[0]) {
+  const gitResult = await gitAfterToolCall(context);
+  if (gitResult?.isError) {
+    return gitResult;
+  }
+  return codingMutationAfterToolCall(context);
+}
+
+function buildSmokeToolPolicyConfig(phase: SmokePhase) {
+  if (phase === 'coding') {
+    return {
+      pathFieldsByTool: {
+        ...READ_ONLY_PATH_FIELDS,
+        ...gitToolPolicyConfig.pathFieldsByTool,
+        ...codingMutationPolicyConfig.pathFieldsByTool,
+      },
+    };
+  }
+  return {
+    pathFieldsByTool: {
+      ...READ_ONLY_PATH_FIELDS,
+      ...gitToolPolicyConfig.pathFieldsByTool,
+    },
+  };
 }
 
 function makeTranscriptPath(
@@ -211,7 +270,14 @@ export async function runNativeAgentDryRun(
 ): Promise<NativeSmokeResult> {
   const { provider, phase, repoDir, env, transcriptDir } = options;
 
-  const entry = resolveProviderEntry(provider, repoDir, env, options._registryOverride);
+  const entry = resolveProviderEntry(
+    provider,
+    repoDir,
+    env,
+    options._registryOverride,
+    options._modelIdOverride,
+    options._certificationMode,
+  );
 
   // Build registry bound to repoDir (or cwd) to report real tool names.
   // In dry-run we never execute any tools, so the path just needs to be valid.
@@ -295,7 +361,14 @@ export async function runNativeAgentLive(
 ): Promise<NativeSmokeResult> {
   const { provider, phase, repoDir, env, transcriptDir } = options;
 
-  const entry = resolveProviderEntry(provider, repoDir, env, options._registryOverride);
+  const entry = resolveProviderEntry(
+    provider,
+    repoDir,
+    env,
+    options._registryOverride,
+    options._modelIdOverride,
+    options._certificationMode,
+  );
 
   if (entry.status !== 'ready') {
     const reason = (entry as UnavailableNativeProviderEntry | SkippedNativeProviderEntry).reason;
@@ -389,12 +462,12 @@ export async function runNativeAgentLive(
     model: modelConfig,
     context,
     convertToLlm: (messages) => messages as unknown as Message[],
-    afterToolCall: gitAfterToolCall,
+    afterToolCall: smokeAfterToolCall,
     toolPolicy: {
-      phase: 'planning',
+      phase,
       worktreePath,
       registry: registry.list(),
-      config: { pathFieldsByTool: READ_ONLY_PATH_FIELDS },
+      config: buildSmokeToolPolicyConfig(phase),
     },
     onEvent: (event) => writer.handleEvent(event),
     budget: {

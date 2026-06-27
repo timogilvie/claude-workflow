@@ -278,6 +278,14 @@ else
   fail "task window resolution does not prefer a worktree-validated persisted windowId"
 fi
 
+if [[ "$WINDOW_RESOLUTION_BLOCK" == *'issue_number="${issue##*-}"'* ]] \
+  && [[ "$WINDOW_RESOLUTION_BLOCK" == *'issue_number " · " slug'* ]] \
+  && [[ "$WINDOW_RESOLUTION_BLOCK" == *'canonical="${issue}-${slug}"'* ]]; then
+  pass "task window resolution falls back from persisted id to renamed titles before canonical names"
+else
+  fail "task window resolution is missing renamed title fallback ordering"
+fi
+
 if [[ "$RESTORE_WINDOW_BLOCK" == *'_tmux_task_window_target "$SESSION" "$issue" "$slug" "${STATE_FILE:-}" "$wt_dir"'* ]] \
   && [[ "$RESTORE_WINDOW_BLOCK" == *'-f "$feature_dir/.coding-complete"'* ]] \
   && [[ "$RESTORE_WINDOW_BLOCK" == *'launch_review_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH"'* ]] \
