@@ -3,11 +3,11 @@
   "$id": "wavemill/workflow-tool-contracts",
   "title": "Workflow Tool Contracts",
   "description": "Input/output schemas for the eight native workflow tools (HOK-2355).",
-  "x-schema-version": "1.0.0",
+  "x-schema-version": "1.1.0",
   "$defs": {
     "schemaVersion": {
       "type": "string",
-      "const": "1.0.0"
+      "const": "1.1.0"
     },
     "workflowToolName": {
       "type": "string",
@@ -375,7 +375,8 @@
         "ok":             { "type": "boolean", "const": true },
         "tool":           { "type": "string", "const": "expand_issue" },
         "taskPacketPath": { "type": "string" },
-        "ref":            { "$ref": "#/$defs/externalRef" }
+        "ref":            { "$ref": "#/$defs/externalRef" },
+        "idempotency":    { "$ref": "#/$defs/idempotencyResult" }
       },
       "required": ["ok", "tool", "taskPacketPath"],
       "additionalProperties": false
