@@ -8,6 +8,8 @@ Implementation reference for the eight native workflow tools. Contracts are defi
 - `shared/lib/native-agent/workflow-tools/contracts.json` — JSON Schema mirror
 - `shared/lib/native-agent/workflow-tools/dedupe.ts` — Dedupe key helpers
 - `shared/lib/native-agent/workflow-tools/mutation-policy.ts` — Phase/tool/action policy matrix
+- `shared/lib/native-agent/workflow-tools/mutation-record.ts` — Serializable mutation outcome types
+- `shared/lib/native-agent/workflow-tools/mutation-enforcer.ts` — Policy-enforcing wrapper
 
 ---
 
@@ -317,3 +319,137 @@ The schema version is `1.0.0`, exposed as:
 - JSON Schema: `x-schema-version` in `contracts.json`
 
 Schema changes follow semver. Additive (backward-compatible) field additions increment the minor version. Breaking changes increment the major version. Tests assert that both surfaces expose the same version string.
+
+---
+
+## Centralized Mutation Enforcement
+
+**HOK-2359**
+
+All external mutations must go through `enforceMutation()` from `mutation-enforcer.ts`. This wrapper centralizes policy checking and recording so no call site can bypass the gate.
+
+### Enforcement Flow
+
+```
+caller → enforceMutation({ context, executor, recorder })
+              │
+              ▼
+         isMutationAllowed(phase, tool, action)
+              │
+       ┌──────┴──────────┐
+       │ denied          │ allowed
+       ▼                 ▼
+   record + return    executor()
+   DeniedResult          │
+                    ┌────┴────┐
+                    │ success │ throws
+                    ▼         ▼
+               record +   record +
+               return     return
+               Executed   Failed
+               Result     Result
+```
+
+**Invariants:**
+- `executor` is called at most once — never on denial.
+- `recorder` is called exactly once on every path (denied, executed, failed).
+- Policy is checked against the existing `isMutationAllowed()` matrix; no logic is duplicated.
+- Denial results are returned as plain data (`DeniedEnforcedResult`), not thrown exceptions, so transcript consumers can embed them in `tool_result.details`.
+- Recording failures propagate to the caller — silent drops are not permitted.
+
+### Denied Mutation Result Shape
+
+```typescript
+interface DeniedEnforcedResult {
+  status: 'denied';
+  record: DeniedMutationRecord;
+}
+
+interface DeniedMutationRecord {
+  outcome: 'denied';
+  tool: WorkflowToolName;
+  phase: WorkflowPhase;
+  action: WorkflowMutationAction;
+  reason: string;       // stable string from the policy matrix
+  timestampMs: number;
+}
+```
+
+`reason` matches the stable strings in the policy matrix (e.g. `review_cannot_merge: …`, `ready_mutation_denied: …`, `unknown_combination: …`). Tests may assert the full value.
+
+### Executed and Failed Shapes
+
+```typescript
+interface ExecutedEnforcedResult<T> {
+  status: 'executed';
+  result: T;            // raw executor result
+  record: ExecutedMutationRecord;
+}
+
+interface ExecutedMutationRecord {
+  outcome: 'executed';
+  tool: WorkflowToolName;
+  phase: WorkflowPhase;
+  action: WorkflowMutationAction;
+  policyReason: string; // allow reason from the matrix
+  timestampMs: number;
+  idempotencyKey?: string;
+  idempotencyOutcome?: IdempotencyOutcome;
+  ref?: ExternalRef | null;
+}
+
+interface FailedEnforcedResult {
+  status: 'failed';
+  error: unknown;       // original thrown value
+  record: FailedMutationRecord;
+}
+
+interface FailedMutationRecord {
+  outcome: 'failed';
+  tool: WorkflowToolName;
+  phase: WorkflowPhase;
+  action: WorkflowMutationAction;
+  error: string;        // normalized, no stack traces
+  timestampMs: number;
+}
+```
+
+All record types are JSON-serializable — no classes, no non-serializable fields.
+
+### Mandatory Recording
+
+Every external mutation outcome must produce a record. The recorder is called exactly once per `enforceMutation` invocation regardless of path. Preferred usage:
+
+```typescript
+const result = await enforceMutation({
+  context: { phase: 'review', tool: 'github_create_pr', action: 'create_pr' },
+  executor: () => createPr(request),
+  recorder: (record) => appendToStageLog(record),
+  extractIdempotency: (r) => ({
+    idempotencyKey: r.idempotency.key,
+    idempotencyOutcome: r.idempotency.outcome,
+    ref: r.idempotency.ref,
+  }),
+});
+
+if (result.status === 'denied') {
+  // Surface denial reason to transcript
+}
+```
+
+### Review and Ready Phase Mutation Scope
+
+**Review phase** may perform PR workflow actions only:
+- `github_create_pr` with `create_pr` or `update_pr`
+- `github_add_label` with `add_label`
+- `linear_comment` with `comment`
+- `write_stage_result` with `write_stage_result`
+- Merge is always denied.
+
+**Ready phase** is limited to remediation only:
+- `github_create_pr` with `stale_base` (PR behind base branch)
+- `github_create_pr` with `merge_conflict`
+- `write_stage_result` with `write_stage_result`
+- All other mutations (comment, create_pr, update_pr, add_label, merge) are denied with reason `ready_mutation_denied`.
+
+See the Phase × Tool × Action matrix above for the complete listing.
