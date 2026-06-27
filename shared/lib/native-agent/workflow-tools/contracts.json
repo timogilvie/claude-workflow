@@ -1,0 +1,435 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "wavemill/workflow-tool-contracts",
+  "title": "Workflow Tool Contracts",
+  "description": "Input/output schemas for the eight native workflow tools (HOK-2355).",
+  "x-schema-version": "1.0.0",
+  "$defs": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "1.0.0"
+    },
+    "workflowToolName": {
+      "type": "string",
+      "enum": [
+        "linear_get_issue",
+        "linear_comment",
+        "github_create_pr",
+        "github_add_label",
+        "review_changes",
+        "route_task",
+        "expand_issue",
+        "write_stage_result"
+      ]
+    },
+    "workflowPhase": {
+      "type": "string",
+      "enum": ["planning", "coding", "review", "ready"]
+    },
+    "workflowMutationAction": {
+      "type": "string",
+      "enum": [
+        "read",
+        "comment",
+        "create_pr",
+        "update_pr",
+        "add_label",
+        "write_stage_result",
+        "stale_base",
+        "merge_conflict",
+        "merge"
+      ]
+    },
+    "externalRefSystem": {
+      "type": "string",
+      "enum": ["linear", "github", "wavemill"]
+    },
+    "externalRefKind": {
+      "type": "string",
+      "enum": [
+        "issue",
+        "comment",
+        "pull_request",
+        "label",
+        "stage_result",
+        "review",
+        "route",
+        "task_packet"
+      ]
+    },
+    "externalRef": {
+      "type": "object",
+      "properties": {
+        "system": { "$ref": "#/$defs/externalRefSystem" },
+        "kind":   { "$ref": "#/$defs/externalRefKind" },
+        "id":     { "type": "string" },
+        "url":    { "type": "string", "format": "uri" }
+      },
+      "required": ["system", "kind", "id"],
+      "additionalProperties": true
+    },
+    "idempotencyOutcome": {
+      "type": "string",
+      "enum": ["created", "reused", "updated", "skipped"]
+    },
+    "idempotencyResult": {
+      "type": "object",
+      "properties": {
+        "key":     { "type": "string", "minLength": 1 },
+        "outcome": { "$ref": "#/$defs/idempotencyOutcome" },
+        "ref": {
+          "oneOf": [
+            { "$ref": "#/$defs/externalRef" },
+            { "type": "null" }
+          ]
+        },
+        "refs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/externalRef" }
+        },
+        "reason": { "type": "string" }
+      },
+      "required": ["key", "outcome", "ref"],
+      "additionalProperties": false
+    },
+    "commonErrorCode": {
+      "type": "string",
+      "enum": [
+        "invalid_input",
+        "policy_denied",
+        "not_found",
+        "aborted",
+        "external_error",
+        "io_error",
+        "schema_mismatch"
+      ]
+    },
+    "toolSpecificErrorCode": {
+      "type": "string",
+      "enum": [
+        "conflict",
+        "rate_limited",
+        "review_failed",
+        "route_failed",
+        "expansion_failed"
+      ]
+    },
+    "workflowToolErrorCode": {
+      "anyOf": [
+        { "$ref": "#/$defs/commonErrorCode" },
+        { "$ref": "#/$defs/toolSpecificErrorCode" }
+      ]
+    },
+    "recordingRequirement": {
+      "type": "object",
+      "properties": {
+        "tool": { "$ref": "#/$defs/workflowToolName" },
+        "requiresTranscriptRecord": { "type": "boolean" },
+        "requiresStageArtifactRecord": { "type": "boolean" },
+        "requiredRecordedFields": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "required": [
+        "tool",
+        "requiresTranscriptRecord",
+        "requiresStageArtifactRecord",
+        "requiredRecordedFields"
+      ],
+      "additionalProperties": false
+    },
+    "linearGetIssueRequest": {
+      "type": "object",
+      "properties": {
+        "issue":           { "type": "string" },
+        "includeRelations":{ "type": "boolean" },
+        "includeComments": { "type": "boolean" }
+      },
+      "required": ["issue"],
+      "additionalProperties": false
+    },
+    "linearGetIssueSuccess": {
+      "type": "object",
+      "properties": {
+        "ok":   { "type": "boolean", "const": true },
+        "tool": { "type": "string", "const": "linear_get_issue" },
+        "issue": {
+          "type": "object",
+          "properties": {
+            "id":          { "type": "string" },
+            "identifier":  { "type": "string" },
+            "title":       { "type": "string" },
+            "description": { "type": "string" },
+            "state":       { "type": "string" },
+            "assignee":    { "type": "string" },
+            "labels":      { "type": "array", "items": { "type": "string" } },
+            "url":         { "type": "string" }
+          },
+          "required": ["id", "identifier", "title"],
+          "additionalProperties": true
+        }
+      },
+      "required": ["ok", "tool", "issue"],
+      "additionalProperties": false
+    },
+    "linearGetIssueError": {
+      "type": "object",
+      "properties": {
+        "ok":      { "type": "boolean", "const": false },
+        "tool":    { "type": "string", "const": "linear_get_issue" },
+        "error":   { "$ref": "#/$defs/commonErrorCode" },
+        "message": { "type": "string" }
+      },
+      "required": ["ok", "tool", "error", "message"],
+      "additionalProperties": false
+    },
+    "linearCommentRequest": {
+      "type": "object",
+      "properties": {
+        "issue":          { "type": "string" },
+        "body":           { "type": "string" },
+        "sessionId":      { "type": "string" },
+        "phase":          { "$ref": "#/$defs/workflowPhase" },
+        "dedupeOverride": { "type": "string" }
+      },
+      "required": ["issue", "body", "sessionId", "phase"],
+      "additionalProperties": false
+    },
+    "linearCommentSuccess": {
+      "type": "object",
+      "properties": {
+        "ok":          { "type": "boolean", "const": true },
+        "tool":        { "type": "string", "const": "linear_comment" },
+        "idempotency": { "$ref": "#/$defs/idempotencyResult" }
+      },
+      "required": ["ok", "tool", "idempotency"],
+      "additionalProperties": false
+    },
+    "linearCommentError": {
+      "type": "object",
+      "properties": {
+        "ok":      { "type": "boolean", "const": false },
+        "tool":    { "type": "string", "const": "linear_comment" },
+        "error":   { "$ref": "#/$defs/workflowToolErrorCode" },
+        "message": { "type": "string" }
+      },
+      "required": ["ok", "tool", "error", "message"],
+      "additionalProperties": false
+    },
+    "githubCreatePrRequest": {
+      "type": "object",
+      "properties": {
+        "repo":    { "type": "string" },
+        "head":    { "type": "string" },
+        "base":    { "type": "string" },
+        "headSha": { "type": "string" },
+        "title":   { "type": "string" },
+        "body":    { "type": "string" },
+        "draft":   { "type": "boolean" }
+      },
+      "required": ["repo", "head", "base", "headSha", "title", "body"],
+      "additionalProperties": false
+    },
+    "githubCreatePrSuccess": {
+      "type": "object",
+      "properties": {
+        "ok":          { "type": "boolean", "const": true },
+        "tool":        { "type": "string", "const": "github_create_pr" },
+        "idempotency": { "$ref": "#/$defs/idempotencyResult" }
+      },
+      "required": ["ok", "tool", "idempotency"],
+      "additionalProperties": false
+    },
+    "githubCreatePrError": {
+      "type": "object",
+      "properties": {
+        "ok":      { "type": "boolean", "const": false },
+        "tool":    { "type": "string", "const": "github_create_pr" },
+        "error":   { "$ref": "#/$defs/workflowToolErrorCode" },
+        "message": { "type": "string" }
+      },
+      "required": ["ok", "tool", "error", "message"],
+      "additionalProperties": false
+    },
+    "githubAddLabelRequest": {
+      "type": "object",
+      "properties": {
+        "repo":         { "type": "string" },
+        "targetKind":   { "type": "string", "enum": ["pull_request", "issue"] },
+        "targetNumber": { "type": "integer", "minimum": 1 },
+        "label":        { "type": "string" }
+      },
+      "required": ["repo", "targetKind", "targetNumber", "label"],
+      "additionalProperties": false
+    },
+    "githubAddLabelSuccess": {
+      "type": "object",
+      "properties": {
+        "ok":          { "type": "boolean", "const": true },
+        "tool":        { "type": "string", "const": "github_add_label" },
+        "idempotency": { "$ref": "#/$defs/idempotencyResult" }
+      },
+      "required": ["ok", "tool", "idempotency"],
+      "additionalProperties": false
+    },
+    "githubAddLabelError": {
+      "type": "object",
+      "properties": {
+        "ok":      { "type": "boolean", "const": false },
+        "tool":    { "type": "string", "const": "github_add_label" },
+        "error":   { "$ref": "#/$defs/workflowToolErrorCode" },
+        "message": { "type": "string" }
+      },
+      "required": ["ok", "tool", "error", "message"],
+      "additionalProperties": false
+    },
+    "reviewChangesRequest": {
+      "type": "object",
+      "properties": {
+        "base":           { "type": "string" },
+        "worktree":       { "type": "string" },
+        "json":           { "type": "boolean" },
+        "maxOutputBytes": { "type": "integer", "minimum": 1 }
+      },
+      "required": ["base"],
+      "additionalProperties": false
+    },
+    "reviewChangesSuccess": {
+      "type": "object",
+      "properties": {
+        "ok":           { "type": "boolean", "const": true },
+        "tool":         { "type": "string", "const": "review_changes" },
+        "findings":     { "type": "string" },
+        "findingCount": { "type": "integer" },
+        "blockingCount":{ "type": "integer" }
+      },
+      "required": ["ok", "tool", "findings"],
+      "additionalProperties": false
+    },
+    "reviewChangesError": {
+      "type": "object",
+      "properties": {
+        "ok":      { "type": "boolean", "const": false },
+        "tool":    { "type": "string", "const": "review_changes" },
+        "error":   { "$ref": "#/$defs/workflowToolErrorCode" },
+        "message": { "type": "string" }
+      },
+      "required": ["ok", "tool", "error", "message"],
+      "additionalProperties": false
+    },
+    "routeTaskRequest": {
+      "type": "object",
+      "properties": {
+        "taskPacketPath": { "type": "string" },
+        "repoDir":        { "type": "string" },
+        "routeMode":      { "type": "string" }
+      },
+      "required": ["taskPacketPath"],
+      "additionalProperties": false
+    },
+    "routeTaskSuccess": {
+      "type": "object",
+      "properties": {
+        "ok":    { "type": "boolean", "const": true },
+        "tool":  { "type": "string", "const": "route_task" },
+        "route": {
+          "type": "object",
+          "properties": {
+            "model":     { "type": "string" },
+            "mode":      { "type": "string" },
+            "rationale": { "type": "string" }
+          },
+          "additionalProperties": true
+        },
+        "ref": { "$ref": "#/$defs/externalRef" }
+      },
+      "required": ["ok", "tool", "route"],
+      "additionalProperties": false
+    },
+    "routeTaskError": {
+      "type": "object",
+      "properties": {
+        "ok":      { "type": "boolean", "const": false },
+        "tool":    { "type": "string", "const": "route_task" },
+        "error":   { "$ref": "#/$defs/workflowToolErrorCode" },
+        "message": { "type": "string" }
+      },
+      "required": ["ok", "tool", "error", "message"],
+      "additionalProperties": false
+    },
+    "expandIssueRequest": {
+      "type": "object",
+      "properties": {
+        "issue":     { "type": "string" },
+        "outputDir": { "type": "string" }
+      },
+      "required": ["issue"],
+      "additionalProperties": false
+    },
+    "expandIssueSuccess": {
+      "type": "object",
+      "properties": {
+        "ok":             { "type": "boolean", "const": true },
+        "tool":           { "type": "string", "const": "expand_issue" },
+        "taskPacketPath": { "type": "string" },
+        "ref":            { "$ref": "#/$defs/externalRef" }
+      },
+      "required": ["ok", "tool", "taskPacketPath"],
+      "additionalProperties": false
+    },
+    "expandIssueError": {
+      "type": "object",
+      "properties": {
+        "ok":      { "type": "boolean", "const": false },
+        "tool":    { "type": "string", "const": "expand_issue" },
+        "error":   { "$ref": "#/$defs/workflowToolErrorCode" },
+        "message": { "type": "string" }
+      },
+      "required": ["ok", "tool", "error", "message"],
+      "additionalProperties": false
+    },
+    "stageStatus": {
+      "type": "string",
+      "enum": ["running", "awaiting_user", "completed", "aborted", "failed"]
+    },
+    "stageName": {
+      "type": "string",
+      "enum": ["planning", "coding", "review", "ready"]
+    },
+    "writeStageResultRequest": {
+      "type": "object",
+      "properties": {
+        "featureDir": { "type": "string" },
+        "issueId":    { "type": "string" },
+        "stage":      { "$ref": "#/$defs/stageName" },
+        "status":     { "$ref": "#/$defs/stageStatus" },
+        "notes":      { "type": "string" },
+        "artifacts":  { "type": "object" }
+      },
+      "required": ["featureDir", "issueId", "stage", "status"],
+      "additionalProperties": false
+    },
+    "writeStageResultSuccess": {
+      "type": "object",
+      "properties": {
+        "ok":          { "type": "boolean", "const": true },
+        "tool":        { "type": "string", "const": "write_stage_result" },
+        "idempotency": { "$ref": "#/$defs/idempotencyResult" }
+      },
+      "required": ["ok", "tool", "idempotency"],
+      "additionalProperties": false
+    },
+    "writeStageResultError": {
+      "type": "object",
+      "properties": {
+        "ok":      { "type": "boolean", "const": false },
+        "tool":    { "type": "string", "const": "write_stage_result" },
+        "error":   { "$ref": "#/$defs/commonErrorCode" },
+        "message": { "type": "string" }
+      },
+      "required": ["ok", "tool", "error", "message"],
+      "additionalProperties": false
+    }
+  }
+}
