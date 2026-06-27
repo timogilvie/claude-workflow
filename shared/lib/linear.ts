@@ -1406,3 +1406,76 @@ export async function getInitiative(initiativeId: string): Promise<LinearInitiat
 
   return data.initiative as LinearInitiative;
 }
+
+// ---------------------------------------------------------------------------
+// Comment mutations (HOK-2356)
+// ---------------------------------------------------------------------------
+
+export interface LinearCommentPayload {
+  id: string;
+  url: string;
+}
+
+/**
+ * Create a comment on a Linear issue.
+ *
+ * @param issueId - Internal Linear issue UUID (not the "HOK-123" identifier)
+ * @param body - Markdown comment body
+ * @returns Created comment id and url
+ */
+export async function createComment(issueId: string, body: string): Promise<LinearCommentPayload> {
+  const data = await request(
+    `
+      mutation($input: CommentCreateInput!) {
+        commentCreate(input: $input) {
+          success
+          comment {
+            id
+            url
+          }
+        }
+      }
+    `,
+    { input: { issueId, body } },
+  );
+
+  const result = data.commentCreate as { success: boolean; comment?: LinearCommentPayload } | undefined;
+  if (!result?.success || !result.comment) {
+    throw new LinearApiError('Linear commentCreate returned no comment', {
+      category: 'graphql',
+    });
+  }
+  return result.comment;
+}
+
+/**
+ * Update the body of an existing Linear comment.
+ *
+ * @param commentId - Internal Linear comment UUID
+ * @param body - New markdown body
+ * @returns Updated comment id and url
+ */
+export async function updateComment(commentId: string, body: string): Promise<LinearCommentPayload> {
+  const data = await request(
+    `
+      mutation($id: String!, $input: CommentUpdateInput!) {
+        commentUpdate(id: $id, input: $input) {
+          success
+          comment {
+            id
+            url
+          }
+        }
+      }
+    `,
+    { id: commentId, input: { body } },
+  );
+
+  const result = data.commentUpdate as { success: boolean; comment?: LinearCommentPayload } | undefined;
+  if (!result?.success || !result.comment) {
+    throw new LinearApiError('Linear commentUpdate returned no comment', {
+      category: 'graphql',
+    });
+  }
+  return result.comment;
+}
