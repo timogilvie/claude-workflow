@@ -107,6 +107,10 @@
  *   ineligible-due-to-failed-outcome without changing existing reconstruction
  *   logic. New `EligibilityErrorCode` values: `missing_feature_outcome`,
  *   `invalid_feature_outcome`, `failed_feature_outcome`.
+ * - **1.31.0**: Added optional `stageEval` field to `EvalRecord` (HOK-2374)
+ *   to capture first-class stage-specific eval evidence for planner-only and
+ *   reviewer-only challenges. Distinguishes direct evidence (plan text,
+ *   self-review summary, review model) from inferred/proxy scoring.
  *
  * @module eval-schema
  */
@@ -116,7 +120,7 @@ import type { ModelSelector, RegistryTaskType } from './model-registry.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
 
 /** Current eval schema version for newly emitted records. */
-export const SCHEMA_VERSION = '1.30.0';
+export const SCHEMA_VERSION = '1.31.0';
 
 export type RoutingRole = 'planner' | 'coder' | 'reviewer';
 
@@ -1366,6 +1370,93 @@ export interface RouteCalibration {
 }
 
 // ────────────────────────────────────────────────────────────────
+// Stage Eval Artifact (HOK-2374)
+// ────────────────────────────────────────────────────────────────
+
+/**
+ * Whether stage-eval scoring used direct phase artifacts or fell back to
+ * inferred/proxy evidence (e.g. final outcome score, diffs, interventions).
+ *
+ * @since 1.31.0
+ */
+export type StageScoringSource = 'direct' | 'inferred';
+
+/**
+ * Raw evidence collected for a specific challenge stage.
+ *
+ * For planner challenges: plan text, planning agent/model, route context.
+ * For reviewer challenges: review model/agent, self-review summary, findings.
+ *
+ * @since 1.31.0
+ */
+export interface StageEvalEvidence {
+  // ── Planner evidence ──────────────────────────────────────────
+  /** Truncated plan content (first ~4000 chars) */
+  planContent?: string;
+  /** Duration of the planning phase in seconds */
+  planDurationSeconds?: number;
+  /** Agent that executed planning (e.g. "claude", "codex") */
+  planningAgent?: string;
+  /** Model used during planning */
+  planningModel?: string;
+  /** Planning phase status from .planning-result.json */
+  planningStatus?: string;
+  /** Human-readable notes from the planning phase result */
+  planningNotes?: string;
+  /** Routing expansion context that informed the plan */
+  expansionRoute?: string;
+
+  // ── Reviewer evidence ─────────────────────────────────────────
+  /** Duration of the review phase in seconds */
+  reviewDurationSeconds?: number;
+  /** Agent that executed the review (e.g. "claude", "codex") */
+  reviewAgent?: string;
+  /** Model used during the review phase */
+  reviewModel?: string;
+  /** Review phase status from .review-result.json */
+  reviewStatus?: string;
+  /** Human-readable notes from the review phase result */
+  reviewNotes?: string;
+  /** PR number reviewed, if present in the review result artifact */
+  reviewPrNumber?: number;
+  /** Formatted self-review summary from review-metrics */
+  selfReviewSummary?: string;
+  /** Total number of blocker findings in self-review */
+  selfReviewBlockers?: number;
+  /** Total number of warning findings in self-review */
+  selfReviewWarnings?: number;
+  /** Final outcome from review-metrics (e.g. "approved", "needs_revision") */
+  selfReviewOutcome?: string;
+  /** Number of self-review iterations before outcome */
+  selfReviewIterations?: number;
+}
+
+/**
+ * Stage-specific eval artifact for planner-only or reviewer-only challenges.
+ *
+ * Captures direct phase evidence so challenge comparisons can reason about
+ * the varied stage rather than relying on overall eval scores. The
+ * `scoringSource` field distinguishes records with real artifacts from those
+ * where evidence was unavailable and only inferred proxy scoring is possible.
+ *
+ * @since 1.31.0
+ */
+export interface StageEvalArtifact {
+  /** Which workflow stage this artifact covers */
+  targetStage: 'plan' | 'review';
+  /** Whether direct phase artifacts were available or scoring must be inferred */
+  scoringSource: StageScoringSource;
+  /** Human-readable one-line summary of available evidence */
+  evidenceSummary: string;
+  /** Raw evidence fields collected from phase artifacts */
+  evidence: StageEvalEvidence;
+  /** Stage-level score and rationale from the eval judge, when available */
+  stageScore?: StageScore;
+  /** ISO 8601 timestamp when this artifact was built */
+  timestamp: string;
+}
+
+// ────────────────────────────────────────────────────────────────
 // Eval Record
 // ────────────────────────────────────────────────────────────────
 
@@ -1723,6 +1814,18 @@ export interface EvalRecord {
    * @since 1.30.0
    */
   featureOutcomeDiagnostics?: FeatureOutcomeDiagnostics;
+
+  /**
+   * Stage-specific eval artifact for planner-only or reviewer-only challenges.
+   *
+   * Present when the challenge varied a single stage (plan or review). Contains
+   * direct phase evidence (plan text, self-review summary, review model) so
+   * comparisons can assess the stage in isolation rather than relying on inferred
+   * proxy scoring from overall eval scores.
+   *
+   * @since 1.31.0
+   */
+  stageEval?: StageEvalArtifact;
 
   /** Optional extensibility bag for additional metadata */
   metadata?: Record<string, unknown>;

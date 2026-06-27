@@ -6602,8 +6602,9 @@ render_challenge_comparison_summary() {
 
   local compare_json winner winner_model rationale
   local comp_p comp_c cor_p cor_c qual_p qual_c impact_p impact_c auto_p auto_c
-  local primary_eval_score challenger_eval_score
+  local primary_eval_score challenger_eval_score stage_evidence_source
   compare_json=$(jq -c '.comparison // {}' "$result_path" 2>/dev/null || echo "{}")
+  stage_evidence_source=$(echo "$compare_json" | jq -r '.stageEvidenceSource // empty' 2>/dev/null || true)
   winner=$(echo "$compare_json" | jq -r '.winner // empty' 2>/dev/null)
   winner_model=$(echo "$compare_json" | jq -r '.winnerModel // empty' 2>/dev/null)
   rationale=$(echo "$compare_json" | jq -r '.rationale // empty' 2>/dev/null)
@@ -6670,6 +6671,10 @@ render_challenge_comparison_summary() {
   echo "$rationale" | fold -s -w 56 | while IFS= read -r rline; do
     log "status" "  │  $(printf '%-58s' "$rline")│"
   done
+  if [[ -n "$stage_evidence_source" ]]; then
+    log "status" "  ├────────────────────────────────────────────────────────────┤"
+    log "status" "  │  Stage evidence: $(printf '%-44s' "$stage_evidence_source")│"
+  fi
   log "status" "  └────────────────────────────────────────────────────────────┘"
   log "status" ""
 }
@@ -6824,7 +6829,7 @@ poll_challenge_jobs() {
 
 maybe_run_challenge_eval() {
   local issue="$1" pr="$2" branch="$3" slug="$4"
-  local eval_completed eval_failed pair_id solution_model linear_issue eval_agent side job_id job_status job_dir log_path result_path pid eval_timeout
+  local eval_completed eval_failed pair_id solution_model linear_issue eval_agent side job_id job_status job_dir log_path result_path pid eval_timeout challenge_stage
   eval_completed=$(read_state_value "false" --arg i "$issue" '.tasks[$i].evalCompleted // false')
   [[ "$eval_completed" == "true" ]] && return 0
   eval_failed=$(read_state_value "false" --arg i "$issue" '.tasks[$i].evalFailed // false')
@@ -6837,6 +6842,7 @@ maybe_run_challenge_eval() {
   [[ -z "$eval_agent" ]] && eval_agent="$AGENT_CMD"
   side=$(get_task_meta "$issue" "challengeRole")
   [[ -z "$side" ]] && side="primary"
+  challenge_stage=$(get_task_meta "$issue" "challengeStage")
   job_id=$(build_eval_job_id "$issue" "$side" "$pr")
   job_status=$(read_job_state_value "$job_id" "" '.jobs[$id].status // empty')
   [[ -n "$job_status" ]] && return 0
@@ -6845,7 +6851,7 @@ maybe_run_challenge_eval() {
   log_path="$job_dir/${job_id}.log"
   result_path="$job_dir/${job_id}.result.json"
 
-  log "status" "  📊 [mill] eval running: issue=$issue side=$side pr=#$pr phase=eval"
+  log "status" "  📊 [mill] eval running: issue=$issue side=$side pr=#$pr phase=eval${challenge_stage:+ stage=$challenge_stage}"
   if ! mark_challenge_eval_running "$issue" "$side" "$pr" "eval" >/dev/null; then
     log_warn "challenge eval launch skipped for $issue: failed to persist running state"
     return 1
@@ -6858,6 +6864,7 @@ maybe_run_challenge_eval() {
     --agent "$eval_agent" \
     --solution-model "$solution_model" \
     --challenge-pair "$pair_id" \
+    ${challenge_stage:+--challenge-stage "$challenge_stage"} \
     --result-file "$result_path" \
     --debug \
     >"$log_path" 2>&1 &

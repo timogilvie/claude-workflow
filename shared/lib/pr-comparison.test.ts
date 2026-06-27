@@ -138,6 +138,80 @@ test('formatRoutingSummary includes challenge type when present', () => {
   assert.match(summary, /Challenge type: multi-variable/);
 });
 
+test('buildComparisonPrompt includes stage eval section for planner-only challenge with direct evidence', () => {
+  const stageEval = {
+    targetStage: 'plan' as const,
+    scoringSource: 'direct' as const,
+    evidenceSummary: 'plan.md available; planning model: claude-opus-4-8',
+    evidence: {
+      planContent: '# Plan\nDo the thing.',
+      planningModel: 'claude-opus-4-8',
+      planningAgent: 'claude',
+      planDurationSeconds: 120,
+    },
+    timestamp: '2026-06-26T00:00:00.000Z',
+  };
+
+  const prompt = buildComparisonPrompt({
+    issuePrompt: 'Issue context',
+    primaryDiff: 'primary diff',
+    challengerDiff: 'challenger diff',
+    primaryEvalScore: 0.8,
+    challengerEvalScore: 0.7,
+    primaryRouting: {
+      planner: 'planner-a',
+      coder: 'shared-coder',
+      reviewer: 'shared-reviewer',
+      planDepth: 'deep',
+      codeDepth: 'medium',
+      reviewMode: 'full',
+    },
+    challengerRouting: {
+      planner: 'planner-b',
+      coder: 'shared-coder',
+      reviewer: 'shared-reviewer',
+      planDepth: 'deep',
+      codeDepth: 'medium',
+      reviewMode: 'full',
+    },
+    primaryStageEval: stageEval,
+    challengerStageEval: { ...stageEval, evidenceSummary: 'plan.md available; planning model: planner-b' },
+  });
+
+  assert.match(prompt, /Stage-Specific Evidence \(planner-only\)/);
+  assert.match(prompt, /planner-only challenge/);
+  assert.match(prompt, /claude-opus-4-8/);
+  assert.match(prompt, /direct stage evidence/i);
+});
+
+test('buildComparisonPrompt omits stage eval section for coder-only challenge', () => {
+  const prompt = buildComparisonPrompt({
+    issuePrompt: 'Issue context',
+    primaryDiff: 'primary diff',
+    challengerDiff: 'challenger diff',
+    primaryEvalScore: 0.8,
+    challengerEvalScore: 0.7,
+    primaryRouting: {
+      planner: 'shared-planner',
+      coder: 'coder-a',
+      reviewer: 'shared-reviewer',
+      planDepth: 'deep',
+      codeDepth: 'medium',
+      reviewMode: 'full',
+    },
+    challengerRouting: {
+      planner: 'shared-planner',
+      coder: 'coder-b',
+      reviewer: 'shared-reviewer',
+      planDepth: 'deep',
+      codeDepth: 'medium',
+      reviewMode: 'full',
+    },
+  });
+
+  assert.doesNotMatch(prompt, /Stage-Specific Evidence/);
+});
+
 test('buildChallengeCommentBody points each PR at the opposite PR', () => {
   const primaryComment = buildChallengeCommentBody({
     pairId: 'pair-123',

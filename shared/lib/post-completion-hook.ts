@@ -24,7 +24,7 @@ import { detectSubsystems } from './subsystem-detector.ts';
 import { formatLintResults, lintSubsystemSpecs } from './context-linter.ts';
 import { updateAffectedSubsystems } from './subsystem-updater.ts';
 import { detectAffectedSubsystems } from './subsystem-mapper.ts';
-import { gatherEvalContext, gatherStageArtifacts } from './eval-context-gatherer.ts';
+import { gatherEvalContext, gatherStageArtifacts, buildStageEvalArtifact } from './eval-context-gatherer.ts';
 import { fetchRoutingCompleteRawWithArchive } from './eval-context-gatherer.ts';
 import { attachPhaseDurations, attachStageOutcomes, enrichTrainingMetadata } from './eval-record-builder.ts';
 import { buildTaskDescriptor } from './task-descriptor-builder.ts';
@@ -98,6 +98,12 @@ export interface PostCompletionContext {
   agentType?: string;
   solutionModel?: string;
   challengePairId?: string;
+  /**
+   * Which workflow stage this challenge pair varies: 'plan', 'implementation',
+   * or 'review'. When set to 'plan' or 'review', the post-completion eval will
+   * build and attach a stage-specific eval artifact with direct phase evidence.
+   */
+  challengeStage?: 'plan' | 'implementation' | 'review';
   onPersisted?: () => void;
 }
 
@@ -670,6 +676,36 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
       executedPlanning: stageArtifacts.executedPlanning,
       phaseDurations,
     });
+
+    // 6b. Build stage eval artifact for planner/reviewer challenges
+    if (ctx.challengePairId && (ctx.challengeStage === 'plan' || ctx.challengeStage === 'review')) {
+      const slug = branchName.replace(/^(task|bug)\//, '') || '';
+      if (slug) {
+        try {
+          const stageOutcomes = record.stageOutcomes || {};
+          const stageScore = ctx.challengeStage === 'plan'
+            ? stageOutcomes.plan
+            : stageOutcomes.review;
+          record.stageEval = buildStageEvalArtifact({
+            targetStage: ctx.challengeStage,
+            repoDir,
+            slug,
+            issueId: ctx.issueId || '',
+            branch: branchName,
+            worktreePath: ctx.worktreePath,
+            stageScore,
+          });
+          console.log(
+            `Post-completion eval: stage eval artifact built ` +
+            `(stage=${ctx.challengeStage}, source=${record.stageEval.scoringSource})`
+          );
+        } catch (stageErr) {
+          console.warn(
+            `Post-completion eval: failed to build stage eval artifact — ${errorMessage(stageErr)}`
+          );
+        }
+      }
+    }
 
     // 7. Persist
     const { dir: evalsDir } = resolveEvalsDir(undefined, repoDir);

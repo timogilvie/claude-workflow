@@ -1487,6 +1487,130 @@ await test('enrichPostCompletionRecord marks complete records with outcomes as t
   }
 });
 
+// ────────────────────────────────────────────────────────────────
+// Stage eval attachment for planner/reviewer challenges (HOK-2374)
+// ────────────────────────────────────────────────────────────────
+
+await test('runPostCompletionEval attaches stageEval for planner challenge when plan.md exists', async () => {
+  await withMockedPostCompletionDeps(async () => {
+    const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-stage-eval-plan-'));
+    const issueId = 'HOK-2374';
+    const slug = 'stage-eval-plan-test';
+
+    try {
+      makeEligibleRepo(repoDir, slug, issueId);
+      // Write a plan to trigger direct evidence
+      writeFileSync(join(repoDir, 'features', slug, 'plan.md'), '# Plan\nImplement the thing.');
+
+      clearConfigCache(repoDir);
+      stubBaseEvalDeps();
+
+      let capturedRecord: EvalRecord | null = null;
+      postCompletionHookDeps.appendEvalRecord = (record) => {
+        capturedRecord = record as EvalRecord;
+      };
+
+      const persisted = await runPostCompletionEval({
+        issueId,
+        prNumber: '99',
+        branchName: `task/${slug}`,
+        worktreePath: repoDir,
+        workflowType: 'mill',
+        repoDir,
+        challengePairId: 'pair-test-1',
+        challengeStage: 'plan',
+      });
+
+      assert.equal(persisted, true);
+      assert.ok(capturedRecord, 'eval record was not captured');
+      const rec = capturedRecord as unknown as EvalRecord & { stageEval?: unknown };
+      assert.ok(rec.stageEval, 'stageEval should be attached');
+      const stageEval = rec.stageEval as { targetStage: string; scoringSource: string };
+      assert.equal(stageEval.targetStage, 'plan');
+      assert.equal(stageEval.scoringSource, 'direct');
+    } finally {
+      clearConfigCache(repoDir);
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+});
+
+await test('runPostCompletionEval does not attach stageEval for coder challenge', async () => {
+  await withMockedPostCompletionDeps(async () => {
+    const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-stage-eval-coder-'));
+    const issueId = 'HOK-2374-coder';
+    const slug = 'stage-eval-coder-test';
+
+    try {
+      makeEligibleRepo(repoDir, slug, issueId);
+      clearConfigCache(repoDir);
+      stubBaseEvalDeps();
+
+      let capturedRecord: EvalRecord | null = null;
+      postCompletionHookDeps.appendEvalRecord = (record) => {
+        capturedRecord = record as EvalRecord;
+      };
+
+      const persisted = await runPostCompletionEval({
+        issueId,
+        prNumber: '100',
+        branchName: `task/${slug}`,
+        worktreePath: repoDir,
+        workflowType: 'mill',
+        repoDir,
+        challengePairId: 'pair-test-2',
+        challengeStage: 'implementation',
+      });
+
+      assert.equal(persisted, true);
+      assert.ok(capturedRecord, 'eval record was not captured');
+      const rec = capturedRecord as unknown as EvalRecord & { stageEval?: unknown };
+      assert.equal(rec.stageEval, undefined, 'stageEval should not be set for coder challenges');
+    } finally {
+      clearConfigCache(repoDir);
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+});
+
+await test('runPostCompletionEval does not attach stageEval when no challengePairId', async () => {
+  await withMockedPostCompletionDeps(async () => {
+    const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-stage-eval-nopair-'));
+    const issueId = 'HOK-2374-nopair';
+    const slug = 'stage-eval-nopair-test';
+
+    try {
+      makeEligibleRepo(repoDir, slug, issueId);
+      writeFileSync(join(repoDir, 'features', slug, 'plan.md'), '# Plan\nDo something.');
+      clearConfigCache(repoDir);
+      stubBaseEvalDeps();
+
+      let capturedRecord: EvalRecord | null = null;
+      postCompletionHookDeps.appendEvalRecord = (record) => {
+        capturedRecord = record as EvalRecord;
+      };
+
+      const persisted = await runPostCompletionEval({
+        issueId,
+        prNumber: '101',
+        branchName: `task/${slug}`,
+        worktreePath: repoDir,
+        workflowType: 'mill',
+        repoDir,
+        // No challengePairId, no challengeStage
+      });
+
+      assert.equal(persisted, true);
+      assert.ok(capturedRecord, 'eval record was not captured');
+      const rec = capturedRecord as unknown as EvalRecord & { stageEval?: unknown };
+      assert.equal(rec.stageEval, undefined, 'stageEval should not be set without challengePairId');
+    } finally {
+      clearConfigCache(repoDir);
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+});
+
 console.log(`\n--- Results: ${passed} passed, ${failed} failed ---`);
 
 if (failed > 0) {

@@ -18,6 +18,9 @@ import {
   convertToRoutingDecision,
   fetchRoutingDecision,
   fetchRoutingCompleteRawWithArchive,
+  gatherPlannerEvidence,
+  gatherReviewerEvidence,
+  buildStageEvalArtifact,
 } from './eval-context-gatherer.ts';
 
 // Mock shell-utils
@@ -862,5 +865,239 @@ describe('eval-context-gatherer', () => {
         fs.rmSync(repoDir, { recursive: true, force: true });
       }
     });
+  });
+});
+
+// ────────────────────────────────────────────────────────────────
+// Stage Evidence Gathering Tests (HOK-2374)
+// ────────────────────────────────────────────────────────────────
+
+function makeTmpDirForStage(): string {
+  return fs.mkdtempSync(nodePath.join(os.tmpdir(), 'stage-evidence-'));
+}
+
+describe('gatherPlannerEvidence', () => {
+  it('returns scoringSource=direct when plan.md is present', () => {
+    const repoDir = makeTmpDirForStage();
+    const slug = 'my-feature';
+    const featureDir = nodePath.join(repoDir, 'features', slug);
+    fs.mkdirSync(featureDir, { recursive: true });
+    fs.writeFileSync(nodePath.join(featureDir, 'plan.md'), '# Plan\nDo the thing.');
+
+    try {
+      const result = gatherPlannerEvidence(repoDir, slug, 'HOK-1', 'task/my-feature');
+      expect(result.scoringSource).toBe('direct');
+      expect(result.evidence.planContent).toContain('Do the thing');
+      expect(result.evidenceSummary).toContain('plan.md available');
+    } finally {
+      fs.rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns scoringSource=direct when .planning-result.json has a model', () => {
+    const repoDir = makeTmpDirForStage();
+    const slug = 'planner-model-feature';
+    const featureDir = nodePath.join(repoDir, 'features', slug);
+    fs.mkdirSync(featureDir, { recursive: true });
+    fs.writeFileSync(
+      nodePath.join(featureDir, '.planning-result.json'),
+      JSON.stringify({ stage: 'plan', model: 'claude-opus-4-8', agent: 'claude', status: 'success' }),
+    );
+
+    try {
+      const result = gatherPlannerEvidence(repoDir, slug, 'HOK-2', 'task/planner-model-feature');
+      expect(result.scoringSource).toBe('direct');
+      expect(result.evidence.planningModel).toBe('claude-opus-4-8');
+      expect(result.evidence.planningAgent).toBe('claude');
+      expect(result.evidenceSummary).toContain('claude-opus-4-8');
+    } finally {
+      fs.rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns scoringSource=inferred when no planning artifacts exist', () => {
+    const repoDir = makeTmpDirForStage();
+    const slug = 'empty-feature';
+    fs.mkdirSync(nodePath.join(repoDir, 'features', slug), { recursive: true });
+
+    try {
+      const result = gatherPlannerEvidence(repoDir, slug, 'HOK-3', 'task/empty-feature');
+      expect(result.scoringSource).toBe('inferred');
+      expect(result.evidenceSummary).toContain('inferred');
+    } finally {
+      fs.rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('truncates plan content to 4000 chars', () => {
+    const repoDir = makeTmpDirForStage();
+    const slug = 'long-plan-feature';
+    const featureDir = nodePath.join(repoDir, 'features', slug);
+    fs.mkdirSync(featureDir, { recursive: true });
+    fs.writeFileSync(nodePath.join(featureDir, 'plan.md'), 'x'.repeat(5000));
+
+    try {
+      const result = gatherPlannerEvidence(repoDir, slug, 'HOK-4', 'task/long-plan-feature');
+      expect(result.evidence.planContent?.length).toBeLessThanOrEqual(4000);
+    } finally {
+      fs.rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('gatherReviewerEvidence', () => {
+  it('returns scoringSource=direct when .review-result.json has a model', () => {
+    const repoDir = makeTmpDirForStage();
+    const slug = 'review-model-feature';
+    const featureDir = nodePath.join(repoDir, 'features', slug);
+    fs.mkdirSync(featureDir, { recursive: true });
+    fs.writeFileSync(
+      nodePath.join(featureDir, '.review-result.json'),
+      JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        agent: 'claude',
+        status: 'success',
+        startedAt: '2026-06-01T10:00:00Z',
+        finishedAt: '2026-06-01T10:05:00Z',
+      }),
+    );
+
+    try {
+      const result = gatherReviewerEvidence(
+        repoDir, slug, 'HOK-5', 'task/review-model-feature',
+      );
+      expect(result.scoringSource).toBe('direct');
+      expect(result.evidence.reviewModel).toBe('claude-sonnet-4-6');
+      expect(result.evidence.reviewAgent).toBe('claude');
+      expect(result.evidence.reviewDurationSeconds).toBeCloseTo(300, 0);
+    } finally {
+      fs.rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('parses self-review metrics for outcome, iterations, blockers, and warnings', () => {
+    const repoDir = makeTmpDirForStage();
+    const slug = 'self-review-feature';
+    const featureDir = nodePath.join(repoDir, 'features', slug);
+    fs.mkdirSync(featureDir, { recursive: true });
+    // Write a ReviewMetric JSONL entry to .wavemill/review-log.json
+    const wavemillDir = nodePath.join(repoDir, '.wavemill');
+    fs.mkdirSync(wavemillDir, { recursive: true });
+    const metric = {
+      id: 'review-001',
+      timestamp: '2026-06-01T10:00:00.000Z',
+      branch: 'task/self-review-feature',
+      targetBranch: 'main',
+      outcome: 'resolved',
+      totalIterations: 2,
+      iterations: [
+        {
+          iterationNumber: 1,
+          verdict: 'approved',
+          findingsSummary: { blockers: 1, warnings: 3 },
+        },
+      ],
+    };
+    fs.writeFileSync(nodePath.join(wavemillDir, 'review-log.json'), JSON.stringify(metric));
+
+    try {
+      const result = gatherReviewerEvidence(
+        repoDir, slug, 'HOK-6', 'task/self-review-feature',
+      );
+      expect(result.scoringSource).toBe('direct');
+      expect(result.evidence.selfReviewOutcome).toBe('resolved');
+      expect(result.evidence.selfReviewIterations).toBe(2);
+      expect(result.evidence.selfReviewBlockers).toBe(1);
+      expect(result.evidence.selfReviewWarnings).toBe(3);
+    } finally {
+      fs.rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns scoringSource=inferred when no review artifacts exist', () => {
+    const repoDir = makeTmpDirForStage();
+    const slug = 'no-review-feature';
+    fs.mkdirSync(nodePath.join(repoDir, 'features', slug), { recursive: true });
+
+    try {
+      const result = gatherReviewerEvidence(
+        repoDir, slug, 'HOK-7', 'task/no-review-feature',
+      );
+      expect(result.scoringSource).toBe('inferred');
+      expect(result.evidenceSummary).toContain('inferred');
+    } finally {
+      fs.rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('buildStageEvalArtifact', () => {
+  it('builds a plan stage artifact with direct scoring when plan exists', () => {
+    const repoDir = makeTmpDirForStage();
+    const slug = 'artifact-plan-feature';
+    const featureDir = nodePath.join(repoDir, 'features', slug);
+    fs.mkdirSync(featureDir, { recursive: true });
+    fs.writeFileSync(nodePath.join(featureDir, 'plan.md'), '# Plan\nImplement the thing.');
+
+    try {
+      const artifact = buildStageEvalArtifact({
+        targetStage: 'plan',
+        repoDir,
+        slug,
+        issueId: 'HOK-10',
+        branch: 'task/artifact-plan-feature',
+        timestamp: '2026-06-26T00:00:00.000Z',
+      });
+      expect(artifact.targetStage).toBe('plan');
+      expect(artifact.scoringSource).toBe('direct');
+      expect(artifact.timestamp).toBe('2026-06-26T00:00:00.000Z');
+      expect(artifact.evidence.planContent).toContain('Implement the thing');
+    } finally {
+      fs.rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('builds a review stage artifact with inferred scoring when nothing exists', () => {
+    const repoDir = makeTmpDirForStage();
+    const slug = 'artifact-review-feature';
+    fs.mkdirSync(nodePath.join(repoDir, 'features', slug), { recursive: true });
+
+    try {
+      const artifact = buildStageEvalArtifact({
+        targetStage: 'review',
+        repoDir,
+        slug,
+        issueId: 'HOK-11',
+        branch: 'task/artifact-review-feature',
+        timestamp: '2026-06-26T00:00:00.000Z',
+      });
+      expect(artifact.targetStage).toBe('review');
+      expect(artifact.scoringSource).toBe('inferred');
+      expect(artifact.evidenceSummary).toContain('inferred');
+    } finally {
+      fs.rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('includes stageScore when provided', () => {
+    const repoDir = makeTmpDirForStage();
+    const slug = 'artifact-score-feature';
+    fs.mkdirSync(nodePath.join(repoDir, 'features', slug), { recursive: true });
+
+    try {
+      const artifact = buildStageEvalArtifact({
+        targetStage: 'plan',
+        repoDir,
+        slug,
+        issueId: 'HOK-12',
+        branch: 'task/artifact-score-feature',
+        stageScore: { score: 0.87, rationale: 'solid plan' },
+        timestamp: '2026-06-26T00:00:00.000Z',
+      });
+      expect(artifact.stageScore?.score).toBe(0.87);
+      expect(artifact.stageScore?.rationale).toBe('solid plan');
+    } finally {
+      fs.rmSync(repoDir, { recursive: true, force: true });
+    }
   });
 });

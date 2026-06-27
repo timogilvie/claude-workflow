@@ -13,6 +13,7 @@ import {
   type ChallengeComparison,
   type ChallengeRoutingMeta,
 } from '../shared/lib/challenge-comparison.ts';
+import type { StageEvalArtifact } from '../shared/lib/eval-schema.ts';
 import { loadWavemillConfig } from '../shared/lib/config.ts';
 import { resolveEvalsDir } from '../shared/lib/evals-paths.ts';
 import {
@@ -110,6 +111,12 @@ runTool({
         throw new Error(`Invalid eval scores for challenge pair ${pairId}`);
       }
 
+      // Extract stage eval artifacts from eval records (built during eval dispatch)
+      const primaryStageEval: StageEvalArtifact | undefined =
+        primaryEval.stageEval as StageEvalArtifact | undefined;
+      const challengerStageEval: StageEvalArtifact | undefined =
+        challengerEval.stageEval as StageEvalArtifact | undefined;
+
     // Build routing metadata if provided
       const primaryRouting: ChallengeRoutingMeta | undefined = args['primary-planner'] ? {
         planner: (args['primary-planner'] as string) || '',
@@ -195,6 +202,22 @@ runTool({
       }
       const challengeType = variedDimensions ? classifyChallengeType(variedDimensions) : undefined;
 
+      // Log stage evidence provenance for planner/reviewer challenges
+      if (challengeType === 'planner-only' || challengeType === 'reviewer-only') {
+        const primarySource = primaryStageEval?.scoringSource ?? 'missing';
+        const challengerSource = challengerStageEval?.scoringSource ?? 'missing';
+        console.log(
+          `[compare-prs] Stage evidence for ${challengeType} challenge: ` +
+          `primary=${primarySource}, challenger=${challengerSource}`
+        );
+        if (primaryStageEval?.evidenceSummary) {
+          console.log(`[compare-prs]   Primary: ${primaryStageEval.evidenceSummary}`);
+        }
+        if (challengerStageEval?.evidenceSummary) {
+          console.log(`[compare-prs]   Challenger: ${challengerStageEval.evidenceSummary}`);
+        }
+      }
+
       const promptLimit = Number.parseInt(process.env.CHALLENGE_COMPARISON_MAX_PROMPT_BYTES || '500000', 10);
       const cappedPrompt = buildCappedComparisonPrompt({
         issuePrompt,
@@ -204,6 +227,8 @@ runTool({
         challengerEvalScore: challengerEval.score,
         primaryRouting,
         challengerRouting,
+        primaryStageEval,
+        challengerStageEval,
       }, Number.isFinite(promptLimit) ? promptLimit : 500000);
       if (cappedPrompt.truncated) {
         console.warn(
@@ -255,6 +280,20 @@ Return a raw JSON object with no code fences, no comments, and no JavaScript syn
           ? (winnerRouting?.reviewer || winnerSolutionModel)
           : winnerSolutionModel;
 
+      // Determine stage evidence source for operator logging
+      let stageEvidenceSource: ChallengeComparison['stageEvidenceSource'];
+      if (challengeType === 'planner-only' || challengeType === 'reviewer-only') {
+        const hasPrimaryDirect = primaryStageEval?.scoringSource === 'direct';
+        const hasChallengerDirect = challengerStageEval?.scoringSource === 'direct';
+        if (hasPrimaryDirect && hasChallengerDirect) {
+          stageEvidenceSource = 'direct';
+        } else if (hasPrimaryDirect || hasChallengerDirect) {
+          stageEvidenceSource = 'mixed';
+        } else if (primaryStageEval || challengerStageEval) {
+          stageEvidenceSource = 'inferred';
+        }
+      }
+
       const record: ChallengeComparison = {
         challengePairId: pairId,
         primaryModel,
@@ -273,8 +312,13 @@ Return a raw JSON object with no code fences, no comments, and no JavaScript syn
         variedDimensions,
         challengeType,
         workflowInsight: verdict.workflowInsight,
+        ...(stageEvidenceSource ? { stageEvidenceSource } : {}),
       };
       recordForResult = record;
+
+      if (stageEvidenceSource) {
+        console.log(`[compare-prs] Comparison used stage evidence: ${stageEvidenceSource}`);
+      }
 
       appendChallengeComparison(record, evalsDir);
 

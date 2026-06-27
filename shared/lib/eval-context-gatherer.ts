@@ -25,6 +25,9 @@ import type {
   RoutePrediction,
   RoutingDecision,
   RoutingCandidate,
+  StageEvalArtifact,
+  StageEvalEvidence,
+  StageScore,
 } from './eval-schema.ts';
 import {
   POLICY_RESOLVER_VERSION,
@@ -1096,4 +1099,204 @@ function loadStageExecutionModel(repoDir: string, slug: string, worktreePath?: s
 function loadRoutingDecisionFromArchive(repoDir: string, issueId: string): RoutingDecision | null {
   const raw = loadRoutingCompleteRawFromArchive(repoDir, issueId);
   return raw ? convertToRoutingDecision(raw) : null;
+}
+
+// ────────────────────────────────────────────────────────────────
+// Stage Evidence Gathering (HOK-2374)
+// ────────────────────────────────────────────────────────────────
+
+interface ReviewResultRaw {
+  agent?: string;
+  model?: string;
+  status?: string;
+  notes?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  artifacts?: {
+    prNumber?: number;
+  };
+}
+
+function loadReviewResultRaw(
+  repoDir: string,
+  slug: string,
+  worktreePath?: string,
+): ReviewResultRaw | undefined {
+  const searchRoots = [worktreePath, repoDir].filter((p): p is string => Boolean(p));
+  for (const root of searchRoots) {
+    for (const dir of ['features', 'bugs']) {
+      const resultPath = path.join(root, dir, slug, '.review-result.json');
+      if (!existsSync(resultPath)) continue;
+      try {
+        return JSON.parse(readFileSync(resultPath, 'utf-8')) as ReviewResultRaw;
+      } catch {
+        continue;
+      }
+    }
+  }
+  return undefined;
+}
+
+function durationFromResult(raw: { startedAt?: string; finishedAt?: string }): number | undefined {
+  const start = parseIsoTimestamp(raw.startedAt);
+  const end = parseIsoTimestamp(raw.finishedAt);
+  if (start === null || end === null || end < start) return undefined;
+  return Math.max(0, (end - start) / 1000);
+}
+
+/**
+ * Collect direct evidence for a planner-only challenge stage.
+ *
+ * Returns evidence with `scoringSource: 'direct'` when plan content or the
+ * planning model is available; falls back to `scoringSource: 'inferred'` when
+ * no phase artifacts exist.
+ */
+export function gatherPlannerEvidence(
+  repoDir: string,
+  slug: string,
+  issueId: string,
+  branch: string,
+  worktreePath?: string,
+): { evidence: StageEvalEvidence; scoringSource: 'direct' | 'inferred'; evidenceSummary: string } {
+  const planContent = loadPlan(repoDir, slug, worktreePath)
+    ?? loadFromArchive(repoDir, issueId, 'plan.md');
+
+  const executedPlanning = loadExecutedPlanning(repoDir, slug, issueId, worktreePath);
+  const phaseDurations = computePhaseDurations(repoDir, slug, worktreePath);
+
+  const routingRaw = fetchRoutingCompleteRaw(repoDir, slug, worktreePath)
+    ?? loadRoutingCompleteRawFromArchive(repoDir, issueId);
+
+  const evidence: StageEvalEvidence = {
+    ...(planContent
+      ? { planContent: planContent.slice(0, 4000) }
+      : {}),
+    ...(typeof phaseDurations?.planning === 'number'
+      ? { planDurationSeconds: phaseDurations.planning }
+      : {}),
+    ...(executedPlanning?.agent ? { planningAgent: executedPlanning.agent } : {}),
+    ...(executedPlanning?.model ? { planningModel: executedPlanning.model } : {}),
+    ...(executedPlanning?.status ? { planningStatus: executedPlanning.status } : {}),
+    ...(routingRaw?.planner
+      ? { expansionRoute: `planner=${routingRaw.planner}, planDepth=${routingRaw.planDepth || 'unknown'}` }
+      : {}),
+  };
+
+  const hasDirect = Boolean(planContent || executedPlanning?.model || executedPlanning?.agent);
+  const scoringSource = hasDirect ? 'direct' : 'inferred';
+
+  const parts: string[] = [];
+  if (planContent) parts.push('plan.md available');
+  if (executedPlanning?.model) parts.push(`planning model: ${executedPlanning.model}`);
+  if (typeof phaseDurations?.planning === 'number') {
+    parts.push(`planning duration: ${Math.round(phaseDurations.planning)}s`);
+  }
+  const evidenceSummary = parts.length > 0
+    ? parts.join('; ')
+    : 'no direct planning artifacts available (inferred)';
+
+  return { evidence, scoringSource, evidenceSummary };
+}
+
+/**
+ * Collect direct evidence for a reviewer-only challenge stage.
+ *
+ * Returns evidence with `scoringSource: 'direct'` when self-review metrics or
+ * the review model are available; falls back to `scoringSource: 'inferred'`
+ * when no phase artifacts exist.
+ */
+export function gatherReviewerEvidence(
+  repoDir: string,
+  slug: string,
+  issueId: string,
+  branch: string,
+  worktreePath?: string,
+): { evidence: StageEvalEvidence; scoringSource: 'direct' | 'inferred'; evidenceSummary: string } {
+  const reviewRaw = loadReviewResultRaw(repoDir, slug, worktreePath);
+  const phaseDurations = computePhaseDurations(repoDir, slug, worktreePath);
+  const selfReviewText = loadSelfReviewSummary(repoDir, branch, worktreePath);
+
+  let selfReviewBlockers: number | undefined;
+  let selfReviewWarnings: number | undefined;
+  let selfReviewOutcome: string | undefined;
+  let selfReviewIterations: number | undefined;
+
+  if (selfReviewText) {
+    const outcomeMatch = selfReviewText.match(/Self-Review Summary \(([^)]+)\)/);
+    selfReviewOutcome = outcomeMatch?.[1];
+    const iterMatch = selfReviewText.match(/Iterations: (\d+)/);
+    selfReviewIterations = iterMatch ? parseInt(iterMatch[1], 10) : undefined;
+    const blockerMatches = [...selfReviewText.matchAll(/\((\d+) blockers?, (\d+) warnings?\)/g)];
+    if (blockerMatches.length > 0) {
+      selfReviewBlockers = blockerMatches.reduce((sum, m) => sum + parseInt(m[1], 10), 0);
+      selfReviewWarnings = blockerMatches.reduce((sum, m) => sum + parseInt(m[2], 10), 0);
+    }
+  }
+
+  const reviewDuration = reviewRaw
+    ? durationFromResult(reviewRaw)
+    : phaseDurations?.review;
+
+  const evidence: StageEvalEvidence = {
+    ...(typeof reviewDuration === 'number' ? { reviewDurationSeconds: reviewDuration } : {}),
+    ...(reviewRaw?.agent ? { reviewAgent: reviewRaw.agent } : {}),
+    ...(reviewRaw?.model ? { reviewModel: reviewRaw.model } : {}),
+    ...(reviewRaw?.status ? { reviewStatus: reviewRaw.status } : {}),
+    ...(reviewRaw?.notes ? { reviewNotes: reviewRaw.notes } : {}),
+    ...(reviewRaw?.artifacts?.prNumber !== undefined
+      ? { reviewPrNumber: reviewRaw.artifacts.prNumber }
+      : {}),
+    ...(selfReviewText ? { selfReviewSummary: selfReviewText } : {}),
+    ...(typeof selfReviewBlockers === 'number' ? { selfReviewBlockers } : {}),
+    ...(typeof selfReviewWarnings === 'number' ? { selfReviewWarnings } : {}),
+    ...(selfReviewOutcome ? { selfReviewOutcome } : {}),
+    ...(typeof selfReviewIterations === 'number' ? { selfReviewIterations } : {}),
+  };
+
+  const hasDirect = Boolean(reviewRaw?.model || reviewRaw?.agent || selfReviewText);
+  const scoringSource = hasDirect ? 'direct' : 'inferred';
+
+  const parts: string[] = [];
+  if (reviewRaw?.model) parts.push(`review model: ${reviewRaw.model}`);
+  if (selfReviewOutcome) parts.push(`self-review: ${selfReviewOutcome}`);
+  if (typeof selfReviewBlockers === 'number') {
+    parts.push(`${selfReviewBlockers} blockers, ${selfReviewWarnings ?? 0} warnings`);
+  }
+  if (typeof reviewDuration === 'number') {
+    parts.push(`review duration: ${Math.round(reviewDuration)}s`);
+  }
+  const evidenceSummary = parts.length > 0
+    ? parts.join('; ')
+    : 'no direct review artifacts available (inferred)';
+
+  return { evidence, scoringSource, evidenceSummary };
+}
+
+/**
+ * Build a stage eval artifact for a planner-only or reviewer-only challenge.
+ *
+ * Returns null when the challenge stage is not 'plan' or 'review'.
+ */
+export function buildStageEvalArtifact(opts: {
+  targetStage: 'plan' | 'review';
+  repoDir: string;
+  slug: string;
+  issueId: string;
+  branch: string;
+  worktreePath?: string;
+  stageScore?: StageScore;
+  timestamp?: string;
+}): StageEvalArtifact {
+  const gathered = opts.targetStage === 'plan'
+    ? gatherPlannerEvidence(opts.repoDir, opts.slug, opts.issueId, opts.branch, opts.worktreePath)
+    : gatherReviewerEvidence(opts.repoDir, opts.slug, opts.issueId, opts.branch, opts.worktreePath);
+
+  return {
+    targetStage: opts.targetStage,
+    scoringSource: gathered.scoringSource,
+    evidenceSummary: gathered.evidenceSummary,
+    evidence: gathered.evidence,
+    ...(opts.stageScore ? { stageScore: opts.stageScore } : {}),
+    timestamp: opts.timestamp || new Date().toISOString(),
+  };
 }

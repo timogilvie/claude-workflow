@@ -26,6 +26,7 @@ runTool({
     agent: { type: 'string', description: 'Agent type: claude or codex (default: claude)' },
     'solution-model': { type: 'string', description: 'Model that produced the solution being evaluated' },
     'challenge-pair': { type: 'string', description: 'Shared challenge pair identifier' },
+    'challenge-stage': { type: 'string', description: 'Challenge stage: plan, implementation, or review' },
     'repo-dir': { type: 'string', description: 'Repository directory (default: current directory)' },
     'result-file': { type: 'string', description: 'Optional path for structured job results' },
     debug: { type: 'boolean', description: 'Enable detailed cost computation diagnostics' },
@@ -62,6 +63,12 @@ runTool({
       console.error('[DEBUG_COST] ========================================');
     }
 
+    const rawChallengeStage = args['challenge-stage'] as string | undefined;
+    const challengeStage: PostCompletionContext['challengeStage'] =
+      rawChallengeStage === 'plan' || rawChallengeStage === 'implementation' || rawChallengeStage === 'review'
+        ? rawChallengeStage
+        : undefined;
+
     const context: PostCompletionContext = {
       issueId: args.issue,
       prNumber: args.pr,
@@ -73,6 +80,7 @@ runTool({
       agentType: args.agent,
       solutionModel: args['solution-model'],
       challengePairId: args['challenge-pair'],
+      challengeStage,
     };
 
     if (debug) {

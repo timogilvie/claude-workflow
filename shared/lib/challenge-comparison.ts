@@ -62,6 +62,11 @@ export interface ChallengeComparison {
   comparisonOutcome?: 'compared' | 'skipped';
   skipReason?: 'identical-routing-dimensions';
   cleanupPolicy?: 'primary-wins-close-challenger';
+  /**
+   * Whether the comparison used direct stage-phase evidence, inferred/proxy
+   * scoring, or a mix. Present only for planner-only and reviewer-only challenges.
+   */
+  stageEvidenceSource?: 'direct' | 'inferred' | 'mixed';
 }
 
 export interface ChallengeComparisonDimensions {

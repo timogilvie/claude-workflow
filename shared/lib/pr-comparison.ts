@@ -4,12 +4,14 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   detectVariedDimensions,
+  classifyChallengeType,
   type ChallengeComparisonDimensions,
   type ChallengeComparison,
   type ChallengeRoutingMeta,
 } from './challenge-comparison.ts';
 import { formatRubricForJudgePrompt } from './rubric.ts';
 import { errorMessage } from './error-utils.ts';
+import type { StageEvalArtifact } from './eval-schema.ts';
 
 export type ValidatedComparisonResult = Omit<
   ChallengeComparison,
@@ -55,6 +57,50 @@ export function prNumberFromValue(pr: string): string {
 }
 
 /**
+ * Format a single side's stage eval evidence as a readable block for the prompt.
+ */
+function formatStageEvalBlock(label: string, artifact: StageEvalArtifact): string {
+  const lines: string[] = [`${label} stage evidence (${artifact.scoringSource}):`];
+  lines.push(`- Summary: ${artifact.evidenceSummary}`);
+
+  const e = artifact.evidence;
+  if (artifact.targetStage === 'plan') {
+    if (e.planningModel) lines.push(`- Planning model: ${e.planningModel}`);
+    if (e.planningAgent) lines.push(`- Planning agent: ${e.planningAgent}`);
+    if (e.planningStatus) lines.push(`- Planning status: ${e.planningStatus}`);
+    if (typeof e.planDurationSeconds === 'number') {
+      lines.push(`- Planning duration: ${Math.round(e.planDurationSeconds)}s`);
+    }
+    if (e.expansionRoute) lines.push(`- Route: ${e.expansionRoute}`);
+    if (e.planContent) {
+      lines.push(`- Plan excerpt:\n${e.planContent.slice(0, 2000)}`);
+    }
+  } else {
+    if (e.reviewModel) lines.push(`- Review model: ${e.reviewModel}`);
+    if (e.reviewAgent) lines.push(`- Review agent: ${e.reviewAgent}`);
+    if (e.reviewStatus) lines.push(`- Review status: ${e.reviewStatus}`);
+    if (typeof e.reviewDurationSeconds === 'number') {
+      lines.push(`- Review duration: ${Math.round(e.reviewDurationSeconds)}s`);
+    }
+    if (e.selfReviewOutcome) lines.push(`- Self-review outcome: ${e.selfReviewOutcome}`);
+    if (typeof e.selfReviewBlockers === 'number') {
+      lines.push(
+        `- Self-review findings: ${e.selfReviewBlockers} blockers, ${e.selfReviewWarnings ?? 0} warnings`
+      );
+    }
+    if (typeof e.selfReviewIterations === 'number') {
+      lines.push(`- Self-review iterations: ${e.selfReviewIterations}`);
+    }
+  }
+
+  if (artifact.stageScore) {
+    lines.push(`- Stage score: ${artifact.stageScore.score} — ${artifact.stageScore.rationale}`);
+  }
+
+  return lines.join('\n');
+}
+
+/**
  * Build the LLM prompt used to compare two challenge PRs.
  */
 export function buildComparisonPrompt(input: {
@@ -65,6 +111,8 @@ export function buildComparisonPrompt(input: {
   challengerEvalScore: number;
   primaryRouting?: ChallengeRoutingMeta;
   challengerRouting?: ChallengeRoutingMeta;
+  primaryStageEval?: StageEvalArtifact;
+  challengerStageEval?: StageEvalArtifact;
 }): string {
   let workflowContext = '';
 
@@ -79,6 +127,10 @@ export function buildComparisonPrompt(input: {
       if (variedDimensions.codeDepth) variedFields.push('codeDepth');
       if (variedDimensions.reviewMode) variedFields.push('reviewMode');
     }
+
+    const challengeType = variedDimensions && Object.values(variedDimensions).some(Boolean)
+      ? classifyChallengeType(variedDimensions)
+      : undefined;
 
     workflowContext = `
 
@@ -96,6 +148,30 @@ Variables that differed: ${variedFields.join(', ') || 'none'}
 
 Consider whether routing differences (not just code differences) may have influenced the outcome.
 `;
+
+    if (
+      (challengeType === 'planner-only' || challengeType === 'reviewer-only') &&
+      (input.primaryStageEval || input.challengerStageEval)
+    ) {
+      const stageLabel = challengeType === 'planner-only' ? 'Planner' : 'Reviewer';
+      workflowContext += `
+## Stage-Specific Evidence (${challengeType})
+
+This is a ${challengeType} challenge — only the ${stageLabel.toLowerCase()} model differs between sides.
+Use this stage evidence as the primary input for assessing the varied dimension.
+
+${input.primaryStageEval
+    ? formatStageEvalBlock('Primary', input.primaryStageEval)
+    : `Primary ${stageLabel.toLowerCase()} stage evidence: not available (use overall eval score as fallback)`}
+
+${input.challengerStageEval
+    ? formatStageEvalBlock('Challenger', input.challengerStageEval)
+    : `Challenger ${stageLabel.toLowerCase()} stage evidence: not available (use overall eval score as fallback)`}
+
+Note: When direct stage evidence is available (scoringSource=direct), weight it more heavily than
+the overall eval score, which reflects the full workflow rather than just the varied stage.
+`;
+    }
   }
 
   return `You are judging two pull requests for the same task.
@@ -189,6 +265,7 @@ export function buildCappedComparisonPrompt(
     ...input,
     primaryDiff: '',
     challengerDiff: '',
+    // Keep stage eval in the scaffold since it's bounded (~2KB per side)
   }));
   let availableDiffBytes = Math.max(0, maxPromptBytes - scaffoldBytes);
   const primaryBytes = byteLength(input.primaryDiff);
