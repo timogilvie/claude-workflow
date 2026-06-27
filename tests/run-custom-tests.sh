@@ -26,6 +26,7 @@ fi
 for f in \
   check-routing.test.ts \
   challenge-mode.test.ts \
+  challenge-score-selector.test.ts \
   challenge-scheduler.test.ts \
   constraint-parser.test.ts \
   constraint-storage.test.ts \
