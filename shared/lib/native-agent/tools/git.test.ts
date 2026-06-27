@@ -362,6 +362,74 @@ describe('native-agent git tools', () => {
     assert.equal(toolResult.isError, true);
   });
 
+  it('hardens revision and path inputs against shell-injection-shaped values', async () => {
+    const repo = createRepo('git-hardened-inputs-');
+    writeFile(repo, 'tracked.txt', 'base\n');
+    git(repo, ['add', 'tracked.txt']);
+    git(repo, ['commit', '-m', 'initial']);
+    writeFile(repo, 'tracked.txt', 'base\nchanged\n');
+
+    const diffTool = createGitDiffTool(repo);
+    const diffStatTool = createGitDiffStatTool(repo);
+    const logTool = createGitLogTool(repo);
+
+    const invalidBases: Array<{ label: string; base: string }> = [
+      { label: 'double-dot range', base: 'main..feature' },
+      { label: 'triple-dot range', base: 'main...feature' },
+      { label: 'embedded whitespace', base: 'main HEAD' },
+      { label: 'shell separator', base: 'main;evil' },
+      { label: 'NUL byte', base: 'main x' },
+      { label: 'pipe metacharacter', base: 'main|cat' },
+      { label: 'subshell metacharacter', base: 'main$(id)' },
+    ];
+    for (const { label, base } of invalidBases) {
+      const details = (await diffStatTool.execute(`call-base-${label}`, { base })).details as GitDiffStatDetails;
+      assert.equal(details.ok, false, `expected git_diff_stat to reject ${label}`);
+      if (!details.ok) {
+        assert.equal(details.error.code, 'invalid_input');
+      }
+      const diffDetails = (await diffTool.execute(`call-diff-base-${label}`, { base })).details as GitDiffDetails;
+      assert.equal(diffDetails.ok, false, `expected git_diff to reject ${label}`);
+      if (!diffDetails.ok) {
+        assert.equal(diffDetails.error.code, 'invalid_input');
+      }
+    }
+
+    const headDiff = (await diffTool.execute('call-base-head', { base: 'HEAD' })).details as GitDiffDetails;
+    assert.equal(headDiff.ok, true);
+    if (headDiff.ok) {
+      assert.equal(headDiff.base, 'HEAD');
+    }
+    const headStat = (await diffStatTool.execute('call-stat-head', { base: 'HEAD' })).details as GitDiffStatDetails;
+    assert.equal(headStat.ok, true);
+    if (headStat.ok) {
+      assert.equal(headStat.base, 'HEAD');
+    }
+
+    const nulPath = (await diffStatTool.execute('call-path-nul', { path: 'tracked .txt' })).details as GitDiffStatDetails;
+    assert.equal(nulPath.ok, false);
+    if (!nulPath.ok) {
+      assert.equal(nulPath.error.code, 'invalid_input');
+      assert.match(nulPath.error.message, /NUL/);
+    }
+    const dashPath = (await diffTool.execute('call-path-dash', { path: '--exec=evil' })).details as GitDiffDetails;
+    assert.equal(dashPath.ok, false);
+    if (!dashPath.ok) {
+      assert.equal(dashPath.error.code, 'invalid_input');
+      assert.match(dashPath.error.message, /must not start with "-"/);
+    }
+    const logNulPath = (await logTool.execute('call-log-path-nul', { path: 'tracked .txt' })).details as GitLogDetails;
+    assert.equal(logNulPath.ok, false);
+    if (!logNulPath.ok) {
+      assert.equal(logNulPath.error.code, 'invalid_input');
+    }
+    const logDashPath = (await logTool.execute('call-log-path-dash', { path: '--all' })).details as GitLogDetails;
+    assert.equal(logDashPath.ok, false);
+    if (!logDashPath.ok) {
+      assert.equal(logDashPath.error.code, 'invalid_input');
+    }
+  });
+
   it('returns structured not-a-repo errors', async () => {
     const nonRepo = mkdtempSync(path.join(tmpdir(), 'git-not-repo-'));
     reposToClean.add(nonRepo);

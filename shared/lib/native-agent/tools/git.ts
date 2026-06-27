@@ -322,6 +322,10 @@ async function runGitDiff(
   if (params.maxBytes !== undefined && (!Number.isInteger(params.maxBytes) || params.maxBytes < MIN_DIFF_MAX_BYTES)) {
     return invalidInputResult('git_diff', `maxBytes must be an integer >= ${MIN_DIFF_MAX_BYTES}`);
   }
+  const sanitizedPath = sanitizePath('git_diff', params.path);
+  if (!sanitizedPath.ok) {
+    return sanitizedPath.result;
+  }
 
   const repoRoot = await resolveRepoRoot(worktreePath, 'git_diff', signal);
   if (!repoRoot.ok) {
@@ -333,7 +337,7 @@ async function runGitDiff(
   const compareBase = base.value ?? 'HEAD';
   gitArgs.push(compareBase);
 
-  const scopedPath = normalizeGitPath(repoRoot.repoRoot, params.path);
+  const scopedPath = normalizeGitPath(repoRoot.repoRoot, sanitizedPath.value);
   if (scopedPath !== undefined) {
     gitArgs.push('--', scopedPath);
   }
@@ -374,6 +378,10 @@ async function runGitDiffStat(
   if (!base.ok) {
     return base.result;
   }
+  const sanitizedPath = sanitizePath('git_diff_stat', params.path);
+  if (!sanitizedPath.ok) {
+    return sanitizedPath.result;
+  }
 
   const repoRoot = await resolveRepoRoot(worktreePath, 'git_diff_stat', signal);
   if (!repoRoot.ok) {
@@ -382,7 +390,7 @@ async function runGitDiffStat(
 
   const compareBase = base.value ?? 'HEAD';
   const gitArgs = ['diff', '--no-ext-diff', '--no-color', '--numstat', compareBase];
-  const scopedPath = normalizeGitPath(repoRoot.repoRoot, params.path);
+  const scopedPath = normalizeGitPath(repoRoot.repoRoot, sanitizedPath.value);
   if (scopedPath !== undefined) {
     gitArgs.push('--', scopedPath);
   }
@@ -428,6 +436,10 @@ async function runGitLog(
   if (params.maxCount !== undefined && params.maxCount > MAX_LOG_MAX_COUNT) {
     return invalidInputResult('git_log', `maxCount must be <= ${MAX_LOG_MAX_COUNT}`);
   }
+  const sanitizedPath = sanitizePath('git_log', params.path);
+  if (!sanitizedPath.ok) {
+    return sanitizedPath.result;
+  }
 
   const repoRoot = await resolveRepoRoot(worktreePath, 'git_log', signal);
   if (!repoRoot.ok) {
@@ -435,7 +447,7 @@ async function runGitLog(
   }
 
   const maxCount = params.maxCount ?? DEFAULT_LOG_MAX_COUNT;
-  const scopedPath = normalizeGitPath(repoRoot.repoRoot, params.path);
+  const scopedPath = normalizeGitPath(repoRoot.repoRoot, sanitizedPath.value);
   const gitArgs = [
     'log',
     '--no-color',
@@ -775,6 +787,9 @@ function normalizeGitPath(repoRoot: string, toolPath: string | undefined): strin
   return relative === '' ? '.' : relative;
 }
 
+const FORBIDDEN_REVISION_CHARS = /[;&|<>\\$(){}*?"'\[\]!#`]/;
+const REVISION_RANGE_SYNTAX = /\.\.\.?/;
+
 function sanitizeRevision(
   tool: 'git_diff' | 'git_diff_stat',
   revision: string | undefined,
@@ -794,7 +809,34 @@ function sanitizeRevision(
   if (trimmed.startsWith('-')) {
     return { ok: false, result: invalidInputResult(tool, 'base must not start with "-"') };
   }
+  if (/\s/.test(trimmed)) {
+    return { ok: false, result: invalidInputResult(tool, 'base must not contain whitespace') };
+  }
+  if (REVISION_RANGE_SYNTAX.test(trimmed)) {
+    return { ok: false, result: invalidInputResult(tool, 'base must not contain ".." or "..." range syntax') };
+  }
+  if (FORBIDDEN_REVISION_CHARS.test(trimmed)) {
+    return { ok: false, result: invalidInputResult(tool, 'base contains forbidden shell metacharacters') };
+  }
   return { ok: true, value: trimmed };
+}
+
+function sanitizePath(
+  tool: 'git_diff' | 'git_diff_stat' | 'git_log',
+  toolPath: string | undefined,
+):
+  | { ok: true; value: string | undefined }
+  | { ok: false; result: WavemillToolResult<GitToolErrorDetails> } {
+  if (toolPath === undefined) {
+    return { ok: true, value: undefined };
+  }
+  if (toolPath.includes('\0')) {
+    return { ok: false, result: invalidInputResult(tool, 'path contains NUL bytes') };
+  }
+  if (toolPath.startsWith('-')) {
+    return { ok: false, result: invalidInputResult(tool, 'path must not start with "-"') };
+  }
+  return { ok: true, value: toolPath };
 }
 
 function truncateUtf8(text: string, maxBytes: number): string {
