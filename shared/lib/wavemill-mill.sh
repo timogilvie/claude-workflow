@@ -9055,7 +9055,8 @@ LAST_DISPLAY=""       # fingerprint of what was last printed
 LAST_ACTIVE_COUNT=-1  # force first render
 LAST_WAITING_MSG=""   # track last waiting message to avoid repetition
 READY_STALE_MERGE_LANE_LOG_KEYS=$'\n'
-TASK_LIST_RENDERED=0  # track task list cursor region in control pane
+TASK_LIST_RENDERED=0              # track task list cursor region in control pane
+WAVEMILL_PANE_REPAINT_LAST_LINES=0  # line-count state for repaint helper
 SELECT_SHOW_ALL=false
 USING_GROUPED_VIEW=false
 GROUPED_SELECT_FROM=""
@@ -9067,10 +9068,27 @@ COMMAND_OFFSET_WARNED=false
 
 clear_task_list_display() {
   if (( TASK_LIST_RENDERED == 1 )); then
-    tput rc 2>/dev/null || true
-    tput ed 2>/dev/null || printf '\033[J'
+    printf '\033[u'  # restore cursor to saved anchor
+    printf '\033[J'  # clear from anchor to end of screen
     TASK_LIST_RENDERED=0
+    WAVEMILL_PANE_REPAINT_LAST_LINES=0
   fi
+}
+
+# Paint a task-list frame, managing the cursor anchor and repaint state.
+# On first call (TASK_LIST_RENDERED=0): emits a blank separator line and
+# saves the cursor as the anchor.  On subsequent calls (TASK_LIST_RENDERED=1):
+# restores the cursor to the saved anchor before repainting.
+paint_task_list_frame() {
+  local frame="$1"
+  if (( TASK_LIST_RENDERED == 1 )); then
+    printf '\033[u'  # restore cursor to anchor
+  else
+    printf '\n'      # blank separator before first paint
+    printf '\033[s'  # save cursor as anchor
+  fi
+  wavemill_pane_repaint "$frame"
+  TASK_LIST_RENDERED=1
 }
 
 log_ready_stale_merge_lane_once() {
@@ -11661,18 +11679,10 @@ while :; do
       fi
       _task_frame+=$'\n'"0 slots available; waiting for active tasks to finish. Press 'q' to quit or wait ${POLL_SECONDS}s to refresh."$'\n'
 
-      if (( TASK_LIST_RENDERED == 1 )); then
-        tput rc 2>/dev/null || true
-      else
-        echo ""
-        tput sc 2>/dev/null || true
-      fi
-      wavemill_pane_repaint "$_task_frame"
-
+      paint_task_list_frame "$_task_frame"
       LAST_DISPLAY="$display_fingerprint"
       LAST_ACTIVE_COUNT=$active_count
       LAST_WAITING_MSG=""
-      TASK_LIST_RENDERED=1
     fi
 
     poll_sleep "$POLL_SECONDS"
@@ -11763,18 +11773,10 @@ while :; do
             _task_frame+="Enter number(s) to start (e.g. 1 3), press Enter to launch recommended wave, 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"$'\n'
           fi
 
-          if (( TASK_LIST_RENDERED == 1 )); then
-            tput rc 2>/dev/null || true
-          else
-            echo ""
-            tput sc 2>/dev/null || true
-          fi
-          wavemill_pane_repaint "$_task_frame"
-
+          paint_task_list_frame "$_task_frame"
           LAST_DISPLAY="$display_fingerprint"
           LAST_ACTIVE_COUNT=$active_count
           LAST_WAITING_MSG=""  # Clear waiting state when tasks are available
-          TASK_LIST_RENDERED=1
         fi
 
         # Default: selection against unblocked list only

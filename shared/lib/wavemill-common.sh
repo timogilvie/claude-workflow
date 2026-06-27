@@ -2477,12 +2477,40 @@ queue_mark_waiting() {
 }
 
 wavemill_pane_repaint() {
-  local content="${1-}" line frame_bytes=""
+  local content="${1-}" line frame_bytes="" current_lines=0
+
+  # Count lines in the new frame so we can detect shrink vs grow.
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    current_lines=$((current_lines + 1))
+  done <<< "$content"
+
+  local prev_lines="${WAVEMILL_PANE_REPAINT_LAST_LINES:-0}"
+
+  # When the new frame is shorter than the previous one, stale rows would
+  # remain visible below the new content even after ESC[J.  Pre-clear by
+  # saving the cursor at the anchor (caller has already restored it there),
+  # moving down through every row of the old frame with ESC[K, emitting
+  # ESC[J to clear the rest, then restoring the cursor to the anchor so
+  # the new content overwrites from the top.
+  if (( prev_lines > current_lines )); then
+    frame_bytes=$'\033[s'
+    local _i
+    for (( _i = 0; _i < prev_lines; _i++ )); do
+      frame_bytes+=$'\033[K'
+      (( _i < prev_lines - 1 )) && frame_bytes+=$'\n'
+    done
+    frame_bytes+=$'\033[J'
+    frame_bytes+=$'\033[u'
+  fi
+
+  # Paint new content, clearing to EOL on each line.
   while IFS= read -r line || [[ -n "$line" ]]; do
     frame_bytes+="${line}"$'\033[K\n'
   done <<< "$content"
   frame_bytes+=$'\033[J'
+
   printf '%s' "$frame_bytes"
+  WAVEMILL_PANE_REPAINT_LAST_LINES=$current_lines
 }
 
 # ============================================================================
