@@ -45,6 +45,7 @@ function makeSnapshot(overrides: Partial<ReadyTaskSnapshot> = {}): ReadyTaskSnap
     relevantJobs: [],
     lastProgressAt: '2026-05-05T12:00:00.000Z',
     idleMinutes: 30,
+    backstageHealth: null,
     ...overrides,
   };
 }
@@ -192,6 +193,30 @@ test('a long-idle merge candidate escalates to needs-user (lane stalled)', () =>
 
   assert.equal(classification.kind, 'needs-user');
   assert.match(classification.detail, /merge lane appears stalled/i);
+});
+
+test('a long-idle merge candidate reports missing tend loop when backstage executor is absent', () => {
+  const classification = classifyReadyTask(
+    makeSnapshot({
+      idleMinutes: 35,
+      readyArtifacts: { type: 'ready', verdict: 'pass', queueState: 'merge-candidate' },
+      backstageHealth: {
+        updatedAt: '2026-05-05T12:20:00.000Z',
+        status: 'missing-tend-loop',
+        detail: 'backstage window is missing the Wavemill Tend Loop executor pane while status panes remain',
+        restartAttemptCount: 1,
+        lastRestartAttemptAt: '2026-05-05T12:19:00.000Z',
+        executorPaneId: null,
+      },
+    }),
+    makeTruth(),
+    new Date('2026-05-05T12:30:00.000Z'),
+    WATCHDOG_CONFIG,
+  );
+
+  assert.equal(classification.kind, 'needs-user');
+  assert.match(classification.detail, /missing tend loop/i);
+  assert.doesNotMatch(classification.detail, /merge lane appears stalled/i);
 });
 
 test('a completed-ready PR (queueState=ready) with clean green classifies as waiting-on-merge-lane', () => {
@@ -1716,6 +1741,48 @@ test('tick suppresses repeated merge-lane stall needs-user when only waited minu
     const secondDeps = { ...baseDeps, now: () => new Date('2030-06-23T12:24:00.000Z') };
     const second = await tickReadyWatchdog({ repoDir, stateFile, config: escalateConfig, deps: secondDeps });
     assert.equal(second.findings.length, 0, 'second tick must be suppressed — only waited minutes changed');
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('tick reports missing tend loop instead of generic merge-lane stall', async () => {
+  const { repoDir, stateFile, featureDir } = setupReadyTask('HOK-2375', 877);
+  writeFileSync(path.join(featureDir, '.ready-result.json'), JSON.stringify({
+    stage: 'ready',
+    status: 'completed',
+    startedAt: '2030-06-23T10:00:00.000Z',
+    finishedAt: '2030-06-23T11:00:00.000Z',
+    agent: 'claude',
+    model: 'claude-sonnet-4-6',
+    notes: null,
+    artifacts: { type: 'ready', verdict: 'pass', prNumber: 877, queueState: 'merge-candidate' },
+  }, null, 2));
+  writeFileSync(path.join(repoDir, '.wavemill', 'backstage-health.json'), JSON.stringify({
+    updatedAt: '2030-06-23T12:22:00.000Z',
+    status: 'missing-tend-loop',
+    detail: 'backstage window is missing the Wavemill Tend Loop executor pane while status panes remain',
+    restartAttemptCount: 1,
+    lastRestartAttemptAt: '2030-06-23T12:22:00.000Z',
+    executorPaneId: null,
+  }, null, 2));
+
+  const baseDeps = {
+    fetchGitHubTruth: async () => makeTruth({ mergeStateStatus: 'CLEAN' }),
+    getCurrentHead: async () => 'head-1',
+    getWorktreeMergeState: async () => ({
+      mergeHead: null, unmergedPaths: [], stagedPaths: [], unstagedPaths: [], untrackedPaths: [], rawStatus: [],
+    }),
+    isTaskPaneActive: async () => null,
+    now: () => new Date('2030-06-23T12:23:00.000Z'),
+  };
+
+  try {
+    const result = await tickReadyWatchdog({ repoDir, stateFile, config: WATCHDOG_CONFIG, deps: baseDeps });
+    assert.equal(result.findings.length, 1);
+    assert.equal(result.findings[0].classification, 'needs-user');
+    assert.match(result.findings[0].detail, /missing tend loop/i);
+    assert.doesNotMatch(result.findings[0].detail, /merge lane appears stalled/i);
   } finally {
     await rm(repoDir, { recursive: true, force: true });
   }

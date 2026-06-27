@@ -11419,6 +11419,157 @@ handle_monitor_quit_command() {
   fi
 }
 
+# ── Backstage tend-loop health watchdog ──────────────────────────────
+LAST_BACKSTAGE_HEALTH_CHECK=0
+BACKSTAGE_HEALTH_INTERVAL=30
+BACKSTAGE_RESTART_COOLDOWN=60
+LAST_BACKSTAGE_HEALTH_STATUS=""
+
+backstage_health_enabled() {
+  local merged enabled use_mill_session
+  merged="$(wavemill_load_config "$REPO_DIR")"
+  enabled="$(printf '%s' "$merged" | jq -r '.integration.enabled // false' 2>/dev/null || echo false)"
+  use_mill_session="$(printf '%s' "$merged" | jq -r '.integration.useMillSession // true' 2>/dev/null || echo true)"
+  [[ "$enabled" == "true" && "$use_mill_session" == "true" ]]
+}
+
+probe_backstage_panes() {
+  tmux list-panes -t "$SESSION:$WAVEMILL_WINDOW_BACKSTAGE" \
+    -F '#{pane_id}	#{pane_title}	#{pane_dead}	#{pane_current_command}	#{pane_start_command}'
+}
+
+read_backstage_health_field() {
+  local field="$1"
+  local path
+  path="$(wavemill_backstage_health_file "$STATE_DIR" 2>/dev/null || true)"
+  [[ -n "$path" && -f "$path" ]] || return 1
+  jq -r "$field // empty" "$path" 2>/dev/null
+}
+
+classify_backstage_health() {
+  local pane_details="${1-}"
+  local pane_count=0 tend_alive=0 status_panes=0
+  local executor_pane_id="" line pane_id pane_title pane_dead _pane_cmd _start_cmd
+
+  if [[ -z "$pane_details" ]]; then
+    printf 'backstage-missing\t\t0\t0\n'
+    return 0
+  fi
+
+  while IFS=$'\t' read -r pane_id pane_title pane_dead _pane_cmd _start_cmd; do
+    [[ -n "$pane_id" ]] || continue
+    pane_count=$((pane_count + 1))
+    if [[ "$pane_title" == "$WAVEMILL_BACKSTAGE_TEND_PANE_TITLE" && "$pane_dead" != "1" ]]; then
+      tend_alive=1
+      executor_pane_id="$pane_id"
+    fi
+    if [[ "$pane_title" == "$WAVEMILL_BACKSTAGE_JOBS_PANE_TITLE" || "$pane_title" == "$WAVEMILL_BACKSTAGE_QUEUE_PANE_TITLE" ]]; then
+      status_panes=$((status_panes + 1))
+    fi
+  done <<< "$pane_details"
+
+  if (( tend_alive == 1 )); then
+    printf 'healthy\tbackstage tend loop is running\t%s\t%s\n' "$pane_count" "$executor_pane_id"
+    return 0
+  fi
+
+  if (( status_panes > 0 )); then
+    printf 'missing-tend-loop\tbackstage window is missing the %s executor pane while status panes remain\t%s\t\n' "$WAVEMILL_BACKSTAGE_TEND_PANE_TITLE" "$pane_count"
+    return 0
+  fi
+
+  printf 'backstage-missing\tbackstage window is unavailable\t%s\t\n' "$pane_count"
+}
+
+restart_backstage_tend_loop() {
+  local integration_cmd new_pane
+  integration_cmd="$(wavemill_build_tend_loop_command "$SESSION" "$REPO_DIR" "$TOOLS_DIR" "integration")"
+  new_pane="$(tmux split-window -d -t "$SESSION:$WAVEMILL_WINDOW_BACKSTAGE.0" -h -b -p 60 -c "$REPO_DIR" -P -F '#{pane_id}' "$integration_cmd" 2>/dev/null || true)"
+  [[ -n "$new_pane" ]] || return 1
+  wavemill_set_tmux_pane_title "$new_pane" "$WAVEMILL_BACKSTAGE_TEND_PANE_TITLE"
+  tmux select-layout -t "$SESSION:$WAVEMILL_WINDOW_BACKSTAGE" main-vertical >/dev/null 2>&1 || true
+  printf '%s\n' "$new_pane"
+}
+
+check_backstage_health() {
+  local now health_file pane_probe pane_summary pane_status detail pane_count executor_pane_id
+  local prior_attempt_at prior_attempt_count elapsed restart_pane_id
+
+  now=$(date +%s)
+  (( now - LAST_BACKSTAGE_HEALTH_CHECK < BACKSTAGE_HEALTH_INTERVAL )) && return 0
+  LAST_BACKSTAGE_HEALTH_CHECK=$now
+
+  health_file="$(wavemill_backstage_health_file "$STATE_DIR" 2>/dev/null || true)"
+  if ! backstage_health_enabled; then
+    [[ -n "$health_file" ]] && wavemill_write_backstage_health "$health_file" "disabled" "integration mill-session backstage health checks are disabled"
+    LAST_BACKSTAGE_HEALTH_STATUS="disabled"
+    return 0
+  fi
+
+  pane_probe="$(probe_backstage_panes 2>/dev/null || true)"
+  pane_summary="$(classify_backstage_health "$pane_probe")"
+  IFS=$'\t' read -r pane_status detail pane_count executor_pane_id <<< "$pane_summary"
+
+  case "$pane_status" in
+    healthy)
+      [[ -n "$health_file" ]] && wavemill_write_backstage_health "$health_file" "healthy" "$detail" 0 "" "$executor_pane_id"
+      LAST_BACKSTAGE_HEALTH_STATUS="healthy"
+      return 0
+      ;;
+    'backstage-missing')
+      [[ -n "$health_file" ]] && wavemill_write_backstage_health "$health_file" "backstage-missing" "$detail" 0 ""
+      if [[ "$LAST_BACKSTAGE_HEALTH_STATUS" != "backstage-missing" ]]; then
+        log_warn "Backstage health check could not find the backstage window."
+      fi
+      LAST_BACKSTAGE_HEALTH_STATUS="backstage-missing"
+      return 0
+      ;;
+  esac
+
+  prior_attempt_at="$(read_backstage_health_field '.lastRestartAttemptAt' || true)"
+  prior_attempt_count="$(read_backstage_health_field '.restartAttemptCount' || true)"
+  [[ "$prior_attempt_count" =~ ^[0-9]+$ ]] || prior_attempt_count=0
+  elapsed=$BACKSTAGE_RESTART_COOLDOWN
+  if [[ -n "$prior_attempt_at" ]]; then
+    local prior_attempt_epoch=0
+    prior_attempt_epoch="$(wavemill_iso8601_to_epoch "$prior_attempt_at" 2>/dev/null || echo 0)"
+    elapsed=$(( now - prior_attempt_epoch ))
+  fi
+
+  if (( prior_attempt_count == 0 )); then
+    if [[ "$LAST_BACKSTAGE_HEALTH_STATUS" != "missing-tend-loop" ]]; then
+      log_warn "Backstage health check detected a missing tend loop. Attempting one restart in '$WAVEMILL_WINDOW_BACKSTAGE'."
+    fi
+    restart_pane_id="$(restart_backstage_tend_loop || true)"
+    sleep 0.3
+    pane_probe="$(probe_backstage_panes 2>/dev/null || true)"
+    pane_summary="$(classify_backstage_health "$pane_probe")"
+    IFS=$'\t' read -r pane_status detail pane_count executor_pane_id <<< "$pane_summary"
+    if [[ "$pane_status" == "healthy" ]]; then
+      [[ -n "$health_file" ]] && wavemill_write_backstage_health "$health_file" "healthy" "backstage tend loop was restarted automatically" 0 "" "${executor_pane_id:-$restart_pane_id}"
+      log "status" "Backstage tend loop restarted"
+      LAST_BACKSTAGE_HEALTH_STATUS="healthy"
+      return 0
+    fi
+    [[ -n "$health_file" ]] && wavemill_write_backstage_health "$health_file" "missing-tend-loop" "$detail" 1 "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    LAST_BACKSTAGE_HEALTH_STATUS="missing-tend-loop"
+    return 0
+  fi
+
+  if (( elapsed < BACKSTAGE_RESTART_COOLDOWN )); then
+    [[ -n "$health_file" ]] && wavemill_write_backstage_health "$health_file" "missing-tend-loop" "$detail" "$prior_attempt_count" "$prior_attempt_at"
+    LAST_BACKSTAGE_HEALTH_STATUS="missing-tend-loop"
+    return 0
+  fi
+
+  detail="Backstage window '$WAVEMILL_WINDOW_BACKSTAGE' is missing the ${WAVEMILL_BACKSTAGE_TEND_PANE_TITLE} executor. Restart 'npx tsx tools/tend.ts --loop --repo-dir $REPO_DIR' in tmux."
+  [[ -n "$health_file" ]] && wavemill_write_backstage_health "$health_file" "needs-user" "$detail" "$prior_attempt_count" "$prior_attempt_at"
+  if [[ "$LAST_BACKSTAGE_HEALTH_STATUS" != "needs-user" ]]; then
+    log_warn "$detail"
+  fi
+  LAST_BACKSTAGE_HEALTH_STATUS="needs-user"
+}
+
 while :; do
   # ── Phase A: Monitor existing tasks ──────────────────────────────────
   _update_effective_max_parallel
@@ -11436,6 +11587,7 @@ while :; do
     esac
   done
   poll_challenge_jobs
+  check_backstage_health
   run_ready_watchdog_tick
   check_mill_pane_health
   wavemill_pr_cache_refresh
