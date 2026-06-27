@@ -47,6 +47,7 @@ import {
   getProvidersConfig,
   getNativeAgentConfig,
   getNativeExpansionConfig,
+  getNativePatchCodingConfig,
   getReadyConfig,
   getReadyWatchdogConfig,
   getMigrationChecksConfig,
@@ -3065,6 +3066,58 @@ test('native expansion config defaults to disabled and no fallback', () => {
   }
 });
 
+test('native patch coding config defaults to disabled when nativeAgent is missing', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({}));
+
+    assert.deepEqual(getNativePatchCodingConfig(tmp), {
+      enabled: false,
+    });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('native patch coding config defaults to disabled when patchCoding is missing', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      nativeAgent: {
+        enabled: true,
+      },
+    }));
+
+    assert.deepEqual(getNativePatchCodingConfig(tmp), {
+      enabled: false,
+    });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('native patch coding config returns enabled when explicitly set', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      nativeAgent: {
+        patchCoding: {
+          enabled: true,
+        },
+      },
+    }));
+
+    assert.deepEqual(getNativePatchCodingConfig(tmp), {
+      enabled: true,
+    });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
 test('native expansion config returns enabled, allowed, and fallback values', () => {
   const tmp = makeTempRepo();
   try {
@@ -3098,6 +3151,49 @@ test('invalid nativeAgent expansion keys are rejected by schema validation', () 
       nativeAgent: {
         expansion: {
           fallbackOnUnavailable: true,
+          extra: true,
+        },
+      },
+    }));
+
+    assert.throws(() => {
+      loadWavemillConfig(tmp);
+    }, /validation failed/i);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('invalid nativeAgent patchCoding.enabled values are rejected by schema validation', () => {
+  if (!hasAjv) return;
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      nativeAgent: {
+        patchCoding: {
+          enabled: 'yes',
+        },
+      },
+    }));
+
+    assert.throws(() => {
+      loadWavemillConfig(tmp);
+    }, /validation failed/i);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('invalid nativeAgent patchCoding keys are rejected by schema validation', () => {
+  if (!hasAjv) return;
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      nativeAgent: {
+        patchCoding: {
+          enabled: true,
           extra: true,
         },
       },

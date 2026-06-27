@@ -96,6 +96,22 @@ describe('native-agent tool policies', () => {
     });
   });
 
+  it('denies coding mutation tool paths outside the worktree', () => {
+    const decision = evaluate({
+      phase: 'coding',
+      name: 'write_artifact',
+      arguments: { path: '../artifact.json' },
+      registry: [makeMetadata('write_artifact', 'mutation', ['coding'])],
+      config: { pathFieldsByTool: { write_artifact: ['path'] } },
+    });
+
+    assert.deepEqual(decision, {
+      kind: 'deny',
+      reason: 'path_denied',
+      message: "path_denied: '../artifact.json' resolves outside the worktree",
+    });
+  });
+
   it('allows paths inside the worktree', () => {
     const decision = evaluate({
       phase: 'coding',

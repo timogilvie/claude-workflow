@@ -8,6 +8,8 @@ import {
   type ChallengeComparison,
   type ChallengeRoutingMeta,
 } from './challenge-comparison.ts';
+import { scoreSourceLabel } from './challenge-score-selector.ts';
+import type { ChallengeStageEval } from './eval-schema.ts';
 import { formatRubricForJudgePrompt } from './rubric.ts';
 import { errorMessage } from './error-utils.ts';
 
@@ -26,7 +28,20 @@ export type ValidatedComparisonResult = Omit<
   | 'challengerRouting'
   | 'variedDimensions'
   | 'challengeType'
+  | 'variedStage'
+  | 'stageEvidenceMode'
 >;
+
+function formatStageEvidenceBlock(
+  side: 'Primary' | 'Challenger',
+  evidence: ChallengeStageEval,
+): string {
+  const items = evidence.evidence
+    .slice(0, 6)
+    .map((item) => `- ${item.label}: ${item.summary}${item.source ? ` [${item.source}]` : ''}`)
+    .join('\n');
+  return `${side} ${evidence.stage} evidence (${evidence.provenance}): ${evidence.summary}${evidence.fallbackReason ? ` Fallback: ${evidence.fallbackReason}.` : ''}\n${items}`;
+}
 
 /**
  * Resolve a pull request number to its GitHub URL.
@@ -65,8 +80,16 @@ export function buildComparisonPrompt(input: {
   challengerEvalScore: number;
   primaryRouting?: ChallengeRoutingMeta;
   challengerRouting?: ChallengeRoutingMeta;
+  primaryEvalScoreSource?: string;
+  challengerEvalScoreSource?: string;
+  primaryPerStageScores?: Record<string, number>;
+  challengerPerStageScores?: Record<string, number>;
+  challengeType?: string;
+  primaryStageEval?: ChallengeStageEval;
+  challengerStageEval?: ChallengeStageEval;
 }): string {
   let workflowContext = '';
+  let stageEvidenceContext = '';
 
   if (input.primaryRouting && input.challengerRouting) {
     const variedDimensions = detectVariedDimensions(input.primaryRouting, input.challengerRouting);
@@ -78,6 +101,18 @@ export function buildComparisonPrompt(input: {
       if (variedDimensions.planDepth) variedFields.push('planDepth');
       if (variedDimensions.codeDepth) variedFields.push('codeDepth');
       if (variedDimensions.reviewMode) variedFields.push('reviewMode');
+    }
+
+    let perStageContext = '';
+    const primaryStages = input.primaryPerStageScores ?? {};
+    const challengerStages = input.challengerPerStageScores ?? {};
+    if (Object.keys({ ...primaryStages, ...challengerStages }).length > 0) {
+      const stageLines = Object.keys({ ...primaryStages, ...challengerStages }).sort().map((stage) => {
+        const p = primaryStages[stage] !== undefined ? primaryStages[stage].toFixed(2) : 'n/a';
+        const c = challengerStages[stage] !== undefined ? challengerStages[stage].toFixed(2) : 'n/a';
+        return `  ${stage}: primary=${p}, challenger=${c}`;
+      });
+      perStageContext = `\nPer-stage scores:\n${stageLines.join('\n')}\n`;
     }
 
     workflowContext = `
@@ -93,8 +128,28 @@ Challenger side:
 - Plan depth: ${input.challengerRouting.planDepth} | Code depth: ${input.challengerRouting.codeDepth} | Review mode: ${input.challengerRouting.reviewMode}
 
 Variables that differed: ${variedFields.join(', ') || 'none'}
-
+${perStageContext}
 Consider whether routing differences (not just code differences) may have influenced the outcome.
+`;
+  }
+
+  const primaryScoreLabel = scoreSourceLabel(input.primaryEvalScoreSource || 'overall', 'Primary');
+  const challengerScoreLabel = scoreSourceLabel(input.challengerEvalScoreSource || 'overall', 'Challenger');
+
+  if (
+    (input.challengeType === 'planner-only' || input.challengeType === 'reviewer-only')
+    && input.primaryStageEval?.provenance === 'direct'
+    && input.challengerStageEval?.provenance === 'direct'
+  ) {
+    stageEvidenceContext = `
+
+## Direct Stage Evidence
+
+Use this evidence as the primary signal for the varied stage.
+
+${formatStageEvidenceBlock('Primary', input.primaryStageEval)}
+
+${formatStageEvidenceBlock('Challenger', input.challengerStageEval)}
 `;
   }
 
@@ -121,11 +176,13 @@ ${formatRubricForJudgePrompt()}
 
 ${workflowContext}
 
+${stageEvidenceContext}
+
 Task context:
 ${input.issuePrompt}
 
-Primary eval score: ${input.primaryEvalScore}
-Challenger eval score: ${input.challengerEvalScore}
+${primaryScoreLabel}: ${input.primaryEvalScore}
+${challengerScoreLabel}: ${input.challengerEvalScore}
 
 Primary diff:
 ${input.primaryDiff}

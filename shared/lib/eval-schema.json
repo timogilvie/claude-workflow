@@ -1926,6 +1926,9 @@
       },
       "additionalProperties": false
     },
+    "challengeStageEval": {
+      "$ref": "#/$defs/ChallengeStageEval"
+    },
     "routePrediction": {
       "$ref": "#/$defs/RoutePrediction"
     },
@@ -2405,6 +2408,65 @@
       "required": [
         "criterion",
         "score"
+      ],
+      "additionalProperties": false
+    },
+    "ChallengeStageEvidenceItem": {
+      "type": "object",
+      "description": "Normalized evidence item for planner/reviewer challenge comparison.",
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "label",
+        "summary"
+      ],
+      "additionalProperties": false
+    },
+    "ChallengeStageEval": {
+      "type": "object",
+      "description": "First-class planner/reviewer stage evidence for challenge evals.",
+      "properties": {
+        "stage": {
+          "type": "string",
+          "enum": [
+            "plan",
+            "review"
+          ]
+        },
+        "provenance": {
+          "type": "string",
+          "enum": [
+            "direct",
+            "inferred"
+          ]
+        },
+        "summary": {
+          "type": "string"
+        },
+        "fallbackReason": {
+          "type": "string"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ChallengeStageEvidenceItem"
+          }
+        }
+      },
+      "required": [
+        "stage",
+        "provenance",
+        "summary",
+        "evidence"
       ],
       "additionalProperties": false
     },

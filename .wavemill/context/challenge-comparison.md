@@ -35,6 +35,52 @@ Launch invariant: non-control challenge pairs must differ on at least one routin
 - Identical-routing pairs are a terminal skipped-comparison outcome, not a failed comparison job. The compare backstop records `comparisonOutcome=skipped`, `skipReason=identical-routing-dimensions`, and `cleanupPolicy=primary-wins-close-challenger`.
 - Skipped identical pairs deterministically declare the primary as winner and the challenger as the cleanup target. This keeps the merge lane moving and prevents watchdog retry spam.
 
+## Stage-Specific Score Selection (HOK-2373)
+
+`compare-prs.ts` derives the comparison score from the stage that was actually varied, not the overall post-completion score.
+
+### Selection rules
+
+| challengeType | Preferred source | Fallback |
+|---|---|---|
+| `reviewer-only` | `metadata.stageScores.review.score`, then `stageOutcomes.review.score` | `record.score` |
+| `planner-only` | `metadata.stageScores.plan.score`, then `stageOutcomes.plan.score` | `record.score` |
+| `coder-only` | `metadata.stageScores.implementation.score`, then `stageOutcomes.implementation.score` | `record.score` |
+| `multi-variable` / `full-stack` / unknown | `record.score` (overall) | — |
+
+`metadata.stageScores` takes precedence over `stageOutcomes` for backward compatibility with older records that were backfilled into metadata rather than stageOutcomes.
+
+### Fallback behavior
+
+When the preferred stage score is missing, null, or non-finite:
+- The comparison falls back to `record.score` (overall).
+- A data-quality warning is logged to stderr.
+- The warning is also persisted on the comparison record in `dataQualityWarnings`.
+
+### Persisted score-source metadata
+
+`ChallengeComparison` records now include:
+- `primaryEvalScoreSource` — source string, e.g. `"stage.review"`, `"stage.plan"`, `"stage.implementation"`, `"overall"`.
+- `challengerEvalScoreSource` — same for challenger.
+- `dataQualityWarnings` — array of warning strings when stage score was unavailable (absent when no warnings).
+
+### Prompt labeling
+
+The comparison prompt names the score source explicitly:
+- `"Primary review-stage eval score"` when source is `stage.review`
+- `"Primary plan-stage eval score"` when source is `stage.plan`
+- `"Primary implementation-stage eval score"` when source is `stage.implementation`
+- `"Primary eval score (overall)"` when source is overall or unknown
+
+For `multi-variable` and `full-stack` challenges, per-stage scores (when available) are included in the Workflow Context section of the prompt so the judge has full visibility without changing the headline score semantics.
+
+### Key files
+
+- `shared/lib/challenge-score-selector.ts` — pure selector and label helpers
+- `shared/lib/challenge-comparison.ts` — `ChallengeComparison` type (new source fields)
+- `shared/lib/pr-comparison.ts` — `buildComparisonPrompt` (source-aware labels)
+- `tools/compare-prs.ts` — orchestrates classification before score selection
+
 ## Coder-override Contract (HOK-2272)
 
 The coding-phase handoff in `shared/lib/wavemill-mill.sh` resolves the coder from `.phase-config.json.coding.model` (or `coderModel` in task state) and only substitutes `challengeModel` when the persisted `challengeStage` is `implementation`. Plan-stage and review-stage challenges keep the route's coder; their `challengeModel` names the varied stage's model, not the coder. Missing/unparseable `challengeStage` for a challenge task fails safe to the phase-config coder with a warning log.
