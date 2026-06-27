@@ -11677,9 +11677,9 @@ while :; do
               ln=$((ln + 1))
               IFS='|' read -r mid mslug mtitle marea mscore mblocked <<<"$mline"
               if (( mblocked > 0 )); then
-                _all_frame+="$(printf "  %s. %s - %s (score: %.0f) [blocked]\n" "$ln" "$mid" "$mtitle" "$mscore")"
+                _all_frame+="$(printf "  %s. %s - %s (score: %.0f) [blocked]" "$ln" "$mid" "$mtitle" "$mscore")"$'\n'
               else
-                _all_frame+="$(printf "  %s. %s - %s (score: %.0f)\n" "$ln" "$mid" "$mtitle" "$mscore")"
+                _all_frame+="$(printf "  %s. %s - %s (score: %.0f)" "$ln" "$mid" "$mtitle" "$mscore")"$'\n'
               fi
             done <<<"$all_avail"
             _all_frame+=$'\n'"Enter number(s) to start (e.g. 1 3), 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"$'\n'

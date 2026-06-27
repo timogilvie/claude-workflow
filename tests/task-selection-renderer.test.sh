@@ -760,6 +760,7 @@ test_render_paths_use_repaint_wrapper() {
   ' <<<"$monitor_body")"
   check_contains "m flat path uses repaint wrapper" "$m_snippet" "repaint_task_list_display"
   check_not_contains "m flat path does not directly echo All tasks" "$m_snippet" 'log "info" "All tasks:"'
+  check_not_contains "m flat path preserves row newlines outside command substitution" "$m_snippet" '%.0f)\n"'
 }
 
 test_queue_analysis_fallback_uses_repaint_wrapper() {
