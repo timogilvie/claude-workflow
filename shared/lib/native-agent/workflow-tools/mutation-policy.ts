@@ -27,11 +27,21 @@ export type { WorkflowPhase, WorkflowToolName, WorkflowMutationAction };
 // Policy result
 // ---------------------------------------------------------------------------
 
-export interface MutationPolicyResult {
-  allowed: boolean;
+export interface MutationPolicyAllowedResult {
+  allowed: true;
   /** Stable reason string — tests may assert the full value. */
   reason: string;
 }
+
+export interface MutationPolicyDeniedResult {
+  allowed: false;
+  /** Stable machine-readable denial code derived from the reason prefix. */
+  code: string;
+  /** Stable reason string — tests may assert the full value. */
+  reason: string;
+}
+
+export type MutationPolicyResult = MutationPolicyAllowedResult | MutationPolicyDeniedResult;
 
 // ---------------------------------------------------------------------------
 // Matrix entry
@@ -82,13 +92,8 @@ const POLICY_MATRIX: readonly PolicyEntry[] = [
   { phase: 'review',   tool: 'linear_comment',   action: 'comment',           allowed: true,  reason: 'linear_comment allowed in review for review outcome updates' },
   // Stage result recording
   { phase: 'review',   tool: 'write_stage_result', action: 'write_stage_result', allowed: true, reason: 'write_stage_result records Wavemill-owned artifacts; allowed in review' },
-  // Merge is ALWAYS denied in review
-  { phase: 'review',   tool: 'github_create_pr', action: 'merge',             allowed: false, reason: 'review_cannot_merge: review phase never merges PRs' },
-  { phase: 'review',   tool: 'github_add_label', action: 'merge',             allowed: false, reason: 'review_cannot_merge: review phase never merges PRs' },
-  { phase: 'review',   tool: 'linear_comment',   action: 'merge',             allowed: false, reason: 'review_cannot_merge: review phase never merges PRs' },
-  { phase: 'review',   tool: 'linear_get_issue', action: 'merge',             allowed: false, reason: 'review_cannot_merge: review phase never merges PRs' },
-  { phase: 'review',   tool: 'review_changes',   action: 'merge',             allowed: false, reason: 'review_cannot_merge: review phase never merges PRs' },
-  { phase: 'review',   tool: 'write_stage_result', action: 'merge',           allowed: false, reason: 'review_cannot_merge: review phase never merges PRs' },
+  // Note: 'merge' action denial is handled by the hard invariant in isMutationAllowed.
+  // Per-tool merge entries are intentionally omitted from the matrix to avoid dead/divergent code.
 
   // ---- ready phase ----------------------------------------------------------
   // Ready phase: only stale_base and merge_conflict remediation plus stage result recording.
@@ -100,8 +105,8 @@ const POLICY_MATRIX: readonly PolicyEntry[] = [
   { phase: 'ready',    tool: 'github_create_pr', action: 'merge_conflict',    allowed: true,  reason: 'merge_conflict remediation allowed in ready phase' },
   // Stage result recording in ready (classified as recording, not external provider mutation)
   { phase: 'ready',    tool: 'write_stage_result', action: 'write_stage_result', allowed: true, reason: 'write_stage_result records Wavemill-owned artifacts; allowed in ready' },
-  // Denied in ready: merge, comment, create_pr, update_pr, add_label
-  { phase: 'ready',    tool: 'github_create_pr', action: 'merge',             allowed: false, reason: 'ready_cannot_merge: merge is never an allowed operation' },
+  // Denied in ready: comment, create_pr, update_pr, add_label
+  // ('merge' action denial is handled by the hard invariant in isMutationAllowed.)
   { phase: 'ready',    tool: 'linear_comment',   action: 'comment',           allowed: false, reason: 'ready_mutation_denied: unrelated comment not allowed in ready phase' },
   { phase: 'ready',    tool: 'github_create_pr', action: 'create_pr',         allowed: false, reason: 'ready_mutation_denied: general PR creation not allowed in ready phase; only stale_base or merge_conflict remediation' },
   { phase: 'ready',    tool: 'github_create_pr', action: 'update_pr',         allowed: false, reason: 'ready_mutation_denied: general PR update not allowed in ready phase; only stale_base or merge_conflict remediation' },
@@ -118,6 +123,12 @@ for (const entry of POLICY_MATRIX) {
 
 function matrixKey(phase: string, tool: string, action: string): string {
   return `${phase}::${tool}::${action}`;
+}
+
+function deniedResult(reason: string): MutationPolicyDeniedResult {
+  const separatorIndex = reason.indexOf(':');
+  const code = separatorIndex === -1 ? 'policy_denied' : reason.slice(0, separatorIndex);
+  return { allowed: false, code, reason };
 }
 
 // ---------------------------------------------------------------------------
@@ -141,20 +152,16 @@ export function isMutationAllowed(
 ): MutationPolicyResult {
   // Hard invariant: merge is never allowed, regardless of matrix entry.
   if (action === 'merge') {
-    return {
-      allowed: false,
-      reason: 'review_cannot_merge: merge is never an allowed workflow tool action',
-    };
+    return deniedResult('review_cannot_merge: merge is never an allowed workflow tool action');
   }
 
   const entry = policyIndex.get(matrixKey(phase, tool, action));
   if (entry !== undefined) {
-    return { allowed: entry.allowed, reason: entry.reason };
+    return entry.allowed ? { allowed: true, reason: entry.reason } : deniedResult(entry.reason);
   }
 
   // Default deny for unknown combinations.
-  return {
-    allowed: false,
-    reason: `unknown_combination: no policy entry for phase=${phase} tool=${tool} action=${action}`,
-  };
+  return deniedResult(
+    `unknown_combination: no policy entry for phase=${phase} tool=${tool} action=${action}`,
+  );
 }

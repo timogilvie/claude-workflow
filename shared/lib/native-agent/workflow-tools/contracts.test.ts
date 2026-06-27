@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -301,11 +300,13 @@ describe('workflow-tools: mutation policy gates', () => {
   it('denies ready phase general PR creation', () => {
     const result = isMutationAllowed('ready', 'github_create_pr', 'create_pr');
     assert.equal(result.allowed, false, result.reason);
+    assert.equal(result.code, 'ready_mutation_denied');
   });
 
   it('denies ready phase feature comment', () => {
     const result = isMutationAllowed('ready', 'linear_comment', 'comment');
     assert.equal(result.allowed, false, result.reason);
+    assert.equal(result.code, 'ready_mutation_denied');
   });
 
   it('denies ready phase add_label', () => {
@@ -337,12 +338,34 @@ describe('workflow-tools: mutation policy gates', () => {
     // @ts-expect-error testing unknown combination
     const result = isMutationAllowed('review', 'linear_get_issue', 'teleport');
     assert.equal(result.allowed, false);
+    assert.equal(result.code, 'unknown_combination');
     assert.match(result.reason, /unknown_combination/);
   });
 
   it('isMutationAllowed returns stable reason string for review merge denial', () => {
     const result = isMutationAllowed('review', 'github_create_pr', 'merge');
+    assert.equal(result.code, 'review_cannot_merge');
     assert.equal(result.reason, 'review_cannot_merge: merge is never an allowed workflow tool action');
+  });
+
+  it('limits review-phase mutations to review workflow actions and recording', () => {
+    assert.equal(isMutationAllowed('review', 'github_create_pr', 'create_pr').allowed, true);
+    assert.equal(isMutationAllowed('review', 'github_create_pr', 'update_pr').allowed, true);
+    assert.equal(isMutationAllowed('review', 'github_add_label', 'add_label').allowed, true);
+    assert.equal(isMutationAllowed('review', 'linear_comment', 'comment').allowed, true);
+    assert.equal(isMutationAllowed('review', 'write_stage_result', 'write_stage_result').allowed, true);
+    assert.equal(isMutationAllowed('review', 'github_create_pr', 'stale_base').allowed, false);
+    assert.equal(isMutationAllowed('review', 'github_create_pr', 'merge_conflict').allowed, false);
+  });
+
+  it('limits ready-phase mutations to remediation work and recording', () => {
+    assert.equal(isMutationAllowed('ready', 'github_create_pr', 'stale_base').allowed, true);
+    assert.equal(isMutationAllowed('ready', 'github_create_pr', 'merge_conflict').allowed, true);
+    assert.equal(isMutationAllowed('ready', 'write_stage_result', 'write_stage_result').allowed, true);
+    assert.equal(isMutationAllowed('ready', 'github_create_pr', 'create_pr').allowed, false);
+    assert.equal(isMutationAllowed('ready', 'github_create_pr', 'update_pr').allowed, false);
+    assert.equal(isMutationAllowed('ready', 'github_add_label', 'add_label').allowed, false);
+    assert.equal(isMutationAllowed('ready', 'linear_comment', 'comment').allowed, false);
   });
 });
 
