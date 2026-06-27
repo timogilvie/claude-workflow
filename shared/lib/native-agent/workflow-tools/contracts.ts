@@ -334,6 +334,8 @@ export type LinearCommentResult = LinearCommentSuccess | LinearCommentError;
 export interface GitHubCreatePrRequest {
   /** Repository in "owner/repo" form. */
   repo: string;
+  /** Workflow phase used by the mutation policy gate. Defaults to "review". */
+  phase?: WorkflowPhase;
   /** Source branch for the PR. */
   head: string;
   /** Target branch for the PR. */
@@ -368,6 +370,8 @@ export type GitHubCreatePrResult = GitHubCreatePrSuccess | GitHubCreatePrError;
 export interface GitHubAddLabelRequest {
   /** Repository in "owner/repo" form. */
   repo: string;
+  /** Workflow phase used by the mutation policy gate. Defaults to "review". */
+  phase?: WorkflowPhase;
   /** Whether the target is a PR or issue. */
   targetKind: 'pull_request' | 'issue';
   /** PR or issue number. */

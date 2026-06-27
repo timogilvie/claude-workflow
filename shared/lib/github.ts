@@ -42,6 +42,48 @@ export interface PullRequestLabelOptions {
 }
 
 /**
+ * Options for creating a pull request.
+ */
+export interface PullRequestCreateOptions {
+  /** Repository in 'owner/name' format. */
+  repo: string;
+  /** Source branch name. */
+  head: string;
+  /** Target branch name. */
+  base: string;
+  /** PR title. */
+  title: string;
+  /** PR body/description. */
+  body: string;
+  /** Create as a draft PR. */
+  draft?: boolean;
+}
+
+/**
+ * Options for updating a pull request.
+ */
+export interface PullRequestUpdateOptions {
+  /** Repository in 'owner/name' format. */
+  repo: string;
+  /** Updated PR title. */
+  title?: string;
+  /** Updated PR body/description. */
+  body?: string;
+}
+
+/**
+ * Minimal issue metadata used by label operations.
+ */
+export interface GitHubIssue {
+  /** Issue number */
+  number: number;
+  /** Issue labels */
+  labels: Array<{ name: string }>;
+  /** Issue URL */
+  url: string;
+}
+
+/**
  * Pull request metadata.
  */
 export interface PullRequest {
@@ -111,6 +153,14 @@ export const githubDeps = {
   resolveOwnerRepo,
   getPullRequest: (prNumber: number | string, options: PullRequestViewOptions = {}) =>
     getPullRequest(prNumber, options),
+  createPullRequest: (options: PullRequestCreateOptions) =>
+    createPullRequest(options),
+  updatePullRequest: (prNumber: number | string, options: PullRequestUpdateOptions) =>
+    updatePullRequest(prNumber, options),
+  getIssue: (issueNumber: number | string, options: PullRequestViewOptions = {}) =>
+    getIssue(issueNumber, options),
+  addLabelsToIssue: (issueNumber: number | string, labels: string[], options: PullRequestLabelOptions = {}) =>
+    addLabelsToIssue(issueNumber, labels, options),
 };
 
 /**
@@ -349,6 +399,196 @@ export const getPullRequestDiff = (prNumber: number | string, options: PullReque
 };
 
 /**
+ * Create a pull request and return the resulting PR metadata.
+ *
+ * @param options - Pull request creation options
+ * @returns Created pull request metadata
+ * @throws {Error} If creation fails or the PR cannot be resolved afterwards
+ */
+export const createPullRequest = (options: PullRequestCreateOptions): PullRequest => {
+  const { repo, head, base, title, body, draft = false } = options;
+
+  if (!repo?.trim()) {
+    throw new Error('Repository is required');
+  }
+  if (!head?.trim()) {
+    throw new Error('Head branch is required');
+  }
+  if (!base?.trim()) {
+    throw new Error('Base branch is required');
+  }
+  if (!title?.trim()) {
+    throw new Error('Pull request title is required');
+  }
+
+  try {
+    const args: Array<string> = [
+      'gh',
+      'pr',
+      'create',
+      '--repo',
+      repo,
+      '--head',
+      head,
+      '--base',
+      base,
+      '--title',
+      title,
+      '--body',
+      body,
+    ];
+
+    if (draft) {
+      args.push('--draft');
+    }
+
+    const output = githubDeps.execShellCommand(
+      buildShellCommand(args),
+      { encoding: 'utf-8' },
+    ).trim();
+
+    const urlMatch = output.match(/https:\/\/github\.com\/[^\s]+\/pull\/(\d+)/);
+    if (urlMatch) {
+      return githubDeps.getPullRequest(urlMatch[1], { repo });
+    }
+
+    const candidates = listPullRequests({ state: 'open', repo }).filter((pr) => (
+      pr.headRefName === head && pr.baseRefName === base
+    ));
+    if (candidates.length > 0) {
+      const created = candidates
+        .slice()
+        .sort((left, right) => right.number - left.number)[0];
+      if (created) {
+        return githubDeps.getPullRequest(created.number, { repo });
+      }
+    }
+
+    throw new Error(`Created pull request could not be resolved for ${repo}:${head}->${base}`);
+  } catch (error) {
+    const err = error as Error;
+    if (err.message.includes('already exists') || err.message.includes('pull request for branch')) {
+      throw new Error(`A pull request already exists for ${head} -> ${base}`);
+    }
+    if (err.message.includes('HTTP 404') || err.message.includes('not found')) {
+      throw new Error(`Repository '${repo}' not found`);
+    }
+    if (err.message.includes('HTTP 422') || err.message.includes('No commits between')) {
+      throw new Error(`Failed to create pull request: ${err.message}`);
+    }
+    if (err.message.includes('gh:')) {
+      throw new Error('GitHub CLI (gh) is not available or not authenticated. Please install and authenticate with: gh auth login');
+    }
+    throw new Error(`Failed to create pull request: ${err.message}`);
+  }
+};
+
+/**
+ * Update an existing pull request and return refreshed metadata.
+ *
+ * @param prNumber - The PR number
+ * @param options - Pull request update options
+ * @returns Updated pull request metadata
+ * @throws {Error} If the PR cannot be updated
+ */
+export const updatePullRequest = (
+  prNumber: number | string,
+  options: PullRequestUpdateOptions,
+): PullRequest => {
+  const { repo, title, body } = options;
+
+  if (!prNumber) {
+    throw new Error('PR number is required');
+  }
+  if (!repo?.trim()) {
+    throw new Error('Repository is required');
+  }
+  if (title === undefined && body === undefined) {
+    throw new Error('At least one of title or body must be provided');
+  }
+
+  try {
+    const args: Array<string> = ['gh', 'pr', 'edit', prNumber.toString(), '--repo', repo];
+
+    if (title !== undefined) {
+      args.push('--title', title);
+    }
+    if (body !== undefined) {
+      args.push('--body', body);
+    }
+
+    githubDeps.execShellCommand(buildShellCommand(args), { encoding: 'utf-8' });
+    return githubDeps.getPullRequest(prNumber, { repo });
+  } catch (error) {
+    const err = error as Error;
+    if (err.message.includes('Could not resolve to a PullRequest') ||
+        err.message.includes('no pull requests found') ||
+        err.message.includes('HTTP 404')) {
+      throw new Error(`Pull request #${prNumber} not found`);
+    }
+    if (err.message.includes('gh:')) {
+      throw new Error('GitHub CLI (gh) is not available or not authenticated. Please install and authenticate with: gh auth login');
+    }
+    throw new Error(`Failed to update pull request #${prNumber}: ${err.message}`);
+  }
+};
+
+/**
+ * Fetch minimal issue metadata used by label mutations.
+ *
+ * @param issueNumber - The issue number
+ * @param options - Options
+ * @returns Issue metadata
+ * @throws {Error} If the issue is not found or gh CLI fails
+ */
+export const getIssue = (
+  issueNumber: number | string,
+  options: PullRequestViewOptions = {},
+): GitHubIssue => {
+  const { repo } = options;
+
+  if (!issueNumber) {
+    throw new Error('Issue number is required');
+  }
+
+  try {
+    const args: Array<string | number> = ['gh', 'issue', 'view', issueNumber.toString()];
+    if (repo) {
+      args.push('--repo', repo);
+    }
+    args.push('--json', 'number,labels,url');
+
+    const output = githubDeps.execShellCommand(
+      buildShellCommand(args),
+      { encoding: 'utf-8' },
+    ).trim();
+
+    const issue = JSON.parse(output) as {
+      number: number;
+      labels?: Array<{ name: string }>;
+      url: string;
+    };
+
+    return {
+      number: issue.number,
+      labels: issue.labels || [],
+      url: issue.url,
+    };
+  } catch (error) {
+    const err = error as Error;
+    if (err.message.includes('Could not resolve to an Issue') ||
+        err.message.includes('HTTP 404') ||
+        err.message.includes('no issue found')) {
+      throw new Error(`Issue #${issueNumber} not found`);
+    }
+    if (err.message.includes('gh:')) {
+      throw new Error('GitHub CLI (gh) is not available or not authenticated. Please install and authenticate with: gh auth login');
+    }
+    throw new Error(`Failed to get issue #${issueNumber}: ${err.message}`);
+  }
+};
+
+/**
  * Add labels to a pull request using GitHub's REST API.
  *
  * GitHub exposes pull requests as issues for label mutations. This path avoids
@@ -454,6 +694,56 @@ export const removeLabelFromPullRequest = (
   return githubDeps.getPullRequest(prNumber, { repo: ownerRepo });
 };
 
+/**
+ * Add labels to an issue using GitHub's REST API.
+ *
+ * @param issueNumber - Issue number to label
+ * @param labels - Label names to add
+ * @param options - Optional repo override
+ * @returns Updated issue metadata after labels are added
+ * @throws {Error} If the issue cannot be found, the repo cannot be resolved, or the API call fails
+ */
+export const addLabelsToIssue = (
+  issueNumber: number | string,
+  labels: string[],
+  options: PullRequestLabelOptions = {},
+): GitHubIssue => {
+  const { repo } = options;
+
+  if (!issueNumber) {
+    throw new Error('Issue number is required');
+  }
+
+  const normalizedLabels = normalizePullRequestLabels(labels);
+  const ownerRepo = repo || githubDeps.resolveOwnerRepo();
+
+  if (!ownerRepo) {
+    throw new Error('Unable to determine GitHub repository. Pass --repo owner/name or run from a GitHub checkout.');
+  }
+
+  try {
+    const payload = JSON.stringify(normalizedLabels);
+    const args: Array<string> = [
+      'gh',
+      'api',
+      '--method',
+      'POST',
+      `repos/${ownerRepo}/issues/${issueNumber.toString()}/labels`,
+      '--input',
+      '-',
+    ];
+
+    githubDeps.execShellCommand(
+      `printf '%s' ${escapeShellArg(payload)} | ${buildShellCommand(args)}`,
+      { encoding: 'utf-8' },
+    );
+
+    return githubDeps.getIssue(issueNumber, { repo: ownerRepo });
+  } catch (error) {
+    throw wrapIssueLabelError(error, issueNumber, 'add');
+  }
+};
+
 function normalizePullRequestLabels(labels: string[]): string[] {
   if (!Array.isArray(labels) || labels.length === 0) {
     throw new Error('At least one label name is required');
@@ -509,6 +799,31 @@ function isMissingPullRequestLabelError(message: string): boolean {
     message.includes('Label does not exist') ||
     message.includes('label does not exist') ||
     message.includes('Not Found');
+}
+
+function wrapIssueLabelError(
+  error: unknown,
+  issueNumber: number | string,
+  action: 'add',
+): Error {
+  const err = error as Error;
+  const prefix = action === 'add' ? 'add labels to' : 'update';
+
+  if (err.message.includes('HTTP 404') ||
+      err.message.includes('Could not resolve to an Issue') ||
+      err.message.includes('Not Found')) {
+    return new Error(`Issue #${issueNumber} not found`);
+  }
+
+  if (err.message.includes('HTTP 403') || err.message.includes('Resource not accessible')) {
+    return new Error(`Failed to ${prefix} issue #${issueNumber}: GitHub access denied. Check repository write permissions and gh auth status.`);
+  }
+
+  if (err.message.includes('gh:')) {
+    return new Error('GitHub CLI (gh) is not available or not authenticated. Please install and authenticate with: gh auth login');
+  }
+
+  return new Error(`Failed to ${prefix} issue #${issueNumber}: ${err.message}`);
 }
 
 /**

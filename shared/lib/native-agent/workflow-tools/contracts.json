@@ -221,6 +221,7 @@
       "type": "object",
       "properties": {
         "repo":    { "type": "string" },
+        "phase":   { "$ref": "#/$defs/workflowPhase" },
         "head":    { "type": "string" },
         "base":    { "type": "string" },
         "headSha": { "type": "string" },
@@ -256,6 +257,7 @@
       "type": "object",
       "properties": {
         "repo":         { "type": "string" },
+        "phase":        { "$ref": "#/$defs/workflowPhase" },
         "targetKind":   { "type": "string", "enum": ["pull_request", "issue"] },
         "targetNumber": { "type": "integer", "minimum": 1 },
         "label":        { "type": "string" }

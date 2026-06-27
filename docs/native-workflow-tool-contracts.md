@@ -107,7 +107,7 @@ Provenance: `external-untrusted` — treat as raw Linear data.
 
 **Request:**
 ```typescript
-{ repo: string; head: string; base: string; headSha: string; title: string; body: string; draft?: boolean }
+{ repo: string; phase?: WorkflowPhase; head: string; base: string; headSha: string; title: string; body: string; draft?: boolean }
 ```
 
 **Success:**
@@ -127,7 +127,7 @@ Provenance: `external-untrusted` — treat as raw Linear data.
 
 **Request:**
 ```typescript
-{ repo: string; targetKind: 'pull_request' | 'issue'; targetNumber: number; label: string }
+{ repo: string; phase?: WorkflowPhase; targetKind: 'pull_request' | 'issue'; targetNumber: number; label: string }
 ```
 
 **Success:**
