@@ -107,6 +107,9 @@
  *   ineligible-due-to-failed-outcome without changing existing reconstruction
  *   logic. New `EligibilityErrorCode` values: `missing_feature_outcome`,
  *   `invalid_feature_outcome`, `failed_feature_outcome`.
+ * - **1.31.0**: Added optional `challengeStageEval` field (HOK-2374) so
+ *   challenge evals can persist planner/reviewer stage evidence with direct
+ *   vs inferred provenance for challenge comparisons.
  *
  * @module eval-schema
  */
@@ -116,7 +119,7 @@ import type { ModelSelector, RegistryTaskType } from './model-registry.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
 
 /** Current eval schema version for newly emitted records. */
-export const SCHEMA_VERSION = '1.30.0';
+export const SCHEMA_VERSION = '1.31.0';
 
 export type RoutingRole = 'planner' | 'coder' | 'reviewer';
 
@@ -927,6 +930,32 @@ export interface PlanCritique {
   overall: PlanCritiqueDimension;
 }
 
+export type ChallengeEvalStage = 'plan' | 'review';
+
+export type ChallengeStageEvalProvenance = 'direct' | 'inferred';
+
+export interface ChallengeStageEvidenceItem {
+  /** Stable label for the evidence item. */
+  label: string;
+  /** Compact summary suitable for prompts and dashboards. */
+  summary: string;
+  /** Optional source artifact identifier. */
+  source?: string;
+}
+
+export interface ChallengeStageEval {
+  /** Workflow stage being evaluated directly. */
+  stage: ChallengeEvalStage;
+  /** Whether the evidence was captured directly or inferred from proxies. */
+  provenance: ChallengeStageEvalProvenance;
+  /** Short operator-facing summary of the stage evidence status. */
+  summary: string;
+  /** Why the collector fell back to inferred evidence, when applicable. */
+  fallbackReason?: string;
+  /** Normalized evidence items for comparison prompts. */
+  evidence: ChallengeStageEvidenceItem[];
+}
+
 /**
  * Which scoring boundary was the binding constraint on the final score.
  *
@@ -1644,6 +1673,16 @@ export interface EvalRecord {
    * @since 1.25.0
    */
   executedPlanning?: EvalExecutedPlanning;
+
+  /**
+   * First-class planner/reviewer stage evidence for challenge evals.
+   *
+   * Lets comparisons cite direct phase artifacts when they exist, while still
+   * preserving an explicit inferred fallback when direct artifacts are absent.
+   *
+   * @since 1.31.0
+   */
+  challengeStageEval?: ChallengeStageEval;
 
   /** Compact, falsifiable router prediction metadata for this route decision. */
   routePrediction?: RoutePrediction;

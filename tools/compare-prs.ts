@@ -194,6 +194,30 @@ runTool({
         return;
       }
       const challengeType = variedDimensions ? classifyChallengeType(variedDimensions) : undefined;
+      const variedStage = challengeType === 'planner-only'
+        ? 'plan'
+        : challengeType === 'reviewer-only'
+          ? 'review'
+          : challengeType === 'coder-only'
+            ? 'implementation'
+            : undefined;
+      const primaryStageEval = primaryEval.challengeStageEval;
+      const challengerStageEval = challengerEval.challengeStageEval;
+      const stageEvidenceMode = (
+        (challengeType === 'planner-only' || challengeType === 'reviewer-only')
+          ? (
+              primaryStageEval?.provenance === 'direct' && challengerStageEval?.provenance === 'direct'
+                ? 'direct'
+                : 'inferred-fallback'
+            )
+          : 'not-applicable'
+      ) as const;
+
+      if (challengeType === 'planner-only' || challengeType === 'reviewer-only') {
+        console.log(
+          `[compare-prs] pair=${pairId} varied_stage=${variedStage} stage_evidence=${stageEvidenceMode} primary_pr=${primaryNumber} challenger_pr=${challengerNumber}`
+        );
+      }
 
       const promptLimit = Number.parseInt(process.env.CHALLENGE_COMPARISON_MAX_PROMPT_BYTES || '500000', 10);
       const cappedPrompt = buildCappedComparisonPrompt({
@@ -204,6 +228,9 @@ runTool({
         challengerEvalScore: challengerEval.score,
         primaryRouting,
         challengerRouting,
+        challengeType,
+        primaryStageEval,
+        challengerStageEval,
       }, Number.isFinite(promptLimit) ? promptLimit : 500000);
       if (cappedPrompt.truncated) {
         console.warn(
@@ -272,6 +299,8 @@ Return a raw JSON object with no code fences, no comments, and no JavaScript syn
         challengerRouting,
         variedDimensions,
         challengeType,
+        variedStage,
+        stageEvidenceMode,
         workflowInsight: verdict.workflowInsight,
       };
       recordForResult = record;
