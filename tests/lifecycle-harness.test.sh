@@ -2333,6 +2333,35 @@ EOF
   check_contains "missing stage: warn log includes issue id" "$(kv_value "$tick" warn_output)" "HOK-2272-MISS"
 }
 
+test_completed_external_dead_pane_triggers_cleanup() {
+  local slug="completed-external-dead-pane"
+  local issue="HOK-2372-DEAD"
+  local repo tick
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" '
+    read_state_value() {
+      if [[ "$*" == *".status"* ]]; then
+        printf "%s\n" "completed-external"
+      else
+        printf "%s\n" "${1-}"
+      fi
+    }
+    cleanup_completed_task() { LOG_OUTPUT+="cleanup:$*\n"; }
+    tmux() {
+      if [[ "${1:-}" == "list-panes" ]]; then
+        printf "%s\n" "1"
+        return 0
+      fi
+      return 1
+    }
+  ')"
+
+  check_contains "dead pane: cleanup invoked on completed-external task" "$(kv_value "$tick" log_output)" "cleanup:HOK-2372-DEAD completed-external-dead-pane post-review cleanup"
+  check_eq "dead pane: no active window count retained" "0" "$(kv_value "$tick" active_count)"
+}
+
 echo "=== Mill Lifecycle: Planning to Coding Handoff ==="
 harness_extract_real_functions
 
@@ -2387,6 +2416,7 @@ test_review_stage_challenge_honors_phase_config_coder
 test_plan_stage_challenge_honors_phase_config_coder
 test_implementation_stage_challenge_applies_override
 test_missing_challenge_stage_fails_safe_to_phase_config
+test_completed_external_dead_pane_triggers_cleanup
 
 echo ""
 if [[ "$FAIL" -eq 0 ]]; then
