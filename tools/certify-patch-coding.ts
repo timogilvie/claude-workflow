@@ -187,6 +187,11 @@ if (import.meta.main) {
       }
 
       if (!report.certified) {
+        const dryRunPassed =
+          args['dry-run'] === true && report.providers.every((provider) => provider.passed);
+        if (dryRunPassed) {
+          return;
+        }
         throw new Error(
           args['dry-run'] === true
             ? 'Dry-run completed. Certification artifact not written.'
