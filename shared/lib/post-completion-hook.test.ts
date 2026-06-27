@@ -380,6 +380,71 @@ await test('enrichPostCompletionRecord attaches taskDescriptor for persisted rec
   }
 });
 
+await test('enrichPostCompletionRecord attaches direct planner challenge stage evidence', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-plan-stage-'));
+  const featureDir = join(repoDir, 'features', 'planner-stage');
+  mkdirSync(featureDir, { recursive: true });
+  writeFileSync(join(featureDir, 'plan.md'), '# Plan\n- Update auth flow\n- Add tests\n');
+  writeFileSync(
+    join(featureDir, '.planning-result.json'),
+    JSON.stringify({
+      stage: 'planning',
+      status: 'completed',
+      startedAt: '2026-04-06T12:00:00.000Z',
+      finishedAt: '2026-04-06T12:02:00.000Z',
+      agent: 'codex',
+      model: 'gpt-5.5',
+      notes: 'Plan approved cleanly.',
+    }),
+  );
+
+  try {
+    const record = makeRecord();
+    record.metadata = {
+      ...record.metadata,
+      planCritique: {
+        component_boundaries: { score: 0.9, rationale: 'good' },
+        invariant_coverage: { score: 0.8, rationale: 'good' },
+        approach_soundness: { score: 0.85, rationale: 'good' },
+        missed_patches: { score: 0.75, rationale: 'good' },
+        overall: { score: 0.84, rationale: 'good' },
+      },
+    };
+    enrichPostCompletionRecord(record, {
+      repoDir,
+      issueId: 'HOK-2374',
+      branchName: 'task/planner-stage',
+      worktreePath: repoDir,
+      agentType: 'codex',
+      challengePairId: 'pair-plan',
+      challengeStage: 'plan',
+      originalPrompt: 'Implement planner challenge evidence',
+      prDiff: '+++ shared/lib/post-completion-hook.ts',
+      record,
+      difficultyData: null,
+      taskContextData: null,
+      repoContextData: null,
+      costOutcome: null,
+      interventionRecords: [],
+      routingDecision: undefined,
+      routing: undefined,
+      routePrediction: undefined,
+      executedPlanning: { agent: 'codex', model: 'gpt-5.5', status: 'completed', source: '.planning-result.json' },
+      phaseDurations: { planning: 120, total: 120 },
+      planContent: '# Plan\n- Update auth flow\n- Add tests\n',
+      selfReviewSummary: undefined,
+    });
+
+    assert.equal(record.challengeStageEval?.stage, 'plan');
+    assert.equal(record.challengeStageEval?.provenance, 'direct');
+    assert.match(record.challengeStageEval?.summary || '', /Direct planning evidence/);
+    assert.ok(record.challengeStageEval?.evidence.some((item) => item.label === 'plan_text'));
+    assert.ok(record.challengeStageEval?.evidence.some((item) => item.label === 'planning_result'));
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
 await test('runPostCompletionEval passes and persists phase durations', async () => {
   const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-hook-phase-'));
   let capturedEvalInput: Record<string, unknown> | undefined;
@@ -427,6 +492,156 @@ await test('runPostCompletionEval passes and persists phase durations', async ()
       total: 660,
     });
     assert.equal(persistedRecord?.timeSeconds, 660);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+await test('runPostCompletionEval persists direct reviewer challenge stage evidence', async () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-review-stage-'));
+  const featureDir = join(repoDir, 'features', 'review-stage');
+  mkdirSync(featureDir, { recursive: true });
+  writeFileSync(
+    join(featureDir, '.review-result.json'),
+    JSON.stringify({
+      stage: 'review',
+      status: 'completed',
+      startedAt: '2026-04-06T12:03:00.000Z',
+      finishedAt: '2026-04-06T12:05:00.000Z',
+      agent: 'codex',
+      model: 'gpt-5.5',
+      notes: 'Review blocked one issue and cleared the rest.',
+      artifacts: {
+        type: 'review',
+        findingsCount: 3,
+        blockingIssues: 1,
+      },
+    }),
+  );
+  let persistedRecord: EvalRecord | undefined;
+
+  try {
+    await withMockedPostCompletionDeps(async () => {
+      stubBaseEvalDeps();
+      postCompletionHookDeps.gatherStageArtifacts = () => ({
+        taskPacket: undefined,
+        planContent: undefined,
+        selfReviewSummary: 'Self-Review Summary (resolved)\n- Iterations: 1\n  - Iteration 1: not_ready (1 blockers, 2 warnings)',
+        routingDecision: undefined,
+        phaseDurations: {
+          planning: 120,
+          coding: 480,
+          review: 120,
+          total: 720,
+        },
+        executionModel: 'gpt-5.5',
+      });
+      postCompletionHookDeps.appendEvalRecord = (record) => {
+        persistedRecord = record;
+      };
+      postCompletionHookDeps.runContextUpdateWork = async () => {};
+
+      const ok = await runPostCompletionEval({
+        issueId: 'HOK-2374',
+        prNumber: '2374',
+        prUrl: 'https://example.test/pr/2374',
+        workflowType: 'mill',
+        repoDir,
+        branchName: 'task/review-stage',
+        worktreePath: repoDir,
+        agentType: 'codex',
+        challengePairId: 'pair-review',
+        challengeStage: 'review',
+      });
+
+      assert.equal(ok, true);
+    });
+
+    assert.equal(persistedRecord?.challengeStageEval?.stage, 'review');
+    assert.equal(persistedRecord?.challengeStageEval?.provenance, 'direct');
+    assert.ok(persistedRecord?.challengeStageEval?.evidence.some((item) => item.label === 'self_review_summary'));
+    assert.ok(persistedRecord?.challengeStageEval?.evidence.some((item) => item.label === 'review_result'));
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+await test('runPostCompletionEval falls back to inferred reviewer evidence when direct artifacts are missing', async () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-review-fallback-'));
+  let persistedRecord: EvalRecord | undefined;
+
+  try {
+    await withMockedPostCompletionDeps(async () => {
+      stubBaseEvalDeps();
+      postCompletionHookDeps.gatherStageArtifacts = () => ({
+        taskPacket: undefined,
+        planContent: undefined,
+        selfReviewSummary: undefined,
+        routingDecision: undefined,
+        phaseDurations: {
+          planning: 120,
+          coding: 480,
+          review: 60,
+          total: 660,
+        },
+        executionModel: 'gpt-5.5',
+      });
+      postCompletionHookDeps.appendEvalRecord = (record) => {
+        persistedRecord = record;
+      };
+      postCompletionHookDeps.runContextUpdateWork = async () => {};
+
+      const ok = await runPostCompletionEval({
+        issueId: 'HOK-2374',
+        prNumber: '2375',
+        prUrl: 'https://example.test/pr/2375',
+        workflowType: 'mill',
+        repoDir,
+        branchName: 'task/review-fallback',
+        worktreePath: repoDir,
+        agentType: 'codex',
+        challengePairId: 'pair-review-fallback',
+        challengeStage: 'review',
+      });
+
+      assert.equal(ok, true);
+    });
+
+    assert.equal(persistedRecord?.challengeStageEval?.stage, 'review');
+    assert.equal(persistedRecord?.challengeStageEval?.provenance, 'inferred');
+    assert.match(persistedRecord?.challengeStageEval?.fallbackReason || '', /self-review summary/);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+await test('runPostCompletionEval leaves challenge stage evidence unset for non-challenge runs', async () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-no-stage-evidence-'));
+  let persistedRecord: EvalRecord | undefined;
+
+  try {
+    await withMockedPostCompletionDeps(async () => {
+      stubBaseEvalDeps();
+      postCompletionHookDeps.appendEvalRecord = (record) => {
+        persistedRecord = record;
+      };
+      postCompletionHookDeps.runContextUpdateWork = async () => {};
+
+      const ok = await runPostCompletionEval({
+        issueId: 'HOK-2374',
+        prNumber: '2376',
+        prUrl: 'https://example.test/pr/2376',
+        workflowType: 'mill',
+        repoDir,
+        branchName: 'task/non-challenge',
+        worktreePath: repoDir,
+        agentType: 'codex',
+      });
+
+      assert.equal(ok, true);
+    });
+
+    assert.equal(persistedRecord?.challengeStageEval, undefined);
   } finally {
     rmSync(repoDir, { recursive: true, force: true });
   }
