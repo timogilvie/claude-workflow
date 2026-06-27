@@ -389,7 +389,7 @@ export interface GitHubAddLabelSuccess {
 export interface GitHubAddLabelError {
   ok: false;
   tool: 'github_add_label';
-  error: CommonErrorCode | 'not_found' | 'rate_limited';
+  error: CommonErrorCode | 'conflict' | 'not_found' | 'rate_limited';
   message: string;
 }
 

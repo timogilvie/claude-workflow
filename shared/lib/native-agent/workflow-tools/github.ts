@@ -515,7 +515,7 @@ function createPrError(
 }
 
 function addLabelError(
-  error: 'invalid_input' | 'policy_denied' | 'not_found' | 'external_error' | 'rate_limited',
+  error: 'invalid_input' | 'policy_denied' | 'not_found' | 'external_error' | 'conflict' | 'rate_limited',
   message: string,
 ): GitHubAddLabelResult {
   return {
