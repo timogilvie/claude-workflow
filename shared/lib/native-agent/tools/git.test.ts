@@ -3,18 +3,22 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { describe, it, after } from 'node:test';
+import { after, describe, it } from 'node:test';
 import { runWavemillLoop } from '../loop.ts';
 import { evaluateBeforeToolCallPolicy } from './policies.ts';
 import { createToolRegistry } from './registry.ts';
 import { toPiAgentTool } from './pi-adapter.ts';
 import {
+  createGitDiffStatTool,
   createGitDiffTool,
+  createGitLogTool,
   createGitStatusTool,
   createGitTools,
   gitAfterToolCall,
   gitToolPolicyConfig,
   type GitDiffDetails,
+  type GitDiffStatDetails,
+  type GitLogDetails,
   type GitStatusDetails,
 } from './git.ts';
 
@@ -34,13 +38,18 @@ describe('native-agent git tools', () => {
 
     assert.deepEqual(
       metadata.map((entry) => entry.name),
-      ['git_status', 'git_diff'],
+      ['git_status', 'git_diff', 'git_diff_stat', 'git_log'],
     );
-    assert.deepEqual(gitToolPolicyConfig, { pathFieldsByTool: { git_diff: ['path'] } });
-    assert.equal(metadata[0]!.class, 'read-only');
-    assert.equal(metadata[1]!.class, 'read-only');
-    assert.deepEqual(metadata[0]!.allowedPhases, ['planning', 'coding', 'review']);
+    assert.deepEqual(gitToolPolicyConfig, {
+      pathFieldsByTool: { git_diff: ['path'], git_diff_stat: ['path'], git_log: ['path'] },
+    });
+    for (const entry of metadata) {
+      assert.equal(entry.class, 'read-only');
+      assert.deepEqual(entry.allowedPhases, ['planning', 'coding', 'review']);
+    }
     assert.deepEqual(metadata[1]!.outputCapPolicy, { strategy: 'truncate', maxBytes: 64 * 1024 });
+    assert.deepEqual(metadata[2]!.outputCapPolicy, { strategy: 'none' });
+    assert.deepEqual(metadata[3]!.outputCapPolicy, { strategy: 'none' });
   });
 
   it('returns structured status for a clean repo and does not mutate repository state', async () => {
@@ -163,42 +172,269 @@ describe('native-agent git tools', () => {
     }
   });
 
-  it('returns structured invalid-base errors and marks loop tool results as isError', async () => {
-    const repo = createRepo('git-diff-error-');
+  it('returns empty diff stat and current history for a clean repo', async () => {
+    const repo = createRepo('git-clean-inspect-');
+    writeFile(repo, 'tracked.txt', 'base\n');
+    git(repo, ['add', 'tracked.txt']);
+    git(repo, ['commit', '-m', 'initial']);
+
+    const diffStatTool = createGitDiffStatTool(repo);
+    const logTool = createGitLogTool(repo);
+    const before = repoSnapshot(repo);
+    const [diffStatResult, logResult] = await Promise.all([
+      diffStatTool.execute('call-6', {}),
+      logTool.execute('call-7', {}),
+    ]);
+    const afterState = repoSnapshot(repo);
+
+    assertRepoUnchanged(before, afterState);
+
+    const diffStat = diffStatResult.details as GitDiffStatDetails;
+    assert.equal(diffStat.ok, true);
+    if (diffStat.ok) {
+      assert.equal(diffStat.base, 'HEAD');
+      assert.deepEqual(diffStat.files, []);
+      assert.deepEqual(diffStat.totals, { filesChanged: 0, additions: 0, deletions: 0 });
+    }
+
+    const log = logResult.details as GitLogDetails;
+    assert.equal(log.ok, true);
+    if (log.ok) {
+      assert.equal(log.maxCount, 20);
+      assert.equal(log.truncated, false);
+      assert.equal(log.commits.length, 1);
+      assert.equal(log.commits[0]!.subject, 'initial');
+    }
+  });
+
+  it('reports structured diff stat for tracked modifications', async () => {
+    const repo = createRepo('git-diff-stat-dirty-');
+    writeFile(repo, 'app.txt', 'one\ntwo\nthree\n');
+    git(repo, ['add', 'app.txt']);
+    git(repo, ['commit', '-m', 'initial']);
+
+    writeFile(repo, 'app.txt', 'one\nchanged\nthree\nfour\n');
+
+    const tool = createGitDiffStatTool(repo);
+    const result = await tool.execute('call-8', {});
+    const details = result.details as GitDiffStatDetails;
+
+    assert.equal(details.ok, true);
+    if (details.ok) {
+      assert.deepEqual(details.files, [
+        { path: 'app.txt', additions: 2, deletions: 1, binary: false },
+      ]);
+      assert.deepEqual(details.totals, { filesChanged: 1, additions: 2, deletions: 1 });
+    }
+  });
+
+  it('supports path-scoped diff stat inside the worktree', async () => {
+    const repo = createRepo('git-diff-stat-path-');
+    writeFile(repo, 'src/one.txt', 'one\n');
+    writeFile(repo, 'src/two.txt', 'two\n');
+    git(repo, ['add', 'src/one.txt', 'src/two.txt']);
+    git(repo, ['commit', '-m', 'initial']);
+
+    writeFile(repo, 'src/one.txt', 'one\nchanged\n');
+    writeFile(repo, 'src/two.txt', 'two\nchanged\n');
+
+    const tool = createGitDiffStatTool(repo);
+    const result = await tool.execute('call-9', { path: './src/../src/one.txt' });
+    const details = result.details as GitDiffStatDetails;
+
+    assert.equal(details.ok, true);
+    if (details.ok) {
+      assert.equal(details.path, 'src/one.txt');
+      assert.deepEqual(details.files, [
+        { path: 'src/one.txt', additions: 1, deletions: 0, binary: false },
+      ]);
+      assert.deepEqual(details.totals, { filesChanged: 1, additions: 1, deletions: 0 });
+    }
+  });
+
+  it('marks binary files in diff stat output', async () => {
+    const repo = createRepo('git-diff-stat-binary-');
+    writeBinaryFile(repo, 'blob.bin', Buffer.from([0, 1, 2, 3]));
+    git(repo, ['add', 'blob.bin']);
+    git(repo, ['commit', '-m', 'initial']);
+
+    writeBinaryFile(repo, 'blob.bin', Buffer.from([3, 2, 1, 0, 4]));
+
+    const tool = createGitDiffStatTool(repo);
+    const result = await tool.execute('call-10', {});
+    const details = result.details as GitDiffStatDetails;
+
+    assert.equal(details.ok, true);
+    if (details.ok) {
+      assert.deepEqual(details.files, [
+        { path: 'blob.bin', additions: null, deletions: null, binary: true },
+      ]);
+      assert.deepEqual(details.totals, { filesChanged: 1, additions: 0, deletions: 0 });
+    }
+  });
+
+  it('returns bounded log output and indicates truncation', async () => {
+    const repo = createRepo('git-log-bounded-');
+    writeFile(repo, 'history.txt', '0\n');
+    git(repo, ['add', 'history.txt']);
+    git(repo, ['commit', '-m', 'commit-0']);
+
+    for (let index = 1; index <= 4; index += 1) {
+      writeFile(repo, 'history.txt', `${index}\n`);
+      git(repo, ['commit', '-am', `commit-${index}`]);
+    }
+
+    const tool = createGitLogTool(repo);
+    const result = await tool.execute('call-11', { maxCount: 3 });
+    const details = result.details as GitLogDetails;
+
+    assert.equal(details.ok, true);
+    if (details.ok) {
+      assert.equal(details.maxCount, 3);
+      assert.equal(details.truncated, true);
+      assert.equal(details.commits.length, 3);
+      assert.deepEqual(
+        details.commits.map((commit) => commit.subject),
+        ['commit-4', 'commit-3', 'commit-2'],
+      );
+    }
+  });
+
+  it('rejects invalid git inputs and marks loop tool results as errors', async () => {
+    const repo = createRepo('git-invalid-inputs-');
     writeFile(repo, 'tracked.txt', 'base\n');
     git(repo, ['add', 'tracked.txt']);
     git(repo, ['commit', '-m', 'initial']);
     writeFile(repo, 'tracked.txt', 'base\nchanged\n');
 
-    const tool = createGitDiffTool(repo);
-    const direct = await tool.execute('call-6', { base: 'missing-ref' });
-    const directDetails = direct.details as GitDiffDetails;
+    const diffTool = createGitDiffTool(repo);
+    const diffStatTool = createGitDiffStatTool(repo);
+    const logTool = createGitLogTool(repo);
 
+    const emptyBase = (await diffStatTool.execute('call-12', { base: '   ' })).details as GitDiffStatDetails;
+    assert.equal(emptyBase.ok, false);
+    if (!emptyBase.ok) {
+      assert.equal(emptyBase.error.code, 'invalid_input');
+    }
+
+    const dashedBase = (await diffTool.execute('call-13', { base: '--output=x' })).details as GitDiffDetails;
+    assert.equal(dashedBase.ok, false);
+    if (!dashedBase.ok) {
+      assert.equal(dashedBase.error.code, 'invalid_input');
+    }
+
+    const fractionalCount = (await logTool.execute('call-14', { maxCount: 1.5 as any })).details as GitLogDetails;
+    assert.equal(fractionalCount.ok, false);
+    if (!fractionalCount.ok) {
+      assert.equal(fractionalCount.error.code, 'invalid_input');
+    }
+
+    const zeroCount = (await logTool.execute('call-15', { maxCount: 0 })).details as GitLogDetails;
+    assert.equal(zeroCount.ok, false);
+    if (!zeroCount.ok) {
+      assert.equal(zeroCount.error.code, 'invalid_input');
+    }
+
+    const overCapCount = (await logTool.execute('call-16', { maxCount: 101 })).details as GitLogDetails;
+    assert.equal(overCapCount.ok, false);
+    if (!overCapCount.ok) {
+      assert.equal(overCapCount.error.code, 'invalid_input');
+    }
+
+    const direct = await diffStatTool.execute('call-17', { base: 'missing-ref' });
+    const directDetails = direct.details as GitDiffStatDetails;
     assert.equal(directDetails.ok, false);
     if (!directDetails.ok) {
       assert.equal(directDetails.error.code, 'git_failed');
       assert.match(directDetails.error.message, /missing-ref|bad revision|unknown revision/i);
     }
 
-    const loopResult = await executeViaLoop(repo, toPiAgentTool(tool), {
+    const loopResult = await executeViaLoop(repo, toPiAgentTool(diffStatTool), {
       type: 'tool_call',
-      id: 'diff-1',
-      name: 'git_diff',
+      id: 'diff-stat-1',
+      name: 'git_diff_stat',
       arguments: { base: 'missing-ref' },
     });
-
     const toolResult = loopResult.messages.find(
-      (message: any) => message.role === 'toolResult' && message.toolName === 'git_diff',
+      (message: any) => message.role === 'toolResult' && message.toolName === 'git_diff_stat',
     ) as any;
     assert.ok(toolResult);
     assert.equal(toolResult.isError, true);
+  });
+
+  it('hardens revision and path inputs against shell-injection-shaped values', async () => {
+    const repo = createRepo('git-hardened-inputs-');
+    writeFile(repo, 'tracked.txt', 'base\n');
+    git(repo, ['add', 'tracked.txt']);
+    git(repo, ['commit', '-m', 'initial']);
+    writeFile(repo, 'tracked.txt', 'base\nchanged\n');
+
+    const diffTool = createGitDiffTool(repo);
+    const diffStatTool = createGitDiffStatTool(repo);
+    const logTool = createGitLogTool(repo);
+
+    const invalidBases: Array<{ label: string; base: string }> = [
+      { label: 'double-dot range', base: 'main..feature' },
+      { label: 'triple-dot range', base: 'main...feature' },
+      { label: 'embedded whitespace', base: 'main HEAD' },
+      { label: 'shell separator', base: 'main;evil' },
+      { label: 'NUL byte', base: 'main x' },
+      { label: 'pipe metacharacter', base: 'main|cat' },
+      { label: 'subshell metacharacter', base: 'main$(id)' },
+    ];
+    for (const { label, base } of invalidBases) {
+      const details = (await diffStatTool.execute(`call-base-${label}`, { base })).details as GitDiffStatDetails;
+      assert.equal(details.ok, false, `expected git_diff_stat to reject ${label}`);
+      if (!details.ok) {
+        assert.equal(details.error.code, 'invalid_input');
+      }
+      const diffDetails = (await diffTool.execute(`call-diff-base-${label}`, { base })).details as GitDiffDetails;
+      assert.equal(diffDetails.ok, false, `expected git_diff to reject ${label}`);
+      if (!diffDetails.ok) {
+        assert.equal(diffDetails.error.code, 'invalid_input');
+      }
+    }
+
+    const headDiff = (await diffTool.execute('call-base-head', { base: 'HEAD' })).details as GitDiffDetails;
+    assert.equal(headDiff.ok, true);
+    if (headDiff.ok) {
+      assert.equal(headDiff.base, 'HEAD');
+    }
+    const headStat = (await diffStatTool.execute('call-stat-head', { base: 'HEAD' })).details as GitDiffStatDetails;
+    assert.equal(headStat.ok, true);
+    if (headStat.ok) {
+      assert.equal(headStat.base, 'HEAD');
+    }
+
+    const nulPath = (await diffStatTool.execute('call-path-nul', { path: 'tracked .txt' })).details as GitDiffStatDetails;
+    assert.equal(nulPath.ok, false);
+    if (!nulPath.ok) {
+      assert.equal(nulPath.error.code, 'invalid_input');
+      assert.match(nulPath.error.message, /NUL/);
+    }
+    const dashPath = (await diffTool.execute('call-path-dash', { path: '--exec=evil' })).details as GitDiffDetails;
+    assert.equal(dashPath.ok, false);
+    if (!dashPath.ok) {
+      assert.equal(dashPath.error.code, 'invalid_input');
+      assert.match(dashPath.error.message, /must not start with "-"/);
+    }
+    const logNulPath = (await logTool.execute('call-log-path-nul', { path: 'tracked .txt' })).details as GitLogDetails;
+    assert.equal(logNulPath.ok, false);
+    if (!logNulPath.ok) {
+      assert.equal(logNulPath.error.code, 'invalid_input');
+    }
+    const logDashPath = (await logTool.execute('call-log-path-dash', { path: '--all' })).details as GitLogDetails;
+    assert.equal(logDashPath.ok, false);
+    if (!logDashPath.ok) {
+      assert.equal(logDashPath.error.code, 'invalid_input');
+    }
   });
 
   it('returns structured not-a-repo errors', async () => {
     const nonRepo = mkdtempSync(path.join(tmpdir(), 'git-not-repo-'));
     reposToClean.add(nonRepo);
 
-    const result = await createGitStatusTool(nonRepo).execute('call-7', {});
+    const result = await createGitStatusTool(nonRepo).execute('call-18', {});
     const details = result.details as GitStatusDetails;
 
     assert.equal(details.ok, false);
@@ -208,23 +444,44 @@ describe('native-agent git tools', () => {
     }
   });
 
-  it('blocks out-of-bounds diff paths before execution', () => {
-    const decision = evaluateBeforeToolCallPolicy({
-      phase: 'coding',
-      worktreePath: '/repo',
-      registry: createToolRegistry(createGitTools('/repo')).list(),
-      config: gitToolPolicyConfig,
-      toolCall: {
-        name: 'git_diff',
-        arguments: { path: '../secret.txt' },
-      },
-    });
+  it('blocks out-of-bounds git paths before execution', () => {
+    const registry = createToolRegistry(createGitTools('/repo')).list();
 
-    assert.deepEqual(decision, {
-      kind: 'deny',
-      reason: 'path_denied',
-      message: "path_denied: '../secret.txt' resolves outside the worktree",
-    });
+    assert.deepEqual(
+      evaluateBeforeToolCallPolicy({
+        phase: 'coding',
+        worktreePath: '/repo',
+        registry,
+        config: gitToolPolicyConfig,
+        toolCall: {
+          name: 'git_diff_stat',
+          arguments: { path: '../secret.txt' },
+        },
+      }),
+      {
+        kind: 'deny',
+        reason: 'path_denied',
+        message: "path_denied: '../secret.txt' resolves outside the worktree",
+      },
+    );
+
+    assert.deepEqual(
+      evaluateBeforeToolCallPolicy({
+        phase: 'coding',
+        worktreePath: '/repo',
+        registry,
+        config: gitToolPolicyConfig,
+        toolCall: {
+          name: 'git_log',
+          arguments: { path: '../secret.txt' },
+        },
+      }),
+      {
+        kind: 'deny',
+        reason: 'path_denied',
+        message: "path_denied: '../secret.txt' resolves outside the worktree",
+      },
+    );
   });
 });
 
@@ -238,6 +495,13 @@ function createRepo(prefix: string): string {
 }
 
 function writeFile(repo: string, relativePath: string, contents: string): void {
+  const filePath = path.join(repo, relativePath);
+  const parent = path.dirname(filePath);
+  execFileSync('mkdir', ['-p', parent]);
+  writeFileSync(filePath, contents);
+}
+
+function writeBinaryFile(repo: string, relativePath: string, contents: Buffer): void {
   const filePath = path.join(repo, relativePath);
   const parent = path.dirname(filePath);
   execFileSync('mkdir', ['-p', parent]);
