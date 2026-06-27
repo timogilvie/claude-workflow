@@ -27,11 +27,21 @@ export type { WorkflowPhase, WorkflowToolName, WorkflowMutationAction };
 // Policy result
 // ---------------------------------------------------------------------------
 
-export interface MutationPolicyResult {
-  allowed: boolean;
+export interface MutationPolicyAllowedResult {
+  allowed: true;
   /** Stable reason string — tests may assert the full value. */
   reason: string;
 }
+
+export interface MutationPolicyDeniedResult {
+  allowed: false;
+  /** Stable machine-readable denial code derived from the reason prefix. */
+  code: string;
+  /** Stable reason string — tests may assert the full value. */
+  reason: string;
+}
+
+export type MutationPolicyResult = MutationPolicyAllowedResult | MutationPolicyDeniedResult;
 
 // ---------------------------------------------------------------------------
 // Matrix entry
@@ -120,6 +130,12 @@ function matrixKey(phase: string, tool: string, action: string): string {
   return `${phase}::${tool}::${action}`;
 }
 
+function deniedResult(reason: string): MutationPolicyDeniedResult {
+  const separatorIndex = reason.indexOf(':');
+  const code = separatorIndex === -1 ? 'policy_denied' : reason.slice(0, separatorIndex);
+  return { allowed: false, code, reason };
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -141,20 +157,16 @@ export function isMutationAllowed(
 ): MutationPolicyResult {
   // Hard invariant: merge is never allowed, regardless of matrix entry.
   if (action === 'merge') {
-    return {
-      allowed: false,
-      reason: 'review_cannot_merge: merge is never an allowed workflow tool action',
-    };
+    return deniedResult('review_cannot_merge: merge is never an allowed workflow tool action');
   }
 
   const entry = policyIndex.get(matrixKey(phase, tool, action));
   if (entry !== undefined) {
-    return { allowed: entry.allowed, reason: entry.reason };
+    return entry.allowed ? { allowed: true, reason: entry.reason } : deniedResult(entry.reason);
   }
 
   // Default deny for unknown combinations.
-  return {
-    allowed: false,
-    reason: `unknown_combination: no policy entry for phase=${phase} tool=${tool} action=${action}`,
-  };
+  return deniedResult(
+    `unknown_combination: no policy entry for phase=${phase} tool=${tool} action=${action}`,
+  );
 }
