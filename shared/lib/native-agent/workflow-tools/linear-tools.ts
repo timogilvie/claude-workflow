@@ -34,6 +34,7 @@ export interface WorkflowToolTranscriptEvent {
   tool: string;
   phase: WorkflowPhase;
   action: string;
+  details?: Record<string, unknown>;
   idempotency?: {
     key: string;
     outcome: string;
@@ -45,6 +46,7 @@ export interface WorkflowToolTranscriptEvent {
 export interface WorkflowToolStageArtifactEntry {
   tool: string;
   phase: WorkflowPhase;
+  details?: Record<string, unknown>;
   idempotency: {
     key: string;
     outcome: string;

@@ -1,0 +1,35 @@
+{
+  "verdict": "not_ready",
+  "codeReviewFindings": [
+    {
+      "severity": "blocker",
+      "location": "src/workflow.ts:42",
+      "category": "correctness",
+      "description": "Route metadata is dropped before the tool result is recorded."
+    },
+    {
+      "severity": "warning",
+      "location": "src/workflow.ts:88",
+      "category": "maintainability",
+      "description": "Command retries do not annotate the transcript with the prior failure."
+    }
+  ],
+  "uiFindings": [
+    {
+      "severity": "warning",
+      "location": "dashboard/review.tsx:14",
+      "category": "design",
+      "description": "Review findings summary truncates the blocking issue count."
+    }
+  ],
+  "needsStrongerReviewer": false,
+  "metadata": {
+    "branch": "task/hok-2358",
+    "files": [
+      "shared/lib/native-agent/workflow-tools/command-tools.ts"
+    ],
+    "hasUiChanges": false,
+    "designContextAvailable": false,
+    "uiVerificationRun": false
+  }
+}

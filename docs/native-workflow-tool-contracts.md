@@ -1,6 +1,6 @@
 # Native Workflow Tool Contracts
 
-**HOK-2355** · Schema version: `1.0.0`
+**HOK-2355** · Schema version: `1.1.0`
 
 Implementation reference for the eight native workflow tools. Contracts are defined in:
 
@@ -158,6 +158,10 @@ Provenance: `wavemill-generated` — findings are agent-analyzed output.
 
 **Error:** `ok: false`, `error: CommonErrorCode | 'review_failed'`, `message: string`
 
+Diagnostics note: the contract does not expose a separate `diagnostics` field.
+Runtime callers should read tool-failure context from `error`, `message`, and
+the recorded transcript event details payload.
+
 ---
 
 ### `route_task`
@@ -172,6 +176,11 @@ Provenance: `wavemill-generated` — findings are agent-analyzed output.
 { ok: true; tool: 'route_task'; route: { model?, mode?, rationale? }; ref?: WavemillRouteRef }
 ```
 Provenance: `wavemill-generated`.
+
+Mapping note: `route.model` is the routed decision's `coder`, `route.mode` is
+`routingMode` when present (otherwise `signals.taskType`), and `route.rationale`
+joins the decision's `reasoning` lines with newlines. The full routed decision
+is preserved in the transcript event details payload.
 
 **Error:** `ok: false`, `error: CommonErrorCode | 'route_failed'`, `message: string`
 
@@ -214,6 +223,10 @@ Provenance: `wavemill-generated`.
 ```
 
 `write_stage_result` mutates Wavemill-owned artifacts (not an external provider), so it is classified as recording rather than external provider mutation. It must still be idempotent and produce a transcript record.
+
+Idempotency note: repeated writes with the same
+`issueId/featureDir + stage + status + payload` update the existing artifact in
+place or return `reused`; they do not create duplicate stage-result files.
 
 **Error:** `ok: false`, `error: CommonErrorCode`, `message: string`
 
