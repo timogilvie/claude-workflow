@@ -119,8 +119,8 @@ test('buildCappedComparisonPrompt truncates oversized diff bodies', () => {
   assert.ok(result.finalBytes <= 3000);
   assert.match(result.prompt, /TRUNCATED primary diff/);
   assert.match(result.prompt, /TRUNCATED challenger diff/);
-  assert.match(result.prompt, /Primary eval score: 0.5/);
-  assert.match(result.prompt, /Challenger eval score: 0.75/);
+  assert.match(result.prompt, /Primary eval score \(overall\): 0.5/);
+  assert.match(result.prompt, /Challenger eval score \(overall\): 0.75/);
 });
 
 test('validateComparisonJson trims fields and rejects invalid score payloads', () => {
@@ -197,6 +197,78 @@ test('formatRoutingSummary includes challenge type when present', () => {
 
   assert.match(summary, /Primary used planner-a/);
   assert.match(summary, /Challenge type: multi-variable/);
+});
+
+test('buildComparisonPrompt uses stage-specific score label for reviewer-only', () => {
+  const prompt = buildComparisonPrompt({
+    issuePrompt: 'Issue context',
+    primaryDiff: 'primary diff',
+    challengerDiff: 'challenger diff',
+    primaryEvalScore: 0.64,
+    challengerEvalScore: 0.75,
+    primaryEvalScoreSource: 'stage.review',
+    challengerEvalScoreSource: 'stage.review',
+  });
+  assert.match(prompt, /Primary review-stage eval score: 0\.64/);
+  assert.match(prompt, /Challenger review-stage eval score: 0\.75/);
+  assert.doesNotMatch(prompt, /Primary eval score:/);
+});
+
+test('buildComparisonPrompt uses overall label when source is overall', () => {
+  const prompt = buildComparisonPrompt({
+    issuePrompt: 'Issue context',
+    primaryDiff: 'primary diff',
+    challengerDiff: 'challenger diff',
+    primaryEvalScore: 0.7,
+    challengerEvalScore: 0.8,
+    primaryEvalScoreSource: 'overall',
+    challengerEvalScoreSource: 'overall',
+  });
+  assert.match(prompt, /Primary eval score \(overall\): 0\.7/);
+  assert.match(prompt, /Challenger eval score \(overall\): 0\.8/);
+});
+
+test('buildComparisonPrompt uses overall label when source is absent', () => {
+  const prompt = buildComparisonPrompt({
+    issuePrompt: 'Issue context',
+    primaryDiff: 'primary diff',
+    challengerDiff: 'challenger diff',
+    primaryEvalScore: 0.5,
+    challengerEvalScore: 0.6,
+  });
+  assert.match(prompt, /Primary eval score \(overall\): 0\.5/);
+  assert.match(prompt, /Challenger eval score \(overall\): 0\.6/);
+});
+
+test('buildComparisonPrompt includes per-stage scores in workflow context for multi-variable', () => {
+  const prompt = buildComparisonPrompt({
+    issuePrompt: 'Issue context',
+    primaryDiff: 'primary diff',
+    challengerDiff: 'challenger diff',
+    primaryEvalScore: 0.7,
+    challengerEvalScore: 0.8,
+    primaryRouting: {
+      planner: 'planner-a',
+      coder: 'coder-a',
+      reviewer: 'reviewer-a',
+      planDepth: 'deep',
+      codeDepth: 'medium',
+      reviewMode: 'full',
+    },
+    challengerRouting: {
+      planner: 'planner-b',
+      coder: 'coder-b',
+      reviewer: 'reviewer-b',
+      planDepth: 'medium',
+      codeDepth: 'low',
+      reviewMode: 'lite',
+    },
+    primaryPerStageScores: { plan: 0.6, review: 0.7 },
+    challengerPerStageScores: { plan: 0.8, review: 0.75 },
+  });
+  assert.match(prompt, /Per-stage scores:/);
+  assert.match(prompt, /plan: primary=0\.60, challenger=0\.80/);
+  assert.match(prompt, /review: primary=0\.70, challenger=0\.75/);
 });
 
 test('buildChallengeCommentBody points each PR at the opposite PR', () => {
