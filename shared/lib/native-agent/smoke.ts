@@ -31,12 +31,20 @@ import {
   type ResolvedNativeProviderEntry,
 } from './providers.ts';
 import { createReadOnlyTools, READ_ONLY_PATH_FIELDS } from './tools/read-only.ts';
-import { createGitTools, gitAfterToolCall, gitToolPolicyConfig } from './tools/git.ts';
+import {
+  createGitCommitTools,
+  createGitTools,
+  gitAfterToolCall,
+  gitMutationAfterToolCall,
+  gitMutationToolPolicyConfig,
+  gitToolPolicyConfig,
+} from './tools/git.ts';
 import {
   createCodingMutationTools,
   codingMutationAfterToolCall,
   codingMutationPolicyConfig,
 } from './tools/mutation-tools.ts';
+import { createIntendedFileTracker, intendedFilesAfterToolCall } from './tools/intended-files.ts';
 import { createToolRegistry } from './tools/registry.ts';
 import { toPiAgentTool } from './tools/pi-adapter.ts';
 import { loadNativePhasePrompt, registerAndRecordNativeProvenance } from './prompts.ts';
@@ -213,18 +221,33 @@ function buildSmokeCompatRegistry(
 }
 
 function buildSmokeToolRegistry(worktreePath: string) {
+  const intendedFileTracker = createIntendedFileTracker();
   const readOnlyDescriptors = createReadOnlyTools(worktreePath);
   const gitDescriptors = createGitTools(worktreePath);
+  const gitMutationDescriptors = createGitCommitTools(worktreePath, { tracker: intendedFileTracker });
   const codingMutationDescriptors = createCodingMutationTools(worktreePath);
-  return createToolRegistry([...readOnlyDescriptors, ...gitDescriptors, ...codingMutationDescriptors]);
-}
+  const registry = createToolRegistry([...readOnlyDescriptors, ...gitDescriptors, ...gitMutationDescriptors, ...codingMutationDescriptors]);
 
-async function smokeAfterToolCall(context: Parameters<NonNullable<WavemillLoopConfig['afterToolCall']>>[0]) {
-  const gitResult = await gitAfterToolCall(context);
-  if (gitResult?.isError) {
-    return gitResult;
-  }
-  return codingMutationAfterToolCall(context);
+  return {
+    registry,
+    afterToolCall: async (
+      context: Parameters<NonNullable<WavemillLoopConfig['afterToolCall']>>[0],
+    ) => {
+      await intendedFilesAfterToolCall(context, intendedFileTracker);
+
+      const gitResult = await gitAfterToolCall(context);
+      if (gitResult?.isError) {
+        return gitResult;
+      }
+
+      const gitMutationResult = await gitMutationAfterToolCall(context);
+      if (gitMutationResult?.isError) {
+        return gitMutationResult;
+      }
+
+      return codingMutationAfterToolCall(context);
+    },
+  };
 }
 
 function buildSmokeToolPolicyConfig(phase: SmokePhase) {
@@ -233,6 +256,7 @@ function buildSmokeToolPolicyConfig(phase: SmokePhase) {
       pathFieldsByTool: {
         ...READ_ONLY_PATH_FIELDS,
         ...gitToolPolicyConfig.pathFieldsByTool,
+        ...gitMutationToolPolicyConfig.pathFieldsByTool,
         ...codingMutationPolicyConfig.pathFieldsByTool,
       },
     };
@@ -282,7 +306,7 @@ export async function runNativeAgentDryRun(
   // Build registry bound to repoDir (or cwd) to report real tool names.
   // In dry-run we never execute any tools, so the path just needs to be valid.
   const worktreePath = repoDir ?? process.cwd();
-  const registry = buildSmokeToolRegistry(worktreePath);
+  const { registry } = buildSmokeToolRegistry(worktreePath);
   const phaseMeta = registry.list({ phase });
   const exposedTools = phaseMeta.map((m) => m.name);
 
@@ -401,7 +425,7 @@ export async function runNativeAgentLive(
   }
 
   const worktreePath = repoDir ?? process.cwd();
-  const registry = buildSmokeToolRegistry(worktreePath);
+  const { registry, afterToolCall } = buildSmokeToolRegistry(worktreePath);
   const phaseMeta = registry.list({ phase });
   const exposedTools = phaseMeta.map((m) => m.name);
   const piTools = registry.getTools({ phase }).map((d) => toPiAgentTool(d));
@@ -462,7 +486,7 @@ export async function runNativeAgentLive(
     model: modelConfig,
     context,
     convertToLlm: (messages) => messages as unknown as Message[],
-    afterToolCall: smokeAfterToolCall,
+    afterToolCall,
     toolPolicy: {
       phase,
       worktreePath,

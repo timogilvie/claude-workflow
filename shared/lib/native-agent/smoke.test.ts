@@ -133,7 +133,16 @@ describe('runNativeAgentDryRun', () => {
       assert.ok(result.exposedTools.includes('git_diff'), 'git_diff must be exposed');
 
       // Must not include any mutation tool names
-      const mutationTools = ['patch_file', 'write_file', 'apply_patch', 'write_artifact', 'create_marker', 'update_status'];
+      const mutationTools = [
+        'patch_file',
+        'write_file',
+        'apply_patch',
+        'write_artifact',
+        'create_marker',
+        'update_status',
+        'git_add',
+        'git_commit',
+      ];
       for (const mut of mutationTools) {
         assert.ok(
           !result.exposedTools.includes(mut),
@@ -160,6 +169,8 @@ describe('runNativeAgentDryRun', () => {
       assert.ok(result.exposedTools.includes('write_artifact'));
       assert.ok(result.exposedTools.includes('create_marker'));
       assert.ok(result.exposedTools.includes('update_status'));
+      assert.ok(result.exposedTools.includes('git_add'));
+      assert.ok(result.exposedTools.includes('git_commit'));
       assert.ok(result.exposedTools.includes('git_status'));
       assert.ok(result.exposedTools.includes('read_file'));
     } finally {
