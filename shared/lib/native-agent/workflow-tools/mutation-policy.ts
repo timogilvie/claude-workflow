@@ -21,7 +21,7 @@
 
 import type { WorkflowPhase, WorkflowToolName, WorkflowMutationAction } from './contracts.ts';
 
-export { WorkflowPhase, WorkflowToolName, WorkflowMutationAction };
+export type { WorkflowPhase, WorkflowToolName, WorkflowMutationAction };
 
 // ---------------------------------------------------------------------------
 // Policy result
