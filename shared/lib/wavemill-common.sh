@@ -5,6 +5,9 @@
 # Default tmux window names for mill mode surfaces.
 WAVEMILL_WINDOW_MILL="${WAVEMILL_WINDOW_MILL:-mill}"
 WAVEMILL_WINDOW_BACKSTAGE="${WAVEMILL_WINDOW_BACKSTAGE:-backstage}"
+WAVEMILL_BACKSTAGE_TEND_PANE_TITLE="${WAVEMILL_BACKSTAGE_TEND_PANE_TITLE:-Wavemill Tend Loop}"
+WAVEMILL_BACKSTAGE_JOBS_PANE_TITLE="${WAVEMILL_BACKSTAGE_JOBS_PANE_TITLE:-Wavemill Jobs}"
+WAVEMILL_BACKSTAGE_QUEUE_PANE_TITLE="${WAVEMILL_BACKSTAGE_QUEUE_PANE_TITLE:-Wavemill Pending + Queue}"
 
 # Dashboard footer tips should stay short enough to fit on one line with the
 # stable refresh prefix.
@@ -24,6 +27,77 @@ declare -a WAVEMILL_USAGE_TIPS=(
 WAVEMILL_GIT_REMOTE_TIMEOUT_DEFAULT=15
 WAVEMILL_GIT_REMOTE_TIMEOUT_MIN=1
 WAVEMILL_GIT_REMOTE_TIMEOUT_MAX=600
+
+wavemill_backstage_health_file() {
+  local state_dir="${1:-${STATE_DIR:-}}"
+  if [[ -n "$state_dir" ]]; then
+    printf '%s\n' "$state_dir/backstage-health.json"
+    return 0
+  fi
+  if [[ -n "${REPO_DIR:-}" ]]; then
+    printf '%s\n' "$REPO_DIR/.wavemill/backstage-health.json"
+    return 0
+  fi
+  return 1
+}
+
+wavemill_build_tend_loop_command() {
+  local session_name="${1:?session required}"
+  local repo_dir="${2:?repo dir required}"
+  local tools_dir="${3:?tools dir required}"
+  local issue_name="${4:-integration}"
+  local command
+
+  printf -v command 'exec env WAVEMILL_SESSION=%q WAVEMILL_ISSUE=%q npx tsx %q --loop --repo-dir %q' \
+    "$session_name" "$issue_name" "$tools_dir/tend.ts" "$repo_dir"
+  printf '%s\n' "$command"
+}
+
+wavemill_set_tmux_pane_title() {
+  local target="${1:?target required}" title="${2:?title required}"
+  tmux select-pane -t "$target" -T "$title" >/dev/null 2>&1
+}
+
+wavemill_write_backstage_health() {
+  local path="${1:?path required}" status="${2:?status required}" detail="${3:-}" attempt_count="${4:-0}" last_attempt_at="${5:-}" executor_pane_id="${6:-}"
+  local tmp
+  mkdir -p "$(dirname "$path")"
+  tmp="${path}.tmp"
+  jq -cn \
+    --arg updatedAt "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+    --arg status "$status" \
+    --arg detail "$detail" \
+    --argjson attemptCount "${attempt_count:-0}" \
+    --arg lastAttemptAt "$last_attempt_at" \
+    --arg executorPaneId "$executor_pane_id" '
+      {
+        updatedAt: $updatedAt,
+        status: $status,
+        detail: (if $detail == "" then null else $detail end),
+        restartAttemptCount: $attemptCount,
+        lastRestartAttemptAt: (if $lastAttemptAt == "" then null else $lastAttemptAt end),
+        executorPaneId: (if $executorPaneId == "" then null else $executorPaneId end)
+      }
+    ' > "$tmp"
+  mv "$tmp" "$path"
+}
+
+wavemill_iso8601_to_epoch() {
+  local timestamp="${1-}"
+  [[ -n "$timestamp" ]] || return 1
+
+  if date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$timestamp" +%s >/dev/null 2>&1; then
+    date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$timestamp" +%s
+    return 0
+  fi
+
+  if date -u -d "$timestamp" +%s >/dev/null 2>&1; then
+    date -u -d "$timestamp" +%s
+    return 0
+  fi
+
+  return 1
+}
 
 wavemill_pick_usage_tip() {
   local tip_count="${#WAVEMILL_USAGE_TIPS[@]}"
@@ -2403,12 +2477,40 @@ queue_mark_waiting() {
 }
 
 wavemill_pane_repaint() {
-  local content="${1-}" line frame_bytes=""
+  local content="${1-}" line frame_bytes="" current_lines=0
+
+  # Count lines in the new frame so we can detect shrink vs grow.
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    current_lines=$((current_lines + 1))
+  done <<< "$content"
+
+  local prev_lines="${WAVEMILL_PANE_REPAINT_LAST_LINES:-0}"
+
+  # When the new frame is shorter than the previous one, stale rows would
+  # remain visible below the new content even after ESC[J.  Pre-clear by
+  # saving the cursor at the anchor (caller has already restored it there),
+  # moving down through every row of the old frame with ESC[K, emitting
+  # ESC[J to clear the rest, then restoring the cursor to the anchor so
+  # the new content overwrites from the top.
+  if (( prev_lines > current_lines )); then
+    frame_bytes=$'\033[s'
+    local _i
+    for (( _i = 0; _i < prev_lines; _i++ )); do
+      frame_bytes+=$'\033[K'
+      (( _i < prev_lines - 1 )) && frame_bytes+=$'\n'
+    done
+    frame_bytes+=$'\033[J'
+    frame_bytes+=$'\033[u'
+  fi
+
+  # Paint new content, clearing to EOL on each line.
   while IFS= read -r line || [[ -n "$line" ]]; do
     frame_bytes+="${line}"$'\033[K\n'
   done <<< "$content"
   frame_bytes+=$'\033[J'
+
   printf '%s' "$frame_bytes"
+  WAVEMILL_PANE_REPAINT_LAST_LINES=$current_lines
 }
 
 # ============================================================================

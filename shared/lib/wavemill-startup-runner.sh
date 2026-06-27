@@ -373,6 +373,10 @@ write_monitor_env() {
     write_shell_assignment "TASKS_FILE" "$tasks_file"
     write_shell_assignment "CHALLENGE_AUTO_MERGE" "${CHALLENGE_AUTO_MERGE:-false}"
     write_shell_assignment "WAVEMILL_WINDOW_MILL" "$WAVEMILL_WINDOW_MILL"
+    write_shell_assignment "WAVEMILL_WINDOW_BACKSTAGE" "$WAVEMILL_WINDOW_BACKSTAGE"
+    write_shell_assignment "WAVEMILL_BACKSTAGE_TEND_PANE_TITLE" "$WAVEMILL_BACKSTAGE_TEND_PANE_TITLE"
+    write_shell_assignment "WAVEMILL_BACKSTAGE_JOBS_PANE_TITLE" "$WAVEMILL_BACKSTAGE_JOBS_PANE_TITLE"
+    write_shell_assignment "WAVEMILL_BACKSTAGE_QUEUE_PANE_TITLE" "$WAVEMILL_BACKSTAGE_QUEUE_PANE_TITLE"
     # Plumb the monitor's own script/env paths so the control-pane health
     # watchdog can rebuild its launch command during recovery.
     write_shell_assignment "MONITOR_SCRIPT" "$MONITOR_SCRIPT"
@@ -416,7 +420,7 @@ setup_control_dashboard() {
 
 spawn_integration_window() {
   [[ "${DRY_RUN:-false}" == "true" ]] && return 0
-  local merged enabled use_mill_session integration_cmd status_script jobs_cmd queue_cmd right_top_pane right_bottom_pane
+  local merged enabled use_mill_session integration_cmd status_script jobs_cmd queue_cmd tend_pane right_top_pane right_bottom_pane backstage_health_file
 
   merged="$(wavemill_load_config "$REPO_DIR")"
   enabled="$(printf '%s' "$merged" | jq -r '.integration.enabled // false' 2>/dev/null || echo false)"
@@ -428,9 +432,10 @@ spawn_integration_window() {
 
   startup_log "Starting backstage window (tend loop + background status)..."
   WORKTREE_ROOT="${WORKTREE_ROOT:-$REPO_DIR}"
-  printf -v integration_cmd 'exec env WAVEMILL_SESSION=%q WAVEMILL_ISSUE=%q npx tsx %q --loop --repo-dir %q' \
-    "$SESSION" "integration" "$TOOLS_DIR/tend.ts" "$REPO_DIR"
+  integration_cmd="$(wavemill_build_tend_loop_command "$SESSION" "$REPO_DIR" "$TOOLS_DIR" "integration")"
   tmux new-window -d -t "$SESSION" -n "$WAVEMILL_WINDOW_BACKSTAGE" -c "$REPO_DIR" "$integration_cmd" >/dev/null
+  tend_pane="$(tmux display-message -p -t "$SESSION:$WAVEMILL_WINDOW_BACKSTAGE.0" '#{pane_id}' 2>/dev/null || true)"
+  [[ -n "$tend_pane" ]] && wavemill_set_tmux_pane_title "$tend_pane" "$WAVEMILL_BACKSTAGE_TEND_PANE_TITLE"
   right_top_pane="$(tmux split-window -t "$SESSION:$WAVEMILL_WINDOW_BACKSTAGE.0" -h -p 40 -P -F '#{pane_id}')"
   right_bottom_pane="$(tmux split-window -t "$right_top_pane" -v -p 50 -P -F '#{pane_id}')"
 
@@ -439,10 +444,16 @@ spawn_integration_window() {
   printf -v queue_cmd "'%s' --pane=queued-pending '%s' '%s' '%s'" "$status_script" "$SESSION" "$WORKTREE_ROOT" "$STATE_FILE"
   tmux respawn-pane -k -t "$right_top_pane" "$jobs_cmd"
   tmux respawn-pane -k -t "$right_bottom_pane" "$queue_cmd"
+  wavemill_set_tmux_pane_title "$right_top_pane" "$WAVEMILL_BACKSTAGE_JOBS_PANE_TITLE"
+  wavemill_set_tmux_pane_title "$right_bottom_pane" "$WAVEMILL_BACKSTAGE_QUEUE_PANE_TITLE"
 
   tmux set-window-option -u -t "$SESSION:$WAVEMILL_WINDOW_BACKSTAGE" window-status-style >/dev/null 2>&1 || true
   tmux set-window-option -u -t "$SESSION:$WAVEMILL_WINDOW_BACKSTAGE" window-status-current-style >/dev/null 2>&1 || true
   tmux set-option -t "$SESSION:$WAVEMILL_WINDOW_BACKSTAGE" remain-on-exit off >/dev/null 2>&1 || true
+  backstage_health_file="$(wavemill_backstage_health_file "$STATE_DIR" 2>/dev/null || true)"
+  if [[ -n "$backstage_health_file" ]]; then
+    wavemill_write_backstage_health "$backstage_health_file" "healthy" "backstage tend loop is running" 0 "" "$tend_pane"
+  fi
   startup_log "✓ Backstage window running."
 }
 
