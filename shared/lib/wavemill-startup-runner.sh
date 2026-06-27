@@ -373,6 +373,10 @@ write_monitor_env() {
     write_shell_assignment "TASKS_FILE" "$tasks_file"
     write_shell_assignment "CHALLENGE_AUTO_MERGE" "${CHALLENGE_AUTO_MERGE:-false}"
     write_shell_assignment "WAVEMILL_WINDOW_MILL" "$WAVEMILL_WINDOW_MILL"
+    write_shell_assignment "WAVEMILL_WINDOW_BACKSTAGE" "$WAVEMILL_WINDOW_BACKSTAGE"
+    write_shell_assignment "WAVEMILL_BACKSTAGE_TEND_PANE_TITLE" "$WAVEMILL_BACKSTAGE_TEND_PANE_TITLE"
+    write_shell_assignment "WAVEMILL_BACKSTAGE_JOBS_PANE_TITLE" "$WAVEMILL_BACKSTAGE_JOBS_PANE_TITLE"
+    write_shell_assignment "WAVEMILL_BACKSTAGE_QUEUE_PANE_TITLE" "$WAVEMILL_BACKSTAGE_QUEUE_PANE_TITLE"
     # Plumb the monitor's own script/env paths so the control-pane health
     # watchdog can rebuild its launch command during recovery.
     write_shell_assignment "MONITOR_SCRIPT" "$MONITOR_SCRIPT"
