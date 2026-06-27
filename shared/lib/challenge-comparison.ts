@@ -41,6 +41,8 @@ export type ChallengeType =
   | 'multi-variable'
   | 'full-stack';
 
+export type StageEvidenceMode = 'direct' | 'inferred-fallback' | 'not-applicable';
+
 export interface ChallengeComparison {
   challengePairId: string;
   primaryModel: string;
@@ -58,6 +60,8 @@ export interface ChallengeComparison {
   challengerRouting?: ChallengeRoutingMeta;
   variedDimensions?: VariedDimensions;
   challengeType?: ChallengeType;
+  variedStage?: 'plan' | 'implementation' | 'review';
+  stageEvidenceMode?: StageEvidenceMode;
   workflowInsight?: string;
   comparisonOutcome?: 'compared' | 'skipped';
   skipReason?: 'identical-routing-dimensions';

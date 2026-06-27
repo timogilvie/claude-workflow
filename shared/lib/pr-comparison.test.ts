@@ -45,6 +45,67 @@ test('buildComparisonPrompt includes workflow context when routing metadata diff
   assert.doesNotMatch(prompt, /scopeDiscipline/);
 });
 
+test('buildComparisonPrompt includes direct stage evidence for planner challenges', () => {
+  const prompt = buildComparisonPrompt({
+    issuePrompt: 'Issue context',
+    primaryDiff: 'primary diff',
+    challengerDiff: 'challenger diff',
+    primaryEvalScore: 0.8,
+    challengerEvalScore: 0.7,
+    challengeType: 'planner-only',
+    primaryStageEval: {
+      stage: 'plan',
+      provenance: 'direct',
+      summary: 'Direct planning evidence captured.',
+      evidence: [
+        { label: 'plan_text', summary: 'Plan chooses a staged auth migration.', source: 'plan.md' },
+      ],
+    },
+    challengerStageEval: {
+      stage: 'plan',
+      provenance: 'direct',
+      summary: 'Direct planning evidence captured.',
+      evidence: [
+        { label: 'plan_text', summary: 'Plan chooses a single-pass auth migration.', source: 'plan.md' },
+      ],
+    },
+  });
+
+  assert.match(prompt, /Direct Stage Evidence/);
+  assert.match(prompt, /Primary plan evidence \(direct\)/);
+  assert.match(prompt, /plan_text: Plan chooses a staged auth migration/);
+});
+
+test('buildComparisonPrompt omits direct stage evidence when fallback inference is required', () => {
+  const prompt = buildComparisonPrompt({
+    issuePrompt: 'Issue context',
+    primaryDiff: 'primary diff',
+    challengerDiff: 'challenger diff',
+    primaryEvalScore: 0.8,
+    challengerEvalScore: 0.7,
+    challengeType: 'reviewer-only',
+    primaryStageEval: {
+      stage: 'review',
+      provenance: 'direct',
+      summary: 'Direct review evidence captured.',
+      evidence: [
+        { label: 'self_review_summary', summary: 'Raised one blocker.', source: 'review-log' },
+      ],
+    },
+    challengerStageEval: {
+      stage: 'review',
+      provenance: 'inferred',
+      summary: 'Fallback to inferred review evidence.',
+      fallbackReason: 'Missing self-review summary',
+      evidence: [
+        { label: 'inferred_review_score', summary: 'score=0.75', source: 'metadata.stageScores.review' },
+      ],
+    },
+  });
+
+  assert.doesNotMatch(prompt, /Direct Stage Evidence/);
+});
+
 test('buildCappedComparisonPrompt truncates oversized diff bodies', () => {
   const result = buildCappedComparisonPrompt({
     issuePrompt: 'Issue context',
