@@ -41,7 +41,12 @@ export type EnforceMutationResult<TResult = unknown> =
 
 export interface EnforceMutationRequest<TResult = unknown> extends MutationRecordContext {
   execute: () => TResult | Promise<TResult>;
-  record?: MutationRecordSink<TResult>;
+  /**
+   * Required mutation record sink. REQ-F4 mandates that every external mutation
+   * outcome is recorded exactly once; the sink is the recording hook. Tests may
+   * pass `async () => {}` as a no-op sink when the record is not asserted.
+   */
+  record: MutationRecordSink<TResult>;
   warn?: MutationRecordWarningFn;
 }
 

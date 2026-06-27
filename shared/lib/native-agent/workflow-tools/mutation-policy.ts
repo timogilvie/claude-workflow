@@ -92,13 +92,8 @@ const POLICY_MATRIX: readonly PolicyEntry[] = [
   { phase: 'review',   tool: 'linear_comment',   action: 'comment',           allowed: true,  reason: 'linear_comment allowed in review for review outcome updates' },
   // Stage result recording
   { phase: 'review',   tool: 'write_stage_result', action: 'write_stage_result', allowed: true, reason: 'write_stage_result records Wavemill-owned artifacts; allowed in review' },
-  // Merge is ALWAYS denied in review
-  { phase: 'review',   tool: 'github_create_pr', action: 'merge',             allowed: false, reason: 'review_cannot_merge: review phase never merges PRs' },
-  { phase: 'review',   tool: 'github_add_label', action: 'merge',             allowed: false, reason: 'review_cannot_merge: review phase never merges PRs' },
-  { phase: 'review',   tool: 'linear_comment',   action: 'merge',             allowed: false, reason: 'review_cannot_merge: review phase never merges PRs' },
-  { phase: 'review',   tool: 'linear_get_issue', action: 'merge',             allowed: false, reason: 'review_cannot_merge: review phase never merges PRs' },
-  { phase: 'review',   tool: 'review_changes',   action: 'merge',             allowed: false, reason: 'review_cannot_merge: review phase never merges PRs' },
-  { phase: 'review',   tool: 'write_stage_result', action: 'merge',           allowed: false, reason: 'review_cannot_merge: review phase never merges PRs' },
+  // Note: 'merge' action denial is handled by the hard invariant in isMutationAllowed.
+  // Per-tool merge entries are intentionally omitted from the matrix to avoid dead/divergent code.
 
   // ---- ready phase ----------------------------------------------------------
   // Ready phase: only stale_base and merge_conflict remediation plus stage result recording.
@@ -110,8 +105,8 @@ const POLICY_MATRIX: readonly PolicyEntry[] = [
   { phase: 'ready',    tool: 'github_create_pr', action: 'merge_conflict',    allowed: true,  reason: 'merge_conflict remediation allowed in ready phase' },
   // Stage result recording in ready (classified as recording, not external provider mutation)
   { phase: 'ready',    tool: 'write_stage_result', action: 'write_stage_result', allowed: true, reason: 'write_stage_result records Wavemill-owned artifacts; allowed in ready' },
-  // Denied in ready: merge, comment, create_pr, update_pr, add_label
-  { phase: 'ready',    tool: 'github_create_pr', action: 'merge',             allowed: false, reason: 'ready_cannot_merge: merge is never an allowed operation' },
+  // Denied in ready: comment, create_pr, update_pr, add_label
+  // ('merge' action denial is handled by the hard invariant in isMutationAllowed.)
   { phase: 'ready',    tool: 'linear_comment',   action: 'comment',           allowed: false, reason: 'ready_mutation_denied: unrelated comment not allowed in ready phase' },
   { phase: 'ready',    tool: 'github_create_pr', action: 'create_pr',         allowed: false, reason: 'ready_mutation_denied: general PR creation not allowed in ready phase; only stale_base or merge_conflict remediation' },
   { phase: 'ready',    tool: 'github_create_pr', action: 'update_pr',         allowed: false, reason: 'ready_mutation_denied: general PR update not allowed in ready phase; only stale_base or merge_conflict remediation' },
