@@ -63,6 +63,12 @@ runTool({
       console.error('[DEBUG_COST] ========================================');
     }
 
+    const rawChallengeStage = args['challenge-stage'];
+    const challengeStage: PostCompletionContext['challengeStage'] =
+      rawChallengeStage === 'plan' || rawChallengeStage === 'implementation' || rawChallengeStage === 'review'
+        ? rawChallengeStage
+        : undefined;
+
     const context: PostCompletionContext = {
       issueId: args.issue,
       prNumber: args.pr,
@@ -74,7 +80,7 @@ runTool({
       agentType: args.agent,
       solutionModel: args['solution-model'],
       challengePairId: args['challenge-pair'],
-      challengeStage: args['challenge-stage'],
+      challengeStage,
     };
 
     if (debug) {
