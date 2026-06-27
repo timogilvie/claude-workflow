@@ -65,6 +65,11 @@ describe('workflow-tools: tool registry', () => {
     assert.equal(schema['x-schema-version'], WORKFLOW_TOOL_SCHEMA_VERSION);
   });
 
+  it('schema version is 1.1.0 (additive bump for optional idempotency field on expandIssueSuccess)', () => {
+    assert.equal(WORKFLOW_TOOL_SCHEMA_VERSION, '1.1.0');
+    assert.equal(schema['x-schema-version'], '1.1.0');
+  });
+
   it('schema phase enum matches TypeScript WORKFLOW_PHASES', () => {
     const schemaPhases: string[] = schema.$defs.workflowPhase.enum;
     assert.deepEqual([...schemaPhases].sort(), [...WORKFLOW_PHASES].sort());
@@ -385,5 +390,62 @@ describe('workflow-tools: recording requirements', () => {
     for (const tool of WORKFLOW_TOOL_NAMES) {
       assert.ok(tools.has(tool), `missing recording requirement entry for ${tool}`);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// expandIssueSuccess: optional idempotency field (HOK-2356)
+// ---------------------------------------------------------------------------
+
+describe('workflow-tools: expandIssueSuccess optional idempotency field', () => {
+  it('validates expandIssueSuccess without optional idempotency field (backward compat)', () => {
+    const { valid, errors } = validateDef('expandIssueSuccess', {
+      ok: true,
+      tool: 'expand_issue',
+      taskPacketPath: '/features/hok-1/task-packet.md',
+    });
+    assert.equal(valid, true, `validation errors: ${JSON.stringify(errors)}`);
+  });
+
+  it('validates expandIssueSuccess with optional idempotency field present', () => {
+    const { valid, errors } = validateDef('expandIssueSuccess', {
+      ok: true,
+      tool: 'expand_issue',
+      taskPacketPath: '/features/hok-1/task-packet.md',
+      idempotency: {
+        key: 'expand_issue:HOK-1:planning:sess-1:',
+        outcome: 'created',
+        ref: { system: 'wavemill', kind: 'task_packet', id: '/features/hok-1/task-packet.md' },
+      },
+    });
+    assert.equal(valid, true, `validation errors: ${JSON.stringify(errors)}`);
+  });
+
+  it('validates expandIssueSuccess with idempotency outcome = reused', () => {
+    const { valid } = validateDef('expandIssueSuccess', {
+      ok: true,
+      tool: 'expand_issue',
+      taskPacketPath: '/features/hok-1/task-packet.md',
+      idempotency: {
+        key: 'expand_issue:HOK-1:planning:sess-1:',
+        outcome: 'reused',
+        ref: { system: 'wavemill', kind: 'task_packet', id: '/features/hok-1/task-packet.md' },
+      },
+    });
+    assert.equal(valid, true);
+  });
+
+  it('rejects expandIssueSuccess with invalid idempotency outcome', () => {
+    const { valid } = validateDef('expandIssueSuccess', {
+      ok: true,
+      tool: 'expand_issue',
+      taskPacketPath: '/features/hok-1/task-packet.md',
+      idempotency: {
+        key: 'expand_issue:HOK-1:planning:sess-1:',
+        outcome: 'denied',
+        ref: null,
+      },
+    });
+    assert.equal(valid, false, 'denied is not a valid idempotency outcome');
   });
 });

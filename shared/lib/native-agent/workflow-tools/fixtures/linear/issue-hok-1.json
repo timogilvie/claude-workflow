@@ -1,0 +1,12 @@
+{
+  "id": "abc123-uuid",
+  "identifier": "HOK-1",
+  "title": "Implement idempotent native Linear tools",
+  "description": "Wire the three Linear-facing native workflow tools.",
+  "state": { "name": "In Progress" },
+  "assignee": { "name": "Tim Ogilvie", "email": "me@timogilvie.com" },
+  "labels": { "nodes": [{ "id": "lbl-1", "name": "epic" }] },
+  "url": "https://linear.app/wavemill/issue/HOK-1/implement-idempotent-native-linear-tools",
+  "completedAt": null,
+  "canceledAt": null
+}
