@@ -5,6 +5,9 @@
 # Default tmux window names for mill mode surfaces.
 WAVEMILL_WINDOW_MILL="${WAVEMILL_WINDOW_MILL:-mill}"
 WAVEMILL_WINDOW_BACKSTAGE="${WAVEMILL_WINDOW_BACKSTAGE:-backstage}"
+WAVEMILL_BACKSTAGE_TEND_PANE_TITLE="${WAVEMILL_BACKSTAGE_TEND_PANE_TITLE:-Wavemill Tend Loop}"
+WAVEMILL_BACKSTAGE_JOBS_PANE_TITLE="${WAVEMILL_BACKSTAGE_JOBS_PANE_TITLE:-Wavemill Jobs}"
+WAVEMILL_BACKSTAGE_QUEUE_PANE_TITLE="${WAVEMILL_BACKSTAGE_QUEUE_PANE_TITLE:-Wavemill Pending + Queue}"
 
 # Dashboard footer tips should stay short enough to fit on one line with the
 # stable refresh prefix.
@@ -24,6 +27,77 @@ declare -a WAVEMILL_USAGE_TIPS=(
 WAVEMILL_GIT_REMOTE_TIMEOUT_DEFAULT=15
 WAVEMILL_GIT_REMOTE_TIMEOUT_MIN=1
 WAVEMILL_GIT_REMOTE_TIMEOUT_MAX=600
+
+wavemill_backstage_health_file() {
+  local state_dir="${1:-${STATE_DIR:-}}"
+  if [[ -n "$state_dir" ]]; then
+    printf '%s\n' "$state_dir/backstage-health.json"
+    return 0
+  fi
+  if [[ -n "${REPO_DIR:-}" ]]; then
+    printf '%s\n' "$REPO_DIR/.wavemill/backstage-health.json"
+    return 0
+  fi
+  return 1
+}
+
+wavemill_build_tend_loop_command() {
+  local session_name="${1:?session required}"
+  local repo_dir="${2:?repo dir required}"
+  local tools_dir="${3:?tools dir required}"
+  local issue_name="${4:-integration}"
+  local command
+
+  printf -v command 'exec env WAVEMILL_SESSION=%q WAVEMILL_ISSUE=%q npx tsx %q --loop --repo-dir %q' \
+    "$session_name" "$issue_name" "$tools_dir/tend.ts" "$repo_dir"
+  printf '%s\n' "$command"
+}
+
+wavemill_set_tmux_pane_title() {
+  local target="${1:?target required}" title="${2:?title required}"
+  tmux select-pane -t "$target" -T "$title" >/dev/null 2>&1
+}
+
+wavemill_write_backstage_health() {
+  local path="${1:?path required}" status="${2:?status required}" detail="${3:-}" attempt_count="${4:-0}" last_attempt_at="${5:-}" executor_pane_id="${6:-}"
+  local tmp
+  mkdir -p "$(dirname "$path")"
+  tmp="${path}.tmp"
+  jq -cn \
+    --arg updatedAt "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+    --arg status "$status" \
+    --arg detail "$detail" \
+    --argjson attemptCount "${attempt_count:-0}" \
+    --arg lastAttemptAt "$last_attempt_at" \
+    --arg executorPaneId "$executor_pane_id" '
+      {
+        updatedAt: $updatedAt,
+        status: $status,
+        detail: (if $detail == "" then null else $detail end),
+        restartAttemptCount: $attemptCount,
+        lastRestartAttemptAt: (if $lastAttemptAt == "" then null else $lastAttemptAt end),
+        executorPaneId: (if $executorPaneId == "" then null else $executorPaneId end)
+      }
+    ' > "$tmp"
+  mv "$tmp" "$path"
+}
+
+wavemill_iso8601_to_epoch() {
+  local timestamp="${1-}"
+  [[ -n "$timestamp" ]] || return 1
+
+  if date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$timestamp" +%s >/dev/null 2>&1; then
+    date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$timestamp" +%s
+    return 0
+  fi
+
+  if date -u -d "$timestamp" +%s >/dev/null 2>&1; then
+    date -u -d "$timestamp" +%s
+    return 0
+  fi
+
+  return 1
+}
 
 wavemill_pick_usage_tip() {
   local tip_count="${#WAVEMILL_USAGE_TIPS[@]}"

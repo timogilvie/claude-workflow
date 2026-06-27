@@ -70,6 +70,16 @@ export interface ReadyTaskSnapshot {
   relevantJobs: MillJob[];
   lastProgressAt: string | null;
   idleMinutes: number | null;
+  backstageHealth: BackstageHealthState | null;
+}
+
+export interface BackstageHealthState {
+  updatedAt: string | null;
+  status: string;
+  detail: string | null;
+  restartAttemptCount: number | null;
+  lastRestartAttemptAt: string | null;
+  executorPaneId: string | null;
 }
 
 export interface WorktreeMergeState {
@@ -674,6 +684,27 @@ function nextCommandForMergeState(snapshot: ReadyTaskSnapshot): string {
   return `cd ${worktree} && git status --short && git commit -m ${escapeShellArg('fix: Resolve merge conflicts')} && git push origin ${escapeShellArg(snapshot.branch)}`;
 }
 
+function readBackstageHealth(repoDir: string): BackstageHealthState | null {
+  const healthPath = path.join(repoDir, '.wavemill', 'backstage-health.json');
+  if (!existsSync(healthPath)) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(readFileSync(healthPath, 'utf-8')) as Record<string, unknown>;
+    return {
+      updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : null,
+      status: typeof parsed.status === 'string' ? parsed.status : 'unknown',
+      detail: typeof parsed.detail === 'string' ? parsed.detail : null,
+      restartAttemptCount: typeof parsed.restartAttemptCount === 'number' ? parsed.restartAttemptCount : null,
+      lastRestartAttemptAt: typeof parsed.lastRestartAttemptAt === 'string' ? parsed.lastRestartAttemptAt : null,
+      executorPaneId: typeof parsed.executorPaneId === 'string' ? parsed.executorPaneId : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function isBehindMergeState(githubTruth: GitHubPRTruth): boolean {
   return githubTruth.state === 'OPEN'
     && githubTruth.mergeable === 'MERGEABLE'
@@ -974,6 +1005,14 @@ export function classifyReadyTask(
     if (inMergeLane) {
       const escalateMinutes = normalizedConfig.thresholdMinutes * MERGE_LANE_STALL_ESCALATE_MULTIPLIER;
       if (snapshot.idleMinutes >= escalateMinutes) {
+        const backstageHealth = snapshot.backstageHealth;
+        if (backstageHealth?.status === 'missing-tend-loop' || backstageHealth?.status === 'needs-user') {
+          const backstageDetail = backstageHealth.detail ?? 'Backstage tend loop executor is missing.';
+          return {
+            kind: 'needs-user',
+            detail: `Missing tend loop: ${backstageDetail} PR #${snapshot.prNumber} has waited ${snapshot.idleMinutes}m for its merge turn without an active merge executor.`,
+          };
+        }
         return {
           kind: 'needs-user',
           detail: `Merge lane appears stalled: PR #${snapshot.prNumber} passed ready and has waited ${snapshot.idleMinutes}m for its merge turn without the lane advancing.`,
@@ -1016,6 +1055,7 @@ async function buildSnapshot(
   task: WorkflowTaskRecord,
   jobs: Record<string, MillJob>,
   now: Date,
+  repoDir: string,
   deps: ReadyWatchdogDeps,
 ): Promise<ReadyTaskSnapshot | null> {
   const slug = task.slug;
@@ -1078,6 +1118,7 @@ async function buildSnapshot(
     relevantJobs,
     lastProgressAt,
     idleMinutes: computeIdleMinutes(lastProgressAt, now),
+    backstageHealth: readBackstageHealth(repoDir),
   };
 }
 
@@ -1312,7 +1353,7 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
 
     activeReadyIssueIds.add(issueId);
 
-    const snapshot = await buildSnapshot(issueId, task, jobs, now, deps);
+    const snapshot = await buildSnapshot(issueId, task, jobs, now, options.repoDir, deps);
     if (!snapshot) {
       delete nextTasks[issueId];
       continue;

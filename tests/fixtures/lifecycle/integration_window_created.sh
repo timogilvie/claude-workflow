@@ -39,11 +39,13 @@ extract_spawn_function() {
 FAKE_BIN="$TMP_DIR/bin"
 REPO_UNDER_TEST="$TMP_DIR/repo"
 TOOLS_DIR="$TMP_DIR/tools"
+STATE_DIR="$TMP_DIR/.wavemill"
 STATUS_LOG_FILE="$TMP_DIR/status.log"
 STATE_FILE="$TMP_DIR/workflow-state.json"
-mkdir -p "$FAKE_BIN" "$REPO_UNDER_TEST" "$TOOLS_DIR"
+mkdir -p "$FAKE_BIN" "$REPO_UNDER_TEST" "$TOOLS_DIR" "$STATE_DIR"
 printf '{"tasks":{}}' > "$STATE_FILE"
-export REPO_DIR="$REPO_UNDER_TEST" TOOLS_DIR STATUS_LOG_FILE STATE_FILE PATH="$FAKE_BIN:$PATH"
+export REPO_DIR="$REPO_UNDER_TEST" TOOLS_DIR STATE_DIR STATUS_LOG_FILE STATE_FILE PATH="$FAKE_BIN:$PATH"
+export LIB_DIR="$SCRIPT_DIR/../../../shared/lib"
 
 cat > "$FAKE_BIN/npx" <<'EOF'
 #!/usr/bin/env bash
