@@ -807,7 +807,7 @@ function wrapIssueLabelError(
   action: 'add',
 ): Error {
   const err = error as Error;
-  const prefix = action === 'add' ? 'add labels to' : 'update';
+  const prefix = `${action} labels to`;
 
   if (err.message.includes('HTTP 404') ||
       err.message.includes('Could not resolve to an Issue') ||

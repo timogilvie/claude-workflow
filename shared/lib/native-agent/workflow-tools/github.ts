@@ -428,7 +428,9 @@ function classifyGitHubError(error: unknown): ClassifiedError {
       lower.includes('econnrefused') ||
       lower.includes('socket hang up') ||
       lower.includes('temporary failure') ||
-      lower.includes('network')) {
+      lower.includes('network error') ||
+      lower.includes('network is unreachable') ||
+      lower.includes('connection reset')) {
     return { code: 'external_error', message, transient: true };
   }
 
