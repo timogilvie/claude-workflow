@@ -1,26 +1,35 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, describe, it } from 'node:test';
+import { validateCodingArtifacts } from '../coding-artifacts.ts';
 import { runWavemillLoop } from '../loop.ts';
 import { evaluateBeforeToolCallPolicy } from './policies.ts';
 import { createToolRegistry } from './registry.ts';
 import { toPiAgentTool } from './pi-adapter.ts';
 import {
+  createGitAddTool,
+  createGitCommitTool,
+  createGitCommitTools,
   createGitDiffStatTool,
   createGitDiffTool,
   createGitLogTool,
   createGitStatusTool,
   createGitTools,
   gitAfterToolCall,
+  gitMutationAfterToolCall,
+  gitMutationToolPolicyConfig,
   gitToolPolicyConfig,
+  type GitAddDetails,
+  type GitCommitDetails,
   type GitDiffDetails,
   type GitDiffStatDetails,
   type GitLogDetails,
   type GitStatusDetails,
 } from './git.ts';
+import { createIntendedFileTracker } from './intended-files.ts';
 
 const reposToClean = new Set<string>();
 const piIdentity = (messages: any[]): any[] => messages;
@@ -483,6 +492,232 @@ describe('native-agent git tools', () => {
       },
     );
   });
+
+  it('exposes git mutation descriptors and path policy metadata', () => {
+    const tracker = createIntendedFileTracker();
+    const registry = createToolRegistry(createGitCommitTools('/repo', { tracker }));
+    const metadata = registry.list();
+
+    assert.deepEqual(metadata.map((entry) => entry.name), ['git_add', 'git_commit']);
+    assert.deepEqual(gitMutationToolPolicyConfig, {
+      pathFieldsByTool: { git_add: ['paths'] },
+    });
+    for (const entry of metadata) {
+      assert.equal(entry.class, 'mutation');
+      assert.deepEqual(entry.allowedPhases, ['coding']);
+      assert.equal(entry.executionMode, 'sequential');
+    }
+  });
+
+  it('stages and commits intended files and increments commit count', async () => {
+    const repo = createRepo('git-add-commit-happy-');
+    writeFile(repo, 'src/app.ts', 'base\n');
+    git(repo, ['add', 'src/app.ts']);
+    git(repo, ['commit', '-m', 'initial']);
+
+    writeFile(repo, 'src/app.ts', 'base\nchanged\n');
+    const tracker = createIntendedFileTracker();
+    tracker.record(['./src/app.ts']);
+
+    const addTool = createGitAddTool(repo, { tracker });
+    const commitTool = createGitCommitTool(repo, { tracker });
+
+    const addResult = await addTool.execute('call-add-1', { paths: ['./src/../src/app.ts'] });
+    const addDetails = addResult.details as GitAddDetails;
+    assert.equal(addDetails.ok, true);
+    if (addDetails.ok) {
+      assert.deepEqual(addDetails.paths, ['src/app.ts']);
+    }
+
+    const commitResult = await commitTool.execute('call-commit-1', { message: 'feat: update intended file' });
+    const commitDetails = commitResult.details as GitCommitDetails;
+    assert.equal(commitDetails.ok, true);
+    if (commitDetails.ok) {
+      assert.match(commitDetails.oid, /^[0-9a-f]{40}$/);
+      assert.equal(commitDetails.subject, 'feat: update intended file');
+      assert.deepEqual(commitDetails.files, ['src/app.ts']);
+      assert.equal(commitDetails.commitCount, 1);
+      assert.equal(git(repo, ['rev-parse', 'HEAD']), commitDetails.oid);
+    }
+
+    assert.equal(tracker.commitCount, 1);
+    assert.equal(readFileSync(path.join(repo, 'src/app.ts'), 'utf-8'), 'base\nchanged\n');
+
+    const artifactValidation = validateCodingArtifacts({
+      type: 'coding',
+      filesChanged: 1,
+      linesAdded: 1,
+      linesRemoved: 0,
+      commitCount: tracker.commitCount,
+    });
+    assert.equal(artifactValidation.ok, true);
+  });
+
+  it('rejects staging dirty files that were not recorded as intended', async () => {
+    const repo = createRepo('git-add-not-intended-');
+    writeFile(repo, 'tracked.txt', 'base\n');
+    git(repo, ['add', 'tracked.txt']);
+    git(repo, ['commit', '-m', 'initial']);
+
+    writeFile(repo, 'tracked.txt', 'base\nchanged\n');
+    const tracker = createIntendedFileTracker();
+    const tool = createGitAddTool(repo, { tracker });
+
+    const result = await tool.execute('call-add-2', { paths: ['tracked.txt'] });
+    const details = result.details as GitAddDetails;
+
+    assert.equal(details.ok, false);
+    if (!details.ok) {
+      assert.equal(details.error.code, 'not_intended');
+    }
+    assert.equal(git(repo, ['diff', '--cached', '--name-only']), '');
+  });
+
+  it('rejects staging paths outside the worktree', async () => {
+    const repo = createRepo('git-add-out-of-scope-');
+    const tracker = createIntendedFileTracker();
+    tracker.record(['tracked.txt']);
+    const tool = createGitAddTool(repo, { tracker });
+
+    const result = await tool.execute('call-add-3', { paths: ['../elsewhere.txt'] });
+    const details = result.details as GitAddDetails;
+
+    assert.equal(details.ok, false);
+    if (!details.ok) {
+      assert.equal(details.error.code, 'out_of_scope');
+    }
+  });
+
+  it('rejects empty commits when nothing is staged', async () => {
+    const repo = createRepo('git-commit-empty-');
+    writeFile(repo, 'tracked.txt', 'base\n');
+    git(repo, ['add', 'tracked.txt']);
+    git(repo, ['commit', '-m', 'initial']);
+
+    const tracker = createIntendedFileTracker();
+    const tool = createGitCommitTool(repo, { tracker });
+    const result = await tool.execute('call-commit-2', { message: 'feat: should fail' });
+    const details = result.details as GitCommitDetails;
+
+    assert.equal(details.ok, false);
+    if (!details.ok) {
+      assert.equal(details.error.code, 'empty_commit');
+    }
+  });
+
+  it('rejects commits when staged files fall outside the intended set', async () => {
+    const repo = createRepo('git-commit-staged-out-of-scope-');
+    writeFile(repo, 'tracked.txt', 'base\n');
+    git(repo, ['add', 'tracked.txt']);
+    git(repo, ['commit', '-m', 'initial']);
+
+    writeFile(repo, 'tracked.txt', 'base\nchanged\n');
+    git(repo, ['add', 'tracked.txt']);
+
+    const tracker = createIntendedFileTracker();
+    const tool = createGitCommitTool(repo, { tracker });
+    const result = await tool.execute('call-commit-3', { message: 'feat: blocked' });
+    const details = result.details as GitCommitDetails;
+
+    assert.equal(details.ok, false);
+    if (!details.ok) {
+      assert.equal(details.error.code, 'out_of_scope');
+    }
+  });
+
+  it('surfaces commit failure diagnostics and marks mutation loop results as errors', async () => {
+    const repo = createRepo('git-commit-failure-');
+    writeFile(repo, 'tracked.txt', 'base\n');
+    git(repo, ['add', 'tracked.txt']);
+    git(repo, ['commit', '-m', 'initial']);
+
+    writeFile(repo, 'tracked.txt', 'base\nchanged\n');
+    git(repo, ['config', '--unset', 'user.name']);
+    git(repo, ['config', '--unset', 'user.email']);
+
+    const tracker = createIntendedFileTracker();
+    tracker.record(['tracked.txt']);
+
+    const addTool = createGitAddTool(repo, { tracker });
+    const addResult = await addTool.execute('call-add-4', { paths: ['tracked.txt'] });
+    assert.equal((addResult.details as GitAddDetails).ok, true);
+
+    const isolatedHome = mkdtempSync(path.join(tmpdir(), 'git-identity-home-'));
+    reposToClean.add(isolatedHome);
+    const previousEnv = {
+      HOME: process.env.HOME,
+      XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+      GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,
+      GIT_CONFIG_NOSYSTEM: process.env.GIT_CONFIG_NOSYSTEM,
+      GIT_AUTHOR_NAME: process.env.GIT_AUTHOR_NAME,
+      GIT_AUTHOR_EMAIL: process.env.GIT_AUTHOR_EMAIL,
+      GIT_COMMITTER_NAME: process.env.GIT_COMMITTER_NAME,
+      GIT_COMMITTER_EMAIL: process.env.GIT_COMMITTER_EMAIL,
+      EMAIL: process.env.EMAIL,
+    };
+
+    process.env.HOME = isolatedHome;
+    process.env.XDG_CONFIG_HOME = path.join(isolatedHome, 'xdg');
+    process.env.GIT_CONFIG_GLOBAL = path.join(isolatedHome, 'missing-gitconfig');
+    process.env.GIT_CONFIG_NOSYSTEM = '1';
+    process.env.GIT_AUTHOR_NAME = '';
+    process.env.GIT_AUTHOR_EMAIL = '';
+    process.env.GIT_COMMITTER_NAME = '';
+    process.env.GIT_COMMITTER_EMAIL = '';
+    process.env.EMAIL = '';
+
+    try {
+      const commitTool = createGitCommitTool(repo, { tracker });
+      const direct = await commitTool.execute('call-commit-4', { message: 'feat: no identity' });
+      const directDetails = direct.details as GitCommitDetails;
+
+      assert.equal(directDetails.ok, false);
+      if (!directDetails.ok) {
+        assert.equal(directDetails.error.code, 'git_failed');
+        assert.deepEqual(directDetails.error.args, ['commit', '-m', 'feat: no identity']);
+        assert.equal(typeof directDetails.error.exitCode, 'number');
+        assert.match(directDetails.error.stderr, /identity|email|name/i);
+      }
+
+      const loopResult = await executeViaLoop(
+        repo,
+        toPiAgentTool(commitTool),
+        {
+          type: 'tool_call',
+          id: 'git-commit-1',
+          name: 'git_commit',
+          arguments: { message: 'feat: no identity' },
+        },
+        createToolRegistry(createGitCommitTools(repo, { tracker })).list(),
+        gitMutationToolPolicyConfig,
+        gitMutationAfterToolCall,
+      );
+      const toolResult = loopResult.messages.find(
+        (message: any) => message.role === 'toolResult' && message.toolName === 'git_commit',
+      ) as any;
+      assert.ok(toolResult);
+      assert.equal(toolResult.isError, true);
+    } finally {
+      if (previousEnv.HOME === undefined) delete process.env.HOME;
+      else process.env.HOME = previousEnv.HOME;
+      if (previousEnv.XDG_CONFIG_HOME === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = previousEnv.XDG_CONFIG_HOME;
+      if (previousEnv.GIT_CONFIG_GLOBAL === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+      else process.env.GIT_CONFIG_GLOBAL = previousEnv.GIT_CONFIG_GLOBAL;
+      if (previousEnv.GIT_CONFIG_NOSYSTEM === undefined) delete process.env.GIT_CONFIG_NOSYSTEM;
+      else process.env.GIT_CONFIG_NOSYSTEM = previousEnv.GIT_CONFIG_NOSYSTEM;
+      if (previousEnv.GIT_AUTHOR_NAME === undefined) delete process.env.GIT_AUTHOR_NAME;
+      else process.env.GIT_AUTHOR_NAME = previousEnv.GIT_AUTHOR_NAME;
+      if (previousEnv.GIT_AUTHOR_EMAIL === undefined) delete process.env.GIT_AUTHOR_EMAIL;
+      else process.env.GIT_AUTHOR_EMAIL = previousEnv.GIT_AUTHOR_EMAIL;
+      if (previousEnv.GIT_COMMITTER_NAME === undefined) delete process.env.GIT_COMMITTER_NAME;
+      else process.env.GIT_COMMITTER_NAME = previousEnv.GIT_COMMITTER_NAME;
+      if (previousEnv.GIT_COMMITTER_EMAIL === undefined) delete process.env.GIT_COMMITTER_EMAIL;
+      else process.env.GIT_COMMITTER_EMAIL = previousEnv.GIT_COMMITTER_EMAIL;
+      if (previousEnv.EMAIL === undefined) delete process.env.EMAIL;
+      else process.env.EMAIL = previousEnv.EMAIL;
+    }
+  });
 });
 
 function createRepo(prefix: string): string {
@@ -534,6 +769,9 @@ async function executeViaLoop(
   repo: string,
   tool: any,
   toolCall: { type: 'tool_call'; id: string; name: string; arguments: Record<string, unknown> },
+  registry = createToolRegistry(createGitTools(repo)).list(),
+  config = gitToolPolicyConfig,
+  afterToolCall = gitAfterToolCall,
 ) {
   const context = {
     systemPrompt: 'You are a test agent.',
@@ -555,12 +793,12 @@ async function executeViaLoop(
     model: { id: 'test-model', api, provider: 'test-provider' },
     context,
     convertToLlm: piIdentity,
-    afterToolCall: gitAfterToolCall,
+    afterToolCall,
     toolPolicy: {
       phase: 'coding',
       worktreePath: repo,
-      registry: createToolRegistry(createGitTools(repo)).list(),
-      config: gitToolPolicyConfig,
+      registry,
+      config,
     },
   });
 }

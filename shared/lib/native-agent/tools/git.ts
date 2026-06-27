@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
+import type { IntendedFileTracker } from './intended-files.ts';
 import type { ToolPolicyConfig } from './policies.ts';
 import type { ToolDescriptor, WavemillToolResult } from './types.ts';
 
@@ -8,7 +9,7 @@ const MIN_DIFF_MAX_BYTES = 1;
 const DEFAULT_LOG_MAX_COUNT = 20;
 const MAX_LOG_MAX_COUNT = 100;
 
-type GitToolName = 'git_status' | 'git_diff' | 'git_diff_stat' | 'git_log';
+type GitToolName = 'git_status' | 'git_diff' | 'git_diff_stat' | 'git_log' | 'git_add' | 'git_commit';
 
 export interface GitStatusParams {}
 
@@ -26,6 +27,14 @@ export interface GitDiffStatParams {
 export interface GitLogParams {
   maxCount?: number;
   path?: string;
+}
+
+export interface GitAddParams {
+  paths: string[];
+}
+
+export interface GitCommitParams {
+  message: string;
 }
 
 export interface GitFileStatus {
@@ -109,11 +118,28 @@ export interface GitLogSuccessDetails {
   truncated: boolean;
 }
 
+export interface GitAddSuccessDetails {
+  ok: true;
+  tool: 'git_add';
+  repoRoot: string;
+  paths: string[];
+}
+
+export interface GitCommitSuccessDetails {
+  ok: true;
+  tool: 'git_commit';
+  repoRoot: string;
+  oid: string;
+  subject: string;
+  files: string[];
+  commitCount: number;
+}
+
 export interface GitToolErrorDetails {
   ok: false;
   tool: GitToolName;
   error: {
-    code: 'invalid_input' | 'not_git_repository' | 'git_failed' | 'aborted';
+    code: 'invalid_input' | 'not_git_repository' | 'git_failed' | 'aborted' | 'out_of_scope' | 'not_intended' | 'empty_commit';
     message: string;
     stderr: string;
     exitCode: number | null;
@@ -125,7 +151,9 @@ export type GitStatusDetails = GitStatusSuccessDetails | GitToolErrorDetails;
 export type GitDiffDetails = GitDiffSuccessDetails | GitToolErrorDetails;
 export type GitDiffStatDetails = GitDiffStatSuccessDetails | GitToolErrorDetails;
 export type GitLogDetails = GitLogSuccessDetails | GitToolErrorDetails;
-type GitToolDetails = GitStatusDetails | GitDiffDetails | GitDiffStatDetails | GitLogDetails;
+export type GitAddDetails = GitAddSuccessDetails | GitToolErrorDetails;
+export type GitCommitDetails = GitCommitSuccessDetails | GitToolErrorDetails;
+type GitToolDetails = GitStatusDetails | GitDiffDetails | GitDiffStatDetails | GitLogDetails | GitAddDetails | GitCommitDetails;
 
 interface GitCommandResult {
   stdout: string;
@@ -185,9 +213,39 @@ const gitLogParameters = {
   additionalProperties: false,
 };
 
+const gitAddParameters = {
+  type: 'object',
+  properties: {
+    paths: {
+      type: 'array',
+      items: { type: 'string' },
+      minItems: 1,
+    },
+  },
+  required: ['paths'],
+  additionalProperties: false,
+};
+
+const gitCommitParameters = {
+  type: 'object',
+  properties: {
+    message: { type: 'string' },
+  },
+  required: ['message'],
+  additionalProperties: false,
+};
+
 export const gitToolPolicyConfig: ToolPolicyConfig = {
   pathFieldsByTool: { git_diff: ['path'], git_diff_stat: ['path'], git_log: ['path'] },
 };
+
+export const gitMutationToolPolicyConfig: ToolPolicyConfig = {
+  pathFieldsByTool: { git_add: ['paths'] },
+};
+
+interface GitCommitToolOptions {
+  tracker: IntendedFileTracker;
+}
 
 export function createGitTools(worktreePath: string): readonly ToolDescriptor[] {
   return [
@@ -195,6 +253,16 @@ export function createGitTools(worktreePath: string): readonly ToolDescriptor[] 
     createGitDiffTool(worktreePath),
     createGitDiffStatTool(worktreePath),
     createGitLogTool(worktreePath),
+  ];
+}
+
+export function createGitCommitTools(
+  worktreePath: string,
+  options: GitCommitToolOptions,
+): readonly ToolDescriptor[] {
+  return [
+    createGitAddTool(worktreePath, options),
+    createGitCommitTool(worktreePath, options),
   ];
 }
 
@@ -268,6 +336,46 @@ export function createGitLogTool(worktreePath: string): ToolDescriptor<GitLogPar
   };
 }
 
+export function createGitAddTool(
+  worktreePath: string,
+  options: GitCommitToolOptions,
+): ToolDescriptor<GitAddParams, GitAddDetails> {
+  return {
+    metadata: {
+      name: 'git_add',
+      description: 'Stage intended files changed during native coding while enforcing worktree scope.',
+      class: 'mutation',
+      allowedPhases: ['coding'],
+      executionMode: 'sequential',
+      outputCapPolicy: { strategy: 'none' },
+    },
+    parameters: gitAddParameters,
+    async execute(_toolCallId, params, signal) {
+      return runGitAdd(worktreePath, params, options.tracker, signal);
+    },
+  };
+}
+
+export function createGitCommitTool(
+  worktreePath: string,
+  options: GitCommitToolOptions,
+): ToolDescriptor<GitCommitParams, GitCommitDetails> {
+  return {
+    metadata: {
+      name: 'git_commit',
+      description: 'Commit staged intended files and return structured commit metadata.',
+      class: 'mutation',
+      allowedPhases: ['coding'],
+      executionMode: 'sequential',
+      outputCapPolicy: { strategy: 'none' },
+    },
+    parameters: gitCommitParameters,
+    async execute(_toolCallId, params, signal) {
+      return runGitCommit(worktreePath, params, options.tracker, signal);
+    },
+  };
+}
+
 export async function gitAfterToolCall(
   context: GitAfterToolCallContext,
 ): Promise<GitAfterToolCallResult | undefined> {
@@ -287,6 +395,19 @@ export async function gitAfterToolCall(
     return undefined;
   }
   return { isError: true };
+}
+
+export async function gitMutationAfterToolCall(
+  context: GitAfterToolCallContext,
+): Promise<GitAfterToolCallResult | undefined> {
+  if (context.toolCall.name !== 'git_add' && context.toolCall.name !== 'git_commit') {
+    return undefined;
+  }
+  const details = context.result.details as GitToolDetails | undefined;
+  if (!details || typeof details !== 'object' || !('ok' in details)) {
+    return undefined;
+  }
+  return details.ok ? undefined : { isError: true };
 }
 
 async function runGitStatus(
@@ -480,6 +601,115 @@ async function runGitLog(
   };
 }
 
+async function runGitAdd(
+  worktreePath: string,
+  params: GitAddParams,
+  tracker: IntendedFileTracker,
+  signal?: AbortSignal,
+): Promise<WavemillToolResult<GitAddDetails>> {
+  if (!Array.isArray(params.paths) || params.paths.length === 0) {
+    return invalidInputResult('git_add', 'paths must be a non-empty array of strings');
+  }
+
+  const repoRoot = await resolveRepoRoot(worktreePath, 'git_add', signal);
+  if (!repoRoot.ok) {
+    return repoRoot.result;
+  }
+
+  const normalizedPaths: string[] = [];
+  for (const candidate of params.paths) {
+    const resolved = resolveMutationPath(repoRoot.repoRoot, 'git_add', candidate);
+    if (!resolved.ok) {
+      return resolved.result;
+    }
+    if (!tracker.isIntended(resolved.path)) {
+      return scopedErrorResult('git_add', 'not_intended', `git_add can only stage intended files; '${resolved.path}' was not recorded as intended.`);
+    }
+    if (!normalizedPaths.includes(resolved.path)) {
+      normalizedPaths.push(resolved.path);
+    }
+  }
+
+  const gitArgs = ['add', '--', ...normalizedPaths];
+  const addResult = await runGit(repoRoot.repoRoot, gitArgs, signal);
+  if (!addResult.ok) {
+    return errorResult('git_add', gitArgs, addResult);
+  }
+
+  const details: GitAddSuccessDetails = {
+    ok: true,
+    tool: 'git_add',
+    repoRoot: repoRoot.repoRoot,
+    paths: normalizedPaths,
+  };
+
+  return {
+    content: [{ type: 'text', text: `Staged ${normalizedPaths.join(', ')}` }],
+    details,
+  };
+}
+
+async function runGitCommit(
+  worktreePath: string,
+  params: GitCommitParams,
+  tracker: IntendedFileTracker,
+  signal?: AbortSignal,
+): Promise<WavemillToolResult<GitCommitDetails>> {
+  if (typeof params.message !== 'string' || params.message.trim() === '') {
+    return invalidInputResult('git_commit', 'message must be a non-empty string');
+  }
+
+  const repoRoot = await resolveRepoRoot(worktreePath, 'git_commit', signal);
+  if (!repoRoot.ok) {
+    return repoRoot.result;
+  }
+
+  const stagedResult = await runGit(repoRoot.repoRoot, ['diff', '--cached', '--name-only', '-z'], signal);
+  if (!stagedResult.ok) {
+    return errorResult('git_commit', ['diff', '--cached', '--name-only', '-z'], stagedResult);
+  }
+
+  const stagedFiles = parseNullDelimitedLines(stagedResult.stdout);
+  if (stagedFiles.length === 0) {
+    return scopedErrorResult('git_commit', 'empty_commit', 'git_commit requires staged changes.');
+  }
+
+  const unintendedFile = stagedFiles.find((candidate) => !tracker.isIntended(candidate));
+  if (unintendedFile) {
+    return scopedErrorResult(
+      'git_commit',
+      'out_of_scope',
+      `git_commit can only commit intended files; '${unintendedFile}' is staged but not intended.`,
+    );
+  }
+
+  const commitArgs = ['commit', '-m', params.message.trim()];
+  const commitResult = await runGit(repoRoot.repoRoot, commitArgs, signal);
+  if (!commitResult.ok) {
+    return errorResult('git_commit', commitArgs, commitResult);
+  }
+
+  const oidResult = await runGit(repoRoot.repoRoot, ['rev-parse', 'HEAD'], signal);
+  if (!oidResult.ok) {
+    return errorResult('git_commit', ['rev-parse', 'HEAD'], oidResult);
+  }
+
+  const details: GitCommitSuccessDetails = {
+    ok: true,
+    tool: 'git_commit',
+    repoRoot: repoRoot.repoRoot,
+    oid: oidResult.stdout.trim(),
+    subject: params.message.trim().split(/\r?\n/u, 1)[0] ?? '',
+    files: stagedFiles,
+    commitCount: tracker.recordCommit(),
+  };
+
+  return {
+    content: [{ type: 'text', text: JSON.stringify(details, null, 2) }],
+    details,
+  };
+}
+
 async function resolveRepoRoot(
   worktreePath: string,
   tool: GitToolName,
@@ -505,7 +735,14 @@ async function runGit(
   | ({ ok: false; code: GitToolErrorDetails['error']['code'] } & Partial<GitCommandResult>)
 > {
   const subcommand = args[0];
-  if (subcommand !== 'rev-parse' && subcommand !== 'status' && subcommand !== 'diff' && subcommand !== 'log') {
+  if (
+    subcommand !== 'rev-parse' &&
+    subcommand !== 'status' &&
+    subcommand !== 'diff' &&
+    subcommand !== 'log' &&
+    subcommand !== 'add' &&
+    subcommand !== 'commit'
+  ) {
     return {
       ok: false,
       code: 'invalid_input',
@@ -665,6 +902,10 @@ function parseGitLogOutput(output: string): GitLogCommit[] {
     });
 }
 
+function parseNullDelimitedLines(output: string): string[] {
+  return output.split('\0').map((item) => item.trim()).filter((item) => item !== '');
+}
+
 function parseBranchToken(branch: ParsedBranchState, token: string): void {
   if (token.startsWith('branch.oid ')) {
     const oid = token.slice('branch.oid '.length);
@@ -760,6 +1001,27 @@ function invalidInputResult(
   };
 }
 
+function scopedErrorResult(
+  tool: GitToolName,
+  code: Extract<GitToolErrorDetails['error']['code'], 'out_of_scope' | 'not_intended' | 'empty_commit'>,
+  message: string,
+): WavemillToolResult<GitToolErrorDetails> {
+  return {
+    content: [{ type: 'text', text: message }],
+    details: {
+      ok: false,
+      tool,
+      error: {
+        code,
+        message,
+        stderr: '',
+        exitCode: null,
+        args: [],
+      },
+    },
+  };
+}
+
 function formatErrorMessage(
   tool: GitToolName,
   code: GitToolErrorDetails['error']['code'],
@@ -785,6 +1047,37 @@ function normalizeGitPath(repoRoot: string, toolPath: string | undefined): strin
   const absolute = path.resolve(repoRoot, comparable);
   const relative = path.relative(repoRoot, absolute).replace(/\\/g, '/');
   return relative === '' ? '.' : relative;
+}
+
+function resolveMutationPath(
+  repoRoot: string,
+  tool: 'git_add',
+  toolPath: unknown,
+):
+  | { ok: true; path: string }
+  | { ok: false; result: WavemillToolResult<GitToolErrorDetails> } {
+  if (typeof toolPath !== 'string' || toolPath.trim() === '') {
+    return { ok: false, result: invalidInputResult(tool, 'paths must contain only non-empty strings') };
+  }
+  if (toolPath.includes('\0')) {
+    return { ok: false, result: invalidInputResult(tool, 'paths must not contain NUL bytes') };
+  }
+  if (toolPath.startsWith('-')) {
+    return { ok: false, result: invalidInputResult(tool, 'paths must not start with "-"') };
+  }
+
+  const normalized = normalizeGitPath(repoRoot, toolPath);
+  if (normalized === undefined || normalized === '.') {
+    return { ok: false, result: invalidInputResult(tool, 'paths must reference files inside the repository') };
+  }
+  if (normalized.startsWith('../') || normalized === '..') {
+    return {
+      ok: false,
+      result: scopedErrorResult(tool, 'out_of_scope', `'${toolPath}' resolves outside the active worktree.`),
+    };
+  }
+
+  return { ok: true, path: normalized };
 }
 
 const FORBIDDEN_REVISION_CHARS = /[;&|<>\\$(){}*?"'\[\]!#`]/;
