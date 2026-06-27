@@ -6856,7 +6856,7 @@ poll_challenge_jobs() {
 
 maybe_run_challenge_eval() {
   local issue="$1" pr="$2" branch="$3" slug="$4"
-  local eval_completed eval_failed pair_id solution_model linear_issue eval_agent side job_id job_status job_dir log_path result_path pid eval_timeout
+  local eval_completed eval_failed pair_id solution_model linear_issue eval_agent side challenge_stage job_id job_status job_dir log_path result_path pid eval_timeout
   eval_completed=$(read_state_value "false" --arg i "$issue" '.tasks[$i].evalCompleted // false')
   [[ "$eval_completed" == "true" ]] && return 0
   eval_failed=$(read_state_value "false" --arg i "$issue" '.tasks[$i].evalFailed // false')
@@ -6869,6 +6869,7 @@ maybe_run_challenge_eval() {
   [[ -z "$eval_agent" ]] && eval_agent="$AGENT_CMD"
   side=$(get_task_meta "$issue" "challengeRole")
   [[ -z "$side" ]] && side="primary"
+  challenge_stage=$(get_task_meta "$issue" "challengeStage")
   job_id=$(build_eval_job_id "$issue" "$side" "$pr")
   job_status=$(read_job_state_value "$job_id" "" '.jobs[$id].status // empty')
   [[ -n "$job_status" ]] && return 0
@@ -6890,6 +6891,7 @@ maybe_run_challenge_eval() {
     --agent "$eval_agent" \
     --solution-model "$solution_model" \
     --challenge-pair "$pair_id" \
+    --challenge-stage "${challenge_stage:-}" \
     --result-file "$result_path" \
     --debug \
     >"$log_path" 2>&1 &
