@@ -767,7 +767,7 @@ function validPromptSizeDiagnostic() {
 }
 
 test('SCHEMA_VERSION is bumped for eval schema updates', () => {
-  assert.equal(SCHEMA_VERSION, '1.30.0');
+  assert.equal(SCHEMA_VERSION, '1.31.0');
 });
 
 test('Record without prompt size fields still validates', () => {
@@ -1069,6 +1069,24 @@ test('Record without routing decision validates (backward compat)', () => {
 test('Record with challengePairId validates', () => {
   const record = scenarios[0].record as unknown as Record<string, unknown>;
   assert.equal((record as any).challengePairId, 'HOK-500');
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
+test('Record with challengeStageEval validates', () => {
+  const record = structuredClone(scenarios[0].record) as Record<string, unknown> & { challengeStageEval?: unknown };
+  record.challengeStageEval = {
+    stage: 'review',
+    provenance: 'direct',
+    summary: 'Direct review evidence captured from self-review output and review result artifacts.',
+    evidence: [
+      {
+        label: 'self_review_summary',
+        summary: 'Raised one blocker and two warnings.',
+        source: 'review-log',
+      },
+    ],
+  };
   const result = validateAgainstSchema(record);
   assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
 });
@@ -1754,8 +1772,8 @@ test('Wavemill router fields validate and schema stays in parity', () => {
   assert.equal(properties.wavemill_router_scoring?.$ref, '#/$defs/WavemillRouterScoringMetadata');
 });
 
-test('Schema version constant is 1.29.0', () => {
-  assert.equal(SCHEMA_VERSION, '1.30.0');
+test('Schema version constant is 1.31.0', () => {
+  assert.equal(SCHEMA_VERSION, '1.31.0');
 });
 
 test('Record with resolved-model routing validates', () => {

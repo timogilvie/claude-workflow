@@ -15,6 +15,7 @@
 
 import { BUDGET_MISSING } from './eval-validator.ts';
 import type {
+  ChallengeStageEval,
   EvalChallengeRouteContext,
   EvalExecutedPlanning,
   EvalRouteArtifact,
@@ -101,6 +102,8 @@ export interface EvalRecordMetadata {
   routing?: EvalRouting | null;
   /** Feature outcome artifact diagnostics (HOK-2262). */
   featureOutcomeDiagnostics?: FeatureOutcomeDiagnostics | null;
+  /** First-class planner/reviewer stage evidence for challenge evals. */
+  challengeStageEval?: ChallengeStageEval | null;
 }
 
 /** Richer eval metadata attachment used by training-facing eval entrypoints. */
@@ -135,6 +138,15 @@ export function attachProviderMetadata(
 export function attachChallengePairId(record: EvalRecord, challengePairId?: string): void {
   if (challengePairId) {
     record.challengePairId = challengePairId;
+  }
+}
+
+export function attachChallengeStageEval(
+  record: EvalRecord,
+  challengeStageEval?: ChallengeStageEval | null,
+): void {
+  if (challengeStageEval) {
+    record.challengeStageEval = challengeStageEval;
   }
 }
 
@@ -1126,6 +1138,7 @@ export function enrichEvalRecord(record: EvalRecord, metadata: EvalRecordMetadat
   attachAgentType(record, metadata.agentType);
   attachProviderMetadata(record, metadata.provider, metadata.endpoint);
   attachChallengePairId(record, metadata.challengePairId);
+  attachChallengeStageEval(record, metadata.challengeStageEval);
   attachChallengeRouteContext(record, metadata.challengeRouteContext);
   attachRouteProvenance(record, metadata.routeProvenance);
   attachExecutedPlanning(record, metadata.executedPlanning);
@@ -1171,6 +1184,7 @@ export function enrichTrainingMetadata(
   attachAgentType(record, metadata.agentType);
   attachProviderMetadata(record, metadata.provider, metadata.endpoint);
   attachChallengePairId(record, metadata.challengePairId);
+  attachChallengeStageEval(record, metadata.challengeStageEval);
   attachChallengeRouteContext(record, metadata.challengeRouteContext);
   attachRouteProvenance(record, metadata.routeProvenance);
   attachExecutedPlanning(record, metadata.executedPlanning);

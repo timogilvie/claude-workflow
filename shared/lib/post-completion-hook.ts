@@ -27,6 +27,7 @@ import { detectAffectedSubsystems } from './subsystem-mapper.ts';
 import { gatherEvalContext, gatherStageArtifacts } from './eval-context-gatherer.ts';
 import { fetchRoutingCompleteRawWithArchive } from './eval-context-gatherer.ts';
 import { attachPhaseDurations, attachStageOutcomes, enrichTrainingMetadata } from './eval-record-builder.ts';
+import { buildChallengeStageEval } from './stage-eval-evidence.ts';
 import { buildTaskDescriptor } from './task-descriptor-builder.ts';
 import { getEvalContextUpdatesConfig, getMaxCostUsd } from './config.ts';
 import { formatHokusaiSubmissionTriggerResult, triggerHokusaiSubmission } from './hokusai-submission-trigger.ts';
@@ -98,6 +99,7 @@ export interface PostCompletionContext {
   agentType?: string;
   solutionModel?: string;
   challengePairId?: string;
+  challengeStage?: 'plan' | 'implementation' | 'review';
   onPersisted?: () => void;
 }
 
@@ -285,6 +287,7 @@ interface PostCompletionEnrichmentInput {
   worktreePath?: string;
   agentType?: string;
   challengePairId?: string;
+  challengeStage?: 'plan' | 'implementation' | 'review';
   originalPrompt: string;
   prDiff: string;
   record: EvalRecord;
@@ -298,6 +301,8 @@ interface PostCompletionEnrichmentInput {
   routePrediction?: RoutePrediction | null;
   executedPlanning?: EvalExecutedPlanning | null;
   phaseDurations?: EvalPhaseDurations | null;
+  planContent?: string;
+  selfReviewSummary?: string;
 }
 
 function resolveRouteArtifactDirs(
@@ -412,6 +417,23 @@ export function enrichPostCompletionRecord(
     provider: getDeepSeekProviderMetadata(record.modelId, input.repoDir)?.provider,
     endpoint: getDeepSeekProviderMetadata(record.modelId, input.repoDir)?.endpoint,
     challengePairId: input.challengePairId,
+    challengeStageEval: buildChallengeStageEval({
+      repoDir: input.repoDir,
+      issueId: input.issueId,
+      branchName: input.branchName,
+      worktreePath: input.worktreePath,
+      challengeStage: input.challengeStage,
+      record,
+      stageArtifacts: {
+        planContent: input.planContent,
+        selfReviewSummary: input.selfReviewSummary,
+        routingDecision: input.routingDecision,
+        routing: input.routing || undefined,
+        routePrediction: input.routePrediction || undefined,
+        executedPlanning: input.executedPlanning || undefined,
+        phaseDurations: input.phaseDurations || undefined,
+      },
+    }),
     routeProvenance: deriveRouteProvenance(
       input.repoDir,
       input.issueId,
@@ -469,6 +491,7 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
     console.log(`[DEBUG_COST]   branchName: ${ctx.branchName || '(undefined)'}`);
     console.log(`[DEBUG_COST]   worktreePath: ${ctx.worktreePath || '(undefined)'}`);
     console.log(`[DEBUG_COST]   agentType: ${ctx.agentType || '(undefined)'}`);
+    console.log(`[DEBUG_COST]   challengeStage: ${ctx.challengeStage || '(undefined)'}`);
     console.log('[DEBUG_COST] ========================================');
   }
 
@@ -656,6 +679,7 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
       worktreePath: ctx.worktreePath,
       agentType: ctx.agentType,
       challengePairId: ctx.challengePairId,
+      challengeStage: ctx.challengeStage,
       originalPrompt: evalContext.taskPrompt,
       prDiff: evalContext.prDiff,
       record,
@@ -669,7 +693,15 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
       routePrediction: stageArtifacts.routePrediction,
       executedPlanning: stageArtifacts.executedPlanning,
       phaseDurations,
+      planContent: stageArtifacts.planContent,
+      selfReviewSummary: stageArtifacts.selfReviewSummary,
     });
+
+    if (record.challengeStageEval) {
+      console.log(
+        `Post-completion eval: challenge stage evidence stage=${record.challengeStageEval.stage} provenance=${record.challengeStageEval.provenance}`
+      );
+    }
 
     // 7. Persist
     const { dir: evalsDir } = resolveEvalsDir(undefined, repoDir);
