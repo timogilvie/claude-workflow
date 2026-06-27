@@ -730,6 +730,52 @@ test_fetch_queue_plan_warning_stays_quiet_without_debug() {
   assert_no_queue_plan_temp_files "non-debug temp files cleaned" "$tmp_dir"
 }
 
+test_render_paths_use_repaint_wrapper() {
+  local monitor_body
+  monitor_body="$(extract_monitor_heredoc)"
+
+  # Normal task-list frame path
+  local normal_snippet slots_snippet m_snippet
+  normal_snippet="$(awk '
+    /_task_frame="Next tasks:"/ { capture = 1 }
+    capture { print }
+    capture && /repaint_task_list_display/ { exit }
+  ' <<<"$monitor_body")"
+  check_contains "normal task-list path uses repaint wrapper" "$normal_snippet" "repaint_task_list_display"
+  check_not_contains "normal task-list path omits tput ed" "$normal_snippet" "tput ed"
+
+  # Slots-full frame path
+  slots_snippet="$(awk '
+    /_task_frame="Next tasks \(slots full\):"/ { capture = 1 }
+    capture { print }
+    capture && /repaint_task_list_display/ { exit }
+  ' <<<"$monitor_body")"
+  check_contains "slots-full path uses repaint wrapper" "$slots_snippet" "repaint_task_list_display"
+
+  # Flat m-mode path builds a frame rather than direct printing
+  m_snippet="$(awk '
+    /_all_frame="All tasks:"/ { capture = 1 }
+    capture { print }
+    capture && /repaint_task_list_display/ { exit }
+  ' <<<"$monitor_body")"
+  check_contains "m flat path uses repaint wrapper" "$m_snippet" "repaint_task_list_display"
+  check_not_contains "m flat path does not directly echo All tasks" "$m_snippet" 'log "info" "All tasks:"'
+}
+
+test_queue_analysis_fallback_uses_repaint_wrapper() {
+  local monitor_body fallback_snippet
+  monitor_body="$(extract_monitor_heredoc)"
+
+  # After queue analysis fails, we still end up at repaint_task_list_display "$_task_frame"
+  fallback_snippet="$(awk '
+    /GROUPED_DISPLAY=""/ && capture { exit }
+    /USING_GROUPED_VIEW=false/ { capture = 1 }
+    capture { print }
+  ' <<<"$monitor_body" | head -30)"
+  check_not_contains "queue fallback does not echo separate Next tasks header" \
+    "$fallback_snippet" 'echo "Next tasks:"'
+}
+
 echo "=== Task Selection Renderer ==="
 test_fetch_queue_plan_transforms_linear_backlog
 test_backlog_refresh_persists_cache_in_parent_shell
@@ -748,6 +794,8 @@ test_fetch_queue_plan_failure_diagnostics_dependency_planning
 test_fetch_queue_plan_failure_diagnostics_validation
 test_fetch_queue_plan_failure_diagnostics_empty_queue
 test_fetch_queue_plan_warning_stays_quiet_without_debug
+test_render_paths_use_repaint_wrapper
+test_queue_analysis_fallback_uses_repaint_wrapper
 
 echo
 echo "Passed: $PASS"

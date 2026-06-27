@@ -9055,7 +9055,8 @@ LAST_DISPLAY=""       # fingerprint of what was last printed
 LAST_ACTIVE_COUNT=-1  # force first render
 LAST_WAITING_MSG=""   # track last waiting message to avoid repetition
 READY_STALE_MERGE_LANE_LOG_KEYS=$'\n'
-TASK_LIST_RENDERED=0  # track task list cursor region in control pane
+TASK_LIST_RENDERED=0      # track task list cursor region in control pane
+TASK_LIST_RENDERED_ROWS=0 # row count of the last painted task frame
 SELECT_SHOW_ALL=false
 USING_GROUPED_VIEW=false
 GROUPED_SELECT_FROM=""
@@ -9070,7 +9071,42 @@ clear_task_list_display() {
     tput rc 2>/dev/null || true
     tput ed 2>/dev/null || printf '\033[J'
     TASK_LIST_RENDERED=0
+    TASK_LIST_RENDERED_ROWS=0
   fi
+}
+
+_count_task_frame_rows() {
+  local frame="$1" count=0
+  while IFS= read -r _; do
+    count=$((count + 1))
+  done <<< "$frame"
+  printf '%d\n' "$count"
+}
+
+repaint_task_list_display() {
+  local frame="$1" new_rows clear_rows n
+  new_rows=$(_count_task_frame_rows "$frame")
+  if (( TASK_LIST_RENDERED == 1 )); then
+    tput rc 2>/dev/null || true
+  else
+    echo ""
+    tput sc 2>/dev/null || true
+  fi
+  # Explicitly clear max(old_rows, new_rows) rows so shrinking frames
+  # don't leave stale content below the new frame.
+  clear_rows=$(( TASK_LIST_RENDERED_ROWS > new_rows ? TASK_LIST_RENDERED_ROWS : new_rows ))
+  if (( clear_rows > 0 )); then
+    n=0
+    while (( n < clear_rows )); do
+      printf '\033[K\n'
+      n=$((n + 1))
+    done
+    # Return cursor to the saved origin before writing the new frame.
+    printf '\033[%dA' "$clear_rows"
+  fi
+  wavemill_pane_repaint "$frame"
+  TASK_LIST_RENDERED=1
+  TASK_LIST_RENDERED_ROWS=$new_rows
 }
 
 log_ready_stale_merge_lane_once() {
@@ -11509,18 +11545,11 @@ while :; do
       fi
       _task_frame+=$'\n'"0 slots available; waiting for active tasks to finish. Press 'q' to quit or wait ${POLL_SECONDS}s to refresh."$'\n'
 
-      if (( TASK_LIST_RENDERED == 1 )); then
-        tput rc 2>/dev/null || true
-      else
-        echo ""
-        tput sc 2>/dev/null || true
-      fi
-      wavemill_pane_repaint "$_task_frame"
+      repaint_task_list_display "$_task_frame"
 
       LAST_DISPLAY="$display_fingerprint"
       LAST_ACTIVE_COUNT=$active_count
       LAST_WAITING_MSG=""
-      TASK_LIST_RENDERED=1
     fi
 
     poll_sleep "$POLL_SECONDS"
@@ -11611,18 +11640,11 @@ while :; do
             _task_frame+="Enter number(s) to start (e.g. 1 3), press Enter to launch recommended wave, 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"$'\n'
           fi
 
-          if (( TASK_LIST_RENDERED == 1 )); then
-            tput rc 2>/dev/null || true
-          else
-            echo ""
-            tput sc 2>/dev/null || true
-          fi
-          wavemill_pane_repaint "$_task_frame"
+          repaint_task_list_display "$_task_frame"
 
           LAST_DISPLAY="$display_fingerprint"
           LAST_ACTIVE_COUNT=$active_count
           LAST_WAITING_MSG=""  # Clear waiting state when tasks are available
-          TASK_LIST_RENDERED=1
         fi
 
         # Default: selection against unblocked list only
@@ -11648,22 +11670,21 @@ while :; do
               '.backlogExpanded = (if (.backlogExpanded // false) then false else true end) | .updated = (now | todate)'
             LAST_DISPLAY=""
           else
-            clear_task_list_display
             all_avail=$(printf '%s\n%s' "$avail_unblocked" "$avail_blocked" | grep .)
-            echo ""
-            log "info" "All tasks:"
+            _all_frame="All tasks:"$'\n'
             ln=0
             while IFS= read -r mline; do
               ln=$((ln + 1))
               IFS='|' read -r mid mslug mtitle marea mscore mblocked <<<"$mline"
               if (( mblocked > 0 )); then
-                printf "  %s. %s - %s (score: %.0f) [blocked]\n" "$ln" "$mid" "$mtitle" "$mscore"
+                _all_frame+="$(printf "  %s. %s - %s (score: %.0f) [blocked]\n" "$ln" "$mid" "$mtitle" "$mscore")"
               else
-                printf "  %s. %s - %s (score: %.0f)\n" "$ln" "$mid" "$mtitle" "$mscore"
+                _all_frame+="$(printf "  %s. %s - %s (score: %.0f)\n" "$ln" "$mid" "$mtitle" "$mscore")"
               fi
             done <<<"$all_avail"
-            echo ""
-            echo "Enter number(s) to start (e.g. 1 3), 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"
+            _all_frame+=$'\n'"Enter number(s) to start (e.g. 1 3), 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"$'\n'
+            repaint_task_list_display "$_all_frame"
+            LAST_DISPLAY=""
             SELECT_SHOW_ALL=true
           fi
         elif [[ "$REPLY" =~ ^[dD]$ ]]; then

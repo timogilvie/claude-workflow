@@ -1980,7 +1980,7 @@ if [[ ! -f "$MILL_SCRIPT" ]]; then
 else
   if ! grep -Fq 'log "status" "Next tasks:"' "$MILL_SCRIPT" \
     && (grep -Fq 'echo "Next tasks:"' "$MILL_SCRIPT" || grep -Fq '_task_frame="Next tasks:"' "$MILL_SCRIPT") \
-    && grep -Fq 'log "info" "All tasks:"' "$MILL_SCRIPT" \
+    && (grep -Fq 'log "info" "All tasks:"' "$MILL_SCRIPT" || grep -Fq '_all_frame="All tasks:"' "$MILL_SCRIPT") \
     && ! grep -Fq 'slot(s) available. Next tasks:' "$MILL_SCRIPT" \
     && ! grep -Fq 'slot(s) available. All tasks:' "$MILL_SCRIPT"; then
     pass "monitor uses echo for interactive prompts, not log"
