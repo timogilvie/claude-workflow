@@ -11671,15 +11671,15 @@ while :; do
             LAST_DISPLAY=""
           else
             all_avail=$(printf '%s\n%s' "$avail_unblocked" "$avail_blocked" | grep .)
-            _all_frame="All tasks:"$'\n'
+            _all_frame="All tasks:"
             ln=0
             while IFS= read -r mline; do
               ln=$((ln + 1))
               IFS='|' read -r mid mslug mtitle marea mscore mblocked <<<"$mline"
               if (( mblocked > 0 )); then
-                _all_frame+="$(printf "  %s. %s - %s (score: %.0f) [blocked]" "$ln" "$mid" "$mtitle" "$mscore")"$'\n'
+                _all_frame+=$'\n'"$(printf "  %s. %s - %s (score: %.0f) [blocked]" "$ln" "$mid" "$mtitle" "$mscore")"
               else
-                _all_frame+="$(printf "  %s. %s - %s (score: %.0f)" "$ln" "$mid" "$mtitle" "$mscore")"$'\n'
+                _all_frame+=$'\n'"$(printf "  %s. %s - %s (score: %.0f)" "$ln" "$mid" "$mtitle" "$mscore")"
               fi
             done <<<"$all_avail"
             _all_frame+=$'\n'"Enter number(s) to start (e.g. 1 3), 'q' to quit, or wait ${POLL_SECONDS}s to refresh:"$'\n'
