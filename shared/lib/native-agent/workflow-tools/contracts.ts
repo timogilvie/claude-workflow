@@ -18,7 +18,7 @@
 // Schema version
 // ---------------------------------------------------------------------------
 
-export const WORKFLOW_TOOL_SCHEMA_VERSION = '1.0.0' as const;
+export const WORKFLOW_TOOL_SCHEMA_VERSION = '1.1.0' as const;
 
 // ---------------------------------------------------------------------------
 // Tool names
@@ -475,6 +475,8 @@ export interface ExpandIssueSuccess {
   /** Task packet output path. Treat as wavemill-generated provenance. */
   taskPacketPath: string;
   ref?: WavemillTaskPacketRef;
+  /** Idempotency metadata (optional; present when the tool executor tracks dedupe). */
+  idempotency?: IdempotencyResult<WavemillTaskPacketRef>;
 }
 
 export interface ExpandIssueError {
