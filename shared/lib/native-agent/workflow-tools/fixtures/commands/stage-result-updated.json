@@ -1,0 +1,11 @@
+{
+  "featureDir": "",
+  "issueId": "HOK-2358",
+  "stage": "coding",
+  "status": "running",
+  "notes": "Updated command-tool implementation with transcript metadata.",
+  "artifacts": {
+    "type": "coding",
+    "commit": "def5678"
+  }
+}

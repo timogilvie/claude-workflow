@@ -1,0 +1,567 @@
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
+
+import {
+  createGithubAddLabelTool,
+  createGithubCreatePrTool,
+  githubAddLabel,
+  githubCreatePr,
+  type GitHubToolDeps,
+  type GitHubToolLabelTarget,
+  type GitHubToolPullRequest,
+} from './github.ts';
+import { githubAddLabelKey, githubCreatePrKey } from './dedupe.ts';
+import { isMutationAllowed } from './mutation-policy.ts';
+
+interface FixtureState {
+  pullRequests: GitHubToolPullRequest[];
+  labelsByTarget: Map<string, GitHubToolLabelTarget>;
+  failListOpenPullRequests: Error[];
+  failCreatePullRequest: Error[];
+  failUpdatePullRequest: Error[];
+  failGetLabels: Error[];
+  failAddLabel: Error[];
+  calls: Record<string, number>;
+  sleepCalls: number[];
+}
+
+function createFixtureDeps(seed?: {
+  pullRequests?: GitHubToolPullRequest[];
+  labelTargets?: Array<{
+    repo: string;
+    targetKind: 'pull_request' | 'issue';
+    targetNumber: number;
+    labels: string[];
+    url: string;
+  }>;
+  failListOpenPullRequests?: Error[];
+  failCreatePullRequest?: Error[];
+  failUpdatePullRequest?: Error[];
+  failGetLabels?: Error[];
+  failAddLabel?: Error[];
+  onCreateSideEffect?: (state: FixtureState) => void;
+  onAddLabelSideEffect?: (state: FixtureState) => void;
+}): { deps: GitHubToolDeps; state: FixtureState } {
+  const state: FixtureState = {
+    pullRequests: seed?.pullRequests ? [...seed.pullRequests] : [],
+    labelsByTarget: new Map(
+      (seed?.labelTargets ?? []).map((target) => [
+        targetKey(target.repo, target.targetKind, target.targetNumber),
+        {
+          number: target.targetNumber,
+          labels: [...target.labels],
+          url: target.url,
+        },
+      ]),
+    ),
+    failListOpenPullRequests: [...(seed?.failListOpenPullRequests ?? [])],
+    failCreatePullRequest: [...(seed?.failCreatePullRequest ?? [])],
+    failUpdatePullRequest: [...(seed?.failUpdatePullRequest ?? [])],
+    failGetLabels: [...(seed?.failGetLabels ?? [])],
+    failAddLabel: [...(seed?.failAddLabel ?? [])],
+    calls: {
+      listOpenPullRequests: 0,
+      createPullRequest: 0,
+      updatePullRequest: 0,
+      getLabels: 0,
+      addLabel: 0,
+    },
+    sleepCalls: [],
+  };
+
+  const deps: GitHubToolDeps = {
+    async listOpenPullRequests({ repo, head, base }) {
+      state.calls.listOpenPullRequests += 1;
+      const failure = state.failListOpenPullRequests.shift();
+      if (failure) {
+        throw failure;
+      }
+      return state.pullRequests.filter((pr) => (
+        pr.url.includes(repo) && pr.head === head && pr.base === base
+      ));
+    },
+    async createPullRequest({ repo, head, base, title, body }) {
+      state.calls.createPullRequest += 1;
+      const failure = state.failCreatePullRequest.shift();
+      if (failure) {
+        seed?.onCreateSideEffect?.(state);
+        throw failure;
+      }
+      const nextNumber = Math.max(0, ...state.pullRequests.map((pr) => pr.number)) + 1;
+      const pr: GitHubToolPullRequest = {
+        number: nextNumber,
+        title,
+        body,
+        head,
+        base,
+        url: `https://github.com/${repo}/pull/${nextNumber}`,
+      };
+      state.pullRequests.push(pr);
+      return pr;
+    },
+    async updatePullRequest({ repo, number, title, body }) {
+      state.calls.updatePullRequest += 1;
+      const failure = state.failUpdatePullRequest.shift();
+      if (failure) {
+        throw failure;
+      }
+      const current = state.pullRequests.find((pr) => pr.number === number && pr.url.includes(repo));
+      if (!current) {
+        throw new Error(`Pull request #${number} not found`);
+      }
+      current.title = title;
+      current.body = body;
+      return current;
+    },
+    async getLabels({ repo, targetKind, targetNumber }) {
+      state.calls.getLabels += 1;
+      const failure = state.failGetLabels.shift();
+      if (failure) {
+        throw failure;
+      }
+      const current = state.labelsByTarget.get(targetKey(repo, targetKind, targetNumber));
+      if (!current) {
+        throw new Error(`${targetKind} #${targetNumber} not found`);
+      }
+      return {
+        number: current.number,
+        labels: [...current.labels],
+        url: current.url,
+      };
+    },
+    async addLabel({ repo, targetKind, targetNumber, label }) {
+      state.calls.addLabel += 1;
+      const failure = state.failAddLabel.shift();
+      if (failure) {
+        seed?.onAddLabelSideEffect?.(state);
+        throw failure;
+      }
+      const key = targetKey(repo, targetKind, targetNumber);
+      const current = state.labelsByTarget.get(key);
+      if (!current) {
+        throw new Error(`${targetKind} #${targetNumber} not found`);
+      }
+      if (!current.labels.some((existing) => existing.toLowerCase() === label.toLowerCase())) {
+        current.labels.push(label);
+      }
+      return {
+        number: current.number,
+        labels: [...current.labels],
+        url: current.url,
+      };
+    },
+    async sleep(ms) {
+      state.sleepCalls.push(ms);
+    },
+    maxAttempts: 3,
+    retryDelayMs: 10,
+  };
+
+  return { deps, state };
+}
+
+describe('githubCreatePr', () => {
+  it('creates a new pull request when none exists', async () => {
+    const { deps } = createFixtureDeps();
+    const result = await githubCreatePr({
+      repo: 'acme/widgets',
+      head: 'feature/idempotent-pr',
+      base: 'main',
+      headSha: 'abc123',
+      title: 'Implement idempotent PR tool',
+      body: 'Body',
+    }, deps);
+
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.idempotency.outcome, 'created');
+    assert.equal(result.idempotency.key, githubCreatePrKey({
+      repo: 'acme/widgets',
+      head: 'feature/idempotent-pr',
+      base: 'main',
+      headSha: 'abc123',
+    }));
+    assert.equal(result.idempotency.ref?.number, 1);
+    assert.match(String(result.idempotency.ref?.url), /pull\/1$/);
+  });
+
+  it('reuses an existing matching pull request', async () => {
+    const { deps, state } = createFixtureDeps({
+      pullRequests: [{
+        number: 42,
+        title: 'Implement idempotent PR tool',
+        body: 'Body',
+        head: 'feature/idempotent-pr',
+        base: 'main',
+        url: 'https://github.com/acme/widgets/pull/42',
+      }],
+    });
+
+    const result = await githubCreatePr({
+      repo: 'acme/widgets',
+      head: 'feature/idempotent-pr',
+      base: 'main',
+      headSha: 'abc123',
+      title: 'Implement idempotent PR tool',
+      body: 'Body',
+    }, deps);
+
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.idempotency.outcome, 'reused');
+    assert.equal(result.idempotency.ref?.number, 42);
+    assert.equal(state.calls.createPullRequest, 0);
+    assert.equal(state.calls.updatePullRequest, 0);
+  });
+
+  it('updates an existing pull request when title or body differ', async () => {
+    const { deps, state } = createFixtureDeps({
+      pullRequests: [{
+        number: 42,
+        title: 'Old title',
+        body: 'Old body',
+        head: 'feature/idempotent-pr',
+        base: 'main',
+        url: 'https://github.com/acme/widgets/pull/42',
+      }],
+    });
+
+    const result = await githubCreatePr({
+      repo: 'acme/widgets',
+      head: 'feature/idempotent-pr',
+      base: 'main',
+      headSha: 'abc123',
+      title: 'New title',
+      body: 'New body',
+    }, deps);
+
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.idempotency.outcome, 'updated');
+    assert.equal(result.idempotency.ref?.number, 42);
+    assert.equal(state.pullRequests[0]?.title, 'New title');
+    assert.equal(state.pullRequests[0]?.body, 'New body');
+  });
+
+  it('retries after rate limiting and then succeeds', async () => {
+    const { deps, state } = createFixtureDeps({
+      failListOpenPullRequests: [new Error('HTTP 429 rate limit exceeded')],
+    });
+
+    const result = await githubCreatePr({
+      repo: 'acme/widgets',
+      head: 'feature/idempotent-pr',
+      base: 'main',
+      headSha: 'abc123',
+      title: 'Retry title',
+      body: 'Retry body',
+    }, deps);
+
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.idempotency.outcome, 'created');
+    assert.equal(state.calls.listOpenPullRequests, 2);
+    assert.deepEqual(state.sleepCalls, [10]);
+  });
+
+  it('does not duplicate a pull request when create partially succeeds before a transient failure', async () => {
+    const { deps, state } = createFixtureDeps({
+      failCreatePullRequest: [new Error('network timeout while waiting for GitHub')],
+      onCreateSideEffect(fixture) {
+        fixture.pullRequests.push({
+          number: 77,
+          title: 'Transient title',
+          body: 'Transient body',
+          head: 'feature/idempotent-pr',
+          base: 'main',
+          url: 'https://github.com/acme/widgets/pull/77',
+        });
+      },
+    });
+
+    const result = await githubCreatePr({
+      repo: 'acme/widgets',
+      head: 'feature/idempotent-pr',
+      base: 'main',
+      headSha: 'abc123',
+      title: 'Transient title',
+      body: 'Transient body',
+    }, deps);
+
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.idempotency.outcome, 'reused');
+    assert.equal(result.idempotency.ref?.number, 77);
+    assert.equal(state.pullRequests.length, 1);
+    assert.equal(state.calls.createPullRequest, 1);
+  });
+
+  it('maps duplicate open pull requests to conflict', async () => {
+    const { deps } = createFixtureDeps({
+      pullRequests: [
+        {
+          number: 41,
+          title: 'One',
+          body: 'Body',
+          head: 'feature/idempotent-pr',
+          base: 'main',
+          url: 'https://github.com/acme/widgets/pull/41',
+        },
+        {
+          number: 42,
+          title: 'Two',
+          body: 'Body',
+          head: 'feature/idempotent-pr',
+          base: 'main',
+          url: 'https://github.com/acme/widgets/pull/42',
+        },
+      ],
+    });
+
+    const result = await githubCreatePr({
+      repo: 'acme/widgets',
+      head: 'feature/idempotent-pr',
+      base: 'main',
+      headSha: 'abc123',
+      title: 'Title',
+      body: 'Body',
+    }, deps);
+
+    assert.deepEqual(result, {
+      ok: false,
+      tool: 'github_create_pr',
+      error: 'conflict',
+      message: 'Multiple open pull requests already exist for acme/widgets:feature/idempotent-pr->main',
+    });
+  });
+
+  it('maps not_found errors', async () => {
+    const { deps } = createFixtureDeps({
+      failCreatePullRequest: [new Error('Repository not found')],
+    });
+
+    const result = await githubCreatePr({
+      repo: 'acme/widgets',
+      head: 'feature/idempotent-pr',
+      base: 'main',
+      headSha: 'abc123',
+      title: 'Title',
+      body: 'Body',
+    }, deps);
+
+    assert.deepEqual(result, {
+      ok: false,
+      tool: 'github_create_pr',
+      error: 'not_found',
+      message: 'Repository not found',
+    });
+  });
+
+  it('denies ready-phase general PR mutations', async () => {
+    const { deps } = createFixtureDeps();
+    const result = await githubCreatePr({
+      repo: 'acme/widgets',
+      phase: 'ready',
+      head: 'feature/idempotent-pr',
+      base: 'main',
+      headSha: 'abc123',
+      title: 'Title',
+      body: 'Body',
+    }, deps);
+
+    assert.deepEqual(result, {
+      ok: false,
+      tool: 'github_create_pr',
+      error: 'policy_denied',
+      message: 'ready_mutation_denied: general PR creation not allowed in ready phase; only stale_base or merge_conflict remediation',
+    });
+  });
+});
+
+describe('githubAddLabel', () => {
+  it('adds a missing label', async () => {
+    const { deps } = createFixtureDeps({
+      labelTargets: [{
+        repo: 'acme/widgets',
+        targetKind: 'pull_request',
+        targetNumber: 22,
+        labels: ['existing'],
+        url: 'https://github.com/acme/widgets/pull/22',
+      }],
+    });
+
+    const result = await githubAddLabel({
+      repo: 'acme/widgets',
+      targetKind: 'pull_request',
+      targetNumber: 22,
+      label: 'needs-review',
+    }, deps);
+
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.idempotency.outcome, 'created');
+    assert.equal(result.idempotency.key, githubAddLabelKey({
+      repo: 'acme/widgets',
+      targetKind: 'pull_request',
+      targetNumber: 22,
+      label: 'needs-review',
+    }));
+    assert.equal(result.idempotency.ref?.id, 'acme/widgets#22:needs-review');
+    assert.match(String(result.idempotency.ref?.url), /pull\/22$/);
+  });
+
+  it('skips when the label is already present case-insensitively', async () => {
+    const { deps, state } = createFixtureDeps({
+      labelTargets: [{
+        repo: 'acme/widgets',
+        targetKind: 'pull_request',
+        targetNumber: 22,
+        labels: ['Needs-Review'],
+        url: 'https://github.com/acme/widgets/pull/22',
+      }],
+    });
+
+    const result = await githubAddLabel({
+      repo: 'acme/widgets',
+      targetKind: 'pull_request',
+      targetNumber: 22,
+      label: 'needs-review',
+    }, deps);
+
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.idempotency.outcome, 'skipped');
+    assert.equal(result.idempotency.ref, null);
+    assert.match(String(result.idempotency.reason), /already present/);
+    assert.equal(state.calls.addLabel, 0);
+  });
+
+  it('retries and becomes a no-op when the label was added before the transient failure surfaced', async () => {
+    const { deps, state } = createFixtureDeps({
+      labelTargets: [{
+        repo: 'acme/widgets',
+        targetKind: 'pull_request',
+        targetNumber: 22,
+        labels: [],
+        url: 'https://github.com/acme/widgets/pull/22',
+      }],
+      failAddLabel: [new Error('network timeout while adding label')],
+      onAddLabelSideEffect(fixture) {
+        const current = fixture.labelsByTarget.get(targetKey('acme/widgets', 'pull_request', 22));
+        current?.labels.push('needs-review');
+      },
+    });
+
+    const result = await githubAddLabel({
+      repo: 'acme/widgets',
+      targetKind: 'pull_request',
+      targetNumber: 22,
+      label: 'needs-review',
+    }, deps);
+
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.idempotency.outcome, 'skipped');
+    assert.equal(state.calls.addLabel, 1);
+    assert.deepEqual(state.sleepCalls, [10]);
+  });
+
+  it('maps not_found errors', async () => {
+    const { deps } = createFixtureDeps({
+      failGetLabels: [new Error('Issue #99 not found')],
+    });
+
+    const result = await githubAddLabel({
+      repo: 'acme/widgets',
+      targetKind: 'issue',
+      targetNumber: 99,
+      label: 'needs-review',
+    }, deps);
+
+    assert.deepEqual(result, {
+      ok: false,
+      tool: 'github_add_label',
+      error: 'not_found',
+      message: 'Issue #99 not found',
+    });
+  });
+
+  it('denies non-review label mutations', async () => {
+    const { deps } = createFixtureDeps({
+      labelTargets: [{
+        repo: 'acme/widgets',
+        targetKind: 'issue',
+        targetNumber: 99,
+        labels: [],
+        url: 'https://github.com/acme/widgets/issues/99',
+      }],
+    });
+
+    const result = await githubAddLabel({
+      repo: 'acme/widgets',
+      phase: 'ready',
+      targetKind: 'issue',
+      targetNumber: 99,
+      label: 'needs-review',
+    }, deps);
+
+    assert.deepEqual(result, {
+      ok: false,
+      tool: 'github_add_label',
+      error: 'policy_denied',
+      message: 'ready_mutation_denied: label add not allowed in ready phase',
+    });
+  });
+});
+
+describe('workflow tool descriptors', () => {
+  it('createGithubCreatePrTool returns the contract details payload', async () => {
+    const { deps } = createFixtureDeps();
+    const tool = createGithubCreatePrTool(deps);
+    const result = await tool.execute('call-1', {
+      repo: 'acme/widgets',
+      head: 'feature/idempotent-pr',
+      base: 'main',
+      headSha: 'abc123',
+      title: 'Title',
+      body: 'Body',
+    });
+
+    assert.equal(tool.metadata.name, 'github_create_pr');
+    assert.equal(result.details.ok, true);
+    assert.match(result.content[0]?.text ?? '', /created/);
+  });
+
+  it('createGithubAddLabelTool returns the contract details payload', async () => {
+    const { deps } = createFixtureDeps({
+      labelTargets: [{
+        repo: 'acme/widgets',
+        targetKind: 'issue',
+        targetNumber: 99,
+        labels: [],
+        url: 'https://github.com/acme/widgets/issues/99',
+      }],
+    });
+    const tool = createGithubAddLabelTool(deps);
+    const result = await tool.execute('call-1', {
+      repo: 'acme/widgets',
+      targetKind: 'issue',
+      targetNumber: 99,
+      label: 'needs-review',
+    });
+
+    assert.equal(tool.metadata.name, 'github_add_label');
+    assert.equal(result.details.ok, true);
+    assert.match(result.content[0]?.text ?? '', /created/);
+  });
+});
+
+describe('workflow policy invariants', () => {
+  it('merge remains denied for review and no merge helper is exported', () => {
+    assert.equal(isMutationAllowed('review', 'github_create_pr', 'merge').allowed, false);
+  });
+});
+
+function targetKey(repo: string, targetKind: 'pull_request' | 'issue', targetNumber: number): string {
+  return `${repo}:${targetKind}:${targetNumber}`;
+}
