@@ -1965,6 +1965,276 @@ test('first tick on old state file without lastLogged* fields emits and backfill
   }
 });
 
+// HOK-2403: challenge pair gate — classifyReadyTask unit tests
+
+test('classify challenge PR in merge lane with no comparison as waiting-on-eval-comparison', () => {
+  const classification = classifyReadyTask(
+    makeSnapshot({
+      idleMinutes: 15,
+      challengePairId: 'HOK-2358',
+      readyArtifacts: { type: 'ready', verdict: 'pass', queueState: 'ready-stale' },
+    }),
+    makeTruth(),
+    new Date('2026-05-05T12:30:00.000Z'),
+    WATCHDOG_CONFIG,
+    undefined,
+    {
+      kind: 'pair-unresolved',
+      pairId: 'HOK-2358',
+      otherPr: null,
+      reason: 'pair-unresolved:no-comparison',
+    },
+  );
+
+  assert.equal(classification.kind, 'waiting-on-eval-comparison');
+  assert.match(classification.detail, /HOK-2358/);
+  assert.match(classification.detail, /pair-unresolved:no-comparison/);
+  assert.match(classification.detail, /merge controller will not select/i);
+});
+
+test('classify challenge PR in merge lane with no comparison includes other PR number when available', () => {
+  const classification = classifyReadyTask(
+    makeSnapshot({
+      idleMinutes: 15,
+      challengePairId: 'HOK-2358',
+      readyArtifacts: { type: 'ready', verdict: 'pass', queueState: 'merge-candidate' },
+    }),
+    makeTruth(),
+    new Date('2026-05-05T12:30:00.000Z'),
+    WATCHDOG_CONFIG,
+    undefined,
+    {
+      kind: 'pair-unresolved',
+      pairId: 'HOK-2358',
+      otherPr: 900,
+      reason: 'pair-unresolved:no-comparison',
+    },
+  );
+
+  assert.equal(classification.kind, 'waiting-on-eval-comparison');
+  assert.match(classification.detail, /pair PR #900/);
+});
+
+test('non-challenge PR in merge lane still classifies as waiting-on-merge-lane when no gate is provided', () => {
+  const classification = classifyReadyTask(
+    makeSnapshot({
+      idleMinutes: 15,
+      challengePairId: null,
+      readyArtifacts: { type: 'ready', verdict: 'pass', queueState: 'ready-stale' },
+    }),
+    makeTruth(),
+    new Date('2026-05-05T12:30:00.000Z'),
+    WATCHDOG_CONFIG,
+  );
+
+  assert.equal(classification.kind, 'waiting-on-merge-lane');
+});
+
+test('challenge PR that is a winner in merge lane still classifies as waiting-on-merge-lane', () => {
+  const classification = classifyReadyTask(
+    makeSnapshot({
+      idleMinutes: 15,
+      challengePairId: 'HOK-2358',
+      readyArtifacts: { type: 'ready', verdict: 'pass', queueState: 'ready-stale' },
+    }),
+    makeTruth(),
+    new Date('2026-05-05T12:30:00.000Z'),
+    WATCHDOG_CONFIG,
+    undefined,
+    {
+      kind: 'winner',
+      pairId: 'HOK-2358',
+      loserPr: 900,
+      autoMerge: true,
+    },
+  );
+
+  assert.equal(classification.kind, 'waiting-on-merge-lane');
+});
+
+// HOK-2403: integration tests using tickReadyWatchdog
+
+test('tick classifies challenge PR in merge lane as waiting-on-eval-comparison when comparison is missing', async () => {
+  const { repoDir, stateDir, stateFile, featureDir } = setupReadyTask('HOK-2358', 893);
+
+  // Override workflow state with challenge task metadata
+  writeFileSync(stateFile, JSON.stringify({
+    tasks: {
+      'HOK-2358': {
+        slug: 'ready-watchdog-task',
+        branch: 'task/ready-watchdog-task',
+        worktree: path.join(repoDir, 'worktrees', 'ready-watchdog-task'),
+        pr: 893,
+        phase: 'ready',
+        updated: '2026-05-05T12:00:00.000Z',
+        agent: 'claude',
+        model: 'claude-sonnet-4-6',
+        challengePairId: 'HOK-2358',
+        challengeRole: 'primary',
+      },
+    },
+    jobs: {},
+  }, null, 2));
+
+  // Ready artifacts indicate the PR is in the merge lane
+  writeFileSync(path.join(featureDir, '.ready-result.json'), JSON.stringify({
+    stage: 'ready',
+    status: 'completed',
+    startedAt: '2026-05-05T11:55:00.000Z',
+    finishedAt: '2026-05-05T12:00:00.000Z',
+    agent: 'claude',
+    model: 'claude-sonnet-4-6',
+    notes: null,
+    artifacts: { type: 'ready', verdict: 'pass', prNumber: 893, queueState: 'ready-stale' },
+  }, null, 2));
+
+  // No challenge-records.jsonl — simulates missing comparison
+  // (evals dir already exists from setupReadyTask via stateDir)
+
+  try {
+    const result = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: WATCHDOG_CONFIG,
+      deps: {
+        fetchGitHubTruth: async () => makeTruth({ mergeStateStatus: 'CLEAN' }),
+        getCurrentHead: async () => 'head-1',
+        getWorktreeMergeState: async () => ({
+          mergeHead: null, unmergedPaths: [], stagedPaths: [], unstagedPaths: [], untrackedPaths: [], rawStatus: [],
+        }),
+        isTaskPaneActive: async () => null,
+        now: () => new Date('2030-05-05T12:30:00.000Z'),
+      },
+    });
+
+    assert.equal(result.findings.length, 1);
+    assert.equal(result.findings[0].classification, 'waiting-on-eval-comparison',
+      `expected waiting-on-eval-comparison, got ${result.findings[0].classification}: ${result.findings[0].detail}`);
+    assert.notEqual(result.findings[0].classification, 'waiting-on-merge-lane');
+    assert.match(result.findings[0].detail, /HOK-2358/);
+    assert.match(result.findings[0].detail, /pair-unresolved:no-comparison/);
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('tick classifies non-challenge clean green PR in merge lane as waiting-on-merge-lane (no regression)', async () => {
+  const { repoDir, stateFile, featureDir } = setupReadyTask('HOK-9999', 999);
+
+  writeFileSync(path.join(featureDir, '.ready-result.json'), JSON.stringify({
+    stage: 'ready',
+    status: 'completed',
+    startedAt: '2030-06-23T12:00:00.000Z',
+    finishedAt: '2030-06-23T12:10:00.000Z',
+    agent: 'claude',
+    model: 'claude-sonnet-4-6',
+    notes: null,
+    artifacts: { type: 'ready', verdict: 'pass', prNumber: 999, queueState: 'ready-stale' },
+  }, null, 2));
+
+  try {
+    const result = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: WATCHDOG_CONFIG,
+      deps: {
+        fetchGitHubTruth: async () => makeTruth({ mergeStateStatus: 'CLEAN' }),
+        getCurrentHead: async () => 'head-1',
+        getWorktreeMergeState: async () => ({
+          mergeHead: null, unmergedPaths: [], stagedPaths: [], unstagedPaths: [], untrackedPaths: [], rawStatus: [],
+        }),
+        isTaskPaneActive: async () => null,
+        now: () => new Date('2030-06-23T12:23:00.000Z'),
+      },
+    });
+
+    assert.equal(result.findings.length, 1);
+    assert.equal(result.findings[0].classification, 'waiting-on-merge-lane');
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('tick classifies challenge PR in merge lane as waiting-on-merge-lane when comparison exists (winner)', async () => {
+  const { repoDir, stateDir, stateFile, featureDir } = setupReadyTask('HOK-2358', 893);
+
+  writeFileSync(stateFile, JSON.stringify({
+    tasks: {
+      'HOK-2358': {
+        slug: 'ready-watchdog-task',
+        branch: 'task/ready-watchdog-task',
+        worktree: path.join(repoDir, 'worktrees', 'ready-watchdog-task'),
+        pr: 893,
+        phase: 'ready',
+        updated: '2026-05-05T12:00:00.000Z',
+        agent: 'claude',
+        model: 'claude-sonnet-4-6',
+        challengePairId: 'HOK-2358',
+        challengeRole: 'primary',
+      },
+    },
+    jobs: {},
+  }, null, 2));
+
+  writeFileSync(path.join(featureDir, '.ready-result.json'), JSON.stringify({
+    stage: 'ready',
+    status: 'completed',
+    startedAt: '2030-06-23T12:00:00.000Z',
+    finishedAt: '2030-06-23T12:10:00.000Z',
+    agent: 'claude',
+    model: 'claude-sonnet-4-6',
+    notes: null,
+    artifacts: { type: 'ready', verdict: 'pass', prNumber: 893, queueState: 'ready-stale' },
+  }, null, 2));
+
+  // Write a comparison record that makes PR #893 the winner
+  const evalsDir = path.join(stateDir, 'evals');
+  mkdirSync(evalsDir, { recursive: true });
+  writeFileSync(path.join(evalsDir, 'challenge-records.jsonl'), JSON.stringify({
+    challengePairId: 'HOK-2358',
+    primaryModel: 'claude-sonnet-4-6',
+    challengerModel: 'claude-opus-4-5',
+    primaryPrUrl: 'https://github.com/org/repo/pull/893',
+    challengerPrUrl: 'https://github.com/org/repo/pull/894',
+    primaryEvalScore: 0.9,
+    challengerEvalScore: 0.7,
+    winner: 'primary',
+    winnerModel: 'claude-sonnet-4-6',
+    rationale: 'primary was better',
+    dimensions: {
+      completeness: { primary: 0.9, challenger: 0.7 },
+      correctness: { primary: 0.9, challenger: 0.7 },
+      code_quality: { primary: 0.9, challenger: 0.7 },
+      intervention_impact: { primary: 0.9, challenger: 0.7 },
+      autonomy: { primary: 0.9, challenger: 0.7 },
+    },
+    timestamp: '2026-05-05T11:00:00.000Z',
+  }) + '\n', 'utf-8');
+
+  try {
+    const result = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: WATCHDOG_CONFIG,
+      deps: {
+        fetchGitHubTruth: async () => makeTruth({ mergeStateStatus: 'CLEAN' }),
+        getCurrentHead: async () => 'head-1',
+        getWorktreeMergeState: async () => ({
+          mergeHead: null, unmergedPaths: [], stagedPaths: [], unstagedPaths: [], untrackedPaths: [], rawStatus: [],
+        }),
+        isTaskPaneActive: async () => null,
+        now: () => new Date('2030-06-23T12:23:00.000Z'),
+      },
+    });
+
+    assert.equal(result.findings.length, 1);
+    assert.equal(result.findings[0].classification, 'waiting-on-merge-lane',
+      `winner challenge PR should still be waiting-on-merge-lane, got: ${result.findings[0].classification}: ${result.findings[0].detail}`);
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
 // HOK-2300: env variable validation
 test('WAVEMILL_READY_WATCHDOG_REPORT_INTERVAL_SECONDS validation falls back to 3600 for invalid values', async () => {
   const { repoDir, stateFile, featureDir } = setupReadyTask('HOK-2300', 900);
