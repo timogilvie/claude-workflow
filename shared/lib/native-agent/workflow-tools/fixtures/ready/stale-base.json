@@ -1,0 +1,18 @@
+{
+  "description": "Stale-base remediation: migration file requires down_revision update after rebase",
+  "input": {
+    "classification": {
+      "kind": "stale_base",
+      "affectedFiles": ["alembic/versions/abc123_add_users.py"],
+      "source": "stale-base-check"
+    },
+    "proposedEdits": ["alembic/versions/abc123_add_users.py"]
+  },
+  "expected": {
+    "decision": "allowed",
+    "classification": "stale_base",
+    "allowedScope": ["alembic/versions/abc123_add_users.py"],
+    "rejectedEdits": [],
+    "rationale": "all proposed edits are within the stale-base remediation scope"
+  }
+}

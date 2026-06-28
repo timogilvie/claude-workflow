@@ -442,6 +442,55 @@ type MutationRecord<TResult> =
 
 ---
 
+## Ready-Phase Per-Edit Guardrail (HOK-2361)
+
+In addition to the per-(phase, tool, action) mutation policy matrix, the ready phase enforces a **per-edit-path** guardrail through `shared/lib/native-agent/workflow-tools/ready-remediation.ts`.
+
+### Purpose
+
+The per-action matrix gates whether a tool call is permitted at all (e.g. `github_create_pr` + `merge_conflict` is allowed in `ready`). The per-edit guardrail goes one level deeper and checks whether every **individual file path** in a proposed edit set is within the scope declared by the active ready-stage classification. This prevents an agent from smuggling unrelated feature edits through a conflict-remediation window.
+
+### Vocabulary mapping
+
+| Ready-remediation kind | Ready-stage / ready-watchdog term | Trigger |
+|---|---|---|
+| `stale_base` | `auto-update` (watchdog), `stale-base` (docs) | PR is behind the base branch |
+| `merge_conflict` | `CONFLICTED` (ready-stage `MergeConflictResult`) | PR has merge conflicts |
+| `unknown` | Any other state | Classification could not be determined; scope is empty (deny-all) |
+
+### Decision shape
+
+```typescript
+interface ReadyRemediationDecision {
+  decision: 'allowed' | 'denied';
+  classification: 'stale_base' | 'merge_conflict' | 'unknown';
+  allowedScope: string[];    // normalized, sorted, deduped repo-relative paths
+  rejectedEdits: string[];   // paths from proposedEdits that were out-of-scope
+  rationale: string;         // human-readable; names rejected paths when denied
+}
+```
+
+This decision is attached to `ReadyArtifacts.remediationDecision` in the stage result file.
+
+### Deny-by-default semantics
+
+- **Unknown classification** → empty scope → all edits denied.
+- **Empty edit set** → `allowed` with rationale `"no edits proposed"` (cannot violate scope).
+- **Path traversal or absolute paths** → always rejected (appended to `rejectedEdits`).
+- **Any proposed path outside `allowedScope`** → `denied`; all out-of-scope paths listed in `rejectedEdits` and named in `rationale`.
+
+### Adapter helpers
+
+```typescript
+// Build a classification from a ready-stage MergeConflictResult
+fromMergeConflictResult(result: MergeConflictResult, conflictedFiles: string[]): ReadyRemediationClassification
+
+// Build a classification for the stale-base condition
+fromStaleBaseCheck(affectedFiles: string[], source?: string): ReadyRemediationClassification
+```
+
+---
+
 ## Schema Versioning
 
 The schema version is `1.1.0`, exposed as:
