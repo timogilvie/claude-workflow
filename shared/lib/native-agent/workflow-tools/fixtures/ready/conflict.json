@@ -1,0 +1,18 @@
+{
+  "description": "Merge-conflict remediation: proposed edits are a subset of conflicted files",
+  "input": {
+    "classification": {
+      "kind": "merge_conflict",
+      "affectedFiles": ["src/a.ts", "src/b.ts"],
+      "source": "merge-conflict-result:CONFLICTED"
+    },
+    "proposedEdits": ["src/a.ts"]
+  },
+  "expected": {
+    "decision": "allowed",
+    "classification": "merge_conflict",
+    "allowedScope": ["src/a.ts", "src/b.ts"],
+    "rejectedEdits": [],
+    "rationale": "all proposed edits are within the merge-conflict remediation scope"
+  }
+}
