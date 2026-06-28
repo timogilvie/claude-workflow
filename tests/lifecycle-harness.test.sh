@@ -170,6 +170,11 @@ harness_extract_real_functions() {
     auto_advance_blocked_completion \
     emit_blocked_completion_attention \
     recover_misplaced_coding_complete_marker \
+    coding_expected_identity \
+    coding_hook_state \
+    coding_monitor_capture_pane_tail \
+    coding_observed_pane_identity \
+    coding_wrong_task_divergence \
     handle_planning_overreach_rejection \
     validate_coding_phase_output \
     resolve_phase \
@@ -2081,6 +2086,135 @@ test_tracked_root_level_coding_complete_marker_is_ignored() {
   check_not_contains "tracked root marker: no recovery warning logged" "$(kv_value "$tick" warn_output)" "Recovered misplaced .coding-complete"
 }
 
+test_coding_wrong_task_divergence_needs_user() {
+  local slug="coding-wrong-task-divergence"
+  local issue="HOK-2402-A"
+  local repo feature_dir tick note
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  feature_dir="$repo/features/$slug"
+  cat > "$feature_dir/selected-task.json" <<EOF
+{
+  "taskId": "$issue",
+  "featureName": "$slug"
+}
+EOF
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" '
+    CURRENT_PHASE="coding"
+    _tmux_task_window_target() { printf "%s\n" "@7"; }
+    coding_monitor_capture_pane_tail() {
+      cat <<'"'"'EOF'"'"'
+You are working on: Different task (HOK-2403)
+Repo worktree: /tmp/worktrees/other-slug
+Created marker: worktrees/other-slug/features/other-slug/.coding-complete
+EOF
+    }
+  ')"
+  note="$(jq -r '.notes // empty' "$feature_dir/.coding-result.json")"
+
+  check_eq "wrong task: coding stays running" "running" "$(harness_read_stage_status "$repo" "$slug" coding)"
+  check_eq "wrong task: needs-user attention set" "needs-user" "$(kv_value "$tick" attention)"
+  check_eq "wrong task: task remains active" "1" "$(kv_value "$tick" active_count)"
+  check_contains "wrong task: note names expected identity" "$note" "$issue/$slug"
+  check_contains "wrong task: note names observed identity" "$note" "HOK-2403/other-slug"
+  check_contains "wrong task: note names missing marker" "$note" "features/$slug/.coding-complete"
+  check_contains "wrong task: warning emitted" "$(kv_value "$tick" warn_output)" "expected $issue/$slug"
+}
+
+test_coding_wrong_task_divergence_ignored_when_hook_working() {
+  local slug="coding-wrong-task-hook-working"
+  local issue="HOK-2402-HOOK"
+  local repo feature_dir tick
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  feature_dir="$repo/features/$slug"
+  cat > "$feature_dir/selected-task.json" <<EOF
+{
+  "taskId": "$issue",
+  "featureName": "$slug"
+}
+EOF
+  cat > "/tmp/wavemill-lifecycle-harness-${issue}.hook" <<EOF
+{"state":"working","timestamp":$(date +%s)}
+EOF
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" '
+    CURRENT_PHASE="coding"
+    coding_monitor_capture_pane_tail() {
+      cat <<'"'"'EOF'"'"'
+You are working on: Different task (HOK-2404)
+Created marker: worktrees/other-slug/features/other-slug/.coding-complete
+EOF
+    }
+  ')"
+
+  check_eq "hook working: attention remains clear" "clear" "$(kv_value "$tick" attention)"
+  check_eq "hook working: coding stays running" "running" "$(harness_read_stage_status "$repo" "$slug" coding)"
+  check_not_contains "hook working: no divergence warning" "$(kv_value "$tick" warn_output)" "Coding task needs attention"
+}
+
+test_coding_wrong_task_divergence_ignored_when_observed_same_slug() {
+  local slug="coding-wrong-task-same-slug"
+  local issue="HOK-2402-SAME"
+  local repo feature_dir tick
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  feature_dir="$repo/features/$slug"
+  cat > "$feature_dir/selected-task.json" <<EOF
+{
+  "taskId": "$issue",
+  "featureName": "$slug"
+}
+EOF
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" '
+    CURRENT_PHASE="coding"
+    _tmux_task_window_target() { printf "%s\n" "@7"; }
+    coding_monitor_capture_pane_tail() {
+      cat <<'"'"'EOF'"'"'
+You are working on: Same slug task
+Created marker: worktrees/'"$slug"'/features/'"$slug"'/.coding-complete
+EOF
+    }
+  ')"
+
+  check_eq "same slug: attention remains clear" "clear" "$(kv_value "$tick" attention)"
+  check_eq "same slug: coding stays running" "running" "$(harness_read_stage_status "$repo" "$slug" coding)"
+  check_not_contains "same slug: no divergence warning" "$(kv_value "$tick" warn_output)" "Coding task needs attention"
+}
+
+test_coding_wrong_task_divergence_ignored_when_identity_unknown() {
+  local slug="coding-wrong-task-unknown"
+  local issue="HOK-2402-UNKNOWN"
+  local repo feature_dir tick
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  feature_dir="$repo/features/$slug"
+  cat > "$feature_dir/selected-task.json" <<EOF
+{
+  "taskId": "$issue",
+  "featureName": "$slug"
+}
+EOF
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" '
+    CURRENT_PHASE="coding"
+    _tmux_task_window_target() { printf "%s\n" "@7"; }
+    coding_monitor_capture_pane_tail() {
+      printf "%s\n" "terminal output without task identity"
+    }
+  ')"
+
+  check_eq "unknown identity: attention remains clear" "clear" "$(kv_value "$tick" attention)"
+  check_eq "unknown identity: coding stays running" "running" "$(harness_read_stage_status "$repo" "$slug" coding)"
+  check_not_contains "unknown identity: no divergence warning" "$(kv_value "$tick" warn_output)" "Coding task needs attention"
+}
+
 test_not_eligible_expanded_reroute_does_not_emit_helper_failure_warn() {
   local slug="not-eligible-expanded-reroute"
   local issue="HOK-2274-NOT-ELIGIBLE"
@@ -2409,6 +2543,10 @@ test_coding_capacity_hook_ignores_stale_signal
 test_misplaced_coding_complete_marker_is_recovered
 test_root_level_coding_complete_marker_is_recovered
 test_tracked_root_level_coding_complete_marker_is_ignored
+test_coding_wrong_task_divergence_needs_user
+test_coding_wrong_task_divergence_ignored_when_hook_working
+test_coding_wrong_task_divergence_ignored_when_observed_same_slug
+test_coding_wrong_task_divergence_ignored_when_identity_unknown
 test_not_eligible_expanded_reroute_does_not_emit_helper_failure_warn
 test_disabled_expanded_reroute_does_not_emit_helper_failure_warn
 test_routing_error_expanded_reroute_emits_helper_failure_warn

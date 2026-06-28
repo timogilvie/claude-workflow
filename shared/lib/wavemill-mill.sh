@@ -4574,6 +4574,114 @@ recover_misplaced_coding_complete_marker() {
   return 0
 }
 
+coding_expected_identity() {
+  local feature_dir="$1" fallback_issue="$2" fallback_slug="$3"
+  local selected_task_file expected_issue expected_slug source="fallback"
+
+  selected_task_file="$feature_dir/selected-task.json"
+  expected_issue="$fallback_issue"
+  expected_slug="$fallback_slug"
+
+  if [[ -f "$selected_task_file" ]] && jq empty "$selected_task_file" >/dev/null 2>&1; then
+    expected_issue="$(jq -r '.taskId // .issue // empty' "$selected_task_file" 2>/dev/null || echo "")"
+    expected_slug="$(jq -r '.featureName // .slug // empty' "$selected_task_file" 2>/dev/null || echo "")"
+    [[ -n "$expected_issue" ]] || expected_issue="$fallback_issue"
+    [[ -n "$expected_slug" ]] || expected_slug="$fallback_slug"
+    source="selected-task.json"
+  fi
+
+  printf '%s|%s|%s\n' "$expected_issue" "$expected_slug" "$source"
+}
+
+coding_hook_state() {
+  local issue="$1"
+  local hook_file="/tmp/wavemill-${SESSION}-${issue}.hook"
+  local state ts now staleness
+
+  [[ -f "$hook_file" ]] || return 1
+  state=$(jq -r '.state // empty' "$hook_file" 2>/dev/null || echo "")
+  [[ -n "$state" ]] || return 1
+
+  ts=$(jq -r '.timestamp // 0' "$hook_file" 2>/dev/null || echo "0")
+  [[ "$ts" =~ ^[0-9]+$ ]] || return 1
+
+  now="$(date +%s)"
+  staleness=$(( now - ts ))
+  (( staleness >= 0 && staleness < 300 )) || return 1
+
+  printf '%s\n' "$state"
+}
+
+coding_monitor_capture_pane_tail() {
+  local issue="$1" slug="$2" worktree="$3"
+  codex_capacity_pane_tail "$issue" "$slug" "$worktree"
+}
+
+coding_observed_pane_identity() {
+  local issue="$1" slug="$2" worktree="$3"
+  local tail observed_issue observed_slug
+
+  tail="$(coding_monitor_capture_pane_tail "$issue" "$slug" "$worktree" 2>/dev/null || true)"
+  [[ -n "$tail" ]] || return 1
+
+  observed_issue="$(printf '%s\n' "$tail" | grep -oE '[A-Z]+-[0-9]+(_c)?' | tail -1 || true)"
+  observed_slug="$(printf '%s\n' "$tail" | sed -nE 's#.*features/([^/]+)/\.coding-complete.*#\1#p' | tail -1 || true)"
+
+  if [[ -z "$observed_slug" ]]; then
+    observed_slug="$(printf '%s\n' "$tail" | sed -nE 's#^Branch: task/([A-Za-z0-9._-]+)$#\1#p' | tail -1 || true)"
+  fi
+
+  [[ -n "$observed_issue" || -n "$observed_slug" ]] || return 1
+  printf '%s|%s|pane-tail\n' "$observed_issue" "$observed_slug"
+}
+
+coding_wrong_task_divergence() {
+  local issue="$1" slug="$2" feature_dir="$3" worktree="$4"
+  local expected_record expected_issue expected_slug expected_source
+  local observed_record observed_issue observed_slug observed_source
+  local hook_state marker_rel diagnostic target
+
+  [[ -f "$feature_dir/.coding-complete" ]] && return 1
+
+  expected_record="$(coding_expected_identity "$feature_dir" "$issue" "$slug" 2>/dev/null || true)"
+  IFS='|' read -r expected_issue expected_slug expected_source <<< "$expected_record"
+  [[ -n "$expected_issue" && -n "$expected_slug" ]] || return 1
+
+  hook_state="$(coding_hook_state "$issue" 2>/dev/null || true)"
+  case "$hook_state" in
+    working|waiting)
+      return 1
+      ;;
+    "")
+      target="$(_tmux_task_window_target "$SESSION" "$issue" "$slug" "${STATE_FILE:-}" "$worktree" 2>/dev/null || true)"
+      [[ -n "$target" ]] || return 1
+      if ! _pane_is_dead_or_idle "$(_tmux_target_join "$SESSION" "$target")"; then
+        return 1
+      fi
+      ;;
+  esac
+
+  observed_record="$(coding_observed_pane_identity "$issue" "$slug" "$worktree" 2>/dev/null || true)"
+  [[ -n "$observed_record" ]] || return 1
+  IFS='|' read -r observed_issue observed_slug observed_source <<< "$observed_record"
+  [[ -n "$observed_issue" || -n "$observed_slug" ]] || return 1
+
+  if [[ -n "$observed_issue" && "$observed_issue" == "$expected_issue" && -z "$observed_slug" ]]; then
+    return 1
+  fi
+  if [[ -n "$observed_slug" && "$observed_slug" == "$expected_slug" && -z "$observed_issue" ]]; then
+    return 1
+  fi
+  if [[ -n "$observed_issue" && "$observed_issue" == "$expected_issue" ]] \
+    && [[ -n "$observed_slug" && "$observed_slug" == "$expected_slug" ]]; then
+    return 1
+  fi
+
+  marker_rel="features/$expected_slug/.coding-complete"
+  diagnostic="Coding task needs attention: expected ${expected_issue}/${expected_slug} (${expected_source}), observed ${observed_issue:-unknown}/${observed_slug:-unknown} (${observed_source:-unknown}), missing $marker_rel"
+  printf '%s\n' "$diagnostic"
+}
+
 # Reject a plan: transition planning from awaiting_user to failed.
 # Usage: reject_plan <feature_dir> [agent] [model]
 reject_plan() {
@@ -10447,6 +10555,7 @@ monitor_issue_state() {
           local coding_status
           coding_status=$(read_stage_status "$FEATURE_DIR" "coding")
           if [[ "$coding_status" == "running" ]]; then
+            local coding_divergence_note
             recover_misplaced_coding_complete_marker "$ISSUE" "${WORKTREE_ROOT}/${SLUG}" "$FEATURE_DIR" "$SLUG" || true
             if [[ -f "$FEATURE_DIR/.coding-complete" ]]; then
               if guard_coding_complete_handoff "$ISSUE" "$FEATURE_DIR" "${WORKTREE_ROOT}/${SLUG}" "$BASE_BRANCH"; then
@@ -10475,6 +10584,14 @@ monitor_issue_state() {
               return 0
             fi
             if emit_blocked_completion_attention "$ISSUE" "$FEATURE_DIR"; then
+              return 0
+            fi
+            coding_divergence_note="$(coding_wrong_task_divergence "$ISSUE" "$SLUG" "$FEATURE_DIR" "${WORKTREE_ROOT}/${SLUG}" 2>/dev/null || true)"
+            if [[ -n "$coding_divergence_note" ]]; then
+              write_stage_result "$FEATURE_DIR" "coding" "running" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "coding" "claude-opus-4-7")" "$coding_divergence_note"
+              set_window_attention_state "$WIN" "needs-user"
+              log_warn "$ISSUE → $coding_divergence_note"
+              active_count=$((active_count + 1))
               return 0
             fi
             log "debug" "$ISSUE → Coding still running: waiting for .coding-complete"
