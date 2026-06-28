@@ -173,6 +173,37 @@ function makeFixExecutor(outcome: ReviewFindingFixExecutor): ReviewFindingFixExe
   return outcome;
 }
 
+const MERGE_TOOL_PATTERNS = [/merge/i, /^github_merge/i];
+const MERGE_ACTION_PATTERNS = [/merge/i, /^merge_pr$/i, /^enable_auto_merge$/i];
+
+function assertNoMergeOperations(
+  transcriptEvents: WorkflowToolTranscriptEvent[],
+  stageArtifactEntries: WorkflowToolStageArtifactEntry[],
+): void {
+  for (const event of transcriptEvents) {
+    for (const pattern of MERGE_TOOL_PATTERNS) {
+      assert.ok(
+        !pattern.test(event.tool),
+        `transcript recorded merge tool "${event.tool}"; flow must halt before merge`,
+      );
+    }
+    for (const pattern of MERGE_ACTION_PATTERNS) {
+      assert.ok(
+        !pattern.test(event.action),
+        `transcript recorded merge action "${event.action}"; flow must halt before merge`,
+      );
+    }
+  }
+  for (const entry of stageArtifactEntries) {
+    for (const pattern of MERGE_TOOL_PATTERNS) {
+      assert.ok(
+        !pattern.test(entry.tool),
+        `stage artifact recorded merge tool "${entry.tool}"; flow must halt before merge`,
+      );
+    }
+  }
+}
+
 let tempDirs: string[] = [];
 
 beforeEach(() => {
@@ -292,6 +323,7 @@ describe('runReviewFlow', () => {
       artifacts: { pullRequest: { idempotency: { outcome: string } } };
     };
     assert.equal(stored.artifacts.pullRequest.idempotency.outcome, 'reused');
+    assertNoMergeOperations(recorder.transcriptEvents, recorder.stageArtifactEntries);
   });
 
   it('continues when fixes are denied and surfaces them in the result', async () => {
@@ -344,6 +376,7 @@ describe('runReviewFlow', () => {
     assert.equal(result.fixes.denied, 3);
     assert.equal(result.pullRequest?.ok, true);
     assert.ok(result.warnings.some((warning) => warning.includes('Policy denied narrow fix')));
+    assertNoMergeOperations(recorder.transcriptEvents, recorder.stageArtifactEntries);
   });
 
   it('short-circuits PR mutation when a stronger reviewer is needed', async () => {
@@ -390,6 +423,7 @@ describe('runReviewFlow', () => {
     assert.equal(result.fixes.attempted, 0);
     assert.equal(state.calls.createPullRequest, 0);
     assert.equal(result.stageResult?.ok, true);
+    assertNoMergeOperations(recorder.transcriptEvents, recorder.stageArtifactEntries);
   });
 
   it('writes a failed stage result when GitHub PR creation fails', async () => {
@@ -440,5 +474,6 @@ describe('runReviewFlow', () => {
     const stored = JSON.parse(readFileSync(stageFile, 'utf8')) as { status: string; artifacts: { failureReason: string } };
     assert.equal(stored.status, 'failed');
     assert.match(stored.artifacts.failureReason, /GitHub create PR failed/);
+    assertNoMergeOperations(recorder.transcriptEvents, recorder.stageArtifactEntries);
   });
 });
