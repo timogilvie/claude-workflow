@@ -1,0 +1,8 @@
+{
+  "number": 42,
+  "title": "Implement native review flow",
+  "body": "Implements the native review flow end-to-end.",
+  "head": "task/review-flow",
+  "base": "auto/integration",
+  "url": "https://github.com/acme/widgets/pull/42"
+}
