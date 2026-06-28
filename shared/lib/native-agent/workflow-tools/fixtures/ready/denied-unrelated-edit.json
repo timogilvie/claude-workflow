@@ -1,0 +1,18 @@
+{
+  "description": "Denied: proposed edits include an unrelated feature file outside conflict scope",
+  "input": {
+    "classification": {
+      "kind": "merge_conflict",
+      "affectedFiles": ["src/a.ts"],
+      "source": "merge-conflict-result:CONFLICTED"
+    },
+    "proposedEdits": ["src/a.ts", "src/feature-new.ts"]
+  },
+  "expected": {
+    "decision": "denied",
+    "classification": "merge_conflict",
+    "allowedScope": ["src/a.ts"],
+    "rejectedEdits": ["src/feature-new.ts"],
+    "rationale": "ready_remediation_denied: proposed edits are outside the merge_conflict remediation scope. Rejected: src/feature-new.ts"
+  }
+}
