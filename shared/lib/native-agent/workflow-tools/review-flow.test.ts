@@ -1,0 +1,444 @@
+import assert from 'node:assert/strict';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { beforeEach, describe, it } from 'node:test';
+
+import type { ReviewResult } from '../../review-engine.ts';
+import { createInMemoryDedupeRegistry } from './dedupe.ts';
+import type {
+  GitHubToolDeps,
+  GitHubToolLabelTarget,
+  GitHubToolPullRequest,
+} from './github.ts';
+import type {
+  LinearClient,
+  WorkflowToolStageArtifactEntry,
+  WorkflowToolTranscriptEvent,
+} from './linear-tools.ts';
+import { runReviewFlow, type ReviewFindingFixExecutor } from './review-flow.ts';
+
+interface FixtureState {
+  pullRequests: GitHubToolPullRequest[];
+  labelsByTarget: Map<string, GitHubToolLabelTarget>;
+  linearComments: Array<{ id: string; body: string; issueId: string; url: string }>;
+  calls: Record<string, number>;
+}
+
+function createLinearClient(state: FixtureState, behavior?: { failComment?: boolean }): LinearClient {
+  return {
+    async getIssue(identifier: string) {
+      return {
+        id: `linear-${identifier}`,
+        identifier,
+        title: `Issue ${identifier}`,
+        url: `https://linear.app/acme/issue/${identifier}`,
+      };
+    },
+    async createComment(issueId: string, body: string) {
+      state.calls.linearCreateComment += 1;
+      if (behavior?.failComment) {
+        throw new Error('Linear comment failed');
+      }
+      const comment = {
+        id: `comment-${state.linearComments.length + 1}`,
+        issueId,
+        body,
+        url: `https://linear.app/acme/comment/${state.linearComments.length + 1}`,
+      };
+      state.linearComments.push(comment);
+      return { id: comment.id, url: comment.url };
+    },
+    async updateComment(_commentId: string, _body: string) {
+      state.calls.linearUpdateComment += 1;
+      return { id: 'unused', url: 'https://linear.app/acme/comment/unused' };
+    },
+  };
+}
+
+function targetKey(repo: string, targetKind: 'pull_request' | 'issue', targetNumber: number): string {
+  return `${repo}:${targetKind}:${targetNumber}`;
+}
+
+function createGitHubDeps(state: FixtureState, behavior?: {
+  failCreatePr?: boolean;
+  failAddLabel?: boolean;
+}): GitHubToolDeps {
+  return {
+    async listOpenPullRequests({ repo, head, base }) {
+      state.calls.listOpenPullRequests += 1;
+      return state.pullRequests.filter((pr) => pr.url.includes(repo) && pr.head === head && pr.base === base);
+    },
+    async createPullRequest({ repo, head, base, title, body }) {
+      state.calls.createPullRequest += 1;
+      if (behavior?.failCreatePr) {
+        throw new Error('GitHub create PR failed');
+      }
+      const number = state.pullRequests.length + 1;
+      const pr = {
+        number,
+        title,
+        body,
+        head,
+        base,
+        url: `https://github.com/${repo}/pull/${number}`,
+      };
+      state.pullRequests.push(pr);
+      state.labelsByTarget.set(targetKey(repo, 'pull_request', number), {
+        number,
+        labels: [],
+        url: pr.url,
+      });
+      return pr;
+    },
+    async updatePullRequest({ repo, number, title, body }) {
+      state.calls.updatePullRequest += 1;
+      const current = state.pullRequests.find((pr) => pr.number === number && pr.url.includes(repo));
+      if (!current) {
+        throw new Error(`PR ${number} not found`);
+      }
+      current.title = title;
+      current.body = body;
+      return current;
+    },
+    async getLabels({ repo, targetKind, targetNumber }) {
+      state.calls.getLabels += 1;
+      const current = state.labelsByTarget.get(targetKey(repo, targetKind, targetNumber));
+      if (!current) {
+        throw new Error(`${targetKind} #${targetNumber} not found`);
+      }
+      return { ...current, labels: [...current.labels] };
+    },
+    async addLabel({ repo, targetKind, targetNumber, label }) {
+      state.calls.addLabel += 1;
+      if (behavior?.failAddLabel) {
+        throw new Error(`Adding label ${label} failed`);
+      }
+      const current = state.labelsByTarget.get(targetKey(repo, targetKind, targetNumber));
+      if (!current) {
+        throw new Error(`${targetKind} #${targetNumber} not found`);
+      }
+      if (!current.labels.includes(label)) {
+        current.labels.push(label);
+      }
+      return { ...current, labels: [...current.labels] };
+    },
+    async sleep() {},
+    maxAttempts: 1,
+    retryDelayMs: 1,
+  };
+}
+
+function makeReview(overrides: Partial<ReviewResult> = {}): ReviewResult {
+  return {
+    verdict: 'not_ready',
+    codeReviewFindings: [
+      {
+        severity: 'blocker',
+        location: 'src/app.ts:10',
+        category: 'correctness',
+        description: 'Guard against empty review summaries.',
+      },
+      {
+        severity: 'warning',
+        location: 'src/app.ts:22',
+        category: 'maintainability',
+        description: 'Tighten transient warning handling.',
+      },
+    ],
+    uiFindings: [
+      {
+        severity: 'warning',
+        location: 'src/view.tsx:5',
+        category: 'ui',
+        description: 'Clarify stronger reviewer messaging.',
+      },
+    ],
+    ...overrides,
+  };
+}
+
+function makeRecorder() {
+  const transcriptEvents: WorkflowToolTranscriptEvent[] = [];
+  const stageArtifactEntries: WorkflowToolStageArtifactEntry[] = [];
+  return {
+    transcript: { append(event: WorkflowToolTranscriptEvent) { transcriptEvents.push(event); } },
+    stageArtifact: { append(entry: WorkflowToolStageArtifactEntry) { stageArtifactEntries.push(entry); } },
+    transcriptEvents,
+    stageArtifactEntries,
+  };
+}
+
+function makeFixExecutor(outcome: ReviewFindingFixExecutor): ReviewFindingFixExecutor {
+  return outcome;
+}
+
+let tempDirs: string[] = [];
+
+beforeEach(() => {
+  for (const dir of tempDirs) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  tempDirs = [];
+});
+
+describe('runReviewFlow', () => {
+  it('covers review through PR creation and rerun reuse/update behavior', async () => {
+    const featureDir = mkdtempSync(path.join(os.tmpdir(), 'review-flow-'));
+    tempDirs.push(featureDir);
+    const state: FixtureState = {
+      pullRequests: [],
+      labelsByTarget: new Map(),
+      linearComments: [],
+      calls: {
+        linearCreateComment: 0,
+        linearUpdateComment: 0,
+        listOpenPullRequests: 0,
+        createPullRequest: 0,
+        updatePullRequest: 0,
+        getLabels: 0,
+        addLabel: 0,
+      },
+    };
+    const registry = createInMemoryDedupeRegistry({ clock: () => 1_000 });
+    const recorder = makeRecorder();
+    const linearClient = createLinearClient(state);
+    const githubDeps = createGitHubDeps(state);
+    const fixExecutor = makeFixExecutor(async ({ finding }) => ({
+      ok: true,
+      outcome: finding.severity === 'blocker' ? 'applied' : 'skipped',
+      findingId: finding.id,
+      filesChanged: finding.severity === 'blocker' ? ['src/app.ts'] : [],
+      message: finding.severity === 'blocker' ? 'Applied narrow fix' : 'No safe narrow fix',
+    }));
+
+    const first = await runReviewFlow({
+      issueId: 'HOK-2360',
+      featureDir,
+      repo: 'acme/widgets',
+      base: 'auto/integration',
+      head: 'task/review-flow',
+      headSha: 'abc123',
+      title: 'Implement native review flow',
+      body: 'Implements native review flow.',
+      labels: ['needs-review', 'native-review'],
+      sessionId: 'sess-1',
+      registry,
+      transcript: recorder.transcript,
+      stageArtifact: recorder.stageArtifact,
+      clock: () => 1_000,
+      linearClient,
+      githubDeps,
+      reviewChangesImpl: async () => makeReview(),
+      fixFindings: fixExecutor,
+    });
+
+    assert.equal(first.ok, true);
+    assert.equal(first.review.findingCount, 3);
+    assert.equal(first.fixes.applied, 1);
+    assert.equal(first.fixes.skipped, 2);
+    assert.equal(first.pullRequest?.ok, true);
+    assert.equal(first.pullRequest?.ok && first.pullRequest.idempotency.outcome, 'created');
+    assert.deepEqual(first.labels.map((label) => label.ok && label.idempotency.outcome), ['created', 'created']);
+    assert.equal(first.haltedBeforeMerge, true);
+    assert.equal(first.merged, false);
+    assert.equal(state.calls.createPullRequest, 1);
+    assert.equal(state.calls.addLabel, 2);
+    assert.ok(recorder.transcriptEvents.some((event) => event.tool === 'review_changes'));
+    assert.ok(recorder.transcriptEvents.some((event) => event.tool === 'review_fix'));
+    assert.ok(recorder.transcriptEvents.some((event) => event.tool === 'linear_comment'));
+    assert.ok(recorder.transcriptEvents.some((event) => event.tool === 'github_create_pr'));
+    assert.ok(recorder.transcriptEvents.some((event) => event.tool === 'github_add_label'));
+    assert.ok(recorder.transcriptEvents.some((event) => event.tool === 'write_stage_result'));
+    assert.ok(recorder.stageArtifactEntries.some((entry) => entry.tool === 'review_fix'));
+    assert.ok(recorder.stageArtifactEntries.some((entry) => entry.tool === 'linear_comment'));
+    assert.ok(recorder.stageArtifactEntries.some((entry) => entry.tool === 'github_create_pr'));
+    assert.ok(recorder.stageArtifactEntries.some((entry) => entry.tool === 'github_add_label'));
+    assert.ok(recorder.stageArtifactEntries.some((entry) => entry.tool === 'write_stage_result'));
+
+    const second = await runReviewFlow({
+      issueId: 'HOK-2360',
+      featureDir,
+      repo: 'acme/widgets',
+      base: 'auto/integration',
+      head: 'task/review-flow',
+      headSha: 'abc123',
+      title: 'Implement native review flow',
+      body: 'Implements native review flow.',
+      labels: ['needs-review', 'native-review'],
+      sessionId: 'sess-1',
+      registry,
+      transcript: recorder.transcript,
+      stageArtifact: recorder.stageArtifact,
+      clock: () => 1_000,
+      linearClient,
+      githubDeps,
+      reviewChangesImpl: async () => makeReview(),
+      fixFindings: fixExecutor,
+    });
+
+    assert.equal(second.ok, true);
+    assert.equal(second.pullRequest?.ok, true);
+    assert.equal(second.pullRequest?.ok && second.pullRequest.idempotency.outcome, 'reused');
+    assert.deepEqual(second.labels.map((label) => label.ok && label.idempotency.outcome), ['skipped', 'skipped']);
+    assert.equal(second.linearComment?.ok, true);
+    assert.equal(second.linearComment?.ok && second.linearComment.idempotency.outcome, 'reused');
+    assert.equal(second.stageResult?.ok, true);
+    assert.equal(second.stageResult?.ok && second.stageResult.idempotency.outcome, 'updated');
+    assert.equal(state.calls.createPullRequest, 1);
+
+    const stageFile = path.join(featureDir, '.review-result.json');
+    const stored = JSON.parse(readFileSync(stageFile, 'utf8')) as {
+      artifacts: { pullRequest: { idempotency: { outcome: string } } };
+    };
+    assert.equal(stored.artifacts.pullRequest.idempotency.outcome, 'reused');
+  });
+
+  it('continues when fixes are denied and surfaces them in the result', async () => {
+    const featureDir = mkdtempSync(path.join(os.tmpdir(), 'review-flow-'));
+    tempDirs.push(featureDir);
+    const state: FixtureState = {
+      pullRequests: [],
+      labelsByTarget: new Map(),
+      linearComments: [],
+      calls: {
+        linearCreateComment: 0,
+        linearUpdateComment: 0,
+        listOpenPullRequests: 0,
+        createPullRequest: 0,
+        updatePullRequest: 0,
+        getLabels: 0,
+        addLabel: 0,
+      },
+    };
+    const recorder = makeRecorder();
+
+    const result = await runReviewFlow({
+      issueId: 'HOK-2360',
+      featureDir,
+      repo: 'acme/widgets',
+      base: 'auto/integration',
+      head: 'task/review-flow',
+      headSha: 'abc123',
+      title: 'Implement native review flow',
+      body: 'Implements native review flow.',
+      labels: ['needs-review'],
+      sessionId: 'sess-1',
+      registry: createInMemoryDedupeRegistry({ clock: () => 1_000 }),
+      transcript: recorder.transcript,
+      stageArtifact: recorder.stageArtifact,
+      clock: () => 1_000,
+      linearClient: createLinearClient(state),
+      githubDeps: createGitHubDeps(state),
+      reviewChangesImpl: async () => makeReview(),
+      fixFindings: async ({ finding }) => ({
+        ok: true,
+        outcome: 'denied',
+        findingId: finding.id,
+        message: 'Policy denied narrow fix',
+      }),
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.fixes.applied, 0);
+    assert.equal(result.fixes.denied, 3);
+    assert.equal(result.pullRequest?.ok, true);
+    assert.ok(result.warnings.some((warning) => warning.includes('Policy denied narrow fix')));
+  });
+
+  it('short-circuits PR mutation when a stronger reviewer is needed', async () => {
+    const featureDir = mkdtempSync(path.join(os.tmpdir(), 'review-flow-'));
+    tempDirs.push(featureDir);
+    const state: FixtureState = {
+      pullRequests: [],
+      labelsByTarget: new Map(),
+      linearComments: [],
+      calls: {
+        linearCreateComment: 0,
+        linearUpdateComment: 0,
+        listOpenPullRequests: 0,
+        createPullRequest: 0,
+        updatePullRequest: 0,
+        getLabels: 0,
+        addLabel: 0,
+      },
+    };
+    const recorder = makeRecorder();
+
+    const result = await runReviewFlow({
+      issueId: 'HOK-2360',
+      featureDir,
+      repo: 'acme/widgets',
+      base: 'auto/integration',
+      head: 'task/review-flow',
+      headSha: 'abc123',
+      title: 'Implement native review flow',
+      body: 'Implements native review flow.',
+      sessionId: 'sess-1',
+      registry: createInMemoryDedupeRegistry({ clock: () => 1_000 }),
+      transcript: recorder.transcript,
+      stageArtifact: recorder.stageArtifact,
+      clock: () => 1_000,
+      linearClient: createLinearClient(state),
+      githubDeps: createGitHubDeps(state),
+      reviewChangesImpl: async () => makeReview({ needsStrongerReviewer: true, strongerReviewerReason: 'Human review needed' }),
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.review.needsStrongerReviewer, true);
+    assert.equal(result.pullRequest, undefined);
+    assert.equal(result.fixes.attempted, 0);
+    assert.equal(state.calls.createPullRequest, 0);
+    assert.equal(result.stageResult?.ok, true);
+  });
+
+  it('writes a failed stage result when GitHub PR creation fails', async () => {
+    const featureDir = mkdtempSync(path.join(os.tmpdir(), 'review-flow-'));
+    tempDirs.push(featureDir);
+    const state: FixtureState = {
+      pullRequests: [],
+      labelsByTarget: new Map(),
+      linearComments: [],
+      calls: {
+        linearCreateComment: 0,
+        linearUpdateComment: 0,
+        listOpenPullRequests: 0,
+        createPullRequest: 0,
+        updatePullRequest: 0,
+        getLabels: 0,
+        addLabel: 0,
+      },
+    };
+    const recorder = makeRecorder();
+
+    const result = await runReviewFlow({
+      issueId: 'HOK-2360',
+      featureDir,
+      repo: 'acme/widgets',
+      base: 'auto/integration',
+      head: 'task/review-flow',
+      headSha: 'abc123',
+      title: 'Implement native review flow',
+      body: 'Implements native review flow.',
+      sessionId: 'sess-1',
+      registry: createInMemoryDedupeRegistry({ clock: () => 1_000 }),
+      transcript: recorder.transcript,
+      stageArtifact: recorder.stageArtifact,
+      clock: () => 1_000,
+      linearClient: createLinearClient(state, { failComment: true }),
+      githubDeps: createGitHubDeps(state, { failCreatePr: true }),
+      reviewChangesImpl: async () => makeReview(),
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.pullRequest?.ok, false);
+    assert.ok(result.warnings.some((warning) => warning.includes('linear_comment')));
+    assert.ok(result.warnings.some((warning) => warning.includes('github_create_pr')));
+    assert.equal(result.stageResult?.ok, true);
+
+    const stageFile = path.join(featureDir, '.review-result.json');
+    const stored = JSON.parse(readFileSync(stageFile, 'utf8')) as { status: string; artifacts: { failureReason: string } };
+    assert.equal(stored.status, 'failed');
+    assert.match(stored.artifacts.failureReason, /GitHub create PR failed/);
+  });
+});
