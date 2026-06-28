@@ -439,6 +439,8 @@ export interface RouteTaskRequest {
   repoDir?: string;
   /** Route mode hint (e.g. "normal", "constrained", "survival"). */
   routeMode?: string;
+  /** Optional model pool to pass through to the router. */
+  modelsAvailable?: string[];
 }
 
 export interface RouteTaskSuccess {
