@@ -338,6 +338,39 @@ Ordering guarantee:
 4. if allowed, execute
 5. record `executed` on success or `failed` on execution error
 
+---
+
+## Review Flow Orchestration
+
+`shared/lib/native-agent/workflow-tools/review-flow.ts` composes the existing
+workflow tools into the native review handoff:
+
+1. `review_changes`
+2. optional per-finding narrow `review_fix` execution when a fix executor is supplied
+3. `linear_comment`
+4. `github_create_pr`
+5. `github_add_label`
+6. `write_stage_result`
+
+Runtime guarantees:
+
+- Structured review runs first and the flow parses its JSON payload before any PR mutation.
+- If `needsStrongerReviewer` is true, the flow records a terminal review stage-result and stops before PR mutation.
+- The flow never merges. It always reports `haltedBeforeMerge: true` and `merged: false`, leaving merge control to ready/tend policy.
+- GitHub PR and label calls are recorded into the session transcript and stage artifact log by the flow, because the lower-level GitHub helpers remain provider-focused and side-effect free outside their own idempotent mutation result.
+
+Idempotent reruns:
+
+- `github_create_pr` reuses or updates the existing open PR based on the current head/base/body state.
+- `github_add_label` skips labels already present.
+- `write_stage_result` reuses or updates the same review artifact instead of creating duplicates.
+- `linear_comment` reuses identical comment bodies. If the review summary body changes, current tool semantics create a new comment rather than updating in place; the flow surfaces that limitation through its result warnings when relevant instead of bypassing the existing Linear tool contract.
+
+Fix policy:
+
+- Review-phase source edits are not routed through the native `apply_patch` tool because the review mutation policy intentionally denies broad source editing there.
+- Instead, the flow accepts an injected narrow fix executor. When no executor is supplied, fixes are skipped cleanly. When an executor returns `denied`, the finding remains in the review summary and the flow continues to PR/stage-result handling.
+
 This guarantees policy-denied mutations short-circuit before side effects.
 
 ---
