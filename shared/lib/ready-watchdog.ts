@@ -16,6 +16,12 @@ import { updateBranchWithBase, type BranchBaseUpdateResult } from './promotion-c
 import { escapeShellArg } from './shell-utils.ts';
 import { mutateJsonState } from './state-mutex.ts';
 import { readStageResult, updateStageResult, type ReadyArtifacts, type StageResult } from './stage-result.ts';
+import { readChallengeComparisons } from './challenge-comparison.ts';
+import {
+  classifyChallengeState,
+  loadWorkflowStateChallengePairs,
+  type ChallengeGate,
+} from './tend-challenge-gate.ts';
 
 const execFileAsync = promisify(execFile);
 const MAX_AUTO_UPDATE_ATTEMPTS = 3;
@@ -71,6 +77,7 @@ export interface ReadyTaskSnapshot {
   lastProgressAt: string | null;
   idleMinutes: number | null;
   backstageHealth: BackstageHealthState | null;
+  challengeGate: ChallengeGate | null;
 }
 
 export interface BackstageHealthState {
@@ -229,6 +236,12 @@ export interface WorkflowTaskRecord extends Record<string, unknown> {
   model?: string;
   challengePairId?: string;
   windowId?: string;
+}
+
+interface ReadyWatchdogChallengeContext {
+  challengePairMap: Map<number, { pairId: string; role: 'primary' | 'challenger' }>;
+  comparisons: ReturnType<typeof readChallengeComparisons>;
+  allPrNumbers: Set<number>;
 }
 
 const defaultDeps: ReadyWatchdogDeps = {
@@ -1003,6 +1016,12 @@ export function classifyReadyTask(
       || (queueState === 'ready' && snapshot.readyResultStatus === 'completed');
 
     if (inMergeLane) {
+      if (snapshot.challengeGate?.kind === 'pair-unresolved') {
+        return {
+          kind: 'waiting-on-eval-comparison',
+          detail: formatUnresolvedChallengeDetail(snapshot, snapshot.challengeGate),
+        };
+      }
       const escalateMinutes = normalizedConfig.thresholdMinutes * MERGE_LANE_STALL_ESCALATE_MULTIPLIER;
       if (snapshot.idleMinutes >= escalateMinutes) {
         const backstageHealth = snapshot.backstageHealth;
@@ -1057,6 +1076,7 @@ async function buildSnapshot(
   now: Date,
   repoDir: string,
   deps: ReadyWatchdogDeps,
+  challengeContext: ReadyWatchdogChallengeContext,
 ): Promise<ReadyTaskSnapshot | null> {
   const slug = task.slug;
   const branch = task.branch;
@@ -1091,6 +1111,16 @@ async function buildSnapshot(
   });
 
   const lastProgressAt = computeLastProgressAt(task, readyResult, readyResultFile);
+  const challengeGate = classifyChallengeState(
+    prNumber,
+    {
+      challengePairId: typeof task.challengePairId === 'string' ? task.challengePairId : undefined,
+    },
+    challengeContext.challengePairMap,
+    challengeContext.comparisons,
+    true,
+    challengeContext.allPrNumbers,
+  );
 
   return {
     issueId,
@@ -1119,7 +1149,49 @@ async function buildSnapshot(
     lastProgressAt,
     idleMinutes: computeIdleMinutes(lastProgressAt, now),
     backstageHealth: readBackstageHealth(repoDir),
+    challengeGate,
   };
+}
+
+function buildChallengeContext(repoDir: string, tasks: Record<string, WorkflowTaskRecord>): ReadyWatchdogChallengeContext {
+  const allPrNumbers = new Set<number>();
+  for (const task of Object.values(tasks)) {
+    const prNumber = parseTaskPrNumber(task.pr);
+    if (prNumber !== null) {
+      allPrNumbers.add(prNumber);
+    }
+  }
+
+  let comparisons: ReturnType<typeof readChallengeComparisons>;
+  try {
+    comparisons = readChallengeComparisons(path.join(repoDir, '.wavemill', 'evals'));
+  } catch (error) {
+    console.warn(`[ready-watchdog] Failed to read challenge comparisons: ${errorMessage(error)}`);
+    comparisons = [];
+  }
+
+  return {
+    challengePairMap: loadWorkflowStateChallengePairs(repoDir),
+    comparisons,
+    allPrNumbers,
+  };
+}
+
+function parseTaskPrNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isInteger(value) && value > 0) {
+    return value;
+  }
+
+  if (typeof value === 'string' && /^\d+$/.test(value)) {
+    return Number(value);
+  }
+
+  return null;
+}
+
+function formatUnresolvedChallengeDetail(snapshot: ReadyTaskSnapshot, gate: Extract<ChallengeGate, { kind: 'pair-unresolved' }>): string {
+  const otherPrDetail = gate.otherPr === null ? ' The paired PR could not be identified from current workflow state.' : ` Paired PR: #${gate.otherPr}.`;
+  return `PR #${snapshot.prNumber} cannot enter the merge lane for challenge pair ${gate.pairId}: ${gate.reason}. A comparison/eval must complete or stale challenge metadata must be cleared.${otherPrDetail}`;
 }
 
 async function recoverReadyState(
@@ -1331,6 +1403,7 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
   const workflowState = await deps.readWorkflowState(options.stateFile);
   const tasks = workflowState.tasks ?? {};
   const jobs = normalizeJobs(workflowState);
+  const challengeContext = buildChallengeContext(options.repoDir, tasks as Record<string, WorkflowTaskRecord>);
   const activeReadyIssueIds = new Set<string>();
 
   for (const [issueId, rawTask] of Object.entries(tasks)) {
@@ -1353,7 +1426,7 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
 
     activeReadyIssueIds.add(issueId);
 
-    const snapshot = await buildSnapshot(issueId, task, jobs, now, options.repoDir, deps);
+    const snapshot = await buildSnapshot(issueId, task, jobs, now, options.repoDir, deps, challengeContext);
     if (!snapshot) {
       delete nextTasks[issueId];
       continue;
