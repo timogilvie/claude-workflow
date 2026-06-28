@@ -2215,6 +2215,75 @@ EOF
   check_not_contains "unknown identity: no divergence warning" "$(kv_value "$tick" warn_output)" "Coding task needs attention"
 }
 
+test_coding_wrong_task_divergence_ignored_when_marker_present() {
+  local slug="coding-wrong-task-marker-present"
+  local issue="HOK-2402-MARKER"
+  local repo feature_dir tick
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  feature_dir="$repo/features/$slug"
+  cat > "$feature_dir/selected-task.json" <<EOF
+{
+  "taskId": "$issue",
+  "featureName": "$slug"
+}
+EOF
+  : > "$feature_dir/.coding-complete"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" '
+    CURRENT_PHASE="coding"
+    coding_monitor_capture_pane_tail() {
+      cat <<'"'"'EOF'"'"'
+You are working on: Different task (HOK-2499)
+Created marker: worktrees/other-slug/features/other-slug/.coding-complete
+EOF
+    }
+  ')"
+
+  check_not_contains "marker present: no divergence warning" "$(kv_value "$tick" warn_output)" "Coding task needs attention"
+}
+
+test_coding_wrong_task_divergence_idempotent_across_ticks() {
+  local slug="coding-wrong-task-idempotent"
+  local issue="HOK-2402-IDEMPOTENT"
+  local repo feature_dir tick1 tick2 mtime1 mtime2
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  feature_dir="$repo/features/$slug"
+  cat > "$feature_dir/selected-task.json" <<EOF
+{
+  "taskId": "$issue",
+  "featureName": "$slug"
+}
+EOF
+
+  local setup='
+    CURRENT_PHASE="coding"
+    _tmux_task_window_target() { printf "%s\n" "@7"; }
+    coding_monitor_capture_pane_tail() {
+      cat <<'"'"'EOF'"'"'
+You are working on: Different task (HOK-2403)
+Created marker: worktrees/other-slug/features/other-slug/.coding-complete
+EOF
+    }
+  '
+
+  tick1="$(harness_run_tick "$repo" "$slug" "$issue" "$setup")"
+  mtime1="$(stat -f %m "$feature_dir/.coding-result.json" 2>/dev/null || stat -c %Y "$feature_dir/.coding-result.json" 2>/dev/null)"
+
+  sleep 1
+
+  tick2="$(harness_run_tick "$repo" "$slug" "$issue" "$setup")"
+  mtime2="$(stat -f %m "$feature_dir/.coding-result.json" 2>/dev/null || stat -c %Y "$feature_dir/.coding-result.json" 2>/dev/null)"
+
+  check_eq "idempotent: first tick logs warning" "1" "$(printf '%s' "$(kv_value "$tick1" warn_output)" | grep -c "Coding task needs attention" || true)"
+  check_eq "idempotent: second tick suppresses duplicate warning" "0" "$(printf '%s' "$(kv_value "$tick2" warn_output)" | grep -c "Coding task needs attention" || true)"
+  check_eq "idempotent: second tick keeps attention needs-user" "needs-user" "$(kv_value "$tick2" attention)"
+  check_eq "idempotent: result file mtime unchanged on second tick" "$mtime1" "$mtime2"
+}
+
 test_not_eligible_expanded_reroute_does_not_emit_helper_failure_warn() {
   local slug="not-eligible-expanded-reroute"
   local issue="HOK-2274-NOT-ELIGIBLE"
@@ -2547,6 +2616,8 @@ test_coding_wrong_task_divergence_needs_user
 test_coding_wrong_task_divergence_ignored_when_hook_working
 test_coding_wrong_task_divergence_ignored_when_observed_same_slug
 test_coding_wrong_task_divergence_ignored_when_identity_unknown
+test_coding_wrong_task_divergence_ignored_when_marker_present
+test_coding_wrong_task_divergence_idempotent_across_ticks
 test_not_eligible_expanded_reroute_does_not_emit_helper_failure_warn
 test_disabled_expanded_reroute_does_not_emit_helper_failure_warn
 test_routing_error_expanded_reroute_emits_helper_failure_warn

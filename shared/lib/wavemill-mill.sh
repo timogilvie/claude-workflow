@@ -10588,9 +10588,13 @@ monitor_issue_state() {
             fi
             coding_divergence_note="$(coding_wrong_task_divergence "$ISSUE" "$SLUG" "$FEATURE_DIR" "${WORKTREE_ROOT}/${SLUG}" 2>/dev/null || true)"
             if [[ -n "$coding_divergence_note" ]]; then
-              write_stage_result "$FEATURE_DIR" "coding" "running" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "coding" "claude-opus-4-7")" "$coding_divergence_note"
+              local prior_divergence_note
+              prior_divergence_note=$(jq -r '.notes // empty' "$FEATURE_DIR/.coding-result.json" 2>/dev/null || echo "")
+              if [[ "$prior_divergence_note" != "$coding_divergence_note" ]]; then
+                write_stage_result "$FEATURE_DIR" "coding" "running" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "coding" "claude-opus-4-7")" "$coding_divergence_note"
+                log_warn "$ISSUE → $coding_divergence_note"
+              fi
               set_window_attention_state "$WIN" "needs-user"
-              log_warn "$ISSUE → $coding_divergence_note"
               active_count=$((active_count + 1))
               return 0
             fi
