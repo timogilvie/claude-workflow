@@ -4574,6 +4574,138 @@ recover_misplaced_coding_complete_marker() {
   return 0
 }
 
+# Returns path to the deduplicate announce marker for pane divergence detection.
+_coding_divergence_announce_marker() {
+  local feature_dir="$1"
+  printf '%s\n' "$feature_dir/.coding-pane-divergence-detected"
+}
+
+# Detect whether the task pane has completed a different task's slug.
+# Uses hook freshness and pane idle state as gating conditions so we do not
+# mark tasks needs-user while the agent is still actively working.
+# On success, sets globals _DIVERGENCE_SLUG and _DIVERGENCE_SOURCE.
+# Returns 0 when divergence evidence is found; 1 otherwise.
+_detect_coding_pane_divergence() {
+  local issue="$1" slug="$2" worktree="$3" feature_dir="$4" win_target="$5"
+  local hook_file="/tmp/wavemill-${SESSION}-${issue}.hook"
+  local hook_state hook_ts now staleness pane_tail other_marker other_slug
+
+  _DIVERGENCE_SLUG=""
+  _DIVERGENCE_SOURCE=""
+
+  # Fresh working/waiting hook means the agent is still active — keep waiting
+  if [[ -f "$hook_file" ]]; then
+    hook_state=$(jq -r '.state // empty' "$hook_file" 2>/dev/null || echo "")
+    hook_ts=$(jq -r '.timestamp // 0' "$hook_file" 2>/dev/null || echo "0")
+    now="$(date +%s)"
+    staleness=$(( now - hook_ts ))
+    if (( staleness < 300 )) && [[ "$hook_state" == "working" || "$hook_state" == "waiting" ]]; then
+      return 1
+    fi
+  fi
+
+  # Pane must be idle or dead for divergence detection to apply
+  [[ -n "$win_target" ]] || return 1
+  _pane_is_dead_or_idle "$win_target" 2>/dev/null || return 1
+
+  # Check pane tail for a different slug's completion marker path
+  pane_tail="$(tmux capture-pane -p -t "$win_target" -S -200 2>/dev/null || true)"
+  if [[ -n "$pane_tail" ]]; then
+    other_slug="$(printf '%s\n' "$pane_tail" \
+      | grep -oE 'features/[^/[:space:]]+/\.coding-complete' \
+      | sed 's|^features/||; s|/\.coding-complete$||' \
+      | grep -v "^${slug}$" | head -1 || true)"
+    if [[ -n "$other_slug" ]]; then
+      _DIVERGENCE_SLUG="$other_slug"
+      _DIVERGENCE_SOURCE="pane_tail"
+      return 0
+    fi
+  fi
+
+  # Check for a .coding-complete marker under a different features/<slug>/ path
+  # within this worktree (e.g. agent wrote marker for wrong task identity)
+  if [[ -d "$worktree" ]]; then
+    other_marker="$(
+      find "$worktree" \
+        -name ".coding-complete" \
+        -path "*/features/*/.coding-complete" \
+        -not -path "$feature_dir/.coding-complete" \
+        -not -path "*/features/${slug}/.coding-complete" \
+        -type f -print -quit 2>/dev/null || true
+    )"
+    if [[ -n "$other_marker" ]]; then
+      other_slug="$(printf '%s\n' "$other_marker" \
+        | sed 's|.*/features/||; s|/\.coding-complete$||')"
+      if [[ -n "$other_slug" && "$other_slug" != "$slug" ]]; then
+        _DIVERGENCE_SLUG="$other_slug"
+        _DIVERGENCE_SOURCE="misplaced_marker"
+        return 0
+      fi
+    fi
+  fi
+
+  return 1
+}
+
+# Emit a needs-user attention signal when the coding pane has completed a
+# different task. This prevents the controller from polling forever when the
+# pane identity has drifted from the controller-owned task/slug.
+#
+# Returns 0 (and increments active_count) when divergence is detected;
+# returns 1 when no action is taken so the caller continues normal polling.
+emit_pane_divergence_attention() {
+  local issue="$1" slug="$2" feature_dir="$3" win="$4" win_target="$5"
+  local worktree="${WORKTREE_ROOT:-}/${slug}"
+  local artifact announce_marker detected_at tmp_artifact
+  local observed_slug observed_source
+
+  _DIVERGENCE_SLUG=""
+  _DIVERGENCE_SOURCE=""
+
+  if ! _detect_coding_pane_divergence "$issue" "$slug" "$worktree" "$feature_dir" "$win_target"; then
+    return 1
+  fi
+
+  observed_slug="$_DIVERGENCE_SLUG"
+  observed_source="$_DIVERGENCE_SOURCE"
+
+  artifact="$feature_dir/.coding-pane-divergence.json"
+  announce_marker="$(_coding_divergence_announce_marker "$feature_dir")"
+  detected_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+
+  if [[ ! -f "$artifact" ]]; then
+    tmp_artifact="$(mktemp "$artifact.tmp.XXXXXX" 2>/dev/null)" || true
+    if [[ -n "$tmp_artifact" ]]; then
+      jq -n \
+        --arg expectedIssue "$issue" \
+        --arg expectedSlug "$slug" \
+        --arg expectedMarker "features/$slug/.coding-complete" \
+        --arg observedSlug "$observed_slug" \
+        --arg observedSource "$observed_source" \
+        --arg detectedAt "$detected_at" \
+        '{
+          expectedIssue: $expectedIssue,
+          expectedSlug: $expectedSlug,
+          expectedMarker: $expectedMarker,
+          observedSlug: $observedSlug,
+          observedSource: $observedSource,
+          detectedAt: $detectedAt
+        }' > "$tmp_artifact" 2>/dev/null \
+        && mv "$tmp_artifact" "$artifact" 2>/dev/null \
+        || rm -f "$tmp_artifact"
+    fi
+  fi
+
+  if [[ ! -f "$announce_marker" ]]; then
+    log_warn "$issue → Coding pane completed a different task (expected: $slug, observed: $observed_slug via $observed_source). Expected .coding-complete is missing — task needs attention."
+    : > "$announce_marker"
+  fi
+
+  set_window_attention_state "$win" "needs-user"
+  active_count=$((active_count + 1))
+  return 0
+}
+
 # Reject a plan: transition planning from awaiting_user to failed.
 # Usage: reject_plan <feature_dir> [agent] [model]
 reject_plan() {
@@ -10475,6 +10607,9 @@ monitor_issue_state() {
               return 0
             fi
             if emit_blocked_completion_attention "$ISSUE" "$FEATURE_DIR"; then
+              return 0
+            fi
+            if emit_pane_divergence_attention "$ISSUE" "$SLUG" "$FEATURE_DIR" "$WIN" "$WIN_TARGET"; then
               return 0
             fi
             log "debug" "$ISSUE → Coding still running: waiting for .coding-complete"
