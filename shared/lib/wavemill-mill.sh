@@ -4584,7 +4584,7 @@ _coding_divergence_announce_marker() {
 # Uses hook freshness and pane idle state as gating conditions so we do not
 # mark tasks needs-user while the agent is still actively working.
 # On success, sets globals _DIVERGENCE_SLUG and _DIVERGENCE_SOURCE.
-# Returns 0 if divergence evidence is found; 1 otherwise.
+# Returns 0 when divergence evidence is found; 1 otherwise.
 _detect_coding_pane_divergence() {
   local issue="$1" slug="$2" worktree="$3" feature_dir="$4" win_target="$5"
   local hook_file="/tmp/wavemill-${SESSION}-${issue}.hook"
@@ -4652,7 +4652,7 @@ _detect_coding_pane_divergence() {
 # pane identity has drifted from the controller-owned task/slug.
 #
 # Returns 0 (and increments active_count) when divergence is detected;
-# returns 1 if no action is taken so the caller continues normal polling.
+# returns 1 when no action is taken so the caller continues normal polling.
 emit_pane_divergence_attention() {
   local issue="$1" slug="$2" feature_dir="$3" win="$4" win_target="$5"
   local worktree="${WORKTREE_ROOT:-}/${slug}"
