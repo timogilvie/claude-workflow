@@ -1,0 +1,29 @@
+{
+  "planner": "claude-sonnet-4-6",
+  "coder": "openai/gpt-5-codex",
+  "reviewer": "claude-sonnet-4-6",
+  "planDepth": "medium",
+  "codeDepth": "deep",
+  "reviewRecommended": "static+llm",
+  "expectedSuccess": 0.82,
+  "expectedCostPlan": 0.34,
+  "expectedCostCode": 1.25,
+  "expectedCostReview": 0.41,
+  "confidence": 0.76,
+  "reasoning": [
+    "The task spans runtime wiring and fixture updates.",
+    "A strong coding model is preferred for native-tool integration."
+  ],
+  "signals": {
+    "taskType": "coding",
+    "promptLength": "medium",
+    "complexityScore": 0.71,
+    "fileTypes": [
+      "ts",
+      "json",
+      "md"
+    ],
+    "riskScore": 0.58
+  },
+  "routingMode": "stage-aware"
+}

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { listOpenIssuesByIdentifierPrefix, setIssueState, setIssuesState, updateIssue } from './linear.ts';
+import { listOpenIssuesByIdentifierPrefix, setIssueState, setIssuesState, updateIssue, createComment, updateComment } from './linear.ts';
 
 type GraphQLPayload = {
   query: string;
@@ -352,6 +352,102 @@ test('listOpenIssuesByIdentifierPrefix returns only open primary/challenger issu
     const issues = await listOpenIssuesByIdentifierPrefix('HOK-701');
     assert.deepEqual(receivedIdentifiers, ['HOK-701', 'HOK-701_c']);
     assert.deepEqual(issues.map((issue) => issue.identifier), ['HOK-701', 'HOK-701_c']);
+  } finally {
+    restore();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// createComment / updateComment (HOK-2356)
+// ---------------------------------------------------------------------------
+
+test('createComment sends commentCreate GraphQL mutation with correct shape', async () => {
+  process.env.LINEAR_API_KEY = 'test';
+  let capturedPayload: { query: string; variables?: Record<string, unknown> } | null = null;
+
+  const restore = installFetchMock((payload) => {
+    capturedPayload = payload;
+    return {
+      commentCreate: {
+        success: true,
+        comment: { id: 'cmt-abc', url: 'https://linear.app/c/cmt-abc' },
+      },
+    };
+  });
+
+  try {
+    const result = await createComment('issue-uuid-1', 'Hello from test');
+    assert.ok(capturedPayload, 'fetch must have been called');
+    assert.ok(capturedPayload!.query.includes('commentCreate'), 'query should include commentCreate');
+    assert.ok(capturedPayload!.query.includes('CommentCreateInput'), 'query should reference CommentCreateInput');
+    assert.deepEqual(capturedPayload!.variables, { input: { issueId: 'issue-uuid-1', body: 'Hello from test' } });
+    assert.equal(result.id, 'cmt-abc');
+    assert.equal(result.url, 'https://linear.app/c/cmt-abc');
+  } finally {
+    restore();
+  }
+});
+
+test('createComment throws LinearApiError when API returns success:false', async () => {
+  process.env.LINEAR_API_KEY = 'test';
+  const restore = installFetchMock(() => ({
+    commentCreate: { success: false, comment: null },
+  }));
+  try {
+    await assert.rejects(
+      () => createComment('issue-uuid-1', 'body'),
+      (err: unknown) => {
+        assert.ok(err instanceof Error);
+        assert.ok(err.message.includes('commentCreate'));
+        return true;
+      },
+    );
+  } finally {
+    restore();
+  }
+});
+
+test('updateComment sends commentUpdate GraphQL mutation with correct shape', async () => {
+  process.env.LINEAR_API_KEY = 'test';
+  let capturedPayload: { query: string; variables?: Record<string, unknown> } | null = null;
+
+  const restore = installFetchMock((payload) => {
+    capturedPayload = payload;
+    return {
+      commentUpdate: {
+        success: true,
+        comment: { id: 'cmt-abc', url: 'https://linear.app/c/cmt-abc' },
+      },
+    };
+  });
+
+  try {
+    const result = await updateComment('cmt-abc', 'Updated body');
+    assert.ok(capturedPayload, 'fetch must have been called');
+    assert.ok(capturedPayload!.query.includes('commentUpdate'), 'query should include commentUpdate');
+    assert.ok(capturedPayload!.query.includes('CommentUpdateInput'), 'query should reference CommentUpdateInput');
+    assert.deepEqual(capturedPayload!.variables, { id: 'cmt-abc', input: { body: 'Updated body' } });
+    assert.equal(result.id, 'cmt-abc');
+    assert.equal(result.url, 'https://linear.app/c/cmt-abc');
+  } finally {
+    restore();
+  }
+});
+
+test('updateComment throws LinearApiError when API returns success:false', async () => {
+  process.env.LINEAR_API_KEY = 'test';
+  const restore = installFetchMock(() => ({
+    commentUpdate: { success: false, comment: null },
+  }));
+  try {
+    await assert.rejects(
+      () => updateComment('cmt-abc', 'body'),
+      (err: unknown) => {
+        assert.ok(err instanceof Error);
+        assert.ok(err.message.includes('commentUpdate'));
+        return true;
+      },
+    );
   } finally {
     restore();
   }

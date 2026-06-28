@@ -1,0 +1,11 @@
+{
+  "featureDir": "",
+  "issueId": "HOK-2358",
+  "stage": "coding",
+  "status": "running",
+  "notes": "Started command-tool implementation.",
+  "artifacts": {
+    "type": "coding",
+    "commit": "abc1234"
+  }
+}
