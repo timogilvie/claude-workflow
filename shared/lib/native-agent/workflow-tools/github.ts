@@ -78,7 +78,8 @@ export interface GitHubToolDeps {
   sleep(ms: number): Promise<void>;
   maxAttempts: number;
   retryDelayMs: number;
-  getSecretEnvNames(): string[];
+  repoDir?: string;
+  getSecretEnvNames(repoDir?: string): string[];
 }
 
 interface ClassifiedError {
@@ -116,8 +117,8 @@ const defaultGitHubToolDeps: GitHubToolDeps = {
   },
   maxAttempts: DEFAULT_MAX_ATTEMPTS,
   retryDelayMs: DEFAULT_RETRY_DELAY_MS,
-  getSecretEnvNames() {
-    return getRedactionConfig().secretEnvNames;
+  getSecretEnvNames(repoDir?: string) {
+    return getRedactionConfig(repoDir).secretEnvNames;
   },
 };
 
@@ -168,7 +169,7 @@ export async function githubCreatePr(
   }
 
   // Redact secrets from title and body before any external exposure or comparison.
-  const profile = buildProfileFromConfig(input.getSecretEnvNames);
+  const profile = buildProfileFromConfig(() => input.getSecretEnvNames(input.repoDir));
   const safeTitle = redact(request.title, profile);
   const safeBody = redact(request.body, profile);
 

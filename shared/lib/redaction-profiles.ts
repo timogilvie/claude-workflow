@@ -134,7 +134,7 @@ export const defaultProfile: RedactionProfile = {
 };
 
 function escapeRegExp(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return str.replace(/[.*+?^${}()|[\]\\]/g, (match) => `\\${match}`);
 }
 
 function applyRules(text: string, rules: readonly RedactionRule[]): { text: string; matchCount: number; categories: Set<string> } {
