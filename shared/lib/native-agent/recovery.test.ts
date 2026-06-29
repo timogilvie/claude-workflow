@@ -66,6 +66,27 @@ describe('recovery stall detection', () => {
     assert.deepEqual(detection, { stalled: false, lastUsefulActivity: null });
   });
 
+  it('treats aborted/error exits as non-stalls even when non-progress signals fire', () => {
+    const observations = [
+      observation(1, { readOnly: true, touchedArtifact: true }),
+      observation(2, { readOnly: true }),
+      observation(3, { readOnly: true }),
+      observation(4, { readOnly: true }),
+      observation(5, { readOnly: true }),
+      observation(6, { readOnly: true }),
+    ];
+
+    for (const stopReason of ['aborted', 'error'] as const) {
+      const detection = detectStall(input({ stopReason, observations }));
+      assert.equal(detection.stalled, false, `${stopReason} should not stall`);
+      assert.deepEqual(
+        detection.lastUsefulActivity,
+        { turnIndex: 1, kind: 'touched_artifact' },
+        `${stopReason} should still surface last useful activity`,
+      );
+    }
+  });
+
   it('detects repeated tool failure at the threshold', () => {
     const detection = detectStall(input({
       observations: [

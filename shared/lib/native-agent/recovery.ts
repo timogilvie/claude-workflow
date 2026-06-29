@@ -122,6 +122,8 @@ const BUDGET_STOP_REASONS = new Set<LoopStopReason>([
   'cost_limit',
 ]);
 
+const NON_STALL_STOP_REASONS = new Set<LoopStopReason>(['aborted', 'error']);
+
 const STALL_METADATA: Record<
   StallType,
   { message: string; diagnostics: string[]; nextActions: string[] }
@@ -187,6 +189,10 @@ export function detectStall(input: RecoveryInput): StallDetection {
   const observations = input.observations;
   const thresholds = resolveThresholds(input.thresholds);
   const lastUsefulActivity = findLastUsefulActivity(observations);
+
+  if (NON_STALL_STOP_REASONS.has(input.stopReason)) {
+    return { stalled: false, lastUsefulActivity };
+  }
 
   const budgetEvidence = detectBudgetExhaustion(input.stopReason);
   if (budgetEvidence) {
