@@ -1,5 +1,6 @@
 import type { ToolDescriptor, WavemillToolResult } from '../tools/types.ts';
-import { redact } from '../../redaction-profiles.ts';
+import { getRedactionConfig } from '../../config.ts';
+import { buildProfileFromConfig, redact } from '../../redaction-profiles.ts';
 import {
   addLabelsToIssue,
   addLabelsToPullRequest,
@@ -77,6 +78,7 @@ export interface GitHubToolDeps {
   sleep(ms: number): Promise<void>;
   maxAttempts: number;
   retryDelayMs: number;
+  getSecretEnvNames(): string[];
 }
 
 interface ClassifiedError {
@@ -114,6 +116,9 @@ const defaultGitHubToolDeps: GitHubToolDeps = {
   },
   maxAttempts: DEFAULT_MAX_ATTEMPTS,
   retryDelayMs: DEFAULT_RETRY_DELAY_MS,
+  getSecretEnvNames() {
+    return getRedactionConfig().secretEnvNames;
+  },
 };
 
 const githubCreatePrParameters = {
@@ -163,8 +168,9 @@ export async function githubCreatePr(
   }
 
   // Redact secrets from title and body before any external exposure or comparison.
-  const safeTitle = redact(request.title);
-  const safeBody = redact(request.body);
+  const profile = buildProfileFromConfig(input.getSecretEnvNames);
+  const safeTitle = redact(request.title, profile);
+  const safeBody = redact(request.body, profile);
 
   const idempotencyKey = githubCreatePrKey({
     repo: request.repo,

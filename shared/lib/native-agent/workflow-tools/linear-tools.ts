@@ -17,7 +17,8 @@ import {
   type LinearCommentRef,
   type WavemillTaskPacketRef,
 } from './contracts.ts';
-import { redact } from '../../redaction-profiles.ts';
+import { getRedactionConfig } from '../../config.ts';
+import { buildProfileFromConfig, redact } from '../../redaction-profiles.ts';
 import { isMutationAllowed } from './mutation-policy.ts';
 import {
   linearCommentKey,
@@ -107,6 +108,7 @@ export interface LinearToolsDeps {
   phase: WorkflowPhase;
   expander?: ExpanderFn;
   clock?: () => number;
+  getSecretEnvNames?: () => string[];
 }
 
 export interface ExpandIssueDeps {
@@ -220,7 +222,8 @@ export async function executeLinearComment(
   }
 
   // Redact secrets before the body is hashed for idempotency and posted externally.
-  const safeBody = redact(params.body);
+  const profile = buildProfileFromConfig(deps.getSecretEnvNames ?? (() => getRedactionConfig().secretEnvNames));
+  const safeBody = redact(params.body, profile);
   const normalizedBody = normalizeBody(safeBody);
   const key = params.dedupeOverride ?? linearCommentKey({
     issue: params.issue,
