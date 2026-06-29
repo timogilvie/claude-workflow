@@ -1,0 +1,8 @@
+{
+  "number": 42,
+  "title": "Updated PR title",
+  "body": "Updated body text for the pull request.",
+  "head": "feature/idempotent-pr",
+  "base": "main",
+  "url": "https://github.com/acme/widgets/pull/42"
+}
