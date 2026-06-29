@@ -1,4 +1,6 @@
 import type { ToolDescriptor, WavemillToolResult } from '../tools/types.ts';
+import { getRedactionConfig } from '../../config.ts';
+import { buildProfileFromConfig, redact } from '../../redaction-profiles.ts';
 import {
   addLabelsToIssue,
   addLabelsToPullRequest,
@@ -76,6 +78,8 @@ export interface GitHubToolDeps {
   sleep(ms: number): Promise<void>;
   maxAttempts: number;
   retryDelayMs: number;
+  repoDir?: string;
+  getSecretEnvNames(repoDir?: string): string[];
 }
 
 interface ClassifiedError {
@@ -113,6 +117,9 @@ const defaultGitHubToolDeps: GitHubToolDeps = {
   },
   maxAttempts: DEFAULT_MAX_ATTEMPTS,
   retryDelayMs: DEFAULT_RETRY_DELAY_MS,
+  getSecretEnvNames(repoDir?: string) {
+    return getRedactionConfig(repoDir).secretEnvNames;
+  },
 };
 
 const githubCreatePrParameters = {
@@ -161,6 +168,11 @@ export async function githubCreatePr(
     return createPrError('policy_denied', createPolicy.reason);
   }
 
+  // Redact secrets from title and body before any external exposure or comparison.
+  const profile = buildProfileFromConfig(() => input.getSecretEnvNames(input.repoDir));
+  const safeTitle = redact(request.title, profile);
+  const safeBody = redact(request.body, profile);
+
   const idempotencyKey = githubCreatePrKey({
     repo: request.repo,
     head: request.head,
@@ -186,7 +198,7 @@ export async function githubCreatePr(
       const current = existing[0];
       if (current) {
         const ref = toPullRequestRef(current);
-        if (current.title === request.title && current.body === request.body) {
+        if (current.title === safeTitle && current.body === safeBody) {
           return {
             ok: true,
             tool: 'github_create_pr',
@@ -205,8 +217,8 @@ export async function githubCreatePr(
         const updated = await input.updatePullRequest({
           repo: request.repo,
           number: current.number,
-          title: request.title,
-          body: request.body,
+          title: safeTitle,
+          body: safeBody,
         });
 
         return {
@@ -228,8 +240,8 @@ export async function githubCreatePr(
         repo: request.repo,
         head: request.head,
         base: request.base,
-        title: request.title,
-        body: request.body,
+        title: safeTitle,
+        body: safeBody,
         draft: request.draft,
       });
 

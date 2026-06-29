@@ -90,6 +90,7 @@ function makeDeps(overrides: Partial<LinearToolsDeps> & { client?: LinearClient 
     phase: overrides.phase ?? 'coding',
     expander: overrides.expander,
     clock: overrides.clock ?? (() => 1_000),
+    getSecretEnvNames: overrides.getSecretEnvNames,
     transcriptEvents,
     stageArtifactEntries,
   };
@@ -469,5 +470,70 @@ describe('idempotency key stability', () => {
 
     assert.equal(keys.length, 2);
     assert.equal(keys[0], keys[1], 'key must be stable across calls');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Secret redaction in linear_comment
+// ---------------------------------------------------------------------------
+
+describe('linear_comment: secret redaction', () => {
+  it('records redacted body via createComment when body contains a secret token', async () => {
+    let capturedBody: string | undefined;
+    const client = makeFakeClient({
+      comment: { id: 'cmt-redact-1', url: 'https://linear.app/hok/comment/cmt-redact-1' },
+    });
+    client.createComment = async (_issueId: string, body: string) => {
+      capturedBody = body;
+      return { id: 'cmt-redact-1', url: 'https://linear.app/hok/comment/cmt-redact-1' };
+    };
+
+    const token = 'sk-testFAKEKEY12345678901234567890';
+    const deps = makeDeps({ client, phase: 'review' });
+    const result = await executeLinearComment(
+      { issue: 'HOK-1', body: `Review complete. Token used: ${token}`, sessionId: 'sess-1', phase: 'review' },
+      deps,
+    );
+
+    assert.equal(result.ok, true);
+    assert.ok(capturedBody !== undefined, 'createComment must have been called');
+    assert.ok(!capturedBody.includes(token), 'original token must not appear in comment body');
+    assert.ok(capturedBody.includes('[REDACTED:openai_key]'), 'redacted placeholder must appear');
+  });
+
+  it('records redacted body via createComment when body contains a configured secret env value', async () => {
+    let capturedBody: string | undefined;
+    process.env.HOKUSAI_LINEAR_SECRET = 'linear-configured-value-without-known-pattern';
+    const client = makeFakeClient({
+      comment: { id: 'cmt-redact-2', url: 'https://linear.app/hok/comment/cmt-redact-2' },
+    });
+    client.createComment = async (_issueId: string, body: string) => {
+      capturedBody = body;
+      return { id: 'cmt-redact-2', url: 'https://linear.app/hok/comment/cmt-redact-2' };
+    };
+
+    const deps = makeDeps({
+      client,
+      phase: 'review',
+      getSecretEnvNames: () => ['HOKUSAI_LINEAR_SECRET'],
+    });
+
+    try {
+      const result = await executeLinearComment(
+        {
+          issue: 'HOK-1',
+          body: 'Secret: linear-configured-value-without-known-pattern',
+          sessionId: 'sess-1',
+          phase: 'review',
+        },
+        deps,
+      );
+
+      assert.equal(result.ok, true);
+      assert.ok(capturedBody !== undefined, 'createComment must have been called');
+      assert.equal(capturedBody, 'Secret: [REDACTED:configured_secret]');
+    } finally {
+      delete process.env.HOKUSAI_LINEAR_SECRET;
+    }
   });
 });
