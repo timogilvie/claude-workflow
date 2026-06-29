@@ -9,7 +9,7 @@
  * - Only the orchestrator writes these files — agents never modify them
  * - Writes are atomic (temp file + rename) to prevent partial JSON
  * - Reads never throw — they return null for missing or malformed files
- * - The schema is additive — old files without `artifacts`/`failureReason` remain valid
+ * - The schema is additive — old files without `artifacts`/`failureReason`/cleanup fields remain valid
  *
  * @module stage-result
  */
@@ -19,6 +19,8 @@ import path from 'node:path';
 import os from 'node:os';
 import type { CodingArtifacts } from './native-agent/coding-artifacts.ts';
 export type { CodingArtifacts } from './native-agent/coding-artifacts.ts';
+import type { CleanupDecision, CleanupReport, TreeState } from './native-agent/cleanup.ts';
+export type { CleanupDecision, CleanupReport, TreeState } from './native-agent/cleanup.ts';
 import type { ReadyRemediationDecision } from './native-agent/workflow-tools/ready-remediation.ts';
 export type { ReadyRemediationDecision } from './native-agent/workflow-tools/ready-remediation.ts';
 
@@ -108,6 +110,9 @@ export interface StageResult {
   notes: string;
   artifacts?: StageArtifacts;
   failureReason?: string | null;
+  finalTreeState?: TreeState;
+  cleanupDecision?: CleanupDecision;
+  cleanupReport?: CleanupReport;
 }
 
 /** All stage result files found in a feature directory. */

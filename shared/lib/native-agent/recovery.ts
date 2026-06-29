@@ -2,6 +2,7 @@ import { mkdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import type { LoopResult, LoopStopReason } from './loop.ts';
+import type { CleanupReport } from './cleanup.ts';
 import { redactSecretsInValue } from './tools/redaction.ts';
 import type { ToolPhase } from './tools/types.ts';
 
@@ -77,7 +78,7 @@ export type RecoveryStageResult =
       nextActions: string[];
     };
 
-export const RECOVERY_ARTIFACT_SCHEMA_VERSION = 1 as const;
+export const RECOVERY_ARTIFACT_SCHEMA_VERSION = 2 as const;
 export const RECOVERY_ARTIFACT_BASE_DIR = '.wavemill/native-agent/recovery';
 
 export interface RecoveryArtifact {
@@ -93,12 +94,14 @@ export interface RecoveryArtifact {
     turnsSinceUseful: number;
   };
   loopStats?: Pick<LoopResult, 'turnsCompleted' | 'toolCallsExecuted' | 'totalCostUsd' | 'wallClockMs'>;
+  cleanupReport?: CleanupReport;
   nextActions: string[];
   redactionApplied: true;
 }
 
 export interface AnalyzeRecoveryOptions {
   createdAt?: string;
+  cleanupReport?: CleanupReport;
 }
 
 export interface AnalyzeRecoveryResult {
@@ -277,6 +280,7 @@ export function buildRecoveryArtifact(
   input: RecoveryInput,
   detection: Extract<StallDetection, { stalled: true }>,
   createdAt: string,
+  cleanupReport?: CleanupReport,
 ): RecoveryArtifact {
   const nextActions = [...STALL_METADATA[detection.stallType].nextActions];
   const lastUsefulIndex = detection.lastUsefulActivity
@@ -306,6 +310,9 @@ export function buildRecoveryArtifact(
   if (input.loopResult) {
     artifact.loopStats = { ...input.loopResult };
   }
+  if (cleanupReport) {
+    artifact.cleanupReport = cleanupReport;
+  }
 
   return redactSecretsInValue(artifact).value as RecoveryArtifact;
 }
@@ -324,7 +331,7 @@ export function analyzeRecovery(
   return {
     detection,
     stageResult,
-    artifact: buildRecoveryArtifact(input, detection, options.createdAt),
+    artifact: buildRecoveryArtifact(input, detection, options.createdAt, options.cleanupReport),
   };
 }
 

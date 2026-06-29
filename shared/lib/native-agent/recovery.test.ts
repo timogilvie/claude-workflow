@@ -266,6 +266,29 @@ describe('recovery stall detection', () => {
       kind: 'touched_artifact',
     });
   });
+
+  it('attaches cleanup reports to recovery artifacts when provided', () => {
+    const result = analyzeRecovery(input({
+      stopReason: 'token_limit',
+      observations: [observation(1)],
+    }), {
+      createdAt: CREATED_AT,
+      cleanupReport: {
+        reason: 'timeout',
+        terminatedCommands: [],
+        partialMutations: [],
+        finalTreeState: 'dirty-unrecoverable',
+        cleanupDecision: 'left-in-place',
+        runTouchedPaths: ['src.ts'],
+        rollbackResults: [],
+        notes: ['left in place'],
+      },
+    });
+
+    assert.equal(result.artifact?.schemaVersion, RECOVERY_ARTIFACT_SCHEMA_VERSION);
+    assert.equal(result.artifact?.cleanupReport?.cleanupDecision, 'left-in-place');
+    assert.equal(result.artifact?.cleanupReport?.finalTreeState, 'dirty-unrecoverable');
+  });
 });
 
 describe('recovery stage results and artifacts', () => {

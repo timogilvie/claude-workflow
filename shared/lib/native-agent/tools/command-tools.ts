@@ -8,6 +8,7 @@ import {
   type RejectionReason,
   type RunCommandOptions,
 } from '../command-substrate.ts';
+import type { CleanupTracker } from '../cleanup.ts';
 import type { ToolDescriptor, WavemillToolResult } from './types.ts';
 
 const DEFAULT_MAX_OUTPUT_BYTES = 64 * 1024;
@@ -73,6 +74,7 @@ export type RunCommandDetails = RunCommandSuccessDetails | RunCommandRejectedDet
 export interface CommandToolFactoryOptions {
   allowedEnvKeys?: readonly string[];
   spawnFn?: RunCommandOptions['spawnFn'];
+  cleanupTracker?: CleanupTracker;
 }
 
 interface RunScopedCommandInput extends RunCommandParams {
@@ -83,6 +85,7 @@ interface RunScopedCommandInput extends RunCommandParams {
   allowedEnvKeys?: readonly string[];
   spawnFn?: RunCommandOptions['spawnFn'];
   signal?: AbortSignal;
+  cleanupTracker?: CleanupTracker;
 }
 
 interface AfterToolCallContext {
@@ -135,6 +138,7 @@ export function createRunTestsTool(
         allowedEnvKeys: options.allowedEnvKeys,
         spawnFn: options.spawnFn,
         signal,
+        cleanupTracker: options.cleanupTracker,
       });
     },
   };
@@ -172,6 +176,7 @@ export function createRunFormatTool(
         allowedEnvKeys: options.allowedEnvKeys,
         spawnFn: options.spawnFn,
         signal,
+        cleanupTracker: options.cleanupTracker,
       });
     },
   };
@@ -299,6 +304,7 @@ export async function runScopedCommand(
     allowedEnvKeys: input.allowedEnvKeys,
     spawnFn: input.spawnFn,
     signal: input.signal,
+    onSpawn: (child) => input.cleanupTracker?.registerProcess(child),
   });
 
   if (result.approval === 'rejected') {
