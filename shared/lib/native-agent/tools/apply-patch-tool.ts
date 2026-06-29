@@ -109,11 +109,13 @@ async function executeApplyPatch(
   try {
     const result = await applyNativePatch(worktreePath, validation.value, { phase });
     if (result.ok) {
-      recorder?.recordMutation({
-        tool: 'apply_patch',
-        status: 'completed',
-        path: result.changedFiles[0],
-      });
+      for (const changedFile of result.changedFiles) {
+        recorder?.recordMutation({
+          tool: 'apply_patch',
+          status: 'completed',
+          path: changedFile,
+        });
+      }
       recorder?.recordPatchSnapshots(result.snapshots);
       const details: ApplyPatchSuccessDetails = {
         ...result,
