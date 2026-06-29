@@ -24,6 +24,7 @@ import {
   type ReplayCompactionEvent,
   type ReplayCompactionOptions,
 } from './compaction.ts';
+import { buildTrustMetadata } from './provenance.ts';
 import type { ProviderModelConfig } from './provider.ts';
 import { evaluateBeforeToolCallPolicy, type ToolPolicyConfig } from './tools/policies.ts';
 import { redactSecrets, redactSecretsInValue } from './tools/redaction.ts';
@@ -419,6 +420,13 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
       // Compute effective content and details after caller override.
       type ContentBlock = { type: string; text: string };
       const baseResult = ctx.result as { content?: ContentBlock[]; details?: unknown } | null | undefined;
+      const existingMetadata = (
+        ctx.result &&
+        typeof ctx.result === 'object' &&
+        'metadata' in ctx.result
+      )
+        ? (ctx.result as { metadata?: ToolResultMetadata }).metadata
+        : undefined;
       const effectiveContent = ((callerOverride?.content ?? baseResult?.content ?? []) as ContentBlock[]);
       const effectiveDetails: unknown =
         callerOverride?.details !== undefined ? callerOverride.details : baseResult?.details;
@@ -464,7 +472,19 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
         categories: allCategories,
       };
 
-      const metadata: ToolResultMetadata = { provenance, outputCap, redaction };
+      const trust = buildTrustMetadata({
+        sourceKind: existingMetadata?.trust?.sourceKind,
+        content: redactedContent,
+        details: detailsResult.value,
+      });
+
+      const metadata: ToolResultMetadata = {
+        ...existingMetadata,
+        provenance,
+        outputCap,
+        redaction,
+        trust,
+      };
 
       // Embed __wavemill metadata in details (plain-object only; transcript extracts it).
       const baseDetails = detailsResult.value;
@@ -484,6 +504,7 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
         content: redactedContent as AfterToolCallResult['content'],
         details: enrichedDetails,
       };
+      (override as AfterToolCallResult & { metadata?: ToolResultMetadata }).metadata = metadata;
 
       return override;
     },
