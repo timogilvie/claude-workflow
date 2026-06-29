@@ -116,6 +116,29 @@ describe('ApprovalStore: basic lifecycle', () => {
     assert.equal(record!.state, 'expired');
   });
 
+  it('emits lifecycle entries for requested, granted, denied, and expired transitions', () => {
+    const entries: string[] = [];
+    const store = new ApprovalStore({
+      lifecycleSink: (entry) => entries.push(entry.event),
+    });
+
+    store.request({ requestId: 'grant-req', sessionId: SESSION_A, tool: 'x', action: 'y', argSummary: '', riskReason: 'r' });
+    store.grant(SESSION_A, 'grant-req');
+    store.request({ requestId: 'deny-req', sessionId: SESSION_A, tool: 'x', action: 'y', argSummary: '', riskReason: 'r' });
+    store.deny(SESSION_A, 'deny-req');
+    store.request({ requestId: 'expire-req', sessionId: SESSION_A, tool: 'x', action: 'y', argSummary: '', riskReason: 'r' });
+    store.expire(SESSION_A, 'expire-req');
+
+    assert.deepEqual(entries, [
+      'requested',
+      'granted',
+      'requested',
+      'denied',
+      'requested',
+      'expired',
+    ]);
+  });
+
   it('expire() returns null for already-resolved request', () => {
     const store = new ApprovalStore();
     store.request({ requestId: REQ_1, sessionId: SESSION_A, tool: 'x', action: 'y', argSummary: '', riskReason: 'r' });

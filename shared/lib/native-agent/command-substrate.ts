@@ -19,7 +19,9 @@ export type ApprovalOutcome = 'approved' | 'rejected' | 'approval_needed';
 export type RejectionReason =
   | 'empty-command'
   | 'dangerous-command-pattern'
-  | 'cwd-outside-allowed-roots';
+  | 'cwd-outside-allowed-roots'
+  | 'approval-denied'
+  | 'approval-expired';
 
 export interface CommandApprovalNeededMetadata {
   requestId: string;

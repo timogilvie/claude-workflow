@@ -343,11 +343,8 @@ function toStageSummary(result: StageResult): StageSummary {
  */
 function hasApprovalNeededArtifact(result: StageResult): boolean {
   if (!result.artifacts) return false;
-  const arts = result.artifacts as Record<string, unknown>;
-  const req = arts.approvalRequest;
-  if (!req || typeof req !== 'object') return false;
-  const r = req as Record<string, unknown>;
-  return typeof r.requestId === 'string' && typeof r.riskReason === 'string';
+  const req = result.artifacts.approvalRequest;
+  return typeof req?.requestId === 'string' && typeof req.riskReason === 'string';
 }
 
 function readLegacyMarkers(featureDir: string): { codingComplete: boolean; planApproved: boolean; aborted: boolean } {

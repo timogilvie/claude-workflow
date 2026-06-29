@@ -85,12 +85,24 @@ export interface ReadyArtifacts {
   remediationDecision?: ReadyRemediationDecision;
 }
 
+/** Pending human approval metadata surfaced by approval-needed stage results. */
+export interface ApprovalRequestArtifact {
+  requestId: string;
+  riskReason: string;
+  argSummary?: string;
+  expiresAt?: number;
+}
+
 /** Discriminated union of all stage artifact types. */
-export type StageArtifacts =
+export type StageArtifacts = (
   | PlanningArtifacts
   | CodingArtifacts
   | ReviewArtifacts
-  | ReadyArtifacts;
+  | ReadyArtifacts
+) & {
+  /** Present when a stage is paused in an approval-needed runtime state. */
+  approvalRequest?: ApprovalRequestArtifact;
+};
 
 /**
  * Structure of a `.<stage>-result.json` file written by the orchestrator.

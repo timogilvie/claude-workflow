@@ -124,6 +124,8 @@ export interface ApprovalStoreOptions {
   clock?: () => number;
   /** Default TTL for new requests (ms). Defaults to 5 minutes. */
   defaultTtlMs?: number;
+  /** Optional sink for requested/granted/denied/expired lifecycle transcript records. */
+  lifecycleSink?: (entry: ApprovalLifecycleEntry) => void;
 }
 
 const DEFAULT_TTL_MS = 5 * 60 * 1000;
@@ -139,10 +141,12 @@ export class ApprovalStore {
   private readonly records = new Map<string, ApprovalRecord>();
   private readonly clockFn: () => number;
   private readonly defaultTtlMs: number;
+  private readonly lifecycleSink?: (entry: ApprovalLifecycleEntry) => void;
 
   constructor(options: ApprovalStoreOptions = {}) {
     this.clockFn = options.clock ?? (() => Date.now());
     this.defaultTtlMs = options.defaultTtlMs ?? DEFAULT_TTL_MS;
+    this.lifecycleSink = options.lifecycleSink;
   }
 
   /** Create a new pending approval request. Overwrites any prior record for the same key. */
@@ -169,6 +173,7 @@ export class ApprovalStore {
     };
     const record: ApprovalRecord = { request: req, state: 'pending' };
     this.records.set(storeKey(params.sessionId, params.requestId), record);
+    this.emit(record, 'requested', now);
     return record;
   }
 
@@ -252,20 +257,28 @@ export class ApprovalStore {
     if (record.state !== 'pending') {
       throw new ApprovalRequestAlreadyResolvedError(requestId, record.state);
     }
+    const now = this.clockFn();
     record.state = state;
-    record.resolution = { requestId, sessionId, state, resolvedAt: this.clockFn() };
+    record.resolution = { requestId, sessionId, state, resolvedAt: now };
+    this.emit(record, state, now);
     return record;
   }
 
   private applyExpiry(record: ApprovalRecord): ApprovalRecord {
+    const now = this.clockFn();
     record.state = 'expired';
     record.resolution = {
       requestId: record.request.requestId,
       sessionId: record.request.sessionId,
       state: 'expired',
-      resolvedAt: this.clockFn(),
+      resolvedAt: now,
     };
+    this.emit(record, 'expired', now);
     return record;
+  }
+
+  private emit(record: ApprovalRecord, event: ApprovalLifecycleEvent, at: number): void {
+    this.lifecycleSink?.(buildLifecycleEntry(record, event, at));
   }
 }
 
