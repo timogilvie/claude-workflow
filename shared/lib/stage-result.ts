@@ -19,6 +19,8 @@ import path from 'node:path';
 import os from 'node:os';
 import type { CodingArtifacts } from './native-agent/coding-artifacts.ts';
 export type { CodingArtifacts } from './native-agent/coding-artifacts.ts';
+import type { ReadyRemediationDecision } from './native-agent/workflow-tools/ready-remediation.ts';
+export type { ReadyRemediationDecision } from './native-agent/workflow-tools/ready-remediation.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -79,6 +81,8 @@ export interface ReadyArtifacts {
   changedFiles?: string[];
   unblocksCount?: number;
   transientMergeabilityAttempts?: number;
+  /** Per-edit-path guardrail decision for stale-base / merge-conflict remediation (HOK-2361). */
+  remediationDecision?: ReadyRemediationDecision;
 }
 
 /** Discriminated union of all stage artifact types. */

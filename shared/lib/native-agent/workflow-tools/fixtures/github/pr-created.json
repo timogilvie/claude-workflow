@@ -1,0 +1,8 @@
+{
+  "number": 1,
+  "title": "Implement idempotent PR tool",
+  "body": "Body text for the pull request.",
+  "head": "feature/idempotent-pr",
+  "base": "main",
+  "url": "https://github.com/acme/widgets/pull/1"
+}

@@ -16,6 +16,12 @@ import { updateBranchWithBase, type BranchBaseUpdateResult } from './promotion-c
 import { escapeShellArg } from './shell-utils.ts';
 import { mutateJsonState } from './state-mutex.ts';
 import { readStageResult, updateStageResult, type ReadyArtifacts, type StageResult } from './stage-result.ts';
+import { readChallengeComparisons, type StoredChallengeComparison } from './challenge-comparison.ts';
+import {
+  classifyChallengeState,
+  loadWorkflowStateChallengePairs,
+  type ChallengeGate,
+} from './tend-challenge-gate.ts';
 
 const execFileAsync = promisify(execFile);
 const MAX_AUTO_UPDATE_ATTEMPTS = 3;
@@ -838,6 +844,7 @@ export function classifyReadyTask(
   now: Date,
   config: ReadyWatchdogConfig,
   prior?: ReadyWatchdogStateEntry,
+  challengeGate?: ChallengeGate,
 ): ReadyWatchdogClassification {
   const normalizedConfig = {
     enabled: true,
@@ -1003,6 +1010,17 @@ export function classifyReadyTask(
       || (queueState === 'ready' && snapshot.readyResultStatus === 'completed');
 
     if (inMergeLane) {
+      // Before reporting a merge-lane wait, check if the tend challenge gate would block
+      // this PR. A PR blocked by a missing challenge comparison will never be selected by
+      // the merge controller, so reporting waiting-on-merge-lane is misleading.
+      if (challengeGate?.kind === 'pair-unresolved') {
+        const pairLabel = challengeGate.otherPr ? ` (pair PR #${challengeGate.otherPr})` : '';
+        return {
+          kind: 'waiting-on-eval-comparison',
+          detail: `PR #${snapshot.prNumber} is blocked from merging: challenge pair ${challengeGate.pairId}${pairLabel} has no comparison record (${challengeGate.reason}). The merge controller will not select this PR until the challenge comparison exists or challenge metadata is cleared.`,
+        };
+      }
+
       const escalateMinutes = normalizedConfig.thresholdMinutes * MERGE_LANE_STALL_ESCALATE_MULTIPLIER;
       if (snapshot.idleMinutes >= escalateMinutes) {
         const backstageHealth = snapshot.backstageHealth;
@@ -1333,6 +1351,28 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
   const jobs = normalizeJobs(workflowState);
   const activeReadyIssueIds = new Set<string>();
 
+  // Load challenge gate data once per tick so classifyReadyTask can detect
+  // challenge PRs that tend would block even when GitHub shows them as clean/green.
+  const challengePairMap = loadWorkflowStateChallengePairs(options.repoDir);
+  let tickChallengeComparisons: StoredChallengeComparison[] = [];
+  try {
+    tickChallengeComparisons = readChallengeComparisons(path.join(options.repoDir, '.wavemill', 'evals'));
+  } catch {
+    // Missing or unreadable file: treat as no comparisons — consistent with tend behavior.
+  }
+
+  // Build the set of all ready-phase PR numbers for challenge gate "other PR" resolution.
+  const allReadyPrNumbers = new Set<number>();
+  for (const rawTask of Object.values(tasks)) {
+    const t = rawTask as WorkflowTaskRecord;
+    if (t.phase === 'ready') {
+      const pr = Number(t.pr);
+      if (Number.isFinite(pr) && pr > 0) {
+        allReadyPrNumbers.add(pr);
+      }
+    }
+  }
+
   for (const [issueId, rawTask] of Object.entries(tasks)) {
     const task = rawTask as WorkflowTaskRecord;
     if (task.phase !== 'ready') {
@@ -1363,9 +1403,24 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
     let classification: ReadyWatchdogClassification;
     let fetchError: string | undefined;
     const prior = priorTasks[issueId];
+
+    // Compute the challenge gate for this PR if it has a challenge pair. Passes null
+    // for PR metadata because workflow-state challenge pairs are sufficient to detect
+    // the pair-unresolved:no-comparison case that the watchdog needs to surface.
+    const challengeGate: ChallengeGate | undefined = snapshot.challengePairId
+      ? classifyChallengeState(
+          snapshot.prNumber,
+          null,
+          challengePairMap,
+          tickChallengeComparisons,
+          true,
+          allReadyPrNumbers,
+        )
+      : undefined;
+
     try {
       githubTruth = await deps.fetchGitHubTruth(snapshot.prNumber, options.repoDir);
-      classification = classifyReadyTask(snapshot, githubTruth, now, config, prior);
+      classification = classifyReadyTask(snapshot, githubTruth, now, config, prior, challengeGate);
     } catch (error) {
       fetchError = errorMessage(error);
       classification = {

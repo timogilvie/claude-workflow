@@ -338,6 +338,39 @@ Ordering guarantee:
 4. if allowed, execute
 5. record `executed` on success or `failed` on execution error
 
+---
+
+## Review Flow Orchestration
+
+`shared/lib/native-agent/workflow-tools/review-flow.ts` composes the existing
+workflow tools into the native review handoff:
+
+1. `review_changes`
+2. optional per-finding narrow `review_fix` execution when a fix executor is supplied
+3. `linear_comment`
+4. `github_create_pr`
+5. `github_add_label`
+6. `write_stage_result`
+
+Runtime guarantees:
+
+- Structured review runs first and the flow parses its JSON payload before any PR mutation.
+- If `needsStrongerReviewer` is true, the flow records a terminal review stage-result and stops before PR mutation.
+- The flow never merges. It always reports `haltedBeforeMerge: true` and `merged: false`, leaving merge control to ready/tend policy.
+- GitHub PR and label calls are recorded into the session transcript and stage artifact log by the flow, because the lower-level GitHub helpers remain provider-focused and side-effect free outside their own idempotent mutation result.
+
+Idempotent reruns:
+
+- `github_create_pr` reuses or updates the existing open PR based on the current head/base/body state.
+- `github_add_label` skips labels already present.
+- `write_stage_result` reuses or updates the same review artifact instead of creating duplicates.
+- `linear_comment` reuses identical comment bodies. If the review summary body changes, current tool semantics create a new comment rather than updating in place; the flow surfaces that limitation through its result warnings when relevant instead of bypassing the existing Linear tool contract.
+
+Fix policy:
+
+- Review-phase source edits are not routed through the native `apply_patch` tool because the review mutation policy intentionally denies broad source editing there.
+- Instead, the flow accepts an injected narrow fix executor. When no executor is supplied, fixes are skipped cleanly. When an executor returns `denied`, the finding remains in the review summary and the flow continues to PR/stage-result handling.
+
 This guarantees policy-denied mutations short-circuit before side effects.
 
 ---
@@ -406,6 +439,55 @@ type MutationRecord<TResult> =
 | `review_failed` | `review_changes` | Review script or subprocess failed |
 | `route_failed` | `route_task` | Router produced no valid routing decision |
 | `expansion_failed` | `expand_issue` | Issue expansion produced no usable task packet |
+
+---
+
+## Ready-Phase Per-Edit Guardrail (HOK-2361)
+
+In addition to the per-(phase, tool, action) mutation policy matrix, the ready phase enforces a **per-edit-path** guardrail through `shared/lib/native-agent/workflow-tools/ready-remediation.ts`.
+
+### Purpose
+
+The per-action matrix gates whether a tool call is permitted at all (e.g. `github_create_pr` + `merge_conflict` is allowed in `ready`). The per-edit guardrail goes one level deeper and checks whether every **individual file path** in a proposed edit set is within the scope declared by the active ready-stage classification. This prevents an agent from smuggling unrelated feature edits through a conflict-remediation window.
+
+### Vocabulary mapping
+
+| Ready-remediation kind | Ready-stage / ready-watchdog term | Trigger |
+|---|---|---|
+| `stale_base` | `auto-update` (watchdog), `stale-base` (docs) | PR is behind the base branch |
+| `merge_conflict` | `CONFLICTED` (ready-stage `MergeConflictResult`) | PR has merge conflicts |
+| `unknown` | Any other state | Classification could not be determined; scope is empty (deny-all) |
+
+### Decision shape
+
+```typescript
+interface ReadyRemediationDecision {
+  decision: 'allowed' | 'denied';
+  classification: 'stale_base' | 'merge_conflict' | 'unknown';
+  allowedScope: string[];    // normalized, sorted, deduped repo-relative paths
+  rejectedEdits: string[];   // paths from proposedEdits that were out-of-scope
+  rationale: string;         // human-readable; names rejected paths when denied
+}
+```
+
+This decision is attached to `ReadyArtifacts.remediationDecision` in the stage result file.
+
+### Deny-by-default semantics
+
+- **Unknown classification** → empty scope → all edits denied.
+- **Empty edit set** → `allowed` with rationale `"no edits proposed"` (cannot violate scope).
+- **Path traversal or absolute paths** → always rejected (appended to `rejectedEdits`).
+- **Any proposed path outside `allowedScope`** → `denied`; all out-of-scope paths listed in `rejectedEdits` and named in `rationale`.
+
+### Adapter helpers
+
+```typescript
+// Build a classification from a ready-stage MergeConflictResult
+fromMergeConflictResult(result: MergeConflictResult, conflictedFiles: string[]): ReadyRemediationClassification
+
+// Build a classification for the stale-base condition
+fromStaleBaseCheck(affectedFiles: string[], source?: string): ReadyRemediationClassification
+```
 
 ---
 
