@@ -1,0 +1,20 @@
+{
+  "description": "Denied: network target is outside the phase and tool allowlist",
+  "input": {
+    "phase": "review",
+    "tool": "github_create_pr",
+    "target": "https://uploads.github.com/repos/acme/widgets"
+  },
+  "expected": {
+    "decision": "deny",
+    "error": "policy_denied",
+    "diagnostics": {
+      "category": "network",
+      "phase": "review",
+      "tool": "github_create_pr",
+      "reason": "not_allowed",
+      "target": "https://uploads.github.com/repos/acme/widgets",
+      "matchedRule": "allowlist:api.github.com"
+    }
+  }
+}

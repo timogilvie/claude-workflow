@@ -162,6 +162,25 @@ Diagnostics note: the contract does not expose a separate `diagnostics` field.
 Runtime callers should read tool-failure context from `error`, `message`, and
 the recorded transcript event details payload.
 
+### Network Policy Denial
+
+Network-capable executors may return `error: 'policy_denied'` when outbound
+access is blocked by the phase-aware network policy. These denials are
+distinguishable from transport failures such as `external_error`,
+`review_failed`, or `route_failed`.
+
+Recorded transcript diagnostics for a denied network call use:
+
+- `category: 'network'`
+- `phase`
+- `tool`
+- `reason`: `missing_policy`, `not_allowed`, or `invalid_target`
+- `target`: redacted before exposure
+- `matchedRule` when a concrete policy entry was evaluated
+
+The redaction guarantee applies to both the surfaced `message` and the recorded
+diagnostic target string.
+
 ---
 
 ### `route_task`
