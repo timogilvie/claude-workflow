@@ -175,6 +175,25 @@ describe('native-agent mutation tools', () => {
       assert.match(details.message, /state must be one of/);
     }
   });
+
+  it('write_artifact redacts secrets from content before writing to disk', async () => {
+    const repo = createRepo('mutation-artifact-redact-');
+    const tool = createWriteArtifactTool(repo);
+    const token = 'ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890';
+
+    const result = await tool.execute('call-redact', {
+      path: 'features/demo/secret.json',
+      content: `{"token": "${token}"}`,
+    });
+
+    const details = result.details as WriteArtifactDetails;
+    assert.equal(details.ok, true);
+    if (details.ok) {
+      const diskContent = readFileSync(path.join(repo, details.resolvedPath), 'utf-8');
+      assert.ok(!diskContent.includes(token), 'original token must not appear on disk');
+      assert.ok(diskContent.includes('[REDACTED:github_pat]'), 'redacted placeholder must appear');
+    }
+  });
 });
 
 function createRepo(prefix: string): string {

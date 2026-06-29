@@ -1,4 +1,5 @@
 import type { ToolDescriptor, WavemillToolResult } from '../tools/types.ts';
+import { redact } from '../../redaction-profiles.ts';
 import {
   addLabelsToIssue,
   addLabelsToPullRequest,
@@ -161,6 +162,10 @@ export async function githubCreatePr(
     return createPrError('policy_denied', createPolicy.reason);
   }
 
+  // Redact secrets from title and body before any external exposure or comparison.
+  const safeTitle = redact(request.title);
+  const safeBody = redact(request.body);
+
   const idempotencyKey = githubCreatePrKey({
     repo: request.repo,
     head: request.head,
@@ -186,7 +191,7 @@ export async function githubCreatePr(
       const current = existing[0];
       if (current) {
         const ref = toPullRequestRef(current);
-        if (current.title === request.title && current.body === request.body) {
+        if (current.title === safeTitle && current.body === safeBody) {
           return {
             ok: true,
             tool: 'github_create_pr',
@@ -205,8 +210,8 @@ export async function githubCreatePr(
         const updated = await input.updatePullRequest({
           repo: request.repo,
           number: current.number,
-          title: request.title,
-          body: request.body,
+          title: safeTitle,
+          body: safeBody,
         });
 
         return {
@@ -228,8 +233,8 @@ export async function githubCreatePr(
         repo: request.repo,
         head: request.head,
         base: request.base,
-        title: request.title,
-        body: request.body,
+        title: safeTitle,
+        body: safeBody,
         draft: request.draft,
       });
 
