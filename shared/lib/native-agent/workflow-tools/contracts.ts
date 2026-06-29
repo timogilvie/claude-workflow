@@ -14,6 +14,8 @@
  * Schema mirror in contracts.json must expose the same version.
  */
 
+import type { ToolResultMetadata } from '../tools/types.ts';
+
 // ---------------------------------------------------------------------------
 // Schema version
 // ---------------------------------------------------------------------------
@@ -117,6 +119,10 @@ export interface IdempotencyResult<TRef extends ExternalRef = ExternalRef> {
   refs?: TRef[];
   /** Human-readable explanation, especially useful when outcome is 'skipped'. */
   reason?: string;
+}
+
+interface WorkflowToolResultBase {
+  metadata?: ToolResultMetadata;
 }
 
 // ---------------------------------------------------------------------------
@@ -270,7 +276,7 @@ export interface LinearGetIssueRequest {
   includeComments?: boolean;
 }
 
-export interface LinearGetIssueSuccess {
+export interface LinearGetIssueSuccess extends WorkflowToolResultBase {
   ok: true;
   tool: 'linear_get_issue';
   /** Raw issue data from Linear. Treat as external-untrusted provenance. */
@@ -286,11 +292,12 @@ export interface LinearGetIssueSuccess {
   };
 }
 
-export interface LinearGetIssueError {
+export interface LinearGetIssueError extends WorkflowToolResultBase {
   ok: false;
   tool: 'linear_get_issue';
   error: CommonErrorCode;
   message: string;
+  diagnostics?: Record<string, unknown>;
 }
 
 export type LinearGetIssueResult = LinearGetIssueSuccess | LinearGetIssueError;
@@ -312,17 +319,18 @@ export interface LinearCommentRequest {
   dedupeOverride?: string;
 }
 
-export interface LinearCommentSuccess {
+export interface LinearCommentSuccess extends WorkflowToolResultBase {
   ok: true;
   tool: 'linear_comment';
   idempotency: IdempotencyResult<LinearCommentRef>;
 }
 
-export interface LinearCommentError {
+export interface LinearCommentError extends WorkflowToolResultBase {
   ok: false;
   tool: 'linear_comment';
   error: CommonErrorCode | 'rate_limited';
   message: string;
+  diagnostics?: Record<string, unknown>;
 }
 
 export type LinearCommentResult = LinearCommentSuccess | LinearCommentError;
@@ -348,17 +356,18 @@ export interface GitHubCreatePrRequest {
   draft?: boolean;
 }
 
-export interface GitHubCreatePrSuccess {
+export interface GitHubCreatePrSuccess extends WorkflowToolResultBase {
   ok: true;
   tool: 'github_create_pr';
   idempotency: IdempotencyResult<GitHubPullRequestRef>;
 }
 
-export interface GitHubCreatePrError {
+export interface GitHubCreatePrError extends WorkflowToolResultBase {
   ok: false;
   tool: 'github_create_pr';
   error: CommonErrorCode | 'conflict' | 'rate_limited';
   message: string;
+  diagnostics?: Record<string, unknown>;
 }
 
 export type GitHubCreatePrResult = GitHubCreatePrSuccess | GitHubCreatePrError;
@@ -380,17 +389,18 @@ export interface GitHubAddLabelRequest {
   label: string;
 }
 
-export interface GitHubAddLabelSuccess {
+export interface GitHubAddLabelSuccess extends WorkflowToolResultBase {
   ok: true;
   tool: 'github_add_label';
   idempotency: IdempotencyResult<GitHubLabelRef>;
 }
 
-export interface GitHubAddLabelError {
+export interface GitHubAddLabelError extends WorkflowToolResultBase {
   ok: false;
   tool: 'github_add_label';
   error: CommonErrorCode | 'conflict' | 'not_found' | 'rate_limited';
   message: string;
+  diagnostics?: Record<string, unknown>;
 }
 
 export type GitHubAddLabelResult = GitHubAddLabelSuccess | GitHubAddLabelError;
@@ -410,7 +420,7 @@ export interface ReviewChangesRequest {
   maxOutputBytes?: number;
 }
 
-export interface ReviewChangesSuccess {
+export interface ReviewChangesSuccess extends WorkflowToolResultBase {
   ok: true;
   tool: 'review_changes';
   /** Plain-text or JSON review findings. Treat as wavemill-generated provenance. */
@@ -419,11 +429,12 @@ export interface ReviewChangesSuccess {
   blockingCount?: number;
 }
 
-export interface ReviewChangesError {
+export interface ReviewChangesError extends WorkflowToolResultBase {
   ok: false;
   tool: 'review_changes';
   error: CommonErrorCode | 'review_failed';
   message: string;
+  diagnostics?: Record<string, unknown>;
 }
 
 export type ReviewChangesResult = ReviewChangesSuccess | ReviewChangesError;
@@ -443,7 +454,7 @@ export interface RouteTaskRequest {
   modelsAvailable?: string[];
 }
 
-export interface RouteTaskSuccess {
+export interface RouteTaskSuccess extends WorkflowToolResultBase {
   ok: true;
   tool: 'route_task';
   /** Route artifact. Treat as wavemill-generated provenance. */
@@ -455,11 +466,12 @@ export interface RouteTaskSuccess {
   ref?: WavemillRouteRef;
 }
 
-export interface RouteTaskError {
+export interface RouteTaskError extends WorkflowToolResultBase {
   ok: false;
   tool: 'route_task';
   error: CommonErrorCode | 'route_failed';
   message: string;
+  diagnostics?: Record<string, unknown>;
 }
 
 export type RouteTaskResult = RouteTaskSuccess | RouteTaskError;
@@ -475,7 +487,7 @@ export interface ExpandIssueRequest {
   outputDir?: string;
 }
 
-export interface ExpandIssueSuccess {
+export interface ExpandIssueSuccess extends WorkflowToolResultBase {
   ok: true;
   tool: 'expand_issue';
   /** Task packet output path. Treat as wavemill-generated provenance. */
@@ -485,11 +497,12 @@ export interface ExpandIssueSuccess {
   idempotency?: IdempotencyResult<WavemillTaskPacketRef>;
 }
 
-export interface ExpandIssueError {
+export interface ExpandIssueError extends WorkflowToolResultBase {
   ok: false;
   tool: 'expand_issue';
   error: CommonErrorCode | 'expansion_failed';
   message: string;
+  diagnostics?: Record<string, unknown>;
 }
 
 export type ExpandIssueResult = ExpandIssueSuccess | ExpandIssueError;
@@ -513,13 +526,13 @@ export interface WriteStageResultRequest {
   artifacts?: Record<string, unknown>;
 }
 
-export interface WriteStageResultSuccess {
+export interface WriteStageResultSuccess extends WorkflowToolResultBase {
   ok: true;
   tool: 'write_stage_result';
   idempotency: IdempotencyResult<WavemillStageResultRef>;
 }
 
-export interface WriteStageResultError {
+export interface WriteStageResultError extends WorkflowToolResultBase {
   ok: false;
   tool: 'write_stage_result';
   error: CommonErrorCode;

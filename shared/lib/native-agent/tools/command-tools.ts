@@ -2,6 +2,7 @@ import { Buffer } from 'node:buffer';
 
 import type { CommandClass } from '../command-classifier.ts';
 import { classifyCommand } from '../command-classifier.ts';
+import { buildTrustMetadata } from '../provenance.ts';
 import {
   runCommand,
   type ApprovalOutcome,
@@ -358,6 +359,7 @@ export async function runScopedCommand(
   return {
     content: [{ type: 'text', text: summarizeResult(details) }],
     details,
+    metadata: { trust: buildTrustMetadata({ sourceKind: 'command_output', details }) },
   };
 }
 
@@ -365,6 +367,13 @@ function rejectedResult(details: RunCommandRejectedDetails): WavemillToolResult<
   return {
     content: [{ type: 'text', text: details.message }],
     details,
+    metadata: {
+      trust: buildTrustMetadata({
+        sourceKind: 'command_output',
+        content: [{ type: 'text', text: details.message }],
+        details,
+      }),
+    },
   };
 }
 
