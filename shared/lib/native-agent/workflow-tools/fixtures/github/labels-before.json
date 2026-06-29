@@ -1,0 +1,5 @@
+{
+  "number": 42,
+  "labels": ["existing-label"],
+  "url": "https://github.com/acme/widgets/pull/42"
+}

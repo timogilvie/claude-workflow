@@ -1,0 +1,6 @@
+{
+  "rate_limited": "HTTP 429 rate limit exceeded",
+  "not_found": "Repository not found",
+  "conflict": "Multiple open pull requests already exist",
+  "transient_network": "network timeout while waiting for GitHub"
+}

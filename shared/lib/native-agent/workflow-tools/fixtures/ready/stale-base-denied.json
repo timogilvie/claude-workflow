@@ -1,0 +1,15 @@
+{
+  "description": "Stale-base remediation denied: proposed edits include out-of-scope feature file",
+  "raw": {
+    "affectedFiles": ["alembic/versions/abc123_add_users.py"],
+    "source": "stale-base-check"
+  },
+  "proposedEdits": ["alembic/versions/abc123_add_users.py", "src/unrelated-feature.ts"],
+  "expected": {
+    "decision": "denied",
+    "classification": "stale_base",
+    "allowedScope": ["alembic/versions/abc123_add_users.py"],
+    "rejectedEdits": ["src/unrelated-feature.ts"],
+    "rationale": "ready_remediation_denied: proposed edits are outside the stale_base remediation scope. Rejected: src/unrelated-feature.ts"
+  }
+}
