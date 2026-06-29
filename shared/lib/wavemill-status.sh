@@ -233,6 +233,23 @@ get_ready_display_status() {
   jq -r '.status // empty' "$result_file" 2>/dev/null || true
 }
 
+# Return "approval_needed" when the coding stage result shows awaiting_user
+# with an approvalRequest artifact, otherwise return empty string.
+# HOK-2364: surface human-approval pause distinct from generic awaiting_user.
+get_coding_approval_status() {
+  local worktree="$1" slug="$2"
+  local feature_dir="$worktree/features/$slug"
+  local result_file="$feature_dir/.coding-result.json"
+
+  [[ -f "$result_file" ]] || return 0
+  local status request_id
+  status=$(jq -r '.status // empty' "$result_file" 2>/dev/null) || return 0
+  [[ "$status" == "awaiting_user" ]] || return 0
+  request_id=$(jq -r '.artifacts.approvalRequest.requestId // empty' "$result_file" 2>/dev/null) || return 0
+  [[ -n "$request_id" ]] && echo "approval_needed"
+  return 0
+}
+
 get_ready_queue_state() {
   local worktree="$1" slug="$2"
   local feature_dir="$worktree/features/$slug"
@@ -1172,10 +1189,14 @@ render_task_row() {
     coding)
       coding_auto_detail=$(coding_auto_advance_detail "$worktree" "$slug" "$issue")
       coding_blocked_detail=$(coding_blocked_completion_detail "$worktree" "$slug" "$issue")
+      coding_approval_status=""
+      [[ -n "$worktree" && -n "$slug" ]] && coding_approval_status=$(get_coding_approval_status "$worktree" "$slug")
       if [[ -n "$coding_auto_detail" ]]; then
         phase_str="${G}auto review${N}"
       elif [[ -n "$coding_blocked_detail" ]]; then
         phase_str="${R}⚠ coding${N}"
+      elif [[ "$coding_approval_status" == "approval_needed" ]]; then
+        phase_str="${Y}⏳ approval${N}"
       else
         phase_str="${G}💻 coding${N}"
       fi

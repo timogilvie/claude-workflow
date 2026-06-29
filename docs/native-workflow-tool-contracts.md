@@ -247,6 +247,25 @@ Idempotency note: repeated writes with the same
 `issueId/featureDir + stage + status + payload` update the existing artifact in
 place or return `reused`; they do not create duplicate stage-result files.
 
+Approval-needed state: risky native runtime operations may pause a stage instead
+of failing it. Such records use `status: 'awaiting_user'` and include a typed
+approval request under `artifacts.approvalRequest`:
+
+```typescript
+{
+  status: 'awaiting_user';
+  artifacts: {
+    type: 'coding' | 'planning' | 'review' | 'ready';
+    approvalRequest: {
+      requestId: string;
+      riskReason: string;
+      argSummary?: string;
+      expiresAt?: number;
+    };
+  };
+}
+```
+
 **Error:** `ok: false`, `error: CommonErrorCode`, `message: string`
 
 ---
