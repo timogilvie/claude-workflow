@@ -15,6 +15,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import type { TranscriptWriter } from '../transcript.ts';
 
 // ---------------------------------------------------------------------------
 // Domain types
@@ -124,6 +125,8 @@ export interface ApprovalStoreOptions {
   clock?: () => number;
   /** Default TTL for new requests (ms). Defaults to 5 minutes. */
   defaultTtlMs?: number;
+  /** Transcript writer used for requested/granted/denied/expired approval events. */
+  transcriptWriter?: Pick<TranscriptWriter, 'writeApprovalEvent'>;
   /** Optional sink for requested/granted/denied/expired lifecycle transcript records. */
   lifecycleSink?: (entry: ApprovalLifecycleEntry) => void;
 }
@@ -146,7 +149,7 @@ export class ApprovalStore {
   constructor(options: ApprovalStoreOptions = {}) {
     this.clockFn = options.clock ?? (() => Date.now());
     this.defaultTtlMs = options.defaultTtlMs ?? DEFAULT_TTL_MS;
-    this.lifecycleSink = options.lifecycleSink;
+    this.lifecycleSink = options.lifecycleSink ?? options.transcriptWriter?.writeApprovalEvent.bind(options.transcriptWriter);
   }
 
   /** Create a new pending approval request. Overwrites any prior record for the same key. */

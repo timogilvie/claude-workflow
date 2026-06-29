@@ -139,6 +139,23 @@ describe('ApprovalStore: basic lifecycle', () => {
     ]);
   });
 
+  it('writes lifecycle entries through a transcript writer hook', () => {
+    const entries: string[] = [];
+    const store = new ApprovalStore({
+      transcriptWriter: {
+        writeApprovalEvent: (entry) => {
+          entries.push(entry.event);
+          return entry as never;
+        },
+      },
+    });
+
+    store.request({ requestId: REQ_1, sessionId: SESSION_A, tool: 'x', action: 'y', argSummary: '', riskReason: 'r' });
+    store.grant(SESSION_A, REQ_1);
+
+    assert.deepEqual(entries, ['requested', 'granted']);
+  });
+
   it('expire() returns null for already-resolved request', () => {
     const store = new ApprovalStore();
     store.request({ requestId: REQ_1, sessionId: SESSION_A, tool: 'x', action: 'y', argSummary: '', riskReason: 'r' });

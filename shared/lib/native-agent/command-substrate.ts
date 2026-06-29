@@ -159,7 +159,7 @@ export async function runCommand(options: RunCommandOptions): Promise<CommandRes
   // Check approval gate before spawning (HOK-2364).
   if (options.approvalGate) {
     const sessionId = options.sessionId ?? '';
-    const argSummary = options.argSummary ?? classification.normalizedCommand;
+    const argSummary = options.argSummary ?? `${options.toolName ?? 'command'}:${classification.commandClass}`;
     const decision = await options.approvalGate({
       sessionId,
       tool: options.toolName ?? 'command',
