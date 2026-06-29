@@ -571,6 +571,14 @@ export interface ResourcesConfig {
   runtimeSelection?: RuntimeResourceSelectionConfig;
 }
 
+export interface RedactionConfig {
+  secretEnvNames?: string[];
+}
+
+export interface SafetyConfig {
+  redaction?: RedactionConfig;
+}
+
 export interface VerificationMandatoryChecksConfig {
   typecheck?: boolean;
   lint?: boolean;
@@ -604,6 +612,7 @@ export interface BudgetConfig {
 
 export interface WavemillConfig {
   configVersion?: string;
+  safety?: SafetyConfig;
   linear?: LinearConfig;
   git?: GitConfig;
   mill?: MillConfig;
@@ -1510,5 +1519,16 @@ export function getRuntimeResourceSelectionConfig(repoDir?: string): Required<Om
     fallbackToBaseline: config.fallbackToBaseline ?? true,
     canaryRate: config.canaryRate ?? 0,
     surfaces: config.surfaces ?? {},
+  };
+}
+
+/**
+ * Get the redaction config section with defaults.
+ * Returns empty secretEnvNames when not configured.
+ */
+export function getRedactionConfig(repoDir?: string): Required<RedactionConfig> {
+  const config = loadWavemillConfig(repoDir).safety?.redaction || {};
+  return {
+    secretEnvNames: config.secretEnvNames ?? [],
   };
 }

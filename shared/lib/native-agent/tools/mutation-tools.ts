@@ -5,6 +5,8 @@ import {
   evaluateMutationWritePolicy,
   type MutationPolicyReason,
 } from '../mutation-policy.ts';
+import { getRedactionConfig } from '../../config.ts';
+import { buildProfileFromConfig, redact } from '../../redaction-profiles.ts';
 import type {
   NormalizedWholeFileWriteAllowlistInput,
   WholeFileWriteAllowlistInput,
@@ -228,14 +230,17 @@ async function executeWholeFileWrite(
     return deniedWriteResult(tool, decision.reason, decision.message);
   }
 
+  // Redact secrets before writing to disk (artifact-write redaction chokepoint).
+  const profile = buildProfileFromConfig(() => getRedactionConfig(worktreePath).secretEnvNames);
+  const safeContent = redact(content, profile);
   const absolutePath = join(worktreePath, decision.resolvedPath);
   try {
-    atomicWriteText(absolutePath, content);
+    atomicWriteText(absolutePath, safeContent);
     const details: WholeFileWriteSuccessDetails = {
       ok: true,
       tool,
       resolvedPath: decision.resolvedPath,
-      bytesWritten: Buffer.byteLength(content, 'utf-8'),
+      bytesWritten: Buffer.byteLength(safeContent, 'utf-8'),
     };
     return {
       content: [{ type: 'text', text: `${tool} wrote ${decision.resolvedPath}` }],
