@@ -188,6 +188,7 @@ const STALL_METADATA: Record<
 export function detectStall(input: RecoveryInput): StallDetection {
   const observations = input.observations;
   const thresholds = resolveThresholds(input.thresholds);
+  validateThresholds(thresholds);
   const lastUsefulActivity = findLastUsefulActivity(observations);
 
   if (NON_STALL_STOP_REASONS.has(input.stopReason)) {
@@ -357,6 +358,16 @@ export function writeRecoveryArtifact(repoDir: string, artifact: RecoveryArtifac
 
 function resolveThresholds(overrides: RecoveryInput['thresholds']): RecoveryThresholds {
   return { ...DEFAULT_RECOVERY_THRESHOLDS, ...overrides };
+}
+
+function validateThresholds(thresholds: RecoveryThresholds): void {
+  for (const [key, value] of Object.entries(thresholds) as Array<[keyof RecoveryThresholds, number]>) {
+    if (!Number.isFinite(value) || !Number.isInteger(value) || value < 1) {
+      throw new RangeError(
+        `Recovery threshold '${key}' must be a positive integer (received ${String(value)}).`,
+      );
+    }
+  }
 }
 
 function detectBudgetExhaustion(stopReason: LoopStopReason): StallEvidence | null {

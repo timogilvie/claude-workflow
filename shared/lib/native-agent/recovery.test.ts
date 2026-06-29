@@ -115,6 +115,34 @@ describe('recovery stall detection', () => {
     assert.deepEqual(detection, { stalled: false, lastUsefulActivity: null });
   });
 
+  it('resets the repeated tool failure streak when an intervening turn succeeds', () => {
+    const detection = detectStall(input({
+      observations: [
+        observation(1, { toolFailures: [{ tool: 'read_file', signature: 'abc123' }] }),
+        observation(2, { toolFailures: [{ tool: 'read_file', signature: 'abc123' }] }),
+        observation(3, { touchedArtifact: true }),
+        observation(4, { toolFailures: [{ tool: 'read_file', signature: 'abc123' }] }),
+        observation(5, { toolFailures: [{ tool: 'read_file', signature: 'abc123' }] }),
+      ],
+    }));
+
+    assert.equal(detection.stalled, false);
+    assert.deepEqual(detection.lastUsefulActivity, {
+      turnIndex: 3,
+      kind: 'touched_artifact',
+    });
+  });
+
+  it('throws when a recovery threshold is not a positive integer', () => {
+    for (const value of [0, -1, 1.5, Number.NaN] as const) {
+      assert.throws(
+        () => detectStall(input({ thresholds: { maxRepeatedToolFailures: value } })),
+        RangeError,
+        `expected RangeError for threshold value ${String(value)}`,
+      );
+    }
+  });
+
   it('detects repeated patch rejection at the threshold', () => {
     const detection = detectStall(input({
       observations: [
