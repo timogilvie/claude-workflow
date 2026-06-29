@@ -134,6 +134,9 @@ function createGitHubDeps(state: FixtureState, behavior?: {
     async sleep() {},
     maxAttempts: 1,
     retryDelayMs: 1,
+    getSecretEnvNames() {
+      return [];
+    },
   };
 }
 

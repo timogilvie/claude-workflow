@@ -22,6 +22,8 @@ import {
   type LinearCommentRef,
   type WavemillTaskPacketRef,
 } from './contracts.ts';
+import { getRedactionConfig } from '../../config.ts';
+import { buildProfileFromConfig, redact } from '../../redaction-profiles.ts';
 import { isMutationAllowed } from './mutation-policy.ts';
 import {
   linearCommentKey,
@@ -112,6 +114,7 @@ export interface LinearToolsDeps {
   expander?: ExpanderFn;
   clock?: () => number;
   networkPolicy?: NetworkPolicy;
+  getSecretEnvNames?: () => string[];
 }
 
 export interface ExpandIssueDeps {
@@ -348,7 +351,10 @@ export async function executeLinearComment(
     return result;
   }
 
-  const normalizedBody = normalizeBody(params.body);
+  // Redact secrets before the body is hashed for idempotency and posted externally.
+  const profile = buildProfileFromConfig(deps.getSecretEnvNames ?? (() => getRedactionConfig().secretEnvNames));
+  const safeBody = redact(params.body, profile);
+  const normalizedBody = normalizeBody(safeBody);
   const key = params.dedupeOverride ?? linearCommentKey({
     issue: params.issue,
     phase,
@@ -396,7 +402,7 @@ export async function executeLinearComment(
 
   try {
     const issue = await deps.client.getIssue(params.issue);
-    const comment = await deps.client.createComment(issue.id, params.body);
+    const comment = await deps.client.createComment(issue.id, safeBody);
     const ref: LinearCommentRef = { system: 'linear', kind: 'comment', id: comment.id, url: comment.url };
     const rec: DedupeRecord<LinearCommentRef> = { key, outcome: 'created', ref };
     deps.registry.record(key, rec);
