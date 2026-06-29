@@ -21,6 +21,7 @@ import type { ReviewResult } from '../../review-engine.ts';
 import { createInMemoryDedupeRegistry } from './dedupe.ts';
 import { isMutationAllowed } from './mutation-policy.ts';
 import { createFixtureBackedGithubDeps } from './fixtures/github-mock.ts';
+import type { NetworkPolicy } from '../network-policy.ts';
 import type {
   LinearClient,
   WorkflowToolStageArtifactEntry,
@@ -134,6 +135,13 @@ function makeReview(overrides: Partial<ReviewResult> = {}): ReviewResult {
   };
 }
 
+const ALLOW_REVIEW_INTEGRATION_NETWORK_POLICY: NetworkPolicy = {
+  review: {
+    review_changes: { kind: 'allow' },
+    linear_comment: { kind: 'allowlist', hosts: ['api.linear.app'] },
+  },
+};
+
 let tempDirs: string[] = [];
 
 beforeEach(() => {
@@ -177,6 +185,7 @@ describe('review-integration: fixture-backed full sequence + merge boundary', ()
       clock: () => 1_000,
       linearClient,
       githubDeps,
+      networkPolicy: ALLOW_REVIEW_INTEGRATION_NETWORK_POLICY,
       reviewChangesImpl: async () => makeReview(),
     });
 
@@ -248,6 +257,7 @@ describe('review-integration: fixture-backed full sequence + merge boundary', ()
       clock: (): number => 1_000,
       linearClient,
       githubDeps,
+      networkPolicy: ALLOW_REVIEW_INTEGRATION_NETWORK_POLICY,
       reviewChangesImpl: async () => makeReview(),
     };
 
@@ -315,6 +325,7 @@ describe('review-integration: fixture-backed full sequence + merge boundary', ()
       clock: () => 1_000,
       linearClient: makeLinearClient(),
       githubDeps,
+      networkPolicy: ALLOW_REVIEW_INTEGRATION_NETWORK_POLICY,
       reviewChangesImpl: async () => makeReview({ needsStrongerReviewer: true }),
     });
 

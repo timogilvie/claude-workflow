@@ -18,6 +18,11 @@ import {
   githubCreatePrKey,
 } from './dedupe.ts';
 import {
+  enforceNetworkPolicy,
+  type NetworkDeniedDiagnostics,
+  type NetworkPolicy,
+} from '../network-policy.ts';
+import {
   isMutationAllowed,
 } from './mutation-policy.ts';
 import type {
@@ -79,6 +84,7 @@ export interface GitHubToolDeps {
   sleep(ms: number): Promise<void>;
   maxAttempts: number;
   retryDelayMs: number;
+  networkPolicy?: NetworkPolicy;
   repoDir?: string;
   getSecretEnvNames(repoDir?: string): string[];
 }
@@ -167,6 +173,16 @@ export async function githubCreatePr(
   const updatePolicy = isMutationAllowed(phase, 'github_create_pr', 'update_pr');
   if (!createPolicy.allowed && !updatePolicy.allowed) {
     return createPrError('policy_denied', createPolicy.reason);
+  }
+
+  const network = enforceNetworkPolicy({
+    policy: input.networkPolicy,
+    phase,
+    tool: 'github_create_pr',
+    target: 'https://api.github.com',
+  });
+  if (network.kind === 'deny') {
+    return createPrError(network.error, network.message, network.diagnostics);
   }
 
   // Redact secrets from title and body before any external exposure or comparison.
@@ -282,6 +298,16 @@ export async function githubAddLabel(
   const policy = isMutationAllowed(phase, 'github_add_label', 'add_label');
   if (!policy.allowed) {
     return addLabelError('policy_denied', policy.reason);
+  }
+
+  const network = enforceNetworkPolicy({
+    policy: input.networkPolicy,
+    phase,
+    tool: 'github_add_label',
+    target: 'https://api.github.com',
+  });
+  if (network.kind === 'deny') {
+    return addLabelError(network.error, network.message, network.diagnostics);
   }
 
   const normalizedLabel = request.label.trim();
@@ -520,12 +546,14 @@ function toLabelRef(repo: string, label: string, target: GitHubToolLabelTarget):
 function createPrError(
   error: 'invalid_input' | 'policy_denied' | 'not_found' | 'external_error' | 'conflict' | 'rate_limited',
   message: string,
+  diagnostics?: NetworkDeniedDiagnostics,
 ): GitHubCreatePrResult {
   return {
     ok: false,
     tool: 'github_create_pr',
     error,
     message,
+    ...(diagnostics ? { diagnostics } : {}),
     metadata: { trust: buildTrustMetadata({ sourceKind: 'wavemill_artifact', details: message }) },
   };
 }
@@ -533,12 +561,14 @@ function createPrError(
 function addLabelError(
   error: 'invalid_input' | 'policy_denied' | 'not_found' | 'external_error' | 'conflict' | 'rate_limited',
   message: string,
+  diagnostics?: NetworkDeniedDiagnostics,
 ): GitHubAddLabelResult {
   return {
     ok: false,
     tool: 'github_add_label',
     error,
     message,
+    ...(diagnostics ? { diagnostics } : {}),
     metadata: { trust: buildTrustMetadata({ sourceKind: 'wavemill_artifact', details: message }) },
   };
 }

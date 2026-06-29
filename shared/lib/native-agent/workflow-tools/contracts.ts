@@ -297,6 +297,7 @@ export interface LinearGetIssueError extends WorkflowToolResultBase {
   tool: 'linear_get_issue';
   error: CommonErrorCode;
   message: string;
+  diagnostics?: Record<string, unknown>;
 }
 
 export type LinearGetIssueResult = LinearGetIssueSuccess | LinearGetIssueError;
@@ -329,6 +330,7 @@ export interface LinearCommentError extends WorkflowToolResultBase {
   tool: 'linear_comment';
   error: CommonErrorCode | 'rate_limited';
   message: string;
+  diagnostics?: Record<string, unknown>;
 }
 
 export type LinearCommentResult = LinearCommentSuccess | LinearCommentError;
@@ -365,6 +367,7 @@ export interface GitHubCreatePrError extends WorkflowToolResultBase {
   tool: 'github_create_pr';
   error: CommonErrorCode | 'conflict' | 'rate_limited';
   message: string;
+  diagnostics?: Record<string, unknown>;
 }
 
 export type GitHubCreatePrResult = GitHubCreatePrSuccess | GitHubCreatePrError;
@@ -397,6 +400,7 @@ export interface GitHubAddLabelError extends WorkflowToolResultBase {
   tool: 'github_add_label';
   error: CommonErrorCode | 'conflict' | 'not_found' | 'rate_limited';
   message: string;
+  diagnostics?: Record<string, unknown>;
 }
 
 export type GitHubAddLabelResult = GitHubAddLabelSuccess | GitHubAddLabelError;
@@ -430,6 +434,7 @@ export interface ReviewChangesError extends WorkflowToolResultBase {
   tool: 'review_changes';
   error: CommonErrorCode | 'review_failed';
   message: string;
+  diagnostics?: Record<string, unknown>;
 }
 
 export type ReviewChangesResult = ReviewChangesSuccess | ReviewChangesError;
@@ -466,6 +471,7 @@ export interface RouteTaskError extends WorkflowToolResultBase {
   tool: 'route_task';
   error: CommonErrorCode | 'route_failed';
   message: string;
+  diagnostics?: Record<string, unknown>;
 }
 
 export type RouteTaskResult = RouteTaskSuccess | RouteTaskError;
@@ -496,6 +502,7 @@ export interface ExpandIssueError extends WorkflowToolResultBase {
   tool: 'expand_issue';
   error: CommonErrorCode | 'expansion_failed';
   message: string;
+  diagnostics?: Record<string, unknown>;
 }
 
 export type ExpandIssueResult = ExpandIssueSuccess | ExpandIssueError;

@@ -21,6 +21,7 @@ import path from 'node:path';
 import { beforeEach, describe, it } from 'node:test';
 
 import { createInMemoryDedupeRegistry } from './dedupe.ts';
+import type { NetworkPolicy } from '../network-policy.ts';
 import { githubAddLabel, githubCreatePr } from './github.ts';
 import {
   executeLinearComment,
@@ -69,6 +70,12 @@ function makeNoopRecorder(): {
     stageArtifact: { append(_e: WorkflowToolStageArtifactEntry) {} },
   };
 }
+
+const ALLOW_LINEAR_NETWORK_POLICY: NetworkPolicy = {
+  coding: {
+    linear_comment: { kind: 'allowlist', hosts: ['api.linear.app'] },
+  },
+};
 
 function makeCommandDeps(overrides: Partial<CommandToolsDeps> = {}): CommandToolsDeps {
   const { transcript, stageArtifact } = makeNoopRecorder();
@@ -294,6 +301,7 @@ describe('retry-idempotency: linear_comment', () => {
       sessionId: 'sess-1',
       phase: 'coding',
       clock: () => 1_000,
+      networkPolicy: ALLOW_LINEAR_NETWORK_POLICY,
     };
 
     const params = { issue: 'HOK-1', body: 'Progress update', sessionId: 'sess-1', phase: 'coding' as const };
@@ -360,6 +368,7 @@ describe('retry-idempotency: linear_comment', () => {
       sessionId: 'sess-1',
       phase: 'coding',
       clock: () => 1_000,
+      networkPolicy: ALLOW_LINEAR_NETWORK_POLICY,
     };
 
     const result = await executeLinearComment(
