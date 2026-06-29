@@ -88,6 +88,30 @@ describe('writeStageResult and readStageResult', () => {
     assert.equal(read?.model, 'pi-standard-20260101');
   });
 
+  it('round-trips cleanup fields', async () => {
+    const result = makeResult({
+      stage: 'coding',
+      finalTreeState: 'dirty-unrecoverable',
+      cleanupDecision: 'left-in-place',
+      cleanupReport: {
+        reason: 'aborted',
+        terminatedCommands: [],
+        partialMutations: [{ tool: 'write_artifact', status: 'completed', path: 'features/demo/out.txt' }],
+        finalTreeState: 'dirty-unrecoverable',
+        cleanupDecision: 'left-in-place',
+        runTouchedPaths: ['features/demo/out.txt'],
+        rollbackResults: [],
+        notes: ['reported'],
+      },
+    });
+    await writeStageResult(testDir, result);
+
+    const read = await readStageResult(testDir, 'coding');
+    assert.equal(read?.finalTreeState, 'dirty-unrecoverable');
+    assert.equal(read?.cleanupDecision, 'left-in-place');
+    assert.equal(read?.cleanupReport?.reason, 'aborted');
+  });
+
   it('overwrites existing file completely', async () => {
     const first = makeResult({ notes: 'first' });
     await writeStageResult(testDir, first);

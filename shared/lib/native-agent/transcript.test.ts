@@ -15,6 +15,7 @@ import {
   type TranscriptAssistantMessage,
   type TranscriptCommandResult,
   type TranscriptCompactionEvent,
+  type TranscriptCleanupReport,
   type TranscriptEvent,
   type TranscriptSessionEnded,
   type TranscriptSessionStarted,
@@ -745,6 +746,28 @@ describe('redaction before write', () => {
     assert.ok(compaction);
     assert.equal(toolResult.content, fullContent);
     assert.ok(!JSON.stringify(compaction).includes(fullContent));
+    removeTempDir();
+  });
+
+  it('writes cleanup_report events with final tree state details', () => {
+    const path = makeTempPath();
+    const writer = new TranscriptWriter({ ...BASE_OPTS, path });
+    writer.write({
+      seq: 999,
+      sessionId: BASE_OPTS.sessionId,
+      timestamp: FIXED_TIME,
+      type: 'cleanup_report',
+      reason: 'timeout',
+      finalTreeState: 'dirty-unrecoverable',
+      cleanupDecision: 'left-in-place',
+      notes: ['reported'],
+    });
+
+    const parsed = parseTranscriptJsonl(readFileSync(path, 'utf-8'));
+    const cleanup = parsed.find((event): event is TranscriptCleanupReport => event.type === 'cleanup_report');
+    assert.ok(cleanup);
+    assert.equal(cleanup.finalTreeState, 'dirty-unrecoverable');
+    assert.equal(cleanup.cleanupDecision, 'left-in-place');
     removeTempDir();
   });
 });

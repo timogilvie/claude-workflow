@@ -33,6 +33,7 @@ export interface RunCommandOptions {
   signal?: AbortSignal;
   toolName?: string;
   transcriptWriter?: Pick<TranscriptWriter, 'writeCommandEvent'>;
+  onSpawn?: (child: ChildProcess) => void;
 }
 
 export interface CommandResult {
@@ -142,6 +143,7 @@ export async function runCommand(options: RunCommandOptions): Promise<CommandRes
   };
 
   const child = spawnFn(spawnSpec.file, spawnSpec.args, spawnOptions);
+  options.onSpawn?.(child);
   return await waitForProcess({
     child,
     command: classification.normalizedCommand,

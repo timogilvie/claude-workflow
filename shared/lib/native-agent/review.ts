@@ -26,6 +26,8 @@ import {
   parseNativeReviewResponse,
 } from '../review-engine.ts';
 import { loadPromptResourceSync } from '../resource-retrieval.ts';
+import { createCleanupTracker, runCleanup, type CleanupReason } from './cleanup.ts';
+import { updateStageResult } from '../stage-result.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const NATIVE_REVIEW_PHASE_PROMPT_PATH = resolve(
@@ -229,6 +231,16 @@ function stopReasonDescription(stopReason: LoopStopReason): string {
   }
 }
 
+function cleanupReasonForStopReason(stopReason: LoopStopReason): CleanupReason | null {
+  if (stopReason === 'aborted') {
+    return 'aborted';
+  }
+  if (stopReason === 'wall_clock_limit') {
+    return 'timeout';
+  }
+  return null;
+}
+
 const nativeReviewDeps = {
   extractDeniedTools,
   extractFinalAssistantText,
@@ -320,6 +332,7 @@ export async function runNativeReview(
   };
 
   const maxRetries = options.maxRetries ?? 1;
+  const cleanupTracker = createCleanupTracker();
   const loopResult = await nativeReviewDeps.runWavemillLoop({
     model: modelConfig,
     context: loopContext,
@@ -350,6 +363,28 @@ export async function runNativeReview(
       maxWallClockMs: options.timeout ?? 300_000,
     },
   });
+
+  const cleanupReason = cleanupReasonForStopReason(loopResult.stopReason);
+  if (cleanupReason) {
+    const cleanupReport = await runCleanup(cleanupTracker, {
+      worktreePath: repoDir,
+      reason: cleanupReason,
+    });
+    transcriptWriter.writeCleanupReport(cleanupReport);
+    if (options.featureDir) {
+      await updateStageResult(options.featureDir, 'review', {
+        status: cleanupReason === 'aborted' ? 'aborted' : 'failed',
+        finishedAt: new Date().toISOString(),
+        agent: 'native',
+        model: modelConfig.name ?? modelConfig.id,
+        notes: `Native review stopped with ${loopResult.stopReason}; cleanup decision ${cleanupReport.cleanupDecision}.`,
+        failureReason: loopResult.stopReason,
+        finalTreeState: cleanupReport.finalTreeState,
+        cleanupDecision: cleanupReport.cleanupDecision,
+        cleanupReport,
+      });
+    }
+  }
 
   const deniedTools = nativeReviewDeps.extractDeniedTools(transcriptEvents);
   if (loopResult.stopReason !== 'stop') {

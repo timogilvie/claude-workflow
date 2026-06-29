@@ -60,6 +60,11 @@ describe('patch-runtime', () => {
       fileChanges: [{ path: 'src/file.ts', linesAdded: 2, linesRemoved: 1 }],
       linesAdded: 2,
       linesRemoved: 1,
+      snapshots: [{
+        path: 'src/file.ts',
+        originalDiskText: 'const value = 1;\n',
+        postImage: 'const value = 2;\nconst extra = 3;\n',
+      }],
     });
     assert.equal(readFixture(worktree, 'src/file.ts'), 'const value = 2;\nconst extra = 3;\n');
   });
