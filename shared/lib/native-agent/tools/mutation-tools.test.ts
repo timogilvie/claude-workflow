@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, describe, it } from 'node:test';
@@ -14,6 +14,7 @@ import {
   type UpdateStatusDetails,
   type WriteArtifactDetails,
 } from './mutation-tools.ts';
+import { clearConfigCache } from '../../config.ts';
 
 const dirsToClean = new Set<string>();
 
@@ -173,6 +174,55 @@ describe('native-agent mutation tools', () => {
     if (!details.ok) {
       assert.equal(details.error, 'invalid_input');
       assert.match(details.message, /state must be one of/);
+    }
+  });
+
+  it('write_artifact redacts secrets from content before writing to disk', async () => {
+    const repo = createRepo('mutation-artifact-redact-');
+    const tool = createWriteArtifactTool(repo);
+    const token = 'ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890';
+
+    const result = await tool.execute('call-redact', {
+      path: 'features/demo/secret.json',
+      content: `{"token": "${token}"}`,
+    });
+
+    const details = result.details as WriteArtifactDetails;
+    assert.equal(details.ok, true);
+    if (details.ok) {
+      const diskContent = readFileSync(path.join(repo, details.resolvedPath), 'utf-8');
+      assert.ok(!diskContent.includes(token), 'original token must not appear on disk');
+      assert.ok(diskContent.includes('[REDACTED:github_pat]'), 'redacted placeholder must appear');
+    }
+  });
+
+  it('write_artifact redacts configured secret env values before writing to disk', async () => {
+    const repo = createRepo('mutation-artifact-configured-redact-');
+    writeFileSync(
+      path.join(repo, '.wavemill-config.json'),
+      JSON.stringify({ safety: { redaction: { secretEnvNames: ['HOKUSAI_TEST_SECRET'] } } }),
+      'utf-8',
+    );
+    clearConfigCache(repo);
+    process.env.HOKUSAI_TEST_SECRET = 'configured-value-without-known-pattern';
+    const tool = createWriteArtifactTool(repo);
+
+    try {
+      const result = await tool.execute('call-configured-redact', {
+        path: 'features/demo/configured-secret.txt',
+        content: 'value=configured-value-without-known-pattern\n',
+      });
+
+      const details = result.details as WriteArtifactDetails;
+      assert.equal(details.ok, true);
+      if (details.ok) {
+        const diskContent = readFileSync(path.join(repo, details.resolvedPath), 'utf-8');
+        assert.ok(!diskContent.includes('configured-value-without-known-pattern'));
+        assert.equal(diskContent, 'value=[REDACTED:configured_secret]\n');
+      }
+    } finally {
+      delete process.env.HOKUSAI_TEST_SECRET;
+      clearConfigCache(repo);
     }
   });
 });

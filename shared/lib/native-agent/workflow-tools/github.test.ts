@@ -155,6 +155,9 @@ function createFixtureDeps(seed?: {
     },
     maxAttempts: 3,
     retryDelayMs: 10,
+    getSecretEnvNames() {
+      return [];
+    },
   };
 
   return { deps, state };
@@ -559,6 +562,96 @@ describe('workflow tool descriptors', () => {
 describe('workflow policy invariants', () => {
   it('merge remains denied for review and no merge helper is exported', () => {
     assert.equal(isMutationAllowed('review', 'github_create_pr', 'merge').allowed, false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Secret redaction in github_create_pr
+// ---------------------------------------------------------------------------
+
+describe('github_create_pr: secret redaction', () => {
+  it('redacts secrets in body before calling createPullRequest', async () => {
+    let capturedBody: string | undefined;
+    const token = 'ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890';
+    const { deps } = createFixtureDeps({
+      onCreateSideEffect: () => {},
+    });
+    const captureCreateDeps: Partial<GitHubToolDeps> = {
+      ...deps,
+      async listOpenPullRequests() { return []; },
+      async createPullRequest(input) {
+        capturedBody = input.body;
+        return {
+          number: 99,
+          title: input.title,
+          body: input.body,
+          head: input.head,
+          base: input.base,
+          url: 'https://github.com/org/repo/pull/99',
+        };
+      },
+    };
+
+    const result = await githubCreatePr(
+      {
+        repo: 'org/repo',
+        head: 'feature/branch',
+        base: 'main',
+        headSha: 'abc1234',
+        title: 'Add feature',
+        body: `## Summary\nUsed token: ${token}`,
+        phase: 'review',
+      },
+      captureCreateDeps,
+    );
+
+    assert.equal(result.ok, true);
+    assert.ok(capturedBody !== undefined, 'createPullRequest must have been called');
+    assert.ok(!capturedBody.includes(token), 'original token must not appear in PR body');
+    assert.ok(capturedBody.includes('[REDACTED:github_pat]'), 'redacted placeholder must appear');
+  });
+
+  it('redacts configured secret env values in body before calling createPullRequest', async () => {
+    let capturedBody: string | undefined;
+    process.env.HOKUSAI_PR_SECRET = 'pr-configured-value-without-known-pattern';
+    const { deps } = createFixtureDeps();
+    const captureCreateDeps: Partial<GitHubToolDeps> = {
+      ...deps,
+      getSecretEnvNames: () => ['HOKUSAI_PR_SECRET'],
+      async listOpenPullRequests() { return []; },
+      async createPullRequest(input) {
+        capturedBody = input.body;
+        return {
+          number: 99,
+          title: input.title,
+          body: input.body,
+          head: input.head,
+          base: input.base,
+          url: 'https://github.com/org/repo/pull/99',
+        };
+      },
+    };
+
+    try {
+      const result = await githubCreatePr(
+        {
+          repo: 'org/repo',
+          head: 'feature/branch',
+          base: 'main',
+          headSha: 'abc1234',
+          title: 'Add feature',
+          body: 'Secret: pr-configured-value-without-known-pattern',
+          phase: 'review',
+        },
+        captureCreateDeps,
+      );
+
+      assert.equal(result.ok, true);
+      assert.ok(capturedBody !== undefined, 'createPullRequest must have been called');
+      assert.equal(capturedBody, 'Secret: [REDACTED:configured_secret]');
+    } finally {
+      delete process.env.HOKUSAI_PR_SECRET;
+    }
   });
 });
 
