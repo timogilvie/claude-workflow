@@ -425,6 +425,13 @@ export class TranscriptWriter {
         let metadata: ToolResultMetadata | undefined;
         let rawDetailsForRedact = resultObj?.details;
         if (
+          resultObj &&
+          typeof resultObj === 'object' &&
+          'metadata' in resultObj
+        ) {
+          metadata = (resultObj as { metadata?: ToolResultMetadata }).metadata;
+        }
+        if (
           rawDetailsForRedact !== null &&
           rawDetailsForRedact !== undefined &&
           typeof rawDetailsForRedact === 'object' &&
@@ -432,7 +439,7 @@ export class TranscriptWriter {
           '__wavemill' in (rawDetailsForRedact as Record<string, unknown>)
         ) {
           const d = rawDetailsForRedact as Record<string, unknown>;
-          metadata = d.__wavemill as ToolResultMetadata;
+          metadata = (d.__wavemill as ToolResultMetadata) ?? metadata;
           // Strip __wavemill so it is not stored in transcript details.
           const { __wavemill: _dropped, ...rest } = d;
           rawDetailsForRedact = Object.keys(rest).length > 0 ? rest : undefined;

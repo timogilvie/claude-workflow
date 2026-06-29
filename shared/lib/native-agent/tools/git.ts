@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
+import { buildTrustMetadata } from '../provenance.ts';
 import type { IntendedFileTracker } from './intended-files.ts';
 import type { ToolPolicyConfig } from './policies.ts';
 import type { ToolDescriptor, WavemillToolResult } from './types.ts';
@@ -428,6 +429,7 @@ async function runGitStatus(
   return {
     content: [{ type: 'text', text: JSON.stringify(details, null, 2) }],
     details,
+    metadata: { trust: buildTrustMetadata({ sourceKind: 'diff', details }) },
   };
 }
 
@@ -487,6 +489,13 @@ async function runGitDiff(
   return {
     content: [{ type: 'text', text: retainedDiff }],
     details,
+    metadata: {
+      trust: buildTrustMetadata({
+        sourceKind: 'diff',
+        content: [{ type: 'text', text: retainedDiff }],
+        details,
+      }),
+    },
   };
 }
 
@@ -543,6 +552,7 @@ async function runGitDiffStat(
   return {
     content: [{ type: 'text', text: JSON.stringify(details, null, 2) }],
     details,
+    metadata: { trust: buildTrustMetadata({ sourceKind: 'diff', details }) },
   };
 }
 
@@ -598,6 +608,7 @@ async function runGitLog(
   return {
     content: [{ type: 'text', text: JSON.stringify(details, null, 2) }],
     details,
+    metadata: { trust: buildTrustMetadata({ sourceKind: 'diff', details }) },
   };
 }
 

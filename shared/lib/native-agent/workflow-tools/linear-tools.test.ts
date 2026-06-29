@@ -109,6 +109,8 @@ describe('linear_get_issue: success path', () => {
     assert.equal(result.issue.identifier, 'HOK-1');
     assert.equal(result.issue.id, 'abc123-uuid');
     assert.equal(typeof result.issue.title, 'string');
+    assert.equal(result.metadata?.trust?.sourceKind, 'issue');
+    assert.equal(result.metadata?.trust?.trust, 'untrusted');
   });
 
   it('flattens state object to string', async () => {
@@ -170,8 +172,9 @@ describe('linear_get_issue: error paths', () => {
 
   it('still appends transcript event on error', async () => {
     const deps = makeDeps({ client: makeFakeClient({ issue: 'throw' }) });
-    await executeLinearGetIssue({ issue: 'HOK-99' }, deps);
+    const result = await executeLinearGetIssue({ issue: 'HOK-99' }, deps);
     assert.equal(deps.transcriptEvents.length, 1);
+    assert.equal(result.metadata?.trust?.sourceKind, 'issue');
   });
 });
 

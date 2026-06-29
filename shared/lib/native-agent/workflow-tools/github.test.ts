@@ -330,12 +330,12 @@ describe('githubCreatePr', () => {
       body: 'Body',
     }, deps);
 
-    assert.deepEqual(result, {
-      ok: false,
-      tool: 'github_create_pr',
-      error: 'conflict',
-      message: 'Multiple open pull requests already exist for acme/widgets:feature/idempotent-pr->main',
-    });
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.equal(result.tool, 'github_create_pr');
+    assert.equal(result.error, 'conflict');
+    assert.equal(result.message, 'Multiple open pull requests already exist for acme/widgets:feature/idempotent-pr->main');
+    assert.equal(result.metadata?.trust?.sourceKind, 'wavemill_artifact');
   });
 
   it('maps not_found errors', async () => {
@@ -352,12 +352,12 @@ describe('githubCreatePr', () => {
       body: 'Body',
     }, deps);
 
-    assert.deepEqual(result, {
-      ok: false,
-      tool: 'github_create_pr',
-      error: 'not_found',
-      message: 'Repository not found',
-    });
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.equal(result.tool, 'github_create_pr');
+    assert.equal(result.error, 'not_found');
+    assert.equal(result.message, 'Repository not found');
+    assert.equal(result.metadata?.trust?.sourceKind, 'wavemill_artifact');
   });
 
   it('denies ready-phase general PR mutations', async () => {
@@ -372,12 +372,12 @@ describe('githubCreatePr', () => {
       body: 'Body',
     }, deps);
 
-    assert.deepEqual(result, {
-      ok: false,
-      tool: 'github_create_pr',
-      error: 'policy_denied',
-      message: 'ready_mutation_denied: general PR creation not allowed in ready phase; only stale_base or merge_conflict remediation',
-    });
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.equal(result.tool, 'github_create_pr');
+    assert.equal(result.error, 'policy_denied');
+    assert.equal(result.message, 'ready_mutation_denied: general PR creation not allowed in ready phase; only stale_base or merge_conflict remediation');
+    assert.equal(result.metadata?.trust?.sourceKind, 'wavemill_artifact');
   });
 });
 
@@ -481,12 +481,12 @@ describe('githubAddLabel', () => {
       label: 'needs-review',
     }, deps);
 
-    assert.deepEqual(result, {
-      ok: false,
-      tool: 'github_add_label',
-      error: 'not_found',
-      message: 'Issue #99 not found',
-    });
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.equal(result.tool, 'github_add_label');
+    assert.equal(result.error, 'not_found');
+    assert.equal(result.message, 'Issue #99 not found');
+    assert.equal(result.metadata?.trust?.sourceKind, 'wavemill_artifact');
   });
 
   it('denies non-review label mutations', async () => {
@@ -508,12 +508,12 @@ describe('githubAddLabel', () => {
       label: 'needs-review',
     }, deps);
 
-    assert.deepEqual(result, {
-      ok: false,
-      tool: 'github_add_label',
-      error: 'policy_denied',
-      message: 'ready_mutation_denied: label add not allowed in ready phase',
-    });
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.equal(result.tool, 'github_add_label');
+    assert.equal(result.error, 'policy_denied');
+    assert.equal(result.message, 'ready_mutation_denied: label add not allowed in ready phase');
+    assert.equal(result.metadata?.trust?.sourceKind, 'wavemill_artifact');
   });
 });
 

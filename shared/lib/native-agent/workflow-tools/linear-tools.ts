@@ -9,6 +9,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import { buildTrustMetadata } from '../provenance.ts';
 import {
   type WorkflowPhase,
   type LinearGetIssueResult,
@@ -180,6 +181,19 @@ export async function executeLinearGetIssue(
         labels: flattenLabels(raw.labels),
         url: raw.url,
       },
+      metadata: {
+        trust: buildTrustMetadata({
+          sourceKind: 'issue',
+          details: {
+            title: raw.title,
+            description: raw.description,
+            state: flattenState(raw.state),
+            assignee: flattenAssignee(raw.assignee),
+            labels: flattenLabels(raw.labels),
+            url: raw.url,
+          },
+        }),
+      },
     };
     deps.transcript.append({ type: 'workflow_tool_call', tool: 'linear_get_issue', phase: deps.phase, action: 'read', at: ts });
     return result;
@@ -191,6 +205,7 @@ export async function executeLinearGetIssue(
       tool: 'linear_get_issue',
       error: isNotFound ? 'not_found' : 'external_error',
       message: msg,
+      metadata: { trust: buildTrustMetadata({ sourceKind: 'issue', details: msg }) },
     };
     deps.transcript.append({ type: 'workflow_tool_call', tool: 'linear_get_issue', phase: deps.phase, action: 'read', at: ts });
     return result;
@@ -215,6 +230,7 @@ export async function executeLinearComment(
       tool: 'linear_comment',
       error: 'policy_denied',
       message: policy.reason,
+      metadata: { trust: buildTrustMetadata({ sourceKind: 'wavemill_artifact', details: policy.reason }) },
     };
     deps.transcript.append({ type: 'workflow_tool_call', tool: 'linear_comment', phase, action: 'comment', at: ts });
     deps.stageArtifact.append({ tool: 'linear_comment', phase, idempotency: { key: '', outcome: 'skipped', ref: null }, at: ts });
@@ -240,6 +256,7 @@ export async function executeLinearComment(
       ok: true,
       tool: 'linear_comment',
       idempotency: { key, outcome: 'reused', ref },
+      metadata: { trust: buildTrustMetadata({ sourceKind: 'wavemill_artifact', details: { key, ref } }) },
     };
     deps.transcript.append({ type: 'workflow_tool_call', tool: 'linear_comment', phase, action: 'comment', idempotency, at: ts });
     deps.stageArtifact.append({ tool: 'linear_comment', phase, idempotency, at: ts });
@@ -257,6 +274,7 @@ export async function executeLinearComment(
       ok: true,
       tool: 'linear_comment',
       idempotency: { key, outcome: 'created', ref },
+      metadata: { trust: buildTrustMetadata({ sourceKind: 'wavemill_artifact', details: { key, ref } }) },
     };
     deps.transcript.append({ type: 'workflow_tool_call', tool: 'linear_comment', phase, action: 'comment', idempotency, at: ts });
     deps.stageArtifact.append({ tool: 'linear_comment', phase, idempotency, at: ts });
@@ -268,6 +286,7 @@ export async function executeLinearComment(
       tool: 'linear_comment',
       error: 'external_error',
       message: msg,
+      metadata: { trust: buildTrustMetadata({ sourceKind: 'wavemill_artifact', details: msg }) },
     };
     deps.transcript.append({ type: 'workflow_tool_call', tool: 'linear_comment', phase, action: 'comment', at: ts });
     deps.stageArtifact.append({ tool: 'linear_comment', phase, idempotency: { key, outcome: 'skipped', ref: null }, at: ts });
@@ -293,6 +312,7 @@ export async function executeExpandIssue(
       tool: 'expand_issue',
       error: 'policy_denied',
       message: policy.reason,
+      metadata: { trust: buildTrustMetadata({ sourceKind: 'wavemill_artifact', details: policy.reason }) },
     };
     deps.transcript.append({ type: 'workflow_tool_call', tool: 'expand_issue', phase, action: 'read', at: ts });
     return result;
@@ -304,6 +324,12 @@ export async function executeExpandIssue(
       tool: 'expand_issue',
       error: 'expansion_failed',
       message: 'No expander function provided to expand_issue tool',
+      metadata: {
+        trust: buildTrustMetadata({
+          sourceKind: 'wavemill_artifact',
+          details: 'No expander function provided to expand_issue tool',
+        }),
+      },
     };
     deps.transcript.append({ type: 'workflow_tool_call', tool: 'expand_issue', phase, action: 'read', at: ts });
     return result;
@@ -327,6 +353,7 @@ export async function executeExpandIssue(
       taskPacketPath,
       ref: ref ?? undefined,
       idempotency: { key: intentKey, outcome: 'reused', ref },
+      metadata: { trust: buildTrustMetadata({ sourceKind: 'wavemill_artifact', details: { taskPacketPath, ref } }) },
     };
     deps.transcript.append({ type: 'workflow_tool_call', tool: 'expand_issue', phase, action: 'read', idempotency, at: ts });
     return result;
@@ -341,6 +368,12 @@ export async function executeExpandIssue(
         tool: 'expand_issue',
         error: 'expansion_failed',
         message: 'Expander returned empty task packet path',
+        metadata: {
+          trust: buildTrustMetadata({
+            sourceKind: 'wavemill_artifact',
+            details: 'Expander returned empty task packet path',
+          }),
+        },
       };
       deps.transcript.append({ type: 'workflow_tool_call', tool: 'expand_issue', phase, action: 'read', at: ts });
       return result;
@@ -356,6 +389,7 @@ export async function executeExpandIssue(
       taskPacketPath,
       ref,
       idempotency: { key: intentKey, outcome: 'created', ref },
+      metadata: { trust: buildTrustMetadata({ sourceKind: 'wavemill_artifact', details: { taskPacketPath, ref } }) },
     };
     deps.transcript.append({ type: 'workflow_tool_call', tool: 'expand_issue', phase, action: 'read', idempotency, at: ts });
     return result;
@@ -366,6 +400,7 @@ export async function executeExpandIssue(
       tool: 'expand_issue',
       error: 'expansion_failed',
       message: msg,
+      metadata: { trust: buildTrustMetadata({ sourceKind: 'wavemill_artifact', details: msg }) },
     };
     deps.transcript.append({ type: 'workflow_tool_call', tool: 'expand_issue', phase, action: 'read', at: ts });
     return result;

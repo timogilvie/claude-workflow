@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { buildTrustMetadata } from '../provenance.ts';
 
 import { gatherCodebaseContext } from '../../codebase-context-gatherer.ts';
 import {
@@ -252,6 +253,7 @@ export async function executeReviewChanges(
       tool: 'review_changes',
       error: 'policy_denied',
       message: policy.reason,
+      metadata: { trust: buildTrustMetadata({ sourceKind: 'wavemill_artifact', details: policy.reason }) },
     };
     deps.transcript.append({
       type: 'workflow_tool_call',
@@ -285,6 +287,7 @@ export async function executeReviewChanges(
       findings,
       findingCount: counts.findingCount,
       blockingCount: counts.blockingCount,
+      metadata: { trust: buildTrustMetadata({ sourceKind: 'wavemill_artifact', details: findings }) },
     };
     deps.transcript.append({
       type: 'workflow_tool_call',
@@ -312,6 +315,7 @@ export async function executeReviewChanges(
       tool: 'review_changes',
       error: 'review_failed',
       message,
+      metadata: { trust: buildTrustMetadata({ sourceKind: 'wavemill_artifact', details: message }) },
     };
     deps.transcript.append({
       type: 'workflow_tool_call',
@@ -344,6 +348,7 @@ export async function executeRouteTask(
       tool: 'route_task',
       error: 'policy_denied',
       message: policy.reason,
+      metadata: { trust: buildTrustMetadata({ sourceKind: 'wavemill_artifact', details: policy.reason }) },
     };
     deps.transcript.append({
       type: 'workflow_tool_call',
@@ -383,6 +388,9 @@ export async function executeRouteTask(
       throw new Error('Routing returned no decision');
     }
     const result = mapRouteDecision(routed.decision);
+    result.metadata = {
+      trust: buildTrustMetadata({ sourceKind: 'wavemill_artifact', details: routed.decision }),
+    };
     deps.transcript.append({
       type: 'workflow_tool_call',
       tool: 'route_task',
@@ -413,6 +421,7 @@ export async function executeRouteTask(
       tool: 'route_task',
       error: errorCode,
       message,
+      metadata: { trust: buildTrustMetadata({ sourceKind: 'wavemill_artifact', details: message }) },
     };
     deps.transcript.append({
       type: 'workflow_tool_call',
@@ -462,6 +471,7 @@ export async function executeWriteStageResult(
       tool: 'write_stage_result',
       error: 'policy_denied',
       message: policy.reason,
+      metadata: { trust: buildTrustMetadata({ sourceKind: 'wavemill_artifact', details: policy.reason }) },
     };
     const idempotency = { key, outcome: 'skipped' as const, ref: null, reason: policy.reason };
     const details = actionDetails({
@@ -553,6 +563,7 @@ export async function executeWriteStageResult(
       ok: true,
       tool: 'write_stage_result',
       idempotency,
+      metadata: { trust: buildTrustMetadata({ sourceKind: 'wavemill_artifact', details: { ref, outcome, hash } }) },
     };
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
@@ -561,6 +572,7 @@ export async function executeWriteStageResult(
       tool: 'write_stage_result',
       error: 'io_error',
       message,
+      metadata: { trust: buildTrustMetadata({ sourceKind: 'wavemill_artifact', details: message }) },
     };
     const idempotency = { key, outcome: 'skipped' as const, ref: null, reason: payloadReason(hash) };
     const details = actionDetails({
