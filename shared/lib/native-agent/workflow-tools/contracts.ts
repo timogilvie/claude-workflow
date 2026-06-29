@@ -291,6 +291,7 @@ export interface LinearGetIssueError {
   tool: 'linear_get_issue';
   error: CommonErrorCode;
   message: string;
+  diagnostics?: Record<string, unknown>;
 }
 
 export type LinearGetIssueResult = LinearGetIssueSuccess | LinearGetIssueError;
