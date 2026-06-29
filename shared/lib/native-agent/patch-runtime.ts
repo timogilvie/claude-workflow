@@ -26,6 +26,11 @@ export interface NativePatchAppliedResult {
   fileChanges: AppliedFileChange[];
   linesAdded: number;
   linesRemoved: number;
+  snapshots: Array<{
+    path: string;
+    originalDiskText: string;
+    postImage: string;
+  }>;
 }
 
 export type ApplyNativePatchResult = NativePatchAppliedResult | NativePatchRejectedResult;
@@ -132,6 +137,11 @@ export async function applyNativePatch(
     fileChanges,
     linesAdded: fileChanges.reduce((sum, change) => sum + change.linesAdded, 0),
     linesRemoved: fileChanges.reduce((sum, change) => sum + change.linesRemoved, 0),
+    snapshots: changedFiles.map((file) => ({
+      path: file.relativePath,
+      originalDiskText: file.originalDiskText,
+      postImage: file.currentDiskText,
+    })),
   };
 }
 

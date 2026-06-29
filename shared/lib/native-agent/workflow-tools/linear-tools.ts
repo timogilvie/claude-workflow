@@ -11,6 +11,11 @@
 import { createHash } from 'node:crypto';
 import { buildTrustMetadata } from '../provenance.ts';
 import {
+  enforceNetworkPolicy,
+  type NetworkDeniedDiagnostics,
+  type NetworkPolicy,
+} from '../network-policy.ts';
+import {
   type WorkflowPhase,
   type LinearGetIssueResult,
   type LinearCommentResult,
@@ -109,6 +114,7 @@ export interface LinearToolsDeps {
   phase: WorkflowPhase;
   expander?: ExpanderFn;
   clock?: () => number;
+  networkPolicy?: NetworkPolicy;
   getSecretEnvNames?: () => string[];
 }
 
@@ -120,6 +126,7 @@ export interface ExpandIssueDeps {
   phase: WorkflowPhase;
   expander?: ExpanderFn;
   clock?: () => number;
+  networkPolicy?: NetworkPolicy;
 }
 
 // ---------------------------------------------------------------------------
@@ -157,6 +164,88 @@ function flattenLabels(labels: LinearIssueData['labels']): string[] | undefined 
   return labels.nodes.map(l => l.name);
 }
 
+function actionDetails(input: {
+  target: string;
+  outcome: 'success' | 'error' | 'denied';
+  diagnostics?: Record<string, unknown>;
+}): Record<string, unknown> {
+  return {
+    target: input.target,
+    outcome: input.outcome,
+    diagnostics: input.diagnostics ?? {},
+  };
+}
+
+function appendLinearDeniedRecord(
+  deps: Pick<LinearToolsDeps, 'transcript' | 'stageArtifact'>,
+  input: {
+    tool: 'linear_comment';
+    phase: WorkflowPhase;
+    action: 'comment';
+    at: number;
+    key: string;
+    diagnostics: NetworkDeniedDiagnostics;
+  },
+): void;
+function appendLinearDeniedRecord(
+  deps: Pick<LinearToolsDeps, 'transcript'>,
+  input: {
+    tool: 'linear_get_issue' | 'expand_issue';
+    phase: WorkflowPhase;
+    action: 'read';
+    at: number;
+    target: string;
+    diagnostics: NetworkDeniedDiagnostics;
+  },
+): void;
+function appendLinearDeniedRecord(
+  deps: Pick<LinearToolsDeps, 'transcript' | 'stageArtifact'>,
+  input: {
+    tool: 'linear_get_issue' | 'linear_comment' | 'expand_issue';
+    phase: WorkflowPhase;
+    action: 'read' | 'comment';
+    at: number;
+    target?: string;
+    key?: string;
+    diagnostics: NetworkDeniedDiagnostics;
+  },
+): void {
+  const target = input.target ?? input.diagnostics.target;
+  deps.transcript.append({
+    type: 'workflow_tool_call',
+    tool: input.tool,
+    phase: input.phase,
+    action: input.action,
+    details: actionDetails({
+      target,
+      outcome: 'denied',
+      diagnostics: {
+        error: 'policy_denied',
+        message: `Network access denied for ${input.tool}`,
+        ...input.diagnostics,
+      },
+    }),
+    at: input.at,
+  });
+  if (input.tool === 'linear_comment' && 'stageArtifact' in deps) {
+    deps.stageArtifact.append({
+      tool: input.tool,
+      phase: input.phase,
+      details: actionDetails({
+        target,
+        outcome: 'denied',
+        diagnostics: {
+          error: 'policy_denied',
+          message: `Network access denied for ${input.tool}`,
+          ...input.diagnostics,
+        },
+      }),
+      idempotency: { key: input.key ?? '', outcome: 'skipped', ref: null },
+      at: input.at,
+    });
+  }
+}
+
 // ---------------------------------------------------------------------------
 // linear_get_issue
 // ---------------------------------------------------------------------------
@@ -166,6 +255,29 @@ export async function executeLinearGetIssue(
   deps: LinearToolsDeps,
 ): Promise<LinearGetIssueResult> {
   const ts = now(deps);
+  const network = enforceNetworkPolicy({
+    policy: deps.networkPolicy,
+    phase: deps.phase,
+    tool: 'linear_get_issue',
+    target: 'https://api.linear.app',
+  });
+  if (network.kind === 'deny') {
+    appendLinearDeniedRecord(deps, {
+      tool: 'linear_get_issue',
+      phase: deps.phase,
+      action: 'read',
+      at: ts,
+      target: 'https://api.linear.app',
+      diagnostics: network.diagnostics,
+    });
+    return {
+      ok: false,
+      tool: 'linear_get_issue',
+      error: network.error,
+      message: network.message,
+      diagnostics: network.diagnostics,
+    };
+  }
   try {
     const raw = await deps.client.getIssue(params.issue);
     const result: LinearGetIssueResult = {
@@ -195,7 +307,14 @@ export async function executeLinearGetIssue(
         }),
       },
     };
-    deps.transcript.append({ type: 'workflow_tool_call', tool: 'linear_get_issue', phase: deps.phase, action: 'read', at: ts });
+    deps.transcript.append({
+      type: 'workflow_tool_call',
+      tool: 'linear_get_issue',
+      phase: deps.phase,
+      action: 'read',
+      details: actionDetails({ target: 'https://api.linear.app', outcome: 'success' }),
+      at: ts,
+    });
     return result;
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -207,7 +326,18 @@ export async function executeLinearGetIssue(
       message: msg,
       metadata: { trust: buildTrustMetadata({ sourceKind: 'issue', details: msg }) },
     };
-    deps.transcript.append({ type: 'workflow_tool_call', tool: 'linear_get_issue', phase: deps.phase, action: 'read', at: ts });
+    deps.transcript.append({
+      type: 'workflow_tool_call',
+      tool: 'linear_get_issue',
+      phase: deps.phase,
+      action: 'read',
+      details: actionDetails({
+        target: 'https://api.linear.app',
+        outcome: 'error',
+        diagnostics: { error: result.error, message: msg },
+      }),
+      at: ts,
+    });
     return result;
   }
 }
@@ -263,6 +393,30 @@ export async function executeLinearComment(
     return result;
   }
 
+  const network = enforceNetworkPolicy({
+    policy: deps.networkPolicy,
+    phase,
+    tool: 'linear_comment',
+    target: 'https://api.linear.app',
+  });
+  if (network.kind === 'deny') {
+    appendLinearDeniedRecord(deps, {
+      tool: 'linear_comment',
+      phase,
+      action: 'comment',
+      at: ts,
+      key,
+      diagnostics: network.diagnostics,
+    });
+    return {
+      ok: false,
+      tool: 'linear_comment',
+      error: network.error,
+      message: network.message,
+      diagnostics: network.diagnostics,
+    };
+  }
+
   try {
     const issue = await deps.client.getIssue(params.issue);
     const comment = await deps.client.createComment(issue.id, safeBody);
@@ -276,8 +430,22 @@ export async function executeLinearComment(
       idempotency: { key, outcome: 'created', ref },
       metadata: { trust: buildTrustMetadata({ sourceKind: 'wavemill_artifact', details: { key, ref } }) },
     };
-    deps.transcript.append({ type: 'workflow_tool_call', tool: 'linear_comment', phase, action: 'comment', idempotency, at: ts });
-    deps.stageArtifact.append({ tool: 'linear_comment', phase, idempotency, at: ts });
+    deps.transcript.append({
+      type: 'workflow_tool_call',
+      tool: 'linear_comment',
+      phase,
+      action: 'comment',
+      details: actionDetails({ target: 'https://api.linear.app', outcome: 'success' }),
+      idempotency,
+      at: ts,
+    });
+    deps.stageArtifact.append({
+      tool: 'linear_comment',
+      phase,
+      details: actionDetails({ target: 'https://api.linear.app', outcome: 'success' }),
+      idempotency,
+      at: ts,
+    });
     return result;
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -288,8 +456,29 @@ export async function executeLinearComment(
       message: msg,
       metadata: { trust: buildTrustMetadata({ sourceKind: 'wavemill_artifact', details: msg }) },
     };
-    deps.transcript.append({ type: 'workflow_tool_call', tool: 'linear_comment', phase, action: 'comment', at: ts });
-    deps.stageArtifact.append({ tool: 'linear_comment', phase, idempotency: { key, outcome: 'skipped', ref: null }, at: ts });
+    deps.transcript.append({
+      type: 'workflow_tool_call',
+      tool: 'linear_comment',
+      phase,
+      action: 'comment',
+      details: actionDetails({
+        target: 'https://api.linear.app',
+        outcome: 'error',
+        diagnostics: { error: 'external_error', message: msg },
+      }),
+      at: ts,
+    });
+    deps.stageArtifact.append({
+      tool: 'linear_comment',
+      phase,
+      details: actionDetails({
+        target: 'https://api.linear.app',
+        outcome: 'error',
+        diagnostics: { error: 'external_error', message: msg },
+      }),
+      idempotency: { key, outcome: 'skipped', ref: null },
+      at: ts,
+    });
     return result;
   }
 }
@@ -316,6 +505,30 @@ export async function executeExpandIssue(
     };
     deps.transcript.append({ type: 'workflow_tool_call', tool: 'expand_issue', phase, action: 'read', at: ts });
     return result;
+  }
+
+  const network = enforceNetworkPolicy({
+    policy: deps.networkPolicy,
+    phase,
+    tool: 'expand_issue',
+    target: 'command:expand_issue',
+  });
+  if (network.kind === 'deny') {
+    appendLinearDeniedRecord(deps, {
+      tool: 'expand_issue',
+      phase,
+      action: 'read',
+      at: ts,
+      target: 'command:expand_issue',
+      diagnostics: network.diagnostics,
+    });
+    return {
+      ok: false,
+      tool: 'expand_issue',
+      error: network.error,
+      message: network.message,
+      diagnostics: network.diagnostics,
+    };
   }
 
   if (!deps.expander) {
@@ -355,7 +568,15 @@ export async function executeExpandIssue(
       idempotency: { key: intentKey, outcome: 'reused', ref },
       metadata: { trust: buildTrustMetadata({ sourceKind: 'wavemill_artifact', details: { taskPacketPath, ref } }) },
     };
-    deps.transcript.append({ type: 'workflow_tool_call', tool: 'expand_issue', phase, action: 'read', idempotency, at: ts });
+    deps.transcript.append({
+      type: 'workflow_tool_call',
+      tool: 'expand_issue',
+      phase,
+      action: 'read',
+      details: actionDetails({ target: 'command:expand_issue', outcome: 'success' }),
+      idempotency,
+      at: ts,
+    });
     return result;
   }
 
@@ -375,7 +596,18 @@ export async function executeExpandIssue(
           }),
         },
       };
-      deps.transcript.append({ type: 'workflow_tool_call', tool: 'expand_issue', phase, action: 'read', at: ts });
+      deps.transcript.append({
+        type: 'workflow_tool_call',
+        tool: 'expand_issue',
+        phase,
+        action: 'read',
+        details: actionDetails({
+          target: 'command:expand_issue',
+          outcome: 'error',
+          diagnostics: { error: 'expansion_failed', message: 'Expander returned empty task packet path' },
+        }),
+        at: ts,
+      });
       return result;
     }
 
@@ -391,7 +623,15 @@ export async function executeExpandIssue(
       idempotency: { key: intentKey, outcome: 'created', ref },
       metadata: { trust: buildTrustMetadata({ sourceKind: 'wavemill_artifact', details: { taskPacketPath, ref } }) },
     };
-    deps.transcript.append({ type: 'workflow_tool_call', tool: 'expand_issue', phase, action: 'read', idempotency, at: ts });
+    deps.transcript.append({
+      type: 'workflow_tool_call',
+      tool: 'expand_issue',
+      phase,
+      action: 'read',
+      details: actionDetails({ target: 'command:expand_issue', outcome: 'success' }),
+      idempotency,
+      at: ts,
+    });
     return result;
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -402,7 +642,18 @@ export async function executeExpandIssue(
       message: msg,
       metadata: { trust: buildTrustMetadata({ sourceKind: 'wavemill_artifact', details: msg }) },
     };
-    deps.transcript.append({ type: 'workflow_tool_call', tool: 'expand_issue', phase, action: 'read', at: ts });
+    deps.transcript.append({
+      type: 'workflow_tool_call',
+      tool: 'expand_issue',
+      phase,
+      action: 'read',
+      details: actionDetails({
+        target: 'command:expand_issue',
+        outcome: 'error',
+        diagnostics: { error: 'expansion_failed', message: msg },
+      }),
+      at: ts,
+    });
     return result;
   }
 }

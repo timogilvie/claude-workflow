@@ -30,6 +30,7 @@ import {
   createInMemoryDedupeRegistry,
   type DedupeRegistry,
 } from './dedupe.ts';
+import type { NetworkPolicy } from '../network-policy.ts';
 
 export interface NormalizedReviewFinding {
   id: string;
@@ -77,6 +78,7 @@ export interface ReviewFlowOptions {
   clock?: () => number;
   linearClient: LinearClient;
   githubDeps?: Partial<GitHubToolDeps>;
+  networkPolicy?: NetworkPolicy;
   fixFindings?: ReviewFindingFixExecutor;
   reviewChangesImpl?: CommandToolsDeps['reviewChangesImpl'];
   readStageResultImpl?: CommandToolsDeps['readStageResultImpl'];
@@ -285,6 +287,7 @@ function createDeps(options: ReviewFlowOptions): CommandToolsDeps {
     readStageResultImpl: options.readStageResultImpl,
     writeStageResultImpl: options.writeStageResultImpl,
     updateStageResultImpl: options.updateStageResultImpl,
+    networkPolicy: options.networkPolicy,
   };
 }
 
@@ -553,6 +556,7 @@ export async function runReviewFlow(options: ReviewFlowOptions): Promise<ReviewF
     sessionId: options.sessionId,
     phase,
     clock: options.clock,
+    networkPolicy: options.networkPolicy,
   });
   if (!linearComment.ok) {
     warnings.push(`linear_comment: ${linearComment.message}`);

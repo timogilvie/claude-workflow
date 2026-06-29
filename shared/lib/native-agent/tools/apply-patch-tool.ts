@@ -1,4 +1,5 @@
 import { applyNativePatch, type NativePatchAppliedResult } from '../patch-runtime.ts';
+import type { MutationRecorder } from '../cleanup.ts';
 import {
   validateNativePatch,
   type NativePatch,
@@ -29,6 +30,7 @@ export type ApplyPatchDetails = ApplyPatchSuccessDetails | ApplyPatchErrorDetail
 
 export interface ApplyPatchToolOptions {
   phase?: ToolPhase;
+  recorder?: MutationRecorder;
 }
 
 interface AfterToolCallContext {
@@ -64,7 +66,7 @@ export function createApplyPatchTool(
     },
     parameters: applyPatchParameters,
     async execute(_toolCallId, params) {
-      return executeApplyPatch(worktreePath, params, phase);
+      return executeApplyPatch(worktreePath, params, phase, options.recorder);
     },
   };
 }
@@ -86,6 +88,7 @@ async function executeApplyPatch(
   worktreePath: string,
   params: ApplyPatchParams,
   phase: ToolPhase,
+  recorder?: MutationRecorder,
 ): Promise<WavemillToolResult<ApplyPatchDetails>> {
   const validation = validateNativePatch(params.patch);
   if (!validation.ok) {
@@ -106,6 +109,14 @@ async function executeApplyPatch(
   try {
     const result = await applyNativePatch(worktreePath, validation.value, { phase });
     if (result.ok) {
+      for (const changedFile of result.changedFiles) {
+        recorder?.recordMutation({
+          tool: 'apply_patch',
+          status: 'completed',
+          path: changedFile,
+        });
+      }
+      recorder?.recordPatchSnapshots(result.snapshots);
       const details: ApplyPatchSuccessDetails = {
         ...result,
         tool: 'apply_patch',
@@ -115,9 +126,21 @@ async function executeApplyPatch(
         details,
       };
     }
+    recorder?.recordMutation({
+      tool: 'apply_patch',
+      status: 'failed',
+      path: validation.value.operations[0]?.path,
+      reason: result.rejection.message,
+    });
     return rejectedPatchResult(result);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
+    recorder?.recordMutation({
+      tool: 'apply_patch',
+      status: 'failed',
+      path: validation.value.operations[0]?.path,
+      reason: message,
+    });
     const details: ApplyPatchErrorDetails = {
       ok: false,
       tool: 'apply_patch',

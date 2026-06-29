@@ -55,6 +55,7 @@ export interface RunCommandOptions {
   sessionId?: string;
   /** Sanitized argument summary forwarded to the gate (no secrets). */
   argSummary?: string;
+  onSpawn?: (child: ChildProcess) => void;
 }
 
 export interface CommandResult {
@@ -209,6 +210,7 @@ export async function runCommand(options: RunCommandOptions): Promise<CommandRes
   };
 
   const child = spawnFn(spawnSpec.file, spawnSpec.args, spawnOptions);
+  options.onSpawn?.(child);
   return await waitForProcess({
     child,
     command: classification.normalizedCommand,

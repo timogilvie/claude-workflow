@@ -35,6 +35,7 @@ import type { AgentEvent } from '@earendil-works/pi-agent-core';
 import type { AssistantMessage } from '@earendil-works/pi-ai';
 import type { ReplayCompactionEvent } from './compaction.ts';
 import type { CommandTranscriptEventData } from './command-transcript.ts';
+import { writeCleanupSummaryEvent, type CleanupDecision, type CleanupReason, type CleanupReport, type TreeState } from './cleanup.ts';
 import type { ToolResultMetadata } from './tools/types.ts';
 import { redactSecrets, redactSecretsInValue } from './tools/redaction.ts';
 import type { ApprovalLifecycleEntry } from './workflow-tools/approval-gate.ts';
@@ -134,6 +135,14 @@ export interface TranscriptCommandResult extends TranscriptEventBase, CommandTra
 
 export interface TranscriptCompactionEvent extends TranscriptEventBase, ReplayCompactionEvent {}
 
+export interface TranscriptCleanupReport extends TranscriptEventBase {
+  type: 'cleanup_report';
+  reason: CleanupReason;
+  finalTreeState: TreeState;
+  cleanupDecision: CleanupDecision;
+  notes?: string[];
+}
+
 export interface TranscriptSessionEnded extends TranscriptEventBase {
   type: 'session_ended';
   messageCount: number;
@@ -151,6 +160,7 @@ export type TranscriptEvent =
   | TranscriptToolResult
   | TranscriptCommandResult
   | TranscriptCompactionEvent
+  | TranscriptCleanupReport
   | TranscriptSessionEnded
   | TranscriptApprovalEvent;
 
@@ -326,6 +336,15 @@ export class TranscriptWriter {
     const transcriptEvent: TranscriptCompactionEvent = {
       ...this.base(),
       ...event,
+    };
+    this.append(transcriptEvent);
+    return transcriptEvent;
+  }
+
+  writeCleanupReport(report: CleanupReport): TranscriptCleanupReport {
+    const transcriptEvent: TranscriptCleanupReport = {
+      ...this.base(),
+      ...writeCleanupSummaryEvent(report),
     };
     this.append(transcriptEvent);
     return transcriptEvent;
