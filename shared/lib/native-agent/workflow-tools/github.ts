@@ -1,5 +1,6 @@
 import type { ToolDescriptor, WavemillToolResult } from '../tools/types.ts';
 import { getRedactionConfig } from '../../config.ts';
+import { buildTrustMetadata } from '../provenance.ts';
 import { buildProfileFromConfig, redact } from '../../redaction-profiles.ts';
 import {
   addLabelsToIssue,
@@ -553,6 +554,7 @@ function createPrError(
     error,
     message,
     ...(diagnostics ? { diagnostics } : {}),
+    metadata: { trust: buildTrustMetadata({ sourceKind: 'wavemill_artifact', details: message }) },
   };
 }
 
@@ -567,6 +569,7 @@ function addLabelError(
     error,
     message,
     ...(diagnostics ? { diagnostics } : {}),
+    metadata: { trust: buildTrustMetadata({ sourceKind: 'wavemill_artifact', details: message }) },
   };
 }
 
@@ -574,6 +577,7 @@ function toToolResult<TDetails>(details: TDetails, text: string): WavemillToolRe
   return {
     content: [{ type: 'text', text }],
     details,
+    metadata: { trust: buildTrustMetadata({ sourceKind: 'wavemill_artifact', details }) },
   };
 }
 

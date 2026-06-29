@@ -23,6 +23,10 @@ import {
   type NativeAssistantMessage,
   type NativeToolCall,
 } from './messages.ts';
+import {
+  buildProviderPayloadTrustMetadata,
+  type ToolTrustMetadata,
+} from './provenance.ts';
 
 export type ProviderFinishReason =
   | 'stop'
@@ -86,6 +90,7 @@ export interface ProviderTurnResult {
   usage: SessionModelUsage;
   events: ProviderTurnEvent[];
   raw: unknown;
+  rawMetadata: ToolTrustMetadata;
 }
 
 export interface ToolCallingProvider {
@@ -177,6 +182,7 @@ class PiToolCallingProvider implements ToolCallingProvider {
       usage: mapPiUsageToSessionModelUsage(finalMessage.usage),
       events,
       raw: finalMessage,
+      rawMetadata: buildProviderPayloadTrustMetadata(finalMessage),
     };
   }
 }
