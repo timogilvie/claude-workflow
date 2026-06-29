@@ -13,7 +13,7 @@ export interface MutationErrorSummary {
 }
 
 interface MutationRecordBase extends MutationRecordContext {
-  outcome: 'executed' | 'denied' | 'failed';
+  outcome: 'executed' | 'denied' | 'failed' | 'approval_needed';
 }
 
 export interface ExecutedMutationRecord<TResult = unknown> extends MutationRecordBase {
@@ -34,10 +34,20 @@ export interface FailedMutationRecord extends MutationRecordBase {
   error: MutationErrorSummary;
 }
 
+/** Recorded when a risky operation is paused pending human approval (HOK-2364). */
+export interface ApprovalNeededMutationRecord extends MutationRecordBase {
+  outcome: 'approval_needed';
+  requestId: string;
+  riskReason: string;
+  argSummary: string;
+  expiresAt: number;
+}
+
 export type MutationRecord<TResult = unknown> =
   | ExecutedMutationRecord<TResult>
   | DeniedMutationRecord
-  | FailedMutationRecord;
+  | FailedMutationRecord
+  | ApprovalNeededMutationRecord;
 
 export type MutationRecordSink<TResult = unknown> = (
   record: MutationRecord<TResult>,
@@ -98,6 +108,20 @@ export function createFailedMutationRecord(
     code: 'external_error',
     reason: `${context.tool} failed: ${summary.message}`,
     error: summary,
+  };
+}
+
+export function createApprovalNeededMutationRecord(
+  context: MutationRecordContext,
+  approval: Pick<ApprovalNeededMutationRecord, 'requestId' | 'riskReason' | 'argSummary' | 'expiresAt'>,
+): ApprovalNeededMutationRecord {
+  return {
+    ...context,
+    outcome: 'approval_needed',
+    requestId: approval.requestId,
+    riskReason: approval.riskReason,
+    argSummary: approval.argSummary,
+    expiresAt: approval.expiresAt,
   };
 }
 

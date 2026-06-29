@@ -66,6 +66,7 @@ export type NormalizedState =
   | 'failed'
   | 'aborted'
   | 'awaiting_user'
+  | 'approval_needed'
   | 'unknown';
 
 /** Stable machine-readable blocker codes. */
@@ -335,6 +336,20 @@ function toStageSummary(result: StageResult): StageSummary {
   return summary;
 }
 
+/**
+ * Return true when a stage result's artifacts carry pending approval metadata
+ * (HOK-2364). The approvalRequest field is set by the native agent when it
+ * writes a stage result in the approval_needed state.
+ */
+function hasApprovalNeededArtifact(result: StageResult): boolean {
+  if (!result.artifacts) return false;
+  const arts = result.artifacts as Record<string, unknown>;
+  const req = arts.approvalRequest;
+  if (!req || typeof req !== 'object') return false;
+  const r = req as Record<string, unknown>;
+  return typeof r.requestId === 'string' && typeof r.riskReason === 'string';
+}
+
 function readLegacyMarkers(featureDir: string): { codingComplete: boolean; planApproved: boolean; aborted: boolean } {
   const check = (f: string): boolean => existsSync(path.join(featureDir, f));
   return {
@@ -381,7 +396,10 @@ function derivePhaseAndState(
       case 'completed': normalized = 'completed'; break;
       case 'failed': normalized = 'failed'; break;
       case 'aborted': normalized = 'aborted'; break;
-      case 'awaiting_user': normalized = 'awaiting_user'; break;
+      case 'awaiting_user':
+        // Distinguish human-approval pause from generic awaiting_user (HOK-2364).
+        normalized = hasApprovalNeededArtifact(result) ? 'approval_needed' : 'awaiting_user';
+        break;
       case 'running': normalized = 'running'; break;
       default: normalized = 'unknown';
     }

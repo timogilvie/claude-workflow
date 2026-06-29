@@ -37,6 +37,7 @@ import type { ReplayCompactionEvent } from './compaction.ts';
 import type { CommandTranscriptEventData } from './command-transcript.ts';
 import type { ToolResultMetadata } from './tools/types.ts';
 import { redactSecrets, redactSecretsInValue } from './tools/redaction.ts';
+import type { ApprovalLifecycleEntry } from './workflow-tools/approval-gate.ts';
 
 // ---------------------------------------------------------------------------
 // Transcript event types
@@ -138,6 +139,9 @@ export interface TranscriptSessionEnded extends TranscriptEventBase {
   messageCount: number;
 }
 
+/** Approval lifecycle event written to the transcript for each request/resolution (HOK-2364). */
+export interface TranscriptApprovalEvent extends TranscriptEventBase, ApprovalLifecycleEntry {}
+
 export type TranscriptEvent =
   | TranscriptSessionStarted
   | TranscriptTurnStarted
@@ -147,7 +151,8 @@ export type TranscriptEvent =
   | TranscriptToolResult
   | TranscriptCommandResult
   | TranscriptCompactionEvent
-  | TranscriptSessionEnded;
+  | TranscriptSessionEnded
+  | TranscriptApprovalEvent;
 
 // ---------------------------------------------------------------------------
 // Redaction
@@ -302,6 +307,16 @@ export class TranscriptWriter {
     const transcriptEvent: TranscriptCommandResult = {
       ...this.base(),
       ...event,
+    };
+    this.append(transcriptEvent);
+    return transcriptEvent;
+  }
+
+  /** Write an approval lifecycle event (requested, granted, denied, expired) to the transcript. */
+  writeApprovalEvent(entry: ApprovalLifecycleEntry): TranscriptApprovalEvent {
+    const transcriptEvent: TranscriptApprovalEvent = {
+      ...this.base(),
+      ...entry,
     };
     this.append(transcriptEvent);
     return transcriptEvent;

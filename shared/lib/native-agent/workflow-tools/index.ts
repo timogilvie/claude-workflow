@@ -4,6 +4,7 @@ export * from './github.ts';
 export * from './mutation-enforcer.ts';
 export * from './mutation-policy.ts';
 export * from './mutation-record.ts';
+export * from './approval-gate.ts';
 export * from './linear-tools.ts';
 export * from './command-tools.ts';
 export * from './review-flow.ts';

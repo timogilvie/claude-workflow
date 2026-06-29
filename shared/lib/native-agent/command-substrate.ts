@@ -7,18 +7,26 @@ import type { CommandClass } from './command-classifier.ts';
 import { classifyCommand } from './command-classifier.ts';
 import { buildCommandTranscript } from './command-transcript.ts';
 import type { TranscriptWriter } from './transcript.ts';
+import type { ApprovalGateFn } from './workflow-tools/approval-gate.ts';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024;
 const KILL_GRACE_MS = 2_000;
 const DEFAULT_ENV_KEYS = ['PATH', 'HOME', 'LANG'] as const;
 
-export type ApprovalOutcome = 'approved' | 'rejected';
+export type ApprovalOutcome = 'approved' | 'rejected' | 'approval_needed';
 
 export type RejectionReason =
   | 'empty-command'
   | 'dangerous-command-pattern'
   | 'cwd-outside-allowed-roots';
+
+export interface CommandApprovalNeededMetadata {
+  requestId: string;
+  riskReason: string;
+  argSummary: string;
+  expiresAt: number;
+}
 
 export interface RunCommandOptions {
   command: string | readonly string[];
@@ -33,12 +41,26 @@ export interface RunCommandOptions {
   signal?: AbortSignal;
   toolName?: string;
   transcriptWriter?: Pick<TranscriptWriter, 'writeCommandEvent'>;
+  /**
+   * Optional human-approval gate (HOK-2364).
+   *
+   * Evaluated after command safety checks pass, before spawning the process.
+   * When the gate returns a non-proceeding decision the command is paused or
+   * blocked. Risk classification is caller-provided.
+   */
+  approvalGate?: ApprovalGateFn;
+  /** Session identifier forwarded to the approval gate. */
+  sessionId?: string;
+  /** Sanitized argument summary forwarded to the gate (no secrets). */
+  argSummary?: string;
 }
 
 export interface CommandResult {
   commandClass: CommandClass;
   approval: ApprovalOutcome;
   rejectionReason?: RejectionReason | string;
+  /** Present when approval === 'approval_needed'. */
+  approvalNeeded?: CommandApprovalNeededMetadata;
   exitCode: number | null;
   signal: NodeJS.Signals | null;
   stdout: string;
@@ -130,6 +152,49 @@ export async function runCommand(options: RunCommandOptions): Promise<CommandRes
       startedAt,
       classification.normalizedCommand,
     );
+  }
+
+  // Check approval gate before spawning (HOK-2364).
+  if (options.approvalGate) {
+    const sessionId = options.sessionId ?? '';
+    const argSummary = options.argSummary ?? classification.normalizedCommand;
+    const decision = await options.approvalGate({
+      sessionId,
+      tool: options.toolName ?? 'command',
+      action: classification.commandClass,
+      argSummary,
+    });
+
+    if (!decision.proceed) {
+      const durationMs = Date.now() - startedAt;
+      if (decision.outcome === 'approval_needed') {
+        return {
+          commandClass: classification.commandClass,
+          approval: 'approval_needed',
+          approvalNeeded: {
+            requestId: decision.requestId,
+            riskReason: decision.riskReason,
+            argSummary: decision.argSummary,
+            expiresAt: decision.expiresAt,
+          },
+          exitCode: null,
+          signal: null,
+          stdout: '',
+          stderr: '',
+          truncated: false,
+          timedOut: false,
+          durationMs,
+        };
+      }
+      // denied or expired — treat as rejection
+      return rejectionResult(
+        options,
+        classification.commandClass,
+        decision.outcome === 'denied' ? 'approval-denied' : 'approval-expired',
+        startedAt,
+        classification.normalizedCommand,
+      );
+    }
   }
 
   const env = buildChildEnv(options.allowedEnvKeys, process.env);
