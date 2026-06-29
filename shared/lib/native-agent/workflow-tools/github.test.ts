@@ -12,6 +12,7 @@ import {
 } from './github.ts';
 import { githubAddLabelKey, githubCreatePrKey } from './dedupe.ts';
 import { isMutationAllowed } from './mutation-policy.ts';
+import type { NetworkPolicy } from '../network-policy.ts';
 
 interface FixtureState {
   pullRequests: GitHubToolPullRequest[];
@@ -376,6 +377,31 @@ describe('githubCreatePr', () => {
       message: 'ready_mutation_denied: general PR creation not allowed in ready phase; only stale_base or merge_conflict remediation',
     });
   });
+
+  it('denies when review-phase network policy blocks GitHub access before any transport call', async () => {
+    const { deps, state } = createFixtureDeps();
+    const result = await githubCreatePr({
+      repo: 'acme/widgets',
+      phase: 'review',
+      head: 'feature/idempotent-pr',
+      base: 'main',
+      headSha: 'abc123',
+      title: 'Title',
+      body: 'Body',
+    }, {
+      ...deps,
+      networkPolicy: {
+        review: {
+          github_create_pr: { kind: 'deny' },
+        },
+      } satisfies NetworkPolicy,
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.error, 'policy_denied');
+    assert.equal(state.calls.listOpenPullRequests, 0);
+    assert.equal((result.diagnostics as { category: string }).category, 'network');
+  });
 });
 
 describe('githubAddLabel', () => {
@@ -511,6 +537,59 @@ describe('githubAddLabel', () => {
       error: 'policy_denied',
       message: 'ready_mutation_denied: label add not allowed in ready phase',
     });
+  });
+
+  it('distinguishes network policy denial from transport failure for label adds', async () => {
+    const { deps, state } = createFixtureDeps({
+      labelTargets: [{
+        repo: 'acme/widgets',
+        targetKind: 'issue',
+        targetNumber: 99,
+        labels: [],
+        url: 'https://github.com/acme/widgets/issues/99',
+      }],
+    });
+
+    const denied = await githubAddLabel({
+      repo: 'acme/widgets',
+      phase: 'review',
+      targetKind: 'issue',
+      targetNumber: 99,
+      label: 'needs-review',
+    }, {
+      ...deps,
+      networkPolicy: {
+        review: {
+          github_add_label: { kind: 'deny' },
+        },
+      } satisfies NetworkPolicy,
+    });
+
+    assert.equal(denied.ok, false);
+    assert.equal(denied.error, 'policy_denied');
+    assert.equal(state.calls.getLabels, 0);
+    assert.equal((denied.diagnostics as { category: string }).category, 'network');
+
+    const failed = await githubAddLabel({
+      repo: 'acme/widgets',
+      phase: 'review',
+      targetKind: 'issue',
+      targetNumber: 99,
+      label: 'needs-review',
+    }, {
+      ...deps,
+      getLabels: async () => {
+        throw new Error('network timeout');
+      },
+      networkPolicy: {
+        review: {
+          github_add_label: { kind: 'allowlist', hosts: ['api.github.com'] },
+        },
+      } satisfies NetworkPolicy,
+    });
+
+    assert.equal(failed.ok, false);
+    assert.equal(failed.error, 'external_error');
   });
 });
 

@@ -32,6 +32,11 @@ import {
   type TaskPacketParts,
 } from '../../task-packet-utils.ts';
 import {
+  enforceNetworkPolicy,
+  type NetworkDeniedDiagnostics,
+  type NetworkPolicy,
+} from '../network-policy.ts';
+import {
   type ReviewChangesResult,
   type RouteTaskResult,
   type WavemillRouteRef,
@@ -68,6 +73,7 @@ export interface CommandToolsDeps {
   readStageResultImpl?: typeof readStageResult;
   writeStageResultImpl?: typeof writeStageResult;
   updateStageResultImpl?: typeof updateStageResult;
+  networkPolicy?: NetworkPolicy;
 }
 
 export interface DefaultExpanderOptions {
@@ -171,6 +177,42 @@ function actionDetails(input: {
   };
 }
 
+function networkDeniedResult<T extends ReviewChangesResult | RouteTaskResult>(input: {
+  tool: 'review_changes' | 'route_task';
+  phase: WorkflowPhase;
+  action: 'read';
+  at: number;
+  target: string;
+  invocation: Record<string, unknown>;
+  diagnostics: NetworkDeniedDiagnostics;
+  deps: Pick<CommandToolsDeps, 'transcript'>;
+}): T {
+  input.deps.transcript.append({
+    type: 'workflow_tool_call',
+    tool: input.tool,
+    phase: input.phase,
+    action: input.action,
+    details: actionDetails({
+      command: input.tool,
+      invocation: input.invocation,
+      outcome: 'denied',
+      diagnostics: {
+        error: 'policy_denied',
+        message: `Network access denied for ${input.tool}`,
+        ...input.diagnostics,
+      },
+    }),
+    at: input.at,
+  });
+  return {
+    ok: false,
+    tool: input.tool,
+    error: 'policy_denied',
+    message: `Network access denied for ${input.tool} in ${input.phase} phase: ${input.diagnostics.reason}`,
+    diagnostics: input.diagnostics,
+  } as T;
+}
+
 function toStageResultRef(featureDir: string, stage: StageName): WavemillStageResultRef {
   return {
     system: 'wavemill',
@@ -269,6 +311,25 @@ export async function executeReviewChanges(
     return result;
   }
 
+  const network = enforceNetworkPolicy({
+    policy: deps.networkPolicy,
+    phase,
+    tool: 'review_changes',
+    target: 'command:review_changes',
+  });
+  if (network.kind === 'deny') {
+    return networkDeniedResult<ReviewChangesResult>({
+      tool: 'review_changes',
+      phase,
+      action: 'read',
+      at: ts,
+      target: 'command:review_changes',
+      invocation: { base: params.base, worktree: params.worktree ?? null, json: !!params.json },
+      diagnostics: network.diagnostics,
+      deps,
+    });
+  }
+
   const repoDir = resolveRepoDir(params.worktree, deps.repoDir);
   const reviewImpl = deps.reviewChangesImpl ?? reviewChanges;
 
@@ -363,6 +424,29 @@ export async function executeRouteTask(
       at: ts,
     });
     return result;
+  }
+
+  const network = enforceNetworkPolicy({
+    policy: deps.networkPolicy,
+    phase,
+    tool: 'route_task',
+    target: 'command:route_task',
+  });
+  if (network.kind === 'deny') {
+    return networkDeniedResult<RouteTaskResult>({
+      tool: 'route_task',
+      phase,
+      action: 'read',
+      at: ts,
+      target: 'command:route_task',
+      invocation: {
+        taskPacketPath: params.taskPacketPath,
+        routeMode: params.routeMode ?? null,
+        modelsAvailable: params.modelsAvailable ?? null,
+      },
+      diagnostics: network.diagnostics,
+      deps,
+    });
   }
 
   const repoDir = resolveRepoDir(params.repoDir, deps.repoDir);

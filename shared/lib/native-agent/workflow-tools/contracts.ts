@@ -323,6 +323,7 @@ export interface LinearCommentError {
   tool: 'linear_comment';
   error: CommonErrorCode | 'rate_limited';
   message: string;
+  diagnostics?: Record<string, unknown>;
 }
 
 export type LinearCommentResult = LinearCommentSuccess | LinearCommentError;
@@ -359,6 +360,7 @@ export interface GitHubCreatePrError {
   tool: 'github_create_pr';
   error: CommonErrorCode | 'conflict' | 'rate_limited';
   message: string;
+  diagnostics?: Record<string, unknown>;
 }
 
 export type GitHubCreatePrResult = GitHubCreatePrSuccess | GitHubCreatePrError;
@@ -391,6 +393,7 @@ export interface GitHubAddLabelError {
   tool: 'github_add_label';
   error: CommonErrorCode | 'conflict' | 'not_found' | 'rate_limited';
   message: string;
+  diagnostics?: Record<string, unknown>;
 }
 
 export type GitHubAddLabelResult = GitHubAddLabelSuccess | GitHubAddLabelError;
@@ -424,6 +427,7 @@ export interface ReviewChangesError {
   tool: 'review_changes';
   error: CommonErrorCode | 'review_failed';
   message: string;
+  diagnostics?: Record<string, unknown>;
 }
 
 export type ReviewChangesResult = ReviewChangesSuccess | ReviewChangesError;
@@ -460,6 +464,7 @@ export interface RouteTaskError {
   tool: 'route_task';
   error: CommonErrorCode | 'route_failed';
   message: string;
+  diagnostics?: Record<string, unknown>;
 }
 
 export type RouteTaskResult = RouteTaskSuccess | RouteTaskError;
@@ -490,6 +495,7 @@ export interface ExpandIssueError {
   tool: 'expand_issue';
   error: CommonErrorCode | 'expansion_failed';
   message: string;
+  diagnostics?: Record<string, unknown>;
 }
 
 export type ExpandIssueResult = ExpandIssueSuccess | ExpandIssueError;
