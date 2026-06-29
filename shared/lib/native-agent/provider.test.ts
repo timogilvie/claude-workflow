@@ -127,6 +127,8 @@ describe('native-agent provider seam', () => {
       cacheCreationTokens: 64,
     });
     assert.equal(result.message.role, 'assistant');
+    assert.equal(result.rawMetadata.sourceKind, 'provider_payload');
+    assert.equal(result.rawMetadata.trust, 'untrusted');
   });
 
   it('normalizes a scripted final text turn', async () => {
@@ -163,5 +165,6 @@ describe('native-agent provider seam', () => {
       cacheReadTokens: 0,
       cacheCreationTokens: 0,
     });
+    assert.equal(result.rawMetadata.sourceKind, 'provider_payload');
   });
 });

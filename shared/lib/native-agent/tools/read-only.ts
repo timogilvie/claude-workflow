@@ -6,6 +6,7 @@
 
 import fsPromises from 'node:fs/promises';
 import path from 'node:path';
+import { buildTrustMetadata } from '../provenance.ts';
 import type { ToolDescriptor, WavemillToolResult } from './types.ts';
 
 // ---------------------------------------------------------------------------
@@ -109,6 +110,7 @@ function makeError(code: string, message: string): WavemillToolResult<ToolErrorD
   return {
     content: [{ type: 'text', text: JSON.stringify({ error: code, message }) }],
     details: { error: code, message },
+    metadata: { trust: buildTrustMetadata({ sourceKind: 'file', details: { error: code, message } }) },
   };
 }
 
@@ -314,6 +316,13 @@ async function executeReadFile(
       truncated,
       ...(truncationReason ? { truncationReason } : {}),
     },
+    metadata: {
+      trust: buildTrustMetadata({
+        sourceKind: 'file',
+        content: [{ type: 'text', text: resultText }],
+        details: { path: resolved.relativePath },
+      }),
+    },
   };
 }
 
@@ -388,6 +397,13 @@ async function executeListFiles(
       count: returned.length,
       truncated,
       maxResults,
+    },
+    metadata: {
+      trust: buildTrustMetadata({
+        sourceKind: 'file',
+        content: [{ type: 'text', text }],
+        details: { path: rootInputPath, glob: params.glob ?? null },
+      }),
     },
   };
 }
@@ -500,6 +516,13 @@ async function executeSearchText(
       matchCount,
       truncated,
       maxResults,
+    },
+    metadata: {
+      trust: buildTrustMetadata({
+        sourceKind: 'file',
+        content: [{ type: 'text', text }],
+        details: { query: params.query, path: rootInputPath, glob: params.glob ?? null },
+      }),
     },
   };
 }

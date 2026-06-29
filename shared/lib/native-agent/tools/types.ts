@@ -2,6 +2,8 @@
 // Wavemill-native tool types — no Pi or typebox imports.
 // ---------------------------------------------------------------------------
 
+import type { ToolTrustMetadata } from '../provenance.ts';
+
 /** Agent workflow phase during which a tool is available. */
 export type ToolPhase = 'planning' | 'coding' | 'review';
 
@@ -66,6 +68,7 @@ export interface ToolResultMetadata {
   outputCap?: ToolOutputCapMetadata;
   provenance?: ToolProvenanceMetadata;
   redaction?: ToolRedactionMetadata;
+  trust?: ToolTrustMetadata;
 }
 
 /** Minimal result shape returned by a Wavemill tool executor. */
