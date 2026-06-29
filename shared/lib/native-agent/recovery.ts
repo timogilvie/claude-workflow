@@ -350,14 +350,15 @@ export function writeRecoveryArtifact(repoDir: string, artifact: RecoveryArtifac
   try {
     writeFileSync(tmpPath, `${JSON.stringify(artifact, null, 2)}\n`, 'utf-8');
     renameSync(tmpPath, artifactPath);
-  } finally {
+  } catch (error) {
     try {
       unlinkSync(tmpPath);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        throw error;
+    } catch (cleanupError) {
+      if ((cleanupError as NodeJS.ErrnoException).code !== 'ENOENT') {
+        // Preserve the original write/rename failure for callers.
       }
     }
+    throw error;
   }
 
   return artifactPath;

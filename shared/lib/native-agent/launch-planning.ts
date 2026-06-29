@@ -22,6 +22,8 @@ import { toPiAgentTool, type AgentTool } from './tools/pi-adapter.ts';
 import type { ToolDescriptor, ToolMetadata, WavemillToolResult } from './tools/types.ts';
 import { loadNativePhasePrompt, registerAndRecordNativeProvenance } from './prompts.ts';
 import { isTaskPacketContent } from '../task-packet-utils.ts';
+import { createCleanupTracker, runCleanup, type CleanupReason } from './cleanup.ts';
+import { updateStageResult } from '../stage-result.ts';
 
 const RELEASE_READINESS_STUB = [
   '',
@@ -60,6 +62,7 @@ export interface LaunchNativePlanningOptions {
   registryMetadataOverride?: readonly ToolMetadata[];
   extraDescriptors?: readonly ToolDescriptor[];
   runTsxCommand?: (args: string[]) => string;
+  signal?: AbortSignal;
 }
 
 function writeHookStatus(
@@ -224,6 +227,16 @@ function toPiTools(descriptors: readonly ToolDescriptor[]): AgentTool<unknown, u
   return descriptors.map((descriptor) => toPiAgentTool(descriptor) as AgentTool<unknown, unknown>);
 }
 
+function cleanupReasonForStopReason(stopReason: string): CleanupReason | null {
+  if (stopReason === 'aborted') {
+    return 'aborted';
+  }
+  if (stopReason === 'wall_clock_limit') {
+    return 'timeout';
+  }
+  return null;
+}
+
 export async function launchNativePlanning(options: LaunchNativePlanningOptions): Promise<{
   planPath: string;
   approvalMarkerPath: string;
@@ -286,6 +299,7 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
       repoDir: options.repoDir,
     });
 
+    const cleanupTracker = createCleanupTracker();
     const context: AgentContext = {
       systemPrompt,
       messages: [{
@@ -311,6 +325,7 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
       context,
       convertToLlm: (messages) => messages as unknown as Message[],
       afterToolCall: gitAfterToolCall,
+      signal: options.signal,
       toolPolicy: {
         phase: 'planning',
         worktreePath: options.wtDir,
@@ -320,6 +335,25 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
         },
       },
     });
+
+    const cleanupReason = cleanupReasonForStopReason(result.stopReason);
+    if (cleanupReason) {
+      const cleanupReport = await runCleanup(cleanupTracker, {
+        worktreePath: options.wtDir,
+        reason: cleanupReason,
+      });
+      await updateStageResult(featureDir, 'planning', {
+        status: cleanupReason === 'aborted' ? 'aborted' : 'failed',
+        finishedAt: new Date().toISOString(),
+        agent: 'native',
+        model: model.name ?? model.id,
+        notes: `Native planning stopped with ${result.stopReason}; cleanup decision ${cleanupReport.cleanupDecision}.`,
+        failureReason: result.stopReason,
+        finalTreeState: cleanupReport.finalTreeState,
+        cleanupDecision: cleanupReport.cleanupDecision,
+        cleanupReport,
+      });
+    }
 
     const rawFinalText = findFinalAssistantText(result.messages);
     if (rawFinalText.trim() === '') {

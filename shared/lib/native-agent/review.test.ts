@@ -171,6 +171,53 @@ describe('native review', () => {
       rmSync(repoDir, { recursive: true, force: true });
     }
   });
+
+  it('records cleanup transcript and stage-result details on timeout', async () => {
+    const repoDir = makeTempRepo();
+    const featureDir = mkdtempSync(join(tmpdir(), 'native-review-feature-'));
+    setReadyProvider();
+
+    nativeReviewTestUtils.setRunWavemillLoop(async (config) => {
+      config.onEvent?.({ type: 'agent_start' });
+      config.onEvent?.({ type: 'agent_end', messages: [] });
+      return {
+        messages: [],
+        stopReason: 'wall_clock_limit',
+        turnsCompleted: 1,
+        toolCallsExecuted: 0,
+        totalInputTokens: 10,
+        totalOutputTokens: 10,
+        totalCostUsd: 0,
+        wallClockMs: 300_000,
+      };
+    });
+
+    try {
+      const result = await runNativeReview(makeReviewContext(), repoDir, { featureDir });
+      assert.equal(result.verdict, 'not_ready');
+      assert.match(result.codeReviewFindings[0].description, /wall-clock budget/i);
+
+      const transcript = loadTranscript(repoDir);
+      const cleanup = transcript.find((event) => event.type === 'cleanup_report');
+      assert.equal(cleanup?.type, 'cleanup_report');
+      if (cleanup?.type === 'cleanup_report') {
+        assert.equal(cleanup.reason, 'timeout');
+        assert.equal(cleanup.finalTreeState, 'clean');
+        assert.equal(cleanup.cleanupDecision, 'no-action-needed');
+      }
+
+      const stageResult = JSON.parse(
+        readFileSync(join(featureDir, '.review-result.json'), 'utf-8'),
+      ) as Record<string, unknown>;
+      assert.equal(stageResult.status, 'failed');
+      assert.equal(stageResult.finalTreeState, 'clean');
+      assert.equal(stageResult.cleanupDecision, 'no-action-needed');
+      assert.equal((stageResult.cleanupReport as Record<string, unknown>).reason, 'timeout');
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+      rmSync(featureDir, { recursive: true, force: true });
+    }
+  });
 });
 
 function makeTempRepo(): string {

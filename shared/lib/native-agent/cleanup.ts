@@ -136,8 +136,11 @@ function isProcessAlive(pid: number): boolean {
     return true;
   } catch (error: unknown) {
     const code = (error as NodeJS.ErrnoException).code;
-    if (code === 'ESRCH' || code === 'EPERM') {
+    if (code === 'ESRCH') {
       return false;
+    }
+    if (code === 'EPERM') {
+      return true;
     }
     throw error;
   }
