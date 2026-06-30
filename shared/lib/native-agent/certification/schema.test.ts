@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
+import Ajv from 'ajv';
 import {
   CERTIFICATION_BASE_PATH,
   CERTIFICATION_SCHEMA_VERSION,
@@ -23,6 +24,10 @@ import {
 } from './loader.ts';
 
 const FIXTURE_DIR = new URL('./fixtures', import.meta.url).pathname;
+const CERTIFICATION_JSON_SCHEMA = JSON.parse(readFileSync(new URL('./schema.json', import.meta.url), 'utf-8'));
+const validateCertificationSchema = new Ajv({ allErrors: true, strict: false, validateFormats: false }).compile(
+  CERTIFICATION_JSON_SCHEMA,
+);
 
 function loadFixture(name: string): unknown {
   return JSON.parse(readFileSync(join(FIXTURE_DIR, name), 'utf-8'));
@@ -74,6 +79,33 @@ describe('schema constants', () => {
   it('exports CERTIFICATION_BASE_PATH', () => {
     assert.equal(CERTIFICATION_BASE_PATH, '.wavemill/native-agent-certifications');
   });
+});
+
+// ─── JSON Schema contract ─────────────────────────────────────────────────
+
+describe('schema.json', () => {
+  it('validates an artifact constructed from TypeScript types', () => {
+    const artifact = makeValidArtifact({
+      expiresAt: '2099-12-31T23:59:59.999Z',
+      knownLimitations: ['does not support workflow tools'],
+      totalRetryCount: 1,
+      scenarios: [{ scenarioId: 'list-files', passed: true, retryCount: 1 }],
+    });
+
+    assert.equal(validateCertificationSchema(artifact), true, JSON.stringify(validateCertificationSchema.errors));
+  });
+
+  for (const field of CERTIFICATION_JSON_SCHEMA.required as string[]) {
+    it(`rejects an artifact missing required field ${field}`, () => {
+      const artifact = { ...makeValidArtifact() } as Record<string, unknown>;
+      delete artifact[field];
+
+      assert.equal(validateCertificationSchema(artifact), false);
+      assert.ok(
+        validateCertificationSchema.errors?.some(error => error.keyword === 'required' && error.params.missingProperty === field),
+      );
+    });
+  }
 });
 
 // ─── phaseSatisfies ────────────────────────────────────────────────────────
