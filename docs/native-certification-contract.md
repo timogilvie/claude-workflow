@@ -167,6 +167,60 @@ Returns `true` if all scenarios passed and the scenarios array is non-empty.
 
 ---
 
+## Storage and Validation Helpers
+
+The `shared/lib/native-agent/certification/` module includes storage and validation helpers on top of the core evaluation contract.
+
+### Writing and reading artifacts
+
+```ts
+import { writeCertification, readCertification, listCertifications } from './store.ts';
+
+// Write atomically (temp file + rename); returns the final absolute path.
+const path = writeCertification(repoDir, artifact);
+
+// Read from an absolute path with fine-grained error codes:
+// 'not-found' | 'unreadable' | 'invalid-json' | 'schema-mismatch'
+const result = readCertification(path);
+if (result.ok) {
+  console.log(result.artifact.phase);
+} else {
+  console.error(result.error.code, result.error.message);
+}
+
+// List all .json artifact paths under .wavemill/native-agent-certifications/
+const paths = listCertifications(repoDir);
+```
+
+### Aggregate validator
+
+`validateCertification` runs all checks without short-circuiting, returning every failure as a `ValidationError` with an actionable message and structured `detail`:
+
+```ts
+import { validateCertification } from './validator.ts';
+
+const result = validateCertification(artifact, {
+  expectedProvider: 'anthropic',
+  expectedModel: 'claude-sonnet-4-6',
+  expectedSuiteVersion: 'v1',
+  requiredPhase: 'patch',
+  requiredCapabilities: ['long-context'], // checked against knownLimitations
+  now: new Date(),
+});
+
+if (!result.ok) {
+  for (const err of result.errors) {
+    console.error(err.code, err.message);
+  }
+}
+```
+
+**Validation error codes**: `schema-version-mismatch`, `suite-version-mismatch`, `expired`, `phase-insufficient`, `identity-mismatch`, `limitation-conflict`, `scenario-failure`.
+
+The per-check helpers (`checkSchemaVersion`, `checkSuiteVersion`, `checkNotExpired`, `checkPhaseSatisfies`, `checkIdentity`, `checkLimitations`, `checkScenarios`) are also exported for callers that need narrower checks.
+
+---
+
 ## Scope and Non-Goals
 
 This contract covers **only** the certification schema, storage path, phase semantics, TTL policy, and fail-closed evaluation helpers. It does not:
