@@ -119,6 +119,15 @@ _wavemill_hook_osc_body() {
     waiting)
       [[ -n "$context" ]] && printf 'waiting on %s' "$context" || printf 'waiting'
       ;;
+    blocked)
+      [[ -n "$context" ]] && printf 'blocked: %s' "$context" || printf 'blocked'
+      ;;
+    approval-needed)
+      [[ -n "$context" ]] && printf 'approval needed: %s' "$context" || printf 'approval needed'
+      ;;
+    policy-denied)
+      [[ -n "$context" ]] && printf 'policy denied: %s' "$context" || printf 'policy denied'
+      ;;
     error)
       [[ -n "$context" ]] && printf 'error in %s' "$context" || printf 'error'
       ;;
@@ -165,7 +174,7 @@ _wavemill_hook_emit_osc() {
   _wavemill_hook_osc_enabled || return 0
 
   case "$state" in
-    waiting|error) ;;
+    waiting|approval-needed|policy-denied|error) ;;
     *) return 0 ;;
   esac
 
@@ -182,10 +191,16 @@ _wavemill_hook_emit_osc() {
 }
 
 # Atomically write the standardized hook status payload.
-# Args: state, event, detail, agent
+# Args: state, event, detail, agent [next_action]
 #
 # States: working (agent is actively processing), idle (agent stopped normally),
-#         waiting (agent blocked on user input), error (agent encountered failure)
+#         waiting (agent blocked on user input), blocked (agent cannot proceed),
+#         approval-needed (agent paused awaiting explicit approval),
+#         policy-denied (action rejected by policy), error (agent encountered failure)
+#
+# The optional next_action field carries a short hint for the dashboard (e.g. the
+# action the operator should take). It is additive and does not affect readers that
+# only know the four-state contract.
 #
 # The hook file uses a 300s TTL - consumers should fall back to other signals
 # (pane liveness, process monitoring) if the timestamp is stale.
@@ -194,10 +209,12 @@ wavemill_hook_write() {
   local event="$2"
   local detail="${3:-}"
   local agent="$4"
+  local next_action="${5:-}"
 
-  # Only write recognized states
+  # Only write recognized states; unknown states are silently dropped so that
+  # readers never see partial or malformed JSON from an unrecognized write.
   case "$state" in
-    working|idle|waiting|error) ;;
+    working|idle|waiting|blocked|approval-needed|policy-denied|error) ;;
     *) return 0 ;;
   esac
 
@@ -218,9 +235,11 @@ wavemill_hook_write() {
     --arg event "$event" \
     --arg detail "$detail" \
     --arg agent "$agent" \
+    --arg next_action "$next_action" \
     --argjson timestamp "$timestamp" \
     '$base + {state: $state, event: $event, agent: $agent, timestamp: $timestamp}
-     + (if $detail != "" then {detail: $detail} else {} end)' > "$tmp_file" 2>/dev/null; then
+     + (if $detail != "" then {detail: $detail} else {} end)
+     + (if $next_action != "" then {next_action: $next_action} else {} end)' > "$tmp_file" 2>/dev/null; then
     if mv "$tmp_file" "$hook_file" 2>/dev/null; then
       wavemill_hook_notify
       _wavemill_hook_emit_osc "$state" "$event" "$detail" "$agent" || true
