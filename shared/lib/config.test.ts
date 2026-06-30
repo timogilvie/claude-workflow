@@ -624,6 +624,70 @@ test('invalid model registry capability enum fails validation', () => {
   }
 });
 
+test('model registry native certification override passes schema validation', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      modelRegistry: {
+        models: {
+          'claude-sonnet-4-6': {
+            nativeCapability: {
+              certification: {
+                maxCertifiedPhase: 'patch',
+                certifiedAt: '2026-06-01T00:00:00.000Z',
+                certificationSuiteVersion: 'v1',
+                knownLimitations: ['long-context degraded'],
+              },
+            },
+          },
+        },
+      },
+    }));
+
+    const config = loadWavemillConfig(tmp);
+    assert.equal(
+      config.modelRegistry?.models?.['claude-sonnet-4-6']?.nativeCapability?.certification?.maxCertifiedPhase,
+      'patch',
+    );
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('model registry native certification override rejects unexpected fields', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      modelRegistry: {
+        models: {
+          'claude-sonnet-4-6': {
+            nativeCapability: {
+              certification: {
+                maxCertifiedPhase: 'patch',
+                extra: true,
+              },
+            },
+          },
+        },
+      },
+    }));
+
+    if (hasAjv) {
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /certification|validation failed/);
+    } else {
+      assert.doesNotThrow(() => {
+        loadWavemillConfig(tmp);
+      });
+    }
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
 test('invalid model registry multimodal shape fails validation', () => {
   const tmp = makeTempRepo();
   try {

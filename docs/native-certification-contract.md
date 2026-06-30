@@ -133,6 +133,24 @@ Reason codes are checked in the following order: `wrong-version` → `stale` →
 
 All exported symbols are available from `shared/lib/native-agent/certification/index.ts`.
 
+## Registry Mirror
+
+The model registry may carry a checked-in `nativeCapability.certification` snapshot with:
+
+- `maxCertifiedPhase`
+- `certifiedAt`
+- `certificationSuiteVersion`
+- `knownLimitations`
+
+This registry mirror is a derived summary of the on-disk artifact, not a replacement for the
+artifact itself. Its purpose is deterministic router and CI eligibility checks from registry data
+alone, without live recertification or artifact reads during ordinary routing decisions.
+
+Registry validation is split intentionally:
+
+- Structural consistency is enforced when registry/config data loads.
+- Freshness remains a runtime eligibility check derived from `certifiedAt + 60 days`.
+
 ### `checkCertificationEligibility(repoDir, provider, model, suiteVersion, requiredPhase, now?)`
 
 Combined load + evaluate. Reads the artifact from disk and evaluates eligibility in one call. All failure paths return `{ eligible: false, reason }` — never throws.

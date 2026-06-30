@@ -7,6 +7,12 @@ import {
   type NativeCapabilityOverride,
 } from './config.ts';
 import { filterDisabledModels } from './disabled-models.ts';
+import {
+  CERTIFICATION_TTL_DAYS,
+  PHASE_ORDER,
+  phaseSatisfies,
+  type CertificationPhase,
+} from './native-agent/certification/schema.ts';
 
 export type ModelClass = 'frontier' | 'strong_generalist' | 'fast_economy';
 export type RegistryTaskType = 'routing' | 'planning' | 'coding' | 'review' | 'classify';
@@ -43,6 +49,13 @@ export interface PiCompatFlags {
   [key: string]: unknown;
 }
 
+export interface NativeCertificationMetadata {
+  maxCertifiedPhase: CertificationPhase;
+  certifiedAt: string;
+  certificationSuiteVersion: string;
+  knownLimitations?: string[];
+}
+
 /**
  * Registry-native metadata for Pi-backed providers.
  *
@@ -58,6 +71,7 @@ export interface NativeCapability {
   readOnlyNative: ReadOnlyNativeCapability;
   compatFlags?: PiCompatFlags;
   limitations?: string[];
+  certification?: NativeCertificationMetadata;
 }
 
 export interface ModelCapabilities {
@@ -127,9 +141,26 @@ const DESCRIPTOR_STAGE_TO_TASK_TYPE: Record<DescriptorModelStage, RegistryTaskTy
 };
 const READ_ONLY_NATIVE_CAPABILITIES: readonly ReadOnlyNativeCapability[] = ['certified', 'unsupported', 'partial'];
 const PI_TRANSPORT_KINDS: readonly PiTransportKind[] = ['openai-responses', 'openai-completions'];
+const CERTIFICATION_PHASES: readonly CertificationPhase[] = PHASE_ORDER;
+const UNSAFE_CERTIFICATION_SEGMENT = /[/\\.\0]/;
 
 function cloneCompatFlags(compatFlags: PiCompatFlags | undefined): PiCompatFlags | undefined {
   return compatFlags ? { ...compatFlags } : undefined;
+}
+
+function cloneCertificationMetadata(
+  certification: NativeCertificationMetadata | undefined,
+): NativeCertificationMetadata | undefined {
+  if (!certification) {
+    return undefined;
+  }
+
+  return {
+    maxCertifiedPhase: certification.maxCertifiedPhase,
+    certifiedAt: certification.certifiedAt,
+    certificationSuiteVersion: certification.certificationSuiteVersion,
+    knownLimitations: certification.knownLimitations ? [...certification.knownLimitations] : undefined,
+  };
 }
 
 function cloneNativeCapability(
@@ -145,6 +176,7 @@ function cloneNativeCapability(
     readOnlyNative: capability.readOnlyNative,
     compatFlags: cloneCompatFlags(capability.compatFlags),
     limitations: capability.limitations ? [...capability.limitations] : undefined,
+    certification: cloneCertificationMetadata(capability.certification),
   };
 }
 
@@ -164,6 +196,19 @@ function mergeNativeCapability(
       : seed?.limitations
       ? [...seed.limitations]
       : undefined,
+    certification: override.certification
+      ? {
+        maxCertifiedPhase: override.certification.maxCertifiedPhase ?? seed?.certification?.maxCertifiedPhase,
+        certifiedAt: override.certification.certifiedAt ?? seed?.certification?.certifiedAt,
+        certificationSuiteVersion:
+          override.certification.certificationSuiteVersion ?? seed?.certification?.certificationSuiteVersion,
+        knownLimitations: override.certification.knownLimitations
+          ? [...override.certification.knownLimitations]
+          : seed?.certification?.knownLimitations
+          ? [...seed.certification.knownLimitations]
+          : undefined,
+      }
+      : cloneCertificationMetadata(seed?.certification),
   };
 
   return merged as NativeCapability;
@@ -749,6 +794,14 @@ function isPiTransportKindValue(value: unknown): value is PiTransportKind {
   return typeof value === 'string' && (PI_TRANSPORT_KINDS as readonly string[]).includes(value);
 }
 
+function isCertificationPhaseValue(value: unknown): value is CertificationPhase {
+  return typeof value === 'string' && (CERTIFICATION_PHASES as readonly string[]).includes(value);
+}
+
+function isSafeCertificationSuiteVersion(value: string): boolean {
+  return value.length > 0 && !UNSAFE_CERTIFICATION_SEGMENT.test(value);
+}
+
 export function validateNativeCapability(
   modelId: string,
   capabilities: Pick<ModelCapabilities, 'nativeCapability'>,
@@ -805,6 +858,66 @@ export function validateNativeCapability(
     throw new ModelValidationError(
       modelId,
       `model ${modelId}: nativeCapability.readOnlyNative=${nativeCapability.readOnlyNative} contradicts compat flags (derived: ${derived.capability})`,
+    );
+  }
+
+  const certification = nativeCapability.certification;
+  if (!certification) {
+    return;
+  }
+
+  if (!nativeCapability.nativeProvider) {
+    throw new ModelValidationError(
+      modelId,
+      `model ${modelId}: nativeCapability.certification requires nativeProvider`,
+    );
+  }
+
+  if (!nativeCapability.piTransportKind) {
+    throw new ModelValidationError(
+      modelId,
+      `model ${modelId}: nativeCapability.certification requires piTransportKind`,
+    );
+  }
+
+  if (nativeCapability.readOnlyNative === 'unsupported') {
+    throw new ModelValidationError(
+      modelId,
+      `model ${modelId}: nativeCapability.certification contradicts readOnlyNative=unsupported`,
+    );
+  }
+
+  if (!isCertificationPhaseValue(certification.maxCertifiedPhase)) {
+    throw new ModelValidationError(
+      modelId,
+      `model ${modelId}: nativeCapability.certification.maxCertifiedPhase must be one of ${CERTIFICATION_PHASES.join(', ')}`,
+    );
+  }
+
+  if (typeof certification.certifiedAt !== 'string' || certification.certifiedAt.length === 0 || Number.isNaN(Date.parse(certification.certifiedAt))) {
+    throw new ModelValidationError(
+      modelId,
+      `model ${modelId}: nativeCapability.certification.certifiedAt must be a valid ISO 8601 datetime`,
+    );
+  }
+
+  if (
+    typeof certification.certificationSuiteVersion !== 'string'
+    || !isSafeCertificationSuiteVersion(certification.certificationSuiteVersion)
+  ) {
+    throw new ModelValidationError(
+      modelId,
+      `model ${modelId}: nativeCapability.certification.certificationSuiteVersion must be a non-empty safe path segment`,
+    );
+  }
+
+  if (
+    certification.knownLimitations !== undefined
+    && (!Array.isArray(certification.knownLimitations) || !certification.knownLimitations.every((value) => typeof value === 'string'))
+  ) {
+    throw new ModelValidationError(
+      modelId,
+      `model ${modelId}: nativeCapability.certification.knownLimitations must be an array of strings`,
     );
   }
 }
@@ -1573,6 +1686,76 @@ export function isReadOnlyNativeCapable(
     return true;
   }
   return capability === 'partial' && opts?.allowPartial === true;
+}
+
+export type RegistryPhaseEligibilityReason = 'no-metadata' | 'stale' | 'phase-insufficient';
+
+export type RegistryPhaseEligibility =
+  | {
+    eligible: true;
+    modelId: string;
+    phase: CertificationPhase;
+    certifiedAt: string;
+    suiteVersion: string;
+  }
+  | {
+    eligible: false;
+    modelId: string;
+    phase: CertificationPhase;
+    reason: RegistryPhaseEligibilityReason;
+    certifiedAt?: string;
+    suiteVersion?: string;
+  };
+
+export function evaluateRegistryPhaseEligibility(input: {
+  modelId: string;
+  phase: CertificationPhase;
+  registry?: ModelRegistry;
+  now?: Date;
+}): RegistryPhaseEligibility {
+  const registry = input.registry ?? getEffectiveRegistry();
+  const certification = registry.models[input.modelId]?.nativeCapability?.certification;
+
+  if (!certification) {
+    return {
+      eligible: false,
+      modelId: input.modelId,
+      phase: input.phase,
+      reason: 'no-metadata',
+    };
+  }
+
+  const now = input.now ?? new Date();
+  const expiryMs = Date.parse(certification.certifiedAt) + CERTIFICATION_TTL_DAYS * 24 * 60 * 60 * 1000;
+  if (now.getTime() >= expiryMs) {
+    return {
+      eligible: false,
+      modelId: input.modelId,
+      phase: input.phase,
+      reason: 'stale',
+      certifiedAt: certification.certifiedAt,
+      suiteVersion: certification.certificationSuiteVersion,
+    };
+  }
+
+  if (!phaseSatisfies(certification.maxCertifiedPhase, input.phase)) {
+    return {
+      eligible: false,
+      modelId: input.modelId,
+      phase: input.phase,
+      reason: 'phase-insufficient',
+      certifiedAt: certification.certifiedAt,
+      suiteVersion: certification.certificationSuiteVersion,
+    };
+  }
+
+  return {
+    eligible: true,
+    modelId: input.modelId,
+    phase: input.phase,
+    certifiedAt: certification.certifiedAt,
+    suiteVersion: certification.certificationSuiteVersion,
+  };
 }
 
 export type NativeReadOnlyRoutingMode = 'task' | 'certification';
