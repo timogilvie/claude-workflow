@@ -51,3 +51,29 @@ export {
   checkSuiteVersion,
   validateCertification,
 } from './validator.ts';
+
+export type {
+  ScenarioClassification,
+  ScenarioCategory,
+  ScenarioContext,
+  ScenarioAssertion,
+  ScenarioAssertionOutcome,
+  HarnessUnsupportedReason,
+  HarnessNotRunReason,
+  CertificationScenario,
+} from './scenarios.ts';
+
+export { getDefaultScenarios } from './scenarios.ts';
+
+export type {
+  HarnessScenarioStatus,
+  HarnessScenarioResult,
+  HarnessReport,
+  RunScenariosOptions,
+} from './scenario-runner.ts';
+
+export {
+  runScenarios,
+  aggregateReport,
+  toArtifactScenario,
+} from './scenario-runner.ts';
