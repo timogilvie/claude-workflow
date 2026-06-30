@@ -725,7 +725,7 @@ test_coding_uses_expanded_route_over_bootstrap() {
 {
   "planner": "expanded-planner",
   "coder": "gpt-5.4",
-  "reviewer": "claude-sonnet-4-6",
+  "reviewer": "claude-sonnet-5",
   "planDepth": "deep",
   "codeDepth": "deep",
   "reviewMode": "static+llm",
@@ -775,7 +775,7 @@ EOF
 {
   \"planner\": \"expanded-planner\",
   \"coder\": \"gpt-5.4\",
-  \"reviewer\": \"claude-sonnet-4-6\",
+  \"reviewer\": \"claude-sonnet-5\",
   \"planDepth\": \"deep\",
   \"codeDepth\": \"deep\",
   \"reviewMode\": \"static+llm\",
@@ -844,7 +844,7 @@ EOF
 {
   \"planner\": \"expanded-planner\",
   \"coder\": \"gpt-5.4\",
-  \"reviewer\": \"claude-sonnet-4-6\",
+  \"reviewer\": \"claude-sonnet-5\",
   \"planDepth\": \"deep\",
   \"codeDepth\": \"deep\",
   \"reviewMode\": \"static+llm\",
@@ -911,7 +911,7 @@ EOF
 {
   \"planner\": \"expanded-planner\",
   \"coder\": \"gpt-5.4\",
-  \"reviewer\": \"claude-sonnet-4-6\",
+  \"reviewer\": \"claude-sonnet-5\",
   \"planDepth\": \"deep\",
   \"codeDepth\": \"deep\",
   \"reviewMode\": \"static+llm\",
@@ -1025,7 +1025,7 @@ EOF
 {
   \"planner\": \"expanded-planner\",
   \"coder\": \"gpt-5.4\",
-  \"reviewer\": \"claude-sonnet-4-6\",
+  \"reviewer\": \"claude-sonnet-5\",
   \"planDepth\": \"deep\",
   \"codeDepth\": \"deep\",
   \"reviewMode\": \"static+llm\",
@@ -1216,7 +1216,7 @@ test_resume_uses_expanded_phase_config_over_stale_state() {
 Resume from expanded lifecycle artifacts.
 EOF
   cat > "$repo/features/$slug/.routing-complete" <<'EOF'
-{"coder":"gpt-5.4","codeDepth":"deep","reviewer":"claude-sonnet-4-6","reviewMode":"static+llm","provenance":{"source":"expanded"}}
+{"coder":"gpt-5.4","codeDepth":"deep","reviewer":"claude-sonnet-5","reviewMode":"static+llm","provenance":{"source":"expanded"}}
 EOF
   cat > "$repo/features/$slug/.phase-config.json" <<'EOF'
 {
@@ -1226,7 +1226,7 @@ EOF
     "depth": "deep"
   },
   "review": {
-    "model": "claude-sonnet-4-6",
+    "model": "claude-sonnet-5",
     "agent": "claude",
     "mode": "static+llm"
   }
@@ -2175,7 +2175,7 @@ test_review_stage_challenge_honors_phase_config_coder() {
 {
   "planner": "expanded-planner",
   "coder": "gpt-5.4",
-  "reviewer": "claude-sonnet-4-6",
+  "reviewer": "claude-sonnet-5",
   "planDepth": "deep",
   "codeDepth": "deep",
   "reviewMode": "static+llm",
@@ -2190,7 +2190,7 @@ EOF
     get_task_meta() {
       local issue_key=\"\$1\" field=\"\$2\"
       case \"\$issue_key.\$field\" in
-        HOK-2272-REV.challengeModel) printf '%s\\n' 'claude-sonnet-4-6' ;;
+        HOK-2272-REV.challengeModel) printf '%s\\n' 'claude-sonnet-5' ;;
         HOK-2272-REV.challengeStage) printf '%s\\n' 'review' ;;
         *) printf '\\n' ;;
       esac
@@ -2217,7 +2217,7 @@ test_plan_stage_challenge_honors_phase_config_coder() {
 {
   "planner": "expanded-planner",
   "coder": "gpt-5.4",
-  "reviewer": "claude-sonnet-4-6",
+  "reviewer": "claude-sonnet-5",
   "planDepth": "deep",
   "codeDepth": "deep",
   "reviewMode": "static+llm",
@@ -2232,7 +2232,7 @@ EOF
     get_task_meta() {
       local issue_key=\"\$1\" field=\"\$2\"
       case \"\$issue_key.\$field\" in
-        HOK-2272-PLAN.challengeModel) printf '%s\\n' 'claude-sonnet-4-6' ;;
+        HOK-2272-PLAN.challengeModel) printf '%s\\n' 'claude-sonnet-5' ;;
         HOK-2272-PLAN.challengeStage) printf '%s\\n' 'plan' ;;
         *) printf '\\n' ;;
       esac
@@ -2259,7 +2259,7 @@ test_implementation_stage_challenge_applies_override() {
 {
   "planner": "expanded-planner",
   "coder": "gpt-5.4",
-  "reviewer": "claude-sonnet-4-6",
+  "reviewer": "claude-sonnet-5",
   "planDepth": "deep",
   "codeDepth": "deep",
   "reviewMode": "static+llm",
@@ -2276,7 +2276,7 @@ EOF
     get_task_meta() {
       local issue_key=\"\$1\" field=\"\$2\"
       case \"\$issue_key.\$field\" in
-        HOK-2272-IMPL.challengeModel) printf '%s\\n' 'claude-sonnet-4-6' ;;
+        HOK-2272-IMPL.challengeModel) printf '%s\\n' 'claude-sonnet-5' ;;
         HOK-2272-IMPL.challengeStage) printf '%s\\n' 'implementation' ;;
         HOK-2272-IMPL.challengeRole) printf '%s\\n' 'challenger' ;;
         *) printf '\\n' ;;
@@ -2286,8 +2286,8 @@ EOF
   tick="$(harness_run_tick "$repo" "$slug" "$issue" "$overrides")"
 
   check_eq "impl challenge: coding launches" "true" "$(kv_value "$tick" coding_launched)"
-  check_eq "impl challenge: challengeModel overrides phase-config coder" "claude-sonnet-4-6" "$(kv_value "$tick" coding_model)"
-  check_eq "impl challenge: coding-result.json records challengeModel" "claude-sonnet-4-6" "$(jq -r '.model // ""' "$repo/features/$slug/.coding-result.json")"
+  check_eq "impl challenge: challengeModel overrides phase-config coder" "claude-sonnet-5" "$(kv_value "$tick" coding_model)"
+  check_eq "impl challenge: coding-result.json records challengeModel" "claude-sonnet-5" "$(jq -r '.model // ""' "$repo/features/$slug/.coding-result.json")"
 }
 
 test_missing_challenge_stage_fails_safe_to_phase_config() {
@@ -2303,7 +2303,7 @@ test_missing_challenge_stage_fails_safe_to_phase_config() {
 {
   "planner": "expanded-planner",
   "coder": "gpt-5.4",
-  "reviewer": "claude-sonnet-4-6",
+  "reviewer": "claude-sonnet-5",
   "planDepth": "deep",
   "codeDepth": "deep",
   "reviewMode": "static+llm",
@@ -2323,7 +2323,7 @@ EOF
     get_task_meta() {
       local issue_key=\"\$1\" field=\"\$2\"
       case \"\$issue_key.\$field\" in
-        HOK-2272-MISS.challengeModel) printf '%s\\n' 'claude-sonnet-4-6' ;;
+        HOK-2272-MISS.challengeModel) printf '%s\\n' 'claude-sonnet-5' ;;
         *) printf '\\n' ;;
       esac
     }

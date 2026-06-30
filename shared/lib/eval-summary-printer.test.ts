@@ -123,7 +123,7 @@ describe('eval-summary-printer', () => {
           activeRoute: {
             coder: 'gpt-5.4',
             codeDepth: 'deep',
-            reviewer: 'claude-sonnet-4-6',
+            reviewer: 'claude-sonnet-5',
             reviewMode: 'static',
           },
           routeChanged: true,
@@ -131,7 +131,7 @@ describe('eval-summary-printer', () => {
       } as EvalRecord;
 
       expect(formatRouteProvenanceDisplay(record)).toBe(
-        ', route: expanded gpt-5.4/deep/claude-sonnet-4-6/static changed=true'
+        ', route: expanded gpt-5.4/deep/claude-sonnet-5/static changed=true'
       );
     });
   });
@@ -182,7 +182,7 @@ describe('eval-summary-printer', () => {
           activeRoute: {
             coder: 'gpt-5.4',
             codeDepth: 'deep',
-            reviewer: 'claude-sonnet-4-6',
+            reviewer: 'claude-sonnet-5',
             reviewMode: 'static',
           },
           routeChanged: true,
@@ -192,7 +192,7 @@ describe('eval-summary-printer', () => {
       printEvalSummary(record);
 
       expect(consoleLogSpy).toHaveBeenCalledWith(
-        'Post-completion eval: excellent (0.95), route: expanded gpt-5.4/deep/claude-sonnet-4-6/static changed=true — saved to eval store'
+        'Post-completion eval: excellent (0.95), route: expanded gpt-5.4/deep/claude-sonnet-5/static changed=true — saved to eval store'
       );
     });
 

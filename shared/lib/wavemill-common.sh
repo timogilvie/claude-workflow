@@ -270,7 +270,7 @@ load_config() {
       "_CFG_MERGE_QUEUE_CONFLICT_GROUPING_ENABLED=\($c.mergeQueue.conflictGroupingEnabled // true)",
       "_CFG_MERGE_QUEUE_SKIP_COOLDOWN_SECONDS=\($c.mergeQueue.skipCooldownSeconds // 60)",
       "_CFG_ROUTER_ENABLED=\($c.router.enabled // true)",
-      "_CFG_ROUTER_DEFAULT_MODEL=\($c.router.defaultModel // "claude-sonnet-4-6" | @sh)",
+      "_CFG_ROUTER_DEFAULT_MODEL=\($c.router.defaultModel // "claude-sonnet-5" | @sh)",
       "_CFG_AUTO_EVAL=\($c.autoEval // true)",
       "_CFG_SETUP_CMD=\($c.mill.setupCommand // "" | @sh)",
       "_CFG_DEFAULT_MAX_COST_USD=\(($c.mill.defaultMaxCostUsd // null) | if . == null then "" else tostring end | @sh)"

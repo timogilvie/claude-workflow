@@ -39,7 +39,7 @@ function baseConfig(mode: 'auto' | 'stage-aware' = 'auto') {
       agentMap: {
         'claude-opus-4-7': 'claude',
         'claude-opus-4-6': 'claude',
-        'claude-sonnet-4-6': 'claude',
+        'claude-sonnet-5': 'claude',
         'claude-haiku-4-5-20251001': 'claude',
         'gpt-5.3-codex': 'codex',
         'gpt-5.4': 'codex',
@@ -50,7 +50,7 @@ function baseConfig(mode: 'auto' | 'stage-aware' = 'auto') {
       pricing: {
         'claude-opus-4-7': { inputCostPerMTok: 15, outputCostPerMTok: 75, cacheWriteCostPerMTok: 18.75, cacheReadCostPerMTok: 1.5 },
         'claude-opus-4-6': { inputCostPerMTok: 15, outputCostPerMTok: 75, cacheWriteCostPerMTok: 18.75, cacheReadCostPerMTok: 1.5 },
-        'claude-sonnet-4-6': { inputCostPerMTok: 3, outputCostPerMTok: 15, cacheWriteCostPerMTok: 3.75, cacheReadCostPerMTok: 0.3 },
+        'claude-sonnet-5': { inputCostPerMTok: 3, outputCostPerMTok: 15, cacheWriteCostPerMTok: 3.75, cacheReadCostPerMTok: 0.3 },
         'claude-haiku-4-5-20251001': { inputCostPerMTok: 0.8, outputCostPerMTok: 4, cacheWriteCostPerMTok: 1, cacheReadCostPerMTok: 0.08 },
         'gpt-5.3-codex': { inputCostPerMTok: 1.75, outputCostPerMTok: 14, cacheWriteCostPerMTok: 2.1875, cacheReadCostPerMTok: 0.44 },
         'gpt-5.4': { inputCostPerMTok: 1.75, outputCostPerMTok: 14, cacheWriteCostPerMTok: 2.1875, cacheReadCostPerMTok: 0.44 },
@@ -73,7 +73,7 @@ function baseConfig(mode: 'auto' | 'stage-aware' = 'auto') {
           weaknesses: [],
           qualityScores: { planning: 90, coding: 90, review: 90, classify: 76, routing: 70 },
         },
-        'claude-sonnet-4-6': {
+        'claude-sonnet-5': {
           vendor: 'anthropic',
           class: 'strong_generalist',
           strengths: ['balanced'],
@@ -110,11 +110,11 @@ function baseConfig(mode: 'auto' | 'stage-aware' = 'auto') {
         },
       },
       ladders: {
-        planning: ['claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        coding: ['claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'gpt-5.3-codex', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        review: ['claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'gpt-5.3-codex', 'gpt-5.5', 'gpt-5.4'],
-        classify: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'gpt-5.3-codex', 'gpt-5.5', 'gpt-5.4'],
+        planning: ['claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
+        coding: ['claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'gpt-5.3-codex', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
+        review: ['claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
+        routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-5', 'gpt-5.3-codex', 'gpt-5.5', 'gpt-5.4'],
+        classify: ['claude-haiku-4-5-20251001', 'claude-sonnet-5', 'gpt-5.3-codex', 'gpt-5.5', 'gpt-5.4'],
       },
     },
   };
@@ -208,7 +208,7 @@ function makeRepo(mode: 'auto' | 'stage-aware' = 'auto') {
   writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify(baseConfig(mode)));
   writeFileSync(join(repoDir, '.wavemill', 'evals', 'evals.jsonl'), [
     JSON.stringify(makeEvalRecord('1', 'gpt-5.3-codex', '2026-04-20T00:00:00.000Z')),
-    JSON.stringify(makeEvalRecord('2', 'claude-sonnet-4-6', '2026-04-21T00:00:00.000Z')),
+    JSON.stringify(makeEvalRecord('2', 'claude-sonnet-5', '2026-04-21T00:00:00.000Z')),
     JSON.stringify(makeEvalRecord('3', 'claude-haiku-4-5-20251001', '2026-04-22T00:00:00.000Z')),
   ].join('\n') + '\n');
   clearConfigCache(repoDir);

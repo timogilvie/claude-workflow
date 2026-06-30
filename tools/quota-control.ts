@@ -58,7 +58,7 @@ function resolveModelId(modelInput: string, repoDir?: string): string {
 
   const normalized = requested.toLowerCase();
   const aliases: Record<string, string> = {
-    sonnet: 'claude-sonnet-4-6',
+    sonnet: 'claude-sonnet-5',
     opus: 'claude-opus-4-7',
     haiku: 'claude-haiku-4-5-20251001',
   };
@@ -106,7 +106,7 @@ runTool({
     'npx tsx tools/quota-control.ts status',
     'npx tsx tools/quota-control.ts set sonnet degrading --reason "known peak window"',
     'npx tsx tools/quota-control.ts clear sonnet',
-    'npx tsx tools/quota-control.ts estimate claude-sonnet-4-6',
+    'npx tsx tools/quota-control.ts estimate claude-sonnet-5',
   ],
   additionalHelp: `Subcommands:
   status                   Show current snapshot and active manual overrides

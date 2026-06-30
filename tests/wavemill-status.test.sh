@@ -251,7 +251,7 @@ fi
 cat > "$WORKTREES_DIR/plan-task/features/plan-task/routing.jsonl" <<'EOF'
 {"role":"planner","requested":"opus","resolved":"claude-opus-4-7"}
 {"role":"coder","requested":"inherit","resolved":"claude-opus-4-7","inheritedFrom":"planner"}
-{"role":"reviewer","requested":"sonnet","resolved":"claude-sonnet-4-6","fallback":"claude-haiku-4-5","fallbackReason":"quota-exhausted"}
+{"role":"reviewer","requested":"sonnet","resolved":"claude-sonnet-5","fallback":"claude-haiku-4-5","fallbackReason":"quota-exhausted"}
 EOF
 
 OUTPUT_ROUTING="$TMP_DIR/output-routing.txt"
@@ -260,7 +260,7 @@ run_render "$STATE_FILE_ONE" "$WORKTREES_DIR" "$BEHAVIOR_ONE" "$OUTPUT_ROUTING"
 if grep -q 'planner: requested=opus → resolved=claude-opus-4-7' "$OUTPUT_ROUTING" \
   && grep -q 'execution telemetry:' "$OUTPUT_ROUTING" \
   && grep -q 'coder: requested=inherit (from planner) → resolved=claude-opus-4-7' "$OUTPUT_ROUTING" \
-  && grep -q 'reviewer: requested=sonnet → resolved=claude-sonnet-4-6' "$OUTPUT_ROUTING" \
+  && grep -q 'reviewer: requested=sonnet → resolved=claude-sonnet-5' "$OUTPUT_ROUTING" \
   && grep -q 'fallback=claude-haiku-4-5 (reason: quota-exhausted)' "$OUTPUT_ROUTING"; then
   pass "awaiting approval labels runtime routing as execution telemetry"
 else
@@ -273,15 +273,15 @@ cat > "$WORKTREES_DIR/plan-task/features/plan-task/.planning-result.json" <<'EOF
   "stage": "planning",
   "status": "completed",
   "agent": "codex",
-  "model": "claude-sonnet-4-6"
+  "model": "claude-sonnet-5"
 }
 EOF
 
 cat > "$WORKTREES_DIR/plan-task/features/plan-task/.initial-route.json" <<'EOF'
 {
-  "planner": "claude-sonnet-4-6",
+  "planner": "claude-sonnet-5",
   "coder": "gpt-5.4",
-  "reviewer": "claude-sonnet-4-6"
+  "reviewer": "claude-sonnet-5"
 }
 EOF
 
@@ -289,7 +289,7 @@ cat > "$WORKTREES_DIR/plan-task/features/plan-task/.post-expansion-route.json" <
 {
   "planner": "claude-opus-4-7",
   "coder": "gpt-5.4",
-  "reviewer": "claude-sonnet-4-6"
+  "reviewer": "claude-sonnet-5"
 }
 EOF
 
@@ -297,7 +297,7 @@ cat > "$WORKTREES_DIR/plan-task/features/plan-task/.routing-complete" <<'EOF'
 {
   "planner": "claude-opus-4-7",
   "coder": "gpt-5.4",
-  "reviewer": "claude-sonnet-4-6",
+  "reviewer": "claude-sonnet-5",
   "planDepth": "light",
   "codeDepth": "medium",
   "reviewMode": "static"
@@ -317,7 +317,7 @@ cat > "$WORKTREES_DIR/plan-task/features/plan-task/.phase-config.json" <<'EOF'
     "depth": "medium"
   },
   "review": {
-    "model": "claude-sonnet-4-6",
+    "model": "claude-sonnet-5",
     "agent": "claude",
     "mode": "static"
   }
@@ -327,10 +327,10 @@ EOF
 OUTPUT_ROUTE_ARTIFACT="$TMP_DIR/output-route-artifact.txt"
 run_render "$STATE_FILE_ONE" "$WORKTREES_DIR" "$BEHAVIOR_ONE" "$OUTPUT_ROUTE_ARTIFACT"
 
-if grep -q 'executed planning: codex / claude-sonnet-4-6' "$OUTPUT_ROUTE_ARTIFACT" \
-  && grep -q 'bootstrap route: p=claude-sonnet-4-6, c=gpt-5.4' "$OUTPUT_ROUTE_ARTIFACT" \
+if grep -q 'executed planning: codex / claude-sonnet-5' "$OUTPUT_ROUTE_ARTIFACT" \
+  && grep -q 'bootstrap route: p=claude-sonnet-5, c=gpt-5.4' "$OUTPUT_ROUTE_ARTIFACT" \
   && grep -q 'recommended after expansion: p=claude-opus-4-7' "$OUTPUT_ROUTE_ARTIFACT" \
-  && grep -q 'active remaining route: c=gpt-5.4, r=claude-sonnet-4-6' "$OUTPUT_ROUTE_ARTIFACT"; then
+  && grep -q 'active remaining route: c=gpt-5.4, r=claude-sonnet-5' "$OUTPUT_ROUTE_ARTIFACT"; then
   pass "awaiting approval distinguishes executed planning from expanded route drift"
 else
   fail "route lifecycle detail is missing from awaiting approval output"
@@ -338,16 +338,16 @@ fi
 
 cat > "$WORKTREES_DIR/plan-task/features/plan-task/.post-expansion-route.json" <<'EOF'
 {
-  "planner": "claude-sonnet-4-6",
+  "planner": "claude-sonnet-5",
   "coder": "gpt-5.4",
-  "reviewer": "claude-sonnet-4-6"
+  "reviewer": "claude-sonnet-5"
 }
 EOF
 
 OUTPUT_ROUTE_NO_DRIFT="$TMP_DIR/output-route-no-drift.txt"
 run_render "$STATE_FILE_ONE" "$WORKTREES_DIR" "$BEHAVIOR_ONE" "$OUTPUT_ROUTE_NO_DRIFT"
 
-if grep -q 'executed planning: codex / claude-sonnet-4-6' "$OUTPUT_ROUTE_NO_DRIFT" \
+if grep -q 'executed planning: codex / claude-sonnet-5' "$OUTPUT_ROUTE_NO_DRIFT" \
   && ! grep -q 'recommended after expansion:' "$OUTPUT_ROUTE_NO_DRIFT"; then
   pass "awaiting approval omits expanded planner recommendation when there is no planner drift"
 else
