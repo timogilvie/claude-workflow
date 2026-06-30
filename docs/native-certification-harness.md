@@ -227,13 +227,86 @@ if (report.liveCertifiable) {
 
 ---
 
+## Operator Commands
+
+### `wavemill native-agent models report`
+
+Lists certification status for every native-capable model in the registry. Reads from registry metadata and on-disk artifacts only — never triggers a paid provider call.
+
+```bash
+# Human-readable table
+wavemill native-agent models report
+
+# Machine-readable JSON (suitable for CI)
+wavemill native-agent models report --json
+
+# Filter by provider
+wavemill native-agent models report --provider openai
+
+# Filter by model
+wavemill native-agent models report --model gpt-4o --json
+```
+
+**Output states:**
+
+| State | Meaning |
+|---|---|
+| `ready` | Fresh, passing certification; satisfies ≥1 router stage |
+| `uncertified` | `certified` capability but no valid on-disk artifact |
+| `stale` | Artifact present but TTL-expired or suite-version mismatch |
+| `unsupported` | `readOnlyNative: 'unsupported'` — model never intended for native use |
+| `certification-only` | `readOnlyNative: 'partial'` — routable in cert mode only, not task mode |
+
+**Exit codes:** `0` always on successful listing (even with uncertified rows); `2` on invalid input.
+
+---
+
+### `wavemill native-agent certify`
+
+Runs the certification scenario harness for a specific provider/model/phase. On success (non-dry-run), writes a `NativeCertificationArtifact` to disk.
+
+```bash
+# Dry run — validate without persisting (safe offline)
+wavemill native-agent certify --provider openai --model gpt-4o --phase read-only --dry-run
+
+# Live certification — runs scenarios and writes artifact on success
+wavemill native-agent certify --provider openai --model gpt-4o --phase read-only
+
+# JSON output (artifact path + scenario outcomes)
+wavemill native-agent certify --provider openai --model gpt-4o --phase read-only --json
+
+# OpenRouter example
+wavemill native-agent certify --provider openrouter --model openai/gpt-4o --phase read-only --dry-run
+```
+
+**Flags:**
+
+| Flag | Required | Default | Description |
+|---|---|---|---|
+| `--provider` | yes | — | `openai` or `openrouter` |
+| `--model` | yes | — | Model ID (e.g. `gpt-4o`) |
+| `--phase` | yes | — | `read-only`, `patch`, or `workflow` |
+| `--dry-run` | no | false | Run scenarios without writing an artifact |
+| `--json` | no | false | Machine-readable JSON output |
+| `--repo` | no | cwd | Repository root |
+
+**Exit codes:** `0` harness passed; `1` harness failed or model unsupported; `2` invalid input.
+
+**Dry-run contract:** A dry-run report is never `liveCertifiable`. No artifact is written regardless of scenario outcomes. Use `--dry-run` in CI pipelines to validate harness connectivity without spending quota.
+
+---
+
 ## Source of truth
 
 | File | Role |
 |---|---|
-| `shared/lib/native-agent/certification/scenarios.ts` | Catalog types, scenario definitions, assertion functions |
+| `shared/lib/native-agent/certification/scenarios.ts` | Catalog types, scenario definitions, assertion functions, `DEFAULT_CERTIFICATION_SUITE_VERSION` |
 | `shared/lib/native-agent/certification/scenario-runner.ts` | Runner, aggregator, artifact projection |
+| `shared/lib/native-agent/certification/report.ts` | Report builder, serializer, table renderer |
 | `shared/lib/native-agent/certification/scenarios.test.ts` | Catalog integrity tests |
 | `shared/lib/native-agent/certification/scenario-runner.test.ts` | Runner behavior tests |
+| `shared/lib/native-agent/certification/report.test.ts` | Report builder tests |
 | `shared/lib/native-agent/certification/index.ts` | Barrel re-exports |
+| `tools/native-agent-models-report.ts` | `wavemill native-agent models report` CLI |
+| `tools/native-agent-certify.ts` | `wavemill native-agent certify` CLI |
 | `docs/native-certification-contract.md` | Persisted artifact contract (HOK-2392) |

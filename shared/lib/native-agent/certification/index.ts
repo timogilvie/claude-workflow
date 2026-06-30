@@ -64,7 +64,21 @@ export type {
   CertificationScenario,
 } from './scenarios.ts';
 
-export { getDefaultScenarios } from './scenarios.ts';
+export { getDefaultScenarios, DEFAULT_CERTIFICATION_SUITE_VERSION } from './scenarios.ts';
+
+export type {
+  ModelCertificationState,
+  ScenarioOutcome,
+  ModelCertificationReportRow,
+  BuildModelCertificationReportOptions,
+  SerializedReport,
+} from './report.ts';
+
+export {
+  buildModelCertificationReport,
+  serializeReport,
+  renderReportTable,
+} from './report.ts';
 
 export type {
   HarnessScenarioStatus,

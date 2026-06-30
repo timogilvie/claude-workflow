@@ -72,6 +72,20 @@ ${GREEN}Commands:${NC}
              - Select one to decompose with Claude
              - Creates phased milestones and issues in Linear
 
+  ${CYAN}native-agent${NC}  Manage native provider certification and model reporting
+             Subcommands:
+               ${CYAN}wavemill native-agent models report${NC}
+                          List certification status, phase eligibility, suite
+                          version, age, and known limitations for all
+                          native-capable models. Never triggers live provider calls.
+                          Options: --json, --provider <p>, --model <m>, --repo <dir>
+               ${CYAN}wavemill native-agent certify${NC}
+                          Run the certification scenario harness for a specific
+                          provider/model/phase. Persists a NativeCertificationArtifact
+                          on success (non-dry-run). Options: --provider <p> (required),
+                          --model <m> (required), --phase <phase> (required),
+                          --dry-run, --json, --repo <dir>
+
   ${CYAN}scaffold${NC}  Scaffold reusable CI workflows into another repository
              Subcommands:
                ${CYAN}wavemill scaffold migrate-dryrun <target>${NC}
@@ -1116,6 +1130,38 @@ run_plan() {
   exec "$plan_script" "$@"
 }
 
+run_native_agent() {
+  local subcommand="${1:-}"
+  shift || true
+
+  case "$subcommand" in
+    models)
+      local sub2="${1:-}"
+      shift || true
+      case "$sub2" in
+        report)
+          exec npx tsx "$TOOLS_DIR/native-agent-models-report.ts" "$@"
+          ;;
+        *)
+          echo "Usage: wavemill native-agent models report [--json] [--provider <p>] [--model <m>] [--repo <dir>]" >&2
+          exit 1
+          ;;
+      esac
+      ;;
+    certify)
+      exec npx tsx "$TOOLS_DIR/native-agent-certify.ts" "$@"
+      ;;
+    *)
+      echo "Usage: wavemill native-agent <subcommand> [options]" >&2
+      echo "" >&2
+      echo "Subcommands:" >&2
+      echo "  models report    List certification status for all native-capable models" >&2
+      echo "  certify          Run the certification harness for a provider/model/phase" >&2
+      exit 1
+      ;;
+  esac
+}
+
 run_scaffold() {
   local subcommand="${1:-}"
 
@@ -1367,6 +1413,10 @@ case "${1:-}" in
     run_preflight_checks
     shift
     run_plan "$@"
+    ;;
+  native-agent)
+    shift
+    run_native_agent "$@"
     ;;
   scaffold)
     shift
