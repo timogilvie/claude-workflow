@@ -15,6 +15,7 @@ import { resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import { errorMessage } from './error-utils.ts';
 import { parseModelSelector } from './model-registry.ts';
+import type { CertificationPhase } from './native-agent/certification/schema.ts';
 import type {
   AgentType,
   LatencyTier,
@@ -154,12 +155,20 @@ export interface PiCompatFlagsOverride {
   [key: string]: unknown;
 }
 
+export interface NativeCertificationMetadataOverride {
+  maxCertifiedPhase?: CertificationPhase;
+  certifiedAt?: string;
+  certificationSuiteVersion?: string;
+  knownLimitations?: string[];
+}
+
 export interface NativeCapabilityOverride {
   nativeProvider?: NativeProviderName;
   piTransportKind?: PiTransportKind;
   readOnlyNative?: ReadOnlyNativeCapability;
   compatFlags?: PiCompatFlagsOverride;
   limitations?: string[];
+  certification?: NativeCertificationMetadataOverride;
 }
 
 export interface ModelCapabilitiesOverride {
