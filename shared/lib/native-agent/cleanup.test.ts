@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, describe, it } from 'node:test';
@@ -93,6 +93,21 @@ describe('cleanup', () => {
     const classified = await classifyTree(repo, ['tracked.ts'], []);
     assert.equal(classified.finalTreeState, 'clean');
     assert.equal(readFileSync(path.join(repo, 'unrelated.ts'), 'utf8'), 'const unrelated = 2;\n');
+  });
+
+  it('classifies tracked paths containing spaces', async () => {
+    const repo = createRepo('cleanup-spaced-path-');
+    const spacedPath = 'docs/my notes.md';
+    mkdirSync(path.join(repo, 'docs'));
+    writeFileSync(path.join(repo, spacedPath), 'original\n', 'utf8');
+    execFileSync('git', ['add', spacedPath], { cwd: repo, stdio: 'ignore' });
+    execFileSync('git', ['commit', '-m', 'init'], { cwd: repo, stdio: 'ignore' });
+    writeFileSync(path.join(repo, spacedPath), 'changed\n', 'utf8');
+
+    const classified = await classifyTree(repo, [spacedPath], []);
+
+    assert.equal(classified.finalTreeState, 'dirty-unrecoverable');
+    assert.equal(classified.cleanupDecision, 'left-in-place');
   });
 
   it('reports non-git worktrees as dirty-unrecoverable without throwing', async () => {

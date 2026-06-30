@@ -293,24 +293,32 @@ async function gitStatusPaths(
           continue;
         }
         if (token.startsWith('1 ')) {
-          const parts = token.split(' ');
-          dirtyPaths.add(normalizeTrackedPath(parts[8] ?? ''));
+          dirtyPaths.add(normalizeTrackedPath(porcelainPath(token, 8)));
           continue;
         }
         if (token.startsWith('2 ')) {
-          const parts = token.split(' ');
-          dirtyPaths.add(normalizeTrackedPath(parts[9] ?? ''));
+          dirtyPaths.add(normalizeTrackedPath(porcelainPath(token, 9)));
           index += 1;
           continue;
         }
         if (token.startsWith('u ')) {
-          const parts = token.split(' ');
-          dirtyPaths.add(normalizeTrackedPath(parts[10] ?? ''));
+          dirtyPaths.add(normalizeTrackedPath(porcelainPath(token, 10)));
         }
       }
       resolve({ dirtyPaths });
     });
   });
+}
+
+function porcelainPath(token: string, metadataFields: number): string {
+  let cursor = -1;
+  for (let field = 0; field < metadataFields; field += 1) {
+    cursor = token.indexOf(' ', cursor + 1);
+    if (cursor === -1) {
+      return '';
+    }
+  }
+  return token.slice(cursor + 1);
 }
 
 export async function classifyTree(
