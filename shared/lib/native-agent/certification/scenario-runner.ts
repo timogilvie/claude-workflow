@@ -26,10 +26,12 @@
 import type { ScenarioResult } from './schema.ts';
 import type {
   CertificationScenario,
+  FailureClass,
   HarnessNotRunReason,
   HarnessUnsupportedReason,
   ScenarioCategory,
   ScenarioClassification,
+  ScenarioAssertionOutcome,
 } from './scenarios.ts';
 import type { ModelRegistry, NativeProviderName, PiTransportKind } from '../../model-registry.ts';
 import type { CertificationPhase } from './schema.ts';
@@ -49,6 +51,9 @@ export interface HarnessScenarioResult {
   detail?: string;
   reason?: HarnessUnsupportedReason | HarnessNotRunReason;
   knownLimitation?: string;
+  attempts?: number;
+  finalAttemptStatus?: Exclude<ScenarioAssertionOutcome['kind'], never>;
+  failureClass?: FailureClass;
   durationMs: number;
 }
 
@@ -76,6 +81,25 @@ export interface RunScenariosOptions {
   dryRun?: boolean;
   /** Test injection point for timing; defaults to performance.now(). */
   now?: () => number;
+  /** Bounded retry policy for live flake handling. Defaults to 3 total attempts. */
+  retryPolicy?: { maxAttempts?: number };
+  /** Injectable hook for future backoff behavior; defaults to a no-op. */
+  sleep?: (ms: number) => Promise<void>;
+}
+
+export function classifyAttempt(outcome: ScenarioAssertionOutcome):
+  | { kind: 'pass' }
+  | { kind: 'classified'; failureClass: FailureClass } {
+  switch (outcome.kind) {
+    case 'pass':
+      return { kind: 'pass' };
+    case 'fail':
+      return { kind: 'classified', failureClass: 'deterministic_failure' };
+    case 'provider-flake':
+      return { kind: 'classified', failureClass: 'provider_flake' };
+    case 'unsupported':
+      return { kind: 'classified', failureClass: 'unsupported_capability' };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -106,6 +130,11 @@ export async function runScenarios(opts: RunScenariosOptions): Promise<HarnessRe
     throw new TypeError('runScenarios: opts.transport must be a non-empty string');
   }
 
+  const maxAttempts = opts.retryPolicy?.maxAttempts ?? 3;
+  if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
+    throw new TypeError('runScenarios: retryPolicy.maxAttempts must be an integer >= 1');
+  }
+
   const ctx = {
     provider: opts.provider,
     model: opts.model,
@@ -115,6 +144,7 @@ export async function runScenarios(opts: RunScenariosOptions): Promise<HarnessRe
 
   const timer = opts.now ?? (() => performance.now());
   const dryRun = opts.dryRun ?? false;
+  const sleep = opts.sleep ?? (async (_ms: number) => {});
   const results: HarnessScenarioResult[] = [];
 
   for (const scenario of opts.scenarios) {
@@ -144,32 +174,50 @@ export async function runScenarios(opts: RunScenariosOptions): Promise<HarnessRe
         status: 'fail',
         detail: `Deterministic scenario "${scenario.id}" has no assertion function`,
         knownLimitation: scenario.knownLimitation,
+        attempts: 1,
+        finalAttemptStatus: 'fail',
+        failureClass: 'deterministic_failure',
         durationMs: timer() - start,
       });
       continue;
     }
 
-    let outcome: Awaited<ReturnType<NonNullable<typeof scenario.assertion>>>;
-    try {
-      outcome = await scenario.assertion(ctx);
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      results.push({
-        scenarioId: scenario.id,
-        category: scenario.category,
-        classification: scenario.classification,
-        phase: scenario.phase,
-        status: 'fail',
-        detail: message,
-        knownLimitation: scenario.knownLimitation,
-        durationMs: timer() - start,
-      });
-      continue;
+    let attempts = 0;
+    let finalOutcome: ScenarioAssertionOutcome | undefined;
+    let finalFailureClass: FailureClass | undefined;
+
+    while (attempts < maxAttempts) {
+      attempts += 1;
+
+      let outcome: ScenarioAssertionOutcome;
+      try {
+        outcome = await scenario.assertion(ctx);
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        finalOutcome = { kind: 'fail', detail: message };
+        finalFailureClass = 'deterministic_failure';
+        break;
+      }
+
+      finalOutcome = outcome;
+      const classified = classifyAttempt(outcome);
+      if (classified.kind === 'pass') {
+        finalFailureClass = undefined;
+        break;
+      }
+
+      finalFailureClass = classified.failureClass;
+      if (classified.failureClass !== 'provider_flake' || attempts >= maxAttempts) {
+        break;
+      }
+
+      await sleep(0);
     }
 
     const durationMs = timer() - start;
+    const finalAttemptStatus = finalOutcome?.kind;
 
-    switch (outcome.kind) {
+    switch (finalOutcome?.kind) {
       case 'pass':
         results.push({
           scenarioId: scenario.id,
@@ -178,6 +226,8 @@ export async function runScenarios(opts: RunScenariosOptions): Promise<HarnessRe
           phase: scenario.phase,
           status: 'pass',
           knownLimitation: scenario.knownLimitation,
+          attempts,
+          finalAttemptStatus,
           durationMs,
         });
         break;
@@ -189,8 +239,27 @@ export async function runScenarios(opts: RunScenariosOptions): Promise<HarnessRe
           classification: scenario.classification,
           phase: scenario.phase,
           status: 'fail',
-          detail: outcome.detail,
+          detail: finalOutcome.detail,
           knownLimitation: scenario.knownLimitation,
+          attempts,
+          finalAttemptStatus,
+          failureClass: finalFailureClass,
+          durationMs,
+        });
+        break;
+
+      case 'provider-flake':
+        results.push({
+          scenarioId: scenario.id,
+          category: scenario.category,
+          classification: scenario.classification,
+          phase: scenario.phase,
+          status: 'fail',
+          detail: finalOutcome.detail,
+          knownLimitation: scenario.knownLimitation,
+          attempts,
+          finalAttemptStatus,
+          failureClass: finalFailureClass,
           durationMs,
         });
         break;
@@ -202,9 +271,12 @@ export async function runScenarios(opts: RunScenariosOptions): Promise<HarnessRe
           classification: scenario.classification,
           phase: scenario.phase,
           status: 'unsupported',
-          reason: outcome.reason,
-          detail: outcome.detail,
+          reason: finalOutcome.reason,
+          detail: finalOutcome.detail,
           knownLimitation: scenario.knownLimitation,
+          attempts,
+          finalAttemptStatus,
+          failureClass: finalFailureClass,
           durationMs,
         });
         break;
@@ -291,6 +363,16 @@ export function toArtifactScenario(result: HarnessScenarioResult): ScenarioResul
     scenarioId: result.scenarioId,
     passed,
   };
+  if (result.attempts !== undefined) {
+    scenario.attempts = result.attempts;
+    scenario.retryCount = Math.max(0, result.attempts - 1);
+  }
+  if (result.finalAttemptStatus !== undefined) {
+    scenario.finalAttemptStatus = result.finalAttemptStatus;
+  }
+  if (result.failureClass !== undefined) {
+    scenario.failureClass = result.failureClass;
+  }
   if (result.detail && !passed) {
     scenario.failureMessage = result.detail;
   }

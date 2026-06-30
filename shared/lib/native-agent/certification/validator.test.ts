@@ -65,6 +65,21 @@ describe('validateCertification', () => {
     assert.ok(result.ok);
   });
 
+  it('accepts artifacts that omit the new retry-accounting fields', () => {
+    const record: NativeCertificationArtifact = {
+      schemaVersion: CERTIFICATION_SCHEMA_VERSION,
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-6',
+      phase: 'read-only',
+      suiteVersion: 'v1',
+      certifiedAt: '2026-06-01T00:00:00.000Z',
+      scenarios: [{ scenarioId: 'list-files', passed: true }],
+    };
+
+    const result = validateCertification(record, defaultExpectations(record));
+    assert.ok(result.ok);
+  });
+
   it('stale-artifact fixture (derived TTL) → expired error with source=derived', () => {
     const record = loadFixture('stale-artifact.json');
     const result = validateCertification(record, defaultExpectations(record));
@@ -322,7 +337,7 @@ describe('validateCertification', () => {
 
   it('schema version mismatch → schema-version-mismatch error', () => {
     const record = loadFixture('valid-read-only.json');
-    const bad = { ...record, schemaVersion: 2 as 1 };
+    const bad = { ...record, schemaVersion: 1 as 2 };
     const result = validateCertification(bad, defaultExpectations(record));
     assert.equal(result.ok, false);
     if (!result.ok) {

@@ -11,7 +11,7 @@ This document describes the deterministic certification scenario harness that sh
 
 ## Relationship to the Certification Contract
 
-The harness is a **downstream consumer** of the contract defined in HOK-2392. It does **not** mutate `schema.ts`, `schema.json`, `loader.ts`, or `store.ts`. The persisted `NativeCertificationArtifact` shape and its `ScenarioResult` sub-records are unchanged; the harness introduces richer in-memory types (`HarnessScenarioResult`, `HarnessReport`) and projects down to the persisted shape via `toArtifactScenario()` when a live cert is written.
+The harness is a **downstream consumer** of the contract defined in HOK-2392. It keeps the persisted contract additive and compatible while extending `ScenarioResult` with retry-accounting fields for live-certification reporting. The harness also introduces richer in-memory types (`HarnessScenarioResult`, `HarnessReport`) and projects them to the persisted shape via `toArtifactScenario()` when a live cert is written.
 
 ---
 
@@ -100,6 +100,7 @@ interface RunScenariosOptions {
   scenarios: CertificationScenario[];
   registry?: ModelRegistry;       // forwarded to validateToolCompat
   dryRun?: boolean;               // default false
+  retryPolicy?: { maxAttempts?: number }; // default 3 total attempts
 }
 ```
 
@@ -134,6 +135,38 @@ interface HarnessReport {
 `harnessPassed = (fail === 0 && unsupported === 0)`.
 
 Every `unsupported` result is unexpected — if a scenario is expected to be unsupported for a given context, its catalog entry should be `live-judged` (→ `not-run`) rather than `deterministic` (→ `unsupported`). The runner never silently drops an unsupported result.
+
+## Retry & flake accounting
+
+Deterministic scenarios can now return four assertion outcomes:
+
+- `pass`
+- `fail`
+- `provider-flake`
+- `unsupported`
+
+Only `provider-flake` is retry-eligible. The runner applies a bounded retry policy with `maxAttempts: 3` by default. Deterministic failures and unsupported capabilities short-circuit immediately and can never be retried into a pass result.
+
+Failure classification is surfaced separately from top-level status:
+
+- `fail` + `failureClass: 'deterministic_failure'`
+- `fail` + `failureClass: 'provider_flake'` when retries exhaust
+- `unsupported` + `failureClass: 'unsupported_capability'`
+
+Persisted `ScenarioResult` fields now include:
+
+- `attempts` — total attempts executed
+- `finalAttemptStatus` — final assertion outcome kind
+- `failureClass` — deterministic failure vs provider flake vs unsupported capability
+- `retryCount` — legacy field, still populated as `attempts - 1`
+
+To mark a transient provider issue from an assertion, return:
+
+```ts
+return { kind: 'provider-flake', detail: 'provider returned malformed transient response' };
+```
+
+The persisted certification schema version is now `2`.
 
 ---
 
@@ -189,8 +222,8 @@ if (report.liveCertifiable) {
 ```
 
 `toArtifactScenario(result)` maps any `HarnessScenarioResult` to a `ScenarioResult` shape:
-- `pass` → `{ scenarioId, passed: true }`
-- `fail` / `unsupported` / `not-run` → `{ scenarioId, passed: false, failureMessage: result.detail }`
+- `pass` → `{ scenarioId, passed: true, attempts, finalAttemptStatus: 'pass', retryCount }`
+- `fail` / `unsupported` / `not-run` → `{ scenarioId, passed: false, failureMessage: result.detail, attempts?, finalAttemptStatus?, failureClass?, retryCount? }`
 
 ---
 

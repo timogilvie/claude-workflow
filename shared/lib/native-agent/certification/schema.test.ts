@@ -64,8 +64,8 @@ function writeArtifact(repoDir: string, provider: string, model: string, suiteVe
 // ─── Schema constants ──────────────────────────────────────────────────────
 
 describe('schema constants', () => {
-  it('exports CERTIFICATION_SCHEMA_VERSION as 1', () => {
-    assert.equal(CERTIFICATION_SCHEMA_VERSION, 1);
+  it('exports CERTIFICATION_SCHEMA_VERSION as 2', () => {
+    assert.equal(CERTIFICATION_SCHEMA_VERSION, 2);
   });
 
   it('exports TTL as 60 days', () => {
@@ -89,10 +89,66 @@ describe('schema.json', () => {
       expiresAt: '2099-12-31T23:59:59.999Z',
       knownLimitations: ['does not support workflow tools'],
       totalRetryCount: 1,
-      scenarios: [{ scenarioId: 'list-files', passed: true, retryCount: 1 }],
+      scenarios: [{
+        scenarioId: 'list-files',
+        passed: true,
+        retryCount: 1,
+        attempts: 2,
+        finalAttemptStatus: 'pass',
+      }],
     });
 
     assert.equal(validateCertificationSchema(artifact), true, JSON.stringify(validateCertificationSchema.errors));
+  });
+
+  it('accepts new retry-accounting fields on a scenario result', () => {
+    const artifact = makeValidArtifact({
+      scenarios: [{
+        scenarioId: 'list-files',
+        passed: true,
+        retryCount: 2,
+        attempts: 3,
+        finalAttemptStatus: 'pass',
+      }],
+    });
+
+    assert.equal(validateCertificationSchema(artifact), true, JSON.stringify(validateCertificationSchema.errors));
+  });
+
+  it('rejects invalid failureClass values', () => {
+    const artifact = makeValidArtifact({
+      scenarios: [{
+        scenarioId: 'list-files',
+        passed: false,
+        failureMessage: 'transient',
+        attempts: 3,
+        finalAttemptStatus: 'provider-flake',
+        failureClass: 'flaky' as never,
+      }],
+    });
+
+    assert.equal(validateCertificationSchema(artifact), false);
+    assert.ok(validateCertificationSchema.errors?.some(error => `${error.instancePath}`.includes('/failureClass')));
+  });
+
+  it('rejects attempts below the minimum', () => {
+    for (const attempts of [0, -1]) {
+      const artifact = makeValidArtifact({
+        scenarios: [{
+          scenarioId: 'list-files',
+          passed: false,
+          failureMessage: 'bad attempts',
+          attempts,
+        }],
+      });
+
+      assert.equal(validateCertificationSchema(artifact), false);
+      assert.ok(validateCertificationSchema.errors?.some(error => `${error.instancePath}`.includes('/attempts')));
+    }
+  });
+
+  it('valid-read-only fixture remains schema-valid', () => {
+    assert.equal(validateCertificationSchema(loadFixture('valid-read-only.json')), true, JSON.stringify(validateCertificationSchema.errors));
   });
 
   for (const field of CERTIFICATION_JSON_SCHEMA.required as string[]) {

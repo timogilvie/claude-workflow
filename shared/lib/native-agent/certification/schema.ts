@@ -21,7 +21,9 @@
  * @module native-agent/certification/schema
  */
 
-export const CERTIFICATION_SCHEMA_VERSION = 1 as const;
+import type { FailureClass } from './scenarios.ts';
+
+export const CERTIFICATION_SCHEMA_VERSION = 2 as const;
 
 /** Path prefix relative to repo root */
 export const CERTIFICATION_BASE_PATH = '.wavemill/native-agent-certifications' as const;
@@ -52,6 +54,12 @@ export interface ScenarioResult {
   failureMessage?: string;
   /** Number of attempts made before final result */
   retryCount?: number;
+  /** Total attempts executed, including the initial attempt */
+  attempts?: number;
+  /** Final outcome kind from the last attempt */
+  finalAttemptStatus?: 'pass' | 'fail' | 'unsupported' | 'provider-flake';
+  /** Failure classification for non-passing scenarios */
+  failureClass?: FailureClass;
 }
 
 /**

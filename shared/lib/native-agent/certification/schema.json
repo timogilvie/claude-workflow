@@ -17,7 +17,7 @@
   "properties": {
     "schemaVersion": {
       "type": "integer",
-      "const": 1,
+      "const": 2,
       "description": "Schema version for forward compatibility"
     },
     "provider": {
@@ -93,6 +93,21 @@
           "type": "integer",
           "minimum": 0,
           "description": "Number of attempts made before final result"
+        },
+        "attempts": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Total attempts executed, including the initial attempt"
+        },
+        "finalAttemptStatus": {
+          "type": "string",
+          "enum": ["pass", "fail", "unsupported", "provider-flake"],
+          "description": "Final outcome kind from the last attempt"
+        },
+        "failureClass": {
+          "type": "string",
+          "enum": ["deterministic_failure", "provider_flake", "unsupported_capability"],
+          "description": "Failure classification for non-passing scenarios"
         }
       }
     }
