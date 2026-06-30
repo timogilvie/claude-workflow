@@ -230,3 +230,32 @@ This contract covers **only** the certification schema, storage path, phase sema
 - Specify which suite scenarios are required for each phase level.
 
 These concerns are addressed in downstream implementation issues that consume this contract.
+
+---
+
+## Registry Metadata Mirror
+
+The canonical model registry mirrors the artifact contract under `nativeCapability.certification` so router and CI decisions can be made from checked-in repo state alone:
+
+```ts
+nativeCapability: {
+  nativeProvider: 'openai' | 'openrouter';
+  piTransportKind: 'openai-responses' | 'openai-completions';
+  readOnlyNative: 'certified' | 'partial' | 'unsupported';
+  certification?: {
+    maxCertifiedPhase: 'read-only' | 'patch' | 'workflow';
+    certifiedAt: string;
+    certificationSuiteVersion: string;
+    knownLimitations?: string[];
+  };
+}
+```
+
+`nativeProvider` and `piTransportKind` are the registry's provider/transport identity. The certification block does not duplicate them.
+
+### Registry validation split
+
+- Structural validation is always-on in `shared/lib/model-registry.ts`. It rejects incomplete metadata, malformed timestamps, missing provider/transport identity, and contradictions between checked-in capability flags and the certification phase.
+- Freshness validation is explicit and time-aware. `validateCertificationFreshness`, `maxCertifiedPhaseForModel`, and `isCertifiedForPhase` accept an injectable `now` and treat stale certifications as ineligible without making the registry structurally invalid.
+
+This split avoids turning checked-in `certifiedAt` values into build-breaking time bombs while still letting router, CI, and tests fail closed on stale certification state.

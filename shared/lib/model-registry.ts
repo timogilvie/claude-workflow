@@ -7,6 +7,13 @@ import {
   type NativeCapabilityOverride,
 } from './config.ts';
 import { filterDisabledModels } from './disabled-models.ts';
+import {
+  CERTIFICATION_TTL_DAYS,
+  PHASE_ORDER,
+  isCertificationFresh,
+  phaseSatisfies,
+  type CertificationPhase,
+} from './native-agent/certification/index.ts';
 
 export type ModelClass = 'frontier' | 'strong_generalist' | 'fast_economy';
 export type RegistryTaskType = 'routing' | 'planning' | 'coding' | 'review' | 'classify';
@@ -43,6 +50,13 @@ export interface PiCompatFlags {
   [key: string]: unknown;
 }
 
+export interface RegistryCertification {
+  maxCertifiedPhase: CertificationPhase;
+  certifiedAt: string;
+  certificationSuiteVersion: string;
+  knownLimitations?: string[];
+}
+
 /**
  * Registry-native metadata for Pi-backed providers.
  *
@@ -58,6 +72,7 @@ export interface NativeCapability {
   readOnlyNative: ReadOnlyNativeCapability;
   compatFlags?: PiCompatFlags;
   limitations?: string[];
+  certification?: RegistryCertification;
 }
 
 export interface ModelCapabilities {
@@ -127,6 +142,22 @@ const DESCRIPTOR_STAGE_TO_TASK_TYPE: Record<DescriptorModelStage, RegistryTaskTy
 };
 const READ_ONLY_NATIVE_CAPABILITIES: readonly ReadOnlyNativeCapability[] = ['certified', 'unsupported', 'partial'];
 const PI_TRANSPORT_KINDS: readonly PiTransportKind[] = ['openai-responses', 'openai-completions'];
+const CERTIFICATION_PHASES: readonly CertificationPhase[] = PHASE_ORDER;
+
+function cloneRegistryCertification(
+  certification: RegistryCertification | undefined,
+): RegistryCertification | undefined {
+  if (!certification) {
+    return undefined;
+  }
+
+  return {
+    maxCertifiedPhase: certification.maxCertifiedPhase,
+    certifiedAt: certification.certifiedAt,
+    certificationSuiteVersion: certification.certificationSuiteVersion,
+    knownLimitations: certification.knownLimitations ? [...certification.knownLimitations] : undefined,
+  };
+}
 
 function cloneCompatFlags(compatFlags: PiCompatFlags | undefined): PiCompatFlags | undefined {
   return compatFlags ? { ...compatFlags } : undefined;
@@ -145,6 +176,9 @@ function cloneNativeCapability(
     readOnlyNative: capability.readOnlyNative,
     compatFlags: cloneCompatFlags(capability.compatFlags),
     limitations: capability.limitations ? [...capability.limitations] : undefined,
+    ...(capability.certification
+      ? { certification: cloneRegistryCertification(capability.certification) }
+      : {}),
   };
 }
 
@@ -165,6 +199,24 @@ function mergeNativeCapability(
       ? [...seed.limitations]
       : undefined,
   };
+
+  const certification = override.certification
+    ? {
+      maxCertifiedPhase: override.certification.maxCertifiedPhase ?? seed?.certification?.maxCertifiedPhase,
+      certifiedAt: override.certification.certifiedAt ?? seed?.certification?.certifiedAt,
+      certificationSuiteVersion:
+        override.certification.certificationSuiteVersion ?? seed?.certification?.certificationSuiteVersion,
+      knownLimitations: override.certification.knownLimitations
+        ? [...override.certification.knownLimitations]
+        : seed?.certification?.knownLimitations
+        ? [...seed.certification.knownLimitations]
+        : undefined,
+    } as RegistryCertification
+    : cloneRegistryCertification(seed?.certification);
+
+  if (certification) {
+    merged.certification = certification;
+  }
 
   return merged as NativeCapability;
 }
@@ -807,6 +859,209 @@ export function validateNativeCapability(
       `model ${modelId}: nativeCapability.readOnlyNative=${nativeCapability.readOnlyNative} contradicts compat flags (derived: ${derived.capability})`,
     );
   }
+
+  validateNativeCertification(modelId, nativeCapability);
+}
+
+function isCertificationPhaseValue(value: unknown): value is CertificationPhase {
+  return typeof value === 'string' && (CERTIFICATION_PHASES as readonly string[]).includes(value);
+}
+
+function isValidIsoDateTime(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?(?:Z|[+-]\d{2}:\d{2})$/.test(value)) {
+    return false;
+  }
+
+  return Number.isFinite(Date.parse(value));
+}
+
+function getRequiredCertifiedPhase(
+  capability: ReadOnlyNativeCapability,
+): CertificationPhase | null {
+  if (capability === 'certified' || capability === 'partial') {
+    return 'read-only';
+  }
+
+  return null;
+}
+
+function validateNativeCertification(modelId: string, nativeCapability: NativeCapability): void {
+  const certification = nativeCapability.certification;
+  if (!certification) {
+    return;
+  }
+
+  if (!nativeCapability.nativeProvider) {
+    throw new ModelValidationError(
+      modelId,
+      `model ${modelId}: nativeCapability.certification requires nativeProvider`,
+    );
+  }
+
+  if (!nativeCapability.piTransportKind) {
+    throw new ModelValidationError(
+      modelId,
+      `model ${modelId}: nativeCapability.certification requires piTransportKind`,
+    );
+  }
+
+  if (!isCertificationPhaseValue(certification.maxCertifiedPhase)) {
+    throw new ModelValidationError(
+      modelId,
+      `model ${modelId}: nativeCapability.certification.maxCertifiedPhase must be one of ${CERTIFICATION_PHASES.join(', ')}`,
+    );
+  }
+
+  if (typeof certification.certifiedAt !== 'string' || certification.certifiedAt.length === 0) {
+    throw new ModelValidationError(
+      modelId,
+      `model ${modelId}: nativeCapability.certification.certifiedAt is required`,
+    );
+  }
+
+  if (!isValidIsoDateTime(certification.certifiedAt)) {
+    throw new ModelValidationError(
+      modelId,
+      `model ${modelId}: nativeCapability.certification.certifiedAt must be a valid ISO 8601 datetime`,
+    );
+  }
+
+  if (
+    typeof certification.certificationSuiteVersion !== 'string'
+    || certification.certificationSuiteVersion.length === 0
+  ) {
+    throw new ModelValidationError(
+      modelId,
+      `model ${modelId}: nativeCapability.certification.certificationSuiteVersion is required`,
+    );
+  }
+
+  if (
+    certification.knownLimitations !== undefined
+    && !certification.knownLimitations.every((item) => typeof item === 'string')
+  ) {
+    throw new ModelValidationError(
+      modelId,
+      `model ${modelId}: nativeCapability.certification.knownLimitations must contain only strings`,
+    );
+  }
+
+  const requiredPhase = getRequiredCertifiedPhase(nativeCapability.readOnlyNative);
+  if (requiredPhase && !phaseSatisfies(certification.maxCertifiedPhase, requiredPhase)) {
+    throw new ModelValidationError(
+      modelId,
+      `model ${modelId}: nativeCapability.readOnlyNative=${nativeCapability.readOnlyNative} contradicts nativeCapability.certification.maxCertifiedPhase=${certification.maxCertifiedPhase}`,
+    );
+  }
+
+  if (
+    nativeCapability.readOnlyNative === 'unsupported'
+    && phaseSatisfies(certification.maxCertifiedPhase, 'read-only')
+  ) {
+    throw new ModelValidationError(
+      modelId,
+      `model ${modelId}: nativeCapability.readOnlyNative=unsupported contradicts nativeCapability.certification.maxCertifiedPhase=${certification.maxCertifiedPhase}`,
+    );
+  }
+}
+
+export interface CertificationFreshnessResult {
+  modelId: string;
+  fresh: boolean;
+  reason: 'missing' | 'invalid' | 'stale' | null;
+  certifiedAt: string | null;
+  expiresAt: string | null;
+  ttlDays: number;
+}
+
+export function validateCertificationFreshness(
+  modelId: string,
+  capabilities: Pick<ModelCapabilities, 'nativeCapability'>,
+  now = new Date(),
+): CertificationFreshnessResult {
+  const certification = capabilities.nativeCapability?.certification;
+  if (!certification) {
+    return {
+      modelId,
+      fresh: false,
+      reason: 'missing',
+      certifiedAt: null,
+      expiresAt: null,
+      ttlDays: CERTIFICATION_TTL_DAYS,
+    };
+  }
+
+  if (!isCertificationPhaseValue(certification.maxCertifiedPhase) || !isValidIsoDateTime(certification.certifiedAt)) {
+    return {
+      modelId,
+      fresh: false,
+      reason: 'invalid',
+      certifiedAt: certification.certifiedAt ?? null,
+      expiresAt: null,
+      ttlDays: CERTIFICATION_TTL_DAYS,
+    };
+  }
+
+  const artifact = {
+    schemaVersion: 1 as const,
+    provider: capabilities.nativeCapability?.nativeProvider ?? 'unknown',
+    model: modelId,
+    phase: certification.maxCertifiedPhase,
+    suiteVersion: certification.certificationSuiteVersion,
+    certifiedAt: certification.certifiedAt,
+    scenarios: [{ scenarioId: 'registry-certification', passed: true }],
+    knownLimitations: certification.knownLimitations,
+  };
+
+  const fresh = isCertificationFresh(artifact, now);
+
+  return {
+    modelId,
+    fresh,
+    reason: fresh ? null : 'stale',
+    certifiedAt: certification.certifiedAt,
+    expiresAt: new Date(
+      new Date(certification.certifiedAt).getTime() + CERTIFICATION_TTL_DAYS * 24 * 60 * 60 * 1000,
+    ).toISOString(),
+    ttlDays: CERTIFICATION_TTL_DAYS,
+  };
+}
+
+export function maxCertifiedPhaseForModel(
+  registry: ModelRegistry,
+  modelId: string,
+  now = new Date(),
+): CertificationPhase | null {
+  const capabilities = registry.models[modelId];
+  if (!capabilities?.nativeCapability?.certification) {
+    return null;
+  }
+
+  try {
+    validateNativeCapability(modelId, capabilities);
+  } catch (error) {
+    if (error instanceof ModelValidationError) {
+      return null;
+    }
+    throw error;
+  }
+
+  const freshness = validateCertificationFreshness(modelId, capabilities, now);
+  if (!freshness.fresh) {
+    return null;
+  }
+
+  return capabilities.nativeCapability.certification.maxCertifiedPhase;
+}
+
+export function isCertifiedForPhase(
+  registry: ModelRegistry,
+  modelId: string,
+  phase: CertificationPhase,
+  now = new Date(),
+): boolean {
+  const maxPhase = maxCertifiedPhaseForModel(registry, modelId, now);
+  return maxPhase ? phaseSatisfies(maxPhase, phase) : false;
 }
 
 export function assertRegistryConsistency(registry: ModelRegistry): void {

@@ -20,8 +20,10 @@ import {
   getEffectiveRegistry,
   getLadder,
   getModel,
+  isCertifiedForPhase,
   isKnownModelId,
   isReadOnlyNativeCapable,
+  maxCertifiedPhaseForModel,
   mergeModelRegistry,
   ModelResolutionError,
   ModelValidationError,
@@ -32,11 +34,13 @@ import {
   REVIEWER_ALIAS_MAP,
   resolveSelector,
   satisfiesCapabilities,
+  validateCertificationFreshness,
   validateNativeCapability,
   validateModelId,
 } from './model-registry.ts';
 import { clearConfigCache } from './config.ts';
 import { filterDisabledModels } from './disabled-models.ts';
+import { CERTIFICATION_TTL_DAYS } from './native-agent/certification/index.ts';
 import {
   ModelPolicyResolutionError,
   resolveSelectorWithPolicy,
@@ -105,6 +109,17 @@ function makeCapabilities(
         readOnlyNative: overrides.nativeCapability.readOnlyNative!,
         compatFlags: overrides.nativeCapability.compatFlags ? { ...overrides.nativeCapability.compatFlags } : undefined,
         limitations: overrides.nativeCapability.limitations ? [...overrides.nativeCapability.limitations] : undefined,
+        certification: overrides.nativeCapability.certification
+          ? {
+            maxCertifiedPhase: overrides.nativeCapability.certification.maxCertifiedPhase!,
+            certifiedAt: overrides.nativeCapability.certification.certifiedAt!,
+            certificationSuiteVersion:
+              overrides.nativeCapability.certification.certificationSuiteVersion!,
+            knownLimitations: overrides.nativeCapability.certification.knownLimitations
+              ? [...overrides.nativeCapability.certification.knownLimitations]
+              : undefined,
+          }
+          : undefined,
       }
       : undefined,
   };
@@ -950,6 +965,102 @@ describe('model-registry', () => {
       }));
     });
 
+    it('round-trips certification metadata through registry merges', () => {
+      const merged = mergeModelRegistry(DEFAULT_MODEL_REGISTRY, {
+        models: {
+          'gpt-5.5': {
+            nativeCapability: {
+              nativeProvider: 'openai',
+              piTransportKind: 'openai-responses',
+              readOnlyNative: 'certified',
+              certification: {
+                maxCertifiedPhase: 'patch',
+                certifiedAt: '2026-05-01T00:00:00.000Z',
+                certificationSuiteVersion: 'suite-v3',
+                knownLimitations: ['needs sandboxed patch paths'],
+              },
+            },
+          },
+        },
+      });
+
+      assert.deepEqual(merged.models['gpt-5.5'].nativeCapability?.certification, {
+        maxCertifiedPhase: 'patch',
+        certifiedAt: '2026-05-01T00:00:00.000Z',
+        certificationSuiteVersion: 'suite-v3',
+        knownLimitations: ['needs sandboxed patch paths'],
+      });
+    });
+
+    it('rejects incomplete certification metadata', () => {
+      assert.throws(
+        () => validateNativeCapability('m', {
+          nativeCapability: {
+            nativeProvider: 'openai',
+            piTransportKind: 'openai-responses',
+            readOnlyNative: 'certified',
+            certification: {
+              maxCertifiedPhase: 'read-only',
+              certifiedAt: '2026-05-01T00:00:00.000Z',
+            } as any,
+          } as any,
+        }),
+        /certificationSuiteVersion is required/,
+      );
+    });
+
+    it('rejects malformed certification timestamps', () => {
+      assert.throws(
+        () => validateNativeCapability('m', {
+          nativeCapability: {
+            nativeProvider: 'openai',
+            piTransportKind: 'openai-responses',
+            readOnlyNative: 'certified',
+            certification: {
+              maxCertifiedPhase: 'read-only',
+              certifiedAt: '2026-05-01',
+              certificationSuiteVersion: 'suite-v1',
+            } as any,
+          } as any,
+        }),
+        /must be a valid ISO 8601 datetime/,
+      );
+    });
+
+    it('rejects certification metadata without provider identity', () => {
+      assert.throws(
+        () => validateNativeCapability('m', {
+          nativeCapability: {
+            readOnlyNative: 'unsupported',
+            certification: {
+              maxCertifiedPhase: 'read-only',
+              certifiedAt: '2026-05-01T00:00:00.000Z',
+              certificationSuiteVersion: 'suite-v1',
+            } as any,
+          } as any,
+        }),
+        /certification requires nativeProvider/,
+      );
+    });
+
+    it('rejects contradictions between unsupported capability and certification phase', () => {
+      assert.throws(
+        () => validateNativeCapability('m', {
+          nativeCapability: {
+            nativeProvider: 'openai',
+            piTransportKind: 'openai-responses',
+            readOnlyNative: 'unsupported',
+            certification: {
+              maxCertifiedPhase: 'read-only',
+              certifiedAt: '2026-05-01T00:00:00.000Z',
+              certificationSuiteVersion: 'suite-v1',
+            } as any,
+          } as any,
+        }),
+        /readOnlyNative=unsupported contradicts/,
+      );
+    });
+
     it('returns true for certified native read-only capability', () => {
       const registry: ModelRegistry = {
         models: {
@@ -1007,6 +1118,104 @@ describe('model-registry', () => {
       assert.equal(isReadOnlyNativeCapable('missing', { registry: DEFAULT_MODEL_REGISTRY }), false);
     });
 
+    it('reports fresh certification metadata and phase eligibility within TTL', () => {
+      const now = new Date('2026-06-01T00:00:00.000Z');
+      const registry: ModelRegistry = {
+        models: {
+          A: makeCapabilities({
+            nativeCapability: {
+              nativeProvider: 'openai',
+              piTransportKind: 'openai-responses',
+              readOnlyNative: 'certified',
+              certification: {
+                maxCertifiedPhase: 'patch',
+                certifiedAt: '2026-05-01T00:00:00.000Z',
+                certificationSuiteVersion: 'suite-v2',
+                knownLimitations: ['review requires human approval'],
+              },
+            },
+          }),
+        },
+        ladders: {},
+      };
+
+      assert.deepEqual(validateCertificationFreshness('A', registry.models.A, now), {
+        modelId: 'A',
+        fresh: true,
+        reason: null,
+        certifiedAt: '2026-05-01T00:00:00.000Z',
+        expiresAt: '2026-06-30T00:00:00.000Z',
+        ttlDays: CERTIFICATION_TTL_DAYS,
+      });
+      assert.equal(maxCertifiedPhaseForModel(registry, 'A', now), 'patch');
+      assert.equal(isCertifiedForPhase(registry, 'A', 'read-only', now), true);
+      assert.equal(isCertifiedForPhase(registry, 'A', 'patch', now), true);
+      assert.equal(isCertifiedForPhase(registry, 'A', 'workflow', now), false);
+    });
+
+    it('treats certification as stale at the exclusive TTL boundary', () => {
+      const certifiedAt = '2026-05-01T00:00:00.000Z';
+      const expiry = new Date(
+        new Date(certifiedAt).getTime() + CERTIFICATION_TTL_DAYS * 24 * 60 * 60 * 1000,
+      );
+      const registry: ModelRegistry = {
+        models: {
+          A: makeCapabilities({
+            nativeCapability: {
+              nativeProvider: 'openai',
+              piTransportKind: 'openai-responses',
+              readOnlyNative: 'certified',
+              certification: {
+                maxCertifiedPhase: 'patch',
+                certifiedAt,
+                certificationSuiteVersion: 'suite-v2',
+              },
+            },
+          }),
+        },
+        ladders: {},
+      };
+
+      assert.equal(
+        isCertifiedForPhase(registry, 'A', 'patch', new Date(expiry.getTime() - 1)),
+        true,
+      );
+      assert.deepEqual(validateCertificationFreshness('A', registry.models.A, expiry), {
+        modelId: 'A',
+        fresh: false,
+        reason: 'stale',
+        certifiedAt,
+        expiresAt: expiry.toISOString(),
+        ttlDays: CERTIFICATION_TTL_DAYS,
+      });
+      assert.equal(maxCertifiedPhaseForModel(registry, 'A', expiry), null);
+      assert.equal(isCertifiedForPhase(registry, 'A', 'patch', expiry), false);
+      assert.equal(isCertifiedForPhase(registry, 'A', 'patch', new Date(expiry.getTime() + 1)), false);
+    });
+
+    it('treats contradictory certification metadata as ineligible without throwing', () => {
+      const registry: ModelRegistry = {
+        models: {
+          A: makeCapabilities({
+            nativeCapability: {
+              nativeProvider: 'openai',
+              piTransportKind: 'openai-responses',
+              readOnlyNative: 'unsupported',
+              certification: {
+                maxCertifiedPhase: 'workflow',
+                certifiedAt: '2026-05-01T00:00:00.000Z',
+                certificationSuiteVersion: 'suite-v4',
+              },
+            } as any,
+          }),
+        },
+        ladders: {},
+      };
+
+      assert.equal(maxCertifiedPhaseForModel(registry, 'A', new Date('2026-05-15T00:00:00.000Z')), null);
+      assert.equal(isCertifiedForPhase(registry, 'A', 'read-only', new Date('2026-05-15T00:00:00.000Z')), false);
+    });
+
     it('keeps model availability distinct from certification', () => {
       const registry = mergeModelRegistry(DEFAULT_MODEL_REGISTRY, {
         models: {
@@ -1055,6 +1264,11 @@ describe('model-registry', () => {
                   nativeProvider: 'openai',
                   piTransportKind: 'openai-responses',
                   readOnlyNative: 'certified',
+                  certification: {
+                    maxCertifiedPhase: 'patch',
+                    certifiedAt: '2026-05-01T00:00:00.000Z',
+                    certificationSuiteVersion: 'suite-v3',
+                  },
                 },
               },
             },
@@ -1064,6 +1278,7 @@ describe('model-registry', () => {
 
         const registry = getEffectiveRegistry(repoDir);
         assert.equal(registry.models['gpt-5.5'].nativeCapability?.readOnlyNative, 'certified');
+        assert.equal(registry.models['gpt-5.5'].nativeCapability?.certification?.maxCertifiedPhase, 'patch');
       } finally {
         clearConfigCache(repoDir);
         cleanUp(repoDir);

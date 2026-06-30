@@ -14,6 +14,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import { errorMessage } from './error-utils.ts';
+import type { CertificationPhase } from './native-agent/certification/index.ts';
 import { parseModelSelector } from './model-registry.ts';
 import type {
   AgentType,
@@ -154,12 +155,20 @@ export interface PiCompatFlagsOverride {
   [key: string]: unknown;
 }
 
+export interface RegistryCertificationOverride {
+  maxCertifiedPhase?: CertificationPhase;
+  certifiedAt?: string;
+  certificationSuiteVersion?: string;
+  knownLimitations?: string[];
+}
+
 export interface NativeCapabilityOverride {
   nativeProvider?: NativeProviderName;
   piTransportKind?: PiTransportKind;
   readOnlyNative?: ReadOnlyNativeCapability;
   compatFlags?: PiCompatFlagsOverride;
   limitations?: string[];
+  certification?: RegistryCertificationOverride;
 }
 
 export interface ModelCapabilitiesOverride {
