@@ -29,16 +29,19 @@ export type CertificationEligibility =
   | { eligible: false; reason: IneligibilityReason; artifact?: NativeCertificationArtifact };
 
 /** Characters that are not safe in a path segment */
-const UNSAFE_SEGMENT = /[/\\.\0]/;
+const UNSAFE_SEGMENT = /[/\\\0]/;
 
 /**
  * Validate that a path segment is non-empty and contains no traversal characters.
  *
- * Rejects empty strings, `.`, `..`, and any segment containing `/`, `\`, or NUL.
+ * Rejects empty strings, the traversal segments `.` and `..`, and any segment
+ * containing `/`, `\`, or NUL. Dots inside the segment (e.g. `gpt-5.5`,
+ * `gemini-2.5-pro`) are permitted so model IDs work as path components.
  * Does not normalize — callers must supply canonical identifiers.
  */
 export function isValidPathSegment(segment: string): boolean {
   if (segment.length === 0) return false;
+  if (segment === '.' || segment === '..') return false;
   if (UNSAFE_SEGMENT.test(segment)) return false;
   return true;
 }
