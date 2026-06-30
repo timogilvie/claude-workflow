@@ -43,6 +43,10 @@ import type { RouteProvenance } from './route-artifact.ts';
 import { isDeepSeekLikeModelId } from './model-registry.ts';
 import { validateModelOrThrow } from './model-validator.ts';
 import { filterDisabledModels, isDisabledModel } from './disabled-models.ts';
+import { filterNativeModels, type RouterCertificationRejection } from './native-agent/certification/router-filter.ts';
+
+export type { RouterCertificationRejection } from './native-agent/certification/router-filter.ts';
+export { STAGE_PHASE_REQUIREMENT } from './native-agent/certification/router-filter.ts';
 
 export type PlanDepth = 'light' | 'medium' | 'deep';
 export type CodeDepth = 'light' | 'medium' | 'deep';
@@ -91,6 +95,7 @@ export interface WorkflowRouteDecision {
   resourceSelections?: RuntimeResourceSelection[];
   provenance?: RouteProvenance;
   routingMode?: string;
+  nativeCertificationRejections?: RouterCertificationRejection[];
 }
 
 export interface RouteWorkflowOptions {
@@ -222,6 +227,7 @@ const BREADTH_PATTERNS = [
 interface ResolvedModelPool {
   models: string[];
   warnings: string[];
+  nativeCertificationRejections?: RouterCertificationRejection[];
 }
 
 export interface StageTokenProfile {
@@ -520,7 +526,29 @@ function resolveStagePool(
 
   validateDeepSeekPool(explicitPool, options?.repoDir);
   const configuredPool = intersectPools(basePool, explicitPool);
-  return filterProviderPool(intersectPools(configuredPool, policyPool), options?.repoDir, role);
+  const providerFiltered = filterProviderPool(intersectPools(configuredPool, policyPool), options?.repoDir, role);
+
+  // Apply native certification filter when we have a repo directory.
+  // Native models only appear in repo-specific registry configs, so this is
+  // always a no-op when repoDir is absent.
+  if (options?.repoDir) {
+    const registry = getEffectiveRegistry(options.repoDir);
+    const nativeFiltered = filterNativeModels(
+      providerFiltered.models,
+      role,
+      registry,
+      options.repoDir,
+    );
+    return {
+      models: nativeFiltered.eligible,
+      warnings: providerFiltered.warnings,
+      ...(nativeFiltered.rejected.length > 0
+        ? { nativeCertificationRejections: nativeFiltered.rejected }
+        : {}),
+    };
+  }
+
+  return providerFiltered;
 }
 
 function pickAvailableModel(pool: string[], preferred: string[], fallback: string): string {
@@ -1226,6 +1254,18 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
     reviewerPoolResolution,
   ));
 
+  // Collect native certification rejections from all stage pools
+  const nativeCertificationRejections: RouterCertificationRejection[] = [
+    ...(plannerPoolResolution.nativeCertificationRejections ?? []),
+    ...(coderPoolResolution.nativeCertificationRejections ?? []),
+    ...(reviewerPoolResolution.nativeCertificationRejections ?? []),
+  ];
+  for (const rejection of nativeCertificationRejections) {
+    reasoning.push(
+      `Native model ${rejection.modelId} rejected for ${rejection.role} role (phase=${rejection.requestedPhase}, reason=${rejection.reason}).`,
+    );
+  }
+
   return {
     planner: finalPlanner,
     coder: finalCoder,
@@ -1255,6 +1295,7 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
     ...(coderRecommendation.resourceSelections?.length
       ? { resourceSelections: coderRecommendation.resourceSelections }
       : {}),
+    ...(nativeCertificationRejections.length > 0 ? { nativeCertificationRejections } : {}),
   };
 }
 

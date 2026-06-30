@@ -57,6 +57,7 @@ for f in \
   task-packet-validator.test.ts \
   workflow-router.test.ts \
   workflow-cost.test.ts \
+  native-agent/certification/router-filter.test.ts \
 ; do
   echo -n "  $f: "
   if node --import "$TSX_LOADER" "$LIB_DIR/$f" > /dev/null 2>&1; then
