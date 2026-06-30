@@ -62,6 +62,67 @@ This is a normal-mode policy adjustment, not degraded routing. `workflow-router.
 
 Individual command behavior now changes based on operating mode. In `constrained` mode, routing restricts to sonnet/haiku candidates and skips LLM-based difficulty classification. In `survival` mode, routing uses haiku only and relies on stage-aware KNN signals instead of open-ended LLM reasoning.
 
+## Native Certification Filtering
+
+Native model certification filtering is a Layer 3 policy constraint applied inside `resolveStagePool()` before final per-role candidate selection. It runs after provider availability and capability checks have already narrowed the pool.
+
+### Phase Requirements
+
+Each router role maps to a minimum required certification phase:
+
+| Role | Required Phase | Rationale |
+|------|---------------|-----------|
+| reviewer | `read-only` | Reads diffs and outputs comments; no file mutations |
+| coder | `patch` | Produces patch-level file edits |
+| planner | `workflow` | Orchestrates the full multi-phase workflow |
+
+A higher-phase certification satisfies lower-phase requirements: `workflow` satisfies `patch` and `read-only`; `patch` satisfies `read-only`.
+
+### Fail-Closed Behavior
+
+All of the following conditions reject a native model from the pool:
+
+| Condition | Rejection Reason |
+|-----------|-----------------|
+| No certification artifact on disk | `missing` |
+| File is unreadable or unparseable | `malformed` |
+| `schemaVersion` or `suiteVersion` mismatch | `wrong-suite` |
+| TTL expired or `expiresAt` in the past | `stale` |
+| Certified phase does not satisfy required phase | `insufficient-phase` |
+| Any scenario result is `passed: false` | `insufficient-phase` |
+| Missing `nativeCapability` or `nativeProvider` in registry | `missing` |
+
+Non-native models (no `nativeCapability` in the registry) always pass through unchanged.
+
+### Diagnostics
+
+Each rejected native model produces one `RouterCertificationRejection` record on the routing decision:
+
+```typescript
+{
+  modelId: string;
+  role: 'planner' | 'coder' | 'reviewer';
+  requestedPhase: CertificationPhase;
+  certifiedPhase?: CertificationPhase;   // from artifact, when readable
+  nativeCapability: string;              // readOnlyNative value from registry
+  requiredSuiteVersion: string;
+  reason: RouterCertificationRejectionReason;
+}
+```
+
+These are collected in `WorkflowRouteDecision.nativeCertificationRejections` and mirrored as human-readable entries in `decision.reasoning`.
+
+### Implementation
+
+- **Filter module**: `shared/lib/native-agent/certification/router-filter.ts`
+- **Phase mapping**: `STAGE_PHASE_REQUIREMENT` (exported from `workflow-router.ts`)
+- **Artifact loading**: `checkCertificationEligibility()` from `native-agent/certification/loader.ts`
+- **Applied in**: `resolveStagePool()` in `workflow-router.ts`, when `repoDir` is available
+
+### Scope
+
+The filter only runs when a `repoDir` is provided to the routing call. Native models only appear in repo-specific registry configs, so this is always a no-op in global/default-registry contexts.
+
 ## Capability Filtering
 
 Capability-aware filtering is an opt-in Layer 3 refinement behind `router.capabilityFiltering.enabled`.
@@ -149,6 +210,8 @@ Both modes use stage-aware KNN signals for candidate selection and prepend a deg
 - Let capability constraints override explicit pinned model selector resolution
 - Assume model registry will have preferred classes available
 - Overwrite `.initial-route.json` after bootstrap routing has been persisted
+- Allow an uncertified native model to reach the final pool (fail closed, never silently ignore certification failures)
+- Accept a native model based only on registry `maxCertifiedPhase` metadata without checking the on-disk artifact
 
 ## Known Failure Modes
 
@@ -163,6 +226,9 @@ Both modes use stage-aware KNN signals for candidate selection and prepend a deg
 | Capability-aware route falls back unexpectedly | Every in-pool candidate failed one or more capability checks, so the empty-filter fallback restored the unfiltered viable pool | Inspect decision reasoning for `capability-filter-empty-fallback` and either loosen the task constraints or expand the configured model pool |
 | Route artifacts are missing provenance or still marked as cache/live incorrectly | Route JSON write sites did not stamp or refresh `provenance` fields on reuse | Ensure route persistence paths always write/merge `provenance` and refresh source on cache recovery |
 | Rubric-aware mode is enabled but scalar routing still wins | Rubric coverage in the nearest-neighbor window is below `router.rubricAware.minCoverage` | Check decision reasoning for `rubric-aware fallback`; lower `minCoverage` only after validating mixed-dataset behavior |
+| Native model appears selected despite having no cert artifact | `repoDir` was not passed to the routing call, so the cert filter did not run | Always pass `repoDir` to routing calls in production paths; cert filter is a no-op without it |
+| Coder rejects valid native model | Cert phase is only `read-only` (insufficient for `patch` requirement) | Re-certify the model at the `patch` phase and write a fresh artifact |
+| `nativeCertificationRejections` missing from decision | No native models were in the resolved pool, or all native models passed | Expected; field is omitted when empty |
 
 ## Testing Patterns
 
@@ -171,6 +237,13 @@ Both modes use stage-aware KNN signals for candidate selection and prepend a deg
 - Survival mode test verifying haiku-only routing and no opus/sonnet usage
 - Constrained mode test verifying opus exclusion but sonnet/haiku availability
 - Normal mode test verifying no degraded rationale is prepended
+- Native certification policy tests: valid/invalid cert per role, missing/stale/wrong-suite/malformed artifacts, fail-closed pool, diagnostic field completeness
+
+`shared/lib/native-agent/certification/router-filter.test.ts` includes:
+- Phase requirement mapping assertions
+- Non-native pass-through
+- All rejection reason paths with direct `filterNativeModels()` calls
+- Mixed pool separation (eligible vs rejected)
 
 ## Dependencies
 
@@ -188,6 +261,10 @@ Both modes use stage-aware KNN signals for candidate selection and prepend a deg
 - `shared/lib/stage-aware-router.ts` — KNN-based routing used by degraded modes after aggregate frontier exhaustion/degradation is confirmed
 
 ## Recent Changes
+
+### 2026-06-30T00:00:00.000Z - HOK-2397: Enforce native certification phase filters in router
+**Changed:** `resolveStagePool()` now applies a native certification filter before returning per-role candidate pools. A new `shared/lib/native-agent/certification/router-filter.ts` module implements `filterNativeModels()` with a closed rejection-reason set (`missing`, `malformed`, `wrong-suite`, `stale`, `insufficient-phase`). Rejections are collected in `WorkflowRouteDecision.nativeCertificationRejections` and mirrored as reasoning entries. Phase requirements: reviewer→`read-only`, coder→`patch`, planner→`workflow`.
+**Impact:** Native models without a valid, fresh, phase-satisfying on-disk certification artifact are rejected fail-closed instead of silently passing through. Non-native models are unaffected. All existing routing paths and tests continue to work unchanged.
 
 ### 2026-04-30T00:00:00.000Z - HOK-1511: Persist route provenance and input hashes
 **Changed:** Route artifacts now include a nested `provenance` object (`source`, `inputKind`, `inputPath`, `inputHash`, `routedAt`, `routerMode`) and shell route readers can resolve both legacy top-level fields and provenance metadata.
