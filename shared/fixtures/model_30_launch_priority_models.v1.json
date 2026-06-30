@@ -27,6 +27,14 @@
       "roleEligibility": ["planning", "coding", "review"]
     },
     {
+      "wavemillAlias": "claude-sonnet-4-6",
+      "openrouterId": "anthropic/claude-sonnet-4.6",
+      "family": "claude",
+      "status": "active",
+      "priorityTier": 1,
+      "roleEligibility": ["planning", "coding", "review"]
+    },
+    {
       "wavemillAlias": "claude-haiku-4-5",
       "openrouterId": "anthropic/claude-haiku-4.5",
       "family": "claude",
