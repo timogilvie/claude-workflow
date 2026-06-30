@@ -201,6 +201,22 @@ agent_hook_detail() {
   jq -r '.detail // empty' "$hook_file" 2>/dev/null || true
 }
 
+# Read next_action field from hook JSON.
+# Only returns next_action if hook file is fresh (300s TTL).
+agent_hook_next_action() {
+  local issue="$1"
+  local hook_file="/tmp/wavemill-${SESSION}-${issue}.hook"
+  [[ -f "$hook_file" ]] || return 0
+
+  local ts now staleness
+  ts=$(jq -r '.timestamp // 0' "$hook_file" 2>/dev/null || echo 0)
+  now=$(date +%s)
+  staleness=$(( now - ts ))
+  (( staleness < 300 )) || return 0
+
+  jq -r '.next_action // empty' "$hook_file" 2>/dev/null || true
+}
+
 # Read the planning stage display status from stage result files.
 # Returns: awaiting_approval, approved, running, rejected, aborted, or empty string.
 get_planning_display_status() {
@@ -722,11 +738,14 @@ agent_status() {
     if (( staleness < 300 )) && [[ -n "$state" ]]; then
       # Map hook states to dashboard display states
       case "$state" in
-        working) echo "running" ;;
-        idle)    echo "exited" ;;
-        waiting) echo "waiting" ;;
-        error)   echo "error" ;;
-        *)       echo "$state" ;;
+        working)         echo "running" ;;
+        idle)            echo "exited" ;;
+        waiting)         echo "waiting" ;;
+        blocked)         echo "blocked" ;;
+        approval-needed) echo "approval-needed" ;;
+        policy-denied)   echo "policy-denied" ;;
+        error)           echo "error" ;;
+        *)               echo "$state" ;;
       esac
       return
     fi
@@ -1036,8 +1055,8 @@ is_actionable_state() {
   fi
 
   case "$agent_state" in
-    exited|waiting|error) echo "actionable" ;;
-    *)                    echo "active" ;;
+    exited|waiting|blocked|approval-needed|policy-denied|error) echo "actionable" ;;
+    *)                                                           echo "active" ;;
   esac
 }
 
@@ -1126,14 +1145,17 @@ render_task_row() {
     reported=$(agent_hook_detail "$issue")
     [[ -z "$reported" ]] && reported=$(agent_reported_status "$issue")
     case "$agent_state:$reported" in
-      waiting:*)       st_str="${Y}⏳ waiting${N}" ;;
-      error:*)         st_str="${R}! error${N}" ;;
-      exited:*)        st_str="${D}○ exited${N}" ;;
-      running:working) st_str="${G}● working${N}" ;;
-      running:waiting) st_str="${Y}⏳ waiting${N}" ;;
-      running:done)    st_str="${D}● idle${N}" ;;
-      running:*)       st_str="${G}● running${N}" ;;
-      *)               st_str="${D}  done${N}" ;;
+      waiting:*)         st_str="${Y}⏳ waiting${N}" ;;
+      blocked:*)         st_str="${Y}⊘ blocked${N}" ;;
+      approval-needed:*) st_str="${Y}⏳ approval${N}" ;;
+      policy-denied:*)   st_str="${R}⛔ denied${N}" ;;
+      error:*)           st_str="${R}! error${N}" ;;
+      exited:*)          st_str="${D}○ exited${N}" ;;
+      running:working)   st_str="${G}● working${N}" ;;
+      running:waiting)   st_str="${Y}⏳ waiting${N}" ;;
+      running:done)      st_str="${D}● idle${N}" ;;
+      running:*)         st_str="${G}● running${N}" ;;
+      *)                 st_str="${D}  done${N}" ;;
     esac
   fi
 
@@ -1276,6 +1298,17 @@ render_task_row() {
   if [[ -n "$reported" ]]; then
     render_task_detail_lines "$reported"
   fi
+
+  # For actionable hook states, surface next_action as a follow-up detail line.
+  case "$agent_state" in
+    approval-needed|blocked|policy-denied)
+      local next_action_detail
+      next_action_detail="$(agent_hook_next_action "$issue")"
+      if [[ -n "$next_action_detail" ]]; then
+        render_task_detail_lines "$next_action_detail"
+      fi
+      ;;
+  esac
 
   if [[ "$task_phase" == "planning" ]] && plan_waiting_for_review "$task_phase" "$agent_state" "$worktree" "$slug"; then
     render_task_detail_lines "$(render_plan_model_routing "$worktree" "$slug")"

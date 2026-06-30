@@ -39,10 +39,27 @@ case "$event" in
     # blocks on input. Older payload shapes used `.notification_type` for
     # permission_prompt/idle_prompt — preserve those as fallbacks so legacy
     # writers keep working.
+    #
+    # When the payload carries a stable discriminator (notification_type or
+    # message pattern) for approval or policy conditions, map to the richer
+    # state so the dashboard can surface it distinctly. Falls back to `waiting`
+    # for all other notifications.
+    notification_type=$(printf '%s' "$payload" | jq -r '.notification_type // .notificationType // empty' 2>/dev/null || true)
     detail=$(printf '%s' "$payload" | jq -r '.message // .notification_type // .notificationType // .type // empty' 2>/dev/null || true)
     detail="${detail:0:120}"
     [[ -z "$detail" ]] && detail="awaiting user input"
-    wavemill_hook_write "waiting" "$event" "$detail" "claude"
+
+    hook_state="waiting"
+    case "$notification_type" in
+      approval_request|approval-request)
+        hook_state="approval-needed"
+        ;;
+      policy_denied|policy-denied)
+        hook_state="policy-denied"
+        ;;
+    esac
+
+    wavemill_hook_write "$hook_state" "$event" "$detail" "claude"
     ;;
   *)
     ;;

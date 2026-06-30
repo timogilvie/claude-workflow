@@ -21,7 +21,7 @@ const DEFAULT_WHOLE_FILE_ALLOWLIST: NormalizedWholeFileWriteAllowlistInput = {
   wavemillOwnedPaths: ['features/**', 'bugs/**'],
 };
 
-const STATUS_STATES = ['working', 'idle', 'waiting', 'error'] as const;
+const STATUS_STATES = ['working', 'idle', 'waiting', 'blocked', 'approval-needed', 'policy-denied', 'error'] as const;
 
 type StatusState = (typeof STATUS_STATES)[number];
 type MutationToolName = 'write_artifact' | 'create_marker' | 'update_status';
@@ -280,7 +280,7 @@ async function executeUpdateStatus(
 ): Promise<WavemillToolResult<UpdateStatusDetails>> {
   if (!isStatusState(params.state)) {
     options.recorder?.recordMutation({ tool: 'update_status', status: 'failed', reason: 'invalid state' });
-    return errorResult('update_status', 'invalid_input', 'state must be one of: working, idle, waiting, error');
+    return errorResult('update_status', 'invalid_input', 'state must be one of: working, idle, waiting, blocked, approval-needed, policy-denied, error');
   }
   if (params.message !== undefined && typeof params.message !== 'string') {
     options.recorder?.recordMutation({ tool: 'update_status', status: 'failed', reason: 'message must be a string when provided' });
