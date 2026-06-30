@@ -148,6 +148,31 @@ describe('certifyNativeAgent', () => {
     assert.equal(result.artifactPath, undefined);
   });
 
+  it('does not certify a higher phase without phase-specific scenarios', async () => {
+    let writeCalls = 0;
+
+    const result = await certifyNativeAgent({
+      provider: 'openai',
+      model: 'gpt-4o',
+      phase: 'patch',
+      repoDir: '/repo',
+      dryRun: false,
+      registry: STUB_REGISTRY,
+      runScenariosFn: async (opts) => {
+        assert.equal(opts.scenarios.length > 0, true);
+        assert.equal(opts.scenarios.some(s => s.phase === 'patch'), false);
+        return PASSING_REPORT;
+      },
+      writeCertificationFn: () => { writeCalls++; return '/repo/cert.json'; },
+    });
+
+    assert.equal(writeCalls, 0, 'writeCertification must not be called without requested phase coverage');
+    assert.equal(result.harnessPassed, true);
+    assert.equal(result.liveCertifiable, false);
+    assert.equal(result.artifactPath, undefined);
+    assert.match(result.knownLimitations.join('\n'), /no patch scenarios/);
+  });
+
   it('throws for unsupported model', async () => {
     await assert.rejects(
       () => certifyNativeAgent({

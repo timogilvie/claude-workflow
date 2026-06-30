@@ -89,6 +89,7 @@ export async function certifyNativeAgent(opts: CertifyOptions): Promise<CertifyR
   // Filter scenarios to those whose phase is satisfied by the requested phase
   const allScenarios = getDefaultScenarios();
   const phaseScenarios = allScenarios.filter(s => opts.phase === s.phase || PHASE_ORDER.indexOf(s.phase) <= PHASE_ORDER.indexOf(opts.phase));
+  const hasRequestedPhaseScenario = phaseScenarios.some(s => s.phase === opts.phase);
 
   const runOpts: RunScenariosOptions = {
     provider: opts.provider,
@@ -100,10 +101,17 @@ export async function certifyNativeAgent(opts: CertifyOptions): Promise<CertifyR
   };
 
   const report = await runScenariosFn(runOpts);
+  const phaseCoverageLimitation = hasRequestedPhaseScenario
+    ? undefined
+    : `Certification suite ${suiteVersion} has no ${opts.phase} scenarios; lower-phase results cannot certify ${opts.phase}.`;
+  const knownLimitations = phaseCoverageLimitation
+    ? [...report.knownLimitations, phaseCoverageLimitation]
+    : report.knownLimitations;
+  const liveCertifiable = report.liveCertifiable && hasRequestedPhaseScenario;
 
   let artifactPath: string | undefined;
 
-  if (report.liveCertifiable && !dryRun) {
+  if (liveCertifiable && !dryRun) {
     const artifact: NativeCertificationArtifact = {
       schemaVersion: CERTIFICATION_SCHEMA_VERSION,
       provider: opts.provider,
@@ -112,7 +120,7 @@ export async function certifyNativeAgent(opts: CertifyOptions): Promise<CertifyR
       suiteVersion,
       certifiedAt: now().toISOString(),
       scenarios: report.results.map(toArtifactScenario),
-      ...(report.knownLimitations.length > 0 ? { knownLimitations: report.knownLimitations } : {}),
+      ...(knownLimitations.length > 0 ? { knownLimitations } : {}),
     };
     artifactPath = writeCertificationFn(opts.repoDir, artifact);
   }
@@ -124,14 +132,14 @@ export async function certifyNativeAgent(opts: CertifyOptions): Promise<CertifyR
     suiteVersion,
     dryRun,
     harnessPassed: report.harnessPassed,
-    liveCertifiable: report.liveCertifiable,
+    liveCertifiable,
     artifactPath,
     scenarios: report.results.map(r => ({
       scenarioId: r.scenarioId,
       status: r.status,
       ...(r.detail ? { detail: r.detail } : {}),
     })),
-    knownLimitations: report.knownLimitations,
+    knownLimitations,
   };
 }
 
