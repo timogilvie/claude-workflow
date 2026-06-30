@@ -200,22 +200,36 @@ function mergeNativeCapability(
       : undefined,
   };
 
-  const certification = override.certification
-    ? {
-      maxCertifiedPhase: override.certification.maxCertifiedPhase ?? seed?.certification?.maxCertifiedPhase,
-      certifiedAt: override.certification.certifiedAt ?? seed?.certification?.certifiedAt,
-      certificationSuiteVersion:
-        override.certification.certificationSuiteVersion ?? seed?.certification?.certificationSuiteVersion,
-      knownLimitations: override.certification.knownLimitations
-        ? [...override.certification.knownLimitations]
-        : seed?.certification?.knownLimitations
-        ? [...seed.certification.knownLimitations]
-        : undefined,
-    } as RegistryCertification
-    : cloneRegistryCertification(seed?.certification);
+  if (override.certification) {
+    const maxCertifiedPhase =
+      override.certification.maxCertifiedPhase ?? seed?.certification?.maxCertifiedPhase;
+    const certifiedAt = override.certification.certifiedAt ?? seed?.certification?.certifiedAt;
+    const certificationSuiteVersion =
+      override.certification.certificationSuiteVersion ?? seed?.certification?.certificationSuiteVersion;
+    const knownLimitations = override.certification.knownLimitations
+      ? [...override.certification.knownLimitations]
+      : seed?.certification?.knownLimitations
+      ? [...seed.certification.knownLimitations]
+      : undefined;
 
-  if (certification) {
-    merged.certification = certification;
+    const certification: Partial<RegistryCertification> = {
+      knownLimitations,
+    };
+    if (maxCertifiedPhase !== undefined) {
+      certification.maxCertifiedPhase = maxCertifiedPhase;
+    }
+    if (certifiedAt !== undefined) {
+      certification.certifiedAt = certifiedAt;
+    }
+    if (certificationSuiteVersion !== undefined) {
+      certification.certificationSuiteVersion = certificationSuiteVersion;
+    }
+    merged.certification = certification as RegistryCertification;
+  } else {
+    const cloned = cloneRegistryCertification(seed?.certification);
+    if (cloned) {
+      merged.certification = cloned;
+    }
   }
 
   return merged as NativeCapability;
