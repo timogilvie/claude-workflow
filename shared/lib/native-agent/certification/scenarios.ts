@@ -322,6 +322,9 @@ async function assertPhasePersistenceRoundtrip(ctx: ScenarioContext): Promise<Sc
 // Default scenario catalog
 // ---------------------------------------------------------------------------
 
+// Expected-unsupported cases are covered by scenario-runner tests instead of
+// permanent catalog entries because any unsupported deterministic scenario makes
+// the harness fail aggregate certification.
 const DEFAULT_SCENARIOS: CertificationScenario[] = [
   {
     id: 'tool.compat.git_status.openai-completions',
