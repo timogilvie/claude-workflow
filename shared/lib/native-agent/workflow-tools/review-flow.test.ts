@@ -6,6 +6,7 @@ import { beforeEach, describe, it } from 'node:test';
 
 import type { ReviewResult } from '../../review-engine.ts';
 import { createInMemoryDedupeRegistry } from './dedupe.ts';
+import type { NetworkPolicy } from '../network-policy.ts';
 import type {
   GitHubToolDeps,
   GitHubToolLabelTarget,
@@ -24,6 +25,13 @@ interface FixtureState {
   linearComments: Array<{ id: string; body: string; issueId: string; url: string }>;
   calls: Record<string, number>;
 }
+
+const ALLOW_REVIEW_FLOW_NETWORK_POLICY: NetworkPolicy = {
+  review: {
+    review_changes: { kind: 'allow' },
+    linear_comment: { kind: 'allowlist', hosts: ['api.linear.app'] },
+  },
+};
 
 function createLinearClient(state: FixtureState, behavior?: { failComment?: boolean }): LinearClient {
   return {
@@ -126,6 +134,9 @@ function createGitHubDeps(state: FixtureState, behavior?: {
     async sleep() {},
     maxAttempts: 1,
     retryDelayMs: 1,
+    getSecretEnvNames() {
+      return [];
+    },
   };
 }
 
@@ -260,6 +271,7 @@ describe('runReviewFlow', () => {
       clock: () => 1_000,
       linearClient,
       githubDeps,
+      networkPolicy: ALLOW_REVIEW_FLOW_NETWORK_POLICY,
       reviewChangesImpl: async () => makeReview(),
       fixFindings: fixExecutor,
     });
@@ -304,6 +316,7 @@ describe('runReviewFlow', () => {
       clock: () => 1_000,
       linearClient,
       githubDeps,
+      networkPolicy: ALLOW_REVIEW_FLOW_NETWORK_POLICY,
       reviewChangesImpl: async () => makeReview(),
       fixFindings: fixExecutor,
     });
@@ -362,6 +375,7 @@ describe('runReviewFlow', () => {
       clock: () => 1_000,
       linearClient: createLinearClient(state),
       githubDeps: createGitHubDeps(state),
+      networkPolicy: ALLOW_REVIEW_FLOW_NETWORK_POLICY,
       reviewChangesImpl: async () => makeReview(),
       fixFindings: async ({ finding }) => ({
         ok: true,
@@ -414,6 +428,7 @@ describe('runReviewFlow', () => {
       clock: () => 1_000,
       linearClient: createLinearClient(state),
       githubDeps: createGitHubDeps(state),
+      networkPolicy: ALLOW_REVIEW_FLOW_NETWORK_POLICY,
       reviewChangesImpl: async () => makeReview({ needsStrongerReviewer: true, strongerReviewerReason: 'Human review needed' }),
     });
 
@@ -461,6 +476,7 @@ describe('runReviewFlow', () => {
       clock: () => 1_000,
       linearClient: createLinearClient(state, { failComment: true }),
       githubDeps: createGitHubDeps(state, { failCreatePr: true }),
+      networkPolicy: ALLOW_REVIEW_FLOW_NETWORK_POLICY,
       reviewChangesImpl: async () => makeReview(),
     });
 

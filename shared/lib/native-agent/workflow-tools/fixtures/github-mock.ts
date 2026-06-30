@@ -209,6 +209,9 @@ export function createFixtureBackedGithubDeps(seed?: GithubFixtureSeed): {
     },
     maxAttempts: seed?.maxAttempts ?? 3,
     retryDelayMs: seed?.retryDelayMs ?? 10,
+    getSecretEnvNames() {
+      return [];
+    },
   };
 
   return { deps, state };

@@ -64,6 +64,7 @@ run_write() {
   local detail="$8"
   local agent="$9"
   local repo_dir="${10:-$REPO_DIR}"
+  local next_action="${11:-}"
   local hook_file
 
   hook_file="$(hook_file_for "$session" "$issue")"
@@ -84,7 +85,7 @@ run_write() {
     else
       unset TMUX
     fi
-    wavemill_hook_write "$state" "$event" "$detail" "$agent"
+    wavemill_hook_write "$state" "$event" "$detail" "$agent" "$next_action"
   ) 2>"$stderr_file"
 
   printf '%s\n' "$hook_file"
@@ -197,6 +198,73 @@ if [[ "$routing_function" == *"wavemill_hook_notify"* ]] && [[ "$routing_functio
 else
   fail "routing hook write should stay JSON + notify only"
 fi
+
+echo ""
+echo "=== New hook states: blocked, approval-needed, policy-denied (HOK-2370) ==="
+
+session="hook-osc-$$-new-1"
+issue="HOK-2370-OSC-A"
+stderr_file="$TMP_ROOT/approval-needed.stderr"
+hook_file="$(run_write "$stderr_file" "$session" "$issue" "coding" "" "approval-needed" "Notification" "waiting for approval" "claude")"
+approval_output="$(cat "$stderr_file")"
+expected_approval="${esc}]777;notify;wavemill ${issue};approval needed: waiting for approval${esc}\\"
+if [[ "$approval_output" == "$expected_approval" ]] \
+  && jq -e '.state == "approval-needed" and .event == "Notification" and .detail == "waiting for approval" and .agent == "claude"' "$hook_file" >/dev/null 2>&1; then
+  pass "approval-needed emits OSC notification with correct body"
+else
+  fail "approval-needed OSC emission (got: $(cat "$stderr_file" | cat -v))"
+fi
+rm -f "$hook_file"
+
+session="hook-osc-$$-new-2"
+issue="HOK-2370-OSC-B"
+stderr_file="$TMP_ROOT/policy-denied.stderr"
+hook_file="$(run_write "$stderr_file" "$session" "$issue" "coding" "" "policy-denied" "policy_check" "network request blocked" "claude")"
+denied_output="$(cat "$stderr_file")"
+expected_denied="${esc}]777;notify;wavemill ${issue};policy denied: network request blocked${esc}\\"
+if [[ "$denied_output" == "$expected_denied" ]] \
+  && jq -e '.state == "policy-denied" and .event == "policy_check" and .detail == "network request blocked"' "$hook_file" >/dev/null 2>&1; then
+  pass "policy-denied emits OSC notification with correct body"
+else
+  fail "policy-denied OSC emission (got: $(cat "$stderr_file" | cat -v))"
+fi
+rm -f "$hook_file"
+
+session="hook-osc-$$-new-3"
+issue="HOK-2370-OSC-C"
+stderr_file="$TMP_ROOT/blocked-no-osc.stderr"
+hook_file="$(run_write "$stderr_file" "$session" "$issue" "coding" "" "blocked" "tool_error" "cannot proceed" "claude")"
+if [[ ! -s "$stderr_file" ]] \
+  && jq -e '.state == "blocked" and .event == "tool_error" and .detail == "cannot proceed"' "$hook_file" >/dev/null 2>&1; then
+  pass "blocked writes JSON but does not emit OSC (non-actionable by user)"
+else
+  fail "blocked OSC behavior unexpected (expected no OSC, got: $(cat "$stderr_file" | cat -v))"
+fi
+rm -f "$hook_file"
+
+session="hook-osc-$$-new-4"
+issue="HOK-2370-OSC-D"
+stderr_file="$TMP_ROOT/next-action.stderr"
+# Args: stderr session issue phase tmux state event detail agent repo_dir next_action
+hook_file="$(run_write "$stderr_file" "$session" "$issue" "coding" "" "approval-needed" "Notification" "plan ready" "claude" "$REPO_DIR" "approve HOK-9999 to proceed")"
+if jq -e '.state == "approval-needed" and .next_action == "approve HOK-9999 to proceed" and .detail == "plan ready"' "$hook_file" >/dev/null 2>&1; then
+  pass "next_action field is written to hook JSON when provided"
+else
+  fail "next_action field missing from hook JSON"
+fi
+rm -f "$hook_file"
+
+session="hook-osc-$$-new-5"
+issue="HOK-2370-OSC-E"
+stderr_file="$TMP_ROOT/no-next-action.stderr"
+# Args: stderr session issue phase tmux state event detail agent repo_dir (next_action omitted)
+hook_file="$(run_write "$stderr_file" "$session" "$issue" "coding" "" "waiting" "Notification" "clarification needed" "claude" "$REPO_DIR")"
+if jq -e 'has("next_action") | not' "$hook_file" >/dev/null 2>&1; then
+  pass "next_action field absent from hook JSON when not provided"
+else
+  fail "next_action field unexpectedly present when not passed"
+fi
+rm -f "$hook_file"
 
 echo ""
 echo "Passed: $PASS"

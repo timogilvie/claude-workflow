@@ -772,3 +772,87 @@ test('native agent/model: awaiting_user status maps through existing hook-state 
     cleanup([featureDir]);
   }
 });
+
+// HOK-2364: approval_needed state surfacing
+test('approval_needed: coding stage with approvalRequest artifact maps to approval_needed normalized state', async () => {
+  const featureDir = makeTempDir();
+  try {
+    mkdirSync(featureDir, { recursive: true });
+
+    writeFileSync(
+      join(featureDir, '.coding-result.json'),
+      JSON.stringify({
+        stage: 'coding',
+        status: 'awaiting_user',
+        startedAt: new Date().toISOString(),
+        finishedAt: null,
+        agent: 'native',
+        model: 'pi-mini',
+        notes: 'Awaiting human approval for risky operation',
+        artifacts: {
+          type: 'coding',
+          filesChanged: 0,
+          linesAdded: 0,
+          linesRemoved: 0,
+          commitCount: 0,
+          approvalRequest: {
+            requestId: 'abc123',
+            riskReason: 'Creates PR in ready phase',
+            argSummary: 'repo=owner/repo',
+            requestedAt: Date.now(),
+            expiresAt: Date.now() + 300_000,
+          },
+        },
+      }),
+    );
+
+    const state = await deriveFeatureState({
+      featureDir,
+      issueId: 'HOK-2364',
+      slug: 'approval-needed-test',
+    });
+
+    assert.equal(state.currentPhase, 'coding');
+    assert.equal(state.normalizedState, 'approval_needed');
+  } finally {
+    cleanup([featureDir]);
+  }
+});
+
+test('approval_needed: awaiting_user without approvalRequest stays as awaiting_user', async () => {
+  const featureDir = makeTempDir();
+  try {
+    mkdirSync(featureDir, { recursive: true });
+
+    writeFileSync(
+      join(featureDir, '.coding-result.json'),
+      JSON.stringify({
+        stage: 'coding',
+        status: 'awaiting_user',
+        startedAt: new Date().toISOString(),
+        finishedAt: null,
+        agent: 'native',
+        model: 'pi-mini',
+        notes: 'Awaiting user (generic)',
+        artifacts: {
+          type: 'coding',
+          filesChanged: 0,
+          linesAdded: 0,
+          linesRemoved: 0,
+          commitCount: 0,
+        },
+      }),
+    );
+
+    const state = await deriveFeatureState({
+      featureDir,
+      issueId: 'HOK-2364',
+      slug: 'generic-awaiting-test',
+    });
+
+    assert.equal(state.currentPhase, 'coding');
+    assert.equal(state.normalizedState, 'awaiting_user');
+  } finally {
+    cleanup([featureDir]);
+  }
+});

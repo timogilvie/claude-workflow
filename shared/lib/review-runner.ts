@@ -53,6 +53,8 @@ export interface ReviewOptions {
   sinceCommit?: string;
   /** Force normal vs degraded scoped-review behavior */
   operatingMode?: OperatingMode;
+  /** Feature directory for stage-result cleanup reporting when available */
+  featureDir?: string;
 }
 
 // Re-export types from review-engine for backward compatibility
@@ -155,6 +157,7 @@ export async function reviewChanges(
     reporter,
     skipClaudePreflight: true,
     operatingMode: options.operatingMode,
+    featureDir: options.featureDir,
   });
 
   return mergeDeterministicFindings(result, deterministicFindings);

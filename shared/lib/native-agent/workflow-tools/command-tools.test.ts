@@ -20,9 +20,19 @@ import type {
   WorkflowToolStageArtifactEntry,
   WorkflowToolTranscriptEvent,
 } from './linear-tools.ts';
+import type { NetworkPolicy } from '../network-policy.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURES = join(__dirname, 'fixtures', 'commands');
+const ALLOW_COMMAND_NETWORK_POLICY: NetworkPolicy = {
+  planning: {
+    route_task: { kind: 'allow' },
+    expand_issue: { kind: 'allow' },
+  },
+  review: {
+    review_changes: { kind: 'allow' },
+  },
+};
 
 function loadFixture<T>(name: string): T {
   return JSON.parse(readFileSync(join(FIXTURES, name), 'utf8')) as T;
@@ -60,6 +70,7 @@ function makeDeps(overrides: Partial<CommandToolsDeps> = {}): CommandToolsDeps &
     readStageResultImpl: overrides.readStageResultImpl,
     writeStageResultImpl: overrides.writeStageResultImpl,
     updateStageResultImpl: overrides.updateStageResultImpl,
+    networkPolicy: overrides.networkPolicy ?? ALLOW_COMMAND_NETWORK_POLICY,
     transcriptEvents,
     stageArtifactEntries,
   };
@@ -115,6 +126,26 @@ describe('executeReviewChanges', () => {
     const result = await executeReviewChanges({ base: 'auto/integration' }, deps);
     assert.equal(result.ok, false);
     assert.equal(result.error, 'policy_denied');
+  });
+
+  it('distinguishes network policy denial from review delegate failure', async () => {
+    const deps = makeDeps({
+      phase: 'review',
+      networkPolicy: {
+        review: {
+          review_changes: { kind: 'deny' },
+        },
+      },
+      reviewChangesImpl: async () => {
+        throw new Error('should not run');
+      },
+    });
+    const result = await executeReviewChanges({ base: 'auto/integration' }, deps);
+
+    assert.equal(result.ok, false);
+    assert.equal(result.error, 'policy_denied');
+    assert.equal((result.diagnostics as { category: string }).category, 'network');
+    assert.equal((deps.transcriptEvents[0].details as { diagnostics: { category: string } }).diagnostics.category, 'network');
   });
 
   it('succeeds on retry after a transient failure', async () => {
@@ -201,6 +232,33 @@ describe('executeRouteTask', () => {
     assert.equal(first.ok, false);
     assert.equal(first.error, 'route_failed');
     assert.ok(second.ok);
+  });
+
+  it('blocks route_task before routing when network policy denies command access', async () => {
+    const repoDir = makeTempDir();
+    tempDirs.push(repoDir);
+    const taskPacketPath = join(repoDir, 'task-packet.md');
+    writeFileSync(taskPacketPath, loadFixtureText('task-packet.md'));
+    let routeCalls = 0;
+    const deps = makeDeps({
+      phase: 'planning',
+      repoDir,
+      networkPolicy: {
+        planning: {
+          route_task: { kind: 'deny' },
+        },
+      },
+      routeBatchImpl: async () => {
+        routeCalls++;
+        return [];
+      },
+    });
+
+    const result = await executeRouteTask({ taskPacketPath, repoDir }, deps);
+    assert.equal(result.ok, false);
+    assert.equal(result.error, 'policy_denied');
+    assert.equal(routeCalls, 0);
+    assert.equal((result.diagnostics as { category: string }).category, 'network');
   });
 });
 

@@ -12,6 +12,7 @@ import {
 } from './github.ts';
 import { githubAddLabelKey, githubCreatePrKey } from './dedupe.ts';
 import { isMutationAllowed } from './mutation-policy.ts';
+import type { NetworkPolicy } from '../network-policy.ts';
 
 interface FixtureState {
   pullRequests: GitHubToolPullRequest[];
@@ -155,6 +156,9 @@ function createFixtureDeps(seed?: {
     },
     maxAttempts: 3,
     retryDelayMs: 10,
+    getSecretEnvNames() {
+      return [];
+    },
   };
 
   return { deps, state };
@@ -327,12 +331,12 @@ describe('githubCreatePr', () => {
       body: 'Body',
     }, deps);
 
-    assert.deepEqual(result, {
-      ok: false,
-      tool: 'github_create_pr',
-      error: 'conflict',
-      message: 'Multiple open pull requests already exist for acme/widgets:feature/idempotent-pr->main',
-    });
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.equal(result.tool, 'github_create_pr');
+    assert.equal(result.error, 'conflict');
+    assert.equal(result.message, 'Multiple open pull requests already exist for acme/widgets:feature/idempotent-pr->main');
+    assert.equal(result.metadata?.trust?.sourceKind, 'wavemill_artifact');
   });
 
   it('maps not_found errors', async () => {
@@ -349,12 +353,12 @@ describe('githubCreatePr', () => {
       body: 'Body',
     }, deps);
 
-    assert.deepEqual(result, {
-      ok: false,
-      tool: 'github_create_pr',
-      error: 'not_found',
-      message: 'Repository not found',
-    });
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.equal(result.tool, 'github_create_pr');
+    assert.equal(result.error, 'not_found');
+    assert.equal(result.message, 'Repository not found');
+    assert.equal(result.metadata?.trust?.sourceKind, 'wavemill_artifact');
   });
 
   it('denies ready-phase general PR mutations', async () => {
@@ -369,12 +373,37 @@ describe('githubCreatePr', () => {
       body: 'Body',
     }, deps);
 
-    assert.deepEqual(result, {
-      ok: false,
-      tool: 'github_create_pr',
-      error: 'policy_denied',
-      message: 'ready_mutation_denied: general PR creation not allowed in ready phase; only stale_base or merge_conflict remediation',
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.equal(result.tool, 'github_create_pr');
+    assert.equal(result.error, 'policy_denied');
+    assert.equal(result.message, 'ready_mutation_denied: general PR creation not allowed in ready phase; only stale_base or merge_conflict remediation');
+    assert.equal(result.metadata?.trust?.sourceKind, 'wavemill_artifact');
+  });
+
+  it('denies when review-phase network policy blocks GitHub access before any transport call', async () => {
+    const { deps, state } = createFixtureDeps();
+    const result = await githubCreatePr({
+      repo: 'acme/widgets',
+      phase: 'review',
+      head: 'feature/idempotent-pr',
+      base: 'main',
+      headSha: 'abc123',
+      title: 'Title',
+      body: 'Body',
+    }, {
+      ...deps,
+      networkPolicy: {
+        review: {
+          github_create_pr: { kind: 'deny' },
+        },
+      } satisfies NetworkPolicy,
     });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.error, 'policy_denied');
+    assert.equal(state.calls.listOpenPullRequests, 0);
+    assert.equal((result.diagnostics as { category: string }).category, 'network');
   });
 });
 
@@ -478,12 +507,12 @@ describe('githubAddLabel', () => {
       label: 'needs-review',
     }, deps);
 
-    assert.deepEqual(result, {
-      ok: false,
-      tool: 'github_add_label',
-      error: 'not_found',
-      message: 'Issue #99 not found',
-    });
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.equal(result.tool, 'github_add_label');
+    assert.equal(result.error, 'not_found');
+    assert.equal(result.message, 'Issue #99 not found');
+    assert.equal(result.metadata?.trust?.sourceKind, 'wavemill_artifact');
   });
 
   it('denies non-review label mutations', async () => {
@@ -505,12 +534,65 @@ describe('githubAddLabel', () => {
       label: 'needs-review',
     }, deps);
 
-    assert.deepEqual(result, {
-      ok: false,
-      tool: 'github_add_label',
-      error: 'policy_denied',
-      message: 'ready_mutation_denied: label add not allowed in ready phase',
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.equal(result.tool, 'github_add_label');
+    assert.equal(result.error, 'policy_denied');
+    assert.equal(result.message, 'ready_mutation_denied: label add not allowed in ready phase');
+    assert.equal(result.metadata?.trust?.sourceKind, 'wavemill_artifact');
+  });
+
+  it('distinguishes network policy denial from transport failure for label adds', async () => {
+    const { deps, state } = createFixtureDeps({
+      labelTargets: [{
+        repo: 'acme/widgets',
+        targetKind: 'issue',
+        targetNumber: 99,
+        labels: [],
+        url: 'https://github.com/acme/widgets/issues/99',
+      }],
     });
+
+    const denied = await githubAddLabel({
+      repo: 'acme/widgets',
+      phase: 'review',
+      targetKind: 'issue',
+      targetNumber: 99,
+      label: 'needs-review',
+    }, {
+      ...deps,
+      networkPolicy: {
+        review: {
+          github_add_label: { kind: 'deny' },
+        },
+      } satisfies NetworkPolicy,
+    });
+
+    assert.equal(denied.ok, false);
+    assert.equal(denied.error, 'policy_denied');
+    assert.equal(state.calls.getLabels, 0);
+    assert.equal((denied.diagnostics as { category: string }).category, 'network');
+
+    const failed = await githubAddLabel({
+      repo: 'acme/widgets',
+      phase: 'review',
+      targetKind: 'issue',
+      targetNumber: 99,
+      label: 'needs-review',
+    }, {
+      ...deps,
+      getLabels: async () => {
+        throw new Error('network timeout');
+      },
+      networkPolicy: {
+        review: {
+          github_add_label: { kind: 'allowlist', hosts: ['api.github.com'] },
+        },
+      } satisfies NetworkPolicy,
+    });
+
+    assert.equal(failed.ok, false);
+    assert.equal(failed.error, 'external_error');
   });
 });
 
@@ -559,6 +641,96 @@ describe('workflow tool descriptors', () => {
 describe('workflow policy invariants', () => {
   it('merge remains denied for review and no merge helper is exported', () => {
     assert.equal(isMutationAllowed('review', 'github_create_pr', 'merge').allowed, false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Secret redaction in github_create_pr
+// ---------------------------------------------------------------------------
+
+describe('github_create_pr: secret redaction', () => {
+  it('redacts secrets in body before calling createPullRequest', async () => {
+    let capturedBody: string | undefined;
+    const token = 'ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890';
+    const { deps } = createFixtureDeps({
+      onCreateSideEffect: () => {},
+    });
+    const captureCreateDeps: Partial<GitHubToolDeps> = {
+      ...deps,
+      async listOpenPullRequests() { return []; },
+      async createPullRequest(input) {
+        capturedBody = input.body;
+        return {
+          number: 99,
+          title: input.title,
+          body: input.body,
+          head: input.head,
+          base: input.base,
+          url: 'https://github.com/org/repo/pull/99',
+        };
+      },
+    };
+
+    const result = await githubCreatePr(
+      {
+        repo: 'org/repo',
+        head: 'feature/branch',
+        base: 'main',
+        headSha: 'abc1234',
+        title: 'Add feature',
+        body: `## Summary\nUsed token: ${token}`,
+        phase: 'review',
+      },
+      captureCreateDeps,
+    );
+
+    assert.equal(result.ok, true);
+    assert.ok(capturedBody !== undefined, 'createPullRequest must have been called');
+    assert.ok(!capturedBody.includes(token), 'original token must not appear in PR body');
+    assert.ok(capturedBody.includes('[REDACTED:github_pat]'), 'redacted placeholder must appear');
+  });
+
+  it('redacts configured secret env values in body before calling createPullRequest', async () => {
+    let capturedBody: string | undefined;
+    process.env.HOKUSAI_PR_SECRET = 'pr-configured-value-without-known-pattern';
+    const { deps } = createFixtureDeps();
+    const captureCreateDeps: Partial<GitHubToolDeps> = {
+      ...deps,
+      getSecretEnvNames: () => ['HOKUSAI_PR_SECRET'],
+      async listOpenPullRequests() { return []; },
+      async createPullRequest(input) {
+        capturedBody = input.body;
+        return {
+          number: 99,
+          title: input.title,
+          body: input.body,
+          head: input.head,
+          base: input.base,
+          url: 'https://github.com/org/repo/pull/99',
+        };
+      },
+    };
+
+    try {
+      const result = await githubCreatePr(
+        {
+          repo: 'org/repo',
+          head: 'feature/branch',
+          base: 'main',
+          headSha: 'abc1234',
+          title: 'Add feature',
+          body: 'Secret: pr-configured-value-without-known-pattern',
+          phase: 'review',
+        },
+        captureCreateDeps,
+      );
+
+      assert.equal(result.ok, true);
+      assert.ok(capturedBody !== undefined, 'createPullRequest must have been called');
+      assert.equal(capturedBody, 'Secret: [REDACTED:configured_secret]');
+    } finally {
+      delete process.env.HOKUSAI_PR_SECRET;
+    }
   });
 });
 

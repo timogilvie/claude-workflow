@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { enforceMutation } from './mutation-enforcer.ts';
 import type { MutationRecord } from './mutation-record.ts';
+import { ApprovalStore, createApprovalGate } from './approval-gate.ts';
 
 describe('workflow-tools: mutation enforcer', () => {
   it('executes allowed mutations and records executed outcomes', async () => {
@@ -169,5 +170,137 @@ describe('workflow-tools: mutation enforcer', () => {
         reason: 'unknown_combination: no policy entry for phase=review tool=linear_comment action=add_label',
       },
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Approval gate integration
+// ---------------------------------------------------------------------------
+
+describe('workflow-tools: mutation enforcer approval gate', () => {
+  it('returns approval_needed and does not execute when gate pauses', async () => {
+    const store = new ApprovalStore();
+    const gate = createApprovalGate(store, () => ({ riskReason: 'high-risk comment', argSummary: 'body=test' }));
+    const records: MutationRecord[] = [];
+    let executed = false;
+
+    const result = await enforceMutation({
+      tool: 'linear_comment',
+      phase: 'coding',
+      action: 'comment',
+      target: { issue: 'HOK-1234' },
+      approvalGate: gate,
+      sessionId: 'session-test',
+      argSummary: 'body=test',
+      execute: async () => {
+        executed = true;
+        return { ok: true };
+      },
+      record: async (r) => { records.push(r); },
+    });
+
+    assert.equal(executed, false);
+    assert.equal(result.outcome, 'approval_needed');
+    if (result.outcome === 'approval_needed') {
+      assert.equal(typeof result.requestId, 'string');
+      assert.equal(result.riskReason, 'high-risk comment');
+    }
+    assert.equal(records.length, 1);
+    assert.equal(records[0]!.outcome, 'approval_needed');
+  });
+
+  it('executes after grant and does not produce approval_needed', async () => {
+    const store = new ApprovalStore();
+    const gate = createApprovalGate(store, () => ({ riskReason: 'risky', argSummary: '' }));
+    const SESSION = 'session-grant-test';
+
+    // First call — should return approval_needed
+    const firstResult = await enforceMutation({
+      tool: 'linear_comment',
+      phase: 'coding',
+      action: 'comment',
+      target: { issue: 'HOK-1' },
+      approvalGate: gate,
+      sessionId: SESSION,
+      argSummary: '',
+      execute: async () => ({ ok: true }),
+      record: async () => {},
+    });
+    assert.equal(firstResult.outcome, 'approval_needed');
+
+    // Grant the request
+    const requestId = (firstResult as { requestId: string }).requestId;
+    store.grant(SESSION, requestId);
+
+    // Second call — should execute
+    let executed = false;
+    const secondResult = await enforceMutation({
+      tool: 'linear_comment',
+      phase: 'coding',
+      action: 'comment',
+      target: { issue: 'HOK-1' },
+      approvalGate: gate,
+      sessionId: SESSION,
+      argSummary: '',
+      execute: async () => { executed = true; return { ok: true }; },
+      record: async () => {},
+    });
+
+    assert.equal(executed, true);
+    assert.equal(secondResult.outcome, 'executed');
+  });
+
+  it('returns denied outcome when gate returns denied decision', async () => {
+    const store = new ApprovalStore();
+    const gate = createApprovalGate(store, () => ({ riskReason: 'risky', argSummary: '' }));
+    const SESSION = 'session-deny-test';
+
+    // First call to create pending
+    const firstResult = await enforceMutation({
+      tool: 'linear_comment',
+      phase: 'coding',
+      action: 'comment',
+      target: {},
+      approvalGate: gate,
+      sessionId: SESSION,
+      argSummary: '',
+      execute: async () => ({ ok: true }),
+      record: async () => {},
+    });
+    const requestId = (firstResult as { requestId: string }).requestId;
+    store.deny(SESSION, requestId);
+
+    // Second call — should be denied
+    let executed = false;
+    const secondResult = await enforceMutation({
+      tool: 'linear_comment',
+      phase: 'coding',
+      action: 'comment',
+      target: {},
+      approvalGate: gate,
+      sessionId: SESSION,
+      argSummary: '',
+      execute: async () => { executed = true; return { ok: true }; },
+      record: async () => {},
+    });
+
+    assert.equal(executed, false);
+    assert.equal(secondResult.outcome, 'denied');
+    if (secondResult.outcome === 'denied') {
+      assert.equal(secondResult.code, 'approval_denied');
+    }
+  });
+
+  it('runs without gate when approvalGate is omitted (backward compat)', async () => {
+    let executed = false;
+    const result = await enforceMutation({
+      tool: 'linear_comment',
+      phase: 'coding',
+      action: 'comment',
+      execute: async () => { executed = true; return { ok: true }; },
+      record: async () => {},
+    });
+    assert.equal(executed, true);
+    assert.equal(result.outcome, 'executed');
   });
 });

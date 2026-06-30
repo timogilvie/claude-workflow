@@ -35,8 +35,10 @@ import type { AgentEvent } from '@earendil-works/pi-agent-core';
 import type { AssistantMessage } from '@earendil-works/pi-ai';
 import type { ReplayCompactionEvent } from './compaction.ts';
 import type { CommandTranscriptEventData } from './command-transcript.ts';
+import { writeCleanupSummaryEvent, type CleanupDecision, type CleanupReason, type CleanupReport, type TreeState } from './cleanup.ts';
 import type { ToolResultMetadata } from './tools/types.ts';
 import { redactSecrets, redactSecretsInValue } from './tools/redaction.ts';
+import type { ApprovalLifecycleEntry } from './workflow-tools/approval-gate.ts';
 
 // ---------------------------------------------------------------------------
 // Transcript event types
@@ -133,10 +135,21 @@ export interface TranscriptCommandResult extends TranscriptEventBase, CommandTra
 
 export interface TranscriptCompactionEvent extends TranscriptEventBase, ReplayCompactionEvent {}
 
+export interface TranscriptCleanupReport extends TranscriptEventBase {
+  type: 'cleanup_report';
+  reason: CleanupReason;
+  finalTreeState: TreeState;
+  cleanupDecision: CleanupDecision;
+  notes?: string[];
+}
+
 export interface TranscriptSessionEnded extends TranscriptEventBase {
   type: 'session_ended';
   messageCount: number;
 }
+
+/** Approval lifecycle event written to the transcript for each request/resolution (HOK-2364). */
+export interface TranscriptApprovalEvent extends TranscriptEventBase, ApprovalLifecycleEntry {}
 
 export type TranscriptEvent =
   | TranscriptSessionStarted
@@ -147,7 +160,9 @@ export type TranscriptEvent =
   | TranscriptToolResult
   | TranscriptCommandResult
   | TranscriptCompactionEvent
-  | TranscriptSessionEnded;
+  | TranscriptCleanupReport
+  | TranscriptSessionEnded
+  | TranscriptApprovalEvent;
 
 // ---------------------------------------------------------------------------
 // Redaction
@@ -307,10 +322,29 @@ export class TranscriptWriter {
     return transcriptEvent;
   }
 
+  /** Write an approval lifecycle event (requested, granted, denied, expired) to the transcript. */
+  writeApprovalEvent(entry: ApprovalLifecycleEntry): TranscriptApprovalEvent {
+    const transcriptEvent: TranscriptApprovalEvent = {
+      ...this.base(),
+      ...entry,
+    };
+    this.append(transcriptEvent);
+    return transcriptEvent;
+  }
+
   writeCompactionEvent(event: ReplayCompactionEvent): TranscriptCompactionEvent {
     const transcriptEvent: TranscriptCompactionEvent = {
       ...this.base(),
       ...event,
+    };
+    this.append(transcriptEvent);
+    return transcriptEvent;
+  }
+
+  writeCleanupReport(report: CleanupReport): TranscriptCleanupReport {
+    const transcriptEvent: TranscriptCleanupReport = {
+      ...this.base(),
+      ...writeCleanupSummaryEvent(report),
     };
     this.append(transcriptEvent);
     return transcriptEvent;
@@ -410,6 +444,13 @@ export class TranscriptWriter {
         let metadata: ToolResultMetadata | undefined;
         let rawDetailsForRedact = resultObj?.details;
         if (
+          resultObj &&
+          typeof resultObj === 'object' &&
+          'metadata' in resultObj
+        ) {
+          metadata = (resultObj as { metadata?: ToolResultMetadata }).metadata;
+        }
+        if (
           rawDetailsForRedact !== null &&
           rawDetailsForRedact !== undefined &&
           typeof rawDetailsForRedact === 'object' &&
@@ -417,7 +458,7 @@ export class TranscriptWriter {
           '__wavemill' in (rawDetailsForRedact as Record<string, unknown>)
         ) {
           const d = rawDetailsForRedact as Record<string, unknown>;
-          metadata = d.__wavemill as ToolResultMetadata;
+          metadata = (d.__wavemill as ToolResultMetadata) ?? metadata;
           // Strip __wavemill so it is not stored in transcript details.
           const { __wavemill: _dropped, ...rest } = d;
           rawDetailsForRedact = Object.keys(rest).length > 0 ? rest : undefined;

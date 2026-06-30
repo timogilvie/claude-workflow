@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, describe, it } from 'node:test';
@@ -14,6 +14,8 @@ import {
   type UpdateStatusDetails,
   type WriteArtifactDetails,
 } from './mutation-tools.ts';
+import { createCleanupTracker } from '../cleanup.ts';
+import { clearConfigCache } from '../../config.ts';
 
 const dirsToClean = new Set<string>();
 
@@ -42,7 +44,8 @@ describe('native-agent mutation tools', () => {
 
   it('writes artifacts to allowlisted paths', async () => {
     const repo = createRepo('mutation-artifact-success-');
-    const tool = createWriteArtifactTool(repo);
+    const tracker = createCleanupTracker();
+    const tool = createWriteArtifactTool(repo, { recorder: tracker });
 
     const result = await tool.execute('call-1', {
       path: 'features/demo/output.json',
@@ -55,6 +58,11 @@ describe('native-agent mutation tools', () => {
       assert.equal(details.resolvedPath, 'features/demo/output.json');
       assert.equal(details.bytesWritten, Buffer.byteLength('{"ok":true}\n', 'utf-8'));
       assert.equal(readFileSync(path.join(repo, details.resolvedPath), 'utf-8'), '{"ok":true}\n');
+      assert.deepEqual(tracker.mutations, [{
+        tool: 'write_artifact',
+        status: 'completed',
+        path: 'features/demo/output.json',
+      }]);
     }
   });
 
@@ -135,7 +143,8 @@ describe('native-agent mutation tools', () => {
   it('writes durable status updates and leaves no temp files behind', async () => {
     const repo = createRepo('mutation-status-success-');
     const statusPath = path.join(repo, '.wavemill', 'status.json');
-    const tool = createUpdateStatusTool(repo, { statusPath });
+    const tracker = createCleanupTracker();
+    const tool = createUpdateStatusTool(repo, { statusPath, recorder: tracker });
 
     const result = await tool.execute('call-6', {
       state: 'working',
@@ -157,7 +166,38 @@ describe('native-agent mutation tools', () => {
         readdirSync(path.dirname(statusPath)).filter((entry) => entry.endsWith('.tmp')),
         [],
       );
+      assert.deepEqual(tracker.mutations, [{
+        tool: 'update_status',
+        status: 'completed',
+        path: '.wavemill/status.json',
+      }]);
     }
+  });
+
+  it('records patch snapshots for apply_patch success', async () => {
+    const repo = createRepo('mutation-apply-patch-recorder-');
+    const tracker = createCleanupTracker();
+    writeFileSync(path.join(repo, 'src.ts'), 'const value = 1;\n', 'utf8');
+    const [tool] = createCodingMutationTools(repo, { recorder: tracker });
+
+    const result = await tool.execute('call-patch', {
+      patch: {
+        version: 1,
+        atomic: true,
+        operations: [{
+          op: 'edit',
+          path: 'src.ts',
+          oldText: 'const value = 1;\n',
+          newText: 'const value = 2;\n',
+        }],
+      },
+    });
+
+    assert.equal((result.details as { ok: boolean }).ok, true);
+    assert.equal(tracker.patchSnapshots.length, 1);
+    assert.equal(tracker.patchSnapshots[0]?.path, 'src.ts');
+    assert.equal(tracker.patchSnapshots[0]?.originalDiskText, 'const value = 1;\n');
+    assert.equal(tracker.patchSnapshots[0]?.postImage, 'const value = 2;\n');
   });
 
   it('rejects invalid status states', async () => {
@@ -173,6 +213,55 @@ describe('native-agent mutation tools', () => {
     if (!details.ok) {
       assert.equal(details.error, 'invalid_input');
       assert.match(details.message, /state must be one of/);
+    }
+  });
+
+  it('write_artifact redacts secrets from content before writing to disk', async () => {
+    const repo = createRepo('mutation-artifact-redact-');
+    const tool = createWriteArtifactTool(repo);
+    const token = 'ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890';
+
+    const result = await tool.execute('call-redact', {
+      path: 'features/demo/secret.json',
+      content: `{"token": "${token}"}`,
+    });
+
+    const details = result.details as WriteArtifactDetails;
+    assert.equal(details.ok, true);
+    if (details.ok) {
+      const diskContent = readFileSync(path.join(repo, details.resolvedPath), 'utf-8');
+      assert.ok(!diskContent.includes(token), 'original token must not appear on disk');
+      assert.ok(diskContent.includes('[REDACTED:github_pat]'), 'redacted placeholder must appear');
+    }
+  });
+
+  it('write_artifact redacts configured secret env values before writing to disk', async () => {
+    const repo = createRepo('mutation-artifact-configured-redact-');
+    writeFileSync(
+      path.join(repo, '.wavemill-config.json'),
+      JSON.stringify({ safety: { redaction: { secretEnvNames: ['HOKUSAI_TEST_SECRET'] } } }),
+      'utf-8',
+    );
+    clearConfigCache(repo);
+    process.env.HOKUSAI_TEST_SECRET = 'configured-value-without-known-pattern';
+    const tool = createWriteArtifactTool(repo);
+
+    try {
+      const result = await tool.execute('call-configured-redact', {
+        path: 'features/demo/configured-secret.txt',
+        content: 'value=configured-value-without-known-pattern\n',
+      });
+
+      const details = result.details as WriteArtifactDetails;
+      assert.equal(details.ok, true);
+      if (details.ok) {
+        const diskContent = readFileSync(path.join(repo, details.resolvedPath), 'utf-8');
+        assert.ok(!diskContent.includes('configured-value-without-known-pattern'));
+        assert.equal(diskContent, 'value=[REDACTED:configured_secret]\n');
+      }
+    } finally {
+      delete process.env.HOKUSAI_TEST_SECRET;
+      clearConfigCache(repo);
     }
   });
 });

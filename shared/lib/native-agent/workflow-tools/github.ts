@@ -1,4 +1,7 @@
 import type { ToolDescriptor, WavemillToolResult } from '../tools/types.ts';
+import { getRedactionConfig } from '../../config.ts';
+import { buildTrustMetadata } from '../provenance.ts';
+import { buildProfileFromConfig, redact } from '../../redaction-profiles.ts';
 import {
   addLabelsToIssue,
   addLabelsToPullRequest,
@@ -14,6 +17,11 @@ import {
   githubAddLabelKey,
   githubCreatePrKey,
 } from './dedupe.ts';
+import {
+  enforceNetworkPolicy,
+  type NetworkDeniedDiagnostics,
+  type NetworkPolicy,
+} from '../network-policy.ts';
 import {
   isMutationAllowed,
 } from './mutation-policy.ts';
@@ -76,6 +84,9 @@ export interface GitHubToolDeps {
   sleep(ms: number): Promise<void>;
   maxAttempts: number;
   retryDelayMs: number;
+  networkPolicy?: NetworkPolicy;
+  repoDir?: string;
+  getSecretEnvNames(repoDir?: string): string[];
 }
 
 interface ClassifiedError {
@@ -113,6 +124,9 @@ const defaultGitHubToolDeps: GitHubToolDeps = {
   },
   maxAttempts: DEFAULT_MAX_ATTEMPTS,
   retryDelayMs: DEFAULT_RETRY_DELAY_MS,
+  getSecretEnvNames(repoDir?: string) {
+    return getRedactionConfig(repoDir).secretEnvNames;
+  },
 };
 
 const githubCreatePrParameters = {
@@ -161,6 +175,21 @@ export async function githubCreatePr(
     return createPrError('policy_denied', createPolicy.reason);
   }
 
+  const network = enforceNetworkPolicy({
+    policy: input.networkPolicy,
+    phase,
+    tool: 'github_create_pr',
+    target: 'https://api.github.com',
+  });
+  if (network.kind === 'deny') {
+    return createPrError(network.error, network.message, network.diagnostics);
+  }
+
+  // Redact secrets from title and body before any external exposure or comparison.
+  const profile = buildProfileFromConfig(() => input.getSecretEnvNames(input.repoDir));
+  const safeTitle = redact(request.title, profile);
+  const safeBody = redact(request.body, profile);
+
   const idempotencyKey = githubCreatePrKey({
     repo: request.repo,
     head: request.head,
@@ -186,7 +215,7 @@ export async function githubCreatePr(
       const current = existing[0];
       if (current) {
         const ref = toPullRequestRef(current);
-        if (current.title === request.title && current.body === request.body) {
+        if (current.title === safeTitle && current.body === safeBody) {
           return {
             ok: true,
             tool: 'github_create_pr',
@@ -205,8 +234,8 @@ export async function githubCreatePr(
         const updated = await input.updatePullRequest({
           repo: request.repo,
           number: current.number,
-          title: request.title,
-          body: request.body,
+          title: safeTitle,
+          body: safeBody,
         });
 
         return {
@@ -228,8 +257,8 @@ export async function githubCreatePr(
         repo: request.repo,
         head: request.head,
         base: request.base,
-        title: request.title,
-        body: request.body,
+        title: safeTitle,
+        body: safeBody,
         draft: request.draft,
       });
 
@@ -269,6 +298,16 @@ export async function githubAddLabel(
   const policy = isMutationAllowed(phase, 'github_add_label', 'add_label');
   if (!policy.allowed) {
     return addLabelError('policy_denied', policy.reason);
+  }
+
+  const network = enforceNetworkPolicy({
+    policy: input.networkPolicy,
+    phase,
+    tool: 'github_add_label',
+    target: 'https://api.github.com',
+  });
+  if (network.kind === 'deny') {
+    return addLabelError(network.error, network.message, network.diagnostics);
   }
 
   const normalizedLabel = request.label.trim();
@@ -507,24 +546,30 @@ function toLabelRef(repo: string, label: string, target: GitHubToolLabelTarget):
 function createPrError(
   error: 'invalid_input' | 'policy_denied' | 'not_found' | 'external_error' | 'conflict' | 'rate_limited',
   message: string,
+  diagnostics?: NetworkDeniedDiagnostics,
 ): GitHubCreatePrResult {
   return {
     ok: false,
     tool: 'github_create_pr',
     error,
     message,
+    ...(diagnostics ? { diagnostics } : {}),
+    metadata: { trust: buildTrustMetadata({ sourceKind: 'wavemill_artifact', details: message }) },
   };
 }
 
 function addLabelError(
   error: 'invalid_input' | 'policy_denied' | 'not_found' | 'external_error' | 'conflict' | 'rate_limited',
   message: string,
+  diagnostics?: NetworkDeniedDiagnostics,
 ): GitHubAddLabelResult {
   return {
     ok: false,
     tool: 'github_add_label',
     error,
     message,
+    ...(diagnostics ? { diagnostics } : {}),
+    metadata: { trust: buildTrustMetadata({ sourceKind: 'wavemill_artifact', details: message }) },
   };
 }
 
@@ -532,6 +577,7 @@ function toToolResult<TDetails>(details: TDetails, text: string): WavemillToolRe
   return {
     content: [{ type: 'text', text }],
     details,
+    metadata: { trust: buildTrustMetadata({ sourceKind: 'wavemill_artifact', details }) },
   };
 }
 
