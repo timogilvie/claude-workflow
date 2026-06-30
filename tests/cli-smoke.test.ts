@@ -351,4 +351,57 @@ describe('wavemill CLI', () => {
       assert.match(out, /wavemill observer --json --once/);
     });
   });
+
+  describe('native-agent command', () => {
+    it('shows usage for unknown native-agent subcommand', () => {
+      const result = runExpectFail(['native-agent', 'unknown-subcommand']);
+      assert.notEqual(result.status, 0);
+      const output = result.stdout + result.stderr;
+      assert.match(output, /Subcommands:|Usage:/i);
+    });
+
+    it('shows usage for missing native-agent subcommand', () => {
+      const result = runExpectFail(['native-agent']);
+      assert.notEqual(result.status, 0);
+      const output = result.stdout + result.stderr;
+      assert.match(output, /Subcommands:|Usage:/i);
+    });
+
+    it('shows usage for unknown models subcommand', () => {
+      const result = runExpectFail(['native-agent', 'models', 'unknown']);
+      assert.notEqual(result.status, 0);
+      const output = result.stdout + result.stderr;
+      assert.match(output, /Usage:/i);
+    });
+
+    it('models report exits 0 and emits valid JSON from an empty temp repo', () => {
+      const repoDir = mkdtempSync(join(tmpdir(), 'wavemill-native-agent-smoke-'));
+      try {
+        const out = run(['native-agent', 'models', 'report', '--json', '--repo', repoDir]);
+        let parsed: unknown;
+        assert.doesNotThrow(() => { parsed = JSON.parse(out); }, 'Output should be valid JSON');
+        const report = parsed as { generatedAt: string; rows: unknown[] };
+        assert.ok(typeof report.generatedAt === 'string', 'Should have generatedAt');
+        assert.ok(Array.isArray(report.rows), 'Should have rows array');
+        assert.equal(report.rows.length, 0, 'Empty repo should have 0 rows');
+      } finally {
+        rmSync(repoDir, { recursive: true, force: true });
+      }
+    });
+
+    it('models report exits 0 and emits text table from an empty temp repo', () => {
+      const repoDir = mkdtempSync(join(tmpdir(), 'wavemill-native-agent-smoke-text-'));
+      try {
+        const out = run(['native-agent', 'models', 'report', '--repo', repoDir]);
+        assert.match(out, /Model Certification Report/);
+      } finally {
+        rmSync(repoDir, { recursive: true, force: true });
+      }
+    });
+
+    it('native-agent appears in help output', () => {
+      const out = run(['help']);
+      assert.match(out, /native-agent/);
+    });
+  });
 });

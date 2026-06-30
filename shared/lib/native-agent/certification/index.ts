@@ -87,3 +87,20 @@ export type {
 } from './router-filter.ts';
 
 export { filterNativeModels, STAGE_PHASE_REQUIREMENT } from './router-filter.ts';
+
+export type {
+  ModelReportState,
+  PhaseEligibility,
+  ModelReportRow,
+  ModelReport,
+} from './model-report.ts';
+
+export {
+  DEFAULT_CERTIFICATION_SUITE_VERSION,
+  buildModelReport,
+  formatModelReportText,
+} from './model-report.ts';
+
+export type { RunCertificationOptions, RunCertificationResult } from './certify-command.ts';
+
+export { runCertification, formatCertifyText } from './certify-command.ts';

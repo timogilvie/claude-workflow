@@ -201,6 +201,24 @@ ${GREEN}Commands:${NC}
                ${CYAN}wavemill quota clear sonnet${NC}
                ${CYAN}wavemill quota estimate claude-sonnet-5${NC}
 
+  ${CYAN}native-agent${NC}  Manage native-agent certification and model status
+             Subcommands:
+               ${CYAN}wavemill native-agent models report [--json]${NC}
+                          Show certification status, phase eligibility, suite
+                          version, age, and known limitations for all known
+                          native-agent models. No paid API calls.
+               ${CYAN}wavemill native-agent certify --provider <p> --model <m> [options]${NC}
+                          Run the deterministic certification harness for a
+                          provider/model pair. Dry-run by default (no paid
+                          calls). Pass --write to run live and persist the
+                          artifact on success.
+             Options for certify:
+               ${CYAN}--provider${NC}  openai|openrouter (required)
+               ${CYAN}--model${NC}     Model identifier (required, e.g. gpt-4o)
+               ${CYAN}--phase${NC}     read-only|patch|workflow (default: read-only)
+               ${CYAN}--write${NC}     Live run; write artifact on pass
+               ${CYAN}--json${NC}      Machine-readable output
+
   ${CYAN}version${NC}   Show version information
   ${CYAN}help${NC}      Show this help message
 
@@ -1233,6 +1251,38 @@ run_quota() {
   exec npx tsx "$quota_tool" "$@"
 }
 
+run_native_agent() {
+  local subcommand="${1:-}"
+  shift || true
+
+  case "$subcommand" in
+    models)
+      local sub2="${1:-}"
+      shift || true
+      case "$sub2" in
+        report)
+          exec npx tsx "$TOOLS_DIR/native-agent-models-report.ts" "$@"
+          ;;
+        *)
+          echo "Usage: wavemill native-agent models report [--json] [--repo <dir>]" >&2
+          exit 1
+          ;;
+      esac
+      ;;
+    certify)
+      exec npx tsx "$TOOLS_DIR/native-agent-certify.ts" "$@"
+      ;;
+    *)
+      echo "Usage: wavemill native-agent <subcommand> [options]" >&2
+      echo "" >&2
+      echo "Subcommands:" >&2
+      echo "  models report   Show certification status for all known models" >&2
+      echo "  certify         Run certification harness for a provider/model" >&2
+      exit 1
+      ;;
+  esac
+}
+
 # Main command dispatcher
 case "${1:-}" in
   mill)
@@ -1421,6 +1471,10 @@ case "${1:-}" in
   init)
     shift
     run_init "$@"
+    ;;
+  native-agent)
+    shift
+    run_native_agent "$@"
     ;;
   version|--version|-v)
     show_version
