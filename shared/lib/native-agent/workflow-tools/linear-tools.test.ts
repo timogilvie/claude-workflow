@@ -20,9 +20,32 @@ import {
   type WorkflowToolStageArtifactEntry,
 } from './linear-tools.ts';
 import { createInMemoryDedupeRegistry } from './dedupe.ts';
+import type { NetworkPolicy } from '../network-policy.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURES = join(__dirname, 'fixtures/linear');
+const ALLOW_LINEAR_NETWORK_POLICY: NetworkPolicy = {
+  planning: {
+    linear_get_issue: { kind: 'allowlist', hosts: ['api.linear.app'] },
+    linear_comment: { kind: 'allowlist', hosts: ['api.linear.app'] },
+    expand_issue: { kind: 'allow' },
+  },
+  coding: {
+    linear_get_issue: { kind: 'allowlist', hosts: ['api.linear.app'] },
+    linear_comment: { kind: 'allowlist', hosts: ['api.linear.app'] },
+    expand_issue: { kind: 'allow' },
+  },
+  review: {
+    linear_get_issue: { kind: 'allowlist', hosts: ['api.linear.app'] },
+    linear_comment: { kind: 'allowlist', hosts: ['api.linear.app'] },
+    expand_issue: { kind: 'allow' },
+  },
+  ready: {
+    linear_get_issue: { kind: 'allowlist', hosts: ['api.linear.app'] },
+    linear_comment: { kind: 'allowlist', hosts: ['api.linear.app'] },
+    expand_issue: { kind: 'allow' },
+  },
+};
 
 function loadFixture(name: string): unknown {
   return JSON.parse(readFileSync(join(FIXTURES, name), 'utf-8'));
@@ -90,6 +113,8 @@ function makeDeps(overrides: Partial<LinearToolsDeps> & { client?: LinearClient 
     phase: overrides.phase ?? 'coding',
     expander: overrides.expander,
     clock: overrides.clock ?? (() => 1_000),
+    networkPolicy: overrides.networkPolicy ?? ALLOW_LINEAR_NETWORK_POLICY,
+    getSecretEnvNames: overrides.getSecretEnvNames,
     transcriptEvents,
     stageArtifactEntries,
   };
@@ -108,6 +133,8 @@ describe('linear_get_issue: success path', () => {
     assert.equal(result.issue.identifier, 'HOK-1');
     assert.equal(result.issue.id, 'abc123-uuid');
     assert.equal(typeof result.issue.title, 'string');
+    assert.equal(result.metadata?.trust?.sourceKind, 'issue');
+    assert.equal(result.metadata?.trust?.trust, 'untrusted');
   });
 
   it('flattens state object to string', async () => {
@@ -169,8 +196,9 @@ describe('linear_get_issue: error paths', () => {
 
   it('still appends transcript event on error', async () => {
     const deps = makeDeps({ client: makeFakeClient({ issue: 'throw' }) });
-    await executeLinearGetIssue({ issue: 'HOK-99' }, deps);
+    const result = await executeLinearGetIssue({ issue: 'HOK-99' }, deps);
     assert.equal(deps.transcriptEvents.length, 1);
+    assert.equal(result.metadata?.trust?.sourceKind, 'issue');
   });
 });
 
@@ -179,6 +207,16 @@ describe('linear_get_issue: ready phase allows reads', () => {
     const deps = makeDeps({ phase: 'ready' });
     const result = await executeLinearGetIssue({ issue: 'HOK-1' }, deps);
     assert.ok(result.ok);
+  });
+
+  it('denies when the network policy is missing for the phase/tool', async () => {
+    const deps = makeDeps({ phase: 'coding', networkPolicy: {} });
+    const result = await executeLinearGetIssue({ issue: 'HOK-1' }, deps);
+    assert.equal(result.ok, false);
+    assert.ok(!result.ok);
+    assert.equal(result.error, 'policy_denied');
+    assert.equal((result.diagnostics as { category: string; reason: string }).category, 'network');
+    assert.equal((result.diagnostics as { reason: string }).reason, 'missing_policy');
   });
 });
 
@@ -317,6 +355,30 @@ describe('linear_comment: phase policy gate', () => {
     assert.equal(deps.transcriptEvents.length, 1);
     assert.equal(deps.stageArtifactEntries.length, 1);
   });
+
+  it('denies coding-phase network access before calling Linear', async () => {
+    const client = makeFakeClient();
+    const deps = makeDeps({
+      client,
+      phase: 'coding',
+      networkPolicy: {
+        coding: {
+          linear_comment: { kind: 'deny' },
+        },
+      },
+    });
+    const result = await executeLinearComment(
+      { issue: 'HOK-1', body: 'Denied by network policy', sessionId: 'sess-1', phase: 'coding' },
+      deps,
+    );
+
+    assert.equal(result.ok, false);
+    assert.ok(!result.ok);
+    assert.equal(result.error, 'policy_denied');
+    assert.equal(client.createCallCount, 0);
+    assert.equal((result.diagnostics as { category: string; reason: string }).category, 'network');
+    assert.equal((result.diagnostics as { reason: string }).reason, 'not_allowed');
+  });
 });
 
 describe('linear_comment: observability', () => {
@@ -425,6 +487,30 @@ describe('expand_issue: phase policy gate', () => {
     assert.equal(result.ok, false);
     assert.ok(!result.ok && result.error === 'expansion_failed');
   });
+
+  it('returns policy_denied with network diagnostics when command-network access is denied', async () => {
+    let expanderCallCount = 0;
+    const deps = makeDeps({
+      phase: 'planning',
+      sessionId: 'sess-1',
+      expander: async () => {
+        expanderCallCount++;
+        return '/features/hok-1/task-packet.md';
+      },
+      networkPolicy: {
+        planning: {
+          expand_issue: { kind: 'deny' },
+        },
+      },
+    });
+    const result = await executeExpandIssue({ issue: 'HOK-1' }, deps);
+
+    assert.equal(result.ok, false);
+    assert.ok(!result.ok);
+    assert.equal(result.error, 'policy_denied');
+    assert.equal(expanderCallCount, 0);
+    assert.equal((result.diagnostics as { category: string }).category, 'network');
+  });
 });
 
 describe('expand_issue: observability', () => {
@@ -469,5 +555,70 @@ describe('idempotency key stability', () => {
 
     assert.equal(keys.length, 2);
     assert.equal(keys[0], keys[1], 'key must be stable across calls');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Secret redaction in linear_comment
+// ---------------------------------------------------------------------------
+
+describe('linear_comment: secret redaction', () => {
+  it('records redacted body via createComment when body contains a secret token', async () => {
+    let capturedBody: string | undefined;
+    const client = makeFakeClient({
+      comment: { id: 'cmt-redact-1', url: 'https://linear.app/hok/comment/cmt-redact-1' },
+    });
+    client.createComment = async (_issueId: string, body: string) => {
+      capturedBody = body;
+      return { id: 'cmt-redact-1', url: 'https://linear.app/hok/comment/cmt-redact-1' };
+    };
+
+    const token = 'sk-testFAKEKEY12345678901234567890';
+    const deps = makeDeps({ client, phase: 'review' });
+    const result = await executeLinearComment(
+      { issue: 'HOK-1', body: `Review complete. Token used: ${token}`, sessionId: 'sess-1', phase: 'review' },
+      deps,
+    );
+
+    assert.equal(result.ok, true);
+    assert.ok(capturedBody !== undefined, 'createComment must have been called');
+    assert.ok(!capturedBody.includes(token), 'original token must not appear in comment body');
+    assert.ok(capturedBody.includes('[REDACTED:openai_key]'), 'redacted placeholder must appear');
+  });
+
+  it('records redacted body via createComment when body contains a configured secret env value', async () => {
+    let capturedBody: string | undefined;
+    process.env.HOKUSAI_LINEAR_SECRET = 'linear-configured-value-without-known-pattern';
+    const client = makeFakeClient({
+      comment: { id: 'cmt-redact-2', url: 'https://linear.app/hok/comment/cmt-redact-2' },
+    });
+    client.createComment = async (_issueId: string, body: string) => {
+      capturedBody = body;
+      return { id: 'cmt-redact-2', url: 'https://linear.app/hok/comment/cmt-redact-2' };
+    };
+
+    const deps = makeDeps({
+      client,
+      phase: 'review',
+      getSecretEnvNames: () => ['HOKUSAI_LINEAR_SECRET'],
+    });
+
+    try {
+      const result = await executeLinearComment(
+        {
+          issue: 'HOK-1',
+          body: 'Secret: linear-configured-value-without-known-pattern',
+          sessionId: 'sess-1',
+          phase: 'review',
+        },
+        deps,
+      );
+
+      assert.equal(result.ok, true);
+      assert.ok(capturedBody !== undefined, 'createComment must have been called');
+      assert.equal(capturedBody, 'Secret: [REDACTED:configured_secret]');
+    } finally {
+      delete process.env.HOKUSAI_LINEAR_SECRET;
+    }
   });
 });

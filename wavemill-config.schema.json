@@ -2468,6 +2468,24 @@
                 }
             },
             "additionalProperties": false
+        },
+        "safety": {
+            "type": "object",
+            "description": "Runtime safety controls including secret redaction.",
+            "properties": {
+                "redaction": {
+                    "type": "object",
+                    "properties": {
+                        "secretEnvNames": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Env-var names whose values must be redacted as literal strings from files, output, payloads, and comments."
+                        }
+                    },
+                    "additionalProperties": false
+                }
+            },
+            "additionalProperties": false
         }
     },
     "definitions": {

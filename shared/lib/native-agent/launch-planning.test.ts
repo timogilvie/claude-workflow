@@ -274,6 +274,42 @@ describe('launchNativePlanning', () => {
     }
   });
 
+  it('writes cleanup details to the planning stage result on abort', async () => {
+    const { wtDir, featureDir } = setupWorktree();
+    const api = uniqueApi('aborted');
+    const hookPath = `/tmp/wavemill-aborted-${Date.now()}.hook`;
+    const controller = new AbortController();
+    controller.abort();
+
+    try {
+      await assert.rejects(
+        () => launchNativePlanning({
+          session: 'aborted',
+          issue: 'HOK-2313',
+          slug: 'demo',
+          wtDir,
+          repoDir: REPO_DIR,
+          hookPath,
+          loopModelOverride: scriptedModel(api),
+          runTsxCommand: stubRunTsxCommand(),
+          signal: controller.signal,
+        }),
+        /without a final plan/,
+      );
+
+      const stageResult = JSON.parse(
+        readFileSync(join(featureDir, '.planning-result.json'), 'utf-8'),
+      ) as Record<string, unknown>;
+      assert.equal(stageResult.status, 'aborted');
+      assert.equal(stageResult.finalTreeState, 'clean');
+      assert.equal(stageResult.cleanupDecision, 'no-action-needed');
+      assert.equal((stageResult.cleanupReport as Record<string, unknown>).reason, 'aborted');
+    } finally {
+      cleanup(wtDir);
+      rmSync(hookPath, { force: true });
+    }
+  });
+
   it('rejects non-planning phases before launching the loop', async () => {
     const { wtDir } = setupWorktree();
     const api = uniqueApi('wrong-phase');

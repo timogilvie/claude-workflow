@@ -124,7 +124,7 @@ Use `docs/prompt-locations.md` as the canonical registry for agent instruction l
 
 ## Hook-Based Status Tracking
 
-Wavemill tracks agent lifecycle using a JSON status file contract at `/tmp/wavemill-${SESSION}-${ISSUE}.hook`. This replaces tmux pane liveness checks with richer state reporting (working/idle/waiting/error) and supports staleness detection via timestamps.
+Wavemill tracks agent lifecycle using a JSON status file contract at `/tmp/wavemill-${SESSION}-${ISSUE}.hook`. This replaces tmux pane liveness checks with richer state reporting (working/idle/waiting/blocked/approval-needed/policy-denied/error) and supports staleness detection via timestamps.
 
 ## State Mutation
 
@@ -136,7 +136,7 @@ Append-only files such as JSONL logs and `.wavemill/registry/` entries remain lo
 
 **Shared Protocol** ([wavemill-hook-protocol.sh](shared/hooks/wavemill-hook-protocol.sh)):
 - `wavemill_hook_check()` - Ensures hooks are no-ops outside wavemill contexts
-- `wavemill_hook_write(state, event, detail, agent)` - Atomic JSON writes with timestamps
+- `wavemill_hook_write(state, event, detail, agent[, next_action])` - Atomic JSON writes with timestamps; optional `next_action` surfaces a human-readable hint in the dashboard
 - 300s TTL for staleness detection
 
 **Agent Adapters**:
@@ -147,7 +147,7 @@ Append-only files such as JSONL logs and `.wavemill/registry/` entries remain lo
 **Status Reading** ([wavemill-status.sh](shared/lib/wavemill-status.sh)):
 - Reads JSON hook files with TTL validation (300s)
 - Falls back to tmux pane liveness if hook is stale or missing
-- Extracts detail field (tool names, error messages) for dashboard
+- Extracts `detail` and `next_action` fields for dashboard display
 
 **Hook Configuration** ([wavemill-common.sh](shared/lib/wavemill-common.sh)):
 - `configure_agent_hooks()` dynamically writes `.claude/settings.local.json` per-worktree
@@ -168,7 +168,29 @@ Append-only files such as JSONL logs and `.wavemill/registry/` entries remain lo
 }
 ```
 
-**States**: `working` (agent active), `idle` (stopped normally), `waiting` (blocked on user input), `error` (failure)
+The optional `next_action` field carries a short operator hint for actionable states:
+
+```json
+{
+  "state": "approval-needed",
+  "event": "Notification",
+  "detail": "waiting for human approval",
+  "next_action": "approve HOK-1234 to continue",
+  "agent": "claude",
+  "timestamp": 1712345678
+}
+```
+
+**States**:
+- `working` — agent is actively processing
+- `idle` — agent stopped normally
+- `waiting` — agent blocked on user input (generic)
+- `blocked` — agent cannot proceed (e.g. merge conflict); displayed in dashboard inbox
+- `approval-needed` — agent paused awaiting explicit operator approval; emits OSC desktop notification
+- `policy-denied` — an action was rejected by a network or mutation policy; emits OSC desktop notification
+- `error` — agent encountered a failure; emits OSC desktop notification
+
+Unknown states are silently dropped so readers never see partial or malformed hook files.
 
 **TTL**: 300s - dashboard falls back to pane liveness if timestamp is stale
 

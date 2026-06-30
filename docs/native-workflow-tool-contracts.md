@@ -162,6 +162,25 @@ Diagnostics note: the contract does not expose a separate `diagnostics` field.
 Runtime callers should read tool-failure context from `error`, `message`, and
 the recorded transcript event details payload.
 
+### Network Policy Denial
+
+Network-capable executors may return `error: 'policy_denied'` when outbound
+access is blocked by the phase-aware network policy. These denials are
+distinguishable from transport failures such as `external_error`,
+`review_failed`, or `route_failed`.
+
+Recorded transcript diagnostics for a denied network call use:
+
+- `category: 'network'`
+- `phase`
+- `tool`
+- `reason`: `missing_policy`, `not_allowed`, or `invalid_target`
+- `target`: redacted before exposure
+- `matchedRule` when a concrete policy entry was evaluated
+
+The redaction guarantee applies to both the surfaced `message` and the recorded
+diagnostic target string.
+
 ---
 
 ### `route_task`
@@ -227,6 +246,25 @@ Provenance: `wavemill-generated`.
 Idempotency note: repeated writes with the same
 `issueId/featureDir + stage + status + payload` update the existing artifact in
 place or return `reused`; they do not create duplicate stage-result files.
+
+Approval-needed state: risky native runtime operations may pause a stage instead
+of failing it. Such records use `status: 'awaiting_user'` and include a typed
+approval request under `artifacts.approvalRequest`:
+
+```typescript
+{
+  status: 'awaiting_user';
+  artifacts: {
+    type: 'coding' | 'planning' | 'review' | 'ready';
+    approvalRequest: {
+      requestId: string;
+      riskReason: string;
+      argSummary?: string;
+      expiresAt?: number;
+    };
+  };
+}
+```
 
 **Error:** `ok: false`, `error: CommonErrorCode`, `message: string`
 

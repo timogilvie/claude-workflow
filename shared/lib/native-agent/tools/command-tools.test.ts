@@ -54,6 +54,8 @@ describe('native-agent command tools', () => {
       assert.ok(testDetails.durationMs >= 0);
       assert.equal(testDetails.stdoutMeta.truncated, false);
       assert.equal(testDetails.stderrMeta.truncated, false);
+      assert.equal(testResult.metadata?.trust?.sourceKind, 'command_output');
+      assert.equal(testResult.metadata?.trust?.trust, 'untrusted');
 
       assert.equal(formatDetails.tool, 'run_format');
       assert.equal(formatDetails.kind, 'format');
@@ -185,6 +187,7 @@ describe('native-agent command tools', () => {
       assert.equal(formatDetails.reason, 'dangerous-command-pattern');
     }
     assert.equal(spawnCalls, 0);
+    assert.equal(testResult.metadata?.trust?.sourceKind, 'command_output');
   });
 
   it('includes required execution metadata on completed results', async () => {

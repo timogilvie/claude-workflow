@@ -8,6 +8,7 @@ import { spawn } from 'node:child_process';
 import { classifyCommand } from './command-classifier.ts';
 import { runCommand } from './command-substrate.ts';
 import { TranscriptWriter, parseTranscriptJsonl } from './transcript.ts';
+import { ApprovalStore, createApprovalGate } from './workflow-tools/approval-gate.ts';
 
 const tempDirs: string[] = [];
 const TEST_SECRET_KEY = 'WAVEMILL_TEST_SECRET';
@@ -443,5 +444,141 @@ describe('transcript logging', () => {
     const rawTranscript = readFileSync(transcriptPath, 'utf-8');
     assert.ok(!rawTranscript.includes('supersecret'));
     assert.ok(rawTranscript.includes('«redacted»'));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Approval gate
+// ---------------------------------------------------------------------------
+
+describe('command substrate approval gate', () => {
+  it('returns approval_needed and does not spawn when gate pauses', async () => {
+    const cwd = makeTempDir('command-substrate-approval-');
+    const store = new ApprovalStore();
+    const gate = createApprovalGate(store, () => ({ riskReason: 'risky command', argSummary: 'git push' }));
+
+    let spawned = false;
+    const fakeSpawn: typeof spawn = (..._args: Parameters<typeof spawn>) => {
+      spawned = true;
+      return spawn(..._args);
+    };
+
+    const result = await runCommand({
+      command: 'git status',
+      cwd,
+      allowedRoots: [cwd],
+      toolName: 'git_tool',
+      sessionId: 'test-session',
+      argSummary: 'git push',
+      approvalGate: gate,
+      spawnFn: fakeSpawn,
+    });
+
+    assert.equal(result.approval, 'approval_needed');
+    assert.equal(spawned, false);
+    assert.ok(result.approvalNeeded !== undefined);
+    assert.equal(typeof result.approvalNeeded!.requestId, 'string');
+    assert.equal(result.approvalNeeded!.riskReason, 'risky command');
+    assert.equal(result.exitCode, null);
+    assert.equal(result.stdout, '');
+    assert.equal(result.stderr, '');
+  });
+
+  it('spawns the process after approval is granted', async () => {
+    const cwd = makeTempDir('command-substrate-grant-');
+    const store = new ApprovalStore();
+    const SESSION = 'test-session-grant';
+    const gate = createApprovalGate(store, () => ({ riskReason: 'risky', argSummary: 'echo test' }));
+
+    // First call — approval_needed
+    const first = await runCommand({
+      command: ['node', '-e', 'process.exit(0)'],
+      cwd,
+      allowedRoots: [cwd],
+      sessionId: SESSION,
+      argSummary: 'echo test',
+      approvalGate: gate,
+    });
+    assert.equal(first.approval, 'approval_needed');
+
+    // Grant
+    const requestId = first.approvalNeeded!.requestId;
+    store.grant(SESSION, requestId);
+
+    // Second call — should run
+    const second = await runCommand({
+      command: ['node', '-e', 'process.exit(0)'],
+      cwd,
+      allowedRoots: [cwd],
+      sessionId: SESSION,
+      argSummary: 'echo test',
+      approvalGate: gate,
+    });
+    assert.equal(second.approval, 'approved');
+    assert.equal(second.exitCode, 0);
+  });
+
+  it('returns rejected when gate returns denied decision', async () => {
+    const cwd = makeTempDir('command-substrate-deny-');
+    const store = new ApprovalStore();
+    const SESSION = 'test-session-deny';
+    const gate = createApprovalGate(store, () => ({ riskReason: 'risky', argSummary: '' }));
+
+    // First call to create pending
+    const first = await runCommand({
+      command: 'git status',
+      cwd,
+      allowedRoots: [cwd],
+      sessionId: SESSION,
+      approvalGate: gate,
+    });
+    store.deny(SESSION, first.approvalNeeded!.requestId);
+
+    // Second call — denied
+    let spawned = false;
+    const result = await runCommand({
+      command: 'git status',
+      cwd,
+      allowedRoots: [cwd],
+      sessionId: SESSION,
+      approvalGate: gate,
+      spawnFn: (...args) => { spawned = true; return spawn(...args); },
+    });
+
+    assert.equal(result.approval, 'rejected');
+    assert.equal(spawned, false);
+  });
+
+  it('does not gate commands that fail safety checks (dangerous takes precedence)', async () => {
+    const cwd = makeTempDir('command-substrate-dangerous-');
+    const store = new ApprovalStore();
+    const gate = createApprovalGate(store, () => ({ riskReason: 'risky', argSummary: '' }));
+    let gateCalled = false;
+    const wrappedGate = (ctx: Parameters<typeof gate>[0]) => {
+      gateCalled = true;
+      return gate(ctx);
+    };
+
+    const result = await runCommand({
+      command: 'rm -rf /tmp/something',
+      cwd,
+      allowedRoots: [cwd],
+      approvalGate: wrappedGate,
+    });
+
+    assert.equal(result.approval, 'rejected');
+    // The dangerous-command-pattern rejection happens before the gate
+    assert.equal(gateCalled, false);
+  });
+
+  it('runs without gate when approvalGate is omitted (backward compat)', async () => {
+    const cwd = makeTempDir('command-substrate-no-gate-');
+    const result = await runCommand({
+      command: ['node', '-e', 'process.exit(0)'],
+      cwd,
+      allowedRoots: [cwd],
+    });
+    assert.equal(result.approval, 'approved');
+    assert.equal(result.exitCode, 0);
   });
 });

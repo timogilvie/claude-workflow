@@ -1,14 +1,17 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join, relative } from 'node:path';
 import {
   evaluateMutationWritePolicy,
   type MutationPolicyReason,
 } from '../mutation-policy.ts';
+import { getRedactionConfig } from '../../config.ts';
+import { buildProfileFromConfig, redact } from '../../redaction-profiles.ts';
 import type {
   NormalizedWholeFileWriteAllowlistInput,
   WholeFileWriteAllowlistInput,
 } from '../coding-artifacts.ts';
+import type { MutationRecorder } from '../cleanup.ts';
 import { createApplyPatchTool } from './apply-patch-tool.ts';
 import type { ToolDescriptor, ToolPhase, WavemillToolResult } from './types.ts';
 import type { ApplyPatchDetails } from './apply-patch-tool.ts';
@@ -18,7 +21,7 @@ const DEFAULT_WHOLE_FILE_ALLOWLIST: NormalizedWholeFileWriteAllowlistInput = {
   wavemillOwnedPaths: ['features/**', 'bugs/**'],
 };
 
-const STATUS_STATES = ['working', 'idle', 'waiting', 'error'] as const;
+const STATUS_STATES = ['working', 'idle', 'waiting', 'blocked', 'approval-needed', 'policy-denied', 'error'] as const;
 
 type StatusState = (typeof STATUS_STATES)[number];
 type MutationToolName = 'write_artifact' | 'create_marker' | 'update_status';
@@ -73,6 +76,7 @@ export interface CodingMutationToolOptions {
   phase?: ToolPhase;
   wholeFileAllowlist?: WholeFileWriteAllowlistInput | NormalizedWholeFileWriteAllowlistInput;
   statusPath?: string;
+  recorder?: MutationRecorder;
 }
 
 interface AfterToolCallContext {
@@ -123,7 +127,7 @@ export function createCodingMutationTools(
   options: CodingMutationToolOptions = {},
 ): readonly ToolDescriptor[] {
   return [
-    createApplyPatchTool(worktreePath, { phase: options.phase }),
+    createApplyPatchTool(worktreePath, { phase: options.phase, recorder: options.recorder }),
     createWriteArtifactTool(worktreePath, options),
     createCreateMarkerTool(worktreePath, options),
     createUpdateStatusTool(worktreePath, options),
@@ -211,9 +215,11 @@ async function executeWholeFileWrite(
   options: CodingMutationToolOptions,
 ): Promise<WavemillToolResult<WriteArtifactDetails | CreateMarkerDetails>> {
   if (typeof targetPath !== 'string' || targetPath.trim() === '') {
+    options.recorder?.recordMutation({ tool, status: 'failed', reason: 'path must be a non-empty string' });
     return errorResult(tool, 'invalid_input', 'path must be a non-empty string');
   }
   if (typeof content !== 'string') {
+    options.recorder?.recordMutation({ tool, status: 'failed', path: targetPath, reason: 'content must be a string' });
     return errorResult(tool, 'invalid_input', 'content must be a string');
   }
 
@@ -225,24 +231,44 @@ async function executeWholeFileWrite(
   });
 
   if (decision.kind === 'deny') {
+    options.recorder?.recordMutation({
+      tool,
+      status: 'failed',
+      path: targetPath,
+      reason: decision.message,
+    });
     return deniedWriteResult(tool, decision.reason, decision.message);
   }
 
+  // Redact secrets before writing to disk (artifact-write redaction chokepoint).
+  const profile = buildProfileFromConfig(() => getRedactionConfig(worktreePath).secretEnvNames);
+  const safeContent = redact(content, profile);
   const absolutePath = join(worktreePath, decision.resolvedPath);
   try {
-    atomicWriteText(absolutePath, content);
+    atomicWriteText(absolutePath, safeContent);
     const details: WholeFileWriteSuccessDetails = {
       ok: true,
       tool,
       resolvedPath: decision.resolvedPath,
-      bytesWritten: Buffer.byteLength(content, 'utf-8'),
+      bytesWritten: Buffer.byteLength(safeContent, 'utf-8'),
     };
+    options.recorder?.recordMutation({
+      tool,
+      status: 'completed',
+      path: decision.resolvedPath,
+    });
     return {
       content: [{ type: 'text', text: `${tool} wrote ${decision.resolvedPath}` }],
       details,
     };
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
+    options.recorder?.recordMutation({
+      tool,
+      status: 'failed',
+      path: decision.resolvedPath,
+      reason: message,
+    });
     return errorResult(tool, 'io_error', `Failed to write ${decision.resolvedPath}: ${message}`);
   }
 }
@@ -253,12 +279,15 @@ async function executeUpdateStatus(
   options: CodingMutationToolOptions,
 ): Promise<WavemillToolResult<UpdateStatusDetails>> {
   if (!isStatusState(params.state)) {
-    return errorResult('update_status', 'invalid_input', 'state must be one of: working, idle, waiting, error');
+    options.recorder?.recordMutation({ tool: 'update_status', status: 'failed', reason: 'invalid state' });
+    return errorResult('update_status', 'invalid_input', 'state must be one of: working, idle, waiting, blocked, approval-needed, policy-denied, error');
   }
   if (params.message !== undefined && typeof params.message !== 'string') {
+    options.recorder?.recordMutation({ tool: 'update_status', status: 'failed', reason: 'message must be a string when provided' });
     return errorResult('update_status', 'invalid_input', 'message must be a string when provided');
   }
   if (params.detail !== undefined && typeof params.detail !== 'string') {
+    options.recorder?.recordMutation({ tool: 'update_status', status: 'failed', reason: 'detail must be a string when provided' });
     return errorResult('update_status', 'invalid_input', 'detail must be a string when provided');
   }
 
@@ -274,14 +303,32 @@ async function executeUpdateStatus(
       ...(params.detail !== undefined ? { detail: params.detail } : {}),
       statusPath,
     };
+    options.recorder?.recordMutation({
+      tool: 'update_status',
+      status: 'completed',
+      path: normalizeRecorderPath(worktreePath, statusPath),
+    });
     return {
       content: [{ type: 'text', text: JSON.stringify(details) }],
       details,
     };
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
+    options.recorder?.recordMutation({
+      tool: 'update_status',
+      status: 'failed',
+      path: normalizeRecorderPath(worktreePath, statusPath),
+      reason: message,
+    });
     return errorResult('update_status', 'io_error', `Failed to persist status: ${message}`);
   }
+}
+
+function normalizeRecorderPath(worktreePath: string, absoluteOrRelativePath: string): string {
+  if (!isAbsolute(absoluteOrRelativePath)) {
+    return absoluteOrRelativePath;
+  }
+  return relative(worktreePath, absoluteOrRelativePath).split('\\').join('/');
 }
 
 function buildStatusPayload(

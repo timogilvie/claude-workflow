@@ -1864,6 +1864,428 @@ else
 fi
 
 echo ""
+echo "=== New hook states: blocked, approval-needed, policy-denied (HOK-2370) ==="
+
+mkdir -p \
+  "$WORKTREES_DIR/waiting-hook-task/features/waiting-hook-task" \
+  "$WORKTREES_DIR/blocked-task/features/blocked-task" \
+  "$WORKTREES_DIR/approval-task/features/approval-task" \
+  "$WORKTREES_DIR/denied-task/features/denied-task"
+
+# ── Blocked state renders distinctly and goes to inbox ─────────────────────
+
+STATE_FILE_BLOCKED_STATE="$TMP_DIR/state-blocked-state.json"
+cat > "$STATE_FILE_BLOCKED_STATE" <<EOF
+{
+  "tasks": {
+    "HOK-2370-A": {
+      "slug": "blocked-task",
+      "branch": "task/blocked-task",
+      "worktree": "$WORKTREES_DIR/blocked-task",
+      "status": "",
+      "phase": "coding",
+      "pr": ""
+    },
+    "HOK-2370-B": {
+      "slug": "active-task",
+      "branch": "task/active-task",
+      "worktree": "$WORKTREES_DIR/active-task",
+      "status": "",
+      "phase": "coding",
+      "pr": ""
+    }
+  }
+}
+EOF
+
+BEHAVIOR_BLOCKED_STATE="$TMP_DIR/behavior-blocked-state.json"
+cat > "$BEHAVIOR_BLOCKED_STATE" <<'EOF'
+{
+  "pane": {
+    "HOK-2370-A-blocked-task": "4",
+    "HOK-2370-B-active-task": "5"
+  },
+  "hook": {
+    "HOK-2370-A": "cannot proceed: merge conflict"
+  },
+  "reported": {},
+  "planning": {},
+  "pr": {},
+  "checks": {}
+}
+EOF
+
+run_render_with_agent_states() {
+  local state_file="$1" workspace_root="$2" behavior_file="$3" output_file="$4"
+  local blocked_issue="$5" approval_issue="$6" denied_issue="$7"
+  (
+    export WAVEMILL_TIP_INDEX=0
+    set -- test-session "$workspace_root" "$state_file"
+    source "$REPO_DIR/shared/lib/wavemill-status.sh"
+
+    refresh_pr_cache() { :; }
+    clear_dashboard_scrollback() { :; }
+    redraw_dashboard_frame() { :; }
+
+    elapsed() {
+      echo "1m"
+    }
+
+    is_active() { return 0; }
+
+    agent_status() {
+      case "$1" in
+        "$blocked_issue")  echo "blocked" ;;
+        "$approval_issue") echo "approval-needed" ;;
+        "$denied_issue")   echo "policy-denied" ;;
+        HOK-2370-W)        echo "waiting" ;;
+        *) echo "running" ;;
+      esac
+    }
+
+    window_index() {
+      local win="$1-$2"
+      jq -r --arg win "$win" '.pane[$win] // "—"' "$behavior_file"
+    }
+
+    agent_hook_detail() {
+      local issue="$1"
+      jq -r --arg issue "$issue" '.hook[$issue] // empty' "$behavior_file"
+    }
+
+    agent_hook_next_action() {
+      local issue="$1"
+      jq -r --arg issue "$issue" '.next_action[$issue] // empty' "$behavior_file"
+    }
+
+    agent_reported_status() { return 0; }
+    get_planning_display_status() { return 0; }
+    pr_for_branch() { return 0; }
+    pr_checks() { return 0; }
+
+    render_dashboard
+    strip_ansi < "$FRAME" > "$output_file"
+  )
+}
+
+# ── Waiting state stays distinct from approval-needed ──────────────────────
+
+STATE_FILE_WAITING_STATE="$TMP_DIR/state-waiting-state.json"
+cat > "$STATE_FILE_WAITING_STATE" <<EOF
+{
+  "tasks": {
+    "HOK-2370-W": {
+      "slug": "waiting-hook-task",
+      "branch": "task/waiting-hook-task",
+      "worktree": "$WORKTREES_DIR/waiting-hook-task",
+      "status": "",
+      "phase": "coding",
+      "pr": ""
+    }
+  }
+}
+EOF
+
+BEHAVIOR_WAITING_STATE="$TMP_DIR/behavior-waiting-state.json"
+cat > "$BEHAVIOR_WAITING_STATE" <<'EOF'
+{
+  "pane": {
+    "HOK-2370-W-waiting-hook-task": "3"
+  },
+  "hook": {
+    "HOK-2370-W": "waiting on CI shard 3/5"
+  },
+  "next_action": {
+    "HOK-2370-W": "this line should not render for generic waiting"
+  },
+  "reported": {},
+  "planning": {},
+  "pr": {},
+  "checks": {}
+}
+EOF
+
+OUTPUT_WAITING_STATE="$TMP_DIR/output-waiting-state.txt"
+run_render_with_agent_states "$STATE_FILE_WAITING_STATE" "$WORKTREES_DIR" "$BEHAVIOR_WAITING_STATE" "$OUTPUT_WAITING_STATE" \
+  "" "" ""
+
+if grep -q '📥 INBOX (1)' "$OUTPUT_WAITING_STATE" \
+  && grep -q 'HOK-2370-W.*waiting-hook-task.*⏳ waiting' "$OUTPUT_WAITING_STATE" \
+  && ! grep -q '⏳ approval' "$OUTPUT_WAITING_STATE"; then
+  pass "waiting state renders distinctly from approval-needed"
+else
+  fail "waiting state did not render distinctly from approval-needed"
+fi
+
+if grep -q 'waiting on CI shard 3/5' "$OUTPUT_WAITING_STATE" \
+  && ! grep -q 'this line should not render for generic waiting' "$OUTPUT_WAITING_STATE"; then
+  pass "waiting state renders detail without actionable next_action follow-up"
+else
+  fail "waiting state detail or next_action behavior is incorrect"
+fi
+
+OUTPUT_BLOCKED_STATE="$TMP_DIR/output-blocked-state.txt"
+run_render_with_agent_states "$STATE_FILE_BLOCKED_STATE" "$WORKTREES_DIR" "$BEHAVIOR_BLOCKED_STATE" "$OUTPUT_BLOCKED_STATE" \
+  "HOK-2370-A" "" ""
+
+if grep -q '📥 INBOX (1)' "$OUTPUT_BLOCKED_STATE" \
+  && grep -q '⚡ ACTIVE (1)' "$OUTPUT_BLOCKED_STATE" \
+  && grep -q 'HOK-2370-A.*blocked-task.*⊘ blocked' "$OUTPUT_BLOCKED_STATE"; then
+  pass "blocked state renders ⊘ blocked and moves task to inbox"
+else
+  fail "blocked state did not render correctly or did not move to inbox"
+fi
+
+if grep -q 'cannot proceed: merge conflict' "$OUTPUT_BLOCKED_STATE"; then
+  pass "blocked state surfaces hook detail line"
+else
+  fail "blocked state detail line missing"
+fi
+
+# ── Approval-needed state renders distinctly and goes to inbox ─────────────
+
+STATE_FILE_APPROVAL_STATE="$TMP_DIR/state-approval-state.json"
+cat > "$STATE_FILE_APPROVAL_STATE" <<EOF
+{
+  "tasks": {
+    "HOK-2370-C": {
+      "slug": "approval-task",
+      "branch": "task/approval-task",
+      "worktree": "$WORKTREES_DIR/approval-task",
+      "status": "",
+      "phase": "coding",
+      "pr": ""
+    },
+    "HOK-2370-D": {
+      "slug": "active-task",
+      "branch": "task/active-task",
+      "worktree": "$WORKTREES_DIR/active-task",
+      "status": "",
+      "phase": "coding",
+      "pr": ""
+    }
+  }
+}
+EOF
+
+BEHAVIOR_APPROVAL_STATE="$TMP_DIR/behavior-approval-state.json"
+cat > "$BEHAVIOR_APPROVAL_STATE" <<'EOF'
+{
+  "pane": {
+    "HOK-2370-C-approval-task": "6",
+    "HOK-2370-D-active-task": "7"
+  },
+  "hook": {
+    "HOK-2370-C": "waiting for human approval"
+  },
+  "next_action": {
+    "HOK-2370-C": "approve HOK-2370-C to continue"
+  },
+  "reported": {},
+  "planning": {},
+  "pr": {},
+  "checks": {}
+}
+EOF
+
+OUTPUT_APPROVAL_STATE="$TMP_DIR/output-approval-state.txt"
+run_render_with_agent_states "$STATE_FILE_APPROVAL_STATE" "$WORKTREES_DIR" "$BEHAVIOR_APPROVAL_STATE" "$OUTPUT_APPROVAL_STATE" \
+  "" "HOK-2370-C" ""
+
+if grep -q '📥 INBOX (1)' "$OUTPUT_APPROVAL_STATE" \
+  && grep -q '⚡ ACTIVE (1)' "$OUTPUT_APPROVAL_STATE" \
+  && grep -q 'HOK-2370-C.*approval-task.*⏳ approval' "$OUTPUT_APPROVAL_STATE"; then
+  pass "approval-needed state renders ⏳ approval and moves task to inbox"
+else
+  fail "approval-needed state did not render correctly or did not move to inbox"
+fi
+
+if grep -q 'waiting for human approval' "$OUTPUT_APPROVAL_STATE" \
+  && grep -q 'approve HOK-2370-C to continue' "$OUTPUT_APPROVAL_STATE"; then
+  pass "approval-needed surfaces detail and next_action lines"
+else
+  fail "approval-needed detail or next_action lines missing"
+fi
+
+if ! grep -q '! error' "$OUTPUT_APPROVAL_STATE"; then
+  pass "approval-needed does not use error styling"
+else
+  fail "approval-needed incorrectly uses error styling"
+fi
+
+# ── Policy-denied state renders distinctly and goes to inbox ───────────────
+
+STATE_FILE_DENIED_STATE="$TMP_DIR/state-denied-state.json"
+cat > "$STATE_FILE_DENIED_STATE" <<EOF
+{
+  "tasks": {
+    "HOK-2370-E": {
+      "slug": "denied-task",
+      "branch": "task/denied-task",
+      "worktree": "$WORKTREES_DIR/denied-task",
+      "status": "",
+      "phase": "coding",
+      "pr": ""
+    },
+    "HOK-2370-F": {
+      "slug": "blocked-task",
+      "branch": "task/blocked-task",
+      "worktree": "$WORKTREES_DIR/blocked-task",
+      "status": "",
+      "phase": "coding",
+      "pr": ""
+    }
+  }
+}
+EOF
+
+BEHAVIOR_DENIED_STATE="$TMP_DIR/behavior-denied-state.json"
+cat > "$BEHAVIOR_DENIED_STATE" <<'EOF'
+{
+  "pane": {
+    "HOK-2370-E-denied-task": "8",
+    "HOK-2370-F-blocked-task": "9"
+  },
+  "hook": {
+    "HOK-2370-E": "network policy rejected outbound request",
+    "HOK-2370-F": "unable to reach api.example.com"
+  },
+  "next_action": {},
+  "reported": {},
+  "planning": {},
+  "pr": {},
+  "checks": {}
+}
+EOF
+
+OUTPUT_DENIED_STATE="$TMP_DIR/output-denied-state.txt"
+run_render_with_agent_states "$STATE_FILE_DENIED_STATE" "$WORKTREES_DIR" "$BEHAVIOR_DENIED_STATE" "$OUTPUT_DENIED_STATE" \
+  "HOK-2370-F" "" "HOK-2370-E"
+
+if grep -q '📥 INBOX (2)' "$OUTPUT_DENIED_STATE" \
+  && grep -q 'HOK-2370-E.*denied-task.*⛔ denied' "$OUTPUT_DENIED_STATE" \
+  && grep -q 'HOK-2370-F.*blocked-task.*⊘ blocked' "$OUTPUT_DENIED_STATE"; then
+  pass "policy-denied and blocked both render as actionable inbox items"
+else
+  fail "policy-denied or blocked did not render correctly in inbox"
+fi
+
+if grep -q 'network policy rejected outbound request' "$OUTPUT_DENIED_STATE"; then
+  pass "policy-denied surfaces detail line"
+else
+  fail "policy-denied detail line missing"
+fi
+
+if ! grep -q 'approve HOK-2370-C to continue' "$OUTPUT_DENIED_STATE"; then
+  pass "policy-denied stays distinct from approval-needed follow-up guidance"
+else
+  fail "policy-denied incorrectly reused approval-needed next_action guidance"
+fi
+
+# Verify denied ≠ blocked label
+if grep -q '⛔ denied' "$OUTPUT_DENIED_STATE" && grep -q '⊘ blocked' "$OUTPUT_DENIED_STATE"; then
+  if ! grep -q '⛔ blocked' "$OUTPUT_DENIED_STATE" && ! grep -q '⊘ denied' "$OUTPUT_DENIED_STATE"; then
+    pass "policy-denied and blocked produce different primary labels"
+  else
+    fail "policy-denied and blocked labels are mixed up"
+  fi
+else
+  fail "policy-denied and blocked labels are not both present"
+fi
+
+# ── Baseline states unchanged ───────────────────────────────────────────────
+
+BEHAVIOR_BASELINE="$TMP_DIR/behavior-baseline.json"
+cat > "$BEHAVIOR_BASELINE" <<'EOF'
+{
+  "pane": {
+    "HOK-2370-G-active-task": "10"
+  },
+  "hook": {},
+  "next_action": {},
+  "reported": {},
+  "planning": {},
+  "pr": {},
+  "checks": {}
+}
+EOF
+
+STATE_FILE_BASELINE="$TMP_DIR/state-baseline.json"
+cat > "$STATE_FILE_BASELINE" <<EOF
+{
+  "tasks": {
+    "HOK-2370-G": {
+      "slug": "active-task",
+      "branch": "task/active-task",
+      "worktree": "$WORKTREES_DIR/active-task",
+      "status": "",
+      "phase": "coding",
+      "pr": ""
+    }
+  }
+}
+EOF
+
+run_render_with_agent_states "$STATE_FILE_BASELINE" "$WORKTREES_DIR" "$BEHAVIOR_BASELINE" "$TMP_DIR/output-baseline-running.txt" \
+  "" "" ""
+
+if grep -q '⚡ ACTIVE (1)' "$TMP_DIR/output-baseline-running.txt" \
+  && grep -q 'HOK-2370-G.*● running' "$TMP_DIR/output-baseline-running.txt" \
+  && ! grep -q '📥 INBOX' "$TMP_DIR/output-baseline-running.txt"; then
+  pass "running state baseline unchanged — stays in active, not inbox"
+else
+  fail "running state baseline regressed"
+fi
+
+# ── Stale approval-needed falls back to pane liveness ─────────────────────
+# The stale-hook fallback is already validated by the TTL in agent_status().
+# We verify the contract via a static check: stale hook state → pane liveness.
+# Confirm that is_actionable_state still routes stale-hook states correctly:
+# agent_status returns "running" when hook is stale → task stays active.
+stale_result_file="$TMP_DIR/stale-classification.txt"
+(
+  set -- test-session "$WORKTREES_DIR"
+  exec 3>"$stale_result_file"
+  exec >/dev/null 2>&1
+  source "$REPO_DIR/shared/lib/wavemill-status.sh"
+  trap - EXIT
+  is_actionable_state "running" "coding" "$WORKTREES_DIR/active-task" "active-task" "HOK-9999" >&3
+) 2>/dev/null || true
+stale_classification="$(cat "$stale_result_file" 2>/dev/null || true)"
+if [[ "$stale_classification" == "active" ]]; then
+  pass "stale hook fallback (running) stays active — does not freeze in actionable state"
+else
+  fail "stale hook fallback classification unexpected: '$stale_classification'"
+fi
+
+# ── Unknown state in hook file falls back gracefully ───────────────────────
+# The protocol silently drops unknown states, so an old hook file with an
+# unknown state would have a stale timestamp and fall back to pane liveness.
+# Validate via the protocol's state allowlist check.
+unknown_result_file="$TMP_DIR/unknown-state-result.txt"
+(
+  export WAVEMILL_SESSION="hok2370-unknown-test-$$"
+  export WAVEMILL_ISSUE="HOK-UNKNOWN"
+  export WAVEMILL_DASHBOARD_PID=""
+  source "$REPO_DIR/shared/hooks/wavemill-hook-protocol.sh"
+  hook_file="/tmp/wavemill-${WAVEMILL_SESSION}-${WAVEMILL_ISSUE}.hook"
+  rm -f "$hook_file"
+  wavemill_hook_write "future-unknown-state" "test" "detail" "test-agent"
+  if [[ ! -e "$hook_file" ]]; then
+    printf 'no-file\n'
+  else
+    printf 'wrote-file\n'
+    rm -f "$hook_file"
+  fi
+) > "$unknown_result_file" 2>/dev/null || true
+unknown_result="$(cat "$unknown_result_file" 2>/dev/null || true)"
+if [[ "$unknown_result" == "no-file" ]]; then
+  pass "unknown/future state is a no-op — hook file not written"
+else
+  fail "unknown state should not write hook file (got: $unknown_result)"
+fi
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 
 if (( FAIL > 0 )); then

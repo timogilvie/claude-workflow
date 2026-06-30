@@ -75,6 +75,8 @@ export interface ReviewEngineOptions {
   skipClaudePreflight?: boolean;
   /** Operating mode controls degraded/scoped review behavior */
   operatingMode?: OperatingMode;
+  /** Feature directory for stage-result cleanup reporting when review runs natively */
+  featureDir?: string;
 }
 
 interface JudgeConfig {
