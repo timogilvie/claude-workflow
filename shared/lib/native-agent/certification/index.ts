@@ -77,3 +77,11 @@ export {
   aggregateReport,
   toArtifactScenario,
 } from './scenario-runner.ts';
+
+export type {
+  RouterCertificationRejection,
+  RouterCertificationRejectionReason,
+  RouterRole,
+} from './router-filter.ts';
+
+export { filterNativeModels, STAGE_PHASE_REQUIREMENT } from './router-filter.ts';
