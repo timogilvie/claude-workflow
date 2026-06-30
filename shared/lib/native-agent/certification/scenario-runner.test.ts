@@ -79,6 +79,20 @@ function makeFailingScenario(id: string, detail = 'forced'): CertificationScenar
   };
 }
 
+function makeProviderFlakeScenario(id: string, detail = 'transient'): CertificationScenario {
+  return {
+    id,
+    phase: 'read-only',
+    category: 'tool',
+    classification: 'deterministic',
+    description: `Synthetic flaky scenario: ${id}`,
+    assertion: async (_ctx: ScenarioContext): Promise<ScenarioAssertionOutcome> => ({
+      kind: 'provider-flake',
+      detail,
+    }),
+  };
+}
+
 function makeUnsupportedScenario(
   id: string,
   reason: 'fixture-not-found' | 'capability-validator-rejected' | 'shape-mismatch' | 'registry-missing-model',
@@ -190,6 +204,9 @@ describe('runScenarios — fail path', () => {
     const result = report.results[0];
     assert.equal(result.status, 'fail');
     assert.equal(result.detail, 'forced failure');
+    assert.equal(result.attempts, 1);
+    assert.equal(result.finalAttemptStatus, 'fail');
+    assert.equal(result.failureClass, 'deterministic_failure');
   });
 
   it('a thrown assertion becomes a fail result (loud-fail invariant)', async () => {
@@ -204,6 +221,9 @@ describe('runScenarios — fail path', () => {
     const result = report.results[0];
     assert.equal(result.status, 'fail');
     assert.ok(result.detail?.includes('boom'), `detail should include error message; got: ${result.detail}`);
+    assert.equal(result.attempts, 1);
+    assert.equal(result.finalAttemptStatus, 'fail');
+    assert.equal(result.failureClass, 'deterministic_failure');
   });
 });
 
@@ -226,6 +246,9 @@ describe('runScenarios — unsupported paths', () => {
     assert.equal(result.reason, 'fixture-not-found');
     assert.ok(result.detail && result.detail.length > 0, 'detail must be non-empty');
     assert.equal(report.harnessPassed, false);
+    assert.equal(result.attempts, 1);
+    assert.equal(result.finalAttemptStatus, 'unsupported');
+    assert.equal(result.failureClass, 'unsupported_capability');
   });
 
   it('capability-validator-rejected produces unsupported result', async () => {
@@ -247,6 +270,9 @@ describe('runScenarios — unsupported paths', () => {
     assert.equal(result.reason, 'capability-validator-rejected');
     assert.ok(result.detail && result.detail.length > 0);
     assert.equal(report.harnessPassed, false);
+    assert.equal(result.attempts, 1);
+    assert.equal(result.finalAttemptStatus, 'unsupported');
+    assert.equal(result.failureClass, 'unsupported_capability');
   });
 
   it('tool.compat.git_status scenario is unsupported when model is not in registry', async () => {
@@ -271,6 +297,9 @@ describe('runScenarios — unsupported paths', () => {
     assert.equal(result.status, 'unsupported');
     assert.equal(result.reason, 'capability-validator-rejected');
     assert.ok(result.detail && result.detail.length > 0);
+    assert.equal(result.attempts, 1);
+    assert.equal(result.finalAttemptStatus, 'unsupported');
+    assert.equal(result.failureClass, 'unsupported_capability');
   });
 
   it('unsupported transport string surfaces as unsupported or fail rather than omission', async () => {
@@ -313,6 +342,309 @@ describe('runScenarios — unsupported paths', () => {
       `expected unsupported or fail, got: ${result.status}`,
     );
     assert.equal(report.harnessPassed, false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Retry policy
+// ---------------------------------------------------------------------------
+
+describe('runScenarios — retry policy', () => {
+  it('retries provider flakes until maxAttempts then records flake exhaustion', async () => {
+    const report = await runScenarios({
+      provider: 'openai',
+      model: 'gpt-4o',
+      transport: 'openai-completions',
+      scenarios: [makeProviderFlakeScenario('flake-exhausted')],
+      retryPolicy: { maxAttempts: 3 },
+    });
+
+    const result = report.results[0];
+    assert.equal(result.status, 'fail');
+    assert.equal(result.attempts, 3);
+    assert.equal(result.finalAttemptStatus, 'provider-flake');
+    assert.equal(result.failureClass, 'provider_flake');
+    assert.equal(report.harnessPassed, false);
+  });
+
+  it('respects a single-attempt retry bound for persistent flakes', async () => {
+    const report = await runScenarios({
+      provider: 'openai',
+      model: 'gpt-4o',
+      transport: 'openai-completions',
+      scenarios: [makeProviderFlakeScenario('flake-single')],
+      retryPolicy: { maxAttempts: 1 },
+    });
+
+    const result = report.results[0];
+    assert.equal(result.status, 'fail');
+    assert.equal(result.attempts, 1);
+    assert.equal(result.finalAttemptStatus, 'provider-flake');
+    assert.equal(result.failureClass, 'provider_flake');
+    assert.equal(report.harnessPassed, false);
+  });
+
+  it('does not retry deterministic failures', async () => {
+    let calls = 0;
+    const scenario: CertificationScenario = {
+      id: 'deterministic-no-retry',
+      phase: 'read-only',
+      category: 'tool',
+      classification: 'deterministic',
+      description: 'deterministic failure short-circuits retries',
+      assertion: async () => {
+        calls += 1;
+        return { kind: 'fail', detail: 'nope' };
+      },
+    };
+
+    const report = await runScenarios({
+      provider: 'openai',
+      model: 'gpt-4o',
+      transport: 'openai-completions',
+      scenarios: [scenario],
+      retryPolicy: { maxAttempts: 5 },
+    });
+
+    const result = report.results[0];
+    assert.equal(calls, 1);
+    assert.equal(result.attempts, 1);
+    assert.equal(result.failureClass, 'deterministic_failure');
+    assert.equal(result.finalAttemptStatus, 'fail');
+  });
+
+  it('does not retry thrown errors', async () => {
+    let calls = 0;
+    const report = await runScenarios({
+      provider: 'openai',
+      model: 'gpt-4o',
+      transport: 'openai-completions',
+      scenarios: [{
+        id: 'throw-no-retry',
+        phase: 'read-only',
+        category: 'tool',
+        classification: 'deterministic',
+        description: 'throws once',
+        assertion: async () => {
+          calls += 1;
+          throw new Error('boom');
+        },
+      }],
+      retryPolicy: { maxAttempts: 5 },
+    });
+
+    const result = report.results[0];
+    assert.equal(calls, 1);
+    assert.equal(result.status, 'fail');
+    assert.equal(result.attempts, 1);
+    assert.equal(result.failureClass, 'deterministic_failure');
+    assert.equal(result.finalAttemptStatus, 'fail');
+  });
+
+  it('does not retry unsupported outcomes', async () => {
+    let calls = 0;
+    const report = await runScenarios({
+      provider: 'openai',
+      model: 'gpt-4o',
+      transport: 'openai-completions',
+      scenarios: [{
+        id: 'unsupported-no-retry',
+        phase: 'read-only',
+        category: 'tool',
+        classification: 'deterministic',
+        description: 'unsupported short-circuits retries',
+        assertion: async () => {
+          calls += 1;
+          return { kind: 'unsupported', reason: 'fixture-not-found', detail: 'missing' };
+        },
+      }],
+      retryPolicy: { maxAttempts: 5 },
+    });
+
+    const result = report.results[0];
+    assert.equal(calls, 1);
+    assert.equal(result.status, 'unsupported');
+    assert.equal(result.attempts, 1);
+    assert.equal(result.failureClass, 'unsupported_capability');
+    assert.equal(result.finalAttemptStatus, 'unsupported');
+  });
+
+  it('passes when a later attempt succeeds after a flake', async () => {
+    let calls = 0;
+    const report = await runScenarios({
+      provider: 'openai',
+      model: 'gpt-4o',
+      transport: 'openai-completions',
+      scenarios: [{
+        id: 'flake-then-pass',
+        phase: 'read-only',
+        category: 'tool',
+        classification: 'deterministic',
+        description: 'transient flake followed by pass',
+        assertion: async () => {
+          calls += 1;
+          return calls === 1
+            ? { kind: 'provider-flake', detail: 'transient' }
+            : { kind: 'pass' };
+        },
+      }],
+      retryPolicy: { maxAttempts: 3 },
+    });
+
+    const result = report.results[0];
+    assert.equal(result.status, 'pass');
+    assert.equal(result.attempts, 2);
+    assert.equal(result.finalAttemptStatus, 'pass');
+    assert.equal(result.failureClass, undefined);
+    assert.equal(report.harnessPassed, true);
+  });
+
+  it('passes on the boundary when the final allowed attempt succeeds', async () => {
+    let calls = 0;
+    const report = await runScenarios({
+      provider: 'openai',
+      model: 'gpt-4o',
+      transport: 'openai-completions',
+      scenarios: [{
+        id: 'flake-flake-pass',
+        phase: 'read-only',
+        category: 'tool',
+        classification: 'deterministic',
+        description: 'passes on last allowed retry',
+        assertion: async () => {
+          calls += 1;
+          return calls < 3
+            ? { kind: 'provider-flake', detail: `transient-${calls}` }
+            : { kind: 'pass' };
+        },
+      }],
+      retryPolicy: { maxAttempts: 3 },
+    });
+
+    const result = report.results[0];
+    assert.equal(result.status, 'pass');
+    assert.equal(result.attempts, 3);
+    assert.equal(result.finalAttemptStatus, 'pass');
+    assert.equal(result.failureClass, undefined);
+  });
+
+  it('exhausts retries before a later hypothetical pass', async () => {
+    let calls = 0;
+    const report = await runScenarios({
+      provider: 'openai',
+      model: 'gpt-4o',
+      transport: 'openai-completions',
+      scenarios: [{
+        id: 'flake-flake-would-pass',
+        phase: 'read-only',
+        category: 'tool',
+        classification: 'deterministic',
+        description: 'retry bound prevents later pass',
+        assertion: async () => {
+          calls += 1;
+          return calls < 3
+            ? { kind: 'provider-flake', detail: `transient-${calls}` }
+            : { kind: 'pass' };
+        },
+      }],
+      retryPolicy: { maxAttempts: 2 },
+    });
+
+    const result = report.results[0];
+    assert.equal(result.status, 'fail');
+    assert.equal(result.attempts, 2);
+    assert.equal(result.finalAttemptStatus, 'provider-flake');
+    assert.equal(result.failureClass, 'provider_flake');
+    assert.equal(report.harnessPassed, false);
+  });
+
+  it('validates retry bounds', async () => {
+    await assert.rejects(
+      () => runScenarios({
+        provider: 'openai',
+        model: 'gpt-4o',
+        transport: 'openai-completions',
+        scenarios: [],
+        retryPolicy: { maxAttempts: 0 },
+      }),
+      TypeError,
+    );
+
+    await assert.rejects(
+      () => runScenarios({
+        provider: 'openai',
+        model: 'gpt-4o',
+        transport: 'openai-completions',
+        scenarios: [],
+        retryPolicy: { maxAttempts: -1 },
+      }),
+      TypeError,
+    );
+
+    await assert.rejects(
+      () => runScenarios({
+        provider: 'openai',
+        model: 'gpt-4o',
+        transport: 'openai-completions',
+        scenarios: [],
+        retryPolicy: { maxAttempts: 1.5 },
+      }),
+      TypeError,
+    );
+  });
+
+  it('defaults maxAttempts to 3 when omitted', async () => {
+    const report = await runScenarios({
+      provider: 'openai',
+      model: 'gpt-4o',
+      transport: 'openai-completions',
+      scenarios: [makeProviderFlakeScenario('flake-default')],
+    });
+
+    assert.equal(report.results[0].attempts, 3);
+  });
+
+  it('retries only flaky scenarios in a mixed suite', async () => {
+    let deterministicCalls = 0;
+    let flakyCalls = 0;
+
+    const report = await runScenarios({
+      provider: 'openai',
+      model: 'gpt-4o',
+      transport: 'openai-completions',
+      scenarios: [
+        {
+          id: 'deterministic',
+          phase: 'read-only',
+          category: 'tool',
+          classification: 'deterministic',
+          description: 'deterministic fail',
+          assertion: async () => {
+            deterministicCalls += 1;
+            return { kind: 'fail', detail: 'deterministic' };
+          },
+        },
+        {
+          id: 'flaky',
+          phase: 'read-only',
+          category: 'tool',
+          classification: 'deterministic',
+          description: 'flake then pass',
+          assertion: async () => {
+            flakyCalls += 1;
+            return flakyCalls === 1
+              ? { kind: 'provider-flake', detail: 'transient' }
+              : { kind: 'pass' };
+          },
+        },
+      ],
+      retryPolicy: { maxAttempts: 3 },
+    });
+
+    assert.equal(deterministicCalls, 1);
+    assert.equal(flakyCalls, 2);
+    assert.equal(report.results.find(r => r.scenarioId === 'deterministic')?.attempts, 1);
+    assert.equal(report.results.find(r => r.scenarioId === 'flaky')?.attempts, 2);
   });
 });
 
@@ -480,9 +812,13 @@ describe('toArtifactScenario', () => {
   }
 
   it('pass result projects to passed: true', () => {
-    const s = toArtifactScenario(makeResult({ status: 'pass' }));
+    const s = toArtifactScenario(makeResult({ status: 'pass', attempts: 2, finalAttemptStatus: 'pass' }));
     assert.equal(s.passed, true);
     assert.equal(s.failureMessage, undefined);
+    assert.equal(s.attempts, 2);
+    assert.equal(s.retryCount, 1);
+    assert.equal(s.finalAttemptStatus, 'pass');
+    assert.equal(s.failureClass, undefined);
   });
 
   it('fail result projects to passed: false with failureMessage', () => {
@@ -491,11 +827,36 @@ describe('toArtifactScenario', () => {
     assert.equal(s.failureMessage, 'oops');
   });
 
-  it('unsupported result projects to passed: false', () => {
+  it('flake exhausted result projects failureClass and retryCount', () => {
     const s = toArtifactScenario(
-      makeResult({ status: 'unsupported', reason: 'fixture-not-found', detail: 'x' }),
+      makeResult({
+        status: 'fail',
+        detail: 'transient',
+        attempts: 3,
+        finalAttemptStatus: 'provider-flake',
+        failureClass: 'provider_flake',
+      }),
     );
     assert.equal(s.passed, false);
+    assert.equal(s.attempts, 3);
+    assert.equal(s.retryCount, 2);
+    assert.equal(s.finalAttemptStatus, 'provider-flake');
+    assert.equal(s.failureClass, 'provider_flake');
+  });
+
+  it('unsupported result projects to passed: false', () => {
+    const s = toArtifactScenario(
+      makeResult({
+        status: 'unsupported',
+        reason: 'fixture-not-found',
+        detail: 'x',
+        attempts: 1,
+        finalAttemptStatus: 'unsupported',
+        failureClass: 'unsupported_capability',
+      }),
+    );
+    assert.equal(s.passed, false);
+    assert.equal(s.failureClass, 'unsupported_capability');
   });
 
   it('not-run result projects to passed: false', () => {

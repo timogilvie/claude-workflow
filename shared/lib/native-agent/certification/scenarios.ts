@@ -57,9 +57,15 @@ export type HarnessUnsupportedReason =
 
 export type HarnessNotRunReason = 'requires-live-judge';
 
+export type FailureClass =
+  | 'deterministic_failure'
+  | 'provider_flake'
+  | 'unsupported_capability';
+
 export type ScenarioAssertionOutcome =
   | { kind: 'pass' }
   | { kind: 'fail'; detail: string }
+  | { kind: 'provider-flake'; detail: string; reason?: string }
   | { kind: 'unsupported'; reason: HarnessUnsupportedReason; detail: string };
 
 export interface ScenarioContext {
