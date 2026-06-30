@@ -292,6 +292,108 @@ describe('recovery stall detection', () => {
 });
 
 describe('recovery stage results and artifacts', () => {
+  it('builds blocked stage results with family-specific diagnostics for every stall type', () => {
+    const scenarios: Array<{
+      name: string;
+      expectedStallType: Exclude<ReturnType<typeof buildBlockedStageResult>, { status: 'progressing' }>['stallType'];
+      recoveryInput: RecoveryInput;
+      diagnosticPrefix: string;
+      evidenceSnippet: string;
+    }> = [
+      {
+        name: 'budget exhaustion',
+        expectedStallType: 'budget_exhaustion',
+        recoveryInput: input({ stopReason: 'wall_clock_limit' }),
+        diagnosticPrefix: '[timeout-cleanup]',
+        evidenceSnippet: 'wall_clock_limit budget was exhausted',
+      },
+      {
+        name: 'repeated tool failure',
+        expectedStallType: 'repeated_tool_failure',
+        recoveryInput: input({
+          observations: [
+            observation(1, { toolFailures: [{ tool: 'read_file', signature: 'abc123' }] }),
+            observation(2, { toolFailures: [{ tool: 'read_file', signature: 'abc123' }] }),
+            observation(3, { toolFailures: [{ tool: 'read_file', signature: 'abc123' }] }),
+          ],
+        }),
+        diagnosticPrefix: '[stall-detection]',
+        evidenceSnippet: 'Tool read_file failed with the same signature',
+      },
+      {
+        name: 'repeated patch rejection',
+        expectedStallType: 'repeated_patch_rejection',
+        recoveryInput: input({
+          observations: [
+            observation(1, { patchRejections: [{ code: 'context_mismatch', target: 'src/app.ts' }] }),
+            observation(2, { patchRejections: [{ code: 'context_mismatch', target: 'src/app.ts' }] }),
+            observation(3, { patchRejections: [{ code: 'context_mismatch', target: 'src/app.ts' }] }),
+          ],
+        }),
+        diagnosticPrefix: '[stall-detection]',
+        evidenceSnippet: 'Patch rejection context_mismatch repeated for src/app.ts',
+      },
+      {
+        name: 'no touched artifacts',
+        expectedStallType: 'no_touched_artifacts',
+        recoveryInput: input({
+          observations: Array.from({ length: 5 }, (_, index) => observation(index + 1)),
+        }),
+        diagnosticPrefix: '[stall-detection]',
+        evidenceSnippet: 'No artifacts were touched in the last 5 turns',
+      },
+      {
+        name: 'no new information',
+        expectedStallType: 'no_new_information',
+        recoveryInput: input({
+          observations: Array.from(
+            { length: 5 },
+            (_, index) => observation(index + 1, { readOnly: true }),
+          ),
+          thresholds: { maxTurnsWithoutTouchedArtifact: 6 },
+        }),
+        diagnosticPrefix: '[stall-detection]',
+        evidenceSnippet: 'The last 5 read-only turns produced no new information',
+      },
+    ];
+
+    for (const scenario of scenarios) {
+      const detection = detectStall(scenario.recoveryInput);
+      assert.equal(
+        detection.stalled,
+        true,
+        `${scenario.diagnosticPrefix} ${scenario.name} should be classified as stalled`,
+      );
+      if (!detection.stalled) {
+        continue;
+      }
+
+      const stageResult = buildBlockedStageResult(detection);
+      assert.equal(
+        stageResult.status,
+        'blocked',
+        `${scenario.diagnosticPrefix} ${scenario.name} should build a blocked stage result`,
+      );
+      if (stageResult.status !== 'blocked') {
+        continue;
+      }
+
+      assert.equal(
+        stageResult.stallType,
+        scenario.expectedStallType,
+        `${scenario.diagnosticPrefix} ${scenario.name} mapped to the wrong stall family`,
+      );
+      assert.ok(
+        stageResult.diagnostics.some((diagnostic) => diagnostic.includes(scenario.evidenceSnippet)),
+        `${scenario.diagnosticPrefix} ${scenario.name} lost its evidence description`,
+      );
+      assert.ok(
+        stageResult.nextActions.length > 0,
+        `${scenario.diagnosticPrefix} ${scenario.name} should keep recovery next actions`,
+      );
+    }
+  });
+
   it('builds a blocked stage result with diagnostics and next actions', () => {
     const detection = detectStall(input({
       observations: [
@@ -369,6 +471,88 @@ describe('recovery stage results and artifacts', () => {
       turnsSinceUseful: 5,
     });
     assert.deepEqual(artifact.loopStats, recoveryInput.loopResult);
+  });
+
+  it('preserves stall evidence and last useful activity in blocked recovery artifacts', () => {
+    const recoveryInput = input({
+      observations: [
+        observation(1, { producedNewInformation: true }),
+        observation(2),
+        observation(3, { toolFailures: [{ tool: 'search', signature: 'timeout-signature' }] }),
+        observation(4, { toolFailures: [{ tool: 'search', signature: 'timeout-signature' }] }),
+        observation(5, { toolFailures: [{ tool: 'search', signature: 'timeout-signature' }] }),
+      ],
+    });
+    const detection = detectStall(recoveryInput);
+    assert.equal(detection.stalled, true, '[stall-detection] repeated tool failure should stall');
+    if (!detection.stalled) {
+      return;
+    }
+
+    const artifact = buildRecoveryArtifact(recoveryInput, detection, CREATED_AT);
+    assert.deepEqual(
+      artifact.evidence.turnIndices,
+      [3, 4, 5],
+      '[stall-detection] artifact should preserve the repeated failure turn window',
+    );
+    assert.deepEqual(
+      artifact.lastUsefulActivity,
+      { turnIndex: 1, kind: 'new_information' },
+      '[stall-detection] artifact should preserve the last useful activity',
+    );
+    assert.equal(
+      artifact.turnSummary.turnsSinceUseful,
+      4,
+      '[stall-detection] turnsSinceUseful should measure distance from the last useful turn',
+    );
+  });
+
+  it('distinguishes timeout cleanup reports from generic blocked recovery output', () => {
+    const result = analyzeRecovery(input({
+      stopReason: 'wall_clock_limit',
+      observations: [
+        observation(1, { touchedArtifact: true }),
+        observation(2),
+      ],
+    }), {
+      createdAt: CREATED_AT,
+      cleanupReport: {
+        reason: 'timeout',
+        terminatedCommands: [{ pid: 1234, command: 'npm test', signal: 'SIGTERM' }],
+        partialMutations: ['src/index.ts'],
+        finalTreeState: 'dirty-unrecoverable',
+        cleanupDecision: 'left-in-place',
+        runTouchedPaths: ['src/index.ts'],
+        rollbackResults: [],
+        notes: ['terminated after wall clock exhaustion'],
+      },
+    });
+
+    assert.equal(result.stageResult.status, 'blocked', '[timeout-cleanup] stalled timeout should block');
+    if (result.stageResult.status !== 'blocked') {
+      return;
+    }
+
+    assert.equal(
+      result.stageResult.stallType,
+      'budget_exhaustion',
+      '[timeout-cleanup] timeout cleanup should remain classified as budget exhaustion',
+    );
+    assert.equal(
+      result.artifact?.cleanupReport?.reason,
+      'timeout',
+      '[timeout-cleanup] recovery artifact should retain the timeout cleanup reason',
+    );
+    assert.equal(
+      result.artifact?.cleanupReport?.cleanupDecision,
+      'left-in-place',
+      '[timeout-cleanup] recovery artifact should retain the cleanup decision',
+    );
+    assert.deepEqual(
+      result.artifact?.cleanupReport?.terminatedCommands,
+      [{ pid: 1234, command: 'npm test', signal: 'SIGTERM' }],
+      '[timeout-cleanup] recovery artifact should retain terminated command diagnostics',
+    );
   });
 
   it('analyzes recovery and emits an artifact when stalled and timestamped', () => {

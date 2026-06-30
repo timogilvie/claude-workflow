@@ -1867,6 +1867,7 @@ echo ""
 echo "=== New hook states: blocked, approval-needed, policy-denied (HOK-2370) ==="
 
 mkdir -p \
+  "$WORKTREES_DIR/waiting-hook-task/features/waiting-hook-task" \
   "$WORKTREES_DIR/blocked-task/features/blocked-task" \
   "$WORKTREES_DIR/approval-task/features/approval-task" \
   "$WORKTREES_DIR/denied-task/features/denied-task"
@@ -1937,6 +1938,7 @@ run_render_with_agent_states() {
         "$blocked_issue")  echo "blocked" ;;
         "$approval_issue") echo "approval-needed" ;;
         "$denied_issue")   echo "policy-denied" ;;
+        HOK-2370-W)        echo "waiting" ;;
         *) echo "running" ;;
       esac
     }
@@ -1965,6 +1967,62 @@ run_render_with_agent_states() {
     strip_ansi < "$FRAME" > "$output_file"
   )
 }
+
+# ── Waiting state stays distinct from approval-needed ──────────────────────
+
+STATE_FILE_WAITING_STATE="$TMP_DIR/state-waiting-state.json"
+cat > "$STATE_FILE_WAITING_STATE" <<EOF
+{
+  "tasks": {
+    "HOK-2370-W": {
+      "slug": "waiting-hook-task",
+      "branch": "task/waiting-hook-task",
+      "worktree": "$WORKTREES_DIR/waiting-hook-task",
+      "status": "",
+      "phase": "coding",
+      "pr": ""
+    }
+  }
+}
+EOF
+
+BEHAVIOR_WAITING_STATE="$TMP_DIR/behavior-waiting-state.json"
+cat > "$BEHAVIOR_WAITING_STATE" <<'EOF'
+{
+  "pane": {
+    "HOK-2370-W-waiting-hook-task": "3"
+  },
+  "hook": {
+    "HOK-2370-W": "waiting on CI shard 3/5"
+  },
+  "next_action": {
+    "HOK-2370-W": "this line should not render for generic waiting"
+  },
+  "reported": {},
+  "planning": {},
+  "pr": {},
+  "checks": {}
+}
+EOF
+
+OUTPUT_WAITING_STATE="$TMP_DIR/output-waiting-state.txt"
+run_render_with_agent_states "$STATE_FILE_WAITING_STATE" "$WORKTREES_DIR" "$BEHAVIOR_WAITING_STATE" "$OUTPUT_WAITING_STATE" \
+  "" "" ""
+
+if grep -q '📥 INBOX (1)' "$OUTPUT_WAITING_STATE" \
+  && grep -q 'HOK-2370-W.*waiting-hook-task.*⏳ waiting' "$OUTPUT_WAITING_STATE" \
+  && ! grep -q '⏳ approval' "$OUTPUT_WAITING_STATE"; then
+  pass "waiting state renders distinctly from approval-needed"
+else
+  fail "waiting state did not render distinctly from approval-needed"
+fi
+
+if grep -q 'waiting on CI shard 3/5' "$OUTPUT_WAITING_STATE" \
+  && ! grep -q 'this line should not render for generic waiting' "$OUTPUT_WAITING_STATE"; then
+  pass "waiting state renders detail without actionable next_action follow-up"
+else
+  fail "waiting state detail or next_action behavior is incorrect"
+fi
 
 OUTPUT_BLOCKED_STATE="$TMP_DIR/output-blocked-state.txt"
 run_render_with_agent_states "$STATE_FILE_BLOCKED_STATE" "$WORKTREES_DIR" "$BEHAVIOR_BLOCKED_STATE" "$OUTPUT_BLOCKED_STATE" \
@@ -2116,6 +2174,12 @@ if grep -q 'network policy rejected outbound request' "$OUTPUT_DENIED_STATE"; th
   pass "policy-denied surfaces detail line"
 else
   fail "policy-denied detail line missing"
+fi
+
+if ! grep -q 'approve HOK-2370-C to continue' "$OUTPUT_DENIED_STATE"; then
+  pass "policy-denied stays distinct from approval-needed follow-up guidance"
+else
+  fail "policy-denied incorrectly reused approval-needed next_action guidance"
 fi
 
 # Verify denied ≠ blocked label

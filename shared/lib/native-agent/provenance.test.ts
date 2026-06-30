@@ -41,23 +41,76 @@ describe('provenance trust tagging', () => {
     assert.deepEqual(metadata.diagnostics, []);
   });
 
-  it('detects phase, path, approval, network, and completion overrides in fixtures', () => {
-    const fileFixture = loadFixture('file.txt');
-    const diffFixture = loadFixture('diff.patch');
-    const issueFixture = loadFixture('issue.md');
-    const prFixture = loadFixture('pr.md');
-    const commentFixture = loadFixture('comment.md');
-
-    const metadata = [
-      buildTrustMetadata({ sourceKind: 'file', details: fileFixture }),
-      buildTrustMetadata({ sourceKind: 'diff', details: diffFixture }),
-      buildTrustMetadata({ sourceKind: 'issue', details: issueFixture }),
-      buildTrustMetadata({ sourceKind: 'pull_request', details: prFixture }),
-      buildTrustMetadata({ sourceKind: 'comment', details: commentFixture }),
+  it('detects source-specific prompt-injection diagnostics for each fixture', () => {
+    const fixtures: Array<{
+      name: string;
+      sourceKind: 'file' | 'diff' | 'issue' | 'pull_request' | 'comment';
+      filename: string;
+      expectedCategories: Array<'phase_override' | 'path_override' | 'approval_override' | 'network_override' | 'completion_override'>;
+    }> = [
+      {
+        name: 'file fixture',
+        sourceKind: 'file',
+        filename: 'file.txt',
+        expectedCategories: [
+          'phase_override',
+          'path_override',
+          'approval_override',
+          'network_override',
+          'completion_override',
+        ],
+      },
+      {
+        name: 'diff fixture',
+        sourceKind: 'diff',
+        filename: 'diff.patch',
+        expectedCategories: ['path_override', 'approval_override'],
+      },
+      {
+        name: 'issue fixture',
+        sourceKind: 'issue',
+        filename: 'issue.md',
+        expectedCategories: ['phase_override'],
+      },
+      {
+        name: 'pull request fixture',
+        sourceKind: 'pull_request',
+        filename: 'pr.md',
+        expectedCategories: ['phase_override'],
+      },
+      {
+        name: 'comment fixture',
+        sourceKind: 'comment',
+        filename: 'comment.md',
+        expectedCategories: ['path_override'],
+      },
     ];
 
+    const metadata = fixtures.map((fixture) => ({
+      fixture,
+      metadata: buildTrustMetadata({
+        sourceKind: fixture.sourceKind,
+        details: loadFixture(fixture.filename),
+      }),
+    }));
+
+    for (const { fixture, metadata: entry } of metadata) {
+      const actualCategories = new Set(entry.diagnostics.map((diagnostic) => diagnostic.category));
+      assert.equal(
+        entry.trust,
+        'untrusted',
+        `[safety-denial] ${fixture.name} should remain untrusted`,
+      );
+      for (const category of fixture.expectedCategories) {
+        assert.ok(
+          actualCategories.has(category),
+          `[safety-denial] ${fixture.name} should trigger ${category}`,
+        );
+      }
+    }
+
     const categories = new Set(
-      metadata.flatMap((entry) => entry.diagnostics.map((diagnostic) => diagnostic.category)),
+      metadata.flatMap(({ metadata: entry }) => entry.diagnostics.map((diagnostic) => diagnostic.category)),
     );
 
     assert.ok(categories.has('phase_override'));
@@ -65,7 +118,7 @@ describe('provenance trust tagging', () => {
     assert.ok(categories.has('approval_override'));
     assert.ok(categories.has('network_override'));
     assert.ok(categories.has('completion_override'));
-    assert.ok(metadata.every((entry) => entry.trust === 'untrusted'));
+    assert.ok(metadata.every(({ metadata: entry }) => entry.trust === 'untrusted'));
   });
 
   it('tags provider payloads as untrusted and scans raw text', () => {
