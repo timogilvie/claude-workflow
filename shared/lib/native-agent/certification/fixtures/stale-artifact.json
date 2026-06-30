@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "provider": "anthropic",
+  "model": "claude-sonnet-4-6",
+  "phase": "read-only",
+  "suiteVersion": "v1",
+  "certifiedAt": "2020-01-01T00:00:00.000Z",
+  "scenarios": [
+    { "scenarioId": "list-files", "passed": true }
+  ]
+}
