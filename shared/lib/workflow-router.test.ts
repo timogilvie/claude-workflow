@@ -1429,6 +1429,340 @@ await test('tryPolicyResolution stays deterministic with exploration disabled', 
 });
 
 
+// ─── Native certification phase filter tests ────────────────────────────────
+// These tests verify that the router enforces phase-level certification for
+// native models at all pool resolution sites (heuristic, policy, stage-aware).
+//
+// Test model: a fake "native-cert-test" model injected via modelRegistry config.
+// Certification artifacts are written to the temp repo directory.
+
+const NATIVE_MODEL_ID = 'native-cert-test';
+const NATIVE_PROVIDER = 'openai';
+const NATIVE_SUITE = 'v1';
+const HOSTED_MODEL_ID = 'claude-sonnet-4-5-20250929';
+
+function nativeModelRegistryEntry(): Record<string, unknown> {
+  return {
+    vendor: 'openai',
+    class: 'strong_generalist',
+    strengths: ['native execution', 'tool use'],
+    weaknesses: ['certification required'],
+    qualityScores: { planning: 72, coding: 78, review: 75, classify: 65, routing: 65 },
+    agent: 'native-openai',
+    nativeCapability: {
+      nativeProvider: NATIVE_PROVIDER,
+      piTransportKind: 'openai-responses',
+      readOnlyNative: 'certified',
+      certification: {
+        maxCertifiedPhase: 'patch',
+        certifiedAt: '2026-06-01T00:00:00.000Z',
+        certificationSuiteVersion: NATIVE_SUITE,
+      },
+    },
+  };
+}
+
+function makeNativeCertArtifact(phase: 'read-only' | 'patch'): Record<string, unknown> {
+  return {
+    schemaVersion: 1,
+    provider: NATIVE_PROVIDER,
+    model: NATIVE_MODEL_ID,
+    phase,
+    suiteVersion: NATIVE_SUITE,
+    certifiedAt: '2026-06-01T00:00:00.000Z',
+    expiresAt: '2099-01-01T00:00:00.000Z',
+    scenarios: [
+      { scenarioId: 'list-files', passed: true },
+      { scenarioId: 'read-file', passed: true },
+      ...(phase === 'patch' ? [{ scenarioId: 'apply-patch', passed: true }] : []),
+    ],
+  };
+}
+
+type ArtifactKind = 'read-only' | 'patch' | 'missing' | 'malformed' | 'stale' | 'wrong-suite';
+
+function makeRepoWithNativeModel(artifactKind: ArtifactKind): { repoDir: string; cleanup: () => void } {
+  const { repoDir, cleanup } = makeRepo({
+    modelRegistry: {
+      models: {
+        [NATIVE_MODEL_ID]: nativeModelRegistryEntry(),
+      },
+    },
+  });
+
+  const certDir = join(repoDir, '.wavemill', 'native-agent-certifications', NATIVE_PROVIDER, NATIVE_MODEL_ID);
+  mkdirSync(certDir, { recursive: true });
+
+  if (artifactKind === 'missing') {
+    // Intentionally no file written.
+  } else if (artifactKind === 'malformed') {
+    writeFileSync(join(certDir, `${NATIVE_SUITE}.json`), '{"schemaVersion":1,"provider":"openai"}');
+  } else if (artifactKind === 'stale') {
+    writeFileSync(join(certDir, `${NATIVE_SUITE}.json`), JSON.stringify({
+      schemaVersion: 1, provider: NATIVE_PROVIDER, model: NATIVE_MODEL_ID,
+      phase: 'patch', suiteVersion: NATIVE_SUITE,
+      certifiedAt: '2020-01-01T00:00:00.000Z',  // expired
+      scenarios: [{ scenarioId: 'test', passed: true }],
+    }));
+  } else if (artifactKind === 'wrong-suite') {
+    writeFileSync(join(certDir, `${NATIVE_SUITE}.json`), JSON.stringify({
+      schemaVersion: 1, provider: NATIVE_PROVIDER, model: NATIVE_MODEL_ID,
+      phase: 'patch', suiteVersion: 'v0',  // content says v0 but path says v1
+      certifiedAt: '2026-06-01T00:00:00.000Z', expiresAt: '2099-01-01T00:00:00.000Z',
+      scenarios: [{ scenarioId: 'test', passed: true }],
+    }));
+  } else {
+    writeFileSync(join(certDir, `${NATIVE_SUITE}.json`), JSON.stringify(makeNativeCertArtifact(artifactKind)));
+  }
+
+  return { repoDir, cleanup };
+}
+
+// Helper: check whether the router rejected the native model for a given stage
+function certRejectionInReasoning(reasoning: string[], modelId = NATIVE_MODEL_ID): boolean {
+  return reasoning.some((line) => line.includes('[native-cert]') && line.includes(modelId));
+}
+
+await test('native model with read-only cert is allowed for planner stage (read-only required)', () => {
+  const { repoDir, cleanup } = makeRepoWithNativeModel('read-only');
+  try {
+    const decision = routeWorkflow('Fix a lint error in the parser.', {
+      repoDir,
+      modelsAvailable: [NATIVE_MODEL_ID, HOSTED_MODEL_ID],
+      skipDifficultyClassification: true,
+    });
+    // Planner stage requires read-only cert; read-only cert satisfies that.
+    const plannerRejection = decision.reasoning.find(
+      (l) => l.includes('[native-cert]') && l.includes(NATIVE_MODEL_ID) && l.includes('planner'),
+    );
+    assert.ok(!plannerRejection, `Expected no planner cert rejection but got: ${plannerRejection}`);
+    // Reviewer stage also requires read-only; also satisfied.
+    const reviewerRejection = decision.reasoning.find(
+      (l) => l.includes('[native-cert]') && l.includes(NATIVE_MODEL_ID) && l.includes('reviewer'),
+    );
+    assert.ok(!reviewerRejection, `Expected no reviewer cert rejection but got: ${reviewerRejection}`);
+  } finally {
+    cleanup();
+  }
+});
+
+await test('native model with patch cert satisfies read-only requirement for planner', () => {
+  const { repoDir, cleanup } = makeRepoWithNativeModel('patch');
+  try {
+    const decision = routeWorkflow('Fix a lint error in the parser.', {
+      repoDir,
+      modelsAvailable: [NATIVE_MODEL_ID, HOSTED_MODEL_ID],
+      skipDifficultyClassification: true,
+    });
+    assert.ok(!certRejectionInReasoning(decision.reasoning), `Expected no cert rejection but got: ${decision.reasoning.filter(l => l.includes('[native-cert]')).join('; ')}`);
+  } finally {
+    cleanup();
+  }
+});
+
+await test('native model with read-only cert is rejected for coder stage (patch required)', () => {
+  const { repoDir, cleanup } = makeRepoWithNativeModel('read-only');
+  try {
+    const decision = routeWorkflow('Fix a lint error in the parser.', {
+      repoDir,
+      modelsAvailable: [NATIVE_MODEL_ID, HOSTED_MODEL_ID],
+      skipDifficultyClassification: true,
+    });
+    // Coder stage requires patch certification; read-only cert is insufficient.
+    assert.ok(certRejectionInReasoning(decision.reasoning), `Expected cert rejection in reasoning but got: ${decision.reasoning.join('; ')}`);
+    // The rejection message should reference the required phase and model.
+    const coderRejection = decision.reasoning.find((l) => l.includes('[native-cert]') && l.includes(NATIVE_MODEL_ID));
+    assert.ok(coderRejection?.includes('patch'), `Expected rejection message to mention required phase 'patch', got: ${coderRejection}`);
+  } finally {
+    cleanup();
+  }
+});
+
+await test('native model with read-only cert is rejected for coder stage and hosted fallback is used', () => {
+  const { repoDir, cleanup } = makeRepoWithNativeModel('read-only');
+  try {
+    const decision = routeWorkflow('Fix a lint error in the parser.', {
+      repoDir,
+      modelsAvailable: [NATIVE_MODEL_ID, HOSTED_MODEL_ID],
+      skipDifficultyClassification: true,
+    });
+    // Native model removed from coder pool; hosted model fills in.
+    assert.equal(decision.coder, HOSTED_MODEL_ID,
+      `Expected coder to be hosted model, got ${decision.coder}`);
+    // Planner and reviewer also need checking since native is rejected there too if cert < required.
+    // (Native with read-only cert satisfies planner/reviewer's read-only requirement.)
+  } finally {
+    cleanup();
+  }
+});
+
+await test('missing certification artifact causes native model rejection', () => {
+  const { repoDir, cleanup } = makeRepoWithNativeModel('missing');
+  try {
+    const decision = routeWorkflow('Fix a lint error in the parser.', {
+      repoDir,
+      modelsAvailable: [NATIVE_MODEL_ID, HOSTED_MODEL_ID],
+      skipDifficultyClassification: true,
+    });
+    assert.ok(certRejectionInReasoning(decision.reasoning), 'Expected rejection for missing cert');
+    assert.notEqual(decision.coder, NATIVE_MODEL_ID, 'Native model should not be coder when cert is missing');
+  } finally {
+    cleanup();
+  }
+});
+
+await test('stale certification artifact causes native model rejection', () => {
+  const { repoDir, cleanup } = makeRepoWithNativeModel('stale');
+  try {
+    const decision = routeWorkflow('Fix a lint error in the parser.', {
+      repoDir,
+      modelsAvailable: [NATIVE_MODEL_ID, HOSTED_MODEL_ID],
+      skipDifficultyClassification: true,
+    });
+    assert.ok(certRejectionInReasoning(decision.reasoning), 'Expected rejection for stale cert');
+    const rejectionLine = decision.reasoning.find((l) => l.includes('[native-cert]'));
+    assert.ok(rejectionLine?.includes('stale') || rejectionLine?.includes('expired'), `Expected stale reason in rejection: ${rejectionLine}`);
+    assert.notEqual(decision.coder, NATIVE_MODEL_ID);
+  } finally {
+    cleanup();
+  }
+});
+
+await test('wrong suite version causes native model rejection', () => {
+  const { repoDir, cleanup } = makeRepoWithNativeModel('wrong-suite');
+  try {
+    const decision = routeWorkflow('Fix a lint error in the parser.', {
+      repoDir,
+      modelsAvailable: [NATIVE_MODEL_ID, HOSTED_MODEL_ID],
+      skipDifficultyClassification: true,
+    });
+    assert.ok(certRejectionInReasoning(decision.reasoning), 'Expected rejection for wrong suite');
+    const rejectionLine = decision.reasoning.find((l) => l.includes('[native-cert]'));
+    assert.ok(rejectionLine?.includes('version') || rejectionLine?.includes('suite'), `Expected suite mismatch reason: ${rejectionLine}`);
+    assert.notEqual(decision.coder, NATIVE_MODEL_ID);
+  } finally {
+    cleanup();
+  }
+});
+
+await test('malformed certification artifact causes native model rejection', () => {
+  const { repoDir, cleanup } = makeRepoWithNativeModel('malformed');
+  try {
+    const decision = routeWorkflow('Fix a lint error in the parser.', {
+      repoDir,
+      modelsAvailable: [NATIVE_MODEL_ID, HOSTED_MODEL_ID],
+      skipDifficultyClassification: true,
+    });
+    assert.ok(certRejectionInReasoning(decision.reasoning), 'Expected rejection for malformed cert');
+    assert.notEqual(decision.coder, NATIVE_MODEL_ID);
+  } finally {
+    cleanup();
+  }
+});
+
+await test('rejected native model does not block hosted model in mixed pool', () => {
+  const { repoDir, cleanup } = makeRepoWithNativeModel('missing');
+  try {
+    const decision = routeWorkflow('Implement a backend feature with tests.', {
+      repoDir,
+      modelsAvailable: [NATIVE_MODEL_ID, HOSTED_MODEL_ID],
+      skipDifficultyClassification: true,
+    });
+    // Native model is rejected but hosted model should be routable.
+    assert.equal(decision.coder, HOSTED_MODEL_ID,
+      `Expected hosted fallback when native cert missing, got ${decision.coder}`);
+    // Routing should still succeed (no empty-pool crash).
+    assert.ok(['planner', 'coder', 'reviewer'].every((role) =>
+      decision[role as 'planner' | 'coder' | 'reviewer'] !== NATIVE_MODEL_ID
+    ), 'Native model should not appear in any role when cert is missing');
+  } finally {
+    cleanup();
+  }
+});
+
+await test('rejection diagnostic identifies model, phase, capability, and required certification', () => {
+  const { repoDir, cleanup } = makeRepoWithNativeModel('read-only');
+  try {
+    const decision = routeWorkflow('Implement a backend feature with tests.', {
+      repoDir,
+      modelsAvailable: [NATIVE_MODEL_ID, HOSTED_MODEL_ID],
+      skipDifficultyClassification: true,
+    });
+    const coderRejection = decision.reasoning.find(
+      (l) => l.includes('[native-cert]') && l.includes(NATIVE_MODEL_ID) && l.includes('coder'),
+    );
+    assert.ok(coderRejection, 'Expected coder rejection line for native model');
+    assert.ok(coderRejection.includes(NATIVE_MODEL_ID), 'Rejection should name the model');
+    assert.ok(coderRejection.includes('coder'), 'Rejection should name the stage');
+    assert.ok(coderRejection.includes('patch'), 'Rejection should name the required certification');
+    assert.ok(coderRejection.includes('phase-insufficient') || coderRejection.includes('insufficient'), 'Rejection should state the reason');
+  } finally {
+    cleanup();
+  }
+});
+
+await test('native model with valid patch cert allowed for coder stage', () => {
+  const { repoDir, cleanup } = makeRepoWithNativeModel('patch');
+  try {
+    const decision = routeWorkflow('Fix a lint error in the parser.', {
+      repoDir,
+      modelsAvailable: [NATIVE_MODEL_ID, HOSTED_MODEL_ID],
+      skipDifficultyClassification: true,
+    });
+    // With valid patch cert, the native model should be in the coder pool.
+    // No certification rejection for the coder stage.
+    const coderRejection = decision.reasoning.find(
+      (l) => l.includes('[native-cert]') && l.includes(NATIVE_MODEL_ID) && l.includes('coder'),
+    );
+    assert.ok(!coderRejection, `Expected no coder rejection for patch-certified model, got: ${coderRejection}`);
+  } finally {
+    cleanup();
+  }
+});
+
+await test('certification filtering in policy resolver path rejects uncertified native model', () => {
+  const { repoDir, cleanup } = makeRepoWithNativeModel('read-only');
+  writeQuotaState(repoDir, {});
+  try {
+    const decision = tryPolicyResolution('Implement a backend feature with tests.', {
+      repoDir,
+      taskDifficulty: 'moderate',
+      skipDifficultyClassification: true,
+      modelsAvailable: [NATIVE_MODEL_ID, HOSTED_MODEL_ID],
+    });
+    if (decision) {
+      // If policy resolution succeeded, native model must not be coder.
+      assert.notEqual(decision.coder, NATIVE_MODEL_ID,
+        'Native model should not be coder in policy path when cert insufficient');
+      // Rejection should appear in reasoning.
+      assert.ok(certRejectionInReasoning(decision.reasoning),
+        'Expected cert rejection in policy path reasoning');
+    }
+    // If decision is null (policy fell through), heuristic routing handles it.
+  } finally {
+    cleanup();
+  }
+});
+
+await test('hosted models are unaffected by native certification filtering', () => {
+  const { repoDir, cleanup } = makeRepo();  // No native model in registry.
+  try {
+    const decision = routeWorkflow('Implement a backend feature with tests.', {
+      repoDir,
+      skipDifficultyClassification: true,
+    });
+    // Existing hosted routing must not be affected.
+    assert.ok(!certRejectionInReasoning(decision.reasoning),
+      'No cert rejection expected for hosted-only routing');
+    assert.ok(['planner', 'coder', 'reviewer'].every((role) =>
+      typeof decision[role as 'planner' | 'coder' | 'reviewer'] === 'string'
+    ), 'All roles should be assigned');
+  } finally {
+    cleanup();
+  }
+});
+
+
 console.log(`\n--- Results: ${passed} passed, ${failed} failed ---`);
 if (failed > 0) {
   process.exit(1);

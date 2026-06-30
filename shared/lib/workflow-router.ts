@@ -43,6 +43,7 @@ import type { RouteProvenance } from './route-artifact.ts';
 import { isDeepSeekLikeModelId } from './model-registry.ts';
 import { validateModelOrThrow } from './model-validator.ts';
 import { filterDisabledModels, isDisabledModel } from './disabled-models.ts';
+import { checkNativeCertificationForStage } from './native-agent/certification/phase-filter.ts';
 
 export type PlanDepth = 'light' | 'medium' | 'deep';
 export type CodeDepth = 'light' | 'medium' | 'deep';
@@ -464,6 +465,42 @@ function filterProviderPool(
   };
 }
 
+interface CertificationFilterResult {
+  models: string[];
+  rejectionMessages: string[];
+}
+
+/**
+ * Remove native models from the pool that do not hold valid certification for
+ * the given stage. Non-native models pass through unchanged.
+ *
+ * Fail-closed: any missing, malformed, stale, wrong-suite, phase-insufficient,
+ * or scenario-failure result causes the native model to be excluded.
+ */
+function filterCertifiedNativeModels(
+  models: string[],
+  stage: 'planner' | 'coder' | 'reviewer',
+  repoDir: string | undefined,
+): CertificationFilterResult {
+  const registry = getEffectiveRegistry(repoDir);
+  const rejectionMessages: string[] = [];
+
+  const filtered = models.filter((modelId) => {
+    const result = checkNativeCertificationForStage({ modelId, stage, registry, repoDir });
+    if (!result.allowed) {
+      rejectionMessages.push(
+        `[native-cert] ${result.diagnostic.message}` +
+        ` (status: ${result.diagnostic.observedCertificationStatus},` +
+        ` model: ${result.diagnostic.modelId},` +
+        ` required: ${result.diagnostic.requiredCertification})`,
+      );
+    }
+    return result.allowed;
+  });
+
+  return { models: filtered, rejectionMessages };
+}
+
 function getModelPool(repoDir?: string): ResolvedModelPool {
   const routerConfig = loadRouterConfig(repoDir);
   const pricingModels = Object.keys(loadConfiguredPricingTable(repoDir));
@@ -520,7 +557,12 @@ function resolveStagePool(
 
   validateDeepSeekPool(explicitPool, options?.repoDir);
   const configuredPool = intersectPools(basePool, explicitPool);
-  return filterProviderPool(intersectPools(configuredPool, policyPool), options?.repoDir, role);
+  const providerFiltered = filterProviderPool(intersectPools(configuredPool, policyPool), options?.repoDir, role);
+  const certFiltered = filterCertifiedNativeModels(providerFiltered.models, role, options?.repoDir);
+  return {
+    models: certFiltered.models,
+    warnings: [...providerFiltered.warnings, ...certFiltered.rejectionMessages],
+  };
 }
 
 function pickAvailableModel(pool: string[], preferred: string[], fallback: string): string {
@@ -659,11 +701,11 @@ function buildPolicyStagePools(params: {
           : params.capabilityConstraints?.reviewer,
     }, [...poolSet]).modelIds;
 
-  return {
-    plannerModels: toPoolModels('planning'),
-    coderModels: toPoolModels('coding'),
-    reviewerModels: toPoolModels('review'),
-  };
+  const plannerModels = filterCertifiedNativeModels(toPoolModels('planning'), 'planner', params.repoDir).models;
+  const coderModels = filterCertifiedNativeModels(toPoolModels('coding'), 'coder', params.repoDir).models;
+  const reviewerModels = filterCertifiedNativeModels(toPoolModels('review'), 'reviewer', params.repoDir).models;
+
+  return { plannerModels, coderModels, reviewerModels };
 }
 
 function highestPriorityFrontierWithStatus(
@@ -1565,21 +1607,37 @@ export function tryPolicyResolution(
     codeDepth,
     reviewRecommended,
   );
-  const plannerCandidates = viableCandidatesInPool({
+  const rawPlannerCandidates = viableCandidatesInPool({
     ...basePolicy,
     taskType: 'planning',
     capabilityConstraints: stageCapabilityConstraints.planner,
   }, pool);
-  const coderCandidates = viableCandidatesInPool({
+  const rawCoderCandidates = viableCandidatesInPool({
     ...basePolicy,
     taskType: 'coding',
     capabilityConstraints: stageCapabilityConstraints.coder,
   }, pool);
-  const reviewerCandidates = viableCandidatesInPool({
+  const rawReviewerCandidates = viableCandidatesInPool({
     ...basePolicy,
     taskType: 'review',
     capabilityConstraints: stageCapabilityConstraints.reviewer,
   }, pool);
+
+  // Apply native certification filtering after policy candidate resolution.
+  // Rejected native models are excluded from selection; hosted models are unchanged.
+  const plannerCertFiltered = filterCertifiedNativeModels(rawPlannerCandidates.modelIds, 'planner', repoDir);
+  const coderCertFiltered = filterCertifiedNativeModels(rawCoderCandidates.modelIds, 'coder', repoDir);
+  const reviewerCertFiltered = filterCertifiedNativeModels(rawReviewerCandidates.modelIds, 'reviewer', repoDir);
+  const certRejectionMessages = [
+    ...plannerCertFiltered.rejectionMessages,
+    ...coderCertFiltered.rejectionMessages,
+    ...reviewerCertFiltered.rejectionMessages,
+  ];
+
+  const plannerCandidates = { ...rawPlannerCandidates, modelIds: plannerCertFiltered.models };
+  const coderCandidates = { ...rawCoderCandidates, modelIds: coderCertFiltered.models };
+  const reviewerCandidates = { ...rawReviewerCandidates, modelIds: reviewerCertFiltered.models };
+
   // Exploration sampling: pick from the ranked viable candidates instead of
   // always taking the argmax. Scores come from registry quality for the task
   // type, matching the ordering produced by the policy resolver.
@@ -1677,6 +1735,7 @@ export function tryPolicyResolution(
         ? ['Capability constraints filtered every in-pool policy candidate for at least one stage, so Layer 3 fell back to the unfiltered viable pool.']
         : []),
       `Risk score ${riskScore} from complexity, scope, and repo-surface keywords.`,
+      ...certRejectionMessages,
     ],
     signals: {
       taskType: characteristics.taskType,

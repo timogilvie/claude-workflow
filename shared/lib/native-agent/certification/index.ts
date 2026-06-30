@@ -66,6 +66,17 @@ export type {
 export { getDefaultScenarios } from './scenarios.ts';
 
 export type {
+  RouterStage,
+  NativeCertificationDiagnostic,
+  NativePhaseFilterResult,
+} from './phase-filter.ts';
+
+export {
+  STAGE_REQUIRED_PHASE,
+  checkNativeCertificationForStage,
+} from './phase-filter.ts';
+
+export type {
   HarnessScenarioStatus,
   HarnessScenarioResult,
   HarnessReport,
