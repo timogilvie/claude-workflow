@@ -1488,6 +1488,29 @@
                                         "items": {
                                             "type": "string"
                                         }
+                                    },
+                                    "certification": {
+                                        "type": "object",
+                                        "properties": {
+                                            "maxCertifiedPhase": {
+                                                "type": "string",
+                                                "enum": ["read-only", "patch", "workflow"]
+                                            },
+                                            "certifiedAt": {
+                                                "type": "string"
+                                            },
+                                            "certificationSuiteVersion": {
+                                                "type": "string",
+                                                "minLength": 1
+                                            },
+                                            "knownLimitations": {
+                                                "type": "array",
+                                                "items": {
+                                                    "type": "string"
+                                                }
+                                            }
+                                        },
+                                        "additionalProperties": false
                                     }
                                 },
                                 "additionalProperties": false

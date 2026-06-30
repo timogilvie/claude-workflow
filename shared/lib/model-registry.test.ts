@@ -11,6 +11,7 @@ import {
   compareLatencyTier,
   deriveReadOnlyNativeCapability,
   evaluateCapabilityConstraints,
+  evaluateRegistryPhaseEligibility,
   evaluateNativeReadOnlyRouting,
   FAMILY_ALIASES,
   getConfiguredModelsForDescriptor,
@@ -105,6 +106,16 @@ function makeCapabilities(
         readOnlyNative: overrides.nativeCapability.readOnlyNative!,
         compatFlags: overrides.nativeCapability.compatFlags ? { ...overrides.nativeCapability.compatFlags } : undefined,
         limitations: overrides.nativeCapability.limitations ? [...overrides.nativeCapability.limitations] : undefined,
+        certification: overrides.nativeCapability.certification
+          ? {
+            maxCertifiedPhase: overrides.nativeCapability.certification.maxCertifiedPhase,
+            certifiedAt: overrides.nativeCapability.certification.certifiedAt,
+            certificationSuiteVersion: overrides.nativeCapability.certification.certificationSuiteVersion,
+            knownLimitations: overrides.nativeCapability.certification.knownLimitations
+              ? [...overrides.nativeCapability.certification.knownLimitations]
+              : undefined,
+          }
+          : undefined,
       }
       : undefined,
   };
@@ -781,6 +792,15 @@ describe('model-registry', () => {
   });
 
   describe('native capability', () => {
+    function makeCertification(overrides: Partial<NonNullable<NonNullable<ModelRegistry['models'][string]['nativeCapability']>['certification']>> = {}) {
+      return {
+        maxCertifiedPhase: overrides.maxCertifiedPhase ?? 'patch',
+        certifiedAt: overrides.certifiedAt ?? '2026-06-01T00:00:00.000Z',
+        certificationSuiteVersion: overrides.certificationSuiteVersion ?? 'v1',
+        knownLimitations: overrides.knownLimitations ? [...overrides.knownLimitations] : ['requires tool retries'],
+      };
+    }
+
     it('keeps non-native entries unset and preserves authored native metadata', () => {
       assert.equal(DEFAULT_MODEL_REGISTRY.models['gpt-5.5'].nativeCapability, undefined);
 
@@ -816,6 +836,7 @@ describe('model-registry', () => {
         readOnlyNative: 'certified',
         compatFlags: undefined,
         limitations: undefined,
+        certification: undefined,
       });
     });
 
@@ -948,6 +969,128 @@ describe('model-registry', () => {
         },
         ladders: {},
       }));
+    });
+
+    it('accepts a valid native certification block', () => {
+      assert.doesNotThrow(() => validateNativeCapability('m', {
+        nativeCapability: {
+          nativeProvider: 'openai',
+          piTransportKind: 'openai-responses',
+          readOnlyNative: 'certified',
+          certification: makeCertification(),
+        },
+      }));
+    });
+
+    it('rejects invalid certified phase values', () => {
+      assert.throws(
+        () => validateNativeCapability('m', {
+          nativeCapability: {
+            nativeProvider: 'openai',
+            piTransportKind: 'openai-responses',
+            readOnlyNative: 'certified',
+            certification: {
+              ...makeCertification(),
+              maxCertifiedPhase: 'invalid-phase' as any,
+            },
+          },
+        }),
+        /maxCertifiedPhase/,
+      );
+    });
+
+    it('rejects malformed certifiedAt values', () => {
+      assert.throws(
+        () => validateNativeCapability('m', {
+          nativeCapability: {
+            nativeProvider: 'openai',
+            piTransportKind: 'openai-responses',
+            readOnlyNative: 'certified',
+            certification: {
+              ...makeCertification(),
+              certifiedAt: 'not-a-date',
+            },
+          },
+        }),
+        /certifiedAt/,
+      );
+    });
+
+    it('rejects unsafe certificationSuiteVersion values', () => {
+      assert.throws(
+        () => validateNativeCapability('m', {
+          nativeCapability: {
+            nativeProvider: 'openai',
+            piTransportKind: 'openai-responses',
+            readOnlyNative: 'certified',
+            certification: {
+              ...makeCertification(),
+              certificationSuiteVersion: '../v1',
+            },
+          },
+        }),
+        /certificationSuiteVersion/,
+      );
+    });
+
+    it('rejects incomplete certification blocks', () => {
+      assert.throws(
+        () => validateNativeCapability('m', {
+          nativeCapability: {
+            nativeProvider: 'openai',
+            piTransportKind: 'openai-responses',
+            readOnlyNative: 'certified',
+            certification: {
+              maxCertifiedPhase: 'patch',
+              certifiedAt: '2026-06-01T00:00:00.000Z',
+            } as any,
+          },
+        }),
+        /certificationSuiteVersion/,
+      );
+    });
+
+    it('rejects non-string knownLimitations values', () => {
+      assert.throws(
+        () => validateNativeCapability('m', {
+          nativeCapability: {
+            nativeProvider: 'openai',
+            piTransportKind: 'openai-responses',
+            readOnlyNative: 'certified',
+            certification: {
+              ...makeCertification(),
+              knownLimitations: ['okay', 1] as any,
+            },
+          },
+        }),
+        /knownLimitations/,
+      );
+    });
+
+    it('rejects certification blocks when readOnlyNative is unsupported', () => {
+      assert.throws(
+        () => validateNativeCapability('m', {
+          nativeCapability: {
+            nativeProvider: 'openai',
+            piTransportKind: 'openai-responses',
+            readOnlyNative: 'unsupported',
+            certification: makeCertification(),
+          } as any,
+        }),
+        /readOnlyNative=unsupported/,
+      );
+    });
+
+    it('rejects certification blocks without native identity', () => {
+      assert.throws(
+        () => validateNativeCapability('m', {
+          nativeCapability: {
+            readOnlyNative: 'certified',
+            certification: makeCertification(),
+          } as any,
+        }),
+        /nativeProvider/,
+      );
     });
 
     it('returns true for certified native read-only capability', () => {
@@ -1094,6 +1237,176 @@ describe('model-registry', () => {
         clearConfigCache(repoDir);
         cleanUp(repoDir);
       }
+    });
+
+    it('evaluates registry phase eligibility from checked-in metadata', () => {
+      const registry: ModelRegistry = {
+        models: {
+          A: makeCapabilities({
+            nativeCapability: {
+              nativeProvider: 'openai',
+              piTransportKind: 'openai-responses',
+              readOnlyNative: 'certified',
+              certification: makeCertification({
+                maxCertifiedPhase: 'workflow',
+                certifiedAt: '2026-06-15T00:00:00.000Z',
+                certificationSuiteVersion: 'v7',
+              }),
+            },
+          }),
+        },
+        ladders: {},
+      };
+
+      assert.deepEqual(
+        evaluateRegistryPhaseEligibility({
+          modelId: 'A',
+          phase: 'patch',
+          registry,
+          now: new Date('2026-06-20T00:00:00.000Z'),
+        }),
+        {
+          eligible: true,
+          modelId: 'A',
+          phase: 'patch',
+          certifiedAt: '2026-06-15T00:00:00.000Z',
+          suiteVersion: 'v7',
+        },
+      );
+    });
+
+    it('returns phase-insufficient when the checked-in phase is too low', () => {
+      const registry: ModelRegistry = {
+        models: {
+          A: makeCapabilities({
+            nativeCapability: {
+              nativeProvider: 'openai',
+              piTransportKind: 'openai-responses',
+              readOnlyNative: 'certified',
+              certification: makeCertification({ maxCertifiedPhase: 'read-only' }),
+            },
+          }),
+        },
+        ladders: {},
+      };
+
+      assert.deepEqual(
+        evaluateRegistryPhaseEligibility({
+          modelId: 'A',
+          phase: 'patch',
+          registry,
+          now: new Date('2026-06-20T00:00:00.000Z'),
+        }),
+        {
+          eligible: false,
+          modelId: 'A',
+          phase: 'patch',
+          reason: 'phase-insufficient',
+          certifiedAt: '2026-06-01T00:00:00.000Z',
+          suiteVersion: 'v1',
+        },
+      );
+    });
+
+    it('returns stale once certifiedAt plus ttl has elapsed', () => {
+      const registry: ModelRegistry = {
+        models: {
+          A: makeCapabilities({
+            nativeCapability: {
+              nativeProvider: 'openai',
+              piTransportKind: 'openai-responses',
+              readOnlyNative: 'certified',
+              certification: makeCertification({
+                certifiedAt: '2026-01-01T00:00:00.000Z',
+              }),
+            },
+          }),
+        },
+        ladders: {},
+      };
+
+      assert.deepEqual(
+        evaluateRegistryPhaseEligibility({
+          modelId: 'A',
+          phase: 'read-only',
+          registry,
+          now: new Date('2026-03-15T00:00:00.000Z'),
+        }),
+        {
+          eligible: false,
+          modelId: 'A',
+          phase: 'read-only',
+          reason: 'stale',
+          certifiedAt: '2026-01-01T00:00:00.000Z',
+          suiteVersion: 'v1',
+        },
+      );
+    });
+
+    it('returns no-metadata when certification is absent', () => {
+      const registry: ModelRegistry = {
+        models: {
+          A: makeCapabilities({
+            nativeCapability: {
+              nativeProvider: 'openai',
+              piTransportKind: 'openai-responses',
+              readOnlyNative: 'certified',
+            },
+          }),
+        },
+        ladders: {},
+      };
+
+      assert.deepEqual(
+        evaluateRegistryPhaseEligibility({
+          modelId: 'A',
+          phase: 'read-only',
+          registry,
+        }),
+        {
+          eligible: false,
+          modelId: 'A',
+          phase: 'read-only',
+          reason: 'no-metadata',
+        },
+      );
+    });
+
+    it('preserves seeded certification when an override only updates one nested field', () => {
+      const merged = mergeModelRegistry({
+        models: {
+          seeded: makeCapabilities({
+            nativeCapability: {
+              nativeProvider: 'openai',
+              piTransportKind: 'openai-responses',
+              readOnlyNative: 'certified',
+              certification: makeCertification({
+                maxCertifiedPhase: 'patch',
+                certificationSuiteVersion: 'v1',
+                knownLimitations: ['seeded'],
+              }),
+            },
+          }),
+        },
+        ladders: {},
+      }, {
+        models: {
+          seeded: {
+            nativeCapability: {
+              certification: {
+                knownLimitations: ['override-only'],
+              },
+            },
+          },
+        },
+      });
+
+      assert.deepEqual(merged.models.seeded.nativeCapability?.certification, {
+        maxCertifiedPhase: 'patch',
+        certifiedAt: '2026-06-01T00:00:00.000Z',
+        certificationSuiteVersion: 'v1',
+        knownLimitations: ['override-only'],
+      });
     });
   });
 
