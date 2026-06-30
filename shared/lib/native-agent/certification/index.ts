@@ -58,6 +58,7 @@ export type {
   ScenarioContext,
   ScenarioAssertion,
   ScenarioAssertionOutcome,
+  FailureClass,
   HarnessUnsupportedReason,
   HarnessNotRunReason,
   CertificationScenario,
@@ -75,6 +76,7 @@ export type {
 export {
   runScenarios,
   aggregateReport,
+  classifyAttempt,
   toArtifactScenario,
 } from './scenario-runner.ts';
 

@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "provider": "anthropic",
   "model": "claude-sonnet-4-6",
   "phase": "patch",
