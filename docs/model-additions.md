@@ -40,7 +40,7 @@ Family aliases are stable developer-facing names that parse into `ModelSelector`
 | Family | Stable model ID | Notes |
 | --- | --- | --- |
 | `opus` | `claude-opus-4-8` | Stable Anthropic frontier alias. |
-| `sonnet` | `claude-sonnet-4-6` | Stable Anthropic generalist alias. |
+| `sonnet` | `claude-sonnet-5` | Stable Anthropic generalist alias. |
 | `haiku` | `claude-haiku-4-5-20251001` | Stable Anthropic economy alias. |
 | `gpt-5.5` | `gpt-5.5` | Alias lookup wins over pinned-ID parsing for this family name. |
 | `gemini-pro` | `gemini-pro` | Declared for selector compatibility; provider/model integration is separate follow-up work when Gemini is not present in the active registry. |
@@ -110,7 +110,7 @@ export type FallbackReason = 'quota-exhausted' | 'disabled-by-policy' | 'unavail
 
 | source | When emitted | Example |
 |--------|-------------|---------|
-| `alias` | Selector is `{ kind: 'alias', family, channel }` and the family/channel pair matches a pinned `FAMILY_ALIASES` entry | `resolveSelector({ kind: 'alias', family: 'sonnet', channel: 'stable' })` → `{ resolved: 'claude-sonnet-4-6', source: 'alias', familyChannel: 'stable' }` |
+| `alias` | Selector is `{ kind: 'alias', family, channel }` and the family/channel pair matches a pinned `FAMILY_ALIASES` entry | `resolveSelector({ kind: 'alias', family: 'sonnet', channel: 'stable' })` → `{ resolved: 'claude-sonnet-5', source: 'alias', familyChannel: 'stable' }` |
 | `pinned` | Selector is `{ kind: 'pinned', modelId }` and the ID passes `validateModelId` | `resolveSelector({ kind: 'pinned', modelId: 'claude-opus-4-8' })` → `{ resolved: 'claude-opus-4-8', source: 'pinned' }` |
 | `inherited` | Selector is `{ kind: 'inherit' }` and `context.parent` is supplied | `resolveSelector({ kind: 'inherit' }, { parent: parentResult })` → `{ resolved: parentResult.resolved, source: 'inherited' }` |
 | `fallback` | Reserved for the policy layer (not emitted directly by `resolveSelector`) | — |
@@ -161,7 +161,7 @@ resolveSelectorWithPolicy(
 // =>
 // {
 //   requested: { kind: 'alias', family: 'opus' },
-//   resolved: 'claude-sonnet-4-6',
+//   resolved: 'claude-sonnet-5',
 //   source: 'fallback',
 //   fallbackReason: 'quota-exhausted',
 // }

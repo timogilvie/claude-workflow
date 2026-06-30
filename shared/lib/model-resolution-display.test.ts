@@ -72,14 +72,14 @@ test('formats quota fallback as a second line', () => {
     role: 'planner',
     requested: 'opus',
     resolved: 'claude-opus-4-7',
-    fallback: 'claude-sonnet-4-6',
+    fallback: 'claude-sonnet-5',
     fallbackReason: 'quota-exhausted',
   }));
 
   assert.equal(
     text,
     'planner: requested=opus → resolved=claude-opus-4-7\n'
-      + '         fallback=claude-sonnet-4-6 (reason: quota-exhausted)',
+      + '         fallback=claude-sonnet-5 (reason: quota-exhausted)',
   );
 });
 
@@ -88,7 +88,7 @@ test('formats disabled-by-policy fallback reason verbatim', () => {
     role: 'planner',
     requested: 'opus',
     resolved: 'claude-opus-4-7',
-    fallback: 'claude-sonnet-4-6',
+    fallback: 'claude-sonnet-5',
     fallbackReason: 'disabled-by-policy',
   });
 
@@ -101,7 +101,7 @@ test('fills in unspecified fallback reason when missing', () => {
     role: 'planner',
     requested: 'opus',
     resolved: 'claude-opus-4-7',
-    fallback: 'claude-sonnet-4-6',
+    fallback: 'claude-sonnet-5',
   }));
 
   assert.match(text, /reason: unspecified/);
@@ -185,32 +185,32 @@ test('formats executed planning, bootstrap route, drift, and active remaining ro
   const text = formatRouteLifecycleDisplayText({
     executedPlanning: {
       agent: 'codex',
-      model: 'claude-sonnet-4-6',
+      model: 'claude-sonnet-5',
       status: 'completed',
       source: '.planning-result.json',
     },
     bootstrapRoute: {
-      planner: 'claude-sonnet-4-6',
+      planner: 'claude-sonnet-5',
       coder: 'gpt-5.4',
-      reviewer: 'claude-sonnet-4-6',
+      reviewer: 'claude-sonnet-5',
     },
     expandedRoute: {
       planner: 'claude-opus-4-7',
       coder: 'gpt-5.4',
-      reviewer: 'claude-sonnet-4-6',
+      reviewer: 'claude-sonnet-5',
     },
     activeRoute: {
       coder: 'gpt-5.4',
-      reviewer: 'claude-sonnet-4-6',
+      reviewer: 'claude-sonnet-5',
     },
   });
 
   assert.equal(
     text,
-    'executed planning: codex / claude-sonnet-4-6\n'
-      + 'bootstrap route: p=claude-sonnet-4-6, c=gpt-5.4, r=claude-sonnet-4-6\n'
+    'executed planning: codex / claude-sonnet-5\n'
+      + 'bootstrap route: p=claude-sonnet-5, c=gpt-5.4, r=claude-sonnet-5\n'
       + 'recommended after expansion: p=claude-opus-4-7\n'
-      + 'active remaining route: c=gpt-5.4, r=claude-sonnet-4-6',
+      + 'active remaining route: c=gpt-5.4, r=claude-sonnet-5',
   );
 });
 
@@ -218,14 +218,14 @@ test('omits expanded recommendation when planner matches executed planning', () 
   const text = formatRouteLifecycleDisplayText({
     executedPlanning: {
       agent: 'codex',
-      model: 'claude-sonnet-4-6',
+      model: 'claude-sonnet-5',
     },
     expandedRoute: {
-      planner: 'CLAUDE-SONNET-4-6',
+      planner: 'CLAUDE-SONNET-5',
     },
   });
 
-  assert.equal(text, 'executed planning: codex / claude-sonnet-4-6');
+  assert.equal(text, 'executed planning: codex / claude-sonnet-5');
 });
 
 test('labels runtime routing records as execution telemetry', () => {

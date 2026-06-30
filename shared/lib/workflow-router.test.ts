@@ -40,7 +40,7 @@ function baseConfig() {
         'claude-opus-4-8': 'claude',
         'claude-opus-4-7': 'claude',
         'claude-opus-4-6': 'claude',
-        'claude-sonnet-4-6': 'claude',
+        'claude-sonnet-5': 'claude',
         'claude-sonnet-4-5-20250929': 'claude',
         'claude-haiku-4-5-20251001': 'claude',
         'gpt-5.3-codex': 'codex',
@@ -53,7 +53,7 @@ function baseConfig() {
         'claude-opus-4-8': { inputCostPerMTok: 15, outputCostPerMTok: 75, cacheWriteCostPerMTok: 18.75, cacheReadCostPerMTok: 1.5 },
         'claude-opus-4-7': { inputCostPerMTok: 15, outputCostPerMTok: 75, cacheWriteCostPerMTok: 18.75, cacheReadCostPerMTok: 1.5 },
         'claude-opus-4-6': { inputCostPerMTok: 15, outputCostPerMTok: 75, cacheWriteCostPerMTok: 18.75, cacheReadCostPerMTok: 1.5 },
-        'claude-sonnet-4-6': { inputCostPerMTok: 3, outputCostPerMTok: 15, cacheWriteCostPerMTok: 3.75, cacheReadCostPerMTok: 0.3 },
+        'claude-sonnet-5': { inputCostPerMTok: 3, outputCostPerMTok: 15, cacheWriteCostPerMTok: 3.75, cacheReadCostPerMTok: 0.3 },
         'claude-sonnet-4-5-20250929': { inputCostPerMTok: 3, outputCostPerMTok: 15, cacheWriteCostPerMTok: 3.75, cacheReadCostPerMTok: 0.3 },
         'claude-haiku-4-5-20251001': { inputCostPerMTok: 0.8, outputCostPerMTok: 4, cacheWriteCostPerMTok: 1, cacheReadCostPerMTok: 0.08 },
         'gpt-5.3-codex': { inputCostPerMTok: 1.75, outputCostPerMTok: 14, cacheWriteCostPerMTok: 2.1875, cacheReadCostPerMTok: 0.44 },
@@ -88,11 +88,11 @@ function frontierSiblingConfig() {
         },
       },
       ladders: {
-        planning: ['claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        coding: ['claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        review: ['claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4'],
-        classify: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'gpt-5.5', 'gpt-5.4'],
+        planning: ['claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
+        coding: ['claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
+        review: ['claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
+        routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-5', 'claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4'],
+        classify: ['claude-haiku-4-5-20251001', 'claude-sonnet-5', 'gpt-5.5', 'gpt-5.4'],
       },
     },
   };
@@ -203,6 +203,7 @@ await test('routes broad CLI workflow work to deep planning and medium-or-higher
     assert.ok([
       'gpt-5.5',
       'gpt-5.4',
+      'claude-sonnet-5',
       'claude-sonnet-4-6',
       'claude-sonnet-4-5-20250929',
       'claude-opus-4-6',
@@ -254,7 +255,7 @@ await test('heuristic routing honors stage-specific planner and reviewer pools',
       ...baseConfig().router,
       availableModels: {
         planner: ['gpt-5.4'],
-        reviewer: ['claude-sonnet-4-6'],
+        reviewer: ['claude-sonnet-5'],
       },
     },
   });
@@ -264,7 +265,7 @@ await test('heuristic routing honors stage-specific planner and reviewer pools',
       { repoDir, maxCostUsd: 25, skipDifficultyClassification: true }
     );
     assert.equal(decision.planner, 'gpt-5.4');
-    assert.equal(decision.reviewer, 'claude-sonnet-4-6');
+    assert.equal(decision.reviewer, 'claude-sonnet-5');
   } finally {
     cleanup();
   }
@@ -275,9 +276,9 @@ await test('filters DeepSeek models from routing when provider is disabled', () 
     router: {
       ...baseConfig().router,
       availableModels: {
-        planner: ['deepseek-v4-pro', 'claude-sonnet-4-6'],
-        coder: ['deepseek-v4-pro', 'claude-sonnet-4-6'],
-        reviewer: ['deepseek-v4-pro', 'claude-sonnet-4-6'],
+        planner: ['deepseek-v4-pro', 'claude-sonnet-5'],
+        coder: ['deepseek-v4-pro', 'claude-sonnet-5'],
+        reviewer: ['deepseek-v4-pro', 'claude-sonnet-5'],
       },
     },
     providers: {
@@ -297,7 +298,7 @@ await test('filters DeepSeek models from routing when provider is disabled', () 
   });
   try {
     const decision = routeWorkflow('Implement a backend workflow feature with tests.', { repoDir });
-    assert.equal(decision.coder, 'claude-sonnet-4-6');
+    assert.equal(decision.coder, 'claude-sonnet-5');
     assert.ok(decision.reasoning.some((line) => line.includes('providers.deepseek.enabled')));
   } finally {
     cleanup();
@@ -402,6 +403,7 @@ await test('policy routing can return DeepSeek when explicitly configured', () =
       'claude-opus-4-8': 'exhausted',
       'claude-opus-4-7': 'exhausted',
       'claude-opus-4-6': 'exhausted',
+      'claude-sonnet-5': 'exhausted',
       'claude-sonnet-4-6': 'exhausted',
       'claude-sonnet-4-5-20250929': 'exhausted',
       'claude-haiku-4-5-20251001': 'exhausted',
@@ -437,9 +439,9 @@ await test('allows DeepSeek routing for configured stages when provider is enabl
     router: {
       ...baseConfig().router,
       availableModels: {
-        planner: ['claude-sonnet-4-6'],
+        planner: ['claude-sonnet-5'],
         coder: ['deepseek-v4-pro'],
-        reviewer: ['claude-sonnet-4-6'],
+        reviewer: ['claude-sonnet-5'],
       },
     },
     providers: {
@@ -462,8 +464,8 @@ await test('allows DeepSeek routing for configured stages when provider is enabl
   try {
     const decision = routeWorkflow('Implement a backend workflow feature with tests.', { repoDir });
     assert.equal(decision.coder, 'deepseek-v4-pro');
-    assert.equal(decision.planner, 'claude-sonnet-4-6');
-    assert.equal(decision.reviewer, 'claude-sonnet-4-6');
+    assert.equal(decision.planner, 'claude-sonnet-5');
+    assert.equal(decision.reviewer, 'claude-sonnet-5');
   } finally {
     if (originalKey === undefined) {
       delete process.env.TEST_DEEPSEEK_KEY;
@@ -479,9 +481,9 @@ await test('falls back from DeepSeek when enabled but API key is missing', () =>
     router: {
       ...baseConfig().router,
       availableModels: {
-        planner: ['claude-sonnet-4-6'],
-        coder: ['deepseek-v4-pro', 'claude-sonnet-4-6'],
-        reviewer: ['claude-sonnet-4-6'],
+        planner: ['claude-sonnet-5'],
+        coder: ['deepseek-v4-pro', 'claude-sonnet-5'],
+        reviewer: ['claude-sonnet-5'],
       },
     },
     providers: {
@@ -503,7 +505,7 @@ await test('falls back from DeepSeek when enabled but API key is missing', () =>
   delete process.env.TEST_DEEPSEEK_KEY;
   try {
     const decision = routeWorkflow('Implement a backend workflow feature with tests.', { repoDir });
-    assert.equal(decision.coder, 'claude-sonnet-4-6');
+    assert.equal(decision.coder, 'claude-sonnet-5');
     assert.ok(decision.reasoning.some((line) => line.includes('TEST_DEEPSEEK_KEY')));
   } finally {
     if (originalKey === undefined) {
@@ -855,7 +857,7 @@ await test('policy routing logs class downgrade without same-class metadata', as
         { repoDir, taskDifficulty: 'hard', skipDifficultyClassification: true }
       ))
     );
-    assert.match(stderr, /\[(planner|coder|reviewer)] policy adjustment: gpt-5\.5 -> claude-sonnet-4-6 \(quota=degrading\)/);
+    assert.match(stderr, /\[(planner|coder|reviewer)] policy adjustment: gpt-5\.5 -> claude-sonnet-5 \(quota=degrading\)/);
     assert.doesNotMatch(stderr, /same-class=/);
   } finally {
     cleanup();
@@ -1235,7 +1237,7 @@ await test('registry-only model addition reaches heuristic routing without code 
         },
       },
       ladders: {
-        planning: ['acme-frontier-1', 'claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        planning: ['acme-frontier-1', 'claude-opus-4-8', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
       },
     },
   });

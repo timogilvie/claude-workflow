@@ -1527,7 +1527,7 @@ test('challengeRouteContext validates when present', () => {
     challengeRouteContext: {
       decisionSource: 'expanded',
       bootstrapRoute: {
-        coder: 'claude-sonnet-4-6',
+        coder: 'claude-sonnet-5',
         codeDepth: 'medium',
         reviewer: 'claude-opus-4-6',
         reviewMode: 'llm',
@@ -1562,7 +1562,7 @@ test('routeProvenance validates when present', () => {
     routeProvenance: {
       decisionSource: 'expanded',
       bootstrapRoute: {
-        coder: 'claude-sonnet-4-6',
+        coder: 'claude-sonnet-5',
         codeDepth: 'medium',
         reviewer: 'claude-opus-4-6',
         reviewMode: 'llm',
@@ -1570,13 +1570,13 @@ test('routeProvenance validates when present', () => {
       expandedRoute: {
         coder: 'gpt-5.4',
         codeDepth: 'deep',
-        reviewer: 'claude-sonnet-4-6',
+        reviewer: 'claude-sonnet-5',
         reviewMode: 'static',
       },
       activeRoute: {
         coder: 'gpt-5.4',
         codeDepth: 'deep',
-        reviewer: 'claude-sonnet-4-6',
+        reviewer: 'claude-sonnet-5',
         reviewMode: 'static',
       },
       routeChanged: true,
@@ -1600,11 +1600,11 @@ test('routeProvenance with full route artifact fields validates', () => {
     routeProvenance: {
       decisionSource: 'expanded',
       bootstrapRoute: {
-        coder: 'claude-sonnet-4-6',
+        coder: 'claude-sonnet-5',
         codeDepth: 'medium',
         reviewer: 'claude-opus-4-6',
         reviewMode: 'llm',
-        planner: 'claude-sonnet-4-6',
+        planner: 'claude-sonnet-5',
         planDepth: 'deep',
         artifactPath: 'features/HOK-2071/.initial-route.json',
         artifactHash: 'a'.repeat(64),
@@ -1622,7 +1622,7 @@ test('routeProvenance with full route artifact fields validates', () => {
       expandedRoute: {
         coder: 'gpt-5.4',
         codeDepth: 'deep',
-        reviewer: 'claude-sonnet-4-6',
+        reviewer: 'claude-sonnet-5',
         reviewMode: 'static',
         planner: 'gpt-5.4',
         planDepth: 'deep',
@@ -1642,7 +1642,7 @@ test('routeProvenance with full route artifact fields validates', () => {
       activeRoute: {
         coder: 'gpt-5.4',
         codeDepth: 'deep',
-        reviewer: 'claude-sonnet-4-6',
+        reviewer: 'claude-sonnet-5',
         reviewMode: 'static',
         planner: 'gpt-5.4',
         planDepth: 'deep',
@@ -1686,7 +1686,7 @@ test('executedPlanning validates when present', () => {
     schemaVersion: '1.25.0',
     executedPlanning: {
       agent: 'codex',
-      model: 'claude-sonnet-4-6',
+      model: 'claude-sonnet-5',
       status: 'completed',
       source: '.planning-result.json',
     },

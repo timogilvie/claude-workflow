@@ -12,7 +12,7 @@
  *   npx tsx tools/backfill-stage-scores.ts --dry-run --limit 5
  *   npx tsx tools/backfill-stage-scores.ts --limit 50
  *   npx tsx tools/backfill-stage-scores.ts --input .wavemill/evals/aggregated-evals.jsonl
- *   npx tsx tools/backfill-stage-scores.ts --model claude-sonnet-4-6   # override to Claude
+ *   npx tsx tools/backfill-stage-scores.ts --model claude-sonnet-5   # override to Claude
  */
 
 import { readFileSync, writeFileSync, existsSync, appendFileSync, mkdirSync } from 'node:fs';
@@ -129,7 +129,7 @@ runTool({
     input: { type: 'string', description: 'Input JSONL file (default: aggregated-evals.jsonl)' },
     output: { type: 'string', description: 'Output JSONL file (default: <input>.backfilled.jsonl)' },
     limit: { type: 'string', description: 'Max records to process (number)' },
-    model: { type: 'string', description: 'Judge model (default: gpt-5.5; use claude-sonnet-4-6 to route via Claude)' },
+    model: { type: 'string', description: 'Judge model (default: gpt-5.5; use claude-sonnet-5 to route via Claude)' },
     'dry-run': { type: 'boolean', description: 'Show what would be processed without making LLM calls' },
     'skip-has-impl': { type: 'boolean', description: 'Skip records that already have implementation stageScores (only backfill records with no stage scores at all)' },
   },

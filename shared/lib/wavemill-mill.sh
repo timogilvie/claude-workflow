@@ -3708,7 +3708,7 @@ resolve_stage_result_model() {
       model=$(read_phase_config "$feature_dir" "review" "model")
       [[ -z "$model" ]] && model=$(get_task_meta "$ISSUE" "reviewerModel")
       [[ -z "$model" ]] && model=$(jq -r '.model // empty' "$feature_dir/.review-result.json" 2>/dev/null || echo "")
-      model="$(resolve_phase_model "review" "$model" "${fallback:-claude-sonnet-4-6}")"
+      model="$(resolve_phase_model "review" "$model" "${fallback:-claude-sonnet-5}")"
       if declare -F agent_resolve_model >/dev/null 2>&1; then
         launch_model="$(agent_resolve_model "reviewer" "$model" "$REPO_DIR" 2>/dev/null || true)"
       fi
@@ -5113,7 +5113,7 @@ _restore_inflight_task_window_if_missing() {
     planning)
       model=$(read_phase_config "$feature_dir" "planning" "model")
       [[ -z "$model" ]] && model=$(get_task_meta "$issue" "plannerModel")
-      model="$(resolve_phase_model "planning" "$model" "claude-sonnet-4-6")"
+      model="$(resolve_phase_model "planning" "$model" "claude-sonnet-5")"
       if declare -F agent_resolve_model >/dev/null 2>&1; then
         model="$(agent_resolve_model "planner" "$model" "$REPO_DIR")" || return 1
       fi
@@ -5148,7 +5148,7 @@ _restore_inflight_task_window_if_missing() {
     review)
       model=$(read_phase_config "$feature_dir" "review" "model")
       [[ -z "$model" ]] && model=$(get_task_meta "$issue" "reviewerModel")
-      model="$(resolve_phase_model "review" "$model" "claude-sonnet-4-6")"
+      model="$(resolve_phase_model "review" "$model" "claude-sonnet-5")"
       if declare -F agent_resolve_model >/dev/null 2>&1; then
         model="$(agent_resolve_model "reviewer" "$model" "$REPO_DIR")" || return 1
       fi
@@ -5428,7 +5428,7 @@ EOF
     if declare -F launch_review_phase >/dev/null 2>&1 && declare -F agent_resolve_from_model >/dev/null 2>&1; then
       # Get review phase configuration from state
       local reviewer_model review_mode reviewer_agent
-      reviewer_model=$(read_state_value "claude-sonnet-4-6" --arg i "$issue" '.tasks[$i].reviewerModel // "claude-sonnet-4-6"')
+      reviewer_model=$(read_state_value "claude-sonnet-5" --arg i "$issue" '.tasks[$i].reviewerModel // "claude-sonnet-5"')
       review_mode=$(read_state_value "static+llm" --arg i "$issue" '.tasks[$i].reviewMode // "static+llm"')
 
       # Resolve agent from model
@@ -9038,9 +9038,9 @@ Implement from the issue description plus direct codebase analysis."
   [[ -z "$routing_max_cost_usd" ]] && routing_max_cost_usd="${DEFAULT_MAX_COST_USD:-}"
 
   jq -n \
-    --arg planner "${planner_model:-claude-sonnet-4-6}" \
+    --arg planner "${planner_model:-claude-sonnet-5}" \
     --arg coder "${task_model:-claude-opus-4-7}" \
-    --arg reviewer "${reviewer_model:-claude-sonnet-4-6}" \
+    --arg reviewer "${reviewer_model:-claude-sonnet-5}" \
     --arg planDepth "${plan_depth:-light}" \
     --arg codeDepth "${code_depth:-medium}" \
     --arg reviewMode "${review_mode:-static}" \
@@ -9103,9 +9103,9 @@ Implement from the issue description plus direct codebase analysis."
 
   # Launch planning phase directly with the routed model (skip routing agent)
   local planner_launch_model resolved_planner_agent
-  planner_launch_model="${planner_model:-claude-sonnet-4-6}"
+  planner_launch_model="${planner_model:-claude-sonnet-5}"
   if declare -F agent_resolve_model >/dev/null 2>&1; then
-    planner_launch_model="$(agent_resolve_model "planner" "${planner_model:-claude-sonnet-4-6}" "$REPO_DIR")" || return 1
+    planner_launch_model="$(agent_resolve_model "planner" "${planner_model:-claude-sonnet-5}" "$REPO_DIR")" || return 1
   fi
   resolved_planner_agent="$(agent_resolve_from_model "$planner_launch_model")"
 
@@ -10097,24 +10097,24 @@ monitor_issue_state() {
                 fi
               elif ! jq empty "$routing_file" 2>/dev/null; then
                 log_warn "$ISSUE → Routing file contains invalid JSON, using defaults"
-                planner_model="claude-sonnet-4-6"
+                planner_model="claude-sonnet-5"
                 coder_model="claude-opus-4-7"
-                reviewer_model="claude-sonnet-4-6"
+                reviewer_model="claude-sonnet-5"
                 plan_depth="light"
                 code_depth="medium"
                 review_mode="static"
               else
-                planner_model=$(jq -r '.planner // "claude-sonnet-4-6"' "$routing_file" 2>/dev/null || echo "claude-sonnet-4-6")
+                planner_model=$(jq -r '.planner // "claude-sonnet-5"' "$routing_file" 2>/dev/null || echo "claude-sonnet-5")
                 coder_model=$(jq -r '.coder // "claude-opus-4-7"' "$routing_file" 2>/dev/null || echo "claude-opus-4-7")
-                reviewer_model=$(jq -r '.reviewer // "claude-sonnet-4-6"' "$routing_file" 2>/dev/null || echo "claude-sonnet-4-6")
+                reviewer_model=$(jq -r '.reviewer // "claude-sonnet-5"' "$routing_file" 2>/dev/null || echo "claude-sonnet-5")
                 plan_depth=$(jq -r '.planDepth // "light"' "$routing_file" 2>/dev/null || echo "light")
                 code_depth=$(jq -r '.codeDepth // "medium"' "$routing_file" 2>/dev/null || echo "medium")
                 review_mode=$(jq -r '.reviewMode // "static"' "$routing_file" 2>/dev/null || echo "static")
               fi
 
-              planner_model="$(resolve_phase_model "planning" "$planner_model" "claude-sonnet-4-6")"
+              planner_model="$(resolve_phase_model "planning" "$planner_model" "claude-sonnet-5")"
               coder_model="$(resolve_phase_model "coding" "$coder_model" "claude-opus-4-7")"
-              reviewer_model="$(resolve_phase_model "review" "$reviewer_model" "claude-sonnet-4-6")"
+              reviewer_model="$(resolve_phase_model "review" "$reviewer_model" "claude-sonnet-5")"
 
               if [[ -z "${FORCE_MODEL:-}" ]]; then
                 [[ -n "${WAVEMILL_PLANNER_MODEL:-}" ]] && planner_model="$WAVEMILL_PLANNER_MODEL"
@@ -10538,7 +10538,7 @@ monitor_issue_state() {
               reviewer_model=$(read_phase_config "$FEATURE_DIR" "review" "model")
               [[ -z "$reviewer_model" ]] && reviewer_model=$(get_task_meta "$ISSUE" "reviewerModel")
             fi
-            reviewer_model="$(resolve_phase_model "review" "$reviewer_model" "claude-sonnet-4-6")"
+            reviewer_model="$(resolve_phase_model "review" "$reviewer_model" "claude-sonnet-5")"
             [[ -n "${WAVEMILL_REVIEWER_MODEL:-}" && -z "${FORCE_MODEL:-}" ]] && reviewer_model="$WAVEMILL_REVIEWER_MODEL"
             review_mode=$(read_phase_config "$FEATURE_DIR" "review" "mode")
             [[ -z "$review_mode" ]] && review_mode=$(get_task_meta "$ISSUE" "reviewMode")
@@ -10630,7 +10630,7 @@ monitor_issue_state() {
         review)
           if [[ "$resolved_phase" == "aborted" ]]; then
             log_task "status" "$ISSUE" "⛔ $ISSUE → Workflow aborted by user during review phase"
-            write_stage_result "$FEATURE_DIR" "review" "aborted" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "review" "claude-sonnet-4-6")"
+            write_stage_result "$FEATURE_DIR" "review" "aborted" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "review" "claude-sonnet-5")"
             set_task_phase "$ISSUE" "aborted"
             set_window_attention_state "$WIN" "needs-user"
             return 0
@@ -10663,7 +10663,7 @@ monitor_issue_state() {
               if [[ -n "$depends_on_pr_meta" ]]; then
                 inject_depends_on_pr_block "$ISSUE" "$pr_number" "$depends_on_pr_meta"
               fi
-              write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "review" "claude-sonnet-4-6")" "PR #$pr_number" "{\"type\":\"review\",\"prNumber\":$pr_number}"
+              write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "review" "claude-sonnet-5")" "PR #$pr_number" "{\"type\":\"review\",\"prNumber\":$pr_number}"
               dispatch_queued_children_for_parent "$ISSUE" "$pr_number"
               review_status="completed"
             else
@@ -10691,7 +10691,7 @@ monitor_issue_state() {
             if [[ -n "$depends_on_pr_meta" ]]; then
               inject_depends_on_pr_block "$ISSUE" "$pr_number" "$depends_on_pr_meta"
             fi
-            write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "review" "claude-sonnet-4-6")" "PR #$pr_number" "{\"type\":\"review\",\"prNumber\":$pr_number}"
+            write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "review" "claude-sonnet-5")" "PR #$pr_number" "{\"type\":\"review\",\"prNumber\":$pr_number}"
             dispatch_queued_children_for_parent "$ISSUE" "$pr_number"
 
             # Transition to ready phase

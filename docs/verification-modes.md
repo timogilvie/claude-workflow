@@ -33,7 +33,7 @@ Verification is triggered automatically when:
 **Example:** Sonnet or Opus coding a moderate task
 
 ```
-✓ Strong model (claude-sonnet-4-6) - no extra verification needed
+✓ Strong model (claude-sonnet-5) - no extra verification needed
 ```
 
 ### Mode 2: Weak Model + Strong Reviewer Available
@@ -296,7 +296,7 @@ To run verification manually:
 ```bash
 # Set up routing metadata
 export WAVEMILL_CODER_MODEL=claude-haiku-4-5-20251001
-export WAVEMILL_AVAILABLE_REVIEWERS=claude-opus-4-8,claude-sonnet-4-6
+export WAVEMILL_AVAILABLE_REVIEWERS=claude-opus-4-8,claude-sonnet-5
 export WAVEMILL_REPO_DIR=/path/to/repo
 
 # Run verification

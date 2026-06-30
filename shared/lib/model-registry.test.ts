@@ -171,6 +171,7 @@ describe('model-registry', () => {
       'claude-opus-4-8',
       'claude-opus-4-7',
       'claude-opus-4-6',
+      'claude-sonnet-5',
       'claude-sonnet-4-6',
       'claude-sonnet-4-5-20250929',
       'claude-haiku-4-5-20251001',
@@ -233,7 +234,7 @@ describe('model-registry', () => {
     assert.deepEqual(getLadder(DEFAULT_MODEL_REGISTRY, 'classify'), [
       'claude-haiku-4-5-20251001',
       'deepseek-v4-flash',
-      'claude-sonnet-4-6',
+      'claude-sonnet-5',
       'gpt-5.5',
       'gpt-5.4',
     ]);
@@ -317,13 +318,13 @@ describe('model-registry', () => {
 
   it('rankCandidates filters excluded models and stays deterministic', () => {
     const once = rankCandidates(DEFAULT_MODEL_REGISTRY, 'review', {
-      excluded: ['claude-sonnet-4-6'],
+      excluded: ['claude-sonnet-5'],
     });
     const twice = rankCandidates(DEFAULT_MODEL_REGISTRY, 'review', {
-      excluded: ['claude-sonnet-4-6'],
+      excluded: ['claude-sonnet-5'],
     });
     const thrice = rankCandidates(DEFAULT_MODEL_REGISTRY, 'review', {
-      excluded: ['claude-sonnet-4-6'],
+      excluded: ['claude-sonnet-5'],
     });
 
     assert.deepEqual(once, [
@@ -349,7 +350,7 @@ describe('model-registry', () => {
   it('rankCandidates returns an empty ladder when every candidate is excluded', () => {
     assert.deepEqual(
       rankCandidates(DEFAULT_MODEL_REGISTRY, 'classify', {
-        excluded: ['claude-haiku-4-5-20251001', 'deepseek-v4-flash', 'claude-sonnet-4-6', 'gpt-5.5', 'gpt-5.4', 'claude-fable-5'],
+        excluded: ['claude-haiku-4-5-20251001', 'deepseek-v4-flash', 'claude-sonnet-5', 'gpt-5.5', 'gpt-5.4', 'claude-fable-5'],
       }),
       []
     );
@@ -360,7 +361,7 @@ describe('model-registry', () => {
       'gpt-5.5',
       'gpt-5.4',
       'deepseek-v4-pro',
-      'claude-sonnet-4-6',
+      'claude-sonnet-5',
       'claude-opus-4-8',
       'claude-opus-4-7',
       'deepseek-chat',
@@ -604,7 +605,7 @@ describe('model-registry', () => {
   it('filters unknown ladder IDs while warning once', () => {
     const merged = mergeModelRegistry(DEFAULT_MODEL_REGISTRY, {
       ladders: {
-        review: ['claude-opus-4-7', 'missing-model', 'claude-sonnet-4-6'],
+        review: ['claude-opus-4-7', 'missing-model', 'claude-sonnet-5'],
       },
     });
     const warnings: string[] = [];
@@ -614,8 +615,8 @@ describe('model-registry', () => {
     };
 
     try {
-      assert.deepEqual(getLadder(merged, 'review'), ['claude-opus-4-7', 'claude-sonnet-4-6']);
-      assert.deepEqual(getLadder(merged, 'review'), ['claude-opus-4-7', 'claude-sonnet-4-6']);
+      assert.deepEqual(getLadder(merged, 'review'), ['claude-opus-4-7', 'claude-sonnet-5']);
+      assert.deepEqual(getLadder(merged, 'review'), ['claude-opus-4-7', 'claude-sonnet-5']);
     } finally {
       console.warn = originalWarn;
     }
@@ -639,14 +640,14 @@ describe('model-registry', () => {
             },
           },
           ladders: {
-            coding: ['claude-opus-4-7', 'claude-sonnet-4-6'],
+            coding: ['claude-opus-4-7', 'claude-sonnet-5'],
           },
         },
       });
 
       const registry = getEffectiveRegistry(repoDir);
       assert.equal(registry.models['claude-opus-4-7'].qualityScores.coding, 99);
-      assert.deepEqual(getLadder(registry, 'coding'), ['claude-opus-4-7', 'claude-sonnet-4-6']);
+      assert.deepEqual(getLadder(registry, 'coding'), ['claude-opus-4-7', 'claude-sonnet-5']);
     } finally {
       clearConfigCache();
       cleanUp(repoDir);
@@ -662,7 +663,7 @@ describe('model-registry', () => {
           availableModels: {
             planner: ['gpt-5.5', 'claude-opus-4-7'],
             coder: ['gpt-5.4', 'gpt-5.3-codex'],
-            reviewer: ['claude-sonnet-4-6'],
+            reviewer: ['claude-sonnet-5'],
           },
         },
         modelRegistry: {
@@ -689,12 +690,12 @@ describe('model-registry', () => {
 
       assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'planner'), ['gpt-5.5', 'claude-opus-4-7']);
       assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'coder'), ['gpt-5.4']);
-      assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'reviewer'), ['claude-sonnet-4-6']);
+      assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'reviewer'), ['claude-sonnet-5']);
       assert.deepEqual(getConfiguredModelsForDescriptor(repoDir), [
         'gpt-5.5',
         'claude-opus-4-7',
         'gpt-5.4',
-        'claude-sonnet-4-6',
+        'claude-sonnet-5',
       ]);
     } finally {
       clearConfigCache(repoDir);
@@ -708,14 +709,14 @@ describe('model-registry', () => {
     try {
       writeConfig(repoDir, {
         router: {
-          models: ['gpt-5.4', 'claude-sonnet-4-6'],
+          models: ['gpt-5.4', 'claude-sonnet-5'],
         },
       });
       clearConfigCache(repoDir);
 
-      assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'planner'), ['gpt-5.4', 'claude-sonnet-4-6']);
-      assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'coder'), ['gpt-5.4', 'claude-sonnet-4-6']);
-      assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'reviewer'), ['gpt-5.4', 'claude-sonnet-4-6']);
+      assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'planner'), ['gpt-5.4', 'claude-sonnet-5']);
+      assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'coder'), ['gpt-5.4', 'claude-sonnet-5']);
+      assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'reviewer'), ['gpt-5.4', 'claude-sonnet-5']);
     } finally {
       clearConfigCache(repoDir);
       cleanUp(repoDir);
@@ -749,7 +750,7 @@ describe('model-registry', () => {
       assert.ok(descriptorModels.includes('gpt-5.5'));
       assert.ok(descriptorModels.includes('gpt-5.4'));
       assert.notDeepEqual(descriptorModels, [
-        'claude-sonnet-4-6',
+        'claude-sonnet-5',
         'claude-opus-4-7',
         'claude-sonnet-4-5-20250929',
         'claude-opus-4-6',
@@ -1595,7 +1596,7 @@ describe('parseModelSelector', () => {
   it('keeps the existing stable pins in the channel registry', () => {
     assert.equal(FAMILY_ALIASES.fable.channels.stable, 'claude-fable-5');
     assert.equal(FAMILY_ALIASES.opus.channels.stable, 'claude-opus-4-8');
-    assert.equal(FAMILY_ALIASES.sonnet.channels.stable, 'claude-sonnet-4-6');
+    assert.equal(FAMILY_ALIASES.sonnet.channels.stable, 'claude-sonnet-5');
     assert.equal(FAMILY_ALIASES.haiku.channels.stable, 'claude-haiku-4-5-20251001');
     assert.equal(FAMILY_ALIASES['gpt-5.5'].channels.stable, 'gpt-5.5');
     assert.equal(FAMILY_ALIASES['gemini-pro'].channels.stable, 'gemini-pro');
@@ -1783,7 +1784,7 @@ describe('resolveSelector', () => {
       {
         parent: {
           requested: { kind: 'alias', family: 'sonnet', channel: 'stable' },
-          resolved: 'claude-sonnet-4-6',
+          resolved: 'claude-sonnet-5',
           source: 'alias',
           familyChannel: 'stable',
         },
@@ -1816,14 +1817,14 @@ describe('resolveSelector', () => {
         {
           parent: {
             requested: { kind: 'alias', family: 'sonnet' },
-            resolved: 'claude-sonnet-4-6',
+            resolved: 'claude-sonnet-5',
             source: 'alias',
           },
         },
       ),
       {
         requested: { kind: 'inherit' },
-        resolved: 'claude-sonnet-4-6',
+        resolved: 'claude-sonnet-5',
         source: 'inherited',
       },
     );
@@ -1913,7 +1914,7 @@ describe('resolveSelectorWithPolicy', () => {
 
     assert.deepEqual(resolved, {
       requested: { kind: 'alias', family: 'opus' },
-      resolved: 'claude-sonnet-4-6',
+      resolved: 'claude-sonnet-5',
       source: 'fallback',
       familyChannel: 'stable',
       fallbackReason: 'quota-exhausted',
@@ -1935,7 +1936,7 @@ describe('resolveSelectorWithPolicy', () => {
 
     assert.deepEqual(resolved, {
       requested: { kind: 'alias', family: 'opus' },
-      resolved: 'claude-sonnet-4-6',
+      resolved: 'claude-sonnet-5',
       source: 'policy',
       familyChannel: 'stable',
       fallbackReason: 'disabled-by-policy',
@@ -1945,11 +1946,11 @@ describe('resolveSelectorWithPolicy', () => {
   it('treats an alias target missing from the registry as unavailable', () => {
     const registry: ModelRegistry = {
       models: {
-        'claude-sonnet-4-6': DEFAULT_MODEL_REGISTRY.models['claude-sonnet-4-6'],
+        'claude-sonnet-5': DEFAULT_MODEL_REGISTRY.models['claude-sonnet-5'],
         'gpt-5.5': DEFAULT_MODEL_REGISTRY.models['gpt-5.5'],
       },
       ladders: {
-        review: ['claude-sonnet-4-6', 'gpt-5.5'],
+        review: ['claude-sonnet-5', 'gpt-5.5'],
       },
     };
 
@@ -1966,7 +1967,7 @@ describe('resolveSelectorWithPolicy', () => {
 
     assert.deepEqual(resolved, {
       requested: { kind: 'alias', family: 'opus' },
-      resolved: 'claude-sonnet-4-6',
+      resolved: 'claude-sonnet-5',
       source: 'fallback',
       familyChannel: 'stable',
       fallbackReason: 'unavailable',
@@ -2063,6 +2064,6 @@ describe('resolveSelectorWithPolicy', () => {
       },
     );
 
-    assert.equal(resolved.resolved, 'claude-sonnet-4-6');
+    assert.equal(resolved.resolved, 'claude-sonnet-5');
   });
 });

@@ -40,7 +40,7 @@ export const CANONICAL_CONFIG_TEMPLATE: WavemillConfig = {
     },
     evalsDir: '.wavemill/evals',
     judge: {
-      model: 'claude-sonnet-4-6',
+      model: 'claude-sonnet-5',
       provider: 'anthropic',
     },
     pricing: {
@@ -48,6 +48,7 @@ export const CANONICAL_CONFIG_TEMPLATE: WavemillConfig = {
       'claude-opus-4-6': { inputCostPerMTok: 5, outputCostPerMTok: 25, cacheWriteCostPerMTok: 6.25, cacheReadCostPerMTok: 0.5 },
       'claude-opus-4-8': { inputCostPerMTok: 5, outputCostPerMTok: 25, cacheWriteCostPerMTok: 6.25, cacheReadCostPerMTok: 0.5 },
       'claude-opus-4-7': { inputCostPerMTok: 5, outputCostPerMTok: 25, cacheWriteCostPerMTok: 6.25, cacheReadCostPerMTok: 0.5 },
+      'claude-sonnet-5': { inputCostPerMTok: 3, outputCostPerMTok: 15, cacheWriteCostPerMTok: 3.75, cacheReadCostPerMTok: 0.3 },
       'claude-sonnet-4-6': { inputCostPerMTok: 3, outputCostPerMTok: 15, cacheWriteCostPerMTok: 3.75, cacheReadCostPerMTok: 0.3 },
       'claude-sonnet-4-5-20250929': { inputCostPerMTok: 3, outputCostPerMTok: 15, cacheWriteCostPerMTok: 3.75, cacheReadCostPerMTok: 0.3 },
       'claude-haiku-4-5-20251001': { inputCostPerMTok: 0.8, outputCostPerMTok: 4, cacheWriteCostPerMTok: 1, cacheReadCostPerMTok: 0.08 },
@@ -110,6 +111,7 @@ export const CANONICAL_CONFIG_TEMPLATE: WavemillConfig = {
     models: [
       'claude-fable-5',
       'claude-opus-4-8',
+      'claude-sonnet-5',
       'claude-sonnet-4-5-20250929',
       'claude-sonnet-4-6',
       'claude-opus-4-6',
@@ -163,7 +165,7 @@ export const CANONICAL_CONFIG_TEMPLATE: WavemillConfig = {
     },
     availableModels: {
       planner: ['claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'kimi-k2', 'gemini-2.5-pro', 'mistral-large-2'],
-      coder: ['claude-fable-5', 'claude-sonnet-4-6', 'gpt-5.5', 'gpt-5.4', 'qwen-3-coder', 'qwen-2.5-coder-32b', 'kimi-k2', 'gemini-2.5-pro', 'gemini-2.5-flash', 'llama-3.3-70b', 'mistral-large-2', 'devstral-small'],
+      coder: ['claude-fable-5', 'claude-sonnet-5', 'gpt-5.5', 'gpt-5.4', 'qwen-3-coder', 'qwen-2.5-coder-32b', 'kimi-k2', 'gemini-2.5-pro', 'gemini-2.5-flash', 'llama-3.3-70b', 'mistral-large-2', 'devstral-small'],
       reviewer: ['claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'qwen-3-coder', 'kimi-k2', 'gemini-2.5-pro', 'gemini-2.5-flash', 'llama-3.3-70b', 'mistral-large-2'],
     },
     defaultAgent: 'codex',
@@ -171,6 +173,7 @@ export const CANONICAL_CONFIG_TEMPLATE: WavemillConfig = {
       'claude-fable-5': 'claude',
       'claude-opus-4-8': 'claude',
       'claude-opus-4-7': 'claude',
+      'claude-sonnet-5': 'claude',
       'claude-sonnet-4-6': 'claude',
       'claude-opus-4-6': 'claude',
       'claude-sonnet-4-5-20250929': 'claude',

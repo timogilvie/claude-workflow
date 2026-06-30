@@ -165,7 +165,7 @@ function makeRouterConfigWithRubricAware(rubricAware: Record<string, unknown>) {
       defaultAgent: 'claude',
       agentMap: {
         'claude-opus-4-6': 'claude',
-        'claude-sonnet-4-6': 'claude',
+        'claude-sonnet-5': 'claude',
         'claude-haiku-4-5-20251001': 'claude',
         'gpt-5.4': 'codex',
         'gpt-5.4': 'codex',
@@ -246,7 +246,7 @@ function makeRepoWithStageAwareData(
       agentMap: {
         'claude-opus-4-7': 'claude',
         'claude-opus-4-6': 'claude',
-        'claude-sonnet-4-6': 'claude',
+        'claude-sonnet-5': 'claude',
         'claude-sonnet-4-5-20250929': 'claude',
         'claude-haiku-4-5-20251001': 'claude',
         'gpt-5.4': 'codex',
@@ -257,7 +257,7 @@ function makeRepoWithStageAwareData(
       pricing: {
         'claude-opus-4-7': { inputCostPerMTok: 15, outputCostPerMTok: 75, cacheWriteCostPerMTok: 18.75, cacheReadCostPerMTok: 1.5 },
         'claude-opus-4-6': { inputCostPerMTok: 15, outputCostPerMTok: 75, cacheWriteCostPerMTok: 18.75, cacheReadCostPerMTok: 1.5 },
-        'claude-sonnet-4-6': { inputCostPerMTok: 3, outputCostPerMTok: 15, cacheWriteCostPerMTok: 3.75, cacheReadCostPerMTok: 0.3 },
+        'claude-sonnet-5': { inputCostPerMTok: 3, outputCostPerMTok: 15, cacheWriteCostPerMTok: 3.75, cacheReadCostPerMTok: 0.3 },
         'claude-sonnet-4-5-20250929': { inputCostPerMTok: 3, outputCostPerMTok: 15, cacheWriteCostPerMTok: 3.75, cacheReadCostPerMTok: 0.3 },
         'claude-haiku-4-5-20251001': { inputCostPerMTok: 0.8, outputCostPerMTok: 4, cacheWriteCostPerMTok: 1, cacheReadCostPerMTok: 0.08 },
         'gpt-5.4': { inputCostPerMTok: 1.75, outputCostPerMTok: 14, cacheWriteCostPerMTok: 2.1875, cacheReadCostPerMTok: 0.44 },
@@ -832,7 +832,7 @@ test('routeStageAware retries without constraints when allowlist filters all nei
       minRecords: 2,
       minModels: 2,
       kNeighbors: 20,
-      modelsAvailable: ['claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+      modelsAvailable: ['claude-sonnet-5', 'claude-haiku-4-5-20251001'],
     });
     assert.ok(decision);
     assert.equal(decision?.routingMode, 'stage-aware-partial');
@@ -1550,8 +1550,8 @@ function recencyBoostRepo(releasedDaysAgo: number, multiplier: number) {
   const records = [
     makeEvalRecord('a1', 'claude-opus-4-6', { plan: 0.9, implementation: 0.9, review: 0.9 }),
     makeEvalRecord('a2', 'claude-opus-4-6', { plan: 0.91, implementation: 0.89, review: 0.9 }),
-    makeEvalRecord('b1', 'claude-sonnet-4-6', { plan: 0.8, implementation: 0.8, review: 0.8 }),
-    makeEvalRecord('b2', 'claude-sonnet-4-6', { plan: 0.81, implementation: 0.79, review: 0.8 }),
+    makeEvalRecord('b1', 'claude-sonnet-5', { plan: 0.8, implementation: 0.8, review: 0.8 }),
+    makeEvalRecord('b2', 'claude-sonnet-5', { plan: 0.81, implementation: 0.79, review: 0.8 }),
     makeEvalRecord('c1', 'claude-sonnet-4-5-20250929', { plan: 0.7, implementation: 0.7, review: 0.7 }),
     makeEvalRecord('c2', 'claude-sonnet-4-5-20250929', { plan: 0.71, implementation: 0.69, review: 0.7 }),
   ];
@@ -1574,7 +1574,7 @@ function recencyBoostRepo(releasedDaysAgo: number, multiplier: number) {
     },
     modelRegistry: {
       models: {
-        'claude-sonnet-4-6': { releasedAt },
+        'claude-sonnet-5': { releasedAt },
       },
     },
   });
@@ -1599,7 +1599,7 @@ test('recency boost steers exploration toward recently released models', () => {
     });
     assert.ok(decision);
     // Boosted weights [~5, 1]: the 0.6 roll lands on the recent runner-up
-    assert.equal(decision?.planner, 'claude-sonnet-4-6');
+    assert.equal(decision?.planner, 'claude-sonnet-5');
     assert.equal(decision?.exploration?.explored[0]?.recencyBoosted, true);
     assert.ok(decision?.reasoning[0].includes('[recency-boosted]'));
   } finally {

@@ -23,13 +23,13 @@ function makeRepo() {
       stageBlendWeight: 0.3,
       defaultAgent: 'claude',
       agentMap: {
-        'claude-sonnet-4-6': 'claude',
+        'claude-sonnet-5': 'claude',
         'gpt-5.3-codex': 'codex',
       },
     },
     eval: {
       pricing: {
-        'claude-sonnet-4-6': { inputCostPerMTok: 3, outputCostPerMTok: 15, cacheWriteCostPerMTok: 3.75, cacheReadCostPerMTok: 0.3 },
+        'claude-sonnet-5': { inputCostPerMTok: 3, outputCostPerMTok: 15, cacheWriteCostPerMTok: 3.75, cacheReadCostPerMTok: 0.3 },
         'gpt-5.3-codex': { inputCostPerMTok: 1.75, outputCostPerMTok: 14, cacheWriteCostPerMTok: 2.1875, cacheReadCostPerMTok: 0.44 },
       },
     },
@@ -83,9 +83,9 @@ function makeRepo() {
           objective: 'balanced',
         },
         stages: {
-          planner: { model: 'claude-sonnet-4-6', cost_usd: 0.7 },
+          planner: { model: 'claude-sonnet-5', cost_usd: 0.7 },
           coder: { model: 'gpt-5.3-codex', cost_usd: 2.8 },
-          reviewer: { model: 'claude-sonnet-4-6', cost_usd: 0.6 },
+          reviewer: { model: 'claude-sonnet-5', cost_usd: 0.6 },
         },
       },
     }),

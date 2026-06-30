@@ -124,7 +124,7 @@ agent_default_model_for_cmd() {
   local agent_cmd="$1"
   case "$agent_cmd" in
     codex) echo "gpt-5.4" ;;
-    claude) echo "claude-sonnet-4-6" ;;
+    claude) echo "claude-sonnet-5" ;;
     claude-deepseek) echo "deepseek-v4-flash" ;;
     claude-openrouter) echo "" ;;
     *) echo "" ;;

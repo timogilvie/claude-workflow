@@ -576,7 +576,7 @@ export const FAMILY_ALIASES = Object.freeze({
   }),
   sonnet: Object.freeze({
     channels: Object.freeze({
-      stable: 'claude-sonnet-4-6',
+      stable: 'claude-sonnet-5',
     }),
     description: 'Stable Anthropic generalist alias for the Sonnet family.',
   }),
@@ -1077,6 +1077,30 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       reasoningTier: 'advanced',
       costPerMillionInputTokensUsd: 5,
       costPerMillionOutputTokensUsd: 25,
+    },
+    'claude-sonnet-5': {
+      vendor: 'anthropic',
+      class: 'strong_generalist',
+      strengths: ['code generation', 'balanced quality/cost', 'instruction following'],
+      weaknesses: ['less deep reasoning'],
+      releasedAt: '2026-06-30',
+      qualityScores: scores(77, 84, 92, 84, 80),
+      // Sonnet 5 is under introductory pricing ($2/$10; cache 2.50/4.00/0.20;
+      // batch 1.00/5.00) through 2026-08-31. Keep the durable standard rate
+      // here until HOK-2407 adds effective-dated pricing schedules.
+      pricing: {
+        inputCostPerMTok: 3,
+        outputCostPerMTok: 15,
+        cacheWriteCostPerMTok: 3.75,
+        cacheReadCostPerMTok: 0.3,
+      },
+      contextWindowTokens: 1_000_000,
+      toolSupport: 'full',
+      multimodal: { text: true, image: true },
+      latencyTier: 'standard',
+      reasoningTier: 'standard',
+      costPerMillionInputTokensUsd: 3,
+      costPerMillionOutputTokensUsd: 15,
     },
     'claude-sonnet-4-6': {
       vendor: 'anthropic',
@@ -1585,11 +1609,11 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
     },
   },
   ladders: {
-    routing: ['claude-haiku-4-5-20251001', 'deepseek-v4-flash', 'claude-sonnet-4-6', 'gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7'],
-    planning: ['claude-fable-5', 'gpt-5.5', 'claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.4', 'deepseek-reasoner', 'deepseek-v4-pro', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-    coding: ['claude-fable-5', 'gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-sonnet-4-6', 'claude-opus-4-8', 'claude-opus-4-7', 'deepseek-chat', 'deepseek-v4-flash', 'claude-haiku-4-5-20251001'],
-    review: ['gpt-5.5', 'claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.4', 'deepseek-v4-pro', 'claude-sonnet-4-6', 'deepseek-reasoner', 'claude-haiku-4-5-20251001'],
-    classify: ['claude-haiku-4-5-20251001', 'deepseek-v4-flash', 'claude-sonnet-4-6', 'gpt-5.5', 'gpt-5.4', 'claude-fable-5'],
+    routing: ['claude-haiku-4-5-20251001', 'deepseek-v4-flash', 'claude-sonnet-5', 'gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7'],
+    planning: ['claude-fable-5', 'gpt-5.5', 'claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.4', 'deepseek-reasoner', 'deepseek-v4-pro', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
+    coding: ['claude-fable-5', 'gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-sonnet-5', 'claude-opus-4-8', 'claude-opus-4-7', 'deepseek-chat', 'deepseek-v4-flash', 'claude-haiku-4-5-20251001'],
+    review: ['gpt-5.5', 'claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.4', 'deepseek-v4-pro', 'claude-sonnet-5', 'deepseek-reasoner', 'claude-haiku-4-5-20251001'],
+    classify: ['claude-haiku-4-5-20251001', 'deepseek-v4-flash', 'claude-sonnet-5', 'gpt-5.5', 'gpt-5.4', 'claude-fable-5'],
   },
 };
 

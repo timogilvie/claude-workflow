@@ -401,11 +401,11 @@ describe('eval-validator', () => {
         routeProvenance: {
           decisionSource: 'expanded',
           bootstrapRoute: {
-            coder: 'claude-sonnet-4-6',
+            coder: 'claude-sonnet-5',
             codeDepth: 'medium',
             reviewer: 'claude-opus-4-6',
             reviewMode: 'llm',
-            planner: 'claude-sonnet-4-6',
+            planner: 'claude-sonnet-5',
             planDepth: 'deep',
             artifactPath: 'features/HOK-2071/.initial-route.json',
             artifactHash: 'a'.repeat(64),
@@ -420,7 +420,7 @@ describe('eval-validator', () => {
           expandedRoute: {
             coder: 'gpt-5.4',
             codeDepth: 'deep',
-            reviewer: 'claude-sonnet-4-6',
+            reviewer: 'claude-sonnet-5',
             reviewMode: 'static',
             planner: 'gpt-5.4',
             planDepth: 'deep',
@@ -437,7 +437,7 @@ describe('eval-validator', () => {
           activeRoute: {
             coder: 'gpt-5.4',
             codeDepth: 'deep',
-            reviewer: 'claude-sonnet-4-6',
+            reviewer: 'claude-sonnet-5',
             reviewMode: 'static',
             planner: 'gpt-5.4',
             planDepth: 'deep',

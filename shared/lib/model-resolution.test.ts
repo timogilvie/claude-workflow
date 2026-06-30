@@ -85,11 +85,11 @@ describe('resolveEffectiveModel', () => {
   const parent = resolveSelector({ kind: 'alias', family: 'sonnet' });
   const unavailableRegistry: ModelRegistry = {
     models: {
-      'claude-sonnet-4-6': DEFAULT_MODEL_REGISTRY.models['claude-sonnet-4-6'],
+      'claude-sonnet-5': DEFAULT_MODEL_REGISTRY.models['claude-sonnet-5'],
       'gpt-5.5': DEFAULT_MODEL_REGISTRY.models['gpt-5.5'],
     },
     ladders: {
-      review: ['claude-sonnet-4-6', 'gpt-5.5'],
+      review: ['claude-sonnet-5', 'gpt-5.5'],
     },
   };
 
@@ -109,7 +109,7 @@ describe('resolveEffectiveModel', () => {
       userOverride: 'sonnet',
       expectedLayer: 'user',
       expectedRequested: { kind: 'alias', family: 'sonnet', channel: 'stable' },
-      expectedResolved: 'claude-sonnet-4-6',
+      expectedResolved: 'claude-sonnet-5',
       expectedSource: 'alias',
       expectedFamilyChannel: 'stable',
     },
@@ -147,7 +147,7 @@ describe('resolveEffectiveModel', () => {
       parentContextId: 'agent-123',
       expectedLayer: 'parent',
       expectedRequested: { kind: 'inherit' },
-      expectedResolved: 'claude-sonnet-4-6',
+      expectedResolved: 'claude-sonnet-5',
       expectedSource: 'inherited',
       expectedParentContextId: 'agent-123',
     },
@@ -183,7 +183,7 @@ describe('resolveEffectiveModel', () => {
       parentContextId: 'agent-456',
       expectedLayer: 'parent',
       expectedRequested: { kind: 'inherit' },
-      expectedResolved: 'claude-sonnet-4-6',
+      expectedResolved: 'claude-sonnet-5',
       expectedSource: 'inherited',
       expectedParentContextId: 'agent-456',
     },
@@ -203,7 +203,7 @@ describe('resolveEffectiveModel', () => {
       }),
       expectedLayer: 'policy',
       expectedRequested: { kind: 'alias', family: 'opus', channel: 'stable' },
-      expectedResolved: 'claude-sonnet-4-6',
+      expectedResolved: 'claude-sonnet-5',
       expectedSource: 'policy',
       expectedFallbackReason: 'disabled-by-policy',
       expectedFamilyChannel: 'stable',
@@ -218,7 +218,7 @@ describe('resolveEffectiveModel', () => {
       }),
       expectedLayer: 'policy',
       expectedRequested: { kind: 'alias', family: 'opus', channel: 'stable' },
-      expectedResolved: 'claude-sonnet-4-6',
+      expectedResolved: 'claude-sonnet-5',
       expectedSource: 'fallback',
       expectedFallbackReason: 'quota-exhausted',
       expectedFamilyChannel: 'stable',
@@ -232,7 +232,7 @@ describe('resolveEffectiveModel', () => {
       }),
       expectedLayer: 'policy',
       expectedRequested: { kind: 'alias', family: 'opus', channel: 'stable' },
-      expectedResolved: 'claude-sonnet-4-6',
+      expectedResolved: 'claude-sonnet-5',
       expectedSource: 'fallback',
       expectedFallbackReason: 'unavailable',
       expectedFamilyChannel: 'stable',

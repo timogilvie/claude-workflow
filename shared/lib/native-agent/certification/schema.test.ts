@@ -284,6 +284,12 @@ describe('isValidPathSegment', () => {
     assert.ok(isValidPathSegment('v1'));
   });
 
+  it('accepts model IDs that contain interior dots', () => {
+    assert.ok(isValidPathSegment('gpt-5.5'));
+    assert.ok(isValidPathSegment('gemini-2.5-pro'));
+    assert.ok(isValidPathSegment('qwen-2.5-coder-32b'));
+  });
+
   it('rejects empty string', () => {
     assert.ok(!isValidPathSegment(''));
   });
