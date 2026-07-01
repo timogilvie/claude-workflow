@@ -159,10 +159,17 @@ function mergeRejections<T extends ChallengePairSelection>(
   result: ChallengePairSelectionResult<T>,
   additionalRejections: ChallengeNativeRejection[],
 ): ChallengePairSelectionResult<T> {
-  const combined = [
+  const combined: ChallengeNativeRejection[] = [];
+  const seen = new Set<string>();
+  for (const rejection of [
     ...additionalRejections,
     ...(result.nativeCertificationRejections || []),
-  ];
+  ]) {
+    const key = `${rejection.modelId}\u0000${rejection.role}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    combined.push(rejection);
+  }
   if (combined.length === 0) return result;
   return { ...result, nativeCertificationRejections: combined };
 }
