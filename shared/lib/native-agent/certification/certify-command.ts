@@ -67,6 +67,8 @@ export interface RunCertificationResult {
   wrote: boolean;
 }
 
+const PHASE_NOT_COVERED_PREFIX = 'No deterministic scenarios cover requested phase';
+
 // ---------------------------------------------------------------------------
 // Core: runCertification
 // ---------------------------------------------------------------------------
@@ -105,8 +107,22 @@ export async function runCertification(opts: RunCertificationOptions): Promise<R
     dryRun,
   });
 
-  // Write artifact only on a live pass
-  if (!dryRun && report.liveCertifiable) {
+  const requestedPhaseCovered = report.results.some(
+    (r) => r.phase === opts.phase && r.status === 'pass',
+  );
+  const certifiableReport = !dryRun && report.liveCertifiable && !requestedPhaseCovered
+    ? {
+      ...report,
+      liveCertifiable: false,
+      knownLimitations: [
+        ...report.knownLimitations,
+        `${PHASE_NOT_COVERED_PREFIX}: ${opts.phase}`,
+      ],
+    }
+    : report;
+
+  // Write artifact only on a live pass that covered the requested phase.
+  if (!dryRun && certifiableReport.liveCertifiable) {
     const artifact: NativeCertificationArtifact = {
       schemaVersion: CERTIFICATION_SCHEMA_VERSION,
       provider: opts.provider,
@@ -121,10 +137,10 @@ export async function runCertification(opts: RunCertificationOptions): Promise<R
     };
 
     const artifactPath = _writeCertification(opts.repoDir, artifact);
-    return { report, artifactPath, wrote: true };
+    return { report: certifiableReport, artifactPath, wrote: true };
   }
 
-  return { report, wrote: false };
+  return { report: certifiableReport, wrote: false };
 }
 
 // ---------------------------------------------------------------------------

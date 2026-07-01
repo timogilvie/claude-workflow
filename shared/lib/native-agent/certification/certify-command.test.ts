@@ -197,6 +197,35 @@ describe('runCertification', () => {
     }
   });
 
+  it('does not write higher-phase artifact when no passed scenario covers the requested phase', async () => {
+    const { repoDir, cleanup } = makeRepo();
+    try {
+      const readOnlyOnlyReport: HarnessReport = makePassingReport({
+        dryRun: false,
+        liveCertifiable: true,
+      });
+
+      const mockRunScenarios = async (_opts: RunScenariosOptions): Promise<HarnessReport> =>
+        readOnlyOnlyReport;
+
+      const result = await runCertification({
+        repoDir,
+        provider: 'openai',
+        model: 'gpt-4o',
+        phase: 'patch',
+        dryRun: false,
+        runScenarios: mockRunScenarios,
+      });
+
+      assert.equal(result.wrote, false);
+      assert.equal(result.artifactPath, undefined);
+      assert.equal(result.report.liveCertifiable, false);
+      assert.ok(result.report.knownLimitations.some((lim) => lim.includes('requested phase: patch')));
+    } finally {
+      cleanup();
+    }
+  });
+
   it('surfaces known limitations from harness report', async () => {
     const { repoDir, cleanup } = makeRepo();
     try {
