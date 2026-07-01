@@ -373,6 +373,10 @@
       "autoApproveReadOnly": true
     }
   },
+  "challengeScheduler": {
+    "enabled": true,
+    "newModelChallengeCount": 25
+  },
   "integration": {
     "enabled": false,
     "integrationBranch": "auto/integration",

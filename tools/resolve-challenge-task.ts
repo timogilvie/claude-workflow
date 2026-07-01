@@ -12,6 +12,7 @@ import {
   decideChallengeLaunch,
   extractChallengeRecommendation,
   variedModelForStage,
+  type ChallengeNativeRejection,
 } from '../shared/lib/challenge-mode.ts';
 import { resolveAgent } from '../shared/lib/model-router.ts';
 import { readBothRouteArtifacts } from '../shared/lib/route-artifact.ts';
@@ -130,6 +131,8 @@ runTool({
     // If task file provided, use workflow routing for both sides
     let selectionFailureReason = 'selection_failed';
     let pair;
+    let nativeCertificationRejections: ChallengeNativeRejection[] | undefined;
+
     if (featureDir) {
       const selection = pickChallengeWorkflowsWithContextAndReason(pool, {
         pairId: issue,
@@ -145,6 +148,7 @@ runTool({
       }, routeArtifacts);
       pair = selection.pair;
       selectionFailureReason = selection.failureReason || selectionFailureReason;
+      nativeCertificationRejections = selection.nativeCertificationRejections;
     }
 
     if (!pair && taskFile) {
@@ -164,6 +168,10 @@ runTool({
         });
         pair = selection.pair;
         selectionFailureReason = selection.failureReason || selectionFailureReason;
+        nativeCertificationRejections = [
+          ...(nativeCertificationRejections || []),
+          ...(selection.nativeCertificationRejections || []),
+        ];
       } catch (error) {
         // Fall back to model-only selection if task file is unreadable
         console.error(`Warning: Failed to read task file for routing: ${error}`);
@@ -175,9 +183,14 @@ runTool({
           forcedChallengerModel,
           agentMap: router.agentMap,
           defaultAgent,
+          repoDir,
         });
         pair = selection.pair;
         selectionFailureReason = selection.failureReason || selectionFailureReason;
+        nativeCertificationRejections = [
+          ...(nativeCertificationRejections || []),
+          ...(selection.nativeCertificationRejections || []),
+        ];
       }
     } else if (!pair) {
       // No task file provided - use model-only selection (backward compatibility)
@@ -189,9 +202,25 @@ runTool({
         forcedChallengerModel,
         agentMap: router.agentMap,
         defaultAgent,
+        repoDir,
       });
       pair = selection.pair;
       selectionFailureReason = selection.failureReason || selectionFailureReason;
+      nativeCertificationRejections = [
+        ...(nativeCertificationRejections || []),
+        ...(selection.nativeCertificationRejections || []),
+      ];
+    }
+
+    // Emit human-readable warnings for skipped native models (mirrors router reasoning output)
+    if (nativeCertificationRejections && nativeCertificationRejections.length > 0) {
+      const roleToStage: Record<string, string> = { planner: 'plan', coder: 'implementation', reviewer: 'review' };
+      for (const rejection of nativeCertificationRejections) {
+        const stage = roleToStage[rejection.role] || rejection.role;
+        process.stderr.write(
+          `Challenge skipped native model ${rejection.modelId} for ${stage} stage (phase=${rejection.requestedPhase}, reason=${rejection.reason}).\n`,
+        );
+      }
     }
 
     if (!pair) {
@@ -228,6 +257,9 @@ runTool({
               stage: launchDecision.recommendation.stage,
             },
           }
+        : {}),
+      ...(nativeCertificationRejections && nativeCertificationRejections.length > 0
+        ? { nativeCertificationRejections }
         : {}),
       routeContext: pair.routeContext,
       entries: [

@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import type { WorkflowRouteDecision } from './workflow-router.ts';
 import {
   canRunChallenge,
@@ -17,10 +20,13 @@ import {
   pickChallengeModels,
   pickChallengeModelsWithReason,
   pickChallengeWorkflows,
+  pickChallengeWorkflowsWithReason,
   variedModelForStage,
 } from './challenge-mode.ts';
 import { listVariedRoutingDimensions, routingMetaFromChallengeEntry } from './challenge-comparison.ts';
 import type { RouteArtifactSnapshot } from './route-artifact.ts';
+import { CERTIFICATION_SCHEMA_VERSION } from './native-agent/certification/schema.ts';
+import { clearConfigCache } from './config.ts';
 
 let passed = 0;
 let failed = 0;
@@ -1191,6 +1197,544 @@ test('reason-aware context selection preserves selection_failed diagnostics', ()
   assert.equal(selection.failureReason, 'selection_failed');
 });
 
+
+// ===========================
+// Native Certification Guardrail Tests
+// ===========================
+
+// Deterministic "now" anchored to 2026-06-30 so TTL checks are stable.
+const TEST_NOW = new Date('2026-06-30T00:00:00.000Z');
+// Recent enough to be within the 60-day TTL (29 days ago).
+const CERT_DATE_FRESH = '2026-06-01T00:00:00.000Z';
+// Well outside the 60-day TTL (180 days ago).
+const CERT_DATE_STALE = '2026-01-01T00:00:00.000Z';
+
+/** Create a temp repo with the given model registry and return cleanup fn */
+function makeNativeTestRepo(modelRegistryModels: Record<string, unknown>): {
+  repoDir: string;
+  cleanup: () => void;
+} {
+  const repoDir = mkdtempSync(join(tmpdir(), 'challenge-native-test-'));
+  mkdirSync(join(repoDir, '.wavemill'), { recursive: true });
+  writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
+    modelRegistry: { models: modelRegistryModels },
+  }));
+  clearConfigCache(repoDir);
+  return {
+    repoDir,
+    cleanup: () => {
+      clearConfigCache(repoDir);
+      rmSync(repoDir, { recursive: true, force: true });
+    },
+  };
+}
+
+/** Write a certification artifact to a test repo */
+function writeCertArtifact(
+  repoDir: string,
+  provider: string,
+  model: string,
+  suiteVersion: string,
+  overrides: Record<string, unknown> = {},
+): void {
+  const certDir = join(repoDir, '.wavemill', 'native-agent-certifications', provider, model);
+  mkdirSync(certDir, { recursive: true });
+  const artifact = {
+    schemaVersion: CERTIFICATION_SCHEMA_VERSION,
+    provider,
+    model,
+    phase: 'patch',
+    suiteVersion,
+    certifiedAt: CERT_DATE_FRESH,
+    scenarios: [{ scenarioId: 's1', passed: true }],
+    ...overrides,
+  };
+  writeFileSync(join(certDir, `${suiteVersion}.json`), JSON.stringify(artifact));
+}
+
+/** Build a minimal native model registry entry */
+function nativeModelEntry(phase: string = 'patch', suiteVersion: string = 'v1') {
+  return {
+    class: 'strong_generalist',
+    nativeCapability: {
+      nativeProvider: 'openai',
+      piTransportKind: 'openai-responses',
+      readOnlyNative: 'certified',
+      certification: {
+        maxCertifiedPhase: phase,
+        certifiedAt: CERT_DATE_FRESH,
+        certificationSuiteVersion: suiteVersion,
+      },
+    },
+  };
+}
+
+console.log('\n--- Native Certification Guardrail Tests ---\n');
+
+test('certified native challenger accepted for implementation stage', () => {
+  const { repoDir, cleanup } = makeNativeTestRepo({
+    'native-patch-model': nativeModelEntry('patch'),
+  });
+  try {
+    writeCertArtifact(repoDir, 'openai', 'native-patch-model', 'v1', { phase: 'patch' });
+
+    const result = pickChallengeModelsWithReason(
+      ['claude-opus-4-6', 'native-patch-model'],
+      {
+        pairId: 'NC-001',
+        issueId: 'NC-001',
+        slug: 'nc-certified',
+        primaryModel: 'claude-opus-4-6',
+        repoDir,
+        now: TEST_NOW,
+        randomFn: () => 0,
+      },
+    );
+
+    assert.ok(result.pair, 'pair should be selected');
+    // native-patch-model is cert-eligible → no rejection for it
+    const rejectedIds = (result.nativeCertificationRejections || []).map((r) => r.modelId);
+    assert.ok(!rejectedIds.includes('native-patch-model'), 'certified native should not be in rejections');
+    // The challenger should be native-patch-model (only other model)
+    assert.equal(result.pair!.challenger.model, 'native-patch-model');
+  } finally {
+    cleanup();
+  }
+});
+
+test('uncertified native challenger excluded when artifact is missing', () => {
+  const { repoDir, cleanup } = makeNativeTestRepo({
+    'native-no-cert': nativeModelEntry('patch'),
+  });
+  try {
+    // No artifact written → missing rejection
+
+    const result = pickChallengeModelsWithReason(
+      ['claude-opus-4-6', 'native-no-cert'],
+      {
+        pairId: 'NC-002',
+        issueId: 'NC-002',
+        slug: 'nc-uncertified',
+        primaryModel: 'claude-opus-4-6',
+        repoDir,
+        now: TEST_NOW,
+        randomFn: () => 0,
+      },
+    );
+
+    // Pool shrinks to just the primary → can't form a pair
+    assert.equal(result.pair, null);
+    assert.equal(result.failureReason, 'selection_failed');
+    assert.ok(result.nativeCertificationRejections && result.nativeCertificationRejections.length > 0,
+      'should have native rejection');
+    const rejection = result.nativeCertificationRejections![0];
+    assert.equal(rejection.modelId, 'native-no-cert');
+    assert.equal(rejection.reason, 'missing');
+    assert.equal(rejection.role, 'coder');
+    assert.equal(rejection.requestedPhase, 'patch');
+  } finally {
+    cleanup();
+  }
+});
+
+test('stale native challenger excluded', () => {
+  const { repoDir, cleanup } = makeNativeTestRepo({
+    'native-stale': nativeModelEntry('patch'),
+  });
+  try {
+    writeCertArtifact(repoDir, 'openai', 'native-stale', 'v1', {
+      phase: 'patch',
+      certifiedAt: CERT_DATE_STALE,
+    });
+
+    const result = pickChallengeModelsWithReason(
+      ['claude-opus-4-6', 'native-stale'],
+      {
+        pairId: 'NC-003',
+        issueId: 'NC-003',
+        slug: 'nc-stale',
+        primaryModel: 'claude-opus-4-6',
+        repoDir,
+        now: TEST_NOW,
+        randomFn: () => 0,
+      },
+    );
+
+    assert.equal(result.pair, null);
+    assert.equal(result.failureReason, 'selection_failed');
+    const rejection = (result.nativeCertificationRejections || [])[0];
+    assert.ok(rejection, 'should have native rejection');
+    assert.equal(rejection.modelId, 'native-stale');
+    assert.equal(rejection.reason, 'stale');
+  } finally {
+    cleanup();
+  }
+});
+
+test('phase-insufficient native challenger excluded for plan stage', () => {
+  // Plan stage requires workflow phase; this model only has patch cert.
+  const { repoDir, cleanup } = makeNativeTestRepo({
+    'native-patch-only': nativeModelEntry('patch'),
+  });
+  try {
+    writeCertArtifact(repoDir, 'openai', 'native-patch-only', 'v1', { phase: 'patch' });
+
+    const mockPlannerRoute = (): WorkflowRouteDecision => ({
+      planner: 'native-patch-only',
+      coder: 'claude-opus-4-6',
+      reviewer: 'claude-opus-4-6',
+      planDepth: 'medium',
+      codeDepth: 'medium',
+      reviewRecommended: 'llm',
+      expectedSuccess: 0.9,
+      expectedCostPlan: 1,
+      expectedCostCode: 1,
+      expectedCostReview: 1,
+      reasoning: [],
+      signals: {},
+    });
+
+    const result = pickChallengeWorkflowsWithReason(
+      ['claude-opus-4-6', 'native-patch-only'],
+      {
+        pairId: 'NC-004',
+        issueId: 'NC-004',
+        slug: 'nc-phase-insufficient',
+        prompt: 'implement feature',
+        challengeStage: 'plan',
+        primaryModel: 'claude-opus-4-6',
+        repoDir,
+        now: TEST_NOW,
+        randomFn: () => 0,
+        routeFn: mockPlannerRoute,
+      },
+    );
+
+    // native-patch-only has patch cert but plan requires workflow → rejected
+    const rejections = result.nativeCertificationRejections || [];
+    const planRejection = rejections.find((r) => r.modelId === 'native-patch-only');
+    assert.ok(planRejection, 'should have a rejection for native-patch-only');
+    assert.equal(planRejection!.reason, 'insufficient-phase');
+    assert.equal(planRejection!.requestedPhase, 'workflow');
+    assert.equal(planRejection!.role, 'planner');
+  } finally {
+    cleanup();
+  }
+});
+
+test('wrong suite version produces wrong-suite rejection', () => {
+  // Registry expects v2; artifact file is at v2.json but contains suiteVersion: 'v1' → mismatch.
+  const { repoDir, cleanup } = makeNativeTestRepo({
+    'native-wrong-suite': nativeModelEntry('patch', 'v2'),
+  });
+  try {
+    // Write at the path the loader will look for ('v2.json') but with wrong suiteVersion inside.
+    writeCertArtifact(repoDir, 'openai', 'native-wrong-suite', 'v2', {
+      phase: 'patch',
+      suiteVersion: 'v1',  // content says v1 but filename and registry say v2 → wrong-version
+    });
+
+    const result = pickChallengeModelsWithReason(
+      ['claude-opus-4-6', 'native-wrong-suite'],
+      {
+        pairId: 'NC-005',
+        issueId: 'NC-005',
+        slug: 'nc-wrong-suite',
+        primaryModel: 'claude-opus-4-6',
+        repoDir,
+        now: TEST_NOW,
+        randomFn: () => 0,
+      },
+    );
+
+    const rejection = (result.nativeCertificationRejections || []).find(
+      (r) => r.modelId === 'native-wrong-suite',
+    );
+    assert.ok(rejection, 'should have rejection for native-wrong-suite');
+    assert.equal(rejection!.reason, 'wrong-suite');
+  } finally {
+    cleanup();
+  }
+});
+
+test('native-only pool returns selection_failed with rejections populated', () => {
+  const { repoDir, cleanup } = makeNativeTestRepo({
+    'native-uncert-a': nativeModelEntry('patch'),
+    'native-uncert-b': nativeModelEntry('patch'),
+  });
+  try {
+    // No artifacts written → both missing
+
+    const result = pickChallengeModelsWithReason(
+      ['native-uncert-a', 'native-uncert-b'],
+      {
+        pairId: 'NC-006',
+        issueId: 'NC-006',
+        slug: 'nc-pool-exhausted',
+        primaryModel: 'native-uncert-a',
+        repoDir,
+        now: TEST_NOW,
+        randomFn: () => 0,
+      },
+    );
+
+    assert.equal(result.pair, null, 'pair should be null');
+    assert.equal(result.failureReason, 'selection_failed');
+    const rejections = result.nativeCertificationRejections || [];
+    assert.ok(rejections.length >= 2, 'both uncertified natives should be rejected');
+    const rejectedIds = rejections.map((r) => r.modelId);
+    assert.ok(rejectedIds.includes('native-uncert-a'));
+    assert.ok(rejectedIds.includes('native-uncert-b'));
+  } finally {
+    cleanup();
+  }
+});
+
+test('forced primary set to uncertified native falls back to random pick from pool', () => {
+  const { repoDir, cleanup } = makeNativeTestRepo({
+    'native-uncert': nativeModelEntry('patch'),
+  });
+  try {
+    // No artifact → uncertified
+
+    const result = pickChallengeModelsWithReason(
+      ['claude-opus-4-6', 'claude-sonnet-4-6', 'native-uncert'],
+      {
+        pairId: 'NC-007A',
+        issueId: 'NC-007A',
+        slug: 'nc-forced-primary',
+        primaryModel: 'native-uncert',   // forced primary is an uncertified native
+        repoDir,
+        now: TEST_NOW,
+        randomFn: () => 0,
+      },
+    );
+
+    assert.ok(result.pair, 'pair should be selected with fallback primary');
+    // Primary must not be the uncertified native
+    assert.notEqual(result.pair!.primary.model, 'native-uncert');
+    // A rejection should be recorded for the native
+    const rejections = result.nativeCertificationRejections || [];
+    assert.ok(rejections.some((r) => r.modelId === 'native-uncert'), 'should record rejection for native-uncert');
+  } finally {
+    cleanup();
+  }
+});
+
+test('workflow selection rejects uncertified native primary coder', () => {
+  const { repoDir, cleanup } = makeNativeTestRepo({
+    'native-uncert': nativeModelEntry('patch'),
+    'native-workflow-model': nativeModelEntry('workflow'),
+  });
+  try {
+    writeCertArtifact(repoDir, 'openai', 'native-workflow-model', 'v1', { phase: 'workflow' });
+
+    const mockPlanRoute = (): WorkflowRouteDecision => ({
+      planner: 'native-workflow-model',
+      coder: 'native-uncert',
+      reviewer: 'claude-opus-4-6',
+      planDepth: 'medium',
+      codeDepth: 'medium',
+      reviewRecommended: 'llm',
+      expectedSuccess: 0.9,
+      expectedCostPlan: 1,
+      expectedCostCode: 1,
+      expectedCostReview: 1,
+      reasoning: [],
+      signals: {},
+    });
+
+    const result = pickChallengeWorkflowsWithReason(
+      ['native-uncert', 'claude-opus-4-6', 'native-workflow-model'],
+      {
+        pairId: 'NC-007C',
+        issueId: 'NC-007C',
+        slug: 'nc-workflow-primary',
+        prompt: 'implement feature',
+        challengeStage: 'plan',
+        primaryModel: 'native-uncert',
+        repoDir,
+        now: TEST_NOW,
+        randomFn: () => 0,
+        routeFn: mockPlanRoute,
+      },
+    );
+
+    assert.ok(result.pair, 'pair should be selected with fallback coder');
+    assert.notEqual(result.pair!.primary.model, 'native-uncert');
+    assert.notEqual(result.pair!.challenger.model, 'native-uncert');
+    const rejections = result.nativeCertificationRejections || [];
+    assert.equal(rejections.filter((r) => r.modelId === 'native-uncert' && r.role === 'coder').length, 1);
+  } finally {
+    cleanup();
+  }
+});
+
+test('route snapshot selection rejects uncertified native primary coder', () => {
+  const { repoDir, cleanup } = makeNativeTestRepo({
+    'native-uncert': nativeModelEntry('patch'),
+    'native-workflow-model': nativeModelEntry('workflow'),
+  });
+  try {
+    writeCertArtifact(repoDir, 'openai', 'native-workflow-model', 'v1', { phase: 'workflow' });
+
+    const bootstrap: RouteArtifactSnapshot = {
+      planner: 'native-workflow-model',
+      coder: 'native-uncert',
+      reviewer: 'claude-opus-4-6',
+      planDepth: 'medium',
+      codeDepth: 'medium',
+      reviewMode: 'llm',
+    };
+
+    const result = pickChallengeWorkflowsWithContextAndReason(
+      ['native-uncert', 'claude-opus-4-6', 'native-workflow-model'],
+      {
+        pairId: 'NC-007D',
+        issueId: 'NC-007D',
+        slug: 'nc-snapshot-primary',
+        prompt: 'implement feature',
+        challengeStage: 'plan',
+        repoDir,
+        now: TEST_NOW,
+        randomFn: () => 0,
+      },
+      { bootstrap, expanded: null },
+    );
+
+    assert.ok(result.pair, 'pair should be selected with fallback coder');
+    assert.notEqual(result.pair!.primary.model, 'native-uncert');
+    assert.notEqual(result.pair!.challenger.model, 'native-uncert');
+    const rejections = result.nativeCertificationRejections || [];
+    assert.equal(rejections.filter((r) => r.modelId === 'native-uncert' && r.role === 'coder').length, 1);
+  } finally {
+    cleanup();
+  }
+});
+
+test('forced challenger set to uncertified native falls back to random pick', () => {
+  const { repoDir, cleanup } = makeNativeTestRepo({
+    'native-uncert': nativeModelEntry('patch'),
+  });
+  try {
+    // No artifact → uncertified
+
+    const result = pickChallengeModelsWithReason(
+      ['claude-opus-4-6', 'claude-sonnet-4-6', 'native-uncert'],
+      {
+        pairId: 'NC-007B',
+        issueId: 'NC-007B',
+        slug: 'nc-forced-challenger',
+        primaryModel: 'claude-opus-4-6',
+        forcedChallengerModel: 'native-uncert',  // forced challenger is uncertified
+        repoDir,
+        now: TEST_NOW,
+        randomFn: () => 0,
+      },
+    );
+
+    assert.ok(result.pair, 'pair should be selected with fallback challenger');
+    // Challenger must not be the uncertified native
+    assert.notEqual(result.pair!.challenger.model, 'native-uncert');
+    // A rejection should be recorded for the native
+    const rejections = result.nativeCertificationRejections || [];
+    assert.ok(rejections.some((r) => r.modelId === 'native-uncert'), 'should record rejection for native-uncert');
+  } finally {
+    cleanup();
+  }
+});
+
+test('non-native pool passes through with empty rejections', () => {
+  const { repoDir, cleanup } = makeNativeTestRepo({});
+  try {
+    const result = pickChallengeModelsWithReason(
+      ['claude-opus-4-6', 'claude-sonnet-4-6'],
+      {
+        pairId: 'NC-008',
+        issueId: 'NC-008',
+        slug: 'nc-non-native',
+        primaryModel: 'claude-opus-4-6',
+        repoDir,
+        now: TEST_NOW,
+        randomFn: () => 0,
+      },
+    );
+
+    assert.ok(result.pair, 'pair should be selected');
+    assert.ok(!result.nativeCertificationRejections || result.nativeCertificationRejections.length === 0,
+      'no rejections expected for non-native pool');
+  } finally {
+    cleanup();
+  }
+});
+
+test('phase semantics match router: certified model accepted, patch-only rejected for plan stage', () => {
+  // Verify challenge filter is consistent with router phase semantics:
+  // patch cert satisfies coder (implementation) but not planner (plan/workflow).
+  const { repoDir, cleanup } = makeNativeTestRepo({
+    'native-patch-model': nativeModelEntry('patch'),
+    'native-workflow-model': nativeModelEntry('workflow'),
+  });
+  try {
+    writeCertArtifact(repoDir, 'openai', 'native-patch-model', 'v1', { phase: 'patch' });
+    writeCertArtifact(repoDir, 'openai', 'native-workflow-model', 'v1', { phase: 'workflow' });
+
+    // Implementation stage: both should pass (patch ≥ patch, workflow ≥ patch)
+    const implResult = pickChallengeModelsWithReason(
+      ['native-patch-model', 'native-workflow-model'],
+      {
+        pairId: 'NC-009-I',
+        issueId: 'NC-009-I',
+        slug: 'nc-phase-semantics-impl',
+        repoDir,
+        now: TEST_NOW,
+        randomFn: () => 0,
+      },
+    );
+    assert.ok(implResult.pair, 'implementation pair should be formed');
+    assert.ok(!implResult.nativeCertificationRejections || implResult.nativeCertificationRejections.length === 0,
+      'no rejections for implementation stage with patch/workflow certs');
+
+    // Plan stage: only workflow-cert model should survive as challenger
+    const mockPlanRoute = (): WorkflowRouteDecision => ({
+      planner: 'native-workflow-model',
+      coder: 'native-workflow-model',
+      reviewer: '',
+      planDepth: 'medium',
+      codeDepth: 'medium',
+      reviewRecommended: 'llm',
+      expectedSuccess: 0.9,
+      expectedCostPlan: 1,
+      expectedCostCode: 1,
+      expectedCostReview: 1,
+      reasoning: [],
+      signals: {},
+    });
+    const planResult = pickChallengeWorkflowsWithReason(
+      ['native-patch-model', 'native-workflow-model'],
+      {
+        pairId: 'NC-009-P',
+        issueId: 'NC-009-P',
+        slug: 'nc-phase-semantics-plan',
+        prompt: 'implement feature',
+        challengeStage: 'plan',
+        primaryModel: 'native-workflow-model',
+        repoDir,
+        now: TEST_NOW,
+        randomFn: () => 0,
+        routeFn: mockPlanRoute,
+      },
+    );
+    // native-patch-model should be rejected for plan (needs workflow)
+    const planRejections = planResult.nativeCertificationRejections || [];
+    const patchRejection = planRejections.find((r) => r.modelId === 'native-patch-model');
+    assert.ok(patchRejection, 'patch-only model should be rejected for plan stage');
+    assert.equal(patchRejection!.reason, 'insufficient-phase');
+    assert.equal(patchRejection!.requestedPhase, 'workflow');
+  } finally {
+    cleanup();
+  }
+});
 
 process.on('exit', () => {
   console.log(`\nPassed: ${passed}`);

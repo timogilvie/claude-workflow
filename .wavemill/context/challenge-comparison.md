@@ -84,3 +84,39 @@ For `multi-variable` and `full-stack` challenges, per-stage scores (when availab
 ## Coder-override Contract (HOK-2272)
 
 The coding-phase handoff in `shared/lib/wavemill-mill.sh` resolves the coder from `.phase-config.json.coding.model` (or `coderModel` in task state) and only substitutes `challengeModel` when the persisted `challengeStage` is `implementation`. Plan-stage and review-stage challenges keep the route's coder; their `challengeModel` names the varied stage's model, not the coder. Missing/unparseable `challengeStage` for a challenge task fails safe to the phase-config coder with a warning log.
+
+## Native Certification Guardrails (HOK-2398)
+
+Challenge mode applies the same native-certification policy as the router. A native model is excluded from a challenge pair when its on-disk certification artifact is missing, stale, malformed, wrong-suite, or does not satisfy the phase required for the slot it would occupy.
+
+### Stage → role → required phase mapping
+
+| Challenge stage | Router role | Required cert phase |
+|---|---|---|
+| `plan` | `planner` | `workflow` |
+| `implementation` | `coder` | `patch` |
+| `review` | `reviewer` | `read-only` |
+
+This mapping is defined in `STAGE_TO_ROLE` inside `shared/lib/challenge-mode.ts` and is intentionally kept in lock-step with `STAGE_PHASE_REQUIREMENT` in `shared/lib/native-agent/certification/router-filter.ts`.
+
+### Behavior on exhaustion
+
+When certification filtering removes enough candidates that no valid divergent pair can be formed, the selection result returns `pair: null` with `failureReason: 'selection_failed'` (or `'insufficient_models'` if detected before selection). The orchestrator falls back to single-model launch; no crash occurs.
+
+Skipped native models do **not** block the challenge roll; they are silently dropped from the candidate pool. Only when the pool is so depleted that no divergent pair remains does the whole challenge attempt fail.
+
+### Where to find diagnostics
+
+**JSON output** (`tools/resolve-challenge-task.ts`): When one or more native models are skipped, the decision JSON includes a `nativeCertificationRejections` array. Each entry has:
+- `modelId` — the skipped model
+- `role` — `planner`, `coder`, or `reviewer`
+- `requestedPhase` — the phase that was required
+- `certifiedPhase` — the phase found in the artifact (when readable)
+- `reason` — `missing`, `malformed`, `wrong-suite`, `stale`, or `insufficient-phase`
+
+**stderr**: For each skipped native model a human-readable line is emitted to stderr before the JSON decision:
+```
+Challenge skipped native model <id> for <stage> stage (phase=<phase>, reason=<reason>).
+```
+
+This mirrors the router's `reasoning` field so dashboard tooling has consistent parity between router-level and challenge-level native rejections.
