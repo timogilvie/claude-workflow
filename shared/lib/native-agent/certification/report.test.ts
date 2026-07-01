@@ -162,7 +162,7 @@ describe('buildModelCertificationReport', () => {
     assert.ok(row, 'gpt-4o row missing');
     assert.equal(row.state, 'ready');
     assert.equal(row.certifiedPhase, 'read-only');
-    assert.deepEqual(row.eligibleStages, ['reviewer']);
+    assert.deepEqual(row.eligibleStages.sort(), ['planner', 'reviewer', 'task-expansion'].sort());
     assert.equal(row.suiteVersion, 'v1');
     assert.equal(row.scenarios.length, 1);
     assert.equal(row.scenarios[0].passed, true);
@@ -267,7 +267,7 @@ describe('buildModelCertificationReport', () => {
     assert.ok(row, 'gpt-4o row missing');
     // Registry metadata is fresh (certifiedAt = FRESH_DATE), so should be ready
     assert.equal(row.state, 'ready');
-    assert.deepEqual(row.eligibleStages, ['reviewer']);
+    assert.deepEqual(row.eligibleStages.sort(), ['planner', 'reviewer', 'task-expansion'].sort());
     assert.equal(row.scenarios.length, 0);
   });
 
@@ -364,7 +364,7 @@ describe('buildModelCertificationReport', () => {
     const row = rows.find(r => r.model === 'gpt-4o');
     assert.ok(row, 'gpt-4o row missing');
     assert.equal(row.state, 'ready');
-    assert.deepEqual(row.eligibleStages.sort(), ['coder', 'planner', 'reviewer'].sort());
+    assert.deepEqual(row.eligibleStages.sort(), ['coder', 'planner', 'reviewer', 'task-expansion'].sort());
   });
 });
 

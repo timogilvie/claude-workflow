@@ -327,12 +327,16 @@ describe('buildCertificationPath', () => {
     assert.throws(() => buildCertificationPath('/repo', '', 'model', 'v1'), /provider/);
   });
 
-  it('throws on path traversal in model', () => {
-    assert.throws(() => buildCertificationPath('/repo', 'anthropic', '../etc', 'v1'), /model/);
+  it('encodes path traversal characters in model IDs', () => {
+    const p = buildCertificationPath('/repo', 'anthropic', '../etc', 'v1');
+    assert.ok(!p.includes('../etc'));
+    assert.deepEqual(parseCertificationPath(p), { provider: 'anthropic', model: '../etc', suiteVersion: 'v1' });
   });
 
-  it('throws on slash in suiteVersion', () => {
-    assert.throws(() => buildCertificationPath('/repo', 'anthropic', 'model', 'v1/evil'), /suiteVersion/);
+  it('encodes slashes in suiteVersion', () => {
+    const p = buildCertificationPath('/repo', 'anthropic', 'model', 'v1/evil');
+    assert.ok(!p.endsWith('/v1/evil.json'));
+    assert.deepEqual(parseCertificationPath(p), { provider: 'anthropic', model: 'model', suiteVersion: 'v1/evil' });
   });
 });
 

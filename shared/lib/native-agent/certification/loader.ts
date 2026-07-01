@@ -30,6 +30,7 @@ export type CertificationEligibility =
 
 /** Characters that are not safe in a path segment */
 const UNSAFE_SEGMENT = /[/\\\0]/;
+const ENCODED_SEGMENT_PREFIX = '~b64.';
 
 /**
  * Validate that a path segment is non-empty and contains no traversal characters.
@@ -46,6 +47,31 @@ export function isValidPathSegment(segment: string): boolean {
   return true;
 }
 
+function encodeCertificationSegment(segment: string): string {
+  if (isValidPathSegment(segment) && !segment.startsWith(ENCODED_SEGMENT_PREFIX)) {
+    return segment;
+  }
+
+  return `${ENCODED_SEGMENT_PREFIX}${Buffer.from(segment, 'utf-8').toString('base64url')}`;
+}
+
+function decodeCertificationSegment(segment: string): string | undefined {
+  if (!segment.startsWith(ENCODED_SEGMENT_PREFIX)) {
+    return isValidPathSegment(segment) ? segment : undefined;
+  }
+
+  const encoded = segment.slice(ENCODED_SEGMENT_PREFIX.length);
+  if (!encoded || /[^A-Za-z0-9_-]/.test(encoded)) {
+    return undefined;
+  }
+
+  try {
+    return Buffer.from(encoded, 'base64url').toString('utf-8');
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Build the storage path for a certification artifact.
  *
@@ -60,11 +86,17 @@ export function buildCertificationPath(
   suiteVersion: string,
 ): string {
   for (const [name, value] of [['provider', provider], ['model', model], ['suiteVersion', suiteVersion]] as const) {
-    if (!isValidPathSegment(value)) {
+    if (value.length === 0 || value === '.' || value === '..' || value.includes('\0')) {
       throw new Error(`Invalid certification path segment for ${name}: ${JSON.stringify(value)}`);
     }
   }
-  return join(repoDir, CERTIFICATION_BASE_PATH, provider, model, `${suiteVersion}.json`);
+  return join(
+    repoDir,
+    CERTIFICATION_BASE_PATH,
+    encodeCertificationSegment(provider),
+    encodeCertificationSegment(model),
+    `${encodeCertificationSegment(suiteVersion)}.json`,
+  );
 }
 
 /**
@@ -86,15 +118,14 @@ export function parseCertificationPath(
   // Expect: <provider>/<model>/<suiteVersion>.json
   if (parts.length !== 3) return undefined;
 
-  const [provider, model, filename] = parts;
+  const [providerSegment, modelSegment, filename] = parts;
   if (!filename.endsWith('.json')) return undefined;
 
-  const suiteVersion = filename.slice(0, -'.json'.length);
-  if (
-    !isValidPathSegment(provider)
-    || !isValidPathSegment(model)
-    || !isValidPathSegment(suiteVersion)
-  ) {
+  const suiteVersionSegment = filename.slice(0, -'.json'.length);
+  const provider = decodeCertificationSegment(providerSegment);
+  const model = decodeCertificationSegment(modelSegment);
+  const suiteVersion = decodeCertificationSegment(suiteVersionSegment);
+  if (!provider || !model || !suiteVersion) {
     return undefined;
   }
 

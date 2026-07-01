@@ -62,8 +62,8 @@ describe('getDefaultScenarios — catalog integrity', () => {
     }
   });
 
-  it('every category in (tool, usage, transcript, phase) has at least one deterministic scenario', () => {
-    const categories = ['tool', 'usage', 'transcript', 'phase'] as const;
+  it('every category has at least one deterministic scenario', () => {
+    const categories = ['budget', 'cleanup', 'policy', 'provenance', 'tool', 'usage', 'transcript', 'phase'] as const;
     const deterministicByCategory = new Map<string, number>();
     for (const scenario of scenarios) {
       if (scenario.classification === 'deterministic') {
@@ -84,6 +84,18 @@ describe('getDefaultScenarios — catalog integrity', () => {
   it('at least one live-judged scenario exists (exercises not-run path)', () => {
     const hasLiveJudged = scenarios.some((s) => s.classification === 'live-judged');
     assert.ok(hasLiveJudged, 'catalog must include at least one live-judged scenario to exercise the not-run path');
+  });
+
+  it('workflow scenarios cover planning-specific certification concerns', () => {
+    const workflowScenarios = scenarios.filter((scenario) => scenario.phase === 'workflow');
+    const ids = new Set(workflowScenarios.map((scenario) => scenario.id));
+
+    assert.ok(ids.has('workflow.planning.tool-availability'));
+    assert.ok(ids.has('workflow.transcript-provenance.manifest-records'));
+    assert.ok(ids.has('workflow.budget.cost-limit'));
+    assert.ok(ids.has('workflow.cleanup.rollback-on-timeout'));
+    assert.ok(ids.has('workflow.policy.denies-out-of-phase-mutation'));
+    assert.ok(workflowScenarios.every((scenario) => scenario.classification === 'deterministic'));
   });
 
   it('getDefaultScenarios returns a new array each call', () => {

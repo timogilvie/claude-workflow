@@ -172,6 +172,47 @@ describe('native review', () => {
     }
   });
 
+  it('includes redacted provider error details for native loop errors', async () => {
+    const repoDir = makeTempRepo();
+    setReadyProvider();
+
+    nativeReviewTestUtils.setRunWavemillLoop(async (config) => {
+      const message = assistantMessage('', {
+        stopReason: 'error',
+        errorMessage: 'OpenRouter 401 invalid api key sk-testFAKEKEY12345678901234567890',
+      });
+      emitCommonEvents(config, message);
+      return {
+        messages: [message],
+        stopReason: 'error',
+        turnsCompleted: 1,
+        toolCallsExecuted: 0,
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        totalCostUsd: 0,
+        wallClockMs: 5,
+      };
+    });
+
+    try {
+      const result = await runNativeReview(makeReviewContext(), repoDir, {});
+      assert.equal(result.verdict, 'not_ready');
+      assert.equal(result.codeReviewFindings[0].category, 'native-review-failed');
+      assert.match(result.codeReviewFindings[0].description, /Provider error: OpenRouter 401/);
+      assert.doesNotMatch(result.codeReviewFindings[0].description, /sk-testFAKEKEY/);
+      assert.match(result.codeReviewFindings[0].description, /\[REDACTED:openai_key\]/);
+
+      const transcript = loadTranscript(repoDir);
+      const assistant = transcript.find((event) => event.type === 'assistant_message');
+      assert.equal(assistant?.type, 'assistant_message');
+      if (assistant?.type === 'assistant_message') {
+        assert.equal(assistant.errorMessage, 'OpenRouter 401 invalid api key [REDACTED:openai_key]');
+      }
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
   it('records cleanup transcript and stage-result details on timeout', async () => {
     const repoDir = makeTempRepo();
     const featureDir = mkdtempSync(join(tmpdir(), 'native-review-feature-'));
@@ -240,7 +281,14 @@ function makeReviewContext(): ReviewContext {
   };
 }
 
-function assistantMessage(text: string) {
+function assistantMessage(text: string, overrides: Record<string, unknown> = {}) {
+  return {
+    ...assistantMessageBase(text),
+    ...overrides,
+  };
+}
+
+function assistantMessageBase(text: string) {
   return {
     role: 'assistant' as const,
     content: [{ type: 'text' as const, text }],

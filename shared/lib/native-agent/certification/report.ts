@@ -32,6 +32,8 @@ export type ModelCertificationState =
   | 'unsupported'
   | 'certification-only';
 
+export type NativeEligibleStage = RouterRole | 'task-expansion';
+
 /** Outcome of a single scenario from the on-disk artifact. */
 export interface ScenarioOutcome {
   scenarioId: string;
@@ -48,8 +50,8 @@ export interface ModelCertificationReportRow {
   state: ModelCertificationState;
   /** Certified phase from the best available certification. */
   certifiedPhase?: CertificationPhase;
-  /** Router roles for which the model is eligible to run. */
-  eligibleStages: RouterRole[];
+  /** Native stages for which the model is eligible to run. */
+  eligibleStages: NativeEligibleStage[];
   /** Suite version from the best available certification. */
   suiteVersion?: string;
   /** ISO 8601 datetime of certification. */
@@ -409,10 +411,17 @@ export function renderReportTable(rows: ModelCertificationReportRow[]): string {
 // Helpers
 // ---------------------------------------------------------------------------
 
-const ALL_ROLES: RouterRole[] = ['reviewer', 'coder', 'planner'];
+const ALL_STAGES: Array<{ name: NativeEligibleStage; requiredPhase: CertificationPhase }> = [
+  { name: 'task-expansion', requiredPhase: 'read-only' },
+  { name: 'reviewer', requiredPhase: STAGE_PHASE_REQUIREMENT.reviewer },
+  { name: 'coder', requiredPhase: STAGE_PHASE_REQUIREMENT.coder },
+  { name: 'planner', requiredPhase: STAGE_PHASE_REQUIREMENT.planner },
+];
 
-function computeEligibleStages(certifiedPhase: CertificationPhase): RouterRole[] {
-  return ALL_ROLES.filter(role => phaseSatisfies(certifiedPhase, STAGE_PHASE_REQUIREMENT[role]));
+function computeEligibleStages(certifiedPhase: CertificationPhase): NativeEligibleStage[] {
+  return ALL_STAGES
+    .filter(stage => phaseSatisfies(certifiedPhase, stage.requiredPhase))
+    .map(stage => stage.name);
 }
 
 function computeAgeDays(certifiedAt: string, now: Date): number {

@@ -127,6 +127,24 @@ function makeCompatRegistry(
 // ---------------------------------------------------------------------------
 
 describe('loop — budget stops', () => {
+  it('returns error when the final assistant message is a provider error', async () => {
+    const api = uniqueApi('provider-error');
+    registerScriptedPiProvider({
+      api,
+      turns: [
+        {
+          content: [],
+          usage: { input: 0, output: 0 },
+          stopReason: 'error',
+        },
+      ],
+    });
+
+    const result = await runWavemillLoop(baseConfig(api));
+
+    assert.equal(result.stopReason, 'error');
+  });
+
   it('stops after maxTurns is reached', async () => {
     // Two scripted turns; maxTurns: 1 should stop after the first.
     // First turn emits a tool call so the loop would otherwise continue.
@@ -151,6 +169,30 @@ describe('loop — budget stops', () => {
 
     assert.equal(result.stopReason, 'turn_limit');
     assert.equal(result.turnsCompleted, 1);
+  });
+
+  it('does not report turn_limit when the final allowed turn stops normally', async () => {
+    const tool = makeTool('noop', 'parallel', async () => 'done');
+    const api = uniqueApi('budget-final-stop');
+    registerScriptedPiProvider({
+      api,
+      turns: [
+        {
+          content: [{ type: 'tool_call', id: 'tc1', name: 'noop', arguments: {} }],
+          usage: { input: 10, output: 5 },
+          stopReason: 'tool_calls',
+        },
+        { content: [{ type: 'text', text: 'Final review JSON' }], stopReason: 'stop' },
+      ],
+    });
+
+    const result = await runWavemillLoop({
+      ...baseConfig(api, [tool]),
+      budget: { maxTurns: 2 },
+    });
+
+    assert.equal(result.stopReason, 'stop');
+    assert.equal(result.turnsCompleted, 2);
   });
 
   it('stops when maxInputTokens is exceeded', async () => {
