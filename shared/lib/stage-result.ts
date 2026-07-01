@@ -78,6 +78,7 @@ export interface ReadyArtifacts {
   targetBaseSha?: string;
   candidatePromotedAt?: string;
   candidateLastProgressAt?: string;
+  mergeRetryInProgressUntil?: string;
   candidateSkippedAt?: string;
   candidateSkipReason?: string;
   changedFiles?: string[];

@@ -12,6 +12,7 @@ export interface MergeQueuePr {
   unblocksCount?: number;
   candidatePromotedAt?: string;
   candidateLastProgressAt?: string;
+  mergeRetryInProgressUntil?: string;
   candidateSkippedAt?: string;
   workflowStatus?: string;
   prState?: string;
@@ -111,10 +112,13 @@ export function computeConflictGroups(prs: MergeQueuePr[]): MergeQueuePr[][] {
 }
 
 export function isCandidateStuck(
-  candidate: Pick<MergeQueuePr, 'candidateLastProgressAt' | 'candidatePromotedAt'>,
+  candidate: Pick<MergeQueuePr, 'candidateLastProgressAt' | 'candidatePromotedAt' | 'mergeRetryInProgressUntil'>,
   now: string,
   config: Pick<MergeQueueConfigResolved, 'stuckTimeoutSeconds'>,
 ): boolean {
+  if (timestampMs(candidate.mergeRetryInProgressUntil) > timestampMs(now)) {
+    return false;
+  }
   const lastProgress = timestampMs(candidate.candidateLastProgressAt) || timestampMs(candidate.candidatePromotedAt);
   if (lastProgress <= 0) return false;
   return timestampMs(now) - lastProgress >= config.stuckTimeoutSeconds * 1000;
@@ -193,6 +197,7 @@ export function demoteCandidate(
     candidateSkipReason: reason,
     candidatePromotedAt: null,
     candidateLastProgressAt: null,
+    mergeRetryInProgressUntil: null,
   };
 }
 
