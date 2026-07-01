@@ -10,6 +10,7 @@ import {
   defaultHealthChecker,
   executeMerge,
   formatStatusLine,
+  isRequiredChecksExpectedMergeError,
   selectNextCandidate,
   waitForChecks,
   type GhPrListEntry,
@@ -118,6 +119,14 @@ function buildMergeTestOptions(overrides: {
     if (cmd.includes('git rev-parse') && cmd.includes('origin/')) return 'abc123def456';
     if (cmd.includes('git merge-base --is-ancestor')) { const e = new Error('Command failed: git merge-base --is-ancestor'); (e as unknown as Record<string, unknown>).status = 1; throw e; }
     if (cmd.includes('gh pr checks')) return JSON.stringify([{ name: 'ci', state: 'COMPLETED', conclusion: 'success' }]);
+    if (cmd.includes('gh pr view')) {
+      return JSON.stringify({
+        mergeStateStatus: 'CLEAN',
+        headRefOid: 'head-sha',
+        baseRefOid: 'base-sha',
+        statusCheckRollup: [{ name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS' }],
+      });
+    }
     return '';
   };
 
@@ -1042,6 +1051,23 @@ describe('formatStatusLine', () => {
   });
 });
 
+describe('merge transient error classification', () => {
+  it('matches GitHub required-checks expected errors without depending on the count prefix', () => {
+    assert.equal(
+      isRequiredChecksExpectedMergeError('GraphQL: 3 of 3 required status checks are expected. (mergePullRequest)'),
+      true,
+    );
+    assert.equal(
+      isRequiredChecksExpectedMergeError('GraphQL: Required status checks are expected. (mergePullRequest)'),
+      true,
+    );
+    assert.equal(
+      isRequiredChecksExpectedMergeError('GraphQL: Head branch was modified. Review and try the merge again.'),
+      false,
+    );
+  });
+});
+
 describe('executeMerge', () => {
   it('rebases, pushes, waits, merges, and marks merged', async () => {
     const options = buildMergeTestOptions();
@@ -1440,6 +1466,160 @@ describe('executeMerge', () => {
       assert.ok(hasCall(options.calls, /gh pr merge 42 --squash/));
       assert.ok(!hasCall(options.calls, /--delete-branch/));
       assert.ok(!hasCall(options.calls, /git push origin --delete/));
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('retries a transient required-checks expected merge failure and merges without blocking', async () => {
+    const options = buildMergeTestOptions();
+    const sleeps: number[] = [];
+    let mergeAttempts = 0;
+    const shellRunner: MergeExecutionDeps['shellRunner'] = (cmd, opts) => {
+      options.calls.push(cmd);
+      const defaultRunner = options.deps.shellRunner as MergeExecutionDeps['shellRunner'];
+      if (cmd.includes('gh pr merge 42')) {
+        mergeAttempts += 1;
+        if (mergeAttempts === 1) {
+          const error = new Error('merge failed');
+          (error as unknown as { stderr: string }).stderr = 'GraphQL: 3 of 3 required status checks are expected. (mergePullRequest)';
+          throw error;
+        }
+        return '';
+      }
+      return defaultRunner(cmd, opts);
+    };
+
+    try {
+      const result = await executeMerge(candidate(), {
+        repoDir: options.repoDir,
+        deps: {
+          ...options.deps,
+          shellRunner,
+          retrySleep: async (ms) => {
+            sleeps.push(ms);
+          },
+          currentTimeMs: () => 0,
+        },
+      });
+
+      assert.deepEqual(result, { status: 'merged', prNumber: 42, haltLoop: false });
+      assert.equal(mergeAttempts, 2);
+      assert.deepEqual(sleeps, [30_000]);
+      assert.ok(hasCall(options.calls, /gh pr view 42 --json mergeStateStatus,statusCheckRollup,headRefOid,baseRefOid/));
+      assert.deepEqual(options.labels, ['merging:42', 'merged:42']);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('blocks once with final diagnostics when transient merge retries exhaust', async () => {
+    const options = buildMergeTestOptions();
+    const sleeps: number[] = [];
+    let mergeAttempts = 0;
+    const shellRunner: MergeExecutionDeps['shellRunner'] = (cmd, opts) => {
+      options.calls.push(cmd);
+      const defaultRunner = options.deps.shellRunner as MergeExecutionDeps['shellRunner'];
+      if (cmd.includes('gh pr merge 42')) {
+        mergeAttempts += 1;
+        const error = new Error('merge failed');
+        (error as unknown as { stderr: string }).stderr = 'GraphQL: 3 of 3 required status checks are expected. (mergePullRequest)';
+        throw error;
+      }
+      if (cmd.includes('gh pr checks')) {
+        return JSON.stringify([
+          { name: 'Shell and Unit Tests', state: 'COMPLETED', bucket: 'pass' },
+          { name: 'Lifecycle Integration Tests', state: 'COMPLETED', bucket: 'pass' },
+        ]);
+      }
+      if (cmd.includes('gh pr view 42')) {
+        return JSON.stringify({
+          mergeStateStatus: 'CLEAN',
+          headRefOid: 'final-head-sha',
+          baseRefOid: 'final-base-sha',
+          statusCheckRollup: [
+            { name: 'Shell and Unit Tests', status: 'COMPLETED', conclusion: 'SUCCESS' },
+            { name: 'Lifecycle Integration Tests', status: 'COMPLETED', conclusion: 'SUCCESS' },
+          ],
+        });
+      }
+      return defaultRunner(cmd, opts);
+    };
+    writeFileSync(
+      join(options.repoDir, '.wavemill-config.json'),
+      JSON.stringify({
+        integration: {
+          integrationBranch: 'auto/integration',
+          mergeMethod: 'squash',
+          requiredChecks: ['Shell and Unit Tests', 'Lifecycle Integration Tests'],
+        },
+      }),
+    );
+
+    try {
+      const result = await executeMerge(candidate(), {
+        repoDir: options.repoDir,
+        deps: {
+          ...options.deps,
+          shellRunner,
+          retrySleep: async (ms) => {
+            sleeps.push(ms);
+          },
+          currentTimeMs: () => 0,
+        },
+      });
+
+      assert.equal(result.status, 'blocked');
+      assert.equal(result.phase, 'merge');
+      assert.equal(mergeAttempts, 8);
+      assert.equal(sleeps.length, 7);
+      assert.deepEqual(options.labels, ['merging:42', 'blocked:42']);
+      assert.ok(hasCall(options.calls, /gh pr comment 42 --body/));
+      assert.ok(hasCall(options.calls, /Exact GitHub error:/));
+      assert.ok(hasCall(options.calls, /required status checks are expected/));
+      assert.ok(hasCall(options.calls, /Required checks: Shell and Unit Tests, Lifecycle Integration Tests/));
+      assert.ok(hasCall(options.calls, /Final mergeStateStatus: CLEAN/));
+      assert.ok(hasCall(options.calls, /PR head SHA: final-head-sha/));
+      assert.ok(hasCall(options.calls, /Base SHA: final-base-sha/));
+      assert.ok(hasCall(options.calls, /Shell and Unit Tests: COMPLETED\/SUCCESS/));
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('still blocks non-transient merge failures immediately', async () => {
+    const options = buildMergeTestOptions();
+    const sleeps: number[] = [];
+    let mergeAttempts = 0;
+    const shellRunner: MergeExecutionDeps['shellRunner'] = (cmd, opts) => {
+      options.calls.push(cmd);
+      const defaultRunner = options.deps.shellRunner as MergeExecutionDeps['shellRunner'];
+      if (cmd.includes('gh pr merge 42')) {
+        mergeAttempts += 1;
+        throw new Error('GraphQL: Head branch was modified. Review and try the merge again.');
+      }
+      return defaultRunner(cmd, opts);
+    };
+
+    try {
+      const result = await executeMerge(candidate(), {
+        repoDir: options.repoDir,
+        deps: {
+          ...options.deps,
+          shellRunner,
+          retrySleep: async (ms) => {
+            sleeps.push(ms);
+          },
+          currentTimeMs: () => 0,
+        },
+      });
+
+      assert.equal(result.status, 'blocked');
+      assert.equal(result.phase, 'merge');
+      assert.equal(mergeAttempts, 1);
+      assert.deepEqual(sleeps, []);
+      assert.ok(!hasCall(options.calls, /gh pr view 42 --json mergeStateStatus/));
+      assert.deepEqual(options.labels, ['merging:42', 'blocked:42']);
     } finally {
       options.cleanup();
     }

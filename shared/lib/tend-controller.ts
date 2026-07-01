@@ -60,6 +60,8 @@ export interface MergeExecutionDeps {
   releaseToBlocked: (prNumber: number) => void;
   releaseMerged: (prNumber: number) => void;
   restoreReady: (prNumber: number) => void;
+  retrySleep: (ms: number) => Promise<void>;
+  currentTimeMs: () => number;
 }
 
 export interface ExecuteMergeOptions {
@@ -105,6 +107,18 @@ const PASSING_CHECK_CONCLUSIONS = new Set(['success', 'skipped', 'neutral']);
 const FAILING_CHECK_BUCKETS = new Set(['fail', 'cancel']);
 const PASSING_CHECK_BUCKETS = new Set(['pass', 'skipping']);
 const CHECK_POLL_INTERVAL_MS = 30_000;
+const TRANSIENT_REQUIRED_CHECKS_EXPECTED = 'required status checks are expected';
+const MERGE_RETRY_MAX_ATTEMPTS = 8;
+const MERGE_RETRY_BACKOFF_MS = 30_000;
+const MERGE_RETRY_WINDOW_MS = 5 * 60 * 1000;
+
+interface PrMergeDiagnostics {
+  mergeStateStatus?: string;
+  statusCheckRollup?: unknown;
+  headRefOid?: string;
+  baseRefOid?: string;
+  unavailableReason?: string;
+}
 
 export async function defaultPrFetcher(integrationBranch: string, repoDir: string): Promise<GhPrListEntry[]> {
   validateIntegrationBranch(integrationBranch);
@@ -354,10 +368,12 @@ export async function executeMerge(
         }
 
         try {
-          const mergeFlag = `--${integrationConfig.mergeMethod}`;
-          deps.shellRunner(
-            `gh pr merge ${candidate.number} ${mergeFlag}`,
-            { encoding: 'utf-8', cwd: options.repoDir },
+          await mergeWithTransientRetry(
+            candidate.number,
+            integrationConfig.mergeMethod,
+            integrationConfig.requiredChecks,
+            options.repoDir,
+            deps,
           );
         } catch (error) {
           return block('merge', outputFromError(error));
@@ -704,6 +720,151 @@ function postFailureComment(
   );
 }
 
+async function mergeWithTransientRetry(
+  prNumber: number,
+  mergeMethod: string,
+  requiredChecks: string[],
+  repoDir: string,
+  deps: MergeExecutionDeps,
+): Promise<void> {
+  const mergeFlag = `--${mergeMethod}`;
+  const command = `gh pr merge ${prNumber} ${mergeFlag}`;
+  const deadlineMs = deps.currentTimeMs() + MERGE_RETRY_WINDOW_MS;
+  let lastTransientError = '';
+  let lastDiagnostics: PrMergeDiagnostics | null = null;
+
+  for (let attempt = 1; attempt <= MERGE_RETRY_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      deps.shellRunner(command, { encoding: 'utf-8', cwd: repoDir });
+      return;
+    } catch (error) {
+      const output = outputFromError(error);
+      if (!isRequiredChecksExpectedMergeError(output)) {
+        throw error;
+      }
+
+      lastTransientError = output;
+      lastDiagnostics = readPrMergeDiagnostics(prNumber, repoDir, deps.shellRunner);
+
+      if (attempt >= MERGE_RETRY_MAX_ATTEMPTS || deps.currentTimeMs() + MERGE_RETRY_BACKOFF_MS > deadlineMs) {
+        throw new Error(buildTransientMergeFailureDiagnostics(lastTransientError, lastDiagnostics, requiredChecks));
+      }
+
+      await deps.retrySleep(MERGE_RETRY_BACKOFF_MS);
+    }
+  }
+
+  throw new Error(buildTransientMergeFailureDiagnostics(lastTransientError, lastDiagnostics, requiredChecks));
+}
+
+export function isRequiredChecksExpectedMergeError(output: string): boolean {
+  return output.toLowerCase().includes(TRANSIENT_REQUIRED_CHECKS_EXPECTED);
+}
+
+function readPrMergeDiagnostics(
+  prNumber: number,
+  repoDir: string,
+  shellRunner: MergeExecutionDeps['shellRunner'],
+): PrMergeDiagnostics {
+  try {
+    const output = shellRunner(
+      `gh pr view ${prNumber} --json mergeStateStatus,statusCheckRollup,headRefOid,baseRefOid`,
+      { encoding: 'utf-8', cwd: repoDir },
+    );
+    const parsed = JSON.parse(String(output)) as unknown;
+    if (!parsed || typeof parsed !== 'object') {
+      return { unavailableReason: 'gh pr view returned non-object JSON' };
+    }
+    const value = parsed as {
+      mergeStateStatus?: unknown;
+      statusCheckRollup?: unknown;
+      headRefOid?: unknown;
+      baseRefOid?: unknown;
+    };
+    return {
+      mergeStateStatus: typeof value.mergeStateStatus === 'string' ? value.mergeStateStatus : undefined,
+      statusCheckRollup: value.statusCheckRollup,
+      headRefOid: typeof value.headRefOid === 'string' ? value.headRefOid : undefined,
+      baseRefOid: typeof value.baseRefOid === 'string' ? value.baseRefOid : undefined,
+    };
+  } catch (error) {
+    return { unavailableReason: outputFromError(error) };
+  }
+}
+
+function buildTransientMergeFailureDiagnostics(
+  githubError: string,
+  diagnostics: PrMergeDiagnostics | null,
+  requiredChecks: string[],
+): string {
+  const lines = [
+    'GitHub continued to report a transient required-checks protection error after Wavemill checks passed.',
+    '',
+    'Exact GitHub error:',
+    githubError || '(no output)',
+    '',
+    `Required checks: ${requiredChecks.length > 0 ? requiredChecks.join(', ') : '(none configured)'}`,
+  ];
+
+  if (!diagnostics) {
+    lines.push('Final PR state: unavailable');
+    return lines.join('\n');
+  }
+
+  if (diagnostics.unavailableReason) {
+    lines.push(`Final PR state unavailable: ${diagnostics.unavailableReason}`);
+    return lines.join('\n');
+  }
+
+  lines.push(`Final mergeStateStatus: ${diagnostics.mergeStateStatus || '(missing)'}`);
+  lines.push(`PR head SHA: ${diagnostics.headRefOid || '(missing)'}`);
+  lines.push(`Base SHA: ${diagnostics.baseRefOid || '(missing)'}`);
+  lines.push('Final check rollup:');
+  lines.push(formatStatusCheckRollup(diagnostics.statusCheckRollup));
+  return lines.join('\n');
+}
+
+function formatStatusCheckRollup(rollup: unknown): string {
+  const entries = extractStatusCheckRollupEntries(rollup);
+  if (entries.length === 0) {
+    return '(no check-rollup entries reported)';
+  }
+  return entries.map((entry) => {
+    const name = stringField(entry, 'name') || stringField(entry, 'context') || 'check';
+    const status = stringField(entry, 'status') || stringField(entry, 'state') || stringField(entry, 'conclusion') || 'unknown';
+    const conclusion = stringField(entry, 'conclusion');
+    return conclusion && conclusion !== status ? `${name}: ${status}/${conclusion}` : `${name}: ${status}`;
+  }).join('\n');
+}
+
+function extractStatusCheckRollupEntries(rollup: unknown): Record<string, unknown>[] {
+  if (Array.isArray(rollup)) {
+    return rollup.filter(isRecord);
+  }
+  if (!isRecord(rollup)) {
+    return [];
+  }
+  if (Array.isArray(rollup.nodes)) {
+    return rollup.nodes.filter(isRecord);
+  }
+  if (Array.isArray(rollup.contexts)) {
+    return rollup.contexts.filter(isRecord);
+  }
+  if (isRecord(rollup.nodes) && Array.isArray(rollup.nodes.nodes)) {
+    return rollup.nodes.nodes.filter(isRecord);
+  }
+  return [];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function stringField(value: Record<string, unknown>, key: string): string | null {
+  const field = value[key];
+  return typeof field === 'string' && field.length > 0 ? field : null;
+}
+
 function mergeExecutionDeps(deps: Partial<MergeExecutionDeps> | undefined): MergeExecutionDeps {
   return {
     shellRunner: (cmd, opts) => String(execShellCommand(cmd, opts)),
@@ -721,6 +882,8 @@ function mergeExecutionDeps(deps: Partial<MergeExecutionDeps> | undefined): Merg
     restoreReady: (prNumber) => {
       setWavemillReady(prNumber);
     },
+    retrySleep: sleep,
+    currentTimeMs: () => Date.now(),
     ...deps,
   };
 }

@@ -5591,7 +5591,8 @@ demote_merge_candidate() {
         candidateSkippedAt: $now,
         candidateSkipReason: $reason,
         candidatePromotedAt: null,
-        candidateLastProgressAt: null
+        candidateLastProgressAt: null,
+        mergeRetryInProgressUntil: null
       }
     ')
   write_ready_queue_artifacts "$state_dir" "$patch_json"
@@ -5717,6 +5718,7 @@ refresh_ready_merge_queue_tick() {
         --arg ready_at "$(jq -r '.finishedAt // .startedAt // empty' "$state_dir/.ready-result.json" 2>/dev/null || echo "")" \
         --arg candidate_promoted_at "$(ready_queue_field "$state_dir" candidatePromotedAt)" \
         --arg candidate_last_progress_at "$(ready_queue_field "$state_dir" candidateLastProgressAt)" \
+        --arg merge_retry_in_progress_until "$(ready_queue_field "$state_dir" mergeRetryInProgressUntil)" \
         --arg candidate_skipped_at "$(ready_queue_field "$state_dir" candidateSkippedAt)" \
         --argjson changed_files "$(ready_changed_files_json "$state_dir" "$wt_dir" "$pr")" '
           $prs + [{
@@ -5731,6 +5733,7 @@ refresh_ready_merge_queue_tick() {
             unblocksCount: 0,
             candidatePromotedAt: (if $candidate_promoted_at == "" then null else $candidate_promoted_at end),
             candidateLastProgressAt: (if $candidate_last_progress_at == "" then null else $candidate_last_progress_at end),
+            mergeRetryInProgressUntil: (if $merge_retry_in_progress_until == "" then null else $merge_retry_in_progress_until end),
             candidateSkippedAt: (if $candidate_skipped_at == "" then null else $candidate_skipped_at end),
             workflowStatus: (if $workflow_status == "" then null else $workflow_status end)
           }]
