@@ -392,6 +392,16 @@ const DEFAULT_SCENARIOS: CertificationScenario[] = [
 export { PHASE_ORDER };
 
 /**
+ * Current default certification suite version.
+ *
+ * Bump this string whenever the scenario catalog changes in a way that
+ * requires re-certifying previously-certified models. The suite version
+ * is stored in every certification artifact and must match the registry
+ * metadata for the artifact to be considered valid by the router.
+ */
+export const DEFAULT_CERTIFICATION_SUITE_VERSION = 'v1' as const;
+
+/**
  * Return the default certification scenario catalog.
  *
  * Returns a fresh array (not a reference to the internal catalog) so callers
