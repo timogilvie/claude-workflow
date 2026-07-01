@@ -360,9 +360,9 @@
                     "properties": {
                         "model": {
                             "type": "string",
-                            "default": "claude-sonnet-4-6",
+                            "default": "claude-sonnet-5",
                             "minLength": 1,
-                            "description": "Model ID for the eval judge (e.g. 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001')."
+                            "description": "Model ID for the eval judge (e.g. 'claude-sonnet-5', 'claude-haiku-4-5-20251001')."
                         },
                         "provider": {
                             "type": "string",
@@ -1488,6 +1488,29 @@
                                         "items": {
                                             "type": "string"
                                         }
+                                    },
+                                    "certification": {
+                                        "type": "object",
+                                        "properties": {
+                                            "maxCertifiedPhase": {
+                                                "type": "string",
+                                                "enum": ["read-only", "patch", "workflow"]
+                                            },
+                                            "certifiedAt": {
+                                                "type": "string"
+                                            },
+                                            "certificationSuiteVersion": {
+                                                "type": "string",
+                                                "minLength": 1
+                                            },
+                                            "knownLimitations": {
+                                                "type": "array",
+                                                "items": {
+                                                    "type": "string"
+                                                }
+                                            }
+                                        },
+                                        "additionalProperties": false
                                     }
                                 },
                                 "additionalProperties": false
@@ -1553,7 +1576,7 @@
                 "defaultModel": {
                     "type": "string",
                     "default": "gpt-5.5",
-                    "description": "Fallback model selector when insufficient eval data exists for routing. Accepts a family alias such as 'sonnet', 'inherit', or a pinned model ID such as 'claude-sonnet-4-6'."
+                    "description": "Fallback model selector when insufficient eval data exists for routing. Accepts a family alias such as 'sonnet', 'inherit', or a pinned model ID such as 'claude-sonnet-5'."
                 },
                 "minRecords": {
                     "type": "integer",

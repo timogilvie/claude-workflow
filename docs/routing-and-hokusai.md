@@ -56,8 +56,8 @@ When routing deviates from the normal path, `wavemill mill` prints a single conc
 
 ```text
 11:31:02 [router] constrained mode: claude-opus-4-8 quota is degrading; reserving it for high-complexity steps
-11:31:02 [router] policy adjustment: coder claude-opus-4-8 -> claude-sonnet-4-6 (quota=degrading)
-11:31:44 [coder] claude-opus-4-8 unavailable (quota); falling back to claude-sonnet-4-6
+11:31:02 [router] policy adjustment: coder claude-opus-4-8 -> claude-sonnet-5 (quota=degrading)
+11:31:44 [coder] claude-opus-4-8 unavailable (quota); falling back to claude-sonnet-5
 ```
 
 `gpt-5.3-codex` is intentionally excluded from active routing and fallback ladders because Codex with a ChatGPT account rejects that model with HTTP 400.

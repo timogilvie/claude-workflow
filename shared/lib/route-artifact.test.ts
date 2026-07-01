@@ -27,9 +27,9 @@ import type { WorkflowRouteDecision } from './workflow-router.ts';
 
 function minimalDecision(overrides: Partial<WorkflowRouteDecision> = {}): WorkflowRouteDecision {
   return {
-    planner: 'claude-sonnet-4-6',
+    planner: 'claude-sonnet-5',
     coder: 'gpt-5.4',
-    reviewer: 'claude-sonnet-4-6',
+    reviewer: 'claude-sonnet-5',
     planDepth: 'light',
     codeDepth: 'medium',
     reviewRecommended: 'static',
@@ -140,7 +140,7 @@ test('validateExpandedRouteArtifact accepts execution fields', () => {
   const result = validateExpandedRouteArtifact({
     coder: 'gpt-5.4',
     codeDepth: 'deep',
-    reviewer: 'claude-sonnet-4-6',
+    reviewer: 'claude-sonnet-5',
     reviewMode: 'static+llm',
     cache_hit: true,
     route_source: 'batch',
@@ -154,7 +154,7 @@ test('validateExpandedRouteArtifact accepts execution fields', () => {
   assert.deepEqual(result.normalized, {
     coder: 'gpt-5.4',
     codeDepth: 'deep',
-    reviewer: 'claude-sonnet-4-6',
+    reviewer: 'claude-sonnet-5',
     reviewMode: 'static+llm',
   });
 });
@@ -163,7 +163,7 @@ test('validateExpandedRouteArtifact falls back from reviewRecommended', () => {
   const result = validateExpandedRouteArtifact({
     coder: 'gpt-5.4',
     codeDepth: 'medium',
-    reviewer: 'claude-sonnet-4-6',
+    reviewer: 'claude-sonnet-5',
     reviewRecommended: 'llm',
   });
 
@@ -193,7 +193,7 @@ test('validateExpandedRouteArtifact rejects blank execution fields', () => {
   const result = validateExpandedRouteArtifact({
     coder: '',
     codeDepth: 'medium',
-    reviewer: 'claude-sonnet-4-6',
+    reviewer: 'claude-sonnet-5',
     reviewMode: 'static',
   });
 
@@ -206,7 +206,7 @@ test('validateExpandedRouteArtifact rejects malformed optional metadata', () => 
   const result = validateExpandedRouteArtifact({
     coder: 'gpt-5.4',
     codeDepth: 'deep',
-    reviewer: 'claude-sonnet-4-6',
+    reviewer: 'claude-sonnet-5',
     reviewMode: 'static+llm',
     cache_hit: 'yes',
     route_source: 'live',
@@ -345,7 +345,7 @@ test('readBothRouteArtifacts returns both snapshots when present', () => {
   const featureDir = makeFeatureDir();
   writeFileSync(join(featureDir, '.initial-route.json'), JSON.stringify({
     planner: 'gpt-5.4',
-    coder: 'claude-sonnet-4-6',
+    coder: 'claude-sonnet-5',
     reviewer: 'claude-opus-4-6',
     planDepth: 'deep',
     codeDepth: 'medium',
@@ -363,7 +363,7 @@ test('readBothRouteArtifacts returns both snapshots when present', () => {
   assert.match(result.bootstrap?.artifactHash ?? '', /^[a-f0-9]{64}$/);
   assert.deepEqual(result.bootstrap && {
     planner: 'gpt-5.4',
-    coder: 'claude-sonnet-4-6',
+    coder: 'claude-sonnet-5',
     reviewer: 'claude-opus-4-6',
     planDepth: 'deep',
     codeDepth: 'medium',
@@ -373,7 +373,7 @@ test('readBothRouteArtifacts returns both snapshots when present', () => {
     packet_hash: undefined,
   }, {
     planner: 'gpt-5.4',
-    coder: 'claude-sonnet-4-6',
+    coder: 'claude-sonnet-5',
     reviewer: 'claude-opus-4-6',
     planDepth: 'deep',
     codeDepth: 'medium',
@@ -433,14 +433,14 @@ test('readBothRouteArtifacts exposes expanded route as authoritative when snapsh
 test('readBothRouteArtifacts returns null for missing sides independently', () => {
   const featureDir = makeFeatureDir();
   writeFileSync(join(featureDir, '.initial-route.json'), JSON.stringify({
-    coder: 'claude-sonnet-4-6',
+    coder: 'claude-sonnet-5',
     reviewer: 'claude-opus-4-6',
     codeDepth: 'medium',
     reviewMode: 'llm',
   }));
 
   const result = readBothRouteArtifacts(featureDir);
-  assert.equal(result.bootstrap?.coder, 'claude-sonnet-4-6');
+  assert.equal(result.bootstrap?.coder, 'claude-sonnet-5');
   assert.equal(result.expanded, null);
 });
 
@@ -448,7 +448,7 @@ test('readBothRouteArtifacts normalizes expanded reviewRecommended to reviewMode
   const featureDir = makeFeatureDir();
   writeFileSync(join(featureDir, '.post-expansion-route.json'), JSON.stringify({
     coder: 'gpt-5.4',
-    reviewer: 'claude-sonnet-4-6',
+    reviewer: 'claude-sonnet-5',
     codeDepth: 'deep',
     reviewRecommended: 'static+llm',
   }));
@@ -531,7 +531,7 @@ test('readBothRouteArtifacts keeps normalized expanded fields and includes prove
   writeFileSync(join(featureDir, '.post-expansion-route.json'), JSON.stringify({
     planner: 'expanded-planner',
     coder: 'gpt-5.4',
-    reviewer: 'claude-sonnet-4-6',
+    reviewer: 'claude-sonnet-5',
     planDepth: 'deep',
     codeDepth: 'deep',
     reviewMode: 'static+llm',
@@ -547,7 +547,7 @@ test('readBothRouteArtifacts keeps normalized expanded fields and includes prove
   assert.deepEqual(result.expanded && {
     planner: 'expanded-planner',
     coder: 'gpt-5.4',
-    reviewer: 'claude-sonnet-4-6',
+    reviewer: 'claude-sonnet-5',
     planDepth: 'deep',
     codeDepth: 'deep',
     reviewMode: 'static+llm',
@@ -561,7 +561,7 @@ test('readBothRouteArtifacts keeps normalized expanded fields and includes prove
   }, {
     planner: 'expanded-planner',
     coder: 'gpt-5.4',
-    reviewer: 'claude-sonnet-4-6',
+    reviewer: 'claude-sonnet-5',
     planDepth: 'deep',
     codeDepth: 'deep',
     reviewMode: 'static+llm',
@@ -580,17 +580,17 @@ test('formatRouteArtifactSignature renders compact operator-facing route ids', (
     formatRouteArtifactSignature({
       coder: 'gpt-5.4',
       codeDepth: 'deep',
-      reviewer: 'claude-sonnet-4-6',
+      reviewer: 'claude-sonnet-5',
       reviewMode: 'static+llm',
     }),
-    'coder=gpt-5.4,codeDepth=deep,reviewer=claude-sonnet-4-6,reviewMode=static+llm',
+    'coder=gpt-5.4,codeDepth=deep,reviewer=claude-sonnet-5,reviewMode=static+llm',
   );
 });
 
 test('routeChangedMaterially tracks coder/reviewer class and depth changes', () => {
   const result = routeChangedMaterially(
     {
-      coder: 'claude-sonnet-4-6',
+      coder: 'claude-sonnet-5',
       codeDepth: 'medium',
       reviewer: 'claude-opus-4-6',
       reviewMode: 'llm',
@@ -598,7 +598,7 @@ test('routeChangedMaterially tracks coder/reviewer class and depth changes', () 
     {
       coder: 'gpt-5.4',
       codeDepth: 'deep',
-      reviewer: 'claude-sonnet-4-6',
+      reviewer: 'claude-sonnet-5',
       reviewMode: 'llm',
     },
   );
@@ -643,7 +643,7 @@ test('readRouteLifecycleArtifacts falls back to archived bootstrap and active ro
 test('deriveRouteDecisionSource returns preserved when active route stays bootstrap', () => {
   const decisionSource = deriveRouteDecisionSource({
     bootstrap: {
-      coder: 'claude-sonnet-4-6',
+      coder: 'claude-sonnet-5',
       codeDepth: 'medium',
       reviewer: 'claude-opus-4-6',
       reviewMode: 'llm',
@@ -651,11 +651,11 @@ test('deriveRouteDecisionSource returns preserved when active route stays bootst
     expanded: {
       coder: 'gpt-5.4',
       codeDepth: 'deep',
-      reviewer: 'claude-sonnet-4-6',
+      reviewer: 'claude-sonnet-5',
       reviewMode: 'static',
     },
     active: {
-      coder: 'claude-sonnet-4-6',
+      coder: 'claude-sonnet-5',
       codeDepth: 'medium',
       reviewer: 'claude-opus-4-6',
       reviewMode: 'llm',
@@ -668,7 +668,7 @@ test('deriveRouteDecisionSource returns preserved when active route stays bootst
 test('buildRouteLifecycleProvenance includes active route and expanded cache metadata', () => {
   const provenance = buildRouteLifecycleProvenance({
     bootstrap: {
-      coder: 'claude-sonnet-4-6',
+      coder: 'claude-sonnet-5',
       codeDepth: 'medium',
       reviewer: 'claude-opus-4-6',
       reviewMode: 'llm',
@@ -676,7 +676,7 @@ test('buildRouteLifecycleProvenance includes active route and expanded cache met
     expanded: {
       coder: 'gpt-5.4',
       codeDepth: 'deep',
-      reviewer: 'claude-sonnet-4-6',
+      reviewer: 'claude-sonnet-5',
       reviewMode: 'static',
       cache_hit: true,
       route_source: 'cache',
@@ -685,14 +685,14 @@ test('buildRouteLifecycleProvenance includes active route and expanded cache met
     active: {
       coder: 'gpt-5.4',
       codeDepth: 'deep',
-      reviewer: 'claude-sonnet-4-6',
+      reviewer: 'claude-sonnet-5',
       reviewMode: 'static',
     },
   });
 
   assert.deepEqual(provenance, {
     bootstrapRoute: {
-      coder: 'claude-sonnet-4-6',
+      coder: 'claude-sonnet-5',
       codeDepth: 'medium',
       reviewer: 'claude-opus-4-6',
       reviewMode: 'llm',
@@ -700,7 +700,7 @@ test('buildRouteLifecycleProvenance includes active route and expanded cache met
     expandedRoute: {
       coder: 'gpt-5.4',
       codeDepth: 'deep',
-      reviewer: 'claude-sonnet-4-6',
+      reviewer: 'claude-sonnet-5',
       reviewMode: 'static',
       cacheHit: true,
       routeSource: 'cache',
@@ -708,7 +708,7 @@ test('buildRouteLifecycleProvenance includes active route and expanded cache met
     activeRoute: {
       coder: 'gpt-5.4',
       codeDepth: 'deep',
-      reviewer: 'claude-sonnet-4-6',
+      reviewer: 'claude-sonnet-5',
       reviewMode: 'static',
     },
     routeChanged: true,
@@ -756,7 +756,7 @@ test('hasValidPostExpansionRoute returns ok for valid artifact', () => {
     writeFileSync(join(dir, '.post-expansion-route.json'), JSON.stringify({
       coder: 'gpt-5.4',
       codeDepth: 'medium',
-      reviewer: 'claude-sonnet-4-6',
+      reviewer: 'claude-sonnet-5',
       reviewMode: 'llm',
     }));
     assert.deepEqual(hasValidPostExpansionRoute(dir), { ok: true });

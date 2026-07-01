@@ -42,7 +42,7 @@
     },
     "evalsDir": ".wavemill/evals",
     "judge": {
-      "model": "claude-sonnet-4-6",
+      "model": "claude-sonnet-5",
       "provider": "anthropic"
     },
     "pricing": {
@@ -52,13 +52,13 @@
         "cacheWriteCostPerMTok": 12.5,
         "cacheReadCostPerMTok": 1
       },
-      "claude-opus-4-8": {
+      "claude-opus-4-6": {
         "inputCostPerMTok": 5,
         "outputCostPerMTok": 25,
         "cacheWriteCostPerMTok": 6.25,
         "cacheReadCostPerMTok": 0.5
       },
-      "claude-opus-4-6": {
+      "claude-opus-4-8": {
         "inputCostPerMTok": 5,
         "outputCostPerMTok": 25,
         "cacheWriteCostPerMTok": 6.25,
@@ -69,6 +69,12 @@
         "outputCostPerMTok": 25,
         "cacheWriteCostPerMTok": 6.25,
         "cacheReadCostPerMTok": 0.5
+      },
+      "claude-sonnet-5": {
+        "inputCostPerMTok": 3,
+        "outputCostPerMTok": 15,
+        "cacheWriteCostPerMTok": 3.75,
+        "cacheReadCostPerMTok": 0.3
       },
       "claude-sonnet-4-6": {
         "inputCostPerMTok": 3,
@@ -192,6 +198,7 @@
     "models": [
       "claude-fable-5",
       "claude-opus-4-8",
+      "claude-sonnet-5",
       "claude-sonnet-4-5-20250929",
       "claude-sonnet-4-6",
       "claude-opus-4-6",
@@ -258,7 +265,7 @@
       ],
       "coder": [
         "claude-fable-5",
-        "claude-sonnet-4-6",
+        "claude-sonnet-5",
         "gpt-5.5",
         "gpt-5.4",
         "qwen-3-coder",
@@ -289,13 +296,14 @@
       "claude-fable-5": "claude",
       "claude-opus-4-8": "claude",
       "claude-opus-4-7": "claude",
+      "claude-sonnet-5": "claude",
       "claude-sonnet-4-6": "claude",
       "claude-opus-4-6": "claude",
       "claude-sonnet-4-5-20250929": "claude",
       "claude-haiku-4-5-20251001": "claude",
-      "gpt-5.3-codex": "codex",
       "gpt-5.4": "codex",
       "gpt-5.5": "codex",
+      "gpt-5.3-codex": "codex",
       "gpt-5.3-codex-spark": "codex",
       "qwen-3-coder": "claude-openrouter",
       "qwen-2.5-coder-32b": "claude-openrouter",

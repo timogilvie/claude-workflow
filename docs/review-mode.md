@@ -193,7 +193,7 @@ Review settings live in `.wavemill-config.json`:
   },
   "eval": {
     "judge": {
-      "model": "claude-sonnet-4-5-20250929",
+      "model": "claude-sonnet-5",
       "provider": "anthropic"
     }
   }
@@ -205,7 +205,7 @@ Review settings live in `.wavemill-config.json`:
 | `review.enabled` | `true` | Enable/disable self-review in the workflow |
 | `review.maxIterations` | `3` | Max review-fix cycles before proceeding |
 | `review.metricsLog` | `.wavemill/review-log.json` | Path to review metrics log (JSONL format) |
-| `eval.judge.model` | `claude-sonnet-4-5-20250929` | LLM model used for review |
+| `eval.judge.model` | `claude-sonnet-5` | LLM model used for review |
 | `eval.judge.provider` | `claude-cli` | Provider (`claude-cli` or `anthropic`) |
 
 ## Review Metrics

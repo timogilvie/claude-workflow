@@ -1,0 +1,416 @@
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
+import {
+  buildModelCertificationReport,
+  serializeReport,
+  renderReportTable,
+} from './report.ts';
+import { CERTIFICATION_SCHEMA_VERSION, CERTIFICATION_TTL_DAYS } from './schema.ts';
+import type { ModelRegistry } from '../../model-registry.ts';
+import type { NativeCertificationArtifact } from './schema.ts';
+
+// ---------------------------------------------------------------------------
+// Test fixtures
+// ---------------------------------------------------------------------------
+
+const NOW = new Date('2026-01-15T12:00:00.000Z');
+const FRESH_DATE = new Date('2026-01-01T00:00:00.000Z').toISOString();
+const STALE_DATE = new Date(NOW.getTime() - (CERTIFICATION_TTL_DAYS + 1) * 24 * 60 * 60 * 1000).toISOString();
+
+function makeRegistry(overrides: Record<string, unknown> = {}): ModelRegistry {
+  return {
+    models: {
+      'gpt-4o': {
+        vendor: 'openai',
+        class: 'strong_generalist',
+        strengths: [],
+        weaknesses: [],
+        qualityScores: { routing: 70, planning: 75, coding: 80, review: 75, classify: 70 },
+        contextWindowTokens: 128_000,
+        toolSupport: { functionCalling: true, streamingTools: true },
+        multimodal: { text: true, image: false },
+        latencyTier: 'standard',
+        reasoningTier: 'standard',
+        costPerMillionInputTokensUsd: 3,
+        costPerMillionOutputTokensUsd: 15,
+        nativeCapability: {
+          nativeProvider: 'openai',
+          piTransportKind: 'openai-responses',
+          readOnlyNative: 'certified',
+          certification: {
+            maxCertifiedPhase: 'read-only',
+            certifiedAt: FRESH_DATE,
+            certificationSuiteVersion: 'v1',
+          },
+        },
+      },
+      'partial-model': {
+        vendor: 'openrouter',
+        class: 'strong_generalist',
+        strengths: [],
+        weaknesses: [],
+        qualityScores: { routing: 70, planning: 75, coding: 80, review: 75, classify: 70 },
+        contextWindowTokens: 128_000,
+        toolSupport: { functionCalling: true, streamingTools: true },
+        multimodal: { text: true, image: false },
+        latencyTier: 'standard',
+        reasoningTier: 'standard',
+        costPerMillionInputTokensUsd: 3,
+        costPerMillionOutputTokensUsd: 15,
+        nativeCapability: {
+          nativeProvider: 'openrouter',
+          piTransportKind: 'openai-completions',
+          readOnlyNative: 'partial',
+        },
+      },
+      'unsupported-model': {
+        vendor: 'openai',
+        class: 'fast_economy',
+        strengths: [],
+        weaknesses: [],
+        qualityScores: { routing: 60, planning: 65, coding: 70, review: 65, classify: 60 },
+        contextWindowTokens: 16_000,
+        toolSupport: { functionCalling: false, streamingTools: false },
+        multimodal: { text: true, image: false },
+        latencyTier: 'fast',
+        reasoningTier: 'standard',
+        costPerMillionInputTokensUsd: 1,
+        costPerMillionOutputTokensUsd: 2,
+        nativeCapability: {
+          nativeProvider: 'openai',
+          piTransportKind: 'openai-completions',
+          readOnlyNative: 'unsupported',
+        },
+      },
+      'no-cert-model': {
+        vendor: 'openai',
+        class: 'strong_generalist',
+        strengths: [],
+        weaknesses: [],
+        qualityScores: { routing: 70, planning: 75, coding: 80, review: 75, classify: 70 },
+        contextWindowTokens: 128_000,
+        toolSupport: { functionCalling: true, streamingTools: true },
+        multimodal: { text: true, image: false },
+        latencyTier: 'standard',
+        reasoningTier: 'standard',
+        costPerMillionInputTokensUsd: 3,
+        costPerMillionOutputTokensUsd: 15,
+        nativeCapability: {
+          nativeProvider: 'openai',
+          piTransportKind: 'openai-responses',
+          readOnlyNative: 'certified',
+          // No certification metadata
+        },
+      },
+      'non-native-model': {
+        vendor: 'anthropic',
+        class: 'strong_generalist',
+        strengths: [],
+        weaknesses: [],
+        qualityScores: { routing: 70, planning: 75, coding: 80, review: 75, classify: 70 },
+        contextWindowTokens: 200_000,
+        toolSupport: { functionCalling: true, streamingTools: true },
+        multimodal: { text: true, image: false },
+        latencyTier: 'standard',
+        reasoningTier: 'standard',
+        costPerMillionInputTokensUsd: 3,
+        costPerMillionOutputTokensUsd: 15,
+      },
+      ...overrides,
+    } as ModelRegistry['models'],
+    ladders: {},
+  };
+}
+
+function makeArtifact(overrides: Partial<NativeCertificationArtifact> = {}): NativeCertificationArtifact {
+  return {
+    schemaVersion: CERTIFICATION_SCHEMA_VERSION,
+    provider: 'openai',
+    model: 'gpt-4o',
+    phase: 'read-only',
+    suiteVersion: 'v1',
+    certifiedAt: FRESH_DATE,
+    scenarios: [{ scenarioId: 's1', passed: true }],
+    ...overrides,
+  };
+}
+
+// A loadCertification stub that returns a fresh, passing artifact for gpt-4o
+function makeLoadFn(artifactOverrides: Partial<NativeCertificationArtifact> = {}) {
+  return (repoDir: string, provider: string, model: string, suiteVersion: string) => {
+    if (model === 'gpt-4o' && suiteVersion === 'v1') {
+      return { ok: true as const, artifact: makeArtifact(artifactOverrides) };
+    }
+    return { ok: false as const, reason: 'missing' as const };
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+describe('buildModelCertificationReport', () => {
+  it('returns ready state for a fresh, passing on-disk artifact', () => {
+    const registry = makeRegistry();
+    const rows = buildModelCertificationReport({
+      registry,
+      now: NOW,
+      loadCertificationFn: makeLoadFn(),
+    });
+
+    const row = rows.find(r => r.model === 'gpt-4o');
+    assert.ok(row, 'gpt-4o row missing');
+    assert.equal(row.state, 'ready');
+    assert.equal(row.certifiedPhase, 'read-only');
+    assert.deepEqual(row.eligibleStages, ['reviewer']);
+    assert.equal(row.suiteVersion, 'v1');
+    assert.equal(row.scenarios.length, 1);
+    assert.equal(row.scenarios[0].passed, true);
+  });
+
+  it('returns stale state when artifact TTL is exceeded', () => {
+    const staleArtifact = makeArtifact({ certifiedAt: STALE_DATE });
+    const registry = makeRegistry();
+    const rows = buildModelCertificationReport({
+      registry,
+      now: NOW,
+      loadCertificationFn: () => ({ ok: true as const, artifact: staleArtifact }),
+    });
+
+    const row = rows.find(r => r.model === 'gpt-4o');
+    assert.ok(row, 'gpt-4o row missing');
+    assert.equal(row.state, 'stale');
+    assert.deepEqual(row.eligibleStages, []);
+  });
+
+  it('returns uncertified state when scenarios fail', () => {
+    const failedArtifact = makeArtifact({
+      scenarios: [{ scenarioId: 's1', passed: false, failureMessage: 'assertion failed' }],
+    });
+    const registry = makeRegistry();
+    const rows = buildModelCertificationReport({
+      registry,
+      now: NOW,
+      loadCertificationFn: () => ({ ok: true as const, artifact: failedArtifact }),
+    });
+
+    const row = rows.find(r => r.model === 'gpt-4o');
+    assert.ok(row, 'gpt-4o row missing');
+    assert.equal(row.state, 'uncertified');
+    assert.deepEqual(row.eligibleStages, []);
+    assert.equal(row.scenarios[0].failureMessage, 'assertion failed');
+  });
+
+  it('returns unsupported state for unsupported-model', () => {
+    const registry = makeRegistry();
+    const rows = buildModelCertificationReport({
+      registry,
+      now: NOW,
+      loadCertificationFn: makeLoadFn(),
+    });
+
+    const row = rows.find(r => r.model === 'unsupported-model');
+    assert.ok(row, 'unsupported-model row missing');
+    assert.equal(row.state, 'unsupported');
+    assert.deepEqual(row.eligibleStages, []);
+    assert.equal(row.scenarios.length, 0);
+  });
+
+  it('returns certification-only state for partial model', () => {
+    const registry = makeRegistry();
+    const rows = buildModelCertificationReport({
+      registry,
+      now: NOW,
+      loadCertificationFn: makeLoadFn(),
+    });
+
+    const row = rows.find(r => r.model === 'partial-model');
+    assert.ok(row, 'partial-model row missing');
+    assert.equal(row.state, 'certification-only');
+    assert.deepEqual(row.eligibleStages, []);
+  });
+
+  it('returns uncertified when no certification metadata exists', () => {
+    const registry = makeRegistry();
+    const rows = buildModelCertificationReport({
+      registry,
+      now: NOW,
+      loadCertificationFn: makeLoadFn(),
+    });
+
+    const row = rows.find(r => r.model === 'no-cert-model');
+    assert.ok(row, 'no-cert-model row missing');
+    assert.equal(row.state, 'uncertified');
+  });
+
+  it('excludes non-native models', () => {
+    const registry = makeRegistry();
+    const rows = buildModelCertificationReport({
+      registry,
+      now: NOW,
+      loadCertificationFn: makeLoadFn(),
+    });
+
+    assert.ok(!rows.find(r => r.model === 'non-native-model'), 'non-native-model should be excluded');
+  });
+
+  it('falls back to registry metadata when artifact is missing', () => {
+    const registry = makeRegistry();
+    const rows = buildModelCertificationReport({
+      registry,
+      now: NOW,
+      // Return missing for all models
+      loadCertificationFn: () => ({ ok: false as const, reason: 'missing' as const }),
+    });
+
+    const row = rows.find(r => r.model === 'gpt-4o');
+    assert.ok(row, 'gpt-4o row missing');
+    // Registry metadata is fresh (certifiedAt = FRESH_DATE), so should be ready
+    assert.equal(row.state, 'ready');
+    assert.deepEqual(row.eligibleStages, ['reviewer']);
+    assert.equal(row.scenarios.length, 0);
+  });
+
+  it('returns stale from registry metadata when TTL exceeded', () => {
+    const staleRegistry = makeRegistry({
+      'gpt-4o': {
+        vendor: 'openai',
+        class: 'strong_generalist',
+        strengths: [],
+        weaknesses: [],
+        qualityScores: { routing: 70, planning: 75, coding: 80, review: 75, classify: 70 },
+        contextWindowTokens: 128_000,
+        toolSupport: { functionCalling: true, streamingTools: true },
+        multimodal: { text: true, image: false },
+        latencyTier: 'standard',
+        reasoningTier: 'standard',
+        costPerMillionInputTokensUsd: 3,
+        costPerMillionOutputTokensUsd: 15,
+        nativeCapability: {
+          nativeProvider: 'openai',
+          piTransportKind: 'openai-responses',
+          readOnlyNative: 'certified',
+          certification: {
+            maxCertifiedPhase: 'read-only',
+            certifiedAt: STALE_DATE,
+            certificationSuiteVersion: 'v1',
+          },
+        },
+      },
+    });
+
+    const rows = buildModelCertificationReport({
+      registry: staleRegistry,
+      now: NOW,
+      loadCertificationFn: () => ({ ok: false as const, reason: 'missing' as const }),
+    });
+
+    const row = rows.find(r => r.model === 'gpt-4o');
+    assert.ok(row, 'gpt-4o row missing');
+    assert.equal(row.state, 'stale');
+  });
+
+  it('filters by provider', () => {
+    const registry = makeRegistry();
+    const rows = buildModelCertificationReport({
+      registry,
+      now: NOW,
+      loadCertificationFn: makeLoadFn(),
+      provider: 'openai',
+    });
+
+    assert.ok(rows.every(r => r.provider === 'openai'), 'all rows should be openai provider');
+    assert.ok(!rows.find(r => r.model === 'partial-model'), 'partial-model (openrouter) excluded');
+  });
+
+  it('filters by model', () => {
+    const registry = makeRegistry();
+    const rows = buildModelCertificationReport({
+      registry,
+      now: NOW,
+      loadCertificationFn: makeLoadFn(),
+      model: 'gpt-4o',
+    });
+
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].model, 'gpt-4o');
+  });
+
+  it('rows are sorted by (provider, model)', () => {
+    const registry = makeRegistry();
+    const rows = buildModelCertificationReport({
+      registry,
+      now: NOW,
+      loadCertificationFn: makeLoadFn(),
+    });
+
+    for (let i = 1; i < rows.length; i++) {
+      const a = rows[i - 1];
+      const b = rows[i];
+      const cmp = a.provider.localeCompare(b.provider) || a.model.localeCompare(b.model);
+      assert.ok(cmp <= 0, `rows out of order: ${a.provider}/${a.model} > ${b.provider}/${b.model}`);
+    }
+  });
+
+  it('workflow-phase artifact is eligible for all stages', () => {
+    const workflowArtifact = makeArtifact({ phase: 'workflow' });
+    const registry = makeRegistry();
+    const rows = buildModelCertificationReport({
+      registry,
+      now: NOW,
+      loadCertificationFn: () => ({ ok: true as const, artifact: workflowArtifact }),
+    });
+
+    const row = rows.find(r => r.model === 'gpt-4o');
+    assert.ok(row, 'gpt-4o row missing');
+    assert.equal(row.state, 'ready');
+    assert.deepEqual(row.eligibleStages.sort(), ['coder', 'planner', 'reviewer'].sort());
+  });
+});
+
+describe('serializeReport', () => {
+  it('produces stable JSON shape', () => {
+    const registry = makeRegistry();
+    const rows = buildModelCertificationReport({
+      registry,
+      now: NOW,
+      loadCertificationFn: makeLoadFn(),
+      model: 'gpt-4o',
+    });
+
+    const report = serializeReport(rows, NOW);
+    assert.equal(report.schemaVersion, 1);
+    assert.equal(report.generatedAt, NOW.toISOString());
+    assert.equal(report.models.length, 1);
+    assert.equal(report.models[0].model, 'gpt-4o');
+    assert.equal(report.models[0].state, 'ready');
+
+    const json = JSON.stringify(report);
+    assert.ok(json.includes('"schemaVersion":1'));
+    assert.ok(json.includes('"generatedAt"'));
+    assert.ok(json.includes('"models"'));
+  });
+});
+
+describe('renderReportTable', () => {
+  it('renders a table with headers and rows', () => {
+    const registry = makeRegistry();
+    const rows = buildModelCertificationReport({
+      registry,
+      now: NOW,
+      loadCertificationFn: makeLoadFn(),
+    });
+
+    const table = renderReportTable(rows);
+    assert.ok(table.includes('Provider'), 'should include Provider header');
+    assert.ok(table.includes('Model'), 'should include Model header');
+    assert.ok(table.includes('State'), 'should include State header');
+    assert.ok(table.includes('openai'), 'should include openai provider');
+    assert.ok(table.includes('ready'), 'should include ready state');
+  });
+
+  it('renders a message when no rows exist', () => {
+    const table = renderReportTable([]);
+    assert.ok(table.includes('No native-capable models'));
+  });
+});

@@ -72,6 +72,20 @@ ${GREEN}Commands:${NC}
              - Select one to decompose with Claude
              - Creates phased milestones and issues in Linear
 
+  ${CYAN}native-agent${NC}  Manage native provider certification and model reporting
+             Subcommands:
+               ${CYAN}wavemill native-agent models report${NC}
+                          List certification status, phase eligibility, suite
+                          version, age, and known limitations for all
+                          native-capable models. Never triggers live provider calls.
+                          Options: --json, --provider <p>, --model <m>, --repo <dir>
+               ${CYAN}wavemill native-agent certify${NC}
+                          Run the certification scenario harness for a specific
+                          provider/model/phase. Persists a NativeCertificationArtifact
+                          on success (non-dry-run). Options: --provider <p> (required),
+                          --model <m> (required), --phase <phase> (required),
+                          --dry-run, --json, --repo <dir>
+
   ${CYAN}scaffold${NC}  Scaffold reusable CI workflows into another repository
              Subcommands:
                ${CYAN}wavemill scaffold migrate-dryrun <target>${NC}
@@ -199,7 +213,7 @@ ${GREEN}Commands:${NC}
                ${CYAN}wavemill quota status${NC}
                ${CYAN}wavemill quota set sonnet degrading --reason "peak load"${NC}
                ${CYAN}wavemill quota clear sonnet${NC}
-               ${CYAN}wavemill quota estimate claude-sonnet-4-6${NC}
+               ${CYAN}wavemill quota estimate claude-sonnet-5${NC}
 
   ${CYAN}version${NC}   Show version information
   ${CYAN}help${NC}      Show this help message
@@ -725,7 +739,7 @@ try {
     },
     "evalsDir": ".wavemill/evals",
     "judge": {
-      "model": "claude-sonnet-4-6",
+      "model": "claude-sonnet-5",
       "provider": "anthropic"
     },
     "pricing": {
@@ -733,6 +747,7 @@ try {
       "claude-opus-4-6": { "inputCostPerMTok": 5, "outputCostPerMTok": 25, "cacheWriteCostPerMTok": 6.25, "cacheReadCostPerMTok": 0.50 },
       "claude-opus-4-8": { "inputCostPerMTok": 5, "outputCostPerMTok": 25, "cacheWriteCostPerMTok": 6.25, "cacheReadCostPerMTok": 0.50 },
       "claude-opus-4-7": { "inputCostPerMTok": 5, "outputCostPerMTok": 25, "cacheWriteCostPerMTok": 6.25, "cacheReadCostPerMTok": 0.50 },
+      "claude-sonnet-5": { "inputCostPerMTok": 3, "outputCostPerMTok": 15, "cacheWriteCostPerMTok": 3.75, "cacheReadCostPerMTok": 0.30 },
       "claude-sonnet-4-6": { "inputCostPerMTok": 3, "outputCostPerMTok": 15, "cacheWriteCostPerMTok": 3.75, "cacheReadCostPerMTok": 0.30 },
       "claude-sonnet-4-5-20250929": { "inputCostPerMTok": 3, "outputCostPerMTok": 15, "cacheWriteCostPerMTok": 3.75, "cacheReadCostPerMTok": 0.30 },
       "claude-haiku-4-5-20251001": { "inputCostPerMTok": 0.80, "outputCostPerMTok": 4, "cacheWriteCostPerMTok": 1.00, "cacheReadCostPerMTok": 0.08 },
@@ -781,8 +796,9 @@ try {
     "models": [
       "claude-fable-5",
       "claude-opus-4-8",
-      "claude-sonnet-4-6",
+      "claude-sonnet-5",
       "claude-sonnet-4-5-20250929",
+      "claude-sonnet-4-6",
       "claude-opus-4-7",
       "claude-opus-4-6",
       "claude-haiku-4-5-20251001",
@@ -794,7 +810,7 @@ try {
   },
   "router": {
     "enabled": true,
-    "defaultModel": "claude-sonnet-4-6",
+    "defaultModel": "claude-sonnet-5",
     "minRecords": 20,
     "minModels": 2,
     "models": [],
@@ -823,6 +839,7 @@ try {
       "claude-fable-5": "claude",
       "claude-opus-4-8": "claude",
       "claude-opus-4-7": "claude",
+      "claude-sonnet-5": "claude",
       "claude-sonnet-4-6": "claude",
       "claude-opus-4-6": "claude",
       "claude-sonnet-4-5-20250929": "claude",
@@ -1113,6 +1130,38 @@ run_plan() {
   exec "$plan_script" "$@"
 }
 
+run_native_agent() {
+  local subcommand="${1:-}"
+  shift || true
+
+  case "$subcommand" in
+    models)
+      local sub2="${1:-}"
+      shift || true
+      case "$sub2" in
+        report)
+          exec npx tsx "$TOOLS_DIR/native-agent-models-report.ts" "$@"
+          ;;
+        *)
+          echo "Usage: wavemill native-agent models report [--json] [--provider <p>] [--model <m>] [--repo <dir>]" >&2
+          exit 1
+          ;;
+      esac
+      ;;
+    certify)
+      exec npx tsx "$TOOLS_DIR/native-agent-certify.ts" "$@"
+      ;;
+    *)
+      echo "Usage: wavemill native-agent <subcommand> [options]" >&2
+      echo "" >&2
+      echo "Subcommands:" >&2
+      echo "  models report    List certification status for all native-capable models" >&2
+      echo "  certify          Run the certification harness for a provider/model/phase" >&2
+      exit 1
+      ;;
+  esac
+}
+
 run_scaffold() {
   local subcommand="${1:-}"
 
@@ -1364,6 +1413,10 @@ case "${1:-}" in
     run_preflight_checks
     shift
     run_plan "$@"
+    ;;
+  native-agent)
+    shift
+    run_native_agent "$@"
     ;;
   scaffold)
     shift

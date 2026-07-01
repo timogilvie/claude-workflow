@@ -70,7 +70,7 @@ function baseConfig(mode: 'auto' | 'heuristic' = 'auto') {
       agentMap: {
         'claude-opus-4-6': 'claude',
         'claude-opus-4-7': 'claude',
-        'claude-sonnet-4-6': 'claude',
+        'claude-sonnet-5': 'claude',
         'claude-sonnet-4-5-20250929': 'claude',
         'claude-haiku-4-5-20251001': 'claude',
         'gpt-5.3-codex': 'codex',
@@ -82,7 +82,7 @@ function baseConfig(mode: 'auto' | 'heuristic' = 'auto') {
       pricing: {
         'claude-opus-4-6': { inputCostPerMTok: 15, outputCostPerMTok: 75, cacheWriteCostPerMTok: 18.75, cacheReadCostPerMTok: 1.5 },
         'claude-opus-4-7': { inputCostPerMTok: 15, outputCostPerMTok: 75, cacheWriteCostPerMTok: 18.75, cacheReadCostPerMTok: 1.5 },
-        'claude-sonnet-4-6': { inputCostPerMTok: 3, outputCostPerMTok: 15, cacheWriteCostPerMTok: 3.75, cacheReadCostPerMTok: 0.3 },
+        'claude-sonnet-5': { inputCostPerMTok: 3, outputCostPerMTok: 15, cacheWriteCostPerMTok: 3.75, cacheReadCostPerMTok: 0.3 },
         'claude-sonnet-4-5-20250929': { inputCostPerMTok: 3, outputCostPerMTok: 15, cacheWriteCostPerMTok: 3.75, cacheReadCostPerMTok: 0.3 },
         'claude-haiku-4-5-20251001': { inputCostPerMTok: 0.8, outputCostPerMTok: 4, cacheWriteCostPerMTok: 1, cacheReadCostPerMTok: 0.08 },
         'gpt-5.3-codex': { inputCostPerMTok: 1.75, outputCostPerMTok: 14, cacheWriteCostPerMTok: 2.1875, cacheReadCostPerMTok: 0.44 },
@@ -189,7 +189,7 @@ describe('routing-policy ranking', () => {
       }),
     });
 
-    assert.equal(ranked[0].modelId, 'claude-sonnet-4-6');
+    assert.equal(ranked[0].modelId, 'claude-sonnet-5');
     assert.equal(ranked[0].viable, true);
     const haiku = ranked.find((candidate) => candidate.modelId === 'claude-haiku-4-5-20251001');
     assert.ok(haiku);
@@ -255,7 +255,7 @@ describe('routing-policy ranking', () => {
       quotaState: makeSnapshot(),
     });
 
-    const sonnet = ranked.find((candidate) => candidate.modelId === 'claude-sonnet-4-6');
+    const sonnet = ranked.find((candidate) => candidate.modelId === 'claude-sonnet-5');
     assert.ok(sonnet);
     assert.equal(sonnet.viable, false);
     assert.equal(sonnet.exclusionReason, 'below-difficulty-floor');
@@ -273,7 +273,7 @@ describe('routing-policy ranking', () => {
     assert.ok(frontier);
     assert.equal(frontier.viable, false);
     assert.equal(frontier.exclusionReason, 'exceeds-cost-tier');
-    assert.equal(ranked[0].modelId, 'claude-sonnet-4-6');
+    assert.equal(ranked[0].modelId, 'claude-sonnet-5');
   });
 
   it('applies minimum quality thresholds after floor and cost checks', () => {
@@ -299,7 +299,7 @@ describe('routing-policy ranking', () => {
       minQualityScore: 87,
     });
 
-    assert.equal(ranked[0].modelId, 'claude-sonnet-4-6');
+    assert.equal(ranked[0].modelId, 'claude-sonnet-5');
     assert.equal(ranked[0].viable, true);
     const sonnet45 = ranked.find((candidate) => candidate.modelId === 'claude-sonnet-4-5-20250929');
     assert.ok(sonnet45);
@@ -324,7 +324,7 @@ describe('routing-policy ranking', () => {
           weaknesses: ['api dependency'],
           qualityScores: { planning: 88, coding: 82, review: 85, classify: 70, routing: 72 },
         },
-        'claude-sonnet-4-6': {
+        'claude-sonnet-5': {
           vendor: 'anthropic' as const,
           class: 'strong_generalist' as const,
           strengths: ['balanced'],
@@ -340,24 +340,24 @@ describe('routing-policy ranking', () => {
         },
       },
       ladders: {
-        coding: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        planning: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        review: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-7', 'gpt-5.4'],
-        classify: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'gpt-5.4'],
+        coding: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
+        planning: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
+        review: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
+        routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-5', 'claude-opus-4-7', 'gpt-5.4'],
+        classify: ['claude-haiku-4-5-20251001', 'claude-sonnet-5', 'gpt-5.4'],
       },
     };
 
     const ranked = resolveModel({
       taskType: 'coding',
       difficulty: 'hard',
-      quotaState: makeSnapshotWithCustomModels(['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'], { 'claude-opus-4-7': 'degrading' }),
+      quotaState: makeSnapshotWithCustomModels(['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'], { 'claude-opus-4-7': 'degrading' }),
       repoDir: undefined,
     }, testRegistry);
 
     assert.equal(ranked[0].modelId, 'gpt-5.4');
     assert.equal(ranked[0].viable, true);
-    const sonnet = ranked.find((candidate) => candidate.modelId === 'claude-sonnet-4-6');
+    const sonnet = ranked.find((candidate) => candidate.modelId === 'claude-sonnet-5');
     assert.ok(sonnet);
     assert.equal(sonnet.viable, false);
     assert.equal(sonnet.exclusionReason, 'below-frontier-substitute');
@@ -380,7 +380,7 @@ describe('routing-policy ranking', () => {
           weaknesses: ['api dependency'],
           qualityScores: { planning: 88, coding: 82, review: 85, classify: 70, routing: 72 },
         },
-        'claude-sonnet-4-6': {
+        'claude-sonnet-5': {
           vendor: 'anthropic' as const,
           class: 'strong_generalist' as const,
           strengths: ['balanced'],
@@ -396,24 +396,24 @@ describe('routing-policy ranking', () => {
         },
       },
       ladders: {
-        coding: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        planning: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        review: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-7', 'gpt-5.4'],
-        classify: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'gpt-5.4'],
+        coding: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
+        planning: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
+        review: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
+        routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-5', 'claude-opus-4-7', 'gpt-5.4'],
+        classify: ['claude-haiku-4-5-20251001', 'claude-sonnet-5', 'gpt-5.4'],
       },
     };
 
     const ranked = resolveModel({
       taskType: 'coding',
       difficulty: 'hard',
-      quotaState: makeSnapshotWithCustomModels(['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'], { 'claude-opus-4-7': 'exhausted' }),
+      quotaState: makeSnapshotWithCustomModels(['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'], { 'claude-opus-4-7': 'exhausted' }),
       repoDir: undefined,
     }, testRegistry);
 
     assert.equal(ranked[0].modelId, 'gpt-5.4');
     assert.equal(ranked[0].viable, true);
-    const sonnet = ranked.find((candidate) => candidate.modelId === 'claude-sonnet-4-6');
+    const sonnet = ranked.find((candidate) => candidate.modelId === 'claude-sonnet-5');
     assert.ok(sonnet);
     assert.equal(sonnet.viable, false);
     assert.equal(sonnet.exclusionReason, 'below-frontier-substitute');
@@ -436,7 +436,7 @@ describe('routing-policy ranking', () => {
           weaknesses: ['api dependency'],
           qualityScores: { planning: 88, coding: 82, review: 85, classify: 70, routing: 72 },
         },
-        'claude-sonnet-4-6': {
+        'claude-sonnet-5': {
           vendor: 'anthropic' as const,
           class: 'strong_generalist' as const,
           strengths: ['balanced'],
@@ -452,23 +452,23 @@ describe('routing-policy ranking', () => {
         },
       },
       ladders: {
-        coding: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        planning: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        review: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-7', 'gpt-5.4'],
-        classify: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'gpt-5.4'],
+        coding: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
+        planning: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
+        review: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
+        routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-5', 'claude-opus-4-7', 'gpt-5.4'],
+        classify: ['claude-haiku-4-5-20251001', 'claude-sonnet-5', 'gpt-5.4'],
       },
     };
 
     const ranked = resolveModel({
       taskType: 'coding',
       difficulty: 'hard',
-      quotaState: makeSnapshotWithCustomModels(['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'], { 'claude-opus-4-7': 'degrading', 'gpt-5.4': 'degrading' }),
+      quotaState: makeSnapshotWithCustomModels(['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'], { 'claude-opus-4-7': 'degrading', 'gpt-5.4': 'degrading' }),
       repoDir: undefined,
     }, testRegistry);
 
     // Sonnet should be viable when both frontiers are degrading
-    const sonnet = ranked.find((candidate) => candidate.modelId === 'claude-sonnet-4-6');
+    const sonnet = ranked.find((candidate) => candidate.modelId === 'claude-sonnet-5');
     assert.ok(sonnet);
     assert.equal(sonnet.viable, true);
   });
@@ -490,7 +490,7 @@ describe('routing-policy ranking', () => {
           weaknesses: ['api dependency'],
           qualityScores: { planning: 88, coding: 82, review: 85, classify: 70, routing: 72 },
         },
-        'claude-sonnet-4-6': {
+        'claude-sonnet-5': {
           vendor: 'anthropic' as const,
           class: 'strong_generalist' as const,
           strengths: ['balanced'],
@@ -506,18 +506,18 @@ describe('routing-policy ranking', () => {
         },
       },
       ladders: {
-        coding: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        planning: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        review: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-7', 'gpt-5.4'],
-        classify: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'gpt-5.4'],
+        coding: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
+        planning: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
+        review: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
+        routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-5', 'claude-opus-4-7', 'gpt-5.4'],
+        classify: ['claude-haiku-4-5-20251001', 'claude-sonnet-5', 'gpt-5.4'],
       },
     };
 
     const ranked = resolveModel({
       taskType: 'coding',
       difficulty: 'moderate',
-      quotaState: makeSnapshotWithCustomModels(['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001']),
+      quotaState: makeSnapshotWithCustomModels(['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-5', 'claude-haiku-4-5-20251001']),
       repoDir: undefined,
     }, testRegistry);
 
@@ -543,7 +543,7 @@ describe('routing-policy ranking', () => {
           weaknesses: ['api dependency'],
           qualityScores: { planning: 88, coding: 82, review: 85, classify: 70, routing: 72 },
         },
-        'claude-sonnet-4-6': {
+        'claude-sonnet-5': {
           vendor: 'anthropic' as const,
           class: 'strong_generalist' as const,
           strengths: ['balanced'],
@@ -559,18 +559,18 @@ describe('routing-policy ranking', () => {
         },
       },
       ladders: {
-        coding: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        planning: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        review: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-7', 'gpt-5.4'],
-        classify: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'gpt-5.4'],
+        coding: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
+        planning: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
+        review: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
+        routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-5', 'claude-opus-4-7', 'gpt-5.4'],
+        classify: ['claude-haiku-4-5-20251001', 'claude-sonnet-5', 'gpt-5.4'],
       },
     };
 
     const ranked = resolveModel({
       taskType: 'coding',
       difficulty: 'hard',
-      quotaState: makeSnapshotWithCustomModels(['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'], { 'claude-opus-4-7': 'degrading' }),
+      quotaState: makeSnapshotWithCustomModels(['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'], { 'claude-opus-4-7': 'degrading' }),
       repoDir: undefined,
     }, testRegistry);
 
@@ -599,7 +599,7 @@ describe('routing-policy ranking', () => {
           weaknesses: ['api dependency'],
           qualityScores: { planning: 88, coding: 82, review: 85, classify: 70, routing: 72 },
         },
-        'claude-sonnet-4-6': {
+        'claude-sonnet-5': {
           vendor: 'anthropic' as const,
           class: 'strong_generalist' as const,
           strengths: ['balanced'],
@@ -615,23 +615,23 @@ describe('routing-policy ranking', () => {
         },
       },
       ladders: {
-        coding: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        planning: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        review: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-7', 'gpt-5.4'],
-        classify: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'gpt-5.4'],
+        coding: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
+        planning: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
+        review: ['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
+        routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-5', 'claude-opus-4-7', 'gpt-5.4'],
+        classify: ['claude-haiku-4-5-20251001', 'claude-sonnet-5', 'gpt-5.4'],
       },
     };
 
     const ranked = resolveModel({
       taskType: 'coding',
       difficulty: 'critical',
-      quotaState: makeSnapshotWithCustomModels(['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'], { 'claude-opus-4-7': 'exhausted', 'gpt-5.4': 'exhausted' }),
+      quotaState: makeSnapshotWithCustomModels(['claude-opus-4-7', 'gpt-5.4', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'], { 'claude-opus-4-7': 'exhausted', 'gpt-5.4': 'exhausted' }),
       repoDir: undefined,
     }, testRegistry);
 
     // Sonnet should be viable when all frontiers are exhausted
-    const sonnet = ranked.find((candidate) => candidate.modelId === 'claude-sonnet-4-6');
+    const sonnet = ranked.find((candidate) => candidate.modelId === 'claude-sonnet-5');
     assert.ok(sonnet);
     assert.equal(sonnet.viable, true);
   });
@@ -717,7 +717,7 @@ describe('routing-policy integration', () => {
         predictions: {
           recommended_strategy: {
             planner_model: 'claude-opus-4-7',
-            coder_model: 'claude-sonnet-4-6',
+            coder_model: 'claude-sonnet-5',
             reviewer_model: 'claude-opus-4-6',
             plan_depth: 'medium',
             code_depth: 'medium',
@@ -785,7 +785,7 @@ describe('routing-policy integration', () => {
     const registry = {
       models: {
         'slow-no-tools': {
-          ...DEFAULT_MODEL_REGISTRY.models['claude-sonnet-4-6'],
+          ...DEFAULT_MODEL_REGISTRY.models['claude-sonnet-5'],
           qualityScores: { routing: 70, planning: 90, coding: 95, review: 82, classify: 60 },
           contextWindowTokens: 128_000,
           toolSupport: 'none' as const,

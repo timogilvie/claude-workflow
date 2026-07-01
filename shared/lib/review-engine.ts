@@ -96,7 +96,7 @@ interface NativeReviewModule {
 // Constants
 // ────────────────────────────────────────────────────────────────
 
-const DEFAULT_MODEL = 'claude-sonnet-4-6';
+const DEFAULT_MODEL = 'claude-sonnet-5';
 const DEFAULT_PROVIDER = 'claude-cli';
 const DEFAULT_TIMEOUT_MS = 300_000; // 5 minutes (claude -p with JSON output is slow)
 const DEFAULT_MAX_RETRIES = 1;
