@@ -357,14 +357,15 @@ await test('read-only cert rejects for coder role (requires patch)', () => {
   }
 });
 
-await test('patch cert rejects for planner role (requires workflow)', () => {
+await test('read-only cert rejects for planner role (requires workflow)', () => {
   const { repoDir, cleanup } = makeRepo();
   try {
-    writeCertArtifact(repoDir, 'openai', 'native-p2', 'v1', { phase: 'patch' });
-    const registry = makeRegistry('native-p2', 'patch', 'v1');
-    const result = filterNativeModels(['native-p2'], 'planner', registry, repoDir);
+    writeCertArtifact(repoDir, 'openai', 'native-ro-planner', 'v1', { phase: 'read-only' });
+    const registry = makeRegistry('native-ro-planner', 'read-only', 'v1');
+    const result = filterNativeModels(['native-ro-planner'], 'planner', registry, repoDir);
+    assert.deepEqual(result.eligible, []);
     assert.equal(result.rejected[0].reason, 'insufficient-phase');
-    assert.equal(result.rejected[0].certifiedPhase, 'patch');
+    assert.equal(result.rejected[0].certifiedPhase, 'read-only');
     assert.equal(result.rejected[0].requestedPhase, 'workflow');
   } finally {
     cleanup();

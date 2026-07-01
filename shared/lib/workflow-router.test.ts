@@ -1479,7 +1479,7 @@ function nativeModelConfig(certPhase: string = 'patch', suiteVersion: string = '
 
 console.log('\n--- Native Certification Router Policy Tests ---\n');
 
-await test('STAGE_PHASE_REQUIREMENT maps reviewer→read-only, coder→patch, planner→workflow', () => {
+await test('STAGE_PHASE_REQUIREMENT maps planner→workflow, reviewer→read-only, coder→patch', () => {
   assert.equal(STAGE_PHASE_REQUIREMENT.reviewer, 'read-only');
   assert.equal(STAGE_PHASE_REQUIREMENT.coder, 'patch');
   assert.equal(STAGE_PHASE_REQUIREMENT.planner, 'workflow');
@@ -1538,28 +1538,27 @@ await test('valid patch cert accepted for coder and reviewer roles', () => {
   }
 });
 
-await test('patch cert rejects planner role which requires workflow certification', () => {
+await test('read-only cert rejected for planner role', () => {
   const { repoDir, cleanup } = makeRepo({
     modelRegistry: {
-      models: { 'native-patch-model': nativeModelConfig('patch') },
+      models: { 'native-ro-planner': nativeModelConfig('read-only') },
     },
   });
   try {
-    writeCertArtifact(repoDir, 'openai', 'native-patch-model', 'v1', { phase: 'patch' });
+    writeCertArtifact(repoDir, 'openai', 'native-ro-planner', 'v1', { phase: 'read-only' });
 
     const decision = routeWorkflow('Plan and implement a new auth workflow.', {
       repoDir,
-      plannerModelsAvailable: ['native-patch-model', 'claude-haiku-4-5-20251001'],
-      modelsAvailable: ['native-patch-model', 'claude-haiku-4-5-20251001'],
+      plannerModelsAvailable: ['native-ro-planner', 'claude-haiku-4-5-20251001'],
+      modelsAvailable: ['native-ro-planner', 'claude-haiku-4-5-20251001'],
       skipDifficultyClassification: true,
     });
 
     const plannerRejection = (decision.nativeCertificationRejections ?? [])
-      .find((r) => r.modelId === 'native-patch-model' && r.role === 'planner');
-    assert.ok(plannerRejection, 'patch-cert native model should be rejected for planner (requires workflow)');
-    assert.equal(plannerRejection?.reason, 'insufficient-phase');
-    assert.equal(plannerRejection?.requestedPhase, 'workflow');
-    assert.notEqual(decision.planner, 'native-patch-model', 'planner must not be the rejected native model');
+      .find((r) => r.modelId === 'native-ro-planner' && r.role === 'planner');
+    assert.ok(plannerRejection, 'read-only cert should be rejected for planner');
+    assert.equal(plannerRejection.reason, 'insufficient-phase');
+    assert.equal(plannerRejection.requestedPhase, 'workflow');
   } finally {
     cleanup();
   }

@@ -2,15 +2,12 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { registerScriptedPiProvider } from './provider.ts';
 import { launchNativePlanning } from './launch-planning.ts';
+import { parseTranscriptJsonl } from './transcript.ts';
 import type { ToolDescriptor } from './tools/types.ts';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const REPO_DIR = resolve(__dirname, '../../..');
 
 let apiSeq = 0;
 function uniqueApi(label: string): string {
@@ -126,7 +123,7 @@ describe('launchNativePlanning', () => {
         issue: 'HOK-2313',
         slug: 'demo',
         wtDir,
-        repoDir: REPO_DIR,
+        repoDir: wtDir,
         title: 'Wire native planning',
         loopModelOverride: scriptedModel(api),
         runTsxCommand: stubRunTsxCommand(),
@@ -146,6 +143,33 @@ describe('launchNativePlanning', () => {
       assert.equal(hook.agent, 'native');
       assert.equal(hook.event, 'process_exit');
       assert.equal(hook.detail, 'planning_completed');
+
+      const stageResult = JSON.parse(
+        readFileSync(join(featureDir, '.planning-result.json'), 'utf-8'),
+      ) as Record<string, unknown>;
+      assert.equal(stageResult.status, 'completed');
+      assert.equal(stageResult.agent, 'native');
+      assert.equal(stageResult.model, `scripted:${api}`);
+      assert.match(String(stageResult.notes), /Transcript:/);
+      assert.match(String(stageResult.notes), /Usage:/);
+      assert.deepEqual(stageResult.artifacts, {
+        type: 'planning',
+        planFile: 'plan.md',
+        taskPacketFile: 'task-packet.md',
+      });
+
+      const transcriptPath = join(
+        wtDir,
+        '.wavemill',
+        'runs',
+        'sess',
+        'native-sessions',
+        'sess-planning-demo.jsonl',
+      );
+      assert.ok(existsSync(transcriptPath), 'expected native planning transcript');
+      const transcript = parseTranscriptJsonl(readFileSync(transcriptPath, 'utf-8'));
+      assert.equal(transcript[0]?.type, 'session_started');
+      assert.equal(transcript.at(-1)?.type, 'session_ended');
     } finally {
       cleanup(wtDir);
     }
@@ -181,7 +205,7 @@ describe('launchNativePlanning', () => {
         issue: 'HOK-2313',
         slug: 'demo',
         wtDir,
-        repoDir: REPO_DIR,
+        repoDir: wtDir,
         loopModelOverride: scriptedModel(api),
         extraDescriptors: [makeMutationTool(executed)],
         runTsxCommand: stubRunTsxCommand(),
@@ -227,7 +251,7 @@ describe('launchNativePlanning', () => {
         issue: 'HOK-2313',
         slug: 'demo',
         wtDir,
-        repoDir: REPO_DIR,
+        repoDir: wtDir,
         loopModelOverride: scriptedModel(api),
         runTsxCommand: stubRunTsxCommand(),
       });
@@ -255,7 +279,7 @@ describe('launchNativePlanning', () => {
           issue: 'HOK-2313',
           slug: 'demo',
           wtDir,
-          repoDir: REPO_DIR,
+          repoDir: wtDir,
           hookPath,
           loopModelOverride: scriptedModel(api),
           runTsxCommand: stubRunTsxCommand(),
@@ -288,7 +312,7 @@ describe('launchNativePlanning', () => {
           issue: 'HOK-2313',
           slug: 'demo',
           wtDir,
-          repoDir: REPO_DIR,
+          repoDir: wtDir,
           hookPath,
           loopModelOverride: scriptedModel(api),
           runTsxCommand: stubRunTsxCommand(),
@@ -321,7 +345,7 @@ describe('launchNativePlanning', () => {
           issue: 'HOK-2313',
           slug: 'demo',
           wtDir,
-          repoDir: REPO_DIR,
+          repoDir: wtDir,
           phase: 'coding',
           loopModelOverride: scriptedModel(api),
         }),

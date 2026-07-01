@@ -311,6 +311,10 @@ export function aggregateReport(
   };
 
   const countsByCategory: Record<ScenarioCategory, number> = {
+    budget: 0,
+    cleanup: 0,
+    policy: 0,
+    provenance: 0,
     tool: 0,
     usage: 0,
     transcript: 0,

@@ -29,11 +29,23 @@ ScenarioClassification = 'deterministic' | 'live-judged'
 ### Category
 
 ```
-ScenarioCategory = 'tool' | 'usage' | 'transcript' | 'phase'
+ScenarioCategory =
+  | 'budget'
+  | 'cleanup'
+  | 'policy'
+  | 'provenance'
+  | 'tool'
+  | 'usage'
+  | 'transcript'
+  | 'phase'
 ```
 
 | Category | Tests |
 |---|---|
+| `budget` | Budget and cost-accounting stop behavior |
+| `cleanup` | Cleanup and rollback behavior after workflow abort/timeout |
+| `policy` | Phase-policy denial for out-of-phase mutation attempts |
+| `provenance` | Runtime/tool-set resource-manifest provenance records |
 | `tool` | Compat fixture lookup, `validateToolCompat` capability check |
 | `usage` | Token mapping from scripted provider turns |
 | `transcript` | `TranscriptWriter` JSONL correctness |
@@ -67,6 +79,27 @@ interface CertificationScenario {
 | `phase.read-only.satisfies-read-only` | `phase` | `phaseSatisfies('read-only', 'read-only')` and `phaseSatisfies('patch', 'read-only')` are true; `phaseSatisfies('read-only', 'patch')` is false |
 | `phase.fixture.persistence-roundtrip` | `phase` | `writeCertification` + `checkCertificationEligibility` round-trip returns `eligible: true` |
 | `live.judge.tool-output-summary-quality` | `tool` | Live-judged placeholder — always returns `not-run` |
+| `workflow.planning.tool-availability` | `tool` | Planning workflow exposes required read-only planning/artifact tools and no mutation tools |
+| `workflow.transcript-provenance.manifest-records` | `provenance` | Workflow certification writes transcript start/end events and runtime/tool-set provenance in the resource manifest |
+| `workflow.budget.cost-limit` | `budget` | Scripted workflow loop stops with `cost_limit` after exceeding `maxCostUsd` |
+| `workflow.cleanup.rollback-on-timeout` | `cleanup` | Cleanup rolls back tracked workflow mutations and leaves the tree clean after timeout |
+| `workflow.policy.denies-out-of-phase-mutation` | `policy` | Planning phase denies a mutation tool whose allowed phase is coding |
+
+### Workflow Certification
+
+Workflow certification is the prerequisite for selecting a native model in planner/workflow routing. A `--phase workflow` run includes lower-phase scenarios, but the CLI writes a `phase: "workflow"` artifact only when deterministic workflow-phase scenarios are present in the catalog and their workflow results pass. Passing read-only scenarios alone cannot promote a model to workflow certification.
+
+The workflow scenarios prove that Wavemill-owned planner/workflow mechanics are wired correctly for a provider/model entry:
+
+- Planning exposes the expected read-only and artifact-inspection tools.
+- Mutation tools remain unavailable during planning unless a later phase explicitly allows them.
+- Transcript start/end records and resource-manifest runtime/tool-set provenance are emitted for the workflow phase.
+- Budget accounting can stop a scripted workflow run at the configured cost limit.
+- Cleanup can roll back tracked workflow mutations after timeout.
+
+Workflow certification does not prove model quality, plan usefulness, broad OpenRouter catalog compatibility, coding safety, or provider uptime. It also does not automatically expand native usage to every OpenRouter model. Each model must still be registered, configured for native use, and hold a fresh artifact whose provider, model, suite version, phase, TTL, and scenario results satisfy router checks.
+
+Existing read-only certification behavior remains backward compatible: the default suite version stays `v1`, read-only artifacts continue to certify read-only phases, and lower-phase artifacts still fail closed when a workflow phase is required.
 
 ### Catalog integrity rules
 
@@ -77,7 +110,8 @@ Enforced by `scenarios.test.ts` and checked at CI:
 - Every `deterministic` scenario has an `assertion` function.
 - No `live-judged` scenario has an `assertion` function.
 - Every `phase` value is in `PHASE_ORDER`.
-- Every category (`tool`, `usage`, `transcript`, `phase`) has ≥1 deterministic scenario.
+- Every category (`budget`, `cleanup`, `policy`, `provenance`, `tool`, `usage`, `transcript`, `phase`) has ≥1 deterministic scenario.
+- Workflow scenarios cover planning tool availability, workflow transcript/provenance, budget behavior, cleanup behavior, and denial of out-of-phase mutation.
 
 ### Adding a scenario
 
@@ -277,6 +311,9 @@ wavemill native-agent certify --provider openai --model gpt-4o --phase read-only
 
 # OpenRouter example
 wavemill native-agent certify --provider openrouter --model openai/gpt-4o --phase read-only --dry-run
+
+# Workflow certification dry run — validates planner/workflow scenarios without persisting
+wavemill native-agent certify --provider openrouter --model qwen/qwen3-coder --phase workflow --dry-run
 ```
 
 **Flags:**

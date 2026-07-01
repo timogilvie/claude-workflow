@@ -101,13 +101,23 @@ export async function certifyNativeAgent(opts: CertifyOptions): Promise<CertifyR
   };
 
   const report = await runScenariosFn(runOpts);
+  const requestedPhaseDeterministicResults = report.results.filter(
+    (result) => result.phase === opts.phase && result.classification === 'deterministic',
+  );
+  const requestedPhasePassed =
+    requestedPhaseDeterministicResults.length > 0
+    && requestedPhaseDeterministicResults.every((result) => result.status === 'pass');
   const phaseCoverageLimitation = hasRequestedPhaseScenario
-    ? undefined
+    ? (
+        requestedPhasePassed
+          ? undefined
+          : `Certification suite ${suiteVersion} did not produce passing deterministic ${opts.phase} scenario results; lower-phase results cannot certify ${opts.phase}.`
+      )
     : `Certification suite ${suiteVersion} has no ${opts.phase} scenarios; lower-phase results cannot certify ${opts.phase}.`;
   const knownLimitations = phaseCoverageLimitation
     ? [...report.knownLimitations, phaseCoverageLimitation]
     : report.knownLimitations;
-  const liveCertifiable = report.liveCertifiable && hasRequestedPhaseScenario;
+  const liveCertifiable = report.liveCertifiable && hasRequestedPhaseScenario && requestedPhasePassed;
 
   let artifactPath: string | undefined;
 
@@ -119,7 +129,9 @@ export async function certifyNativeAgent(opts: CertifyOptions): Promise<CertifyR
       phase: opts.phase,
       suiteVersion,
       certifiedAt: now().toISOString(),
-      scenarios: report.results.map(toArtifactScenario),
+      scenarios: report.results
+        .filter((result) => result.status !== 'not-run')
+        .map(toArtifactScenario),
       ...(knownLimitations.length > 0 ? { knownLimitations } : {}),
     };
     artifactPath = writeCertificationFn(opts.repoDir, artifact);

@@ -15,7 +15,8 @@
  * @module native-agent/certification/scenarios
  */
 
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -27,17 +28,26 @@ import {
 } from './schema.ts';
 import { checkCertificationEligibility } from '../certification/loader.ts';
 import { writeCertification } from '../certification/store.ts';
+import { createCleanupTracker, runCleanup } from '../cleanup.ts';
 import { findFixture } from '../fixtures/compat/index.ts';
+import { runWavemillLoop } from '../loop.ts';
 import {
   createPiToolCallingProvider,
   registerScriptedPiProvider,
   type ProviderConversationState,
 } from '../provider.ts';
+import { registerNativeRuntime } from '../../resource-adapters/native-runtime-adapter.ts';
+import { closeManifest, getManifest, openManifest, recordUse } from '../../resource-manifest.ts';
 import {
   TranscriptWriter,
   type TranscriptSessionStarted,
   type TranscriptSessionEnded,
 } from '../transcript.ts';
+import { createArtifactTools } from '../tools/artifacts.ts';
+import { createGitTools } from '../tools/git.ts';
+import { evaluateBeforeToolCallPolicy } from '../tools/policies.ts';
+import { createReadOnlyTools } from '../tools/read-only.ts';
+import { createToolRegistry } from '../tools/registry.ts';
 import { validateToolCompat } from '../tool-compat-validator.ts';
 import type { ModelRegistry, NativeProviderName, PiTransportKind } from '../../model-registry.ts';
 
@@ -47,7 +57,15 @@ import type { ModelRegistry, NativeProviderName, PiTransportKind } from '../../m
 
 export type ScenarioClassification = 'deterministic' | 'live-judged';
 
-export type ScenarioCategory = 'tool' | 'usage' | 'transcript' | 'phase';
+export type ScenarioCategory =
+  | 'budget'
+  | 'cleanup'
+  | 'policy'
+  | 'provenance'
+  | 'tool'
+  | 'usage'
+  | 'transcript'
+  | 'phase';
 
 export type HarnessUnsupportedReason =
   | 'fixture-not-found'
@@ -95,6 +113,7 @@ export interface CertificationScenario {
 
 let _usageApiSeq = 0;
 let _transcriptSeq = 0;
+let _workflowSeq = 0;
 
 // ---------------------------------------------------------------------------
 // Concrete assertions
@@ -324,6 +343,213 @@ async function assertPhasePersistenceRoundtrip(ctx: ScenarioContext): Promise<Sc
   }
 }
 
+async function assertWorkflowPlanningToolAvailability(_ctx: ScenarioContext): Promise<ScenarioAssertionOutcome> {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'native-workflow-tools-'));
+  try {
+    mkdirSync(join(tmpDir, 'features', 'demo'), { recursive: true });
+    writeFileSync(
+      join(tmpDir, 'features', 'demo', 'task-packet.md'),
+      '## 1. Objective\n\nVerify workflow tools.\n',
+      'utf8',
+    );
+
+    const registry = createToolRegistry([
+      ...createReadOnlyTools(tmpDir),
+      ...createGitTools(tmpDir),
+      ...createArtifactTools(tmpDir),
+    ]);
+    const planningTools = registry.list({ phase: 'planning' });
+    const names = new Set(planningTools.map((tool) => tool.name));
+
+    for (const required of ['read_file', 'git_status', 'read_task_packet']) {
+      if (!names.has(required)) {
+        return { kind: 'fail', detail: `Expected planning tool "${required}" to be available` };
+      }
+    }
+
+    const mutation = planningTools.find((tool) => tool.class === 'mutation');
+    if (mutation) {
+      return {
+        kind: 'fail',
+        detail: `Mutation tool "${mutation.name}" should not be available during planning workflow`,
+      };
+    }
+
+    return { kind: 'pass' };
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
+async function assertWorkflowTranscriptAndProvenance(ctx: ScenarioContext): Promise<ScenarioAssertionOutcome> {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'native-workflow-provenance-'));
+  const sessionId = `workflow-cert-${++_workflowSeq}`;
+  try {
+    const transcriptPath = join(tmpDir, 'transcript.jsonl');
+    const writer = new TranscriptWriter({
+      sessionId,
+      model: ctx.model,
+      api: ctx.transport,
+      provider: ctx.provider,
+      path: transcriptPath,
+      worktreePath: tmpDir,
+    });
+    const now = Date.now();
+    writer.write({
+      seq: 0,
+      sessionId,
+      timestamp: now,
+      type: 'session_started',
+      model: ctx.model,
+      api: ctx.transport,
+      provider: ctx.provider,
+      worktreePath: tmpDir,
+    });
+    writer.write({
+      seq: 1,
+      sessionId,
+      timestamp: now,
+      type: 'session_ended',
+      messageCount: 0,
+    });
+
+    openManifest(sessionId, { workflowType: 'certification', repoDir: tmpDir });
+    const refs = registerNativeRuntime({
+      phase: 'workflow',
+      provider: ctx.provider,
+      model: ctx.model,
+      api: ctx.transport,
+      tools: [
+        { name: 'read_file', class: 'read-only' },
+        { name: 'git_status', class: 'read-only' },
+      ],
+      repoDir: tmpDir,
+    });
+    recordUse(sessionId, 'workflow', refs.runtime, tmpDir);
+    recordUse(sessionId, 'workflow', refs.toolSet, tmpDir);
+    closeManifest(sessionId, { status: 'completed', repoDir: tmpDir });
+
+    const transcript = readFileSync(transcriptPath, 'utf8');
+    if (!transcript.includes('"session_started"') || !transcript.includes('"session_ended"')) {
+      return { kind: 'fail', detail: 'Expected transcript to include session_started and session_ended events' };
+    }
+
+    const manifest = getManifest(sessionId, tmpDir);
+    const workflowRefs = manifest?.phases.workflow ?? [];
+    if (manifest?.status !== 'completed') {
+      return { kind: 'fail', detail: `Expected completed manifest, got ${String(manifest?.status)}` };
+    }
+    if (workflowRefs.length < 2) {
+      return {
+        kind: 'fail',
+        detail: `Expected workflow manifest to record runtime and tool-set refs, got ${workflowRefs.length}`,
+      };
+    }
+
+    return { kind: 'pass' };
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
+async function assertWorkflowBudgetCostLimit(ctx: ScenarioContext): Promise<ScenarioAssertionOutcome> {
+  const api = `cert-workflow-budget-${++_workflowSeq}`;
+  registerScriptedPiProvider({
+    api,
+    provider: ctx.provider,
+    turns: [
+      {
+        content: [{ type: 'text', text: 'budget check complete' }],
+        usage: { input: 1_000, output: 0 },
+        stopReason: 'stop',
+      },
+    ],
+  });
+
+  const result = await runWavemillLoop({
+    model: { id: ctx.model, name: ctx.model, api, provider: ctx.provider },
+    context: {
+      systemPrompt: 'Return a final response.',
+      messages: [{ role: 'user', content: 'trigger budget accounting', timestamp: 0 }],
+      tools: [],
+    },
+    convertToLlm: (messages) => messages as never,
+    budget: { maxCostUsd: 0.0005 },
+    modelPricing: { inputCostPerMTok: 1, outputCostPerMTok: 1 },
+  });
+
+  if (result.stopReason !== 'cost_limit') {
+    return { kind: 'fail', detail: `Expected stopReason=cost_limit, got ${result.stopReason}` };
+  }
+  if (result.totalCostUsd < 0.0005) {
+    return { kind: 'fail', detail: `Expected totalCostUsd to exceed budget, got ${result.totalCostUsd}` };
+  }
+
+  return { kind: 'pass' };
+}
+
+async function assertWorkflowCleanupRollback(_ctx: ScenarioContext): Promise<ScenarioAssertionOutcome> {
+  const repo = mkdtempSync(join(tmpdir(), 'native-workflow-cleanup-'));
+  try {
+    execFileSync('git', ['init'], { cwd: repo, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.email', 'cert@example.test'], { cwd: repo, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.name', 'Certification Harness'], { cwd: repo, stdio: 'ignore' });
+    writeFileSync(join(repo, 'plan.md'), 'original\n', 'utf8');
+    execFileSync('git', ['add', 'plan.md'], { cwd: repo, stdio: 'ignore' });
+    execFileSync('git', ['commit', '-m', 'init'], { cwd: repo, stdio: 'ignore' });
+
+    const tracker = createCleanupTracker();
+    tracker.recordMutation({ tool: 'write_artifact', status: 'completed', path: 'plan.md' });
+    tracker.recordPatchSnapshots([{
+      path: 'plan.md',
+      originalDiskText: 'original\n',
+      postImage: 'changed\n',
+    }]);
+    writeFileSync(join(repo, 'plan.md'), 'changed\n', 'utf8');
+
+    const report = await runCleanup(tracker, { worktreePath: repo, reason: 'timeout' });
+    const current = readFileSync(join(repo, 'plan.md'), 'utf8');
+    if (current !== 'original\n') {
+      return { kind: 'fail', detail: 'Expected cleanup to roll back changed plan.md' };
+    }
+    if (report.cleanupDecision !== 'rolled-back' || report.finalTreeState !== 'clean') {
+      return {
+        kind: 'fail',
+        detail: `Expected rolled-back/clean cleanup, got ${report.cleanupDecision}/${report.finalTreeState}`,
+      };
+    }
+
+    return { kind: 'pass' };
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+}
+
+async function assertWorkflowDeniesOutOfPhaseMutation(_ctx: ScenarioContext): Promise<ScenarioAssertionOutcome> {
+  const decision = evaluateBeforeToolCallPolicy({
+    phase: 'planning',
+    worktreePath: '/repo',
+    registry: [{
+      name: 'write_artifact',
+      description: 'Write a Wavemill-owned artifact.',
+      class: 'mutation',
+      allowedPhases: ['coding'],
+      executionMode: 'sequential',
+      outputCapPolicy: { strategy: 'none' },
+    }],
+    toolCall: {
+      name: 'write_artifact',
+      arguments: { path: 'features/demo/plan.md', content: 'mutate' },
+    },
+  });
+
+  if (decision.kind !== 'deny' || decision.reason !== 'phase_denied') {
+    return { kind: 'fail', detail: `Expected phase_denied, got ${JSON.stringify(decision)}` };
+  }
+
+  return { kind: 'pass' };
+}
+
 // ---------------------------------------------------------------------------
 // Default scenario catalog
 // ---------------------------------------------------------------------------
@@ -385,6 +611,51 @@ const DEFAULT_SCENARIOS: CertificationScenario[] = [
     description:
       'Live LLM judge evaluates the quality of tool-output summaries. Not runnable offline; returned as not-run by the deterministic harness.',
     knownLimitation: 'Live-judged scenarios require a paid provider call and are not run by the deterministic harness.',
+  },
+  {
+    id: 'workflow.planning.tool-availability',
+    phase: 'workflow',
+    category: 'tool',
+    classification: 'deterministic',
+    description:
+      'Planning workflow tool registry exposes required read-only planning/artifact tools and no mutation tools.',
+    assertion: assertWorkflowPlanningToolAvailability,
+  },
+  {
+    id: 'workflow.transcript-provenance.manifest-records',
+    phase: 'workflow',
+    category: 'provenance',
+    classification: 'deterministic',
+    description:
+      'Workflow certification records transcript start/end events and resource-manifest runtime/tool-set provenance for the workflow phase.',
+    assertion: assertWorkflowTranscriptAndProvenance,
+  },
+  {
+    id: 'workflow.budget.cost-limit',
+    phase: 'workflow',
+    category: 'budget',
+    classification: 'deterministic',
+    description:
+      'A scripted workflow loop with pricing and maxCostUsd stops with cost_limit when cost exceeds the configured budget.',
+    assertion: assertWorkflowBudgetCostLimit,
+  },
+  {
+    id: 'workflow.cleanup.rollback-on-timeout',
+    phase: 'workflow',
+    category: 'cleanup',
+    classification: 'deterministic',
+    description:
+      'Cleanup rolls back tracked workflow mutations after a timeout and leaves the final tree clean.',
+    assertion: assertWorkflowCleanupRollback,
+  },
+  {
+    id: 'workflow.policy.denies-out-of-phase-mutation',
+    phase: 'workflow',
+    category: 'policy',
+    classification: 'deterministic',
+    description:
+      'Workflow policy denies mutation tools when invoked from the planning phase, proving phase authority is outside model output.',
+    assertion: assertWorkflowDeniesOutOfPhaseMutation,
   },
 ];
 

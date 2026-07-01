@@ -13,6 +13,7 @@ import { dirname, join, relative, resolve } from 'node:path';
 import type { AgentMessage, AgentTurn, Message } from './messages.ts';
 import type { AgentContext, WavemillLoopConfig } from './loop.ts';
 import { runWavemillLoop } from './loop.ts';
+import { TranscriptWriter } from './transcript.ts';
 import { resolveNativeAgentProviders, type ReadyNativeProviderEntry } from './providers.ts';
 import { createReadOnlyTools, READ_ONLY_PATH_FIELDS } from './tools/read-only.ts';
 import { createGitTools, gitAfterToolCall } from './tools/git.ts';
@@ -223,6 +224,22 @@ function defaultHookPath(session: string, issue: string): string {
   return `/tmp/wavemill-${session}-${issue}.hook`;
 }
 
+function safeTranscriptSegment(value: string): string {
+  const normalized = value.trim().replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+  return normalized || 'native-planning';
+}
+
+function defaultTranscriptPath(repoDir: string, session: string, slug: string): string {
+  return join(
+    repoDir,
+    '.wavemill',
+    'runs',
+    safeTranscriptSegment(session),
+    'native-sessions',
+    `${safeTranscriptSegment(session)}-planning-${safeTranscriptSegment(slug)}.jsonl`,
+  );
+}
+
 function toPiTools(descriptors: readonly ToolDescriptor[]): AgentTool<unknown, unknown>[] {
   return descriptors.map((descriptor) => toPiAgentTool(descriptor) as AgentTool<unknown, unknown>);
 }
@@ -287,6 +304,16 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
     const taskPacket = readFileSync(taskPacketPath, 'utf-8');
     const { content: systemPrompt, promptRef } = loadNativePhasePrompt(options.repoDir);
     const model = options.loopModelOverride ?? readyProvider!.model;
+    const transcriptPath = defaultTranscriptPath(options.repoDir, options.session, options.slug);
+    const transcriptWriter = new TranscriptWriter({
+      sessionId: `${options.session}-planning-${options.slug}`,
+      model: model.name ?? model.id,
+      api: model.api,
+      provider: model.provider,
+      worktreePath: options.wtDir,
+      gitBranch: options.branch,
+      path: transcriptPath,
+    });
 
     registerAndRecordNativeProvenance({
       sessionId: options.session,
@@ -326,6 +353,9 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
       convertToLlm: (messages) => messages as unknown as Message[],
       afterToolCall: gitAfterToolCall,
       signal: options.signal,
+      onEvent: (event) => {
+        transcriptWriter.handleEvent(event);
+      },
       toolPolicy: {
         phase: 'planning',
         worktreePath: options.wtDir,
@@ -363,6 +393,22 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
 
     atomicWriteText(planPath, finalText);
     writeFileSync(approvalMarkerPath, '', 'utf-8');
+    await updateStageResult(featureDir, 'planning', {
+      status: 'completed',
+      finishedAt: new Date().toISOString(),
+      agent: 'native',
+      model: model.name ?? model.id,
+      notes: [
+        `Native planning completed with ${result.stopReason}.`,
+        `Transcript: ${transcriptPath}`,
+        `Usage: ${result.totalInputTokens} input tokens, ${result.totalOutputTokens} output tokens, cost $${result.totalCostUsd.toFixed(6)}.`,
+      ].join(' '),
+      artifacts: {
+        type: 'planning',
+        planFile: relative(featureDir, planPath),
+        taskPacketFile: relative(featureDir, taskPacketPath),
+      },
+    });
     writeHookStatus(hookPath, 'idle', 'process_exit', 'planning_completed', 'native');
 
     return {
