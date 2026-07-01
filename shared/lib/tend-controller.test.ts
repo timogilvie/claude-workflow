@@ -1140,6 +1140,51 @@ describe('executeMerge', () => {
     }
   });
 
+  it('keeps retrying while GitHub reports mergeStateStatus UNKNOWN during the race window', async () => {
+    let mergeAttempts = 0;
+    let viewCalls = 0;
+    const options = buildMergeTestOptions({
+      shellRunner: (cmd) => {
+        options.calls.push(cmd);
+        if (cmd.includes('gh pr list --label')) return '[]';
+        if (cmd.includes('git rev-parse --git-common-dir')) return join(options.repoDir, '.git');
+        if (cmd.includes('git rev-parse') && cmd.includes('origin/')) return 'abc123def456';
+        if (cmd.includes('git merge-base --is-ancestor')) { const e = new Error('Command failed: git merge-base --is-ancestor'); (e as unknown as Record<string, unknown>).status = 1; throw e; }
+        if (cmd.includes('gh pr checks')) return JSON.stringify([{ name: 'ci', state: 'COMPLETED', conclusion: 'success' }]);
+        if (cmd.includes('gh pr view 42 --json mergeStateStatus,statusCheckRollup,headRefOid,baseRefOid')) {
+          viewCalls += 1;
+          // GitHub is still recomputing mergeability immediately after the push.
+          return JSON.stringify({
+            mergeStateStatus: 'UNKNOWN',
+            headRefOid: 'headsha42',
+            baseRefOid: 'basesha42',
+            statusCheckRollup: [{ name: 'ci', conclusion: 'SUCCESS' }],
+          });
+        }
+        if (cmd.includes('gh pr merge 42 --squash')) {
+          mergeAttempts += 1;
+          if (mergeAttempts === 1) {
+            throw new Error('GraphQL: 3 of 3 required status checks are expected. (mergePullRequest)');
+          }
+        }
+        return '';
+      },
+    });
+    writeReadyResult(options.repoDir, 'retry-unknown', 42);
+
+    try {
+      const result = await executeMerge(candidate(), { repoDir: options.repoDir, deps: options.deps });
+
+      assert.deepEqual(result, { status: 'merged', prNumber: 42, haltLoop: false });
+      assert.equal(mergeAttempts, 2);
+      assert.equal(viewCalls, 1);
+      assert.equal(options.labels.includes('blocked:42'), false);
+      assert.deepEqual(options.labels, ['merging:42', 'merged:42']);
+    } finally {
+      options.cleanup();
+    }
+  });
+
   it('blocks once with diagnostics when transient required-checks-expected merge failures expire', async () => {
     const nowValues = [
       Date.parse('2026-07-01T04:00:00.000Z'),

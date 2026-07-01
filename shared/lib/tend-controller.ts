@@ -109,7 +109,6 @@ interface MergeRetrySnapshot {
   checkRollupSummary: string;
   requiredCheckSummary: string;
   hasFailingRequiredChecks: boolean;
-  hasPendingRequiredChecks: boolean;
 }
 
 interface NormalizedCheckRun {
@@ -129,7 +128,10 @@ const TRANSIENT_REQUIRED_CHECKS_EXPECTED_SUBSTRING = 'required status checks are
 const MERGE_RETRY_DELAY_MS = 30_000;
 const MERGE_RETRY_MAX_ATTEMPTS = 5;
 const MERGE_RETRY_MAX_ELAPSED_MS = 5 * 60 * 1000;
-const MERGEABLE_RETRY_STATES = new Set(['', 'CLEAN', 'HAS_HOOKS', 'UNSTABLE']);
+// 'UNKNOWN' is the mergeStateStatus GitHub returns while it is still recomputing mergeability and
+// required-check state right after a push — the exact race window that surfaces the transient
+// 'required status checks are expected' merge error, so it must remain retryable rather than terminal.
+const MERGEABLE_RETRY_STATES = new Set(['', 'UNKNOWN', 'CLEAN', 'HAS_HOOKS', 'UNSTABLE']);
 
 export async function defaultPrFetcher(integrationBranch: string, repoDir: string): Promise<GhPrListEntry[]> {
   validateIntegrationBranch(integrationBranch);
@@ -919,8 +921,6 @@ function readMergeRetrySnapshot(
       checkRollupSummary: summarizeNormalizedChecks(rollup),
       requiredCheckSummary: summarizeRequiredChecks(rollup, requiredChecks),
       hasFailingRequiredChecks: relevantChecks.some((check) => check.status === 'failure'),
-      hasPendingRequiredChecks: relevantChecks.some((check) => check.status === 'pending')
-        || findMissingNormalizedRequiredChecks(rollup, requiredChecks).length > 0,
     };
   } catch (error) {
     return new Error(`Final GitHub state read failed: ${errorMessage(error)}`);
