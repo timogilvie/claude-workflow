@@ -72,7 +72,7 @@ export interface ReadyArtifacts {
   remediationFailures?: string[];
   /** Main branch HEAD SHA at the time readiness passed; used to detect staleness. */
   readyBaseSha?: string;
-  queueState?: 'ready' | 'ready-stale' | 'merge-candidate';
+  queueState?: 'ready' | 'ready-stale' | 'merge-candidate' | 'merge-blocked';
   staleAt?: string;
   staleBaseSha?: string;
   targetBaseSha?: string;

@@ -5699,7 +5699,7 @@ refresh_ready_merge_queue_tick() {
       continue
     fi
 
-    if [[ "$ready_status" == "completed" && ( "$ready_verdict" == "pass" || "$ready_verdict" == "warn" ) && -n "$current_main" && "$stored_base" != "$current_main" && "$queue_state" != "merge-candidate" ]]; then
+    if [[ "$ready_status" == "completed" && ( "$ready_verdict" == "pass" || "$ready_verdict" == "warn" ) && -n "$current_main" && "$stored_base" != "$current_main" && "$queue_state" != "merge-candidate" && "$queue_state" != "merge-blocked" ]]; then
       mark_ready_stale "$issue" "$state_dir" "$stored_base" "$current_main"
       queue_state="ready-stale"
     fi
@@ -11242,7 +11242,7 @@ monitor_issue_state() {
 
       if [[ -n "$current_main_sha" && "$stored_base_sha" != "$current_main_sha" ]]; then
         if merge_queue_enabled; then
-          if [[ "$queue_state" != "merge-candidate" ]]; then
+          if [[ "$queue_state" != "merge-candidate" && "$queue_state" != "merge-blocked" ]]; then
             mark_ready_stale "$ISSUE" "$ready_state_dir_path" "$stored_base_sha" "$current_main_sha"
             log_ready_stale_merge_lane_once "$ISSUE" "$PR" "$stored_base_sha" "$current_main_sha"
             set_window_attention_state "$WIN" "clear"

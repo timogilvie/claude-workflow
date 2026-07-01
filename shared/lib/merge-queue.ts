@@ -1,4 +1,4 @@
-export type MergeQueueState = 'ready' | 'ready-stale' | 'merge-candidate';
+export type MergeQueueState = 'ready' | 'ready-stale' | 'merge-candidate' | 'merge-blocked';
 
 export interface MergeQueuePr {
   issue: string;
@@ -135,11 +135,16 @@ export function selectMergeCandidates(options: {
   config: MergeQueueConfigResolved;
 }): MergeQueuePr[] {
   const { readyPrs, activeCandidates, now, config } = options;
-  const selected = activeCandidates.filter(isSelectableMergeQueuePr).sort(comparePriority).slice(0, config.maxConcurrentCandidates);
+  const selected = activeCandidates
+    .filter(isSelectableMergeQueuePr)
+    .filter((pr) => pr.queueState !== 'merge-blocked')
+    .sort(comparePriority)
+    .slice(0, config.maxConcurrentCandidates);
   const selectedIssues = new Set(selected.map((pr) => pr.issue));
 
   const eligible = readyPrs
     .filter(isSelectableMergeQueuePr)
+    .filter((pr) => pr.queueState !== 'merge-blocked')
     .filter((pr) => !selectedIssues.has(pr.issue))
     .filter((pr) => !coolingDown(pr, now, config))
     .sort(comparePriority);

@@ -10,6 +10,7 @@ import {
   defaultHealthChecker,
   executeMerge,
   formatStatusLine,
+  isTransientRequiredChecksExpectedError,
   selectNextCandidate,
   waitForChecks,
   type GhPrListEntry,
@@ -96,6 +97,8 @@ function buildMergeTestOptions(overrides: {
   shellRunner?: MergeExecutionDeps['shellRunner'];
   readyChecker?: MergeExecutionDeps['readyChecker'];
   healthChecker?: MergeExecutionDeps['healthChecker'];
+  sleep?: MergeExecutionDeps['sleep'];
+  now?: MergeExecutionDeps['now'];
 } = {}): {
   repoDir: string;
   calls: string[];
@@ -141,9 +144,35 @@ function buildMergeTestOptions(overrides: {
       restoreReady: (prNumber) => {
         labels.push(`ready:${prNumber}`);
       },
+      sleep: overrides.sleep ?? (async () => {}),
+      now: overrides.now ?? (() => Date.now()),
     },
     cleanup: () => rmSync(repoDir, { recursive: true, force: true }),
   };
+}
+
+function writeReadyResult(repoDir: string, slug: string, prNumber: number, overrides: Record<string, unknown> = {}): string {
+  const featureDir = join(repoDir, 'features', slug);
+  mkdirSync(featureDir, { recursive: true });
+  writeFileSync(join(featureDir, '.ready-result.json'), JSON.stringify({
+    stage: 'ready',
+    status: 'completed',
+    startedAt: '2026-07-01T04:00:00.000Z',
+    finishedAt: '2026-07-01T04:05:00.000Z',
+    agent: 'test',
+    model: 'test',
+    notes: '',
+    artifacts: {
+      type: 'ready',
+      verdict: 'pass',
+      prNumber,
+      queueState: 'merge-candidate',
+      candidatePromotedAt: '2026-07-01T04:00:00.000Z',
+      candidateLastProgressAt: '2026-07-01T04:00:00.000Z',
+      ...overrides,
+    },
+  }));
+  return featureDir;
 }
 
 function hasCall(calls: string[], pattern: RegExp): boolean {
@@ -1042,7 +1071,161 @@ describe('formatStatusLine', () => {
   });
 });
 
+describe('isTransientRequiredChecksExpectedError', () => {
+  it('matches the exact transient branch-protection error substring', () => {
+    assert.equal(
+      isTransientRequiredChecksExpectedError('GraphQL: 3 of 3 required status checks are expected. (mergePullRequest)'),
+      true,
+    );
+    assert.equal(
+      isTransientRequiredChecksExpectedError('GraphQL: 1 of 1 required status checks are expected. (mergePullRequest)'),
+      true,
+    );
+    assert.equal(
+      isTransientRequiredChecksExpectedError('GraphQL: required status checks failed. (mergePullRequest)'),
+      false,
+    );
+    assert.equal(
+      isTransientRequiredChecksExpectedError('GraphQL: merge branch protection rejected update'),
+      false,
+    );
+  });
+});
+
 describe('executeMerge', () => {
+  it('retries transient required-checks-expected merge failures and refreshes merge-candidate progress', async () => {
+    let mergeAttempts = 0;
+    const options = buildMergeTestOptions({
+      shellRunner: (cmd) => {
+        options.calls.push(cmd);
+        if (cmd.includes('gh pr list --label')) return '[]';
+        if (cmd.includes('git rev-parse --git-common-dir')) return join(options.repoDir, '.git');
+        if (cmd.includes('git rev-parse') && cmd.includes('origin/')) return 'abc123def456';
+        if (cmd.includes('git merge-base --is-ancestor')) { const e = new Error('Command failed: git merge-base --is-ancestor'); (e as unknown as Record<string, unknown>).status = 1; throw e; }
+        if (cmd.includes('gh pr checks')) return JSON.stringify([{ name: 'ci', state: 'COMPLETED', conclusion: 'success' }]);
+        if (cmd.includes('gh pr view 42 --json mergeStateStatus,statusCheckRollup,headRefOid,baseRefOid')) {
+          return JSON.stringify({
+            mergeStateStatus: 'CLEAN',
+            headRefOid: 'headsha42',
+            baseRefOid: 'basesha42',
+            statusCheckRollup: [{ name: 'ci', conclusion: 'SUCCESS' }],
+          });
+        }
+        if (cmd.includes('gh pr merge 42 --squash')) {
+          mergeAttempts += 1;
+          if (mergeAttempts === 1) {
+            throw new Error('GraphQL: 3 of 3 required status checks are expected. (mergePullRequest)');
+          }
+        }
+        return '';
+      },
+    });
+    const featureDir = writeReadyResult(options.repoDir, 'retry-merge', 42);
+
+    try {
+      const result = await executeMerge(candidate(), { repoDir: options.repoDir, deps: options.deps });
+
+      assert.deepEqual(result, { status: 'merged', prNumber: 42, haltLoop: false });
+      assert.equal(mergeAttempts, 2);
+      assert.ok(hasCall(options.calls, /gh pr view 42 --json mergeStateStatus,statusCheckRollup,headRefOid,baseRefOid/));
+      assert.equal(options.labels.includes('blocked:42'), false);
+      assert.deepEqual(options.labels, ['merging:42', 'merged:42']);
+
+      const readyResult = JSON.parse(readFileSync(join(featureDir, '.ready-result.json'), 'utf-8')) as {
+        artifacts: { candidateLastProgressAt?: string };
+      };
+      assert.notEqual(readyResult.artifacts.candidateLastProgressAt, '2026-07-01T04:00:00.000Z');
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('blocks once with diagnostics when transient required-checks-expected merge failures expire', async () => {
+    const nowValues = [
+      Date.parse('2026-07-01T04:00:00.000Z'),
+      Date.parse('2026-07-01T04:00:01.000Z'),
+      Date.parse('2026-07-01T04:05:01.000Z'),
+      Date.parse('2026-07-01T04:05:02.000Z'),
+    ];
+    const options = buildMergeTestOptions({
+      now: () => nowValues.shift() ?? Date.parse('2026-07-01T04:05:02.000Z'),
+      shellRunner: (cmd) => {
+        options.calls.push(cmd);
+        if (cmd.includes('gh pr list --label')) return '[]';
+        if (cmd.includes('git rev-parse --git-common-dir')) return join(options.repoDir, '.git');
+        if (cmd.includes('git rev-parse') && cmd.includes('origin/')) return 'abc123def456';
+        if (cmd.includes('git merge-base --is-ancestor')) { const e = new Error('Command failed: git merge-base --is-ancestor'); (e as unknown as Record<string, unknown>).status = 1; throw e; }
+        if (cmd.includes('gh pr checks')) return JSON.stringify([{ name: 'ci', state: 'COMPLETED', conclusion: 'success' }]);
+        if (cmd.includes('gh pr view 42 --json mergeStateStatus,statusCheckRollup,headRefOid,baseRefOid')) {
+          return JSON.stringify({
+            mergeStateStatus: 'CLEAN',
+            headRefOid: 'headsha42',
+            baseRefOid: 'basesha42',
+            statusCheckRollup: [{ name: 'ci', conclusion: 'SUCCESS' }],
+          });
+        }
+        if (cmd.includes('gh pr merge 42 --squash')) {
+          throw new Error('GraphQL: 3 of 3 required status checks are expected. (mergePullRequest)');
+        }
+        return '';
+      },
+    });
+    const featureDir = writeReadyResult(options.repoDir, 'retry-expire', 42);
+
+    try {
+      const result = await executeMerge(candidate(), { repoDir: options.repoDir, deps: options.deps });
+
+      assert.equal(result.status, 'blocked');
+      assert.equal(result.phase, 'merge');
+      assert.deepEqual(options.labels, ['merging:42', 'blocked:42']);
+      assert.ok(hasCall(options.calls, /required checks: \(none reported\)/));
+      assert.ok(hasCall(options.calls, /mergeStateStatus: CLEAN/));
+      assert.ok(hasCall(options.calls, /head SHA: headsha42/));
+      assert.ok(hasCall(options.calls, /base SHA: basesha42/));
+      assert.ok(hasCall(options.calls, /GraphQL: 3 of 3 required status checks are expected/));
+
+      const readyResult = JSON.parse(readFileSync(join(featureDir, '.ready-result.json'), 'utf-8')) as {
+        artifacts: { queueState?: string };
+      };
+      assert.equal(readyResult.artifacts.queueState, 'merge-blocked');
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('does not retry non-transient merge failures', async () => {
+    let mergeAttempts = 0;
+    const options = buildMergeTestOptions({
+      shellRunner: (cmd) => {
+        options.calls.push(cmd);
+        if (cmd.includes('gh pr list --label')) return '[]';
+        if (cmd.includes('git rev-parse --git-common-dir')) return join(options.repoDir, '.git');
+        if (cmd.includes('git rev-parse') && cmd.includes('origin/')) return 'abc123def456';
+        if (cmd.includes('git merge-base --is-ancestor')) { const e = new Error('Command failed: git merge-base --is-ancestor'); (e as unknown as Record<string, unknown>).status = 1; throw e; }
+        if (cmd.includes('gh pr checks')) return JSON.stringify([{ name: 'ci', state: 'COMPLETED', conclusion: 'success' }]);
+        if (cmd.includes('gh pr merge 42 --squash')) {
+          mergeAttempts += 1;
+          throw new Error('GraphQL: merge branch protection rejected update');
+        }
+        if (cmd.includes('gh pr view')) {
+          throw new Error('retry snapshot should not be queried');
+        }
+        return '';
+      },
+    });
+
+    try {
+      const result = await executeMerge(candidate(), { repoDir: options.repoDir, deps: options.deps });
+
+      assert.equal(result.status, 'blocked');
+      assert.equal(mergeAttempts, 1);
+      assert.deepEqual(options.labels, ['merging:42', 'blocked:42']);
+      assert.ok(!hasCall(options.calls, /gh pr view 42 --json mergeStateStatus,statusCheckRollup,headRefOid,baseRefOid/));
+    } finally {
+      options.cleanup();
+    }
+  });
+
   it('rebases, pushes, waits, merges, and marks merged', async () => {
     const options = buildMergeTestOptions();
     try {

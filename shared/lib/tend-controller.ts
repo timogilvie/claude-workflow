@@ -1,3 +1,4 @@
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   setWavemillBlocked,
@@ -15,6 +16,7 @@ import { extractMetadataBlock, parsePrMetadata, type PrMetadata } from './pr-met
 import { evaluateReady } from './ready-engine.ts';
 import { runReadyStage } from './ready-stage.ts';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
+import { readStageResult, updateStageResult, type ReadyArtifacts } from './stage-result.ts';
 import { applyChallengePairGates, type ChallengeGateDeps, type ChallengeGateOptions } from './tend-challenge-gate.ts';
 
 export interface TendCandidate {
@@ -60,6 +62,8 @@ export interface MergeExecutionDeps {
   releaseToBlocked: (prNumber: number) => void;
   releaseMerged: (prNumber: number) => void;
   restoreReady: (prNumber: number) => void;
+  sleep: (ms: number) => Promise<void>;
+  now: () => number;
 }
 
 export interface ExecuteMergeOptions {
@@ -98,6 +102,22 @@ interface EligibleWorkItem {
   metadata: PrMetadata;
 }
 
+interface MergeRetrySnapshot {
+  mergeStateStatus: string;
+  headRefOid: string;
+  baseRefOid: string;
+  checkRollupSummary: string;
+  requiredCheckSummary: string;
+  hasFailingRequiredChecks: boolean;
+  hasPendingRequiredChecks: boolean;
+}
+
+interface NormalizedCheckRun {
+  name: string;
+  status: 'success' | 'neutral' | 'skipped' | 'pending' | 'failure' | 'unknown';
+  rawStatus: string;
+}
+
 const BRANCH_NAME_PATTERN = /^[a-zA-Z0-9._/-]+$/;
 const PR_DEPENDENCY_PATTERN = /^PR#(\d+)$/i;
 const FAILING_CHECK_CONCLUSIONS = new Set(['failure', 'timed_out', 'cancelled']);
@@ -105,6 +125,11 @@ const PASSING_CHECK_CONCLUSIONS = new Set(['success', 'skipped', 'neutral']);
 const FAILING_CHECK_BUCKETS = new Set(['fail', 'cancel']);
 const PASSING_CHECK_BUCKETS = new Set(['pass', 'skipping']);
 const CHECK_POLL_INTERVAL_MS = 30_000;
+const TRANSIENT_REQUIRED_CHECKS_EXPECTED_SUBSTRING = 'required status checks are expected';
+const MERGE_RETRY_DELAY_MS = 30_000;
+const MERGE_RETRY_MAX_ATTEMPTS = 5;
+const MERGE_RETRY_MAX_ELAPSED_MS = 5 * 60 * 1000;
+const MERGEABLE_RETRY_STATES = new Set(['', 'CLEAN', 'HAS_HOOKS', 'UNSTABLE']);
 
 export async function defaultPrFetcher(integrationBranch: string, repoDir: string): Promise<GhPrListEntry[]> {
   validateIntegrationBranch(integrationBranch);
@@ -306,14 +331,20 @@ export async function executeMerge(
     };
   }
 
-  const block = async (phase: string, output: string): Promise<MergeExecutionResult> => {
+  const block = async (phase: string, output: string, commentBody?: string): Promise<MergeExecutionResult> => {
     const failureExcerpt = truncateOutput(output);
     try {
-      postFailureComment(candidate.number, buildFailureComment(phase, failureExcerpt), options.repoDir, deps.shellRunner);
+      postFailureComment(
+        candidate.number,
+        commentBody ?? buildFailureComment(phase, failureExcerpt),
+        options.repoDir,
+        deps.shellRunner,
+      );
     } catch {
       // Comment posting failure is non-fatal; always release the PR from merging state.
     }
     try {
+      await updateReadyArtifactForBlockedMerge(options.repoDir, candidate.number);
       deps.releaseToBlocked(candidate.number);
     } catch {
       // Label update failure is non-fatal; PR will be manually reviewed or auto-retried on next cycle.
@@ -353,14 +384,14 @@ export async function executeMerge(
           return block('ready', outputFromError(error));
         }
 
-        try {
-          const mergeFlag = `--${integrationConfig.mergeMethod}`;
-          deps.shellRunner(
-            `gh pr merge ${candidate.number} ${mergeFlag}`,
-            { encoding: 'utf-8', cwd: options.repoDir },
-          );
-        } catch (error) {
-          return block('merge', outputFromError(error));
+        const mergeFailure = await attemptMergeWithRetry(
+          candidate.number,
+          options.repoDir,
+          integrationConfig.requiredChecks ?? [],
+          deps,
+        );
+        if (mergeFailure) {
+          return block('merge', mergeFailure.output, mergeFailure.commentBody);
         }
 
         if (integrationConfig.deleteBranchAfterMerge) {
@@ -435,6 +466,73 @@ export function buildFailureComment(phase: string, excerpt: string): string {
     escaped,
     '```',
   ].join('\n');
+}
+
+export function isTransientRequiredChecksExpectedError(output: string): boolean {
+  return output.toLowerCase().includes(TRANSIENT_REQUIRED_CHECKS_EXPECTED_SUBSTRING);
+}
+
+async function attemptMergeWithRetry(
+  prNumber: number,
+  repoDir: string,
+  requiredChecks: string[],
+  deps: MergeExecutionDeps,
+): Promise<{ output: string; commentBody: string } | null> {
+  const mergeFlag = `--${getIntegrationConfig(repoDir).mergeMethod}`;
+  const startedAtMs = deps.now();
+  let attempt = 1;
+
+  while (true) {
+    try {
+      deps.shellRunner(
+        `gh pr merge ${prNumber} ${mergeFlag}`,
+        { encoding: 'utf-8', cwd: repoDir },
+      );
+      return null;
+    } catch (error) {
+      const output = outputFromError(error);
+      if (!isTransientRequiredChecksExpectedError(output)) {
+        return { output, commentBody: buildFailureComment('merge', truncateOutput(output)) };
+      }
+
+      const snapshot = readMergeRetrySnapshot(prNumber, repoDir, deps.shellRunner, requiredChecks);
+      if (snapshot instanceof Error) {
+        return { output, commentBody: buildDiagnosticReadFailureComment(output, snapshot.message) };
+      }
+      if (!MERGEABLE_RETRY_STATES.has(snapshot.mergeStateStatus) || snapshot.hasFailingRequiredChecks) {
+        return { output, commentBody: buildTransientMergeFailureComment(snapshot, requiredChecks, output) };
+      }
+      if (attempt >= MERGE_RETRY_MAX_ATTEMPTS || (deps.now() - startedAtMs) >= MERGE_RETRY_MAX_ELAPSED_MS) {
+        return {
+          output,
+          commentBody: buildTransientMergeFailureComment(
+            snapshot,
+            requiredChecks,
+            output,
+            'Retry window expired before GitHub branch protection settled.',
+          ),
+        };
+      }
+
+      await refreshReadyArtifactCandidateProgress(repoDir, prNumber, new Date(deps.now()).toISOString());
+      await deps.sleep(MERGE_RETRY_DELAY_MS);
+
+      const checks = await waitForChecks(
+        prNumber,
+        repoDir,
+        deps.shellRunner,
+        { timeoutMs: 0, requiredChecks },
+      );
+      if (checks.outcome === 'fail') {
+        return {
+          output,
+          commentBody: buildTransientMergeFailureComment(snapshot, requiredChecks, output, checks.summary),
+        };
+      }
+
+      attempt += 1;
+    }
+  }
 }
 
 async function withScratchWorktree<T>(
@@ -721,6 +819,8 @@ function mergeExecutionDeps(deps: Partial<MergeExecutionDeps> | undefined): Merg
     restoreReady: (prNumber) => {
       setWavemillReady(prNumber);
     },
+    sleep,
+    now: () => Date.now(),
     ...deps,
   };
 }
@@ -786,6 +886,208 @@ function summarizeChecks(checks: PrCheckRun[], requiredChecks: string[] = []): s
   return missingRequired.length > 0
     ? `${summary}\nMissing required checks: ${missingRequired.join(', ')}`
     : summary;
+}
+
+function readMergeRetrySnapshot(
+  prNumber: number,
+  repoDir: string,
+  shellRunner: MergeExecutionDeps['shellRunner'],
+  requiredChecks: string[],
+): MergeRetrySnapshot | Error {
+  try {
+    const output = shellRunner(
+      `gh pr view ${prNumber} --json mergeStateStatus,statusCheckRollup,headRefOid,baseRefOid`,
+      { encoding: 'utf-8', cwd: repoDir },
+    );
+    const parsed = JSON.parse(String(output)) as Record<string, unknown>;
+    const rollup = normalizeStatusCheckRollup(parsed.statusCheckRollup);
+    const relevantChecks = filterRelevantChecks(rollup, requiredChecks);
+    return {
+      mergeStateStatus: String(parsed.mergeStateStatus ?? ''),
+      headRefOid: String(parsed.headRefOid ?? ''),
+      baseRefOid: String(parsed.baseRefOid ?? ''),
+      checkRollupSummary: summarizeNormalizedChecks(rollup),
+      requiredCheckSummary: summarizeRequiredChecks(rollup, requiredChecks),
+      hasFailingRequiredChecks: relevantChecks.some((check) => check.status === 'failure'),
+      hasPendingRequiredChecks: relevantChecks.some((check) => check.status === 'pending')
+        || findMissingNormalizedRequiredChecks(rollup, requiredChecks).length > 0,
+    };
+  } catch (error) {
+    return new Error(`Final GitHub state read failed: ${errorMessage(error)}`);
+  }
+}
+
+function normalizeStatusCheckRollup(raw: unknown): NormalizedCheckRun[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  return raw.map((item, index) => {
+    const entry = typeof item === 'object' && item !== null ? item as Record<string, unknown> : {};
+    const rawStatus = String(entry.conclusion ?? entry.state ?? '').toUpperCase();
+    const name = String(entry.name ?? entry.context ?? `check-${index + 1}`);
+    let status: NormalizedCheckRun['status'] = 'unknown';
+
+    if (rawStatus === 'SUCCESS') status = 'success';
+    else if (rawStatus === 'NEUTRAL') status = 'neutral';
+    else if (rawStatus === 'SKIPPED') status = 'skipped';
+    else if (['PENDING', 'QUEUED', 'IN_PROGRESS', 'EXPECTED', 'WAITING', 'ACTION_REQUIRED'].includes(rawStatus)) {
+      status = 'pending';
+    } else if (['FAILURE', 'ERROR', 'TIMED_OUT', 'CANCELLED'].includes(rawStatus)) {
+      status = 'failure';
+    }
+
+    return { name, status, rawStatus };
+  });
+}
+
+function filterRelevantChecks(checks: NormalizedCheckRun[], requiredChecks: string[]): NormalizedCheckRun[] {
+  if (requiredChecks.length === 0) {
+    return checks;
+  }
+  const requiredSet = new Set(requiredChecks);
+  return checks.filter((check) => requiredSet.has(check.name));
+}
+
+function findMissingNormalizedRequiredChecks(checks: NormalizedCheckRun[], requiredChecks: string[]): string[] {
+  if (requiredChecks.length === 0) {
+    return [];
+  }
+  const reported = new Set(checks.map((check) => check.name));
+  return requiredChecks.filter((name) => !reported.has(name));
+}
+
+function summarizeNormalizedChecks(checks: NormalizedCheckRun[]): string {
+  if (checks.length === 0) {
+    return '(none reported)';
+  }
+  return checks.map((check) => `${check.name}: ${check.rawStatus || check.status.toUpperCase()}`).join('\n');
+}
+
+function summarizeRequiredChecks(checks: NormalizedCheckRun[], requiredChecks: string[]): string {
+  if (requiredChecks.length === 0) {
+    return '(none reported)';
+  }
+  const summary = filterRelevantChecks(checks, requiredChecks)
+    .map((check) => `${check.name}: ${check.rawStatus || check.status.toUpperCase()}`);
+  const missing = findMissingNormalizedRequiredChecks(checks, requiredChecks)
+    .map((name) => `${name}: MISSING`);
+  return [...summary, ...missing].join('\n') || '(none reported)';
+}
+
+function buildTransientMergeFailureComment(
+  snapshot: MergeRetrySnapshot,
+  requiredChecks: string[],
+  mergeError: string,
+  note?: string,
+): string {
+  const requiredChecksList = requiredChecks.length > 0 ? requiredChecks.join(', ') : '(none reported)';
+  return [
+    '### Wavemill Merge failed',
+    '',
+    '```text',
+    `required checks: ${requiredChecksList}`,
+    `mergeStateStatus: ${snapshot.mergeStateStatus || '(empty)'}`,
+    `head SHA: ${snapshot.headRefOid || '(unknown)'}`,
+    `base SHA: ${snapshot.baseRefOid || '(unknown)'}`,
+    '',
+    'Check rollup:',
+    snapshot.checkRollupSummary,
+    '',
+    'Required checks:',
+    snapshot.requiredCheckSummary,
+    ...(note ? ['', note] : []),
+    '',
+    'GitHub merge error:',
+    mergeError || '(no output)',
+    '```',
+  ].join('\n');
+}
+
+function buildDiagnosticReadFailureComment(mergeError: string, diagnosticError: string): string {
+  return [
+    '### Wavemill Merge failed',
+    '',
+    '```text',
+    'GitHub kept reporting `required status checks are expected` after the ready gate passed.',
+    '',
+    'GitHub merge error:',
+    mergeError || '(no output)',
+    '',
+    diagnosticError,
+    '```',
+  ].join('\n');
+}
+
+async function refreshReadyArtifactCandidateProgress(repoDir: string, prNumber: number, now: string): Promise<void> {
+  const featureDir = resolveFeatureDirForPr(repoDir, prNumber);
+  if (!featureDir) {
+    return;
+  }
+  const readyResult = await readStageResult(featureDir, 'ready');
+  if (!readyResult?.artifacts || readyResult.artifacts.type !== 'ready' || readyResult.artifacts.queueState !== 'merge-candidate') {
+    return;
+  }
+  const artifacts = readyResult.artifacts;
+  await updateStageResult(featureDir, 'ready', {
+    artifacts: {
+      ...artifacts,
+      type: 'ready',
+      candidatePromotedAt: artifacts.candidatePromotedAt ?? now,
+      candidateLastProgressAt: now,
+      candidateSkipReason: null,
+    },
+  });
+}
+
+async function updateReadyArtifactForBlockedMerge(repoDir: string, prNumber: number): Promise<void> {
+  const featureDir = resolveFeatureDirForPr(repoDir, prNumber);
+  if (!featureDir) {
+    return;
+  }
+  const readyResult = await readStageResult(featureDir, 'ready');
+  if (!readyResult?.artifacts || readyResult.artifacts.type !== 'ready') {
+    return;
+  }
+  const now = new Date().toISOString();
+  await updateStageResult(featureDir, 'ready', {
+    artifacts: {
+      ...readyResult.artifacts,
+      type: 'ready',
+      queueState: 'merge-blocked',
+      candidateLastProgressAt: now,
+      candidateSkippedAt: now,
+      candidateSkipReason: 'tend merge blocked',
+    } as ReadyArtifacts,
+  });
+}
+
+function resolveFeatureDirForPr(repoDir: string, prNumber: number): string | null {
+  for (const rootName of ['features', 'bugs']) {
+    const rootDir = join(repoDir, rootName);
+    if (!existsSync(rootDir)) {
+      continue;
+    }
+    for (const entry of readdirSync(rootDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      const featureDir = join(rootDir, entry.name);
+      const readyResultPath = join(featureDir, '.ready-result.json');
+      if (!existsSync(readyResultPath)) {
+        continue;
+      }
+      try {
+        const parsed = JSON.parse(readFileSync(readyResultPath, 'utf-8')) as { artifacts?: { prNumber?: unknown } };
+        if (parsed.artifacts?.prNumber === prNumber) {
+          return featureDir;
+        }
+      } catch {
+        continue;
+      }
+    }
+  }
+  return null;
 }
 
 function sleep(ms: number): Promise<void> {

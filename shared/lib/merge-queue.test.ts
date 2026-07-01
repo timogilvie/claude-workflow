@@ -152,6 +152,39 @@ test('tick planner demotes stuck candidate and promotes disjoint replacement', (
   assert.deepEqual(plan.selectedIssues, ['HOK-2']);
 });
 
+test('recent candidateLastProgressAt prevents a retrying merge candidate from being marked stuck', () => {
+  const plan = planMergeQueueTick({
+    readyPrs: [
+      pr({
+        issue: 'HOK-1',
+        queueState: 'merge-candidate',
+        candidatePromotedAt: '2026-05-06T12:00:00.000Z',
+        candidateLastProgressAt: '2026-05-06T12:29:30.000Z',
+        changedFiles: ['a.ts'],
+      }),
+    ],
+    now: '2026-05-06T12:30:00.000Z',
+    config,
+  });
+  assert.deepEqual(plan.stuckIssues, []);
+  assert.deepEqual(plan.selectedIssues, ['HOK-1']);
+});
+
+test('merge-blocked queue state is excluded from reselection', () => {
+  const selected = selectMergeCandidates({
+    readyPrs: [
+      pr({ issue: 'HOK-1', queueState: 'merge-blocked', changedFiles: ['a.ts'] }),
+      pr({ issue: 'HOK-2', prNumber: 2, branch: 'task/two', queueState: 'ready-stale', changedFiles: ['b.ts'] }),
+    ],
+    activeCandidates: [
+      pr({ issue: 'HOK-1', queueState: 'merge-blocked', changedFiles: ['a.ts'] }),
+    ],
+    now: '2026-05-06T12:30:00.000Z',
+    config,
+  });
+  assert.deepEqual(selected.map((item) => item.issue), ['HOK-2']);
+});
+
 // --- Terminal workflow status predicate tests ---
 
 test('isTerminalWorkflowStatus: merged is terminal', () => {
