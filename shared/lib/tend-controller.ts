@@ -345,6 +345,11 @@ export async function executeMerge(
     }
     try {
       await updateReadyArtifactForBlockedMerge(options.repoDir, candidate.number);
+    } catch {
+      // Ready-artifact update failure is non-fatal and must never suppress releaseToBlocked below,
+      // otherwise the PR would keep its merging label forever. Kept in its own try/catch on purpose.
+    }
+    try {
       deps.releaseToBlocked(candidate.number);
     } catch {
       // Label update failure is non-fatal; PR will be manually reviewed or auto-retried on next cycle.
@@ -514,7 +519,12 @@ async function attemptMergeWithRetry(
         };
       }
 
-      await refreshReadyArtifactCandidateProgress(repoDir, prNumber, new Date(deps.now()).toISOString());
+      try {
+        await refreshReadyArtifactCandidateProgress(repoDir, prNumber, new Date(deps.now()).toISOString());
+      } catch {
+        // Refreshing local merge-queue progress is a best-effort optimization to avoid demote/promote
+        // churn; a failure here must never abort the retry/merge flow (which would strand the merging label).
+      }
       await deps.sleep(MERGE_RETRY_DELAY_MS);
 
       const checks = await waitForChecks(
