@@ -5509,6 +5509,18 @@ ready_queue_field() {
   jq -r --arg field "$field" '.artifacts[$field] // empty' "$result_file" 2>/dev/null || echo ""
 }
 
+# Reads the transient merge-retry window marker written by the tend process for a
+# PR (shared/lib/tend-controller.ts writeMergeRetryMarker). Returns the ISO expiry
+# timestamp while tend is actively retrying a transient merge failure, or empty
+# when no active retry window exists. Keeps the local merge queue from demoting a
+# candidate as "stuck" while tend keeps retrying it in a separate process.
+merge_retry_marker_until() {
+  local pr="$1"
+  local marker_file="$REPO_DIR/.wavemill/merge-retry/${pr}.json"
+  [[ -n "$pr" && -f "$marker_file" ]] || { echo ""; return 0; }
+  jq -r '.until // empty' "$marker_file" 2>/dev/null || echo ""
+}
+
 merge_queue_enabled() {
   [[ "${MERGE_QUEUE_ENABLED:-true}" == "1" || "${MERGE_QUEUE_ENABLED:-true}" == "true" ]]
 }
@@ -5718,7 +5730,7 @@ refresh_ready_merge_queue_tick() {
         --arg ready_at "$(jq -r '.finishedAt // .startedAt // empty' "$state_dir/.ready-result.json" 2>/dev/null || echo "")" \
         --arg candidate_promoted_at "$(ready_queue_field "$state_dir" candidatePromotedAt)" \
         --arg candidate_last_progress_at "$(ready_queue_field "$state_dir" candidateLastProgressAt)" \
-        --arg merge_retry_in_progress_until "$(ready_queue_field "$state_dir" mergeRetryInProgressUntil)" \
+        --arg merge_retry_in_progress_until "$(merge_retry_marker_until "$pr")" \
         --arg candidate_skipped_at "$(ready_queue_field "$state_dir" candidateSkippedAt)" \
         --argjson changed_files "$(ready_changed_files_json "$state_dir" "$wt_dir" "$pr")" '
           $prs + [{

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -11,6 +11,7 @@ import {
   executeMerge,
   formatStatusLine,
   isRequiredChecksExpectedMergeError,
+  mergeRetryMarkerPath,
   selectNextCandidate,
   waitForChecks,
   type GhPrListEntry,
@@ -1508,6 +1509,55 @@ describe('executeMerge', () => {
       assert.deepEqual(sleeps, [30_000]);
       assert.ok(hasCall(options.calls, /gh pr view 42 --json mergeStateStatus,statusCheckRollup,headRefOid,baseRefOid/));
       assert.deepEqual(options.labels, ['merging:42', 'merged:42']);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('writes and clears the cross-process merge-retry marker while retrying a transient failure', async () => {
+    const options = buildMergeTestOptions();
+    let mergeAttempts = 0;
+    const markerPath = mergeRetryMarkerPath(42, options.repoDir);
+    let markerExistedDuringRetry = false;
+    let markerUntilDuringRetry: string | null = null;
+    const shellRunner: MergeExecutionDeps['shellRunner'] = (cmd, opts) => {
+      options.calls.push(cmd);
+      const defaultRunner = options.deps.shellRunner as MergeExecutionDeps['shellRunner'];
+      if (cmd.includes('gh pr merge 42')) {
+        mergeAttempts += 1;
+        if (mergeAttempts === 1) {
+          const error = new Error('merge failed');
+          (error as unknown as { stderr: string }).stderr = 'GraphQL: 3 of 3 required status checks are expected. (mergePullRequest)';
+          throw error;
+        }
+        return '';
+      }
+      return defaultRunner(cmd, opts);
+    };
+
+    try {
+      // Exercise the real default writer (not a spy): observe the marker mid-retry
+      // from inside retrySleep, which runs after the marker has been persisted.
+      const result = await executeMerge(candidate(), {
+        repoDir: options.repoDir,
+        deps: {
+          ...options.deps,
+          shellRunner,
+          retrySleep: async () => {
+            markerExistedDuringRetry = existsSync(markerPath);
+            if (markerExistedDuringRetry) {
+              markerUntilDuringRetry = JSON.parse(readFileSync(markerPath, 'utf-8')).until;
+            }
+          },
+          currentTimeMs: () => 1_000,
+        },
+      });
+
+      assert.equal(result.status, 'merged');
+      assert.equal(markerExistedDuringRetry, true, 'marker should exist while tend is retrying');
+      // Window ends at currentTimeMs (1_000ms) + 5min retry window.
+      assert.equal(markerUntilDuringRetry, new Date(1_000 + 5 * 60 * 1000).toISOString());
+      assert.equal(existsSync(markerPath), false, 'marker should be cleared after the merge resolves');
     } finally {
       options.cleanup();
     }

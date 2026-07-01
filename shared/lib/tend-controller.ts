@@ -1,3 +1,4 @@
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   setWavemillBlocked,
@@ -62,6 +63,7 @@ export interface MergeExecutionDeps {
   restoreReady: (prNumber: number) => void;
   retrySleep: (ms: number) => Promise<void>;
   currentTimeMs: () => number;
+  setMergeRetryWindow: (prNumber: number, untilIso: string | null, repoDir: string) => void;
 }
 
 export interface ExecuteMergeOptions {
@@ -732,29 +734,44 @@ async function mergeWithTransientRetry(
   const deadlineMs = deps.currentTimeMs() + MERGE_RETRY_WINDOW_MS;
   let lastTransientError = '';
   let lastDiagnostics: PrMergeDiagnostics | null = null;
+  let retryWindowMarked = false;
 
-  for (let attempt = 1; attempt <= MERGE_RETRY_MAX_ATTEMPTS; attempt += 1) {
-    try {
-      deps.shellRunner(command, { encoding: 'utf-8', cwd: repoDir });
-      return;
-    } catch (error) {
-      const output = outputFromError(error);
-      if (!isRequiredChecksExpectedMergeError(output)) {
-        throw error;
+  try {
+    for (let attempt = 1; attempt <= MERGE_RETRY_MAX_ATTEMPTS; attempt += 1) {
+      try {
+        deps.shellRunner(command, { encoding: 'utf-8', cwd: repoDir });
+        return;
+      } catch (error) {
+        const output = outputFromError(error);
+        if (!isRequiredChecksExpectedMergeError(output)) {
+          throw error;
+        }
+
+        lastTransientError = output;
+        lastDiagnostics = readPrMergeDiagnostics(prNumber, repoDir, deps.shellRunner);
+
+        if (attempt >= MERGE_RETRY_MAX_ATTEMPTS || deps.currentTimeMs() + MERGE_RETRY_BACKOFF_MS > deadlineMs) {
+          throw new Error(buildTransientMergeFailureDiagnostics(lastTransientError, lastDiagnostics, requiredChecks));
+        }
+
+        // Signal the local merge queue (a separate process) that this candidate is
+        // in an active transient-retry window so it is not demoted as "stuck" and
+        // re-promoted while tend keeps retrying. See isCandidateStuck in merge-queue.ts.
+        if (!retryWindowMarked) {
+          deps.setMergeRetryWindow(prNumber, new Date(deadlineMs).toISOString(), repoDir);
+          retryWindowMarked = true;
+        }
+
+        await deps.retrySleep(MERGE_RETRY_BACKOFF_MS);
       }
+    }
 
-      lastTransientError = output;
-      lastDiagnostics = readPrMergeDiagnostics(prNumber, repoDir, deps.shellRunner);
-
-      if (attempt >= MERGE_RETRY_MAX_ATTEMPTS || deps.currentTimeMs() + MERGE_RETRY_BACKOFF_MS > deadlineMs) {
-        throw new Error(buildTransientMergeFailureDiagnostics(lastTransientError, lastDiagnostics, requiredChecks));
-      }
-
-      await deps.retrySleep(MERGE_RETRY_BACKOFF_MS);
+    throw new Error(buildTransientMergeFailureDiagnostics(lastTransientError, lastDiagnostics, requiredChecks));
+  } finally {
+    if (retryWindowMarked) {
+      deps.setMergeRetryWindow(prNumber, null, repoDir);
     }
   }
-
-  throw new Error(buildTransientMergeFailureDiagnostics(lastTransientError, lastDiagnostics, requiredChecks));
 }
 
 export function isRequiredChecksExpectedMergeError(output: string): boolean {
@@ -884,8 +901,40 @@ function mergeExecutionDeps(deps: Partial<MergeExecutionDeps> | undefined): Merg
     },
     retrySleep: sleep,
     currentTimeMs: () => Date.now(),
+    setMergeRetryWindow: (prNumber, untilIso, repoDir) => {
+      writeMergeRetryMarker(prNumber, untilIso, repoDir);
+    },
     ...deps,
   };
+}
+
+/**
+ * Absolute path to the cross-process marker that records an active transient
+ * merge-retry window for a PR. Written by the tend process (which knows the PR
+ * number and repo dir) and read by the shell mill loop's merge-queue tick, which
+ * lives in a separate process and cannot otherwise observe that tend is mid-retry.
+ */
+export function mergeRetryMarkerPath(prNumber: number, repoDir: string): string {
+  return join(repoDir, '.wavemill', 'merge-retry', `${prNumber}.json`);
+}
+
+/**
+ * Persist (or clear) the transient merge-retry window marker for a PR. Failures
+ * are swallowed: the marker is a best-effort anti-churn hint, and losing it must
+ * never abort or crash an in-flight merge attempt.
+ */
+function writeMergeRetryMarker(prNumber: number, untilIso: string | null, repoDir: string): void {
+  const markerPath = mergeRetryMarkerPath(prNumber, repoDir);
+  try {
+    if (untilIso === null) {
+      rmSync(markerPath, { force: true });
+      return;
+    }
+    mkdirSync(join(repoDir, '.wavemill', 'merge-retry'), { recursive: true });
+    writeFileSync(markerPath, `${JSON.stringify({ prNumber, until: untilIso })}\n`, 'utf-8');
+  } catch {
+    // Best-effort only; stuck detection falls back to timestamp-based demotion.
+  }
 }
 
 function defaultLoserCleanup(prNumber: number, repoDir: string): void {
