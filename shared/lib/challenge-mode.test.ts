@@ -1521,6 +1521,97 @@ test('forced primary set to uncertified native falls back to random pick from po
   }
 });
 
+test('workflow selection rejects uncertified native primary coder', () => {
+  const { repoDir, cleanup } = makeNativeTestRepo({
+    'native-uncert': nativeModelEntry('patch'),
+    'native-workflow-model': nativeModelEntry('workflow'),
+  });
+  try {
+    writeCertArtifact(repoDir, 'openai', 'native-workflow-model', 'v1', { phase: 'workflow' });
+
+    const mockPlanRoute = (): WorkflowRouteDecision => ({
+      planner: 'native-workflow-model',
+      coder: 'native-uncert',
+      reviewer: 'claude-opus-4-6',
+      planDepth: 'medium',
+      codeDepth: 'medium',
+      reviewRecommended: 'llm',
+      expectedSuccess: 0.9,
+      expectedCostPlan: 1,
+      expectedCostCode: 1,
+      expectedCostReview: 1,
+      reasoning: [],
+      signals: {},
+    });
+
+    const result = pickChallengeWorkflowsWithReason(
+      ['native-uncert', 'claude-opus-4-6', 'native-workflow-model'],
+      {
+        pairId: 'NC-007C',
+        issueId: 'NC-007C',
+        slug: 'nc-workflow-primary',
+        prompt: 'implement feature',
+        challengeStage: 'plan',
+        primaryModel: 'native-uncert',
+        repoDir,
+        now: TEST_NOW,
+        randomFn: () => 0,
+        routeFn: mockPlanRoute,
+      },
+    );
+
+    assert.ok(result.pair, 'pair should be selected with fallback coder');
+    assert.notEqual(result.pair!.primary.model, 'native-uncert');
+    assert.notEqual(result.pair!.challenger.model, 'native-uncert');
+    const rejections = result.nativeCertificationRejections || [];
+    assert.equal(rejections.filter((r) => r.modelId === 'native-uncert' && r.role === 'coder').length, 1);
+  } finally {
+    cleanup();
+  }
+});
+
+test('route snapshot selection rejects uncertified native primary coder', () => {
+  const { repoDir, cleanup } = makeNativeTestRepo({
+    'native-uncert': nativeModelEntry('patch'),
+    'native-workflow-model': nativeModelEntry('workflow'),
+  });
+  try {
+    writeCertArtifact(repoDir, 'openai', 'native-workflow-model', 'v1', { phase: 'workflow' });
+
+    const bootstrap: RouteArtifactSnapshot = {
+      planner: 'native-workflow-model',
+      coder: 'native-uncert',
+      reviewer: 'claude-opus-4-6',
+      planDepth: 'medium',
+      codeDepth: 'medium',
+      reviewMode: 'llm',
+    };
+
+    const result = pickChallengeWorkflowsWithContextAndReason(
+      ['native-uncert', 'claude-opus-4-6', 'native-workflow-model'],
+      {
+        pairId: 'NC-007D',
+        issueId: 'NC-007D',
+        slug: 'nc-snapshot-primary',
+        prompt: 'implement feature',
+        challengeStage: 'plan',
+        repoDir,
+        now: TEST_NOW,
+        randomFn: () => 0,
+      },
+      { bootstrap, expanded: null },
+    );
+
+    assert.ok(result.pair, 'pair should be selected with fallback coder');
+    assert.notEqual(result.pair!.primary.model, 'native-uncert');
+    assert.notEqual(result.pair!.challenger.model, 'native-uncert');
+    const rejections = result.nativeCertificationRejections || [];
+    assert.equal(rejections.filter((r) => r.modelId === 'native-uncert' && r.role === 'coder').length, 1);
+  } finally {
+    cleanup();
+  }
+});
+
 test('forced challenger set to uncertified native falls back to random pick', () => {
   const { repoDir, cleanup } = makeNativeTestRepo({
     'native-uncert': nativeModelEntry('patch'),

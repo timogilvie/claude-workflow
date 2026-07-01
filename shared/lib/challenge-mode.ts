@@ -174,6 +174,49 @@ function mergeRejections<T extends ChallengePairSelection>(
   return { ...result, nativeCertificationRejections: combined };
 }
 
+function selectCertifiedImplementationPrimary(
+  pool: string[],
+  primaryModel: string | undefined,
+  opts: {
+    repoDir?: string;
+    now?: Date;
+    randomFn: () => number;
+  },
+): { model?: string; rejections: ChallengeNativeRejection[]; failureReason?: ChallengeSelectionFailureReason } {
+  const { models: certifiedPool, rejections } =
+    filterNativeChallengeCandidates(pool, 'implementation', opts.repoDir, opts.now);
+  const uniquePool = filterDisabledModels(uniqueNonEmpty(certifiedPool));
+  const allRejections: ChallengeNativeRejection[] = [...rejections];
+
+  let selected = primaryModel?.trim() || '';
+  if (isDisabledModel(selected)) {
+    selected = '';
+  }
+
+  if (selected && opts.repoDir) {
+    const { rejections: primaryRejections } =
+      filterNativeChallengeCandidates([selected], 'implementation', opts.repoDir, opts.now);
+    if (primaryRejections.length > 0) {
+      allRejections.push(...primaryRejections);
+      selected = '';
+    }
+  }
+
+  if (!selected) {
+    if (uniquePool.length === 0) {
+      return { rejections: allRejections, failureReason: 'selection_failed' };
+    }
+    const primaryIndex = Math.floor(opts.randomFn() * uniquePool.length);
+    selected = uniquePool[primaryIndex] || '';
+  }
+
+  if (!selected) {
+    return { rejections: allRejections, failureReason: 'selection_failed' };
+  }
+
+  return { model: selected, rejections: allRejections };
+}
+
 export function filterDeepSeekChallengeModels(
   pool: string[],
   challengeConfig?: ChallengeConfig,
@@ -728,18 +771,19 @@ export function pickChallengeWorkflowsWithReason(
   const requestedStage = opts.challengeStage || 'implementation';
 
   // First, get the base coder selection (shared when a non-coder stage varies)
-  let primaryModel = opts.primaryModel?.trim() || '';
-  if (!primaryModel) {
-    if (!canRunChallenge(uniquePool)) {
-      return { pair: null, failureReason: 'selection_failed' };
-    }
-    const primaryIndex = Math.floor(randomFn() * uniquePool.length);
-    primaryModel = uniquePool[primaryIndex] || '';
+  const primarySelection = selectCertifiedImplementationPrimary(uniquePool, opts.primaryModel, {
+    repoDir: opts.repoDir,
+    now: opts.now,
+    randomFn,
+  });
+  const allRejections: ChallengeNativeRejection[] = [...primarySelection.rejections];
+  if (!primarySelection.model) {
+    return mergeRejections(
+      { pair: null, failureReason: primarySelection.failureReason || 'selection_failed' },
+      allRejections,
+    );
   }
-
-  if (!primaryModel) {
-    return { pair: null, failureReason: 'selection_failed' };
-  }
+  const primaryModel = primarySelection.model;
 
   // Route the workflow once to get planner/reviewer/depths
   const routing = routeFn(opts.prompt, { repoDir: opts.repoDir });
@@ -759,7 +803,7 @@ export function pickChallengeWorkflowsWithReason(
   // Filter the candidate pool for the cert phase required by this stage
   const { models: certifiedPool, rejections: nativeRejections } =
     filterNativeChallengeCandidates(uniquePool, stage, opts.repoDir, opts.now);
-  const allRejections: ChallengeNativeRejection[] = [...nativeRejections];
+  allRejections.push(...nativeRejections);
 
   // Reject a forced challenger that is an uncertified native for this stage
   let forcedChallengerModel = opts.forcedChallengerModel;
@@ -915,7 +959,7 @@ function buildPairFromRouteSnapshotWithReason(
   const agentMap = opts.agentMap || {};
   const defaultAgent = opts.defaultAgent || 'claude';
   const requestedStage = opts.challengeStage || 'implementation';
-  const primaryCoder = opts.primaryModel?.trim() || route.coder;
+  const requestedPrimaryCoder = opts.primaryModel?.trim() || route.coder;
 
   // Fall back to coder variation when the route snapshot lacks the requested
   // stage model (bootstrap artifacts may omit the planner).
@@ -933,7 +977,7 @@ function buildPairFromRouteSnapshotWithReason(
       pairId: opts.pairId,
       issueId: opts.issueId,
       slug: opts.slug,
-      primaryModel: primaryCoder,
+      primaryModel: requestedPrimaryCoder,
       forcedChallengerModel: opts.forcedChallengerModel,
       agentMap: opts.agentMap,
       defaultAgent: opts.defaultAgent,
@@ -959,10 +1003,24 @@ function buildPairFromRouteSnapshotWithReason(
     return mergeRejections(result, selection.nativeCertificationRejections || []);
   }
 
+  const primarySelection = selectCertifiedImplementationPrimary(pool, requestedPrimaryCoder, {
+    repoDir: opts.repoDir,
+    now: opts.now,
+    randomFn: opts.randomFn || Math.random,
+  });
+  const allRejections: ChallengeNativeRejection[] = [...primarySelection.rejections];
+  if (!primarySelection.model) {
+    return mergeRejections(
+      { pair: null, failureReason: primarySelection.failureReason || 'selection_failed' },
+      allRejections,
+    );
+  }
+  const primaryCoder = primarySelection.model;
+
   // Filter pool for the non-implementation stage's cert requirements
   const { models: certifiedPool, rejections: nativeRejections } =
     filterNativeChallengeCandidates(uniqueNonEmpty(pool), stage, opts.repoDir, opts.now);
-  const allRejections: ChallengeNativeRejection[] = [...nativeRejections];
+  allRejections.push(...nativeRejections);
 
   // Reject a forced challenger that is an uncertified native for this stage
   let forcedChallengerModel = opts.forcedChallengerModel;
