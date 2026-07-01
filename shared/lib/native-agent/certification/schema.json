@@ -1,0 +1,115 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "native-certification-artifact",
+  "title": "NativeCertificationArtifact",
+  "description": "Native agent certification artifact stored under .wavemill/native-agent-certifications/<provider>/<model>/<suite-version>.json",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "provider",
+    "model",
+    "phase",
+    "suiteVersion",
+    "certifiedAt",
+    "scenarios"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "const": 2,
+      "description": "Schema version for forward compatibility"
+    },
+    "provider": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Provider identifier (e.g. anthropic, openai, openrouter)"
+    },
+    "model": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Model identifier (e.g. claude-sonnet-4-6)"
+    },
+    "phase": {
+      "type": "string",
+      "enum": ["read-only", "patch", "workflow"],
+      "description": "The certified phase level; ordering is read-only < patch < workflow"
+    },
+    "suiteVersion": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Suite version string matching the storage path segment"
+    },
+    "certifiedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 datetime when certification was completed"
+    },
+    "expiresAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Optional explicit expiry datetime; takes precedence over derived TTL"
+    },
+    "scenarios": {
+      "type": "array",
+      "description": "Per-scenario results from the certification run",
+      "items": {
+        "$ref": "#/$defs/ScenarioResult"
+      }
+    },
+    "knownLimitations": {
+      "type": "array",
+      "description": "Optional known limitations or caveats for this certification",
+      "items": {
+        "type": "string"
+      }
+    },
+    "totalRetryCount": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Total retry count across all scenarios"
+    }
+  },
+  "$defs": {
+    "ScenarioResult": {
+      "type": "object",
+      "required": ["scenarioId", "passed"],
+      "additionalProperties": false,
+      "properties": {
+        "scenarioId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Stable scenario identifier within the suite"
+        },
+        "passed": {
+          "type": "boolean",
+          "description": "Whether this scenario passed"
+        },
+        "failureMessage": {
+          "type": "string",
+          "description": "Optional human-readable failure message"
+        },
+        "retryCount": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of attempts made before final result"
+        },
+        "attempts": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Total attempts executed, including the initial attempt"
+        },
+        "finalAttemptStatus": {
+          "type": "string",
+          "enum": ["pass", "fail", "unsupported", "provider-flake"],
+          "description": "Final outcome kind from the last attempt"
+        },
+        "failureClass": {
+          "type": "string",
+          "enum": ["deterministic_failure", "provider_flake", "unsupported_capability"],
+          "description": "Failure classification for non-passing scenarios"
+        }
+      }
+    }
+  }
+}

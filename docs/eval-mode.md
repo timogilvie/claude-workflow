@@ -113,7 +113,7 @@ The tool gathers measurable outcomes:
 
 ### 5) LLM Judge Invocation
 
-Context is sent to the LLM judge (default: `claude-sonnet-4-5-20250929`):
+Context is sent to the LLM judge (default: `claude-sonnet-5`):
 
 **Judge inputs:**
 - Task prompt (issue description)
@@ -191,7 +191,7 @@ Interventions reduce the score based on severity:
   Issue:  HOK-699
   PR:     https://github.com/org/repo/pull/42
   Agent:  claude
-  Model:  claude-sonnet-4-5-20250929
+  Model:  claude-sonnet-5
   Time:   127s
 
   Score:  0.82  ████████░░  Good
@@ -236,7 +236,7 @@ When piped to a file or non-TTY, outputs complete JSON record:
   "difficultyBand": "moderate",
   "taskContext": {...},
   "repoContext": {...},
-  "modelId": "claude-sonnet-4-5-20250929",
+  "modelId": "claude-sonnet-5",
   "agentType": "claude",
   "timeSeconds": 127
 }
@@ -250,7 +250,7 @@ Eval settings live in `.wavemill-config.json`:
 {
   "eval": {
     "judge": {
-      "model": "claude-sonnet-4-5-20250929",
+      "model": "claude-sonnet-5",
       "provider": "claude-cli"
     },
     "interventions": {
@@ -269,7 +269,7 @@ Eval settings live in `.wavemill-config.json`:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `eval.judge.model` | `claude-sonnet-4-5-20250929` | LLM model for evaluation |
+| `eval.judge.model` | `claude-sonnet-5` | LLM model for evaluation |
 | `eval.judge.provider` | `claude-cli` | Provider (`claude-cli` or `anthropic`) |
 | `eval.interventions.penalties.*` | See above | Penalty weights per intervention type |
 

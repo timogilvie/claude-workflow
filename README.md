@@ -287,8 +287,8 @@ Configure in `.wavemill-config.json`:
   "router": {
     "enabled": true,
     "mode": "auto",
-    "models": ["claude-sonnet-4-6", "claude-opus-4-8", "o3"],
-    "defaultModel": "claude-sonnet-4-6"
+    "models": ["claude-sonnet-5", "claude-opus-4-8", "o3"],
+    "defaultModel": "claude-sonnet-5"
   }
 }
 ```

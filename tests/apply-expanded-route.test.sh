@@ -122,7 +122,7 @@ echo "=== Expanded Route Apply Helper ==="
 {
   "planner": "expanded-planner",
   "coder": "gpt-5.4",
-  "reviewer": "claude-sonnet-4-6",
+  "reviewer": "claude-sonnet-5",
   "planDepth": "deep",
   "codeDepth": "deep",
   "reviewRecommended": "static+llm",
@@ -166,9 +166,9 @@ EOF
   feature_dir="$wt_dir/features/test-slug"
   cat > "$feature_dir/.post-expansion-route.json" <<'EOF'
 {
-  "planner": "claude-sonnet-4-6",
+  "planner": "claude-sonnet-5",
   "coder": "gpt-5.4",
-  "reviewer": "claude-sonnet-4-6",
+  "reviewer": "claude-sonnet-5",
   "planDepth": "deep",
   "codeDepth": "medium",
   "reviewMode": "llm"
@@ -179,7 +179,7 @@ EOF
   status=$?
   set -e
 
-  if [[ "$status" -eq 0 ]] && grep -q '\[HOK-1512\] \[router\] planner=claude-sonnet-4-6' <<< "$output"; then
+  if [[ "$status" -eq 0 ]] && grep -q '\[HOK-1512\] \[router\] planner=claude-sonnet-5' <<< "$output"; then
     pass "default mode emits concise single-line route summary"
   else
     fail "default mode should emit concise route summary"
@@ -291,7 +291,7 @@ EOF
   printf '{"preserved":true}\n' > "$feature_dir/.initial-route.json"
   cp "$feature_dir/.initial-route.json" "$root/initial-before.json"
   cat > "$feature_dir/.post-expansion-route.json" <<'EOF'
-{"coder":"gpt-5.4","codeDepth":"deep","reviewer":"claude-sonnet-4-6","reviewMode":"llm"}
+{"coder":"gpt-5.4","codeDepth":"deep","reviewer":"claude-sonnet-5","reviewMode":"llm"}
 EOF
 
   if run_apply "$feature_dir" "$state_file" \
@@ -310,7 +310,7 @@ EOF
   state_file="${fixture[2]}"
   feature_dir="$wt_dir/features/test-slug"
   cat > "$feature_dir/.post-expansion-route.json" <<'EOF'
-{"coder":"gpt-5.4","codeDepth":"deep","reviewer":"claude-sonnet-4-6","reviewRecommended":"llm"}
+{"coder":"gpt-5.4","codeDepth":"deep","reviewer":"claude-sonnet-5","reviewRecommended":"llm"}
 EOF
 
   if run_apply "$feature_dir" "$state_file"; then

@@ -8,7 +8,9 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { clearConfigCache } from './config.ts';
 import type { QuotaStatus } from './quota-state.ts';
-import { applyDifficultyFloor, readTaskPromptFromFile, routeWorkflow, routeWorkflowAuto, routeWorkflowHokusai, summarizeWorkflowRoute, tryPolicyResolution } from './workflow-router.ts';
+import { applyDifficultyFloor, readTaskPromptFromFile, routeWorkflow, routeWorkflowAuto, routeWorkflowHokusai, summarizeWorkflowRoute, tryPolicyResolution, STAGE_PHASE_REQUIREMENT } from './workflow-router.ts';
+import type { RouterCertificationRejection } from './workflow-router.ts';
+import { CERTIFICATION_SCHEMA_VERSION } from './native-agent/certification/schema.ts';
 
 let passed = 0;
 let failed = 0;
@@ -38,7 +40,7 @@ function baseConfig() {
         'claude-opus-4-8': 'claude',
         'claude-opus-4-7': 'claude',
         'claude-opus-4-6': 'claude',
-        'claude-sonnet-4-6': 'claude',
+        'claude-sonnet-5': 'claude',
         'claude-sonnet-4-5-20250929': 'claude',
         'claude-haiku-4-5-20251001': 'claude',
         'gpt-5.3-codex': 'codex',
@@ -51,7 +53,7 @@ function baseConfig() {
         'claude-opus-4-8': { inputCostPerMTok: 15, outputCostPerMTok: 75, cacheWriteCostPerMTok: 18.75, cacheReadCostPerMTok: 1.5 },
         'claude-opus-4-7': { inputCostPerMTok: 15, outputCostPerMTok: 75, cacheWriteCostPerMTok: 18.75, cacheReadCostPerMTok: 1.5 },
         'claude-opus-4-6': { inputCostPerMTok: 15, outputCostPerMTok: 75, cacheWriteCostPerMTok: 18.75, cacheReadCostPerMTok: 1.5 },
-        'claude-sonnet-4-6': { inputCostPerMTok: 3, outputCostPerMTok: 15, cacheWriteCostPerMTok: 3.75, cacheReadCostPerMTok: 0.3 },
+        'claude-sonnet-5': { inputCostPerMTok: 3, outputCostPerMTok: 15, cacheWriteCostPerMTok: 3.75, cacheReadCostPerMTok: 0.3 },
         'claude-sonnet-4-5-20250929': { inputCostPerMTok: 3, outputCostPerMTok: 15, cacheWriteCostPerMTok: 3.75, cacheReadCostPerMTok: 0.3 },
         'claude-haiku-4-5-20251001': { inputCostPerMTok: 0.8, outputCostPerMTok: 4, cacheWriteCostPerMTok: 1, cacheReadCostPerMTok: 0.08 },
         'gpt-5.3-codex': { inputCostPerMTok: 1.75, outputCostPerMTok: 14, cacheWriteCostPerMTok: 2.1875, cacheReadCostPerMTok: 0.44 },
@@ -86,11 +88,11 @@ function frontierSiblingConfig() {
         },
       },
       ladders: {
-        planning: ['claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        coding: ['claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        review: ['claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4'],
-        classify: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'gpt-5.5', 'gpt-5.4'],
+        planning: ['claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
+        coding: ['claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
+        review: ['claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
+        routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-5', 'claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4'],
+        classify: ['claude-haiku-4-5-20251001', 'claude-sonnet-5', 'gpt-5.5', 'gpt-5.4'],
       },
     },
   };
@@ -201,6 +203,7 @@ await test('routes broad CLI workflow work to deep planning and medium-or-higher
     assert.ok([
       'gpt-5.5',
       'gpt-5.4',
+      'claude-sonnet-5',
       'claude-sonnet-4-6',
       'claude-sonnet-4-5-20250929',
       'claude-opus-4-6',
@@ -252,7 +255,7 @@ await test('heuristic routing honors stage-specific planner and reviewer pools',
       ...baseConfig().router,
       availableModels: {
         planner: ['gpt-5.4'],
-        reviewer: ['claude-sonnet-4-6'],
+        reviewer: ['claude-sonnet-5'],
       },
     },
   });
@@ -262,7 +265,7 @@ await test('heuristic routing honors stage-specific planner and reviewer pools',
       { repoDir, maxCostUsd: 25, skipDifficultyClassification: true }
     );
     assert.equal(decision.planner, 'gpt-5.4');
-    assert.equal(decision.reviewer, 'claude-sonnet-4-6');
+    assert.equal(decision.reviewer, 'claude-sonnet-5');
   } finally {
     cleanup();
   }
@@ -273,9 +276,9 @@ await test('filters DeepSeek models from routing when provider is disabled', () 
     router: {
       ...baseConfig().router,
       availableModels: {
-        planner: ['deepseek-v4-pro', 'claude-sonnet-4-6'],
-        coder: ['deepseek-v4-pro', 'claude-sonnet-4-6'],
-        reviewer: ['deepseek-v4-pro', 'claude-sonnet-4-6'],
+        planner: ['deepseek-v4-pro', 'claude-sonnet-5'],
+        coder: ['deepseek-v4-pro', 'claude-sonnet-5'],
+        reviewer: ['deepseek-v4-pro', 'claude-sonnet-5'],
       },
     },
     providers: {
@@ -295,7 +298,7 @@ await test('filters DeepSeek models from routing when provider is disabled', () 
   });
   try {
     const decision = routeWorkflow('Implement a backend workflow feature with tests.', { repoDir });
-    assert.equal(decision.coder, 'claude-sonnet-4-6');
+    assert.equal(decision.coder, 'claude-sonnet-5');
     assert.ok(decision.reasoning.some((line) => line.includes('providers.deepseek.enabled')));
   } finally {
     cleanup();
@@ -400,6 +403,7 @@ await test('policy routing can return DeepSeek when explicitly configured', () =
       'claude-opus-4-8': 'exhausted',
       'claude-opus-4-7': 'exhausted',
       'claude-opus-4-6': 'exhausted',
+      'claude-sonnet-5': 'exhausted',
       'claude-sonnet-4-6': 'exhausted',
       'claude-sonnet-4-5-20250929': 'exhausted',
       'claude-haiku-4-5-20251001': 'exhausted',
@@ -435,9 +439,9 @@ await test('allows DeepSeek routing for configured stages when provider is enabl
     router: {
       ...baseConfig().router,
       availableModels: {
-        planner: ['claude-sonnet-4-6'],
+        planner: ['claude-sonnet-5'],
         coder: ['deepseek-v4-pro'],
-        reviewer: ['claude-sonnet-4-6'],
+        reviewer: ['claude-sonnet-5'],
       },
     },
     providers: {
@@ -460,8 +464,8 @@ await test('allows DeepSeek routing for configured stages when provider is enabl
   try {
     const decision = routeWorkflow('Implement a backend workflow feature with tests.', { repoDir });
     assert.equal(decision.coder, 'deepseek-v4-pro');
-    assert.equal(decision.planner, 'claude-sonnet-4-6');
-    assert.equal(decision.reviewer, 'claude-sonnet-4-6');
+    assert.equal(decision.planner, 'claude-sonnet-5');
+    assert.equal(decision.reviewer, 'claude-sonnet-5');
   } finally {
     if (originalKey === undefined) {
       delete process.env.TEST_DEEPSEEK_KEY;
@@ -477,9 +481,9 @@ await test('falls back from DeepSeek when enabled but API key is missing', () =>
     router: {
       ...baseConfig().router,
       availableModels: {
-        planner: ['claude-sonnet-4-6'],
-        coder: ['deepseek-v4-pro', 'claude-sonnet-4-6'],
-        reviewer: ['claude-sonnet-4-6'],
+        planner: ['claude-sonnet-5'],
+        coder: ['deepseek-v4-pro', 'claude-sonnet-5'],
+        reviewer: ['claude-sonnet-5'],
       },
     },
     providers: {
@@ -501,7 +505,7 @@ await test('falls back from DeepSeek when enabled but API key is missing', () =>
   delete process.env.TEST_DEEPSEEK_KEY;
   try {
     const decision = routeWorkflow('Implement a backend workflow feature with tests.', { repoDir });
-    assert.equal(decision.coder, 'claude-sonnet-4-6');
+    assert.equal(decision.coder, 'claude-sonnet-5');
     assert.ok(decision.reasoning.some((line) => line.includes('TEST_DEEPSEEK_KEY')));
   } finally {
     if (originalKey === undefined) {
@@ -853,7 +857,7 @@ await test('policy routing logs class downgrade without same-class metadata', as
         { repoDir, taskDifficulty: 'hard', skipDifficultyClassification: true }
       ))
     );
-    assert.match(stderr, /\[(planner|coder|reviewer)] policy adjustment: gpt-5\.5 -> claude-sonnet-4-6 \(quota=degrading\)/);
+    assert.match(stderr, /\[(planner|coder|reviewer)] policy adjustment: gpt-5\.5 -> claude-sonnet-5 \(quota=degrading\)/);
     assert.doesNotMatch(stderr, /same-class=/);
   } finally {
     cleanup();
@@ -1233,7 +1237,7 @@ await test('registry-only model addition reaches heuristic routing without code 
         },
       },
       ladders: {
-        planning: ['acme-frontier-1', 'claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        planning: ['acme-frontier-1', 'claude-opus-4-8', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
       },
     },
   });
@@ -1428,6 +1432,354 @@ await test('tryPolicyResolution stays deterministic with exploration disabled', 
   }
 });
 
+
+// ===========================
+// Native Certification Router Policy Tests
+// ===========================
+
+/** Write a certification artifact to the test repo */
+function writeCertArtifact(
+  repoDir: string,
+  provider: string,
+  model: string,
+  suiteVersion: string,
+  overrides: Record<string, unknown> = {},
+): void {
+  const certDir = join(repoDir, '.wavemill', 'native-agent-certifications', provider, model);
+  mkdirSync(certDir, { recursive: true });
+  const artifact = {
+    schemaVersion: CERTIFICATION_SCHEMA_VERSION,
+    provider,
+    model,
+    phase: 'patch',
+    suiteVersion,
+    certifiedAt: '2026-06-01T00:00:00.000Z',
+    scenarios: [{ scenarioId: 's1', passed: true }],
+    ...overrides,
+  };
+  writeFileSync(join(certDir, `${suiteVersion}.json`), JSON.stringify(artifact));
+}
+
+/** Build a modelRegistry override for a native model */
+function nativeModelConfig(certPhase: string = 'patch', suiteVersion: string = 'v1') {
+  return {
+    class: 'strong_generalist',
+    nativeCapability: {
+      nativeProvider: 'openai',
+      piTransportKind: 'openai-responses',
+      readOnlyNative: 'certified',
+      certification: {
+        maxCertifiedPhase: certPhase,
+        certifiedAt: '2026-06-01T00:00:00.000Z',
+        certificationSuiteVersion: suiteVersion,
+      },
+    },
+  };
+}
+
+console.log('\n--- Native Certification Router Policy Tests ---\n');
+
+await test('STAGE_PHASE_REQUIREMENT maps reviewer→read-only, coder→patch, planner→workflow', () => {
+  assert.equal(STAGE_PHASE_REQUIREMENT.reviewer, 'read-only');
+  assert.equal(STAGE_PHASE_REQUIREMENT.coder, 'patch');
+  assert.equal(STAGE_PHASE_REQUIREMENT.planner, 'workflow');
+});
+
+await test('valid read-only cert accepted for reviewer role', () => {
+  const { repoDir, cleanup } = makeRepo({
+    modelRegistry: {
+      models: { 'native-ro-model': nativeModelConfig('read-only') },
+    },
+  });
+  try {
+    writeCertArtifact(repoDir, 'openai', 'native-ro-model', 'v1', { phase: 'read-only' });
+
+    const decision = routeWorkflow('Fix a small bug in the router.', {
+      repoDir,
+      reviewerModelsAvailable: ['native-ro-model'],
+      modelsAvailable: ['native-ro-model', 'claude-haiku-4-5-20251001'],
+      skipDifficultyClassification: true,
+    });
+
+    // reviewer pool had a valid read-only cert — no rejection for reviewer
+    const reviewerRejection = (decision.nativeCertificationRejections ?? [])
+      .find((r) => r.modelId === 'native-ro-model' && r.role === 'reviewer');
+    assert.equal(reviewerRejection, undefined, 'valid read-only cert should not be rejected for reviewer');
+  } finally {
+    cleanup();
+  }
+});
+
+await test('valid patch cert accepted for coder and reviewer roles', () => {
+  const { repoDir, cleanup } = makeRepo({
+    modelRegistry: {
+      models: { 'native-patch-model': nativeModelConfig('patch') },
+    },
+  });
+  try {
+    writeCertArtifact(repoDir, 'openai', 'native-patch-model', 'v1', { phase: 'patch' });
+
+    const decision = routeWorkflow('Implement a feature with tests.', {
+      repoDir,
+      coderModelsAvailable: ['native-patch-model'],
+      reviewerModelsAvailable: ['native-patch-model'],
+      modelsAvailable: ['native-patch-model', 'claude-haiku-4-5-20251001'],
+      skipDifficultyClassification: true,
+    });
+
+    const coderRejection = (decision.nativeCertificationRejections ?? [])
+      .find((r) => r.modelId === 'native-patch-model' && r.role === 'coder');
+    const reviewerRejection = (decision.nativeCertificationRejections ?? [])
+      .find((r) => r.modelId === 'native-patch-model' && r.role === 'reviewer');
+    assert.equal(coderRejection, undefined, 'patch cert should not be rejected for coder');
+    assert.equal(reviewerRejection, undefined, 'patch cert satisfies read-only, should not be rejected for reviewer');
+  } finally {
+    cleanup();
+  }
+});
+
+await test('patch cert rejects planner role which requires workflow certification', () => {
+  const { repoDir, cleanup } = makeRepo({
+    modelRegistry: {
+      models: { 'native-patch-model': nativeModelConfig('patch') },
+    },
+  });
+  try {
+    writeCertArtifact(repoDir, 'openai', 'native-patch-model', 'v1', { phase: 'patch' });
+
+    const decision = routeWorkflow('Plan and implement a new auth workflow.', {
+      repoDir,
+      plannerModelsAvailable: ['native-patch-model', 'claude-haiku-4-5-20251001'],
+      modelsAvailable: ['native-patch-model', 'claude-haiku-4-5-20251001'],
+      skipDifficultyClassification: true,
+    });
+
+    const plannerRejection = (decision.nativeCertificationRejections ?? [])
+      .find((r) => r.modelId === 'native-patch-model' && r.role === 'planner');
+    assert.ok(plannerRejection, 'patch-cert native model should be rejected for planner (requires workflow)');
+    assert.equal(plannerRejection?.reason, 'insufficient-phase');
+    assert.equal(plannerRejection?.requestedPhase, 'workflow');
+    assert.notEqual(decision.planner, 'native-patch-model', 'planner must not be the rejected native model');
+  } finally {
+    cleanup();
+  }
+});
+
+await test('missing artifact rejects native model and routes to non-native fallback', () => {
+  const { repoDir, cleanup } = makeRepo({
+    modelRegistry: {
+      models: { 'native-no-cert': nativeModelConfig('patch') },
+    },
+  });
+  try {
+    // Intentionally do NOT write any cert artifact
+
+    const decision = routeWorkflow('Build a new CLI tool.', {
+      repoDir,
+      coderModelsAvailable: ['native-no-cert', 'claude-haiku-4-5-20251001'],
+      modelsAvailable: ['native-no-cert', 'claude-haiku-4-5-20251001'],
+      skipDifficultyClassification: true,
+    });
+
+    const coderRejection = (decision.nativeCertificationRejections ?? [])
+      .find((r) => r.modelId === 'native-no-cert' && r.role === 'coder');
+    assert.ok(coderRejection, 'missing artifact must produce a rejection record');
+    assert.equal(coderRejection?.reason, 'missing');
+    assert.notEqual(decision.coder, 'native-no-cert', 'coder must fall back to non-native model');
+    assert.ok(
+      decision.reasoning.some((line) => line.includes('native-no-cert') && line.includes('missing')),
+      'reasoning should mention the rejected native model',
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+await test('stale artifact rejects native model', () => {
+  const { repoDir, cleanup } = makeRepo({
+    modelRegistry: {
+      models: {
+        'native-stale': {
+          ...nativeModelConfig('patch'),
+          nativeCapability: {
+            nativeProvider: 'openai',
+            piTransportKind: 'openai-responses',
+            readOnlyNative: 'certified',
+            certification: {
+              maxCertifiedPhase: 'patch',
+              // Registry certifiedAt doesn't affect artifact staleness check
+              certifiedAt: '2026-06-01T00:00:00.000Z',
+              certificationSuiteVersion: 'v1',
+            },
+          },
+        },
+      },
+    },
+  });
+  try {
+    // Cert older than 60 days from now (2026-06-30)
+    writeCertArtifact(repoDir, 'openai', 'native-stale', 'v1', {
+      phase: 'patch',
+      certifiedAt: '2020-01-01T00:00:00.000Z',
+    });
+
+    const decision = routeWorkflow('Implement a feature.', {
+      repoDir,
+      coderModelsAvailable: ['native-stale', 'claude-haiku-4-5-20251001'],
+      modelsAvailable: ['native-stale', 'claude-haiku-4-5-20251001'],
+      skipDifficultyClassification: true,
+    });
+
+    const rejection = (decision.nativeCertificationRejections ?? [])
+      .find((r) => r.modelId === 'native-stale' && r.role === 'coder');
+    assert.ok(rejection, 'stale cert must produce a rejection');
+    assert.equal(rejection?.reason, 'stale');
+    assert.notEqual(decision.coder, 'native-stale');
+  } finally {
+    cleanup();
+  }
+});
+
+await test('wrong suite version rejects native model', () => {
+  const { repoDir, cleanup } = makeRepo({
+    modelRegistry: {
+      models: {
+        'native-wrong-suite': nativeModelConfig('patch', 'v2'),
+      },
+    },
+  });
+  try {
+    // Artifact has suiteVersion 'v1' but registry expects 'v2'
+    writeCertArtifact(repoDir, 'openai', 'native-wrong-suite', 'v2', {
+      phase: 'patch',
+      suiteVersion: 'v1',
+    });
+
+    const decision = routeWorkflow('Fix a router bug.', {
+      repoDir,
+      coderModelsAvailable: ['native-wrong-suite', 'claude-haiku-4-5-20251001'],
+      modelsAvailable: ['native-wrong-suite', 'claude-haiku-4-5-20251001'],
+      skipDifficultyClassification: true,
+    });
+
+    const rejection = (decision.nativeCertificationRejections ?? [])
+      .find((r) => r.modelId === 'native-wrong-suite' && r.role === 'coder');
+    assert.ok(rejection, 'suite version mismatch must produce a rejection');
+    assert.equal(rejection?.reason, 'wrong-suite');
+    assert.notEqual(decision.coder, 'native-wrong-suite');
+  } finally {
+    cleanup();
+  }
+});
+
+await test('malformed artifact rejects native model', () => {
+  const { repoDir, cleanup } = makeRepo({
+    modelRegistry: {
+      models: { 'native-malformed': nativeModelConfig('patch') },
+    },
+  });
+  try {
+    const certDir = join(repoDir, '.wavemill', 'native-agent-certifications', 'openai', 'native-malformed');
+    mkdirSync(certDir, { recursive: true });
+    // Write an incomplete / structurally invalid artifact
+    writeFileSync(join(certDir, 'v1.json'), JSON.stringify({ schemaVersion: 1, provider: 'openai' }));
+
+    const decision = routeWorkflow('Refactor a service.', {
+      repoDir,
+      coderModelsAvailable: ['native-malformed', 'claude-haiku-4-5-20251001'],
+      modelsAvailable: ['native-malformed', 'claude-haiku-4-5-20251001'],
+      skipDifficultyClassification: true,
+    });
+
+    const rejection = (decision.nativeCertificationRejections ?? [])
+      .find((r) => r.modelId === 'native-malformed' && r.role === 'coder');
+    assert.ok(rejection, 'malformed artifact must produce a rejection');
+    assert.equal(rejection?.reason, 'malformed');
+    assert.notEqual(decision.coder, 'native-malformed');
+  } finally {
+    cleanup();
+  }
+});
+
+await test('native-only ineligible pool is rejected fail-closed, not silently treated as eligible', () => {
+  const { repoDir, cleanup } = makeRepo({
+    modelRegistry: {
+      models: { 'native-only': nativeModelConfig('patch') },
+    },
+  });
+  try {
+    // No cert artifact written — native model will be rejected
+
+    const decision = routeWorkflow('Build a feature.', {
+      repoDir,
+      coderModelsAvailable: ['native-only'],
+      modelsAvailable: ['native-only'],
+      skipDifficultyClassification: true,
+    });
+
+    assert.notEqual(decision.coder, 'native-only', 'rejected native model must not be selected as coder');
+    const rejection = (decision.nativeCertificationRejections ?? [])
+      .find((r) => r.modelId === 'native-only' && r.role === 'coder');
+    assert.ok(rejection, 'rejection must be recorded even when no fallback exists in the pool');
+    assert.equal(rejection?.reason, 'missing');
+  } finally {
+    cleanup();
+  }
+});
+
+await test('diagnostics contain modelId, role, requestedPhase, nativeCapability, requiredSuiteVersion, and reason', () => {
+  const { repoDir, cleanup } = makeRepo({
+    modelRegistry: {
+      models: { 'native-diag': nativeModelConfig('patch', 'v1') },
+    },
+  });
+  try {
+    // No artifact — triggers missing rejection
+
+    const decision = routeWorkflow('Implement a workflow feature.', {
+      repoDir,
+      coderModelsAvailable: ['native-diag', 'claude-haiku-4-5-20251001'],
+      modelsAvailable: ['native-diag', 'claude-haiku-4-5-20251001'],
+      skipDifficultyClassification: true,
+    });
+
+    const rejection = (decision.nativeCertificationRejections ?? [])
+      .find((r) => r.modelId === 'native-diag');
+    assert.ok(rejection, 'expected a rejection record');
+
+    // Verify all required diagnostic fields
+    assert.equal(typeof rejection?.modelId, 'string');
+    assert.equal(typeof rejection?.role, 'string');
+    assert.equal(typeof rejection?.requestedPhase, 'string');
+    assert.equal(typeof rejection?.nativeCapability, 'string');
+    assert.equal(typeof rejection?.requiredSuiteVersion, 'string');
+    assert.equal(typeof rejection?.reason, 'string');
+
+    assert.equal(rejection?.nativeCapability, 'certified');
+    assert.equal(rejection?.requiredSuiteVersion, 'v1');
+  } finally {
+    cleanup();
+  }
+});
+
+await test('non-native models are unaffected by native certification filter', () => {
+  const { repoDir, cleanup } = makeRepo();
+  try {
+    const decision = routeWorkflow('Implement a new feature with tests.', {
+      repoDir,
+      modelsAvailable: ['claude-sonnet-4-5-20250929', 'claude-haiku-4-5-20251001'],
+      skipDifficultyClassification: true,
+    });
+
+    assert.equal(
+      (decision.nativeCertificationRejections ?? []).length,
+      0,
+      'non-native models should produce zero native certification rejections',
+    );
+  } finally {
+    cleanup();
+  }
+});
 
 console.log(`\n--- Results: ${passed} passed, ${failed} failed ---`);
 if (failed > 0) {

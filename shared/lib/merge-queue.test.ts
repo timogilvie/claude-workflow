@@ -112,6 +112,7 @@ test('demotion patch clears candidate promotion state', () => {
   assert.equal(patch.queueState, 'ready-stale');
   assert.equal(patch.candidatePromotedAt, null);
   assert.equal(patch.candidateLastProgressAt, null);
+  assert.equal(patch.mergeRetryInProgressUntil, null);
   assert.equal(patch.candidateSkipReason, 'stuck');
 });
 
@@ -150,6 +151,51 @@ test('tick planner demotes stuck candidate and promotes disjoint replacement', (
   });
   assert.deepEqual(plan.stuckIssues, ['HOK-1']);
   assert.deepEqual(plan.selectedIssues, ['HOK-2']);
+});
+
+test('active transient merge retry candidates are not demoted as stuck', () => {
+  const plan = planMergeQueueTick({
+    readyPrs: [
+      pr({
+        issue: 'HOK-1',
+        queueState: 'merge-candidate',
+        candidatePromotedAt: '2026-05-06T12:00:00.000Z',
+        candidateLastProgressAt: '2026-05-06T12:00:00.000Z',
+        mergeRetryInProgressUntil: '2026-05-06T12:35:00.000Z',
+        changedFiles: ['a.ts'],
+      }),
+      pr({
+        issue: 'HOK-2',
+        prNumber: 2,
+        branch: 'task/two',
+        queueState: 'ready-stale',
+        changedFiles: ['b.ts'],
+      }),
+    ],
+    now: '2026-05-06T12:30:00.000Z',
+    config,
+  });
+  assert.deepEqual(plan.stuckIssues, []);
+  assert.deepEqual(plan.selectedIssues, ['HOK-1', 'HOK-2']);
+});
+
+test('expired transient merge retry candidates can still be demoted as stuck', () => {
+  const plan = planMergeQueueTick({
+    readyPrs: [
+      pr({
+        issue: 'HOK-1',
+        queueState: 'merge-candidate',
+        candidatePromotedAt: '2026-05-06T12:00:00.000Z',
+        candidateLastProgressAt: '2026-05-06T12:00:00.000Z',
+        mergeRetryInProgressUntil: '2026-05-06T12:20:00.000Z',
+        changedFiles: ['a.ts'],
+      }),
+    ],
+    now: '2026-05-06T12:30:00.000Z',
+    config,
+  });
+  assert.deepEqual(plan.stuckIssues, ['HOK-1']);
+  assert.deepEqual(plan.selectedIssues, []);
 });
 
 // --- Terminal workflow status predicate tests ---

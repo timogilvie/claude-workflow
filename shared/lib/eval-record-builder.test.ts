@@ -568,11 +568,11 @@ describe('eval-record-builder', () => {
       record.routeProvenance = {
         decisionSource: 'expanded',
         bootstrapRoute: {
-          coder: 'claude-sonnet-4-6',
+          coder: 'claude-sonnet-5',
           codeDepth: 'medium',
           reviewer: 'claude-opus-4-6',
           reviewMode: 'llm',
-          planner: 'claude-sonnet-4-6',
+          planner: 'claude-sonnet-5',
           planDepth: 'deep',
           artifactPath: 'features/HOK-2071/.initial-route.json',
           artifactHash: 'a'.repeat(64),
@@ -587,7 +587,7 @@ describe('eval-record-builder', () => {
         expandedRoute: {
           coder: 'gpt-5.4',
           codeDepth: 'deep',
-          reviewer: 'claude-sonnet-4-6',
+          reviewer: 'claude-sonnet-5',
           reviewMode: 'static',
           planner: 'gpt-5.4',
           planDepth: 'deep',
@@ -604,7 +604,7 @@ describe('eval-record-builder', () => {
         activeRoute: {
           coder: 'gpt-5.4',
           codeDepth: 'deep',
-          reviewer: 'claude-sonnet-4-6',
+          reviewer: 'claude-sonnet-5',
           reviewMode: 'static',
           planner: 'gpt-5.4',
           planDepth: 'deep',
@@ -879,14 +879,14 @@ describe('eval-record-builder', () => {
         routing: {
           reviewer: {
             role: 'reviewer',
-            requestedSelector: { kind: 'pinned', modelId: 'claude-sonnet-4-6' },
-            resolvedModelId: 'claude-sonnet-4-6',
+            requestedSelector: { kind: 'pinned', modelId: 'claude-sonnet-5' },
+            resolvedModelId: 'claude-sonnet-5',
             sourceLayer: 'user',
           },
         },
       });
 
-      expect(baseRecord.routing?.reviewer?.resolvedModelId).toBe('claude-sonnet-4-6');
+      expect(baseRecord.routing?.reviewer?.resolvedModelId).toBe('claude-sonnet-5');
     });
 
     it('should handle partial metadata gracefully', () => {
@@ -1062,7 +1062,7 @@ describe('eval-record-builder', () => {
     const routeContext = {
       decisionSource: 'expanded' as const,
       bootstrapRoute: {
-        coder: 'claude-sonnet-4-6',
+        coder: 'claude-sonnet-5',
         codeDepth: 'medium',
         reviewer: 'claude-opus-4-6',
         reviewMode: 'llm',
@@ -1096,7 +1096,7 @@ describe('eval-record-builder', () => {
       expect(baseRecord.challengeRouteContext).toEqual({
         decisionSource: 'expanded',
         bootstrapRoute: {
-          coder: 'claude-sonnet-4-6',
+          coder: 'claude-sonnet-5',
           codeDepth: 'medium',
           reviewer: 'claude-opus-4-6',
           reviewMode: 'llm',
@@ -1119,7 +1119,7 @@ describe('eval-record-builder', () => {
       expect(baseRecord.challengeRouteContext).toEqual({
         decisionSource: 'bootstrap',
         bootstrapRoute: {
-          coder: 'claude-sonnet-4-6',
+          coder: 'claude-sonnet-5',
           codeDepth: 'medium',
           reviewer: 'claude-opus-4-6',
           reviewMode: 'llm',
@@ -1132,7 +1132,7 @@ describe('eval-record-builder', () => {
     const routeProvenance = {
       decisionSource: 'expanded' as const,
       bootstrapRoute: {
-        coder: 'claude-sonnet-4-6',
+        coder: 'claude-sonnet-5',
         codeDepth: 'medium',
         reviewer: 'claude-opus-4-6',
         reviewMode: 'llm',
@@ -1140,7 +1140,7 @@ describe('eval-record-builder', () => {
       expandedRoute: {
         coder: 'gpt-5.4',
         codeDepth: 'deep',
-        reviewer: 'claude-sonnet-4-6',
+        reviewer: 'claude-sonnet-5',
         reviewMode: 'static',
         source: 'expanded' as const,
         routerMode: 'survival' as const,
@@ -1149,7 +1149,7 @@ describe('eval-record-builder', () => {
       activeRoute: {
         coder: 'gpt-5.4',
         codeDepth: 'deep',
-        reviewer: 'claude-sonnet-4-6',
+        reviewer: 'claude-sonnet-5',
         reviewMode: 'static',
         source: 'expanded' as const,
         routerMode: 'survival' as const,
@@ -1204,7 +1204,7 @@ describe('eval-record-builder', () => {
   describe('attachExecutedPlanning (HOK-1728)', () => {
     const executedPlanning = {
       agent: 'codex',
-      model: 'claude-sonnet-4-6',
+      model: 'claude-sonnet-5',
       status: 'completed' as const,
       source: '.planning-result.json' as const,
     };
