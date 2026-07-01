@@ -5,7 +5,7 @@
  * final pool selection. Non-native models pass through unchanged.
  *
  * Phase requirements by router role:
- * - planner: read-only investigation and plan output → requires at least `read-only` cert
+ * - planner: workflow planning/tools/provenance → requires at least `workflow` cert
  * - reviewer: read-only operations → requires at least `read-only` cert
  * - coder: patch operations → requires at least `patch` cert
  *
@@ -25,12 +25,13 @@ export type RouterRole = 'planner' | 'coder' | 'reviewer';
 /**
  * Required certification phase for each router role.
  *
- * planner → read-only: planner investigates and emits a plan artifact; Wavemill writes artifacts.
+ * planner → workflow: planner runs through workflow selection, tool policy, transcript,
+ * and provenance paths even when model-facing tools are read-only.
  * reviewer → read-only: reviewer reads diffs and outputs comments only.
  * coder → patch: coder produces patch-level file edits.
  */
 export const STAGE_PHASE_REQUIREMENT: Record<RouterRole, CertificationPhase> = {
-  planner: 'read-only',
+  planner: 'workflow',
   reviewer: 'read-only',
   coder: 'patch',
 };

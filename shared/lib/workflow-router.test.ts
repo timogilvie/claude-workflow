@@ -1479,10 +1479,10 @@ function nativeModelConfig(certPhase: string = 'patch', suiteVersion: string = '
 
 console.log('\n--- Native Certification Router Policy Tests ---\n');
 
-await test('STAGE_PHASE_REQUIREMENT maps planner/reviewer→read-only, coder→patch', () => {
+await test('STAGE_PHASE_REQUIREMENT maps planner→workflow, reviewer→read-only, coder→patch', () => {
   assert.equal(STAGE_PHASE_REQUIREMENT.reviewer, 'read-only');
   assert.equal(STAGE_PHASE_REQUIREMENT.coder, 'patch');
-  assert.equal(STAGE_PHASE_REQUIREMENT.planner, 'read-only');
+  assert.equal(STAGE_PHASE_REQUIREMENT.planner, 'workflow');
 });
 
 await test('valid read-only cert accepted for reviewer role', () => {
@@ -1538,7 +1538,7 @@ await test('valid patch cert accepted for coder and reviewer roles', () => {
   }
 });
 
-await test('read-only cert accepted for planner role', () => {
+await test('read-only cert rejected for planner role', () => {
   const { repoDir, cleanup } = makeRepo({
     modelRegistry: {
       models: { 'native-ro-planner': nativeModelConfig('read-only') },
@@ -1556,7 +1556,9 @@ await test('read-only cert accepted for planner role', () => {
 
     const plannerRejection = (decision.nativeCertificationRejections ?? [])
       .find((r) => r.modelId === 'native-ro-planner' && r.role === 'planner');
-    assert.equal(plannerRejection, undefined, 'read-only cert should not be rejected for planner');
+    assert.ok(plannerRejection, 'read-only cert should be rejected for planner');
+    assert.equal(plannerRejection.reason, 'insufficient-phase');
+    assert.equal(plannerRejection.requestedPhase, 'workflow');
   } finally {
     cleanup();
   }
