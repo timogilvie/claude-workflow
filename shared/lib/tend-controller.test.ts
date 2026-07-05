@@ -943,7 +943,7 @@ describe('defaultHealthChecker', () => {
     }
   });
 
-  it('keeps local branch precedence over origin tracking refs', async () => {
+  it('prefers origin integration when local branch is ahead', async () => {
     const repo = createRepoWithRemoteIntegration();
 
     try {
@@ -954,8 +954,8 @@ describe('defaultHealthChecker', () => {
       await withFakeGh('{"check_runs":[{"name":"ci","conclusion":"success"}]}', async ({ logPath }) => {
         const health = await defaultHealthChecker('auto/integration', repo.repoDir);
         assert.deepEqual(health, { state: 'healthy' });
-        assert.match(readFileSync(logPath, 'utf-8'), new RegExp(localSha));
-        assert.doesNotMatch(readFileSync(logPath, 'utf-8'), new RegExp(`${repo.remoteSha}$`));
+        assert.match(readFileSync(logPath, 'utf-8'), new RegExp(repo.remoteSha));
+        assert.doesNotMatch(readFileSync(logPath, 'utf-8'), new RegExp(localSha));
       });
     } finally {
       repo.cleanup();

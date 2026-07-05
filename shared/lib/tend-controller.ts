@@ -180,15 +180,15 @@ export async function defaultHealthChecker(integrationBranch: string, repoDir: s
 }
 
 function resolveIntegrationBranchSha(integrationBranch: string, repoDir: string): string {
-  const localSha = resolveRefSha(integrationBranch, repoDir);
-  if (localSha) {
-    return localSha;
-  }
-
   const remoteTrackingRef = `refs/remotes/origin/${integrationBranch}`;
   const remoteSha = resolveRefSha(remoteTrackingRef, repoDir);
   if (remoteSha) {
     return remoteSha;
+  }
+
+  const localSha = resolveRefSha(integrationBranch, repoDir);
+  if (localSha) {
+    return localSha;
   }
 
   throw new Error(
