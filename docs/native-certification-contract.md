@@ -79,6 +79,8 @@ A higher certification **satisfies** all lower required phases. A lower certific
 - **`patch`**: The agent may apply patches and make file mutations, in addition to all read-only operations.
 - **`workflow`**: The agent may execute full workflow operations including multi-step state changes, in addition to all patch operations.
 
+As of certification suite `v1`, `phase: 'workflow'` artifacts are backed by deterministic workflow-phase scenario coverage in the default certification harness.
+
 ---
 
 ## Suite-Version Invalidation

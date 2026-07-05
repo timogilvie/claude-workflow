@@ -173,6 +173,47 @@ describe('certifyNativeAgent', () => {
     assert.match(result.knownLimitations.join('\n'), /no patch scenarios/);
   });
 
+  it('certifies workflow when the default catalog includes workflow scenarios', async () => {
+    let written: NativeCertificationArtifact | undefined;
+
+    const result = await certifyNativeAgent({
+      provider: 'openai',
+      model: 'gpt-4o',
+      phase: 'workflow',
+      repoDir: '/repo',
+      dryRun: false,
+      registry: STUB_REGISTRY,
+      runScenariosFn: async (opts) => {
+        assert.equal(opts.scenarios.some((scenario) => scenario.phase === 'workflow'), true);
+        return {
+          ...PASSING_REPORT,
+          results: [
+            {
+              scenarioId: 'workflow.phase.workflow-persistence-roundtrip',
+              category: 'phase',
+              classification: 'deterministic',
+              phase: 'workflow',
+              status: 'pass',
+              durationMs: 1,
+            } as HarnessScenarioResult,
+          ],
+          countsByCategory: { tool: 0, usage: 0, transcript: 0, phase: 1 },
+        };
+      },
+      writeCertificationFn: (_repoDir, artifact) => {
+        written = artifact;
+        return '/repo/.wavemill/native-agent-certifications/openai/gpt-4o/v1.json';
+      },
+    });
+
+    assert.equal(result.harnessPassed, true);
+    assert.equal(result.liveCertifiable, true);
+    assert.equal(result.artifactPath, '/repo/.wavemill/native-agent-certifications/openai/gpt-4o/v1.json');
+    assert.ok(written);
+    assert.equal(written.phase, 'workflow');
+    assert.equal(result.knownLimitations.some((limitation) => /no workflow scenarios/.test(limitation)), false);
+  });
+
   it('throws for unsupported model', async () => {
     await assert.rejects(
       () => certifyNativeAgent({
