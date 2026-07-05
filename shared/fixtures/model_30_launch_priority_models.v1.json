@@ -155,11 +155,27 @@
       "roleEligibility": ["planning", "coding", "review"]
     },
     {
+      "wavemillAlias": "kimi-k2.7-code",
+      "openrouterId": "moonshotai/kimi-k2.7-code",
+      "family": "kimi",
+      "status": "active",
+      "priorityTier": 1,
+      "roleEligibility": ["planning", "coding", "review"]
+    },
+    {
       "wavemillAlias": "kimi-k2-thinking",
       "openrouterId": "moonshotai/kimi-k2-thinking",
       "family": "kimi",
       "status": "watchlist",
       "priorityTier": 2,
+      "roleEligibility": ["planning", "coding", "review"]
+    },
+    {
+      "wavemillAlias": "glm-5.2",
+      "openrouterId": "z-ai/glm-5.2",
+      "family": "glm",
+      "status": "active",
+      "priorityTier": 1,
       "roleEligibility": ["planning", "coding", "review"]
     },
     {

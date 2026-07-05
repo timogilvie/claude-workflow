@@ -323,6 +323,16 @@ describe('buildCertificationPath', () => {
     assert.ok(p.endsWith('/.wavemill/native-agent-certifications/anthropic/claude-sonnet-4-6/v1.json'));
   });
 
+  it('maps raw OpenRouter ids into provider/model storage segments', () => {
+    const p = buildCertificationPath('/repo', 'openrouter', 'qwen/qwen3-coder', 'v1');
+    assert.ok(p.endsWith('/.wavemill/native-agent-certifications/qwen/qwen3-coder/v1.json'));
+  });
+
+  it('maps known OpenRouter aliases into provider/model storage segments', () => {
+    const p = buildCertificationPath('/repo', 'openrouter', 'qwen-3-coder', 'v1');
+    assert.ok(p.endsWith('/.wavemill/native-agent-certifications/qwen/qwen3-coder/v1.json'));
+  });
+
   it('throws on empty provider', () => {
     assert.throws(() => buildCertificationPath('/repo', '', 'model', 'v1'), /provider/);
   });

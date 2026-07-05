@@ -27,6 +27,7 @@ export type ModelFamily =
   | 'claude'
   | 'gpt'
   | 'deepseek'
+  | 'glm'
   | 'qwen'
   | 'kimi'
   | 'gemini'
@@ -149,6 +150,19 @@ export function resolveWavemillAliasFromOpenRouterId(
   const model = loadLaunchPriorityList(fixturePath)
     .find((entry) => entry.openrouterId === openrouterId);
   return model?.wavemillAlias ?? null;
+}
+
+export function resolveOpenRouterIdFromWavemillAlias(
+  wavemillAlias: string | null | undefined,
+  fixturePath?: string,
+): string | null {
+  if (typeof wavemillAlias !== 'string' || wavemillAlias.trim().length === 0) {
+    return null;
+  }
+
+  const model = loadLaunchPriorityList(fixturePath)
+    .find((entry) => entry.wavemillAlias === wavemillAlias);
+  return model?.openrouterId ?? null;
 }
 
 /**

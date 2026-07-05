@@ -35,6 +35,31 @@ const STUB_REGISTRY: ModelRegistry = {
         },
       },
     },
+    'qwen-3-coder': {
+      vendor: 'qwen',
+      class: 'strong_generalist',
+      strengths: [],
+      weaknesses: [],
+      qualityScores: { routing: 60, planning: 72, coding: 84, review: 78, classify: 58 },
+      contextWindowTokens: 131_072,
+      toolSupport: 'basic',
+      multimodal: { text: true, image: false },
+      latencyTier: 'standard',
+      reasoningTier: 'standard',
+      costPerMillionInputTokensUsd: 0.35,
+      costPerMillionOutputTokensUsd: 1.05,
+      nativeCapability: {
+        nativeProvider: 'openrouter',
+        piTransportKind: 'openai-completions',
+        readOnlyNative: 'certified',
+        compatFlags: { thinkingFormat: 'openrouter' },
+        certification: {
+          maxCertifiedPhase: 'workflow',
+          certifiedAt: new Date().toISOString(),
+          certificationSuiteVersion: 'v1',
+        },
+      },
+    },
   },
   ladders: {},
 };
@@ -203,5 +228,70 @@ describe('certifyNativeAgent', () => {
     assert.equal(result.scenarios.length, 1);
     assert.equal(result.scenarios[0].scenarioId, 's1');
     assert.equal(result.scenarios[0].status, 'pass');
+  });
+
+  it('resolves raw OpenRouter ids through registry metadata and writes storage identity', async () => {
+    let written: NativeCertificationArtifact | undefined;
+
+    const result = await certifyNativeAgent({
+      provider: 'openrouter',
+      model: 'qwen/qwen3-coder',
+      phase: 'read-only',
+      repoDir: '/repo',
+      registry: STUB_REGISTRY,
+      runScenariosFn: async () => ({
+        ...PASSING_REPORT,
+        provider: 'openrouter',
+        model: 'qwen/qwen3-coder',
+        transport: 'openai-completions',
+      }),
+      writeCertificationFn: (_repoDir, artifact) => {
+        written = artifact;
+        return '/repo/.wavemill/native-agent-certifications/qwen/qwen3-coder/v1.json';
+      },
+    });
+
+    assert.equal(result.model, 'qwen/qwen3-coder');
+    assert.equal(result.artifactPath, '/repo/.wavemill/native-agent-certifications/qwen/qwen3-coder/v1.json');
+    assert.ok(written, 'artifact should have been written');
+    assert.equal(written.provider, 'qwen');
+    assert.equal(written.model, 'qwen3-coder');
+  });
+
+  it('omits not-run live-judge scenarios from persisted artifacts', async () => {
+    let written: NativeCertificationArtifact | undefined;
+
+    await certifyNativeAgent({
+      provider: 'openai',
+      model: 'gpt-4o',
+      phase: 'read-only',
+      repoDir: '/repo',
+      registry: STUB_REGISTRY,
+      runScenariosFn: async () => ({
+        ...PASSING_REPORT,
+        results: [
+          PASSING_REPORT.results[0]!,
+          {
+            scenarioId: 'live.judge.tool-output-summary-quality',
+            category: 'tool',
+            classification: 'live-judged',
+            phase: 'read-only',
+            status: 'not-run',
+            reason: 'requires-live-judge',
+            durationMs: 1,
+          } as HarnessScenarioResult,
+        ],
+      }),
+      writeCertificationFn: (_repoDir, artifact) => {
+        written = artifact;
+        return '/repo/.wavemill/native-agent-certifications/openai/gpt-4o/v1.json';
+      },
+    });
+
+    assert.ok(written, 'artifact should have been written');
+    assert.deepEqual(
+      written.scenarios.map((scenario) => scenario.scenarioId),
+      ['s1'],
+    );
   });
 });
