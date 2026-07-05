@@ -67,6 +67,34 @@ interface CertificationScenario {
 | `phase.read-only.satisfies-read-only` | `phase` | `phaseSatisfies('read-only', 'read-only')` and `phaseSatisfies('patch', 'read-only')` are true; `phaseSatisfies('read-only', 'patch')` is false |
 | `phase.fixture.persistence-roundtrip` | `phase` | `writeCertification` + `checkCertificationEligibility` round-trip returns `eligible: true` |
 | `live.judge.tool-output-summary-quality` | `tool` | Live-judged placeholder — always returns `not-run` |
+| `workflow.tools.contract-shape-stable` | `tool` | Canonical workflow tool names, workflow phases, and mutation actions are still present |
+| `workflow.tools.mutation-policy-allows-in-phase` | `tool` | Planning-phase reads and `write_stage_result` are explicitly allowed by the workflow mutation matrix |
+| `workflow.tools.mutation-policy-denies-out-of-phase` | `tool` | Merge and out-of-phase workflow mutations are denied fail-closed, including unknown combinations |
+| `workflow.transcript.approval-lifecycle-jsonl-shape` | `transcript` | `TranscriptWriter` serializes `approval_lifecycle` and `cleanup_report` events between session bookends with stable JSONL shape |
+| `workflow.provenance.untrusted-input-detects-phase-override` | `transcript` | Untrusted workflow inputs that try to override phase policy are flagged by provenance metadata |
+| `workflow.usage.multi-turn-token-accounting` | `usage` | Multi-turn scripted provider usage stays per-turn, which preserves workflow budget accounting |
+| `workflow.cleanup.tracker-roundtrip-and-summary-event` | `phase` | Cleanup tracker round-trip yields a `cleanup_report` summary with `finalTreeState` and `cleanupDecision` fields |
+| `workflow.phase.workflow-persistence-roundtrip` | `phase` | A persisted `phase: 'workflow'` artifact satisfies workflow, patch, and read-only eligibility checks |
+
+## What Workflow-Phase Certification Proves And Does Not Prove
+
+### Proves
+
+- Workflow tool contract shape is intact: 8 canonical tools, 4 workflow phases, and the explicit `merge` denial action are still encoded.
+- The workflow mutation matrix allows the in-phase reads and stage-result writes planner runs depend on, and denies out-of-phase mutations fail-closed.
+- Transcript serialization includes stable `approval_lifecycle` and `cleanup_report` JSONL events alongside ordinary session bookends.
+- Provenance trust metadata flags common override attempts from untrusted workflow inputs, including phase-policy bypass language.
+- Multi-turn usage accounting remains per-turn, which is required for budget tracking in longer planner sessions.
+- Cleanup tracking emits a well-formed summary event with `finalTreeState` and `cleanupDecision`.
+- A passing `phase: 'workflow'` artifact satisfies the router's workflow requirement for planner routing and still satisfies lower `patch` and `read-only` requirements.
+
+### Does not prove
+
+- Live workflow orchestration quality, such as whether a model actually produces strong plans or approval flows against real tasks.
+- Real Linear or GitHub API compatibility, because the workflow certification scenarios are deterministic and offline.
+- Production cost or latency behavior under real multi-turn budgets.
+- Human operator approval-flow correctness with real approvers.
+- Real-task reasoning quality on expanded task packets; that remains the live judge's domain.
 
 ### Catalog integrity rules
 
@@ -78,6 +106,7 @@ Enforced by `scenarios.test.ts` and checked at CI:
 - No `live-judged` scenario has an `assertion` function.
 - Every `phase` value is in `PHASE_ORDER`.
 - Every category (`tool`, `usage`, `transcript`, `phase`) has ≥1 deterministic scenario.
+- The default catalog includes deterministic workflow-phase coverage, so `native-agent-certify --phase workflow` can be live-certifiable when the scenarios pass.
 
 ### Adding a scenario
 
