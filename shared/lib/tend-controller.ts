@@ -102,6 +102,11 @@ interface EligibleWorkItem {
   metadata: PrMetadata;
 }
 
+interface IntegrationBranchResolution {
+  sha: string;
+  source: 'remote' | 'local';
+}
+
 const BRANCH_NAME_PATTERN = /^[a-zA-Z0-9._/-]+$/;
 const PR_DEPENDENCY_PATTERN = /^PR#(\d+)$/i;
 const FAILING_CHECK_CONCLUSIONS = new Set(['failure', 'timed_out', 'cancelled']);
@@ -152,19 +157,28 @@ export async function defaultHealthChecker(integrationBranch: string, repoDir: s
   try {
     validateIntegrationBranch(integrationBranch);
 
-    const sha = resolveIntegrationBranchSha(integrationBranch, repoDir);
+    const resolution = resolveIntegrationBranchSha(integrationBranch, repoDir);
     const repo = resolveOwnerRepoFromRemote(repoDir);
 
     if (!repo) {
       return { state: 'unhealthy', reason: 'health-check-error: unable to resolve origin repo' };
     }
 
-    const raw = String(execShellCommand(
-      `gh api ${escapeShellArg(`repos/${repo}/commits/${sha}/check-runs`)}`,
-      { encoding: 'utf-8', cwd: repoDir },
-    ));
-    const parsed = JSON.parse(raw) as { check_runs?: Array<{ name?: string; conclusion?: string | null }> };
-    const checkRuns = Array.isArray(parsed.check_runs) ? parsed.check_runs : [];
+    let checkRuns: Array<{ name?: string; conclusion?: string | null }>;
+    try {
+      checkRuns = readCheckRuns(repo, resolution.sha, repoDir);
+    } catch (error) {
+      const remoteResolution = resolveRemoteIntegrationBranchSha(integrationBranch, repoDir);
+      if (
+        resolution.source !== 'local' ||
+        !isMissingCommitCheckRunsError(error) ||
+        !remoteResolution ||
+        remoteResolution.sha === resolution.sha
+      ) {
+        throw error;
+      }
+      checkRuns = readCheckRuns(repo, remoteResolution.sha, repoDir);
+    }
 
     for (const checkRun of checkRuns) {
       const conclusion = checkRun.conclusion ?? '';
@@ -179,21 +193,53 @@ export async function defaultHealthChecker(integrationBranch: string, repoDir: s
   }
 }
 
-function resolveIntegrationBranchSha(integrationBranch: string, repoDir: string): string {
-  const localSha = resolveRefSha(integrationBranch, repoDir);
-  if (localSha) {
-    return localSha;
+function readCheckRuns(repo: string, sha: string, repoDir: string): Array<{ name?: string; conclusion?: string | null }> {
+  const raw = String(execShellCommand(
+    `gh api ${escapeShellArg(`repos/${repo}/commits/${sha}/check-runs`)}`,
+    { encoding: 'utf-8', cwd: repoDir },
+  ));
+  const parsed = JSON.parse(raw) as { check_runs?: Array<{ name?: string; conclusion?: string | null }> };
+  return Array.isArray(parsed.check_runs) ? parsed.check_runs : [];
+}
+
+function isMissingCommitCheckRunsError(error: unknown): boolean {
+  const output = outputFromError(error);
+  return output.includes('No commit found for SHA') && output.includes('HTTP 422');
+}
+
+function resolveIntegrationBranchSha(integrationBranch: string, repoDir: string): IntegrationBranchResolution {
+  const remoteResolution = resolveRemoteIntegrationBranchSha(integrationBranch, repoDir);
+  if (remoteResolution) {
+    return remoteResolution;
   }
 
-  const remoteTrackingRef = `refs/remotes/origin/${integrationBranch}`;
-  const remoteSha = resolveRefSha(remoteTrackingRef, repoDir);
-  if (remoteSha) {
-    return remoteSha;
+  const localSha = resolveRefSha(integrationBranch, repoDir);
+  if (localSha) {
+    return { sha: localSha, source: 'local' };
   }
+
+  const remoteTrackingRef = integrationRemoteTrackingRef(integrationBranch);
 
   throw new Error(
     `unable to resolve integration branch ${escapeShellArg(integrationBranch)} locally or as ${remoteTrackingRef}`,
   );
+}
+
+function resolveRemoteIntegrationBranchSha(
+  integrationBranch: string,
+  repoDir: string,
+): IntegrationBranchResolution | null {
+  const remoteTrackingRef = integrationRemoteTrackingRef(integrationBranch);
+  const remoteSha = resolveRefSha(remoteTrackingRef, repoDir);
+  if (!remoteSha) {
+    return null;
+  }
+
+  return { sha: remoteSha, source: 'remote' };
+}
+
+function integrationRemoteTrackingRef(integrationBranch: string): string {
+  return `refs/remotes/origin/${integrationBranch}`;
 }
 
 function resolveRefSha(ref: string, repoDir: string): string | null {

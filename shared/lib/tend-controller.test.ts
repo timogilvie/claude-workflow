@@ -217,9 +217,18 @@ function createRepoWithRemoteIntegration(): {
   };
 }
 
-function writeFakeGh(binDir: string, responseBody: string, logPath?: string): void {
+function writeFakeGh(
+  binDir: string,
+  responseBody: string,
+  options: {
+    logPath?: string;
+    missingCommitShas?: string[];
+    createRemoteRefOnMissingCommit?: { ref: string; sha: string };
+  } = {},
+): void {
   mkdirSync(binDir, { recursive: true });
   const scriptPath = join(binDir, 'gh');
+  const missingCommitShas = options.missingCommitShas ?? [];
   const script = [
     '#!/bin/sh',
     'set -eu',
@@ -227,7 +236,19 @@ function writeFakeGh(binDir: string, responseBody: string, logPath?: string): vo
     '  echo "unexpected gh command: $*" >&2',
     '  exit 1',
     'fi',
-    logPath ? `printf '%s\\n' "$2" > ${JSON.stringify(logPath)}` : ':',
+    'path="${2:-}"',
+    'sha=$(printf \'%s\' "$path" | sed -n \'s#repos/.*/commits/\\([^/]*\\)/check-runs#\\1#p\')',
+    options.logPath ? `printf '%s\\n' "$path" >> ${JSON.stringify(options.logPath)}` : ':',
+    missingCommitShas.length > 0
+      ? `case "$sha" in ${missingCommitShas.map((sha) => JSON.stringify(sha)).join('|')})
+  ${options.createRemoteRefOnMissingCommit
+    ? `git update-ref ${JSON.stringify(options.createRemoteRefOnMissingCommit.ref)} ${JSON.stringify(options.createRemoteRefOnMissingCommit.sha)}`
+    : ':'}
+  echo "gh: No commit found for SHA: $sha (HTTP 422)" >&2
+  exit 1
+  ;;
+esac`
+      : ':',
     `cat <<'EOF'`,
     responseBody,
     'EOF',
@@ -239,12 +260,16 @@ function writeFakeGh(binDir: string, responseBody: string, logPath?: string): vo
 async function withFakeGh<T>(
   responseBody: string,
   run: (context: { binDir: string; logPath: string }) => Promise<T>,
+  options: {
+    missingCommitShas?: string[];
+    createRemoteRefOnMissingCommit?: { ref: string; sha: string };
+  } = {},
 ): Promise<T> {
   const fakeRoot = mkdtempSync(join(tmpdir(), 'wavemill-gh-'));
   const binDir = join(fakeRoot, 'bin');
   const logPath = join(fakeRoot, 'gh-api-path.txt');
   const originalPath = process.env.PATH ?? '';
-  writeFakeGh(binDir, responseBody, logPath);
+  writeFakeGh(binDir, responseBody, { logPath, ...options });
   process.env.PATH = `${binDir}${originalPath ? `:${originalPath}` : ''}`;
 
   try {
@@ -262,6 +287,17 @@ function hasLocalBranch(repoDir: string, branch: string): boolean {
   } catch {
     return false;
   }
+}
+
+function readGhApiPaths(logPath: string): string[] {
+  if (!existsSync(logPath)) {
+    return [];
+  }
+
+  return readFileSync(logPath, 'utf-8')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
 }
 
 async function withDecision(
@@ -936,27 +972,59 @@ describe('defaultHealthChecker', () => {
       await withFakeGh('{"check_runs":[{"name":"ci","conclusion":"success"}]}', async ({ logPath }) => {
         const health = await defaultHealthChecker('auto/integration', repo.repoDir);
         assert.deepEqual(health, { state: 'healthy' });
-        assert.match(readFileSync(logPath, 'utf-8'), new RegExp(repo.remoteSha));
+        assert.deepEqual(readGhApiPaths(logPath), [`repos/example/repo/commits/${repo.remoteSha}/check-runs`]);
       });
     } finally {
       repo.cleanup();
     }
   });
 
-  it('keeps local branch precedence over origin tracking refs', async () => {
+  it('prefers the remote-tracking integration sha when local branch is ahead', async () => {
     const repo = createRepoWithRemoteIntegration();
 
     try {
       runGit(repo.repoDir, ['checkout', '-b', 'auto/integration', 'origin/auto/integration']);
-      const localSha = createCommit(repo.repoDir, 'README.md', 'local integration\n', 'local branch wins');
+      const localSha = createCommit(repo.repoDir, 'README.md', 'local integration\n', 'local branch diverges');
       runGit(repo.repoDir, ['checkout', '--detach']);
 
       await withFakeGh('{"check_runs":[{"name":"ci","conclusion":"success"}]}', async ({ logPath }) => {
         const health = await defaultHealthChecker('auto/integration', repo.repoDir);
         assert.deepEqual(health, { state: 'healthy' });
-        assert.match(readFileSync(logPath, 'utf-8'), new RegExp(localSha));
-        assert.doesNotMatch(readFileSync(logPath, 'utf-8'), new RegExp(`${repo.remoteSha}$`));
+        assert.notEqual(localSha, repo.remoteSha);
+        assert.deepEqual(readGhApiPaths(logPath), [`repos/example/repo/commits/${repo.remoteSha}/check-runs`]);
       });
+    } finally {
+      repo.cleanup();
+    }
+  });
+
+  it('retries once with origin integration after a local-only sha gets a missing-commit 422', async () => {
+    const repo = createRepoWithRemoteIntegration();
+
+    try {
+      runGit(repo.repoDir, ['checkout', '-b', 'auto/integration', 'origin/auto/integration']);
+      const localSha = createCommit(repo.repoDir, 'README.md', 'local integration\n', 'local-only integration sha');
+      runGit(repo.repoDir, ['checkout', '--detach']);
+      runGit(repo.repoDir, ['update-ref', '-d', 'refs/remotes/origin/auto/integration']);
+
+      await withFakeGh(
+        '{"check_runs":[{"name":"ci","conclusion":"success"}]}',
+        async ({ logPath }) => {
+          const health = await defaultHealthChecker('auto/integration', repo.repoDir);
+          assert.deepEqual(health, { state: 'healthy' });
+          assert.deepEqual(readGhApiPaths(logPath), [
+            `repos/example/repo/commits/${localSha}/check-runs`,
+            `repos/example/repo/commits/${repo.remoteSha}/check-runs`,
+          ]);
+        },
+        {
+          missingCommitShas: [localSha],
+          createRemoteRefOnMissingCommit: {
+            ref: 'refs/remotes/origin/auto/integration',
+            sha: repo.remoteSha,
+          },
+        },
+      );
     } finally {
       repo.cleanup();
     }
@@ -989,7 +1057,7 @@ describe('defaultHealthChecker', () => {
       await withFakeGh('{"check_runs":[{"name":"ci","conclusion":"failure"}]}', async ({ logPath }) => {
         const health = await defaultHealthChecker('auto/integration', repo.repoDir);
         assert.deepEqual(health, { state: 'unhealthy', reason: 'ci: failure' });
-        assert.match(readFileSync(logPath, 'utf-8'), new RegExp(repo.remoteSha));
+        assert.deepEqual(readGhApiPaths(logPath), [`repos/example/repo/commits/${repo.remoteSha}/check-runs`]);
       });
     } finally {
       repo.cleanup();
