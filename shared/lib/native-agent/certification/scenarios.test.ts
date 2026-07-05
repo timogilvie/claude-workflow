@@ -1,6 +1,26 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { PHASE_ORDER, getDefaultScenarios } from './scenarios.ts';
+import { checkCertificationEligibility } from './loader.ts';
+import { writeCertification } from './store.ts';
+import { CERTIFICATION_SCHEMA_VERSION, type NativeCertificationArtifact } from './schema.ts';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+const DEFAULT_CONTEXT = {
+  provider: 'openai',
+  model: 'gpt-test',
+  transport: 'openai-responses',
+} as const;
+
+function scenarioById(id: string) {
+  const scenario = getDefaultScenarios().find((entry) => entry.id === id);
+  assert.ok(scenario, `missing scenario ${id}`);
+  assert.equal(scenario.classification, 'deterministic');
+  assert.equal(typeof scenario.assertion, 'function');
+  return scenario;
+}
 
 describe('getDefaultScenarios — catalog integrity', () => {
   const scenarios = getDefaultScenarios();
@@ -86,10 +106,90 @@ describe('getDefaultScenarios — catalog integrity', () => {
     assert.ok(hasLiveJudged, 'catalog must include at least one live-judged scenario to exercise the not-run path');
   });
 
+  it('has at least one deterministic workflow-phase scenario', () => {
+    assert.ok(
+      scenarios.some((scenario) => scenario.phase === 'workflow' && scenario.classification === 'deterministic'),
+      'catalog must include at least one deterministic workflow-phase scenario',
+    );
+  });
+
+  it('workflow-phase scenarios cover tool, transcript, usage, and phase categories', () => {
+    const workflowCategories = new Set(
+      scenarios
+        .filter((scenario) => scenario.phase === 'workflow')
+        .map((scenario) => scenario.category),
+    );
+    assert.deepEqual([...workflowCategories].sort(), ['phase', 'tool', 'transcript', 'usage']);
+  });
+
+  it('workflow-phase scenarios are all deterministic', () => {
+    for (const scenario of scenarios.filter((entry) => entry.phase === 'workflow')) {
+      assert.equal(
+        scenario.classification,
+        'deterministic',
+        `workflow scenario "${scenario.id}" must be deterministic`,
+      );
+    }
+  });
+
   it('getDefaultScenarios returns a new array each call', () => {
     const a = getDefaultScenarios();
     const b = getDefaultScenarios();
     assert.notEqual(a, b, 'getDefaultScenarios must return a fresh array each call');
     assert.deepEqual(a.map((s) => s.id), b.map((s) => s.id));
+  });
+});
+
+describe('workflow certification scenarios', () => {
+  const workflowScenarioIds = [
+    'workflow.tools.contract-shape-stable',
+    'workflow.tools.mutation-policy-allows-in-phase',
+    'workflow.tools.mutation-policy-denies-out-of-phase',
+    'workflow.transcript.approval-lifecycle-jsonl-shape',
+    'workflow.provenance.untrusted-input-detects-phase-override',
+    'workflow.usage.multi-turn-token-accounting',
+    'workflow.cleanup.tracker-roundtrip-and-summary-event',
+    'workflow.phase.workflow-persistence-roundtrip',
+  ];
+
+  for (const id of workflowScenarioIds) {
+    it(`${id} passes in the deterministic harness`, async () => {
+      const scenario = scenarioById(id);
+      const result = await scenario.assertion!(DEFAULT_CONTEXT);
+      assert.deepEqual(result, { kind: 'pass' });
+    });
+  }
+
+  it('workflow-phase persistence requires workflow for planner eligibility when the artifact is only read-only', () => {
+    const repoDir = mkdtempSync(join(tmpdir(), 'workflow-phase-insufficient-'));
+    try {
+      const artifact: NativeCertificationArtifact = {
+        schemaVersion: CERTIFICATION_SCHEMA_VERSION,
+        provider: 'openai',
+        model: 'gpt-test',
+        phase: 'read-only',
+        suiteVersion: 'v1',
+        certifiedAt: new Date().toISOString(),
+        scenarios: [{ scenarioId: 'synthetic.pass', passed: true }],
+      };
+
+      writeCertification(repoDir, artifact);
+      const eligibility = checkCertificationEligibility(
+        repoDir,
+        artifact.provider,
+        artifact.model,
+        artifact.suiteVersion,
+        'workflow',
+        new Date(),
+      );
+
+      assert.deepEqual(eligibility, {
+        eligible: false,
+        reason: 'phase-insufficient',
+        artifact,
+      });
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
   });
 });
