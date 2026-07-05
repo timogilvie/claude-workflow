@@ -329,13 +329,20 @@ create_tmux_session() {
   if tmux has-session -t "$SESSION" 2>/dev/null; then
     local existing_dir
     existing_dir=$(tmux show-environment -t "$SESSION" REPO_DIR 2>/dev/null | sed 's/^REPO_DIR=//') || true
-    if [[ -n "$existing_dir" && "$existing_dir" != "$REPO_DIR" ]]; then
-      echo "ERROR: tmux session '$SESSION' is already active in: $existing_dir" >&2
-      echo "Cannot start a new session for: $REPO_DIR" >&2
+    # A same-named session that is bound to a different repo (or to no repo at
+    # all) is a foreign session. Reusing it would strand the operator in the
+    # wrong repository's panes (HOK-2449), so we refuse non-destructively and
+    # surface every command needed to recover.
+    if [[ "$existing_dir" != "$REPO_DIR" ]]; then
+      local existing_repo_display="${existing_dir:-unknown}"
+      echo "ERROR: tmux session '$SESSION' already exists for a different repository." >&2
+      echo "  active session repo: $existing_repo_display" >&2
+      echo "  requested repo:      $REPO_DIR" >&2
       echo "" >&2
-      echo "Options:" >&2
-      echo "  - Stop the existing session first (tmux kill-session -t '$SESSION')" >&2
-      echo "  - Use a different session name: SESSION=my-session wavemill mill" >&2
+      echo "This session is left untouched. Choose one:" >&2
+      echo "  - Attach to the existing session:  tmux attach -t '$SESSION'" >&2
+      echo "  - Stop the existing session:       tmux kill-session -t '$SESSION'" >&2
+      echo "  - Run this repo under a distinct name: SESSION=my-session wavemill mill" >&2
       return 1
     fi
     tmux kill-session -t "$SESSION" 2>/dev/null || true

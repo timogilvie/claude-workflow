@@ -70,7 +70,9 @@ eval "$(
   echo "D_ENTER_LAUNCHES_WAVE='$ENTER_LAUNCHES_WAVE'"
 )"
 
-check_matches "default SESSION" '^wavemill-' "$D_SESSION"
+# Default session is repo-scoped: readable slug plus a stable path-hash suffix,
+# so separate repositories (even same-basename ones) never collide (HOK-2449).
+check_matches "default SESSION" '^wavemill-[a-z0-9-]+-[a-z0-9]{8}$' "$D_SESSION"
 check "default MAX_PARALLEL" "7" "$D_MAX_PARALLEL"
 check "default GIT_FETCH_TTL_SECONDS" "60" "$D_GIT_FETCH_TTL_SECONDS"
 check "default BASE_BRANCH" "main" "$D_BASE_BRANCH"
@@ -275,8 +277,27 @@ eval "$(
 )"
 rm -rf "$EMPTY_TMP"
 
-check_matches "defaults with no config files" '^wavemill-' "$M_SESSION"
+check_matches "defaults with no config files" '^wavemill-[a-z0-9-]+-[a-z0-9]{8}$' "$M_SESSION"
 check "defaults with no config files (parallel)" "7" "$M_MAX_PARALLEL"
+
+# Same-basename repositories must resolve to distinct default sessions so a
+# stale session for one checkout cannot be mistaken for another (HOK-1075).
+SAME_A=$(mktemp -d)/mttr; SAME_B=$(mktemp -d)/mttr
+mkdir -p "$SAME_A" "$SAME_B"
+eval "$(
+  export HOME="$FAKE_HOME"
+  unset $UNSET_VARS 2>/dev/null || true
+  source "$COMMON"
+  load_config "$SAME_A" 2>/dev/null; echo "SB_A='$SESSION'"
+  unset SESSION
+  load_config "$SAME_B" 2>/dev/null; echo "SB_B='$SESSION'"
+)"
+rm -rf "$(dirname "$SAME_A")" "$(dirname "$SAME_B")"
+if [[ -n "$SB_A" && "$SB_A" != "$SB_B" ]]; then
+  pass "same-basename repos get distinct default sessions"
+else
+  fail "same-basename repos get distinct default sessions" "$SB_A != $SB_B" "equal"
+fi
 
 # ============================================================================
 # Test 6: wavemill_load_config merges .local.json onto base

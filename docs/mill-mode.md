@@ -111,6 +111,42 @@ If you only document one command first, document `mill`.
 
 When operating mode drops to `constrained` or `survival`, mill-mode review switches to a scoped checklist: syntax/type failures, contract violations, obvious regressions, and test-coverage gaps. In that mode the review tool may emit `needs_stronger_reviewer`, which the review phase should surface on the PR title/body/labels for human follow-up.
 
+## Session Identity
+
+Mill tmux sessions are **repository-scoped by default**. `wavemill mill` derives its
+session name from the repository root as:
+
+```text
+wavemill-<repo-slug>-<8-char-path-hash>
+```
+
+The slug keeps the name readable (the lowercase, sanitized repo basename) while the
+hash of the absolute repository root guarantees uniqueness — so two different
+checkouts that happen to share the same directory name (e.g. two `mttr` worktrees)
+still get distinct sessions. This prevents a stale session for one repository from
+stranding you in the wrong repo's panes (HOK-2449).
+
+Overrides are preserved and take precedence over the derived default:
+
+- `SESSION=my-session wavemill mill` — explicit env var wins verbatim. Passing a
+  shared name (including `SESSION=wavemill`) intentionally opts back into a single
+  cross-repo session and relies on the mismatch guard below.
+- `mill.session` in `.wavemill-config.json` — used when `SESSION` is unset.
+
+If a tmux session with the target name already exists but is bound to a **different**
+repository (or has no `REPO_DIR` at all), `wavemill mill` refuses to start and leaves
+that session untouched. The error names both the active session's repo and the
+requested repo, and prints the exact commands to attach, kill, or override:
+
+```text
+tmux attach -t '<session>'
+tmux kill-session -t '<session>'
+SESSION=my-session wavemill mill
+```
+
+Existing live sessions are not renamed by this behavior — operators may still have
+old shared `wavemill` sessions until they kill and recreate them.
+
 ## Ready Phase
 
 By default, `wavemill mill` inserts a merge-readiness phase after PR creation and before merge completion:

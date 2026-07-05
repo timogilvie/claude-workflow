@@ -2688,6 +2688,24 @@ EOF
     fail "mill session setup is missing the next done keybinding"
   fi
 
+  # HOK-2449: a same-named session bound to another repo must be refused
+  # non-destructively with attach/kill/override guidance, not silently reused.
+  # Use fixed-string matching so the literal '$SESSION' is not read as a regex.
+  if grep -qF 'different repository' <<< "$NEXT_DONE_BINDING_BLOCK" \
+    && grep -qF "tmux attach -t '\$SESSION'" <<< "$NEXT_DONE_BINDING_BLOCK" \
+    && grep -qF "tmux kill-session -t '\$SESSION'" <<< "$NEXT_DONE_BINDING_BLOCK" \
+    && grep -qF 'SESSION=my-session wavemill mill' <<< "$NEXT_DONE_BINDING_BLOCK"; then
+    pass "mill session guard surfaces attach/kill/override for foreign session"
+  else
+    fail "mill session guard is missing attach/kill/override guidance"
+  fi
+
+  if grep -q 'wavemill_default_session_name' "$REPO_DIR/shared/lib/wavemill-common.sh"; then
+    pass "wavemill-common.sh derives repo-scoped default session name"
+  else
+    fail "wavemill-common.sh is missing repo-scoped default session helper"
+  fi
+
   if grep -q '^declare -a WAVEMILL_USAGE_TIPS=' "$REPO_DIR/shared/lib/wavemill-common.sh"; then
     pass "wavemill-common.sh defines shared usage tip array"
   else

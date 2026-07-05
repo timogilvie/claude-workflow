@@ -190,6 +190,60 @@ _WAVEMILL_DEFAULTS='{
   }
 }'
 
+# Derive the default repository-scoped tmux session name.
+#
+# Separate repositories must never share the same implicit tmux session,
+# otherwise a stale session for repo A can strand an operator working in
+# repo B (see HOK-2449 / HOK-1075). A basename-only default is insufficient
+# because two checkouts with the same directory name (e.g. two "mttr"
+# worktrees) still collide. We therefore combine a readable slug with a
+# stable hash of the canonical repository root.
+#
+# Output shape: wavemill-<slug>-<8-hex-hash>
+#   - slug:  lowercase repo basename, non [a-z0-9-] collapsed to '-'
+#   - hash:  first 8 hex chars derived from the absolute repo root path
+#
+# The result is always a single line with no whitespace, ':' or '.', which
+# keeps it safe as a tmux target (tmux treats ':' and '.' specially).
+#
+# Args: $1 = repo directory (default: $REPO_DIR, then $PWD)
+wavemill_default_session_name() {
+  local repo_dir="${1:-${REPO_DIR:-$PWD}}"
+
+  # Canonicalize to an absolute repository root. Prefer the git toplevel so
+  # that a worktree and its subdirectories resolve to a single identity;
+  # fall back to a physical absolute path for non-git/fixture directories.
+  local canonical
+  canonical="$(git -C "$repo_dir" rev-parse --show-toplevel 2>/dev/null)" || canonical=""
+  if [[ -z "$canonical" ]]; then
+    canonical="$(cd "$repo_dir" 2>/dev/null && pwd -P)" || canonical="$repo_dir"
+  fi
+
+  # Build a readable slug from the basename.
+  local slug
+  slug="$(basename "$canonical")"
+  slug="$(printf '%s' "$slug" | tr '[:upper:]' '[:lower:]')"
+  # Collapse any run of non [a-z0-9-] into a single '-'.
+  slug="$(printf '%s' "$slug" | sed -E 's/[^a-z0-9-]+/-/g; s/-+/-/g; s/^-//; s/-$//')"
+  [[ -z "$slug" ]] && slug="repo"
+
+  # Stable 8-char hash of the canonical root. Prefer shasum (present on
+  # macOS and most Linux), fall back to cksum for minimal environments.
+  local hash=""
+  if command -v shasum >/dev/null 2>&1; then
+    hash="$(printf '%s' "$canonical" | shasum 2>/dev/null | cut -c1-8)"
+  elif command -v sha1sum >/dev/null 2>&1; then
+    hash="$(printf '%s' "$canonical" | sha1sum 2>/dev/null | cut -c1-8)"
+  fi
+  if [[ -z "$hash" ]]; then
+    # cksum emits decimal digits only — still tmux-safe and deterministic.
+    hash="$(printf '%s' "$canonical" | cksum 2>/dev/null | cut -d' ' -f1)"
+  fi
+  [[ -z "$hash" ]] && hash="00000000"
+
+  printf 'wavemill-%s-%s\n' "$slug" "$hash"
+}
+
 # Load layered config: defaults < ~/.wavemill/config.json < .wavemill-config.json
 # < .wavemill-config.local.json < env vars
 #
@@ -302,16 +356,14 @@ load_config() {
   fi
 
   # Session name: env var > config > repo-specific default
-  # Repo-specific default prevents cross-repo session collisions
-  local _repo_basename
-  _repo_basename="$(basename "$repo_dir" | tr '.:-' '___')"
-  local _default_session="wavemill-${_repo_basename}"
+  # Repo-specific default prevents cross-repo session collisions, including
+  # separate repositories that share the same basename (see HOK-2449).
   if [[ -n "${SESSION:-}" ]]; then
-    : # Explicit env var — keep it
+    : # Explicit env var — keep it verbatim (may intentionally reuse a name)
   elif [[ -n "$_CFG_SESSION" ]]; then
     SESSION="$_CFG_SESSION"
   else
-    SESSION="$_default_session"
+    SESSION="$(wavemill_default_session_name "$repo_dir")"
   fi
   MAX_PARALLEL="${MAX_PARALLEL:-$_CFG_MAX_PARALLEL}"
   POLL_SECONDS="${POLL_SECONDS:-$_CFG_POLL_SECONDS}"
