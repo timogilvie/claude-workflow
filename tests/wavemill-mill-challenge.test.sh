@@ -80,6 +80,7 @@ if [[ -n "$EXPANDED_REFRESH_BLOCK" ]]; then
   check_contains "refresh block extracts primary planDepth" "$EXPANDED_REFRESH_BLOCK" 'entries[0].planDepth'
   check_contains "refresh block extracts primary codeDepth" "$EXPANDED_REFRESH_BLOCK" 'entries[0].codeDepth'
   check_contains "refresh block extracts primary reviewMode" "$EXPANDED_REFRESH_BLOCK" 'entries[0].reviewMode'
+  check_contains "refresh block extracts challenge stage" "$EXPANDED_REFRESH_BLOCK" 'challengeStage // "implementation"'
   check_contains "refresh block extracts challenger planner" "$EXPANDED_REFRESH_BLOCK" 'entries[1].planner'
   check_contains "refresh block extracts challenger reviewer" "$EXPANDED_REFRESH_BLOCK" 'entries[1].reviewer'
   check_contains "refresh block extracts challenger planDepth" "$EXPANDED_REFRESH_BLOCK" 'entries[1].planDepth'
@@ -95,6 +96,8 @@ if [[ -n "$EXPANDED_REFRESH_BLOCK" ]]; then
   check_contains "challenger save_task_state passes planDepth" "$EXPANDED_REFRESH_BLOCK" 'new_challenger_plan_depth'
   check_contains "challenger save_task_state passes codeDepth" "$EXPANDED_REFRESH_BLOCK" 'new_challenger_code_depth'
   check_contains "challenger save_task_state passes reviewMode" "$EXPANDED_REFRESH_BLOCK" 'new_challenger_review_mode'
+  check_contains "primary save_task_state passes challengeStage" "$EXPANDED_REFRESH_BLOCK" 'new_challenge_stage'
+  check_contains "refresh updates in-memory challengeStage" "$EXPANDED_REFRESH_BLOCK" 'challenge_stage_meta="$new_challenge_stage"'
   check_contains "refresh block detects identical primary/challenger routing" "$EXPANDED_REFRESH_BLOCK" 'expanded challenge refresh produced identical primary/challenger routing, preserving'
   check_contains "refresh block compares primary/challenger planner" "$EXPANDED_REFRESH_BLOCK" 'new_primary_planner" == "$new_challenger_planner'
 else
@@ -176,6 +179,7 @@ bash -lc '
     local issue="$1" slug="$2" branch="$3" worktree="$4" pr="${5:-}" status="${6:-active}" agent="${7:-}"
     local linear_issue="${8:-$issue}" challenge="${9:-}" challenge_pair="${10:-}" challenge_role="${11:-}" challenge_model="${12:-}"
     local planner_model="${13:-}" coder_model="${14:-}" reviewer_model="${15:-}" plan_depth="${16:-}" code_depth="${17:-}" review_mode="${18:-}"
+    local challenge_stage="${19:-}"
 
     state_mutate "$STATE_FILE" \
       "(.tasks[\$issue].agent // \"\") as \$old_agent |
@@ -187,6 +191,7 @@ bash -lc '
        (.tasks[\$issue].challengePairId // \"\") as \$old_challenge_pair |
        (.tasks[\$issue].challengeRole // \"\") as \$old_challenge_role |
        (.tasks[\$issue].challengeModel // \"\") as \$old_challenge_model |
+       (.tasks[\$issue].challengeStage // \"\") as \$old_challenge_stage |
        (.tasks[\$issue].evalRunning // null) as \$old_eval_running |
        (.tasks[\$issue].comparisonRunning // null) as \$old_comparison_running |
        (.tasks[\$issue].linearIssueId // \$issue) as \$old_linear_issue |
@@ -204,6 +209,7 @@ bash -lc '
          challengePairId: (if \$challengePair != \"\" then \$challengePair else \$old_challenge_pair end),
          challengeRole: (if \$challengeRole != \"\" then \$challengeRole else \$old_challenge_role end),
          challengeModel: (if \$challengeModel != \"\" then \$challengeModel else \$old_challenge_model end),
+         challengeStage: (if \$challengeStage != \"\" then \$challengeStage else \$old_challenge_stage end),
          coderModel: (if \$coderModel != \"\" then \$coderModel else \$old_coderModel end),
          plannerModel: (if \$plannerModel != \"\" then \$plannerModel else \$old_plannerModel end),
          reviewerModel: (if \$reviewerModel != \"\" then \$reviewerModel else \$old_reviewerModel end),
@@ -219,6 +225,7 @@ bash -lc '
       --arg agent "$agent" --arg linearIssue "$linear_issue" --arg challenge "$challenge" \
       --arg challengePair "$challenge_pair" --arg challengeRole "$challenge_role" \
       --arg challengeModel "$challenge_model" \
+      --arg challengeStage "$challenge_stage" \
       --arg plannerModel "$planner_model" --arg coderModel "$coder_model" --arg reviewerModel "$reviewer_model" \
       --arg planDepth "$plan_depth" --arg codeDepth "$code_depth" --arg reviewMode "$review_mode"
   }
@@ -230,6 +237,7 @@ bash -lc '
   new_primary_plan_depth=$(echo "$REFRESHED_PLAN" | jq -r ".entries[0].planDepth // empty" 2>/dev/null)
   new_primary_code_depth=$(echo "$REFRESHED_PLAN" | jq -r ".entries[0].codeDepth // empty" 2>/dev/null)
   new_primary_review_mode=$(echo "$REFRESHED_PLAN" | jq -r ".entries[0].reviewMode // empty" 2>/dev/null)
+  new_challenge_stage=$(echo "$REFRESHED_PLAN" | jq -r ".challengeStage // \"implementation\"" 2>/dev/null || echo "implementation")
   new_challenger_key=$(echo "$REFRESHED_PLAN" | jq -r ".entries[1].key // empty" 2>/dev/null)
   new_challenger_model=$(echo "$REFRESHED_PLAN" | jq -r ".entries[1].model // empty" 2>/dev/null)
   new_challenger_planner=$(echo "$REFRESHED_PLAN" | jq -r ".entries[1].planner // empty" 2>/dev/null)
@@ -240,7 +248,7 @@ bash -lc '
 
   if [[ -n "$new_primary" ]]; then
     save_task_state "HOK-9999" "hok-9999" "task/hok-9999" "/tmp/worktrees/hok-9999" "" "active" "codex" "HOK-9999" \
-      "true" "HOK-9999" "primary" "$new_primary" "$new_primary_planner" "$new_primary" "$new_primary_reviewer" "$new_primary_plan_depth" "$new_primary_code_depth" "$new_primary_review_mode"
+      "true" "HOK-9999" "primary" "$new_primary" "$new_primary_planner" "$new_primary" "$new_primary_reviewer" "$new_primary_plan_depth" "$new_primary_code_depth" "$new_primary_review_mode" "$new_challenge_stage"
   fi
 
   challenger_slug=$(jq -r ".tasks[\"$new_challenger_key\"].slug // empty" "$STATE_FILE")
@@ -248,7 +256,7 @@ bash -lc '
   challenger_worktree=$(jq -r ".tasks[\"$new_challenger_key\"].worktree // empty" "$STATE_FILE")
   if [[ -n "$new_challenger_key" ]] && [[ -n "$new_challenger_model" ]] && [[ -n "$challenger_slug" ]] && [[ -n "$challenger_branch" ]] && [[ -n "$challenger_worktree" ]]; then
     save_task_state "$new_challenger_key" "$challenger_slug" "$challenger_branch" "$challenger_worktree" "" "active" "codex" "HOK-9999" \
-      "true" "HOK-9999" "challenger" "$new_challenger_model" "$new_challenger_planner" "$new_challenger_model" "$new_challenger_reviewer" "$new_challenger_plan_depth" "$new_challenger_code_depth" "$new_challenger_review_mode"
+      "true" "HOK-9999" "challenger" "$new_challenger_model" "$new_challenger_planner" "$new_challenger_model" "$new_challenger_reviewer" "$new_challenger_plan_depth" "$new_challenger_code_depth" "$new_challenger_review_mode" "$new_challenge_stage"
   fi
 ' bash "$STATE_FILE" "$REFRESHED_PLAN" "$REPO_DIR"
 
@@ -270,6 +278,7 @@ primary_reviewer_model=$(jq -r '.tasks["HOK-9999"].reviewerModel // empty' "$STA
 primary_plan_depth=$(jq -r '.tasks["HOK-9999"].planDepth // empty' "$STATE_FILE")
 primary_code_depth=$(jq -r '.tasks["HOK-9999"].codeDepth // empty' "$STATE_FILE")
 primary_review_mode=$(jq -r '.tasks["HOK-9999"].reviewMode // empty' "$STATE_FILE")
+primary_challenge_stage=$(jq -r '.tasks["HOK-9999"].challengeStage // empty' "$STATE_FILE")
 
 challenger_challenge_model=$(jq -r '.tasks["HOK-9999_c"].challengeModel // empty' "$STATE_FILE")
 challenger_coder_model=$(jq -r '.tasks["HOK-9999_c"].coderModel // empty' "$STATE_FILE")
@@ -278,6 +287,7 @@ challenger_reviewer_model=$(jq -r '.tasks["HOK-9999_c"].reviewerModel // empty' 
 challenger_plan_depth=$(jq -r '.tasks["HOK-9999_c"].planDepth // empty' "$STATE_FILE")
 challenger_code_depth=$(jq -r '.tasks["HOK-9999_c"].codeDepth // empty' "$STATE_FILE")
 challenger_review_mode=$(jq -r '.tasks["HOK-9999_c"].reviewMode // empty' "$STATE_FILE")
+challenger_challenge_stage=$(jq -r '.tasks["HOK-9999_c"].challengeStage // empty' "$STATE_FILE")
 
 check_eq "primary challengeModel set to refreshed primary model" "gpt-5.4" "$primary_challenge_model"
 check_eq "primary coderModel aligned with refreshed primary model" "gpt-5.4" "$primary_coder_model"
@@ -286,6 +296,7 @@ check_eq "primary reviewerModel set from refreshed entry" "gpt-5.5" "$primary_re
 check_eq "primary planDepth set from refreshed entry" "deep" "$primary_plan_depth"
 check_eq "primary codeDepth set from refreshed entry" "deep" "$primary_code_depth"
 check_eq "primary reviewMode set from refreshed entry" "static" "$primary_review_mode"
+check_eq "primary challengeStage repaired during refresh" "implementation" "$primary_challenge_stage"
 
 check_eq "challenger challengeModel set to refreshed challenger model" "claude-sonnet-4-6" "$challenger_challenge_model"
 check_eq "challenger coderModel aligned with refreshed challenger model" "claude-sonnet-4-6" "$challenger_coder_model"
@@ -294,6 +305,7 @@ check_eq "challenger reviewerModel set from refreshed entry" "claude-sonnet-4-6"
 check_eq "challenger planDepth set from refreshed entry" "deep" "$challenger_plan_depth"
 check_eq "challenger codeDepth set from refreshed entry" "deep" "$challenger_code_depth"
 check_eq "challenger reviewMode set from refreshed entry" "static+llm" "$challenger_review_mode"
+check_eq "challenger challengeStage repaired during refresh" "implementation" "$challenger_challenge_stage"
 
 # Guard: challenger model must differ from primary (cannot be gpt-5.4 vs gpt-5.4)
 if [[ "$primary_challenge_model" != "$challenger_challenge_model" ]]; then
