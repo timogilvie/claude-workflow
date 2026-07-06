@@ -116,6 +116,63 @@ wavemill_pick_usage_tip() {
   printf '%s\n' "${WAVEMILL_USAGE_TIPS[RANDOM % tip_count]}"
 }
 
+wavemill_repo_identity_root() {
+  local repo_dir="${1:-$PWD}"
+  local repo_root
+
+  repo_root="$(git -C "$repo_dir" rev-parse --show-toplevel 2>/dev/null)" || repo_root=""
+  if [[ -n "$repo_root" ]]; then
+    printf '%s\n' "$repo_root"
+    return 0
+  fi
+
+  (cd "$repo_dir" 2>/dev/null && pwd -P)
+}
+
+wavemill_slugify_session_part() {
+  local value="${1-}"
+  local slug
+
+  slug="$(printf '%s' "$value" \
+    | tr '[:upper:]' '[:lower:]' \
+    | sed -E 's/[^a-z0-9-]+/-/g; s/-+/-/g; s/^-+//; s/-+$//')"
+
+  if [[ -z "$slug" ]]; then
+    slug="repo"
+  fi
+
+  printf '%s\n' "$slug"
+}
+
+wavemill_repo_session_hash() {
+  local repo_root="${1:?repo root required}"
+  local digest=""
+
+  if command -v shasum >/dev/null 2>&1; then
+    digest="$(printf '%s' "$repo_root" | shasum -a 256 | awk '{print substr($1, 1, 8)}')"
+  elif command -v sha256sum >/dev/null 2>&1; then
+    digest="$(printf '%s' "$repo_root" | sha256sum | awk '{print substr($1, 1, 8)}')"
+  elif command -v md5 >/dev/null 2>&1; then
+    digest="$(printf '%s' "$repo_root" | md5 | awk '{print substr($NF, 1, 8)}')"
+  else
+    digest="$(printf '%s' "$repo_root" | cksum | awk '{printf "%08d\n", $1 % 100000000}')"
+  fi
+
+  printf '%s\n' "$digest"
+}
+
+wavemill_default_session_name() {
+  local repo_dir="${1:-$PWD}"
+  local repo_root repo_basename repo_slug repo_hash
+
+  repo_root="$(wavemill_repo_identity_root "$repo_dir")"
+  repo_basename="$(basename "$repo_root")"
+  repo_slug="$(wavemill_slugify_session_part "$repo_basename")"
+  repo_hash="$(wavemill_repo_session_hash "$repo_root")"
+
+  printf 'wavemill-%s-%s\n' "$repo_slug" "$repo_hash"
+}
+
 # ============================================================================
 # LAYERED CONFIGURATION LOADING
 # ============================================================================
@@ -301,11 +358,9 @@ load_config() {
     PROJECT_NAME="${PROJECT_NAME:-}"
   fi
 
-  # Session name: env var > config > repo-specific default
-  # Repo-specific default prevents cross-repo session collisions
-  local _repo_basename
-  _repo_basename="$(basename "$repo_dir" | tr '.:-' '___')"
-  local _default_session="wavemill-${_repo_basename}"
+  # Session name: env var > config > repo-scoped default
+  local _default_session
+  _default_session="$(wavemill_default_session_name "$repo_dir")"
   if [[ -n "${SESSION:-}" ]]; then
     : # Explicit env var — keep it
   elif [[ -n "$_CFG_SESSION" ]]; then
