@@ -338,6 +338,61 @@ async function assertPhasePersistenceRoundtrip(ctx: ScenarioContext): Promise<Sc
   }
 }
 
+async function assertWorkflowArtifactUnlocksPlanner(ctx: ScenarioContext): Promise<ScenarioAssertionOutcome> {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'native-cert-harness-'));
+  try {
+    const provider = ctx.provider === 'openrouter' ? 'qwen' : ctx.provider;
+    const model = ctx.provider === 'openrouter' ? 'qwen3-coder' : 'test-model';
+    const suiteVersion = 'v1';
+
+    const artifact: NativeCertificationArtifact = {
+      schemaVersion: CERTIFICATION_SCHEMA_VERSION,
+      provider,
+      model,
+      phase: 'workflow',
+      suiteVersion,
+      certifiedAt: new Date().toISOString(),
+      scenarios: [{ scenarioId: 'workflow-roundtrip-test', passed: true }],
+    };
+
+    writeCertification(tmpDir, artifact);
+
+    const plannerEligibility = checkCertificationEligibility(
+      tmpDir,
+      ctx.provider,
+      ctx.provider === 'openrouter' ? 'qwen/qwen3-coder' : model,
+      suiteVersion,
+      'workflow',
+      new Date(),
+    );
+    if (!plannerEligibility.eligible) {
+      return {
+        kind: 'fail',
+        detail: `Expected workflow artifact to satisfy planner eligibility, got ${(plannerEligibility as { reason: string }).reason}`,
+      };
+    }
+
+    const reviewerEligibility = checkCertificationEligibility(
+      tmpDir,
+      ctx.provider,
+      ctx.provider === 'openrouter' ? 'qwen/qwen3-coder' : model,
+      suiteVersion,
+      'read-only',
+      new Date(),
+    );
+    if (!reviewerEligibility.eligible) {
+      return {
+        kind: 'fail',
+        detail: `Expected workflow artifact to satisfy reviewer eligibility, got ${(reviewerEligibility as { reason: string }).reason}`,
+      };
+    }
+
+    return { kind: 'pass' };
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
 async function assertWorkflowToolContractShapeStable(_ctx: ScenarioContext): Promise<ScenarioAssertionOutcome> {
   const expectedToolNames = [
     'expand_issue',
@@ -769,6 +824,15 @@ const DEFAULT_SCENARIOS: CertificationScenario[] = [
     description:
       'A valid NativeCertificationArtifact written via writeCertification and evaluated via checkCertificationEligibility returns eligible: true.',
     assertion: assertPhasePersistenceRoundtrip,
+  },
+  {
+    id: 'phase.workflow.artifact-unlocks-planner',
+    phase: 'workflow',
+    category: 'phase',
+    classification: 'deterministic',
+    description:
+      'A workflow NativeCertificationArtifact written via writeCertification satisfies both workflow planner eligibility and lower read-only reviewer eligibility.',
+    assertion: assertWorkflowArtifactUnlocksPlanner,
   },
   {
     id: 'live.judge.tool-output-summary-quality',

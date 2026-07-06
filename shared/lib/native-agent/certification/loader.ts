@@ -9,6 +9,10 @@ import {
   type CertificationPhase,
   type NativeCertificationArtifact,
 } from './schema.ts';
+import {
+  isValidCertificationPathSegment,
+  resolveCertificationStorageIdentity,
+} from './identity.ts';
 
 /**
  * Stable reason codes returned when a certification is ineligible.
@@ -28,23 +32,7 @@ export type CertificationEligibility =
   | { eligible: true; artifact: NativeCertificationArtifact }
   | { eligible: false; reason: IneligibilityReason; artifact?: NativeCertificationArtifact };
 
-/** Characters that are not safe in a path segment */
-const UNSAFE_SEGMENT = /[/\\\0]/;
-
-/**
- * Validate that a path segment is non-empty and contains no traversal characters.
- *
- * Rejects empty strings, the traversal segments `.` and `..`, and any segment
- * containing `/`, `\`, or NUL. Dots inside the segment (e.g. `gpt-5.5`,
- * `gemini-2.5-pro`) are permitted so model IDs work as path components.
- * Does not normalize — callers must supply canonical identifiers.
- */
-export function isValidPathSegment(segment: string): boolean {
-  if (segment.length === 0) return false;
-  if (segment === '.' || segment === '..') return false;
-  if (UNSAFE_SEGMENT.test(segment)) return false;
-  return true;
-}
+export const isValidPathSegment = isValidCertificationPathSegment;
 
 /**
  * Build the storage path for a certification artifact.
@@ -59,12 +47,18 @@ export function buildCertificationPath(
   model: string,
   suiteVersion: string,
 ): string {
-  for (const [name, value] of [['provider', provider], ['model', model], ['suiteVersion', suiteVersion]] as const) {
+  const identity = resolveCertificationStorageIdentity(provider, model);
+
+  for (const [name, value] of [
+    ['provider', identity.provider],
+    ['model', identity.model],
+    ['suiteVersion', suiteVersion],
+  ] as const) {
     if (!isValidPathSegment(value)) {
       throw new Error(`Invalid certification path segment for ${name}: ${JSON.stringify(value)}`);
     }
   }
-  return join(repoDir, CERTIFICATION_BASE_PATH, provider, model, `${suiteVersion}.json`);
+  return join(repoDir, CERTIFICATION_BASE_PATH, identity.provider, identity.model, `${suiteVersion}.json`);
 }
 
 /**

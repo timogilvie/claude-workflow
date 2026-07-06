@@ -143,6 +143,11 @@ const READ_ONLY_NATIVE_CAPABILITIES: readonly ReadOnlyNativeCapability[] = ['cer
 const PI_TRANSPORT_KINDS: readonly PiTransportKind[] = ['openai-responses', 'openai-completions'];
 const CERTIFICATION_PHASES: readonly CertificationPhase[] = PHASE_ORDER;
 const UNSAFE_CERTIFICATION_SEGMENT = /[/\\.\0]/;
+const OPENROUTER_CERTIFICATION_SEED = Object.freeze({
+  maxCertifiedPhase: 'workflow' as const,
+  certifiedAt: '2024-01-01T00:00:00.000Z',
+  certificationSuiteVersion: 'v1',
+});
 
 function cloneCompatFlags(compatFlags: PiCompatFlags | undefined): PiCompatFlags | undefined {
   return compatFlags ? { ...compatFlags } : undefined;
@@ -1445,6 +1450,13 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       costPerMillionInputTokensUsd: 0.35,
       costPerMillionOutputTokensUsd: 1.05,
       agent: 'claude-openrouter',
+      nativeCapability: {
+        nativeProvider: 'openrouter',
+        piTransportKind: 'openai-completions',
+        readOnlyNative: 'certified',
+        compatFlags: { thinkingFormat: 'openrouter' },
+        certification: OPENROUTER_CERTIFICATION_SEED,
+      },
     },
     'qwen-3-235b': {
       vendor: 'qwen',
@@ -1479,6 +1491,61 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       costPerMillionInputTokensUsd: 1,
       costPerMillionOutputTokensUsd: 3,
       agent: 'claude-openrouter',
+      nativeCapability: {
+        nativeProvider: 'openrouter',
+        piTransportKind: 'openai-completions',
+        readOnlyNative: 'certified',
+        compatFlags: { thinkingFormat: 'openrouter' },
+        certification: OPENROUTER_CERTIFICATION_SEED,
+      },
+    },
+    'glm-5.2': {
+      vendor: 'z-ai',
+      class: 'strong_generalist',
+      strengths: ['reasoning', 'coding', 'long-context analysis'],
+      weaknesses: ['watchlist maturity', 'provider routing dependency'],
+      qualityScores: scores(58, 82, 83, 80, 56),
+      pricing: { inputCostPerMTok: 0.9, outputCostPerMTok: 4.2 },
+      defaultLadderEligible: false,
+      contextWindowTokens: 131_072,
+      toolSupport: 'basic',
+      multimodal: { text: true, image: false },
+      latencyTier: 'standard',
+      reasoningTier: 'advanced',
+      costPerMillionInputTokensUsd: 0.9,
+      costPerMillionOutputTokensUsd: 4.2,
+      agent: 'claude-openrouter',
+      nativeCapability: {
+        nativeProvider: 'openrouter',
+        piTransportKind: 'openai-completions',
+        readOnlyNative: 'certified',
+        compatFlags: { thinkingFormat: 'openrouter' },
+        certification: OPENROUTER_CERTIFICATION_SEED,
+      },
+    },
+    'kimi-k2.7-code': {
+      vendor: 'moonshotai',
+      class: 'strong_generalist',
+      strengths: ['coding', 'planning', 'agentic execution'],
+      weaknesses: ['watchlist maturity', 'provider routing dependency'],
+      qualityScores: scores(60, 86, 87, 82, 58),
+      pricing: { inputCostPerMTok: 1.2, outputCostPerMTok: 3.6 },
+      defaultLadderEligible: false,
+      contextWindowTokens: 262_144,
+      toolSupport: 'basic',
+      multimodal: { text: true, image: false },
+      latencyTier: 'standard',
+      reasoningTier: 'advanced',
+      costPerMillionInputTokensUsd: 1.2,
+      costPerMillionOutputTokensUsd: 3.6,
+      agent: 'claude-openrouter',
+      nativeCapability: {
+        nativeProvider: 'openrouter',
+        piTransportKind: 'openai-completions',
+        readOnlyNative: 'certified',
+        compatFlags: { thinkingFormat: 'openrouter' },
+        certification: OPENROUTER_CERTIFICATION_SEED,
+      },
     },
     'kimi-k2-thinking': {
       vendor: 'moonshotai',

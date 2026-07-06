@@ -224,6 +224,49 @@ await test('workflow cert passes for all roles', () => {
   }
 });
 
+await test('openrouter aliases load certifications from mapped provider/model storage paths', () => {
+  const { repoDir, cleanup } = makeRepo();
+  try {
+    writeCertArtifact(repoDir, 'qwen', 'qwen3-coder', 'v1', { phase: 'workflow' });
+    const registry: ModelRegistry = {
+      models: {
+        'qwen-3-coder': {
+          vendor: 'qwen',
+          class: 'strong_generalist',
+          strengths: [],
+          weaknesses: [],
+          qualityScores: { routing: 58, planning: 72, coding: 84, review: 78, classify: 58 },
+          contextWindowTokens: 131_072,
+          toolSupport: 'basic',
+          multimodal: { text: true, image: false },
+          latencyTier: 'standard',
+          reasoningTier: 'standard',
+          costPerMillionInputTokensUsd: 0.35,
+          costPerMillionOutputTokensUsd: 1.05,
+          nativeCapability: {
+            nativeProvider: 'openrouter',
+            piTransportKind: 'openai-completions',
+            readOnlyNative: 'certified',
+            compatFlags: { thinkingFormat: 'openrouter' },
+            certification: {
+              maxCertifiedPhase: 'workflow',
+              certifiedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+              certificationSuiteVersion: 'v1',
+            },
+          },
+        },
+      },
+      ladders: {},
+    };
+
+    const result = filterNativeModels(['qwen-3-coder'], 'planner', registry, repoDir);
+    assert.deepEqual(result.eligible, ['qwen-3-coder']);
+    assert.deepEqual(result.rejected, []);
+  } finally {
+    cleanup();
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Rejection reason: missing
 // ---------------------------------------------------------------------------

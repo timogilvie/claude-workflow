@@ -82,6 +82,13 @@ describe('getDefaultScenarios — catalog integrity', () => {
     }
   });
 
+  it('includes at least one workflow-phase scenario', () => {
+    assert.ok(
+      scenarios.some((scenario) => scenario.phase === 'workflow'),
+      'catalog must include at least one workflow scenario',
+    );
+  });
+
   it('every category in (tool, usage, transcript, phase) has at least one deterministic scenario', () => {
     const categories = ['tool', 'usage', 'transcript', 'phase'] as const;
     const deterministicByCategory = new Map<string, number>();
