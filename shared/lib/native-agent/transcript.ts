@@ -102,6 +102,7 @@ export interface TranscriptAssistantMessage extends TranscriptEventBase {
   responseModel?: string;
   responseId?: string;
   stopReason: string;
+  errorMessage?: string;
   usage?: TranscriptUsage;
   /** Raw history: all content blocks, provider payload stripped. */
   rawContent: TranscriptRawContentBlock[];
@@ -417,6 +418,9 @@ export class TranscriptWriter {
         };
         if (assistantMsg.responseModel !== undefined) result.responseModel = assistantMsg.responseModel;
         if (assistantMsg.responseId !== undefined) result.responseId = assistantMsg.responseId;
+        if (assistantMsg.errorMessage !== undefined) {
+          result.errorMessage = redactSecrets(assistantMsg.errorMessage).text;
+        }
         return result;
       }
 

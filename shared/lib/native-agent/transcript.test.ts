@@ -178,6 +178,7 @@ describe('deriveTranscriptEvents – event family derivation', () => {
       model: 'hokusai-mini',
       usage: { input: 200, output: 30, cacheRead: 5, cacheWrite: 2, totalTokens: 237, cost: { input: 0.002, output: 0.0003, cacheRead: 0, cacheWrite: 0, total: 0.0023 } },
       stopReason: 'toolUse' as const,
+      errorMessage: '401 invalid api key sk-testFAKEKEY12345678901234567890',
       timestamp: FIXED_TIME,
     };
     const events = deriveTranscriptEvents([{ type: 'message_end', message: msg }], BASE_OPTS);
@@ -186,6 +187,7 @@ describe('deriveTranscriptEvents – event family derivation', () => {
     assert.equal(ev.type, 'assistant_message');
     assert.equal(ev.model, 'hokusai-mini');
     assert.equal(ev.stopReason, 'toolUse');
+    assert.equal(ev.errorMessage, '401 invalid api key [REDACTED:openai_key]');
 
     // rawContent preserves thinking blocks
     assert.equal(ev.rawContent.length, 3);
