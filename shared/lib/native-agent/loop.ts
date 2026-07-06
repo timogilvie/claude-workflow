@@ -154,6 +154,16 @@ function computeArgsFingerprint(args: unknown): string {
   return createHash('sha256').update(stable).digest('hex').slice(0, 16);
 }
 
+function finalAssistantStopReason(messages: AgentMessage[]): string | null {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (message.role === 'assistant' && typeof message.stopReason === 'string') {
+      return message.stopReason;
+    }
+  }
+  return null;
+}
+
 function deriveOutputCapMetadata(
   policy: OutputCapPolicy | undefined,
   redactedDetails: unknown,
@@ -564,11 +574,18 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
   const wallClockMs = Date.now() - startTime;
 
   let stopReason: LoopStopReason;
+  const finalStopReason = finalAssistantStopReason(finalMessages);
   if (composed.signal.aborted && (loopError || !budgetStopReason)) {
     // Abort takes precedence over a loop error since the error may be caused by the abort.
     stopReason = composed.isWallClockExpiry() ? 'wall_clock_limit' : 'aborted';
   } else if (loopError) {
     stopReason = 'error';
+  } else if (finalStopReason === 'error') {
+    stopReason = 'error';
+  } else if (finalStopReason === 'aborted') {
+    stopReason = composed.isWallClockExpiry() ? 'wall_clock_limit' : 'aborted';
+  } else if (finalStopReason === 'stop' && budgetStopReason === 'turn_limit') {
+    stopReason = 'stop';
   } else if (budgetStopReason) {
     stopReason = budgetStopReason;
   } else if (composed.signal.aborted) {
