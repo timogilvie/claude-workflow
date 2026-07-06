@@ -27,6 +27,7 @@ Common overrides:
 ```bash
 MAX_PARALLEL=5 wavemill mill
 AGENT_CMD=codex wavemill mill
+SESSION=custom-session wavemill mill
 WAVEMILL_DASHBOARD_REFRESH_SECONDS=3 wavemill mill
 WAVEMILL_TIP_REFRESH_SECONDS=60 wavemill mill
 ```
@@ -108,6 +109,18 @@ If you only document one command first, document `mill`.
 - migration conflict avoidance
 - review-to-ready-to-merge gating before marking tasks done
 - persistent workflow state in `.wavemill/workflow-state.json`
+
+## Tmux Session Names
+
+By default, mill derives a repo-scoped tmux session name in the form `wavemill-<repo-slug>-<hash>`. The slug comes from the repository root basename and the hash makes same-named repos under different parent directories resolve to different sessions.
+
+Use `tmux list-sessions` to discover the active name after launch, then attach with:
+
+```bash
+tmux attach -t <session-name>
+```
+
+If you want a fixed shared name, set an explicit override with `SESSION=custom-session wavemill mill` or `mill.session` in `.wavemill-config.json`. Existing old tmux sessions are not renamed automatically.
 
 When operating mode drops to `constrained` or `survival`, mill-mode review switches to a scoped checklist: syntax/type failures, contract violations, obvious regressions, and test-coverage gaps. In that mode the review tool may emit `needs_stronger_reviewer`, which the review phase should surface on the PR title/body/labels for human follow-up.
 

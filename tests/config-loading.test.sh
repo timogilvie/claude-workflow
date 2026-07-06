@@ -386,6 +386,64 @@ check "detect_project_name sees overlay" "overlay-project" "$LC_DETECT"
 rm -rf "$LCFG_TMP"
 
 # ============================================================================
+# Test 8: Derived session names are repo-scoped and tmux-safe
+# ============================================================================
+echo ""
+echo "=== Repo-Scoped Session Names ==="
+
+SESSION_TMP=$(mktemp -d)
+SESSION_PARENT_A="$SESSION_TMP/parent a"
+SESSION_PARENT_B="$SESSION_TMP/parent-b"
+SAME_BASENAME="Same Repo:Name"
+SPECIAL_BASENAME="Upper Repo.Name:42"
+mkdir -p "$SESSION_PARENT_A/$SAME_BASENAME" "$SESSION_PARENT_B/$SAME_BASENAME" "$SESSION_PARENT_A/$SPECIAL_BASENAME"
+git -C "$SESSION_PARENT_A/$SAME_BASENAME" init >/dev/null 2>&1
+git -C "$SESSION_PARENT_B/$SAME_BASENAME" init >/dev/null 2>&1
+git -C "$SESSION_PARENT_A/$SPECIAL_BASENAME" init >/dev/null 2>&1
+
+eval "$(
+  export HOME="$FAKE_HOME"
+  unset $UNSET_VARS 2>/dev/null || true
+  source "$COMMON"
+  echo "SAME_ONE='$(wavemill_default_session_name "$SESSION_PARENT_A/$SAME_BASENAME")'"
+  echo "SAME_TWO='$(wavemill_default_session_name "$SESSION_PARENT_A/$SAME_BASENAME")'"
+  echo "SAME_THREE='$(wavemill_default_session_name "$SESSION_PARENT_B/$SAME_BASENAME")'"
+  echo "SPECIAL_SESSION='$(wavemill_default_session_name "$SESSION_PARENT_A/$SPECIAL_BASENAME")'"
+)"
+
+check_matches "derived session format" '^wavemill-[a-z0-9-]+-[a-z0-9]{8}$' "$SAME_ONE"
+check "same repo keeps stable session name" "$SAME_ONE" "$SAME_TWO"
+if [[ "$SAME_ONE" != "$SAME_THREE" ]]; then
+  pass "same basename in different parents gets unique sessions"
+else
+  fail "same basename in different parents gets unique sessions" "different session names" "$SAME_ONE"
+fi
+check_matches "special chars slugify to tmux-safe session" '^wavemill-upper-repo-name-42-[a-z0-9]{8}$' "$SPECIAL_SESSION"
+
+EMPTY_SESSION_CFG_TMP=$(mktemp -d)
+cat > "$EMPTY_SESSION_CFG_TMP/.wavemill-config.json" <<'EOF'
+{
+  "mill": {
+    "session": ""
+  }
+}
+EOF
+git -C "$EMPTY_SESSION_CFG_TMP" init >/dev/null 2>&1
+
+eval "$(
+  export HOME="$FAKE_HOME"
+  unset $UNSET_VARS 2>/dev/null || true
+  source "$COMMON"
+  load_config "$EMPTY_SESSION_CFG_TMP"
+  echo "EMPTY_CFG_SESSION='$SESSION'"
+  echo "EMPTY_CFG_EXPECTED='$(wavemill_default_session_name "$EMPTY_SESSION_CFG_TMP")'"
+)"
+
+check "empty configured session uses derived default" "$EMPTY_CFG_EXPECTED" "$EMPTY_CFG_SESSION"
+
+rm -rf "$SESSION_TMP" "$EMPTY_SESSION_CFG_TMP"
+
+# ============================================================================
 # Results
 # ============================================================================
 echo ""

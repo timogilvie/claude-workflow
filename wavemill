@@ -294,7 +294,7 @@ ${GREEN}Environment Variable Overrides:${NC}
     LINEAR_PROJECT    Explicit Linear project override
     DRY_RUN           Dry run mode (env-only, default: false)
     MAX_PARALLEL      Number of parallel tasks
-    SESSION           Tmux session name
+    SESSION           Tmux session override
     AGENT_CMD         Agent to use (claude, codex)
     WORKTREE_ROOT     Worktree location
     BASE_BRANCH       Base branch
@@ -711,7 +711,7 @@ try {
     "project": "$linear_project_json"
   },
   "mill": {
-    "session": "wavemill",
+    "session": "",
     "maxParallel": $max_parallel,
     "pollSeconds": 10,
     "baseBranch": "main",
