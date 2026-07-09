@@ -329,13 +329,16 @@ create_tmux_session() {
   if tmux has-session -t "$SESSION" 2>/dev/null; then
     local existing_dir
     existing_dir=$(tmux show-environment -t "$SESSION" REPO_DIR 2>/dev/null | sed 's/^REPO_DIR=//') || true
-    if [[ -n "$existing_dir" && "$existing_dir" != "$REPO_DIR" ]]; then
-      echo "ERROR: tmux session '$SESSION' is already active in: $existing_dir" >&2
-      echo "Cannot start a new session for: $REPO_DIR" >&2
-      echo "" >&2
-      echo "Options:" >&2
-      echo "  - Stop the existing session first (tmux kill-session -t '$SESSION')" >&2
-      echo "  - Use a different session name: SESSION=my-session wavemill mill" >&2
+    if [[ -z "$existing_dir" ]]; then
+      existing_dir="unknown"
+    fi
+    if [[ "$existing_dir" != "$REPO_DIR" ]]; then
+      echo "ERROR: tmux session '$SESSION' is already bound to a different repo." >&2
+      echo "  Requested repo: $REPO_DIR" >&2
+      echo "  Active repo:    $existing_dir" >&2
+      echo "  Attach:         tmux attach -t $SESSION" >&2
+      echo "  Kill:           tmux kill-session -t $SESSION" >&2
+      echo "  Override:       SESSION=${SESSION}-alt wavemill mill" >&2
       return 1
     fi
     tmux kill-session -t "$SESSION" 2>/dev/null || true

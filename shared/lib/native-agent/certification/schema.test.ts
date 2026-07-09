@@ -323,20 +323,26 @@ describe('buildCertificationPath', () => {
     assert.ok(p.endsWith('/.wavemill/native-agent-certifications/anthropic/claude-sonnet-4-6/v1.json'));
   });
 
+  it('maps raw OpenRouter ids into provider/model storage segments', () => {
+    const p = buildCertificationPath('/repo', 'openrouter', 'qwen/qwen3-coder', 'v1');
+    assert.ok(p.endsWith('/.wavemill/native-agent-certifications/qwen/qwen3-coder/v1.json'));
+  });
+
+  it('maps known OpenRouter aliases into provider/model storage segments', () => {
+    const p = buildCertificationPath('/repo', 'openrouter', 'qwen-3-coder', 'v1');
+    assert.ok(p.endsWith('/.wavemill/native-agent-certifications/qwen/qwen3-coder/v1.json'));
+  });
+
   it('throws on empty provider', () => {
     assert.throws(() => buildCertificationPath('/repo', '', 'model', 'v1'), /provider/);
   });
 
-  it('encodes path traversal characters in model IDs', () => {
-    const p = buildCertificationPath('/repo', 'anthropic', '../etc', 'v1');
-    assert.ok(!p.includes('../etc'));
-    assert.deepEqual(parseCertificationPath(p), { provider: 'anthropic', model: '../etc', suiteVersion: 'v1' });
+  it('throws on path traversal in model', () => {
+    assert.throws(() => buildCertificationPath('/repo', 'anthropic', '../etc', 'v1'), /model/);
   });
 
-  it('encodes slashes in suiteVersion', () => {
-    const p = buildCertificationPath('/repo', 'anthropic', 'model', 'v1/evil');
-    assert.ok(!p.endsWith('/v1/evil.json'));
-    assert.deepEqual(parseCertificationPath(p), { provider: 'anthropic', model: 'model', suiteVersion: 'v1/evil' });
+  it('throws on slash in suiteVersion', () => {
+    assert.throws(() => buildCertificationPath('/repo', 'anthropic', 'model', 'v1/evil'), /suiteVersion/);
   });
 });
 

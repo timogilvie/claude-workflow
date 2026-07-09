@@ -8,12 +8,6 @@ import {
   type NativeCertificationArtifact,
 } from './schema.ts';
 import {
-  buildCertificationPath,
-  loadCertification,
-  parseCertificationPath,
-  checkCertificationEligibility,
-} from './loader.ts';
-import {
   listCertifications,
   readCertification,
   serializeCertification,
@@ -195,46 +189,6 @@ describe('writeCertification', () => {
       assert.ok(path.includes('openai/gpt-4o/v2.json'));
       const result = readCertification(path);
       assert.ok(result.ok);
-    } finally {
-      cleanupRepo(repoDir);
-    }
-  });
-
-  it('supports OpenRouter model IDs that contain provider slashes', () => {
-    const repoDir = makeTempRepo();
-    try {
-      const artifact = makeValidArtifact({
-        provider: 'openrouter',
-        model: 'moonshotai/kimi-k2.7-code',
-        suiteVersion: 'v1',
-      });
-
-      const path = writeCertification(repoDir, artifact);
-      assert.ok(!path.includes('moonshotai/kimi-k2.7-code'));
-      assert.ok(path.includes('~b64.'));
-
-      const parsed = parseCertificationPath(path);
-      assert.deepEqual(parsed, {
-        provider: 'openrouter',
-        model: 'moonshotai/kimi-k2.7-code',
-        suiteVersion: 'v1',
-      });
-
-      const loaded = loadCertification(repoDir, 'openrouter', 'moonshotai/kimi-k2.7-code', 'v1');
-      assert.ok(loaded.ok);
-      if (loaded.ok) {
-        assert.equal(loaded.artifact.model, 'moonshotai/kimi-k2.7-code');
-      }
-
-      const eligibility = checkCertificationEligibility(
-        repoDir,
-        'openrouter',
-        'moonshotai/kimi-k2.7-code',
-        'v1',
-        'read-only',
-        new Date('2026-06-02T00:00:00.000Z'),
-      );
-      assert.equal(eligibility.eligible, true);
     } finally {
       cleanupRepo(repoDir);
     }

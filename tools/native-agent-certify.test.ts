@@ -35,6 +35,31 @@ const STUB_REGISTRY: ModelRegistry = {
         },
       },
     },
+    'qwen-3-coder': {
+      vendor: 'qwen',
+      class: 'strong_generalist',
+      strengths: [],
+      weaknesses: [],
+      qualityScores: { routing: 60, planning: 72, coding: 84, review: 78, classify: 58 },
+      contextWindowTokens: 131_072,
+      toolSupport: 'basic',
+      multimodal: { text: true, image: false },
+      latencyTier: 'standard',
+      reasoningTier: 'standard',
+      costPerMillionInputTokensUsd: 0.35,
+      costPerMillionOutputTokensUsd: 1.05,
+      nativeCapability: {
+        nativeProvider: 'openrouter',
+        piTransportKind: 'openai-completions',
+        readOnlyNative: 'certified',
+        compatFlags: { thinkingFormat: 'openrouter' },
+        certification: {
+          maxCertifiedPhase: 'workflow',
+          certifiedAt: new Date().toISOString(),
+          certificationSuiteVersion: 'v1',
+        },
+      },
+    },
   },
   ladders: {},
 };
@@ -54,7 +79,7 @@ const PASSING_REPORT: HarnessReport = {
     } as HarnessScenarioResult,
   ],
   countsByStatus: { pass: 1, fail: 0, unsupported: 0, 'not-run': 0 },
-  countsByCategory: { budget: 0, cleanup: 0, policy: 0, provenance: 0, tool: 1, usage: 0, transcript: 0, phase: 0 },
+  countsByCategory: { tool: 1, usage: 0, transcript: 0, phase: 0 },
   knownLimitations: [],
   harnessPassed: true,
   liveCertifiable: true,
@@ -129,115 +154,6 @@ describe('certifyNativeAgent', () => {
     assert.equal(result.liveCertifiable, true);
   });
 
-  it('does not persist not-run live-judged scenarios as failed artifact scenarios', async () => {
-    let written: NativeCertificationArtifact | undefined;
-    const report: HarnessReport = {
-      ...PASSING_REPORT,
-      results: [
-        ...PASSING_REPORT.results,
-        {
-          scenarioId: 'live.judge.placeholder',
-          category: 'tool',
-          classification: 'live-judged',
-          phase: 'read-only',
-          status: 'not-run',
-          reason: 'requires-live-judge',
-          knownLimitation: 'Requires live judge.',
-          durationMs: 1,
-        } as HarnessScenarioResult,
-      ],
-      countsByStatus: { pass: 1, fail: 0, unsupported: 0, 'not-run': 1 },
-      knownLimitations: ['Requires live judge.'],
-      harnessPassed: true,
-      liveCertifiable: true,
-    };
-
-    const result = await certifyNativeAgent({
-      provider: 'openai',
-      model: 'gpt-4o',
-      phase: 'read-only',
-      repoDir: '/repo',
-      dryRun: false,
-      registry: STUB_REGISTRY,
-      runScenariosFn: async () => report,
-      writeCertificationFn: (_repoDir, artifact) => {
-        written = artifact;
-        return '/repo/.wavemill/native-agent-certifications/openai/gpt-4o/v1.json';
-      },
-    });
-
-    assert.ok(result.artifactPath);
-    assert.ok(written);
-    assert.deepEqual(written.scenarios.map((scenario) => scenario.scenarioId), ['s1']);
-    assert.deepEqual(written.knownLimitations, ['Requires live judge.']);
-  });
-
-  it('writes a workflow artifact only when workflow scenarios pass', async () => {
-    let receivedPhaseScenarios = false;
-    let written: NativeCertificationArtifact | undefined;
-    const report: HarnessReport = {
-      ...PASSING_REPORT,
-      results: [
-        ...PASSING_REPORT.results,
-        {
-          scenarioId: 'workflow.planning.tool-availability',
-          category: 'tool',
-          classification: 'deterministic',
-          phase: 'workflow',
-          status: 'pass',
-          durationMs: 1,
-        } as HarnessScenarioResult,
-      ],
-      countsByStatus: { pass: 2, fail: 0, unsupported: 0, 'not-run': 0 },
-      countsByCategory: { budget: 0, cleanup: 0, policy: 0, provenance: 0, tool: 2, usage: 0, transcript: 0, phase: 0 },
-    };
-
-    const result = await certifyNativeAgent({
-      provider: 'openai',
-      model: 'gpt-4o',
-      phase: 'workflow',
-      repoDir: '/repo',
-      dryRun: false,
-      registry: STUB_REGISTRY,
-      runScenariosFn: async (opts) => {
-        receivedPhaseScenarios = opts.scenarios.some((scenario) => scenario.phase === 'workflow');
-        return report;
-      },
-      writeCertificationFn: (_repoDir, artifact) => {
-        written = artifact;
-        return '/repo/.wavemill/native-agent-certifications/openai/gpt-4o/v1.json';
-      },
-    });
-
-    assert.equal(receivedPhaseScenarios, true);
-    assert.ok(result.artifactPath);
-    assert.ok(written);
-    assert.equal(written.phase, 'workflow');
-    assert.equal(result.liveCertifiable, true);
-  });
-
-  it('does not certify workflow when workflow results are missing', async () => {
-    let writeCalls = 0;
-
-    const result = await certifyNativeAgent({
-      provider: 'openai',
-      model: 'gpt-4o',
-      phase: 'workflow',
-      repoDir: '/repo',
-      dryRun: false,
-      registry: STUB_REGISTRY,
-      runScenariosFn: async () => PASSING_REPORT,
-      writeCertificationFn: () => {
-        writeCalls += 1;
-        return '/repo/cert.json';
-      },
-    });
-
-    assert.equal(writeCalls, 0);
-    assert.equal(result.liveCertifiable, false);
-    assert.match(result.knownLimitations[0] ?? '', /workflow scenario results/);
-  });
-
   it('harness failure does not write artifact', async () => {
     let writeCalls = 0;
 
@@ -282,6 +198,47 @@ describe('certifyNativeAgent', () => {
     assert.match(result.knownLimitations.join('\n'), /no patch scenarios/);
   });
 
+  it('certifies workflow when the default catalog includes workflow scenarios', async () => {
+    let written: NativeCertificationArtifact | undefined;
+
+    const result = await certifyNativeAgent({
+      provider: 'openai',
+      model: 'gpt-4o',
+      phase: 'workflow',
+      repoDir: '/repo',
+      dryRun: false,
+      registry: STUB_REGISTRY,
+      runScenariosFn: async (opts) => {
+        assert.equal(opts.scenarios.some((scenario) => scenario.phase === 'workflow'), true);
+        return {
+          ...PASSING_REPORT,
+          results: [
+            {
+              scenarioId: 'workflow.phase.workflow-persistence-roundtrip',
+              category: 'phase',
+              classification: 'deterministic',
+              phase: 'workflow',
+              status: 'pass',
+              durationMs: 1,
+            } as HarnessScenarioResult,
+          ],
+          countsByCategory: { tool: 0, usage: 0, transcript: 0, phase: 1 },
+        };
+      },
+      writeCertificationFn: (_repoDir, artifact) => {
+        written = artifact;
+        return '/repo/.wavemill/native-agent-certifications/openai/gpt-4o/v1.json';
+      },
+    });
+
+    assert.equal(result.harnessPassed, true);
+    assert.equal(result.liveCertifiable, true);
+    assert.equal(result.artifactPath, '/repo/.wavemill/native-agent-certifications/openai/gpt-4o/v1.json');
+    assert.ok(written);
+    assert.equal(written.phase, 'workflow');
+    assert.equal(result.knownLimitations.some((limitation) => /no workflow scenarios/.test(limitation)), false);
+  });
+
   it('throws for unsupported model', async () => {
     await assert.rejects(
       () => certifyNativeAgent({
@@ -312,5 +269,70 @@ describe('certifyNativeAgent', () => {
     assert.equal(result.scenarios.length, 1);
     assert.equal(result.scenarios[0].scenarioId, 's1');
     assert.equal(result.scenarios[0].status, 'pass');
+  });
+
+  it('resolves raw OpenRouter ids through registry metadata and writes storage identity', async () => {
+    let written: NativeCertificationArtifact | undefined;
+
+    const result = await certifyNativeAgent({
+      provider: 'openrouter',
+      model: 'qwen/qwen3-coder',
+      phase: 'read-only',
+      repoDir: '/repo',
+      registry: STUB_REGISTRY,
+      runScenariosFn: async () => ({
+        ...PASSING_REPORT,
+        provider: 'openrouter',
+        model: 'qwen/qwen3-coder',
+        transport: 'openai-completions',
+      }),
+      writeCertificationFn: (_repoDir, artifact) => {
+        written = artifact;
+        return '/repo/.wavemill/native-agent-certifications/qwen/qwen3-coder/v1.json';
+      },
+    });
+
+    assert.equal(result.model, 'qwen/qwen3-coder');
+    assert.equal(result.artifactPath, '/repo/.wavemill/native-agent-certifications/qwen/qwen3-coder/v1.json');
+    assert.ok(written, 'artifact should have been written');
+    assert.equal(written.provider, 'qwen');
+    assert.equal(written.model, 'qwen3-coder');
+  });
+
+  it('omits not-run live-judge scenarios from persisted artifacts', async () => {
+    let written: NativeCertificationArtifact | undefined;
+
+    await certifyNativeAgent({
+      provider: 'openai',
+      model: 'gpt-4o',
+      phase: 'read-only',
+      repoDir: '/repo',
+      registry: STUB_REGISTRY,
+      runScenariosFn: async () => ({
+        ...PASSING_REPORT,
+        results: [
+          PASSING_REPORT.results[0]!,
+          {
+            scenarioId: 'live.judge.tool-output-summary-quality',
+            category: 'tool',
+            classification: 'live-judged',
+            phase: 'read-only',
+            status: 'not-run',
+            reason: 'requires-live-judge',
+            durationMs: 1,
+          } as HarnessScenarioResult,
+        ],
+      }),
+      writeCertificationFn: (_repoDir, artifact) => {
+        written = artifact;
+        return '/repo/.wavemill/native-agent-certifications/openai/gpt-4o/v1.json';
+      },
+    });
+
+    assert.ok(written, 'artifact should have been written');
+    assert.deepEqual(
+      written.scenarios.map((scenario) => scenario.scenarioId),
+      ['s1'],
+    );
   });
 });

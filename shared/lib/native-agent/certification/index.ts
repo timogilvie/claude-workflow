@@ -15,6 +15,7 @@ export {
 } from './schema.ts';
 
 export type { CertificationEligibility, IneligibilityReason } from './loader.ts';
+export type { CertificationStorageIdentity } from './identity.ts';
 
 export {
   buildCertificationPath,
@@ -24,6 +25,10 @@ export {
   loadCertification,
   parseCertificationPath,
 } from './loader.ts';
+export {
+  isValidCertificationPathSegment,
+  resolveCertificationStorageIdentity,
+} from './identity.ts';
 
 export type { ReadResult, StoreError, StoreErrorCode } from './store.ts';
 

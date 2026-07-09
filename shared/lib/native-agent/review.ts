@@ -15,7 +15,6 @@ import { createReadOnlyTools, READ_ONLY_PATH_FIELDS } from './tools/read-only.ts
 import { createGitTools, gitAfterToolCall, gitToolPolicyConfig } from './tools/git.ts';
 import { createToolRegistry } from './tools/registry.ts';
 import { toPiAgentTool } from './tools/pi-adapter.ts';
-import { redactSecrets } from './tools/redaction.ts';
 import type { ToolDescriptor } from './tools/types.ts';
 import type { ReviewContext } from '../review-context-gatherer.ts';
 import { logPromptUsage } from '../prompt-registry.ts';
@@ -232,21 +231,6 @@ function stopReasonDescription(stopReason: LoopStopReason): string {
   }
 }
 
-function extractNativeErrorMessage(messages: AgentMessage[]): string | null {
-  for (let index = messages.length - 1; index >= 0; index--) {
-    const message = messages[index];
-    if (
-      message.role === 'assistant' &&
-      typeof message.errorMessage === 'string' &&
-      message.errorMessage.trim().length > 0
-    ) {
-      const redacted = redactSecrets(message.errorMessage.trim()).text;
-      return redacted.length > 800 ? `${redacted.slice(0, 800)}...` : redacted;
-    }
-  }
-  return null;
-}
-
 function cleanupReasonForStopReason(stopReason: LoopStopReason): CleanupReason | null {
   if (stopReason === 'aborted') {
     return 'aborted';
@@ -404,16 +388,10 @@ export async function runNativeReview(
 
   const deniedTools = nativeReviewDeps.extractDeniedTools(transcriptEvents);
   if (loopResult.stopReason !== 'stop') {
-    const providerError = loopResult.stopReason === 'error'
-      ? extractNativeErrorMessage(loopResult.messages)
-      : null;
-    const message = providerError
-      ? `${stopReasonDescription(loopResult.stopReason)} Provider error: ${providerError}`
-      : stopReasonDescription(loopResult.stopReason);
     return nativeReviewFailure(
       context,
       'native-review-failed',
-      message,
+      stopReasonDescription(loopResult.stopReason),
       deniedTools,
     );
   }

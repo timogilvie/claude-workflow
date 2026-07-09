@@ -534,7 +534,7 @@ describe('[certification-command] rollout dry-run command behavior', () => {
               durationMs: 0,
             }],
             countsByStatus: { pass: 1, fail: 0, unsupported: 0, 'not-run': 0 },
-            countsByCategory: { budget: 0, cleanup: 0, policy: 0, provenance: 0, tool: 1, usage: 0, transcript: 0, phase: 0 },
+            countsByCategory: { tool: 1, usage: 0, transcript: 0, phase: 0 },
           };
         },
         writeCertificationFn: () => {

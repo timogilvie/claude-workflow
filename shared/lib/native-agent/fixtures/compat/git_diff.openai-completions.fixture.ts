@@ -25,7 +25,7 @@ export default {
       maxBytes: 4096,
     },
     expectedPayload: {
-      model: 'openai/gpt-4o-mini',
+      model: 'openrouter:openai/gpt-4o-mini',
       messages: [
         { role: 'system', content: 'You are a fixture harness.' },
         { role: 'user', content: 'Use the available tool.' },
@@ -50,7 +50,7 @@ export default {
     rawProviderResponse: [
       {
         id: 'chatcmpl-git-diff',
-        model: 'openai/gpt-4o-mini',
+        model: 'openrouter:openai/gpt-4o-mini',
         choices: [
           {
             index: 0,

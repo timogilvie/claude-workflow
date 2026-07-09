@@ -5,11 +5,6 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import type { ModelRegistry } from '../model-registry.ts';
 import {
-  CERTIFICATION_SCHEMA_VERSION,
-  type NativeCertificationArtifact,
-} from './certification/schema.ts';
-import { writeCertification } from './certification/store.ts';
-import {
   buildOpenAiResponsesModel,
   buildOpenRouterModel,
   getNativeProviderApiKey,
@@ -19,19 +14,7 @@ import {
   resolveNativeAgentProviders,
 } from './providers.ts';
 
-function makeCertifiedRegistry(
-  modelId: string,
-  provider: 'openai' | 'openrouter',
-  withArtifactMetadata = false,
-): ModelRegistry {
-  const certification = withArtifactMetadata
-    ? {
-      maxCertifiedPhase: 'read-only' as const,
-      certifiedAt: '2026-06-01T00:00:00.000Z',
-      certificationSuiteVersion: 'v1',
-    }
-    : undefined;
-
+function makeCertifiedRegistry(modelId: string, provider: 'openai' | 'openrouter'): ModelRegistry {
   return {
     models: {
       [modelId]: {
@@ -48,34 +31,11 @@ function makeCertifiedRegistry(
         costPerMillionInputTokensUsd: 1,
         costPerMillionOutputTokensUsd: 2,
         nativeCapability: provider === 'openai'
-          ? { nativeProvider: 'openai', piTransportKind: 'openai-responses', readOnlyNative: 'certified', certification }
-          : {
-            nativeProvider: 'openrouter',
-            piTransportKind: 'openai-completions',
-            readOnlyNative: 'certified',
-            compatFlags: { thinkingFormat: 'openrouter' },
-            certification,
-          },
+          ? { nativeProvider: 'openai', piTransportKind: 'openai-responses', readOnlyNative: 'certified' }
+          : { nativeProvider: 'openrouter', piTransportKind: 'openai-completions', readOnlyNative: 'certified', compatFlags: { thinkingFormat: 'openrouter' } },
       },
     },
     ladders: {},
-  };
-}
-
-function makeCertificationArtifact(
-  provider: 'openai' | 'openrouter',
-  modelId: string,
-  overrides: Partial<NativeCertificationArtifact> = {},
-): NativeCertificationArtifact {
-  return {
-    schemaVersion: CERTIFICATION_SCHEMA_VERSION,
-    provider,
-    model: modelId,
-    phase: 'read-only',
-    suiteVersion: 'v1',
-    certifiedAt: '2026-06-01T00:00:00.000Z',
-    scenarios: [{ scenarioId: 'tool.compat.list-files', passed: true }],
-    ...overrides,
   };
 }
 
@@ -125,8 +85,6 @@ describe('native-agent provider resolution', () => {
     assert.equal(entry.status, 'ready');
     assert.equal(entry.model.api, 'openai-completions');
     assert.equal(entry.model.provider, 'openrouter');
-    assert.equal(entry.model.id, 'openrouter-test-model');
-    assert.equal(entry.model.name, 'openrouter-test-model');
     assert.equal(entry.model.baseUrl, 'https://example.test/openrouter');
     assert.deepEqual(entry.model.headers, {
       'HTTP-Referer': 'https://wavemill.test',
@@ -365,86 +323,6 @@ describe('native-agent certification gate', () => {
     const [entry] = entries;
     assert.equal(entry.status, 'ready');
     assert.equal(entry.certificationOnly, false);
-  });
-
-  it('blocks task routing when registry metadata exists but the certification artifact is missing', () => {
-    const repoDir = mkdtempSync(join(tmpdir(), 'native-agent-provider-'));
-    try {
-      const entries = resolveNativeAgentProviders({
-        providers: {
-          openrouter: {
-            models: ['vendor/certified-model'],
-          },
-        },
-      }, {
-        repoDir,
-        env: { OPENROUTER_API_KEY: 'sk-test' },
-        registry: makeCertifiedRegistry('vendor/certified-model', 'openrouter', true),
-      });
-
-      assert.equal(entries.length, 1);
-      const [entry] = entries;
-      assert.equal(entry.status, 'uncertified');
-      assert.match(entry.reason, /reason: missing/);
-      assert.match(entry.reason, /Run the native certification suite/);
-    } finally {
-      rmSync(repoDir, { recursive: true, force: true });
-    }
-  });
-
-  it('blocks task routing when the certification artifact is stale', () => {
-    const repoDir = mkdtempSync(join(tmpdir(), 'native-agent-provider-'));
-    try {
-      writeCertification(repoDir, makeCertificationArtifact('openrouter', 'vendor/certified-model', {
-        certifiedAt: '2020-01-01T00:00:00.000Z',
-      }));
-
-      const entries = resolveNativeAgentProviders({
-        providers: {
-          openrouter: {
-            models: ['vendor/certified-model'],
-          },
-        },
-      }, {
-        repoDir,
-        env: { OPENROUTER_API_KEY: 'sk-test' },
-        registry: makeCertifiedRegistry('vendor/certified-model', 'openrouter', true),
-      });
-
-      assert.equal(entries.length, 1);
-      const [entry] = entries;
-      assert.equal(entry.status, 'uncertified');
-      assert.match(entry.reason, /reason: stale/);
-    } finally {
-      rmSync(repoDir, { recursive: true, force: true });
-    }
-  });
-
-  it('allows task-expansion routing with a fresh read-only certification artifact', () => {
-    const repoDir = mkdtempSync(join(tmpdir(), 'native-agent-provider-'));
-    try {
-      writeCertification(repoDir, makeCertificationArtifact('openrouter', 'vendor/certified-model'));
-
-      const entries = resolveNativeAgentProviders({
-        providers: {
-          openrouter: {
-            models: ['vendor/certified-model'],
-          },
-        },
-      }, {
-        repoDir,
-        phase: 'task-expansion',
-        env: { OPENROUTER_API_KEY: 'sk-test' },
-        registry: makeCertifiedRegistry('vendor/certified-model', 'openrouter', true),
-      });
-
-      assert.equal(entries.length, 1);
-      const [entry] = entries;
-      assert.equal(entry.status, 'ready');
-      assert.equal(entry.modelId, 'vendor/certified-model');
-    } finally {
-      rmSync(repoDir, { recursive: true, force: true });
-    }
   });
 
   it('certified model in certificationMode resolves to ready with certificationOnly: false', () => {

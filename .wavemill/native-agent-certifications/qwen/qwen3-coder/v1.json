@@ -1,0 +1,55 @@
+{
+  "certifiedAt": "2026-07-05T15:31:57.711Z",
+  "knownLimitations": [
+    "Live-judged scenarios require a paid provider call and are not run by the deterministic harness."
+  ],
+  "model": "qwen3-coder",
+  "phase": "workflow",
+  "provider": "qwen",
+  "scenarios": [
+    {
+      "attempts": 1,
+      "finalAttemptStatus": "pass",
+      "passed": true,
+      "retryCount": 0,
+      "scenarioId": "tool.compat.git_status.openai-completions"
+    },
+    {
+      "attempts": 1,
+      "finalAttemptStatus": "pass",
+      "passed": true,
+      "retryCount": 0,
+      "scenarioId": "usage.scripted.records-input-output-tokens"
+    },
+    {
+      "attempts": 1,
+      "finalAttemptStatus": "pass",
+      "passed": true,
+      "retryCount": 0,
+      "scenarioId": "transcript.scripted.session_started_then_ended"
+    },
+    {
+      "attempts": 1,
+      "finalAttemptStatus": "pass",
+      "passed": true,
+      "retryCount": 0,
+      "scenarioId": "phase.read-only.satisfies-read-only"
+    },
+    {
+      "attempts": 1,
+      "finalAttemptStatus": "pass",
+      "passed": true,
+      "retryCount": 0,
+      "scenarioId": "phase.fixture.persistence-roundtrip"
+    },
+    {
+      "attempts": 1,
+      "finalAttemptStatus": "pass",
+      "passed": true,
+      "retryCount": 0,
+      "scenarioId": "phase.workflow.artifact-unlocks-planner"
+    }
+  ],
+  "schemaVersion": 2,
+  "suiteVersion": "v1"
+}
