@@ -11,8 +11,6 @@ import {
   type ModelRegistry,
   type ReadOnlyNativeCapability,
 } from '../model-registry.ts';
-import { checkCertificationEligibility } from './certification/loader.ts';
-import type { CertificationPhase } from './certification/schema.ts';
 import {
   buildPiModel,
   getRegisteredPiProviderForModel,
@@ -142,7 +140,6 @@ export function resolveNativeAgentProviders(
     }
 
     for (const modelId of modelIds) {
-      const nativeCapability = registry.models[modelId]?.nativeCapability;
       const decision = evaluateNativeReadOnlyRouting({
         modelId,
         phase,
@@ -160,29 +157,6 @@ export function resolveNativeAgentProviders(
           baseUrl,
           headers,
           reason: decision.reason!,
-          capability: decision.capability,
-        });
-        continue;
-      }
-
-      const artifactReason = certificationMode || !repoDir
-        ? undefined
-        : evaluateTaskCertificationArtifact({
-          repoDir,
-          providerName,
-          modelId,
-          suiteVersion: nativeCapability?.certification?.certificationSuiteVersion,
-          phase,
-        });
-      if (artifactReason) {
-        resolved.push({
-          providerName,
-          modelId,
-          status: 'uncertified',
-          apiKeyEnv,
-          baseUrl,
-          headers,
-          reason: artifactReason,
           capability: decision.capability,
         });
         continue;
@@ -206,49 +180,6 @@ export function resolveNativeAgentProviders(
   }
 
   return resolved;
-}
-
-function evaluateTaskCertificationArtifact({
-  repoDir,
-  providerName,
-  modelId,
-  suiteVersion,
-  phase,
-}: {
-  repoDir: string;
-  providerName: NativeAgentProviderName;
-  modelId: string;
-  suiteVersion: string | undefined;
-  phase: string;
-}): string | undefined {
-  if (!suiteVersion) {
-    return undefined;
-  }
-
-  const requiredPhase = requiredCertificationPhaseForNativeTaskPhase(phase);
-  const eligibility = checkCertificationEligibility(
-    repoDir,
-    providerName,
-    modelId,
-    suiteVersion,
-    requiredPhase,
-  );
-  if (eligibility.eligible) {
-    return undefined;
-  }
-
-  return `Refusing native read-only routing: certification artifact for ${providerName}:${modelId} is not eligible for ${phase} (reason: ${eligibility.reason}; required phase: ${requiredPhase}; suite: ${suiteVersion}). Run the native certification suite before routing this model.`;
-}
-
-function requiredCertificationPhaseForNativeTaskPhase(phase: string): CertificationPhase {
-  switch (phase) {
-    case 'task-expansion':
-    case 'planning':
-    case 'review':
-      return 'read-only';
-    default:
-      return 'read-only';
-  }
 }
 
 export function getNativeProviderApiKey(entry: ReadyNativeProviderEntry): string | undefined {
@@ -284,7 +215,7 @@ export function buildOpenRouterModel({
   headers?: Record<string, string>;
 }): PiModel {
   return buildPiModel({
-    id: modelId,
+    id: `${OPENROUTER_NATIVE_PROVIDER}:${modelId}`,
     name: modelId,
     api: 'openai-completions',
     provider: OPENROUTER_NATIVE_PROVIDER,

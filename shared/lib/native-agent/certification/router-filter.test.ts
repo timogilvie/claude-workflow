@@ -224,6 +224,49 @@ await test('workflow cert passes for all roles', () => {
   }
 });
 
+await test('openrouter aliases load certifications from mapped provider/model storage paths', () => {
+  const { repoDir, cleanup } = makeRepo();
+  try {
+    writeCertArtifact(repoDir, 'qwen', 'qwen3-coder', 'v1', { phase: 'workflow' });
+    const registry: ModelRegistry = {
+      models: {
+        'qwen-3-coder': {
+          vendor: 'qwen',
+          class: 'strong_generalist',
+          strengths: [],
+          weaknesses: [],
+          qualityScores: { routing: 58, planning: 72, coding: 84, review: 78, classify: 58 },
+          contextWindowTokens: 131_072,
+          toolSupport: 'basic',
+          multimodal: { text: true, image: false },
+          latencyTier: 'standard',
+          reasoningTier: 'standard',
+          costPerMillionInputTokensUsd: 0.35,
+          costPerMillionOutputTokensUsd: 1.05,
+          nativeCapability: {
+            nativeProvider: 'openrouter',
+            piTransportKind: 'openai-completions',
+            readOnlyNative: 'certified',
+            compatFlags: { thinkingFormat: 'openrouter' },
+            certification: {
+              maxCertifiedPhase: 'workflow',
+              certifiedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+              certificationSuiteVersion: 'v1',
+            },
+          },
+        },
+      },
+      ladders: {},
+    };
+
+    const result = filterNativeModels(['qwen-3-coder'], 'planner', registry, repoDir);
+    assert.deepEqual(result.eligible, ['qwen-3-coder']);
+    assert.deepEqual(result.rejected, []);
+  } finally {
+    cleanup();
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Rejection reason: missing
 // ---------------------------------------------------------------------------
@@ -357,15 +400,14 @@ await test('read-only cert rejects for coder role (requires patch)', () => {
   }
 });
 
-await test('read-only cert rejects for planner role (requires workflow)', () => {
+await test('patch cert rejects for planner role (requires workflow)', () => {
   const { repoDir, cleanup } = makeRepo();
   try {
-    writeCertArtifact(repoDir, 'openai', 'native-ro-planner', 'v1', { phase: 'read-only' });
-    const registry = makeRegistry('native-ro-planner', 'read-only', 'v1');
-    const result = filterNativeModels(['native-ro-planner'], 'planner', registry, repoDir);
-    assert.deepEqual(result.eligible, []);
+    writeCertArtifact(repoDir, 'openai', 'native-p2', 'v1', { phase: 'patch' });
+    const registry = makeRegistry('native-p2', 'patch', 'v1');
+    const result = filterNativeModels(['native-p2'], 'planner', registry, repoDir);
     assert.equal(result.rejected[0].reason, 'insufficient-phase');
-    assert.equal(result.rejected[0].certifiedPhase, 'read-only');
+    assert.equal(result.rejected[0].certifiedPhase, 'patch');
     assert.equal(result.rejected[0].requestedPhase, 'workflow');
   } finally {
     cleanup();

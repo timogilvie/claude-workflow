@@ -9,6 +9,10 @@ import {
   type CertificationPhase,
   type NativeCertificationArtifact,
 } from './schema.ts';
+import {
+  isValidCertificationPathSegment,
+  resolveCertificationStorageIdentity,
+} from './identity.ts';
 
 /**
  * Stable reason codes returned when a certification is ineligible.
@@ -28,49 +32,7 @@ export type CertificationEligibility =
   | { eligible: true; artifact: NativeCertificationArtifact }
   | { eligible: false; reason: IneligibilityReason; artifact?: NativeCertificationArtifact };
 
-/** Characters that are not safe in a path segment */
-const UNSAFE_SEGMENT = /[/\\\0]/;
-const ENCODED_SEGMENT_PREFIX = '~b64.';
-
-/**
- * Validate that a path segment is non-empty and contains no traversal characters.
- *
- * Rejects empty strings, the traversal segments `.` and `..`, and any segment
- * containing `/`, `\`, or NUL. Dots inside the segment (e.g. `gpt-5.5`,
- * `gemini-2.5-pro`) are permitted so model IDs work as path components.
- * Does not normalize — callers must supply canonical identifiers.
- */
-export function isValidPathSegment(segment: string): boolean {
-  if (segment.length === 0) return false;
-  if (segment === '.' || segment === '..') return false;
-  if (UNSAFE_SEGMENT.test(segment)) return false;
-  return true;
-}
-
-function encodeCertificationSegment(segment: string): string {
-  if (isValidPathSegment(segment) && !segment.startsWith(ENCODED_SEGMENT_PREFIX)) {
-    return segment;
-  }
-
-  return `${ENCODED_SEGMENT_PREFIX}${Buffer.from(segment, 'utf-8').toString('base64url')}`;
-}
-
-function decodeCertificationSegment(segment: string): string | undefined {
-  if (!segment.startsWith(ENCODED_SEGMENT_PREFIX)) {
-    return isValidPathSegment(segment) ? segment : undefined;
-  }
-
-  const encoded = segment.slice(ENCODED_SEGMENT_PREFIX.length);
-  if (!encoded || /[^A-Za-z0-9_-]/.test(encoded)) {
-    return undefined;
-  }
-
-  try {
-    return Buffer.from(encoded, 'base64url').toString('utf-8');
-  } catch {
-    return undefined;
-  }
-}
+export const isValidPathSegment = isValidCertificationPathSegment;
 
 /**
  * Build the storage path for a certification artifact.
@@ -85,18 +47,18 @@ export function buildCertificationPath(
   model: string,
   suiteVersion: string,
 ): string {
-  for (const [name, value] of [['provider', provider], ['model', model], ['suiteVersion', suiteVersion]] as const) {
-    if (value.length === 0 || value === '.' || value === '..' || value.includes('\0')) {
+  const identity = resolveCertificationStorageIdentity(provider, model);
+
+  for (const [name, value] of [
+    ['provider', identity.provider],
+    ['model', identity.model],
+    ['suiteVersion', suiteVersion],
+  ] as const) {
+    if (!isValidPathSegment(value)) {
       throw new Error(`Invalid certification path segment for ${name}: ${JSON.stringify(value)}`);
     }
   }
-  return join(
-    repoDir,
-    CERTIFICATION_BASE_PATH,
-    encodeCertificationSegment(provider),
-    encodeCertificationSegment(model),
-    `${encodeCertificationSegment(suiteVersion)}.json`,
-  );
+  return join(repoDir, CERTIFICATION_BASE_PATH, identity.provider, identity.model, `${suiteVersion}.json`);
 }
 
 /**
@@ -118,14 +80,15 @@ export function parseCertificationPath(
   // Expect: <provider>/<model>/<suiteVersion>.json
   if (parts.length !== 3) return undefined;
 
-  const [providerSegment, modelSegment, filename] = parts;
+  const [provider, model, filename] = parts;
   if (!filename.endsWith('.json')) return undefined;
 
-  const suiteVersionSegment = filename.slice(0, -'.json'.length);
-  const provider = decodeCertificationSegment(providerSegment);
-  const model = decodeCertificationSegment(modelSegment);
-  const suiteVersion = decodeCertificationSegment(suiteVersionSegment);
-  if (!provider || !model || !suiteVersion) {
+  const suiteVersion = filename.slice(0, -'.json'.length);
+  if (
+    !isValidPathSegment(provider)
+    || !isValidPathSegment(model)
+    || !isValidPathSegment(suiteVersion)
+  ) {
     return undefined;
   }
 

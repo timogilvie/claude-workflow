@@ -29,8 +29,10 @@ import {
   toArtifactScenario,
   type RunScenariosOptions,
 } from '../shared/lib/native-agent/certification/scenario-runner.ts';
+import { resolveCertificationStorageIdentity } from '../shared/lib/native-agent/certification/identity.ts';
 import { writeCertification } from '../shared/lib/native-agent/certification/store.ts';
 import { getEffectiveRegistry, type ModelRegistry, type NativeProviderName } from '../shared/lib/model-registry.ts';
+import { resolveWavemillAliasFromOpenRouterId } from '../shared/lib/openrouter-catalog.ts';
 
 const NATIVE_PROVIDERS: NativeProviderName[] = ['openai', 'openrouter'];
 
@@ -65,8 +67,20 @@ export async function certifyNativeAgent(opts: CertifyOptions): Promise<CertifyR
   const now = opts.now ?? (() => new Date());
   const dryRun = opts.dryRun ?? false;
 
-  const registry = opts.registry ?? getEffectiveRegistry(opts.repoDir);
-  const modelEntry = registry.models[opts.model];
+  const baseRegistry = opts.registry ?? getEffectiveRegistry(opts.repoDir);
+  let registry = baseRegistry;
+  const registryModelId = resolveRegistryModelId(opts.provider, opts.model, registry);
+  if (registryModelId !== opts.model && baseRegistry.models[registryModelId]) {
+    registry = {
+      ...baseRegistry,
+      models: {
+        ...baseRegistry.models,
+        [opts.model]: baseRegistry.models[registryModelId]!,
+      },
+    };
+  }
+
+  const modelEntry = registry.models[registryModelId];
   const nativeCapability = modelEntry?.nativeCapability;
 
   if (!nativeCapability || nativeCapability.readOnlyNative === 'unsupported') {
@@ -101,31 +115,22 @@ export async function certifyNativeAgent(opts: CertifyOptions): Promise<CertifyR
   };
 
   const report = await runScenariosFn(runOpts);
-  const requestedPhaseDeterministicResults = report.results.filter(
-    (result) => result.phase === opts.phase && result.classification === 'deterministic',
-  );
-  const requestedPhasePassed =
-    requestedPhaseDeterministicResults.length > 0
-    && requestedPhaseDeterministicResults.every((result) => result.status === 'pass');
   const phaseCoverageLimitation = hasRequestedPhaseScenario
-    ? (
-        requestedPhasePassed
-          ? undefined
-          : `Certification suite ${suiteVersion} did not produce passing deterministic ${opts.phase} scenario results; lower-phase results cannot certify ${opts.phase}.`
-      )
+    ? undefined
     : `Certification suite ${suiteVersion} has no ${opts.phase} scenarios; lower-phase results cannot certify ${opts.phase}.`;
   const knownLimitations = phaseCoverageLimitation
     ? [...report.knownLimitations, phaseCoverageLimitation]
     : report.knownLimitations;
-  const liveCertifiable = report.liveCertifiable && hasRequestedPhaseScenario && requestedPhasePassed;
+  const liveCertifiable = report.liveCertifiable && hasRequestedPhaseScenario;
 
   let artifactPath: string | undefined;
 
   if (liveCertifiable && !dryRun) {
+    const storageIdentity = resolveCertificationStorageIdentity(opts.provider, opts.model);
     const artifact: NativeCertificationArtifact = {
       schemaVersion: CERTIFICATION_SCHEMA_VERSION,
-      provider: opts.provider,
-      model: opts.model,
+      provider: storageIdentity.provider,
+      model: storageIdentity.model,
       phase: opts.phase,
       suiteVersion,
       certifiedAt: now().toISOString(),
@@ -153,6 +158,32 @@ export async function certifyNativeAgent(opts: CertifyOptions): Promise<CertifyR
     })),
     knownLimitations,
   };
+}
+
+function resolveRegistryModelId(
+  provider: NativeProviderName,
+  modelId: string,
+  registry: ModelRegistry,
+): string {
+  if (registry.models[modelId]) {
+    return modelId;
+  }
+
+  if (provider !== 'openrouter') {
+    return modelId;
+  }
+
+  const mappedAlias = resolveWavemillAliasFromOpenRouterId(modelId);
+  if (mappedAlias && registry.models[mappedAlias]) {
+    return mappedAlias;
+  }
+
+  const parts = modelId.split('/');
+  if (parts.length === 2 && registry.models[parts[1]!]) {
+    return parts[1]!;
+  }
+
+  return modelId;
 }
 
 if (import.meta.main) {

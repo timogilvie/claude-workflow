@@ -14,6 +14,7 @@ import {
   normalizeCatalog,
   OPENROUTER_MODELS_URL,
   resolveWavemillAliasFromOpenRouterId,
+  resolveOpenRouterIdFromWavemillAlias,
   serializeSnapshot,
   type LaunchPriorityFixture,
   type LaunchPriorityModel,
@@ -78,7 +79,7 @@ describe('loadLaunchPriorityFixture', () => {
     const list = loadLaunchPriorityList();
     assert.ok(list.length >= 25, `expected at least 25 launch-priority models, got ${list.length}`);
     const aliases = new Set(list.map((m) => m.wavemillAlias));
-    for (const required of ['claude-fable-5', 'gpt-5.5', 'deepseek-r1', 'qwen-2.5-coder-32b', 'kimi-k2']) {
+    for (const required of ['claude-fable-5', 'gpt-5.5', 'deepseek-r1', 'qwen-2.5-coder-32b', 'kimi-k2', 'glm-5.2', 'kimi-k2.7-code']) {
       assert.ok(aliases.has(required), `expected fixture to include ${required}`);
     }
   });
@@ -132,6 +133,15 @@ describe('fetchOpenRouterModels', () => {
       json: async () => ({ wrong: 'shape' }),
     })) as unknown as typeof fetch;
     await assert.rejects(() => fetchOpenRouterModels(fakeFetch), /missing "data" array/);
+  });
+});
+
+describe('OpenRouter alias mapping', () => {
+  it('resolves known aliases and ids in both directions', () => {
+    assert.equal(resolveWavemillAliasFromOpenRouterId('qwen/qwen3-coder'), 'qwen-3-coder');
+    assert.equal(resolveOpenRouterIdFromWavemillAlias('qwen-3-coder'), 'qwen/qwen3-coder');
+    assert.equal(resolveOpenRouterIdFromWavemillAlias('glm-5.2'), 'z-ai/glm-5.2');
+    assert.equal(resolveOpenRouterIdFromWavemillAlias('kimi-k2.7-code'), 'moonshotai/kimi-k2.7-code');
   });
 });
 

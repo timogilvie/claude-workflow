@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import {
   buildModelCertificationReport,
@@ -135,6 +138,14 @@ function makeArtifact(overrides: Partial<NativeCertificationArtifact> = {}): Nat
   };
 }
 
+function makeTempRepo(): { repoDir: string; cleanup: () => void } {
+  const repoDir = mkdtempSync(join(tmpdir(), 'native-cert-report-'));
+  return {
+    repoDir,
+    cleanup: () => rmSync(repoDir, { recursive: true, force: true }),
+  };
+}
+
 // A loadCertification stub that returns a fresh, passing artifact for gpt-4o
 function makeLoadFn(artifactOverrides: Partial<NativeCertificationArtifact> = {}) {
   return (repoDir: string, provider: string, model: string, suiteVersion: string) => {
@@ -162,7 +173,7 @@ describe('buildModelCertificationReport', () => {
     assert.ok(row, 'gpt-4o row missing');
     assert.equal(row.state, 'ready');
     assert.equal(row.certifiedPhase, 'read-only');
-    assert.deepEqual(row.eligibleStages.sort(), ['reviewer', 'task-expansion'].sort());
+    assert.deepEqual(row.eligibleStages, ['reviewer']);
     assert.equal(row.suiteVersion, 'v1');
     assert.equal(row.scenarios.length, 1);
     assert.equal(row.scenarios[0].passed, true);
@@ -267,7 +278,7 @@ describe('buildModelCertificationReport', () => {
     assert.ok(row, 'gpt-4o row missing');
     // Registry metadata is fresh (certifiedAt = FRESH_DATE), so should be ready
     assert.equal(row.state, 'ready');
-    assert.deepEqual(row.eligibleStages.sort(), ['reviewer', 'task-expansion'].sort());
+    assert.deepEqual(row.eligibleStages, ['reviewer']);
     assert.equal(row.scenarios.length, 0);
   });
 
@@ -364,7 +375,60 @@ describe('buildModelCertificationReport', () => {
     const row = rows.find(r => r.model === 'gpt-4o');
     assert.ok(row, 'gpt-4o row missing');
     assert.equal(row.state, 'ready');
-    assert.deepEqual(row.eligibleStages.sort(), ['coder', 'planner', 'reviewer', 'task-expansion'].sort());
+    assert.deepEqual(row.eligibleStages.sort(), ['coder', 'planner', 'reviewer'].sort());
+  });
+
+  it('loads mapped OpenRouter artifacts for aliased models', () => {
+    const { repoDir, cleanup } = makeTempRepo();
+    try {
+      const certDir = join(repoDir, '.wavemill', 'native-agent-certifications', 'qwen', 'qwen3-coder');
+      mkdirSync(certDir, { recursive: true });
+      writeFileSync(join(certDir, 'v1.json'), JSON.stringify({
+        schemaVersion: CERTIFICATION_SCHEMA_VERSION,
+        provider: 'qwen',
+        model: 'qwen3-coder',
+        phase: 'workflow',
+        suiteVersion: 'v1',
+        certifiedAt: FRESH_DATE,
+        scenarios: [{ scenarioId: 's1', passed: true }],
+      }));
+
+      const registry = makeRegistry({
+        'qwen-3-coder': {
+          vendor: 'qwen',
+          class: 'strong_generalist',
+          strengths: [],
+          weaknesses: [],
+          qualityScores: { routing: 58, planning: 72, coding: 84, review: 78, classify: 58 },
+          contextWindowTokens: 131_072,
+          toolSupport: 'basic',
+          multimodal: { text: true, image: false },
+          latencyTier: 'standard',
+          reasoningTier: 'standard',
+          costPerMillionInputTokensUsd: 0.35,
+          costPerMillionOutputTokensUsd: 1.05,
+          nativeCapability: {
+            nativeProvider: 'openrouter',
+            piTransportKind: 'openai-completions',
+            readOnlyNative: 'certified',
+            compatFlags: { thinkingFormat: 'openrouter' },
+            certification: {
+              maxCertifiedPhase: 'workflow',
+              certifiedAt: FRESH_DATE,
+              certificationSuiteVersion: 'v1',
+            },
+          },
+        },
+      });
+
+      const rows = buildModelCertificationReport({ registry, repoDir, now: NOW });
+      const row = rows.find(r => r.model === 'qwen-3-coder');
+      assert.ok(row, 'qwen-3-coder row missing');
+      assert.equal(row.state, 'ready');
+      assert.deepEqual(row.eligibleStages.sort(), ['coder', 'planner', 'reviewer'].sort());
+    } finally {
+      cleanup();
+    }
   });
 });
 

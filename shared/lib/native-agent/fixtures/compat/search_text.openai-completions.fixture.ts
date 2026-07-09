@@ -27,7 +27,7 @@ export default {
       maxResults: 10,
     },
     expectedPayload: {
-      model: 'openai/gpt-4o-mini',
+      model: 'openrouter:openai/gpt-4o-mini',
       messages: [
         { role: 'system', content: 'You are a fixture harness.' },
         { role: 'user', content: 'Use the available tool.' },
@@ -52,7 +52,7 @@ export default {
     rawProviderResponse: [
       {
         id: 'chatcmpl-search-text',
-        model: 'openai/gpt-4o-mini',
+        model: 'openrouter:openai/gpt-4o-mini',
         choices: [
           {
             index: 0,
