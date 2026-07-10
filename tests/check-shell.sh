@@ -3150,12 +3150,18 @@ if [[ -f "$LIB_DIR/agent-adapters.sh" ]]; then
 
   result="$(bash -c '
     source "'"$LIB_DIR/agent-adapters.sh"'" 2>/dev/null
-    agent_resolve_from_model "deepseek-v4-pro"
+    agent_resolve_from_model "deepseek-v4-pro" "coding"
   ' 2>/dev/null)" || true
   if [[ "$result" == "claude" ]]; then
     pass "agent_resolve_from_model deepseek-v4-pro still maps to claude (backward compat)"
   else
     fail "backward compat agent_resolve_from_model" "expected claude, got $result"
+  fi
+
+  if bash "$SCRIPT_DIR/agent-resolve-from-model.test.sh"; then
+    pass "agent_resolve_from_model shell regression coverage"
+  else
+    fail "agent_resolve_from_model shell regression coverage"
   fi
 else
   fail "agent-adapters.sh not found"

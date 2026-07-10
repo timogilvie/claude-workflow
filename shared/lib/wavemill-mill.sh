@@ -2219,7 +2219,7 @@ elif [[ "${ROUTER_ENABLED:-true}" == "true" ]]; then
 
               echo "$ROUTE_JSON" > "/tmp/${SESSION}-${ISSUE}-route.json"
 
-              CODER_AGENT=$(agent_resolve_from_model "${CODER:-}")
+              CODER_AGENT=$(agent_resolve_from_model "${CODER:-}" "coding" || true)
               jq -n \
                 --arg model "${CODER:-}" \
                 --arg agent "$CODER_AGENT" \
@@ -2272,7 +2272,7 @@ elif [[ "${ROUTER_ENABLED:-true}" == "true" ]]; then
 
             echo "$ROUTE_JSON" > "/tmp/${SESSION}-${ISSUE}-route.json"
 
-            CODER_AGENT=$(agent_resolve_from_model "${CODER:-}")
+            CODER_AGENT=$(agent_resolve_from_model "${CODER:-}" "coding" || true)
             jq -n \
               --arg model "${CODER:-}" \
               --arg agent "$CODER_AGENT" \
@@ -2319,7 +2319,7 @@ for t in "${TASKS[@]}"; do
 
   if [[ -n "${FORCE_MODEL:-}" ]]; then
     rec_model="$FORCE_MODEL"
-    rec_agent="$(agent_resolve_from_model "$FORCE_MODEL")"
+    rec_agent="$(agent_resolve_from_model "$FORCE_MODEL" "coding" || true)"
     route_planner="$FORCE_MODEL"
     route_reviewer="$FORCE_MODEL"
     route_plan_depth="light"
@@ -2333,7 +2333,7 @@ for t in "${TASKS[@]}"; do
     route_code_depth=$(read_route_json "$SESSION" "$ISSUE" "codeDepth" "medium")
     route_review_mode=$(read_route_json "$SESSION" "$ISSUE" "reviewRecommended" "static")
     if [[ -n "$rec_model" ]]; then
-      rec_agent="$(agent_resolve_from_model "$rec_model")"
+      rec_agent="$(agent_resolve_from_model "$rec_model" "coding" || true)"
     fi
   fi
 
@@ -5219,9 +5219,18 @@ write_phase_config() {
   [[ -n "$force_model" ]] && force_model_json="\"$force_model\""
 
   local planner_agent coder_agent reviewer_agent
-  planner_agent="$(agent_resolve_from_model "$planner_model")"
-  coder_agent="$(agent_resolve_from_model "$coder_model")"
-  reviewer_agent="$(agent_resolve_from_model "$reviewer_model")"
+  if declare -F agent_resolve_models_for_roles >/dev/null 2>&1; then
+    if agent_resolve_models_for_roles "$planner_model" "$coder_model" "$reviewer_model"; then
+      :
+    fi
+    planner_agent="$(agent_resolve_batch_agent_for_role "planner")"
+    coder_agent="$(agent_resolve_batch_agent_for_role "coder")"
+    reviewer_agent="$(agent_resolve_batch_agent_for_role "reviewer")"
+  else
+    planner_agent="$(agent_resolve_from_model "$planner_model" "planning" || true)"
+    coder_agent="$(agent_resolve_from_model "$coder_model" "coding" || true)"
+    reviewer_agent="$(agent_resolve_from_model "$reviewer_model" "review" || true)"
+  fi
 
   cat > "$tmp" <<EOF
 {
@@ -5453,9 +5462,12 @@ _restore_inflight_task_window_if_missing() {
       depth=$(read_phase_config "$feature_dir" "planning" "depth")
       [[ -z "$depth" ]] && depth=$(get_task_meta "$issue" "planDepth")
       [[ -z "$depth" ]] && depth="light"
-      agent_cmd="$(agent_resolve_from_model "$model")"
-      launch_planning_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
-        "$model" "$agent_cmd" "$depth" || rc=$?
+      if ! agent_cmd="$(agent_resolve_from_model "$model" "planning")"; then
+        rc=1
+      else
+        launch_planning_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
+          "$model" "$agent_cmd" "$depth" || rc=$?
+      fi
       ;;
     coding)
       if ! reroute_expanded_packets_for_coding_handoff "$issue" "$slug" "$feature_dir"; then
@@ -5474,9 +5486,12 @@ _restore_inflight_task_window_if_missing() {
       depth=$(read_phase_config "$feature_dir" "coding" "depth")
       [[ -z "$depth" ]] && depth=$(get_task_meta "$issue" "codeDepth")
       [[ -z "$depth" ]] && depth="medium"
-      agent_cmd="$(agent_resolve_from_model "$model")"
-      launch_coding_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
-        "$model" "$agent_cmd" "$depth" || rc=$?
+      if ! agent_cmd="$(agent_resolve_from_model "$model" "coding")"; then
+        rc=1
+      else
+        launch_coding_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
+          "$model" "$agent_cmd" "$depth" || rc=$?
+      fi
       ;;
     review)
       model=$(read_phase_config "$feature_dir" "review" "model")
@@ -5489,9 +5504,12 @@ _restore_inflight_task_window_if_missing() {
       review_mode=$(read_phase_config "$feature_dir" "review" "mode")
       [[ -z "$review_mode" ]] && review_mode=$(get_task_meta "$issue" "reviewMode")
       [[ -z "$review_mode" ]] && review_mode="static"
-      agent_cmd="$(agent_resolve_from_model "$model")"
-      launch_review_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
-        "$model" "$agent_cmd" "$review_mode" || rc=$?
+      if ! agent_cmd="$(agent_resolve_from_model "$model" "review")"; then
+        rc=1
+      else
+        launch_review_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
+          "$model" "$agent_cmd" "$review_mode" || rc=$?
+      fi
       ;;
     *)
       log_warn "$issue → Cannot restore window for unsupported phase: $phase"
@@ -5765,17 +5783,23 @@ EOF
       review_mode=$(read_state_value "static+llm" --arg i "$issue" '.tasks[$i].reviewMode // "static+llm"')
 
       # Resolve agent from model
-      reviewer_agent="$(agent_resolve_from_model "$reviewer_model")"
-
-      # Launch review phase agent
-      log "status" "  → Relaunching review agent for $issue (model: $reviewer_model, mode: $review_mode)"
-      launch_review_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" "$reviewer_model" "$reviewer_agent" "$review_mode"
-      if [[ $? -eq 0 ]]; then
-        log "status" "$issue → Review context restored and agent relaunched for PR #$pr"
+      if reviewer_agent="$(agent_resolve_from_model "$reviewer_model" "review")"; then
+        # Launch review phase agent
+        log "status" "  → Relaunching review agent for $issue (model: $reviewer_model, mode: $review_mode)"
+        launch_review_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" "$reviewer_model" "$reviewer_agent" "$review_mode"
+        if [[ $? -eq 0 ]]; then
+          log "status" "$issue → Review context restored and agent relaunched for PR #$pr"
+        else
+          log_warn "$issue → Failed to relaunch review agent"
+          if [[ "$restored_window" == "true" || "$recreated_worktree" == "true" ]]; then
+            log "status" "$issue → Review context restored for PR #$pr (but agent launch failed)"
+          fi
+          return 1
+        fi
       else
-        log_warn "$issue → Failed to relaunch review agent"
+        log_warn "$issue → Review relaunch blocked: ${AGENT_RESOLVE_LAST_DIAGNOSTIC:-agent resolution failed}"
         if [[ "$restored_window" == "true" || "$recreated_worktree" == "true" ]]; then
-          log "status" "$issue → Review context restored for PR #$pr (but agent launch failed)"
+          log "status" "$issue → Review context restored for PR #$pr (but agent launch was blocked)"
         fi
         return 1
       fi
@@ -8919,15 +8943,24 @@ launch_task() {
   local challenger_key="" challenger_slug="" challenger_title="$title"
   if [[ -n "$challenge_model" ]]; then
     task_model="$challenge_model"
-    task_agent_cmd="$(agent_resolve_from_model "$task_model")"
     # Read stored routing for this challenge entry
     planner_model=$(get_task_meta "$issue" "plannerModel")
     reviewer_model=$(get_task_meta "$issue" "reviewerModel")
     plan_depth=$(get_task_meta "$issue" "planDepth")
     code_depth=$(get_task_meta "$issue" "codeDepth")
     review_mode=$(get_task_meta "$issue" "reviewMode")
-    planner_agent="$(agent_resolve_from_model "${planner_model:-$task_model}")"
-    reviewer_agent="$(agent_resolve_from_model "${reviewer_model:-$task_model}")"
+    if declare -F agent_resolve_models_for_roles >/dev/null 2>&1; then
+      if agent_resolve_models_for_roles "${planner_model:-$task_model}" "$task_model" "${reviewer_model:-$task_model}"; then
+        :
+      fi
+      planner_agent="$(agent_resolve_batch_agent_for_role "planner")"
+      task_agent_cmd="$(agent_resolve_batch_agent_for_role "coder")"
+      reviewer_agent="$(agent_resolve_batch_agent_for_role "reviewer")"
+    else
+      task_agent_cmd="$(agent_resolve_from_model "$task_model" "coding" || true)"
+      planner_agent="$(agent_resolve_from_model "${planner_model:-$task_model}" "planning" || true)"
+      reviewer_agent="$(agent_resolve_from_model "${reviewer_model:-$task_model}" "review" || true)"
+    fi
     log "info" "  Challenge: $task_agent_cmd --model $task_model (planner=$planner_model, reviewer=$reviewer_model)"
   elif [[ -n "${FORCE_MODEL:-}" ]]; then
     # Validate model (should have been validated earlier, but double-check)
@@ -8937,7 +8970,7 @@ launch_task() {
       continue
     fi
     task_model="$FORCE_MODEL"
-    task_agent_cmd="$(agent_resolve_from_model "$FORCE_MODEL")"
+    task_agent_cmd="$(agent_resolve_from_model "$FORCE_MODEL" "coding" || true)"
     planner_model="$FORCE_MODEL"
     planner_agent="$task_agent_cmd"
     reviewer_model="$FORCE_MODEL"
@@ -9107,14 +9140,23 @@ launch_task() {
         review_mode=$(echo "$route_json" | jq -r '.reviewRecommended // "static"' 2>/dev/null)
 
         # Resolve agents for each stage
-        if [[ -n "$planner_model" ]]; then
-          planner_agent="$(agent_resolve_from_model "$planner_model")"
-        fi
-        if [[ -n "$task_model" ]]; then
-          task_agent_cmd="$(agent_resolve_from_model "$task_model")"
-        fi
-        if [[ -n "$reviewer_model" ]]; then
-          reviewer_agent="$(agent_resolve_from_model "$reviewer_model")"
+        if declare -F agent_resolve_models_for_roles >/dev/null 2>&1; then
+          if agent_resolve_models_for_roles "$planner_model" "$task_model" "$reviewer_model"; then
+            :
+          fi
+          planner_agent="$(agent_resolve_batch_agent_for_role "planner")"
+          task_agent_cmd="$(agent_resolve_batch_agent_for_role "coder")"
+          reviewer_agent="$(agent_resolve_batch_agent_for_role "reviewer")"
+        else
+          if [[ -n "$planner_model" ]]; then
+            planner_agent="$(agent_resolve_from_model "$planner_model" "planning" || true)"
+          fi
+          if [[ -n "$task_model" ]]; then
+            task_agent_cmd="$(agent_resolve_from_model "$task_model" "coding" || true)"
+          fi
+          if [[ -n "$reviewer_model" ]]; then
+            reviewer_agent="$(agent_resolve_from_model "$reviewer_model" "review" || true)"
+          fi
         fi
 
         if [[ "$route_source" == "live" ]]; then
@@ -9232,14 +9274,23 @@ EOF
     [[ -n "${WAVEMILL_REVIEWER_MODEL:-}" ]] && reviewer_model="$WAVEMILL_REVIEWER_MODEL"
   fi
 
-  if [[ -n "$planner_model" ]]; then
-    planner_agent="$(agent_resolve_from_model "$planner_model")"
-  fi
-  if [[ -n "$task_model" ]]; then
-    task_agent_cmd="$(agent_resolve_from_model "$task_model")"
-  fi
-  if [[ -n "$reviewer_model" ]]; then
-    reviewer_agent="$(agent_resolve_from_model "$reviewer_model")"
+  if declare -F agent_resolve_models_for_roles >/dev/null 2>&1; then
+    if agent_resolve_models_for_roles "$planner_model" "$task_model" "$reviewer_model"; then
+      :
+    fi
+    planner_agent="$(agent_resolve_batch_agent_for_role "planner")"
+    task_agent_cmd="$(agent_resolve_batch_agent_for_role "coder")"
+    reviewer_agent="$(agent_resolve_batch_agent_for_role "reviewer")"
+  else
+    if [[ -n "$planner_model" ]]; then
+      planner_agent="$(agent_resolve_from_model "$planner_model" "planning" || true)"
+    fi
+    if [[ -n "$task_model" ]]; then
+      task_agent_cmd="$(agent_resolve_from_model "$task_model" "coding" || true)"
+    fi
+    if [[ -n "$reviewer_model" ]]; then
+      reviewer_agent="$(agent_resolve_from_model "$reviewer_model" "review" || true)"
+    fi
   fi
 
   # Save to state ledger (after routing so agent is known)
@@ -9477,7 +9528,13 @@ Implement from the issue description plus direct codebase analysis."
   if declare -F agent_resolve_model >/dev/null 2>&1; then
     planner_launch_model="$(agent_resolve_model "planner" "${planner_model:-claude-sonnet-5}" "$REPO_DIR")" || return 1
   fi
-  resolved_planner_agent="$(agent_resolve_from_model "$planner_launch_model")"
+  if ! resolved_planner_agent="$(agent_resolve_from_model "$planner_launch_model" "planning")"; then
+    write_stage_result "$feature_dir" "planning" "failed" "" "$planner_launch_model" "${AGENT_RESOLVE_LAST_DIAGNOSTIC:-Planning launch blocked by agent resolution failure.}"
+    set_task_phase "$issue" "routing"
+    set_window_attention_state "$win" "needs-user"
+    log "warn" "⚠ $issue → Planning launch blocked: ${AGENT_RESOLVE_LAST_DIAGNOSTIC:-agent resolution failed}"
+    return 0
+  fi
 
   # Record planning stage as running before the first launch so the monitor
   # keeps the task active even before any planning artifacts exist.
@@ -10506,7 +10563,14 @@ monitor_issue_state() {
               if declare -F agent_resolve_model >/dev/null 2>&1; then
                 planner_launch_model="$(agent_resolve_model "planner" "$planner_model" "$REPO_DIR")" || return 1
               fi
-              planner_agent="$(agent_resolve_from_model "$planner_launch_model")"
+              if ! planner_agent="$(agent_resolve_from_model "$planner_launch_model" "planning")"; then
+                write_stage_result "$FEATURE_DIR" "planning" "failed" "" "$planner_launch_model" "${AGENT_RESOLVE_LAST_DIAGNOSTIC:-Planning launch blocked by agent resolution failure.}"
+                set_task_phase "$ISSUE" "routing"
+                set_window_attention_state "$WIN" "needs-user"
+                log "warn" "⚠ $ISSUE → Planning launch blocked: ${AGENT_RESOLVE_LAST_DIAGNOSTIC:-agent resolution failed}"
+                active_count=$((active_count + 1))
+                return 0
+              fi
 
               # Get title from state or Linear
               title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
@@ -10774,7 +10838,14 @@ monitor_issue_state() {
             if declare -F agent_resolve_model >/dev/null 2>&1; then
               coder_launch_model="$(agent_resolve_model "coder" "$coder_model" "$REPO_DIR")" || return 1
             fi
-            coder_agent="$(agent_resolve_from_model "$coder_launch_model")"
+            if ! coder_agent="$(agent_resolve_from_model "$coder_launch_model" "coding")"; then
+              write_stage_result "$FEATURE_DIR" "coding" "failed" "" "$coder_launch_model" "${AGENT_RESOLVE_LAST_DIAGNOSTIC:-Coding launch blocked by agent resolution failure.}"
+              set_task_phase "$ISSUE" "planning"
+              set_window_attention_state "$WIN" "needs-user"
+              log "warn" "⚠ $ISSUE → Coding launch blocked: ${AGENT_RESOLVE_LAST_DIAGNOSTIC:-agent resolution failed}"
+              active_count=$((active_count + 1))
+              return 0
+            fi
 
             # Get title
             title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
@@ -10922,7 +10993,14 @@ monitor_issue_state() {
             if declare -F agent_resolve_model >/dev/null 2>&1; then
               reviewer_launch_model="$(agent_resolve_model "reviewer" "$reviewer_model" "$REPO_DIR")" || return 1
             fi
-            reviewer_agent="$(agent_resolve_from_model "$reviewer_launch_model")"
+            if ! reviewer_agent="$(agent_resolve_from_model "$reviewer_launch_model" "review")"; then
+              write_stage_result "$FEATURE_DIR" "review" "failed" "" "$reviewer_launch_model" "${AGENT_RESOLVE_LAST_DIAGNOSTIC:-Review launch blocked by agent resolution failure.}"
+              set_task_phase "$ISSUE" "coding"
+              set_window_attention_state "$WIN" "needs-user"
+              log "warn" "⚠ $ISSUE → Review launch blocked: ${AGENT_RESOLVE_LAST_DIAGNOSTIC:-agent resolution failed}"
+              active_count=$((active_count + 1))
+              return 0
+            fi
 
             # Get title
             title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')

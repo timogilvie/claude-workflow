@@ -54,7 +54,7 @@ runTool({
     const pool = getChallengeModelPool(challenge, router);
 
     const singleAgent = primaryModel
-      ? resolveAgent(primaryModel, router.agentMap || {}, defaultAgent)
+      ? resolveAgent(primaryModel, router.agentMap || {}, defaultAgent, repoDir, 'coding')
       : defaultAgent;
 
     const base = {

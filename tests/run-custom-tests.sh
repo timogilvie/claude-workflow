@@ -69,6 +69,19 @@ for f in \
   fi
 done
 
+for f in \
+  agent-resolve-from-model.test.sh \
+; do
+  echo -n "  $f: "
+  if bash "$SCRIPT_DIR/$f" > /dev/null 2>&1; then
+    echo "PASS"
+    PASS=$((PASS + 1))
+  else
+    echo "FAIL"
+    FAIL=$((FAIL + 1))
+  fi
+done
+
 # Known-broken tests (pre-existing issues, tracked separately)
 for f in \
   constraint-validator.test.ts \
