@@ -53,6 +53,14 @@ test('challenge model pool prefers explicit challenge.models', () => {
   assert.deepEqual(pool, ['claude-opus-4-6', 'gpt-5.4']);
 });
 
+test('challenge model pool keeps promoted OpenRouter aliases when listed explicitly', () => {
+  const pool = getChallengeModelPool(
+    { models: ['glm-5.2', 'kimi-k2.7-code', 'glm-5.2'] },
+    { models: ['claude-sonnet-4-5-20250929'] },
+  );
+  assert.deepEqual(pool, ['glm-5.2', 'kimi-k2.7-code']);
+});
+
 test('challenge model pool falls back to router models when challenge.models is null', () => {
   const pool = getChallengeModelPool(
     { models: null },
@@ -1269,6 +1277,24 @@ function nativeModelEntry(phase: string = 'patch', suiteVersion: string = 'v1') 
   };
 }
 
+function openRouterNativeModelEntry(phase: string = 'workflow', suiteVersion: string = 'v1') {
+  return {
+    class: 'strong_generalist',
+    agent: 'claude-openrouter',
+    nativeCapability: {
+      nativeProvider: 'openrouter',
+      piTransportKind: 'openai-completions',
+      readOnlyNative: 'certified',
+      compatFlags: { thinkingFormat: 'openrouter' },
+      certification: {
+        maxCertifiedPhase: phase,
+        certifiedAt: CERT_DATE_FRESH,
+        certificationSuiteVersion: suiteVersion,
+      },
+    },
+  };
+}
+
 console.log('\n--- Native Certification Guardrail Tests ---\n');
 
 test('certified native challenger accepted for implementation stage', () => {
@@ -1731,6 +1757,34 @@ test('phase semantics match router: certified model accepted, patch-only rejecte
     assert.ok(patchRejection, 'patch-only model should be rejected for plan stage');
     assert.equal(patchRejection!.reason, 'insufficient-phase');
     assert.equal(patchRejection!.requestedPhase, 'workflow');
+  } finally {
+    cleanup();
+  }
+});
+
+test('workflow-certified OpenRouter aliases remain challenge-eligible by alias', () => {
+  const { repoDir, cleanup } = makeNativeTestRepo({
+    'glm-5.2': openRouterNativeModelEntry('workflow'),
+  });
+  try {
+    writeCertArtifact(repoDir, 'z-ai', 'glm-5.2', 'v1', { phase: 'workflow' });
+
+    const result = pickChallengeModelsWithReason(
+      ['claude-opus-4-6', 'glm-5.2'],
+      {
+        pairId: 'NC-010',
+        issueId: 'NC-010',
+        slug: 'nc-openrouter-alias',
+        primaryModel: 'claude-opus-4-6',
+        repoDir,
+        now: TEST_NOW,
+        randomFn: () => 0,
+      },
+    );
+
+    assert.ok(result.pair, 'pair should be selected');
+    assert.equal(result.pair!.challenger.model, 'glm-5.2');
+    assert.equal((result.nativeCertificationRejections || []).length, 0);
   } finally {
     cleanup();
   }
