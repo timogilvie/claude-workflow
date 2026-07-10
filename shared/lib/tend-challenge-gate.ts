@@ -167,6 +167,14 @@ export function classifyChallengeState(
   }
 
   const latestComparison = relevantComparisons[0];
+  if (latestComparison.comparisonOutcome === 'double-forfeit') {
+    return {
+      kind: 'loser',
+      pairId,
+      winnerPr: null,
+    };
+  }
+
   if (relevantComparisons.some((comparison) => comparison.winner !== latestComparison.winner)) {
     console.warn(
       `[tend-challenge-gate] Pair ${pairId} has conflicting comparison winners; using latest record at ${latestComparison.timestamp}`,
