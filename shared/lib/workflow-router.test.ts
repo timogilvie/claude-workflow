@@ -4,12 +4,13 @@
 
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { clearConfigCache } from './config.ts';
 import type { QuotaStatus } from './quota-state.ts';
 import { applyDifficultyFloor, readTaskPromptFromFile, routeWorkflow, routeWorkflowAuto, routeWorkflowHokusai, summarizeWorkflowRoute, tryPolicyResolution, STAGE_PHASE_REQUIREMENT } from './workflow-router.ts';
 import type { RouterCertificationRejection } from './workflow-router.ts';
+import { buildCertificationPath } from './native-agent/certification/loader.ts';
 import { CERTIFICATION_SCHEMA_VERSION } from './native-agent/certification/schema.ts';
 
 let passed = 0;
@@ -1445,8 +1446,8 @@ function writeCertArtifact(
   suiteVersion: string,
   overrides: Record<string, unknown> = {},
 ): void {
-  const certDir = join(repoDir, '.wavemill', 'native-agent-certifications', provider, model);
-  mkdirSync(certDir, { recursive: true });
+  const artifactPath = buildCertificationPath(repoDir, provider, model, suiteVersion);
+  mkdirSync(dirname(artifactPath), { recursive: true });
   const artifact = {
     schemaVersion: CERTIFICATION_SCHEMA_VERSION,
     provider,
@@ -1457,7 +1458,7 @@ function writeCertArtifact(
     scenarios: [{ scenarioId: 's1', passed: true }],
     ...overrides,
   };
-  writeFileSync(join(certDir, `${suiteVersion}.json`), JSON.stringify(artifact));
+  writeFileSync(artifactPath, JSON.stringify(artifact));
 }
 
 /** Build a modelRegistry override for a native model */
@@ -1776,6 +1777,57 @@ await test('openrouter-only planner pool without native metadata is rejected bef
       .find((r) => r.modelId === 'mistral-large-2' && r.role === 'planner');
     assert.ok(rejection, 'expected structured planner rejection');
     assert.equal(rejection?.reason, 'no-native-capability');
+  } finally {
+    if (originalKey === undefined) {
+      delete process.env.TEST_OPENROUTER_KEY;
+    } else {
+      process.env.TEST_OPENROUTER_KEY = originalKey;
+    }
+    cleanup();
+  }
+});
+
+await test('glm-5.2 and kimi-k2.7-code remain eligible as OpenRouter aliases when allowlisted and certified', () => {
+  const { repoDir, cleanup } = makeRepo({
+    eval: {
+      pricing: {
+        ...baseConfig().eval.pricing,
+        'glm-5.2': { inputCostPerMTok: 0.9, outputCostPerMTok: 4.2 },
+        'kimi-k2.7-code': { inputCostPerMTok: 1.2, outputCostPerMTok: 3.6 },
+      },
+    },
+    providers: {
+      openrouter: {
+        enabled: true,
+        apiKeyEnv: 'TEST_OPENROUTER_KEY',
+        models: ['glm-5.2', 'kimi-k2.7-code'],
+        stages: ['planner', 'coder', 'reviewer'],
+      },
+    },
+  });
+  const originalKey = process.env.TEST_OPENROUTER_KEY;
+  process.env.TEST_OPENROUTER_KEY = 'test-key';
+  try {
+    writeCertArtifact(repoDir, 'openrouter', 'glm-5.2', 'v1', { phase: 'workflow' });
+    writeCertArtifact(repoDir, 'openrouter', 'kimi-k2.7-code', 'v1', { phase: 'patch' });
+
+    const decision = routeWorkflow('Plan and implement a routed OpenRouter feature.', {
+      repoDir,
+      plannerModelsAvailable: ['glm-5.2'],
+      coderModelsAvailable: ['kimi-k2.7-code'],
+      reviewerModelsAvailable: ['glm-5.2'],
+      modelsAvailable: ['glm-5.2', 'kimi-k2.7-code'],
+      skipDifficultyClassification: true,
+    });
+
+    assert.equal(decision.planner, 'glm-5.2');
+    assert.ok(['glm-5.2', 'kimi-k2.7-code'].includes(decision.coder));
+    const plannerRejection = (decision.nativeCertificationRejections ?? [])
+      .find((r) => r.modelId === 'glm-5.2' && r.role === 'planner');
+    const coderRejection = (decision.nativeCertificationRejections ?? [])
+      .find((r) => r.modelId === 'kimi-k2.7-code' && r.role === 'coder');
+    assert.equal(plannerRejection, undefined);
+    assert.equal(coderRejection, undefined);
   } finally {
     if (originalKey === undefined) {
       delete process.env.TEST_OPENROUTER_KEY;

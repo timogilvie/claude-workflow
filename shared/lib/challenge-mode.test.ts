@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { WorkflowRouteDecision } from './workflow-router.ts';
 import {
@@ -25,6 +25,7 @@ import {
 } from './challenge-mode.ts';
 import { listVariedRoutingDimensions, routingMetaFromChallengeEntry } from './challenge-comparison.ts';
 import type { RouteArtifactSnapshot } from './route-artifact.ts';
+import { buildCertificationPath } from './native-agent/certification/loader.ts';
 import { CERTIFICATION_SCHEMA_VERSION } from './native-agent/certification/schema.ts';
 import { clearConfigCache } from './config.ts';
 
@@ -51,6 +52,14 @@ test('challenge model pool prefers explicit challenge.models', () => {
     { models: ['claude-sonnet-4-5-20250929'] },
   );
   assert.deepEqual(pool, ['claude-opus-4-6', 'gpt-5.4']);
+});
+
+test('challenge model pool preserves glm-5.2 and kimi-k2.7-code aliases', () => {
+  const pool = getChallengeModelPool(
+    { models: ['glm-5.2', 'kimi-k2.7-code', 'glm-5.2'] },
+    { models: ['claude-opus-4-6'] },
+  );
+  assert.deepEqual(pool, ['glm-5.2', 'kimi-k2.7-code']);
 });
 
 test('challenge model pool falls back to router models when challenge.models is null', () => {
@@ -1237,8 +1246,8 @@ function writeCertArtifact(
   suiteVersion: string,
   overrides: Record<string, unknown> = {},
 ): void {
-  const certDir = join(repoDir, '.wavemill', 'native-agent-certifications', provider, model);
-  mkdirSync(certDir, { recursive: true });
+  const artifactPath = buildCertificationPath(repoDir, provider, model, suiteVersion);
+  mkdirSync(dirname(artifactPath), { recursive: true });
   const artifact = {
     schemaVersion: CERTIFICATION_SCHEMA_VERSION,
     provider,
@@ -1249,7 +1258,7 @@ function writeCertArtifact(
     scenarios: [{ scenarioId: 's1', passed: true }],
     ...overrides,
   };
-  writeFileSync(join(certDir, `${suiteVersion}.json`), JSON.stringify(artifact));
+  writeFileSync(artifactPath, JSON.stringify(artifact));
 }
 
 /** Build a minimal native model registry entry */
@@ -1297,6 +1306,47 @@ test('certified native challenger accepted for implementation stage', () => {
     assert.ok(!rejectedIds.includes('native-patch-model'), 'certified native should not be in rejections');
     // The challenger should be native-patch-model (only other model)
     assert.equal(result.pair!.challenger.model, 'native-patch-model');
+  } finally {
+    cleanup();
+  }
+});
+
+test('certified glm-5.2 challenger is accepted as a first-class alias', () => {
+  const { repoDir, cleanup } = makeNativeTestRepo({
+    'glm-5.2': {
+      class: 'strong_generalist',
+      nativeCapability: {
+        nativeProvider: 'openrouter',
+        piTransportKind: 'openai-completions',
+        readOnlyNative: 'certified',
+        certification: {
+          maxCertifiedPhase: 'workflow',
+          certifiedAt: CERT_DATE_FRESH,
+          certificationSuiteVersion: 'v1',
+        },
+      },
+    },
+  });
+  try {
+    writeCertArtifact(repoDir, 'openrouter', 'glm-5.2', 'v1', { phase: 'workflow' });
+
+    const result = pickChallengeModelsWithReason(
+      ['claude-opus-4-6', 'glm-5.2'],
+      {
+        pairId: 'NC-001A',
+        issueId: 'NC-001A',
+        slug: 'nc-glm-alias',
+        primaryModel: 'claude-opus-4-6',
+        repoDir,
+        now: TEST_NOW,
+        randomFn: () => 0,
+      },
+    );
+
+    assert.ok(result.pair, 'pair should be selected');
+    assert.equal(result.pair!.challenger.model, 'glm-5.2');
+    const rejectedIds = (result.nativeCertificationRejections || []).map((r) => r.modelId);
+    assert.ok(!rejectedIds.includes('glm-5.2'), 'certified glm-5.2 should not be rejected');
   } finally {
     cleanup();
   }

@@ -120,6 +120,14 @@
         "inputCostPerMTok": 1,
         "outputCostPerMTok": 3
       },
+      "glm-5.2": {
+        "inputCostPerMTok": 0.9,
+        "outputCostPerMTok": 4.2
+      },
+      "kimi-k2.7-code": {
+        "inputCostPerMTok": 1.2,
+        "outputCostPerMTok": 3.6
+      },
       "gemini-2.5-pro": {
         "inputCostPerMTok": 1.25,
         "outputCostPerMTok": 10
@@ -173,6 +181,8 @@
         "qwen-3-coder",
         "qwen-2.5-coder-32b",
         "kimi-k2",
+        "glm-5.2",
+        "kimi-k2.7-code",
         "gemini-2.5-pro",
         "gemini-2.5-flash",
         "llama-3.3-70b",
@@ -232,6 +242,8 @@
       "qwen-3-coder",
       "qwen-2.5-coder-32b",
       "kimi-k2",
+      "glm-5.2",
+      "kimi-k2.7-code",
       "gemini-2.5-pro",
       "gemini-2.5-flash",
       "llama-3.3-70b",
@@ -282,9 +294,9 @@
         "claude-opus-4-7",
         "gpt-5.5",
         "gpt-5.4",
-        "qwen/qwen3-coder",
-        "z-ai/glm-5.2",
-        "moonshotai/kimi-k2.7-code",
+        "qwen-3-coder",
+        "glm-5.2",
+        "kimi-k2.7-code",
         "kimi-k2",
         "gemini-2.5-pro",
         "mistral-large-2"
@@ -297,6 +309,8 @@
         "qwen-3-coder",
         "qwen-2.5-coder-32b",
         "kimi-k2",
+        "glm-5.2",
+        "kimi-k2.7-code",
         "gemini-2.5-pro",
         "gemini-2.5-flash",
         "llama-3.3-70b",
@@ -311,6 +325,8 @@
         "gpt-5.4",
         "qwen-3-coder",
         "kimi-k2",
+        "glm-5.2",
+        "kimi-k2.7-code",
         "gemini-2.5-pro",
         "gemini-2.5-flash",
         "llama-3.3-70b",
@@ -334,6 +350,8 @@
       "qwen-3-coder": "claude-openrouter",
       "qwen-2.5-coder-32b": "claude-openrouter",
       "kimi-k2": "claude-openrouter",
+      "glm-5.2": "claude-openrouter",
+      "kimi-k2.7-code": "claude-openrouter",
       "gemini-2.5-pro": "claude-openrouter",
       "gemini-2.5-flash": "claude-openrouter",
       "llama-3.3-70b": "claude-openrouter",
