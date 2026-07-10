@@ -23,6 +23,48 @@ import {
 } from './schema.ts';
 import type { ModelRegistry } from '../../model-registry.ts';
 
+const OPENROUTER_PATCH_CASES = [
+  {
+    modelId: 'qwen/qwen3-coder',
+    providerPath: 'qwen',
+    modelPath: 'qwen3-coder',
+    vendor: 'qwen',
+    modelClass: 'strong_generalist' as const,
+    qualityScores: { routing: 58, planning: 72, coding: 84, review: 78, classify: 58 },
+    contextWindowTokens: 131_072,
+    multimodal: { text: true, image: false },
+    reasoningTier: 'standard' as const,
+    inputCost: 0.35,
+    outputCost: 1.05,
+  },
+  {
+    modelId: 'z-ai/glm-5.2',
+    providerPath: 'z-ai',
+    modelPath: 'glm-5.2',
+    vendor: 'z-ai',
+    modelClass: 'frontier' as const,
+    qualityScores: { routing: 60, planning: 80, coding: 80, review: 84, classify: 60 },
+    contextWindowTokens: 1_048_576,
+    multimodal: { text: true, image: false },
+    reasoningTier: 'advanced' as const,
+    inputCost: 0.93,
+    outputCost: 3,
+  },
+  {
+    modelId: 'moonshotai/kimi-k2.7-code',
+    providerPath: 'moonshotai',
+    modelPath: 'kimi-k2.7-code',
+    vendor: 'kimi',
+    modelClass: 'strong_generalist' as const,
+    qualityScores: { routing: 60, planning: 72, coding: 82, review: 82, classify: 58 },
+    contextWindowTokens: 262_144,
+    multimodal: { text: true, image: true },
+    reasoningTier: 'advanced' as const,
+    inputCost: 0.74,
+    outputCost: 3.5,
+  },
+] as const;
+
 let passed = 0;
 let failed = 0;
 
@@ -332,6 +374,51 @@ await test('openrouter aliases load certifications from mapped provider/model st
   }
 });
 
+for (const testCase of OPENROUTER_PATCH_CASES) {
+  await test(`fresh patch artifact admits raw OpenRouter model ${testCase.modelId} for coder role`, () => {
+    const { repoDir, cleanup } = makeRepo();
+    try {
+      writeCertArtifact(repoDir, testCase.providerPath, testCase.modelPath, 'v1', { phase: 'patch' });
+      const registry: ModelRegistry = {
+        models: {
+          [testCase.modelId]: {
+            vendor: testCase.vendor,
+            class: testCase.modelClass,
+            strengths: [],
+            weaknesses: [],
+            qualityScores: testCase.qualityScores,
+            contextWindowTokens: testCase.contextWindowTokens,
+            toolSupport: 'full',
+            multimodal: testCase.multimodal,
+            latencyTier: 'standard',
+            reasoningTier: testCase.reasoningTier,
+            costPerMillionInputTokensUsd: testCase.inputCost,
+            costPerMillionOutputTokensUsd: testCase.outputCost,
+            nativeCapability: {
+              nativeProvider: 'openrouter',
+              piTransportKind: 'openai-completions',
+              readOnlyNative: 'certified',
+              compatFlags: { thinkingFormat: 'openrouter' },
+              certification: {
+                maxCertifiedPhase: 'patch',
+                certifiedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+                certificationSuiteVersion: 'v1',
+              },
+            },
+          },
+        },
+        ladders: {},
+      };
+
+      const result = filterNativeModels([testCase.modelId], 'coder', registry, repoDir);
+      assert.deepEqual(result.eligible, [testCase.modelId]);
+      assert.deepEqual(result.rejected, []);
+    } finally {
+      cleanup();
+    }
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Rejection reason: missing
 // ---------------------------------------------------------------------------
@@ -521,6 +608,65 @@ await test('structurally invalid artifact rejects with reason=malformed', () => 
     const registry = makeRegistry('native-incomplete', 'patch', 'v1');
     const result = filterNativeModels(['native-incomplete'], 'coder', registry, repoDir);
     assert.equal(result.rejected[0].reason, 'malformed');
+  } finally {
+    cleanup();
+  }
+});
+
+await test('negative patch-path diagnostics stay pairwise distinct across all required failure modes', () => {
+  const { repoDir, cleanup } = makeRepo();
+  try {
+    const registry = makeRegistry('native-distinct', 'patch', 'v2');
+    const certDir = join(repoDir, '.wavemill', 'native-agent-certifications', 'openai', 'native-distinct');
+
+    const checkReason = (): string => {
+      const result = filterNativeModels(['native-distinct'], 'coder', registry, repoDir);
+      assert.equal(result.eligible.length, 0);
+      assert.equal(result.rejected.length, 1);
+      return result.rejected[0]!.reason;
+    };
+
+    const reasons = new Map<string, string>();
+
+    reasons.set('missing', checkReason());
+
+    writeCertArtifact(repoDir, 'openai', 'native-distinct', 'v2', {
+      phase: 'patch',
+      certifiedAt: new Date(
+        Date.now() - (CERTIFICATION_TTL_DAYS + 1) * 24 * 60 * 60 * 1000,
+      ).toISOString(),
+    });
+    reasons.set('stale', checkReason());
+
+    mkdirSync(certDir, { recursive: true });
+    writeFileSync(join(certDir, 'v2.json'), JSON.stringify({
+      schemaVersion: CERTIFICATION_SCHEMA_VERSION,
+      provider: 'openai',
+      model: 'native-distinct',
+      phase: 'read-only',
+      suiteVersion: 'v2',
+      certifiedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+      scenarios: [{ scenarioId: 's1', passed: true }],
+    }));
+    reasons.set('read-only-only', checkReason());
+
+    writeCertArtifact(repoDir, 'openai', 'native-distinct', 'v2', {
+      phase: 'patch',
+      suiteVersion: 'v1',
+    });
+    reasons.set('wrong-suite', checkReason());
+
+    writeFileSync(join(certDir, 'v2.json'), '{ invalid json');
+    reasons.set('malformed', checkReason());
+
+    assert.deepEqual(Object.fromEntries(reasons), {
+      missing: 'missing',
+      stale: 'stale',
+      'read-only-only': 'insufficient-phase',
+      'wrong-suite': 'wrong-suite',
+      malformed: 'malformed',
+    });
+    assert.equal(new Set(reasons.values()).size, reasons.size);
   } finally {
     cleanup();
   }
