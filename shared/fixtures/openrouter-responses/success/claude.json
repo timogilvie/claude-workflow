@@ -1,0 +1,16 @@
+{
+  "id": "gen-claude",
+  "model": "anthropic/claude-fable-5",
+  "choices": [
+    {
+      "message": {
+        "role": "assistant",
+        "content": "Claude fixture response."
+      }
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 128,
+    "completion_tokens": 32
+  }
+}

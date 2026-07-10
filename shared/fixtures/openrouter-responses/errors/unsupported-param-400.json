@@ -1,0 +1,6 @@
+{
+  "error": {
+    "message": "Unsupported parameter: tools",
+    "code": "unsupported_parameter"
+  }
+}

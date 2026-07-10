@@ -201,6 +201,12 @@ describe('normalizeCatalog', () => {
       Math.abs((entry.pricing.outputPerMTok ?? 0) - 0.6) < 1e-9,
       `expected ~0.6, got ${entry.pricing.outputPerMTok}`,
     );
+    assert.deepEqual(entry.capabilities, {
+      supportsTools: true,
+      supportsStreaming: true,
+      supportsTemperature: true,
+      temperatureRange: [0, 2],
+    });
     assert.deepEqual(entry.roleEligibility, ['coding']);
     assert.equal(entry.resolvedAt, FIXED_RESOLVED_AT);
   });

@@ -1,0 +1,16 @@
+{
+  "id": "gen-glm",
+  "model": "z-ai/glm-5.2",
+  "choices": [
+    {
+      "message": {
+        "role": "assistant",
+        "content": "GLM fixture response."
+      }
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 92,
+    "completion_tokens": 22
+  }
+}

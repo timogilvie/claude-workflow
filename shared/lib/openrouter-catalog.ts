@@ -17,6 +17,10 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  getFamilyCapabilities,
+  type FamilyCapabilities,
+} from './openrouter-capabilities.ts';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -78,6 +82,7 @@ export interface NormalizedCatalogEntry {
   family: ModelFamily;
   contextTokens: number | null;
   pricing: NormalizedPricing;
+  capabilities?: FamilyCapabilities;
   roleEligibility: RoleEligibility[];
   status: ModelStatus;
   priorityTier: number;
@@ -309,6 +314,7 @@ export function normalizeCatalog(
       family: lp.family,
       contextTokens,
       pricing: { inputPerMTok, outputPerMTok },
+      capabilities: getFamilyCapabilities(lp.family),
       roleEligibility: [...lp.roleEligibility],
       status: lp.status,
       priorityTier: lp.priorityTier,
