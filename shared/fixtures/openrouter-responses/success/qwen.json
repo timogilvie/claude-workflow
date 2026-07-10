@@ -1,0 +1,16 @@
+{
+  "id": "gen-qwen",
+  "model": "qwen/qwen3-coder",
+  "choices": [
+    {
+      "message": {
+        "role": "assistant",
+        "content": "Qwen fixture response."
+      }
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 88,
+    "completion_tokens": 20
+  }
+}

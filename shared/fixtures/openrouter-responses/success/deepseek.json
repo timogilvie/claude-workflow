@@ -1,0 +1,16 @@
+{
+  "id": "gen-deepseek",
+  "model": "deepseek/deepseek-r1",
+  "choices": [
+    {
+      "message": {
+        "role": "assistant",
+        "content": "DeepSeek fixture response."
+      }
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 112,
+    "completion_tokens": 30
+  }
+}

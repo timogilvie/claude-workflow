@@ -1,0 +1,11 @@
+{
+  "id": "gen-malformed",
+  "model": "vendor/malformed",
+  "choices": [
+    {
+      "message": {
+        "role": "assistant"
+      }
+    }
+  ]
+}

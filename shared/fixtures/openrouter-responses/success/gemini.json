@@ -1,0 +1,16 @@
+{
+  "id": "gen-gemini",
+  "model": "google/gemini-2.5-pro",
+  "choices": [
+    {
+      "message": {
+        "role": "assistant",
+        "content": "Gemini fixture response."
+      }
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 120,
+    "completion_tokens": 26
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "id": "gen-gpt",
+  "model": "openai/gpt-5.5",
+  "choices": [
+    {
+      "message": {
+        "role": "assistant",
+        "content": "GPT fixture response."
+      }
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 96,
+    "completion_tokens": 24
+  }
+}
