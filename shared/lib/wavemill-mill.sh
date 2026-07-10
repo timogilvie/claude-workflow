@@ -729,6 +729,15 @@ challenge_eval_retry_max_attempts() {
   fi
 }
 
+challenge_eval_hard_failure_max_retries() {
+  local max_retries="${WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES:-2}"
+  if [[ "$max_retries" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$max_retries"
+  else
+    printf '2\n'
+  fi
+}
+
 clear_challenge_pair_state() {
   local pair_id="$1"
   state_mutate "$STATE_FILE" '
@@ -798,6 +807,157 @@ challenge_pair_timeout_reason() {
     *,challenger,*) printf 'challenger_eval_timed_out\n' ;;
     *) printf 'eval_timed_out\n' ;;
   esac
+}
+
+challenge_pair_hard_failure_reason() {
+  local failed_sides_csv="$1"
+  case ",$failed_sides_csv," in
+    *,primary,challenger,*|*,challenger,primary,*) printf 'both_eval_hard_failed\n' ;;
+    *,primary,*) printf 'primary_eval_hard_failed\n' ;;
+    *,challenger,*) printf 'challenger_eval_hard_failed\n' ;;
+    *) printf 'eval_hard_failed\n' ;;
+  esac
+}
+
+challenge_pair_records_file() {
+  local evals_dir="$REPO_DIR/.wavemill/evals"
+  mkdir -p "$evals_dir"
+  printf '%s/challenge-records.jsonl\n' "$evals_dir"
+}
+
+challenge_pr_url_from_number() {
+  local pr="$1"
+  local pr_url=""
+  if [[ -n "$pr" ]]; then
+    pr_url=$(gh pr view "$pr" --json url --jq .url 2>/dev/null || true)
+  fi
+  if [[ -n "$pr_url" ]]; then
+    printf '%s\n' "$pr_url"
+  else
+    printf 'https://github.com/unknown/unknown/pull/%s\n' "${pr:-0}"
+  fi
+}
+
+challenge_pair_record_exists() {
+  local pair_id="$1"
+  local records_file
+  records_file=$(challenge_pair_records_file)
+  [[ -f "$records_file" ]] || return 1
+  jq -e --arg pair "$pair_id" 'select(.challengePairId == $pair)' "$records_file" >/dev/null 2>&1
+}
+
+resolve_challenge_pair_hard_failure() {
+  local pair_id="$1"
+  local primary_key="$pair_id" challenger_key="${pair_id}_c"
+  local retry_max primary_failed challenger_failed primary_completed challenger_completed
+  local primary_retry_count challenger_retry_count failed_sides_csv terminal_reason outcome
+  local primary_pr challenger_pr primary_model challenger_model primary_pr_url challenger_pr_url
+  local winner winner_model rationale timestamp record_json
+
+  [[ -n "$pair_id" ]] || return 1
+
+  if challenge_pair_record_exists "$pair_id"; then
+    mark_challenge_compared "$pair_id"
+    return 0
+  fi
+
+  retry_max=$(challenge_eval_hard_failure_max_retries)
+  primary_failed=$(read_state_value "false" --arg i "$primary_key" '.tasks[$i].evalFailed // false')
+  challenger_failed=$(read_state_value "false" --arg i "$challenger_key" '.tasks[$i].evalFailed // false')
+  primary_completed=$(read_state_value "false" --arg i "$primary_key" '.tasks[$i].evalCompleted // false')
+  challenger_completed=$(read_state_value "false" --arg i "$challenger_key" '.tasks[$i].evalCompleted // false')
+  primary_retry_count=$(read_state_value "0" --arg i "$primary_key" '.tasks[$i].evalHardFailureRetryCount // 0')
+  challenger_retry_count=$(read_state_value "0" --arg i "$challenger_key" '.tasks[$i].evalHardFailureRetryCount // 0')
+
+  failed_sides_csv=""
+  [[ "$primary_failed" == "true" ]] && failed_sides_csv="primary"
+  if [[ "$challenger_failed" == "true" ]]; then
+    if [[ -n "$failed_sides_csv" ]]; then
+      failed_sides_csv="${failed_sides_csv},challenger"
+    else
+      failed_sides_csv="challenger"
+    fi
+  fi
+  [[ -n "$failed_sides_csv" ]] || return 1
+
+  if [[ "$primary_failed" == "true" && "$challenger_failed" == "true" ]]; then
+    if (( primary_retry_count < retry_max )); then
+      return 1
+    fi
+    if (( challenger_retry_count < retry_max )); then
+      return 1
+    fi
+    outcome="double-forfeit"
+    winner="primary"
+    rationale="Both sides exhausted hard eval retries without persisting an eval record."
+  elif [[ "$primary_failed" == "true" ]]; then
+    [[ "$challenger_completed" == "true" ]] || return 1
+    outcome="forfeit"
+    winner="challenger"
+    rationale="Primary exhausted hard eval retries without persisting an eval record."
+  elif [[ "$challenger_failed" == "true" ]]; then
+    [[ "$primary_completed" == "true" ]] || return 1
+    outcome="forfeit"
+    winner="primary"
+    rationale="Challenger exhausted hard eval retries without persisting an eval record."
+  else
+    return 1
+  fi
+
+  terminal_reason=$(challenge_pair_hard_failure_reason "$failed_sides_csv")
+  primary_pr=$(read_state_value "" --arg i "$primary_key" '.tasks[$i].pr // empty')
+  challenger_pr=$(read_state_value "" --arg i "$challenger_key" '.tasks[$i].pr // empty')
+  [[ -n "$primary_pr" && -n "$challenger_pr" ]] || return 1
+  primary_model=$(read_state_value "" --arg i "$primary_key" '.tasks[$i].challengeModel // .tasks[$i].coderModel // empty')
+  challenger_model=$(read_state_value "" --arg i "$challenger_key" '.tasks[$i].challengeModel // .tasks[$i].coderModel // empty')
+  primary_pr_url=$(challenge_pr_url_from_number "$primary_pr")
+  challenger_pr_url=$(challenge_pr_url_from_number "$challenger_pr")
+  if [[ "$winner" == "primary" ]]; then
+    winner_model="$primary_model"
+  else
+    winner_model="$challenger_model"
+  fi
+  [[ -n "$winner_model" ]] || winner_model="unknown"
+  timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  record_json=$(jq -cn \
+    --arg challengePairId "$pair_id" \
+    --arg primaryModel "$primary_model" \
+    --arg challengerModel "$challenger_model" \
+    --arg primaryPrUrl "$primary_pr_url" \
+    --arg challengerPrUrl "$challenger_pr_url" \
+    --arg winner "$winner" \
+    --arg winnerModel "$winner_model" \
+    --arg rationale "$rationale" \
+    --arg timestamp "$timestamp" \
+    --arg comparisonOutcome "$outcome" \
+    --arg terminalReason "$terminal_reason" \
+    '{
+      challengePairId: $challengePairId,
+      primaryModel: $primaryModel,
+      challengerModel: $challengerModel,
+      primaryPrUrl: $primaryPrUrl,
+      challengerPrUrl: $challengerPrUrl,
+      primaryEvalScore: 0,
+      challengerEvalScore: 0,
+      winner: $winner,
+      winnerModel: $winnerModel,
+      rationale: $rationale,
+      dimensions: {
+        completeness: { primary: 0, challenger: 0 },
+        correctness: { primary: 0, challenger: 0 },
+        code_quality: { primary: 0, challenger: 0 },
+        intervention_impact: { primary: 0, challenger: 0 },
+        autonomy: { primary: 0, challenger: 0 }
+      },
+      timestamp: $timestamp,
+      comparisonOutcome: $comparisonOutcome,
+      terminalReason: $terminalReason
+    }')
+  if ! challenge_pair_record_exists "$pair_id"; then
+    printf '%s\n' "$record_json" >> "$(challenge_pair_records_file)"
+  fi
+  mark_challenge_compared "$pair_id"
+  log_warn "challenge pair $pair_id resolved via $terminal_reason"
 }
 
 challenge_pair_manual_artifact_path() {
@@ -2920,6 +3080,7 @@ save_task_state() {
       (.tasks[$issue].phase // "executing") as $old_phase |
       (.tasks[$issue].evalCompleted // false) as $old_eval |
       (.tasks[$issue].evalFailed // false) as $old_eval_failed |
+      (.tasks[$issue].evalHardFailureRetryCount // 0) as $old_eval_hard_failure_retry_count |
       (.tasks[$issue].challengeCompared // false) as $old_challenge_compared |
       (.tasks[$issue].challenge // false) as $old_challenge |
       (.tasks[$issue].challengePairId // "") as $old_challenge_pair |
@@ -2966,6 +3127,7 @@ save_task_state() {
         phase: $old_phase,
         evalCompleted: $old_eval,
         evalFailed: $old_eval_failed,
+        evalHardFailureRetryCount: $old_eval_hard_failure_retry_count,
         challengeCompared: $old_challenge_compared,
         evalRunning: $old_eval_running,
         comparisonRunning: $old_comparison_running,
@@ -3057,6 +3219,7 @@ mark_eval_completed() {
   if ! state_mutate "$STATE_FILE" \
      '.tasks[$issue].evalCompleted = true
       | .tasks[$issue].evalFailed = false
+      | .tasks[$issue].evalHardFailureRetryCount = 0
       | del(.tasks[$issue].evalRunning)
       | .tasks[$issue].updated = (now | todateiso8601)' \
      --arg issue "$issue"; then
@@ -3129,6 +3292,15 @@ challenge_eval_retry_max_attempts() {
   fi
 }
 
+challenge_eval_hard_failure_max_retries() {
+  local max_retries="${WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES:-2}"
+  if [[ "$max_retries" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$max_retries"
+  else
+    printf '2\n'
+  fi
+}
+
 clear_challenge_pair_state() {
   local pair_id="$1"
   state_mutate "$STATE_FILE" '
@@ -3198,6 +3370,157 @@ challenge_pair_timeout_reason() {
     *,challenger,*) printf 'challenger_eval_timed_out\n' ;;
     *) printf 'eval_timed_out\n' ;;
   esac
+}
+
+challenge_pair_hard_failure_reason() {
+  local failed_sides_csv="$1"
+  case ",$failed_sides_csv," in
+    *,primary,challenger,*|*,challenger,primary,*) printf 'both_eval_hard_failed\n' ;;
+    *,primary,*) printf 'primary_eval_hard_failed\n' ;;
+    *,challenger,*) printf 'challenger_eval_hard_failed\n' ;;
+    *) printf 'eval_hard_failed\n' ;;
+  esac
+}
+
+challenge_pair_records_file() {
+  local evals_dir="$REPO_DIR/.wavemill/evals"
+  mkdir -p "$evals_dir"
+  printf '%s/challenge-records.jsonl\n' "$evals_dir"
+}
+
+challenge_pr_url_from_number() {
+  local pr="$1"
+  local pr_url=""
+  if [[ -n "$pr" ]]; then
+    pr_url=$(gh pr view "$pr" --json url --jq .url 2>/dev/null || true)
+  fi
+  if [[ -n "$pr_url" ]]; then
+    printf '%s\n' "$pr_url"
+  else
+    printf 'https://github.com/unknown/unknown/pull/%s\n' "${pr:-0}"
+  fi
+}
+
+challenge_pair_record_exists() {
+  local pair_id="$1"
+  local records_file
+  records_file=$(challenge_pair_records_file)
+  [[ -f "$records_file" ]] || return 1
+  jq -e --arg pair "$pair_id" 'select(.challengePairId == $pair)' "$records_file" >/dev/null 2>&1
+}
+
+resolve_challenge_pair_hard_failure() {
+  local pair_id="$1"
+  local primary_key="$pair_id" challenger_key="${pair_id}_c"
+  local retry_max primary_failed challenger_failed primary_completed challenger_completed
+  local primary_retry_count challenger_retry_count failed_sides_csv terminal_reason outcome
+  local primary_pr challenger_pr primary_model challenger_model primary_pr_url challenger_pr_url
+  local winner winner_model rationale timestamp record_json
+
+  [[ -n "$pair_id" ]] || return 1
+
+  if challenge_pair_record_exists "$pair_id"; then
+    mark_challenge_compared "$pair_id"
+    return 0
+  fi
+
+  retry_max=$(challenge_eval_hard_failure_max_retries)
+  primary_failed=$(read_state_value "false" --arg i "$primary_key" '.tasks[$i].evalFailed // false')
+  challenger_failed=$(read_state_value "false" --arg i "$challenger_key" '.tasks[$i].evalFailed // false')
+  primary_completed=$(read_state_value "false" --arg i "$primary_key" '.tasks[$i].evalCompleted // false')
+  challenger_completed=$(read_state_value "false" --arg i "$challenger_key" '.tasks[$i].evalCompleted // false')
+  primary_retry_count=$(read_state_value "0" --arg i "$primary_key" '.tasks[$i].evalHardFailureRetryCount // 0')
+  challenger_retry_count=$(read_state_value "0" --arg i "$challenger_key" '.tasks[$i].evalHardFailureRetryCount // 0')
+
+  failed_sides_csv=""
+  [[ "$primary_failed" == "true" ]] && failed_sides_csv="primary"
+  if [[ "$challenger_failed" == "true" ]]; then
+    if [[ -n "$failed_sides_csv" ]]; then
+      failed_sides_csv="${failed_sides_csv},challenger"
+    else
+      failed_sides_csv="challenger"
+    fi
+  fi
+  [[ -n "$failed_sides_csv" ]] || return 1
+
+  if [[ "$primary_failed" == "true" && "$challenger_failed" == "true" ]]; then
+    if (( primary_retry_count < retry_max )); then
+      return 1
+    fi
+    if (( challenger_retry_count < retry_max )); then
+      return 1
+    fi
+    outcome="double-forfeit"
+    winner="primary"
+    rationale="Both sides exhausted hard eval retries without persisting an eval record."
+  elif [[ "$primary_failed" == "true" ]]; then
+    [[ "$challenger_completed" == "true" ]] || return 1
+    outcome="forfeit"
+    winner="challenger"
+    rationale="Primary exhausted hard eval retries without persisting an eval record."
+  elif [[ "$challenger_failed" == "true" ]]; then
+    [[ "$primary_completed" == "true" ]] || return 1
+    outcome="forfeit"
+    winner="primary"
+    rationale="Challenger exhausted hard eval retries without persisting an eval record."
+  else
+    return 1
+  fi
+
+  terminal_reason=$(challenge_pair_hard_failure_reason "$failed_sides_csv")
+  primary_pr=$(read_state_value "" --arg i "$primary_key" '.tasks[$i].pr // empty')
+  challenger_pr=$(read_state_value "" --arg i "$challenger_key" '.tasks[$i].pr // empty')
+  [[ -n "$primary_pr" && -n "$challenger_pr" ]] || return 1
+  primary_model=$(read_state_value "" --arg i "$primary_key" '.tasks[$i].challengeModel // .tasks[$i].coderModel // empty')
+  challenger_model=$(read_state_value "" --arg i "$challenger_key" '.tasks[$i].challengeModel // .tasks[$i].coderModel // empty')
+  primary_pr_url=$(challenge_pr_url_from_number "$primary_pr")
+  challenger_pr_url=$(challenge_pr_url_from_number "$challenger_pr")
+  if [[ "$winner" == "primary" ]]; then
+    winner_model="$primary_model"
+  else
+    winner_model="$challenger_model"
+  fi
+  [[ -n "$winner_model" ]] || winner_model="unknown"
+  timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  record_json=$(jq -cn \
+    --arg challengePairId "$pair_id" \
+    --arg primaryModel "$primary_model" \
+    --arg challengerModel "$challenger_model" \
+    --arg primaryPrUrl "$primary_pr_url" \
+    --arg challengerPrUrl "$challenger_pr_url" \
+    --arg winner "$winner" \
+    --arg winnerModel "$winner_model" \
+    --arg rationale "$rationale" \
+    --arg timestamp "$timestamp" \
+    --arg comparisonOutcome "$outcome" \
+    --arg terminalReason "$terminal_reason" \
+    '{
+      challengePairId: $challengePairId,
+      primaryModel: $primaryModel,
+      challengerModel: $challengerModel,
+      primaryPrUrl: $primaryPrUrl,
+      challengerPrUrl: $challengerPrUrl,
+      primaryEvalScore: 0,
+      challengerEvalScore: 0,
+      winner: $winner,
+      winnerModel: $winnerModel,
+      rationale: $rationale,
+      dimensions: {
+        completeness: { primary: 0, challenger: 0 },
+        correctness: { primary: 0, challenger: 0 },
+        code_quality: { primary: 0, challenger: 0 },
+        intervention_impact: { primary: 0, challenger: 0 },
+        autonomy: { primary: 0, challenger: 0 }
+      },
+      timestamp: $timestamp,
+      comparisonOutcome: $comparisonOutcome,
+      terminalReason: $terminalReason
+    }')
+  if ! challenge_pair_record_exists "$pair_id"; then
+    printf '%s\n' "$record_json" >> "$(challenge_pair_records_file)"
+  fi
+  mark_challenge_compared "$pair_id"
+  log_warn "challenge pair $pair_id resolved via $terminal_reason"
 }
 
 challenge_pair_manual_artifact_path() {
@@ -7013,13 +7336,33 @@ poll_challenge_jobs() {
 
 maybe_run_challenge_eval() {
   local issue="$1" pr="$2" branch="$3" slug="$4"
-  local eval_completed eval_failed pair_id solution_model linear_issue eval_agent side challenge_stage job_id job_status job_dir log_path result_path pid eval_timeout
+  local eval_completed eval_failed eval_hard_retry_count eval_hard_retry_max
+  local pair_id solution_model linear_issue eval_agent side challenge_stage job_id job_status job_dir log_path result_path pid eval_timeout
   eval_completed=$(read_state_value "false" --arg i "$issue" '.tasks[$i].evalCompleted // false')
   [[ "$eval_completed" == "true" ]] && return 0
-  eval_failed=$(read_state_value "false" --arg i "$issue" '.tasks[$i].evalFailed // false')
-  [[ "$eval_failed" == "true" ]] && return 0
 
   pair_id=$(get_task_meta "$issue" "challengePairId")
+  if [[ "$(read_state_value "false" --arg i "$issue" '.tasks[$i].challengeCompared // false')" == "true" ]]; then
+    return 0
+  fi
+  eval_failed=$(read_state_value "false" --arg i "$issue" '.tasks[$i].evalFailed // false')
+  if [[ "$eval_failed" == "true" ]]; then
+    eval_hard_retry_count=$(read_state_value "0" --arg i "$issue" '.tasks[$i].evalHardFailureRetryCount // 0')
+    eval_hard_retry_max=$(challenge_eval_hard_failure_max_retries)
+    if (( eval_hard_retry_count < eval_hard_retry_max )); then
+      eval_hard_retry_count=$((eval_hard_retry_count + 1))
+      state_mutate "$STATE_FILE" '
+        .tasks[$issue].evalFailed = false
+        | .tasks[$issue].evalCompleted = false
+        | .tasks[$issue].evalHardFailureRetryCount = $retryCount
+        | .tasks[$issue].updated = (now | todateiso8601)
+      ' --arg issue "$issue" --argjson retryCount "$eval_hard_retry_count" >/dev/null || true
+      log "status" "challenge eval retrying for $issue: hard failure (attempt $eval_hard_retry_count/$eval_hard_retry_max)"
+    else
+      resolve_challenge_pair_hard_failure "$pair_id" >/dev/null || true
+      return 0
+    fi
+  fi
   solution_model=$(get_task_meta "$issue" "challengeModel")
   linear_issue=$(get_linear_issue_id "$issue")
   eval_agent=$(read_state_value "" --arg i "$issue" '.tasks[$i].agent // ""')
@@ -7029,7 +7372,9 @@ maybe_run_challenge_eval() {
   challenge_stage=$(get_task_meta "$issue" "challengeStage")
   job_id=$(build_eval_job_id "$issue" "$side" "$pr")
   job_status=$(read_job_state_value "$job_id" "" '.jobs[$id].status // empty')
-  [[ -n "$job_status" ]] && return 0
+  if [[ "$job_status" == "running" || "$job_status" == "succeeded" ]]; then
+    return 0
+  fi
 
   job_dir=$(challenge_job_dir)
   log_path="$job_dir/${job_id}.log"

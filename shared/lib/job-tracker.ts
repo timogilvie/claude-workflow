@@ -170,6 +170,7 @@ export function settleJobSuccess<T extends WorkflowStateLike>(state: T, job: Mil
       ...tasks[job.issueId],
       evalCompleted: true,
       evalFailed: false,
+      evalHardFailureRetryCount: 0,
       evalRunning: undefined,
       updated: updatedAt,
     };

@@ -272,7 +272,8 @@ test('markJobSettled updates eval completion state', async () => {
       tasks: {
         'HOK-1': {
           evalCompleted: false,
-          evalFailed: false,
+          evalFailed: true,
+          evalHardFailureRetryCount: 2,
           evalRunning: {
             startedAt: new Date().toISOString(),
           },
@@ -289,6 +290,8 @@ test('markJobSettled updates eval completion state', async () => {
     await markJobSettled({ statePath, jobId: 'eval-HOK-1-primary-101' });
     const next = JSON.parse(readFileSync(statePath, 'utf-8'));
     assert.equal(next.tasks['HOK-1'].evalCompleted, true);
+    assert.equal(next.tasks['HOK-1'].evalFailed, false);
+    assert.equal(next.tasks['HOK-1'].evalHardFailureRetryCount, 0);
     assert.equal('evalRunning' in next.tasks['HOK-1'], false);
     assert.equal(next.jobs['eval-HOK-1-primary-101'].settled, true);
   } finally {
