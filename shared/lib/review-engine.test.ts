@@ -51,6 +51,7 @@ describe('review-engine scoped mode', () => {
     const cases = [
       { config: { nativeAgent: { enabled: true, allowedPhases: ['review'] } }, expected: true },
       { config: { nativeAgent: { enabled: true } }, expected: false },
+      { config: { nativeAgent: { enabled: true, allowedPhases: ['planning'] } }, expected: false },
       { config: { nativeAgent: { allowedPhases: ['review'] } }, expected: false },
       { config: {}, expected: false },
     ];
@@ -118,6 +119,49 @@ describe('review-engine scoped mode', () => {
     writeFileSync(
       join(repoDir, '.wavemill-config.json'),
       JSON.stringify({ nativeAgent: { enabled: false, allowedPhases: ['review'] } }),
+      'utf-8',
+    );
+
+    let loaderCalls = 0;
+    let personaCalls = 0;
+    reviewEngineTestUtils.setLoadNativeReviewModule(async () => {
+      loaderCalls += 1;
+      throw new Error('native loader should not be called');
+    });
+    reviewEngineTestUtils.setRunPersonaReview(async () => {
+      personaCalls += 1;
+      return {
+        verdict: 'ready',
+        codeReviewFindings: [],
+        metadata: {
+          branch: context.metadata.branch,
+          files: context.metadata.files,
+          hasUiChanges: false,
+          designContextAvailable: false,
+          uiVerificationRun: false,
+        },
+      };
+    });
+
+    try {
+      const result = await import('./review-engine.ts').then((module) => module.runReview(context, repoDir, {
+        skipClaudePreflight: true,
+      }));
+      assert.equal(loaderCalls, 0);
+      assert.equal(personaCalls, 1);
+      assert.equal(result.verdict, 'ready');
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not invoke the native review loader when allowedPhases excludes review', async () => {
+    const repoDir = mkdtempSync(join(tmpdir(), 'review-engine-native-phase-removed-'));
+    const context = makeReviewContext();
+
+    writeFileSync(
+      join(repoDir, '.wavemill-config.json'),
+      JSON.stringify({ nativeAgent: { enabled: true, allowedPhases: ['planning'] } }),
       'utf-8',
     );
 
