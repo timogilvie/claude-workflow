@@ -165,6 +165,71 @@ await test('model not in registry is treated as non-native and passes through', 
   }
 });
 
+await test('claude-openrouter entries without native capability are rejected fail-closed', () => {
+  const { repoDir, cleanup } = makeRepo();
+  try {
+    const registry: ModelRegistry = {
+      models: {
+        'mistral-large-2': {
+          vendor: 'mistral',
+          class: 'strong_generalist',
+          strengths: [],
+          weaknesses: [],
+          qualityScores: { routing: 60, planning: 70, coding: 70, review: 70, classify: 60 },
+          contextWindowTokens: 128_000,
+          toolSupport: 'basic',
+          multimodal: { text: true, image: false },
+          latencyTier: 'standard',
+          reasoningTier: 'standard',
+          costPerMillionInputTokensUsd: 2,
+          costPerMillionOutputTokensUsd: 6,
+          agent: 'claude-openrouter',
+        },
+      },
+      ladders: {},
+    };
+
+    const result = filterNativeModels(['mistral-large-2'], 'planner', registry, repoDir);
+    assert.deepEqual(result.eligible, []);
+    assert.equal(result.rejected.length, 1);
+    assert.equal(result.rejected[0]?.reason, 'no-native-capability');
+  } finally {
+    cleanup();
+  }
+});
+
+await test('hosted codex entries without native capability still pass through', () => {
+  const { repoDir, cleanup } = makeRepo();
+  try {
+    const registry: ModelRegistry = {
+      models: {
+        'gpt-5.5': {
+          vendor: 'openai',
+          class: 'frontier',
+          strengths: [],
+          weaknesses: [],
+          qualityScores: { routing: 80, planning: 85, coding: 85, review: 85, classify: 80 },
+          contextWindowTokens: 128_000,
+          toolSupport: 'full',
+          multimodal: { text: true, image: true },
+          latencyTier: 'standard',
+          reasoningTier: 'advanced',
+          costPerMillionInputTokensUsd: 10,
+          costPerMillionOutputTokensUsd: 30,
+          agent: 'codex',
+        },
+      },
+      ladders: {},
+    };
+
+    const result = filterNativeModels(['gpt-5.5'], 'reviewer', registry, repoDir);
+    assert.deepEqual(result.eligible, ['gpt-5.5']);
+    assert.deepEqual(result.rejected, []);
+  } finally {
+    cleanup();
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Valid certification paths
 // ---------------------------------------------------------------------------

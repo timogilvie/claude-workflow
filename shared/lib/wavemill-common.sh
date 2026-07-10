@@ -1318,10 +1318,17 @@ apply_expanded_route_if_present() {
 
   ensure_phase_config_state_file "$feature_dir"
 
-  if declare -F agent_resolve_from_model >/dev/null 2>&1; then
-    [[ -n "$planner_model" ]] && planner_agent="$(agent_resolve_from_model "$planner_model")"
-    [[ -n "$coder_model" ]] && coder_agent="$(agent_resolve_from_model "$coder_model")"
-    [[ -n "$reviewer_model" ]] && reviewer_agent="$(agent_resolve_from_model "$reviewer_model")"
+  if declare -F agent_resolve_models_for_roles >/dev/null 2>&1; then
+    if agent_resolve_models_for_roles "$planner_model" "$coder_model" "$reviewer_model"; then
+      :
+    fi
+    planner_agent="$(agent_resolve_batch_agent_for_role "planner")"
+    coder_agent="$(agent_resolve_batch_agent_for_role "coder")"
+    reviewer_agent="$(agent_resolve_batch_agent_for_role "reviewer")"
+  elif declare -F agent_resolve_from_model >/dev/null 2>&1; then
+    [[ -n "$planner_model" ]] && planner_agent="$(agent_resolve_from_model "$planner_model" "planning" || true)"
+    [[ -n "$coder_model" ]] && coder_agent="$(agent_resolve_from_model "$coder_model" "coding" || true)"
+    [[ -n "$reviewer_model" ]] && reviewer_agent="$(agent_resolve_from_model "$reviewer_model" "review" || true)"
   fi
 
   if ! state_mutate "$phase_config_file" \

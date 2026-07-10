@@ -1717,12 +1717,71 @@ await test('native-only ineligible pool is rejected fail-closed, not silently tr
       skipDifficultyClassification: true,
     });
 
-    assert.notEqual(decision.coder, 'native-only', 'rejected native model must not be selected as coder');
+    assert.equal(decision.coder, '', 'route should surface an empty coder slot when no eligible candidates remain');
     const rejection = (decision.nativeCertificationRejections ?? [])
       .find((r) => r.modelId === 'native-only' && r.role === 'coder');
     assert.ok(rejection, 'rejection must be recorded even when no fallback exists in the pool');
     assert.equal(rejection?.reason, 'missing');
+    assert.ok(
+      decision.reasoning.some((line) => line.includes('No eligible coder models remain')),
+      'reasoning should surface the empty eligible pool failure',
+    );
   } finally {
+    cleanup();
+  }
+});
+
+await test('openrouter-only planner pool without native metadata is rejected before fallback routing', () => {
+  const { repoDir, cleanup } = makeRepo({
+    modelRegistry: {
+      models: {
+        'mistral-large-2': {
+          class: 'strong_generalist',
+          vendor: 'mistral',
+          strengths: [],
+          weaknesses: [],
+          qualityScores: { routing: 60, planning: 70, coding: 70, review: 70, classify: 60 },
+          contextWindowTokens: 128_000,
+          toolSupport: 'basic',
+          multimodal: { text: true, image: false },
+          latencyTier: 'standard',
+          reasoningTier: 'standard',
+          costPerMillionInputTokensUsd: 2,
+          costPerMillionOutputTokensUsd: 6,
+          agent: 'claude-openrouter',
+        },
+      },
+    },
+    providers: {
+      openrouter: {
+        enabled: true,
+        apiKeyEnv: 'TEST_OPENROUTER_KEY',
+        models: ['mistral-large-2'],
+        stages: ['planner', 'coder', 'reviewer'],
+      },
+    },
+  });
+  const originalKey = process.env.TEST_OPENROUTER_KEY;
+  process.env.TEST_OPENROUTER_KEY = 'test-key';
+  try {
+    const decision = routeWorkflow('Plan a workflow feature.', {
+      repoDir,
+      plannerModelsAvailable: ['mistral-large-2'],
+      modelsAvailable: ['mistral-large-2'],
+      skipDifficultyClassification: true,
+    });
+
+    assert.equal(decision.planner, '', 'planner should remain unresolved when the pool is entirely rejected');
+    const rejection = (decision.nativeCertificationRejections ?? [])
+      .find((r) => r.modelId === 'mistral-large-2' && r.role === 'planner');
+    assert.ok(rejection, 'expected structured planner rejection');
+    assert.equal(rejection?.reason, 'no-native-capability');
+  } finally {
+    if (originalKey === undefined) {
+      delete process.env.TEST_OPENROUTER_KEY;
+    } else {
+      process.env.TEST_OPENROUTER_KEY = originalKey;
+    }
     cleanup();
   }
 });

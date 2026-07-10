@@ -1,6 +1,6 @@
 # Router
 
-**Last updated:** 2026-05-13T00:00:00.000Z
+**Last updated:** 2026-07-10T00:00:00.000Z
 **Files touched:** 7 files in last 30 days
 
 ## Purpose
@@ -93,6 +93,17 @@ All of the following conditions reject a native model from the pool:
 | Missing `nativeCapability` or `nativeProvider` in registry | `missing` |
 
 Non-native models (no `nativeCapability` in the registry) always pass through unchanged.
+
+## Agent Resolution
+
+Model-to-agent resolution is now registry-backed and fail-closed across both TypeScript and shell launch paths.
+
+- `shared/lib/model-agent-resolution.ts` is the single authority for mapping a model plus phase to an agent.
+- `shared/lib/model-router.ts` delegates `resolveAgent()` and `tryResolveAgent()` to that shared resolver.
+- `shared/lib/agent-adapters.sh` shells out to `tools/resolve-model-agent.ts` instead of applying prefix heuristics.
+- There is no default Codex fallback for unknown, unsupported, uncertified, or malformed non-OpenAI model selections.
+
+This prevents non-ChatGPT/Codex models such as `mistral-large-2` from reaching `codex exec`. OpenRouter/native candidates now either resolve to `native-openrouter` after certification checks or fail before tmux launch with an `[agent-resolution]` diagnostic and the matching `native-agent-certify` command.
 
 ### Diagnostics
 
@@ -218,6 +229,7 @@ Both modes use stage-aware KNN signals for candidate selection and prepend a deg
 | Symptom | Root Cause | Fix |
 |---------|------------|-----|
 | Degraded routing falls back to full pool | No models of restricted class available in registry | Ensure model registry includes sonnet/haiku; verify class definitions in `model-registry.ts` |
+| Non-OpenAI model launches in Codex and fails with unsupported-model | Before 2026-07-10, shell or TS resolution fell through to a default Codex agent instead of consulting registry-backed native routing | Inspect the `[agent-resolution]` diagnostic, certify the model via `npx tsx tools/native-agent-certify.ts --provider openrouter --model <id> --phase <phase>`, or remove it from router candidates |
 | `constrained` mode fires even though one frontier model is healthy | Operating mode derived from a single-model check instead of aggregating all frontier IDs | Ensure `deriveOperatingMode()` iterates the full frontier set from the effective registry and treats snapshot-absent frontier models as `healthy` |
 | A non-frontier model is selected while a healthy frontier sibling is available | Frontier-sibling substitution was skipped, or `below-frontier-substitute` exclusions were not applied | Verify `findHealthyFrontierSibling()` can see the current quota snapshot and `resolveModel()` is excluding non-frontier candidates in the mixed-frontier path |
 | No policy-adjustment line appears for a frontier-to-frontier swap | The route never passed through `logPolicyAdjustment()` or `logFinalFrontierSubstitution()` for that path | Confirm routing stayed out of degraded mode and note that `routingMode === 'policy'` intentionally skips the final frontier-substitution log |

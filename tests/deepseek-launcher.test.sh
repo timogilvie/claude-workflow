@@ -33,10 +33,9 @@ cleanup() {
 
 # Source agent adapters for function testing
 source_adapters() {
-  # Set up minimal environment so sourcing doesn't fail
-  local test_repo="$1"
-  export REPO_DIR="$test_repo"
-  export TOOLS_DIR="$test_repo/tools"
+  # Resolver-backed helpers need the real repo toolchain.
+  export REPO_DIR="$REPO_DIR"
+  export TOOLS_DIR="$TOOLS_DIR"
   # shellcheck disable=SC1090
   source "$LIB_DIR/agent-adapters.sh" 2>/dev/null || true
 }
@@ -236,7 +235,7 @@ tmp="$(make_temp_repo)"
   source_adapters "$tmp"
 
   # agent_resolve_from_model should still map deepseek-* to claude (backward compat)
-  result="$(agent_resolve_from_model "deepseek-v4-pro")"
+  result="$(agent_resolve_from_model "deepseek-v4-pro" "coding")"
   if [[ "$result" == "claude" ]]; then
     pass "agent_resolve_from_model deepseek-v4-pro still maps to claude (backward compat)"
   else
@@ -244,7 +243,7 @@ tmp="$(make_temp_repo)"
   fi
 
   # claude still maps to claude
-  result="$(agent_resolve_from_model "claude-sonnet-4-6")"
+  result="$(agent_resolve_from_model "claude-sonnet-4-6" "coding")"
   if [[ "$result" == "claude" ]]; then
     pass "agent_resolve_from_model claude-sonnet-4-6 still maps to claude"
   else
@@ -252,7 +251,7 @@ tmp="$(make_temp_repo)"
   fi
 
   # codex still maps to codex
-  result="$(agent_resolve_from_model "gpt-5.4")"
+  result="$(agent_resolve_from_model "gpt-5.4" "coding")"
   if [[ "$result" == "codex" ]]; then
     pass "agent_resolve_from_model gpt-5.4 still maps to codex"
   else

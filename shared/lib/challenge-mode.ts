@@ -4,7 +4,7 @@ import { loadWavemillConfig, type ChallengeConfig, type RouterConfig } from './c
 import { isDeepSeekModel } from './deepseek-provider.ts';
 import { filterDisabledModels, isDisabledModel } from './disabled-models.ts';
 import { getEffectiveRegistry, getModel } from './model-registry.ts';
-import { resolveAgent } from './model-router.ts';
+import { resolveAgent, tryResolveAgent, type AgentResolutionPhase } from './model-router.ts';
 import { listVariedRoutingDimensions, routingMetaFromChallengeEntry } from './challenge-comparison.ts';
 export { routeChangedMaterially } from './route-artifact.ts';
 import { routeChangedMaterially, type RouteArtifactSnapshot } from './route-artifact.ts';
@@ -484,7 +484,7 @@ export function pickChallengeModelsWithReason(
 
   const result = finalizeChallengePairWithReason(
     {
-      ...buildChallengeEntries(opts, agentMap, defaultAgent, primaryModel, challengerModel),
+      ...buildChallengeEntries(opts, agentMap, defaultAgent, primaryModel, challengerModel, opts.repoDir),
       challengeStage: 'implementation',
     },
     uniquePool,
@@ -509,6 +509,7 @@ function buildChallengeEntries(
   defaultAgent: string,
   primaryModel: string,
   challengerModel: string,
+  repoDir?: string,
 ): ChallengePairSelection {
   const primarySlug = deriveChallengeSlug(opts.slug, 'primary');
   const challengerSlug = deriveChallengeSlug(opts.slug, 'challenger');
@@ -522,7 +523,7 @@ function buildChallengeEntries(
       branch: deriveChallengeBranch(opts.slug, 'primary'),
       role: 'primary',
       model: primaryModel,
-      agent: resolveAgent(primaryModel, agentMap, defaultAgent),
+      agent: resolveAgent(primaryModel, agentMap, defaultAgent, repoDir, 'coding'),
       planner: '',
       plannerAgent: '',
       reviewer: '',
@@ -538,7 +539,7 @@ function buildChallengeEntries(
       branch: deriveChallengeBranch(opts.slug, 'challenger'),
       role: 'challenger',
       model: challengerModel,
-      agent: resolveAgent(challengerModel, agentMap, defaultAgent),
+      agent: resolveAgent(challengerModel, agentMap, defaultAgent, repoDir, 'coding'),
       planner: '',
       plannerAgent: '',
       reviewer: '',
@@ -569,7 +570,7 @@ function applyStageVariation(
       challenger: {
         ...pair.challenger,
         planner: challengerVaried,
-        plannerAgent: resolveOptionalAgent(challengerVaried, agentMap, defaultAgent, repoDir),
+        plannerAgent: resolveOptionalAgent(challengerVaried, agentMap, defaultAgent, repoDir, 'planning'),
       },
     };
   }
@@ -580,7 +581,7 @@ function applyStageVariation(
       challenger: {
         ...pair.challenger,
         reviewer: challengerVaried,
-        reviewerAgent: resolveOptionalAgent(challengerVaried, agentMap, defaultAgent, repoDir),
+        reviewerAgent: resolveOptionalAgent(challengerVaried, agentMap, defaultAgent, repoDir, 'review'),
       },
     };
   }
@@ -607,7 +608,7 @@ function buildStageVariedPair(
 
   if (stage === 'implementation') {
     nextChallenger.model = challengerVaried;
-    nextChallenger.agent = resolveAgent(challengerVaried, agentMap, defaultAgent, repoDir);
+    nextChallenger.agent = resolveAgent(challengerVaried, agentMap, defaultAgent, repoDir, 'coding');
     return {
       ...pair,
       challengeStage: stage,
@@ -839,11 +840,11 @@ export function pickChallengeWorkflowsWithReason(
         branch: deriveChallengeBranch(opts.slug, 'primary'),
         role: 'primary',
         model: primaryModel,
-        agent: resolveAgent(primaryModel, agentMap, defaultAgent),
+        agent: resolveAgent(primaryModel, agentMap, defaultAgent, opts.repoDir, 'coding'),
         planner: routing.planner,
-        plannerAgent: resolveAgent(routing.planner, agentMap, defaultAgent),
+        plannerAgent: resolveOptionalAgent(routing.planner, agentMap, defaultAgent, opts.repoDir, 'planning'),
         reviewer: routing.reviewer,
-        reviewerAgent: resolveAgent(routing.reviewer, agentMap, defaultAgent),
+        reviewerAgent: resolveOptionalAgent(routing.reviewer, agentMap, defaultAgent, opts.repoDir, 'review'),
         planDepth: routing.planDepth,
         codeDepth: routing.codeDepth,
         reviewMode: routing.reviewRecommended,
@@ -855,11 +856,11 @@ export function pickChallengeWorkflowsWithReason(
         branch: deriveChallengeBranch(opts.slug, 'challenger'),
         role: 'challenger',
         model: challengerCoder,
-        agent: resolveAgent(challengerCoder, agentMap, defaultAgent),
+        agent: resolveAgent(challengerCoder, agentMap, defaultAgent, opts.repoDir, 'coding'),
         planner: challengerPlanner,
-        plannerAgent: resolveAgent(challengerPlanner, agentMap, defaultAgent),
+        plannerAgent: resolveOptionalAgent(challengerPlanner, agentMap, defaultAgent, opts.repoDir, 'planning'),
         reviewer: challengerReviewer,
-        reviewerAgent: resolveAgent(challengerReviewer, agentMap, defaultAgent),
+        reviewerAgent: resolveOptionalAgent(challengerReviewer, agentMap, defaultAgent, opts.repoDir, 'review'),
         planDepth: routing.planDepth,
         codeDepth: routing.codeDepth,
         reviewMode: routing.reviewRecommended,
@@ -881,11 +882,13 @@ function resolveOptionalAgent(
   agentMap: Record<string, string>,
   defaultAgent: string,
   repoDir?: string,
+  phase: AgentResolutionPhase = 'coding',
 ): string {
   if (!modelId) {
     return '';
   }
-  return resolveAgent(modelId, agentMap, defaultAgent, repoDir);
+  const resolution = tryResolveAgent(modelId, agentMap, defaultAgent, repoDir, phase);
+  return resolution.ok ? resolution.agent : '';
 }
 
 function applyRouteSnapshot(
@@ -902,9 +905,9 @@ function applyRouteSnapshot(
   const withRoute = (entry: ChallengeTaskEntry): ChallengeTaskEntry => ({
     ...entry,
     planner,
-    plannerAgent: resolveOptionalAgent(planner, agentMap, defaultAgent, repoDir),
+    plannerAgent: resolveOptionalAgent(planner, agentMap, defaultAgent, repoDir, 'planning'),
     reviewer: route.reviewer,
-    reviewerAgent: resolveOptionalAgent(route.reviewer, agentMap, defaultAgent, repoDir),
+    reviewerAgent: resolveOptionalAgent(route.reviewer, agentMap, defaultAgent, repoDir, 'review'),
     planDepth,
     codeDepth: route.codeDepth,
     reviewMode: route.reviewMode,
@@ -1045,7 +1048,7 @@ function buildPairFromRouteSnapshotWithReason(
   // Same coder on both sides; route fields applied, then the varied stage
   // overridden on the challenger.
   const pair = applyRouteSnapshot(
-    buildChallengeEntries(opts, agentMap, defaultAgent, primaryCoder, primaryCoder),
+    buildChallengeEntries(opts, agentMap, defaultAgent, primaryCoder, primaryCoder, opts.repoDir),
     route,
     agentMap,
     defaultAgent,

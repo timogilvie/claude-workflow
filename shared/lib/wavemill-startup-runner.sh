@@ -859,7 +859,7 @@ $details_context"
   fi
 
   local planner_agent
-  planner_agent="$(agent_resolve_from_model "${planner_model:-gpt-5.4}")"
+  planner_agent="$(agent_resolve_from_model "${planner_model:-gpt-5.4}" "planning" || true)"
   write_stage_result_local "$feature_dir" "planning" "running" "$planner_agent" "${planner_model:-gpt-5.4}" "Startup handoff launched planning" || true
   startup_step "[4/7] Writing task artifacts...  ✓"
 
