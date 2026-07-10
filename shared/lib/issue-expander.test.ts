@@ -119,6 +119,36 @@ describe('issue-expander', () => {
     }
   });
 
+  it('expandIssue uses Claude path when nativeAgent is enabled but task-expansion is removed', async () => {
+    const repoDir = makeRepo({
+      nativeAgent: {
+        enabled: true,
+        allowedPhases: ['planning', 'review'],
+      },
+    });
+    const calls: string[] = [];
+    try {
+      const result = await expandIssue({
+        promptTemplate: 'prompt',
+        issueContext: 'issue',
+        repoDir,
+      }, {
+        expandIssueWithClaude: async () => {
+          calls.push('claude');
+          return 'claude result';
+        },
+        importNativeExpansion: async () => {
+          throw new Error('native module should not be imported');
+        },
+      });
+
+      assert.equal(result.text, 'claude result');
+      assert.deepEqual(calls, ['claude']);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
   it('expandIssue uses native path when task expansion is enabled', async () => {
     const repoDir = makeRepo({
       nativeAgent: {
