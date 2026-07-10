@@ -1024,6 +1024,21 @@ describe('eval-record-builder', () => {
       expect(baseRecord.rubric_provenance).toBe('judge');
     });
 
+    it('drops an invalid optional determinative_boundary before persistence', () => {
+      attachRubricEval(baseRecord, {
+        ...validRubricEval,
+        determinative_boundary: 'invalid_boundary' as unknown as RubricEval['determinative_boundary'],
+      });
+
+      expect(baseRecord.rubricEval).toEqual({
+        schema_version: validRubricEval.schema_version,
+        rubric_version: validRubricEval.rubric_version,
+        criteria: validRubricEval.criteria,
+      });
+      expect(baseRecord.rubricEval).not.toHaveProperty('determinative_boundary');
+      expect(baseRecord.rubric_provenance).toBe('judge');
+    });
+
     it('enrichEvalRecord leaves rubricEval undefined when not in metadata', () => {
       enrichEvalRecord(baseRecord, {});
       expect(baseRecord.rubricEval).toBeUndefined();

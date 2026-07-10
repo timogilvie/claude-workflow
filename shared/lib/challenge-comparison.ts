@@ -63,8 +63,9 @@ export interface ChallengeComparison {
   variedStage?: 'plan' | 'implementation' | 'review';
   stageEvidenceMode?: StageEvidenceMode;
   workflowInsight?: string;
-  comparisonOutcome?: 'compared' | 'skipped';
+  comparisonOutcome?: 'compared' | 'skipped' | 'forfeit' | 'double-forfeit';
   skipReason?: 'identical-routing-dimensions';
+  terminalReason?: 'eval_hard_failed' | 'primary_eval_hard_failed' | 'challenger_eval_hard_failed' | 'both_eval_hard_failed';
   cleanupPolicy?: 'primary-wins-close-challenger';
   /** Source of the primary comparison score (e.g. "stage.review", "stage.plan", "overall") */
   primaryEvalScoreSource?: string;

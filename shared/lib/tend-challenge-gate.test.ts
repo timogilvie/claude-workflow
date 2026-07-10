@@ -243,6 +243,100 @@ describe('branch sibling detection in applyChallengePairGates', () => {
       cleanup();
     }
   });
+
+  it('allows the surviving side through when a terminal forfeit record exists', async () => {
+    const { repoDir, cleanup } = setupRepoDir();
+    try {
+      const items = [makeWorkItem({
+        number: 102,
+        headRefName: 'task/foo-challenger',
+        challengePairId: 'pair-1',
+        challenge: true,
+      })];
+
+      writeWorkflowState(repoDir, {
+        HOK_1: { pr: 101, challengePairId: 'pair-1', challengeRole: 'primary' },
+        HOK_1_c: { pr: 102, challengePairId: 'pair-1', challengeRole: 'challenger' },
+      });
+      writeFileSync(
+        join(repoDir, '.wavemill', 'evals', 'challenge-records.jsonl'),
+        JSON.stringify({
+          challengePairId: 'pair-1',
+          primaryPrUrl: 'https://github.com/org/repo/pull/101',
+          challengerPrUrl: 'https://github.com/org/repo/pull/102',
+          winner: 'challenger',
+          timestamp: '2026-07-06T12:00:00Z',
+          comparisonOutcome: 'forfeit',
+          terminalReason: 'primary_eval_hard_failed',
+        }),
+      );
+
+      const result = await applyChallengePairGates(items, [], repoDir, {
+        remoteBranches: ['task/foo', 'task/foo-challenger'],
+        coolOffSeconds: 0,
+      });
+
+      assert.equal(result.eligible.length, 1);
+      assert.equal(result.eligible[0].pr.number, 102);
+      assert.equal(result.blocked.length, 0);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('treats a double-forfeit terminal record as losing both sides', async () => {
+    const { repoDir, cleanup } = setupRepoDir();
+    try {
+      const items = [
+        makeWorkItem({
+          number: 101,
+          headRefName: 'task/foo',
+          challengePairId: 'pair-1',
+          challenge: true,
+        }),
+        makeWorkItem({
+          number: 102,
+          headRefName: 'task/foo-challenger',
+          challengePairId: 'pair-1',
+          challenge: true,
+        }),
+      ];
+
+      writeWorkflowState(repoDir, {
+        HOK_1: { pr: 101, challengePairId: 'pair-1', challengeRole: 'primary' },
+        HOK_1_c: { pr: 102, challengePairId: 'pair-1', challengeRole: 'challenger' },
+      });
+      writeFileSync(
+        join(repoDir, '.wavemill', 'evals', 'challenge-records.jsonl'),
+        JSON.stringify({
+          challengePairId: 'pair-1',
+          primaryPrUrl: 'https://github.com/org/repo/pull/101',
+          challengerPrUrl: 'https://github.com/org/repo/pull/102',
+          winner: 'primary',
+          timestamp: '2026-07-06T12:00:00Z',
+          comparisonOutcome: 'double-forfeit',
+          terminalReason: 'both_eval_hard_failed',
+        }),
+      );
+
+      const result = await applyChallengePairGates(items, [], repoDir, {
+        remoteBranches: ['task/foo', 'task/foo-challenger'],
+        coolOffSeconds: 0,
+      });
+
+      assert.equal(result.eligible.length, 0);
+      assert.deepEqual(
+        result.blocked.map((item) => [item.number, item.reason]).sort((a, b) => a[0] - b[0]),
+        [
+          [101, 'challenge:loser:pair-1'],
+          [102, 'challenge:loser:pair-1'],
+        ],
+      );
+      assert.deepEqual(result.losers.sort((a, b) => a - b), [101, 102]);
+    } finally {
+      cleanup();
+    }
+  });
 });
 
 describe('cool-off window in applyChallengePairGates', () => {
