@@ -14,6 +14,7 @@ import {
   variedModelForStage,
   type ChallengeNativeRejection,
 } from '../shared/lib/challenge-mode.ts';
+import { buildEvalSummary, modelStageCount } from '../shared/lib/challenge-scheduler.ts';
 import { resolveAgent } from '../shared/lib/model-router.ts';
 import { readBothRouteArtifacts } from '../shared/lib/route-artifact.ts';
 import { readTaskPromptFromFile } from '../shared/lib/workflow-router.ts';
@@ -127,6 +128,11 @@ runTool({
       weights: challenge.stageWeights,
       recommendedStage: launchDecision.recommendation?.stage,
     });
+    const summary = buildEvalSummary(repoDir);
+    const coverage = (model: string, stage: 'plan' | 'implementation' | 'review') =>
+      modelStageCount(summary, model, stage);
+    const rotationSeed = `${issue}|${challengeStage}`;
+    const recommendedChallengerModel = launchDecision.recommendation?.challengerModel;
 
     // If task file provided, use workflow routing for both sides
     let selectionFailureReason = 'selection_failed';
@@ -141,11 +147,14 @@ runTool({
         prompt: title,
         primaryModel,
         forcedChallengerModel,
-        challengeStage,
-        agentMap: router.agentMap,
-        defaultAgent,
-        repoDir,
-      }, routeArtifacts);
+          challengeStage,
+          agentMap: router.agentMap,
+          defaultAgent,
+          repoDir,
+          coverage,
+          rotationSeed,
+          recommendedChallengerModel,
+        }, routeArtifacts);
       pair = selection.pair;
       selectionFailureReason = selection.failureReason || selectionFailureReason;
       nativeCertificationRejections = selection.nativeCertificationRejections;
@@ -165,6 +174,9 @@ runTool({
           agentMap: router.agentMap,
           defaultAgent,
           repoDir,
+          coverage,
+          rotationSeed,
+          recommendedChallengerModel,
         });
         pair = selection.pair;
         selectionFailureReason = selection.failureReason || selectionFailureReason;
@@ -184,6 +196,9 @@ runTool({
           agentMap: router.agentMap,
           defaultAgent,
           repoDir,
+          coverage,
+          rotationSeed,
+          recommendedChallengerModel,
         });
         pair = selection.pair;
         selectionFailureReason = selection.failureReason || selectionFailureReason;
@@ -203,6 +218,9 @@ runTool({
         agentMap: router.agentMap,
         defaultAgent,
         repoDir,
+        coverage,
+        rotationSeed,
+        recommendedChallengerModel,
       });
       pair = selection.pair;
       selectionFailureReason = selection.failureReason || selectionFailureReason;
@@ -232,9 +250,11 @@ runTool({
     // route missing the requested stage model) — report the effective stage.
     const effectiveStage = pair.challengeStage || 'implementation';
     const challengerVaried = variedModelForStage(pair.challenger, effectiveStage);
-    const challengerSource = forcedChallengerModel && challengerVaried === forcedChallengerModel
-      ? 'recommendation'
-      : 'random';
+    const challengerSource = pair.selectionReason || (
+      forcedChallengerModel && challengerVaried === forcedChallengerModel
+        ? 'recommendation'
+        : 'random'
+    );
 
     console.log(JSON.stringify({
       issue,
@@ -247,6 +267,8 @@ runTool({
       primaryModel,
       selectionPath: launchDecision.selectionPath,
       challengerSource,
+      selectionReason: pair.selectionReason,
+      coverageCount: pair.challengerCoverageCount,
       challengeStage: effectiveStage,
       ...(launchDecision.recommendation
         ? {
