@@ -25,6 +25,7 @@ fi
 
 for f in \
   check-routing.test.ts \
+  challenge-coverage-selector.test.ts \
   challenge-mode.test.ts \
   challenge-score-selector.test.ts \
   challenge-scheduler.test.ts \
