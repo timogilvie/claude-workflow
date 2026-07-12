@@ -218,12 +218,78 @@ describe('native review', () => {
       rmSync(featureDir, { recursive: true, force: true });
     }
   });
+
+  it('surfaces actionable provider/model artifact failures before native review starts', async () => {
+    const repoDir = makeConfiguredNativeRepo();
+    process.env.OPENAI_API_KEY = 'sk-test-native-review';
+
+    try {
+      const result = await runNativeReview(makeReviewContext(), repoDir, {});
+      assert.equal(result.verdict, 'not_ready');
+      assert.equal(result.codeReviewFindings[0].category, 'native-runtime-unavailable');
+      assert.match(
+        result.codeReviewFindings[0].description,
+        /Native review is unavailable: openai:gpt-4o: reason=missing_artifact; modelId=gpt-4o;.*artifactPath=/,
+      );
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
 });
 
-function makeTempRepo(): string {
+function makeTempRepo(configOverride?: Record<string, unknown>): string {
   const repoDir = mkdtempSync(join(tmpdir(), 'native-review-test-'));
-  writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({}), 'utf-8');
+  writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify(configOverride ?? {}, null, 2), 'utf-8');
   return repoDir;
+}
+
+function makeConfiguredNativeRepo(): string {
+  return makeTempRepo({
+    nativeAgent: {
+      enabled: true,
+      allowedPhases: ['review'],
+      providers: {
+        openai: {
+          models: ['gpt-4o'],
+        },
+      },
+    },
+    modelRegistry: {
+      models: {
+        'gpt-4o': {
+          vendor: 'openai',
+          class: 'strong_generalist',
+          strengths: [],
+          weaknesses: [],
+          qualityScores: {
+            routing: 70,
+            planning: 75,
+            coding: 80,
+            review: 75,
+            classify: 70,
+          },
+          contextWindowTokens: 128000,
+          toolSupport: 'full',
+          multimodal: { text: true, image: false },
+          latencyTier: 'standard',
+          reasoningTier: 'standard',
+          costPerMillionInputTokensUsd: 3,
+          costPerMillionOutputTokensUsd: 15,
+          nativeCapability: {
+            nativeProvider: 'openai',
+            piTransportKind: 'openai-responses',
+            readOnlyNative: 'certified',
+            certification: {
+              maxCertifiedPhase: 'workflow',
+              certifiedAt: '2026-07-12T00:00:00.000Z',
+              certificationSuiteVersion: 'v1',
+            },
+          },
+        },
+      },
+      ladders: {},
+    },
+  });
 }
 
 function makeReviewContext(): ReviewContext {

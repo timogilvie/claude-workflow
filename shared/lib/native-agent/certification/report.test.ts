@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 import {
   buildModelCertificationReport,
@@ -10,7 +11,9 @@ import {
 } from './report.ts';
 import { CERTIFICATION_SCHEMA_VERSION, CERTIFICATION_TTL_DAYS } from './schema.ts';
 import type { ModelRegistry } from '../../model-registry.ts';
+import { resolveNativeAgentProviders } from '../providers.ts';
 import type { NativeCertificationArtifact } from './schema.ts';
+import { buildCertificationPath } from './loader.ts';
 
 // ---------------------------------------------------------------------------
 // Test fixtures
@@ -143,6 +146,67 @@ function makeTempRepo(): { repoDir: string; cleanup: () => void } {
   return {
     repoDir,
     cleanup: () => rmSync(repoDir, { recursive: true, force: true }),
+  };
+}
+
+function writeRepoConfig(repoDir: string, modelRegistry: ModelRegistry): void {
+  writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
+    nativeAgent: {
+      enabled: true,
+      allowedPhases: ['task-expansion', 'planning', 'review'],
+      providers: {
+        openai: {
+          models: ['gpt-4o'],
+        },
+      },
+    },
+    modelRegistry,
+  }, null, 2), 'utf-8');
+}
+
+function writeArtifact(repoDir: string, artifact: NativeCertificationArtifact): void {
+  const artifactPath = buildCertificationPath(
+    repoDir,
+    artifact.provider as 'openai' | 'openrouter',
+    artifact.model,
+    artifact.suiteVersion,
+  );
+  mkdirSync(dirname(artifactPath), { recursive: true });
+  writeFileSync(artifactPath, JSON.stringify(artifact, null, 2), 'utf-8');
+}
+
+function makeCliRegistry(
+  maxCertifiedPhase: 'read-only' | 'workflow' = 'workflow',
+  certifiedAt = FRESH_DATE,
+): ModelRegistry {
+  return {
+    models: {
+      'gpt-4o': {
+        vendor: 'openai',
+        class: 'strong_generalist',
+        strengths: [],
+        weaknesses: [],
+        qualityScores: { routing: 70, planning: 75, coding: 80, review: 75, classify: 70 },
+        contextWindowTokens: 128_000,
+        toolSupport: 'full',
+        multimodal: { text: true, image: false },
+        latencyTier: 'standard',
+        reasoningTier: 'standard',
+        costPerMillionInputTokensUsd: 3,
+        costPerMillionOutputTokensUsd: 15,
+        nativeCapability: {
+          nativeProvider: 'openai',
+          piTransportKind: 'openai-responses',
+          readOnlyNative: 'certified',
+          certification: {
+            maxCertifiedPhase,
+            certifiedAt,
+            certificationSuiteVersion: 'v1',
+          },
+        },
+      },
+    },
+    ladders: {},
   };
 }
 
@@ -426,6 +490,107 @@ describe('buildModelCertificationReport', () => {
       assert.ok(row, 'qwen-3-coder row missing');
       assert.equal(row.state, 'ready');
       assert.deepEqual(row.eligibleStages.sort(), ['coder', 'planner', 'reviewer'].sort());
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('agrees with task-mode resolver and CLI JSON for a workflow artifact', () => {
+    const { repoDir, cleanup } = makeTempRepo();
+    const now = new Date();
+    const certifiedAt = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
+    const registry = makeCliRegistry('workflow', certifiedAt);
+
+    try {
+      writeRepoConfig(repoDir, registry);
+      writeArtifact(repoDir, makeArtifact({ phase: 'workflow', certifiedAt }));
+
+      const planningEntry = resolveNativeAgentProviders(repoDir, {
+        env: { OPENAI_API_KEY: 'sk-test-report' },
+        phase: 'planning',
+        now,
+      })[0];
+      const reviewEntry = resolveNativeAgentProviders(repoDir, {
+        env: { OPENAI_API_KEY: 'sk-test-report' },
+        phase: 'review',
+        now,
+      })[0];
+
+      assert.equal(planningEntry.status, 'ready');
+      assert.equal(reviewEntry.status, 'ready');
+
+      const rows = buildModelCertificationReport({ repoDir, now });
+      const row = rows.find((candidate) => candidate.model === 'gpt-4o');
+      assert.ok(row, 'gpt-4o row missing');
+      assert.equal(row.state, 'ready');
+      assert.deepEqual(row.eligibleStages.sort(), ['coder', 'planner', 'reviewer'].sort());
+
+      const cliReport = JSON.parse(execFileSync('npx', [
+        'tsx',
+        'tools/native-agent-models-report.ts',
+        '--json',
+        '--repo',
+        repoDir,
+      ], {
+        cwd: process.cwd(),
+        encoding: 'utf-8',
+      })) as { models: Array<{ model: string; state: string; eligibleStages: string[] }> };
+      const cliRow = cliReport.models.find((candidate) => candidate.model === 'gpt-4o');
+      assert.ok(cliRow, 'gpt-4o CLI row missing');
+      assert.equal(cliRow.state, 'ready');
+      assert.deepEqual(cliRow.eligibleStages.sort(), ['coder', 'planner', 'reviewer'].sort());
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('reports no eligible stages when stale artifacts block task-mode resolution', () => {
+    const { repoDir, cleanup } = makeTempRepo();
+    const registry = makeCliRegistry('workflow');
+
+    try {
+      writeRepoConfig(repoDir, registry);
+      writeArtifact(repoDir, makeArtifact({
+        phase: 'workflow',
+        certifiedAt: STALE_DATE,
+      }));
+
+      const planningEntry = resolveNativeAgentProviders(repoDir, {
+        env: { OPENAI_API_KEY: 'sk-test-report' },
+        phase: 'planning',
+        now: NOW,
+      })[0];
+      const reviewEntry = resolveNativeAgentProviders(repoDir, {
+        env: { OPENAI_API_KEY: 'sk-test-report' },
+        phase: 'review',
+        now: NOW,
+      })[0];
+
+      assert.equal(planningEntry.status, 'uncertified');
+      assert.equal(reviewEntry.status, 'uncertified');
+      assert.equal(planningEntry.rejectionReason, 'stale_artifact');
+      assert.equal(reviewEntry.rejectionReason, 'stale_artifact');
+
+      const rows = buildModelCertificationReport({ repoDir, now: NOW });
+      const row = rows.find((candidate) => candidate.model === 'gpt-4o');
+      assert.ok(row, 'gpt-4o row missing');
+      assert.equal(row.state, 'stale');
+      assert.deepEqual(row.eligibleStages, []);
+
+      const cliReport = JSON.parse(execFileSync('npx', [
+        'tsx',
+        'tools/native-agent-models-report.ts',
+        '--json',
+        '--repo',
+        repoDir,
+      ], {
+        cwd: process.cwd(),
+        encoding: 'utf-8',
+      })) as { models: Array<{ model: string; state: string; eligibleStages: string[] }> };
+      const cliRow = cliReport.models.find((candidate) => candidate.model === 'gpt-4o');
+      assert.ok(cliRow, 'gpt-4o CLI row missing');
+      assert.equal(cliRow.state, 'stale');
+      assert.deepEqual(cliRow.eligibleStages, []);
     } finally {
       cleanup();
     }

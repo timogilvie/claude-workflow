@@ -339,6 +339,7 @@ describe('runNativeAgentLive — scripted provider', () => {
         env: { OPENAI_API_KEY: 'sk-stub-key-for-scripted-provider' },
         transcriptDir,
         sessionId: 'live-scripted-success',
+        _certificationMode: true,
         _modelOverride: {
           id: `scripted:${scriptedApi}`,
           name: 'scripted-model',
@@ -396,6 +397,7 @@ describe('runNativeAgentLive — scripted provider', () => {
           env: { OPENAI_API_KEY: 'sk-stub-key-for-scripted-provider' },
           transcriptDir,
           sessionId: 'live-scripted-empty',
+          _certificationMode: true,
           _modelOverride: {
             id: `scripted:${scriptedApi}`,
             name: 'scripted-model',
@@ -441,6 +443,7 @@ describe('runNativeAgentLive — scripted provider', () => {
         env: { OPENAI_API_KEY: secretKey },
         transcriptDir,
         sessionId: 'live-no-leak-scripted',
+        _certificationMode: true,
         _modelOverride: {
           id: `scripted:${scriptedApi}`,
           name: 'scripted-model',
@@ -464,6 +467,74 @@ describe('runNativeAgentLive — scripted provider', () => {
           'key must not appear in transcript JSONL',
         );
       }
+    } finally {
+      cleanupDir(transcriptDir);
+    }
+  });
+
+  it('allows certification harness execution without allowing task-mode routing', async () => {
+    const transcriptDir = makeTempTranscriptDir();
+    const scriptedApi = uniqueApi();
+
+    registerScriptedPiProvider({
+      api: scriptedApi,
+      turns: [
+        {
+          content: [{ type: 'tool_call', id: 'tc-smoke-3', name: 'list_files', arguments: { path: '.' } }],
+          usage: { input: 20, output: 10 },
+          stopReason: 'toolUse',
+        },
+        {
+          content: [{ type: 'text', text: 'Certification smoke complete.' }],
+          usage: { input: 10, output: 15 },
+          stopReason: 'stop',
+        },
+      ],
+    });
+
+    try {
+      const taskMode = await runNativeAgentLive({
+        provider: 'openai',
+        phase: 'planning',
+        env: { OPENAI_API_KEY: 'sk-stub-key-for-scripted-provider' },
+        transcriptDir,
+        sessionId: 'live-task-mode-blocked',
+        _modelOverride: {
+          id: `scripted:${scriptedApi}`,
+          name: 'scripted-model',
+          api: scriptedApi,
+          provider: 'scripted',
+          baseUrl: 'http://localhost:0/mock',
+          headers: {},
+        },
+        _registryOverride: { models: {}, ladders: {} },
+      });
+
+      assert.equal(taskMode.outcome, 'skipped');
+      assert.match(taskMode.skipReason ?? '', /reason=unregistered_model/);
+
+      const certificationMode = await runNativeAgentLive({
+        provider: 'openai',
+        phase: 'planning',
+        env: { OPENAI_API_KEY: 'sk-stub-key-for-scripted-provider' },
+        transcriptDir,
+        sessionId: 'live-certification-mode-allowed',
+        _modelOverride: {
+          id: `scripted:${scriptedApi}`,
+          name: 'scripted-model',
+          api: scriptedApi,
+          provider: 'scripted',
+          baseUrl: 'http://localhost:0/mock',
+          headers: {},
+        },
+        _registryOverride: { models: {}, ladders: {} },
+        _certificationMode: true,
+      });
+
+      assert.equal(certificationMode.outcome, 'ok');
+      assert.equal(certificationMode.phase, 'planning');
+      assert.equal(certificationMode.provider, 'openai');
+      assert.ok(certificationMode.usage);
     } finally {
       cleanupDir(transcriptDir);
     }

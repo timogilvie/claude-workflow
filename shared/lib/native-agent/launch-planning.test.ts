@@ -42,6 +42,57 @@ function setupWorktree(): { wtDir: string; featureDir: string; packetPath: strin
   return { wtDir, featureDir, packetPath, sourcePath };
 }
 
+function setupNativeRepo(): string {
+  const repoDir = mkdtempSync(join(tmpdir(), 'native-planning-repo-'));
+  writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
+    nativeAgent: {
+      enabled: true,
+      allowedPhases: ['planning'],
+      providers: {
+        openai: {
+          models: ['gpt-4o'],
+        },
+      },
+    },
+    modelRegistry: {
+      models: {
+        'gpt-4o': {
+          vendor: 'openai',
+          class: 'strong_generalist',
+          strengths: [],
+          weaknesses: [],
+          qualityScores: {
+            routing: 70,
+            planning: 75,
+            coding: 80,
+            review: 75,
+            classify: 70,
+          },
+          contextWindowTokens: 128000,
+          toolSupport: 'full',
+          multimodal: { text: true, image: false },
+          latencyTier: 'standard',
+          reasoningTier: 'standard',
+          costPerMillionInputTokensUsd: 3,
+          costPerMillionOutputTokensUsd: 15,
+          nativeCapability: {
+            nativeProvider: 'openai',
+            piTransportKind: 'openai-responses',
+            readOnlyNative: 'certified',
+            certification: {
+              maxCertifiedPhase: 'workflow',
+              certifiedAt: '2026-07-12T00:00:00.000Z',
+              certificationSuiteVersion: 'v1',
+            },
+          },
+        },
+      },
+      ladders: {},
+    },
+  }, null, 2));
+  return repoDir;
+}
+
 function cleanup(path: string): void {
   rmSync(path, { recursive: true, force: true });
 }
@@ -307,6 +358,35 @@ describe('launchNativePlanning', () => {
     } finally {
       cleanup(wtDir);
       rmSync(hookPath, { force: true });
+    }
+  });
+
+  it('surfaces actionable provider resolution failures when certification blocks planning', async () => {
+    const { wtDir } = setupWorktree();
+    const repoDir = setupNativeRepo();
+    const originalOpenAiKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = 'sk-test-native-planning';
+
+    try {
+      await assert.rejects(
+        () => launchNativePlanning({
+          session: 'sess',
+          issue: 'HOK-2313',
+          slug: 'demo',
+          wtDir,
+          repoDir,
+          runTsxCommand: stubRunTsxCommand(),
+        }),
+        /No ready native provider is available for planning: openai:gpt-4o: reason=missing_artifact; modelId=gpt-4o;.*artifactPath=/,
+      );
+    } finally {
+      if (originalOpenAiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalOpenAiKey;
+      }
+      cleanup(wtDir);
+      cleanup(repoDir);
     }
   });
 

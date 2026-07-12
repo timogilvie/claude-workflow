@@ -658,6 +658,57 @@ describe('native provider certification artifacts', () => {
     }
   });
 
+  it('fails closed on wrong provider identity in an OpenAI artifact', () => {
+    const { repoDir, cleanup } = makeRepo();
+    try {
+      writeArtifact(repoDir, 'openai', 'gpt-4o', 'v1', {
+        provider: 'wrong-provider',
+      });
+
+      const [entry] = resolveNativeAgentProviders(
+        makeProviderConfig('openai', 'gpt-4o'),
+        {
+          repoDir,
+          env: { OPENAI_API_KEY: 'sk-openai-test' },
+          registry: makeCertifiedRegistry('gpt-4o', 'openai'),
+          now: FIXED_NOW,
+        },
+      );
+
+      assert(entry);
+      assert.equal(entry.status, 'uncertified');
+      assert.equal(entry.rejectionReason, 'missing_artifact');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('fails closed on wrong model identity in an OpenRouter artifact', () => {
+    const { repoDir, cleanup } = makeRepo();
+    try {
+      writeArtifact(repoDir, 'openrouter', 'glm-5.2', 'v1', {
+        provider: 'z-ai',
+        model: 'wrong-model',
+      });
+
+      const [entry] = resolveNativeAgentProviders(
+        makeProviderConfig('openrouter', 'glm-5.2'),
+        {
+          repoDir,
+          env: { OPENROUTER_API_KEY: 'sk-openrouter-test' },
+          registry: makeCertifiedRegistry('glm-5.2', 'openrouter'),
+          now: FIXED_NOW,
+        },
+      );
+
+      assert(entry);
+      assert.equal(entry.status, 'uncertified');
+      assert.equal(entry.rejectionReason, 'missing_artifact');
+    } finally {
+      cleanup();
+    }
+  });
+
   it('treats a fresh 59-day artifact as ready and the 60-day boundary as stale', () => {
     const { repoDir, cleanup } = makeRepo();
     try {

@@ -13,7 +13,11 @@ import { dirname, join, relative, resolve } from 'node:path';
 import type { AgentMessage, AgentTurn, Message } from './messages.ts';
 import type { AgentContext, WavemillLoopConfig } from './loop.ts';
 import { runWavemillLoop } from './loop.ts';
-import { resolveNativeAgentProviders, type ReadyNativeProviderEntry } from './providers.ts';
+import {
+  resolveNativeAgentProviders,
+  type ReadyNativeProviderEntry,
+  type ResolvedNativeProviderEntry,
+} from './providers.ts';
 import { createReadOnlyTools, READ_ONLY_PATH_FIELDS } from './tools/read-only.ts';
 import { createGitTools, gitAfterToolCall } from './tools/git.ts';
 import { createArtifactTools } from './tools/artifacts.ts';
@@ -237,6 +241,19 @@ function cleanupReasonForStopReason(stopReason: string): CleanupReason | null {
   return null;
 }
 
+function formatPlanningProviderFailure(entries: readonly ResolvedNativeProviderEntry[]): string {
+  const reasons = entries.map((entry) => {
+    if ('reason' in entry && typeof entry.reason === 'string') {
+      return `${entry.providerName}:${entry.modelId}: ${entry.reason}`;
+    }
+    return `${entry.providerName}:${entry.modelId}: unavailable`;
+  });
+
+  return reasons.length > 0
+    ? `No ready native provider is available for planning: ${reasons.join('; ')}`
+    : 'No ready native provider is available for planning: no configured native providers were ready.';
+}
+
 export async function launchNativePlanning(options: LaunchNativePlanningOptions): Promise<{
   planPath: string;
   approvalMarkerPath: string;
@@ -276,12 +293,13 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
     const registry = createToolRegistry(descriptors);
     const registryMetadata = options.registryMetadataOverride ?? registry.list();
 
-    const readyProvider = options.providerEntries?.[0]
-      ?? resolveNativeAgentProviders(options.repoDir, { phase: 'planning' })
-        .find((entry): entry is ReadyNativeProviderEntry => entry.status === 'ready');
+    const providerEntries = options.providerEntries ?? resolveNativeAgentProviders(options.repoDir, { phase: 'planning' });
+    const readyProvider = providerEntries.find(
+      (entry): entry is ReadyNativeProviderEntry => entry.status === 'ready',
+    );
 
     if (!readyProvider && !options.loopModelOverride) {
-      throw new Error('No ready native provider is available for planning');
+      throw new Error(formatPlanningProviderFailure(providerEntries));
     }
 
     const taskPacket = readFileSync(taskPacketPath, 'utf-8');

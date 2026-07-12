@@ -392,4 +392,32 @@ describe('runNativeExpansion', () => {
       cleanup(repoDir);
     }
   });
+
+  it('surfaces actionable stale-artifact details when task expansion is blocked', async () => {
+    const repoDir = makeRepo();
+    writeCertification(repoDir, 'gpt-4o', 'openai', {
+      certifiedAt: '2026-01-01T00:00:00.000Z',
+    });
+
+    try {
+      await assert.rejects(
+        () => runNativeExpansion({
+          promptTemplate: makePrompt(),
+          issueContext: 'Issue context',
+          codebaseContext: 'Codebase context',
+          mode: 'normal',
+          repoDir,
+          env: { OPENAI_API_KEY: 'sk-test-native-expansion' },
+          registry: makeRegistry('gpt-4o'),
+        }),
+        (error: unknown) => error instanceof NativeExpansionUnavailableError
+          && error.kind === 'uncertified'
+          && /reason=stale_artifact/.test(error.message)
+          && /modelId=gpt-4o/.test(error.message)
+          && /artifactPath=/.test(error.message),
+      );
+    } finally {
+      cleanup(repoDir);
+    }
+  });
 });
