@@ -16,6 +16,14 @@ export {
 
 export type { CertificationEligibility, IneligibilityReason } from './loader.ts';
 export type { CertificationStorageIdentity } from './identity.ts';
+export type {
+  NativeGateDecision,
+  NativeGateInput,
+  NativeGateMode,
+  NativeGateReady,
+  NativeGateReject,
+  NativeGateRejectReason,
+} from './eligibility-gate.ts';
 
 export {
   buildCertificationPath,
@@ -29,6 +37,7 @@ export {
   isValidCertificationPathSegment,
   resolveCertificationStorageIdentity,
 } from './identity.ts';
+export { evaluateNativeProviderGate } from './eligibility-gate.ts';
 
 export type { ReadResult, StoreError, StoreErrorCode } from './store.ts';
 
