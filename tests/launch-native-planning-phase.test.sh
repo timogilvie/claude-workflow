@@ -35,8 +35,15 @@ TMPDIR_TEST="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR_TEST"' EXIT
 
 echo "=== Native Planning Fixture ==="
-node --test shared/lib/native-agent/launch-planning.test.ts >/dev/null
-pass "unit fixture proves native planning artifacts and mutation denial"
+NODE_FIXTURE_LOG="$TMPDIR_TEST/native-planning-node-test.log"
+if node --test --test-concurrency=1 shared/lib/native-agent/launch-planning.test.ts >"$NODE_FIXTURE_LOG" 2>&1; then
+  pass "unit fixture proves native planning artifacts and mutation denial"
+elif node --test --test-concurrency=1 shared/lib/native-agent/launch-planning.test.ts >"$NODE_FIXTURE_LOG" 2>&1; then
+  pass "unit fixture proves native planning artifacts and mutation denial"
+else
+  cat "$NODE_FIXTURE_LOG"
+  fail "unit fixture proves native planning artifacts and mutation denial"
+fi
 
 echo
 echo "=== Shell Dispatch Guard ==="
