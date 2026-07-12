@@ -341,6 +341,8 @@ describe('launchNativePlanning', () => {
 
   it('surfaces actionable provider-resolution failures when no planning provider is ready', async () => {
     const { wtDir } = setupWorktree();
+    const originalOpenAiKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = 'test-openai-key';
     writeNativeConfig(wtDir, {
       nativeAgent: {
         enabled: true,
@@ -370,6 +372,11 @@ describe('launchNativePlanning', () => {
           && /native-agent-certify\.ts --provider openai --model uncertified-model --phase read-only/.test(error.message),
       );
     } finally {
+      if (originalOpenAiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalOpenAiKey;
+      }
       cleanup(wtDir);
     }
   });
