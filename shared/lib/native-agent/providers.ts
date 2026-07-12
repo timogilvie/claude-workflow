@@ -100,6 +100,7 @@ const NATIVE_AGENT_PHASE_TO_CERT_PHASE: Record<NativeAgentAllowedPhase, Certific
 };
 
 const READY_ENTRY_API_KEY = Symbol('ready-native-provider-api-key');
+const NATIVE_PROVIDER_REMEDIATION_REPORT = 'wavemill native-agent models report --json';
 
 export function resolveNativeAgentProviders(
   configOrRepoDir?: NativeAgentConfig | string,
@@ -224,6 +225,25 @@ export function resolveNativeAgentProviders(
 
 export function getNativeProviderApiKey(entry: ReadyNativeProviderEntry): string | undefined {
   return (entry as ReadyNativeProviderEntry & { [READY_ENTRY_API_KEY]?: string })[READY_ENTRY_API_KEY];
+}
+
+export function buildNativeProviderResolutionFailureMessage(
+  launchLabel: string,
+  entries: readonly ResolvedNativeProviderEntry[],
+  requiredCertificationPhase: CertificationPhase = 'read-only',
+): string {
+  if (entries.length === 0) {
+    return [
+      `Native ${launchLabel} is unavailable: no native providers are configured.`,
+      `Configure nativeAgent.providers and run ${NATIVE_PROVIDER_REMEDIATION_REPORT}.`,
+    ].join(' ');
+  }
+
+  const details = entries.map((entry) => describeNativeProviderFailure(entry, requiredCertificationPhase));
+  return [
+    `Native ${launchLabel} is unavailable: ${details.join('; ')}.`,
+    `Run ${NATIVE_PROVIDER_REMEDIATION_REPORT} to inspect current artifact eligibility.`,
+  ].join(' ');
 }
 
 export function buildOpenAiResponsesModel({
@@ -359,6 +379,40 @@ function attachApiKey(entry: ReadyNativeProviderEntry, apiKey: string): void {
     configurable: false,
     writable: false,
   });
+}
+
+function describeNativeProviderFailure(
+  entry: ResolvedNativeProviderEntry,
+  requiredCertificationPhase: CertificationPhase,
+): string {
+  const identity = `${entry.providerName}:${entry.modelId}`;
+
+  if (entry.status === 'unavailable') {
+    return `${identity} unavailable (${entry.reason}); set ${entry.apiKeyEnv}`;
+  }
+
+  if (entry.status === 'skipped') {
+    return `${identity} skipped (${entry.reason}); enable nativeAgent.providers.${entry.providerName}.enabled`;
+  }
+
+  if (entry.status === 'uncertified') {
+    const certifyCommand = buildNativeProviderCertifyCommand(
+      entry.providerName,
+      entry.modelId,
+      requiredCertificationPhase,
+    );
+    return `${identity} rejected (reason=${entry.rejectionReason ?? 'uncertified'}; ${entry.reason}); re-certify with ${certifyCommand}`;
+  }
+
+  return `${identity} unavailable`;
+}
+
+function buildNativeProviderCertifyCommand(
+  providerName: NativeAgentProviderName,
+  modelId: string,
+  requiredCertificationPhase: CertificationPhase,
+): string {
+  return `npx tsx tools/native-agent-certify.ts --provider ${providerName} --model ${modelId} --phase ${requiredCertificationPhase}`;
 }
 
 function resolveProviderMode(options: ResolveNativeAgentProvidersOptions): NativeGateMode {

@@ -353,7 +353,9 @@ describe('runNativeExpansion', () => {
         }),
         (error: unknown) => error instanceof NativeExpansionUnavailableError
           && error.kind === 'missing_key'
-          && /WAVEMILL_TEST_MISSING_NATIVE_KEY/.test(error.message),
+          && /openai:gpt-4o/.test(error.message)
+          && /WAVEMILL_TEST_MISSING_NATIVE_KEY/.test(error.message)
+          && /wavemill native-agent models report --json/.test(error.message),
       );
     } finally {
       cleanup(repoDir);
@@ -386,7 +388,9 @@ describe('runNativeExpansion', () => {
         }),
         (error: unknown) => error instanceof NativeExpansionUnavailableError
           && error.kind === 'uncertified'
-          && /gpt-4o/.test(error.message),
+          && /openai:gpt-4o/.test(error.message)
+          && /reason=wrong_suite/.test(error.message)
+          && /wavemill native-agent models report --json/.test(error.message),
       );
     } finally {
       cleanup(repoDir);

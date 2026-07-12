@@ -218,11 +218,38 @@ describe('native review', () => {
       rmSync(featureDir, { recursive: true, force: true });
     }
   });
+
+  it('surfaces actionable provider-resolution failures before launching the loop', async () => {
+    const repoDir = makeTempRepo({
+      nativeAgent: {
+        enabled: true,
+        allowedPhases: ['review'],
+        providers: {
+          openai: {
+            models: ['uncertified-model'],
+          },
+        },
+      },
+    });
+    process.env.OPENAI_API_KEY = 'sk-review-test';
+
+    try {
+      const result = await runNativeReview(makeReviewContext(), repoDir, {});
+      assert.equal(result.verdict, 'not_ready');
+      assert.equal(result.codeReviewFindings[0].category, 'native-runtime-unavailable');
+      assert.match(result.codeReviewFindings[0].description, /openai:uncertified-model/);
+      assert.match(result.codeReviewFindings[0].description, /reason=unregistered_model/);
+      assert.match(result.codeReviewFindings[0].description, /wavemill native-agent models report --json/);
+      assert.match(result.codeReviewFindings[0].description, /native-agent-certify\.ts --provider openai --model uncertified-model --phase read-only/);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
 });
 
-function makeTempRepo(): string {
+function makeTempRepo(config: Record<string, unknown> = {}): string {
   const repoDir = mkdtempSync(join(tmpdir(), 'native-review-test-'));
-  writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({}), 'utf-8');
+  writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify(config), 'utf-8');
   return repoDir;
 }
 
