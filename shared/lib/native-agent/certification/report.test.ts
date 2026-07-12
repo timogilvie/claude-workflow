@@ -265,60 +265,47 @@ describe('buildModelCertificationReport', () => {
     assert.ok(!rows.find(r => r.model === 'non-native-model'), 'non-native-model should be excluded');
   });
 
-  it('falls back to registry metadata when artifact is missing', () => {
+  it('fails closed when the artifact is missing even if registry metadata is fresh', () => {
     const registry = makeRegistry();
     const rows = buildModelCertificationReport({
       registry,
       now: NOW,
-      // Return missing for all models
       loadCertificationFn: () => ({ ok: false as const, reason: 'missing' as const }),
     });
 
     const row = rows.find(r => r.model === 'gpt-4o');
     assert.ok(row, 'gpt-4o row missing');
-    // Registry metadata is fresh (certifiedAt = FRESH_DATE), so should be ready
-    assert.equal(row.state, 'ready');
-    assert.deepEqual(row.eligibleStages, ['reviewer']);
+    assert.equal(row.state, 'uncertified');
+    assert.deepEqual(row.eligibleStages, []);
     assert.equal(row.scenarios.length, 0);
   });
 
-  it('returns stale from registry metadata when TTL exceeded', () => {
-    const staleRegistry = makeRegistry({
-      'gpt-4o': {
-        vendor: 'openai',
-        class: 'strong_generalist',
-        strengths: [],
-        weaknesses: [],
-        qualityScores: { routing: 70, planning: 75, coding: 80, review: 75, classify: 70 },
-        contextWindowTokens: 128_000,
-        toolSupport: { functionCalling: true, streamingTools: true },
-        multimodal: { text: true, image: false },
-        latencyTier: 'standard',
-        reasoningTier: 'standard',
-        costPerMillionInputTokensUsd: 3,
-        costPerMillionOutputTokensUsd: 15,
-        nativeCapability: {
-          nativeProvider: 'openai',
-          piTransportKind: 'openai-responses',
-          readOnlyNative: 'certified',
-          certification: {
-            maxCertifiedPhase: 'read-only',
-            certifiedAt: STALE_DATE,
-            certificationSuiteVersion: 'v1',
-          },
-        },
-      },
-    });
-
+  it('fails closed when the artifact suite version does not match the registry metadata', () => {
+    const registry = makeRegistry();
     const rows = buildModelCertificationReport({
-      registry: staleRegistry,
+      registry,
       now: NOW,
-      loadCertificationFn: () => ({ ok: false as const, reason: 'missing' as const }),
+      loadCertificationFn: () => ({ ok: true as const, artifact: makeArtifact({ suiteVersion: 'v0' }) }),
     });
 
     const row = rows.find(r => r.model === 'gpt-4o');
     assert.ok(row, 'gpt-4o row missing');
-    assert.equal(row.state, 'stale');
+    assert.equal(row.state, 'uncertified');
+    assert.deepEqual(row.eligibleStages, []);
+  });
+
+  it('fails closed when the artifact identity does not match the requested provider/model', () => {
+    const registry = makeRegistry();
+    const rows = buildModelCertificationReport({
+      registry,
+      now: NOW,
+      loadCertificationFn: () => ({ ok: true as const, artifact: makeArtifact({ provider: 'openrouter', model: 'other-model' }) }),
+    });
+
+    const row = rows.find(r => r.model === 'gpt-4o');
+    assert.ok(row, 'gpt-4o row missing');
+    assert.equal(row.state, 'uncertified');
+    assert.deepEqual(row.eligibleStages, []);
   });
 
   it('filters by provider', () => {

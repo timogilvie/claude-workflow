@@ -70,6 +70,13 @@ function stubRunTsxCommand(): (args: string[]) => string {
   };
 }
 
+function writeNativeConfig(
+  repoDir: string,
+  config: Record<string, unknown>,
+): void {
+  writeFileSync(join(repoDir, '.wavemill-config.json'), `${JSON.stringify(config, null, 2)}\n`);
+}
+
 function makeMutationTool(executed: { value: boolean }): ToolDescriptor {
   return {
     metadata: {
@@ -326,6 +333,41 @@ describe('launchNativePlanning', () => {
           loopModelOverride: scriptedModel(api),
         }),
         /planning phase/,
+      );
+    } finally {
+      cleanup(wtDir);
+    }
+  });
+
+  it('surfaces actionable provider-resolution failures when no planning provider is ready', async () => {
+    const { wtDir } = setupWorktree();
+    writeNativeConfig(wtDir, {
+      nativeAgent: {
+        enabled: true,
+        allowedPhases: ['planning'],
+        providers: {
+          openai: {
+            models: ['uncertified-model'],
+          },
+        },
+      },
+    });
+
+    try {
+      await assert.rejects(
+        () => launchNativePlanning({
+          session: 'sess',
+          issue: 'HOK-2313',
+          slug: 'demo',
+          wtDir,
+          repoDir: wtDir,
+          runTsxCommand: stubRunTsxCommand(),
+        }),
+        (error: unknown) => error instanceof Error
+          && /openai:uncertified-model/.test(error.message)
+          && /reason=unregistered_model/.test(error.message)
+          && /wavemill native-agent models report --json/.test(error.message)
+          && /native-agent-certify\.ts --provider openai --model uncertified-model --phase read-only/.test(error.message),
       );
     } finally {
       cleanup(wtDir);

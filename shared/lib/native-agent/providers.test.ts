@@ -614,6 +614,15 @@ describe('native provider certification artifacts', () => {
         certifiedAt: new Date(FIXED_NOW.getTime() - 61 * 24 * 60 * 60 * 1000).toISOString(),
       });
 
+      const [taskEntry] = resolveNativeAgentProviders(
+        makeProviderConfig('openai', 'gpt-4o'),
+        {
+          repoDir,
+          env: { OPENAI_API_KEY: 'sk-openai-test' },
+          registry: makeCertifiedRegistry('gpt-4o', 'openai'),
+          now: FIXED_NOW,
+        },
+      );
       const [entry] = resolveNativeAgentProviders(
         makeProviderConfig('openai', 'gpt-4o'),
         {
@@ -625,6 +634,8 @@ describe('native provider certification artifacts', () => {
         },
       );
 
+      assert.equal(taskEntry.status, 'uncertified');
+      assert.equal(taskEntry.rejectionReason, 'stale_artifact');
       assert(entry);
       assert.equal(entry.status, 'ready');
       assert.equal(entry.certificationOnly, false);
@@ -651,6 +662,54 @@ describe('native provider certification artifacts', () => {
       );
 
       assert(entry);
+      assert.equal(entry.status, 'uncertified');
+      assert.equal(entry.rejectionReason, 'missing_artifact');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('rejects wrong-provider artifacts by identity even when the file path matches', () => {
+    const { repoDir, cleanup } = makeRepo();
+    try {
+      writeArtifact(repoDir, 'openai', 'gpt-4o', 'v1', {
+        provider: 'openrouter',
+      });
+
+      const [entry] = resolveNativeAgentProviders(
+        makeProviderConfig('openai', 'gpt-4o'),
+        {
+          repoDir,
+          env: { OPENAI_API_KEY: 'sk-openai-test' },
+          registry: makeCertifiedRegistry('gpt-4o', 'openai'),
+          now: FIXED_NOW,
+        },
+      );
+
+      assert.equal(entry.status, 'uncertified');
+      assert.equal(entry.rejectionReason, 'missing_artifact');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('rejects wrong-model artifacts by identity even when the file path matches', () => {
+    const { repoDir, cleanup } = makeRepo();
+    try {
+      writeArtifact(repoDir, 'openai', 'gpt-4o', 'v1', {
+        model: 'gpt-4.1',
+      });
+
+      const [entry] = resolveNativeAgentProviders(
+        makeProviderConfig('openai', 'gpt-4o'),
+        {
+          repoDir,
+          env: { OPENAI_API_KEY: 'sk-openai-test' },
+          registry: makeCertifiedRegistry('gpt-4o', 'openai'),
+          now: FIXED_NOW,
+        },
+      );
+
       assert.equal(entry.status, 'uncertified');
       assert.equal(entry.rejectionReason, 'missing_artifact');
     } finally {

@@ -8,6 +8,7 @@ import type { AgentContext, HeartbeatEvent, WavemillLoopConfig } from './native-
 import { runWavemillLoop } from './native-agent/loop.ts';
 import { TranscriptWriter, parseTranscriptJsonl } from './native-agent/transcript.ts';
 import {
+  buildNativeProviderResolutionFailureMessage,
   getNativeProviderApiKey,
   resolveNativeAgentProviders,
   type ReadyNativeProviderEntry,
@@ -153,7 +154,7 @@ function resolveReadyProvider(options: NativeExpansionOptions): ReadyNativeProvi
   if (entries.length === 0) {
     throw new NativeExpansionUnavailableError(
       'no_providers',
-      'Native task expansion is enabled but no native providers are configured.'
+      buildNativeProviderResolutionFailureMessage('task expansion', [])
     );
   }
 
@@ -166,7 +167,7 @@ function resolveReadyProvider(options: NativeExpansionOptions): ReadyNativeProvi
   if (unavailable) {
     throw new NativeExpansionUnavailableError(
       'missing_key',
-      `Native task expansion is unavailable: ${unavailable.reason}.`
+      buildNativeProviderResolutionFailureMessage('task expansion', entries)
     );
   }
 
@@ -174,13 +175,13 @@ function resolveReadyProvider(options: NativeExpansionOptions): ReadyNativeProvi
   if (uncertified) {
     throw new NativeExpansionUnavailableError(
       'uncertified',
-      `Native task expansion is unavailable: ${uncertified.modelId} is not certified for task-expansion (${uncertified.reason}).`
+      buildNativeProviderResolutionFailureMessage('task expansion', entries)
     );
   }
 
   throw new NativeExpansionUnavailableError(
     'no_providers',
-    'Native task expansion is unavailable: no ready native providers were resolved.'
+    buildNativeProviderResolutionFailureMessage('task expansion', entries)
   );
 }
 
