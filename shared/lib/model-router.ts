@@ -16,19 +16,16 @@ import type { EvalRecord } from './eval-schema.ts';
 import { isEvalSuccess } from './eval-success-policy.ts';
 import { readJsonlFile } from './jsonl-utils.ts';
 import { recommendModelLLM } from './llm-router.ts';
-import { getNativeAgentConfig, loadWavemillConfig, type NativeAgentAllowedPhase } from './config.ts';
+import { loadWavemillConfig } from './config.ts';
 import { aggregateEvals } from './eval-aggregator.ts';
 import { resolveFromMainRepo } from './git-utils.ts';
 import { errorMessage } from './error-utils.ts';
 import { resolveGlobalAggregatedEvalsPath } from './evals-paths.ts';
+import { resolveModelAgent, type AgentResolution, type AgentResolutionPhase } from './model-agent-resolution.ts';
 import {
-  evaluateNativeReadOnlyRouting,
   configuredDeepSeekModelIds,
   DEFAULT_MODEL_REGISTRY,
   getEffectiveRegistry,
-  getModel,
-  isNativeAgentType,
-  nativeAgentTypeForProvider,
   isDeepSeekLikeModelId,
   ModelValidationError,
   type AgentType,
@@ -286,8 +283,6 @@ export interface RouterOptions {
   stageBlendWeight?: number;
 }
 
-export type AgentResolutionPhase = NativeAgentAllowedPhase | 'coding';
-
 const DEFAULT_ROUTER_OPTIONS = {
   evalsDir: '',
   minRecords: 20,
@@ -306,43 +301,62 @@ const DEFAULT_ROUTER_OPTIONS = {
   stageBlendWeight: 0.3,
 } satisfies Required<RouterOptions>;
 
-const READ_ONLY_NATIVE_PHASES: readonly NativeAgentAllowedPhase[] = [
-  'task-expansion',
-  'planning',
-  'review',
-] as const;
+function registryWithAgentOverride(
+  modelId: string,
+  agentMap: Record<string, AgentType>,
+  repoDir?: string,
+) {
+  const registry = repoDir ? getEffectiveRegistry(repoDir) : DEFAULT_MODEL_REGISTRY;
+  const mappedAgent = agentMap[modelId];
+  if (!mappedAgent || !registry.models[modelId]) {
+    return registry;
+  }
 
-function isReadOnlyNativePhase(phase: AgentResolutionPhase | undefined): phase is NativeAgentAllowedPhase {
-  return phase !== undefined && READ_ONLY_NATIVE_PHASES.includes(phase as NativeAgentAllowedPhase);
+  return {
+    ...registry,
+    models: {
+      ...registry.models,
+      [modelId]: {
+        ...registry.models[modelId]!,
+        agent: mappedAgent,
+      },
+    },
+  };
 }
 
-function canResolveNativeAgent(
-  candidate: AgentType,
+function modelResolutionError(
   modelId: string,
-  repoDir: string | undefined,
-  phase: AgentResolutionPhase | undefined,
-): boolean {
-  if (!isNativeAgentType(candidate) || !repoDir || !isReadOnlyNativePhase(phase)) {
-    return false;
+  diagnostic: string,
+  registry = DEFAULT_MODEL_REGISTRY,
+): ModelValidationError {
+  if (isDeepSeekLikeModelId(modelId)) {
+    const configured = configuredDeepSeekModelIds(registry);
+    const configuredList = configured.length > 0
+      ? `\n\nConfigured DeepSeek models:\n${configured.map((candidate) => `  • ${candidate}`).join('\n')}`
+      : '';
+    return new ModelValidationError(
+      modelId,
+      `Error: Unknown DeepSeek model "${modelId}"${configuredList}`,
+    );
   }
 
-  const config = getNativeAgentConfig(repoDir);
-  if (config.enabled !== true || !config.allowedPhases?.includes(phase)) {
-    return false;
-  }
+  return new ModelValidationError(modelId, diagnostic);
+}
 
-  const registry = getEffectiveRegistry(repoDir);
-  const capabilities = getModel(registry, modelId);
-  const provider = capabilities?.nativeCapability?.nativeProvider;
-  if (!provider || nativeAgentTypeForProvider(provider) !== candidate) {
-    return false;
-  }
-
-  return evaluateNativeReadOnlyRouting({
-    modelId,
+export function tryResolveAgent(
+  modelId: string,
+  agentMap: Record<string, AgentType>,
+  _defaultAgent: AgentType,
+  repoDir?: string,
+  phase: AgentResolutionPhase = 'coding',
+): AgentResolution {
+  const registry = registryWithAgentOverride(modelId, agentMap, repoDir);
+  return resolveModelAgent({
+    model: modelId,
     phase,
+    repoDir,
     registry,
-  }).routable;
+  });
 }
 
 /**
@@ -358,34 +372,13 @@ export function resolveAgent(
   agentMap: Record<string, AgentType>,
   defaultAgent: AgentType,
   repoDir?: string,
-  phase?: AgentResolutionPhase,
+  phase: AgentResolutionPhase = 'coding',
 ): AgentType {
-  const mappedAgent = agentMap[modelId];
-  if (mappedAgent && mappedAgent !== 'claude-openrouter') {
-    if (!isNativeAgentType(mappedAgent) || canResolveNativeAgent(mappedAgent, modelId, repoDir, phase)) {
-      return mappedAgent;
-    }
+  const result = tryResolveAgent(modelId, agentMap, defaultAgent, repoDir, phase);
+  if (result.ok) {
+    return result.agent;
   }
-  const registry = repoDir ? getEffectiveRegistry(repoDir) : DEFAULT_MODEL_REGISTRY;
-  const capabilities = getModel(registry, modelId);
-  if (capabilities?.agent && capabilities.agent !== 'claude-openrouter') {
-    if (!isNativeAgentType(capabilities.agent) || canResolveNativeAgent(capabilities.agent, modelId, repoDir, phase)) {
-      return capabilities.agent;
-    }
-  }
-  if (modelId.startsWith('claude-')) return 'claude';
-  if (modelId.startsWith('gpt-') || /^o\d/.test(modelId)) return 'codex';
-  if (isDeepSeekLikeModelId(modelId)) {
-    const configured = configuredDeepSeekModelIds(registry);
-    const configuredList = configured.length > 0
-      ? `\n\nConfigured DeepSeek models:\n${configured.map((candidate) => `  • ${candidate}`).join('\n')}`
-      : '';
-    throw new ModelValidationError(
-      modelId,
-      `Error: Unknown DeepSeek model "${modelId}"${configuredList}`,
-    );
-  }
-  return defaultAgent;
+  throw modelResolutionError(modelId, result.diagnostic, registryWithAgentOverride(modelId, agentMap, repoDir));
 }
 
 /**
@@ -563,7 +556,7 @@ function recommendModelHeuristic(
   if (records.length < opts.minRecords || distinctModels.size < opts.minModels) {
     return {
       recommendedModel: opts.defaultModel,
-      recommendedAgent: resolveAgent(opts.defaultModel, opts.agentMap, opts.defaultAgent),
+      recommendedAgent: resolveAgent(opts.defaultModel, opts.agentMap, opts.defaultAgent, opts.repoDir, 'coding'),
       confidence: 'low',
       reasoning:
         `Insufficient eval data for routing (${records.length} records, ` +
@@ -588,7 +581,7 @@ function recommendModelHeuristic(
   if (modelStats.length === 0) {
     return {
       recommendedModel: opts.defaultModel,
-      recommendedAgent: resolveAgent(opts.defaultModel, opts.agentMap, opts.defaultAgent),
+      recommendedAgent: resolveAgent(opts.defaultModel, opts.agentMap, opts.defaultAgent, opts.repoDir, 'coding'),
       confidence: 'low',
       reasoning: 'No eval data found for configured candidate models. Using default model.',
       taskType,
@@ -638,7 +631,7 @@ function recommendModelHeuristic(
 
   return {
     recommendedModel: best.modelId,
-    recommendedAgent: resolveAgent(best.modelId, opts.agentMap, opts.defaultAgent),
+    recommendedAgent: resolveAgent(best.modelId, opts.agentMap, opts.defaultAgent, opts.repoDir, 'coding'),
     confidence,
     reasoning,
     taskType,

@@ -1,10 +1,15 @@
 import type { ChallengeRecommendation, ChallengeStage } from './challenge-scheduler.ts';
 export type { ChallengeStage } from './challenge-scheduler.ts';
+import {
+  selectLeastUsedChallenger,
+  type ChallengeSelectionReason,
+} from './challenge-coverage-selector.ts';
 import { loadWavemillConfig, type ChallengeConfig, type RouterConfig } from './config.ts';
 import { isDeepSeekModel } from './deepseek-provider.ts';
 import { filterDisabledModels, isDisabledModel } from './disabled-models.ts';
 import { getEffectiveRegistry, getModel } from './model-registry.ts';
-import { resolveAgent } from './model-router.ts';
+import { resolveAgent, tryResolveAgent, type AgentResolutionPhase } from './model-router.ts';
+import { filterOpenRouterModels } from './openrouter-provider.ts';
 import { listVariedRoutingDimensions, routingMetaFromChallengeEntry } from './challenge-comparison.ts';
 export { routeChangedMaterially } from './route-artifact.ts';
 import { routeChangedMaterially, type RouteArtifactSnapshot } from './route-artifact.ts';
@@ -46,6 +51,8 @@ export interface ChallengePairSelection {
   primary: ChallengeTaskEntry;
   challenger: ChallengeTaskEntry;
   routeContext?: ChallengeRouteContext;
+  selectionReason?: ChallengeSelectionReason;
+  challengerCoverageCount?: number;
   /**
    * Which workflow stage the pair varies. Exactly one stage's model differs
    * between primary and challenger; the other two are shared so comparison
@@ -59,6 +66,12 @@ export interface ChallengeStageWeights {
   plan?: number;
   implementation?: number;
   review?: number;
+}
+
+export interface ChallengeCoverageOptions {
+  coverage?: (model: string, stage: ChallengeStage) => number;
+  rotationSeed?: string;
+  recommendedChallengerModel?: string;
 }
 
 const CHALLENGE_STAGES: readonly ChallengeStage[] = ['plan', 'implementation', 'review'];
@@ -155,6 +168,22 @@ function filterNativeChallengeCandidates(
   return { models: eligible, rejections: rejected };
 }
 
+function filterEligibleChallengeCandidates(
+  pool: string[],
+  stage: ChallengeStage,
+  repoDir?: string,
+  now?: Date,
+): { models: string[]; rejections: ChallengeNativeRejection[] } {
+  const { models: nativeEligible, rejections } = filterNativeChallengeCandidates(pool, stage, repoDir, now);
+  const openRouterEligible = repoDir
+    ? filterOpenRouterModels(nativeEligible, repoDir, STAGE_TO_ROLE[stage]).models
+    : nativeEligible;
+  return {
+    models: filterDisabledModels(uniqueNonEmpty(openRouterEligible)),
+    rejections,
+  };
+}
+
 function mergeRejections<T extends ChallengePairSelection>(
   result: ChallengePairSelectionResult<T>,
   additionalRejections: ChallengeNativeRejection[],
@@ -184,7 +213,7 @@ function selectCertifiedImplementationPrimary(
   },
 ): { model?: string; rejections: ChallengeNativeRejection[]; failureReason?: ChallengeSelectionFailureReason } {
   const { models: certifiedPool, rejections } =
-    filterNativeChallengeCandidates(pool, 'implementation', opts.repoDir, opts.now);
+    filterEligibleChallengeCandidates(pool, 'implementation', opts.repoDir, opts.now);
   const uniquePool = filterDisabledModels(uniqueNonEmpty(certifiedPool));
   const allRejections: ChallengeNativeRejection[] = [...rejections];
 
@@ -194,10 +223,12 @@ function selectCertifiedImplementationPrimary(
   }
 
   if (selected && opts.repoDir) {
-    const { rejections: primaryRejections } =
-      filterNativeChallengeCandidates([selected], 'implementation', opts.repoDir, opts.now);
+    const { models, rejections: primaryRejections } =
+      filterEligibleChallengeCandidates([selected], 'implementation', opts.repoDir, opts.now);
     if (primaryRejections.length > 0) {
       allRejections.push(...primaryRejections);
+    }
+    if (models.length === 0) {
       selected = '';
     }
   }
@@ -281,18 +312,63 @@ export function chooseDistinctChallengerModel(
   return candidates[index] || null;
 }
 
+interface ChallengerSelectionResult {
+  model: string | null;
+  selectionReason?: ChallengeSelectionReason;
+  coverageCount?: number;
+}
+
+interface ChallengerSelectionOptions extends ChallengeCoverageOptions {
+  stage?: ChallengeStage;
+}
+
+function withSelectionMetadata(
+  pair: ChallengePairSelection,
+  selection: ChallengerSelectionResult,
+): ChallengePairSelection {
+  if (!selection.selectionReason && typeof selection.coverageCount !== 'number') {
+    return pair;
+  }
+  return {
+    ...pair,
+    ...(selection.selectionReason ? { selectionReason: selection.selectionReason } : {}),
+    ...(typeof selection.coverageCount === 'number'
+      ? { challengerCoverageCount: selection.coverageCount }
+      : {}),
+  };
+}
+
 function resolveChallengerModel(
   pool: string[],
   primaryModel: string,
   forced: string | undefined,
   randomFn: () => number,
-): string | null {
+  selectionOpts?: ChallengerSelectionOptions,
+): ChallengerSelectionResult {
   const enabledPool = filterDisabledModels(uniqueNonEmpty(pool));
   const trimmed = forced?.trim();
-  if (trimmed && trimmed !== primaryModel && !isDisabledModel(trimmed) && enabledPool.includes(trimmed)) {
-    return trimmed;
+  if (selectionOpts?.coverage && selectionOpts.stage) {
+    const selection = selectLeastUsedChallenger({
+      stage: selectionOpts.stage,
+      primaryModel,
+      candidates: enabledPool,
+      coverage: selectionOpts.coverage,
+      recommendedChallenger: selectionOpts.recommendedChallengerModel?.trim() || trimmed || undefined,
+      rotationSeed: selectionOpts.rotationSeed || `${selectionOpts.stage}|${primaryModel}`,
+    });
+    if (!selection.model || selection.selectionReason === 'no-eligible-candidate') {
+      return { model: null };
+    }
+    return {
+      model: selection.model,
+      selectionReason: selection.selectionReason,
+      coverageCount: selection.coverageCount,
+    };
   }
-  return chooseDistinctChallengerModel(enabledPool, primaryModel, randomFn);
+  if (trimmed && trimmed !== primaryModel && !isDisabledModel(trimmed) && enabledPool.includes(trimmed)) {
+    return { model: trimmed };
+  }
+  return { model: chooseDistinctChallengerModel(enabledPool, primaryModel, randomFn) };
 }
 
 function chooseDistinctStageModel(
@@ -300,20 +376,24 @@ function chooseDistinctStageModel(
   primaryModel: string,
   forced: string | undefined,
   randomFn: () => number,
-): string | null {
+  selectionOpts?: ChallengerSelectionOptions,
+): ChallengerSelectionResult {
   const uniquePool = filterDisabledModels(uniqueNonEmpty(pool));
+  if (selectionOpts?.coverage && selectionOpts.stage) {
+    return resolveChallengerModel(uniquePool, primaryModel, forced, randomFn, selectionOpts);
+  }
   const trimmedForced = forced?.trim();
   if (trimmedForced && trimmedForced !== primaryModel && !isDisabledModel(trimmedForced) && uniquePool.includes(trimmedForced)) {
-    return trimmedForced;
+    return { model: trimmedForced };
   }
 
   const candidates = uniquePool.filter((model) => model !== primaryModel);
   if (candidates.length === 0) {
-    return null;
+    return { model: null };
   }
 
   if (trimmedForced && trimmedForced === primaryModel) {
-    return candidates[0] || null;
+    return { model: candidates[0] || null };
   }
 
   return resolveChallengerModel(uniquePool, primaryModel, undefined, randomFn);
@@ -431,10 +511,10 @@ export function pickChallengeModelsWithReason(
     randomFn?: () => number;
     repoDir?: string;
     now?: Date;
-  },
+  } & ChallengeCoverageOptions,
 ): ChallengePairSelectionResult {
   const { models: certifiedPool, rejections: poolRejections } =
-    filterNativeChallengeCandidates(pool, 'implementation', opts.repoDir, opts.now);
+    filterEligibleChallengeCandidates(pool, 'implementation', opts.repoDir, opts.now);
   const uniquePool = filterDisabledModels(uniqueNonEmpty(certifiedPool));
   const allRejections: ChallengeNativeRejection[] = [...poolRejections];
   const randomFn = opts.randomFn || Math.random;
@@ -448,9 +528,11 @@ export function pickChallengeModelsWithReason(
 
   // Reject an externally-supplied primary that is an uncertified native
   if (primaryModel && opts.repoDir) {
-    const { rejections } = filterNativeChallengeCandidates([primaryModel], 'implementation', opts.repoDir, opts.now);
+    const { models, rejections } = filterEligibleChallengeCandidates([primaryModel], 'implementation', opts.repoDir, opts.now);
     if (rejections.length > 0) {
       allRejections.push(...rejections);
+    }
+    if (models.length === 0) {
       primaryModel = '';
     }
   }
@@ -470,23 +552,30 @@ export function pickChallengeModelsWithReason(
   // Reject a forced challenger that is an uncertified native
   let forcedChallengerModel = opts.forcedChallengerModel;
   if (forcedChallengerModel && opts.repoDir) {
-    const { rejections } = filterNativeChallengeCandidates([forcedChallengerModel], 'implementation', opts.repoDir, opts.now);
+    const { models, rejections } = filterEligibleChallengeCandidates([forcedChallengerModel], 'implementation', opts.repoDir, opts.now);
     if (rejections.length > 0) {
       allRejections.push(...rejections);
+    }
+    if (models.length === 0) {
       forcedChallengerModel = undefined;
     }
   }
 
-  const challengerModel = resolveChallengerModel(uniquePool, primaryModel, forcedChallengerModel, randomFn);
-  if (!challengerModel) {
+  const challengerSelection = resolveChallengerModel(uniquePool, primaryModel, forcedChallengerModel, randomFn, {
+    stage: 'implementation',
+    coverage: opts.coverage,
+    rotationSeed: opts.rotationSeed,
+    recommendedChallengerModel: opts.recommendedChallengerModel,
+  });
+  if (!challengerSelection.model) {
     return mergeRejections({ pair: null, failureReason: 'selection_failed' }, allRejections);
   }
 
   const result = finalizeChallengePairWithReason(
-    {
-      ...buildChallengeEntries(opts, agentMap, defaultAgent, primaryModel, challengerModel),
+    withSelectionMetadata({
+      ...buildChallengeEntries(opts, agentMap, defaultAgent, primaryModel, challengerSelection.model, opts.repoDir),
       challengeStage: 'implementation',
-    },
+    }, challengerSelection),
     uniquePool,
     forcedChallengerModel,
     agentMap,
@@ -494,6 +583,11 @@ export function pickChallengeModelsWithReason(
     randomFn,
     opts.repoDir,
     opts.now,
+    {
+      coverage: opts.coverage,
+      rotationSeed: opts.rotationSeed,
+      recommendedChallengerModel: opts.recommendedChallengerModel,
+    },
   );
   return mergeRejections(result, allRejections);
 }
@@ -509,6 +603,7 @@ function buildChallengeEntries(
   defaultAgent: string,
   primaryModel: string,
   challengerModel: string,
+  repoDir?: string,
 ): ChallengePairSelection {
   const primarySlug = deriveChallengeSlug(opts.slug, 'primary');
   const challengerSlug = deriveChallengeSlug(opts.slug, 'challenger');
@@ -522,7 +617,7 @@ function buildChallengeEntries(
       branch: deriveChallengeBranch(opts.slug, 'primary'),
       role: 'primary',
       model: primaryModel,
-      agent: resolveAgent(primaryModel, agentMap, defaultAgent),
+      agent: resolveAgent(primaryModel, agentMap, defaultAgent, repoDir, 'coding'),
       planner: '',
       plannerAgent: '',
       reviewer: '',
@@ -538,7 +633,7 @@ function buildChallengeEntries(
       branch: deriveChallengeBranch(opts.slug, 'challenger'),
       role: 'challenger',
       model: challengerModel,
-      agent: resolveAgent(challengerModel, agentMap, defaultAgent),
+      agent: resolveAgent(challengerModel, agentMap, defaultAgent, repoDir, 'coding'),
       planner: '',
       plannerAgent: '',
       reviewer: '',
@@ -569,7 +664,7 @@ function applyStageVariation(
       challenger: {
         ...pair.challenger,
         planner: challengerVaried,
-        plannerAgent: resolveOptionalAgent(challengerVaried, agentMap, defaultAgent, repoDir),
+        plannerAgent: resolveOptionalAgent(challengerVaried, agentMap, defaultAgent, repoDir, 'planning'),
       },
     };
   }
@@ -580,7 +675,7 @@ function applyStageVariation(
       challenger: {
         ...pair.challenger,
         reviewer: challengerVaried,
-        reviewerAgent: resolveOptionalAgent(challengerVaried, agentMap, defaultAgent, repoDir),
+        reviewerAgent: resolveOptionalAgent(challengerVaried, agentMap, defaultAgent, repoDir, 'review'),
       },
     };
   }
@@ -607,7 +702,7 @@ function buildStageVariedPair(
 
   if (stage === 'implementation') {
     nextChallenger.model = challengerVaried;
-    nextChallenger.agent = resolveAgent(challengerVaried, agentMap, defaultAgent, repoDir);
+    nextChallenger.agent = resolveAgent(challengerVaried, agentMap, defaultAgent, repoDir, 'coding');
     return {
       ...pair,
       challengeStage: stage,
@@ -653,6 +748,7 @@ function finalizeChallengePair(
   randomFn: () => number,
   repoDir?: string,
   now?: Date,
+  selectionOpts?: ChallengerSelectionOptions,
 ): ChallengePairSelection | null {
   return finalizeChallengePairWithReason(
     pair,
@@ -663,6 +759,7 @@ function finalizeChallengePair(
     randomFn,
     repoDir,
     now,
+    selectionOpts,
   ).pair;
 }
 
@@ -675,6 +772,7 @@ function finalizeChallengePairWithReason(
   randomFn: () => number,
   repoDir?: string,
   now?: Date,
+  selectionOpts?: ChallengerSelectionOptions,
 ): ChallengePairSelectionResult {
   if (
     listVariedRoutingDimensions(
@@ -696,22 +794,25 @@ function finalizeChallengePairWithReason(
     // Re-filter the pool for the specific phase required by this candidate stage so that
     // a native model cert'd for patch cannot be selected for a plan (workflow-phase) slot.
     const { models: stagePool, rejections: stageRejections } =
-      filterNativeChallengeCandidates(pool, stage, repoDir, now);
+      filterEligibleChallengeCandidates(pool, stage, repoDir, now);
     allRejections.push(...stageRejections);
 
-    const challengerVaried = chooseDistinctStageModel(stagePool, primaryVaried, forcedChallengerModel, randomFn);
-    if (!challengerVaried) {
+    const challengerSelection = chooseDistinctStageModel(stagePool, primaryVaried, forcedChallengerModel, randomFn, {
+      ...selectionOpts,
+      stage,
+    });
+    if (!challengerSelection.model) {
       continue;
     }
 
-    const repaired = buildStageVariedPair(
+    const repaired = withSelectionMetadata(buildStageVariedPair(
       pair,
       stage,
-      challengerVaried,
+      challengerSelection.model,
       agentMap,
       defaultAgent,
       repoDir,
-    );
+    ), challengerSelection);
     if (
       listVariedRoutingDimensions(
         routingMetaFromChallengeEntry(repaired.primary),
@@ -740,7 +841,7 @@ export function pickChallengeWorkflows(
     randomFn?: () => number;
     repoDir?: string;
     routeFn?: (prompt: string, options?: { repoDir?: string }) => WorkflowRouteDecision;
-  },
+  } & ChallengeCoverageOptions,
 ): ChallengePairSelection | null {
   return pickChallengeWorkflowsWithReason(pool, opts).pair;
 }
@@ -761,7 +862,7 @@ export function pickChallengeWorkflowsWithReason(
     repoDir?: string;
     now?: Date;
     routeFn?: (prompt: string, options?: { repoDir?: string }) => WorkflowRouteDecision;
-  },
+  } & ChallengeCoverageOptions,
 ): ChallengePairSelectionResult {
   const uniquePool = uniqueNonEmpty(pool);
   const randomFn = opts.randomFn || Math.random;
@@ -802,23 +903,31 @@ export function pickChallengeWorkflowsWithReason(
 
   // Filter the candidate pool for the cert phase required by this stage
   const { models: certifiedPool, rejections: nativeRejections } =
-    filterNativeChallengeCandidates(uniquePool, stage, opts.repoDir, opts.now);
+    filterEligibleChallengeCandidates(uniquePool, stage, opts.repoDir, opts.now);
   allRejections.push(...nativeRejections);
 
   // Reject a forced challenger that is an uncertified native for this stage
   let forcedChallengerModel = opts.forcedChallengerModel;
   if (forcedChallengerModel && opts.repoDir) {
-    const { rejections } = filterNativeChallengeCandidates([forcedChallengerModel], stage, opts.repoDir, opts.now);
+    const { models, rejections } = filterEligibleChallengeCandidates([forcedChallengerModel], stage, opts.repoDir, opts.now);
     if (rejections.length > 0) {
       allRejections.push(...rejections);
+    }
+    if (models.length === 0) {
       forcedChallengerModel = undefined;
     }
   }
 
-  const challengerVaried = resolveChallengerModel(certifiedPool, primaryVaried, forcedChallengerModel, randomFn);
-  if (!challengerVaried) {
+  const challengerSelection = resolveChallengerModel(certifiedPool, primaryVaried, forcedChallengerModel, randomFn, {
+    stage,
+    coverage: opts.coverage,
+    rotationSeed: opts.rotationSeed,
+    recommendedChallengerModel: opts.recommendedChallengerModel,
+  });
+  if (!challengerSelection.model) {
     return mergeRejections({ pair: null, failureReason: 'selection_failed' }, allRejections);
   }
+  const challengerVaried = challengerSelection.model;
 
   // Exactly one stage differs between primary and challenger; the other two
   // stages (and all depths) are shared so outcomes attribute to one variable.
@@ -829,7 +938,7 @@ export function pickChallengeWorkflowsWithReason(
   const challengerSlug = deriveChallengeSlug(opts.slug, 'challenger');
 
   const result = finalizeChallengePairWithReason(
-    {
+    withSelectionMetadata({
       pairId: opts.pairId,
       challengeStage: stage,
       primary: {
@@ -839,11 +948,11 @@ export function pickChallengeWorkflowsWithReason(
         branch: deriveChallengeBranch(opts.slug, 'primary'),
         role: 'primary',
         model: primaryModel,
-        agent: resolveAgent(primaryModel, agentMap, defaultAgent),
+        agent: resolveAgent(primaryModel, agentMap, defaultAgent, opts.repoDir, 'coding'),
         planner: routing.planner,
-        plannerAgent: resolveAgent(routing.planner, agentMap, defaultAgent),
+        plannerAgent: resolveOptionalAgent(routing.planner, agentMap, defaultAgent, opts.repoDir, 'planning'),
         reviewer: routing.reviewer,
-        reviewerAgent: resolveAgent(routing.reviewer, agentMap, defaultAgent),
+        reviewerAgent: resolveOptionalAgent(routing.reviewer, agentMap, defaultAgent, opts.repoDir, 'review'),
         planDepth: routing.planDepth,
         codeDepth: routing.codeDepth,
         reviewMode: routing.reviewRecommended,
@@ -855,16 +964,16 @@ export function pickChallengeWorkflowsWithReason(
         branch: deriveChallengeBranch(opts.slug, 'challenger'),
         role: 'challenger',
         model: challengerCoder,
-        agent: resolveAgent(challengerCoder, agentMap, defaultAgent),
+        agent: resolveAgent(challengerCoder, agentMap, defaultAgent, opts.repoDir, 'coding'),
         planner: challengerPlanner,
-        plannerAgent: resolveAgent(challengerPlanner, agentMap, defaultAgent),
+        plannerAgent: resolveOptionalAgent(challengerPlanner, agentMap, defaultAgent, opts.repoDir, 'planning'),
         reviewer: challengerReviewer,
-        reviewerAgent: resolveAgent(challengerReviewer, agentMap, defaultAgent),
+        reviewerAgent: resolveOptionalAgent(challengerReviewer, agentMap, defaultAgent, opts.repoDir, 'review'),
         planDepth: routing.planDepth,
         codeDepth: routing.codeDepth,
         reviewMode: routing.reviewRecommended,
       },
-    },
+    }, challengerSelection),
     certifiedPool,
     forcedChallengerModel,
     agentMap,
@@ -872,6 +981,11 @@ export function pickChallengeWorkflowsWithReason(
     randomFn,
     opts.repoDir,
     opts.now,
+    {
+      coverage: opts.coverage,
+      rotationSeed: opts.rotationSeed,
+      recommendedChallengerModel: opts.recommendedChallengerModel,
+    },
   );
   return mergeRejections(result, allRejections);
 }
@@ -881,11 +995,13 @@ function resolveOptionalAgent(
   agentMap: Record<string, string>,
   defaultAgent: string,
   repoDir?: string,
+  phase: AgentResolutionPhase = 'coding',
 ): string {
   if (!modelId) {
     return '';
   }
-  return resolveAgent(modelId, agentMap, defaultAgent, repoDir);
+  const resolution = tryResolveAgent(modelId, agentMap, defaultAgent, repoDir, phase);
+  return resolution.ok ? resolution.agent : '';
 }
 
 function applyRouteSnapshot(
@@ -902,9 +1018,9 @@ function applyRouteSnapshot(
   const withRoute = (entry: ChallengeTaskEntry): ChallengeTaskEntry => ({
     ...entry,
     planner,
-    plannerAgent: resolveOptionalAgent(planner, agentMap, defaultAgent, repoDir),
+    plannerAgent: resolveOptionalAgent(planner, agentMap, defaultAgent, repoDir, 'planning'),
     reviewer: route.reviewer,
-    reviewerAgent: resolveOptionalAgent(route.reviewer, agentMap, defaultAgent, repoDir),
+    reviewerAgent: resolveOptionalAgent(route.reviewer, agentMap, defaultAgent, repoDir, 'review'),
     planDepth,
     codeDepth: route.codeDepth,
     reviewMode: route.reviewMode,
@@ -931,7 +1047,7 @@ function buildPairFromRouteSnapshot(
     randomFn?: () => number;
     repoDir?: string;
     now?: Date;
-  },
+  } & ChallengeCoverageOptions,
   route: RouteArtifactSnapshot,
   fallback?: RouteArtifactSnapshot | null,
 ): ChallengePairSelection | null {
@@ -952,7 +1068,7 @@ function buildPairFromRouteSnapshotWithReason(
     randomFn?: () => number;
     repoDir?: string;
     now?: Date;
-  },
+  } & ChallengeCoverageOptions,
   route: RouteArtifactSnapshot,
   fallback?: RouteArtifactSnapshot | null,
 ): ChallengePairSelectionResult {
@@ -984,6 +1100,9 @@ function buildPairFromRouteSnapshotWithReason(
       randomFn: opts.randomFn,
       repoDir: opts.repoDir,
       now: opts.now,
+      coverage: opts.coverage,
+      rotationSeed: opts.rotationSeed,
+      recommendedChallengerModel: opts.recommendedChallengerModel,
     });
 
     if (!selection.pair) {
@@ -999,6 +1118,11 @@ function buildPairFromRouteSnapshotWithReason(
       opts.randomFn || Math.random,
       opts.repoDir,
       opts.now,
+      {
+        coverage: opts.coverage,
+        rotationSeed: opts.rotationSeed,
+        recommendedChallengerModel: opts.recommendedChallengerModel,
+      },
     );
     return mergeRejections(result, selection.nativeCertificationRejections || []);
   }
@@ -1019,33 +1143,42 @@ function buildPairFromRouteSnapshotWithReason(
 
   // Filter pool for the non-implementation stage's cert requirements
   const { models: certifiedPool, rejections: nativeRejections } =
-    filterNativeChallengeCandidates(uniqueNonEmpty(pool), stage, opts.repoDir, opts.now);
+    filterEligibleChallengeCandidates(uniqueNonEmpty(pool), stage, opts.repoDir, opts.now);
   allRejections.push(...nativeRejections);
 
   // Reject a forced challenger that is an uncertified native for this stage
   let forcedChallengerModel = opts.forcedChallengerModel;
   if (forcedChallengerModel && opts.repoDir) {
-    const { rejections } = filterNativeChallengeCandidates([forcedChallengerModel], stage, opts.repoDir, opts.now);
+    const { models, rejections } = filterEligibleChallengeCandidates([forcedChallengerModel], stage, opts.repoDir, opts.now);
     if (rejections.length > 0) {
       allRejections.push(...rejections);
+    }
+    if (models.length === 0) {
       forcedChallengerModel = undefined;
     }
   }
 
-  const challengerVaried = resolveChallengerModel(
+  const challengerSelection = resolveChallengerModel(
     certifiedPool,
     primaryVaried,
     forcedChallengerModel,
     opts.randomFn || Math.random,
+    {
+      stage,
+      coverage: opts.coverage,
+      rotationSeed: opts.rotationSeed,
+      recommendedChallengerModel: opts.recommendedChallengerModel,
+    },
   );
-  if (!challengerVaried) {
+  if (!challengerSelection.model) {
     return mergeRejections({ pair: null, failureReason: 'selection_failed' }, allRejections);
   }
+  const challengerVaried = challengerSelection.model;
 
   // Same coder on both sides; route fields applied, then the varied stage
   // overridden on the challenger.
   const pair = applyRouteSnapshot(
-    buildChallengeEntries(opts, agentMap, defaultAgent, primaryCoder, primaryCoder),
+    buildChallengeEntries(opts, agentMap, defaultAgent, primaryCoder, primaryCoder, opts.repoDir),
     route,
     agentMap,
     defaultAgent,
@@ -1053,7 +1186,10 @@ function buildPairFromRouteSnapshotWithReason(
     fallback,
   );
   const result = finalizeChallengePairWithReason(
-    applyStageVariation(pair, stage, challengerVaried, agentMap, defaultAgent, opts.repoDir),
+    withSelectionMetadata(
+      applyStageVariation(pair, stage, challengerVaried, agentMap, defaultAgent, opts.repoDir),
+      challengerSelection,
+    ),
     certifiedPool,
     forcedChallengerModel,
     agentMap,
@@ -1061,6 +1197,11 @@ function buildPairFromRouteSnapshotWithReason(
     opts.randomFn || Math.random,
     opts.repoDir,
     opts.now,
+    {
+      coverage: opts.coverage,
+      rotationSeed: opts.rotationSeed,
+      recommendedChallengerModel: opts.recommendedChallengerModel,
+    },
   );
   return mergeRejections(result, allRejections);
 }
@@ -1081,7 +1222,7 @@ export function pickChallengeWorkflowsWithContext(
     repoDir?: string;
     now?: Date;
     routeFn?: (prompt: string, options?: { repoDir?: string }) => WorkflowRouteDecision;
-  },
+  } & ChallengeCoverageOptions,
   routeArtifacts: {
     bootstrap: RouteArtifactSnapshot | null;
     expanded: RouteArtifactSnapshot | null;
@@ -1106,7 +1247,7 @@ export function pickChallengeWorkflowsWithContextAndReason(
     repoDir?: string;
     now?: Date;
     routeFn?: (prompt: string, options?: { repoDir?: string }) => WorkflowRouteDecision;
-  },
+  } & ChallengeCoverageOptions,
   routeArtifacts: {
     bootstrap: RouteArtifactSnapshot | null;
     expanded: RouteArtifactSnapshot | null;

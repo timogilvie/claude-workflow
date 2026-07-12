@@ -120,3 +120,9 @@ Challenge skipped native model <id> for <stage> stage (phase=<phase>, reason=<re
 ```
 
 This mirrors the router's `reasoning` field so dashboard tooling has consistent parity between router-level and challenge-level native rejections.
+
+## Recent Changes
+
+### 2026-07-11T00:00:00.000Z - HOK-2500: Coverage-aware challenge challenger selection at launch
+
+`tools/resolve-challenge-task.ts` now builds the eval coverage grid at launch time and threads a per-stage coverage function into `shared/lib/challenge-mode.ts`. Challenge selection no longer falls back to random distinct challengers when coverage is available: it deterministically chooses the least-used eligible model for the varied stage, treats zero-record launch-priority OpenRouter/native cells as mandatory ahead of already-used incumbents, applies native-certification and OpenRouter eligibility filters before ranking, and persists `selectionReason` plus `challengerCoverageCount` on the pair and the launch JSON for auditability.

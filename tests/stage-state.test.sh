@@ -199,9 +199,9 @@ write_phase_config() {
   local force_model_json="null"
   [[ -n "$force_model" ]] && force_model_json="\"$force_model\""
   local planner_agent coder_agent reviewer_agent
-  planner_agent="$(agent_resolve_from_model "$planner_model")"
-  coder_agent="$(agent_resolve_from_model "$coder_model")"
-  reviewer_agent="$(agent_resolve_from_model "$reviewer_model")"
+  planner_agent="$(agent_resolve_from_model "$planner_model" "planning")"
+  coder_agent="$(agent_resolve_from_model "$coder_model" "coding")"
+  reviewer_agent="$(agent_resolve_from_model "$reviewer_model" "review")"
   cat > "$tmp" <<EOF
 {
   "planning": {

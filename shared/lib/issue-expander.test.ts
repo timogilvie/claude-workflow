@@ -163,6 +163,39 @@ describe('issue-expander', () => {
     }
   });
 
+  it('expandIssue rolls back to Claude when nativeAgent is enabled but task-expansion is removed from allowedPhases', async () => {
+    const repoDir = makeRepo({
+      nativeAgent: {
+        enabled: true,
+        allowedPhases: ['planning', 'review'],
+        providers: {
+          openai: {},
+        },
+      },
+    });
+    const calls: string[] = [];
+    try {
+      const result = await expandIssue({
+        promptTemplate: 'prompt',
+        issueContext: 'issue',
+        repoDir,
+      }, {
+        expandIssueWithClaude: async () => {
+          calls.push('claude');
+          return 'claude rollback';
+        },
+        importNativeExpansion: async () => {
+          throw new Error('native module should not be imported when task-expansion is disabled');
+        },
+      });
+
+      assert.equal(result.text, 'claude rollback');
+      assert.deepEqual(calls, ['claude']);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
   it('expandIssue falls back to Claude when native prerequisites are unavailable and fallback is enabled', async () => {
     const repoDir = makeRepo({
       nativeAgent: {

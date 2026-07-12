@@ -228,6 +228,7 @@ interface ResolvedModelPool {
   models: string[];
   warnings: string[];
   nativeCertificationRejections?: RouterCertificationRejection[];
+  routingFailure?: string;
 }
 
 export interface StageTokenProfile {
@@ -542,6 +543,9 @@ function resolveStagePool(
     return {
       models: nativeFiltered.eligible,
       warnings: providerFiltered.warnings,
+      ...(providerFiltered.models.length > 0 && nativeFiltered.eligible.length === 0
+        ? { routingFailure: `No eligible ${role} models remain after native certification filtering.` }
+        : {}),
       ...(nativeFiltered.rejected.length > 0
         ? { nativeCertificationRejections: nativeFiltered.rejected }
         : {}),
@@ -1266,6 +1270,23 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
     );
   }
 
+  const routingFailures = [
+    plannerPoolResolution.routingFailure,
+    coderPoolResolution.routingFailure,
+    reviewerPoolResolution.routingFailure,
+  ].filter((value): value is string => Boolean(value));
+  reasoning.push(...routingFailures);
+
+  if (plannerPool.length === 0) {
+    finalPlanner = '';
+  }
+  if (coderPool.length === 0) {
+    finalCoder = '';
+  }
+  if (reviewerPool.length === 0) {
+    finalReviewer = '';
+  }
+
   return {
     planner: finalPlanner,
     coder: finalCoder,
@@ -1498,6 +1519,9 @@ function registerWorkflowDecisionResources(
     ['coding', decision.coder],
     ['review', decision.reviewer],
   ] as const) {
+    if (!model) {
+      continue;
+    }
     const ref = registerAgentConfig({
       phase,
       model,
@@ -1832,9 +1856,9 @@ export function summarizeWorkflowRoute(decision: WorkflowRouteDecision, repoDir?
   const defaultAgent = routerConfig.defaultAgent || 'claude';
   const agentMap = routerConfig.agentMap || {};
 
-  const plannerAgent = resolveAgent(decision.planner, agentMap, defaultAgent, repoDir, 'planning');
-  const coderAgent = resolveAgent(decision.coder, agentMap, defaultAgent, repoDir, 'coding');
-  const reviewerAgent = resolveAgent(decision.reviewer, agentMap, defaultAgent, repoDir, 'review');
+  const plannerAgent = decision.planner ? resolveAgent(decision.planner, agentMap, defaultAgent, repoDir, 'planning') : 'unresolved';
+  const coderAgent = decision.coder ? resolveAgent(decision.coder, agentMap, defaultAgent, repoDir, 'coding') : 'unresolved';
+  const reviewerAgent = decision.reviewer ? resolveAgent(decision.reviewer, agentMap, defaultAgent, repoDir, 'review') : 'unresolved';
 
   const difficultySuffix = decision.signals.taskDifficulty
     ? `  difficulty=${decision.signals.taskDifficulty}`

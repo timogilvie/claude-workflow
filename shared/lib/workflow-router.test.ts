@@ -172,6 +172,27 @@ function writeQuotaState(
   }, null, 2), 'utf-8');
 }
 
+function writeNativeCertificationArtifact(
+  repoDir: string,
+  provider: string,
+  model: string,
+  suiteVersion: string,
+  phase: 'read-only' | 'patch' | 'workflow',
+  certifiedAt = '2026-07-05T15:31:57.527Z',
+): void {
+  const certDir = join(repoDir, '.wavemill', 'native-agent-certifications', provider, model);
+  mkdirSync(certDir, { recursive: true });
+  writeFileSync(join(certDir, `${suiteVersion}.json`), JSON.stringify({
+    schemaVersion: CERTIFICATION_SCHEMA_VERSION,
+    provider,
+    model,
+    phase,
+    suiteVersion,
+    certifiedAt,
+    scenarios: [{ scenarioId: 's1', passed: true }],
+  }, null, 2), 'utf-8');
+}
+
 async function captureStderr<T>(fn: () => T | Promise<T>): Promise<{ result: T; stderr: string }> {
   let output = '';
   const originalWrite = process.stderr.write.bind(process.stderr);
@@ -512,6 +533,118 @@ await test('falls back from DeepSeek when enabled but API key is missing', () =>
       delete process.env.TEST_DEEPSEEK_KEY;
     } else {
       process.env.TEST_DEEPSEEK_KEY = originalKey;
+    }
+    cleanup();
+  }
+});
+
+await test('allows workflow-certified OpenRouter aliases for configured stages', () => {
+  const { repoDir, cleanup } = makeRepo({
+    router: {
+      ...baseConfig().router,
+      availableModels: {
+        planner: ['glm-5.2'],
+        coder: ['kimi-k2.7-code'],
+        reviewer: ['glm-5.2'],
+      },
+      agentMap: {
+        ...baseConfig().router.agentMap,
+        'glm-5.2': 'claude-openrouter',
+        'kimi-k2.7-code': 'claude-openrouter',
+      },
+    },
+    providers: {
+      openrouter: {
+        enabled: true,
+        apiKeyEnv: 'TEST_OPENROUTER_KEY',
+        models: ['glm-5.2', 'kimi-k2.7-code'],
+        stages: ['planner', 'coder', 'reviewer'],
+      },
+    },
+    eval: {
+      pricing: {
+        ...baseConfig().eval.pricing,
+        'glm-5.2': { inputCostPerMTok: 0.9, outputCostPerMTok: 4.2 },
+        'kimi-k2.7-code': { inputCostPerMTok: 1.2, outputCostPerMTok: 3.6 },
+      },
+    },
+    modelRegistry: {
+      models: {
+        'glm-5.2': {
+          vendor: 'z-ai',
+          class: 'strong_generalist',
+          strengths: ['planning'],
+          weaknesses: [],
+          qualityScores: { routing: 60, planning: 92, coding: 84, review: 90, classify: 60 },
+          contextWindowTokens: 131_072,
+          toolSupport: 'basic',
+          multimodal: { text: true, image: false },
+          latencyTier: 'standard',
+          reasoningTier: 'advanced',
+          costPerMillionInputTokensUsd: 0.9,
+          costPerMillionOutputTokensUsd: 4.2,
+          agent: 'claude-openrouter',
+          nativeCapability: {
+            nativeProvider: 'openrouter',
+            piTransportKind: 'openai-completions',
+            readOnlyNative: 'certified',
+            compatFlags: { thinkingFormat: 'openrouter' },
+            certification: {
+              maxCertifiedPhase: 'workflow',
+              certifiedAt: '2026-07-05T15:31:57.527Z',
+              certificationSuiteVersion: 'v1',
+            },
+          },
+        },
+        'kimi-k2.7-code': {
+          vendor: 'moonshotai',
+          class: 'strong_generalist',
+          strengths: ['coding'],
+          weaknesses: [],
+          qualityScores: { routing: 60, planning: 80, coding: 93, review: 82, classify: 58 },
+          contextWindowTokens: 262_144,
+          toolSupport: 'basic',
+          multimodal: { text: true, image: false },
+          latencyTier: 'standard',
+          reasoningTier: 'advanced',
+          costPerMillionInputTokensUsd: 1.2,
+          costPerMillionOutputTokensUsd: 3.6,
+          agent: 'claude-openrouter',
+          nativeCapability: {
+            nativeProvider: 'openrouter',
+            piTransportKind: 'openai-completions',
+            readOnlyNative: 'certified',
+            compatFlags: { thinkingFormat: 'openrouter' },
+            certification: {
+              maxCertifiedPhase: 'workflow',
+              certifiedAt: '2026-07-05T15:31:57.748Z',
+              certificationSuiteVersion: 'v1',
+            },
+          },
+        },
+      },
+    },
+  });
+  const originalKey = process.env.TEST_OPENROUTER_KEY;
+  process.env.TEST_OPENROUTER_KEY = 'test-key';
+  try {
+    writeNativeCertificationArtifact(repoDir, 'z-ai', 'glm-5.2', 'v1', 'workflow');
+    writeNativeCertificationArtifact(repoDir, 'moonshotai', 'kimi-k2.7-code', 'v1', 'workflow', '2026-07-05T15:31:57.748Z');
+
+    const decision = routeWorkflow('Implement a backend workflow feature with tests.', {
+      repoDir,
+      skipDifficultyClassification: true,
+    });
+
+    assert.equal(decision.planner, 'glm-5.2');
+    assert.equal(decision.coder, 'kimi-k2.7-code');
+    assert.equal(decision.reviewer, 'glm-5.2');
+    assert.equal((decision.nativeCertificationRejections ?? []).length, 0);
+  } finally {
+    if (originalKey === undefined) {
+      delete process.env.TEST_OPENROUTER_KEY;
+    } else {
+      process.env.TEST_OPENROUTER_KEY = originalKey;
     }
     cleanup();
   }
@@ -1717,12 +1850,71 @@ await test('native-only ineligible pool is rejected fail-closed, not silently tr
       skipDifficultyClassification: true,
     });
 
-    assert.notEqual(decision.coder, 'native-only', 'rejected native model must not be selected as coder');
+    assert.equal(decision.coder, '', 'route should surface an empty coder slot when no eligible candidates remain');
     const rejection = (decision.nativeCertificationRejections ?? [])
       .find((r) => r.modelId === 'native-only' && r.role === 'coder');
     assert.ok(rejection, 'rejection must be recorded even when no fallback exists in the pool');
     assert.equal(rejection?.reason, 'missing');
+    assert.ok(
+      decision.reasoning.some((line) => line.includes('No eligible coder models remain')),
+      'reasoning should surface the empty eligible pool failure',
+    );
   } finally {
+    cleanup();
+  }
+});
+
+await test('openrouter-only planner pool without native metadata is rejected before fallback routing', () => {
+  const { repoDir, cleanup } = makeRepo({
+    modelRegistry: {
+      models: {
+        'mistral-large-2': {
+          class: 'strong_generalist',
+          vendor: 'mistral',
+          strengths: [],
+          weaknesses: [],
+          qualityScores: { routing: 60, planning: 70, coding: 70, review: 70, classify: 60 },
+          contextWindowTokens: 128_000,
+          toolSupport: 'basic',
+          multimodal: { text: true, image: false },
+          latencyTier: 'standard',
+          reasoningTier: 'standard',
+          costPerMillionInputTokensUsd: 2,
+          costPerMillionOutputTokensUsd: 6,
+          agent: 'claude-openrouter',
+        },
+      },
+    },
+    providers: {
+      openrouter: {
+        enabled: true,
+        apiKeyEnv: 'TEST_OPENROUTER_KEY',
+        models: ['mistral-large-2'],
+        stages: ['planner', 'coder', 'reviewer'],
+      },
+    },
+  });
+  const originalKey = process.env.TEST_OPENROUTER_KEY;
+  process.env.TEST_OPENROUTER_KEY = 'test-key';
+  try {
+    const decision = routeWorkflow('Plan a workflow feature.', {
+      repoDir,
+      plannerModelsAvailable: ['mistral-large-2'],
+      modelsAvailable: ['mistral-large-2'],
+      skipDifficultyClassification: true,
+    });
+
+    assert.equal(decision.planner, '', 'planner should remain unresolved when the pool is entirely rejected');
+    const rejection = (decision.nativeCertificationRejections ?? [])
+      .find((r) => r.modelId === 'mistral-large-2' && r.role === 'planner');
+    assert.ok(rejection, 'expected structured planner rejection');
+    assert.equal(rejection?.reason, 'no-native-capability');
+  } finally {
+    if (originalKey === undefined) {
+      delete process.env.TEST_OPENROUTER_KEY;
+    } else {
+      process.env.TEST_OPENROUTER_KEY = originalKey;
+    }
     cleanup();
   }
 });

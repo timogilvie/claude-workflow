@@ -46,6 +46,7 @@ export const STAGE_PHASE_REQUIREMENT: Record<RouterRole, CertificationPhase> = {
  *                         or a required scenario failed
  */
 export type RouterCertificationRejectionReason =
+  | 'no-native-capability'
   | 'missing'
   | 'malformed'
   | 'wrong-suite'
@@ -90,7 +91,8 @@ function mapIneligibilityReason(reason: IneligibilityReason): RouterCertificatio
  * Filter native model candidates for a given router role.
  *
  * For each model in `models`:
- * - If the model has no `nativeCapability` in the registry: pass through (non-native).
+ * - If the model has no `nativeCapability` in the registry: pass through for
+ *   hosted models, but reject legacy OpenRouter/deepseek launcher entries.
  * - If the model has `nativeCapability` but no registry certification metadata or
  *   no `nativeProvider`: reject as `missing` fail-closed.
  * - Otherwise: load the on-disk certification artifact and evaluate it against
@@ -114,10 +116,25 @@ export function filterNativeModels(
   const rejected: RouterCertificationRejection[] = [];
 
   for (const modelId of models) {
-    const nativeCapability = registry.models[modelId]?.nativeCapability;
+    const capabilities = registry.models[modelId];
+    const nativeCapability = capabilities?.nativeCapability;
 
-    // Non-native model — pass through unchanged
+    // Hosted model without native metadata — pass through unchanged.
+    // OpenRouter/deepseek shim entries must fail closed until they carry
+    // native capability metadata and certification.
     if (!nativeCapability) {
+      const registeredAgent = capabilities?.agent as string | undefined;
+      if (registeredAgent === 'claude-openrouter' || registeredAgent === 'claude-deepseek') {
+        rejected.push({
+          modelId,
+          role,
+          requestedPhase: requiredPhase,
+          nativeCapability: 'unregistered',
+          requiredSuiteVersion: '',
+          reason: 'no-native-capability',
+        });
+        continue;
+      }
       eligible.push(modelId);
       continue;
     }

@@ -5,6 +5,45 @@ import type { HarnessReport, HarnessScenarioResult } from '../shared/lib/native-
 import type { NativeCertificationArtifact } from '../shared/lib/native-agent/certification/schema.ts';
 import type { ModelRegistry } from '../shared/lib/model-registry.ts';
 
+const OPENROUTER_STORAGE_CASES = [
+  {
+    rawId: 'qwen/qwen3-coder',
+    alias: 'qwen-3-coder',
+    providerPath: 'qwen',
+    modelPath: 'qwen3-coder',
+    vendor: 'qwen',
+    modelClass: 'strong_generalist' as const,
+    qualityScores: { routing: 60, planning: 72, coding: 84, review: 78, classify: 58 },
+    contextWindowTokens: 131_072,
+    costPerMillionInputTokensUsd: 0.35,
+    costPerMillionOutputTokensUsd: 1.05,
+  },
+  {
+    rawId: 'z-ai/glm-5.2',
+    alias: 'glm-5.2',
+    providerPath: 'z-ai',
+    modelPath: 'glm-5.2',
+    vendor: 'z-ai',
+    modelClass: 'frontier' as const,
+    qualityScores: { routing: 62, planning: 80, coding: 80, review: 84, classify: 60 },
+    contextWindowTokens: 1_048_576,
+    costPerMillionInputTokensUsd: 0.93,
+    costPerMillionOutputTokensUsd: 3,
+  },
+  {
+    rawId: 'moonshotai/kimi-k2.7-code',
+    alias: 'kimi-k2.7-code',
+    providerPath: 'moonshotai',
+    modelPath: 'kimi-k2.7-code',
+    vendor: 'kimi',
+    modelClass: 'strong_generalist' as const,
+    qualityScores: { routing: 60, planning: 72, coding: 82, review: 82, classify: 58 },
+    contextWindowTokens: 262_144,
+    costPerMillionInputTokensUsd: 0.74,
+    costPerMillionOutputTokensUsd: 3.5,
+  },
+] as const;
+
 // ---------------------------------------------------------------------------
 // Minimal stub registry with one certified model
 // ---------------------------------------------------------------------------
@@ -48,6 +87,56 @@ const STUB_REGISTRY: ModelRegistry = {
       reasoningTier: 'standard',
       costPerMillionInputTokensUsd: 0.35,
       costPerMillionOutputTokensUsd: 1.05,
+      nativeCapability: {
+        nativeProvider: 'openrouter',
+        piTransportKind: 'openai-completions',
+        readOnlyNative: 'certified',
+        compatFlags: { thinkingFormat: 'openrouter' },
+        certification: {
+          maxCertifiedPhase: 'workflow',
+          certifiedAt: new Date().toISOString(),
+          certificationSuiteVersion: 'v1',
+        },
+      },
+    },
+    'glm-5.2': {
+      vendor: 'z-ai',
+      class: 'frontier',
+      strengths: [],
+      weaknesses: [],
+      qualityScores: { routing: 62, planning: 80, coding: 80, review: 84, classify: 60 },
+      contextWindowTokens: 1_048_576,
+      toolSupport: 'basic',
+      multimodal: { text: true, image: false },
+      latencyTier: 'standard',
+      reasoningTier: 'advanced',
+      costPerMillionInputTokensUsd: 0.93,
+      costPerMillionOutputTokensUsd: 3,
+      nativeCapability: {
+        nativeProvider: 'openrouter',
+        piTransportKind: 'openai-completions',
+        readOnlyNative: 'certified',
+        compatFlags: { thinkingFormat: 'openrouter' },
+        certification: {
+          maxCertifiedPhase: 'workflow',
+          certifiedAt: new Date().toISOString(),
+          certificationSuiteVersion: 'v1',
+        },
+      },
+    },
+    'kimi-k2.7-code': {
+      vendor: 'kimi',
+      class: 'strong_generalist',
+      strengths: [],
+      weaknesses: [],
+      qualityScores: { routing: 60, planning: 72, coding: 82, review: 82, classify: 58 },
+      contextWindowTokens: 262_144,
+      toolSupport: 'basic',
+      multimodal: { text: true, image: true },
+      latencyTier: 'standard',
+      reasoningTier: 'advanced',
+      costPerMillionInputTokensUsd: 0.74,
+      costPerMillionOutputTokensUsd: 3.5,
       nativeCapability: {
         nativeProvider: 'openrouter',
         piTransportKind: 'openai-completions',
@@ -271,33 +360,48 @@ describe('certifyNativeAgent', () => {
     assert.equal(result.scenarios[0].status, 'pass');
   });
 
-  it('resolves raw OpenRouter ids through registry metadata and writes storage identity', async () => {
-    let written: NativeCertificationArtifact | undefined;
+  for (const testCase of OPENROUTER_STORAGE_CASES) {
+    it(`resolves raw OpenRouter id ${testCase.rawId} through registry metadata and writes storage identity`, async () => {
+      let written: NativeCertificationArtifact | undefined;
+      const expectedArtifactPath = `/repo/.wavemill/native-agent-certifications/${testCase.providerPath}/${testCase.modelPath}/v1.json`;
 
-    const result = await certifyNativeAgent({
-      provider: 'openrouter',
-      model: 'qwen/qwen3-coder',
-      phase: 'read-only',
-      repoDir: '/repo',
-      registry: STUB_REGISTRY,
-      runScenariosFn: async () => ({
-        ...PASSING_REPORT,
+      const result = await certifyNativeAgent({
         provider: 'openrouter',
-        model: 'qwen/qwen3-coder',
-        transport: 'openai-completions',
-      }),
-      writeCertificationFn: (_repoDir, artifact) => {
-        written = artifact;
-        return '/repo/.wavemill/native-agent-certifications/qwen/qwen3-coder/v1.json';
-      },
-    });
+        model: testCase.rawId,
+        phase: 'workflow',
+        repoDir: '/repo',
+        registry: STUB_REGISTRY,
+        runScenariosFn: async () => ({
+          ...PASSING_REPORT,
+          provider: 'openrouter',
+          model: testCase.rawId,
+          transport: 'openai-completions',
+          results: [
+            {
+              scenarioId: 'workflow.phase.workflow-persistence-roundtrip',
+              category: 'phase',
+              classification: 'deterministic',
+              phase: 'workflow',
+              status: 'pass',
+              durationMs: 1,
+            } as HarnessScenarioResult,
+          ],
+          countsByCategory: { tool: 0, usage: 0, transcript: 0, phase: 1 },
+        }),
+        writeCertificationFn: (_repoDir, artifact) => {
+          written = artifact;
+          return expectedArtifactPath;
+        },
+      });
 
-    assert.equal(result.model, 'qwen/qwen3-coder');
-    assert.equal(result.artifactPath, '/repo/.wavemill/native-agent-certifications/qwen/qwen3-coder/v1.json');
-    assert.ok(written, 'artifact should have been written');
-    assert.equal(written.provider, 'qwen');
-    assert.equal(written.model, 'qwen3-coder');
-  });
+      assert.equal(result.model, testCase.rawId);
+      assert.equal(result.artifactPath, expectedArtifactPath);
+      assert.ok(written, 'artifact should have been written');
+      assert.equal(written.provider, testCase.providerPath);
+      assert.equal(written.model, testCase.modelPath);
+      assert.equal(written.phase, 'workflow');
+    });
+  }
 
   it('omits not-run live-judge scenarios from persisted artifacts', async () => {
     let written: NativeCertificationArtifact | undefined;

@@ -53,6 +53,14 @@ test('challenge model pool prefers explicit challenge.models', () => {
   assert.deepEqual(pool, ['claude-opus-4-6', 'gpt-5.4']);
 });
 
+test('challenge model pool keeps promoted OpenRouter aliases when listed explicitly', () => {
+  const pool = getChallengeModelPool(
+    { models: ['glm-5.2', 'kimi-k2.7-code', 'glm-5.2'] },
+    { models: ['claude-sonnet-4-5-20250929'] },
+  );
+  assert.deepEqual(pool, ['glm-5.2', 'kimi-k2.7-code']);
+});
+
 test('challenge model pool falls back to router models when challenge.models is null', () => {
   const pool = getChallengeModelPool(
     { models: null },
@@ -230,6 +238,12 @@ const mockRouteFn = (): WorkflowRouteDecision => ({
   reasoning: [],
   signals: {},
 });
+
+function makeCoverage(
+  counts: Partial<Record<'plan' | 'implementation' | 'review', Record<string, number>>>,
+) {
+  return (model: string, stage: 'plan' | 'implementation' | 'review') => counts[stage]?.[model] ?? 0;
+}
 
 test('pickChallengeWorkflows populates routing fields for both sides', () => {
   const pair = pickChallengeWorkflows(
@@ -942,6 +956,231 @@ test('pickChallengeWorkflows falls back to coder variation when the route lacks 
   assert.notEqual(pair!.challenger.model, pair!.primary.model);
 });
 
+test('pickChallengeModels selects the least-used zero-record implementation challenger', () => {
+  const selection = pickChallengeModelsWithReason(
+    ['claude-opus-4-6', 'qwen-3-coder', 'glm-5.2'],
+    {
+      pairId: 'HOK-997A',
+      issueId: 'HOK-997A',
+      slug: 'least-used-implementation',
+      primaryModel: 'claude-opus-4-6',
+      forcedChallengerModel: 'glm-5.2',
+      recommendedChallengerModel: 'glm-5.2',
+      agentMap: {
+        'qwen-3-coder': 'codex',
+        'glm-5.2': 'codex',
+      },
+      coverage: makeCoverage({
+        implementation: {
+          'qwen-3-coder': 0,
+          'glm-5.2': 2,
+        },
+      }),
+      rotationSeed: 'HOK-997A|implementation',
+      randomFn: () => {
+        throw new Error('random fallback should not run');
+      },
+    },
+  );
+
+  assert.ok(selection.pair);
+  assert.equal(selection.pair!.challengeStage, 'implementation');
+  assert.equal(selection.pair!.challenger.model, 'qwen-3-coder');
+  assert.equal(selection.pair!.selectionReason, 'least-used-zero-record');
+  assert.equal(selection.pair!.challengerCoverageCount, 0);
+});
+
+test('pickChallengeWorkflows varies only the planner and selects the least-used zero-record planner challenger', () => {
+  const selection = pickChallengeWorkflowsWithReason(
+    ['claude-opus-4-6', 'qwen-3-coder', 'glm-5.2'],
+    {
+      pairId: 'HOK-997B',
+      issueId: 'HOK-997B',
+      slug: 'least-used-plan',
+      prompt: 'Implement user authentication with OAuth2',
+      primaryModel: 'claude-sonnet-4-5-20250929',
+      challengeStage: 'plan',
+      agentMap: {
+        'qwen-3-coder': 'codex',
+        'glm-5.2': 'codex',
+      },
+      coverage: makeCoverage({
+        plan: {
+          'qwen-3-coder': 0,
+          'glm-5.2': 4,
+        },
+      }),
+      rotationSeed: 'HOK-997B|plan',
+      routeFn: mockRouteFn,
+      randomFn: () => {
+        throw new Error('random fallback should not run');
+      },
+    },
+  );
+
+  assert.ok(selection.pair);
+  assert.equal(selection.pair!.challengeStage, 'plan');
+  assert.equal(selection.pair!.primary.model, selection.pair!.challenger.model);
+  assert.equal(selection.pair!.primary.reviewer, selection.pair!.challenger.reviewer);
+  assert.equal(selection.pair!.challenger.planner, 'qwen-3-coder');
+  assert.equal(selection.pair!.selectionReason, 'least-used-zero-record');
+  assert.equal(selection.pair!.challengerCoverageCount, 0);
+});
+
+test('pickChallengeWorkflows varies only the reviewer and selects the least-used zero-record reviewer challenger', () => {
+  const selection = pickChallengeWorkflowsWithReason(
+    ['claude-opus-4-6', 'qwen-3-coder', 'glm-5.2'],
+    {
+      pairId: 'HOK-997C',
+      issueId: 'HOK-997C',
+      slug: 'least-used-review',
+      prompt: 'Implement user authentication with OAuth2',
+      primaryModel: 'claude-opus-4-6',
+      challengeStage: 'review',
+      agentMap: {
+        'qwen-3-coder': 'codex',
+        'glm-5.2': 'codex',
+      },
+      coverage: makeCoverage({
+        review: {
+          'qwen-3-coder': 0,
+          'glm-5.2': 5,
+        },
+      }),
+      rotationSeed: 'HOK-997C|review',
+      routeFn: mockRouteFn,
+      randomFn: () => {
+        throw new Error('random fallback should not run');
+      },
+    },
+  );
+
+  assert.ok(selection.pair);
+  assert.equal(selection.pair!.challengeStage, 'review');
+  assert.equal(selection.pair!.primary.model, selection.pair!.challenger.model);
+  assert.equal(selection.pair!.primary.planner, selection.pair!.challenger.planner);
+  assert.equal(selection.pair!.challenger.reviewer, 'qwen-3-coder');
+  assert.equal(selection.pair!.selectionReason, 'least-used-zero-record');
+  assert.equal(selection.pair!.challengerCoverageCount, 0);
+});
+
+test('pickChallengeWorkflowsWithContext uses the bootstrap route and least-used implementation challenger', () => {
+  const bootstrap: RouteArtifactSnapshot = {
+    planner: 'claude-opus-4-6',
+    coder: 'claude-sonnet-4-6',
+    reviewer: 'claude-opus-4-6',
+    planDepth: 'deep',
+    codeDepth: 'medium',
+    reviewMode: 'llm',
+  };
+
+  const selection = pickChallengeWorkflowsWithContextAndReason(
+    ['claude-sonnet-4-6', 'qwen-3-coder', 'glm-5.2'],
+    {
+      pairId: 'HOK-997D',
+      issueId: 'HOK-997D',
+      slug: 'bootstrap-zero-record',
+      prompt: 'irrelevant',
+      primaryModel: 'claude-sonnet-4-6',
+      agentMap: {
+        'qwen-3-coder': 'codex',
+        'glm-5.2': 'codex',
+      },
+      coverage: makeCoverage({
+        implementation: {
+          'qwen-3-coder': 0,
+          'glm-5.2': 2,
+        },
+      }),
+      rotationSeed: 'HOK-997D|implementation',
+      randomFn: () => {
+        throw new Error('random fallback should not run');
+      },
+    },
+    { bootstrap, expanded: null },
+  );
+
+  assert.ok(selection.pair);
+  assert.equal(selection.pair!.routeContext?.decisionSource, 'bootstrap');
+  assert.equal(selection.pair!.challenger.model, 'qwen-3-coder');
+  assert.equal(selection.pair!.selectionReason, 'least-used-zero-record');
+  assert.equal(selection.pair!.challengerCoverageCount, 0);
+});
+
+test('pickChallengeWorkflowsWithContext uses the expanded route and least-used implementation challenger', () => {
+  const expanded: RouteArtifactSnapshot = {
+    coder: 'claude-sonnet-4-6',
+    reviewer: 'claude-opus-4-6',
+    codeDepth: 'deep',
+    reviewMode: 'static',
+  };
+
+  const selection = pickChallengeWorkflowsWithContextAndReason(
+    ['claude-sonnet-4-6', 'qwen-3-coder', 'glm-5.2'],
+    {
+      pairId: 'HOK-997E',
+      issueId: 'HOK-997E',
+      slug: 'expanded-zero-record',
+      prompt: 'irrelevant',
+      agentMap: {
+        'qwen-3-coder': 'codex',
+        'glm-5.2': 'codex',
+      },
+      coverage: makeCoverage({
+        implementation: {
+          'qwen-3-coder': 0,
+          'glm-5.2': 3,
+        },
+      }),
+      rotationSeed: 'HOK-997E|implementation',
+      randomFn: () => {
+        throw new Error('random fallback should not run');
+      },
+    },
+    { bootstrap: null, expanded },
+  );
+
+  assert.ok(selection.pair);
+  assert.equal(selection.pair!.routeContext?.decisionSource, 'expanded');
+  assert.equal(selection.pair!.primary.model, 'claude-sonnet-4-6');
+  assert.equal(selection.pair!.challenger.model, 'qwen-3-coder');
+  assert.equal(selection.pair!.selectionReason, 'least-used-zero-record');
+  assert.equal(selection.pair!.challengerCoverageCount, 0);
+});
+
+test('coverage-aware selection falls forward when the recommended challenger is not least-used', () => {
+  const selection = pickChallengeModelsWithReason(
+    ['claude-opus-4-6', 'qwen-3-coder', 'glm-5.2'],
+    {
+      pairId: 'HOK-997F',
+      issueId: 'HOK-997F',
+      slug: 'fallforward',
+      primaryModel: 'claude-opus-4-6',
+      forcedChallengerModel: 'glm-5.2',
+      recommendedChallengerModel: 'glm-5.2',
+      agentMap: {
+        'qwen-3-coder': 'codex',
+        'glm-5.2': 'codex',
+      },
+      coverage: makeCoverage({
+        implementation: {
+          'qwen-3-coder': 2,
+          'glm-5.2': 5,
+        },
+      }),
+      rotationSeed: 'HOK-997F|implementation',
+      randomFn: () => {
+        throw new Error('random fallback should not run');
+      },
+    },
+  );
+
+  assert.ok(selection.pair);
+  assert.equal(selection.pair!.challenger.model, 'qwen-3-coder');
+  assert.equal(selection.pair!.selectionReason, 'least-used-fallforward');
+  assert.equal(selection.pair!.challengerCoverageCount, 2);
+});
+
 test('pickChallengeWorkflowsWithContext varies the planner from a route snapshot', () => {
   const expanded: RouteArtifactSnapshot = {
     coder: 'claude-sonnet-4-5-20250929',
@@ -1210,7 +1449,13 @@ const CERT_DATE_FRESH = '2026-06-01T00:00:00.000Z';
 const CERT_DATE_STALE = '2026-01-01T00:00:00.000Z';
 
 /** Create a temp repo with the given model registry and return cleanup fn */
-function makeNativeTestRepo(modelRegistryModels: Record<string, unknown>): {
+function makeNativeTestRepo(
+  modelRegistryModels: Record<string, unknown>,
+  opts: {
+    config?: Record<string, unknown>;
+    env?: Record<string, string>;
+  } = {},
+): {
   repoDir: string;
   cleanup: () => void;
 } {
@@ -1218,7 +1463,14 @@ function makeNativeTestRepo(modelRegistryModels: Record<string, unknown>): {
   mkdirSync(join(repoDir, '.wavemill'), { recursive: true });
   writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
     modelRegistry: { models: modelRegistryModels },
+    ...(opts.config || {}),
   }));
+  if (opts.env && Object.keys(opts.env).length > 0) {
+    writeFileSync(
+      join(repoDir, '.env'),
+      `${Object.entries(opts.env).map(([key, value]) => `${key}=${value}`).join('\n')}\n`,
+    );
+  }
   clearConfigCache(repoDir);
   return {
     repoDir,
@@ -1260,6 +1512,24 @@ function nativeModelEntry(phase: string = 'patch', suiteVersion: string = 'v1') 
       nativeProvider: 'openai',
       piTransportKind: 'openai-responses',
       readOnlyNative: 'certified',
+      certification: {
+        maxCertifiedPhase: phase,
+        certifiedAt: CERT_DATE_FRESH,
+        certificationSuiteVersion: suiteVersion,
+      },
+    },
+  };
+}
+
+function openRouterNativeModelEntry(phase: string = 'workflow', suiteVersion: string = 'v1') {
+  return {
+    class: 'strong_generalist',
+    agent: 'claude-openrouter',
+    nativeCapability: {
+      nativeProvider: 'openrouter',
+      piTransportKind: 'openai-completions',
+      readOnlyNative: 'certified',
+      compatFlags: { thinkingFormat: 'openrouter' },
       certification: {
         maxCertifiedPhase: phase,
         certifiedAt: CERT_DATE_FRESH,
@@ -1731,6 +2001,99 @@ test('phase semantics match router: certified model accepted, patch-only rejecte
     assert.ok(patchRejection, 'patch-only model should be rejected for plan stage');
     assert.equal(patchRejection!.reason, 'insufficient-phase');
     assert.equal(patchRejection!.requestedPhase, 'workflow');
+  } finally {
+    cleanup();
+  }
+});
+
+test('workflow-certified OpenRouter aliases remain challenge-eligible by alias', () => {
+  const { repoDir, cleanup } = makeNativeTestRepo(
+    {
+      'glm-5.2': openRouterNativeModelEntry('workflow'),
+    },
+    {
+      config: {
+        providers: {
+          openrouter: {
+            enabled: true,
+            apiKeyEnv: 'NC_OPENROUTER_KEY',
+            models: ['glm-5.2'],
+            stages: ['coder'],
+          },
+        },
+      },
+      env: {
+        NC_OPENROUTER_KEY: 'test-openrouter-key',
+      },
+    },
+  );
+  try {
+    writeCertArtifact(repoDir, 'z-ai', 'glm-5.2', 'v1', { phase: 'workflow' });
+
+    const result = pickChallengeModelsWithReason(
+      ['claude-opus-4-6', 'glm-5.2'],
+      {
+        pairId: 'NC-010',
+        issueId: 'NC-010',
+        slug: 'nc-openrouter-alias',
+        primaryModel: 'claude-opus-4-6',
+        repoDir,
+        now: TEST_NOW,
+        randomFn: () => 0,
+      },
+    );
+
+    assert.ok(result.pair, 'pair should be selected');
+    assert.equal(result.pair!.challenger.model, 'glm-5.2');
+    assert.equal((result.nativeCertificationRejections || []).length, 0);
+  } finally {
+    cleanup();
+  }
+});
+
+test('missing OPENROUTER_API_KEY excludes OpenRouter challengers and falls back to incumbents', () => {
+  const { repoDir, cleanup } = makeNativeTestRepo({}, {
+    config: {
+        providers: {
+          openrouter: {
+            enabled: true,
+            apiKeyEnv: 'NC_MISSING_OPENROUTER_KEY',
+            models: ['qwen-3-coder'],
+            stages: ['coder'],
+          },
+        },
+    },
+  });
+  try {
+    const result = pickChallengeModelsWithReason(
+      ['claude-opus-4-6', 'claude-sonnet-4-6', 'qwen-3-coder'],
+      {
+        pairId: 'NC-011',
+        issueId: 'NC-011',
+        slug: 'missing-openrouter-key',
+        primaryModel: 'claude-opus-4-6',
+        agentMap: {
+          'qwen-3-coder': 'codex',
+        },
+        coverage: makeCoverage({
+          implementation: {
+            'claude-sonnet-4-6': 3,
+            'qwen-3-coder': 0,
+          },
+        }),
+        rotationSeed: 'NC-011|implementation',
+        repoDir,
+        now: TEST_NOW,
+        randomFn: () => {
+          throw new Error('random fallback should not run');
+        },
+      },
+    );
+
+    assert.ok(result.pair);
+    assert.equal(result.pair!.challenger.model, 'claude-sonnet-4-6');
+    assert.equal(result.pair!.selectionReason, 'last-resort-incumbent');
+    assert.equal(result.pair!.challengerCoverageCount, 3);
   } finally {
     cleanup();
   }

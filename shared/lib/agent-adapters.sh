@@ -21,20 +21,155 @@ agent_tmux_target() {
 # AGENT RESOLUTION
 # ============================================================================
 
-# Resolve the agent CLI command for a given model ID using prefix heuristics.
-# Mirrors the logic in shared/lib/model-router.ts resolveAgent().
-# Args: $1 = model selector or model ID (e.g. "opus", "claude-opus-4-6", "gpt-5.5")
+# Resolve the agent CLI command for a given model ID and phase using the
+# shared TypeScript resolver. AGENT_CMD is not allowed to override the result.
+# Args: $1 = model ID, $2 = phase (planning|coding|review)
 # Prints: agent command name (e.g. "claude", "codex")
+AGENT_RESOLVE_LAST_DIAGNOSTIC=""
+AGENT_RESOLVE_LAST_BATCH_JSON=""
+
 agent_resolve_from_model() {
   local model="$1"
-  case "$model" in
-    fable|opus|sonnet|haiku|fable-*|opus-*|sonnet-*|haiku-*) echo "claude" ;;
-    gpt-5.5|gpt-5.5-*|gemini-pro|gemini-pro-*) echo "codex" ;;
-    claude-*) echo "claude" ;;
-    deepseek-*) echo "claude" ;;
-    gpt-*|o[0-9]*) echo "codex" ;;
-    *) echo "${AGENT_CMD:-codex}" ;;
+  local phase="$2"
+  local repo_dir="${REPO_DIR:-$(pwd)}"
+  local tools_dir="${TOOLS_DIR:-$repo_dir/tools}"
+  local resolver_tool="$tools_dir/resolve-model-agent.ts"
+  local stderr_file="" json_output="" agent="" diagnostic=""
+  AGENT_RESOLVE_LAST_DIAGNOSTIC=""
+
+  if [[ -z "$model" ]]; then
+    AGENT_RESOLVE_LAST_DIAGNOSTIC="[agent-resolution] model=(empty) phase=${phase:-unknown} provider=unknown reason=invalid-model-id certification=invalid-model-id certify=\"unavailable\""
+    echo "$AGENT_RESOLVE_LAST_DIAGNOSTIC" >&2
+    return 1
+  fi
+  if [[ ! "$model" =~ ^[A-Za-z0-9._/-]+(\[[A-Za-z0-9._-]+\])?$ ]]; then
+    AGENT_RESOLVE_LAST_DIAGNOSTIC="[agent-resolution] model=$model phase=${phase:-unknown} provider=unknown reason=invalid-model-id certification=invalid-model-id certify=\"unavailable\""
+    echo "$AGENT_RESOLVE_LAST_DIAGNOSTIC" >&2
+    return 1
+  fi
+  case "$phase" in
+    planning|coding|review) ;;
+    *)
+      AGENT_RESOLVE_LAST_DIAGNOSTIC="[agent-resolution] model=$model phase=${phase:-unknown} provider=unknown reason=invalid-model-id certification=invalid-phase certify=\"unavailable\""
+      echo "$AGENT_RESOLVE_LAST_DIAGNOSTIC" >&2
+      return 1
+      ;;
   esac
+  if ! command -v jq >/dev/null 2>&1; then
+    AGENT_RESOLVE_LAST_DIAGNOSTIC="[agent-resolution] model=$model phase=$phase provider=unknown reason=invalid-model-id certification=missing-jq certify=\"unavailable\""
+    echo "$AGENT_RESOLVE_LAST_DIAGNOSTIC" >&2
+    return 1
+  fi
+  if ! agent_model_helper_available; then
+    AGENT_RESOLVE_LAST_DIAGNOSTIC="[agent-resolution] model=$model phase=$phase provider=unknown reason=invalid-model-id certification=missing-tsx certify=\"unavailable\""
+    echo "$AGENT_RESOLVE_LAST_DIAGNOSTIC" >&2
+    return 1
+  fi
+
+  stderr_file="$(mktemp "${TMPDIR:-/tmp}/agent-resolve-stderr.XXXXXX")" || {
+    AGENT_RESOLVE_LAST_DIAGNOSTIC="[agent-resolution] model=$model phase=$phase provider=unknown reason=invalid-model-id certification=mktemp-failed certify=\"unavailable\""
+    echo "$AGENT_RESOLVE_LAST_DIAGNOSTIC" >&2
+    return 1
+  }
+
+  json_output="$(cd "$repo_dir" 2>/dev/null && agent_run_tsx_tool "$resolver_tool" --model "$model" --phase "$phase" --repo "$repo_dir" 2>"$stderr_file")"
+  local rc=$?
+  if [[ -s "$stderr_file" ]]; then
+    diagnostic="$(cat "$stderr_file")"
+  fi
+  rm -f "$stderr_file"
+
+  if [[ "$rc" -ne 0 ]]; then
+    AGENT_RESOLVE_LAST_DIAGNOSTIC="${diagnostic:-[agent-resolution] model=$model phase=$phase provider=unknown reason=unknown-model certification=resolver-failed certify=\"unavailable\"}"
+    [[ -n "$diagnostic" ]] || echo "$AGENT_RESOLVE_LAST_DIAGNOSTIC" >&2
+    [[ -n "$diagnostic" ]] && echo "$diagnostic" >&2
+    return 1
+  fi
+
+  if [[ -z "$json_output" ]] || ! agent="$(printf '%s' "$json_output" | jq -er '.agent')" 2>/dev/null; then
+    diagnostic="$(printf '%s' "$json_output" | jq -r '.diagnostic // empty' 2>/dev/null || true)"
+    AGENT_RESOLVE_LAST_DIAGNOSTIC="${diagnostic:-[agent-resolution] model=$model phase=$phase provider=unknown reason=unknown-model certification=malformed-json certify=\"unavailable\"}"
+    echo "$AGENT_RESOLVE_LAST_DIAGNOSTIC" >&2
+    return 1
+  fi
+
+  printf '%s\n' "$agent"
+}
+
+# Resolve planner/coder/reviewer agents with a single resolver spawn.
+# Args: $1 = planner model, $2 = coder model, $3 = reviewer model
+# Prints nothing. Successful role resolutions are available via
+# agent_resolve_batch_agent_for_role <planner|coder|reviewer>.
+agent_resolve_models_for_roles() {
+  local planner_model="${1:-}"
+  local coder_model="${2:-}"
+  local reviewer_model="${3:-}"
+  local repo_dir="${REPO_DIR:-$(pwd)}"
+  local tools_dir="${TOOLS_DIR:-$repo_dir/tools}"
+  local resolver_tool="$tools_dir/resolve-model-agent.ts"
+  local stderr_file="" json_output="" diagnostic=""
+  local -a resolver_args=()
+  AGENT_RESOLVE_LAST_DIAGNOSTIC=""
+  AGENT_RESOLVE_LAST_BATCH_JSON='{"ok":true,"results":{}}'
+
+  if [[ -z "$planner_model" && -z "$coder_model" && -z "$reviewer_model" ]]; then
+    return 0
+  fi
+  if ! command -v jq >/dev/null 2>&1; then
+    AGENT_RESOLVE_LAST_DIAGNOSTIC="[agent-resolution] model=batch phase=mixed provider=unknown reason=invalid-model-id certification=missing-jq certify=\"unavailable\""
+    echo "$AGENT_RESOLVE_LAST_DIAGNOSTIC" >&2
+    return 1
+  fi
+  if ! agent_model_helper_available; then
+    AGENT_RESOLVE_LAST_DIAGNOSTIC="[agent-resolution] model=batch phase=mixed provider=unknown reason=invalid-model-id certification=missing-tsx certify=\"unavailable\""
+    echo "$AGENT_RESOLVE_LAST_DIAGNOSTIC" >&2
+    return 1
+  fi
+
+  [[ -n "$planner_model" ]] && resolver_args+=(--planner "$planner_model")
+  [[ -n "$coder_model" ]] && resolver_args+=(--coder "$coder_model")
+  [[ -n "$reviewer_model" ]] && resolver_args+=(--reviewer "$reviewer_model")
+  resolver_args+=(--repo "$repo_dir")
+
+  stderr_file="$(mktemp "${TMPDIR:-/tmp}/agent-resolve-batch-stderr.XXXXXX")" || {
+    AGENT_RESOLVE_LAST_DIAGNOSTIC="[agent-resolution] model=batch phase=mixed provider=unknown reason=invalid-model-id certification=mktemp-failed certify=\"unavailable\""
+    echo "$AGENT_RESOLVE_LAST_DIAGNOSTIC" >&2
+    return 1
+  }
+
+  json_output="$(cd "$repo_dir" 2>/dev/null && agent_run_tsx_tool "$resolver_tool" "${resolver_args[@]}" 2>"$stderr_file")"
+  local rc=$?
+  if [[ -s "$stderr_file" ]]; then
+    diagnostic="$(cat "$stderr_file")"
+  fi
+  rm -f "$stderr_file"
+
+  if [[ -z "$json_output" ]] || ! printf '%s' "$json_output" | jq -e '.results | type == "object"' >/dev/null 2>&1; then
+    AGENT_RESOLVE_LAST_DIAGNOSTIC="${diagnostic:-[agent-resolution] model=batch phase=mixed provider=unknown reason=unknown-model certification=malformed-json certify=\"unavailable\"}"
+    echo "$AGENT_RESOLVE_LAST_DIAGNOSTIC" >&2
+    return 1
+  fi
+
+  AGENT_RESOLVE_LAST_BATCH_JSON="$json_output"
+  if [[ "$rc" -ne 0 ]]; then
+    AGENT_RESOLVE_LAST_DIAGNOSTIC="${diagnostic:-[agent-resolution] model=batch phase=mixed provider=unknown reason=unknown-model certification=resolver-failed certify=\"unavailable\"}"
+    [[ -n "$diagnostic" ]] || echo "$AGENT_RESOLVE_LAST_DIAGNOSTIC" >&2
+    [[ -n "$diagnostic" ]] && echo "$diagnostic" >&2
+    return 1
+  fi
+
+  return 0
+}
+
+agent_resolve_batch_agent_for_role() {
+  local role="$1"
+  local json="${2:-$AGENT_RESOLVE_LAST_BATCH_JSON}"
+  if [[ -z "$json" ]] || ! command -v jq >/dev/null 2>&1; then
+    return 0
+  fi
+  printf '%s' "$json" | jq -er --arg role "$role" '
+    .results[$role] | if .ok == true then .agent else empty end
+  ' 2>/dev/null || true
 }
 
 # Resolve the underlying binary for a given agent kind.

@@ -1,0 +1,16 @@
+{
+  "id": "gen-kimi",
+  "model": "moonshotai/kimi-k2",
+  "choices": [
+    {
+      "message": {
+        "role": "assistant",
+        "content": "Kimi fixture response."
+      }
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 104,
+    "completion_tokens": 28
+  }
+}

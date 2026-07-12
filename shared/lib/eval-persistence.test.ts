@@ -9,6 +9,7 @@ import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync } from 'nod
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { EvalRecord } from './eval-schema.ts';
+import { enrichEvalRecord } from './eval-record-builder.ts';
 import { appendEvalRecord, EvalValidationError, hasChallengeEvalRecord, hasChallengeEvalRecordPair, readEvalRecords } from './eval-persistence.ts';
 
 // ────────────────────────────────────────────────────────────────
@@ -170,6 +171,34 @@ test('append skipValidation bypasses the write-time gate for fixtures', () => {
     });
     const records = readEvalRecords({ dir: evalsDir });
     assert.equal(records.length, 1);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('append succeeds after invalid optional rubric boundary is normalized away', () => {
+  const tmp = makeTempDir();
+  const evalsDir = join(tmp, 'evals');
+  try {
+    const record = makeRecord();
+    enrichEvalRecord(record, {
+      rubricEval: {
+        schema_version: '1.0',
+        rubric_version: '1.0',
+        criteria: {
+          completeness: { score: 0.8, rationale: 'Complete enough.' },
+          correctness: { score: 0.8, rationale: 'Correct enough.' },
+          code_quality: { score: 0.8, rationale: 'Clean enough.' },
+          intervention_impact: { score: 0.8, rationale: 'Low intervention.' },
+          autonomy: { score: 0.8, rationale: 'Mostly autonomous.' },
+        },
+        determinative_boundary: 'invalid_boundary' as never,
+      },
+    });
+
+    appendEvalRecord(record, { dir: evalsDir });
+    const [saved] = readEvalRecords({ dir: evalsDir });
+    assert.equal(saved.rubricEval?.determinative_boundary, undefined);
   } finally {
     cleanUp(tmp);
   }

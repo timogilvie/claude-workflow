@@ -1,0 +1,221 @@
+import {
+  DEFAULT_MODEL_REGISTRY,
+  evaluateRegistryPhaseEligibility,
+  getModel,
+  type AgentType,
+  type ModelRegistry,
+  type NativeProviderName,
+} from './model-registry.ts';
+import type { CertificationPhase } from './native-agent/certification/schema.ts';
+
+export type AgentResolutionPhase = 'planning' | 'coding' | 'review';
+
+export type UnroutableReason =
+  | 'invalid-model-id'
+  | 'unknown-model'
+  | 'no-native-capability'
+  | 'native-unsupported'
+  | 'uncertified';
+
+export type AgentResolution =
+  | { ok: true; agent: AgentType }
+  | { ok: false; reason: UnroutableReason; diagnostic: string; certifyCommand?: string };
+
+interface ResolveModelAgentOptions {
+  model: string;
+  phase: AgentResolutionPhase;
+  repoDir?: string;
+  registry?: ModelRegistry;
+  now?: Date;
+}
+
+const SAFE_MODEL_ID_PATTERN = /^[A-Za-z0-9._/-]+(?:\[[A-Za-z0-9._-]+\])?$/;
+
+const CERTIFICATION_PHASE_BY_AGENT_PHASE: Record<AgentResolutionPhase, CertificationPhase> = {
+  planning: 'workflow',
+  coding: 'patch',
+  review: 'read-only',
+};
+
+function certificationPhaseForAgentPhase(phase: AgentResolutionPhase): CertificationPhase {
+  return CERTIFICATION_PHASE_BY_AGENT_PHASE[phase];
+}
+
+function inferHostedAgent(vendor: string | undefined): Extract<AgentType, 'claude' | 'codex'> | undefined {
+  if (vendor === 'anthropic' || vendor === 'deepseek') {
+    return 'claude';
+  }
+  if (vendor === 'openai') {
+    return 'codex';
+  }
+  return undefined;
+}
+
+function certifyCommandFor(modelId: string, provider: NativeProviderName, phase: AgentResolutionPhase): string {
+  return `npx tsx tools/native-agent-certify.ts --provider ${provider} --model ${modelId} --phase ${certificationPhaseForAgentPhase(phase)}`;
+}
+
+function buildDiagnostic(input: {
+  modelId: string;
+  phase: AgentResolutionPhase;
+  provider?: NativeProviderName;
+  reason: UnroutableReason;
+  certificationStatus: string;
+  certifyCommand?: string;
+}): string {
+  const provider = input.provider ?? 'unknown';
+  const command = input.certifyCommand ?? 'unavailable';
+  return `[agent-resolution] model=${input.modelId} phase=${input.phase} provider=${provider} reason=${input.reason} certification=${input.certificationStatus} certify="${command}"`;
+}
+
+function resolveRegistryBackedNativeAgent(input: {
+  modelId: string;
+  phase: AgentResolutionPhase;
+  registry: ModelRegistry;
+  now?: Date;
+  nativeAgent: Extract<AgentType, 'native-openai' | 'native-openrouter'>;
+}): AgentResolution {
+  const capabilities = getModel(input.registry, input.modelId);
+  const nativeCapability = capabilities?.nativeCapability;
+  const provider = nativeCapability?.nativeProvider;
+  const expectedProvider = input.nativeAgent === 'native-openai' ? 'openai' : 'openrouter';
+  if (!nativeCapability || !provider) {
+    const certifyCommand = certifyCommandFor(input.modelId, expectedProvider, input.phase);
+    const diagnostic = buildDiagnostic({
+      modelId: input.modelId,
+      phase: input.phase,
+      provider: expectedProvider,
+      reason: 'no-native-capability',
+      certificationStatus: 'missing-native-capability',
+      certifyCommand,
+    });
+    return { ok: false, reason: 'no-native-capability', diagnostic, certifyCommand };
+  }
+
+  if (provider !== expectedProvider) {
+    const diagnostic = buildDiagnostic({
+      modelId: input.modelId,
+      phase: input.phase,
+      provider,
+      reason: 'no-native-capability',
+      certificationStatus: `provider-mismatch:${provider}->${expectedProvider}`,
+      certifyCommand: provider ? certifyCommandFor(input.modelId, provider, input.phase) : undefined,
+    });
+    return {
+      ok: false,
+      reason: 'no-native-capability',
+      diagnostic,
+      ...(provider ? { certifyCommand: certifyCommandFor(input.modelId, provider, input.phase) } : {}),
+    };
+  }
+
+  if (nativeCapability.readOnlyNative === 'unsupported') {
+    const diagnostic = buildDiagnostic({
+      modelId: input.modelId,
+      phase: input.phase,
+      provider,
+      reason: 'native-unsupported',
+      certificationStatus: 'native-unsupported',
+      certifyCommand: certifyCommandFor(input.modelId, provider, input.phase),
+    });
+    return {
+      ok: false,
+      reason: 'native-unsupported',
+      diagnostic,
+      certifyCommand: certifyCommandFor(input.modelId, provider, input.phase),
+    };
+  }
+
+  const eligibility = evaluateRegistryPhaseEligibility({
+    modelId: input.modelId,
+    phase: certificationPhaseForAgentPhase(input.phase),
+    registry: input.registry,
+    now: input.now,
+  });
+
+  if (!eligibility.eligible) {
+    const certifyCommand = certifyCommandFor(input.modelId, provider, input.phase);
+    const diagnostic = buildDiagnostic({
+      modelId: input.modelId,
+      phase: input.phase,
+      provider,
+      reason: 'uncertified',
+      certificationStatus: eligibility.reason,
+      certifyCommand,
+    });
+    return { ok: false, reason: 'uncertified', diagnostic, certifyCommand };
+  }
+
+  return { ok: true, agent: input.nativeAgent };
+}
+
+export function resolveModelAgent(opts: ResolveModelAgentOptions): AgentResolution {
+  const modelId = opts.model.trim();
+  if (!modelId || !SAFE_MODEL_ID_PATTERN.test(modelId)) {
+    return {
+      ok: false,
+      reason: 'invalid-model-id',
+      diagnostic: buildDiagnostic({
+        modelId: modelId || '(empty)',
+        phase: opts.phase,
+        reason: 'invalid-model-id',
+        certificationStatus: 'invalid-model-id',
+      }),
+    };
+  }
+
+  const registry = opts.registry ?? DEFAULT_MODEL_REGISTRY;
+  const capabilities = getModel(registry, modelId);
+  const resolvedAgent = capabilities?.agent
+    ?? (capabilities?.nativeCapability?.nativeProvider
+      ? (capabilities.nativeCapability.nativeProvider === 'openai' ? 'native-openai' : 'native-openrouter')
+      : undefined)
+    ?? inferHostedAgent(capabilities?.vendor);
+  if (!resolvedAgent) {
+    return {
+      ok: false,
+      reason: 'unknown-model',
+      diagnostic: buildDiagnostic({
+        modelId,
+        phase: opts.phase,
+        reason: 'unknown-model',
+        certificationStatus: 'unknown-model',
+      }),
+    };
+  }
+
+  if (resolvedAgent === 'codex' || resolvedAgent === 'claude') {
+    return { ok: true, agent: resolvedAgent };
+  }
+
+  if (resolvedAgent === 'native-openai' || resolvedAgent === 'native-openrouter') {
+    return resolveRegistryBackedNativeAgent({
+      modelId,
+      phase: opts.phase,
+      registry,
+      now: opts.now,
+      nativeAgent: resolvedAgent,
+    });
+  }
+
+  if (resolvedAgent === 'claude-openrouter') {
+    return resolveRegistryBackedNativeAgent({
+      modelId,
+      phase: opts.phase,
+      registry,
+      now: opts.now,
+      nativeAgent: 'native-openrouter',
+    });
+  }
+
+  return {
+    ok: false,
+    reason: 'unknown-model',
+    diagnostic: buildDiagnostic({
+      modelId,
+      phase: opts.phase,
+      reason: 'unknown-model',
+      certificationStatus: 'unsupported-agent',
+    }),
+  };
+}

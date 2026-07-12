@@ -25,6 +25,7 @@ fi
 
 for f in \
   check-routing.test.ts \
+  challenge-coverage-selector.test.ts \
   challenge-mode.test.ts \
   challenge-score-selector.test.ts \
   challenge-scheduler.test.ts \
@@ -61,6 +62,19 @@ for f in \
 ; do
   echo -n "  $f: "
   if node --import "$TSX_LOADER" "$LIB_DIR/$f" > /dev/null 2>&1; then
+    echo "PASS"
+    PASS=$((PASS + 1))
+  else
+    echo "FAIL"
+    FAIL=$((FAIL + 1))
+  fi
+done
+
+for f in \
+  agent-resolve-from-model.test.sh \
+; do
+  echo -n "  $f: "
+  if bash "$SCRIPT_DIR/$f" > /dev/null 2>&1; then
     echo "PASS"
     PASS=$((PASS + 1))
   else

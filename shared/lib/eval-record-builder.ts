@@ -38,6 +38,7 @@ import type {
   PromptSizeDiagnostic,
   RoutingDecision,
   RubricCriterion,
+  RubricDeterminativeBoundary,
   FeatureOutcomeDiagnostics,
 } from './eval-schema.ts';
 import type { DifficultyAnalysis } from './difficulty-analyzer.ts';
@@ -108,6 +109,18 @@ export interface EvalRecordMetadata {
 
 /** Richer eval metadata attachment used by training-facing eval entrypoints. */
 export interface EnrichTrainingMetadataInput extends EvalRecordMetadata {}
+
+const RUBRIC_DETERMINATIVE_BOUNDARY_VALUES: readonly RubricDeterminativeBoundary[] = [
+  'no_interventions',
+  'cosmetic_only',
+  'functional_bug',
+  'multiple_bugs',
+  'heavy_intervention',
+  'unverified_prediction',
+  'vacuous_safety_gate',
+];
+
+const RUBRIC_DETERMINATIVE_BOUNDARY_SET = new Set<string>(RUBRIC_DETERMINATIVE_BOUNDARY_VALUES);
 
 // ────────────────────────────────────────────────────────────────
 // Metadata Attachment Functions
@@ -1079,7 +1092,14 @@ export function attachResourceSelections(record: EvalRecord): void {
  */
 export function attachRubricEval(record: EvalRecord, rubricEval?: RubricEval): void {
   if (!rubricEval) return;
-  record.rubricEval = rubricEval;
+  const normalizedRubricEval = { ...rubricEval };
+  if (
+    typeof normalizedRubricEval.determinative_boundary === 'string'
+    && !RUBRIC_DETERMINATIVE_BOUNDARY_SET.has(normalizedRubricEval.determinative_boundary)
+  ) {
+    delete normalizedRubricEval.determinative_boundary;
+  }
+  record.rubricEval = normalizedRubricEval;
   record.rubric_provenance = 'judge';
 }
 

@@ -1,0 +1,6 @@
+{
+  "error": {
+    "message": "OpenRouter service temporarily unavailable.",
+    "code": "service_unavailable"
+  }
+}

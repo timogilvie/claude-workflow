@@ -185,6 +185,21 @@ test('CANONICAL_CONFIG_TEMPLATE.configVersion matches CURRENT_CONFIG_VERSION', (
   assert.equal(CANONICAL_CONFIG_TEMPLATE.configVersion, CURRENT_CONFIG_VERSION);
 });
 
+test('CANONICAL_CONFIG_TEMPLATE exposes promoted OpenRouter aliases on user-facing surfaces', () => {
+  assert.ok(CANONICAL_CONFIG_TEMPLATE.eval?.pricing?.['glm-5.2']);
+  assert.ok(CANONICAL_CONFIG_TEMPLATE.eval?.pricing?.['kimi-k2.7-code']);
+  assert.ok(CANONICAL_CONFIG_TEMPLATE.providers?.openrouter?.models?.includes('glm-5.2'));
+  assert.ok(CANONICAL_CONFIG_TEMPLATE.providers?.openrouter?.models?.includes('kimi-k2.7-code'));
+  assert.ok(CANONICAL_CONFIG_TEMPLATE.challenge?.models?.includes('glm-5.2'));
+  assert.ok(CANONICAL_CONFIG_TEMPLATE.challenge?.models?.includes('kimi-k2.7-code'));
+  assert.ok(CANONICAL_CONFIG_TEMPLATE.router?.availableModels?.planner?.includes('glm-5.2'));
+  assert.ok(CANONICAL_CONFIG_TEMPLATE.router?.availableModels?.planner?.includes('kimi-k2.7-code'));
+  assert.ok(CANONICAL_CONFIG_TEMPLATE.router?.availableModels?.coder?.includes('glm-5.2'));
+  assert.ok(CANONICAL_CONFIG_TEMPLATE.router?.availableModels?.coder?.includes('kimi-k2.7-code'));
+  assert.ok(CANONICAL_CONFIG_TEMPLATE.router?.availableModels?.reviewer?.includes('glm-5.2'));
+  assert.ok(CANONICAL_CONFIG_TEMPLATE.router?.availableModels?.reviewer?.includes('kimi-k2.7-code'));
+});
+
 test('wavemill init heredoc configVersion matches CURRENT_CONFIG_VERSION', () => {
   const script = readFileSync(join(import.meta.dirname, '..', '..', 'wavemill'), 'utf-8');
   const match = script.match(/"configVersion":\s*"([^"]+)"/);

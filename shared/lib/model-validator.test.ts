@@ -30,6 +30,8 @@ describe('model-validator', () => {
       assert.ok(all.includes('deepseek-v4-pro'), 'Should include deepseek-v4-pro');
       assert.ok(all.includes('deepseek-v4-flash'), 'Should include deepseek-v4-flash');
       assert.ok(all.includes('deepseek-v4-pro[1m]'), 'Should include deepseek-v4-pro[1m]');
+      assert.ok(all.includes('glm-5.2'), 'Should include glm-5.2');
+      assert.ok(all.includes('kimi-k2.7-code'), 'Should include kimi-k2.7-code');
     });
 
     it('groups models by agent', () => {
@@ -67,6 +69,8 @@ describe('model-validator', () => {
       assert.strictEqual(isValidModel('deepseek-v4-pro', '.'), true);
       assert.strictEqual(isValidModel('deepseek-v4-flash', '.'), true);
       assert.strictEqual(isValidModel('deepseek-v4-pro[1m]', '.'), true);
+      assert.strictEqual(isValidModel('glm-5.2', '.'), true);
+      assert.strictEqual(isValidModel('kimi-k2.7-code', '.'), true);
     });
 
     it('returns false for unknown models', () => {
@@ -134,6 +138,12 @@ describe('model-validator', () => {
       });
       assert.doesNotThrow(() => {
         validateModelOrThrow('deepseek-v4-pro[1m]', '.');
+      });
+      assert.doesNotThrow(() => {
+        validateModelOrThrow('glm-5.2', '.');
+      });
+      assert.doesNotThrow(() => {
+        validateModelOrThrow('kimi-k2.7-code', '.');
       });
     });
 

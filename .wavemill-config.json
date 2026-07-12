@@ -116,9 +116,17 @@
         "inputCostPerMTok": 0.2,
         "outputCostPerMTok": 0.6
       },
+      "glm-5.2": {
+        "inputCostPerMTok": 0.9,
+        "outputCostPerMTok": 4.2
+      },
       "kimi-k2": {
         "inputCostPerMTok": 1,
         "outputCostPerMTok": 3
+      },
+      "kimi-k2.7-code": {
+        "inputCostPerMTok": 1.2,
+        "outputCostPerMTok": 3.6
       },
       "gemini-2.5-pro": {
         "inputCostPerMTok": 1.25,
@@ -172,7 +180,9 @@
       "models": [
         "qwen-3-coder",
         "qwen-2.5-coder-32b",
+        "glm-5.2",
         "kimi-k2",
+        "kimi-k2.7-code",
         "gemini-2.5-pro",
         "gemini-2.5-flash",
         "llama-3.3-70b",
@@ -231,7 +241,9 @@
       "gpt-5.5",
       "qwen-3-coder",
       "qwen-2.5-coder-32b",
+      "glm-5.2",
       "kimi-k2",
+      "kimi-k2.7-code",
       "gemini-2.5-pro",
       "gemini-2.5-flash",
       "llama-3.3-70b",
@@ -282,10 +294,9 @@
         "claude-opus-4-7",
         "gpt-5.5",
         "gpt-5.4",
-        "qwen/qwen3-coder",
-        "z-ai/glm-5.2",
-        "moonshotai/kimi-k2.7-code",
+        "glm-5.2",
         "kimi-k2",
+        "kimi-k2.7-code",
         "gemini-2.5-pro",
         "mistral-large-2"
       ],
@@ -296,7 +307,9 @@
         "gpt-5.4",
         "qwen-3-coder",
         "qwen-2.5-coder-32b",
+        "glm-5.2",
         "kimi-k2",
+        "kimi-k2.7-code",
         "gemini-2.5-pro",
         "gemini-2.5-flash",
         "llama-3.3-70b",
@@ -310,7 +323,9 @@
         "gpt-5.5",
         "gpt-5.4",
         "qwen-3-coder",
+        "glm-5.2",
         "kimi-k2",
+        "kimi-k2.7-code",
         "gemini-2.5-pro",
         "gemini-2.5-flash",
         "llama-3.3-70b",
@@ -333,7 +348,9 @@
       "gpt-5.3-codex-spark": "codex",
       "qwen-3-coder": "claude-openrouter",
       "qwen-2.5-coder-32b": "claude-openrouter",
+      "glm-5.2": "claude-openrouter",
       "kimi-k2": "claude-openrouter",
+      "kimi-k2.7-code": "claude-openrouter",
       "gemini-2.5-pro": "claude-openrouter",
       "gemini-2.5-flash": "claude-openrouter",
       "llama-3.3-70b": "claude-openrouter",
@@ -420,7 +437,7 @@
   },
   "modelRegistry": {
     "models": {
-      "qwen/qwen3-coder": {
+      "qwen-3-coder": {
         "vendor": "qwen",
         "class": "strong_generalist",
         "strengths": [
@@ -456,11 +473,11 @@
             "thinkingFormat": "openrouter"
           },
           "limitations": [
-            "Pilot use is limited to native task expansion, planning, and review until workflow certification covers broader native operation."
+            "Pilot use is limited to configured OpenRouter-native routing surfaces while broader rollout matures."
           ],
           "certification": {
-            "maxCertifiedPhase": "read-only",
-            "certifiedAt": "2026-07-01T16:01:42.602Z",
+            "maxCertifiedPhase": "workflow",
+            "certifiedAt": "2026-07-05T15:31:57.711Z",
             "certificationSuiteVersion": "v1",
             "knownLimitations": [
               "Live-judged scenarios require a paid provider call and are not run by the deterministic harness."
@@ -468,7 +485,7 @@
           }
         }
       },
-      "z-ai/glm-5.2": {
+      "glm-5.2": {
         "vendor": "z-ai",
         "class": "frontier",
         "strengths": [
@@ -504,11 +521,11 @@
             "thinkingFormat": "openrouter"
           },
           "limitations": [
-            "Pilot use is limited to native task expansion, planning, and review until workflow certification covers broader native operation."
+            "Pilot use is limited to configured OpenRouter-native routing surfaces while broader rollout matures."
           ],
           "certification": {
-            "maxCertifiedPhase": "read-only",
-            "certifiedAt": "2026-07-01T16:01:42.577Z",
+            "maxCertifiedPhase": "workflow",
+            "certifiedAt": "2026-07-05T15:31:57.527Z",
             "certificationSuiteVersion": "v1",
             "knownLimitations": [
               "Live-judged scenarios require a paid provider call and are not run by the deterministic harness."
@@ -516,8 +533,8 @@
           }
         }
       },
-      "moonshotai/kimi-k2.7-code": {
-        "vendor": "kimi",
+      "kimi-k2.7-code": {
+        "vendor": "moonshotai",
         "class": "strong_generalist",
         "strengths": [
           "coding-focused review",
@@ -552,11 +569,11 @@
             "thinkingFormat": "openrouter"
           },
           "limitations": [
-            "Pilot use is limited to native task expansion, planning, and review until workflow certification covers broader native operation."
+            "Pilot use is limited to configured OpenRouter-native routing surfaces while broader rollout matures."
           ],
           "certification": {
-            "maxCertifiedPhase": "read-only",
-            "certifiedAt": "2026-07-01T16:01:42.578Z",
+            "maxCertifiedPhase": "workflow",
+            "certifiedAt": "2026-07-05T15:31:57.748Z",
             "certificationSuiteVersion": "v1",
             "knownLimitations": [
               "Live-judged scenarios require a paid provider call and are not run by the deterministic harness."

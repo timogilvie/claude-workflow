@@ -361,7 +361,7 @@ export function recommendModelLLM(
     recommendedModel: response.recommended_model,
     recommendedAgent:
       response.recommended_agent ||
-      resolveAgent(response.recommended_model, agentMap, defaultAgent),
+      resolveAgent(response.recommended_model, agentMap, defaultAgent, undefined, 'coding'),
     confidence: normalizeConfidence(response.confidence),
     reasoning: `[LLM Router] ${response.reasoning}`,
     taskType: characteristics.taskType,

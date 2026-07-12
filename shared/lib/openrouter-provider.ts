@@ -101,13 +101,6 @@ export function filterOpenRouterModels(
     return { models: requested, warnings: [] };
   }
 
-  if (!OPENROUTER_DIRECT_AGENTS_ENABLED) {
-    return {
-      models: requested.filter((modelId) => !isOpenRouterModel(modelId)),
-      warnings: ['OpenRouter models were ignored because direct OpenRouter agents are temporarily disabled.'],
-    };
-  }
-
   const provider = resolveOpenRouterProviderConfig(repoDir);
   if (!provider.enabled) {
     return {

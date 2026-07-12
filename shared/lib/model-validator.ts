@@ -26,7 +26,7 @@ import {
   validateModelId,
 } from './model-registry.ts';
 import { resolveEffectiveModel } from './model-resolution.ts';
-import { resolveAgent } from './model-router.ts';
+import { resolveAgent, tryResolveAgent } from './model-router.ts';
 import { readQuotaSnapshot } from './quota-state.ts';
 
 const MODEL_SELECTOR_ACCEPTED_FORMS = 'family alias (for example "opus"), optional channel form (for example "opus:stable"), "inherit", or a pinned model ID (for example "claude-opus-4-7")';
@@ -140,7 +140,8 @@ export function getKnownModels(repoDir?: string): KnownModelsResult {
   const defaultAgent = config.router?.defaultAgent || 'claude';
 
   for (const modelId of all) {
-    const agent = resolveAgent(modelId, agentMap, defaultAgent, repoDir);
+    const resolution = tryResolveAgent(modelId, agentMap, defaultAgent, repoDir, 'coding');
+    const agent = resolution.ok ? resolution.agent : 'unroutable';
     const existing = byAgent.get(agent) || [];
     existing.push(modelId);
     byAgent.set(agent, existing);
