@@ -1,16 +1,22 @@
 import {
   getNativeAgentConfig,
   type NativeAgentConfig,
+  type NativeAgentAllowedPhase,
   type NativeAgentProviderConfig,
   type NativeAgentProviderName,
 } from '../config.ts';
 import { resolveEnvValue } from '../env-file.ts';
 import {
-  evaluateNativeReadOnlyRouting,
   getEffectiveRegistry,
   type ModelRegistry,
   type ReadOnlyNativeCapability,
 } from '../model-registry.ts';
+import {
+  evaluateNativeProviderGate,
+  type CertificationPhase,
+  type NativeGateMode,
+  type NativeGateRejectReason,
+} from './certification/index.ts';
 import {
   buildPiModel,
   getRegisteredPiProviderForModel,
@@ -61,6 +67,7 @@ export interface UncertifiedNativeProviderEntry extends NativeProviderEntryBase 
   status: 'uncertified';
   reason: string;
   capability: ReadOnlyNativeCapability | 'unregistered';
+  rejectionReason?: NativeGateRejectReason;
 }
 
 export type ResolvedNativeProviderEntry =
@@ -73,15 +80,24 @@ export interface ResolveNativeAgentProvidersOptions {
   env?: Record<string, string | undefined>;
   repoDir?: string;
   phase?: string;
+  mode?: NativeGateMode;
+  requiredCertificationPhase?: CertificationPhase;
   certificationMode?: boolean;
   allowPartial?: boolean;
   registry?: ModelRegistry;
+  now?: Date;
 }
 
 const DEFAULT_PROVIDER_ORDER: readonly NativeAgentProviderName[] = [
   OPENAI_NATIVE_PROVIDER,
   OPENROUTER_NATIVE_PROVIDER,
 ] as const;
+
+const NATIVE_AGENT_PHASE_TO_CERT_PHASE: Record<NativeAgentAllowedPhase, CertificationPhase> = {
+  'task-expansion': 'read-only',
+  planning: 'read-only',
+  review: 'read-only',
+};
 
 const READY_ENTRY_API_KEY = Symbol('ready-native-provider-api-key');
 
@@ -93,8 +109,10 @@ export function resolveNativeAgentProviders(
   const providers = config.providers ?? {};
   const resolved: ResolvedNativeProviderEntry[] = [];
   const phase = options.phase ?? 'planning';
-  const certificationMode = options.certificationMode ?? false;
-  const allowPartial = options.allowPartial ?? false;
+  const mode = resolveProviderMode(options);
+  const requiredCertificationPhase = mode === 'task'
+    ? resolveRequiredCertificationPhase(phase, options.requiredCertificationPhase)
+    : undefined;
   const registry = options.registry ?? getEffectiveRegistry(repoDir);
 
   for (const providerName of DEFAULT_PROVIDER_ORDER) {
@@ -140,15 +158,36 @@ export function resolveNativeAgentProviders(
     }
 
     for (const modelId of modelIds) {
-      const decision = evaluateNativeReadOnlyRouting({
+      if (mode === 'certification') {
+        const readyEntry: ReadyNativeProviderEntry = {
+          providerName,
+          modelId,
+          status: 'ready',
+          apiKeyEnv,
+          baseUrl,
+          headers,
+          model: providerName === OPENAI_NATIVE_PROVIDER
+            ? buildOpenAiResponsesModel({ modelId, baseUrl, headers })
+            : buildOpenRouterModel({ modelId, baseUrl, headers }),
+          certificationOnly: registry.models[modelId]?.nativeCapability?.readOnlyNative !== 'certified',
+        };
+        attachApiKey(readyEntry, apiKey);
+        resolved.push(readyEntry);
+        continue;
+      }
+
+      const decision = evaluateNativeProviderGate({
         modelId,
-        phase,
-        mode: certificationMode ? 'certification' : 'task',
+        mode,
+        requiredPhase: requiredCertificationPhase,
         registry,
-        allowPartial,
+        repoDir,
+        apiKeyPresent: true,
+        apiKeyEnv,
+        now: options.now,
       });
 
-      if (!certificationMode && !decision.routable) {
+      if (!decision.ok) {
         resolved.push({
           providerName,
           modelId,
@@ -156,8 +195,9 @@ export function resolveNativeAgentProviders(
           apiKeyEnv,
           baseUrl,
           headers,
-          reason: decision.reason!,
-          capability: decision.capability,
+          reason: decision.message,
+          capability: decision.nativeCapability ?? 'unregistered',
+          rejectionReason: decision.reason,
         });
         continue;
       }
@@ -172,7 +212,7 @@ export function resolveNativeAgentProviders(
         model: providerName === OPENAI_NATIVE_PROVIDER
           ? buildOpenAiResponsesModel({ modelId, baseUrl, headers })
           : buildOpenRouterModel({ modelId, baseUrl, headers }),
-        certificationOnly: certificationMode ? !decision.certified : false,
+        certificationOnly: false,
       };
       attachApiKey(readyEntry, apiKey);
       resolved.push(readyEntry);
@@ -319,4 +359,26 @@ function attachApiKey(entry: ReadyNativeProviderEntry, apiKey: string): void {
     configurable: false,
     writable: false,
   });
+}
+
+function resolveProviderMode(options: ResolveNativeAgentProvidersOptions): NativeGateMode {
+  if (options.mode) {
+    return options.mode;
+  }
+  return options.certificationMode === true ? 'certification' : 'task';
+}
+
+function resolveRequiredCertificationPhase(
+  phase: string,
+  requiredCertificationPhase: CertificationPhase | undefined,
+): CertificationPhase {
+  if (requiredCertificationPhase) {
+    return requiredCertificationPhase;
+  }
+
+  if (phase in NATIVE_AGENT_PHASE_TO_CERT_PHASE) {
+    return NATIVE_AGENT_PHASE_TO_CERT_PHASE[phase as NativeAgentAllowedPhase];
+  }
+
+  throw new Error(`resolveNativeAgentProviders: unsupported task phase "${phase}" for certification gating`);
 }

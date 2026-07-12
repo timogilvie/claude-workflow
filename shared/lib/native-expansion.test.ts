@@ -1,10 +1,15 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { registerScriptedPiProvider } from './native-agent/provider.ts';
+import {
+  buildCertificationPath,
+  CERTIFICATION_SCHEMA_VERSION,
+  type NativeCertificationArtifact,
+} from './native-agent/certification/index.ts';
 import { runNativeExpansion, NativeExpansionUnavailableError } from './native-expansion.ts';
 import type { ModelRegistry } from './model-registry.ts';
 import { createToolRegistry } from './native-agent/tools/registry.ts';
@@ -43,11 +48,37 @@ function makeRegistry(modelId: string, provider: 'openai' | 'openrouter' = 'open
           readOnlyNative: 'certified',
           nativeProvider: provider,
           piTransportKind: provider === 'openai' ? 'openai-responses' : 'openai-completions',
+          certification: {
+            maxCertifiedPhase: 'workflow',
+            certifiedAt: new Date().toISOString(),
+            certificationSuiteVersion: 'v1',
+          },
         },
       } as never,
     },
     ladders: {},
   };
+}
+
+function writeCertification(
+  repoDir: string,
+  modelId: string,
+  provider: 'openai' | 'openrouter' = 'openai',
+  overrides: Partial<NativeCertificationArtifact> = {},
+): void {
+  const path = buildCertificationPath(repoDir, provider, modelId, 'v1');
+  mkdirSync(dirname(path), { recursive: true });
+  const artifact: NativeCertificationArtifact = {
+    schemaVersion: CERTIFICATION_SCHEMA_VERSION,
+    provider,
+    model: modelId,
+    phase: 'workflow',
+    suiteVersion: 'v1',
+    certifiedAt: new Date().toISOString(),
+    scenarios: [{ scenarioId: 's1', passed: true }],
+    ...overrides,
+  };
+  writeFileSync(path, JSON.stringify(artifact, null, 2), 'utf-8');
 }
 
 function makePrompt(): string {
@@ -97,6 +128,7 @@ describe('runNativeExpansion', () => {
   it('returns valid task packet text and transcript metadata', async () => {
     const repoDir = makeRepo();
     const api = `native-expansion-success-${Date.now()}`;
+    writeCertification(repoDir, 'gpt-4o');
 
     registerScriptedPiProvider({
       api,
@@ -163,6 +195,7 @@ describe('runNativeExpansion', () => {
   it('records denied mutation tool calls without mutating the filesystem', async () => {
     const repoDir = makeRepo();
     const api = `native-expansion-denied-${Date.now()}`;
+    writeCertification(repoDir, 'gpt-4o');
     const notesPath = join(repoDir, 'notes.md');
     const before = readFileSync(notesPath, 'utf-8');
     const beforeMtime = statSync(notesPath).mtimeMs;
@@ -229,6 +262,7 @@ describe('runNativeExpansion', () => {
 
   it('throws when the planning-phase allow-list is empty', async () => {
     const repoDir = makeRepo();
+    writeCertification(repoDir, 'gpt-4o');
     try {
       await assert.rejects(
         () => runNativeExpansion({
@@ -256,6 +290,7 @@ describe('runNativeExpansion', () => {
   it('throws when the provider returns invalid task packet markdown', async () => {
     const repoDir = makeRepo();
     const api = `native-expansion-invalid-${Date.now()}`;
+    writeCertification(repoDir, 'gpt-4o');
     registerScriptedPiProvider({
       api,
       turns: [
