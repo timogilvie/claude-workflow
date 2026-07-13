@@ -176,6 +176,14 @@ ${GREEN}Commands:${NC}
                ${CYAN}wavemill check-routing --json${NC}
                ${CYAN}wavemill check-routing --repo-dir ~/src/wavemill${NC}
 
+  ${CYAN}doctor${NC}    Inspect operator-facing routing health diagnostics
+             Subcommands:
+               ${CYAN}wavemill doctor openrouter${NC}
+                          Reports configured OpenRouter/native model eligibility,
+                          blocking reasons, zero-traffic cells, and recent-selection
+                          warnings. Options: --json, --stage <planner|coder|reviewer>,
+                          --repo-dir <dir>, --lookback <N>
+
   ${CYAN}init${NC}      Initialize wavemill in current directory
              - Creates .wavemill-config.json
              - Optionally initializes project context (.wavemill/project-context.md)
@@ -1114,6 +1122,21 @@ run_check_routing() {
   exec npx tsx "$check_tool" "$@"
 }
 
+run_doctor() {
+  local subcommand="${1:-}"
+  shift || true
+
+  case "$subcommand" in
+    openrouter)
+      exec npx tsx "$TOOLS_DIR/openrouter-doctor.ts" "$@"
+      ;;
+    *)
+      echo "Usage: wavemill doctor openrouter [--json] [--stage <planner|coder|reviewer>] [--repo-dir <dir>] [--lookback <N>]" >&2
+      exit 1
+      ;;
+  esac
+}
+
 run_plan() {
   local plan_script="$LIB_DIR/wavemill-plan.sh"
 
@@ -1467,6 +1490,10 @@ case "${1:-}" in
   check-routing)
     shift
     run_check_routing "$@"
+    ;;
+  doctor)
+    shift
+    run_doctor "$@"
     ;;
   init)
     shift

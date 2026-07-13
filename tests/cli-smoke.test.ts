@@ -58,6 +58,7 @@ describe('wavemill CLI', () => {
       const out = run(['help']);
       assert.match(out, /Wavemill/);
       assert.match(out, /mill/);
+      assert.match(out, /doctor/);
       assert.match(out, /expand/);
       assert.match(out, /plan/);
       assert.match(out, /review/);
@@ -210,6 +211,63 @@ describe('wavemill CLI', () => {
         assert.match(out, /Starting Wavemill Routing Check/);
         assert.match(out, /Routing health:/);
         assert.match(out, /Sample route:/);
+      } finally {
+        rmSync(repoDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  describe('doctor command', () => {
+    it('dispatches doctor openrouter to the tool layer', () => {
+      const repoDir = mkdtempSync(join(tmpdir(), 'wavemill-openrouter-doctor-cli-'));
+      try {
+        mkdirSync(join(repoDir, '.wavemill', 'native-agent-certifications', 'z-ai', 'glm-5.2'), { recursive: true });
+        writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
+          providers: {
+            openrouter: {
+              enabled: true,
+              apiKeyEnv: 'TEST_OPENROUTER_KEY',
+              models: ['glm-5.2'],
+              stages: ['planner', 'coder', 'reviewer'],
+            },
+          },
+          nativeAgent: {
+            providers: {
+              openrouter: {
+                enabled: true,
+                apiKeyEnv: 'TEST_OPENROUTER_KEY',
+                models: ['z-ai/glm-5.2'],
+              },
+            },
+          },
+          router: {
+            defaultAgent: 'claude',
+            models: ['glm-5.2'],
+            availableModels: {
+              planner: ['glm-5.2'],
+              coder: ['glm-5.2'],
+              reviewer: ['glm-5.2'],
+            },
+            agentMap: {
+              'glm-5.2': 'claude-openrouter',
+            },
+          },
+        }, null, 2));
+        writeFileSync(join(repoDir, '.wavemill', 'native-agent-certifications', 'z-ai', 'glm-5.2', 'v1.json'), JSON.stringify({
+          schemaVersion: '1.0.0',
+          provider: 'z-ai',
+          model: 'glm-5.2',
+          phase: 'workflow',
+          suiteVersion: 'v1',
+          certifiedAt: '2026-07-10T00:00:00.000Z',
+          scenarios: [{ scenarioId: 's1', passed: true }],
+        }));
+        const result = runExpectFail(['doctor', 'openrouter', '--json', '--repo-dir', repoDir], {
+          TEST_OPENROUTER_KEY: 'sk-test',
+        });
+        assert.ok(result.status === 0 || result.status === 1);
+        const parsed = JSON.parse(result.stdout);
+        assert.equal(parsed.models[0].alias, 'glm-5.2');
       } finally {
         rmSync(repoDir, { recursive: true, force: true });
       }
