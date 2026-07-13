@@ -126,7 +126,7 @@ function registerNativeProvenance(input: {
   model: string;
   api: string;
   tools: readonly { name: string; class: string }[];
-}): void {
+  }): void {
   try {
     const refs = registerNativeRuntime({
       phase: 'task-expansion',
@@ -137,6 +137,7 @@ function registerNativeProvenance(input: {
       promptRef: input.promptRef ?? undefined,
       repoDir: input.repoDir,
     });
+    if (input.promptRef) recordUse(input.sessionId, 'task-expansion', input.promptRef, input.repoDir);
     if (refs.runtime) recordUse(input.sessionId, 'task-expansion', refs.runtime, input.repoDir);
     if (refs.toolSet) recordUse(input.sessionId, 'task-expansion', refs.toolSet, input.repoDir);
   } catch (error) {
