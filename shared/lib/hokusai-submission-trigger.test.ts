@@ -147,6 +147,15 @@ describe('hokusai-submission-trigger', () => {
     assert.equal(entry.row.inputs?.reviewer_model, 'gpt-5.4');
     assert.equal(entry.row.inputs?.coder_attempted_model, 'qwen/qwen3-coder');
     assert.equal(entry.row.inputs?.coder_model_alias, 'qwen-3-coder');
+    assert.equal(entry.row.inputs?.launch_priority_alias, 'qwen-3-coder');
+    assert.equal(entry.row.inputs?.launch_priority_openrouter_id, 'qwen/qwen3-coder');
+    assert.equal(entry.row.inputs?.launch_priority_family, 'qwen');
+    assert.equal(entry.row.inputs?.launch_priority_status, 'active');
+    assert.equal(entry.row.inputs?.launch_priority_tier, 1);
+    assert.deepEqual(entry.row.inputs?.launch_priority_roles, ['coding', 'review']);
+    assert.equal(entry.row.inputs?.launch_priority_track, 'target');
+    assert.equal(entry.row.inputs?.launch_priority_list_schema_version, '1');
+    assert.match(String(entry.row.inputs?.launch_priority_list_source_hash ?? ''), /^[a-f0-9]{64}$/);
     assert.equal(entry.row.inputs?.rubric_version, undefined);
     assert.equal(readFileSync(pendingPath, 'utf-8').includes('HOK-1243'), false);
   });
@@ -174,6 +183,8 @@ describe('hokusai-submission-trigger', () => {
     assert.equal(entry.row.success_under_budget, false);
     assert.equal(entry.row.inputs?.coder_attempted_model, undefined);
     assert.equal(entry.row.inputs?.coder_model_alias, undefined);
+    assert.equal(entry.row.inputs?.launch_priority_alias, undefined);
+    assert.equal(entry.row.inputs?.launch_priority_track, undefined);
   });
 
   it('warns and swallows redaction failures', async () => {

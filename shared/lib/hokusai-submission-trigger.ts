@@ -6,6 +6,7 @@ import { redactHokusaiSubmission } from './hokusai-redaction.ts';
 import { toHokusaiSubmission, type HokusaiSubmission } from './hokusai-schema.ts';
 import { errorMessage } from './error-utils.ts';
 import type { EvalRecord } from './eval-schema.ts';
+import { resolveLaunchPriorityMetadata } from './launch-validation.ts';
 
 export interface TriggerHokusaiSubmissionOptions {
   repoDir: string;
@@ -63,6 +64,9 @@ function toContributionProjection(
   record?: EvalRecord,
 ): RedactedEvalContributionProjection {
   const fod = record?.featureOutcomeDiagnostics ?? undefined;
+  const launchPriority = resolveLaunchPriorityMetadata(
+    record?.model_alias ?? record?.attempted_model ?? record?.modelId,
+  );
 
   const projection: RedactedEvalContributionProjection = {
     taskId: submission.task_id,
@@ -87,6 +91,19 @@ function toContributionProjection(
         : {}),
       ...(record?.model_alias
         ? { coder_model_alias: record.model_alias }
+        : {}),
+      ...(launchPriority
+        ? {
+          launch_priority_alias: launchPriority.wavemillAlias,
+          launch_priority_openrouter_id: launchPriority.openrouterId,
+          launch_priority_family: launchPriority.family,
+          launch_priority_status: launchPriority.status,
+          launch_priority_tier: launchPriority.priorityTier,
+          launch_priority_roles: launchPriority.roleEligibility,
+          launch_priority_track: launchPriority.track,
+          launch_priority_list_schema_version: launchPriority.provenance.schemaVersion,
+          launch_priority_list_source_hash: launchPriority.provenance.sourceHash,
+        }
         : {}),
     },
     // Feature outcome artifact diagnostics (HOK-2262)
