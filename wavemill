@@ -86,6 +86,15 @@ ${GREEN}Commands:${NC}
                           --model <m> (required), --phase <phase> (required),
                           --dry-run, --json, --repo <dir>
 
+  ${CYAN}doctor${NC}    Run diagnostic checks for provider/router eligibility
+             Subcommands:
+               ${CYAN}wavemill doctor openrouter${NC}
+                          Report OpenRouter/native eligibility, blocking gates,
+                          recent zero-traffic warnings, and the next challenger.
+                          Options: --json, --stage <planner|coder|reviewer>,
+                          --repo <dir>, --recent-window <n>, --strict,
+                          --warning-only
+
   ${CYAN}scaffold${NC}  Scaffold reusable CI workflows into another repository
              Subcommands:
                ${CYAN}wavemill scaffold migrate-dryrun <target>${NC}
@@ -1162,6 +1171,21 @@ run_native_agent() {
   esac
 }
 
+run_doctor() {
+  local subcommand="${1:-}"
+  shift || true
+
+  case "$subcommand" in
+    openrouter)
+      exec npx tsx "$TOOLS_DIR/openrouter-doctor.ts" "$@"
+      ;;
+    *)
+      echo "Usage: wavemill doctor openrouter [--json] [--stage <planner|coder|reviewer>] [--repo <dir>] [--recent-window <n>] [--strict] [--warning-only]" >&2
+      exit 1
+      ;;
+  esac
+}
+
 run_scaffold() {
   local subcommand="${1:-}"
 
@@ -1417,6 +1441,10 @@ case "${1:-}" in
   native-agent)
     shift
     run_native_agent "$@"
+    ;;
+  doctor)
+    shift
+    run_doctor "$@"
     ;;
   scaffold)
     shift

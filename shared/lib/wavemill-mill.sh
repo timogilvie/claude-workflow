@@ -141,6 +141,15 @@ _update_effective_max_parallel() {
   esac
 }
 
+openrouter_zero_traffic_warning() {
+  local warning
+  warning="$(_with_timeout 5 npx tsx "$TOOLS_DIR/openrouter-doctor.ts" --warning-only --repo "$REPO_DIR" 2>/dev/null || true)"
+  warning="$(trim_outer_whitespace "$warning")"
+  if [[ -n "$warning" ]]; then
+    log_warn "$warning"
+  fi
+}
+
 if [[ "${WAVEMILL_READY_WATCHDOG_SOURCE_ONLY:-}" != "1" ]]; then
   _update_effective_max_parallel
 fi
@@ -12643,6 +12652,8 @@ if ! jq empty "$LAUNCH_PLAN_FILE" >/dev/null 2>&1; then
   log_error "Generated launch plan is not valid JSON: $LAUNCH_PLAN_FILE"
   exit 1
 fi
+
+openrouter_zero_traffic_warning
 
 if [[ "$DRY_RUN" == "true" ]]; then
   log "status" "Dry-run launch plan written: $LAUNCH_PLAN_FILE"

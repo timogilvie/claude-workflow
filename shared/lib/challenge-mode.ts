@@ -142,6 +142,13 @@ export interface DeepSeekChallengeFilterResult {
   warnings: string[];
 }
 
+export interface ChallengePoolExplanation {
+  stage: ChallengeStage;
+  configuredPool: string[];
+  eligibleModels: string[];
+  rejections: ChallengeNativeRejection[];
+}
+
 function uniqueNonEmpty(values: string[]): string[] {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
 }
@@ -180,6 +187,30 @@ function filterEligibleChallengeCandidates(
     : nativeEligible;
   return {
     models: filterDisabledModels(uniqueNonEmpty(openRouterEligible)),
+    rejections,
+  };
+}
+
+export function explainChallengePool(
+  stage: ChallengeStage,
+  repoDir?: string,
+  opts: {
+    pool?: string[];
+    now?: Date;
+  } = {},
+): ChallengePoolExplanation {
+  const configuredPool = uniqueNonEmpty(opts.pool ?? getChallengeModelPoolFromConfig(repoDir));
+  const { models, rejections } = filterEligibleChallengeCandidates(
+    configuredPool,
+    stage,
+    repoDir,
+    opts.now,
+  );
+
+  return {
+    stage,
+    configuredPool,
+    eligibleModels: models,
     rejections,
   };
 }

@@ -231,6 +231,13 @@ interface ResolvedModelPool {
   routingFailure?: string;
 }
 
+export interface StagePoolExplanation extends ResolvedModelPool {
+  role: 'planner' | 'coder' | 'reviewer';
+  basePool: string[];
+  explicitPool: string[];
+  configuredPool: string[];
+}
+
 export interface StageTokenProfile {
   inputTokens: number;
   cacheCreationTokens: number;
@@ -553,6 +560,37 @@ function resolveStagePool(
   }
 
   return providerFiltered;
+}
+
+export function explainStagePool(
+  role: 'planner' | 'coder' | 'reviewer',
+  repoDir?: string,
+  options?: RouteWorkflowOptions,
+  policyPool?: string[],
+): StagePoolExplanation {
+  const routerConfig = getRouterConfig(repoDir);
+  const effectiveOptions = {
+    ...options,
+    ...(repoDir ? { repoDir } : {}),
+  };
+  const basePool = options?.modelsAvailable && options.modelsAvailable.length > 0
+    ? [...new Set(options.modelsAvailable)]
+    : getEffectiveModelPool(effectiveOptions).models;
+  const explicitPool = options?.modelsAvailable && options.modelsAvailable.length > 0
+    ? options.modelsAvailable
+    : role === 'planner'
+      ? options?.plannerModelsAvailable ?? getAvailableModelsForStage(routerConfig, 'planner') ?? basePool
+      : role === 'coder'
+        ? options?.coderModelsAvailable ?? getAvailableModelsForStage(routerConfig, 'coder') ?? basePool
+        : options?.reviewerModelsAvailable ?? getAvailableModelsForStage(routerConfig, 'reviewer') ?? basePool;
+
+  return {
+    role,
+    basePool,
+    explicitPool: [...new Set(explicitPool)],
+    configuredPool: intersectPools(basePool, explicitPool),
+    ...resolveStagePool(role, basePool, routerConfig, effectiveOptions, policyPool),
+  };
 }
 
 function pickAvailableModel(pool: string[], preferred: string[], fallback: string): string {

@@ -26,6 +26,20 @@ export interface OpenRouterPoolFilterResult {
   warnings: string[];
 }
 
+export interface OpenRouterProviderGateExplanation {
+  modelId: string;
+  stage?: DeepSeekProviderStage;
+  enabled: boolean;
+  apiKeyEnv: string;
+  hasApiKey: boolean;
+  directAgentsEnabled: boolean;
+  directAgentsEnv: 'OPENROUTER_DIRECT_AGENTS_ENABLED';
+  stageAllowed: boolean;
+  modelAllowed: boolean;
+  registryAliasPresent: boolean;
+  openrouterId: string | null;
+}
+
 let launchPriorityByAliasCache: Map<string, { openrouterId: string; family: string }> | null = null;
 
 function getLaunchPriorityByAlias(): Map<string, { openrouterId: string; family: string }> {
@@ -132,6 +146,29 @@ export function filterOpenRouterModels(
     warnings: skippedConfiguredModels.length > 0
       ? [`OpenRouter models were ignored because they are not allowlisted in providers.openrouter.models: ${skippedConfiguredModels.join(', ')}`]
       : [],
+  };
+}
+
+export function explainOpenRouterProviderGate(
+  modelId: string,
+  repoDir?: string,
+  stage?: DeepSeekProviderStage,
+): OpenRouterProviderGateExplanation {
+  const provider = resolveOpenRouterProviderConfig(repoDir);
+  const openrouterId = resolveOpenRouterModelId(modelId);
+
+  return {
+    modelId,
+    stage,
+    enabled: provider.enabled,
+    apiKeyEnv: provider.apiKeyEnv,
+    hasApiKey: provider.hasApiKey,
+    directAgentsEnabled: OPENROUTER_DIRECT_AGENTS_ENABLED,
+    directAgentsEnv: 'OPENROUTER_DIRECT_AGENTS_ENABLED',
+    stageAllowed: !stage || provider.stages.includes(stage),
+    modelAllowed: provider.models.includes(modelId),
+    registryAliasPresent: openrouterId !== null,
+    openrouterId,
   };
 }
 
