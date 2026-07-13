@@ -15,7 +15,11 @@
  * @module native-agent/certification/router-filter
  */
 
-import { checkCertificationEligibility, type IneligibilityReason } from './loader.ts';
+import {
+  evaluateNativeProviderGate,
+  type NativeGateRejectReason,
+} from './eligibility-gate.ts';
+import { loadCertification } from './loader.ts';
 import type { CertificationPhase } from './schema.ts';
 import type { ModelRegistry } from '../../model-registry.ts';
 
@@ -76,14 +80,19 @@ export interface RouterCertificationRejection {
   reason: RouterCertificationRejectionReason;
 }
 
-function mapIneligibilityReason(reason: IneligibilityReason): RouterCertificationRejectionReason {
+function mapGateReason(reason: NativeGateRejectReason): RouterCertificationRejectionReason {
   switch (reason) {
-    case 'missing': return 'missing';
-    case 'malformed': return 'malformed';
-    case 'wrong-version': return 'wrong-suite';
-    case 'stale': return 'stale';
-    case 'phase-insufficient': return 'insufficient-phase';
-    case 'scenario-failure': return 'insufficient-phase';
+    case 'missing_api_key':
+    case 'missing_artifact':
+      return 'missing';
+    case 'unregistered_model':
+      return 'no-native-capability';
+    case 'wrong_suite':
+      return 'wrong-suite';
+    case 'stale_artifact':
+      return 'stale';
+    case 'insufficient_phase':
+      return 'insufficient-phase';
   }
 }
 
@@ -155,26 +164,47 @@ export function filterNativeModels(
       continue;
     }
 
-    const eligibility = checkCertificationEligibility(
+    const loaded = loadCertification(
       repoDir,
       nativeCapability.nativeProvider,
       modelId,
       certMeta.certificationSuiteVersion,
-      requiredPhase,
-      now,
     );
 
-    if (eligibility.eligible) {
+    if (!loaded.ok) {
+      rejected.push({
+        modelId,
+        role,
+        requestedPhase: requiredPhase,
+        nativeCapability: readOnlyNative,
+        requiredSuiteVersion: certMeta.certificationSuiteVersion,
+        reason: loaded.reason,
+      });
+      continue;
+    }
+
+    const decision = evaluateNativeProviderGate({
+      modelId,
+      mode: 'task',
+      requiredPhase,
+      registry,
+      repoDir,
+      apiKeyPresent: true,
+      apiKeyEnv: 'ROUTER_FILTER_UNUSED',
+      now,
+    });
+
+    if (decision.ok) {
       eligible.push(modelId);
     } else {
       rejected.push({
         modelId,
         role,
         requestedPhase: requiredPhase,
-        certifiedPhase: eligibility.artifact?.phase,
+        certifiedPhase: decision.foundPhase ?? loaded.artifact.phase,
         nativeCapability: readOnlyNative,
         requiredSuiteVersion: certMeta.certificationSuiteVersion,
-        reason: mapIneligibilityReason(eligibility.reason),
+        reason: mapGateReason(decision.reason),
       });
     }
   }

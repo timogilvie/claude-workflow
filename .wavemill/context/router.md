@@ -1,6 +1,6 @@
 # Router
 
-**Last updated:** 2026-07-10T00:00:00.000Z
+**Last updated:** 2026-07-12T00:00:00.000Z
 **Files touched:** 7 files in last 30 days
 
 ## Purpose
@@ -127,8 +127,9 @@ These are collected in `WorkflowRouteDecision.nativeCertificationRejections` and
 
 - **Filter module**: `shared/lib/native-agent/certification/router-filter.ts`
 - **Phase mapping**: `STAGE_PHASE_REQUIREMENT` (exported from `workflow-router.ts`)
-- **Artifact loading**: `checkCertificationEligibility()` from `native-agent/certification/loader.ts`
-- **Applied in**: `resolveStagePool()` in `workflow-router.ts`, when `repoDir` is available
+- **Unified gate**: `evaluateNativeProviderGate()` in `shared/lib/native-agent/certification/eligibility-gate.ts`
+- **Artifact loading**: router preserves `missing` versus `malformed` by calling `loadCertification()` before delegating freshness/suite/phase checks to the unified gate
+- **Applied in**: `resolveStagePool()` in `workflow-router.ts`, and task-mode native provider resolution in `shared/lib/native-agent/providers.ts`
 
 ### Scope
 
@@ -223,6 +224,7 @@ Both modes use stage-aware KNN signals for candidate selection and prepend a deg
 - Overwrite `.initial-route.json` after bootstrap routing has been persisted
 - Allow an uncertified native model to reach the final pool (fail closed, never silently ignore certification failures)
 - Accept a native model based only on registry `maxCertifiedPhase` metadata without checking the on-disk artifact
+- Assume an OpenRouter alias and its raw `vendor/model` ID resolve to different certification artifacts
 
 ## Known Failure Modes
 
@@ -237,6 +239,7 @@ Both modes use stage-aware KNN signals for candidate selection and prepend a deg
 | Capability-aware routing appears ignored | `router.capabilityFiltering.enabled` is unset/false, so capability constraints are not applied | Enable `router.capabilityFiltering.enabled` and verify the route went through Layer 3 policy or stage-aware selection instead of explicit pinned resolution |
 | Capability-aware route falls back unexpectedly | Every in-pool candidate failed one or more capability checks, so the empty-filter fallback restored the unfiltered viable pool | Inspect decision reasoning for `capability-filter-empty-fallback` and either loosen the task constraints or expand the configured model pool |
 | Route artifacts are missing provenance or still marked as cache/live incorrectly | Route JSON write sites did not stamp or refresh `provenance` fields on reuse | Ensure route persistence paths always write/merge `provenance` and refresh source on cache recovery |
+| Native provider reports `missing_artifact` even though an OpenRouter cert exists on disk | The artifact was written under a different storage identity than the router/provider gate resolves (for example alias vs raw ID mismatch) | Compare the reported `artifactPath` with `.wavemill/native-agent-certifications/<provider>/<model>/<suite>.json`; alias `glm-5.2` and raw `z-ai/glm-5.2` must both land under `z-ai/glm-5.2/` |
 | Rubric-aware mode is enabled but scalar routing still wins | Rubric coverage in the nearest-neighbor window is below `router.rubricAware.minCoverage` | Check decision reasoning for `rubric-aware fallback`; lower `minCoverage` only after validating mixed-dataset behavior |
 | Native model appears selected despite having no cert artifact | `repoDir` was not passed to the routing call, so the cert filter did not run | Always pass `repoDir` to routing calls in production paths; cert filter is a no-op without it |
 | Coder rejects valid native model | Cert phase is only `read-only` (insufficient for `patch` requirement) | Re-certify the model at the `patch` phase and write a fresh artifact |

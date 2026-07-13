@@ -9,16 +9,15 @@
  */
 
 import {
-  allScenariosPassed,
-  isCertificationFresh,
   phaseSatisfies,
   type CertificationPhase,
   type NativeCertificationArtifact,
 } from './schema.ts';
-import { loadCertification } from './loader.ts';
+import { evaluateEligibility, loadCertification } from './loader.ts';
 import { STAGE_PHASE_REQUIREMENT, type RouterRole } from './router-filter.ts';
 import { getEffectiveRegistry, type ModelRegistry, type ReadOnlyNativeCapability } from '../../model-registry.ts';
-import { CERTIFICATION_TTL_DAYS } from './schema.ts';
+import { resolveCertificationStorageIdentity } from './identity.ts';
+import { checkIdentity } from './validator.ts';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -147,11 +146,11 @@ export function buildModelCertificationReport(
       continue;
     }
 
-    // Certified — determine state from on-disk artifact, falling back to registry metadata
+    // Certified — determine state from on-disk artifact only so the report
+    // matches provider-resolution fail-closed semantics.
     const certMeta = nativeCapability.certification;
 
     if (!certMeta) {
-      // No registry metadata — cannot look up artifact by suite version
       rows.push({
         provider: nativeCapability.nativeProvider,
         model: modelId,
@@ -172,20 +171,7 @@ export function buildModelCertificationReport(
       certMeta.certificationSuiteVersion,
     );
 
-    if (loaded.ok) {
-      rows.push(rowFromArtifact(
-        nativeCapability.nativeProvider,
-        modelId,
-        readOnlyNative,
-        loaded.artifact,
-        now,
-        flattenLimitations([nativeCapability.limitations, certMeta.knownLimitations]),
-      ));
-      continue;
-    }
-
-    if (loaded.reason === 'malformed') {
-      // Corrupted artifact — treat as uncertified
+    if (!loaded.ok) {
       rows.push({
         provider: nativeCapability.nativeProvider,
         model: modelId,
@@ -199,14 +185,51 @@ export function buildModelCertificationReport(
       continue;
     }
 
-    // Artifact missing — fall back to registry metadata
-    rows.push(rowFromRegistryMeta(
+    const storageIdentity = resolveCertificationStorageIdentity(nativeCapability.nativeProvider, modelId);
+    const identityError = checkIdentity(
+      loaded.artifact,
+      storageIdentity.provider,
+      storageIdentity.model,
+    );
+    if (identityError) {
+      rows.push(rowFromArtifactState(
+        nativeCapability.nativeProvider,
+        modelId,
+        readOnlyNative,
+        loaded.artifact,
+        'uncertified',
+        now,
+        flattenLimitations([nativeCapability.limitations, certMeta.knownLimitations]),
+      ));
+      continue;
+    }
+
+    const eligibility = evaluateEligibility(
+      loaded.artifact,
+      certMeta.certificationSuiteVersion,
+      'read-only',
+      now,
+    );
+    if (eligibility.eligible) {
+      rows.push(rowFromArtifact(
+        nativeCapability.nativeProvider,
+        modelId,
+        readOnlyNative,
+        loaded.artifact,
+        now,
+        flattenLimitations([nativeCapability.limitations, certMeta.knownLimitations]),
+      ));
+      continue;
+    }
+
+    rows.push(rowFromArtifactState(
       nativeCapability.nativeProvider,
       modelId,
       readOnlyNative,
-      certMeta,
+      loaded.artifact,
+      eligibility.reason === 'stale' ? 'stale' : 'uncertified',
       now,
-      flattenLimitations([nativeCapability.limitations]),
+      flattenLimitations([nativeCapability.limitations, certMeta.knownLimitations]),
     ));
   }
 
@@ -230,53 +253,31 @@ function rowFromArtifact(
   now: Date,
   registryLimitations: string[],
 ): ModelCertificationReportRow {
-  const fresh = isCertificationFresh(artifact, now);
-  const allPassed = allScenariosPassed(artifact);
+  return rowFromArtifactState(provider, model, native, artifact, 'ready', now, registryLimitations);
+}
 
+function rowFromArtifactState(
+  provider: string,
+  model: string,
+  native: ReadOnlyNativeCapability,
+  artifact: NativeCertificationArtifact,
+  state: Extract<ModelCertificationState, 'ready' | 'stale' | 'uncertified'>,
+  now: Date,
+  registryLimitations: string[],
+): ModelCertificationReportRow {
   const artLimitations = artifact.knownLimitations ?? [];
   const knownLimitations = deduplicateStrings([...registryLimitations, ...artLimitations]);
-
   const scenarios: ScenarioOutcome[] = artifact.scenarios.map(s => ({
     scenarioId: s.scenarioId,
     passed: s.passed,
     ...(s.failureMessage ? { failureMessage: s.failureMessage } : {}),
   }));
-
   const ageDays = computeAgeDays(artifact.certifiedAt, now);
-
-  if (!fresh) {
-    return {
-      provider, model, native,
-      state: 'stale',
-      certifiedPhase: artifact.phase,
-      eligibleStages: [],
-      suiteVersion: artifact.suiteVersion,
-      certifiedAt: artifact.certifiedAt,
-      ageDays,
-      knownLimitations,
-      scenarios,
-    };
-  }
-
-  if (!allPassed) {
-    return {
-      provider, model, native,
-      state: 'uncertified',
-      certifiedPhase: artifact.phase,
-      eligibleStages: [],
-      suiteVersion: artifact.suiteVersion,
-      certifiedAt: artifact.certifiedAt,
-      ageDays,
-      knownLimitations,
-      scenarios,
-    };
-  }
-
-  const eligibleStages = computeEligibleStages(artifact.phase);
+  const eligibleStages = state === 'ready' ? computeEligibleStages(artifact.phase) : [];
 
   return {
     provider, model, native,
-    state: eligibleStages.length > 0 ? 'ready' : 'uncertified',
+    state: state === 'ready' && eligibleStages.length === 0 ? 'uncertified' : state,
     certifiedPhase: artifact.phase,
     eligibleStages,
     suiteVersion: artifact.suiteVersion,
@@ -284,54 +285,6 @@ function rowFromArtifact(
     ageDays,
     knownLimitations,
     scenarios,
-  };
-}
-
-function rowFromRegistryMeta(
-  provider: string,
-  model: string,
-  native: ReadOnlyNativeCapability,
-  certMeta: { maxCertifiedPhase: CertificationPhase; certifiedAt: string; certificationSuiteVersion: string; knownLimitations?: string[] },
-  now: Date,
-  registryLimitations: string[],
-): ModelCertificationReportRow {
-  const knownLimitations = deduplicateStrings([
-    ...registryLimitations,
-    ...(certMeta.knownLimitations ?? []),
-  ]);
-
-  // Check freshness using the same TTL logic as isCertificationFresh
-  const certifiedAtMs = Date.parse(certMeta.certifiedAt);
-  const expiryMs = certifiedAtMs + CERTIFICATION_TTL_DAYS * 24 * 60 * 60 * 1000;
-  const fresh = now.getTime() < expiryMs;
-  const ageDays = computeAgeDays(certMeta.certifiedAt, now);
-
-  if (!fresh) {
-    return {
-      provider, model, native,
-      state: 'stale',
-      certifiedPhase: certMeta.maxCertifiedPhase,
-      eligibleStages: [],
-      suiteVersion: certMeta.certificationSuiteVersion,
-      certifiedAt: certMeta.certifiedAt,
-      ageDays,
-      knownLimitations,
-      scenarios: [],
-    };
-  }
-
-  const eligibleStages = computeEligibleStages(certMeta.maxCertifiedPhase);
-
-  return {
-    provider, model, native,
-    state: eligibleStages.length > 0 ? 'ready' : 'uncertified',
-    certifiedPhase: certMeta.maxCertifiedPhase,
-    eligibleStages,
-    suiteVersion: certMeta.certificationSuiteVersion,
-    certifiedAt: certMeta.certifiedAt,
-    ageDays,
-    knownLimitations,
-    scenarios: [],
   };
 }
 
