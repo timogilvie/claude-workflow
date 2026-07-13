@@ -11,6 +11,7 @@ export interface TriggerHokusaiSubmissionOptions {
   repoDir: string;
   configDir?: string;
   redactionSalt?: string;
+  launchPriorityValidation?: LaunchPriorityValidationContext;
 }
 
 export type HokusaiSubmissionTriggerResult =
@@ -57,10 +58,37 @@ function toBudgetCompliant(submission: HokusaiSubmission): boolean {
   return actualCostUsd <= maxCostUsd;
 }
 
-function toContributionProjection(
+export interface LaunchPriorityValidationContext {
+  catalogGeneratedAt?: string;
+  catalogSourceHash?: string;
+  launchPriorityListVersion?: string;
+  launchPriorityFixtureHash?: string;
+}
+
+function toLaunchPriorityInputs(
+  launchPriorityValidation: LaunchPriorityValidationContext | undefined,
+): Record<string, string> {
+  const inputs: Record<string, string> = {};
+  if (launchPriorityValidation?.catalogGeneratedAt) {
+    inputs.launch_priority_catalog_generated_at = launchPriorityValidation.catalogGeneratedAt;
+  }
+  if (launchPriorityValidation?.catalogSourceHash) {
+    inputs.launch_priority_catalog_source_hash = launchPriorityValidation.catalogSourceHash;
+  }
+  if (launchPriorityValidation?.launchPriorityListVersion) {
+    inputs.launch_priority_list_version = launchPriorityValidation.launchPriorityListVersion;
+  }
+  if (launchPriorityValidation?.launchPriorityFixtureHash) {
+    inputs.launch_priority_fixture_hash = launchPriorityValidation.launchPriorityFixtureHash;
+  }
+  return inputs;
+}
+
+export function buildHokusaiContributionProjection(
   submission: HokusaiSubmission,
   observedAt: string,
   record?: EvalRecord,
+  launchPriorityValidation?: LaunchPriorityValidationContext,
 ): RedactedEvalContributionProjection {
   const fod = record?.featureOutcomeDiagnostics ?? undefined;
 
@@ -88,6 +116,7 @@ function toContributionProjection(
       ...(record?.model_alias
         ? { coder_model_alias: record.model_alias }
         : {}),
+      ...toLaunchPriorityInputs(launchPriorityValidation),
     },
     // Feature outcome artifact diagnostics (HOK-2262)
     // Only safe scalar/enum/array-of-string fields; no raw paths or issue IDs
@@ -159,7 +188,12 @@ export async function triggerHokusaiSubmission(
       salt: options.redactionSalt,
     });
     const row = hokusaiSubmissionTriggerDeps.buildSubmitDataContributionRow(
-      toContributionProjection(redactedSubmission, record.timestamp, record),
+      buildHokusaiContributionProjection(
+        redactedSubmission,
+        record.timestamp,
+        record,
+        options.launchPriorityValidation,
+      ),
     );
     const enqueueResult = await hokusaiSubmissionTriggerDeps.enqueueContribution(row, {
       repoDir: options.repoDir,
