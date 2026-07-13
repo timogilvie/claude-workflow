@@ -6,6 +6,7 @@ import { join, resolve, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { buildCertificationPath } from '../shared/lib/native-agent/certification/loader.ts';
+import { resolveCertificationStorageIdentity } from '../shared/lib/native-agent/certification/identity.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const resolveChallengeTaskTool = resolve(__dirname, 'resolve-challenge-task.ts');
@@ -37,11 +38,12 @@ function writeCertArtifact(
   phase: string = 'workflow',
 ) {
   const certPath = buildCertificationPath(repoDir, provider, model, suiteVersion);
+  const identity = resolveCertificationStorageIdentity(provider, model);
   mkdirSync(dirname(certPath), { recursive: true });
   writeFileSync(certPath, JSON.stringify({
     schemaVersion: 2,
-    provider,
-    model,
+    provider: identity.provider,
+    model: identity.model,
     phase,
     suiteVersion,
     certifiedAt: CERT_DATE_FRESH,

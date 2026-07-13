@@ -6,10 +6,10 @@ import type { AgentContext, LoopStopReason, WavemillLoopConfig } from './loop.ts
 import { runWavemillLoop } from './loop.ts';
 import { TranscriptWriter, type TranscriptEvent, type TranscriptToolResult } from './transcript.ts';
 import {
+  buildNativeProviderResolutionFailureMessage,
   getNativeProviderApiKey,
   resolveNativeAgentProviders,
   type ReadyNativeProviderEntry,
-  type ResolvedNativeProviderEntry,
 } from './providers.ts';
 import { createReadOnlyTools, READ_ONLY_PATH_FIELDS } from './tools/read-only.ts';
 import { createGitTools, gitAfterToolCall, gitToolPolicyConfig } from './tools/git.ts';
@@ -157,18 +157,9 @@ function selectReviewProvider(repoDir: string, env: NodeJS.ProcessEnv = process.
     return { ok: true, entry: readyEntry };
   }
 
-  const reasons = providers.map((entry: ResolvedNativeProviderEntry) => {
-    if ('reason' in entry && typeof entry.reason === 'string') {
-      return `${entry.providerName}:${entry.modelId}: ${entry.reason}`;
-    }
-    return `${entry.providerName}:${entry.modelId}: unavailable`;
-  });
-
   return {
     ok: false,
-    message: reasons.length > 0
-      ? `Native review is unavailable: ${reasons.join('; ')}`
-      : 'Native review is unavailable: no configured native providers were ready.',
+    message: buildNativeProviderResolutionFailureMessage('review', providers),
   };
 }
 

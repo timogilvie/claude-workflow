@@ -13,7 +13,11 @@ import { dirname, join, relative, resolve } from 'node:path';
 import type { AgentMessage, AgentTurn, Message } from './messages.ts';
 import type { AgentContext, WavemillLoopConfig } from './loop.ts';
 import { runWavemillLoop } from './loop.ts';
-import { resolveNativeAgentProviders, type ReadyNativeProviderEntry } from './providers.ts';
+import {
+  buildNativeProviderResolutionFailureMessage,
+  resolveNativeAgentProviders,
+  type ReadyNativeProviderEntry,
+} from './providers.ts';
 import { createReadOnlyTools, READ_ONLY_PATH_FIELDS } from './tools/read-only.ts';
 import { createGitTools, gitAfterToolCall } from './tools/git.ts';
 import { createArtifactTools } from './tools/artifacts.ts';
@@ -276,12 +280,14 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
     const registry = createToolRegistry(descriptors);
     const registryMetadata = options.registryMetadataOverride ?? registry.list();
 
-    const readyProvider = options.providerEntries?.[0]
-      ?? resolveNativeAgentProviders(options.repoDir, { phase: 'planning' })
-        .find((entry): entry is ReadyNativeProviderEntry => entry.status === 'ready');
+    const providerEntries = options.providerEntries
+      ?? resolveNativeAgentProviders(options.repoDir, { phase: 'planning' });
+    const readyProvider = providerEntries.find(
+      (entry): entry is ReadyNativeProviderEntry => entry.status === 'ready',
+    );
 
     if (!readyProvider && !options.loopModelOverride) {
-      throw new Error('No ready native provider is available for planning');
+      throw new Error(buildNativeProviderResolutionFailureMessage('planning', providerEntries));
     }
 
     const taskPacket = readFileSync(taskPacketPath, 'utf-8');
