@@ -11,6 +11,7 @@ import {
 export const OPENROUTER_BASE_URL = 'https://openrouter.ai/api';
 export const OPENROUTER_DEFAULT_STAGES = ['planner', 'coder', 'reviewer'] as const satisfies readonly DeepSeekProviderStage[];
 export const OPENROUTER_DIRECT_AGENTS_ENABLED = false;
+export const OPENROUTER_DIRECT_AGENTS_ENV = 'OPENROUTER_DIRECT_AGENTS_ENABLED';
 
 export interface ResolvedOpenRouterProviderConfig {
   enabled: boolean;
@@ -19,6 +20,7 @@ export interface ResolvedOpenRouterProviderConfig {
   models: string[];
   stages: DeepSeekProviderStage[];
   hasApiKey: boolean;
+  directAgentsEnabled: boolean;
 }
 
 export interface OpenRouterPoolFilterResult {
@@ -49,6 +51,32 @@ function normalizeModels(models?: string[]): string[] {
 function normalizeStages(stages?: DeepSeekProviderStage[]): DeepSeekProviderStage[] {
   const candidates = stages && stages.length > 0 ? stages : [...OPENROUTER_DEFAULT_STAGES];
   return [...new Set(candidates)];
+}
+
+function isTruthyEnvValue(value: string | undefined): boolean {
+  if (typeof value !== 'string') {
+    return false;
+  }
+
+  switch (value.trim().toLowerCase()) {
+    case '1':
+    case 'true':
+    case 'yes':
+    case 'on':
+      return true;
+    default:
+      return false;
+  }
+}
+
+export function isOpenRouterDirectAgentsEnabled(
+  env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env,
+): boolean {
+  const configured = env[OPENROUTER_DIRECT_AGENTS_ENV];
+  if (typeof configured === 'undefined') {
+    return OPENROUTER_DIRECT_AGENTS_ENABLED;
+  }
+  return isTruthyEnvValue(configured);
 }
 
 export function isOpenRouterModel(modelId: string | null | undefined): boolean {
@@ -87,6 +115,7 @@ export function resolveOpenRouterProviderConfig(repoDir?: string): ResolvedOpenR
     models: normalizeModels(config.models),
     stages: normalizeStages(config.stages),
     hasApiKey,
+    directAgentsEnabled: isOpenRouterDirectAgentsEnabled(),
   };
 }
 

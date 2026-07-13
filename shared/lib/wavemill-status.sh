@@ -62,6 +62,7 @@ MAX_REFRESH=10
 DEFAULT_TIP_REFRESH=60
 MAX_TIP_REFRESH=3600
 PR_CACHE="/tmp/${SESSION}-pr-cache.json"
+OPENROUTER_WARNING_CACHE="/tmp/${SESSION}-openrouter-warning.txt"
 PR_TTL=15
 WAVEMILL_STATUS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WAVEMILL_REPO_DIR="$(cd "$WAVEMILL_STATUS_DIR/../.." && pwd)"
@@ -1474,9 +1475,19 @@ redraw_dashboard_frame() {
   }
 }
 
+cached_openrouter_warning() {
+  [[ -r "$OPENROUTER_WARNING_CACHE" ]] || return 1
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    printf '%s\n' "$line"
+    return 0
+  done < "$OPENROUTER_WARNING_CACHE"
+  return 1
+}
+
 render_dashboard() {
   local tasks line issue slug branch worktree task_status task_phase state_pr
-  local win agent_state classification task_data free_slots usage_tip
+  local win agent_state classification task_data free_slots usage_tip openrouter_warning
   declare -ga inbox_tasks=()
   declare -ga active_tasks=()
 
@@ -1489,6 +1500,9 @@ render_dashboard() {
   fi
   if [[ -n "$free_slots" ]]; then
     printf "${D}├─ %b${N}${EL}\n" "${G}${free_slots} slot(s) available${N}" >> "$FRAME"
+  fi
+  if openrouter_warning="$(cached_openrouter_warning)"; then
+    printf "${D}├─ WARN: %s${N}${EL}\n" "$openrouter_warning" >> "$FRAME"
   fi
 
   tasks=$(gather_tasks)

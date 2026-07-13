@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import {
   filterOpenRouterModels,
   getOpenRouterProviderMetadata,
+  isOpenRouterDirectAgentsEnabled,
   isOpenRouterModel,
   resolveOpenRouterModelId,
   resolveOpenRouterProviderConfig,
@@ -68,6 +69,13 @@ describe('openrouter-provider', () => {
   it('resolveOpenRouterModelId resolves promoted aliases', () => {
     assert.equal(resolveOpenRouterModelId('glm-5.2'), 'z-ai/glm-5.2');
     assert.equal(resolveOpenRouterModelId('kimi-k2.7-code'), 'moonshotai/kimi-k2.7-code');
+  });
+
+  it('reads the direct-agent gate from environment', () => {
+    assert.equal(isOpenRouterDirectAgentsEnabled({ OPENROUTER_DIRECT_AGENTS_ENABLED: '1' }), true);
+    assert.equal(isOpenRouterDirectAgentsEnabled({ OPENROUTER_DIRECT_AGENTS_ENABLED: 'true' }), true);
+    assert.equal(isOpenRouterDirectAgentsEnabled({ OPENROUTER_DIRECT_AGENTS_ENABLED: '0' }), false);
+    assert.equal(isOpenRouterDirectAgentsEnabled({}), false);
   });
 
   it('filterOpenRouterModels keeps allowlisted OpenRouter models when provider access is configured', () => {

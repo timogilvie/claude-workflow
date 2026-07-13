@@ -106,6 +106,43 @@ startup_step() {
   startup_log "  $message"
 }
 
+write_openrouter_warning_cache() {
+  local warning_text="${1:-}"
+  local warning_file="/tmp/${SESSION}-openrouter-warning.txt"
+
+  if [[ -n "$warning_text" ]]; then
+    printf '%s\n' "$warning_text" > "$warning_file" 2>/dev/null || true
+  else
+    rm -f "$warning_file" 2>/dev/null || true
+  fi
+}
+
+startup_warn_openrouter_status() {
+  [[ -n "${REPO_DIR:-}" && -n "${TOOLS_DIR:-}" ]] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+
+  local doctor_json doctor_rc warning_text status_line line
+  doctor_json="$(npx tsx "$TOOLS_DIR/openrouter-doctor.ts" --json --repo-dir "$REPO_DIR" --lookback 20 2>/dev/null)" || doctor_rc=$?
+  doctor_rc="${doctor_rc:-0}"
+  [[ -n "$doctor_json" ]] || return 0
+
+  warning_text="$(printf '%s' "$doctor_json" | jq -r '.zeroTrafficAlertText // empty' 2>/dev/null)" || return 0
+  status_line="$(printf '%s' "$doctor_json" | jq -r '.zeroTrafficAlert.headline // empty' 2>/dev/null)" || status_line=""
+
+  if [[ -z "$warning_text" ]]; then
+    write_openrouter_warning_cache ""
+    return 0
+  fi
+
+  write_openrouter_warning_cache "${status_line:-$warning_text}"
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    startup_log "WARN: $line"
+  done <<< "$warning_text"
+
+  return 0
+}
+
 write_stage_result_local() {
   local feature_dir="$1" stage="$2" status="$3"
   local agent="${4:-}" model="${5:-}" notes="${6:-}"
@@ -1046,6 +1083,7 @@ main() {
 
   startup_log "═══ Wavemill Startup ═══"
   startup_log "Reading launch plan: $PLAN_FILE"
+  startup_warn_openrouter_status || true
 
   if [[ -n "$LAUNCH_QUEUE_PLAN" ]]; then
     startup_log "Queue plan metadata present (ignored; reserved for future queue execution)"
