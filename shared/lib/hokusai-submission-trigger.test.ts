@@ -112,7 +112,10 @@ describe('hokusai-submission-trigger', () => {
   it('redacts and enqueues an eligible record when submission is enabled', async () => {
     const { repoDir, configDir } = makeRepo(true);
 
-    await triggerHokusaiSubmission(makeEligibleRecord(), {
+    await triggerHokusaiSubmission(makeEligibleRecord({
+      attempted_model: 'qwen/qwen3-coder',
+      model_alias: 'qwen-3-coder',
+    }), {
       repoDir,
       configDir,
       redactionSalt: 'b'.repeat(64),
@@ -142,6 +145,8 @@ describe('hokusai-submission-trigger', () => {
     assert.equal(entry.row.inputs?.planner_model, 'gpt-5.4');
     assert.equal(entry.row.inputs?.coder_model, 'gpt-5.4');
     assert.equal(entry.row.inputs?.reviewer_model, 'gpt-5.4');
+    assert.equal(entry.row.inputs?.coder_attempted_model, 'qwen/qwen3-coder');
+    assert.equal(entry.row.inputs?.coder_model_alias, 'qwen-3-coder');
     assert.equal(entry.row.inputs?.rubric_version, undefined);
     assert.equal(readFileSync(pendingPath, 'utf-8').includes('HOK-1243'), false);
   });
@@ -161,11 +166,14 @@ describe('hokusai-submission-trigger', () => {
       row: {
         actual_cost_usd?: number | null;
         success_under_budget?: boolean;
+        inputs?: Record<string, unknown>;
       };
     };
 
     assert.equal(entry.row.actual_cost_usd, null);
     assert.equal(entry.row.success_under_budget, false);
+    assert.equal(entry.row.inputs?.coder_attempted_model, undefined);
+    assert.equal(entry.row.inputs?.coder_model_alias, undefined);
   });
 
   it('warns and swallows redaction failures', async () => {

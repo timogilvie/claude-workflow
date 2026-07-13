@@ -62,6 +62,12 @@ This is a normal-mode policy adjustment, not degraded routing. `workflow-router.
 
 Individual command behavior now changes based on operating mode. In `constrained` mode, routing restricts to sonnet/haiku candidates and skips LLM-based difficulty classification. In `survival` mode, routing uses haiku only and relies on stage-aware KNN signals instead of open-ended LLM reasoning.
 
+## Launch-Priority Audit Input
+
+`.wavemill/audits/launch-priority-coverage.json` is a planning input only. It does not override live routing or stage-pool filtering, but it is the artifact operators should inspect when they want to target zero-evidence or below-target launch-priority models in upcoming eval/task batches.
+
+`shared/lib/launch-priority-audit.ts` reads the same launch-priority catalog surface as the existing OpenRouter challenger tooling, so audit coverage and router-side launch-priority classification stay aligned on what counts as a launch-priority model.
+
 ## Native Certification Filtering
 
 Native model certification filtering is a Layer 3 policy constraint applied inside `resolveStagePool()` before final per-role candidate selection. It runs after provider availability and capability checks have already narrowed the pool.

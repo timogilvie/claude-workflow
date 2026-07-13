@@ -1,0 +1,1225 @@
+{
+  "generatedAt": "2026-07-13T20:31:28.698Z",
+  "schemaVersion": "1",
+  "coverageTargetPerRole": 3,
+  "models": [
+    {
+      "wavemillAlias": "claude-opus-4-7",
+      "openrouterId": "anthropic/claude-opus-4.7",
+      "family": "claude",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "planning",
+      "directEvidenceCount": 1,
+      "availablePoolExposureCount": 178,
+      "evalAttempts": 1,
+      "evalSuccesses": 1,
+      "blockers": [],
+      "status": "below-target"
+    },
+    {
+      "wavemillAlias": "claude-opus-4-7",
+      "openrouterId": "anthropic/claude-opus-4.7",
+      "family": "claude",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "coding",
+      "directEvidenceCount": 1,
+      "availablePoolExposureCount": 178,
+      "evalAttempts": 1,
+      "evalSuccesses": 1,
+      "blockers": [],
+      "status": "below-target"
+    },
+    {
+      "wavemillAlias": "claude-opus-4-7",
+      "openrouterId": "anthropic/claude-opus-4.7",
+      "family": "claude",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "review",
+      "directEvidenceCount": 1,
+      "availablePoolExposureCount": 178,
+      "evalAttempts": 1,
+      "evalSuccesses": 1,
+      "blockers": [],
+      "status": "below-target"
+    },
+    {
+      "wavemillAlias": "claude-opus-4-8",
+      "openrouterId": "anthropic/claude-opus-4.8",
+      "family": "claude",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "planning",
+      "directEvidenceCount": 18,
+      "availablePoolExposureCount": 195,
+      "evalAttempts": 18,
+      "evalSuccesses": 17,
+      "blockers": [],
+      "status": "at-target"
+    },
+    {
+      "wavemillAlias": "claude-opus-4-8",
+      "openrouterId": "anthropic/claude-opus-4.8",
+      "family": "claude",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "coding",
+      "directEvidenceCount": 18,
+      "availablePoolExposureCount": 195,
+      "evalAttempts": 18,
+      "evalSuccesses": 17,
+      "blockers": [],
+      "status": "at-target"
+    },
+    {
+      "wavemillAlias": "claude-opus-4-8",
+      "openrouterId": "anthropic/claude-opus-4.8",
+      "family": "claude",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "review",
+      "directEvidenceCount": 18,
+      "availablePoolExposureCount": 195,
+      "evalAttempts": 18,
+      "evalSuccesses": 17,
+      "blockers": [],
+      "status": "at-target"
+    },
+    {
+      "wavemillAlias": "claude-sonnet-4-6",
+      "openrouterId": "anthropic/claude-sonnet-4.6",
+      "family": "claude",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "planning",
+      "directEvidenceCount": 83,
+      "availablePoolExposureCount": 324,
+      "evalAttempts": 83,
+      "evalSuccesses": 45,
+      "blockers": [],
+      "status": "at-target"
+    },
+    {
+      "wavemillAlias": "claude-sonnet-4-6",
+      "openrouterId": "anthropic/claude-sonnet-4.6",
+      "family": "claude",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "coding",
+      "directEvidenceCount": 83,
+      "availablePoolExposureCount": 324,
+      "evalAttempts": 83,
+      "evalSuccesses": 45,
+      "blockers": [],
+      "status": "at-target"
+    },
+    {
+      "wavemillAlias": "claude-sonnet-4-6",
+      "openrouterId": "anthropic/claude-sonnet-4.6",
+      "family": "claude",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "review",
+      "directEvidenceCount": 83,
+      "availablePoolExposureCount": 324,
+      "evalAttempts": 83,
+      "evalSuccesses": 45,
+      "blockers": [],
+      "status": "at-target"
+    },
+    {
+      "wavemillAlias": "claude-sonnet-5",
+      "openrouterId": "anthropic/claude-sonnet-5",
+      "family": "claude",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "planning",
+      "directEvidenceCount": 1,
+      "availablePoolExposureCount": 52,
+      "evalAttempts": 1,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "below-target"
+    },
+    {
+      "wavemillAlias": "claude-sonnet-5",
+      "openrouterId": "anthropic/claude-sonnet-5",
+      "family": "claude",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "coding",
+      "directEvidenceCount": 1,
+      "availablePoolExposureCount": 52,
+      "evalAttempts": 1,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "below-target"
+    },
+    {
+      "wavemillAlias": "claude-sonnet-5",
+      "openrouterId": "anthropic/claude-sonnet-5",
+      "family": "claude",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "review",
+      "directEvidenceCount": 1,
+      "availablePoolExposureCount": 52,
+      "evalAttempts": 1,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "below-target"
+    },
+    {
+      "wavemillAlias": "deepseek-r1",
+      "openrouterId": "deepseek/deepseek-r1",
+      "family": "deepseek",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "planning",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 0,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "deepseek-r1",
+      "openrouterId": "deepseek/deepseek-r1",
+      "family": "deepseek",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "coding",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 0,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "deepseek-r1",
+      "openrouterId": "deepseek/deepseek-r1",
+      "family": "deepseek",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "review",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 0,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "deepseek-v3",
+      "openrouterId": "deepseek/deepseek-chat-v3",
+      "family": "deepseek",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "coding",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 0,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "deepseek-v3",
+      "openrouterId": "deepseek/deepseek-chat-v3",
+      "family": "deepseek",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "review",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 0,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "gemini-2.5-pro",
+      "openrouterId": "google/gemini-2.5-pro",
+      "family": "gemini",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "planning",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 174,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "gemini-2.5-pro",
+      "openrouterId": "google/gemini-2.5-pro",
+      "family": "gemini",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "coding",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 174,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "gemini-2.5-pro",
+      "openrouterId": "google/gemini-2.5-pro",
+      "family": "gemini",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "review",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 174,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "glm-5.2",
+      "openrouterId": "z-ai/glm-5.2",
+      "family": "glm",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "planning",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 24,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "glm-5.2",
+      "openrouterId": "z-ai/glm-5.2",
+      "family": "glm",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "coding",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 24,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "glm-5.2",
+      "openrouterId": "z-ai/glm-5.2",
+      "family": "glm",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "review",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 24,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "gpt-5",
+      "openrouterId": "openai/gpt-5",
+      "family": "gpt",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "planning",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 0,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "gpt-5",
+      "openrouterId": "openai/gpt-5",
+      "family": "gpt",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "coding",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 0,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "gpt-5",
+      "openrouterId": "openai/gpt-5",
+      "family": "gpt",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "review",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 0,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "gpt-5.5",
+      "openrouterId": "openai/gpt-5.5",
+      "family": "gpt",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "planning",
+      "directEvidenceCount": 231,
+      "availablePoolExposureCount": 400,
+      "evalAttempts": 231,
+      "evalSuccesses": 6,
+      "blockers": [],
+      "status": "at-target"
+    },
+    {
+      "wavemillAlias": "gpt-5.5",
+      "openrouterId": "openai/gpt-5.5",
+      "family": "gpt",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "coding",
+      "directEvidenceCount": 231,
+      "availablePoolExposureCount": 400,
+      "evalAttempts": 231,
+      "evalSuccesses": 6,
+      "blockers": [],
+      "status": "at-target"
+    },
+    {
+      "wavemillAlias": "gpt-5.5",
+      "openrouterId": "openai/gpt-5.5",
+      "family": "gpt",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "review",
+      "directEvidenceCount": 231,
+      "availablePoolExposureCount": 400,
+      "evalAttempts": 231,
+      "evalSuccesses": 6,
+      "blockers": [],
+      "status": "at-target"
+    },
+    {
+      "wavemillAlias": "kimi-k2",
+      "openrouterId": "moonshotai/kimi-k2",
+      "family": "kimi",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "planning",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 174,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [
+        {
+          "reason": "missing-native-certification",
+          "role": "planning",
+          "detail": "kimi-k2 lacks read-only certification (missing)"
+        }
+      ],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "kimi-k2",
+      "openrouterId": "moonshotai/kimi-k2",
+      "family": "kimi",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "coding",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 174,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [
+        {
+          "reason": "missing-native-certification",
+          "role": "coding",
+          "detail": "kimi-k2 lacks patch certification (missing)"
+        }
+      ],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "kimi-k2",
+      "openrouterId": "moonshotai/kimi-k2",
+      "family": "kimi",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "review",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 174,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [
+        {
+          "reason": "missing-native-certification",
+          "role": "review",
+          "detail": "kimi-k2 lacks read-only certification (missing)"
+        }
+      ],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "kimi-k2.7-code",
+      "openrouterId": "moonshotai/kimi-k2.7-code",
+      "family": "kimi",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "planning",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 24,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "kimi-k2.7-code",
+      "openrouterId": "moonshotai/kimi-k2.7-code",
+      "family": "kimi",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "coding",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 24,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "kimi-k2.7-code",
+      "openrouterId": "moonshotai/kimi-k2.7-code",
+      "family": "kimi",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "review",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 24,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "qwen-2.5-coder-32b",
+      "openrouterId": "qwen/qwen-2.5-coder-32b-instruct",
+      "family": "qwen",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "coding",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 174,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "qwen-3-coder",
+      "openrouterId": "qwen/qwen3-coder",
+      "family": "qwen",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "coding",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 191,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "qwen-3-coder",
+      "openrouterId": "qwen/qwen3-coder",
+      "family": "qwen",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "review",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 191,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "claude-haiku-4-5",
+      "openrouterId": "anthropic/claude-haiku-4.5",
+      "family": "claude",
+      "launchPriorityStatus": "active",
+      "priorityTier": 2,
+      "role": "coding",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 0,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [
+        {
+          "reason": "agent-resolution-fails-closed",
+          "role": "coding",
+          "detail": "claude-haiku-4-5 is missing or disabled in the active model registry"
+        }
+      ],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "claude-haiku-4-5",
+      "openrouterId": "anthropic/claude-haiku-4.5",
+      "family": "claude",
+      "launchPriorityStatus": "active",
+      "priorityTier": 2,
+      "role": "review",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 0,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [
+        {
+          "reason": "agent-resolution-fails-closed",
+          "role": "review",
+          "detail": "claude-haiku-4-5 is missing or disabled in the active model registry"
+        }
+      ],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "devstral-small",
+      "openrouterId": "mistralai/devstral-small",
+      "family": "mistral",
+      "launchPriorityStatus": "active",
+      "priorityTier": 2,
+      "role": "coding",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 174,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "gemini-2.5-flash",
+      "openrouterId": "google/gemini-2.5-flash",
+      "family": "gemini",
+      "launchPriorityStatus": "active",
+      "priorityTier": 2,
+      "role": "coding",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 174,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "gemini-2.5-flash",
+      "openrouterId": "google/gemini-2.5-flash",
+      "family": "gemini",
+      "launchPriorityStatus": "active",
+      "priorityTier": 2,
+      "role": "review",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 174,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "gpt-5-mini",
+      "openrouterId": "openai/gpt-5-mini",
+      "family": "gpt",
+      "launchPriorityStatus": "active",
+      "priorityTier": 2,
+      "role": "coding",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 0,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "gpt-5-mini",
+      "openrouterId": "openai/gpt-5-mini",
+      "family": "gpt",
+      "launchPriorityStatus": "active",
+      "priorityTier": 2,
+      "role": "review",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 0,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "llama-3.3-70b",
+      "openrouterId": "meta-llama/llama-3.3-70b-instruct",
+      "family": "llama",
+      "launchPriorityStatus": "active",
+      "priorityTier": 2,
+      "role": "coding",
+      "directEvidenceCount": 1,
+      "availablePoolExposureCount": 174,
+      "evalAttempts": 1,
+      "evalSuccesses": 1,
+      "blockers": [],
+      "status": "below-target"
+    },
+    {
+      "wavemillAlias": "llama-3.3-70b",
+      "openrouterId": "meta-llama/llama-3.3-70b-instruct",
+      "family": "llama",
+      "launchPriorityStatus": "active",
+      "priorityTier": 2,
+      "role": "review",
+      "directEvidenceCount": 1,
+      "availablePoolExposureCount": 174,
+      "evalAttempts": 1,
+      "evalSuccesses": 1,
+      "blockers": [],
+      "status": "below-target"
+    },
+    {
+      "wavemillAlias": "llama-4-maverick",
+      "openrouterId": "meta-llama/llama-4-maverick",
+      "family": "llama",
+      "launchPriorityStatus": "active",
+      "priorityTier": 2,
+      "role": "planning",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 0,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "llama-4-maverick",
+      "openrouterId": "meta-llama/llama-4-maverick",
+      "family": "llama",
+      "launchPriorityStatus": "active",
+      "priorityTier": 2,
+      "role": "coding",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 0,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "mistral-large-2",
+      "openrouterId": "mistralai/mistral-large-2411",
+      "family": "mistral",
+      "launchPriorityStatus": "active",
+      "priorityTier": 2,
+      "role": "planning",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 174,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "mistral-large-2",
+      "openrouterId": "mistralai/mistral-large-2411",
+      "family": "mistral",
+      "launchPriorityStatus": "active",
+      "priorityTier": 2,
+      "role": "coding",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 174,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "mistral-large-2",
+      "openrouterId": "mistralai/mistral-large-2411",
+      "family": "mistral",
+      "launchPriorityStatus": "active",
+      "priorityTier": 2,
+      "role": "review",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 174,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "claude-fable-5",
+      "openrouterId": "anthropic/claude-fable-5",
+      "family": "claude",
+      "launchPriorityStatus": "watchlist",
+      "priorityTier": 2,
+      "role": "planning",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 6,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [
+        {
+          "reason": "agent-resolution-fails-closed",
+          "role": "planning",
+          "detail": "claude-fable-5 is missing or disabled in the active model registry"
+        }
+      ],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "claude-fable-5",
+      "openrouterId": "anthropic/claude-fable-5",
+      "family": "claude",
+      "launchPriorityStatus": "watchlist",
+      "priorityTier": 2,
+      "role": "coding",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 6,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [
+        {
+          "reason": "agent-resolution-fails-closed",
+          "role": "coding",
+          "detail": "claude-fable-5 is missing or disabled in the active model registry"
+        }
+      ],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "claude-fable-5",
+      "openrouterId": "anthropic/claude-fable-5",
+      "family": "claude",
+      "launchPriorityStatus": "watchlist",
+      "priorityTier": 2,
+      "role": "review",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 6,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [
+        {
+          "reason": "agent-resolution-fails-closed",
+          "role": "review",
+          "detail": "claude-fable-5 is missing or disabled in the active model registry"
+        }
+      ],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "deepseek-coder-v2",
+      "openrouterId": "deepseek/deepseek-coder-v2-instruct",
+      "family": "deepseek",
+      "launchPriorityStatus": "watchlist",
+      "priorityTier": 2,
+      "role": "coding",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 0,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [
+        {
+          "reason": "agent-resolution-fails-closed",
+          "role": "coding",
+          "detail": "deepseek-coder-v2 is missing or disabled in the active model registry"
+        }
+      ],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "devstral-medium",
+      "openrouterId": "mistralai/devstral-medium",
+      "family": "mistral",
+      "launchPriorityStatus": "watchlist",
+      "priorityTier": 2,
+      "role": "coding",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 0,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "kimi-k2-thinking",
+      "openrouterId": "moonshotai/kimi-k2-thinking",
+      "family": "kimi",
+      "launchPriorityStatus": "watchlist",
+      "priorityTier": 2,
+      "role": "planning",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 0,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "kimi-k2-thinking",
+      "openrouterId": "moonshotai/kimi-k2-thinking",
+      "family": "kimi",
+      "launchPriorityStatus": "watchlist",
+      "priorityTier": 2,
+      "role": "coding",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 0,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "kimi-k2-thinking",
+      "openrouterId": "moonshotai/kimi-k2-thinking",
+      "family": "kimi",
+      "launchPriorityStatus": "watchlist",
+      "priorityTier": 2,
+      "role": "review",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 0,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "qwen-3-235b",
+      "openrouterId": "qwen/qwen3-235b-a22b-instruct",
+      "family": "qwen",
+      "launchPriorityStatus": "watchlist",
+      "priorityTier": 2,
+      "role": "planning",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 0,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "qwen-3-235b",
+      "openrouterId": "qwen/qwen3-235b-a22b-instruct",
+      "family": "qwen",
+      "launchPriorityStatus": "watchlist",
+      "priorityTier": 2,
+      "role": "coding",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 0,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "qwen-3-235b",
+      "openrouterId": "qwen/qwen3-235b-a22b-instruct",
+      "family": "qwen",
+      "launchPriorityStatus": "watchlist",
+      "priorityTier": 2,
+      "role": "review",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 0,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "gemini-2.0-flash",
+      "openrouterId": "google/gemini-2.0-flash-001",
+      "family": "gemini",
+      "launchPriorityStatus": "watchlist",
+      "priorityTier": 3,
+      "role": "coding",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 0,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [
+        {
+          "reason": "agent-resolution-fails-closed",
+          "role": "coding",
+          "detail": "gemini-2.0-flash is missing or disabled in the active model registry"
+        }
+      ],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "gpt-4.1",
+      "openrouterId": "openai/gpt-4.1",
+      "family": "gpt",
+      "launchPriorityStatus": "watchlist",
+      "priorityTier": 3,
+      "role": "coding",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 0,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [
+        {
+          "reason": "agent-resolution-fails-closed",
+          "role": "coding",
+          "detail": "gpt-4.1 is missing or disabled in the active model registry"
+        }
+      ],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "grok-code-fast",
+      "openrouterId": "x-ai/grok-code-fast-1",
+      "family": "grok",
+      "launchPriorityStatus": "watchlist",
+      "priorityTier": 3,
+      "role": "coding",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 0,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [
+        {
+          "reason": "agent-resolution-fails-closed",
+          "role": "coding",
+          "detail": "grok-code-fast is missing or disabled in the active model registry"
+        }
+      ],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "llama-4-scout",
+      "openrouterId": "meta-llama/llama-4-scout",
+      "family": "llama",
+      "launchPriorityStatus": "watchlist",
+      "priorityTier": 3,
+      "role": "coding",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 0,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [
+        {
+          "reason": "agent-resolution-fails-closed",
+          "role": "coding",
+          "detail": "llama-4-scout is missing or disabled in the active model registry"
+        }
+      ],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "mistral-medium-3",
+      "openrouterId": "mistralai/mistral-medium-3",
+      "family": "mistral",
+      "launchPriorityStatus": "watchlist",
+      "priorityTier": 3,
+      "role": "coding",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 0,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [
+        {
+          "reason": "agent-resolution-fails-closed",
+          "role": "coding",
+          "detail": "mistral-medium-3 is missing or disabled in the active model registry"
+        }
+      ],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "qwen-2.5-72b",
+      "openrouterId": "qwen/qwen-2.5-72b-instruct",
+      "family": "qwen",
+      "launchPriorityStatus": "watchlist",
+      "priorityTier": 3,
+      "role": "coding",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 0,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [
+        {
+          "reason": "agent-resolution-fails-closed",
+          "role": "coding",
+          "detail": "qwen-2.5-72b is missing or disabled in the active model registry"
+        }
+      ],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "o3-mini",
+      "openrouterId": "openai/o3-mini",
+      "family": "gpt",
+      "launchPriorityStatus": "deprecated",
+      "priorityTier": 3,
+      "role": "coding",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 0,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [
+        {
+          "reason": "deprecated",
+          "role": "coding",
+          "detail": "o3-mini is deprecated"
+        },
+        {
+          "reason": "agent-resolution-fails-closed",
+          "role": "coding",
+          "detail": "o3-mini is missing or disabled in the active model registry"
+        }
+      ],
+      "status": "zero-evidence"
+    }
+  ],
+  "zeroEvidence": [
+    "deepseek-r1",
+    "deepseek-v3",
+    "devstral-medium",
+    "devstral-small",
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+    "glm-5.2",
+    "gpt-5",
+    "gpt-5-mini",
+    "kimi-k2-thinking",
+    "kimi-k2.7-code",
+    "llama-4-maverick",
+    "mistral-large-2",
+    "qwen-2.5-coder-32b",
+    "qwen-3-235b",
+    "qwen-3-coder"
+  ],
+  "belowTarget": [
+    "claude-opus-4-7",
+    "claude-sonnet-5",
+    "llama-3.3-70b"
+  ],
+  "samplingPlan": [
+    {
+      "wavemillAlias": "deepseek-r1",
+      "openrouterId": "deepseek/deepseek-r1",
+      "role": "planning",
+      "tier": "zero-evidence-active",
+      "reason": "deepseek-r1 has zero direct evidence for planning",
+      "gap": 3,
+      "cost": null
+    },
+    {
+      "wavemillAlias": "deepseek-r1",
+      "openrouterId": "deepseek/deepseek-r1",
+      "role": "coding",
+      "tier": "zero-evidence-active",
+      "reason": "deepseek-r1 has zero direct evidence for coding",
+      "gap": 3,
+      "cost": null
+    },
+    {
+      "wavemillAlias": "deepseek-r1",
+      "openrouterId": "deepseek/deepseek-r1",
+      "role": "review",
+      "tier": "zero-evidence-active",
+      "reason": "deepseek-r1 has zero direct evidence for review",
+      "gap": 3,
+      "cost": null
+    },
+    {
+      "wavemillAlias": "deepseek-v3",
+      "openrouterId": "deepseek/deepseek-chat-v3",
+      "role": "coding",
+      "tier": "zero-evidence-active",
+      "reason": "deepseek-v3 has zero direct evidence for coding",
+      "gap": 3,
+      "cost": null
+    },
+    {
+      "wavemillAlias": "deepseek-v3",
+      "openrouterId": "deepseek/deepseek-chat-v3",
+      "role": "review",
+      "tier": "zero-evidence-active",
+      "reason": "deepseek-v3 has zero direct evidence for review",
+      "gap": 3,
+      "cost": null
+    },
+    {
+      "wavemillAlias": "devstral-small",
+      "openrouterId": "mistralai/devstral-small",
+      "role": "coding",
+      "tier": "zero-evidence-active",
+      "reason": "devstral-small has zero direct evidence for coding",
+      "gap": 3,
+      "cost": null
+    },
+    {
+      "wavemillAlias": "gemini-2.5-flash",
+      "openrouterId": "google/gemini-2.5-flash",
+      "role": "coding",
+      "tier": "zero-evidence-active",
+      "reason": "gemini-2.5-flash has zero direct evidence for coding",
+      "gap": 3,
+      "cost": null
+    },
+    {
+      "wavemillAlias": "gemini-2.5-flash",
+      "openrouterId": "google/gemini-2.5-flash",
+      "role": "review",
+      "tier": "zero-evidence-active",
+      "reason": "gemini-2.5-flash has zero direct evidence for review",
+      "gap": 3,
+      "cost": null
+    },
+    {
+      "wavemillAlias": "gemini-2.5-pro",
+      "openrouterId": "google/gemini-2.5-pro",
+      "role": "planning",
+      "tier": "zero-evidence-active",
+      "reason": "gemini-2.5-pro has zero direct evidence for planning",
+      "gap": 3,
+      "cost": null
+    },
+    {
+      "wavemillAlias": "gemini-2.5-pro",
+      "openrouterId": "google/gemini-2.5-pro",
+      "role": "coding",
+      "tier": "zero-evidence-active",
+      "reason": "gemini-2.5-pro has zero direct evidence for coding",
+      "gap": 3,
+      "cost": null
+    }
+  ],
+  "summary": {
+    "totalLaunchPriority": 33,
+    "blockedCount": 16,
+    "sampledCount": 10,
+    "byRole": {
+      "planning": {
+        "zero": 11,
+        "below": 2,
+        "at": 3
+      },
+      "coding": {
+        "zero": 27,
+        "below": 3,
+        "at": 3
+      },
+      "review": {
+        "zero": 15,
+        "below": 3,
+        "at": 3
+      }
+    }
+  }
+}
