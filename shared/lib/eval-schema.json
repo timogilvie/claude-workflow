@@ -42,6 +42,14 @@
       "type": "string",
       "description": "Specific model version string for reproducibility."
     },
+    "attempted_model": {
+      "type": "string",
+      "description": "HOK-2234: preserves the model attempted before fallback resolution so audits can distinguish \"attempted but fell back\" from \"never attempted\"."
+    },
+    "model_alias": {
+      "type": "string",
+      "description": "HOK-2234: preserves the Wavemill alias for the attempted model before fallback so launch-priority coverage audits can group attempts consistently."
+    },
     "judgeModel": {
       "type": "string",
       "description": "Model ID used by the LLM judge for this eval."

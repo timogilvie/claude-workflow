@@ -82,6 +82,12 @@ function toContributionProjection(
       rubric_version: submission.rubric_signals?.rubric_version,
       rubric_mean_score: submission.rubric_signals?.mean_score,
       determinative_boundary: submission.rubric_signals?.determinative_boundary,
+      ...(record?.attempted_model
+        ? { coder_attempted_model: record.attempted_model }
+        : {}),
+      ...(record?.model_alias
+        ? { coder_model_alias: record.model_alias }
+        : {}),
     },
     // Feature outcome artifact diagnostics (HOK-2262)
     // Only safe scalar/enum/array-of-string fields; no raw paths or issue IDs

@@ -767,7 +767,7 @@ function validPromptSizeDiagnostic() {
 }
 
 test('SCHEMA_VERSION is bumped for eval schema updates', () => {
-  assert.equal(SCHEMA_VERSION, '1.31.0');
+  assert.equal(SCHEMA_VERSION, '1.32.0');
 });
 
 test('Record without prompt size fields still validates', () => {
@@ -1071,6 +1071,26 @@ test('Record with challengePairId validates', () => {
   assert.equal((record as any).challengePairId, 'HOK-500');
   const result = validateAgainstSchema(record);
   assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
+test('Record with attempted_model and model_alias validates', () => {
+  const record = {
+    ...scenarios[0].record,
+    attempted_model: 'qwen/qwen3-coder',
+    model_alias: 'qwen-3-coder',
+  } as unknown as Record<string, unknown>;
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
+test('Rejects attempted_model with the wrong type', () => {
+  const record = {
+    ...scenarios[0].record,
+    attempted_model: 42,
+  } as unknown as Record<string, unknown>;
+  const result = validateAgainstSchema(record);
+  assert.ok(!result.valid, 'Should be invalid');
+  assert.ok(result.errors.some((e) => e.includes('attempted_model')));
 });
 
 test('Record with challengeStageEval validates', () => {
@@ -1772,8 +1792,8 @@ test('Wavemill router fields validate and schema stays in parity', () => {
   assert.equal(properties.wavemill_router_scoring?.$ref, '#/$defs/WavemillRouterScoringMetadata');
 });
 
-test('Schema version constant is 1.31.0', () => {
-  assert.equal(SCHEMA_VERSION, '1.31.0');
+test('Schema version constant is 1.32.0', () => {
+  assert.equal(SCHEMA_VERSION, '1.32.0');
 });
 
 test('Record with resolved-model routing validates', () => {

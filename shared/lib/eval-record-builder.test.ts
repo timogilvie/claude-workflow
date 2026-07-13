@@ -8,6 +8,7 @@ import type { EvalRecord } from './eval-schema.ts';
 import {
   attachEligibility,
   attachAgentType,
+  attachAttemptedModel,
   attachBudgetMetadata,
   attachRouteCalibration,
   attachRoutePrediction,
@@ -146,6 +147,37 @@ describe('eval-record-builder', () => {
       attachProviderMetadata(baseRecord, undefined, undefined);
       expect(baseRecord.provider).toBeUndefined();
       expect(baseRecord.endpoint).toBeUndefined();
+    });
+  });
+
+  describe('attachAttemptedModel', () => {
+    it('sets both attempted_model and model_alias when provided', () => {
+      attachAttemptedModel(baseRecord, {
+        attemptedModel: 'qwen/qwen3-coder',
+        modelAlias: 'qwen-3-coder',
+      });
+
+      expect(baseRecord.attempted_model).toBe('qwen/qwen3-coder');
+      expect(baseRecord.model_alias).toBe('qwen-3-coder');
+    });
+
+    it('sets only the provided field when one is missing', () => {
+      attachAttemptedModel(baseRecord, {
+        attemptedModel: 'qwen/qwen3-coder',
+      });
+
+      expect(baseRecord.attempted_model).toBe('qwen/qwen3-coder');
+      expect(baseRecord.model_alias).toBeUndefined();
+    });
+
+    it('treats null and empty strings as no-ops', () => {
+      attachAttemptedModel(baseRecord, {
+        attemptedModel: '',
+        modelAlias: null,
+      });
+
+      expect('attempted_model' in baseRecord).toBe(false);
+      expect('model_alias' in baseRecord).toBe(false);
     });
   });
 
