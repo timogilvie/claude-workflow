@@ -1,5 +1,5 @@
 import type { NativeProviderName } from '../../config.ts';
-import type { ModelRegistry, ReadOnlyNativeCapability } from '../../model-registry.ts';
+import { getModel, type ModelRegistry, type ReadOnlyNativeCapability } from '../../model-registry.ts';
 import { checkIdentity } from './validator.ts';
 import {
   buildCertificationPath,
@@ -67,7 +67,7 @@ export function evaluateNativeProviderGate(input: NativeGateInput): NativeGateDe
     });
   }
 
-  const nativeCapability = input.registry.models[input.modelId]?.nativeCapability;
+  const nativeCapability = getModel(input.registry, input.modelId)?.nativeCapability;
   const nativeProvider = nativeCapability?.nativeProvider;
   const capability = nativeCapability?.readOnlyNative ?? 'unregistered';
 

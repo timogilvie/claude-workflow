@@ -66,10 +66,11 @@ Native patch coding stays disabled by default. The config gate is separate from 
 }
 ```
 
-This flag is necessary but not sufficient. Wavemill only enables native patch coding when both of these are true:
+This flag is necessary but not sufficient. Native patch coding only becomes routable when all three of these gates pass:
 
 - `nativeAgent.patchCoding.enabled` is `true`
 - `.wavemill/native-agent/patch-coding-certification.json` exists and matches the current smoke-suite revision
+- the selected provider/model pair has a current phase certification artifact at `.wavemill/native-agent-certifications/<provider>/<model>/<suite-version>.json` whose phase satisfies `patch`
 
 The runtime gate is exported from `shared/lib/native-agent/coding-gate.ts` as `isPatchCodingEnabled()` and `evaluatePatchCodingGate()`. That is the handoff seam for the follow-up command/test/git runtime work.
 
@@ -91,6 +92,14 @@ Native routing is fail-closed. A model must be registered as certified for nativ
 - review
 
 If a model is configured but not certified, the native eligibility checks reject it instead of silently routing it.
+
+For coding, keep the three gates separate:
+
+- repo opt-in: `nativeAgent.patchCoding.enabled`
+- runtime smoke gate: `.wavemill/native-agent/patch-coding-certification.json`
+- provider/model phase gate: `.wavemill/native-agent-certifications/<provider>/<model>/<suite-version>.json`
+
+The smoke gate proves the local patch-coding runtime is enabled safely. The provider/model phase artifact proves a specific native provider/model pair passed the patch-path certification suite and may be routed into coder work.
 
 Patch-coding alpha uses its own certification artifact. Run:
 
