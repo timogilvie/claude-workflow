@@ -66,6 +66,16 @@ interface CertificationScenario {
 | `transcript.scripted.session_started_then_ended` | `transcript` | `TranscriptWriter` produces JSONL with `session_started` first, `session_ended` last, matching `sessionId`/`provider`/`model` |
 | `phase.read-only.satisfies-read-only` | `phase` | `phaseSatisfies('read-only', 'read-only')` and `phaseSatisfies('patch', 'read-only')` are true; `phaseSatisfies('read-only', 'patch')` is false |
 | `phase.fixture.persistence-roundtrip` | `phase` | `writeCertification` + `checkCertificationEligibility` round-trip returns `eligible: true` |
+| `patch.tools.apply-native-patch-and-track-intended-files` | `tool` | Safe `apply_patch` runs atomically and records intended files |
+| `patch.tools.rejects-path-traversal` | `tool` | Traversal paths are rejected without mutating the worktree |
+| `patch.tools.rejects-symlink-and-absolute-escape` | `tool` | Symlink escapes and out-of-worktree absolute paths are rejected fail-closed |
+| `patch.tools.generated-artifact-allowlist` | `tool` | Generated artifact writes are allowed while source whole-file writes stay denied |
+| `patch.tools.command-and-format-safety` | `tool` | `run_tests` accepts safe scoped commands and `run_format` rejects unsafe ones |
+| `patch.transcript.redacts-tool-result-secrets` | `transcript` | Patch-session transcripts redact secret-bearing tool result content and details |
+| `patch.phase.persistence-roundtrip` | `phase` | A persisted `phase: 'patch'` artifact satisfies `patch` and `read-only`, but not `workflow` |
+| `patch.phase.dirty-tree-gate-semantics` | `phase` | Completion stays blocked while dirty paths remain |
+| `patch.phase.cleanup-on-abort-and-timeout` | `phase` | Cleanup restores patch snapshots on abort/timeout and terminates tracked commands |
+| `patch.phase.ready-remediation-fixtures` | `phase` | Stale-base and merge-conflict fixtures keep path scope enforcement intact |
 | `live.judge.tool-output-summary-quality` | `tool` | Live-judged placeholder — always returns `not-run` |
 | `workflow.tools.contract-shape-stable` | `tool` | Canonical workflow tool names, workflow phases, and mutation actions are still present |
 | `workflow.tools.mutation-policy-allows-in-phase` | `tool` | Planning-phase reads and `write_stage_result` are explicitly allowed by the workflow mutation matrix |
@@ -75,6 +85,15 @@ interface CertificationScenario {
 | `workflow.usage.multi-turn-token-accounting` | `usage` | Multi-turn scripted provider usage stays per-turn, which preserves workflow budget accounting |
 | `workflow.cleanup.tracker-roundtrip-and-summary-event` | `phase` | Cleanup tracker round-trip yields a `cleanup_report` summary with `finalTreeState` and `cleanupDecision` fields |
 | `workflow.phase.workflow-persistence-roundtrip` | `phase` | A persisted `phase: 'workflow'` artifact satisfies workflow, patch, and read-only eligibility checks |
+
+## What Patch-Phase Certification Proves
+
+- Native patch application succeeds atomically for safe edits and records intended files.
+- Traversal, symlink escape, and denied absolute paths are rejected before they can mutate files.
+- Generated-artifact whole-file writes stay allowlisted while handwritten source writes remain denied.
+- `run_tests` / `run_format` continue to use the scoped command safety substrate.
+- Dirty-tree gating, cleanup on abort/timeout, and transcript redaction all remain deterministic and fail-closed.
+- Ready-stage stale-base and merge-conflict fixtures still preserve path-scope enforcement that patch-capable flows rely on downstream.
 
 ## What Workflow-Phase Certification Proves And Does Not Prove
 
@@ -106,7 +125,7 @@ Enforced by `scenarios.test.ts` and checked at CI:
 - No `live-judged` scenario has an `assertion` function.
 - Every `phase` value is in `PHASE_ORDER`.
 - Every category (`tool`, `usage`, `transcript`, `phase`) has ≥1 deterministic scenario.
-- The default catalog includes deterministic workflow-phase coverage, so `native-agent-certify --phase workflow` can be live-certifiable when the scenarios pass.
+- The default catalog includes deterministic patch-phase and workflow-phase coverage, so `native-agent-certify --phase patch` and `--phase workflow` can both be live-certifiable when the scenarios pass.
 
 ### Adding a scenario
 
@@ -241,7 +260,7 @@ if (report.liveCertifiable) {
     provider: report.provider,
     model: report.model,
     phase: 'read-only',
-    suiteVersion: 'v1',
+    suiteVersion: 'v2',
     certifiedAt: new Date().toISOString(),
     scenarios: scenarioResults,
     knownLimitations: report.knownLimitations,

@@ -8,7 +8,10 @@ import { join, relative } from 'node:path';
 import { clearConfigCache } from '../shared/lib/config.ts';
 import { buildCertificationPath } from '../shared/lib/native-agent/certification/loader.ts';
 import { CERTIFICATION_SCHEMA_VERSION, type CertificationPhase, type NativeCertificationArtifact } from '../shared/lib/native-agent/certification/schema.ts';
-import { getDefaultScenarios } from '../shared/lib/native-agent/certification/scenarios.ts';
+import {
+  DEFAULT_CERTIFICATION_SUITE_VERSION,
+  getDefaultScenarios,
+} from '../shared/lib/native-agent/certification/scenarios.ts';
 import { readCertification } from '../shared/lib/native-agent/certification/store.ts';
 import { filterNativeModels, type RouterCertificationRejection } from '../shared/lib/native-agent/certification/router-filter.ts';
 import { routeWorkflow } from '../shared/lib/workflow-router.ts';
@@ -326,7 +329,7 @@ function buildAcceptanceRows(summary: VerificationSummary): AcceptanceRow[] {
         : summary.liveRun.reason,
     },
     {
-      criterion: 'Live artifact has workflow phase, v1 suite, and passing workflow records when executed',
+      criterion: `Live artifact has workflow phase, ${DEFAULT_CERTIFICATION_SUITE_VERSION} suite, and passing workflow records when executed`,
       verdict: summary.liveRun.status === 'executed' ? 'PASS' : 'DEFERRED',
       evidence: summary.liveRun.status === 'executed'
         ? `phase=\`${liveArtifact?.phase}\`, suite=\`${liveArtifact?.suiteVersion}\`, passingWorkflow=${liveArtifact?.passingWorkflowScenarioCount}/${liveArtifact?.workflowScenarioCount}.`
@@ -393,7 +396,7 @@ function inspectExpectedArtifact(
   modelId: string,
   workflowScenarioIds: readonly string[],
 ): ArtifactCoverageSummary | MissingArtifactSummary {
-  const path = buildCertificationPath(repoDir, 'openrouter', modelId, 'v1');
+  const path = buildCertificationPath(repoDir, 'openrouter', modelId, DEFAULT_CERTIFICATION_SUITE_VERSION);
   const result = readCertification(path);
   if (!result.ok) {
     return {
@@ -447,7 +450,10 @@ function makeTempRepo(config: Record<string, unknown>): { repoDir: string; clean
   };
 }
 
-function nativeModelConfig(certPhase: CertificationPhase = 'workflow', suiteVersion = 'v1'): Record<string, unknown> {
+function nativeModelConfig(
+  certPhase: CertificationPhase = 'workflow',
+  suiteVersion = DEFAULT_CERTIFICATION_SUITE_VERSION,
+): Record<string, unknown> {
   return {
     class: 'strong_generalist',
     nativeCapability: {
@@ -510,24 +516,31 @@ function verifyPlannerFailClosedCases(): PlannerFailClosedObservation[] {
 
     const missing = routeWorkflow(prompt, plannerArgs);
 
-    writeSyntheticArtifact(repo.repoDir, 'openai', modelId, 'v1', 'workflow', {
+    writeSyntheticArtifact(repo.repoDir, 'openai', modelId, DEFAULT_CERTIFICATION_SUITE_VERSION, 'workflow', {
       certifiedAt: '2020-01-01T00:00:00.000Z',
     });
     const stale = routeWorkflow(prompt, plannerArgs);
 
-    writeSyntheticArtifact(repo.repoDir, 'openai', modelId, 'v1', 'workflow', {
+    writeSyntheticArtifact(repo.repoDir, 'openai', modelId, DEFAULT_CERTIFICATION_SUITE_VERSION, 'workflow', {
       suiteVersion: 'v0',
     });
     const wrongSuite = routeWorkflow(prompt, plannerArgs);
 
     writeFileSync(
-      join(repo.repoDir, '.wavemill', 'native-agent-certifications', 'openai', modelId, 'v1.json'),
+      join(
+        repo.repoDir,
+        '.wavemill',
+        'native-agent-certifications',
+        'openai',
+        modelId,
+        `${DEFAULT_CERTIFICATION_SUITE_VERSION}.json`,
+      ),
       '{ invalid json',
       'utf-8',
     );
     const malformed = routeWorkflow(prompt, plannerArgs);
 
-    writeSyntheticArtifact(repo.repoDir, 'openai', modelId, 'v1', 'read-only');
+    writeSyntheticArtifact(repo.repoDir, 'openai', modelId, DEFAULT_CERTIFICATION_SUITE_VERSION, 'read-only');
     const insufficientPhase = routeWorkflow(prompt, plannerArgs);
 
     return [
@@ -567,7 +580,13 @@ function verifyReadOnlyBehavior(): ReadOnlyBehaviorSummary {
   });
 
   try {
-    writeSyntheticArtifact(repo.repoDir, 'openai', 'native-read-only-check', 'v1', 'read-only');
+    writeSyntheticArtifact(
+      repo.repoDir,
+      'openai',
+      'native-read-only-check',
+      DEFAULT_CERTIFICATION_SUITE_VERSION,
+      'read-only',
+    );
     const registry: ModelRegistry = {
       models: {
         'native-read-only-check': nativeModelConfig('read-only'),
@@ -664,7 +683,7 @@ function verifyDryRun(repoDir: string, modelId: string): DryRunSummary {
   assert.equal(parsed.provider, 'openrouter');
   assert.equal(parsed.model, modelId);
   assert.equal(parsed.phase, 'workflow');
-  assert.equal(parsed.suiteVersion, 'v1');
+  assert.equal(parsed.suiteVersion, DEFAULT_CERTIFICATION_SUITE_VERSION);
   assert.equal(parsed.dryRun, true);
   assert.equal(parsed.harnessPassed, true);
 

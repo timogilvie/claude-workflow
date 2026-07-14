@@ -1834,6 +1834,38 @@ await test('malformed artifact rejects native model', () => {
   }
 });
 
+await test('scenario-failed patch artifact rejects native model', () => {
+  const { repoDir, cleanup } = makeRepo({
+    modelRegistry: {
+      models: { 'native-scenario-failure': nativeModelConfig('patch') },
+    },
+  });
+  try {
+    writeCertArtifact(repoDir, 'openai', 'native-scenario-failure', 'v1', {
+      phase: 'patch',
+      scenarios: [
+        { scenarioId: 'patch.tools.apply-native-patch-and-track-intended-files', passed: true },
+        { scenarioId: 'patch.tools.rejects-path-traversal', passed: false },
+      ],
+    });
+
+    const decision = routeWorkflow('Implement guarded patch behavior.', {
+      repoDir,
+      coderModelsAvailable: ['native-scenario-failure', 'claude-haiku-4-5-20251001'],
+      modelsAvailable: ['native-scenario-failure', 'claude-haiku-4-5-20251001'],
+      skipDifficultyClassification: true,
+    });
+
+    const rejection = (decision.nativeCertificationRejections ?? [])
+      .find((r) => r.modelId === 'native-scenario-failure' && r.role === 'coder');
+    assert.ok(rejection, 'scenario-failed artifact must produce a rejection');
+    assert.equal(rejection?.reason, 'insufficient-phase');
+    assert.notEqual(decision.coder, 'native-scenario-failure');
+  } finally {
+    cleanup();
+  }
+});
+
 await test('native-only ineligible pool is rejected fail-closed, not silently treated as eligible', () => {
   const { repoDir, cleanup } = makeRepo({
     modelRegistry: {

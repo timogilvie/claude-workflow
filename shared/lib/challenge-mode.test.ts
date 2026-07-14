@@ -1727,6 +1727,45 @@ test('wrong suite version produces wrong-suite rejection', () => {
   }
 });
 
+test('scenario-failed native challenger is excluded for implementation stage', () => {
+  const { repoDir, cleanup } = makeNativeTestRepo({
+    'native-scenario-failure': nativeModelEntry('patch'),
+  });
+  try {
+    writeCertArtifact(repoDir, 'openai', 'native-scenario-failure', 'v1', {
+      phase: 'patch',
+      scenarios: [
+        { scenarioId: 'patch.tools.apply-native-patch-and-track-intended-files', passed: true },
+        { scenarioId: 'patch.tools.rejects-path-traversal', passed: false },
+      ],
+    });
+
+    const result = pickChallengeModelsWithReason(
+      ['claude-opus-4-6', 'native-scenario-failure'],
+      {
+        pairId: 'NC-005B',
+        issueId: 'NC-005B',
+        slug: 'nc-scenario-failure',
+        primaryModel: 'claude-opus-4-6',
+        repoDir,
+        now: TEST_NOW,
+        randomFn: () => 0,
+      },
+    );
+
+    assert.equal(result.pair, null);
+    assert.equal(result.failureReason, 'selection_failed');
+    const rejection = (result.nativeCertificationRejections || []).find(
+      (r) => r.modelId === 'native-scenario-failure',
+    );
+    assert.ok(rejection, 'should have rejection for native-scenario-failure');
+    assert.equal(rejection!.reason, 'insufficient-phase');
+    assert.equal(rejection!.role, 'coder');
+  } finally {
+    cleanup();
+  }
+});
+
 test('native-only pool returns selection_failed with rejections populated', () => {
   const { repoDir, cleanup } = makeNativeTestRepo({
     'native-uncert-a': nativeModelEntry('patch'),

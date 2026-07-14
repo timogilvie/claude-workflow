@@ -15,7 +15,8 @@
  * @module native-agent/certification/scenarios
  */
 
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { execFileSync, spawn } from 'node:child_process';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -40,11 +41,18 @@ import {
   writeCleanupSummaryEvent,
   type CleanupReport,
 } from '../cleanup.ts';
+import { evaluateCodingCompletionGate } from '../completion-gate.ts';
+import { NATIVE_PATCH_VERSION, type NativePatch } from '../patch-contract.ts';
+import { applyNativePatch } from '../patch-runtime.ts';
 import {
   TranscriptWriter,
   type TranscriptSessionStarted,
   type TranscriptSessionEnded,
 } from '../transcript.ts';
+import { createApplyPatchTool, type ApplyPatchDetails } from '../tools/apply-patch-tool.ts';
+import { createRunFormatTool, createRunTestsTool, type RunCommandDetails } from '../tools/command-tools.ts';
+import { createIntendedFileTracker, intendedFilesAfterToolCall } from '../tools/intended-files.ts';
+import { createWriteArtifactTool, type WriteArtifactDetails } from '../tools/mutation-tools.ts';
 import { validateToolCompat } from '../tool-compat-validator.ts';
 import type { ApprovalLifecycleEntry } from '../workflow-tools/approval-gate.ts';
 import {
@@ -53,6 +61,7 @@ import {
   WORKFLOW_TOOL_NAMES,
 } from '../workflow-tools/contracts.ts';
 import { isMutationAllowed } from '../workflow-tools/mutation-policy.ts';
+import { evaluateReadyRemediation, fromStaleBaseCheck } from '../workflow-tools/ready-remediation.ts';
 import type { ModelRegistry, NativeProviderName, PiTransportKind } from '../../model-registry.ts';
 
 // ---------------------------------------------------------------------------
@@ -109,6 +118,26 @@ export interface CertificationScenario {
 
 let _usageApiSeq = 0;
 let _transcriptSeq = 0;
+
+function makeNativePatch(operations: NativePatch['operations']): NativePatch {
+  return {
+    version: NATIVE_PATCH_VERSION,
+    atomic: true,
+    operations,
+  };
+}
+
+function initializeGitRepo(repoDir: string): void {
+  execFileSync('git', ['init'], { cwd: repoDir, stdio: 'ignore' });
+  execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: repoDir, stdio: 'ignore' });
+  execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: repoDir, stdio: 'ignore' });
+}
+
+function loadReadyFixture(name: string): Record<string, unknown> {
+  return JSON.parse(
+    readFileSync(new URL(`../workflow-tools/fixtures/ready/${name}.json`, import.meta.url), 'utf-8'),
+  ) as Record<string, unknown>;
+}
 
 // ---------------------------------------------------------------------------
 // Concrete assertions
@@ -302,7 +331,7 @@ async function assertPhasePersistenceRoundtrip(ctx: ScenarioContext): Promise<Sc
     // but hardcode model to avoid any path-segment issues from test model names.
     const provider = ctx.provider;
     const model = 'test-model';
-    const suiteVersion = 'v1';
+    const suiteVersion = DEFAULT_CERTIFICATION_SUITE_VERSION;
 
     const artifact: NativeCertificationArtifact = {
       schemaVersion: CERTIFICATION_SCHEMA_VERSION,
@@ -343,7 +372,7 @@ async function assertWorkflowArtifactUnlocksPlanner(ctx: ScenarioContext): Promi
   try {
     const provider = ctx.provider === 'openrouter' ? 'qwen' : ctx.provider;
     const model = ctx.provider === 'openrouter' ? 'qwen3-coder' : 'test-model';
-    const suiteVersion = 'v1';
+    const suiteVersion = DEFAULT_CERTIFICATION_SUITE_VERSION;
 
     const artifact: NativeCertificationArtifact = {
       schemaVersion: CERTIFICATION_SCHEMA_VERSION,
@@ -391,6 +420,493 @@ async function assertWorkflowArtifactUnlocksPlanner(ctx: ScenarioContext): Promi
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
   }
+}
+
+async function assertPatchAppliesAndTracksIntendedFiles(
+  _ctx: ScenarioContext,
+): Promise<ScenarioAssertionOutcome> {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'native-cert-patch-'));
+  try {
+    mkdirSync(join(tmpDir, 'src'), { recursive: true });
+    writeFileSync(join(tmpDir, 'src', 'app.ts'), 'export const value = 1;\n', 'utf8');
+
+    const tracker = createIntendedFileTracker();
+    const tool = createApplyPatchTool(tmpDir);
+    const result = await tool.execute('cert-patch-apply', {
+      patch: makeNativePatch([
+        {
+          op: 'edit',
+          path: 'src/app.ts',
+          oldText: 'export const value = 1;\n',
+          newText: 'export const value = 2;\n',
+        },
+      ]),
+    });
+
+    const details = result.details as ApplyPatchDetails;
+    if (!details.ok) {
+      return {
+        kind: 'fail',
+        detail: `Expected apply_patch success, got ${details.error}: ${details.message}`,
+      };
+    }
+
+    await intendedFilesAfterToolCall(
+      {
+        toolCall: { name: 'apply_patch' },
+        result,
+      },
+      tracker,
+    );
+
+    if (!details.atomic || details.changedFiles.join(',') !== 'src/app.ts') {
+      return {
+        kind: 'fail',
+        detail: `Expected atomic apply_patch result for src/app.ts, got ${JSON.stringify(details.changedFiles)}`,
+      };
+    }
+    if (!tracker.isIntended('src/app.ts')) {
+      return {
+        kind: 'fail',
+        detail: 'Expected intended-file tracker to record src/app.ts after successful patch application.',
+      };
+    }
+    if (readFileSync(join(tmpDir, 'src', 'app.ts'), 'utf-8') !== 'export const value = 2;\n') {
+      return {
+        kind: 'fail',
+        detail: 'Patched file contents did not match the expected post-image.',
+      };
+    }
+
+    return { kind: 'pass' };
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
+async function assertPatchRejectsTraversalPath(_ctx: ScenarioContext): Promise<ScenarioAssertionOutcome> {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'native-cert-patch-traversal-'));
+  try {
+    mkdirSync(join(tmpDir, 'src'), { recursive: true });
+    writeFileSync(join(tmpDir, 'src', 'safe.ts'), 'export const safe = true;\n', 'utf8');
+
+    const result = await applyNativePatch(
+      tmpDir,
+      makeNativePatch([
+        {
+          op: 'edit',
+          path: '../outside.ts',
+          oldText: 'x',
+          newText: 'y',
+        },
+      ]),
+    );
+
+    if (result.ok) {
+      return {
+        kind: 'fail',
+        detail: 'Expected traversal patch to be rejected, but it was applied.',
+      };
+    }
+    if (result.rejection.code !== 'path_denied') {
+      return {
+        kind: 'fail',
+        detail: `Expected traversal rejection code=path_denied, got ${result.rejection.code}`,
+      };
+    }
+    if (readFileSync(join(tmpDir, 'src', 'safe.ts'), 'utf-8') !== 'export const safe = true;\n') {
+      return {
+        kind: 'fail',
+        detail: 'Traversal rejection must leave existing worktree files unchanged.',
+      };
+    }
+
+    return { kind: 'pass' };
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
+async function assertPatchRejectsSymlinkAndAbsoluteEscapes(
+  _ctx: ScenarioContext,
+): Promise<ScenarioAssertionOutcome> {
+  const worktreeDir = mkdtempSync(join(tmpdir(), 'native-cert-patch-symlink-'));
+  const outsideDir = mkdtempSync(join(tmpdir(), 'native-cert-patch-outside-'));
+  try {
+    const outsidePath = join(outsideDir, 'outside.txt');
+    writeFileSync(outsidePath, 'outside\n', 'utf8');
+    symlinkSync(outsidePath, join(worktreeDir, 'linked.txt'));
+
+    const symlinkResult = await applyNativePatch(
+      worktreeDir,
+      makeNativePatch([
+        {
+          op: 'edit',
+          path: 'linked.txt',
+          oldText: 'outside\n',
+          newText: 'changed\n',
+        },
+      ]),
+    );
+    if (symlinkResult.ok || symlinkResult.rejection.code !== 'path_denied') {
+      return {
+        kind: 'fail',
+        detail: `Expected symlink escape to be rejected with path_denied, got ${symlinkResult.ok ? 'ok' : symlinkResult.rejection.code}`,
+      };
+    }
+
+    const absoluteResult = await applyNativePatch(
+      worktreeDir,
+      makeNativePatch([
+        {
+          op: 'edit',
+          path: outsidePath,
+          oldText: 'outside\n',
+          newText: 'changed\n',
+        },
+      ]),
+    );
+    if (absoluteResult.ok || absoluteResult.rejection.code !== 'path_denied') {
+      return {
+        kind: 'fail',
+        detail: `Expected absolute out-of-worktree path to be rejected with path_denied, got ${absoluteResult.ok ? 'ok' : absoluteResult.rejection.code}`,
+      };
+    }
+    if (readFileSync(outsidePath, 'utf-8') !== 'outside\n') {
+      return {
+        kind: 'fail',
+        detail: 'Absolute-path rejection must not modify the out-of-worktree target.',
+      };
+    }
+
+    return { kind: 'pass' };
+  } finally {
+    rmSync(worktreeDir, { recursive: true, force: true });
+    rmSync(outsideDir, { recursive: true, force: true });
+  }
+}
+
+async function assertPatchGeneratedArtifactAllowlist(
+  _ctx: ScenarioContext,
+): Promise<ScenarioAssertionOutcome> {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'native-cert-patch-generated-'));
+  try {
+    const tool = createWriteArtifactTool(tmpDir, {
+      wholeFileAllowlist: {
+        generatedPaths: ['dist/**'],
+      },
+    });
+
+    const allowed = await tool.execute('cert-artifact-allow', {
+      path: 'dist/output.json',
+      content: '{"ok":true}\n',
+    });
+    const allowedDetails = allowed.details as WriteArtifactDetails;
+    if (!allowedDetails.ok) {
+      return {
+        kind: 'fail',
+        detail: `Expected generated artifact write to succeed, got ${allowedDetails.error}: ${allowedDetails.message}`,
+      };
+    }
+
+    const denied = await tool.execute('cert-artifact-deny', {
+      path: 'src/app.ts',
+      content: 'export const value = 1;\n',
+    });
+    const deniedDetails = denied.details as WriteArtifactDetails;
+    if (deniedDetails.ok || deniedDetails.error !== 'whole_file_source_write_denied') {
+      return {
+        kind: 'fail',
+        detail: `Expected source whole-file write to be denied, got ${deniedDetails.ok ? 'ok' : deniedDetails.error}`,
+      };
+    }
+    if (readFileSync(join(tmpDir, 'dist', 'output.json'), 'utf-8') !== '{"ok":true}\n') {
+      return {
+        kind: 'fail',
+        detail: 'Generated artifact contents were not written as expected.',
+      };
+    }
+
+    return { kind: 'pass' };
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
+async function assertPatchCommandAndFormatSafety(
+  _ctx: ScenarioContext,
+): Promise<ScenarioAssertionOutcome> {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'native-cert-patch-commands-'));
+  try {
+    const runTests = createRunTestsTool(tmpDir);
+    const runFormat = createRunFormatTool(tmpDir);
+
+    const testResult = await runTests.execute('cert-run-tests', {
+      command: `node -e console.log(String.fromCharCode(111,107))`,
+    });
+    const testDetails = testResult.details as RunCommandDetails;
+    if (!testDetails.ok || testDetails.status !== 'completed' || !testDetails.stdout.includes('ok')) {
+      return {
+        kind: 'fail',
+        detail: 'run_tests did not complete successfully with the expected safe command output.',
+      };
+    }
+
+    const formatResult = await runFormat.execute('cert-run-format', {
+      command: 'rm -rf /',
+    });
+    const formatDetails = formatResult.details as RunCommandDetails;
+    if (formatDetails.ok || formatDetails.error !== 'unsafe_command') {
+      return {
+        kind: 'fail',
+        detail: `Expected run_format to reject an unsafe command, got ${formatDetails.ok ? 'ok' : formatDetails.error}`,
+      };
+    }
+
+    return { kind: 'pass' };
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
+async function assertPatchPersistenceRoundtrip(ctx: ScenarioContext): Promise<ScenarioAssertionOutcome> {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'native-cert-patch-roundtrip-'));
+  try {
+    const artifact: NativeCertificationArtifact = {
+      schemaVersion: CERTIFICATION_SCHEMA_VERSION,
+      provider: ctx.provider,
+      model: 'patch-test-model',
+      phase: 'patch',
+      suiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
+      certifiedAt: new Date().toISOString(),
+      scenarios: [{ scenarioId: 'patch-roundtrip-test', passed: true }],
+    };
+
+    writeCertification(tmpDir, artifact);
+
+    for (const requiredPhase of ['patch', 'read-only'] as const) {
+      const eligibility = checkCertificationEligibility(
+        tmpDir,
+        ctx.provider,
+        'patch-test-model',
+        DEFAULT_CERTIFICATION_SUITE_VERSION,
+        requiredPhase,
+        new Date(),
+      );
+      if (!eligibility.eligible) {
+        return {
+          kind: 'fail',
+          detail: `Expected patch artifact to satisfy ${requiredPhase}, got ${(eligibility as { reason: string }).reason}`,
+        };
+      }
+    }
+
+    const workflowEligibility = checkCertificationEligibility(
+      tmpDir,
+      ctx.provider,
+      'patch-test-model',
+      DEFAULT_CERTIFICATION_SUITE_VERSION,
+      'workflow',
+      new Date(),
+    );
+    if (workflowEligibility.eligible || workflowEligibility.reason !== 'phase-insufficient') {
+      return {
+        kind: 'fail',
+        detail: `Expected patch artifact to be phase-insufficient for workflow, got ${workflowEligibility.eligible ? 'eligible' : workflowEligibility.reason}`,
+      };
+    }
+
+    return { kind: 'pass' };
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
+async function assertPatchDirtyTreeGateSemantics(_ctx: ScenarioContext): Promise<ScenarioAssertionOutcome> {
+  const accepted = evaluateCodingCompletionGate({
+    dirtyPaths: [],
+    commitPolicySatisfied: true,
+    checksPolicySatisfied: true,
+  });
+  if (accepted.status !== 'accepted') {
+    return {
+      kind: 'fail',
+      detail: `Expected clean-tree completion gate to accept, got ${accepted.status}`,
+    };
+  }
+
+  const blocked = evaluateCodingCompletionGate({
+    dirtyPaths: ['src/app.ts'],
+    commitPolicySatisfied: true,
+    checksPolicySatisfied: true,
+  });
+  if (blocked.status !== 'blocked' || blocked.reason !== 'dirty_tree') {
+    return {
+      kind: 'fail',
+      detail: `Expected dirty-tree completion gate block, got ${JSON.stringify(blocked)}`,
+    };
+  }
+
+  return { kind: 'pass' };
+}
+
+async function assertPatchCleanupOnAbortAndTimeout(_ctx: ScenarioContext): Promise<ScenarioAssertionOutcome> {
+  const repoDir = mkdtempSync(join(tmpdir(), 'native-cert-patch-cleanup-'));
+  try {
+    initializeGitRepo(repoDir);
+    writeFileSync(join(repoDir, 'src.ts'), 'const value = 1;\n', 'utf8');
+    execFileSync('git', ['add', 'src.ts'], { cwd: repoDir, stdio: 'ignore' });
+    execFileSync('git', ['commit', '-m', 'init'], { cwd: repoDir, stdio: 'ignore' });
+
+    const snapshot = {
+      path: 'src.ts',
+      originalDiskText: 'const value = 1;\n',
+      postImage: 'const value = 2;\n',
+    };
+
+    writeFileSync(join(repoDir, 'src.ts'), snapshot.postImage, 'utf8');
+    const abortTracker = createCleanupTracker();
+    abortTracker.recordMutation({ tool: 'apply_patch', status: 'completed', path: snapshot.path });
+    abortTracker.recordPatchSnapshots([snapshot]);
+    const abortReport = await runCleanup(abortTracker, {
+      worktreePath: repoDir,
+      reason: 'aborted',
+    });
+
+    if (abortReport.reason !== 'aborted'
+      || abortReport.finalTreeState !== 'clean'
+      || abortReport.cleanupDecision !== 'rolled-back'
+      || readFileSync(join(repoDir, 'src.ts'), 'utf-8') !== snapshot.originalDiskText) {
+      return {
+        kind: 'fail',
+        detail: `Abort cleanup did not roll back to a clean tree: ${JSON.stringify(abortReport)}`,
+      };
+    }
+
+    writeFileSync(join(repoDir, 'src.ts'), snapshot.postImage, 'utf8');
+    const timeoutTracker = createCleanupTracker();
+    timeoutTracker.recordMutation({ tool: 'apply_patch', status: 'completed', path: snapshot.path });
+    timeoutTracker.recordPatchSnapshots([snapshot]);
+    const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'ignore' });
+    timeoutTracker.registerProcess(child);
+    const timeoutReport = await runCleanup(timeoutTracker, {
+      worktreePath: repoDir,
+      reason: 'timeout',
+    });
+
+    if (timeoutReport.reason !== 'timeout'
+      || timeoutReport.finalTreeState !== 'clean'
+      || timeoutReport.cleanupDecision !== 'rolled-back'
+      || timeoutReport.terminatedCommands.length !== 1
+      || timeoutReport.terminatedCommands[0]?.signal === null
+      || readFileSync(join(repoDir, 'src.ts'), 'utf-8') !== snapshot.originalDiskText) {
+      return {
+        kind: 'fail',
+        detail: `Timeout cleanup did not terminate and roll back as expected: ${JSON.stringify(timeoutReport)}`,
+      };
+    }
+
+    return { kind: 'pass' };
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+}
+
+async function assertPatchTranscriptRedaction(ctx: ScenarioContext): Promise<ScenarioAssertionOutcome> {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'native-cert-patch-transcript-'));
+  try {
+    const transcriptPath = join(tmpDir, 'session.jsonl');
+    const secret = 'ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890';
+    const writer = new TranscriptWriter({
+      sessionId: `cert-harness-patch-transcript-${++_transcriptSeq}`,
+      model: ctx.model,
+      api: ctx.transport === 'openai-responses' ? 'openai-responses' : 'openai-completions',
+      provider: ctx.provider,
+      path: transcriptPath,
+      clock: () => 1_720_000_000_000,
+    });
+
+    writer.handleEvent({
+      type: 'tool_execution_end',
+      toolCallId: 'tc-redact',
+      toolName: 'api_call',
+      result: {
+        content: [{ type: 'text', text: `token=${secret}` }],
+        details: { token: secret, status: 200 },
+      },
+      isError: false,
+    } as any);
+
+    const content = readFileSync(transcriptPath, 'utf-8');
+    if (content.includes(secret)) {
+      return {
+        kind: 'fail',
+        detail: 'Transcript JSONL persisted an unredacted secret.',
+      };
+    }
+
+    const [event] = content
+      .split('\n')
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const details = event?.['details'] as Record<string, unknown> | undefined;
+    if (event?.['type'] !== 'tool_result'
+      || details?.['token'] !== '[REDACTED]'
+      || event['redacted'] !== true) {
+      return {
+        kind: 'fail',
+        detail: `Expected redacted tool_result transcript event, got ${JSON.stringify(event)}`,
+      };
+    }
+
+    return { kind: 'pass' };
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
+async function assertPatchReadyRemediationFixtures(_ctx: ScenarioContext): Promise<ScenarioAssertionOutcome> {
+  const cases = [
+    loadReadyFixture('stale-base'),
+    loadReadyFixture('conflict'),
+    loadReadyFixture('denied-unrelated-edit'),
+  ];
+
+  for (const fixture of cases) {
+    const result = evaluateReadyRemediation(
+      fixture['input'] as {
+        classification: { kind: 'stale_base' | 'merge_conflict' | 'unknown'; affectedFiles: string[]; source?: string };
+        proposedEdits: string[];
+      },
+    );
+    if (JSON.stringify(result) !== JSON.stringify(fixture['expected'])) {
+      return {
+        kind: 'fail',
+        detail: `Ready remediation fixture mismatch for ${String(fixture['description'])}`,
+      };
+    }
+  }
+
+  const staleBaseDenied = loadReadyFixture('stale-base-denied') as {
+    proposedEdits: string[];
+    raw: { affectedFiles: string[]; source?: string };
+    expected: unknown;
+  };
+  const deniedResult = evaluateReadyRemediation({
+    classification: fromStaleBaseCheck(
+      staleBaseDenied.raw.affectedFiles,
+      staleBaseDenied.raw.source,
+    ),
+    proposedEdits: staleBaseDenied.proposedEdits,
+  });
+  if (JSON.stringify(deniedResult) !== JSON.stringify(staleBaseDenied.expected)) {
+    return {
+      kind: 'fail',
+      detail: 'Ready remediation stale-base denied fixture did not evaluate as expected.',
+    };
+  }
+
+  return { kind: 'pass' };
 }
 
 async function assertWorkflowToolContractShapeStable(_ctx: ScenarioContext): Promise<ScenarioAssertionOutcome> {
@@ -742,7 +1258,7 @@ async function assertWorkflowPhasePersistenceRoundtrip(ctx: ScenarioContext): Pr
       provider: ctx.provider,
       model: 'test-model',
       phase: 'workflow',
-      suiteVersion: 'v1',
+      suiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
       certifiedAt: new Date().toISOString(),
       scenarios: [{ scenarioId: 'workflow-roundtrip-test', passed: true }],
     };
@@ -754,7 +1270,7 @@ async function assertWorkflowPhasePersistenceRoundtrip(ctx: ScenarioContext): Pr
         tmpDir,
         ctx.provider,
         'test-model',
-        'v1',
+        DEFAULT_CERTIFICATION_SUITE_VERSION,
         requiredPhase,
         new Date(),
       );
@@ -824,6 +1340,96 @@ const DEFAULT_SCENARIOS: CertificationScenario[] = [
     description:
       'A valid NativeCertificationArtifact written via writeCertification and evaluated via checkCertificationEligibility returns eligible: true.',
     assertion: assertPhasePersistenceRoundtrip,
+  },
+  {
+    id: 'patch.tools.apply-native-patch-and-track-intended-files',
+    phase: 'patch',
+    category: 'tool',
+    classification: 'deterministic',
+    description:
+      'A safe NativePatch applies atomically through apply_patch and records the mutated file in the intended-file tracker.',
+    assertion: assertPatchAppliesAndTracksIntendedFiles,
+  },
+  {
+    id: 'patch.tools.rejects-path-traversal',
+    phase: 'patch',
+    category: 'tool',
+    classification: 'deterministic',
+    description:
+      'Traversal paths are rejected fail-closed by patch application without mutating the worktree.',
+    assertion: assertPatchRejectsTraversalPath,
+  },
+  {
+    id: 'patch.tools.rejects-symlink-and-absolute-escape',
+    phase: 'patch',
+    category: 'tool',
+    classification: 'deterministic',
+    description:
+      'Symlink escapes and out-of-worktree absolute paths are rejected fail-closed during patch application.',
+    assertion: assertPatchRejectsSymlinkAndAbsoluteEscapes,
+  },
+  {
+    id: 'patch.tools.generated-artifact-allowlist',
+    phase: 'patch',
+    category: 'tool',
+    classification: 'deterministic',
+    description:
+      'Generated artifacts can be written through the whole-file allowlist while handwritten source files remain denied to write_artifact.',
+    assertion: assertPatchGeneratedArtifactAllowlist,
+  },
+  {
+    id: 'patch.tools.command-and-format-safety',
+    phase: 'patch',
+    category: 'tool',
+    classification: 'deterministic',
+    description:
+      'run_tests executes a safe scoped command while run_format rejects unsafe commands before spawn.',
+    assertion: assertPatchCommandAndFormatSafety,
+  },
+  {
+    id: 'patch.transcript.redacts-tool-result-secrets',
+    phase: 'patch',
+    category: 'transcript',
+    classification: 'deterministic',
+    description:
+      'TranscriptWriter redacts secret-bearing tool result content and details before persisting patch-session JSONL.',
+    assertion: assertPatchTranscriptRedaction,
+  },
+  {
+    id: 'patch.phase.persistence-roundtrip',
+    phase: 'patch',
+    category: 'phase',
+    classification: 'deterministic',
+    description:
+      'A persisted phase=patch artifact satisfies patch and read-only eligibility checks but remains insufficient for workflow.',
+    assertion: assertPatchPersistenceRoundtrip,
+  },
+  {
+    id: 'patch.phase.dirty-tree-gate-semantics',
+    phase: 'patch',
+    category: 'phase',
+    classification: 'deterministic',
+    description:
+      'Coding completion stays blocked when dirty paths remain and accepts only when the tree is clean and commit/check policies are satisfied.',
+    assertion: assertPatchDirtyTreeGateSemantics,
+  },
+  {
+    id: 'patch.phase.cleanup-on-abort-and-timeout',
+    phase: 'patch',
+    category: 'phase',
+    classification: 'deterministic',
+    description:
+      'Cleanup rolls back patch snapshots on abort and timeout, and timeout cleanup also terminates tracked commands.',
+    assertion: assertPatchCleanupOnAbortAndTimeout,
+  },
+  {
+    id: 'patch.phase.ready-remediation-fixtures',
+    phase: 'patch',
+    category: 'phase',
+    classification: 'deterministic',
+    description:
+      'Stale-base and merge-conflict remediation fixtures continue to enforce in-scope paths and reject out-of-scope edits.',
+    assertion: assertPatchReadyRemediationFixtures,
   },
   {
     id: 'phase.workflow.artifact-unlocks-planner',
@@ -928,7 +1534,7 @@ export { PHASE_ORDER };
  * is stored in every certification artifact and must match the registry
  * metadata for the artifact to be considered valid by the router.
  */
-export const DEFAULT_CERTIFICATION_SUITE_VERSION = 'v1' as const;
+export const DEFAULT_CERTIFICATION_SUITE_VERSION = 'v2' as const;
 
 /**
  * Return the default certification scenario catalog.

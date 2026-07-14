@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { PHASE_ORDER, getDefaultScenarios } from './scenarios.ts';
+import {
+  DEFAULT_CERTIFICATION_SUITE_VERSION,
+  PHASE_ORDER,
+  getDefaultScenarios,
+} from './scenarios.ts';
 import { checkCertificationEligibility } from './loader.ts';
 import { writeCertification } from './store.ts';
 import { CERTIFICATION_SCHEMA_VERSION, type NativeCertificationArtifact } from './schema.ts';
@@ -89,6 +93,13 @@ describe('getDefaultScenarios — catalog integrity', () => {
     );
   });
 
+  it('includes at least one patch-phase scenario', () => {
+    assert.ok(
+      scenarios.some((scenario) => scenario.phase === 'patch'),
+      'catalog must include at least one patch scenario',
+    );
+  });
+
   it('every category in (tool, usage, transcript, phase) has at least one deterministic scenario', () => {
     const categories = ['tool', 'usage', 'transcript', 'phase'] as const;
     const deterministicByCategory = new Map<string, number>();
@@ -137,6 +148,20 @@ describe('getDefaultScenarios — catalog integrity', () => {
         `workflow scenario "${scenario.id}" must be deterministic`,
       );
     }
+  });
+
+  it('patch-phase scenarios are all deterministic', () => {
+    for (const scenario of scenarios.filter((entry) => entry.phase === 'patch')) {
+      assert.equal(
+        scenario.classification,
+        'deterministic',
+        `patch scenario "${scenario.id}" must be deterministic`,
+      );
+    }
+  });
+
+  it('bumps the default suite version for patch/path certification coverage', () => {
+    assert.equal(DEFAULT_CERTIFICATION_SUITE_VERSION, 'v2');
   });
 
   it('getDefaultScenarios returns a new array each call', () => {
@@ -199,4 +224,27 @@ describe('workflow certification scenarios', () => {
       rmSync(repoDir, { recursive: true, force: true });
     }
   });
+});
+
+describe('patch certification scenarios', () => {
+  const patchScenarioIds = [
+    'patch.tools.apply-native-patch-and-track-intended-files',
+    'patch.tools.rejects-path-traversal',
+    'patch.tools.rejects-symlink-and-absolute-escape',
+    'patch.tools.generated-artifact-allowlist',
+    'patch.tools.command-and-format-safety',
+    'patch.transcript.redacts-tool-result-secrets',
+    'patch.phase.persistence-roundtrip',
+    'patch.phase.dirty-tree-gate-semantics',
+    'patch.phase.cleanup-on-abort-and-timeout',
+    'patch.phase.ready-remediation-fixtures',
+  ];
+
+  for (const id of patchScenarioIds) {
+    it(`${id} passes in the deterministic harness`, async () => {
+      const scenario = scenarioById(id);
+      const result = await scenario.assertion!(DEFAULT_CONTEXT);
+      assert.deepEqual(result, { kind: 'pass' });
+    });
+  }
 });

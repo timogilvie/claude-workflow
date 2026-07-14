@@ -10,7 +10,7 @@ Wavemill can opt into the native runtime for read-only phases only:
 - planning
 - review
 
-Coding is not part of this opt-in. Even when native read-only phases are enabled, coding continues to use the existing non-native path unless the separate patch-coding alpha gate is enabled and certified.
+Coding is not part of this opt-in. Even when native read-only phases are enabled, coding continues to use the existing non-native path unless the separate patch-coding alpha gate is enabled, smoke-certified for the repo, and backed by provider/model `patch` certification.
 
 ## Required Config
 
@@ -71,6 +71,8 @@ This flag is necessary but not sufficient. Wavemill only enables native patch co
 - `nativeAgent.patchCoding.enabled` is `true`
 - `.wavemill/native-agent/patch-coding-certification.json` exists and matches the current smoke-suite revision
 
+That still does not make every configured model eligible for coding. Routing also checks provider/model phase certifications under `.wavemill/native-agent-certifications/<provider>/<model>/<suite-version>.json`, where coder selection requires `phase: "patch"`.
+
 The runtime gate is exported from `shared/lib/native-agent/coding-gate.ts` as `isPatchCodingEnabled()` and `evaluatePatchCodingGate()`. That is the handoff seam for the follow-up command/test/git runtime work.
 
 ## Supported Providers
@@ -106,6 +108,14 @@ Certification requirements:
 - stale revisions fail closed until recertified
 
 The artifact path is `.wavemill/native-agent/patch-coding-certification.json`. The current coding smoke-suite revision constant lives in `shared/lib/native-agent/smoke.ts` as `PATCH_CODING_SMOKE_SUITE_REVISION`.
+
+Provider/model phase certification is separate and lives under `.wavemill/native-agent-certifications/`. Those artifacts control routing eligibility by phase:
+
+- reviewer requires `phase: "read-only"`
+- coder requires `phase: "patch"`
+- planner requires `phase: "workflow"`
+
+Higher phases satisfy lower ones, so a `workflow` artifact also satisfies coder and reviewer routing, while a `read-only` artifact never satisfies coder routing.
 
 ## Phase Examples
 

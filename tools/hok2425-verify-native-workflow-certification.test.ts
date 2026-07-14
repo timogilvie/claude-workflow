@@ -7,6 +7,7 @@ import {
   pickRepresentativeModel,
   summarizeArtifactCoverage,
 } from './hok2425-verify-native-workflow-certification.ts';
+import { DEFAULT_CERTIFICATION_SUITE_VERSION } from '../shared/lib/native-agent/certification/scenarios.ts';
 import type { NativeCertificationArtifact } from '../shared/lib/native-agent/certification/schema.ts';
 
 describe('hok2425 native workflow verification helpers', () => {
@@ -37,7 +38,7 @@ describe('hok2425 native workflow verification helpers', () => {
       provider: 'qwen',
       model: 'qwen3-coder',
       phase: 'workflow',
-      suiteVersion: 'v1',
+      suiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
       certifiedAt: '2026-07-11T00:00:00.000Z',
       scenarios: [
         { scenarioId: 'workflow.tools.contract-shape-stable', passed: true },
@@ -46,11 +47,15 @@ describe('hok2425 native workflow verification helpers', () => {
       ],
     };
 
-    const summary = summarizeArtifactCoverage(artifact, '/repo/.wavemill/native-agent-certifications/qwen/qwen3-coder/v1.json', [
+    const summary = summarizeArtifactCoverage(
+      artifact,
+      `/repo/.wavemill/native-agent-certifications/qwen/qwen3-coder/${DEFAULT_CERTIFICATION_SUITE_VERSION}.json`,
+      [
       'workflow.phase.workflow-persistence-roundtrip',
       'workflow.tools.contract-shape-stable',
       'workflow.usage.multi-turn-token-accounting',
-    ]);
+      ],
+    );
 
     assert.equal(summary.workflowScenarioCount, 2);
     assert.equal(summary.passingWorkflowScenarioCount, 1);
@@ -99,7 +104,7 @@ describe('hok2425 native workflow verification helpers', () => {
           provider: 'openrouter',
           model: 'qwen/qwen3-coder',
           phase: 'workflow',
-          suiteVersion: 'v1',
+          suiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
           dryRun: true,
           harnessPassed: true,
           liveCertifiable: true,
@@ -111,9 +116,9 @@ describe('hok2425 native workflow verification helpers', () => {
       },
       currentArtifacts: [
         {
-          path: '/repo/.wavemill/native-agent-certifications/qwen/qwen3-coder/v1.json',
+          path: `/repo/.wavemill/native-agent-certifications/qwen/qwen3-coder/${DEFAULT_CERTIFICATION_SUITE_VERSION}.json`,
           phase: 'workflow',
-          suiteVersion: 'v1',
+          suiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
           scenarioCount: 6,
           passingScenarioCount: 6,
           workflowScenarioCount: 1,
@@ -139,7 +144,7 @@ describe('hok2425 native workflow verification helpers', () => {
           requestedPhase: 'workflow',
           certifiedPhase: 'read-only',
           nativeCapability: 'certified',
-          requiredSuiteVersion: 'v1',
+          requiredSuiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
           reason: 'insufficient-phase',
         }],
       },

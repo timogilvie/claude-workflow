@@ -9,6 +9,7 @@ import {
   CERTIFICATION_SCHEMA_VERSION,
   type NativeCertificationArtifact,
 } from './certification/index.ts';
+import { DEFAULT_CERTIFICATION_SUITE_VERSION } from './certification/scenarios.ts';
 import {
   buildOpenAiResponsesModel,
   buildOpenRouterModel,
@@ -39,7 +40,7 @@ const PROVIDER_CASES = [
 function makeCertifiedRegistry(
   modelId: string,
   provider: 'openai' | 'openrouter',
-  suiteVersion = 'v1',
+  suiteVersion = DEFAULT_CERTIFICATION_SUITE_VERSION,
 ): ModelRegistry {
   return {
     models: {
@@ -128,7 +129,7 @@ describe('native-agent provider resolution', () => {
   it('builds a ready OpenAI responses model', () => {
     const { repoDir, cleanup } = makeRepo();
     try {
-      writeArtifact(repoDir, 'openai', 'gpt-4o', 'v1');
+      writeArtifact(repoDir, 'openai', 'gpt-4o', DEFAULT_CERTIFICATION_SUITE_VERSION);
 
       const [entry] = resolveNativeAgentProviders({
         providers: {
@@ -161,7 +162,7 @@ describe('native-agent provider resolution', () => {
   it('builds a ready OpenRouter model with compat and header overrides', () => {
     const { repoDir, cleanup } = makeRepo();
     try {
-      writeArtifact(repoDir, 'openrouter', 'openrouter-test-model', 'v1', {
+      writeArtifact(repoDir, 'openrouter', 'openrouter-test-model', DEFAULT_CERTIFICATION_SUITE_VERSION, {
         provider: 'openrouter',
         model: 'openrouter-test-model',
       });
@@ -205,7 +206,7 @@ describe('native-agent provider resolution', () => {
     const { repoDir, cleanup } = makeRepo();
     try {
       writeFileSync(join(repoDir, '.env'), 'WAVEMILL_TEST_OPENAI_KEY=sk-from-dotenv\n', 'utf8');
-      writeArtifact(repoDir, 'openai', 'gpt-4o', 'v1');
+      writeArtifact(repoDir, 'openai', 'gpt-4o', DEFAULT_CERTIFICATION_SUITE_VERSION);
 
       const [entry] = resolveNativeAgentProviders({
         providers: {
@@ -238,6 +239,14 @@ describe('native-agent provider resolution', () => {
     console.error = (...args: unknown[]) => { events.push(`error:${args.join(' ')}`); };
 
     try {
+      const { repoDir, cleanup } = makeRepo();
+      try {
+        writeArtifact(repoDir, 'openai', 'gpt-4o', DEFAULT_CERTIFICATION_SUITE_VERSION);
+        writeArtifact(repoDir, 'openrouter', 'openai/gpt-4o-mini', DEFAULT_CERTIFICATION_SUITE_VERSION, {
+          provider: 'openai',
+          model: 'gpt-4o-mini',
+        });
+
       const missing = resolveNativeAgentProviders({
         providers: {
           openai: {
@@ -246,36 +255,50 @@ describe('native-agent provider resolution', () => {
           },
         },
       }, {
+        repoDir,
         env: {},
+        registry: makeCertifiedRegistry('gpt-4o', 'openai'),
+        now: FIXED_NOW,
       });
       const empty = resolveNativeAgentProviders({
         providers: {
           openrouter: {
+            apiKeyEnv: 'WAVEMILL_TEST_OPENROUTER_KEY',
             models: ['openai/gpt-4o-mini'],
           },
         },
       }, {
-        env: { OPENROUTER_API_KEY: '' },
+        repoDir,
+        env: { WAVEMILL_TEST_OPENROUTER_KEY: '' },
+        registry: makeCertifiedRegistry('openai/gpt-4o-mini', 'openrouter'),
+        now: FIXED_NOW,
       });
       const whitespace = resolveNativeAgentProviders({
         providers: {
           openrouter: {
+            apiKeyEnv: 'WAVEMILL_TEST_OPENROUTER_KEY',
             models: ['openai/gpt-4o-mini'],
           },
         },
       }, {
-        env: { OPENROUTER_API_KEY: '   ' },
+        repoDir,
+        env: { WAVEMILL_TEST_OPENROUTER_KEY: '   ' },
+        registry: makeCertifiedRegistry('openai/gpt-4o-mini', 'openrouter'),
+        now: FIXED_NOW,
       });
 
       for (const entry of [...missing, ...empty, ...whitespace]) {
         assert.equal(entry.status, 'unavailable');
-        assert.match(entry.reason, /OPENAI_KEY_NAME|OPENROUTER_API_KEY/);
+        assert.match(entry.reason, /OPENAI_KEY_NAME|WAVEMILL_TEST_OPENROUTER_KEY/);
       }
 
       const serialized = JSON.stringify({ missing, empty, whitespace });
       assert(!serialized.includes('sk-openrouter-test'));
       assert(!serialized.includes('OPENROUTER_API_KEY='));
       assert.deepEqual(events, []);
+      } finally {
+        cleanup();
+      }
     } finally {
       console.log = consoleLog;
       console.warn = consoleWarn;
@@ -303,7 +326,7 @@ describe('native-agent provider resolution', () => {
   it('does not expose ready provider secrets in JSON output', () => {
     const { repoDir, cleanup } = makeRepo();
     try {
-      writeArtifact(repoDir, 'openai', 'gpt-4o', 'v1');
+      writeArtifact(repoDir, 'openai', 'gpt-4o', DEFAULT_CERTIFICATION_SUITE_VERSION);
 
       const [entry] = resolveNativeAgentProviders({
         providers: {
@@ -427,7 +450,7 @@ describe('native-agent certification gate', () => {
   it('certified model resolves to ready with certificationOnly: false', () => {
     const { repoDir, cleanup } = makeRepo();
     try {
-      writeArtifact(repoDir, 'openai', 'certified-model', 'v1');
+      writeArtifact(repoDir, 'openai', 'certified-model', DEFAULT_CERTIFICATION_SUITE_VERSION);
 
       const entries = resolveNativeAgentProviders({
         providers: {
@@ -475,7 +498,7 @@ describe('native-agent certification gate', () => {
     const registry = makeCertifiedRegistry('certified-a', 'openai');
 
     try {
-      writeArtifact(repoDir, 'openai', 'certified-a', 'v1');
+      writeArtifact(repoDir, 'openai', 'certified-a', DEFAULT_CERTIFICATION_SUITE_VERSION);
 
       const entries = resolveNativeAgentProviders({
         providers: {
@@ -534,7 +557,7 @@ describe('native provider certification artifacts', () => {
     it(`rejects stale ${testCase.provider} artifacts in task mode`, () => {
       const { repoDir, cleanup } = makeRepo();
       try {
-        writeArtifact(repoDir, testCase.provider, testCase.modelId, 'v1', {
+        writeArtifact(repoDir, testCase.provider, testCase.modelId, DEFAULT_CERTIFICATION_SUITE_VERSION, {
           certifiedAt: new Date(FIXED_NOW.getTime() - 61 * 24 * 60 * 60 * 1000).toISOString(),
         });
 
@@ -559,7 +582,7 @@ describe('native provider certification artifacts', () => {
     it(`rejects wrong-suite ${testCase.provider} artifacts before staleness`, () => {
       const { repoDir, cleanup } = makeRepo();
       try {
-        writeArtifact(repoDir, testCase.provider, testCase.modelId, 'v1', {
+        writeArtifact(repoDir, testCase.provider, testCase.modelId, DEFAULT_CERTIFICATION_SUITE_VERSION, {
           suiteVersion: 'v0',
           certifiedAt: new Date(FIXED_NOW.getTime() - 61 * 24 * 60 * 60 * 1000).toISOString(),
         });
@@ -585,7 +608,7 @@ describe('native provider certification artifacts', () => {
     it(`rejects insufficient-phase ${testCase.provider} artifacts with an explicit override`, () => {
       const { repoDir, cleanup } = makeRepo();
       try {
-        writeArtifact(repoDir, testCase.provider, testCase.modelId, 'v1', { phase: 'patch' });
+        writeArtifact(repoDir, testCase.provider, testCase.modelId, DEFAULT_CERTIFICATION_SUITE_VERSION, { phase: 'patch' });
 
         const [entry] = resolveNativeAgentProviders(
           makeProviderConfig(testCase.provider, testCase.modelId),
@@ -610,7 +633,7 @@ describe('native provider certification artifacts', () => {
   it('keeps certification mode lenient for stale registered candidates', () => {
     const { repoDir, cleanup } = makeRepo();
     try {
-      writeArtifact(repoDir, 'openai', 'gpt-4o', 'v1', {
+      writeArtifact(repoDir, 'openai', 'gpt-4o', DEFAULT_CERTIFICATION_SUITE_VERSION, {
         certifiedAt: new Date(FIXED_NOW.getTime() - 61 * 24 * 60 * 60 * 1000).toISOString(),
       });
 
@@ -647,7 +670,7 @@ describe('native provider certification artifacts', () => {
   it('maps malformed artifacts to missing_artifact for provider resolution', () => {
     const { repoDir, cleanup } = makeRepo();
     try {
-      const path = buildCertificationPath(repoDir, 'openai', 'gpt-4o', 'v1');
+      const path = buildCertificationPath(repoDir, 'openai', 'gpt-4o', DEFAULT_CERTIFICATION_SUITE_VERSION);
       mkdirSync(dirname(path), { recursive: true });
       writeFileSync(path, 'not json', 'utf8');
 
@@ -672,7 +695,7 @@ describe('native provider certification artifacts', () => {
   it('rejects wrong-provider artifacts by identity even when the file path matches', () => {
     const { repoDir, cleanup } = makeRepo();
     try {
-      writeArtifact(repoDir, 'openai', 'gpt-4o', 'v1', {
+      writeArtifact(repoDir, 'openai', 'gpt-4o', DEFAULT_CERTIFICATION_SUITE_VERSION, {
         provider: 'openrouter',
       });
 
@@ -696,7 +719,7 @@ describe('native provider certification artifacts', () => {
   it('rejects wrong-model artifacts by identity even when the file path matches', () => {
     const { repoDir, cleanup } = makeRepo();
     try {
-      writeArtifact(repoDir, 'openai', 'gpt-4o', 'v1', {
+      writeArtifact(repoDir, 'openai', 'gpt-4o', DEFAULT_CERTIFICATION_SUITE_VERSION, {
         model: 'gpt-4.1',
       });
 
@@ -720,7 +743,7 @@ describe('native provider certification artifacts', () => {
   it('treats a fresh 59-day artifact as ready and the 60-day boundary as stale', () => {
     const { repoDir, cleanup } = makeRepo();
     try {
-      writeArtifact(repoDir, 'openai', 'gpt-4o', 'v1', {
+      writeArtifact(repoDir, 'openai', 'gpt-4o', DEFAULT_CERTIFICATION_SUITE_VERSION, {
         certifiedAt: new Date(FIXED_NOW.getTime() - 59 * 24 * 60 * 60 * 1000).toISOString(),
       });
 
@@ -736,7 +759,7 @@ describe('native provider certification artifacts', () => {
 
       assert.equal(freshEntry.status, 'ready');
 
-      writeArtifact(repoDir, 'openai', 'gpt-4o', 'v1', {
+      writeArtifact(repoDir, 'openai', 'gpt-4o', DEFAULT_CERTIFICATION_SUITE_VERSION, {
         certifiedAt: new Date(FIXED_NOW.getTime() - 60 * 24 * 60 * 60 * 1000).toISOString(),
       });
 
@@ -760,7 +783,7 @@ describe('native provider certification artifacts', () => {
   it('resolves openrouter aliases and raw IDs to the same artifact path', () => {
     const { repoDir, cleanup } = makeRepo();
     try {
-      const path = writeArtifact(repoDir, 'openrouter', 'z-ai/glm-5.2', 'v1');
+      const path = writeArtifact(repoDir, 'openrouter', 'z-ai/glm-5.2', DEFAULT_CERTIFICATION_SUITE_VERSION);
 
       const [aliasEntry] = resolveNativeAgentProviders(
         makeProviderConfig('openrouter', 'glm-5.2'),
@@ -783,8 +806,8 @@ describe('native provider certification artifacts', () => {
 
       assert.equal(aliasEntry.status, 'ready');
       assert.equal(rawEntry.status, 'ready');
-      assert.equal(buildCertificationPath(repoDir, 'openrouter', 'glm-5.2', 'v1'), path);
-      assert.equal(buildCertificationPath(repoDir, 'openrouter', 'z-ai/glm-5.2', 'v1'), path);
+      assert.equal(buildCertificationPath(repoDir, 'openrouter', 'glm-5.2', DEFAULT_CERTIFICATION_SUITE_VERSION), path);
+      assert.equal(buildCertificationPath(repoDir, 'openrouter', 'z-ai/glm-5.2', DEFAULT_CERTIFICATION_SUITE_VERSION), path);
     } finally {
       cleanup();
     }

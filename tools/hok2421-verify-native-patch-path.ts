@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { certifyNativeAgent } from './native-agent-certify.ts';
 import { clearConfigCache } from '../shared/lib/config.ts';
 import { filterNativeModels, type RouterRole } from '../shared/lib/native-agent/certification/router-filter.ts';
+import { DEFAULT_CERTIFICATION_SUITE_VERSION } from '../shared/lib/native-agent/certification/scenarios.ts';
 import { CERTIFICATION_SCHEMA_VERSION, type CertificationPhase, type NativeCertificationArtifact } from '../shared/lib/native-agent/certification/schema.ts';
 import { resolveCertificationStorageIdentity } from '../shared/lib/native-agent/certification/identity.ts';
 import { writeCertification } from '../shared/lib/native-agent/certification/store.ts';
@@ -93,7 +94,7 @@ function modelConfig(model: ModelCase): ModelCapabilitiesOverride {
       certification: {
         maxCertifiedPhase: 'workflow',
         certifiedAt: '2026-07-01T00:00:00.000Z',
-        certificationSuiteVersion: 'v1',
+        certificationSuiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
       },
     },
   };
@@ -180,7 +181,7 @@ function writePhaseArtifact(repoDir: string, model: ModelCase, phase: Certificat
     provider: identity.provider,
     model: identity.model,
     phase,
-    suiteVersion: 'v1',
+    suiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
     certifiedAt: '2026-07-09T12:00:00.000Z',
     scenarios: [{ scenarioId: `hok2421.${phase}`, passed: true }],
     ...overrides,
@@ -191,7 +192,7 @@ function writeArtifactAtRequiredPath(repoDir: string, model: ModelCase, artifact
   const identity = resolveCertificationStorageIdentity('openrouter', model.rawId);
   const artifactDir = join(repoDir, '.wavemill', 'native-agent-certifications', identity.provider, identity.model);
   mkdirSync(artifactDir, { recursive: true });
-  const artifactPath = join(artifactDir, 'v1.json');
+  const artifactPath = join(artifactDir, `${DEFAULT_CERTIFICATION_SUITE_VERSION}.json`);
   writeFileSync(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`, 'utf-8');
   return artifactPath;
 }
@@ -389,7 +390,16 @@ function verifyRouterEligibility(repoDir: string): {
   const readOnlyOnlyPath = writePhaseArtifact(repoDir, target, 'read-only');
   rejectedDiagnostics['read-only-only'] = filterNativeModels([target.rawId], 'coder', registry, repoDir).rejected[0]!.reason;
 
-  writeFileSync(readOnlyOnlyPath, '{ invalid json', 'utf-8');
+  writePhaseArtifact(repoDir, target, 'patch', {
+    scenarios: [
+      { scenarioId: 'hok2421.patch.pass', passed: true },
+      { scenarioId: 'hok2421.patch.fail', passed: false },
+    ],
+  });
+  rejectedDiagnostics['scenario-failure'] = filterNativeModels([target.rawId], 'coder', registry, repoDir).rejected[0]!.reason;
+
+  const malformedPath = writePhaseArtifact(repoDir, target, 'patch');
+  writeFileSync(malformedPath, '{ invalid json', 'utf-8');
   rejectedDiagnostics.malformed = filterNativeModels([target.rawId], 'coder', registry, repoDir).rejected[0]!.reason;
 
   assert.deepEqual(rejectedDiagnostics, {
@@ -397,6 +407,7 @@ function verifyRouterEligibility(repoDir: string): {
     stale: 'stale',
     'wrong-suite': 'wrong-suite',
     'read-only-only': 'insufficient-phase',
+    'scenario-failure': 'insufficient-phase',
     malformed: 'malformed',
   });
 
@@ -536,22 +547,24 @@ async function main(): Promise<void> {
 
     const certificationRuns = [];
     for (const model of MODELS) {
-      const result = await certifyNativeAgent({
-        provider: 'openrouter',
-        model: model.rawId,
-        phase: 'workflow',
-        repoDir,
-      });
-      assert.equal(result.harnessPassed, true);
-      assert.equal(result.liveCertifiable, true);
-      assert.ok(result.artifactPath);
-      certificationRuns.push({
-        modelId: model.rawId,
-        phase: result.phase,
-        harnessPassed: result.harnessPassed,
-        liveCertifiable: result.liveCertifiable,
-        artifactPath: result.artifactPath,
-      });
+      for (const phase of ['patch', 'workflow'] as const) {
+        const result = await certifyNativeAgent({
+          provider: 'openrouter',
+          model: model.rawId,
+          phase,
+          repoDir,
+        });
+        assert.equal(result.harnessPassed, true);
+        assert.equal(result.liveCertifiable, true);
+        assert.ok(result.artifactPath);
+        certificationRuns.push({
+          modelId: model.rawId,
+          phase: result.phase,
+          harnessPassed: result.harnessPassed,
+          liveCertifiable: result.liveCertifiable,
+          artifactPath: result.artifactPath,
+        });
+      }
     }
 
     const routerEligibility = verifyRouterEligibility(repoDir);

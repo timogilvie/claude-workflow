@@ -19,7 +19,7 @@ All certification evaluation is **fail-closed**: missing, malformed, stale, wron
 **Example:**
 
 ```
-.wavemill/native-agent-certifications/anthropic/claude-sonnet-4-6/v1.json
+.wavemill/native-agent-certifications/anthropic/claude-sonnet-4-6/v2.json
 ```
 
 ### Path segment rules
@@ -79,7 +79,7 @@ A higher certification **satisfies** all lower required phases. A lower certific
 - **`patch`**: The agent may apply patches and make file mutations, in addition to all read-only operations.
 - **`workflow`**: The agent may execute full workflow operations including multi-step state changes, in addition to all patch operations.
 
-As of certification suite `v1`, `phase: 'workflow'` artifacts are backed by deterministic workflow-phase scenario coverage in the default certification harness.
+As of certification suite `v2`, the default certification harness includes deterministic `patch` coverage for patch/path safety and deterministic `workflow` coverage for full workflow orchestration. A `phase: 'patch'` artifact now represents real patch-path certification rather than lower-phase carry-forward.
 
 ---
 
@@ -222,7 +222,7 @@ import { validateCertification } from './validator.ts';
 const result = validateCertification(artifact, {
   expectedProvider: 'anthropic',
   expectedModel: 'claude-sonnet-4-6',
-  expectedSuiteVersion: 'v1',
+  expectedSuiteVersion: 'v2',
   requiredPhase: 'patch',
   requiredCapabilities: ['long-context'], // checked against knownLimitations
   now: new Date(),
