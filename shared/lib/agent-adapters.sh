@@ -17,6 +17,21 @@ agent_tmux_target() {
   esac
 }
 
+agent_repo_env_bootstrap_command() {
+  local repo_dir="$1"
+  local env_file="$repo_dir/.env"
+  [[ -f "$env_file" ]] || return 0
+  printf 'set -a; source %q; set +a\n' "$env_file"
+}
+
+agent_hydrate_repo_env_in_pane() {
+  local target="$1" repo_dir="$2"
+  local bootstrap_cmd
+  bootstrap_cmd="$(agent_repo_env_bootstrap_command "$repo_dir")"
+  [[ -n "$bootstrap_cmd" ]] || return 0
+  tmux send-keys -t "$target" "$bootstrap_cmd" C-m
+}
+
 # ============================================================================
 # AGENT RESOLUTION
 # ============================================================================
@@ -2098,6 +2113,7 @@ agent_launch_interactive() {
   if [[ "$prepare_rc" -eq 2 ]]; then
     return "$prepare_rc"
   fi
+  agent_hydrate_repo_env_in_pane "$target" "$repo_dir"
 
   local launcher="/tmp/${session}-$(basename "$prompt_file" .txt)-launcher.sh"
   local launcher_cmd=""

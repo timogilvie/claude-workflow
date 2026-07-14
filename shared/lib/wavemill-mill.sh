@@ -320,6 +320,60 @@ write_shell_assignment() {
   printf '%q\n' "$value"
 }
 
+dotenv_value() {
+  local env_file="$1" wanted_key="$2"
+  local raw line key value first last
+  [[ -f "$env_file" ]] || return 1
+
+  while IFS= read -r raw || [[ -n "$raw" ]]; do
+    line="$(printf '%s' "$raw" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+    [[ -n "$line" && "$line" != \#* ]] || continue
+    if [[ "$line" == export\ * ]]; then
+      line="${line#export }"
+      line="$(printf '%s' "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+    fi
+    [[ "$line" == *=* ]] || continue
+    key="$(printf '%s' "${line%%=*}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+    [[ "$key" == "$wanted_key" ]] || continue
+    value="$(printf '%s' "${line#*=}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+    if [[ "${#value}" -ge 2 ]]; then
+      first="${value:0:1}"
+      last="${value: -1}"
+      if [[ "$first" == "$last" && ( "$first" == "'" || "$first" == '"' ) ]]; then
+        value="${value:1:${#value}-2}"
+      fi
+    fi
+    printf '%s\n' "$value"
+    return 0
+  done < "$env_file"
+
+  return 1
+}
+
+hydrate_provider_env_from_dotenv() {
+  local repo_dir="$1" session="${2:-}"
+  local env_file="$repo_dir/.env"
+  local key value
+  local keys=(
+    OPENROUTER_API_KEY
+    DEEPSEEK_API_KEY
+    OPENAI_API_KEY
+    ANTHROPIC_API_KEY
+  )
+  [[ -f "$env_file" ]] || return 0
+
+  for key in "${keys[@]}"; do
+    value="${!key:-}"
+    if [[ -z "$value" ]]; then
+      value="$(dotenv_value "$env_file" "$key" 2>/dev/null || true)"
+      [[ -n "$value" ]] && export "$key=$value"
+    fi
+    if [[ -n "$session" && -n "${!key:-}" ]]; then
+      tmux set-environment -t "$session" "$key" "${!key}" 2>/dev/null || true
+    fi
+  done
+}
+
 create_tmux_session() {
   local tmux_conf
   local next_done_script
@@ -350,6 +404,7 @@ create_tmux_session() {
   tmux set-option -t "$SESSION:$WAVEMILL_WINDOW_MILL" remain-on-exit on 2>/dev/null || true
   tmux set-environment -t "$SESSION" REPO_DIR "$REPO_DIR"
   tmux set-environment -t "$SESSION" WAVEMILL_MILL_ACTIVE "$REPO_DIR"
+  hydrate_provider_env_from_dotenv "$REPO_DIR" "$SESSION"
   [[ -n "${WAVEMILL_NO_PROGRESS:-}" ]] && tmux set-environment -t "$SESSION" WAVEMILL_NO_PROGRESS "$WAVEMILL_NO_PROGRESS"
   if [[ -x "$next_done_script" ]]; then
     tmux bind-key -T prefix N run-shell "WAVEMILL_SESSION='#{session_name}' '$next_done_script'"
