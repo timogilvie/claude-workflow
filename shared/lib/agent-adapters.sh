@@ -331,6 +331,97 @@ agent_native_planning_eligible() {
   return 0
 }
 
+agent_is_native_cmd() {
+  case "${1:-}" in
+    native-openai|native-openrouter)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+agent_phase_from_role() {
+  case "${1:-}" in
+    planner|planning)
+      printf '%s\n' "planning"
+      ;;
+    reviewer|review|reviewing)
+      printf '%s\n' "review"
+      ;;
+    coder|coding)
+      printf '%s\n' "coding"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+AGENT_NATIVE_LAUNCH_LAST_JSON=""
+AGENT_NATIVE_LAUNCH_LAST_REASON=""
+
+agent_native_launch_probe() {
+  local cmd="$1"
+  local phase="$2"
+  local model="$3"
+  local repo_dir="${4:-${REPO_DIR:-$(pwd)}}"
+  local tool="${TOOLS_DIR:-$repo_dir/tools}/check-native-agent-launch.ts"
+  local output=""
+
+  AGENT_NATIVE_LAUNCH_LAST_JSON=""
+  AGENT_NATIVE_LAUNCH_LAST_REASON=""
+
+  if ! agent_is_native_cmd "$cmd"; then
+    AGENT_NATIVE_LAUNCH_LAST_REASON="error: non-native agent '$cmd' passed to native launch probe"
+    echo "$AGENT_NATIVE_LAUNCH_LAST_REASON" >&2
+    return 1
+  fi
+
+  if [[ ! -f "$tool" ]]; then
+    AGENT_NATIVE_LAUNCH_LAST_REASON="error: native launch probe is unavailable ($tool)"
+    echo "$AGENT_NATIVE_LAUNCH_LAST_REASON" >&2
+    return 1
+  fi
+
+  if ! output="$(cd "$repo_dir" 2>/dev/null && agent_run_tsx_tool "$tool" --repo-dir "$repo_dir" --phase "$phase" --agent "$cmd" --model "$model" 2>/dev/null)"; then
+    AGENT_NATIVE_LAUNCH_LAST_REASON="error: native launch probe failed for $cmd/$phase/$model"
+    [[ -n "$output" ]] && AGENT_NATIVE_LAUNCH_LAST_REASON="$output"
+    echo "$AGENT_NATIVE_LAUNCH_LAST_REASON" >&2
+    return 1
+  fi
+
+  if ! command -v jq >/dev/null 2>&1; then
+    AGENT_NATIVE_LAUNCH_LAST_REASON="error: jq is required to validate native launch probes"
+    echo "$AGENT_NATIVE_LAUNCH_LAST_REASON" >&2
+    return 1
+  fi
+
+  AGENT_NATIVE_LAUNCH_LAST_JSON="$output"
+  if [[ "$(printf '%s' "$output" | jq -r '.ok // "false"' 2>/dev/null)" != "true" ]]; then
+    AGENT_NATIVE_LAUNCH_LAST_REASON="$(printf '%s' "$output" | jq -r '.reason // "native launch probe rejected the route"' 2>/dev/null)"
+    echo "$AGENT_NATIVE_LAUNCH_LAST_REASON" >&2
+    return 1
+  fi
+
+  return 0
+}
+
+agent_validate_phase_launch() {
+  local cmd="$1"
+  local phase="$2"
+  local model="${3:-}"
+  local repo_dir="${4:-${REPO_DIR:-$(pwd)}}"
+
+  if agent_is_native_cmd "$cmd"; then
+    agent_native_launch_probe "$cmd" "$phase" "$model" "$repo_dir"
+    return $?
+  fi
+
+  agent_validate "$cmd"
+}
+
 
 agent_model_is_deepseek() {
   local model="${1:-}"
@@ -471,10 +562,15 @@ agent_write_initial_status() {
 agent_validate() {
   local cmd="$1"
   local binary
-  if [[ "$cmd" == "claude-openrouter" ]]; then
-    agent_openrouter_direct_disabled_message
-    return 1
-  fi
+  case "$cmd" in
+    claude-openrouter)
+      agent_openrouter_direct_disabled_message
+      return 1
+      ;;
+    native-openai|native-openrouter)
+      return 0
+      ;;
+  esac
   binary="$(agent_binary_for_cmd "$cmd")"
   command -v "$binary" >/dev/null 2>&1
 }
@@ -614,6 +710,10 @@ agent_check_auth() {
   fi
 
   case "$cmd" in
+    native-openai|native-openrouter)
+      agent_auth_cache_set "$cache_key" 0
+      return 0
+      ;;
     claude-deepseek)
       # claude-deepseek uses the claude binary + DeepSeek env; validate DEEPSEEK_API_KEY
       if ! _agent_check_deepseek_api_key "$repo_dir"; then
@@ -1561,26 +1661,45 @@ agent_launch_autonomous() {
     model_flag=" --model $model"
   fi
 
+  local native_phase="${WAVEMILL_PHASE:-}"
+  case "$native_phase" in
+    planning|coding|review) ;;
+    *)
+      native_phase=""
+      ;;
+  esac
+  if [[ -z "$native_phase" ]]; then
+    native_phase="$(agent_phase_from_role "${role:-$window}" 2>/dev/null || true)"
+  fi
+  local native_model=""
+  local worktree_dir="${feature_dir%/features/*}"
+  local feature_slug="${WAVEMILL_FEATURE_SLUG:-${WAVEMILL_SLUG:-}}"
+  if agent_is_native_cmd "$agent_cmd"; then
+    if ! agent_validate_phase_launch "$agent_cmd" "$native_phase" "$model" "$repo_dir"; then
+      return 1
+    fi
+    native_model="$(printf '%s' "$AGENT_NATIVE_LAUNCH_LAST_JSON" | jq -r '.model // empty' 2>/dev/null)"
+  fi
+
   agent_write_initial_status "$session" "$issue"
   if [[ -n "$role" && -n "$model" ]]; then
     routing_emit_phase "$role" "$model" "$repo_dir" "$feature_dir" || true
   fi
 
-  local native_phase="${WAVEMILL_PHASE:-$window}"
-  local native_model=""
-  local worktree_dir="${feature_dir%/features/*}"
-  local feature_slug="${WAVEMILL_FEATURE_SLUG:-${WAVEMILL_SLUG:-}}"
-  if agent_native_planning_eligible "$repo_dir" "$native_phase"; then
-    native_model="${AGENT_NATIVE_PLANNING_MODEL:-native}"
-    local launcher="/tmp/${session}-${issue}-autonomous-launcher.sh"
-    cat > "$launcher" <<LAUNCHEOF
+  # Wrap agent command so exit status is visible and the shell survives
+  case "$agent_cmd" in
+    native-openai|native-openrouter)
+      local launcher="/tmp/${session}-${issue}-autonomous-launcher.sh"
+      case "$native_phase" in
+        planning)
+          cat > "$launcher" <<LAUNCHEOF
 #!/bin/bash
 set -euo pipefail
 export WAVEMILL_SESSION='$session'
 export WAVEMILL_ISSUE='$issue'
 export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
-export WAVEMILL_PHASE='$window'
-export WAVEMILL_RESOLVED_MODEL='$native_model'
+export WAVEMILL_PHASE='planning'
+export WAVEMILL_RESOLVED_MODEL='${native_model:-$model}'
 export WAVEMILL_REPO_DIR='$repo_dir'
 export WAVEMILL_WT_DIR='$worktree_dir'
 export WAVEMILL_FEATURE_SLUG='$feature_slug'
@@ -1601,14 +1720,44 @@ fi
 echo "[wavemill] Agent exited (native=\${native_rc})"
 exit "\$native_rc"
 LAUNCHEOF
-    chmod +x "$launcher"
-    tmux send-keys -t "$target" -l -- "$launcher"
-    tmux send-keys -t "$target" C-m
-    return 0
-  fi
-
-  # Wrap agent command so exit status is visible and the shell survives
-  case "$agent_cmd" in
+          ;;
+        review)
+          cat > "$launcher" <<LAUNCHEOF
+#!/bin/bash
+set -euo pipefail
+export WAVEMILL_SESSION='$session'
+export WAVEMILL_ISSUE='$issue'
+export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
+export WAVEMILL_PHASE='review'
+export WAVEMILL_RESOLVED_MODEL='${native_model:-$model}'
+export WAVEMILL_REPO_DIR='$repo_dir'
+export WAVEMILL_WT_DIR='$worktree_dir'
+export WAVEMILL_FEATURE_SLUG='$feature_slug'
+export WAVEMILL_SLUG='$feature_slug'
+export WAVEMILL_BRANCH='${WAVEMILL_BRANCH:-}'
+export WAVEMILL_BASE_BRANCH='${WAVEMILL_BASE_BRANCH:-}'
+export WAVEMILL_TITLE='${WAVEMILL_TITLE:-}'
+if [[ -n '$issue' ]]; then
+  printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
+fi
+npx tsx '$repo_dir/tools/launch-native-review.ts' --session '$session' --issue '$issue' --slug '$feature_slug' --wt-dir '$worktree_dir' --repo-dir '$repo_dir'
+native_rc=\$?
+if [[ -n "\${STATUS_LOG_FILE:-}" ]]; then
+  printf '%s\n' "[wavemill] native review exit code native=\${native_rc} issue='$issue'" >> "\$STATUS_LOG_FILE" 2>/dev/null || true
+fi
+echo "[wavemill] Agent exited (native=\${native_rc})"
+exit "\$native_rc"
+LAUNCHEOF
+          ;;
+        *)
+          echo "Error: native agent '$agent_cmd' does not support autonomous phase '$native_phase'" >&2
+          return 1
+          ;;
+      esac
+      chmod +x "$launcher"
+      tmux send-keys -t "$target" -l -- "$launcher"
+      tmux send-keys -t "$target" C-m
+      ;;
     claude-deepseek)
       local tools_dir="${TOOLS_DIR:-$repo_dir/tools}"
       local lib_dir="${tools_dir%/tools}/shared/lib"
@@ -1952,6 +2101,26 @@ agent_launch_interactive() {
 
   local launcher="/tmp/${session}-$(basename "$prompt_file" .txt)-launcher.sh"
   local launcher_cmd=""
+  local native_phase="${WAVEMILL_PHASE:-}"
+  case "$native_phase" in
+    planning|coding|review) ;;
+    *)
+      native_phase=""
+      ;;
+  esac
+  if [[ -z "$native_phase" ]]; then
+    native_phase="$(agent_phase_from_role "${role:-$window}" 2>/dev/null || true)"
+  fi
+  local native_model=""
+  local worktree_dir="${feature_dir%/features/*}"
+  local feature_slug="${WAVEMILL_FEATURE_SLUG:-${WAVEMILL_SLUG:-}}"
+
+  if agent_is_native_cmd "$agent_cmd"; then
+    if ! agent_validate_phase_launch "$agent_cmd" "$native_phase" "$model" "$repo_dir"; then
+      return 1
+    fi
+    native_model="$(printf '%s' "$AGENT_NATIVE_LAUNCH_LAST_JSON" | jq -r '.model // empty' 2>/dev/null)"
+  fi
 
   agent_write_initial_status "$session" "$issue"
   if [[ -n "$role" && -n "$model" ]]; then
@@ -1960,6 +2129,62 @@ agent_launch_interactive() {
 
   # Don't use exec — keep the shell alive so the window persists after agent exit
   case "$agent_cmd" in
+    native-openai|native-openrouter)
+      case "$native_phase" in
+        planning)
+          cat > "$launcher" <<LAUNCHEOF
+#!/bin/bash
+set -euo pipefail
+export WAVEMILL_SESSION='$session'
+export WAVEMILL_ISSUE='$issue'
+export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
+export WAVEMILL_PHASE='planning'
+export WAVEMILL_RESOLVED_MODEL='${native_model:-$model}'
+export WAVEMILL_REPO_DIR='$repo_dir'
+export WAVEMILL_WT_DIR='$worktree_dir'
+export WAVEMILL_FEATURE_SLUG='$feature_slug'
+export WAVEMILL_SLUG='$feature_slug'
+export WAVEMILL_PLAN_DEPTH='${WAVEMILL_PLAN_DEPTH:-}'
+export WAVEMILL_OPERATING_MODE='${WAVEMILL_OPERATING_MODE:-}'
+export WAVEMILL_BRANCH='${WAVEMILL_BRANCH:-}'
+export WAVEMILL_BASE_BRANCH='${WAVEMILL_BASE_BRANCH:-}'
+export WAVEMILL_TITLE='${WAVEMILL_TITLE:-}'
+if [[ -n '$issue' ]]; then
+  printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
+fi
+npx tsx '$repo_dir/tools/launch-native-planning.ts' --session '$session' --issue '$issue' --slug '$feature_slug' --wt-dir '$worktree_dir' --repo-dir '$repo_dir'
+echo "[wavemill] Agent exited (\$?)"
+LAUNCHEOF
+          ;;
+        review)
+          cat > "$launcher" <<LAUNCHEOF
+#!/bin/bash
+set -euo pipefail
+export WAVEMILL_SESSION='$session'
+export WAVEMILL_ISSUE='$issue'
+export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
+export WAVEMILL_PHASE='review'
+export WAVEMILL_RESOLVED_MODEL='${native_model:-$model}'
+export WAVEMILL_REPO_DIR='$repo_dir'
+export WAVEMILL_WT_DIR='$worktree_dir'
+export WAVEMILL_FEATURE_SLUG='$feature_slug'
+export WAVEMILL_SLUG='$feature_slug'
+export WAVEMILL_BRANCH='${WAVEMILL_BRANCH:-}'
+export WAVEMILL_BASE_BRANCH='${WAVEMILL_BASE_BRANCH:-}'
+export WAVEMILL_TITLE='${WAVEMILL_TITLE:-}'
+if [[ -n '$issue' ]]; then
+  printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
+fi
+npx tsx '$repo_dir/tools/launch-native-review.ts' --session '$session' --issue '$issue' --slug '$feature_slug' --wt-dir '$worktree_dir' --repo-dir '$repo_dir'
+echo "[wavemill] Agent exited (\$?)"
+LAUNCHEOF
+          ;;
+        *)
+          echo "Error: native agent '$agent_cmd' does not support interactive phase '$native_phase'" >&2
+          return 1
+          ;;
+      esac
+      ;;
     claude-deepseek)
       local tools_dir="${TOOLS_DIR:-$repo_dir/tools}"
       local lib_dir="${tools_dir%/tools}/shared/lib"

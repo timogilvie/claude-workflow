@@ -24,6 +24,7 @@ import {
   variedModelForStage,
 } from './challenge-mode.ts';
 import { listVariedRoutingDimensions, routingMetaFromChallengeEntry } from './challenge-comparison.ts';
+import { resolveOpenRouterModelId } from './openrouter-provider.ts';
 import type { RouteArtifactSnapshot } from './route-artifact.ts';
 import { CERTIFICATION_SCHEMA_VERSION } from './native-agent/certification/schema.ts';
 import { clearConfigCache } from './config.ts';
@@ -245,6 +246,83 @@ function makeCoverage(
   return (model: string, stage: 'plan' | 'implementation' | 'review') => counts[stage]?.[model] ?? 0;
 }
 
+function writeNativeChallengeRepo(options: {
+  model: string;
+  provider: 'openai' | 'openrouter';
+  phase: 'read-only' | 'patch';
+}): string {
+  const repoDir = mkdtempSync(join(tmpdir(), 'challenge-native-'));
+  const storageIdentity = options.provider === 'openrouter'
+    ? (() => {
+        const openrouterId = resolveOpenRouterModelId(options.model) ?? options.model;
+        const [provider, model] = openrouterId.split('/');
+        return provider && model ? { provider, model } : { provider: options.provider, model: options.model };
+      })()
+    : { provider: options.provider, model: options.model };
+  mkdirSync(join(repoDir, '.wavemill', 'native-agent-certifications', storageIdentity.provider, storageIdentity.model), { recursive: true });
+  writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
+    nativeAgent: {
+      enabled: true,
+      allowedPhases: ['planning', 'review'],
+      providers: {
+        [options.provider]: {
+          enabled: true,
+          models: [options.model],
+        },
+      },
+    },
+    providers: {
+      openrouter: {
+        enabled: options.provider === 'openrouter',
+        apiKeyEnv: 'OPENROUTER_API_KEY',
+        models: [options.model],
+      },
+    },
+    modelRegistry: {
+      models: {
+        [options.model]: {
+          vendor: options.provider === 'openrouter' ? 'qwen' : 'openai',
+          class: 'strong_generalist',
+          strengths: ['coding'],
+          weaknesses: [],
+          qualityScores: { routing: 70, planning: 70, coding: 70, review: 70, classify: 70 },
+          contextWindowTokens: 128000,
+          toolSupport: 'full',
+          multimodal: { text: true, image: false },
+          latencyTier: 'standard',
+          reasoningTier: 'standard',
+          costPerMillionInputTokensUsd: 1,
+          costPerMillionOutputTokensUsd: 4,
+          nativeCapability: {
+            nativeProvider: options.provider,
+            piTransportKind: options.provider === 'openrouter' ? 'openai-completions' : 'openai-responses',
+            readOnlyNative: 'certified',
+            certification: {
+              maxCertifiedPhase: options.phase,
+              certifiedAt: '2026-06-01T00:00:00.000Z',
+              certificationSuiteVersion: 'v-test',
+            },
+          },
+        },
+      },
+    },
+  }));
+  writeFileSync(
+    join(repoDir, '.wavemill', 'native-agent-certifications', storageIdentity.provider, storageIdentity.model, 'v-test.json'),
+    JSON.stringify({
+      schemaVersion: CERTIFICATION_SCHEMA_VERSION,
+      provider: storageIdentity.provider,
+      model: storageIdentity.model,
+      phase: options.phase,
+      suiteVersion: 'v-test',
+      certifiedAt: '2026-06-01T00:00:00.000Z',
+      scenarios: [{ scenarioId: 'challenge.native.pass', passed: true }],
+    }),
+  );
+  clearConfigCache(repoDir);
+  return repoDir;
+}
+
 test('pickChallengeWorkflows populates routing fields for both sides', () => {
   const pair = pickChallengeWorkflows(
     ['claude-opus-4-6', 'claude-sonnet-4-5-20250929', 'gpt-5.4'],
@@ -277,6 +355,98 @@ test('pickChallengeWorkflows populates routing fields for both sides', () => {
   assert.equal(pair!.challenger.planDepth, 'deep');
   assert.equal(pair!.challenger.codeDepth, 'medium');
   assert.equal(pair!.challenger.reviewMode, 'llm');
+});
+
+test('review-stage challenge preserves native OpenRouter reviewer routing', () => {
+  const previousApiKey = process.env.OPENROUTER_API_KEY;
+  process.env.OPENROUTER_API_KEY = 'test-openrouter-key';
+  const repoDir = writeNativeChallengeRepo({
+    model: 'qwen-3-coder',
+    provider: 'openrouter',
+    phase: 'read-only',
+  });
+
+  try {
+    const pair = pickChallengeWorkflows(
+      ['gpt-5.4', 'qwen-3-coder'],
+      {
+        pairId: 'HOK-2512',
+        issueId: 'HOK-2512',
+        slug: 'native-review-stage',
+        prompt: 'Review the implementation and prepare the PR.',
+        primaryModel: 'gpt-5.4',
+        challengeStage: 'review',
+        repoDir,
+        routeFn: () => ({
+          planner: 'gpt-5.4',
+          coder: 'gpt-5.4',
+          reviewer: 'gpt-5.4',
+          planDepth: 'light',
+          codeDepth: 'medium',
+          reviewRecommended: 'llm',
+          expectedSuccess: 0.85,
+          expectedCostPlan: 10,
+          expectedCostCode: 20,
+          expectedCostReview: 5,
+          reasoning: [],
+          signals: {},
+        }),
+      },
+    );
+
+    assert.ok(pair);
+    assert.equal(pair!.challengeStage, 'review');
+    assert.equal(pair!.challenger.model, 'gpt-5.4');
+    assert.equal(pair!.challenger.reviewer, 'qwen-3-coder');
+    assert.equal(pair!.challenger.reviewerAgent, 'native-openrouter');
+  } finally {
+    clearConfigCache(repoDir);
+    rmSync(repoDir, { recursive: true, force: true });
+    if (previousApiKey === undefined) {
+      delete process.env.OPENROUTER_API_KEY;
+    } else {
+      process.env.OPENROUTER_API_KEY = previousApiKey;
+    }
+  }
+});
+
+test('implementation-stage challenge excludes native models without a coding launcher', () => {
+  const repoDir = writeNativeChallengeRepo({
+    model: 'qwen-3-coder',
+    provider: 'openrouter',
+    phase: 'patch',
+  });
+  const previousApiKey = process.env.OPENROUTER_API_KEY;
+  process.env.OPENROUTER_API_KEY = 'test-openrouter-key';
+
+  try {
+    const result = pickChallengeModelsWithReason(
+      ['gpt-5.4', 'claude-opus-4-6', 'qwen-3-coder'],
+      {
+        pairId: 'HOK-2235',
+        issueId: 'HOK-2235',
+        slug: 'native-coding-stage',
+        primaryModel: 'gpt-5.4',
+        repoDir,
+        randomFn: () => 0,
+      },
+    );
+
+    assert.ok(result.pair);
+    assert.equal(result.pair!.challenger.model, 'claude-opus-4-6');
+    const rejection = (result.nativeCertificationRejections || []).find((entry) => entry.modelId === 'qwen-3-coder');
+    assert.ok(rejection);
+    assert.equal(rejection!.reason, 'insufficient-phase');
+    assert.equal(rejection!.role, 'coder');
+  } finally {
+    clearConfigCache(repoDir);
+    rmSync(repoDir, { recursive: true, force: true });
+    if (previousApiKey === undefined) {
+      delete process.env.OPENROUTER_API_KEY;
+    } else {
+      process.env.OPENROUTER_API_KEY = previousApiKey;
+    }
+  }
 });
 
 test('pickChallengeWorkflows uses same routing for both sides', () => {
@@ -1541,7 +1711,7 @@ function openRouterNativeModelEntry(phase: string = 'workflow', suiteVersion: st
 
 console.log('\n--- Native Certification Guardrail Tests ---\n');
 
-test('certified native challenger accepted for implementation stage', () => {
+test('implementation-stage native challenger is excluded without a coding launcher', () => {
   const { repoDir, cleanup } = makeNativeTestRepo({
     'native-patch-model': nativeModelEntry('patch'),
   });
@@ -1561,12 +1731,11 @@ test('certified native challenger accepted for implementation stage', () => {
       },
     );
 
-    assert.ok(result.pair, 'pair should be selected');
-    // native-patch-model is cert-eligible → no rejection for it
-    const rejectedIds = (result.nativeCertificationRejections || []).map((r) => r.modelId);
-    assert.ok(!rejectedIds.includes('native-patch-model'), 'certified native should not be in rejections');
-    // The challenger should be native-patch-model (only other model)
-    assert.equal(result.pair!.challenger.model, 'native-patch-model');
+    assert.equal(result.pair, null);
+    const rejection = (result.nativeCertificationRejections || []).find((entry) => entry.modelId === 'native-patch-model');
+    assert.ok(rejection, 'native coding challenger should be rejected');
+    assert.equal(rejection!.reason, 'insufficient-phase');
+    assert.equal(rejection!.role, 'coder');
   } finally {
     cleanup();
   }
@@ -1682,7 +1851,7 @@ test('phase-insufficient native challenger excluded for plan stage', () => {
 
     // native-patch-only has patch cert but plan requires workflow → rejected
     const rejections = result.nativeCertificationRejections || [];
-    const planRejection = rejections.find((r) => r.modelId === 'native-patch-only');
+    const planRejection = rejections.find((r) => r.modelId === 'native-patch-only' && r.role === 'planner');
     assert.ok(planRejection, 'should have a rejection for native-patch-only');
     assert.equal(planRejection!.reason, 'insufficient-phase');
     assert.equal(planRejection!.requestedPhase, 'workflow');
@@ -1938,9 +2107,7 @@ test('non-native pool passes through with empty rejections', () => {
   }
 });
 
-test('phase semantics match router: certified model accepted, patch-only rejected for plan stage', () => {
-  // Verify challenge filter is consistent with router phase semantics:
-  // patch cert satisfies coder (implementation) but not planner (plan/workflow).
+test('phase semantics match router: native implementation is fail-closed and plan still requires workflow', () => {
   const { repoDir, cleanup } = makeNativeTestRepo({
     'native-patch-model': nativeModelEntry('patch'),
     'native-workflow-model': nativeModelEntry('workflow'),
@@ -1949,7 +2116,6 @@ test('phase semantics match router: certified model accepted, patch-only rejecte
     writeCertArtifact(repoDir, 'openai', 'native-patch-model', 'v1', { phase: 'patch' });
     writeCertArtifact(repoDir, 'openai', 'native-workflow-model', 'v1', { phase: 'workflow' });
 
-    // Implementation stage: both should pass (patch ≥ patch, workflow ≥ patch)
     const implResult = pickChallengeModelsWithReason(
       ['native-patch-model', 'native-workflow-model'],
       {
@@ -1961,14 +2127,12 @@ test('phase semantics match router: certified model accepted, patch-only rejecte
         randomFn: () => 0,
       },
     );
-    assert.ok(implResult.pair, 'implementation pair should be formed');
-    assert.ok(!implResult.nativeCertificationRejections || implResult.nativeCertificationRejections.length === 0,
-      'no rejections for implementation stage with patch/workflow certs');
+    assert.equal(implResult.pair, null);
+    assert.ok((implResult.nativeCertificationRejections || []).every((entry) => entry.role === 'coder'));
 
-    // Plan stage: only workflow-cert model should survive as challenger
     const mockPlanRoute = (): WorkflowRouteDecision => ({
       planner: 'native-workflow-model',
-      coder: 'native-workflow-model',
+      coder: 'claude-opus-4-6',
       reviewer: '',
       planDepth: 'medium',
       codeDepth: 'medium',
@@ -1981,23 +2145,22 @@ test('phase semantics match router: certified model accepted, patch-only rejecte
       signals: {},
     });
     const planResult = pickChallengeWorkflowsWithReason(
-      ['native-patch-model', 'native-workflow-model'],
+      ['claude-opus-4-6', 'native-patch-model', 'native-workflow-model'],
       {
         pairId: 'NC-009-P',
         issueId: 'NC-009-P',
         slug: 'nc-phase-semantics-plan',
         prompt: 'implement feature',
         challengeStage: 'plan',
-        primaryModel: 'native-workflow-model',
+        primaryModel: 'claude-opus-4-6',
         repoDir,
         now: TEST_NOW,
         randomFn: () => 0,
         routeFn: mockPlanRoute,
       },
     );
-    // native-patch-model should be rejected for plan (needs workflow)
     const planRejections = planResult.nativeCertificationRejections || [];
-    const patchRejection = planRejections.find((r) => r.modelId === 'native-patch-model');
+    const patchRejection = planRejections.find((r) => r.modelId === 'native-patch-model' && r.role === 'planner');
     assert.ok(patchRejection, 'patch-only model should be rejected for plan stage');
     assert.equal(patchRejection!.reason, 'insufficient-phase');
     assert.equal(patchRejection!.requestedPhase, 'workflow');
@@ -2006,7 +2169,7 @@ test('phase semantics match router: certified model accepted, patch-only rejecte
   }
 });
 
-test('workflow-certified OpenRouter aliases remain challenge-eligible by alias', () => {
+test('workflow-certified OpenRouter aliases remain challenge-eligible for review-stage variation', () => {
   const { repoDir, cleanup } = makeNativeTestRepo(
     {
       'glm-5.2': openRouterNativeModelEntry('workflow'),
@@ -2018,7 +2181,7 @@ test('workflow-certified OpenRouter aliases remain challenge-eligible by alias',
             enabled: true,
             apiKeyEnv: 'NC_OPENROUTER_KEY',
             models: ['glm-5.2'],
-            stages: ['coder'],
+            stages: ['reviewer'],
           },
         },
       },
@@ -2030,22 +2193,42 @@ test('workflow-certified OpenRouter aliases remain challenge-eligible by alias',
   try {
     writeCertArtifact(repoDir, 'z-ai', 'glm-5.2', 'v1', { phase: 'workflow' });
 
-    const result = pickChallengeModelsWithReason(
+    const result = pickChallengeWorkflowsWithReason(
       ['claude-opus-4-6', 'glm-5.2'],
       {
         pairId: 'NC-010',
         issueId: 'NC-010',
         slug: 'nc-openrouter-alias',
+        prompt: 'review the implementation and open the PR',
+        challengeStage: 'review',
         primaryModel: 'claude-opus-4-6',
         repoDir,
         now: TEST_NOW,
         randomFn: () => 0,
+        routeFn: () => ({
+          planner: 'claude-opus-4-6',
+          coder: 'claude-opus-4-6',
+          reviewer: 'claude-opus-4-6',
+          planDepth: 'medium',
+          codeDepth: 'medium',
+          reviewRecommended: 'llm',
+          expectedSuccess: 0.9,
+          expectedCostPlan: 1,
+          expectedCostCode: 1,
+          expectedCostReview: 1,
+          reasoning: [],
+          signals: {},
+        }),
       },
     );
 
     assert.ok(result.pair, 'pair should be selected');
-    assert.equal(result.pair!.challenger.model, 'glm-5.2');
-    assert.equal((result.nativeCertificationRejections || []).length, 0);
+    assert.equal(result.pair!.challenger.reviewer, 'glm-5.2');
+    assert.equal(result.pair!.challenger.reviewerAgent, 'native-openrouter');
+    const reviewerRejection = (result.nativeCertificationRejections || []).find(
+      (entry) => entry.modelId === 'glm-5.2' && entry.role === 'reviewer',
+    );
+    assert.equal(reviewerRejection, undefined);
   } finally {
     cleanup();
   }
