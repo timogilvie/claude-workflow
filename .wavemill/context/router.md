@@ -62,6 +62,12 @@ This is a normal-mode policy adjustment, not degraded routing. `workflow-router.
 
 Individual command behavior now changes based on operating mode. In `constrained` mode, routing restricts to sonnet/haiku candidates and skips LLM-based difficulty classification. In `survival` mode, routing uses haiku only and relies on stage-aware KNN signals instead of open-ended LLM reasoning.
 
+## Launch-Priority Audit Input
+
+`.wavemill/audits/launch-priority-coverage.json` is a planning input only. It does not override live routing or stage-pool filtering, but it is the artifact operators should inspect when they want to target zero-evidence or below-target launch-priority models in upcoming eval/task batches.
+
+`shared/lib/launch-priority-audit.ts` reads the same launch-priority catalog surface as the existing OpenRouter challenger tooling, so audit coverage and router-side launch-priority classification stay aligned on what counts as a launch-priority model.
+
 ## Native Certification Filtering
 
 Native model certification filtering is a Layer 3 policy constraint applied inside `resolveStagePool()` before final per-role candidate selection. It runs after provider availability and capability checks have already narrowed the pool.
@@ -104,6 +110,48 @@ Model-to-agent resolution is now registry-backed and fail-closed across both Typ
 - There is no default Codex fallback for unknown, unsupported, uncertified, or malformed non-OpenAI model selections.
 
 This prevents non-ChatGPT/Codex models such as `mistral-large-2` from reaching `codex exec`. OpenRouter/native candidates now either resolve to `native-openrouter` after certification checks or fail before tmux launch with an `[agent-resolution]` diagnostic and the matching `native-agent-certify` command.
+
+## OpenRouter Doctor
+
+Use `wavemill doctor openrouter` to inspect whether configured OpenRouter/native candidates can currently receive router or challenge traffic.
+
+- `wavemill doctor openrouter --json --repo-dir <dir>` emits the full machine-readable report.
+- `wavemill doctor openrouter --stage coder` limits the view to one workflow stage.
+- `wavemill mill` startup runs the same doctor in a guarded, fail-silent path and caches a one-line warning in `/tmp/${SESSION}-openrouter-warning.txt` for the dashboard header.
+
+### Reason Taxonomy
+
+Each blocked model/stage cell reports one primary reason plus optional secondary reasons from this closed set:
+
+- `PROVIDER_DISABLED`
+- `MISSING_API_KEY`
+- `DIRECT_AGENTS_DISABLED`
+- `MISSING_REGISTRY_ALIAS`
+- `CERTIFICATION_REJECTED`
+- `AGENT_FALLBACK_TO_CODEX`
+- `STAGE_NOT_PERMITTED`
+- `OPERATING_MODE_RESTRICTED`
+
+Each reason includes the blocking detail, the relevant config surface or env var, and a concrete remediation hint.
+
+### Alias vs Raw ID
+
+The doctor keeps three identities distinct:
+
+- Wavemill alias, such as `glm-5.2`
+- Raw OpenRouter/native provider ID, such as `z-ai/glm-5.2`
+- Certification storage identity/path, such as `.wavemill/native-agent-certifications/z-ai/glm-5.2/v1.json`
+
+`providers.openrouter.models` should contain Wavemill aliases. `nativeAgent.providers.openrouter.models` may contain raw provider IDs. When those surfaces disagree or a raw ID has no effective alias/registry entry, the doctor reports `MISSING_REGISTRY_ALIAS` and points to the offending config surface.
+
+### Selection History and Zero-Traffic Alerts
+
+The zero-traffic detector is read-only. It inspects existing route and eval artifacts only:
+
+- feature and archive route artifacts via `readRouteLifecycleArtifacts()`
+- `.wavemill/evals/evals.jsonl`, skipping malformed lines
+
+If the last `N` observed selections contain no configured OpenRouter/native model, the doctor emits a concise warning and includes the next challenge candidate when one can be derived from the current challenge pool. If no route/eval history is available, the warning degrades to an eligibility-only check instead of failing.
 
 ### Diagnostics
 

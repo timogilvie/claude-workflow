@@ -110,6 +110,10 @@
  * - **1.31.0**: Added optional `challengeStageEval` field (HOK-2374) so
  *   challenge evals can persist planner/reviewer stage evidence with direct
  *   vs inferred provenance for challenge comparisons.
+ * - **1.32.0**: Added optional `attempted_model` and `model_alias` fields
+ *   (HOK-2234) so eval records preserve the model actually attempted
+ *   pre-fallback and its Wavemill alias for launch-priority coverage
+ *   diagnostics.
  *
  * @module eval-schema
  */
@@ -119,7 +123,7 @@ import type { ModelSelector, RegistryTaskType } from './model-registry.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
 
 /** Current eval schema version for newly emitted records. */
-export const SCHEMA_VERSION = '1.31.0';
+export const SCHEMA_VERSION = '1.32.0';
 
 export type RoutingRole = 'planner' | 'coder' | 'reviewer';
 
@@ -1420,6 +1424,23 @@ export interface EvalRecord {
 
   /** Specific model version string for reproducibility */
   modelVersion: string;
+
+  /**
+   * HOK-2234: attempted model before fallback resolution.
+   *
+   * Preserves the model the workflow tried to launch before any runtime
+   * fallback changed `modelId`, so audits can distinguish "attempted but fell
+   * back" from "never attempted".
+   */
+  attempted_model?: string;
+
+  /**
+   * HOK-2234: Wavemill alias for the attempted model before fallback.
+   *
+   * Lets coverage audits group attempted launches by the catalog alias even
+   * when downstream execution resolved to a different model identifier.
+   */
+  model_alias?: string;
 
   /** Model ID used by the LLM judge for this eval */
   judgeModel?: string;

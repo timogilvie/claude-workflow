@@ -55,7 +55,9 @@ assert_not_contains() {
 }
 
 FUNCS_FILE="$TMP_DIR/create-tmux-session.sh"
-extract_function "$MILL_SCRIPT" create_tmux_session > "$FUNCS_FILE"
+extract_function "$MILL_SCRIPT" dotenv_value > "$FUNCS_FILE"
+extract_function "$MILL_SCRIPT" hydrate_provider_env_from_dotenv >> "$FUNCS_FILE"
+extract_function "$MILL_SCRIPT" create_tmux_session >> "$FUNCS_FILE"
 source "$FUNCS_FILE"
 
 SCRIPT_DIR="$REPO_DIR/shared/lib"
@@ -69,6 +71,9 @@ TMUX_HAS_SESSION=1
 
 tmux() {
   printf 'tmux %s\n' "$*" >> "$TMUX_LOG"
+  if [[ "${1:-}" == "-f" ]]; then
+    shift 2
+  fi
   case "${1:-}" in
     has-session)
       [[ "$TMUX_HAS_SESSION" == "1" ]]
@@ -81,6 +86,9 @@ tmux() {
       fi
       ;;
     kill-session)
+      return 0
+      ;;
+    new-session|set-option|set-environment|bind-key|send-keys)
       return 0
       ;;
     *)
@@ -124,4 +132,20 @@ fi
 assert_contains "missing repo reports unknown" "$unknown_output" "Active repo:    unknown"
 assert_not_contains "unknown repo does not kill session" "$(cat "$TMUX_LOG")" "kill-session"
 
-echo "PASS: create_tmux_session rejects foreign or unknown repo sessions"
+: > "$TMUX_LOG"
+TMUX_HAS_SESSION=0
+TMUX_EXISTING_REPO=""
+REPO_DIR="$TMP_DIR/repo"
+mkdir -p "$REPO_DIR"
+cat > "$REPO_DIR/.env" <<'EOF'
+OPENROUTER_API_KEY=sk-openrouter-from-dotenv
+EOF
+
+create_tmux_session >/dev/null
+
+assert_contains \
+  "new session exports OPENROUTER_API_KEY from root .env" \
+  "$(cat "$TMUX_LOG")" \
+  "set-environment -t collide OPENROUTER_API_KEY sk-openrouter-from-dotenv"
+
+echo "PASS: create_tmux_session rejects foreign sessions and hydrates provider env"

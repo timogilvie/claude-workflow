@@ -8,7 +8,10 @@ import { join, relative } from 'node:path';
 import { clearConfigCache } from '../shared/lib/config.ts';
 import { buildCertificationPath } from '../shared/lib/native-agent/certification/loader.ts';
 import { CERTIFICATION_SCHEMA_VERSION, type CertificationPhase, type NativeCertificationArtifact } from '../shared/lib/native-agent/certification/schema.ts';
-import { getDefaultScenarios } from '../shared/lib/native-agent/certification/scenarios.ts';
+import {
+  DEFAULT_CERTIFICATION_SUITE_VERSION,
+  getDefaultScenarios,
+} from '../shared/lib/native-agent/certification/scenarios.ts';
 import { readCertification } from '../shared/lib/native-agent/certification/store.ts';
 import { filterNativeModels, type RouterCertificationRejection } from '../shared/lib/native-agent/certification/router-filter.ts';
 import { routeWorkflow } from '../shared/lib/workflow-router.ts';
@@ -510,24 +513,24 @@ function verifyPlannerFailClosedCases(): PlannerFailClosedObservation[] {
 
     const missing = routeWorkflow(prompt, plannerArgs);
 
-    writeSyntheticArtifact(repo.repoDir, 'openai', modelId, 'v1', 'workflow', {
+    writeSyntheticArtifact(repo.repoDir, 'openai', modelId, DEFAULT_CERTIFICATION_SUITE_VERSION, 'workflow', {
       certifiedAt: '2020-01-01T00:00:00.000Z',
     });
     const stale = routeWorkflow(prompt, plannerArgs);
 
-    writeSyntheticArtifact(repo.repoDir, 'openai', modelId, 'v1', 'workflow', {
+    writeSyntheticArtifact(repo.repoDir, 'openai', modelId, DEFAULT_CERTIFICATION_SUITE_VERSION, 'workflow', {
       suiteVersion: 'v0',
     });
     const wrongSuite = routeWorkflow(prompt, plannerArgs);
 
     writeFileSync(
-      join(repo.repoDir, '.wavemill', 'native-agent-certifications', 'openai', modelId, 'v1.json'),
+      join(repo.repoDir, '.wavemill', 'native-agent-certifications', 'openai', modelId, `${DEFAULT_CERTIFICATION_SUITE_VERSION}.json`),
       '{ invalid json',
       'utf-8',
     );
     const malformed = routeWorkflow(prompt, plannerArgs);
 
-    writeSyntheticArtifact(repo.repoDir, 'openai', modelId, 'v1', 'read-only');
+    writeSyntheticArtifact(repo.repoDir, 'openai', modelId, DEFAULT_CERTIFICATION_SUITE_VERSION, 'read-only');
     const insufficientPhase = routeWorkflow(prompt, plannerArgs);
 
     return [

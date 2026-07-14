@@ -232,12 +232,17 @@ describe('native-agent provider resolution', () => {
     const consoleLog = console.log;
     const consoleWarn = console.warn;
     const consoleError = console.error;
+    const originalOpenAiKeyName = process.env.OPENAI_KEY_NAME;
+    const originalOpenRouterKey = process.env.OPENROUTER_API_KEY;
     const events: string[] = [];
     console.log = (...args: unknown[]) => { events.push(`log:${args.join(' ')}`); };
     console.warn = (...args: unknown[]) => { events.push(`warn:${args.join(' ')}`); };
     console.error = (...args: unknown[]) => { events.push(`error:${args.join(' ')}`); };
 
     try {
+      delete process.env.OPENAI_KEY_NAME;
+      delete process.env.OPENROUTER_API_KEY;
+
       const missing = resolveNativeAgentProviders({
         providers: {
           openai: {
@@ -277,6 +282,16 @@ describe('native-agent provider resolution', () => {
       assert(!serialized.includes('OPENROUTER_API_KEY='));
       assert.deepEqual(events, []);
     } finally {
+      if (typeof originalOpenAiKeyName === 'undefined') {
+        delete process.env.OPENAI_KEY_NAME;
+      } else {
+        process.env.OPENAI_KEY_NAME = originalOpenAiKeyName;
+      }
+      if (typeof originalOpenRouterKey === 'undefined') {
+        delete process.env.OPENROUTER_API_KEY;
+      } else {
+        process.env.OPENROUTER_API_KEY = originalOpenRouterKey;
+      }
       console.log = consoleLog;
       console.warn = consoleWarn;
       console.error = consoleError;
@@ -776,7 +791,7 @@ describe('native provider certification artifacts', () => {
         {
           repoDir,
           env: { OPENROUTER_API_KEY: 'sk-openrouter-test' },
-          registry: makeCertifiedRegistry('z-ai/glm-5.2', 'openrouter'),
+          registry: makeCertifiedRegistry('glm-5.2', 'openrouter'),
           now: FIXED_NOW,
         },
       );

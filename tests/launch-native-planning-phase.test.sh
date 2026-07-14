@@ -49,6 +49,7 @@ echo
 echo "=== Shell Dispatch Guard ==="
 TMUX_LOG="$TMPDIR_TEST/tmux.log"
 NATIVE_LAUNCHER="/tmp/sess-HOK-2313-autonomous-launcher.sh"
+NATIVE_REVIEW_LAUNCHER="/tmp/sess-HOK-2314-autonomous-launcher.sh"
 source "$ADAPTERS"
 
 tmux() {
@@ -61,8 +62,8 @@ agent_resolve_model() { printf '%s\n' "$2"; }
 agent_write_initial_status() { :; }
 routing_role_from_window() { printf '%s\n' "planner"; }
 routing_emit_phase() { :; }
-agent_native_planning_eligible() {
-  AGENT_NATIVE_PLANNING_MODEL="scripted-native"
+agent_validate_phase_launch() {
+  AGENT_NATIVE_LAUNCH_LAST_JSON='{"ok":true,"model":"scripted-native"}'
   return 0
 }
 
@@ -75,12 +76,28 @@ WAVEMILL_BRANCH="task/demo" \
 WAVEMILL_BASE_BRANCH="auto/integration" \
 WAVEMILL_TITLE="Demo" \
 REPO_DIR="$REPO_DIR" \
-agent_launch_autonomous "sess" "planning" "/tmp/instr.txt" "codex" "gpt-5.4" "HOK-2313"
+agent_launch_autonomous "sess" "planning" "/tmp/instr.txt" "native-openrouter" "qwen-3-coder" "HOK-2313"
 
 check_contains "native branch dispatches launcher path" "$(cat "$TMUX_LOG")" "$NATIVE_LAUNCHER"
 check_contains "native launcher invokes launch-native-planning tool" "$(cat "$NATIVE_LAUNCHER")" "tools/launch-native-planning.ts"
 
-unset -f agent_native_planning_eligible
+TMUX_LOG="$TMPDIR_TEST/tmux-review.log"
+tmux() {
+  printf '%s\n' "$*" >> "$TMUX_LOG"
+}
+routing_role_from_window() { printf '%s\n' "reviewer"; }
+WAVEMILL_FEATURE_DIR="$TMPDIR_TEST/repo/features/demo" \
+WAVEMILL_FEATURE_SLUG="demo" \
+WAVEMILL_BRANCH="task/demo" \
+WAVEMILL_BASE_BRANCH="auto/integration" \
+WAVEMILL_TITLE="Demo" \
+REPO_DIR="$REPO_DIR" \
+agent_launch_autonomous "sess" "review" "/tmp/instr.txt" "native-openrouter" "qwen-3-coder" "HOK-2314"
+
+check_contains "native review dispatches launcher path" "$(cat "$TMUX_LOG")" "$NATIVE_REVIEW_LAUNCHER"
+check_contains "native review launcher invokes review flow tool" "$(cat "$NATIVE_REVIEW_LAUNCHER")" "tools/launch-native-review.ts"
+
+unset -f agent_validate_phase_launch
 source "$ADAPTERS"
 
 if WAVEMILL_PHASE="coding" agent_native_planning_eligible "$REPO_DIR" "coding"; then
@@ -104,6 +121,35 @@ if npx tsx "$REPO_DIR/tools/check-native-eligibility.ts" "$CODING_GUARD_REPO" "c
   fail "native opt-in still excludes coding"
 else
   pass "native opt-in still excludes coding"
+fi
+
+CODING_DISPATCH_REPO="$TMPDIR_TEST/coding-dispatch-repo"
+mkdir -p "$CODING_DISPATCH_REPO"
+cat > "$CODING_DISPATCH_REPO/.wavemill-config.json" <<'EOF'
+{
+  "nativeAgent": {
+    "enabled": true,
+    "allowedPhases": ["planning", "coding", "review"],
+    "patchCoding": {
+      "enabled": true
+    },
+    "providers": {
+      "openrouter": {
+        "models": ["qwen-3-coder"]
+      }
+    }
+  }
+}
+EOF
+
+if npx tsx "$REPO_DIR/tools/check-native-agent-launch.ts" \
+  --repo-dir "$CODING_DISPATCH_REPO" \
+  --phase coding \
+  --agent native-openrouter \
+  --model qwen-3-coder >/dev/null 2>&1; then
+  fail "native coding dispatch stays fail-closed without launcher"
+else
+  pass "native coding dispatch stays fail-closed without launcher"
 fi
 
 if agent_native_planning_eligible "$REPO_DIR" "planning"; then

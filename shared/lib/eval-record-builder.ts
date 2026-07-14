@@ -154,6 +154,22 @@ export function attachChallengePairId(record: EvalRecord, challengePairId?: stri
   }
 }
 
+export function attachAttemptedModel(
+  record: EvalRecord,
+  input?: {
+    attemptedModel?: string | null;
+    modelAlias?: string | null;
+  },
+): void {
+  if (input?.attemptedModel) {
+    record.attempted_model = input.attemptedModel;
+  }
+
+  if (input?.modelAlias) {
+    record.model_alias = input.modelAlias;
+  }
+}
+
 export function attachChallengeStageEval(
   record: EvalRecord,
   challengeStageEval?: ChallengeStageEval | null,
