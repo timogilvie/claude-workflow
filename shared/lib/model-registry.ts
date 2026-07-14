@@ -146,7 +146,7 @@ const UNSAFE_CERTIFICATION_SEGMENT = /[/\\.\0]/;
 const OPENROUTER_CERTIFICATION_SEED = Object.freeze({
   maxCertifiedPhase: 'workflow' as const,
   certifiedAt: '2024-01-01T00:00:00.000Z',
-  certificationSuiteVersion: 'v1',
+  certificationSuiteVersion: 'v2',
 });
 
 function cloneCompatFlags(compatFlags: PiCompatFlags | undefined): PiCompatFlags | undefined {

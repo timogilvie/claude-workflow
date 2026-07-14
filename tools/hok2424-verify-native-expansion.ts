@@ -20,6 +20,7 @@ import { registerScriptedPiProvider } from '../shared/lib/native-agent/provider.
 import {
   buildCertificationPath,
   CERTIFICATION_SCHEMA_VERSION,
+  DEFAULT_CERTIFICATION_SUITE_VERSION,
   resolveCertificationStorageIdentity,
   type NativeCertificationArtifact,
 } from '../shared/lib/native-agent/certification/index.ts';
@@ -497,7 +498,7 @@ function baseConfig(modelId: string, options: { fallbackOnUnavailable?: boolean 
         certification: {
           maxCertifiedPhase: 'workflow',
           certifiedAt: FIXED_NOW.toISOString(),
-          certificationSuiteVersion: 'v1',
+          certificationSuiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
         },
       },
     },
@@ -560,14 +561,14 @@ function writeCertification(
   overrides: Partial<NativeCertificationArtifact> = {},
 ): string {
   const identity = resolveCertificationStorageIdentity('openrouter', modelId);
-  const path = buildCertificationPath(repoDir, 'openrouter', modelId, 'v1');
+  const path = buildCertificationPath(repoDir, 'openrouter', modelId, DEFAULT_CERTIFICATION_SUITE_VERSION);
   mkdirSync(dirname(path), { recursive: true });
   const artifact: NativeCertificationArtifact = {
     schemaVersion: CERTIFICATION_SCHEMA_VERSION,
     provider: identity.provider,
     model: identity.model,
     phase: 'workflow',
-    suiteVersion: 'v1',
+    suiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
     certifiedAt: FIXED_NOW.toISOString(),
     scenarios: [{ scenarioId: 'hok2424.read-only', passed: true }],
     ...overrides,

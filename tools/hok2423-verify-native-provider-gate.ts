@@ -8,6 +8,7 @@ import {
   buildCertificationPath,
   buildModelCertificationReport,
   CERTIFICATION_SCHEMA_VERSION,
+  DEFAULT_CERTIFICATION_SUITE_VERSION,
   type CertificationPhase,
   type NativeCertificationArtifact,
 } from '../shared/lib/native-agent/certification/index.ts';
@@ -226,7 +227,7 @@ function makeRegistry(
           certification: {
             maxCertifiedPhase: 'workflow',
             certifiedAt: now.toISOString(),
-            certificationSuiteVersion: 'v1',
+            certificationSuiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
           },
         },
       },
@@ -242,14 +243,14 @@ function writeArtifact(
   now: Date,
   overrides: Partial<NativeCertificationArtifact>,
 ): void {
-  const path = buildCertificationPath(repoDir, provider, modelId, 'v1');
+  const path = buildCertificationPath(repoDir, provider, modelId, DEFAULT_CERTIFICATION_SUITE_VERSION);
   mkdirSync(dirname(path), { recursive: true });
   const artifact: NativeCertificationArtifact = {
     schemaVersion: CERTIFICATION_SCHEMA_VERSION,
     provider,
     model: modelId,
     phase: 'workflow',
-    suiteVersion: 'v1',
+    suiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
     certifiedAt: new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString(),
     scenarios: [{ scenarioId: 's1', passed: true }],
     ...overrides,

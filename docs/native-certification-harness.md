@@ -241,7 +241,7 @@ if (report.liveCertifiable) {
     provider: report.provider,
     model: report.model,
     phase: 'read-only',
-    suiteVersion: 'v1',
+    suiteVersion: 'v2',
     certifiedAt: new Date().toISOString(),
     scenarios: scenarioResults,
     knownLimitations: report.knownLimitations,

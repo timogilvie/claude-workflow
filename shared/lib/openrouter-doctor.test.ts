@@ -7,6 +7,7 @@ import { clearConfigCache } from './config.ts';
 import { diagnoseOpenRouter } from './openrouter-doctor.ts';
 import {
   CERTIFICATION_SCHEMA_VERSION,
+  DEFAULT_CERTIFICATION_SUITE_VERSION,
   buildCertificationPath,
   resolveCertificationStorageIdentity,
 } from './native-agent/certification/index.ts';
@@ -87,7 +88,7 @@ function writeOpenRouterCert(
   modelId: string,
   phase: 'read-only' | 'patch' | 'workflow' = 'workflow',
 ): string {
-  const path = buildCertificationPath(repoDir, 'openrouter', modelId, 'v1');
+  const path = buildCertificationPath(repoDir, 'openrouter', modelId, DEFAULT_CERTIFICATION_SUITE_VERSION);
   mkdirSync(dirname(path), { recursive: true });
   const identity = resolveCertificationStorageIdentity('openrouter', modelId);
   writeFileSync(path, JSON.stringify({
@@ -95,7 +96,7 @@ function writeOpenRouterCert(
     provider: identity.provider,
     model: identity.model,
     phase,
-    suiteVersion: 'v1',
+    suiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
     certifiedAt: '2026-07-10T00:00:00.000Z',
     scenarios: [{ scenarioId: 's1', passed: true }],
   }));

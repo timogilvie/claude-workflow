@@ -8,6 +8,7 @@ import { diagnoseOpenRouter } from './openrouter-doctor.ts';
 import { renderZeroTrafficAlert } from './openrouter-zero-traffic.ts';
 import {
   CERTIFICATION_SCHEMA_VERSION,
+  DEFAULT_CERTIFICATION_SUITE_VERSION,
   buildCertificationPath,
   resolveCertificationStorageIdentity,
 } from './native-agent/certification/index.ts';
@@ -60,7 +61,7 @@ function writeConfig(repoDir: string): void {
 }
 
 function writeOpenRouterCert(repoDir: string): void {
-  const path = buildCertificationPath(repoDir, 'openrouter', 'z-ai/glm-5.2', 'v1');
+  const path = buildCertificationPath(repoDir, 'openrouter', 'z-ai/glm-5.2', DEFAULT_CERTIFICATION_SUITE_VERSION);
   mkdirSync(join(repoDir, '.wavemill', 'evals'), { recursive: true });
   mkdirSync(join(repoDir, '.wavemill', 'native-agent-certifications', 'z-ai', 'glm-5.2'), { recursive: true });
   const identity = resolveCertificationStorageIdentity('openrouter', 'z-ai/glm-5.2');
@@ -69,7 +70,7 @@ function writeOpenRouterCert(repoDir: string): void {
     provider: identity.provider,
     model: identity.model,
     phase: 'workflow',
-    suiteVersion: 'v1',
+    suiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
     certifiedAt: '2026-07-10T00:00:00.000Z',
     scenarios: [{ scenarioId: 's1', passed: true }],
   }));

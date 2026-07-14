@@ -75,6 +75,8 @@ Keep native provider secrets such as `OPENAI_API_KEY` and `OPENROUTER_API_KEY` i
 
 `nativeAgent.patchCoding.enabled` is fail-closed and defaults to `false`. Setting it to `true` does not enable native patch coding by itself; Wavemill also requires a current certification artifact at `.wavemill/native-agent/patch-coding-certification.json`.
 
+Coder routing has a third gate after repo opt-in and the smoke artifact: the chosen provider/model pair must also have a current phase certification artifact at `.wavemill/native-agent-certifications/<provider>/<model>/<suite-version>.json` whose phase satisfies `patch`.
+
 See [Native Read-Only Runtime](./native-read-only-runtime.md) for the exact config shape and phase examples.
 
 ### Router Exploration Sampling
