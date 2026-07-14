@@ -10,6 +10,8 @@ import {
   resolveCertificationStorageIdentity,
 } from '../shared/lib/native-agent/certification/index.ts';
 
+const OPENROUTER_CERTIFICATION_SUITE_VERSION = 'v2';
+
 function makeRepoDir(): string {
   return mkdtempSync(join(tmpdir(), 'openrouter-doctor-tool-'));
 }
@@ -53,7 +55,7 @@ function writeConfig(repoDir: string): void {
 }
 
 function writeCert(repoDir: string): void {
-  const path = buildCertificationPath(repoDir, 'openrouter', 'z-ai/glm-5.2', 'v1');
+  const path = buildCertificationPath(repoDir, 'openrouter', 'z-ai/glm-5.2', OPENROUTER_CERTIFICATION_SUITE_VERSION);
   mkdirSync(dirname(path), { recursive: true });
   const identity = resolveCertificationStorageIdentity('openrouter', 'z-ai/glm-5.2');
   writeFileSync(path, JSON.stringify({
@@ -61,7 +63,7 @@ function writeCert(repoDir: string): void {
     provider: identity.provider,
     model: identity.model,
     phase: 'workflow',
-    suiteVersion: 'v1',
+    suiteVersion: OPENROUTER_CERTIFICATION_SUITE_VERSION,
     certifiedAt: '2026-07-10T00:00:00.000Z',
     scenarios: [{ scenarioId: 's1', passed: true }],
   }));

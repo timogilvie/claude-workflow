@@ -11,6 +11,8 @@ import {
   resolveCertificationStorageIdentity,
 } from './native-agent/certification/index.ts';
 
+const OPENROUTER_CERTIFICATION_SUITE_VERSION = 'v2';
+
 function makeRepoDir(): string {
   return mkdtempSync(join(tmpdir(), 'openrouter-doctor-'));
 }
@@ -87,7 +89,7 @@ function writeOpenRouterCert(
   modelId: string,
   phase: 'read-only' | 'patch' | 'workflow' = 'workflow',
 ): string {
-  const path = buildCertificationPath(repoDir, 'openrouter', modelId, 'v1');
+  const path = buildCertificationPath(repoDir, 'openrouter', modelId, OPENROUTER_CERTIFICATION_SUITE_VERSION);
   mkdirSync(dirname(path), { recursive: true });
   const identity = resolveCertificationStorageIdentity('openrouter', modelId);
   writeFileSync(path, JSON.stringify({
@@ -95,7 +97,7 @@ function writeOpenRouterCert(
     provider: identity.provider,
     model: identity.model,
     phase,
-    suiteVersion: 'v1',
+    suiteVersion: OPENROUTER_CERTIFICATION_SUITE_VERSION,
     certifiedAt: '2026-07-10T00:00:00.000Z',
     scenarios: [{ scenarioId: 's1', passed: true }],
   }));
