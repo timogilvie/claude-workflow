@@ -9,6 +9,7 @@ import { certifyNativeAgent } from './native-agent-certify.ts';
 import { clearConfigCache } from '../shared/lib/config.ts';
 import { filterNativeModels, type RouterRole } from '../shared/lib/native-agent/certification/router-filter.ts';
 import { CERTIFICATION_SCHEMA_VERSION, type CertificationPhase, type NativeCertificationArtifact } from '../shared/lib/native-agent/certification/schema.ts';
+import { DEFAULT_CERTIFICATION_SUITE_VERSION } from '../shared/lib/native-agent/certification/scenarios.ts';
 import { resolveCertificationStorageIdentity } from '../shared/lib/native-agent/certification/identity.ts';
 import { writeCertification } from '../shared/lib/native-agent/certification/store.ts';
 import { isPatchCodingEnabled } from '../shared/lib/native-agent/coding-gate.ts';
@@ -93,7 +94,7 @@ function modelConfig(model: ModelCase): ModelCapabilitiesOverride {
       certification: {
         maxCertifiedPhase: 'workflow',
         certifiedAt: '2026-07-01T00:00:00.000Z',
-        certificationSuiteVersion: 'v1',
+        certificationSuiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
       },
     },
   };
@@ -180,7 +181,7 @@ function writePhaseArtifact(repoDir: string, model: ModelCase, phase: Certificat
     provider: identity.provider,
     model: identity.model,
     phase,
-    suiteVersion: 'v1',
+    suiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
     certifiedAt: '2026-07-09T12:00:00.000Z',
     scenarios: [{ scenarioId: `hok2421.${phase}`, passed: true }],
     ...overrides,
@@ -191,7 +192,7 @@ function writeArtifactAtRequiredPath(repoDir: string, model: ModelCase, artifact
   const identity = resolveCertificationStorageIdentity('openrouter', model.rawId);
   const artifactDir = join(repoDir, '.wavemill', 'native-agent-certifications', identity.provider, identity.model);
   mkdirSync(artifactDir, { recursive: true });
-  const artifactPath = join(artifactDir, 'v1.json');
+  const artifactPath = join(artifactDir, `${DEFAULT_CERTIFICATION_SUITE_VERSION}.json`);
   writeFileSync(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`, 'utf-8');
   return artifactPath;
 }

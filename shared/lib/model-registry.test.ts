@@ -1113,6 +1113,25 @@ describe('model-registry', () => {
       assert.equal(isReadOnlyNativeCapable('A', { registry }), true);
     });
 
+    it('resolves raw OpenRouter ids through the alias-keyed registry', () => {
+      const registry: ModelRegistry = {
+        models: {
+          'qwen-3-coder': makeCapabilities({
+            nativeCapability: {
+              nativeProvider: 'openrouter',
+              piTransportKind: 'openai-completions',
+              readOnlyNative: 'certified',
+              compatFlags: { thinkingFormat: 'openrouter' },
+            },
+          }),
+        },
+        ladders: {},
+      };
+
+      assert.equal(getModel(registry, 'qwen/qwen3-coder'), registry.models['qwen-3-coder']);
+      assert.equal(isReadOnlyNativeCapable('qwen/qwen3-coder', { registry }), true);
+    });
+
     it('returns false for unsupported native read-only capability', () => {
       const registry: ModelRegistry = {
         models: {
@@ -1272,6 +1291,43 @@ describe('model-registry', () => {
           eligible: true,
           modelId: 'A',
           phase: 'patch',
+          certifiedAt: '2026-06-15T00:00:00.000Z',
+          suiteVersion: 'v7',
+        },
+      );
+    });
+
+    it('evaluates raw OpenRouter id phase eligibility from alias metadata', () => {
+      const registry: ModelRegistry = {
+        models: {
+          'qwen-3-coder': makeCapabilities({
+            nativeCapability: {
+              nativeProvider: 'openrouter',
+              piTransportKind: 'openai-completions',
+              readOnlyNative: 'certified',
+              compatFlags: { thinkingFormat: 'openrouter' },
+              certification: makeCertification({
+                maxCertifiedPhase: 'workflow',
+                certifiedAt: '2026-06-15T00:00:00.000Z',
+                certificationSuiteVersion: 'v7',
+              }),
+            },
+          }),
+        },
+        ladders: {},
+      };
+
+      assert.deepEqual(
+        evaluateRegistryPhaseEligibility({
+          modelId: 'qwen/qwen3-coder',
+          phase: 'read-only',
+          registry,
+          now: new Date('2026-06-20T00:00:00.000Z'),
+        }),
+        {
+          eligible: true,
+          modelId: 'qwen/qwen3-coder',
+          phase: 'read-only',
           certifiedAt: '2026-06-15T00:00:00.000Z',
           suiteVersion: 'v7',
         },
