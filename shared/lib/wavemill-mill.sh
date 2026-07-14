@@ -9184,19 +9184,31 @@ EOF
   fi
 
   # Validate the selected agent exists
-  if ! agent_validate "$task_agent_cmd"; then
+  if ! agent_validate_phase_launch "$task_agent_cmd" "coding" "$task_model" "$REPO_DIR"; then
+    if agent_is_native_cmd "$task_agent_cmd"; then
+      log_error "  Native coder route is not launchable: agent=$task_agent_cmd model=$task_model"
+      return 1
+    fi
     log_warn "  Agent '$task_agent_cmd' not found, falling back to '$AGENT_CMD'"
     task_agent_cmd="$AGENT_CMD"
     task_model=""
   fi
 
   # Validate planner and reviewer agents if they were set
-  if [[ -n "$planner_agent" ]] && ! agent_validate "$planner_agent"; then
+  if [[ -n "$planner_agent" ]] && ! agent_validate_phase_launch "$planner_agent" "planning" "$planner_model" "$REPO_DIR"; then
+    if agent_is_native_cmd "$planner_agent"; then
+      log_error "  Native planner route is not launchable: agent=$planner_agent model=$planner_model"
+      return 1
+    fi
     log_warn "  Planner agent '$planner_agent' not found, using coder agent"
     planner_agent="$task_agent_cmd"
     planner_model="$task_model"
   fi
-  if [[ -n "$reviewer_agent" ]] && ! agent_validate "$reviewer_agent"; then
+  if [[ -n "$reviewer_agent" ]] && ! agent_validate_phase_launch "$reviewer_agent" "review" "$reviewer_model" "$REPO_DIR"; then
+    if agent_is_native_cmd "$reviewer_agent"; then
+      log_error "  Native reviewer route is not launchable: agent=$reviewer_agent model=$reviewer_model"
+      return 1
+    fi
     log_warn "  Reviewer agent '$reviewer_agent' not found, using coder agent"
     reviewer_agent="$task_agent_cmd"
     reviewer_model="$task_model"
@@ -9254,10 +9266,6 @@ EOF
       cp "/tmp/${SESSION}-${issue}-issue.json" "/tmp/${SESSION}-${challenger_key}-issue.json" 2>/dev/null || true
       cp "/tmp/${SESSION}-${issue}-taskpacket-details.md" "/tmp/${SESSION}-${challenger_key}-taskpacket-details.md" 2>/dev/null || true
 
-      save_task_state "$issue" "$slug" "$branch" "$wt_dir" "" "" "$task_agent_cmd" "$linear_issue" "true" "$challenge_pair" "primary" "$task_model" "$planner_model" "$task_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode" "$challenge_stage"
-      save_task_state "$challenger_key" "$challenger_slug" "task/${challenger_slug}" "${WORKTREE_ROOT}/${challenger_slug}" "" "" "$challenger_agent" "$linear_issue" "true" "$challenge_pair" "challenger" "$challenger_model" "$challenger_planner" "$challenger_model" "$challenger_reviewer" "$challenger_plan_depth" "$challenger_code_depth" "$challenger_review_mode" "$challenge_stage"
-      state_mutate "$STATE_FILE" '.tasks[$issue].challengeStage = $stage' --arg issue "$issue" --arg stage "$challenge_stage" || true
-      state_mutate "$STATE_FILE" '.tasks[$issue].challengeStage = $stage' --arg issue "$challenger_key" --arg stage "$challenge_stage" || true
       should_launch_challenger="true"
       LAST_LAUNCHED_SLOTS=1  # Challenger is free overhead, doesn't consume a slot
       primary_varied=$(echo "$challenge_plan" | jq -r '.entries[0].variedModel // .entries[0].model // empty' 2>/dev/null)
@@ -9293,6 +9301,48 @@ EOF
     fi
   fi
 
+  if ! agent_validate_phase_launch "$task_agent_cmd" "coding" "$task_model" "$REPO_DIR"; then
+    log_error "  Selected coder route is not launchable: agent=$task_agent_cmd model=$task_model"
+    return 1
+  fi
+  if [[ -n "$planner_agent" ]] && ! agent_validate_phase_launch "$planner_agent" "planning" "$planner_model" "$REPO_DIR"; then
+    log_error "  Selected planner route is not launchable: agent=$planner_agent model=$planner_model"
+    return 1
+  fi
+  if [[ -n "$reviewer_agent" ]] && ! agent_validate_phase_launch "$reviewer_agent" "review" "$reviewer_model" "$REPO_DIR"; then
+    log_error "  Selected reviewer route is not launchable: agent=$reviewer_agent model=$reviewer_model"
+    return 1
+  fi
+
+  local challenger_planner_agent="" challenger_reviewer_agent=""
+  if [[ "$challenge_enabled_for_launch" == "true" ]]; then
+    if declare -F agent_resolve_models_for_roles >/dev/null 2>&1; then
+      if agent_resolve_models_for_roles "$challenger_planner" "$challenger_model" "$challenger_reviewer"; then
+        :
+      fi
+      challenger_planner_agent="$(agent_resolve_batch_agent_for_role "planner")"
+      challenger_agent="$(agent_resolve_batch_agent_for_role "coder")"
+      challenger_reviewer_agent="$(agent_resolve_batch_agent_for_role "reviewer")"
+    else
+      [[ -n "$challenger_planner" ]] && challenger_planner_agent="$(agent_resolve_from_model "$challenger_planner" "planning" || true)"
+      [[ -n "$challenger_model" ]] && challenger_agent="$(agent_resolve_from_model "$challenger_model" "coding" || true)"
+      [[ -n "$challenger_reviewer" ]] && challenger_reviewer_agent="$(agent_resolve_from_model "$challenger_reviewer" "review" || true)"
+    fi
+
+    if ! agent_validate_phase_launch "$challenger_agent" "coding" "$challenger_model" "$REPO_DIR"; then
+      log_error "  Selected challenger coder route is not launchable: agent=$challenger_agent model=$challenger_model"
+      return 1
+    fi
+    if [[ -n "$challenger_planner_agent" ]] && ! agent_validate_phase_launch "$challenger_planner_agent" "planning" "$challenger_planner" "$REPO_DIR"; then
+      log_error "  Selected challenger planner route is not launchable: agent=$challenger_planner_agent model=$challenger_planner"
+      return 1
+    fi
+    if [[ -n "$challenger_reviewer_agent" ]] && ! agent_validate_phase_launch "$challenger_reviewer_agent" "review" "$challenger_reviewer" "$REPO_DIR"; then
+      log_error "  Selected challenger reviewer route is not launchable: agent=$challenger_reviewer_agent model=$challenger_reviewer"
+      return 1
+    fi
+  fi
+
   # Save to state ledger (after routing so agent is known)
   local initial_phase="planning"
   # If this task was already marked as a challenge participant (e.g. challenger
@@ -9303,6 +9353,13 @@ EOF
     effective_challenge="true"
   fi
   save_task_state "$issue" "$slug" "$branch" "$wt_dir" "" "" "$task_agent_cmd" "$linear_issue" "$effective_challenge" "$challenge_pair" "${challenge_role:-}" "$task_model" "$planner_model" "$task_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode" "${challenge_stage:-}"
+  if [[ "$challenge_enabled_for_launch" == "true" ]]; then
+    save_task_state "$challenger_key" "$challenger_slug" "task/${challenger_slug}" "${WORKTREE_ROOT}/${challenger_slug}" "" "" "$challenger_agent" "$linear_issue" "true" "$challenge_pair" "challenger" "$challenger_model" "$challenger_planner" "$challenger_model" "$challenger_reviewer" "$challenger_plan_depth" "$challenger_code_depth" "$challenger_review_mode" "$challenge_stage"
+    state_mutate "$STATE_FILE" '.tasks[$issue].challengeStage = $stage' --arg issue "$challenger_key" --arg stage "$challenge_stage" || true
+  fi
+  if [[ -n "${challenge_stage:-}" ]]; then
+    state_mutate "$STATE_FILE" '.tasks[$issue].challengeStage = $stage' --arg issue "$issue" --arg stage "$challenge_stage" || true
+  fi
   set_task_phase "$issue" "$initial_phase"
 
   # Verify agent was saved correctly (helps debug future issues)
