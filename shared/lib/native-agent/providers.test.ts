@@ -791,7 +791,7 @@ describe('native provider certification artifacts', () => {
         {
           repoDir,
           env: { OPENROUTER_API_KEY: 'sk-openrouter-test' },
-          registry: makeCertifiedRegistry('z-ai/glm-5.2', 'openrouter'),
+          registry: makeCertifiedRegistry('glm-5.2', 'openrouter'),
           now: FIXED_NOW,
         },
       );
