@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 import { clearConfigCache } from '../../config.ts';
 import {
@@ -15,6 +15,11 @@ import {
 } from '../../model-registry.ts';
 import { pickChallengeModelsWithReason } from '../../challenge-mode.ts';
 import { certifyNativeAgent } from '../../../../tools/native-agent-certify.ts';
+import {
+  PATCH_CODING_CERTIFICATION_SCHEMA_VERSION,
+  getPatchCodingCertificationPath,
+} from '../coding-certification.ts';
+import { PATCH_CODING_SMOKE_SUITE_REVISION } from '../smoke.ts';
 import {
   CERTIFICATION_SCHEMA_VERSION,
   type CertificationPhase,
@@ -40,7 +45,10 @@ const STALE_CERTIFIED_AT = '2026-01-01T00:00:00.000Z';
 const SUITE_VERSION = 'v-rollout';
 const FIXTURE_DIR = new URL('./fixtures', import.meta.url).pathname;
 
-function makeRepo(modelRegistryModels: Record<string, Partial<ModelCapabilities>> = {}): {
+function makeRepo(
+  modelRegistryModels: Record<string, Partial<ModelCapabilities>> = {},
+  options: { patchCodingEnabled?: boolean; nativeCodingLauncher?: boolean } = {},
+): {
   repoDir: string;
   cleanup: () => void;
 } {
@@ -48,7 +56,14 @@ function makeRepo(modelRegistryModels: Record<string, Partial<ModelCapabilities>
   mkdirSync(join(repoDir, '.wavemill'), { recursive: true });
   writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
     modelRegistry: { models: modelRegistryModels },
+    ...(options.patchCodingEnabled
+      ? { nativeAgent: { patchCoding: { enabled: true } } }
+      : {}),
   }));
+  if (options.nativeCodingLauncher) {
+    mkdirSync(join(repoDir, 'tools'), { recursive: true });
+    writeFileSync(join(repoDir, 'tools', 'launch-native-coding.ts'), 'export {};\n');
+  }
   clearConfigCache(repoDir);
 
   return {
@@ -58,6 +73,21 @@ function makeRepo(modelRegistryModels: Record<string, Partial<ModelCapabilities>
       rmSync(repoDir, { recursive: true, force: true });
     },
   };
+}
+
+function writePatchCodingCertification(repoDir: string): void {
+  const certificationPath = getPatchCodingCertificationPath(repoDir);
+  mkdirSync(dirname(certificationPath), { recursive: true });
+  writeFileSync(certificationPath, JSON.stringify({
+    schemaVersion: PATCH_CODING_CERTIFICATION_SCHEMA_VERSION,
+    certified: true,
+    smokeSuiteRevision: PATCH_CODING_SMOKE_SUITE_REVISION,
+    certifiedAt: FRESH_CERTIFIED_AT,
+    providers: [
+      { provider: 'openai', model: 'native-certified', passed: true },
+      { provider: 'openrouter', model: 'openai/native-certified', passed: true },
+    ],
+  }));
 }
 
 function nativeCertificationMetadata(
@@ -434,8 +464,12 @@ describe('[challenge-guardrails] rollout challenge-mode native candidate filteri
       'native-certified': nativeModel('patch'),
       'native-uncertified': nativeModel('patch'),
       'native-stale': nativeModel('patch'),
+    }, {
+      patchCodingEnabled: true,
+      nativeCodingLauncher: true,
     });
     try {
+      writePatchCodingCertification(repoDir);
       writeCertArtifact(repoDir, 'openai', 'native-certified');
       writeCertArtifact(repoDir, 'openai', 'native-stale', SUITE_VERSION, { certifiedAt: STALE_CERTIFIED_AT });
 

@@ -19,7 +19,7 @@ All certification evaluation is **fail-closed**: missing, malformed, stale, wron
 **Example:**
 
 ```
-.wavemill/native-agent-certifications/anthropic/claude-sonnet-4-6/v1.json
+.wavemill/native-agent-certifications/anthropic/claude-sonnet-4-6/v2.json
 ```
 
 ### Path segment rules
@@ -35,7 +35,7 @@ All certification evaluation is **fail-closed**: missing, malformed, stale, wron
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `schemaVersion` | `1` (integer literal) | yes | Schema version for forward compatibility |
+| `schemaVersion` | `2` (integer literal) | yes | Schema version for forward compatibility |
 | `provider` | string | yes | Provider identifier (e.g. `anthropic`, `openai`) |
 | `model` | string | yes | Model identifier (e.g. `claude-sonnet-4-6`) |
 | `phase` | `"read-only"` \| `"patch"` \| `"workflow"` | yes | Certified phase level |
@@ -79,7 +79,7 @@ A higher certification **satisfies** all lower required phases. A lower certific
 - **`patch`**: The agent may apply patches and make file mutations, in addition to all read-only operations.
 - **`workflow`**: The agent may execute full workflow operations including multi-step state changes, in addition to all patch operations.
 
-As of certification suite `v1`, `phase: 'workflow'` artifacts are backed by deterministic workflow-phase scenario coverage in the default certification harness.
+As of certification suite `v2`, `phase: 'patch'` artifacts are backed by deterministic patch-path safety scenarios, and `phase: 'workflow'` artifacts are backed by deterministic workflow-phase scenario coverage in the default certification harness.
 
 ---
 
@@ -88,6 +88,16 @@ As of certification suite `v1`, `phase: 'workflow'` artifacts are backed by dete
 A certification is only valid for the exact `suiteVersion` it was issued against. If the required suite version changes (e.g. from `v1` to `v2`), all existing `v1` certifications are automatically invalid for new `v2` checks — they do not need to be deleted, they simply do not satisfy a `v2` requirement.
 
 Downstream consumers must supply the current suite version when calling `evaluateEligibility` or `checkCertificationEligibility`. Mismatched suite versions return the `wrong-version` reason code.
+
+## Patch-Coding Relationship
+
+Native coding rollout uses three separate fail-closed gates:
+
+1. Repo opt-in: `nativeAgent.patchCoding.enabled` in `.wavemill-config.json`
+2. Runtime smoke gate: `.wavemill/native-agent/patch-coding-certification.json`
+3. Provider/model phase gate: `.wavemill/native-agent-certifications/<provider>/<model>/<suite-version>.json`
+
+The smoke artifact proves the local patch-coding runtime is enabled safely. The provider/model artifact proves a specific native provider/model pair passed the certification suite for the requested phase. For coder routing, the artifact phase must satisfy `patch`; for planner routing, it must satisfy `workflow`.
 
 ---
 
@@ -222,7 +232,7 @@ import { validateCertification } from './validator.ts';
 const result = validateCertification(artifact, {
   expectedProvider: 'anthropic',
   expectedModel: 'claude-sonnet-4-6',
-  expectedSuiteVersion: 'v1',
+  expectedSuiteVersion: 'v2',
   requiredPhase: 'patch',
   requiredCapabilities: ['long-context'], // checked against knownLimitations
   now: new Date(),

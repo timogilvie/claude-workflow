@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 import { certifyNativeAgent } from './native-agent-certify.ts';
 import type { HarnessReport, HarnessScenarioResult } from '../shared/lib/native-agent/certification/scenario-runner.ts';
 import type { NativeCertificationArtifact } from '../shared/lib/native-agent/certification/schema.ts';
+import { DEFAULT_CERTIFICATION_SUITE_VERSION } from '../shared/lib/native-agent/certification/scenarios.ts';
 import type { ModelRegistry } from '../shared/lib/model-registry.ts';
 
 const OPENROUTER_STORAGE_CASES = [
@@ -70,7 +71,7 @@ const STUB_REGISTRY: ModelRegistry = {
         certification: {
           maxCertifiedPhase: 'read-only',
           certifiedAt: new Date().toISOString(),
-          certificationSuiteVersion: 'v1',
+          certificationSuiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
         },
       },
     },
@@ -95,7 +96,7 @@ const STUB_REGISTRY: ModelRegistry = {
         certification: {
           maxCertifiedPhase: 'workflow',
           certifiedAt: new Date().toISOString(),
-          certificationSuiteVersion: 'v1',
+          certificationSuiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
         },
       },
     },
@@ -120,7 +121,7 @@ const STUB_REGISTRY: ModelRegistry = {
         certification: {
           maxCertifiedPhase: 'workflow',
           certifiedAt: new Date().toISOString(),
-          certificationSuiteVersion: 'v1',
+          certificationSuiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
         },
       },
     },
@@ -145,7 +146,7 @@ const STUB_REGISTRY: ModelRegistry = {
         certification: {
           maxCertifiedPhase: 'workflow',
           certifiedAt: new Date().toISOString(),
-          certificationSuiteVersion: 'v1',
+          certificationSuiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
         },
       },
     },
@@ -228,7 +229,7 @@ describe('certifyNativeAgent', () => {
       runScenariosFn: async () => PASSING_REPORT,
       writeCertificationFn: (_repoDir, artifact) => {
         written = artifact;
-        return '/repo/.wavemill/native-agent-certifications/openai/gpt-4o/v1.json';
+        return `/repo/.wavemill/native-agent-certifications/openai/gpt-4o/${DEFAULT_CERTIFICATION_SUITE_VERSION}.json`;
       },
       now: () => FIXED_NOW,
     });
@@ -262,8 +263,8 @@ describe('certifyNativeAgent', () => {
     assert.equal(result.artifactPath, undefined);
   });
 
-  it('does not certify a higher phase without phase-specific scenarios', async () => {
-    let writeCalls = 0;
+  it('certifies patch when the default catalog includes patch scenarios', async () => {
+    let written: NativeCertificationArtifact | undefined;
 
     const result = await certifyNativeAgent({
       provider: 'openai',
@@ -274,17 +275,34 @@ describe('certifyNativeAgent', () => {
       registry: STUB_REGISTRY,
       runScenariosFn: async (opts) => {
         assert.equal(opts.scenarios.length > 0, true);
-        assert.equal(opts.scenarios.some(s => s.phase === 'patch'), false);
-        return PASSING_REPORT;
+        assert.equal(opts.scenarios.some((scenario) => scenario.phase === 'patch'), true);
+        return {
+          ...PASSING_REPORT,
+          results: [
+            {
+              scenarioId: 'patch.runtime.native-patch-application',
+              category: 'tool',
+              classification: 'deterministic',
+              phase: 'patch',
+              status: 'pass',
+              durationMs: 1,
+            } as HarnessScenarioResult,
+          ],
+          countsByCategory: { tool: 1, usage: 0, transcript: 0, phase: 0 },
+        };
       },
-      writeCertificationFn: () => { writeCalls++; return '/repo/cert.json'; },
+      writeCertificationFn: (_repoDir, artifact) => {
+        written = artifact;
+        return `/repo/.wavemill/native-agent-certifications/openai/gpt-4o/${DEFAULT_CERTIFICATION_SUITE_VERSION}.json`;
+      },
     });
 
-    assert.equal(writeCalls, 0, 'writeCertification must not be called without requested phase coverage');
     assert.equal(result.harnessPassed, true);
-    assert.equal(result.liveCertifiable, false);
-    assert.equal(result.artifactPath, undefined);
-    assert.match(result.knownLimitations.join('\n'), /no patch scenarios/);
+    assert.equal(result.liveCertifiable, true);
+    assert.equal(result.artifactPath, `/repo/.wavemill/native-agent-certifications/openai/gpt-4o/${DEFAULT_CERTIFICATION_SUITE_VERSION}.json`);
+    assert.ok(written, 'patch artifact should have been written');
+    assert.equal(written.phase, 'patch');
+    assert.equal(result.knownLimitations.some((limitation) => /no patch scenarios/.test(limitation)), false);
   });
 
   it('certifies workflow when the default catalog includes workflow scenarios', async () => {
@@ -316,13 +334,13 @@ describe('certifyNativeAgent', () => {
       },
       writeCertificationFn: (_repoDir, artifact) => {
         written = artifact;
-        return '/repo/.wavemill/native-agent-certifications/openai/gpt-4o/v1.json';
+        return `/repo/.wavemill/native-agent-certifications/openai/gpt-4o/${DEFAULT_CERTIFICATION_SUITE_VERSION}.json`;
       },
     });
 
     assert.equal(result.harnessPassed, true);
     assert.equal(result.liveCertifiable, true);
-    assert.equal(result.artifactPath, '/repo/.wavemill/native-agent-certifications/openai/gpt-4o/v1.json');
+    assert.equal(result.artifactPath, `/repo/.wavemill/native-agent-certifications/openai/gpt-4o/${DEFAULT_CERTIFICATION_SUITE_VERSION}.json`);
     assert.ok(written);
     assert.equal(written.phase, 'workflow');
     assert.equal(result.knownLimitations.some((limitation) => /no workflow scenarios/.test(limitation)), false);
@@ -363,7 +381,7 @@ describe('certifyNativeAgent', () => {
   for (const testCase of OPENROUTER_STORAGE_CASES) {
     it(`resolves raw OpenRouter id ${testCase.rawId} through registry metadata and writes storage identity`, async () => {
       let written: NativeCertificationArtifact | undefined;
-      const expectedArtifactPath = `/repo/.wavemill/native-agent-certifications/${testCase.providerPath}/${testCase.modelPath}/v1.json`;
+      const expectedArtifactPath = `/repo/.wavemill/native-agent-certifications/${testCase.providerPath}/${testCase.modelPath}/${DEFAULT_CERTIFICATION_SUITE_VERSION}.json`;
 
       const result = await certifyNativeAgent({
         provider: 'openrouter',
@@ -429,7 +447,7 @@ describe('certifyNativeAgent', () => {
       }),
       writeCertificationFn: (_repoDir, artifact) => {
         written = artifact;
-        return '/repo/.wavemill/native-agent-certifications/openai/gpt-4o/v1.json';
+        return `/repo/.wavemill/native-agent-certifications/openai/gpt-4o/${DEFAULT_CERTIFICATION_SUITE_VERSION}.json`;
       },
     });
 
