@@ -1,7 +1,7 @@
 # Subsystem: eval-system
 
-**Last updated:** 2026-04-27
-**Files touched:** 10
+**Last updated:** 2026-07-13
+**Files touched:** 12
 
 ## Purpose
 
@@ -15,10 +15,10 @@ Historical and aggregated eval datasets now also carry explicit rubric provenanc
 
 | File | Role | Notes |
 |------|------|-------|
-| `shared/lib/eval-schema.ts` | Canonical TypeScript schema and changelog | Minor version bumps are required for additive fields. |
-| `shared/lib/eval-schema.json` | JSON Schema mirror for validator-style tests | Must stay in sync with `eval-schema.ts`. |
+| `shared/lib/eval-schema.ts` | Canonical TypeScript schema and changelog | Schema `1.32.0` adds optional `attempted_model` and `model_alias` for HOK-2234. |
+| `shared/lib/eval-schema.json` | JSON Schema mirror for validator-style tests | Must stay in sync with `eval-schema.ts`, including additive optional fields. |
 | `shared/lib/eval.ts` | Builds judge-backed eval records | Owns the top-level `SCHEMA_VERSION`. |
-| `shared/lib/eval-record-builder.ts` | Pure metadata attachment helpers | Null/undefined metadata must remain a no-op. |
+| `shared/lib/eval-record-builder.ts` | Pure metadata attachment helpers | `attachAttemptedModel()` follows the same null-safe no-op pattern as the other field helpers. |
 | `shared/lib/eval-backfill.ts` | Historical rubric provenance backfill | Must parse strictly and rewrite atomically. |
 | `shared/lib/eval-persistence.ts` | Appends and reads `evals.jsonl` | Persistence failures should never corrupt prior records. |
 | `shared/lib/llm-cli.ts` | Emits fallback eval records on quota-triggered model swaps | Uses best-effort logging only after fallback events. |
@@ -31,6 +31,7 @@ Historical and aggregated eval datasets now also carry explicit rubric provenanc
 - Keep schema evolution additive. New fields must be optional so old `evals.jsonl` rows continue to parse unchanged.
 - Bump the eval schema minor version on additive changes and document the change in `eval-schema.ts`.
 - Keep `eval-record-builder.ts` helpers pure and local: mutate the provided record, but treat `null` and `undefined` as "do nothing".
+- Preserve pre-fallback routing evidence in `attempted_model` and `model_alias` when a launch-priority audit needs to distinguish "attempted but fell back" from "never attempted".
 - Keep `shared/lib/eval-validator.ts` as the single authoritative source of eval validation error codes; tolerant readers may continue skipping malformed rows silently, but explicit validation must flow through that module.
 - Route fallback telemetry through `appendEvalRecord()` so prompt-registry and aggregation tooling continue to observe a single eval pipeline.
 - Treat telemetry writes as best-effort metadata. Fallback logging must never change the success or failure semantics of the LLM call itself.
@@ -110,6 +111,7 @@ Compatibility and aggregation notes:
 | Symptom | Root Cause | Fix |
 |---------|------------|-----|
 | New fallback fields validate in TypeScript but schema tests fail | `eval-schema.json` was not updated with the additive field | Update both schema files in the same change. |
+| Launch-priority audits undercount attempted challenger models | Fallback changed `modelId` and the record omitted `attempted_model` / `model_alias` | Use `attachAttemptedModel()` before persistence; older rows remain valid but lose that extra attribution. |
 | Fallback occurred but no eval row was written | `logFallbackEvents` was disabled or persistence failed | Check `LLMCallOptions.logFallbackEvents`, then inspect `console.warn` output from `llm-cli`. |
 | Older eval readers reject records | A new field was made required or parsing assumed presence | Restore optional semantics and add backward-compat coverage. |
 | Fallback logging changes request behavior | Telemetry exception leaked out of the emitter | Keep `appendEvalRecord()` calls wrapped in local `try/catch`. |
@@ -137,6 +139,7 @@ Compatibility and aggregation notes:
 ## Recent Changes
 
 - 2026-04-28: Aligned challenge PR comparison judging with the canonical 5-criterion rubric used by per-PR evals (HOK-1450), replacing legacy comparison dimensions and surfacing the same rubric in planning/coding prompts before implementation.
+- 2026-07-13: Added optional `attempted_model` and `model_alias` to eval schema version `1.32.0` plus `attachAttemptedModel()` in `eval-record-builder.ts` (HOK-2234); launch-priority audits can now preserve the model actually attempted before fallback without invalidating older rows.
 - 2026-04-27: Added `rubric_provenance` to eval schema version `1.12.0` and `backfill-rubric-eval-records.ts` (HOK-1408); aggregated and historical datasets now preserve rubric provenance explicitly, and dedup prefers rubric-richer duplicates.
 - 2026-04-27: Added `rubricEval` to eval schema version `1.10.0` (HOK-1406); per-criterion rubric scores (completeness, correctness, code quality, intervention impact, autonomy) are now persisted as durable training signal alongside the aggregate score. Updated eval-judge.md prompt to emit rubricEval, added parsing in eval.ts, `attachRubricEval()` in eval-record-builder.ts, display in eval-formatter.ts.
 - 2026-04-18: Added `fallbackEvent` to eval schema version `1.6.0` and wired `llm-cli` quota fallback emission into `evals.jsonl`.

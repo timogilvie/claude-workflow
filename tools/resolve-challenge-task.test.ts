@@ -163,7 +163,7 @@ function runResolveChallengeTask(repoDir: string, args: string[]): Record<string
 }
 
 describe('resolve-challenge-task CLI', () => {
-  it('emits the least-used zero-record challenger reason and coverage count', () => {
+  it('falls back to single mode when implementation challengers are native-only and not launchable', () => {
     const repoDir = makeRepo(['glm-5.2']);
     try {
       const result = runResolveChallengeTask(repoDir, [
@@ -175,21 +175,16 @@ describe('resolve-challenge-task CLI', () => {
         '--repo-dir', repoDir,
       ]);
 
-      assert.equal(result.mode, 'challenge');
-      assert.equal(result.challengeStage, 'implementation');
-      assert.equal(result.challengerSource, 'least-used-zero-record');
-      assert.equal(result.selectionReason, 'least-used-zero-record');
-      assert.equal(result.coverageCount, 0);
-
-      const entries = result.entries as Array<Record<string, unknown>>;
-      assert.equal(entries[1].model, 'qwen-3-coder');
-      assert.equal(entries[1].variedModel, 'qwen-3-coder');
+      assert.equal(result.mode, 'single');
+      assert.equal(result.reason, 'selection_failed');
+      const single = result.single as Record<string, unknown>;
+      assert.equal(single.model, 'claude-sonnet-4-6');
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
   });
 
-  it('falls forward from a recommended challenger to the next least-used eligible model', () => {
+  it('keeps recommendation-driven implementation native challengers excluded before launch', () => {
     const repoDir = makeRepo(['qwen-3-coder', 'qwen-3-coder', 'glm-5.2', 'glm-5.2', 'glm-5.2']);
     const featureDir = join(repoDir, 'features', 'fallforward');
     mkdirSync(featureDir, { recursive: true });
@@ -217,16 +212,10 @@ describe('resolve-challenge-task CLI', () => {
         '--feature-dir', featureDir,
       ]);
 
-      assert.equal(result.mode, 'challenge');
-      assert.equal(result.selectionPath, 'recommendation-driven');
-      assert.equal(result.challengerSource, 'least-used-fallforward');
-      assert.equal(result.selectionReason, 'least-used-fallforward');
-      assert.equal(result.coverageCount, 2);
-
-      const entries = result.entries as Array<Record<string, unknown>>;
-      assert.equal(entries[1].model, 'qwen-3-coder');
-      const challengeRecommendation = result.challengeRecommendation as Record<string, unknown>;
-      assert.equal(challengeRecommendation.challengerModel, 'glm-5.2');
+      assert.equal(result.mode, 'single');
+      assert.equal(result.reason, 'selection_failed');
+      const single = result.single as Record<string, unknown>;
+      assert.equal(single.model, 'claude-sonnet-4-6');
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }

@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { PHASE_ORDER, getDefaultScenarios } from './scenarios.ts';
+import {
+  DEFAULT_CERTIFICATION_SUITE_VERSION,
+  PHASE_ORDER,
+  getDefaultScenarios,
+} from './scenarios.ts';
 import { checkCertificationEligibility } from './loader.ts';
 import { writeCertification } from './store.ts';
 import { CERTIFICATION_SCHEMA_VERSION, type NativeCertificationArtifact } from './schema.ts';
@@ -175,7 +179,7 @@ describe('workflow certification scenarios', () => {
         provider: 'openai',
         model: 'gpt-test',
         phase: 'read-only',
-        suiteVersion: 'v1',
+        suiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
         certifiedAt: new Date().toISOString(),
         scenarios: [{ scenarioId: 'synthetic.pass', passed: true }],
       };
@@ -197,6 +201,47 @@ describe('workflow certification scenarios', () => {
       });
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('patch certification scenarios', () => {
+  const patchScenarioIds = [
+    'patch.runtime.native-patch-application',
+    'patch.paths.boundaries-and-generated-artifacts',
+    'patch.phase.dirty-tree-gate',
+    'patch.usage.intended-file-tracking',
+    'patch.tools.command-and-format-safety',
+    'patch.cleanup.abort-restores-worktree',
+    'patch.cleanup.timeout-restores-worktree',
+    'patch.transcript.command-redaction',
+    'patch.phase.ready-remediation-fixtures',
+  ];
+
+  for (const id of patchScenarioIds) {
+    it(`${id} passes in the deterministic harness`, async () => {
+      const scenario = scenarioById(id);
+      const result = await scenario.assertion!(DEFAULT_CONTEXT);
+      assert.deepEqual(result, { kind: 'pass' });
+    });
+  }
+
+  it('patch-phase scenarios cover tool, transcript, usage, and phase categories', () => {
+    const patchCategories = new Set(
+      getDefaultScenarios()
+        .filter((scenario) => scenario.phase === 'patch')
+        .map((scenario) => scenario.category),
+    );
+    assert.deepEqual([...patchCategories].sort(), ['phase', 'tool', 'transcript', 'usage']);
+  });
+
+  it('patch-phase scenarios are all deterministic', () => {
+    for (const scenario of getDefaultScenarios().filter((entry) => entry.phase === 'patch')) {
+      assert.equal(
+        scenario.classification,
+        'deterministic',
+        `patch scenario "${scenario.id}" must be deterministic`,
+      );
     }
   });
 });
