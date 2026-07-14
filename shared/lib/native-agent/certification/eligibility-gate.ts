@@ -1,6 +1,5 @@
 import type { NativeProviderName } from '../../config.ts';
-import type { ModelRegistry, ReadOnlyNativeCapability } from '../../model-registry.ts';
-import { resolveWavemillAliasFromOpenRouterId } from '../../openrouter-catalog.ts';
+import { getModel, type ModelRegistry, type ReadOnlyNativeCapability } from '../../model-registry.ts';
 import { checkIdentity } from './validator.ts';
 import {
   buildCertificationPath,
@@ -68,8 +67,7 @@ export function evaluateNativeProviderGate(input: NativeGateInput): NativeGateDe
     });
   }
 
-  const registryModelId = resolveRegistryModelId(input.registry, input.modelId);
-  const nativeCapability = input.registry.models[registryModelId]?.nativeCapability;
+  const nativeCapability = getModel(input.registry, input.modelId)?.nativeCapability;
   const nativeProvider = nativeCapability?.nativeProvider;
   const capability = nativeCapability?.readOnlyNative ?? 'unregistered';
 
@@ -165,15 +163,6 @@ export function evaluateNativeProviderGate(input: NativeGateInput): NativeGateDe
     artifact: eligibility.artifact,
     certified: true,
   };
-}
-
-function resolveRegistryModelId(registry: ModelRegistry, modelId: string): string {
-  if (registry.models[modelId]) {
-    return modelId;
-  }
-
-  const alias = resolveWavemillAliasFromOpenRouterId(modelId);
-  return alias && registry.models[alias] ? alias : modelId;
 }
 
 function mapEligibilityReason(reason: 'missing' | 'malformed' | 'wrong-version' | 'stale' | 'phase-insufficient' | 'scenario-failure'): NativeGateRejectReason {

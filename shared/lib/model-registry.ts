@@ -13,6 +13,7 @@ import {
   phaseSatisfies,
   type CertificationPhase,
 } from './native-agent/certification/schema.ts';
+import { resolveWavemillAliasFromOpenRouterId } from './openrouter-catalog.ts';
 
 export type ModelClass = 'frontier' | 'strong_generalist' | 'fast_economy';
 export type RegistryTaskType = 'routing' | 'planning' | 'coding' | 'review' | 'classify';
@@ -1688,11 +1689,20 @@ export function isModelEnabled(capabilities: ModelCapabilities | undefined): boo
   return capabilities !== undefined && capabilities.disabled !== true;
 }
 
+export function resolveModelRegistryKey(registry: ModelRegistry, modelId: string): string {
+  if (registry.models[modelId]) {
+    return modelId;
+  }
+
+  const alias = resolveWavemillAliasFromOpenRouterId(modelId);
+  return alias && registry.models[alias] ? alias : modelId;
+}
+
 export function getModel(registry: ModelRegistry, modelId: string): ModelCapabilities | undefined {
   if (!modelId) {
     return undefined;
   }
-  return registry.models[modelId];
+  return registry.models[resolveModelRegistryKey(registry, modelId)];
 }
 
 export function getLadder(registry: ModelRegistry, taskType: RegistryTaskType): string[] {
@@ -1772,7 +1782,7 @@ export function isReadOnlyNativeCapable(
   opts?: { registry?: ModelRegistry; allowPartial?: boolean },
 ): boolean {
   const registry = opts?.registry ?? getEffectiveRegistry();
-  const capability = registry.models[modelId]?.nativeCapability?.readOnlyNative;
+  const capability = getModel(registry, modelId)?.nativeCapability?.readOnlyNative;
   if (capability === 'certified') {
     return true;
   }
@@ -1805,7 +1815,7 @@ export function evaluateRegistryPhaseEligibility(input: {
   now?: Date;
 }): RegistryPhaseEligibility {
   const registry = input.registry ?? getEffectiveRegistry();
-  const certification = registry.models[input.modelId]?.nativeCapability?.certification;
+  const certification = getModel(registry, input.modelId)?.nativeCapability?.certification;
 
   if (!certification) {
     return {
@@ -1892,7 +1902,7 @@ export function evaluateNativeReadOnlyRouting(input: {
 }): NativeReadOnlyRoutingDecision {
   const mode = input.mode ?? 'task';
   const registry = input.registry ?? getEffectiveRegistry();
-  const nativeCapability = registry.models[input.modelId]?.nativeCapability;
+  const nativeCapability = getModel(registry, input.modelId)?.nativeCapability;
   const capability: ReadOnlyNativeCapability | 'unregistered' = nativeCapability?.readOnlyNative ?? 'unregistered';
   const certified = isReadOnlyNativeCapable(input.modelId, { registry, allowPartial: input.allowPartial });
 
