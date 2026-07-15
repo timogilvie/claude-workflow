@@ -2424,11 +2424,13 @@ for t in "${TASKS[@]}"; do
     challenge_stage=$(echo "$challenge_plan" | jq -r '.challengeStage // "implementation"' 2>/dev/null || echo "implementation")
     primary_entry_planner=$(echo "$challenge_plan" | jq -r '.entries[0].planner // empty' 2>/dev/null)
     primary_entry_reviewer=$(echo "$challenge_plan" | jq -r '.entries[0].reviewer // empty' 2>/dev/null)
+    primary_entry_planner_agent=$(echo "$challenge_plan" | jq -r '.entries[0].plannerAgent // empty' 2>/dev/null)
     primary_entry_plan_depth=$(echo "$challenge_plan" | jq -r '.entries[0].planDepth // empty' 2>/dev/null)
     primary_entry_code_depth=$(echo "$challenge_plan" | jq -r '.entries[0].codeDepth // empty' 2>/dev/null)
     primary_entry_review_mode=$(echo "$challenge_plan" | jq -r '.entries[0].reviewMode // empty' 2>/dev/null)
     challenger_entry_planner=$(echo "$challenge_plan" | jq -r '.entries[1].planner // empty' 2>/dev/null)
     challenger_entry_reviewer=$(echo "$challenge_plan" | jq -r '.entries[1].reviewer // empty' 2>/dev/null)
+    challenger_entry_planner_agent=$(echo "$challenge_plan" | jq -r '.entries[1].plannerAgent // empty' 2>/dev/null)
     challenger_entry_plan_depth=$(echo "$challenge_plan" | jq -r '.entries[1].planDepth // empty' 2>/dev/null)
     challenger_entry_code_depth=$(echo "$challenge_plan" | jq -r '.entries[1].codeDepth // empty' 2>/dev/null)
     challenger_entry_review_mode=$(echo "$challenge_plan" | jq -r '.entries[1].reviewMode // empty' 2>/dev/null)
@@ -2443,7 +2445,7 @@ for t in "${TASKS[@]}"; do
     TASK_CHALLENGE_ROLE_BY_ISSUE["$ISSUE"]="primary"
     TASK_CHALLENGE_MODEL_BY_ISSUE["$ISSUE"]="$primary_model"
     TASK_CHALLENGE_STAGE_BY_ISSUE["$ISSUE"]="$challenge_stage"
-    TASK_AGENT_BY_ISSUE["$ISSUE"]="${primary_agent:-$rec_agent}"
+    TASK_AGENT_BY_ISSUE["$ISSUE"]="${primary_entry_planner_agent:-${primary_agent:-$rec_agent}}"
     TASK_PLANNER_MODEL_BY_ISSUE["$ISSUE"]="${primary_entry_planner:-$route_planner}"
     TASK_CODER_MODEL_BY_ISSUE["$ISSUE"]="$primary_model"
     TASK_REVIEWER_MODEL_BY_ISSUE["$ISSUE"]="${primary_entry_reviewer:-$route_reviewer}"
@@ -2457,7 +2459,7 @@ for t in "${TASKS[@]}"; do
     TASK_CHALLENGE_ROLE_BY_ISSUE["$challenger_key"]="challenger"
     TASK_CHALLENGE_MODEL_BY_ISSUE["$challenger_key"]="$challenger_model"
     TASK_CHALLENGE_STAGE_BY_ISSUE["$challenger_key"]="$challenge_stage"
-    TASK_AGENT_BY_ISSUE["$challenger_key"]="${challenger_agent:-$AGENT_CMD}"
+    TASK_AGENT_BY_ISSUE["$challenger_key"]="${challenger_entry_planner_agent:-${challenger_agent:-$AGENT_CMD}}"
     # Stage-varied challengers carry their own planner/reviewer in the entry
     TASK_PLANNER_MODEL_BY_ISSUE["$challenger_key"]="${challenger_entry_planner:-$route_planner}"
     TASK_CODER_MODEL_BY_ISSUE["$challenger_key"]="$challenger_model"
@@ -4976,7 +4978,7 @@ _coding_divergence_announce_marker() {
 _detect_coding_pane_divergence() {
   local issue="$1" slug="$2" worktree="$3" feature_dir="$4" win_target="$5"
   local hook_file="/tmp/wavemill-${SESSION}-${issue}.hook"
-  local hook_state hook_ts now staleness pane_tail other_marker other_slug
+  local hook_state hook_ts now staleness pane_tail other_slug
 
   _DIVERGENCE_SLUG=""
   _DIVERGENCE_SOURCE=""
@@ -5007,28 +5009,6 @@ _detect_coding_pane_divergence() {
       _DIVERGENCE_SLUG="$other_slug"
       _DIVERGENCE_SOURCE="pane_tail"
       return 0
-    fi
-  fi
-
-  # Check for a .coding-complete marker under a different features/<slug>/ path
-  # within this worktree (e.g. agent wrote marker for wrong task identity)
-  if [[ -d "$worktree" ]]; then
-    other_marker="$(
-      find "$worktree" \
-        -name ".coding-complete" \
-        -path "*/features/*/.coding-complete" \
-        -not -path "$feature_dir/.coding-complete" \
-        -not -path "*/features/${slug}/.coding-complete" \
-        -type f -print -quit 2>/dev/null || true
-    )"
-    if [[ -n "$other_marker" ]]; then
-      other_slug="$(printf '%s\n' "$other_marker" \
-        | sed 's|.*/features/||; s|/\.coding-complete$||')"
-      if [[ -n "$other_slug" && "$other_slug" != "$slug" ]]; then
-        _DIVERGENCE_SLUG="$other_slug"
-        _DIVERGENCE_SOURCE="misplaced_marker"
-        return 0
-      fi
     fi
   fi
 
@@ -5544,6 +5524,12 @@ _restore_inflight_task_window_if_missing() {
       if ! agent_cmd="$(agent_resolve_from_model "$model" "coding")"; then
         rc=1
       else
+        if [[ -f "${STATE_FILE:-}" ]] && jq -e --arg issue "$issue" '.tasks[$issue]? // empty' "$STATE_FILE" >/dev/null 2>&1; then
+          state_mutate "$STATE_FILE" \
+            '.tasks[$issue].agent = $agent | .tasks[$issue].updated = (now | todate)' \
+            --arg issue "$issue" \
+            --arg agent "$agent_cmd" >/dev/null 2>&1 || true
+        fi
         launch_coding_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
           "$model" "$agent_cmd" "$depth" || rc=$?
       fi
@@ -9407,9 +9393,9 @@ EOF
   if [[ "$effective_challenge" != "true" && -n "$challenge_role" ]]; then
     effective_challenge="true"
   fi
-  save_task_state "$issue" "$slug" "$branch" "$wt_dir" "" "" "$task_agent_cmd" "$linear_issue" "$effective_challenge" "$challenge_pair" "${challenge_role:-}" "$task_model" "$planner_model" "$task_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode" "${challenge_stage:-}"
+  save_task_state "$issue" "$slug" "$branch" "$wt_dir" "" "" "${planner_agent:-$task_agent_cmd}" "$linear_issue" "$effective_challenge" "$challenge_pair" "${challenge_role:-}" "$task_model" "$planner_model" "$task_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode" "${challenge_stage:-}"
   if [[ "$challenge_enabled_for_launch" == "true" ]]; then
-    save_task_state "$challenger_key" "$challenger_slug" "task/${challenger_slug}" "${WORKTREE_ROOT}/${challenger_slug}" "" "" "$challenger_agent" "$linear_issue" "true" "$challenge_pair" "challenger" "$challenger_model" "$challenger_planner" "$challenger_model" "$challenger_reviewer" "$challenger_plan_depth" "$challenger_code_depth" "$challenger_review_mode" "$challenge_stage"
+    save_task_state "$challenger_key" "$challenger_slug" "task/${challenger_slug}" "${WORKTREE_ROOT}/${challenger_slug}" "" "" "${challenger_planner_agent:-$challenger_agent}" "$linear_issue" "true" "$challenge_pair" "challenger" "$challenger_model" "$challenger_planner" "$challenger_model" "$challenger_reviewer" "$challenger_plan_depth" "$challenger_code_depth" "$challenger_review_mode" "$challenge_stage"
     state_mutate "$STATE_FILE" '.tasks[$issue].challengeStage = $stage' --arg issue "$challenger_key" --arg stage "$challenge_stage" || true
   fi
   if [[ -n "${challenge_stage:-}" ]]; then
@@ -9420,11 +9406,12 @@ EOF
   # Verify agent was saved correctly (helps debug future issues)
   if [[ "${DEBUG_AGENT:-}" == "1" ]]; then
     local saved_agent
+    local expected_saved_agent="${planner_agent:-$task_agent_cmd}"
     saved_agent=$(jq -r --arg i "$issue" '.tasks[$i].agent // ""' "$STATE_FILE" 2>/dev/null)
-    if [[ "$saved_agent" != "$task_agent_cmd" ]]; then
-      log_warn "  ⚠ Agent save mismatch: expected='$task_agent_cmd' but got='$saved_agent'"
+    if [[ "$saved_agent" != "$expected_saved_agent" ]]; then
+      log_warn "  ⚠ Agent save mismatch: expected='$expected_saved_agent' but got='$saved_agent'"
     else
-      log "info" "Agent set to: $task_agent_cmd"
+      log "info" "Agent set to: $expected_saved_agent"
     fi
   fi
 
@@ -10957,6 +10944,14 @@ monitor_issue_state() {
               log "warn" "⚠ $ISSUE → Coding launch blocked: ${AGENT_RESOLVE_LAST_DIAGNOSTIC:-agent resolution failed}"
               active_count=$((active_count + 1))
               return 0
+            fi
+            if [[ -f "${STATE_FILE:-}" ]] && jq -e --arg issue "$ISSUE" '.tasks[$issue]? // empty' "$STATE_FILE" >/dev/null 2>&1; then
+              if ! state_mutate "$STATE_FILE" \
+                '.tasks[$issue].agent = $agent | .tasks[$issue].updated = (now | todate)' \
+                --arg issue "$ISSUE" \
+                --arg agent "$coder_agent" >/dev/null 2>&1; then
+                log_warn "set_task_agent: failed to update $ISSUE for coding"
+              fi
             fi
 
             # Get title

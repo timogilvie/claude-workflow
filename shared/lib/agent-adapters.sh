@@ -374,6 +374,61 @@ agent_phase_from_role() {
   esac
 }
 
+agent_role_from_phase() {
+  case "${1:-}" in
+    planning)
+      printf '%s\n' "planner"
+      ;;
+    coding)
+      printf '%s\n' "coder"
+      ;;
+    review)
+      printf '%s\n' "reviewer"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+agent_normalize_phase_token() {
+  case "${1:-}" in
+    planning|planner|plan)
+      printf '%s\n' "planning"
+      ;;
+    coding|coder|implementation)
+      printf '%s\n' "coding"
+      ;;
+    review|reviewer|reviewing)
+      printf '%s\n' "review"
+      ;;
+    *planning-prompt*|*planning_prompt*)
+      printf '%s\n' "planning"
+      ;;
+    *coding-prompt*|*coding_prompt*)
+      printf '%s\n' "coding"
+      ;;
+    *review-prompt*|*review_prompt*)
+      printf '%s\n' "review"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+agent_normalize_launch_phase() {
+  local token phase
+  for token in "$@"; do
+    [[ -n "${token:-}" ]] || continue
+    if phase="$(agent_normalize_phase_token "$token" 2>/dev/null)"; then
+      printf '%s\n' "$phase"
+      return 0
+    fi
+  done
+  return 1
+}
+
 AGENT_NATIVE_LAUNCH_LAST_JSON=""
 AGENT_NATIVE_LAUNCH_LAST_REASON=""
 
@@ -1655,12 +1710,14 @@ agent_launch_autonomous() {
   local target
   target="$(agent_tmux_target "$session" "$window")" || return 1
   local repo_dir="${REPO_DIR:-$(pwd)}"
-  local role feature_dir
-  role="$(routing_role_from_window "$window" 2>/dev/null || true)"
+  local role feature_dir launch_phase phase_env
+  launch_phase="$(agent_normalize_launch_phase "${WAVEMILL_PHASE:-}" "$window" "$instr_file" 2>/dev/null || true)"
+  role="$(agent_role_from_phase "$launch_phase" 2>/dev/null || true)"
   feature_dir="${WAVEMILL_FEATURE_DIR:-}"
   if [[ -z "$feature_dir" && -n "${WAVEMILL_FEATURE_SLUG:-}" ]]; then
     feature_dir="$repo_dir/features/$WAVEMILL_FEATURE_SLUG"
   fi
+  phase_env="${launch_phase:-$window}"
 
   if [[ -n "$model" ]] && ! agent_validate_model "$model" "${REPO_DIR:-$(pwd)}" >/dev/null 2>&1; then
     echo "Error: invalid model selector '$model' for $agent_cmd" >&2
@@ -1676,20 +1733,15 @@ agent_launch_autonomous() {
     model_flag=" --model $model"
   fi
 
-  local native_phase="${WAVEMILL_PHASE:-}"
-  case "$native_phase" in
-    planning|coding|review) ;;
-    *)
-      native_phase=""
-      ;;
-  esac
-  if [[ -z "$native_phase" ]]; then
-    native_phase="$(agent_phase_from_role "${role:-$window}" 2>/dev/null || true)"
-  fi
+  local native_phase="$launch_phase"
   local native_model=""
   local worktree_dir="${feature_dir%/features/*}"
   local feature_slug="${WAVEMILL_FEATURE_SLUG:-${WAVEMILL_SLUG:-}}"
   if agent_is_native_cmd "$agent_cmd"; then
+    if [[ -z "$native_phase" ]]; then
+      echo "Error: native agent '$agent_cmd' cannot launch without normalized phase (window='$window')" >&2
+      return 1
+    fi
     if ! agent_validate_phase_launch "$agent_cmd" "$native_phase" "$model" "$repo_dir"; then
       return 1
     fi
@@ -1805,7 +1857,7 @@ set -euo pipefail
 export WAVEMILL_SESSION='$session'
 export WAVEMILL_ISSUE='$issue'
 export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
-export WAVEMILL_PHASE='$window'
+export WAVEMILL_PHASE='$phase_env'
 export WAVEMILL_RESOLVED_MODEL='${resolved_model:-$model}'
 # Resolve credentials at runtime (not embedded in script)
 tools_dir='$tools_dir'
@@ -1852,7 +1904,7 @@ set -euo pipefail
 export WAVEMILL_SESSION='$session'
 export WAVEMILL_ISSUE='$issue'
 export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
-export WAVEMILL_PHASE='$window'
+export WAVEMILL_PHASE='$phase_env'
 export WAVEMILL_RESOLVED_MODEL='$model'
 provider_root='$provider_root'
 provider_home='$provider_home'
@@ -1886,7 +1938,7 @@ LAUNCHEOF
         tmux send-keys -t "$target" -l -- "$launcher"
         tmux send-keys -t "$target" C-m
       else
-        tmux send-keys -t "$target" "export WAVEMILL_SESSION='$session' WAVEMILL_ISSUE='$issue' WAVEMILL_DASHBOARD_PID='$dashboard_pid' WAVEMILL_PHASE='$window' WAVEMILL_RESOLVED_MODEL='$model'; cat '$instr_file' | claude${model_flag} --dangerously-skip-permissions; echo '[wavemill] Agent exited (\$?)'" C-m
+        tmux send-keys -t "$target" "export WAVEMILL_SESSION='$session' WAVEMILL_ISSUE='$issue' WAVEMILL_DASHBOARD_PID='$dashboard_pid' WAVEMILL_PHASE='$phase_env' WAVEMILL_RESOLVED_MODEL='$model'; cat '$instr_file' | claude${model_flag} --dangerously-skip-permissions; echo '[wavemill] Agent exited (\$?)'" C-m
       fi
       ;;
     codex)
@@ -1897,7 +1949,7 @@ LAUNCHEOF
 export WAVEMILL_SESSION='$session'
 export WAVEMILL_ISSUE='$issue'
 export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
-export WAVEMILL_PHASE='$window'
+export WAVEMILL_PHASE='$phase_env'
 export WAVEMILL_RESOLVED_MODEL='$model'
 if [[ -n '$issue' ]]; then
   printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
@@ -2046,12 +2098,14 @@ agent_launch_interactive() {
   local dashboard_pid
   dashboard_pid="$(agent_resolve_dashboard_pid "$session")"
   local repo_dir="${REPO_DIR:-$(pwd)}"
-  local role feature_dir
-  role="$(routing_role_from_window "$window" 2>/dev/null || true)"
+  local role feature_dir launch_phase phase_env
+  launch_phase="$(agent_normalize_launch_phase "${WAVEMILL_PHASE:-}" "$window" "$prompt_file" 2>/dev/null || true)"
+  role="$(agent_role_from_phase "$launch_phase" 2>/dev/null || true)"
   feature_dir="${WAVEMILL_FEATURE_DIR:-}"
   if [[ -z "$feature_dir" && -n "${WAVEMILL_FEATURE_SLUG:-}" ]]; then
     feature_dir="$repo_dir/features/$WAVEMILL_FEATURE_SLUG"
   fi
+  phase_env="${launch_phase:-$window}"
 
   if [[ -n "$model" ]] && ! agent_validate_model "$model" "${REPO_DIR:-$(pwd)}" >/dev/null 2>&1; then
     local fallback_model=""
@@ -2117,21 +2171,16 @@ agent_launch_interactive() {
 
   local launcher="/tmp/${session}-$(basename "$prompt_file" .txt)-launcher.sh"
   local launcher_cmd=""
-  local native_phase="${WAVEMILL_PHASE:-}"
-  case "$native_phase" in
-    planning|coding|review) ;;
-    *)
-      native_phase=""
-      ;;
-  esac
-  if [[ -z "$native_phase" ]]; then
-    native_phase="$(agent_phase_from_role "${role:-$window}" 2>/dev/null || true)"
-  fi
+  local native_phase="$launch_phase"
   local native_model=""
   local worktree_dir="${feature_dir%/features/*}"
   local feature_slug="${WAVEMILL_FEATURE_SLUG:-${WAVEMILL_SLUG:-}}"
 
   if agent_is_native_cmd "$agent_cmd"; then
+    if [[ -z "$native_phase" ]]; then
+      echo "Error: native agent '$agent_cmd' cannot launch without normalized phase (window='$window')" >&2
+      return 1
+    fi
     if ! agent_validate_phase_launch "$agent_cmd" "$native_phase" "$model" "$repo_dir"; then
       return 1
     fi
@@ -2236,7 +2285,7 @@ set -euo pipefail
 export WAVEMILL_SESSION='$session'
 export WAVEMILL_ISSUE='$issue'
 export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
-export WAVEMILL_PHASE='$window'
+export WAVEMILL_PHASE='$phase_env'
 export WAVEMILL_RESOLVED_MODEL='${resolved_model:-$model}'
 if [[ -n '$issue' ]]; then
   printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
@@ -2278,7 +2327,7 @@ set -euo pipefail
 export WAVEMILL_SESSION='$session'
 export WAVEMILL_ISSUE='$issue'
 export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
-export WAVEMILL_PHASE='$window'
+export WAVEMILL_PHASE='$phase_env'
 export WAVEMILL_RESOLVED_MODEL='$model'
 provider_root='$provider_root'
 provider_home='$provider_home'
@@ -2314,7 +2363,7 @@ LAUNCHEOF
 export WAVEMILL_SESSION='$session'
 export WAVEMILL_ISSUE='$issue'
 export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
-export WAVEMILL_PHASE='$window'
+export WAVEMILL_PHASE='$phase_env'
 export WAVEMILL_RESOLVED_MODEL='$model'
 if [[ -n '$issue' ]]; then
   printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
@@ -2330,7 +2379,7 @@ LAUNCHEOF
 export WAVEMILL_SESSION='$session'
 export WAVEMILL_ISSUE='$issue'
 export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
-export WAVEMILL_PHASE='$window'
+export WAVEMILL_PHASE='$phase_env'
 export WAVEMILL_RESOLVED_MODEL='$model'
 if [[ -n '$issue' ]]; then
   printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
@@ -2345,7 +2394,7 @@ LAUNCHEOF
 export WAVEMILL_SESSION='$session'
 export WAVEMILL_ISSUE='$issue'
 export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
-export WAVEMILL_PHASE='$window'
+export WAVEMILL_PHASE='$phase_env'
 export WAVEMILL_RESOLVED_MODEL='$model'
 if [[ -n '$issue' ]]; then
   printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
