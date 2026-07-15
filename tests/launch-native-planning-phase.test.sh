@@ -31,6 +31,16 @@ check_contains() {
   fi
 }
 
+check_not_contains() {
+  local name="$1" haystack="$2" needle="$3"
+  if [[ "$haystack" != *"$needle"* ]]; then
+    pass "$name"
+  else
+    echo "    unexpected: $needle"
+    fail "$name"
+  fi
+}
+
 TMPDIR_TEST="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR_TEST"' EXIT
 
@@ -80,6 +90,7 @@ agent_launch_autonomous "sess" "planning" "/tmp/instr.txt" "native-openrouter" "
 
 check_contains "native branch dispatches launcher path" "$(cat "$TMUX_LOG")" "$NATIVE_LAUNCHER"
 check_contains "native launcher invokes launch-native-planning tool" "$(cat "$NATIVE_LAUNCHER")" "tools/launch-native-planning.ts"
+check_not_contains "native planning launcher does not execute logical provider" "$(cat "$NATIVE_LAUNCHER")" "native-openrouter --model"
 
 TMUX_LOG="$TMPDIR_TEST/tmux-review.log"
 tmux() {
@@ -96,6 +107,35 @@ agent_launch_autonomous "sess" "review" "/tmp/instr.txt" "native-openrouter" "qw
 
 check_contains "native review dispatches launcher path" "$(cat "$TMUX_LOG")" "$NATIVE_REVIEW_LAUNCHER"
 check_contains "native review launcher invokes review flow tool" "$(cat "$NATIVE_REVIEW_LAUNCHER")" "tools/launch-native-review.ts"
+check_not_contains "native review launcher does not execute logical provider" "$(cat "$NATIVE_REVIEW_LAUNCHER")" "native-openrouter --model"
+
+TMUX_LOG="$TMPDIR_TEST/tmux-coding.log"
+tmux() {
+  printf '%s\n' "$*" >> "$TMUX_LOG"
+}
+CODING_PROMPT="/tmp/wavemill-HOK-2516-coding-prompt.txt"
+CODING_LAUNCHER="/tmp/sess-HOK-2516-autonomous-launcher.sh"
+rm -f "$CODING_LAUNCHER"
+REPO_DIR="$REPO_DIR" \
+agent_launch_autonomous "sess" "@95" "$CODING_PROMPT" "codex" "gpt-5.4" "HOK-2516"
+
+check_contains "tmux id coding prompt dispatches codex launcher" "$(cat "$TMUX_LOG")" "$CODING_LAUNCHER"
+check_contains "coding launcher normalizes phase from prompt" "$(cat "$CODING_LAUNCHER")" "export WAVEMILL_PHASE='coding'"
+check_contains "coding launcher uses effective coder route" "$(cat "$CODING_LAUNCHER")" "codex exec --model gpt-5.4"
+check_not_contains "coding launcher does not execute native provider" "$(cat "$CODING_LAUNCHER")" "native-openrouter"
+
+BAD_NATIVE_LAUNCHER="/tmp/sess-HOK-2517-autonomous-launcher.sh"
+rm -f "$BAD_NATIVE_LAUNCHER"
+if REPO_DIR="$REPO_DIR" agent_launch_autonomous "sess" "@96" "/tmp/instr.txt" "native-openrouter" "qwen-3-coder" "HOK-2517" 2>"$TMPDIR_TEST/bad-native.err"; then
+  fail "native launch fails closed when phase cannot be normalized"
+else
+  pass "native launch fails closed when phase cannot be normalized"
+fi
+if [[ -f "$BAD_NATIVE_LAUNCHER" ]]; then
+  fail "invalid native phase does not write launcher"
+else
+  pass "invalid native phase does not write launcher"
+fi
 
 unset -f agent_validate_phase_launch
 source "$ADAPTERS"

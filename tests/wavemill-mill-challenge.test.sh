@@ -65,6 +65,50 @@ else
 fi
 
 echo ""
+echo "=== Challenge Phase-Specific Agent Persistence Guards ==="
+
+CHALLENGE_PERSISTENCE_BLOCK="$(awk '
+  /if \[\[ "\$challenge_mode" == "challenge" \]\]; then/ { capture=1 }
+  capture { print }
+  /FINAL_LAUNCH_ARGS\+=\("\$challenger_key\|\$challenger_slug\|\$TITLE"\)/ && capture { exit }
+' "$MILL_SCRIPT")"
+
+if [[ -n "$CHALLENGE_PERSISTENCE_BLOCK" ]]; then
+  check_contains "startup challenge extracts primary planner agent" "$CHALLENGE_PERSISTENCE_BLOCK" 'entries[0].plannerAgent'
+  check_contains "startup challenge extracts challenger planner agent" "$CHALLENGE_PERSISTENCE_BLOCK" 'entries[1].plannerAgent'
+  check_contains "startup primary task agent starts as planner agent" "$CHALLENGE_PERSISTENCE_BLOCK" 'TASK_AGENT_BY_ISSUE["$ISSUE"]="${primary_entry_planner_agent:-${primary_agent:-$rec_agent}}"'
+  check_contains "startup challenger task agent starts as planner agent" "$CHALLENGE_PERSISTENCE_BLOCK" 'TASK_AGENT_BY_ISSUE["$challenger_key"]="${challenger_entry_planner_agent:-${challenger_agent:-$AGENT_CMD}}"'
+else
+  fail "could not extract startup challenge persistence block"
+fi
+
+RUNTIME_SAVE_BLOCK="$(awk '
+  /# Save to state ledger/ { capture=1 }
+  capture { print }
+  /# Verify agent was saved correctly/ && capture { exit }
+' "$MILL_SCRIPT")"
+
+if [[ -n "$RUNTIME_SAVE_BLOCK" ]]; then
+  check_contains "runtime primary state saves planner agent for planning phase" "$RUNTIME_SAVE_BLOCK" '"${planner_agent:-$task_agent_cmd}"'
+  check_contains "runtime challenger state saves planner agent for planning phase" "$RUNTIME_SAVE_BLOCK" '"${challenger_planner_agent:-$challenger_agent}"'
+else
+  fail "could not extract runtime state save block"
+fi
+
+CODING_HANDOFF_BLOCK="$(awk '
+  /if ! coder_agent="\$\(agent_resolve_from_model "\$coder_launch_model" "coding"\)"; then/ { capture=1 }
+  capture { print }
+  /launch_coding_phase "\$ISSUE"/ && capture { exit }
+' "$MILL_SCRIPT")"
+
+if [[ -n "$CODING_HANDOFF_BLOCK" ]]; then
+  check_contains "coding handoff updates task agent to coder" "$CODING_HANDOFF_BLOCK" '.tasks[$issue].agent = $agent'
+  check_contains "coding handoff writes resolved coder agent" "$CODING_HANDOFF_BLOCK" '--arg agent "$coder_agent"'
+else
+  fail "could not extract coding handoff block"
+fi
+
+echo ""
 echo "=== Challenge Expanded-Route Refresh Full Routing Persistence ==="
 
 # Extract the block that handles refreshed_source == expanded in the monitor path
