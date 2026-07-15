@@ -2365,7 +2365,7 @@ test_completed_external_dead_pane_triggers_cleanup() {
   check_eq "dead pane: no active window count retained" "0" "$(kv_value "$tick" active_count)"
 }
 
-test_coding_pane_divergence_idle_pane_different_slug_via_marker_needs_user() {
+test_coding_pane_divergence_idle_pane_ignores_stale_unrelated_marker() {
   local slug="pane-divergence-misplaced-marker"
   local issue="HOK-2402-DIV-MARKER"
   local repo tick feature_dir other_feature_dir
@@ -2374,7 +2374,7 @@ test_coding_pane_divergence_idle_pane_different_slug_via_marker_needs_user() {
   harness_setup_coding_state "$repo" "$slug" "running"
   feature_dir="$repo/features/$slug"
 
-  # Simulate: pane completed a different task — its features dir exists with a completion marker
+  # Simulate: a reused worktree contains a stale completion marker for an unrelated task.
   other_feature_dir="$repo/features/other-task-slug"
   mkdir -p "$other_feature_dir"
   touch "$other_feature_dir/.coding-complete"
@@ -2383,15 +2383,11 @@ test_coding_pane_divergence_idle_pane_different_slug_via_marker_needs_user() {
 
   check_eq "div marker: phase remains coding" "coding" "$(kv_value "$tick" phase)"
   check_eq "div marker: coding stage stays running" "running" "$(harness_read_stage_status "$repo" "$slug" coding)"
-  check_eq "div marker: needs-user attention set" "needs-user" "$(kv_value "$tick" attention)"
+  check_eq "div marker: attention stays clear" "clear" "$(kv_value "$tick" attention)"
   check_eq "div marker: task remains active" "1" "$(kv_value "$tick" active_count)"
-  check_file_exists "div marker: divergence audit written" "$feature_dir/.coding-pane-divergence.json"
-  check_file_exists "div marker: announce dedupe marker written" "$feature_dir/.coding-pane-divergence-detected"
-  check_eq "div marker: audit expectedSlug matches controller slug" "$slug" "$(jq -r '.expectedSlug' "$feature_dir/.coding-pane-divergence.json")"
-  check_eq "div marker: audit observedSlug matches other slug" "other-task-slug" "$(jq -r '.observedSlug' "$feature_dir/.coding-pane-divergence.json")"
-  check_eq "div marker: audit observedSource is misplaced_marker" "misplaced_marker" "$(jq -r '.observedSource' "$feature_dir/.coding-pane-divergence.json")"
-  check_contains "div marker: warning log references expected slug" "$(kv_value "$tick" warn_output)" "$slug"
-  check_contains "div marker: warning log references observed slug" "$(kv_value "$tick" warn_output)" "other-task-slug"
+  check_file_absent "div marker: no divergence audit written" "$feature_dir/.coding-pane-divergence.json"
+  check_file_absent "div marker: no announce marker written" "$feature_dir/.coding-pane-divergence-detected"
+  check_not_contains "div marker: no stale-marker warning" "$(kv_value "$tick" warn_output)" "other-task-slug"
 }
 
 test_coding_pane_divergence_idle_pane_different_slug_via_pane_tail_needs_user() {
@@ -2479,17 +2475,24 @@ test_coding_pane_divergence_same_slug_marker_still_recovers() {
 test_coding_pane_divergence_deduplicates_on_repeat_ticks() {
   local slug="pane-divergence-dedupe"
   local issue="HOK-2402-DIV-DEDUP"
-  local repo tick1 tick2 feature_dir other_dir
+  local repo tick1 tick2 feature_dir overrides
   repo="$(harness_init_repo "$slug")"
   harness_setup_runtime_artifacts "$repo"
   harness_setup_coding_state "$repo" "$slug" "running"
   feature_dir="$repo/features/$slug"
-  other_dir="$repo/features/another-task"
-  mkdir -p "$other_dir"
-  touch "$other_dir/.coding-complete"
+  overrides='
+    CURRENT_PHASE="coding"
+    tmux() {
+      if [[ "${1:-}" == "capture-pane" ]]; then
+        printf "%s\n" "Created features/another-task/.coding-complete"
+        return 0
+      fi
+      return 1
+    }
+  '
 
-  tick1="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
-  tick2="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
+  tick1="$(harness_run_tick "$repo" "$slug" "$issue" "$overrides")"
+  tick2="$(harness_run_tick "$repo" "$slug" "$issue" "$overrides")"
 
   check_eq "div dedupe: tick 1 sets needs-user" "needs-user" "$(kv_value "$tick1" attention)"
   check_contains "div dedupe: tick 1 emits warning" "$(kv_value "$tick1" warn_output)" "another-task"
@@ -2553,7 +2556,7 @@ test_plan_stage_challenge_honors_phase_config_coder
 test_implementation_stage_challenge_applies_override
 test_missing_challenge_stage_fails_safe_to_phase_config
 test_completed_external_dead_pane_triggers_cleanup
-test_coding_pane_divergence_idle_pane_different_slug_via_marker_needs_user
+test_coding_pane_divergence_idle_pane_ignores_stale_unrelated_marker
 test_coding_pane_divergence_idle_pane_different_slug_via_pane_tail_needs_user
 test_coding_pane_divergence_fresh_working_hook_keeps_waiting
 test_coding_pane_divergence_same_slug_marker_still_recovers
