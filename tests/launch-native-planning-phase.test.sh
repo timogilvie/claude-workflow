@@ -90,6 +90,8 @@ agent_launch_autonomous "sess" "planning" "/tmp/instr.txt" "native-openrouter" "
 
 check_contains "native branch dispatches launcher path" "$(cat "$TMUX_LOG")" "$NATIVE_LAUNCHER"
 check_contains "native launcher invokes launch-native-planning tool" "$(cat "$NATIVE_LAUNCHER")" "tools/launch-native-planning.ts"
+check_contains "native launcher exports linear issue id" "$(cat "$NATIVE_LAUNCHER")" "export WAVEMILL_LINEAR_ISSUE='HOK-2313'"
+check_contains "native launcher passes linear issue id" "$(cat "$NATIVE_LAUNCHER")" "--linear-issue 'HOK-2313'"
 check_not_contains "native planning launcher does not execute logical provider" "$(cat "$NATIVE_LAUNCHER")" "native-openrouter --model"
 
 TMUX_LOG="$TMPDIR_TEST/tmux-review.log"

@@ -1735,6 +1735,7 @@ agent_launch_autonomous() {
 
   local native_phase="$launch_phase"
   local native_model=""
+  local linear_issue="${WAVEMILL_LINEAR_ISSUE:-$issue}"
   local worktree_dir="${feature_dir%/features/*}"
   local feature_slug="${WAVEMILL_FEATURE_SLUG:-${WAVEMILL_SLUG:-}}"
   if agent_is_native_cmd "$agent_cmd"; then
@@ -1764,6 +1765,7 @@ agent_launch_autonomous() {
 set -euo pipefail
 export WAVEMILL_SESSION='$session'
 export WAVEMILL_ISSUE='$issue'
+export WAVEMILL_LINEAR_ISSUE='$linear_issue'
 export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
 export WAVEMILL_PHASE='planning'
 export WAVEMILL_RESOLVED_MODEL='${native_model:-$model}'
@@ -1779,7 +1781,7 @@ export WAVEMILL_TITLE='${WAVEMILL_TITLE:-}'
 if [[ -n '$issue' ]]; then
   printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
 fi
-npx tsx '$repo_dir/tools/launch-native-planning.ts' --session '$session' --issue '$issue' --slug '$feature_slug' --wt-dir '$worktree_dir' --repo-dir '$repo_dir'
+npx tsx '$repo_dir/tools/launch-native-planning.ts' --session '$session' --issue '$issue' --linear-issue '$linear_issue' --slug '$feature_slug' --wt-dir '$worktree_dir' --repo-dir '$repo_dir'
 native_rc=\$?
 if [[ -n "\${STATUS_LOG_FILE:-}" ]]; then
   printf '%s\n' "[wavemill] native planning exit code native=\${native_rc} issue='$issue'" >> "\$STATUS_LOG_FILE" 2>/dev/null || true
@@ -1794,6 +1796,7 @@ LAUNCHEOF
 set -euo pipefail
 export WAVEMILL_SESSION='$session'
 export WAVEMILL_ISSUE='$issue'
+export WAVEMILL_LINEAR_ISSUE='$linear_issue'
 export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
 export WAVEMILL_PHASE='review'
 export WAVEMILL_RESOLVED_MODEL='${native_model:-$model}'
@@ -1856,6 +1859,7 @@ LAUNCHEOF
 set -euo pipefail
 export WAVEMILL_SESSION='$session'
 export WAVEMILL_ISSUE='$issue'
+export WAVEMILL_LINEAR_ISSUE='$linear_issue'
 export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
 export WAVEMILL_PHASE='$phase_env'
 export WAVEMILL_RESOLVED_MODEL='${resolved_model:-$model}'
@@ -2173,6 +2177,7 @@ agent_launch_interactive() {
   local launcher_cmd=""
   local native_phase="$launch_phase"
   local native_model=""
+  local linear_issue="${WAVEMILL_LINEAR_ISSUE:-$issue}"
   local worktree_dir="${feature_dir%/features/*}"
   local feature_slug="${WAVEMILL_FEATURE_SLUG:-${WAVEMILL_SLUG:-}}"
 
@@ -2202,6 +2207,7 @@ agent_launch_interactive() {
 set -euo pipefail
 export WAVEMILL_SESSION='$session'
 export WAVEMILL_ISSUE='$issue'
+export WAVEMILL_LINEAR_ISSUE='$linear_issue'
 export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
 export WAVEMILL_PHASE='planning'
 export WAVEMILL_RESOLVED_MODEL='${native_model:-$model}'
@@ -2217,7 +2223,7 @@ export WAVEMILL_TITLE='${WAVEMILL_TITLE:-}'
 if [[ -n '$issue' ]]; then
   printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
 fi
-npx tsx '$repo_dir/tools/launch-native-planning.ts' --session '$session' --issue '$issue' --slug '$feature_slug' --wt-dir '$worktree_dir' --repo-dir '$repo_dir'
+npx tsx '$repo_dir/tools/launch-native-planning.ts' --session '$session' --issue '$issue' --linear-issue '$linear_issue' --slug '$feature_slug' --wt-dir '$worktree_dir' --repo-dir '$repo_dir'
 echo "[wavemill] Agent exited (\$?)"
 LAUNCHEOF
           ;;
@@ -2227,6 +2233,7 @@ LAUNCHEOF
 set -euo pipefail
 export WAVEMILL_SESSION='$session'
 export WAVEMILL_ISSUE='$issue'
+export WAVEMILL_LINEAR_ISSUE='$linear_issue'
 export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
 export WAVEMILL_PHASE='review'
 export WAVEMILL_RESOLVED_MODEL='${native_model:-$model}'
