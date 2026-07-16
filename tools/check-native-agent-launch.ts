@@ -5,6 +5,10 @@ import { join, resolve } from 'node:path';
 import { getNativeAgentConfig } from '../shared/lib/config.ts';
 import { isPatchCodingEnabled } from '../shared/lib/native-agent/coding-gate.ts';
 import { resolveNativeAgentProviders } from '../shared/lib/native-agent/providers.ts';
+import {
+  resolveLaunchPriorityModel,
+  resolveOpenRouterIdFromWavemillAlias,
+} from '../shared/lib/openrouter-catalog.ts';
 
 type NativeAgent = 'native-openai' | 'native-openrouter';
 type NativePhase = 'planning' | 'coding' | 'review';
@@ -22,6 +26,23 @@ function fail(reason: string): never {
 
 function providerNameForAgent(agent: NativeAgent): 'openai' | 'openrouter' {
   return agent === 'native-openai' ? 'openai' : 'openrouter';
+}
+
+/**
+ * Canonicalize an OpenRouter model identifier so that the wavemill alias the
+ * router emits (e.g. "qwen-3-coder") and the OpenRouter slug stored in
+ * nativeAgent config (e.g. "qwen/qwen3-coder") compare equal. The launcher and
+ * certification gate already normalize both forms; this keeps the pre-launch
+ * probe consistent so a valid alias is not rejected as "not configured".
+ */
+function canonicalModelId(providerName: 'openai' | 'openrouter', modelId: string): string {
+  if (providerName !== 'openrouter') {
+    return modelId;
+  }
+  if (modelId.includes('/')) {
+    return modelId;
+  }
+  return resolveOpenRouterIdFromWavemillAlias(modelId) ?? modelId;
 }
 
 function main(): void {
@@ -66,8 +87,10 @@ function main(): void {
   }
 
   const entries = resolveNativeAgentProviders(repoDir, { phase });
+  const requestedModel = canonicalModelId(providerName, model);
   const entry = entries.find((candidate) => (
-    candidate.providerName === providerName && candidate.modelId === model
+    candidate.providerName === providerName
+    && canonicalModelId(providerName, candidate.modelId) === requestedModel
   ));
 
   if (!entry) {
@@ -76,6 +99,16 @@ function main(): void {
 
   if (entry.status !== 'ready') {
     fail(entry.reason);
+  }
+
+  // Role-eligibility gate: reject models that are configured and ready but not
+  // eligible for this phase (e.g. a coding-only model routed to planning). Models
+  // absent from the launch-priority list carry no eligibility metadata, so they
+  // are allowed through rather than blocked on missing data.
+  const launchPriorityModel = resolveLaunchPriorityModel(model);
+  if (launchPriorityModel && !launchPriorityModel.roleEligibility.includes(phase)) {
+    const eligibleRoles = launchPriorityModel.roleEligibility.join(', ') || 'none';
+    fail(`native provider ${providerName}/${model} is not eligible for ${phase} (eligible roles: ${eligibleRoles})`);
   }
 
   process.stdout.write(JSON.stringify({
