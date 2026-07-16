@@ -171,6 +171,24 @@ export function resolveOpenRouterIdFromWavemillAlias(
 }
 
 /**
+ * Look up a launch-priority model by either its wavemill alias
+ * (e.g. "qwen-3-coder") or its OpenRouter slug (e.g. "qwen/qwen3-coder").
+ * Returns null when the identifier is not present in the launch-priority list.
+ */
+export function resolveLaunchPriorityModel(
+  modelIdOrAlias: string | null | undefined,
+  fixturePath?: string,
+): LaunchPriorityModel | null {
+  if (typeof modelIdOrAlias !== 'string' || modelIdOrAlias.trim().length === 0) {
+    return null;
+  }
+
+  const id = modelIdOrAlias.trim();
+  return loadLaunchPriorityList(fixturePath)
+    .find((entry) => entry.wavemillAlias === id || entry.openrouterId === id) ?? null;
+}
+
+/**
  * Hash the launch-priority fixture for snapshot auditability. Hashes the
  * raw file bytes so any whitespace or ordering change yields a new hash.
  */
