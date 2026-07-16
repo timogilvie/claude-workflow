@@ -5596,7 +5596,7 @@ _launch_agent_in_pane() {
   local agent_flags=""
   local abort_check_cmd=""
   local feature_dir=""
-  local esc_session esc_issue esc_slug
+  local esc_session esc_issue esc_slug esc_linear_issue linear_issue
 
   [[ "$agent_cmd" == "codex" ]] && agent_flags="--dangerously-bypass-approvals-and-sandbox"
   if [[ -n "$slug" ]]; then
@@ -5605,14 +5605,20 @@ _launch_agent_in_pane() {
   fi
 
   # Export wavemill context environment variables for hook protocol
+  if declare -F get_linear_issue_id >/dev/null 2>&1; then
+    linear_issue="$(get_linear_issue_id "$issue" 2>/dev/null || true)"
+  fi
+  [[ -n "$linear_issue" ]] || linear_issue="$issue"
   esc_session=${session//\'/\'\\\'\'}
   esc_issue=${issue//\'/\'\\\'\'}
   esc_slug=${slug//\'/\'\\\'\'}
+  esc_linear_issue=${linear_issue//\'/\'\\\'\'}
   tmux send-keys -t "$target" \
-    "export WAVEMILL_SESSION='$esc_session' WAVEMILL_ISSUE='$esc_issue' WAVEMILL_SLUG='$esc_slug' WAVEMILL_FEATURE_SLUG='$esc_slug' WAVEMILL_FEATURE_DIR='$feature_dir'" C-m
+    "export WAVEMILL_SESSION='$esc_session' WAVEMILL_ISSUE='$esc_issue' WAVEMILL_LINEAR_ISSUE='$esc_linear_issue' WAVEMILL_SLUG='$esc_slug' WAVEMILL_FEATURE_SLUG='$esc_slug' WAVEMILL_FEATURE_DIR='$feature_dir'" C-m
 
   export WAVEMILL_FEATURE_SLUG="$slug"
   export WAVEMILL_FEATURE_DIR="$feature_dir"
+  export WAVEMILL_LINEAR_ISSUE="$linear_issue"
 
   agent_launch_interactive "$session" "$window" "$prompt_file" "$agent_cmd" "$model" "$agent_flags" "$abort_check_cmd" "$issue"
 }

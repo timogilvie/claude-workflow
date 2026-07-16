@@ -32,6 +32,7 @@ async function main(): Promise<void> {
     baseBranch: readOption('base-branch') ?? process.env.WAVEMILL_BASE_BRANCH,
     title: readOption('title') ?? process.env.WAVEMILL_TITLE,
     issueContext: readOption('issue-context') ?? process.env.WAVEMILL_ISSUE_CONTEXT,
+    linearIssue: readOption('linear-issue') ?? process.env.WAVEMILL_LINEAR_ISSUE,
   });
 }
 

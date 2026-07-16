@@ -55,6 +55,7 @@ export interface LaunchNativePlanningOptions {
   baseBranch?: string;
   title?: string;
   issueContext?: string;
+  linearIssue?: string;
   taskPacketPath?: string;
   routeOutputPath?: string;
   planPath?: string;
@@ -110,6 +111,7 @@ function execTsx(repoDir: string, args: string[]): string {
 function ensureTaskPacket(
   repoDir: string,
   issue: string,
+  linearIssue: string | undefined,
   taskPacketPath: string,
   runTsxCommand: (args: string[]) => string,
 ): void {
@@ -118,14 +120,36 @@ function ensureTaskPacket(
     return;
   }
 
+  const expandIssue = normalizeLinearIssueIdentifier(linearIssue) ?? normalizeLinearIssueIdentifier(issue);
+  if (!expandIssue) {
+    throw new Error(`Cannot expand task packet for invalid Linear issue identifier: ${issue}`);
+  }
+
   runTsxCommand([
     'tools/expand-issue.ts',
-    issue,
+    expandIssue,
     '--output',
     taskPacketPath,
     '--repo-path',
     repoDir,
   ]);
+}
+
+function normalizeLinearIssueIdentifier(issue: string | undefined): string | null {
+  const trimmed = issue?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const direct = trimmed.match(/^[A-Z][A-Z0-9]*-[0-9]+$/);
+  if (direct) {
+    return trimmed;
+  }
+  const challenger = trimmed.match(/^([A-Z][A-Z0-9]*-[0-9]+)_c$/);
+  if (challenger?.[1]) {
+    return challenger[1];
+  }
+  const url = trimmed.match(/^https?:\/\/linear\.app\/[^/]+\/issue\/([A-Z][A-Z0-9]*-[0-9]+)(?:[/?#].*)?$/);
+  return url?.[1] ?? null;
 }
 
 function routeTaskPacket(
@@ -267,7 +291,7 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
 
   try {
     mkdirSync(featureDir, { recursive: true });
-    ensureTaskPacket(options.repoDir, options.issue, taskPacketPath, runTsxCommand);
+    ensureTaskPacket(options.repoDir, options.issue, options.linearIssue, taskPacketPath, runTsxCommand);
     routeTaskPacket(taskPacketPath, routeOutputPath, options.repoDir, runTsxCommand);
     maybeWriteMigrationMarker(taskPacketPath, migrationMarkerPath);
 

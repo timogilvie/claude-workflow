@@ -70,6 +70,36 @@ function stubRunTsxCommand(): (args: string[]) => string {
   };
 }
 
+function stubRunTsxCommandWithExpansion(expandedIssues: string[]): (args: string[]) => string {
+  return (args: string[]) => {
+    const command = args[0];
+    const outputIndex = args.indexOf('--output');
+    if (command === 'tools/expand-issue.ts') {
+      expandedIssues.push(args[1] ?? '');
+      assert.ok(outputIndex >= 0, 'expand-issue must receive --output');
+      writeFileSync(args[outputIndex + 1]!, [
+        '# Task Packet',
+        '## 1. Objective',
+        'Plan the challenger workflow.',
+        '## Success Criteria',
+        '- packet expands from the canonical Linear issue',
+      ].join('\n'));
+      return '';
+    }
+    if (command === 'tools/route-task.ts') {
+      assert.ok(outputIndex >= 0, 'route-task must receive --output');
+      writeFileSync(args[outputIndex + 1]!, `${JSON.stringify({
+        planner: 'gpt-5.4',
+        coder: 'gpt-5.4',
+        reviewer: 'gpt-5.4',
+        planDepth: 'light',
+      }, null, 2)}\n`);
+      return '';
+    }
+    throw new Error(`unexpected tsx command: ${args.join(' ')}`);
+  };
+}
+
 function writeNativeConfig(
   repoDir: string,
   config: Record<string, unknown>,
@@ -153,6 +183,77 @@ describe('launchNativePlanning', () => {
       assert.equal(hook.agent, 'native');
       assert.equal(hook.event, 'process_exit');
       assert.equal(hook.detail, 'planning_completed');
+    } finally {
+      cleanup(wtDir);
+    }
+  });
+
+  it('expands challenger task packets with the canonical Linear issue id', async () => {
+    const { wtDir, featureDir, packetPath } = setupWorktree();
+    const api = uniqueApi('challenger-linear-issue');
+    const expandedIssues: string[] = [];
+    writeFileSync(packetPath, 'raw challenger context without task packet sections\n');
+
+    try {
+      registerScriptedPiProvider({
+        api,
+        turns: [{
+          content: [{
+            type: 'text',
+            text: '# Challenger Plan\n## Release Readiness\n- **database_change_risk**: none',
+          }],
+          stopReason: 'stop',
+        }],
+      });
+
+      await launchNativePlanning({
+        session: 'sess',
+        issue: 'HOK-2464_c',
+        linearIssue: 'HOK-2464',
+        slug: 'demo',
+        wtDir,
+        repoDir: REPO_DIR,
+        title: 'Plan challenger',
+        loopModelOverride: scriptedModel(api),
+        runTsxCommand: stubRunTsxCommandWithExpansion(expandedIssues),
+      });
+
+      assert.deepEqual(expandedIssues, ['HOK-2464']);
+      assert.match(readFileSync(join(featureDir, 'plan.md'), 'utf-8'), /# Challenger Plan/);
+    } finally {
+      cleanup(wtDir);
+    }
+  });
+
+  it('falls back from a synthetic challenger id to the root Linear issue id during expansion', async () => {
+    const { wtDir, packetPath } = setupWorktree();
+    const api = uniqueApi('challenger-suffix-fallback');
+    const expandedIssues: string[] = [];
+    writeFileSync(packetPath, 'raw challenger context without task packet sections\n');
+
+    try {
+      registerScriptedPiProvider({
+        api,
+        turns: [{
+          content: [{
+            type: 'text',
+            text: '# Challenger Plan\n## Release Readiness\n- **database_change_risk**: none',
+          }],
+          stopReason: 'stop',
+        }],
+      });
+
+      await launchNativePlanning({
+        session: 'sess',
+        issue: 'HOK-2464_c',
+        slug: 'demo',
+        wtDir,
+        repoDir: REPO_DIR,
+        loopModelOverride: scriptedModel(api),
+        runTsxCommand: stubRunTsxCommandWithExpansion(expandedIssues),
+      });
+
+      assert.deepEqual(expandedIssues, ['HOK-2464']);
     } finally {
       cleanup(wtDir);
     }
