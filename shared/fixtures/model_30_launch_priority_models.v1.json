@@ -100,7 +100,7 @@
     },
     {
       "wavemillAlias": "deepseek-v3",
-      "openrouterId": "deepseek/deepseek-chat-v3",
+      "openrouterId": "deepseek/deepseek-v3.2",
       "family": "deepseek",
       "status": "active",
       "priorityTier": 1,
@@ -132,7 +132,7 @@
     },
     {
       "wavemillAlias": "qwen-3-235b",
-      "openrouterId": "qwen/qwen3-235b-a22b-instruct",
+      "openrouterId": "qwen/qwen3-235b-a22b-2507",
       "family": "qwen",
       "status": "watchlist",
       "priorityTier": 2,
@@ -228,7 +228,7 @@
     },
     {
       "wavemillAlias": "mistral-large-2",
-      "openrouterId": "mistralai/mistral-large-2411",
+      "openrouterId": "mistralai/mistral-large-2407",
       "family": "mistral",
       "status": "active",
       "priorityTier": 2,
@@ -236,7 +236,7 @@
     },
     {
       "wavemillAlias": "mistral-medium-3",
-      "openrouterId": "mistralai/mistral-medium-3",
+      "openrouterId": "mistralai/mistral-medium-3-5",
       "family": "mistral",
       "status": "watchlist",
       "priorityTier": 3,
@@ -244,7 +244,7 @@
     },
     {
       "wavemillAlias": "devstral-small",
-      "openrouterId": "mistralai/devstral-small",
+      "openrouterId": "mistralai/mistral-small-2603",
       "family": "mistral",
       "status": "active",
       "priorityTier": 2,
@@ -252,7 +252,7 @@
     },
     {
       "wavemillAlias": "devstral-medium",
-      "openrouterId": "mistralai/devstral-medium",
+      "openrouterId": "mistralai/mistral-medium-3-5",
       "family": "mistral",
       "status": "watchlist",
       "priorityTier": 2,

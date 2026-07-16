@@ -1,0 +1,106 @@
+{
+  "schemaVersion": "1",
+  "generatedAt": "2026-07-16T14:40:16.269Z",
+  "issue": "HOK-2527",
+  "model": {
+    "wavemillAlias": "deepseek-r1",
+    "openrouterId": "deepseek/deepseek-r1",
+    "family": "deepseek",
+    "status": "active",
+    "priorityTier": 1,
+    "roleEligibility": [
+      "planning",
+      "coding",
+      "review"
+    ]
+  },
+  "target": 3,
+  "persist": true,
+  "checks": [
+    {
+      "name": "fixture",
+      "status": "ok",
+      "detail": "deepseek-r1 is present in the launch-priority fixture as deepseek/deepseek-r1."
+    },
+    {
+      "name": "registry",
+      "status": "ok",
+      "detail": "deepseek-r1 is present in the effective model registry."
+    },
+    {
+      "name": "provider-config",
+      "status": "ok",
+      "detail": "deepseek-r1 is allowlisted in providers.openrouter.models."
+    },
+    {
+      "name": "challenge-pool",
+      "status": "ok",
+      "detail": "deepseek-r1 is present in challenge.models."
+    },
+    {
+      "name": "router-pools",
+      "status": "ok",
+      "detail": "deepseek-r1 is present in all eligible router role pools."
+    }
+  ],
+  "smoke": {
+    "dryRun": [
+      {
+        "modelId": "deepseek-r1",
+        "family": "deepseek",
+        "status": "ok",
+        "costUsd": 0.000172
+      }
+    ],
+    "live": [
+      {
+        "modelId": "deepseek-r1",
+        "family": "deepseek",
+        "status": "ok",
+        "costUsd": 0.0002702
+      }
+    ]
+  },
+  "eval": {
+    "plannedRuns": 3,
+    "executedRuns": 3,
+    "persistedIds": [
+      "acf9c1e0-c341-4668-8eb9-e0ce3bdad90f",
+      "77aa9184-0151-48d1-9a6c-0ed80fef397d",
+      "42798cbd-7cc5-46ec-9522-20cbd6238452"
+    ]
+  },
+  "audit": {
+    "zeroEvidenceBefore": true,
+    "zeroEvidenceAfter": false,
+    "roles": [
+      {
+        "role": "planning",
+        "before": 0,
+        "after": 3,
+        "target": 3,
+        "gapBefore": 3,
+        "status": "at-target"
+      },
+      {
+        "role": "coding",
+        "before": 0,
+        "after": 3,
+        "target": 3,
+        "gapBefore": 3,
+        "status": "at-target"
+      },
+      {
+        "role": "review",
+        "before": 0,
+        "after": 3,
+        "target": 3,
+        "gapBefore": 3,
+        "status": "at-target"
+      }
+    ]
+  },
+  "reportPath": "/Users/timothyogilvie/Dropbox/wavemill/.wavemill/audits/certifications/deepseek-r1.json",
+  "auditPath": "/Users/timothyogilvie/Dropbox/wavemill/.wavemill/audits/launch-priority-coverage.json",
+  "summary": "Certified deepseek-r1: planning 0->3/3 (at-target); coding 0->3/3 (at-target); review 0->3/3 (at-target). Dry smoke: deepseek-r1:ok. Live smoke: deepseek-r1:ok. Eval runs: 3/3. Zero-evidence after: no."
+}

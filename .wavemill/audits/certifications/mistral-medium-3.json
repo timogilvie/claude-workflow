@@ -1,0 +1,88 @@
+{
+  "schemaVersion": "1",
+  "generatedAt": "2026-07-16T15:17:32.492Z",
+  "issue": "HOK-2533",
+  "model": {
+    "wavemillAlias": "mistral-medium-3",
+    "openrouterId": "mistralai/mistral-medium-3-5",
+    "family": "mistral",
+    "status": "watchlist",
+    "priorityTier": 3,
+    "roleEligibility": [
+      "coding"
+    ]
+  },
+  "target": 3,
+  "persist": true,
+  "checks": [
+    {
+      "name": "fixture",
+      "status": "ok",
+      "detail": "mistral-medium-3 is present in the launch-priority fixture as mistralai/mistral-medium-3-5."
+    },
+    {
+      "name": "registry",
+      "status": "ok",
+      "detail": "mistral-medium-3 is present in the effective model registry."
+    },
+    {
+      "name": "provider-config",
+      "status": "ok",
+      "detail": "mistral-medium-3 is allowlisted in providers.openrouter.models."
+    },
+    {
+      "name": "challenge-pool",
+      "status": "ok",
+      "detail": "mistral-medium-3 is present in challenge.models."
+    },
+    {
+      "name": "router-pools",
+      "status": "ok",
+      "detail": "mistral-medium-3 is present in all eligible router role pools."
+    }
+  ],
+  "smoke": {
+    "dryRun": [
+      {
+        "modelId": "mistral-medium-3",
+        "family": "mistral",
+        "status": "ok",
+        "costUsd": 0.000128
+      }
+    ],
+    "live": [
+      {
+        "modelId": "mistral-medium-3",
+        "family": "mistral",
+        "status": "ok",
+        "costUsd": 0.0002565
+      }
+    ]
+  },
+  "eval": {
+    "plannedRuns": 3,
+    "executedRuns": 3,
+    "persistedIds": [
+      "3a4a7415-f861-4604-8174-5ded85d680d0",
+      "0bbbc4b5-857c-4927-ac2b-558212899b0c",
+      "54b82438-5be7-42f7-b614-171b871d7b18"
+    ]
+  },
+  "audit": {
+    "zeroEvidenceBefore": true,
+    "zeroEvidenceAfter": false,
+    "roles": [
+      {
+        "role": "coding",
+        "before": 0,
+        "after": 3,
+        "target": 3,
+        "gapBefore": 3,
+        "status": "at-target"
+      }
+    ]
+  },
+  "reportPath": "/Users/timothyogilvie/Dropbox/wavemill/.wavemill/audits/certifications/mistral-medium-3.json",
+  "auditPath": "/Users/timothyogilvie/Dropbox/wavemill/.wavemill/audits/launch-priority-coverage.json",
+  "summary": "Certified mistral-medium-3: coding 0->3/3 (at-target). Dry smoke: mistral-medium-3:ok. Live smoke: mistral-medium-3:ok. Eval runs: 3/3. Zero-evidence after: no."
+}

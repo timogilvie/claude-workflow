@@ -1,0 +1,88 @@
+{
+  "schemaVersion": "1",
+  "generatedAt": "2026-07-16T14:29:25.533Z",
+  "issue": "HOK-2532",
+  "model": {
+    "wavemillAlias": "qwen-2.5-coder-32b",
+    "openrouterId": "qwen/qwen-2.5-coder-32b-instruct",
+    "family": "qwen",
+    "status": "active",
+    "priorityTier": 1,
+    "roleEligibility": [
+      "coding"
+    ]
+  },
+  "target": 3,
+  "persist": true,
+  "checks": [
+    {
+      "name": "fixture",
+      "status": "ok",
+      "detail": "qwen-2.5-coder-32b is present in the launch-priority fixture as qwen/qwen-2.5-coder-32b-instruct."
+    },
+    {
+      "name": "registry",
+      "status": "ok",
+      "detail": "qwen-2.5-coder-32b is present in the effective model registry."
+    },
+    {
+      "name": "provider-config",
+      "status": "ok",
+      "detail": "qwen-2.5-coder-32b is allowlisted in providers.openrouter.models."
+    },
+    {
+      "name": "challenge-pool",
+      "status": "ok",
+      "detail": "qwen-2.5-coder-32b is present in challenge.models."
+    },
+    {
+      "name": "router-pools",
+      "status": "ok",
+      "detail": "qwen-2.5-coder-32b is present in all eligible router role pools."
+    }
+  ],
+  "smoke": {
+    "dryRun": [
+      {
+        "modelId": "qwen-2.5-coder-32b",
+        "family": "qwen",
+        "status": "ok",
+        "costUsd": 0.000128
+      }
+    ],
+    "live": [
+      {
+        "modelId": "qwen-2.5-coder-32b",
+        "family": "qwen",
+        "status": "ok",
+        "costUsd": 0.00002444
+      }
+    ]
+  },
+  "eval": {
+    "plannedRuns": 3,
+    "executedRuns": 3,
+    "persistedIds": [
+      "e91b99c3-e436-4878-b55d-c6ea5a16d6e7",
+      "a53cb640-f45c-42fc-8839-37ee9b594c83",
+      "0828f821-9784-428f-91f7-bbff1cd3e4a0"
+    ]
+  },
+  "audit": {
+    "zeroEvidenceBefore": true,
+    "zeroEvidenceAfter": false,
+    "roles": [
+      {
+        "role": "coding",
+        "before": 0,
+        "after": 3,
+        "target": 3,
+        "gapBefore": 3,
+        "status": "at-target"
+      }
+    ]
+  },
+  "reportPath": "/Users/timothyogilvie/Dropbox/wavemill/.wavemill/audits/certifications/qwen-2.5-coder-32b.json",
+  "auditPath": "/Users/timothyogilvie/Dropbox/wavemill/.wavemill/audits/launch-priority-coverage.json",
+  "summary": "Certified qwen-2.5-coder-32b: coding 0->3/3 (at-target). Dry smoke: qwen-2.5-coder-32b:ok. Live smoke: qwen-2.5-coder-32b:ok. Eval runs: 3/3. Zero-evidence after: no."
+}

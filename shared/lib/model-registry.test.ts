@@ -198,6 +198,7 @@ describe('model-registry', () => {
       'llama-3.3-70b',
       'llama-4-maverick',
       'mistral-large-2',
+      'mistral-medium-3',
       'qwen-2.5-coder-32b',
       'qwen-3-235b',
       'qwen-3-coder',

@@ -5,6 +5,7 @@ import {
   getScoreBand,
   SCHEMA_VERSION,
   type EvalRecord,
+  type EvalRouting,
   type RoutePrediction,
   type WavemillRouterMeasurementPolicy,
 } from '../../../shared/lib/eval-schema.ts';
@@ -444,6 +445,32 @@ function buildHemRecord(
   modelsAvailable?: string[],
 ): EvalRecord {
   const aggregateScore = score.workflow_success_rate_under_budget;
+  const constrainedModel = modelsAvailable?.length === 1 ? modelsAvailable[0] : undefined;
+  const constrainedRouting: EvalRouting | undefined = constrainedModel
+    ? {
+        planner: {
+          role: 'planner',
+          requestedSelector: { kind: 'pinned', modelId: constrainedModel },
+          resolvedModelId: constrainedModel,
+          sourceLayer: 'wavemill-router-eval',
+          resolutionSource: 'models-available',
+        },
+        coder: {
+          role: 'coder',
+          requestedSelector: { kind: 'pinned', modelId: constrainedModel },
+          resolvedModelId: constrainedModel,
+          sourceLayer: 'wavemill-router-eval',
+          resolutionSource: 'models-available',
+        },
+        reviewer: {
+          role: 'reviewer',
+          requestedSelector: { kind: 'pinned', modelId: constrainedModel },
+          resolvedModelId: constrainedModel,
+          sourceLayer: 'wavemill-router-eval',
+          resolutionSource: 'models-available',
+        },
+      }
+    : undefined;
 
   return {
     id: randomUUID(),
@@ -451,6 +478,7 @@ function buildHemRecord(
     originalPrompt: `Wavemill router eval (${policy})`,
     modelId: score.wavemill_router_scoring.scorer_id,
     modelVersion: 'v1',
+    ...(constrainedModel ? { attempted_model: constrainedModel, model_alias: constrainedModel } : {}),
     score: aggregateScore,
     scoreBand: getScoreBand(aggregateScore).label,
     timeSeconds: null,
@@ -471,6 +499,7 @@ function buildHemRecord(
       repoDir: relative(process.cwd(), repoDir) || '.',
       mintEligibility,
     },
+    ...(constrainedRouting ? { routing: constrainedRouting } : {}),
     taskDescriptor: buildTaskDescriptor({
       originalPrompt: `Wavemill router eval (${policy})`,
       score: aggregateScore,
