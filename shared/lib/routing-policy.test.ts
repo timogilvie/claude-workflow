@@ -273,7 +273,12 @@ describe('routing-policy ranking', () => {
     assert.ok(frontier);
     assert.equal(frontier.viable, false);
     assert.equal(frontier.exclusionReason, 'exceeds-cost-tier');
-    assert.equal(ranked[0].modelId, 'claude-sonnet-5');
+    assert.equal(ranked[0].modelId, 'gpt-5');
+    assert.equal(ranked[0].viable, true);
+
+    const sonnet = ranked.find((candidate) => candidate.modelId === 'claude-sonnet-5');
+    assert.ok(sonnet);
+    assert.equal(sonnet.viable, true);
   });
 
   it('applies minimum quality thresholds after floor and cost checks', () => {
