@@ -15,9 +15,11 @@ import type { AgentContext, WavemillLoopConfig } from './loop.ts';
 import { runWavemillLoop } from './loop.ts';
 import {
   buildNativeProviderResolutionFailureMessage,
+  getNativeProviderApiKey,
   resolveNativeAgentProviders,
   type ReadyNativeProviderEntry,
 } from './providers.ts';
+import { TranscriptWriter } from './transcript.ts';
 import { createReadOnlyTools, READ_ONLY_PATH_FIELDS } from './tools/read-only.ts';
 import { createGitTools, gitAfterToolCall } from './tools/git.ts';
 import { createArtifactTools } from './tools/artifacts.ts';
@@ -39,6 +41,8 @@ const RELEASE_READINESS_STUB = [
   '- **manual_steps**: none',
   '',
 ].join('\n');
+
+const DEFAULT_HELPER_TIMEOUT_MS = 12 * 60 * 1000;
 
 type HookState = 'working' | 'idle' | 'error';
 
@@ -99,13 +103,32 @@ function writeHookStatus(
   renameSync(tmpPath, hookPath);
 }
 
+function helperTimeoutMs(): number {
+  const raw = process.env.WAVEMILL_NATIVE_PLANNING_HELPER_TIMEOUT_MS;
+  if (!raw) {
+    return DEFAULT_HELPER_TIMEOUT_MS;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_HELPER_TIMEOUT_MS;
+}
+
 function execTsx(repoDir: string, args: string[]): string {
-  return execFileSync('npx', ['tsx', ...args], {
-    cwd: repoDir,
-    encoding: 'utf-8',
-    env: process.env,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  try {
+    return execFileSync('npx', ['tsx', ...args], {
+      cwd: repoDir,
+      encoding: 'utf-8',
+      env: process.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: helperTimeoutMs(),
+      killSignal: 'SIGTERM',
+    });
+  } catch (error) {
+    const err = error as Error & { signal?: NodeJS.Signals; killed?: boolean };
+    if (err.signal === 'SIGTERM' || err.killed) {
+      throw new Error(`Native planning helper timed out: npx tsx ${args.join(' ')}`);
+    }
+    throw error;
+  }
 }
 
 function ensureTaskPacket(
@@ -232,6 +255,20 @@ function findFinalAssistantText(messages: AgentMessage[]): string {
   return '';
 }
 
+function findFinalAssistantErrorMessage(messages: AgentMessage[]): string {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if ((message as { role?: string }).role !== 'assistant') {
+      continue;
+    }
+    const errorMessage = (message as AgentTurn).errorMessage?.trim();
+    if (errorMessage) {
+      return errorMessage;
+    }
+  }
+  return '';
+}
+
 function ensureReleaseReadiness(planText: string): string {
   if (/^##\s+Release Readiness\b/m.test(planText)) {
     return planText;
@@ -265,6 +302,15 @@ function cleanupReasonForStopReason(stopReason: string): CleanupReason | null {
   return null;
 }
 
+function makeTranscriptPath(repoDir: string, session: string, issue: string): string {
+  const safeIssue = issue.replace(/[^A-Za-z0-9._-]+/g, '-');
+  const baseDir = process.env.WAVEMILL_RUN_DIR
+    ? join(process.env.WAVEMILL_RUN_DIR, 'native-sessions')
+    : join(repoDir, '.wavemill', 'runs', session, 'native-sessions');
+  mkdirSync(baseDir, { recursive: true });
+  return join(baseDir, `planning-${safeIssue}.jsonl`);
+}
+
 export async function launchNativePlanning(options: LaunchNativePlanningOptions): Promise<{
   planPath: string;
   approvalMarkerPath: string;
@@ -272,6 +318,7 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
   provider: string;
   model: string;
   stopReason: string;
+  transcriptPath: string;
 }> {
   const phase = options.phase ?? 'planning';
   assert.equal(phase, 'planning', 'launchNativePlanning only supports the planning phase');
@@ -287,7 +334,7 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
   const operatingMode = options.operatingMode ?? 'normal';
   const runTsxCommand = options.runTsxCommand ?? ((args: string[]) => execTsx(options.repoDir, args));
 
-    writeHookStatus(hookPath, 'working', 'launch_native_planning', options.loopModelOverride?.name ?? 'native', 'native');
+  writeHookStatus(hookPath, 'working', 'launch_native_planning', options.loopModelOverride?.name ?? 'native', 'native');
 
   try {
     mkdirSync(featureDir, { recursive: true });
@@ -316,7 +363,24 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
 
     const taskPacket = readFileSync(taskPacketPath, 'utf-8');
     const { content: systemPrompt, promptRef } = loadNativePhasePrompt(options.repoDir);
-    const model = options.loopModelOverride ?? readyProvider!.model;
+    const apiKey = readyProvider ? getNativeProviderApiKey(readyProvider) : undefined;
+    const model = options.loopModelOverride ?? {
+      ...readyProvider!.model,
+      headers: {
+        ...(readyProvider!.model.headers ?? {}),
+        ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+      },
+    };
+    const transcriptPath = makeTranscriptPath(options.repoDir, options.session, options.issue);
+    const transcriptWriter = new TranscriptWriter({
+      sessionId: `${options.session}-planning-${options.issue}`,
+      model: model.name ?? model.id,
+      api: model.api,
+      provider: model.provider,
+      worktreePath: options.wtDir,
+      gitBranch: options.branch,
+      path: transcriptPath,
+    });
 
     registerAndRecordNativeProvenance({
       sessionId: options.session,
@@ -364,6 +428,9 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
           pathFieldsByTool: READ_ONLY_PATH_FIELDS,
         },
       },
+      onEvent: (event) => {
+        transcriptWriter.handleEvent(event);
+      },
     });
 
     const cleanupReason = cleanupReasonForStopReason(result.stopReason);
@@ -387,6 +454,10 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
 
     const rawFinalText = findFinalAssistantText(result.messages);
     if (rawFinalText.trim() === '') {
+      const providerError = findFinalAssistantErrorMessage(result.messages);
+      if (providerError) {
+        throw new Error(`Native planning failed: ${providerError}`);
+      }
       throw new Error(`Native planning completed without a final plan (stopReason=${result.stopReason})`);
     }
     const finalText = ensureReleaseReadiness(rawFinalText);
@@ -402,6 +473,7 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
       provider: model.provider,
       model: model.name ?? model.id,
       stopReason: result.stopReason,
+      transcriptPath,
     };
   } catch (err) {
     writeHookStatus(hookPath, 'error', 'process_exit', (err as Error).message, 'native');

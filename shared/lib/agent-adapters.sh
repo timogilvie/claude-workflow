@@ -32,6 +32,28 @@ agent_hydrate_repo_env_in_pane() {
   tmux send-keys -t "$target" "$bootstrap_cmd" C-m
 }
 
+agent_normalize_linear_issue_id() {
+  local issue="${1:-}" candidate="${2:-}"
+  candidate="${candidate#"${candidate%%[![:space:]]*}"}"
+  candidate="${candidate%"${candidate##*[![:space:]]}"}"
+
+  if [[ "$candidate" =~ ^[A-Z][A-Z0-9]*-[0-9]+$ ]]; then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+  if [[ "$candidate" =~ ^https?://linear\.app/[^/]+/issue/[A-Z][A-Z0-9]*-[0-9]+([/?#].*)?$ ]]; then
+    local linear_url_path="${candidate#*://linear.app/}"
+    linear_url_path="${linear_url_path#*/issue/}"
+    printf '%s\n' "${linear_url_path%%[/?#]*}"
+    return 0
+  fi
+  if [[ "$issue" =~ ^([A-Z][A-Z0-9]*-[0-9]+)_c$ ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  printf '%s\n' "$issue"
+}
+
 # ============================================================================
 # AGENT RESOLUTION
 # ============================================================================
@@ -1735,7 +1757,8 @@ agent_launch_autonomous() {
 
   local native_phase="$launch_phase"
   local native_model=""
-  local linear_issue="${WAVEMILL_LINEAR_ISSUE:-$issue}"
+  local linear_issue
+  linear_issue="$(agent_normalize_linear_issue_id "$issue" "${WAVEMILL_LINEAR_ISSUE:-}")"
   local worktree_dir="${feature_dir%/features/*}"
   local feature_slug="${WAVEMILL_FEATURE_SLUG:-${WAVEMILL_SLUG:-}}"
   if agent_is_native_cmd "$agent_cmd"; then
@@ -2177,7 +2200,8 @@ agent_launch_interactive() {
   local launcher_cmd=""
   local native_phase="$launch_phase"
   local native_model=""
-  local linear_issue="${WAVEMILL_LINEAR_ISSUE:-$issue}"
+  local linear_issue
+  linear_issue="$(agent_normalize_linear_issue_id "$issue" "${WAVEMILL_LINEAR_ISSUE:-}")"
   local worktree_dir="${feature_dir%/features/*}"
   local feature_slug="${WAVEMILL_FEATURE_SLUG:-${WAVEMILL_SLUG:-}}"
 
