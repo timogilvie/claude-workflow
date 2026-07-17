@@ -4337,6 +4337,38 @@ emit_blocked_completion_attention() {
   return 0
 }
 
+blocked_completion_live_process_mode() {
+  case "${WAVEMILL_BLOCKED_COMPLETION_LIVE_PROCESS_MODE:-attention}" in
+    terminate) printf 'terminate\n' ;;
+    *) printf 'attention\n' ;;
+  esac
+}
+
+emit_blocked_completion_liveness_attention() {
+  local issue="$1" feature_dir="$2" win="$3" detail="$4" next_action="$5"
+  local artifact_record summary reason artifact_mtime
+  local hook_protocol="$LIB_DIR/../hooks/wavemill-hook-protocol.sh"
+
+  artifact_record="$(read_blocked_completion "$feature_dir")"
+  IFS=$'\001' read -r summary reason artifact_mtime <<< "$artifact_record"
+
+  if blocked_completion_should_announce "$feature_dir" "$artifact_mtime"; then
+    log "status" "$issue needs attention: $detail. $next_action"
+    mark_blocked_completion_announced "$feature_dir" "$artifact_mtime"
+  fi
+
+  if [[ -f "$hook_protocol" ]]; then
+    source "$hook_protocol" || true
+    WAVEMILL_SESSION="$SESSION" WAVEMILL_ISSUE="$issue" \
+      wavemill_hook_write "blocked" "blocked_completion_liveness" "$detail" "${current_agent:-unknown}" "$next_action" || true
+  fi
+
+  set_window_attention_state "$win" "needs-user"
+  AUTO_ADVANCE_BLOCKED_COMPLETION_HANDLED="attention"
+  active_count=$((active_count + 1))
+  return 0
+}
+
 write_codex_capacity_blocked_completion() {
   local issue="$1" feature_dir="$2" model="${3:-}" source="${4:-unknown}"
   local artifact recovery_marker artifact_tmp recovery_tmp slug timestamp
@@ -4647,8 +4679,8 @@ blocked_completion_validate_for_advance() {
       (.committed | type == "boolean") and
       (.passingChecks | type == "array") and
       all(.passingChecks[]?; type == "string") and
-      (.blockingChecks | type == "array") and
-      all(.blockingChecks[]?; type == "string") and
+      ((has("blockingChecks") | not) or (.blockingChecks | type == "array")) and
+      all((.blockingChecks // [])[]?; type == "string") and
       (.blockingReason | type == "string") and
       (.evidence | type == "string") and
       (.recommendedAction | type == "string") and
@@ -4687,8 +4719,6 @@ blocked_completion_validate_for_advance() {
       decision_reason="${decision_reason:-recommendedAction must be advance_to_review}"
     elif [[ "$has_passing_checks" != true ]]; then
       decision_reason="${decision_reason:-passingChecks must be non-empty}"
-    elif [[ "$has_blocking_checks" != true ]]; then
-      decision_reason="${decision_reason:-blockingChecks must be non-empty}"
     fi
   fi
 
@@ -4777,24 +4807,77 @@ blocked_completion_validate_for_advance() {
 
 complete_coding_advance() {
   local issue="$1" feature_dir="$2" audit_path="$3" stage_notes="$4"
-  local audit_tmp marker_path advance_agent
+  local audit_timestamp="$5" summary="$6" slug="$7" passing_count="$8" blocking_count="$9" decision_json="${10}" blocked_json="${11}"
+  local marker_path advance_agent result_path result_model finished_at
 
-  audit_tmp="$(mktemp "$audit_path.tmp.XXXXXX" 2>/dev/null)" || {
-    log_warn "$issue advance failed: could not create audit artifact"
+  if [[ ! -f "$audit_path" ]] && ! printf '{}\n' | write_json_artifact "$audit_path"; then
+    log_warn "$issue advance failed: could not initialize audit artifact"
     return 1
-  }
-  cat > "$audit_tmp"
-  if ! mv "$audit_tmp" "$audit_path"; then
-    rm -f "$audit_tmp"
+  fi
+
+  if ! state_mutate "$audit_path" '
+      .timestamp = $timestamp
+      | .issue = $issue
+      | .slug = $slug
+      | .commit = ($validation.commit // "")
+      | .reason = $reason
+      | .blocked_completion_path = $blockedCompletionPath
+      | .blocked_completion_summary = $blockedCompletionSummary
+      | .guardrails = ($validation.guardrails // {})
+      | .passing_checks_count = ($passingChecksCount | tonumber)
+      | .blocking_checks_count = ($blockingChecksCount | tonumber)
+      | .blockedCompletion = (($blocked[0] // {}) | {
+          stage,
+          implementationComplete,
+          committed,
+          commit,
+          passingChecks,
+          blockingChecks,
+          blockingReason,
+          evidence,
+          recommendedAction
+        })
+    ' \
+    --arg timestamp "$audit_timestamp" \
+    --arg issue "$issue" \
+    --arg slug "$slug" \
+    --arg reason "automatic advance from valid blocked-completion artifact" \
+    --arg blockedCompletionPath "features/$slug/.coding-blocked-completion.json" \
+    --arg blockedCompletionSummary "$summary" \
+    --arg passingChecksCount "$passing_count" \
+    --arg blockingChecksCount "$blocking_count" \
+    --argjson validation "$decision_json" \
+    --argjson blocked "$blocked_json"; then
     log_warn "$issue advance failed: could not finalize audit artifact"
     return 1
   fi
 
   advance_agent="${current_agent:-}"
-  if ! write_stage_result "$feature_dir" "coding" "completed" "$advance_agent" "$(resolve_stage_result_model "$feature_dir" "coding" "claude-opus-4-7")" "$stage_notes"; then
+  result_model="$(resolve_stage_result_model "$feature_dir" "coding" "claude-opus-4-7")"
+  result_path="$feature_dir/.coding-result.json"
+  if [[ ! -f "$result_path" ]]; then
+    log_warn "$issue advance failed: missing coding stage result"
+    return 1
+  fi
+
+  finished_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  if ! state_mutate "$result_path" '
+      .stage = "coding"
+      | .status = "completed"
+      | .startedAt = (.startedAt // $finishedAt)
+      | .finishedAt = $finishedAt
+      | .agent = $agent
+      | .model = $model
+      | .notes = $notes
+    ' \
+    --arg finishedAt "$finished_at" \
+    --arg agent "$advance_agent" \
+    --arg model "$result_model" \
+    --arg notes "$stage_notes"; then
     log_warn "$issue advance failed: could not update coding stage result"
     return 1
   fi
+  _write_stage_result_trace_event "$feature_dir" "coding" "completed" "$advance_agent" "$result_model"
 
   marker_path="$feature_dir/.coding-complete"
   if ! touch "$marker_path"; then
@@ -4806,11 +4889,15 @@ complete_coding_advance() {
 }
 
 auto_advance_blocked_completion() {
-  local issue="$1" feature_dir="$2"
+  local issue="$1" feature_dir="$2" win_target="${3:-}" win="${4:-$1-$(basename "$2")}"
   local slug artifact_path artifact_record summary reason artifact_mtime decision_json
   local audit_path audit_timestamp passing_count blocking_count blocked_json
+  local pane_pid live_process_mode liveness_rc
+  local blocking_command next_action
+  local -a blocking_commands=()
 
   AUTO_ADVANCE_BLOCKED_COMPLETION_REASON=""
+  AUTO_ADVANCE_BLOCKED_COMPLETION_HANDLED=""
   artifact_path="$feature_dir/.coding-blocked-completion.json"
   [[ -f "$artifact_path" ]] || return 1
 
@@ -4827,41 +4914,95 @@ auto_advance_blocked_completion() {
   passing_count="$(jq -r '(.passingChecks // []) | length' "$artifact_path" 2>/dev/null || echo 0)"
   blocking_count="$(jq -r '(.blockingChecks // []) | length' "$artifact_path" 2>/dev/null || echo 0)"
   blocked_json="$(jq -c '[.]' "$artifact_path")"
+  if ! mapfile -t blocking_commands < <(jq -r '(.blockingChecks // [])[]? | strings' "$artifact_path" 2>/dev/null); then
+    AUTO_ADVANCE_BLOCKED_COMPLETION_REASON="blocked-completion liveness checks could not parse blocking checks"
+    emit_blocked_completion_liveness_attention \
+      "$issue" \
+      "$feature_dir" \
+      "$win" \
+      "blocked-completion auto-advance refused because liveness is indeterminate (could not parse blocking checks)" \
+      "Inspect the coding pane for $issue and resolve the blocked completion manually."
+    return 1
+  fi
 
-  if ! jq -n \
-    --arg timestamp "$audit_timestamp" \
-    --arg issue "$issue" \
-    --arg slug "$slug" \
-    --arg reason "automatic advance from valid blocked-completion artifact" \
-    --arg blockedCompletionPath "features/$slug/.coding-blocked-completion.json" \
-    --arg blockedCompletionSummary "$summary" \
-    --argjson passingChecksCount "$passing_count" \
-    --argjson blockingChecksCount "$blocking_count" \
-    --argjson validation "$decision_json" \
-    --argjson blocked "$blocked_json" \
-    '{
-      timestamp: $timestamp,
-      issue: $issue,
-      slug: $slug,
-      commit: ($validation.commit // ""),
-      reason: $reason,
-      blocked_completion_path: $blockedCompletionPath,
-      blocked_completion_summary: $blockedCompletionSummary,
-      guardrails: ($validation.guardrails // {}),
-      passing_checks_count: $passingChecksCount,
-      blocking_checks_count: $blockingChecksCount,
-      blockedCompletion: (($blocked[0] // {}) | {
-        stage,
-        implementationComplete,
-        committed,
-        commit,
-        passingChecks,
-        blockingChecks,
-        blockingReason,
-        evidence,
-        recommendedAction
-      })
-    }' | complete_coding_advance "$issue" "$feature_dir" "$audit_path" "Blocked verification accepted automatically; review may proceed"; then
+  pane_pid="$(tmux display-message -p -t "$win_target" '#{pane_pid}' 2>/dev/null || true)"
+  mill_pane_has_live_blocking_process "$pane_pid" "${blocking_commands[@]}"
+  liveness_rc=$?
+  if [[ "$liveness_rc" -eq 2 ]]; then
+    AUTO_ADVANCE_BLOCKED_COMPLETION_REASON="blocked-completion liveness indeterminate: ${MILL_BLOCKING_PROCESS_REASON:-unknown reason}"
+    emit_blocked_completion_liveness_attention \
+      "$issue" \
+      "$feature_dir" \
+      "$win" \
+      "blocked-completion auto-advance refused because liveness is indeterminate (${MILL_BLOCKING_PROCESS_REASON:-unknown reason})" \
+      "Inspect the coding pane for $issue and resolve the blocked completion manually."
+    return 1
+  fi
+
+  if [[ "$liveness_rc" -eq 0 ]]; then
+    blocking_command="${MILL_BLOCKING_PROCESS_COMMAND:-live blocking process}"
+    next_action="Stop the live blocking command for $issue (${blocking_command}), then retry review."
+    live_process_mode="$(blocked_completion_live_process_mode)"
+    if [[ "$live_process_mode" == "terminate" ]] && (( ${#MILL_BLOCKING_PROCESS_PIDS[@]} > 0 )); then
+      if mill_terminate_blocking_processes "$pane_pid" "${MILL_BLOCKING_PROCESS_PIDS[@]}"; then
+        mill_pane_has_live_blocking_process "$pane_pid" "${blocking_commands[@]}"
+        liveness_rc=$?
+        if [[ "$liveness_rc" -eq 1 ]]; then
+          log "status" "[auto-advance] $issue terminated live blocking process before coding handoff: $blocking_command"
+        elif [[ "$liveness_rc" -eq 2 ]]; then
+          AUTO_ADVANCE_BLOCKED_COMPLETION_REASON="blocked-completion liveness indeterminate after termination: ${MILL_BLOCKING_PROCESS_REASON:-unknown reason}"
+          emit_blocked_completion_liveness_attention \
+            "$issue" \
+            "$feature_dir" \
+            "$win" \
+            "blocked-completion auto-advance refused because post-termination liveness is indeterminate (${MILL_BLOCKING_PROCESS_REASON:-unknown reason})" \
+            "Inspect the coding pane for $issue and confirm the blocking command has stopped."
+          return 1
+        else
+          blocking_command="${MILL_BLOCKING_PROCESS_COMMAND:-$blocking_command}"
+          AUTO_ADVANCE_BLOCKED_COMPLETION_REASON="live blocking process still running after termination attempt"
+          emit_blocked_completion_liveness_attention \
+            "$issue" \
+            "$feature_dir" \
+            "$win" \
+            "blocked-completion auto-advance refused because a live blocking command is still running after termination attempt ($blocking_command)" \
+            "Inspect the coding pane for $issue and stop the remaining blocking command manually."
+          return 1
+        fi
+      else
+        AUTO_ADVANCE_BLOCKED_COMPLETION_REASON="failed to terminate live blocking process"
+        emit_blocked_completion_liveness_attention \
+          "$issue" \
+          "$feature_dir" \
+          "$win" \
+          "blocked-completion auto-advance refused because the live blocking command could not be terminated ($blocking_command)" \
+          "Inspect the coding pane for $issue and stop the blocking command manually."
+        return 1
+      fi
+    else
+      AUTO_ADVANCE_BLOCKED_COMPLETION_REASON="live blocking process still running"
+      emit_blocked_completion_liveness_attention \
+        "$issue" \
+        "$feature_dir" \
+        "$win" \
+        "blocked-completion auto-advance refused because a live blocking command is still running ($blocking_command)" \
+        "$next_action"
+      return 1
+    fi
+  fi
+
+  if ! complete_coding_advance \
+    "$issue" \
+    "$feature_dir" \
+    "$audit_path" \
+    "Blocked verification accepted automatically; review may proceed" \
+    "$audit_timestamp" \
+    "$summary" \
+    "$slug" \
+    "$passing_count" \
+    "$blocking_count" \
+    "$decision_json" \
+    "$blocked_json"; then
     return 1
   fi
 
@@ -11158,9 +11299,12 @@ monitor_issue_state() {
               write_codex_capacity_blocked_completion "$ISSUE" "$FEATURE_DIR" "$codex_capacity_model" "$codex_capacity_source" || true
               write_stage_result "$FEATURE_DIR" "coding" "running" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "coding" "claude-opus-4-7")" "Blocked: Codex model at capacity"
             fi
-            if auto_advance_blocked_completion "$ISSUE" "$FEATURE_DIR"; then
+            if auto_advance_blocked_completion "$ISSUE" "$FEATURE_DIR" "$WIN_TARGET" "$WIN"; then
               set_window_attention_state "$WIN" "clear"
               active_count=$((active_count + 1))
+              return 0
+            fi
+            if [[ "${AUTO_ADVANCE_BLOCKED_COMPLETION_HANDLED:-}" == "attention" ]]; then
               return 0
             fi
             if emit_blocked_completion_attention "$ISSUE" "$FEATURE_DIR"; then

@@ -130,6 +130,7 @@ harness_extract_real_functions() {
   : > "$REAL_FUNC_FILE"
   for func in \
     trim_outer_whitespace \
+    merge_retry_marker_until \
     refresh_ready_merge_queue_tick \
     get_main_head_sha \
     ready_stage_allows_merge \
@@ -143,6 +144,8 @@ harness_extract_real_functions() {
     blocked_completion_announce_marker \
     blocked_completion_should_announce \
     mark_blocked_completion_announced \
+    blocked_completion_live_process_mode \
+    emit_blocked_completion_liveness_attention \
     wavemill_capacity_stall_seconds \
     codex_capacity_recovery_marker \
     codex_capacity_dwell_marker \
@@ -356,6 +359,19 @@ harness_read_stage_status() {
   jq -r '.status // empty' "$repo/features/$slug/.${stage}-result.json" 2>/dev/null || true
 }
 
+harness_auto_advance_clear_liveness_setup() {
+  cat <<'EOF'
+CURRENT_PHASE="coding"
+mill_pane_has_live_blocking_process() {
+  MILL_BLOCKING_PROCESS_COMMAND=""
+  MILL_BLOCKING_PROCESS_REASON=""
+  MILL_BLOCKING_PROCESS_MATCH_COUNT=0
+  MILL_BLOCKING_PROCESS_PIDS=()
+  return 1
+}
+EOF
+}
+
 harness_run_tick() {
   local repo="$1" slug="$2" issue="$3" extra_setup="${4:-}"
   local tick_setup_file="$TEST_TMP/${issue}-${slug}-extra-$$.sh"
@@ -380,6 +396,7 @@ harness_run_tick() {
     SLUG="$TEST_SLUG"
     BRANCH="task/$SLUG"
     WORKTREE_ROOT="$(dirname "$REPO_UNDER_TEST")"
+    LIB_DIR="$REPO_DIR/shared/lib"
     REPO_DIR="$REPO_UNDER_TEST"
     TOOLS_DIR=""
     SESSION="lifecycle-harness"
@@ -1502,7 +1519,7 @@ test_coding_blocked_completion_auto_advances_when_valid() {
 }
 EOF
 
-  tick="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" "$(harness_auto_advance_clear_liveness_setup)")"
 
   check_eq "auto blocked completion: phase remains coding for handoff" "coding" "$(kv_value "$tick" phase)"
   check_eq "auto blocked completion: coding stage becomes completed" "completed" "$(harness_read_stage_status "$repo" "$slug" coding)"
@@ -1544,7 +1561,7 @@ EOF
   printf '{"issue":"%s"}\n' "$issue" > "$feature_dir/selected-task.json"
   printf '{"prompt":"registry"}\n' > "$repo/prompt-registry.jsonl"
 
-  tick="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" "$(harness_auto_advance_clear_liveness_setup)")"
 
   check_eq "metadata noise: phase remains coding for handoff" "coding" "$(kv_value "$tick" phase)"
   check_eq "metadata noise: coding stage becomes completed" "completed" "$(harness_read_stage_status "$repo" "$slug" coding)"
@@ -1553,6 +1570,237 @@ EOF
   check_file_exists "metadata noise: audit artifact written" "$feature_dir/.coding-auto-advance.json"
   check_file_exists "metadata noise: coding complete marker written" "$feature_dir/.coding-complete"
   check_file_absent "metadata noise: no dedupe marker written" "$feature_dir/.blocked-completion-announced"
+}
+
+test_coding_blocked_completion_live_process_needs_attention() {
+  local slug="coding-blocked-live-process"
+  local issue="HOK-2464-LIVE"
+  local repo tick commit hook_file overrides
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  commit="$(git -C "$repo" rev-parse --short HEAD)"
+  hook_file="/tmp/wavemill-lifecycle-harness-${issue}.hook"
+  cat > "$repo/features/$slug/.coding-blocked-completion.json" <<EOF
+{
+  "stage": "coding",
+  "implementationComplete": true,
+  "committed": true,
+  "commit": "$commit",
+  "passingChecks": ["bash tests/wavemill-mill-advance.test.sh"],
+  "blockingChecks": ["pytest -v"],
+  "blockingReason": "baseline_failures",
+  "evidence": "Repo-level typecheck is failing outside this change.",
+  "recommendedAction": "advance_to_review"
+}
+EOF
+
+  overrides="$(cat <<'EOF'
+CURRENT_PHASE="coding"
+mill_pane_has_live_blocking_process() {
+  MILL_BLOCKING_PROCESS_COMMAND="pytest -v"
+  MILL_BLOCKING_PROCESS_REASON=""
+  MILL_BLOCKING_PROCESS_MATCH_COUNT=1
+  MILL_BLOCKING_PROCESS_PIDS=("4242")
+  return 0
+}
+EOF
+)"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" "$overrides")"
+
+  check_eq "live process: coding stage stays running" "running" "$(harness_read_stage_status "$repo" "$slug" coding)"
+  check_eq "live process: needs-user attention set" "needs-user" "$(kv_value "$tick" attention)"
+  check_contains "live process: attention log mentions running command" "$(kv_value "$tick" log_output)" "live blocking command is still running"
+  check_file_absent "live process: no auto audit written" "$repo/features/$slug/.coding-auto-advance.json"
+  check_file_absent "live process: no coding complete marker" "$repo/features/$slug/.coding-complete"
+  check_eq "live process: hook state blocked" "blocked" "$(jq -r '.state // empty' "$hook_file" 2>/dev/null || true)"
+  check_contains "live process: hook next action names issue" "$(jq -r '.next_action // empty' "$hook_file" 2>/dev/null || true)" "$issue"
+}
+
+test_coding_blocked_completion_terminates_live_process_when_configured() {
+  local slug="coding-blocked-terminate"
+  local issue="HOK-2464-TERM"
+  local repo tick commit overrides
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  commit="$(git -C "$repo" rev-parse --short HEAD)"
+  cat > "$repo/features/$slug/.coding-blocked-completion.json" <<EOF
+{
+  "stage": "coding",
+  "implementationComplete": true,
+  "committed": true,
+  "commit": "$commit",
+  "passingChecks": ["bash tests/wavemill-mill-advance.test.sh"],
+  "blockingChecks": ["pytest -v"],
+  "blockingReason": "baseline_failures",
+  "evidence": "Repo-level typecheck is failing outside this change.",
+  "recommendedAction": "advance_to_review"
+}
+EOF
+
+  overrides="$(cat <<'EOF'
+CURRENT_PHASE="coding"
+WAVEMILL_BLOCKED_COMPLETION_LIVE_PROCESS_MODE="terminate"
+MILL_LIVENESS_CALLS=0
+mill_pane_has_live_blocking_process() {
+  MILL_LIVENESS_CALLS=$((MILL_LIVENESS_CALLS + 1))
+  if [[ "$MILL_LIVENESS_CALLS" -eq 1 ]]; then
+    MILL_BLOCKING_PROCESS_COMMAND="pytest -v"
+    MILL_BLOCKING_PROCESS_REASON=""
+    MILL_BLOCKING_PROCESS_MATCH_COUNT=1
+    MILL_BLOCKING_PROCESS_PIDS=("5151")
+    return 0
+  fi
+  MILL_BLOCKING_PROCESS_COMMAND=""
+  MILL_BLOCKING_PROCESS_REASON=""
+  MILL_BLOCKING_PROCESS_MATCH_COUNT=0
+  MILL_BLOCKING_PROCESS_PIDS=()
+  return 1
+}
+mill_terminate_blocking_processes() {
+  [[ "$2" == "5151" ]] || return 1
+  return 0
+}
+EOF
+)"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" "$overrides")"
+
+  check_eq "terminate mode: coding stage becomes completed" "completed" "$(harness_read_stage_status "$repo" "$slug" coding)"
+  check_eq "terminate mode: attention cleared" "clear" "$(kv_value "$tick" attention)"
+  check_contains "terminate mode: termination log emitted" "$(kv_value "$tick" log_output)" "terminated live blocking process before coding handoff"
+  check_file_exists "terminate mode: auto audit written" "$repo/features/$slug/.coding-auto-advance.json"
+  check_file_exists "terminate mode: coding complete marker written" "$repo/features/$slug/.coding-complete"
+}
+
+test_coding_blocked_completion_indeterminate_liveness_needs_attention() {
+  local slug="coding-blocked-indeterminate"
+  local issue="HOK-2464-INDET"
+  local repo tick commit hook_file
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  commit="$(git -C "$repo" rev-parse --short HEAD)"
+  hook_file="/tmp/wavemill-lifecycle-harness-${issue}.hook"
+  cat > "$repo/features/$slug/.coding-blocked-completion.json" <<EOF
+{
+  "stage": "coding",
+  "implementationComplete": true,
+  "committed": true,
+  "commit": "$commit",
+  "passingChecks": ["bash tests/wavemill-mill-advance.test.sh"],
+  "blockingChecks": ["pytest -v"],
+  "blockingReason": "baseline_failures",
+  "evidence": "Repo-level typecheck is failing outside this change.",
+  "recommendedAction": "advance_to_review"
+}
+EOF
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" '
+    CURRENT_PHASE="coding"
+    mill_pane_has_live_blocking_process() {
+      MILL_BLOCKING_PROCESS_COMMAND=""
+      MILL_BLOCKING_PROCESS_REASON="pane pid unavailable"
+      MILL_BLOCKING_PROCESS_MATCH_COUNT=0
+      MILL_BLOCKING_PROCESS_PIDS=()
+      return 2
+    }
+  ')"
+
+  check_eq "indeterminate liveness: coding stage stays running" "running" "$(harness_read_stage_status "$repo" "$slug" coding)"
+  check_eq "indeterminate liveness: needs-user attention set" "needs-user" "$(kv_value "$tick" attention)"
+  check_contains "indeterminate liveness: diagnostic log emitted" "$(kv_value "$tick" log_output)" "liveness is indeterminate"
+  check_file_absent "indeterminate liveness: no auto audit written" "$repo/features/$slug/.coding-auto-advance.json"
+  check_file_absent "indeterminate liveness: no coding complete marker" "$repo/features/$slug/.coding-complete"
+  check_eq "indeterminate liveness: hook state blocked" "blocked" "$(jq -r '.state // empty' "$hook_file" 2>/dev/null || true)"
+}
+
+test_coding_blocked_completion_missing_blocking_checks_advances_when_pane_is_gone() {
+  local slug="coding-blocked-missing-blocking-checks"
+  local issue="HOK-2464-MISSING-CHECKS"
+  local repo tick commit overrides
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  commit="$(git -C "$repo" rev-parse --short HEAD)"
+  cat > "$repo/features/$slug/.coding-blocked-completion.json" <<EOF
+{
+  "stage": "coding",
+  "implementationComplete": true,
+  "committed": true,
+  "commit": "$commit",
+  "passingChecks": ["bash tests/wavemill-mill-advance.test.sh"],
+  "blockingReason": "baseline_failures",
+  "evidence": "Repo-level typecheck is failing outside this change.",
+  "recommendedAction": "advance_to_review"
+}
+EOF
+
+  overrides="$(cat <<'EOF'
+CURRENT_PHASE="coding"
+mill_pane_has_live_blocking_process() {
+  [[ "$#" -eq 1 ]] || return 2
+  MILL_BLOCKING_PROCESS_COMMAND=""
+  MILL_BLOCKING_PROCESS_REASON=""
+  MILL_BLOCKING_PROCESS_MATCH_COUNT=0
+  MILL_BLOCKING_PROCESS_PIDS=()
+  return 1
+}
+EOF
+)"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" "$overrides")"
+
+  check_eq "missing blocking checks: coding stage becomes completed" "completed" "$(harness_read_stage_status "$repo" "$slug" coding)"
+  check_eq "missing blocking checks: attention cleared" "clear" "$(kv_value "$tick" attention)"
+  check_file_exists "missing blocking checks: auto audit written" "$repo/features/$slug/.coding-auto-advance.json"
+  check_file_exists "missing blocking checks: coding complete marker written" "$repo/features/$slug/.coding-complete"
+}
+
+test_coding_blocked_completion_empty_blocking_checks_falls_back_to_any_descendant() {
+  local slug="coding-blocked-empty-blocking-checks"
+  local issue="HOK-2464-EMPTY-CHECKS"
+  local repo tick commit overrides
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  commit="$(git -C "$repo" rev-parse --short HEAD)"
+  cat > "$repo/features/$slug/.coding-blocked-completion.json" <<EOF
+{
+  "stage": "coding",
+  "implementationComplete": true,
+  "committed": true,
+  "commit": "$commit",
+  "passingChecks": ["bash tests/wavemill-mill-advance.test.sh"],
+  "blockingChecks": [],
+  "blockingReason": "baseline_failures",
+  "evidence": "Repo-level typecheck is failing outside this change.",
+  "recommendedAction": "advance_to_review"
+}
+EOF
+
+  overrides="$(cat <<'EOF'
+CURRENT_PHASE="coding"
+mill_pane_has_live_blocking_process() {
+  [[ "$#" -eq 1 ]] || return 2
+  MILL_BLOCKING_PROCESS_COMMAND="pid 6262"
+  MILL_BLOCKING_PROCESS_REASON=""
+  MILL_BLOCKING_PROCESS_MATCH_COUNT=1
+  MILL_BLOCKING_PROCESS_PIDS=("6262")
+  return 0
+}
+EOF
+)"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" "$overrides")"
+
+  check_eq "empty blocking checks: coding stage stays running" "running" "$(harness_read_stage_status "$repo" "$slug" coding)"
+  check_eq "empty blocking checks: needs-user attention set" "needs-user" "$(kv_value "$tick" attention)"
+  check_contains "empty blocking checks: attention log emitted" "$(kv_value "$tick" log_output)" "live blocking command is still running"
+  check_file_absent "empty blocking checks: no auto audit written" "$repo/features/$slug/.coding-auto-advance.json"
+  check_file_absent "empty blocking checks: no coding complete marker" "$repo/features/$slug/.coding-complete"
 }
 
 test_coding_blocked_completion_dedupes_same_artifact() {
@@ -2528,6 +2776,11 @@ test_merge_queue_preserved_merged_tasks_do_not_block_ready_pr
 test_coding_blocked_completion_needs_user_without_advancing
 test_coding_blocked_completion_auto_advances_when_valid
 test_coding_blocked_completion_auto_advances_with_wavemill_metadata_noise
+test_coding_blocked_completion_live_process_needs_attention
+test_coding_blocked_completion_terminates_live_process_when_configured
+test_coding_blocked_completion_indeterminate_liveness_needs_attention
+test_coding_blocked_completion_missing_blocking_checks_advances_when_pane_is_gone
+test_coding_blocked_completion_empty_blocking_checks_falls_back_to_any_descendant
 test_coding_blocked_completion_dedupes_same_artifact
 test_coding_blocked_completion_reannounces_on_mtime_change
 test_coding_complete_wins_over_blocked_completion
