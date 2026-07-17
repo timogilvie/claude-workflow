@@ -58,7 +58,7 @@ fi
 echo
 echo "=== Shell Dispatch Guard ==="
 TMUX_LOG="$TMPDIR_TEST/tmux.log"
-NATIVE_LAUNCHER="/tmp/sess-HOK-2313-autonomous-launcher.sh"
+NATIVE_LAUNCHER="/tmp/sess-HOK-2313_c-autonomous-launcher.sh"
 NATIVE_REVIEW_LAUNCHER="/tmp/sess-HOK-2314-autonomous-launcher.sh"
 source "$ADAPTERS"
 
@@ -86,12 +86,12 @@ WAVEMILL_BRANCH="task/demo" \
 WAVEMILL_BASE_BRANCH="auto/integration" \
 WAVEMILL_TITLE="Demo" \
 REPO_DIR="$REPO_DIR" \
-agent_launch_autonomous "sess" "planning" "/tmp/instr.txt" "native-openrouter" "qwen-3-coder" "HOK-2313"
+agent_launch_autonomous "sess" "planning" "/tmp/instr.txt" "native-openrouter" "qwen-3-coder" "HOK-2313_c"
 
 check_contains "native branch dispatches launcher path" "$(cat "$TMUX_LOG")" "$NATIVE_LAUNCHER"
 check_contains "native launcher invokes launch-native-planning tool" "$(cat "$NATIVE_LAUNCHER")" "tools/launch-native-planning.ts"
-check_contains "native launcher exports linear issue id" "$(cat "$NATIVE_LAUNCHER")" "export WAVEMILL_LINEAR_ISSUE='HOK-2313'"
-check_contains "native launcher passes linear issue id" "$(cat "$NATIVE_LAUNCHER")" "--linear-issue 'HOK-2313'"
+check_contains "native launcher exports canonical challenger linear issue id" "$(cat "$NATIVE_LAUNCHER")" "export WAVEMILL_LINEAR_ISSUE='HOK-2313'"
+check_contains "native launcher passes canonical challenger linear issue id" "$(cat "$NATIVE_LAUNCHER")" "--linear-issue 'HOK-2313'"
 check_not_contains "native planning launcher does not execute logical provider" "$(cat "$NATIVE_LAUNCHER")" "native-openrouter --model"
 
 TMUX_LOG="$TMPDIR_TEST/tmux-review.log"
