@@ -904,6 +904,7 @@ challenge_pair_record_exists() {
 resolve_challenge_pair_hard_failure() {
   local pair_id="$1"
   local primary_key="$pair_id" challenger_key="${pair_id}_c"
+  local primary_exists challenger_exists resolve_output resolve_status resolve_reason
   local retry_max primary_failed challenger_failed primary_completed challenger_completed
   local primary_retry_count challenger_retry_count failed_sides_csv terminal_reason outcome
   local primary_pr challenger_pr primary_model challenger_model primary_pr_url challenger_pr_url
@@ -917,12 +918,30 @@ resolve_challenge_pair_hard_failure() {
   fi
 
   retry_max=$(challenge_eval_hard_failure_max_retries)
+  primary_exists=$(read_state_value "false" --arg i "$primary_key" '.tasks[$i] != null')
+  challenger_exists=$(read_state_value "false" --arg i "$challenger_key" '.tasks[$i] != null')
   primary_failed=$(read_state_value "false" --arg i "$primary_key" '.tasks[$i].evalFailed // false')
   challenger_failed=$(read_state_value "false" --arg i "$challenger_key" '.tasks[$i].evalFailed // false')
   primary_completed=$(read_state_value "false" --arg i "$primary_key" '.tasks[$i].evalCompleted // false')
   challenger_completed=$(read_state_value "false" --arg i "$challenger_key" '.tasks[$i].evalCompleted // false')
   primary_retry_count=$(read_state_value "0" --arg i "$primary_key" '.tasks[$i].evalHardFailureRetryCount // 0')
   challenger_retry_count=$(read_state_value "0" --arg i "$challenger_key" '.tasks[$i].evalHardFailureRetryCount // 0')
+
+  if [[ "$primary_exists" != "true" || "$challenger_exists" != "true" ]]; then
+    resolve_output=$(npx tsx "$TOOLS_DIR/resolve-orphan-challenge-pair.ts" \
+      --pair-id "$pair_id" \
+      --reason orphan-sibling \
+      --repo-dir "$REPO_DIR" 2>/dev/null || true)
+    resolve_status=$(jq -r '.status // empty' <<<"$resolve_output" 2>/dev/null || true)
+    if [[ "$resolve_status" == "resolved" || "$resolve_status" == "already-resolved" ]]; then
+      mark_challenge_compared "$pair_id"
+      if [[ "$resolve_status" == "resolved" ]]; then
+        resolve_reason=$(jq -r '.reason // "orphan-sibling"' <<<"$resolve_output" 2>/dev/null || echo "orphan-sibling")
+        log_warn "challenge pair $pair_id resolved via $resolve_reason"
+      fi
+      return 0
+    fi
+  fi
 
   failed_sides_csv=""
   [[ "$primary_failed" == "true" ]] && failed_sides_csv="primary"
@@ -3469,6 +3488,7 @@ challenge_pair_record_exists() {
 resolve_challenge_pair_hard_failure() {
   local pair_id="$1"
   local primary_key="$pair_id" challenger_key="${pair_id}_c"
+  local primary_exists challenger_exists resolve_output resolve_status resolve_reason
   local retry_max primary_failed challenger_failed primary_completed challenger_completed
   local primary_retry_count challenger_retry_count failed_sides_csv terminal_reason outcome
   local primary_pr challenger_pr primary_model challenger_model primary_pr_url challenger_pr_url
@@ -3482,12 +3502,30 @@ resolve_challenge_pair_hard_failure() {
   fi
 
   retry_max=$(challenge_eval_hard_failure_max_retries)
+  primary_exists=$(read_state_value "false" --arg i "$primary_key" '.tasks[$i] != null')
+  challenger_exists=$(read_state_value "false" --arg i "$challenger_key" '.tasks[$i] != null')
   primary_failed=$(read_state_value "false" --arg i "$primary_key" '.tasks[$i].evalFailed // false')
   challenger_failed=$(read_state_value "false" --arg i "$challenger_key" '.tasks[$i].evalFailed // false')
   primary_completed=$(read_state_value "false" --arg i "$primary_key" '.tasks[$i].evalCompleted // false')
   challenger_completed=$(read_state_value "false" --arg i "$challenger_key" '.tasks[$i].evalCompleted // false')
   primary_retry_count=$(read_state_value "0" --arg i "$primary_key" '.tasks[$i].evalHardFailureRetryCount // 0')
   challenger_retry_count=$(read_state_value "0" --arg i "$challenger_key" '.tasks[$i].evalHardFailureRetryCount // 0')
+
+  if [[ "$primary_exists" != "true" || "$challenger_exists" != "true" ]]; then
+    resolve_output=$(npx tsx "$TOOLS_DIR/resolve-orphan-challenge-pair.ts" \
+      --pair-id "$pair_id" \
+      --reason orphan-sibling \
+      --repo-dir "$REPO_DIR" 2>/dev/null || true)
+    resolve_status=$(jq -r '.status // empty' <<<"$resolve_output" 2>/dev/null || true)
+    if [[ "$resolve_status" == "resolved" || "$resolve_status" == "already-resolved" ]]; then
+      mark_challenge_compared "$pair_id"
+      if [[ "$resolve_status" == "resolved" ]]; then
+        resolve_reason=$(jq -r '.reason // "orphan-sibling"' <<<"$resolve_output" 2>/dev/null || echo "orphan-sibling")
+        log_warn "challenge pair $pair_id resolved via $resolve_reason"
+      fi
+      return 0
+    fi
+  fi
 
   failed_sides_csv=""
   [[ "$primary_failed" == "true" ]] && failed_sides_csv="primary"
@@ -7748,6 +7786,35 @@ maybe_run_challenge_comparison() {
   log "status" "  ⚖ Challenge comparison running in background for $pair_id (pid $pid)"
 }
 
+maybe_resolve_unresolvable_challenge_pair() {
+  local issue="$1"
+  local pair_id resolve_output resolve_status resolve_reason
+
+  pair_id=$(get_task_meta "$issue" "challengePairId")
+  [[ -n "$pair_id" ]] || return 0
+
+  if challenge_pair_record_exists "$pair_id"; then
+    mark_challenge_compared "$pair_id" >/dev/null || true
+    return 0
+  fi
+
+  resolve_output=$(npx tsx "$TOOLS_DIR/resolve-orphan-challenge-pair.ts" \
+    --pair-id "$pair_id" \
+    --repo-dir "$REPO_DIR" 2>/dev/null || true)
+  resolve_status=$(jq -r '.status // empty' <<<"$resolve_output" 2>/dev/null || true)
+
+  case "$resolve_status" in
+    resolved)
+      resolve_reason=$(jq -r '.reason // "unknown"' <<<"$resolve_output" 2>/dev/null || echo "unknown")
+      mark_challenge_compared "$pair_id" >/dev/null || true
+      log_warn "challenge pair $pair_id resolved automatically via $resolve_reason"
+      ;;
+    already-resolved)
+      mark_challenge_compared "$pair_id" >/dev/null || true
+      ;;
+  esac
+}
+
 # Archive stage artifacts from worktree before cleanup.
 # Copies plan.md, task-packet.md, and routing decision to a durable location
 # so post-merge eval can still access them after the worktree is removed.
@@ -11892,6 +11959,7 @@ monitor_issue_state() {
       if is_challenge_task "$ISSUE"; then
         maybe_run_challenge_eval "$ISSUE" "$PR" "$BRANCH" "$SLUG"
         maybe_run_challenge_comparison "$ISSUE"
+        maybe_resolve_unresolvable_challenge_pair "$ISSUE"
       fi
 
       local challenge_comparison_state
@@ -12078,6 +12146,7 @@ monitor_issue_state() {
   if is_challenge_task "$ISSUE"; then
     maybe_run_challenge_eval "$ISSUE" "$PR" "$BRANCH" "$SLUG"
     maybe_run_challenge_comparison "$ISSUE"
+    maybe_resolve_unresolvable_challenge_pair "$ISSUE"
   fi
   active_count=$((active_count + 1))
 
