@@ -83,7 +83,33 @@ describe('resolveModelAgent', () => {
     assert.deepEqual(result, { ok: true, agent: 'codex' });
   });
 
-  it('resolves certified claude-openrouter models to native-openrouter', () => {
+  it('resolves certified role-eligible claude-openrouter models to native-openrouter', () => {
+    const registry = makeRegistry('qwen-3-coder', {
+      agent: 'claude-openrouter',
+      nativeCapability: {
+        nativeProvider: 'openrouter',
+        piTransportKind: 'openai-completions',
+        readOnlyNative: 'certified',
+        compatFlags: { thinkingFormat: 'openrouter' },
+        certification: {
+          maxCertifiedPhase: 'workflow',
+          certifiedAt: '2099-01-01T00:00:00.000Z',
+          certificationSuiteVersion: 'v1',
+        },
+      },
+    });
+
+    const result = resolveModelAgent({
+      model: 'qwen-3-coder',
+      phase: 'review',
+      registry,
+      now: new Date('2098-01-01T00:00:00.000Z'),
+    });
+
+    assert.deepEqual(result, { ok: true, agent: 'native-openrouter' });
+  });
+
+  it('rejects launch-priority models that are not eligible for the requested phase', () => {
     const registry = makeRegistry('qwen-3-coder', {
       agent: 'claude-openrouter',
       nativeCapability: {
@@ -106,11 +132,17 @@ describe('resolveModelAgent', () => {
       now: new Date('2098-01-01T00:00:00.000Z'),
     });
 
-    assert.deepEqual(result, { ok: true, agent: 'native-openrouter' });
+    assert.equal(result.ok, false);
+    if (result.ok) {
+      assert.fail('expected rejection');
+    }
+    assert.equal(result.reason, 'role-ineligible');
+    assert.match(result.diagnostic, /phase=planning/);
+    assert.match(result.diagnostic, /certification=eligible-roles:coding,review/);
   });
 
   it('rejects stale or phase-insufficient native metadata as uncertified', () => {
-    const registry = makeRegistry('qwen-3-coder', {
+    const registry = makeRegistry('native-plan-model', {
       agent: 'claude-openrouter',
       nativeCapability: {
         nativeProvider: 'openrouter',
@@ -126,7 +158,7 @@ describe('resolveModelAgent', () => {
     });
 
     const stale = resolveModelAgent({
-      model: 'qwen-3-coder',
+      model: 'native-plan-model',
       phase: 'planning',
       registry,
       now: new Date('2026-07-01T00:00:00.000Z'),
@@ -140,9 +172,9 @@ describe('resolveModelAgent', () => {
     assert.match(stale.diagnostic, /certification=stale|certification=phase-insufficient/);
 
     const phaseInsufficient = resolveModelAgent({
-      model: 'qwen-3-coder',
+      model: 'native-plan-model',
       phase: 'planning',
-      registry: makeRegistry('qwen-3-coder', {
+      registry: makeRegistry('native-plan-model', {
         agent: 'claude-openrouter',
         nativeCapability: {
           nativeProvider: 'openrouter',
@@ -164,6 +196,6 @@ describe('resolveModelAgent', () => {
     }
     assert.equal(phaseInsufficient.reason, 'uncertified');
     assert.match(phaseInsufficient.diagnostic, /certification=phase-insufficient/);
-    assert.match(phaseInsufficient.diagnostic, /native-agent-certify\.ts --provider openrouter --model qwen-3-coder --phase workflow/);
+    assert.match(phaseInsufficient.diagnostic, /native-agent-certify\.ts --provider openrouter --model native-plan-model --phase workflow/);
   });
 });

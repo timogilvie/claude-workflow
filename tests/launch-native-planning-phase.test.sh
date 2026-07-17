@@ -194,6 +194,65 @@ else
   pass "native coding dispatch stays fail-closed without launcher"
 fi
 
+ROLE_REPO="$TMPDIR_TEST/role-guard-repo"
+mkdir -p "$ROLE_REPO/.wavemill/native-agent-certifications/qwen/qwen3-coder"
+cat > "$ROLE_REPO/.wavemill-config.json" <<'EOF'
+{
+  "nativeAgent": {
+    "enabled": true,
+    "allowedPhases": ["planning", "review"],
+    "providers": {
+      "openrouter": {
+        "enabled": true,
+        "apiKeyEnv": "TEST_OPENROUTER_KEY",
+        "models": ["qwen/qwen3-coder"]
+      }
+    }
+  }
+}
+EOF
+cat > "$ROLE_REPO/.wavemill/native-agent-certifications/qwen/qwen3-coder/v2.json" <<'EOF'
+{
+  "schemaVersion": 2,
+  "provider": "qwen",
+  "model": "qwen3-coder",
+  "phase": "workflow",
+  "suiteVersion": "v2",
+  "certifiedAt": "2099-01-01T00:00:00.000Z",
+  "scenarios": [{ "scenarioId": "s1", "passed": true }]
+}
+EOF
+
+if TEST_OPENROUTER_KEY="sk-test" npx tsx "$REPO_DIR/tools/check-native-eligibility.ts" "$ROLE_REPO" "planning" >/dev/null 2>&1; then
+  fail "role-ineligible native planner is not selected"
+else
+  pass "role-ineligible native planner is not selected"
+fi
+
+probe_stdout="$TMPDIR_TEST/role-probe.stdout"
+probe_stderr="$TMPDIR_TEST/role-probe.stderr"
+agent_run_tsx_tool() {
+  printf '%s\n' '{"ok":false,"reason":"native provider openrouter/qwen-3-coder is not eligible for planning (eligible roles: coding, review)"}'
+  return 1
+}
+if TEST_OPENROUTER_KEY="sk-test" TOOLS_DIR="$REPO_DIR/tools" agent_native_launch_probe "native-openrouter" "planning" "qwen-3-coder" "$ROLE_REPO" >"$probe_stdout" 2>"$probe_stderr"; then
+  fail "role-ineligible native launch probe rejects planner route"
+else
+  pass "role-ineligible native launch probe rejects planner route"
+fi
+unset -f agent_run_tsx_tool
+source "$ADAPTERS"
+if grep -q '{"ok":false' "$probe_stderr"; then
+  fail "native launch probe does not echo raw JSON rejection"
+else
+  pass "native launch probe does not echo raw JSON rejection"
+fi
+if grep -q "not eligible for planning" "$probe_stderr"; then
+  pass "native launch probe emits parsed rejection reason"
+else
+  fail "native launch probe emits parsed rejection reason" "$(cat "$probe_stderr")"
+fi
+
 if agent_native_planning_eligible "$REPO_DIR" "planning"; then
   fail "disabled config stays ineligible"
 else

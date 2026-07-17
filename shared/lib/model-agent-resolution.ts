@@ -7,6 +7,7 @@ import {
   type NativeProviderName,
 } from './model-registry.ts';
 import type { CertificationPhase } from './native-agent/certification/schema.ts';
+import { resolveLaunchPriorityModel, type RoleEligibility } from './openrouter-catalog.ts';
 
 export type AgentResolutionPhase = 'planning' | 'coding' | 'review';
 
@@ -15,6 +16,7 @@ export type UnroutableReason =
   | 'unknown-model'
   | 'no-native-capability'
   | 'native-unsupported'
+  | 'role-ineligible'
   | 'uncertified';
 
 export type AgentResolution =
@@ -53,6 +55,20 @@ function inferHostedAgent(vendor: string | undefined): Extract<AgentType, 'claud
 
 function certifyCommandFor(modelId: string, provider: NativeProviderName, phase: AgentResolutionPhase): string {
   return `npx tsx tools/native-agent-certify.ts --provider ${provider} --model ${modelId} --phase ${certificationPhaseForAgentPhase(phase)}`;
+}
+
+function launchPriorityRoleEligibility(modelId: string, phase: AgentResolutionPhase): {
+  eligible: boolean;
+  eligibleRoles?: readonly RoleEligibility[];
+} {
+  const launchPriorityModel = resolveLaunchPriorityModel(modelId);
+  if (!launchPriorityModel) {
+    return { eligible: true };
+  }
+  return {
+    eligible: launchPriorityModel.roleEligibility.includes(phase),
+    eligibleRoles: launchPriorityModel.roleEligibility,
+  };
 }
 
 function buildDiagnostic(input: {
@@ -124,6 +140,19 @@ function resolveRegistryBackedNativeAgent(input: {
       diagnostic,
       certifyCommand: certifyCommandFor(input.modelId, provider, input.phase),
     };
+  }
+
+  const roleEligibility = launchPriorityRoleEligibility(input.modelId, input.phase);
+  if (!roleEligibility.eligible) {
+    const eligibleRoles = roleEligibility.eligibleRoles?.join(',') || 'none';
+    const diagnostic = buildDiagnostic({
+      modelId: input.modelId,
+      phase: input.phase,
+      provider,
+      reason: 'role-ineligible',
+      certificationStatus: `eligible-roles:${eligibleRoles}`,
+    });
+    return { ok: false, reason: 'role-ineligible', diagnostic };
   }
 
   const eligibility = evaluateRegistryPhaseEligibility({

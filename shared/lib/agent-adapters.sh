@@ -479,7 +479,13 @@ agent_native_launch_probe() {
 
   if ! output="$(cd "$repo_dir" 2>/dev/null && agent_run_tsx_tool "$tool" --repo-dir "$repo_dir" --phase "$phase" --agent "$cmd" --model "$model" 2>/dev/null)"; then
     AGENT_NATIVE_LAUNCH_LAST_REASON="error: native launch probe failed for $cmd/$phase/$model"
-    [[ -n "$output" ]] && AGENT_NATIVE_LAUNCH_LAST_REASON="$output"
+    if [[ -n "$output" ]]; then
+      if command -v jq >/dev/null 2>&1 && printf '%s' "$output" | jq -e '.ok == false' >/dev/null 2>&1; then
+        AGENT_NATIVE_LAUNCH_LAST_REASON="$(printf '%s' "$output" | jq -r '.reason // "native launch probe rejected the route"' 2>/dev/null)"
+      else
+        AGENT_NATIVE_LAUNCH_LAST_REASON="$output"
+      fi
+    fi
     echo "$AGENT_NATIVE_LAUNCH_LAST_REASON" >&2
     return 1
   fi
