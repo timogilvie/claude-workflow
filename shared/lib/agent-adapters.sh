@@ -1804,8 +1804,10 @@ export WAVEMILL_TITLE='${WAVEMILL_TITLE:-}'
 if [[ -n '$issue' ]]; then
   printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
 fi
+set +e
 npx tsx '$repo_dir/tools/launch-native-planning.ts' --session '$session' --issue '$issue' --linear-issue '$linear_issue' --slug '$feature_slug' --wt-dir '$worktree_dir' --repo-dir '$repo_dir'
 native_rc=\$?
+set -e
 if [[ -n "\${STATUS_LOG_FILE:-}" ]]; then
   printf '%s\n' "[wavemill] native planning exit code native=\${native_rc} issue='$issue'" >> "\$STATUS_LOG_FILE" 2>/dev/null || true
 fi
@@ -1833,8 +1835,10 @@ export WAVEMILL_TITLE='${WAVEMILL_TITLE:-}'
 if [[ -n '$issue' ]]; then
   printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
 fi
+set +e
 npx tsx '$repo_dir/tools/launch-native-review.ts' --session '$session' --issue '$issue' --slug '$feature_slug' --wt-dir '$worktree_dir' --repo-dir '$repo_dir'
 native_rc=\$?
+set -e
 if [[ -n "\${STATUS_LOG_FILE:-}" ]]; then
   printf '%s\n' "[wavemill] native review exit code native=\${native_rc} issue='$issue'" >> "\$STATUS_LOG_FILE" 2>/dev/null || true
 fi
@@ -2247,8 +2251,15 @@ export WAVEMILL_TITLE='${WAVEMILL_TITLE:-}'
 if [[ -n '$issue' ]]; then
   printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
 fi
+set +e
 npx tsx '$repo_dir/tools/launch-native-planning.ts' --session '$session' --issue '$issue' --linear-issue '$linear_issue' --slug '$feature_slug' --wt-dir '$worktree_dir' --repo-dir '$repo_dir'
-echo "[wavemill] Agent exited (\$?)"
+native_rc=\$?
+set -e
+if [[ -n "\${STATUS_LOG_FILE:-}" ]]; then
+  printf '%s\n' "[wavemill] native planning exit code native=\${native_rc} issue='$issue'" >> "\$STATUS_LOG_FILE" 2>/dev/null || true
+fi
+echo "[wavemill] Agent exited (native=\${native_rc})"
+exit "\$native_rc"
 LAUNCHEOF
           ;;
         review)
@@ -2271,8 +2282,15 @@ export WAVEMILL_TITLE='${WAVEMILL_TITLE:-}'
 if [[ -n '$issue' ]]; then
   printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
 fi
+set +e
 npx tsx '$repo_dir/tools/launch-native-review.ts' --session '$session' --issue '$issue' --slug '$feature_slug' --wt-dir '$worktree_dir' --repo-dir '$repo_dir'
-echo "[wavemill] Agent exited (\$?)"
+native_rc=\$?
+set -e
+if [[ -n "\${STATUS_LOG_FILE:-}" ]]; then
+  printf '%s\n' "[wavemill] native review exit code native=\${native_rc} issue='$issue'" >> "\$STATUS_LOG_FILE" 2>/dev/null || true
+fi
+echo "[wavemill] Agent exited (native=\${native_rc})"
+exit "\$native_rc"
 LAUNCHEOF
           ;;
         *)

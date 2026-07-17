@@ -33,6 +33,7 @@ async function main(): Promise<void> {
     title: readOption('title') ?? process.env.WAVEMILL_TITLE,
     issueContext: readOption('issue-context') ?? process.env.WAVEMILL_ISSUE_CONTEXT,
     linearIssue: readOption('linear-issue') ?? process.env.WAVEMILL_LINEAR_ISSUE,
+    resolvedModel: readOption('model') ?? process.env.WAVEMILL_RESOLVED_MODEL,
   });
 }
 
