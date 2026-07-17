@@ -30,6 +30,10 @@ import { loadNativePhasePrompt, registerAndRecordNativeProvenance } from './prom
 import { isTaskPacketContent } from '../task-packet-utils.ts';
 import { createCleanupTracker, runCleanup, type CleanupReason } from './cleanup.ts';
 import { updateStageResult } from '../stage-result.ts';
+import {
+  resolveOpenRouterIdFromWavemillAlias,
+  resolveWavemillAliasFromOpenRouterId,
+} from '../openrouter-catalog.ts';
 
 const RELEASE_READINESS_STUB = [
   '',
@@ -43,6 +47,7 @@ const RELEASE_READINESS_STUB = [
 ].join('\n');
 
 const DEFAULT_HELPER_TIMEOUT_MS = 12 * 60 * 1000;
+const HELPER_STDERR_TAIL_CHARS = 2000;
 
 type HookState = 'working' | 'idle' | 'error';
 
@@ -60,6 +65,7 @@ export interface LaunchNativePlanningOptions {
   title?: string;
   issueContext?: string;
   linearIssue?: string;
+  resolvedModel?: string;
   taskPacketPath?: string;
   routeOutputPath?: string;
   planPath?: string;
@@ -103,6 +109,18 @@ function writeHookStatus(
   renameSync(tmpPath, hookPath);
 }
 
+function writeTextStatus(session: string, issue: string, text: string): void {
+  if (!session || !issue) {
+    return;
+  }
+  const statusPath = `/tmp/${session}-${issue}-status.txt`;
+  try {
+    writeFileSync(statusPath, `${text}\n`, 'utf-8');
+  } catch {
+    // The hook JSON is the source of truth; this plain text file is best-effort.
+  }
+}
+
 function helperTimeoutMs(): number {
   const raw = process.env.WAVEMILL_NATIVE_PLANNING_HELPER_TIMEOUT_MS;
   if (!raw) {
@@ -112,22 +130,53 @@ function helperTimeoutMs(): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_HELPER_TIMEOUT_MS;
 }
 
+function formatTsxCommand(args: string[]): string {
+  return `npx tsx ${args.map((arg) => /\s/.test(arg) ? JSON.stringify(arg) : arg).join(' ')}`;
+}
+
+export function describeNativePlanningHelperFailure(error: unknown, args: string[], timeoutMs: number): Error {
+  const err = error as Error & {
+    code?: string;
+    signal?: NodeJS.Signals;
+    killed?: boolean;
+    status?: number | null;
+    stderr?: Buffer | string | null;
+  };
+  const command = formatTsxCommand(args);
+  const message = err instanceof Error ? err.message : String(error);
+  const timedOut = err.code === 'ETIMEDOUT'
+    || err.signal === 'SIGTERM'
+    || err.killed === true
+    || /ETIMEDOUT|timed out/i.test(message);
+
+  if (timedOut) {
+    return new Error(`Native planning helper timed out after ${timeoutMs}ms: ${command}`);
+  }
+
+  const stderr = typeof err.stderr === 'string'
+    ? err.stderr
+    : Buffer.isBuffer(err.stderr)
+      ? err.stderr.toString('utf-8')
+      : '';
+  const stderrTail = stderr.trim().slice(-HELPER_STDERR_TAIL_CHARS);
+  const status = typeof err.status === 'number' ? `exit ${err.status}` : 'failed';
+  const detail = stderrTail ? `: ${stderrTail}` : message ? `: ${message}` : '';
+  return new Error(`Native planning helper ${status}: ${command}${detail}`);
+}
+
 function execTsx(repoDir: string, args: string[]): string {
+  const timeoutMs = helperTimeoutMs();
   try {
     return execFileSync('npx', ['tsx', ...args], {
       cwd: repoDir,
       encoding: 'utf-8',
       env: process.env,
       stdio: ['ignore', 'pipe', 'pipe'],
-      timeout: helperTimeoutMs(),
+      timeout: timeoutMs,
       killSignal: 'SIGTERM',
     });
   } catch (error) {
-    const err = error as Error & { signal?: NodeJS.Signals; killed?: boolean };
-    if (err.signal === 'SIGTERM' || err.killed) {
-      throw new Error(`Native planning helper timed out: npx tsx ${args.join(' ')}`);
-    }
-    throw error;
+    throw describeNativePlanningHelperFailure(error, args, timeoutMs);
   }
 }
 
@@ -140,6 +189,9 @@ function ensureTaskPacket(
 ): void {
   const existing = existsSync(taskPacketPath) ? readFileSync(taskPacketPath, 'utf-8') : '';
   if (existing.trim() !== '' && isTaskPacketContent(existing)) {
+    return;
+  }
+  if (materializeTaskPacketFromSelectedTask(taskPacketPath)) {
     return;
   }
 
@@ -156,6 +208,35 @@ function ensureTaskPacket(
     '--repo-path',
     repoDir,
   ]);
+}
+
+function materializeTaskPacketFromSelectedTask(taskPacketPath: string): boolean {
+  const selectedTaskPath = join(dirname(taskPacketPath), 'selected-task.json');
+  if (!existsSync(selectedTaskPath)) {
+    return false;
+  }
+
+  let data: unknown;
+  try {
+    data = JSON.parse(readFileSync(selectedTaskPath, 'utf-8')) as unknown;
+  } catch {
+    return false;
+  }
+
+  if (!data || typeof data !== 'object') {
+    return false;
+  }
+
+  const record = data as Record<string, unknown>;
+  const title = typeof record.title === 'string' ? record.title.trim() : '';
+  const description = typeof record.description === 'string' ? record.description.trim() : '';
+  const content = [title, description].filter((part) => part.length > 0).join('\n\n').trim();
+  if (content === '' || !isTaskPacketContent(content)) {
+    return false;
+  }
+
+  atomicWriteText(taskPacketPath, content);
+  return true;
 }
 
 function normalizeLinearIssueIdentifier(issue: string | undefined): string | null {
@@ -292,6 +373,54 @@ function toPiTools(descriptors: readonly ToolDescriptor[]): AgentTool<unknown, u
   return descriptors.map((descriptor) => toPiAgentTool(descriptor) as AgentTool<unknown, unknown>);
 }
 
+function canonicalNativeModelIds(modelId: string | undefined): Set<string> {
+  const ids = new Set<string>();
+  const trimmed = modelId?.trim();
+  if (!trimmed) {
+    return ids;
+  }
+
+  ids.add(trimmed);
+  const openRouterId = resolveOpenRouterIdFromWavemillAlias(trimmed);
+  if (openRouterId) {
+    ids.add(openRouterId);
+  }
+  const wavemillAlias = resolveWavemillAliasFromOpenRouterId(trimmed);
+  if (wavemillAlias) {
+    ids.add(wavemillAlias);
+  }
+  return ids;
+}
+
+function selectReadyProvider(
+  providerEntries: readonly ReadyNativeProviderEntry[],
+  resolvedModel: string | undefined,
+): ReadyNativeProviderEntry | undefined {
+  const requestedIds = canonicalNativeModelIds(resolvedModel);
+  if (requestedIds.size === 0) {
+    return providerEntries[0];
+  }
+
+  return providerEntries.find((entry) => {
+    const entryIds = canonicalNativeModelIds(entry.modelId);
+    if (entry.model.name) {
+      for (const id of canonicalNativeModelIds(entry.model.name)) {
+        entryIds.add(id);
+      }
+    }
+    return [...requestedIds].some((id) => entryIds.has(id));
+  });
+}
+
+function formatReadyProviderList(providerEntries: readonly ReadyNativeProviderEntry[]): string {
+  if (providerEntries.length === 0) {
+    return 'none';
+  }
+  return providerEntries
+    .map((entry) => `${entry.providerName}:${entry.modelId}`)
+    .join(', ');
+}
+
 function cleanupReasonForStopReason(stopReason: string): CleanupReason | null {
   if (stopReason === 'aborted') {
     return 'aborted';
@@ -338,7 +467,9 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
 
   try {
     mkdirSync(featureDir, { recursive: true });
+    writeHookStatus(hookPath, 'working', 'prepare_task_packet', taskPacketPath, 'native');
     ensureTaskPacket(options.repoDir, options.issue, options.linearIssue, taskPacketPath, runTsxCommand);
+    writeHookStatus(hookPath, 'working', 'route_task_packet', routeOutputPath, 'native');
     routeTaskPacket(taskPacketPath, routeOutputPath, options.repoDir, runTsxCommand);
     maybeWriteMigrationMarker(taskPacketPath, migrationMarkerPath);
 
@@ -353,9 +484,18 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
 
     const providerEntries = options.providerEntries
       ?? resolveNativeAgentProviders(options.repoDir, { phase: 'planning' });
-    const readyProvider = providerEntries.find(
+    const readyProviders = providerEntries.filter(
       (entry): entry is ReadyNativeProviderEntry => entry.status === 'ready',
     );
+    const readyProvider = selectReadyProvider(readyProviders, options.resolvedModel);
+
+    if (options.resolvedModel?.trim() && readyProviders.length > 0 && !readyProvider && !options.loopModelOverride) {
+      throw new Error(
+        `Native planning requested model "${options.resolvedModel.trim()}", but no ready native provider matched it. `
+        + `Ready providers: ${formatReadyProviderList(readyProviders)}. `
+        + 'Run wavemill native-agent models report --json to inspect current artifact eligibility.',
+      );
+    }
 
     if (!readyProvider && !options.loopModelOverride) {
       throw new Error(buildNativeProviderResolutionFailureMessage('planning', providerEntries));
@@ -392,6 +532,8 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
       promptRef,
       repoDir: options.repoDir,
     });
+
+    writeHookStatus(hookPath, 'working', 'run_native_model', model.name ?? model.id, 'native');
 
     const cleanupTracker = createCleanupTracker();
     const context: AgentContext = {
@@ -463,8 +605,22 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
     const finalText = ensureReleaseReadiness(rawFinalText);
 
     atomicWriteText(planPath, finalText);
+    await updateStageResult(featureDir, 'planning', {
+      status: 'completed',
+      finishedAt: new Date().toISOString(),
+      agent: 'native',
+      model: model.name ?? model.id,
+      notes: 'Native planning completed',
+      artifacts: {
+        type: 'planning',
+        planFile: relative(options.wtDir, planPath),
+        taskPacketFile: relative(options.wtDir, taskPacketPath),
+      },
+      failureReason: null,
+    });
     writeFileSync(approvalMarkerPath, '', 'utf-8');
     writeHookStatus(hookPath, 'idle', 'process_exit', 'planning_completed', 'native');
+    writeTextStatus(options.session, options.issue, 'planning complete');
 
     return {
       planPath,
@@ -477,6 +633,7 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
     };
   } catch (err) {
     writeHookStatus(hookPath, 'error', 'process_exit', (err as Error).message, 'native');
+    writeTextStatus(options.session, options.issue, 'planning error');
     throw err;
   }
 }

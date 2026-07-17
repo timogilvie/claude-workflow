@@ -6,8 +6,9 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 import { registerScriptedPiProvider } from './provider.ts';
-import { launchNativePlanning } from './launch-planning.ts';
+import { describeNativePlanningHelperFailure, launchNativePlanning } from './launch-planning.ts';
 import type { ToolDescriptor } from './tools/types.ts';
+import type { ReadyNativeProviderEntry } from './providers.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_DIR = resolve(__dirname, '../../..');
@@ -53,6 +54,24 @@ function scriptedModel(api: string) {
     api,
     provider: 'scripted',
   } as const;
+}
+
+function readyOpenRouterEntry(modelId: string, api: string): ReadyNativeProviderEntry {
+  return {
+    providerName: 'openrouter',
+    modelId,
+    status: 'ready',
+    apiKeyEnv: 'OPENROUTER_API_KEY',
+    baseUrl: 'https://openrouter.ai/api/v1',
+    headers: {},
+    model: {
+      ...scriptedModel(api),
+      id: `openrouter:${modelId}`,
+      name: modelId,
+      provider: 'scripted',
+    },
+    certificationOnly: false,
+  };
 }
 
 function stubRunTsxCommand(): (args: string[]) => string {
@@ -177,6 +196,17 @@ describe('launchNativePlanning', () => {
       assert.match(plan, /# Implementation Plan/);
       assert.match(plan, /## Release Readiness/);
       assert.ok(existsSync(join(featureDir, '.plan-approved')));
+      const stageResult = JSON.parse(
+        readFileSync(join(featureDir, '.planning-result.json'), 'utf-8'),
+      ) as Record<string, unknown>;
+      assert.equal(stageResult.status, 'completed');
+      assert.equal(stageResult.agent, 'native');
+      assert.equal(stageResult.model, `scripted:${api}`);
+      assert.deepEqual(stageResult.artifacts, {
+        type: 'planning',
+        planFile: 'features/demo/plan.md',
+        taskPacketFile: 'features/demo/task-packet.md',
+      });
 
       const hook = JSON.parse(readFileSync(result.hookPath, 'utf-8')) as Record<string, unknown>;
       assert.equal(hook.state, 'idle');
@@ -254,6 +284,135 @@ describe('launchNativePlanning', () => {
       });
 
       assert.deepEqual(expandedIssues, ['HOK-2464']);
+    } finally {
+      cleanup(wtDir);
+    }
+  });
+
+  it('materializes task-packet.md from structured selected-task.json before expanding', async () => {
+    const { wtDir, featureDir, packetPath } = setupWorktree();
+    const api = uniqueApi('selected-task-materialized');
+    const helperCommands: string[] = [];
+    rmSync(packetPath, { force: true });
+    writeFileSync(join(featureDir, 'selected-task.json'), `${JSON.stringify({
+      taskId: 'HOK-2464_c',
+      title: 'Wavemill auto-advances blocked coding',
+      description: [
+        '# Wavemill Auto-Advances Blocked Coding - Quick Reference',
+        '## Objective',
+        'Add a liveness guard.',
+        '## Success Criteria',
+        '- no silent advance',
+      ].join('\n'),
+    }, null, 2)}\n`);
+
+    try {
+      registerScriptedPiProvider({
+        api,
+        turns: [{
+          content: [{
+            type: 'text',
+            text: '# Plan\n## Release Readiness\n- **database_change_risk**: none',
+          }],
+          stopReason: 'stop',
+        }],
+      });
+
+      await launchNativePlanning({
+        session: 'sess',
+        issue: 'HOK-2464_c',
+        linearIssue: 'HOK-2464',
+        slug: 'demo',
+        wtDir,
+        repoDir: REPO_DIR,
+        loopModelOverride: scriptedModel(api),
+        runTsxCommand: (args: string[]) => {
+          helperCommands.push(args[0] ?? '');
+          if (args[0] === 'tools/expand-issue.ts') {
+            throw new Error('expand should not run when selected-task has structured task content');
+          }
+          if (args[0] === 'tools/route-task.ts') {
+            const outputIndex = args.indexOf('--output');
+            assert.ok(outputIndex >= 0, 'route-task must receive --output');
+            writeFileSync(args[outputIndex + 1]!, `${JSON.stringify({
+              planner: 'gpt-5.4',
+              coder: 'gpt-5.4',
+              reviewer: 'gpt-5.4',
+              planDepth: 'light',
+            }, null, 2)}\n`);
+            return '';
+          }
+          throw new Error(`unexpected tsx command: ${args.join(' ')}`);
+        },
+      });
+
+      assert.deepEqual(helperCommands, ['tools/route-task.ts']);
+      assert.match(readFileSync(packetPath, 'utf-8'), /Quick Reference/);
+      assert.match(readFileSync(join(featureDir, 'plan.md'), 'utf-8'), /# Plan/);
+    } finally {
+      cleanup(wtDir);
+    }
+  });
+
+  it('normalizes helper ETIMEDOUT errors with command context', () => {
+    const timeout = new Error('spawnSync npx ETIMEDOUT') as Error & { code: string };
+    timeout.code = 'ETIMEDOUT';
+
+    const error = describeNativePlanningHelperFailure(timeout, [
+      'tools/expand-issue.ts',
+      'HOK-2464',
+      '--output',
+      '/tmp/task-packet.md',
+    ], 720000);
+
+    assert.match(error.message, /Native planning helper timed out after 720000ms/);
+    assert.match(error.message, /npx tsx tools\/expand-issue\.ts HOK-2464 --output \/tmp\/task-packet\.md/);
+    assert.doesNotMatch(error.message, /^spawnSync npx ETIMEDOUT$/);
+  });
+
+  it('selects the ready provider matching the routed OpenRouter alias', async () => {
+    const { wtDir, featureDir } = setupWorktree();
+    const qwenApi = uniqueApi('qwen-provider');
+    const kimiApi = uniqueApi('kimi-provider');
+
+    try {
+      registerScriptedPiProvider({
+        api: qwenApi,
+        turns: [{
+          content: [{
+            type: 'text',
+            text: '# Wrong Provider\n## Release Readiness\n- **database_change_risk**: none',
+          }],
+          stopReason: 'stop',
+        }],
+      });
+      registerScriptedPiProvider({
+        api: kimiApi,
+        turns: [{
+          content: [{
+            type: 'text',
+            text: '# Kimi Provider\n## Release Readiness\n- **database_change_risk**: none',
+          }],
+          stopReason: 'stop',
+        }],
+      });
+
+      const result = await launchNativePlanning({
+        session: 'sess',
+        issue: 'HOK-2464_c',
+        slug: 'demo',
+        wtDir,
+        repoDir: REPO_DIR,
+        resolvedModel: 'kimi-k2.7-code',
+        providerEntries: [
+          readyOpenRouterEntry('qwen/qwen3-coder', qwenApi),
+          readyOpenRouterEntry('moonshotai/kimi-k2.7-code', kimiApi),
+        ],
+        runTsxCommand: stubRunTsxCommand(),
+      });
+
+      assert.equal(result.model, 'moonshotai/kimi-k2.7-code');
+      assert.match(readFileSync(join(featureDir, 'plan.md'), 'utf-8'), /# Kimi Provider/);
     } finally {
       cleanup(wtDir);
     }
