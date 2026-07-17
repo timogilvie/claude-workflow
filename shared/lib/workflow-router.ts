@@ -1793,7 +1793,11 @@ export async function routeWorkflowHokusai(
         ]
       : enriched.reasoning,
     routingMode: 'hokusai',
-    neighborCount: 0,
+    neighborCount: typeof enriched.provenance?.hokusai?.nearestNeighborCount === 'number'
+      ? enriched.provenance.hokusai.nearestNeighborCount
+      : Array.isArray(enriched.provenance?.nearestNeighbors)
+        ? enriched.provenance.nearestNeighbors.length
+        : 0,
     neighborSimilarityRange: [0, 0],
     expectedCost: Number(
       (enriched.expectedCostPlan + enriched.expectedCostCode + enriched.expectedCostReview).toFixed(2)

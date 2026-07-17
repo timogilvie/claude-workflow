@@ -135,10 +135,21 @@ test('clamps probability fields and preserves provenance metadata', () => {
         estimated_cost_usd: 0,
         estimated_duration_seconds: 123,
         confidence: -1,
+        objective: 'highest_reliability',
+        rationale: 'Estimated highest_reliability strategy from 2 exact route match(es) across 40 nearest Wavemill router row(s).',
       },
       alternatives: [{ planner_model: 'alt' }],
       tradeoffs: [{ kind: 'speed' }],
       nearest_neighbors: [{ id: 'n1' }],
+    },
+    metadata: {
+      request_id: 'req-1',
+      inference_log_id: 'log-1',
+      api_version: '1.0',
+      inference_method: 'mlflow_pyfunc',
+      model_uri: 'models:/Technical Task Router@production',
+      model_version: 'production',
+      schema: 'technical_task_router_inputs/v2',
     },
   }));
 
@@ -148,6 +159,10 @@ test('clamps probability fields and preserves provenance metadata', () => {
   assert.equal(decision.provenance?.inferenceLogId, 'log-1');
   assert.equal(decision.provenance?.estimatedDurationSeconds, 123);
   assert.deepEqual(decision.provenance?.alternatives, [{ planner_model: 'alt' }]);
+  assert.equal(decision.provenance?.hokusai?.nearestNeighborCount, 1);
+  assert.equal(decision.provenance?.hokusai?.exactRouteMatchCount, 2);
+  assert.equal(decision.provenance?.hokusai?.modelVersion, 'production');
+  assert.equal(decision.provenance?.hokusai?.schema, 'technical_task_router_inputs/v2');
 });
 
 console.log(`\n--- Results: ${passed} passed, ${failed} failed ---`);

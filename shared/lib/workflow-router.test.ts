@@ -728,6 +728,7 @@ await test('auto mode uses hokusai first when configured', async () => {
         estimated_success_under_budget: 0.88,
         estimated_cost_usd: 1.75,
         confidence: 0.81,
+        rationale: 'Estimated highest_reliability strategy from 0 exact route match(es) across 40 nearest Wavemill router row(s).',
       },
     },
     metadata: {},
@@ -737,6 +738,7 @@ await test('auto mode uses hokusai first when configured', async () => {
     const decision = await routeWorkflowAuto('Add a workflow router mode with tests.', { repoDir });
     assert.equal(decision.routingMode, 'hokusai');
     assert.equal(decision.coder, 'gpt-5.4');
+    assert.equal(decision.neighborCount, 40);
   } finally {
     globalThis.fetch = originalFetch;
     cleanup();

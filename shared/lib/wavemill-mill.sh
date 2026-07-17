@@ -9579,42 +9579,78 @@ Implement from the issue description plus direct codebase analysis."
   routing_max_cost_usd="$(read_route_json "$SESSION" "$issue" "constraints.maxCostUsd" "")"
   [[ -z "$routing_max_cost_usd" ]] && routing_max_cost_usd="${DEFAULT_MAX_COST_USD:-}"
 
-  jq -n \
-    --arg planner "${planner_model:-claude-sonnet-5}" \
-    --arg coder "${task_model:-claude-opus-4-7}" \
-    --arg reviewer "${reviewer_model:-claude-sonnet-5}" \
-    --arg planDepth "${plan_depth:-light}" \
-    --arg codeDepth "${code_depth:-medium}" \
-    --arg reviewMode "${review_mode:-static}" \
-    --arg source "bootstrap" \
-    --arg inputKind "issue" \
-    --arg inputPath "features/$slug/selected-task.json" \
-    --arg provenanceSource "$(read_route_json "$SESSION" "$issue" "source" "")" \
-    --arg provenanceInputKind "$(read_route_json "$SESSION" "$issue" "inputKind" "")" \
-    --arg provenanceInputPath "$(read_route_json "$SESSION" "$issue" "inputPath" "")" \
-    --arg provenanceInputHash "$(read_route_json "$SESSION" "$issue" "inputHash" "")" \
-    --arg provenanceRoutedAt "$(read_route_json "$SESSION" "$issue" "routedAt" "")" \
-    --arg provenanceRouterMode "$(read_route_json "$SESSION" "$issue" "routerMode" "")" \
-    --argjson maxCostUsd "${routing_max_cost_usd:-null}" \
-    '{
-      planner: $planner,
-      coder: $coder,
-      reviewer: $reviewer,
-      planDepth: $planDepth,
-      codeDepth: $codeDepth,
-      reviewMode: $reviewMode,
-      reviewRecommended: $reviewMode,
-      provenance: {
-        source: (if $provenanceSource == "" then $source else $provenanceSource end),
-        inputKind: (if $provenanceInputKind == "" then $inputKind else $provenanceInputKind end),
-        inputPath: (if $provenanceInputPath == "" then $inputPath else $provenanceInputPath end),
-        inputHash: $provenanceInputHash,
-        routedAt: (if $provenanceRoutedAt == "" then (now | todateiso8601) else $provenanceRoutedAt end),
-        routerMode: (if $provenanceRouterMode == "" then "normal" else $provenanceRouterMode end)
-      },
-      maxCostUsd: $maxCostUsd
-    } + (if $maxCostUsd == null then {} else {constraints: {maxCostUsd: $maxCostUsd}} end)' \
-    | write_json_artifact "$routing_file"
+  local startup_route_file="/tmp/${SESSION}-${issue}-route.json"
+  if [[ -f "$startup_route_file" ]] && jq -e '.planner and .coder and .reviewer' "$startup_route_file" >/dev/null 2>&1; then
+    jq \
+      --arg planner "${planner_model:-claude-sonnet-5}" \
+      --arg coder "${task_model:-claude-opus-4-7}" \
+      --arg reviewer "${reviewer_model:-claude-sonnet-5}" \
+      --arg planDepth "${plan_depth:-light}" \
+      --arg codeDepth "${code_depth:-medium}" \
+      --arg reviewMode "${review_mode:-static}" \
+      --arg source "bootstrap" \
+      --arg inputKind "issue" \
+      --arg inputPath "features/$slug/selected-task.json" \
+      --argjson maxCostUsd "${routing_max_cost_usd:-null}" \
+      '(.provenance // {}) as $p
+      | .planner = $planner
+      | .coder = $coder
+      | .reviewer = $reviewer
+      | .planDepth = $planDepth
+      | .codeDepth = $codeDepth
+      | .reviewMode = $reviewMode
+      | .reviewRecommended = $reviewMode
+      | .provenance = ($p + {
+          source: (if (($p.source // "") == "") then $source else $p.source end),
+          inputKind: (if (($p.inputKind // "") == "") then $inputKind else $p.inputKind end),
+          inputPath: (if (($p.inputPath // "") == "") then $inputPath else $p.inputPath end),
+          inputHash: ($p.inputHash // ""),
+          routedAt: (if (($p.routedAt // "") == "") then (now | todateiso8601) else $p.routedAt end),
+          routerMode: (if (($p.routerMode // "") == "") then "normal" else $p.routerMode end)
+        })
+      | if $maxCostUsd == null
+        then .
+        else .maxCostUsd = $maxCostUsd | .constraints = ((.constraints // {}) + {maxCostUsd: $maxCostUsd})
+        end' "$startup_route_file" \
+      | write_json_artifact "$routing_file"
+  else
+    jq -n \
+      --arg planner "${planner_model:-claude-sonnet-5}" \
+      --arg coder "${task_model:-claude-opus-4-7}" \
+      --arg reviewer "${reviewer_model:-claude-sonnet-5}" \
+      --arg planDepth "${plan_depth:-light}" \
+      --arg codeDepth "${code_depth:-medium}" \
+      --arg reviewMode "${review_mode:-static}" \
+      --arg source "bootstrap" \
+      --arg inputKind "issue" \
+      --arg inputPath "features/$slug/selected-task.json" \
+      --arg provenanceSource "$(read_route_json "$SESSION" "$issue" "source" "")" \
+      --arg provenanceInputKind "$(read_route_json "$SESSION" "$issue" "inputKind" "")" \
+      --arg provenanceInputPath "$(read_route_json "$SESSION" "$issue" "inputPath" "")" \
+      --arg provenanceInputHash "$(read_route_json "$SESSION" "$issue" "inputHash" "")" \
+      --arg provenanceRoutedAt "$(read_route_json "$SESSION" "$issue" "routedAt" "")" \
+      --arg provenanceRouterMode "$(read_route_json "$SESSION" "$issue" "routerMode" "")" \
+      --argjson maxCostUsd "${routing_max_cost_usd:-null}" \
+      '{
+        planner: $planner,
+        coder: $coder,
+        reviewer: $reviewer,
+        planDepth: $planDepth,
+        codeDepth: $codeDepth,
+        reviewMode: $reviewMode,
+        reviewRecommended: $reviewMode,
+        provenance: {
+          source: (if $provenanceSource == "" then $source else $provenanceSource end),
+          inputKind: (if $provenanceInputKind == "" then $inputKind else $provenanceInputKind end),
+          inputPath: (if $provenanceInputPath == "" then $inputPath else $provenanceInputPath end),
+          inputHash: $provenanceInputHash,
+          routedAt: (if $provenanceRoutedAt == "" then (now | todateiso8601) else $provenanceRoutedAt end),
+          routerMode: (if $provenanceRouterMode == "" then "normal" else $provenanceRouterMode end)
+        },
+        maxCostUsd: $maxCostUsd
+      } + (if $maxCostUsd == null then {} else {constraints: {maxCostUsd: $maxCostUsd}} end)' \
+      | write_json_artifact "$routing_file"
+  fi
 
   # Save initial route for eval comparison (routed on raw description).
   # Always stamp source='bootstrap' regardless of what the batch router recorded,

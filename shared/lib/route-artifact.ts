@@ -41,6 +41,17 @@ export interface RouteProvenance {
   alternatives?: unknown;
   tradeoffs?: unknown;
   nearestNeighbors?: unknown;
+  hokusai?: {
+    apiVersion?: string;
+    inferenceMethod?: string;
+    modelUri?: string;
+    modelVersion?: string;
+    schema?: string;
+    objective?: string;
+    rationale?: string;
+    nearestNeighborCount?: number;
+    exactRouteMatchCount?: number;
+  };
 }
 
 export interface RouteDecisionWithProvenance extends WorkflowRouteDecision {
@@ -166,7 +177,10 @@ export function withRouteProvenance<T extends WorkflowRouteDecision>(decision: T
 } {
   return {
     ...decision,
-    provenance,
+    provenance: {
+      ...(decision.provenance ?? {}),
+      ...provenance,
+    },
   };
 }
 
