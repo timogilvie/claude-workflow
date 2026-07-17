@@ -4495,9 +4495,31 @@ blocked_completion_commit_matches_head() {
   return 1
 }
 
-blocked_completion_auto_allowed_dirty_path() {
+# wavemill_owned_feature_artifact_path <normalized_path> <slug>
+# Returns 0 when the path is a Wavemill-owned artifact scoped to features/<slug>/.
+wavemill_owned_feature_artifact_path() {
   local normalized_path="$1" slug="$2"
   local artifact_prefix="features/$slug/"
+
+  if [[ "$normalized_path" == ${artifact_prefix}.* ]]; then
+    return 0
+  fi
+
+  case "$normalized_path" in
+    "${artifact_prefix}plan.md"|\
+    "${artifact_prefix}task-packet"*.md|\
+    "${artifact_prefix}selected-task.json"|\
+    "${artifact_prefix}trace.jsonl"|\
+    "${artifact_prefix}routing.jsonl")
+      return 0
+      ;;
+  esac
+
+  return 1
+}
+
+blocked_completion_auto_allowed_dirty_path() {
+  local normalized_path="$1" slug="$2"
 
   if [[ "$normalized_path" == .wavemill/* ]]; then
     return 0
@@ -4508,19 +4530,7 @@ blocked_completion_auto_allowed_dirty_path() {
     return 0
   fi
 
-  if [[ "$normalized_path" == ${artifact_prefix}.* ]]; then
-    return 0
-  fi
-
-  case "$normalized_path" in
-    "${artifact_prefix}plan.md"|\
-    "${artifact_prefix}task-packet"*.md|\
-    "${artifact_prefix}selected-task.json")
-      return 0
-      ;;
-  esac
-
-  return 1
+  wavemill_owned_feature_artifact_path "$normalized_path" "$slug"
 }
 
 blocked_completion_worktree_clean_for_auto() {
