@@ -156,6 +156,7 @@ harness_extract_real_functions() {
     blocked_completion_current_head \
     coding_output_dirty_paths \
     blocked_completion_commit_matches_head \
+    wavemill_owned_feature_artifact_path \
     blocked_completion_auto_allowed_dirty_path \
     blocked_completion_worktree_clean_for_auto \
     coding_uncommitted_output_announce_marker \
@@ -1620,6 +1621,50 @@ EOF
   check_not_contains "coding complete wins: no blocked-attention log" "$(kv_value "$tick" log_output)" "needs attention:"
 }
 
+test_coding_complete_trace_metadata_only_advances() {
+  local slug="coding-complete-trace-only"
+  local issue="HOK-2446-TRACE"
+  local repo tick1 tick2 feature_dir
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  feature_dir="$repo/features/$slug"
+
+  touch "$feature_dir/.coding-complete"
+  printf '{"stage":"coding","event":"phase_completed"}\n' > "$feature_dir/trace.jsonl"
+
+  tick1="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
+  tick2="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
+
+  check_eq "trace only: coding stage becomes completed" "completed" "$(harness_read_stage_status "$repo" "$slug" coding)"
+  check_eq "trace only: controller advances to review" "review" "$(kv_value "$tick2" phase)"
+  check_eq "trace only: attention stays clear" "clear" "$(kv_value "$tick2" attention)"
+  check_file_absent "trace only: no uncommitted output artifact" "$feature_dir/.coding-uncommitted-output.json"
+  check_not_contains "trace only: no dirty output log" "$(kv_value "$tick1" log_output)$(kv_value "$tick2" log_output)" "uncommitted coding output"
+}
+
+test_coding_complete_routing_metadata_only_advances() {
+  local slug="coding-complete-routing-only"
+  local issue="HOK-2446-ROUTING"
+  local repo tick1 tick2 feature_dir
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  feature_dir="$repo/features/$slug"
+
+  touch "$feature_dir/.coding-complete"
+  printf '{"event":"route_assigned","model":"codex"}\n' > "$feature_dir/routing.jsonl"
+
+  tick1="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
+  tick2="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
+
+  check_eq "routing only: coding stage becomes completed" "completed" "$(harness_read_stage_status "$repo" "$slug" coding)"
+  check_eq "routing only: controller advances to review" "review" "$(kv_value "$tick2" phase)"
+  check_eq "routing only: attention stays clear" "clear" "$(kv_value "$tick2" attention)"
+  check_file_absent "routing only: no uncommitted output artifact" "$feature_dir/.coding-uncommitted-output.json"
+  check_not_contains "routing only: no dirty output log" "$(kv_value "$tick1" log_output)$(kv_value "$tick2" log_output)" "uncommitted coding output"
+}
+
 test_coding_complete_dirty_worktree_without_commits_needs_attention() {
   local slug="coding-complete-uncommitted-output"
   local issue="HOK-2266-UNCOMMITTED"
@@ -1642,6 +1687,33 @@ test_coding_complete_dirty_worktree_without_commits_needs_attention() {
   check_contains "uncommitted output: actionable log emitted" "$(kv_value "$tick" log_output)" "branch has no commits beyond main and worktree still contains uncommitted coding output"
   check_file_exists "uncommitted output: artifact written" "$feature_dir/.coding-uncommitted-output.json"
   check_file_exists "uncommitted output: dedupe marker written" "$feature_dir/.coding-uncommitted-output-announced"
+}
+
+test_coding_complete_metadata_and_source_dirty_still_blocks_review() {
+  local slug="coding-complete-metadata-and-source-dirty"
+  local issue="HOK-2446-MIXED"
+  local repo tick feature_dir
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  feature_dir="$repo/features/$slug"
+
+  printf 'committed change\n' >> "$repo/README.md"
+  git -C "$repo" add README.md
+  git -C "$repo" commit -m "feat: committed coding output" >/dev/null 2>&1
+
+  touch "$feature_dir/.coding-complete"
+  printf '{"stage":"coding","event":"phase_completed"}\n' > "$feature_dir/trace.jsonl"
+  printf 'still dirty\n' >> "$repo/src-dirty.ts"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
+
+  check_eq "mixed dirty: phase stays coding" "coding" "$(kv_value "$tick" phase)"
+  check_eq "mixed dirty: coding stage stays running" "running" "$(harness_read_stage_status "$repo" "$slug" coding)"
+  check_eq "mixed dirty: needs-user attention set" "needs-user" "$(kv_value "$tick" attention)"
+  check_contains "mixed dirty: dirty source still reported" "$(jq -r '.dirtyPaths[]' "$feature_dir/.coding-uncommitted-output.json")" "src-dirty.ts"
+  check_not_contains "mixed dirty: metadata omitted from dirty paths" "$(jq -r '.dirtyPaths[]' "$feature_dir/.coding-uncommitted-output.json")" "trace.jsonl"
+  check_not_contains "mixed dirty: review does not launch" "$(kv_value "$tick" log_output)" "Launching review phase"
 }
 
 test_coding_complete_dirty_worktree_with_commits_needs_attention() {
@@ -2531,7 +2603,10 @@ test_coding_blocked_completion_auto_advances_with_wavemill_metadata_noise
 test_coding_blocked_completion_dedupes_same_artifact
 test_coding_blocked_completion_reannounces_on_mtime_change
 test_coding_complete_wins_over_blocked_completion
+test_coding_complete_trace_metadata_only_advances
+test_coding_complete_routing_metadata_only_advances
 test_coding_complete_dirty_worktree_without_commits_needs_attention
+test_coding_complete_metadata_and_source_dirty_still_blocks_review
 test_coding_blocked_completion_malformed_json_falls_back
 test_coding_blocked_completion_missing_required_field_does_not_auto_advance
 test_coding_blocked_completion_empty_passing_checks_does_not_auto_advance

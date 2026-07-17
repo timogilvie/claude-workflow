@@ -4439,7 +4439,7 @@ coding_output_dirty_paths() {
     fi
     normalized_path="${path#./}"
 
-    if blocked_completion_auto_allowed_dirty_path "$normalized_path" "$slug"; then
+    if wavemill_owned_feature_artifact_path "$normalized_path" "$slug"; then
       continue
     fi
 
@@ -4455,6 +4455,20 @@ blocked_completion_commit_matches_head() {
   [[ "$artifact_commit" == "$head" ]] && return 0
   [[ "$head" == "$artifact_commit"* ]] && return 0
   return 1
+}
+
+wavemill_owned_feature_artifact_path() {
+  local normalized_path="$1" slug="$2"
+  local artifact_prefix="features/$slug/"
+
+  case "$normalized_path" in
+    "${artifact_prefix}trace.jsonl"|\
+    "${artifact_prefix}routing.jsonl")
+      return 0
+      ;;
+  esac
+
+  blocked_completion_auto_allowed_dirty_path "$normalized_path" "$slug"
 }
 
 blocked_completion_auto_allowed_dirty_path() {
