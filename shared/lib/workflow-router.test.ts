@@ -1700,6 +1700,74 @@ await test('patch cert rejects planner role which requires workflow certificatio
   }
 });
 
+await test('launch-priority roleEligibility removes coding-only Qwen from planner pool with diagnostics', () => {
+  const previousApiKey = process.env.HOK2540_OPENROUTER_KEY;
+  process.env.HOK2540_OPENROUTER_KEY = 'test-openrouter-key';
+  const { repoDir, cleanup } = makeRepo({
+    providers: {
+      openrouter: {
+        enabled: true,
+        apiKeyEnv: 'HOK2540_OPENROUTER_KEY',
+        models: ['qwen-2.5-coder-32b'],
+        stages: ['planner'],
+      },
+    },
+    modelRegistry: {
+      models: {
+        'qwen-2.5-coder-32b': {
+          class: 'strong_generalist',
+          nativeCapability: {
+            nativeProvider: 'openrouter',
+            piTransportKind: 'openai-completions',
+            readOnlyNative: 'certified',
+            compatFlags: { thinkingFormat: 'openrouter' },
+            certification: {
+              maxCertifiedPhase: 'workflow',
+              certifiedAt: '2026-06-01T00:00:00.000Z',
+              certificationSuiteVersion: 'v1',
+            },
+          },
+        },
+      },
+    },
+  });
+  try {
+    writeCertArtifact(repoDir, 'qwen', 'qwen-2.5-coder-32b-instruct', 'v1', { phase: 'workflow' });
+
+    const decision = routeWorkflow('Plan a new multi-stage workflow.', {
+      repoDir,
+      plannerModelsAvailable: ['qwen-2.5-coder-32b', 'claude-haiku-4-5-20251001'],
+      modelsAvailable: ['qwen-2.5-coder-32b', 'claude-haiku-4-5-20251001'],
+      skipDifficultyClassification: true,
+    });
+
+    assert.notEqual(decision.planner, 'qwen-2.5-coder-32b');
+    const rejection = (decision.nativeCertificationRejections ?? [])
+      .find((r) => r.modelId === 'qwen-2.5-coder-32b' && r.role === 'planner');
+    assert.ok(rejection, 'coding-only Qwen planner candidate must be rejected before selection');
+    assert.equal(rejection?.reason, 'role-ineligible');
+    assert.equal(rejection?.requestedLaunchPhase, 'planning');
+    assert.equal(rejection?.nativeProvider, 'openrouter');
+    assert.deepEqual(rejection?.eligibleRoles, ['coding']);
+    assert.ok(
+      decision.reasoning.some((line) => (
+        line.includes('qwen-2.5-coder-32b')
+        && line.includes('role-ineligible')
+        && line.includes('provider=openrouter')
+        && line.includes('eligibleRoles=coding')
+      )),
+      'router reasoning should include role/provider eligibility diagnostics',
+    );
+  } finally {
+    cleanup();
+    if (previousApiKey === undefined) {
+      delete process.env.HOK2540_OPENROUTER_KEY;
+    } else {
+      process.env.HOK2540_OPENROUTER_KEY = previousApiKey;
+    }
+  }
+});
+
 await test('missing artifact rejects native model and routes to non-native fallback', () => {
   const { repoDir, cleanup } = makeRepo({
     modelRegistry: {

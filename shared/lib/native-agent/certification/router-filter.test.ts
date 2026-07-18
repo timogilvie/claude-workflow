@@ -331,7 +331,7 @@ await test('workflow cert passes for all roles', () => {
   }
 });
 
-await test('openrouter aliases load certifications from mapped provider/model storage paths', () => {
+await test('openrouter aliases load certifications from mapped provider/model storage paths for eligible roles', () => {
   const { repoDir, cleanup } = makeRepo();
   try {
     writeCertArtifact(repoDir, 'qwen', 'qwen3-coder', 'v1', { phase: 'workflow' });
@@ -366,9 +366,78 @@ await test('openrouter aliases load certifications from mapped provider/model st
       ladders: {},
     };
 
-    const result = filterNativeModels(['qwen-3-coder'], 'planner', registry, repoDir);
+    const result = filterNativeModels(['qwen-3-coder'], 'reviewer', registry, repoDir);
     assert.deepEqual(result.eligible, ['qwen-3-coder']);
     assert.deepEqual(result.rejected, []);
+  } finally {
+    cleanup();
+  }
+});
+
+await test('launch-priority roleEligibility rejects coding-only Qwen aliases for planner role', () => {
+  const { repoDir, cleanup } = makeRepo();
+  try {
+    writeCertArtifact(repoDir, 'qwen', 'qwen-2.5-coder-32b-instruct', 'v1', { phase: 'workflow' });
+    const registry: ModelRegistry = {
+      models: {
+        'qwen-2.5-coder-32b': {
+          vendor: 'qwen',
+          class: 'strong_generalist',
+          strengths: [],
+          weaknesses: [],
+          qualityScores: { routing: 58, planning: 65, coding: 84, review: 70, classify: 58 },
+          contextWindowTokens: 32_768,
+          toolSupport: 'basic',
+          multimodal: { text: true, image: false },
+          latencyTier: 'standard',
+          reasoningTier: 'standard',
+          costPerMillionInputTokensUsd: 0.2,
+          costPerMillionOutputTokensUsd: 0.6,
+          nativeCapability: {
+            nativeProvider: 'openrouter',
+            piTransportKind: 'openai-completions',
+            readOnlyNative: 'certified',
+            certification: {
+              maxCertifiedPhase: 'workflow',
+              certifiedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+              certificationSuiteVersion: 'v1',
+            },
+          },
+        },
+      },
+      ladders: {},
+    };
+
+    const result = filterNativeModels(['qwen-2.5-coder-32b'], 'planner', registry, repoDir);
+    assert.deepEqual(result.eligible, []);
+    assert.equal(result.rejected.length, 1);
+    assert.equal(result.rejected[0]?.reason, 'role-ineligible');
+    assert.equal(result.rejected[0]?.requestedLaunchPhase, 'planning');
+    assert.equal(result.rejected[0]?.nativeProvider, 'openrouter');
+    assert.deepEqual(result.rejected[0]?.eligibleRoles, ['coding']);
+  } finally {
+    cleanup();
+  }
+});
+
+await test('nativeAgent.allowedPhases rejects configured native planning candidates before route selection', () => {
+  const { repoDir, cleanup } = makeRepo();
+  try {
+    writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
+      nativeAgent: {
+        enabled: true,
+        allowedPhases: ['review'],
+      },
+    }));
+    writeCertArtifact(repoDir, 'openai', 'native-workflow', 'v1', { phase: 'workflow' });
+    const registry = makeRegistry('native-workflow', 'workflow', 'v1');
+
+    const result = filterNativeModels(['native-workflow'], 'planner', registry, repoDir);
+    assert.deepEqual(result.eligible, []);
+    assert.equal(result.rejected.length, 1);
+    assert.equal(result.rejected[0]?.reason, 'phase-not-allowed');
+    assert.equal(result.rejected[0]?.requestedLaunchPhase, 'planning');
+    assert.deepEqual(result.rejected[0]?.allowedNativeAgentPhases, ['review']);
   } finally {
     cleanup();
   }
