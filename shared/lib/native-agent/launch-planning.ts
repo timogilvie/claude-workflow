@@ -606,11 +606,11 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
 
     atomicWriteText(planPath, finalText);
     await updateStageResult(featureDir, 'planning', {
-      status: 'completed',
-      finishedAt: new Date().toISOString(),
+      status: 'awaiting_user',
+      finishedAt: null,
       agent: 'native',
       model: model.name ?? model.id,
-      notes: 'Native planning completed',
+      notes: 'Native planning ready for approval',
       artifacts: {
         type: 'planning',
         planFile: relative(options.wtDir, planPath),
@@ -618,9 +618,8 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
       },
       failureReason: null,
     });
-    writeFileSync(approvalMarkerPath, '', 'utf-8');
-    writeHookStatus(hookPath, 'idle', 'process_exit', 'planning_completed', 'native');
-    writeTextStatus(options.session, options.issue, 'planning complete');
+    writeHookStatus(hookPath, 'idle', 'process_exit', 'planning_awaiting_user', 'native');
+    writeTextStatus(options.session, options.issue, 'awaiting plan approval');
 
     return {
       planPath,

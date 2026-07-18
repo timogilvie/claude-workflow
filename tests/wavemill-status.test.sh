@@ -138,6 +138,7 @@ mkdir -p \
   "$WORKTREES_DIR/ready-conflict-task/features/ready-conflict-task" \
   "$WORKTREES_DIR/ready-complete-task/features/ready-complete-task" \
   "$WORKTREES_DIR/ready-failed-task/features/ready-failed-task" \
+  "$WORKTREES_DIR/native-failed-task/features/native-failed-task" \
   "$WORKTREES_DIR/stale-task/features/stale-task"
 
 STATE_FILE_ONE="$TMP_DIR/state-one.json"
@@ -1857,7 +1858,7 @@ fi
 # Native phases must reuse the existing hook/pane liveness path; no native-only
 # fallback or branch should be introduced.
 WAVEMILL_STATUS_SH="$REPO_DIR/shared/lib/wavemill-status.sh"
-if ! grep -Eq '(agent[ _-]?type|provider|adapter)[^\n]{0,40}=[^\n]{0,40}native|case[^\n]{0,40}native\)|if[^\n]{0,40}native' "$WAVEMILL_STATUS_SH"; then
+if ! grep -Eq '(agent[ _-]?type|provider|adapter)[^\n]{0,40}=[^\n]{0,40}native|case[^\n]{0,40}native\)|(^|[[:space:]])if[[:space:]][^\n]{0,40}native' "$WAVEMILL_STATUS_SH"; then
   pass "wavemill-status.sh has no native-specific liveness branch (REQ-F3)"
 else
   fail "wavemill-status.sh contains a native-specific branch — native phases must reuse existing hook states"
@@ -2191,6 +2192,68 @@ if grep -q '⛔ denied' "$OUTPUT_DENIED_STATE" && grep -q '⊘ blocked' "$OUTPUT
   fi
 else
   fail "policy-denied and blocked labels are not both present"
+fi
+
+# ── Native launch failures surface recovery detail ─────────────────────────
+
+cat > "$WORKTREES_DIR/native-failed-task/features/native-failed-task/.native-launch-failure.json" <<'EOF'
+{
+  "type": "native-launch-failure",
+  "issue": "HOK-2539",
+  "stage": "planning",
+  "agent": "native-openrouter",
+  "model": "qwen-3-coder",
+  "paneTarget": "@96",
+  "failureKind": "bare-model-command",
+  "exitCode": 127,
+  "detectedAt": "2026-07-18T13:00:00Z",
+  "recommendedAction": "Inspect the pane transcript and route config, then relaunch after fixing native provider/model eligibility."
+}
+EOF
+
+STATE_FILE_NATIVE_FAILURE="$TMP_DIR/state-native-failure.json"
+cat > "$STATE_FILE_NATIVE_FAILURE" <<EOF
+{
+  "tasks": {
+    "HOK-2539": {
+      "slug": "native-failed-task",
+      "branch": "task/native-failed-task",
+      "worktree": "$WORKTREES_DIR/native-failed-task",
+      "status": "",
+      "phase": "planning",
+      "pr": ""
+    }
+  }
+}
+EOF
+
+BEHAVIOR_NATIVE_FAILURE="$TMP_DIR/behavior-native-failure.json"
+cat > "$BEHAVIOR_NATIVE_FAILURE" <<'EOF'
+{
+  "pane": {
+    "HOK-2539-native-failed-task": "96"
+  },
+  "hook": {},
+  "next_action": {},
+  "reported": {},
+  "planning": {},
+  "pr": {},
+  "checks": {}
+}
+EOF
+
+OUTPUT_NATIVE_FAILURE="$TMP_DIR/output-native-failure.txt"
+run_render_with_agent_states "$STATE_FILE_NATIVE_FAILURE" "$WORKTREES_DIR" "$BEHAVIOR_NATIVE_FAILURE" "$OUTPUT_NATIVE_FAILURE" \
+  "" "" ""
+
+if grep -q '📥 INBOX (1)' "$OUTPUT_NATIVE_FAILURE" \
+  && grep -q 'HOK-2539.*native-failed-task.*⚠ planning' "$OUTPUT_NATIVE_FAILURE" \
+  && grep -q 'Native planning launch failed: bare-model-command exit=127' "$OUTPUT_NATIVE_FAILURE" \
+  && grep -q 'model=qwen-3-coder pane=@96' "$OUTPUT_NATIVE_FAILURE" \
+  && grep -q 'Inspect the pane transcript and route config' "$OUTPUT_NATIVE_FAILURE"; then
+  pass "native launch failure renders actionable recovery detail"
+else
+  fail "native launch failure detail missing from dashboard"
 fi
 
 # ── Baseline states unchanged ───────────────────────────────────────────────

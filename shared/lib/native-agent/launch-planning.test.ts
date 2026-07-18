@@ -155,7 +155,7 @@ function makeMutationTool(executed: { value: boolean }): ToolDescriptor {
 }
 
 describe('launchNativePlanning', () => {
-  it('writes plan.md, .plan-approved, and idle native hook on success', async () => {
+  it('writes plan.md, leaves approval to the monitor, and idles the native hook on success', async () => {
     const { wtDir, featureDir } = setupWorktree();
     const api = uniqueApi('success');
 
@@ -195,13 +195,15 @@ describe('launchNativePlanning', () => {
       const plan = readFileSync(planPath, 'utf-8');
       assert.match(plan, /# Implementation Plan/);
       assert.match(plan, /## Release Readiness/);
-      assert.ok(existsSync(join(featureDir, '.plan-approved')));
+      assert.equal(existsSync(join(featureDir, '.plan-approved')), false);
       const stageResult = JSON.parse(
         readFileSync(join(featureDir, '.planning-result.json'), 'utf-8'),
       ) as Record<string, unknown>;
-      assert.equal(stageResult.status, 'completed');
+      assert.equal(stageResult.status, 'awaiting_user');
+      assert.equal(stageResult.finishedAt, null);
       assert.equal(stageResult.agent, 'native');
       assert.equal(stageResult.model, `scripted:${api}`);
+      assert.equal(stageResult.notes, 'Native planning ready for approval');
       assert.deepEqual(stageResult.artifacts, {
         type: 'planning',
         planFile: 'features/demo/plan.md',
@@ -212,7 +214,7 @@ describe('launchNativePlanning', () => {
       assert.equal(hook.state, 'idle');
       assert.equal(hook.agent, 'native');
       assert.equal(hook.event, 'process_exit');
-      assert.equal(hook.detail, 'planning_completed');
+      assert.equal(hook.detail, 'planning_awaiting_user');
     } finally {
       cleanup(wtDir);
     }
@@ -459,7 +461,7 @@ describe('launchNativePlanning', () => {
       const hook = JSON.parse(readFileSync(result.hookPath, 'utf-8')) as Record<string, unknown>;
       assert.equal(hook.state, 'idle');
       assert.equal(hook.event, 'process_exit');
-      assert.equal(hook.detail, 'planning_completed');
+      assert.equal(hook.detail, 'planning_awaiting_user');
     } finally {
       cleanup(wtDir);
     }

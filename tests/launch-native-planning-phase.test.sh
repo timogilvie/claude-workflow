@@ -94,6 +94,30 @@ check_contains "native launcher exports canonical challenger linear issue id" "$
 check_contains "native launcher passes canonical challenger linear issue id" "$(cat "$NATIVE_LAUNCHER")" "--linear-issue 'HOK-2313'"
 check_not_contains "native planning launcher does not execute logical provider" "$(cat "$NATIVE_LAUNCHER")" "native-openrouter --model"
 
+TMUX_LOG="$TMPDIR_TEST/tmux-interactive-native.log"
+INTERACTIVE_NATIVE_PROMPT="/tmp/HOK-2315_c-planning-prompt.txt"
+INTERACTIVE_NATIVE_LAUNCHER="/tmp/sess-HOK-2315_c-planning-prompt-launcher.sh"
+printf '%s\n' "plan prompt" > "$INTERACTIVE_NATIVE_PROMPT"
+rm -f "$INTERACTIVE_NATIVE_LAUNCHER"
+tmux() {
+  printf '%s\n' "$*" >> "$TMUX_LOG"
+}
+agent_prepare_pane_for_launch() { return 0; }
+WAVEMILL_FEATURE_DIR="$TMPDIR_TEST/repo/features/demo" \
+WAVEMILL_FEATURE_SLUG="demo" \
+WAVEMILL_PLAN_DEPTH="medium" \
+WAVEMILL_OPERATING_MODE="normal" \
+WAVEMILL_BRANCH="task/demo" \
+WAVEMILL_BASE_BRANCH="auto/integration" \
+WAVEMILL_TITLE="Demo" \
+REPO_DIR="$REPO_DIR" \
+agent_launch_interactive "sess" "planning" "$INTERACTIVE_NATIVE_PROMPT" "native-openrouter" "kimi-k2.7-code" "" "" "HOK-2315_c"
+
+check_contains "interactive native planning dispatches launcher path" "$(cat "$TMUX_LOG")" "$INTERACTIVE_NATIVE_LAUNCHER"
+check_contains "interactive native planning invokes launch-native-planning tool" "$(cat "$INTERACTIVE_NATIVE_LAUNCHER")" "tools/launch-native-planning.ts"
+check_not_contains "interactive native planning launcher has no bare model command" "$(cat "$INTERACTIVE_NATIVE_LAUNCHER")" $'\n --model'
+check_not_contains "interactive native planning launcher does not execute logical provider" "$(cat "$INTERACTIVE_NATIVE_LAUNCHER")" "native-openrouter --model"
+
 TMUX_LOG="$TMPDIR_TEST/tmux-review.log"
 tmux() {
   printf '%s\n' "$*" >> "$TMUX_LOG"
@@ -251,6 +275,34 @@ if grep -q "not eligible for planning" "$probe_stderr"; then
   pass "native launch probe emits parsed rejection reason"
 else
   fail "native launch probe emits parsed rejection reason" "$(cat "$probe_stderr")"
+fi
+
+BAD_INTERACTIVE_PROMPT="/tmp/HOK-2319_c-planning-prompt.txt"
+BAD_INTERACTIVE_LAUNCHER="/tmp/sess-HOK-2319_c-planning-prompt-launcher.sh"
+printf '%s\n' "bad plan prompt" > "$BAD_INTERACTIVE_PROMPT"
+rm -f "$BAD_INTERACTIVE_LAUNCHER"
+agent_prepare_pane_for_launch() { return 0; }
+tmux() { :; }
+if TEST_OPENROUTER_KEY="sk-test" \
+  TOOLS_DIR="$REPO_DIR/tools" \
+  REPO_DIR="$ROLE_REPO" \
+  WAVEMILL_FEATURE_DIR="$ROLE_REPO/features/demo" \
+  WAVEMILL_FEATURE_SLUG="demo" \
+  agent_launch_interactive "sess" "planning" "$BAD_INTERACTIVE_PROMPT" "native-openrouter" "qwen-3-coder" "" "" "HOK-2319_c" \
+    >"$TMPDIR_TEST/bad-interactive.stdout" 2>"$TMPDIR_TEST/bad-interactive.stderr"; then
+  fail "interactive native planner rejects role-ineligible qwen route"
+else
+  pass "interactive native planner rejects role-ineligible qwen route"
+fi
+if [[ -f "$BAD_INTERACTIVE_LAUNCHER" ]]; then
+  fail "role-ineligible interactive native planner does not write launcher"
+else
+  pass "role-ineligible interactive native planner does not write launcher"
+fi
+if grep -Eq "not eligible for planning|Failed to resolve model selector 'qwen-3-coder'|Rejecting invalid model 'qwen-3-coder'|native launch probe failed for native-openrouter/planning/" "$TMPDIR_TEST/bad-interactive.stderr"; then
+  pass "interactive native planner emits role rejection"
+else
+  fail "interactive native planner emits role rejection" "$(cat "$TMPDIR_TEST/bad-interactive.stderr")"
 fi
 
 if agent_native_planning_eligible "$REPO_DIR" "planning"; then
