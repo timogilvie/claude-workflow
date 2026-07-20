@@ -52,9 +52,13 @@ function setupRepoDir(config: Record<string, unknown> = {}): { repoDir: string; 
   };
 }
 
-function writeWorkflowState(repoDir: string, tasks: Record<string, unknown>): void {
+function writeWorkflowState(
+  repoDir: string,
+  tasks: Record<string, unknown>,
+  jobs: Record<string, unknown> = {},
+): void {
   mkdirSync(join(repoDir, '.wavemill'), { recursive: true });
-  writeFileSync(join(repoDir, '.wavemill', 'workflow-state.json'), JSON.stringify({ tasks }));
+  writeFileSync(join(repoDir, '.wavemill', 'workflow-state.json'), JSON.stringify({ tasks, jobs }));
 }
 
 describe('getSiblingBranch', () => {
@@ -494,6 +498,225 @@ describe('cool-off window in applyChallengePairGates', () => {
       const result = await applyChallengePairGates(items, [], repoDir, options);
       assert.equal(result.blocked.length, 1);
       assert.equal(result.blocked[0].reason, 'challenge:pair-unresolved:branch-pair');
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe('unresolvable pair states in applyChallengePairGates', () => {
+  it('blocks an orphaned challenge pair with an explicit orphan reason', async () => {
+    const { repoDir, cleanup } = setupRepoDir();
+    try {
+      const items = [makeWorkItem({
+        number: 101,
+        headRefName: 'task/orphaned',
+        challengePairId: 'pair-1',
+        challenge: true,
+      })];
+
+      writeWorkflowState(repoDir, {
+        HOK_1: {
+          pr: 101,
+          branch: 'task/orphaned',
+          updated: '2026-01-01T00:00:00Z',
+          challengePairId: 'pair-1',
+          challengeRole: 'primary',
+        },
+      });
+
+      const result = await applyChallengePairGates(items, [], repoDir, {
+        remoteBranches: ['task/orphaned'],
+        coolOffSeconds: 0,
+        nowMs: () => Date.parse('2026-07-17T00:00:00Z'),
+      });
+
+      assert.equal(result.eligible.length, 0);
+      assert.equal(result.blocked.length, 1);
+      assert.equal(result.blocked[0].reason, 'challenge:pair-unresolvable:orphan-sibling');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('blocks a pair when the sibling exhausted eval hard-failure retries', async () => {
+    const { repoDir, cleanup } = setupRepoDir({
+      challenge: { eval: { retryMaxAttempts: 2 } },
+    });
+    try {
+      const items = [makeWorkItem({
+        number: 101,
+        headRefName: 'task/pair-primary',
+        challengePairId: 'pair-1',
+        challenge: true,
+      })];
+
+      writeWorkflowState(repoDir, {
+        HOK_1: {
+          pr: 101,
+          branch: 'task/pair-primary',
+          challengePairId: 'pair-1',
+          challengeRole: 'primary',
+          evalCompleted: true,
+          updated: '2026-07-01T00:00:00Z',
+        },
+        HOK_1_c: {
+          pr: 102,
+          branch: 'task/pair-primary-challenger',
+          challengePairId: 'pair-1',
+          challengeRole: 'challenger',
+          evalFailed: true,
+          evalHardFailureRetryCount: 2,
+          updated: '2026-07-01T00:00:00Z',
+        },
+      });
+
+      const result = await applyChallengePairGates(items, [], repoDir, {
+        remoteBranches: ['task/pair-primary', 'task/pair-primary-challenger'],
+        coolOffSeconds: 0,
+      });
+
+      assert.equal(result.blocked[0].reason, 'challenge:pair-unresolvable:sibling-eval-hard-failed');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('blocks a pair when both sides exhausted eval hard-failure retries', async () => {
+    const { repoDir, cleanup } = setupRepoDir({
+      challenge: { eval: { retryMaxAttempts: 2 } },
+    });
+    try {
+      const items = [makeWorkItem({
+        number: 101,
+        headRefName: 'task/pair-primary',
+        challengePairId: 'pair-1',
+        challenge: true,
+      })];
+
+      writeWorkflowState(repoDir, {
+        HOK_1: {
+          pr: 101,
+          branch: 'task/pair-primary',
+          challengePairId: 'pair-1',
+          challengeRole: 'primary',
+          evalFailed: true,
+          evalHardFailureRetryCount: 2,
+          updated: '2026-07-01T00:00:00Z',
+        },
+        HOK_1_c: {
+          pr: 102,
+          branch: 'task/pair-primary-challenger',
+          challengePairId: 'pair-1',
+          challengeRole: 'challenger',
+          evalFailed: true,
+          evalHardFailureRetryCount: 2,
+          updated: '2026-07-01T00:00:00Z',
+        },
+      });
+
+      const result = await applyChallengePairGates(items, [], repoDir, {
+        remoteBranches: ['task/pair-primary', 'task/pair-primary-challenger'],
+        coolOffSeconds: 0,
+      });
+
+      assert.equal(result.blocked[0].reason, 'challenge:pair-unresolvable:both-eval-hard-failed');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('reports comparison-in-progress when the comparison job is still running', async () => {
+    const { repoDir, cleanup } = setupRepoDir();
+    try {
+      const items = [makeWorkItem({
+        number: 101,
+        headRefName: 'task/pair-primary',
+        challengePairId: 'pair-1',
+        challenge: true,
+      })];
+
+      writeWorkflowState(repoDir, {
+        HOK_1: {
+          pr: 101,
+          branch: 'task/pair-primary',
+          challengePairId: 'pair-1',
+          challengeRole: 'primary',
+          updated: '2026-07-01T00:00:00Z',
+        },
+        HOK_1_c: {
+          pr: 102,
+          branch: 'task/pair-primary-challenger',
+          challengePairId: 'pair-1',
+          challengeRole: 'challenger',
+          updated: '2026-07-01T00:00:00Z',
+        },
+      }, {
+        'comparison-pair-1-101-102': {
+          id: 'comparison-pair-1-101-102',
+          kind: 'comparison',
+          pairId: 'pair-1',
+          prNumbers: [101, 102],
+          pid: 123,
+          startedAt: '2026-07-01T00:00:00Z',
+          timeoutSeconds: 240,
+          logPath: '/tmp/comparison.log',
+          resultPath: '/tmp/comparison.result.json',
+          status: 'running',
+          exitCode: null,
+          finishedAt: null,
+          reason: null,
+          excerpt: null,
+          settled: false,
+        },
+      });
+
+      const result = await applyChallengePairGates(items, [], repoDir, {
+        remoteBranches: ['task/pair-primary', 'task/pair-primary-challenger'],
+        coolOffSeconds: 0,
+      });
+
+      assert.equal(result.blocked[0].reason, 'challenge:pair-unresolved:comparison-in-progress');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('keeps the legacy no-comparison reason when the pair is still waiting to launch', async () => {
+    const { repoDir, cleanup } = setupRepoDir();
+    try {
+      const items = [makeWorkItem({
+        number: 101,
+        headRefName: 'task/pair-primary',
+        challengePairId: 'pair-1',
+        challenge: true,
+      })];
+
+      writeWorkflowState(repoDir, {
+        HOK_1: {
+          pr: 101,
+          branch: 'task/pair-primary',
+          challengePairId: 'pair-1',
+          challengeRole: 'primary',
+          evalCompleted: true,
+          updated: '2026-07-01T00:00:00Z',
+        },
+        HOK_1_c: {
+          pr: 102,
+          branch: 'task/pair-primary-challenger',
+          challengePairId: 'pair-1',
+          challengeRole: 'challenger',
+          evalCompleted: true,
+          updated: '2026-07-01T00:00:00Z',
+        },
+      });
+
+      const result = await applyChallengePairGates(items, [], repoDir, {
+        remoteBranches: ['task/pair-primary', 'task/pair-primary-challenger'],
+        coolOffSeconds: 0,
+      });
+
+      assert.equal(result.blocked[0].reason, 'challenge:pair-unresolved:no-comparison');
     } finally {
       cleanup();
     }
