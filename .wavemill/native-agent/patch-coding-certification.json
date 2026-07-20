@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "certified": true,
+  "smokeSuiteRevision": "patch-coding-smoke-v1",
+  "providers": [
+    {
+      "provider": "openrouter",
+      "model": "qwen/qwen3-coder",
+      "passed": true
+    },
+    {
+      "provider": "openrouter",
+      "model": "z-ai/glm-5.2",
+      "passed": true
+    }
+  ],
+  "certifiedAt": "2026-07-20T18:27:31.990Z"
+}

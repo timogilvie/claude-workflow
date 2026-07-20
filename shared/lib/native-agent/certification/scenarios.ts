@@ -26,6 +26,7 @@ import {
   type CertificationPhase,
   type NativeCertificationArtifact,
 } from './schema.ts';
+import { filterNativeModels, type RouterRole } from './router-filter.ts';
 import { checkCertificationEligibility } from '../certification/loader.ts';
 import { writeCertification } from '../certification/store.ts';
 import { findFixture } from '../fixtures/compat/index.ts';
@@ -70,6 +71,7 @@ import {
 } from '../workflow-tools/contracts.ts';
 import { isMutationAllowed } from '../workflow-tools/mutation-policy.ts';
 import type { ModelRegistry, NativeProviderName, PiTransportKind } from '../../model-registry.ts';
+import { resolveOpenRouterModelIdentity, type RoleEligibility } from '../../openrouter-catalog.ts';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -198,6 +200,48 @@ function compareRemediationDecision(
   return JSON.stringify(actual) === JSON.stringify(expected)
     ? null
     : `${label} fixture mismatch: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`;
+}
+
+function makeOpenRouterMatrixRegistry(
+  modelId: string,
+  maxCertifiedPhase: CertificationPhase,
+  suiteVersion: string,
+): ModelRegistry | { error: string } {
+  const identity = resolveOpenRouterModelIdentity(modelId);
+  if (!identity) {
+    return { error: `Missing launch-priority identity for ${modelId}` };
+  }
+
+  return {
+    models: {
+      [modelId]: {
+        vendor: identity.family,
+        class: identity.family === 'glm' ? 'frontier' : 'strong_generalist',
+        strengths: [],
+        weaknesses: [],
+        qualityScores: { routing: 60, planning: 80, coding: 84, review: 82, classify: 60 },
+        contextWindowTokens: identity.family === 'glm' ? 1_048_576 : 262_144,
+        toolSupport: 'full',
+        multimodal: { text: true, image: identity.family === 'kimi' },
+        latencyTier: 'standard',
+        reasoningTier: identity.family === 'qwen' ? 'standard' : 'advanced',
+        costPerMillionInputTokensUsd: 1,
+        costPerMillionOutputTokensUsd: 3,
+        nativeCapability: {
+          nativeProvider: 'openrouter',
+          piTransportKind: 'openai-completions',
+          readOnlyNative: 'certified',
+          compatFlags: { thinkingFormat: 'openrouter' },
+          certification: {
+            maxCertifiedPhase,
+            certifiedAt: new Date().toISOString(),
+            certificationSuiteVersion: suiteVersion,
+          },
+        },
+      },
+    },
+    ladders: {},
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -862,6 +906,79 @@ async function assertWorkflowPhasePersistenceRoundtrip(ctx: ScenarioContext): Pr
   }
 }
 
+async function assertWorkflowNativeOpenRouterLaunchMatrix(_ctx: ScenarioContext): Promise<ScenarioAssertionOutcome> {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'native-cert-openrouter-matrix-'));
+  try {
+    writeFileSync(join(tmpDir, '.wavemill-config.json'), JSON.stringify({
+      nativeAgent: {
+        enabled: true,
+        allowedPhases: ['planning', 'coding', 'review'],
+      },
+    }));
+
+    const roleLaunchPhase: Record<RouterRole, RoleEligibility> = {
+      planner: 'planning',
+      coder: 'coding',
+      reviewer: 'review',
+    };
+    const models = [
+      'qwen-3-coder',
+      'qwen/qwen3-coder',
+      'kimi-k2.7-code',
+      'moonshotai/kimi-k2.7-code',
+      'glm-5.2',
+      'z-ai/glm-5.2',
+    ];
+
+    for (const modelId of models) {
+      const identity = resolveOpenRouterModelIdentity(modelId);
+      if (!identity) {
+        return { kind: 'fail', detail: `Missing launch-priority identity for ${modelId}` };
+      }
+
+      const artifact: NativeCertificationArtifact = {
+        schemaVersion: CERTIFICATION_SCHEMA_VERSION,
+        provider: identity.provider,
+        model: identity.providerModel,
+        phase: 'workflow',
+        suiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
+        certifiedAt: new Date().toISOString(),
+        scenarios: [{ scenarioId: 'workflow.phase.native-openrouter-launch-matrix', passed: true }],
+      };
+      writeCertification(tmpDir, artifact);
+
+      const registry = makeOpenRouterMatrixRegistry(modelId, 'workflow', DEFAULT_CERTIFICATION_SUITE_VERSION);
+      if ('error' in registry) {
+        return { kind: 'fail', detail: registry.error };
+      }
+
+      for (const role of ['planner', 'coder', 'reviewer'] as const) {
+        const result = filterNativeModels([modelId], role, registry, tmpDir);
+        const expectedEligible = identity.roleEligibility.includes(roleLaunchPhase[role]);
+        if (expectedEligible) {
+          if (result.eligible.join(',') !== modelId || result.rejected.length !== 0) {
+            return {
+              kind: 'fail',
+              detail: `Expected ${modelId} to be eligible for ${role}, got ${JSON.stringify(result)}`,
+            };
+          }
+        } else {
+          if (result.eligible.length !== 0 || result.rejected[0]?.reason !== 'role-ineligible') {
+            return {
+              kind: 'fail',
+              detail: `Expected ${modelId} to be role-ineligible for ${role}, got ${JSON.stringify(result)}`,
+            };
+          }
+        }
+      }
+    }
+
+    return { kind: 'pass' };
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
 async function assertPatchNativePatchApplication(_ctx: ScenarioContext): Promise<ScenarioAssertionOutcome> {
   const tmpDir = mkdtempSync(join(tmpdir(), 'native-cert-patch-apply-'));
   try {
@@ -1451,6 +1568,15 @@ const DEFAULT_SCENARIOS: CertificationScenario[] = [
     description:
       'A persisted phase=workflow artifact satisfies workflow, patch, and read-only eligibility checks.',
     assertion: assertWorkflowPhasePersistenceRoundtrip,
+  },
+  {
+    id: 'workflow.phase.native-openrouter-launch-matrix',
+    phase: 'workflow',
+    category: 'phase',
+    classification: 'deterministic',
+    description:
+      'Kimi, Qwen, and GLM native OpenRouter aliases and raw IDs route only through launch-priority-eligible planning, coding, and review roles.',
+    assertion: assertWorkflowNativeOpenRouterLaunchMatrix,
   },
 ];
 

@@ -3,6 +3,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { runReviewFlow } from '../shared/lib/native-agent/workflow-tools/review-flow.ts';
 import type {
   WorkflowToolStageArtifactEntry,
@@ -47,12 +48,65 @@ function readLinearIdentifier(session: string, issue: string): string {
   }
 }
 
+function readOptional(path: string): string | null {
+  try {
+    return existsSync(path) ? readFileSync(path, 'utf-8') : null;
+  } catch {
+    return null;
+  }
+}
+
+function truncateText(text: string, maxBytes: number): string {
+  const bytes = Buffer.byteLength(text, 'utf-8');
+  if (bytes <= maxBytes) {
+    return text;
+  }
+  return `${Buffer.from(text, 'utf-8').subarray(0, maxBytes).toString('utf-8')}\n[truncated ${bytes - maxBytes} bytes]`;
+}
+
+export function buildNativeCodingHandoff(featureDir: string): string {
+  const sections: string[] = [];
+  const codingResult = readOptional(join(featureDir, '.coding-result.json'));
+  const codingComplete = readOptional(join(featureDir, '.coding-complete'));
+  const blockedCompletion = readOptional(join(featureDir, '.coding-blocked-completion.json'));
+
+  if (codingResult?.trim()) {
+    sections.push([
+      '### Coding Stage Result',
+      '```json',
+      truncateText(codingResult.trim(), 8_000),
+      '```',
+    ].join('\n'));
+  }
+
+  if (codingComplete?.trim()) {
+    sections.push([
+      '### Coding Completion Marker',
+      '```text',
+      truncateText(codingComplete.trim(), 2_000),
+      '```',
+    ].join('\n'));
+  }
+
+  if (blockedCompletion?.trim()) {
+    sections.push([
+      '### Blocked Completion Handoff',
+      '```json',
+      truncateText(blockedCompletion.trim(), 8_000),
+      '```',
+    ].join('\n'));
+  }
+
+  return sections.join('\n\n');
+}
+
 function buildPrBody(input: {
   issue: string;
   title: string;
   reviewerModel: string;
   baseBranch: string;
   headBranch: string;
+  codingHandoff?: string;
 }): string {
   return [
     '## Summary',
@@ -65,6 +119,14 @@ function buildPrBody(input: {
     `- Branch: \`${input.headBranch}\``,
     `- Base: \`${input.baseBranch}\``,
     '',
+    input.codingHandoff?.trim()
+      ? [
+        '## Native Coding Handoff',
+        '',
+        input.codingHandoff.trim(),
+        '',
+      ].join('\n')
+      : '',
     '## Test plan',
     '',
     '- Native review flow ran `review_changes` and attached the structured findings below.',
@@ -100,6 +162,7 @@ async function main(): Promise<void> {
   const prTitle = title.includes(issue) ? title : `${issue}: ${title}`;
   const linearIssue = readLinearIdentifier(session, issue);
   const workflowLogPath = join(featureDir, '.native-review-workflow.jsonl');
+  const codingHandoff = buildNativeCodingHandoff(featureDir);
 
   const transcript = {
     append(event: WorkflowToolTranscriptEvent) {
@@ -144,7 +207,15 @@ async function main(): Promise<void> {
       reviewerModel,
       baseBranch,
       headBranch,
+      codingHandoff,
     }),
+    worktreeDir: wtDir,
+    reviewContextAppendix: codingHandoff
+      ? [
+        'Native coding handoff artifacts from the completed coding phase:',
+        codingHandoff,
+      ].join('\n\n')
+      : undefined,
     labels: ['wavemill'],
     sessionId: session,
     phase: 'review',
@@ -174,7 +245,9 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error) => {
-  console.error((error as Error).message);
-  process.exit(1);
-});
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+  main().catch((error) => {
+    console.error((error as Error).message);
+    process.exit(1);
+  });
+}

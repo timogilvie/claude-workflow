@@ -21,7 +21,9 @@ import {
 } from './eligibility-gate.ts';
 import { loadCertification } from './loader.ts';
 import type { CertificationPhase } from './schema.ts';
-import type { ModelRegistry } from '../../model-registry.ts';
+import { getNativeAgentConfig, type NativeAgentAllowedPhase } from '../../config.ts';
+import type { ModelRegistry, NativeProviderName } from '../../model-registry.ts';
+import { resolveLaunchPriorityModel, type RoleEligibility } from '../../openrouter-catalog.ts';
 
 /** Router role names as used in workflow-router.ts */
 export type RouterRole = 'planner' | 'coder' | 'reviewer';
@@ -39,6 +41,12 @@ export const STAGE_PHASE_REQUIREMENT: Record<RouterRole, CertificationPhase> = {
   planner: 'workflow',
 };
 
+export const ROUTER_ROLE_LAUNCH_PHASE: Record<RouterRole, RoleEligibility> = {
+  reviewer: 'review',
+  coder: 'coding',
+  planner: 'planning',
+};
+
 /**
  * Normalized router-facing certification rejection reasons.
  *
@@ -48,6 +56,8 @@ export const STAGE_PHASE_REQUIREMENT: Record<RouterRole, CertificationPhase> = {
  * - `stale`             — TTL or explicit expiresAt exceeded
  * - `insufficient-phase`— certified phase does not satisfy the required phase,
  *                         or a required scenario failed
+ * - `role-ineligible`   — launch-priority metadata excludes this router role
+ * - `phase-not-allowed` — nativeAgent.allowedPhases excludes this launch phase
  */
 export type RouterCertificationRejectionReason =
   | 'no-native-capability'
@@ -55,7 +65,9 @@ export type RouterCertificationRejectionReason =
   | 'malformed'
   | 'wrong-suite'
   | 'stale'
-  | 'insufficient-phase';
+  | 'insufficient-phase'
+  | 'role-ineligible'
+  | 'phase-not-allowed';
 
 /**
  * Diagnostic record for a native model rejected during router pool filtering.
@@ -68,12 +80,20 @@ export interface RouterCertificationRejection {
   modelId: string;
   /** Router role this filter was applied for */
   role: RouterRole;
+  /** Launch phase corresponding to the router role */
+  requestedLaunchPhase: RoleEligibility;
   /** Certification phase required by this role */
   requestedPhase: CertificationPhase;
   /** Phase found in the artifact, if it was readable */
   certifiedPhase?: CertificationPhase;
   /** `readOnlyNative` value from the model registry */
   nativeCapability: string;
+  /** Native provider from the model registry, when known */
+  nativeProvider?: NativeProviderName;
+  /** Launch-priority roles for this model, when the model is known there */
+  eligibleRoles?: readonly RoleEligibility[];
+  /** Configured nativeAgent phases, when that config gate rejected the model */
+  allowedNativeAgentPhases?: readonly NativeAgentAllowedPhase[];
   /** Suite version used for the artifact lookup */
   requiredSuiteVersion: string;
   /** Normalized rejection reason */
@@ -94,6 +114,41 @@ function mapGateReason(reason: NativeGateRejectReason): RouterCertificationRejec
     case 'insufficient_phase':
       return 'insufficient-phase';
   }
+}
+
+function launchPriorityRoleEligibility(modelId: string, phase: RoleEligibility): {
+  eligible: boolean;
+  eligibleRoles?: readonly RoleEligibility[];
+} {
+  const launchPriorityModel = resolveLaunchPriorityModel(modelId);
+  if (!launchPriorityModel) {
+    return { eligible: true };
+  }
+  return {
+    eligible: launchPriorityModel.roleEligibility.includes(phase),
+    eligibleRoles: launchPriorityModel.roleEligibility,
+  };
+}
+
+function nativeAgentPhaseEligibility(role: RouterRole, repoDir: string): {
+  eligible: boolean;
+  allowedNativeAgentPhases?: readonly NativeAgentAllowedPhase[];
+} {
+  const requestedLaunchPhase = ROUTER_ROLE_LAUNCH_PHASE[role];
+  if (requestedLaunchPhase === 'coding') {
+    return { eligible: true };
+  }
+
+  const config = getNativeAgentConfig(repoDir);
+  if (config.enabled !== true) {
+    return { eligible: true };
+  }
+
+  const allowedNativeAgentPhases = config.allowedPhases ?? [];
+  return {
+    eligible: allowedNativeAgentPhases.includes(requestedLaunchPhase as NativeAgentAllowedPhase),
+    allowedNativeAgentPhases,
+  };
 }
 
 /**
@@ -121,6 +176,7 @@ export function filterNativeModels(
   now?: Date,
 ): { eligible: string[]; rejected: RouterCertificationRejection[] } {
   const requiredPhase = STAGE_PHASE_REQUIREMENT[role];
+  const requestedLaunchPhase = ROUTER_ROLE_LAUNCH_PHASE[role];
   const eligible: string[] = [];
   const rejected: RouterCertificationRejection[] = [];
 
@@ -137,6 +193,7 @@ export function filterNativeModels(
         rejected.push({
           modelId,
           role,
+          requestedLaunchPhase,
           requestedPhase: requiredPhase,
           nativeCapability: 'unregistered',
           requiredSuiteVersion: '',
@@ -150,14 +207,51 @@ export function filterNativeModels(
 
     const readOnlyNative = nativeCapability.readOnlyNative;
     const certMeta = nativeCapability.certification;
+    const nativeProvider = nativeCapability.nativeProvider;
 
-    // Missing registry metadata or provider — fail closed as `missing`
-    if (!certMeta || !nativeCapability.nativeProvider) {
+    const roleEligibility = launchPriorityRoleEligibility(modelId, requestedLaunchPhase);
+    if (!roleEligibility.eligible) {
       rejected.push({
         modelId,
         role,
+        requestedLaunchPhase,
         requestedPhase: requiredPhase,
         nativeCapability: readOnlyNative,
+        ...(nativeProvider ? { nativeProvider } : {}),
+        ...(roleEligibility.eligibleRoles ? { eligibleRoles: roleEligibility.eligibleRoles } : {}),
+        requiredSuiteVersion: certMeta?.certificationSuiteVersion ?? '',
+        reason: 'role-ineligible',
+      });
+      continue;
+    }
+
+    const nativeAgentPhase = nativeAgentPhaseEligibility(role, repoDir);
+    if (!nativeAgentPhase.eligible) {
+      rejected.push({
+        modelId,
+        role,
+        requestedLaunchPhase,
+        requestedPhase: requiredPhase,
+        nativeCapability: readOnlyNative,
+        ...(nativeProvider ? { nativeProvider } : {}),
+        ...(nativeAgentPhase.allowedNativeAgentPhases
+          ? { allowedNativeAgentPhases: nativeAgentPhase.allowedNativeAgentPhases }
+          : {}),
+        requiredSuiteVersion: certMeta?.certificationSuiteVersion ?? '',
+        reason: 'phase-not-allowed',
+      });
+      continue;
+    }
+
+    // Missing registry metadata or provider — fail closed as `missing`
+    if (!certMeta || !nativeProvider) {
+      rejected.push({
+        modelId,
+        role,
+        requestedLaunchPhase,
+        requestedPhase: requiredPhase,
+        nativeCapability: readOnlyNative,
+        ...(nativeProvider ? { nativeProvider } : {}),
         requiredSuiteVersion: certMeta?.certificationSuiteVersion ?? '',
         reason: 'missing',
       });
@@ -166,7 +260,7 @@ export function filterNativeModels(
 
     const loaded = loadCertification(
       repoDir,
-      nativeCapability.nativeProvider,
+      nativeProvider,
       modelId,
       certMeta.certificationSuiteVersion,
     );
@@ -175,8 +269,10 @@ export function filterNativeModels(
       rejected.push({
         modelId,
         role,
+        requestedLaunchPhase,
         requestedPhase: requiredPhase,
         nativeCapability: readOnlyNative,
+        nativeProvider,
         requiredSuiteVersion: certMeta.certificationSuiteVersion,
         reason: loaded.reason,
       });
@@ -200,9 +296,11 @@ export function filterNativeModels(
       rejected.push({
         modelId,
         role,
+        requestedLaunchPhase,
         requestedPhase: requiredPhase,
         certifiedPhase: decision.foundPhase ?? loaded.artifact.phase,
         nativeCapability: readOnlyNative,
+        nativeProvider,
         requiredSuiteVersion: certMeta.certificationSuiteVersion,
         reason: mapGateReason(decision.reason),
       });

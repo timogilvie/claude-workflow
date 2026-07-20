@@ -55,6 +55,8 @@ export interface ReviewOptions {
   operatingMode?: OperatingMode;
   /** Feature directory for stage-result cleanup reporting when available */
   featureDir?: string;
+  /** Additional task-local context appended to the review prompt. */
+  additionalContext?: string;
 }
 
 // Re-export types from review-engine for backward compatibility
@@ -133,12 +135,23 @@ export async function reviewChanges(
     repoDir,
     sinceCommit: options.sinceCommit,
   });
-  const reviewContext = deterministicFindings.length > 0
+  const reviewContextWithDeterministicFindings = deterministicFindings.length > 0
     ? {
       ...context,
       diff: prependCrossPrRevertContext(context.diff, deterministicFindings),
     }
     : context;
+  const additionalContext = options.additionalContext?.trim();
+  const reviewContext = additionalContext
+    ? {
+      ...reviewContextWithDeterministicFindings,
+      taskPacket: [
+        reviewContextWithDeterministicFindings.taskPacket,
+        'Additional review context:',
+        additionalContext,
+      ].filter((part): part is string => typeof part === 'string' && part.trim() !== '').join('\n\n'),
+    }
+    : reviewContextWithDeterministicFindings;
 
   await reporter?.emit({
     event: 'context_loaded',

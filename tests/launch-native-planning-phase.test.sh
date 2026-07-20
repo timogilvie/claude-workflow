@@ -94,6 +94,30 @@ check_contains "native launcher exports canonical challenger linear issue id" "$
 check_contains "native launcher passes canonical challenger linear issue id" "$(cat "$NATIVE_LAUNCHER")" "--linear-issue 'HOK-2313'"
 check_not_contains "native planning launcher does not execute logical provider" "$(cat "$NATIVE_LAUNCHER")" "native-openrouter --model"
 
+TMUX_LOG="$TMPDIR_TEST/tmux-interactive-native.log"
+INTERACTIVE_NATIVE_PROMPT="/tmp/HOK-2315_c-planning-prompt.txt"
+INTERACTIVE_NATIVE_LAUNCHER="/tmp/sess-HOK-2315_c-planning-prompt-launcher.sh"
+printf '%s\n' "plan prompt" > "$INTERACTIVE_NATIVE_PROMPT"
+rm -f "$INTERACTIVE_NATIVE_LAUNCHER"
+tmux() {
+  printf '%s\n' "$*" >> "$TMUX_LOG"
+}
+agent_prepare_pane_for_launch() { return 0; }
+WAVEMILL_FEATURE_DIR="$TMPDIR_TEST/repo/features/demo" \
+WAVEMILL_FEATURE_SLUG="demo" \
+WAVEMILL_PLAN_DEPTH="medium" \
+WAVEMILL_OPERATING_MODE="normal" \
+WAVEMILL_BRANCH="task/demo" \
+WAVEMILL_BASE_BRANCH="auto/integration" \
+WAVEMILL_TITLE="Demo" \
+REPO_DIR="$REPO_DIR" \
+agent_launch_interactive "sess" "planning" "$INTERACTIVE_NATIVE_PROMPT" "native-openrouter" "kimi-k2.7-code" "" "" "HOK-2315_c"
+
+check_contains "interactive native planning dispatches launcher path" "$(cat "$TMUX_LOG")" "$INTERACTIVE_NATIVE_LAUNCHER"
+check_contains "interactive native planning invokes launch-native-planning tool" "$(cat "$INTERACTIVE_NATIVE_LAUNCHER")" "tools/launch-native-planning.ts"
+check_not_contains "interactive native planning launcher has no bare model command" "$(cat "$INTERACTIVE_NATIVE_LAUNCHER")" $'\n --model'
+check_not_contains "interactive native planning launcher does not execute logical provider" "$(cat "$INTERACTIVE_NATIVE_LAUNCHER")" "native-openrouter --model"
+
 TMUX_LOG="$TMPDIR_TEST/tmux-review.log"
 tmux() {
   printf '%s\n' "$*" >> "$TMUX_LOG"
@@ -110,6 +134,21 @@ agent_launch_autonomous "sess" "review" "/tmp/instr.txt" "native-openrouter" "qw
 check_contains "native review dispatches launcher path" "$(cat "$TMUX_LOG")" "$NATIVE_REVIEW_LAUNCHER"
 check_contains "native review launcher invokes review flow tool" "$(cat "$NATIVE_REVIEW_LAUNCHER")" "tools/launch-native-review.ts"
 check_not_contains "native review launcher does not execute logical provider" "$(cat "$NATIVE_REVIEW_LAUNCHER")" "native-openrouter --model"
+
+TMUX_LOG="$TMPDIR_TEST/tmux-native-coding.log"
+tmux() {
+  printf '%s\n' "$*" >> "$TMUX_LOG"
+}
+NATIVE_CODING_PROMPT="/tmp/wavemill-HOK-2542-coding-prompt.txt"
+NATIVE_CODING_LAUNCHER="/tmp/sess-HOK-2542-autonomous-launcher.sh"
+rm -f "$NATIVE_CODING_LAUNCHER"
+REPO_DIR="$REPO_DIR" \
+agent_launch_autonomous "sess" "@95" "$NATIVE_CODING_PROMPT" "native-openrouter" "glm-5.2" "HOK-2542"
+
+check_contains "native coding dispatches launcher path" "$(cat "$TMUX_LOG")" "$NATIVE_CODING_LAUNCHER"
+check_contains "native coding launcher invokes coding flow tool" "$(cat "$NATIVE_CODING_LAUNCHER")" "tools/launch-native-coding.ts"
+check_contains "native coding launcher normalizes phase from prompt" "$(cat "$NATIVE_CODING_LAUNCHER")" "export WAVEMILL_PHASE='coding'"
+check_not_contains "native coding launcher does not execute logical provider" "$(cat "$NATIVE_CODING_LAUNCHER")" "native-openrouter --model"
 
 TMUX_LOG="$TMPDIR_TEST/tmux-coding.log"
 tmux() {
@@ -137,6 +176,86 @@ if [[ -f "$BAD_NATIVE_LAUNCHER" ]]; then
   fail "invalid native phase does not write launcher"
 else
   pass "invalid native phase does not write launcher"
+fi
+
+PREFLIGHT_AUTONOMOUS_LAUNCHER="/tmp/sess-HOK-2545-autonomous-launcher.sh"
+rm -f "$PREFLIGHT_AUTONOMOUS_LAUNCHER"
+TMUX_LOG="$TMPDIR_TEST/tmux-preflight-autonomous.log"
+rm -f "$TMUX_LOG"
+tmux() {
+  printf '%s\n' "$*" >> "$TMUX_LOG"
+}
+agent_validate_phase_launch() {
+  AGENT_NATIVE_LAUNCH_LAST_JSON='{"ok":false,"reason":"TEST_OPENROUTER_KEY is not set","code":"missing-provider-env","surface":"nativeAgent.providers.openrouter.apiKeyEnv","remediation":"Set TEST_OPENROUTER_KEY before launch.","wavemillAlias":"glm-5.2","openrouterId":"z-ai/glm-5.2"}'
+  AGENT_NATIVE_LAUNCH_LAST_REASON="TEST_OPENROUTER_KEY is not set"
+  return 1
+}
+if REPO_DIR="$REPO_DIR" agent_launch_autonomous "sess" "planning" "/tmp/instr.txt" "native-openrouter" "glm-5.2" "HOK-2545" \
+  >"$TMPDIR_TEST/preflight-autonomous.stdout" 2>"$TMPDIR_TEST/preflight-autonomous.stderr"; then
+  fail "autonomous native preflight rejects missing provider env"
+else
+  pass "autonomous native preflight rejects missing provider env"
+fi
+if [[ -f "$PREFLIGHT_AUTONOMOUS_LAUNCHER" ]]; then
+  fail "autonomous native preflight does not write launcher"
+else
+  pass "autonomous native preflight does not write launcher"
+fi
+if [[ ! -s "$TMUX_LOG" ]]; then
+  pass "autonomous native preflight does not touch tmux"
+else
+  fail "autonomous native preflight does not touch tmux"
+fi
+if grep -q "route=HOK-2545" "$TMPDIR_TEST/preflight-autonomous.stderr" \
+  && grep -q "stage=planning" "$TMPDIR_TEST/preflight-autonomous.stderr" \
+  && grep -q "provider=openrouter" "$TMPDIR_TEST/preflight-autonomous.stderr" \
+  && grep -q "model=glm-5.2" "$TMPDIR_TEST/preflight-autonomous.stderr" \
+  && grep -q "surface=nativeAgent.providers.openrouter.apiKeyEnv" "$TMPDIR_TEST/preflight-autonomous.stderr"; then
+  pass "autonomous native preflight emits route diagnostics"
+else
+  fail "autonomous native preflight emits route diagnostics" "$(cat "$TMPDIR_TEST/preflight-autonomous.stderr")"
+fi
+
+PREFLIGHT_INTERACTIVE_PROMPT="/tmp/HOK-2545-planning-prompt.txt"
+PREFLIGHT_INTERACTIVE_LAUNCHER="/tmp/sess-HOK-2545-planning-prompt-launcher.sh"
+printf '%s\n' "preflight plan prompt" > "$PREFLIGHT_INTERACTIVE_PROMPT"
+rm -f "$PREFLIGHT_INTERACTIVE_LAUNCHER"
+PREPARE_CALLED=0
+TMUX_LOG="$TMPDIR_TEST/tmux-preflight-interactive.log"
+rm -f "$TMUX_LOG"
+tmux() {
+  printf '%s\n' "$*" >> "$TMUX_LOG"
+}
+agent_prepare_pane_for_launch() {
+  PREPARE_CALLED=1
+  return 0
+}
+if REPO_DIR="$REPO_DIR" \
+  WAVEMILL_FEATURE_DIR="$TMPDIR_TEST/repo/features/demo" \
+  WAVEMILL_FEATURE_SLUG="demo" \
+  agent_launch_interactive "sess" "planning" "$PREFLIGHT_INTERACTIVE_PROMPT" "native-openrouter" "glm-5.2" "" "" "HOK-2545" \
+    >"$TMPDIR_TEST/preflight-interactive.stdout" 2>"$TMPDIR_TEST/preflight-interactive.stderr"; then
+  fail "interactive native preflight rejects missing provider env"
+else
+  pass "interactive native preflight rejects missing provider env"
+fi
+if [[ "$PREPARE_CALLED" -eq 0 ]]; then
+  pass "interactive native preflight does not prepare pane"
+else
+  fail "interactive native preflight does not prepare pane"
+fi
+if [[ -f "$PREFLIGHT_INTERACTIVE_LAUNCHER" ]]; then
+  fail "interactive native preflight does not write launcher"
+else
+  pass "interactive native preflight does not write launcher"
+fi
+if grep -q "route=HOK-2545" "$TMPDIR_TEST/preflight-interactive.stderr" \
+  && grep -q "stage=planning" "$TMPDIR_TEST/preflight-interactive.stderr" \
+  && grep -q "provider=openrouter" "$TMPDIR_TEST/preflight-interactive.stderr" \
+  && grep -q "model=glm-5.2" "$TMPDIR_TEST/preflight-interactive.stderr"; then
+  pass "interactive native preflight emits route diagnostics"
+else
+  fail "interactive native preflight emits route diagnostics" "$(cat "$TMPDIR_TEST/preflight-interactive.stderr")"
 fi
 
 unset -f agent_validate_phase_launch
@@ -189,9 +308,9 @@ if npx tsx "$REPO_DIR/tools/check-native-agent-launch.ts" \
   --phase coding \
   --agent native-openrouter \
   --model qwen-3-coder >/dev/null 2>&1; then
-  fail "native coding dispatch stays fail-closed without launcher"
+  fail "native coding dispatch stays fail-closed without patch certification"
 else
-  pass "native coding dispatch stays fail-closed without launcher"
+  pass "native coding dispatch stays fail-closed without patch certification"
 fi
 
 ROLE_REPO="$TMPDIR_TEST/role-guard-repo"
@@ -253,7 +372,53 @@ else
   fail "native launch probe emits parsed rejection reason" "$(cat "$probe_stderr")"
 fi
 
-if agent_native_planning_eligible "$REPO_DIR" "planning"; then
+BAD_INTERACTIVE_PROMPT="/tmp/HOK-2319_c-planning-prompt.txt"
+BAD_INTERACTIVE_LAUNCHER="/tmp/sess-HOK-2319_c-planning-prompt-launcher.sh"
+printf '%s\n' "bad plan prompt" > "$BAD_INTERACTIVE_PROMPT"
+rm -f "$BAD_INTERACTIVE_LAUNCHER"
+agent_prepare_pane_for_launch() { return 0; }
+tmux() { :; }
+if TEST_OPENROUTER_KEY="sk-test" \
+  TOOLS_DIR="$REPO_DIR/tools" \
+  REPO_DIR="$ROLE_REPO" \
+  WAVEMILL_FEATURE_DIR="$ROLE_REPO/features/demo" \
+  WAVEMILL_FEATURE_SLUG="demo" \
+  agent_launch_interactive "sess" "planning" "$BAD_INTERACTIVE_PROMPT" "native-openrouter" "qwen-3-coder" "" "" "HOK-2319_c" \
+    >"$TMPDIR_TEST/bad-interactive.stdout" 2>"$TMPDIR_TEST/bad-interactive.stderr"; then
+  fail "interactive native planner rejects role-ineligible qwen route"
+else
+  pass "interactive native planner rejects role-ineligible qwen route"
+fi
+if [[ -f "$BAD_INTERACTIVE_LAUNCHER" ]]; then
+  fail "role-ineligible interactive native planner does not write launcher"
+else
+  pass "role-ineligible interactive native planner does not write launcher"
+fi
+if grep -Eq "not eligible for planning|Failed to resolve model selector 'qwen-3-coder'|Rejecting invalid model 'qwen-3-coder'|native launch probe failed for native-openrouter/planning/" "$TMPDIR_TEST/bad-interactive.stderr"; then
+  pass "interactive native planner emits role rejection"
+else
+  fail "interactive native planner emits role rejection" "$(cat "$TMPDIR_TEST/bad-interactive.stderr")"
+fi
+
+DISABLED_REPO="$TMPDIR_TEST/disabled-native-repo"
+mkdir -p "$DISABLED_REPO"
+cat > "$DISABLED_REPO/.wavemill-config.json" <<'EOF'
+{
+  "nativeAgent": {
+    "enabled": false,
+    "allowedPhases": ["planning"],
+    "providers": {
+      "openrouter": {
+        "enabled": true,
+        "apiKeyEnv": "TEST_OPENROUTER_KEY",
+        "models": ["z-ai/glm-5.2"]
+      }
+    }
+  }
+}
+EOF
+
+if TEST_OPENROUTER_KEY="sk-test" agent_native_planning_eligible "$DISABLED_REPO" "planning"; then
   fail "disabled config stays ineligible"
 else
   pass "disabled config stays ineligible"

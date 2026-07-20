@@ -31,8 +31,7 @@ import { isTaskPacketContent } from '../task-packet-utils.ts';
 import { createCleanupTracker, runCleanup, type CleanupReason } from './cleanup.ts';
 import { updateStageResult } from '../stage-result.ts';
 import {
-  resolveOpenRouterIdFromWavemillAlias,
-  resolveWavemillAliasFromOpenRouterId,
+  equivalentOpenRouterModelIds,
 } from '../openrouter-catalog.ts';
 
 const RELEASE_READINESS_STUB = [
@@ -77,6 +76,7 @@ export interface LaunchNativePlanningOptions {
   registryMetadataOverride?: readonly ToolMetadata[];
   extraDescriptors?: readonly ToolDescriptor[];
   runTsxCommand?: (args: string[]) => string;
+  onAwaitingUserStagePublished?: () => void | Promise<void>;
   signal?: AbortSignal;
 }
 
@@ -365,6 +365,10 @@ function atomicWriteText(path: string, content: string): void {
   renameSync(tmpPath, path);
 }
 
+function clearApprovalMarkerCreatedDuringPlanning(approvalMarkerPath: string): void {
+  rmSync(approvalMarkerPath, { force: true });
+}
+
 function defaultHookPath(session: string, issue: string): string {
   return `/tmp/wavemill-${session}-${issue}.hook`;
 }
@@ -374,22 +378,12 @@ function toPiTools(descriptors: readonly ToolDescriptor[]): AgentTool<unknown, u
 }
 
 function canonicalNativeModelIds(modelId: string | undefined): Set<string> {
-  const ids = new Set<string>();
   const trimmed = modelId?.trim();
   if (!trimmed) {
-    return ids;
+    return new Set();
   }
 
-  ids.add(trimmed);
-  const openRouterId = resolveOpenRouterIdFromWavemillAlias(trimmed);
-  if (openRouterId) {
-    ids.add(openRouterId);
-  }
-  const wavemillAlias = resolveWavemillAliasFromOpenRouterId(trimmed);
-  if (wavemillAlias) {
-    ids.add(wavemillAlias);
-  }
-  return ids;
+  return new Set(equivalentOpenRouterModelIds(trimmed));
 }
 
 function selectReadyProvider(
@@ -604,13 +598,14 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
     }
     const finalText = ensureReleaseReadiness(rawFinalText);
 
+    clearApprovalMarkerCreatedDuringPlanning(approvalMarkerPath);
     atomicWriteText(planPath, finalText);
     await updateStageResult(featureDir, 'planning', {
-      status: 'completed',
-      finishedAt: new Date().toISOString(),
+      status: 'awaiting_user',
+      finishedAt: null,
       agent: 'native',
       model: model.name ?? model.id,
-      notes: 'Native planning completed',
+      notes: 'Native planning ready for approval',
       artifacts: {
         type: 'planning',
         planFile: relative(options.wtDir, planPath),
@@ -618,9 +613,9 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
       },
       failureReason: null,
     });
-    writeFileSync(approvalMarkerPath, '', 'utf-8');
-    writeHookStatus(hookPath, 'idle', 'process_exit', 'planning_completed', 'native');
-    writeTextStatus(options.session, options.issue, 'planning complete');
+    await options.onAwaitingUserStagePublished?.();
+    writeHookStatus(hookPath, 'idle', 'process_exit', 'planning_awaiting_user', 'native');
+    writeTextStatus(options.session, options.issue, 'awaiting plan approval');
 
     return {
       planPath,

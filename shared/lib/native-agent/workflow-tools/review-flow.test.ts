@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { beforeEach, describe, it } from 'node:test';
@@ -390,6 +390,69 @@ describe('runReviewFlow', () => {
     assert.equal(result.fixes.denied, 3);
     assert.equal(result.pullRequest?.ok, true);
     assert.ok(result.warnings.some((warning) => warning.includes('Policy denied narrow fix')));
+    assertNoMergeOperations(recorder.transcriptEvents, recorder.stageArtifactEntries);
+  });
+
+  it('runs review against worktreeDir while writing review artifacts to featureDir', async () => {
+    const featureDir = mkdtempSync(path.join(os.tmpdir(), 'review-flow-feature-'));
+    const worktreeDir = mkdtempSync(path.join(os.tmpdir(), 'review-flow-worktree-'));
+    tempDirs.push(featureDir, worktreeDir);
+    const state: FixtureState = {
+      pullRequests: [],
+      labelsByTarget: new Map(),
+      linearComments: [],
+      calls: {
+        linearCreateComment: 0,
+        linearUpdateComment: 0,
+        listOpenPullRequests: 0,
+        createPullRequest: 0,
+        updatePullRequest: 0,
+        getLabels: 0,
+        addLabel: 0,
+      },
+    };
+    const recorder = makeRecorder();
+    let reviewOptions: { repoDir?: string; featureDir?: string; additionalContext?: string } | undefined;
+
+    const result = await runReviewFlow({
+      issueId: 'HOK-2543',
+      featureDir,
+      worktreeDir,
+      repo: 'acme/widgets',
+      base: 'auto/integration',
+      head: 'task/native-review-handoff',
+      headSha: 'review123',
+      title: 'Complete native review workflow',
+      body: 'Native review body.',
+      labels: ['native-review'],
+      sessionId: 'sess-native-review',
+      registry: createInMemoryDedupeRegistry({ clock: () => 1_000 }),
+      transcript: recorder.transcript,
+      stageArtifact: recorder.stageArtifact,
+      clock: () => 1_000,
+      linearClient: createLinearClient(state),
+      githubDeps: createGitHubDeps(state),
+      networkPolicy: ALLOW_REVIEW_FLOW_NETWORK_POLICY,
+      reviewContextAppendix: 'Native coding handoff: commitCount=1 verification passed',
+      reviewChangesImpl: async (options) => {
+        reviewOptions = options;
+        return makeReview({ verdict: 'ready', codeReviewFindings: [], uiFindings: [] });
+      },
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(reviewOptions?.repoDir, worktreeDir);
+    assert.equal(reviewOptions?.featureDir, featureDir);
+    assert.match(reviewOptions?.additionalContext ?? '', /Native coding handoff/);
+    assert.equal(existsSync(path.join(featureDir, '.review-result.json')), true);
+    assert.equal(existsSync(path.join(worktreeDir, '.review-result.json')), false);
+
+    const stored = JSON.parse(readFileSync(path.join(featureDir, '.review-result.json'), 'utf8')) as {
+      artifacts: { review: { verdict: string; findingCount: number; blockingCount: number } };
+    };
+    assert.equal(stored.artifacts.review.verdict, 'ready');
+    assert.equal(stored.artifacts.review.findingCount, 0);
+    assert.equal(stored.artifacts.review.blockingCount, 0);
     assertNoMergeOperations(recorder.transcriptEvents, recorder.stageArtifactEntries);
   });
 

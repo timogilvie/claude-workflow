@@ -163,14 +163,23 @@ grep -q -- '--model cannot be combined with --planner-model, --coder-model, or -
 # REQ-F10: validator unavailable → non-zero exit, never silently accept
 (
   NO_TSX_BIN="$TMP_DIR/no-tsx-bin"
+  REAL_NODE_BIN="$(command -v node || true)"
   mkdir -p "$NO_TSX_BIN"
   for f in "$FAKE_BIN"/*; do
     cp "$f" "$NO_TSX_BIN/"
   done
-  # Shadow tsx and npx with stubs that fail for model-validator calls
+  # Shadow all TypeScript runner paths with stubs that fail for model-validator calls.
+  cat > "$NO_TSX_BIN/node" <<EOF
+#!/usr/bin/env bash
+if [[ "\${1:-}" == "--import" && "\${2:-}" == "tsx" ]]; then
+  echo "node: tsx loader not available" >&2
+  exit 127
+fi
+exec "$REAL_NODE_BIN" "\$@"
+EOF
   printf '#!/usr/bin/env bash\necho "tsx: not available" >&2\nexit 127\n' > "$NO_TSX_BIN/tsx"
   printf '#!/usr/bin/env bash\nif [[ "${1:-}" == "tsx" ]]; then echo "npx: tsx not found" >&2; exit 127; fi\n' > "$NO_TSX_BIN/npx"
-  chmod +x "$NO_TSX_BIN/tsx" "$NO_TSX_BIN/npx"
+  chmod +x "$NO_TSX_BIN/node" "$NO_TSX_BIN/tsx" "$NO_TSX_BIN/npx"
   export PATH="${PATH/$FAKE_BIN/$NO_TSX_BIN}"
   run_mill_case 1 --model opus
   grep -qE 'model validation requires|Invalid FORCE_MODEL' "$STDERR_FILE" || {

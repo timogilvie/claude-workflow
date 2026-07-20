@@ -1265,8 +1265,20 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
     ...(reviewerPoolResolution.nativeCertificationRejections ?? []),
   ];
   for (const rejection of nativeCertificationRejections) {
+    const details = [
+      `launchPhase=${rejection.requestedLaunchPhase}`,
+      `certPhase=${rejection.requestedPhase}`,
+      `reason=${rejection.reason}`,
+      `provider=${rejection.nativeProvider ?? 'unknown'}`,
+    ];
+    if (rejection.eligibleRoles) {
+      details.push(`eligibleRoles=${rejection.eligibleRoles.join(',') || 'none'}`);
+    }
+    if (rejection.allowedNativeAgentPhases) {
+      details.push(`allowedNativeAgentPhases=${rejection.allowedNativeAgentPhases.join(',') || 'none'}`);
+    }
     reasoning.push(
-      `Native model ${rejection.modelId} rejected for ${rejection.role} role (phase=${rejection.requestedPhase}, reason=${rejection.reason}).`,
+      `Native model ${rejection.modelId} rejected for ${rejection.role} role (${details.join(', ')}).`,
     );
   }
 

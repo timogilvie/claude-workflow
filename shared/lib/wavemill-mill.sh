@@ -5074,6 +5074,188 @@ emit_pane_divergence_attention() {
   return 0
 }
 
+native_launch_failure_artifact_path() {
+  local feature_dir="$1"
+  printf '%s\n' "$feature_dir/.native-launch-failure.json"
+}
+
+stage_result_field() {
+  local feature_dir="$1" stage="$2" field="$3"
+  local result_file="$feature_dir/.${stage}-result.json"
+  [[ -f "$result_file" ]] || return 0
+  jq -r --arg field "$field" '.[$field] // empty' "$result_file" 2>/dev/null || true
+}
+
+agent_or_model_is_native_for_recovery() {
+  local agent="${1:-}" model="${2:-}" tail="${3:-}"
+
+  case "$agent" in
+    native|native-*) return 0 ;;
+  esac
+
+  case "$model" in
+    native:*|openrouter/*|qwen-*|kimi-*|glm-*) return 0 ;;
+  esac
+
+  if printf '%s\n' "$tail" | grep -Eiq '(native-openrouter|native-openai|launch-native-(planning|review|coding)|OpenRouter|wavemill native-agent)'; then
+    return 0
+  fi
+
+  return 1
+}
+
+native_launch_failure_kind() {
+  local tail="${1:-}"
+
+  if printf '%s\n' "$tail" | grep -Eiq -- '--model[[:space:]]+[^[:space:]]'; then
+    printf 'bare-model-command\n'
+    return 0
+  fi
+
+  if printf '%s\n' "$tail" | grep -Eiq -- 'command not found.*--model'; then
+    printf 'bare-model-command\n'
+    return 0
+  fi
+
+  if printf '%s\n' "$tail" | grep -Eiq -- '--model.*command not found'; then
+    printf 'bare-model-command\n'
+    return 0
+  fi
+
+  if printf '%s\n' "$tail" | grep -Fq 'Agent exited (127)'; then
+    printf 'agent-exited-127\n'
+    return 0
+  fi
+
+  if printf '%s\n' "$tail" | grep -Fq 'exited with status 127'; then
+    printf 'agent-exited-127\n'
+    return 0
+  fi
+
+  if printf '%s\n' "$tail" | grep -Fq 'exited with code 127'; then
+    printf 'agent-exited-127\n'
+    return 0
+  fi
+
+  if printf '%s\n' "$tail" | grep -Fq 'exit status 127'; then
+    printf 'agent-exited-127\n'
+    return 0
+  fi
+
+  if printf '%s\n' "$tail" | grep -Fq 'native launch probe failed'; then
+    printf 'native-route-rejected\n'
+    return 0
+  fi
+
+  if printf '%s\n' "$tail" | grep -Eiq -- 'native agent .*cannot launch'; then
+    printf 'native-route-rejected\n'
+    return 0
+  fi
+
+  if printf '%s\n' "$tail" | grep -Eiq -- 'native agent .*does not support'; then
+    printf 'native-route-rejected\n'
+    return 0
+  fi
+
+  if printf '%s\n' "$tail" | grep -Eiq -- 'not eligible for planning'; then
+    printf 'native-route-rejected\n'
+    return 0
+  fi
+
+  if printf '%s\n' "$tail" | grep -Eiq -- 'not eligible for coding'; then
+    printf 'native-route-rejected\n'
+    return 0
+  fi
+
+  if printf '%s\n' "$tail" | grep -Eiq -- 'not eligible for review'; then
+    printf 'native-route-rejected\n'
+    return 0
+  fi
+
+  return 1
+}
+
+write_native_launch_failure_artifact() {
+  local issue="$1" feature_dir="$2" stage="$3" agent="$4" model="$5" pane_target="$6" failure_kind="$7" exit_code="$8"
+  local artifact tmp detected_at recommended_action
+
+  artifact="$(native_launch_failure_artifact_path "$feature_dir")"
+  detected_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  recommended_action="Inspect the pane transcript and route config, then relaunch after fixing native provider/model eligibility."
+  mkdir -p "$feature_dir"
+  tmp="$(mktemp "$artifact.tmp.XXXXXX" 2>/dev/null)" || return 0
+
+  jq -n \
+    --arg issue "$issue" \
+    --arg stage "$stage" \
+    --arg agent "$agent" \
+    --arg model "$model" \
+    --arg paneTarget "$pane_target" \
+    --arg failureKind "$failure_kind" \
+    --arg exitCode "$exit_code" \
+    --arg detectedAt "$detected_at" \
+    --arg recommendedAction "$recommended_action" \
+    '{
+      type: "native-launch-failure",
+      issue: $issue,
+      stage: $stage,
+      agent: $agent,
+      model: $model,
+      paneTarget: $paneTarget,
+      failureKind: $failureKind,
+      exitCode: (if $exitCode == "" then null else ($exitCode | tonumber) end),
+      detectedAt: $detectedAt,
+      recommendedAction: $recommendedAction
+    }' > "$tmp" 2>/dev/null \
+    && mv "$tmp" "$artifact" 2>/dev/null \
+    || rm -f "$tmp"
+}
+
+# Convert dead native launch panes into failed controller-owned stage results.
+# This prevents malformed launchers from leaving stages in "running" forever.
+emit_native_launch_failure_attention() {
+  local issue="$1" feature_dir="$2" stage="$3" win="$4" win_target="$5" fallback_agent="${6:-}" fallback_model="${7:-}"
+  local stage_status agent model pane_tail failure_kind exit_code notes artifacts_json
+
+  stage_status="$(read_stage_status "$feature_dir" "$stage")"
+  [[ "$stage_status" == "running" ]] || return 1
+  [[ -n "$win_target" ]] || return 1
+  _pane_is_dead_or_idle "$win_target" 2>/dev/null || return 1
+
+  pane_tail="$(tmux capture-pane -p -t "$win_target" -S -200 2>/dev/null || true)"
+  agent="$(stage_result_field "$feature_dir" "$stage" "agent")"
+  model="$(stage_result_field "$feature_dir" "$stage" "model")"
+  [[ -n "$agent" ]] || agent="$fallback_agent"
+  [[ -n "$model" ]] || model="$fallback_model"
+
+  agent_or_model_is_native_for_recovery "$agent" "$model" "$pane_tail" || return 1
+
+  failure_kind="$(native_launch_failure_kind "$pane_tail" || true)"
+  [[ -n "$failure_kind" ]] || failure_kind="native-agent-exited-without-artifacts"
+
+  exit_code=""
+  if printf '%s\n' "$pane_tail" | grep -Eq '(^|[^0-9])127([^0-9]|$)'; then
+    exit_code="127"
+  fi
+
+  write_native_launch_failure_artifact "$issue" "$feature_dir" "$stage" "$agent" "$model" "$win_target" "$failure_kind" "$exit_code"
+
+  notes="Native ${stage} launch failed: ${failure_kind}"
+  [[ -n "$exit_code" ]] && notes+=" (exit $exit_code)"
+  notes+=". Pane $win_target needs attention"
+
+  artifacts_json="$(jq -cn \
+    --arg paneTarget "$win_target" \
+    --arg failureKind "$failure_kind" \
+    --arg exitCode "$exit_code" \
+    '{type:"nativeLaunchFailure", paneTarget:$paneTarget, failureKind:$failureKind, exitCode:(if $exitCode == "" then null else ($exitCode | tonumber) end)}' 2>/dev/null || printf '{}')"
+  write_stage_result "$feature_dir" "$stage" "failed" "$agent" "$model" "$notes" "$artifacts_json"
+  set_window_attention_state "$win" "needs-user"
+  log_warn "$issue → Native ${stage} launcher failed (${failure_kind}) in pane $win_target"
+  active_count=$((active_count + 1))
+  return 0
+}
+
 # Reject a plan: transition planning from awaiting_user to failed.
 # Usage: reject_plan <feature_dir> [agent] [model]
 reject_plan() {
@@ -5929,6 +6111,19 @@ merge_queue_enabled() {
   [[ "${MERGE_QUEUE_ENABLED:-true}" == "1" || "${MERGE_QUEUE_ENABLED:-true}" == "true" ]]
 }
 
+wavemill_run_tsx_tool() {
+  local tool="$1"
+  shift
+
+  if node --import tsx -e "" >/dev/null 2>&1; then
+    node --import tsx "$tool" "$@"
+  elif command -v tsx >/dev/null 2>&1; then
+    tsx "$tool" "$@"
+  else
+    npx tsx "$tool" "$@"
+  fi
+}
+
 write_ready_queue_artifacts() {
   local state_dir="$1" patch_json="$2"
   local result_file="$state_dir/.ready-result.json"
@@ -5948,7 +6143,7 @@ write_ready_queue_artifacts() {
       ) | .type = "ready"
     ')
 
-  npx tsx "$TOOLS_DIR/stage-result-cli.ts" update "$state_dir" ready --artifacts "$merged_artifacts" >/dev/null 2>&1 || \
+  wavemill_run_tsx_tool "$TOOLS_DIR/stage-result-cli.ts" update "$state_dir" ready --artifacts "$merged_artifacts" >/dev/null 2>&1 || \
     log_warn "merge queue: failed to update ready artifacts in $state_dir"
 }
 
@@ -6175,7 +6370,7 @@ refresh_ready_merge_queue_tick() {
   input_file=$(mktemp) || return 0
   output_file=$(mktemp) || { rm -f "$input_file"; return 0; }
   jq -cn --arg now "$now" --argjson prs "$ready_prs" --argjson config "$config_json" '{readyPrs:$prs, now:$now, config:$config}' > "$input_file"
-  if ! npx tsx "$TOOLS_DIR/merge-queue-select.ts" --input "$input_file" > "$output_file" 2>/dev/null; then
+  if ! wavemill_run_tsx_tool "$TOOLS_DIR/merge-queue-select.ts" --input "$input_file" > "$output_file" 2>/dev/null; then
     rm -f "$input_file" "$output_file"
     printf '{"selectedIssues":[],"stuckIssues":[]}\n' > "$MERGE_QUEUE_SELECTION_FILE"
     return 0
@@ -9346,33 +9541,56 @@ EOF
   fi
 
   if declare -F agent_resolve_models_for_roles >/dev/null 2>&1; then
-    if agent_resolve_models_for_roles "$planner_model" "$task_model" "$reviewer_model"; then
-      :
+    if ! agent_resolve_models_for_roles "$planner_model" "$task_model" "$reviewer_model"; then
+      log_error "  Selected route is not launchable: ${AGENT_RESOLVE_LAST_DIAGNOSTIC:-agent resolution failed}"
+      return 1
     fi
     planner_agent="$(agent_resolve_batch_agent_for_role "planner")"
     task_agent_cmd="$(agent_resolve_batch_agent_for_role "coder")"
     reviewer_agent="$(agent_resolve_batch_agent_for_role "reviewer")"
   else
     if [[ -n "$planner_model" ]]; then
-      planner_agent="$(agent_resolve_from_model "$planner_model" "planning" || true)"
+      if ! planner_agent="$(agent_resolve_from_model "$planner_model" "planning")"; then
+        log_error "  Selected planner route is not launchable: ${AGENT_RESOLVE_LAST_DIAGNOSTIC:-agent resolution failed}"
+        return 1
+      fi
     fi
     if [[ -n "$task_model" ]]; then
-      task_agent_cmd="$(agent_resolve_from_model "$task_model" "coding" || true)"
+      if ! task_agent_cmd="$(agent_resolve_from_model "$task_model" "coding")"; then
+        log_error "  Selected coder route is not launchable: ${AGENT_RESOLVE_LAST_DIAGNOSTIC:-agent resolution failed}"
+        return 1
+      fi
     fi
     if [[ -n "$reviewer_model" ]]; then
-      reviewer_agent="$(agent_resolve_from_model "$reviewer_model" "review" || true)"
+      if ! reviewer_agent="$(agent_resolve_from_model "$reviewer_model" "review")"; then
+        log_error "  Selected reviewer route is not launchable: ${AGENT_RESOLVE_LAST_DIAGNOSTIC:-agent resolution failed}"
+        return 1
+      fi
     fi
+  fi
+
+  if [[ -n "$planner_model" && -z "$planner_agent" ]]; then
+    log_error "  Selected planner route is not launchable: agent resolution returned empty for model=$planner_model"
+    return 1
+  fi
+  if [[ -n "$task_model" && -z "$task_agent_cmd" ]]; then
+    log_error "  Selected coder route is not launchable: agent resolution returned empty for model=$task_model"
+    return 1
+  fi
+  if [[ -n "$reviewer_model" && -z "$reviewer_agent" ]]; then
+    log_error "  Selected reviewer route is not launchable: agent resolution returned empty for model=$reviewer_model"
+    return 1
   fi
 
   if ! agent_validate_phase_launch "$task_agent_cmd" "coding" "$task_model" "$REPO_DIR"; then
     log_error "  Selected coder route is not launchable: agent=$task_agent_cmd model=$task_model"
     return 1
   fi
-  if [[ -n "$planner_agent" ]] && ! agent_validate_phase_launch "$planner_agent" "planning" "$planner_model" "$REPO_DIR"; then
+  if [[ -n "$planner_model" ]] && ! agent_validate_phase_launch "$planner_agent" "planning" "$planner_model" "$REPO_DIR"; then
     log_error "  Selected planner route is not launchable: agent=$planner_agent model=$planner_model"
     return 1
   fi
-  if [[ -n "$reviewer_agent" ]] && ! agent_validate_phase_launch "$reviewer_agent" "review" "$reviewer_model" "$REPO_DIR"; then
+  if [[ -n "$reviewer_model" ]] && ! agent_validate_phase_launch "$reviewer_agent" "review" "$reviewer_model" "$REPO_DIR"; then
     log_error "  Selected reviewer route is not launchable: agent=$reviewer_agent model=$reviewer_model"
     return 1
   fi
@@ -9380,16 +9598,39 @@ EOF
   local challenger_planner_agent="" challenger_reviewer_agent=""
   if [[ "$challenge_enabled_for_launch" == "true" ]]; then
     if declare -F agent_resolve_models_for_roles >/dev/null 2>&1; then
-      if agent_resolve_models_for_roles "$challenger_planner" "$challenger_model" "$challenger_reviewer"; then
-        :
+      if ! agent_resolve_models_for_roles "$challenger_planner" "$challenger_model" "$challenger_reviewer"; then
+        log_error "  Selected challenger route is not launchable: ${AGENT_RESOLVE_LAST_DIAGNOSTIC:-agent resolution failed}"
+        return 1
       fi
       challenger_planner_agent="$(agent_resolve_batch_agent_for_role "planner")"
       challenger_agent="$(agent_resolve_batch_agent_for_role "coder")"
       challenger_reviewer_agent="$(agent_resolve_batch_agent_for_role "reviewer")"
     else
-      [[ -n "$challenger_planner" ]] && challenger_planner_agent="$(agent_resolve_from_model "$challenger_planner" "planning" || true)"
-      [[ -n "$challenger_model" ]] && challenger_agent="$(agent_resolve_from_model "$challenger_model" "coding" || true)"
-      [[ -n "$challenger_reviewer" ]] && challenger_reviewer_agent="$(agent_resolve_from_model "$challenger_reviewer" "review" || true)"
+      if [[ -n "$challenger_planner" ]] && ! challenger_planner_agent="$(agent_resolve_from_model "$challenger_planner" "planning")"; then
+        log_error "  Selected challenger planner route is not launchable: ${AGENT_RESOLVE_LAST_DIAGNOSTIC:-agent resolution failed}"
+        return 1
+      fi
+      if [[ -n "$challenger_model" ]] && ! challenger_agent="$(agent_resolve_from_model "$challenger_model" "coding")"; then
+        log_error "  Selected challenger coder route is not launchable: ${AGENT_RESOLVE_LAST_DIAGNOSTIC:-agent resolution failed}"
+        return 1
+      fi
+      if [[ -n "$challenger_reviewer" ]] && ! challenger_reviewer_agent="$(agent_resolve_from_model "$challenger_reviewer" "review")"; then
+        log_error "  Selected challenger reviewer route is not launchable: ${AGENT_RESOLVE_LAST_DIAGNOSTIC:-agent resolution failed}"
+        return 1
+      fi
+    fi
+
+    if [[ -n "$challenger_planner" && -z "$challenger_planner_agent" ]]; then
+      log_error "  Selected challenger planner route is not launchable: agent resolution returned empty for model=$challenger_planner"
+      return 1
+    fi
+    if [[ -n "$challenger_model" && -z "$challenger_agent" ]]; then
+      log_error "  Selected challenger coder route is not launchable: agent resolution returned empty for model=$challenger_model"
+      return 1
+    fi
+    if [[ -n "$challenger_reviewer" && -z "$challenger_reviewer_agent" ]]; then
+      log_error "  Selected challenger reviewer route is not launchable: agent resolution returned empty for model=$challenger_reviewer"
+      return 1
     fi
 
     if ! agent_validate_phase_launch "$challenger_agent" "coding" "$challenger_model" "$REPO_DIR"; then
@@ -11037,8 +11278,15 @@ monitor_issue_state() {
           local planning_status
           planning_status=$(read_stage_status "$FEATURE_DIR" "planning")
 
-          # Transition 1: running/awaiting_user + .plan-approved → completed
-          if [[ "$planning_status" == "running" || "$planning_status" == "awaiting_user" ]]; then
+          # Transition 1: awaiting_user + .plan-approved → completed.
+          # Approval markers created before the run reaches awaiting_user are
+          # stale/in-run markers and must not bypass the operator gate.
+          if [[ "$planning_status" == "running" ]] && [[ -f "$FEATURE_DIR/.plan-approved" ]]; then
+            rm -f "$FEATURE_DIR/.plan-approved"
+            log "warn" "$ISSUE → Ignoring .plan-approved created before planning was awaiting user approval"
+          fi
+
+          if [[ "$planning_status" == "awaiting_user" ]]; then
             if [[ -f "$FEATURE_DIR/.plan-approved" ]]; then
               unset "$approval_wait_var" 2>/dev/null || true
               if ! validate_planning_phase_output "${WORKTREE_ROOT}/${SLUG}"; then
@@ -11064,6 +11312,10 @@ monitor_issue_state() {
               active_count=$((active_count + 1))
               return 0
             fi
+          fi
+
+          if emit_native_launch_failure_attention "$ISSUE" "$FEATURE_DIR" "planning" "$WIN" "$WIN_TARGET" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "planning" "")"; then
+            return 0
           fi
 
           # Check if plan exists but not yet approved (awaiting_user)
@@ -11101,6 +11353,12 @@ monitor_issue_state() {
           # Stage still running — keep task active
           if [[ "$planning_status" == "running" ]]; then
             set_window_attention_state "$WIN" "clear"
+            active_count=$((active_count + 1))
+            return 0
+          fi
+
+          if [[ "$planning_status" == "failed" ]]; then
+            set_window_attention_state "$WIN" "needs-user"
             active_count=$((active_count + 1))
             return 0
           fi
@@ -11227,6 +11485,9 @@ monitor_issue_state() {
             if emit_pane_divergence_attention "$ISSUE" "$SLUG" "$FEATURE_DIR" "$WIN" "$WIN_TARGET"; then
               return 0
             fi
+            if emit_native_launch_failure_attention "$ISSUE" "$FEATURE_DIR" "coding" "$WIN" "$WIN_TARGET" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "coding" "claude-opus-4-7")"; then
+              return 0
+            fi
             log "debug" "$ISSUE → Coding still running: waiting for .coding-complete"
           fi
 
@@ -11234,6 +11495,12 @@ monitor_issue_state() {
           if [[ "$coding_status" == "running" ]]; then
             set_window_attention_state "$WIN" "clear"
             # Keep coding tasks active while the controller-owned stage is running
+            active_count=$((active_count + 1))
+            return 0
+          fi
+
+          if [[ "$coding_status" == "failed" ]]; then
+            set_window_attention_state "$WIN" "needs-user"
             active_count=$((active_count + 1))
             return 0
           fi
@@ -11281,6 +11548,8 @@ monitor_issue_state() {
               write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "review" "claude-sonnet-5")" "PR #$pr_number" "{\"type\":\"review\",\"prNumber\":$pr_number}"
               dispatch_queued_children_for_parent "$ISSUE" "$pr_number"
               review_status="completed"
+            elif emit_native_launch_failure_attention "$ISSUE" "$FEATURE_DIR" "review" "$WIN" "$WIN_TARGET" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "review" "claude-sonnet-5")"; then
+              return 0
             else
               set_window_attention_state "$WIN" "clear"
               # Keep review tasks active while the controller-owned stage is running
@@ -11291,6 +11560,12 @@ monitor_issue_state() {
 
           if [[ "$review_status" == "running" ]]; then
             set_window_attention_state "$WIN" "clear"
+            active_count=$((active_count + 1))
+            return 0
+          fi
+
+          if [[ "$review_status" == "failed" ]]; then
+            set_window_attention_state "$WIN" "needs-user"
             active_count=$((active_count + 1))
             return 0
           fi

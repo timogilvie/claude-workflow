@@ -2,16 +2,47 @@
 
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { getNativeAgentConfig } from '../shared/lib/config.ts';
 import { isPatchCodingEnabled } from '../shared/lib/native-agent/coding-gate.ts';
+import { validateNativeOpenRouterConfig } from '../shared/lib/native-openrouter-config-validation.ts';
 import { resolveNativeAgentProviders } from '../shared/lib/native-agent/providers.ts';
 import {
+  equivalentOpenRouterModelIds,
   resolveLaunchPriorityModel,
-  resolveOpenRouterIdFromWavemillAlias,
 } from '../shared/lib/openrouter-catalog.ts';
 
 type NativeAgent = 'native-openai' | 'native-openrouter';
 type NativePhase = 'planning' | 'coding' | 'review';
+
+export type CheckNativeAgentLaunchSuccess = {
+  ok: true;
+  phase: NativePhase;
+  agent: NativeAgent;
+  model: string;
+  provider: 'openai' | 'openrouter';
+  command?: ReturnType<typeof validateNativeOpenRouterConfig>['command'];
+  launcher: 'native-planning' | 'native-coding' | 'native-review';
+};
+
+export type CheckNativeAgentLaunchFailure = {
+  ok: false;
+  reason: string;
+  code?: string;
+  surface?: string;
+  remediation?: string;
+  wavemillAlias?: string;
+  openrouterId?: string;
+};
+
+export type CheckNativeAgentLaunchResult = CheckNativeAgentLaunchSuccess | CheckNativeAgentLaunchFailure;
+
+export interface CheckNativeAgentLaunchInput {
+  repoDir: string;
+  agent: NativeAgent | string;
+  phase: NativePhase | string;
+  model: string;
+}
 
 function readOption(name: string): string | undefined {
   const index = process.argv.indexOf(`--${name}`);
@@ -19,9 +50,8 @@ function readOption(name: string): string | undefined {
   return process.argv[index + 1];
 }
 
-function fail(reason: string): never {
-  process.stdout.write(JSON.stringify({ ok: false, reason }));
-  process.exit(1);
+function reject(reason: string, extra: Omit<CheckNativeAgentLaunchFailure, 'ok' | 'reason'> = {}): CheckNativeAgentLaunchFailure {
+  return { ok: false, reason, ...extra };
 }
 
 function providerNameForAgent(agent: NativeAgent): 'openai' | 'openrouter' {
@@ -35,70 +65,81 @@ function providerNameForAgent(agent: NativeAgent): 'openai' | 'openrouter' {
  * certification gate already normalize both forms; this keeps the pre-launch
  * probe consistent so a valid alias is not rejected as "not configured".
  */
-function canonicalModelId(providerName: 'openai' | 'openrouter', modelId: string): string {
+function canonicalModelIds(providerName: 'openai' | 'openrouter', modelId: string): Set<string> {
   if (providerName !== 'openrouter') {
-    return modelId;
+    return new Set([modelId]);
   }
-  if (modelId.includes('/')) {
-    return modelId;
-  }
-  return resolveOpenRouterIdFromWavemillAlias(modelId) ?? modelId;
+  return new Set(equivalentOpenRouterModelIds(modelId));
 }
 
-function main(): void {
-  const repoDir = resolve(readOption('repo-dir') ?? process.cwd());
-  const agent = (readOption('agent') ?? '') as NativeAgent;
-  const phase = (readOption('phase') ?? '') as NativePhase;
-  const model = (readOption('model') ?? '').trim();
+export function checkNativeAgentLaunch(input: CheckNativeAgentLaunchInput): CheckNativeAgentLaunchResult {
+  const { repoDir, agent, phase } = input;
+  const model = input.model.trim();
 
   if (agent !== 'native-openai' && agent !== 'native-openrouter') {
-    fail(`unsupported native agent '${agent || '(empty)'}'`);
+    return reject(`unsupported native agent '${agent || '(empty)'}'`, { code: 'unsupported-native-agent' });
   }
   if (phase !== 'planning' && phase !== 'coding' && phase !== 'review') {
-    fail(`unsupported native launch phase '${phase || '(empty)'}'`);
+    return reject(`unsupported native launch phase '${phase || '(empty)'}'`, { code: 'unsupported-native-stage' });
   }
   if (!model) {
-    fail('native launch requires a resolved model');
+    return reject('native launch requires a resolved model', { code: 'missing-model' });
   }
 
   const providerName = providerNameForAgent(agent);
+  const openRouterValidation = providerName === 'openrouter'
+    ? validateNativeOpenRouterConfig({ repoDir, model, phase })
+    : null;
+  if (openRouterValidation && !openRouterValidation.ok) {
+    const blocker = openRouterValidation.blockers[0]!;
+    return reject(blocker.detail, {
+      code: blocker.code,
+      surface: blocker.surface,
+      remediation: blocker.remediation,
+      ...(openRouterValidation.identity
+        ? {
+          wavemillAlias: openRouterValidation.identity.wavemillAlias,
+          openrouterId: openRouterValidation.identity.openrouterId,
+        }
+        : {}),
+    });
+  }
+
   const config = getNativeAgentConfig(repoDir);
 
   if (config.enabled !== true) {
-    fail('nativeAgent.enabled must be true');
+    return reject('nativeAgent.enabled must be true');
   }
 
   if (!config.allowedPhases?.includes(phase)) {
-    fail(`nativeAgent.allowedPhases does not include '${phase}'`);
+    return reject(`nativeAgent.allowedPhases does not include '${phase}'`);
   }
 
   if (phase === 'coding') {
     const gate = isPatchCodingEnabled(repoDir);
     if (!gate.enabled) {
-      fail(`native coding is not enabled (${gate.reason})`);
+      return reject(`native coding is not enabled (${gate.reason})`);
     }
 
     const launcherPath = join(repoDir, 'tools', 'launch-native-coding.ts');
     if (!existsSync(launcherPath)) {
-      fail('native coding launcher is unavailable (missing tools/launch-native-coding.ts)');
+      return reject('native coding launcher is unavailable (missing tools/launch-native-coding.ts)');
     }
-
-    fail('native coding shell dispatch is not implemented');
   }
 
   const entries = resolveNativeAgentProviders(repoDir, { phase });
-  const requestedModel = canonicalModelId(providerName, model);
+  const requestedModels = canonicalModelIds(providerName, model);
   const entry = entries.find((candidate) => (
     candidate.providerName === providerName
-    && canonicalModelId(providerName, candidate.modelId) === requestedModel
+    && [...canonicalModelIds(providerName, candidate.modelId)].some((candidateModel) => requestedModels.has(candidateModel))
   ));
 
   if (!entry) {
-    fail(`native provider ${providerName}/${model} is not configured for ${phase}`);
+    return reject(`native provider ${providerName}/${model} is not configured for ${phase}`);
   }
 
   if (entry.status !== 'ready') {
-    fail(entry.reason);
+    return reject(entry.reason);
   }
 
   // Role-eligibility gate: reject models that are configured and ready but not
@@ -108,17 +149,38 @@ function main(): void {
   const launchPriorityModel = resolveLaunchPriorityModel(model);
   if (launchPriorityModel && !launchPriorityModel.roleEligibility.includes(phase)) {
     const eligibleRoles = launchPriorityModel.roleEligibility.join(', ') || 'none';
-    fail(`native provider ${providerName}/${model} is not eligible for ${phase} (eligible roles: ${eligibleRoles})`);
+    return reject(`native provider ${providerName}/${model} is not eligible for ${phase} (eligible roles: ${eligibleRoles})`);
   }
 
-  process.stdout.write(JSON.stringify({
+  return {
     ok: true,
     phase,
     agent,
     model,
     provider: providerName,
-    launcher: phase === 'planning' ? 'native-planning' : 'native-review',
-  }));
+    ...(openRouterValidation?.command ? { command: openRouterValidation.command } : {}),
+    launcher: phase === 'planning'
+      ? 'native-planning'
+      : phase === 'coding'
+        ? 'native-coding'
+        : 'native-review',
+  };
 }
 
-main();
+function main(): void {
+  const repoDir = resolve(readOption('repo-dir') ?? process.cwd());
+  const agent = (readOption('agent') ?? '') as NativeAgent;
+  const phase = (readOption('phase') ?? '') as NativePhase;
+  const model = (readOption('model') ?? '').trim();
+
+  const result = checkNativeAgentLaunch({ repoDir, agent, phase, model });
+
+  process.stdout.write(JSON.stringify(result));
+  if (!result.ok) {
+    process.exit(1);
+  }
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+  main();
+}

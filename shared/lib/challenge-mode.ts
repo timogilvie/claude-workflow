@@ -175,8 +175,10 @@ function filterImplementationLaunchableNativeCandidates(
     rejections.push({
       modelId,
       role: 'coder',
+      requestedLaunchPhase: 'coding',
       requestedPhase: 'patch',
       nativeCapability: nativeCapability.readOnlyNative,
+      ...(nativeCapability.nativeProvider ? { nativeProvider: nativeCapability.nativeProvider } : {}),
       requiredSuiteVersion: nativeCapability.certification?.certificationSuiteVersion ?? '',
       reason: 'insufficient-phase',
     });

@@ -128,6 +128,15 @@ rm -f "$stdout_file" "$stderr_file"
 rm -rf "$stub_dir"
 
 stub_dir="$(mktemp -d)"
+cat > "$stub_dir/node" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "--import" && "${2:-}" == "tsx" && "${3:-}" == "-e" ]]; then
+  exit 0
+fi
+printf 'not-json\n'
+exit 0
+EOF
+chmod +x "$stub_dir/node"
 cat > "$stub_dir/tsx" <<'EOF'
 #!/usr/bin/env bash
 printf 'not-json\n'

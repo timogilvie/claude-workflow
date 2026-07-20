@@ -1,0 +1,22 @@
+[
+  {
+    "id": "issue-hok-2074",
+    "identifier": "HOK-2074",
+    "title": "[Phase 1] Light randomization of reviewer-model assignment with logged propensity",
+    "description": "**Phase 1 - converts observational reviewer data into interventional data.**\n\nOn matched task signatures, lightly randomize which reviewer model runs and log the propensity of the assignment. This is the same interventional principle as the tool layer, applied at the stage boundary where we already have instrumentation.\n\n## Scope\n\n* Inject a bounded exploration policy into reviewer-model assignment for eligible matched-signature tasks.\n* Persist assignment propensity with each record so off-policy / causal estimation is valid by construction.\n* Keep exploration light enough to avoid material quality regressions.\n\n## Why\n\nObservational estimates are complexity-controlled, not clean. Known propensities make the reviewer-router trainable without confounding.\n\n## Acceptance\n\n* Reviewer-model assignment randomizes on eligible tasks with logged exact propensity.\n* Guardrails cap exploration on high-stakes tasks.\n\nRef: docs/hokusai-second-model-data-plan.md WS-B (B2).",
+    "priority": 3,
+    "estimate": 3,
+    "state": {
+      "name": "Backlog"
+    },
+    "labels": {
+      "nodes": []
+    },
+    "relations": {
+      "nodes": []
+    },
+    "inverseRelations": {
+      "nodes": []
+    }
+  }
+]
