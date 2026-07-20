@@ -39,8 +39,8 @@ export type CheckNativeAgentLaunchResult = CheckNativeAgentLaunchSuccess | Check
 
 export interface CheckNativeAgentLaunchInput {
   repoDir: string;
-  agent: NativeAgent;
-  phase: NativePhase;
+  agent: NativeAgent | string;
+  phase: NativePhase | string;
   model: string;
 }
 
@@ -75,6 +75,17 @@ function canonicalModelIds(providerName: 'openai' | 'openrouter', modelId: strin
 export function checkNativeAgentLaunch(input: CheckNativeAgentLaunchInput): CheckNativeAgentLaunchResult {
   const { repoDir, agent, phase } = input;
   const model = input.model.trim();
+
+  if (agent !== 'native-openai' && agent !== 'native-openrouter') {
+    return reject(`unsupported native agent '${agent || '(empty)'}'`, { code: 'unsupported-native-agent' });
+  }
+  if (phase !== 'planning' && phase !== 'coding' && phase !== 'review') {
+    return reject(`unsupported native launch phase '${phase || '(empty)'}'`, { code: 'unsupported-native-stage' });
+  }
+  if (!model) {
+    return reject('native launch requires a resolved model', { code: 'missing-model' });
+  }
+
   const providerName = providerNameForAgent(agent);
   const openRouterValidation = providerName === 'openrouter'
     ? validateNativeOpenRouterConfig({ repoDir, model, phase })

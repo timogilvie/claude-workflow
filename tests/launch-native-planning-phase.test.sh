@@ -178,6 +178,86 @@ else
   pass "invalid native phase does not write launcher"
 fi
 
+PREFLIGHT_AUTONOMOUS_LAUNCHER="/tmp/sess-HOK-2545-autonomous-launcher.sh"
+rm -f "$PREFLIGHT_AUTONOMOUS_LAUNCHER"
+TMUX_LOG="$TMPDIR_TEST/tmux-preflight-autonomous.log"
+rm -f "$TMUX_LOG"
+tmux() {
+  printf '%s\n' "$*" >> "$TMUX_LOG"
+}
+agent_validate_phase_launch() {
+  AGENT_NATIVE_LAUNCH_LAST_JSON='{"ok":false,"reason":"TEST_OPENROUTER_KEY is not set","code":"missing-provider-env","surface":"nativeAgent.providers.openrouter.apiKeyEnv","remediation":"Set TEST_OPENROUTER_KEY before launch.","wavemillAlias":"glm-5.2","openrouterId":"z-ai/glm-5.2"}'
+  AGENT_NATIVE_LAUNCH_LAST_REASON="TEST_OPENROUTER_KEY is not set"
+  return 1
+}
+if REPO_DIR="$REPO_DIR" agent_launch_autonomous "sess" "planning" "/tmp/instr.txt" "native-openrouter" "glm-5.2" "HOK-2545" \
+  >"$TMPDIR_TEST/preflight-autonomous.stdout" 2>"$TMPDIR_TEST/preflight-autonomous.stderr"; then
+  fail "autonomous native preflight rejects missing provider env"
+else
+  pass "autonomous native preflight rejects missing provider env"
+fi
+if [[ -f "$PREFLIGHT_AUTONOMOUS_LAUNCHER" ]]; then
+  fail "autonomous native preflight does not write launcher"
+else
+  pass "autonomous native preflight does not write launcher"
+fi
+if [[ ! -s "$TMUX_LOG" ]]; then
+  pass "autonomous native preflight does not touch tmux"
+else
+  fail "autonomous native preflight does not touch tmux"
+fi
+if grep -q "route=HOK-2545" "$TMPDIR_TEST/preflight-autonomous.stderr" \
+  && grep -q "stage=planning" "$TMPDIR_TEST/preflight-autonomous.stderr" \
+  && grep -q "provider=openrouter" "$TMPDIR_TEST/preflight-autonomous.stderr" \
+  && grep -q "model=glm-5.2" "$TMPDIR_TEST/preflight-autonomous.stderr" \
+  && grep -q "surface=nativeAgent.providers.openrouter.apiKeyEnv" "$TMPDIR_TEST/preflight-autonomous.stderr"; then
+  pass "autonomous native preflight emits route diagnostics"
+else
+  fail "autonomous native preflight emits route diagnostics" "$(cat "$TMPDIR_TEST/preflight-autonomous.stderr")"
+fi
+
+PREFLIGHT_INTERACTIVE_PROMPT="/tmp/HOK-2545-planning-prompt.txt"
+PREFLIGHT_INTERACTIVE_LAUNCHER="/tmp/sess-HOK-2545-planning-prompt-launcher.sh"
+printf '%s\n' "preflight plan prompt" > "$PREFLIGHT_INTERACTIVE_PROMPT"
+rm -f "$PREFLIGHT_INTERACTIVE_LAUNCHER"
+PREPARE_CALLED=0
+TMUX_LOG="$TMPDIR_TEST/tmux-preflight-interactive.log"
+rm -f "$TMUX_LOG"
+tmux() {
+  printf '%s\n' "$*" >> "$TMUX_LOG"
+}
+agent_prepare_pane_for_launch() {
+  PREPARE_CALLED=1
+  return 0
+}
+if REPO_DIR="$REPO_DIR" \
+  WAVEMILL_FEATURE_DIR="$TMPDIR_TEST/repo/features/demo" \
+  WAVEMILL_FEATURE_SLUG="demo" \
+  agent_launch_interactive "sess" "planning" "$PREFLIGHT_INTERACTIVE_PROMPT" "native-openrouter" "glm-5.2" "" "" "HOK-2545" \
+    >"$TMPDIR_TEST/preflight-interactive.stdout" 2>"$TMPDIR_TEST/preflight-interactive.stderr"; then
+  fail "interactive native preflight rejects missing provider env"
+else
+  pass "interactive native preflight rejects missing provider env"
+fi
+if [[ "$PREPARE_CALLED" -eq 0 ]]; then
+  pass "interactive native preflight does not prepare pane"
+else
+  fail "interactive native preflight does not prepare pane"
+fi
+if [[ -f "$PREFLIGHT_INTERACTIVE_LAUNCHER" ]]; then
+  fail "interactive native preflight does not write launcher"
+else
+  pass "interactive native preflight does not write launcher"
+fi
+if grep -q "route=HOK-2545" "$TMPDIR_TEST/preflight-interactive.stderr" \
+  && grep -q "stage=planning" "$TMPDIR_TEST/preflight-interactive.stderr" \
+  && grep -q "provider=openrouter" "$TMPDIR_TEST/preflight-interactive.stderr" \
+  && grep -q "model=glm-5.2" "$TMPDIR_TEST/preflight-interactive.stderr"; then
+  pass "interactive native preflight emits route diagnostics"
+else
+  fail "interactive native preflight emits route diagnostics" "$(cat "$TMPDIR_TEST/preflight-interactive.stderr")"
+fi
+
 unset -f agent_validate_phase_launch
 source "$ADAPTERS"
 

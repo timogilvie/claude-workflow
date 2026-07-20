@@ -139,6 +139,77 @@ describe('checkNativeAgentLaunch', () => {
     assert.match(result.ok ? '' : result.reason, /does not include planner/);
   });
 
+  it('rejects unknown native OpenRouter aliases before launch', () => {
+    const repoDir = makeRepo(baseConfig());
+    process.env.TEST_OPENROUTER_KEY = 'sk-test';
+
+    const result = checkNativeAgentLaunch({
+      repoDir,
+      phase: 'planning',
+      agent: 'native-openrouter',
+      model: 'not-a-native-model',
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.ok ? undefined : result.code, 'unknown-openrouter-model');
+    assert.equal(result.ok ? undefined : result.surface, 'launch.model');
+    assert.match(result.ok ? '' : result.reason, /Unknown native OpenRouter model/);
+  });
+
+  it('rejects unsupported native stages before provider validation', () => {
+    const repoDir = makeRepo(baseConfig());
+    process.env.TEST_OPENROUTER_KEY = 'sk-test';
+
+    const result = checkNativeAgentLaunch({
+      repoDir,
+      phase: 'deploy',
+      agent: 'native-openrouter',
+      model: 'glm-5.2',
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.ok ? undefined : result.code, 'unsupported-native-stage');
+    assert.match(result.ok ? '' : result.reason, /unsupported native launch phase 'deploy'/);
+  });
+
+  it('rejects missing native provider env before launch', () => {
+    const repoDir = makeRepo(baseConfig());
+    writeOpenRouterCert(repoDir, 'z-ai', 'glm-5.2');
+
+    const result = checkNativeAgentLaunch({
+      repoDir,
+      phase: 'planning',
+      agent: 'native-openrouter',
+      model: 'glm-5.2',
+    });
+
+    assert.equal(result.ok, false);
+    assert.match(result.ok ? '' : result.reason, /TEST_OPENROUTER_KEY is not set/);
+  });
+
+  it('rejects empty native commands and models before launch', () => {
+    const repoDir = makeRepo(baseConfig());
+    process.env.TEST_OPENROUTER_KEY = 'sk-test';
+
+    const emptyAgent = checkNativeAgentLaunch({
+      repoDir,
+      phase: 'planning',
+      agent: '',
+      model: 'glm-5.2',
+    });
+    assert.equal(emptyAgent.ok, false);
+    assert.equal(emptyAgent.ok ? undefined : emptyAgent.code, 'unsupported-native-agent');
+
+    const emptyModel = checkNativeAgentLaunch({
+      repoDir,
+      phase: 'planning',
+      agent: 'native-openrouter',
+      model: '   ',
+    });
+    assert.equal(emptyModel.ok, false);
+    assert.equal(emptyModel.ok ? undefined : emptyModel.code, 'missing-model');
+  });
+
   it('allows native OpenRouter coding when patch coding and certification are configured', () => {
     const repoDir = makeRepo(baseConfig({
       providers: {
