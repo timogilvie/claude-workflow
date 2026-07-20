@@ -1852,6 +1852,39 @@ echo "[wavemill] Agent exited (native=\${native_rc})"
 exit "\$native_rc"
 LAUNCHEOF
           ;;
+        coding)
+          cat > "$launcher" <<LAUNCHEOF
+#!/bin/bash
+set -euo pipefail
+export WAVEMILL_SESSION='$session'
+export WAVEMILL_ISSUE='$issue'
+export WAVEMILL_LINEAR_ISSUE='$linear_issue'
+export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
+export WAVEMILL_PHASE='coding'
+export WAVEMILL_RESOLVED_MODEL='${native_model:-$model}'
+export WAVEMILL_REPO_DIR='$repo_dir'
+export WAVEMILL_WT_DIR='$worktree_dir'
+export WAVEMILL_FEATURE_SLUG='$feature_slug'
+export WAVEMILL_SLUG='$feature_slug'
+export WAVEMILL_CODE_DEPTH='${WAVEMILL_CODE_DEPTH:-}'
+export WAVEMILL_OPERATING_MODE='${WAVEMILL_OPERATING_MODE:-}'
+export WAVEMILL_BRANCH='${WAVEMILL_BRANCH:-}'
+export WAVEMILL_BASE_BRANCH='${WAVEMILL_BASE_BRANCH:-}'
+export WAVEMILL_TITLE='${WAVEMILL_TITLE:-}'
+if [[ -n '$issue' ]]; then
+  printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
+fi
+set +e
+npx tsx '$repo_dir/tools/launch-native-coding.ts' --session '$session' --issue '$issue' --slug '$feature_slug' --wt-dir '$worktree_dir' --repo-dir '$repo_dir'
+native_rc=\$?
+set -e
+if [[ -n "\${STATUS_LOG_FILE:-}" ]]; then
+  printf '%s\n' "[wavemill] native coding exit code native=\${native_rc} issue='$issue'" >> "\$STATUS_LOG_FILE" 2>/dev/null || true
+fi
+echo "[wavemill] Agent exited (native=\${native_rc})"
+exit "\$native_rc"
+LAUNCHEOF
+          ;;
         *)
           echo "Error: native agent '$agent_cmd' does not support autonomous phase '$native_phase'" >&2
           return 1
@@ -2294,6 +2327,39 @@ native_rc=\$?
 set -e
 if [[ -n "\${STATUS_LOG_FILE:-}" ]]; then
   printf '%s\n' "[wavemill] native review exit code native=\${native_rc} issue='$issue'" >> "\$STATUS_LOG_FILE" 2>/dev/null || true
+fi
+echo "[wavemill] Agent exited (native=\${native_rc})"
+exit "\$native_rc"
+LAUNCHEOF
+          ;;
+        coding)
+          cat > "$launcher" <<LAUNCHEOF
+#!/bin/bash
+set -euo pipefail
+export WAVEMILL_SESSION='$session'
+export WAVEMILL_ISSUE='$issue'
+export WAVEMILL_LINEAR_ISSUE='$linear_issue'
+export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
+export WAVEMILL_PHASE='coding'
+export WAVEMILL_RESOLVED_MODEL='${native_model:-$model}'
+export WAVEMILL_REPO_DIR='$repo_dir'
+export WAVEMILL_WT_DIR='$worktree_dir'
+export WAVEMILL_FEATURE_SLUG='$feature_slug'
+export WAVEMILL_SLUG='$feature_slug'
+export WAVEMILL_CODE_DEPTH='${WAVEMILL_CODE_DEPTH:-}'
+export WAVEMILL_OPERATING_MODE='${WAVEMILL_OPERATING_MODE:-}'
+export WAVEMILL_BRANCH='${WAVEMILL_BRANCH:-}'
+export WAVEMILL_BASE_BRANCH='${WAVEMILL_BASE_BRANCH:-}'
+export WAVEMILL_TITLE='${WAVEMILL_TITLE:-}'
+if [[ -n '$issue' ]]; then
+  printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
+fi
+set +e
+npx tsx '$repo_dir/tools/launch-native-coding.ts' --session '$session' --issue '$issue' --slug '$feature_slug' --wt-dir '$worktree_dir' --repo-dir '$repo_dir'
+native_rc=\$?
+set -e
+if [[ -n "\${STATUS_LOG_FILE:-}" ]]; then
+  printf '%s\n' "[wavemill] native coding exit code native=\${native_rc} issue='$issue'" >> "\$STATUS_LOG_FILE" 2>/dev/null || true
 fi
 echo "[wavemill] Agent exited (native=\${native_rc})"
 exit "\$native_rc"

@@ -135,6 +135,21 @@ check_contains "native review dispatches launcher path" "$(cat "$TMUX_LOG")" "$N
 check_contains "native review launcher invokes review flow tool" "$(cat "$NATIVE_REVIEW_LAUNCHER")" "tools/launch-native-review.ts"
 check_not_contains "native review launcher does not execute logical provider" "$(cat "$NATIVE_REVIEW_LAUNCHER")" "native-openrouter --model"
 
+TMUX_LOG="$TMPDIR_TEST/tmux-native-coding.log"
+tmux() {
+  printf '%s\n' "$*" >> "$TMUX_LOG"
+}
+NATIVE_CODING_PROMPT="/tmp/wavemill-HOK-2542-coding-prompt.txt"
+NATIVE_CODING_LAUNCHER="/tmp/sess-HOK-2542-autonomous-launcher.sh"
+rm -f "$NATIVE_CODING_LAUNCHER"
+REPO_DIR="$REPO_DIR" \
+agent_launch_autonomous "sess" "@95" "$NATIVE_CODING_PROMPT" "native-openrouter" "glm-5.2" "HOK-2542"
+
+check_contains "native coding dispatches launcher path" "$(cat "$TMUX_LOG")" "$NATIVE_CODING_LAUNCHER"
+check_contains "native coding launcher invokes coding flow tool" "$(cat "$NATIVE_CODING_LAUNCHER")" "tools/launch-native-coding.ts"
+check_contains "native coding launcher normalizes phase from prompt" "$(cat "$NATIVE_CODING_LAUNCHER")" "export WAVEMILL_PHASE='coding'"
+check_not_contains "native coding launcher does not execute logical provider" "$(cat "$NATIVE_CODING_LAUNCHER")" "native-openrouter --model"
+
 TMUX_LOG="$TMPDIR_TEST/tmux-coding.log"
 tmux() {
   printf '%s\n' "$*" >> "$TMUX_LOG"
@@ -213,9 +228,9 @@ if npx tsx "$REPO_DIR/tools/check-native-agent-launch.ts" \
   --phase coding \
   --agent native-openrouter \
   --model qwen-3-coder >/dev/null 2>&1; then
-  fail "native coding dispatch stays fail-closed without launcher"
+  fail "native coding dispatch stays fail-closed without patch certification"
 else
-  pass "native coding dispatch stays fail-closed without launcher"
+  pass "native coding dispatch stays fail-closed without patch certification"
 fi
 
 ROLE_REPO="$TMPDIR_TEST/role-guard-repo"

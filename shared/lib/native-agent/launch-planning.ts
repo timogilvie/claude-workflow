@@ -31,8 +31,7 @@ import { isTaskPacketContent } from '../task-packet-utils.ts';
 import { createCleanupTracker, runCleanup, type CleanupReason } from './cleanup.ts';
 import { updateStageResult } from '../stage-result.ts';
 import {
-  resolveOpenRouterIdFromWavemillAlias,
-  resolveWavemillAliasFromOpenRouterId,
+  equivalentOpenRouterModelIds,
 } from '../openrouter-catalog.ts';
 
 const RELEASE_READINESS_STUB = [
@@ -374,22 +373,12 @@ function toPiTools(descriptors: readonly ToolDescriptor[]): AgentTool<unknown, u
 }
 
 function canonicalNativeModelIds(modelId: string | undefined): Set<string> {
-  const ids = new Set<string>();
   const trimmed = modelId?.trim();
   if (!trimmed) {
-    return ids;
+    return new Set();
   }
 
-  ids.add(trimmed);
-  const openRouterId = resolveOpenRouterIdFromWavemillAlias(trimmed);
-  if (openRouterId) {
-    ids.add(openRouterId);
-  }
-  const wavemillAlias = resolveWavemillAliasFromOpenRouterId(trimmed);
-  if (wavemillAlias) {
-    ids.add(wavemillAlias);
-  }
-  return ids;
+  return new Set(equivalentOpenRouterModelIds(trimmed));
 }
 
 function selectReadyProvider(

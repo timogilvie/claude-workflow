@@ -955,7 +955,7 @@
                     "description": "Read-only workflow phases where native agents may be selected.",
                     "items": {
                         "type": "string",
-                        "enum": ["task-expansion", "planning", "review"]
+                        "enum": ["task-expansion", "planning", "coding", "review"]
                     }
                 },
                 "expansion": {

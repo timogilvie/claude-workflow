@@ -13,6 +13,7 @@ import {
   loadLaunchPriorityList,
   normalizeCatalog,
   OPENROUTER_MODELS_URL,
+  resolveOpenRouterModelIdentity,
   resolveWavemillAliasFromOpenRouterId,
   resolveOpenRouterIdFromWavemillAlias,
   serializeSnapshot,
@@ -142,6 +143,28 @@ describe('OpenRouter alias mapping', () => {
     assert.equal(resolveOpenRouterIdFromWavemillAlias('qwen-3-coder'), 'qwen/qwen3-coder');
     assert.equal(resolveOpenRouterIdFromWavemillAlias('glm-5.2'), 'z-ai/glm-5.2');
     assert.equal(resolveOpenRouterIdFromWavemillAlias('kimi-k2.7-code'), 'moonshotai/kimi-k2.7-code');
+  });
+
+  it('resolves Kimi/Qwen/GLM aliases and ids through one native OpenRouter identity', () => {
+    const cases = [
+      ['qwen-3-coder', 'qwen/qwen3-coder'],
+      ['glm-5.2', 'z-ai/glm-5.2'],
+      ['kimi-k2.7-code', 'moonshotai/kimi-k2.7-code'],
+    ] as const;
+
+    for (const [alias, openrouterId] of cases) {
+      const fromAlias = resolveOpenRouterModelIdentity(alias);
+      const fromId = resolveOpenRouterModelIdentity(openrouterId);
+      assert.ok(fromAlias, `expected identity for ${alias}`);
+      assert.ok(fromId, `expected identity for ${openrouterId}`);
+      assert.equal(fromAlias!.wavemillAlias, alias);
+      assert.equal(fromAlias!.openrouterId, openrouterId);
+      assert.equal(fromAlias!.nativeOpenRouter, true);
+      assert.equal(fromId!.wavemillAlias, alias);
+      assert.equal(fromId!.openrouterId, openrouterId);
+      assert.deepEqual(fromAlias!.equivalentIds, [alias, openrouterId]);
+      assert.deepEqual(fromId!.equivalentIds, [alias, openrouterId]);
+    }
   });
 });
 
