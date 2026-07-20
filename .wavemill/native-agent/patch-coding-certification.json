@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "certified": true,
+  "smokeSuiteRevision": "patch-coding-smoke-v1",
+  "providers": [
+    {
+      "provider": "openrouter",
+      "model": "qwen/qwen3-coder",
+      "passed": true,
+      "transcriptPath": "/var/folders/0v/2l0qx62n3tgf2p_32p6_0_ww0000gn/T/native-smoke-live-smoke-live-openrouter-1784572013631.jsonl"
+    },
+    {
+      "provider": "openrouter",
+      "model": "z-ai/glm-5.2",
+      "passed": true,
+      "transcriptPath": "/var/folders/0v/2l0qx62n3tgf2p_32p6_0_ww0000gn/T/native-smoke-live-smoke-live-openrouter-1784572028858.jsonl"
+    }
+  ],
+  "certifiedAt": "2026-07-20T18:27:31.990Z"
+}

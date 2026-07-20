@@ -229,8 +229,12 @@
     "allowedPhases": [
       "task-expansion",
       "planning",
+      "coding",
       "review"
     ],
+    "patchCoding": {
+      "enabled": true
+    },
     "expansion": {
       "fallbackOnUnavailable": true
     },
