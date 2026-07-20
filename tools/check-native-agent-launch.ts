@@ -173,16 +173,7 @@ function main(): void {
   const phase = (readOption('phase') ?? '') as NativePhase;
   const model = (readOption('model') ?? '').trim();
 
-  let result: CheckNativeAgentLaunchResult;
-  if (agent !== 'native-openai' && agent !== 'native-openrouter') {
-    result = reject(`unsupported native agent '${agent || '(empty)'}'`);
-  } else if (phase !== 'planning' && phase !== 'coding' && phase !== 'review') {
-    result = reject(`unsupported native launch phase '${phase || '(empty)'}'`);
-  } else if (!model) {
-    result = reject('native launch requires a resolved model');
-  } else {
-    result = checkNativeAgentLaunch({ repoDir, agent, phase, model });
-  }
+  const result = checkNativeAgentLaunch({ repoDir, agent, phase, model });
 
   process.stdout.write(JSON.stringify(result));
   if (!result.ok) {

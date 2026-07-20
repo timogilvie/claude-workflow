@@ -76,6 +76,7 @@ export interface LaunchNativePlanningOptions {
   registryMetadataOverride?: readonly ToolMetadata[];
   extraDescriptors?: readonly ToolDescriptor[];
   runTsxCommand?: (args: string[]) => string;
+  onAwaitingUserStagePublished?: () => void | Promise<void>;
   signal?: AbortSignal;
 }
 
@@ -612,7 +613,7 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
       },
       failureReason: null,
     });
-    clearApprovalMarkerCreatedDuringPlanning(approvalMarkerPath);
+    await options.onAwaitingUserStagePublished?.();
     writeHookStatus(hookPath, 'idle', 'process_exit', 'planning_awaiting_user', 'native');
     writeTextStatus(options.session, options.issue, 'awaiting plan approval');
 

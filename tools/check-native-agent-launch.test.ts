@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { afterEach, describe, it } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { clearConfigCache } from '../shared/lib/config.ts';
 import {
   PATCH_CODING_CERTIFICATION_SCHEMA_VERSION,
@@ -12,6 +14,7 @@ import { PATCH_CODING_SMOKE_SUITE_REVISION } from '../shared/lib/native-agent/sm
 import { checkNativeAgentLaunch } from './check-native-agent-launch.ts';
 
 const repos: string[] = [];
+const REPO_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 function makeRepo(config: Record<string, unknown>): string {
   const repoDir = mkdtempSync(join(tmpdir(), 'check-native-agent-launch-'));
@@ -48,6 +51,28 @@ function writePatchCodingCertification(repoDir: string): void {
       { provider: 'openrouter', model: 'qwen/qwen3-coder', passed: true },
     ],
   }, null, 2), 'utf-8');
+}
+
+function runCliFailure(repoDir: string, args: string[]): Record<string, unknown> {
+  try {
+    execFileSync(process.execPath, [
+      '--import',
+      'tsx',
+      join(REPO_DIR, 'tools', 'check-native-agent-launch.ts'),
+      '--repo-dir',
+      repoDir,
+      ...args,
+    ], {
+      cwd: REPO_DIR,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    assert.fail('expected preflight CLI to fail');
+  } catch (error) {
+    const err = error as Error & { stdout?: Buffer | string };
+    const stdout = Buffer.isBuffer(err.stdout) ? err.stdout.toString('utf-8') : String(err.stdout ?? '');
+    return JSON.parse(stdout) as Record<string, unknown>;
+  }
 }
 
 function baseConfig(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -208,6 +233,32 @@ describe('checkNativeAgentLaunch', () => {
     });
     assert.equal(emptyModel.ok, false);
     assert.equal(emptyModel.ok ? undefined : emptyModel.code, 'missing-model');
+  });
+
+  it('preserves structured validation codes through the CLI entrypoint', () => {
+    const repoDir = makeRepo(baseConfig());
+
+    const unsupportedStage = runCliFailure(repoDir, [
+      '--agent',
+      'native-openrouter',
+      '--phase',
+      'deploy',
+      '--model',
+      'glm-5.2',
+    ]);
+    assert.equal(unsupportedStage.ok, false);
+    assert.equal(unsupportedStage.code, 'unsupported-native-stage');
+
+    const missingModel = runCliFailure(repoDir, [
+      '--agent',
+      'native-openrouter',
+      '--phase',
+      'planning',
+      '--model',
+      '   ',
+    ]);
+    assert.equal(missingModel.ok, false);
+    assert.equal(missingModel.code, 'missing-model');
   });
 
   it('allows native OpenRouter coding when patch coding and certification are configured', () => {

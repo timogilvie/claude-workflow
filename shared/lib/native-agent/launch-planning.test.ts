@@ -259,6 +259,47 @@ describe('launchNativePlanning', () => {
     }
   });
 
+  it('preserves approval markers created after awaiting_user is published', async () => {
+    const { wtDir, featureDir } = setupWorktree();
+    const api = uniqueApi('approval-after-awaiting-user');
+    const approvalMarkerPath = join(featureDir, '.plan-approved');
+
+    try {
+      registerScriptedPiProvider({
+        api,
+        turns: [{
+          content: [{
+            type: 'text',
+            text: '# Plan\n## Release Readiness\n- **database_change_risk**: none',
+          }],
+          stopReason: 'stop',
+        }],
+      });
+
+      await launchNativePlanning({
+        session: 'sess',
+        issue: 'HOK-2544',
+        slug: 'demo',
+        wtDir,
+        repoDir: REPO_DIR,
+        title: 'Do not delete explicit approvals',
+        loopModelOverride: scriptedModel(api),
+        runTsxCommand: stubRunTsxCommand(),
+        onAwaitingUserStagePublished: () => {
+          writeFileSync(approvalMarkerPath, 'approved after awaiting_user\n');
+        },
+      });
+
+      assert.equal(readFileSync(approvalMarkerPath, 'utf-8'), 'approved after awaiting_user\n');
+      const stageResult = JSON.parse(
+        readFileSync(join(featureDir, '.planning-result.json'), 'utf-8'),
+      ) as Record<string, unknown>;
+      assert.equal(stageResult.status, 'awaiting_user');
+    } finally {
+      cleanup(wtDir);
+    }
+  });
+
   it('expands challenger task packets with the canonical Linear issue id', async () => {
     const { wtDir, featureDir, packetPath } = setupWorktree();
     const api = uniqueApi('challenger-linear-issue');

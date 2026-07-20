@@ -22,6 +22,7 @@ import {
   CERTIFICATION_TTL_DAYS,
 } from './schema.ts';
 import type { ModelRegistry } from '../../model-registry.ts';
+import { resolveOpenRouterModelIdentity, type RoleEligibility } from '../../openrouter-catalog.ts';
 
 const OPENROUTER_PATCH_CASES = [
   {
@@ -156,6 +157,46 @@ function makeRegistry(nativeModelId: string, certPhase: string, suiteVersion: st
         reasoningTier: 'standard',
         costPerMillionInputTokensUsd: 3,
         costPerMillionOutputTokensUsd: 15,
+      },
+    },
+    ladders: {},
+  };
+}
+
+function makeOpenRouterRegistry(
+  modelId: string,
+  certPhase: 'read-only' | 'patch' | 'workflow',
+  suiteVersion: string,
+): ModelRegistry {
+  const identity = resolveOpenRouterModelIdentity(modelId);
+  assert.ok(identity, `expected launch-priority identity for ${modelId}`);
+
+  return {
+    models: {
+      [modelId]: {
+        vendor: identity.family,
+        class: identity.family === 'glm' ? 'frontier' : 'strong_generalist',
+        strengths: [],
+        weaknesses: [],
+        qualityScores: { routing: 60, planning: 80, coding: 84, review: 82, classify: 60 },
+        contextWindowTokens: identity.family === 'glm' ? 1_048_576 : 262_144,
+        toolSupport: 'full',
+        multimodal: { text: true, image: identity.family === 'kimi' },
+        latencyTier: 'standard',
+        reasoningTier: identity.family === 'qwen' ? 'standard' : 'advanced',
+        costPerMillionInputTokensUsd: 1,
+        costPerMillionOutputTokensUsd: 3,
+        nativeCapability: {
+          nativeProvider: 'openrouter',
+          piTransportKind: 'openai-completions',
+          readOnlyNative: 'certified',
+          compatFlags: { thinkingFormat: 'openrouter' },
+          certification: {
+            maxCertifiedPhase: certPhase,
+            certifiedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+            certificationSuiteVersion: suiteVersion,
+          },
+        },
       },
     },
     ladders: {},
@@ -440,6 +481,54 @@ await test('nativeAgent.allowedPhases rejects configured native planning candida
     assert.deepEqual(result.rejected[0]?.allowedNativeAgentPhases, ['review']);
   } finally {
     cleanup();
+  }
+});
+
+await test('native OpenRouter launch matrix covers Kimi, Qwen, and GLM aliases and raw ids', () => {
+  const roleLaunchPhase: Record<RouterRole, RoleEligibility> = {
+    planner: 'planning',
+    coder: 'coding',
+    reviewer: 'review',
+  };
+  const modelIds = [
+    'qwen-3-coder',
+    'qwen/qwen3-coder',
+    'kimi-k2.7-code',
+    'moonshotai/kimi-k2.7-code',
+    'glm-5.2',
+    'z-ai/glm-5.2',
+  ];
+
+  for (const modelId of modelIds) {
+    const identity = resolveOpenRouterModelIdentity(modelId);
+    assert.ok(identity, `expected launch-priority identity for ${modelId}`);
+    const { repoDir, cleanup } = makeRepo();
+    try {
+      writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
+        nativeAgent: {
+          enabled: true,
+          allowedPhases: ['planning', 'coding', 'review'],
+        },
+      }));
+      writeCertArtifact(repoDir, identity.provider, identity.providerModel, 'v1', { phase: 'workflow' });
+      const registry = makeOpenRouterRegistry(modelId, 'workflow', 'v1');
+
+      for (const role of ['planner', 'coder', 'reviewer'] as const) {
+        const result = filterNativeModels([modelId], role, registry, repoDir);
+        const expectedEligible = identity.roleEligibility.includes(roleLaunchPhase[role]);
+        if (expectedEligible) {
+          assert.deepEqual(result.eligible, [modelId], `${modelId} should be eligible for ${role}`);
+          assert.deepEqual(result.rejected, [], `${modelId} should not be rejected for ${role}`);
+        } else {
+          assert.deepEqual(result.eligible, [], `${modelId} should not be eligible for ${role}`);
+          assert.equal(result.rejected.length, 1, `${modelId} should have one rejection for ${role}`);
+          assert.equal(result.rejected[0]?.reason, 'role-ineligible');
+          assert.deepEqual(result.rejected[0]?.eligibleRoles, identity.roleEligibility);
+        }
+      }
+    } finally {
+      cleanup();
+    }
   }
 });
 

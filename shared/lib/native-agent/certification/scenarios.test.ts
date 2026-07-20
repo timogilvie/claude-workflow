@@ -161,6 +161,7 @@ describe('workflow certification scenarios', () => {
     'workflow.usage.multi-turn-token-accounting',
     'workflow.cleanup.tracker-roundtrip-and-summary-event',
     'workflow.phase.workflow-persistence-roundtrip',
+    'workflow.phase.native-openrouter-launch-matrix',
   ];
 
   for (const id of workflowScenarioIds) {
