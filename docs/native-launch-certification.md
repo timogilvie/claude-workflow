@@ -38,15 +38,14 @@ launches, not a general list of models that the router knows about.
 
 | Model alias | OpenRouter model | Planning | Coding | Review |
 | --- | --- | --- | --- | --- |
-| `glm-5.2` | `z-ai/glm-5.2` | yes | no | yes |
-| `kimi-k2.7-code` | `moonshotai/kimi-k2.7-code` | yes | no | yes |
-| `qwen-3-coder` | `qwen/qwen3-coder` | no | no | yes |
+| `glm-5.2` | `z-ai/glm-5.2` | yes | yes | yes |
+| `kimi-k2.7-code` | `moonshotai/kimi-k2.7-code` | yes | yes | yes |
+| `qwen-3-coder` | `qwen/qwen3-coder` | no | yes | yes |
 
-Coding is currently blocked globally because `nativeAgent.allowedPhases` does
-not include `coding`. The `qwen-3-coder`, `glm-5.2`, and `kimi-k2.7-code`
-registry entries are coding-eligible and have workflow certification artifacts,
-but they are not coding-executable until the checked-in phase gate permits
-native coding.
+Native coding is enabled by the checked-in `nativeAgent.allowedPhases` and
+`nativeAgent.patchCoding.enabled` settings. The repo-level patch-coding smoke
+artifact certifies the native patch runtime, and the provider/model workflow
+certification artifacts certify the configured OpenRouter model identities.
 
 `qwen-3-coder` is review-executable but not planning-executable because its
 launch-priority role eligibility is `coding` and `review`, not `planning`.
@@ -62,9 +61,9 @@ Native model rollout has two separate gates:
    preflight for the current repository configuration and environment.
 
 A model can be certified but still not launchable for a specific phase. The
-current coding block is the main example: the models have certification
-artifacts, but `check-native-agent-launch` rejects coding because the phase is
-not enabled.
+remaining `qwen-3-coder` planning rejection is the main example: the model is
+known and certified for native execution, but its role eligibility excludes
+planning.
 
 Use this preflight command when checking a specific launch path:
 
@@ -91,7 +90,10 @@ passes in the same environment that will run `wavemill mill`.
 - The model registry entry has a native capability for `native-openrouter`.
 - The model has a valid workflow certification artifact for the current
   certification suite.
+- Native coding additionally requires `nativeAgent.patchCoding.enabled` and a
+  valid `.wavemill/native-agent/patch-coding-certification.json` smoke artifact.
 
-The next launch-readiness blocker is native coding runability. Until `coding` is
-enabled in `nativeAgent.allowedPhases` and verified through preflight plus the
-certification suite, no native model should be treated as executable for coding.
+Run the HOK-2074 canary fixture in
+`tests/fixtures/native-routing-canary/README.md` before broad rollout. It
+checks the current primary and challenger native model matrices against a real
+Wavemill routing task.
