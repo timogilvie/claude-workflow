@@ -539,7 +539,7 @@ render_plan_model_routing() {
     MODEL_RESOLUTION_DISPLAY_MODULE="$WAVEMILL_REPO_DIR/shared/lib/model-resolution-display.ts" \
     NO_UPDATE_NOTIFIER=1 \
     npm_config_update_notifier=false \
-    npx tsx -e '
+    node --import tsx -e '
       (async () => {
         const modulePath = process.env.MODEL_RESOLUTION_DISPLAY_MODULE;
         const { formatRouteLifecycleDisplayTextFromPaths } = await import(modulePath);

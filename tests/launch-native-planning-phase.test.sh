@@ -400,7 +400,25 @@ else
   fail "interactive native planner emits role rejection" "$(cat "$TMPDIR_TEST/bad-interactive.stderr")"
 fi
 
-if agent_native_planning_eligible "$REPO_DIR" "planning"; then
+DISABLED_REPO="$TMPDIR_TEST/disabled-native-repo"
+mkdir -p "$DISABLED_REPO"
+cat > "$DISABLED_REPO/.wavemill-config.json" <<'EOF'
+{
+  "nativeAgent": {
+    "enabled": false,
+    "allowedPhases": ["planning"],
+    "providers": {
+      "openrouter": {
+        "enabled": true,
+        "apiKeyEnv": "TEST_OPENROUTER_KEY",
+        "models": ["z-ai/glm-5.2"]
+      }
+    }
+  }
+}
+EOF
+
+if TEST_OPENROUTER_KEY="sk-test" agent_native_planning_eligible "$DISABLED_REPO" "planning"; then
   fail "disabled config stays ineligible"
 else
   pass "disabled config stays ineligible"

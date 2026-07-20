@@ -248,7 +248,7 @@ agent_validate_model() {
 
   # Call TypeScript validator (cd to lib_dir first for imports to work)
   # Exits 0 if valid, 1 if invalid with error message
-  if (cd "$lib_dir" && npx tsx "$validator" --selector-token "$model" "$repo_dir" >/dev/null); then
+  if (cd "$lib_dir" && agent_run_tsx_tool "$validator" --selector-token "$model" "$repo_dir" >/dev/null); then
     return 0
   else
     return 1
@@ -272,7 +272,7 @@ agent_resolve_model() {
     return 1
   fi
 
-  if resolved_model="$(cd "$lib_dir" 2>/dev/null && npx tsx "$validator" --resolve-selector-token "$model" --role "$role" "$repo_dir" 2>/dev/null)"; then
+  if resolved_model="$(cd "$lib_dir" 2>/dev/null && agent_run_tsx_tool "$validator" --resolve-selector-token "$model" --role "$role" "$repo_dir" 2>/dev/null)"; then
     printf '%s\n' "$resolved_model"
     return 0
   fi
@@ -342,7 +342,9 @@ agent_run_tsx_tool() {
   local tool="$1"
   shift
 
-  if command -v tsx >/dev/null 2>&1; then
+  if node --import tsx -e "" >/dev/null 2>&1; then
+    node --import tsx "$tool" "$@"
+  elif command -v tsx >/dev/null 2>&1; then
     tsx "$tool" "$@"
   else
     npx tsx "$tool" "$@"
@@ -350,7 +352,7 @@ agent_run_tsx_tool() {
 }
 
 agent_model_helper_available() {
-  command -v tsx >/dev/null 2>&1 || command -v npx >/dev/null 2>&1
+  node --import tsx -e "" >/dev/null 2>&1 || command -v tsx >/dev/null 2>&1 || command -v npx >/dev/null 2>&1
 }
 
 agent_native_planning_eligible() {

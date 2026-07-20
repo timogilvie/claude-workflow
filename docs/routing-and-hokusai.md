@@ -213,10 +213,12 @@ Examples:
 - `wavemill mill` runs routing as part of the main factory loop
 - `wavemill route` shows the recommended planner, coder, and reviewer workflow for a task
 - `wavemill eval` inspects the outcome data that routing learns from
+- `npm run test:native-launch-certification` verifies native agent launch readiness
 
 ## See Also
 
 - [Mill Mode](mill-mode.md) — the default workflow
+- [Native Launch Certification](native-launch-certification.md) — current native model runability matrix and certification gate
 - [CLI Reference](cli-reference.md) — all commands and command groups
 - [Eval Mode](eval-mode.md) — how outcomes are scored
 - [Adding Models](model-additions.md) — maintainer checklist for adding model support

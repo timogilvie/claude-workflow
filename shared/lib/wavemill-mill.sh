@@ -6111,6 +6111,19 @@ merge_queue_enabled() {
   [[ "${MERGE_QUEUE_ENABLED:-true}" == "1" || "${MERGE_QUEUE_ENABLED:-true}" == "true" ]]
 }
 
+wavemill_run_tsx_tool() {
+  local tool="$1"
+  shift
+
+  if node --import tsx -e "" >/dev/null 2>&1; then
+    node --import tsx "$tool" "$@"
+  elif command -v tsx >/dev/null 2>&1; then
+    tsx "$tool" "$@"
+  else
+    npx tsx "$tool" "$@"
+  fi
+}
+
 write_ready_queue_artifacts() {
   local state_dir="$1" patch_json="$2"
   local result_file="$state_dir/.ready-result.json"
@@ -6130,7 +6143,7 @@ write_ready_queue_artifacts() {
       ) | .type = "ready"
     ')
 
-  npx tsx "$TOOLS_DIR/stage-result-cli.ts" update "$state_dir" ready --artifacts "$merged_artifacts" >/dev/null 2>&1 || \
+  wavemill_run_tsx_tool "$TOOLS_DIR/stage-result-cli.ts" update "$state_dir" ready --artifacts "$merged_artifacts" >/dev/null 2>&1 || \
     log_warn "merge queue: failed to update ready artifacts in $state_dir"
 }
 
@@ -6357,7 +6370,7 @@ refresh_ready_merge_queue_tick() {
   input_file=$(mktemp) || return 0
   output_file=$(mktemp) || { rm -f "$input_file"; return 0; }
   jq -cn --arg now "$now" --argjson prs "$ready_prs" --argjson config "$config_json" '{readyPrs:$prs, now:$now, config:$config}' > "$input_file"
-  if ! npx tsx "$TOOLS_DIR/merge-queue-select.ts" --input "$input_file" > "$output_file" 2>/dev/null; then
+  if ! wavemill_run_tsx_tool "$TOOLS_DIR/merge-queue-select.ts" --input "$input_file" > "$output_file" 2>/dev/null; then
     rm -f "$input_file" "$output_file"
     printf '{"selectedIssues":[],"stuckIssues":[]}\n' > "$MERGE_QUEUE_SELECTION_FILE"
     return 0

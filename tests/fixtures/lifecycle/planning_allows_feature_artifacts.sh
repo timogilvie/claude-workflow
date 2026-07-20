@@ -7,7 +7,7 @@ setup_planning_allows_feature_artifacts() {
   create_git_worktree
   CURRENT_PHASE="planning"
   MONITOR_ITERATIONS=2
-  write_stage_result "$FEATURE_DIR" "planning" "running" "$CURRENT_AGENT"
+  write_stage_result "$FEATURE_DIR" "planning" "awaiting_user" "$CURRENT_AGENT"
   printf "plan\n" > "$FEATURE_DIR/plan.md"
   printf "packet\n" > "$FEATURE_DIR/task-packet.md"
   printf "header\n" > "$FEATURE_DIR/task-packet-header.md"
