@@ -11265,8 +11265,15 @@ monitor_issue_state() {
           local planning_status
           planning_status=$(read_stage_status "$FEATURE_DIR" "planning")
 
-          # Transition 1: running/awaiting_user + .plan-approved → completed
-          if [[ "$planning_status" == "running" || "$planning_status" == "awaiting_user" ]]; then
+          # Transition 1: awaiting_user + .plan-approved → completed.
+          # Approval markers created before the run reaches awaiting_user are
+          # stale/in-run markers and must not bypass the operator gate.
+          if [[ "$planning_status" == "running" ]] && [[ -f "$FEATURE_DIR/.plan-approved" ]]; then
+            rm -f "$FEATURE_DIR/.plan-approved"
+            log "warn" "$ISSUE → Ignoring .plan-approved created before planning was awaiting user approval"
+          fi
+
+          if [[ "$planning_status" == "awaiting_user" ]]; then
             if [[ -f "$FEATURE_DIR/.plan-approved" ]]; then
               unset "$approval_wait_var" 2>/dev/null || true
               if ! validate_planning_phase_output "${WORKTREE_ROOT}/${SLUG}"; then

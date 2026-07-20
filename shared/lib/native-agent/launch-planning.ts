@@ -364,6 +364,10 @@ function atomicWriteText(path: string, content: string): void {
   renameSync(tmpPath, path);
 }
 
+function clearApprovalMarkerCreatedDuringPlanning(approvalMarkerPath: string): void {
+  rmSync(approvalMarkerPath, { force: true });
+}
+
 function defaultHookPath(session: string, issue: string): string {
   return `/tmp/wavemill-${session}-${issue}.hook`;
 }
@@ -593,6 +597,7 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
     }
     const finalText = ensureReleaseReadiness(rawFinalText);
 
+    clearApprovalMarkerCreatedDuringPlanning(approvalMarkerPath);
     atomicWriteText(planPath, finalText);
     await updateStageResult(featureDir, 'planning', {
       status: 'awaiting_user',
@@ -607,6 +612,7 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
       },
       failureReason: null,
     });
+    clearApprovalMarkerCreatedDuringPlanning(approvalMarkerPath);
     writeHookStatus(hookPath, 'idle', 'process_exit', 'planning_awaiting_user', 'native');
     writeTextStatus(options.session, options.issue, 'awaiting plan approval');
 

@@ -220,6 +220,45 @@ describe('launchNativePlanning', () => {
     }
   });
 
+  it('clears approval markers that exist before native planning reaches awaiting_user', async () => {
+    const { wtDir, featureDir } = setupWorktree();
+    const api = uniqueApi('stale-approval-marker');
+    writeFileSync(join(featureDir, '.plan-approved'), 'created too early\n');
+
+    try {
+      registerScriptedPiProvider({
+        api,
+        turns: [{
+          content: [{
+            type: 'text',
+            text: '# Plan\n## Release Readiness\n- **database_change_risk**: none',
+          }],
+          stopReason: 'stop',
+        }],
+      });
+
+      await launchNativePlanning({
+        session: 'sess',
+        issue: 'HOK-2544',
+        slug: 'demo',
+        wtDir,
+        repoDir: REPO_DIR,
+        title: 'Keep native planning approval gated',
+        loopModelOverride: scriptedModel(api),
+        runTsxCommand: stubRunTsxCommand(),
+      });
+
+      assert.equal(existsSync(join(featureDir, '.plan-approved')), false);
+      const stageResult = JSON.parse(
+        readFileSync(join(featureDir, '.planning-result.json'), 'utf-8'),
+      ) as Record<string, unknown>;
+      assert.equal(stageResult.status, 'awaiting_user');
+      assert.equal(stageResult.finishedAt, null);
+    } finally {
+      cleanup(wtDir);
+    }
+  });
+
   it('expands challenger task packets with the canonical Linear issue id', async () => {
     const { wtDir, featureDir, packetPath } = setupWorktree();
     const api = uniqueApi('challenger-linear-issue');
