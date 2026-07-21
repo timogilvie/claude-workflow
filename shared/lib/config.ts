@@ -294,6 +294,10 @@ export interface ChallengeGateConfig {
   coolOffSeconds?: number;
 }
 
+export interface ChallengeEvalConfig {
+  retryMaxAttempts?: number;
+}
+
 export interface ChallengeConfig {
   enabled?: boolean;
   rate?: number;
@@ -308,6 +312,7 @@ export interface ChallengeConfig {
     implementation?: number;
     review?: number;
   };
+  eval?: ChallengeEvalConfig;
 }
 
 export interface ChallengeSchedulerConfig {
