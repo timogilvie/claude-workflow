@@ -159,3 +159,33 @@ test('fixture end-to-end run appends an eval record with workflow_success_rate_u
     cleanup(tmp);
   }
 });
+
+test('single-model prospective run persists launch-priority attribution', async () => {
+  const tmp = makeTempDir();
+  try {
+    const evalsDir = writeFixtureEvals(join(tmp, 'evals'));
+    await runWavemillRouterEval({
+      repoDir: process.cwd(),
+      policy: 'challenge_prospective',
+      evalsDir,
+      artifactsDir: join(fixtureRoot, 'artifacts'),
+      modelsAvailable: ['glm-5.2'],
+      persist: true,
+    });
+
+    const persisted = readFileSync(join(evalsDir, 'evals.jsonl'), 'utf-8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    const hem = persisted[persisted.length - 1];
+
+    assert.equal(hem.modelId, 'hokusai.scorers.wavemill.success_rate_under_budget:v1');
+    assert.equal(hem.attempted_model, 'glm-5.2');
+    assert.equal(hem.model_alias, 'glm-5.2');
+    assert.equal(hem.routing.planner.resolvedModelId, 'glm-5.2');
+    assert.equal(hem.routing.coder.resolvedModelId, 'glm-5.2');
+    assert.equal(hem.routing.reviewer.resolvedModelId, 'glm-5.2');
+  } finally {
+    cleanup(tmp);
+  }
+});

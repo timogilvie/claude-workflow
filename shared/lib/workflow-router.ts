@@ -1265,8 +1265,20 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
     ...(reviewerPoolResolution.nativeCertificationRejections ?? []),
   ];
   for (const rejection of nativeCertificationRejections) {
+    const details = [
+      `launchPhase=${rejection.requestedLaunchPhase}`,
+      `certPhase=${rejection.requestedPhase}`,
+      `reason=${rejection.reason}`,
+      `provider=${rejection.nativeProvider ?? 'unknown'}`,
+    ];
+    if (rejection.eligibleRoles) {
+      details.push(`eligibleRoles=${rejection.eligibleRoles.join(',') || 'none'}`);
+    }
+    if (rejection.allowedNativeAgentPhases) {
+      details.push(`allowedNativeAgentPhases=${rejection.allowedNativeAgentPhases.join(',') || 'none'}`);
+    }
     reasoning.push(
-      `Native model ${rejection.modelId} rejected for ${rejection.role} role (phase=${rejection.requestedPhase}, reason=${rejection.reason}).`,
+      `Native model ${rejection.modelId} rejected for ${rejection.role} role (${details.join(', ')}).`,
     );
   }
 
@@ -1793,7 +1805,11 @@ export async function routeWorkflowHokusai(
         ]
       : enriched.reasoning,
     routingMode: 'hokusai',
-    neighborCount: 0,
+    neighborCount: typeof enriched.provenance?.hokusai?.nearestNeighborCount === 'number'
+      ? enriched.provenance.hokusai.nearestNeighborCount
+      : Array.isArray(enriched.provenance?.nearestNeighbors)
+        ? enriched.provenance.nearestNeighbors.length
+        : 0,
     neighborSimilarityRange: [0, 0],
     expectedCost: Number(
       (enriched.expectedCostPlan + enriched.expectedCostCode + enriched.expectedCostReview).toFixed(2)

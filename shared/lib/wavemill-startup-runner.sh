@@ -853,36 +853,73 @@ $details_context"
   local bootstrap_router_mode
   bootstrap_router_mode="$(npx tsx "$TOOLS_DIR/get-operating-mode.ts" global --repo-dir "$REPO_DIR" 2>/dev/null || echo "normal")"
 
-  jq -n \
-    --arg planner "${planner_model:-gpt-5.4}" \
-    --arg coder "${coder_model:-gpt-5.5}" \
-    --arg reviewer "${reviewer_model:-gpt-5.4}" \
-    --arg planDepth "$plan_depth" \
-    --arg codeDepth "$code_depth" \
-    --arg reviewMode "$review_mode" \
-    --arg source "bootstrap" \
-    --arg inputKind "issue" \
-    --arg inputPath "features/$slug/selected-task.json" \
-    --arg routerMode "$bootstrap_router_mode" \
-    --argjson maxCostUsd "${route_max_cost_usd:-null}" \
-    '{
-      planner: $planner,
-      coder: $coder,
-      reviewer: $reviewer,
-      planDepth: $planDepth,
-      codeDepth: $codeDepth,
-      reviewMode: $reviewMode,
-      reviewRecommended: $reviewMode,
-      provenance: {
-        source: $source,
-        inputKind: $inputKind,
-        inputPath: $inputPath,
-        inputHash: "",
-        routedAt: (now | todateiso8601),
-        routerMode: $routerMode
-      }
-    } + (if $maxCostUsd == null then {} else {maxCostUsd: $maxCostUsd} end)' \
-    | write_json_artifact "$feature_dir/.routing-complete"
+  local startup_route_file="/tmp/${SESSION}-${issue}-route.json"
+  if [[ -f "$startup_route_file" ]] && jq -e '.planner and .coder and .reviewer' "$startup_route_file" >/dev/null 2>&1; then
+    jq \
+      --arg planner "${planner_model:-gpt-5.4}" \
+      --arg coder "${coder_model:-gpt-5.5}" \
+      --arg reviewer "${reviewer_model:-gpt-5.4}" \
+      --arg planDepth "$plan_depth" \
+      --arg codeDepth "$code_depth" \
+      --arg reviewMode "$review_mode" \
+      --arg source "bootstrap" \
+      --arg inputKind "issue" \
+      --arg inputPath "features/$slug/selected-task.json" \
+      --arg routerMode "$bootstrap_router_mode" \
+      --argjson maxCostUsd "${route_max_cost_usd:-null}" \
+      '(.provenance // {}) as $p
+      | .planner = $planner
+      | .coder = $coder
+      | .reviewer = $reviewer
+      | .planDepth = $planDepth
+      | .codeDepth = $codeDepth
+      | .reviewMode = $reviewMode
+      | .reviewRecommended = $reviewMode
+      | .provenance = ($p + {
+          source: (if (($p.source // "") == "") then $source else $p.source end),
+          inputKind: (if (($p.inputKind // "") == "") then $inputKind else $p.inputKind end),
+          inputPath: (if (($p.inputPath // "") == "") then $inputPath else $p.inputPath end),
+          inputHash: ($p.inputHash // ""),
+          routedAt: (if (($p.routedAt // "") == "") then (now | todateiso8601) else $p.routedAt end),
+          routerMode: (if (($p.routerMode // "") == "") then $routerMode else $p.routerMode end)
+        })
+      | if $maxCostUsd == null
+        then .
+        else .maxCostUsd = $maxCostUsd | .constraints = ((.constraints // {}) + {maxCostUsd: $maxCostUsd})
+        end' "$startup_route_file" \
+      | write_json_artifact "$feature_dir/.routing-complete"
+  else
+    jq -n \
+      --arg planner "${planner_model:-gpt-5.4}" \
+      --arg coder "${coder_model:-gpt-5.5}" \
+      --arg reviewer "${reviewer_model:-gpt-5.4}" \
+      --arg planDepth "$plan_depth" \
+      --arg codeDepth "$code_depth" \
+      --arg reviewMode "$review_mode" \
+      --arg source "bootstrap" \
+      --arg inputKind "issue" \
+      --arg inputPath "features/$slug/selected-task.json" \
+      --arg routerMode "$bootstrap_router_mode" \
+      --argjson maxCostUsd "${route_max_cost_usd:-null}" \
+      '{
+        planner: $planner,
+        coder: $coder,
+        reviewer: $reviewer,
+        planDepth: $planDepth,
+        codeDepth: $codeDepth,
+        reviewMode: $reviewMode,
+        reviewRecommended: $reviewMode,
+        provenance: {
+          source: $source,
+          inputKind: $inputKind,
+          inputPath: $inputPath,
+          inputHash: "",
+          routedAt: (now | todateiso8601),
+          routerMode: $routerMode
+        }
+      } + (if $maxCostUsd == null then {} else {maxCostUsd: $maxCostUsd} end)' \
+      | write_json_artifact "$feature_dir/.routing-complete"
+  fi
   if [[ -f "$feature_dir/.initial-route.json" ]]; then
     startup_log "  Keeping existing .initial-route.json for $issue"
   else

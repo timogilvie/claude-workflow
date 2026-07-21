@@ -7,7 +7,7 @@ setup_planning_approval_with_runtime_logs() {
   create_git_worktree
   CURRENT_PHASE="planning"
   MONITOR_ITERATIONS=2
-  write_stage_result "$FEATURE_DIR" "planning" "running" "$CURRENT_AGENT"
+  write_stage_result "$FEATURE_DIR" "planning" "awaiting_user" "$CURRENT_AGENT"
   printf "plan\n" > "$FEATURE_DIR/plan.md"
   touch "$FEATURE_DIR/.plan-approved"
   mkdir -p "$WT_DIR/.wavemill/logs" "$WT_DIR/.wavemill/evals"

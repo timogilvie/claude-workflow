@@ -5,7 +5,7 @@ import {
 import { resolveEnvValue } from './env-file.ts';
 import {
   loadLaunchPriorityList,
-  resolveWavemillAliasFromOpenRouterId,
+  resolveOpenRouterModelIdentity,
 } from './openrouter-catalog.ts';
 
 export const OPENROUTER_BASE_URL = 'https://openrouter.ai/api';
@@ -28,24 +28,15 @@ export interface OpenRouterPoolFilterResult {
   warnings: string[];
 }
 
-let launchPriorityByAliasCache: Map<string, { openrouterId: string; family: string }> | null = null;
-
-function getLaunchPriorityByAlias(): Map<string, { openrouterId: string; family: string }> {
-  if (!launchPriorityByAliasCache) {
-    launchPriorityByAliasCache = new Map(
-      loadLaunchPriorityList().map((entry) => [
-        entry.wavemillAlias,
-        { openrouterId: entry.openrouterId, family: entry.family },
-      ]),
-    );
-  }
-  return launchPriorityByAliasCache;
-}
-
 function normalizeModels(models?: string[]): string[] {
   const fixtureAliases = loadLaunchPriorityList().map((entry) => entry.wavemillAlias);
   const candidates = models && models.length > 0 ? models : fixtureAliases;
-  return [...new Set(candidates.filter((modelId) => isOpenRouterModel(modelId)))];
+  return [...new Set(
+    candidates
+      .map((modelId) => resolveOpenRouterModelIdentity(modelId))
+      .filter((identity): identity is NonNullable<typeof identity> => Boolean(identity?.nativeOpenRouter))
+      .map((identity) => identity.wavemillAlias),
+  )];
 }
 
 function normalizeStages(stages?: DeepSeekProviderStage[]): DeepSeekProviderStage[] {
@@ -80,27 +71,12 @@ export function isOpenRouterDirectAgentsEnabled(
 }
 
 export function isOpenRouterModel(modelId: string | null | undefined): boolean {
-  if (typeof modelId !== 'string' || modelId.length === 0) {
-    return false;
-  }
-
-  const entry = getLaunchPriorityByAlias().get(modelId);
-  if (!entry?.openrouterId) {
-    return false;
-  }
-
-  return !(
-    entry.openrouterId.startsWith('anthropic/')
-    || entry.openrouterId.startsWith('openai/')
-    || entry.openrouterId.startsWith('deepseek/')
-  );
+  return resolveOpenRouterModelIdentity(modelId)?.nativeOpenRouter === true;
 }
 
 export function resolveOpenRouterModelId(modelId: string | null | undefined): string | null {
-  if (typeof modelId !== 'string' || modelId.length === 0) {
-    return null;
-  }
-  return getLaunchPriorityByAlias().get(modelId)?.openrouterId ?? null;
+  const identity = resolveOpenRouterModelIdentity(modelId);
+  return identity?.nativeOpenRouter ? identity.openrouterId : null;
 }
 
 export function resolveOpenRouterProviderConfig(repoDir?: string): ResolvedOpenRouterProviderConfig {
@@ -153,8 +129,14 @@ export function filterOpenRouterModels(
   }
 
   const allowedModels = new Set(provider.models);
-  const filtered = requested.filter((modelId) => !isOpenRouterModel(modelId) || allowedModels.has(modelId));
-  const skippedConfiguredModels = openRouterRequested.filter((modelId) => !allowedModels.has(modelId));
+  const filtered = requested.filter((modelId) => {
+    const identity = resolveOpenRouterModelIdentity(modelId);
+    return !identity?.nativeOpenRouter || allowedModels.has(identity.wavemillAlias);
+  });
+  const skippedConfiguredModels = openRouterRequested.filter((modelId) => {
+    const identity = resolveOpenRouterModelIdentity(modelId);
+    return !identity || !allowedModels.has(identity.wavemillAlias);
+  });
 
   return {
     models: filtered,
@@ -173,13 +155,13 @@ export function getOpenRouterProviderMetadata(
   }
 
   const provider = resolveOpenRouterProviderConfig(repoDir);
-  const openrouterId = resolveOpenRouterModelId(modelId);
-  return openrouterId
+  const identity = resolveOpenRouterModelIdentity(modelId);
+  return identity?.nativeOpenRouter
     ? {
       provider: 'openrouter',
       endpoint: provider.baseUrl,
-      openrouterId,
-      wavemillAlias: resolveWavemillAliasFromOpenRouterId(openrouterId),
+      openrouterId: identity.openrouterId,
+      wavemillAlias: identity.wavemillAlias,
     }
     : null;
 }

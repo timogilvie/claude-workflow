@@ -266,13 +266,22 @@ describe('openrouter-doctor', () => {
   });
 
   it('reports the current repo shape when OPENROUTER_API_KEY is missing', () => {
-    const repoDir = process.cwd();
-    const report = withEnv({ OPENROUTER_API_KEY: undefined }, () => diagnoseOpenRouter({ repoDir }));
-    assert.ok(report.models.length > 0);
-    assert.equal(
-      report.models.some((model) => model.cells.some((cell) => cell.primaryReason?.reason === 'MISSING_API_KEY')),
-      true,
-    );
+    const repoDir = makeRepoDir();
+    try {
+      writeFileSync(
+        join(repoDir, '.wavemill-config.json'),
+        readFileSync(join(process.cwd(), '.wavemill-config.json'), 'utf-8'),
+      );
+      clearConfigCache();
+      const report = withEnv({ OPENROUTER_API_KEY: undefined }, () => diagnoseOpenRouter({ repoDir }));
+      assert.ok(report.models.length > 0);
+      assert.equal(
+        report.models.some((model) => model.cells.some((cell) => cell.primaryReason?.reason === 'MISSING_API_KEY')),
+        true,
+      );
+    } finally {
+      cleanup(repoDir);
+    }
   });
 
   it('captures zero-traffic cells for eligible models', () => {

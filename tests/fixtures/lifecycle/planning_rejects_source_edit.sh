@@ -6,7 +6,7 @@ register_lifecycle_scenario planning_rejects_source_edit
 setup_planning_rejects_source_edit() {
   create_git_worktree
   CURRENT_PHASE="planning"
-  write_stage_result "$FEATURE_DIR" "planning" "running" "$CURRENT_AGENT"
+  write_stage_result "$FEATURE_DIR" "planning" "awaiting_user" "$CURRENT_AGENT"
   printf "plan\n" > "$FEATURE_DIR/plan.md"
   touch "$FEATURE_DIR/.plan-approved"
   mkdir -p "$WT_DIR/src"

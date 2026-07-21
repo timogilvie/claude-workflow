@@ -2169,6 +2169,60 @@ test('phase semantics match router: native implementation is fail-closed and pla
   }
 });
 
+test('plan-stage challenge rejects role-ineligible forced native challenger before route expansion', () => {
+  const { repoDir, cleanup } = makeNativeTestRepo({
+    'qwen-2.5-coder-32b': openRouterNativeModelEntry('workflow'),
+  });
+  try {
+    writeCertArtifact(repoDir, 'qwen', 'qwen-2.5-coder-32b-instruct', 'v1', { phase: 'workflow' });
+
+    const result = pickChallengeWorkflowsWithReason(
+      ['claude-opus-4-6', 'claude-sonnet-4-5-20250929', 'qwen-2.5-coder-32b'],
+      {
+        pairId: 'NC-010-R',
+        issueId: 'NC-010-R',
+        slug: 'nc-role-ineligible-plan',
+        prompt: 'plan the implementation workflow',
+        challengeStage: 'plan',
+        primaryModel: 'claude-opus-4-6',
+        forcedChallengerModel: 'qwen-2.5-coder-32b',
+        repoDir,
+        now: TEST_NOW,
+        randomFn: () => 0,
+        routeFn: () => ({
+          planner: 'claude-opus-4-6',
+          coder: 'claude-opus-4-6',
+          reviewer: 'claude-opus-4-6',
+          planDepth: 'medium',
+          codeDepth: 'medium',
+          reviewRecommended: 'llm',
+          expectedSuccess: 0.9,
+          expectedCostPlan: 1,
+          expectedCostCode: 1,
+          expectedCostReview: 1,
+          reasoning: [],
+          signals: {},
+        }),
+      },
+    );
+
+    assert.ok(result.pair, 'eligible non-native fallback should keep plan challenge viable');
+    assert.equal(result.pair!.challengeStage, 'plan');
+    assert.notEqual(result.pair!.challenger.planner, 'qwen-2.5-coder-32b');
+    assert.equal(result.pair!.challenger.planner, 'claude-sonnet-4-5-20250929');
+    const rejection = (result.nativeCertificationRejections || []).find(
+      (entry) => entry.modelId === 'qwen-2.5-coder-32b' && entry.role === 'planner',
+    );
+    assert.ok(rejection, 'role-ineligible native planner challenger must be reported');
+    assert.equal(rejection!.reason, 'role-ineligible');
+    assert.equal(rejection!.requestedLaunchPhase, 'planning');
+    assert.equal(rejection!.nativeProvider, 'openrouter');
+    assert.deepEqual(rejection!.eligibleRoles, ['coding']);
+  } finally {
+    cleanup();
+  }
+});
+
 test('workflow-certified OpenRouter aliases remain challenge-eligible for review-stage variation', () => {
   const { repoDir, cleanup } = makeNativeTestRepo(
     {

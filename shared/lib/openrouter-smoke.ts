@@ -48,6 +48,7 @@ export async function runOpenRouterSmoke(opts: {
         {
           modelId: entry.wavemillAlias,
           messages: [{ role: 'user', content: prompt }],
+          maxOutputTokens: 256,
         },
         entry,
         {

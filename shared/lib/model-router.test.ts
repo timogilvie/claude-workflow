@@ -136,8 +136,12 @@ describe('model-router resolveAgent', () => {
         () => resolveAgent('qwen-3-coder', { 'qwen-3-coder': 'native-openai' }, 'codex', repoDir, 'planning'),
         /provider-mismatch:openrouter->openai/,
       );
+      assert.throws(
+        () => resolveAgent('qwen-3-coder', { 'qwen-3-coder': 'native-openrouter' }, 'codex', repoDir, 'planning'),
+        /reason=role-ineligible/,
+      );
       assert.equal(
-        resolveAgent('qwen-3-coder', { 'qwen-3-coder': 'native-openrouter' }, 'codex', repoDir, 'planning'),
+        resolveAgent('qwen-3-coder', { 'qwen-3-coder': 'native-openrouter' }, 'codex', repoDir, 'review'),
         'native-openrouter',
       );
     } finally {

@@ -138,6 +138,7 @@ mkdir -p \
   "$WORKTREES_DIR/ready-conflict-task/features/ready-conflict-task" \
   "$WORKTREES_DIR/ready-complete-task/features/ready-complete-task" \
   "$WORKTREES_DIR/ready-failed-task/features/ready-failed-task" \
+  "$WORKTREES_DIR/native-failed-task/features/native-failed-task" \
   "$WORKTREES_DIR/stale-task/features/stale-task"
 
 STATE_FILE_ONE="$TMP_DIR/state-one.json"
@@ -1498,6 +1499,74 @@ else
   fail "exited ready pane did not override stale status text"
 fi
 
+STATE_FILE_READY_PLANNING_STALE="$TMP_DIR/state-ready-planning-stale.json"
+cat > "$STATE_FILE_READY_PLANNING_STALE" <<EOF
+{
+  "tasks": {
+    "HOK-1311": {
+      "slug": "ready-task",
+      "branch": "task/ready-task",
+      "worktree": "$WORKTREES_DIR/ready-task",
+      "status": "",
+      "phase": "ready",
+      "pr": "tracked"
+    },
+    "HOK-1312": {
+      "slug": "active-task",
+      "branch": "task/active-task",
+      "worktree": "$WORKTREES_DIR/active-task",
+      "status": "",
+      "phase": "ready",
+      "pr": "tracked"
+    }
+  }
+}
+EOF
+
+cat > "$TMP_DIR/ready-watchdog-state.json" <<'EOF'
+{
+  "updatedAt": "2026-05-05T12:30:00.000Z",
+  "tasks": {}
+}
+EOF
+
+BEHAVIOR_READY_PLANNING_STALE="$TMP_DIR/behavior-ready-planning-stale.json"
+cat > "$BEHAVIOR_READY_PLANNING_STALE" <<'EOF'
+{
+  "pane": {
+    "HOK-1311-ready-task": "15",
+    "HOK-1312-active-task": "16"
+  },
+  "hook": {
+    "HOK-1311": "planning_awaiting_user"
+  },
+  "reported": {
+    "HOK-1312": "awaiting plan approval"
+  },
+  "planning": {},
+  "pr": {
+    "task/ready-task": "414|OPEN",
+    "task/active-task": "415|OPEN"
+  },
+  "checks": {
+    "task/ready-task": "pass",
+    "task/active-task": "pass"
+  }
+}
+EOF
+
+OUTPUT_READY_PLANNING_STALE="$TMP_DIR/output-ready-planning-stale.txt"
+run_render "$STATE_FILE_READY_PLANNING_STALE" "$WORKTREES_DIR" "$BEHAVIOR_READY_PLANNING_STALE" "$OUTPUT_READY_PLANNING_STALE"
+
+if grep -q 'HOK-1311.*ready' "$OUTPUT_READY_PLANNING_STALE" \
+  && grep -q 'HOK-1312.*ready' "$OUTPUT_READY_PLANNING_STALE" \
+  && ! grep -q 'planning_awaiting_user' "$OUTPUT_READY_PLANNING_STALE" \
+  && ! grep -q 'awaiting plan approval' "$OUTPUT_READY_PLANNING_STALE"; then
+  pass "ready rows suppress stale planning approval detail"
+else
+  fail "ready rows still render stale planning approval detail"
+fi
+
 echo ""
 echo "=== wavemill-status pr_checks rollup handling ==="
 
@@ -1857,7 +1926,7 @@ fi
 # Native phases must reuse the existing hook/pane liveness path; no native-only
 # fallback or branch should be introduced.
 WAVEMILL_STATUS_SH="$REPO_DIR/shared/lib/wavemill-status.sh"
-if ! grep -Eq '(agent[ _-]?type|provider|adapter)[^\n]{0,40}=[^\n]{0,40}native|case[^\n]{0,40}native\)|if[^\n]{0,40}native' "$WAVEMILL_STATUS_SH"; then
+if ! grep -Eq '(agent[ _-]?type|provider|adapter)[^\n]{0,40}=[^\n]{0,40}native|case[^\n]{0,40}native\)|(^|[[:space:]])if[[:space:]][^\n]{0,40}native' "$WAVEMILL_STATUS_SH"; then
   pass "wavemill-status.sh has no native-specific liveness branch (REQ-F3)"
 else
   fail "wavemill-status.sh contains a native-specific branch — native phases must reuse existing hook states"
@@ -2191,6 +2260,68 @@ if grep -q '⛔ denied' "$OUTPUT_DENIED_STATE" && grep -q '⊘ blocked' "$OUTPUT
   fi
 else
   fail "policy-denied and blocked labels are not both present"
+fi
+
+# ── Native launch failures surface recovery detail ─────────────────────────
+
+cat > "$WORKTREES_DIR/native-failed-task/features/native-failed-task/.native-launch-failure.json" <<'EOF'
+{
+  "type": "native-launch-failure",
+  "issue": "HOK-2539",
+  "stage": "planning",
+  "agent": "native-openrouter",
+  "model": "qwen-3-coder",
+  "paneTarget": "@96",
+  "failureKind": "bare-model-command",
+  "exitCode": 127,
+  "detectedAt": "2026-07-18T13:00:00Z",
+  "recommendedAction": "Inspect the pane transcript and route config, then relaunch after fixing native provider/model eligibility."
+}
+EOF
+
+STATE_FILE_NATIVE_FAILURE="$TMP_DIR/state-native-failure.json"
+cat > "$STATE_FILE_NATIVE_FAILURE" <<EOF
+{
+  "tasks": {
+    "HOK-2539": {
+      "slug": "native-failed-task",
+      "branch": "task/native-failed-task",
+      "worktree": "$WORKTREES_DIR/native-failed-task",
+      "status": "",
+      "phase": "planning",
+      "pr": ""
+    }
+  }
+}
+EOF
+
+BEHAVIOR_NATIVE_FAILURE="$TMP_DIR/behavior-native-failure.json"
+cat > "$BEHAVIOR_NATIVE_FAILURE" <<'EOF'
+{
+  "pane": {
+    "HOK-2539-native-failed-task": "96"
+  },
+  "hook": {},
+  "next_action": {},
+  "reported": {},
+  "planning": {},
+  "pr": {},
+  "checks": {}
+}
+EOF
+
+OUTPUT_NATIVE_FAILURE="$TMP_DIR/output-native-failure.txt"
+run_render_with_agent_states "$STATE_FILE_NATIVE_FAILURE" "$WORKTREES_DIR" "$BEHAVIOR_NATIVE_FAILURE" "$OUTPUT_NATIVE_FAILURE" \
+  "" "" ""
+
+if grep -q '📥 INBOX (1)' "$OUTPUT_NATIVE_FAILURE" \
+  && grep -q 'HOK-2539.*native-failed-task.*⚠ planning' "$OUTPUT_NATIVE_FAILURE" \
+  && grep -q 'Native planning launch failed: bare-model-command exit=127' "$OUTPUT_NATIVE_FAILURE" \
+  && grep -q 'model=qwen-3-coder pane=@96' "$OUTPUT_NATIVE_FAILURE" \
+  && grep -q 'Inspect the pane transcript and route config' "$OUTPUT_NATIVE_FAILURE"; then
+  pass "native launch failure renders actionable recovery detail"
+else
+  fail "native launch failure detail missing from dashboard"
 fi
 
 # ── Baseline states unchanged ───────────────────────────────────────────────

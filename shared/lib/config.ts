@@ -393,7 +393,7 @@ export interface ProvidersConfig {
 }
 
 export type NativeAgentProviderName = 'openai' | 'openrouter';
-export type NativeAgentAllowedPhase = 'task-expansion' | 'planning' | 'review';
+export type NativeAgentAllowedPhase = 'task-expansion' | 'planning' | 'coding' | 'review';
 
 export interface NativeAgentProviderConfig {
   enabled?: boolean;

@@ -1,9 +1,19 @@
 #!/usr/bin/env -S npx tsx
 import { getNativeAgentConfig } from '../shared/lib/config.ts';
 import { resolveNativeAgentProviders } from '../shared/lib/native-agent/providers.ts';
+import { resolveLaunchPriorityModel, type RoleEligibility } from '../shared/lib/openrouter-catalog.ts';
 
 const repoDir = process.argv[2] || process.cwd();
 const phase = process.argv[3] || 'planning';
+
+function isRoleEligible(modelId: string, phase: string): boolean {
+  if (phase !== 'planning' && phase !== 'coding' && phase !== 'review') {
+    return false;
+  }
+
+  const launchPriorityModel = resolveLaunchPriorityModel(modelId);
+  return !launchPriorityModel || launchPriorityModel.roleEligibility.includes(phase as RoleEligibility);
+}
 
 try {
   const config = getNativeAgentConfig(repoDir);
@@ -12,10 +22,10 @@ try {
   }
 
   const ready = resolveNativeAgentProviders(repoDir, { phase })
-    .find((entry) => entry.status === 'ready');
+    .find((entry) => entry.status === 'ready' && isRoleEligible(entry.modelId, phase));
 
   if (!ready) {
-    console.warn(`[native-planning] No certified native provider ready for phase=${phase}`);
+    console.warn(`[native-planning] No role-eligible certified native provider ready for phase=${phase}`);
     process.exit(1);
   }
 

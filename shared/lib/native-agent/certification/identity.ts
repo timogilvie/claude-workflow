@@ -1,4 +1,4 @@
-import { resolveOpenRouterIdFromWavemillAlias } from '../../openrouter-catalog.ts';
+import { resolveOpenRouterModelIdentity } from '../../openrouter-catalog.ts';
 
 export interface CertificationStorageIdentity {
   provider: string;
@@ -22,9 +22,7 @@ export function resolveCertificationStorageIdentity(
     return { provider, model };
   }
 
-  const openrouterModelId = model.includes('/')
-    ? model
-    : resolveOpenRouterIdFromWavemillAlias(model) ?? model;
+  const openrouterModelId = resolveOpenRouterModelIdentity(model)?.openrouterId ?? model;
 
   const parts = openrouterModelId.split('/');
   if (

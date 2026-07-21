@@ -354,7 +354,11 @@ simulate_planning_transition() {
   local planning_status
   planning_status=$(read_stage_status "$feature_dir" "planning")
 
-  if [[ "$planning_status" == "running" || "$planning_status" == "awaiting_user" ]]; then
+  if [[ "$planning_status" == "running" ]] && [[ -f "$feature_dir/.plan-approved" ]]; then
+    rm -f "$feature_dir/.plan-approved"
+  fi
+
+  if [[ "$planning_status" == "awaiting_user" ]]; then
     if [[ -f "$feature_dir/.plan-approved" ]]; then
       approve_plan "$feature_dir" "claude" "claude-opus-4-6"
       echo "completed"
@@ -1066,6 +1070,20 @@ PANE_IS_DEAD_OR_IDLE=true
 check "running planning with plan.md still becomes awaiting_user first" "awaiting_user" "$(simulate_planning_transition "$FD54D")"
 check "running planning is not auto-approved directly" "awaiting_user" "$(read_stage_status "$FD54D" "planning")"
 PANE_IS_DEAD_OR_IDLE=false
+
+# Test 54e: Native planning cannot auto-advance with an in-run approval marker
+FD54E="$TEST_DIR/test54e"
+mkdir -p "$FD54E"
+write_stage_result "$FD54E" "planning" "running" "native" "kimi-k2"
+touch "$FD54E/plan.md"
+touch "$FD54E/.plan-approved"
+check "running planning ignores in-run .plan-approved" "awaiting_user" "$(simulate_planning_transition "$FD54E")"
+check "in-run .plan-approved marker is removed" "no" "$([[ -f "$FD54E/.plan-approved" ]] && echo yes || echo no)"
+PANE_IS_DEAD_OR_IDLE=true
+check "stale marker removal prevents next-tick auto-approval" "awaiting_user" "$(simulate_planning_transition "$FD54E")"
+PANE_IS_DEAD_OR_IDLE=false
+touch "$FD54E/.plan-approved"
+check "explicit post-awaiting approval completes planning" "completed" "$(simulate_planning_transition "$FD54E")"
 
 # Test 55: Coding transition does not require pane exit semantics
 FD55="$TEST_DIR/test55"

@@ -338,7 +338,7 @@ else
 
     # Known external commands and bash builtins that are NOT custom functions
     # This list covers standard utilities, coreutils, and tools used by wavemill
-    KNOWN_EXTERNALS="bash|cat|cd|chmod|column|command|continue|cut|date|declare|diff|dirname|echo|eval|exec|exit|export|false|find|fold|git|grep|gh|head|jq|kill|local|ls|mkdir|mktemp|mv|npx|printf|read|readlink|return|rm|sed|set|shift|sleep|sort|source|sqlite3|stat|tail|tee|test|tmux|touch|tr|trap|true|tput|type|to_entries|uniq|unset|wait|wc|xargs|basename|awk|seq|ascii_downcase"
+    KNOWN_EXTERNALS="bash|cat|cd|chmod|column|command|continue|cut|date|declare|diff|dirname|echo|eval|exec|exit|export|false|find|fold|git|grep|gh|head|jq|kill|local|ls|mkdir|mktemp|mv|node|npx|printf|read|readlink|return|rm|sed|set|shift|sleep|sort|source|sqlite3|stat|tail|tee|test|tmux|touch|tr|trap|true|tput|tsx|type|to_entries|uniq|unset|wait|wc|xargs|basename|awk|seq|ascii_downcase"
 
     # Extract function calls from the heredoc.
     # Restrict matches to actual command positions instead of every bare word;
@@ -736,7 +736,7 @@ else
     && grep -qE '^handle_planning_overreach_rejection\(\) \{' <<< "$HEREDOC_CONTENT" \
     && grep -Fq '.wavemill/*) ;;' <<< "$HEREDOC_CONTENT" \
     && grep -Fq '.claude/settings.local.json) ;;' <<< "$HEREDOC_CONTENT" \
-    && grep -Fq 'validate_planning_phase_output "${WORKTREE_ROOT}/${SLUG}"' <<< "$MONITOR_ISSUE_BLOCK" \
+    && grep -Fq 'validate_planning_phase_output "$WT_DIR"' <<< "$MONITOR_ISSUE_BLOCK" \
     && grep -Fq 'handle_planning_overreach_rejection "$ISSUE" "$FEATURE_DIR" "$WIN" "$current_agent"' <<< "$MONITOR_ISSUE_BLOCK" \
     && grep -Fq '.planning-rejected.json' <<< "$HEREDOC_CONTENT" \
     && grep -Fq 'write_stage_result "$feature_dir" "planning" "awaiting_user"' <<< "$HEREDOC_CONTENT"; then
@@ -1214,6 +1214,14 @@ else
     pass "dashboard overrides stale status with plan review message"
   else
     fail "dashboard does not override stale status with plan review message"
+  fi
+
+  if grep -qE '^is_stale_planning_detail_for_phase\(\) \{' "$STATUS_SCRIPT" \
+    && grep -q 'planning_\*|awaiting\\ plan\\ approval|Plan\\ ready\*|Native\\ planning\*' "$STATUS_SCRIPT" \
+    && grep -q 'is_stale_planning_detail_for_phase "\$task_phase" "\$reported"' "$STATUS_SCRIPT"; then
+    pass "dashboard suppresses planning-only detail outside planning phase"
+  else
+    fail "dashboard is missing stale planning detail suppression"
   fi
 
   if grep -q 'running:working' "$STATUS_SCRIPT" \
@@ -2595,6 +2603,17 @@ else
     pass "launch_review_phase uses protected pane launcher"
   else
     fail "launch_review_phase does not call protected pane launcher"
+  fi
+
+  LAUNCH_AGENT_BLOCK=$(awk '
+    /^_launch_agent_in_pane\(\) \{/ { in_fn=1 }
+    in_fn { print }
+    in_fn && /^\}/ { exit }
+  ' "$MILL_SCRIPT")
+  if grep -q 'local esc_session esc_issue esc_slug esc_linear_issue linear_issue=""' <<< "$LAUNCH_AGENT_BLOCK"; then
+    pass "protected pane launcher initializes linear_issue for strict-mode watchdog launches"
+  else
+    fail "protected pane launcher can read unbound linear_issue under set -u"
   fi
 fi
 

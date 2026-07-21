@@ -63,12 +63,14 @@ export type ReviewFindingFixExecutor = (input: {
 export interface ReviewFlowOptions {
   issueId: string;
   featureDir: string;
+  worktreeDir?: string;
   repo: string;
   base: string;
   head: string;
   headSha: string;
   title: string;
   body: string;
+  reviewContextAppendix?: string;
   labels?: string[];
   sessionId: string;
   phase?: WorkflowPhase;
@@ -88,6 +90,7 @@ export interface ReviewFlowOptions {
 
 export interface ReviewFlowReviewSummary {
   status: 'completed' | 'failed';
+  verdict?: ReviewResult['verdict'];
   findings: string;
   findingCount: number;
   blockingCount: number;
@@ -231,6 +234,7 @@ function buildStageArtifacts(input: {
   return {
     review: {
       status: input.review.status,
+      verdict: input.review.verdict,
       findingCount: input.review.findingCount,
       blockingCount: input.review.blockingCount,
       needsStrongerReviewer: input.review.needsStrongerReviewer,
@@ -281,7 +285,7 @@ function createDeps(options: ReviewFlowOptions): CommandToolsDeps {
     stageArtifact: options.stageArtifact,
     sessionId: options.sessionId,
     phase: options.phase ?? DEFAULT_PHASE,
-    repoDir: options.featureDir,
+    repoDir: options.worktreeDir ?? options.featureDir,
     clock: options.clock,
     reviewChangesImpl: options.reviewChangesImpl,
     readStageResultImpl: options.readStageResultImpl,
@@ -377,10 +381,13 @@ export async function runReviewFlow(options: ReviewFlowOptions): Promise<ReviewF
 
   const deps = createDeps(options);
   const registry = deps.registry;
+  const reviewWorktreeDir = options.worktreeDir ?? options.featureDir;
   const reviewCall = await executeReviewChanges({
     base: options.base,
-    worktree: options.featureDir,
+    worktree: reviewWorktreeDir,
     json: true,
+    featureDir: options.featureDir,
+    additionalContext: options.reviewContextAppendix,
   }, deps);
 
   const initialReview: ReviewFlowReviewSummary = {
@@ -446,6 +453,7 @@ export async function runReviewFlow(options: ReviewFlowOptions): Promise<ReviewF
 
   const review: ReviewFlowReviewSummary = {
     ...initialReview,
+    verdict: parsedReview.verdict,
     needsStrongerReviewer: parsedReview.needsStrongerReviewer === true,
   };
 

@@ -131,6 +131,8 @@ harness_extract_real_functions() {
   for func in \
     trim_outer_whitespace \
     refresh_ready_merge_queue_tick \
+    wavemill_run_tsx_tool \
+    merge_retry_marker_until \
     get_main_head_sha \
     ready_stage_allows_merge \
     ready_stage_pending_verdict \
@@ -170,6 +172,12 @@ harness_extract_real_functions() {
     complete_coding_advance \
     auto_advance_blocked_completion \
     emit_blocked_completion_attention \
+    native_launch_failure_artifact_path \
+    stage_result_field \
+    agent_or_model_is_native_for_recovery \
+    native_launch_failure_kind \
+    write_native_launch_failure_artifact \
+    emit_native_launch_failure_attention \
     recover_misplaced_coding_complete_marker \
     _coding_divergence_announce_marker \
     _detect_coding_pane_divergence \

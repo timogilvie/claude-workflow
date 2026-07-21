@@ -1,0 +1,97 @@
+{
+  "schemaVersion": "1",
+  "generatedAt": "2026-07-16T14:46:49.113Z",
+  "issue": "HOK-2534",
+  "model": {
+    "wavemillAlias": "llama-4-maverick",
+    "openrouterId": "meta-llama/llama-4-maverick",
+    "family": "llama",
+    "status": "active",
+    "priorityTier": 2,
+    "roleEligibility": [
+      "planning",
+      "coding"
+    ]
+  },
+  "target": 3,
+  "persist": true,
+  "checks": [
+    {
+      "name": "fixture",
+      "status": "ok",
+      "detail": "llama-4-maverick is present in the launch-priority fixture as meta-llama/llama-4-maverick."
+    },
+    {
+      "name": "registry",
+      "status": "ok",
+      "detail": "llama-4-maverick is present in the effective model registry."
+    },
+    {
+      "name": "provider-config",
+      "status": "ok",
+      "detail": "llama-4-maverick is allowlisted in providers.openrouter.models."
+    },
+    {
+      "name": "challenge-pool",
+      "status": "ok",
+      "detail": "llama-4-maverick is present in challenge.models."
+    },
+    {
+      "name": "router-pools",
+      "status": "ok",
+      "detail": "llama-4-maverick is present in all eligible router role pools."
+    }
+  ],
+  "smoke": {
+    "dryRun": [
+      {
+        "modelId": "llama-4-maverick",
+        "family": "llama",
+        "status": "ok",
+        "costUsd": 0.000128
+      }
+    ],
+    "live": [
+      {
+        "modelId": "llama-4-maverick",
+        "family": "llama",
+        "status": "ok",
+        "costUsd": 0.0000046
+      }
+    ]
+  },
+  "eval": {
+    "plannedRuns": 3,
+    "executedRuns": 3,
+    "persistedIds": [
+      "d9ef0ebe-5d7f-410f-809f-f65d62c85139",
+      "480e19a8-a3ed-4faa-9382-8f23c848ae20",
+      "90aaa6f8-9532-4faf-a038-d756dc09e85b"
+    ]
+  },
+  "audit": {
+    "zeroEvidenceBefore": true,
+    "zeroEvidenceAfter": false,
+    "roles": [
+      {
+        "role": "planning",
+        "before": 0,
+        "after": 3,
+        "target": 3,
+        "gapBefore": 3,
+        "status": "at-target"
+      },
+      {
+        "role": "coding",
+        "before": 0,
+        "after": 3,
+        "target": 3,
+        "gapBefore": 3,
+        "status": "at-target"
+      }
+    ]
+  },
+  "reportPath": "/Users/timothyogilvie/Dropbox/wavemill/.wavemill/audits/certifications/llama-4-maverick.json",
+  "auditPath": "/Users/timothyogilvie/Dropbox/wavemill/.wavemill/audits/launch-priority-coverage.json",
+  "summary": "Certified llama-4-maverick: planning 0->3/3 (at-target); coding 0->3/3 (at-target). Dry smoke: llama-4-maverick:ok. Live smoke: llama-4-maverick:ok. Eval runs: 3/3. Zero-evidence after: no."
+}

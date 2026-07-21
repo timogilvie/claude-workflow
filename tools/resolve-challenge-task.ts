@@ -235,8 +235,20 @@ runTool({
       const roleToStage: Record<string, string> = { planner: 'plan', coder: 'implementation', reviewer: 'review' };
       for (const rejection of nativeCertificationRejections) {
         const stage = roleToStage[rejection.role] || rejection.role;
+        const details = [
+          `launchPhase=${rejection.requestedLaunchPhase}`,
+          `certPhase=${rejection.requestedPhase}`,
+          `reason=${rejection.reason}`,
+          `provider=${rejection.nativeProvider ?? 'unknown'}`,
+        ];
+        if (rejection.eligibleRoles) {
+          details.push(`eligibleRoles=${rejection.eligibleRoles.join(',') || 'none'}`);
+        }
+        if (rejection.allowedNativeAgentPhases) {
+          details.push(`allowedNativeAgentPhases=${rejection.allowedNativeAgentPhases.join(',') || 'none'}`);
+        }
         process.stderr.write(
-          `Challenge skipped native model ${rejection.modelId} for ${stage} stage (phase=${rejection.requestedPhase}, reason=${rejection.reason}).\n`,
+          `Challenge skipped native model ${rejection.modelId} for ${stage} stage (${details.join(', ')}).\n`,
         );
       }
     }

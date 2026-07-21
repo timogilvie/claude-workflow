@@ -32,6 +32,28 @@ agent_hydrate_repo_env_in_pane() {
   tmux send-keys -t "$target" "$bootstrap_cmd" C-m
 }
 
+agent_normalize_linear_issue_id() {
+  local issue="${1:-}" candidate="${2:-}"
+  candidate="${candidate#"${candidate%%[![:space:]]*}"}"
+  candidate="${candidate%"${candidate##*[![:space:]]}"}"
+
+  if [[ "$candidate" =~ ^[A-Z][A-Z0-9]*-[0-9]+$ ]]; then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+  if [[ "$candidate" =~ ^https?://linear\.app/[^/]+/issue/[A-Z][A-Z0-9]*-[0-9]+([/?#].*)?$ ]]; then
+    local linear_url_path="${candidate#*://linear.app/}"
+    linear_url_path="${linear_url_path#*/issue/}"
+    printf '%s\n' "${linear_url_path%%[/?#]*}"
+    return 0
+  fi
+  if [[ "$issue" =~ ^([A-Z][A-Z0-9]*-[0-9]+)_c$ ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  printf '%s\n' "$issue"
+}
+
 # ============================================================================
 # AGENT RESOLUTION
 # ============================================================================
@@ -226,7 +248,7 @@ agent_validate_model() {
 
   # Call TypeScript validator (cd to lib_dir first for imports to work)
   # Exits 0 if valid, 1 if invalid with error message
-  if (cd "$lib_dir" && npx tsx "$validator" --selector-token "$model" "$repo_dir" >/dev/null); then
+  if (cd "$lib_dir" && agent_run_tsx_tool "$validator" --selector-token "$model" "$repo_dir" >/dev/null); then
     return 0
   else
     return 1
@@ -250,7 +272,7 @@ agent_resolve_model() {
     return 1
   fi
 
-  if resolved_model="$(cd "$lib_dir" 2>/dev/null && npx tsx "$validator" --resolve-selector-token "$model" --role "$role" "$repo_dir" 2>/dev/null)"; then
+  if resolved_model="$(cd "$lib_dir" 2>/dev/null && agent_run_tsx_tool "$validator" --resolve-selector-token "$model" --role "$role" "$repo_dir" 2>/dev/null)"; then
     printf '%s\n' "$resolved_model"
     return 0
   fi
@@ -320,7 +342,9 @@ agent_run_tsx_tool() {
   local tool="$1"
   shift
 
-  if command -v tsx >/dev/null 2>&1; then
+  if node --import tsx -e "" >/dev/null 2>&1; then
+    node --import tsx "$tool" "$@"
+  elif command -v tsx >/dev/null 2>&1; then
     tsx "$tool" "$@"
   else
     npx tsx "$tool" "$@"
@@ -328,7 +352,7 @@ agent_run_tsx_tool() {
 }
 
 agent_model_helper_available() {
-  command -v tsx >/dev/null 2>&1 || command -v npx >/dev/null 2>&1
+  node --import tsx -e "" >/dev/null 2>&1 || command -v tsx >/dev/null 2>&1 || command -v npx >/dev/null 2>&1
 }
 
 agent_native_planning_eligible() {
@@ -457,7 +481,14 @@ agent_native_launch_probe() {
 
   if ! output="$(cd "$repo_dir" 2>/dev/null && agent_run_tsx_tool "$tool" --repo-dir "$repo_dir" --phase "$phase" --agent "$cmd" --model "$model" 2>/dev/null)"; then
     AGENT_NATIVE_LAUNCH_LAST_REASON="error: native launch probe failed for $cmd/$phase/$model"
-    [[ -n "$output" ]] && AGENT_NATIVE_LAUNCH_LAST_REASON="$output"
+    if [[ -n "$output" ]]; then
+      AGENT_NATIVE_LAUNCH_LAST_JSON="$output"
+      if command -v jq >/dev/null 2>&1 && printf '%s' "$output" | jq -e '.ok == false' >/dev/null 2>&1; then
+        AGENT_NATIVE_LAUNCH_LAST_REASON="$(printf '%s' "$output" | jq -r '.reason // "native launch probe rejected the route"' 2>/dev/null)"
+      else
+        AGENT_NATIVE_LAUNCH_LAST_REASON="$output"
+      fi
+    fi
     echo "$AGENT_NATIVE_LAUNCH_LAST_REASON" >&2
     return 1
   fi
@@ -476,6 +507,56 @@ agent_native_launch_probe() {
   fi
 
   return 0
+}
+
+agent_native_launch_preflight() {
+  local route_id="$1"
+  local cmd="$2"
+  local phase="$3"
+  local model="${4:-}"
+  local repo_dir="${5:-${REPO_DIR:-$(pwd)}}"
+  local provider="unknown"
+
+  agent_is_native_cmd "$cmd" || return 0
+  case "$cmd" in
+    native-openai) provider="openai" ;;
+    native-openrouter) provider="openrouter" ;;
+  esac
+  [[ -n "$route_id" ]] || route_id="$cmd/${phase:-unknown}/${model:-unknown}"
+
+  if [[ -z "$phase" ]]; then
+    echo "Error: native launch preflight failed: route=$route_id stage=(empty) agent=$cmd provider=$provider model=${model:-'(empty)'} reason=unsupported-native-stage" >&2
+    return 1
+  fi
+  if [[ -z "$model" ]]; then
+    echo "Error: native launch preflight failed: route=$route_id stage=$phase agent=$cmd provider=$provider model=(empty) reason=missing-model" >&2
+    return 1
+  fi
+
+  if agent_validate_phase_launch "$cmd" "$phase" "$model" "$repo_dir"; then
+    return 0
+  fi
+
+  local reason="${AGENT_NATIVE_LAUNCH_LAST_REASON:-native launch probe rejected the route}"
+  local json="${AGENT_NATIVE_LAUNCH_LAST_JSON:-}"
+  local code="" surface="" remediation="" alias="" provider_id=""
+  if [[ -n "$json" ]] && command -v jq >/dev/null 2>&1 && printf '%s' "$json" | jq -e '.ok == false' >/dev/null 2>&1; then
+    code="$(printf '%s' "$json" | jq -r '.code // empty' 2>/dev/null || true)"
+    surface="$(printf '%s' "$json" | jq -r '.surface // empty' 2>/dev/null || true)"
+    remediation="$(printf '%s' "$json" | jq -r '.remediation // empty' 2>/dev/null || true)"
+    alias="$(printf '%s' "$json" | jq -r '.wavemillAlias // empty' 2>/dev/null || true)"
+    provider_id="$(printf '%s' "$json" | jq -r '.openrouterId // empty' 2>/dev/null || true)"
+  fi
+
+  local message="Error: native launch preflight failed: route=$route_id stage=$phase agent=$cmd provider=$provider model=$model"
+  [[ -n "$alias" ]] && message+=" alias=$alias"
+  [[ -n "$provider_id" ]] && message+=" providerId=$provider_id"
+  [[ -n "$code" ]] && message+=" code=$code"
+  [[ -n "$surface" ]] && message+=" surface=$surface"
+  message+=" reason=$reason"
+  [[ -n "$remediation" ]] && message+=" remediation=\"$remediation\""
+  echo "$message" >&2
+  return 1
 }
 
 agent_validate_phase_launch() {
@@ -1707,8 +1788,6 @@ agent_launch_autonomous() {
   local hooks_dir dashboard_pid
   hooks_dir="$(agent_hooks_dir)"
   dashboard_pid="$(agent_resolve_dashboard_pid "$session")"
-  local target
-  target="$(agent_tmux_target "$session" "$window")" || return 1
   local repo_dir="${REPO_DIR:-$(pwd)}"
   local role feature_dir launch_phase phase_env
   launch_phase="$(agent_normalize_launch_phase "${WAVEMILL_PHASE:-}" "$window" "$instr_file" 2>/dev/null || true)"
@@ -1735,18 +1814,19 @@ agent_launch_autonomous() {
 
   local native_phase="$launch_phase"
   local native_model=""
+  local linear_issue
+  linear_issue="$(agent_normalize_linear_issue_id "$issue" "${WAVEMILL_LINEAR_ISSUE:-}")"
   local worktree_dir="${feature_dir%/features/*}"
   local feature_slug="${WAVEMILL_FEATURE_SLUG:-${WAVEMILL_SLUG:-}}"
   if agent_is_native_cmd "$agent_cmd"; then
-    if [[ -z "$native_phase" ]]; then
-      echo "Error: native agent '$agent_cmd' cannot launch without normalized phase (window='$window')" >&2
-      return 1
-    fi
-    if ! agent_validate_phase_launch "$agent_cmd" "$native_phase" "$model" "$repo_dir"; then
+    if ! agent_native_launch_preflight "$issue" "$agent_cmd" "$native_phase" "$model" "$repo_dir"; then
       return 1
     fi
     native_model="$(printf '%s' "$AGENT_NATIVE_LAUNCH_LAST_JSON" | jq -r '.model // empty' 2>/dev/null)"
   fi
+
+  local target
+  target="$(agent_tmux_target "$session" "$window")" || return 1
 
   agent_write_initial_status "$session" "$issue"
   if [[ -n "$role" && -n "$model" ]]; then
@@ -1764,6 +1844,7 @@ agent_launch_autonomous() {
 set -euo pipefail
 export WAVEMILL_SESSION='$session'
 export WAVEMILL_ISSUE='$issue'
+export WAVEMILL_LINEAR_ISSUE='$linear_issue'
 export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
 export WAVEMILL_PHASE='planning'
 export WAVEMILL_RESOLVED_MODEL='${native_model:-$model}'
@@ -1779,8 +1860,10 @@ export WAVEMILL_TITLE='${WAVEMILL_TITLE:-}'
 if [[ -n '$issue' ]]; then
   printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
 fi
-npx tsx '$repo_dir/tools/launch-native-planning.ts' --session '$session' --issue '$issue' --slug '$feature_slug' --wt-dir '$worktree_dir' --repo-dir '$repo_dir'
+set +e
+npx tsx '$repo_dir/tools/launch-native-planning.ts' --session '$session' --issue '$issue' --linear-issue '$linear_issue' --slug '$feature_slug' --wt-dir '$worktree_dir' --repo-dir '$repo_dir'
 native_rc=\$?
+set -e
 if [[ -n "\${STATUS_LOG_FILE:-}" ]]; then
   printf '%s\n' "[wavemill] native planning exit code native=\${native_rc} issue='$issue'" >> "\$STATUS_LOG_FILE" 2>/dev/null || true
 fi
@@ -1794,6 +1877,7 @@ LAUNCHEOF
 set -euo pipefail
 export WAVEMILL_SESSION='$session'
 export WAVEMILL_ISSUE='$issue'
+export WAVEMILL_LINEAR_ISSUE='$linear_issue'
 export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
 export WAVEMILL_PHASE='review'
 export WAVEMILL_RESOLVED_MODEL='${native_model:-$model}'
@@ -1807,10 +1891,45 @@ export WAVEMILL_TITLE='${WAVEMILL_TITLE:-}'
 if [[ -n '$issue' ]]; then
   printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
 fi
+set +e
 npx tsx '$repo_dir/tools/launch-native-review.ts' --session '$session' --issue '$issue' --slug '$feature_slug' --wt-dir '$worktree_dir' --repo-dir '$repo_dir'
 native_rc=\$?
+set -e
 if [[ -n "\${STATUS_LOG_FILE:-}" ]]; then
   printf '%s\n' "[wavemill] native review exit code native=\${native_rc} issue='$issue'" >> "\$STATUS_LOG_FILE" 2>/dev/null || true
+fi
+echo "[wavemill] Agent exited (native=\${native_rc})"
+exit "\$native_rc"
+LAUNCHEOF
+          ;;
+        coding)
+          cat > "$launcher" <<LAUNCHEOF
+#!/bin/bash
+set -euo pipefail
+export WAVEMILL_SESSION='$session'
+export WAVEMILL_ISSUE='$issue'
+export WAVEMILL_LINEAR_ISSUE='$linear_issue'
+export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
+export WAVEMILL_PHASE='coding'
+export WAVEMILL_RESOLVED_MODEL='${native_model:-$model}'
+export WAVEMILL_REPO_DIR='$repo_dir'
+export WAVEMILL_WT_DIR='$worktree_dir'
+export WAVEMILL_FEATURE_SLUG='$feature_slug'
+export WAVEMILL_SLUG='$feature_slug'
+export WAVEMILL_CODE_DEPTH='${WAVEMILL_CODE_DEPTH:-}'
+export WAVEMILL_OPERATING_MODE='${WAVEMILL_OPERATING_MODE:-}'
+export WAVEMILL_BRANCH='${WAVEMILL_BRANCH:-}'
+export WAVEMILL_BASE_BRANCH='${WAVEMILL_BASE_BRANCH:-}'
+export WAVEMILL_TITLE='${WAVEMILL_TITLE:-}'
+if [[ -n '$issue' ]]; then
+  printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
+fi
+set +e
+npx tsx '$repo_dir/tools/launch-native-coding.ts' --session '$session' --issue '$issue' --slug '$feature_slug' --wt-dir '$worktree_dir' --repo-dir '$repo_dir'
+native_rc=\$?
+set -e
+if [[ -n "\${STATUS_LOG_FILE:-}" ]]; then
+  printf '%s\n' "[wavemill] native coding exit code native=\${native_rc} issue='$issue'" >> "\$STATUS_LOG_FILE" 2>/dev/null || true
 fi
 echo "[wavemill] Agent exited (native=\${native_rc})"
 exit "\$native_rc"
@@ -1856,6 +1975,7 @@ LAUNCHEOF
 set -euo pipefail
 export WAVEMILL_SESSION='$session'
 export WAVEMILL_ISSUE='$issue'
+export WAVEMILL_LINEAR_ISSUE='$linear_issue'
 export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
 export WAVEMILL_PHASE='$phase_env'
 export WAVEMILL_RESOLVED_MODEL='${resolved_model:-$model}'
@@ -2159,6 +2279,22 @@ agent_launch_interactive() {
     agent_flags="${agent_flags} --dangerously-bypass-approvals-and-sandbox"
   fi
 
+  local launcher="/tmp/${session}-$(basename "$prompt_file" .txt)-launcher.sh"
+  local launcher_cmd=""
+  local native_phase="$launch_phase"
+  local native_model=""
+  local linear_issue
+  linear_issue="$(agent_normalize_linear_issue_id "$issue" "${WAVEMILL_LINEAR_ISSUE:-}")"
+  local worktree_dir="${feature_dir%/features/*}"
+  local feature_slug="${WAVEMILL_FEATURE_SLUG:-${WAVEMILL_SLUG:-}}"
+
+  if agent_is_native_cmd "$agent_cmd"; then
+    if ! agent_native_launch_preflight "$issue" "$agent_cmd" "$native_phase" "$model" "$repo_dir"; then
+      return 1
+    fi
+    native_model="$(printf '%s' "$AGENT_NATIVE_LAUNCH_LAST_JSON" | jq -r '.model // empty' 2>/dev/null)"
+  fi
+
   local target
   target="$(agent_tmux_target "$session" "$window")" || return 1
 
@@ -2168,24 +2304,6 @@ agent_launch_interactive() {
     return "$prepare_rc"
   fi
   agent_hydrate_repo_env_in_pane "$target" "$repo_dir"
-
-  local launcher="/tmp/${session}-$(basename "$prompt_file" .txt)-launcher.sh"
-  local launcher_cmd=""
-  local native_phase="$launch_phase"
-  local native_model=""
-  local worktree_dir="${feature_dir%/features/*}"
-  local feature_slug="${WAVEMILL_FEATURE_SLUG:-${WAVEMILL_SLUG:-}}"
-
-  if agent_is_native_cmd "$agent_cmd"; then
-    if [[ -z "$native_phase" ]]; then
-      echo "Error: native agent '$agent_cmd' cannot launch without normalized phase (window='$window')" >&2
-      return 1
-    fi
-    if ! agent_validate_phase_launch "$agent_cmd" "$native_phase" "$model" "$repo_dir"; then
-      return 1
-    fi
-    native_model="$(printf '%s' "$AGENT_NATIVE_LAUNCH_LAST_JSON" | jq -r '.model // empty' 2>/dev/null)"
-  fi
 
   agent_write_initial_status "$session" "$issue"
   if [[ -n "$role" && -n "$model" ]]; then
@@ -2202,6 +2320,7 @@ agent_launch_interactive() {
 set -euo pipefail
 export WAVEMILL_SESSION='$session'
 export WAVEMILL_ISSUE='$issue'
+export WAVEMILL_LINEAR_ISSUE='$linear_issue'
 export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
 export WAVEMILL_PHASE='planning'
 export WAVEMILL_RESOLVED_MODEL='${native_model:-$model}'
@@ -2217,8 +2336,15 @@ export WAVEMILL_TITLE='${WAVEMILL_TITLE:-}'
 if [[ -n '$issue' ]]; then
   printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
 fi
-npx tsx '$repo_dir/tools/launch-native-planning.ts' --session '$session' --issue '$issue' --slug '$feature_slug' --wt-dir '$worktree_dir' --repo-dir '$repo_dir'
-echo "[wavemill] Agent exited (\$?)"
+set +e
+npx tsx '$repo_dir/tools/launch-native-planning.ts' --session '$session' --issue '$issue' --linear-issue '$linear_issue' --slug '$feature_slug' --wt-dir '$worktree_dir' --repo-dir '$repo_dir'
+native_rc=\$?
+set -e
+if [[ -n "\${STATUS_LOG_FILE:-}" ]]; then
+  printf '%s\n' "[wavemill] native planning exit code native=\${native_rc} issue='$issue'" >> "\$STATUS_LOG_FILE" 2>/dev/null || true
+fi
+echo "[wavemill] Agent exited (native=\${native_rc})"
+exit "\$native_rc"
 LAUNCHEOF
           ;;
         review)
@@ -2227,6 +2353,7 @@ LAUNCHEOF
 set -euo pipefail
 export WAVEMILL_SESSION='$session'
 export WAVEMILL_ISSUE='$issue'
+export WAVEMILL_LINEAR_ISSUE='$linear_issue'
 export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
 export WAVEMILL_PHASE='review'
 export WAVEMILL_RESOLVED_MODEL='${native_model:-$model}'
@@ -2240,8 +2367,48 @@ export WAVEMILL_TITLE='${WAVEMILL_TITLE:-}'
 if [[ -n '$issue' ]]; then
   printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
 fi
+set +e
 npx tsx '$repo_dir/tools/launch-native-review.ts' --session '$session' --issue '$issue' --slug '$feature_slug' --wt-dir '$worktree_dir' --repo-dir '$repo_dir'
-echo "[wavemill] Agent exited (\$?)"
+native_rc=\$?
+set -e
+if [[ -n "\${STATUS_LOG_FILE:-}" ]]; then
+  printf '%s\n' "[wavemill] native review exit code native=\${native_rc} issue='$issue'" >> "\$STATUS_LOG_FILE" 2>/dev/null || true
+fi
+echo "[wavemill] Agent exited (native=\${native_rc})"
+exit "\$native_rc"
+LAUNCHEOF
+          ;;
+        coding)
+          cat > "$launcher" <<LAUNCHEOF
+#!/bin/bash
+set -euo pipefail
+export WAVEMILL_SESSION='$session'
+export WAVEMILL_ISSUE='$issue'
+export WAVEMILL_LINEAR_ISSUE='$linear_issue'
+export WAVEMILL_DASHBOARD_PID='$dashboard_pid'
+export WAVEMILL_PHASE='coding'
+export WAVEMILL_RESOLVED_MODEL='${native_model:-$model}'
+export WAVEMILL_REPO_DIR='$repo_dir'
+export WAVEMILL_WT_DIR='$worktree_dir'
+export WAVEMILL_FEATURE_SLUG='$feature_slug'
+export WAVEMILL_SLUG='$feature_slug'
+export WAVEMILL_CODE_DEPTH='${WAVEMILL_CODE_DEPTH:-}'
+export WAVEMILL_OPERATING_MODE='${WAVEMILL_OPERATING_MODE:-}'
+export WAVEMILL_BRANCH='${WAVEMILL_BRANCH:-}'
+export WAVEMILL_BASE_BRANCH='${WAVEMILL_BASE_BRANCH:-}'
+export WAVEMILL_TITLE='${WAVEMILL_TITLE:-}'
+if [[ -n '$issue' ]]; then
+  printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
+fi
+set +e
+npx tsx '$repo_dir/tools/launch-native-coding.ts' --session '$session' --issue '$issue' --slug '$feature_slug' --wt-dir '$worktree_dir' --repo-dir '$repo_dir'
+native_rc=\$?
+set -e
+if [[ -n "\${STATUS_LOG_FILE:-}" ]]; then
+  printf '%s\n' "[wavemill] native coding exit code native=\${native_rc} issue='$issue'" >> "\$STATUS_LOG_FILE" 2>/dev/null || true
+fi
+echo "[wavemill] Agent exited (native=\${native_rc})"
+exit "\$native_rc"
 LAUNCHEOF
           ;;
         *)
