@@ -159,6 +159,13 @@ npx() {
     JOB_TRACKER_CALLS=$((JOB_TRACKER_CALLS + 1))
     return 0
   fi
+  if [[ "$*" == *"resolve-orphan-challenge-pair.ts"* ]]; then
+    cat > "$REPO_DIR/.wavemill/evals/challenge-records.jsonl" <<JSON
+{"challengePairId":"HOK-2462","primaryModel":"model-a","challengerModel":"unknown","primaryPrUrl":"https://github.com/example/repo/pull/101","challengerPrUrl":"https://github.com/unknown/unknown/pull/0","primaryEvalScore":0,"challengerEvalScore":0,"winner":"primary","winnerModel":"model-a","rationale":"Challenge pair became orphaned before a comparison could be launched; the surviving side wins by forfeit.","dimensions":{"completeness":{"primary":0,"challenger":0},"correctness":{"primary":0,"challenger":0},"code_quality":{"primary":0,"challenger":0},"intervention_impact":{"primary":0,"challenger":0},"autonomy":{"primary":0,"challenger":0}},"timestamp":"2026-07-17T00:00:00Z","comparisonOutcome":"forfeit","terminalReason":"orphan_pair"}
+JSON
+    printf '%s\n' '{"status":"resolved","reason":"orphan-sibling"}'
+    return 0
+  fi
   if [[ "$*" == *"run-eval-hook.ts"* ]]; then
     EVAL_LAUNCHES=$((EVAL_LAUNCHES + 1))
     cp "$STATE_FILE" "$CASE_DIR/eval-launch-state.json"
@@ -331,6 +338,39 @@ JSON
   printf 'double_compared_challenger=%s\n' "$(jq -r '.tasks["HOK-2462_c"].challengeCompared' "$STATE_FILE")"
 }
 
+run_orphan_case() {
+  cat > "$STATE_FILE" <<JSON
+{
+  "tasks": {
+    "HOK-2462": {
+      "slug": "hok-2462",
+      "branch": "task/hok-2462",
+      "worktree": "$WORKTREE_ROOT/hok-2462",
+      "pr": "101",
+      "status": "ready",
+      "agent": "codex",
+      "phase": "ready",
+      "evalCompleted": true,
+      "evalFailed": true,
+      "evalHardFailureRetryCount": 2,
+      "challengeCompared": false,
+      "challenge": true,
+      "challengePairId": "HOK-2462",
+      "challengeRole": "primary",
+      "challengeModel": "model-a"
+    }
+  }
+}
+JSON
+
+  resolve_challenge_pair_hard_failure "HOK-2462"
+  printf 'orphan_lines=%s\n' "$(wc -l < "$REPO_DIR/.wavemill/evals/challenge-records.jsonl" | tr -d '[:space:]')"
+  printf 'orphan_outcome=%s\n' "$(jq -r '.comparisonOutcome' "$REPO_DIR/.wavemill/evals/challenge-records.jsonl")"
+  printf 'orphan_reason=%s\n' "$(jq -r '.terminalReason' "$REPO_DIR/.wavemill/evals/challenge-records.jsonl")"
+  printf 'orphan_winner=%s\n' "$(jq -r '.winner' "$REPO_DIR/.wavemill/evals/challenge-records.jsonl")"
+  printf 'orphan_compared_primary=%s\n' "$(jq -r '.tasks["HOK-2462"].challengeCompared' "$STATE_FILE")"
+}
+
 "run_${CASE_NAME}_case"
 printf 'eval_launches=%s\n' "$EVAL_LAUNCHES"
 printf 'job_tracker_calls=%s\n' "$JOB_TRACKER_CALLS"
@@ -343,6 +383,7 @@ echo "=== Challenge Eval Hard Failure ==="
 retry_output="$(CASE_NAME=retry CASE_DIR="$TEST_TMP/retry" REPO_DIR="$REPO_DIR" FUNCTION_FILE="$FUNCTION_FILE" "$TEST_TMP/run-case.sh")"
 exhausted_output="$(CASE_NAME=exhausted CASE_DIR="$TEST_TMP/exhausted" REPO_DIR="$REPO_DIR" FUNCTION_FILE="$FUNCTION_FILE" "$TEST_TMP/run-case.sh")"
 double_output="$(CASE_NAME=double CASE_DIR="$TEST_TMP/double" REPO_DIR="$REPO_DIR" FUNCTION_FILE="$FUNCTION_FILE" "$TEST_TMP/run-case.sh")"
+orphan_output="$(CASE_NAME=orphan CASE_DIR="$TEST_TMP/orphan" REPO_DIR="$REPO_DIR" FUNCTION_FILE="$FUNCTION_FILE" "$TEST_TMP/run-case.sh")"
 
 check_contains "legacy hard failure defaults retry counter to zero then increments" "$retry_output" "retry_counter=1"
 check_contains "hard failure retry clears evalFailed before relaunch" "$retry_output" "retry_failed=false"
@@ -366,6 +407,12 @@ check_contains "double hard failure records both-side reason" "$double_output" "
 check_contains "double hard failure marks primary compared" "$double_output" "double_compared_primary=true"
 check_contains "double hard failure marks challenger compared" "$double_output" "double_compared_challenger=true"
 check_contains "double hard failure does not relaunch eval" "$double_output" "eval_launches=0"
+
+check_contains "orphan hard failure path writes exactly one terminal record" "$orphan_output" "orphan_lines=1"
+check_contains "orphan hard failure path writes forfeit outcome" "$orphan_output" "orphan_outcome=forfeit"
+check_contains "orphan hard failure path records orphan reason" "$orphan_output" "orphan_reason=orphan_pair"
+check_contains "orphan hard failure path awards surviving primary" "$orphan_output" "orphan_winner=primary"
+check_contains "orphan hard failure path marks primary compared" "$orphan_output" "orphan_compared_primary=true"
 
 echo ""
 echo "Passed: $PASS"

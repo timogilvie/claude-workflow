@@ -42,6 +42,13 @@ export type ChallengeType =
   | 'full-stack';
 
 export type StageEvidenceMode = 'direct' | 'inferred-fallback' | 'not-applicable';
+export type ChallengeComparisonOutcome = 'compared' | 'skipped' | 'forfeit' | 'double-forfeit';
+export type ChallengeTerminalReason =
+  | 'eval_hard_failed'
+  | 'primary_eval_hard_failed'
+  | 'challenger_eval_hard_failed'
+  | 'both_eval_hard_failed'
+  | 'orphan_pair';
 
 export interface ChallengeComparison {
   challengePairId: string;
@@ -63,9 +70,9 @@ export interface ChallengeComparison {
   variedStage?: 'plan' | 'implementation' | 'review';
   stageEvidenceMode?: StageEvidenceMode;
   workflowInsight?: string;
-  comparisonOutcome?: 'compared' | 'skipped' | 'forfeit' | 'double-forfeit';
+  comparisonOutcome?: ChallengeComparisonOutcome;
   skipReason?: 'identical-routing-dimensions';
-  terminalReason?: 'eval_hard_failed' | 'primary_eval_hard_failed' | 'challenger_eval_hard_failed' | 'both_eval_hard_failed';
+  terminalReason?: ChallengeTerminalReason;
   cleanupPolicy?: 'primary-wins-close-challenger';
   /** Source of the primary comparison score (e.g. "stage.review", "stage.plan", "overall") */
   primaryEvalScoreSource?: string;
@@ -104,6 +111,13 @@ const ROUTING_DIMENSION_KEYS: readonly RoutingDimensionKey[] = [
   'codeDepth',
   'reviewMode',
 ];
+const EMPTY_DIMENSIONS: ChallengeComparisonDimensions = {
+  completeness: { primary: 0, challenger: 0 },
+  correctness: { primary: 0, challenger: 0 },
+  code_quality: { primary: 0, challenger: 0 },
+  intervention_impact: { primary: 0, challenger: 0 },
+  autonomy: { primary: 0, challenger: 0 },
+};
 
 type ChallengeEntryLike = {
   planner?: string;
@@ -245,13 +259,7 @@ export function buildSkippedIdenticalComparison(input: {
     winner: 'primary',
     winnerModel: input.primaryRouting?.coder || input.primaryModel,
     rationale: 'Comparison skipped because primary and challenger used identical routing dimensions.',
-    dimensions: {
-      completeness: { primary: 0, challenger: 0 },
-      correctness: { primary: 0, challenger: 0 },
-      code_quality: { primary: 0, challenger: 0 },
-      intervention_impact: { primary: 0, challenger: 0 },
-      autonomy: { primary: 0, challenger: 0 },
-    },
+    dimensions: EMPTY_DIMENSIONS,
     timestamp: input.timestamp || new Date().toISOString(),
     primaryRouting: input.primaryRouting,
     challengerRouting: input.challengerRouting,
@@ -260,6 +268,63 @@ export function buildSkippedIdenticalComparison(input: {
     comparisonOutcome: 'skipped',
     skipReason: 'identical-routing-dimensions',
     cleanupPolicy: 'primary-wins-close-challenger',
+  };
+}
+
+export function buildForfeitComparison(input: {
+  challengePairId: string;
+  primaryModel: string;
+  challengerModel: string;
+  primaryPrUrl: string;
+  challengerPrUrl: string;
+  winner: 'primary' | 'challenger';
+  rationale: string;
+  terminalReason: ChallengeTerminalReason;
+  timestamp?: string;
+}): ChallengeComparison {
+  return {
+    challengePairId: input.challengePairId,
+    primaryModel: input.primaryModel,
+    challengerModel: input.challengerModel,
+    primaryPrUrl: input.primaryPrUrl,
+    challengerPrUrl: input.challengerPrUrl,
+    primaryEvalScore: 0,
+    challengerEvalScore: 0,
+    winner: input.winner,
+    winnerModel: input.winner === 'primary' ? input.primaryModel : input.challengerModel,
+    rationale: input.rationale,
+    dimensions: EMPTY_DIMENSIONS,
+    timestamp: input.timestamp || new Date().toISOString(),
+    comparisonOutcome: 'forfeit',
+    terminalReason: input.terminalReason,
+  };
+}
+
+export function buildDoubleForfeitComparison(input: {
+  challengePairId: string;
+  primaryModel: string;
+  challengerModel: string;
+  primaryPrUrl: string;
+  challengerPrUrl: string;
+  rationale: string;
+  terminalReason: ChallengeTerminalReason;
+  timestamp?: string;
+}): ChallengeComparison {
+  return {
+    challengePairId: input.challengePairId,
+    primaryModel: input.primaryModel,
+    challengerModel: input.challengerModel,
+    primaryPrUrl: input.primaryPrUrl,
+    challengerPrUrl: input.challengerPrUrl,
+    primaryEvalScore: 0,
+    challengerEvalScore: 0,
+    winner: 'primary',
+    winnerModel: input.primaryModel,
+    rationale: input.rationale,
+    dimensions: EMPTY_DIMENSIONS,
+    timestamp: input.timestamp || new Date().toISOString(),
+    comparisonOutcome: 'double-forfeit',
+    terminalReason: input.terminalReason,
   };
 }
 
