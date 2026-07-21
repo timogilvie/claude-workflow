@@ -1783,6 +1783,7 @@ test_stage_result_trace_events_are_idempotent() {
 
   harness_run_tick "$repo" "$slug" "$issue" '
     CURRENT_PHASE="coding"
+    monitor_issue_state() { :; }
     rm -f "$REPO_UNDER_TEST/features/$SLUG/.coding-result.json"
     printf "{\\\"issueId\\\":\\\"issue-1\\\",\\\"slug\\\":\\\"%s\\\"}\\n" "$SLUG" > "$REPO_UNDER_TEST/features/$SLUG/.trace-context.json"
     trace_read_id() { printf "%s\\n" "trace-1"; }
@@ -1793,8 +1794,8 @@ test_stage_result_trace_events_are_idempotent() {
     write_stage_result "$REPO_UNDER_TEST/features/$SLUG" coding completed codex test-model
   ' >/dev/null
 
-  starts="$(rg -c 'phase_started' "$repo/trace-events.log")"
-  completions="$(rg -c 'phase_completed' "$repo/trace-events.log")"
+  starts="$(grep -c 'phase_started' "$repo/trace-events.log")"
+  completions="$(grep -c 'phase_completed' "$repo/trace-events.log")"
   check_eq "trace events: one running transition" "1" "$starts"
   check_eq "trace events: one completion transition" "1" "$completions"
 }

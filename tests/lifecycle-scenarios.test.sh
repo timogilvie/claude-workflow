@@ -143,6 +143,7 @@ for fn in \
   mark_coding_uncommitted_output_announced \
   write_coding_uncommitted_output_artifact \
   resolve_stage_result_model \
+  quarantine_completed_coding_pane \
   ready_queue_state \
   merge_queue_enabled \
   mark_ready_stale \
