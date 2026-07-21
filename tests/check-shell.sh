@@ -736,7 +736,7 @@ else
     && grep -qE '^handle_planning_overreach_rejection\(\) \{' <<< "$HEREDOC_CONTENT" \
     && grep -Fq '.wavemill/*) ;;' <<< "$HEREDOC_CONTENT" \
     && grep -Fq '.claude/settings.local.json) ;;' <<< "$HEREDOC_CONTENT" \
-    && grep -Fq 'validate_planning_phase_output "${WORKTREE_ROOT}/${SLUG}"' <<< "$MONITOR_ISSUE_BLOCK" \
+    && grep -Fq 'validate_planning_phase_output "$WT_DIR"' <<< "$MONITOR_ISSUE_BLOCK" \
     && grep -Fq 'handle_planning_overreach_rejection "$ISSUE" "$FEATURE_DIR" "$WIN" "$current_agent"' <<< "$MONITOR_ISSUE_BLOCK" \
     && grep -Fq '.planning-rejected.json' <<< "$HEREDOC_CONTENT" \
     && grep -Fq 'write_stage_result "$feature_dir" "planning" "awaiting_user"' <<< "$HEREDOC_CONTENT"; then
