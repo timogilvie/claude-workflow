@@ -156,6 +156,7 @@ harness_extract_real_functions() {
     blocked_completion_current_head \
     coding_output_dirty_paths \
     blocked_completion_commit_matches_head \
+    wavemill_owned_feature_artifact_path \
     blocked_completion_auto_allowed_dirty_path \
     blocked_completion_worktree_clean_for_auto \
     coding_uncommitted_output_announce_marker \
@@ -1543,6 +1544,8 @@ EOF
   printf '# Details\n' > "$feature_dir/task-packet-details.md"
   printf '{"issue":"%s"}\n' "$issue" > "$feature_dir/selected-task.json"
   printf '{"prompt":"registry"}\n' > "$repo/prompt-registry.jsonl"
+  printf '{"event":"phase_started"}\n' > "$feature_dir/trace.jsonl"
+  printf '{"route":"coding"}\n' > "$feature_dir/routing.jsonl"
 
   tick="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
 
@@ -1553,6 +1556,67 @@ EOF
   check_file_exists "metadata noise: audit artifact written" "$feature_dir/.coding-auto-advance.json"
   check_file_exists "metadata noise: coding complete marker written" "$feature_dir/.coding-complete"
   check_file_absent "metadata noise: no dedupe marker written" "$feature_dir/.blocked-completion-announced"
+}
+
+test_coding_complete_advances_when_only_trace_metadata_dirty() {
+  local slug="coding-complete-trace-only"
+  local issue="HOK-2454-TRACEONLY"
+  local repo tick feature_dir
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  feature_dir="$repo/features/$slug"
+
+  printf 'committed change\n' >> "$repo/README.md"
+  git -C "$repo" add README.md
+  git -C "$repo" commit -m "feat: committed coding output" >/dev/null 2>&1
+
+  touch "$feature_dir/.coding-complete"
+  printf '{"event":"phase_started"}\n' >> "$feature_dir/trace.jsonl"
+  printf '{"route":"coding"}\n' >> "$feature_dir/routing.jsonl"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
+
+  check_eq "trace-only dirty: phase stays coding for handoff" "coding" "$(kv_value "$tick" phase)"
+  check_eq "trace-only dirty: coding stage becomes completed" "completed" "$(harness_read_stage_status "$repo" "$slug" coding)"
+  check_eq "trace-only dirty: attention cleared" "" "$(kv_value "$tick" attention)"
+  check_contains "trace-only dirty: review launch log emitted" "$(kv_value "$tick" log_output)" ".coding-complete detected, marking coding as completed"
+  check_file_absent "trace-only dirty: no uncommitted-output artifact" "$feature_dir/.coding-uncommitted-output.json"
+}
+
+test_write_stage_result_running_emits_phase_started_once() {
+  local slug="coding-phase-started-idempotent"
+  local issue="HOK-2454-IDEMPOTENT"
+  local repo feature_dir started_count
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  feature_dir="$repo/features/$slug"
+
+  cat > "$feature_dir/.trace-context.json" <<EOF
+{
+  "schemaVersion": "1.0",
+  "traceId": "trc_test_hok_2454",
+  "issueId": "$issue",
+  "slug": "$slug"
+}
+EOF
+
+  REPO_UNDER_TEST="$repo" \
+  REPO_DIR="$REPO_DIR" \
+  REAL_FUNC_FILE="$REAL_FUNC_FILE" \
+  env -u npm_config_prefix bash -lc '
+    set -euo pipefail
+    source "$REPO_DIR/shared/lib/wavemill-common.sh"
+    source "$REAL_FUNC_FILE"
+    TOOLS_DIR=""
+    log_warn() { :; }
+    write_stage_result "$REPO_UNDER_TEST/features/'"$slug"'" coding running codex test-model
+    write_stage_result "$REPO_UNDER_TEST/features/'"$slug"'" coding running codex test-model
+  '
+
+  started_count="$(jq -r 'select(.event=="phase_started" and .phase=="coding") | .event' "$feature_dir/trace.jsonl" 2>/dev/null | wc -l | tr -d " ")"
+
+  check_eq "phase-started dedupe: exactly one coding phase_started" "1" "$started_count"
 }
 
 test_coding_blocked_completion_dedupes_same_artifact() {
@@ -2528,10 +2592,12 @@ test_merge_queue_preserved_merged_tasks_do_not_block_ready_pr
 test_coding_blocked_completion_needs_user_without_advancing
 test_coding_blocked_completion_auto_advances_when_valid
 test_coding_blocked_completion_auto_advances_with_wavemill_metadata_noise
+test_coding_complete_advances_when_only_trace_metadata_dirty
 test_coding_blocked_completion_dedupes_same_artifact
 test_coding_blocked_completion_reannounces_on_mtime_change
 test_coding_complete_wins_over_blocked_completion
 test_coding_complete_dirty_worktree_without_commits_needs_attention
+test_write_stage_result_running_emits_phase_started_once
 test_coding_blocked_completion_malformed_json_falls_back
 test_coding_blocked_completion_missing_required_field_does_not_auto_advance
 test_coding_blocked_completion_empty_passing_checks_does_not_auto_advance

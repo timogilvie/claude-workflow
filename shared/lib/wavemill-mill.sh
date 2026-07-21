@@ -3672,6 +3672,12 @@ check_routing_complete() {
 write_stage_result() {
   local feature_dir="$1" stage="$2" status="$3"
   local agent="${4:-}" model="${5:-}" notes="${6:-}" artifacts_json="${7:-}"
+  local result_file="$feature_dir/.${stage}-result.json"
+  local _prior_status=""
+
+  if [[ -f "$result_file" ]]; then
+    _prior_status=$(jq -r '.status // empty' "$result_file" 2>/dev/null || echo "")
+  fi
 
   # Try the TypeScript CLI first (HOK-1192: structured writes with artifacts support)
   if [[ -n "${TOOLS_DIR:-}" ]]; then
@@ -3682,14 +3688,13 @@ write_stage_result() {
     [[ -n "$artifacts_json" ]] && cli_args+=(--artifacts "$artifacts_json")
 
     if npx tsx "$TOOLS_DIR/stage-result-cli.ts" write "${cli_args[@]}" 2>/dev/null; then
-      _write_stage_result_trace_event "$feature_dir" "$stage" "$status" "$agent" "$model"
+      _write_stage_result_trace_event "$feature_dir" "$stage" "$status" "$agent" "$model" "$_prior_status"
       return 0
     fi
     log_warn "write_stage_result: TypeScript CLI failed, falling back to shell"
   fi
 
   # Fallback: inline JSON construction (legacy path)
-  local result_file="$feature_dir/.${stage}-result.json"
   local now
   now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
@@ -3721,13 +3726,13 @@ write_stage_result() {
 }
 EOF
   mv "$tmp" "$result_file"
-  _write_stage_result_trace_event "$feature_dir" "$stage" "$status" "$agent" "$model"
+  _write_stage_result_trace_event "$feature_dir" "$stage" "$status" "$agent" "$model" "$_prior_status"
 }
 
 # Emit trace events when a stage result is written (HOK-2259).
 # Best-effort — never fails. Reads trace context from the feature directory.
 _write_stage_result_trace_event() {
-  local feature_dir="$1" stage="$2" status="$3" agent="${4:-}" model="${5:-}"
+  local feature_dir="$1" stage="$2" status="$3" agent="${4:-}" model="${5:-}" prior_status="${6:-}"
   local _tid _iid _sl
   _tid=$(trace_read_id "$feature_dir" 2>/dev/null || true)
   [[ -n "$_tid" ]] || return 0
@@ -3737,6 +3742,7 @@ _write_stage_result_trace_event() {
 
   case "$status" in
     running)
+      [[ "$prior_status" == "running" ]] && return 0
       trace_append_event "$feature_dir" "$_tid" "$_iid" "$_sl" "$stage" "phase_started" "ok" "$model" "$agent" 2>/dev/null || true
       ;;
     completed)
@@ -4457,6 +4463,17 @@ blocked_completion_commit_matches_head() {
   return 1
 }
 
+wavemill_owned_feature_artifact_path() {
+  local normalized_path="$1" slug="$2"
+  local artifact_prefix="features/$slug/"
+
+  # Mill-owned trace metadata is controller/router output, not coding output.
+  [[ "$normalized_path" == "${artifact_prefix}trace.jsonl" ]] && return 0
+  [[ "$normalized_path" == "${artifact_prefix}routing.jsonl" ]] && return 0
+
+  return 1
+}
+
 blocked_completion_auto_allowed_dirty_path() {
   local normalized_path="$1" slug="$2"
   local artifact_prefix="features/$slug/"
@@ -4481,6 +4498,10 @@ blocked_completion_auto_allowed_dirty_path() {
       return 0
       ;;
   esac
+
+  if wavemill_owned_feature_artifact_path "$normalized_path" "$slug"; then
+    return 0
+  fi
 
   return 1
 }
