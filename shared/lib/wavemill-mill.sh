@@ -4817,49 +4817,62 @@ blocked_completion_validate_for_advance() {
 
 complete_coding_advance() {
   local issue="$1" feature_dir="$2" audit_path="$3" stage_notes="$4"
-  local audit_timestamp="$5" summary="$6" slug="$7" passing_count="$8" blocking_count="$9" decision_json="${10}" blocked_json="${11}"
-  local marker_path advance_agent result_path result_model finished_at
+  local audit_timestamp="${5:-}" summary="${6:-}" slug="${7:-}" passing_count="${8:-}" blocking_count="${9:-}" decision_json="${10:-}" blocked_json="${11:-}"
+  local marker_path advance_agent result_path result_model finished_at audit_tmp
 
-  if [[ ! -f "$audit_path" ]] && ! printf '{}\n' | write_json_artifact "$audit_path"; then
-    log_warn "$issue advance failed: could not initialize audit artifact"
-    return 1
-  fi
+  if [[ -n "$audit_timestamp" ]]; then
+    if [[ ! -f "$audit_path" ]] && ! printf '{}\n' | write_json_artifact "$audit_path"; then
+      log_warn "$issue advance failed: could not initialize audit artifact"
+      return 1
+    fi
 
-  if ! state_mutate "$audit_path" '
-      .timestamp = $timestamp
-      | .issue = $issue
-      | .slug = $slug
-      | .commit = ($validation.commit // "")
-      | .reason = $reason
-      | .blocked_completion_path = $blockedCompletionPath
-      | .blocked_completion_summary = $blockedCompletionSummary
-      | .guardrails = ($validation.guardrails // {})
-      | .passing_checks_count = ($passingChecksCount | tonumber)
-      | .blocking_checks_count = ($blockingChecksCount | tonumber)
-      | .blockedCompletion = (($blocked[0] // {}) | {
-          stage,
-          implementationComplete,
-          committed,
-          commit,
-          passingChecks,
-          blockingChecks,
-          blockingReason,
-          evidence,
-          recommendedAction
-        })
-    ' \
-    --arg timestamp "$audit_timestamp" \
-    --arg issue "$issue" \
-    --arg slug "$slug" \
-    --arg reason "automatic advance from valid blocked-completion artifact" \
-    --arg blockedCompletionPath "features/$slug/.coding-blocked-completion.json" \
-    --arg blockedCompletionSummary "$summary" \
-    --arg passingChecksCount "$passing_count" \
-    --arg blockingChecksCount "$blocking_count" \
-    --argjson validation "$decision_json" \
-    --argjson blocked "$blocked_json"; then
-    log_warn "$issue advance failed: could not finalize audit artifact"
-    return 1
+    if ! state_mutate "$audit_path" '
+        .timestamp = $timestamp
+        | .issue = $issue
+        | .slug = $slug
+        | .commit = ($validation.commit // "")
+        | .reason = $reason
+        | .blocked_completion_path = $blockedCompletionPath
+        | .blocked_completion_summary = $blockedCompletionSummary
+        | .guardrails = ($validation.guardrails // {})
+        | .passing_checks_count = ($passingChecksCount | tonumber)
+        | .blocking_checks_count = ($blockingChecksCount | tonumber)
+        | .blockedCompletion = (($blocked[0] // {}) | {
+            stage,
+            implementationComplete,
+            committed,
+            commit,
+            passingChecks,
+            blockingChecks,
+            blockingReason,
+            evidence,
+            recommendedAction
+          })
+      ' \
+      --arg timestamp "$audit_timestamp" \
+      --arg issue "$issue" \
+      --arg slug "$slug" \
+      --arg reason "automatic advance from valid blocked-completion artifact" \
+      --arg blockedCompletionPath "features/$slug/.coding-blocked-completion.json" \
+      --arg blockedCompletionSummary "$summary" \
+      --arg passingChecksCount "$passing_count" \
+      --arg blockingChecksCount "$blocking_count" \
+      --argjson validation "$decision_json" \
+      --argjson blocked "$blocked_json"; then
+      log_warn "$issue advance failed: could not finalize audit artifact"
+      return 1
+    fi
+  else
+    audit_tmp="$(mktemp "$audit_path.tmp.XXXXXX" 2>/dev/null)" || {
+      log_warn "$issue advance failed: could not create audit artifact"
+      return 1
+    }
+    cat > "$audit_tmp"
+    if ! mv "$audit_tmp" "$audit_path"; then
+      rm -f "$audit_tmp"
+      log_warn "$issue advance failed: could not finalize audit artifact"
+      return 1
+    fi
   fi
 
   advance_agent="${current_agent:-}"
