@@ -1647,12 +1647,15 @@ cleanup_stale_tasks() {
           log "  📊 Running failure eval for closed PR #$pr..."
           local eval_log="/tmp/${SESSION}-eval-${issue}.log"
           : >"$eval_log"
+          local eval_worktree
+          eval_worktree="$worktree"
+          [[ -z "$eval_worktree" || "$eval_worktree" == "null" ]] && eval_worktree="${WORKTREE_ROOT}/${slug}"
           (
             {
               printf 'Launching pr-closed eval in background\n'
               _with_timeout 120 npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
                 --issue "${linear_issue:-$issue}" --pr "$pr" --branch "$branch" \
-                --worktree "${WORKTREE_ROOT}/${slug}" \
+                --worktree "$eval_worktree" \
                 --workflow-type mill --repo-dir "$REPO_DIR" \
                 --agent "$AGENT_CMD" \
                 --debug
@@ -4063,7 +4066,7 @@ phase_should_remain_active_without_pr() {
       ! check_routing_complete "$slug"
       return $?
       ;;
-    planning|coding|review|ready)
+    planning|coding|review)
       stage_result_is_in_progress "$feature_dir" "$phase"
       return $?
       ;;
@@ -7621,7 +7624,7 @@ poll_challenge_jobs() {
 maybe_run_challenge_eval() {
   local issue="$1" pr="$2" branch="$3" slug="$4"
   local eval_completed eval_failed eval_hard_retry_count eval_hard_retry_max
-  local pair_id solution_model linear_issue eval_agent side challenge_stage job_id job_status job_dir log_path result_path pid eval_timeout
+  local pair_id solution_model linear_issue eval_agent side challenge_stage job_id job_status job_dir log_path result_path pid eval_timeout eval_worktree
   eval_completed=$(read_state_value "false" --arg i "$issue" '.tasks[$i].evalCompleted // false')
   [[ "$eval_completed" == "true" ]] && return 0
 
@@ -7663,6 +7666,8 @@ maybe_run_challenge_eval() {
   job_dir=$(challenge_job_dir)
   log_path="$job_dir/${job_id}.log"
   result_path="$job_dir/${job_id}.result.json"
+  eval_worktree=$(read_state_value "" --arg i "$issue" '.tasks[$i].worktree // empty')
+  [[ -z "$eval_worktree" ]] && eval_worktree="${WORKTREE_ROOT}/${slug}"
 
   log "status" "  📊 [mill] eval running: issue=$issue side=$side pr=#$pr phase=eval"
   if ! mark_challenge_eval_running "$issue" "$side" "$pr" "eval" >/dev/null; then
@@ -7672,7 +7677,7 @@ maybe_run_challenge_eval() {
 
   npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
     --issue "$linear_issue" --pr "$pr" --branch "$branch" \
-    --worktree "${WORKTREE_ROOT}/${slug}" \
+    --worktree "$eval_worktree" \
     --workflow-type mill --repo-dir "$REPO_DIR" \
     --agent "$eval_agent" \
     --solution-model "$solution_model" \
@@ -7700,7 +7705,7 @@ post_merge_eval_timeout_seconds() {
 
 launch_background_post_merge_eval() {
   local issue="$1" pr="$2" branch="$3" slug="$4" issue_ref="$5" reason="$6" preresolved_agent="${7:-}"
-  local eval_agent eval_log eval_timeout rc result_path persisted
+  local eval_agent eval_log eval_timeout rc result_path persisted eval_worktree
 
   if [[ -n "$preresolved_agent" ]]; then
     eval_agent="$preresolved_agent"
@@ -7713,6 +7718,8 @@ launch_background_post_merge_eval() {
   eval_log="/tmp/${SESSION}-eval-${issue}.log"
   result_path="/tmp/${SESSION:-wavemill}-eval-${issue}-result.json"
   eval_timeout="$(post_merge_eval_timeout_seconds)"
+  eval_worktree=$(read_state_value "" --arg i "$issue" '.tasks[$i].worktree // empty')
+  [[ -z "$eval_worktree" ]] && eval_worktree="${WORKTREE_ROOT}/${slug}"
   : >"$eval_log"
   rm -f "$result_path"
 
@@ -7722,7 +7729,7 @@ launch_background_post_merge_eval() {
       if [[ -n "$pr" ]]; then
         if _with_timeout "$eval_timeout" npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
           --issue "$issue_ref" --pr "$pr" --branch "$branch" \
-          --worktree "${WORKTREE_ROOT}/${slug}" \
+          --worktree "$eval_worktree" \
           --workflow-type mill --repo-dir "$REPO_DIR" \
           --agent "$eval_agent" \
           --result-file "$result_path" \
@@ -7734,7 +7741,7 @@ launch_background_post_merge_eval() {
       else
         if _with_timeout "$eval_timeout" npx tsx "$TOOLS_DIR/run-eval-hook.ts" \
           --issue "$issue_ref" --branch "$branch" \
-          --worktree "${WORKTREE_ROOT}/${slug}" \
+          --worktree "$eval_worktree" \
           --workflow-type mill --repo-dir "$REPO_DIR" \
           --agent "$eval_agent" \
           --result-file "$result_path" \
@@ -10815,7 +10822,7 @@ monitor_issue_state() {
         title=$(echo "$issue_json" | jq -r '.title // "Task"' 2>/dev/null || echo "Task")
       fi
 
-      if launch_ready_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$PR"; then
+      if launch_ready_phase "$ISSUE" "$SLUG" "$title" "$WT_DIR" "$BRANCH" "$BASE_BRANCH" "$PR"; then
         launch_rc=0
       else
         launch_rc=$?
@@ -11594,7 +11601,7 @@ monitor_issue_state() {
               issue_json=$(cat "/tmp/${SESSION}-${ISSUE}-issue.json" 2>/dev/null || echo "{}")
               title=$(echo "$issue_json" | jq -r '.title // "Task"' 2>/dev/null || echo "Task")
             fi
-            if launch_ready_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$pr_number"; then
+            if launch_ready_phase "$ISSUE" "$SLUG" "$title" "$WT_DIR" "$BRANCH" "$BASE_BRANCH" "$pr_number"; then
               local launch_rc=0
             else
               local launch_rc=$?
@@ -11649,13 +11656,13 @@ monitor_issue_state() {
           fi
 
           local ready_state_dir_path
-          ready_state_dir_path="$(ready_state_dir "${WORKTREE_ROOT}/${SLUG}" "$SLUG")"
+          ready_state_dir_path="$(ready_state_dir "$WT_DIR" "$SLUG")"
 
           if [[ -f "$ready_state_dir_path/.conflict-detected" ]]; then
             local ready_status launch_head current_head attention_head
             ready_status=$(read_stage_status "$ready_state_dir_path" "ready")
             launch_head=$(ready_conflict_launch_head "$ready_state_dir_path")
-            current_head=$(git -C "${WORKTREE_ROOT}/${SLUG}" rev-parse HEAD 2>/dev/null || echo "")
+            current_head=$(git -C "$WT_DIR" rev-parse HEAD 2>/dev/null || echo "")
             attention_head=$(ready_conflict_attention_head "$ready_state_dir_path")
 
             if [[ "$ready_status" == "running" ]] && [[ -n "$launch_head" ]] && [[ "$launch_head" == "$current_head" ]]; then
@@ -11688,7 +11695,7 @@ monitor_issue_state() {
                 title=$(echo "$issue_json" | jq -r '.title // "Task"' 2>/dev/null || echo "Task")
               fi
 
-              if launch_ready_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$pr_number"; then
+              if launch_ready_phase "$ISSUE" "$SLUG" "$title" "$WT_DIR" "$BRANCH" "$BASE_BRANCH" "$pr_number"; then
                 local launch_rc=0
               else
                 local launch_rc=$?
@@ -11779,7 +11786,7 @@ monitor_issue_state() {
       # immediately — the worktree and branch still have value.
       if ! _tmux_task_window_target "$SESSION" "$ISSUE" "$SLUG" "${STATE_FILE:-}" "$WT_DIR" >/dev/null 2>&1; then
         log "status" "⚠ $ISSUE → Window disappeared during $current_phase phase, recreating..."
-        tmux new-window -d -t "$SESSION" -n "$WIN" -c "${WORKTREE_ROOT}/${SLUG}" 2>/dev/null || true
+        tmux new-window -d -t "$SESSION" -n "$WIN" -c "$WT_DIR" 2>/dev/null || true
         WIN_TARGET="$(tmux display-message -p -t "$SESSION:$WIN" '#{window_id}' 2>/dev/null || true)"
         [[ -n "$WIN_TARGET" ]] || WIN_TARGET="$WIN"
         persist_task_window_id "$ISSUE" "$WIN_TARGET"
@@ -11835,7 +11842,7 @@ monitor_issue_state() {
   # still trigger eval, cleanup, and Linear updates after the ready stage was added.
   if validate_pr_merge "$PR"; then
     local merged_ready_dir merged_before_ready=false
-    merged_ready_dir="$(ready_state_dir "${WORKTREE_ROOT}/${SLUG}" "$SLUG")"
+    merged_ready_dir="$(ready_state_dir "$WT_DIR" "$SLUG")"
     if ! ready_stage_allows_merge "$merged_ready_dir"; then
       merged_before_ready=true
       ready_stage_warn_bypass_once "$merged_ready_dir" "$ISSUE" "$PR" || true
@@ -11963,7 +11970,7 @@ monitor_issue_state() {
           title=$(echo "$issue_json" | jq -r '.title // "Task"' 2>/dev/null || echo "Task")
         fi
 
-        if launch_ready_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$PR"; then
+        if launch_ready_phase "$ISSUE" "$SLUG" "$title" "$WT_DIR" "$BRANCH" "$BASE_BRANCH" "$PR"; then
           launch_rc=0
         else
           launch_rc=$?
@@ -12020,11 +12027,11 @@ monitor_issue_state() {
       return 0
     fi
 
-    ready_state_dir_path="$(ready_state_dir "${WORKTREE_ROOT}/${SLUG}" "$SLUG")"
+    ready_state_dir_path="$(ready_state_dir "$WT_DIR" "$SLUG")"
     if [[ -f "$ready_state_dir_path/.conflict-detected" ]]; then
       ready_status=$(read_stage_status "$ready_state_dir_path" "ready")
       launch_head=$(ready_conflict_launch_head "$ready_state_dir_path")
-      current_head=$(git -C "${WORKTREE_ROOT}/${SLUG}" rev-parse HEAD 2>/dev/null || echo "")
+      current_head=$(git -C "$WT_DIR" rev-parse HEAD 2>/dev/null || echo "")
       local attention_head
       attention_head=$(ready_conflict_attention_head "$ready_state_dir_path")
 
@@ -12051,7 +12058,7 @@ monitor_issue_state() {
           title=$(echo "$issue_json" | jq -r '.title // "Task"' 2>/dev/null || echo "Task")
         fi
 
-        if launch_ready_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$PR"; then
+        if launch_ready_phase "$ISSUE" "$SLUG" "$title" "$WT_DIR" "$BRANCH" "$BASE_BRANCH" "$PR"; then
           launch_rc=0
         else
           launch_rc=$?
@@ -12095,7 +12102,7 @@ monitor_issue_state() {
 
     ready_status=$(read_stage_status "$ready_state_dir_path" "ready")
     launch_head=$(ready_remediation_launch_head "$ready_state_dir_path")
-    current_head=$(git -C "${WORKTREE_ROOT}/${SLUG}" rev-parse HEAD 2>/dev/null || echo "")
+    current_head=$(git -C "$WT_DIR" rev-parse HEAD 2>/dev/null || echo "")
 
     # Ready stage finished — run challenge eval/comparison before dropping out.
     # Without this, challenge tasks sit in phase=ready forever (resolve_phase
@@ -12130,7 +12137,7 @@ monitor_issue_state() {
       # Re-run ready if main has advanced since the pass was recorded (HOK-1359)
       local stored_base_sha current_main_sha queue_state
       stored_base_sha=$(ready_base_sha "$ready_state_dir_path")
-      current_main_sha=$(get_main_head_sha "${WORKTREE_ROOT}/${SLUG}" "$BASE_BRANCH")
+      current_main_sha=$(get_main_head_sha "$WT_DIR" "$BASE_BRANCH")
       queue_state=$(ready_queue_state "$ready_state_dir_path")
 
       if [[ -n "$current_main_sha" && "$stored_base_sha" != "$current_main_sha" ]]; then
@@ -12154,7 +12161,7 @@ monitor_issue_state() {
           issue_json=$(cat "/tmp/${SESSION}-${ISSUE}-issue.json" 2>/dev/null || echo "{}")
           title=$(echo "$issue_json" | jq -r '.title // "Task"' 2>/dev/null || echo "Task")
         fi
-        if launch_ready_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$PR"; then
+        if launch_ready_phase "$ISSUE" "$SLUG" "$title" "$WT_DIR" "$BRANCH" "$BASE_BRANCH" "$PR"; then
           launch_rc=0
         else
           launch_rc=$?
@@ -12189,13 +12196,13 @@ monitor_issue_state() {
       return 0
     fi
 
-    if [[ "$ready_status" == "running" ]] && [[ -n "$launch_head" ]] && [[ "$launch_head" == "$current_head" ]]; then
+    ready_verdict=$(ready_stage_pending_verdict "$ready_state_dir_path")
+    if [[ "$ready_status" == "running" && "$ready_verdict" != "pending" ]] && [[ -n "$launch_head" ]] && [[ "$launch_head" == "$current_head" ]]; then
       set_window_attention_state "$WIN" "clear"
       active_count=$((active_count + 1))
       return 0
     fi
 
-    ready_verdict=$(ready_stage_pending_verdict "$ready_state_dir_path")
     if [[ "$ready_status" == "failed" ]]; then
       log "status" "↻ $ISSUE → Re-running failed ready checks for PR #$PR"
       title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
@@ -12204,7 +12211,7 @@ monitor_issue_state() {
         title=$(echo "$issue_json" | jq -r '.title // "Task"' 2>/dev/null || echo "Task")
       fi
 
-      if launch_ready_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$PR"; then
+      if launch_ready_phase "$ISSUE" "$SLUG" "$title" "$WT_DIR" "$BRANCH" "$BASE_BRANCH" "$PR"; then
         launch_rc=0
       else
         launch_rc=$?
@@ -12243,7 +12250,7 @@ monitor_issue_state() {
         title=$(echo "$issue_json" | jq -r '.title // "Task"' 2>/dev/null || echo "Task")
       fi
 
-      if launch_ready_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$PR"; then
+      if launch_ready_phase "$ISSUE" "$SLUG" "$title" "$WT_DIR" "$BRANCH" "$BASE_BRANCH" "$PR"; then
         launch_rc=0
       else
         launch_rc=$?

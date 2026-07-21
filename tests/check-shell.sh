@@ -774,6 +774,18 @@ else
     fail "monitor still relies on pane-respawn fallback for phase progression"
   fi
 
+  PHASE_ACTIVE_BLOCK=$(awk '
+    /^phase_should_remain_active_without_pr\(\) \{/ { in_fn=1 }
+    in_fn { print }
+    in_fn && /^\}/ { exit }
+  ' <<< "$HEREDOC_CONTENT")
+  if grep -Fq 'planning|coding|review)' <<< "$PHASE_ACTIVE_BLOCK" \
+    && ! grep -Fq 'planning|coding|review|ready)' <<< "$PHASE_ACTIVE_BLOCK"; then
+    pass "ready phase bypasses no-PR active guard so ready lifecycle can re-poll"
+  else
+    fail "ready phase can still be held before ready lifecycle re-poll"
+  fi
+
   CLOSED_BLOCK=$(awk '
     index($0, "log_warn \"$ISSUE → PR #$PR CLOSED without merge\"") { in_block=1 }
     in_block { print }
@@ -876,19 +888,47 @@ else
 
   if grep -Fq 'if [[ "$current_phase" == "review" ]]; then' <<< "$MONITOR_ISSUE_BLOCK" \
     && grep -Fq 'set_task_phase "$ISSUE" "ready"' <<< "$MONITOR_ISSUE_BLOCK" \
-    && grep -Fq 'launch_ready_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$PR"' <<< "$MONITOR_ISSUE_BLOCK"; then
+    && grep -Fq 'launch_ready_phase "$ISSUE" "$SLUG" "$title" "$WT_DIR" "$BRANCH" "$BASE_BRANCH" "$PR"' <<< "$MONITOR_ISSUE_BLOCK"; then
     pass "monitor unconditionally transitions PR-backed review tasks into ready before merge checks"
   else
     fail "monitor does not transition PR-backed review tasks into ready"
   fi
 
   if grep -Fq 'elif [[ "$current_phase" == "ready" ]]; then' <<< "$MONITOR_ISSUE_BLOCK" \
-    && grep -Fq 'ready_state_dir_path="$(ready_state_dir "${WORKTREE_ROOT}/${SLUG}" "$SLUG")"' <<< "$MONITOR_ISSUE_BLOCK" \
+    && grep -Fq 'ready_state_dir_path="$(ready_state_dir "$WT_DIR" "$SLUG")"' <<< "$MONITOR_ISSUE_BLOCK" \
     && grep -Fq '.conflict-detected' <<< "$MONITOR_ISSUE_BLOCK" \
     && grep -Fq 'Conflict remediation complete, ready checks rerun' <<< "$MONITOR_ISSUE_BLOCK"; then
     pass "monitor handles PR-backed ready tasks in the PR lifecycle path"
   else
     fail "monitor is missing PR-backed ready-phase handling in the PR lifecycle path"
+  fi
+
+  if grep -Fq 'ready_state_dir_path="$(ready_state_dir "$WT_DIR" "$SLUG")"' <<< "$MONITOR_ISSUE_BLOCK" \
+    && grep -Fq 'current_head=$(git -C "$WT_DIR" rev-parse HEAD 2>/dev/null || echo "")' <<< "$MONITOR_ISSUE_BLOCK" \
+    && grep -Fq 'current_main_sha=$(get_main_head_sha "$WT_DIR" "$BASE_BRANCH")' <<< "$MONITOR_ISSUE_BLOCK" \
+    && ! grep -Fq 'ready_state_dir_path="$(ready_state_dir "${WORKTREE_ROOT}/${SLUG}" "$SLUG")"' <<< "$MONITOR_ISSUE_BLOCK"; then
+    pass "monitor ready lifecycle uses persisted task worktree"
+  else
+    fail "monitor ready lifecycle can read stale WORKTREE_ROOT state"
+  fi
+
+  CHALLENGE_EVAL_BLOCK=$(awk '
+    /^maybe_run_challenge_eval\(\) \{/ { in_fn=1 }
+    in_fn { print }
+    in_fn && /^\}/ { exit }
+  ' <<< "$HEREDOC_CONTENT")
+  POST_MERGE_EVAL_BLOCK=$(awk '
+    /^launch_background_post_merge_eval\(\) \{/ { in_fn=1 }
+    in_fn { print }
+    in_fn && /^\}/ { exit }
+  ' <<< "$HEREDOC_CONTENT")
+  if grep -Fq 'eval_worktree=$(read_state_value "" --arg i "$issue" '\''.tasks[$i].worktree // empty'\'')' <<< "$CHALLENGE_EVAL_BLOCK" \
+    && grep -Fq -- '--worktree "$eval_worktree"' <<< "$CHALLENGE_EVAL_BLOCK" \
+    && grep -Fq 'eval_worktree=$(read_state_value "" --arg i "$issue" '\''.tasks[$i].worktree // empty'\'')' <<< "$POST_MERGE_EVAL_BLOCK" \
+    && grep -Fq -- '--worktree "$eval_worktree"' <<< "$POST_MERGE_EVAL_BLOCK"; then
+    pass "eval launchers use persisted task worktree"
+  else
+    fail "eval launchers can read stale WORKTREE_ROOT worktrees"
   fi
 
   READ_STATE_VALUE_BLOCK=$(awk '

@@ -72,6 +72,7 @@ run_monitor_case() {
     FOUND_PR=""
     SESSION="ready-transition-test"
     WORKTREE_ROOT="$CASE_DIR/worktrees"
+    PERSISTED_WT_DIR="$CASE_DIR/persisted-worktree"
     REPO_DIR="$CASE_DIR/repo"
     BASE_BRANCH="main"
     AGENT_CMD="codex"
@@ -106,7 +107,7 @@ run_monitor_case() {
     MERGE_QUEUE_ON="false"
     QUEUE_STATE="ready"
 
-    mkdir -p "$WORKTREE_ROOT/$SLUG/features/$SLUG" "$REPO_DIR"
+    mkdir -p "$WORKTREE_ROOT/$SLUG/features/$SLUG" "$PERSISTED_WT_DIR/features/$SLUG" "$REPO_DIR"
     FEATURE_DIR="$WORKTREE_ROOT/$SLUG/features/$SLUG"
     READY_DIR="$FEATURE_DIR/ready"
     mkdir -p "$READY_DIR"
@@ -181,6 +182,14 @@ JSON
         READY_STATUS="running"
         cat > "$READY_DIR/.ready-result.json" <<JSON
 {"stage":"ready","status":"running","artifacts":{"verdict":"fail","remediationAttempts":1,"remediationLaunchHead":"current-head"}}
+JSON
+        ;;
+      ready_remediation_pending_same_head)
+        CURRENT_PHASE="ready"
+        READY_STATUS="running"
+        READY_LAUNCH_RC=0
+        cat > "$READY_DIR/.ready-result.json" <<JSON
+{"stage":"ready","status":"running","artifacts":{"verdict":"pending","remediationAttempts":1,"remediationLaunchHead":"current-head"}}
 JSON
         ;;
       ready_conflict_merged)
@@ -286,7 +295,13 @@ JSON
 
     log() { LOG_OUTPUT+="$*\n"; }
     log_warn() { LOG_OUTPUT+="WARN:$*\n"; }
-    read_state_value() { printf "%s\n" "${1-}"; }
+    read_state_value() {
+      if [[ "$*" == *worktree* ]]; then
+        printf "%s\n" "$PERSISTED_WT_DIR"
+        return 0
+      fi
+      printf "%s\n" "${1-}"
+    }
     set_window_attention_state() { ATTENTION_STATE="$2"; }
     handle_agent_error_recovery() { :; }
     cleanup_completed_task() { CLEANUP_COUNT=$((CLEANUP_COUNT + 1)); }
@@ -408,6 +423,7 @@ check_contains "review with open PR transitions to ready" "$review_to_ready_outp
 check_contains "review with open PR launches ready checks" "$review_to_ready_output" "ready_launches=1"
 check_contains "review with open PR does not only restore review window" "$review_to_ready_output" "restore_calls=0"
 check_contains "review with open PR records completed review stage" "$review_to_ready_output" "|review|completed|"
+check_contains "review ready launch uses persisted worktree" "$review_to_ready_output" "persisted-worktree task/monitor-ready main 321"
 
 ready_conflict_output="$(run_monitor_case ready_conflict_rerun)"
 check_contains "ready conflict rerun keeps task in ready" "$ready_conflict_output" "phase=ready"
@@ -453,6 +469,12 @@ ready_remediation_inflight_same_head_output="$(run_monitor_case ready_remediatio
 check_contains "ready remediation in-flight keeps task active" "$ready_remediation_inflight_same_head_output" "active_count=1"
 check_contains "ready remediation in-flight does not relaunch ready" "$ready_remediation_inflight_same_head_output" "ready_launches=0"
 check_contains "ready remediation in-flight clears attention" "$ready_remediation_inflight_same_head_output" "attention=clear"
+
+ready_remediation_pending_same_head_output="$(run_monitor_case ready_remediation_pending_same_head)"
+check_contains "ready remediation pending same-head re-polls CI" "$ready_remediation_pending_same_head_output" "ready_launches=1"
+check_contains "ready remediation pending same-head keeps attention clear" "$ready_remediation_pending_same_head_output" "attention=clear"
+check_contains "ready remediation pending same-head holds slot active" "$ready_remediation_pending_same_head_output" "active_count=1"
+check_contains "ready remediation pending same-head uses persisted worktree" "$ready_remediation_pending_same_head_output" "persisted-worktree task/monitor-ready main 321"
 
 ready_conflict_merged_output="$(run_monitor_case ready_conflict_merged)"
 check_contains "ready merge wins over conflict rerun" "$ready_conflict_merged_output" "cleanup_count=1"
