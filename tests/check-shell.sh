@@ -1216,6 +1216,14 @@ else
     fail "dashboard does not override stale status with plan review message"
   fi
 
+  if grep -qE '^is_stale_planning_detail_for_phase\(\) \{' "$STATUS_SCRIPT" \
+    && grep -q 'planning_\*|awaiting\\ plan\\ approval|Plan\\ ready\*|Native\\ planning\*' "$STATUS_SCRIPT" \
+    && grep -q 'is_stale_planning_detail_for_phase "\$task_phase" "\$reported"' "$STATUS_SCRIPT"; then
+    pass "dashboard suppresses planning-only detail outside planning phase"
+  else
+    fail "dashboard is missing stale planning detail suppression"
+  fi
+
   if grep -q 'running:working' "$STATUS_SCRIPT" \
     && grep -q 'running:waiting' "$STATUS_SCRIPT" \
     && grep -q 'running:done' "$STATUS_SCRIPT" \
@@ -2595,6 +2603,17 @@ else
     pass "launch_review_phase uses protected pane launcher"
   else
     fail "launch_review_phase does not call protected pane launcher"
+  fi
+
+  LAUNCH_AGENT_BLOCK=$(awk '
+    /^_launch_agent_in_pane\(\) \{/ { in_fn=1 }
+    in_fn { print }
+    in_fn && /^\}/ { exit }
+  ' "$MILL_SCRIPT")
+  if grep -q 'local esc_session esc_issue esc_slug esc_linear_issue linear_issue=""' <<< "$LAUNCH_AGENT_BLOCK"; then
+    pass "protected pane launcher initializes linear_issue for strict-mode watchdog launches"
+  else
+    fail "protected pane launcher can read unbound linear_issue under set -u"
   fi
 fi
 

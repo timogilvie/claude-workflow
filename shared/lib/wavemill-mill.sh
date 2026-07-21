@@ -5780,7 +5780,7 @@ _launch_agent_in_pane() {
   local agent_flags=""
   local abort_check_cmd=""
   local feature_dir=""
-  local esc_session esc_issue esc_slug esc_linear_issue linear_issue
+  local esc_session esc_issue esc_slug esc_linear_issue linear_issue=""
 
   [[ "$agent_cmd" == "codex" ]] && agent_flags="--dangerously-bypass-approvals-and-sandbox"
   if [[ -n "$slug" ]]; then
