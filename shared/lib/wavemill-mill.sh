@@ -5646,7 +5646,9 @@ persist_task_window_id() {
 _RESTORE_STATE=""
 _restore_inflight_task_window_if_missing() {
   local issue="$1" slug="$2" branch="$3" phase="$4"
-  local wt_dir="${WORKTREE_ROOT}/${slug}"
+  local wt_dir
+  wt_dir=$(read_state_value "" --arg i "$issue" '.tasks[$i].worktree // ""')
+  [[ -z "$wt_dir" ]] && wt_dir="${WORKTREE_ROOT}/${slug}"
   local feature_dir="${wt_dir}/features/${slug}"
   _RESTORE_STATE="none"
 
@@ -5778,7 +5780,7 @@ _launch_agent_in_pane() {
   local agent_flags=""
   local abort_check_cmd=""
   local feature_dir=""
-  local esc_session esc_issue esc_slug esc_linear_issue linear_issue
+  local esc_session esc_issue esc_slug esc_linear_issue linear_issue=""
 
   [[ "$agent_cmd" == "codex" ]] && agent_flags="--dangerously-bypass-approvals-and-sandbox"
   if [[ -n "$slug" ]]; then
@@ -10698,13 +10700,14 @@ monitor_issue_state() {
   SLUG="${SLUG_BY_ISSUE[$ISSUE]}"
   PR="${PR_BY_ISSUE[$ISSUE]:-}"
   WIN="$ISSUE-$SLUG"
-  WT_DIR="${WORKTREE_ROOT}/${SLUG}"
+  WT_DIR=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].worktree // ""')
+  [[ -z "$WT_DIR" ]] && WT_DIR="${WORKTREE_ROOT}/${SLUG}"
   local WIN_TARGET
   WIN_TARGET="$(_tmux_task_window_target "$SESSION" "$ISSUE" "$SLUG" "${STATE_FILE:-}" "$WT_DIR" 2>/dev/null || true)"
   if [[ -z "$WIN_TARGET" ]]; then
     WIN_TARGET="$(_tmux_target_join "$SESSION" "$WIN" 2>/dev/null || printf '%s:%s\n' "$SESSION" "$WIN")"
   fi
-  local FEATURE_DIR="${WORKTREE_ROOT}/${SLUG}/features/${SLUG}"
+  local FEATURE_DIR="${WT_DIR}/features/${SLUG}"
   current_agent=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].agent // ""')
   needs_attention="false"
 
@@ -10718,7 +10721,7 @@ monitor_issue_state() {
   if [[ "$task_status" == "merged" || "$task_status" == "completed-external" ]]; then
     if [[ "$task_status" == "merged" ]]; then
       local merged_ready_dir merged_before_ready=false
-      merged_ready_dir="$(ready_state_dir "${WORKTREE_ROOT}/${SLUG}" "$SLUG")"
+      merged_ready_dir="$(ready_state_dir "$WT_DIR" "$SLUG")"
       if ! ready_stage_allows_merge "$merged_ready_dir"; then
         merged_before_ready=true
         ready_stage_warn_bypass_once "$merged_ready_dir" "$ISSUE" "$PR" || true
@@ -10783,7 +10786,7 @@ monitor_issue_state() {
       challenge_pair=$(get_task_meta "$ISSUE" "challengePairId")
       challenge_role=$(get_task_meta "$ISSUE" "challengeRole")
       challenge_model=$(get_task_meta "$ISSUE" "challengeModel")
-      save_task_state "$ISSUE" "$SLUG" "$BRANCH" "${WORKTREE_ROOT}/${SLUG}" "$PR" "" "$current_agent" "$linear_issue" "$challenge_flag" "$challenge_pair" "$challenge_role" "$challenge_model"
+      save_task_state "$ISSUE" "$SLUG" "$BRANCH" "$WT_DIR" "$PR" "" "$current_agent" "$linear_issue" "$challenge_flag" "$challenge_pair" "$challenge_role" "$challenge_model"
       if should_update_linear_state "$ISSUE"; then
         linear_set_state "$linear_issue" "In Review"
       fi
@@ -10872,7 +10875,7 @@ monitor_issue_state() {
           fi
           # Preserve agent when marking as completed-external
           current_agent=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].agent // ""')
-          save_task_state "$ISSUE" "$SLUG" "$BRANCH" "${WORKTREE_ROOT}/${SLUG}" "" "completed-external" "$current_agent"
+          save_task_state "$ISSUE" "$SLUG" "$BRANCH" "$WT_DIR" "" "completed-external" "$current_agent"
           active_count=$((active_count + 1))
           return 0
         fi
@@ -10950,7 +10953,7 @@ monitor_issue_state() {
               # Save routing results to state
               current_agent=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].agent // ""')
               linear_issue=$(get_linear_issue_id "$ISSUE")
-              save_task_state "$ISSUE" "$SLUG" "$BRANCH" "${WORKTREE_ROOT}/${SLUG}" "" "" "$current_agent" "$linear_issue" "" "" "" "" "$planner_model" "$coder_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode"
+              save_task_state "$ISSUE" "$SLUG" "$BRANCH" "$WT_DIR" "" "" "$current_agent" "$linear_issue" "" "" "" "" "$planner_model" "$coder_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode"
 
               # Write canonical phase config (HOK-1177)
               write_phase_config "$FEATURE_DIR" "$planner_model" "$coder_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode" "${FORCE_MODEL:-}"
@@ -11060,7 +11063,7 @@ monitor_issue_state() {
           if [[ "$resolved_phase" == "coding" ]]; then
             unset "$approval_wait_var" 2>/dev/null || true
             # Before launching coding, validate planning did not overreach.
-            if ! validate_planning_phase_output "${WORKTREE_ROOT}/${SLUG}"; then
+            if ! validate_planning_phase_output "$WT_DIR"; then
               handle_planning_overreach_rejection "$ISSUE" "$FEATURE_DIR" "$WIN" "$current_agent"
               active_count=$((active_count + 1))
               return 0
@@ -11071,7 +11074,7 @@ monitor_issue_state() {
             if ! reroute_expanded_packets_for_coding_handoff "$ISSUE" "$SLUG" "$FEATURE_DIR"; then
               handle_expanded_reroute_handoff_failure "$ISSUE" "$FEATURE_DIR"
             fi
-            if ! apply_expanded_route_if_present "$FEATURE_DIR" "$ISSUE" "$SLUG" "${WORKTREE_ROOT}/${SLUG}" "$STATE_FILE"; then
+            if ! apply_expanded_route_if_present "$FEATURE_DIR" "$ISSUE" "$SLUG" "$WT_DIR" "$STATE_FILE"; then
               log_warn "$ISSUE → expanded route invalid; using bootstrap execution route for coding"
             fi
             emit_execution_active_route "$FEATURE_DIR" "$ISSUE"
@@ -11082,7 +11085,7 @@ monitor_issue_state() {
 
             if [[ "$handshake_reason" == "missing" && "$handshake_policy" == "recover" ]]; then
               if recover_missing_expansion_artifact "$ISSUE" "$SLUG" "$FEATURE_DIR"; then
-                if ! apply_expanded_route_if_present "$FEATURE_DIR" "$ISSUE" "$SLUG" "${WORKTREE_ROOT}/${SLUG}" "$STATE_FILE"; then
+                if ! apply_expanded_route_if_present "$FEATURE_DIR" "$ISSUE" "$SLUG" "$WT_DIR" "$STATE_FILE"; then
                   expansion_recovery_mark_result "$FEATURE_DIR" "$ISSUE" "failed" "expanded-route-promotion-failed" "1" || true
                   log_warn "$ISSUE → recovered expanded route was invalid during promotion; using bootstrap execution route for coding"
                   handshake_reason="recovery-fallback-bootstrap"
@@ -11179,7 +11182,7 @@ monitor_issue_state() {
                     current_status=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].status // ""')
                     current_agent=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].agent // ""')
                     current_linear_issue=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].linearIssueId // ""')
-                    save_task_state "$ISSUE" "$SLUG" "$BRANCH" "${WORKTREE_ROOT}/${SLUG}" "$current_pr" "$current_status" "$current_agent" "$current_linear_issue" \
+                    save_task_state "$ISSUE" "$SLUG" "$BRANCH" "$WT_DIR" "$current_pr" "$current_status" "$current_agent" "$current_linear_issue" \
                       "true" "$ISSUE" "primary" "$new_primary" "$new_primary_planner" "$new_primary" "$new_primary_reviewer" "$new_primary_plan_depth" "$new_primary_code_depth" "$new_primary_review_mode" "$new_challenge_stage"
                     challenge_coder="$new_primary"
                     challenge_stage_meta="$new_challenge_stage"
@@ -11263,7 +11266,7 @@ monitor_issue_state() {
             # Record coding stage as running (HOK-1177)
             write_stage_result "$FEATURE_DIR" "coding" "running" "$coder_agent" "$coder_launch_model"
 
-            launch_coding_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$coder_launch_model" "$coder_agent" "$code_depth"
+            launch_coding_phase "$ISSUE" "$SLUG" "$title" "$WT_DIR" "$BRANCH" "$BASE_BRANCH" "$coder_launch_model" "$coder_agent" "$code_depth"
             local launch_rc=$?
             if ! handle_phase_launch_result "$ISSUE" "$FEATURE_DIR" "coding" "planning" "$launch_rc" "$WIN" "$coder_agent" "$coder_launch_model"; then
                 return 0
@@ -11289,7 +11292,7 @@ monitor_issue_state() {
           if [[ "$planning_status" == "awaiting_user" ]]; then
             if [[ -f "$FEATURE_DIR/.plan-approved" ]]; then
               unset "$approval_wait_var" 2>/dev/null || true
-              if ! validate_planning_phase_output "${WORKTREE_ROOT}/${SLUG}"; then
+              if ! validate_planning_phase_output "$WT_DIR"; then
                 handle_planning_overreach_rejection "$ISSUE" "$FEATURE_DIR" "$WIN" "$current_agent"
                 active_count=$((active_count + 1))
                 return 0
@@ -11323,7 +11326,7 @@ monitor_issue_state() {
             # Check if user signaled approval by creating .plan-approved marker
             if [[ -f "$FEATURE_DIR/.plan-approved" ]]; then
               unset "$approval_wait_var" 2>/dev/null || true
-              if ! validate_planning_phase_output "${WORKTREE_ROOT}/${SLUG}"; then
+              if ! validate_planning_phase_output "$WT_DIR"; then
                 handle_planning_overreach_rejection "$ISSUE" "$FEATURE_DIR" "$WIN" "$current_agent"
                 active_count=$((active_count + 1))
                 return 0
@@ -11870,7 +11873,7 @@ monitor_issue_state() {
       fi
       # Preserve agent when marking as merged
       current_agent=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].agent // ""')
-      save_task_state "$ISSUE" "$SLUG" "$BRANCH" "${WORKTREE_ROOT}/${SLUG}" "$PR" "merged" "$current_agent"
+      save_task_state "$ISSUE" "$SLUG" "$BRANCH" "$WT_DIR" "$PR" "merged" "$current_agent"
       active_count=$((active_count + 1))
       return 0
     fi

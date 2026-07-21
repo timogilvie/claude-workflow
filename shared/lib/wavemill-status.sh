@@ -1159,6 +1159,15 @@ render_section_header() {
     "────────────────────────────────────────────────────────────────────────────────" >> "$FRAME"
 }
 
+is_stale_planning_detail_for_phase() {
+  local task_phase="$1" detail="$2"
+  [[ "$task_phase" != "planning" && -n "$detail" ]] || return 1
+  case "$detail" in
+    planning_*|awaiting\ plan\ approval|Plan\ ready*|Native\ planning*) return 0 ;;
+  esac
+  return 1
+}
+
 # Render one task row and any optional follow-up detail line.
 render_task_row() {
   local issue="$1" slug="$2" branch="$3" worktree="$4" win="$5"
@@ -1180,6 +1189,9 @@ render_task_row() {
     # Prefer rich hook detail (tool names, errors) over legacy text files.
     reported=$(agent_hook_detail "$issue")
     [[ -z "$reported" ]] && reported=$(agent_reported_status "$issue")
+    if is_stale_planning_detail_for_phase "$task_phase" "$reported"; then
+      reported=""
+    fi
     case "$agent_state:$reported" in
       waiting:*)         st_str="${Y}⏳ waiting${N}" ;;
       blocked:*)         st_str="${Y}⊘ blocked${N}" ;;
