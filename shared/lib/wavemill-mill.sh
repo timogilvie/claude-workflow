@@ -4967,6 +4967,7 @@ auto_advance_blocked_completion() {
   local pane_pid live_process_mode liveness_rc
   local blocking_command next_action
   local -a blocking_commands=()
+  local -a MILL_BLOCKING_PROCESS_PIDS=()
 
   AUTO_ADVANCE_BLOCKED_COMPLETION_REASON=""
   AUTO_ADVANCE_BLOCKED_COMPLETION_HANDLED=""
