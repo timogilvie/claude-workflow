@@ -3710,6 +3710,13 @@ check_routing_complete() {
 write_stage_result() {
   local feature_dir="$1" stage="$2" status="$3"
   local agent="${4:-}" model="${5:-}" notes="${6:-}" artifacts_json="${7:-}"
+  local result_file="$feature_dir/.${stage}-result.json" previous_status=""
+
+  # Capture the transition before either writer replaces the result. A malformed
+  # or missing result is intentionally treated as an unknown prior state.
+  if [[ -f "$result_file" ]]; then
+    previous_status="$(jq -r '.status // empty' "$result_file" 2>/dev/null || true)"
+  fi
 
   # Try the TypeScript CLI first (HOK-1192: structured writes with artifacts support)
   if [[ -n "${TOOLS_DIR:-}" ]]; then
@@ -3720,14 +3727,13 @@ write_stage_result() {
     [[ -n "$artifacts_json" ]] && cli_args+=(--artifacts "$artifacts_json")
 
     if npx tsx "$TOOLS_DIR/stage-result-cli.ts" write "${cli_args[@]}" 2>/dev/null; then
-      _write_stage_result_trace_event "$feature_dir" "$stage" "$status" "$agent" "$model"
+      _write_stage_result_trace_event "$feature_dir" "$stage" "$status" "$agent" "$model" "$previous_status"
       return 0
     fi
     log_warn "write_stage_result: TypeScript CLI failed, falling back to shell"
   fi
 
   # Fallback: inline JSON construction (legacy path)
-  local result_file="$feature_dir/.${stage}-result.json"
   local now
   now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
@@ -3759,13 +3765,13 @@ write_stage_result() {
 }
 EOF
   mv "$tmp" "$result_file"
-  _write_stage_result_trace_event "$feature_dir" "$stage" "$status" "$agent" "$model"
+  _write_stage_result_trace_event "$feature_dir" "$stage" "$status" "$agent" "$model" "$previous_status"
 }
 
 # Emit trace events when a stage result is written (HOK-2259).
 # Best-effort — never fails. Reads trace context from the feature directory.
 _write_stage_result_trace_event() {
-  local feature_dir="$1" stage="$2" status="$3" agent="${4:-}" model="${5:-}"
+  local feature_dir="$1" stage="$2" status="$3" agent="${4:-}" model="${5:-}" previous_status="${6:-}"
   local _tid _iid _sl
   _tid=$(trace_read_id "$feature_dir" 2>/dev/null || true)
   [[ -n "$_tid" ]] || return 0
@@ -3775,12 +3781,15 @@ _write_stage_result_trace_event() {
 
   case "$status" in
     running)
+      [[ "$previous_status" != "running" ]] || return 0
       trace_append_event "$feature_dir" "$_tid" "$_iid" "$_sl" "$stage" "phase_started" "ok" "$model" "$agent" 2>/dev/null || true
       ;;
     completed)
+      [[ "$previous_status" != "completed" ]] || return 0
       trace_append_event "$feature_dir" "$_tid" "$_iid" "$_sl" "$stage" "phase_completed" "ok" "$model" "$agent" 2>/dev/null || true
       ;;
     failed|aborted)
+      [[ "$previous_status" != "$status" ]] || return 0
       trace_append_event "$feature_dir" "$_tid" "$_iid" "$_sl" "$stage" "phase_completed" "failed" "$model" "$agent" \
         "$(jq -cn --arg st "$status" '{meta:{stageStatus:$st}}' 2>/dev/null || echo '{}')" 2>/dev/null || true
       ;;
@@ -4850,6 +4859,8 @@ complete_coding_advance() {
     return 1
   fi
 
+  quarantine_completed_coding_pane "$issue" "$feature_dir"
+
   return 0
 }
 
@@ -5571,6 +5582,23 @@ _tmux_task_window_target() {
   return 1
 }
 
+# A completed coding agent must not remain available for unrelated interactive
+# input while the controller advances the task. This is deliberately best-effort:
+# result state is authoritative and review will recreate a task window as needed.
+quarantine_completed_coding_pane() {
+  local issue="$1" feature_dir="$2" worktree="${3:-}"
+  local slug target
+
+  command -v tmux >/dev/null 2>&1 || return 0
+  slug="$(basename "$feature_dir")"
+  [[ -n "$worktree" ]] || worktree="$(dirname "$(dirname "$feature_dir")")"
+  target="$(_tmux_task_window_target "$SESSION" "$issue" "$slug" "${STATE_FILE:-}" "$worktree" 2>/dev/null || true)"
+  [[ -n "$target" ]] || return 0
+
+  tmux kill-window -t "$target" 2>/dev/null || true
+  return 0
+}
+
 _ensure_task_window_exists() {
   local session="$1" issue="$2" slug="$3" wt_dir="$4"
   local target canonical
@@ -6235,7 +6263,7 @@ merge_queue_enrich_ready_artifacts() {
 
 refresh_ready_merge_queue_tick() {
   local now input_file output_file input_json output_json config_json
-  local issue phase slug pr state_dir ready_status ready_verdict stored_base current_main queue_state wt_dir workflow_status
+  local issue phase slug pr state_dir ready_status ready_verdict stored_base current_main queue_state wt_dir workflow_status pr_state_val
   local ready_prs='[]'
 
   : > "$MERGE_QUEUE_SELECTION_FILE"
@@ -6268,6 +6296,8 @@ refresh_ready_merge_queue_tick() {
       continue
     fi
 
+    pr_state_val="$(pr_state "$pr")"
+
     if [[ "$ready_status" == "completed" && ( "$ready_verdict" == "pass" || "$ready_verdict" == "warn" ) && -n "$current_main" && "$stored_base" != "$current_main" && "$queue_state" != "merge-candidate" ]]; then
       mark_ready_stale "$issue" "$state_dir" "$stored_base" "$current_main"
       queue_state="ready-stale"
@@ -6283,6 +6313,7 @@ refresh_ready_merge_queue_tick() {
         --arg ready_base_sha "$stored_base" \
         --arg queue_state "$queue_state" \
         --arg workflow_status "$workflow_status" \
+        --arg pr_state "$pr_state_val" \
         --arg ready_at "$(jq -r '.finishedAt // .startedAt // empty' "$state_dir/.ready-result.json" 2>/dev/null || echo "")" \
         --arg candidate_promoted_at "$(ready_queue_field "$state_dir" candidatePromotedAt)" \
         --arg candidate_last_progress_at "$(ready_queue_field "$state_dir" candidateLastProgressAt)" \
@@ -6303,7 +6334,8 @@ refresh_ready_merge_queue_tick() {
             candidateLastProgressAt: (if $candidate_last_progress_at == "" then null else $candidate_last_progress_at end),
             mergeRetryInProgressUntil: (if $merge_retry_in_progress_until == "" then null else $merge_retry_in_progress_until end),
             candidateSkippedAt: (if $candidate_skipped_at == "" then null else $candidate_skipped_at end),
-            workflowStatus: (if $workflow_status == "" then null else $workflow_status end)
+            workflowStatus: (if $workflow_status == "" then null else $workflow_status end),
+            prState: (if $pr_state == "" then null else $pr_state end)
           }]
         ')
     fi
@@ -11267,6 +11299,7 @@ monitor_issue_state() {
             clear_coding_uncommitted_output_attention "$FEATURE_DIR"
             # Mark coding as completed (HOK-1177)
             write_stage_result "$FEATURE_DIR" "coding" "completed" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "coding" "claude-opus-4-7")"
+            quarantine_completed_coding_pane "$ISSUE" "$FEATURE_DIR" "${WORKTREE_ROOT}/${SLUG}"
 
             # FORCE_MODEL takes priority, then phase config, then state, then default
             if [[ -n "${FORCE_MODEL:-}" ]]; then
@@ -11332,6 +11365,7 @@ monitor_issue_state() {
               log "status" "$ISSUE → .coding-complete detected, marking coding as completed"
               clear_coding_uncommitted_output_attention "$FEATURE_DIR"
               write_stage_result "$FEATURE_DIR" "coding" "completed" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "coding" "claude-opus-4-7")"
+              quarantine_completed_coding_pane "$ISSUE" "$FEATURE_DIR" "${WORKTREE_ROOT}/${SLUG}"
               # Next iteration will detect resolved_phase == "review" and launch review
               active_count=$((active_count + 1))
               return 0

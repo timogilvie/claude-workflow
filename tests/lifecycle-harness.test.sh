@@ -177,6 +177,7 @@ harness_extract_real_functions() {
     _coding_divergence_announce_marker \
     _detect_coding_pane_divergence \
     emit_pane_divergence_attention \
+    quarantine_completed_coding_pane \
     handle_planning_overreach_rejection \
     validate_coding_phase_output \
     resolve_phase \
@@ -1460,6 +1461,128 @@ EOF
   check_file_absent "preserved-merged: no demotions written" "$repo/.wavemill/demoted-issues"
 }
 
+test_merge_queue_closed_unmerged_pr_does_not_block_ready_pr() {
+  local slug="merge-queue-closed-unmerged"
+  local issue="HOK-CLEAN"
+  local repo tick worktree_root
+  repo="$(harness_init_repo "$slug")"
+  worktree_root="$(dirname "$repo")"
+
+  mkdir -p "$repo/features/$slug/ready"
+  cat > "$repo/features/$slug/ready/.ready-result.json" <<'EOF'
+{
+  "stage": "ready",
+  "status": "completed",
+  "startedAt": "2026-06-25T10:00:00Z",
+  "finishedAt": "2026-06-25T10:05:00Z",
+  "artifacts": {
+    "type": "ready",
+    "verdict": "pass",
+    "readyBaseSha": "sha-current",
+    "queueState": "ready-stale"
+  }
+}
+EOF
+
+  mkdir -p "$worktree_root/closed-unmerged/features/closed-unmerged/ready"
+  cat > "$worktree_root/closed-unmerged/features/closed-unmerged/ready/.ready-result.json" <<'EOF'
+{
+  "stage": "ready",
+  "status": "completed",
+  "startedAt": "2026-06-25T09:00:00Z",
+  "finishedAt": "2026-06-25T09:05:00Z",
+  "artifacts": {
+    "type": "ready",
+    "verdict": "pass",
+    "readyBaseSha": "sha-current",
+    "queueState": "merge-candidate",
+    "candidatePromotedAt": "2026-06-25T09:10:00Z",
+    "candidateLastProgressAt": "2026-06-25T09:15:00Z"
+  }
+}
+EOF
+
+  local extra_setup
+  extra_setup="TOOLS_DIR=\"${REPO_DIR}/tools\""
+  extra_setup+=$'\n'
+  extra_setup+='
+    CURRENT_PHASE="ready"
+    PR_BY_ISSUE["$ISSUE"]="900"
+    BRANCH_BY_ISSUE["HOK-CLOSED"]="task/closed-unmerged"
+    SLUG_BY_ISSUE["HOK-CLOSED"]="closed-unmerged"
+    PR_BY_ISSUE["HOK-CLOSED"]="838"
+
+    get_task_phase() { printf "%s\n" "ready"; }
+    get_main_head_sha() { printf "%s\n" "sha-current"; }
+    merge_queue_enabled() { return 0; }
+    pr_state() {
+      if [[ "${1:-}" == "838" ]]; then
+        printf "%s\n" "CLOSED"
+      else
+        printf "%s\n" "OPEN"
+      fi
+    }
+    ready_queue_state() {
+      local state_dir="$1"
+      jq -r ".artifacts.queueState // empty" "$state_dir/.ready-result.json" 2>/dev/null || printf "\n"
+    }
+    ready_base_sha() {
+      local state_dir="$1"
+      jq -r ".artifacts.readyBaseSha // empty" "$state_dir/.ready-result.json" 2>/dev/null || printf "\n"
+    }
+    ready_queue_field() {
+      local state_dir="$1" field="$2"
+      jq -r ".artifacts.$field // empty" "$state_dir/.ready-result.json" 2>/dev/null || printf "\n"
+    }
+    ready_changed_files_json() {
+      local state_dir="$1"
+      if [[ "$state_dir" == *"closed-unmerged"* ]]; then
+        printf "[\"a.ts\"]\n"
+      else
+        printf "[\"b.ts\"]\n"
+      fi
+    }
+    read_state_value() {
+      local arg_issue=""
+      local i
+      for i in "$@"; do
+        if [[ "$i" == "HOK-CLOSED" || "$i" == "HOK-CLEAN" ]]; then
+          arg_issue="$i"
+          break
+        fi
+      done
+      case "$arg_issue" in
+        HOK-CLOSED) printf "%s\n" "active" ;;
+        *) printf "\n" ;;
+      esac
+    }
+    promote_merge_candidate() {
+      local promo_issue="$1"
+      printf "%s\n" "$promo_issue" >> "$REPO_UNDER_TEST/.wavemill/promoted-issues"
+    }
+    demote_merge_candidate() {
+      local demo_issue="$1"
+      printf "%s\n" "$demo_issue" >> "$REPO_UNDER_TEST/.wavemill/demoted-issues"
+    }
+  '
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" "$extra_setup")"
+
+  check_file_exists "closed-unmerged: promoted file exists" "$repo/.wavemill/promoted-issues"
+  check_contains "closed-unmerged: clean PR promoted" "$(cat "$repo/.wavemill/promoted-issues" 2>/dev/null || true)" "HOK-CLEAN"
+  check_not_contains "closed-unmerged: closed PR not promoted" "$(cat "$repo/.wavemill/promoted-issues" 2>/dev/null || true)" "HOK-CLOSED"
+
+  local selected stuck
+  selected="$(jq -r '.selectedIssues[]?' "$repo/.wavemill/merge-queue-selection.json" 2>/dev/null || true)"
+  stuck="$(jq -r '.stuckIssues[]?' "$repo/.wavemill/merge-queue-selection.json" 2>/dev/null || true)"
+  check_contains "closed-unmerged: selection includes clean PR" "$selected" "HOK-CLEAN"
+  check_not_contains "closed-unmerged: selection excludes closed PR" "$selected" "HOK-CLOSED"
+  check_not_contains "closed-unmerged: stuck excludes closed PR" "$stuck" "HOK-CLOSED"
+
+  check_file_absent "closed-unmerged: no demotions written" "$repo/.wavemill/demoted-issues"
+  check_eq "closed-unmerged: task remains active" "1" "$(kv_value "$tick" active_count)"
+}
+
 test_coding_blocked_completion_needs_user_without_advancing() {
   local slug="coding-blocked-completion"
   local issue="HOK-1642-BLOCKED"
@@ -1676,9 +1799,9 @@ test_coding_complete_dirty_worktree_with_commits_needs_attention() {
   check_file_exists "dirty tree: dedupe marker written" "$feature_dir/.coding-uncommitted-output-announced"
 }
 
-test_coding_complete_metadata_only_trace_advances_to_review() {
+test_coding_complete_trace_only_dirty_worktree_advances() {
   local slug="coding-complete-trace-only"
-  local issue="HOK-2446-TRACE"
+  local issue="HOK-2454-TRACE"
   local repo tick feature_dir
   repo="$(harness_init_repo "$slug")"
   harness_setup_runtime_artifacts "$repo"
@@ -1734,7 +1857,6 @@ test_coding_complete_source_dirty_still_blocks() {
   printf 'committed change\n' >> "$repo/README.md"
   git -C "$repo" add README.md
   git -C "$repo" commit -m "feat: committed coding output" >/dev/null 2>&1
-
   touch "$feature_dir/.coding-complete"
   printf 'export const extra = true;\n' > "$feature_dir/extra.ts"
 
@@ -1748,6 +1870,80 @@ test_coding_complete_source_dirty_still_blocks() {
   check_contains "feature source dirty: actionable log emitted" "$(kv_value "$tick" log_output)" "worktree still contains uncommitted coding output"
   check_file_exists "feature source dirty: artifact written" "$feature_dir/.coding-uncommitted-output.json"
   check_file_exists "feature source dirty: dedupe marker written" "$feature_dir/.coding-uncommitted-output-announced"
+}
+
+test_coding_complete_trace_and_source_dirty_worktree_needs_attention() {
+  local slug="coding-complete-trace-and-source"
+  local issue="HOK-2454-MIXED"
+  local repo tick feature_dir dirty_paths
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  feature_dir="$repo/features/$slug"
+
+  printf 'committed change\n' >> "$repo/README.md"
+  git -C "$repo" add README.md
+  git -C "$repo" commit -m "feat: committed coding output" >/dev/null 2>&1
+  touch "$feature_dir/.coding-complete"
+  printf '{"event":"phase_started"}\n' > "$feature_dir/trace.jsonl"
+  printf 'still dirty\n' > "$repo/src-dirty.ts"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
+  dirty_paths="$(jq -r '.dirtyPaths[]?' "$feature_dir/.coding-uncommitted-output.json")"
+
+  check_eq "trace and source: phase stays coding" "coding" "$(kv_value "$tick" phase)"
+  check_eq "trace and source: coding stays running" "running" "$(harness_read_stage_status "$repo" "$slug" coding)"
+  check_eq "trace and source: needs-user attention set" "needs-user" "$(kv_value "$tick" attention)"
+  check_contains "trace and source: real source reported" "$dirty_paths" "src-dirty.ts"
+  check_not_contains "trace and source: trace omitted from dirty paths" "$dirty_paths" "trace.jsonl"
+}
+
+test_stage_result_trace_events_are_idempotent() {
+  local slug="stage-result-trace-idempotent"
+  local issue="HOK-2454-TRACE-EVENTS"
+  local repo starts completions
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+
+  harness_run_tick "$repo" "$slug" "$issue" '
+    CURRENT_PHASE="coding"
+    monitor_issue_state() { :; }
+    rm -f "$REPO_UNDER_TEST/features/$SLUG/.coding-result.json"
+    printf "{\\\"issueId\\\":\\\"issue-1\\\",\\\"slug\\\":\\\"%s\\\"}\\n" "$SLUG" > "$REPO_UNDER_TEST/features/$SLUG/.trace-context.json"
+    trace_read_id() { printf "%s\\n" "trace-1"; }
+    trace_append_event() { printf "%s\\n" "$*" >> "$REPO_UNDER_TEST/trace-events.log"; }
+    write_stage_result "$REPO_UNDER_TEST/features/$SLUG" coding running codex test-model
+    write_stage_result "$REPO_UNDER_TEST/features/$SLUG" coding running codex test-model
+    write_stage_result "$REPO_UNDER_TEST/features/$SLUG" coding completed codex test-model
+    write_stage_result "$REPO_UNDER_TEST/features/$SLUG" coding completed codex test-model
+  ' >/dev/null
+
+  starts="$(grep -c 'phase_started' "$repo/trace-events.log")"
+  completions="$(grep -c 'phase_completed' "$repo/trace-events.log")"
+  check_eq "trace events: one running transition" "1" "$starts"
+  check_eq "trace events: one completion transition" "1" "$completions"
+}
+
+test_completed_coding_pane_is_quarantined_best_effort() {
+  local slug="coding-complete-pane-quarantine"
+  local issue="HOK-2454-PANE"
+  local repo tick feature_dir
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  feature_dir="$repo/features/$slug"
+  touch "$feature_dir/.coding-complete"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" '
+    CURRENT_PHASE="coding"
+    _tmux_task_window_target() { printf "%s\\n" "@7"; }
+    tmux() { printf "%s\\n" "$*" >> "$REPO_UNDER_TEST/tmux.log"; return 0; }
+  ')"
+
+  check_eq "pane quarantine: coding stage becomes completed" "completed" "$(harness_read_stage_status "$repo" "$slug" coding)"
+  check_contains "pane quarantine: completed window is killed" "$(cat "$repo/tmux.log")" "kill-window -t @7"
+  check_eq "pane quarantine: state advances despite cleanup" "" "$(kv_value "$tick" attention)"
 }
 
 test_coding_blocked_completion_malformed_json_falls_back() {
@@ -2699,6 +2895,7 @@ test_resume_uses_expanded_phase_config_over_stale_state
 test_merge_queue_marks_non_candidate_stale_without_rerun
 test_merge_queue_disabled_keeps_legacy_rerun
 test_merge_queue_preserved_merged_tasks_do_not_block_ready_pr
+test_merge_queue_closed_unmerged_pr_does_not_block_ready_pr
 test_coding_blocked_completion_needs_user_without_advancing
 test_coding_blocked_completion_auto_advances_when_valid
 test_coding_blocked_completion_auto_advances_with_wavemill_metadata_noise
@@ -2706,8 +2903,13 @@ test_coding_blocked_completion_dedupes_same_artifact
 test_coding_blocked_completion_reannounces_on_mtime_change
 test_coding_complete_wins_over_blocked_completion
 test_coding_complete_dirty_worktree_without_commits_needs_attention
-test_coding_complete_metadata_only_trace_advances_to_review
+test_coding_complete_dirty_worktree_with_commits_needs_attention
+test_coding_complete_trace_only_dirty_worktree_advances
+test_coding_complete_trace_and_source_dirty_worktree_needs_attention
+test_stage_result_trace_events_are_idempotent
+test_completed_coding_pane_is_quarantined_best_effort
 test_coding_complete_metadata_only_routing_advances_to_review
+test_coding_complete_source_dirty_still_blocks
 test_coding_blocked_completion_malformed_json_falls_back
 test_coding_blocked_completion_missing_required_field_does_not_auto_advance
 test_coding_blocked_completion_empty_passing_checks_does_not_auto_advance
