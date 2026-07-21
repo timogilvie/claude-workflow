@@ -1,6 +1,10 @@
 #!/usr/bin/env -S npx tsx
 import { resolve } from 'node:path';
 import { launchNativePlanning } from '../shared/lib/native-agent/launch-planning.ts';
+import {
+  resolveNativePlanningApprovalMode,
+  runNativePlanningApprovalGate,
+} from '../shared/lib/native-agent/planning-approval.ts';
 
 function readOption(name: string): string | undefined {
   const index = process.argv.indexOf(`--${name}`);
@@ -19,7 +23,7 @@ async function main(): Promise<void> {
     throw new Error('session, issue, and slug are required');
   }
 
-  await launchNativePlanning({
+  const result = await launchNativePlanning({
     session,
     issue,
     slug,
@@ -34,6 +38,20 @@ async function main(): Promise<void> {
     issueContext: readOption('issue-context') ?? process.env.WAVEMILL_ISSUE_CONTEXT,
     linearIssue: readOption('linear-issue') ?? process.env.WAVEMILL_LINEAR_ISSUE,
     resolvedModel: readOption('model') ?? process.env.WAVEMILL_RESOLVED_MODEL,
+  });
+
+  const approvalMode = resolveNativePlanningApprovalMode(
+    readOption('approval-mode') ?? process.env.WAVEMILL_NATIVE_PLANNING_APPROVAL_MODE,
+  );
+  await runNativePlanningApprovalGate({
+    issue,
+    planPath: result.planPath,
+    approvalMarkerPath: result.approvalMarkerPath,
+    workflowAbortMarkerPath: resolve(wtDir, 'features', slug, '.workflow-aborted'),
+    transcriptPath: result.transcriptPath,
+    provider: result.provider,
+    model: result.model,
+    mode: approvalMode,
   });
 }
 

@@ -3,10 +3,16 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { Readable, Writable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 import { registerScriptedPiProvider } from './provider.ts';
 import { describeNativePlanningHelperFailure, launchNativePlanning } from './launch-planning.ts';
+import {
+  parseNativePlanningApprovalCommand,
+  resolveNativePlanningApprovalMode,
+  runNativePlanningApprovalGate,
+} from './planning-approval.ts';
 import type { ToolDescriptor } from './tools/types.ts';
 import type { ReadyNativeProviderEntry } from './providers.ts';
 
@@ -153,6 +159,138 @@ function makeMutationTool(executed: { value: boolean }): ToolDescriptor {
     },
   };
 }
+
+function collectOutput(): { writable: Writable; text: () => string } {
+  const chunks: Buffer[] = [];
+  return {
+    writable: new Writable({
+      write(chunk, _encoding, callback) {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+        callback();
+      },
+    }),
+    text: () => Buffer.concat(chunks).toString('utf-8'),
+  };
+}
+
+function approvalFixture(): {
+  dir: string;
+  planPath: string;
+  approvalMarkerPath: string;
+  workflowAbortMarkerPath: string;
+} {
+  const dir = mkdtempSync(join(tmpdir(), 'native-planning-approval-'));
+  const planPath = join(dir, 'plan.md');
+  writeFileSync(planPath, '# Plan\n\n## Release Readiness\n- **database_change_risk**: none\n');
+  return {
+    dir,
+    planPath,
+    approvalMarkerPath: join(dir, '.plan-approved'),
+    workflowAbortMarkerPath: join(dir, '.workflow-aborted'),
+  };
+}
+
+describe('native planning approval gate', () => {
+  it('parses approval commands used by tmux operators', () => {
+    assert.equal(parseNativePlanningApprovalCommand('approved'), 'approve');
+    assert.equal(parseNativePlanningApprovalCommand('yes'), 'approve');
+    assert.equal(parseNativePlanningApprovalCommand('reject'), 'reject');
+    assert.equal(parseNativePlanningApprovalCommand('abort'), 'abort');
+    assert.equal(parseNativePlanningApprovalCommand('status'), 'status');
+    assert.equal(parseNativePlanningApprovalCommand(''), 'help');
+    assert.equal(parseNativePlanningApprovalCommand('continue'), 'unknown');
+  });
+
+  it('defaults to external mode for non-TTY launchers', () => {
+    const input = Readable.from([]);
+    Object.defineProperty(input, 'isTTY', { value: false });
+    assert.equal(resolveNativePlanningApprovalMode(undefined, input), 'external');
+    assert.equal(resolveNativePlanningApprovalMode('interactive', input), 'interactive');
+  });
+
+  it('creates .plan-approved only after an explicit interactive approval command', async () => {
+    const fixture = approvalFixture();
+    const output = collectOutput();
+
+    try {
+      const result = await runNativePlanningApprovalGate({
+        issue: 'HOK-2544',
+        planPath: fixture.planPath,
+        approvalMarkerPath: fixture.approvalMarkerPath,
+        workflowAbortMarkerPath: fixture.workflowAbortMarkerPath,
+        transcriptPath: join(fixture.dir, 'transcript.jsonl'),
+        provider: 'openrouter',
+        model: 'z-ai/glm-5.2',
+        mode: 'interactive',
+        input: Readable.from(['approved\n']),
+        output: output.writable,
+      });
+
+      assert.equal(result.decision, 'approved');
+      assert.equal(existsSync(fixture.approvalMarkerPath), true);
+      assert.equal(existsSync(fixture.workflowAbortMarkerPath), false);
+      assert.match(output.text(), /Native plan ready for approval/);
+      assert.match(output.text(), /Plan approved\. Created/);
+    } finally {
+      cleanup(fixture.dir);
+    }
+  });
+
+  it('creates .workflow-aborted without approving when the operator aborts', async () => {
+    const fixture = approvalFixture();
+    const output = collectOutput();
+
+    try {
+      const result = await runNativePlanningApprovalGate({
+        issue: 'HOK-2544',
+        planPath: fixture.planPath,
+        approvalMarkerPath: fixture.approvalMarkerPath,
+        workflowAbortMarkerPath: fixture.workflowAbortMarkerPath,
+        transcriptPath: join(fixture.dir, 'transcript.jsonl'),
+        provider: 'openrouter',
+        model: 'z-ai/glm-5.2',
+        mode: 'interactive',
+        input: Readable.from(['abort\n']),
+        output: output.writable,
+      });
+
+      assert.equal(result.decision, 'aborted');
+      assert.equal(existsSync(fixture.approvalMarkerPath), false);
+      assert.equal(existsSync(fixture.workflowAbortMarkerPath), true);
+      assert.match(output.text(), /Workflow abort requested/);
+    } finally {
+      cleanup(fixture.dir);
+    }
+  });
+
+  it('external mode prints marker instructions and does not approve', async () => {
+    const fixture = approvalFixture();
+    const output = collectOutput();
+
+    try {
+      const result = await runNativePlanningApprovalGate({
+        issue: 'HOK-2544',
+        planPath: fixture.planPath,
+        approvalMarkerPath: fixture.approvalMarkerPath,
+        workflowAbortMarkerPath: fixture.workflowAbortMarkerPath,
+        transcriptPath: join(fixture.dir, 'transcript.jsonl'),
+        provider: 'openrouter',
+        model: 'z-ai/glm-5.2',
+        mode: 'external',
+        input: Readable.from([]),
+        output: output.writable,
+      });
+
+      assert.equal(result.decision, 'external');
+      assert.equal(existsSync(fixture.approvalMarkerPath), false);
+      assert.equal(existsSync(fixture.workflowAbortMarkerPath), false);
+      assert.match(output.text(), /Native planning is awaiting external approval/);
+      assert.match(output.text(), new RegExp(`touch ${fixture.approvalMarkerPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+    } finally {
+      cleanup(fixture.dir);
+    }
+  });
+});
 
 describe('launchNativePlanning', () => {
   it('writes plan.md, leaves approval to the monitor, and idles the native hook on success', async () => {
