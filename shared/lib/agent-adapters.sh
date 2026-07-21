@@ -1377,6 +1377,7 @@ Before creating .coding-complete, verify ALL of these are true:
 - All tests pass (run the test/lint commands)
 - No compilation errors
 - Changes are committed to git
+- If full verification is blocked by environmental or pre-existing failures, do not stop after reporting the blocker. Write "$feature_dir/.coding-blocked-completion.json" using the shape below before finishing.
 If ANY item is false, continue working. Do NOT create the marker.
 
 ### When Verification Is Blocked
@@ -1387,6 +1388,8 @@ Write "$feature_dir/.coding-blocked-completion.json" only when ALL of these are 
 - Targeted/scoped verification passed.
 - Remaining verification blockers are clearly unrelated, pre-existing, or environmental.
 - You are not comfortable creating .coding-complete.
+
+CRITICAL: If your final response reports that implementation is committed but verification is blocked, you MUST write "$feature_dir/.coding-blocked-completion.json" before ending the response. Do not say "I did not create .coding-complete" without also having written "$feature_dir/.coding-blocked-completion.json". The workflow monitor cannot recover from a terminal blocked-completion report unless the artifact exists.
 
 Use this compact JSON shape:
 
