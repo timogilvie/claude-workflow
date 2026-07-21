@@ -6153,7 +6153,7 @@ merge_queue_enrich_ready_artifacts() {
 
 refresh_ready_merge_queue_tick() {
   local now input_file output_file input_json output_json config_json
-  local issue phase slug pr state_dir ready_status ready_verdict stored_base current_main queue_state wt_dir workflow_status
+  local issue phase slug pr state_dir ready_status ready_verdict stored_base current_main queue_state wt_dir workflow_status pr_state_val
   local ready_prs='[]'
 
   : > "$MERGE_QUEUE_SELECTION_FILE"
@@ -6186,6 +6186,8 @@ refresh_ready_merge_queue_tick() {
       continue
     fi
 
+    pr_state_val="$(pr_state "$pr")"
+
     if [[ "$ready_status" == "completed" && ( "$ready_verdict" == "pass" || "$ready_verdict" == "warn" ) && -n "$current_main" && "$stored_base" != "$current_main" && "$queue_state" != "merge-candidate" ]]; then
       mark_ready_stale "$issue" "$state_dir" "$stored_base" "$current_main"
       queue_state="ready-stale"
@@ -6201,6 +6203,7 @@ refresh_ready_merge_queue_tick() {
         --arg ready_base_sha "$stored_base" \
         --arg queue_state "$queue_state" \
         --arg workflow_status "$workflow_status" \
+        --arg pr_state "$pr_state_val" \
         --arg ready_at "$(jq -r '.finishedAt // .startedAt // empty' "$state_dir/.ready-result.json" 2>/dev/null || echo "")" \
         --arg candidate_promoted_at "$(ready_queue_field "$state_dir" candidatePromotedAt)" \
         --arg candidate_last_progress_at "$(ready_queue_field "$state_dir" candidateLastProgressAt)" \
@@ -6221,7 +6224,8 @@ refresh_ready_merge_queue_tick() {
             candidateLastProgressAt: (if $candidate_last_progress_at == "" then null else $candidate_last_progress_at end),
             mergeRetryInProgressUntil: (if $merge_retry_in_progress_until == "" then null else $merge_retry_in_progress_until end),
             candidateSkippedAt: (if $candidate_skipped_at == "" then null else $candidate_skipped_at end),
-            workflowStatus: (if $workflow_status == "" then null else $workflow_status end)
+            workflowStatus: (if $workflow_status == "" then null else $workflow_status end),
+            prState: (if $pr_state == "" then null else $pr_state end)
           }]
         ')
     fi
