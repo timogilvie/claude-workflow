@@ -734,6 +734,19 @@
                         }
                     },
                     "additionalProperties": false
+                },
+                "eval": {
+                    "type": "object",
+                    "description": "Challenge eval retry controls.",
+                    "properties": {
+                        "retryMaxAttempts": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "default": 1,
+                            "description": "How many eval relaunch attempts to allow before marking the challenge eval path as failed to persist."
+                        }
+                    },
+                    "additionalProperties": false
                 }
             },
             "additionalProperties": false

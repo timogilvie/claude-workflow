@@ -904,6 +904,7 @@ challenge_pair_record_exists() {
 resolve_challenge_pair_hard_failure() {
   local pair_id="$1"
   local primary_key="$pair_id" challenger_key="${pair_id}_c"
+  local primary_exists challenger_exists resolve_output resolve_status resolve_reason
   local retry_max primary_failed challenger_failed primary_completed challenger_completed
   local primary_retry_count challenger_retry_count failed_sides_csv terminal_reason outcome
   local primary_pr challenger_pr primary_model challenger_model primary_pr_url challenger_pr_url
@@ -917,12 +918,30 @@ resolve_challenge_pair_hard_failure() {
   fi
 
   retry_max=$(challenge_eval_hard_failure_max_retries)
+  primary_exists=$(read_state_value "false" --arg i "$primary_key" '.tasks[$i] != null')
+  challenger_exists=$(read_state_value "false" --arg i "$challenger_key" '.tasks[$i] != null')
   primary_failed=$(read_state_value "false" --arg i "$primary_key" '.tasks[$i].evalFailed // false')
   challenger_failed=$(read_state_value "false" --arg i "$challenger_key" '.tasks[$i].evalFailed // false')
   primary_completed=$(read_state_value "false" --arg i "$primary_key" '.tasks[$i].evalCompleted // false')
   challenger_completed=$(read_state_value "false" --arg i "$challenger_key" '.tasks[$i].evalCompleted // false')
   primary_retry_count=$(read_state_value "0" --arg i "$primary_key" '.tasks[$i].evalHardFailureRetryCount // 0')
   challenger_retry_count=$(read_state_value "0" --arg i "$challenger_key" '.tasks[$i].evalHardFailureRetryCount // 0')
+
+  if [[ "$primary_exists" != "true" || "$challenger_exists" != "true" ]]; then
+    resolve_output=$(npx tsx "$TOOLS_DIR/resolve-orphan-challenge-pair.ts" \
+      --pair-id "$pair_id" \
+      --reason orphan-sibling \
+      --repo-dir "$REPO_DIR" 2>/dev/null || true)
+    resolve_status=$(jq -r '.status // empty' <<<"$resolve_output" 2>/dev/null || true)
+    if [[ "$resolve_status" == "resolved" || "$resolve_status" == "already-resolved" ]]; then
+      mark_challenge_compared "$pair_id"
+      if [[ "$resolve_status" == "resolved" ]]; then
+        resolve_reason=$(jq -r '.reason // "orphan-sibling"' <<<"$resolve_output" 2>/dev/null || echo "orphan-sibling")
+        log_warn "challenge pair $pair_id resolved via $resolve_reason"
+      fi
+      return 0
+    fi
+  fi
 
   failed_sides_csv=""
   [[ "$primary_failed" == "true" ]] && failed_sides_csv="primary"
@@ -3469,6 +3488,7 @@ challenge_pair_record_exists() {
 resolve_challenge_pair_hard_failure() {
   local pair_id="$1"
   local primary_key="$pair_id" challenger_key="${pair_id}_c"
+  local primary_exists challenger_exists resolve_output resolve_status resolve_reason
   local retry_max primary_failed challenger_failed primary_completed challenger_completed
   local primary_retry_count challenger_retry_count failed_sides_csv terminal_reason outcome
   local primary_pr challenger_pr primary_model challenger_model primary_pr_url challenger_pr_url
@@ -3482,12 +3502,30 @@ resolve_challenge_pair_hard_failure() {
   fi
 
   retry_max=$(challenge_eval_hard_failure_max_retries)
+  primary_exists=$(read_state_value "false" --arg i "$primary_key" '.tasks[$i] != null')
+  challenger_exists=$(read_state_value "false" --arg i "$challenger_key" '.tasks[$i] != null')
   primary_failed=$(read_state_value "false" --arg i "$primary_key" '.tasks[$i].evalFailed // false')
   challenger_failed=$(read_state_value "false" --arg i "$challenger_key" '.tasks[$i].evalFailed // false')
   primary_completed=$(read_state_value "false" --arg i "$primary_key" '.tasks[$i].evalCompleted // false')
   challenger_completed=$(read_state_value "false" --arg i "$challenger_key" '.tasks[$i].evalCompleted // false')
   primary_retry_count=$(read_state_value "0" --arg i "$primary_key" '.tasks[$i].evalHardFailureRetryCount // 0')
   challenger_retry_count=$(read_state_value "0" --arg i "$challenger_key" '.tasks[$i].evalHardFailureRetryCount // 0')
+
+  if [[ "$primary_exists" != "true" || "$challenger_exists" != "true" ]]; then
+    resolve_output=$(npx tsx "$TOOLS_DIR/resolve-orphan-challenge-pair.ts" \
+      --pair-id "$pair_id" \
+      --reason orphan-sibling \
+      --repo-dir "$REPO_DIR" 2>/dev/null || true)
+    resolve_status=$(jq -r '.status // empty' <<<"$resolve_output" 2>/dev/null || true)
+    if [[ "$resolve_status" == "resolved" || "$resolve_status" == "already-resolved" ]]; then
+      mark_challenge_compared "$pair_id"
+      if [[ "$resolve_status" == "resolved" ]]; then
+        resolve_reason=$(jq -r '.reason // "orphan-sibling"' <<<"$resolve_output" 2>/dev/null || echo "orphan-sibling")
+        log_warn "challenge pair $pair_id resolved via $resolve_reason"
+      fi
+      return 0
+    fi
+  fi
 
   failed_sides_csv=""
   [[ "$primary_failed" == "true" ]] && failed_sides_csv="primary"
@@ -3672,6 +3710,13 @@ check_routing_complete() {
 write_stage_result() {
   local feature_dir="$1" stage="$2" status="$3"
   local agent="${4:-}" model="${5:-}" notes="${6:-}" artifacts_json="${7:-}"
+  local result_file="$feature_dir/.${stage}-result.json" previous_status=""
+
+  # Capture the transition before either writer replaces the result. A malformed
+  # or missing result is intentionally treated as an unknown prior state.
+  if [[ -f "$result_file" ]]; then
+    previous_status="$(jq -r '.status // empty' "$result_file" 2>/dev/null || true)"
+  fi
 
   # Try the TypeScript CLI first (HOK-1192: structured writes with artifacts support)
   if [[ -n "${TOOLS_DIR:-}" ]]; then
@@ -3682,14 +3727,13 @@ write_stage_result() {
     [[ -n "$artifacts_json" ]] && cli_args+=(--artifacts "$artifacts_json")
 
     if npx tsx "$TOOLS_DIR/stage-result-cli.ts" write "${cli_args[@]}" 2>/dev/null; then
-      _write_stage_result_trace_event "$feature_dir" "$stage" "$status" "$agent" "$model"
+      _write_stage_result_trace_event "$feature_dir" "$stage" "$status" "$agent" "$model" "$previous_status"
       return 0
     fi
     log_warn "write_stage_result: TypeScript CLI failed, falling back to shell"
   fi
 
   # Fallback: inline JSON construction (legacy path)
-  local result_file="$feature_dir/.${stage}-result.json"
   local now
   now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
@@ -3721,13 +3765,13 @@ write_stage_result() {
 }
 EOF
   mv "$tmp" "$result_file"
-  _write_stage_result_trace_event "$feature_dir" "$stage" "$status" "$agent" "$model"
+  _write_stage_result_trace_event "$feature_dir" "$stage" "$status" "$agent" "$model" "$previous_status"
 }
 
 # Emit trace events when a stage result is written (HOK-2259).
 # Best-effort — never fails. Reads trace context from the feature directory.
 _write_stage_result_trace_event() {
-  local feature_dir="$1" stage="$2" status="$3" agent="${4:-}" model="${5:-}"
+  local feature_dir="$1" stage="$2" status="$3" agent="${4:-}" model="${5:-}" previous_status="${6:-}"
   local _tid _iid _sl
   _tid=$(trace_read_id "$feature_dir" 2>/dev/null || true)
   [[ -n "$_tid" ]] || return 0
@@ -3737,12 +3781,15 @@ _write_stage_result_trace_event() {
 
   case "$status" in
     running)
+      [[ "$previous_status" != "running" ]] || return 0
       trace_append_event "$feature_dir" "$_tid" "$_iid" "$_sl" "$stage" "phase_started" "ok" "$model" "$agent" 2>/dev/null || true
       ;;
     completed)
+      [[ "$previous_status" != "completed" ]] || return 0
       trace_append_event "$feature_dir" "$_tid" "$_iid" "$_sl" "$stage" "phase_completed" "ok" "$model" "$agent" 2>/dev/null || true
       ;;
     failed|aborted)
+      [[ "$previous_status" != "$status" ]] || return 0
       trace_append_event "$feature_dir" "$_tid" "$_iid" "$_sl" "$stage" "phase_completed" "failed" "$model" "$agent" \
         "$(jq -cn --arg st "$status" '{meta:{stageStatus:$st}}' 2>/dev/null || echo '{}')" 2>/dev/null || true
       ;;
@@ -4337,6 +4384,38 @@ emit_blocked_completion_attention() {
   return 0
 }
 
+blocked_completion_live_process_mode() {
+  case "${WAVEMILL_BLOCKED_COMPLETION_LIVE_PROCESS_MODE:-attention}" in
+    terminate) printf 'terminate\n' ;;
+    *) printf 'attention\n' ;;
+  esac
+}
+
+emit_blocked_completion_liveness_attention() {
+  local issue="$1" feature_dir="$2" win="$3" detail="$4" next_action="$5"
+  local artifact_record summary reason artifact_mtime
+  local hook_protocol="$LIB_DIR/../hooks/wavemill-hook-protocol.sh"
+
+  artifact_record="$(read_blocked_completion "$feature_dir")"
+  IFS=$'\001' read -r summary reason artifact_mtime <<< "$artifact_record"
+
+  if blocked_completion_should_announce "$feature_dir" "$artifact_mtime"; then
+    log "status" "$issue needs attention: $detail. $next_action"
+    mark_blocked_completion_announced "$feature_dir" "$artifact_mtime"
+  fi
+
+  if [[ -f "$hook_protocol" ]]; then
+    source "$hook_protocol" || true
+    WAVEMILL_SESSION="$SESSION" WAVEMILL_ISSUE="$issue" \
+      wavemill_hook_write "blocked" "blocked_completion_liveness" "$detail" "${current_agent:-unknown}" "$next_action" || true
+  fi
+
+  set_window_attention_state "$win" "needs-user"
+  AUTO_ADVANCE_BLOCKED_COMPLETION_HANDLED="attention"
+  active_count=$((active_count + 1))
+  return 0
+}
+
 write_codex_capacity_blocked_completion() {
   local issue="$1" feature_dir="$2" model="${3:-}" source="${4:-unknown}"
   local artifact recovery_marker artifact_tmp recovery_tmp slug timestamp
@@ -4457,9 +4536,31 @@ blocked_completion_commit_matches_head() {
   return 1
 }
 
-blocked_completion_auto_allowed_dirty_path() {
+# wavemill_owned_feature_artifact_path <normalized_path> <slug>
+# Returns 0 when the path is a Wavemill-owned artifact scoped to features/<slug>/.
+wavemill_owned_feature_artifact_path() {
   local normalized_path="$1" slug="$2"
   local artifact_prefix="features/$slug/"
+
+  if [[ "$normalized_path" == ${artifact_prefix}.* ]]; then
+    return 0
+  fi
+
+  case "$normalized_path" in
+    "${artifact_prefix}plan.md"|\
+    "${artifact_prefix}task-packet"*.md|\
+    "${artifact_prefix}selected-task.json"|\
+    "${artifact_prefix}trace.jsonl"|\
+    "${artifact_prefix}routing.jsonl")
+      return 0
+      ;;
+  esac
+
+  return 1
+}
+
+blocked_completion_auto_allowed_dirty_path() {
+  local normalized_path="$1" slug="$2"
 
   if [[ "$normalized_path" == .wavemill/* ]]; then
     return 0
@@ -4470,19 +4571,7 @@ blocked_completion_auto_allowed_dirty_path() {
     return 0
   fi
 
-  if [[ "$normalized_path" == ${artifact_prefix}.* ]]; then
-    return 0
-  fi
-
-  case "$normalized_path" in
-    "${artifact_prefix}plan.md"|\
-    "${artifact_prefix}task-packet"*.md|\
-    "${artifact_prefix}selected-task.json")
-      return 0
-      ;;
-  esac
-
-  return 1
+  wavemill_owned_feature_artifact_path "$normalized_path" "$slug"
 }
 
 blocked_completion_worktree_clean_for_auto() {
@@ -4647,8 +4736,8 @@ blocked_completion_validate_for_advance() {
       (.committed | type == "boolean") and
       (.passingChecks | type == "array") and
       all(.passingChecks[]?; type == "string") and
-      (.blockingChecks | type == "array") and
-      all(.blockingChecks[]?; type == "string") and
+      ((has("blockingChecks") | not) or (.blockingChecks | type == "array")) and
+      all((.blockingChecks // [])[]?; type == "string") and
       (.blockingReason | type == "string") and
       (.evidence | type == "string") and
       (.recommendedAction | type == "string") and
@@ -4687,8 +4776,6 @@ blocked_completion_validate_for_advance() {
       decision_reason="${decision_reason:-recommendedAction must be advance_to_review}"
     elif [[ "$has_passing_checks" != true ]]; then
       decision_reason="${decision_reason:-passingChecks must be non-empty}"
-    elif [[ "$has_blocking_checks" != true ]]; then
-      decision_reason="${decision_reason:-blockingChecks must be non-empty}"
     fi
   fi
 
@@ -4777,24 +4864,90 @@ blocked_completion_validate_for_advance() {
 
 complete_coding_advance() {
   local issue="$1" feature_dir="$2" audit_path="$3" stage_notes="$4"
-  local audit_tmp marker_path advance_agent
+  local audit_timestamp="${5:-}" summary="${6:-}" slug="${7:-}" passing_count="${8:-}" blocking_count="${9:-}" decision_json="${10:-}" blocked_json="${11:-}"
+  local marker_path advance_agent result_path result_model finished_at audit_tmp
 
-  audit_tmp="$(mktemp "$audit_path.tmp.XXXXXX" 2>/dev/null)" || {
-    log_warn "$issue advance failed: could not create audit artifact"
-    return 1
-  }
-  cat > "$audit_tmp"
-  if ! mv "$audit_tmp" "$audit_path"; then
-    rm -f "$audit_tmp"
-    log_warn "$issue advance failed: could not finalize audit artifact"
-    return 1
+  if [[ -n "$audit_timestamp" ]]; then
+    if [[ ! -f "$audit_path" ]] && ! printf '{}\n' | write_json_artifact "$audit_path"; then
+      log_warn "$issue advance failed: could not initialize audit artifact"
+      return 1
+    fi
+
+    if ! state_mutate "$audit_path" '
+        .timestamp = $timestamp
+        | .issue = $issue
+        | .slug = $slug
+        | .commit = ($validation.commit // "")
+        | .reason = $reason
+        | .blocked_completion_path = $blockedCompletionPath
+        | .blocked_completion_summary = $blockedCompletionSummary
+        | .guardrails = ($validation.guardrails // {})
+        | .passing_checks_count = ($passingChecksCount | tonumber)
+        | .blocking_checks_count = ($blockingChecksCount | tonumber)
+        | .blockedCompletion = (($blocked[0] // {}) | {
+            stage,
+            implementationComplete,
+            committed,
+            commit,
+            passingChecks,
+            blockingChecks,
+            blockingReason,
+            evidence,
+            recommendedAction
+          })
+      ' \
+      --arg timestamp "$audit_timestamp" \
+      --arg issue "$issue" \
+      --arg slug "$slug" \
+      --arg reason "automatic advance from valid blocked-completion artifact" \
+      --arg blockedCompletionPath "features/$slug/.coding-blocked-completion.json" \
+      --arg blockedCompletionSummary "$summary" \
+      --arg passingChecksCount "$passing_count" \
+      --arg blockingChecksCount "$blocking_count" \
+      --argjson validation "$decision_json" \
+      --argjson blocked "$blocked_json"; then
+      log_warn "$issue advance failed: could not finalize audit artifact"
+      return 1
+    fi
+  else
+    audit_tmp="$(mktemp "$audit_path.tmp.XXXXXX" 2>/dev/null)" || {
+      log_warn "$issue advance failed: could not create audit artifact"
+      return 1
+    }
+    cat > "$audit_tmp"
+    if ! mv "$audit_tmp" "$audit_path"; then
+      rm -f "$audit_tmp"
+      log_warn "$issue advance failed: could not finalize audit artifact"
+      return 1
+    fi
   fi
 
   advance_agent="${current_agent:-}"
-  if ! write_stage_result "$feature_dir" "coding" "completed" "$advance_agent" "$(resolve_stage_result_model "$feature_dir" "coding" "claude-opus-4-7")" "$stage_notes"; then
+  result_model="$(resolve_stage_result_model "$feature_dir" "coding" "claude-opus-4-7")"
+  result_path="$feature_dir/.coding-result.json"
+  if [[ ! -f "$result_path" ]]; then
+    log_warn "$issue advance failed: missing coding stage result"
+    return 1
+  fi
+
+  finished_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  if ! state_mutate "$result_path" '
+      .stage = "coding"
+      | .status = "completed"
+      | .startedAt = (.startedAt // $finishedAt)
+      | .finishedAt = $finishedAt
+      | .agent = $agent
+      | .model = $model
+      | .notes = $notes
+    ' \
+    --arg finishedAt "$finished_at" \
+    --arg agent "$advance_agent" \
+    --arg model "$result_model" \
+    --arg notes "$stage_notes"; then
     log_warn "$issue advance failed: could not update coding stage result"
     return 1
   fi
+  _write_stage_result_trace_event "$feature_dir" "coding" "completed" "$advance_agent" "$result_model"
 
   marker_path="$feature_dir/.coding-complete"
   if ! touch "$marker_path"; then
@@ -4802,15 +4955,22 @@ complete_coding_advance() {
     return 1
   fi
 
+  quarantine_completed_coding_pane "$issue" "$feature_dir"
+
   return 0
 }
 
 auto_advance_blocked_completion() {
-  local issue="$1" feature_dir="$2"
+  local issue="$1" feature_dir="$2" win_target="${3:-}" win="${4:-$1-$(basename "$2")}"
   local slug artifact_path artifact_record summary reason artifact_mtime decision_json
   local audit_path audit_timestamp passing_count blocking_count blocked_json
+  local pane_pid live_process_mode liveness_rc
+  local blocking_command next_action
+  local -a blocking_commands=()
+  local -a MILL_BLOCKING_PROCESS_PIDS=()
 
   AUTO_ADVANCE_BLOCKED_COMPLETION_REASON=""
+  AUTO_ADVANCE_BLOCKED_COMPLETION_HANDLED=""
   artifact_path="$feature_dir/.coding-blocked-completion.json"
   [[ -f "$artifact_path" ]] || return 1
 
@@ -4827,41 +4987,95 @@ auto_advance_blocked_completion() {
   passing_count="$(jq -r '(.passingChecks // []) | length' "$artifact_path" 2>/dev/null || echo 0)"
   blocking_count="$(jq -r '(.blockingChecks // []) | length' "$artifact_path" 2>/dev/null || echo 0)"
   blocked_json="$(jq -c '[.]' "$artifact_path")"
+  if ! mapfile -t blocking_commands < <(jq -r '(.blockingChecks // [])[]? | strings' "$artifact_path" 2>/dev/null); then
+    AUTO_ADVANCE_BLOCKED_COMPLETION_REASON="blocked-completion liveness checks could not parse blocking checks"
+    emit_blocked_completion_liveness_attention \
+      "$issue" \
+      "$feature_dir" \
+      "$win" \
+      "blocked-completion auto-advance refused because liveness is indeterminate (could not parse blocking checks)" \
+      "Inspect the coding pane for $issue and resolve the blocked completion manually."
+    return 1
+  fi
 
-  if ! jq -n \
-    --arg timestamp "$audit_timestamp" \
-    --arg issue "$issue" \
-    --arg slug "$slug" \
-    --arg reason "automatic advance from valid blocked-completion artifact" \
-    --arg blockedCompletionPath "features/$slug/.coding-blocked-completion.json" \
-    --arg blockedCompletionSummary "$summary" \
-    --argjson passingChecksCount "$passing_count" \
-    --argjson blockingChecksCount "$blocking_count" \
-    --argjson validation "$decision_json" \
-    --argjson blocked "$blocked_json" \
-    '{
-      timestamp: $timestamp,
-      issue: $issue,
-      slug: $slug,
-      commit: ($validation.commit // ""),
-      reason: $reason,
-      blocked_completion_path: $blockedCompletionPath,
-      blocked_completion_summary: $blockedCompletionSummary,
-      guardrails: ($validation.guardrails // {}),
-      passing_checks_count: $passingChecksCount,
-      blocking_checks_count: $blockingChecksCount,
-      blockedCompletion: (($blocked[0] // {}) | {
-        stage,
-        implementationComplete,
-        committed,
-        commit,
-        passingChecks,
-        blockingChecks,
-        blockingReason,
-        evidence,
-        recommendedAction
-      })
-    }' | complete_coding_advance "$issue" "$feature_dir" "$audit_path" "Blocked verification accepted automatically; review may proceed"; then
+  pane_pid="$(tmux display-message -p -t "$win_target" '#{pane_pid}' 2>/dev/null || true)"
+  mill_pane_has_live_blocking_process "$pane_pid" "${blocking_commands[@]}"
+  liveness_rc=$?
+  if [[ "$liveness_rc" -eq 2 ]]; then
+    AUTO_ADVANCE_BLOCKED_COMPLETION_REASON="blocked-completion liveness indeterminate: ${MILL_BLOCKING_PROCESS_REASON:-unknown reason}"
+    emit_blocked_completion_liveness_attention \
+      "$issue" \
+      "$feature_dir" \
+      "$win" \
+      "blocked-completion auto-advance refused because liveness is indeterminate (${MILL_BLOCKING_PROCESS_REASON:-unknown reason})" \
+      "Inspect the coding pane for $issue and resolve the blocked completion manually."
+    return 1
+  fi
+
+  if [[ "$liveness_rc" -eq 0 ]]; then
+    blocking_command="${MILL_BLOCKING_PROCESS_COMMAND:-live blocking process}"
+    next_action="Stop the live blocking command for $issue (${blocking_command}), then retry review."
+    live_process_mode="$(blocked_completion_live_process_mode)"
+    if [[ "$live_process_mode" == "terminate" ]] && (( ${#MILL_BLOCKING_PROCESS_PIDS[@]} > 0 )); then
+      if mill_terminate_blocking_processes "$pane_pid" "${MILL_BLOCKING_PROCESS_PIDS[@]}"; then
+        mill_pane_has_live_blocking_process "$pane_pid" "${blocking_commands[@]}"
+        liveness_rc=$?
+        if [[ "$liveness_rc" -eq 1 ]]; then
+          log "status" "[auto-advance] $issue terminated live blocking process before coding handoff: $blocking_command"
+        elif [[ "$liveness_rc" -eq 2 ]]; then
+          AUTO_ADVANCE_BLOCKED_COMPLETION_REASON="blocked-completion liveness indeterminate after termination: ${MILL_BLOCKING_PROCESS_REASON:-unknown reason}"
+          emit_blocked_completion_liveness_attention \
+            "$issue" \
+            "$feature_dir" \
+            "$win" \
+            "blocked-completion auto-advance refused because post-termination liveness is indeterminate (${MILL_BLOCKING_PROCESS_REASON:-unknown reason})" \
+            "Inspect the coding pane for $issue and confirm the blocking command has stopped."
+          return 1
+        else
+          blocking_command="${MILL_BLOCKING_PROCESS_COMMAND:-$blocking_command}"
+          AUTO_ADVANCE_BLOCKED_COMPLETION_REASON="live blocking process still running after termination attempt"
+          emit_blocked_completion_liveness_attention \
+            "$issue" \
+            "$feature_dir" \
+            "$win" \
+            "blocked-completion auto-advance refused because a live blocking command is still running after termination attempt ($blocking_command)" \
+            "Inspect the coding pane for $issue and stop the remaining blocking command manually."
+          return 1
+        fi
+      else
+        AUTO_ADVANCE_BLOCKED_COMPLETION_REASON="failed to terminate live blocking process"
+        emit_blocked_completion_liveness_attention \
+          "$issue" \
+          "$feature_dir" \
+          "$win" \
+          "blocked-completion auto-advance refused because the live blocking command could not be terminated ($blocking_command)" \
+          "Inspect the coding pane for $issue and stop the blocking command manually."
+        return 1
+      fi
+    else
+      AUTO_ADVANCE_BLOCKED_COMPLETION_REASON="live blocking process still running"
+      emit_blocked_completion_liveness_attention \
+        "$issue" \
+        "$feature_dir" \
+        "$win" \
+        "blocked-completion auto-advance refused because a live blocking command is still running ($blocking_command)" \
+        "$next_action"
+      return 1
+    fi
+  fi
+
+  if ! complete_coding_advance \
+    "$issue" \
+    "$feature_dir" \
+    "$audit_path" \
+    "Blocked verification accepted automatically; review may proceed" \
+    "$audit_timestamp" \
+    "$summary" \
+    "$slug" \
+    "$passing_count" \
+    "$blocking_count" \
+    "$decision_json" \
+    "$blocked_json"; then
     return 1
   fi
 
@@ -5256,6 +5470,116 @@ emit_native_launch_failure_attention() {
   return 0
 }
 
+coding_missing_blocked_completion_announce_marker() {
+  local feature_dir="$1"
+  printf '%s\n' "$feature_dir/.missing-blocked-completion-announced"
+}
+
+_coding_terminal_blocked_completion_detected() {
+  local feature_dir="$1" win_target="$2"
+  local coding_status pane_tail line lower_line
+  local commit_phrase="" blocked_phrase=""
+
+  _CODING_TERMINAL_BLOCKED_COMMIT_PHRASE=""
+  _CODING_TERMINAL_BLOCKED_BLOCKED_PHRASE=""
+
+  coding_status="$(read_stage_status "$feature_dir" "coding")"
+  [[ "$coding_status" == "running" ]] || return 1
+  [[ ! -f "$feature_dir/.coding-complete" ]] || return 1
+  [[ ! -f "$feature_dir/.coding-blocked-completion.json" ]] || return 1
+  [[ -n "$win_target" ]] || return 1
+  _pane_is_dead_or_idle "$win_target" 2>/dev/null || return 1
+
+  pane_tail="$(tmux capture-pane -p -t "$win_target" -S -500 2>/dev/null || true)"
+  [[ -n "$pane_tail" ]] || return 1
+
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    lower_line="$(printf '%s' "$line" | tr '[:upper:]' '[:lower:]')"
+
+    if [[ -z "$commit_phrase" ]] && [[ \
+      "$lower_line" == *"committed as"* || \
+      "$lower_line" == *"implementation is committed"* || \
+      "$lower_line" == *"implementation committed"* || \
+      "$lower_line" == *"changes committed"* \
+    ]]; then
+      commit_phrase="$line"
+    fi
+
+    if [[ -z "$blocked_phrase" ]] && [[ \
+      "$lower_line" == *"did not create .coding-complete"* || \
+      "$lower_line" == *"verification is blocked"* || \
+      "$lower_line" == *"verification blocked"* || \
+      "$lower_line" == *"environmentally blocked"* || \
+      "$lower_line" == *"environmental blocker"* \
+    ]]; then
+      blocked_phrase="$line"
+    fi
+  done <<< "$pane_tail"
+
+  [[ -n "$commit_phrase" ]] || return 1
+  [[ -n "$blocked_phrase" ]] || return 1
+
+  _CODING_TERMINAL_BLOCKED_COMMIT_PHRASE="$commit_phrase"
+  _CODING_TERMINAL_BLOCKED_BLOCKED_PHRASE="$blocked_phrase"
+  return 0
+}
+
+emit_terminal_blocked_completion_attention() {
+  local issue="$1" slug="$2" feature_dir="$3" win="$4" win_target="$5"
+  local artifact_rel_path audit_path announce_marker detected_at tmp_artifact
+  local action observed_phrases_json
+
+  if ! _coding_terminal_blocked_completion_detected "$feature_dir" "$win_target"; then
+    return 1
+  fi
+
+  artifact_rel_path="features/$slug/.coding-blocked-completion.json"
+  audit_path="$feature_dir/.coding-missing-blocked-completion.json"
+  announce_marker="$(coding_missing_blocked_completion_announce_marker "$feature_dir")"
+  detected_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  action="Create $artifact_rel_path or run advance $issue."
+  observed_phrases_json="$(
+    printf '%s\n%s\n' \
+      "$_CODING_TERMINAL_BLOCKED_COMMIT_PHRASE" \
+      "$_CODING_TERMINAL_BLOCKED_BLOCKED_PHRASE" \
+      | jq -R . \
+      | jq -s .
+  )"
+
+  if [[ ! -f "$audit_path" ]]; then
+    tmp_artifact="$(mktemp "$audit_path.tmp.XXXXXX" 2>/dev/null)" || true
+    if [[ -n "$tmp_artifact" ]]; then
+      jq -n \
+        --arg issue "$issue" \
+        --arg slug "$slug" \
+        --arg detectedAt "$detected_at" \
+        --arg missingArtifact "$artifact_rel_path" \
+        --arg action "$action" \
+        --argjson observedPhrases "$observed_phrases_json" \
+        '{
+          issue: $issue,
+          slug: $slug,
+          detectedAt: $detectedAt,
+          observedPhrases: $observedPhrases,
+          missingArtifact: $missingArtifact,
+          action: $action
+        }' > "$tmp_artifact" 2>/dev/null \
+        && mv "$tmp_artifact" "$audit_path" 2>/dev/null \
+        || rm -f "$tmp_artifact"
+    fi
+  fi
+
+  if [[ ! -f "$announce_marker" ]]; then
+    log "status" "$issue needs attention: coding appears complete but .coding-blocked-completion.json is missing. Create $artifact_rel_path or run \"advance $issue\" to continue."
+    : > "$announce_marker"
+  fi
+
+  set_window_attention_state "$win" "needs-user"
+  active_count=$((active_count + 1))
+  return 0
+}
+
 # Reject a plan: transition planning from awaiting_user to failed.
 # Usage: reject_plan <feature_dir> [agent] [model]
 reject_plan() {
@@ -5593,6 +5917,23 @@ _tmux_task_window_target() {
   fi
 
   return 1
+}
+
+# A completed coding agent must not remain available for unrelated interactive
+# input while the controller advances the task. This is deliberately best-effort:
+# result state is authoritative and review will recreate a task window as needed.
+quarantine_completed_coding_pane() {
+  local issue="$1" feature_dir="$2" worktree="${3:-}"
+  local slug target
+
+  command -v tmux >/dev/null 2>&1 || return 0
+  slug="$(basename "$feature_dir")"
+  [[ -n "$worktree" ]] || worktree="$(dirname "$(dirname "$feature_dir")")"
+  target="$(_tmux_task_window_target "$SESSION" "$issue" "$slug" "${STATE_FILE:-}" "$worktree" 2>/dev/null || true)"
+  [[ -n "$target" ]] || return 0
+
+  tmux kill-window -t "$target" 2>/dev/null || true
+  return 0
 }
 
 _ensure_task_window_exists() {
@@ -6280,7 +6621,7 @@ merge_queue_enrich_ready_artifacts() {
 
 refresh_ready_merge_queue_tick() {
   local now input_file output_file input_json output_json config_json
-  local issue phase slug pr state_dir ready_status ready_verdict stored_base current_main queue_state wt_dir workflow_status
+  local issue phase slug pr state_dir ready_status ready_verdict stored_base current_main queue_state wt_dir workflow_status pr_state_val
   local ready_prs='[]'
 
   : > "$MERGE_QUEUE_SELECTION_FILE"
@@ -6313,6 +6654,8 @@ refresh_ready_merge_queue_tick() {
       continue
     fi
 
+    pr_state_val="$(pr_state "$pr")"
+
     if [[ "$ready_status" == "completed" && ( "$ready_verdict" == "pass" || "$ready_verdict" == "warn" ) && -n "$current_main" && "$stored_base" != "$current_main" && "$queue_state" != "merge-candidate" ]]; then
       mark_ready_stale "$issue" "$state_dir" "$stored_base" "$current_main"
       queue_state="ready-stale"
@@ -6328,6 +6671,7 @@ refresh_ready_merge_queue_tick() {
         --arg ready_base_sha "$stored_base" \
         --arg queue_state "$queue_state" \
         --arg workflow_status "$workflow_status" \
+        --arg pr_state "$pr_state_val" \
         --arg ready_at "$(jq -r '.finishedAt // .startedAt // empty' "$state_dir/.ready-result.json" 2>/dev/null || echo "")" \
         --arg candidate_promoted_at "$(ready_queue_field "$state_dir" candidatePromotedAt)" \
         --arg candidate_last_progress_at "$(ready_queue_field "$state_dir" candidateLastProgressAt)" \
@@ -6348,7 +6692,8 @@ refresh_ready_merge_queue_tick() {
             candidateLastProgressAt: (if $candidate_last_progress_at == "" then null else $candidate_last_progress_at end),
             mergeRetryInProgressUntil: (if $merge_retry_in_progress_until == "" then null else $merge_retry_in_progress_until end),
             candidateSkippedAt: (if $candidate_skipped_at == "" then null else $candidate_skipped_at end),
-            workflowStatus: (if $workflow_status == "" then null else $workflow_status end)
+            workflowStatus: (if $workflow_status == "" then null else $workflow_status end),
+            prState: (if $pr_state == "" then null else $pr_state end)
           }]
         ')
     fi
@@ -7845,6 +8190,35 @@ maybe_run_challenge_comparison() {
 
   launch_tracked_job "comparison" "$job_id" "" "" "$pair_id" "${primary_pr},${challenger_pr}" "$pid" "240" "$log_path" "$result_path"
   log "status" "  ⚖ Challenge comparison running in background for $pair_id (pid $pid)"
+}
+
+maybe_resolve_unresolvable_challenge_pair() {
+  local issue="$1"
+  local pair_id resolve_output resolve_status resolve_reason
+
+  pair_id=$(get_task_meta "$issue" "challengePairId")
+  [[ -n "$pair_id" ]] || return 0
+
+  if challenge_pair_record_exists "$pair_id"; then
+    mark_challenge_compared "$pair_id" >/dev/null || true
+    return 0
+  fi
+
+  resolve_output=$(npx tsx "$TOOLS_DIR/resolve-orphan-challenge-pair.ts" \
+    --pair-id "$pair_id" \
+    --repo-dir "$REPO_DIR" 2>/dev/null || true)
+  resolve_status=$(jq -r '.status // empty' <<<"$resolve_output" 2>/dev/null || true)
+
+  case "$resolve_status" in
+    resolved)
+      resolve_reason=$(jq -r '.reason // "unknown"' <<<"$resolve_output" 2>/dev/null || echo "unknown")
+      mark_challenge_compared "$pair_id" >/dev/null || true
+      log_warn "challenge pair $pair_id resolved automatically via $resolve_reason"
+      ;;
+    already-resolved)
+      mark_challenge_compared "$pair_id" >/dev/null || true
+      ;;
+  esac
 }
 
 # Archive stage artifacts from worktree before cleanup.
@@ -9649,6 +10023,48 @@ EOF
     fi
   fi
 
+  if ! agent_validate_phase_launch "$task_agent_cmd" "coding" "$task_model" "$REPO_DIR"; then
+    log_error "  Selected coder route is not launchable: agent=$task_agent_cmd model=$task_model"
+    return 1
+  fi
+  if [[ -n "$planner_agent" ]] && ! agent_validate_phase_launch "$planner_agent" "planning" "$planner_model" "$REPO_DIR"; then
+    log_error "  Selected planner route is not launchable: agent=$planner_agent model=$planner_model"
+    return 1
+  fi
+  if [[ -n "$reviewer_agent" ]] && ! agent_validate_phase_launch "$reviewer_agent" "review" "$reviewer_model" "$REPO_DIR"; then
+    log_error "  Selected reviewer route is not launchable: agent=$reviewer_agent model=$reviewer_model"
+    return 1
+  fi
+
+  local challenger_planner_agent="" challenger_reviewer_agent=""
+  if [[ "$challenge_enabled_for_launch" == "true" ]]; then
+    if declare -F agent_resolve_models_for_roles >/dev/null 2>&1; then
+      if agent_resolve_models_for_roles "$challenger_planner" "$challenger_model" "$challenger_reviewer"; then
+        :
+      fi
+      challenger_planner_agent="$(agent_resolve_batch_agent_for_role "planner")"
+      challenger_agent="$(agent_resolve_batch_agent_for_role "coder")"
+      challenger_reviewer_agent="$(agent_resolve_batch_agent_for_role "reviewer")"
+    else
+      [[ -n "$challenger_planner" ]] && challenger_planner_agent="$(agent_resolve_from_model "$challenger_planner" "planning" || true)"
+      [[ -n "$challenger_model" ]] && challenger_agent="$(agent_resolve_from_model "$challenger_model" "coding" || true)"
+      [[ -n "$challenger_reviewer" ]] && challenger_reviewer_agent="$(agent_resolve_from_model "$challenger_reviewer" "review" || true)"
+    fi
+
+    if ! agent_validate_phase_launch "$challenger_agent" "coding" "$challenger_model" "$REPO_DIR"; then
+      log_error "  Selected challenger coder route is not launchable: agent=$challenger_agent model=$challenger_model"
+      return 1
+    fi
+    if [[ -n "$challenger_planner_agent" ]] && ! agent_validate_phase_launch "$challenger_planner_agent" "planning" "$challenger_planner" "$REPO_DIR"; then
+      log_error "  Selected challenger planner route is not launchable: agent=$challenger_planner_agent model=$challenger_planner"
+      return 1
+    fi
+    if [[ -n "$challenger_reviewer_agent" ]] && ! agent_validate_phase_launch "$challenger_reviewer_agent" "review" "$challenger_reviewer" "$REPO_DIR"; then
+      log_error "  Selected challenger reviewer route is not launchable: agent=$challenger_reviewer_agent model=$challenger_reviewer"
+      return 1
+    fi
+  fi
+
   # Save to state ledger (after routing so agent is known)
   local initial_phase="planning"
   # If this task was already marked as a challenge participant (e.g. challenger
@@ -11399,6 +11815,7 @@ monitor_issue_state() {
             clear_coding_uncommitted_output_attention "$FEATURE_DIR"
             # Mark coding as completed (HOK-1177)
             write_stage_result "$FEATURE_DIR" "coding" "completed" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "coding" "claude-opus-4-7")"
+            quarantine_completed_coding_pane "$ISSUE" "$FEATURE_DIR" "${WORKTREE_ROOT}/${SLUG}"
 
             # FORCE_MODEL takes priority, then phase config, then state, then default
             if [[ -n "${FORCE_MODEL:-}" ]]; then
@@ -11464,6 +11881,7 @@ monitor_issue_state() {
               log "status" "$ISSUE → .coding-complete detected, marking coding as completed"
               clear_coding_uncommitted_output_attention "$FEATURE_DIR"
               write_stage_result "$FEATURE_DIR" "coding" "completed" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "coding" "claude-opus-4-7")"
+              quarantine_completed_coding_pane "$ISSUE" "$FEATURE_DIR" "${WORKTREE_ROOT}/${SLUG}"
               # Next iteration will detect resolved_phase == "review" and launch review
               active_count=$((active_count + 1))
               return 0
@@ -11477,9 +11895,12 @@ monitor_issue_state() {
               write_codex_capacity_blocked_completion "$ISSUE" "$FEATURE_DIR" "$codex_capacity_model" "$codex_capacity_source" || true
               write_stage_result "$FEATURE_DIR" "coding" "running" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "coding" "claude-opus-4-7")" "Blocked: Codex model at capacity"
             fi
-            if auto_advance_blocked_completion "$ISSUE" "$FEATURE_DIR"; then
+            if auto_advance_blocked_completion "$ISSUE" "$FEATURE_DIR" "$WIN_TARGET" "$WIN"; then
               set_window_attention_state "$WIN" "clear"
               active_count=$((active_count + 1))
+              return 0
+            fi
+            if [[ "${AUTO_ADVANCE_BLOCKED_COMPLETION_HANDLED:-}" == "attention" ]]; then
               return 0
             fi
             if emit_blocked_completion_attention "$ISSUE" "$FEATURE_DIR"; then
@@ -11489,6 +11910,9 @@ monitor_issue_state() {
               return 0
             fi
             if emit_native_launch_failure_attention "$ISSUE" "$FEATURE_DIR" "coding" "$WIN" "$WIN_TARGET" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "coding" "claude-opus-4-7")"; then
+              return 0
+            fi
+            if emit_terminal_blocked_completion_attention "$ISSUE" "$SLUG" "$FEATURE_DIR" "$WIN" "$WIN_TARGET"; then
               return 0
             fi
             log "debug" "$ISSUE → Coding still running: waiting for .coding-complete"
@@ -12105,6 +12529,7 @@ monitor_issue_state() {
       if is_challenge_task "$ISSUE"; then
         maybe_run_challenge_eval "$ISSUE" "$PR" "$BRANCH" "$SLUG"
         maybe_run_challenge_comparison "$ISSUE"
+        maybe_resolve_unresolvable_challenge_pair "$ISSUE"
       fi
 
       local challenge_comparison_state
@@ -12291,6 +12716,7 @@ monitor_issue_state() {
   if is_challenge_task "$ISSUE"; then
     maybe_run_challenge_eval "$ISSUE" "$PR" "$BRANCH" "$SLUG"
     maybe_run_challenge_comparison "$ISSUE"
+    maybe_resolve_unresolvable_challenge_pair "$ISSUE"
   fi
   active_count=$((active_count + 1))
 

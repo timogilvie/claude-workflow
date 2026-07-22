@@ -330,3 +330,76 @@ test('terminal stale active candidates do not appear in stuckIssues', () => {
   assert.deepEqual(plan.stuckIssues, []);
   assert.deepEqual(plan.selectedIssues, []);
 });
+
+test('closed unmerged active candidates are excluded from selectedIssues and stuckIssues', () => {
+  const plan = planMergeQueueTick({
+    readyPrs: [
+      pr({
+        issue: 'HOK-CLOSED',
+        queueState: 'merge-candidate',
+        workflowStatus: 'active',
+        prState: 'CLOSED',
+        candidatePromotedAt: '2026-05-06T12:00:00.000Z',
+        changedFiles: ['a.ts'],
+      }),
+    ],
+    now: '2026-05-06T12:30:00.000Z',
+    config,
+  });
+  assert.deepEqual(plan.stuckIssues, []);
+  assert.deepEqual(plan.selectedIssues, []);
+});
+
+test('closed unmerged candidate does not block open clean ready PR selection', () => {
+  const plan = planMergeQueueTick({
+    readyPrs: [
+      pr({
+        issue: 'HOK-CLOSED',
+        queueState: 'merge-candidate',
+        workflowStatus: 'active',
+        prState: 'CLOSED',
+        candidatePromotedAt: '2026-05-06T12:00:00.000Z',
+        changedFiles: ['a.ts'],
+      }),
+      pr({
+        issue: 'HOK-OPEN',
+        prNumber: 2,
+        branch: 'task/open',
+        queueState: 'ready-stale',
+        prState: 'OPEN',
+        changedFiles: ['b.ts'],
+      }),
+    ],
+    now: '2026-05-06T12:30:00.000Z',
+    config: { ...config, maxConcurrentCandidates: 1 },
+  });
+  assert.deepEqual(plan.stuckIssues, []);
+  assert.deepEqual(plan.selectedIssues, ['HOK-OPEN']);
+});
+
+test('closed prState is excluded case-insensitively', () => {
+  const plan = planMergeQueueTick({
+    readyPrs: [
+      pr({
+        issue: 'HOK-CLOSED',
+        queueState: 'merge-candidate',
+        workflowStatus: 'active',
+        prState: 'closed',
+        candidatePromotedAt: '2026-05-06T12:00:00.000Z',
+        changedFiles: ['a.ts'],
+      }),
+      pr({
+        issue: 'HOK-OPEN',
+        prNumber: 2,
+        branch: 'task/open',
+        queueState: 'ready-stale',
+        prState: 'OPEN',
+        changedFiles: ['b.ts'],
+      }),
+    ],
+    now: '2026-05-06T12:30:00.000Z',
+    config: { ...config, maxConcurrentCandidates: 1 },
+  });
+  assert.deepEqual(plan.stuckIssues, []);
+  assert.deepEqual(plan.selectedIssues, ['HOK-OPEN']);
+});

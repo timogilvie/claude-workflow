@@ -149,6 +149,7 @@ for fn in \
   write_native_launch_failure_artifact \
   emit_native_launch_failure_attention \
   resolve_stage_result_model \
+  quarantine_completed_coding_pane \
   ready_queue_state \
   merge_queue_enabled \
   mark_ready_stale \
