@@ -731,6 +731,155 @@ _wavemill_kill_process_tree() {
   kill -KILL "$pid" 2>/dev/null || true
 }
 
+wavemill_collect_descendant_pids() {
+  local root_pid="${1:-}" pid children child
+  [[ "$root_pid" =~ ^[0-9]+$ ]] || return 0
+  command -v pgrep >/dev/null 2>&1 || return 1
+
+  local -a queue=("$root_pid")
+  local idx=0
+  while (( idx < ${#queue[@]} )); do
+    pid="${queue[idx]}"
+    idx=$((idx + 1))
+    children="$(pgrep -P "$pid" 2>/dev/null || true)"
+    while IFS= read -r child; do
+      [[ "$child" =~ ^[0-9]+$ ]] || continue
+      printf '%s\n' "$child"
+      queue+=("$child")
+    done <<< "$children"
+  done
+}
+
+wavemill_process_command_line() {
+  local pid="${1:-}" command_line=""
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+
+  command_line="$(ps -p "$pid" -o command= 2>/dev/null || ps -o command= -p "$pid" 2>/dev/null || true)"
+  command_line="$(printf '%s' "$command_line" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+  [[ -n "$command_line" ]] || return 1
+  printf '%s\n' "$command_line"
+}
+
+wavemill_pid_is_descendant() {
+  local root_pid="${1:-}" candidate_pid="${2:-}" pid
+  [[ "$root_pid" =~ ^[0-9]+$ && "$candidate_pid" =~ ^[0-9]+$ ]] || return 1
+
+  while IFS= read -r pid; do
+    [[ "$pid" == "$candidate_pid" ]] && return 0
+  done < <(wavemill_collect_descendant_pids "$root_pid" 2>/dev/null || true)
+
+  return 1
+}
+
+mill_pane_has_live_blocking_process() {
+  local pane_pid="${1:-}"
+  shift || true
+
+  # shellcheck disable=SC2034
+  MILL_BLOCKING_PROCESS_COMMAND=""
+  MILL_BLOCKING_PROCESS_REASON=""
+  MILL_BLOCKING_PROCESS_MATCH_COUNT=0
+  MILL_BLOCKING_PROCESS_PIDS=()
+
+  if ! command -v pgrep >/dev/null 2>&1; then
+    MILL_BLOCKING_PROCESS_REASON="pgrep missing"
+    return 2
+  fi
+
+  if [[ -z "$pane_pid" || ! "$pane_pid" =~ ^[0-9]+$ ]]; then
+    MILL_BLOCKING_PROCESS_REASON="pane pid unavailable"
+    return 2
+  fi
+
+  if ! kill -0 "$pane_pid" 2>/dev/null; then
+    return 1
+  fi
+
+  local -a blocking_commands=()
+  local raw_command sanitized_command
+  for raw_command in "$@"; do
+    sanitized_command="$(sanitize_blocked_completion_text "$raw_command")"
+    [[ -n "$sanitized_command" ]] || continue
+    blocking_commands+=("$sanitized_command")
+  done
+
+  local -a descendant_pids=()
+  local pid command_line matched=false blocking_command
+  mapfile -t descendant_pids < <(wavemill_collect_descendant_pids "$pane_pid" 2>/dev/null || true)
+  (( ${#descendant_pids[@]} > 0 )) || return 1
+
+  if (( ${#blocking_commands[@]} == 0 )); then
+    for pid in "${descendant_pids[@]}"; do
+      kill -0 "$pid" 2>/dev/null || continue
+      MILL_BLOCKING_PROCESS_PIDS=("$pid")
+      MILL_BLOCKING_PROCESS_MATCH_COUNT=1
+      command_line="$(wavemill_process_command_line "$pid" 2>/dev/null || true)"
+      MILL_BLOCKING_PROCESS_COMMAND="${command_line:-pid $pid}"
+      return 0
+    done
+    return 1
+  fi
+
+  if ! command -v ps >/dev/null 2>&1; then
+    MILL_BLOCKING_PROCESS_REASON="ps missing"
+    return 2
+  fi
+
+  local -a matched_pids=()
+  for pid in "${descendant_pids[@]}"; do
+    kill -0 "$pid" 2>/dev/null || continue
+    command_line="$(wavemill_process_command_line "$pid" 2>/dev/null || true)"
+    if [[ -z "$command_line" ]]; then
+      if kill -0 "$pid" 2>/dev/null; then
+        MILL_BLOCKING_PROCESS_REASON="could not read command line for pid $pid"
+        return 2
+      fi
+      continue
+    fi
+
+    for blocking_command in "${blocking_commands[@]}"; do
+      if [[ "$command_line" == *"$blocking_command"* ]]; then
+        matched=true
+        matched_pids+=("$pid")
+        if [[ -z "$MILL_BLOCKING_PROCESS_COMMAND" ]]; then
+          MILL_BLOCKING_PROCESS_COMMAND="$command_line"
+        fi
+        break
+      fi
+    done
+  done
+
+  if [[ "$matched" == true ]]; then
+    # shellcheck disable=SC2034
+    MILL_BLOCKING_PROCESS_PIDS=("${matched_pids[@]}")
+    MILL_BLOCKING_PROCESS_MATCH_COUNT="${#matched_pids[@]}"
+    return 0
+  fi
+
+  return 1
+}
+
+mill_terminate_blocking_processes() {
+  local pane_pid="${1:-}"
+  shift || true
+
+  [[ "$pane_pid" =~ ^[0-9]+$ ]] || return 1
+
+  local pid terminated_any=false
+  for pid in "$@"; do
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    (( pid > 1 )) || continue
+    [[ "$pid" != "$$" ]] || continue
+    kill -0 "$pid" 2>/dev/null || continue
+    wavemill_pid_is_descendant "$pane_pid" "$pid" || continue
+    _wavemill_kill_process_tree "$pid"
+    terminated_any=true
+  done
+
+  [[ "$terminated_any" == true ]]
+}
+
 wavemill_git_remote_with_timeout() {
   local timeout_seconds="${1:-}"
   shift || true
