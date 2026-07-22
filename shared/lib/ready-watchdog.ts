@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import {
   getReadyRemediationConfig,
   getReadyWatchdogConfig,
+  loadWavemillConfig,
   type ReadyWatchdogConfig,
 } from './config.ts';
 import { errorMessage } from './error-utils.ts';
@@ -19,15 +20,19 @@ import { readStageResult, updateStageResult, type ReadyArtifacts, type StageResu
 import { readChallengeComparisons, type StoredChallengeComparison } from './challenge-comparison.ts';
 import {
   classifyChallengeState,
-  loadWorkflowStateChallengePairs,
+  getSiblingBranch,
+  listRemoteTaskBranches,
+  loadWorkflowStateChallengeData,
   type ChallengeGate,
 } from './tend-challenge-gate.ts';
 
 const execFileAsync = promisify(execFile);
 const MAX_AUTO_UPDATE_ATTEMPTS = 3;
 const FAILING_CHECK_STABILITY_THRESHOLD = 2;
+const DEFAULT_CHALLENGE_HARD_FAILURE_RETRY_MAX = 2;
 const WAVEMILL_TOOLS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'tools');
 const READY_WATCHDOG_TOOL_PATH = path.join(WAVEMILL_TOOLS_DIR, 'ready-watchdog.ts');
+const CHALLENGE_PAIR_RESOLVER_TOOL_PATH = path.join(WAVEMILL_TOOLS_DIR, 'resolve-orphan-challenge-pair.ts');
 
 export type ReadyWatchdogClassificationKind =
   | 'fresh'
@@ -871,6 +876,13 @@ export function classifyReadyTask(
   }
 
   if (hasRunningEvalOrComparison(snapshot)) {
+    const runningComparison = snapshot.relevantJobs.find((job) => job.status === 'running' && job.kind === 'comparison');
+    if (runningComparison) {
+      return {
+        kind: 'waiting-on-eval-comparison',
+        detail: `PR #${snapshot.prNumber} is waiting for the challenge comparison job for pair ${runningComparison.pairId ?? snapshot.challengePairId ?? 'unknown'} to finish.`,
+      };
+    }
     const runningJobs = snapshot.relevantJobs
       .filter((job) => job.status === 'running')
       .map((job) => `${job.kind}:${job.id}`);
@@ -1013,12 +1025,8 @@ export function classifyReadyTask(
       // Before reporting a merge-lane wait, check if the tend challenge gate would block
       // this PR. A PR blocked by a missing challenge comparison will never be selected by
       // the merge controller, so reporting waiting-on-merge-lane is misleading.
-      if (challengeGate?.kind === 'pair-unresolved') {
-        const pairLabel = challengeGate.otherPr ? ` (pair PR #${challengeGate.otherPr})` : '';
-        return {
-          kind: 'waiting-on-eval-comparison',
-          detail: `PR #${snapshot.prNumber} is blocked from merging: challenge pair ${challengeGate.pairId}${pairLabel} has no comparison record (${challengeGate.reason}). The merge controller will not select this PR until the challenge comparison exists or challenge metadata is cleared.`,
-        };
+      if (challengeGate?.kind === 'pair-unresolved' || challengeGate?.kind === 'pair-unresolvable') {
+        return classifyMergeLaneChallengeBlocker(snapshot, challengeGate, config);
       }
 
       const escalateMinutes = normalizedConfig.thresholdMinutes * MERGE_LANE_STALL_ESCALATE_MULTIPLIER;
@@ -1066,6 +1074,77 @@ export function classifyReadyTask(
     kind: 'needs-user',
     detail: `PR #${snapshot.prNumber} is blocked by merge state ${githubTruth.mergeStateStatus || githubTruth.mergeable}.`,
   };
+}
+
+function classifyMergeLaneChallengeBlocker(
+  snapshot: ReadyTaskSnapshot,
+  challengeGate: Extract<ChallengeGate, { kind: 'pair-unresolved' | 'pair-unresolvable' }>,
+): ReadyWatchdogClassification {
+  const pairLabel = challengeGate.otherPr ? ` (pair PR #${challengeGate.otherPr})` : '';
+  if (challengeGate.kind === 'pair-unresolved') {
+    if (challengeGate.reason === 'pair-unresolved:comparison-in-progress') {
+      return {
+        kind: 'waiting-on-eval-comparison',
+        detail: `PR #${snapshot.prNumber} is waiting for the challenge comparison job for pair ${challengeGate.pairId}${pairLabel} to finish.`,
+      };
+    }
+    return {
+      kind: 'waiting-on-eval-comparison',
+      detail: `PR #${snapshot.prNumber} is blocked from merging: challenge pair ${challengeGate.pairId}${pairLabel} has no comparison record (${challengeGate.reason}). The merge controller will not select this PR until the challenge comparison exists or challenge metadata is cleared.`,
+    };
+  }
+
+  const recoveryCommand = buildChallengePairRecoveryCommand(snapshot, challengeGate.pairId, challengeGate.reason);
+  if (challengeGate.reason === 'orphan-sibling') {
+    return {
+      kind: 'needs-user',
+      detail: `PR #${snapshot.prNumber} is blocked from merging: challenge pair ${challengeGate.pairId}${pairLabel} has no discoverable sibling task/PR/branch, so no comparison can be produced.`,
+      recoveryCommand,
+    };
+  }
+  if (challengeGate.reason === 'sibling-eval-hard-failed') {
+    return {
+      kind: 'needs-user',
+      detail: `PR #${snapshot.prNumber} is blocked from merging: challenge pair ${challengeGate.pairId}${pairLabel} cannot produce a comparison because one side exhausted challenge eval hard-failure retries.`,
+      recoveryCommand,
+    };
+  }
+  return {
+    kind: 'needs-user',
+    detail: `PR #${snapshot.prNumber} is blocked from merging: challenge pair ${challengeGate.pairId}${pairLabel} cannot produce a comparison because both sides exhausted challenge eval hard-failure retries.`,
+    recoveryCommand,
+  };
+}
+
+function buildChallengePairRecoveryCommand(
+  snapshot: ReadyTaskSnapshot,
+  pairId: string,
+  reason: 'orphan-sibling' | 'sibling-eval-hard-failed' | 'both-eval-hard-failed',
+): string {
+  return [
+    'npx',
+    'tsx',
+    escapeShellArg(CHALLENGE_PAIR_RESOLVER_TOOL_PATH),
+    '--pair-id',
+    escapeShellArg(pairId),
+    '--reason',
+    escapeShellArg(reason),
+    '--repo-dir',
+    escapeShellArg(path.resolve(snapshot.worktree, '..', '..')),
+    '--dry-run',
+  ].join(' ');
+}
+
+function getChallengeHardFailureRetryMax(repoDir: string): number {
+  const fromEnv = Number(process.env.WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES ?? '');
+  if (Number.isInteger(fromEnv) && fromEnv >= 0) {
+    return fromEnv;
+  }
+
+  const raw = loadWavemillConfig(repoDir).challenge?.eval?.retryMaxAttempts;
+  return typeof raw === 'number' && Number.isInteger(raw) && raw >= 0
+    ? raw
+    : DEFAULT_CHALLENGE_HARD_FAILURE_RETRY_MAX;
 }
 
 async function buildSnapshot(
@@ -1353,7 +1432,14 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
 
   // Load challenge gate data once per tick so classifyReadyTask can detect
   // challenge PRs that tend would block even when GitHub shows them as clean/green.
-  const challengePairMap = loadWorkflowStateChallengePairs(options.repoDir);
+  const challengeWorkflowState = loadWorkflowStateChallengeData(options.repoDir);
+  const challengePairMap = challengeWorkflowState.challengePairMap;
+  const challengeEvalRetryMax = getChallengeHardFailureRetryMax(options.repoDir);
+  const remoteTaskBranches = new Set(
+    Object.values(tasks).some((task) => typeof (task as WorkflowTaskRecord).challengePairId === 'string')
+      ? listRemoteTaskBranches(options.repoDir)
+      : [],
+  );
   let tickChallengeComparisons: StoredChallengeComparison[] = [];
   try {
     tickChallengeComparisons = readChallengeComparisons(path.join(options.repoDir, '.wavemill', 'evals'));
@@ -1415,6 +1501,15 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
           tickChallengeComparisons,
           true,
           allReadyPrNumbers,
+          {
+            activeJobsByPair: challengeWorkflowState.activeJobsByPair,
+            taskStateByPair: challengeWorkflowState.taskStateByPair,
+            evalHardFailureRetryMax: challengeEvalRetryMax,
+            hasSiblingBranch: Boolean(
+              getSiblingBranch(snapshot.branch) && remoteTaskBranches.has(getSiblingBranch(snapshot.branch) as string),
+            ),
+            nowMs: () => now.getTime(),
+          },
         )
       : undefined;
 

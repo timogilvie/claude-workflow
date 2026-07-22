@@ -1,31 +1,73 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { readChallengeComparisons, type StoredChallengeComparison } from './challenge-comparison.ts';
-import { getChallengeConfig, getChallengeGateConfig } from './config.ts';
+import { getChallengeConfig, getChallengeGateConfig, loadWavemillConfig } from './config.ts';
 import { errorMessage } from './error-utils.ts';
+import { normalizeJobs, type MillJob, type WorkflowStateLike } from './job-tracker.ts';
 import { listOpenIssuesByIdentifierPrefix, type LinearIssueSummary } from './linear.ts';
 import type { PrMetadata } from './pr-metadata.ts';
 import { WM_LABELS } from './pr-state-labels.ts';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 
-type ChallengeRole = 'primary' | 'challenger';
+export type ChallengeRole = 'primary' | 'challenger';
+export type UnresolvableReason =
+  | 'orphan-sibling'
+  | 'sibling-eval-hard-failed'
+  | 'both-eval-hard-failed';
 const BRANCH_NAME_PATTERN = /^[a-zA-Z0-9._/-]+$/;
 const TASK_IDENTIFIER_PATTERN = /^[A-Z]+-\d+(?:_c)?$/;
+const ORPHAN_PAIR_GRACE_MS = 60_000;
+const DEFAULT_HARD_FAILURE_RETRY_MAX = 2;
 
 interface ChallengePairInfo {
   pairId: string;
   role: ChallengeRole;
+  issueId: string;
+  branch: string | null;
+  updatedAt: number | null;
+}
+
+export interface TaskEvalState {
+  issueId: string;
+  prNumber: number | null;
+  role: ChallengeRole;
+  branch: string | null;
+  model: string | null;
+  updatedAt: number | null;
+  evalFailed: boolean;
+  evalCompleted: boolean;
+  evalHardFailureRetryCount: number;
+  comparisonState: string | null;
+}
+
+export interface PairTaskState {
+  primary?: TaskEvalState;
+  challenger?: TaskEvalState;
+}
+
+export interface WorkflowStateChallengeData {
+  challengePairMap: Map<number, ChallengePairInfo>;
+  taskStateByPair: Map<string, PairTaskState>;
+  activeJobsByPair: Map<string, MillJob[]>;
 }
 
 interface WorkflowStateTask {
   pr?: unknown;
+  branch?: unknown;
+  updated?: unknown;
   challengePairId?: unknown;
   challengeRole?: unknown;
+  challengeModel?: unknown;
+  coderModel?: unknown;
+  evalFailed?: unknown;
+  evalCompleted?: unknown;
+  evalHardFailureRetryCount?: unknown;
+  comparisonState?: unknown;
 }
 
-interface WorkflowStateFile {
+type WorkflowStateFile = WorkflowStateLike & {
   tasks?: Record<string, WorkflowStateTask>;
-}
+};
 
 interface ChallengeEligiblePr {
   number: number;
@@ -80,39 +122,94 @@ export interface ChallengeGateOptions extends ChallengeGateDeps {
   listRemoteBranches?: (repoDir: string) => string[];
 }
 
+export interface ChallengeClassificationOptions {
+  activeJobsByPair?: Map<string, MillJob[]>;
+  taskStateByPair?: Map<string, PairTaskState>;
+  evalHardFailureRetryMax?: number;
+  hasSiblingBranch?: boolean;
+  nowMs?: number;
+  orphanGraceMs?: number;
+}
+
 export type ChallengeGate =
   | { kind: 'not-in-challenge' }
   | { kind: 'pair-unresolved'; pairId: string; otherPr: number | null; reason: string }
+  | { kind: 'pair-unresolvable'; pairId: string; otherPr: number | null; reason: UnresolvableReason }
   | { kind: 'cool-off'; reason: string }
   | { kind: 'winner'; pairId: string; loserPr: number | null; autoMerge: boolean }
   | { kind: 'loser'; pairId: string; winnerPr: number | null };
 
 export function loadWorkflowStateChallengePairs(repoDir: string): Map<number, ChallengePairInfo> {
+  return loadWorkflowStateChallengeData(repoDir).challengePairMap;
+}
+
+export function loadWorkflowStateChallengeData(repoDir: string): WorkflowStateChallengeData {
   const statePath = join(repoDir, '.wavemill', 'workflow-state.json');
   if (!existsSync(statePath)) {
-    return new Map();
+    return {
+      challengePairMap: new Map(),
+      taskStateByPair: new Map(),
+      activeJobsByPair: new Map(),
+    };
   }
 
   try {
     const parsed = JSON.parse(readFileSync(statePath, 'utf-8')) as WorkflowStateFile;
     const tasks = parsed.tasks ?? {};
-    const pairs = new Map<number, ChallengePairInfo>();
+    const challengePairMap = new Map<number, ChallengePairInfo>();
+    const taskStateByPair = new Map<string, PairTaskState>();
+    const activeJobsByPair = buildActiveJobsByPair(normalizeJobs(parsed));
 
-    for (const task of Object.values(tasks)) {
+    for (const [issueId, task] of Object.entries(tasks)) {
       const prNumber = parseWorkflowStatePr(task.pr);
       if (
-        prNumber !== null &&
         typeof task.challengePairId === 'string' &&
         (task.challengeRole === 'primary' || task.challengeRole === 'challenger')
       ) {
-        pairs.set(prNumber, { pairId: task.challengePairId, role: task.challengeRole });
+        const updatedAt = parseWorkflowStateTimestamp(task.updated);
+        const branch = typeof task.branch === 'string' ? task.branch : null;
+        const info: ChallengePairInfo = {
+          pairId: task.challengePairId,
+          role: task.challengeRole,
+          issueId,
+          branch,
+          updatedAt,
+        };
+        if (prNumber !== null) {
+          challengePairMap.set(prNumber, info);
+        }
+
+        const pairTaskState = taskStateByPair.get(task.challengePairId) ?? {};
+        pairTaskState[task.challengeRole] = {
+          issueId,
+          prNumber,
+          role: task.challengeRole,
+          branch,
+          model: typeof task.challengeModel === 'string'
+            ? task.challengeModel
+            : (typeof task.coderModel === 'string' ? task.coderModel : null),
+          updatedAt,
+          evalFailed: task.evalFailed === true,
+          evalCompleted: task.evalCompleted === true,
+          evalHardFailureRetryCount: parseNonNegativeInteger(task.evalHardFailureRetryCount),
+          comparisonState: typeof task.comparisonState === 'string' ? task.comparisonState : null,
+        };
+        taskStateByPair.set(task.challengePairId, pairTaskState);
       }
     }
 
-    return pairs;
+    return {
+      challengePairMap,
+      taskStateByPair,
+      activeJobsByPair,
+    };
   } catch (error) {
     console.warn(`[tend-challenge-gate] Failed to read workflow-state.json: ${errorMessage(error)}`);
-    return new Map();
+    return {
+      challengePairMap: new Map(),
+      taskStateByPair: new Map(),
+      activeJobsByPair: new Map(),
+    };
   }
 }
 
@@ -128,6 +225,36 @@ function parseWorkflowStatePr(value: unknown): number | null {
   return null;
 }
 
+function parseWorkflowStateTimestamp(value: unknown): number | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function parseNonNegativeInteger(value: unknown): number {
+  if (typeof value === 'number' && Number.isInteger(value) && value >= 0) {
+    return value;
+  }
+  if (typeof value === 'string' && /^\d+$/.test(value)) {
+    return Number(value);
+  }
+  return 0;
+}
+
+function buildActiveJobsByPair(jobs: Record<string, MillJob>): Map<string, MillJob[]> {
+  const activeJobsByPair = new Map<string, MillJob[]>();
+  for (const job of Object.values(jobs)) {
+    if (job.pairId && job.status === 'running') {
+      const pairJobs = activeJobsByPair.get(job.pairId) ?? [];
+      pairJobs.push(job);
+      activeJobsByPair.set(job.pairId, pairJobs);
+    }
+  }
+  return activeJobsByPair;
+}
+
 export function classifyChallengeState(
   prNumber: number,
   metadata: PrMetadata | null,
@@ -135,6 +262,7 @@ export function classifyChallengeState(
   comparisons: StoredChallengeComparison[],
   autoMerge: boolean,
   allPrNumbers: Set<number>,
+  options: ChallengeClassificationOptions = {},
 ): ChallengeGate {
   const workflowStatePair = challengePairMap.get(prNumber);
   const pairId = metadata?.challengePairId ?? workflowStatePair?.pairId;
@@ -158,10 +286,40 @@ export function classifyChallengeState(
     .sort((a, b) => b.timestamp.localeCompare(a.timestamp));
 
   if (relevantComparisons.length === 0) {
+    const otherPr = findOtherOpenPr(pairId, prNumber, challengePairMap, allPrNumbers);
+    const pairState = options.taskStateByPair?.get(pairId);
+    if (hasRunningComparison(pairId, pairState, options.activeJobsByPair)) {
+      return {
+        kind: 'pair-unresolved',
+        pairId,
+        otherPr,
+        reason: 'pair-unresolved:comparison-in-progress',
+      };
+    }
+
+    const hardFailureState = classifyHardFailureState(pairState, options.evalHardFailureRetryMax ?? DEFAULT_HARD_FAILURE_RETRY_MAX);
+    if (hardFailureState) {
+      return {
+        kind: 'pair-unresolvable',
+        pairId,
+        otherPr,
+        reason: hardFailureState,
+      };
+    }
+
+    if (isOrphanedPair(pairState, otherPr, options.hasSiblingBranch, options.nowMs, options.orphanGraceMs)) {
+      return {
+        kind: 'pair-unresolvable',
+        pairId,
+        otherPr,
+        reason: 'orphan-sibling',
+      };
+    }
+
     return {
       kind: 'pair-unresolved',
       pairId,
-      otherPr: findOtherOpenPr(pairId, prNumber, challengePairMap, allPrNumbers),
+      otherPr,
       reason: 'pair-unresolved:no-comparison',
     };
   }
@@ -224,7 +382,7 @@ export async function applyChallengePairGates<T extends ChallengeEligibleWorkIte
     ...eligibleItems.map((item) => item.pr.number),
     ...blocked.map((item) => item.number),
   ]);
-  const challengePairMap = loadWorkflowStateChallengePairs(repoDir);
+  const { challengePairMap, taskStateByPair, activeJobsByPair } = loadWorkflowStateChallengeData(repoDir);
 
   let comparisons: StoredChallengeComparison[];
   try {
@@ -238,6 +396,7 @@ export async function applyChallengePairGates<T extends ChallengeEligibleWorkIte
   const gateConfig = getChallengeGateConfig(repoDir);
   const coolOffSeconds = options.coolOffSeconds ?? gateConfig.coolOffSeconds;
   const nowMs = options.nowMs ?? (() => Date.now());
+  const evalHardFailureRetryMax = getHardFailureRetryMax(repoDir);
 
   const remoteBranches = options.remoteBranches
     ?? (options.listRemoteBranches
@@ -251,6 +410,8 @@ export async function applyChallengePairGates<T extends ChallengeEligibleWorkIte
   const losers = new Set<number>();
 
   for (const item of eligibleItems) {
+    const siblingBranch = getSiblingBranch(item.pr.headRefName);
+    const hasSiblingBranch = Boolean(siblingBranch && remoteBranchSet.has(siblingBranch));
     const state = classifyChallengeState(
       item.pr.number,
       item.metadata,
@@ -258,11 +419,17 @@ export async function applyChallengePairGates<T extends ChallengeEligibleWorkIte
       comparisons,
       autoMerge,
       allPrNumbers,
+      {
+        activeJobsByPair,
+        taskStateByPair,
+        evalHardFailureRetryMax,
+        hasSiblingBranch,
+        nowMs,
+      },
     );
 
     if (state.kind === 'not-in-challenge') {
-      const sibling = getSiblingBranch(item.pr.headRefName);
-      if (sibling && remoteBranchSet.has(sibling)) {
+      if (hasSiblingBranch) {
         nextBlocked.push(toBlockedCandidate(item, 'challenge:pair-unresolved:branch-pair'));
         continue;
       }
@@ -295,6 +462,11 @@ export async function applyChallengePairGates<T extends ChallengeEligibleWorkIte
 
     if (state.kind === 'pair-unresolved') {
       nextBlocked.push(toBlockedCandidate(item, `challenge:${state.reason}`));
+      continue;
+    }
+
+    if (state.kind === 'pair-unresolvable') {
+      nextBlocked.push(toBlockedCandidate(item, `challenge:pair-unresolvable:${state.reason}`));
       continue;
     }
 
@@ -381,6 +553,76 @@ function resolvePrRole(
   }
 
   return workflowRole ?? null;
+}
+
+function hasRunningComparison(
+  pairId: string,
+  pairState: PairTaskState | undefined,
+  activeJobsByPair: Map<string, MillJob[]> | undefined,
+): boolean {
+  const pairJobs = activeJobsByPair?.get(pairId) ?? [];
+  if (pairJobs.some((job) => job.kind === 'comparison' && job.status === 'running')) {
+    return true;
+  }
+  return pairState?.primary?.comparisonState === 'comparison_running'
+    || pairState?.challenger?.comparisonState === 'comparison_running';
+}
+
+function classifyHardFailureState(
+  pairState: PairTaskState | undefined,
+  retryMax: number,
+): UnresolvableReason | null {
+  if (!pairState) {
+    return null;
+  }
+  const primaryExhausted = isHardFailureExhausted(pairState.primary, retryMax);
+  const challengerExhausted = isHardFailureExhausted(pairState.challenger, retryMax);
+
+  if (primaryExhausted && challengerExhausted) {
+    return 'both-eval-hard-failed';
+  }
+  if (primaryExhausted || challengerExhausted) {
+    return 'sibling-eval-hard-failed';
+  }
+  return null;
+}
+
+function isHardFailureExhausted(task: TaskEvalState | undefined, retryMax: number): boolean {
+  return Boolean(task?.evalFailed && task.evalHardFailureRetryCount >= retryMax);
+}
+
+function isOrphanedPair(
+  pairState: PairTaskState | undefined,
+  otherPr: number | null,
+  hasSiblingBranch: boolean | undefined,
+  nowMs: (() => number) | undefined,
+  orphanGraceMs: number | undefined,
+): boolean {
+  if (!pairState) {
+    return false;
+  }
+  if (pairState.primary && pairState.challenger) {
+    return false;
+  }
+  if (otherPr !== null || hasSiblingBranch) {
+    return false;
+  }
+  const loneTask = pairState.primary ?? pairState.challenger;
+  if (!loneTask) {
+    return false;
+  }
+  if (loneTask.updatedAt === null) {
+    return true;
+  }
+  const now = nowMs?.() ?? Date.now();
+  return now - loneTask.updatedAt >= (orphanGraceMs ?? ORPHAN_PAIR_GRACE_MS);
+}
+
+function getHardFailureRetryMax(repoDir: string): number {
+  const raw = loadWavemillConfig(repoDir).challenge?.eval?.retryMaxAttempts;
+  return typeof raw === 'number' && Number.isInteger(raw) && raw >= 0
+    ? raw
+    : DEFAULT_HARD_FAILURE_RETRY_MAX;
 }
 
 const CHALLENGER_SUFFIX = '-challenger';
