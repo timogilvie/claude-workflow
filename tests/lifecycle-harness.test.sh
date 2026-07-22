@@ -173,6 +173,9 @@ harness_extract_real_functions() {
     complete_coding_advance \
     auto_advance_blocked_completion \
     emit_blocked_completion_attention \
+    coding_missing_blocked_completion_announce_marker \
+    _coding_terminal_blocked_completion_detected \
+    emit_terminal_blocked_completion_attention \
     recover_misplaced_coding_complete_marker \
     _coding_divergence_announce_marker \
     _detect_coding_pane_divergence \
@@ -2379,6 +2382,102 @@ EOF
   check_not_contains "no-stat dedupe: second poll emits no duplicate log" "$(kv_value "$tick2" log_output)" "needs attention:"
 }
 
+test_coding_terminal_blocked_report_no_marker_needs_user() {
+  local slug="coding-terminal-blocked-no-marker"
+  local issue="HOK-2484-POS"
+  local repo tick feature_dir commit
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  feature_dir="$repo/features/$slug"
+
+  printf 'feat: carry rewards context\n' > "$repo/integrate.ts"
+  git -C "$repo" add integrate.ts
+  git -C "$repo" commit -q -m "feat: carry rewards context into integrate flow"
+  commit="$(git -C "$repo" rev-parse --short HEAD)"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" "
+    CURRENT_PHASE=\"coding\"
+    tmux() {
+      if [[ \"\${1:-}\" == \"capture-pane\" ]]; then
+        printf '%s\\n' \\
+          'Implementation committed as $commit.' \\
+          'pnpm verify failed: missing ts-node, next, and prisma.' \\
+          'Verification is blocked because node_modules is absent.' \\
+          'Because of that, I did not create .coding-complete.'
+        return 0
+      fi
+      return 1
+    }
+  ")"
+
+  check_eq "terminal blocked no marker: phase remains coding" "coding" "$(kv_value "$tick" phase)"
+  check_eq "terminal blocked no marker: coding stage stays running" "running" "$(harness_read_stage_status "$repo" "$slug" coding)"
+  check_eq "terminal blocked no marker: needs-user attention set" "needs-user" "$(kv_value "$tick" attention)"
+  check_eq "terminal blocked no marker: task remains active" "1" "$(kv_value "$tick" active_count)"
+  check_contains "terminal blocked no marker: log names missing artifact path" "$(kv_value "$tick" log_output)" "features/$slug/.coding-blocked-completion.json"
+  check_contains "terminal blocked no marker: log suggests advance command" "$(kv_value "$tick" log_output)" "advance $issue"
+  check_file_exists "terminal blocked no marker: audit artifact written" "$feature_dir/.coding-missing-blocked-completion.json"
+  check_file_exists "terminal blocked no marker: dedupe marker written" "$feature_dir/.missing-blocked-completion-announced"
+  check_file_absent "terminal blocked no marker: no blocked completion synthesized" "$feature_dir/.coding-blocked-completion.json"
+}
+
+test_coding_terminal_blocked_report_ignores_no_commit_evidence() {
+  local slug="coding-terminal-blocked-no-commit"
+  local issue="HOK-2484-NEG-COMMIT"
+  local repo tick feature_dir
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  feature_dir="$repo/features/$slug"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" '
+    CURRENT_PHASE="coding"
+    tmux() {
+      if [[ "${1:-}" == "capture-pane" ]]; then
+        printf "%s\n" \
+          "Verification is blocked because node_modules is missing." \
+          "Because of that, I did not create .coding-complete."
+        return 0
+      fi
+      return 1
+    }
+  ')"
+
+  check_eq "no commit evidence: attention remains clear" "clear" "$(kv_value "$tick" attention)"
+  check_file_absent "no commit evidence: no audit artifact" "$feature_dir/.coding-missing-blocked-completion.json"
+  check_file_absent "no commit evidence: no dedupe marker" "$feature_dir/.missing-blocked-completion-announced"
+}
+
+test_coding_terminal_blocked_report_ignores_busy_pane() {
+  local slug="coding-terminal-blocked-busy-pane"
+  local issue="HOK-2484-NEG-BUSY"
+  local repo tick feature_dir commit
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  feature_dir="$repo/features/$slug"
+  commit="$(git -C "$repo" rev-parse --short HEAD)"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" "
+    CURRENT_PHASE=\"coding\"
+    _pane_is_dead_or_idle() { return 1; }
+    tmux() {
+      if [[ \"\${1:-}\" == \"capture-pane\" ]]; then
+        printf '%s\\n' \\
+          'Implementation committed as $commit.' \\
+          'Verification is blocked.' \\
+          'Because of that, I did not create .coding-complete.'
+        return 0
+      fi
+      return 1
+    }
+  ")"
+
+  check_eq "busy pane: attention remains clear" "clear" "$(kv_value "$tick" attention)"
+  check_file_absent "busy pane: no audit artifact" "$feature_dir/.coding-missing-blocked-completion.json"
+}
+
 test_coding_capacity_hook_writes_blocked_completion() {
   local slug="coding-capacity-hook"
   local issue="HOK-2318-HOOK"
@@ -3072,6 +3171,9 @@ test_coding_blocked_completion_dirty_worktree_does_not_auto_advance
 test_coding_blocked_completion_unknown_feature_file_does_not_auto_advance
 test_coding_complete_source_dirty_still_blocks
 test_coding_blocked_completion_dedupes_when_stat_unavailable
+test_coding_terminal_blocked_report_no_marker_needs_user
+test_coding_terminal_blocked_report_ignores_no_commit_evidence
+test_coding_terminal_blocked_report_ignores_busy_pane
 test_coding_capacity_hook_writes_blocked_completion
 test_coding_capacity_prompt_writes_blocked_completion
 test_coding_complete_wins_over_capacity_prompt

@@ -5288,6 +5288,116 @@ emit_pane_divergence_attention() {
   return 0
 }
 
+coding_missing_blocked_completion_announce_marker() {
+  local feature_dir="$1"
+  printf '%s\n' "$feature_dir/.missing-blocked-completion-announced"
+}
+
+_coding_terminal_blocked_completion_detected() {
+  local feature_dir="$1" win_target="$2"
+  local coding_status pane_tail line lower_line
+  local commit_phrase="" blocked_phrase=""
+
+  _CODING_TERMINAL_BLOCKED_COMMIT_PHRASE=""
+  _CODING_TERMINAL_BLOCKED_BLOCKED_PHRASE=""
+
+  coding_status="$(read_stage_status "$feature_dir" "coding")"
+  [[ "$coding_status" == "running" ]] || return 1
+  [[ ! -f "$feature_dir/.coding-complete" ]] || return 1
+  [[ ! -f "$feature_dir/.coding-blocked-completion.json" ]] || return 1
+  [[ -n "$win_target" ]] || return 1
+  _pane_is_dead_or_idle "$win_target" 2>/dev/null || return 1
+
+  pane_tail="$(tmux capture-pane -p -t "$win_target" -S -500 2>/dev/null || true)"
+  [[ -n "$pane_tail" ]] || return 1
+
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    lower_line="$(printf '%s' "$line" | tr '[:upper:]' '[:lower:]')"
+
+    if [[ -z "$commit_phrase" ]] && [[ \
+      "$lower_line" == *"committed as"* || \
+      "$lower_line" == *"implementation is committed"* || \
+      "$lower_line" == *"implementation committed"* || \
+      "$lower_line" == *"changes committed"* \
+    ]]; then
+      commit_phrase="$line"
+    fi
+
+    if [[ -z "$blocked_phrase" ]] && [[ \
+      "$lower_line" == *"did not create .coding-complete"* || \
+      "$lower_line" == *"verification is blocked"* || \
+      "$lower_line" == *"verification blocked"* || \
+      "$lower_line" == *"environmentally blocked"* || \
+      "$lower_line" == *"environmental blocker"* \
+    ]]; then
+      blocked_phrase="$line"
+    fi
+  done <<< "$pane_tail"
+
+  [[ -n "$commit_phrase" ]] || return 1
+  [[ -n "$blocked_phrase" ]] || return 1
+
+  _CODING_TERMINAL_BLOCKED_COMMIT_PHRASE="$commit_phrase"
+  _CODING_TERMINAL_BLOCKED_BLOCKED_PHRASE="$blocked_phrase"
+  return 0
+}
+
+emit_terminal_blocked_completion_attention() {
+  local issue="$1" slug="$2" feature_dir="$3" win="$4" win_target="$5"
+  local artifact_rel_path audit_path announce_marker detected_at tmp_artifact
+  local action observed_phrases_json
+
+  if ! _coding_terminal_blocked_completion_detected "$feature_dir" "$win_target"; then
+    return 1
+  fi
+
+  artifact_rel_path="features/$slug/.coding-blocked-completion.json"
+  audit_path="$feature_dir/.coding-missing-blocked-completion.json"
+  announce_marker="$(coding_missing_blocked_completion_announce_marker "$feature_dir")"
+  detected_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  action="Create $artifact_rel_path or run advance $issue."
+  observed_phrases_json="$(
+    printf '%s\n%s\n' \
+      "$_CODING_TERMINAL_BLOCKED_COMMIT_PHRASE" \
+      "$_CODING_TERMINAL_BLOCKED_BLOCKED_PHRASE" \
+      | jq -R . \
+      | jq -s .
+  )"
+
+  if [[ ! -f "$audit_path" ]]; then
+    tmp_artifact="$(mktemp "$audit_path.tmp.XXXXXX" 2>/dev/null)" || true
+    if [[ -n "$tmp_artifact" ]]; then
+      jq -n \
+        --arg issue "$issue" \
+        --arg slug "$slug" \
+        --arg detectedAt "$detected_at" \
+        --arg missingArtifact "$artifact_rel_path" \
+        --arg action "$action" \
+        --argjson observedPhrases "$observed_phrases_json" \
+        '{
+          issue: $issue,
+          slug: $slug,
+          detectedAt: $detectedAt,
+          observedPhrases: $observedPhrases,
+          missingArtifact: $missingArtifact,
+          action: $action
+        }' > "$tmp_artifact" 2>/dev/null \
+        && mv "$tmp_artifact" "$audit_path" 2>/dev/null \
+        || rm -f "$tmp_artifact"
+    fi
+  fi
+
+  if [[ ! -f "$announce_marker" ]]; then
+    log "status" "$issue needs attention: coding appears complete but .coding-blocked-completion.json is missing. Create $artifact_rel_path or run \"advance $issue\" to continue."
+    : > "$announce_marker"
+  fi
+
+  set_window_attention_state "$win" "needs-user"
+  active_count=$((active_count + 1))
+  return 0
+}
+
 # Reject a plan: transition planning from awaiting_user to failed.
 # Usage: reject_plan <feature_dir> [agent] [model]
 reject_plan() {
@@ -11436,6 +11546,9 @@ monitor_issue_state() {
               return 0
             fi
             if emit_pane_divergence_attention "$ISSUE" "$SLUG" "$FEATURE_DIR" "$WIN" "$WIN_TARGET"; then
+              return 0
+            fi
+            if emit_terminal_blocked_completion_attention "$ISSUE" "$SLUG" "$FEATURE_DIR" "$WIN" "$WIN_TARGET"; then
               return 0
             fi
             log "debug" "$ISSUE → Coding still running: waiting for .coding-complete"
