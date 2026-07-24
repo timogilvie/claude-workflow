@@ -24,7 +24,7 @@ describe('model-router resolveAgent', () => {
 
   it('resolves hosted claude and gpt models from registry-backed metadata', () => {
     assert.equal(resolveAgent('claude-sonnet-4-6', {}, 'codex'), 'claude');
-    assert.equal(resolveAgent('gpt-5.4', {}, 'claude'), 'codex');
+    assert.equal(resolveAgent('gpt-5.6-terra', {}, 'claude'), 'codex');
   });
 
   it('throws instead of routing OpenRouter aliases through codex fallback', () => {
@@ -202,8 +202,8 @@ describe('model-router resolveAgent', () => {
             id: 'global-1',
             schemaVersion: '1.15.0',
             originalPrompt: 'Fix router bug',
-            modelId: 'gpt-5.4',
-            modelVersion: 'gpt-5.4',
+            modelId: 'gpt-5.6-terra',
+            modelVersion: 'gpt-5.6-terra',
             score: 0.95,
             scoreBand: 'Strong',
             timeSeconds: 20,
@@ -242,7 +242,7 @@ describe('model-router resolveAgent', () => {
       });
 
       assert.equal(recommendation.insufficientData, false);
-      assert.equal(recommendation.recommendedModel, 'gpt-5.4');
+      assert.equal(recommendation.recommendedModel, 'gpt-5.6-terra');
       assert.equal(recommendation.candidates.length, 2);
     } finally {
       if (previousOverride === undefined) {

@@ -1234,7 +1234,9 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       class: 'frontier',
       strengths: ['frontier reasoning', 'code generation', 'architecture'],
       weaknesses: ['superseded for ChatGPT Codex launches by GPT-5.6 Terra'],
-      disabled: true,
+      // Retained for historical records and explicit non-Codex policy analysis.
+      // Its Codex/ChatGPT capability below remains false, so it cannot launch.
+      disabled: false,
       qualityScores: scores(60, 94, 90, 92, 60),
       pricing: {
         inputCostPerMTok: 2.5,
