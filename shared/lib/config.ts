@@ -171,6 +171,12 @@ export interface NativeCapabilityOverride {
   certification?: NativeCertificationMetadataOverride;
 }
 
+/** Explicit eligibility for launches through a ChatGPT-authenticated Codex CLI. */
+export interface CodexChatgptCapabilityOverride {
+  supported?: boolean;
+  reason?: string;
+}
+
 export interface ModelCapabilitiesOverride {
   vendor?: string;
   class?: ModelRegistryClass;
@@ -188,6 +194,7 @@ export interface ModelCapabilitiesOverride {
   costPerMillionInputTokensUsd?: number;
   costPerMillionOutputTokensUsd?: number;
   agent?: AgentType;
+  codexChatgptCapability?: CodexChatgptCapabilityOverride;
   nativeCapability?: NativeCapabilityOverride;
   releasedAt?: string;
 }

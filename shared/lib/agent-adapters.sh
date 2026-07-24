@@ -295,7 +295,7 @@ agent_model_looks_like_depth_tag() {
 agent_default_model_for_cmd() {
   local agent_cmd="$1"
   case "$agent_cmd" in
-    codex) echo "gpt-5.4" ;;
+    codex) echo "gpt-5.6-terra" ;;
     claude) echo "claude-sonnet-5" ;;
     claude-deepseek) echo "deepseek-v4-flash" ;;
     claude-openrouter) echo "" ;;
@@ -1150,9 +1150,9 @@ You are in the **ROUTING PHASE** of a multi-phase workflow. Your job is to:
 
 3. Save the routing results to $routing_path as JSON:
    {
-     "planner": "gpt-5.4",
+     "planner": "gpt-5.6-terra",
      "coder": "gpt-5.5",
-     "reviewer": "gpt-5.4",
+     "reviewer": "gpt-5.6-terra",
      "planDepth": "light",
      "codeDepth": "medium",
      "reviewMode": "static"
@@ -1168,9 +1168,9 @@ You are in the **ROUTING PHASE** of a multi-phase workflow. Your job is to:
 ### Important Notes
 - Use the routing tool's recommendations directly - don't override them
 - If the routing tool fails, use sensible defaults:
-  - planner: gpt-5.4
+  - planner: gpt-5.6-terra
   - coder: gpt-5.5
-  - reviewer: gpt-5.4
+  - reviewer: gpt-5.6-terra
   - planDepth: light
   - codeDepth: medium
   - reviewMode: static
@@ -1805,6 +1805,14 @@ agent_launch_autonomous() {
 
   if [[ -n "$model" ]]; then
     model="$(agent_resolve_model "${role:-coder}" "$model" "$repo_dir")"
+    local resolved_agent
+    if ! resolved_agent="$(agent_resolve_from_model "$model" "${launch_phase:-coding}")"; then
+      return 1
+    fi
+    if [[ "$resolved_agent" != "$agent_cmd" ]]; then
+      echo "Error: launch agent mismatch for model $model: route resolved $resolved_agent, requested $agent_cmd" >&2
+      return 1
+    fi
   fi
 
   local model_flag=""
@@ -2258,6 +2266,14 @@ agent_launch_interactive() {
       return 1
     fi
     model="$resolved_model"
+    local resolved_agent
+    if ! resolved_agent="$(agent_resolve_from_model "$model" "${launch_phase:-coding}")"; then
+      return 1
+    fi
+    if [[ "$resolved_agent" != "$agent_cmd" ]]; then
+      echo "Error: launch agent mismatch for model $model: route resolved $resolved_agent, requested $agent_cmd" >&2
+      return 1
+    fi
   fi
 
   if [[ -n "$model" ]] && agent_model_is_deepseek "$model"; then

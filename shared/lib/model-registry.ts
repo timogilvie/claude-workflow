@@ -3,6 +3,7 @@ import {
   getModelRegistryConfig,
   getRouterConfig,
   type ModelCapabilitiesOverride,
+  type CodexChatgptCapabilityOverride,
   type ModelRegistryConfig,
   type NativeCapabilityOverride,
 } from './config.ts';
@@ -75,6 +76,12 @@ export interface NativeCapability {
   certification?: NativeCertificationMetadata;
 }
 
+/** Account/surface capability for hosted Codex launches (not native OpenAI). */
+export interface CodexChatgptCapability {
+  supported: boolean;
+  reason?: string;
+}
+
 export interface ModelCapabilities {
   vendor: string;
   class: ModelClass;
@@ -97,6 +104,7 @@ export interface ModelCapabilities {
   costPerMillionInputTokensUsd: number;
   costPerMillionOutputTokensUsd: number;
   agent?: AgentType;
+  codexChatgptCapability?: CodexChatgptCapability;
   nativeCapability?: NativeCapability;
   /**
    * ISO date the model became generally available. Drives the recency-aware
@@ -186,6 +194,20 @@ function cloneNativeCapability(
   };
 }
 
+function cloneCodexChatgptCapability(
+  capability: CodexChatgptCapability | undefined,
+): CodexChatgptCapability | undefined {
+  return capability ? { ...capability } : undefined;
+}
+
+function mergeCodexChatgptCapability(
+  seed: CodexChatgptCapability | undefined,
+  override: CodexChatgptCapabilityOverride | undefined,
+): CodexChatgptCapability | undefined {
+  if (!override) return cloneCodexChatgptCapability(seed);
+  return { supported: override.supported ?? seed?.supported ?? false, reason: override.reason ?? seed?.reason };
+}
+
 function mergeNativeCapability(
   seed: NativeCapability | undefined,
   override: NativeCapabilityOverride,
@@ -248,6 +270,7 @@ function cloneCapabilities(capabilities: ModelCapabilities): ModelCapabilities {
     costPerMillionInputTokensUsd: capabilities.costPerMillionInputTokensUsd,
     costPerMillionOutputTokensUsd: capabilities.costPerMillionOutputTokensUsd,
     agent: capabilities.agent,
+    codexChatgptCapability: cloneCodexChatgptCapability(capabilities.codexChatgptCapability),
     nativeCapability: cloneNativeCapability(capabilities.nativeCapability),
     releasedAt: capabilities.releasedAt,
   };
@@ -381,6 +404,9 @@ function makeDefaultCapabilities(override?: ModelCapabilitiesOverride): ModelCap
     costPerMillionInputTokensUsd: override?.costPerMillionInputTokensUsd ?? 0,
     costPerMillionOutputTokensUsd: override?.costPerMillionOutputTokensUsd ?? 0,
     agent: override?.agent,
+    codexChatgptCapability: override?.codexChatgptCapability
+      ? mergeCodexChatgptCapability(undefined, override.codexChatgptCapability)
+      : undefined,
     releasedAt: override?.releasedAt,
   };
 }
@@ -411,6 +437,7 @@ function mergeCapabilities(
     costPerMillionInputTokensUsd: override.costPerMillionInputTokensUsd ?? seed.costPerMillionInputTokensUsd,
     costPerMillionOutputTokensUsd: override.costPerMillionOutputTokensUsd ?? seed.costPerMillionOutputTokensUsd,
     agent: override.agent ?? seed.agent,
+    codexChatgptCapability: mergeCodexChatgptCapability(seed.codexChatgptCapability, override.codexChatgptCapability),
     nativeCapability: override.nativeCapability
       ? mergeNativeCapability(seed.nativeCapability, override.nativeCapability)
       : cloneNativeCapability(seed.nativeCapability),
@@ -597,6 +624,12 @@ export const FAMILY_ALIASES = Object.freeze({
       stable: 'gpt-5.5',
     }),
     description: 'Stable OpenAI frontier alias for the GPT-5.5 family.',
+  }),
+  'gpt-5.6': Object.freeze({
+    channels: Object.freeze({
+      stable: 'gpt-5.6-sol',
+    }),
+    description: 'OpenAI API alias for the GPT-5.6 family; resolves to Sol.',
   }),
   'gemini-pro': Object.freeze({
     channels: Object.freeze({
@@ -1187,12 +1220,14 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       costPerMillionInputTokensUsd: 5,
       costPerMillionOutputTokensUsd: 30,
       agent: 'codex',
+      codexChatgptCapability: { supported: true },
     },
     'gpt-5.4': {
       vendor: 'openai',
       class: 'frontier',
       strengths: ['frontier reasoning', 'code generation', 'architecture'],
-      weaknesses: ['higher cost'],
+      weaknesses: ['superseded for ChatGPT Codex launches by GPT-5.6 Terra'],
+      disabled: true,
       qualityScores: scores(60, 94, 90, 92, 60),
       pricing: {
         inputCostPerMTok: 2.5,
@@ -1207,6 +1242,61 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       costPerMillionInputTokensUsd: 2.5,
       costPerMillionOutputTokensUsd: 15,
       agent: 'codex',
+      codexChatgptCapability: {
+        supported: false,
+        reason: 'HOK-2549: Codex now uses gpt-5.6-terra in place of gpt-5.4.',
+      },
+    },
+    'gpt-5.6-sol': {
+      vendor: 'openai',
+      class: 'frontier',
+      strengths: ['frontier professional reasoning', 'complex coding', 'tool use'],
+      weaknesses: ['higher cost', 'not certified for the ChatGPT Codex launch surface'],
+      defaultLadderEligible: false,
+      qualityScores: scores(0, 0, 0, 0, 0),
+      pricing: { inputCostPerMTok: 5, outputCostPerMTok: 30, cacheWriteCostPerMTok: 6.25, cacheReadCostPerMTok: 0.5 },
+      contextWindowTokens: 1_050_000,
+      toolSupport: 'full',
+      multimodal: { text: true, image: true },
+      latencyTier: 'slow',
+      reasoningTier: 'advanced',
+      costPerMillionInputTokensUsd: 5,
+      costPerMillionOutputTokensUsd: 30,
+      agent: 'native-openai',
+    },
+    'gpt-5.6-terra': {
+      vendor: 'openai',
+      class: 'strong_generalist',
+      strengths: ['balanced professional reasoning', 'coding', 'tool use'],
+      weaknesses: ['new routing candidate; evaluation evidence is still accumulating'],
+      qualityScores: scores(62, 94, 91, 93, 66),
+      pricing: { inputCostPerMTok: 2.5, outputCostPerMTok: 15, cacheWriteCostPerMTok: 3.125, cacheReadCostPerMTok: 0.25 },
+      contextWindowTokens: 1_050_000,
+      toolSupport: 'full',
+      multimodal: { text: true, image: true },
+      latencyTier: 'standard',
+      reasoningTier: 'advanced',
+      costPerMillionInputTokensUsd: 2.5,
+      costPerMillionOutputTokensUsd: 15,
+      agent: 'codex',
+      codexChatgptCapability: { supported: true },
+    },
+    'gpt-5.6-luna': {
+      vendor: 'openai',
+      class: 'fast_economy',
+      strengths: ['cost-sensitive high-volume workloads', 'tool use'],
+      weaknesses: ['not certified for the ChatGPT Codex launch surface'],
+      defaultLadderEligible: false,
+      qualityScores: scores(0, 0, 0, 0, 0),
+      pricing: { inputCostPerMTok: 1, outputCostPerMTok: 6, cacheWriteCostPerMTok: 1.25, cacheReadCostPerMTok: 0.1 },
+      contextWindowTokens: 1_050_000,
+      toolSupport: 'full',
+      multimodal: { text: true, image: true },
+      latencyTier: 'fast',
+      reasoningTier: 'advanced',
+      costPerMillionInputTokensUsd: 1,
+      costPerMillionOutputTokensUsd: 6,
+      agent: 'native-openai',
     },
     'gpt-5.3-codex': {
       vendor: 'openai',
@@ -1235,7 +1325,7 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       vendor: 'openai',
       class: 'strong_generalist',
       strengths: ['general reasoning', 'coding', 'broad tool support'],
-      weaknesses: ['premium cost', 'opt-in only'],
+      weaknesses: ['premium cost', 'not available to the ChatGPT Codex surface'],
       qualityScores: scores(72, 92, 90, 90, 70),
       pricing: { inputCostPerMTok: 3, outputCostPerMTok: 15 },
       defaultLadderEligible: false,
@@ -1247,12 +1337,16 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       costPerMillionInputTokensUsd: 3,
       costPerMillionOutputTokensUsd: 15,
       agent: 'codex',
+      codexChatgptCapability: {
+        supported: false,
+        reason: 'The ChatGPT-authenticated Codex CLI does not support gpt-5.',
+      },
     },
     'gpt-5-mini': {
       vendor: 'openai',
       class: 'fast_economy',
       strengths: ['fast responses', 'low-cost coding'],
-      weaknesses: ['less depth than frontier GPT variants', 'opt-in only'],
+      weaknesses: ['less depth than frontier GPT variants', 'not available to the ChatGPT Codex surface'],
       qualityScores: scores(60, 75, 82, 80, 62),
       pricing: { inputCostPerMTok: 0.6, outputCostPerMTok: 2.4 },
       defaultLadderEligible: false,
@@ -1264,6 +1358,10 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       costPerMillionInputTokensUsd: 0.6,
       costPerMillionOutputTokensUsd: 2.4,
       agent: 'codex',
+      codexChatgptCapability: {
+        supported: false,
+        reason: 'The ChatGPT-authenticated Codex CLI does not support gpt-5-mini.',
+      },
     },
     'gemini-2.5-pro': {
       vendor: 'google',
@@ -1694,11 +1792,11 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
     },
   },
   ladders: {
-    routing: ['claude-haiku-4-5-20251001', 'deepseek-v4-flash', 'claude-sonnet-5', 'gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7'],
-    planning: ['claude-fable-5', 'gpt-5.5', 'claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.4', 'deepseek-reasoner', 'deepseek-v4-pro', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
-    coding: ['claude-fable-5', 'gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-sonnet-5', 'claude-opus-4-8', 'claude-opus-4-7', 'deepseek-chat', 'deepseek-v4-flash', 'claude-haiku-4-5-20251001'],
-    review: ['gpt-5.5', 'claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.4', 'deepseek-v4-pro', 'claude-sonnet-5', 'deepseek-reasoner', 'claude-haiku-4-5-20251001'],
-    classify: ['claude-haiku-4-5-20251001', 'deepseek-v4-flash', 'claude-sonnet-5', 'gpt-5.5', 'gpt-5.4', 'claude-fable-5'],
+    routing: ['claude-haiku-4-5-20251001', 'deepseek-v4-flash', 'claude-sonnet-5', 'gpt-5.5', 'gpt-5.6-terra', 'deepseek-v4-pro', 'claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7'],
+    planning: ['claude-fable-5', 'gpt-5.5', 'claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.6-terra', 'deepseek-reasoner', 'deepseek-v4-pro', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
+    coding: ['claude-fable-5', 'gpt-5.5', 'gpt-5.6-terra', 'deepseek-v4-pro', 'claude-sonnet-5', 'claude-opus-4-8', 'claude-opus-4-7', 'deepseek-chat', 'deepseek-v4-flash', 'claude-haiku-4-5-20251001'],
+    review: ['gpt-5.5', 'claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.6-terra', 'deepseek-v4-pro', 'claude-sonnet-5', 'deepseek-reasoner', 'claude-haiku-4-5-20251001'],
+    classify: ['claude-haiku-4-5-20251001', 'deepseek-v4-flash', 'claude-sonnet-5', 'gpt-5.5', 'gpt-5.6-terra', 'claude-fable-5'],
   },
 };
 
@@ -1788,6 +1886,15 @@ export function mergeModelRegistry(
 
 export function getEffectiveRegistry(repoDir?: string): ModelRegistry {
   return mergeModelRegistry(DEFAULT_MODEL_REGISTRY, getModelRegistryConfig(repoDir));
+}
+
+/**
+ * Hosted Codex authenticates through a ChatGPT account, whose model inventory
+ * is narrower than the OpenAI API. Missing metadata is deliberately ineligible
+ * so a new API model cannot accidentally be launched through Codex.
+ */
+export function isCodexChatgptLaunchEligible(capabilities: ModelCapabilities | undefined): boolean {
+  return capabilities?.codexChatgptCapability?.supported === true;
 }
 
 /**

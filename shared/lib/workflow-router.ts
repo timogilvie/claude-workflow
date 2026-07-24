@@ -9,12 +9,12 @@
 
 import { readFileSync } from 'node:fs';
 import { buildEvalSummary, evaluateChallenge, type ChallengeRecommendation } from './challenge-scheduler.ts';
-import { getAvailableModelsForStage, getBudgetConfig, getChallengeSchedulerConfig, getDifficultyClassifierConfig, getHokusaiRouterConfig, getRouterConfig, isRouterCapabilityFilteringEnabled } from './config.ts';
+import { getAvailableModelsForStage, getBudgetConfig, getChallengeSchedulerConfig, getDifficultyClassifierConfig, getHokusaiRouterConfig, getRouterConfig, isRouterCapabilityFilteringEnabled, loadWavemillConfig } from './config.ts';
 import { filterDeepSeekModels, type DeepSeekPoolFilterResult } from './deepseek-provider.ts';
 import { filterOpenRouterModels, type OpenRouterPoolFilterResult } from './openrouter-provider.ts';
 import { routeViaHokusai } from './hokusai-router.ts';
 import { analyzePrompt, loadRouterConfig, recommendModel, resolveAgent, type PromptCharacteristics, type TaskType } from './model-router.ts';
-import { compareLatencyTier, getEffectiveRegistry, getLadder, hasCapabilityConstraints, isModelEnabled, type CapabilityConstraints, type LatencyTier, type RegistryTaskType } from './model-registry.ts';
+import { compareLatencyTier, getEffectiveRegistry, getLadder, hasCapabilityConstraints, isCodexChatgptLaunchEligible, isModelEnabled, type CapabilityConstraints, type LatencyTier, type RegistryTaskType } from './model-registry.ts';
 import { readQuotaSnapshot, type QuotaSnapshot } from './quota-state.ts';
 import {
   formatExplorationReasoning,
@@ -150,6 +150,7 @@ function withChallengeRecommendation<T extends WorkflowRouteDecision>(decision: 
     routingDecision: decision,
     evalSummary: buildEvalSummary(repoDir),
     config: challengeConfig,
+    challengeModels: loadWavemillConfig(repoDir).challenge?.models,
     repoDir,
   });
 
@@ -465,9 +466,17 @@ function filterProviderPool(
 ): ResolvedModelPool {
   const deepSeekFiltered = filterDeepSeekModels(filterDisabledModels(models), repoDir, stage);
   const openRouterFiltered = filterOpenRouterModels(deepSeekFiltered.models, repoDir, stage);
+  const registry = getEffectiveRegistry(repoDir);
+  const codexRejected = openRouterFiltered.models.filter((modelId) => {
+    const capabilities = registry.models[modelId];
+    return capabilities?.agent === 'codex' && !isCodexChatgptLaunchEligible(capabilities);
+  });
   return {
-    models: openRouterFiltered.models,
-    warnings: mergePoolWarnings(deepSeekFiltered, openRouterFiltered),
+    models: openRouterFiltered.models.filter((modelId) => !codexRejected.includes(modelId)),
+    warnings: [
+      ...mergePoolWarnings(deepSeekFiltered, openRouterFiltered),
+      ...codexRejected.map((modelId) => `Excluded ${modelId}: modelRegistry declares it ineligible for the codex-chatgpt launch surface.`),
+    ],
   };
 }
 

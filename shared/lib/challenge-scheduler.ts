@@ -64,6 +64,11 @@ export interface ChallengeSchedulerInput {
   routingDecision: WorkflowRouteDecision | StageAwareDecision;
   evalSummary: EvalSummary;
   config: ChallengeSchedulerConfig;
+  /**
+   * Explicit challenger pool. When supplied, recommendations must stay in
+   * this pool rather than drawing from every priced routing model.
+   */
+  challengeModels?: string[] | null;
   repoDir?: string;
   forceModel?: string;
 }
@@ -128,7 +133,12 @@ function getDefaultModel(
 function getAvailableModels(
   routingDecision: WorkflowRouteDecision | StageAwareDecision,
   repoDir?: string,
+  challengeModels?: string[] | null,
 ): string[] {
+  if (challengeModels && challengeModels.length > 0) {
+    return filterDisabledModels([...new Set(challengeModels)]);
+  }
+
   const routerConfig = loadRouterConfig(repoDir);
   const pricingModels = Object.keys(loadConfiguredPricingTable(repoDir));
   return filterDisabledModels([...new Set([
@@ -389,7 +399,7 @@ export function evaluateChallenge(input: ChallengeSchedulerInput): ChallengeReco
     };
   }
 
-  const availableModels = getAvailableModels(input.routingDecision, input.repoDir);
+  const availableModels = getAvailableModels(input.routingDecision, input.repoDir, input.challengeModels);
   const recommendations = [
     checkLowConfidence(
       input.routingDecision,

@@ -61,6 +61,21 @@ else
 fi
 rm -f "$stdout_file" "$stderr_file"
 
+for unsupported_model in gpt-5 gpt-5-mini gpt-5.4; do
+  stdout_file="$(mktemp)"
+  stderr_file="$(mktemp)"
+  if run_resolve "$stdout_file" "$stderr_file" agent_resolve_from_model "$unsupported_model" "planning"; then
+    fail "$unsupported_model must not resolve for Codex/ChatGPT" "expected non-zero exit"
+  elif [[ ! -s "$stdout_file" ]] \
+    && grep -q "model=$unsupported_model" "$stderr_file" \
+    && grep -q 'surface=codex-chatgpt' "$stderr_file"; then
+    pass "$unsupported_model fails closed with Codex/ChatGPT diagnostic"
+  else
+    fail "$unsupported_model fails closed with Codex/ChatGPT diagnostic" "stdout=$(cat "$stdout_file"), stderr=$(cat "$stderr_file")"
+  fi
+  rm -f "$stdout_file" "$stderr_file"
+done
+
 stdout_file="$(mktemp)"
 stderr_file="$(mktemp)"
 if run_resolve "$stdout_file" "$stderr_file" agent_resolve_from_model "claude-sonnet-5" "coding"; then
@@ -76,14 +91,14 @@ rm -f "$stdout_file" "$stderr_file"
 
 stdout_file="$(mktemp)"
 stderr_file="$(mktemp)"
-if run_resolve "$stdout_file" "$stderr_file" agent_resolve_from_model "gpt-5.5" "review"; then
+if run_resolve "$stdout_file" "$stderr_file" agent_resolve_from_model "gpt-5.6-terra" "review"; then
   if [[ "$(tr -d '\n' < "$stdout_file")" == "codex" ]]; then
-    pass "gpt-5.5 review resolves to codex"
+    pass "gpt-5.6-terra review resolves to codex"
   else
-    fail "gpt-5.5 review resolves to codex" "got: $(cat "$stdout_file")"
+    fail "gpt-5.6-terra review resolves to codex" "got: $(cat "$stdout_file")"
   fi
 else
-  fail "gpt-5.5 review resolves to codex" "$(cat "$stderr_file")"
+  fail "gpt-5.6-terra review resolves to codex" "$(cat "$stderr_file")"
 fi
 rm -f "$stdout_file" "$stderr_file"
 
