@@ -96,6 +96,35 @@ await test('successful routing returns a workflow decision from the model 30 res
   }
 });
 
+await test('upgrades retired Codex IDs returned by Hokusai to supported successors', async () => {
+  const { repoDir, cleanup } = makeRepo();
+  process.env.TEST_HOKUSAI_TOKEN = 'secret-token';
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    predictions: {
+      recommended_strategy: {
+        planner_model: 'gpt-5.4',
+        coder_model: 'gpt-5',
+        reviewer_model: 'gpt-5.4',
+        stages: ['plan', 'code', 'review'],
+        estimated_success_under_budget: 0.9,
+        estimated_cost_usd: 2.5,
+        confidence: 0.8,
+      },
+    },
+    metadata: {},
+  }), { status: 200 });
+
+  try {
+    const decision = await routeViaHokusai('Implement a backend feature with tests.', { repoDir });
+    assert.equal(decision?.planner, 'gpt-5.6-terra');
+    assert.equal(decision?.coder, 'gpt-5.5');
+    assert.equal(decision?.reviewer, 'gpt-5.6-terra');
+  } finally {
+    globalThis.fetch = originalFetch;
+    cleanup();
+  }
+});
+
 await test('sends the nested inputs payload and prevents legacy flat payload keys', async () => {
   const { repoDir, cleanup } = makeRepo();
   process.env.TEST_HOKUSAI_TOKEN = 'secret-token';

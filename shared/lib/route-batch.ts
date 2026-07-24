@@ -11,6 +11,7 @@ import {
 import { getCurrentOperatingMode, type OperatingMode } from './operating-mode.ts';
 import { resolveEffectiveModel } from './model-resolution.ts';
 import { readQuotaSnapshot } from './quota-state.ts';
+import { upgradeRouteModelSuccessors } from './route-model-successors.ts';
 import {
   buildRouteProvenance,
   withExpandedRouteMetadata,
@@ -396,10 +397,10 @@ export async function routeExpandedPackets(
       continue;
     }
 
-    const cachedDecision = withResolvedRouteBudget(cached.decision, {
+    const cachedDecision = upgradeRouteModelSuccessors(withResolvedRouteBudget(cached.decision, {
       explicitMaxCostUsd: resolvedOptions.maxCostUsd,
       repoDir,
-    });
+    }), repoDir);
     results.set(task.key, {
       input: task,
       outputFile: task.outputFile,
@@ -419,10 +420,10 @@ export async function routeExpandedPackets(
     decision: WorkflowRouteDecision,
     routeSource: 'batch' | 'single',
   ): Promise<void> => {
-    const budgetedDecision = withResolvedRouteBudget(decision, {
+    const budgetedDecision = upgradeRouteModelSuccessors(withResolvedRouteBudget(decision, {
       explicitMaxCostUsd: resolvedOptions.maxCostUsd,
       repoDir,
-    });
+    }), repoDir);
     const decorated = withExpandedRouteMetadata(budgetedDecision, {
       cache_hit: false,
       route_source: routeSource,

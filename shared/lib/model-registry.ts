@@ -1907,6 +1907,35 @@ export function isCodexChatgptLaunchEligible(capabilities: ModelCapabilities | u
 }
 
 /**
+ * Explicit migrations for retired model IDs emitted by historical route
+ * artifacts or external routers. These are deliberately narrow: an unknown or
+ * otherwise ineligible model must still be rejected by agent resolution.
+ */
+export const CODEX_CHATGPT_SUCCESSOR_MODELS: Readonly<Record<string, string>> = Object.freeze({
+  'gpt-5.4': 'gpt-5.6-terra',
+  'gpt-5': 'gpt-5.5',
+  'gpt-5-mini': 'gpt-5.5',
+});
+
+/**
+ * Returns a launchable Codex successor for a specifically retired model ID.
+ * The target is checked against the effective registry so local configuration
+ * cannot turn a migration into an invalid launch.
+ */
+export function resolveCodexChatgptSuccessor(
+  modelId: string,
+  registry: ModelRegistry = DEFAULT_MODEL_REGISTRY,
+): string | null {
+  const successor = CODEX_CHATGPT_SUCCESSOR_MODELS[modelId];
+  if (!successor) return null;
+
+  const capabilities = getModel(registry, successor);
+  return capabilities?.agent === 'codex' && isCodexChatgptLaunchEligible(capabilities)
+    ? successor
+    : null;
+}
+
+/**
  * Use this guard at any native read-only selection site. Mere model availability
  * does not imply native read-only certification.
  */
