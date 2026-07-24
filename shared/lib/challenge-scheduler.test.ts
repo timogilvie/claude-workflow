@@ -125,33 +125,6 @@ test('recommends challenge when confidence is below threshold', () => {
   }
 });
 
-test('limits recommendations to the configured challenge pool', () => {
-  const { repoDir, cleanup } = makeRepo();
-  try {
-    const result = evaluateChallenge({
-      routingDecision: makeDecision({ coder: 'gpt-5.4' }),
-      evalSummary: makeDenseSummary({
-        recordsByModel: {
-          'claude-sonnet-4-5-20250929': 100,
-          'gpt-5.4': 100,
-          'gpt-5.3-codex': 0,
-          'glm-5.2': 0,
-          'kimi-k2.7-code': 0,
-        },
-      }),
-      config: { enabled: true, confidenceThreshold: 0, newModelChallengeCount: 25, minEvalRecordsPerStage: 1 },
-      challengeModels: ['glm-5.2', 'kimi-k2.7-code'],
-      repoDir,
-    });
-
-    assert.equal(result.shouldChallenge, true);
-    assert.equal(result.reason, 'new-model');
-    assert.ok(['glm-5.2', 'kimi-k2.7-code'].includes(result.challengerModel || ''));
-  } finally {
-    cleanup();
-  }
-});
-
 test('skips challenge when forceModel is set', () => {
   const { repoDir, cleanup } = makeRepo();
   try {

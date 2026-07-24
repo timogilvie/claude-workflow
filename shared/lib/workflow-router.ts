@@ -9,7 +9,7 @@
 
 import { readFileSync } from 'node:fs';
 import { buildEvalSummary, evaluateChallenge, type ChallengeRecommendation } from './challenge-scheduler.ts';
-import { getAvailableModelsForStage, getBudgetConfig, getChallengeSchedulerConfig, getDifficultyClassifierConfig, getHokusaiRouterConfig, getRouterConfig, isRouterCapabilityFilteringEnabled, loadWavemillConfig } from './config.ts';
+import { getAvailableModelsForStage, getBudgetConfig, getChallengeSchedulerConfig, getDifficultyClassifierConfig, getHokusaiRouterConfig, getRouterConfig, isRouterCapabilityFilteringEnabled } from './config.ts';
 import { filterDeepSeekModels, type DeepSeekPoolFilterResult } from './deepseek-provider.ts';
 import { filterOpenRouterModels, type OpenRouterPoolFilterResult } from './openrouter-provider.ts';
 import { routeViaHokusai } from './hokusai-router.ts';
@@ -150,7 +150,6 @@ function withChallengeRecommendation<T extends WorkflowRouteDecision>(decision: 
     routingDecision: decision,
     evalSummary: buildEvalSummary(repoDir),
     config: challengeConfig,
-    challengeModels: loadWavemillConfig(repoDir).challenge?.models,
     repoDir,
   });
 
