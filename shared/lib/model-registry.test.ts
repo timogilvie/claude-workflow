@@ -1711,6 +1711,10 @@ describe('parseModelSelector', () => {
       ok: true,
       selector: { kind: 'pinned', modelId: 'deepseek-reasoner' },
     });
+    assert.deepEqual(parseModelSelector('gpt-5.6-terra'), {
+      ok: true,
+      selector: { kind: 'pinned', modelId: 'gpt-5.6-terra' },
+    });
   });
 
   it('parses inherit and trims whitespace on successful selectors', () => {

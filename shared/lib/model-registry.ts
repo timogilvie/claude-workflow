@@ -722,6 +722,13 @@ export function parseModelSelector(input: string): ParseModelSelectorResult {
     return { ok: true, selector: { kind: 'alias', family: trimmed, channel: 'stable' } };
   }
 
+  // A concrete registered model ID takes precedence over the legacy
+  // family-channel shorthand (for example, `gpt-5.6-terra` must not be
+  // interpreted as the unsupported `gpt-5.6:terra` channel).
+  if (Object.hasOwn(DEFAULT_MODEL_REGISTRY.models, trimmed)) {
+    return { ok: true, selector: { kind: 'pinned', modelId: trimmed } };
+  }
+
   for (const family of Object.keys(FAMILY_ALIASES)) {
     if (!trimmed.startsWith(`${family}-`)) {
       continue;

@@ -86,7 +86,7 @@ WAVEMILL_BRANCH="task/demo" \
 WAVEMILL_BASE_BRANCH="auto/integration" \
 WAVEMILL_TITLE="Demo" \
 REPO_DIR="$REPO_DIR" \
-agent_launch_autonomous "sess" "planning" "/tmp/instr.txt" "native-openrouter" "qwen-3-coder" "HOK-2313_c"
+agent_launch_autonomous "sess" "planning" "/tmp/instr.txt" "native-openrouter" "kimi-k2.7-code" "HOK-2313_c"
 
 check_contains "native branch dispatches launcher path" "$(cat "$TMUX_LOG")" "$NATIVE_LAUNCHER"
 check_contains "native launcher invokes launch-native-planning tool" "$(cat "$NATIVE_LAUNCHER")" "tools/launch-native-planning.ts"
@@ -158,11 +158,11 @@ CODING_PROMPT="/tmp/wavemill-HOK-2516-coding-prompt.txt"
 CODING_LAUNCHER="/tmp/sess-HOK-2516-autonomous-launcher.sh"
 rm -f "$CODING_LAUNCHER"
 REPO_DIR="$REPO_DIR" \
-agent_launch_autonomous "sess" "@95" "$CODING_PROMPT" "codex" "gpt-5.4" "HOK-2516"
+agent_launch_autonomous "sess" "@95" "$CODING_PROMPT" "codex" "gpt-5.6-terra" "HOK-2516"
 
 check_contains "tmux id coding prompt dispatches codex launcher" "$(cat "$TMUX_LOG")" "$CODING_LAUNCHER"
 check_contains "coding launcher normalizes phase from prompt" "$(cat "$CODING_LAUNCHER")" "export WAVEMILL_PHASE='coding'"
-check_contains "coding launcher uses effective coder route" "$(cat "$CODING_LAUNCHER")" "codex exec --model gpt-5.4"
+check_contains "coding launcher uses effective coder route" "$(cat "$CODING_LAUNCHER")" "codex exec --model gpt-5.6-terra"
 check_not_contains "coding launcher does not execute native provider" "$(cat "$CODING_LAUNCHER")" "native-openrouter"
 
 BAD_NATIVE_LAUNCHER="/tmp/sess-HOK-2517-autonomous-launcher.sh"
@@ -394,7 +394,7 @@ if [[ -f "$BAD_INTERACTIVE_LAUNCHER" ]]; then
 else
   pass "role-ineligible interactive native planner does not write launcher"
 fi
-if grep -Eq "not eligible for planning|Failed to resolve model selector 'qwen-3-coder'|Rejecting invalid model 'qwen-3-coder'|native launch probe failed for native-openrouter/planning/" "$TMPDIR_TEST/bad-interactive.stderr"; then
+if grep -Eq "not eligible for planning|Failed to resolve model selector 'qwen-3-coder'|Rejecting invalid model 'qwen-3-coder'|native launch probe failed for native-openrouter/planning|model=qwen-3-coder.*reason=role-ineligible" "$TMPDIR_TEST/bad-interactive.stderr"; then
   pass "interactive native planner emits role rejection"
 else
   fail "interactive native planner emits role rejection" "$(cat "$TMPDIR_TEST/bad-interactive.stderr")"
