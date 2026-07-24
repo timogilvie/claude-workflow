@@ -1,7 +1,7 @@
 import type { ModelClass } from './model-registry.ts';
 import { getAvailableModelsForStage, getRouterConfig } from './config.ts';
 import { filterDeepSeekModels } from './deepseek-provider.ts';
-import { getEffectiveRegistry, isModelEnabled } from './model-registry.ts';
+import { getEffectiveRegistry, isCodexChatgptLaunchEligible, isModelEnabled } from './model-registry.ts';
 import type { QuotaSnapshot, QuotaStatus, VendorQuotaStats } from './quota-state.ts';
 import { getVendorQuotaBreakdown, readQuotaSnapshot } from './quota-state.ts';
 
@@ -16,6 +16,11 @@ export const PREMIUM_MODEL_CLASS: ModelClass = 'frontier';
 export const CONSTRAINED_TRIGGER_STATUS: QuotaStatus = 'degrading';
 export const SURVIVAL_TRIGGER_STATUS: QuotaStatus = 'exhausted';
 const ROUTER_STAGES = ['planner', 'coder', 'reviewer'] as const;
+
+function isActiveForOperatingMode(capabilities: Parameters<typeof isModelEnabled>[0]): boolean {
+  return isModelEnabled(capabilities)
+    && (capabilities?.agent !== 'codex' || isCodexChatgptLaunchEligible(capabilities));
+}
 
 export function deriveOperatingMode(
   snapshot: QuotaSnapshot,
@@ -67,16 +72,20 @@ export function getOperatingModeResult(repoDir?: string): OperatingModeResult {
   const routerConfig = getRouterConfig(repoDir);
   const activeModelIds = new Set<string>();
   for (const [modelId, capabilities] of Object.entries(registry.models)) {
-    if (!isModelEnabled(capabilities)) {
+    if (!isActiveForOperatingMode(capabilities)) {
       continue;
     }
     if (capabilities.defaultLadderEligible !== false) {
-      activeModelIds.add(modelId);
+      if (isActiveForOperatingMode(registry.models[modelId])) {
+        activeModelIds.add(modelId);
+      }
     }
   }
   for (const ladder of Object.values(registry.ladders)) {
     for (const modelId of ladder ?? []) {
-      activeModelIds.add(modelId);
+      if (isActiveForOperatingMode(registry.models[modelId])) {
+        activeModelIds.add(modelId);
+      }
     }
   }
   for (const stage of ROUTER_STAGES) {
@@ -86,7 +95,7 @@ export function getOperatingModeResult(repoDir?: string): OperatingModeResult {
   }
   const unfilteredFrontierModels = Object.entries(registry.models)
     .filter(([modelId]) => activeModelIds.has(modelId))
-    .filter(([, capabilities]) => isModelEnabled(capabilities))
+    .filter(([, capabilities]) => isActiveForOperatingMode(capabilities))
     .filter(([, capabilities]) => capabilities.class === PREMIUM_MODEL_CLASS)
     .map(([modelId, capabilities]) => ({ modelId, vendor: capabilities.vendor }));
   const allowedModelIds = new Set(filterDeepSeekModels(
