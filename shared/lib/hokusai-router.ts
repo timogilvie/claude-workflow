@@ -8,6 +8,7 @@ import { getHokusaiRouterConfig } from './config.ts';
 import { resolveEnvValue } from './env-file.ts';
 import { errorMessage } from './error-utils.ts';
 import { fromHokusaiModel30Response } from './hokusai-adapter.ts';
+import { upgradeRouteModelSuccessors } from './route-model-successors.ts';
 import {
   toHokusaiModel30Request,
   type HokusaiModel30Response,
@@ -187,7 +188,10 @@ export async function routeViaHokusai(
       return null;
     }
 
-    const decision = fromHokusaiModel30Response(payload, { repoDir });
+    const decision = upgradeRouteModelSuccessors(
+      fromHokusaiModel30Response(payload, { repoDir }),
+      repoDir,
+    );
     if (typeof options.maxCostUsd === 'number') {
       decision.constraints = { maxCostUsd: options.maxCostUsd };
     }

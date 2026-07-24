@@ -5,7 +5,9 @@ import { mutateJsonState, StateParseError } from './state-mutex.ts';
 import type { OperatingMode } from './operating-mode.ts';
 import type { WorkflowRouteDecision } from './workflow-router.ts';
 
-export const EXPANDED_ROUTE_CACHE_INPUT_VERSION = '1';
+// Bump when routing semantics change so stale packet-only cache keys cannot
+// replay a route made against a retired model registry.
+export const EXPANDED_ROUTE_CACHE_INPUT_VERSION = '2';
 
 export interface ExpandedPacketFiles {
   packetFile?: string;
