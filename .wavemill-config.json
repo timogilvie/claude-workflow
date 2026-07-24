@@ -99,9 +99,10 @@
         "outputCostPerMTok": 14,
         "cacheReadCostPerMTok": 0.44
       },
-      "gpt-5.4": {
+      "gpt-5.6-terra": {
         "inputCostPerMTok": 2.5,
         "outputCostPerMTok": 15,
+        "cacheWriteCostPerMTok": 3.125,
         "cacheReadCostPerMTok": 0.25
       },
       "gpt-5.5": {
@@ -199,8 +200,6 @@
       "models": [
         "deepseek-r1",
         "deepseek-v3",
-        "gpt-5",
-        "gpt-5-mini",
         "qwen-3-coder",
         "qwen-3-235b",
         "qwen-2.5-coder-32b",
@@ -307,8 +306,7 @@
         "claude-opus-4-8",
         "claude-opus-4-7",
         "gpt-5.5",
-        "gpt-5",
-        "gpt-5.4",
+        "gpt-5.6-terra",
         "deepseek-r1",
         "glm-5.2",
         "kimi-k2",
@@ -324,9 +322,7 @@
         "claude-fable-5",
         "claude-sonnet-5",
         "gpt-5.5",
-        "gpt-5",
-        "gpt-5-mini",
-        "gpt-5.4",
+        "gpt-5.6-terra",
         "deepseek-r1",
         "deepseek-v3",
         "qwen-3-coder",
@@ -350,9 +346,7 @@
         "claude-opus-4-8",
         "claude-opus-4-7",
         "gpt-5.5",
-        "gpt-5",
-        "gpt-5-mini",
-        "gpt-5.4",
+        "gpt-5.6-terra",
         "deepseek-r1",
         "deepseek-v3",
         "qwen-3-coder",
@@ -378,7 +372,7 @@
       "claude-opus-4-6": "claude",
       "claude-sonnet-4-5-20250929": "claude",
       "claude-haiku-4-5-20251001": "claude",
-      "gpt-5.4": "codex",
+      "gpt-5.6-terra": "codex",
       "gpt-5.5": "codex",
       "gpt-5.3-codex": "codex",
       "gpt-5.3-codex-spark": "codex",

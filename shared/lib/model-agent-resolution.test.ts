@@ -83,6 +83,30 @@ describe('resolveModelAgent', () => {
     assert.deepEqual(result, { ok: true, agent: 'codex' });
   });
 
+  it('routes the GPT-5.6 Terra Codex replacement and rejects retired GPT-5.4 launches', () => {
+    assert.deepEqual(
+      resolveModelAgent({ model: 'gpt-5.6-terra', phase: 'coding' }),
+      { ok: true, agent: 'codex' },
+    );
+    const retired = resolveModelAgent({ model: 'gpt-5.4', phase: 'coding' });
+    assert.equal(retired.ok, false);
+    if (retired.ok) assert.fail('expected retired model rejection');
+    assert.equal(retired.reason, 'codex-chatgpt-ineligible');
+    assert.match(retired.diagnostic, /gpt-5\.6-terra/);
+  });
+
+  it('rejects GPT models not certified for the ChatGPT Codex surface', () => {
+    for (const model of ['gpt-5', 'gpt-5-mini']) {
+      const result = resolveModelAgent({ model, phase: 'coding' });
+      assert.equal(result.ok, false);
+      if (result.ok) assert.fail('expected rejection');
+      assert.equal(result.reason, 'codex-chatgpt-ineligible');
+      assert.match(result.diagnostic, new RegExp(`model=${model}`));
+      assert.match(result.diagnostic, /surface=codex-chatgpt/);
+      assert.match(result.diagnostic, /source=modelRegistry/);
+    }
+  });
+
   it('resolves certified role-eligible claude-openrouter models to native-openrouter', () => {
     const registry = makeRegistry('qwen-3-coder', {
       agent: 'claude-openrouter',

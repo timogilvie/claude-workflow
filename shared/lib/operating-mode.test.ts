@@ -104,7 +104,7 @@ function writeMultiFrontierConfig(targetRepoDir: string): void {
   writeFileSync(join(targetRepoDir, '.wavemill-config.json'), JSON.stringify({
     modelRegistry: {
       models: {
-        'gpt-5.4': {
+        'gpt-5.6-terra': {
           vendor: 'openai',
           class: 'frontier',
           strengths: ['code generation'],
@@ -120,11 +120,11 @@ function writeMultiFrontierConfig(targetRepoDir: string): void {
         },
       },
       ladders: {
-        planning: ['claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        coding: ['claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        review: ['claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4'],
-        classify: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'gpt-5.5', 'gpt-5.4'],
+        planning: ['claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.6-terra', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        coding: ['claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.6-terra', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        review: ['claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.6-terra', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+        routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.6-terra'],
+        classify: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6', 'gpt-5.5', 'gpt-5.6-terra'],
       },
     },
   }, null, 2), 'utf-8');
@@ -261,7 +261,7 @@ describe('operating-mode', () => {
       'claude-opus-4-7': 'degrading',
       'claude-opus-4-6': 'degrading',
       'gpt-5.5': 'degrading',
-      'gpt-5.4': 'degrading',
+      'gpt-5.6-terra': 'degrading',
     });
 
     assert.equal(getCurrentOperatingMode(repoDir), 'constrained');
@@ -283,7 +283,7 @@ describe('operating-mode', () => {
       modelRegistry: {
         models: {
           'claude-opus-4-7': { class: 'frontier' },
-          'gpt-5.4': { class: 'frontier' },
+          'gpt-5.6-terra': { class: 'frontier' },
         },
       },
     }, null, 2), 'utf-8');
@@ -313,7 +313,7 @@ describe('operating-mode', () => {
         'claude-opus-4-7': 'exhausted',
         'claude-opus-4-6': 'exhausted',
         'claude-opus-4-8': 'exhausted',
-        'gpt-5.4': 'healthy',
+        'gpt-5.6-terra': 'healthy',
         'gpt-5.5': 'healthy',
       });
 
@@ -332,7 +332,7 @@ describe('operating-mode', () => {
         'claude-opus-4-7': 'degrading',
         'claude-opus-4-6': 'degrading',
         'claude-opus-4-8': 'degrading',
-        'gpt-5.4': 'degrading',
+        'gpt-5.6-terra': 'degrading',
         'gpt-5.5': 'degrading',
       });
 
@@ -350,7 +350,7 @@ describe('operating-mode', () => {
         'claude-opus-4-7': 'exhausted',
         'claude-opus-4-6': 'exhausted',
         'claude-opus-4-8': 'exhausted',
-        'gpt-5.4': 'exhausted',
+        'gpt-5.6-terra': 'exhausted',
         'gpt-5.5': 'exhausted',
       });
 
@@ -361,11 +361,11 @@ describe('operating-mode', () => {
   it('returns the operating mode for an individual model', () => {
     writeQuotaState({
       'claude-opus-4-7': 'exhausted',
-      'gpt-5.4': 'degrading',
+      'gpt-5.6-terra': 'degrading',
     });
 
     assert.equal(getModelOperatingMode('claude-opus-4-7', repoDir), 'survival');
-    assert.equal(getModelOperatingMode('gpt-5.4', repoDir), 'constrained');
+    assert.equal(getModelOperatingMode('gpt-5.6-terra', repoDir), 'constrained');
     assert.equal(getModelOperatingMode('claude-sonnet-4-6', repoDir), 'normal');
   });
 
@@ -375,19 +375,19 @@ describe('operating-mode', () => {
       'claude-opus-4-8': 'exhausted',
       'claude-opus-4-7': 'exhausted',
       'claude-opus-4-6': 'exhausted',
-      'gpt-5.4': 'degrading',
-      'gpt-5.5': 'exhausted',
+      'gpt-5.6-terra': 'degrading',
+      'gpt-5.5': 'degrading',
     });
 
     assert.equal(runOperatingModeTool(['global', '--repo-dir', repoDir]).stdout, 'constrained');
-    assert.equal(runOperatingModeTool(['model', 'gpt-5.4', '--repo-dir', repoDir]).stdout, 'constrained');
+    assert.equal(runOperatingModeTool(['model', 'gpt-5.6-terra', '--repo-dir', repoDir]).stdout, 'constrained');
   });
 
   it('prints a vendor breakdown in verbose global mode', () => {
     writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
       modelRegistry: {
         models: {
-          'gpt-5.4': {
+          'gpt-5.6-terra': {
             vendor: 'openai',
             class: 'frontier',
           },
@@ -400,7 +400,7 @@ describe('operating-mode', () => {
       'claude-opus-4-7': 'healthy',
       'claude-opus-4-6': 'degrading',
       'claude-opus-4-8': 'healthy',
-      'gpt-5.4': 'exhausted',
+      'gpt-5.6-terra': 'exhausted',
     });
 
     assert.equal(
@@ -436,7 +436,7 @@ describe('operating-mode', () => {
             status: 'degrading',
             reason: 'aggregate frontier capacity check',
           },
-          'gpt-5.4': {
+          'gpt-5.6-terra': {
             status: 'degrading',
             reason: 'aggregate frontier capacity check',
           },
@@ -465,7 +465,7 @@ describe('operating-mode', () => {
       assert.equal(result.mode, 'normal');
       assert.deepEqual(result.vendorBreakdown, {
         anthropic: { healthy: 3, degraded: 0, exhausted: 0, total: 3 },
-        openai: { healthy: 2, degraded: 0, exhausted: 0, total: 2 },
+        openai: { healthy: 1, degraded: 0, exhausted: 0, total: 1 },
       });
     });
 
@@ -475,7 +475,7 @@ describe('operating-mode', () => {
         'claude-opus-4-7': 'degrading',
         'claude-opus-4-6': 'exhausted',
         'gpt-5.5': 'degrading',
-        'gpt-5.4': 'exhausted',
+        'gpt-5.6-terra': 'exhausted',
       });
 
       const result = getOperatingModeResult(repoDir);
@@ -483,7 +483,7 @@ describe('operating-mode', () => {
       assert.equal(result.mode, 'normal');
       assert.deepEqual(result.vendorBreakdown, {
         anthropic: { healthy: 1, degraded: 1, exhausted: 1, total: 3 },
-        openai: { healthy: 0, degraded: 1, exhausted: 1, total: 2 },
+        openai: { healthy: 0, degraded: 1, exhausted: 0, total: 1 },
       });
     });
 
@@ -494,7 +494,7 @@ describe('operating-mode', () => {
         'claude-opus-4-7': 'exhausted',
         'claude-opus-4-6': 'exhausted',
         'gpt-5.5': 'exhausted',
-        'gpt-5.4': 'exhausted',
+        'gpt-5.6-terra': 'exhausted',
       });
 
       const result = getOperatingModeResult(repoDir);
@@ -502,7 +502,7 @@ describe('operating-mode', () => {
       assert.equal(result.mode, 'survival');
       assert.deepEqual(result.vendorBreakdown, {
         anthropic: { healthy: 0, degraded: 0, exhausted: 3, total: 3 },
-        openai: { healthy: 0, degraded: 0, exhausted: 2, total: 2 },
+        openai: { healthy: 0, degraded: 0, exhausted: 1, total: 1 },
       });
     });
 
@@ -510,7 +510,7 @@ describe('operating-mode', () => {
       writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
         modelRegistry: {
           models: {
-            'gpt-5.4': {
+            'gpt-5.6-terra': {
               vendor: 'openai',
               class: 'frontier',
             },
@@ -522,7 +522,7 @@ describe('operating-mode', () => {
         'claude-opus-4-8': 'healthy',
         'claude-opus-4-7': 'healthy',
         'claude-opus-4-6': 'degrading',
-        'gpt-5.4': 'exhausted',
+        'gpt-5.6-terra': 'exhausted',
       });
 
       const result = getOperatingModeResult(repoDir);
@@ -553,7 +553,7 @@ describe('operating-mode', () => {
             'gpt-5.5': {
               class: 'strong_generalist',
             },
-            'gpt-5.4': {
+            'gpt-5.6-terra': {
               class: 'strong_generalist',
             },
           },

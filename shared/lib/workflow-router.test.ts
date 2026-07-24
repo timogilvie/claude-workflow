@@ -44,7 +44,7 @@ function baseConfig() {
         'claude-sonnet-4-5-20250929': 'claude',
         'claude-haiku-4-5-20251001': 'claude',
         'gpt-5.3-codex': 'codex',
-        'gpt-5.4': 'codex',
+        'gpt-5.6-terra': 'codex',
         'gpt-5.5': 'codex',
       },
     },
@@ -57,7 +57,7 @@ function baseConfig() {
         'claude-sonnet-4-5-20250929': { inputCostPerMTok: 3, outputCostPerMTok: 15, cacheWriteCostPerMTok: 3.75, cacheReadCostPerMTok: 0.3 },
         'claude-haiku-4-5-20251001': { inputCostPerMTok: 0.8, outputCostPerMTok: 4, cacheWriteCostPerMTok: 1, cacheReadCostPerMTok: 0.08 },
         'gpt-5.3-codex': { inputCostPerMTok: 1.75, outputCostPerMTok: 14, cacheWriteCostPerMTok: 2.1875, cacheReadCostPerMTok: 0.44 },
-        'gpt-5.4': { inputCostPerMTok: 1.75, outputCostPerMTok: 14, cacheWriteCostPerMTok: 2.1875, cacheReadCostPerMTok: 0.44 },
+        'gpt-5.6-terra': { inputCostPerMTok: 1.75, outputCostPerMTok: 14, cacheWriteCostPerMTok: 2.1875, cacheReadCostPerMTok: 0.44 },
         'gpt-5.5': { inputCostPerMTok: 5, outputCostPerMTok: 30, cacheWriteCostPerMTok: 6.25, cacheReadCostPerMTok: 0.5 },
       },
     },
@@ -72,7 +72,7 @@ function frontierSiblingConfig() {
     },
     modelRegistry: {
       models: {
-        'gpt-5.4': {
+        'gpt-5.6-terra': {
           vendor: 'openai',
           class: 'frontier',
           strengths: ['code generation'],
@@ -88,11 +88,11 @@ function frontierSiblingConfig() {
         },
       },
       ladders: {
-        planning: ['claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
-        coding: ['claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
-        review: ['claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
-        routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-5', 'claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.4'],
-        classify: ['claude-haiku-4-5-20251001', 'claude-sonnet-5', 'gpt-5.5', 'gpt-5.4'],
+        planning: ['claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.6-terra', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
+        coding: ['claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.6-terra', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
+        review: ['claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.6-terra', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
+        routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-5', 'claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.5', 'gpt-5.6-terra'],
+        classify: ['claude-haiku-4-5-20251001', 'claude-sonnet-5', 'gpt-5.5', 'gpt-5.6-terra'],
       },
     },
   };
@@ -223,7 +223,7 @@ await test('routes broad CLI workflow work to deep planning and medium-or-higher
     assert.equal(decision.planDepth, 'deep');
     assert.ok([
       'gpt-5.5',
-      'gpt-5.4',
+      'gpt-5.6-terra',
       'claude-sonnet-5',
       'claude-sonnet-4-6',
       'claude-sonnet-4-5-20250929',
@@ -275,7 +275,7 @@ await test('heuristic routing honors stage-specific planner and reviewer pools',
     router: {
       ...baseConfig().router,
       availableModels: {
-        planner: ['gpt-5.4'],
+        planner: ['gpt-5.6-terra'],
         reviewer: ['claude-sonnet-5'],
       },
     },
@@ -285,7 +285,7 @@ await test('heuristic routing honors stage-specific planner and reviewer pools',
       'Create a wavemill route CLI command that extends the router, outputs planner coder and reviewer, prints JSON and stdout, and estimates cost and success.',
       { repoDir, maxCostUsd: 25, skipDifficultyClassification: true }
     );
-    assert.equal(decision.planner, 'gpt-5.4');
+    assert.equal(decision.planner, 'gpt-5.6-terra');
     assert.equal(decision.reviewer, 'claude-sonnet-5');
   } finally {
     cleanup();
@@ -432,7 +432,7 @@ await test('policy routing can return DeepSeek when explicitly configured', () =
       'gpt-5': 'exhausted',
       'gpt-5-mini': 'exhausted',
       'gpt-5.5': 'exhausted',
-      'gpt-5.4': 'exhausted',
+      'gpt-5.6-terra': 'exhausted',
       'deepseek-r1': 'exhausted',
       'deepseek-v3': 'exhausted',
       'deepseek-v4-pro': 'healthy',
@@ -720,7 +720,7 @@ await test('auto mode uses hokusai first when configured', async () => {
     predictions: {
       recommended_strategy: {
         planner_model: 'claude-sonnet-4-5-20250929',
-        coder_model: 'gpt-5.4',
+        coder_model: 'gpt-5.6-terra',
         reviewer_model: 'claude-haiku-4-5-20251001',
         plan_depth: 'medium',
         code_depth: 'medium',
@@ -737,7 +737,7 @@ await test('auto mode uses hokusai first when configured', async () => {
   try {
     const decision = await routeWorkflowAuto('Add a workflow router mode with tests.', { repoDir });
     assert.equal(decision.routingMode, 'hokusai');
-    assert.equal(decision.coder, 'gpt-5.4');
+    assert.equal(decision.coder, 'gpt-5.6-terra');
     assert.equal(decision.neighborCount, 40);
   } finally {
     globalThis.fetch = originalFetch;
@@ -815,7 +815,7 @@ await test('auto mode uses degraded haiku-only routing in survival mode', async 
     'claude-opus-4-7': 'exhausted',
     'claude-opus-4-6': 'exhausted',
     'gpt-5.5': 'exhausted',
-    'gpt-5.4': 'exhausted',
+    'gpt-5.6-terra': 'exhausted',
     ...restoredFrontierQuotaState('exhausted'),
   });
 
@@ -852,7 +852,7 @@ await test('auto mode excludes opus in constrained mode', async () => {
     'claude-opus-4-7': 'degrading',
     'claude-opus-4-6': 'degrading',
     'gpt-5.5': 'degrading',
-    'gpt-5.4': 'degrading',
+    'gpt-5.6-terra': 'degrading',
     ...restoredFrontierQuotaState('degrading'),
   });
 
@@ -881,7 +881,7 @@ await test('auto mode emits a constrained router transparency line when quota is
     'claude-opus-4-7': 'degrading',
     'claude-opus-4-6': 'degrading',
     'gpt-5.5': 'degrading',
-    'gpt-5.4': 'degrading',
+    'gpt-5.6-terra': 'degrading',
     ...restoredFrontierQuotaState('degrading'),
   });
 
@@ -949,7 +949,7 @@ await test('policy routing logs same-class frontier substitution distinctly', as
     'claude-opus-4-7': 'exhausted',
     'claude-opus-4-6': 'exhausted',
     'gpt-5.5': 'healthy',
-    'gpt-5.4': 'healthy',
+    'gpt-5.6-terra': 'healthy',
   });
 
   try {
@@ -981,7 +981,7 @@ await test('policy routing logs class downgrade without same-class metadata', as
     'claude-opus-4-7': 'degrading',
     'claude-opus-4-6': 'degrading',
     'gpt-5.5': 'degrading',
-    'gpt-5.4': 'degrading',
+    'gpt-5.6-terra': 'degrading',
     ...restoredFrontierQuotaState('degrading'),
   });
 
@@ -1048,16 +1048,16 @@ await test('auto mode logs frontier substitution without constrained banner when
     'claude-opus-4-7': 'exhausted',
     'claude-opus-4-6': 'exhausted',
     'gpt-5.5': 'healthy',
-    'gpt-5.4': 'healthy',
+    'gpt-5.6-terra': 'healthy',
   });
 
   try {
     globalThis.fetch = async () => new Response(JSON.stringify({
       predictions: {
         recommended_strategy: {
-          planner_model: 'gpt-5.4',
-          coder_model: 'gpt-5.4',
-          reviewer_model: 'gpt-5.4',
+          planner_model: 'gpt-5.6-terra',
+          coder_model: 'gpt-5.6-terra',
+          reviewer_model: 'gpt-5.6-terra',
           plan_depth: 'medium',
           code_depth: 'medium',
           review_mode: 'light',
@@ -1072,7 +1072,7 @@ await test('auto mode logs frontier substitution without constrained banner when
       routeWorkflowAuto('Implement a backend feature with tests and review.', { repoDir })
     );
     assert.equal(result.routingMode, 'hokusai');
-    assert.match(stderr, /\[coder] policy adjustment: claude-opus-4-8 -> gpt-5\.4 \(quota=exhausted, same-class=frontier\)/);
+    assert.match(stderr, /\[coder] policy adjustment: claude-opus-4-8 -> gpt-5\.6-terra \(quota=exhausted, same-class=frontier\)/);
     assert.doesNotMatch(stderr, /\[router] constrained mode:/);
     assert.doesNotMatch(result.reasoning[0], /Constrained mode|Survival mode/);
   } finally {
@@ -1090,7 +1090,7 @@ await test('auto mode routes to healthy frontier sibling when anthropic frontier
     'claude-opus-4-7': 'exhausted',
     'claude-opus-4-6': 'exhausted',
     'gpt-5.5': 'healthy',
-    'gpt-5.4': 'healthy',
+    'gpt-5.6-terra': 'healthy',
   });
 
   try {
@@ -1117,7 +1117,7 @@ await test('tryPolicyResolution pools select healthy frontier for all three role
     'claude-opus-4-7': 'exhausted',
     'claude-opus-4-6': 'exhausted',
     'gpt-5.5': 'healthy',
-    'gpt-5.4': 'healthy',
+    'gpt-5.6-terra': 'healthy',
   });
 
   try {
@@ -1144,7 +1144,7 @@ await test('emits same-class substitution log for every role and no constrained 
     'claude-opus-4-7': 'exhausted',
     'claude-opus-4-6': 'exhausted',
     'gpt-5.5': 'healthy',
-    'gpt-5.4': 'healthy',
+    'gpt-5.6-terra': 'healthy',
   });
 
   try {
@@ -1177,7 +1177,7 @@ await test('emits constrained-mode banner when every frontier vendor is degradin
     'claude-opus-4-7': 'degrading',
     'claude-opus-4-6': 'degrading',
     'gpt-5.5': 'degrading',
-    'gpt-5.4': 'degrading',
+    'gpt-5.6-terra': 'degrading',
     ...restoredFrontierQuotaState('degrading'),
   });
 
@@ -1202,7 +1202,7 @@ await test('emits survival-mode banner when every frontier vendor is exhausted (
     'claude-opus-4-7': 'exhausted',
     'claude-opus-4-6': 'exhausted',
     'gpt-5.5': 'exhausted',
-    'gpt-5.4': 'exhausted',
+    'gpt-5.6-terra': 'exhausted',
     ...restoredFrontierQuotaState('exhausted'),
   });
 
@@ -1469,7 +1469,7 @@ await test('uses survival mode budget when in survival', () => {
   // Write quota state showing survival mode
   writeQuotaState(repoDir, {
     'gpt-5.5': 'exhausted',
-    'gpt-5.4': 'exhausted',
+    'gpt-5.6-terra': 'exhausted',
     'claude-opus-4-8': 'exhausted',
     'claude-opus-4-7': 'exhausted',
     'claude-opus-4-6': 'exhausted',

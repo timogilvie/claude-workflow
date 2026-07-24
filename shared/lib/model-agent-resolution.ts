@@ -2,6 +2,7 @@ import {
   DEFAULT_MODEL_REGISTRY,
   evaluateRegistryPhaseEligibility,
   getModel,
+  isCodexChatgptLaunchEligible,
   type AgentType,
   type ModelRegistry,
   type NativeProviderName,
@@ -17,7 +18,8 @@ export type UnroutableReason =
   | 'no-native-capability'
   | 'native-unsupported'
   | 'role-ineligible'
-  | 'uncertified';
+  | 'uncertified'
+  | 'codex-chatgpt-ineligible';
 
 export type AgentResolution =
   | { ok: true; agent: AgentType }
@@ -214,6 +216,15 @@ export function resolveModelAgent(opts: ResolveModelAgentOptions): AgentResoluti
   }
 
   if (resolvedAgent === 'codex' || resolvedAgent === 'claude') {
+    if (resolvedAgent === 'codex' && !isCodexChatgptLaunchEligible(capabilities)) {
+      const reason = capabilities?.codexChatgptCapability?.reason
+        ?? 'No explicit ChatGPT/Codex launch capability is declared.';
+      return {
+        ok: false,
+        reason: 'codex-chatgpt-ineligible',
+        diagnostic: `[agent-resolution] model=${modelId} phase=${opts.phase} surface=codex-chatgpt reason=codex-chatgpt-ineligible source=modelRegistry.models.${modelId}.codexChatgptCapability detail="${reason}"`,
+      };
+    }
     return { ok: true, agent: resolvedAgent };
   }
 

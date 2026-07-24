@@ -401,6 +401,18 @@ function resolveAgentFallbackReason(
 ): OpenRouterDoctorReason | null {
   const routerConfig = getRouterConfig(repoDir);
   const explicitAgent = routerConfig.agentMap?.[modelId];
+
+  // An explicit Codex mapping is invalid for an OpenRouter candidate even
+  // when the stricter agent resolver rejects it before producing an agent.
+  if (explicitAgent === 'codex') {
+    return buildReason(
+      'AGENT_FALLBACK_TO_CODEX',
+      `router.agentMap resolves ${modelId} to codex for ${stage}.`,
+      `router.agentMap.${modelId}`,
+      `Map ${modelId} to a native OpenRouter agent or remove it from ${stage} routing pools.`,
+    );
+  }
+
   const resolution = tryResolveAgent(
     modelId,
     routerConfig.agentMap ?? {},
@@ -415,15 +427,6 @@ function resolveAgentFallbackReason(
 
   if (resolution.agent !== 'codex') {
     return null;
-  }
-
-  if (explicitAgent === 'codex') {
-    return buildReason(
-      'AGENT_FALLBACK_TO_CODEX',
-      `router.agentMap resolves ${modelId} to codex for ${stage}.`,
-      `router.agentMap.${modelId}`,
-      `Map ${modelId} to a native OpenRouter agent or remove it from ${stage} routing pools.`,
-    );
   }
 
   return buildReason(
