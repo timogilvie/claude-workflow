@@ -220,7 +220,10 @@ describe('openrouter-doctor', () => {
     const repoDir = makeRepoDir();
     try {
       writeConfig(repoDir);
-      const report = withEnv({ TEST_OPENROUTER_KEY: 'sk-test' }, () => diagnoseOpenRouter({ repoDir }));
+      const report = withEnv({
+        TEST_OPENROUTER_KEY: 'sk-test',
+        WAVEMILL_CERTIFICATION_ROOT: join(repoDir, '.wavemill', 'native-agent-certifications'),
+      }, () => diagnoseOpenRouter({ repoDir }));
       const glm = report.models.find((model) => model.id === 'glm-5.2');
       assert.ok(glm);
       assert.equal(glm.cells.every((cell) => cell.primaryReason?.reason === 'CERTIFICATION_REJECTED'), true);
