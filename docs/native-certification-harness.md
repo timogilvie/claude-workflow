@@ -325,6 +325,46 @@ wavemill native-agent certify --provider openrouter --model openai/gpt-4o --phas
 
 ---
 
+## Shared Storage And Default Pools
+
+Successful provider/model certifications are Wavemill-wide. `wavemill native-agent certify` writes artifacts to shared user storage by default:
+
+```text
+~/.wavemill/native-agent-certifications/<provider>/<model>/<suite>.json
+```
+
+Set `WAVEMILL_NATIVE_CERTIFICATION_ROOT` to override the shared root in tests or controlled operator environments. Legacy repo-local artifacts under `.wavemill/native-agent-certifications/` are still readable as a compatibility fallback and can be imported explicitly:
+
+```bash
+wavemill native-agent certifications import --repo /path/to/repo --dry-run --json
+wavemill native-agent certifications import --repo /path/to/repo
+```
+
+Routing and challenge mode default to broad exploration: when no `router.models`, `router.availableModels.<stage>`, or `challenge.models` allowlist is configured, Wavemill derives candidates from the canonical model registry and then applies provider availability, API-key checks, disabled-model policy, budgets, stage capability filters, global certification validity, and local readiness checks.
+
+Use `modelExclusions` to remove models without hiding newly supported models added by a Wavemill update:
+
+```json
+{
+  "modelExclusions": [
+    {
+      "model": "qwen-3-coder",
+      "stages": ["coding", "review"],
+      "reason": "cost policy"
+    }
+  ]
+}
+```
+
+`stages` is optional; omit it to exclude the model everywhere. Accepted stage names are `planner`, `coder`, `reviewer`, `expansion`, `planning`, `coding`, `review`, `plan`, and `implementation`. The models report and route/challenge diagnostics show the exclusion source (`repo` or `local`) and reason when provided.
+
+The models report separates:
+
+- **Global certification**: shared provider/model artifact validity, suite version, phase, TTL, scenarios, and storage scope.
+- **Local readiness**: repo opt-in and repo-dependent launcher or patch-coding readiness checks.
+
+---
+
 ## Source of truth
 
 | File | Role |

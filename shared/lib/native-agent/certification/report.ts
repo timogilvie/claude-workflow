@@ -13,11 +13,16 @@ import {
   type CertificationPhase,
   type NativeCertificationArtifact,
 } from './schema.ts';
-import { evaluateEligibility, loadCertification } from './loader.ts';
+import { evaluateEligibility, loadCertification, loadSharedCertificationWithLegacyFallback } from './loader.ts';
 import { STAGE_PHASE_REQUIREMENT, type RouterRole } from './router-filter.ts';
 import { getEffectiveRegistry, type ModelRegistry, type ReadOnlyNativeCapability } from '../../model-registry.ts';
 import { resolveCertificationStorageIdentity } from './identity.ts';
 import { checkIdentity } from './validator.ts';
+import { findModelExclusion, type ModelExclusionDiagnostic } from '../../model-exclusions.ts';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { getNativePatchCodingConfig } from '../../config.ts';
+import { PATCH_CODING_CERTIFICATION_RELATIVE_PATH } from '../coding-certification.ts';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -59,6 +64,13 @@ export interface ModelCertificationReportRow {
   knownLimitations: string[];
   /** Per-scenario outcomes from the on-disk artifact. */
   scenarios: ScenarioOutcome[];
+  globalCertification: {
+    state: ModelCertificationState;
+    artifactPath?: string;
+    storageScope?: 'global' | 'legacy-repo';
+  };
+  localReadiness: Partial<Record<RouterRole, { ready: boolean; reasons: string[] }>>;
+  exclusion?: ModelExclusionDiagnostic;
 }
 
 // ---------------------------------------------------------------------------
@@ -123,6 +135,9 @@ export function buildModelCertificationReport(
         eligibleStages: [],
         knownLimitations: flattenLimitations([nativeCapability.limitations]),
         scenarios: [],
+        globalCertification: { state: 'unsupported' },
+        localReadiness: buildLocalReadiness(repoDir, []),
+        ...(findModelExclusion(modelId, 'coding', repoDir) ? { exclusion: findModelExclusion(modelId, 'coding', repoDir) } : {}),
       });
       continue;
     }
@@ -142,6 +157,9 @@ export function buildModelCertificationReport(
         ageDays: registryMeta?.certifiedAt ? computeAgeDays(registryMeta.certifiedAt, now) : undefined,
         knownLimitations: flattenLimitations([nativeCapability.limitations, registryMeta?.knownLimitations]),
         scenarios: [],
+        globalCertification: { state: 'certification-only' },
+        localReadiness: buildLocalReadiness(repoDir, []),
+        ...(findModelExclusion(modelId, 'coding', repoDir) ? { exclusion: findModelExclusion(modelId, 'coding', repoDir) } : {}),
       });
       continue;
     }
@@ -159,17 +177,17 @@ export function buildModelCertificationReport(
         eligibleStages: [],
         knownLimitations: flattenLimitations([nativeCapability.limitations]),
         scenarios: [],
+        globalCertification: { state: 'uncertified' },
+        localReadiness: buildLocalReadiness(repoDir, []),
+        ...(findModelExclusion(modelId, 'coding', repoDir) ? { exclusion: findModelExclusion(modelId, 'coding', repoDir) } : {}),
       });
       continue;
     }
 
     // Try loading the on-disk artifact
-    const loaded = loadCertFn(
-      repoDir,
-      nativeCapability.nativeProvider,
-      modelId,
-      certMeta.certificationSuiteVersion,
-    );
+    const loaded = opts.loadCertificationFn
+      ? loadCertFn(repoDir, nativeCapability.nativeProvider, modelId, certMeta.certificationSuiteVersion)
+      : loadSharedCertificationWithLegacyFallback(repoDir, nativeCapability.nativeProvider, modelId, certMeta.certificationSuiteVersion);
 
     if (!loaded.ok) {
       rows.push({
@@ -181,6 +199,13 @@ export function buildModelCertificationReport(
         suiteVersion: certMeta.certificationSuiteVersion,
         knownLimitations: flattenLimitations([nativeCapability.limitations, certMeta.knownLimitations]),
         scenarios: [],
+        globalCertification: {
+          state: 'uncertified',
+          ...(getLoadedPath(loaded) ? { artifactPath: getLoadedPath(loaded) } : {}),
+          ...(getLoadedScope(loaded) ? { storageScope: getLoadedScope(loaded) } : {}),
+        },
+        localReadiness: buildLocalReadiness(repoDir, []),
+        ...(findModelExclusion(modelId, 'coding', repoDir) ? { exclusion: findModelExclusion(modelId, 'coding', repoDir) } : {}),
       });
       continue;
     }
@@ -192,7 +217,7 @@ export function buildModelCertificationReport(
       storageIdentity.model,
     );
     if (identityError) {
-      rows.push(rowFromArtifactState(
+      rows.push(withReadiness(rowFromArtifactState(
         nativeCapability.nativeProvider,
         modelId,
         readOnlyNative,
@@ -200,7 +225,7 @@ export function buildModelCertificationReport(
         'uncertified',
         now,
         flattenLimitations([nativeCapability.limitations, certMeta.knownLimitations]),
-      ));
+      ), repoDir, [], 'uncertified', getLoadedPath(loaded), getLoadedScope(loaded), findModelExclusion(modelId, 'coding', repoDir)));
       continue;
     }
 
@@ -211,18 +236,19 @@ export function buildModelCertificationReport(
       now,
     );
     if (eligibility.eligible) {
-      rows.push(rowFromArtifact(
+      const row = rowFromArtifact(
         nativeCapability.nativeProvider,
         modelId,
         readOnlyNative,
         loaded.artifact,
         now,
         flattenLimitations([nativeCapability.limitations, certMeta.knownLimitations]),
-      ));
+      );
+      rows.push(withReadiness(row, repoDir, row.eligibleStages, 'ready', getLoadedPath(loaded), getLoadedScope(loaded), findModelExclusion(modelId, 'coding', repoDir)));
       continue;
     }
 
-    rows.push(rowFromArtifactState(
+    const row = rowFromArtifactState(
       nativeCapability.nativeProvider,
       modelId,
       readOnlyNative,
@@ -230,6 +256,15 @@ export function buildModelCertificationReport(
       eligibility.reason === 'stale' ? 'stale' : 'uncertified',
       now,
       flattenLimitations([nativeCapability.limitations, certMeta.knownLimitations]),
+    );
+    rows.push(withReadiness(
+      row,
+      repoDir,
+      [],
+      row.state,
+      getLoadedPath(loaded),
+      getLoadedScope(loaded),
+      findModelExclusion(modelId, 'coding', repoDir),
     ));
   }
 
@@ -285,6 +320,8 @@ function rowFromArtifactState(
     ageDays,
     knownLimitations,
     scenarios,
+    globalCertification: { state },
+    localReadiness: {},
   };
 }
 
@@ -319,7 +356,7 @@ export function serializeReport(
 // Human-readable table
 // ---------------------------------------------------------------------------
 
-const COLUMN_HEADERS = ['Provider', 'Model', 'State', 'Eligible Stages', 'Suite', 'Age (days)', 'Limitations'] as const;
+const COLUMN_HEADERS = ['Provider', 'Model', 'State', 'Local Ready', 'Eligible Stages', 'Suite', 'Age (days)', 'Exclusion', 'Limitations'] as const;
 
 /**
  * Render the report as a human-readable table.
@@ -332,10 +369,16 @@ export function renderReportTable(rows: ModelCertificationReportRow[]): string {
   const dataRows: string[][] = rows.map(row => [
     row.provider,
     row.model,
-    row.state,
+    row.globalCertification.storageScope
+      ? `${row.globalCertification.state} (${row.globalCertification.storageScope})`
+      : row.globalCertification.state,
+    summarizeLocalReadiness(row),
     row.eligibleStages.length > 0 ? row.eligibleStages.join(', ') : '—',
     row.suiteVersion ?? '—',
     row.ageDays !== undefined ? String(row.ageDays) : '—',
+    row.exclusion
+      ? `${row.exclusion.source}${row.exclusion.reason ? `: ${row.exclusion.reason}` : ''}`
+      : '—',
     row.knownLimitations.length > 0 ? row.knownLimitations.join('; ') : '—',
   ]);
 
@@ -379,4 +422,77 @@ function flattenLimitations(sources: (string[] | undefined)[]): string[] {
 
 function deduplicateStrings(values: string[]): string[] {
   return [...new Set(values)];
+}
+
+function summarizeLocalReadiness(row: ModelCertificationReportRow): string {
+  const ready = Object.entries(row.localReadiness)
+    .filter(([, state]) => state.ready)
+    .map(([role]) => role);
+  return ready.length > 0 ? ready.join(', ') : '—';
+}
+
+function getLoadedPath(loaded: unknown): string | undefined {
+  return typeof loaded === 'object'
+    && loaded !== null
+    && 'path' in loaded
+    && typeof (loaded as { path?: unknown }).path === 'string'
+    ? (loaded as { path: string }).path
+    : undefined;
+}
+
+function getLoadedScope(loaded: unknown): 'global' | 'legacy-repo' | undefined {
+  return typeof loaded === 'object'
+    && loaded !== null
+    && 'scope' in loaded
+    && ((loaded as { scope?: unknown }).scope === 'global' || (loaded as { scope?: unknown }).scope === 'legacy-repo')
+    ? (loaded as { scope: 'global' | 'legacy-repo' }).scope
+    : undefined;
+}
+
+function withReadiness(
+  row: ModelCertificationReportRow,
+  repoDir: string,
+  eligibleStages: RouterRole[],
+  certificationState: ModelCertificationState,
+  artifactPath?: string,
+  storageScope?: 'global' | 'legacy-repo',
+  exclusion?: ModelExclusionDiagnostic,
+): ModelCertificationReportRow {
+  return {
+    ...row,
+    globalCertification: {
+      state: certificationState,
+      ...(artifactPath ? { artifactPath } : {}),
+      ...(storageScope ? { storageScope } : {}),
+    },
+    localReadiness: buildLocalReadiness(repoDir, eligibleStages),
+    ...(exclusion ? { exclusion } : {}),
+  };
+}
+
+function buildLocalReadiness(
+  repoDir: string,
+  eligibleStages: RouterRole[],
+): Partial<Record<RouterRole, { ready: boolean; reasons: string[] }>> {
+  const readiness: Partial<Record<RouterRole, { ready: boolean; reasons: string[] }>> = {};
+  const patchCodingConfig = getNativePatchCodingConfig(repoDir);
+  const patchCertificationPresent = existsSync(join(repoDir, PATCH_CODING_CERTIFICATION_RELATIVE_PATH));
+  const hasCodingLauncher = existsSync(join(repoDir, 'tools', 'launch-native-coding.ts'));
+
+  for (const role of ALL_ROLES) {
+    const reasons: string[] = [];
+    if (!eligibleStages.includes(role)) {
+      reasons.push('global certification not eligible for stage');
+    }
+    if (role === 'coder') {
+      if (patchCodingConfig.enabled !== true) reasons.push('local patch-coding readiness disabled');
+      if (!patchCertificationPresent) reasons.push('local patch-coding certification missing');
+      if (!hasCodingLauncher) reasons.push('local native coding launcher missing');
+    }
+    readiness[role] = {
+      ready: reasons.length === 0,
+      reasons,
+    };
+  }
+  return readiness;
 }

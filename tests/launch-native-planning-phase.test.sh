@@ -61,6 +61,7 @@ TMUX_LOG="$TMPDIR_TEST/tmux.log"
 NATIVE_LAUNCHER="/tmp/sess-HOK-2313-autonomous-launcher.sh"
 NATIVE_REVIEW_LAUNCHER="/tmp/sess-HOK-2314-autonomous-launcher.sh"
 source "$ADAPTERS"
+unset WAVEMILL_PHASE
 
 tmux() {
   printf '%s\n' "$*" >> "$TMUX_LOG"
@@ -192,7 +193,17 @@ else
   pass "native coding dispatch stays fail-closed without launcher"
 fi
 
-if agent_native_planning_eligible "$REPO_DIR" "planning"; then
+DISABLED_CONFIG_REPO="$TMPDIR_TEST/disabled-config-repo"
+mkdir -p "$DISABLED_CONFIG_REPO"
+cat > "$DISABLED_CONFIG_REPO/.wavemill-config.json" <<'EOF'
+{
+  "nativeAgent": {
+    "enabled": false
+  }
+}
+EOF
+
+if agent_native_planning_eligible "$DISABLED_CONFIG_REPO" "planning"; then
   fail "disabled config stays ineligible"
 else
   pass "disabled config stays ineligible"

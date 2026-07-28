@@ -15,6 +15,11 @@ import { dirname, join } from 'node:path';
 import Ajv from 'ajv';
 import { CERTIFICATION_BASE_PATH, type NativeCertificationArtifact } from './schema.ts';
 import { buildCertificationPath } from './loader.ts';
+import {
+  buildCertificationPathFromRoot,
+  resolveCertificationStorage,
+  type CertificationStorageOptions,
+} from './storage.ts';
 
 const CERTIFICATION_JSON_SCHEMA = JSON.parse(
   readFileSync(new URL('./schema.json', import.meta.url), 'utf-8'),
@@ -200,6 +205,64 @@ export function writeCertification(repoDir: string, record: NativeCertificationA
   return finalPath;
 }
 
+function writeCertificationToPath(finalPath: string, record: NativeCertificationArtifact): string {
+  mkdirSync(dirname(finalPath), { recursive: true });
+
+  const serialized = serializeCertification(record);
+  const tmpPath = `${finalPath}.tmp-${process.pid}-${randomBytes(8).toString('hex')}`;
+
+  writeFileSync(tmpPath, serialized, 'utf-8');
+
+  try {
+    const fd = openSync(tmpPath, 'r');
+    try {
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    // Swallow — rename is the durability boundary
+  }
+
+  try {
+    renameSync(tmpPath, finalPath);
+  } catch (err) {
+    try { unlinkSync(tmpPath); } catch { /* best-effort cleanup */ }
+    throw err;
+  }
+
+  return finalPath;
+}
+
+export function writeScopedCertification(
+  record: NativeCertificationArtifact,
+  options: CertificationStorageOptions = {},
+): string {
+  const valid = validateSchema(record);
+  if (!valid) {
+    const summary = (validateSchema.errors ?? [])
+      .map(e => `${e.instancePath || '(root)'} ${e.message}`)
+      .join('; ');
+    throw new Error(`writeScopedCertification: record fails schema validation: ${summary}`);
+  }
+
+  const storage = resolveCertificationStorage(options);
+  const finalPath = buildCertificationPathFromRoot(
+    storage.root,
+    record.provider,
+    record.model,
+    record.suiteVersion,
+  );
+  return writeCertificationToPath(finalPath, record);
+}
+
+export function writeGlobalCertification(
+  record: NativeCertificationArtifact,
+  options: Omit<CertificationStorageOptions, 'scope' | 'repoDir'> = {},
+): string {
+  return writeScopedCertification(record, { ...options, scope: 'global' });
+}
+
 /**
  * Return absolute paths of all `.json` artifacts under
  * <repoDir>/.wavemill/native-agent-certifications/, recursing through
@@ -208,44 +271,36 @@ export function writeCertification(repoDir: string, record: NativeCertificationA
  */
 export function listCertifications(repoDir: string): string[] {
   const baseDir = join(repoDir, CERTIFICATION_BASE_PATH);
+  return listCertificationFilesUnderRoot(baseDir);
+}
 
-  let providerEntries: ReturnType<typeof readdirSync>;
+export function listScopedCertifications(options: CertificationStorageOptions = {}): string[] {
+  return listCertificationFilesUnderRoot(resolveCertificationStorage(options).root);
+}
+
+export function listGlobalCertifications(options: Omit<CertificationStorageOptions, 'scope' | 'repoDir'> = {}): string[] {
+  return listScopedCertifications({ ...options, scope: 'global' });
+}
+
+function listCertificationFilesUnderRoot(baseDir: string): string[] {
+  let entries: ReturnType<typeof readdirSync>;
   try {
-    providerEntries = readdirSync(baseDir, { withFileTypes: true });
+    entries = readdirSync(baseDir, { withFileTypes: true });
   } catch {
     return [];
   }
 
   const paths: string[] = [];
 
-  for (const providerEntry of providerEntries) {
-    if (!providerEntry.isDirectory()) continue;
-    const providerDir = join(baseDir, providerEntry.name);
-
-    let modelEntries: ReturnType<typeof readdirSync>;
-    try {
-      modelEntries = readdirSync(providerDir, { withFileTypes: true });
-    } catch {
+  for (const entry of entries) {
+    const entryPath = join(baseDir, entry.name);
+    if (entry.isDirectory()) {
+      paths.push(...listCertificationFilesUnderRoot(entryPath));
       continue;
     }
-
-    for (const modelEntry of modelEntries) {
-      if (!modelEntry.isDirectory()) continue;
-      const modelDir = join(providerDir, modelEntry.name);
-
-      let artifactEntries: ReturnType<typeof readdirSync>;
-      try {
-        artifactEntries = readdirSync(modelDir, { withFileTypes: true });
-      } catch {
-        continue;
-      }
-
-      for (const artifactEntry of artifactEntries) {
-        if (!artifactEntry.isFile()) continue;
-        if (!artifactEntry.name.endsWith('.json')) continue;
-        paths.push(join(modelDir, artifactEntry.name));
-      }
-    }
+    if (!entry.isFile()) continue;
+    if (!entry.name.endsWith('.json')) continue;
+    paths.push(entryPath);
   }
 
   return paths;
