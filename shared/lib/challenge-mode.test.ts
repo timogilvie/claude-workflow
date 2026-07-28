@@ -1908,7 +1908,7 @@ test('HOK-2569 OpenRouter v2 patch aliases fail closed consistently for degraded
         mkdirSync(dirname(artifactPath), { recursive: true });
         writeFileSync(artifactPath, '{');
       },
-      gateReason: 'missing_artifact',
+      gateReason: 'malformed_artifact',
       challengeReason: 'malformed',
     },
     {
