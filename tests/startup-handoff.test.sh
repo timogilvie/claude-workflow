@@ -301,6 +301,22 @@ else
   fail "missing-window recovery can leak warning logs into captured tmux targets"
 fi
 
+if [[ "$ENSURE_WINDOW_BLOCK" == *'consume_coding_pane_expected_replacement "$issue" "$slug" "$wt_dir"'* ]] \
+  && [[ "$ENSURE_WINDOW_BLOCK" == *'intentionally quarantined after coding'* ]] \
+  && [[ "$ENSURE_WINDOW_BLOCK" == *'else'*'log_warn "  Window $canonical missing, recreating..." >&2'* ]]; then
+  pass "intentional coding-pane quarantine uses informational replacement logging"
+else
+  fail "intentional coding-pane quarantine is not distinguished from missing-window recovery"
+fi
+
+if [[ "$ENSURE_WINDOW_BLOCK" == *'tmux new-window -d -t "$session" -n "$canonical" -c "$wt_dir"'* ]] \
+  && [[ "$ENSURE_WINDOW_BLOCK" == *'tmux set-option -t "$(_tmux_target_join "$session" "$target")" remain-on-exit on'* ]] \
+  && [[ "$ENSURE_WINDOW_BLOCK" == *'printf '\''%s\n'\'' "$target"'* ]]; then
+  pass "missing-window recovery still recreates a usable task window"
+else
+  fail "missing-window recovery no longer preserves window recreation behavior"
+fi
+
 if [[ "$REROUTE_EXPANDED_BLOCK" == *'sibling_issue sibling_slug sibling_worktree'* ]] \
   && [[ "$REROUTE_EXPANDED_BLOCK" != *'read -r issue slug worktree'* ]]; then
   pass "expanded reroute scan avoids clobbering restore issue variables"
