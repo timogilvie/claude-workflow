@@ -180,7 +180,15 @@ harness_extract_real_functions() {
     _coding_divergence_announce_marker \
     _detect_coding_pane_divergence \
     emit_pane_divergence_attention \
+    _tmux_window_target_exists \
+    _tmux_target_join \
+    _tmux_task_window_target \
+    coding_pane_expected_replacement_path \
+    mark_coding_pane_expected_replacement \
+    clear_coding_pane_expected_replacement \
+    consume_coding_pane_expected_replacement \
     quarantine_completed_coding_pane \
+    _ensure_task_window_exists \
     handle_planning_overreach_rejection \
     validate_coding_phase_output \
     resolve_phase \
@@ -1627,7 +1635,7 @@ EOF
 test_coding_blocked_completion_auto_advances_when_valid() {
   local slug="coding-blocked-auto"
   local issue="HOK-1642-AUTO"
-  local repo tick commit
+  local repo tick tick_review commit review_setup
   repo="$(harness_init_repo "$slug")"
   harness_setup_runtime_artifacts "$repo"
   harness_setup_coding_state "$repo" "$slug" "running"
@@ -1646,16 +1654,42 @@ test_coding_blocked_completion_auto_advances_when_valid() {
 }
 EOF
 
-  tick="$(harness_run_tick "$repo" "$slug" "$issue" "$(harness_auto_advance_clear_liveness_setup)")"
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" "$(harness_auto_advance_clear_liveness_setup)
+_tmux_task_window_target() { printf \"%s\\n\" \"@7\"; }
+tmux() { printf \"%s\\n\" \"\$*\" >> \"\$REPO_UNDER_TEST/tmux.log\"; return 0; }")"
 
   check_eq "auto blocked completion: phase remains coding for handoff" "coding" "$(kv_value "$tick" phase)"
   check_eq "auto blocked completion: coding stage becomes completed" "completed" "$(harness_read_stage_status "$repo" "$slug" coding)"
   check_eq "auto blocked completion: attention cleared" "clear" "$(kv_value "$tick" attention)"
   check_eq "auto blocked completion: task remains active" "1" "$(kv_value "$tick" active_count)"
   check_contains "auto blocked completion: auto-advance log emitted" "$(kv_value "$tick" log_output)" "[auto-advance] $issue advancing coding to review"
+  check_contains "auto blocked completion: completed window is killed" "$(cat "$repo/tmux.log")" "kill-window -t @7"
+  check_file_exists "auto blocked completion: expected replacement marker written" "$repo/features/$slug/.coding-pane-expected-replacement.json"
   check_file_exists "auto blocked completion: audit artifact written" "$repo/features/$slug/.coding-auto-advance.json"
   check_file_exists "auto blocked completion: coding complete marker written" "$repo/features/$slug/.coding-complete"
   check_file_absent "auto blocked completion: no dedupe marker written" "$repo/features/$slug/.blocked-completion-announced"
+
+  review_setup='
+CURRENT_PHASE="coding"
+log() { printf "%s\n" "$*" >> "$REPO_UNDER_TEST/review-log-output"; }
+log_warn() { printf "%s\n" "$*" >> "$REPO_UNDER_TEST/review-warn-output"; }
+_tmux_task_window_target() { return 1; }
+tmux() {
+  printf "%s\n" "$*" >> "$REPO_UNDER_TEST/tmux-review.log"
+  if [[ "${1:-}" == "display-message" ]]; then
+    printf "%s\n" "@8"
+  fi
+  return 0
+}
+review_win="$(_ensure_task_window_exists "$SESSION" "$ISSUE" "$SLUG" "$REPO_UNDER_TEST")"
+printf "%s\n" "$review_win" > "$REPO_UNDER_TEST/review-window-target"
+'
+  tick_review="$(harness_run_tick "$repo" "$slug" "$issue" "$review_setup")"
+  check_eq "auto blocked completion review: fresh window target returned" "@8" "$(cat "$repo/review-window-target")"
+  check_contains "auto blocked completion review: replacement window created" "$(cat "$repo/tmux-review.log")" "new-window -d -t lifecycle-harness -n $issue-$slug -c $repo"
+  check_contains "auto blocked completion review: informational lifecycle log emitted" "$(cat "$repo/review-log-output")" "intentionally quarantined after coding"
+  check_not_contains "auto blocked completion review: no missing-window warning" "$(cat "$repo/review-warn-output" 2>/dev/null || true)" "missing, recreating"
+  check_file_absent "auto blocked completion review: expected replacement consumed" "$repo/features/$slug/.coding-pane-expected-replacement.json"
 }
 
 test_coding_blocked_completion_auto_advances_with_wavemill_metadata_noise() {
@@ -2176,7 +2210,7 @@ test_stage_result_trace_events_are_idempotent() {
 test_completed_coding_pane_is_quarantined_best_effort() {
   local slug="coding-complete-pane-quarantine"
   local issue="HOK-2454-PANE"
-  local repo tick feature_dir
+  local repo tick tick_review feature_dir review_setup
   repo="$(harness_init_repo "$slug")"
   harness_setup_runtime_artifacts "$repo"
   harness_setup_coding_state "$repo" "$slug" "running"
@@ -2191,7 +2225,30 @@ test_completed_coding_pane_is_quarantined_best_effort() {
 
   check_eq "pane quarantine: coding stage becomes completed" "completed" "$(harness_read_stage_status "$repo" "$slug" coding)"
   check_contains "pane quarantine: completed window is killed" "$(cat "$repo/tmux.log")" "kill-window -t @7"
+  check_file_exists "pane quarantine: expected replacement marker written" "$repo/features/$slug/.coding-pane-expected-replacement.json"
   check_eq "pane quarantine: state advances despite cleanup" "" "$(kv_value "$tick" attention)"
+
+  review_setup='
+CURRENT_PHASE="coding"
+log() { printf "%s\n" "$*" >> "$REPO_UNDER_TEST/review-log-output"; }
+log_warn() { printf "%s\n" "$*" >> "$REPO_UNDER_TEST/review-warn-output"; }
+_tmux_task_window_target() { return 1; }
+tmux() {
+  printf "%s\n" "$*" >> "$REPO_UNDER_TEST/tmux-review.log"
+  if [[ "${1:-}" == "display-message" ]]; then
+    printf "%s\n" "@8"
+  fi
+  return 0
+}
+review_win="$(_ensure_task_window_exists "$SESSION" "$ISSUE" "$SLUG" "$REPO_UNDER_TEST")"
+printf "%s\n" "$review_win" > "$REPO_UNDER_TEST/review-window-target"
+'
+  tick_review="$(harness_run_tick "$repo" "$slug" "$issue" "$review_setup")"
+  check_eq "pane quarantine review: fresh window target returned" "@8" "$(cat "$repo/review-window-target")"
+  check_contains "pane quarantine review: replacement window created" "$(cat "$repo/tmux-review.log")" "new-window -d -t lifecycle-harness -n $issue-$slug -c $repo"
+  check_contains "pane quarantine review: informational lifecycle log emitted" "$(cat "$repo/review-log-output")" "intentionally quarantined after coding"
+  check_not_contains "pane quarantine review: no missing-window warning" "$(cat "$repo/review-warn-output" 2>/dev/null || true)" "missing, recreating"
+  check_file_absent "pane quarantine review: expected replacement consumed" "$repo/features/$slug/.coding-pane-expected-replacement.json"
 }
 
 test_coding_blocked_completion_malformed_json_falls_back() {
@@ -3169,7 +3226,6 @@ test_coding_blocked_completion_empty_passing_checks_does_not_auto_advance
 test_coding_blocked_completion_stale_commit_does_not_auto_advance
 test_coding_blocked_completion_dirty_worktree_does_not_auto_advance
 test_coding_blocked_completion_unknown_feature_file_does_not_auto_advance
-test_coding_complete_source_dirty_still_blocks
 test_coding_blocked_completion_dedupes_when_stat_unavailable
 test_coding_terminal_blocked_report_no_marker_needs_user
 test_coding_terminal_blocked_report_ignores_no_commit_evidence

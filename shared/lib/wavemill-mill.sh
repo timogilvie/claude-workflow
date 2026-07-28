@@ -5737,6 +5737,73 @@ _tmux_task_window_target() {
   return 1
 }
 
+coding_pane_expected_replacement_path() {
+  local feature_dir="$1"
+  printf '%s\n' "$feature_dir/.coding-pane-expected-replacement.json"
+}
+
+mark_coding_pane_expected_replacement() {
+  local issue="$1" feature_dir="$2" worktree="$3" target="$4"
+  local marker tmp created_at slug
+
+  [[ -n "$feature_dir" ]] || return 1
+  mkdir -p "$feature_dir" 2>/dev/null || return 1
+  marker="$(coding_pane_expected_replacement_path "$feature_dir")"
+  tmp="$(mktemp "$feature_dir/.coding-pane-expected-replacement.tmp.XXXXXX" 2>/dev/null)" || return 1
+  created_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  slug="$(basename "$feature_dir")"
+
+  jq -n \
+    --arg issue "$issue" \
+    --arg slug "$slug" \
+    --arg worktree "$worktree" \
+    --arg target "$target" \
+    --arg createdAt "$created_at" \
+    '{
+      issue: $issue,
+      slug: $slug,
+      worktree: $worktree,
+      quarantinedWindowTarget: $target,
+      createdAt: $createdAt,
+      reason: "completed-coding-pane-quarantine"
+    }' > "$tmp" 2>/dev/null || {
+      rm -f "$tmp"
+      return 1
+    }
+  mv "$tmp" "$marker" 2>/dev/null || {
+    rm -f "$tmp"
+    return 1
+  }
+}
+
+clear_coding_pane_expected_replacement() {
+  local feature_dir="$1"
+  [[ -n "$feature_dir" ]] || return 0
+  rm -f "$(coding_pane_expected_replacement_path "$feature_dir")" 2>/dev/null || true
+}
+
+consume_coding_pane_expected_replacement() {
+  local issue="$1" slug="$2" wt_dir="$3"
+  local feature_dir marker marker_issue marker_slug marker_worktree expected_real marker_real
+
+  [[ -n "$wt_dir" && -n "$slug" ]] || return 1
+  feature_dir="$wt_dir/features/$slug"
+  marker="$(coding_pane_expected_replacement_path "$feature_dir")"
+  [[ -f "$marker" ]] || return 1
+
+  marker_issue="$(jq -r '.issue // empty' "$marker" 2>/dev/null || true)"
+  marker_slug="$(jq -r '.slug // empty' "$marker" 2>/dev/null || true)"
+  marker_worktree="$(jq -r '.worktree // empty' "$marker" 2>/dev/null || true)"
+  clear_coding_pane_expected_replacement "$feature_dir"
+
+  [[ "$marker_issue" == "$issue" && "$marker_slug" == "$slug" ]] || return 1
+  [[ -n "$marker_worktree" ]] || return 1
+  expected_real="$(cd -P "$wt_dir" 2>/dev/null && printf '%s\n' "$PWD" || printf '%s\n' "$wt_dir")"
+  marker_real="$(cd -P "$marker_worktree" 2>/dev/null && printf '%s\n' "$PWD" || printf '%s\n' "$marker_worktree")"
+  [[ "$marker_real" == "$expected_real" ]] || return 1
+  return 0
+}
+
 # A completed coding agent must not remain available for unrelated interactive
 # input while the controller advances the task. This is deliberately best-effort:
 # result state is authoritative and review will recreate a task window as needed.
@@ -5750,7 +5817,10 @@ quarantine_completed_coding_pane() {
   target="$(_tmux_task_window_target "$SESSION" "$issue" "$slug" "${STATE_FILE:-}" "$worktree" 2>/dev/null || true)"
   [[ -n "$target" ]] || return 0
 
-  tmux kill-window -t "$target" 2>/dev/null || true
+  mark_coding_pane_expected_replacement "$issue" "$feature_dir" "$worktree" "$target" || true
+  if ! tmux kill-window -t "$target" 2>/dev/null; then
+    clear_coding_pane_expected_replacement "$feature_dir"
+  fi
   return 0
 }
 
@@ -5764,7 +5834,11 @@ _ensure_task_window_exists() {
   fi
 
   canonical="${issue}-${slug}"
-  log_warn "  Window $canonical missing, recreating..." >&2
+  if consume_coding_pane_expected_replacement "$issue" "$slug" "$wt_dir"; then
+    log "status" "Window $canonical was intentionally quarantined after coding and will be replaced for review." >&2
+  else
+    log_warn "  Window $canonical missing, recreating..." >&2
+  fi
   tmux new-window -d -t "$session" -n "$canonical" -c "$wt_dir" 2>/dev/null || true
   target="$(tmux display-message -p -t "$session:$canonical" '#{window_id}' 2>/dev/null || true)"
   [[ -n "$target" ]] || target="$canonical"
