@@ -102,6 +102,9 @@ for fn in \
   coding_output_dirty_paths \
   blocked_completion_worktree_clean_for_auto \
   blocked_completion_validate_for_advance \
+  coding_pane_replacement_intent_path \
+  record_coding_pane_replacement_intent \
+  quarantine_completed_coding_pane \
   complete_coding_advance \
   handle_advance_command \
   execute_or_defer_monitor_command
@@ -126,6 +129,8 @@ write_stage_result() {
 {"stage":"$stage","status":"$status"}
 EOF
 }
+
+_write_stage_result_trace_event() { :; }
 
 log_lines=()
 warn_lines=()
@@ -251,6 +256,7 @@ run_advance "advance HOK-1639"
 assert_eq "success status" "handled" "$MONITOR_COMMAND_STATUS"
 assert_file_exists "success writes audit artifact" "$FEATURE_SUCCESS/.coding-advance-override.json"
 assert_file_exists "success writes coding complete marker" "$FEATURE_SUCCESS/.coding-complete"
+assert_file_exists "success records expected review window replacement" "$FEATURE_SUCCESS/.coding-pane-replacement-intent.json"
 assert_eq "success acks command offset" "7" "${ACKED_OFFSETS[0]:-}"
 assert_contains "success log message" "HOK-1639 -> advance recorded; review will launch on the next monitor tick" "${log_lines[*]}"
 assert_eq "success audit issue" "HOK-1639" "$(jq -r '.issue' "$FEATURE_SUCCESS/.coding-advance-override.json")"
@@ -259,6 +265,8 @@ assert_eq "success audit path" "features/test-slug/.coding-blocked-completion.js
 assert_eq "success audit action" "advance_to_review" "$(jq -r '.artifact_summary.recommendedAction' "$FEATURE_SUCCESS/.coding-advance-override.json")"
 assert_eq "success audit passing count" "1" "$(jq -r '.artifact_summary.passing_checks_count' "$FEATURE_SUCCESS/.coding-advance-override.json")"
 assert_eq "success audit stage running guardrail" "true" "$(jq -r '.guardrails.stageRunning' "$FEATURE_SUCCESS/.coding-advance-override.json")"
+assert_eq "success replacement intent issue" "HOK-1639" "$(jq -r '.issue' "$FEATURE_SUCCESS/.coding-pane-replacement-intent.json")"
+assert_eq "success replacement intent to review" "review" "$(jq -r '.to' "$FEATURE_SUCCESS/.coding-pane-replacement-intent.json")"
 assert_contains "success audit timestamp present" "T" "$(jq -r '.timestamp' "$FEATURE_SUCCESS/.coding-advance-override.json")"
 assert_eq "backlog prompt preserves advance command" "advance HOK-1639" "$(normalize_prompt_command_reply "advance HOK-1639")"
 
@@ -274,6 +282,7 @@ run_advance "advance HOK-1639_c"
 assert_eq "challenger success status" "handled" "$MONITOR_COMMAND_STATUS"
 assert_file_exists "challenger writes audit artifact" "$FEATURE_CHALLENGER/.coding-advance-override.json"
 assert_file_exists "challenger writes coding complete marker" "$FEATURE_CHALLENGER/.coding-complete"
+assert_file_exists "challenger records expected review window replacement" "$FEATURE_CHALLENGER/.coding-pane-replacement-intent.json"
 assert_contains "challenger success log message" "HOK-1639_c -> advance recorded; review will launch on the next monitor tick" "${log_lines[*]}"
 assert_eq "challenger audit issue" "HOK-1639_c" "$(jq -r '.issue' "$FEATURE_CHALLENGER/.coding-advance-override.json")"
 assert_eq "challenger prompt preserves advance command" "advance HOK-1639_c" "$(normalize_prompt_command_reply "advance HOK-1639_c")"

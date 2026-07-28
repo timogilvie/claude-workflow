@@ -180,6 +180,8 @@ harness_extract_real_functions() {
     _coding_divergence_announce_marker \
     _detect_coding_pane_divergence \
     emit_pane_divergence_attention \
+    coding_pane_replacement_intent_path \
+    record_coding_pane_replacement_intent \
     _tmux_window_target_exists \
     _tmux_target_join \
     _tmux_task_window_target \
@@ -187,6 +189,8 @@ harness_extract_real_functions() {
     mark_coding_pane_expected_replacement \
     clear_coding_pane_expected_replacement \
     consume_coding_pane_expected_replacement \
+    coding_pane_replacement_intent_matches \
+    clear_coding_pane_replacement_intent \
     quarantine_completed_coding_pane \
     _ensure_task_window_exists \
     handle_planning_overreach_rejection \
@@ -1667,6 +1671,8 @@ tmux() { printf \"%s\\n\" \"\$*\" >> \"\$REPO_UNDER_TEST/tmux.log\"; return 0; }
   check_file_exists "auto blocked completion: expected replacement marker written" "$repo/features/$slug/.coding-pane-expected-replacement.json"
   check_file_exists "auto blocked completion: audit artifact written" "$repo/features/$slug/.coding-auto-advance.json"
   check_file_exists "auto blocked completion: coding complete marker written" "$repo/features/$slug/.coding-complete"
+  check_file_exists "auto blocked completion: review replacement intent written" "$repo/features/$slug/.coding-pane-replacement-intent.json"
+  check_eq "auto blocked completion: replacement intent targets review" "review" "$(jq -r '.to' "$repo/features/$slug/.coding-pane-replacement-intent.json")"
   check_file_absent "auto blocked completion: no dedupe marker written" "$repo/features/$slug/.blocked-completion-announced"
 
   review_setup='
@@ -1681,7 +1687,7 @@ tmux() {
   fi
   return 0
 }
-review_win="$(_ensure_task_window_exists "$SESSION" "$ISSUE" "$SLUG" "$REPO_UNDER_TEST")"
+review_win="$(_ensure_task_window_exists "$SESSION" "$ISSUE" "$SLUG" "$REPO_UNDER_TEST" "review")"
 printf "%s\n" "$review_win" > "$REPO_UNDER_TEST/review-window-target"
 '
   tick_review="$(harness_run_tick "$repo" "$slug" "$issue" "$review_setup")"
@@ -1690,6 +1696,7 @@ printf "%s\n" "$review_win" > "$REPO_UNDER_TEST/review-window-target"
   check_contains "auto blocked completion review: informational lifecycle log emitted" "$(cat "$repo/review-log-output")" "intentionally quarantined after coding"
   check_not_contains "auto blocked completion review: no missing-window warning" "$(cat "$repo/review-warn-output" 2>/dev/null || true)" "missing, recreating"
   check_file_absent "auto blocked completion review: expected replacement consumed" "$repo/features/$slug/.coding-pane-expected-replacement.json"
+  check_file_absent "auto blocked completion review: replacement intent consumed" "$repo/features/$slug/.coding-pane-replacement-intent.json"
 }
 
 test_coding_blocked_completion_auto_advances_with_wavemill_metadata_noise() {

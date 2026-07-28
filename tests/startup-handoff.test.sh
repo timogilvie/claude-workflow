@@ -295,6 +295,15 @@ else
   fail "resume restore still relies on canonical tmux window names"
 fi
 
+if [[ "$ENSURE_WINDOW_BLOCK" == *'coding_pane_replacement_intent_matches "$issue" "$slug" "$feature_dir" "$lifecycle_phase"'* ]] \
+  && [[ "$ENSURE_WINDOW_BLOCK" == *'log "status" "  Window $canonical intentionally quarantined after coding, creating fresh review window"'* ]] \
+  && [[ "$ENSURE_WINDOW_BLOCK" == *'clear_coding_pane_replacement_intent "$feature_dir"'* ]] \
+  && [[ "$ENSURE_WINDOW_BLOCK" == *'log_warn "  Window $canonical missing, recreating..." >&2'* ]]; then
+  pass "expected coding-pane replacement is informational while missing-window recovery still warns"
+else
+  fail "task window creation does not distinguish expected coding-pane replacement from recovery"
+fi
+
 if [[ "$ENSURE_WINDOW_BLOCK" == *'log_warn "  Window $canonical missing, recreating..." >&2'* ]]; then
   pass "missing-window recovery keeps warning logs out of captured tmux targets"
 else
@@ -324,7 +333,7 @@ else
   fail "expanded reroute scan can clobber restore issue variables"
 fi
 
-if [[ "$LAUNCH_PLANNING_BLOCK" == *'_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir"'* ]] \
+if [[ "$LAUNCH_PLANNING_BLOCK" == *'_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir")'* ]] \
   && [[ "$LAUNCH_PLANNING_BLOCK" == *'persist_task_window_id "$issue" "$win"'* ]] \
   && [[ "$LAUNCH_PLANNING_BLOCK" == *'_launch_agent_in_pane "$win"'* ]] \
   && [[ "$LAUNCH_PLANNING_BLOCK" != *'_launch_agent_in_pane "$SESSION:$win"'* ]]; then
@@ -333,16 +342,16 @@ else
   fail "planning launch does not use stable task window selector"
 fi
 
-if [[ "$LAUNCH_CODING_BLOCK" == *'_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir"'* ]] \
+if [[ "$LAUNCH_CODING_BLOCK" == *'_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir")'* ]] \
   && [[ "$LAUNCH_CODING_BLOCK" == *'persist_task_window_id "$issue" "$win"'* ]] \
   && [[ "$LAUNCH_CODING_BLOCK" == *'_launch_agent_in_pane "$win"'* ]] \
   && [[ "$LAUNCH_CODING_BLOCK" != *'_launch_agent_in_pane "$SESSION:$win"'* ]] \
-  && [[ "$LAUNCH_REVIEW_BLOCK" == *'_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir"'* ]] \
+  && [[ "$LAUNCH_REVIEW_BLOCK" == *'_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir" "review")'* ]] \
   && [[ "$LAUNCH_REVIEW_BLOCK" == *'persist_task_window_id "$issue" "$win"'* ]] \
   && [[ "$LAUNCH_REVIEW_BLOCK" == *'_launch_agent_in_pane "$win"'* ]] \
   && [[ "$LAUNCH_REVIEW_BLOCK" != *'_launch_agent_in_pane "$SESSION:$win"'* ]] \
   && [[ "$LAUNCH_READY_BLOCK" == *'persist_task_window_id "$issue" "$win"'* ]] \
-  && [[ "$LAUNCH_READY_BLOCK" == *'_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir"'* ]]; then
+  && [[ "$LAUNCH_READY_BLOCK" == *'_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir")'* ]]; then
   pass "coding/review/ready launches target stable task window selector"
 else
   fail "coding/review/ready launches do not all use stable task window selector"
@@ -350,6 +359,108 @@ fi
 
 TMP_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TMP_ROOT"' EXIT
+
+INTENT_FUNCS="$TMP_ROOT/intent-funcs.sh"
+: > "$INTENT_FUNCS"
+for fn in \
+  coding_pane_replacement_intent_path \
+  record_coding_pane_replacement_intent \
+  coding_pane_replacement_intent_matches \
+  clear_coding_pane_replacement_intent \
+  _tmux_window_target_exists \
+  _tmux_target_join \
+  _tmux_task_window_target \
+  _ensure_task_window_exists
+do
+  extract_function() {
+    local source_file="$1"
+    local function_name="$2"
+    awk -v name="$function_name" '
+      function brace_delta(line, stripped, opens, closes) {
+        stripped = line
+        gsub(/"([^"\\]|\\.)*"/, "\"\"", stripped)
+        gsub(/\047([^\047\\]|\\.)*\047/, "\047\047", stripped)
+        opens = gsub(/\{/, "{", stripped)
+        closes = gsub(/\}/, "}", stripped)
+        return opens - closes
+      }
+      $0 ~ "^" name "\\(\\)[[:space:]]*\\{" {
+        capture = 1
+        depth = 0
+      }
+      capture {
+        print
+        depth += brace_delta($0)
+        if (depth == 0) {
+          exit
+        }
+      }
+    ' "$source_file"
+  }
+  extracted="$(extract_function "$MILL_SCRIPT" "$fn")"
+  if [[ -z "$extracted" ]]; then
+    fail "missing extracted helper for expected replacement test: $fn"
+  fi
+  printf '%s\n\n' "$extracted" >> "$INTENT_FUNCS"
+done
+
+if (
+  set -euo pipefail
+  source "$INTENT_FUNCS"
+  SESSION="intent-session"
+  STATE_FILE="$TMP_ROOT/intent-state.json"
+  printf '{"tasks":{}}\n' > "$STATE_FILE"
+  log_file="$TMP_ROOT/intent-status.log"
+  warn_file="$TMP_ROOT/intent-warn.log"
+  : > "$log_file"
+  : > "$warn_file"
+  tmux_calls=()
+  log() { printf '%s:%s\n' "$1" "$2" >> "$log_file"; }
+  log_warn() { printf '%s\n' "$*" >> "$warn_file"; }
+  sleep() { :; }
+  tmux() {
+    tmux_calls+=("$*")
+    case "${1:-}" in
+      list-windows)
+        return 0
+        ;;
+      new-window)
+        return 0
+        ;;
+      display-message)
+        if [[ "$*" == *"#{window_id}"* ]]; then
+          printf '@42\n'
+          return 0
+        fi
+        return 1
+        ;;
+      set-option)
+        return 0
+        ;;
+    esac
+    return 1
+  }
+
+  wt_dir="$TMP_ROOT/intent-worktree"
+  feature_dir="$wt_dir/features/intent-slug"
+  mkdir -p "$feature_dir"
+  record_coding_pane_replacement_intent "HOK-2571" "$feature_dir" "$wt_dir"
+  expected_target="$(_ensure_task_window_exists "$SESSION" "HOK-2571" "intent-slug" "$wt_dir" "review")"
+  [[ "$expected_target" == "@42" ]]
+  grep -q "intentionally quarantined after coding" "$log_file"
+  ! grep -q "missing, recreating" "$warn_file"
+  [[ ! -e "$feature_dir/.coding-pane-replacement-intent.json" ]]
+
+  : > "$log_file"
+  : > "$warn_file"
+  second_target="$(_ensure_task_window_exists "$SESSION" "HOK-2571" "intent-slug" "$wt_dir" "review")"
+  [[ "$second_target" == "@42" ]]
+  grep -q "Window HOK-2571-intent-slug missing, recreating" "$warn_file"
+); then
+  pass "expected coding-pane replacement is consumed once before recovery warnings resume"
+else
+  fail "expected coding-pane replacement consumption behavior regressed"
+fi
 
 TEST_REPO="$TMP_ROOT/repo"
 mkdir -p "$TEST_REPO/shared/lib" "$TEST_REPO/tools/prompts" "$TEST_REPO/worktrees" "$TEST_REPO/.claude"
