@@ -22,6 +22,7 @@ import type {
   MultimodalSupport,
   ReasoningTier,
   RegistryTaskType,
+  SupportedModelMetadata,
   ToolSupport,
 } from './model-registry.ts';
 
@@ -145,6 +146,29 @@ export interface AvailableModelsConfig {
   reviewer?: string[];
 }
 
+export type ModelExclusionStage =
+  | 'planner'
+  | 'coder'
+  | 'reviewer'
+  | 'expansion'
+  | 'planning'
+  | 'coding'
+  | 'review'
+  | 'plan'
+  | 'implementation';
+
+export interface ModelExclusionConfig {
+  model: string;
+  stages?: ModelExclusionStage[];
+  reason?: string;
+}
+
+export type ModelExclusionSource = 'repo' | 'local';
+
+export interface EffectiveModelExclusion extends ModelExclusionConfig {
+  source: ModelExclusionSource;
+}
+
 export type ModelRegistryClass = 'frontier' | 'strong_generalist' | 'fast_economy';
 export type NativeProviderName = 'openai' | 'openrouter';
 export type PiTransportKind = 'openai-responses' | 'openai-completions';
@@ -189,6 +213,7 @@ export interface ModelCapabilitiesOverride {
   costPerMillionOutputTokensUsd?: number;
   agent?: AgentType;
   nativeCapability?: NativeCapabilityOverride;
+  supportedModel?: SupportedModelMetadata;
   releasedAt?: string;
 }
 
@@ -626,6 +651,7 @@ export interface BudgetConfig {
 
 export interface WavemillConfig {
   configVersion?: string;
+  modelExclusions?: ModelExclusionConfig[];
   safety?: SafetyConfig;
   linear?: LinearConfig;
   git?: GitConfig;
@@ -1093,6 +1119,20 @@ export function clearConfigCache(repoDir?: string): void {
  */
 export function getRouterConfig(repoDir?: string): RouterConfig {
   return loadWavemillConfig(repoDir).router || {};
+}
+
+export function getEffectiveModelExclusions(repoDir?: string): EffectiveModelExclusion[] {
+  const absRepoDir = resolveRepoDir(repoDir);
+  const base = loadWavemillBaseConfig(absRepoDir).modelExclusions ?? [];
+  const localConfigPath = resolve(absRepoDir, '.wavemill-config.local.json');
+  const local = existsSync(localConfigPath)
+    ? ((readAndParseConfig(localConfigPath) as WavemillConfig).modelExclusions ?? [])
+    : [];
+
+  return [
+    ...base.map((entry) => ({ ...entry, stages: entry.stages ? [...entry.stages] : undefined, source: 'repo' as const })),
+    ...local.map((entry) => ({ ...entry, stages: entry.stages ? [...entry.stages] : undefined, source: 'local' as const })),
+  ];
 }
 
 export function isRouterCapabilityFilteringEnabled(repoDir?: string): boolean {

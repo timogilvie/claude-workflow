@@ -136,6 +136,7 @@ assert_not_contains "unknown repo does not kill session" "$(cat "$TMUX_LOG")" "k
 TMUX_HAS_SESSION=0
 TMUX_EXISTING_REPO=""
 REPO_DIR="$TMP_DIR/repo"
+unset OPENROUTER_API_KEY DEEPSEEK_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY
 mkdir -p "$REPO_DIR"
 cat > "$REPO_DIR/.env" <<'EOF'
 OPENROUTER_API_KEY=sk-openrouter-from-dotenv

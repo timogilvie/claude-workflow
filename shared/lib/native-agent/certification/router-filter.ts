@@ -19,7 +19,6 @@ import {
   evaluateNativeProviderGate,
   type NativeGateRejectReason,
 } from './eligibility-gate.ts';
-import { loadCertification } from './loader.ts';
 import type { CertificationPhase } from './schema.ts';
 import type { ModelRegistry } from '../../model-registry.ts';
 
@@ -85,6 +84,8 @@ function mapGateReason(reason: NativeGateRejectReason): RouterCertificationRejec
     case 'missing_api_key':
     case 'missing_artifact':
       return 'missing';
+    case 'malformed_artifact':
+      return 'malformed';
     case 'unregistered_model':
       return 'no-native-capability';
     case 'wrong_suite':
@@ -164,25 +165,6 @@ export function filterNativeModels(
       continue;
     }
 
-    const loaded = loadCertification(
-      repoDir,
-      nativeCapability.nativeProvider,
-      modelId,
-      certMeta.certificationSuiteVersion,
-    );
-
-    if (!loaded.ok) {
-      rejected.push({
-        modelId,
-        role,
-        requestedPhase: requiredPhase,
-        nativeCapability: readOnlyNative,
-        requiredSuiteVersion: certMeta.certificationSuiteVersion,
-        reason: loaded.reason,
-      });
-      continue;
-    }
-
     const decision = evaluateNativeProviderGate({
       modelId,
       mode: 'task',
@@ -201,7 +183,7 @@ export function filterNativeModels(
         modelId,
         role,
         requestedPhase: requiredPhase,
-        certifiedPhase: decision.foundPhase ?? loaded.artifact.phase,
+        certifiedPhase: decision.foundPhase,
         nativeCapability: readOnlyNative,
         requiredSuiteVersion: certMeta.certificationSuiteVersion,
         reason: mapGateReason(decision.reason),

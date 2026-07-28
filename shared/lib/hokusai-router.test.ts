@@ -184,7 +184,9 @@ await test('uses the documented production endpoint when routeViaHokusai is call
 
 await test('missing auth fails fast and never sends a request', async () => {
   const { repoDir, cleanup } = makeRepo();
+  const currentApiKey = process.env.HOKUSAI_API_KEY;
   delete process.env.TEST_HOKUSAI_TOKEN;
+  delete process.env.HOKUSAI_API_KEY;
   let called = false;
   globalThis.fetch = async () => {
     called = true;
@@ -196,6 +198,11 @@ await test('missing auth fails fast and never sends a request', async () => {
     assert.equal(decision, null);
     assert.equal(called, false);
   } finally {
+    if (currentApiKey === undefined) {
+      delete process.env.HOKUSAI_API_KEY;
+    } else {
+      process.env.HOKUSAI_API_KEY = currentApiKey;
+    }
     globalThis.fetch = originalFetch;
     cleanup();
   }
