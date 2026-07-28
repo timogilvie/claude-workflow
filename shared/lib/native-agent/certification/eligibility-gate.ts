@@ -3,7 +3,7 @@ import { getModel, type ModelRegistry, type ReadOnlyNativeCapability } from '../
 import { checkIdentity } from './validator.ts';
 import {
   buildCertificationPath,
-  checkCertificationEligibility,
+  checkSharedCertificationEligibility,
 } from './loader.ts';
 import { resolveCertificationStorageIdentity } from './identity.ts';
 import type {
@@ -15,6 +15,7 @@ export type NativeGateRejectReason =
   | 'missing_api_key'
   | 'unregistered_model'
   | 'missing_artifact'
+  | 'malformed_artifact'
   | 'stale_artifact'
   | 'wrong_suite'
   | 'insufficient_phase';
@@ -54,6 +55,7 @@ export interface NativeGateReject {
   foundSuiteVersion?: string;
   certifiedAt?: string;
   artifactPath?: string;
+  artifactScope?: 'global' | 'legacy-repo';
 }
 
 export type NativeGateDecision = NativeGateReady | NativeGateReject;
@@ -112,7 +114,7 @@ export function evaluateNativeProviderGate(input: NativeGateInput): NativeGateDe
     input.modelId,
     requiredSuiteVersion,
   );
-  const eligibility = checkCertificationEligibility(
+  const eligibility = checkSharedCertificationEligibility(
     input.repoDir,
     nativeProvider,
     input.modelId,
@@ -132,7 +134,8 @@ export function evaluateNativeProviderGate(input: NativeGateInput): NativeGateDe
       requiredSuiteVersion,
       foundSuiteVersion: artifact?.suiteVersion,
       certifiedAt: artifact?.certifiedAt,
-      artifactPath,
+      artifactPath: eligibility.artifactPath ?? artifactPath,
+      artifactScope: eligibility.storageScope,
     });
   }
 
@@ -151,7 +154,8 @@ export function evaluateNativeProviderGate(input: NativeGateInput): NativeGateDe
       requiredSuiteVersion,
       foundSuiteVersion: eligibility.artifact.suiteVersion,
       certifiedAt: eligibility.artifact.certifiedAt,
-      artifactPath,
+      artifactPath: eligibility.artifactPath ?? artifactPath,
+      artifactScope: eligibility.storageScope,
     });
   }
 
@@ -159,7 +163,7 @@ export function evaluateNativeProviderGate(input: NativeGateInput): NativeGateDe
     ok: true,
     modelId: input.modelId,
     nativeProvider,
-    storagePath: artifactPath,
+    storagePath: eligibility.artifactPath ?? artifactPath,
     artifact: eligibility.artifact,
     certified: true,
   };
@@ -168,8 +172,9 @@ export function evaluateNativeProviderGate(input: NativeGateInput): NativeGateDe
 function mapEligibilityReason(reason: 'missing' | 'malformed' | 'wrong-version' | 'stale' | 'phase-insufficient' | 'scenario-failure'): NativeGateRejectReason {
   switch (reason) {
     case 'missing':
-    case 'malformed':
       return 'missing_artifact';
+    case 'malformed':
+      return 'malformed_artifact';
     case 'wrong-version':
       return 'wrong_suite';
     case 'stale':
@@ -202,6 +207,7 @@ function formatRejectMessage(input: Omit<NativeGateReject, 'ok' | 'message'>): s
   if (input.foundSuiteVersion) parts.push(`foundSuiteVersion=${input.foundSuiteVersion}`);
   if (input.certifiedAt) parts.push(`certifiedAt=${input.certifiedAt}`);
   if (input.artifactPath) parts.push(`artifactPath=${input.artifactPath}`);
+  if (input.artifactScope) parts.push(`artifactScope=${input.artifactScope}`);
 
   return parts.join('; ');
 }

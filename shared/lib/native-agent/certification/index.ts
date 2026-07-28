@@ -14,8 +14,9 @@ export {
   phaseSatisfies,
 } from './schema.ts';
 
-export type { CertificationEligibility, IneligibilityReason } from './loader.ts';
+export type { CertificationEligibility, IneligibilityReason, ScopedCertificationEligibility } from './loader.ts';
 export type { CertificationStorageIdentity } from './identity.ts';
+export type { CertificationStorageOptions, CertificationStorageScope } from './storage.ts';
 export type {
   NativeGateDecision,
   NativeGateInput,
@@ -27,12 +28,24 @@ export type {
 
 export {
   buildCertificationPath,
+  buildGlobalCertificationPath,
   checkCertificationEligibility,
+  checkSharedCertificationEligibility,
   evaluateEligibility,
   isValidPathSegment,
   loadCertification,
+  loadGlobalCertification,
+  loadSharedCertificationWithLegacyFallback,
   parseCertificationPath,
 } from './loader.ts';
+export {
+  GLOBAL_CERTIFICATION_ROOT_ENV,
+  buildCertificationPathFromRoot,
+  buildScopedCertificationPath,
+  resolveCertificationStorage,
+  resolveGlobalCertificationRoot,
+  resolveLegacyCertificationRoot,
+} from './storage.ts';
 export {
   isValidCertificationPathSegment,
   resolveCertificationStorageIdentity,
@@ -43,9 +56,13 @@ export type { ReadResult, StoreError, StoreErrorCode } from './store.ts';
 
 export {
   listCertifications,
+  listGlobalCertifications,
+  listScopedCertifications,
   readCertification,
   serializeCertification,
   writeCertification,
+  writeGlobalCertification,
+  writeScopedCertification,
 } from './store.ts';
 
 export type {

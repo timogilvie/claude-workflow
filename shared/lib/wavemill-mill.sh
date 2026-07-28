@@ -423,6 +423,27 @@ write_launch_plan() {
   local queue_plan_json="${2:-}"
   local initial_phase="planning"
 
+  if [[ -n "${FORCE_MODEL:-}" ]]; then
+    if ! agent_validate_model "$FORCE_MODEL" "$REPO_DIR"; then
+      log_error "Invalid FORCE_MODEL: $FORCE_MODEL"
+      log_error "Run 'wavemill mill' without FORCE_MODEL to use the router, or fix the model name."
+      exit 1
+    fi
+  else
+    if [[ -n "${WAVEMILL_PLANNER_MODEL:-}" ]] && ! agent_validate_model "$WAVEMILL_PLANNER_MODEL" "$REPO_DIR"; then
+      log_error "Invalid WAVEMILL_PLANNER_MODEL: $WAVEMILL_PLANNER_MODEL"
+      exit 1
+    fi
+    if [[ -n "${WAVEMILL_CODER_MODEL:-}" ]] && ! agent_validate_model "$WAVEMILL_CODER_MODEL" "$REPO_DIR"; then
+      log_error "Invalid WAVEMILL_CODER_MODEL: $WAVEMILL_CODER_MODEL"
+      exit 1
+    fi
+    if [[ -n "${WAVEMILL_REVIEWER_MODEL:-}" ]] && ! agent_validate_model "$WAVEMILL_REVIEWER_MODEL" "$REPO_DIR"; then
+      log_error "Invalid WAVEMILL_REVIEWER_MODEL: $WAVEMILL_REVIEWER_MODEL"
+      exit 1
+    fi
+  fi
+
   local tasks_json='[]'
   local t issue slug title branch wt_dir linear_issue task_packet_file details_file issue_json_file route_file
   local route_json route_planner route_coder route_reviewer route_plan_depth route_code_depth route_review_mode route_max_cost_usd

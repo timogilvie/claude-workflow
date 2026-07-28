@@ -13,6 +13,13 @@ import {
   isValidCertificationPathSegment,
   resolveCertificationStorageIdentity,
 } from './identity.ts';
+import {
+  buildCertificationPathFromRoot,
+  buildScopedCertificationPath,
+  resolveLegacyCertificationRoot,
+  type CertificationStorageOptions,
+  type CertificationStorageScope,
+} from './storage.ts';
 
 /**
  * Stable reason codes returned when a certification is ineligible.
@@ -59,6 +66,15 @@ export function buildCertificationPath(
     }
   }
   return join(repoDir, CERTIFICATION_BASE_PATH, identity.provider, identity.model, `${suiteVersion}.json`);
+}
+
+export function buildGlobalCertificationPath(
+  provider: string,
+  model: string,
+  suiteVersion: string,
+  options: Omit<CertificationStorageOptions, 'scope' | 'repoDir'> = {},
+): string {
+  return buildScopedCertificationPath({ ...options, scope: 'global' }, provider, model, suiteVersion);
 }
 
 /**
@@ -140,6 +156,87 @@ export function loadCertification(
   return { ok: true, artifact };
 }
 
+export function loadCertificationFromPath(
+  path: string,
+): { ok: true; artifact: NativeCertificationArtifact } | { ok: false; reason: 'missing' | 'malformed' } {
+  if (!existsSync(path)) {
+    return { ok: false, reason: 'missing' };
+  }
+
+  let raw: string;
+  try {
+    raw = readFileSync(path, 'utf-8');
+  } catch {
+    return { ok: false, reason: 'missing' };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { ok: false, reason: 'malformed' };
+  }
+
+  const artifact = parseArtifact(parsed);
+  if (!artifact) {
+    return { ok: false, reason: 'malformed' };
+  }
+
+  return { ok: true, artifact };
+}
+
+export type ScopedLoadCertificationResult =
+  | { ok: true; artifact: NativeCertificationArtifact; path: string; scope: CertificationStorageScope }
+  | { ok: false; reason: 'missing' | 'malformed'; path?: string; scope: CertificationStorageScope };
+
+export function loadGlobalCertification(
+  provider: string,
+  model: string,
+  suiteVersion: string,
+  options: Omit<CertificationStorageOptions, 'scope' | 'repoDir'> = {},
+): ScopedLoadCertificationResult {
+  let path: string;
+  try {
+    path = buildGlobalCertificationPath(provider, model, suiteVersion, options);
+  } catch {
+    return { ok: false, reason: 'malformed', scope: 'global' };
+  }
+  const loaded = loadCertificationFromPath(path);
+  return loaded.ok
+    ? { ...loaded, path, scope: 'global' }
+    : { ...loaded, path, scope: 'global' };
+}
+
+export function loadSharedCertificationWithLegacyFallback(
+  repoDir: string | undefined,
+  provider: string,
+  model: string,
+  suiteVersion: string,
+  options: Omit<CertificationStorageOptions, 'scope' | 'repoDir'> = {},
+): ScopedLoadCertificationResult {
+  const global = loadGlobalCertification(provider, model, suiteVersion, options);
+  if (global.ok || global.reason === 'malformed' || !repoDir) {
+    return global;
+  }
+
+  let path: string;
+  try {
+    path = buildCertificationPathFromRoot(
+      resolveLegacyCertificationRoot(repoDir),
+      provider,
+      model,
+      suiteVersion,
+    );
+  } catch {
+    return { ok: false, reason: 'malformed', scope: 'legacy-repo' };
+  }
+
+  const loaded = loadCertificationFromPath(path);
+  return loaded.ok
+    ? { ...loaded, path, scope: 'legacy-repo' }
+    : { ...loaded, path, scope: 'legacy-repo' };
+}
+
 /**
  * Evaluate whether a loaded certification artifact grants eligibility for a phase.
  *
@@ -200,6 +297,35 @@ export function checkCertificationEligibility(
     return { eligible: false, reason: loaded.reason };
   }
   return evaluateEligibility(loaded.artifact, suiteVersion, requiredPhase, now);
+}
+
+export type ScopedCertificationEligibility = CertificationEligibility & {
+  artifactPath?: string;
+  storageScope?: CertificationStorageScope;
+};
+
+export function checkSharedCertificationEligibility(
+  repoDir: string | undefined,
+  provider: string,
+  model: string,
+  suiteVersion: string,
+  requiredPhase: CertificationPhase,
+  now: Date = new Date(),
+): ScopedCertificationEligibility {
+  const loaded = loadSharedCertificationWithLegacyFallback(repoDir, provider, model, suiteVersion);
+  if (!loaded.ok) {
+    return {
+      eligible: false,
+      reason: loaded.reason,
+      ...(loaded.path ? { artifactPath: loaded.path } : {}),
+      storageScope: loaded.scope,
+    };
+  }
+  return {
+    ...evaluateEligibility(loaded.artifact, suiteVersion, requiredPhase, now),
+    artifactPath: loaded.path,
+    storageScope: loaded.scope,
+  };
 }
 
 function parseArtifact(input: unknown): NativeCertificationArtifact | undefined {

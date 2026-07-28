@@ -185,7 +185,7 @@ describe('evaluateNativeProviderGate', () => {
     }
   });
 
-  it('maps malformed artifacts to missing_artifact', () => {
+  it('maps malformed artifacts to malformed_artifact', () => {
     const { repoDir, cleanup } = makeRepo();
     try {
       const registry = makeRegistry('gpt-4o', 'openai');
@@ -196,7 +196,7 @@ describe('evaluateNativeProviderGate', () => {
       const decision = evaluateNativeProviderGate(taskInput(registry, 'gpt-4o', repoDir));
 
       assert.equal(decision.ok, false);
-      assert.equal(decision.reason, 'missing_artifact');
+      assert.equal(decision.reason, 'malformed_artifact');
     } finally {
       cleanup();
     }
