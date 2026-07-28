@@ -140,9 +140,13 @@ function makeArtifact(overrides: Partial<NativeCertificationArtifact> = {}): Nat
 
 function makeTempRepo(): { repoDir: string; cleanup: () => void } {
   const repoDir = mkdtempSync(join(tmpdir(), 'native-cert-report-'));
+  process.env.WAVEMILL_CERTIFICATION_ROOT = join(repoDir, '.wavemill', 'native-agent-certifications');
   return {
     repoDir,
-    cleanup: () => rmSync(repoDir, { recursive: true, force: true }),
+    cleanup: () => {
+      rmSync(repoDir, { recursive: true, force: true });
+      delete process.env.WAVEMILL_CERTIFICATION_ROOT;
+    },
   };
 }
 

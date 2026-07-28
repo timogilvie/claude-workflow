@@ -49,9 +49,13 @@ function makeRegistry(modelId: string, provider: 'openai' | 'openrouter', suiteV
 
 function makeRepo(): { repoDir: string; cleanup: () => void } {
   const repoDir = mkdtempSync(join(tmpdir(), 'eligibility-gate-'));
+  process.env.WAVEMILL_CERTIFICATION_ROOT = join(repoDir, '.wavemill', 'native-agent-certifications');
   return {
     repoDir,
-    cleanup: () => rmSync(repoDir, { recursive: true, force: true }),
+    cleanup: () => {
+      rmSync(repoDir, { recursive: true, force: true });
+      delete process.env.WAVEMILL_CERTIFICATION_ROOT;
+    },
   };
 }
 

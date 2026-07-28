@@ -109,6 +109,8 @@ function restoredFrontierQuotaState(status: QuotaStatus): Record<string, QuotaSt
 
 function makeRepo(configOverride?: Record<string, unknown>): { repoDir: string; cleanup: () => void } {
   const repoDir = mkdtempSync(join(tmpdir(), 'workflow-router-test-'));
+  const previousCertificationRoot = process.env.WAVEMILL_CERTIFICATION_ROOT;
+  process.env.WAVEMILL_CERTIFICATION_ROOT = join(repoDir, '.wavemill', 'native-agent-certifications');
   mkdirSync(join(repoDir, '.wavemill', 'evals'), { recursive: true });
   writeFileSync(join(repoDir, '.wavemill', 'evals', 'records.jsonl'), [
     JSON.stringify({ id: '1', modelId: 'gpt-5.3-codex', originalPrompt: 'Create a CLI command', score: 0.91, timeSeconds: 100, interventionCount: 0 }),
@@ -141,6 +143,11 @@ function makeRepo(configOverride?: Record<string, unknown>): { repoDir: string; 
     cleanup: () => {
       clearConfigCache(repoDir);
       rmSync(repoDir, { recursive: true, force: true });
+      if (previousCertificationRoot === undefined) {
+        delete process.env.WAVEMILL_CERTIFICATION_ROOT;
+      } else {
+        process.env.WAVEMILL_CERTIFICATION_ROOT = previousCertificationRoot;
+      }
     },
   };
 }

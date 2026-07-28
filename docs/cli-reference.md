@@ -119,6 +119,32 @@ Shows the recommended planner, coder, and reviewer workflow for a task or task f
 
 Evaluates completed workflow runs and supports reporting, export, and aggregation.
 
+## Native Certification
+
+### `wavemill native-agent certify`
+
+Runs the native provider/model certification harness. Successful non-dry-run runs write shared Wavemill certification artifacts that every consumer repository can reuse.
+
+```bash
+wavemill native-agent certify --provider openrouter --model qwen-3-coder --phase patch
+```
+
+### `wavemill native-agent models report`
+
+Shows global provider/model certification state. Use `--json --include-local` to include effective certified pools by stage and repository-local patch readiness.
+
+```bash
+wavemill native-agent models report --json --include-local
+```
+
+### `wavemill native-agent certifications import`
+
+Imports valid legacy repo-local provider/model certification artifacts into shared Wavemill storage.
+
+```bash
+wavemill native-agent certifications import --repo /path/to/repo --dry-run --json
+```
+
 ### `wavemill hokusai`
 
 Manages opt-in submission for collective routing intelligence.

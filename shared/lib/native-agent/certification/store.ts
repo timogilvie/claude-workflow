@@ -13,8 +13,12 @@ import {
 import { randomBytes } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import Ajv from 'ajv';
-import { CERTIFICATION_BASE_PATH, type NativeCertificationArtifact } from './schema.ts';
+import { type NativeCertificationArtifact } from './schema.ts';
 import { buildCertificationPath } from './loader.ts';
+import {
+  resolveCertificationRoot,
+  type CertificationPathOptions,
+} from './storage.ts';
 
 const CERTIFICATION_JSON_SCHEMA = JSON.parse(
   readFileSync(new URL('./schema.json', import.meta.url), 'utf-8'),
@@ -157,7 +161,11 @@ function sortKeys(v: unknown): unknown {
  * Throws on invalid path segments, fs write/rename failures, or records
  * that fail schema validation (write-side guard against corrupt artifacts).
  */
-export function writeCertification(repoDir: string, record: NativeCertificationArtifact): string {
+export function writeCertification(
+  repoDir: string,
+  record: NativeCertificationArtifact,
+  options: CertificationPathOptions = {},
+): string {
   // Write-side schema validation: reject malformed records before touching disk.
   const valid = validateSchema(record);
   if (!valid) {
@@ -168,7 +176,7 @@ export function writeCertification(repoDir: string, record: NativeCertificationA
   }
 
   // buildCertificationPath throws on bad segment chars (path traversal, etc.)
-  const finalPath = buildCertificationPath(repoDir, record.provider, record.model, record.suiteVersion);
+  const finalPath = buildCertificationPath(repoDir, record.provider, record.model, record.suiteVersion, options);
 
   mkdirSync(dirname(finalPath), { recursive: true });
 
@@ -207,7 +215,22 @@ export function writeCertification(repoDir: string, record: NativeCertificationA
  * Returns [] if the base directory does not exist.
  */
 export function listCertifications(repoDir: string): string[] {
-  const baseDir = join(repoDir, CERTIFICATION_BASE_PATH);
+  return listCertificationsForScope(repoDir);
+}
+
+export function writeLegacyCertification(repoDir: string, record: NativeCertificationArtifact): string {
+  return writeCertification(repoDir, record, { scope: 'legacy-local' });
+}
+
+export function listLegacyCertifications(repoDir: string): string[] {
+  return listCertificationsForScope(repoDir, { scope: 'legacy-local' });
+}
+
+export function listCertificationsForScope(
+  repoDir: string,
+  options: CertificationPathOptions = {},
+): string[] {
+  const baseDir = resolveCertificationRoot(repoDir, options);
 
   let providerEntries: ReturnType<typeof readdirSync>;
   try {

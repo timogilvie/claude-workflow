@@ -28,6 +28,7 @@ const CERTIFICATION_JSON_SCHEMA = JSON.parse(readFileSync(new URL('./schema.json
 const validateCertificationSchema = new Ajv({ allErrors: true, strict: false, validateFormats: false }).compile(
   CERTIFICATION_JSON_SCHEMA,
 );
+const ORIGINAL_CERTIFICATION_ROOT = process.env.WAVEMILL_CERTIFICATION_ROOT;
 
 function loadFixture(name: string): unknown {
   return JSON.parse(readFileSync(join(FIXTURE_DIR, name), 'utf-8'));
@@ -47,10 +48,17 @@ function makeValidArtifact(overrides: Partial<NativeCertificationArtifact> = {})
 }
 
 function makeTempRepo(): string {
-  return mkdtempSync(join(tmpdir(), 'native-cert-test-'));
+  const repoDir = mkdtempSync(join(tmpdir(), 'native-cert-test-'));
+  process.env.WAVEMILL_CERTIFICATION_ROOT = join(repoDir, '.wavemill', 'native-agent-certifications');
+  return repoDir;
 }
 
 function cleanupRepo(dir: string): void {
+  if (ORIGINAL_CERTIFICATION_ROOT === undefined) {
+    delete process.env.WAVEMILL_CERTIFICATION_ROOT;
+  } else {
+    process.env.WAVEMILL_CERTIFICATION_ROOT = ORIGINAL_CERTIFICATION_ROOT;
+  }
   rmSync(dir, { recursive: true, force: true });
 }
 

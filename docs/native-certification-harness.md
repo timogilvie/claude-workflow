@@ -260,7 +260,7 @@ if (report.liveCertifiable) {
 
 ### `wavemill native-agent models report`
 
-Lists certification status for every native-capable model in the registry. Reads from registry metadata and on-disk artifacts only — never triggers a paid provider call.
+Lists certification status for every native-capable model in the registry. Reads from registry metadata and shared certification artifacts only — never triggers a paid provider call. JSON output also includes effective certified pools by stage.
 
 ```bash
 # Human-readable table
@@ -268,6 +268,9 @@ wavemill native-agent models report
 
 # Machine-readable JSON (suitable for CI)
 wavemill native-agent models report --json
+
+# Include repository-local patch readiness in JSON
+wavemill native-agent models report --json --include-local
 
 # Filter by provider
 wavemill native-agent models report --provider openai
@@ -292,7 +295,7 @@ wavemill native-agent models report --model gpt-4o --json
 
 ### `wavemill native-agent certify`
 
-Runs the certification scenario harness for a specific provider/model/phase. On success (non-dry-run), writes a `NativeCertificationArtifact` to disk.
+Runs the certification scenario harness for a specific provider/model/phase. On success (non-dry-run), writes a `NativeCertificationArtifact` to Wavemill shared certification storage.
 
 ```bash
 # Dry run — validate without persisting (safe offline)
@@ -323,6 +326,17 @@ wavemill native-agent certify --provider openrouter --model openai/gpt-4o --phas
 
 **Dry-run contract:** A dry-run report is never `liveCertifiable`. No artifact is written regardless of scenario outcomes. Use `--dry-run` in CI pipelines to validate harness connectivity without spending quota.
 
+### `wavemill native-agent certifications import`
+
+Imports valid legacy repo-local provider/model artifacts into shared storage.
+
+```bash
+wavemill native-agent certifications import --repo /path/to/repo --dry-run --json
+wavemill native-agent certifications import --repo /path/to/repo
+```
+
+The import validates schema, identity, suite version, phase, TTL, and scenario results before writing. It does not copy secrets.
+
 ---
 
 ## Source of truth
@@ -338,4 +352,5 @@ wavemill native-agent certify --provider openrouter --model openai/gpt-4o --phas
 | `shared/lib/native-agent/certification/index.ts` | Barrel re-exports |
 | `tools/native-agent-models-report.ts` | `wavemill native-agent models report` CLI |
 | `tools/native-agent-certify.ts` | `wavemill native-agent certify` CLI |
+| `tools/native-agent-certifications-import.ts` | Legacy repo-local certification import CLI |
 | `docs/native-certification-contract.md` | Persisted artifact contract (HOK-2392) |

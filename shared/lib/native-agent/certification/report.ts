@@ -18,6 +18,8 @@ import { STAGE_PHASE_REQUIREMENT, type RouterRole } from './router-filter.ts';
 import { getEffectiveRegistry, type ModelRegistry, type ReadOnlyNativeCapability } from '../../model-registry.ts';
 import { resolveCertificationStorageIdentity } from './identity.ts';
 import { checkIdentity } from './validator.ts';
+import { buildCertificationArtifactPath } from './storage.ts';
+import { isPatchCodingEnabled } from '../coding-gate.ts';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -59,6 +61,21 @@ export interface ModelCertificationReportRow {
   knownLimitations: string[];
   /** Per-scenario outcomes from the on-disk artifact. */
   scenarios: ScenarioOutcome[];
+  certificationScope: 'global';
+  artifactPath?: string;
+  artifactIdentity?: {
+    provider: string;
+    model: string;
+  };
+}
+
+export interface LocalReadinessReport {
+  patchCoding: {
+    enabled: boolean;
+    reason: string;
+    smokeSuiteRevision?: string;
+    certifiedAt?: string;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -123,6 +140,7 @@ export function buildModelCertificationReport(
         eligibleStages: [],
         knownLimitations: flattenLimitations([nativeCapability.limitations]),
         scenarios: [],
+        certificationScope: 'global',
       });
       continue;
     }
@@ -142,6 +160,7 @@ export function buildModelCertificationReport(
         ageDays: registryMeta?.certifiedAt ? computeAgeDays(registryMeta.certifiedAt, now) : undefined,
         knownLimitations: flattenLimitations([nativeCapability.limitations, registryMeta?.knownLimitations]),
         scenarios: [],
+        certificationScope: 'global',
       });
       continue;
     }
@@ -159,6 +178,7 @@ export function buildModelCertificationReport(
         eligibleStages: [],
         knownLimitations: flattenLimitations([nativeCapability.limitations]),
         scenarios: [],
+        certificationScope: 'global',
       });
       continue;
     }
@@ -181,6 +201,9 @@ export function buildModelCertificationReport(
         suiteVersion: certMeta.certificationSuiteVersion,
         knownLimitations: flattenLimitations([nativeCapability.limitations, certMeta.knownLimitations]),
         scenarios: [],
+        certificationScope: 'global',
+        artifactPath: safeArtifactPath(repoDir, nativeCapability.nativeProvider, modelId, certMeta.certificationSuiteVersion),
+        artifactIdentity: resolveCertificationStorageIdentity(nativeCapability.nativeProvider, modelId),
       });
       continue;
     }
@@ -285,6 +308,9 @@ function rowFromArtifactState(
     ageDays,
     knownLimitations,
     scenarios,
+    certificationScope: 'global',
+    artifactPath: safeArtifactPath(process.cwd(), provider, model, artifact.suiteVersion),
+    artifactIdentity: { provider: artifact.provider, model: artifact.model },
   };
 }
 
@@ -296,6 +322,8 @@ export interface SerializedReport {
   schemaVersion: 1;
   generatedAt: string;
   models: ModelCertificationReportRow[];
+  effectiveCandidatePools: Record<RouterRole, string[]>;
+  localReadiness?: LocalReadinessReport;
 }
 
 /**
@@ -307,11 +335,20 @@ export interface SerializedReport {
 export function serializeReport(
   rows: ModelCertificationReportRow[],
   now: Date = new Date(),
+  opts: { repoDir?: string; includeLocalReadiness?: boolean } = {},
 ): SerializedReport {
   return {
     schemaVersion: 1,
     generatedAt: now.toISOString(),
     models: rows,
+    effectiveCandidatePools: {
+      planner: rows.filter((row) => row.state === 'ready' && row.eligibleStages.includes('planner')).map((row) => row.model),
+      coder: rows.filter((row) => row.state === 'ready' && row.eligibleStages.includes('coder')).map((row) => row.model),
+      reviewer: rows.filter((row) => row.state === 'ready' && row.eligibleStages.includes('reviewer')).map((row) => row.model),
+    },
+    ...(opts.includeLocalReadiness && opts.repoDir
+      ? { localReadiness: buildLocalReadinessReport(opts.repoDir) }
+      : {}),
   };
 }
 
@@ -371,6 +408,31 @@ function computeEligibleStages(certifiedPhase: CertificationPhase): RouterRole[]
 function computeAgeDays(certifiedAt: string, now: Date): number {
   const ms = now.getTime() - Date.parse(certifiedAt);
   return Math.floor(ms / (24 * 60 * 60 * 1000));
+}
+
+export function buildLocalReadinessReport(repoDir: string): LocalReadinessReport {
+  const patchGate = isPatchCodingEnabled(repoDir);
+  return {
+    patchCoding: {
+      enabled: patchGate.enabled,
+      reason: patchGate.reason,
+      smokeSuiteRevision: patchGate.certification?.smokeSuiteRevision,
+      certifiedAt: patchGate.certification?.certifiedAt,
+    },
+  };
+}
+
+function safeArtifactPath(
+  repoDir: string,
+  provider: string,
+  model: string,
+  suiteVersion: string,
+): string | undefined {
+  try {
+    return buildCertificationArtifactPath(repoDir, provider, model, suiteVersion);
+  } catch {
+    return undefined;
+  }
 }
 
 function flattenLimitations(sources: (string[] | undefined)[]): string[] {

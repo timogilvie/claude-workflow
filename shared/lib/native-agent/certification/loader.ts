@@ -1,5 +1,4 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import {
   CERTIFICATION_BASE_PATH,
   CERTIFICATION_SCHEMA_VERSION,
@@ -11,8 +10,11 @@ import {
 } from './schema.ts';
 import {
   isValidCertificationPathSegment,
-  resolveCertificationStorageIdentity,
 } from './identity.ts';
+import {
+  buildCertificationArtifactPath,
+  type CertificationPathOptions,
+} from './storage.ts';
 
 /**
  * Stable reason codes returned when a certification is ineligible.
@@ -46,19 +48,18 @@ export function buildCertificationPath(
   provider: string,
   model: string,
   suiteVersion: string,
+  options: CertificationPathOptions = {},
 ): string {
-  const identity = resolveCertificationStorageIdentity(provider, model);
+  return buildCertificationArtifactPath(repoDir, provider, model, suiteVersion, options);
+}
 
-  for (const [name, value] of [
-    ['provider', identity.provider],
-    ['model', identity.model],
-    ['suiteVersion', suiteVersion],
-  ] as const) {
-    if (!isValidPathSegment(value)) {
-      throw new Error(`Invalid certification path segment for ${name}: ${JSON.stringify(value)}`);
-    }
-  }
-  return join(repoDir, CERTIFICATION_BASE_PATH, identity.provider, identity.model, `${suiteVersion}.json`);
+export function buildLegacyCertificationPath(
+  repoDir: string,
+  provider: string,
+  model: string,
+  suiteVersion: string,
+): string {
+  return buildCertificationPath(repoDir, provider, model, suiteVersion, { scope: 'legacy-local' });
 }
 
 /**
@@ -106,10 +107,11 @@ export function loadCertification(
   provider: string,
   model: string,
   suiteVersion: string,
+  options: CertificationPathOptions = {},
 ): { ok: true; artifact: NativeCertificationArtifact } | { ok: false; reason: 'missing' | 'malformed' } {
   let path: string;
   try {
-    path = buildCertificationPath(repoDir, provider, model, suiteVersion);
+    path = buildCertificationPath(repoDir, provider, model, suiteVersion, options);
   } catch {
     return { ok: false, reason: 'malformed' };
   }
@@ -138,6 +140,15 @@ export function loadCertification(
   }
 
   return { ok: true, artifact };
+}
+
+export function loadLegacyCertification(
+  repoDir: string,
+  provider: string,
+  model: string,
+  suiteVersion: string,
+): { ok: true; artifact: NativeCertificationArtifact } | { ok: false; reason: 'missing' | 'malformed' } {
+  return loadCertification(repoDir, provider, model, suiteVersion, { scope: 'legacy-local' });
 }
 
 /**
@@ -194,8 +205,9 @@ export function checkCertificationEligibility(
   suiteVersion: string,
   requiredPhase: CertificationPhase,
   now: Date = new Date(),
+  options: CertificationPathOptions = {},
 ): CertificationEligibility {
-  const loaded = loadCertification(repoDir, provider, model, suiteVersion);
+  const loaded = loadCertification(repoDir, provider, model, suiteVersion, options);
   if (!loaded.ok) {
     return { eligible: false, reason: loaded.reason };
   }

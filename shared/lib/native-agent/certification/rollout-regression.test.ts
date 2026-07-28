@@ -44,6 +44,7 @@ const FRESH_CERTIFIED_AT = '2026-06-01T00:00:00.000Z';
 const STALE_CERTIFIED_AT = '2026-01-01T00:00:00.000Z';
 const SUITE_VERSION = 'v-rollout';
 const FIXTURE_DIR = new URL('./fixtures', import.meta.url).pathname;
+const ORIGINAL_CERTIFICATION_ROOT = process.env.WAVEMILL_CERTIFICATION_ROOT;
 
 function makeRepo(
   modelRegistryModels: Record<string, Partial<ModelCapabilities>> = {},
@@ -53,6 +54,7 @@ function makeRepo(
   cleanup: () => void;
 } {
   const repoDir = mkdtempSync(join(tmpdir(), 'rollout-regression-'));
+  process.env.WAVEMILL_CERTIFICATION_ROOT = join(repoDir, '.wavemill', 'native-agent-certifications');
   mkdirSync(join(repoDir, '.wavemill'), { recursive: true });
   writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
     modelRegistry: { models: modelRegistryModels },
@@ -69,6 +71,11 @@ function makeRepo(
   return {
     repoDir,
     cleanup: () => {
+      if (ORIGINAL_CERTIFICATION_ROOT === undefined) {
+        delete process.env.WAVEMILL_CERTIFICATION_ROOT;
+      } else {
+        process.env.WAVEMILL_CERTIFICATION_ROOT = ORIGINAL_CERTIFICATION_ROOT;
+      }
       clearConfigCache(repoDir);
       rmSync(repoDir, { recursive: true, force: true });
     },

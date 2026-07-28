@@ -18,6 +18,7 @@ import { resolveWavemillAliasFromOpenRouterId } from './openrouter-catalog.ts';
 export type ModelClass = 'frontier' | 'strong_generalist' | 'fast_economy';
 export type RegistryTaskType = 'routing' | 'planning' | 'coding' | 'review' | 'classify';
 export type DescriptorModelStage = 'planner' | 'coder' | 'reviewer';
+export type ModelLifecycleStatus = 'supported' | 'deprecated' | 'blocked';
 export type ToolSupport = 'none' | 'basic' | 'full';
 export type LatencyTier = 'fast' | 'standard' | 'slow';
 export type ReasoningTier = 'basic' | 'standard' | 'advanced';
@@ -54,6 +55,7 @@ export interface NativeCertificationMetadata {
   maxCertifiedPhase: CertificationPhase;
   certifiedAt: string;
   certificationSuiteVersion: string;
+  artifactPath?: string;
   knownLimitations?: string[];
 }
 
@@ -68,6 +70,7 @@ export interface NativeCertificationMetadata {
  */
 export interface NativeCapability {
   nativeProvider: NativeProviderName;
+  providerNativeModelId?: string;
   piTransportKind: PiTransportKind;
   readOnlyNative: ReadOnlyNativeCapability;
   compatFlags?: PiCompatFlags;
@@ -98,6 +101,13 @@ export interface ModelCapabilities {
   costPerMillionOutputTokensUsd: number;
   agent?: AgentType;
   nativeCapability?: NativeCapability;
+  lifecycleStatus?: ModelLifecycleStatus;
+  supportedStages?: DescriptorModelStage[];
+  requiredCertificationPhaseByStage?: Partial<Record<DescriptorModelStage, CertificationPhase>>;
+  launchEligibility?: {
+    routable?: boolean;
+    challengeEligible?: boolean;
+  };
   /**
    * ISO date the model became generally available. Drives the recency-aware
    * exploration boost (router.exploration.newModelBoost) and challenge
@@ -144,6 +154,13 @@ const READ_ONLY_NATIVE_CAPABILITIES: readonly ReadOnlyNativeCapability[] = ['cer
 const PI_TRANSPORT_KINDS: readonly PiTransportKind[] = ['openai-responses', 'openai-completions'];
 const CERTIFICATION_PHASES: readonly CertificationPhase[] = PHASE_ORDER;
 const UNSAFE_CERTIFICATION_SEGMENT = /[/\\.\0]/;
+const LIFECYCLE_STATUSES: readonly ModelLifecycleStatus[] = ['supported', 'deprecated', 'blocked'];
+const SUPPORTED_STAGES: readonly DescriptorModelStage[] = ['planner', 'coder', 'reviewer'];
+export const DEFAULT_STAGE_CERTIFICATION_PHASES: Readonly<Record<DescriptorModelStage, CertificationPhase>> = Object.freeze({
+  planner: 'workflow',
+  coder: 'patch',
+  reviewer: 'read-only',
+});
 const OPENROUTER_CERTIFICATION_SEED = Object.freeze({
   maxCertifiedPhase: 'workflow' as const,
   certifiedAt: '2024-01-01T00:00:00.000Z',
@@ -165,6 +182,7 @@ function cloneCertificationMetadata(
     maxCertifiedPhase: certification.maxCertifiedPhase,
     certifiedAt: certification.certifiedAt,
     certificationSuiteVersion: certification.certificationSuiteVersion,
+    ...(certification.artifactPath !== undefined ? { artifactPath: certification.artifactPath } : {}),
     knownLimitations: certification.knownLimitations ? [...certification.knownLimitations] : undefined,
   };
 }
@@ -178,6 +196,7 @@ function cloneNativeCapability(
 
   return {
     nativeProvider: capability.nativeProvider,
+    ...(capability.providerNativeModelId !== undefined ? { providerNativeModelId: capability.providerNativeModelId } : {}),
     piTransportKind: capability.piTransportKind,
     readOnlyNative: capability.readOnlyNative,
     compatFlags: cloneCompatFlags(capability.compatFlags),
@@ -208,6 +227,9 @@ function mergeNativeCapability(
         certifiedAt: override.certification.certifiedAt ?? seed?.certification?.certifiedAt,
         certificationSuiteVersion:
           override.certification.certificationSuiteVersion ?? seed?.certification?.certificationSuiteVersion,
+        ...((override.certification.artifactPath ?? seed?.certification?.artifactPath) !== undefined
+          ? { artifactPath: override.certification.artifactPath ?? seed?.certification?.artifactPath }
+          : {}),
         knownLimitations: override.certification.knownLimitations
           ? [...override.certification.knownLimitations]
           : seed?.certification?.knownLimitations
@@ -216,6 +238,11 @@ function mergeNativeCapability(
       }
       : cloneCertificationMetadata(seed?.certification),
   };
+
+  const providerNativeModelId = override.providerNativeModelId ?? seed?.providerNativeModelId;
+  if (providerNativeModelId !== undefined) {
+    merged.providerNativeModelId = providerNativeModelId;
+  }
 
   return merged as NativeCapability;
 }
@@ -249,6 +276,12 @@ function cloneCapabilities(capabilities: ModelCapabilities): ModelCapabilities {
     costPerMillionOutputTokensUsd: capabilities.costPerMillionOutputTokensUsd,
     agent: capabilities.agent,
     nativeCapability: cloneNativeCapability(capabilities.nativeCapability),
+    lifecycleStatus: capabilities.lifecycleStatus,
+    supportedStages: capabilities.supportedStages ? [...capabilities.supportedStages] : undefined,
+    requiredCertificationPhaseByStage: capabilities.requiredCertificationPhaseByStage
+      ? { ...capabilities.requiredCertificationPhaseByStage }
+      : undefined,
+    launchEligibility: capabilities.launchEligibility ? { ...capabilities.launchEligibility } : undefined,
     releasedAt: capabilities.releasedAt,
   };
 }
@@ -359,6 +392,7 @@ export function satisfiesCapabilities(
 function makeDefaultCapabilities(override?: ModelCapabilitiesOverride): ModelCapabilities {
   return {
     vendor: override?.vendor ?? 'custom',
+    lifecycleStatus: override?.lifecycleStatus ?? 'supported',
     class: override?.class ?? 'strong_generalist',
     strengths: override?.strengths ? [...override.strengths] : [],
     weaknesses: override?.weaknesses ? [...override.weaknesses] : [],
@@ -382,6 +416,11 @@ function makeDefaultCapabilities(override?: ModelCapabilitiesOverride): ModelCap
     costPerMillionOutputTokensUsd: override?.costPerMillionOutputTokensUsd ?? 0,
     agent: override?.agent,
     releasedAt: override?.releasedAt,
+    supportedStages: override?.supportedStages ? [...override.supportedStages] : undefined,
+    requiredCertificationPhaseByStage: override?.requiredCertificationPhaseByStage
+      ? { ...override.requiredCertificationPhaseByStage }
+      : undefined,
+    launchEligibility: override?.launchEligibility ? { ...override.launchEligibility } : undefined,
   };
 }
 
@@ -414,6 +453,14 @@ function mergeCapabilities(
     nativeCapability: override.nativeCapability
       ? mergeNativeCapability(seed.nativeCapability, override.nativeCapability)
       : cloneNativeCapability(seed.nativeCapability),
+    lifecycleStatus: override.lifecycleStatus ?? seed.lifecycleStatus ?? 'supported',
+    supportedStages: override.supportedStages ? [...override.supportedStages] : seed.supportedStages ? [...seed.supportedStages] : undefined,
+    requiredCertificationPhaseByStage: override.requiredCertificationPhaseByStage
+      ? { ...seed.requiredCertificationPhaseByStage, ...override.requiredCertificationPhaseByStage }
+      : seed.requiredCertificationPhaseByStage ? { ...seed.requiredCertificationPhaseByStage } : undefined,
+    launchEligibility: override.launchEligibility
+      ? { ...seed.launchEligibility, ...override.launchEligibility }
+      : seed.launchEligibility ? { ...seed.launchEligibility } : undefined,
     releasedAt: override.releasedAt ?? seed.releasedAt,
   };
 }
@@ -808,13 +855,79 @@ function isSafeCertificationSuiteVersion(value: string): boolean {
   return value.length > 0 && !UNSAFE_CERTIFICATION_SEGMENT.test(value);
 }
 
+function isModelLifecycleStatusValue(value: unknown): value is ModelLifecycleStatus {
+  return typeof value === 'string' && (LIFECYCLE_STATUSES as readonly string[]).includes(value);
+}
+
+function isDescriptorModelStageValue(value: unknown): value is DescriptorModelStage {
+  return typeof value === 'string' && (SUPPORTED_STAGES as readonly string[]).includes(value);
+}
+
+function isSafeProviderNativeModelId(value: string): boolean {
+  return value.length > 0 && !/[\0]/.test(value) && !value.split('/').some((segment) => segment === '.' || segment === '..');
+}
+
 export function validateNativeCapability(
   modelId: string,
-  capabilities: Pick<ModelCapabilities, 'nativeCapability'>,
+  capabilities: Pick<ModelCapabilities, 'nativeCapability' | 'lifecycleStatus' | 'supportedStages' | 'requiredCertificationPhaseByStage' | 'launchEligibility'>,
 ): void {
+  if (
+    capabilities.lifecycleStatus !== undefined
+    && !isModelLifecycleStatusValue(capabilities.lifecycleStatus)
+  ) {
+    throw new ModelValidationError(
+      modelId,
+      `model ${modelId}: lifecycleStatus must be one of ${LIFECYCLE_STATUSES.join(', ')}`,
+    );
+  }
+
+  if (
+    capabilities.lifecycleStatus === 'blocked'
+    && capabilities.launchEligibility?.routable === true
+  ) {
+    throw new ModelValidationError(
+      modelId,
+      `model ${modelId}: lifecycleStatus=blocked cannot set launchEligibility.routable=true`,
+    );
+  }
+
+  if (
+    capabilities.supportedStages !== undefined
+    && (
+      !Array.isArray(capabilities.supportedStages)
+      || !capabilities.supportedStages.every(isDescriptorModelStageValue)
+    )
+  ) {
+    throw new ModelValidationError(
+      modelId,
+      `model ${modelId}: supportedStages must contain only ${SUPPORTED_STAGES.join(', ')}`,
+    );
+  }
+
+  if (capabilities.requiredCertificationPhaseByStage !== undefined) {
+    for (const [stage, phase] of Object.entries(capabilities.requiredCertificationPhaseByStage)) {
+      if (!isDescriptorModelStageValue(stage) || !isCertificationPhaseValue(phase)) {
+        throw new ModelValidationError(
+          modelId,
+          `model ${modelId}: requiredCertificationPhaseByStage must map ${SUPPORTED_STAGES.join(', ')} to ${CERTIFICATION_PHASES.join(', ')}`,
+        );
+      }
+    }
+  }
+
   const nativeCapability = capabilities.nativeCapability;
   if (!nativeCapability) {
     return;
+  }
+
+  if (
+    nativeCapability.providerNativeModelId !== undefined
+    && !isSafeProviderNativeModelId(nativeCapability.providerNativeModelId)
+  ) {
+    throw new ModelValidationError(
+      modelId,
+      `model ${modelId}: nativeCapability.providerNativeModelId must be a non-empty safe provider model identifier`,
+    );
   }
 
   if (!isReadOnlyNativeCapabilityValue(nativeCapability.readOnlyNative)) {
@@ -914,6 +1027,16 @@ export function validateNativeCapability(
     throw new ModelValidationError(
       modelId,
       `model ${modelId}: nativeCapability.certification.certificationSuiteVersion must be a non-empty safe path segment`,
+    );
+  }
+
+  if (
+    certification.artifactPath !== undefined
+    && (typeof certification.artifactPath !== 'string' || certification.artifactPath.length === 0)
+  ) {
+    throw new ModelValidationError(
+      modelId,
+      `model ${modelId}: nativeCapability.certification.artifactPath must be a non-empty string when provided`,
     );
   }
 
@@ -1686,7 +1809,39 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
 };
 
 export function isModelEnabled(capabilities: ModelCapabilities | undefined): boolean {
-  return capabilities !== undefined && capabilities.disabled !== true;
+  return capabilities !== undefined && capabilities.disabled !== true && capabilities.lifecycleStatus !== 'blocked';
+}
+
+export function getModelLifecycleStatus(capabilities: ModelCapabilities | undefined): ModelLifecycleStatus {
+  if (!capabilities) return 'blocked';
+  if (capabilities.lifecycleStatus) return capabilities.lifecycleStatus;
+  return capabilities.disabled === true ? 'blocked' : 'supported';
+}
+
+export function getSupportedStages(
+  modelId: string,
+  registry: ModelRegistry,
+): DescriptorModelStage[] {
+  const capabilities = getModel(registry, modelId);
+  if (!capabilities || getModelLifecycleStatus(capabilities) === 'blocked') {
+    return [];
+  }
+  if (capabilities.supportedStages && capabilities.supportedStages.length > 0) {
+    return [...new Set(capabilities.supportedStages)];
+  }
+  return SUPPORTED_STAGES.filter((stage) => {
+    const taskType = DESCRIPTOR_STAGE_TO_TASK_TYPE[stage];
+    return Number.isFinite(capabilities.qualityScores[taskType]) && capabilities.qualityScores[taskType] >= 0;
+  });
+}
+
+export function getRequiredCertificationPhaseForStage(
+  modelId: string,
+  stage: DescriptorModelStage,
+  registry: ModelRegistry,
+): CertificationPhase {
+  return getModel(registry, modelId)?.requiredCertificationPhaseByStage?.[stage]
+    ?? DEFAULT_STAGE_CERTIFICATION_PHASES[stage];
 }
 
 export function resolveModelRegistryKey(registry: ModelRegistry, modelId: string): string {

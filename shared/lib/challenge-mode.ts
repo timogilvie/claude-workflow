@@ -9,7 +9,11 @@ import {
 import { loadWavemillConfig, type ChallengeConfig, type RouterConfig } from './config.ts';
 import { isDeepSeekModel } from './deepseek-provider.ts';
 import { filterDisabledModels, isDisabledModel } from './disabled-models.ts';
-import { getEffectiveRegistry, getModel } from './model-registry.ts';
+import { getEffectiveRegistry, getModel, getSupportedStages } from './model-registry.ts';
+import {
+  applyConfiguredModelExclusions,
+  type ModelExclusionDiagnostic,
+} from './model-exclusions.ts';
 import { resolveAgent, tryResolveAgent, type AgentResolutionPhase } from './model-router.ts';
 import { filterOpenRouterModels } from './openrouter-provider.ts';
 import { listVariedRoutingDimensions, routingMetaFromChallengeEntry } from './challenge-comparison.ts';
@@ -86,6 +90,7 @@ export interface ChallengePairSelectionResult<T extends ChallengePairSelection =
   failureReason?: ChallengeSelectionFailureReason;
   /** Native models excluded from candidacy due to missing/stale/phase-insufficient cert */
   nativeCertificationRejections?: ChallengeNativeRejection[];
+  modelExclusions?: ModelExclusionDiagnostic[];
 }
 
 /**
@@ -216,7 +221,12 @@ function filterEligibleChallengeCandidates(
   repoDir?: string,
   now?: Date,
 ): { models: string[]; rejections: ChallengeNativeRejection[] } {
-  const { models: nativeEligible, rejections } = filterNativeChallengeCandidates(pool, stage, repoDir, now);
+  const role = STAGE_TO_ROLE[stage];
+  const stageCompatible = repoDir
+    ? uniqueNonEmpty(pool).filter((modelId) => getSupportedStages(modelId, getEffectiveRegistry(repoDir)).includes(role))
+    : uniqueNonEmpty(pool);
+  const excluded = applyConfiguredModelExclusions(stageCompatible, role, repoDir);
+  const { models: nativeEligible, rejections } = filterNativeChallengeCandidates(excluded.models, stage, repoDir, now);
   const implementationLaunchable = repoDir && stage === 'implementation'
     ? filterImplementationLaunchableNativeCandidates(nativeEligible, repoDir, now)
     : { models: nativeEligible, rejections: [] };
@@ -313,17 +323,24 @@ export function filterDeepSeekChallengeModels(
 
 export function getChallengeModelPoolFromConfig(repoDir?: string): string[] {
   const config = loadWavemillConfig(repoDir);
-  return getChallengeModelPool(config.challenge, config.router);
+  return getChallengeModelPool(config.challenge, config.router, repoDir);
 }
 
 export function getChallengeModelPool(
   challengeConfig?: ChallengeConfig,
   routerConfig?: RouterConfig,
+  repoDir?: string,
 ): string[] {
   const configured = challengeConfig?.models;
   // Disabled models must never enter the challenge pool, even when listed
   // explicitly in challenge.models — the disable set is authoritative.
-  const source = Array.isArray(configured) ? configured : (routerConfig?.models || []);
+  const source = Array.isArray(configured)
+    ? configured
+    : routerConfig?.models && routerConfig.models.length > 0
+      ? routerConfig.models
+      : repoDir
+        ? Object.keys(getEffectiveRegistry(repoDir).models)
+        : [];
   return filterDisabledModels(filterDeepSeekChallengeModels(source, challengeConfig).models);
 }
 

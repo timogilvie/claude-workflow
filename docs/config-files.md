@@ -73,11 +73,29 @@ Use `.wavemill-config.json` for the shared `nativeAgent.enabled`, `nativeAgent.a
 
 Keep native provider secrets such as `OPENAI_API_KEY` and `OPENROUTER_API_KEY` in environment variables only.
 
-`nativeAgent.patchCoding.enabled` is fail-closed and defaults to `false`. Setting it to `true` does not enable native patch coding by itself; Wavemill also requires a current certification artifact at `.wavemill/native-agent/patch-coding-certification.json`.
+`nativeAgent.patchCoding.enabled` is fail-closed and defaults to `false`. Setting it to `true` does not enable native patch coding by itself; Wavemill also requires a current local readiness artifact at `.wavemill/native-agent/patch-coding-certification.json`.
 
-Coder routing has a third gate after repo opt-in and the smoke artifact: the chosen provider/model pair must also have a current phase certification artifact at `.wavemill/native-agent-certifications/<provider>/<model>/<suite-version>.json` whose phase satisfies `patch`.
+Coder routing has a third gate after repo opt-in and the smoke artifact: the chosen provider/model pair must also have a current shared Wavemill certification artifact whose phase satisfies `patch`.
 
 See [Native Read-Only Runtime](./native-read-only-runtime.md) for the exact config shape and phase examples.
+
+## Model Pool Defaults And Exclusions
+
+When `router.availableModels`, `router.models`, and `challenge.models` are absent, Wavemill starts from all enabled registry models that support the requested stage. Native models then require a current shared certification for that stage. Explicit model lists narrow the pool; they are curation controls, not a requirement for newly supported models to appear.
+
+Use `models.exclude` to remove supported models by alias:
+
+```json
+{
+  "models": {
+    "exclude": [
+      { "model": "glm-5.2", "stages": ["coder"], "reason": "cost policy" }
+    ]
+  }
+}
+```
+
+`stages` may contain `planner`, `coder`, and `reviewer`. Omit `stages` to exclude the model from every stage. Router diagnostics include the excluded model, stage, source, and reason.
 
 ### Router Exploration Sampling
 

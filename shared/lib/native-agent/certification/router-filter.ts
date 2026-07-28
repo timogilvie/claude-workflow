@@ -21,7 +21,10 @@ import {
 } from './eligibility-gate.ts';
 import { loadCertification } from './loader.ts';
 import type { CertificationPhase } from './schema.ts';
-import type { ModelRegistry } from '../../model-registry.ts';
+import {
+  getRequiredCertificationPhaseForStage,
+  type ModelRegistry,
+} from '../../model-registry.ts';
 
 /** Router role names as used in workflow-router.ts */
 export type RouterRole = 'planner' | 'coder' | 'reviewer';
@@ -120,11 +123,11 @@ export function filterNativeModels(
   repoDir: string,
   now?: Date,
 ): { eligible: string[]; rejected: RouterCertificationRejection[] } {
-  const requiredPhase = STAGE_PHASE_REQUIREMENT[role];
   const eligible: string[] = [];
   const rejected: RouterCertificationRejection[] = [];
 
   for (const modelId of models) {
+    const requiredPhase = getRequiredCertificationPhaseForStage(modelId, role, registry);
     const capabilities = registry.models[modelId];
     const nativeCapability = capabilities?.nativeCapability;
 

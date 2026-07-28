@@ -1477,12 +1477,57 @@
                                 "type": "string",
                                 "enum": ["claude", "codex", "claude-openrouter", "native-openai", "native-openrouter"]
                             },
+                            "lifecycleStatus": {
+                                "type": "string",
+                                "enum": ["supported", "deprecated", "blocked"]
+                            },
+                            "supportedStages": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string",
+                                    "enum": ["planner", "coder", "reviewer"]
+                                }
+                            },
+                            "requiredCertificationPhaseByStage": {
+                                "type": "object",
+                                "properties": {
+                                    "planner": {
+                                        "type": "string",
+                                        "enum": ["read-only", "patch", "workflow"]
+                                    },
+                                    "coder": {
+                                        "type": "string",
+                                        "enum": ["read-only", "patch", "workflow"]
+                                    },
+                                    "reviewer": {
+                                        "type": "string",
+                                        "enum": ["read-only", "patch", "workflow"]
+                                    }
+                                },
+                                "additionalProperties": false
+                            },
+                            "launchEligibility": {
+                                "type": "object",
+                                "properties": {
+                                    "routable": {
+                                        "type": "boolean"
+                                    },
+                                    "challengeEligible": {
+                                        "type": "boolean"
+                                    }
+                                },
+                                "additionalProperties": false
+                            },
                             "nativeCapability": {
                                 "type": "object",
                                 "properties": {
                                     "nativeProvider": {
                                         "type": "string",
                                         "enum": ["openai", "openrouter"]
+                                    },
+                                    "providerNativeModelId": {
+                                        "type": "string",
+                                        "minLength": 1
                                     },
                                     "piTransportKind": {
                                         "type": "string",
@@ -1513,6 +1558,10 @@
                                                 "type": "string"
                                             },
                                             "certificationSuiteVersion": {
+                                                "type": "string",
+                                                "minLength": 1
+                                            },
+                                            "artifactPath": {
                                                 "type": "string",
                                                 "minLength": 1
                                             },
@@ -1573,6 +1622,38 @@
                         }
                     },
                     "additionalProperties": false
+                }
+            },
+            "additionalProperties": false
+        },
+        "models": {
+            "type": "object",
+            "description": "Model curation controls applied after Wavemill's broad supported-model default pool is resolved.",
+            "properties": {
+                "exclude": {
+                    "type": "array",
+                    "description": "Stage-aware model exclusions for cost, policy, provider preference, or performance reasons.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "model": {
+                                "type": "string",
+                                "minLength": 1
+                            },
+                            "stages": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string",
+                                    "enum": ["planner", "coder", "reviewer"]
+                                }
+                            },
+                            "reason": {
+                                "type": "string"
+                            }
+                        },
+                        "required": ["model"],
+                        "additionalProperties": false
+                    }
                 }
             },
             "additionalProperties": false

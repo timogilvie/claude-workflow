@@ -34,11 +34,14 @@ function makeValidArtifact(overrides: Partial<NativeCertificationArtifact> = {})
 }
 
 function makeTempRepo(): string {
-  return mkdtempSync(join(tmpdir(), 'native-cert-store-test-'));
+  const dir = mkdtempSync(join(tmpdir(), 'native-cert-store-test-'));
+  process.env.WAVEMILL_CERTIFICATION_ROOT = join(dir, '.wavemill', 'native-agent-certifications');
+  return dir;
 }
 
 function cleanupRepo(dir: string): void {
   rmSync(dir, { recursive: true, force: true });
+  delete process.env.WAVEMILL_CERTIFICATION_ROOT;
 }
 
 // ─── serializeCertification ────────────────────────────────────────────────
@@ -191,6 +194,25 @@ describe('writeCertification', () => {
       assert.ok(result.ok);
     } finally {
       cleanupRepo(repoDir);
+    }
+  });
+
+  it('writes shared artifacts reusable from a second repo', () => {
+    const repoA = makeTempRepo();
+    const repoB = mkdtempSync(join(tmpdir(), 'native-cert-store-test-repo-b-'));
+    try {
+      const artifact = makeValidArtifact({ provider: 'openai', model: 'gpt-5.5', suiteVersion: 'v2' });
+      const path = writeCertification(repoA, artifact);
+      const listedFromB = listCertifications(repoB);
+      assert.deepEqual(listedFromB, [path]);
+      const result = readCertification(listedFromB[0]);
+      assert.ok(result.ok);
+      if (result.ok) {
+        assert.equal(result.artifact.model, 'gpt-5.5');
+      }
+    } finally {
+      cleanupRepo(repoA);
+      rmSync(repoB, { recursive: true, force: true });
     }
   });
 });

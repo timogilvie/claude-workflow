@@ -10,10 +10,12 @@ All certification evaluation is **fail-closed**: missing, malformed, stale, wron
 
 ---
 
-## Storage Path Contract
+## Shared Storage Path Contract
+
+Provider/model certification artifacts are Wavemill-managed shared state, not consumer-repository state. By default, Wavemill resolves the shared root to the Wavemill installation's `.wavemill/native-agent-certifications` directory. `WAVEMILL_CERTIFICATION_ROOT` may be set for tests or controlled installations.
 
 ```
-.wavemill/native-agent-certifications/<provider>/<model>/<suite-version>.json
+<shared-certification-root>/<provider>/<model>/<suite-version>.json
 ```
 
 **Example:**
@@ -21,6 +23,8 @@ All certification evaluation is **fail-closed**: missing, malformed, stale, wron
 ```
 .wavemill/native-agent-certifications/anthropic/claude-sonnet-4-6/v2.json
 ```
+
+Legacy repo-local artifacts under `<consumer-repo>/.wavemill/native-agent-certifications/` are read only by explicit import/migration tooling. Ordinary routing, challenge selection, provider gates, and reports read shared storage.
 
 ### Path segment rules
 
@@ -95,7 +99,7 @@ Native coding rollout uses three separate fail-closed gates:
 
 1. Repo opt-in: `nativeAgent.patchCoding.enabled` in `.wavemill-config.json`
 2. Runtime smoke gate: `.wavemill/native-agent/patch-coding-certification.json`
-3. Provider/model phase gate: `.wavemill/native-agent-certifications/<provider>/<model>/<suite-version>.json`
+3. Provider/model phase gate: shared `.wavemill/native-agent-certifications/<provider>/<model>/<suite-version>.json`
 
 The smoke artifact proves the local patch-coding runtime is enabled safely. The provider/model artifact proves a specific native provider/model pair passed the certification suite for the requested phase. For coder routing, the artifact phase must satisfy `patch`; for planner routing, it must satisfy `workflow`.
 
@@ -165,7 +169,7 @@ Registry validation is split intentionally:
 
 ### `checkCertificationEligibility(repoDir, provider, model, suiteVersion, requiredPhase, now?)`
 
-Combined load + evaluate. Reads the artifact from disk and evaluates eligibility in one call. All failure paths return `{ eligible: false, reason }` — never throws.
+Combined load + evaluate. Reads the artifact from shared storage by default and evaluates eligibility in one call. All failure paths return `{ eligible: false, reason }` — never throws.
 
 ### `evaluateEligibility(artifact, requiredSuiteVersion, requiredPhase, now?)`
 
@@ -173,7 +177,7 @@ Evaluates a pre-loaded artifact against a required suite version and phase. The 
 
 ### `loadCertification(repoDir, provider, model, suiteVersion)`
 
-Reads and structurally validates an artifact from disk. Returns `{ ok: true, artifact }` or `{ ok: false, reason: 'missing' | 'malformed' }`.
+Reads and structurally validates a shared artifact. Returns `{ ok: true, artifact }` or `{ ok: false, reason: 'missing' | 'malformed' }`. Use `loadLegacyCertification()` only for explicit import/migration flows.
 
 ### `buildCertificationPath(repoDir, provider, model, suiteVersion)`
 

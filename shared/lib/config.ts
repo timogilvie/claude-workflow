@@ -160,15 +160,26 @@ export interface NativeCertificationMetadataOverride {
   certifiedAt?: string;
   certificationSuiteVersion?: string;
   knownLimitations?: string[];
+  artifactPath?: string;
 }
 
 export interface NativeCapabilityOverride {
   nativeProvider?: NativeProviderName;
+  providerNativeModelId?: string;
   piTransportKind?: PiTransportKind;
   readOnlyNative?: ReadOnlyNativeCapability;
   compatFlags?: PiCompatFlagsOverride;
   limitations?: string[];
   certification?: NativeCertificationMetadataOverride;
+}
+
+export type ModelLifecycleStatus = 'supported' | 'deprecated' | 'blocked';
+export type SupportedModelStage = 'planner' | 'coder' | 'reviewer';
+
+export interface StageCertificationRequirementsOverride {
+  planner?: CertificationPhase;
+  coder?: CertificationPhase;
+  reviewer?: CertificationPhase;
 }
 
 export interface ModelCapabilitiesOverride {
@@ -189,12 +200,29 @@ export interface ModelCapabilitiesOverride {
   costPerMillionOutputTokensUsd?: number;
   agent?: AgentType;
   nativeCapability?: NativeCapabilityOverride;
+  lifecycleStatus?: ModelLifecycleStatus;
+  supportedStages?: SupportedModelStage[];
+  requiredCertificationPhaseByStage?: StageCertificationRequirementsOverride;
+  launchEligibility?: {
+    routable?: boolean;
+    challengeEligible?: boolean;
+  };
   releasedAt?: string;
 }
 
 export interface ModelRegistryConfig {
   models?: Record<string, ModelCapabilitiesOverride>;
   ladders?: Partial<Record<RegistryTaskType, string[]>>;
+}
+
+export interface ModelExclusionConfig {
+  model: string;
+  stages?: SupportedModelStage[];
+  reason?: string;
+}
+
+export interface ModelsConfig {
+  exclude?: ModelExclusionConfig[];
 }
 
 export interface AggregationConfig {
@@ -656,6 +684,7 @@ export interface WavemillConfig {
   mergeQueue?: MergeQueueConfig;
   monitor?: MonitorConfig;
   permissions?: PermissionsConfig;
+  models?: ModelsConfig;
   modelRegistry?: ModelRegistryConfig;
   quota?: QuotaConfig;
   verification?: VerificationConfig;
@@ -1479,6 +1508,10 @@ export function getPermissionsConfig(repoDir?: string): PermissionsConfig {
  */
 export function getModelRegistryConfig(repoDir?: string): ModelRegistryConfig {
   return loadWavemillConfig(repoDir).modelRegistry || {};
+}
+
+export function getModelsConfig(repoDir?: string): ModelsConfig {
+  return loadWavemillConfig(repoDir).models || {};
 }
 
 /**

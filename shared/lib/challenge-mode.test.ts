@@ -252,6 +252,7 @@ function writeNativeChallengeRepo(options: {
   phase: 'read-only' | 'patch';
 }): string {
   const repoDir = mkdtempSync(join(tmpdir(), 'challenge-native-'));
+  process.env.WAVEMILL_CERTIFICATION_ROOT = join(repoDir, '.wavemill', 'native-agent-certifications');
   const storageIdentity = options.provider === 'openrouter'
     ? (() => {
         const openrouterId = resolveOpenRouterModelId(options.model) ?? options.model;
@@ -1630,6 +1631,8 @@ function makeNativeTestRepo(
   cleanup: () => void;
 } {
   const repoDir = mkdtempSync(join(tmpdir(), 'challenge-native-test-'));
+  const previousCertificationRoot = process.env.WAVEMILL_CERTIFICATION_ROOT;
+  process.env.WAVEMILL_CERTIFICATION_ROOT = join(repoDir, '.wavemill', 'native-agent-certifications');
   mkdirSync(join(repoDir, '.wavemill'), { recursive: true });
   writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
     modelRegistry: { models: modelRegistryModels },
@@ -1647,6 +1650,11 @@ function makeNativeTestRepo(
     cleanup: () => {
       clearConfigCache(repoDir);
       rmSync(repoDir, { recursive: true, force: true });
+      if (previousCertificationRoot === undefined) {
+        delete process.env.WAVEMILL_CERTIFICATION_ROOT;
+      } else {
+        process.env.WAVEMILL_CERTIFICATION_ROOT = previousCertificationRoot;
+      }
     },
   };
 }

@@ -20,6 +20,7 @@ import {
 } from './providers.ts';
 
 const FIXED_NOW = new Date('2026-07-12T12:00:00.000Z');
+const ORIGINAL_CERTIFICATION_ROOT = process.env.WAVEMILL_CERTIFICATION_ROOT;
 
 const PROVIDER_CASES = [
   {
@@ -86,9 +87,17 @@ function makeCertifiedRegistry(
 
 function makeRepo(): { repoDir: string; cleanup: () => void } {
   const repoDir = mkdtempSync(join(tmpdir(), 'native-agent-provider-'));
+  process.env.WAVEMILL_CERTIFICATION_ROOT = join(repoDir, '.wavemill', 'native-agent-certifications');
   return {
     repoDir,
-    cleanup: () => rmSync(repoDir, { recursive: true, force: true }),
+    cleanup: () => {
+      if (ORIGINAL_CERTIFICATION_ROOT === undefined) {
+        delete process.env.WAVEMILL_CERTIFICATION_ROOT;
+      } else {
+        process.env.WAVEMILL_CERTIFICATION_ROOT = ORIGINAL_CERTIFICATION_ROOT;
+      }
+      rmSync(repoDir, { recursive: true, force: true });
+    },
   };
 }
 

@@ -14,7 +14,12 @@ import { filterDeepSeekModels, type DeepSeekPoolFilterResult } from './deepseek-
 import { filterOpenRouterModels, type OpenRouterPoolFilterResult } from './openrouter-provider.ts';
 import { routeViaHokusai } from './hokusai-router.ts';
 import { analyzePrompt, loadRouterConfig, recommendModel, resolveAgent, type PromptCharacteristics, type TaskType } from './model-router.ts';
-import { compareLatencyTier, getEffectiveRegistry, getLadder, hasCapabilityConstraints, isModelEnabled, type CapabilityConstraints, type LatencyTier, type RegistryTaskType } from './model-registry.ts';
+import { compareLatencyTier, getEffectiveRegistry, getLadder, getSupportedStages, hasCapabilityConstraints, isModelEnabled, type CapabilityConstraints, type LatencyTier, type RegistryTaskType } from './model-registry.ts';
+import {
+  applyConfiguredModelExclusions,
+  dedupeModelExclusions,
+  type ModelExclusionDiagnostic,
+} from './model-exclusions.ts';
 import { readQuotaSnapshot, type QuotaSnapshot } from './quota-state.ts';
 import {
   formatExplorationReasoning,
@@ -96,6 +101,7 @@ export interface WorkflowRouteDecision {
   provenance?: RouteProvenance;
   routingMode?: string;
   nativeCertificationRejections?: RouterCertificationRejection[];
+  modelExclusions?: ModelExclusionDiagnostic[];
 }
 
 export interface RouteWorkflowOptions {
@@ -228,6 +234,7 @@ interface ResolvedModelPool {
   models: string[];
   warnings: string[];
   nativeCertificationRejections?: RouterCertificationRejection[];
+  modelExclusions?: ModelExclusionDiagnostic[];
   routingFailure?: string;
 }
 
@@ -526,14 +533,16 @@ function resolveStagePool(
         : options?.reviewerModelsAvailable ?? getAvailableModelsForStage(routerConfig, 'reviewer');
 
   validateDeepSeekPool(explicitPool, options?.repoDir);
-  const configuredPool = intersectPools(basePool, explicitPool);
-  const providerFiltered = filterProviderPool(intersectPools(configuredPool, policyPool), options?.repoDir, role);
+  const registry = getEffectiveRegistry(options?.repoDir);
+  const stageCompatiblePool = intersectPools(basePool, explicitPool)
+    .filter((modelId) => getSupportedStages(modelId, registry).includes(role));
+  const exclusionFiltered = applyConfiguredModelExclusions(stageCompatiblePool, role, options?.repoDir);
+  const providerFiltered = filterProviderPool(intersectPools(exclusionFiltered.models, policyPool), options?.repoDir, role);
 
   // Apply native certification filter when we have a repo directory.
   // Native models only appear in repo-specific registry configs, so this is
   // always a no-op when repoDir is absent.
   if (options?.repoDir) {
-    const registry = getEffectiveRegistry(options.repoDir);
     const nativeFiltered = filterNativeModels(
       providerFiltered.models,
       role,
@@ -549,10 +558,18 @@ function resolveStagePool(
       ...(nativeFiltered.rejected.length > 0
         ? { nativeCertificationRejections: nativeFiltered.rejected }
         : {}),
+      ...(exclusionFiltered.exclusions.length > 0
+        ? { modelExclusions: exclusionFiltered.exclusions }
+        : {}),
     };
   }
 
-  return providerFiltered;
+  return {
+    ...providerFiltered,
+    ...(exclusionFiltered.exclusions.length > 0
+      ? { modelExclusions: exclusionFiltered.exclusions }
+      : {}),
+  };
 }
 
 function pickAvailableModel(pool: string[], preferred: string[], fallback: string): string {
@@ -1264,9 +1281,19 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
     ...(coderPoolResolution.nativeCertificationRejections ?? []),
     ...(reviewerPoolResolution.nativeCertificationRejections ?? []),
   ];
+  const modelExclusions = dedupeModelExclusions([
+    ...(plannerPoolResolution.modelExclusions ?? []),
+    ...(coderPoolResolution.modelExclusions ?? []),
+    ...(reviewerPoolResolution.modelExclusions ?? []),
+  ]);
   for (const rejection of nativeCertificationRejections) {
     reasoning.push(
       `Native model ${rejection.modelId} rejected for ${rejection.role} role (phase=${rejection.requestedPhase}, reason=${rejection.reason}).`,
+    );
+  }
+  for (const exclusion of modelExclusions) {
+    reasoning.push(
+      `Model ${exclusion.model} excluded for ${exclusion.stage} by ${exclusion.source}: ${exclusion.reason}.`,
     );
   }
 
@@ -1317,6 +1344,7 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
       ? { resourceSelections: coderRecommendation.resourceSelections }
       : {}),
     ...(nativeCertificationRejections.length > 0 ? { nativeCertificationRejections } : {}),
+    ...(modelExclusions.length > 0 ? { modelExclusions } : {}),
   };
 }
 

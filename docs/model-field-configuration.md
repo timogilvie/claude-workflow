@@ -112,6 +112,24 @@ Invalid values fail loudly during config or plan validation with an error that n
 
 `gpt-5.3-codex` remains a recognized historical pinned ID, but active routing filters it out because Codex with a ChatGPT account returns HTTP 400 for that model.
 
+## Default Pools And Curation
+
+When no explicit model pool is configured, routing and challenge mode use Wavemill's canonical registry: every enabled, stage-compatible, currently certified native model for configured providers is considered. `router.availableModels`, `router.models`, and `challenge.models` narrow this broad default.
+
+To remove a supported model without freezing the whole pool, use `models.exclude`:
+
+```json
+{
+  "models": {
+    "exclude": [
+      { "model": "glm-5.2", "stages": ["coder"], "reason": "cost policy" }
+    ]
+  }
+}
+```
+
+Exclusions are stage-aware and appear in router diagnostics.
+
 ## Cross-Process Inheritance
 
 `"inherit"` is resolved in one place: [`shared/lib/model-resolution.ts`](../shared/lib/model-resolution.ts). Shell launchers only forward context; they do not implement selector logic themselves.

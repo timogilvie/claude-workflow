@@ -34,6 +34,10 @@ runTool({
       type: 'string',
       description: 'Filter by model ID.',
     },
+    'include-local': {
+      type: 'boolean',
+      description: 'Include repository-local native patch readiness in JSON output.',
+    },
     repo: {
       type: 'string',
       description: 'Repository directory. Defaults to current working directory.',
@@ -55,7 +59,10 @@ runTool({
     });
 
     if (args.json === true) {
-      console.log(JSON.stringify(serializeReport(rows), null, 2));
+      console.log(JSON.stringify(serializeReport(rows, new Date(), {
+        repoDir,
+        includeLocalReadiness: args['include-local'] === true,
+      }), null, 2));
     } else {
       process.stdout.write(renderReportTable(rows));
     }
