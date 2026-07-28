@@ -5,6 +5,7 @@ import type { NativeAgentProviderName } from '../config.ts';
 
 export const PATCH_CODING_CERTIFICATION_SCHEMA_VERSION = 1 as const;
 export const PATCH_CODING_CERTIFICATION_RELATIVE_PATH = '.wavemill/native-agent/patch-coding-certification.json';
+export const PATCH_CODING_SMOKE_SUITE_REVISION = 'patch-coding-smoke-v1';
 
 export type PatchCodingCertificationReason =
   | 'missing'

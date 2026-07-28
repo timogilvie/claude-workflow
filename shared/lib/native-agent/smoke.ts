@@ -50,6 +50,7 @@ import { toPiAgentTool } from './tools/pi-adapter.ts';
 import { loadNativePhasePrompt, registerAndRecordNativeProvenance } from './prompts.ts';
 import { getNativeAgentConfig, type NativeAgentConfig } from '../config.ts';
 import type { ModelCapabilities, ModelRegistry, PiCompatFlags } from '../model-registry.ts';
+export { PATCH_CODING_SMOKE_SUITE_REVISION } from './coding-certification.ts';
 
 // ---------------------------------------------------------------------------
 // Public constants
@@ -61,7 +62,6 @@ export const SMOKE_PROVIDERS = [
 ] as const;
 
 export const SMOKE_PHASES = ['planning', 'coding'] as const;
-export const PATCH_CODING_SMOKE_SUITE_REVISION = 'patch-coding-smoke-v1';
 
 // ---------------------------------------------------------------------------
 // Public types

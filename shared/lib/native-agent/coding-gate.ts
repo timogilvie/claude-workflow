@@ -1,11 +1,11 @@
 import { getNativePatchCodingConfig, type ResolvedNativePatchCodingConfig } from '../config.ts';
 import {
   loadPatchCodingCertification,
+  PATCH_CODING_SMOKE_SUITE_REVISION,
   type PatchCodingCertification,
   type PatchCodingCertificationReason,
   type PatchCodingCertificationStatus,
 } from './coding-certification.ts';
-import { PATCH_CODING_SMOKE_SUITE_REVISION } from './smoke.ts';
 
 export type PatchCodingGateReason = 'enabled' | 'config_disabled' | PatchCodingCertificationReason;
 
