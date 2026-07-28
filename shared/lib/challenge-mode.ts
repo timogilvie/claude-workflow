@@ -1,5 +1,3 @@
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
 import type { ChallengeRecommendation, ChallengeStage } from './challenge-scheduler.ts';
 export type { ChallengeStage } from './challenge-scheduler.ts';
 import {
@@ -159,7 +157,6 @@ function filterImplementationLaunchableNativeCandidates(
 ): { models: string[]; rejections: ChallengeNativeRejection[] } {
   const registry = getEffectiveRegistry(repoDir);
   const gate = isPatchCodingEnabled(repoDir);
-  const hasCodingLauncher = existsSync(join(repoDir, 'tools', 'launch-native-coding.ts'));
   const models: string[] = [];
   const rejections: ChallengeNativeRejection[] = [];
 
@@ -170,7 +167,7 @@ function filterImplementationLaunchableNativeCandidates(
       continue;
     }
 
-    if (gate.enabled && hasCodingLauncher) {
+    if (gate.enabled) {
       models.push(modelId);
       continue;
     }
@@ -181,7 +178,7 @@ function filterImplementationLaunchableNativeCandidates(
       requestedPhase: 'patch',
       nativeCapability: nativeCapability.readOnlyNative,
       requiredSuiteVersion: nativeCapability.certification?.certificationSuiteVersion ?? '',
-      reason: 'insufficient-phase',
+      reason: 'no-native-capability',
     });
   }
 

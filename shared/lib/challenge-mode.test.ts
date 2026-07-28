@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { WorkflowRouteDecision } from './workflow-router.ts';
 import {
@@ -28,6 +28,13 @@ import { resolveOpenRouterModelId } from './openrouter-provider.ts';
 import type { RouteArtifactSnapshot } from './route-artifact.ts';
 import { CERTIFICATION_SCHEMA_VERSION } from './native-agent/certification/schema.ts';
 import { clearConfigCache } from './config.ts';
+import { getEffectiveRegistry } from './model-registry.ts';
+import {
+  PATCH_CODING_CERTIFICATION_SCHEMA_VERSION,
+  getPatchCodingCertificationPath,
+} from './native-agent/coding-certification.ts';
+import { PATCH_CODING_SMOKE_SUITE_REVISION } from './native-agent/smoke.ts';
+import { evaluateNativeProviderGate } from './native-agent/certification/eligibility-gate.ts';
 
 let passed = 0;
 let failed = 0;
@@ -246,12 +253,30 @@ function makeCoverage(
   return (model: string, stage: 'plan' | 'implementation' | 'review') => counts[stage]?.[model] ?? 0;
 }
 
+function writePatchCodingCertification(repoDir: string, certifiedAt = '2026-06-01T00:00:00.000Z'): void {
+  const certificationPath = getPatchCodingCertificationPath(repoDir);
+  mkdirSync(dirname(certificationPath), { recursive: true });
+  writeFileSync(certificationPath, JSON.stringify({
+    schemaVersion: PATCH_CODING_CERTIFICATION_SCHEMA_VERSION,
+    certified: true,
+    smokeSuiteRevision: PATCH_CODING_SMOKE_SUITE_REVISION,
+    certifiedAt,
+    providers: [
+      { provider: 'openai', model: 'native-certified', passed: true },
+      { provider: 'openrouter', model: 'qwen/qwen3-coder', passed: true },
+    ],
+  }));
+}
+
 function writeNativeChallengeRepo(options: {
   model: string;
   provider: 'openai' | 'openrouter';
   phase: 'read-only' | 'patch';
+  suiteVersion?: string;
+  enablePatchCoding?: boolean;
 }): string {
   const repoDir = mkdtempSync(join(tmpdir(), 'challenge-native-'));
+  const suiteVersion = options.suiteVersion ?? 'v-test';
   const storageIdentity = options.provider === 'openrouter'
     ? (() => {
         const openrouterId = resolveOpenRouterModelId(options.model) ?? options.model;
@@ -264,6 +289,7 @@ function writeNativeChallengeRepo(options: {
     nativeAgent: {
       enabled: true,
       allowedPhases: ['planning', 'review'],
+      ...(options.enablePatchCoding ? { patchCoding: { enabled: true } } : {}),
       providers: {
         [options.provider]: {
           enabled: true,
@@ -276,6 +302,7 @@ function writeNativeChallengeRepo(options: {
         enabled: options.provider === 'openrouter',
         apiKeyEnv: 'OPENROUTER_API_KEY',
         models: [options.model],
+        stages: ['coder', 'reviewer'],
       },
     },
     modelRegistry: {
@@ -300,7 +327,7 @@ function writeNativeChallengeRepo(options: {
             certification: {
               maxCertifiedPhase: options.phase,
               certifiedAt: '2026-06-01T00:00:00.000Z',
-              certificationSuiteVersion: 'v-test',
+              certificationSuiteVersion: suiteVersion,
             },
           },
         },
@@ -308,17 +335,20 @@ function writeNativeChallengeRepo(options: {
     },
   }));
   writeFileSync(
-    join(repoDir, '.wavemill', 'native-agent-certifications', storageIdentity.provider, storageIdentity.model, 'v-test.json'),
+    join(repoDir, '.wavemill', 'native-agent-certifications', storageIdentity.provider, storageIdentity.model, `${suiteVersion}.json`),
     JSON.stringify({
       schemaVersion: CERTIFICATION_SCHEMA_VERSION,
       provider: storageIdentity.provider,
       model: storageIdentity.model,
       phase: options.phase,
-      suiteVersion: 'v-test',
+      suiteVersion,
       certifiedAt: '2026-06-01T00:00:00.000Z',
       scenarios: [{ scenarioId: 'challenge.native.pass', passed: true }],
     }),
   );
+  if (options.enablePatchCoding) {
+    writePatchCodingCertification(repoDir);
+  }
   clearConfigCache(repoDir);
   return repoDir;
 }
@@ -410,11 +440,12 @@ test('review-stage challenge preserves native OpenRouter reviewer routing', () =
   }
 });
 
-test('implementation-stage challenge excludes native models without a coding launcher', () => {
+test('implementation-stage challenge retains native models with patch-coding opt-in', () => {
   const repoDir = writeNativeChallengeRepo({
     model: 'qwen-3-coder',
     provider: 'openrouter',
     phase: 'patch',
+    enablePatchCoding: true,
   });
   const previousApiKey = process.env.OPENROUTER_API_KEY;
   process.env.OPENROUTER_API_KEY = 'test-openrouter-key';
@@ -427,6 +458,45 @@ test('implementation-stage challenge excludes native models without a coding lau
         issueId: 'HOK-2235',
         slug: 'native-coding-stage',
         primaryModel: 'gpt-5.4',
+        forcedChallengerModel: 'qwen-3-coder',
+        repoDir,
+        randomFn: () => 0,
+      },
+    );
+
+    assert.ok(result.pair);
+    assert.equal(result.pair!.challenger.model, 'qwen-3-coder');
+    assert.equal(result.pair!.challenger.agent, 'native-openrouter');
+    const rejection = (result.nativeCertificationRejections || []).find((entry) => entry.modelId === 'qwen-3-coder');
+    assert.equal(rejection, undefined);
+  } finally {
+    clearConfigCache(repoDir);
+    rmSync(repoDir, { recursive: true, force: true });
+    if (previousApiKey === undefined) {
+      delete process.env.OPENROUTER_API_KEY;
+    } else {
+      process.env.OPENROUTER_API_KEY = previousApiKey;
+    }
+  }
+});
+
+test('implementation-stage challenge rejects native models when repo patch-coding opt-in is absent', () => {
+  const repoDir = writeNativeChallengeRepo({
+    model: 'qwen-3-coder',
+    provider: 'openrouter',
+    phase: 'patch',
+  });
+  const previousApiKey = process.env.OPENROUTER_API_KEY;
+  process.env.OPENROUTER_API_KEY = 'test-openrouter-key';
+
+  try {
+    const result = pickChallengeModelsWithReason(
+      ['gpt-5.4', 'claude-opus-4-6', 'qwen-3-coder'],
+      {
+        pairId: 'HOK-2235-OPT-OUT',
+        issueId: 'HOK-2235-OPT-OUT',
+        slug: 'native-coding-stage-opt-out',
+        primaryModel: 'gpt-5.4',
         repoDir,
         randomFn: () => 0,
       },
@@ -436,7 +506,7 @@ test('implementation-stage challenge excludes native models without a coding lau
     assert.equal(result.pair!.challenger.model, 'claude-opus-4-6');
     const rejection = (result.nativeCertificationRejections || []).find((entry) => entry.modelId === 'qwen-3-coder');
     assert.ok(rejection);
-    assert.equal(rejection!.reason, 'insufficient-phase');
+    assert.equal(rejection!.reason, 'no-native-capability');
     assert.equal(rejection!.role, 'coder');
   } finally {
     clearConfigCache(repoDir);
@@ -1624,6 +1694,7 @@ function makeNativeTestRepo(
   opts: {
     config?: Record<string, unknown>;
     env?: Record<string, string>;
+    patchCodingEnabled?: boolean;
   } = {},
 ): {
   repoDir: string;
@@ -1633,8 +1704,14 @@ function makeNativeTestRepo(
   mkdirSync(join(repoDir, '.wavemill'), { recursive: true });
   writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
     modelRegistry: { models: modelRegistryModels },
+    ...(opts.patchCodingEnabled
+      ? { nativeAgent: { patchCoding: { enabled: true } } }
+      : {}),
     ...(opts.config || {}),
   }));
+  if (opts.patchCodingEnabled) {
+    writePatchCodingCertification(repoDir, CERT_DATE_FRESH);
+  }
   if (opts.env && Object.keys(opts.env).length > 0) {
     writeFileSync(
       join(repoDir, '.env'),
@@ -1659,12 +1736,14 @@ function writeCertArtifact(
   suiteVersion: string,
   overrides: Record<string, unknown> = {},
 ): void {
-  const certDir = join(repoDir, '.wavemill', 'native-agent-certifications', provider, model);
+  const openrouterId = provider === 'openrouter' ? resolveOpenRouterModelId(model) : null;
+  const [storageProvider, storageModel] = openrouterId?.split('/') ?? [provider, model];
+  const certDir = join(repoDir, '.wavemill', 'native-agent-certifications', storageProvider!, storageModel!);
   mkdirSync(certDir, { recursive: true });
   const artifact = {
     schemaVersion: CERTIFICATION_SCHEMA_VERSION,
-    provider,
-    model,
+    provider: storageProvider,
+    model: storageModel,
     phase: 'patch',
     suiteVersion,
     certifiedAt: CERT_DATE_FRESH,
@@ -1672,6 +1751,12 @@ function writeCertArtifact(
     ...overrides,
   };
   writeFileSync(join(certDir, `${suiteVersion}.json`), JSON.stringify(artifact));
+}
+
+function certArtifactPath(repoDir: string, provider: string, model: string, suiteVersion: string): string {
+  const openrouterId = provider === 'openrouter' ? resolveOpenRouterModelId(model) : null;
+  const [storageProvider, storageModel] = openrouterId?.split('/') ?? [provider, model];
+  return join(repoDir, '.wavemill', 'native-agent-certifications', storageProvider!, storageModel!, `${suiteVersion}.json`);
 }
 
 /** Build a minimal native model registry entry */
@@ -1709,9 +1794,205 @@ function openRouterNativeModelEntry(phase: string = 'workflow', suiteVersion: st
   };
 }
 
+const HOK_2569_OPENROUTER_ALIASES = ['qwen-3-coder', 'glm-5.2', 'kimi-k2.7-code'] as const;
+
+function makeHok2569Repo(
+  alias: typeof HOK_2569_OPENROUTER_ALIASES[number],
+  opts: { patchCodingEnabled?: boolean } = { patchCodingEnabled: true },
+) {
+  return makeNativeTestRepo(
+    {
+      [alias]: openRouterNativeModelEntry('patch', 'v2'),
+    },
+    {
+      patchCodingEnabled: opts.patchCodingEnabled,
+      config: {
+        providers: {
+          openrouter: {
+            enabled: true,
+            apiKeyEnv: 'HOK_2569_OPENROUTER_KEY',
+            models: [alias],
+            stages: ['coder'],
+          },
+        },
+      },
+      env: {
+        HOK_2569_OPENROUTER_KEY: 'test-openrouter-key',
+      },
+    },
+  );
+}
+
 console.log('\n--- Native Certification Guardrail Tests ---\n');
 
-test('implementation-stage native challenger is excluded without a coding launcher', () => {
+test('HOK-2569 OpenRouter v2 patch aliases pass canonical gate and challenge filtering', () => {
+  for (const alias of HOK_2569_OPENROUTER_ALIASES) {
+    const { repoDir, cleanup } = makeHok2569Repo(alias);
+    try {
+      writeCertArtifact(repoDir, 'openrouter', alias, 'v2', { phase: 'patch' });
+
+      const gate = evaluateNativeProviderGate({
+        modelId: alias,
+        mode: 'task',
+        requiredPhase: 'patch',
+        registry: getEffectiveRegistry(repoDir),
+        repoDir,
+        apiKeyPresent: true,
+        apiKeyEnv: 'HOK_2569_OPENROUTER_KEY',
+        now: TEST_NOW,
+      });
+      assert.equal(gate.ok, true, `${alias} should pass canonical gate`);
+
+      const result = pickChallengeModelsWithReason(
+        ['claude-opus-4-6', alias],
+        {
+          pairId: `HOK-2569-${alias}`,
+          issueId: `HOK-2569-${alias}`,
+          slug: `hok-2569-${alias}`,
+          primaryModel: 'claude-opus-4-6',
+          forcedChallengerModel: alias,
+          repoDir,
+          now: TEST_NOW,
+          randomFn: () => 0,
+        },
+      );
+
+      assert.ok(result.pair, `${alias} should remain challenge-eligible`);
+      assert.equal(result.pair!.challenger.model, alias);
+      assert.equal(
+        (result.nativeCertificationRejections || []).find((entry) => entry.modelId === alias),
+        undefined,
+        `${alias} should not have challenge native rejections`,
+      );
+    } finally {
+      cleanup();
+    }
+  }
+});
+
+test('HOK-2569 OpenRouter v2 patch aliases fail closed consistently for degraded artifacts', () => {
+  const cases: Array<{
+    name: string;
+    configure: (repoDir: string, alias: typeof HOK_2569_OPENROUTER_ALIASES[number]) => void;
+    gateReason: string;
+    challengeReason: string;
+  }> = [
+    {
+      name: 'missing',
+      configure: () => {},
+      gateReason: 'missing_artifact',
+      challengeReason: 'missing',
+    },
+    {
+      name: 'stale',
+      configure: (repoDir, alias) => writeCertArtifact(repoDir, 'openrouter', alias, 'v2', {
+        phase: 'patch',
+        certifiedAt: CERT_DATE_STALE,
+      }),
+      gateReason: 'stale_artifact',
+      challengeReason: 'stale',
+    },
+    {
+      name: 'wrong-suite',
+      configure: (repoDir, alias) => writeCertArtifact(repoDir, 'openrouter', alias, 'v2', {
+        phase: 'patch',
+        suiteVersion: 'v1',
+      }),
+      gateReason: 'wrong_suite',
+      challengeReason: 'wrong-suite',
+    },
+    {
+      name: 'malformed',
+      configure: (repoDir, alias) => {
+        const artifactPath = certArtifactPath(repoDir, 'openrouter', alias, 'v2');
+        mkdirSync(dirname(artifactPath), { recursive: true });
+        writeFileSync(artifactPath, '{');
+      },
+      gateReason: 'missing_artifact',
+      challengeReason: 'malformed',
+    },
+    {
+      name: 'phase-insufficient',
+      configure: (repoDir, alias) => writeCertArtifact(repoDir, 'openrouter', alias, 'v2', {
+        phase: 'read-only',
+      }),
+      gateReason: 'insufficient_phase',
+      challengeReason: 'insufficient-phase',
+    },
+  ];
+
+  for (const testCase of cases) {
+    const alias = 'qwen-3-coder';
+    const { repoDir, cleanup } = makeHok2569Repo(alias);
+    try {
+      testCase.configure(repoDir, alias);
+
+      const gate = evaluateNativeProviderGate({
+        modelId: alias,
+        mode: 'task',
+        requiredPhase: 'patch',
+        registry: getEffectiveRegistry(repoDir),
+        repoDir,
+        apiKeyPresent: true,
+        apiKeyEnv: 'HOK_2569_OPENROUTER_KEY',
+        now: TEST_NOW,
+      });
+      assert.equal(gate.ok, false, `${testCase.name} should fail canonical gate`);
+      assert.equal(gate.ok ? '' : gate.reason, testCase.gateReason);
+
+      const result = pickChallengeModelsWithReason(
+        ['claude-opus-4-6', alias],
+        {
+          pairId: `HOK-2569-${testCase.name}`,
+          issueId: `HOK-2569-${testCase.name}`,
+          slug: `hok-2569-${testCase.name}`,
+          primaryModel: 'claude-opus-4-6',
+          forcedChallengerModel: alias,
+          repoDir,
+          now: TEST_NOW,
+          randomFn: () => 0,
+        },
+      );
+      assert.equal(result.pair, null, `${testCase.name} should not produce a native challenge`);
+      const rejection = (result.nativeCertificationRejections || []).find((entry) => entry.modelId === alias);
+      assert.ok(rejection, `${testCase.name} should have challenge rejection`);
+      assert.equal(rejection!.reason, testCase.challengeReason);
+    } finally {
+      cleanup();
+    }
+  }
+});
+
+test('HOK-2569 OpenRouter implementation aliases reject when repo patch-coding opt-in is absent', () => {
+  const alias = 'qwen-3-coder';
+  const { repoDir, cleanup } = makeHok2569Repo(alias, { patchCodingEnabled: false });
+  try {
+    writeCertArtifact(repoDir, 'openrouter', alias, 'v2', { phase: 'patch' });
+
+    const result = pickChallengeModelsWithReason(
+      ['claude-opus-4-6', alias],
+      {
+        pairId: 'HOK-2569-OPT-OUT',
+        issueId: 'HOK-2569-OPT-OUT',
+        slug: 'hok-2569-opt-out',
+        primaryModel: 'claude-opus-4-6',
+        forcedChallengerModel: alias,
+        repoDir,
+        now: TEST_NOW,
+        randomFn: () => 0,
+      },
+    );
+
+    assert.equal(result.pair, null);
+    const rejection = (result.nativeCertificationRejections || []).find((entry) => entry.modelId === alias);
+    assert.ok(rejection);
+    assert.equal(rejection!.reason, 'no-native-capability');
+  } finally {
+    cleanup();
+  }
+});
+
+test('implementation-stage native challenger is excluded without repo patch-coding opt-in', () => {
   const { repoDir, cleanup } = makeNativeTestRepo({
     'native-patch-model': nativeModelEntry('patch'),
   });
@@ -1734,8 +2015,41 @@ test('implementation-stage native challenger is excluded without a coding launch
     assert.equal(result.pair, null);
     const rejection = (result.nativeCertificationRejections || []).find((entry) => entry.modelId === 'native-patch-model');
     assert.ok(rejection, 'native coding challenger should be rejected');
-    assert.equal(rejection!.reason, 'insufficient-phase');
+    assert.equal(rejection!.reason, 'no-native-capability');
     assert.equal(rejection!.role, 'coder');
+  } finally {
+    cleanup();
+  }
+});
+
+test('implementation-stage native challenger is retained with repo patch-coding opt-in', () => {
+  const { repoDir, cleanup } = makeNativeTestRepo(
+    {
+      'native-patch-model': nativeModelEntry('patch'),
+    },
+    { patchCodingEnabled: true },
+  );
+  try {
+    writeCertArtifact(repoDir, 'openai', 'native-patch-model', 'v1', { phase: 'patch' });
+
+    const result = pickChallengeModelsWithReason(
+      ['claude-opus-4-6', 'native-patch-model'],
+      {
+        pairId: 'NC-001B',
+        issueId: 'NC-001B',
+        slug: 'nc-certified-enabled',
+        primaryModel: 'claude-opus-4-6',
+        forcedChallengerModel: 'native-patch-model',
+        repoDir,
+        now: TEST_NOW,
+        randomFn: () => 0,
+      },
+    );
+
+    assert.ok(result.pair, 'pair should be selected');
+    assert.equal(result.pair!.challenger.model, 'native-patch-model');
+    const rejection = (result.nativeCertificationRejections || []).find((entry) => entry.modelId === 'native-patch-model');
+    assert.equal(rejection, undefined);
   } finally {
     cleanup();
   }
