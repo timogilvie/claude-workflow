@@ -180,6 +180,8 @@ harness_extract_real_functions() {
     _coding_divergence_announce_marker \
     _detect_coding_pane_divergence \
     emit_pane_divergence_attention \
+    coding_pane_replacement_intent_path \
+    record_coding_pane_replacement_intent \
     quarantine_completed_coding_pane \
     handle_planning_overreach_rejection \
     validate_coding_phase_output \
@@ -1655,6 +1657,8 @@ EOF
   check_contains "auto blocked completion: auto-advance log emitted" "$(kv_value "$tick" log_output)" "[auto-advance] $issue advancing coding to review"
   check_file_exists "auto blocked completion: audit artifact written" "$repo/features/$slug/.coding-auto-advance.json"
   check_file_exists "auto blocked completion: coding complete marker written" "$repo/features/$slug/.coding-complete"
+  check_file_exists "auto blocked completion: review replacement intent written" "$repo/features/$slug/.coding-pane-replacement-intent.json"
+  check_eq "auto blocked completion: replacement intent targets review" "review" "$(jq -r '.to' "$repo/features/$slug/.coding-pane-replacement-intent.json")"
   check_file_absent "auto blocked completion: no dedupe marker written" "$repo/features/$slug/.blocked-completion-announced"
 }
 

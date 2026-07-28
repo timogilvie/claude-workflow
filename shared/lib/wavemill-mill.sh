@@ -5740,13 +5740,76 @@ _tmux_task_window_target() {
 # A completed coding agent must not remain available for unrelated interactive
 # input while the controller advances the task. This is deliberately best-effort:
 # result state is authoritative and review will recreate a task window as needed.
+coding_pane_replacement_intent_path() {
+  local feature_dir="$1"
+  printf '%s/.coding-pane-replacement-intent.json\n' "$feature_dir"
+}
+
+record_coding_pane_replacement_intent() {
+  local issue="$1" feature_dir="$2" worktree="${3:-}"
+  local slug intent_path intent_tmp created_at
+
+  [[ -n "$feature_dir" ]] || return 0
+  slug="$(basename "$feature_dir")"
+  intent_path="$(coding_pane_replacement_intent_path "$feature_dir")"
+  created_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  mkdir -p "$feature_dir" 2>/dev/null || return 0
+
+  intent_tmp="$(mktemp "$intent_path.tmp.XXXXXX" 2>/dev/null)" || return 0
+  jq -n \
+    --arg issue "$issue" \
+    --arg slug "$slug" \
+    --arg from "coding" \
+    --arg to "review" \
+    --arg action "replace_task_window_after_coding_quarantine" \
+    --arg worktree "$worktree" \
+    --arg createdAt "$created_at" \
+    '{
+      issue: $issue,
+      slug: $slug,
+      from: $from,
+      to: $to,
+      action: $action,
+      worktree: $worktree,
+      createdAt: $createdAt
+    }' > "$intent_tmp" 2>/dev/null || {
+      rm -f "$intent_tmp"
+      return 0
+    }
+  mv "$intent_tmp" "$intent_path" 2>/dev/null || rm -f "$intent_tmp"
+  return 0
+}
+
+coding_pane_replacement_intent_matches() {
+  local issue="$1" slug="$2" feature_dir="$3" to_phase="$4"
+  local intent_path
+
+  [[ "$to_phase" == "review" ]] || return 1
+  intent_path="$(coding_pane_replacement_intent_path "$feature_dir")"
+  [[ -f "$intent_path" ]] || return 1
+
+  jq -e \
+    --arg issue "$issue" \
+    --arg slug "$slug" \
+    --arg to "$to_phase" \
+    '(.issue == $issue) and (.slug == $slug) and (.from == "coding") and (.to == $to) and (.action == "replace_task_window_after_coding_quarantine")' \
+    "$intent_path" >/dev/null 2>&1
+}
+
+clear_coding_pane_replacement_intent() {
+  local feature_dir="$1"
+  rm -f "$(coding_pane_replacement_intent_path "$feature_dir")" 2>/dev/null || true
+}
+
 quarantine_completed_coding_pane() {
   local issue="$1" feature_dir="$2" worktree="${3:-}"
   local slug target
 
-  command -v tmux >/dev/null 2>&1 || return 0
   slug="$(basename "$feature_dir")"
   [[ -n "$worktree" ]] || worktree="$(dirname "$(dirname "$feature_dir")")"
+  record_coding_pane_replacement_intent "$issue" "$feature_dir" "$worktree"
+
+  command -v tmux >/dev/null 2>&1 || return 0
   target="$(_tmux_task_window_target "$SESSION" "$issue" "$slug" "${STATE_FILE:-}" "$worktree" 2>/dev/null || true)"
   [[ -n "$target" ]] || return 0
 
@@ -5755,8 +5818,8 @@ quarantine_completed_coding_pane() {
 }
 
 _ensure_task_window_exists() {
-  local session="$1" issue="$2" slug="$3" wt_dir="$4"
-  local target canonical
+  local session="$1" issue="$2" slug="$3" wt_dir="$4" lifecycle_phase="${5:-}"
+  local target canonical feature_dir expected_replacement="false" new_window_rc=0
 
   if target="$(_tmux_task_window_target "$session" "$issue" "$slug" "${STATE_FILE:-}" "$wt_dir")"; then
     printf '%s\n' "$target"
@@ -5764,11 +5827,20 @@ _ensure_task_window_exists() {
   fi
 
   canonical="${issue}-${slug}"
-  log_warn "  Window $canonical missing, recreating..." >&2
-  tmux new-window -d -t "$session" -n "$canonical" -c "$wt_dir" 2>/dev/null || true
+  feature_dir="$wt_dir/features/$slug"
+  if coding_pane_replacement_intent_matches "$issue" "$slug" "$feature_dir" "$lifecycle_phase"; then
+    expected_replacement="true"
+    log "status" "  Window $canonical intentionally quarantined after coding, creating fresh review window"
+  else
+    log_warn "  Window $canonical missing, recreating..." >&2
+  fi
+  tmux new-window -d -t "$session" -n "$canonical" -c "$wt_dir" 2>/dev/null || new_window_rc=$?
   target="$(tmux display-message -p -t "$session:$canonical" '#{window_id}' 2>/dev/null || true)"
   [[ -n "$target" ]] || target="$canonical"
   tmux set-option -t "$(_tmux_target_join "$session" "$target")" remain-on-exit on 2>/dev/null || true
+  if [[ "$expected_replacement" == "true" && "$new_window_rc" -eq 0 ]]; then
+    clear_coding_pane_replacement_intent "$feature_dir"
+  fi
   sleep 1
   printf '%s\n' "$target"
 }
@@ -6025,7 +6097,7 @@ launch_review_phase() {
   local operating_mode="normal"
   local win
   local status_file="/tmp/${SESSION}-${issue}-status.txt"
-  win="$(_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir")"
+  win="$(_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir" "review")"
   persist_task_window_id "$issue" "$win"
   configure_agent_hooks "$reviewer_agent" "$wt_dir" "$REPO_DIR"
 
