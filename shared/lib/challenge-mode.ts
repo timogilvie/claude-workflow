@@ -89,6 +89,102 @@ export interface ChallengePairSelectionResult<T extends ChallengePairSelection =
   modelExclusions?: ModelExclusionDiagnostic[];
 }
 
+export interface ChallengeExecutionIntentSide {
+  key?: string;
+  role: ChallengeRole;
+  planner: { model: string; agent: string };
+  coder: { model: string; agent: string };
+  reviewer: { model: string; agent: string };
+}
+
+export interface ChallengeExecutionIntent {
+  schemaVersion: 1;
+  pairId: string;
+  issueId: string;
+  createdAt: string;
+  selectedStage?: ChallengeStage;
+  decisionSource: ChallengeDecisionSource;
+  selectionPath?: ChallengeSelectionPath;
+  selectionReason?: ChallengeSelectionReason;
+  challengerSource?: ChallengeSelectionReason | 'recommendation' | 'random';
+  challengeRecommendation?: Partial<ChallengeRecommendation>;
+  routeContext?: ChallengeRouteContext;
+  primary?: ChallengeExecutionIntentSide;
+  challenger?: ChallengeExecutionIntentSide;
+  nativeCertificationRejections?: ChallengeNativeRejection[];
+  modelExclusions?: ModelExclusionDiagnostic[];
+  fallbackReason?: string;
+  noChallengeReason?: string;
+}
+
+function intentSideFromEntry(entry: ChallengeTaskEntry): ChallengeExecutionIntentSide {
+  return {
+    key: entry.key,
+    role: entry.role,
+    planner: {
+      model: entry.planner || '',
+      agent: entry.plannerAgent || '',
+    },
+    coder: {
+      model: entry.model || '',
+      agent: entry.agent || '',
+    },
+    reviewer: {
+      model: entry.reviewer || '',
+      agent: entry.reviewerAgent || '',
+    },
+  };
+}
+
+export function buildChallengeExecutionIntent(input: {
+  pairId: string;
+  issueId: string;
+  createdAt?: string;
+  selectedStage?: ChallengeStage;
+  decisionSource?: ChallengeDecisionSource;
+  selectionPath?: ChallengeSelectionPath;
+  selectionReason?: ChallengeSelectionReason;
+  challengerSource?: ChallengeExecutionIntent['challengerSource'];
+  challengeRecommendation?: Partial<ChallengeRecommendation>;
+  routeContext?: ChallengeRouteContext;
+  primary?: ChallengeTaskEntry | ChallengeExecutionIntentSide;
+  challenger?: ChallengeTaskEntry | ChallengeExecutionIntentSide;
+  nativeCertificationRejections?: ChallengeNativeRejection[];
+  modelExclusions?: ModelExclusionDiagnostic[];
+  fallbackReason?: string;
+  noChallengeReason?: string;
+}): ChallengeExecutionIntent {
+  const asIntentSide = (
+    side: ChallengeTaskEntry | ChallengeExecutionIntentSide | undefined,
+  ): ChallengeExecutionIntentSide | undefined => {
+    if (!side) return undefined;
+    if ('coder' in side) return side;
+    return intentSideFromEntry(side);
+  };
+
+  return {
+    schemaVersion: 1,
+    pairId: input.pairId,
+    issueId: input.issueId,
+    createdAt: input.createdAt || new Date().toISOString(),
+    decisionSource: input.decisionSource || 'bootstrap',
+    ...(input.selectedStage ? { selectedStage: input.selectedStage } : {}),
+    ...(input.selectionPath ? { selectionPath: input.selectionPath } : {}),
+    ...(input.selectionReason ? { selectionReason: input.selectionReason } : {}),
+    ...(input.challengerSource ? { challengerSource: input.challengerSource } : {}),
+    ...(input.challengeRecommendation ? { challengeRecommendation: input.challengeRecommendation } : {}),
+    ...(input.routeContext ? { routeContext: input.routeContext } : {}),
+    ...(asIntentSide(input.primary) ? { primary: asIntentSide(input.primary) } : {}),
+    ...(asIntentSide(input.challenger) ? { challenger: asIntentSide(input.challenger) } : {}),
+    ...(input.nativeCertificationRejections?.length
+      ? { nativeCertificationRejections: input.nativeCertificationRejections }
+      : {}),
+    ...(input.modelExclusions?.length ? { modelExclusions: input.modelExclusions } : {}),
+    ...(input.fallbackReason ? { fallbackReason: input.fallbackReason } : {}),
+    ...(input.noChallengeReason ? { noChallengeReason: input.noChallengeReason } : {}),
+  };
+}
+
 /**
  * Choose which stage a challenge pair should vary.
  *
@@ -494,7 +590,7 @@ export function extractChallengeRecommendation(artifacts: {
   expanded: RouteArtifactSnapshot | null;
 }): ChallengeRecommendation | null {
   for (const snapshot of [artifacts.expanded, artifacts.bootstrap]) {
-    const raw = snapshot?.expectedMetrics?.challengeRecommendation;
+    const raw = snapshot?.expectedMetrics?.challengeRecommendation ?? snapshot?.challengeRecommendation;
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
       continue;
     }

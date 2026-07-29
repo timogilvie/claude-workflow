@@ -850,6 +850,50 @@ test('extractChallengeRecommendation prefers the expanded artifact', () => {
   assert.equal(recommendation?.challengerModel, 'claude-fable-5');
 });
 
+test('extractChallengeRecommendation accepts top-level recommendations and prefers expectedMetrics within an artifact', () => {
+  const recommendation = extractChallengeRecommendation({
+    bootstrap: null,
+    expanded: {
+      ...snapshotWithRecommendation({
+        shouldChallenge: true,
+        reason: 'low-data-stage',
+        challengerModel: 'expected-metrics-model',
+        stage: 'implementation',
+        priority: 200,
+      }),
+      challengeRecommendation: {
+        shouldChallenge: true,
+        reason: 'new-model',
+        challengerModel: 'top-level-model',
+        stage: 'review',
+        priority: 300,
+      },
+    },
+  });
+
+  assert.equal(recommendation?.challengerModel, 'expected-metrics-model');
+  assert.equal(recommendation?.stage, 'implementation');
+
+  const topLevelOnly = extractChallengeRecommendation({
+    bootstrap: null,
+    expanded: {
+      coder: 'gpt-5.5',
+      codeDepth: 'medium',
+      reviewer: 'gpt-5.5',
+      reviewMode: 'llm',
+      challengeRecommendation: {
+        shouldChallenge: true,
+        reason: 'low-data-stage',
+        challengerModel: 'glm-5.2',
+        stage: 'implementation',
+        priority: 200,
+      },
+    },
+  });
+  assert.equal(topLevelOnly?.challengerModel, 'glm-5.2');
+  assert.equal(topLevelOnly?.stage, 'implementation');
+});
+
 test('extractChallengeRecommendation falls back to bootstrap and rejects non-actionable payloads', () => {
   const fromBootstrap = extractChallengeRecommendation({
     bootstrap: snapshotWithRecommendation({
