@@ -3,11 +3,18 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { Readable, Writable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 import { registerScriptedPiProvider } from './provider.ts';
-import { launchNativePlanning } from './launch-planning.ts';
+import { describeNativePlanningHelperFailure, launchNativePlanning } from './launch-planning.ts';
+import {
+  parseNativePlanningApprovalCommand,
+  resolveNativePlanningApprovalMode,
+  runNativePlanningApprovalGate,
+} from './planning-approval.ts';
 import type { ToolDescriptor } from './tools/types.ts';
+import type { ReadyNativeProviderEntry } from './providers.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_DIR = resolve(__dirname, '../../..');
@@ -55,6 +62,24 @@ function scriptedModel(api: string) {
   } as const;
 }
 
+function readyOpenRouterEntry(modelId: string, api: string): ReadyNativeProviderEntry {
+  return {
+    providerName: 'openrouter',
+    modelId,
+    status: 'ready',
+    apiKeyEnv: 'OPENROUTER_API_KEY',
+    baseUrl: 'https://openrouter.ai/api/v1',
+    headers: {},
+    model: {
+      ...scriptedModel(api),
+      id: `openrouter:${modelId}`,
+      name: modelId,
+      provider: 'scripted',
+    },
+    certificationOnly: false,
+  };
+}
+
 function stubRunTsxCommand(): (args: string[]) => string {
   return (args: string[]) => {
     const outputIndex = args.indexOf('--output');
@@ -67,6 +92,36 @@ function stubRunTsxCommand(): (args: string[]) => string {
       }, null, 2)}\n`);
     }
     return '';
+  };
+}
+
+function stubRunTsxCommandWithExpansion(expandedIssues: string[]): (args: string[]) => string {
+  return (args: string[]) => {
+    const command = args[0];
+    const outputIndex = args.indexOf('--output');
+    if (command === 'tools/expand-issue.ts') {
+      expandedIssues.push(args[1] ?? '');
+      assert.ok(outputIndex >= 0, 'expand-issue must receive --output');
+      writeFileSync(args[outputIndex + 1]!, [
+        '# Task Packet',
+        '## 1. Objective',
+        'Plan the challenger workflow.',
+        '## Success Criteria',
+        '- packet expands from the canonical Linear issue',
+      ].join('\n'));
+      return '';
+    }
+    if (command === 'tools/route-task.ts') {
+      assert.ok(outputIndex >= 0, 'route-task must receive --output');
+      writeFileSync(args[outputIndex + 1]!, `${JSON.stringify({
+        planner: 'gpt-5.4',
+        coder: 'gpt-5.4',
+        reviewer: 'gpt-5.4',
+        planDepth: 'light',
+      }, null, 2)}\n`);
+      return '';
+    }
+    throw new Error(`unexpected tsx command: ${args.join(' ')}`);
   };
 }
 
@@ -105,8 +160,140 @@ function makeMutationTool(executed: { value: boolean }): ToolDescriptor {
   };
 }
 
+function collectOutput(): { writable: Writable; text: () => string } {
+  const chunks: Buffer[] = [];
+  return {
+    writable: new Writable({
+      write(chunk, _encoding, callback) {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+        callback();
+      },
+    }),
+    text: () => Buffer.concat(chunks).toString('utf-8'),
+  };
+}
+
+function approvalFixture(): {
+  dir: string;
+  planPath: string;
+  approvalMarkerPath: string;
+  workflowAbortMarkerPath: string;
+} {
+  const dir = mkdtempSync(join(tmpdir(), 'native-planning-approval-'));
+  const planPath = join(dir, 'plan.md');
+  writeFileSync(planPath, '# Plan\n\n## Release Readiness\n- **database_change_risk**: none\n');
+  return {
+    dir,
+    planPath,
+    approvalMarkerPath: join(dir, '.plan-approved'),
+    workflowAbortMarkerPath: join(dir, '.workflow-aborted'),
+  };
+}
+
+describe('native planning approval gate', () => {
+  it('parses approval commands used by tmux operators', () => {
+    assert.equal(parseNativePlanningApprovalCommand('approved'), 'approve');
+    assert.equal(parseNativePlanningApprovalCommand('yes'), 'approve');
+    assert.equal(parseNativePlanningApprovalCommand('reject'), 'reject');
+    assert.equal(parseNativePlanningApprovalCommand('abort'), 'abort');
+    assert.equal(parseNativePlanningApprovalCommand('status'), 'status');
+    assert.equal(parseNativePlanningApprovalCommand(''), 'help');
+    assert.equal(parseNativePlanningApprovalCommand('continue'), 'unknown');
+  });
+
+  it('defaults to external mode for non-TTY launchers', () => {
+    const input = Readable.from([]);
+    Object.defineProperty(input, 'isTTY', { value: false });
+    assert.equal(resolveNativePlanningApprovalMode(undefined, input), 'external');
+    assert.equal(resolveNativePlanningApprovalMode('interactive', input), 'interactive');
+  });
+
+  it('creates .plan-approved only after an explicit interactive approval command', async () => {
+    const fixture = approvalFixture();
+    const output = collectOutput();
+
+    try {
+      const result = await runNativePlanningApprovalGate({
+        issue: 'HOK-2544',
+        planPath: fixture.planPath,
+        approvalMarkerPath: fixture.approvalMarkerPath,
+        workflowAbortMarkerPath: fixture.workflowAbortMarkerPath,
+        transcriptPath: join(fixture.dir, 'transcript.jsonl'),
+        provider: 'openrouter',
+        model: 'z-ai/glm-5.2',
+        mode: 'interactive',
+        input: Readable.from(['approved\n']),
+        output: output.writable,
+      });
+
+      assert.equal(result.decision, 'approved');
+      assert.equal(existsSync(fixture.approvalMarkerPath), true);
+      assert.equal(existsSync(fixture.workflowAbortMarkerPath), false);
+      assert.match(output.text(), /Native plan ready for approval/);
+      assert.match(output.text(), /Plan approved\. Created/);
+    } finally {
+      cleanup(fixture.dir);
+    }
+  });
+
+  it('creates .workflow-aborted without approving when the operator aborts', async () => {
+    const fixture = approvalFixture();
+    const output = collectOutput();
+
+    try {
+      const result = await runNativePlanningApprovalGate({
+        issue: 'HOK-2544',
+        planPath: fixture.planPath,
+        approvalMarkerPath: fixture.approvalMarkerPath,
+        workflowAbortMarkerPath: fixture.workflowAbortMarkerPath,
+        transcriptPath: join(fixture.dir, 'transcript.jsonl'),
+        provider: 'openrouter',
+        model: 'z-ai/glm-5.2',
+        mode: 'interactive',
+        input: Readable.from(['abort\n']),
+        output: output.writable,
+      });
+
+      assert.equal(result.decision, 'aborted');
+      assert.equal(existsSync(fixture.approvalMarkerPath), false);
+      assert.equal(existsSync(fixture.workflowAbortMarkerPath), true);
+      assert.match(output.text(), /Workflow abort requested/);
+    } finally {
+      cleanup(fixture.dir);
+    }
+  });
+
+  it('external mode prints marker instructions and does not approve', async () => {
+    const fixture = approvalFixture();
+    const output = collectOutput();
+
+    try {
+      const result = await runNativePlanningApprovalGate({
+        issue: 'HOK-2544',
+        planPath: fixture.planPath,
+        approvalMarkerPath: fixture.approvalMarkerPath,
+        workflowAbortMarkerPath: fixture.workflowAbortMarkerPath,
+        transcriptPath: join(fixture.dir, 'transcript.jsonl'),
+        provider: 'openrouter',
+        model: 'z-ai/glm-5.2',
+        mode: 'external',
+        input: Readable.from([]),
+        output: output.writable,
+      });
+
+      assert.equal(result.decision, 'external');
+      assert.equal(existsSync(fixture.approvalMarkerPath), false);
+      assert.equal(existsSync(fixture.workflowAbortMarkerPath), false);
+      assert.match(output.text(), /Native planning is awaiting external approval/);
+      assert.match(output.text(), new RegExp(`touch ${fixture.approvalMarkerPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+    } finally {
+      cleanup(fixture.dir);
+    }
+  });
+});
+
 describe('launchNativePlanning', () => {
-  it('writes plan.md, .plan-approved, and idle native hook on success', async () => {
+  it('writes plan.md, leaves approval to the monitor, and idles the native hook on success', async () => {
     const { wtDir, featureDir } = setupWorktree();
     const api = uniqueApi('success');
 
@@ -146,13 +333,306 @@ describe('launchNativePlanning', () => {
       const plan = readFileSync(planPath, 'utf-8');
       assert.match(plan, /# Implementation Plan/);
       assert.match(plan, /## Release Readiness/);
-      assert.ok(existsSync(join(featureDir, '.plan-approved')));
+      assert.equal(existsSync(join(featureDir, '.plan-approved')), false);
+      const stageResult = JSON.parse(
+        readFileSync(join(featureDir, '.planning-result.json'), 'utf-8'),
+      ) as Record<string, unknown>;
+      assert.equal(stageResult.status, 'awaiting_user');
+      assert.equal(stageResult.finishedAt, null);
+      assert.equal(stageResult.agent, 'native');
+      assert.equal(stageResult.model, `scripted:${api}`);
+      assert.equal(stageResult.notes, 'Native planning ready for approval');
+      assert.deepEqual(stageResult.artifacts, {
+        type: 'planning',
+        planFile: 'features/demo/plan.md',
+        taskPacketFile: 'features/demo/task-packet.md',
+      });
 
       const hook = JSON.parse(readFileSync(result.hookPath, 'utf-8')) as Record<string, unknown>;
       assert.equal(hook.state, 'idle');
       assert.equal(hook.agent, 'native');
       assert.equal(hook.event, 'process_exit');
-      assert.equal(hook.detail, 'planning_completed');
+      assert.equal(hook.detail, 'planning_awaiting_user');
+    } finally {
+      cleanup(wtDir);
+    }
+  });
+
+  it('clears approval markers that exist before native planning reaches awaiting_user', async () => {
+    const { wtDir, featureDir } = setupWorktree();
+    const api = uniqueApi('stale-approval-marker');
+    writeFileSync(join(featureDir, '.plan-approved'), 'created too early\n');
+
+    try {
+      registerScriptedPiProvider({
+        api,
+        turns: [{
+          content: [{
+            type: 'text',
+            text: '# Plan\n## Release Readiness\n- **database_change_risk**: none',
+          }],
+          stopReason: 'stop',
+        }],
+      });
+
+      await launchNativePlanning({
+        session: 'sess',
+        issue: 'HOK-2544',
+        slug: 'demo',
+        wtDir,
+        repoDir: REPO_DIR,
+        title: 'Keep native planning approval gated',
+        loopModelOverride: scriptedModel(api),
+        runTsxCommand: stubRunTsxCommand(),
+      });
+
+      assert.equal(existsSync(join(featureDir, '.plan-approved')), false);
+      const stageResult = JSON.parse(
+        readFileSync(join(featureDir, '.planning-result.json'), 'utf-8'),
+      ) as Record<string, unknown>;
+      assert.equal(stageResult.status, 'awaiting_user');
+      assert.equal(stageResult.finishedAt, null);
+    } finally {
+      cleanup(wtDir);
+    }
+  });
+
+  it('preserves approval markers created after awaiting_user is published', async () => {
+    const { wtDir, featureDir } = setupWorktree();
+    const api = uniqueApi('approval-after-awaiting-user');
+    const approvalMarkerPath = join(featureDir, '.plan-approved');
+
+    try {
+      registerScriptedPiProvider({
+        api,
+        turns: [{
+          content: [{
+            type: 'text',
+            text: '# Plan\n## Release Readiness\n- **database_change_risk**: none',
+          }],
+          stopReason: 'stop',
+        }],
+      });
+
+      await launchNativePlanning({
+        session: 'sess',
+        issue: 'HOK-2544',
+        slug: 'demo',
+        wtDir,
+        repoDir: REPO_DIR,
+        title: 'Do not delete explicit approvals',
+        loopModelOverride: scriptedModel(api),
+        runTsxCommand: stubRunTsxCommand(),
+        onAwaitingUserStagePublished: () => {
+          writeFileSync(approvalMarkerPath, 'approved after awaiting_user\n');
+        },
+      });
+
+      assert.equal(readFileSync(approvalMarkerPath, 'utf-8'), 'approved after awaiting_user\n');
+      const stageResult = JSON.parse(
+        readFileSync(join(featureDir, '.planning-result.json'), 'utf-8'),
+      ) as Record<string, unknown>;
+      assert.equal(stageResult.status, 'awaiting_user');
+    } finally {
+      cleanup(wtDir);
+    }
+  });
+
+  it('expands challenger task packets with the canonical Linear issue id', async () => {
+    const { wtDir, featureDir, packetPath } = setupWorktree();
+    const api = uniqueApi('challenger-linear-issue');
+    const expandedIssues: string[] = [];
+    writeFileSync(packetPath, 'raw challenger context without task packet sections\n');
+
+    try {
+      registerScriptedPiProvider({
+        api,
+        turns: [{
+          content: [{
+            type: 'text',
+            text: '# Challenger Plan\n## Release Readiness\n- **database_change_risk**: none',
+          }],
+          stopReason: 'stop',
+        }],
+      });
+
+      await launchNativePlanning({
+        session: 'sess',
+        issue: 'HOK-2464_c',
+        linearIssue: 'HOK-2464',
+        slug: 'demo',
+        wtDir,
+        repoDir: REPO_DIR,
+        title: 'Plan challenger',
+        loopModelOverride: scriptedModel(api),
+        runTsxCommand: stubRunTsxCommandWithExpansion(expandedIssues),
+      });
+
+      assert.deepEqual(expandedIssues, ['HOK-2464']);
+      assert.match(readFileSync(join(featureDir, 'plan.md'), 'utf-8'), /# Challenger Plan/);
+    } finally {
+      cleanup(wtDir);
+    }
+  });
+
+  it('falls back from a synthetic challenger id to the root Linear issue id during expansion', async () => {
+    const { wtDir, packetPath } = setupWorktree();
+    const api = uniqueApi('challenger-suffix-fallback');
+    const expandedIssues: string[] = [];
+    writeFileSync(packetPath, 'raw challenger context without task packet sections\n');
+
+    try {
+      registerScriptedPiProvider({
+        api,
+        turns: [{
+          content: [{
+            type: 'text',
+            text: '# Challenger Plan\n## Release Readiness\n- **database_change_risk**: none',
+          }],
+          stopReason: 'stop',
+        }],
+      });
+
+      await launchNativePlanning({
+        session: 'sess',
+        issue: 'HOK-2464_c',
+        slug: 'demo',
+        wtDir,
+        repoDir: REPO_DIR,
+        loopModelOverride: scriptedModel(api),
+        runTsxCommand: stubRunTsxCommandWithExpansion(expandedIssues),
+      });
+
+      assert.deepEqual(expandedIssues, ['HOK-2464']);
+    } finally {
+      cleanup(wtDir);
+    }
+  });
+
+  it('materializes task-packet.md from structured selected-task.json before expanding', async () => {
+    const { wtDir, featureDir, packetPath } = setupWorktree();
+    const api = uniqueApi('selected-task-materialized');
+    const helperCommands: string[] = [];
+    rmSync(packetPath, { force: true });
+    writeFileSync(join(featureDir, 'selected-task.json'), `${JSON.stringify({
+      taskId: 'HOK-2464_c',
+      title: 'Wavemill auto-advances blocked coding',
+      description: [
+        '# Wavemill Auto-Advances Blocked Coding - Quick Reference',
+        '## Objective',
+        'Add a liveness guard.',
+        '## Success Criteria',
+        '- no silent advance',
+      ].join('\n'),
+    }, null, 2)}\n`);
+
+    try {
+      registerScriptedPiProvider({
+        api,
+        turns: [{
+          content: [{
+            type: 'text',
+            text: '# Plan\n## Release Readiness\n- **database_change_risk**: none',
+          }],
+          stopReason: 'stop',
+        }],
+      });
+
+      await launchNativePlanning({
+        session: 'sess',
+        issue: 'HOK-2464_c',
+        linearIssue: 'HOK-2464',
+        slug: 'demo',
+        wtDir,
+        repoDir: REPO_DIR,
+        loopModelOverride: scriptedModel(api),
+        runTsxCommand: (args: string[]) => {
+          helperCommands.push(args[0] ?? '');
+          if (args[0] === 'tools/expand-issue.ts') {
+            throw new Error('expand should not run when selected-task has structured task content');
+          }
+          if (args[0] === 'tools/route-task.ts') {
+            const outputIndex = args.indexOf('--output');
+            assert.ok(outputIndex >= 0, 'route-task must receive --output');
+            writeFileSync(args[outputIndex + 1]!, `${JSON.stringify({
+              planner: 'gpt-5.4',
+              coder: 'gpt-5.4',
+              reviewer: 'gpt-5.4',
+              planDepth: 'light',
+            }, null, 2)}\n`);
+            return '';
+          }
+          throw new Error(`unexpected tsx command: ${args.join(' ')}`);
+        },
+      });
+
+      assert.deepEqual(helperCommands, ['tools/route-task.ts']);
+      assert.match(readFileSync(packetPath, 'utf-8'), /Quick Reference/);
+      assert.match(readFileSync(join(featureDir, 'plan.md'), 'utf-8'), /# Plan/);
+    } finally {
+      cleanup(wtDir);
+    }
+  });
+
+  it('normalizes helper ETIMEDOUT errors with command context', () => {
+    const timeout = new Error('spawnSync npx ETIMEDOUT') as Error & { code: string };
+    timeout.code = 'ETIMEDOUT';
+
+    const error = describeNativePlanningHelperFailure(timeout, [
+      'tools/expand-issue.ts',
+      'HOK-2464',
+      '--output',
+      '/tmp/task-packet.md',
+    ], 720000);
+
+    assert.match(error.message, /Native planning helper timed out after 720000ms/);
+    assert.match(error.message, /npx tsx tools\/expand-issue\.ts HOK-2464 --output \/tmp\/task-packet\.md/);
+    assert.doesNotMatch(error.message, /^spawnSync npx ETIMEDOUT$/);
+  });
+
+  it('selects the ready provider matching the routed OpenRouter alias', async () => {
+    const { wtDir, featureDir } = setupWorktree();
+    const qwenApi = uniqueApi('qwen-provider');
+    const kimiApi = uniqueApi('kimi-provider');
+
+    try {
+      registerScriptedPiProvider({
+        api: qwenApi,
+        turns: [{
+          content: [{
+            type: 'text',
+            text: '# Wrong Provider\n## Release Readiness\n- **database_change_risk**: none',
+          }],
+          stopReason: 'stop',
+        }],
+      });
+      registerScriptedPiProvider({
+        api: kimiApi,
+        turns: [{
+          content: [{
+            type: 'text',
+            text: '# Kimi Provider\n## Release Readiness\n- **database_change_risk**: none',
+          }],
+          stopReason: 'stop',
+        }],
+      });
+
+      const result = await launchNativePlanning({
+        session: 'sess',
+        issue: 'HOK-2464_c',
+        slug: 'demo',
+        wtDir,
+        repoDir: REPO_DIR,
+        resolvedModel: 'kimi-k2.7-code',
+        providerEntries: [
+          readyOpenRouterEntry('qwen/qwen3-coder', qwenApi),
+          readyOpenRouterEntry('moonshotai/kimi-k2.7-code', kimiApi),
+        ],
+        runTsxCommand: stubRunTsxCommand(),
+      });
+
+      assert.equal(result.model, 'moonshotai/kimi-k2.7-code');
+      assert.match(readFileSync(join(featureDir, 'plan.md'), 'utf-8'), /# Kimi Provider/);
     } finally {
       cleanup(wtDir);
     }
@@ -199,7 +679,7 @@ describe('launchNativePlanning', () => {
       const hook = JSON.parse(readFileSync(result.hookPath, 'utf-8')) as Record<string, unknown>;
       assert.equal(hook.state, 'idle');
       assert.equal(hook.event, 'process_exit');
-      assert.equal(hook.detail, 'planning_completed');
+      assert.equal(hook.detail, 'planning_awaiting_user');
     } finally {
       cleanup(wtDir);
     }

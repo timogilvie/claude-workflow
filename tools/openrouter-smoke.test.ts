@@ -1,31 +1,52 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
 import { describe, it } from 'node:test';
+import {
+  createDryRunEntries,
+  runOpenRouterSmokeCli,
+  sanitizeSmokeDetail,
+  selectSmokeEntries,
+} from './openrouter-smoke.ts';
 
-function runSmoke(args: string[], env: Record<string, string | undefined> = {}) {
-  return spawnSync('npx', ['tsx', 'tools/openrouter-smoke.ts', ...args], {
-    cwd: process.cwd(),
-    encoding: 'utf-8',
-    env: {
-      ...process.env,
-      OPENROUTER_API_KEY: '',
-      OPENROUTER_LIVE_SMOKE: '',
-      ...env,
-    },
-  });
+async function runSmoke(args: string[], env: Record<string, string | undefined> = {}) {
+  const originalLog = console.log;
+  const originalEnv = {
+    OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY,
+    OPENROUTER_LIVE_SMOKE: process.env.OPENROUTER_LIVE_SMOKE,
+  };
+  const stdout: string[] = [];
+  console.log = (...values: unknown[]) => stdout.push(values.join(' '));
+  process.env.OPENROUTER_API_KEY = '';
+  process.env.OPENROUTER_LIVE_SMOKE = '';
+  Object.assign(process.env, env);
+  try {
+    await runOpenRouterSmokeCli(args);
+    return { status: 0, stdout: stdout.join('\n') };
+  } finally {
+    console.log = originalLog;
+    if (originalEnv.OPENROUTER_API_KEY === undefined) {
+      delete process.env.OPENROUTER_API_KEY;
+    } else {
+      process.env.OPENROUTER_API_KEY = originalEnv.OPENROUTER_API_KEY;
+    }
+    if (originalEnv.OPENROUTER_LIVE_SMOKE === undefined) {
+      delete process.env.OPENROUTER_LIVE_SMOKE;
+    } else {
+      process.env.OPENROUTER_LIVE_SMOKE = originalEnv.OPENROUTER_LIVE_SMOKE;
+    }
+  }
 }
 
 describe('openrouter-smoke tool', () => {
-  it('defaults to a dry-run that succeeds without environment configuration', () => {
-    const result = runSmoke([]);
+  it('defaults to a dry-run that succeeds without environment configuration', async () => {
+    const result = await runSmoke([]);
 
     assert.equal(result.status, 0);
     assert.match(result.stdout, /^dry-run:/m);
     assert.doesNotMatch(result.stdout, /BLOCKER/);
   });
 
-  it('emits machine-readable JSON output', () => {
-    const result = runSmoke(['--json']);
+  it('emits machine-readable JSON output', async () => {
+    const result = await runSmoke(['--json']);
 
     assert.equal(result.status, 0);
     const parsed = JSON.parse(result.stdout);
@@ -34,13 +55,38 @@ describe('openrouter-smoke tool', () => {
     assert.ok(parsed.reports.length >= 25);
   });
 
-  it('skips live runs cleanly when the env gate is missing', () => {
-    const result = runSmoke(['--live']);
+  it('skips live runs cleanly when the env gate is missing', async () => {
+    const result = await runSmoke(['--live']);
 
     assert.equal(result.status, 0);
     assert.match(
       result.stdout,
       /OPENROUTER_LIVE_SMOKE=1 and OPENROUTER_API_KEY are required/,
+    );
+  });
+
+  it('filters dry-run smoke to requested models', async () => {
+    const result = await runSmoke(['--models', 'glm-5.2', '--json']);
+
+    assert.equal(result.status, 0);
+    const parsed = JSON.parse(result.stdout);
+    assert.deepEqual(parsed.reports.map((report: { modelId: string }) => report.modelId), ['glm-5.2']);
+  });
+
+  it('filters entries by family and model id helpers', () => {
+    const entries = createDryRunEntries();
+    const qwen = selectSmokeEntries(entries, { families: ['qwen'] });
+    assert.ok(qwen.length > 0);
+    assert.ok(qwen.every((entry) => entry.family === 'qwen'));
+
+    const glm = selectSmokeEntries(entries, { models: ['z-ai/glm-5.2'] });
+    assert.deepEqual(glm.map((entry) => entry.wavemillAlias), ['glm-5.2']);
+  });
+
+  it('redacts OpenRouter management URLs from blocker details', () => {
+    assert.equal(
+      sanitizeSmokeDetail('visit https://openrouter.ai/workspaces/default/keys/abc123 and retry'),
+      'visit [openrouter-url-redacted] and retry',
     );
   });
 });

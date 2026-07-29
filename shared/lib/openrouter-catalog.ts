@@ -51,6 +51,25 @@ export interface LaunchPriorityModel {
   roleEligibility: RoleEligibility[];
 }
 
+export interface OpenRouterModelIdentity {
+  input: string;
+  wavemillAlias: string;
+  openrouterId: string;
+  provider: string;
+  providerModel: string;
+  family: ModelFamily;
+  status: ModelStatus;
+  priorityTier: number;
+  roleEligibility: RoleEligibility[];
+  /**
+   * True for third-party OpenRouter-native models that wavemill can route
+   * through native-openrouter. Anthropic/OpenAI/DeepSeek catalog rows are
+   * launch-priority entries but still use their hosted/specialized agents.
+   */
+  nativeOpenRouter: boolean;
+  equivalentIds: readonly string[];
+}
+
 export interface LaunchPriorityFixture {
   schemaVersion: string;
   description?: string;
@@ -144,30 +163,106 @@ export function loadLaunchPriorityList(fixturePath?: string): LaunchPriorityMode
   return loadLaunchPriorityFixture(fixturePath).models;
 }
 
+function splitOpenRouterId(openrouterId: string): { provider: string; providerModel: string } | null {
+  const parts = openrouterId.split('/');
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    return null;
+  }
+  return { provider: parts[0], providerModel: parts[1] };
+}
+
+function isNativeOpenRouterProviderId(openrouterId: string): boolean {
+  return !(
+    openrouterId.startsWith('anthropic/')
+    || openrouterId.startsWith('openai/')
+    || openrouterId.startsWith('deepseek/')
+  );
+}
+
+export function resolveOpenRouterModelIdentity(
+  modelIdOrAlias: string | null | undefined,
+  fixturePath?: string,
+): OpenRouterModelIdentity | null {
+  if (typeof modelIdOrAlias !== 'string' || modelIdOrAlias.trim().length === 0) {
+    return null;
+  }
+
+  const input = modelIdOrAlias.trim();
+  const model = loadLaunchPriorityList(fixturePath)
+    .find((entry) => entry.wavemillAlias === input || entry.openrouterId === input);
+  if (!model) {
+    return null;
+  }
+
+  const parts = splitOpenRouterId(model.openrouterId);
+  if (!parts) {
+    return null;
+  }
+
+  return {
+    input,
+    wavemillAlias: model.wavemillAlias,
+    openrouterId: model.openrouterId,
+    provider: parts.provider,
+    providerModel: parts.providerModel,
+    family: model.family,
+    status: model.status,
+    priorityTier: model.priorityTier,
+    roleEligibility: [...model.roleEligibility],
+    nativeOpenRouter: isNativeOpenRouterProviderId(model.openrouterId),
+    equivalentIds: Object.freeze([model.wavemillAlias, model.openrouterId]),
+  };
+}
+
+export function equivalentOpenRouterModelIds(
+  modelIdOrAlias: string | null | undefined,
+  fixturePath?: string,
+): readonly string[] {
+  const identity = resolveOpenRouterModelIdentity(modelIdOrAlias, fixturePath);
+  if (identity) {
+    return identity.equivalentIds;
+  }
+
+  const trimmed = typeof modelIdOrAlias === 'string' ? modelIdOrAlias.trim() : '';
+  return trimmed ? [trimmed] : [];
+}
+
 export function resolveWavemillAliasFromOpenRouterId(
   openrouterId: string | null | undefined,
   fixturePath?: string,
 ): string | null {
-  if (typeof openrouterId !== 'string' || openrouterId.trim().length === 0) {
-    return null;
-  }
-
-  const model = loadLaunchPriorityList(fixturePath)
-    .find((entry) => entry.openrouterId === openrouterId);
-  return model?.wavemillAlias ?? null;
+  return resolveOpenRouterModelIdentity(openrouterId, fixturePath)?.wavemillAlias ?? null;
 }
 
 export function resolveOpenRouterIdFromWavemillAlias(
   wavemillAlias: string | null | undefined,
   fixturePath?: string,
 ): string | null {
-  if (typeof wavemillAlias !== 'string' || wavemillAlias.trim().length === 0) {
+  const identity = resolveOpenRouterModelIdentity(wavemillAlias, fixturePath);
+  return identity?.input === identity?.wavemillAlias ? identity.openrouterId : null;
+}
+
+/**
+ * Look up a launch-priority model by either its wavemill alias
+ * (e.g. "qwen-3-coder") or its OpenRouter slug (e.g. "qwen/qwen3-coder").
+ * Returns null when the identifier is not present in the launch-priority list.
+ */
+export function resolveLaunchPriorityModel(
+  modelIdOrAlias: string | null | undefined,
+  fixturePath?: string,
+): LaunchPriorityModel | null {
+  const identity = resolveOpenRouterModelIdentity(modelIdOrAlias, fixturePath);
+  if (!identity) {
     return null;
   }
-
-  const model = loadLaunchPriorityList(fixturePath)
-    .find((entry) => entry.wavemillAlias === wavemillAlias);
-  return model?.openrouterId ?? null;
+  return {
+    wavemillAlias: identity.wavemillAlias,
+    openrouterId: identity.openrouterId,
+    family: identity.family,
+    status: identity.status,
+    priorityTier: identity.priorityTier,
+    roleEligibility: [...identity.roleEligibility],
+  };
 }
 
 /**

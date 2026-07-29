@@ -304,6 +304,13 @@ else
   fail "task window creation does not distinguish expected coding-pane replacement from recovery"
 fi
 
+if [[ "$RESTORE_WINDOW_BLOCK" == *'read_state_value "" --arg i "$issue" '\''.tasks[$i].worktree // ""'\'''* ]] \
+  && [[ "$RESTORE_WINDOW_BLOCK" == *'[[ -z "$wt_dir" ]] && wt_dir="${WORKTREE_ROOT}/${slug}"'* ]]; then
+  pass "resume restore prefers persisted task worktree over WORKTREE_ROOT fallback"
+else
+  fail "resume restore ignores persisted task worktree"
+fi
+
 if [[ "$ENSURE_WINDOW_BLOCK" == *'log_warn "  Window $canonical missing, recreating..." >&2'* ]]; then
   pass "missing-window recovery keeps warning logs out of captured tmux targets"
 else

@@ -151,7 +151,7 @@ function makeRepo(coderHistory: string[], opts: {
       models: ['claude-sonnet-4-6', ...aliases],
       agentMap: {
         'claude-sonnet-4-6': 'claude',
-        ...Object.fromEntries(aliases.map((alias) => [alias, 'codex'])),
+        ...Object.fromEntries(aliases.map((alias) => [alias, 'native-openrouter'])),
       },
     },
     ...(opts.patchCodingEnabled

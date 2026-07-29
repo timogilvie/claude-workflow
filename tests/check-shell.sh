@@ -338,7 +338,7 @@ else
 
     # Known external commands and bash builtins that are NOT custom functions
     # This list covers standard utilities, coreutils, and tools used by wavemill
-    KNOWN_EXTERNALS="bash|cat|cd|chmod|column|command|continue|cut|date|declare|diff|dirname|echo|eval|exec|exit|export|false|find|fold|git|grep|gh|head|jq|kill|local|ls|mkdir|mktemp|mv|npx|printf|read|readlink|return|rm|sed|set|shift|sleep|sort|source|sqlite3|stat|tail|tee|test|tmux|touch|tr|trap|true|tput|type|to_entries|uniq|unset|wait|wc|xargs|basename|awk|seq|ascii_downcase"
+    KNOWN_EXTERNALS="bash|cat|cd|chmod|column|command|continue|cut|date|declare|diff|dirname|echo|eval|exec|exit|export|false|find|fold|git|grep|gh|head|jq|kill|local|ls|mkdir|mktemp|mv|node|npx|printf|read|readlink|return|rm|sed|set|shift|sleep|sort|source|sqlite3|stat|tail|tee|test|tmux|touch|tr|trap|true|tput|tsx|type|to_entries|uniq|unset|wait|wc|xargs|basename|awk|seq|ascii_downcase"
 
     # Extract function calls from the heredoc.
     # Restrict matches to actual command positions instead of every bare word;
@@ -736,7 +736,7 @@ else
     && grep -qE '^handle_planning_overreach_rejection\(\) \{' <<< "$HEREDOC_CONTENT" \
     && grep -Fq '.wavemill/*) ;;' <<< "$HEREDOC_CONTENT" \
     && grep -Fq '.claude/settings.local.json) ;;' <<< "$HEREDOC_CONTENT" \
-    && grep -Fq 'validate_planning_phase_output "${WORKTREE_ROOT}/${SLUG}"' <<< "$MONITOR_ISSUE_BLOCK" \
+    && grep -Fq 'validate_planning_phase_output "$WT_DIR"' <<< "$MONITOR_ISSUE_BLOCK" \
     && grep -Fq 'handle_planning_overreach_rejection "$ISSUE" "$FEATURE_DIR" "$WIN" "$current_agent"' <<< "$MONITOR_ISSUE_BLOCK" \
     && grep -Fq '.planning-rejected.json' <<< "$HEREDOC_CONTENT" \
     && grep -Fq 'write_stage_result "$feature_dir" "planning" "awaiting_user"' <<< "$HEREDOC_CONTENT"; then
@@ -1216,6 +1216,14 @@ else
     fail "dashboard does not override stale status with plan review message"
   fi
 
+  if grep -qE '^is_stale_planning_detail_for_phase\(\) \{' "$STATUS_SCRIPT" \
+    && grep -q 'planning_\*|awaiting\\ plan\\ approval|Plan\\ ready\*|Native\\ planning\*' "$STATUS_SCRIPT" \
+    && grep -q 'is_stale_planning_detail_for_phase "\$task_phase" "\$reported"' "$STATUS_SCRIPT"; then
+    pass "dashboard suppresses planning-only detail outside planning phase"
+  else
+    fail "dashboard is missing stale planning detail suppression"
+  fi
+
   if grep -q 'running:working' "$STATUS_SCRIPT" \
     && grep -q 'running:waiting' "$STATUS_SCRIPT" \
     && grep -q 'running:done' "$STATUS_SCRIPT" \
@@ -1686,7 +1694,7 @@ agent_verify_launch() {
 
 CODEX_PROMPT_FILE="$PROMPT_RENDER_DIR/interactive-codex-prompt.txt"
 printf 'planning prompt\n' > "$CODEX_PROMPT_FILE"
-agent_launch_interactive "wavemill-test" "planning" "$CODEX_PROMPT_FILE" "codex" "gpt-5.4"
+agent_launch_interactive "wavemill-test" "planning" "$CODEX_PROMPT_FILE" "codex" "gpt-5.6-terra"
 
 CODEX_LAUNCHER_PATH=""
 for captured in "${TMUX_CAPTURE[@]}"; do
@@ -1697,7 +1705,7 @@ for captured in "${TMUX_CAPTURE[@]}"; do
 done
 
 if [[ -f "$CODEX_LAUNCHER_PATH" ]] \
-  && grep -q 'codex\( --model gpt-5\.4\)\? --dangerously-bypass-approvals-and-sandbox --no-alt-screen "\$(cat ' "$CODEX_LAUNCHER_PATH"; then
+  && grep -q 'codex --model gpt-5\.6-terra --dangerously-bypass-approvals-and-sandbox --no-alt-screen "\$(cat ' "$CODEX_LAUNCHER_PATH"; then
   pass "interactive Codex launcher uses interactive codex with bypass flag"
 else
   fail "interactive Codex launcher is missing interactive codex flags"
@@ -1836,7 +1844,7 @@ AGENT_LAUNCH_SETTLE_DELAY=0
 AGENT_LAUNCH_ENTER_DELAY=0
 AGENT_LAUNCH_RETRY_DELAY=0
 printf 'retry prompt\n' > "$CODEX_PROMPT_FILE"
-if agent_launch_interactive "wavemill-test" "planning" "$CODEX_PROMPT_FILE" "codex" "gpt-5.4" ""; then
+if agent_launch_interactive "wavemill-test" "planning" "$CODEX_PROMPT_FILE" "codex" "gpt-5.6-terra" ""; then
   if [[ "$LAUNCH_VERIFY_INDEX" -eq 2 ]] && [[ "$LAUNCH_SEND_KEYS" -ge 5 ]]; then
     pass "agent_launch_interactive retries dispatch after a failed verification"
   else
@@ -1878,7 +1886,7 @@ agent_verify_launch() {
   return 0
 }
 AGENT_LAUNCH_MAX_RETRIES=1
-if agent_launch_interactive "wavemill-test" "@42" "$CODEX_PROMPT_FILE" "codex" "gpt-5.4" ""; then
+if agent_launch_interactive "wavemill-test" "@42" "$CODEX_PROMPT_FILE" "codex" "gpt-5.6-terra" ""; then
   if printf '%s\n' "${LAUNCH_SEND_TARGETS[@]}" | grep -qx '@42' \
     && ! printf '%s\n' "${LAUNCH_SEND_TARGETS[@]}" | grep -qx 'wavemill-test:@42'; then
     pass "agent_launch_interactive dispatches directly to stable tmux window ids"
@@ -1904,7 +1912,7 @@ agent_verify_launch() {
   return "$result"
 }
 AGENT_LAUNCH_MAX_RETRIES=1
-if agent_launch_interactive "wavemill-test" "planning" "$CODEX_PROMPT_FILE" "codex" "gpt-5.4" ""; then
+if agent_launch_interactive "wavemill-test" "planning" "$CODEX_PROMPT_FILE" "codex" "gpt-5.6-terra" ""; then
   fail "agent_launch_interactive succeeded even though verification never passed"
 else
   if [[ "$LAUNCH_VERIFY_INDEX" -eq 1 ]] && [[ "$LAUNCH_SEND_KEYS" -ge 3 ]]; then
@@ -1955,7 +1963,7 @@ agent_verify_launch() {
   return 0
 }
 AGENT_LAUNCH_MAX_RETRIES=1
-if agent_launch_interactive "wavemill-test" "planning" "$CODEX_PROMPT_FILE" "codex" "gpt-5.4" ""; then
+if agent_launch_interactive "wavemill-test" "planning" "$CODEX_PROMPT_FILE" "codex" "gpt-5.6-terra" ""; then
   if [[ "$LAUNCH_RESPAWNS" -ge 2 ]] && [[ "$LAUNCH_SEND_KEYS" -ge 2 ]] && [[ "$LAUNCH_VERIFY_INDEX" -eq 1 ]]; then
     pass "agent_launch_interactive respawns before dispatch when pane prep or readiness fails"
   else
@@ -2266,7 +2274,7 @@ else
 
   if agent_launch_interactive "$launch_session" "window" "$prompt_file" "codex" "deep" "" ""; then
     if [[ -f "$launcher_file" ]] \
-      && grep -q 'codex --model gpt-5.4' "$launcher_file" \
+      && grep -q 'codex --model gpt-5.6-terra' "$launcher_file" \
       && grep -q "export WAVEMILL_SESSION='$launch_session'" "$launcher_file" \
       && ! grep -q -- '--model deep' "$launcher_file"; then
       pass "interactive launcher replaces depth tags with a valid codex model and exports status env"
@@ -2278,9 +2286,9 @@ else
   fi
 
   rm -f "$launcher_file"
-  if agent_launch_interactive "$launch_session" "window" "$prompt_file" "codex" "gpt-5.4" "" "" "HOK-1221"; then
+  if agent_launch_interactive "$launch_session" "window" "$prompt_file" "codex" "gpt-5.6-terra" "" "" "HOK-1221"; then
     if [[ -f "$launcher_file" ]] \
-      && grep -q 'codex --model gpt-5.4' "$launcher_file" \
+      && grep -q 'codex --model gpt-5.6-terra' "$launcher_file" \
       && grep -q "export WAVEMILL_ISSUE='HOK-1221'" "$launcher_file" \
       && grep -q '/tmp/check-shell-.*-status.txt' "$launcher_file"; then
       pass "interactive launcher preserves valid codex models and writes initial status"
@@ -2491,7 +2499,7 @@ else
       write_stage_result() { :; }
       log() { LOG_LINE="$*"; }
       set +e
-      handle_phase_launch_result "HOK-1212" "$TEST_DIR" "coding" "planning" 1 "win-1" "codex" "gpt-5.4"
+      handle_phase_launch_result "HOK-1212" "$TEST_DIR" "coding" "planning" 1 "win-1" "codex" "gpt-5.6-terra"
       rc=$?
       set -e
       printf "rc=%s phase=%s attn=%s exists=%s log=%s\n" "$rc" "$PHASE_SET" "$ATTN_SET" "$([[ -f "$TEST_DIR/.coding-result.json" ]] && echo yes || echo no)" "$LOG_LINE"
@@ -2595,6 +2603,17 @@ else
     pass "launch_review_phase uses protected pane launcher"
   else
     fail "launch_review_phase does not call protected pane launcher"
+  fi
+
+  LAUNCH_AGENT_BLOCK=$(awk '
+    /^_launch_agent_in_pane\(\) \{/ { in_fn=1 }
+    in_fn { print }
+    in_fn && /^\}/ { exit }
+  ' "$MILL_SCRIPT")
+  if grep -q 'local esc_session esc_issue esc_slug esc_linear_issue linear_issue=""' <<< "$LAUNCH_AGENT_BLOCK"; then
+    pass "protected pane launcher initializes linear_issue for strict-mode watchdog launches"
+  else
+    fail "protected pane launcher can read unbound linear_issue under set -u"
   fi
 fi
 

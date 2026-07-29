@@ -202,6 +202,20 @@ function extractAssistantText(result: Awaited<ReturnType<typeof runWavemillLoop>
   return '';
 }
 
+function extractAssistantErrorMessage(result: Awaited<ReturnType<typeof runWavemillLoop>>): string {
+  for (let index = result.messages.length - 1; index >= 0; index -= 1) {
+    const message = result.messages[index];
+    if (message.role !== 'assistant') {
+      continue;
+    }
+    const errorMessage = (message as { errorMessage?: string }).errorMessage?.trim();
+    if (errorMessage) {
+      return errorMessage;
+    }
+  }
+  return '';
+}
+
 function extractDeniedToolCalls(transcriptPath: string): ReadonlyArray<{ tool: string; reason: string }> {
   const events = parseTranscriptJsonl(readFileSync(transcriptPath, 'utf-8'));
   return events
@@ -342,7 +356,10 @@ export async function runNativeExpansion(options: NativeExpansionOptions): Promi
   });
 
   if (loopResult.stopReason === 'error') {
-    throw new Error('Native task expansion failed: loop exited with stopReason=error.');
+    const providerError = extractAssistantErrorMessage(loopResult);
+    throw new Error(providerError
+      ? `Native task expansion failed: ${providerError}`
+      : 'Native task expansion failed: loop exited with stopReason=error.');
   }
 
   const text = extractAssistantText(loopResult);

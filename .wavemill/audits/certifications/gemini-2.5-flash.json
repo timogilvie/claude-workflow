@@ -1,0 +1,97 @@
+{
+  "schemaVersion": "1",
+  "generatedAt": "2026-07-16T14:11:44.830Z",
+  "issue": "HOK-2528",
+  "model": {
+    "wavemillAlias": "gemini-2.5-flash",
+    "openrouterId": "google/gemini-2.5-flash",
+    "family": "gemini",
+    "status": "active",
+    "priorityTier": 2,
+    "roleEligibility": [
+      "coding",
+      "review"
+    ]
+  },
+  "target": 3,
+  "persist": true,
+  "checks": [
+    {
+      "name": "fixture",
+      "status": "ok",
+      "detail": "gemini-2.5-flash is present in the launch-priority fixture as google/gemini-2.5-flash."
+    },
+    {
+      "name": "registry",
+      "status": "ok",
+      "detail": "gemini-2.5-flash is present in the effective model registry."
+    },
+    {
+      "name": "provider-config",
+      "status": "ok",
+      "detail": "gemini-2.5-flash is allowlisted in providers.openrouter.models."
+    },
+    {
+      "name": "challenge-pool",
+      "status": "ok",
+      "detail": "gemini-2.5-flash is present in challenge.models."
+    },
+    {
+      "name": "router-pools",
+      "status": "ok",
+      "detail": "gemini-2.5-flash is present in all eligible router role pools."
+    }
+  ],
+  "smoke": {
+    "dryRun": [
+      {
+        "modelId": "gemini-2.5-flash",
+        "family": "gemini",
+        "status": "ok",
+        "costUsd": 0.000172
+      }
+    ],
+    "live": [
+      {
+        "modelId": "gemini-2.5-flash",
+        "family": "gemini",
+        "status": "ok",
+        "costUsd": 0.000004
+      }
+    ]
+  },
+  "eval": {
+    "plannedRuns": 3,
+    "executedRuns": 3,
+    "persistedIds": [
+      "4c66d77d-9fce-4f1f-b52a-d20319905de1",
+      "5682a985-2259-4dae-8f38-307557a3eb8d",
+      "7b32c333-eae5-494d-ba58-6ce7c1c40768"
+    ]
+  },
+  "audit": {
+    "zeroEvidenceBefore": true,
+    "zeroEvidenceAfter": false,
+    "roles": [
+      {
+        "role": "coding",
+        "before": 0,
+        "after": 3,
+        "target": 3,
+        "gapBefore": 3,
+        "status": "at-target"
+      },
+      {
+        "role": "review",
+        "before": 0,
+        "after": 3,
+        "target": 3,
+        "gapBefore": 3,
+        "status": "at-target"
+      }
+    ]
+  },
+  "reportPath": "/Users/timothyogilvie/Dropbox/wavemill/.wavemill/audits/certifications/gemini-2.5-flash.json",
+  "auditPath": "/Users/timothyogilvie/Dropbox/wavemill/.wavemill/audits/launch-priority-coverage.json",
+  "summary": "Certified gemini-2.5-flash: coding 0->3/3 (at-target); review 0->3/3 (at-target). Dry smoke: gemini-2.5-flash:ok. Live smoke: gemini-2.5-flash:ok. Eval runs: 3/3. Zero-evidence after: no."
+}

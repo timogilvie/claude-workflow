@@ -1,0 +1,106 @@
+{
+  "schemaVersion": "1",
+  "generatedAt": "2026-07-16T14:42:27.093Z",
+  "issue": "HOK-2531",
+  "model": {
+    "wavemillAlias": "kimi-k2-thinking",
+    "openrouterId": "moonshotai/kimi-k2-thinking",
+    "family": "kimi",
+    "status": "watchlist",
+    "priorityTier": 2,
+    "roleEligibility": [
+      "planning",
+      "coding",
+      "review"
+    ]
+  },
+  "target": 3,
+  "persist": true,
+  "checks": [
+    {
+      "name": "fixture",
+      "status": "ok",
+      "detail": "kimi-k2-thinking is present in the launch-priority fixture as moonshotai/kimi-k2-thinking."
+    },
+    {
+      "name": "registry",
+      "status": "ok",
+      "detail": "kimi-k2-thinking is present in the effective model registry."
+    },
+    {
+      "name": "provider-config",
+      "status": "ok",
+      "detail": "kimi-k2-thinking is allowlisted in providers.openrouter.models."
+    },
+    {
+      "name": "challenge-pool",
+      "status": "ok",
+      "detail": "kimi-k2-thinking is present in challenge.models."
+    },
+    {
+      "name": "router-pools",
+      "status": "ok",
+      "detail": "kimi-k2-thinking is present in all eligible router role pools."
+    }
+  ],
+  "smoke": {
+    "dryRun": [
+      {
+        "modelId": "kimi-k2-thinking",
+        "family": "kimi",
+        "status": "ok",
+        "costUsd": 0.00016
+      }
+    ],
+    "live": [
+      {
+        "modelId": "kimi-k2-thinking",
+        "family": "kimi",
+        "status": "ok",
+        "costUsd": 0.0001353
+      }
+    ]
+  },
+  "eval": {
+    "plannedRuns": 3,
+    "executedRuns": 3,
+    "persistedIds": [
+      "484bec18-c62d-4e55-a001-7eef2a5d9fd6",
+      "67e1a0ba-2788-467f-95fb-fa88428cef05",
+      "8f31b075-7770-461c-8059-4b88e385791e"
+    ]
+  },
+  "audit": {
+    "zeroEvidenceBefore": true,
+    "zeroEvidenceAfter": false,
+    "roles": [
+      {
+        "role": "planning",
+        "before": 0,
+        "after": 3,
+        "target": 3,
+        "gapBefore": 3,
+        "status": "at-target"
+      },
+      {
+        "role": "coding",
+        "before": 0,
+        "after": 3,
+        "target": 3,
+        "gapBefore": 3,
+        "status": "at-target"
+      },
+      {
+        "role": "review",
+        "before": 0,
+        "after": 3,
+        "target": 3,
+        "gapBefore": 3,
+        "status": "at-target"
+      }
+    ]
+  },
+  "reportPath": "/Users/timothyogilvie/Dropbox/wavemill/.wavemill/audits/certifications/kimi-k2-thinking.json",
+  "auditPath": "/Users/timothyogilvie/Dropbox/wavemill/.wavemill/audits/launch-priority-coverage.json",
+  "summary": "Certified kimi-k2-thinking: planning 0->3/3 (at-target); coding 0->3/3 (at-target); review 0->3/3 (at-target). Dry smoke: kimi-k2-thinking:ok. Live smoke: kimi-k2-thinking:ok. Eval runs: 3/3. Zero-evidence after: no."
+}

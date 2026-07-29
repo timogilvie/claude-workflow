@@ -853,36 +853,73 @@ $details_context"
   local bootstrap_router_mode
   bootstrap_router_mode="$(npx tsx "$TOOLS_DIR/get-operating-mode.ts" global --repo-dir "$REPO_DIR" 2>/dev/null || echo "normal")"
 
-  jq -n \
-    --arg planner "${planner_model:-gpt-5.4}" \
-    --arg coder "${coder_model:-gpt-5.5}" \
-    --arg reviewer "${reviewer_model:-gpt-5.4}" \
-    --arg planDepth "$plan_depth" \
-    --arg codeDepth "$code_depth" \
-    --arg reviewMode "$review_mode" \
-    --arg source "bootstrap" \
-    --arg inputKind "issue" \
-    --arg inputPath "features/$slug/selected-task.json" \
-    --arg routerMode "$bootstrap_router_mode" \
-    --argjson maxCostUsd "${route_max_cost_usd:-null}" \
-    '{
-      planner: $planner,
-      coder: $coder,
-      reviewer: $reviewer,
-      planDepth: $planDepth,
-      codeDepth: $codeDepth,
-      reviewMode: $reviewMode,
-      reviewRecommended: $reviewMode,
-      provenance: {
-        source: $source,
-        inputKind: $inputKind,
-        inputPath: $inputPath,
-        inputHash: "",
-        routedAt: (now | todateiso8601),
-        routerMode: $routerMode
-      }
-    } + (if $maxCostUsd == null then {} else {maxCostUsd: $maxCostUsd} end)' \
-    | write_json_artifact "$feature_dir/.routing-complete"
+  local startup_route_file="/tmp/${SESSION}-${issue}-route.json"
+  if [[ -f "$startup_route_file" ]] && jq -e '.planner and .coder and .reviewer' "$startup_route_file" >/dev/null 2>&1; then
+    jq \
+      --arg planner "${planner_model:-gpt-5.6-terra}" \
+      --arg coder "${coder_model:-gpt-5.5}" \
+      --arg reviewer "${reviewer_model:-gpt-5.6-terra}" \
+      --arg planDepth "$plan_depth" \
+      --arg codeDepth "$code_depth" \
+      --arg reviewMode "$review_mode" \
+      --arg source "bootstrap" \
+      --arg inputKind "issue" \
+      --arg inputPath "features/$slug/selected-task.json" \
+      --arg routerMode "$bootstrap_router_mode" \
+      --argjson maxCostUsd "${route_max_cost_usd:-null}" \
+      '(.provenance // {}) as $p
+      | .planner = $planner
+      | .coder = $coder
+      | .reviewer = $reviewer
+      | .planDepth = $planDepth
+      | .codeDepth = $codeDepth
+      | .reviewMode = $reviewMode
+      | .reviewRecommended = $reviewMode
+      | .provenance = ($p + {
+          source: (if (($p.source // "") == "") then $source else $p.source end),
+          inputKind: (if (($p.inputKind // "") == "") then $inputKind else $p.inputKind end),
+          inputPath: (if (($p.inputPath // "") == "") then $inputPath else $p.inputPath end),
+          inputHash: ($p.inputHash // ""),
+          routedAt: (if (($p.routedAt // "") == "") then (now | todateiso8601) else $p.routedAt end),
+          routerMode: (if (($p.routerMode // "") == "") then $routerMode else $p.routerMode end)
+        })
+      | if $maxCostUsd == null
+        then .
+        else .maxCostUsd = $maxCostUsd | .constraints = ((.constraints // {}) + {maxCostUsd: $maxCostUsd})
+        end' "$startup_route_file" \
+      | write_json_artifact "$feature_dir/.routing-complete"
+  else
+    jq -n \
+      --arg planner "${planner_model:-gpt-5.6-terra}" \
+      --arg coder "${coder_model:-gpt-5.5}" \
+      --arg reviewer "${reviewer_model:-gpt-5.6-terra}" \
+      --arg planDepth "$plan_depth" \
+      --arg codeDepth "$code_depth" \
+      --arg reviewMode "$review_mode" \
+      --arg source "bootstrap" \
+      --arg inputKind "issue" \
+      --arg inputPath "features/$slug/selected-task.json" \
+      --arg routerMode "$bootstrap_router_mode" \
+      --argjson maxCostUsd "${route_max_cost_usd:-null}" \
+      '{
+        planner: $planner,
+        coder: $coder,
+        reviewer: $reviewer,
+        planDepth: $planDepth,
+        codeDepth: $codeDepth,
+        reviewMode: $reviewMode,
+        reviewRecommended: $reviewMode,
+        provenance: {
+          source: $source,
+          inputKind: $inputKind,
+          inputPath: $inputPath,
+          inputHash: "",
+          routedAt: (now | todateiso8601),
+          routerMode: $routerMode
+        }
+      } + (if $maxCostUsd == null then {} else {maxCostUsd: $maxCostUsd} end)' \
+      | write_json_artifact "$feature_dir/.routing-complete"
+  fi
   if [[ -f "$feature_dir/.initial-route.json" ]]; then
     startup_log "  Keeping existing .initial-route.json for $issue"
   else
@@ -896,8 +933,8 @@ $details_context"
   fi
 
   local planner_agent
-  planner_agent="$(agent_resolve_from_model "${planner_model:-gpt-5.4}" "planning" || true)"
-  write_stage_result_local "$feature_dir" "planning" "running" "$planner_agent" "${planner_model:-gpt-5.4}" "Startup handoff launched planning" || true
+  planner_agent="$(agent_resolve_from_model "${planner_model:-gpt-5.6-terra}" "planning" || true)"
+  write_stage_result_local "$feature_dir" "planning" "running" "$planner_agent" "${planner_model:-gpt-5.6-terra}" "Startup handoff launched planning" || true
   startup_step "[4/7] Writing task artifacts...  ✓"
 
   # Persist launched tasks as active planning work in the initial state write so
@@ -941,14 +978,14 @@ $details_context"
   planning_prompt="/tmp/${SESSION}-${issue}-planning-prompt.txt"
   build_planning_prompt "$title" "$linear_issue" "$wt_dir" "$branch" "$BASE_BRANCH" \
     "$issue_context" "$status_file" "$TOOLS_DIR" "$slug" "$plan_depth" "$planner_agent" > "$planning_prompt"
-  if ! planner_launch_model="$(agent_resolve_model "planner" "${planner_model:-gpt-5.4}" "$wt_dir" 2>/dev/null)"; then
-    planner_launch_model="${planner_model:-gpt-5.4}"
+  if ! planner_launch_model="$(agent_resolve_model "planner" "${planner_model:-gpt-5.6-terra}" "$wt_dir" 2>/dev/null)"; then
+    planner_launch_model="${planner_model:-gpt-5.6-terra}"
   fi
   export WAVEMILL_RESOLVED_MODEL="$planner_launch_model"
   tmux set-environment -t "$SESSION" WAVEMILL_RESOLVED_MODEL "$planner_launch_model" 2>/dev/null || true
   export WAVEMILL_FEATURE_SLUG="$slug"
   export WAVEMILL_FEATURE_DIR="$feature_dir"
-  if ! agent_launch_interactive "$SESSION" "${created_window_id:-$win}" "$planning_prompt" "$planner_agent" "${planner_model:-gpt-5.4}" "" "" "$issue"; then
+  if ! agent_launch_interactive "$SESSION" "${created_window_id:-$win}" "$planning_prompt" "$planner_agent" "${planner_model:-gpt-5.6-terra}" "" "" "$issue"; then
     [[ -n "${state_written:-}" ]] && wavemill_lock_run "state" remove_task_state "$issue" >/dev/null 2>&1 || true
     tmux kill-window -t "${created_window_id:-$SESSION:$win}" >/dev/null 2>&1 || true
     startup_phase_failed "$startup_id" agent "$issue" "launching planning agent"

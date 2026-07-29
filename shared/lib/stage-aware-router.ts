@@ -24,6 +24,7 @@ import {
   getConfiguredModelsForDescriptorStage,
   getEffectiveRegistry,
   hasCapabilityConstraints,
+  isCodexChatgptLaunchEligible,
   type CapabilityConstraints,
   type RegistryTaskType,
 } from './model-registry.ts';
@@ -588,7 +589,12 @@ function filterProviderModels(
   stage?: 'planner' | 'coder' | 'reviewer',
 ): string[] {
   const deepSeekFiltered = filterDeepSeekModels(filterDisabledModels(models), repoDir, stage);
-  return filterOpenRouterModels(deepSeekFiltered.models, repoDir, stage).models;
+  const providerModels = filterOpenRouterModels(deepSeekFiltered.models, repoDir, stage).models;
+  const registry = getEffectiveRegistry(repoDir);
+  return providerModels.filter((modelId) => {
+    const capabilities = registry.models[modelId];
+    return capabilities?.agent !== 'codex' || isCodexChatgptLaunchEligible(capabilities);
+  });
 }
 
 function resolveSeedModelsForRole(

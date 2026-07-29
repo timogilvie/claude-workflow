@@ -1,0 +1,106 @@
+{
+  "schemaVersion": "1",
+  "generatedAt": "2026-07-16T15:15:32.064Z",
+  "issue": "HOK-2533",
+  "model": {
+    "wavemillAlias": "mistral-large-2",
+    "openrouterId": "mistralai/mistral-large-2407",
+    "family": "mistral",
+    "status": "active",
+    "priorityTier": 2,
+    "roleEligibility": [
+      "planning",
+      "coding",
+      "review"
+    ]
+  },
+  "target": 3,
+  "persist": true,
+  "checks": [
+    {
+      "name": "fixture",
+      "status": "ok",
+      "detail": "mistral-large-2 is present in the launch-priority fixture as mistralai/mistral-large-2407."
+    },
+    {
+      "name": "registry",
+      "status": "ok",
+      "detail": "mistral-large-2 is present in the effective model registry."
+    },
+    {
+      "name": "provider-config",
+      "status": "ok",
+      "detail": "mistral-large-2 is allowlisted in providers.openrouter.models."
+    },
+    {
+      "name": "challenge-pool",
+      "status": "ok",
+      "detail": "mistral-large-2 is present in challenge.models."
+    },
+    {
+      "name": "router-pools",
+      "status": "ok",
+      "detail": "mistral-large-2 is present in all eligible router role pools."
+    }
+  ],
+  "smoke": {
+    "dryRun": [
+      {
+        "modelId": "mistral-large-2",
+        "family": "mistral",
+        "status": "ok",
+        "costUsd": 0.000128
+      }
+    ],
+    "live": [
+      {
+        "modelId": "mistral-large-2",
+        "family": "mistral",
+        "status": "ok",
+        "costUsd": 0.000194
+      }
+    ]
+  },
+  "eval": {
+    "plannedRuns": 3,
+    "executedRuns": 3,
+    "persistedIds": [
+      "0e463519-fa8b-43b9-989a-5f072e9016a5",
+      "88e83aa9-fbec-4d17-ac73-7cd384614071",
+      "d47452c9-2644-4117-aaab-6fd9771efc83"
+    ]
+  },
+  "audit": {
+    "zeroEvidenceBefore": true,
+    "zeroEvidenceAfter": false,
+    "roles": [
+      {
+        "role": "planning",
+        "before": 0,
+        "after": 3,
+        "target": 3,
+        "gapBefore": 3,
+        "status": "at-target"
+      },
+      {
+        "role": "coding",
+        "before": 0,
+        "after": 3,
+        "target": 3,
+        "gapBefore": 3,
+        "status": "at-target"
+      },
+      {
+        "role": "review",
+        "before": 0,
+        "after": 3,
+        "target": 3,
+        "gapBefore": 3,
+        "status": "at-target"
+      }
+    ]
+  },
+  "reportPath": "/Users/timothyogilvie/Dropbox/wavemill/.wavemill/audits/certifications/mistral-large-2.json",
+  "auditPath": "/Users/timothyogilvie/Dropbox/wavemill/.wavemill/audits/launch-priority-coverage.json",
+  "summary": "Certified mistral-large-2: planning 0->3/3 (at-target); coding 0->3/3 (at-target); review 0->3/3 (at-target). Dry smoke: mistral-large-2:ok. Live smoke: mistral-large-2:ok. Eval runs: 3/3. Zero-evidence after: no."
+}

@@ -142,6 +142,12 @@ for fn in \
   coding_uncommitted_output_should_announce \
   mark_coding_uncommitted_output_announced \
   write_coding_uncommitted_output_artifact \
+  native_launch_failure_artifact_path \
+  stage_result_field \
+  agent_or_model_is_native_for_recovery \
+  native_launch_failure_kind \
+  write_native_launch_failure_artifact \
+  emit_native_launch_failure_attention \
   resolve_stage_result_model \
   coding_pane_replacement_intent_path \
   record_coding_pane_replacement_intent \
@@ -217,6 +223,7 @@ run_lifecycle_scenario() {
       LINEAR_UPDATES="false"
       LINEAR_COMPLETED="false"
       PANE_ALIVE="false"
+      PANE_TAIL=""
       ABORTED="false"
       REVIEWER_MODEL="claude-sonnet-4-5-20250929"
       CODER_MODEL="claude-opus-4-6"
@@ -319,6 +326,10 @@ run_lifecycle_scenario() {
         printf "0\n"
         return 0
       fi
+      if [[ "${1:-}" == "capture-pane" && -n "${PANE_TAIL:-}" ]]; then
+        printf "%s\n" "$PANE_TAIL"
+        return 0
+      fi
       return 1
     }
     get_linear_issue_id() { printf "%s\n" "$ISSUE"; }
@@ -410,6 +421,9 @@ JSON
       esac
     }
     validate_coding_phase_output() { return 0; }
+    codex_capacity_idle_confirmed() { return 1; }
+    auto_advance_blocked_completion() { return 1; }
+    emit_pane_divergence_attention() { return 1; }
     restore_review_task_window() {
       RESTORE_COUNT=$((RESTORE_COUNT + 1))
       return 0

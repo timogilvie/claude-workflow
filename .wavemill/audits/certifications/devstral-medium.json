@@ -1,0 +1,88 @@
+{
+  "schemaVersion": "1",
+  "generatedAt": "2026-07-16T15:16:53.190Z",
+  "issue": "HOK-2533",
+  "model": {
+    "wavemillAlias": "devstral-medium",
+    "openrouterId": "mistralai/mistral-medium-3-5",
+    "family": "mistral",
+    "status": "watchlist",
+    "priorityTier": 2,
+    "roleEligibility": [
+      "coding"
+    ]
+  },
+  "target": 3,
+  "persist": true,
+  "checks": [
+    {
+      "name": "fixture",
+      "status": "ok",
+      "detail": "devstral-medium is present in the launch-priority fixture as mistralai/mistral-medium-3-5."
+    },
+    {
+      "name": "registry",
+      "status": "ok",
+      "detail": "devstral-medium is present in the effective model registry."
+    },
+    {
+      "name": "provider-config",
+      "status": "ok",
+      "detail": "devstral-medium is allowlisted in providers.openrouter.models."
+    },
+    {
+      "name": "challenge-pool",
+      "status": "ok",
+      "detail": "devstral-medium is present in challenge.models."
+    },
+    {
+      "name": "router-pools",
+      "status": "ok",
+      "detail": "devstral-medium is present in all eligible router role pools."
+    }
+  ],
+  "smoke": {
+    "dryRun": [
+      {
+        "modelId": "devstral-medium",
+        "family": "mistral",
+        "status": "ok",
+        "costUsd": 0.000128
+      }
+    ],
+    "live": [
+      {
+        "modelId": "devstral-medium",
+        "family": "mistral",
+        "status": "ok",
+        "costUsd": 0.000129
+      }
+    ]
+  },
+  "eval": {
+    "plannedRuns": 3,
+    "executedRuns": 3,
+    "persistedIds": [
+      "dbe57ef7-1263-462e-8a80-e318f30edf47",
+      "5fe35a84-54bb-4782-82fb-62788506a6f7",
+      "ce96235f-9af6-45af-99f8-67897c7f10d8"
+    ]
+  },
+  "audit": {
+    "zeroEvidenceBefore": true,
+    "zeroEvidenceAfter": false,
+    "roles": [
+      {
+        "role": "coding",
+        "before": 0,
+        "after": 3,
+        "target": 3,
+        "gapBefore": 3,
+        "status": "at-target"
+      }
+    ]
+  },
+  "reportPath": "/Users/timothyogilvie/Dropbox/wavemill/.wavemill/audits/certifications/devstral-medium.json",
+  "auditPath": "/Users/timothyogilvie/Dropbox/wavemill/.wavemill/audits/launch-priority-coverage.json",
+  "summary": "Certified devstral-medium: coding 0->3/3 (at-target). Dry smoke: devstral-medium:ok. Live smoke: devstral-medium:ok. Eval runs: 3/3. Zero-evidence after: no."
+}

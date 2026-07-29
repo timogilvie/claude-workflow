@@ -60,14 +60,19 @@ describe('openrouter-provider', () => {
 
   it('isOpenRouterModel identifies OpenRouter models', () => {
     assert.equal(isOpenRouterModel('qwen-3-coder'), true);
+    assert.equal(isOpenRouterModel('qwen/qwen3-coder'), true);
     assert.equal(isOpenRouterModel('glm-5.2'), true);
+    assert.equal(isOpenRouterModel('z-ai/glm-5.2'), true);
     assert.equal(isOpenRouterModel('kimi-k2.7-code'), true);
+    assert.equal(isOpenRouterModel('moonshotai/kimi-k2.7-code'), true);
     assert.equal(isOpenRouterModel('gpt-5'), false);
     assert.equal(isOpenRouterModel('deepseek-r1'), false);
   });
 
   it('resolveOpenRouterModelId resolves promoted aliases', () => {
+    assert.equal(resolveOpenRouterModelId('qwen/qwen3-coder'), 'qwen/qwen3-coder');
     assert.equal(resolveOpenRouterModelId('glm-5.2'), 'z-ai/glm-5.2');
+    assert.equal(resolveOpenRouterModelId('z-ai/glm-5.2'), 'z-ai/glm-5.2');
     assert.equal(resolveOpenRouterModelId('kimi-k2.7-code'), 'moonshotai/kimi-k2.7-code');
   });
 
@@ -87,6 +92,27 @@ describe('openrouter-provider', () => {
       assert.deepEqual(filtered.models, ['qwen-3-coder', 'gpt-5']);
       assert.equal(filtered.warnings.length, 1);
       assert.match(filtered.warnings[0] || '', /not allowlisted/);
+    } finally {
+      delete process.env.OPENROUTER_API_KEY;
+      cleanUp(tmp);
+    }
+  });
+
+  it('filterOpenRouterModels treats raw OpenRouter ids and aliases as equivalent allowlist entries', () => {
+    const tmp = makeTempRepo();
+    try {
+      writeConfig(tmp, { providers: { openrouter: { enabled: true, apiKeyEnv: 'OPENROUTER_API_KEY', models: ['qwen/qwen3-coder'], stages: ['coder'] } } });
+      process.env.OPENROUTER_API_KEY = 'sk-test';
+      const config = resolveOpenRouterProviderConfig(tmp);
+      assert.deepEqual(config.models, ['qwen-3-coder']);
+
+      const aliasFiltered = filterOpenRouterModels(['qwen-3-coder'], tmp, 'coder');
+      assert.deepEqual(aliasFiltered.models, ['qwen-3-coder']);
+      assert.deepEqual(aliasFiltered.warnings, []);
+
+      const idFiltered = filterOpenRouterModels(['qwen/qwen3-coder'], tmp, 'coder');
+      assert.deepEqual(idFiltered.models, ['qwen/qwen3-coder']);
+      assert.deepEqual(idFiltered.warnings, []);
     } finally {
       delete process.env.OPENROUTER_API_KEY;
       cleanUp(tmp);

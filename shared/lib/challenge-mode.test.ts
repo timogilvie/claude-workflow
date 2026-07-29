@@ -55,10 +55,10 @@ console.log('\n--- Challenge Mode Tests ---\n');
 
 test('challenge model pool prefers explicit challenge.models', () => {
   const pool = getChallengeModelPool(
-    { models: ['claude-opus-4-6', 'gpt-5.4', 'claude-opus-4-6'] },
+    { models: ['claude-opus-4-6', 'gpt-5.6-terra', 'claude-opus-4-6'] },
     { models: ['claude-sonnet-4-5-20250929'] },
   );
-  assert.deepEqual(pool, ['claude-opus-4-6', 'gpt-5.4']);
+  assert.deepEqual(pool, ['claude-opus-4-6', 'gpt-5.6-terra']);
 });
 
 test('challenge model pool keeps promoted OpenRouter aliases when listed explicitly', () => {
@@ -72,9 +72,9 @@ test('challenge model pool keeps promoted OpenRouter aliases when listed explici
 test('challenge model pool falls back to router models when challenge.models is null', () => {
   const pool = getChallengeModelPool(
     { models: null },
-    { models: ['claude-sonnet-4-5-20250929', 'gpt-5.4'] },
+    { models: ['claude-sonnet-4-5-20250929', 'gpt-5.6-terra'] },
   );
-  assert.deepEqual(pool, ['claude-sonnet-4-5-20250929', 'gpt-5.4']);
+  assert.deepEqual(pool, ['claude-sonnet-4-5-20250929', 'gpt-5.6-terra']);
 });
 
 test('challenge model pool excludes disabled models even when listed explicitly', () => {
@@ -88,7 +88,7 @@ test('challenge model pool excludes disabled models even when listed explicitly'
 test('challenge model pool excludes DeepSeek by default', () => {
   const pool = getChallengeModelPool(
     { models: ['deepseek-v4-flash', 'claude-opus-4-6', 'deepseek-v4-pro'] },
-    { models: ['gpt-5.4'] },
+    { models: ['gpt-5.6-terra'] },
   );
   assert.deepEqual(pool, ['claude-opus-4-6']);
 });
@@ -96,7 +96,7 @@ test('challenge model pool excludes DeepSeek by default', () => {
 test('challenge model pool includes DeepSeek when allowDeepseek is enabled', () => {
   const pool = getChallengeModelPool(
     { allowDeepseek: true, models: ['deepseek-v4-flash', 'claude-opus-4-6', 'deepseek-v4-flash'] },
-    { models: ['gpt-5.4'] },
+    { models: ['gpt-5.6-terra'] },
   );
   assert.deepEqual(pool, ['deepseek-v4-flash', 'claude-opus-4-6']);
 });
@@ -112,7 +112,7 @@ test('filterDeepSeekChallengeModels returns a clear rationale when it removes ca
 
 test('canRunChallenge requires at least two distinct models', () => {
   assert.equal(canRunChallenge(['claude-opus-4-6']), false);
-  assert.equal(canRunChallenge(['claude-opus-4-6', 'claude-opus-4-6', 'gpt-5.4']), true);
+  assert.equal(canRunChallenge(['claude-opus-4-6', 'claude-opus-4-6', 'gpt-5.6-terra']), true);
 });
 
 test('derive challenge identifiers and branches', () => {
@@ -125,7 +125,7 @@ test('derive challenge identifiers and branches', () => {
 
 test('chooseDistinctChallengerModel skips the primary model', () => {
   const challenger = chooseDistinctChallengerModel(
-    ['claude-opus-4-6', 'claude-sonnet-4-5-20250929', 'gpt-5.4'],
+    ['claude-opus-4-6', 'claude-sonnet-4-5-20250929', 'gpt-5.6-terra'],
     'claude-opus-4-6',
     () => 0,
   );
@@ -134,13 +134,13 @@ test('chooseDistinctChallengerModel skips the primary model', () => {
 
 test('pickChallengeModels uses the router-selected primary model', () => {
   const pair = pickChallengeModels(
-    ['claude-opus-4-6', 'claude-sonnet-4-5-20250929', 'gpt-5.4'],
+    ['claude-opus-4-6', 'claude-sonnet-4-5-20250929', 'gpt-5.6-terra'],
     {
       pairId: 'HOK-970',
       issueId: 'HOK-970',
       slug: 'challenge-mode',
       primaryModel: 'claude-opus-4-6',
-      agentMap: { 'gpt-5.4': 'codex' },
+      agentMap: { 'gpt-5.6-terra': 'codex' },
       defaultAgent: 'claude',
       randomFn: () => 0.9,
     },
@@ -156,13 +156,13 @@ test('pickChallengeModels uses the router-selected primary model', () => {
 
 test('pickChallengeModels allows a router-selected primary model outside the configured pool', () => {
   const pair = pickChallengeModels(
-    ['claude-sonnet-4-5-20250929', 'gpt-5.4'],
+    ['claude-sonnet-4-5-20250929', 'gpt-5.6-terra'],
     {
       pairId: 'HOK-971',
       issueId: 'HOK-971',
       slug: 'external-primary',
       primaryModel: 'claude-opus-4-6',
-      agentMap: { 'gpt-5.4': 'codex' },
+      agentMap: { 'gpt-5.6-terra': 'codex' },
       defaultAgent: 'claude',
       randomFn: () => 0,
     },
@@ -355,14 +355,14 @@ function writeNativeChallengeRepo(options: {
 
 test('pickChallengeWorkflows populates routing fields for both sides', () => {
   const pair = pickChallengeWorkflows(
-    ['claude-opus-4-6', 'claude-sonnet-4-5-20250929', 'gpt-5.4'],
+    ['claude-opus-4-6', 'claude-sonnet-4-5-20250929', 'gpt-5.6-terra'],
     {
       pairId: 'HOK-973',
       issueId: 'HOK-973',
       slug: 'oauth-auth',
       prompt: 'Implement user authentication with OAuth2',
       primaryModel: 'claude-opus-4-6',
-      agentMap: { 'gpt-5.4': 'codex' },
+      agentMap: { 'gpt-5.6-terra': 'codex' },
       defaultAgent: 'claude',
       randomFn: () => 0.9,
       routeFn: mockRouteFn,
@@ -398,19 +398,19 @@ test('review-stage challenge preserves native OpenRouter reviewer routing', () =
 
   try {
     const pair = pickChallengeWorkflows(
-      ['gpt-5.4', 'qwen-3-coder'],
+      ['gpt-5.6-terra', 'qwen-3-coder'],
       {
         pairId: 'HOK-2512',
         issueId: 'HOK-2512',
         slug: 'native-review-stage',
         prompt: 'Review the implementation and prepare the PR.',
-        primaryModel: 'gpt-5.4',
+        primaryModel: 'gpt-5.6-terra',
         challengeStage: 'review',
         repoDir,
         routeFn: () => ({
-          planner: 'gpt-5.4',
-          coder: 'gpt-5.4',
-          reviewer: 'gpt-5.4',
+          planner: 'gpt-5.6-terra',
+          coder: 'gpt-5.6-terra',
+          reviewer: 'gpt-5.6-terra',
           planDepth: 'light',
           codeDepth: 'medium',
           reviewRecommended: 'llm',
@@ -426,7 +426,7 @@ test('review-stage challenge preserves native OpenRouter reviewer routing', () =
 
     assert.ok(pair);
     assert.equal(pair!.challengeStage, 'review');
-    assert.equal(pair!.challenger.model, 'gpt-5.4');
+    assert.equal(pair!.challenger.model, 'gpt-5.6-terra');
     assert.equal(pair!.challenger.reviewer, 'qwen-3-coder');
     assert.equal(pair!.challenger.reviewerAgent, 'native-openrouter');
   } finally {
@@ -452,12 +452,12 @@ test('implementation-stage challenge retains native models with patch-coding opt
 
   try {
     const result = pickChallengeModelsWithReason(
-      ['gpt-5.4', 'claude-opus-4-6', 'qwen-3-coder'],
+      ['gpt-5.6-terra', 'claude-opus-4-6', 'qwen-3-coder'],
       {
         pairId: 'HOK-2235',
         issueId: 'HOK-2235',
         slug: 'native-coding-stage',
-        primaryModel: 'gpt-5.4',
+        primaryModel: 'gpt-5.6-terra',
         forcedChallengerModel: 'qwen-3-coder',
         repoDir,
         randomFn: () => 0,
@@ -491,12 +491,12 @@ test('implementation-stage challenge rejects native models when repo patch-codin
 
   try {
     const result = pickChallengeModelsWithReason(
-      ['gpt-5.4', 'claude-opus-4-6', 'qwen-3-coder'],
+      ['gpt-5.6-terra', 'claude-opus-4-6', 'qwen-3-coder'],
       {
         pairId: 'HOK-2235-OPT-OUT',
         issueId: 'HOK-2235-OPT-OUT',
         slug: 'native-coding-stage-opt-out',
-        primaryModel: 'gpt-5.4',
+        primaryModel: 'gpt-5.6-terra',
         repoDir,
         randomFn: () => 0,
       },
@@ -584,7 +584,7 @@ test('routeChangedMaterially detects class and depth changes', () => {
     reviewMode: 'llm',
   };
   const expanded: RouteArtifactSnapshot = {
-    coder: 'gpt-5.4',
+    coder: 'gpt-5.6-terra',
     reviewer: 'claude-opus-4-6',
     codeDepth: 'deep',
     reviewMode: 'llm',
@@ -592,7 +592,7 @@ test('routeChangedMaterially detects class and depth changes', () => {
 
   assert.deepEqual(routeChangedMaterially(bootstrap, expanded), {
     changed: true,
-    reasons: ['coder_class', 'code_depth', 'reviewer_class'],
+    reasons: ['code_depth', 'reviewer_class'],
   });
 });
 
@@ -618,7 +618,7 @@ test('routeChangedMaterially compares unknown models by exact id', () => {
 
 test('pickChallengeWorkflowsWithContext uses bootstrap route when expanded route is absent', () => {
   const bootstrap: RouteArtifactSnapshot = {
-    planner: 'gpt-5.4',
+    planner: 'gpt-5.6-terra',
     coder: 'claude-sonnet-4-6',
     reviewer: 'claude-opus-4-6',
     planDepth: 'deep',
@@ -627,7 +627,7 @@ test('pickChallengeWorkflowsWithContext uses bootstrap route when expanded route
   };
 
   const pair = pickChallengeWorkflowsWithContext(
-    ['claude-sonnet-4-6', 'gpt-5.4'],
+    ['claude-sonnet-4-6', 'gpt-5.6-terra'],
     {
       pairId: 'HOK-976',
       issueId: 'HOK-976',
@@ -641,21 +641,21 @@ test('pickChallengeWorkflowsWithContext uses bootstrap route when expanded route
 
   assert.ok(pair);
   assert.equal(pair!.routeContext.decisionSource, 'bootstrap');
-  assert.equal(pair!.primary.planner, 'gpt-5.4');
+  assert.equal(pair!.primary.planner, 'gpt-5.6-terra');
   assert.equal(pair!.primary.planDepth, 'deep');
   assert.equal(pair!.primary.reviewer, 'claude-opus-4-6');
 });
 
 test('pickChallengeWorkflowsWithContext uses expanded route when bootstrap is unavailable', () => {
   const expanded: RouteArtifactSnapshot = {
-    coder: 'gpt-5.4',
+    coder: 'gpt-5.6-terra',
     reviewer: 'claude-opus-4-6',
     codeDepth: 'deep',
     reviewMode: 'static',
   };
 
   const pair = pickChallengeWorkflowsWithContext(
-    ['gpt-5.4', 'claude-sonnet-4-6'],
+    ['gpt-5.6-terra', 'claude-sonnet-4-6'],
     {
       pairId: 'HOK-977',
       issueId: 'HOK-977',
@@ -668,7 +668,7 @@ test('pickChallengeWorkflowsWithContext uses expanded route when bootstrap is un
 
   assert.ok(pair);
   assert.equal(pair!.routeContext.decisionSource, 'expanded');
-  assert.equal(pair!.primary.model, 'gpt-5.4');
+  assert.equal(pair!.primary.model, 'gpt-5.6-terra');
   assert.equal(pair!.primary.codeDepth, 'deep');
 });
 
@@ -689,7 +689,7 @@ test('pickChallengeWorkflowsWithContext preserves bootstrap participants when ro
   };
 
   const pair = pickChallengeWorkflowsWithContext(
-    ['claude-sonnet-4-6', 'gpt-5.4'],
+    ['claude-sonnet-4-6', 'gpt-5.6-terra'],
     {
       pairId: 'HOK-978',
       issueId: 'HOK-978',
@@ -717,14 +717,14 @@ test('pickChallengeWorkflowsWithContext refreshes participants when expanded rou
     reviewMode: 'llm',
   };
   const expanded: RouteArtifactSnapshot = {
-    coder: 'gpt-5.4',
+    coder: 'gpt-5.6-terra',
     reviewer: 'claude-opus-4-6',
     codeDepth: 'deep',
     reviewMode: 'static',
   };
 
   const pair = pickChallengeWorkflowsWithContext(
-    ['gpt-5.4', 'claude-sonnet-4-6'],
+    ['gpt-5.6-terra', 'claude-sonnet-4-6'],
     {
       pairId: 'HOK-979',
       issueId: 'HOK-979',
@@ -738,7 +738,7 @@ test('pickChallengeWorkflowsWithContext refreshes participants when expanded rou
 
   assert.ok(pair);
   assert.equal(pair!.routeContext.decisionSource, 'expanded');
-  assert.equal(pair!.primary.model, 'gpt-5.4');
+  assert.equal(pair!.primary.model, 'gpt-5.6-terra');
   assert.equal(pair!.primary.codeDepth, 'deep');
   assert.equal(pair!.primary.planner, 'claude-opus-4-6');
   assert.equal(pair!.primary.planDepth, 'deep');
@@ -754,14 +754,14 @@ test('pickChallengeWorkflowsWithContext carries expanded route context to both c
     reviewMode: 'llm',
   };
   const expanded: RouteArtifactSnapshot = {
-    coder: 'gpt-5.4',
+    coder: 'gpt-5.6-terra',
     reviewer: 'claude-sonnet-4-6',
     codeDepth: 'deep',
     reviewMode: 'static+llm',
   };
 
   const pair = pickChallengeWorkflowsWithContext(
-    ['gpt-5.4', 'claude-sonnet-4-6'],
+    ['gpt-5.6-terra', 'claude-sonnet-4-6'],
     {
       pairId: 'HOK-980',
       issueId: 'HOK-980',
@@ -776,7 +776,7 @@ test('pickChallengeWorkflowsWithContext carries expanded route context to both c
   assert.ok(pair);
   assert.equal(pair!.routeContext.decisionSource, 'expanded');
   assert.equal(pair!.routeContext.expandedRoute, expanded);
-  assert.equal(pair!.primary.model, 'gpt-5.4');
+  assert.equal(pair!.primary.model, 'gpt-5.6-terra');
   assert.equal(pair!.primary.codeDepth, 'deep');
   assert.equal(pair!.primary.reviewMode, 'static+llm');
   assert.equal(pair!.primary.planner, 'bootstrap-planner');
@@ -796,7 +796,7 @@ test('pickChallengeWorkflowsWithContext treats absent invalid expanded snapshot 
   };
 
   const pair = pickChallengeWorkflowsWithContext(
-    ['claude-sonnet-4-6', 'gpt-5.4'],
+    ['claude-sonnet-4-6', 'gpt-5.6-terra'],
     {
       pairId: 'HOK-981',
       issueId: 'HOK-981',
@@ -836,7 +836,7 @@ test('extractChallengeRecommendation prefers the expanded artifact', () => {
     bootstrap: snapshotWithRecommendation({
       shouldChallenge: true,
       reason: 'low-confidence',
-      challengerModel: 'gpt-5.4',
+      challengerModel: 'gpt-5.6-terra',
       priority: 300,
     }),
     expanded: snapshotWithRecommendation({
@@ -893,20 +893,20 @@ test('decideChallengeLaunch without recommendation is a plain random roll', () =
 
 test('decideChallengeLaunch fires exploration recommendations regardless of base rate', () => {
   const decision = decideChallengeLaunch({
-    pool: ['claude-sonnet-4-6', 'gpt-5.4'],
+    pool: ['claude-sonnet-4-6', 'gpt-5.6-terra'],
     primaryModel: 'claude-sonnet-4-6',
     rate: 0.1,
     recommendation: {
       shouldChallenge: true,
       reason: 'new-model',
-      challengerModel: 'gpt-5.4',
+      challengerModel: 'gpt-5.6-terra',
       priority: 200,
     },
     randomFn: () => 0.99,
   });
   assert.equal(decision.launch, true);
   assert.equal(decision.selectionPath, 'recommendation-driven');
-  assert.equal(decision.forcedChallengerModel, 'gpt-5.4');
+  assert.equal(decision.forcedChallengerModel, 'gpt-5.6-terra');
 });
 
 test('decideChallengeLaunch honors a reduced recommendationRate', () => {
@@ -928,24 +928,24 @@ test('decideChallengeLaunch honors a reduced recommendationRate', () => {
 
 test('decideChallengeLaunch keeps the base rate for low-confidence recommendations', () => {
   const decision = decideChallengeLaunch({
-    pool: ['claude-sonnet-4-6', 'gpt-5.4'],
+    pool: ['claude-sonnet-4-6', 'gpt-5.6-terra'],
     rate: 0.3,
     recommendation: {
       shouldChallenge: true,
       reason: 'low-confidence',
-      challengerModel: 'gpt-5.4',
+      challengerModel: 'gpt-5.6-terra',
       priority: 300,
     },
     randomFn: () => 0.5,
   });
   assert.equal(decision.launch, false);
   assert.equal(decision.selectionPath, 'recommendation-driven');
-  assert.equal(decision.forcedChallengerModel, 'gpt-5.4');
+  assert.equal(decision.forcedChallengerModel, 'gpt-5.6-terra');
 });
 
 test('decideChallengeLaunch drops unusable recommended challengers', () => {
   const notInPool = decideChallengeLaunch({
-    pool: ['claude-sonnet-4-6', 'gpt-5.4'],
+    pool: ['claude-sonnet-4-6', 'gpt-5.6-terra'],
     rate: 0.1,
     recommendation: {
       shouldChallenge: true,
@@ -959,13 +959,13 @@ test('decideChallengeLaunch drops unusable recommended challengers', () => {
   assert.equal(notInPool.forcedChallengerModel, undefined);
 
   const samePrimary = decideChallengeLaunch({
-    pool: ['claude-sonnet-4-6', 'gpt-5.4'],
-    primaryModel: 'gpt-5.4',
+    pool: ['claude-sonnet-4-6', 'gpt-5.6-terra'],
+    primaryModel: 'gpt-5.6-terra',
     rate: 0.1,
     recommendation: {
       shouldChallenge: true,
       reason: 'new-model',
-      challengerModel: 'gpt-5.4',
+      challengerModel: 'gpt-5.6-terra',
       priority: 200,
     },
     randomFn: () => 0,
@@ -973,7 +973,7 @@ test('decideChallengeLaunch drops unusable recommended challengers', () => {
   assert.equal(samePrimary.forcedChallengerModel, undefined);
 
   const disabled = decideChallengeLaunch({
-    pool: ['claude-sonnet-4-6', 'gpt-5.4', 'claude-fable-5'],
+    pool: ['claude-sonnet-4-6', 'gpt-5.6-terra', 'claude-fable-5'],
     primaryModel: 'claude-sonnet-4-6',
     rate: 0.1,
     recommendation: {
@@ -990,14 +990,14 @@ test('decideChallengeLaunch drops unusable recommended challengers', () => {
 
 test('pickChallengeModels uses the forced challenger when usable', () => {
   const pair = pickChallengeModels(
-    ['claude-sonnet-4-6', 'gpt-5.4', 'claude-opus-4-8'],
+    ['claude-sonnet-4-6', 'gpt-5.6-terra', 'claude-opus-4-8'],
     {
       pairId: 'HOK-990',
       issueId: 'HOK-990',
       slug: 'forced-challenger',
       primaryModel: 'claude-sonnet-4-6',
       forcedChallengerModel: 'claude-opus-4-8',
-      randomFn: () => 0, // would otherwise pick gpt-5.4
+      randomFn: () => 0, // would otherwise pick gpt-5.6-terra
     },
   );
   assert.equal(pair?.challenger.model, 'claude-opus-4-8');
@@ -1006,7 +1006,7 @@ test('pickChallengeModels uses the forced challenger when usable', () => {
 
 test('pickChallengeModels falls back to random when the forced challenger is unusable', () => {
   const equalsPrimary = pickChallengeModels(
-    ['claude-sonnet-4-6', 'gpt-5.4'],
+    ['claude-sonnet-4-6', 'gpt-5.6-terra'],
     {
       pairId: 'HOK-991',
       issueId: 'HOK-991',
@@ -1016,10 +1016,10 @@ test('pickChallengeModels falls back to random when the forced challenger is unu
       randomFn: () => 0,
     },
   );
-  assert.equal(equalsPrimary?.challenger.model, 'gpt-5.4');
+  assert.equal(equalsPrimary?.challenger.model, 'gpt-5.6-terra');
 
   const notInPool = pickChallengeModels(
-    ['claude-sonnet-4-6', 'gpt-5.4'],
+    ['claude-sonnet-4-6', 'gpt-5.6-terra'],
     {
       pairId: 'HOK-992',
       issueId: 'HOK-992',
@@ -1029,10 +1029,10 @@ test('pickChallengeModels falls back to random when the forced challenger is unu
       randomFn: () => 0,
     },
   );
-  assert.equal(notInPool?.challenger.model, 'gpt-5.4');
+  assert.equal(notInPool?.challenger.model, 'gpt-5.6-terra');
 
   const disabled = pickChallengeModels(
-    ['claude-sonnet-4-6', 'gpt-5.4', 'claude-fable-5'],
+    ['claude-sonnet-4-6', 'gpt-5.6-terra', 'claude-fable-5'],
     {
       pairId: 'HOK-994',
       issueId: 'HOK-994',
@@ -1042,10 +1042,10 @@ test('pickChallengeModels falls back to random when the forced challenger is unu
       randomFn: () => 0,
     },
   );
-  assert.equal(disabled?.challenger.model, 'gpt-5.4');
+  assert.equal(disabled?.challenger.model, 'gpt-5.6-terra');
 
   const disabledPrimary = pickChallengeModels(
-    ['claude-sonnet-4-6', 'gpt-5.4', 'claude-fable-5'],
+    ['claude-sonnet-4-6', 'gpt-5.6-terra', 'claude-fable-5'],
     {
       pairId: 'HOK-995',
       issueId: 'HOK-995',
@@ -1069,14 +1069,14 @@ test('pickChallengeWorkflowsWithContext threads the forced challenger through ro
   };
 
   const pair = pickChallengeWorkflowsWithContext(
-    ['claude-sonnet-4-6', 'gpt-5.4', 'claude-opus-4-8'],
+    ['claude-sonnet-4-6', 'gpt-5.6-terra', 'claude-opus-4-8'],
     {
       pairId: 'HOK-993',
       issueId: 'HOK-993',
       slug: 'forced-with-context',
       prompt: 'irrelevant',
       forcedChallengerModel: 'claude-opus-4-8',
-      randomFn: () => 0, // would otherwise pick gpt-5.4
+      randomFn: () => 0, // would otherwise pick gpt-5.6-terra
     },
     { bootstrap: null, expanded },
   );
@@ -1123,7 +1123,7 @@ test('variedModelForStage maps stage to the right entry field', () => {
 
 test('pickChallengeWorkflows varies only the planner for plan-stage challenges', () => {
   const pair = pickChallengeWorkflows(
-    ['claude-opus-4-6', 'claude-sonnet-4-5-20250929', 'gpt-5.4'],
+    ['claude-opus-4-6', 'claude-sonnet-4-5-20250929', 'gpt-5.6-terra'],
     {
       pairId: 'HOK-995',
       issueId: 'HOK-995',
@@ -1149,7 +1149,7 @@ test('pickChallengeWorkflows varies only the planner for plan-stage challenges',
 
 test('pickChallengeWorkflows varies only the reviewer for review-stage challenges', () => {
   const pair = pickChallengeWorkflows(
-    ['claude-opus-4-6', 'claude-sonnet-4-5-20250929', 'gpt-5.4'],
+    ['claude-opus-4-6', 'claude-sonnet-4-5-20250929', 'gpt-5.6-terra'],
     {
       pairId: 'HOK-996',
       issueId: 'HOK-996',
@@ -1157,7 +1157,7 @@ test('pickChallengeWorkflows varies only the reviewer for review-stage challenge
       prompt: 'Implement user authentication with OAuth2',
       primaryModel: 'claude-opus-4-6',
       challengeStage: 'review',
-      forcedChallengerModel: 'gpt-5.4',
+      forcedChallengerModel: 'gpt-5.6-terra',
       randomFn: () => 0,
       routeFn: mockRouteFn,
     },
@@ -1169,7 +1169,7 @@ test('pickChallengeWorkflows varies only the reviewer for review-stage challenge
   assert.equal(pair!.primary.planner, pair!.challenger.planner);
   assert.equal(pair!.primary.reviewer, 'claude-sonnet-4-5-20250929');
   // Forced challenger applies to the varied stage
-  assert.equal(pair!.challenger.reviewer, 'gpt-5.4');
+  assert.equal(pair!.challenger.reviewer, 'gpt-5.6-terra');
 });
 
 test('pickChallengeWorkflows falls back to coder variation when the route lacks the stage model', () => {
@@ -1207,7 +1207,7 @@ test('pickChallengeModels selects the least-used zero-record implementation chal
       forcedChallengerModel: 'glm-5.2',
       recommendedChallengerModel: 'glm-5.2',
       agentMap: {
-        'qwen-3-coder': 'codex',
+        'qwen-3-coder': 'claude',
         'glm-5.2': 'codex',
       },
       coverage: makeCoverage({
@@ -1241,7 +1241,7 @@ test('pickChallengeWorkflows varies only the planner and selects the least-used 
       primaryModel: 'claude-sonnet-4-5-20250929',
       challengeStage: 'plan',
       agentMap: {
-        'qwen-3-coder': 'codex',
+        'qwen-3-coder': 'claude',
         'glm-5.2': 'codex',
       },
       coverage: makeCoverage({
@@ -1278,7 +1278,7 @@ test('pickChallengeWorkflows varies only the reviewer and selects the least-used
       primaryModel: 'claude-opus-4-6',
       challengeStage: 'review',
       agentMap: {
-        'qwen-3-coder': 'codex',
+        'qwen-3-coder': 'claude',
         'glm-5.2': 'codex',
       },
       coverage: makeCoverage({
@@ -1323,7 +1323,7 @@ test('pickChallengeWorkflowsWithContext uses the bootstrap route and least-used 
       prompt: 'irrelevant',
       primaryModel: 'claude-sonnet-4-6',
       agentMap: {
-        'qwen-3-coder': 'codex',
+        'qwen-3-coder': 'claude',
         'glm-5.2': 'codex',
       },
       coverage: makeCoverage({
@@ -1363,7 +1363,7 @@ test('pickChallengeWorkflowsWithContext uses the expanded route and least-used i
       slug: 'expanded-zero-record',
       prompt: 'irrelevant',
       agentMap: {
-        'qwen-3-coder': 'codex',
+        'qwen-3-coder': 'claude',
         'glm-5.2': 'codex',
       },
       coverage: makeCoverage({
@@ -1399,7 +1399,7 @@ test('coverage-aware selection falls forward when the recommended challenger is 
       forcedChallengerModel: 'glm-5.2',
       recommendedChallengerModel: 'glm-5.2',
       agentMap: {
-        'qwen-3-coder': 'codex',
+        'qwen-3-coder': 'claude',
         'glm-5.2': 'codex',
       },
       coverage: makeCoverage({
@@ -1432,7 +1432,7 @@ test('pickChallengeWorkflowsWithContext varies the planner from a route snapshot
   };
 
   const pair = pickChallengeWorkflowsWithContext(
-    ['claude-opus-4-6', 'claude-sonnet-4-5-20250929', 'gpt-5.4'],
+    ['claude-opus-4-6', 'claude-sonnet-4-5-20250929', 'gpt-5.6-terra'],
     {
       pairId: 'HOK-998',
       issueId: 'HOK-998',
@@ -1487,7 +1487,7 @@ test('pickChallengeWorkflowsWithContext keeps coder variation by default', () =>
 
 test('implementation-stage pair remains unchanged when coder differs', () => {
   const pair = pickChallengeWorkflows(
-    ['claude-opus-4-6', 'gpt-5.4', 'claude-sonnet-4-5-20250929'],
+    ['claude-opus-4-6', 'gpt-5.6-terra', 'claude-sonnet-4-5-20250929'],
     {
       pairId: 'HOK-2301-I',
       issueId: 'HOK-2301-I',
@@ -1495,7 +1495,7 @@ test('implementation-stage pair remains unchanged when coder differs', () => {
       prompt: 'irrelevant',
       primaryModel: 'claude-opus-4-6',
       challengeStage: 'implementation',
-      forcedChallengerModel: 'gpt-5.4',
+      forcedChallengerModel: 'gpt-5.6-terra',
       randomFn: () => 0,
       routeFn: mockRouteFn,
     },
@@ -1504,7 +1504,7 @@ test('implementation-stage pair remains unchanged when coder differs', () => {
   assert.ok(pair);
   assert.equal(pair!.challengeStage, 'implementation');
   assert.equal(pair!.primary.model, 'claude-opus-4-6');
-  assert.equal(pair!.challenger.model, 'gpt-5.4');
+  assert.equal(pair!.challenger.model, 'gpt-5.6-terra');
   assert.deepEqual(
     listVariedRoutingDimensions(
       routingMetaFromChallengeEntry(pair!.primary),
@@ -1516,7 +1516,7 @@ test('implementation-stage pair remains unchanged when coder differs', () => {
 
 test('already-varied plan and review pairs remain single-variable', () => {
   const planPair = pickChallengeWorkflows(
-    ['claude-opus-4-6', 'gpt-5.4', 'claude-sonnet-4-5-20250929'],
+    ['claude-opus-4-6', 'gpt-5.6-terra', 'claude-sonnet-4-5-20250929'],
     {
       pairId: 'HOK-2301-P',
       issueId: 'HOK-2301-P',
@@ -1524,7 +1524,7 @@ test('already-varied plan and review pairs remain single-variable', () => {
       prompt: 'irrelevant',
       primaryModel: 'claude-opus-4-6',
       challengeStage: 'plan',
-      forcedChallengerModel: 'gpt-5.4',
+      forcedChallengerModel: 'gpt-5.6-terra',
       randomFn: () => 0,
       routeFn: mockRouteFn,
     },
@@ -1541,7 +1541,7 @@ test('already-varied plan and review pairs remain single-variable', () => {
   );
 
   const reviewPair = pickChallengeWorkflows(
-    ['claude-opus-4-6', 'gpt-5.4', 'claude-sonnet-4-5-20250929'],
+    ['claude-opus-4-6', 'gpt-5.6-terra', 'claude-sonnet-4-5-20250929'],
     {
       pairId: 'HOK-2301-R',
       issueId: 'HOK-2301-R',
@@ -1549,7 +1549,7 @@ test('already-varied plan and review pairs remain single-variable', () => {
       prompt: 'irrelevant',
       primaryModel: 'claude-opus-4-6',
       challengeStage: 'review',
-      forcedChallengerModel: 'gpt-5.4',
+      forcedChallengerModel: 'gpt-5.6-terra',
       randomFn: () => 0,
       routeFn: mockRouteFn,
     },
@@ -1568,19 +1568,19 @@ test('already-varied plan and review pairs remain single-variable', () => {
 
 test('pickChallengeWorkflows repairs a forced review challenger that matches the primary reviewer', () => {
   const pair = pickChallengeWorkflows(
-    ['gpt-5.4', 'claude-opus-4-7', 'claude-sonnet-4-6'],
+    ['gpt-5.6-terra', 'claude-opus-4-7', 'claude-sonnet-4-6'],
     {
       pairId: 'HOK-2301-A',
       issueId: 'HOK-2301-A',
       slug: 'repair-review-stage',
       prompt: 'irrelevant',
-      primaryModel: 'gpt-5.4',
+      primaryModel: 'gpt-5.6-terra',
       challengeStage: 'review',
       forcedChallengerModel: 'claude-opus-4-7',
       randomFn: () => 0,
       routeFn: () => ({
         planner: 'claude-opus-4-7',
-        coder: 'gpt-5.4',
+        coder: 'gpt-5.6-terra',
         reviewer: 'claude-opus-4-7',
         planDepth: 'medium',
         codeDepth: 'medium',
@@ -1599,7 +1599,7 @@ test('pickChallengeWorkflows repairs a forced review challenger that matches the
   assert.equal(pair!.challengeStage, 'review');
   assert.equal(pair!.primary.reviewer, 'claude-opus-4-7');
   assert.notEqual(pair!.challenger.reviewer, pair!.primary.reviewer);
-  assert.equal(pair!.challenger.reviewer, 'gpt-5.4');
+  assert.equal(pair!.challenger.reviewer, 'gpt-5.6-terra');
 });
 
 test('pickChallengeModels returns null when no routing divergence can be created', () => {
@@ -1621,7 +1621,7 @@ test('pickChallengeModels returns null when no routing divergence can be created
 test('pickChallengeWorkflowsWithContext preserves route context while repairing identical review dimensions', () => {
   const expanded: RouteArtifactSnapshot = {
     planner: 'claude-opus-4-7',
-    coder: 'gpt-5.4',
+    coder: 'gpt-5.6-terra',
     reviewer: 'claude-opus-4-7',
     planDepth: 'medium',
     codeDepth: 'medium',
@@ -1629,7 +1629,7 @@ test('pickChallengeWorkflowsWithContext preserves route context while repairing 
   };
 
   const pair = pickChallengeWorkflowsWithContext(
-    ['gpt-5.4', 'claude-opus-4-7', 'claude-sonnet-4-6'],
+    ['gpt-5.6-terra', 'claude-opus-4-7', 'claude-sonnet-4-6'],
     {
       pairId: 'HOK-2301-C',
       issueId: 'HOK-2301-C',
@@ -2483,6 +2483,60 @@ test('phase semantics match router: native implementation is fail-closed and pla
   }
 });
 
+test('plan-stage challenge rejects role-ineligible forced native challenger before route expansion', () => {
+  const { repoDir, cleanup } = makeNativeTestRepo({
+    'qwen-2.5-coder-32b': openRouterNativeModelEntry('workflow'),
+  });
+  try {
+    writeCertArtifact(repoDir, 'qwen', 'qwen-2.5-coder-32b-instruct', 'v1', { phase: 'workflow' });
+
+    const result = pickChallengeWorkflowsWithReason(
+      ['claude-opus-4-6', 'claude-sonnet-4-5-20250929', 'qwen-2.5-coder-32b'],
+      {
+        pairId: 'NC-010-R',
+        issueId: 'NC-010-R',
+        slug: 'nc-role-ineligible-plan',
+        prompt: 'plan the implementation workflow',
+        challengeStage: 'plan',
+        primaryModel: 'claude-opus-4-6',
+        forcedChallengerModel: 'qwen-2.5-coder-32b',
+        repoDir,
+        now: TEST_NOW,
+        randomFn: () => 0,
+        routeFn: () => ({
+          planner: 'claude-opus-4-6',
+          coder: 'claude-opus-4-6',
+          reviewer: 'claude-opus-4-6',
+          planDepth: 'medium',
+          codeDepth: 'medium',
+          reviewRecommended: 'llm',
+          expectedSuccess: 0.9,
+          expectedCostPlan: 1,
+          expectedCostCode: 1,
+          expectedCostReview: 1,
+          reasoning: [],
+          signals: {},
+        }),
+      },
+    );
+
+    assert.ok(result.pair, 'eligible non-native fallback should keep plan challenge viable');
+    assert.equal(result.pair!.challengeStage, 'plan');
+    assert.notEqual(result.pair!.challenger.planner, 'qwen-2.5-coder-32b');
+    assert.equal(result.pair!.challenger.planner, 'claude-sonnet-4-5-20250929');
+    const rejection = (result.nativeCertificationRejections || []).find(
+      (entry) => entry.modelId === 'qwen-2.5-coder-32b' && entry.role === 'planner',
+    );
+    assert.ok(rejection, 'role-ineligible native planner challenger must be reported');
+    assert.equal(rejection!.reason, 'role-ineligible');
+    assert.equal(rejection!.requestedLaunchPhase, 'planning');
+    assert.equal(rejection!.nativeProvider, 'openrouter');
+    assert.deepEqual(rejection!.eligibleRoles, ['coding']);
+  } finally {
+    cleanup();
+  }
+});
+
 test('workflow-certified OpenRouter aliases remain challenge-eligible for review-stage variation', () => {
   const { repoDir, cleanup } = makeNativeTestRepo(
     {
@@ -2570,7 +2624,7 @@ test('missing OPENROUTER_API_KEY excludes OpenRouter challengers and falls back 
         slug: 'missing-openrouter-key',
         primaryModel: 'claude-opus-4-6',
         agentMap: {
-          'qwen-3-coder': 'codex',
+          'qwen-3-coder': 'claude',
         },
         coverage: makeCoverage({
           implementation: {

@@ -9,12 +9,12 @@
 
 import { readFileSync } from 'node:fs';
 import { buildEvalSummary, evaluateChallenge, type ChallengeRecommendation } from './challenge-scheduler.ts';
-import { getAvailableModelsForStage, getBudgetConfig, getChallengeSchedulerConfig, getDifficultyClassifierConfig, getHokusaiRouterConfig, getRouterConfig, isRouterCapabilityFilteringEnabled } from './config.ts';
+import { getAvailableModelsForStage, getBudgetConfig, getChallengeSchedulerConfig, getDifficultyClassifierConfig, getHokusaiRouterConfig, getRouterConfig, isRouterCapabilityFilteringEnabled, loadWavemillConfig } from './config.ts';
 import { filterDeepSeekModels, type DeepSeekPoolFilterResult } from './deepseek-provider.ts';
 import { filterOpenRouterModels, type OpenRouterPoolFilterResult } from './openrouter-provider.ts';
 import { routeViaHokusai } from './hokusai-router.ts';
 import { analyzePrompt, loadRouterConfig, recommendModel, resolveAgent, type PromptCharacteristics, type TaskType } from './model-router.ts';
-import { compareLatencyTier, getEffectiveRegistry, getLadder, hasCapabilityConstraints, isModelEnabled, listSupportedModelsForStage, type CapabilityConstraints, type LatencyTier, type RegistryTaskType } from './model-registry.ts';
+import { compareLatencyTier, getEffectiveRegistry, getLadder, hasCapabilityConstraints, isCodexChatgptLaunchEligible, isModelEnabled, listSupportedModelsForStage, type CapabilityConstraints, type LatencyTier, type RegistryTaskType } from './model-registry.ts';
 import { readQuotaSnapshot, type QuotaSnapshot } from './quota-state.ts';
 import {
   formatExplorationReasoning,
@@ -152,6 +152,7 @@ function withChallengeRecommendation<T extends WorkflowRouteDecision>(decision: 
     routingDecision: decision,
     evalSummary: buildEvalSummary(repoDir),
     config: challengeConfig,
+    challengeModels: loadWavemillConfig(repoDir).challenge?.models,
     repoDir,
   });
 
@@ -474,9 +475,17 @@ function filterProviderPool(
 ): ResolvedModelPool {
   const deepSeekFiltered = filterDeepSeekModels(filterDisabledModels(models), repoDir, stage);
   const openRouterFiltered = filterOpenRouterModels(deepSeekFiltered.models, repoDir, stage);
+  const registry = getEffectiveRegistry(repoDir);
+  const codexRejected = openRouterFiltered.models.filter((modelId) => {
+    const capabilities = registry.models[modelId];
+    return capabilities?.agent === 'codex' && !isCodexChatgptLaunchEligible(capabilities);
+  });
   return {
-    models: openRouterFiltered.models,
-    warnings: mergePoolWarnings(deepSeekFiltered, openRouterFiltered),
+    models: openRouterFiltered.models.filter((modelId) => !codexRejected.includes(modelId)),
+    warnings: [
+      ...mergePoolWarnings(deepSeekFiltered, openRouterFiltered),
+      ...codexRejected.map((modelId) => `Excluded ${modelId}: modelRegistry declares it ineligible for the codex-chatgpt launch surface.`),
+    ],
   };
 }
 
@@ -1290,8 +1299,20 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
     ...(reviewerPoolResolution.nativeCertificationRejections ?? []),
   ];
   for (const rejection of nativeCertificationRejections) {
+    const details = [
+      `launchPhase=${rejection.requestedLaunchPhase}`,
+      `certPhase=${rejection.requestedPhase}`,
+      `reason=${rejection.reason}`,
+      `provider=${rejection.nativeProvider ?? 'unknown'}`,
+    ];
+    if (rejection.eligibleRoles) {
+      details.push(`eligibleRoles=${rejection.eligibleRoles.join(',') || 'none'}`);
+    }
+    if (rejection.allowedNativeAgentPhases) {
+      details.push(`allowedNativeAgentPhases=${rejection.allowedNativeAgentPhases.join(',') || 'none'}`);
+    }
     reasoning.push(
-      `Native model ${rejection.modelId} rejected for ${rejection.role} role by global certification gate (phase=${rejection.requestedPhase}, reason=${rejection.reason}).`,
+      `Native model ${rejection.modelId} rejected for ${rejection.role} role (${details.join(', ')}).`,
     );
   }
 
@@ -1830,7 +1851,11 @@ export async function routeWorkflowHokusai(
         ]
       : enriched.reasoning,
     routingMode: 'hokusai',
-    neighborCount: 0,
+    neighborCount: typeof enriched.provenance?.hokusai?.nearestNeighborCount === 'number'
+      ? enriched.provenance.hokusai.nearestNeighborCount
+      : Array.isArray(enriched.provenance?.nearestNeighbors)
+        ? enriched.provenance.nearestNeighbors.length
+        : 0,
     neighborSimilarityRange: [0, 0],
     expectedCost: Number(
       (enriched.expectedCostPlan + enriched.expectedCostCode + enriched.expectedCostReview).toFixed(2)
