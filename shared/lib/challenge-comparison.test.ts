@@ -1,16 +1,19 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   appendChallengeComparison,
   buildInvalidChallengeComparison,
   buildSkippedIdenticalComparison,
+  buildInvalidProvenanceComparison,
   listVariedRoutingDimensions,
   readChallengeComparisons,
   detectVariedDimensions,
   hasAnyVariedDimension,
   classifyChallengeType,
+  resolveChallengeSideExecutionProvenance,
+  validateChallengeExecutionProvenance,
   type ChallengeComparison,
   type ChallengeRoutingMeta,
 } from './challenge-comparison.ts';
@@ -424,6 +427,138 @@ test('buildInvalidChallengeComparison omits winner and cleanup policy', () => {
   assert.equal(record.winner, undefined);
   assert.equal(record.winnerModel, undefined);
   assert.equal(record.cleanupPolicy, undefined);
+});
+
+console.log('\n--- Execution Provenance Tests ---\n');
+
+function writeStage(featureDir: string, stage: 'planning' | 'coding' | 'review', agent: string, model: string, status = 'completed') {
+  writeFileSync(
+    join(featureDir, `.${stage}-result.json`),
+    JSON.stringify({
+      stage,
+      status,
+      startedAt: '2026-07-29T00:00:00Z',
+      finishedAt: '2026-07-29T00:01:00Z',
+      agent,
+      model,
+      notes: '',
+    }),
+  );
+}
+
+test('resolver canonicalizes native OpenRouter Kimi planner provenance and preserves artifact path', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'challenge-provenance-test-'));
+  try {
+    const featureDir = join(tmp, 'features', 'hok-2578');
+    mkdirSync(featureDir, { recursive: true });
+    writeStage(featureDir, 'planning', 'native-openrouter', 'moonshotai/kimi-k2.7-code');
+    writeStage(featureDir, 'coding', 'claude', 'claude-sonnet-5');
+    writeStage(featureDir, 'review', 'claude', 'claude-opus-4-7');
+
+    const resolved = resolveChallengeSideExecutionProvenance({ featureDir });
+
+    assert.equal(resolved.planning.agent, 'native-openrouter');
+    assert.equal(resolved.planning.model, 'kimi-k2.7-code');
+    assert.equal(resolved.planning.rawModel, 'moonshotai/kimi-k2.7-code');
+    assert.equal(resolved.planning.status, 'completed');
+    assert.equal(resolved.planning.source, '.planning-result.json');
+    assert.match(resolved.planning.artifactPath || '', /\.planning-result\.json$/);
+    assert.deepEqual(resolved.planning.consultedArtifactPaths, [join(featureDir, '.planning-result.json')]);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('planner intent mismatch with native Kimi execution invalidates challenged stage', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'challenge-provenance-test-'));
+  try {
+    const primaryDir = join(tmp, 'features', 'primary');
+    const challengerDir = join(tmp, 'features', 'challenger');
+    mkdirSync(primaryDir, { recursive: true });
+    mkdirSync(challengerDir, { recursive: true });
+    writeStage(primaryDir, 'planning', 'native-openrouter', 'moonshotai/kimi-k2.7-code');
+    writeStage(challengerDir, 'planning', 'claude', 'claude-sonnet-5');
+
+    const primaryRouting = makeRouting({ planner: 'claude-opus-4-7' });
+    const challengerRouting = makeRouting({ planner: 'claude-sonnet-5' });
+    const variedDimensions = detectVariedDimensions(primaryRouting, challengerRouting);
+    const primaryExecution = resolveChallengeSideExecutionProvenance({ featureDir: primaryDir });
+    const challengerExecution = resolveChallengeSideExecutionProvenance({ featureDir: challengerDir });
+    const validation = validateChallengeExecutionProvenance({
+      primaryExecution,
+      challengerExecution,
+      primaryRouting,
+      challengerRouting,
+      primaryModel: primaryRouting.coder,
+      challengerModel: challengerRouting.coder,
+      variedDimensions,
+    });
+
+    assert.equal(validation.valid, false);
+    assert.equal(validation.outcome, 'invalid');
+    assert.equal(validation.challengedStage, 'planning');
+    assert.equal(validation.issues[0].side, 'primary');
+    assert.equal(validation.issues[0].reason, 'executed-model-mismatch');
+    assert.equal(validation.issues[0].intendedModel, 'claude-opus-4-7');
+    assert.equal(validation.issues[0].executedModel, 'kimi-k2.7-code');
+    assert.match(validation.issues[0].artifactPath || '', /\.planning-result\.json$/);
+
+    const record = buildInvalidProvenanceComparison({
+      challengePairId: 'HOK-2578',
+      primaryModel: primaryRouting.coder,
+      challengerModel: challengerRouting.coder,
+      primaryPrUrl: 'https://github.com/org/repo/pull/1',
+      challengerPrUrl: 'https://github.com/org/repo/pull/2',
+      primaryEvalScore: 0.8,
+      challengerEvalScore: 0.8,
+      primaryRouting,
+      challengerRouting,
+      primaryExecution,
+      challengerExecution,
+      provenanceValidation: validation,
+      variedDimensions,
+      challengeType: 'planner-only',
+      variedStage: 'plan',
+    });
+    assert.equal(record.comparisonOutcome, 'invalid');
+    assert.equal(record.winner, undefined);
+    assert.equal(record.winnerModel, undefined);
+    assert.equal(record.terminalReason, 'provenance_validation_failed');
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('same intended routing with different execution is inconclusive', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'challenge-provenance-test-'));
+  try {
+    const primaryDir = join(tmp, 'features', 'primary');
+    const challengerDir = join(tmp, 'features', 'challenger');
+    mkdirSync(primaryDir, { recursive: true });
+    mkdirSync(challengerDir, { recursive: true });
+    writeStage(primaryDir, 'planning', 'claude', 'claude-opus-4-7');
+    writeStage(challengerDir, 'planning', 'native-openrouter', 'moonshotai/kimi-k2.7-code');
+
+    const routing = makeRouting({ planner: 'claude-opus-4-7' });
+    const variedDimensions = detectVariedDimensions(routing, routing);
+    const validation = validateChallengeExecutionProvenance({
+      primaryExecution: resolveChallengeSideExecutionProvenance({ featureDir: primaryDir }),
+      challengerExecution: resolveChallengeSideExecutionProvenance({ featureDir: challengerDir }),
+      primaryRouting: routing,
+      challengerRouting: routing,
+      primaryModel: routing.coder,
+      challengerModel: routing.coder,
+      variedDimensions,
+    });
+
+    assert.equal(validation.valid, false);
+    assert.equal(validation.outcome, 'inconclusive');
+    assert.equal(validation.issues[0].reason, 'same-intent-different-execution');
+    assert.equal(validation.issues[0].stage, 'planning');
+    assert.match(validation.issues[0].executedModel || '', /primary=claude-opus-4-7; challenger=kimi-k2\.7-code/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 process.on('exit', () => {

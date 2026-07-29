@@ -91,11 +91,15 @@ export function incrementModelStat(map: Map<string, ModelStats>, model: string, 
  * Compute aggregate win-rate, quality, and cost statistics for challenge comparisons.
  */
 export function computeAggregations(joined: JoinedChallengeRecord[]): AggregatedStats {
-  const validJoined = joined.filter(({ comparison }) => (
-    comparison.comparisonOutcome !== 'invalid_challenge' && comparison.invalidChallenge !== true
-  ));
+  const comparable = joined.filter(({ comparison }) =>
+    comparison.comparisonOutcome !== 'invalid' &&
+    comparison.comparisonOutcome !== 'inconclusive' &&
+    comparison.comparisonOutcome !== 'invalid_challenge' &&
+    comparison.invalidChallenge !== true &&
+    (comparison.winner === 'primary' || comparison.winner === 'challenger')
+  );
   const stats: AggregatedStats = {
-    totalComparisons: validJoined.length,
+    totalComparisons: comparable.length,
     overallWinRates: new Map(),
     winRatesByRole: {
       planner: {},
@@ -123,7 +127,7 @@ export function computeAggregations(joined: JoinedChallengeRecord[]): Aggregated
 
   const costs: { winner: number[]; loser: number[] } = { winner: [], loser: [] };
 
-  for (const record of validJoined) {
+  for (const record of comparable) {
     const { comparison, primaryEval, challengerEval } = record;
     const { winner, primaryModel, challengerModel, primaryRouting, challengerRouting, challengeType } = comparison;
 

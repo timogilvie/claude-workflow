@@ -7,10 +7,13 @@ import { hasChallengeEvalRecordPair, readEvalRecords } from '../shared/lib/eval-
 import {
   appendChallengeComparison,
   buildInvalidChallengeComparison,
+  buildInvalidProvenanceComparison,
   buildSkippedIdenticalComparison,
   detectVariedDimensions,
   hasAnyVariedDimension,
   classifyChallengeType,
+  resolveChallengeSideExecutionProvenance,
+  validateChallengeExecutionProvenance,
   type ChallengeComparison,
   type ChallengeRoutingMeta,
 } from '../shared/lib/challenge-comparison.ts';
@@ -57,6 +60,8 @@ runTool({
     'challenger-plan-depth': { type: 'string', description: 'Challenger plan depth' },
     'challenger-code-depth': { type: 'string', description: 'Challenger code depth' },
     'challenger-review-mode': { type: 'string', description: 'Challenger review mode' },
+    'primary-feature-dir': { type: 'string', description: 'Primary feature directory containing stage results' },
+    'challenger-feature-dir': { type: 'string', description: 'Challenger feature directory containing stage results' },
     'repo-dir': { type: 'string', description: 'Repository directory' },
     model: { type: 'string', description: 'Comparison judge model override' },
     comment: { type: 'boolean', description: 'Post recommendation comments on both PRs' },
@@ -167,6 +172,7 @@ runTool({
           primaryAttestation,
           challengerAttestation,
         });
+        recordForResult = invalidRecord;
         appendChallengeComparison(invalidRecord, evalsDir);
         console.log(JSON.stringify(invalidRecord, null, 2));
         if (resultFile) {
@@ -175,6 +181,101 @@ runTool({
             exitCode,
             comparison: invalidRecord,
             invalidChallenge: true,
+          });
+        }
+        return;
+      }
+
+      const primaryExecution = resolveChallengeSideExecutionProvenance({
+        featureDir: args['primary-feature-dir'] as string | undefined,
+        repoDir,
+        evalRecord: primaryEval,
+      });
+      const challengerExecution = resolveChallengeSideExecutionProvenance({
+        featureDir: args['challenger-feature-dir'] as string | undefined,
+        repoDir,
+        evalRecord: challengerEval,
+      });
+      const challengeType = variedDimensions && hasAnyVariedDimension(variedDimensions)
+        ? classifyChallengeType(variedDimensions)
+        : undefined;
+      const variedStage = challengeType === 'planner-only'
+        ? 'plan'
+        : challengeType === 'reviewer-only'
+          ? 'review'
+          : challengeType === 'coder-only'
+            ? 'implementation'
+            : undefined;
+      const provenanceValidation = validateChallengeExecutionProvenance({
+        primaryExecution,
+        challengerExecution,
+        primaryRouting,
+        challengerRouting,
+        primaryModel,
+        challengerModel,
+        variedDimensions,
+        repoDir,
+      });
+
+      if (!provenanceValidation.valid) {
+        const invalidRecord = buildInvalidProvenanceComparison({
+          challengePairId: pairId,
+          primaryModel,
+          challengerModel,
+          primaryPrUrl,
+          challengerPrUrl,
+          primaryEvalScore: primaryEval.score,
+          challengerEvalScore: challengerEval.score,
+          primaryRouting,
+          challengerRouting,
+          primaryExecution,
+          challengerExecution,
+          provenanceValidation,
+          variedDimensions,
+          challengeType,
+          variedStage,
+        });
+        recordForResult = invalidRecord;
+        appendChallengeComparison(invalidRecord, evalsDir);
+
+        const routingSummary = formatRoutingSummary(
+          primaryRouting,
+          challengerRouting,
+          invalidRecord.challengeType,
+          primaryExecution,
+          challengerExecution,
+          provenanceValidation,
+        );
+        const primaryCommentBody = buildChallengeCommentBody({
+          pairId,
+          rationale: invalidRecord.rationale,
+          otherPrUrl: challengerPrUrl,
+          routingSummary,
+          provenanceValidation,
+        });
+        const challengerCommentBody = buildChallengeCommentBody({
+          pairId,
+          rationale: invalidRecord.rationale,
+          otherPrUrl: primaryPrUrl,
+          routingSummary,
+          provenanceValidation,
+        });
+
+        if (args.comment || config.challenge?.autoMergeWinner) {
+          withBodyFile(primaryCommentBody, (bodyFile) => {
+            tryGh(['pr', 'comment', primaryNumber, '--body-file', bodyFile], repoDir, `comment primary PR ${primaryNumber}`);
+          });
+          withBodyFile(challengerCommentBody, (bodyFile) => {
+            tryGh(['pr', 'comment', challengerNumber, '--body-file', bodyFile], repoDir, `comment challenger PR ${challengerNumber}`);
+          });
+        }
+
+        console.log(JSON.stringify(invalidRecord, null, 2));
+        if (resultFile) {
+          writeJobResultFile(resultFile, {
+            ok: true,
+            exitCode,
+            comparison: invalidRecord,
           });
         }
         return;
@@ -192,12 +293,19 @@ runTool({
           primaryRouting,
           challengerRouting,
         });
+        skippedRecord.primaryExecution = primaryExecution;
+        skippedRecord.challengerExecution = challengerExecution;
+        skippedRecord.provenanceValidation = provenanceValidation;
+        recordForResult = skippedRecord;
         appendChallengeComparison(skippedRecord, evalsDir);
 
         const routingSummary = formatRoutingSummary(
           primaryRouting,
           challengerRouting,
           skippedRecord.challengeType,
+          primaryExecution,
+          challengerExecution,
+          provenanceValidation,
         );
         const primaryCommentBody = buildChallengeCommentBody({
           pairId,
@@ -243,9 +351,6 @@ runTool({
         }
         return;
       }
-      const primaryDiff = fetchPrContext(primaryNumber, repoDir).diff;
-      const challengerDiff = fetchPrContext(challengerNumber, repoDir).diff;
-      const challengeType = variedDimensions ? classifyChallengeType(variedDimensions) : undefined;
       const primarySelected = selectChallengeEvalScore(primaryEval, challengeType);
       const challengerSelected = selectChallengeEvalScore(challengerEval, challengeType);
 
@@ -262,13 +367,6 @@ runTool({
       const primaryPerStageScores = isMultiStage ? collectPerStageScores(primaryEval) : undefined;
       const challengerPerStageScores = isMultiStage ? collectPerStageScores(challengerEval) : undefined;
 
-      const variedStage = challengeType === 'planner-only'
-        ? 'plan'
-        : challengeType === 'reviewer-only'
-          ? 'review'
-          : challengeType === 'coder-only'
-            ? 'implementation'
-            : undefined;
       const primaryStageEval = primaryEval.challengeStageEval;
       const challengerStageEval = challengerEval.challengeStageEval;
       const stageEvidenceMode = (
@@ -303,6 +401,8 @@ runTool({
         challengeType,
         primaryStageEval,
         challengerStageEval,
+        primaryExecution,
+        challengerExecution,
       }, Number.isFinite(promptLimit) ? promptLimit : 500000);
       if (cappedPrompt.truncated) {
         console.warn(
@@ -369,6 +469,9 @@ Return a raw JSON object with no code fences, no comments, and no JavaScript syn
         timestamp: new Date().toISOString(),
         primaryRouting,
         challengerRouting,
+        primaryExecution,
+        challengerExecution,
+        provenanceValidation,
         variedDimensions,
         challengeType,
         variedStage,
@@ -382,7 +485,14 @@ Return a raw JSON object with no code fences, no comments, and no JavaScript syn
 
       appendChallengeComparison(record, evalsDir);
 
-      const routingSummary = formatRoutingSummary(primaryRouting, challengerRouting, challengeType);
+      const routingSummary = formatRoutingSummary(
+        primaryRouting,
+        challengerRouting,
+        challengeType,
+        primaryExecution,
+        challengerExecution,
+        provenanceValidation,
+      );
       const primaryCommentBody = buildChallengeCommentBody({
         pairId,
         winner: record.winner,
