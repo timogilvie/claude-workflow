@@ -1099,6 +1099,19 @@ test('chooseChallengeStage defaults to implementation and honors recommendations
   assert.equal(chooseChallengeStage({ recommendedStage: 'plan' }), 'plan');
 });
 
+test('chooseChallengeStage does not sample non-implementation stages without route artifacts', () => {
+  assert.equal(chooseChallengeStage({
+    routeArtifactsAvailable: false,
+    weights: { plan: 1, implementation: 0, review: 0 },
+    randomFn: () => 0,
+  }), 'implementation');
+  assert.equal(chooseChallengeStage({
+    routeArtifactsAvailable: false,
+    recommendedStage: 'review',
+    weights: { implementation: 1 },
+  }), 'review');
+});
+
 test('chooseChallengeStage samples stages by weight with a seeded randomFn', () => {
   const weights = { plan: 1, implementation: 2, review: 1 };
   // Cumulative mass: plan [0, 0.25), implementation [0.25, 0.75), review [0.75, 1)

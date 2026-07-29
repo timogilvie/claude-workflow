@@ -447,7 +447,9 @@ write_launch_plan() {
   local tasks_json='[]'
   local t issue slug title branch wt_dir linear_issue task_packet_file details_file issue_json_file route_file
   local route_json route_planner route_coder route_reviewer route_plan_depth route_code_depth route_review_mode route_max_cost_usd
-  local route_payload challenge_flag challenge_pair challenge_role challenge_model migration_number task_agent
+  local route_payload challenge_flag challenge_pair challenge_role challenge_model challenge_stage migration_number task_agent
+  local challenge_selection_source challenge_refresh_required challenge_no_challenge_reason challenge_native_rejections challenge_model_exclusions
+  local planner_agent reviewer_agent
   local depends_on base_from_task
 
   for t in "${LAUNCH_ARGS[@]}"; do
@@ -475,8 +477,17 @@ write_launch_plan() {
     challenge_role="${TASK_CHALLENGE_ROLE_BY_ISSUE[$issue]:-}"
     challenge_model="${TASK_CHALLENGE_MODEL_BY_ISSUE[$issue]:-}"
     challenge_stage="${TASK_CHALLENGE_STAGE_BY_ISSUE[$issue]:-}"
+    challenge_selection_source="${TASK_CHALLENGE_SELECTION_SOURCE_BY_ISSUE[$issue]:-}"
+    challenge_refresh_required="${TASK_CHALLENGE_REFRESH_REQUIRED_BY_ISSUE[$issue]:-}"
+    challenge_no_challenge_reason="${TASK_CHALLENGE_NO_CHALLENGE_REASON_BY_ISSUE[$issue]:-}"
+    challenge_native_rejections="${TASK_CHALLENGE_NATIVE_REJECTIONS_BY_ISSUE[$issue]:-[]}"
+    challenge_model_exclusions="${TASK_CHALLENGE_MODEL_EXCLUSIONS_BY_ISSUE[$issue]:-[]}"
+    echo "$challenge_native_rejections" | jq -e . >/dev/null 2>&1 || challenge_native_rejections="[]"
+    echo "$challenge_model_exclusions" | jq -e . >/dev/null 2>&1 || challenge_model_exclusions="[]"
     migration_number="$(jq -r --arg issue "$issue" '.migrationReservations[$issue] // empty' "$STATE_FILE" 2>/dev/null || echo "")"
     task_agent="${TASK_AGENT_BY_ISSUE[$issue]:-$AGENT_CMD}"
+    planner_agent="${TASK_PLANNER_AGENT_BY_ISSUE[$issue]:-}"
+    reviewer_agent="${TASK_REVIEWER_AGENT_BY_ISSUE[$issue]:-}"
 
     if [[ -n "${FORCE_MODEL:-}" ]]; then
       route_planner="$FORCE_MODEL"
@@ -539,8 +550,15 @@ write_launch_plan() {
       --arg challengeRole "$challenge_role" \
       --arg challengeModel "$challenge_model" \
       --arg challengeStage "$challenge_stage" \
+      --arg challengeSelectionSource "$challenge_selection_source" \
+      --arg challengeRefreshRequired "$challenge_refresh_required" \
+      --arg challengeNoChallengeReason "$challenge_no_challenge_reason" \
+      --argjson challengeNativeRejections "$challenge_native_rejections" \
+      --argjson challengeModelExclusions "$challenge_model_exclusions" \
       --arg migrationNumber "$migration_number" \
       --arg agent "$task_agent" \
+      --arg plannerAgent "$planner_agent" \
+      --arg reviewerAgent "$reviewer_agent" \
       --argjson dependsOn "$depends_on" \
       --arg baseFromTask "$base_from_task" \
       '$tasks + [{
@@ -560,6 +578,13 @@ write_launch_plan() {
         challengeRole: (if $challengeRole == "" then null else $challengeRole end),
         challengeModel: (if $challengeModel == "" then null else $challengeModel end),
         challengeStage: (if $challengeStage == "" then null else $challengeStage end),
+        challengeSelectionSource: (if $challengeSelectionSource == "" then null else $challengeSelectionSource end),
+        challengeRefreshRequired: (if $challengeRefreshRequired == "" then false else ($challengeRefreshRequired == "true") end),
+        challengeNoChallengeReason: (if $challengeNoChallengeReason == "" then null else $challengeNoChallengeReason end),
+        challengeNativeRejections: $challengeNativeRejections,
+        challengeModelExclusions: $challengeModelExclusions,
+        plannerAgent: (if $plannerAgent == "" then null else $plannerAgent end),
+        reviewerAgent: (if $reviewerAgent == "" then null else $reviewerAgent end),
         migrationNumber: (if $migrationNumber == "" then null else ($migrationNumber | tonumber) end),
         agent: $agent
       } + (if ($baseFromTask != "null" or ($dependsOn | length > 0)) then {dependsOn: $dependsOn, baseFromTask: (if $baseFromTask == "null" then null else $baseFromTask end)} else {} end)]')"
@@ -741,6 +766,10 @@ save_task_state() {
   local linear_issue="${8:-$issue}" challenge="${9:-}" challenge_pair="${10:-}" challenge_role="${11:-}" challenge_model="${12:-}"
   local planner_model="${13:-}" coder_model="${14:-}" reviewer_model="${15:-}" plan_depth="${16:-}" code_depth="${17:-}" review_mode="${18:-}"
   local challenge_stage="${19:-}"
+  local challenge_selection_source="${20:-}" challenge_refresh_required="${21:-}" challenge_no_challenge_reason="${22:-}"
+  local challenge_native_rejections="${23:-[]}" planner_agent="${24:-}" reviewer_agent="${25:-}" challenge_model_exclusions="${26:-[]}"
+  echo "$challenge_native_rejections" | jq -e . >/dev/null 2>&1 || challenge_native_rejections="[]"
+  echo "$challenge_model_exclusions" | jq -e . >/dev/null 2>&1 || challenge_model_exclusions="[]"
   if ! state_mutate "$STATE_FILE" \
      '.tasks[$issue] = (.tasks[$issue] // {}) + {slug: $slug, branch: $branch, worktree: $worktree, pr: $pr, status: $status, linearIssueId: $linearIssue, updated: (now | todate)}
       | if $agent != "" then .tasks[$issue].agent = $agent else . end
@@ -749,9 +778,16 @@ save_task_state() {
       | if $challengeRole != "" then .tasks[$issue].challengeRole = $challengeRole else . end
       | if $challengeModel != "" then .tasks[$issue].challengeModel = $challengeModel else . end
       | if $challengeStage != "" then .tasks[$issue].challengeStage = $challengeStage else . end
+      | if $challengeSelectionSource != "" then .tasks[$issue].challengeSelectionSource = $challengeSelectionSource else . end
+      | if $challengeRefreshRequired != "" then .tasks[$issue].challengeRefreshRequired = ($challengeRefreshRequired == "true") else . end
+      | if $challengeNoChallengeReason != "" then .tasks[$issue].challengeNoChallengeReason = $challengeNoChallengeReason else . end
+      | if ($challengeNativeRejections | length) > 0 then .tasks[$issue].challengeNativeRejections = $challengeNativeRejections else . end
+      | if ($challengeModelExclusions | length) > 0 then .tasks[$issue].challengeModelExclusions = $challengeModelExclusions else . end
       | if $plannerModel != "" then .tasks[$issue].plannerModel = $plannerModel else . end
+      | if $plannerAgent != "" then .tasks[$issue].plannerAgent = $plannerAgent else . end
       | if $coderModel != "" then .tasks[$issue].coderModel = $coderModel else . end
       | if $reviewerModel != "" then .tasks[$issue].reviewerModel = $reviewerModel else . end
+      | if $reviewerAgent != "" then .tasks[$issue].reviewerAgent = $reviewerAgent else . end
       | if $planDepth != "" then .tasks[$issue].planDepth = $planDepth else . end
       | if $codeDepth != "" then .tasks[$issue].codeDepth = $codeDepth else . end
       | if $reviewMode != "" then .tasks[$issue].reviewMode = $reviewMode else . end' \
@@ -760,7 +796,13 @@ save_task_state() {
      --arg linearIssue "$linear_issue" --arg challenge "$challenge" --arg challengePair "$challenge_pair" \
      --arg challengeRole "$challenge_role" --arg challengeModel "$challenge_model" \
      --arg challengeStage "$challenge_stage" \
+     --arg challengeSelectionSource "$challenge_selection_source" \
+     --arg challengeRefreshRequired "$challenge_refresh_required" \
+     --arg challengeNoChallengeReason "$challenge_no_challenge_reason" \
+     --argjson challengeNativeRejections "$challenge_native_rejections" \
+     --argjson challengeModelExclusions "$challenge_model_exclusions" \
      --arg plannerModel "$planner_model" --arg coderModel "$coder_model" --arg reviewerModel "$reviewer_model" \
+     --arg plannerAgent "$planner_agent" --arg reviewerAgent "$reviewer_agent" \
      --arg planDepth "$plan_depth" --arg codeDepth "$code_depth" --arg reviewMode "$review_mode"; then
     log_warn "save_task_state: failed to update $issue"
   fi
@@ -2121,9 +2163,16 @@ declare -A TASK_CHALLENGE_PAIR_BY_ISSUE
 declare -A TASK_CHALLENGE_ROLE_BY_ISSUE
 declare -A TASK_CHALLENGE_MODEL_BY_ISSUE
 declare -A TASK_CHALLENGE_STAGE_BY_ISSUE
+declare -A TASK_CHALLENGE_SELECTION_SOURCE_BY_ISSUE
+declare -A TASK_CHALLENGE_REFRESH_REQUIRED_BY_ISSUE
+declare -A TASK_CHALLENGE_NO_CHALLENGE_REASON_BY_ISSUE
+declare -A TASK_CHALLENGE_NATIVE_REJECTIONS_BY_ISSUE
+declare -A TASK_CHALLENGE_MODEL_EXCLUSIONS_BY_ISSUE
 declare -A TASK_AGENT_BY_ISSUE
+declare -A TASK_PLANNER_AGENT_BY_ISSUE
 declare -A TASK_PLANNER_MODEL_BY_ISSUE
 declare -A TASK_CODER_MODEL_BY_ISSUE
+declare -A TASK_REVIEWER_AGENT_BY_ISSUE
 declare -A TASK_REVIEWER_MODEL_BY_ISSUE
 declare -A TASK_PLAN_DEPTH_BY_ISSUE
 declare -A TASK_CODE_DEPTH_BY_ISSUE
@@ -2471,9 +2520,19 @@ for t in "${TASKS[@]}"; do
     challenger_entry_planner=$(echo "$challenge_plan" | jq -r '.entries[1].planner // empty' 2>/dev/null)
     challenger_entry_reviewer=$(echo "$challenge_plan" | jq -r '.entries[1].reviewer // empty' 2>/dev/null)
     challenger_entry_planner_agent=$(echo "$challenge_plan" | jq -r '.entries[1].plannerAgent // empty' 2>/dev/null)
+    challenger_entry_reviewer_agent=$(echo "$challenge_plan" | jq -r '.entries[1].reviewerAgent // empty' 2>/dev/null)
     challenger_entry_plan_depth=$(echo "$challenge_plan" | jq -r '.entries[1].planDepth // empty' 2>/dev/null)
     challenger_entry_code_depth=$(echo "$challenge_plan" | jq -r '.entries[1].codeDepth // empty' 2>/dev/null)
     challenger_entry_review_mode=$(echo "$challenge_plan" | jq -r '.entries[1].reviewMode // empty' 2>/dev/null)
+    selection_source=$(echo "$challenge_plan" | jq -r '.selectionSource // empty' 2>/dev/null)
+    refresh_required=$(echo "$challenge_plan" | jq -r '.requiresRefresh // false' 2>/dev/null)
+    native_rejections=$(echo "$challenge_plan" | jq -c '.nativeCertificationRejections // []' 2>/dev/null || echo "[]")
+    model_exclusions=$(echo "$challenge_plan" | jq -c '.modelExclusions // []' 2>/dev/null || echo "[]")
+    challenge_intent=$(echo "$challenge_plan" | jq -c '.challengeExecutionIntent // empty' 2>/dev/null || echo "")
+    primary_feature_dir="${WORKTREE_ROOT}/${SLUG}/features/${SLUG}"
+    if [[ -n "$challenge_intent" ]] && declare -F write_challenge_execution_intent >/dev/null 2>&1; then
+      write_challenge_execution_intent "$primary_feature_dir" "$challenge_intent" || true
+    fi
 
     cp "/tmp/${SESSION}-${ISSUE}-taskpacket.md" "/tmp/${SESSION}-${challenger_key}-taskpacket.md" 2>/dev/null || true
     cp "/tmp/${SESSION}-${ISSUE}-issue.json" "/tmp/${SESSION}-${challenger_key}-issue.json" 2>/dev/null || true
@@ -2485,9 +2544,15 @@ for t in "${TASKS[@]}"; do
     TASK_CHALLENGE_ROLE_BY_ISSUE["$ISSUE"]="primary"
     TASK_CHALLENGE_MODEL_BY_ISSUE["$ISSUE"]="$primary_model"
     TASK_CHALLENGE_STAGE_BY_ISSUE["$ISSUE"]="$challenge_stage"
+    TASK_CHALLENGE_SELECTION_SOURCE_BY_ISSUE["$ISSUE"]="$selection_source"
+    TASK_CHALLENGE_REFRESH_REQUIRED_BY_ISSUE["$ISSUE"]="$refresh_required"
+    TASK_CHALLENGE_NATIVE_REJECTIONS_BY_ISSUE["$ISSUE"]="$native_rejections"
+    TASK_CHALLENGE_MODEL_EXCLUSIONS_BY_ISSUE["$ISSUE"]="$model_exclusions"
     TASK_AGENT_BY_ISSUE["$ISSUE"]="${primary_entry_planner_agent:-${primary_agent:-$rec_agent}}"
+    TASK_PLANNER_AGENT_BY_ISSUE["$ISSUE"]="$primary_entry_planner_agent"
     TASK_PLANNER_MODEL_BY_ISSUE["$ISSUE"]="${primary_entry_planner:-$route_planner}"
     TASK_CODER_MODEL_BY_ISSUE["$ISSUE"]="$primary_model"
+    TASK_REVIEWER_AGENT_BY_ISSUE["$ISSUE"]="$(echo "$challenge_plan" | jq -r '.entries[0].reviewerAgent // empty' 2>/dev/null)"
     TASK_REVIEWER_MODEL_BY_ISSUE["$ISSUE"]="${primary_entry_reviewer:-$route_reviewer}"
     TASK_PLAN_DEPTH_BY_ISSUE["$ISSUE"]="${primary_entry_plan_depth:-$route_plan_depth}"
     TASK_CODE_DEPTH_BY_ISSUE["$ISSUE"]="${primary_entry_code_depth:-$route_code_depth}"
@@ -2499,10 +2564,16 @@ for t in "${TASKS[@]}"; do
     TASK_CHALLENGE_ROLE_BY_ISSUE["$challenger_key"]="challenger"
     TASK_CHALLENGE_MODEL_BY_ISSUE["$challenger_key"]="$challenger_model"
     TASK_CHALLENGE_STAGE_BY_ISSUE["$challenger_key"]="$challenge_stage"
+    TASK_CHALLENGE_SELECTION_SOURCE_BY_ISSUE["$challenger_key"]="$selection_source"
+    TASK_CHALLENGE_REFRESH_REQUIRED_BY_ISSUE["$challenger_key"]="$refresh_required"
+    TASK_CHALLENGE_NATIVE_REJECTIONS_BY_ISSUE["$challenger_key"]="$native_rejections"
+    TASK_CHALLENGE_MODEL_EXCLUSIONS_BY_ISSUE["$challenger_key"]="$model_exclusions"
     TASK_AGENT_BY_ISSUE["$challenger_key"]="${challenger_entry_planner_agent:-${challenger_agent:-$AGENT_CMD}}"
+    TASK_PLANNER_AGENT_BY_ISSUE["$challenger_key"]="$challenger_entry_planner_agent"
     # Stage-varied challengers carry their own planner/reviewer in the entry
     TASK_PLANNER_MODEL_BY_ISSUE["$challenger_key"]="${challenger_entry_planner:-$route_planner}"
     TASK_CODER_MODEL_BY_ISSUE["$challenger_key"]="$challenger_model"
+    TASK_REVIEWER_AGENT_BY_ISSUE["$challenger_key"]="$challenger_entry_reviewer_agent"
     TASK_REVIEWER_MODEL_BY_ISSUE["$challenger_key"]="${challenger_entry_reviewer:-$route_reviewer}"
     TASK_PLAN_DEPTH_BY_ISSUE["$challenger_key"]="${challenger_entry_plan_depth:-$route_plan_depth}"
     TASK_CODE_DEPTH_BY_ISSUE["$challenger_key"]="${challenger_entry_code_depth:-$route_code_depth}"
@@ -2524,6 +2595,11 @@ for t in "${TASKS[@]}"; do
     TASK_CHALLENGE_ROLE_BY_ISSUE["$ISSUE"]=""
     TASK_CHALLENGE_MODEL_BY_ISSUE["$ISSUE"]=""
     TASK_CHALLENGE_STAGE_BY_ISSUE["$ISSUE"]=""
+    TASK_CHALLENGE_SELECTION_SOURCE_BY_ISSUE["$ISSUE"]="$(echo "$challenge_plan" | jq -r '.selectionSource // empty' 2>/dev/null)"
+    TASK_CHALLENGE_REFRESH_REQUIRED_BY_ISSUE["$ISSUE"]="$(echo "$challenge_plan" | jq -r '.requiresRefresh // false' 2>/dev/null)"
+    TASK_CHALLENGE_NO_CHALLENGE_REASON_BY_ISSUE["$ISSUE"]="$(echo "$challenge_plan" | jq -r '.noChallengeReason // empty' 2>/dev/null)"
+    TASK_CHALLENGE_NATIVE_REJECTIONS_BY_ISSUE["$ISSUE"]="$(echo "$challenge_plan" | jq -c '.nativeCertificationRejections // []' 2>/dev/null || echo "[]")"
+    TASK_CHALLENGE_MODEL_EXCLUSIONS_BY_ISSUE["$ISSUE"]="$(echo "$challenge_plan" | jq -c '.modelExclusions // []' 2>/dev/null || echo "[]")"
     TASK_AGENT_BY_ISSUE["$ISSUE"]="$rec_agent"
     TASK_PLANNER_MODEL_BY_ISSUE["$ISSUE"]="$route_planner"
     TASK_CODER_MODEL_BY_ISSUE["$ISSUE"]="$rec_model"
@@ -3161,6 +3237,10 @@ save_task_state() {
   local linear_issue="${8:-$issue}" challenge="${9:-}" challenge_pair="${10:-}" challenge_role="${11:-}" challenge_model="${12:-}"
   local planner_model="${13:-}" coder_model="${14:-}" reviewer_model="${15:-}" plan_depth="${16:-}" code_depth="${17:-}" review_mode="${18:-}"
   local challenge_stage="${19:-}"
+  local challenge_selection_source="${20:-}" challenge_refresh_required="${21:-}" challenge_no_challenge_reason="${22:-}"
+  local challenge_native_rejections="${23:-[]}" planner_agent="${24:-}" reviewer_agent="${25:-}" challenge_model_exclusions="${26:-[]}"
+  echo "$challenge_native_rejections" | jq -e . >/dev/null 2>&1 || challenge_native_rejections="[]"
+  echo "$challenge_model_exclusions" | jq -e . >/dev/null 2>&1 || challenge_model_exclusions="[]"
 
   # Resolve traceId from feature directory (HOK-2259) — best-effort, never fails
   local _trace_id_for_state=""
@@ -3184,6 +3264,13 @@ save_task_state() {
       (.tasks[$issue].challengeRole // "") as $old_challenge_role |
       (.tasks[$issue].challengeModel // "") as $old_challenge_model |
       (.tasks[$issue].challengeStage // "") as $old_challenge_stage |
+      (.tasks[$issue].challengeSelectionSource // "") as $old_challenge_selection_source |
+      (.tasks[$issue].challengeRefreshRequired // false) as $old_challenge_refresh_required |
+      (.tasks[$issue].challengeNoChallengeReason // "") as $old_challenge_no_challenge_reason |
+      (.tasks[$issue].challengeNativeRejections // []) as $old_challenge_native_rejections |
+      (.tasks[$issue].challengeModelExclusions // []) as $old_challenge_model_exclusions |
+      (.tasks[$issue].plannerAgent // "") as $old_plannerAgent |
+      (.tasks[$issue].reviewerAgent // "") as $old_reviewerAgent |
       (.tasks[$issue].evalRunning // null) as $old_eval_running |
       (.tasks[$issue].comparisonRunning // null) as $old_comparison_running |
       (.tasks[$issue].comparisonState // null) as $old_comparison_state |
@@ -3214,9 +3301,16 @@ save_task_state() {
         challengeRole: (if $challengeRole != "" then $challengeRole else $old_challenge_role end),
         challengeModel: (if $challengeModel != "" then $challengeModel else $old_challenge_model end),
         challengeStage: (if $challengeStage != "" then $challengeStage else $old_challenge_stage end),
+        challengeSelectionSource: (if $challengeSelectionSource != "" then $challengeSelectionSource else $old_challenge_selection_source end),
+        challengeRefreshRequired: (if $challengeRefreshRequired != "" then ($challengeRefreshRequired == "true") else $old_challenge_refresh_required end),
+        challengeNoChallengeReason: (if $challengeNoChallengeReason != "" then $challengeNoChallengeReason else $old_challenge_no_challenge_reason end),
+        challengeNativeRejections: (if ($challengeNativeRejections | length) > 0 then $challengeNativeRejections else $old_challenge_native_rejections end),
+        challengeModelExclusions: (if ($challengeModelExclusions | length) > 0 then $challengeModelExclusions else $old_challenge_model_exclusions end),
         coderModel: (if $coderModel != "" then $coderModel else $old_coderModel end),
         plannerModel: (if $plannerModel != "" then $plannerModel else $old_plannerModel end),
+        plannerAgent: (if $plannerAgent != "" then $plannerAgent else $old_plannerAgent end),
         reviewerModel: (if $reviewerModel != "" then $reviewerModel else $old_reviewerModel end),
+        reviewerAgent: (if $reviewerAgent != "" then $reviewerAgent else $old_reviewerAgent end),
         planDepth: (if $planDepth != "" then $planDepth else $old_planDepth end),
         codeDepth: (if $codeDepth != "" then $codeDepth else $old_codeDepth end),
         reviewMode: (if $reviewMode != "" then $reviewMode else $old_reviewMode end),
@@ -3243,7 +3337,13 @@ save_task_state() {
      --arg challengePair "$challenge_pair" --arg challengeRole "$challenge_role" \
      --arg challengeModel "$challenge_model" \
      --arg challengeStage "$challenge_stage" \
+     --arg challengeSelectionSource "$challenge_selection_source" \
+     --arg challengeRefreshRequired "$challenge_refresh_required" \
+     --arg challengeNoChallengeReason "$challenge_no_challenge_reason" \
+     --argjson challengeNativeRejections "$challenge_native_rejections" \
+     --argjson challengeModelExclusions "$challenge_model_exclusions" \
      --arg plannerModel "$planner_model" --arg coderModel "$coder_model" --arg reviewerModel "$reviewer_model" \
+     --arg plannerAgent "$planner_agent" --arg reviewerAgent "$reviewer_agent" \
      --arg planDepth "$plan_depth" --arg codeDepth "$code_depth" --arg reviewMode "$review_mode" \
      --arg traceId "$_trace_id_for_state"; then
     log_warn "save_task_state: failed to save $issue"
@@ -10018,6 +10118,7 @@ EOF
 
   if [[ -z "${WAVEMILL_DISABLE_CHALLENGE:-}" ]] && should_update_linear_state "$issue" && (( remaining_slots >= 1 )); then
     local challenge_args challenge_plan challenge_mode challenge_reason challenge_stage primary_varied challenger_varied
+    local challenge_selection_source="" challenge_refresh_required="" challenge_native_rejections="[]" challenge_model_exclusions="[]" challenge_intent=""
     # Challengers are free overhead — always pass remaining-slots >= 2
     challenge_mode="single"
     challenge_reason=""
@@ -10041,6 +10142,14 @@ EOF
       challenge_enabled_for_launch="true"
       challenge_pair="$issue"
       challenge_stage=$(echo "$challenge_plan" | jq -r '.challengeStage // "implementation"' 2>/dev/null || echo "implementation")
+      challenge_selection_source=$(echo "$challenge_plan" | jq -r '.selectionSource // empty' 2>/dev/null)
+      challenge_refresh_required=$(echo "$challenge_plan" | jq -r '.requiresRefresh // false' 2>/dev/null)
+      challenge_native_rejections=$(echo "$challenge_plan" | jq -c '.nativeCertificationRejections // []' 2>/dev/null || echo "[]")
+      challenge_model_exclusions=$(echo "$challenge_plan" | jq -c '.modelExclusions // []' 2>/dev/null || echo "[]")
+      challenge_intent=$(echo "$challenge_plan" | jq -c '.challengeExecutionIntent // empty' 2>/dev/null || echo "")
+      if [[ -n "$challenge_intent" ]] && declare -F write_challenge_execution_intent >/dev/null 2>&1; then
+        write_challenge_execution_intent "$feature_dir" "$challenge_intent" || true
+      fi
       task_model=$(echo "$challenge_plan" | jq -r '.entries[0].model // empty' 2>/dev/null)
       task_agent_cmd=$(echo "$challenge_plan" | jq -r '.entries[0].agent // empty' 2>/dev/null)
 
@@ -10242,9 +10351,9 @@ EOF
   if [[ "$effective_challenge" != "true" && -n "$challenge_role" ]]; then
     effective_challenge="true"
   fi
-  save_task_state "$issue" "$slug" "$branch" "$wt_dir" "" "" "${planner_agent:-$task_agent_cmd}" "$linear_issue" "$effective_challenge" "$challenge_pair" "${challenge_role:-}" "$task_model" "$planner_model" "$task_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode" "${challenge_stage:-}"
+  save_task_state "$issue" "$slug" "$branch" "$wt_dir" "" "" "${planner_agent:-$task_agent_cmd}" "$linear_issue" "$effective_challenge" "$challenge_pair" "${challenge_role:-}" "$task_model" "$planner_model" "$task_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode" "${challenge_stage:-}" "${challenge_selection_source:-}" "${challenge_refresh_required:-}" "" "${challenge_native_rejections:-[]}" "$planner_agent" "$reviewer_agent" "${challenge_model_exclusions:-[]}"
   if [[ "$challenge_enabled_for_launch" == "true" ]]; then
-    save_task_state "$challenger_key" "$challenger_slug" "task/${challenger_slug}" "${WORKTREE_ROOT}/${challenger_slug}" "" "" "${challenger_planner_agent:-$challenger_agent}" "$linear_issue" "true" "$challenge_pair" "challenger" "$challenger_model" "$challenger_planner" "$challenger_model" "$challenger_reviewer" "$challenger_plan_depth" "$challenger_code_depth" "$challenger_review_mode" "$challenge_stage"
+    save_task_state "$challenger_key" "$challenger_slug" "task/${challenger_slug}" "${WORKTREE_ROOT}/${challenger_slug}" "" "" "${challenger_planner_agent:-$challenger_agent}" "$linear_issue" "true" "$challenge_pair" "challenger" "$challenger_model" "$challenger_planner" "$challenger_model" "$challenger_reviewer" "$challenger_plan_depth" "$challenger_code_depth" "$challenger_review_mode" "$challenge_stage" "${challenge_selection_source:-}" "${challenge_refresh_required:-}" "" "${challenge_native_rejections:-[]}" "$challenger_planner_agent" "$challenger_reviewer_agent" "${challenge_model_exclusions:-[]}"
     state_mutate "$STATE_FILE" '.tasks[$issue].challengeStage = $stage' --arg issue "$challenger_key" --arg stage "$challenge_stage" || true
   fi
   if [[ -n "${challenge_stage:-}" ]]; then
@@ -11706,6 +11815,7 @@ monitor_issue_state() {
               challenge_coder=$(get_task_meta "$ISSUE" "challengeModel")
               challenge_stage_meta=$(get_task_meta "$ISSUE" "challengeStage")
               challenge_role_meta=$(get_task_meta "$ISSUE" "challengeRole")
+              challenge_refresh_required_meta=$(get_task_meta "$ISSUE" "challengeRefreshRequired")
               # Post-expansion refresh re-pairs by coder; stage-varied pairs
               # (plan/review) keep their original pairing.
               #
@@ -11720,7 +11830,7 @@ monitor_issue_state() {
               # makes compare-prs fail with "Missing eval records", stalling the
               # challenge before evaluation. Guard challengers out entirely — the
               # primary's refresh already re-pairs them correctly.
-              if [[ "$challenge_role_meta" != "challenger" ]] && [[ -n "$challenge_coder" ]] && [[ -z "$challenge_stage_meta" || "$challenge_stage_meta" == "implementation" ]] && [[ -f "$FEATURE_DIR/.post-expansion-route.json" ]]; then
+              if [[ "$challenge_role_meta" != "challenger" ]] && [[ -n "$challenge_coder" ]] && { [[ -z "$challenge_stage_meta" || "$challenge_stage_meta" == "implementation" ]] || [[ "$challenge_refresh_required_meta" == "true" ]]; } && [[ -f "$FEATURE_DIR/.post-expansion-route.json" ]]; then
                 refresh_title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
                 if [[ -z "$refresh_title" ]]; then
                   issue_json=$(cat "/tmp/${SESSION}-${ISSUE}-issue.json" 2>/dev/null || echo "{}")
@@ -11736,9 +11846,23 @@ monitor_issue_state() {
                   --feature-dir "$FEATURE_DIR" 2>/dev/null || echo "")
                 refreshed_source=$(echo "$refreshed_plan" | jq -r '.decisionSource // "bootstrap"' 2>/dev/null || echo "bootstrap")
                 if [[ "$refreshed_source" == "expanded" ]]; then
+                  refreshed_selection_source=$(echo "$refreshed_plan" | jq -r '.selectionSource // empty' 2>/dev/null)
+                  refreshed_requires_refresh=$(echo "$refreshed_plan" | jq -r '.requiresRefresh // false' 2>/dev/null)
+                  refreshed_native_rejections=$(echo "$refreshed_plan" | jq -c '.nativeCertificationRejections // []' 2>/dev/null || echo "[]")
+                  refreshed_model_exclusions=$(echo "$refreshed_plan" | jq -c '.modelExclusions // []' 2>/dev/null || echo "[]")
+                  refreshed_intent=$(echo "$refreshed_plan" | jq -c '.challengeExecutionIntent // empty' 2>/dev/null || echo "")
+                  if [[ -n "$refreshed_intent" ]] && declare -F write_challenge_execution_intent >/dev/null 2>&1; then
+                    existing_intent=$(read_challenge_execution_intent "$FEATURE_DIR" 2>/dev/null || echo "")
+                    if [[ -n "$existing_intent" ]] && [[ "$existing_intent" != "$refreshed_intent" ]]; then
+                      log "info" "  $ISSUE: Challenge execution intent updated after expanded route"
+                    fi
+                    write_challenge_execution_intent "$FEATURE_DIR" "$refreshed_intent" || true
+                  fi
                   new_primary=$(echo "$refreshed_plan" | jq -r '.entries[0].model // empty' 2>/dev/null)
                   new_primary_planner=$(echo "$refreshed_plan" | jq -r '.entries[0].planner // empty' 2>/dev/null)
+                  new_primary_planner_agent=$(echo "$refreshed_plan" | jq -r '.entries[0].plannerAgent // empty' 2>/dev/null)
                   new_primary_reviewer=$(echo "$refreshed_plan" | jq -r '.entries[0].reviewer // empty' 2>/dev/null)
+                  new_primary_reviewer_agent=$(echo "$refreshed_plan" | jq -r '.entries[0].reviewerAgent // empty' 2>/dev/null)
                   new_primary_plan_depth=$(echo "$refreshed_plan" | jq -r '.entries[0].planDepth // empty' 2>/dev/null)
                   new_primary_code_depth=$(echo "$refreshed_plan" | jq -r '.entries[0].codeDepth // empty' 2>/dev/null)
                   new_primary_review_mode=$(echo "$refreshed_plan" | jq -r '.entries[0].reviewMode // empty' 2>/dev/null)
@@ -11746,7 +11870,9 @@ monitor_issue_state() {
                   new_challenger_key=$(echo "$refreshed_plan" | jq -r '.entries[1].key // empty' 2>/dev/null)
                   new_challenger_model=$(echo "$refreshed_plan" | jq -r '.entries[1].model // empty' 2>/dev/null)
                   new_challenger_planner=$(echo "$refreshed_plan" | jq -r '.entries[1].planner // empty' 2>/dev/null)
+                  new_challenger_planner_agent=$(echo "$refreshed_plan" | jq -r '.entries[1].plannerAgent // empty' 2>/dev/null)
                   new_challenger_reviewer=$(echo "$refreshed_plan" | jq -r '.entries[1].reviewer // empty' 2>/dev/null)
+                  new_challenger_reviewer_agent=$(echo "$refreshed_plan" | jq -r '.entries[1].reviewerAgent // empty' 2>/dev/null)
                   new_challenger_plan_depth=$(echo "$refreshed_plan" | jq -r '.entries[1].planDepth // empty' 2>/dev/null)
                   new_challenger_code_depth=$(echo "$refreshed_plan" | jq -r '.entries[1].codeDepth // empty' 2>/dev/null)
                   new_challenger_review_mode=$(echo "$refreshed_plan" | jq -r '.entries[1].reviewMode // empty' 2>/dev/null)
@@ -11767,7 +11893,7 @@ monitor_issue_state() {
                     current_agent=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].agent // ""')
                     current_linear_issue=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].linearIssueId // ""')
                     save_task_state "$ISSUE" "$SLUG" "$BRANCH" "$WT_DIR" "$current_pr" "$current_status" "$current_agent" "$current_linear_issue" \
-                      "true" "$ISSUE" "primary" "$new_primary" "$new_primary_planner" "$new_primary" "$new_primary_reviewer" "$new_primary_plan_depth" "$new_primary_code_depth" "$new_primary_review_mode" "$new_challenge_stage"
+                      "true" "$ISSUE" "primary" "$new_primary" "$new_primary_planner" "$new_primary" "$new_primary_reviewer" "$new_primary_plan_depth" "$new_primary_code_depth" "$new_primary_review_mode" "$new_challenge_stage" "$refreshed_selection_source" "$refreshed_requires_refresh" "" "$refreshed_native_rejections" "$new_primary_planner_agent" "$new_primary_reviewer_agent" "$refreshed_model_exclusions"
                     challenge_coder="$new_primary"
                     challenge_stage_meta="$new_challenge_stage"
                   fi
@@ -11782,7 +11908,7 @@ monitor_issue_state() {
                     challenger_linear_issue=$(read_state_value "" --arg i "$new_challenger_key" '.tasks[$i].linearIssueId // ""')
                     if [[ -n "$challenger_slug" ]] && [[ -n "$challenger_branch" ]] && [[ -n "$challenger_worktree" ]]; then
                       save_task_state "$new_challenger_key" "$challenger_slug" "$challenger_branch" "$challenger_worktree" "$challenger_pr" "$challenger_status" "$challenger_agent" "$challenger_linear_issue" \
-                        "true" "$ISSUE" "challenger" "$new_challenger_model" "$new_challenger_planner" "$new_challenger_model" "$new_challenger_reviewer" "$new_challenger_plan_depth" "$new_challenger_code_depth" "$new_challenger_review_mode" "$new_challenge_stage"
+                        "true" "$ISSUE" "challenger" "$new_challenger_model" "$new_challenger_planner" "$new_challenger_model" "$new_challenger_reviewer" "$new_challenger_plan_depth" "$new_challenger_code_depth" "$new_challenger_review_mode" "$new_challenge_stage" "$refreshed_selection_source" "$refreshed_requires_refresh" "" "$refreshed_native_rejections" "$new_challenger_planner_agent" "$new_challenger_reviewer_agent" "$refreshed_model_exclusions"
                     fi
                   fi
 

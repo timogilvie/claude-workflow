@@ -12,12 +12,67 @@ import {
   decideChallengeLaunch,
   extractChallengeRecommendation,
   variedModelForStage,
+  type ChallengePairSelection,
   type ChallengeNativeRejection,
+  type ChallengeTaskEntry,
+  type ChallengeSelectionSource,
 } from '../shared/lib/challenge-mode.ts';
+import type { ModelExclusionDiagnostic } from '../shared/lib/model-exclusions.ts';
 import { buildEvalSummary, modelStageCount } from '../shared/lib/challenge-scheduler.ts';
 import { resolveAgent } from '../shared/lib/model-router.ts';
 import { readBothRouteArtifacts } from '../shared/lib/route-artifact.ts';
 import { readTaskPromptFromFile } from '../shared/lib/workflow-router.ts';
+
+function buildChallengeExecutionIntent(input: {
+  issue: string;
+  slug: string;
+  pair: ChallengePairSelection;
+  selectionSource: string;
+  nativeCertificationRejections?: ChallengeNativeRejection[];
+  modelExclusions?: ModelExclusionDiagnostic[];
+  noChallengeReason?: string;
+}) {
+  const sideIntent = (entry: ChallengeTaskEntry) => ({
+    key: entry.key,
+    issueId: entry.issueId,
+    slug: entry.slug,
+    branch: entry.branch,
+    role: entry.role,
+    planner: {
+      model: entry.planner || '',
+      agent: entry.plannerAgent || '',
+    },
+    coder: {
+      model: entry.model || '',
+      agent: entry.agent || '',
+    },
+    reviewer: {
+      model: entry.reviewer || '',
+      agent: entry.reviewerAgent || '',
+    },
+    planDepth: entry.planDepth || '',
+    codeDepth: entry.codeDepth || '',
+    reviewMode: entry.reviewMode || '',
+  });
+
+  return {
+    schemaVersion: 1,
+    pairId: input.pair.pairId,
+    issueId: input.issue,
+    slug: input.slug,
+    selectedStage: input.pair.challengeStage || 'implementation',
+    selectionSource: input.selectionSource,
+    primary: sideIntent(input.pair.primary),
+    challenger: sideIntent(input.pair.challenger),
+    ...(input.nativeCertificationRejections && input.nativeCertificationRejections.length > 0
+      ? { nativeCertificationRejections: input.nativeCertificationRejections }
+      : {}),
+    ...(input.modelExclusions && input.modelExclusions.length > 0
+      ? { modelExclusions: input.modelExclusions }
+      : {}),
+    ...(input.noChallengeReason ? { noChallengeReason: input.noChallengeReason } : {}),
+  };
+}
 
 runTool({
   name: 'resolve-challenge-task',
@@ -100,6 +155,7 @@ runTool({
     const routeArtifacts = featureDir
       ? readBothRouteArtifacts(featureDir)
       : { bootstrap: null, expanded: null };
+    const hasUsableRoute = Boolean(routeArtifacts.bootstrap || routeArtifacts.expanded);
     const recommendation = extractChallengeRecommendation(routeArtifacts);
 
     const launchDecision = decideChallengeLaunch({
@@ -115,6 +171,8 @@ runTool({
         ...base,
         reason: 'roll_not_selected',
         selectionPath: launchDecision.selectionPath,
+        selectionSource: launchDecision.selectionSource,
+        requiresRefresh: !hasUsableRoute,
       }));
       return;
     }
@@ -127,6 +185,7 @@ runTool({
     const challengeStage = chooseChallengeStage({
       weights: challenge.stageWeights,
       recommendedStage: launchDecision.recommendation?.stage,
+      routeArtifactsAvailable: hasUsableRoute,
     });
     const summary = buildEvalSummary(repoDir);
     const coverage = (model: string, stage: 'plan' | 'implementation' | 'review') =>
@@ -138,6 +197,7 @@ runTool({
     let selectionFailureReason = 'selection_failed';
     let pair;
     let nativeCertificationRejections: ChallengeNativeRejection[] | undefined;
+    let modelExclusions: ModelExclusionDiagnostic[] | undefined;
 
     if (featureDir) {
       const selection = pickChallengeWorkflowsWithContextAndReason(pool, {
@@ -158,6 +218,7 @@ runTool({
       pair = selection.pair;
       selectionFailureReason = selection.failureReason || selectionFailureReason;
       nativeCertificationRejections = selection.nativeCertificationRejections;
+      modelExclusions = selection.modelExclusions;
     }
 
     if (!pair && taskFile) {
@@ -184,6 +245,10 @@ runTool({
           ...(nativeCertificationRejections || []),
           ...(selection.nativeCertificationRejections || []),
         ];
+        modelExclusions = [
+          ...(modelExclusions || []),
+          ...(selection.modelExclusions || []),
+        ];
       } catch (error) {
         // Fall back to model-only selection if task file is unreadable
         console.error(`Warning: Failed to read task file for routing: ${error}`);
@@ -206,6 +271,10 @@ runTool({
           ...(nativeCertificationRejections || []),
           ...(selection.nativeCertificationRejections || []),
         ];
+        modelExclusions = [
+          ...(modelExclusions || []),
+          ...(selection.modelExclusions || []),
+        ];
       }
     } else if (!pair) {
       // No task file provided - use model-only selection (backward compatibility)
@@ -227,6 +296,10 @@ runTool({
       nativeCertificationRejections = [
         ...(nativeCertificationRejections || []),
         ...(selection.nativeCertificationRejections || []),
+      ];
+      modelExclusions = [
+        ...(modelExclusions || []),
+        ...(selection.modelExclusions || []),
       ];
     }
 
@@ -254,7 +327,22 @@ runTool({
     }
 
     if (!pair) {
-      console.log(JSON.stringify({ ...base, reason: selectionFailureReason }));
+      const selectionSource: ChallengeSelectionSource = (modelExclusions || []).length > 0
+        ? 'model-exclusion'
+        : (nativeCertificationRejections || []).length > 0
+          ? 'eligibility-rejection'
+          : 'no-challenge';
+      console.log(JSON.stringify({
+        ...base,
+        reason: selectionFailureReason,
+        selectionSource,
+        noChallengeReason: selectionFailureReason,
+        requiresRefresh: !hasUsableRoute,
+        ...(nativeCertificationRejections && nativeCertificationRejections.length > 0
+          ? { nativeCertificationRejections }
+          : {}),
+        ...(modelExclusions && modelExclusions.length > 0 ? { modelExclusions } : {}),
+      }));
       return;
     }
 
@@ -267,6 +355,15 @@ runTool({
         ? 'recommendation'
         : 'random'
     );
+    const selectionSource = pair.routeContext?.selectionSource || launchDecision.selectionSource;
+    const challengeExecutionIntent = buildChallengeExecutionIntent({
+      issue,
+      slug,
+      pair,
+      selectionSource,
+      nativeCertificationRejections,
+      modelExclusions,
+    });
 
     console.log(JSON.stringify({
       issue,
@@ -278,10 +375,13 @@ runTool({
       reason: 'selected',
       primaryModel,
       selectionPath: launchDecision.selectionPath,
+      selectionSource,
+      requiresRefresh: !hasUsableRoute,
       challengerSource,
       selectionReason: pair.selectionReason,
       coverageCount: pair.challengerCoverageCount,
       challengeStage: effectiveStage,
+      challengeExecutionIntent,
       ...(launchDecision.recommendation
         ? {
             challengeRecommendation: {
@@ -295,6 +395,7 @@ runTool({
       ...(nativeCertificationRejections && nativeCertificationRejections.length > 0
         ? { nativeCertificationRejections }
         : {}),
+      ...(modelExclusions && modelExclusions.length > 0 ? { modelExclusions } : {}),
       routeContext: pair.routeContext,
       entries: [
         { ...pair.primary, variedModel: variedModelForStage(pair.primary, effectiveStage) },

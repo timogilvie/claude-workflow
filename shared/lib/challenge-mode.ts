@@ -20,6 +20,15 @@ import { applyModelExclusions, type ModelExclusionDiagnostic } from './model-exc
 
 export type ChallengeRole = 'primary' | 'challenger';
 export type ChallengeDecisionSource = 'bootstrap' | 'expanded' | 'preserved';
+export type ChallengeSelectionSource =
+  | 'bootstrap'
+  | 'expanded'
+  | 'preserved'
+  | 'recommendation-driven'
+  | 'random-fallback'
+  | 'eligibility-rejection'
+  | 'model-exclusion'
+  | 'no-challenge';
 
 /** Re-export so callers don't need to import from internal certification paths */
 export type ChallengeNativeRejection = RouterCertificationRejection;
@@ -99,10 +108,15 @@ export interface ChallengePairSelectionResult<T extends ChallengePairSelection =
 export function chooseChallengeStage(opts: {
   weights?: ChallengeStageWeights;
   recommendedStage?: ChallengeStage;
+  routeArtifactsAvailable?: boolean;
   randomFn?: () => number;
 } = {}): ChallengeStage {
   if (opts.recommendedStage && CHALLENGE_STAGES.includes(opts.recommendedStage)) {
     return opts.recommendedStage;
+  }
+
+  if (opts.routeArtifactsAvailable === false) {
+    return 'implementation';
   }
 
   const randomFn = opts.randomFn || Math.random;
@@ -136,9 +150,13 @@ export function variedModelForStage(entry: ChallengeTaskEntry, stage: ChallengeS
 
 export interface ChallengeRouteContext {
   decisionSource: ChallengeDecisionSource;
+  selectionSource?: ChallengeSelectionSource;
   bootstrapRoute?: RouteArtifactSnapshot;
   expandedRoute?: RouteArtifactSnapshot;
   refreshRationale?: string;
+  nativeRejections?: ChallengeNativeRejection[];
+  modelExclusions?: ModelExclusionDiagnostic[];
+  noChallengeReason?: string;
 }
 
 export interface DeepSeekChallengeFilterResult {
@@ -478,6 +496,7 @@ export type ChallengeSelectionPath = 'recommendation-driven' | 'random-roll';
 export interface ChallengeLaunchDecision {
   launch: boolean;
   selectionPath: ChallengeSelectionPath;
+  selectionSource: ChallengeSelectionSource;
   forcedChallengerModel?: string;
   recommendation?: ChallengeRecommendation;
 }
@@ -535,6 +554,7 @@ export function decideChallengeLaunch(opts: {
     return {
       launch: randomFn() < opts.rate,
       selectionPath: 'random-roll',
+      selectionSource: 'random-fallback',
     };
   }
 
@@ -551,6 +571,7 @@ export function decideChallengeLaunch(opts: {
   return {
     launch: randomFn() < effectiveRate,
     selectionPath: 'recommendation-driven',
+    selectionSource: 'recommendation-driven',
     ...(challengerUsable ? { forcedChallengerModel: challenger } : {}),
     recommendation,
   };
@@ -1343,6 +1364,46 @@ export function pickChallengeWorkflowsWithContext(
   return pickChallengeWorkflowsWithContextAndReason(pool, opts, routeArtifacts).pair;
 }
 
+function routeSelectionSource(
+  decisionSource: ChallengeDecisionSource,
+  opts: { forcedChallengerModel?: string; recommendedChallengerModel?: string },
+  selection: ChallengePairSelectionResult,
+): ChallengeSelectionSource {
+  const recommended = opts.forcedChallengerModel?.trim() || opts.recommendedChallengerModel?.trim();
+  if (recommended && selection.pair) {
+    const stage = selection.pair.challengeStage || 'implementation';
+    if (variedModelForStage(selection.pair.challenger, stage) === recommended) {
+      return 'recommendation-driven';
+    }
+  }
+  if (recommended && (selection.modelExclusions || []).some((exclusion) => exclusion.modelId === recommended)) {
+    return 'model-exclusion';
+  }
+  if (recommended && (selection.nativeCertificationRejections || []).some((rejection) => rejection.modelId === recommended)) {
+    return 'eligibility-rejection';
+  }
+  return decisionSource;
+}
+
+function attachRouteContext(
+  pair: ChallengePairSelection,
+  context: ChallengeRouteContext,
+  selection: ChallengePairSelectionResult,
+): ChallengePairSelection & { routeContext: ChallengeRouteContext } {
+  return {
+    ...pair,
+    routeContext: {
+      ...context,
+      ...((selection.nativeCertificationRejections || []).length > 0
+        ? { nativeRejections: selection.nativeCertificationRejections }
+        : {}),
+      ...((selection.modelExclusions || []).length > 0
+        ? { modelExclusions: selection.modelExclusions }
+        : {}),
+    },
+  };
+}
+
 export function pickChallengeWorkflowsWithContextAndReason(
   pool: string[],
   opts: {
@@ -1376,13 +1437,15 @@ export function pickChallengeWorkflowsWithContextAndReason(
       return selection;
     }
     return {
-      pair: {
-        ...selection.pair,
-        routeContext: {
-          decisionSource: 'bootstrap',
-          ...(bootstrapRoute ? { bootstrapRoute } : {}),
-        },
-      },
+      pair: attachRouteContext(selection.pair, {
+        decisionSource: 'bootstrap',
+        selectionSource: bootstrapRoute
+          ? routeSelectionSource('bootstrap', opts, selection)
+          : routeSelectionSource('bootstrap', opts, selection) === 'bootstrap'
+            ? 'random-fallback'
+            : routeSelectionSource('bootstrap', opts, selection),
+        ...(bootstrapRoute ? { bootstrapRoute } : {}),
+      }, selection),
       ...(selection.nativeCertificationRejections ? { nativeCertificationRejections: selection.nativeCertificationRejections } : {}),
       ...(selection.modelExclusions ? { modelExclusions: selection.modelExclusions } : {}),
     };
@@ -1397,13 +1460,11 @@ export function pickChallengeWorkflowsWithContextAndReason(
       return selection;
     }
     return {
-      pair: {
-        ...selection.pair,
-        routeContext: {
-          decisionSource: 'expanded',
-          expandedRoute,
-        },
-      },
+      pair: attachRouteContext(selection.pair, {
+        decisionSource: 'expanded',
+        selectionSource: routeSelectionSource('expanded', opts, selection),
+        expandedRoute,
+      }, selection),
       ...(selection.nativeCertificationRejections ? { nativeCertificationRejections: selection.nativeCertificationRejections } : {}),
       ...(selection.modelExclusions ? { modelExclusions: selection.modelExclusions } : {}),
     };
@@ -1419,14 +1480,12 @@ export function pickChallengeWorkflowsWithContextAndReason(
       return selection;
     }
     return {
-      pair: {
-        ...selection.pair,
-        routeContext: {
-          decisionSource: 'expanded',
-          bootstrapRoute,
-          expandedRoute,
-        },
-      },
+      pair: attachRouteContext(selection.pair, {
+        decisionSource: 'expanded',
+        selectionSource: routeSelectionSource('expanded', opts, selection),
+        bootstrapRoute,
+        expandedRoute,
+      }, selection),
       ...(selection.nativeCertificationRejections ? { nativeCertificationRejections: selection.nativeCertificationRejections } : {}),
       ...(selection.modelExclusions ? { modelExclusions: selection.modelExclusions } : {}),
     };
@@ -1441,15 +1500,13 @@ export function pickChallengeWorkflowsWithContextAndReason(
   }
 
   return {
-    pair: {
-      ...selection.pair,
-      routeContext: {
-        decisionSource: 'preserved',
-        bootstrapRoute,
-        expandedRoute,
-        refreshRationale: 'expanded route matches bootstrap on coder class/depth',
-      },
-    },
+    pair: attachRouteContext(selection.pair, {
+      decisionSource: 'preserved',
+      selectionSource: routeSelectionSource('preserved', opts, selection),
+      bootstrapRoute,
+      expandedRoute,
+      refreshRationale: 'expanded route matches bootstrap on coder class/depth',
+    }, selection),
     ...(selection.nativeCertificationRejections ? { nativeCertificationRejections: selection.nativeCertificationRejections } : {}),
     ...(selection.modelExclusions ? { modelExclusions: selection.modelExclusions } : {}),
   };

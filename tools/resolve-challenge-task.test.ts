@@ -151,6 +151,7 @@ function makeRepo(coderHistory: string[], opts: {
       models: ['claude-sonnet-4-6', ...aliases],
       agentMap: {
         'claude-sonnet-4-6': 'claude',
+        'gpt-5.5': 'codex',
         ...Object.fromEntries(aliases.map((alias) => [alias, 'native-openrouter'])),
       },
     },
@@ -282,6 +283,80 @@ describe('resolve-challenge-task CLI', () => {
       assert.equal(result.reason, 'selection_failed');
       const single = result.single as Record<string, unknown>;
       assert.equal(single.model, 'claude-sonnet-4-6');
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('replays HOK-2570 timing and finalizes the expanded native implementation recommendation', () => {
+    const repoDir = makeRepo(['glm-5.2', 'glm-5.2'], {
+      aliases: ['glm-5.2'],
+      patchCodingEnabled: true,
+      suiteVersion: 'v2',
+      certificationPhase: 'patch',
+    });
+    const featureDir = join(repoDir, 'features', 'hok-2570');
+    mkdirSync(featureDir, { recursive: true });
+
+    try {
+      const initial = runResolveChallengeTask(repoDir, [
+        '--issue', 'HOK-2570',
+        '--slug', 'hok-2570',
+        '--title', 'Make registry reusable',
+        '--primary-model', 'gpt-5.5',
+        '--remaining-slots', '2',
+        '--repo-dir', repoDir,
+        '--feature-dir', featureDir,
+      ]);
+
+      assert.equal(initial.mode, 'challenge');
+      assert.equal(initial.challengeStage, 'implementation');
+      assert.equal(initial.requiresRefresh, true);
+
+      writeFileSync(join(featureDir, '.post-expansion-route.json'), JSON.stringify({
+        planner: 'gpt-5.5',
+        coder: 'gpt-5.5',
+        reviewer: 'gpt-5.5',
+        planDepth: 'medium',
+        codeDepth: 'medium',
+        reviewMode: 'llm',
+        challengeRecommendation: {
+          shouldChallenge: true,
+          reason: 'new-model',
+          challengerModel: 'glm-5.2',
+          defaultModel: 'gpt-5.5',
+          stage: 'implementation',
+        },
+      }), 'utf-8');
+
+      const refreshed = runResolveChallengeTask(repoDir, [
+        '--issue', 'HOK-2570',
+        '--slug', 'hok-2570',
+        '--title', 'Make registry reusable',
+        '--primary-model', 'gpt-5.5',
+        '--remaining-slots', '2',
+        '--repo-dir', repoDir,
+        '--feature-dir', featureDir,
+      ]);
+
+      assert.equal(refreshed.mode, 'challenge');
+      assert.equal(refreshed.requiresRefresh, false);
+      assert.equal(refreshed.challengeStage, 'implementation');
+      assert.equal(refreshed.selectionSource, 'recommendation-driven');
+      const entries = refreshed.entries as Array<Record<string, unknown>>;
+      const primary = entries.find((entry) => entry.role === 'primary');
+      const challenger = entries.find((entry) => entry.role === 'challenger');
+      assert.equal(primary?.model, 'gpt-5.5');
+      assert.equal(primary?.agent, 'codex');
+      assert.equal(challenger?.model, 'glm-5.2');
+      assert.equal(challenger?.agent, 'native-openrouter');
+      const intent = refreshed.challengeExecutionIntent as Record<string, any>;
+      assert.equal(intent.selectedStage, 'implementation');
+      assert.equal(intent.selectionSource, 'recommendation-driven');
+      assert.equal(intent.primary.coder.model, 'gpt-5.5');
+      assert.equal(intent.primary.coder.agent, 'codex');
+      assert.equal(intent.challenger.coder.model, 'glm-5.2');
+      assert.equal(intent.challenger.coder.agent, 'native-openrouter');
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }

@@ -681,6 +681,17 @@ function modelClassOrId(modelId: string, repoDir?: string): string {
   return getModel(registry, modelId)?.class || modelId;
 }
 
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableJson(entry)).join(',')}]`;
+  }
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`).join(',')}}`;
+}
+
 export function routeChangedMaterially(
   bootstrap: RouteArtifactSnapshot,
   expanded: RouteArtifactSnapshot,
@@ -698,6 +709,13 @@ export function routeChangedMaterially(
 
   if (modelClassOrId(bootstrap.reviewer, repoDir) !== modelClassOrId(expanded.reviewer, repoDir)) {
     reasons.push('reviewer_class');
+  }
+
+  if (
+    stableJson(bootstrap.expectedMetrics?.challengeRecommendation)
+    !== stableJson(expanded.expectedMetrics?.challengeRecommendation)
+  ) {
+    reasons.push('challenge_recommendation');
   }
 
   return {

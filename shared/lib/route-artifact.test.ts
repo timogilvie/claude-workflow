@@ -607,6 +607,30 @@ test('routeChangedMaterially tracks coder/reviewer class and depth changes', () 
   assert.deepEqual(result.reasons.sort(), ['code_depth', 'coder_class', 'reviewer_class']);
 });
 
+test('routeChangedMaterially treats challengeRecommendation changes as material', () => {
+  const bootstrap = {
+    coder: 'gpt-5.4',
+    codeDepth: 'medium',
+    reviewer: 'claude-sonnet-5',
+    reviewMode: 'static',
+  };
+  const expanded = {
+    ...bootstrap,
+    expectedMetrics: {
+      challengeRecommendation: {
+        shouldChallenge: true,
+        reason: 'new-model',
+        challengerModel: 'glm-5.2',
+        stage: 'implementation',
+      },
+    },
+  };
+
+  const materiality = routeChangedMaterially(bootstrap, expanded);
+  assert.equal(materiality.changed, true);
+  assert.ok(materiality.reasons.includes('challenge_recommendation'));
+});
+
 test('readRouteLifecycleArtifacts falls back to archived bootstrap and active route files', () => {
   const featureDir = makeFeatureDir();
   const archiveDir = join(dirname(featureDir), 'archive');

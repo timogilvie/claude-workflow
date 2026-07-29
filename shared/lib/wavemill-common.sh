@@ -1109,6 +1109,21 @@ write_json_artifact() {
   fi
 }
 
+write_challenge_execution_intent() {
+  local feature_dir="$1" intent_json="$2"
+  [[ -n "$feature_dir" ]] || return 1
+  [[ -n "$intent_json" ]] || return 1
+  mkdir -p "$feature_dir"
+  printf '%s\n' "$intent_json" | write_json_artifact "$feature_dir/.challenge-execution-intent.json"
+}
+
+read_challenge_execution_intent() {
+  local feature_dir="$1"
+  local intent_file="$feature_dir/.challenge-execution-intent.json"
+  [[ -f "$intent_file" ]] || return 1
+  jq -c . "$intent_file" 2>/dev/null
+}
+
 read_route_json() {
   local session="$1" issue="$2" field="$3" default_value="${4:-}"
   local route_file="/tmp/${session}-${issue}-route.json"

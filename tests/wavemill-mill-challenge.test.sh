@@ -76,6 +76,9 @@ CHALLENGE_PERSISTENCE_BLOCK="$(awk '
 if [[ -n "$CHALLENGE_PERSISTENCE_BLOCK" ]]; then
   check_contains "startup challenge extracts primary planner agent" "$CHALLENGE_PERSISTENCE_BLOCK" 'entries[0].plannerAgent'
   check_contains "startup challenge extracts challenger planner agent" "$CHALLENGE_PERSISTENCE_BLOCK" 'entries[1].plannerAgent'
+  check_contains "startup challenge extracts selection source" "$CHALLENGE_PERSISTENCE_BLOCK" '.selectionSource // empty'
+  check_contains "startup challenge extracts refresh flag" "$CHALLENGE_PERSISTENCE_BLOCK" '.requiresRefresh // false'
+  check_contains "startup challenge writes execution intent" "$CHALLENGE_PERSISTENCE_BLOCK" 'write_challenge_execution_intent'
   check_contains "startup primary task agent starts as planner agent" "$CHALLENGE_PERSISTENCE_BLOCK" 'TASK_AGENT_BY_ISSUE["$ISSUE"]="${primary_entry_planner_agent:-${primary_agent:-$rec_agent}}"'
   check_contains "startup challenger task agent starts as planner agent" "$CHALLENGE_PERSISTENCE_BLOCK" 'TASK_AGENT_BY_ISSUE["$challenger_key"]="${challenger_entry_planner_agent:-${challenger_agent:-$AGENT_CMD}}"'
 else
@@ -91,6 +94,8 @@ RUNTIME_SAVE_BLOCK="$(awk '
 if [[ -n "$RUNTIME_SAVE_BLOCK" ]]; then
   check_contains "runtime primary state saves planner agent for planning phase" "$RUNTIME_SAVE_BLOCK" '"${planner_agent:-$task_agent_cmd}"'
   check_contains "runtime challenger state saves planner agent for planning phase" "$RUNTIME_SAVE_BLOCK" '"${challenger_planner_agent:-$challenger_agent}"'
+  check_contains "runtime primary state saves selection source" "$RUNTIME_SAVE_BLOCK" '"${challenge_selection_source:-}"'
+  check_contains "runtime primary state saves refresh flag" "$RUNTIME_SAVE_BLOCK" '"${challenge_refresh_required:-}"'
 else
   fail "could not extract runtime state save block"
 fi
@@ -120,6 +125,8 @@ EXPANDED_REFRESH_BLOCK="$(awk '
 
 if [[ -n "$EXPANDED_REFRESH_BLOCK" ]]; then
   check_contains "refresh block extracts primary planner" "$EXPANDED_REFRESH_BLOCK" 'entries[0].planner'
+  check_contains "refresh block extracts selection source" "$EXPANDED_REFRESH_BLOCK" '.selectionSource // empty'
+  check_contains "refresh block writes execution intent" "$EXPANDED_REFRESH_BLOCK" 'write_challenge_execution_intent'
   check_contains "refresh block extracts primary reviewer" "$EXPANDED_REFRESH_BLOCK" 'entries[0].reviewer'
   check_contains "refresh block extracts primary planDepth" "$EXPANDED_REFRESH_BLOCK" 'entries[0].planDepth'
   check_contains "refresh block extracts primary codeDepth" "$EXPANDED_REFRESH_BLOCK" 'entries[0].codeDepth'
