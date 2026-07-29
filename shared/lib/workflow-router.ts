@@ -14,7 +14,7 @@ import { filterDeepSeekModels, type DeepSeekPoolFilterResult } from './deepseek-
 import { filterOpenRouterModels, type OpenRouterPoolFilterResult } from './openrouter-provider.ts';
 import { routeViaHokusai } from './hokusai-router.ts';
 import { analyzePrompt, loadRouterConfig, recommendModel, resolveAgent, type PromptCharacteristics, type TaskType } from './model-router.ts';
-import { compareLatencyTier, getEffectiveRegistry, getLadder, hasCapabilityConstraints, isCodexChatgptLaunchEligible, isModelEnabled, type CapabilityConstraints, type LatencyTier, type RegistryTaskType } from './model-registry.ts';
+import { compareLatencyTier, getEffectiveRegistry, getLadder, hasCapabilityConstraints, isCodexChatgptLaunchEligible, isModelEnabled, listSupportedModelsForStage, type CapabilityConstraints, type LatencyTier, type RegistryTaskType } from './model-registry.ts';
 import { readQuotaSnapshot, type QuotaSnapshot } from './quota-state.ts';
 import {
   formatExplorationReasoning,
@@ -44,6 +44,7 @@ import { isDeepSeekLikeModelId } from './model-registry.ts';
 import { validateModelOrThrow } from './model-validator.ts';
 import { filterDisabledModels, isDisabledModel } from './disabled-models.ts';
 import { filterNativeModels, type RouterCertificationRejection } from './native-agent/certification/router-filter.ts';
+import { applyModelExclusions, type ModelExclusionDiagnostic } from './model-exclusions.ts';
 
 export type { RouterCertificationRejection } from './native-agent/certification/router-filter.ts';
 export { STAGE_PHASE_REQUIREMENT } from './native-agent/certification/router-filter.ts';
@@ -96,6 +97,7 @@ export interface WorkflowRouteDecision {
   provenance?: RouteProvenance;
   routingMode?: string;
   nativeCertificationRejections?: RouterCertificationRejection[];
+  modelExclusions?: ModelExclusionDiagnostic[];
 }
 
 export interface RouteWorkflowOptions {
@@ -176,6 +178,12 @@ function registryModelPool(repoDir?: string): string[] {
     .map(([modelId]) => modelId);
 }
 
+function registryStageModelPool(role: 'planner' | 'coder' | 'reviewer', repoDir?: string): string[] {
+  const registry = getEffectiveRegistry(repoDir);
+  return listSupportedModelsForStage(role, registry)
+    .filter((modelId) => isModelEnabled(registry.models[modelId]));
+}
+
 /**
  * Task-type ladder grouped by model class, preserving ladder order within
  * each class. Encodes tier-shaped preferences (e.g. "frontier first, then
@@ -229,6 +237,7 @@ interface ResolvedModelPool {
   models: string[];
   warnings: string[];
   nativeCertificationRejections?: RouterCertificationRejection[];
+  modelExclusions?: ModelExclusionDiagnostic[];
   routingFailure?: string;
 }
 
@@ -536,7 +545,15 @@ function resolveStagePool(
 
   validateDeepSeekPool(explicitPool, options?.repoDir);
   const configuredPool = intersectPools(basePool, explicitPool);
-  const providerFiltered = filterProviderPool(intersectPools(configuredPool, policyPool), options?.repoDir, role);
+  const stageDefaultPool = explicitPool && explicitPool.length > 0
+    ? configuredPool
+    : intersectPools(registryStageModelPool(role, options?.repoDir), configuredPool);
+  const exclusionFiltered = applyModelExclusions(
+    intersectPools(stageDefaultPool, policyPool),
+    role,
+    options?.repoDir,
+  );
+  const providerFiltered = filterProviderPool(exclusionFiltered.models, options?.repoDir, role);
 
   // Apply native certification filter when we have a repo directory.
   // Native models only appear in repo-specific registry configs, so this is
@@ -558,10 +575,18 @@ function resolveStagePool(
       ...(nativeFiltered.rejected.length > 0
         ? { nativeCertificationRejections: nativeFiltered.rejected }
         : {}),
+      ...(exclusionFiltered.exclusions.length > 0
+        ? { modelExclusions: exclusionFiltered.exclusions }
+        : {}),
     };
   }
 
-  return providerFiltered;
+  return {
+    ...providerFiltered,
+    ...(exclusionFiltered.exclusions.length > 0
+      ? { modelExclusions: exclusionFiltered.exclusions }
+      : {}),
+  };
 }
 
 function pickAvailableModel(pool: string[], preferred: string[], fallback: string): string {
@@ -1291,6 +1316,17 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
     );
   }
 
+  const modelExclusions: ModelExclusionDiagnostic[] = [
+    ...(plannerPoolResolution.modelExclusions ?? []),
+    ...(coderPoolResolution.modelExclusions ?? []),
+    ...(reviewerPoolResolution.modelExclusions ?? []),
+  ];
+  for (const exclusion of modelExclusions) {
+    reasoning.push(
+      `Model ${exclusion.modelId} excluded for ${exclusion.stage} by ${exclusion.source} config${exclusion.reason ? `: ${exclusion.reason}` : ''}.`,
+    );
+  }
+
   const routingFailures = [
     plannerPoolResolution.routingFailure,
     coderPoolResolution.routingFailure,
@@ -1338,6 +1374,7 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
       ? { resourceSelections: coderRecommendation.resourceSelections }
       : {}),
     ...(nativeCertificationRejections.length > 0 ? { nativeCertificationRejections } : {}),
+    ...(modelExclusions.length > 0 ? { modelExclusions } : {}),
   };
 }
 

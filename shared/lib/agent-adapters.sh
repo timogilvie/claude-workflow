@@ -240,6 +240,7 @@ agent_validate_model() {
   local tools_dir="${TOOLS_DIR:-$repo_dir/tools}"
   local lib_dir="${tools_dir%/tools}/shared/lib"
   local validator="model-validator.ts"
+  local validation_stderr
 
   if ! agent_model_helper_available; then
     echo "error: model validation requires tsx or npx -- install Node.js tooling to use model selectors" >&2
@@ -248,9 +249,18 @@ agent_validate_model() {
 
   # Call TypeScript validator (cd to lib_dir first for imports to work)
   # Exits 0 if valid, 1 if invalid with error message
-  if (cd "$lib_dir" && agent_run_tsx_tool "$validator" --selector-token "$model" "$repo_dir" >/dev/null); then
+  validation_stderr="$(mktemp "${TMPDIR:-/tmp}/model-validator-stderr.XXXXXX")" || return 1
+  if (cd "$lib_dir" && agent_run_tsx_tool "$validator" --selector-token "$model" "$repo_dir" > /dev/null 2>"$validation_stderr"); then
+    if grep -Eqi 'tsx: not available|tsx not found|npx: tsx not found' "$validation_stderr"; then
+      cat "$validation_stderr" >&2
+      rm -f "$validation_stderr"
+      return 1
+    fi
+    rm -f "$validation_stderr"
     return 0
   else
+    cat "$validation_stderr" >&2
+    rm -f "$validation_stderr"
     return 1
   fi
 }
@@ -352,7 +362,16 @@ agent_run_tsx_tool() {
 }
 
 agent_model_helper_available() {
-  node --import tsx -e "" >/dev/null 2>&1 || command -v tsx >/dev/null 2>&1 || command -v npx >/dev/null 2>&1
+  node --import tsx -e "" >/dev/null 2>&1 && return 0
+  if command -v tsx >/dev/null 2>&1; then
+    tsx --version >/dev/null 2>&1
+    return $?
+  fi
+  if command -v npx >/dev/null 2>&1; then
+    npx tsx --version >/dev/null 2>&1
+    return $?
+  fi
+  return 1
 }
 
 agent_native_planning_eligible() {

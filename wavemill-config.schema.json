@@ -8,6 +8,33 @@
             "type": "string",
             "description": "Config format version (e.g., '1.0.0'). Used for upgrade detection and compatibility checks."
         },
+        "modelExclusions": {
+            "type": "array",
+            "description": "Models to remove from default router and challenge candidate pools without hiding newly supported models.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "model": {
+                        "type": "string",
+                        "minLength": 1
+                    },
+                    "stages": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "enum": ["planner", "coder", "reviewer", "expansion", "planning", "coding", "review", "plan", "implementation"]
+                        }
+                    },
+                    "reason": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 300
+                    }
+                },
+                "required": ["model"],
+                "additionalProperties": false
+            }
+        },
         "linear": {
             "type": "object",
             "properties": {
@@ -1533,6 +1560,56 @@
                                         },
                                         "additionalProperties": false
                                     }
+                                },
+                                "additionalProperties": false
+                            },
+                            "supportedModel": {
+                                "type": "object",
+                                "properties": {
+                                    "wavemillAlias": { "type": "string", "minLength": 1 },
+                                    "providerNativeId": { "type": "string", "minLength": 1 },
+                                    "provider": { "type": "string", "enum": ["openai", "openrouter"] },
+                                    "transport": { "type": "string", "enum": ["openai-responses", "openai-completions"] },
+                                    "stages": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "string",
+                                            "enum": ["expansion", "planning", "coding", "review"]
+                                        }
+                                    },
+                                    "requiredCertificationPhaseByStage": {
+                                        "type": "object",
+                                        "properties": {
+                                            "expansion": { "type": "string", "enum": ["read-only", "patch", "workflow"] },
+                                            "planning": { "type": "string", "enum": ["read-only", "patch", "workflow"] },
+                                            "coding": { "type": "string", "enum": ["read-only", "patch", "workflow"] },
+                                            "review": { "type": "string", "enum": ["read-only", "patch", "workflow"] }
+                                        },
+                                        "additionalProperties": false
+                                    },
+                                    "certificationSuiteVersion": { "type": "string", "minLength": 1 },
+                                    "certificationFreshnessDays": { "type": "integer", "minimum": 1 },
+                                    "canonicalArtifactIdentity": {
+                                        "type": "object",
+                                        "properties": {
+                                            "provider": { "type": "string", "minLength": 1 },
+                                            "model": { "type": "string", "minLength": 1 },
+                                            "suiteVersion": { "type": "string", "minLength": 1 }
+                                        },
+                                        "required": ["provider", "model", "suiteVersion"],
+                                        "additionalProperties": false
+                                    },
+                                    "lifecycle": { "type": "string", "enum": ["supported", "deprecated", "blocked"] },
+                                    "compatibilityFlags": {
+                                        "type": "object",
+                                        "additionalProperties": true
+                                    },
+                                    "limitations": {
+                                        "type": "array",
+                                        "items": { "type": "string" }
+                                    },
+                                    "launchEligible": { "type": "boolean" },
+                                    "routingEligible": { "type": "boolean" }
                                 },
                                 "additionalProperties": false
                             },

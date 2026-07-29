@@ -30,7 +30,7 @@ import {
   type RunScenariosOptions,
 } from '../shared/lib/native-agent/certification/scenario-runner.ts';
 import { resolveCertificationStorageIdentity } from '../shared/lib/native-agent/certification/identity.ts';
-import { writeCertification } from '../shared/lib/native-agent/certification/store.ts';
+import { writeGlobalCertification } from '../shared/lib/native-agent/certification/store.ts';
 import { getEffectiveRegistry, type ModelRegistry, type NativeProviderName } from '../shared/lib/model-registry.ts';
 import { resolveWavemillAliasFromOpenRouterId } from '../shared/lib/openrouter-catalog.ts';
 
@@ -44,7 +44,7 @@ export interface CertifyOptions {
   dryRun?: boolean;
   registry?: ModelRegistry;
   runScenariosFn?: typeof runScenarios;
-  writeCertificationFn?: typeof writeCertification;
+  writeCertificationFn?: typeof writeGlobalCertification | ((repoDir: string, record: NativeCertificationArtifact) => string);
   now?: () => Date;
 }
 
@@ -57,13 +57,14 @@ export interface CertifyResult {
   harnessPassed: boolean;
   liveCertifiable: boolean;
   artifactPath?: string;
+  artifactScope?: 'global';
   scenarios: Array<{ scenarioId: string; status: string; detail?: string }>;
   knownLimitations: string[];
 }
 
 export async function certifyNativeAgent(opts: CertifyOptions): Promise<CertifyResult> {
   const runScenariosFn = opts.runScenariosFn ?? runScenarios;
-  const writeCertificationFn = opts.writeCertificationFn ?? writeCertification;
+  const writeCertificationFn = opts.writeCertificationFn ?? writeGlobalCertification;
   const now = opts.now ?? (() => new Date());
   const dryRun = opts.dryRun ?? false;
 
@@ -139,7 +140,9 @@ export async function certifyNativeAgent(opts: CertifyOptions): Promise<CertifyR
         .map(toArtifactScenario),
       ...(knownLimitations.length > 0 ? { knownLimitations } : {}),
     };
-    artifactPath = writeCertificationFn(opts.repoDir, artifact);
+    artifactPath = writeCertificationFn.length >= 2
+      ? (writeCertificationFn as (repoDir: string, record: NativeCertificationArtifact) => string)(opts.repoDir, artifact)
+      : (writeCertificationFn as typeof writeGlobalCertification)(artifact);
   }
 
   return {
@@ -151,6 +154,7 @@ export async function certifyNativeAgent(opts: CertifyOptions): Promise<CertifyR
     harnessPassed: report.harnessPassed,
     liveCertifiable,
     artifactPath,
+    ...(artifactPath ? { artifactScope: 'global' as const } : {}),
     scenarios: report.results.map(r => ({
       scenarioId: r.scenarioId,
       status: r.status,
@@ -291,8 +295,8 @@ runTool({
       if (result.harnessPassed) {
         if (dryRun) {
           console.log('Dry-run PASSED. No artifact written.');
-        } else if (result.artifactPath) {
-          console.log(`CERTIFIED. Artifact: ${result.artifactPath}`);
+      } else if (result.artifactPath) {
+          console.log(`CERTIFIED. Artifact (${result.artifactScope ?? 'global'}): ${result.artifactPath}`);
         } else {
           console.log('Passed (not live-certifiable — no artifact written).');
         }

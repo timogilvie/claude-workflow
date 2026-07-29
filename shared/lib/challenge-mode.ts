@@ -1,5 +1,3 @@
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
 import type { ChallengeRecommendation, ChallengeStage } from './challenge-scheduler.ts';
 export type { ChallengeStage } from './challenge-scheduler.ts';
 import {
@@ -9,7 +7,7 @@ import {
 import { loadWavemillConfig, type ChallengeConfig, type RouterConfig } from './config.ts';
 import { isDeepSeekModel } from './deepseek-provider.ts';
 import { filterDisabledModels, isDisabledModel } from './disabled-models.ts';
-import { getEffectiveRegistry, getModel } from './model-registry.ts';
+import { getEffectiveRegistry, getModel, listSupportedModelsForStage } from './model-registry.ts';
 import { resolveAgent, tryResolveAgent, type AgentResolutionPhase } from './model-router.ts';
 import { filterOpenRouterModels } from './openrouter-provider.ts';
 import { listVariedRoutingDimensions, routingMetaFromChallengeEntry } from './challenge-comparison.ts';
@@ -18,6 +16,7 @@ import { routeChangedMaterially, type RouteArtifactSnapshot } from './route-arti
 import { routeWorkflow, type WorkflowRouteDecision } from './workflow-router.ts';
 import { filterNativeModels, type RouterCertificationRejection, type RouterRole } from './native-agent/certification/router-filter.ts';
 import { isPatchCodingEnabled } from './native-agent/coding-gate.ts';
+import { applyModelExclusions, type ModelExclusionDiagnostic } from './model-exclusions.ts';
 
 export type ChallengeRole = 'primary' | 'challenger';
 export type ChallengeDecisionSource = 'bootstrap' | 'expanded' | 'preserved';
@@ -86,6 +85,8 @@ export interface ChallengePairSelectionResult<T extends ChallengePairSelection =
   failureReason?: ChallengeSelectionFailureReason;
   /** Native models excluded from candidacy due to missing/stale/phase-insufficient cert */
   nativeCertificationRejections?: ChallengeNativeRejection[];
+  /** Models removed by repo/user exclusions */
+  modelExclusions?: ModelExclusionDiagnostic[];
 }
 
 /**
@@ -156,7 +157,6 @@ function filterImplementationLaunchableNativeCandidates(
 ): { models: string[]; rejections: ChallengeNativeRejection[] } {
   const registry = getEffectiveRegistry(repoDir);
   const gate = isPatchCodingEnabled(repoDir);
-  const hasCodingLauncher = existsSync(join(repoDir, 'tools', 'launch-native-coding.ts'));
   const models: string[] = [];
   const rejections: ChallengeNativeRejection[] = [];
 
@@ -167,7 +167,7 @@ function filterImplementationLaunchableNativeCandidates(
       continue;
     }
 
-    if (gate.enabled && hasCodingLauncher) {
+    if (gate.enabled) {
       models.push(modelId);
       continue;
     }
@@ -180,7 +180,7 @@ function filterImplementationLaunchableNativeCandidates(
       nativeCapability: nativeCapability.readOnlyNative,
       ...(nativeCapability.nativeProvider ? { nativeProvider: nativeCapability.nativeProvider } : {}),
       requiredSuiteVersion: nativeCapability.certification?.certificationSuiteVersion ?? '',
-      reason: 'insufficient-phase',
+      reason: 'no-native-capability',
     });
   }
 
@@ -217,8 +217,9 @@ function filterEligibleChallengeCandidates(
   stage: ChallengeStage,
   repoDir?: string,
   now?: Date,
-): { models: string[]; rejections: ChallengeNativeRejection[] } {
-  const { models: nativeEligible, rejections } = filterNativeChallengeCandidates(pool, stage, repoDir, now);
+): { models: string[]; rejections: ChallengeNativeRejection[]; exclusions: ModelExclusionDiagnostic[] } {
+  const exclusionFiltered = applyModelExclusions(pool, stage, repoDir);
+  const { models: nativeEligible, rejections } = filterNativeChallengeCandidates(exclusionFiltered.models, stage, repoDir, now);
   const implementationLaunchable = repoDir && stage === 'implementation'
     ? filterImplementationLaunchableNativeCandidates(nativeEligible, repoDir, now)
     : { models: nativeEligible, rejections: [] };
@@ -228,6 +229,7 @@ function filterEligibleChallengeCandidates(
   return {
     models: filterDisabledModels(uniqueNonEmpty(openRouterEligible)),
     rejections: [...rejections, ...implementationLaunchable.rejections],
+    exclusions: exclusionFiltered.exclusions,
   };
 }
 
@@ -248,6 +250,25 @@ function mergeRejections<T extends ChallengePairSelection>(
   }
   if (combined.length === 0) return result;
   return { ...result, nativeCertificationRejections: combined };
+}
+
+function mergeExclusions<T extends ChallengePairSelection>(
+  result: ChallengePairSelectionResult<T>,
+  additionalExclusions: ModelExclusionDiagnostic[],
+): ChallengePairSelectionResult<T> {
+  const combined: ModelExclusionDiagnostic[] = [];
+  const seen = new Set<string>();
+  for (const exclusion of [
+    ...additionalExclusions,
+    ...(result.modelExclusions || []),
+  ]) {
+    const key = `${exclusion.modelId}\u0000${exclusion.stage}\u0000${exclusion.source}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    combined.push(exclusion);
+  }
+  if (combined.length === 0) return result;
+  return { ...result, modelExclusions: combined };
 }
 
 function selectCertifiedImplementationPrimary(
@@ -315,6 +336,12 @@ export function filterDeepSeekChallengeModels(
 
 export function getChallengeModelPoolFromConfig(repoDir?: string): string[] {
   const config = loadWavemillConfig(repoDir);
+  if (!Array.isArray(config.challenge?.models) && repoDir) {
+    return filterDisabledModels(filterDeepSeekChallengeModels(
+      listSupportedModelsForStage('coding', getEffectiveRegistry(repoDir)),
+      config.challenge,
+    ).models);
+  }
   return getChallengeModelPool(config.challenge, config.router);
 }
 
@@ -560,10 +587,11 @@ export function pickChallengeModelsWithReason(
     now?: Date;
   } & ChallengeCoverageOptions,
 ): ChallengePairSelectionResult {
-  const { models: certifiedPool, rejections: poolRejections } =
+  const { models: certifiedPool, rejections: poolRejections, exclusions: poolExclusions } =
     filterEligibleChallengeCandidates(pool, 'implementation', opts.repoDir, opts.now);
   const uniquePool = filterDisabledModels(uniqueNonEmpty(certifiedPool));
   const allRejections: ChallengeNativeRejection[] = [...poolRejections];
+  const allExclusions: ModelExclusionDiagnostic[] = [...poolExclusions];
   const randomFn = opts.randomFn || Math.random;
   const defaultAgent = opts.defaultAgent || 'claude';
   const agentMap = opts.agentMap || {};
@@ -575,10 +603,11 @@ export function pickChallengeModelsWithReason(
 
   // Reject an externally-supplied primary that is an uncertified native
   if (primaryModel && opts.repoDir) {
-    const { models, rejections } = filterEligibleChallengeCandidates([primaryModel], 'implementation', opts.repoDir, opts.now);
+    const { models, rejections, exclusions } = filterEligibleChallengeCandidates([primaryModel], 'implementation', opts.repoDir, opts.now);
     if (rejections.length > 0) {
       allRejections.push(...rejections);
     }
+    allExclusions.push(...exclusions);
     if (models.length === 0) {
       primaryModel = '';
     }
@@ -586,23 +615,30 @@ export function pickChallengeModelsWithReason(
 
   if (!primaryModel) {
     if (!canRunChallenge(uniquePool)) {
-      return mergeRejections({ pair: null, failureReason: 'selection_failed' }, allRejections);
+      return mergeExclusions(
+        mergeRejections({ pair: null, failureReason: 'selection_failed' }, allRejections),
+        allExclusions,
+      );
     }
     const primaryIndex = Math.floor(randomFn() * uniquePool.length);
     primaryModel = uniquePool[primaryIndex] || '';
   }
 
   if (!primaryModel) {
-    return mergeRejections({ pair: null, failureReason: 'selection_failed' }, allRejections);
+    return mergeExclusions(
+      mergeRejections({ pair: null, failureReason: 'selection_failed' }, allRejections),
+      allExclusions,
+    );
   }
 
   // Reject a forced challenger that is an uncertified native
   let forcedChallengerModel = opts.forcedChallengerModel;
   if (forcedChallengerModel && opts.repoDir) {
-    const { models, rejections } = filterEligibleChallengeCandidates([forcedChallengerModel], 'implementation', opts.repoDir, opts.now);
+    const { models, rejections, exclusions } = filterEligibleChallengeCandidates([forcedChallengerModel], 'implementation', opts.repoDir, opts.now);
     if (rejections.length > 0) {
       allRejections.push(...rejections);
     }
+    allExclusions.push(...exclusions);
     if (models.length === 0) {
       forcedChallengerModel = undefined;
     }
@@ -615,7 +651,10 @@ export function pickChallengeModelsWithReason(
     recommendedChallengerModel: opts.recommendedChallengerModel,
   });
   if (!challengerSelection.model) {
-    return mergeRejections({ pair: null, failureReason: 'selection_failed' }, allRejections);
+    return mergeExclusions(
+      mergeRejections({ pair: null, failureReason: 'selection_failed' }, allRejections),
+      allExclusions,
+    );
   }
 
   const result = finalizeChallengePairWithReason(
@@ -636,7 +675,7 @@ export function pickChallengeModelsWithReason(
       recommendedChallengerModel: opts.recommendedChallengerModel,
     },
   );
-  return mergeRejections(result, allRejections);
+  return mergeExclusions(mergeRejections(result, allRejections), allExclusions);
 }
 
 /**
@@ -831,6 +870,7 @@ function finalizeChallengePairWithReason(
   }
 
   const allRejections: ChallengeNativeRejection[] = [];
+  const allExclusions: ModelExclusionDiagnostic[] = [];
 
   for (const stage of candidateStages(pair)) {
     const primaryVaried = primaryVariedModelForStage(pair, stage);
@@ -840,9 +880,10 @@ function finalizeChallengePairWithReason(
 
     // Re-filter the pool for the specific phase required by this candidate stage so that
     // a native model cert'd for patch cannot be selected for a plan (workflow-phase) slot.
-    const { models: stagePool, rejections: stageRejections } =
+    const { models: stagePool, rejections: stageRejections, exclusions: stageExclusions } =
       filterEligibleChallengeCandidates(pool, stage, repoDir, now);
     allRejections.push(...stageRejections);
+    allExclusions.push(...stageExclusions);
 
     const challengerSelection = chooseDistinctStageModel(stagePool, primaryVaried, forcedChallengerModel, randomFn, {
       ...selectionOpts,
@@ -866,11 +907,14 @@ function finalizeChallengePairWithReason(
         routingMetaFromChallengeEntry(repaired.challenger),
       ).length > 0
     ) {
-      return mergeRejections({ pair: repaired }, allRejections);
+      return mergeExclusions(mergeRejections({ pair: repaired }, allRejections), allExclusions);
     }
   }
 
-  return mergeRejections({ pair: null, failureReason: NO_VALID_CHALLENGE_DIVERGENCE_REASON }, allRejections);
+  return mergeExclusions(
+    mergeRejections({ pair: null, failureReason: NO_VALID_CHALLENGE_DIVERGENCE_REASON }, allRejections),
+    allExclusions,
+  );
 }
 
 export function pickChallengeWorkflows(
@@ -925,10 +969,14 @@ export function pickChallengeWorkflowsWithReason(
     randomFn,
   });
   const allRejections: ChallengeNativeRejection[] = [...primarySelection.rejections];
+  const allExclusions: ModelExclusionDiagnostic[] = [];
   if (!primarySelection.model) {
-    return mergeRejections(
-      { pair: null, failureReason: primarySelection.failureReason || 'selection_failed' },
-      allRejections,
+    return mergeExclusions(
+      mergeRejections(
+        { pair: null, failureReason: primarySelection.failureReason || 'selection_failed' },
+        allRejections,
+      ),
+      allExclusions,
     );
   }
   const primaryModel = primarySelection.model;
@@ -949,17 +997,19 @@ export function pickChallengeWorkflowsWithReason(
       : primaryModel;
 
   // Filter the candidate pool for the cert phase required by this stage
-  const { models: certifiedPool, rejections: nativeRejections } =
+  const { models: certifiedPool, rejections: nativeRejections, exclusions: stageExclusions } =
     filterEligibleChallengeCandidates(uniquePool, stage, opts.repoDir, opts.now);
   allRejections.push(...nativeRejections);
+  allExclusions.push(...stageExclusions);
 
   // Reject a forced challenger that is an uncertified native for this stage
   let forcedChallengerModel = opts.forcedChallengerModel;
   if (forcedChallengerModel && opts.repoDir) {
-    const { models, rejections } = filterEligibleChallengeCandidates([forcedChallengerModel], stage, opts.repoDir, opts.now);
+    const { models, rejections, exclusions } = filterEligibleChallengeCandidates([forcedChallengerModel], stage, opts.repoDir, opts.now);
     if (rejections.length > 0) {
       allRejections.push(...rejections);
     }
+    allExclusions.push(...exclusions);
     if (models.length === 0) {
       forcedChallengerModel = undefined;
     }
@@ -972,7 +1022,10 @@ export function pickChallengeWorkflowsWithReason(
     recommendedChallengerModel: opts.recommendedChallengerModel,
   });
   if (!challengerSelection.model) {
-    return mergeRejections({ pair: null, failureReason: 'selection_failed' }, allRejections);
+    return mergeExclusions(
+      mergeRejections({ pair: null, failureReason: 'selection_failed' }, allRejections),
+      allExclusions,
+    );
   }
   const challengerVaried = challengerSelection.model;
 
@@ -1034,7 +1087,7 @@ export function pickChallengeWorkflowsWithReason(
       recommendedChallengerModel: opts.recommendedChallengerModel,
     },
   );
-  return mergeRejections(result, allRejections);
+  return mergeExclusions(mergeRejections(result, allRejections), allExclusions);
 }
 
 function resolveOptionalAgent(
@@ -1171,7 +1224,10 @@ function buildPairFromRouteSnapshotWithReason(
         recommendedChallengerModel: opts.recommendedChallengerModel,
       },
     );
-    return mergeRejections(result, selection.nativeCertificationRejections || []);
+    return mergeExclusions(
+      mergeRejections(result, selection.nativeCertificationRejections || []),
+      selection.modelExclusions || [],
+    );
   }
 
   const primarySelection = selectCertifiedImplementationPrimary(pool, requestedPrimaryCoder, {
@@ -1180,26 +1236,32 @@ function buildPairFromRouteSnapshotWithReason(
     randomFn: opts.randomFn || Math.random,
   });
   const allRejections: ChallengeNativeRejection[] = [...primarySelection.rejections];
+  const allExclusions: ModelExclusionDiagnostic[] = [];
   if (!primarySelection.model) {
-    return mergeRejections(
-      { pair: null, failureReason: primarySelection.failureReason || 'selection_failed' },
-      allRejections,
+    return mergeExclusions(
+      mergeRejections(
+        { pair: null, failureReason: primarySelection.failureReason || 'selection_failed' },
+        allRejections,
+      ),
+      allExclusions,
     );
   }
   const primaryCoder = primarySelection.model;
 
   // Filter pool for the non-implementation stage's cert requirements
-  const { models: certifiedPool, rejections: nativeRejections } =
+  const { models: certifiedPool, rejections: nativeRejections, exclusions: stageExclusions } =
     filterEligibleChallengeCandidates(uniqueNonEmpty(pool), stage, opts.repoDir, opts.now);
   allRejections.push(...nativeRejections);
+  allExclusions.push(...stageExclusions);
 
   // Reject a forced challenger that is an uncertified native for this stage
   let forcedChallengerModel = opts.forcedChallengerModel;
   if (forcedChallengerModel && opts.repoDir) {
-    const { models, rejections } = filterEligibleChallengeCandidates([forcedChallengerModel], stage, opts.repoDir, opts.now);
+    const { models, rejections, exclusions } = filterEligibleChallengeCandidates([forcedChallengerModel], stage, opts.repoDir, opts.now);
     if (rejections.length > 0) {
       allRejections.push(...rejections);
     }
+    allExclusions.push(...exclusions);
     if (models.length === 0) {
       forcedChallengerModel = undefined;
     }
@@ -1218,7 +1280,10 @@ function buildPairFromRouteSnapshotWithReason(
     },
   );
   if (!challengerSelection.model) {
-    return mergeRejections({ pair: null, failureReason: 'selection_failed' }, allRejections);
+    return mergeExclusions(
+      mergeRejections({ pair: null, failureReason: 'selection_failed' }, allRejections),
+      allExclusions,
+    );
   }
   const challengerVaried = challengerSelection.model;
 
@@ -1250,7 +1315,7 @@ function buildPairFromRouteSnapshotWithReason(
       recommendedChallengerModel: opts.recommendedChallengerModel,
     },
   );
-  return mergeRejections(result, allRejections);
+  return mergeExclusions(mergeRejections(result, allRejections), allExclusions);
 }
 
 export function pickChallengeWorkflowsWithContext(
@@ -1319,6 +1384,7 @@ export function pickChallengeWorkflowsWithContextAndReason(
         },
       },
       ...(selection.nativeCertificationRejections ? { nativeCertificationRejections: selection.nativeCertificationRejections } : {}),
+      ...(selection.modelExclusions ? { modelExclusions: selection.modelExclusions } : {}),
     };
   }
 
@@ -1339,6 +1405,7 @@ export function pickChallengeWorkflowsWithContextAndReason(
         },
       },
       ...(selection.nativeCertificationRejections ? { nativeCertificationRejections: selection.nativeCertificationRejections } : {}),
+      ...(selection.modelExclusions ? { modelExclusions: selection.modelExclusions } : {}),
     };
   }
 
@@ -1361,6 +1428,7 @@ export function pickChallengeWorkflowsWithContextAndReason(
         },
       },
       ...(selection.nativeCertificationRejections ? { nativeCertificationRejections: selection.nativeCertificationRejections } : {}),
+      ...(selection.modelExclusions ? { modelExclusions: selection.modelExclusions } : {}),
     };
   }
 
@@ -1383,6 +1451,7 @@ export function pickChallengeWorkflowsWithContextAndReason(
       },
     },
     ...(selection.nativeCertificationRejections ? { nativeCertificationRejections: selection.nativeCertificationRejections } : {}),
+    ...(selection.modelExclusions ? { modelExclusions: selection.modelExclusions } : {}),
   };
 }
 

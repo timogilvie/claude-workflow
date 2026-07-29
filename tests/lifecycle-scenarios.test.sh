@@ -149,6 +149,8 @@ for fn in \
   write_native_launch_failure_artifact \
   emit_native_launch_failure_attention \
   resolve_stage_result_model \
+  coding_pane_replacement_intent_path \
+  record_coding_pane_replacement_intent \
   quarantine_completed_coding_pane \
   ready_queue_state \
   merge_queue_enabled \

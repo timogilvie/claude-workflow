@@ -58,6 +58,7 @@ import {
   isRouterCapabilityFilteringEnabled,
   getQuotaConfig,
   getRuntimeResourceSelectionConfig,
+  getEffectiveModelExclusions,
 } from './config.ts';
 
 // ────────────────────────────────────────────────────────────────
@@ -3380,6 +3381,47 @@ test('configs that omit nativeAgent providers still validate', () => {
     const config = loadWavemillConfig(tmp);
     assert.deepEqual(config.nativeAgent, {});
     assert.equal(config.integration?.enabled, false);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('modelExclusions validates and preserves repo/local source diagnostics', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      modelExclusions: [
+        { model: 'qwen-3-coder', stages: ['coding'], reason: 'cost' },
+      ],
+    }));
+    writeFileSync(join(tmp, '.wavemill-config.local.json'), JSON.stringify({
+      modelExclusions: [
+        { model: 'gpt-5.5', stages: ['reviewer'], reason: 'policy' },
+      ],
+    }), 'utf-8');
+
+    assert.deepEqual(getEffectiveModelExclusions(tmp), [
+      { model: 'qwen-3-coder', stages: ['coding'], reason: 'cost', source: 'repo' },
+      { model: 'gpt-5.5', stages: ['reviewer'], reason: 'policy', source: 'local' },
+    ]);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('modelExclusions rejects invalid stages', () => {
+  if (!hasAjv) return;
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      modelExclusions: [
+        { model: 'gpt-5.5', stages: ['unknown-stage'] },
+      ],
+    }));
+
+    assert.throws(() => loadWavemillConfig(tmp), /validation failed/);
   } finally {
     cleanUp(tmp);
   }

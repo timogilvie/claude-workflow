@@ -14,6 +14,7 @@ import {
   evaluateRegistryPhaseEligibility,
   evaluateNativeReadOnlyRouting,
   FAMILY_ALIASES,
+  explainModelSupportExclusion,
   getConfiguredModelsForDescriptor,
   getConfiguredModelsForDescriptorStage,
   configuredDeepSeekModelIds,
@@ -21,6 +22,7 @@ import {
   getEffectiveRegistry,
   getLadder,
   getModel,
+  getRequiredCertificationPhaseForStage,
   isKnownModelId,
   isReadOnlyNativeCapable,
   mergeModelRegistry,
@@ -31,7 +33,9 @@ import {
   parseModelSelector,
   rankCandidates,
   REVIEWER_ALIAS_MAP,
+  resolveProviderNativeModelId,
   resolveSelector,
+  listSupportedModelsForStage,
   satisfiesCapabilities,
   validateNativeCapability,
   validateModelId,
@@ -116,6 +120,22 @@ function makeCapabilities(
               : undefined,
           }
           : undefined,
+      }
+      : undefined,
+    supportedModel: overrides.supportedModel
+      ? {
+        ...overrides.supportedModel,
+        stages: overrides.supportedModel.stages ? [...overrides.supportedModel.stages] : undefined,
+        requiredCertificationPhaseByStage: overrides.supportedModel.requiredCertificationPhaseByStage
+          ? { ...overrides.supportedModel.requiredCertificationPhaseByStage }
+          : undefined,
+        canonicalArtifactIdentity: overrides.supportedModel.canonicalArtifactIdentity
+          ? { ...overrides.supportedModel.canonicalArtifactIdentity }
+          : undefined,
+        compatibilityFlags: overrides.supportedModel.compatibilityFlags
+          ? { ...overrides.supportedModel.compatibilityFlags }
+          : undefined,
+        limitations: overrides.supportedModel.limitations ? [...overrides.supportedModel.limitations] : undefined,
       }
       : undefined,
   };
@@ -2131,5 +2151,70 @@ describe('resolveSelectorWithPolicy', () => {
     );
 
     assert.equal(resolved.resolved, 'claude-sonnet-5');
+  });
+});
+
+describe('canonical supported-model helpers', () => {
+  it('lists supported stage-compatible models and excludes blocked lifecycle entries', () => {
+    const registry: ModelRegistry = {
+      models: {
+        'native-coder': makeCapabilities({
+          qualityScores: { coding: 90, planning: 10 },
+          supportedModel: {
+            lifecycle: 'supported',
+            stages: ['coding'],
+            routingEligible: true,
+          },
+        }),
+        'blocked-coder': makeCapabilities({
+          qualityScores: { coding: 95 },
+          supportedModel: {
+            lifecycle: 'blocked',
+            stages: ['coding'],
+          },
+        }),
+        'planner-only': makeCapabilities({
+          qualityScores: { planning: 90, coding: 0 },
+          supportedModel: {
+            lifecycle: 'supported',
+            stages: ['planning'],
+          },
+        }),
+      },
+      ladders: {},
+    };
+
+    assert.deepEqual(listSupportedModelsForStage('coder', registry), ['native-coder']);
+    assert.equal(explainModelSupportExclusion('blocked-coder', 'coding', registry), 'blocked-lifecycle');
+    assert.equal(explainModelSupportExclusion('planner-only', 'coding', registry), 'stage-incompatible');
+  });
+
+  it('resolves provider-native identity and required phase metadata', () => {
+    const registry: ModelRegistry = {
+      models: {
+        'wavemill-alias': makeCapabilities({
+          supportedModel: {
+            wavemillAlias: 'wavemill-alias',
+            providerNativeId: 'provider/native-id',
+            provider: 'openrouter',
+            transport: 'openai-completions',
+            requiredCertificationPhaseByStage: {
+              coding: 'patch',
+              planning: 'workflow',
+            },
+          },
+        }),
+      },
+      ladders: {},
+    };
+
+    assert.deepEqual(resolveProviderNativeModelId('wavemill-alias', registry), {
+      wavemillAlias: 'wavemill-alias',
+      providerNativeId: 'provider/native-id',
+      provider: 'openrouter',
+      transport: 'openai-completions',
+    });
+    assert.equal(getRequiredCertificationPhaseForStage('wavemill-alias', 'coder', registry), 'patch');
+    assert.equal(getRequiredCertificationPhaseForStage('wavemill-alias', 'planner', registry), 'workflow');
   });
 });

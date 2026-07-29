@@ -7,6 +7,11 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { buildCertificationPath } from '../shared/lib/native-agent/certification/loader.ts';
 import { resolveCertificationStorageIdentity } from '../shared/lib/native-agent/certification/identity.ts';
+import {
+  PATCH_CODING_CERTIFICATION_SCHEMA_VERSION,
+  getPatchCodingCertificationPath,
+} from '../shared/lib/native-agent/coding-certification.ts';
+import { PATCH_CODING_SMOKE_SUITE_REVISION } from '../shared/lib/native-agent/smoke.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const resolveChallengeTaskTool = resolve(__dirname, 'resolve-challenge-task.ts');
@@ -48,6 +53,21 @@ function writeCertArtifact(
     suiteVersion,
     certifiedAt: CERT_DATE_FRESH,
     scenarios: [{ scenarioId: 's1', passed: true }],
+  }), 'utf-8');
+}
+
+function writePatchCodingCertification(repoDir: string) {
+  const certificationPath = getPatchCodingCertificationPath(repoDir);
+  mkdirSync(dirname(certificationPath), { recursive: true });
+  writeFileSync(certificationPath, JSON.stringify({
+    schemaVersion: PATCH_CODING_CERTIFICATION_SCHEMA_VERSION,
+    certified: true,
+    smokeSuiteRevision: PATCH_CODING_SMOKE_SUITE_REVISION,
+    certifiedAt: CERT_DATE_FRESH,
+    providers: [
+      { provider: 'openai', model: 'native-certified', passed: true },
+      { provider: 'openrouter', model: 'qwen/qwen3-coder', passed: true },
+    ],
   }), 'utf-8');
 }
 
@@ -108,43 +128,57 @@ function makeEvalRecord(id: string, coder: string) {
   };
 }
 
-function makeRepo(coderHistory: string[]): string {
+function makeRepo(coderHistory: string[], opts: {
+  patchCodingEnabled?: boolean;
+  aliases?: string[];
+  suiteVersion?: string;
+  certificationPhase?: string;
+} = {}): string {
   const repoDir = mkdtempSync(join(tmpdir(), 'resolve-challenge-task-'));
+  const aliases = opts.aliases ?? ['qwen-3-coder', 'glm-5.2'];
+  const suiteVersion = opts.suiteVersion ?? 'v1';
+  const certificationPhase = opts.certificationPhase ?? 'workflow';
   mkdirSync(join(repoDir, '.wavemill', 'evals'), { recursive: true });
   writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
     challenge: {
       enabled: true,
       rate: 1,
       recommendationRate: 1,
-      models: ['claude-sonnet-4-6', 'qwen-3-coder', 'glm-5.2'],
+      models: ['claude-sonnet-4-6', ...aliases],
     },
     router: {
       defaultAgent: 'claude',
-      models: ['claude-sonnet-4-6', 'qwen-3-coder', 'glm-5.2'],
+      models: ['claude-sonnet-4-6', ...aliases],
       agentMap: {
         'claude-sonnet-4-6': 'claude',
-        'qwen-3-coder': 'codex',
-        'glm-5.2': 'codex',
+        ...Object.fromEntries(aliases.map((alias) => [alias, 'native-openrouter'])),
       },
     },
+    ...(opts.patchCodingEnabled
+      ? { nativeAgent: { patchCoding: { enabled: true } } }
+      : {}),
     modelRegistry: {
-      models: {
-        'qwen-3-coder': openRouterNativeModelEntry(),
-        'glm-5.2': openRouterNativeModelEntry(),
-      },
+      models: Object.fromEntries(aliases.map((alias) => [
+        alias,
+        openRouterNativeModelEntry(certificationPhase, suiteVersion),
+      ])),
     },
     providers: {
       openrouter: {
         enabled: true,
         apiKeyEnv: 'TEST_RESOLVE_OPENROUTER_KEY',
-        models: ['qwen-3-coder', 'glm-5.2'],
+        models: aliases,
         stages: ['coder'],
       },
     },
   }), 'utf-8');
   writeFileSync(join(repoDir, '.env'), 'TEST_RESOLVE_OPENROUTER_KEY=test-key\n', 'utf-8');
-  writeCertArtifact(repoDir, 'openrouter', 'qwen-3-coder', 'v1');
-  writeCertArtifact(repoDir, 'openrouter', 'glm-5.2', 'v1');
+  for (const alias of aliases) {
+    writeCertArtifact(repoDir, 'openrouter', alias, suiteVersion, certificationPhase);
+  }
+  if (opts.patchCodingEnabled) {
+    writePatchCodingCertification(repoDir);
+  }
   writeFileSync(
     join(repoDir, '.wavemill', 'evals', 'evals.jsonl'),
     `${coderHistory.map((coder, index) => JSON.stringify(makeEvalRecord(String(index + 1), coder))).join('\n')}\n`,
@@ -179,6 +213,38 @@ describe('resolve-challenge-task CLI', () => {
       assert.equal(result.reason, 'selection_failed');
       const single = result.single as Record<string, unknown>;
       assert.equal(single.model, 'claude-sonnet-4-6');
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns challenge mode for HOK-2569 v2 native patch OpenRouter challengers', () => {
+    const aliases = ['qwen-3-coder', 'glm-5.2', 'kimi-k2.7-code'];
+    const repoDir = makeRepo([], {
+      aliases,
+      patchCodingEnabled: true,
+      suiteVersion: 'v2',
+      certificationPhase: 'patch',
+    });
+    try {
+      const result = runResolveChallengeTask(repoDir, [
+        '--issue', 'HOK-CONFIG-VERIFY',
+        '--slug', 'config-verify',
+        '--title', 'Configuration verification',
+        '--primary-model', 'claude-sonnet-4-6',
+        '--remaining-slots', '2',
+        '--repo-dir', repoDir,
+      ]);
+
+      assert.equal(result.mode, 'challenge');
+      assert.equal(result.slotsRequired, 2);
+      assert.equal(result.challengeStage, 'implementation');
+      const entries = result.entries as Array<Record<string, unknown>>;
+      assert.equal(entries.length, 2);
+      const challenger = entries.find((entry) => entry.role === 'challenger');
+      assert.ok(challenger);
+      assert.ok(aliases.includes(challenger!.model as string), 'challenger should be a configured native alias');
+      assert.equal(result.nativeCertificationRejections, undefined);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }

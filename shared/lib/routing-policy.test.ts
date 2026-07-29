@@ -179,17 +179,14 @@ describe('routing-policy ranking', () => {
     const ranked = resolveModel({
       taskType: 'coding',
       difficulty: 'critical',
-      quotaState: makeSnapshot({
-        'claude-fable-5': 'exhausted',
-        'claude-opus-4-7': 'exhausted',
-        'claude-opus-4-6': 'exhausted',
-        'gpt-5.5': 'exhausted',
-        'gpt-5.4': 'exhausted',
-        'claude-opus-4-8': 'exhausted',
-      }),
+      quotaState: makeSnapshot(Object.fromEntries(
+        Object.entries(DEFAULT_MODEL_REGISTRY.models)
+          .filter(([, model]) => model.class === 'frontier')
+          .map(([modelId]) => [modelId, 'exhausted']),
+      )),
     });
 
-    assert.equal(ranked[0].modelId, 'claude-sonnet-5');
+    assert.equal(DEFAULT_MODEL_REGISTRY.models[ranked[0].modelId]?.class, 'strong_generalist');
     assert.equal(ranked[0].viable, true);
     const haiku = ranked.find((candidate) => candidate.modelId === 'claude-haiku-4-5-20251001');
     assert.ok(haiku);

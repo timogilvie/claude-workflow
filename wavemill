@@ -486,6 +486,36 @@ run_mill() {
   exec "$BASH" "$mill_script" "$@"
 }
 
+validate_mill_model_override() {
+  local env_name="$1"
+  local model="$2"
+  local label="$3"
+  local validator="$LIB_DIR/model-validator.ts"
+
+  [[ -n "$model" ]] || return 0
+  if [[ ! -f "$validator" ]]; then
+    echo -e "${RED}Error:${NC} model validation requires $validator" >&2
+    exit 1
+  fi
+
+  if command -v tsx >/dev/null 2>&1; then
+    if tsx "$validator" --selector-token "$model" "$PWD" >/dev/null; then
+      return 0
+    fi
+  elif command -v npx >/dev/null 2>&1; then
+    if npx tsx "$validator" --selector-token "$model" "$PWD" >/dev/null; then
+      return 0
+    fi
+  else
+    echo -e "${RED}Error:${NC} model validation requires tsx or npx" >&2
+    exit 1
+  fi
+
+  echo -e "${RED}Error:${NC} Invalid $env_name: $model" >&2
+  echo "  $label must be a supported model selector or model ID." >&2
+  exit 1
+}
+
 run_init() {
   local target=".wavemill-config.json"
   local context_exists=false
@@ -1421,6 +1451,10 @@ case "${1:-}" in
       echo -e "${RED}Error:${NC} --model cannot be combined with --planner-model, --coder-model, or --reviewer-model" >&2
       exit 1
     fi
+    validate_mill_model_override "FORCE_MODEL" "$mill_force_model" "--model"
+    validate_mill_model_override "WAVEMILL_PLANNER_MODEL" "$mill_planner_model" "--planner-model"
+    validate_mill_model_override "WAVEMILL_CODER_MODEL" "$mill_coder_model" "--coder-model"
+    validate_mill_model_override "WAVEMILL_REVIEWER_MODEL" "$mill_reviewer_model" "--reviewer-model"
     [[ -n "$mill_force_model" ]] && export FORCE_MODEL="$mill_force_model"
     [[ -n "$mill_planner_model" ]] && export WAVEMILL_PLANNER_MODEL="$mill_planner_model"
     [[ -n "$mill_coder_model" ]] && export WAVEMILL_CODER_MODEL="$mill_coder_model"

@@ -27,6 +27,8 @@ export const CHANNELS: readonly Channel[] = Object.freeze(['stable', 'preview', 
 export type NativeProviderName = 'openai' | 'openrouter';
 export type PiTransportKind = 'openai-responses' | 'openai-completions';
 export type ReadOnlyNativeCapability = 'certified' | 'unsupported' | 'partial';
+export type ModelLifecycleStatus = 'supported' | 'deprecated' | 'blocked';
+export type SupportedModelStage = 'expansion' | 'planning' | 'coding' | 'review';
 export type AgentType =
   | 'claude'
   | 'codex'
@@ -76,6 +78,27 @@ export interface NativeCapability {
   certification?: NativeCertificationMetadata;
 }
 
+export interface SupportedModelMetadata {
+  wavemillAlias?: string;
+  providerNativeId?: string;
+  provider?: NativeProviderName;
+  transport?: PiTransportKind;
+  stages?: SupportedModelStage[];
+  requiredCertificationPhaseByStage?: Partial<Record<SupportedModelStage, CertificationPhase>>;
+  certificationSuiteVersion?: string;
+  certificationFreshnessDays?: number;
+  canonicalArtifactIdentity?: {
+    provider: string;
+    model: string;
+    suiteVersion: string;
+  };
+  lifecycle?: ModelLifecycleStatus;
+  compatibilityFlags?: PiCompatFlags;
+  limitations?: string[];
+  launchEligible?: boolean;
+  routingEligible?: boolean;
+}
+
 /** Account/surface capability for hosted Codex launches (not native OpenAI). */
 export interface CodexChatgptCapability {
   supported: boolean;
@@ -106,6 +129,7 @@ export interface ModelCapabilities {
   agent?: AgentType;
   codexChatgptCapability?: CodexChatgptCapability;
   nativeCapability?: NativeCapability;
+  supportedModel?: SupportedModelMetadata;
   /**
    * ISO date the model became generally available. Drives the recency-aware
    * exploration boost (router.exploration.newModelBoost) and challenge
@@ -151,6 +175,8 @@ const DESCRIPTOR_STAGE_TO_TASK_TYPE: Record<DescriptorModelStage, RegistryTaskTy
 const READ_ONLY_NATIVE_CAPABILITIES: readonly ReadOnlyNativeCapability[] = ['certified', 'unsupported', 'partial'];
 const PI_TRANSPORT_KINDS: readonly PiTransportKind[] = ['openai-responses', 'openai-completions'];
 const CERTIFICATION_PHASES: readonly CertificationPhase[] = PHASE_ORDER;
+const MODEL_LIFECYCLE_STATUSES: readonly ModelLifecycleStatus[] = ['supported', 'deprecated', 'blocked'];
+const SUPPORTED_MODEL_STAGES: readonly SupportedModelStage[] = ['expansion', 'planning', 'coding', 'review'];
 const UNSAFE_CERTIFICATION_SEGMENT = /[/\\.\0]/;
 const OPENROUTER_CERTIFICATION_SEED = Object.freeze({
   maxCertifiedPhase: 'workflow' as const,
@@ -272,7 +298,36 @@ function cloneCapabilities(capabilities: ModelCapabilities): ModelCapabilities {
     agent: capabilities.agent,
     codexChatgptCapability: cloneCodexChatgptCapability(capabilities.codexChatgptCapability),
     nativeCapability: cloneNativeCapability(capabilities.nativeCapability),
+    supportedModel: cloneSupportedModelMetadata(capabilities.supportedModel),
     releasedAt: capabilities.releasedAt,
+  };
+}
+
+function cloneSupportedModelMetadata(
+  metadata: SupportedModelMetadata | undefined,
+): SupportedModelMetadata | undefined {
+  if (!metadata) {
+    return undefined;
+  }
+  return {
+    wavemillAlias: metadata.wavemillAlias,
+    providerNativeId: metadata.providerNativeId,
+    provider: metadata.provider,
+    transport: metadata.transport,
+    stages: metadata.stages ? [...metadata.stages] : undefined,
+    requiredCertificationPhaseByStage: metadata.requiredCertificationPhaseByStage
+      ? { ...metadata.requiredCertificationPhaseByStage }
+      : undefined,
+    certificationSuiteVersion: metadata.certificationSuiteVersion,
+    certificationFreshnessDays: metadata.certificationFreshnessDays,
+    canonicalArtifactIdentity: metadata.canonicalArtifactIdentity
+      ? { ...metadata.canonicalArtifactIdentity }
+      : undefined,
+    lifecycle: metadata.lifecycle,
+    compatibilityFlags: metadata.compatibilityFlags ? { ...metadata.compatibilityFlags } : undefined,
+    limitations: metadata.limitations ? [...metadata.limitations] : undefined,
+    launchEligible: metadata.launchEligible,
+    routingEligible: metadata.routingEligible,
   };
 }
 
@@ -441,6 +496,37 @@ function mergeCapabilities(
     nativeCapability: override.nativeCapability
       ? mergeNativeCapability(seed.nativeCapability, override.nativeCapability)
       : cloneNativeCapability(seed.nativeCapability),
+    supportedModel: override.supportedModel
+      ? {
+        ...cloneSupportedModelMetadata(seed.supportedModel),
+        ...override.supportedModel,
+        stages: override.supportedModel.stages
+          ? [...override.supportedModel.stages]
+          : seed.supportedModel?.stages
+          ? [...seed.supportedModel.stages]
+          : undefined,
+        requiredCertificationPhaseByStage: override.supportedModel.requiredCertificationPhaseByStage
+          ? { ...override.supportedModel.requiredCertificationPhaseByStage }
+          : seed.supportedModel?.requiredCertificationPhaseByStage
+          ? { ...seed.supportedModel.requiredCertificationPhaseByStage }
+          : undefined,
+        canonicalArtifactIdentity: override.supportedModel.canonicalArtifactIdentity
+          ? { ...override.supportedModel.canonicalArtifactIdentity }
+          : seed.supportedModel?.canonicalArtifactIdentity
+          ? { ...seed.supportedModel.canonicalArtifactIdentity }
+          : undefined,
+        compatibilityFlags: override.supportedModel.compatibilityFlags
+          ? { ...override.supportedModel.compatibilityFlags }
+          : seed.supportedModel?.compatibilityFlags
+          ? { ...seed.supportedModel.compatibilityFlags }
+          : undefined,
+        limitations: override.supportedModel.limitations
+          ? [...override.supportedModel.limitations]
+          : seed.supportedModel?.limitations
+          ? [...seed.supportedModel.limitations]
+          : undefined,
+      }
+      : cloneSupportedModelMetadata(seed.supportedModel),
     releasedAt: override.releasedAt ?? seed.releasedAt,
   };
 }
@@ -844,6 +930,14 @@ function isCertificationPhaseValue(value: unknown): value is CertificationPhase 
   return typeof value === 'string' && (CERTIFICATION_PHASES as readonly string[]).includes(value);
 }
 
+function isSupportedModelStageValue(value: unknown): value is SupportedModelStage {
+  return typeof value === 'string' && (SUPPORTED_MODEL_STAGES as readonly string[]).includes(value);
+}
+
+function isModelLifecycleStatusValue(value: unknown): value is ModelLifecycleStatus {
+  return typeof value === 'string' && (MODEL_LIFECYCLE_STATUSES as readonly string[]).includes(value);
+}
+
 function isSafeCertificationSuiteVersion(value: string): boolean {
   return value.length > 0 && !UNSAFE_CERTIFICATION_SEGMENT.test(value);
 }
@@ -968,9 +1062,57 @@ export function validateNativeCapability(
   }
 }
 
+export function validateSupportedModelMetadata(
+  modelId: string,
+  capabilities: Pick<ModelCapabilities, 'supportedModel' | 'nativeCapability'>,
+): void {
+  const metadata = capabilities.supportedModel;
+  if (!metadata) {
+    return;
+  }
+
+  if (metadata.lifecycle !== undefined && !isModelLifecycleStatusValue(metadata.lifecycle)) {
+    throw new ModelValidationError(
+      modelId,
+      `model ${modelId}: supportedModel.lifecycle must be one of ${MODEL_LIFECYCLE_STATUSES.join(', ')}`,
+    );
+  }
+
+  if (metadata.stages !== undefined) {
+    if (!Array.isArray(metadata.stages) || !metadata.stages.every(isSupportedModelStageValue)) {
+      throw new ModelValidationError(
+        modelId,
+        `model ${modelId}: supportedModel.stages must contain only ${SUPPORTED_MODEL_STAGES.join(', ')}`,
+      );
+    }
+  }
+
+  for (const [stage, phase] of Object.entries(metadata.requiredCertificationPhaseByStage ?? {})) {
+    if (!isSupportedModelStageValue(stage) || !isCertificationPhaseValue(phase)) {
+      throw new ModelValidationError(
+        modelId,
+        `model ${modelId}: supportedModel.requiredCertificationPhaseByStage has an invalid stage or phase`,
+      );
+    }
+  }
+
+  const identity = metadata.canonicalArtifactIdentity;
+  if (identity) {
+    for (const [name, value] of Object.entries(identity)) {
+      if (typeof value !== 'string' || !isSafeCertificationSuiteVersion(value)) {
+        throw new ModelValidationError(
+          modelId,
+          `model ${modelId}: supportedModel.canonicalArtifactIdentity.${name} must be a non-empty safe path segment`,
+        );
+      }
+    }
+  }
+}
+
 export function assertRegistryConsistency(registry: ModelRegistry): void {
   for (const [modelId, capabilities] of Object.entries(registry.models)) {
     validateNativeCapability(modelId, capabilities);
+    validateSupportedModelMetadata(modelId, capabilities);
   }
 }
 
@@ -1895,6 +2037,89 @@ export function mergeModelRegistry(
 
 export function getEffectiveRegistry(repoDir?: string): ModelRegistry {
   return mergeModelRegistry(DEFAULT_MODEL_REGISTRY, getModelRegistryConfig(repoDir));
+}
+
+export function normalizeSupportedModelStage(stage: SupportedModelStage | DescriptorModelStage | RegistryTaskType): SupportedModelStage {
+  if (stage === 'planner') return 'planning';
+  if (stage === 'coder') return 'coding';
+  if (stage === 'reviewer') return 'review';
+  if (stage === 'routing' || stage === 'classify') return 'planning';
+  return stage;
+}
+
+export function getRequiredCertificationPhaseForStage(
+  modelId: string,
+  stage: SupportedModelStage | DescriptorModelStage | RegistryTaskType,
+  registry: ModelRegistry = getEffectiveRegistry(),
+): CertificationPhase | undefined {
+  const normalized = normalizeSupportedModelStage(stage);
+  const capabilities = getModel(registry, modelId);
+  const explicit = capabilities?.supportedModel?.requiredCertificationPhaseByStage?.[normalized];
+  if (explicit) {
+    return explicit;
+  }
+  if (!capabilities?.nativeCapability) {
+    return undefined;
+  }
+  if (normalized === 'coding') return 'patch';
+  if (normalized === 'planning') return 'workflow';
+  return 'read-only';
+}
+
+export function resolveProviderNativeModelId(
+  modelId: string,
+  registry: ModelRegistry = getEffectiveRegistry(),
+): { wavemillAlias: string; providerNativeId: string; provider?: NativeProviderName; transport?: PiTransportKind } | undefined {
+  const capabilities = getModel(registry, modelId);
+  if (!capabilities) {
+    return undefined;
+  }
+  return {
+    wavemillAlias: capabilities.supportedModel?.wavemillAlias ?? modelId,
+    providerNativeId: capabilities.supportedModel?.providerNativeId ?? modelId,
+    provider: capabilities.supportedModel?.provider ?? capabilities.nativeCapability?.nativeProvider,
+    transport: capabilities.supportedModel?.transport ?? capabilities.nativeCapability?.piTransportKind,
+  };
+}
+
+export function explainModelSupportExclusion(
+  modelId: string,
+  stage: SupportedModelStage | DescriptorModelStage | RegistryTaskType,
+  registry: ModelRegistry = getEffectiveRegistry(),
+): string | undefined {
+  const capabilities = getModel(registry, modelId);
+  if (!capabilities) {
+    return 'unknown-model';
+  }
+  const lifecycle = capabilities.supportedModel?.lifecycle ?? 'supported';
+  if (lifecycle === 'blocked') return 'blocked-lifecycle';
+  if (capabilities.disabled === true) return 'disabled';
+  const normalized = normalizeSupportedModelStage(stage);
+  const configuredStages = capabilities.supportedModel?.stages;
+  if (configuredStages && !configuredStages.includes(normalized)) {
+    return 'stage-incompatible';
+  }
+  if ((capabilities.supportedModel?.routingEligible ?? true) === false) {
+    return 'routing-ineligible';
+  }
+  return undefined;
+}
+
+export function listSupportedModelsForStage(
+  stage: SupportedModelStage | DescriptorModelStage | RegistryTaskType,
+  registry: ModelRegistry = getEffectiveRegistry(),
+): string[] {
+  const normalized = normalizeSupportedModelStage(stage);
+  return Object.entries(registry.models)
+    .filter(([modelId]) => explainModelSupportExclusion(modelId, normalized, registry) === undefined)
+    .filter(([, capabilities]) => {
+      const configuredStages = capabilities.supportedModel?.stages;
+      if (configuredStages) {
+        return configuredStages.includes(normalized);
+      }
+      return (capabilities.qualityScores[normalized] ?? 0) > 0;
+    })
+    .map(([modelId]) => modelId);
 }
 
 /**

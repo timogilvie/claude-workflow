@@ -664,7 +664,7 @@ describe('native provider certification artifacts', () => {
     }
   });
 
-  it('maps malformed artifacts to missing_artifact for provider resolution', () => {
+  it('maps malformed artifacts to malformed_artifact for provider resolution', () => {
     const { repoDir, cleanup } = makeRepo();
     try {
       const path = buildCertificationPath(repoDir, 'openai', 'gpt-4o', 'v1');
@@ -683,7 +683,7 @@ describe('native provider certification artifacts', () => {
 
       assert(entry);
       assert.equal(entry.status, 'uncertified');
-      assert.equal(entry.rejectionReason, 'missing_artifact');
+      assert.equal(entry.rejectionReason, 'malformed_artifact');
     } finally {
       cleanup();
     }

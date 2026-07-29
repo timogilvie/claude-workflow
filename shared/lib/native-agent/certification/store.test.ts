@@ -9,10 +9,13 @@ import {
 } from './schema.ts';
 import {
   listCertifications,
+  listScopedCertifications,
   readCertification,
   serializeCertification,
   writeCertification,
+  writeScopedCertification,
 } from './store.ts';
+import { buildScopedCertificationPath } from './storage.ts';
 
 const FIXTURE_DIR = new URL('./fixtures', import.meta.url).pathname;
 
@@ -340,6 +343,43 @@ describe('listCertifications', () => {
       assert.ok(listed.every(p => p.endsWith('.json')));
     } finally {
       cleanupRepo(repoDir);
+    }
+  });
+});
+
+describe('scoped certification storage', () => {
+  it('builds stable root-relative shared paths', () => {
+    const root = makeTempRepo();
+    try {
+      const path = buildScopedCertificationPath({ root }, 'openrouter', 'z-ai/glm-5.2', 'v2');
+      assert.ok(path.endsWith('/z-ai/glm-5.2/v2.json'));
+      assert.ok(!path.includes('.wavemill/native-agent-certifications/.wavemill'));
+    } finally {
+      cleanupRepo(root);
+    }
+  });
+
+  it('writes once and reads from another repo through the same shared root', () => {
+    const root = makeTempRepo();
+    const repoA = makeTempRepo();
+    const repoB = makeTempRepo();
+    try {
+      const artifact = makeValidArtifact({ provider: 'openai', model: 'gpt-4o', suiteVersion: 'v2' });
+      const path = writeScopedCertification(artifact, { root });
+      assert.equal(
+        buildScopedCertificationPath({ root }, 'openai', 'gpt-4o', 'v2'),
+        path,
+      );
+      assert.ok(!path.startsWith(repoA));
+      assert.ok(!path.startsWith(repoB));
+      const listed = listScopedCertifications({ root });
+      assert.deepEqual(listed, [path]);
+      const read = readCertification(path);
+      assert.ok(read.ok);
+    } finally {
+      cleanupRepo(root);
+      cleanupRepo(repoA);
+      cleanupRepo(repoB);
     }
   });
 });

@@ -105,19 +105,29 @@ describe('hokusai-queue-drain', () => {
     const { repoDir, configDir } = makeRepo({ batchSize: 1, endpointTokenEnv: 'HOKUSAI_API_TOKEN' });
     await enqueueContribution(makeRow('a'), { repoDir, configDir });
     writeFileSync(join(repoDir, '.env'), 'HOKUSAI_API_KEY=repo-secret\n');
+    const originalApiKey = process.env.HOKUSAI_API_KEY;
+    delete process.env.HOKUSAI_API_KEY;
     let authorization = '';
 
-    const result = await drainContributionQueue({
-      repoDir,
-      configDir,
-      fetchImpl: async (_input, init) => {
-        authorization = String((init?.headers as Record<string, string>).authorization ?? '');
-        return new Response(null, { status: 204 });
-      },
-    });
+    try {
+      const result = await drainContributionQueue({
+        repoDir,
+        configDir,
+        fetchImpl: async (_input, init) => {
+          authorization = String((init?.headers as Record<string, string>).authorization ?? '');
+          return new Response(null, { status: 204 });
+        },
+      });
 
-    assert.equal(result.status, 'uploaded');
-    assert.equal(authorization, 'Bearer repo-secret');
+      assert.equal(result.status, 'uploaded');
+      assert.equal(authorization, 'Bearer repo-secret');
+    } finally {
+      if (originalApiKey === undefined) {
+        delete process.env.HOKUSAI_API_KEY;
+      } else {
+        process.env.HOKUSAI_API_KEY = originalApiKey;
+      }
+    }
   });
 
   it('accepts 204 empty responses', async () => {

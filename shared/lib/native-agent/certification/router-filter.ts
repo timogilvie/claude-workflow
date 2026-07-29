@@ -105,6 +105,8 @@ function mapGateReason(reason: NativeGateRejectReason): RouterCertificationRejec
     case 'missing_api_key':
     case 'missing_artifact':
       return 'missing';
+    case 'malformed_artifact':
+      return 'malformed';
     case 'unregistered_model':
       return 'no-native-capability';
     case 'wrong_suite':
@@ -278,7 +280,6 @@ export function filterNativeModels(
       });
       continue;
     }
-
     const decision = evaluateNativeProviderGate({
       modelId,
       mode: 'task',
@@ -298,7 +299,7 @@ export function filterNativeModels(
         role,
         requestedLaunchPhase,
         requestedPhase: requiredPhase,
-        certifiedPhase: decision.foundPhase ?? loaded.artifact.phase,
+        certifiedPhase: decision.foundPhase,
         nativeCapability: readOnlyNative,
         nativeProvider,
         requiredSuiteVersion: certMeta.certificationSuiteVersion,
