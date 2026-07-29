@@ -33,17 +33,13 @@ import { updateStageResult } from '../stage-result.ts';
 import {
   equivalentOpenRouterModelIds,
 } from '../openrouter-catalog.ts';
-
-const RELEASE_READINESS_STUB = [
-  '',
-  '## Release Readiness',
-  '',
-  '- **database_change_risk**: unknown',
-  '- **env_changes**: none',
-  '- **config_changes**: none',
-  '- **manual_steps**: none',
-  '',
-].join('\n');
+import { getNativeAgentConfig } from '../config.ts';
+import {
+  resolveNativePlanningLimits,
+  toLoopBudget,
+  validateFinalPlanningArtifact,
+  type PlanningFailureReason,
+} from './planning-guards.ts';
 
 const DEFAULT_HELPER_TIMEOUT_MS = 12 * 60 * 1000;
 const HELPER_STDERR_TAIL_CHARS = 2000;
@@ -350,14 +346,6 @@ function findFinalAssistantErrorMessage(messages: AgentMessage[]): string {
   return '';
 }
 
-function ensureReleaseReadiness(planText: string): string {
-  if (/^##\s+Release Readiness\b/m.test(planText)) {
-    return planText;
-  }
-  console.warn('[native-planning] Plan output missing Release Readiness section; appending stub');
-  return `${planText.trimEnd()}\n${RELEASE_READINESS_STUB}`;
-}
-
 function atomicWriteText(path: string, content: string): void {
   mkdirSync(dirname(path), { recursive: true });
   const tmpPath = `${path}.${randomUUID()}.tmp`;
@@ -366,6 +354,11 @@ function atomicWriteText(path: string, content: string): void {
 }
 
 function clearApprovalMarkerCreatedDuringPlanning(approvalMarkerPath: string): void {
+  rmSync(approvalMarkerPath, { force: true });
+}
+
+function clearRejectedPlanningArtifacts(planPath: string, approvalMarkerPath: string): void {
+  rmSync(planPath, { force: true });
   rmSync(approvalMarkerPath, { force: true });
 }
 
@@ -423,6 +416,20 @@ function cleanupReasonForStopReason(stopReason: string): CleanupReason | null {
     return 'timeout';
   }
   return null;
+}
+
+function planningFailureReasonForStopReason(stopReason: string): PlanningFailureReason | null {
+  switch (stopReason) {
+    case 'turn_limit':
+    case 'tool_call_limit':
+    case 'wall_clock_limit':
+    case 'tool_stagnation':
+    case 'aborted':
+    case 'error':
+      return stopReason;
+    default:
+      return null;
+  }
 }
 
 function makeTranscriptPath(repoDir: string, session: string, issue: string): string {
@@ -530,6 +537,7 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
     writeHookStatus(hookPath, 'working', 'run_native_model', model.name ?? model.id, 'native');
 
     const cleanupTracker = createCleanupTracker();
+    const planningLimits = resolveNativePlanningLimits(getNativeAgentConfig(options.repoDir).planning);
     const context: AgentContext = {
       systemPrompt,
       messages: [{
@@ -567,36 +575,86 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
       onEvent: (event) => {
         transcriptWriter.handleEvent(event);
       },
+      budget: toLoopBudget(planningLimits),
     });
 
     const cleanupReason = cleanupReasonForStopReason(result.stopReason);
+    let cleanupPatch: Record<string, unknown> = {};
     if (cleanupReason) {
       const cleanupReport = await runCleanup(cleanupTracker, {
         worktreePath: options.wtDir,
         reason: cleanupReason,
       });
-      await updateStageResult(featureDir, 'planning', {
-        status: cleanupReason === 'aborted' ? 'aborted' : 'failed',
-        finishedAt: new Date().toISOString(),
-        agent: 'native',
-        model: model.name ?? model.id,
-        notes: `Native planning stopped with ${result.stopReason}; cleanup decision ${cleanupReport.cleanupDecision}.`,
-        failureReason: result.stopReason,
+      cleanupPatch = {
         finalTreeState: cleanupReport.finalTreeState,
         cleanupDecision: cleanupReport.cleanupDecision,
         cleanupReport,
+      };
+    }
+
+    const stopFailureReason = planningFailureReasonForStopReason(result.stopReason);
+    if (stopFailureReason) {
+      clearRejectedPlanningArtifacts(planPath, approvalMarkerPath);
+      await updateStageResult(featureDir, 'planning', {
+        status: stopFailureReason === 'aborted' ? 'aborted' : 'failed',
+        finishedAt: new Date().toISOString(),
+        agent: 'native',
+        model: model.name ?? model.id,
+        notes: `Native planning rejected before approval: ${stopFailureReason}.`,
+        artifacts: {
+          type: 'planning',
+          taskPacketFile: relative(options.wtDir, taskPacketPath),
+          transcriptFile: transcriptPath,
+        },
+        failureReason: stopFailureReason,
+        ...cleanupPatch,
       });
+      throw new Error(`Native planning rejected before approval: ${stopFailureReason}`);
     }
 
     const rawFinalText = findFinalAssistantText(result.messages);
     if (rawFinalText.trim() === '') {
       const providerError = findFinalAssistantErrorMessage(result.messages);
-      if (providerError) {
-        throw new Error(`Native planning failed: ${providerError}`);
-      }
-      throw new Error(`Native planning completed without a final plan (stopReason=${result.stopReason})`);
+      clearRejectedPlanningArtifacts(planPath, approvalMarkerPath);
+      await updateStageResult(featureDir, 'planning', {
+        status: 'failed',
+        finishedAt: new Date().toISOString(),
+        agent: 'native',
+        model: model.name ?? model.id,
+        notes: providerError
+          ? `Native planning failed: ${providerError}`
+          : `Native planning completed without a final plan (stopReason=${result.stopReason})`,
+        artifacts: {
+          type: 'planning',
+          taskPacketFile: relative(options.wtDir, taskPacketPath),
+          transcriptFile: transcriptPath,
+        },
+        failureReason: providerError ? 'error' : 'empty_final_plan',
+      });
+      throw new Error(providerError
+        ? `Native planning failed: ${providerError}`
+        : `Native planning completed without a final plan (stopReason=${result.stopReason})`);
     }
-    const finalText = ensureReleaseReadiness(rawFinalText);
+    const validation = validateFinalPlanningArtifact(rawFinalText);
+    if (!validation.valid) {
+      clearRejectedPlanningArtifacts(planPath, approvalMarkerPath);
+      await updateStageResult(featureDir, 'planning', {
+        status: 'failed',
+        finishedAt: new Date().toISOString(),
+        agent: 'native',
+        model: model.name ?? model.id,
+        notes: `Native planning final artifact rejected: ${validation.reason ?? 'invalid'}.`,
+        artifacts: {
+          type: 'planning',
+          taskPacketFile: relative(options.wtDir, taskPacketPath),
+          transcriptFile: transcriptPath,
+          validationError: validation.reason ?? 'invalid',
+        },
+        failureReason: 'invalid_final_plan',
+      });
+      throw new Error(`Native planning final artifact rejected: ${validation.reason ?? 'invalid'}`);
+    }
+    const finalText = rawFinalText;
 
     clearApprovalMarkerCreatedDuringPlanning(approvalMarkerPath);
     atomicWriteText(planPath, finalText);

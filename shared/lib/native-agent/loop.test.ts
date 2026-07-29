@@ -358,6 +358,94 @@ describe('loop — budget stops', () => {
     assert.equal(result.stopReason, 'wall_clock_limit');
     assert.ok(result.wallClockMs >= 100);
   });
+
+  it('stops repeated normalized tool signatures with identical output as tool_stagnation', async () => {
+    let executions = 0;
+    const tool = makeTool('search_text', 'parallel', async () => {
+      executions += 1;
+      return 'same search result';
+    });
+    const api = uniqueApi('stagnant-search');
+    registerScriptedPiProvider({
+      api,
+      turns: [
+        {
+          content: [{ type: 'tool_call', id: 's1', name: 'search_text', arguments: { q: 'TODO', path: 'src' } }],
+          stopReason: 'tool_calls',
+        },
+        {
+          content: [{ type: 'tool_call', id: 's2', name: 'search_text', arguments: { path: 'src', q: 'TODO' } }],
+          stopReason: 'tool_calls',
+        },
+        {
+          content: [{ type: 'tool_call', id: 's3', name: 'search_text', arguments: { q: 'TODO', path: 'src' } }],
+          stopReason: 'tool_calls',
+        },
+        {
+          content: [{ type: 'text', text: 'should not reach final text' }],
+          stopReason: 'stop',
+        },
+      ],
+    });
+
+    const result = await runWavemillLoop({
+      ...baseConfig(api, [tool]),
+      budget: {
+        stagnation: {
+          maxRepeatedSignatureCalls: 3,
+          maxNoNovelProgressCalls: 2,
+        },
+      },
+    });
+
+    assert.equal(result.stopReason, 'tool_stagnation');
+    assert.equal(result.toolCallsExecuted, 3);
+    assert.equal(executions, 3);
+  });
+
+  it('does not treat repeated calls with novel output as stagnation', async () => {
+    let executions = 0;
+    const tool = makeTool('search_text', 'parallel', async () => {
+      executions += 1;
+      return `search result page ${executions}`;
+    });
+    const api = uniqueApi('progressing-search');
+    registerScriptedPiProvider({
+      api,
+      turns: [
+        {
+          content: [{ type: 'tool_call', id: 'p1', name: 'search_text', arguments: { q: 'TODO' } }],
+          stopReason: 'tool_calls',
+        },
+        {
+          content: [{ type: 'tool_call', id: 'p2', name: 'search_text', arguments: { q: 'TODO' } }],
+          stopReason: 'tool_calls',
+        },
+        {
+          content: [{ type: 'tool_call', id: 'p3', name: 'search_text', arguments: { q: 'TODO' } }],
+          stopReason: 'tool_calls',
+        },
+        {
+          content: [{ type: 'text', text: 'Done' }],
+          stopReason: 'stop',
+        },
+      ],
+    });
+
+    const result = await runWavemillLoop({
+      ...baseConfig(api, [tool]),
+      budget: {
+        stagnation: {
+          maxRepeatedSignatureCalls: 3,
+          maxNoNovelProgressCalls: 2,
+        },
+      },
+    });
+
+    assert.equal(result.stopReason, 'stop');
+    assert.equal(result.toolCallsExecuted, 3);
+    assert.equal(executions, 3);
+  });
 });
 
 describe('loop — tool compat gate', () => {

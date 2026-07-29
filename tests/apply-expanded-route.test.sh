@@ -105,7 +105,8 @@ EOF
 
 run_apply() {
   local feature_dir="$1" state_file="$2"
-  apply_expanded_route_if_present "$feature_dir" "HOK-1512" "test-slug" "$(dirname "$(dirname "$feature_dir")")" "$state_file"
+  local issue="${3:-HOK-1512}"
+  apply_expanded_route_if_present "$feature_dir" "$issue" "test-slug" "$(dirname "$(dirname "$feature_dir")")" "$state_file"
 }
 
 echo "=== Expanded Route Apply Helper ==="
@@ -325,6 +326,73 @@ EOF
     fi
   else
     fail "initial idempotence apply should succeed"
+  fi
+  rm -rf "$root"
+}
+
+{
+  mapfile -t fixture < <(new_fixture "expanded-route-challenge-review-contract")
+  root="${fixture[0]}"
+  wt_dir="${fixture[1]}"
+  state_file="${fixture[2]}"
+  feature_dir="$wt_dir/features/test-slug"
+  cat > "$feature_dir/challenge-intent.json" <<'EOF'
+{
+  "pairId": "HOK-1512",
+  "challengeStage": "review",
+  "primary": {
+    "pairId": "HOK-1512",
+    "side": "primary",
+    "challengeStage": "review",
+    "expectedStageModel": "bootstrap-reviewer",
+    "expectedRoute": {
+      "planner": "bootstrap-planner",
+      "coder": "bootstrap-coder",
+      "reviewer": "bootstrap-reviewer",
+      "planDepth": "light",
+      "codeDepth": "medium",
+      "reviewMode": "static"
+    }
+  },
+  "challenger": {
+    "pairId": "HOK-1512",
+    "side": "challenger",
+    "challengeStage": "review",
+    "expectedStageModel": "glm-5.2",
+    "expectedRoute": {
+      "planner": "bootstrap-planner",
+      "coder": "bootstrap-coder",
+      "reviewer": "glm-5.2",
+      "planDepth": "light",
+      "codeDepth": "medium",
+      "reviewMode": "llm"
+    }
+  }
+}
+EOF
+  cat > "$feature_dir/.post-expansion-route.json" <<'EOF'
+{
+  "planner": "bootstrap-planner",
+  "coder": "bootstrap-coder",
+  "reviewer": "gpt-5.5",
+  "planDepth": "light",
+  "codeDepth": "medium",
+  "reviewMode": "llm"
+}
+EOF
+
+  jq '.tasks["HOK-1512_c"] = (.tasks["HOK-1512"] + {challengePairId:"HOK-1512", challengeRole:"challenger"})' "$state_file" > "$root/state.tmp"
+  mv "$root/state.tmp" "$state_file"
+
+  if run_apply "$feature_dir" "$state_file" "HOK-1512_c" \
+    && [[ "$(jq -r '.reviewer' "$feature_dir/.routing-complete")" == "glm-5.2" ]] \
+    && [[ "$(jq -r '.review.model' "$feature_dir/.phase-config.json")" == "glm-5.2" ]] \
+    && [[ "$(jq -r '.tasks["HOK-1512_c"].reviewerModel' "$state_file")" == "glm-5.2" ]] \
+    && [[ "$(jq -r '.challengeIntentApplied' "$feature_dir/.routing-complete")" == "true" ]] \
+    && [[ "$(jq -r '.rawExpandedRoute.reviewer' "$feature_dir/.routing-complete")" == "gpt-5.5" ]]; then
+    pass "challenger review intent survives expanded route overwrite"
+  else
+    fail "challenger review intent was not preserved during expanded route promotion"
   fi
   rm -rf "$root"
 }

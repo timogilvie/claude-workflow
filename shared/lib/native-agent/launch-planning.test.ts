@@ -62,6 +62,25 @@ function scriptedModel(api: string) {
   } as const;
 }
 
+function validPlan(title = 'Implementation Plan'): string {
+  return [
+    `# ${title}`,
+    '',
+    '## Phase 1',
+    '- Inspect the native planning launch path and relevant tests.',
+    '- Implement bounded loop execution and deterministic validation.',
+    '',
+    '## Validation',
+    '- Run targeted native planning and loop tests.',
+    '',
+    '## Release Readiness',
+    '- **database_change_risk**: none',
+    '- **env_changes**: none',
+    '- **config_changes**: native planning limits only',
+    '- **manual_steps**: none',
+  ].join('\n');
+}
+
 function readyOpenRouterEntry(modelId: string, api: string): ReadyNativeProviderEntry {
   return {
     providerName: 'openrouter',
@@ -303,13 +322,7 @@ describe('launchNativePlanning', () => {
         turns: [{
           content: [{
             type: 'text',
-            text: [
-              '# Implementation Plan',
-              '## Phase 1',
-              '- Inspect launch path',
-              '## Release Readiness',
-              '- **database_change_risk**: none',
-            ].join('\n'),
+            text: validPlan(),
           }],
           stopReason: 'stop',
         }],
@@ -369,7 +382,7 @@ describe('launchNativePlanning', () => {
         turns: [{
           content: [{
             type: 'text',
-            text: '# Plan\n## Release Readiness\n- **database_change_risk**: none',
+            text: validPlan('Stale Approval Marker Plan'),
           }],
           stopReason: 'stop',
         }],
@@ -408,7 +421,7 @@ describe('launchNativePlanning', () => {
         turns: [{
           content: [{
             type: 'text',
-            text: '# Plan\n## Release Readiness\n- **database_change_risk**: none',
+            text: validPlan('Approval Marker Plan'),
           }],
           stopReason: 'stop',
         }],
@@ -450,7 +463,7 @@ describe('launchNativePlanning', () => {
         turns: [{
           content: [{
             type: 'text',
-            text: '# Challenger Plan\n## Release Readiness\n- **database_change_risk**: none',
+            text: validPlan('Challenger Plan'),
           }],
           stopReason: 'stop',
         }],
@@ -487,7 +500,7 @@ describe('launchNativePlanning', () => {
         turns: [{
           content: [{
             type: 'text',
-            text: '# Challenger Plan\n## Release Readiness\n- **database_change_risk**: none',
+            text: validPlan('Challenger Plan'),
           }],
           stopReason: 'stop',
         }],
@@ -532,7 +545,7 @@ describe('launchNativePlanning', () => {
         turns: [{
           content: [{
             type: 'text',
-            text: '# Plan\n## Release Readiness\n- **database_change_risk**: none',
+            text: validPlan('Selected Task Plan'),
           }],
           stopReason: 'stop',
         }],
@@ -568,7 +581,7 @@ describe('launchNativePlanning', () => {
 
       assert.deepEqual(helperCommands, ['tools/route-task.ts']);
       assert.match(readFileSync(packetPath, 'utf-8'), /Quick Reference/);
-      assert.match(readFileSync(join(featureDir, 'plan.md'), 'utf-8'), /# Plan/);
+      assert.match(readFileSync(join(featureDir, 'plan.md'), 'utf-8'), /# Selected Task Plan/);
     } finally {
       cleanup(wtDir);
     }
@@ -601,7 +614,7 @@ describe('launchNativePlanning', () => {
         turns: [{
           content: [{
             type: 'text',
-            text: '# Wrong Provider\n## Release Readiness\n- **database_change_risk**: none',
+            text: validPlan('Wrong Provider'),
           }],
           stopReason: 'stop',
         }],
@@ -611,7 +624,7 @@ describe('launchNativePlanning', () => {
         turns: [{
           content: [{
             type: 'text',
-            text: '# Kimi Provider\n## Release Readiness\n- **database_change_risk**: none',
+            text: validPlan('Kimi Provider'),
           }],
           stopReason: 'stop',
         }],
@@ -657,7 +670,7 @@ describe('launchNativePlanning', () => {
             stopReason: 'toolUse',
           },
           {
-            content: [{ type: 'text', text: '# Plan\n## Release Readiness\n- **database_change_risk**: none' }],
+            content: [{ type: 'text', text: validPlan('Registered Mutation Tool Plan') }],
             stopReason: 'stop',
           },
         ],
@@ -703,7 +716,7 @@ describe('launchNativePlanning', () => {
             stopReason: 'toolUse',
           },
           {
-            content: [{ type: 'text', text: '# Plan\n## Release Readiness\n- **database_change_risk**: none' }],
+            content: [{ type: 'text', text: validPlan('Unregistered Mutation Tool Plan') }],
             stopReason: 'stop',
           },
         ],
@@ -761,6 +774,198 @@ describe('launchNativePlanning', () => {
     }
   });
 
+  it('fails planning with tool_stagnation for repeated identical searches without approval artifacts', async () => {
+    const { wtDir, featureDir } = setupWorktree();
+    const api = uniqueApi('stagnant-search');
+    const hookPath = `/tmp/wavemill-stagnant-search-${Date.now()}.hook`;
+    writeNativeConfig(wtDir, {
+      nativeAgent: {
+        planning: {
+          maxTurns: 10,
+          maxToolCalls: 10,
+          maxWallClockMs: 60_000,
+          toolStagnation: {
+            maxRepeatedSignatureCalls: 3,
+            maxNoNovelProgressCalls: 2,
+          },
+        },
+      },
+    });
+
+    try {
+      registerScriptedPiProvider({
+        api,
+        turns: [
+          {
+            content: [{
+              type: 'tool_call',
+              id: 'search-1',
+              name: 'search_text',
+              arguments: { query: 'export const value', path: '.', maxResults: 5 },
+            }],
+            stopReason: 'tool_calls',
+          },
+          {
+            content: [{
+              type: 'tool_call',
+              id: 'search-2',
+              name: 'search_text',
+              arguments: { maxResults: 5, path: '.', query: 'export const value' },
+            }],
+            stopReason: 'tool_calls',
+          },
+          {
+            content: [{
+              type: 'tool_call',
+              id: 'search-3',
+              name: 'search_text',
+              arguments: { query: 'export const value', path: '.', maxResults: 5 },
+            }],
+            stopReason: 'tool_calls',
+          },
+          {
+            content: [{ type: 'text', text: validPlan('Should Not Be Approved') }],
+            stopReason: 'stop',
+          },
+        ],
+      });
+
+      await assert.rejects(
+        () => launchNativePlanning({
+          session: 'stagnant-search',
+          issue: 'HOK-2577',
+          slug: 'demo',
+          wtDir,
+          repoDir: wtDir,
+          hookPath,
+          loopModelOverride: scriptedModel(api),
+          runTsxCommand: stubRunTsxCommand(),
+        }),
+        /tool_stagnation/,
+      );
+
+      assert.equal(existsSync(join(featureDir, 'plan.md')), false);
+      assert.equal(existsSync(join(featureDir, '.plan-approved')), false);
+      const stageResult = JSON.parse(
+        readFileSync(join(featureDir, '.planning-result.json'), 'utf-8'),
+      ) as Record<string, any>;
+      assert.equal(stageResult.status, 'failed');
+      assert.equal(stageResult.failureReason, 'tool_stagnation');
+      assert.ok(stageResult.artifacts?.transcriptFile);
+      assert.equal(existsSync(stageResult.artifacts.transcriptFile), true);
+      assert.match(readFileSync(stageResult.artifacts.transcriptFile, 'utf-8'), /search_text/);
+    } finally {
+      cleanup(wtDir);
+      rmSync(hookPath, { force: true });
+    }
+  });
+
+  it('rejects tool-control final assistant text without publishing awaiting_user', async () => {
+    const { wtDir, featureDir } = setupWorktree();
+    const api = uniqueApi('control-text-final');
+    const hookPath = `/tmp/wavemill-control-final-${Date.now()}.hook`;
+    let awaitingPublished = false;
+    writeFileSync(join(featureDir, 'plan.md'), 'stale plan\n');
+    writeFileSync(join(featureDir, '.plan-approved'), 'stale approval\n');
+
+    try {
+      registerScriptedPiProvider({
+        api,
+        turns: [{
+          content: [{
+            type: 'text',
+            text: [
+              '<|assistant to=functions.search_text|>{"query":"loop","path":"."}<|tool_call|>',
+              'recipient_name: functions.search_text',
+              'arguments_json: {"query":"loop"}',
+            ].join('\n'),
+          }],
+          stopReason: 'stop',
+        }],
+      });
+
+      await assert.rejects(
+        () => launchNativePlanning({
+          session: 'control-final',
+          issue: 'HOK-2577',
+          slug: 'demo',
+          wtDir,
+          repoDir: REPO_DIR,
+          hookPath,
+          loopModelOverride: scriptedModel(api),
+          runTsxCommand: stubRunTsxCommand(),
+          onAwaitingUserStagePublished: () => {
+            awaitingPublished = true;
+          },
+        }),
+        /control_text_leakage/,
+      );
+
+      assert.equal(awaitingPublished, false);
+      assert.equal(existsSync(join(featureDir, 'plan.md')), false);
+      assert.equal(existsSync(join(featureDir, '.plan-approved')), false);
+      const stageResult = JSON.parse(
+        readFileSync(join(featureDir, '.planning-result.json'), 'utf-8'),
+      ) as Record<string, any>;
+      assert.equal(stageResult.status, 'failed');
+      assert.equal(stageResult.failureReason, 'invalid_final_plan');
+      assert.equal(stageResult.artifacts?.validationError, 'control_text_leakage');
+      assert.ok(stageResult.artifacts?.transcriptFile);
+    } finally {
+      cleanup(wtDir);
+      rmSync(hookPath, { force: true });
+    }
+  });
+
+  it('rejects final plans missing required release readiness fields', async () => {
+    const { wtDir, featureDir } = setupWorktree();
+    const api = uniqueApi('missing-readiness-final');
+
+    try {
+      registerScriptedPiProvider({
+        api,
+        turns: [{
+          content: [{
+            type: 'text',
+            text: [
+              '# Missing Readiness Plan',
+              '',
+              '## Phase 1',
+              '- Implement the scoped launcher changes.',
+              '',
+              '## Release Readiness',
+              '- **database_change_risk**: none',
+            ].join('\n'),
+          }],
+          stopReason: 'stop',
+        }],
+      });
+
+      await assert.rejects(
+        () => launchNativePlanning({
+          session: 'missing-readiness',
+          issue: 'HOK-2577',
+          slug: 'demo',
+          wtDir,
+          repoDir: REPO_DIR,
+          loopModelOverride: scriptedModel(api),
+          runTsxCommand: stubRunTsxCommand(),
+        }),
+        /missing_release_readiness_env_changes/,
+      );
+
+      assert.equal(existsSync(join(featureDir, 'plan.md')), false);
+      const stageResult = JSON.parse(
+        readFileSync(join(featureDir, '.planning-result.json'), 'utf-8'),
+      ) as Record<string, any>;
+      assert.equal(stageResult.status, 'failed');
+      assert.equal(stageResult.failureReason, 'invalid_final_plan');
+      assert.equal(stageResult.artifacts?.validationError, 'missing_release_readiness_env_changes');
+    } finally {
+      cleanup(wtDir);
+    }
+  });
+
   it('writes cleanup details to the planning stage result on abort', async () => {
     const { wtDir, featureDir } = setupWorktree();
     const api = uniqueApi('aborted');
@@ -781,7 +986,7 @@ describe('launchNativePlanning', () => {
           runTsxCommand: stubRunTsxCommand(),
           signal: controller.signal,
         }),
-        /without a final plan/,
+        /aborted/,
       );
 
       const stageResult = JSON.parse(

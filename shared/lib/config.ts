@@ -449,12 +449,23 @@ export interface NativePatchCodingConfig {
   enabled?: boolean;
 }
 
+export interface NativePlanningConfig {
+  maxTurns?: number;
+  maxToolCalls?: number;
+  maxWallClockMs?: number;
+  toolStagnation?: {
+    maxRepeatedSignatureCalls?: number;
+    maxNoNovelProgressCalls?: number;
+  };
+}
+
 export interface NativeAgentConfig {
   enabled?: boolean;
   allowedPhases?: NativeAgentAllowedPhase[];
   expansion?: {
     fallbackOnUnavailable?: boolean;
   };
+  planning?: NativePlanningConfig;
   patchCoding?: NativePatchCodingConfig;
   providers?: NativeAgentProvidersConfig;
 }

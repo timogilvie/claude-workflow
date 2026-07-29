@@ -3207,6 +3207,59 @@ test('native expansion config returns enabled, allowed, and fallback values', ()
   }
 });
 
+test('nativeAgent planning limits validate and are returned by the accessor', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      nativeAgent: {
+        planning: {
+          maxTurns: 12,
+          maxToolCalls: 34,
+          maxWallClockMs: 56000,
+          toolStagnation: {
+            maxRepeatedSignatureCalls: 5,
+            maxNoNovelProgressCalls: 3,
+          },
+        },
+      },
+    }));
+
+    assert.deepEqual(getNativeAgentConfig(tmp).planning, {
+      maxTurns: 12,
+      maxToolCalls: 34,
+      maxWallClockMs: 56000,
+      toolStagnation: {
+        maxRepeatedSignatureCalls: 5,
+        maxNoNovelProgressCalls: 3,
+      },
+    });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('invalid nativeAgent planning limits are rejected by schema validation', () => {
+  if (!hasAjv) return;
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      nativeAgent: {
+        planning: {
+          maxTurns: 0,
+        },
+      },
+    }));
+
+    assert.throws(() => {
+      loadWavemillConfig(tmp);
+    }, /validation failed/i);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
 test('invalid nativeAgent expansion keys are rejected by schema validation', () => {
   if (!hasAjv) return;
   const tmp = makeTempRepo();
