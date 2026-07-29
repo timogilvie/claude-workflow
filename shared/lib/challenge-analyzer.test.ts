@@ -177,3 +177,50 @@ test('joinRecords accepts legacy comparison dimensions without crashing', () => 
   assert.equal(stats.totalComparisons, 1);
   assert.equal(stats.overallWinRates.get('model-a')?.wins, 1);
 });
+
+test('computeAggregations skips invalid and inconclusive no-winner comparisons', () => {
+  const comparisons: StoredChallengeComparison[] = [
+    {
+      challengePairId: 'pair-invalid',
+      primaryModel: 'model-a',
+      challengerModel: 'model-b',
+      primaryPrUrl: 'https://example.com/pr/20',
+      challengerPrUrl: 'https://example.com/pr/21',
+      primaryEvalScore: 0.75,
+      challengerEvalScore: 0.7,
+      rationale: 'provenance mismatch',
+      dimensions: {
+        completeness: { primary: 0, challenger: 0 },
+        correctness: { primary: 0, challenger: 0 },
+        code_quality: { primary: 0, challenger: 0 },
+        intervention_impact: { primary: 0, challenger: 0 },
+        autonomy: { primary: 0, challenger: 0 },
+      },
+      timestamp: '2026-01-03T00:00:00.000Z',
+      comparisonOutcome: 'invalid',
+    },
+    {
+      challengePairId: 'pair-inconclusive',
+      primaryModel: 'model-c',
+      challengerModel: 'model-d',
+      primaryPrUrl: 'https://example.com/pr/22',
+      challengerPrUrl: 'https://example.com/pr/23',
+      primaryEvalScore: 0.75,
+      challengerEvalScore: 0.7,
+      rationale: 'same intent executed differently',
+      dimensions: {
+        completeness: { primary: 0, challenger: 0 },
+        correctness: { primary: 0, challenger: 0 },
+        code_quality: { primary: 0, challenger: 0 },
+        intervention_impact: { primary: 0, challenger: 0 },
+        autonomy: { primary: 0, challenger: 0 },
+      },
+      timestamp: '2026-01-03T00:00:00.000Z',
+      comparisonOutcome: 'inconclusive',
+    },
+  ];
+
+  const stats = computeAggregations(joinRecords(comparisons, []));
+  assert.equal(stats.totalComparisons, 0);
+  assert.equal(stats.overallWinRates.size, 0);
+});
