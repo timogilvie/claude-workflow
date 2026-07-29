@@ -47,6 +47,8 @@ export interface PlanningArtifacts {
   type: 'planning';
   planFile?: string;
   taskPacketFile?: string;
+  transcriptFile?: string;
+  validationError?: string;
 }
 
 /** Artifacts produced during the review stage. */

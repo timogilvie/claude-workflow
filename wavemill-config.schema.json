@@ -1010,6 +1010,39 @@
                     },
                     "additionalProperties": false
                 },
+                "planning": {
+                    "type": "object",
+                    "description": "Planning-specific native-agent budgets and stagnation limits.",
+                    "properties": {
+                        "maxTurns": {
+                            "type": "integer",
+                            "minimum": 1
+                        },
+                        "maxToolCalls": {
+                            "type": "integer",
+                            "minimum": 1
+                        },
+                        "maxWallClockMs": {
+                            "type": "integer",
+                            "minimum": 1
+                        },
+                        "toolStagnation": {
+                            "type": "object",
+                            "properties": {
+                                "maxRepeatedSignatureCalls": {
+                                    "type": "integer",
+                                    "minimum": 1
+                                },
+                                "maxNoNovelProgressCalls": {
+                                    "type": "integer",
+                                    "minimum": 1
+                                }
+                            },
+                            "additionalProperties": false
+                        }
+                    },
+                    "additionalProperties": false
+                },
                 "patchCoding": {
                     "type": "object",
                     "description": "Explicit gate for native patch-coding alpha. Config alone is insufficient without certification.",

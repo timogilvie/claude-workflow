@@ -235,6 +235,7 @@ export interface RouteArtifactSnapshot extends NormalizedExpandedRouteArtifact {
   routerMode?: RouteProvenance['routerMode'];
   routingMode?: string;
   expectedMetrics?: Record<string, unknown>;
+  challengeRecommendation?: unknown;
 }
 
 export interface RouteArtifactView {
@@ -481,6 +482,10 @@ export function buildRoutePrediction(
 
 function readExpectedMetrics(artifact: Record<string, unknown>): Record<string, unknown> | undefined {
   const metrics: Record<string, unknown> = {};
+  const nested = artifact.expectedMetrics;
+  if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+    Object.assign(metrics, nested as Record<string, unknown>);
+  }
   const keys = [
     'expectedSuccess',
     'expectedCost',
@@ -548,6 +553,7 @@ function parseBootstrapRouteArtifact(
     routerMode: readString((artifact.provenance as Record<string, unknown> | undefined)?.routerMode) as RouteProvenance['routerMode'] | undefined,
     routingMode: readString(artifact.routingMode),
     expectedMetrics: readExpectedMetrics(artifact),
+    challengeRecommendation: artifact.challengeRecommendation,
   };
 }
 
@@ -598,6 +604,7 @@ function parseExpandedRouteArtifact(
     routerMode: readString((artifact.provenance as Record<string, unknown> | undefined)?.routerMode) as RouteProvenance['routerMode'] | undefined,
     routingMode: readString(artifact.routingMode),
     expectedMetrics: readExpectedMetrics(artifact),
+    challengeRecommendation: artifact.challengeRecommendation,
   };
 }
 

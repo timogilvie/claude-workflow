@@ -7,6 +7,8 @@ import {
   type ChallengeComparisonDimensions,
   type ChallengeComparison,
   type ChallengeRoutingMeta,
+  type ChallengeSideExecutionProvenance,
+  type ChallengeProvenanceValidation,
 } from './challenge-comparison.ts';
 import { scoreSourceLabel } from './challenge-score-selector.ts';
 import type { ChallengeStageEval } from './eval-schema.ts';
@@ -87,6 +89,8 @@ export function buildComparisonPrompt(input: {
   challengeType?: string;
   primaryStageEval?: ChallengeStageEval;
   challengerStageEval?: ChallengeStageEval;
+  primaryExecution?: ChallengeSideExecutionProvenance;
+  challengerExecution?: ChallengeSideExecutionProvenance;
 }): string {
   let workflowContext = '';
   let stageEvidenceContext = '';
@@ -119,6 +123,7 @@ export function buildComparisonPrompt(input: {
 
 ## Workflow Context
 
+Intended routing:
 Primary side:
 - Planner: ${input.primaryRouting.planner} | Coder: ${input.primaryRouting.coder} | Reviewer: ${input.primaryRouting.reviewer}
 - Plan depth: ${input.primaryRouting.planDepth} | Code depth: ${input.primaryRouting.codeDepth} | Review mode: ${input.primaryRouting.reviewMode}
@@ -128,6 +133,7 @@ Challenger side:
 - Plan depth: ${input.challengerRouting.planDepth} | Code depth: ${input.challengerRouting.codeDepth} | Review mode: ${input.challengerRouting.reviewMode}
 
 Variables that differed: ${variedFields.join(', ') || 'none'}
+${formatExecutionPromptContext(input.primaryExecution, input.challengerExecution)}
 ${perStageContext}
 Consider whether routing differences (not just code differences) may have influenced the outcome.
 `;
@@ -388,11 +394,12 @@ export function withBodyFile<T>(body: string, fn: (filePath: string) => T): T {
  */
 export function buildChallengeCommentBody(input: {
   pairId: string;
-  winner: 'primary' | 'challenger';
-  winnerModel: string;
+  winner?: 'primary' | 'challenger';
+  winnerModel?: string;
   rationale: string;
   otherPrUrl: string;
   routingSummary?: string;
+  provenanceValidation?: ChallengeProvenanceValidation;
 }): string {
   const commentParts = [
     `Challenge comparison for \`${input.pairId}\``,
@@ -401,6 +408,16 @@ export function buildChallengeCommentBody(input: {
 
   if (input.routingSummary) {
     commentParts.push(input.routingSummary, '');
+  }
+
+  if (input.provenanceValidation && !input.provenanceValidation.valid) {
+    commentParts.push(
+      `Comparison outcome: ${input.provenanceValidation.outcome ?? 'invalid'}`,
+      `Other PR: ${input.otherPrUrl}`,
+      ``,
+      input.rationale,
+    );
+    return commentParts.join('\n');
   }
 
   commentParts.push(
@@ -413,6 +430,30 @@ export function buildChallengeCommentBody(input: {
   return commentParts.join('\n');
 }
 
+function formatExecutedStage(stage: ChallengeSideExecutionProvenance[keyof ChallengeSideExecutionProvenance]): string {
+  const agent = stage.agent || 'unknown-agent';
+  const model = stage.model || 'unknown-model';
+  const status = stage.status || 'unknown-status';
+  const path = stage.artifactPath ? ` @ ${stage.artifactPath}` : '';
+  return `${agent}/${model} [${status}, ${stage.source}${path}]`;
+}
+
+function formatExecutionPromptContext(
+  primaryExecution?: ChallengeSideExecutionProvenance,
+  challengerExecution?: ChallengeSideExecutionProvenance,
+): string {
+  if (!primaryExecution || !challengerExecution) return '';
+  return `
+Executed provenance:
+- Primary planner: ${formatExecutedStage(primaryExecution.planning)}
+- Primary coder: ${formatExecutedStage(primaryExecution.coding)}
+- Primary reviewer: ${formatExecutedStage(primaryExecution.review)}
+- Challenger planner: ${formatExecutedStage(challengerExecution.planning)}
+- Challenger coder: ${formatExecutedStage(challengerExecution.coding)}
+- Challenger reviewer: ${formatExecutedStage(challengerExecution.review)}
+`;
+}
+
 /**
  * Format routing metadata for PR comment output.
  */
@@ -420,6 +461,9 @@ export function formatRoutingSummary(
   primaryRouting?: ChallengeRoutingMeta,
   challengerRouting?: ChallengeRoutingMeta,
   challengeType?: string,
+  primaryExecution?: ChallengeSideExecutionProvenance,
+  challengerExecution?: ChallengeSideExecutionProvenance,
+  provenanceValidation?: ChallengeProvenanceValidation,
 ): string {
   if (!primaryRouting || !challengerRouting) {
     return '';
@@ -428,15 +472,30 @@ export function formatRoutingSummary(
   const parts: string[] = [];
 
   parts.push(
-    `Primary used ${primaryRouting.planner || 'unknown'} (planner) + ${primaryRouting.coder} (coder)` +
+    `Primary intended ${primaryRouting.planner || 'unknown'} (planner) + ${primaryRouting.coder} (coder)` +
     (primaryRouting.reviewer ? ` + ${primaryRouting.reviewer} (reviewer)` : '')
   );
   parts.push(
-    `Challenger used ${challengerRouting.planner || 'unknown'} (planner) + ${challengerRouting.coder} (coder)` +
+    `Challenger intended ${challengerRouting.planner || 'unknown'} (planner) + ${challengerRouting.coder} (coder)` +
     (challengerRouting.reviewer ? ` + ${challengerRouting.reviewer} (reviewer)` : '')
   );
 
   let summary = parts.join(' vs ');
+
+  if (primaryExecution && challengerExecution) {
+    summary += `\nExecuted primary: planner ${formatExecutedStage(primaryExecution.planning)}; coder ${formatExecutedStage(primaryExecution.coding)}; reviewer ${formatExecutedStage(primaryExecution.review)}`;
+    summary += `\nExecuted challenger: planner ${formatExecutedStage(challengerExecution.planning)}; coder ${formatExecutedStage(challengerExecution.coding)}; reviewer ${formatExecutedStage(challengerExecution.review)}`;
+  }
+
+  if (provenanceValidation && !provenanceValidation.valid) {
+    const reasonLines = provenanceValidation.issues.map((issue) => {
+      const path = issue.artifactPath ? ` path=${issue.artifactPath}` : '';
+      const intended = issue.intendedModel ? ` intended=${issue.intendedModel}` : '';
+      const executed = issue.executedModel ? ` executed=${issue.executedModel}` : '';
+      return `- ${issue.side} ${issue.role}: ${issue.reason}${intended}${executed}${path}`;
+    });
+    summary += `\nProvenance validation: ${provenanceValidation.outcome ?? 'invalid'}\n${reasonLines.join('\n')}`;
+  }
 
   if (challengeType) {
     summary += `\nChallenge type: ${challengeType}`;

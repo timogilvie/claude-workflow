@@ -1401,6 +1401,7 @@ apply_expanded_route_if_present() {
   local route_file routing_file phase_config_file planner_model plan_depth coder_model code_depth reviewer_model review_mode
   local planner_agent="" coder_agent="" reviewer_agent=""
   local active_route="" bootstrap_route="" expanded_route="" route_changed="false" source="expanded"
+  local challenge_intent_file="" challenge_intent_tmp="" challenge_side=""
 
   route_file="$(find_expanded_route_artifact "$feature_dir" 2>/dev/null || true)"
   [[ -n "$route_file" ]] || return 0
@@ -1430,11 +1431,62 @@ apply_expanded_route_if_present() {
     printf '{}\n' | write_json_artifact "$routing_file"
   fi
 
+  for candidate in "$feature_dir/challenge-intent.json" "$feature_dir/.challenge-intent.json"; do
+    if [[ -f "$candidate" ]] && jq -e . "$candidate" >/dev/null 2>&1; then
+      challenge_intent_file="$candidate"
+      break
+    fi
+  done
+  if [[ -z "$challenge_intent_file" && -n "$state_file" && -f "$state_file" ]]; then
+    if jq -e --arg issue "$issue" '.tasks[$issue].challengeIntent? // empty' "$state_file" >/dev/null 2>&1; then
+      challenge_intent_tmp="$(mktemp "${TMPDIR:-/tmp}/wavemill-challenge-intent.XXXXXX")"
+      jq --arg issue "$issue" '.tasks[$issue].challengeIntent' "$state_file" > "$challenge_intent_tmp" 2>/dev/null || true
+      if [[ -s "$challenge_intent_tmp" ]] && jq -e . "$challenge_intent_tmp" >/dev/null 2>&1; then
+        challenge_intent_file="$challenge_intent_tmp"
+      fi
+    fi
+  fi
+  if [[ -n "$challenge_intent_file" ]]; then
+    challenge_side="$(jq -r --arg issue "$issue" '
+      if ($issue | endswith("_c")) then "challenger"
+      elif (.primary.pairId // .pairId // "") != "" then "primary"
+      else empty end
+    ' "$challenge_intent_file" 2>/dev/null || true)"
+  fi
+
   if ! state_mutate "$routing_file" \
     '. as $base
      | $route[0] as $route
-     | $base + $route
-     | .reviewMode = ($route.reviewMode // $route.reviewRecommended // $base.reviewMode // $base.reviewRecommended // "")
+     | ($intent[0]? // null) as $intentObj
+     | ($side // "") as $sideName
+     | ($base + $route) as $rawEffective
+     | (if $intentObj == null or $sideName == "" then $rawEffective
+        else
+          ($intentObj[$sideName].expectedRoute // {}) as $expected
+          | ($intentObj.challengeStage // $intentObj[$sideName].challengeStage // "implementation") as $stage
+          | $rawEffective
+          | if $stage == "plan" then
+              .planner = ($expected.planner // .planner)
+              | .planDepth = ($expected.planDepth // .planDepth)
+            elif $stage == "review" then
+              .reviewer = ($expected.reviewer // .reviewer)
+              | .reviewMode = ($expected.reviewMode // .reviewMode // .reviewRecommended)
+              | .reviewRecommended = .reviewMode
+            else
+              .coder = ($expected.coder // .coder)
+              | .codeDepth = ($expected.codeDepth // .codeDepth)
+            end
+          | .challengeIntentApplied = true
+          | .intendedStage = $stage
+          | .rawExpandedRoute = $route
+        end)
+     | .reviewMode = (
+         if (.challengeIntentApplied == true and .intendedStage == "review") then
+           (.reviewMode // $route.reviewMode // $route.reviewRecommended // $base.reviewMode // $base.reviewRecommended // "")
+         else
+           ($route.reviewMode // $route.reviewRecommended // .reviewMode // $base.reviewMode // $base.reviewRecommended // "")
+         end
+       )
      | .reviewRecommended = .reviewMode
      | .provenance = (($base.provenance // {}) + ($route.provenance // {}) + {
          source: "expanded",
@@ -1451,11 +1503,22 @@ apply_expanded_route_if_present() {
          )
        })' \
     --arg routeFile "$route_file" \
+    --arg side "$challenge_side" \
+    --slurpfile intent "${challenge_intent_file:-/dev/null}" \
     --slurpfile route "$route_file"; then
     log "warn" "expanded route invalid: $route_file (failed to update .routing-complete)"
     active_route="$(route_lifecycle_route_id "$feature_dir/.routing-complete" 2>/dev/null || true)"
     log_route_lifecycle "expansion_failed" "issue=$issue" "reason=invalid_artifact" "active_route=\"${active_route}\""
     return 1
+  fi
+  if [[ -n "$challenge_intent_file" && "$challenge_intent_file" != "$feature_dir/challenge-intent.json" ]]; then
+    if cp "$challenge_intent_file" "$feature_dir/challenge-intent.json" 2>/dev/null; then
+      challenge_intent_file="$feature_dir/challenge-intent.json"
+    fi
+  fi
+  if [[ -n "$challenge_intent_tmp" ]]; then
+    rm -f "$challenge_intent_tmp" 2>/dev/null || true
+    challenge_intent_tmp=""
   fi
 
   planner_model="$(jq -r '.planner // empty' "$routing_file" 2>/dev/null || true)"
@@ -1515,6 +1578,7 @@ apply_expanded_route_if_present() {
        | .tasks[$issue].planDepth = $planDepth
        | .tasks[$issue].codeDepth = $codeDepth
        | .tasks[$issue].reviewMode = $reviewMode
+       | if $challengeIntentFile != "" then .tasks[$issue].challengeIntent = $challengeIntent[0] else . end
        | .tasks[$issue].slug = (.tasks[$issue].slug // $slug)
        | .tasks[$issue].worktree = (.tasks[$issue].worktree // $worktree)
        | .tasks[$issue].updated = (now | todate)' \
@@ -1526,7 +1590,9 @@ apply_expanded_route_if_present() {
       --arg reviewerModel "$reviewer_model" \
       --arg planDepth "$plan_depth" \
       --arg codeDepth "$code_depth" \
-      --arg reviewMode "$review_mode"; then
+      --arg reviewMode "$review_mode" \
+      --arg challengeIntentFile "$challenge_intent_file" \
+      --slurpfile challengeIntent "${challenge_intent_file:-/dev/null}"; then
       log "warn" "expanded route invalid: $route_file (failed to update workflow state)"
       active_route="$(route_lifecycle_route_id "$routing_file" 2>/dev/null || true)"
       log_route_lifecycle "expansion_failed" "issue=$issue" "reason=invalid_artifact" "active_route=\"${active_route}\""

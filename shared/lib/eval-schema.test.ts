@@ -767,7 +767,7 @@ function validPromptSizeDiagnostic() {
 }
 
 test('SCHEMA_VERSION is bumped for eval schema updates', () => {
-  assert.equal(SCHEMA_VERSION, '1.32.0');
+  assert.equal(SCHEMA_VERSION, '1.33.0');
 });
 
 test('Record without prompt size fields still validates', () => {
@@ -1793,7 +1793,7 @@ test('Wavemill router fields validate and schema stays in parity', () => {
 });
 
 test('Schema version constant is 1.32.0', () => {
-  assert.equal(SCHEMA_VERSION, '1.32.0');
+  assert.equal(SCHEMA_VERSION, '1.33.0');
 });
 
 test('Record with resolved-model routing validates', () => {

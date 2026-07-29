@@ -28,6 +28,7 @@ import { buildTrustMetadata } from './provenance.ts';
 import { toProviderRequestModelId, type ProviderModelConfig } from './provider.ts';
 import { evaluateBeforeToolCallPolicy, type ToolPolicyConfig } from './tools/policies.ts';
 import { redactSecrets, redactSecretsInValue } from './tools/redaction.ts';
+import { ToolStagnationTracker, type ToolStagnationPolicy } from './planning-guards.ts';
 import type {
   OutputCapPolicy,
   ToolMetadata,
@@ -50,6 +51,7 @@ export interface LoopBudget {
   maxToolCalls?: number;
   maxWallClockMs?: number;
   maxCostUsd?: number;
+  stagnation?: ToolStagnationPolicy;
 }
 
 export type LoopStopReason =
@@ -57,6 +59,7 @@ export type LoopStopReason =
   | 'turn_limit'
   | 'token_limit'
   | 'tool_call_limit'
+  | 'tool_stagnation'
   | 'wall_clock_limit'
   | 'cost_limit'
   | 'aborted'
@@ -271,6 +274,14 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
 
   const startTime = Date.now();
   const composed = composeAbortSignal(callerSignal, budget?.maxWallClockMs);
+  const stagnationTracker =
+    budget?.stagnation?.maxRepeatedSignatureCalls !== undefined &&
+    budget.stagnation.maxNoNovelProgressCalls !== undefined
+      ? new ToolStagnationTracker({
+        maxRepeatedSignatureCalls: budget.stagnation.maxRepeatedSignatureCalls,
+        maxNoNovelProgressCalls: budget.stagnation.maxNoNovelProgressCalls,
+      })
+      : undefined;
 
   // Build a name→metadata map for quick lookup inside afterToolCall.
   const toolMetadataByName = new Map<string, ToolMetadata>(
@@ -427,6 +438,12 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
       if (config.afterToolCall) {
         callerOverride = await config.afterToolCall(ctx, signal);
       }
+      const stagnationDecision = !isSkipped
+        ? stagnationTracker?.record(ctx, callerOverride)
+        : undefined;
+      if (stagnationDecision?.stagnant) {
+        budgetStopReason = 'tool_stagnation';
+      }
 
       // Compute effective content and details after caller override.
       type ContentBlock = { type: string; text: string };
@@ -512,6 +529,7 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
       const override: AfterToolCallResult = {
         ...(callerOverride?.isError !== undefined ? { isError: callerOverride.isError } : {}),
         ...(callerOverride?.terminate !== undefined ? { terminate: callerOverride.terminate } : {}),
+        ...(stagnationDecision?.stagnant ? { terminate: true } : {}),
         content: redactedContent as AfterToolCallResult['content'],
         details: enrichedDetails,
       };

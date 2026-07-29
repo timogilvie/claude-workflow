@@ -110,6 +110,8 @@ for fn in \
   check_stage_aborted \
   check_stage_complete \
   check_stage_awaiting_user \
+  persist_challenge_execution_intent \
+  finalize_challenge_execution_intent_before_coding \
   resolve_phase \
   _persist_phase \
   ready_base_sha \
