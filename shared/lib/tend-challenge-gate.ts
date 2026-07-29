@@ -327,13 +327,17 @@ export function classifyChallengeState(
   const latestComparison = relevantComparisons[0];
   if (
     latestComparison.comparisonOutcome === 'invalid' ||
-    latestComparison.comparisonOutcome === 'inconclusive'
+    latestComparison.comparisonOutcome === 'inconclusive' ||
+    latestComparison.comparisonOutcome === 'invalid_challenge' ||
+    latestComparison.invalidChallenge
   ) {
     return {
       kind: 'pair-unresolved',
       pairId,
       otherPr: findOtherOpenPr(pairId, prNumber, challengePairMap, allPrNumbers),
-      reason: `pair-unresolved:${latestComparison.comparisonOutcome}-comparison`,
+      reason: latestComparison.invalidChallenge || latestComparison.comparisonOutcome === 'invalid_challenge'
+        ? `pair-unresolved:invalid-challenge:${latestComparison.invalidChallengeReason ?? 'unknown'}`
+        : `pair-unresolved:${latestComparison.comparisonOutcome}-comparison`,
     };
   }
 
