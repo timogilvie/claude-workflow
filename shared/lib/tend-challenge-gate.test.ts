@@ -341,6 +341,114 @@ describe('branch sibling detection in applyChallengePairGates', () => {
       cleanup();
     }
   });
+
+  it('holds both sides when the latest comparison is invalid', async () => {
+    const { repoDir, cleanup } = setupRepoDir();
+    try {
+      const items = [
+        makeWorkItem({
+          number: 101,
+          headRefName: 'task/foo',
+          challengePairId: 'pair-1',
+          challenge: true,
+        }),
+        makeWorkItem({
+          number: 102,
+          headRefName: 'task/foo-challenger',
+          challengePairId: 'pair-1',
+          challenge: true,
+        }),
+      ];
+
+      writeWorkflowState(repoDir, {
+        HOK_1: { pr: 101, challengePairId: 'pair-1', challengeRole: 'primary' },
+        HOK_1_c: { pr: 102, challengePairId: 'pair-1', challengeRole: 'challenger' },
+      });
+      writeFileSync(
+        join(repoDir, '.wavemill', 'evals', 'challenge-records.jsonl'),
+        JSON.stringify({
+          challengePairId: 'pair-1',
+          primaryPrUrl: 'https://github.com/org/repo/pull/101',
+          challengerPrUrl: 'https://github.com/org/repo/pull/102',
+          timestamp: '2026-07-29T12:00:00Z',
+          comparisonOutcome: 'invalid',
+          terminalReason: 'provenance_validation_failed',
+          rationale: 'Planner provenance mismatch.',
+        }),
+      );
+
+      const result = await applyChallengePairGates(items, [], repoDir, {
+        remoteBranches: ['task/foo', 'task/foo-challenger'],
+        coolOffSeconds: 0,
+      });
+
+      assert.equal(result.eligible.length, 0);
+      assert.deepEqual(
+        result.blocked.map((item) => [item.number, item.reason]).sort((a, b) => a[0] - b[0]),
+        [
+          [101, 'challenge:pair-unresolved:invalid-comparison'],
+          [102, 'challenge:pair-unresolved:invalid-comparison'],
+        ],
+      );
+      assert.deepEqual(result.losers, []);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('holds both sides when the latest comparison is inconclusive', async () => {
+    const { repoDir, cleanup } = setupRepoDir();
+    try {
+      const items = [
+        makeWorkItem({
+          number: 101,
+          headRefName: 'task/foo',
+          challengePairId: 'pair-1',
+          challenge: true,
+        }),
+        makeWorkItem({
+          number: 102,
+          headRefName: 'task/foo-challenger',
+          challengePairId: 'pair-1',
+          challenge: true,
+        }),
+      ];
+
+      writeWorkflowState(repoDir, {
+        HOK_1: { pr: 101, challengePairId: 'pair-1', challengeRole: 'primary' },
+        HOK_1_c: { pr: 102, challengePairId: 'pair-1', challengeRole: 'challenger' },
+      });
+      writeFileSync(
+        join(repoDir, '.wavemill', 'evals', 'challenge-records.jsonl'),
+        JSON.stringify({
+          challengePairId: 'pair-1',
+          primaryPrUrl: 'https://github.com/org/repo/pull/101',
+          challengerPrUrl: 'https://github.com/org/repo/pull/102',
+          timestamp: '2026-07-29T12:00:00Z',
+          comparisonOutcome: 'inconclusive',
+          terminalReason: 'provenance_validation_failed',
+          rationale: 'Same intent executed differently.',
+        }),
+      );
+
+      const result = await applyChallengePairGates(items, [], repoDir, {
+        remoteBranches: ['task/foo', 'task/foo-challenger'],
+        coolOffSeconds: 0,
+      });
+
+      assert.equal(result.eligible.length, 0);
+      assert.deepEqual(
+        result.blocked.map((item) => [item.number, item.reason]).sort((a, b) => a[0] - b[0]),
+        [
+          [101, 'challenge:pair-unresolved:inconclusive-comparison'],
+          [102, 'challenge:pair-unresolved:inconclusive-comparison'],
+        ],
+      );
+      assert.deepEqual(result.losers, []);
+    } finally {
+      cleanup();
+    }
+  });
 });
 
 describe('cool-off window in applyChallengePairGates', () => {
