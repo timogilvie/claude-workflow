@@ -325,6 +325,18 @@ export function classifyChallengeState(
   }
 
   const latestComparison = relevantComparisons[0];
+  if (
+    latestComparison.comparisonOutcome === 'invalid' ||
+    latestComparison.comparisonOutcome === 'inconclusive'
+  ) {
+    return {
+      kind: 'pair-unresolved',
+      pairId,
+      otherPr: findOtherOpenPr(pairId, prNumber, challengePairMap, allPrNumbers),
+      reason: `pair-unresolved:${latestComparison.comparisonOutcome}-comparison`,
+    };
+  }
+
   if (latestComparison.comparisonOutcome === 'double-forfeit') {
     return {
       kind: 'loser',

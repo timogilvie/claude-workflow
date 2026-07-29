@@ -37,7 +37,7 @@ export interface JobResultFile {
     winner?: 'primary' | 'challenger';
     winnerModel?: string;
     rationale?: string;
-    comparisonOutcome?: 'compared' | 'skipped';
+    comparisonOutcome?: 'compared' | 'skipped' | 'forfeit' | 'double-forfeit' | 'invalid' | 'inconclusive';
     skipReason?: 'identical-routing-dimensions';
     cleanupPolicy?: 'primary-wins-close-challenger';
     primaryModel?: string;
