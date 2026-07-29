@@ -282,7 +282,14 @@ function classifyIoError(error: unknown): 'io_error' | 'route_failed' {
 }
 
 export async function executeReviewChanges(
-  params: { base: string; worktree?: string; json?: boolean; maxOutputBytes?: number },
+  params: {
+    base: string;
+    worktree?: string;
+    json?: boolean;
+    maxOutputBytes?: number;
+    featureDir?: string;
+    additionalContext?: string;
+  },
   deps: CommandToolsDeps,
 ): Promise<ReviewChangesResult> {
   const ts = now(deps);
@@ -339,6 +346,8 @@ export async function executeReviewChanges(
     const reviewResult = await reviewImpl({
       targetBranch: params.base,
       repoDir,
+      featureDir: params.featureDir,
+      additionalContext: params.additionalContext,
     });
     const counts = countFindings(reviewResult);
     const findings = normalizeReviewFindings(reviewResult, params.json, params.maxOutputBytes);

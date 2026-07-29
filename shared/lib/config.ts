@@ -195,6 +195,12 @@ export interface NativeCapabilityOverride {
   certification?: NativeCertificationMetadataOverride;
 }
 
+/** Explicit eligibility for launches through a ChatGPT-authenticated Codex CLI. */
+export interface CodexChatgptCapabilityOverride {
+  supported?: boolean;
+  reason?: string;
+}
+
 export interface ModelCapabilitiesOverride {
   vendor?: string;
   class?: ModelRegistryClass;
@@ -212,6 +218,7 @@ export interface ModelCapabilitiesOverride {
   costPerMillionInputTokensUsd?: number;
   costPerMillionOutputTokensUsd?: number;
   agent?: AgentType;
+  codexChatgptCapability?: CodexChatgptCapabilityOverride;
   nativeCapability?: NativeCapabilityOverride;
   supportedModel?: SupportedModelMetadata;
   releasedAt?: string;
@@ -423,7 +430,7 @@ export interface ProvidersConfig {
 }
 
 export type NativeAgentProviderName = 'openai' | 'openrouter';
-export type NativeAgentAllowedPhase = 'task-expansion' | 'planning' | 'review';
+export type NativeAgentAllowedPhase = 'task-expansion' | 'planning' | 'coding' | 'review';
 
 export interface NativeAgentProviderConfig {
   enabled?: boolean;

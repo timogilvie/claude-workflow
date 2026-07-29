@@ -1,4 +1,5 @@
 import type {
+  HokusaiModel30Predictions,
   HokusaiModel30Response,
   HokusaiOutput,
   HokusaiRecommendedStrategy,
@@ -87,6 +88,46 @@ function deriveReviewMode(strategy: HokusaiRecommendedStrategy): Exclude<ReviewM
   return strategy.stages?.includes('review') ? 'llm' : 'static';
 }
 
+function firstFiniteNonNegativeInteger(...values: unknown[]): number | undefined {
+  for (const value of values) {
+    if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
+      return Math.floor(value);
+    }
+  }
+  return undefined;
+}
+
+function parseHokusaiNeighborEvidence(rationale: string | undefined): {
+  nearestNeighborCount?: number;
+  exactRouteMatchCount?: number;
+} {
+  if (!rationale) return {};
+
+  const nearestMatch = rationale.match(/\bacross\s+(\d+)\s+nearest\b/i);
+  const exactMatch = rationale.match(/\bfrom\s+(\d+)\s+exact route match/i);
+
+  return {
+    ...(nearestMatch ? { nearestNeighborCount: Number(nearestMatch[1]) } : {}),
+    ...(exactMatch ? { exactRouteMatchCount: Number(exactMatch[1]) } : {}),
+  };
+}
+
+function deriveNearestNeighborCount(
+  predictions: HokusaiModel30Predictions,
+): number | undefined {
+  if (Array.isArray(predictions.nearest_neighbors)) {
+    return predictions.nearest_neighbors.length;
+  }
+
+  const raw = predictions as Record<string, unknown>;
+  return firstFiniteNonNegativeInteger(
+    raw.nearest_neighbor_count,
+    raw.neighbor_count,
+    raw.neighbors_count,
+    parseHokusaiNeighborEvidence(predictions.recommended_strategy.rationale).nearestNeighborCount,
+  );
+}
+
 export function fromHokusaiRecommendedStrategy(
   strategy: HokusaiRecommendedStrategy,
   options: {
@@ -95,6 +136,8 @@ export function fromHokusaiRecommendedStrategy(
     alternatives?: unknown;
     tradeoffs?: unknown;
     nearestNeighbors?: unknown;
+    nearestNeighborCount?: number;
+    exactRouteMatchCount?: number;
   } = {},
 ): WorkflowRouteDecision {
   const planDepth = derivePlanDepth(strategy);
@@ -109,6 +152,22 @@ export function fromHokusaiRecommendedStrategy(
     strategy.estimated_cost_usd,
     fallbackCosts,
   );
+
+  const hokusaiEvidence = {
+    ...parseHokusaiNeighborEvidence(strategy.rationale),
+    ...(typeof options.nearestNeighborCount === 'number' ? { nearestNeighborCount: options.nearestNeighborCount } : {}),
+    ...(typeof options.exactRouteMatchCount === 'number' ? { exactRouteMatchCount: options.exactRouteMatchCount } : {}),
+  };
+  const hokusaiMetadata = {
+    ...(typeof options.metadata?.api_version === 'string' ? { apiVersion: options.metadata.api_version } : {}),
+    ...(typeof options.metadata?.inference_method === 'string' ? { inferenceMethod: options.metadata.inference_method } : {}),
+    ...(typeof options.metadata?.model_uri === 'string' ? { modelUri: options.metadata.model_uri } : {}),
+    ...(typeof options.metadata?.model_version === 'string' ? { modelVersion: options.metadata.model_version } : {}),
+    ...(typeof options.metadata?.schema === 'string' ? { schema: options.metadata.schema } : {}),
+    ...(strategy.objective ? { objective: String(strategy.objective) } : {}),
+    ...(strategy.rationale ? { rationale: strategy.rationale } : {}),
+    ...hokusaiEvidence,
+  };
 
   return {
     planner: strategy.planner_model,
@@ -148,6 +207,7 @@ export function fromHokusaiRecommendedStrategy(
       ...(options.alternatives ? { alternatives: options.alternatives } : {}),
       ...(options.tradeoffs ? { tradeoffs: options.tradeoffs } : {}),
       ...(options.nearestNeighbors ? { nearestNeighbors: options.nearestNeighbors } : {}),
+      ...(Object.keys(hokusaiMetadata).length > 0 ? { hokusai: hokusaiMetadata } : {}),
     },
   };
 }
@@ -156,12 +216,15 @@ export function fromHokusaiModel30Response(
   response: HokusaiModel30Response,
   options?: { repoDir?: string },
 ): WorkflowRouteDecision {
+  const parsedEvidence = parseHokusaiNeighborEvidence(response.predictions.recommended_strategy.rationale);
   return fromHokusaiRecommendedStrategy(response.predictions.recommended_strategy, {
     repoDir: options?.repoDir,
     metadata: response.metadata,
     alternatives: response.predictions.alternatives,
     tradeoffs: response.predictions.tradeoffs,
     nearestNeighbors: response.predictions.nearest_neighbors,
+    nearestNeighborCount: deriveNearestNeighborCount(response.predictions),
+    exactRouteMatchCount: parsedEvidence.exactRouteMatchCount,
   });
 }
 

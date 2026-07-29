@@ -270,7 +270,12 @@ describe('routing-policy ranking', () => {
     assert.ok(frontier);
     assert.equal(frontier.viable, false);
     assert.equal(frontier.exclusionReason, 'exceeds-cost-tier');
-    assert.equal(ranked[0].modelId, 'claude-sonnet-5');
+    assert.equal(ranked[0].modelId, 'gpt-5.6-terra');
+    assert.equal(ranked[0].viable, true);
+
+    const sonnet = ranked.find((candidate) => candidate.modelId === 'claude-sonnet-5');
+    assert.ok(sonnet);
+    assert.equal(sonnet.viable, true);
   });
 
   it('applies minimum quality thresholds after floor and cost checks', () => {
@@ -742,11 +747,11 @@ describe('routing-policy integration', () => {
       // the same filter to the expected sets (robust to the disable set).
       assert.deepEqual(
         availableModels?.available_coder_models?.sort(),
-        filterDisabledModels(['claude-fable-5', 'claude-opus-4-6', 'claude-opus-4-7', 'claude-opus-4-8', 'gpt-5.4', 'gpt-5.5']).sort(),
+        filterDisabledModels(['claude-fable-5', 'claude-opus-4-6', 'claude-opus-4-7', 'claude-opus-4-8', 'gpt-5.5']).sort(),
       );
       assert.deepEqual(
         availableModels?.available_planner_models?.sort(),
-        filterDisabledModels(['claude-fable-5', 'claude-opus-4-6', 'claude-opus-4-7', 'claude-opus-4-8', 'gpt-5.4', 'gpt-5.5']).sort(),
+        filterDisabledModels(['claude-fable-5', 'claude-opus-4-6', 'claude-opus-4-7', 'claude-opus-4-8', 'gpt-5.5']).sort(),
       );
       assert.equal(decision.signals.taskDifficulty, 'critical');
     } finally {

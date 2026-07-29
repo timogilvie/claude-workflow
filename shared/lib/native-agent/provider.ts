@@ -74,6 +74,22 @@ export interface ProviderModelConfig {
   maxTokens?: number;
 }
 
+export function toProviderRequestModelId(
+  config: Pick<ProviderModelConfig, 'id' | 'name' | 'provider' | 'api'>,
+): string {
+  const name = config.name?.trim();
+  if (isNativeOpenAiTransport(config.provider, config.api)) {
+    if (name) {
+      return name;
+    }
+    const prefix = `${config.provider}:`;
+    if (config.id.startsWith(prefix)) {
+      return config.id.slice(prefix.length);
+    }
+  }
+  return config.id;
+}
+
 export interface ProviderTurnEvent {
   type: 'start' | 'text_delta' | 'tool_call' | 'done' | 'error';
   text?: string;
@@ -241,9 +257,10 @@ function toNativeToolCall(toolCall: Extract<AssistantMessage['content'][number],
 }
 
 function toPiModel(config: ProviderModelConfig): Model<Api> {
+  const requestModelId = toProviderRequestModelId(config);
   return {
-    id: config.id,
-    name: config.name ?? config.id,
+    id: requestModelId,
+    name: config.name ?? requestModelId,
     api: config.api,
     provider: config.provider,
     baseUrl: config.baseUrl ?? 'http://localhost:0/mock',
@@ -255,6 +272,11 @@ function toPiModel(config: ProviderModelConfig): Model<Api> {
     contextWindow: config.contextWindow ?? 200000,
     maxTokens: config.maxTokens ?? 8192,
   };
+}
+
+function isNativeOpenAiTransport(provider: string, api: string): boolean {
+  return (provider === 'openai' && api === 'openai-responses')
+    || (provider === 'openrouter' && api === 'openai-completions');
 }
 
 function toPiTool(tool: NativeToolSchema): Tool {

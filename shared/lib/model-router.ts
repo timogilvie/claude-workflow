@@ -287,7 +287,7 @@ const DEFAULT_ROUTER_OPTIONS = {
   evalsDir: '',
   minRecords: 20,
   minModels: 2,
-  defaultModel: 'gpt-5.4',
+  defaultModel: 'gpt-5.6-terra',
   models: [] as string[],
   agentMap: {} as Record<string, AgentType>,
   defaultAgent: 'codex',

@@ -98,7 +98,7 @@ export const DEFAULT_VALIDATION_CONFIG: ValidationConfig = {
   },
   layer2: {
     enabled: true,
-    model: 'gpt-5.4',
+    model: 'gpt-5.6-terra',
     provider: 'codex',
   },
   onFailure: 'conservative',

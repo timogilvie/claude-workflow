@@ -3,6 +3,7 @@ import {
   getModelRegistryConfig,
   getRouterConfig,
   type ModelCapabilitiesOverride,
+  type CodexChatgptCapabilityOverride,
   type ModelRegistryConfig,
   type NativeCapabilityOverride,
 } from './config.ts';
@@ -98,6 +99,12 @@ export interface SupportedModelMetadata {
   routingEligible?: boolean;
 }
 
+/** Account/surface capability for hosted Codex launches (not native OpenAI). */
+export interface CodexChatgptCapability {
+  supported: boolean;
+  reason?: string;
+}
+
 export interface ModelCapabilities {
   vendor: string;
   class: ModelClass;
@@ -120,6 +127,7 @@ export interface ModelCapabilities {
   costPerMillionInputTokensUsd: number;
   costPerMillionOutputTokensUsd: number;
   agent?: AgentType;
+  codexChatgptCapability?: CodexChatgptCapability;
   nativeCapability?: NativeCapability;
   supportedModel?: SupportedModelMetadata;
   /**
@@ -212,6 +220,20 @@ function cloneNativeCapability(
   };
 }
 
+function cloneCodexChatgptCapability(
+  capability: CodexChatgptCapability | undefined,
+): CodexChatgptCapability | undefined {
+  return capability ? { ...capability } : undefined;
+}
+
+function mergeCodexChatgptCapability(
+  seed: CodexChatgptCapability | undefined,
+  override: CodexChatgptCapabilityOverride | undefined,
+): CodexChatgptCapability | undefined {
+  if (!override) return cloneCodexChatgptCapability(seed);
+  return { supported: override.supported ?? seed?.supported ?? false, reason: override.reason ?? seed?.reason };
+}
+
 function mergeNativeCapability(
   seed: NativeCapability | undefined,
   override: NativeCapabilityOverride,
@@ -274,6 +296,7 @@ function cloneCapabilities(capabilities: ModelCapabilities): ModelCapabilities {
     costPerMillionInputTokensUsd: capabilities.costPerMillionInputTokensUsd,
     costPerMillionOutputTokensUsd: capabilities.costPerMillionOutputTokensUsd,
     agent: capabilities.agent,
+    codexChatgptCapability: cloneCodexChatgptCapability(capabilities.codexChatgptCapability),
     nativeCapability: cloneNativeCapability(capabilities.nativeCapability),
     supportedModel: cloneSupportedModelMetadata(capabilities.supportedModel),
     releasedAt: capabilities.releasedAt,
@@ -436,6 +459,9 @@ function makeDefaultCapabilities(override?: ModelCapabilitiesOverride): ModelCap
     costPerMillionInputTokensUsd: override?.costPerMillionInputTokensUsd ?? 0,
     costPerMillionOutputTokensUsd: override?.costPerMillionOutputTokensUsd ?? 0,
     agent: override?.agent,
+    codexChatgptCapability: override?.codexChatgptCapability
+      ? mergeCodexChatgptCapability(undefined, override.codexChatgptCapability)
+      : undefined,
     releasedAt: override?.releasedAt,
   };
 }
@@ -466,6 +492,7 @@ function mergeCapabilities(
     costPerMillionInputTokensUsd: override.costPerMillionInputTokensUsd ?? seed.costPerMillionInputTokensUsd,
     costPerMillionOutputTokensUsd: override.costPerMillionOutputTokensUsd ?? seed.costPerMillionOutputTokensUsd,
     agent: override.agent ?? seed.agent,
+    codexChatgptCapability: mergeCodexChatgptCapability(seed.codexChatgptCapability, override.codexChatgptCapability),
     nativeCapability: override.nativeCapability
       ? mergeNativeCapability(seed.nativeCapability, override.nativeCapability)
       : cloneNativeCapability(seed.nativeCapability),
@@ -684,6 +711,12 @@ export const FAMILY_ALIASES = Object.freeze({
     }),
     description: 'Stable OpenAI frontier alias for the GPT-5.5 family.',
   }),
+  'gpt-5.6': Object.freeze({
+    channels: Object.freeze({
+      stable: 'gpt-5.6-sol',
+    }),
+    description: 'OpenAI API alias for the GPT-5.6 family; resolves to Sol.',
+  }),
   'gemini-pro': Object.freeze({
     channels: Object.freeze({
       stable: 'gemini-pro',
@@ -773,6 +806,13 @@ export function parseModelSelector(input: string): ParseModelSelectorResult {
 
   if (isKnownFamilyAlias(trimmed)) {
     return { ok: true, selector: { kind: 'alias', family: trimmed, channel: 'stable' } };
+  }
+
+  // A concrete registered model ID takes precedence over the legacy
+  // family-channel shorthand (for example, `gpt-5.6-terra` must not be
+  // interpreted as the unsupported `gpt-5.6:terra` channel).
+  if (Object.hasOwn(DEFAULT_MODEL_REGISTRY.models, trimmed)) {
+    return { ok: true, selector: { kind: 'pinned', modelId: trimmed } };
   }
 
   for (const family of Object.keys(FAMILY_ALIASES)) {
@@ -1329,12 +1369,16 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       costPerMillionInputTokensUsd: 5,
       costPerMillionOutputTokensUsd: 30,
       agent: 'codex',
+      codexChatgptCapability: { supported: true },
     },
     'gpt-5.4': {
       vendor: 'openai',
       class: 'frontier',
       strengths: ['frontier reasoning', 'code generation', 'architecture'],
-      weaknesses: ['higher cost'],
+      weaknesses: ['superseded for ChatGPT Codex launches by GPT-5.6 Terra'],
+      // Retained for historical records and explicit non-Codex policy analysis.
+      // Its Codex/ChatGPT capability below remains false, so it cannot launch.
+      disabled: false,
       qualityScores: scores(60, 94, 90, 92, 60),
       pricing: {
         inputCostPerMTok: 2.5,
@@ -1349,6 +1393,61 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       costPerMillionInputTokensUsd: 2.5,
       costPerMillionOutputTokensUsd: 15,
       agent: 'codex',
+      codexChatgptCapability: {
+        supported: false,
+        reason: 'HOK-2549: Codex now uses gpt-5.6-terra in place of gpt-5.4.',
+      },
+    },
+    'gpt-5.6-sol': {
+      vendor: 'openai',
+      class: 'frontier',
+      strengths: ['frontier professional reasoning', 'complex coding', 'tool use'],
+      weaknesses: ['higher cost', 'not certified for the ChatGPT Codex launch surface'],
+      defaultLadderEligible: false,
+      qualityScores: scores(0, 0, 0, 0, 0),
+      pricing: { inputCostPerMTok: 5, outputCostPerMTok: 30, cacheWriteCostPerMTok: 6.25, cacheReadCostPerMTok: 0.5 },
+      contextWindowTokens: 1_050_000,
+      toolSupport: 'full',
+      multimodal: { text: true, image: true },
+      latencyTier: 'slow',
+      reasoningTier: 'advanced',
+      costPerMillionInputTokensUsd: 5,
+      costPerMillionOutputTokensUsd: 30,
+      agent: 'native-openai',
+    },
+    'gpt-5.6-terra': {
+      vendor: 'openai',
+      class: 'strong_generalist',
+      strengths: ['balanced professional reasoning', 'coding', 'tool use'],
+      weaknesses: ['new routing candidate; evaluation evidence is still accumulating'],
+      qualityScores: scores(62, 94, 91, 93, 66),
+      pricing: { inputCostPerMTok: 2.5, outputCostPerMTok: 15, cacheWriteCostPerMTok: 3.125, cacheReadCostPerMTok: 0.25 },
+      contextWindowTokens: 1_050_000,
+      toolSupport: 'full',
+      multimodal: { text: true, image: true },
+      latencyTier: 'standard',
+      reasoningTier: 'advanced',
+      costPerMillionInputTokensUsd: 2.5,
+      costPerMillionOutputTokensUsd: 15,
+      agent: 'codex',
+      codexChatgptCapability: { supported: true },
+    },
+    'gpt-5.6-luna': {
+      vendor: 'openai',
+      class: 'fast_economy',
+      strengths: ['cost-sensitive high-volume workloads', 'tool use'],
+      weaknesses: ['not certified for the ChatGPT Codex launch surface'],
+      defaultLadderEligible: false,
+      qualityScores: scores(0, 0, 0, 0, 0),
+      pricing: { inputCostPerMTok: 1, outputCostPerMTok: 6, cacheWriteCostPerMTok: 1.25, cacheReadCostPerMTok: 0.1 },
+      contextWindowTokens: 1_050_000,
+      toolSupport: 'full',
+      multimodal: { text: true, image: true },
+      latencyTier: 'fast',
+      reasoningTier: 'advanced',
+      costPerMillionInputTokensUsd: 1,
+      costPerMillionOutputTokensUsd: 6,
+      agent: 'native-openai',
     },
     'gpt-5.3-codex': {
       vendor: 'openai',
@@ -1377,7 +1476,7 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       vendor: 'openai',
       class: 'strong_generalist',
       strengths: ['general reasoning', 'coding', 'broad tool support'],
-      weaknesses: ['premium cost', 'opt-in only'],
+      weaknesses: ['premium cost', 'not available to the ChatGPT Codex surface'],
       qualityScores: scores(72, 92, 90, 90, 70),
       pricing: { inputCostPerMTok: 3, outputCostPerMTok: 15 },
       defaultLadderEligible: false,
@@ -1389,12 +1488,16 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       costPerMillionInputTokensUsd: 3,
       costPerMillionOutputTokensUsd: 15,
       agent: 'codex',
+      codexChatgptCapability: {
+        supported: false,
+        reason: 'The ChatGPT-authenticated Codex CLI does not support gpt-5.',
+      },
     },
     'gpt-5-mini': {
       vendor: 'openai',
       class: 'fast_economy',
       strengths: ['fast responses', 'low-cost coding'],
-      weaknesses: ['less depth than frontier GPT variants', 'opt-in only'],
+      weaknesses: ['less depth than frontier GPT variants', 'not available to the ChatGPT Codex surface'],
       qualityScores: scores(60, 75, 82, 80, 62),
       pricing: { inputCostPerMTok: 0.6, outputCostPerMTok: 2.4 },
       defaultLadderEligible: false,
@@ -1406,6 +1509,10 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       costPerMillionInputTokensUsd: 0.6,
       costPerMillionOutputTokensUsd: 2.4,
       agent: 'codex',
+      codexChatgptCapability: {
+        supported: false,
+        reason: 'The ChatGPT-authenticated Codex CLI does not support gpt-5-mini.',
+      },
     },
     'gemini-2.5-pro': {
       vendor: 'google',
@@ -1481,9 +1588,9 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       strengths: ['planning', 'coding', 'long context'],
       weaknesses: ['opt-in only', 'less tooling maturity'],
       qualityScores: scores(60, 82, 84, 82, 58),
-      pricing: { inputCostPerMTok: 2, outputCostPerMTok: 6 },
+      pricing: { inputCostPerMTok: 2, outputCostPerMTok: 6, cacheReadCostPerMTok: 0.2 },
       defaultLadderEligible: false,
-      contextWindowTokens: 128_000,
+      contextWindowTokens: 131_072,
       toolSupport: 'basic',
       multimodal: { text: true, image: false },
       latencyTier: 'standard',
@@ -1492,38 +1599,55 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       costPerMillionOutputTokensUsd: 6,
       agent: 'claude-openrouter',
     },
+    'mistral-medium-3': {
+      vendor: 'mistral',
+      class: 'strong_generalist',
+      strengths: ['agentic workflows', 'coding', 'multimodal review'],
+      weaknesses: ['watchlist maturity', 'higher cost than small Mistral models'],
+      qualityScores: scores(58, 78, 82, 80, 58),
+      pricing: { inputCostPerMTok: 1.5, outputCostPerMTok: 7.5 },
+      defaultLadderEligible: false,
+      contextWindowTokens: 262_144,
+      toolSupport: 'full',
+      multimodal: { text: true, image: true },
+      latencyTier: 'standard',
+      reasoningTier: 'advanced',
+      costPerMillionInputTokensUsd: 1.5,
+      costPerMillionOutputTokensUsd: 7.5,
+      agent: 'claude-openrouter',
+    },
     'devstral-small': {
       vendor: 'mistral',
       class: 'fast_economy',
-      strengths: ['coding specialization', 'low cost'],
-      weaknesses: ['coding-only fit', 'opt-in only'],
+      strengths: ['coding', 'multimodal understanding', 'low cost'],
+      weaknesses: ['lower ceiling than larger Mistral models', 'opt-in only'],
       qualityScores: scores(50, 58, 76, 66, 50),
-      pricing: { inputCostPerMTok: 0.1, outputCostPerMTok: 0.25 },
+      pricing: { inputCostPerMTok: 0.15, outputCostPerMTok: 0.6, cacheReadCostPerMTok: 0.015 },
       defaultLadderEligible: false,
-      contextWindowTokens: 128_000,
-      toolSupport: 'basic',
-      multimodal: { text: true, image: false },
+      contextWindowTokens: 262_144,
+      toolSupport: 'full',
+      multimodal: { text: true, image: true },
       latencyTier: 'fast',
-      reasoningTier: 'basic',
-      costPerMillionInputTokensUsd: 0.1,
-      costPerMillionOutputTokensUsd: 0.25,
+      reasoningTier: 'standard',
+      costPerMillionInputTokensUsd: 0.15,
+      costPerMillionOutputTokensUsd: 0.6,
       agent: 'claude-openrouter',
     },
     'devstral-medium': {
       vendor: 'mistral',
       class: 'strong_generalist',
-      strengths: ['coding specialization', 'better review quality than small'],
-      weaknesses: ['watchlist maturity', 'opt-in only'],
-      qualityScores: scores(52, 62, 80, 70, 52),
-      pricing: { inputCostPerMTok: 0.35, outputCostPerMTok: 0.9 },
+      strengths: ['agentic workflows', 'coding', 'multimodal review'],
+      weaknesses: ['watchlist maturity', 'higher cost than small Mistral models'],
+      qualityScores: scores(58, 78, 82, 80, 58),
+      pricing: { inputCostPerMTok: 1.5, outputCostPerMTok: 7.5 },
       defaultLadderEligible: false,
-      contextWindowTokens: 128_000,
-      toolSupport: 'basic',
-      multimodal: { text: true, image: false },
+      contextWindowTokens: 262_144,
+      toolSupport: 'full',
+      multimodal: { text: true, image: true },
       latencyTier: 'standard',
-      reasoningTier: 'standard',
-      costPerMillionInputTokensUsd: 0.35,
-      costPerMillionOutputTokensUsd: 0.9,
+      reasoningTier: 'advanced',
+      costPerMillionInputTokensUsd: 1.5,
+      costPerMillionOutputTokensUsd: 7.5,
       agent: 'claude-openrouter',
     },
     'deepseek-r1': {
@@ -1546,18 +1670,18 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
     'deepseek-v3': {
       vendor: 'deepseek',
       class: 'strong_generalist',
-      strengths: ['coding', 'review', 'budget efficiency'],
-      weaknesses: ['review/planning ceiling below R1', 'OpenRouter dependency'],
+      strengths: ['coding', 'review', 'agentic tool use', 'budget efficiency'],
+      weaknesses: ['reasoning defaults off unless explicitly requested', 'OpenRouter dependency'],
       qualityScores: scores(58, 74, 82, 80, 56),
-      pricing: { inputCostPerMTok: 0.27, outputCostPerMTok: 1.1 },
+      pricing: { inputCostPerMTok: 0.2145, outputCostPerMTok: 0.32175, cacheReadCostPerMTok: 0.02145 },
       defaultLadderEligible: false,
-      contextWindowTokens: 128_000,
-      toolSupport: 'basic',
+      contextWindowTokens: 163_840,
+      toolSupport: 'full',
       multimodal: { text: true, image: false },
       latencyTier: 'standard',
       reasoningTier: 'standard',
-      costPerMillionInputTokensUsd: 0.27,
-      costPerMillionOutputTokensUsd: 1.1,
+      costPerMillionInputTokensUsd: 0.2145,
+      costPerMillionOutputTokensUsd: 0.32175,
       agent: 'claude',
     },
     'qwen-2.5-coder-32b': {
@@ -1607,15 +1731,15 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       strengths: ['planning', 'coding', 'review breadth'],
       weaknesses: ['watchlist maturity', 'opt-in only'],
       qualityScores: scores(60, 86, 85, 83, 58),
-      pricing: { inputCostPerMTok: 0.8, outputCostPerMTok: 2.4 },
+      pricing: { inputCostPerMTok: 0.09, outputCostPerMTok: 0.55 },
       defaultLadderEligible: false,
-      contextWindowTokens: 131_072,
-      toolSupport: 'basic',
+      contextWindowTokens: 262_144,
+      toolSupport: 'full',
       multimodal: { text: true, image: false },
       latencyTier: 'slow',
       reasoningTier: 'advanced',
-      costPerMillionInputTokensUsd: 0.8,
-      costPerMillionOutputTokensUsd: 2.4,
+      costPerMillionInputTokensUsd: 0.09,
+      costPerMillionOutputTokensUsd: 0.55,
       agent: 'claude-openrouter',
     },
     'kimi-k2': {
@@ -1819,11 +1943,11 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
     },
   },
   ladders: {
-    routing: ['claude-haiku-4-5-20251001', 'deepseek-v4-flash', 'claude-sonnet-5', 'gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7'],
-    planning: ['claude-fable-5', 'gpt-5.5', 'claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.4', 'deepseek-reasoner', 'deepseek-v4-pro', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
-    coding: ['claude-fable-5', 'gpt-5.5', 'gpt-5.4', 'deepseek-v4-pro', 'claude-sonnet-5', 'claude-opus-4-8', 'claude-opus-4-7', 'deepseek-chat', 'deepseek-v4-flash', 'claude-haiku-4-5-20251001'],
-    review: ['gpt-5.5', 'claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.4', 'deepseek-v4-pro', 'claude-sonnet-5', 'deepseek-reasoner', 'claude-haiku-4-5-20251001'],
-    classify: ['claude-haiku-4-5-20251001', 'deepseek-v4-flash', 'claude-sonnet-5', 'gpt-5.5', 'gpt-5.4', 'claude-fable-5'],
+    routing: ['claude-haiku-4-5-20251001', 'deepseek-v4-flash', 'claude-sonnet-5', 'gpt-5.5', 'gpt-5.6-terra', 'deepseek-v4-pro', 'claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7'],
+    planning: ['claude-fable-5', 'gpt-5.5', 'claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.6-terra', 'deepseek-reasoner', 'deepseek-v4-pro', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
+    coding: ['claude-fable-5', 'gpt-5.5', 'gpt-5.6-terra', 'deepseek-v4-pro', 'claude-sonnet-5', 'claude-opus-4-8', 'claude-opus-4-7', 'deepseek-chat', 'deepseek-v4-flash', 'claude-haiku-4-5-20251001'],
+    review: ['gpt-5.5', 'claude-fable-5', 'claude-opus-4-8', 'claude-opus-4-7', 'gpt-5.6-terra', 'deepseek-v4-pro', 'claude-sonnet-5', 'deepseek-reasoner', 'claude-haiku-4-5-20251001'],
+    classify: ['claude-haiku-4-5-20251001', 'deepseek-v4-flash', 'claude-sonnet-5', 'gpt-5.5', 'gpt-5.6-terra', 'claude-fable-5'],
   },
 };
 
@@ -1996,6 +2120,44 @@ export function listSupportedModelsForStage(
       return (capabilities.qualityScores[normalized] ?? 0) > 0;
     })
     .map(([modelId]) => modelId);
+}
+
+/**
+ * Hosted Codex authenticates through a ChatGPT account, whose model inventory
+ * is narrower than the OpenAI API. Missing metadata is deliberately ineligible
+ * so a new API model cannot accidentally be launched through Codex.
+ */
+export function isCodexChatgptLaunchEligible(capabilities: ModelCapabilities | undefined): boolean {
+  return capabilities?.codexChatgptCapability?.supported === true;
+}
+
+/**
+ * Explicit migrations for retired model IDs emitted by historical route
+ * artifacts or external routers. These are deliberately narrow: an unknown or
+ * otherwise ineligible model must still be rejected by agent resolution.
+ */
+export const CODEX_CHATGPT_SUCCESSOR_MODELS: Readonly<Record<string, string>> = Object.freeze({
+  'gpt-5.4': 'gpt-5.6-terra',
+  'gpt-5': 'gpt-5.5',
+  'gpt-5-mini': 'gpt-5.5',
+});
+
+/**
+ * Returns a launchable Codex successor for a specifically retired model ID.
+ * The target is checked against the effective registry so local configuration
+ * cannot turn a migration into an invalid launch.
+ */
+export function resolveCodexChatgptSuccessor(
+  modelId: string,
+  registry: ModelRegistry = DEFAULT_MODEL_REGISTRY,
+): string | null {
+  const successor = CODEX_CHATGPT_SUCCESSOR_MODELS[modelId];
+  if (!successor) return null;
+
+  const capabilities = getModel(registry, successor);
+  return capabilities?.agent === 'codex' && isCodexChatgptLaunchEligible(capabilities)
+    ? successor
+    : null;
 }
 
 /**

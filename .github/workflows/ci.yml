@@ -44,6 +44,9 @@ jobs:
       - name: Run shell and unit tests
         run: npm test
 
+      - name: Run native launch certification
+        run: npm run test:native-launch-certification
+
   check-paths:
     name: Check Lifecycle Paths
     runs-on: ubuntu-latest

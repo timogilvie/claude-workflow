@@ -1127,7 +1127,7 @@ const CLI_AVAILABILITY_SPECS: Record<LLMProvider, CliAvailabilitySpec> = {
   codex: {
     label: 'Codex',
     buildTestCommand: (cliCmd, tmpFile) =>
-      `${escapeShellArg(cliCmd)} exec --json --sandbox read-only --model gpt-5.4 < ${escapeShellArg(tmpFile)}`,
+      `${escapeShellArg(cliCmd)} exec --json --sandbox read-only --model gpt-5.6-terra < ${escapeShellArg(tmpFile)}`,
   },
   openai: {
     label: 'OpenAI',

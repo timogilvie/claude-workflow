@@ -2,11 +2,13 @@ import {
   DEFAULT_MODEL_REGISTRY,
   evaluateRegistryPhaseEligibility,
   getModel,
+  isCodexChatgptLaunchEligible,
   type AgentType,
   type ModelRegistry,
   type NativeProviderName,
 } from './model-registry.ts';
 import type { CertificationPhase } from './native-agent/certification/schema.ts';
+import { resolveLaunchPriorityModel, type RoleEligibility } from './openrouter-catalog.ts';
 
 export type AgentResolutionPhase = 'planning' | 'coding' | 'review';
 
@@ -15,7 +17,9 @@ export type UnroutableReason =
   | 'unknown-model'
   | 'no-native-capability'
   | 'native-unsupported'
-  | 'uncertified';
+  | 'role-ineligible'
+  | 'uncertified'
+  | 'codex-chatgpt-ineligible';
 
 export type AgentResolution =
   | { ok: true; agent: AgentType }
@@ -53,6 +57,20 @@ function inferHostedAgent(vendor: string | undefined): Extract<AgentType, 'claud
 
 function certifyCommandFor(modelId: string, provider: NativeProviderName, phase: AgentResolutionPhase): string {
   return `npx tsx tools/native-agent-certify.ts --provider ${provider} --model ${modelId} --phase ${certificationPhaseForAgentPhase(phase)}`;
+}
+
+function launchPriorityRoleEligibility(modelId: string, phase: AgentResolutionPhase): {
+  eligible: boolean;
+  eligibleRoles?: readonly RoleEligibility[];
+} {
+  const launchPriorityModel = resolveLaunchPriorityModel(modelId);
+  if (!launchPriorityModel) {
+    return { eligible: true };
+  }
+  return {
+    eligible: launchPriorityModel.roleEligibility.includes(phase),
+    eligibleRoles: launchPriorityModel.roleEligibility,
+  };
 }
 
 function buildDiagnostic(input: {
@@ -126,6 +144,19 @@ function resolveRegistryBackedNativeAgent(input: {
     };
   }
 
+  const roleEligibility = launchPriorityRoleEligibility(input.modelId, input.phase);
+  if (!roleEligibility.eligible) {
+    const eligibleRoles = roleEligibility.eligibleRoles?.join(',') || 'none';
+    const diagnostic = buildDiagnostic({
+      modelId: input.modelId,
+      phase: input.phase,
+      provider,
+      reason: 'role-ineligible',
+      certificationStatus: `eligible-roles:${eligibleRoles}`,
+    });
+    return { ok: false, reason: 'role-ineligible', diagnostic };
+  }
+
   const eligibility = evaluateRegistryPhaseEligibility({
     modelId: input.modelId,
     phase: certificationPhaseForAgentPhase(input.phase),
@@ -185,6 +216,15 @@ export function resolveModelAgent(opts: ResolveModelAgentOptions): AgentResoluti
   }
 
   if (resolvedAgent === 'codex' || resolvedAgent === 'claude') {
+    if (resolvedAgent === 'codex' && !isCodexChatgptLaunchEligible(capabilities)) {
+      const reason = capabilities?.codexChatgptCapability?.reason
+        ?? 'No explicit ChatGPT/Codex launch capability is declared.';
+      return {
+        ok: false,
+        reason: 'codex-chatgpt-ineligible',
+        diagnostic: `[agent-resolution] model=${modelId} phase=${opts.phase} surface=codex-chatgpt reason=codex-chatgpt-ineligible source=modelRegistry.models.${modelId}.codexChatgptCapability detail="${reason}"`,
+      };
+    }
     return { ok: true, agent: resolvedAgent };
   }
 

@@ -1,6 +1,7 @@
 import {
   deriveReadOnlyNativeCapability,
   getEffectiveRegistry,
+  getModel,
   type ModelRegistry,
   type NativeProviderName,
   type PiTransportKind,
@@ -77,7 +78,7 @@ export function validateToolCompat(input: ToolCompatInput): ToolCompatResult {
 
   const surface = getTransportCapabilities(input.transport);
   const registry = input.registry ?? getEffectiveRegistry();
-  const modelCapabilities = registry.models[input.model];
+  const modelCapabilities = getModel(registry, input.model);
   const diagnostics: ToolCompatDiagnostic[] = [];
   const seenToolNames = new Set<string>();
   const capability = deriveReadOnlyNativeCapability({

@@ -212,12 +212,16 @@ describe('model-registry', () => {
       'gpt-5.3-codex',
       'gpt-5.5',
       'gpt-5.4',
+      'gpt-5.6-sol',
+      'gpt-5.6-terra',
+      'gpt-5.6-luna',
       'kimi-k2',
       'kimi-k2.7-code',
       'kimi-k2-thinking',
       'llama-3.3-70b',
       'llama-4-maverick',
       'mistral-large-2',
+      'mistral-medium-3',
       'qwen-2.5-coder-32b',
       'qwen-3-235b',
       'qwen-3-coder',
@@ -258,7 +262,7 @@ describe('model-registry', () => {
       'deepseek-v4-flash',
       'claude-sonnet-5',
       'gpt-5.5',
-      'gpt-5.4',
+      'gpt-5.6-terra',
     ]);
   });
 
@@ -353,7 +357,7 @@ describe('model-registry', () => {
       'gpt-5.5',
       'claude-opus-4-8',
       'claude-opus-4-7',
-      'gpt-5.4',
+      'gpt-5.6-terra',
       'deepseek-v4-pro',
       'deepseek-reasoner',
       'claude-haiku-4-5-20251001',
@@ -372,7 +376,7 @@ describe('model-registry', () => {
   it('rankCandidates returns an empty ladder when every candidate is excluded', () => {
     assert.deepEqual(
       rankCandidates(DEFAULT_MODEL_REGISTRY, 'classify', {
-        excluded: ['claude-haiku-4-5-20251001', 'deepseek-v4-flash', 'claude-sonnet-5', 'gpt-5.5', 'gpt-5.4', 'claude-fable-5'],
+        excluded: ['claude-haiku-4-5-20251001', 'deepseek-v4-flash', 'claude-sonnet-5', 'gpt-5.5', 'gpt-5.6-terra', 'claude-fable-5'],
       }),
       []
     );
@@ -381,7 +385,7 @@ describe('model-registry', () => {
   it('rankCandidates returns the full ladder when no exclusions are provided', () => {
     assert.deepEqual(rankCandidates(DEFAULT_MODEL_REGISTRY, 'coding'), [
       'gpt-5.5',
-      'gpt-5.4',
+      'gpt-5.6-terra',
       'deepseek-v4-pro',
       'claude-sonnet-5',
       'claude-opus-4-8',
@@ -684,7 +688,7 @@ describe('model-registry', () => {
         router: {
           availableModels: {
             planner: ['gpt-5.5', 'claude-opus-4-7'],
-            coder: ['gpt-5.4', 'gpt-5.3-codex'],
+            coder: ['gpt-5.6-terra', 'gpt-5.3-codex'],
             reviewer: ['claude-sonnet-5'],
           },
         },
@@ -711,12 +715,12 @@ describe('model-registry', () => {
       clearConfigCache(repoDir);
 
       assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'planner'), ['gpt-5.5', 'claude-opus-4-7']);
-      assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'coder'), ['gpt-5.4']);
+      assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'coder'), ['gpt-5.6-terra']);
       assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'reviewer'), ['claude-sonnet-5']);
       assert.deepEqual(getConfiguredModelsForDescriptor(repoDir), [
         'gpt-5.5',
         'claude-opus-4-7',
-        'gpt-5.4',
+        'gpt-5.6-terra',
         'claude-sonnet-5',
       ]);
     } finally {
@@ -731,14 +735,14 @@ describe('model-registry', () => {
     try {
       writeConfig(repoDir, {
         router: {
-          models: ['gpt-5.4', 'claude-sonnet-5'],
+          models: ['gpt-5.6-terra', 'claude-sonnet-5'],
         },
       });
       clearConfigCache(repoDir);
 
-      assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'planner'), ['gpt-5.4', 'claude-sonnet-5']);
-      assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'coder'), ['gpt-5.4', 'claude-sonnet-5']);
-      assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'reviewer'), ['gpt-5.4', 'claude-sonnet-5']);
+      assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'planner'), ['gpt-5.6-terra', 'claude-sonnet-5']);
+      assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'coder'), ['gpt-5.6-terra', 'claude-sonnet-5']);
+      assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'reviewer'), ['gpt-5.6-terra', 'claude-sonnet-5']);
     } finally {
       clearConfigCache(repoDir);
       cleanUp(repoDir);
@@ -770,7 +774,7 @@ describe('model-registry', () => {
       const descriptorModels = getConfiguredModelsForDescriptor(repoDir);
       assert.ok(descriptorModels.length > 0);
       assert.ok(descriptorModels.includes('gpt-5.5'));
-      assert.ok(descriptorModels.includes('gpt-5.4'));
+      assert.ok(descriptorModels.includes('gpt-5.6-terra'));
       assert.notDeepEqual(descriptorModels, [
         'claude-sonnet-5',
         'claude-opus-4-7',
@@ -1726,6 +1730,10 @@ describe('parseModelSelector', () => {
     assert.deepEqual(parseModelSelector('deepseek-reasoner'), {
       ok: true,
       selector: { kind: 'pinned', modelId: 'deepseek-reasoner' },
+    });
+    assert.deepEqual(parseModelSelector('gpt-5.6-terra'), {
+      ok: true,
+      selector: { kind: 'pinned', modelId: 'gpt-5.6-terra' },
     });
   });
 

@@ -995,7 +995,7 @@
                     "description": "Read-only workflow phases where native agents may be selected.",
                     "items": {
                         "type": "string",
-                        "enum": ["task-expansion", "planning", "review"]
+                        "enum": ["task-expansion", "planning", "coding", "review"]
                     }
                 },
                 "expansion": {
@@ -1503,6 +1503,14 @@
                             "agent": {
                                 "type": "string",
                                 "enum": ["claude", "codex", "claude-openrouter", "native-openai", "native-openrouter"]
+                            },
+                            "codexChatgptCapability": {
+                                "type": "object",
+                                "properties": {
+                                    "supported": { "type": "boolean" },
+                                    "reason": { "type": "string" }
+                                },
+                                "additionalProperties": false
                             },
                             "nativeCapability": {
                                 "type": "object",
@@ -2028,8 +2036,8 @@
                         },
                         "model": {
                             "type": "string",
-                            "default": "gpt-5.4",
-                            "description": "Model selector to use for task packet review. Accepts a family alias such as 'haiku', 'inherit', or a pinned model ID such as 'gpt-5.4'. Should be fast and cheap."
+                            "default": "gpt-5.6-terra",
+                            "description": "Model selector to use for task packet review. Accepts a family alias such as 'haiku', 'inherit', or a pinned model ID such as 'gpt-5.6-terra'. Should be fast and cheap."
                         },
                         "provider": {
                             "type": "string",

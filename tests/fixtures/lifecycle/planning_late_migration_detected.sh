@@ -7,7 +7,7 @@ setup_planning_late_migration_detected() {
   create_git_worktree
   CURRENT_PHASE="planning"
   MONITOR_ITERATIONS=2
-  write_stage_result "$FEATURE_DIR" "planning" "running" "$CURRENT_AGENT"
+  write_stage_result "$FEATURE_DIR" "planning" "awaiting_user" "$CURRENT_AGENT"
   printf "plan\n" > "$FEATURE_DIR/plan.md"
   touch "$FEATURE_DIR/.plan-approved"
   touch "$FEATURE_DIR/.migration-detected"

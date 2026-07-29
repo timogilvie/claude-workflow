@@ -18,6 +18,7 @@ import {
   OPENROUTER_DEFAULT_BASE_URL,
   resolveNativeAgentProviders,
 } from './providers.ts';
+import { toProviderRequestModelId } from './provider.ts';
 
 const FIXED_NOW = new Date('2026-07-12T12:00:00.000Z');
 
@@ -152,6 +153,7 @@ describe('native-agent provider resolution', () => {
       assert.equal(entry.model.baseUrl, OPENAI_DEFAULT_BASE_URL);
       assert.equal(entry.model.id, 'openai:gpt-4o');
       assert.equal(entry.model.name, 'gpt-4o');
+      assert.equal(toProviderRequestModelId(entry.model), 'gpt-4o');
       assert.equal(getNativeProviderApiKey(entry), 'sk-openai-test');
     } finally {
       cleanup();
@@ -189,6 +191,9 @@ describe('native-agent provider resolution', () => {
       assert.equal(entry.model.api, 'openai-completions');
       assert.equal(entry.model.provider, 'openrouter');
       assert.equal(entry.model.baseUrl, 'https://example.test/openrouter');
+      assert.equal(entry.model.id, 'openrouter:openrouter-test-model');
+      assert.equal(entry.model.name, 'openrouter-test-model');
+      assert.equal(toProviderRequestModelId(entry.model), 'openrouter-test-model');
       assert.deepEqual(entry.model.headers, {
         'HTTP-Referer': 'https://wavemill.test',
         'X-Title': 'Wavemill',

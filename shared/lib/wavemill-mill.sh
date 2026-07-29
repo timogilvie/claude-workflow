@@ -5309,6 +5309,188 @@ emit_pane_divergence_attention() {
   return 0
 }
 
+native_launch_failure_artifact_path() {
+  local feature_dir="$1"
+  printf '%s\n' "$feature_dir/.native-launch-failure.json"
+}
+
+stage_result_field() {
+  local feature_dir="$1" stage="$2" field="$3"
+  local result_file="$feature_dir/.${stage}-result.json"
+  [[ -f "$result_file" ]] || return 0
+  jq -r --arg field "$field" '.[$field] // empty' "$result_file" 2>/dev/null || true
+}
+
+agent_or_model_is_native_for_recovery() {
+  local agent="${1:-}" model="${2:-}" tail="${3:-}"
+
+  case "$agent" in
+    native|native-*) return 0 ;;
+  esac
+
+  case "$model" in
+    native:*|openrouter/*|qwen-*|kimi-*|glm-*) return 0 ;;
+  esac
+
+  if printf '%s\n' "$tail" | grep -Eiq '(native-openrouter|native-openai|launch-native-(planning|review|coding)|OpenRouter|wavemill native-agent)'; then
+    return 0
+  fi
+
+  return 1
+}
+
+native_launch_failure_kind() {
+  local tail="${1:-}"
+
+  if printf '%s\n' "$tail" | grep -Eiq -- '--model[[:space:]]+[^[:space:]]'; then
+    printf 'bare-model-command\n'
+    return 0
+  fi
+
+  if printf '%s\n' "$tail" | grep -Eiq -- 'command not found.*--model'; then
+    printf 'bare-model-command\n'
+    return 0
+  fi
+
+  if printf '%s\n' "$tail" | grep -Eiq -- '--model.*command not found'; then
+    printf 'bare-model-command\n'
+    return 0
+  fi
+
+  if printf '%s\n' "$tail" | grep -Fq 'Agent exited (127)'; then
+    printf 'agent-exited-127\n'
+    return 0
+  fi
+
+  if printf '%s\n' "$tail" | grep -Fq 'exited with status 127'; then
+    printf 'agent-exited-127\n'
+    return 0
+  fi
+
+  if printf '%s\n' "$tail" | grep -Fq 'exited with code 127'; then
+    printf 'agent-exited-127\n'
+    return 0
+  fi
+
+  if printf '%s\n' "$tail" | grep -Fq 'exit status 127'; then
+    printf 'agent-exited-127\n'
+    return 0
+  fi
+
+  if printf '%s\n' "$tail" | grep -Fq 'native launch probe failed'; then
+    printf 'native-route-rejected\n'
+    return 0
+  fi
+
+  if printf '%s\n' "$tail" | grep -Eiq -- 'native agent .*cannot launch'; then
+    printf 'native-route-rejected\n'
+    return 0
+  fi
+
+  if printf '%s\n' "$tail" | grep -Eiq -- 'native agent .*does not support'; then
+    printf 'native-route-rejected\n'
+    return 0
+  fi
+
+  if printf '%s\n' "$tail" | grep -Eiq -- 'not eligible for planning'; then
+    printf 'native-route-rejected\n'
+    return 0
+  fi
+
+  if printf '%s\n' "$tail" | grep -Eiq -- 'not eligible for coding'; then
+    printf 'native-route-rejected\n'
+    return 0
+  fi
+
+  if printf '%s\n' "$tail" | grep -Eiq -- 'not eligible for review'; then
+    printf 'native-route-rejected\n'
+    return 0
+  fi
+
+  return 1
+}
+
+write_native_launch_failure_artifact() {
+  local issue="$1" feature_dir="$2" stage="$3" agent="$4" model="$5" pane_target="$6" failure_kind="$7" exit_code="$8"
+  local artifact tmp detected_at recommended_action
+
+  artifact="$(native_launch_failure_artifact_path "$feature_dir")"
+  detected_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  recommended_action="Inspect the pane transcript and route config, then relaunch after fixing native provider/model eligibility."
+  mkdir -p "$feature_dir"
+  tmp="$(mktemp "$artifact.tmp.XXXXXX" 2>/dev/null)" || return 0
+
+  jq -n \
+    --arg issue "$issue" \
+    --arg stage "$stage" \
+    --arg agent "$agent" \
+    --arg model "$model" \
+    --arg paneTarget "$pane_target" \
+    --arg failureKind "$failure_kind" \
+    --arg exitCode "$exit_code" \
+    --arg detectedAt "$detected_at" \
+    --arg recommendedAction "$recommended_action" \
+    '{
+      type: "native-launch-failure",
+      issue: $issue,
+      stage: $stage,
+      agent: $agent,
+      model: $model,
+      paneTarget: $paneTarget,
+      failureKind: $failureKind,
+      exitCode: (if $exitCode == "" then null else ($exitCode | tonumber) end),
+      detectedAt: $detectedAt,
+      recommendedAction: $recommendedAction
+    }' > "$tmp" 2>/dev/null \
+    && mv "$tmp" "$artifact" 2>/dev/null \
+    || rm -f "$tmp"
+}
+
+# Convert dead native launch panes into failed controller-owned stage results.
+# This prevents malformed launchers from leaving stages in "running" forever.
+emit_native_launch_failure_attention() {
+  local issue="$1" feature_dir="$2" stage="$3" win="$4" win_target="$5" fallback_agent="${6:-}" fallback_model="${7:-}"
+  local stage_status agent model pane_tail failure_kind exit_code notes artifacts_json
+
+  stage_status="$(read_stage_status "$feature_dir" "$stage")"
+  [[ "$stage_status" == "running" ]] || return 1
+  [[ -n "$win_target" ]] || return 1
+  _pane_is_dead_or_idle "$win_target" 2>/dev/null || return 1
+
+  pane_tail="$(tmux capture-pane -p -t "$win_target" -S -200 2>/dev/null || true)"
+  agent="$(stage_result_field "$feature_dir" "$stage" "agent")"
+  model="$(stage_result_field "$feature_dir" "$stage" "model")"
+  [[ -n "$agent" ]] || agent="$fallback_agent"
+  [[ -n "$model" ]] || model="$fallback_model"
+
+  agent_or_model_is_native_for_recovery "$agent" "$model" "$pane_tail" || return 1
+
+  failure_kind="$(native_launch_failure_kind "$pane_tail" || true)"
+  [[ -n "$failure_kind" ]] || failure_kind="native-agent-exited-without-artifacts"
+
+  exit_code=""
+  if printf '%s\n' "$pane_tail" | grep -Eq '(^|[^0-9])127([^0-9]|$)'; then
+    exit_code="127"
+  fi
+
+  write_native_launch_failure_artifact "$issue" "$feature_dir" "$stage" "$agent" "$model" "$win_target" "$failure_kind" "$exit_code"
+
+  notes="Native ${stage} launch failed: ${failure_kind}"
+  [[ -n "$exit_code" ]] && notes+=" (exit $exit_code)"
+  notes+=". Pane $win_target needs attention"
+
+  artifacts_json="$(jq -cn \
+    --arg paneTarget "$win_target" \
+    --arg failureKind "$failure_kind" \
+    --arg exitCode "$exit_code" \
+    '{type:"nativeLaunchFailure", paneTarget:$paneTarget, failureKind:$failureKind, exitCode:(if $exitCode == "" then null else ($exitCode | tonumber) end)}' 2>/dev/null || printf '{}')"
+  write_stage_result "$feature_dir" "$stage" "failed" "$agent" "$model" "$notes" "$artifacts_json"
+  set_window_attention_state "$win" "needs-user"
+  log_warn "$issue → Native ${stage} launcher failed (${failure_kind}) in pane $win_target"
+  active_count=$((active_count + 1))
+  return 0
+}
+
 coding_missing_blocked_completion_announce_marker() {
   local feature_dir="$1"
   printf '%s\n' "$feature_dir/.missing-blocked-completion-announced"
@@ -5973,7 +6155,9 @@ persist_task_window_id() {
 _RESTORE_STATE=""
 _restore_inflight_task_window_if_missing() {
   local issue="$1" slug="$2" branch="$3" phase="$4"
-  local wt_dir="${WORKTREE_ROOT}/${slug}"
+  local wt_dir
+  wt_dir=$(read_state_value "" --arg i "$issue" '.tasks[$i].worktree // ""')
+  [[ -z "$wt_dir" ]] && wt_dir="${WORKTREE_ROOT}/${slug}"
   local feature_dir="${wt_dir}/features/${slug}"
   _RESTORE_STATE="none"
 
@@ -6105,7 +6289,7 @@ _launch_agent_in_pane() {
   local agent_flags=""
   local abort_check_cmd=""
   local feature_dir=""
-  local esc_session esc_issue esc_slug
+  local esc_session esc_issue esc_slug esc_linear_issue linear_issue=""
 
   [[ "$agent_cmd" == "codex" ]] && agent_flags="--dangerously-bypass-approvals-and-sandbox"
   if [[ -n "$slug" ]]; then
@@ -6114,14 +6298,20 @@ _launch_agent_in_pane() {
   fi
 
   # Export wavemill context environment variables for hook protocol
+  if declare -F get_linear_issue_id >/dev/null 2>&1; then
+    linear_issue="$(get_linear_issue_id "$issue" 2>/dev/null || true)"
+  fi
+  [[ -n "$linear_issue" ]] || linear_issue="$issue"
   esc_session=${session//\'/\'\\\'\'}
   esc_issue=${issue//\'/\'\\\'\'}
   esc_slug=${slug//\'/\'\\\'\'}
+  esc_linear_issue=${linear_issue//\'/\'\\\'\'}
   tmux send-keys -t "$target" \
-    "export WAVEMILL_SESSION='$esc_session' WAVEMILL_ISSUE='$esc_issue' WAVEMILL_SLUG='$esc_slug' WAVEMILL_FEATURE_SLUG='$esc_slug' WAVEMILL_FEATURE_DIR='$feature_dir'" C-m
+    "export WAVEMILL_SESSION='$esc_session' WAVEMILL_ISSUE='$esc_issue' WAVEMILL_LINEAR_ISSUE='$esc_linear_issue' WAVEMILL_SLUG='$esc_slug' WAVEMILL_FEATURE_SLUG='$esc_slug' WAVEMILL_FEATURE_DIR='$feature_dir'" C-m
 
   export WAVEMILL_FEATURE_SLUG="$slug"
   export WAVEMILL_FEATURE_DIR="$feature_dir"
+  export WAVEMILL_LINEAR_ISSUE="$linear_issue"
 
   agent_launch_interactive "$session" "$window" "$prompt_file" "$agent_cmd" "$model" "$agent_flags" "$abort_check_cmd" "$issue"
 }
@@ -6432,6 +6622,19 @@ merge_queue_enabled() {
   [[ "${MERGE_QUEUE_ENABLED:-true}" == "1" || "${MERGE_QUEUE_ENABLED:-true}" == "true" ]]
 }
 
+wavemill_run_tsx_tool() {
+  local tool="$1"
+  shift
+
+  if node --import tsx -e "" >/dev/null 2>&1; then
+    node --import tsx "$tool" "$@"
+  elif command -v tsx >/dev/null 2>&1; then
+    tsx "$tool" "$@"
+  else
+    npx tsx "$tool" "$@"
+  fi
+}
+
 write_ready_queue_artifacts() {
   local state_dir="$1" patch_json="$2"
   local result_file="$state_dir/.ready-result.json"
@@ -6451,7 +6654,7 @@ write_ready_queue_artifacts() {
       ) | .type = "ready"
     ')
 
-  npx tsx "$TOOLS_DIR/stage-result-cli.ts" update "$state_dir" ready --artifacts "$merged_artifacts" >/dev/null 2>&1 || \
+  wavemill_run_tsx_tool "$TOOLS_DIR/stage-result-cli.ts" update "$state_dir" ready --artifacts "$merged_artifacts" >/dev/null 2>&1 || \
     log_warn "merge queue: failed to update ready artifacts in $state_dir"
 }
 
@@ -6682,7 +6885,7 @@ refresh_ready_merge_queue_tick() {
   input_file=$(mktemp) || return 0
   output_file=$(mktemp) || { rm -f "$input_file"; return 0; }
   jq -cn --arg now "$now" --argjson prs "$ready_prs" --argjson config "$config_json" '{readyPrs:$prs, now:$now, config:$config}' > "$input_file"
-  if ! npx tsx "$TOOLS_DIR/merge-queue-select.ts" --input "$input_file" > "$output_file" 2>/dev/null; then
+  if ! wavemill_run_tsx_tool "$TOOLS_DIR/merge-queue-select.ts" --input "$input_file" > "$output_file" 2>/dev/null; then
     rm -f "$input_file" "$output_file"
     printf '{"selectedIssues":[],"stuckIssues":[]}\n' > "$MERGE_QUEUE_SELECTION_FILE"
     return 0
@@ -7519,7 +7722,23 @@ get_linear_issue_id() {
   local issue="$1"
   local linear_issue
   linear_issue=$(get_task_meta "$issue" "linearIssueId")
-  [[ -n "$linear_issue" ]] && echo "$linear_issue" || echo "$issue"
+  linear_issue="${linear_issue#"${linear_issue%%[![:space:]]*}"}"
+  linear_issue="${linear_issue%"${linear_issue##*[![:space:]]}"}"
+  if [[ "$linear_issue" =~ ^[A-Z][A-Z0-9]*-[0-9]+$ ]]; then
+    printf '%s\n' "$linear_issue"
+    return 0
+  fi
+  if [[ "$linear_issue" =~ ^https?://linear\.app/[^/]+/issue/[A-Z][A-Z0-9]*-[0-9]+([/?#].*)?$ ]]; then
+    local linear_url_path="${linear_issue#*://linear.app/}"
+    linear_url_path="${linear_url_path#*/issue/}"
+    printf '%s\n' "${linear_url_path%%[/?#]*}"
+    return 0
+  fi
+  if [[ "$issue" =~ ^([A-Z][A-Z0-9]*-[0-9]+)_c$ ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  printf '%s\n' "$issue"
 }
 
 expansion_recovery_resolve_issue_id() {
@@ -9866,21 +10085,109 @@ EOF
   fi
 
   if declare -F agent_resolve_models_for_roles >/dev/null 2>&1; then
-    if agent_resolve_models_for_roles "$planner_model" "$task_model" "$reviewer_model"; then
-      :
+    if ! agent_resolve_models_for_roles "$planner_model" "$task_model" "$reviewer_model"; then
+      log_error "  Selected route is not launchable: ${AGENT_RESOLVE_LAST_DIAGNOSTIC:-agent resolution failed}"
+      return 1
     fi
     planner_agent="$(agent_resolve_batch_agent_for_role "planner")"
     task_agent_cmd="$(agent_resolve_batch_agent_for_role "coder")"
     reviewer_agent="$(agent_resolve_batch_agent_for_role "reviewer")"
   else
     if [[ -n "$planner_model" ]]; then
-      planner_agent="$(agent_resolve_from_model "$planner_model" "planning" || true)"
+      if ! planner_agent="$(agent_resolve_from_model "$planner_model" "planning")"; then
+        log_error "  Selected planner route is not launchable: ${AGENT_RESOLVE_LAST_DIAGNOSTIC:-agent resolution failed}"
+        return 1
+      fi
     fi
     if [[ -n "$task_model" ]]; then
-      task_agent_cmd="$(agent_resolve_from_model "$task_model" "coding" || true)"
+      if ! task_agent_cmd="$(agent_resolve_from_model "$task_model" "coding")"; then
+        log_error "  Selected coder route is not launchable: ${AGENT_RESOLVE_LAST_DIAGNOSTIC:-agent resolution failed}"
+        return 1
+      fi
     fi
     if [[ -n "$reviewer_model" ]]; then
-      reviewer_agent="$(agent_resolve_from_model "$reviewer_model" "review" || true)"
+      if ! reviewer_agent="$(agent_resolve_from_model "$reviewer_model" "review")"; then
+        log_error "  Selected reviewer route is not launchable: ${AGENT_RESOLVE_LAST_DIAGNOSTIC:-agent resolution failed}"
+        return 1
+      fi
+    fi
+  fi
+
+  if [[ -n "$planner_model" && -z "$planner_agent" ]]; then
+    log_error "  Selected planner route is not launchable: agent resolution returned empty for model=$planner_model"
+    return 1
+  fi
+  if [[ -n "$task_model" && -z "$task_agent_cmd" ]]; then
+    log_error "  Selected coder route is not launchable: agent resolution returned empty for model=$task_model"
+    return 1
+  fi
+  if [[ -n "$reviewer_model" && -z "$reviewer_agent" ]]; then
+    log_error "  Selected reviewer route is not launchable: agent resolution returned empty for model=$reviewer_model"
+    return 1
+  fi
+
+  if ! agent_validate_phase_launch "$task_agent_cmd" "coding" "$task_model" "$REPO_DIR"; then
+    log_error "  Selected coder route is not launchable: agent=$task_agent_cmd model=$task_model"
+    return 1
+  fi
+  if [[ -n "$planner_model" ]] && ! agent_validate_phase_launch "$planner_agent" "planning" "$planner_model" "$REPO_DIR"; then
+    log_error "  Selected planner route is not launchable: agent=$planner_agent model=$planner_model"
+    return 1
+  fi
+  if [[ -n "$reviewer_model" ]] && ! agent_validate_phase_launch "$reviewer_agent" "review" "$reviewer_model" "$REPO_DIR"; then
+    log_error "  Selected reviewer route is not launchable: agent=$reviewer_agent model=$reviewer_model"
+    return 1
+  fi
+
+  local challenger_planner_agent="" challenger_reviewer_agent=""
+  if [[ "$challenge_enabled_for_launch" == "true" ]]; then
+    if declare -F agent_resolve_models_for_roles >/dev/null 2>&1; then
+      if ! agent_resolve_models_for_roles "$challenger_planner" "$challenger_model" "$challenger_reviewer"; then
+        log_error "  Selected challenger route is not launchable: ${AGENT_RESOLVE_LAST_DIAGNOSTIC:-agent resolution failed}"
+        return 1
+      fi
+      challenger_planner_agent="$(agent_resolve_batch_agent_for_role "planner")"
+      challenger_agent="$(agent_resolve_batch_agent_for_role "coder")"
+      challenger_reviewer_agent="$(agent_resolve_batch_agent_for_role "reviewer")"
+    else
+      if [[ -n "$challenger_planner" ]] && ! challenger_planner_agent="$(agent_resolve_from_model "$challenger_planner" "planning")"; then
+        log_error "  Selected challenger planner route is not launchable: ${AGENT_RESOLVE_LAST_DIAGNOSTIC:-agent resolution failed}"
+        return 1
+      fi
+      if [[ -n "$challenger_model" ]] && ! challenger_agent="$(agent_resolve_from_model "$challenger_model" "coding")"; then
+        log_error "  Selected challenger coder route is not launchable: ${AGENT_RESOLVE_LAST_DIAGNOSTIC:-agent resolution failed}"
+        return 1
+      fi
+      if [[ -n "$challenger_reviewer" ]] && ! challenger_reviewer_agent="$(agent_resolve_from_model "$challenger_reviewer" "review")"; then
+        log_error "  Selected challenger reviewer route is not launchable: ${AGENT_RESOLVE_LAST_DIAGNOSTIC:-agent resolution failed}"
+        return 1
+      fi
+    fi
+
+    if [[ -n "$challenger_planner" && -z "$challenger_planner_agent" ]]; then
+      log_error "  Selected challenger planner route is not launchable: agent resolution returned empty for model=$challenger_planner"
+      return 1
+    fi
+    if [[ -n "$challenger_model" && -z "$challenger_agent" ]]; then
+      log_error "  Selected challenger coder route is not launchable: agent resolution returned empty for model=$challenger_model"
+      return 1
+    fi
+    if [[ -n "$challenger_reviewer" && -z "$challenger_reviewer_agent" ]]; then
+      log_error "  Selected challenger reviewer route is not launchable: agent resolution returned empty for model=$challenger_reviewer"
+      return 1
+    fi
+
+    if ! agent_validate_phase_launch "$challenger_agent" "coding" "$challenger_model" "$REPO_DIR"; then
+      log_error "  Selected challenger coder route is not launchable: agent=$challenger_agent model=$challenger_model"
+      return 1
+    fi
+    if [[ -n "$challenger_planner_agent" ]] && ! agent_validate_phase_launch "$challenger_planner_agent" "planning" "$challenger_planner" "$REPO_DIR"; then
+      log_error "  Selected challenger planner route is not launchable: agent=$challenger_planner_agent model=$challenger_planner"
+      return 1
+    fi
+    if [[ -n "$challenger_reviewer_agent" ]] && ! agent_validate_phase_launch "$challenger_reviewer_agent" "review" "$challenger_reviewer" "$REPO_DIR"; then
+      log_error "  Selected challenger reviewer route is not launchable: agent=$challenger_reviewer_agent model=$challenger_reviewer"
+      return 1
     fi
   fi
 
@@ -10099,42 +10406,78 @@ Implement from the issue description plus direct codebase analysis."
   routing_max_cost_usd="$(read_route_json "$SESSION" "$issue" "constraints.maxCostUsd" "")"
   [[ -z "$routing_max_cost_usd" ]] && routing_max_cost_usd="${DEFAULT_MAX_COST_USD:-}"
 
-  jq -n \
-    --arg planner "${planner_model:-claude-sonnet-5}" \
-    --arg coder "${task_model:-claude-opus-4-7}" \
-    --arg reviewer "${reviewer_model:-claude-sonnet-5}" \
-    --arg planDepth "${plan_depth:-light}" \
-    --arg codeDepth "${code_depth:-medium}" \
-    --arg reviewMode "${review_mode:-static}" \
-    --arg source "bootstrap" \
-    --arg inputKind "issue" \
-    --arg inputPath "features/$slug/selected-task.json" \
-    --arg provenanceSource "$(read_route_json "$SESSION" "$issue" "source" "")" \
-    --arg provenanceInputKind "$(read_route_json "$SESSION" "$issue" "inputKind" "")" \
-    --arg provenanceInputPath "$(read_route_json "$SESSION" "$issue" "inputPath" "")" \
-    --arg provenanceInputHash "$(read_route_json "$SESSION" "$issue" "inputHash" "")" \
-    --arg provenanceRoutedAt "$(read_route_json "$SESSION" "$issue" "routedAt" "")" \
-    --arg provenanceRouterMode "$(read_route_json "$SESSION" "$issue" "routerMode" "")" \
-    --argjson maxCostUsd "${routing_max_cost_usd:-null}" \
-    '{
-      planner: $planner,
-      coder: $coder,
-      reviewer: $reviewer,
-      planDepth: $planDepth,
-      codeDepth: $codeDepth,
-      reviewMode: $reviewMode,
-      reviewRecommended: $reviewMode,
-      provenance: {
-        source: (if $provenanceSource == "" then $source else $provenanceSource end),
-        inputKind: (if $provenanceInputKind == "" then $inputKind else $provenanceInputKind end),
-        inputPath: (if $provenanceInputPath == "" then $inputPath else $provenanceInputPath end),
-        inputHash: $provenanceInputHash,
-        routedAt: (if $provenanceRoutedAt == "" then (now | todateiso8601) else $provenanceRoutedAt end),
-        routerMode: (if $provenanceRouterMode == "" then "normal" else $provenanceRouterMode end)
-      },
-      maxCostUsd: $maxCostUsd
-    } + (if $maxCostUsd == null then {} else {constraints: {maxCostUsd: $maxCostUsd}} end)' \
-    | write_json_artifact "$routing_file"
+  local startup_route_file="/tmp/${SESSION}-${issue}-route.json"
+  if [[ -f "$startup_route_file" ]] && jq -e '.planner and .coder and .reviewer' "$startup_route_file" >/dev/null 2>&1; then
+    jq \
+      --arg planner "${planner_model:-claude-sonnet-5}" \
+      --arg coder "${task_model:-claude-opus-4-7}" \
+      --arg reviewer "${reviewer_model:-claude-sonnet-5}" \
+      --arg planDepth "${plan_depth:-light}" \
+      --arg codeDepth "${code_depth:-medium}" \
+      --arg reviewMode "${review_mode:-static}" \
+      --arg source "bootstrap" \
+      --arg inputKind "issue" \
+      --arg inputPath "features/$slug/selected-task.json" \
+      --argjson maxCostUsd "${routing_max_cost_usd:-null}" \
+      '(.provenance // {}) as $p
+      | .planner = $planner
+      | .coder = $coder
+      | .reviewer = $reviewer
+      | .planDepth = $planDepth
+      | .codeDepth = $codeDepth
+      | .reviewMode = $reviewMode
+      | .reviewRecommended = $reviewMode
+      | .provenance = ($p + {
+          source: (if (($p.source // "") == "") then $source else $p.source end),
+          inputKind: (if (($p.inputKind // "") == "") then $inputKind else $p.inputKind end),
+          inputPath: (if (($p.inputPath // "") == "") then $inputPath else $p.inputPath end),
+          inputHash: ($p.inputHash // ""),
+          routedAt: (if (($p.routedAt // "") == "") then (now | todateiso8601) else $p.routedAt end),
+          routerMode: (if (($p.routerMode // "") == "") then "normal" else $p.routerMode end)
+        })
+      | if $maxCostUsd == null
+        then .
+        else .maxCostUsd = $maxCostUsd | .constraints = ((.constraints // {}) + {maxCostUsd: $maxCostUsd})
+        end' "$startup_route_file" \
+      | write_json_artifact "$routing_file"
+  else
+    jq -n \
+      --arg planner "${planner_model:-claude-sonnet-5}" \
+      --arg coder "${task_model:-claude-opus-4-7}" \
+      --arg reviewer "${reviewer_model:-claude-sonnet-5}" \
+      --arg planDepth "${plan_depth:-light}" \
+      --arg codeDepth "${code_depth:-medium}" \
+      --arg reviewMode "${review_mode:-static}" \
+      --arg source "bootstrap" \
+      --arg inputKind "issue" \
+      --arg inputPath "features/$slug/selected-task.json" \
+      --arg provenanceSource "$(read_route_json "$SESSION" "$issue" "source" "")" \
+      --arg provenanceInputKind "$(read_route_json "$SESSION" "$issue" "inputKind" "")" \
+      --arg provenanceInputPath "$(read_route_json "$SESSION" "$issue" "inputPath" "")" \
+      --arg provenanceInputHash "$(read_route_json "$SESSION" "$issue" "inputHash" "")" \
+      --arg provenanceRoutedAt "$(read_route_json "$SESSION" "$issue" "routedAt" "")" \
+      --arg provenanceRouterMode "$(read_route_json "$SESSION" "$issue" "routerMode" "")" \
+      --argjson maxCostUsd "${routing_max_cost_usd:-null}" \
+      '{
+        planner: $planner,
+        coder: $coder,
+        reviewer: $reviewer,
+        planDepth: $planDepth,
+        codeDepth: $codeDepth,
+        reviewMode: $reviewMode,
+        reviewRecommended: $reviewMode,
+        provenance: {
+          source: (if $provenanceSource == "" then $source else $provenanceSource end),
+          inputKind: (if $provenanceInputKind == "" then $inputKind else $provenanceInputKind end),
+          inputPath: (if $provenanceInputPath == "" then $inputPath else $provenanceInputPath end),
+          inputHash: $provenanceInputHash,
+          routedAt: (if $provenanceRoutedAt == "" then (now | todateiso8601) else $provenanceRoutedAt end),
+          routerMode: (if $provenanceRouterMode == "" then "normal" else $provenanceRouterMode end)
+        },
+        maxCostUsd: $maxCostUsd
+      } + (if $maxCostUsd == null then {} else {constraints: {maxCostUsd: $maxCostUsd}} end)' \
+      | write_json_artifact "$routing_file"
+  fi
 
   # Save initial route for eval comparison (routed on raw description).
   # Always stamp source='bootstrap' regardless of what the batch router recorded,
@@ -10941,13 +11284,14 @@ monitor_issue_state() {
   SLUG="${SLUG_BY_ISSUE[$ISSUE]}"
   PR="${PR_BY_ISSUE[$ISSUE]:-}"
   WIN="$ISSUE-$SLUG"
-  WT_DIR="${WORKTREE_ROOT}/${SLUG}"
+  WT_DIR=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].worktree // ""')
+  [[ -z "$WT_DIR" ]] && WT_DIR="${WORKTREE_ROOT}/${SLUG}"
   local WIN_TARGET
   WIN_TARGET="$(_tmux_task_window_target "$SESSION" "$ISSUE" "$SLUG" "${STATE_FILE:-}" "$WT_DIR" 2>/dev/null || true)"
   if [[ -z "$WIN_TARGET" ]]; then
     WIN_TARGET="$(_tmux_target_join "$SESSION" "$WIN" 2>/dev/null || printf '%s:%s\n' "$SESSION" "$WIN")"
   fi
-  local FEATURE_DIR="${WORKTREE_ROOT}/${SLUG}/features/${SLUG}"
+  local FEATURE_DIR="${WT_DIR}/features/${SLUG}"
   current_agent=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].agent // ""')
   needs_attention="false"
 
@@ -10961,7 +11305,7 @@ monitor_issue_state() {
   if [[ "$task_status" == "merged" || "$task_status" == "completed-external" ]]; then
     if [[ "$task_status" == "merged" ]]; then
       local merged_ready_dir merged_before_ready=false
-      merged_ready_dir="$(ready_state_dir "${WORKTREE_ROOT}/${SLUG}" "$SLUG")"
+      merged_ready_dir="$(ready_state_dir "$WT_DIR" "$SLUG")"
       if ! ready_stage_allows_merge "$merged_ready_dir"; then
         merged_before_ready=true
         ready_stage_warn_bypass_once "$merged_ready_dir" "$ISSUE" "$PR" || true
@@ -11026,7 +11370,7 @@ monitor_issue_state() {
       challenge_pair=$(get_task_meta "$ISSUE" "challengePairId")
       challenge_role=$(get_task_meta "$ISSUE" "challengeRole")
       challenge_model=$(get_task_meta "$ISSUE" "challengeModel")
-      save_task_state "$ISSUE" "$SLUG" "$BRANCH" "${WORKTREE_ROOT}/${SLUG}" "$PR" "" "$current_agent" "$linear_issue" "$challenge_flag" "$challenge_pair" "$challenge_role" "$challenge_model"
+      save_task_state "$ISSUE" "$SLUG" "$BRANCH" "$WT_DIR" "$PR" "" "$current_agent" "$linear_issue" "$challenge_flag" "$challenge_pair" "$challenge_role" "$challenge_model"
       if should_update_linear_state "$ISSUE"; then
         linear_set_state "$linear_issue" "In Review"
       fi
@@ -11115,7 +11459,7 @@ monitor_issue_state() {
           fi
           # Preserve agent when marking as completed-external
           current_agent=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].agent // ""')
-          save_task_state "$ISSUE" "$SLUG" "$BRANCH" "${WORKTREE_ROOT}/${SLUG}" "" "completed-external" "$current_agent"
+          save_task_state "$ISSUE" "$SLUG" "$BRANCH" "$WT_DIR" "" "completed-external" "$current_agent"
           active_count=$((active_count + 1))
           return 0
         fi
@@ -11193,7 +11537,7 @@ monitor_issue_state() {
               # Save routing results to state
               current_agent=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].agent // ""')
               linear_issue=$(get_linear_issue_id "$ISSUE")
-              save_task_state "$ISSUE" "$SLUG" "$BRANCH" "${WORKTREE_ROOT}/${SLUG}" "" "" "$current_agent" "$linear_issue" "" "" "" "" "$planner_model" "$coder_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode"
+              save_task_state "$ISSUE" "$SLUG" "$BRANCH" "$WT_DIR" "" "" "$current_agent" "$linear_issue" "" "" "" "" "$planner_model" "$coder_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode"
 
               # Write canonical phase config (HOK-1177)
               write_phase_config "$FEATURE_DIR" "$planner_model" "$coder_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode" "${FORCE_MODEL:-}"
@@ -11303,7 +11647,7 @@ monitor_issue_state() {
           if [[ "$resolved_phase" == "coding" ]]; then
             unset "$approval_wait_var" 2>/dev/null || true
             # Before launching coding, validate planning did not overreach.
-            if ! validate_planning_phase_output "${WORKTREE_ROOT}/${SLUG}"; then
+            if ! validate_planning_phase_output "$WT_DIR"; then
               handle_planning_overreach_rejection "$ISSUE" "$FEATURE_DIR" "$WIN" "$current_agent"
               active_count=$((active_count + 1))
               return 0
@@ -11314,7 +11658,7 @@ monitor_issue_state() {
             if ! reroute_expanded_packets_for_coding_handoff "$ISSUE" "$SLUG" "$FEATURE_DIR"; then
               handle_expanded_reroute_handoff_failure "$ISSUE" "$FEATURE_DIR"
             fi
-            if ! apply_expanded_route_if_present "$FEATURE_DIR" "$ISSUE" "$SLUG" "${WORKTREE_ROOT}/${SLUG}" "$STATE_FILE"; then
+            if ! apply_expanded_route_if_present "$FEATURE_DIR" "$ISSUE" "$SLUG" "$WT_DIR" "$STATE_FILE"; then
               log_warn "$ISSUE → expanded route invalid; using bootstrap execution route for coding"
             fi
             emit_execution_active_route "$FEATURE_DIR" "$ISSUE"
@@ -11325,7 +11669,7 @@ monitor_issue_state() {
 
             if [[ "$handshake_reason" == "missing" && "$handshake_policy" == "recover" ]]; then
               if recover_missing_expansion_artifact "$ISSUE" "$SLUG" "$FEATURE_DIR"; then
-                if ! apply_expanded_route_if_present "$FEATURE_DIR" "$ISSUE" "$SLUG" "${WORKTREE_ROOT}/${SLUG}" "$STATE_FILE"; then
+                if ! apply_expanded_route_if_present "$FEATURE_DIR" "$ISSUE" "$SLUG" "$WT_DIR" "$STATE_FILE"; then
                   expansion_recovery_mark_result "$FEATURE_DIR" "$ISSUE" "failed" "expanded-route-promotion-failed" "1" || true
                   log_warn "$ISSUE → recovered expanded route was invalid during promotion; using bootstrap execution route for coding"
                   handshake_reason="recovery-fallback-bootstrap"
@@ -11422,7 +11766,7 @@ monitor_issue_state() {
                     current_status=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].status // ""')
                     current_agent=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].agent // ""')
                     current_linear_issue=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].linearIssueId // ""')
-                    save_task_state "$ISSUE" "$SLUG" "$BRANCH" "${WORKTREE_ROOT}/${SLUG}" "$current_pr" "$current_status" "$current_agent" "$current_linear_issue" \
+                    save_task_state "$ISSUE" "$SLUG" "$BRANCH" "$WT_DIR" "$current_pr" "$current_status" "$current_agent" "$current_linear_issue" \
                       "true" "$ISSUE" "primary" "$new_primary" "$new_primary_planner" "$new_primary" "$new_primary_reviewer" "$new_primary_plan_depth" "$new_primary_code_depth" "$new_primary_review_mode" "$new_challenge_stage"
                     challenge_coder="$new_primary"
                     challenge_stage_meta="$new_challenge_stage"
@@ -11506,7 +11850,7 @@ monitor_issue_state() {
             # Record coding stage as running (HOK-1177)
             write_stage_result "$FEATURE_DIR" "coding" "running" "$coder_agent" "$coder_launch_model"
 
-            launch_coding_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$coder_launch_model" "$coder_agent" "$code_depth"
+            launch_coding_phase "$ISSUE" "$SLUG" "$title" "$WT_DIR" "$BRANCH" "$BASE_BRANCH" "$coder_launch_model" "$coder_agent" "$code_depth"
             local launch_rc=$?
             if ! handle_phase_launch_result "$ISSUE" "$FEATURE_DIR" "coding" "planning" "$launch_rc" "$WIN" "$coder_agent" "$coder_launch_model"; then
                 return 0
@@ -11521,11 +11865,18 @@ monitor_issue_state() {
           local planning_status
           planning_status=$(read_stage_status "$FEATURE_DIR" "planning")
 
-          # Transition 1: running/awaiting_user + .plan-approved → completed
-          if [[ "$planning_status" == "running" || "$planning_status" == "awaiting_user" ]]; then
+          # Transition 1: awaiting_user + .plan-approved → completed.
+          # Approval markers created before the run reaches awaiting_user are
+          # stale/in-run markers and must not bypass the operator gate.
+          if [[ "$planning_status" == "running" ]] && [[ -f "$FEATURE_DIR/.plan-approved" ]]; then
+            rm -f "$FEATURE_DIR/.plan-approved"
+            log "warn" "$ISSUE → Ignoring .plan-approved created before planning was awaiting user approval"
+          fi
+
+          if [[ "$planning_status" == "awaiting_user" ]]; then
             if [[ -f "$FEATURE_DIR/.plan-approved" ]]; then
               unset "$approval_wait_var" 2>/dev/null || true
-              if ! validate_planning_phase_output "${WORKTREE_ROOT}/${SLUG}"; then
+              if ! validate_planning_phase_output "$WT_DIR"; then
                 handle_planning_overreach_rejection "$ISSUE" "$FEATURE_DIR" "$WIN" "$current_agent"
                 active_count=$((active_count + 1))
                 return 0
@@ -11550,12 +11901,16 @@ monitor_issue_state() {
             fi
           fi
 
+          if emit_native_launch_failure_attention "$ISSUE" "$FEATURE_DIR" "planning" "$WIN" "$WIN_TARGET" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "planning" "")"; then
+            return 0
+          fi
+
           # Check if plan exists but not yet approved (awaiting_user)
           if [[ "$resolved_phase" == "awaiting_user" ]]; then
             # Check if user signaled approval by creating .plan-approved marker
             if [[ -f "$FEATURE_DIR/.plan-approved" ]]; then
               unset "$approval_wait_var" 2>/dev/null || true
-              if ! validate_planning_phase_output "${WORKTREE_ROOT}/${SLUG}"; then
+              if ! validate_planning_phase_output "$WT_DIR"; then
                 handle_planning_overreach_rejection "$ISSUE" "$FEATURE_DIR" "$WIN" "$current_agent"
                 active_count=$((active_count + 1))
                 return 0
@@ -11585,6 +11940,12 @@ monitor_issue_state() {
           # Stage still running — keep task active
           if [[ "$planning_status" == "running" ]]; then
             set_window_attention_state "$WIN" "clear"
+            active_count=$((active_count + 1))
+            return 0
+          fi
+
+          if [[ "$planning_status" == "failed" ]]; then
+            set_window_attention_state "$WIN" "needs-user"
             active_count=$((active_count + 1))
             return 0
           fi
@@ -11716,6 +12077,9 @@ monitor_issue_state() {
             if emit_pane_divergence_attention "$ISSUE" "$SLUG" "$FEATURE_DIR" "$WIN" "$WIN_TARGET"; then
               return 0
             fi
+            if emit_native_launch_failure_attention "$ISSUE" "$FEATURE_DIR" "coding" "$WIN" "$WIN_TARGET" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "coding" "claude-opus-4-7")"; then
+              return 0
+            fi
             if emit_terminal_blocked_completion_attention "$ISSUE" "$SLUG" "$FEATURE_DIR" "$WIN" "$WIN_TARGET"; then
               return 0
             fi
@@ -11726,6 +12090,12 @@ monitor_issue_state() {
           if [[ "$coding_status" == "running" ]]; then
             set_window_attention_state "$WIN" "clear"
             # Keep coding tasks active while the controller-owned stage is running
+            active_count=$((active_count + 1))
+            return 0
+          fi
+
+          if [[ "$coding_status" == "failed" ]]; then
+            set_window_attention_state "$WIN" "needs-user"
             active_count=$((active_count + 1))
             return 0
           fi
@@ -11773,6 +12143,8 @@ monitor_issue_state() {
               write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "review" "claude-sonnet-5")" "PR #$pr_number" "{\"type\":\"review\",\"prNumber\":$pr_number}"
               dispatch_queued_children_for_parent "$ISSUE" "$pr_number"
               review_status="completed"
+            elif emit_native_launch_failure_attention "$ISSUE" "$FEATURE_DIR" "review" "$WIN" "$WIN_TARGET" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "review" "claude-sonnet-5")"; then
+              return 0
             else
               set_window_attention_state "$WIN" "clear"
               # Keep review tasks active while the controller-owned stage is running
@@ -11783,6 +12155,12 @@ monitor_issue_state() {
 
           if [[ "$review_status" == "running" ]]; then
             set_window_attention_state "$WIN" "clear"
+            active_count=$((active_count + 1))
+            return 0
+          fi
+
+          if [[ "$review_status" == "failed" ]]; then
+            set_window_attention_state "$WIN" "needs-user"
             active_count=$((active_count + 1))
             return 0
           fi
@@ -12087,7 +12465,7 @@ monitor_issue_state() {
       fi
       # Preserve agent when marking as merged
       current_agent=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].agent // ""')
-      save_task_state "$ISSUE" "$SLUG" "$BRANCH" "${WORKTREE_ROOT}/${SLUG}" "$PR" "merged" "$current_agent"
+      save_task_state "$ISSUE" "$SLUG" "$BRANCH" "$WT_DIR" "$PR" "merged" "$current_agent"
       active_count=$((active_count + 1))
       return 0
     fi

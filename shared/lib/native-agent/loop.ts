@@ -25,7 +25,7 @@ import {
   type ReplayCompactionOptions,
 } from './compaction.ts';
 import { buildTrustMetadata } from './provenance.ts';
-import type { ProviderModelConfig } from './provider.ts';
+import { toProviderRequestModelId, type ProviderModelConfig } from './provider.ts';
 import { evaluateBeforeToolCallPolicy, type ToolPolicyConfig } from './tools/policies.ts';
 import { redactSecrets, redactSecretsInValue } from './tools/redaction.ts';
 import type {
@@ -198,9 +198,10 @@ function deriveOutputCapMetadata(
 }
 
 function toPiModel(config: ProviderModelConfig): Model<string> {
+  const requestModelId = toProviderRequestModelId(config);
   return {
-    id: config.id,
-    name: config.name ?? config.id,
+    id: requestModelId,
+    name: config.name ?? requestModelId,
     api: config.api,
     provider: config.provider,
     baseUrl: config.baseUrl ?? 'http://localhost:0/mock',

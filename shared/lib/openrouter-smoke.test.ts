@@ -80,6 +80,20 @@ describe('runOpenRouterSmoke', () => {
     assert.equal(results[1]?.category, 'provider_unavailable');
   });
 
+  it('caps smoke requests to a small max output budget', async () => {
+    const entries = [makeEntry('gemini-2.5-pro', 'gemini', 'google/gemini-2.5-pro')];
+    const seenMaxTokens: unknown[] = [];
+    const transport: OpenRouterTransport = async (_url, init) => {
+      const payload = JSON.parse(String(init.body)) as { max_tokens?: unknown };
+      seenMaxTokens.push(payload.max_tokens);
+      return jsonResponse(successFixture);
+    };
+
+    await runOpenRouterSmoke({ entries, transport });
+
+    assert.deepEqual(seenMaxTokens, [256]);
+  });
+
   it('returns an empty list for empty input', async () => {
     const results = await runOpenRouterSmoke({
       entries: [],

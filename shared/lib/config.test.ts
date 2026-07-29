@@ -3102,13 +3102,13 @@ test('valid nativeAgent allowedPhases validate and are returned by the accessor'
     writeConfig(tmp, JSON.stringify({
       nativeAgent: {
         enabled: true,
-        allowedPhases: ['task-expansion', 'planning', 'review'],
+        allowedPhases: ['task-expansion', 'planning', 'coding', 'review'],
       },
     }));
 
     assert.deepEqual(getNativeAgentConfig(tmp), {
       enabled: true,
-      allowedPhases: ['task-expansion', 'planning', 'review'],
+      allowedPhases: ['task-expansion', 'planning', 'coding', 'review'],
     });
   } finally {
     cleanUp(tmp);
@@ -3280,7 +3280,7 @@ test('invalid nativeAgent allowedPhases are rejected by schema validation', () =
     writeConfig(tmp, JSON.stringify({
       nativeAgent: {
         enabled: true,
-        allowedPhases: ['planning', 'coding'],
+        allowedPhases: ['planning', 'deploy'],
       },
     }));
 

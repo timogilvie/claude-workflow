@@ -193,11 +193,13 @@ export interface HokusaiRecommendedStrategy {
   planner_model: string;
   coder_model: string;
   reviewer_model: string;
+  objective?: HokusaiModel30Objective | string;
   stages?: HokusaiModel30WorkflowStage[];
   estimated_success_under_budget?: number;
   estimated_cost_usd?: number;
   estimated_duration_seconds?: number;
   confidence?: number;
+  rationale?: string;
   plan_depth?: HokusaiModel30Depth;
   code_depth?: HokusaiModel30Depth;
   review_mode?: HokusaiModel30ReviewMode;

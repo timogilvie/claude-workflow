@@ -40,6 +40,35 @@ function makeRegistry(readOnlyNative: 'certified' | 'partial' | 'unsupported', c
   };
 }
 
+function makeAliasRegistry(): ModelRegistry {
+  return {
+    models: {
+      'qwen-3-coder': {
+        vendor: 'qwen',
+        class: 'strong_generalist',
+        strengths: ['coding'],
+        weaknesses: ['none'],
+        qualityScores: { routing: 0, planning: 0, coding: 0, review: 0, classify: 0 },
+        defaultLadderEligible: false,
+        contextWindowTokens: 131_072,
+        toolSupport: 'basic',
+        multimodal: { text: true, image: false },
+        latencyTier: 'standard',
+        reasoningTier: 'standard',
+        costPerMillionInputTokensUsd: 0,
+        costPerMillionOutputTokensUsd: 0,
+        nativeCapability: {
+          nativeProvider: 'openrouter',
+          piTransportKind: 'openai-completions',
+          readOnlyNative: 'certified',
+          compatFlags: { thinkingFormat: 'openrouter' },
+        },
+      },
+    },
+    ladders: {},
+  };
+}
+
 function makeTool(name: string): Pick<ToolMetadata, 'name' | 'description' | 'executionMode'> {
   return {
     name,
@@ -55,6 +84,18 @@ describe('tool-compat-validator', () => {
       provider: 'openrouter',
       transport: 'openai-completions',
       registry: makeRegistry('certified', { thinkingFormat: 'openrouter' }),
+      tools: [makeTool('read_file'), makeTool('list_files')],
+    });
+
+    assert.deepEqual(result, { ok: true });
+  });
+
+  it('resolves OpenRouter slugs through registry aliases', () => {
+    const result = validateToolCompat({
+      model: 'qwen/qwen3-coder',
+      provider: 'openrouter',
+      transport: 'openai-completions',
+      registry: makeAliasRegistry(),
       tools: [makeTool('read_file'), makeTool('list_files')],
     });
 
