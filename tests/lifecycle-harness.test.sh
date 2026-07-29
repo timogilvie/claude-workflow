@@ -212,6 +212,8 @@ harness_extract_real_functions() {
     check_stage_complete \
     check_stage_awaiting_user \
     check_stage_aborted \
+    persist_challenge_execution_intent \
+    finalize_challenge_execution_intent_before_coding \
     phase_should_remain_active_without_pr \
     stage_result_is_in_progress \
     ready_conflict_launch_head \
