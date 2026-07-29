@@ -237,6 +237,15 @@
     "expansion": {
       "fallbackOnUnavailable": true
     },
+    "planning": {
+      "maxTurns": 40,
+      "maxToolCalls": 120,
+      "maxWallClockMs": 1200000,
+      "toolStagnation": {
+        "maxRepeatedSignatureCalls": 8,
+        "maxNoNovelProgressCalls": 4
+      }
+    },
     "providers": {
       "openrouter": {
         "enabled": true,
