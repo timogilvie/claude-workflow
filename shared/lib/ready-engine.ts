@@ -273,7 +273,12 @@ export async function checkChallengePairs(ctx: ReadyEngineContext): Promise<Guar
       comparison.primaryPrUrl === ctx.pr.url || comparison.challengerPrUrl === ctx.pr.url,
     );
 
-    if (matched) {
+    if (
+      matched
+      && matched.comparisonOutcome !== 'inconclusive'
+      && matched.validity !== 'invalid'
+      && matched.winner
+    ) {
       return { status: 'pass' };
     }
 

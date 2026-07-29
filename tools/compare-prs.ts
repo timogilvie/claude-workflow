@@ -6,10 +6,13 @@ import { fetchIssueData, formatIssueAsPrompt, fetchPrContext } from '../shared/l
 import { hasChallengeEvalRecordPair, readEvalRecords } from '../shared/lib/eval-persistence.ts';
 import {
   appendChallengeComparison,
+  buildInconclusiveComparison,
   buildSkippedIdenticalComparison,
   detectVariedDimensions,
   hasAnyVariedDimension,
   classifyChallengeType,
+  resolveChallengeExecutionProvenance,
+  validateChallengeExecutionProvenance,
   type ChallengeComparison,
   type ChallengeRoutingMeta,
 } from '../shared/lib/challenge-comparison.ts';
@@ -52,6 +55,8 @@ runTool({
     'challenger-plan-depth': { type: 'string', description: 'Challenger plan depth' },
     'challenger-code-depth': { type: 'string', description: 'Challenger code depth' },
     'challenger-review-mode': { type: 'string', description: 'Challenger review mode' },
+    'primary-feature-dir': { type: 'string', description: 'Primary feature directory with stage result artifacts' },
+    'challenger-feature-dir': { type: 'string', description: 'Challenger feature directory with stage result artifacts' },
     'repo-dir': { type: 'string', description: 'Repository directory' },
     model: { type: 'string', description: 'Comparison judge model override' },
     comment: { type: 'boolean', description: 'Post recommendation comments on both PRs' },
@@ -134,6 +139,107 @@ runTool({
       } : undefined;
 
       const variedDimensions = detectVariedDimensions(primaryRouting, challengerRouting);
+      const challengeType = variedDimensions && hasAnyVariedDimension(variedDimensions)
+        ? classifyChallengeType(variedDimensions)
+        : undefined;
+      const variedStage = challengeType === 'planner-only'
+        ? 'plan'
+        : challengeType === 'reviewer-only'
+          ? 'review'
+          : challengeType === 'coder-only'
+            ? 'implementation'
+            : undefined;
+      const primaryFeatureDir = args['primary-feature-dir'] as string | undefined;
+      const challengerFeatureDir = args['challenger-feature-dir'] as string | undefined;
+      const executionProvenance = primaryFeatureDir && challengerFeatureDir
+        ? await resolveChallengeExecutionProvenance({ primaryFeatureDir, challengerFeatureDir })
+        : undefined;
+      const provenanceValidation = executionProvenance
+        ? validateChallengeExecutionProvenance({
+            provenance: executionProvenance,
+            primaryRouting,
+            challengerRouting,
+            variedDimensions,
+          })
+        : undefined;
+
+      if (executionProvenance && provenanceValidation?.validity === 'invalid') {
+        const rationale = [
+          'Comparison marked inconclusive because execution provenance did not match the intended launchable route.',
+          ...provenanceValidation.mismatches.map((mismatch) => {
+            const source = mismatch.sourcePath ? ` (${mismatch.sourcePath})` : '';
+            return `${mismatch.reason}${source}`;
+          }),
+        ].join(' ');
+        const inconclusiveRecord = buildInconclusiveComparison({
+          challengePairId: pairId,
+          primaryModel,
+          challengerModel,
+          primaryPrUrl,
+          challengerPrUrl,
+          primaryEvalScore: primaryEval.score,
+          challengerEvalScore: challengerEval.score,
+          rationale,
+          primaryRouting,
+          challengerRouting,
+          variedDimensions,
+          challengeType,
+          variedStage,
+          executionProvenance,
+          provenanceValidation,
+        });
+        appendChallengeComparison(inconclusiveRecord, evalsDir);
+        recordForResult = inconclusiveRecord;
+
+        const routingSummary = formatRoutingSummary(
+          primaryRouting,
+          challengerRouting,
+          challengeType,
+          executionProvenance,
+          provenanceValidation,
+        );
+        const primaryCommentBody = buildChallengeCommentBody({
+          pairId,
+          winner: inconclusiveRecord.winner,
+          winnerModel: inconclusiveRecord.winnerModel,
+          rationale: inconclusiveRecord.rationale,
+          otherPrUrl: challengerPrUrl,
+          routingSummary,
+          comparisonOutcome: inconclusiveRecord.comparisonOutcome,
+          validity: inconclusiveRecord.validity,
+          mismatchReasons: inconclusiveRecord.mismatchReasons,
+        });
+        const challengerCommentBody = buildChallengeCommentBody({
+          pairId,
+          winner: inconclusiveRecord.winner,
+          winnerModel: inconclusiveRecord.winnerModel,
+          rationale: inconclusiveRecord.rationale,
+          otherPrUrl: primaryPrUrl,
+          routingSummary,
+          comparisonOutcome: inconclusiveRecord.comparisonOutcome,
+          validity: inconclusiveRecord.validity,
+          mismatchReasons: inconclusiveRecord.mismatchReasons,
+        });
+
+        if (args.comment || config.challenge?.autoMergeWinner) {
+          withBodyFile(primaryCommentBody, (bodyFile) => {
+            tryGh(['pr', 'comment', primaryNumber, '--body-file', bodyFile], repoDir, `comment primary PR ${primaryNumber}`);
+          });
+          withBodyFile(challengerCommentBody, (bodyFile) => {
+            tryGh(['pr', 'comment', challengerNumber, '--body-file', bodyFile], repoDir, `comment challenger PR ${challengerNumber}`);
+          });
+        }
+
+        console.log(JSON.stringify(inconclusiveRecord, null, 2));
+        if (resultFile) {
+          writeJobResultFile(resultFile, {
+            ok: true,
+            exitCode,
+            comparison: inconclusiveRecord,
+          });
+        }
+        return;
+      }
 
       if (variedDimensions && !hasAnyVariedDimension(variedDimensions)) {
         const skippedRecord = buildSkippedIdenticalComparison({
@@ -146,6 +252,8 @@ runTool({
           challengerEvalScore: challengerEval.score,
           primaryRouting,
           challengerRouting,
+          executionProvenance,
+          provenanceValidation,
         });
         appendChallengeComparison(skippedRecord, evalsDir);
 
@@ -153,6 +261,8 @@ runTool({
           primaryRouting,
           challengerRouting,
           skippedRecord.challengeType,
+          executionProvenance,
+          provenanceValidation,
         );
         const primaryCommentBody = buildChallengeCommentBody({
           pairId,
@@ -161,6 +271,8 @@ runTool({
           rationale: skippedRecord.rationale,
           otherPrUrl: challengerPrUrl,
           routingSummary,
+          comparisonOutcome: skippedRecord.comparisonOutcome,
+          validity: skippedRecord.validity,
         });
         const challengerCommentBody = buildChallengeCommentBody({
           pairId,
@@ -169,6 +281,8 @@ runTool({
           rationale: skippedRecord.rationale,
           otherPrUrl: primaryPrUrl,
           routingSummary,
+          comparisonOutcome: skippedRecord.comparisonOutcome,
+          validity: skippedRecord.validity,
         });
 
         if (args.comment || config.challenge?.autoMergeWinner) {
@@ -198,7 +312,6 @@ runTool({
         }
         return;
       }
-      const challengeType = variedDimensions ? classifyChallengeType(variedDimensions) : undefined;
       const primarySelected = selectChallengeEvalScore(primaryEval, challengeType);
       const challengerSelected = selectChallengeEvalScore(challengerEval, challengeType);
 
@@ -215,13 +328,6 @@ runTool({
       const primaryPerStageScores = isMultiStage ? collectPerStageScores(primaryEval) : undefined;
       const challengerPerStageScores = isMultiStage ? collectPerStageScores(challengerEval) : undefined;
 
-      const variedStage = challengeType === 'planner-only'
-        ? 'plan'
-        : challengeType === 'reviewer-only'
-          ? 'review'
-          : challengeType === 'coder-only'
-            ? 'implementation'
-            : undefined;
       const primaryStageEval = primaryEval.challengeStageEval;
       const challengerStageEval = challengerEval.challengeStageEval;
       const stageEvidenceMode = (
@@ -256,6 +362,8 @@ runTool({
         challengeType,
         primaryStageEval,
         challengerStageEval,
+        executionProvenance,
+        provenanceValidation,
       }, Number.isFinite(promptLimit) ? promptLimit : 500000);
       if (cappedPrompt.truncated) {
         console.warn(
@@ -326,6 +434,10 @@ Return a raw JSON object with no code fences, no comments, and no JavaScript syn
         challengeType,
         variedStage,
         stageEvidenceMode,
+        comparisonOutcome: 'compared',
+        validity: 'valid',
+        executionProvenance,
+        provenanceValidation,
         workflowInsight: verdict.workflowInsight,
         primaryEvalScoreSource: primarySelected.source,
         challengerEvalScoreSource: challengerSelected.source,
@@ -335,7 +447,13 @@ Return a raw JSON object with no code fences, no comments, and no JavaScript syn
 
       appendChallengeComparison(record, evalsDir);
 
-      const routingSummary = formatRoutingSummary(primaryRouting, challengerRouting, challengeType);
+      const routingSummary = formatRoutingSummary(
+        primaryRouting,
+        challengerRouting,
+        challengeType,
+        executionProvenance,
+        provenanceValidation,
+      );
       const primaryCommentBody = buildChallengeCommentBody({
         pairId,
         winner: record.winner,
@@ -343,6 +461,8 @@ Return a raw JSON object with no code fences, no comments, and no JavaScript syn
         rationale: record.rationale,
         otherPrUrl: challengerPrUrl,
         routingSummary,
+        comparisonOutcome: record.comparisonOutcome,
+        validity: record.validity,
       });
       const challengerCommentBody = buildChallengeCommentBody({
         pairId,
@@ -351,9 +471,12 @@ Return a raw JSON object with no code fences, no comments, and no JavaScript syn
         rationale: record.rationale,
         otherPrUrl: primaryPrUrl,
         routingSummary,
+        comparisonOutcome: record.comparisonOutcome,
+        validity: record.validity,
       });
 
-      if (args.comment || config.challenge?.autoMergeWinner) {
+      const canCleanup = record.comparisonOutcome === 'compared' && record.validity !== 'invalid' && !!record.winner;
+      if (args.comment || (config.challenge?.autoMergeWinner && canCleanup)) {
         withBodyFile(primaryCommentBody, (bodyFile) => {
           tryGh(['pr', 'comment', primaryNumber, '--body-file', bodyFile], repoDir, `comment primary PR ${primaryNumber}`);
         });
@@ -362,7 +485,7 @@ Return a raw JSON object with no code fences, no comments, and no JavaScript syn
         });
       }
 
-      if (args['auto-merge'] || config.challenge?.autoMergeWinner) {
+      if ((args['auto-merge'] || config.challenge?.autoMergeWinner) && canCleanup) {
         const winnerNumber = record.winner === 'primary' ? primaryNumber : challengerNumber;
         const loserNumber = record.winner === 'primary' ? challengerNumber : primaryNumber;
         tryGh(['pr', 'merge', winnerNumber, '--merge', '--delete-branch=false'], repoDir, `merge winner PR ${winnerNumber}`);

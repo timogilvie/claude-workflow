@@ -7718,6 +7718,19 @@ get_task_meta() {
   read_state_value "" --arg issue "$issue" --arg field "$field" '.tasks[$issue][$field] // empty'
 }
 
+challenge_feature_dir_for_slug() {
+  local slug="$1"
+  local wt_dir="${WORKTREE_ROOT}/${slug}"
+  local dir
+  for dir in features bugs; do
+    if [[ -d "$wt_dir/$dir/$slug" ]]; then
+      printf '%s\n' "$wt_dir/$dir/$slug"
+      return 0
+    fi
+  done
+  printf '%s\n' "$wt_dir/features/$slug"
+}
+
 get_linear_issue_id() {
   local issue="$1"
   local linear_issue
@@ -7909,13 +7922,15 @@ render_challenge_comparison_summary() {
   local pair_id="$1" primary_pr="$2" challenger_pr="$3" primary_model="$4" challenger_model="$5" result_path="$6"
   [[ -r "$result_path" ]] || return 0
 
-  local compare_json winner winner_model rationale
+  local compare_json winner winner_model rationale outcome validity
   local comp_p comp_c cor_p cor_c qual_p qual_c impact_p impact_c auto_p auto_c
   local primary_eval_score challenger_eval_score
   compare_json=$(jq -c '.comparison // {}' "$result_path" 2>/dev/null || echo "{}")
   winner=$(echo "$compare_json" | jq -r '.winner // empty' 2>/dev/null)
   winner_model=$(echo "$compare_json" | jq -r '.winnerModel // empty' 2>/dev/null)
   rationale=$(echo "$compare_json" | jq -r '.rationale // empty' 2>/dev/null)
+  outcome=$(echo "$compare_json" | jq -r '.comparisonOutcome // "compared"' 2>/dev/null)
+  validity=$(echo "$compare_json" | jq -r '.validity // "unknown"' 2>/dev/null)
   primary_eval_score=$(echo "$compare_json" | jq -r '.primaryEvalScore // "—"' 2>/dev/null)
   challenger_eval_score=$(echo "$compare_json" | jq -r '.challengerEvalScore // "—"' 2>/dev/null)
   comp_p=$(echo "$compare_json" | jq -r '.dimensions.completeness.primary // "—"' 2>/dev/null)
@@ -7931,7 +7946,9 @@ render_challenge_comparison_summary() {
 
   local disp_primary disp_challenger disp_winner
   local primary_planner challenger_planner primary_reviewer challenger_reviewer
+  local primary_exec_planner challenger_exec_planner primary_exec_coder challenger_exec_coder primary_exec_reviewer challenger_exec_reviewer
   local disp_primary_planner disp_challenger_planner disp_primary_reviewer disp_challenger_reviewer
+  local disp_primary_exec_planner disp_challenger_exec_planner disp_primary_exec_coder disp_challenger_exec_coder disp_primary_exec_reviewer disp_challenger_exec_reviewer
   local model_row_label has_routing
   disp_primary=$(echo "$primary_model" | sed 's/-[0-9]\{8\}$//')
   disp_challenger=$(echo "$challenger_model" | sed 's/-[0-9]\{8\}$//')
@@ -7944,6 +7961,18 @@ render_challenge_comparison_summary() {
   disp_challenger_planner=$(echo "$challenger_planner" | sed 's/-[0-9]\{8\}$//')
   disp_primary_reviewer=$(echo "$primary_reviewer" | sed 's/-[0-9]\{8\}$//')
   disp_challenger_reviewer=$(echo "$challenger_reviewer" | sed 's/-[0-9]\{8\}$//')
+  primary_exec_planner=$(echo "$compare_json" | jq -r '(.executionProvenance.primary.stages.planning.agent // "unknown") + "/" + (.executionProvenance.primary.stages.planning.model // "unknown")' 2>/dev/null | sed 's#^unknown/unknown$##')
+  challenger_exec_planner=$(echo "$compare_json" | jq -r '(.executionProvenance.challenger.stages.planning.agent // "unknown") + "/" + (.executionProvenance.challenger.stages.planning.model // "unknown")' 2>/dev/null | sed 's#^unknown/unknown$##')
+  primary_exec_coder=$(echo "$compare_json" | jq -r '(.executionProvenance.primary.stages.coding.agent // "unknown") + "/" + (.executionProvenance.primary.stages.coding.model // "unknown")' 2>/dev/null | sed 's#^unknown/unknown$##')
+  challenger_exec_coder=$(echo "$compare_json" | jq -r '(.executionProvenance.challenger.stages.coding.agent // "unknown") + "/" + (.executionProvenance.challenger.stages.coding.model // "unknown")' 2>/dev/null | sed 's#^unknown/unknown$##')
+  primary_exec_reviewer=$(echo "$compare_json" | jq -r '(.executionProvenance.primary.stages.review.agent // "unknown") + "/" + (.executionProvenance.primary.stages.review.model // "unknown")' 2>/dev/null | sed 's#^unknown/unknown$##')
+  challenger_exec_reviewer=$(echo "$compare_json" | jq -r '(.executionProvenance.challenger.stages.review.agent // "unknown") + "/" + (.executionProvenance.challenger.stages.review.model // "unknown")' 2>/dev/null | sed 's#^unknown/unknown$##')
+  disp_primary_exec_planner=$(echo "$primary_exec_planner" | sed 's/-[0-9]\{8\}$//')
+  disp_challenger_exec_planner=$(echo "$challenger_exec_planner" | sed 's/-[0-9]\{8\}$//')
+  disp_primary_exec_coder=$(echo "$primary_exec_coder" | sed 's/-[0-9]\{8\}$//')
+  disp_challenger_exec_coder=$(echo "$challenger_exec_coder" | sed 's/-[0-9]\{8\}$//')
+  disp_primary_exec_reviewer=$(echo "$primary_exec_reviewer" | sed 's/-[0-9]\{8\}$//')
+  disp_challenger_exec_reviewer=$(echo "$challenger_exec_reviewer" | sed 's/-[0-9]\{8\}$//')
   has_routing="false"
   if [[ -n "$primary_planner$challenger_planner$primary_reviewer$challenger_reviewer" ]]; then
     has_routing="true"
@@ -7958,8 +7987,13 @@ render_challenge_comparison_summary() {
   log "status" "  │                    Primary            Challenger           │"
   log "status" "  │  $(printf '%-14s' "$model_row_label")$(printf '%-20s' "$disp_primary") $(printf '%-19s' "$disp_challenger")│"
   if [[ "$has_routing" == "true" ]]; then
-    log "status" "  │  Planner        $(printf '%-20s' "${disp_primary_planner:-—}") $(printf '%-19s' "${disp_challenger_planner:-—}")│"
-    log "status" "  │  Reviewer       $(printf '%-20s' "${disp_primary_reviewer:-—}") $(printf '%-19s' "${disp_challenger_reviewer:-—}")│"
+    log "status" "  │  Intended Plan  $(printf '%-20s' "${disp_primary_planner:-—}") $(printf '%-19s' "${disp_challenger_planner:-—}")│"
+    log "status" "  │  Intended Rev   $(printf '%-20s' "${disp_primary_reviewer:-—}") $(printf '%-19s' "${disp_challenger_reviewer:-—}")│"
+  fi
+  if [[ -n "$primary_exec_planner$challenger_exec_planner$primary_exec_coder$challenger_exec_coder$primary_exec_reviewer$challenger_exec_reviewer" ]]; then
+    log "status" "  │  Exec Planner   $(printf '%-20.20s' "${disp_primary_exec_planner:-—}") $(printf '%-19.19s' "${disp_challenger_exec_planner:-—}")│"
+    log "status" "  │  Exec Coder     $(printf '%-20.20s' "${disp_primary_exec_coder:-—}") $(printf '%-19.19s' "${disp_challenger_exec_coder:-—}")│"
+    log "status" "  │  Exec Reviewer  $(printf '%-20.20s' "${disp_primary_exec_reviewer:-—}") $(printf '%-19.19s' "${disp_challenger_exec_reviewer:-—}")│"
   fi
   log "status" "  │  PR              #$(printf '%-19s' "$primary_pr") #$(printf '%-18s' "$challenger_pr")│"
   log "status" "  │  Eval Score      $(printf '%-20s' "$primary_eval_score") $(printf '%-19s' "$challenger_eval_score")│"
@@ -7970,7 +8004,9 @@ render_challenge_comparison_summary() {
   log "status" "  │  Intervention    $(printf '%-20s' "$impact_p") $(printf '%-19s' "$impact_c")│"
   log "status" "  │  Autonomy        $(printf '%-20s' "$auto_p") $(printf '%-19s' "$auto_c")│"
   log "status" "  ├────────────────────────────────────────────────────────────┤"
-  if [[ "$winner" == "primary" ]]; then
+  if [[ "$outcome" == "inconclusive" || "$validity" == "invalid" || -z "$winner" ]]; then
+    log "status" "  │  Result: Inconclusive — no winner selected"
+  elif [[ "$winner" == "primary" ]]; then
     log "status" "  │  ★ Winner: Primary ($disp_winner) — PR #$primary_pr"
   else
     log "status" "  │  ★ Winner: Challenger ($disp_winner) — PR #$challenger_pr"
@@ -7985,12 +8021,18 @@ render_challenge_comparison_summary() {
 
 handle_comparison_job_success() {
   local pair_id="$1" primary_key="$2" challenger_key="$3" primary_pr="$4" challenger_pr="$5" result_path="$6"
-  local primary_model challenger_model loser_key loser_slug loser_pr winner
+  local primary_model challenger_model loser_key loser_slug loser_pr winner outcome validity
   primary_model=$(get_task_meta "$primary_key" "challengeModel")
   challenger_model=$(get_task_meta "$challenger_key" "challengeModel")
   render_challenge_comparison_summary "$pair_id" "$primary_pr" "$challenger_pr" "$primary_model" "$challenger_model" "$result_path"
 
   winner=$(jq -r '.comparison.winner // empty' "$result_path" 2>/dev/null || echo "")
+  outcome=$(jq -r '.comparison.comparisonOutcome // "compared"' "$result_path" 2>/dev/null || echo "")
+  validity=$(jq -r '.comparison.validity // "unknown"' "$result_path" 2>/dev/null || echo "")
+  if [[ "$outcome" != "compared" || "$validity" == "invalid" || -z "$winner" ]]; then
+    log "status" "  ⚖ Challenge comparison did not select a winner, both PRs remain open"
+    return 0
+  fi
   if [[ "$winner" == "primary" ]]; then
     loser_key="$challenger_key"
   elif [[ "$winner" == "challenger" ]]; then
@@ -8278,6 +8320,7 @@ maybe_run_challenge_comparison() {
   local primary_planner primary_reviewer primary_plan_depth primary_code_depth primary_review_mode
   local challenger_planner challenger_reviewer challenger_plan_depth challenger_code_depth challenger_review_mode
   local job_id job_status job_reason pairing_repaired job_dir log_path result_path pid
+  local primary_slug challenger_slug primary_feature_dir challenger_feature_dir
   pair_id=$(get_task_meta "$issue" "challengePairId")
   [[ -z "$pair_id" ]] && return 0
   primary_key="$pair_id"
@@ -8321,6 +8364,10 @@ maybe_run_challenge_comparison() {
   linear_issue=$(get_linear_issue_id "$primary_key")
   primary_model=$(get_task_meta "$primary_key" "challengeModel")
   challenger_model=$(get_task_meta "$challenger_key" "challengeModel")
+  primary_slug=$(get_task_meta "$primary_key" "slug")
+  challenger_slug=$(get_task_meta "$challenger_key" "slug")
+  primary_feature_dir=$(challenge_feature_dir_for_slug "$primary_slug")
+  challenger_feature_dir=$(challenge_feature_dir_for_slug "$challenger_slug")
 
   # Read routing metadata for both sides
   primary_planner=$(get_task_meta "$primary_key" "plannerModel")
@@ -8351,6 +8398,7 @@ maybe_run_challenge_comparison() {
     --primary-plan-depth "$primary_plan_depth" --primary-code-depth "$primary_code_depth" --primary-review-mode "$primary_review_mode" \
     --challenger-planner "$challenger_planner" --challenger-reviewer "$challenger_reviewer" \
     --challenger-plan-depth "$challenger_plan_depth" --challenger-code-depth "$challenger_code_depth" --challenger-review-mode "$challenger_review_mode" \
+    --primary-feature-dir "$primary_feature_dir" --challenger-feature-dir "$challenger_feature_dir" \
     --repo-dir "$REPO_DIR" --comment \
     --result-file "$result_path" \
     >"$log_path" 2>&1 &

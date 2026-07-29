@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   appendChallengeComparison,
   buildSkippedIdenticalComparison,
+  resolveChallengeExecutionProvenance,
+  validateChallengeExecutionProvenance,
   listVariedRoutingDimensions,
   readChallengeComparisons,
   detectVariedDimensions,
@@ -17,17 +19,50 @@ import {
 let passed = 0;
 let failed = 0;
 
-function test(name: string, fn: () => void) {
+const pendingTests: Promise<void>[] = [];
+
+function test(name: string, fn: () => void | Promise<void>) {
+  const run = async () => {
+    try {
+      await fn();
+      passed++;
+      console.log(`  PASS  ${name}`);
+    } catch (err) {
+      failed++;
+      console.log(`  FAIL  ${name}`);
+      console.log(`        ${(err as Error).message}`);
+    }
+  };
+  pendingTests.push(run());
+}
+
+async function finishTests() {
   try {
-    fn();
-    passed++;
-    console.log(`  PASS  ${name}`);
-  } catch (err) {
-    failed++;
-    console.log(`  FAIL  ${name}`);
-    console.log(`        ${(err as Error).message}`);
+    await Promise.all(pendingTests);
+  } finally {
+    console.log(`\nPassed: ${passed}`);
+    console.log(`Failed: ${failed}`);
+    if (failed > 0) process.exitCode = 1;
   }
 }
+
+function writeStage(featureDir: string, stage: 'planning' | 'coding' | 'review', fields: {
+  status?: string;
+  agent?: string;
+  model?: string;
+}) {
+  mkdirSync(featureDir, { recursive: true });
+  writeFileSync(join(featureDir, `.${stage}-result.json`), JSON.stringify({
+    stage,
+    status: fields.status ?? 'completed',
+    startedAt: '2026-07-29T00:00:00.000Z',
+    finishedAt: '2026-07-29T00:01:00.000Z',
+    agent: fields.agent ?? 'codex',
+    model: fields.model ?? 'claude-opus-4-7',
+    notes: '',
+  }, null, 2));
+}
+
 
 function makeRecord(overrides?: Partial<ChallengeComparison>): ChallengeComparison {
   return {
@@ -404,8 +439,107 @@ test('buildSkippedIdenticalComparison returns deterministic primary-wins metadat
   assert.equal(record.workflowInsight, 'No LLM comparison was run because both workflows resolved to identical routing dimensions.');
 });
 
-process.on('exit', () => {
-  console.log(`\nPassed: ${passed}`);
-  console.log(`Failed: ${failed}`);
-  if (failed > 0) process.exitCode = 1;
+console.log('\n--- Execution Provenance Tests ---\n');
+
+test('resolveChallengeExecutionProvenance attributes native Kimi planner from stage result', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'challenge-provenance-test-'));
+  try {
+    const primaryDir = join(tmp, 'primary');
+    const challengerDir = join(tmp, 'challenger');
+    writeStage(primaryDir, 'planning', {
+      agent: 'native-openrouter',
+      model: 'moonshotai/kimi-k2.7-code',
+    });
+    writeStage(primaryDir, 'coding', { model: 'gpt-5.4' });
+    writeStage(primaryDir, 'review', { model: 'claude-opus-4-7' });
+    writeStage(challengerDir, 'planning', { model: 'claude-opus-4-7' });
+    writeStage(challengerDir, 'coding', { model: 'gpt-5.4' });
+    writeStage(challengerDir, 'review', { model: 'claude-opus-4-7' });
+
+    const provenance = await resolveChallengeExecutionProvenance({
+      primaryFeatureDir: primaryDir,
+      challengerFeatureDir: challengerDir,
+    });
+
+    assert.equal(provenance.primary.stages.planning?.agent, 'native-openrouter');
+    assert.equal(provenance.primary.stages.planning?.canonicalModel, 'moonshotai/kimi-k2.7-code');
+    assert.match(provenance.primary.stages.planning?.sourcePath || '', /\.planning-result\.json$/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });
+
+test('validateChallengeExecutionProvenance invalidates stale Claude intent when native Kimi executed', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'challenge-provenance-test-'));
+  try {
+    const primaryDir = join(tmp, 'primary');
+    const challengerDir = join(tmp, 'challenger');
+    for (const dir of [primaryDir, challengerDir]) {
+      writeStage(dir, 'planning', { agent: 'native-openrouter', model: 'moonshotai/kimi-k2.7-code' });
+      writeStage(dir, 'coding', { model: 'gpt-5.4' });
+      writeStage(dir, 'review', { model: 'claude-opus-4-7' });
+    }
+    const routing = makeRouting({
+      planner: 'claude-opus-4-7',
+      coder: 'gpt-5.4',
+      reviewer: 'claude-opus-4-7',
+      planDepth: 'medium',
+      codeDepth: 'medium',
+      reviewMode: 'llm',
+    });
+    const provenance = await resolveChallengeExecutionProvenance({
+      primaryFeatureDir: primaryDir,
+      challengerFeatureDir: challengerDir,
+    });
+    const validation = validateChallengeExecutionProvenance({
+      provenance,
+      primaryRouting: routing,
+      challengerRouting: routing,
+      variedDimensions: detectVariedDimensions(routing, routing),
+    });
+
+    assert.equal(validation.validity, 'invalid');
+    assert.deepEqual(validation.challengedStages, ['planning', 'coding', 'review']);
+    assert.ok(validation.mismatchReasons.some((reason) => reason.includes('executed moonshotai/kimi-k2.7-code but intended claude-opus-4-7')));
+    assert.match(validation.mismatches[0]?.sourcePath || '', /\.planning-result\.json$/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('same-intent different execution is not represented as identical execution', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'challenge-provenance-test-'));
+  try {
+    const primaryDir = join(tmp, 'primary');
+    const challengerDir = join(tmp, 'challenger');
+    writeStage(primaryDir, 'planning', { model: 'claude-opus-4-7' });
+    writeStage(primaryDir, 'coding', { model: 'gpt-5.4' });
+    writeStage(primaryDir, 'review', { model: 'claude-opus-4-7' });
+    writeStage(challengerDir, 'planning', { agent: 'native-openrouter', model: 'moonshotai/kimi-k2.7-code' });
+    writeStage(challengerDir, 'coding', { model: 'gpt-5.4' });
+    writeStage(challengerDir, 'review', { model: 'claude-opus-4-7' });
+    const routing = makeRouting({
+      planner: 'claude-opus-4-7',
+      coder: 'gpt-5.4',
+      reviewer: 'claude-opus-4-7',
+    });
+    const provenance = await resolveChallengeExecutionProvenance({
+      primaryFeatureDir: primaryDir,
+      challengerFeatureDir: challengerDir,
+    });
+    const validation = validateChallengeExecutionProvenance({
+      provenance,
+      primaryRouting: routing,
+      challengerRouting: routing,
+      variedDimensions: detectVariedDimensions(routing, routing),
+    });
+
+    assert.equal(validation.validity, 'invalid');
+    assert.ok(validation.mismatches.some((mismatch) => mismatch.side === 'challenger' && mismatch.stage === 'planning'));
+    assert.equal(provenance.primary.stages.planning?.canonicalModel === provenance.challenger.stages.planning?.canonicalModel, false);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+finishTests();

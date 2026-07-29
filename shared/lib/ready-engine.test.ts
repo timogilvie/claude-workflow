@@ -274,6 +274,34 @@ describe('checkChallengePairs', () => {
     assert.equal(result.status, 'pass');
   });
 
+  it('fails when a matching challenge comparison is inconclusive', async () => {
+    const result = await checkChallengePairs(buildContext({
+      pr: { body: ['<!-- wavemill-meta', 'challenge: true', '-->'].join('\n') } as ReadyEngineContext['pr'],
+      readChallengeComparisons: () => [{
+        challengePairId: 'pair-1',
+        primaryModel: 'a',
+        challengerModel: 'b',
+        primaryPrUrl: 'https://github.com/acme/widgets/pull/42',
+        challengerPrUrl: 'https://github.com/acme/widgets/pull/43',
+        primaryEvalScore: 0.9,
+        challengerEvalScore: 0.8,
+        rationale: 'Execution provenance mismatch.',
+        dimensions: {
+          completeness: { primary: 0, challenger: 0 },
+          correctness: { primary: 0, challenger: 0 },
+          code_quality: { primary: 0, challenger: 0 },
+          intervention_impact: { primary: 0, challenger: 0 },
+          autonomy: { primary: 0, challenger: 0 },
+        },
+        timestamp: '2026-04-27T00:00:00Z',
+        comparisonOutcome: 'inconclusive',
+        validity: 'invalid',
+      }],
+    }));
+    assert.equal(result.status, 'fail');
+    assert.deepEqual(result.labels, [WM_LABELS.challengeUnresolved]);
+  });
+
   it('passes when the PR is not marked as a challenge', async () => {
     const result = await checkChallengePairs(buildContext());
     assert.equal(result.status, 'pass');

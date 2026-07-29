@@ -83,6 +83,7 @@ for fn in \
   launch_tracked_job:1 \
   maybe_run_challenge_eval:1 \
   post_merge_eval_timeout_seconds:1 \
+  challenge_feature_dir_for_slug:1 \
   maybe_run_challenge_comparison:1
 do
   IFS=: read -r name occurrence <<<"$fn"

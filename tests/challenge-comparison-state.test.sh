@@ -54,6 +54,8 @@ extract_function_occurrence "$MILL_SCRIPT" "read_job_state_value" 1 >> "$FUNCTIO
 printf '\n' >> "$FUNCTION_FILE"
 extract_function_occurrence "$MILL_SCRIPT" "launch_tracked_job" 1 >> "$FUNCTION_FILE"
 printf '\n' >> "$FUNCTION_FILE"
+extract_function_occurrence "$MILL_SCRIPT" "challenge_feature_dir_for_slug" 1 >> "$FUNCTION_FILE"
+printf '\n' >> "$FUNCTION_FILE"
 extract_function_occurrence "$MILL_SCRIPT" "maybe_run_challenge_comparison" 1 >> "$FUNCTION_FILE"
 
 if [[ ! -s "$FUNCTION_FILE" ]]; then

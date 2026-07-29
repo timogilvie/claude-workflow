@@ -195,8 +195,140 @@ test('formatRoutingSummary includes challenge type when present', () => {
     'multi-variable'
   );
 
-  assert.match(summary, /Primary used planner-a/);
+  assert.match(summary, /Intended primary route: planner-a/);
   assert.match(summary, /Challenge type: multi-variable/);
+});
+
+test('formatRoutingSummary separates intended route from executed provenance', () => {
+  const executionProvenance = {
+    primary: {
+      featureDir: '/tmp/primary',
+      diagnostics: [],
+      stages: {
+        planning: {
+          stage: 'planning',
+          agent: 'native-openrouter',
+          model: 'moonshotai/kimi-k2.7-code',
+          canonicalModel: 'moonshotai/kimi-k2.7-code',
+          status: 'completed',
+          sourcePath: '/tmp/primary/.planning-result.json',
+        },
+        coding: {
+          stage: 'coding',
+          agent: 'codex',
+          model: 'gpt-5.4',
+          canonicalModel: 'gpt-5.4',
+          status: 'completed',
+          sourcePath: '/tmp/primary/.coding-result.json',
+        },
+        review: {
+          stage: 'review',
+          agent: 'codex',
+          model: 'claude-opus-4-7',
+          canonicalModel: 'claude-opus-4-7',
+          status: 'completed',
+          sourcePath: '/tmp/primary/.review-result.json',
+        },
+      },
+    },
+    challenger: {
+      featureDir: '/tmp/challenger',
+      diagnostics: [],
+      stages: {
+        planning: {
+          stage: 'planning',
+          agent: 'codex',
+          model: 'claude-opus-4-7',
+          canonicalModel: 'claude-opus-4-7',
+          status: 'completed',
+          sourcePath: '/tmp/challenger/.planning-result.json',
+        },
+      },
+    },
+  } as const;
+  const summary = formatRoutingSummary(
+    {
+      planner: 'claude-opus-4-7',
+      coder: 'gpt-5.4',
+      reviewer: 'claude-opus-4-7',
+      planDepth: 'medium',
+      codeDepth: 'medium',
+      reviewMode: 'llm',
+    },
+    {
+      planner: 'claude-opus-4-7',
+      coder: 'gpt-5.4',
+      reviewer: 'claude-opus-4-7',
+      planDepth: 'medium',
+      codeDepth: 'medium',
+      reviewMode: 'llm',
+    },
+    undefined,
+    executionProvenance,
+    {
+      validity: 'invalid',
+      challengedStages: ['planning'],
+      mismatchReasons: ['primary planning executed moonshotai/kimi-k2.7-code but intended claude-opus-4-7'],
+      mismatches: [{
+        side: 'primary',
+        stage: 'planning',
+        reason: 'primary planning executed moonshotai/kimi-k2.7-code but intended claude-opus-4-7',
+        sourcePath: '/tmp/primary/.planning-result.json',
+      }],
+    },
+  );
+
+  assert.match(summary, /Intended primary route: claude-opus-4-7/);
+  assert.match(summary, /Primary planner: native-openrouter \/ moonshotai\/kimi-k2\.7-code \(completed\)/);
+  assert.match(summary, /\/tmp\/primary\/\.planning-result\.json/);
+  assert.match(summary, /Mismatches:/);
+});
+
+test('buildComparisonPrompt includes executed provenance in workflow context', () => {
+  const prompt = buildComparisonPrompt({
+    issuePrompt: 'Issue context',
+    primaryDiff: 'primary diff',
+    challengerDiff: 'challenger diff',
+    primaryEvalScore: 0.8,
+    challengerEvalScore: 0.7,
+    primaryRouting: {
+      planner: 'claude-opus-4-7',
+      coder: 'gpt-5.4',
+      reviewer: 'claude-opus-4-7',
+      planDepth: 'medium',
+      codeDepth: 'medium',
+      reviewMode: 'llm',
+    },
+    challengerRouting: {
+      planner: 'claude-opus-4-7',
+      coder: 'gpt-5.4',
+      reviewer: 'claude-opus-4-7',
+      planDepth: 'medium',
+      codeDepth: 'medium',
+      reviewMode: 'llm',
+    },
+    executionProvenance: {
+      primary: {
+        featureDir: '/tmp/primary',
+        diagnostics: [],
+        stages: {
+          planning: {
+            stage: 'planning',
+            agent: 'native-openrouter',
+            model: 'moonshotai/kimi-k2.7-code',
+            canonicalModel: 'moonshotai/kimi-k2.7-code',
+            status: 'completed',
+            sourcePath: '/tmp/primary/.planning-result.json',
+          },
+        },
+      },
+      challenger: { featureDir: '/tmp/challenger', diagnostics: [], stages: {} },
+    },
+  });
+
+  assert.match(prompt, /Intended routing:/);
+  assert.match(prompt, /Executed provenance:/);
+  assert.match(prompt, /native-openrouter \/ moonshotai\/kimi-k2\.7-code/);
 });
 
 test('buildComparisonPrompt uses stage-specific score label for reviewer-only', () => {
@@ -293,4 +425,20 @@ test('buildChallengeCommentBody points each PR at the opposite PR', () => {
   assert.match(challengerComment, /Other PR: https:\/\/github\.com\/acme\/repo\/pull\/11/);
   assert.doesNotMatch(primaryComment, /Other PR: https:\/\/github\.com\/acme\/repo\/pull\/11/);
   assert.doesNotMatch(challengerComment, /Other PR: https:\/\/github\.com\/acme\/repo\/pull\/22/);
+});
+
+test('buildChallengeCommentBody renders inconclusive without recommended winner', () => {
+  const comment = buildChallengeCommentBody({
+    pairId: 'pair-123',
+    rationale: 'Execution provenance did not match intended route.',
+    otherPrUrl: 'https://github.com/acme/repo/pull/22',
+    comparisonOutcome: 'inconclusive',
+    validity: 'invalid',
+    mismatchReasons: ['primary planning executed Kimi but intended Claude'],
+  });
+
+  assert.match(comment, /Result: inconclusive/);
+  assert.match(comment, /Execution provenance mismatch:/);
+  assert.match(comment, /primary planning executed Kimi but intended Claude/);
+  assert.doesNotMatch(comment, /Recommended winner:/);
 });

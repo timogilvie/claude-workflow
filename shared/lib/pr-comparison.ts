@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import {
   detectVariedDimensions,
   type ChallengeComparisonDimensions,
+  type ChallengeExecutionProvenance,
+  type ChallengeProvenanceValidation,
   type ChallengeComparison,
   type ChallengeRoutingMeta,
 } from './challenge-comparison.ts';
@@ -87,6 +89,8 @@ export function buildComparisonPrompt(input: {
   challengeType?: string;
   primaryStageEval?: ChallengeStageEval;
   challengerStageEval?: ChallengeStageEval;
+  executionProvenance?: ChallengeExecutionProvenance;
+  provenanceValidation?: ChallengeProvenanceValidation;
 }): string {
   let workflowContext = '';
   let stageEvidenceContext = '';
@@ -115,10 +119,15 @@ export function buildComparisonPrompt(input: {
       perStageContext = `\nPer-stage scores:\n${stageLines.join('\n')}\n`;
     }
 
+    const executionContext = input.executionProvenance
+      ? `\nExecuted provenance:\n${formatExecutionProvenance(input.executionProvenance, input.provenanceValidation)}\n`
+      : '';
+
     workflowContext = `
 
 ## Workflow Context
 
+Intended routing:
 Primary side:
 - Planner: ${input.primaryRouting.planner} | Coder: ${input.primaryRouting.coder} | Reviewer: ${input.primaryRouting.reviewer}
 - Plan depth: ${input.primaryRouting.planDepth} | Code depth: ${input.primaryRouting.codeDepth} | Review mode: ${input.primaryRouting.reviewMode}
@@ -129,6 +138,7 @@ Challenger side:
 
 Variables that differed: ${variedFields.join(', ') || 'none'}
 ${perStageContext}
+${executionContext}
 Consider whether routing differences (not just code differences) may have influenced the outcome.
 `;
   }
@@ -388,11 +398,14 @@ export function withBodyFile<T>(body: string, fn: (filePath: string) => T): T {
  */
 export function buildChallengeCommentBody(input: {
   pairId: string;
-  winner: 'primary' | 'challenger';
-  winnerModel: string;
+  winner?: 'primary' | 'challenger';
+  winnerModel?: string;
   rationale: string;
   otherPrUrl: string;
   routingSummary?: string;
+  comparisonOutcome?: string;
+  validity?: string;
+  mismatchReasons?: string[];
 }): string {
   const commentParts = [
     `Challenge comparison for \`${input.pairId}\``,
@@ -403,14 +416,58 @@ export function buildChallengeCommentBody(input: {
     commentParts.push(input.routingSummary, '');
   }
 
-  commentParts.push(
-    `Recommended winner: ${input.winner} (${input.winnerModel})`,
-    `Other PR: ${input.otherPrUrl}`,
-    ``,
-    input.rationale,
-  );
+  if (input.comparisonOutcome === 'inconclusive' || input.validity === 'invalid' || !input.winner) {
+    commentParts.push(`Result: inconclusive`, `Other PR: ${input.otherPrUrl}`);
+    if (input.mismatchReasons && input.mismatchReasons.length > 0) {
+      commentParts.push('', 'Execution provenance mismatch:');
+      for (const reason of input.mismatchReasons) {
+        commentParts.push(`- ${reason}`);
+      }
+    }
+    commentParts.push('', input.rationale);
+  } else {
+    commentParts.push(
+      `Recommended winner: ${input.winner} (${input.winnerModel})`,
+      `Other PR: ${input.otherPrUrl}`,
+      ``,
+      input.rationale,
+    );
+  }
 
   return commentParts.join('\n');
+}
+
+function formatStageLine(
+  sideLabel: string,
+  stageLabel: string,
+  stage: ChallengeExecutionProvenance['primary']['stages']['planning'],
+): string {
+  if (!stage) return `${sideLabel} ${stageLabel}: missing`;
+  const executed = stage.model
+    ? `${stage.agent || 'unknown-agent'} / ${stage.model}`
+    : stage.status;
+  return `${sideLabel} ${stageLabel}: ${executed} (${stage.status}) [${stage.sourcePath}]`;
+}
+
+export function formatExecutionProvenance(
+  provenance: ChallengeExecutionProvenance,
+  validation?: ChallengeProvenanceValidation,
+): string {
+  const lines = [
+    formatStageLine('Primary', 'planner', provenance.primary.stages.planning),
+    formatStageLine('Primary', 'coder', provenance.primary.stages.coding),
+    formatStageLine('Primary', 'reviewer', provenance.primary.stages.review),
+    formatStageLine('Challenger', 'planner', provenance.challenger.stages.planning),
+    formatStageLine('Challenger', 'coder', provenance.challenger.stages.coding),
+    formatStageLine('Challenger', 'reviewer', provenance.challenger.stages.review),
+  ];
+  if (validation?.mismatches.length) {
+    lines.push('Mismatches:');
+    for (const mismatch of validation.mismatches) {
+      lines.push(`- ${mismatch.reason}${mismatch.sourcePath ? ` [${mismatch.sourcePath}]` : ''}`);
+    }
+  }
+  return lines.join('\n');
 }
 
 /**
@@ -420,19 +477,21 @@ export function formatRoutingSummary(
   primaryRouting?: ChallengeRoutingMeta,
   challengerRouting?: ChallengeRoutingMeta,
   challengeType?: string,
+  executionProvenance?: ChallengeExecutionProvenance,
+  provenanceValidation?: ChallengeProvenanceValidation,
 ): string {
   if (!primaryRouting || !challengerRouting) {
-    return '';
+    return executionProvenance ? formatExecutionProvenance(executionProvenance, provenanceValidation) : '';
   }
 
   const parts: string[] = [];
 
   parts.push(
-    `Primary used ${primaryRouting.planner || 'unknown'} (planner) + ${primaryRouting.coder} (coder)` +
+    `Intended primary route: ${primaryRouting.planner || 'unknown'} (planner) + ${primaryRouting.coder} (coder)` +
     (primaryRouting.reviewer ? ` + ${primaryRouting.reviewer} (reviewer)` : '')
   );
   parts.push(
-    `Challenger used ${challengerRouting.planner || 'unknown'} (planner) + ${challengerRouting.coder} (coder)` +
+    `Intended challenger route: ${challengerRouting.planner || 'unknown'} (planner) + ${challengerRouting.coder} (coder)` +
     (challengerRouting.reviewer ? ` + ${challengerRouting.reviewer} (reviewer)` : '')
   );
 
@@ -440,6 +499,9 @@ export function formatRoutingSummary(
 
   if (challengeType) {
     summary += `\nChallenge type: ${challengeType}`;
+  }
+  if (executionProvenance) {
+    summary += `\n${formatExecutionProvenance(executionProvenance, provenanceValidation)}`;
   }
 
   return summary;
