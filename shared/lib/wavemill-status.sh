@@ -1025,6 +1025,14 @@ task_running_detail() {
     manual_comparison_needed)
       printf 'manual comparison needed: timed_out=%s artifact=%s\n' "${timed_out_sides:-unknown}" "${manual_artifact:-missing}"
       ;;
+    invalid_challenge)
+      local invalid_reason invalid_details repair_action
+      invalid_reason=$(jq -r --arg issue "$issue" '.tasks[$issue].invalidChallengeReason // "unknown"' "$STATE_FILE" 2>/dev/null || echo "unknown")
+      invalid_details=$(jq -r --arg issue "$issue" '.tasks[$issue].invalidChallengeDetails // empty' "$STATE_FILE" 2>/dev/null || true)
+      repair_action=$(jq -r --arg issue "$issue" '.tasks[$issue].challengeRepairAction // empty' "$STATE_FILE" 2>/dev/null || true)
+      printf 'invalid challenge: reason=%s%s\n' "$invalid_reason" "${invalid_details:+ detail=$invalid_details}"
+      printf 'retry/re-pair: %s\n' "${repair_action:-wavemill mill challenge repair}"
+      ;;
   esac
   if [[ -n "$blocked_reason" && "$comparison_state" != "retrying_eval" ]]; then
     printf 'comparison blocker: %s\n' "$blocked_reason"

@@ -26,7 +26,12 @@ import { updateAffectedSubsystems } from './subsystem-updater.ts';
 import { detectAffectedSubsystems } from './subsystem-mapper.ts';
 import { gatherEvalContext, gatherStageArtifacts } from './eval-context-gatherer.ts';
 import { fetchRoutingCompleteRawWithArchive } from './eval-context-gatherer.ts';
-import { attachPhaseDurations, attachStageOutcomes, enrichTrainingMetadata } from './eval-record-builder.ts';
+import {
+  attachChallengeExecutionMetadata,
+  attachPhaseDurations,
+  attachStageOutcomes,
+  enrichTrainingMetadata,
+} from './eval-record-builder.ts';
 import { buildChallengeStageEval } from './stage-eval-evidence.ts';
 import { buildTaskDescriptor } from './task-descriptor-builder.ts';
 import { getEvalContextUpdatesConfig, getMaxCostUsd } from './config.ts';
@@ -67,6 +72,11 @@ import type { ChallengeRouteContext } from './challenge-mode.ts';
 import type { WorkflowCostOutcome } from './workflow-cost.ts';
 import type { InterventionSummary } from './intervention-detector.ts';
 import type { OperatingMode } from './operating-mode.ts';
+import {
+  attestEvalRecordChallengeExecution,
+  loadChallengeIntentFromFeatureDir,
+  type ChallengeExecutionIntent,
+} from './challenge-execution-contract.ts';
 
 function isFiniteNonNegativeBudget(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0;
@@ -83,6 +93,36 @@ function resolvePostCompletionBudget(input: Pick<PostCompletionEnrichmentInput, 
     routingComplete?.constraints?.maxCostUsd,
     getMaxCostUsd(input.repoDir),
   ].find(isFiniteNonNegativeBudget);
+}
+
+function deriveChallengeSide(branchName: string | undefined, issueId: string | undefined, challengePairId?: string): 'primary' | 'challenger' | undefined {
+  if (!challengePairId) return undefined;
+  const slug = branchName?.replace(/^(task|bug)\//, '') || '';
+  if (issueId === `${challengePairId}_c` || slug.endsWith('_c')) return 'challenger';
+  return 'primary';
+}
+
+function loadPostCompletionChallengeIntent(input: PostCompletionEnrichmentInput): ChallengeExecutionIntent | undefined {
+  const slug = input.branchName?.replace(/^(task|bug)\//, '') || input.issueId?.toLowerCase() || '';
+  if (!input.challengePairId) return undefined;
+  if (input.worktreePath && slug) {
+    for (const dir of ['features', 'bugs']) {
+      const intent = loadChallengeIntentFromFeatureDir(path.join(input.worktreePath, dir, slug));
+      if (intent) return intent;
+    }
+  }
+  const statePath = path.join(input.repoDir, '.wavemill', 'state', 'workflow-state.json');
+  try {
+    if (input.issueId && existsSync(statePath)) {
+      const state = JSON.parse(readFileSync(statePath, 'utf-8')) as { tasks?: Record<string, { challengeIntent?: ChallengeExecutionIntent }> };
+      return state.tasks?.[input.issueId]?.challengeIntent
+        ?? state.tasks?.[input.challengePairId]?.challengeIntent
+        ?? state.tasks?.[`${input.challengePairId}_c`]?.challengeIntent;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
 }
 
 const __filename = fileURLToPath(import.meta.url);
@@ -411,12 +451,16 @@ export function enrichPostCompletionRecord(
     const errorMsg = errorMessage(err);
     console.warn(`Post-completion eval: failed to build task descriptor — ${errorMsg}`);
   }
+  const challengeSide = deriveChallengeSide(input.branchName, input.issueId, input.challengePairId);
+  const challengeIntent = loadPostCompletionChallengeIntent(input);
 
   enrichTrainingMetadata(record, {
     agentType: input.agentType,
     provider: getDeepSeekProviderMetadata(record.modelId, input.repoDir)?.provider,
     endpoint: getDeepSeekProviderMetadata(record.modelId, input.repoDir)?.endpoint,
     challengePairId: input.challengePairId,
+    challengeSide,
+    challengeIntent,
     challengeStageEval: buildChallengeStageEval({
       repoDir: input.repoDir,
       issueId: input.issueId,
@@ -456,6 +500,12 @@ export function enrichPostCompletionRecord(
       const maxCostUsd = resolvePostCompletionBudget(input);
       return typeof maxCostUsd === 'number' ? { maxCostUsd } : undefined;
     })(),
+  });
+  const attestation = attestEvalRecordChallengeExecution(record);
+  attachChallengeExecutionMetadata(record, {
+    side: record.challengeSide,
+    intent: record.challengeIntent,
+    evidence: attestation,
   });
 }
 

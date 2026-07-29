@@ -12,21 +12,27 @@ fail() { echo "  FAIL  $1"; FAIL=$((FAIL + 1)); }
 
 run_case() {
   local kind="$1"
-  local tmp_dir state_file log_path result_path pid job_id pr_numbers timeout status cycles drains
+  local tmp_dir state_file log_path result_path completion_marker pid job_id pr_numbers timeout status cycles drains
   local -a job_flags=()
   tmp_dir="$(mktemp -d)"
   state_file="$tmp_dir/workflow-state.json"
   log_path="$tmp_dir/${kind}.log"
   result_path="$tmp_dir/${kind}.result.json"
+  completion_marker="$tmp_dir/${kind}.complete"
   printf '{"tasks":{"HOK-1564":{"challengePairId":"HOK-1564","challengeRole":"primary"},"HOK-1564_c":{"challengePairId":"HOK-1564","challengeRole":"challenger"}}}\n' > "$state_file"
   printf 'job running\n' > "$log_path"
 
-  (
-    sleep 5
-    cat > "$result_path" <<'JSON'
-{"ok":true,"exitCode":0}
-JSON
-  ) &
+  if [[ "$kind" == "eval" ]]; then
+    (
+      while [[ ! -f "$completion_marker" ]]; do
+        sleep 0.05
+      done
+    ) &
+  else
+    (
+      sleep 30
+    ) &
+  fi
   pid=$!
 
   if [[ "$kind" == "eval" ]]; then
@@ -57,6 +63,14 @@ JSON
   while [[ "$status" == "running" && $cycles -lt 10 ]]; do
     drains=$((drains + 1))
     npx tsx "$REPO_DIR/tools/job-tracker.ts" poll --state-file "$state_file" >/dev/null
+    if (( cycles == 1 )); then
+      cat > "$result_path" <<'JSON'
+{"ok":true,"exitCode":0}
+JSON
+      if [[ "$kind" == "eval" ]]; then
+        : > "$completion_marker"
+      fi
+    fi
     status=$(jq -r --arg id "$job_id" '.jobs[$id].status // "running"' "$state_file")
     cycles=$((cycles + 1))
     sleep 0.2
@@ -81,6 +95,8 @@ JSON
   fi
 
   rm -rf "$tmp_dir"
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
 }
 
 run_failed_comparison_case() {
@@ -100,7 +116,7 @@ JSON
     cat > "$result_path" <<'JSON'
 {"ok":false,"exitCode":1,"reason":"Challenge comparison has no varied routing dimensions"}
 JSON
-    sleep 5
+    sleep 30
   ) &
   pid=$!
 

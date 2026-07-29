@@ -195,8 +195,117 @@ test('formatRoutingSummary includes challenge type when present', () => {
     'multi-variable'
   );
 
-  assert.match(summary, /Primary used planner-a/);
+  assert.match(summary, /Primary intended planner-a/);
   assert.match(summary, /Challenge type: multi-variable/);
+});
+
+test('formatRoutingSummary separates intended routing from executed provenance and validation', () => {
+  const summary = formatRoutingSummary(
+    {
+      planner: 'claude-opus-4-7',
+      coder: 'coder-a',
+      reviewer: 'reviewer-a',
+      planDepth: 'deep',
+      codeDepth: 'high',
+      reviewMode: 'full',
+    },
+    {
+      planner: 'claude-sonnet-5',
+      coder: 'coder-a',
+      reviewer: 'reviewer-a',
+      planDepth: 'deep',
+      codeDepth: 'high',
+      reviewMode: 'full',
+    },
+    'planner-only',
+    {
+      planning: {
+        stage: 'planning',
+        role: 'planner',
+        model: 'kimi-k2.7-code',
+        rawModel: 'moonshotai/kimi-k2.7-code',
+        agent: 'native-openrouter',
+        status: 'completed',
+        source: '.planning-result.json',
+        artifactPath: '/tmp/primary/.planning-result.json',
+        consultedArtifactPaths: ['/tmp/primary/.planning-result.json'],
+      },
+      coding: {
+        stage: 'coding',
+        role: 'coder',
+        model: 'coder-a',
+        agent: 'claude',
+        status: 'completed',
+        source: '.coding-result.json',
+        artifactPath: '/tmp/primary/.coding-result.json',
+        consultedArtifactPaths: ['/tmp/primary/.coding-result.json'],
+      },
+      review: {
+        stage: 'review',
+        role: 'reviewer',
+        model: 'reviewer-a',
+        agent: 'claude',
+        status: 'completed',
+        source: '.review-result.json',
+        artifactPath: '/tmp/primary/.review-result.json',
+        consultedArtifactPaths: ['/tmp/primary/.review-result.json'],
+      },
+    },
+    {
+      planning: {
+        stage: 'planning',
+        role: 'planner',
+        model: 'claude-sonnet-5',
+        agent: 'claude',
+        status: 'completed',
+        source: '.planning-result.json',
+        artifactPath: '/tmp/challenger/.planning-result.json',
+        consultedArtifactPaths: ['/tmp/challenger/.planning-result.json'],
+      },
+      coding: {
+        stage: 'coding',
+        role: 'coder',
+        model: 'coder-a',
+        agent: 'claude',
+        status: 'completed',
+        source: '.coding-result.json',
+        artifactPath: '/tmp/challenger/.coding-result.json',
+        consultedArtifactPaths: ['/tmp/challenger/.coding-result.json'],
+      },
+      review: {
+        stage: 'review',
+        role: 'reviewer',
+        model: 'reviewer-a',
+        agent: 'claude',
+        status: 'completed',
+        source: '.review-result.json',
+        artifactPath: '/tmp/challenger/.review-result.json',
+        consultedArtifactPaths: ['/tmp/challenger/.review-result.json'],
+      },
+    },
+    {
+      valid: false,
+      outcome: 'invalid',
+      challengedStage: 'planning',
+      challengedRole: 'planner',
+      issues: [
+        {
+          side: 'primary',
+          stage: 'planning',
+          role: 'planner',
+          reason: 'executed-model-mismatch',
+          intendedModel: 'claude-opus-4-7',
+          executedModel: 'kimi-k2.7-code',
+          artifactPath: '/tmp/primary/.planning-result.json',
+        },
+      ],
+    },
+  );
+
+  assert.match(summary, /Primary intended claude-opus-4-7/);
+  assert.match(summary, /Executed primary: planner native-openrouter\/kimi-k2\.7-code/);
+  assert.match(summary, /Provenance validation: invalid/);
+  assert.match(summary, /executed-model-mismatch intended=claude-opus-4-7 executed=kimi-k2\.7-code/);
 });
 
 test('buildComparisonPrompt uses stage-specific score label for reviewer-only', () => {
@@ -293,4 +402,28 @@ test('buildChallengeCommentBody points each PR at the opposite PR', () => {
   assert.match(challengerComment, /Other PR: https:\/\/github\.com\/acme\/repo\/pull\/11/);
   assert.doesNotMatch(primaryComment, /Other PR: https:\/\/github\.com\/acme\/repo\/pull\/11/);
   assert.doesNotMatch(challengerComment, /Other PR: https:\/\/github\.com\/acme\/repo\/pull\/22/);
+});
+
+test('buildChallengeCommentBody reports invalid comparisons without a winner', () => {
+  const body = buildChallengeCommentBody({
+    pairId: 'pair-123',
+    rationale: 'Challenge comparison invalid: primary planner mismatch.',
+    otherPrUrl: 'https://github.com/acme/repo/pull/22',
+    routingSummary: 'routing summary',
+    provenanceValidation: {
+      valid: false,
+      outcome: 'invalid',
+      issues: [
+        {
+          side: 'primary',
+          stage: 'planning',
+          role: 'planner',
+          reason: 'executed-model-mismatch',
+        },
+      ],
+    },
+  });
+
+  assert.match(body, /Comparison outcome: invalid/);
+  assert.doesNotMatch(body, /Recommended winner/);
 });

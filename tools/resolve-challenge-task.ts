@@ -20,6 +20,7 @@ import { buildEvalSummary, modelStageCount } from '../shared/lib/challenge-sched
 import { resolveAgent } from '../shared/lib/model-router.ts';
 import { readBothRouteArtifacts } from '../shared/lib/route-artifact.ts';
 import { readTaskPromptFromFile } from '../shared/lib/workflow-router.ts';
+import { buildChallengeExecutionIntent as buildChallengeIntent } from '../shared/lib/challenge-execution-contract.ts';
 
 runTool({
   name: 'resolve-challenge-task',
@@ -317,6 +318,14 @@ runTool({
     // route missing the requested stage model) — report the effective stage.
     const effectiveStage = pair.challengeStage || 'implementation';
     const challengerVaried = variedModelForStage(pair.challenger, effectiveStage);
+    const challengeIntent = buildChallengeIntent({
+      pairId: issue,
+      challengeStage: effectiveStage,
+      primary: pair.primary,
+      challenger: pair.challenger,
+      routeContext: pair.routeContext,
+      selectionReason: pair.selectionReason,
+    });
     const challengerSource = pair.selectionReason || (
       forcedChallengerModel && challengerVaried === forcedChallengerModel
         ? 'recommendation'
@@ -365,6 +374,7 @@ runTool({
       coverageCount: pair.challengerCoverageCount,
       challengeStage: effectiveStage,
       ...(challengeRecommendation ? { challengeRecommendation } : {}),
+      challengeIntent,
       ...(nativeCertificationRejections && nativeCertificationRejections.length > 0
         ? { nativeCertificationRejections }
         : {}),

@@ -114,6 +114,8 @@
  *   (HOK-2234) so eval records preserve the model actually attempted
  *   pre-fallback and its Wavemill alias for launch-priority coverage
  *   diagnostics.
+ * - **1.33.0**: Added challenge execution contract fields (HOK-2575)
+ *   so invalid challenge runs are excluded from reward/training attribution.
  *
  * @module eval-schema
  */
@@ -121,9 +123,15 @@
 import type { ModelPricing } from './workflow-cost.ts';
 import type { ModelSelector, RegistryTaskType } from './model-registry.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
+import type {
+  ChallengeExecutionAttestation,
+  ChallengeExecutionIntent,
+  InvalidChallengeReason,
+} from './challenge-execution-contract.ts';
+import type { ChallengeRoutingMeta } from './challenge-comparison.ts';
 
 /** Current eval schema version for newly emitted records. */
-export const SCHEMA_VERSION = '1.32.0';
+export const SCHEMA_VERSION = '1.33.0';
 
 export type RoutingRole = 'planner' | 'coder' | 'reviewer';
 
@@ -1494,6 +1502,9 @@ export interface EvalRecord {
   /** Shared identifier linking both sides of a challenge-mode pair */
   challengePairId?: string;
 
+  /** Side within a challenge pair, used to bind intent to evidence. */
+  challengeSide?: 'primary' | 'challenger';
+
   /** Pull request URL, if the task produced a PR */
   prUrl?: string;
 
@@ -1673,6 +1684,21 @@ export interface EvalRecord {
    * @since 1.16.0
    */
   challengeRouteContext?: EvalChallengeRouteContext;
+
+  /** Selected challenge execution contract for both sides of the pair. */
+  challengeIntent?: ChallengeExecutionIntent;
+
+  /** Effective per-stage execution route after expanded routing/contract application. */
+  challengeExecutionRoute?: ChallengeRoutingMeta;
+
+  /** Per-stage launch evidence used to attest the challenge contract. */
+  challengeExecutionEvidence?: ChallengeExecutionAttestation;
+
+  /** Stable reason when selected challenge intent did not execute. */
+  challengeDivergenceReason?: InvalidChallengeReason;
+
+  /** True when this eval record must not count as challenge/training evidence. */
+  invalidChallenge?: boolean;
 
   /**
    * General routing provenance for operator and eval attribution.

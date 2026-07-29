@@ -14,6 +14,7 @@
  */
 
 import path from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
 import { errorMessage } from './error-utils.ts';
 import { finalizeEvalSuccess } from './eval-success-policy.ts';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
@@ -45,11 +46,22 @@ import {
   collectDeliveryOutcome,
 } from './outcome-collectors.ts';
 import { evaluateTask } from './eval.ts';
-import { attachPhaseDurations, attachStageOutcomes, attachTraceId, enrichTrainingMetadata } from './eval-record-builder.ts';
+import {
+  attachChallengeExecutionMetadata,
+  attachPhaseDurations,
+  attachStageOutcomes,
+  attachTraceId,
+  enrichTrainingMetadata,
+} from './eval-record-builder.ts';
 import { loadFeatureOutcomeDiagnostics } from './feature-outcome-consumer.ts';
 import { loadTraceContext, appendTraceEvent } from './trace-event.ts';
 import { appendEvalRecord } from './eval-persistence.ts';
 import { buildTaskDescriptor } from './task-descriptor-builder.ts';
+import {
+  attestEvalRecordChallengeExecution,
+  loadChallengeIntentFromFeatureDir,
+  type ChallengeExecutionIntent,
+} from './challenge-execution-contract.ts';
 import { getMaxCostUsd } from './config.ts';
 import { formatHokusaiSubmissionTriggerResult, triggerHokusaiSubmission } from './hokusai-submission-trigger.ts';
 import { getConfiguredModelsForDescriptor } from './model-registry.ts';
@@ -148,6 +160,39 @@ function deriveRouteProvenance(
     readRouteLifecycleArtifacts(featureDir, archiveDir),
     repoDir,
   );
+}
+
+function deriveChallengeFeatureDir(worktreePath: string | undefined, slug: string): string | undefined {
+  if (!worktreePath || !slug) return undefined;
+  for (const dir of ['features', 'bugs']) {
+    const featureDir = path.join(worktreePath, dir, slug);
+    try {
+      return featureDir;
+    } catch {
+      continue;
+    }
+  }
+  return undefined;
+}
+
+function deriveChallengeSide(slug: string, issueId: string, challengePairId?: string): 'primary' | 'challenger' | undefined {
+  if (!challengePairId) return undefined;
+  if (issueId === `${challengePairId}_c` || slug.endsWith('_c')) return 'challenger';
+  return 'primary';
+}
+
+function loadChallengeIntentFromState(repoDir: string, issueId: string, challengePairId?: string): ChallengeExecutionIntent | undefined {
+  if (!challengePairId) return undefined;
+  const statePath = path.join(repoDir, '.wavemill', 'state', 'workflow-state.json');
+  try {
+    if (!existsSync(statePath)) return undefined;
+    const state = JSON.parse(readFileSync(statePath, 'utf-8')) as { tasks?: Record<string, { challengeIntent?: ChallengeExecutionIntent }> };
+    return (issueId ? state.tasks?.[issueId]?.challengeIntent : undefined)
+      ?? state.tasks?.[challengePairId]?.challengeIntent
+      ?? state.tasks?.[`${challengePairId}_c`]?.challengeIntent;
+  } catch {
+    return undefined;
+  }
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -495,10 +540,15 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
   if (!providerMetadata) {
     providerMetadata = getDeepSeekProviderMetadata(executionModel, repoDir);
   }
+  const slug = branch.replace(/^(task|bug)\//, '') || issueId.toLowerCase();
+  let challengeIntent: ChallengeExecutionIntent | undefined;
+  if (challengePairId && slug) {
+    const challengeFeatureDir = deriveChallengeFeatureDir(worktreePath, slug);
+    challengeIntent = challengeFeatureDir ? loadChallengeIntentFromFeatureDir(challengeFeatureDir) : undefined;
+  }
+  challengeIntent ??= loadChallengeIntentFromState(repoDir, issueId, challengePairId);
   try {
     // Derive feature slug from branch or issue ID
-    const slug = branch.replace(/^(task|bug)\//, '') || issueId.toLowerCase();
-
     // Fetch raw routing data
     const routingComplete = slug
       ? fetchRoutingCompleteRawWithArchive(repoDir, slug, issueId, worktreePath)
@@ -596,6 +646,8 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
     provider: providerMetadata?.provider,
     endpoint: providerMetadata?.endpoint,
     challengePairId,
+    challengeSide: deriveChallengeSide(slug, issueId, challengePairId),
+    challengeIntent,
     routeProvenance: deriveRouteProvenance(repoDir, branch, issueId, worktreePath),
     executedPlanning: stageArtifacts.executedPlanning,
     phaseDurations,
@@ -609,9 +661,14 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
     constraints: evalConstraints,
     featureOutcomeDiagnostics,
   });
+  const attestation = attestEvalRecordChallengeExecution(record);
+  attachChallengeExecutionMetadata(record, {
+    side: record.challengeSide,
+    intent: record.challengeIntent,
+    evidence: attestation,
+  });
 
   // 10a. Attach trace correlation ID (HOK-2259) — best-effort
-  const slug = branch.replace(/^(task|bug)\//, '') || issueId.toLowerCase();
   let traceCtx = null;
   if (worktreePath && slug) {
     for (const dir of ['features', 'bugs']) {

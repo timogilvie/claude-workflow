@@ -1,6 +1,9 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { appendJsonlRecord, readJsonlFile } from './jsonl-utils.ts';
+import { getEffectiveRegistry, resolveModelRegistryKey } from './model-registry.ts';
+import { resolveWavemillAliasFromOpenRouterId } from './openrouter-catalog.ts';
+import type { StageName, StageResult, StageStatus } from './stage-result.ts';
 
 export interface ChallengeRoutingMeta {
   planner: string;
@@ -42,13 +45,67 @@ export type ChallengeType =
   | 'full-stack';
 
 export type StageEvidenceMode = 'direct' | 'inferred-fallback' | 'not-applicable';
-export type ChallengeComparisonOutcome = 'compared' | 'skipped' | 'forfeit' | 'double-forfeit';
+export type ChallengeComparisonOutcome = 'compared' | 'skipped' | 'forfeit' | 'double-forfeit' | 'invalid' | 'inconclusive' | 'invalid_challenge';
 export type ChallengeTerminalReason =
   | 'eval_hard_failed'
   | 'primary_eval_hard_failed'
   | 'challenger_eval_hard_failed'
   | 'both_eval_hard_failed'
-  | 'orphan_pair';
+  | 'orphan_pair'
+  | 'provenance_validation_failed';
+export type ChallengeStageRole = 'planner' | 'coder' | 'reviewer';
+export type ChallengeProvenanceSource =
+  | '.planning-result.json'
+  | '.coding-result.json'
+  | '.review-result.json'
+  | 'eval.executedPlanning'
+  | 'missing'
+  | 'malformed-artifact';
+export type ChallengeProvenanceValidationReason =
+  | 'missing-artifact'
+  | 'malformed-artifact'
+  | 'stage-not-completed'
+  | 'executed-model-mismatch'
+  | 'same-intent-different-execution';
+
+export interface ChallengeExecutedStageProvenance {
+  stage: StageName;
+  role: ChallengeStageRole;
+  model: string;
+  rawModel?: string;
+  agent: string;
+  status: StageStatus | 'missing' | 'malformed';
+  source: ChallengeProvenanceSource;
+  artifactPath?: string;
+  consultedArtifactPaths: string[];
+}
+
+export interface ChallengeSideExecutionProvenance {
+  planning: ChallengeExecutedStageProvenance;
+  coding: ChallengeExecutedStageProvenance;
+  review: ChallengeExecutedStageProvenance;
+}
+
+export interface ChallengeProvenanceValidationIssue {
+  side: 'primary' | 'challenger' | 'pair';
+  stage: StageName;
+  role: ChallengeStageRole;
+  reason: ChallengeProvenanceValidationReason;
+  intendedModel?: string;
+  executedModel?: string;
+  executedAgent?: string;
+  status?: string;
+  artifactPath?: string;
+  consultedArtifactPaths?: string[];
+}
+
+export interface ChallengeProvenanceValidation {
+  valid: boolean;
+  outcome?: 'invalid' | 'inconclusive';
+  challengedStage?: StageName;
+  challengedRole?: ChallengeStageRole;
+  issues: ChallengeProvenanceValidationIssue[];
+}
 
 export interface ChallengeComparison {
   challengePairId: string;
@@ -58,13 +115,16 @@ export interface ChallengeComparison {
   challengerPrUrl: string;
   primaryEvalScore: number;
   challengerEvalScore: number;
-  winner: 'primary' | 'challenger';
-  winnerModel: string;
+  winner?: 'primary' | 'challenger';
+  winnerModel?: string;
   rationale: string;
   dimensions: ChallengeComparisonDimensions;
   timestamp: string;
   primaryRouting?: ChallengeRoutingMeta;
   challengerRouting?: ChallengeRoutingMeta;
+  primaryExecution?: ChallengeSideExecutionProvenance;
+  challengerExecution?: ChallengeSideExecutionProvenance;
+  provenanceValidation?: ChallengeProvenanceValidation;
   variedDimensions?: VariedDimensions;
   challengeType?: ChallengeType;
   variedStage?: 'plan' | 'implementation' | 'review';
@@ -72,6 +132,11 @@ export interface ChallengeComparison {
   workflowInsight?: string;
   comparisonOutcome?: ChallengeComparisonOutcome;
   skipReason?: 'identical-routing-dimensions';
+  invalidChallengeReason?: 'stage_override_lost' | 'native_launch_fallback' | 'identical_effective_route';
+  invalidChallengeDetails?: string;
+  invalidChallenge?: boolean;
+  primaryAttestation?: unknown;
+  challengerAttestation?: unknown;
   terminalReason?: ChallengeTerminalReason;
   cleanupPolicy?: 'primary-wins-close-challenger';
   /** Source of the primary comparison score (e.g. "stage.review", "stage.plan", "overall") */
@@ -128,6 +193,30 @@ type ChallengeEntryLike = {
   reviewMode?: string;
 };
 
+type EvalExecutedPlanningLike = {
+  agent?: unknown;
+  model?: unknown;
+  status?: unknown;
+  source?: unknown;
+};
+
+type EvalRecordLike = {
+  executedPlanning?: EvalExecutedPlanningLike | null;
+};
+
+const STAGE_ROLES: Record<StageName, ChallengeStageRole | undefined> = {
+  planning: 'planner',
+  coding: 'coder',
+  review: 'reviewer',
+  ready: undefined,
+};
+
+const ROLE_STAGES: Record<ChallengeStageRole, StageName> = {
+  planner: 'planning',
+  coder: 'coding',
+  reviewer: 'review',
+};
+
 function resolveRecordsFile(dir?: string): string {
   const baseDir = resolve(dir || DEFAULT_EVALS_DIR);
   return join(baseDir, CHALLENGE_RECORDS_FILENAME);
@@ -135,6 +224,21 @@ function resolveRecordsFile(dir?: string): string {
 
 function normalize(value: string | undefined): string {
   return value?.trim() || '';
+}
+
+function normalizeUnknown(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+export function canonicalizeChallengeModelId(modelId: string, repoDir?: string): string {
+  const trimmed = normalize(modelId);
+  if (!trimmed) return '';
+  const registry = getEffectiveRegistry(repoDir);
+  const registryKey = resolveModelRegistryKey(registry, trimmed);
+  if (registry.models[registryKey]) {
+    return registryKey;
+  }
+  return resolveWavemillAliasFromOpenRouterId(trimmed) ?? trimmed;
 }
 
 function variantDiffers(a: string | undefined, b: string | undefined): boolean {
@@ -235,6 +339,327 @@ export function appendChallengeComparison(record: ChallengeComparison, dir?: str
   appendJsonlRecord(resolveRecordsFile(dir), record);
 }
 
+function stageResultFileName(stage: StageName): ChallengeProvenanceSource {
+  if (stage === 'planning') return '.planning-result.json';
+  if (stage === 'coding') return '.coding-result.json';
+  if (stage === 'review') return '.review-result.json';
+  throw new Error(`Unsupported challenge provenance stage: ${stage}`);
+}
+
+function emptyStageProvenance(
+  stage: StageName,
+  source: ChallengeProvenanceSource,
+  consultedArtifactPaths: string[],
+): ChallengeExecutedStageProvenance {
+  const role = STAGE_ROLES[stage];
+  if (!role) {
+    throw new Error(`Unsupported challenge provenance stage: ${stage}`);
+  }
+  return {
+    stage,
+    role,
+    model: '',
+    agent: '',
+    status: source === 'malformed-artifact' ? 'malformed' : 'missing',
+    source,
+    consultedArtifactPaths,
+  };
+}
+
+function parseStageArtifact(
+  stage: StageName,
+  artifactPath: string,
+  repoDir?: string,
+): ChallengeExecutedStageProvenance {
+  const consultedArtifactPaths = [artifactPath];
+  const source = stageResultFileName(stage);
+  if (!existsSync(artifactPath)) {
+    return emptyStageProvenance(stage, 'missing', consultedArtifactPaths);
+  }
+
+  let parsed: StageResult;
+  try {
+    parsed = JSON.parse(readFileSync(artifactPath, 'utf-8')) as StageResult;
+  } catch {
+    return {
+      ...emptyStageProvenance(stage, 'malformed-artifact', consultedArtifactPaths),
+      artifactPath,
+    };
+  }
+
+  if (parsed?.stage !== stage || !parsed.status) {
+    return {
+      ...emptyStageProvenance(stage, 'malformed-artifact', consultedArtifactPaths),
+      artifactPath,
+    };
+  }
+
+  const rawModel = normalizeUnknown(parsed.model);
+  return {
+    stage,
+    role: STAGE_ROLES[stage] as ChallengeStageRole,
+    model: canonicalizeChallengeModelId(rawModel, repoDir),
+    rawModel,
+    agent: normalizeUnknown(parsed.agent),
+    status: parsed.status,
+    source,
+    artifactPath,
+    consultedArtifactPaths,
+  };
+}
+
+function evalPlanningFallback(
+  evalRecord: EvalRecordLike | undefined,
+  existing: ChallengeExecutedStageProvenance,
+  repoDir?: string,
+): ChallengeExecutedStageProvenance {
+  if (existing.status !== 'missing') {
+    return existing;
+  }
+  const executedPlanning = evalRecord?.executedPlanning;
+  if (!executedPlanning || typeof executedPlanning !== 'object') {
+    return existing;
+  }
+  const rawModel = normalizeUnknown(executedPlanning.model);
+  const status = normalizeUnknown(executedPlanning.status);
+  return {
+    stage: 'planning',
+    role: 'planner',
+    model: canonicalizeChallengeModelId(rawModel, repoDir),
+    rawModel,
+    agent: normalizeUnknown(executedPlanning.agent),
+    status: status === 'completed' ? 'completed' : (status as StageStatus || 'completed'),
+    source: 'eval.executedPlanning',
+    consultedArtifactPaths: existing.consultedArtifactPaths,
+  };
+}
+
+export function resolveChallengeSideExecutionProvenance(input: {
+  featureDir?: string;
+  repoDir?: string;
+  evalRecord?: EvalRecordLike;
+}): ChallengeSideExecutionProvenance {
+  const stagePath = (stage: StageName) => input.featureDir ? join(input.featureDir, stageResultFileName(stage)) : '';
+  const planning = input.featureDir
+    ? parseStageArtifact('planning', stagePath('planning'), input.repoDir)
+    : emptyStageProvenance('planning', 'missing', []);
+  const coding = input.featureDir
+    ? parseStageArtifact('coding', stagePath('coding'), input.repoDir)
+    : emptyStageProvenance('coding', 'missing', []);
+  const review = input.featureDir
+    ? parseStageArtifact('review', stagePath('review'), input.repoDir)
+    : emptyStageProvenance('review', 'missing', []);
+
+  return {
+    planning: evalPlanningFallback(input.evalRecord, planning, input.repoDir),
+    coding,
+    review,
+  };
+}
+
+export function challengeRoleForVariedDimensions(varied: VariedDimensions | undefined): ChallengeStageRole | undefined {
+  if (!varied) return undefined;
+  const roles: ChallengeStageRole[] = [];
+  if (varied.planner) roles.push('planner');
+  if (varied.coder) roles.push('coder');
+  if (varied.reviewer) roles.push('reviewer');
+  return roles.length === 1 ? roles[0] : undefined;
+}
+
+function stageForRole(role: ChallengeStageRole): StageName {
+  return ROLE_STAGES[role];
+}
+
+function intendedModelForRole(routing: ChallengeRoutingMeta | undefined, role: ChallengeStageRole, fallbackCoder: string): string {
+  if (!routing) return role === 'coder' ? fallbackCoder : '';
+  if (role === 'planner') return routing.planner;
+  if (role === 'reviewer') return routing.reviewer;
+  return routing.coder || fallbackCoder;
+}
+
+function addStageValidationIssue(
+  issues: ChallengeProvenanceValidationIssue[],
+  side: 'primary' | 'challenger',
+  stageProvenance: ChallengeExecutedStageProvenance,
+  reason: ChallengeProvenanceValidationReason,
+  intendedModel?: string,
+): void {
+  issues.push({
+    side,
+    stage: stageProvenance.stage,
+    role: stageProvenance.role,
+    reason,
+    intendedModel,
+    executedModel: stageProvenance.model,
+    executedAgent: stageProvenance.agent,
+    status: stageProvenance.status,
+    artifactPath: stageProvenance.artifactPath,
+    consultedArtifactPaths: stageProvenance.consultedArtifactPaths,
+  });
+}
+
+function validateStageForSide(input: {
+  side: 'primary' | 'challenger';
+  provenance: ChallengeSideExecutionProvenance;
+  routing?: ChallengeRoutingMeta;
+  fallbackCoder: string;
+  role: ChallengeStageRole;
+  repoDir?: string;
+  issues: ChallengeProvenanceValidationIssue[];
+}): void {
+  const stage = stageForRole(input.role);
+  const stageProvenance = input.provenance[stage];
+  const intendedModel = canonicalizeChallengeModelId(
+    intendedModelForRole(input.routing, input.role, input.fallbackCoder),
+    input.repoDir,
+  );
+  if (stageProvenance.status === 'missing') {
+    addStageValidationIssue(input.issues, input.side, stageProvenance, 'missing-artifact', intendedModel);
+    return;
+  }
+  if (stageProvenance.status === 'malformed') {
+    addStageValidationIssue(input.issues, input.side, stageProvenance, 'malformed-artifact', intendedModel);
+    return;
+  }
+  if (stageProvenance.status !== 'completed') {
+    addStageValidationIssue(input.issues, input.side, stageProvenance, 'stage-not-completed', intendedModel);
+  }
+  if (intendedModel && stageProvenance.model && stageProvenance.model !== intendedModel) {
+    addStageValidationIssue(input.issues, input.side, stageProvenance, 'executed-model-mismatch', intendedModel);
+  }
+}
+
+function materiallyDifferentExecution(
+  primary: ChallengeExecutedStageProvenance,
+  challenger: ChallengeExecutedStageProvenance,
+): boolean {
+  if (primary.status === 'missing' || challenger.status === 'missing') return false;
+  if (primary.status === 'malformed' || challenger.status === 'malformed') return false;
+  return primary.model !== challenger.model || primary.agent !== challenger.agent;
+}
+
+export function validateChallengeExecutionProvenance(input: {
+  primaryExecution: ChallengeSideExecutionProvenance;
+  challengerExecution: ChallengeSideExecutionProvenance;
+  primaryRouting?: ChallengeRoutingMeta;
+  challengerRouting?: ChallengeRoutingMeta;
+  primaryModel: string;
+  challengerModel: string;
+  variedDimensions?: VariedDimensions;
+  repoDir?: string;
+}): ChallengeProvenanceValidation {
+  const issues: ChallengeProvenanceValidationIssue[] = [];
+  const role = challengeRoleForVariedDimensions(input.variedDimensions);
+
+  if (role) {
+    validateStageForSide({
+      side: 'primary',
+      provenance: input.primaryExecution,
+      routing: input.primaryRouting,
+      fallbackCoder: input.primaryModel,
+      role,
+      repoDir: input.repoDir,
+      issues,
+    });
+    validateStageForSide({
+      side: 'challenger',
+      provenance: input.challengerExecution,
+      routing: input.challengerRouting,
+      fallbackCoder: input.challengerModel,
+      role,
+      repoDir: input.repoDir,
+      issues,
+    });
+    return {
+      valid: issues.length === 0,
+      outcome: issues.length === 0 ? undefined : 'invalid',
+      challengedStage: stageForRole(role),
+      challengedRole: role,
+      issues,
+    };
+  }
+
+  if (input.variedDimensions && !hasAnyVariedDimension(input.variedDimensions)) {
+    for (const stage of ['planning', 'coding', 'review'] as const) {
+      const primaryStage = input.primaryExecution[stage];
+      const challengerStage = input.challengerExecution[stage];
+      if (materiallyDifferentExecution(primaryStage, challengerStage)) {
+        issues.push({
+          side: 'pair',
+          stage,
+          role: primaryStage.role,
+          reason: 'same-intent-different-execution',
+          executedModel: `primary=${primaryStage.model}; challenger=${challengerStage.model}`,
+          executedAgent: `primary=${primaryStage.agent}; challenger=${challengerStage.agent}`,
+          artifactPath: primaryStage.artifactPath || challengerStage.artifactPath,
+          consultedArtifactPaths: [
+            ...primaryStage.consultedArtifactPaths,
+            ...challengerStage.consultedArtifactPaths,
+          ],
+        });
+      }
+    }
+  }
+
+  return {
+    valid: issues.length === 0,
+    outcome: issues.length === 0 ? undefined : 'inconclusive',
+    issues,
+  };
+}
+
+export function buildInvalidProvenanceComparison(input: {
+  challengePairId: string;
+  primaryModel: string;
+  challengerModel: string;
+  primaryPrUrl: string;
+  challengerPrUrl: string;
+  primaryEvalScore: number;
+  challengerEvalScore: number;
+  primaryRouting?: ChallengeRoutingMeta;
+  challengerRouting?: ChallengeRoutingMeta;
+  primaryExecution: ChallengeSideExecutionProvenance;
+  challengerExecution: ChallengeSideExecutionProvenance;
+  provenanceValidation: ChallengeProvenanceValidation;
+  variedDimensions?: VariedDimensions;
+  challengeType?: ChallengeType;
+  variedStage?: 'plan' | 'implementation' | 'review';
+  timestamp?: string;
+}): ChallengeComparison {
+  const reason = input.provenanceValidation.issues
+    .map((issue) => {
+      const side = issue.side === 'pair' ? 'pair' : `${issue.side} ${issue.role}`;
+      const path = issue.artifactPath ? ` (${issue.artifactPath})` : '';
+      const intended = issue.intendedModel ? ` intended=${issue.intendedModel}` : '';
+      const executed = issue.executedModel ? ` executed=${issue.executedModel}` : '';
+      return `${side}: ${issue.reason}${intended}${executed}${path}`;
+    })
+    .join('; ');
+  const outcome = input.provenanceValidation.outcome ?? 'invalid';
+  return {
+    challengePairId: input.challengePairId,
+    primaryModel: input.primaryModel,
+    challengerModel: input.challengerModel,
+    primaryPrUrl: input.primaryPrUrl,
+    challengerPrUrl: input.challengerPrUrl,
+    primaryEvalScore: input.primaryEvalScore,
+    challengerEvalScore: input.challengerEvalScore,
+    rationale: `Challenge comparison ${outcome}: ${reason || 'execution provenance did not validate'}.`,
+    dimensions: EMPTY_DIMENSIONS,
+    timestamp: input.timestamp || new Date().toISOString(),
+    primaryRouting: input.primaryRouting,
+    challengerRouting: input.challengerRouting,
+    primaryExecution: input.primaryExecution,
+    challengerExecution: input.challengerExecution,
+    provenanceValidation: input.provenanceValidation,
+    variedDimensions: input.variedDimensions,
+    challengeType: input.challengeType,
+    variedStage: input.variedStage,
+    comparisonOutcome: outcome,
+    terminalReason: 'provenance_validation_failed',
+  };
+}
+
 export function buildSkippedIdenticalComparison(input: {
   challengePairId: string;
   primaryModel: string;
@@ -268,6 +693,47 @@ export function buildSkippedIdenticalComparison(input: {
     comparisonOutcome: 'skipped',
     skipReason: 'identical-routing-dimensions',
     cleanupPolicy: 'primary-wins-close-challenger',
+  };
+}
+
+export function buildInvalidChallengeComparison(input: {
+  challengePairId: string;
+  primaryModel: string;
+  challengerModel: string;
+  primaryPrUrl: string;
+  challengerPrUrl: string;
+  primaryEvalScore: number;
+  challengerEvalScore: number;
+  reason: 'stage_override_lost' | 'native_launch_fallback' | 'identical_effective_route';
+  details?: string;
+  primaryRouting?: ChallengeRoutingMeta;
+  challengerRouting?: ChallengeRoutingMeta;
+  primaryAttestation?: unknown;
+  challengerAttestation?: unknown;
+  timestamp?: string;
+}): ChallengeComparison {
+  const variedDimensions = detectVariedDimensions(input.primaryRouting, input.challengerRouting);
+  return {
+    challengePairId: input.challengePairId,
+    primaryModel: input.primaryModel,
+    challengerModel: input.challengerModel,
+    primaryPrUrl: input.primaryPrUrl,
+    challengerPrUrl: input.challengerPrUrl,
+    primaryEvalScore: input.primaryEvalScore,
+    challengerEvalScore: input.challengerEvalScore,
+    rationale: input.details || `Invalid challenge: ${input.reason}`,
+    dimensions: EMPTY_DIMENSIONS,
+    timestamp: input.timestamp || new Date().toISOString(),
+    primaryRouting: input.primaryRouting,
+    challengerRouting: input.challengerRouting,
+    variedDimensions,
+    comparisonOutcome: 'invalid_challenge',
+    invalidChallenge: true,
+    invalidChallengeReason: input.reason,
+    ...(input.details ? { invalidChallengeDetails: input.details } : {}),
+    ...(input.primaryAttestation ? { primaryAttestation: input.primaryAttestation } : {}),
+    ...(input.challengerAttestation ? { challengerAttestation: input.challengerAttestation } : {}),
+    workflowInsight: 'No LLM comparison was run because the selected challenge intent did not execute.',
   };
 }
 

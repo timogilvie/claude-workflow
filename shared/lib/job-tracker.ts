@@ -37,8 +37,11 @@ export interface JobResultFile {
     winner?: 'primary' | 'challenger';
     winnerModel?: string;
     rationale?: string;
-    comparisonOutcome?: 'compared' | 'skipped';
+    comparisonOutcome?: 'compared' | 'skipped' | 'forfeit' | 'double-forfeit' | 'invalid' | 'inconclusive' | 'invalid_challenge';
     skipReason?: 'identical-routing-dimensions';
+    invalidChallenge?: boolean;
+    invalidChallengeReason?: string;
+    invalidChallengeDetails?: string;
     cleanupPolicy?: 'primary-wins-close-challenger';
     primaryModel?: string;
     challengerModel?: string;
@@ -48,6 +51,7 @@ export interface JobResultFile {
     challengerEvalScore?: number;
     dimensions?: Record<string, unknown>;
   };
+  invalidChallenge?: boolean;
 }
 
 export interface WorkflowStateLike {
