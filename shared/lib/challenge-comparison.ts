@@ -42,7 +42,7 @@ export type ChallengeType =
   | 'full-stack';
 
 export type StageEvidenceMode = 'direct' | 'inferred-fallback' | 'not-applicable';
-export type ChallengeComparisonOutcome = 'compared' | 'skipped' | 'forfeit' | 'double-forfeit';
+export type ChallengeComparisonOutcome = 'compared' | 'skipped' | 'forfeit' | 'double-forfeit' | 'invalid_challenge';
 export type ChallengeTerminalReason =
   | 'eval_hard_failed'
   | 'primary_eval_hard_failed'
@@ -58,8 +58,8 @@ export interface ChallengeComparison {
   challengerPrUrl: string;
   primaryEvalScore: number;
   challengerEvalScore: number;
-  winner: 'primary' | 'challenger';
-  winnerModel: string;
+  winner?: 'primary' | 'challenger';
+  winnerModel?: string;
   rationale: string;
   dimensions: ChallengeComparisonDimensions;
   timestamp: string;
@@ -72,6 +72,11 @@ export interface ChallengeComparison {
   workflowInsight?: string;
   comparisonOutcome?: ChallengeComparisonOutcome;
   skipReason?: 'identical-routing-dimensions';
+  invalidChallengeReason?: 'stage_override_lost' | 'native_launch_fallback' | 'identical_effective_route';
+  invalidChallengeDetails?: string;
+  invalidChallenge?: boolean;
+  primaryAttestation?: unknown;
+  challengerAttestation?: unknown;
   terminalReason?: ChallengeTerminalReason;
   cleanupPolicy?: 'primary-wins-close-challenger';
   /** Source of the primary comparison score (e.g. "stage.review", "stage.plan", "overall") */
@@ -268,6 +273,47 @@ export function buildSkippedIdenticalComparison(input: {
     comparisonOutcome: 'skipped',
     skipReason: 'identical-routing-dimensions',
     cleanupPolicy: 'primary-wins-close-challenger',
+  };
+}
+
+export function buildInvalidChallengeComparison(input: {
+  challengePairId: string;
+  primaryModel: string;
+  challengerModel: string;
+  primaryPrUrl: string;
+  challengerPrUrl: string;
+  primaryEvalScore: number;
+  challengerEvalScore: number;
+  reason: 'stage_override_lost' | 'native_launch_fallback' | 'identical_effective_route';
+  details?: string;
+  primaryRouting?: ChallengeRoutingMeta;
+  challengerRouting?: ChallengeRoutingMeta;
+  primaryAttestation?: unknown;
+  challengerAttestation?: unknown;
+  timestamp?: string;
+}): ChallengeComparison {
+  const variedDimensions = detectVariedDimensions(input.primaryRouting, input.challengerRouting);
+  return {
+    challengePairId: input.challengePairId,
+    primaryModel: input.primaryModel,
+    challengerModel: input.challengerModel,
+    primaryPrUrl: input.primaryPrUrl,
+    challengerPrUrl: input.challengerPrUrl,
+    primaryEvalScore: input.primaryEvalScore,
+    challengerEvalScore: input.challengerEvalScore,
+    rationale: input.details || `Invalid challenge: ${input.reason}`,
+    dimensions: EMPTY_DIMENSIONS,
+    timestamp: input.timestamp || new Date().toISOString(),
+    primaryRouting: input.primaryRouting,
+    challengerRouting: input.challengerRouting,
+    variedDimensions,
+    comparisonOutcome: 'invalid_challenge',
+    invalidChallenge: true,
+    invalidChallengeReason: input.reason,
+    ...(input.details ? { invalidChallengeDetails: input.details } : {}),
+    ...(input.primaryAttestation ? { primaryAttestation: input.primaryAttestation } : {}),
+    ...(input.challengerAttestation ? { challengerAttestation: input.challengerAttestation } : {}),
+    workflowInsight: 'No LLM comparison was run because the selected challenge intent did not execute.',
   };
 }
 

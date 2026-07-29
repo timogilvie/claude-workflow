@@ -6,6 +6,7 @@ import { fetchIssueData, formatIssueAsPrompt, fetchPrContext } from '../shared/l
 import { hasChallengeEvalRecordPair, readEvalRecords } from '../shared/lib/eval-persistence.ts';
 import {
   appendChallengeComparison,
+  buildInvalidChallengeComparison,
   buildSkippedIdenticalComparison,
   detectVariedDimensions,
   hasAnyVariedDimension,
@@ -13,6 +14,10 @@ import {
   type ChallengeComparison,
   type ChallengeRoutingMeta,
 } from '../shared/lib/challenge-comparison.ts';
+import {
+  routesIdentical,
+  type InvalidChallengeReason,
+} from '../shared/lib/challenge-execution-contract.ts';
 import {
   selectChallengeEvalScore,
   collectPerStageScores,
@@ -102,8 +107,6 @@ runTool({
         return;
       }
 
-      const primaryDiff = fetchPrContext(primaryNumber, repoDir).diff;
-      const challengerDiff = fetchPrContext(challengerNumber, repoDir).diff;
       const evals = readEvalRecords({ dir: evalsDir });
       const primaryEval = evals.find((record) => record.challengePairId === pairId && record.prUrl === primaryPrUrl);
       const challengerEval = evals.find((record) => record.challengePairId === pairId && record.prUrl === challengerPrUrl);
@@ -134,6 +137,48 @@ runTool({
       } : undefined;
 
       const variedDimensions = detectVariedDimensions(primaryRouting, challengerRouting);
+      const primaryAttestation = primaryEval.challengeExecutionEvidence;
+      const challengerAttestation = challengerEval.challengeExecutionEvidence;
+      const invalidReason = (primaryEval.challengeDivergenceReason
+        || challengerEval.challengeDivergenceReason
+        || primaryAttestation?.invalidReason
+        || challengerAttestation?.invalidReason) as InvalidChallengeReason | undefined;
+      const intentionallyIdentical = primaryEval.challengeIntent?.intentionallyIdentical === true
+        || challengerEval.challengeIntent?.intentionallyIdentical === true;
+
+      if (invalidReason || (routesIdentical(primaryRouting, challengerRouting) && !intentionallyIdentical)) {
+        const reason = invalidReason || 'identical_effective_route';
+        const invalidRecord = buildInvalidChallengeComparison({
+          challengePairId: pairId,
+          primaryModel,
+          challengerModel,
+          primaryPrUrl,
+          challengerPrUrl,
+          primaryEvalScore: primaryEval.score,
+          challengerEvalScore: challengerEval.score,
+          reason,
+          details: primaryEval.challengeExecutionEvidence?.invalidDetails
+            || challengerEval.challengeExecutionEvidence?.invalidDetails
+            || (reason === 'identical_effective_route'
+              ? 'Primary and challenger effective routes are identical without an identical-control intent.'
+              : undefined),
+          primaryRouting,
+          challengerRouting,
+          primaryAttestation,
+          challengerAttestation,
+        });
+        appendChallengeComparison(invalidRecord, evalsDir);
+        console.log(JSON.stringify(invalidRecord, null, 2));
+        if (resultFile) {
+          writeJobResultFile(resultFile, {
+            ok: true,
+            exitCode,
+            comparison: invalidRecord,
+            invalidChallenge: true,
+          });
+        }
+        return;
+      }
 
       if (variedDimensions && !hasAnyVariedDimension(variedDimensions)) {
         const skippedRecord = buildSkippedIdenticalComparison({
@@ -198,6 +243,8 @@ runTool({
         }
         return;
       }
+      const primaryDiff = fetchPrContext(primaryNumber, repoDir).diff;
+      const challengerDiff = fetchPrContext(challengerNumber, repoDir).diff;
       const challengeType = variedDimensions ? classifyChallengeType(variedDimensions) : undefined;
       const primarySelected = selectChallengeEvalScore(primaryEval, challengeType);
       const challengerSelected = selectChallengeEvalScore(challengerEval, challengeType);

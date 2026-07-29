@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   appendChallengeComparison,
+  buildInvalidChallengeComparison,
   buildSkippedIdenticalComparison,
   listVariedRoutingDimensions,
   readChallengeComparisons,
@@ -402,6 +403,27 @@ test('buildSkippedIdenticalComparison returns deterministic primary-wins metadat
   assert.equal(record.cleanupPolicy, 'primary-wins-close-challenger');
   assert.equal(record.challengeType, undefined);
   assert.equal(record.workflowInsight, 'No LLM comparison was run because both workflows resolved to identical routing dimensions.');
+});
+
+test('buildInvalidChallengeComparison omits winner and cleanup policy', () => {
+  const record = buildInvalidChallengeComparison({
+    challengePairId: 'HOK-2575',
+    primaryModel: 'gpt-5.5',
+    challengerModel: 'glm-5.2',
+    primaryPrUrl: 'https://github.com/org/repo/pull/1',
+    challengerPrUrl: 'https://github.com/org/repo/pull/2',
+    primaryEvalScore: 0.8,
+    challengerEvalScore: 0.8,
+    reason: 'stage_override_lost',
+    details: 'Expected review model glm-5.2, effective route has gpt-5.5.',
+  });
+
+  assert.equal(record.comparisonOutcome, 'invalid_challenge');
+  assert.equal(record.invalidChallenge, true);
+  assert.equal(record.invalidChallengeReason, 'stage_override_lost');
+  assert.equal(record.winner, undefined);
+  assert.equal(record.winnerModel, undefined);
+  assert.equal(record.cleanupPolicy, undefined);
 });
 
 process.on('exit', () => {

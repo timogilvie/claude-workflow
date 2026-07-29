@@ -325,6 +325,15 @@ export function classifyChallengeState(
   }
 
   const latestComparison = relevantComparisons[0];
+  if (latestComparison.comparisonOutcome === 'invalid_challenge' || latestComparison.invalidChallenge) {
+    return {
+      kind: 'pair-unresolved',
+      pairId,
+      otherPr: findOtherOpenPr(pairId, prNumber, challengePairMap, allPrNumbers),
+      reason: `pair-unresolved:invalid-challenge:${latestComparison.invalidChallengeReason ?? 'unknown'}`,
+    };
+  }
+
   if (latestComparison.comparisonOutcome === 'double-forfeit') {
     return {
       kind: 'loser',
