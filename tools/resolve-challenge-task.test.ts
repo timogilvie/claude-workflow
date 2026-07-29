@@ -131,11 +131,14 @@ function makeEvalRecord(id: string, coder: string) {
 function makeRepo(coderHistory: string[], opts: {
   patchCodingEnabled?: boolean;
   aliases?: string[];
+  primaryModels?: string[];
   suiteVersion?: string;
   certificationPhase?: string;
 } = {}): string {
   const repoDir = mkdtempSync(join(tmpdir(), 'resolve-challenge-task-'));
   const aliases = opts.aliases ?? ['qwen-3-coder', 'glm-5.2'];
+  const primaryModels = opts.primaryModels ?? [];
+  const allModels = ['claude-sonnet-4-6', ...primaryModels, ...aliases];
   const suiteVersion = opts.suiteVersion ?? 'v1';
   const certificationPhase = opts.certificationPhase ?? 'workflow';
   mkdirSync(join(repoDir, '.wavemill', 'evals'), { recursive: true });
@@ -144,13 +147,14 @@ function makeRepo(coderHistory: string[], opts: {
       enabled: true,
       rate: 1,
       recommendationRate: 1,
-      models: ['claude-sonnet-4-6', ...aliases],
+      models: allModels,
     },
     router: {
       defaultAgent: 'claude',
-      models: ['claude-sonnet-4-6', ...aliases],
+      models: allModels,
       agentMap: {
         'claude-sonnet-4-6': 'claude',
+        ...Object.fromEntries(primaryModels.map((model) => [model, 'codex'])),
         ...Object.fromEntries(aliases.map((alias) => [alias, 'native-openrouter'])),
       },
     },
@@ -282,6 +286,68 @@ describe('resolve-challenge-task CLI', () => {
       assert.equal(result.reason, 'selection_failed');
       const single = result.single as Record<string, unknown>;
       assert.equal(single.model, 'claude-sonnet-4-6');
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('finalizes expanded top-level implementation recommendations into native coder intent', () => {
+    const repoDir = makeRepo([], {
+      aliases: ['glm-5.2'],
+      primaryModels: ['gpt-5.5'],
+      patchCodingEnabled: true,
+      suiteVersion: 'v2',
+      certificationPhase: 'patch',
+    });
+    const featureDir = join(repoDir, 'features', 'hok-2570-timing');
+    mkdirSync(featureDir, { recursive: true });
+    writeFileSync(join(featureDir, '.post-expansion-route.json'), JSON.stringify({
+      planner: 'gpt-5.5',
+      coder: 'gpt-5.5',
+      reviewer: 'gpt-5.5',
+      planDepth: 'medium',
+      codeDepth: 'medium',
+      reviewMode: 'llm',
+      challengeRecommendation: {
+        shouldChallenge: true,
+        reason: 'low-data-stage',
+        challengerModel: 'glm-5.2',
+        stage: 'implementation',
+        priority: 200,
+      },
+    }), 'utf-8');
+    writeFileSync(join(featureDir, 'task-packet.md'), '# Task\n\nImplement the feature.\n', 'utf-8');
+
+    try {
+      const result = runResolveChallengeTask(repoDir, [
+        '--issue', 'HOK-2570',
+        '--slug', 'hok-2570-timing',
+        '--title', 'Make registry reusable',
+        '--primary-model', 'gpt-5.5',
+        '--remaining-slots', '2',
+        '--repo-dir', repoDir,
+        '--feature-dir', featureDir,
+        '--file', join(featureDir, 'task-packet.md'),
+      ]);
+
+      assert.equal(result.mode, 'challenge');
+      assert.equal(result.decisionSource, 'expanded');
+      assert.equal(result.selectionPath, 'recommendation-driven');
+      assert.equal(result.challengeStage, 'implementation');
+      const entries = result.entries as Array<Record<string, unknown>>;
+      const primary = entries.find((entry) => entry.role === 'primary');
+      const challenger = entries.find((entry) => entry.role === 'challenger');
+      assert.equal(primary?.model, 'gpt-5.5');
+      assert.equal(primary?.agent, 'codex');
+      assert.equal(challenger?.model, 'glm-5.2');
+      assert.equal(challenger?.agent, 'native-openrouter');
+
+      const intent = result.challengeExecutionIntent as Record<string, unknown>;
+      assert.equal(intent.selectedStage, 'implementation');
+      assert.equal(intent.decisionSource, 'expanded');
+      assert.equal(intent.selectionPath, 'recommendation-driven');
+      assert.equal((intent.challenger as Record<string, unknown> & { coder: Record<string, unknown> }).coder.model, 'glm-5.2');
+      assert.equal((intent.challenger as Record<string, unknown> & { coder: Record<string, unknown> }).coder.agent, 'native-openrouter');
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }

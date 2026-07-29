@@ -109,43 +109,42 @@ else
 fi
 
 echo ""
-echo "=== Challenge Expanded-Route Refresh Full Routing Persistence ==="
+echo "=== Challenge Execution Intent Finalization Guards ==="
 
-# Extract the block that handles refreshed_source == expanded in the monitor path
-EXPANDED_REFRESH_BLOCK="$(awk '
-  /if \[\[ "\$refreshed_source" == "expanded" \]\]; then/ { capture=1 }
+FINALIZATION_HELPER="$(awk '
+  /^finalize_challenge_execution_intent_before_coding\(\) \{/ { capture=1 }
   capture { print }
-  capture && /log "status".*Challenge participants refreshed/ { exit }
+  /^}/ && capture { exit }
 ' "$MILL_SCRIPT")"
 
-if [[ -n "$EXPANDED_REFRESH_BLOCK" ]]; then
-  check_contains "refresh block extracts primary planner" "$EXPANDED_REFRESH_BLOCK" 'entries[0].planner'
-  check_contains "refresh block extracts primary reviewer" "$EXPANDED_REFRESH_BLOCK" 'entries[0].reviewer'
-  check_contains "refresh block extracts primary planDepth" "$EXPANDED_REFRESH_BLOCK" 'entries[0].planDepth'
-  check_contains "refresh block extracts primary codeDepth" "$EXPANDED_REFRESH_BLOCK" 'entries[0].codeDepth'
-  check_contains "refresh block extracts primary reviewMode" "$EXPANDED_REFRESH_BLOCK" 'entries[0].reviewMode'
-  check_contains "refresh block extracts challenge stage" "$EXPANDED_REFRESH_BLOCK" 'challengeStage // "implementation"'
-  check_contains "refresh block extracts challenger planner" "$EXPANDED_REFRESH_BLOCK" 'entries[1].planner'
-  check_contains "refresh block extracts challenger reviewer" "$EXPANDED_REFRESH_BLOCK" 'entries[1].reviewer'
-  check_contains "refresh block extracts challenger planDepth" "$EXPANDED_REFRESH_BLOCK" 'entries[1].planDepth'
-  check_contains "refresh block extracts challenger codeDepth" "$EXPANDED_REFRESH_BLOCK" 'entries[1].codeDepth'
-  check_contains "refresh block extracts challenger reviewMode" "$EXPANDED_REFRESH_BLOCK" 'entries[1].reviewMode'
-  check_contains "primary save_task_state passes planner" "$EXPANDED_REFRESH_BLOCK" 'new_primary_planner'
-  check_contains "primary save_task_state passes reviewer" "$EXPANDED_REFRESH_BLOCK" 'new_primary_reviewer'
-  check_contains "primary save_task_state passes planDepth" "$EXPANDED_REFRESH_BLOCK" 'new_primary_plan_depth'
-  check_contains "primary save_task_state passes codeDepth" "$EXPANDED_REFRESH_BLOCK" 'new_primary_code_depth'
-  check_contains "primary save_task_state passes reviewMode" "$EXPANDED_REFRESH_BLOCK" 'new_primary_review_mode'
-  check_contains "challenger save_task_state passes planner" "$EXPANDED_REFRESH_BLOCK" 'new_challenger_planner'
-  check_contains "challenger save_task_state passes reviewer" "$EXPANDED_REFRESH_BLOCK" 'new_challenger_reviewer'
-  check_contains "challenger save_task_state passes planDepth" "$EXPANDED_REFRESH_BLOCK" 'new_challenger_plan_depth'
-  check_contains "challenger save_task_state passes codeDepth" "$EXPANDED_REFRESH_BLOCK" 'new_challenger_code_depth'
-  check_contains "challenger save_task_state passes reviewMode" "$EXPANDED_REFRESH_BLOCK" 'new_challenger_review_mode'
-  check_contains "primary save_task_state passes challengeStage" "$EXPANDED_REFRESH_BLOCK" 'new_challenge_stage'
-  check_contains "refresh updates in-memory challengeStage" "$EXPANDED_REFRESH_BLOCK" 'challenge_stage_meta="$new_challenge_stage"'
-  check_contains "refresh block detects identical primary/challenger routing" "$EXPANDED_REFRESH_BLOCK" 'expanded challenge refresh produced identical primary/challenger routing, preserving'
-  check_contains "refresh block compares primary/challenger planner" "$EXPANDED_REFRESH_BLOCK" 'new_primary_planner" == "$new_challenger_planner'
+CODING_FINALIZATION_BLOCK="$(awk '
+  /FINALIZED_CHALLENGE_CODER=""/ { capture=1 }
+  capture { print }
+  /if \[\[ -n "\$FINALIZED_CHALLENGE_CODER" \]\]/ && capture { seen=1 }
+  seen && /fi/ { exit }
+' "$MILL_SCRIPT")"
+
+if [[ -n "$FINALIZATION_HELPER" ]]; then
+  check_contains "finalizer skips challenger side" "$FINALIZATION_HELPER" '[[ "$challenge_role_meta" != "challenger" ]] || return 0'
+  check_contains "finalizer requires expanded artifact" "$FINALIZATION_HELPER" '[[ -f "$feature_dir/.post-expansion-route.json" ]] || return 0'
+  check_contains "finalizer passes feature-dir to resolver" "$FINALIZATION_HELPER" '--feature-dir "$feature_dir"'
+  check_contains "finalizer passes task packet when present" "$FINALIZATION_HELPER" 'packet_arg=(--file "$feature_dir/task-packet.md")'
+  check_contains "finalizer requires expanded or preserved source" "$FINALIZATION_HELPER" 'refreshed_source" != "expanded" && "$refreshed_source" != "preserved"'
+  check_contains "finalizer extracts challenge intent" "$FINALIZATION_HELPER" '.challengeExecutionIntent // empty'
+  check_contains "finalizer persists no-challenge intent" "$FINALIZATION_HELPER" 'persist_challenge_execution_intent "$issue" "" "$feature_dir" "$intent_json"'
+  check_contains "finalizer saves primary planner" "$FINALIZATION_HELPER" 'new_primary_planner'
+  check_contains "finalizer saves challenger planner" "$FINALIZATION_HELPER" 'new_challenger_planner'
+  check_contains "finalizer persists paired intent" "$FINALIZATION_HELPER" 'persist_challenge_execution_intent "$issue" "$new_challenger_key" "$feature_dir" "$intent_json"'
+  check_contains "finalizer exposes in-memory coder" "$FINALIZATION_HELPER" 'FINALIZED_CHALLENGE_CODER="$new_primary"'
 else
-  fail "could not extract expanded refresh block from monitor path"
+  fail "could not extract challenge execution finalizer"
+fi
+
+if [[ -n "$CODING_FINALIZATION_BLOCK" ]]; then
+  check_contains "coding handoff calls finalizer" "$CODING_FINALIZATION_BLOCK" 'finalize_challenge_execution_intent_before_coding "$ISSUE" "$SLUG" "$BRANCH" "$WT_DIR" "$FEATURE_DIR" "$coder_model"'
+  check_contains "coding handoff updates challenge coder from final intent" "$CODING_FINALIZATION_BLOCK" 'challenge_coder="$FINALIZED_CHALLENGE_CODER"'
+else
+  fail "could not extract coding finalization block"
 fi
 
 echo ""
