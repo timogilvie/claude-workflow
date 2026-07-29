@@ -43,6 +43,10 @@ import type {
 } from './eval-schema.ts';
 import type { DifficultyAnalysis } from './difficulty-analyzer.ts';
 import type { ChallengeRouteContext } from './challenge-mode.ts';
+import type {
+  ChallengeExecutionAttestation,
+  ChallengeExecutionIntent,
+} from './challenge-execution-contract.ts';
 import type { WorkflowCostOutcome, WorkflowCostResult, WorkflowCostFailure } from './workflow-cost.ts';
 import { getManifest, getManifestRef } from './resource-manifest.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
@@ -73,6 +77,12 @@ export interface EvalRecordMetadata {
   endpoint?: string;
   /** Shared challenge pair identifier */
   challengePairId?: string;
+  /** Side within a challenge pair. */
+  challengeSide?: 'primary' | 'challenger';
+  /** Selected challenge execution contract. */
+  challengeIntent?: ChallengeExecutionIntent | null;
+  /** Challenge execution attestation. */
+  challengeExecutionEvidence?: ChallengeExecutionAttestation | null;
   /** Challenge route provenance for evals */
   challengeRouteContext?: ChallengeRouteContext | null;
   /** General route provenance for all evals */
@@ -151,6 +161,39 @@ export function attachProviderMetadata(
 export function attachChallengePairId(record: EvalRecord, challengePairId?: string): void {
   if (challengePairId) {
     record.challengePairId = challengePairId;
+  }
+}
+
+export function attachChallengeExecutionMetadata(
+  record: EvalRecord,
+  input?: {
+    side?: 'primary' | 'challenger';
+    intent?: ChallengeExecutionIntent | null;
+    evidence?: ChallengeExecutionAttestation | null;
+  },
+): void {
+  if (input?.side) {
+    record.challengeSide = input.side;
+  }
+  if (input?.intent) {
+    record.challengeIntent = input.intent;
+    const sideIntent = input.side === 'challenger' ? input.intent.challenger : input.intent.primary;
+    record.challengeExecutionRoute = sideIntent.expectedRoute;
+  }
+  if (input?.evidence) {
+    record.challengeExecutionEvidence = input.evidence;
+    if (input.evidence.effectiveRoute) {
+      record.challengeExecutionRoute = input.evidence.effectiveRoute;
+    }
+    if (input.evidence.invalidReason) {
+      record.challengeDivergenceReason = input.evidence.invalidReason;
+      record.invalidChallenge = true;
+      record.trainingEligible = false;
+      record.nonRewardReason = {
+        code: 'INVALID_CHALLENGE',
+        message: `Invalid challenge: ${input.evidence.invalidReason}`,
+      };
+    }
   }
 }
 
@@ -1174,6 +1217,11 @@ export function enrichEvalRecord(record: EvalRecord, metadata: EvalRecordMetadat
   attachAgentType(record, metadata.agentType);
   attachProviderMetadata(record, metadata.provider, metadata.endpoint);
   attachChallengePairId(record, metadata.challengePairId);
+  attachChallengeExecutionMetadata(record, {
+    side: metadata.challengeSide,
+    intent: metadata.challengeIntent,
+    evidence: metadata.challengeExecutionEvidence,
+  });
   attachChallengeStageEval(record, metadata.challengeStageEval);
   attachChallengeRouteContext(record, metadata.challengeRouteContext);
   attachRouteProvenance(record, metadata.routeProvenance);
@@ -1198,6 +1246,11 @@ export function enrichEvalRecord(record: EvalRecord, metadata: EvalRecordMetadat
   attachManifestRef(record, process.env.WAVEMILL_SESSION, undefined);
   attachResourceSelections(record);
   attachEligibility(record);
+  attachChallengeExecutionMetadata(record, {
+    side: metadata.challengeSide,
+    intent: metadata.challengeIntent,
+    evidence: metadata.challengeExecutionEvidence,
+  });
 
   // Extract stageScores from record metadata (set by evaluateTask)
   const stageScores = record.metadata?.stageScores as
@@ -1220,6 +1273,11 @@ export function enrichTrainingMetadata(
   attachAgentType(record, metadata.agentType);
   attachProviderMetadata(record, metadata.provider, metadata.endpoint);
   attachChallengePairId(record, metadata.challengePairId);
+  attachChallengeExecutionMetadata(record, {
+    side: metadata.challengeSide,
+    intent: metadata.challengeIntent,
+    evidence: metadata.challengeExecutionEvidence,
+  });
   attachChallengeStageEval(record, metadata.challengeStageEval);
   attachChallengeRouteContext(record, metadata.challengeRouteContext);
   attachRouteProvenance(record, metadata.routeProvenance);
@@ -1244,6 +1302,11 @@ export function enrichTrainingMetadata(
   attachResourceSelections(record);
   attachEnrichmentDiagnostics(record);
   attachEligibility(record);
+  attachChallengeExecutionMetadata(record, {
+    side: metadata.challengeSide,
+    intent: metadata.challengeIntent,
+    evidence: metadata.challengeExecutionEvidence,
+  });
 
   const stageScores = record.metadata?.stageScores as
     | Record<string, { score: number; rationale: string; rubricCriteria?: RubricCriterion[] }>

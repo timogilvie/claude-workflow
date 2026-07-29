@@ -94,6 +94,8 @@ export function computeAggregations(joined: JoinedChallengeRecord[]): Aggregated
   const comparable = joined.filter(({ comparison }) =>
     comparison.comparisonOutcome !== 'invalid' &&
     comparison.comparisonOutcome !== 'inconclusive' &&
+    comparison.comparisonOutcome !== 'invalid_challenge' &&
+    comparison.invalidChallenge !== true &&
     (comparison.winner === 'primary' || comparison.winner === 'challenger')
   );
   const stats: AggregatedStats = {

@@ -539,6 +539,7 @@ write_launch_plan() {
       --arg challengeRole "$challenge_role" \
       --arg challengeModel "$challenge_model" \
       --arg challengeStage "$challenge_stage" \
+      --argjson challengeIntent "${TASK_CHALLENGE_INTENT_BY_ISSUE[$issue]:-null}" \
       --arg migrationNumber "$migration_number" \
       --arg agent "$task_agent" \
       --argjson dependsOn "$depends_on" \
@@ -560,6 +561,7 @@ write_launch_plan() {
         challengeRole: (if $challengeRole == "" then null else $challengeRole end),
         challengeModel: (if $challengeModel == "" then null else $challengeModel end),
         challengeStage: (if $challengeStage == "" then null else $challengeStage end),
+        challengeIntent: $challengeIntent,
         migrationNumber: (if $migrationNumber == "" then null else ($migrationNumber | tonumber) end),
         agent: $agent
       } + (if ($baseFromTask != "null" or ($dependsOn | length > 0)) then {dependsOn: $dependsOn, baseFromTask: (if $baseFromTask == "null" then null else $baseFromTask end)} else {} end)]')"
@@ -2122,6 +2124,7 @@ declare -A TASK_CHALLENGE_PAIR_BY_ISSUE
 declare -A TASK_CHALLENGE_ROLE_BY_ISSUE
 declare -A TASK_CHALLENGE_MODEL_BY_ISSUE
 declare -A TASK_CHALLENGE_STAGE_BY_ISSUE
+declare -A TASK_CHALLENGE_INTENT_BY_ISSUE
 declare -A TASK_AGENT_BY_ISSUE
 declare -A TASK_PLANNER_MODEL_BY_ISSUE
 declare -A TASK_CODER_MODEL_BY_ISSUE
@@ -2475,6 +2478,7 @@ for t in "${TASKS[@]}"; do
     challenger_entry_plan_depth=$(echo "$challenge_plan" | jq -r '.entries[1].planDepth // empty' 2>/dev/null)
     challenger_entry_code_depth=$(echo "$challenge_plan" | jq -r '.entries[1].codeDepth // empty' 2>/dev/null)
     challenger_entry_review_mode=$(echo "$challenge_plan" | jq -r '.entries[1].reviewMode // empty' 2>/dev/null)
+    challenge_intent=$(echo "$challenge_plan" | jq -c '.challengeIntent // null' 2>/dev/null || echo "null")
 
     cp "/tmp/${SESSION}-${ISSUE}-taskpacket.md" "/tmp/${SESSION}-${challenger_key}-taskpacket.md" 2>/dev/null || true
     cp "/tmp/${SESSION}-${ISSUE}-issue.json" "/tmp/${SESSION}-${challenger_key}-issue.json" 2>/dev/null || true
@@ -2486,6 +2490,7 @@ for t in "${TASKS[@]}"; do
     TASK_CHALLENGE_ROLE_BY_ISSUE["$ISSUE"]="primary"
     TASK_CHALLENGE_MODEL_BY_ISSUE["$ISSUE"]="$primary_model"
     TASK_CHALLENGE_STAGE_BY_ISSUE["$ISSUE"]="$challenge_stage"
+    TASK_CHALLENGE_INTENT_BY_ISSUE["$ISSUE"]="$challenge_intent"
     TASK_AGENT_BY_ISSUE["$ISSUE"]="${primary_entry_planner_agent:-${primary_agent:-$rec_agent}}"
     TASK_PLANNER_MODEL_BY_ISSUE["$ISSUE"]="${primary_entry_planner:-$route_planner}"
     TASK_CODER_MODEL_BY_ISSUE["$ISSUE"]="$primary_model"
@@ -2500,6 +2505,7 @@ for t in "${TASKS[@]}"; do
     TASK_CHALLENGE_ROLE_BY_ISSUE["$challenger_key"]="challenger"
     TASK_CHALLENGE_MODEL_BY_ISSUE["$challenger_key"]="$challenger_model"
     TASK_CHALLENGE_STAGE_BY_ISSUE["$challenger_key"]="$challenge_stage"
+    TASK_CHALLENGE_INTENT_BY_ISSUE["$challenger_key"]="$challenge_intent"
     TASK_AGENT_BY_ISSUE["$challenger_key"]="${challenger_entry_planner_agent:-${challenger_agent:-$AGENT_CMD}}"
     # Stage-varied challengers carry their own planner/reviewer in the entry
     TASK_PLANNER_MODEL_BY_ISSUE["$challenger_key"]="${challenger_entry_planner:-$route_planner}"
@@ -2525,6 +2531,7 @@ for t in "${TASKS[@]}"; do
     TASK_CHALLENGE_ROLE_BY_ISSUE["$ISSUE"]=""
     TASK_CHALLENGE_MODEL_BY_ISSUE["$ISSUE"]=""
     TASK_CHALLENGE_STAGE_BY_ISSUE["$ISSUE"]=""
+    TASK_CHALLENGE_INTENT_BY_ISSUE["$ISSUE"]="null"
     TASK_AGENT_BY_ISSUE["$ISSUE"]="$rec_agent"
     TASK_PLANNER_MODEL_BY_ISSUE["$ISSUE"]="$route_planner"
     TASK_CODER_MODEL_BY_ISSUE["$ISSUE"]="$rec_model"
@@ -7848,6 +7855,31 @@ mark_challenge_compared() {
   fi
 }
 
+mark_challenge_invalid() {
+  local pair_id="$1" reason="$2" details="${3:-}"
+  if ! state_mutate "$STATE_FILE" '
+    .tasks |= with_entries(
+      if (.value.challengePairId // "") == $pair then
+        .value.challengeCompared = false |
+        .value.comparisonState = "invalid_challenge" |
+        .value.invalidChallengeReason = $reason |
+        .value.invalidChallengeDetails = $details |
+        .value.challengeRepairAction = ("wavemill mill challenge repair " + $pair) |
+        .value |= (
+          del(
+            .comparisonRunning,
+            .cleanupPolicy
+          ) |
+          .updated = (now | todateiso8601)
+        )
+      else
+        .
+      end
+    )' --arg pair "$pair_id" --arg reason "$reason" --arg details "$details"; then
+    log_warn "mark_challenge_invalid: failed for $pair_id"
+  fi
+}
+
 sanitize_job_token() {
   printf '%s' "${1:-unknown}" | sed 's/[^A-Za-z0-9._-]/-/g'
 }
@@ -7918,6 +7950,9 @@ render_challenge_comparison_summary() {
   winner=$(echo "$compare_json" | jq -r '.winner // empty' 2>/dev/null)
   winner_model=$(echo "$compare_json" | jq -r '.winnerModel // empty' 2>/dev/null)
   rationale=$(echo "$compare_json" | jq -r '.rationale // empty' 2>/dev/null)
+  local invalid_challenge invalid_reason
+  invalid_challenge=$(echo "$compare_json" | jq -r '.invalidChallenge // false' 2>/dev/null)
+  invalid_reason=$(echo "$compare_json" | jq -r '.invalidChallengeReason // empty' 2>/dev/null)
   comparison_outcome=$(echo "$compare_json" | jq -r '.comparisonOutcome // "compared"' 2>/dev/null)
   primary_eval_score=$(echo "$compare_json" | jq -r '.primaryEvalScore // "—"' 2>/dev/null)
   challenger_eval_score=$(echo "$compare_json" | jq -r '.challengerEvalScore // "—"' 2>/dev/null)
@@ -7992,7 +8027,9 @@ render_challenge_comparison_summary() {
   log "status" "  │  Intervention    $(printf '%-20s' "$impact_p") $(printf '%-19s' "$impact_c")│"
   log "status" "  │  Autonomy        $(printf '%-20s' "$auto_p") $(printf '%-19s' "$auto_c")│"
   log "status" "  ├────────────────────────────────────────────────────────────┤"
-  if [[ -z "$winner" ]]; then
+  if [[ "$invalid_challenge" == "true" ]]; then
+    log "status" "  │  Invalid challenge: ${invalid_reason:-unknown}"
+  elif [[ -z "$winner" ]]; then
     log "status" "  │  Outcome: ${comparison_outcome:-inconclusive}"
   elif [[ "$winner" == "primary" ]]; then
     log "status" "  │  ★ Winner: Primary ($disp_winner) — PR #$primary_pr"
@@ -8013,6 +8050,15 @@ handle_comparison_job_success() {
   primary_model=$(get_task_meta "$primary_key" "challengeModel")
   challenger_model=$(get_task_meta "$challenger_key" "challengeModel")
   render_challenge_comparison_summary "$pair_id" "$primary_pr" "$challenger_pr" "$primary_model" "$challenger_model" "$result_path"
+
+  if [[ "$(jq -r '.invalidChallenge // .comparison.invalidChallenge // false' "$result_path" 2>/dev/null || echo "false")" == "true" ]]; then
+    local invalid_reason invalid_details
+    invalid_reason=$(jq -r '.comparison.invalidChallengeReason // "invalid_challenge"' "$result_path" 2>/dev/null || echo "invalid_challenge")
+    invalid_details=$(jq -r '.comparison.invalidChallengeDetails // .comparison.rationale // ""' "$result_path" 2>/dev/null || echo "")
+    mark_challenge_invalid "$pair_id" "$invalid_reason" "$invalid_details"
+    log_warn "challenge comparison invalid for $pair_id: $invalid_reason"
+    return 0
+  fi
 
   winner=$(jq -r '.comparison.winner // empty' "$result_path" 2>/dev/null || echo "")
   comparison_outcome=$(jq -r '.comparison.comparisonOutcome // "compared"' "$result_path" 2>/dev/null || echo "compared")
@@ -8316,6 +8362,9 @@ maybe_run_challenge_comparison() {
   compared=$(read_state_value "false" --arg i "$primary_key" '.tasks[$i].challengeCompared // false')
   [[ "$compared" == "true" ]] && return 0
   if [[ "$(read_state_value "" --arg i "$primary_key" '.tasks[$i].comparisonState // empty')" == "manual_comparison_needed" ]]; then
+    return 0
+  fi
+  if [[ "$(read_state_value "" --arg i "$primary_key" '.tasks[$i].comparisonState // empty')" == "invalid_challenge" ]]; then
     return 0
   fi
 
@@ -10105,6 +10154,7 @@ EOF
       challenger_plan_depth=$(echo "$challenge_plan" | jq -r '.entries[1].planDepth // "light"' 2>/dev/null)
       challenger_code_depth=$(echo "$challenge_plan" | jq -r '.entries[1].codeDepth // "medium"' 2>/dev/null)
       challenger_review_mode=$(echo "$challenge_plan" | jq -r '.entries[1].reviewMode // "static"' 2>/dev/null)
+      challenge_intent=$(echo "$challenge_plan" | jq -c '.challengeIntent // null' 2>/dev/null || echo "null")
 
       cp "$packet_file" "/tmp/${SESSION}-${challenger_key}-taskpacket.md" 2>/dev/null || true
       cp "/tmp/${SESSION}-${issue}-issue.json" "/tmp/${SESSION}-${challenger_key}-issue.json" 2>/dev/null || true
@@ -10288,6 +10338,10 @@ EOF
   if [[ "$challenge_enabled_for_launch" == "true" ]]; then
     save_task_state "$challenger_key" "$challenger_slug" "task/${challenger_slug}" "${WORKTREE_ROOT}/${challenger_slug}" "" "" "${challenger_planner_agent:-$challenger_agent}" "$linear_issue" "true" "$challenge_pair" "challenger" "$challenger_model" "$challenger_planner" "$challenger_model" "$challenger_reviewer" "$challenger_plan_depth" "$challenger_code_depth" "$challenger_review_mode" "$challenge_stage"
     state_mutate "$STATE_FILE" '.tasks[$issue].challengeStage = $stage' --arg issue "$challenger_key" --arg stage "$challenge_stage" || true
+    state_mutate "$STATE_FILE" '
+      .tasks[$primary].challengeIntent = $intent
+      | .tasks[$challenger].challengeIntent = $intent
+    ' --arg primary "$issue" --arg challenger "$challenger_key" --argjson intent "${challenge_intent:-null}" || true
   fi
   if [[ -n "${challenge_stage:-}" ]]; then
     state_mutate "$STATE_FILE" '.tasks[$issue].challengeStage = $stage' --arg issue "$issue" --arg stage "$challenge_stage" || true
