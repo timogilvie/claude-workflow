@@ -28,9 +28,13 @@ function makeRegistry(modelId: string, model: ModelRegistry['models'][string]): 
 
 describe('resolveModelAgent', () => {
   it('rejects openrouter aliases without native capability metadata', () => {
+    const registry = makeRegistry('legacy-openrouter-model', {
+      agent: 'claude-openrouter',
+    });
     const result = resolveModelAgent({
-      model: 'mistral-large-2',
+      model: 'legacy-openrouter-model',
       phase: 'planning',
+      registry,
     });
 
     assert.deepEqual(result.ok, false);
@@ -38,7 +42,7 @@ describe('resolveModelAgent', () => {
       assert.fail('expected rejection');
     }
     assert.equal(result.reason, 'no-native-capability');
-    assert.match(result.diagnostic, /mistral-large-2/);
+    assert.match(result.diagnostic, /legacy-openrouter-model/);
     assert.match(result.diagnostic, /phase=planning/);
     assert.match(result.diagnostic, /provider=openrouter/);
   });

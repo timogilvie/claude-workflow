@@ -143,7 +143,7 @@ describe('routing-policy ranking', () => {
       quotaState: makeSnapshot(),
     });
 
-    assert.equal(ranked[0].modelId, 'gpt-5.5');
+    assert.equal(ranked[0].modelId, 'claude-fable-5');
     assert.equal(ranked[0].viable, true);
   });
 
@@ -158,7 +158,7 @@ describe('routing-policy ranking', () => {
     assert.ok(degraded);
     assert.equal(degraded.viable, true);
     assert.equal(degraded.adjustedScore, 78.2);
-    assert.equal(ranked[0].modelId, 'gpt-5.4');
+    assert.equal(ranked[0].modelId, 'claude-fable-5');
   });
 
   it('excludes exhausted primary models and promotes the next viable candidate', () => {
@@ -172,7 +172,7 @@ describe('routing-policy ranking', () => {
     assert.ok(exhausted);
     assert.equal(exhausted.viable, false);
     assert.equal(exhausted.exclusionReason, 'quota-exhausted');
-    assert.equal(ranked[0].modelId, 'gpt-5.4');
+    assert.equal(ranked[0].modelId, 'claude-fable-5');
   });
 
   it('falls back to strong generalists on critical tasks when all frontier models are exhausted', () => {
@@ -770,7 +770,7 @@ describe('routing-policy integration', () => {
       },
     });
 
-    assert.equal(ranked[0].modelId, 'gpt-5.5');
+    assert.equal(ranked[0].modelId, 'claude-fable-5');
     assert.equal(ranked[0].exclusionReason, undefined);
   });
 
