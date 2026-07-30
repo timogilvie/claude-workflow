@@ -19,6 +19,19 @@ import type { OpenRouterTransport } from '../shared/lib/openrouter-runtime.ts';
 const moduleDir = dirname(fileURLToPath(import.meta.url));
 const fixtureDir = join(moduleDir, '..', 'shared', 'fixtures', 'openrouter-responses', 'success');
 const OPENROUTER_URL_PATTERN = /https:\/\/openrouter\.ai\/\S+/g;
+export const WATCHLIST_SMOKE_MODELS = [
+  'claude-fable-5',
+  'gpt-4.1',
+  'deepseek-coder-v2',
+  'qwen-3-235b',
+  'qwen-2.5-72b',
+  'kimi-k2-thinking',
+  'gemini-2.0-flash',
+  'llama-4-scout',
+  'mistral-medium-3',
+  'devstral-medium',
+  'grok-code-fast',
+] as const;
 
 function readFixture(name: string): Record<string, unknown> {
   return JSON.parse(readFileSync(join(fixtureDir, `${name}.json`), 'utf-8')) as Record<string, unknown>;
@@ -151,6 +164,7 @@ const options = {
   json: { type: 'boolean', description: 'Emit machine-readable JSON.' },
   prompt: { type: 'string', description: 'Override the smoke prompt (default: ping).' },
   models: { type: 'string', description: 'Comma-separated Wavemill aliases or OpenRouter IDs to smoke.' },
+  watchlist: { type: 'boolean', description: 'Smoke the 11 non-deprecated watchlist aliases from HOK-2582.' },
   families: { type: 'string', description: 'Comma-separated launch-priority families to smoke.' },
   'repo-dir': { type: 'string', description: 'Repository directory to resolve before running.' },
 } as const;
@@ -163,6 +177,7 @@ export async function runOpenRouterSmokeCli(argv: string[] = process.argv.slice(
     examples: [
       'npx tsx tools/openrouter-smoke.ts --json',
       'npx tsx tools/openrouter-smoke.ts --models glm-5.2 --json',
+      'npx tsx tools/openrouter-smoke.ts --watchlist --json',
       'OPENROUTER_LIVE_SMOKE=1 npx tsx tools/openrouter-smoke.ts --families qwen --live --json',
     ],
     async run({ args }) {
@@ -170,7 +185,9 @@ export async function runOpenRouterSmokeCli(argv: string[] = process.argv.slice(
 
     const prompt = (args.prompt as string | undefined) || 'ping';
     const filters = {
-      models: parseCsv(args.models as string | undefined),
+      models: args.watchlist === true
+        ? [...WATCHLIST_SMOKE_MODELS, ...parseCsv(args.models as string | undefined)]
+        : parseCsv(args.models as string | undefined),
       families: parseCsv(args.families as string | undefined),
     };
     const dryRunEntries = selectSmokeEntries(createDryRunEntries(), filters);

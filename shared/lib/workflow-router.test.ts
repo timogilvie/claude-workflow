@@ -104,6 +104,7 @@ function frontierSiblingConfig() {
 
 function restoredFrontierQuotaState(status: QuotaStatus): Record<string, QuotaStatus> {
   return {
+    'claude-fable-5': status,
     'deepseek-r1': status,
     'gemini-2.5-pro': status,
     'qwen-3-235b': status,
@@ -898,7 +899,7 @@ await test('auto mode emits a constrained router transparency line when quota is
     const { result, stderr } = await captureStderr(() =>
       routeWorkflowAuto('Build a backend feature with tests and review.', { repoDir })
     );
-    assert.match(stderr, /\[router] constrained mode: gpt-5\.5 quota is degrading; reserving it for high-complexity steps/);
+    assert.match(stderr, /\[router] constrained mode: claude-fable-5 quota is degrading; reserving it for high-complexity steps/);
     assert.ok(result.reasoning[0].includes('Constrained mode'));
   } finally {
     cleanup();
@@ -1947,7 +1948,7 @@ await test('openrouter-only planner pool without native metadata is rejected bef
   const { repoDir, cleanup } = makeRepo({
     modelRegistry: {
       models: {
-        'mistral-large-2': {
+        'legacy-mistral-openrouter': {
           class: 'strong_generalist',
           vendor: 'mistral',
           strengths: [],
@@ -1968,7 +1969,7 @@ await test('openrouter-only planner pool without native metadata is rejected bef
       openrouter: {
         enabled: true,
         apiKeyEnv: 'TEST_OPENROUTER_KEY',
-        models: ['mistral-large-2'],
+        models: ['legacy-mistral-openrouter'],
         stages: ['planner', 'coder', 'reviewer'],
       },
     },
@@ -1978,14 +1979,14 @@ await test('openrouter-only planner pool without native metadata is rejected bef
   try {
     const decision = routeWorkflow('Plan a workflow feature.', {
       repoDir,
-      plannerModelsAvailable: ['mistral-large-2'],
-      modelsAvailable: ['mistral-large-2'],
+      plannerModelsAvailable: ['legacy-mistral-openrouter'],
+      modelsAvailable: ['legacy-mistral-openrouter'],
       skipDifficultyClassification: true,
     });
 
     assert.equal(decision.planner, '', 'planner should remain unresolved when the pool is entirely rejected');
     const rejection = (decision.nativeCertificationRejections ?? [])
-      .find((r) => r.modelId === 'mistral-large-2' && r.role === 'planner');
+      .find((r) => r.modelId === 'legacy-mistral-openrouter' && r.role === 'planner');
     assert.ok(rejection, 'expected structured planner rejection');
     assert.equal(rejection?.reason, 'no-native-capability');
   } finally {

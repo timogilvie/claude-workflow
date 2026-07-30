@@ -1030,13 +1030,13 @@ test('decideChallengeLaunch drops unusable recommended challengers', () => {
   assert.equal(samePrimary.forcedChallengerModel, undefined);
 
   const disabled = decideChallengeLaunch({
-    pool: ['claude-sonnet-4-6', 'gpt-5.6-terra', 'claude-fable-5'],
+    pool: ['claude-sonnet-4-6', 'gpt-5.6-terra', 'gpt-5.3-codex'],
     primaryModel: 'claude-sonnet-4-6',
     rate: 0.1,
     recommendation: {
       shouldChallenge: true,
       reason: 'new-model',
-      challengerModel: 'claude-fable-5',
+      challengerModel: 'gpt-5.3-codex',
       priority: 200,
     },
     randomFn: () => 0,
@@ -1089,30 +1089,30 @@ test('pickChallengeModels falls back to random when the forced challenger is unu
   assert.equal(notInPool?.challenger.model, 'gpt-5.6-terra');
 
   const disabled = pickChallengeModels(
-    ['claude-sonnet-4-6', 'gpt-5.6-terra', 'claude-fable-5'],
+    ['claude-sonnet-4-6', 'gpt-5.6-terra', 'gpt-5.3-codex'],
     {
       pairId: 'HOK-994',
       issueId: 'HOK-994',
       slug: 'forced-disabled',
       primaryModel: 'claude-sonnet-4-6',
-      forcedChallengerModel: 'claude-fable-5',
+      forcedChallengerModel: 'gpt-5.3-codex',
       randomFn: () => 0,
     },
   );
   assert.equal(disabled?.challenger.model, 'gpt-5.6-terra');
 
   const disabledPrimary = pickChallengeModels(
-    ['claude-sonnet-4-6', 'gpt-5.6-terra', 'claude-fable-5'],
+    ['claude-sonnet-4-6', 'gpt-5.6-terra', 'gpt-5.3-codex'],
     {
       pairId: 'HOK-995',
       issueId: 'HOK-995',
       slug: 'primary-disabled',
-      primaryModel: 'claude-fable-5',
+      primaryModel: 'gpt-5.3-codex',
       randomFn: () => 0,
     },
   );
-  assert.notEqual(disabledPrimary?.primary.model, 'claude-fable-5');
-  assert.notEqual(disabledPrimary?.challenger.model, 'claude-fable-5');
+  assert.notEqual(disabledPrimary?.primary.model, 'gpt-5.3-codex');
+  assert.notEqual(disabledPrimary?.challenger.model, 'gpt-5.3-codex');
 });
 
 test('pickChallengeWorkflowsWithContext threads the forced challenger through route snapshots', () => {

@@ -18,6 +18,8 @@ fi
 SESSION="$(jq -r '.session' "$PLAN_FILE")"
 REPO_DIR="$(jq -r '.repoDir' "$PLAN_FILE")"
 BASE_BRANCH="$(jq -r '.baseBranch' "$PLAN_FILE")"
+RESOLVED_BASE_REF="$(jq -r '.resolvedBaseRef // empty' "$PLAN_FILE")"
+BASE_REF_PREFLIGHT_JSON="$(jq -c '.baseRefPreflight // empty' "$PLAN_FILE" 2>/dev/null || true)"
 WORKTREE_ROOT="$(jq -r '.worktreeRoot' "$PLAN_FILE")"
 PLANNING_MODE="$(jq -r '.planningMode' "$PLAN_FILE")"
 if [[ "$PLANNING_MODE" != "interactive" ]]; then
@@ -61,7 +63,7 @@ DASHBOARD_PID=""
 # Runner ignores these fields; queue execution lands in a follow-up.
 LAUNCH_QUEUE_PLAN="$(jq -c '.queuePlan // empty' "$PLAN_FILE" 2>/dev/null || true)"
 
-export SESSION REPO_DIR BASE_BRANCH WORKTREE_ROOT PLANNING_MODE AGENT_CMD AGENT_CMD_EXPLICIT
+export SESSION REPO_DIR BASE_BRANCH RESOLVED_BASE_REF WORKTREE_ROOT PLANNING_MODE AGENT_CMD AGENT_CMD_EXPLICIT
 export FORCE_MODEL ROUTER_ENABLED MAX_PARALLEL STATE_DIR STATE_FILE TOOLS_DIR LIB_DIR
 export POLL_SECONDS REQUIRE_CONFIRM DRY_RUN PROJECT_NAME AUTO_EVAL ENTER_LAUNCHES_WAVE DASHBOARD_VERBOSITY
 export DASHBOARD_LOG_TO_FILE MILL_LOG_FILE
@@ -104,6 +106,32 @@ startup_task_log() {
 startup_step() {
   local message="$1"
   startup_log "  $message"
+}
+
+startup_preflight_base_ref() {
+  local needs_preflight="true"
+
+  if [[ -n "${RESOLVED_BASE_REF:-}" ]] \
+    && [[ -n "${BASE_REF_PREFLIGHT_JSON:-}" ]] \
+    && [[ "$(printf '%s' "$BASE_REF_PREFLIGHT_JSON" | jq -r '.status // empty' 2>/dev/null)" == "ok" ]] \
+    && git -C "$REPO_DIR" show-ref --verify --quiet "$RESOLVED_BASE_REF"; then
+    needs_preflight="false"
+  fi
+
+  if [[ "$needs_preflight" == "true" ]]; then
+    local preflight_file preflight_rc=0
+    preflight_file="$(mktemp "/tmp/${SESSION}-base-ref-preflight.XXXXXX")"
+    wavemill_base_ref_preflight "$BASE_BRANCH" --force-fetch --json-out "$preflight_file" || preflight_rc=$?
+    BASE_REF_PREFLIGHT_JSON="$(cat "$preflight_file" 2>/dev/null || echo '{}')"
+    rm -f "$preflight_file"
+    RESOLVED_BASE_REF="$(printf '%s' "$BASE_REF_PREFLIGHT_JSON" | jq -r '.resolvedRef // empty' 2>/dev/null || true)"
+    export RESOLVED_BASE_REF BASE_REF_PREFLIGHT_JSON
+    if [[ "$preflight_rc" -ne 0 ]]; then
+      return "$preflight_rc"
+    fi
+  fi
+
+  [[ -n "${RESOLVED_BASE_REF:-}" ]]
 }
 
 write_openrouter_warning_cache() {
@@ -720,9 +748,10 @@ startup_run_task_phases() {
       fi
       wt_dir="$resolved_path"
     else
-      if ! wavemill_lock_run "git-worktree" git worktree add "$wt_dir" -b "$branch" "origin/$BASE_BRANCH" >/dev/null 2>"$worktree_stderr"; then
+      local worktree_base_ref="${RESOLVED_BASE_REF:-origin/$BASE_BRANCH}"
+      if ! wavemill_lock_run "git-worktree" git worktree add "$wt_dir" -b "$branch" "$worktree_base_ref" >/dev/null 2>"$worktree_stderr"; then
         startup_phase_failed "$startup_id" worktree "$issue" "worktree creation"
-        startup_log "  Error: failed to create $branch from origin/$BASE_BRANCH"
+        startup_log "  Error: failed to create $branch from $worktree_base_ref"
         [[ -s "$worktree_stderr" ]] && sed 's/^/  git: /' "$worktree_stderr" >> "$STATUS_LOG_FILE"
         [[ -s "$worktree_stderr" && -n "${STARTUP_TASK_LOG_FILE:-}" ]] && sed 's/^/  git: /' "$worktree_stderr" >> "$STARTUP_TASK_LOG_FILE"
         rm -f "$worktree_stderr"
@@ -1107,16 +1136,29 @@ main() {
   local task_count idx tasks_file monitor_cmd task_json resumed_count launched_count pool_exit
   local -a linear_batch_ids=()
 
+  if ! cd "$REPO_DIR"; then
+    startup_log "✗ Startup failed: could not cd to repo root: $REPO_DIR"
+    exit 1
+  fi
+
+  if ! startup_preflight_base_ref; then
+    local base_ref_reason cleanup_status
+    base_ref_reason="$(printf '%s' "$BASE_REF_PREFLIGHT_JSON" | jq -r '.reason // "base_ref_unavailable"' 2>/dev/null || echo "base_ref_unavailable")"
+    wavemill_format_base_ref_preflight_failure "$BASE_REF_PREFLIGHT_JSON" >> "$STATUS_LOG_FILE" 2>/dev/null || startup_log "Wavemill cannot start: configured base branch \"$BASE_BRANCH\" is unavailable."
+    cleanup_status="$(wavemill_cleanup_launch_attempt 2>/dev/null || echo "partial")"
+    wavemill_record_startup_terminal_reason "$base_ref_reason" "$BASE_REF_PREFLIGHT_JSON" "$cleanup_status"
+    exit 1
+  fi
+
+  if [[ "$(printf '%s' "$BASE_REF_PREFLIGHT_JSON" | jq -r '.fetchDegraded // false' 2>/dev/null)" == "true" ]]; then
+    startup_log "WARN: Startup fetch for $BASE_BRANCH degraded; continuing with verified local base ref $RESOLVED_BASE_REF"
+  fi
+
   ensure_state_file
   cleanup_background_jobs_startup
   seed_queued_tasks_from_plan "$PLAN_FILE"
   : > "$STATUS_LOG_FILE"
   : > "$LAUNCHED_ISSUES_FILE"
-
-  if ! cd "$REPO_DIR"; then
-    startup_log "✗ Startup failed: could not cd to repo root: $REPO_DIR"
-    exit 1
-  fi
 
   startup_log "═══ Wavemill Startup ═══"
   startup_log "Reading launch plan: $PLAN_FILE"

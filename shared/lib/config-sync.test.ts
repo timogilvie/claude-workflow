@@ -200,6 +200,35 @@ test('CANONICAL_CONFIG_TEMPLATE exposes promoted OpenRouter aliases on user-faci
   assert.ok(CANONICAL_CONFIG_TEMPLATE.router?.availableModels?.reviewer?.includes('kimi-k2.7-code'));
 });
 
+test('CANONICAL_CONFIG_TEMPLATE exposes watchlist aliases only in launchable stages', () => {
+  const expected = {
+    'claude-fable-5': ['planner', 'coder', 'reviewer'],
+    'gpt-4.1': ['coder'],
+    'deepseek-coder-v2': ['coder'],
+    'qwen-3-235b': ['planner', 'coder', 'reviewer'],
+    'qwen-2.5-72b': ['coder'],
+    'kimi-k2-thinking': ['planner', 'coder', 'reviewer'],
+    'gemini-2.0-flash': ['coder'],
+    'llama-4-scout': ['coder'],
+    'mistral-medium-3': ['coder'],
+    'devstral-medium': ['coder'],
+    'grok-code-fast': ['coder'],
+  } as const;
+  const pools = CANONICAL_CONFIG_TEMPLATE.router?.availableModels;
+  assert.ok(pools);
+
+  for (const [modelId, stages] of Object.entries(expected)) {
+    assert.ok(CANONICAL_CONFIG_TEMPLATE.providers?.openrouter?.models?.includes(modelId));
+    for (const stage of ['planner', 'coder', 'reviewer'] as const) {
+      assert.equal(
+        pools[stage]?.includes(modelId),
+        (stages as readonly string[]).includes(stage),
+        `${modelId}:${stage}`,
+      );
+    }
+  }
+});
+
 test('wavemill init heredoc configVersion matches CURRENT_CONFIG_VERSION', () => {
   const script = readFileSync(join(import.meta.dirname, '..', '..', 'wavemill'), 'utf-8');
   const match = script.match(/"configVersion":\s*"([^"]+)"/);

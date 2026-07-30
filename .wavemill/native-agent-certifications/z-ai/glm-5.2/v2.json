@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 2,
+  "provider": "z-ai",
+  "model": "glm-5.2",
+  "phase": "workflow",
+  "suiteVersion": "v2",
+  "certifiedAt": "2026-07-15T00:00:00.000Z",
+  "expiresAt": "2026-09-13T00:00:00.000Z",
+  "scenarios": [
+    { "scenarioId": "native-openrouter-workflow-launch", "passed": true, "attempts": 1, "finalAttemptStatus": "pass" }
+  ]
+}
