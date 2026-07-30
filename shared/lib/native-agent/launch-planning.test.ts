@@ -355,11 +355,22 @@ describe('launchNativePlanning', () => {
       assert.equal(stageResult.agent, 'native');
       assert.equal(stageResult.model, `scripted:${api}`);
       assert.equal(stageResult.notes, 'Native planning ready for approval');
-      assert.deepEqual(stageResult.artifacts, {
-        type: 'planning',
-        planFile: 'features/demo/plan.md',
-        taskPacketFile: 'features/demo/task-packet.md',
-      });
+      const artifacts = stageResult.artifacts as Record<string, any>;
+      assert.equal(artifacts.type, 'planning');
+      assert.equal(artifacts.planFile, 'features/demo/plan.md');
+      assert.equal(artifacts.taskPacketFile, 'features/demo/task-packet.md');
+      assert.equal(artifacts.planArtifactValid, true);
+      assert.equal(artifacts.approvalReady, true);
+      assert.equal(typeof artifacts.bounds?.maxTurns, 'number');
+      assert.equal(typeof artifacts.bounds?.maxToolCalls, 'number');
+      assert.equal(typeof artifacts.bounds?.maxWallClockMs, 'number');
+      assert.equal(artifacts.usage?.turnsCompleted, 1);
+      assert.equal(artifacts.usage?.toolCallsExecuted, 0);
+      assert.equal(typeof artifacts.usage?.wallClockMs, 'number');
+      assert.equal(typeof artifacts.usage?.totalInputTokens, 'number');
+      assert.equal(typeof artifacts.usage?.totalOutputTokens, 'number');
+      assert.equal(typeof artifacts.promptRef?.id, 'string');
+      assert.equal(typeof artifacts.promptRef?.version, 'string');
 
       const hook = JSON.parse(readFileSync(result.hookPath, 'utf-8')) as Record<string, unknown>;
       assert.equal(hook.state, 'idle');
@@ -405,6 +416,63 @@ describe('launchNativePlanning', () => {
       ) as Record<string, unknown>;
       assert.equal(stageResult.status, 'awaiting_user');
       assert.equal(stageResult.finishedAt, null);
+    } finally {
+      cleanup(wtDir);
+    }
+  });
+
+  it('records structured failure outcome when native planning hits turn_limit', async () => {
+    const { wtDir, featureDir } = setupWorktree();
+    const api = uniqueApi('turn-limit');
+    writeNativeConfig(wtDir, {
+      nativeAgent: {
+        planning: {
+          maxTurns: 1,
+          maxToolCalls: 120,
+          maxWallClockMs: 60_000,
+        },
+      },
+    });
+
+    try {
+      registerScriptedPiProvider({
+        api,
+        turns: [{
+          content: [{
+            type: 'tool_call',
+            id: 'read-1',
+            name: 'read_file',
+            arguments: { path: 'src.ts' },
+          }],
+          stopReason: 'tool_calls',
+        }],
+      });
+
+      await assert.rejects(
+        () => launchNativePlanning({
+          session: 'turn-limit',
+          issue: 'HOK-2593',
+          slug: 'demo',
+          wtDir,
+          repoDir: wtDir,
+          loopModelOverride: scriptedModel(api),
+          runTsxCommand: stubRunTsxCommand(),
+        }),
+        /turn_limit/,
+      );
+
+      const stageResult = JSON.parse(
+        readFileSync(join(featureDir, '.planning-result.json'), 'utf-8'),
+      ) as Record<string, any>;
+      assert.equal(stageResult.status, 'failed');
+      assert.equal(stageResult.failureReason, 'turn_limit');
+      assert.equal(stageResult.artifacts?.planArtifactValid, false);
+      assert.equal(stageResult.artifacts?.approvalReady, false);
+      assert.equal(stageResult.artifacts?.bounds?.maxTurns, 1);
+      assert.equal(stageResult.artifacts?.usage?.turnsCompleted, 1);
+      assert.equal(stageResult.artifacts?.usage?.toolCallsExecuted, 1);
+      assert.equal(typeof stageResult.artifacts?.usage?.wallClockMs, 'number');
+      assert.equal(typeof stageResult.artifacts?.promptRef?.id, 'string');
     } finally {
       cleanup(wtDir);
     }
@@ -852,6 +920,10 @@ describe('launchNativePlanning', () => {
       assert.equal(stageResult.status, 'failed');
       assert.equal(stageResult.failureReason, 'tool_stagnation');
       assert.ok(stageResult.artifacts?.transcriptFile);
+      assert.equal(stageResult.artifacts?.planArtifactValid, false);
+      assert.equal(stageResult.artifacts?.approvalReady, false);
+      assert.equal(stageResult.artifacts?.bounds?.maxTurns, 10);
+      assert.equal(stageResult.artifacts?.usage?.toolCallsExecuted, 3);
       assert.equal(existsSync(stageResult.artifacts.transcriptFile), true);
       assert.match(readFileSync(stageResult.artifacts.transcriptFile, 'utf-8'), /search_text/);
     } finally {
@@ -911,6 +983,9 @@ describe('launchNativePlanning', () => {
       assert.equal(stageResult.failureReason, 'invalid_final_plan');
       assert.equal(stageResult.artifacts?.validationError, 'control_text_leakage');
       assert.ok(stageResult.artifacts?.transcriptFile);
+      assert.equal(stageResult.artifacts?.planArtifactValid, false);
+      assert.equal(stageResult.artifacts?.approvalReady, false);
+      assert.equal(stageResult.artifacts?.usage?.turnsCompleted, 1);
     } finally {
       cleanup(wtDir);
       rmSync(hookPath, { force: true });
@@ -961,6 +1036,9 @@ describe('launchNativePlanning', () => {
       assert.equal(stageResult.status, 'failed');
       assert.equal(stageResult.failureReason, 'invalid_final_plan');
       assert.equal(stageResult.artifacts?.validationError, 'missing_release_readiness_env_changes');
+      assert.equal(stageResult.artifacts?.planArtifactValid, false);
+      assert.equal(stageResult.artifacts?.approvalReady, false);
+      assert.equal(stageResult.artifacts?.usage?.turnsCompleted, 1);
     } finally {
       cleanup(wtDir);
     }
@@ -993,6 +1071,10 @@ describe('launchNativePlanning', () => {
         readFileSync(join(featureDir, '.planning-result.json'), 'utf-8'),
       ) as Record<string, unknown>;
       assert.equal(stageResult.status, 'aborted');
+      assert.equal(stageResult.failureReason, 'aborted');
+      assert.equal((stageResult.artifacts as Record<string, any>)?.planArtifactValid, false);
+      assert.equal((stageResult.artifacts as Record<string, any>)?.approvalReady, false);
+      assert.equal((stageResult.artifacts as Record<string, any>)?.usage?.turnsCompleted, 0);
       assert.equal(stageResult.finalTreeState, 'clean');
       assert.equal(stageResult.cleanupDecision, 'no-action-needed');
       assert.equal((stageResult.cleanupReport as Record<string, unknown>).reason, 'aborted');

@@ -6,6 +6,7 @@ import type {
   ChallengeStageEvidenceItem,
   EvalExecutedPlanning,
   EvalPhaseDurations,
+  PlanningExecutionOutcome,
   EvalRecord,
   EvalRouting,
   RoutePrediction,
@@ -21,6 +22,7 @@ interface GatheredStageArtifactsLike {
   routing?: EvalRouting;
   routePrediction?: RoutePrediction;
   executedPlanning?: EvalExecutedPlanning;
+  planningExecutionOutcome?: PlanningExecutionOutcome;
   phaseDurations?: EvalPhaseDurations;
 }
 
@@ -36,11 +38,27 @@ export interface BuildChallengeStageEvalInput {
 
 type StageResultShape = {
   status?: string;
+  failureReason?: string | null;
   agent?: string;
   model?: string;
   notes?: string;
   artifacts?: {
     type?: string;
+    bounds?: {
+      maxTurns?: unknown;
+      maxToolCalls?: unknown;
+      maxWallClockMs?: unknown;
+    };
+    usage?: {
+      turnsCompleted?: unknown;
+      toolCallsExecuted?: unknown;
+      wallClockMs?: unknown;
+      totalInputTokens?: unknown;
+      totalOutputTokens?: unknown;
+      totalCostUsd?: unknown;
+    };
+    planArtifactValid?: unknown;
+    approvalReady?: unknown;
     findingsCount?: unknown;
     blockingIssues?: unknown;
     prNumber?: unknown;
@@ -123,6 +141,42 @@ function summarizePlanningResult(result: StageResultShape | null | undefined): s
     truncate(result.notes, 120) ? `notes=${truncate(result.notes, 120)}` : '',
   ].filter(Boolean);
   return parts.join(', ');
+}
+
+function exceedsBound(usage: unknown, bound: unknown): boolean {
+  return typeof usage === 'number'
+    && Number.isFinite(usage)
+    && typeof bound === 'number'
+    && Number.isFinite(bound)
+    && usage >= bound;
+}
+
+function summarizePlanningExecutionOutcome(result: StageResultShape | null | undefined): string | undefined {
+  if (!result) return undefined;
+  const artifacts = result.artifacts;
+  const bounds = artifacts?.bounds;
+  const usage = artifacts?.usage;
+  const exceeded = [
+    exceedsBound(usage?.turnsCompleted, bounds?.maxTurns) ? 'turns' : '',
+    exceedsBound(usage?.toolCallsExecuted, bounds?.maxToolCalls) ? 'tool_calls' : '',
+    exceedsBound(usage?.wallClockMs, bounds?.maxWallClockMs) ? 'wall_clock' : '',
+  ].filter(Boolean);
+  const parts = [
+    result.status ? `status=${result.status}` : '',
+    result.model ? `model=${result.model}` : '',
+    result.agent ? `agent=${result.agent}` : '',
+    result.failureReason ? `failureReason=${result.failureReason}` : '',
+    typeof artifacts?.planArtifactValid === 'boolean' ? `planValid=${artifacts.planArtifactValid}` : '',
+    typeof artifacts?.approvalReady === 'boolean' ? `approvalReady=${artifacts.approvalReady}` : '',
+    typeof bounds?.maxTurns === 'number' ? `maxTurns=${bounds.maxTurns}` : '',
+    typeof usage?.turnsCompleted === 'number' ? `turnsCompleted=${usage.turnsCompleted}` : '',
+    typeof bounds?.maxToolCalls === 'number' ? `maxToolCalls=${bounds.maxToolCalls}` : '',
+    typeof usage?.toolCallsExecuted === 'number' ? `toolCallsExecuted=${usage.toolCallsExecuted}` : '',
+    typeof bounds?.maxWallClockMs === 'number' ? `maxWallClockMs=${bounds.maxWallClockMs}` : '',
+    typeof usage?.wallClockMs === 'number' ? `wallClockMs=${usage.wallClockMs}` : '',
+    exceeded.length > 0 ? `boundsExceeded=${exceeded.join('|')}` : '',
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(', ') : undefined;
 }
 
 function summarizeReviewResult(result: StageResultShape | null | undefined): string | undefined {
@@ -218,6 +272,12 @@ function buildPlannerStageEval(
 
   addEvidence(evidence, 'plan_text', planContent, 'plan.md');
   addEvidence(evidence, 'planning_result', summarizePlanningResult(planningResult), '.planning-result.json');
+  addEvidence(
+    evidence,
+    'planning_execution_outcome',
+    summarizePlanningExecutionOutcome(planningResult),
+    '.planning-result.json',
+  );
   addEvidence(evidence, 'routing', summarizeRouting(input.stageArtifacts), '.routing-complete');
   addEvidence(evidence, 'plan_critique', summarizePlanCritique(input.record), 'judge.planCritique');
   addEvidence(evidence, 'interventions', summarizeInterventions(input.record), 'interventions');
