@@ -6,8 +6,9 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { registerScriptedPiProvider } from './native-agent/provider.ts';
 import {
-  buildCertificationPath,
+  buildGlobalCertificationPath,
   CERTIFICATION_SCHEMA_VERSION,
+  GLOBAL_CERTIFICATION_ROOT_ENV,
   type NativeCertificationArtifact,
 } from './native-agent/certification/index.ts';
 import { runNativeExpansion, NativeExpansionUnavailableError } from './native-expansion.ts';
@@ -16,8 +17,12 @@ import { createToolRegistry } from './native-agent/tools/registry.ts';
 import { createReadOnlyTools } from './native-agent/tools/read-only.ts';
 import { createGitTools } from './native-agent/tools/git.ts';
 
+const previousGlobalRoots = new Map<string, string | undefined>();
+
 function makeRepo(configOverride?: unknown): string {
   const repoDir = mkdtempSync(join(tmpdir(), 'native-expansion-'));
+  previousGlobalRoots.set(repoDir, process.env[GLOBAL_CERTIFICATION_ROOT_ENV]);
+  process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = join(repoDir, 'global-certifications');
   execFileSync('git', ['init', repoDir], { stdio: 'pipe' });
   execFileSync('git', ['-C', repoDir, 'config', 'user.email', 'native@wavemill.test'], { stdio: 'pipe' });
   execFileSync('git', ['-C', repoDir, 'config', 'user.name', 'Native Expansion Test'], { stdio: 'pipe' });
@@ -37,6 +42,13 @@ function makeRepo(configOverride?: unknown): string {
 }
 
 function cleanup(dir: string): void {
+  const previous = previousGlobalRoots.get(dir);
+  if (previous === undefined) {
+    delete process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
+  } else {
+    process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = previous;
+  }
+  previousGlobalRoots.delete(dir);
   rmSync(dir, { recursive: true, force: true });
 }
 
@@ -61,12 +73,12 @@ function makeRegistry(modelId: string, provider: 'openai' | 'openrouter' = 'open
 }
 
 function writeCertification(
-  repoDir: string,
+  _repoDir: string,
   modelId: string,
   provider: 'openai' | 'openrouter' = 'openai',
   overrides: Partial<NativeCertificationArtifact> = {},
 ): void {
-  const path = buildCertificationPath(repoDir, provider, modelId, 'v1');
+  const path = buildGlobalCertificationPath(provider, modelId, 'v1');
   mkdirSync(dirname(path), { recursive: true });
   const artifact: NativeCertificationArtifact = {
     schemaVersion: CERTIFICATION_SCHEMA_VERSION,

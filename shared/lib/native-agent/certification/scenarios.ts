@@ -28,7 +28,8 @@ import {
 } from './schema.ts';
 import { filterNativeModels, type RouterRole } from './router-filter.ts';
 import { checkCertificationEligibility } from '../certification/loader.ts';
-import { writeCertification } from '../certification/store.ts';
+import { writeCertification, writeGlobalCertification } from '../certification/store.ts';
+import { GLOBAL_CERTIFICATION_ROOT_ENV } from '../certification/storage.ts';
 import { findFixture } from '../fixtures/compat/index.ts';
 import {
   createPiToolCallingProvider,
@@ -908,6 +909,8 @@ async function assertWorkflowPhasePersistenceRoundtrip(ctx: ScenarioContext): Pr
 
 async function assertWorkflowNativeOpenRouterLaunchMatrix(_ctx: ScenarioContext): Promise<ScenarioAssertionOutcome> {
   const tmpDir = mkdtempSync(join(tmpdir(), 'native-cert-openrouter-matrix-'));
+  const previousGlobalRoot = process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
+  process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = join(tmpDir, 'global-certifications');
   try {
     writeFileSync(join(tmpDir, '.wavemill-config.json'), JSON.stringify({
       nativeAgent: {
@@ -945,7 +948,7 @@ async function assertWorkflowNativeOpenRouterLaunchMatrix(_ctx: ScenarioContext)
         certifiedAt: new Date().toISOString(),
         scenarios: [{ scenarioId: 'workflow.phase.native-openrouter-launch-matrix', passed: true }],
       };
-      writeCertification(tmpDir, artifact);
+      writeGlobalCertification(artifact);
 
       const registry = makeOpenRouterMatrixRegistry(modelId, 'workflow', DEFAULT_CERTIFICATION_SUITE_VERSION);
       if ('error' in registry) {
@@ -975,6 +978,11 @@ async function assertWorkflowNativeOpenRouterLaunchMatrix(_ctx: ScenarioContext)
 
     return { kind: 'pass' };
   } finally {
+    if (previousGlobalRoot === undefined) {
+      delete process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
+    } else {
+      process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = previousGlobalRoot;
+    }
     rmSync(tmpDir, { recursive: true, force: true });
   }
 }

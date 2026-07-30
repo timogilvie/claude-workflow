@@ -8,6 +8,7 @@ import {
   type NativeProviderName,
 } from './model-registry.ts';
 import type { CertificationPhase } from './native-agent/certification/schema.ts';
+import { evaluateNativeProviderGate } from './native-agent/certification/eligibility-gate.ts';
 import { resolveLaunchPriorityModel, type RoleEligibility } from './openrouter-catalog.ts';
 
 export type AgentResolutionPhase = 'planning' | 'coding' | 'review';
@@ -89,6 +90,7 @@ function buildDiagnostic(input: {
 function resolveRegistryBackedNativeAgent(input: {
   modelId: string;
   phase: AgentResolutionPhase;
+  repoDir?: string;
   registry: ModelRegistry;
   now?: Date;
   nativeAgent: Extract<AgentType, 'native-openai' | 'native-openrouter'>;
@@ -157,9 +159,42 @@ function resolveRegistryBackedNativeAgent(input: {
     return { ok: false, reason: 'role-ineligible', diagnostic };
   }
 
+  const requiredPhase = certificationPhaseForAgentPhase(input.phase);
+
+  if (input.repoDir) {
+    const gate = evaluateNativeProviderGate({
+      modelId: input.modelId,
+      mode: 'task',
+      requiredPhase,
+      registry: input.registry,
+      repoDir: input.repoDir,
+      apiKeyPresent: true,
+      apiKeyEnv: 'AGENT_RESOLUTION_UNUSED',
+      now: input.now,
+    });
+    if (!gate.ok) {
+      const certifyCommand = certifyCommandFor(input.modelId, provider, input.phase);
+      const diagnostic = buildDiagnostic({
+        modelId: input.modelId,
+        phase: input.phase,
+        provider,
+        reason: gate.reason === 'unregistered_model' ? 'no-native-capability' : 'uncertified',
+        certificationStatus: gate.reason,
+        certifyCommand,
+      });
+      return {
+        ok: false,
+        reason: gate.reason === 'unregistered_model' ? 'no-native-capability' : 'uncertified',
+        diagnostic,
+        certifyCommand,
+      };
+    }
+    return { ok: true, agent: input.nativeAgent };
+  }
+
   const eligibility = evaluateRegistryPhaseEligibility({
     modelId: input.modelId,
-    phase: certificationPhaseForAgentPhase(input.phase),
+    phase: requiredPhase,
     registry: input.registry,
     now: input.now,
   });
@@ -232,6 +267,7 @@ export function resolveModelAgent(opts: ResolveModelAgentOptions): AgentResoluti
     return resolveRegistryBackedNativeAgent({
       modelId,
       phase: opts.phase,
+      repoDir: opts.repoDir,
       registry,
       now: opts.now,
       nativeAgent: resolvedAgent,
@@ -242,6 +278,7 @@ export function resolveModelAgent(opts: ResolveModelAgentOptions): AgentResoluti
     return resolveRegistryBackedNativeAgent({
       modelId,
       phase: opts.phase,
+      repoDir: opts.repoDir,
       registry,
       now: opts.now,
       nativeAgent: 'native-openrouter',

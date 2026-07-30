@@ -19,7 +19,6 @@ import {
   evaluateNativeProviderGate,
   type NativeGateRejectReason,
 } from './eligibility-gate.ts';
-import { loadCertification } from './loader.ts';
 import type { CertificationPhase } from './schema.ts';
 import { getNativeAgentConfig, type NativeAgentAllowedPhase } from '../../config.ts';
 import type { ModelRegistry, NativeProviderName } from '../../model-registry.ts';
@@ -260,26 +259,6 @@ export function filterNativeModels(
       continue;
     }
 
-    const loaded = loadCertification(
-      repoDir,
-      nativeProvider,
-      modelId,
-      certMeta.certificationSuiteVersion,
-    );
-
-    if (!loaded.ok) {
-      rejected.push({
-        modelId,
-        role,
-        requestedLaunchPhase,
-        requestedPhase: requiredPhase,
-        nativeCapability: readOnlyNative,
-        nativeProvider,
-        requiredSuiteVersion: certMeta.certificationSuiteVersion,
-        reason: loaded.reason,
-      });
-      continue;
-    }
     const decision = evaluateNativeProviderGate({
       modelId,
       mode: 'task',

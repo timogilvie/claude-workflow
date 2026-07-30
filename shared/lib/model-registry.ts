@@ -180,9 +180,47 @@ const SUPPORTED_MODEL_STAGES: readonly SupportedModelStage[] = ['expansion', 'pl
 const UNSAFE_CERTIFICATION_SEGMENT = /[/\\.\0]/;
 const OPENROUTER_CERTIFICATION_SEED = Object.freeze({
   maxCertifiedPhase: 'workflow' as const,
-  certifiedAt: '2024-01-01T00:00:00.000Z',
+  certifiedAt: '2026-07-15T00:00:00.000Z',
   certificationSuiteVersion: 'v2',
 });
+
+const OPENROUTER_NATIVE_CAPABILITY: NativeCapability = Object.freeze({
+  nativeProvider: 'openrouter',
+  piTransportKind: 'openai-completions',
+  readOnlyNative: 'certified',
+  compatFlags: Object.freeze({ thinkingFormat: 'openrouter' }),
+  certification: OPENROUTER_CERTIFICATION_SEED,
+});
+
+function openRouterSupportedModel(input: {
+  alias: string;
+  providerNativeId: string;
+  stages: SupportedModelStage[];
+  lifecycle?: ModelLifecycleStatus;
+}): SupportedModelMetadata {
+  const [provider, model] = input.providerNativeId.split('/');
+  return {
+    wavemillAlias: input.alias,
+    providerNativeId: input.providerNativeId,
+    provider: 'openrouter',
+    transport: 'openai-completions',
+    stages: input.stages,
+    requiredCertificationPhaseByStage: {
+      planning: 'workflow',
+      coding: 'patch',
+      review: 'read-only',
+    },
+    certificationSuiteVersion: OPENROUTER_CERTIFICATION_SEED.certificationSuiteVersion,
+    certificationFreshnessDays: CERTIFICATION_TTL_DAYS,
+    canonicalArtifactIdentity: provider && model
+      ? { provider, model, suiteVersion: OPENROUTER_CERTIFICATION_SEED.certificationSuiteVersion }
+      : undefined,
+    lifecycle: input.lifecycle ?? 'supported',
+    compatibilityFlags: { thinkingFormat: 'openrouter' },
+    launchEligible: true,
+    routingEligible: true,
+  };
+}
 
 function cloneCompatFlags(compatFlags: PiCompatFlags | undefined): PiCompatFlags | undefined {
   return compatFlags ? { ...compatFlags } : undefined;
@@ -942,6 +980,10 @@ function isSafeCertificationSuiteVersion(value: string): boolean {
   return value.length > 0 && !UNSAFE_CERTIFICATION_SEGMENT.test(value);
 }
 
+function isSafeArtifactIdentitySegment(value: string): boolean {
+  return value.length > 0 && value !== '.' && value !== '..' && !/[/\\\0]/.test(value);
+}
+
 export function validateNativeCapability(
   modelId: string,
   capabilities: Pick<ModelCapabilities, 'nativeCapability'>,
@@ -1099,7 +1141,7 @@ export function validateSupportedModelMetadata(
   const identity = metadata.canonicalArtifactIdentity;
   if (identity) {
     for (const [name, value] of Object.entries(identity)) {
-      if (typeof value !== 'string' || !isSafeCertificationSuiteVersion(value)) {
+      if (typeof value !== 'string' || !isSafeArtifactIdentitySegment(value)) {
         throw new ModelValidationError(
           modelId,
           `model ${modelId}: supportedModel.canonicalArtifactIdentity.${name} must be a non-empty safe path segment`,
@@ -1184,8 +1226,7 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       vendor: 'anthropic',
       class: 'frontier',
       strengths: ['frontier reasoning', 'long-horizon agentic work', 'code review', 'architecture'],
-      weaknesses: ['highest cost', 'slower', 'minutes-long turns on hard tasks', 'temporarily unavailable upstream'],
-      disabled: true,
+      weaknesses: ['highest cost', 'slower', 'minutes-long turns on hard tasks', 'OpenRouter dependency'],
       // Seed dates are approximate; override via modelRegistry config if exact
       // launch dates matter for the recency boost window.
       releasedAt: '2026-06-10',
@@ -1203,6 +1244,13 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       reasoningTier: 'advanced',
       costPerMillionInputTokensUsd: 10,
       costPerMillionOutputTokensUsd: 50,
+      agent: 'native-openrouter',
+      nativeCapability: OPENROUTER_NATIVE_CAPABILITY,
+      supportedModel: openRouterSupportedModel({
+        alias: 'claude-fable-5',
+        providerNativeId: 'anthropic/claude-fable-5',
+        stages: ['planning', 'coding', 'review'],
+      }),
     },
     'claude-opus-4-8': {
       vendor: 'anthropic',
@@ -1349,6 +1397,36 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       reasoningTier: 'basic',
       costPerMillionInputTokensUsd: 0.8,
       costPerMillionOutputTokensUsd: 4,
+    },
+    'claude-haiku-4-5': {
+      vendor: 'anthropic',
+      class: 'fast_economy',
+      strengths: ['speed', 'low cost', 'classification'],
+      weaknesses: ['less depth on complex reasoning'],
+      qualityScores: scores(88, 55, 60, 55, 92),
+      pricing: {
+        inputCostPerMTok: 0.8,
+        outputCostPerMTok: 4,
+        cacheWriteCostPerMTok: 1,
+        cacheReadCostPerMTok: 0.08,
+      },
+      defaultLadderEligible: false,
+      contextWindowTokens: 200_000,
+      toolSupport: 'full',
+      multimodal: { text: true, image: true },
+      latencyTier: 'fast',
+      reasoningTier: 'basic',
+      costPerMillionInputTokensUsd: 0.8,
+      costPerMillionOutputTokensUsd: 4,
+      agent: 'claude',
+      supportedModel: {
+        wavemillAlias: 'claude-haiku-4-5',
+        providerNativeId: 'claude-haiku-4-5-20251001',
+        stages: ['coding', 'review'],
+        lifecycle: 'supported',
+        launchEligible: true,
+        routingEligible: true,
+      },
     },
     'gpt-5.5': {
       vendor: 'openai',
@@ -1514,6 +1592,29 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
         reason: 'The ChatGPT-authenticated Codex CLI does not support gpt-5-mini.',
       },
     },
+    'gpt-4.1': {
+      vendor: 'openai',
+      class: 'strong_generalist',
+      strengths: ['coding', 'tool use', 'low-latency implementation work'],
+      weaknesses: ['coding-only watchlist entry', 'OpenRouter dependency'],
+      qualityScores: scores(52, 0, 78, 0, 50),
+      pricing: { inputCostPerMTok: 2, outputCostPerMTok: 8 },
+      defaultLadderEligible: false,
+      contextWindowTokens: 1_047_576,
+      toolSupport: 'full',
+      multimodal: { text: true, image: true },
+      latencyTier: 'standard',
+      reasoningTier: 'standard',
+      costPerMillionInputTokensUsd: 2,
+      costPerMillionOutputTokensUsd: 8,
+      agent: 'native-openrouter',
+      nativeCapability: OPENROUTER_NATIVE_CAPABILITY,
+      supportedModel: openRouterSupportedModel({
+        alias: 'gpt-4.1',
+        providerNativeId: 'openai/gpt-4.1',
+        stages: ['coding'],
+      }),
+    },
     'gemini-2.5-pro': {
       vendor: 'google',
       class: 'frontier',
@@ -1529,7 +1630,13 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       reasoningTier: 'advanced',
       costPerMillionInputTokensUsd: 1.25,
       costPerMillionOutputTokensUsd: 10,
-      agent: 'claude-openrouter',
+      agent: 'native-openrouter',
+      nativeCapability: OPENROUTER_NATIVE_CAPABILITY,
+      supportedModel: openRouterSupportedModel({
+        alias: 'gemini-2.5-pro',
+        providerNativeId: 'google/gemini-2.5-pro',
+        stages: ['planning', 'coding', 'review'],
+      }),
     },
     'gemini-2.5-flash': {
       vendor: 'google',
@@ -1546,7 +1653,35 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       reasoningTier: 'standard',
       costPerMillionInputTokensUsd: 0.3,
       costPerMillionOutputTokensUsd: 2.5,
-      agent: 'claude-openrouter',
+      agent: 'native-openrouter',
+      nativeCapability: OPENROUTER_NATIVE_CAPABILITY,
+      supportedModel: openRouterSupportedModel({
+        alias: 'gemini-2.5-flash',
+        providerNativeId: 'google/gemini-2.5-flash',
+        stages: ['coding', 'review'],
+      }),
+    },
+    'gemini-2.0-flash': {
+      vendor: 'google',
+      class: 'fast_economy',
+      strengths: ['fast coding assistance', 'low latency', 'Gemini family coverage'],
+      weaknesses: ['coding-only watchlist entry', 'older than Gemini 2.5 flash', 'OpenRouter dependency'],
+      qualityScores: scores(52, 0, 74, 0, 60),
+      defaultLadderEligible: false,
+      contextWindowTokens: 1_000_000,
+      toolSupport: 'full',
+      multimodal: { text: true, image: true },
+      latencyTier: 'fast',
+      reasoningTier: 'standard',
+      costPerMillionInputTokensUsd: 0,
+      costPerMillionOutputTokensUsd: 0,
+      agent: 'native-openrouter',
+      nativeCapability: OPENROUTER_NATIVE_CAPABILITY,
+      supportedModel: openRouterSupportedModel({
+        alias: 'gemini-2.0-flash',
+        providerNativeId: 'google/gemini-2.0-flash-001',
+        stages: ['coding'],
+      }),
     },
     'llama-4-maverick': {
       vendor: 'meta',
@@ -1563,7 +1698,13 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       reasoningTier: 'standard',
       costPerMillionInputTokensUsd: 0.4,
       costPerMillionOutputTokensUsd: 1.6,
-      agent: 'claude-openrouter',
+      agent: 'native-openrouter',
+      nativeCapability: OPENROUTER_NATIVE_CAPABILITY,
+      supportedModel: openRouterSupportedModel({
+        alias: 'llama-4-maverick',
+        providerNativeId: 'meta-llama/llama-4-maverick',
+        stages: ['planning', 'coding'],
+      }),
     },
     'llama-3.3-70b': {
       vendor: 'meta',
@@ -1580,7 +1721,35 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       reasoningTier: 'basic',
       costPerMillionInputTokensUsd: 0.12,
       costPerMillionOutputTokensUsd: 0.3,
-      agent: 'claude-openrouter',
+      agent: 'native-openrouter',
+      nativeCapability: OPENROUTER_NATIVE_CAPABILITY,
+      supportedModel: openRouterSupportedModel({
+        alias: 'llama-3.3-70b',
+        providerNativeId: 'meta-llama/llama-3.3-70b-instruct',
+        stages: ['coding', 'review'],
+      }),
+    },
+    'llama-4-scout': {
+      vendor: 'meta',
+      class: 'fast_economy',
+      strengths: ['coding', 'low-cost open model coverage', 'long context'],
+      weaknesses: ['coding-only watchlist entry', 'OpenRouter dependency'],
+      qualityScores: scores(48, 0, 72, 0, 46),
+      defaultLadderEligible: false,
+      contextWindowTokens: 1_000_000,
+      toolSupport: 'basic',
+      multimodal: { text: true, image: true },
+      latencyTier: 'fast',
+      reasoningTier: 'standard',
+      costPerMillionInputTokensUsd: 0,
+      costPerMillionOutputTokensUsd: 0,
+      agent: 'native-openrouter',
+      nativeCapability: OPENROUTER_NATIVE_CAPABILITY,
+      supportedModel: openRouterSupportedModel({
+        alias: 'llama-4-scout',
+        providerNativeId: 'meta-llama/llama-4-scout',
+        stages: ['coding'],
+      }),
     },
     'mistral-large-2': {
       vendor: 'mistral',
@@ -1597,7 +1766,13 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       reasoningTier: 'advanced',
       costPerMillionInputTokensUsd: 2,
       costPerMillionOutputTokensUsd: 6,
-      agent: 'claude-openrouter',
+      agent: 'native-openrouter',
+      nativeCapability: OPENROUTER_NATIVE_CAPABILITY,
+      supportedModel: openRouterSupportedModel({
+        alias: 'mistral-large-2',
+        providerNativeId: 'mistralai/mistral-large-2407',
+        stages: ['planning', 'coding', 'review'],
+      }),
     },
     'mistral-medium-3': {
       vendor: 'mistral',
@@ -1614,7 +1789,13 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       reasoningTier: 'advanced',
       costPerMillionInputTokensUsd: 1.5,
       costPerMillionOutputTokensUsd: 7.5,
-      agent: 'claude-openrouter',
+      agent: 'native-openrouter',
+      nativeCapability: OPENROUTER_NATIVE_CAPABILITY,
+      supportedModel: openRouterSupportedModel({
+        alias: 'mistral-medium-3',
+        providerNativeId: 'mistralai/mistral-medium-3-5',
+        stages: ['coding'],
+      }),
     },
     'devstral-small': {
       vendor: 'mistral',
@@ -1631,7 +1812,13 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       reasoningTier: 'standard',
       costPerMillionInputTokensUsd: 0.15,
       costPerMillionOutputTokensUsd: 0.6,
-      agent: 'claude-openrouter',
+      agent: 'native-openrouter',
+      nativeCapability: OPENROUTER_NATIVE_CAPABILITY,
+      supportedModel: openRouterSupportedModel({
+        alias: 'devstral-small',
+        providerNativeId: 'mistralai/mistral-small-2603',
+        stages: ['coding'],
+      }),
     },
     'devstral-medium': {
       vendor: 'mistral',
@@ -1648,7 +1835,13 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       reasoningTier: 'advanced',
       costPerMillionInputTokensUsd: 1.5,
       costPerMillionOutputTokensUsd: 7.5,
-      agent: 'claude-openrouter',
+      agent: 'native-openrouter',
+      nativeCapability: OPENROUTER_NATIVE_CAPABILITY,
+      supportedModel: openRouterSupportedModel({
+        alias: 'devstral-medium',
+        providerNativeId: 'mistralai/mistral-medium-3-5',
+        stages: ['coding'],
+      }),
     },
     'deepseek-r1': {
       vendor: 'deepseek',
@@ -1684,6 +1877,28 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       costPerMillionOutputTokensUsd: 0.32175,
       agent: 'claude',
     },
+    'deepseek-coder-v2': {
+      vendor: 'deepseek',
+      class: 'fast_economy',
+      strengths: ['coding', 'low-cost implementation', 'DeepSeek family coverage'],
+      weaknesses: ['coding-only watchlist entry', 'OpenRouter dependency'],
+      qualityScores: scores(44, 0, 74, 0, 42),
+      defaultLadderEligible: false,
+      contextWindowTokens: 128_000,
+      toolSupport: 'basic',
+      multimodal: { text: true, image: false },
+      latencyTier: 'fast',
+      reasoningTier: 'standard',
+      costPerMillionInputTokensUsd: 0,
+      costPerMillionOutputTokensUsd: 0,
+      agent: 'native-openrouter',
+      nativeCapability: OPENROUTER_NATIVE_CAPABILITY,
+      supportedModel: openRouterSupportedModel({
+        alias: 'deepseek-coder-v2',
+        providerNativeId: 'deepseek/deepseek-coder-v2-instruct',
+        stages: ['coding'],
+      }),
+    },
     'qwen-2.5-coder-32b': {
       vendor: 'qwen',
       class: 'fast_economy',
@@ -1699,7 +1914,13 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       reasoningTier: 'standard',
       costPerMillionInputTokensUsd: 0.2,
       costPerMillionOutputTokensUsd: 0.6,
-      agent: 'claude-openrouter',
+      agent: 'native-openrouter',
+      nativeCapability: OPENROUTER_NATIVE_CAPABILITY,
+      supportedModel: openRouterSupportedModel({
+        alias: 'qwen-2.5-coder-32b',
+        providerNativeId: 'qwen/qwen-2.5-coder-32b-instruct',
+        stages: ['coding'],
+      }),
     },
     'qwen-3-coder': {
       vendor: 'qwen',
@@ -1716,14 +1937,13 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       reasoningTier: 'standard',
       costPerMillionInputTokensUsd: 0.35,
       costPerMillionOutputTokensUsd: 1.05,
-      agent: 'claude-openrouter',
-      nativeCapability: {
-        nativeProvider: 'openrouter',
-        piTransportKind: 'openai-completions',
-        readOnlyNative: 'certified',
-        compatFlags: { thinkingFormat: 'openrouter' },
-        certification: OPENROUTER_CERTIFICATION_SEED,
-      },
+      agent: 'native-openrouter',
+      nativeCapability: OPENROUTER_NATIVE_CAPABILITY,
+      supportedModel: openRouterSupportedModel({
+        alias: 'qwen-3-coder',
+        providerNativeId: 'qwen/qwen3-coder',
+        stages: ['coding', 'review'],
+      }),
     },
     'qwen-3-235b': {
       vendor: 'qwen',
@@ -1740,7 +1960,35 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       reasoningTier: 'advanced',
       costPerMillionInputTokensUsd: 0.09,
       costPerMillionOutputTokensUsd: 0.55,
-      agent: 'claude-openrouter',
+      agent: 'native-openrouter',
+      nativeCapability: OPENROUTER_NATIVE_CAPABILITY,
+      supportedModel: openRouterSupportedModel({
+        alias: 'qwen-3-235b',
+        providerNativeId: 'qwen/qwen3-235b-a22b-2507',
+        stages: ['planning', 'coding', 'review'],
+      }),
+    },
+    'qwen-2.5-72b': {
+      vendor: 'qwen',
+      class: 'fast_economy',
+      strengths: ['coding', 'low-cost Qwen family coverage'],
+      weaknesses: ['coding-only watchlist entry', 'OpenRouter dependency'],
+      qualityScores: scores(46, 0, 72, 0, 44),
+      defaultLadderEligible: false,
+      contextWindowTokens: 32_768,
+      toolSupport: 'basic',
+      multimodal: { text: true, image: false },
+      latencyTier: 'fast',
+      reasoningTier: 'standard',
+      costPerMillionInputTokensUsd: 0,
+      costPerMillionOutputTokensUsd: 0,
+      agent: 'native-openrouter',
+      nativeCapability: OPENROUTER_NATIVE_CAPABILITY,
+      supportedModel: openRouterSupportedModel({
+        alias: 'qwen-2.5-72b',
+        providerNativeId: 'qwen/qwen-2.5-72b-instruct',
+        stages: ['coding'],
+      }),
     },
     'kimi-k2': {
       vendor: 'moonshotai',
@@ -1757,14 +2005,13 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       reasoningTier: 'advanced',
       costPerMillionInputTokensUsd: 1,
       costPerMillionOutputTokensUsd: 3,
-      agent: 'claude-openrouter',
-      nativeCapability: {
-        nativeProvider: 'openrouter',
-        piTransportKind: 'openai-completions',
-        readOnlyNative: 'certified',
-        compatFlags: { thinkingFormat: 'openrouter' },
-        certification: OPENROUTER_CERTIFICATION_SEED,
-      },
+      agent: 'native-openrouter',
+      nativeCapability: OPENROUTER_NATIVE_CAPABILITY,
+      supportedModel: openRouterSupportedModel({
+        alias: 'kimi-k2',
+        providerNativeId: 'moonshotai/kimi-k2',
+        stages: ['planning', 'coding', 'review'],
+      }),
     },
     'glm-5.2': {
       vendor: 'z-ai',
@@ -1781,14 +2028,13 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       reasoningTier: 'advanced',
       costPerMillionInputTokensUsd: 0.9,
       costPerMillionOutputTokensUsd: 4.2,
-      agent: 'claude-openrouter',
-      nativeCapability: {
-        nativeProvider: 'openrouter',
-        piTransportKind: 'openai-completions',
-        readOnlyNative: 'certified',
-        compatFlags: { thinkingFormat: 'openrouter' },
-        certification: OPENROUTER_CERTIFICATION_SEED,
-      },
+      agent: 'native-openrouter',
+      nativeCapability: OPENROUTER_NATIVE_CAPABILITY,
+      supportedModel: openRouterSupportedModel({
+        alias: 'glm-5.2',
+        providerNativeId: 'z-ai/glm-5.2',
+        stages: ['planning', 'coding', 'review'],
+      }),
     },
     'kimi-k2.7-code': {
       vendor: 'moonshotai',
@@ -1805,14 +2051,13 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       reasoningTier: 'advanced',
       costPerMillionInputTokensUsd: 1.2,
       costPerMillionOutputTokensUsd: 3.6,
-      agent: 'claude-openrouter',
-      nativeCapability: {
-        nativeProvider: 'openrouter',
-        piTransportKind: 'openai-completions',
-        readOnlyNative: 'certified',
-        compatFlags: { thinkingFormat: 'openrouter' },
-        certification: OPENROUTER_CERTIFICATION_SEED,
-      },
+      agent: 'native-openrouter',
+      nativeCapability: OPENROUTER_NATIVE_CAPABILITY,
+      supportedModel: openRouterSupportedModel({
+        alias: 'kimi-k2.7-code',
+        providerNativeId: 'moonshotai/kimi-k2.7-code',
+        stages: ['planning', 'coding', 'review'],
+      }),
     },
     'kimi-k2-thinking': {
       vendor: 'moonshotai',
@@ -1829,7 +2074,13 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       reasoningTier: 'advanced',
       costPerMillionInputTokensUsd: 1.5,
       costPerMillionOutputTokensUsd: 4.5,
-      agent: 'claude-openrouter',
+      agent: 'native-openrouter',
+      nativeCapability: OPENROUTER_NATIVE_CAPABILITY,
+      supportedModel: openRouterSupportedModel({
+        alias: 'kimi-k2-thinking',
+        providerNativeId: 'moonshotai/kimi-k2-thinking',
+        stages: ['planning', 'coding', 'review'],
+      }),
     },
     'deepseek-v4-pro': {
       vendor: 'deepseek',
@@ -1940,6 +2191,28 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       costPerMillionInputTokensUsd: 0.435,
       costPerMillionOutputTokensUsd: 0.87,
       agent: 'claude',
+    },
+    'grok-code-fast': {
+      vendor: 'x-ai',
+      class: 'fast_economy',
+      strengths: ['fast coding iteration', 'low-latency implementation work', 'Grok family coverage'],
+      weaknesses: ['coding-only watchlist entry', 'OpenRouter dependency'],
+      qualityScores: scores(48, 0, 76, 0, 44),
+      defaultLadderEligible: false,
+      contextWindowTokens: 256_000,
+      toolSupport: 'basic',
+      multimodal: { text: true, image: false },
+      latencyTier: 'fast',
+      reasoningTier: 'standard',
+      costPerMillionInputTokensUsd: 0,
+      costPerMillionOutputTokensUsd: 0,
+      agent: 'native-openrouter',
+      nativeCapability: OPENROUTER_NATIVE_CAPABILITY,
+      supportedModel: openRouterSupportedModel({
+        alias: 'grok-code-fast',
+        providerNativeId: 'x-ai/grok-code-fast-1',
+        stages: ['coding'],
+      }),
     },
   },
   ladders: {

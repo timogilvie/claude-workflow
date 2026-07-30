@@ -7,7 +7,7 @@ import { describe, it } from 'node:test';
 import {
   CERTIFICATION_SCHEMA_VERSION,
   DEFAULT_CERTIFICATION_SUITE_VERSION,
-  buildCertificationPath,
+  buildGlobalCertificationPath,
   resolveCertificationStorageIdentity,
 } from '../shared/lib/native-agent/certification/index.ts';
 
@@ -20,6 +20,7 @@ function cleanup(repoDir: string): void {
 }
 
 function writeConfig(repoDir: string): void {
+  process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT = join(repoDir, 'global-certifications');
   writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
     providers: {
       openrouter: {
@@ -54,7 +55,7 @@ function writeConfig(repoDir: string): void {
 }
 
 function writeCert(repoDir: string): void {
-  const path = buildCertificationPath(repoDir, 'openrouter', 'z-ai/glm-5.2', DEFAULT_CERTIFICATION_SUITE_VERSION);
+  const path = buildGlobalCertificationPath('openrouter', 'z-ai/glm-5.2', DEFAULT_CERTIFICATION_SUITE_VERSION);
   mkdirSync(dirname(path), { recursive: true });
   const identity = resolveCertificationStorageIdentity('openrouter', 'z-ai/glm-5.2');
   writeFileSync(path, JSON.stringify({

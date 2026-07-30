@@ -45,18 +45,18 @@ echo "=== agent_resolve_from_model ==="
 
 stdout_file="$(mktemp)"
 stderr_file="$(mktemp)"
-if run_resolve "$stdout_file" "$stderr_file" agent_resolve_from_model "mistral-large-2" "planning"; then
-  fail "mistral-large-2 planning should fail closed" "expected non-zero exit"
+if run_resolve "$stdout_file" "$stderr_file" agent_resolve_from_model "gpt-5.6-sol" "planning"; then
+  fail "gpt-5.6-sol planning should fail closed" "expected non-zero exit"
 else
   if [[ ! -s "$stdout_file" ]]; then
-    pass "mistral-large-2 planning leaves stdout empty"
+    pass "gpt-5.6-sol planning leaves stdout empty"
   else
-    fail "mistral-large-2 planning leaves stdout empty" "got: $(cat "$stdout_file")"
+    fail "gpt-5.6-sol planning leaves stdout empty" "got: $(cat "$stdout_file")"
   fi
-  if grep -q '\[agent-resolution\].*mistral-large-2.*phase=planning' "$stderr_file" && grep -q 'native-agent-certify.ts' "$stderr_file"; then
-    pass "mistral-large-2 planning emits actionable diagnostic"
+  if grep -q '\[agent-resolution\].*gpt-5.6-sol.*phase=planning' "$stderr_file" && grep -q 'native-agent-certify.ts' "$stderr_file"; then
+    pass "gpt-5.6-sol planning emits actionable diagnostic"
   else
-    fail "mistral-large-2 planning emits actionable diagnostic" "$(cat "$stderr_file")"
+    fail "gpt-5.6-sol planning emits actionable diagnostic" "$(cat "$stderr_file")"
   fi
 fi
 rm -f "$stdout_file" "$stderr_file"
@@ -106,14 +106,14 @@ stdout_file="$(mktemp)"
 stderr_file="$(mktemp)"
 if (
   export AGENT_CMD="codex"
-  run_resolve "$stdout_file" "$stderr_file" agent_resolve_from_model "mistral-large-2" "planning"
+  run_resolve "$stdout_file" "$stderr_file" agent_resolve_from_model "gpt-5.6-sol" "planning"
 ); then
-  fail "AGENT_CMD does not override mistral failure" "expected non-zero exit"
+  fail "AGENT_CMD does not override native-openai failure" "expected non-zero exit"
 else
   if [[ ! -s "$stdout_file" ]]; then
-    pass "AGENT_CMD does not override mistral failure"
+    pass "AGENT_CMD does not override native-openai failure"
   else
-    fail "AGENT_CMD does not override mistral failure" "got: $(cat "$stdout_file")"
+    fail "AGENT_CMD does not override native-openai failure" "got: $(cat "$stdout_file")"
   fi
 fi
 rm -f "$stdout_file" "$stderr_file"
@@ -179,7 +179,7 @@ rm -rf "$stub_dir"
 stdout_file="$(mktemp)"
 stderr_file="$(mktemp)"
 if run_snippet "$stdout_file" "$stderr_file" '
-  agent_resolve_models_for_roles "claude-sonnet-5" "gpt-5.5" "mistral-large-2"
+  agent_resolve_models_for_roles "claude-sonnet-5" "gpt-5.5" "gpt-5.6-sol"
   rc=$?
   printf "planner=%s\n" "$(agent_resolve_batch_agent_for_role planner)"
   printf "coder=%s\n" "$(agent_resolve_batch_agent_for_role coder)"
@@ -193,7 +193,7 @@ else
   else
     fail "batch resolution preserves successful role agents" "got: $(cat "$stdout_file")"
   fi
-  if grep -q '\[agent-resolution\].*mistral-large-2.*phase=review' "$stderr_file"; then
+  if grep -q '\[agent-resolution\].*gpt-5.6-sol.*phase=review' "$stderr_file"; then
     pass "batch resolution emits per-role diagnostic"
   else
     fail "batch resolution emits per-role diagnostic" "$(cat "$stderr_file")"

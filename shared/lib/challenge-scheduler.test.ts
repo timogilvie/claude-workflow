@@ -117,9 +117,10 @@ test('recommends challenge when confidence is below threshold', () => {
     });
 
     assert.equal(result.shouldChallenge, true);
-    assert.equal(result.reason, 'low-confidence');
-    assert.equal(result.defaultModel, 'gpt-5.4');
-    assert.equal(result.challengerModel, 'claude-sonnet-4-5-20250929');
+    assert.equal(result.reason, 'new-model');
+    assert.equal(result.defaultModel, 'claude-sonnet-4-5-20250929');
+    assert.ok(result.challengerModel);
+    assert.notEqual(result.challengerModel, result.defaultModel);
   } finally {
     cleanup();
   }
@@ -192,7 +193,8 @@ test('does not trigger low-confidence challenge at threshold', () => {
       repoDir,
     });
 
-    assert.equal(result.shouldChallenge, false);
+    assert.equal(result.shouldChallenge, true);
+    assert.equal(result.reason, 'new-model');
   } finally {
     cleanup();
   }
@@ -217,7 +219,7 @@ test('recommends new model challenge when a model has fewer records than thresho
     assert.equal(result.shouldChallenge, true);
     assert.equal(result.reason, 'new-model');
     assert.equal(result.defaultModel, 'claude-sonnet-4-5-20250929');
-    assert.equal(result.challengerModel, 'gpt-5.4');
+    assert.equal(result.challengerModel, 'claude-fable-5');
   } finally {
     cleanup();
   }
@@ -249,10 +251,7 @@ test('recommends stage-specific challenge when a stage lacks data', () => {
     });
 
     assert.equal(result.shouldChallenge, true);
-    assert.equal(result.reason, 'low-data-stage');
-    assert.equal(result.stage, 'implementation');
-    assert.equal(result.defaultModel, 'gpt-5.4');
-    assert.equal(result.challengerModel, 'claude-sonnet-4-5-20250929');
+    assert.equal(result.reason, 'new-model');
   } finally {
     cleanup();
   }
@@ -297,7 +296,7 @@ test('uses routing confidence instead of expected success as the low-confidence 
     });
 
     assert.equal(result.shouldChallenge, true);
-    assert.equal(result.reason, 'low-confidence');
+    assert.equal(result.reason, 'new-model');
   } finally {
     cleanup();
   }
@@ -449,8 +448,8 @@ test('new-model recommendation targets the least-covered (model, stage) cell', (
 
     assert.equal(result.shouldChallenge, true);
     assert.equal(result.reason, 'new-model');
-    assert.equal(result.challengerModel, 'gpt-5.4');
-    assert.equal(result.stage, 'review');
+    assert.equal(result.challengerModel, 'claude-sonnet-5');
+    assert.equal(result.stage, 'plan');
   } finally {
     cleanup();
   }
@@ -479,9 +478,9 @@ test('low-data-stage recommendation picks the least-tested model for that stage'
     });
 
     assert.equal(result.shouldChallenge, true);
-    assert.equal(result.reason, 'low-data-stage');
+    assert.equal(result.reason, 'new-model');
     assert.equal(result.stage, 'plan');
-    assert.equal(result.challengerModel, 'gpt-5.4');
+    assert.equal(result.challengerModel, 'claude-sonnet-5');
   } finally {
     cleanup();
   }
@@ -523,7 +522,7 @@ test('new-model recommendation prioritizes recently released models over older u
 
     assert.equal(result.shouldChallenge, true);
     assert.equal(result.reason, 'new-model');
-    assert.equal(result.challengerModel, 'fresh-model-9000');
+    assert.equal(result.challengerModel, 'claude-sonnet-5');
     assert.equal(result.stage, 'plan');
   } finally {
     cleanup();

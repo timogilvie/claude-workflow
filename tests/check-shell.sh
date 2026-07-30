@@ -528,10 +528,10 @@ else
   fail "window hold-open logs are missing mill.requireConfirm annotation"
 fi
 
-if grep -qF 'wavemill_fetch_base_branch "$BASE_BRANCH" --force' "$MILL_SCRIPT"; then
-  pass "startup session fetch uses forced fetch helper"
+if grep -qF 'wavemill_base_ref_preflight "$BASE_BRANCH" --force-fetch' "$MILL_SCRIPT"; then
+  pass "startup session uses canonical base-ref preflight"
 else
-  fail "startup session fetch is not using forced fetch helper"
+  fail "startup session is not using canonical base-ref preflight"
 fi
 
 LAUNCH_TASK_BLOCK=$(awk '
@@ -1179,7 +1179,7 @@ fi
 
 if [[ -f "$LIB_DIR/wavemill-startup-runner.sh" ]] \
   && grep -q 'wavemill_lock_run "git-worktree" ensure_worktree "\$branch" "\$wt_dir"' "$LIB_DIR/wavemill-startup-runner.sh" \
-  && grep -q 'wavemill_lock_run "git-worktree" git worktree add "\$wt_dir" -b "\$branch" "origin/\$BASE_BRANCH"' "$LIB_DIR/wavemill-startup-runner.sh"; then
+  && grep -q 'wavemill_lock_run "git-worktree" git worktree add "\$wt_dir" -b "\$branch" "\$worktree_base_ref"' "$LIB_DIR/wavemill-startup-runner.sh"; then
   pass "startup runner serializes git worktree creation"
 else
   fail "startup runner does not serialize git worktree creation"
