@@ -445,8 +445,8 @@ describe('challenge-mode gating', () => {
     });
     const options = buildTestOptions([first, second]);
     const cleaned: number[] = [];
-    options.loserCleanup = (prNumber) => {
-      cleaned.push(prNumber);
+    options.loserCleanup = (candidate) => {
+      cleaned.push(candidate.loserPr);
     };
     writeWorkflowState(options.repoDir, {
       HOK_1439: { pr: 101, challengePairId: 'pair-1', challengeRole: 'primary' },
@@ -486,8 +486,8 @@ describe('challenge-mode gating', () => {
     });
     const options = buildTestOptions([first, second]);
     const cleaned: number[] = [];
-    options.loserCleanup = (prNumber) => {
-      cleaned.push(prNumber);
+    options.loserCleanup = (candidate) => {
+      cleaned.push(candidate.loserPr);
     };
     writeWorkflowState(options.repoDir, {
       HOK_1439: { pr: 101, challengePairId: 'pair-1', challengeRole: 'primary' },
@@ -532,8 +532,8 @@ describe('challenge-mode gating', () => {
     });
     const options = buildTestOptions([first, second]);
     const cleaned: number[] = [];
-    options.loserCleanup = (prNumber) => {
-      cleaned.push(prNumber);
+    options.loserCleanup = (candidate) => {
+      cleaned.push(candidate.loserPr);
     };
     writeWorkflowState(options.repoDir, {
       HOK_1439: { pr: 101, challengePairId: 'pair-1', challengeRole: 'primary' },
@@ -578,8 +578,8 @@ describe('challenge-mode gating', () => {
       challenge: { autoMergeWinner: false },
     });
     const cleaned: number[] = [];
-    options.loserCleanup = (prNumber) => {
-      cleaned.push(prNumber);
+    options.loserCleanup = (candidate) => {
+      cleaned.push(candidate.loserPr);
     };
     writeWorkflowState(options.repoDir, {
       HOK_1439: { pr: 101, challengePairId: 'pair-1', challengeRole: 'primary' },
