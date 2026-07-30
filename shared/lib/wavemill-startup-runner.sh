@@ -70,6 +70,10 @@ export DASHBOARD_LOG_TO_FILE MILL_LOG_FILE
 
 source "$LIB_DIR/wavemill-common.sh"
 source "$LIB_DIR/agent-adapters.sh"
+if [[ -f "$LIB_DIR/terminal-reconciler.sh" ]]; then
+# shellcheck source=terminal-reconciler.sh
+source "$LIB_DIR/terminal-reconciler.sh"
+fi
 source "$LIB_DIR/startup-progress.sh"
 if [[ -f "$LIB_DIR/wavemill-worktree-deps.sh" ]]; then
 # shellcheck source=wavemill-worktree-deps.sh

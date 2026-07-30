@@ -722,6 +722,19 @@ agent_write_initial_status() {
   printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
 }
 
+agent_supersede_terminal_hook() {
+  local session="$1" issue="$2" feature_dir="${3:-}"
+  local hooks_dir
+  [[ -n "$session" && -n "$issue" ]] || return 0
+  hooks_dir="$(agent_hooks_dir)"
+  [[ -f "$hooks_dir/wavemill-hook-protocol.sh" ]] || return 0
+  # shellcheck source=/dev/null
+  source "$hooks_dir/wavemill-hook-protocol.sh" 2>/dev/null || return 0
+  declare -F wavemill_hook_supersede >/dev/null 2>&1 || return 0
+  WAVEMILL_SESSION="$session" WAVEMILL_ISSUE="$issue" WAVEMILL_FEATURE_DIR="$feature_dir" \
+    wavemill_hook_supersede "$session" "$issue" "replacement_process_started" || true
+}
+
 # ============================================================================
 # AGENT VALIDATION
 # ============================================================================
@@ -1856,6 +1869,7 @@ agent_launch_autonomous() {
   target="$(agent_tmux_target "$session" "$window")" || return 1
 
   agent_write_initial_status "$session" "$issue"
+  agent_supersede_terminal_hook "$session" "$issue" "$feature_dir"
   if [[ -n "$role" && -n "$model" ]]; then
     routing_emit_phase "$role" "$model" "$repo_dir" "$feature_dir" || true
   fi
@@ -2341,6 +2355,7 @@ agent_launch_interactive() {
   agent_hydrate_repo_env_in_pane "$target" "$repo_dir"
 
   agent_write_initial_status "$session" "$issue"
+  agent_supersede_terminal_hook "$session" "$issue" "$feature_dir"
   if [[ -n "$role" && -n "$model" ]]; then
     routing_emit_phase "$role" "$model" "$repo_dir" "$feature_dir" || true
   fi

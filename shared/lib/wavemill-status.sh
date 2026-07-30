@@ -751,9 +751,48 @@ elapsed() {
 
 # Read agent status via hook protocol with TTL-based fallback to pane liveness.
 # Hook files use a 300s TTL - stale status falls back to tmux pane state.
+agent_terminal_override() {
+  local issue="$1"
+  local task_status="" task_phase="" task_pr="" task_branch="" pr_info="" pr_state=""
+
+  if [[ -n "$STATE_FILE" && -f "$STATE_FILE" ]]; then
+    task_status="$(jq -r --arg issue "$issue" '.tasks[$issue].status // empty' "$STATE_FILE" 2>/dev/null || true)"
+    task_phase="$(jq -r --arg issue "$issue" '.tasks[$issue].phase // empty' "$STATE_FILE" 2>/dev/null || true)"
+    task_pr="$(jq -r --arg issue "$issue" '.tasks[$issue].pr // empty' "$STATE_FILE" 2>/dev/null || true)"
+    task_branch="$(jq -r --arg issue "$issue" '.tasks[$issue].branch // empty' "$STATE_FILE" 2>/dev/null || true)"
+  fi
+
+  case "$task_status:$task_phase" in
+    merged:*|closed:*|aborted:*|error:*|*:aborted|*:closed|*:done)
+      echo "exited"
+      return 0
+      ;;
+  esac
+
+  if [[ -n "$task_pr" && -n "$task_branch" ]]; then
+    pr_info="$(pr_for_branch "$task_branch")"
+    if [[ -n "$pr_info" ]]; then
+      IFS='|' read -r _pr_num pr_state <<<"$pr_info"
+      case "$pr_state" in
+        MERGED|CLOSED)
+          echo "exited"
+          return 0
+          ;;
+      esac
+    fi
+  fi
+}
+
 agent_status() {
   local issue="$1" target="${2:-}"
   local hook_file="/tmp/wavemill-${SESSION}-${issue}.hook"
+  local terminal_override=""
+
+  terminal_override="$(agent_terminal_override "$issue")"
+  if [[ -n "$terminal_override" ]]; then
+    echo "$terminal_override"
+    return
+  fi
 
   # Prefer hook-reported state when fresh (300s TTL)
   if [[ -f "$hook_file" ]]; then
