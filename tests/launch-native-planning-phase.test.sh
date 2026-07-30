@@ -69,6 +69,13 @@ agent_resolve_dashboard_pid() { printf '%s\n' "123"; }
 agent_hooks_dir() { printf '%s\n' "$REPO_DIR/shared/hooks"; }
 agent_validate_model() { return 0; }
 agent_resolve_model() { printf '%s\n' "$2"; }
+agent_resolve_from_model() {
+  if [[ "$1" == "gpt-5.6-terra" ]]; then
+    printf '%s\n' "codex"
+  else
+    printf '%s\n' "native-openrouter"
+  fi
+}
 agent_write_initial_status() { :; }
 routing_role_from_window() { printf '%s\n' "planner"; }
 routing_emit_phase() { :; }
