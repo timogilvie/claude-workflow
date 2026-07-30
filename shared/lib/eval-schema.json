@@ -196,6 +196,31 @@
       "type": "string",
       "description": "Shared identifier linking both sides of a challenge-mode pair."
     },
+    "challengeSide": {
+      "type": "string",
+      "enum": ["primary", "challenger"],
+      "description": "Side within a challenge pair, used to bind intent to evidence (HOK-2598)."
+    },
+    "challengeIntent": {
+      "$ref": "#/$defs/ChallengeExecutionIntent",
+      "description": "Selected challenge execution contract for both sides of the pair (HOK-2598)."
+    },
+    "challengeExecutionRoute": {
+      "$ref": "#/$defs/ChallengeRoutingMeta",
+      "description": "Effective per-stage execution route after expanded routing/contract application (HOK-2598)."
+    },
+    "challengeExecutionEvidence": {
+      "$ref": "#/$defs/ChallengeExecutionAttestation",
+      "description": "Per-stage launch evidence used to attest the challenge contract (HOK-2598)."
+    },
+    "challengeDivergenceReason": {
+      "$ref": "#/$defs/InvalidChallengeReason",
+      "description": "Stable reason when selected challenge intent did not execute (HOK-2598)."
+    },
+    "invalidChallenge": {
+      "type": "boolean",
+      "description": "True when this eval record must not count as challenge/training evidence (HOK-2598)."
+    },
     "prUrl": {
       "type": "string",
       "format": "uri",
@@ -2069,6 +2094,98 @@
     }
   },
   "$defs": {
+    "InvalidChallengeReason": {
+      "type": "string",
+      "enum": [
+        "stage_override_lost",
+        "native_launch_fallback",
+        "identical_effective_route",
+        "side_attribution_mismatch"
+      ],
+      "description": "Stable machine-readable reason a challenge execution was invalidated (HOK-2598 adds side_attribution_mismatch)."
+    },
+    "ChallengeRoutingMeta": {
+      "type": "object",
+      "description": "Challenge routing metadata with per-stage model assignments (HOK-2598).",
+      "properties": {
+        "planner": { "type": "string" },
+        "coder": { "type": "string" },
+        "reviewer": { "type": "string" },
+        "planDepth": { "type": "string" },
+        "codeDepth": { "type": "string" },
+        "reviewMode": { "type": "string" },
+        "routerVariant": { "type": "string" },
+        "plannerPromptVariant": { "type": "string" },
+        "reviewerPromptVariant": { "type": "string" }
+      },
+      "required": ["planner", "coder", "reviewer", "planDepth", "codeDepth", "reviewMode"],
+      "additionalProperties": false
+    },
+    "ChallengeSideIntent": {
+      "type": "object",
+      "description": "Expected challenge intent for one side of a pair (HOK-2598).",
+      "properties": {
+        "pairId": { "type": "string" },
+        "side": { "type": "string", "enum": ["primary", "challenger"] },
+        "challengeStage": { "type": "string", "enum": ["plan", "implementation", "review"] },
+        "expectedStageModel": { "type": "string" },
+        "expectedStageAgent": { "type": "string" },
+        "expectedRoute": { "$ref": "#/$defs/ChallengeRoutingMeta" }
+      },
+      "required": ["pairId", "side", "challengeStage", "expectedStageModel", "expectedRoute"],
+      "additionalProperties": false
+    },
+    "ChallengeExecutionIntent": {
+      "type": "object",
+      "description": "Challenge execution intent defining expected routes and models for both sides (HOK-2598).",
+      "properties": {
+        "pairId": { "type": "string" },
+        "challengeStage": { "type": "string", "enum": ["plan", "implementation", "review"] },
+        "intentionallyIdentical": { "type": "boolean" },
+        "routeContext": {},
+        "selectionReason": { "type": "string" },
+        "primary": { "$ref": "#/$defs/ChallengeSideIntent" },
+        "challenger": { "$ref": "#/$defs/ChallengeSideIntent" }
+      },
+      "required": ["pairId", "challengeStage", "primary", "challenger"],
+      "additionalProperties": false
+    },
+    "ChallengeExecutionEvidenceItem": {
+      "type": "object",
+      "description": "Per-stage execution evidence for challenge attestation (HOK-2598).",
+      "properties": {
+        "stage": { "type": "string", "enum": ["plan", "implementation", "review"] },
+        "agent": { "type": "string" },
+        "model": { "type": "string" },
+        "requestedModel": { "type": "string" },
+        "resolvedModel": { "type": "string" },
+        "fallbackReason": { "type": "string" },
+        "source": { "type": "string" }
+      },
+      "required": ["stage"],
+      "additionalProperties": false
+    },
+    "ChallengeExecutionAttestation": {
+      "type": "object",
+      "description": "Attestation of challenge execution against the intent (HOK-2598).",
+      "properties": {
+        "pairId": { "type": "string" },
+        "side": { "type": "string", "enum": ["primary", "challenger"] },
+        "validity": { "type": "string", "enum": ["valid", "invalid_challenge", "identical_control"] },
+        "challengeStage": { "type": "string", "enum": ["plan", "implementation", "review"] },
+        "expectedStageModel": { "type": "string" },
+        "expectedStageAgent": { "type": "string" },
+        "effectiveRoute": { "$ref": "#/$defs/ChallengeRoutingMeta" },
+        "evidence": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ChallengeExecutionEvidenceItem" }
+        },
+        "invalidReason": { "$ref": "#/$defs/InvalidChallengeReason" },
+        "invalidDetails": { "type": "string" }
+      },
+      "required": ["pairId", "side", "validity", "challengeStage", "expectedStageModel", "evidence"],
+      "additionalProperties": false
+    },
     "ChallengeRouteArtifact": {
       "type": "object",
       "properties": {

@@ -8,7 +8,9 @@ export type ChallengeValidity = 'valid' | 'invalid_challenge' | 'identical_contr
 export type InvalidChallengeReason =
   | 'stage_override_lost'
   | 'native_launch_fallback'
-  | 'identical_effective_route';
+  | 'identical_effective_route'
+  // HOK-2598: canonical challengeRole state disagrees with the branch-name fallback.
+  | 'side_attribution_mismatch';
 
 export interface ChallengeSideIntent {
   pairId: string;
@@ -254,4 +256,135 @@ export function loadChallengeIntentFromFeatureDir(featureDir: string): Challenge
     }
   }
   return undefined;
+}
+
+// ────────────────────────────────────────────────────────────────
+// Canonical state resolution (HOK-2598)
+//
+// `workflow-state.json` (`.tasks[<id>]`) is the single source of truth for
+// challenge side/intent attribution. `challengeRole` and
+// `challengeExecutionIntent` are the canonical keys written by the mill
+// orchestrator (wavemill-mill.sh); `challengeIntent` is a legacy key kept
+// only as a fallback for state files predating the canonical key. Branch/
+// issue-id suffix heuristics (`-challenger`, legacy `_c`) are a fallback for
+// artifacts that lack workflow state entirely.
+// ────────────────────────────────────────────────────────────────
+
+const CHALLENGER_BRANCH_SUFFIX = '-challenger';
+
+interface WorkflowStateTask {
+  challengeRole?: 'primary' | 'challenger';
+  challengeExecutionIntent?: ChallengeExecutionIntent;
+  /** @deprecated legacy key predating the canonical `challengeExecutionIntent`; fallback only. */
+  challengeIntent?: ChallengeExecutionIntent;
+}
+
+function readWorkflowStateTask(repoDir: string, taskId: string | undefined): WorkflowStateTask | undefined {
+  if (!taskId) return undefined;
+  const statePath = path.join(repoDir, '.wavemill', 'state', 'workflow-state.json');
+  try {
+    if (!existsSync(statePath)) return undefined;
+    const state = JSON.parse(readFileSync(statePath, 'utf-8')) as { tasks?: Record<string, WorkflowStateTask> };
+    return state.tasks?.[taskId];
+  } catch {
+    return undefined;
+  }
+}
+
+function findWorkflowStateTask(
+  repoDir: string,
+  issueId: string | undefined,
+  challengePairId: string | undefined,
+): WorkflowStateTask | undefined {
+  if (!challengePairId) return undefined;
+  return readWorkflowStateTask(repoDir, issueId)
+    ?? readWorkflowStateTask(repoDir, challengePairId)
+    ?? readWorkflowStateTask(repoDir, `${challengePairId}_c`);
+}
+
+/**
+ * Branch-name / issue-id suffix fallback. Recognizes the actual `-challenger`
+ * branch convention as well as the legacy `_c` issue-id suffix. Use only when
+ * canonical `workflow-state.json` `challengeRole` is unavailable.
+ */
+export function deriveChallengeSideFromBranch(
+  branchName: string | undefined,
+  issueId: string | undefined,
+  challengePairId?: string,
+): 'primary' | 'challenger' | undefined {
+  if (!challengePairId) return undefined;
+  const slug = branchName?.replace(/^(task|bug)\//, '') || '';
+  if (
+    issueId === `${challengePairId}_c`
+    || slug.endsWith(CHALLENGER_BRANCH_SUFFIX)
+    || slug.endsWith('_c')
+  ) {
+    return 'challenger';
+  }
+  return 'primary';
+}
+
+/** Canonical challenge side from `workflow-state.json` `.tasks[<id>].challengeRole`. */
+export function deriveChallengeSideFromState(
+  repoDir: string,
+  issueId: string | undefined,
+  challengePairId?: string,
+): 'primary' | 'challenger' | undefined {
+  return findWorkflowStateTask(repoDir, issueId, challengePairId)?.challengeRole;
+}
+
+export interface ChallengeSideResolution {
+  side: 'primary' | 'challenger' | undefined;
+  /** Which source produced `side`, or `none` when no challenge pair is present. */
+  source: 'state' | 'branch' | 'none';
+  /** True when the branch-name fallback disagrees with canonical state. */
+  mismatch: boolean;
+}
+
+/**
+ * Resolve challenge side, preferring canonical `workflow-state.json`
+ * `challengeRole` and falling back to the branch-name/issue-id heuristic
+ * only when canonical state is absent. When both are available but disagree,
+ * the state wins and `mismatch` is set so callers can flag the record as
+ * invalid rather than silently misattributing it.
+ */
+export function resolveChallengeSide(input: {
+  repoDir: string;
+  branchName?: string;
+  issueId?: string;
+  challengePairId?: string;
+}): ChallengeSideResolution {
+  if (!input.challengePairId) {
+    return { side: undefined, source: 'none', mismatch: false };
+  }
+  const stateSide = deriveChallengeSideFromState(input.repoDir, input.issueId, input.challengePairId);
+  const branchSide = deriveChallengeSideFromBranch(input.branchName, input.issueId, input.challengePairId);
+  if (stateSide) {
+    return { side: stateSide, source: 'state', mismatch: branchSide !== undefined && branchSide !== stateSide };
+  }
+  return { side: branchSide, source: 'branch', mismatch: false };
+}
+
+/**
+ * Resolve challenge execution intent, preferring a feature-dir intent
+ * artifact, then canonical `workflow-state.json` `challengeExecutionIntent`,
+ * with the legacy `challengeIntent` state key as a last-resort fallback.
+ */
+export function resolveChallengeIntent(input: {
+  repoDir: string;
+  worktreePath?: string;
+  branchName?: string;
+  issueId?: string;
+  challengePairId?: string;
+}): ChallengeExecutionIntent | undefined {
+  if (!input.challengePairId) return undefined;
+  const slug = input.branchName?.replace(/^(task|bug)\//, '') || input.issueId?.toLowerCase() || '';
+  if (input.worktreePath && slug) {
+    for (const dir of ['features', 'bugs']) {
+      const intent = loadChallengeIntentFromFeatureDir(path.join(input.worktreePath, dir, slug));
+      if (intent) return intent;
+    }
+  }
+  const task = findWorkflowStateTask(input.repoDir, input.issueId, input.challengePairId);
+  return task?.challengeExecutionIntent ?? task?.challengeIntent;
 }

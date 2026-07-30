@@ -116,6 +116,15 @@
  *   diagnostics.
  * - **1.33.0**: Added challenge execution contract fields (HOK-2575)
  *   so invalid challenge runs are excluded from reward/training attribution.
+ * - **1.34.0**: Synced `eval-schema.json` (AJV) with the `challengeSide`,
+ *   `challengeIntent`, `challengeExecutionRoute`, `challengeExecutionEvidence`,
+ *   `challengeDivergenceReason`, and `invalidChallenge` fields introduced in
+ *   1.33.0 (HOK-2598). Those fields were TypeScript-only and rejected at
+ *   write time with `SCHEMA_VIOLATION`, silently dropping every challenge-mode
+ *   eval; this release adds the matching `$defs` and closes the gap. Also
+ *   adds `side_attribution_mismatch` to `InvalidChallengeReason` so a
+ *   disagreement between the canonical `challengeRole` state and the
+ *   branch-name fallback is flagged instead of silently misattributed.
  *
  * @module eval-schema
  */
@@ -131,7 +140,7 @@ import type {
 import type { ChallengeRoutingMeta } from './challenge-comparison.ts';
 
 /** Current eval schema version for newly emitted records. */
-export const SCHEMA_VERSION = '1.33.0';
+export const SCHEMA_VERSION = '1.34.0';
 
 export type RoutingRole = 'planner' | 'coder' | 'reviewer';
 

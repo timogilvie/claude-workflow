@@ -445,6 +445,71 @@ await test('enrichPostCompletionRecord attaches direct planner challenge stage e
   }
 });
 
+function minimalEnrichmentInput(overrides: Partial<Parameters<typeof enrichPostCompletionRecord>[1]>) {
+  return {
+    repoDir: overrides.repoDir as string,
+    originalPrompt: 'placeholder',
+    prDiff: '',
+    record: overrides.record as EvalRecord,
+    difficultyData: null,
+    taskContextData: null,
+    repoContextData: null,
+    costOutcome: null,
+    interventionRecords: [],
+    ...overrides,
+  };
+}
+
+await test('enrichPostCompletionRecord attributes challengeSide from the -challenger branch suffix (HOK-2598)', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-challenger-suffix-'));
+  try {
+    const record = makeRecord();
+    enrichPostCompletionRecord(record, minimalEnrichmentInput({
+      repoDir,
+      issueId: 'HOK-2581',
+      branchName: 'task/hok-2581-fix-thing-challenger',
+      worktreePath: repoDir,
+      agentType: 'codex',
+      challengePairId: 'HOK-2581',
+      record,
+    }));
+
+    assert.equal(record.challengeSide, 'challenger');
+    assert.equal(record.invalidChallenge, undefined);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+await test('enrichPostCompletionRecord prefers canonical challengeRole state and flags a branch disagreement as invalid (HOK-2598)', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-side-mismatch-'));
+  mkdirSync(join(repoDir, '.wavemill', 'state'), { recursive: true });
+  writeFileSync(
+    join(repoDir, '.wavemill', 'state', 'workflow-state.json'),
+    JSON.stringify({ tasks: { 'HOK-2581': { challengeRole: 'primary' } } }),
+  );
+  try {
+    const record = makeRecord();
+    enrichPostCompletionRecord(record, minimalEnrichmentInput({
+      repoDir,
+      issueId: 'HOK-2581',
+      // Branch suffix disagrees with the canonical challengeRole state above.
+      branchName: 'task/hok-2581-fix-thing-challenger',
+      worktreePath: repoDir,
+      agentType: 'codex',
+      challengePairId: 'HOK-2581',
+      record,
+    }));
+
+    assert.equal(record.challengeSide, 'primary');
+    assert.equal(record.invalidChallenge, true);
+    assert.equal(record.challengeDivergenceReason, 'side_attribution_mismatch');
+    assert.equal(record.trainingEligible, false);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
 await test('runPostCompletionEval passes and persists phase durations', async () => {
   const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-hook-phase-'));
   let capturedEvalInput: Record<string, unknown> | undefined;

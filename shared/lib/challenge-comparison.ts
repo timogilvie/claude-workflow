@@ -4,6 +4,7 @@ import { appendJsonlRecord, readJsonlFile } from './jsonl-utils.ts';
 import { getEffectiveRegistry, resolveModelRegistryKey } from './model-registry.ts';
 import { resolveWavemillAliasFromOpenRouterId } from './openrouter-catalog.ts';
 import type { StageName, StageResult, StageStatus } from './stage-result.ts';
+import type { InvalidChallengeReason } from './challenge-execution-contract.ts';
 
 export interface ChallengeRoutingMeta {
   planner: string;
@@ -132,7 +133,7 @@ export interface ChallengeComparison {
   workflowInsight?: string;
   comparisonOutcome?: ChallengeComparisonOutcome;
   skipReason?: 'identical-routing-dimensions';
-  invalidChallengeReason?: 'stage_override_lost' | 'native_launch_fallback' | 'identical_effective_route';
+  invalidChallengeReason?: InvalidChallengeReason;
   invalidChallengeDetails?: string;
   invalidChallenge?: boolean;
   primaryAttestation?: unknown;
@@ -704,7 +705,7 @@ export function buildInvalidChallengeComparison(input: {
   challengerPrUrl: string;
   primaryEvalScore: number;
   challengerEvalScore: number;
-  reason: 'stage_override_lost' | 'native_launch_fallback' | 'identical_effective_route';
+  reason: InvalidChallengeReason;
   details?: string;
   primaryRouting?: ChallengeRoutingMeta;
   challengerRouting?: ChallengeRoutingMeta;

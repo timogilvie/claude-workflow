@@ -204,6 +204,99 @@ test('append succeeds after invalid optional rubric boundary is normalized away'
   }
 });
 
+test('challenge record with challengeSide/challengeIntent/challengeExecutionRoute/challengeExecutionEvidence persists (HOK-2598 regression)', () => {
+  const tmp = makeTempDir();
+  const evalsDir = join(tmp, 'evals');
+  try {
+    const expectedRoute = {
+      planner: 'claude-opus-4-6',
+      coder: 'gpt-5.4',
+      reviewer: 'claude-opus-4-6',
+      planDepth: 'deep',
+      codeDepth: 'medium',
+      reviewMode: 'llm',
+    };
+    const record = makeRecord({
+      challengePairId: 'HOK-2581',
+      challengeSide: 'challenger',
+      challengeIntent: {
+        pairId: 'HOK-2581',
+        challengeStage: 'implementation',
+        primary: {
+          pairId: 'HOK-2581',
+          side: 'primary',
+          challengeStage: 'implementation',
+          expectedStageModel: 'claude-sonnet-5',
+          expectedRoute: { ...expectedRoute, coder: 'claude-sonnet-5' },
+        },
+        challenger: {
+          pairId: 'HOK-2581',
+          side: 'challenger',
+          challengeStage: 'implementation',
+          expectedStageModel: 'gpt-5.4',
+          expectedRoute,
+        },
+      },
+      challengeExecutionRoute: expectedRoute,
+      challengeExecutionEvidence: {
+        pairId: 'HOK-2581',
+        side: 'challenger',
+        validity: 'valid',
+        challengeStage: 'implementation',
+        expectedStageModel: 'gpt-5.4',
+        evidence: [{ stage: 'implementation', model: 'gpt-5.4', source: 'eval.modelId' }],
+      },
+    });
+
+    appendEvalRecord(record, { dir: evalsDir });
+
+    const [saved] = readEvalRecords({ dir: evalsDir });
+    assert.equal(saved.challengeSide, 'challenger');
+    assert.deepEqual(saved.challengeExecutionRoute, expectedRoute);
+    assert.equal(saved.challengeExecutionEvidence?.validity, 'valid');
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('retry after a schema-rejected write persists exactly one record, not a duplicate (HOK-2598)', () => {
+  const tmp = makeTempDir();
+  const evalsDir = join(tmp, 'evals');
+  try {
+    const invalidRecord = {
+      ...makeRecord({ challengePairId: 'HOK-2581', challengeSide: 'challenger' }),
+      challengeExecutionRoute: 'not-an-object' as unknown,
+    };
+
+    assert.throws(
+      () => appendEvalRecord(invalidRecord as EvalRecord, { dir: evalsDir }),
+      (error) => error instanceof EvalValidationError
+        && error.issues.some((issue) => issue.code === 'SCHEMA_VIOLATION'),
+    );
+    assert.deepEqual(readEvalRecords({ dir: evalsDir }), []);
+
+    const validRecord = makeRecord({
+      challengePairId: 'HOK-2581',
+      challengeSide: 'challenger',
+      challengeExecutionRoute: {
+        planner: 'claude-opus-4-6',
+        coder: 'gpt-5.4',
+        reviewer: 'claude-opus-4-6',
+        planDepth: 'deep',
+        codeDepth: 'medium',
+        reviewMode: 'llm',
+      },
+    });
+    appendEvalRecord(validRecord, { dir: evalsDir });
+
+    const records = readEvalRecords({ dir: evalsDir });
+    assert.equal(records.length, 1);
+    assert.equal(records[0].challengeSide, 'challenger');
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
 // ────────────────────────────────────────────────────────────────
 // Read Tests — No Filters
 // ────────────────────────────────────────────────────────────────

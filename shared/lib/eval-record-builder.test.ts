@@ -12,6 +12,7 @@ import {
   attachBudgetMetadata,
   attachRouteCalibration,
   attachRoutePrediction,
+  attachChallengeExecutionMetadata,
   attachChallengeRouteContext,
   attachConstraints,
   attachDifficultyMetadata,
@@ -1102,6 +1103,98 @@ describe('eval-record-builder', () => {
         code: 'INELIGIBLE_REWARD_NO_JUDGE',
         message: 'Reward not paid: record has no judge evaluation result.',
       });
+    });
+  });
+
+  describe('attachChallengeExecutionMetadata (HOK-2598)', () => {
+    const expectedRoute = {
+      planner: 'claude-opus-4-6',
+      coder: 'claude-sonnet-5',
+      reviewer: 'claude-opus-4-6',
+      planDepth: 'deep',
+      codeDepth: 'medium',
+      reviewMode: 'llm',
+    };
+    const intent = {
+      pairId: 'HOK-2581',
+      challengeStage: 'implementation' as const,
+      primary: {
+        pairId: 'HOK-2581',
+        side: 'primary' as const,
+        challengeStage: 'implementation' as const,
+        expectedStageModel: 'claude-sonnet-5',
+        expectedRoute,
+      },
+      challenger: {
+        pairId: 'HOK-2581',
+        side: 'challenger' as const,
+        challengeStage: 'implementation' as const,
+        expectedStageModel: 'gpt-5.4',
+        expectedRoute: { ...expectedRoute, coder: 'gpt-5.4' },
+      },
+    };
+
+    it('is a no-op when input is undefined', () => {
+      const before = { ...baseRecord };
+      attachChallengeExecutionMetadata(baseRecord, undefined);
+      expect(baseRecord).toEqual(before);
+    });
+
+    it('attaches side and derives challengeExecutionRoute from the matching side intent', () => {
+      attachChallengeExecutionMetadata(baseRecord, { side: 'challenger', intent });
+      expect(baseRecord.challengeSide).toBe('challenger');
+      expect(baseRecord.challengeIntent).toEqual(intent);
+      expect(baseRecord.challengeExecutionRoute).toEqual({ ...expectedRoute, coder: 'gpt-5.4' });
+    });
+
+    it('evidence.effectiveRoute overrides the intent-derived route', () => {
+      attachChallengeExecutionMetadata(baseRecord, {
+        side: 'primary',
+        intent,
+        evidence: {
+          pairId: 'HOK-2581',
+          side: 'primary',
+          validity: 'valid',
+          challengeStage: 'implementation',
+          expectedStageModel: 'claude-sonnet-5',
+          effectiveRoute: { ...expectedRoute, coder: 'claude-opus-4-6' },
+          evidence: [],
+        },
+      });
+      expect(baseRecord.challengeExecutionRoute).toEqual({ ...expectedRoute, coder: 'claude-opus-4-6' });
+    });
+
+    it('marks the record invalid when evidence carries an invalidReason', () => {
+      attachChallengeExecutionMetadata(baseRecord, {
+        side: 'primary',
+        intent,
+        evidence: {
+          pairId: 'HOK-2581',
+          side: 'primary',
+          validity: 'invalid_challenge',
+          challengeStage: 'implementation',
+          expectedStageModel: 'claude-sonnet-5',
+          evidence: [],
+          invalidReason: 'stage_override_lost',
+        },
+      });
+      expect(baseRecord.invalidChallenge).toBe(true);
+      expect(baseRecord.challengeDivergenceReason).toBe('stage_override_lost');
+      expect(baseRecord.trainingEligible).toBe(false);
+      expect(baseRecord.nonRewardReason?.code).toBe('INVALID_CHALLENGE');
+    });
+
+    it('marks the record invalid with side_attribution_mismatch when sideMismatch is set, even without evidence', () => {
+      attachChallengeExecutionMetadata(baseRecord, { side: 'primary', sideMismatch: true });
+      expect(baseRecord.invalidChallenge).toBe(true);
+      expect(baseRecord.challengeDivergenceReason).toBe('side_attribution_mismatch');
+      expect(baseRecord.trainingEligible).toBe(false);
+    });
+
+    it('does not mark the record invalid when sideMismatch is false', () => {
+      attachChallengeExecutionMetadata(baseRecord, { side: 'primary', sideMismatch: false });
+      expect(baseRecord.invalidChallenge).toBeUndefined();
+      expect(baseRecord.challengeDivergenceReason).toBeUndefined();
     });
   });
 

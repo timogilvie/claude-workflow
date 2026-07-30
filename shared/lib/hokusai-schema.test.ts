@@ -879,6 +879,81 @@ describe('hokusai-schema', () => {
 
       assert.equal('eligibilityErrors' in redacted, false);
     });
+
+    it('never includes local challenge execution fields in the Hokusai submission (HOK-2598)', () => {
+      const record = makeRecord({
+        challengePairId: 'HOK-2581',
+        challengeSide: 'challenger',
+        challengeIntent: {
+          pairId: 'HOK-2581',
+          challengeStage: 'implementation',
+          primary: {
+            pairId: 'HOK-2581',
+            side: 'primary',
+            challengeStage: 'implementation',
+            expectedStageModel: 'coder-a',
+            expectedRoute: {
+              planner: 'planner-a', coder: 'coder-a', reviewer: 'reviewer-a',
+              planDepth: 'medium', codeDepth: 'medium', reviewMode: 'llm',
+            },
+          },
+          challenger: {
+            pairId: 'HOK-2581',
+            side: 'challenger',
+            challengeStage: 'implementation',
+            expectedStageModel: 'coder-b',
+            expectedRoute: {
+              planner: 'planner-a', coder: 'coder-b', reviewer: 'reviewer-a',
+              planDepth: 'medium', codeDepth: 'medium', reviewMode: 'llm',
+            },
+          },
+        },
+        challengeExecutionRoute: {
+          planner: 'planner-a', coder: 'coder-b', reviewer: 'reviewer-a',
+          planDepth: 'medium', codeDepth: 'medium', reviewMode: 'llm',
+        },
+        challengeExecutionEvidence: {
+          pairId: 'HOK-2581',
+          side: 'challenger',
+          validity: 'valid',
+          challengeStage: 'implementation',
+          expectedStageModel: 'coder-b',
+          evidence: [{ stage: 'implementation', model: 'coder-b', source: 'eval.modelId' }],
+        },
+        invalidChallenge: false,
+      });
+
+      const submission = expectSuccess(toHokusaiSubmission(record));
+      for (const field of [
+        'challengePairId', 'challengeSide', 'challengeIntent',
+        'challengeExecutionRoute', 'challengeExecutionEvidence',
+        'challengeDivergenceReason', 'invalidChallenge',
+      ]) {
+        assert.equal(field in submission, false, `submission should not include ${field}`);
+      }
+
+      const redacted = redactHokusaiSubmission(submission, { salt: 'f'.repeat(64) }) as Record<string, unknown>;
+      for (const field of [
+        'challengePairId', 'challengeSide', 'challengeIntent',
+        'challengeExecutionRoute', 'challengeExecutionEvidence',
+        'challengeDivergenceReason', 'invalidChallenge',
+      ]) {
+        assert.equal(field in redacted, false, `redacted submission should not include ${field}`);
+      }
+    });
+
+    it('excludes an invalid-challenge record from submission via existing eligibility gating', () => {
+      expectFailure(
+        toHokusaiSubmission(makeRecord({
+          challengePairId: 'HOK-2581',
+          challengeSide: 'challenger',
+          invalidChallenge: true,
+          trainingEligible: false,
+          eligibilityErrors: ['missing_routing'],
+        })),
+        ['missing_routing'],
+      );
+    });
   });
 
   describe('validateHokusaiSubmission', () => {

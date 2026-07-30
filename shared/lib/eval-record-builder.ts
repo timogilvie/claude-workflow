@@ -46,6 +46,7 @@ import type { ChallengeRouteContext } from './challenge-mode.ts';
 import type {
   ChallengeExecutionAttestation,
   ChallengeExecutionIntent,
+  InvalidChallengeReason,
 } from './challenge-execution-contract.ts';
 import type { WorkflowCostOutcome, WorkflowCostResult, WorkflowCostFailure } from './workflow-cost.ts';
 import { getManifest, getManifestRef } from './resource-manifest.ts';
@@ -83,6 +84,8 @@ export interface EvalRecordMetadata {
   challengeIntent?: ChallengeExecutionIntent | null;
   /** Challenge execution attestation. */
   challengeExecutionEvidence?: ChallengeExecutionAttestation | null;
+  /** True when canonical `challengeRole` state disagrees with the branch-name fallback (HOK-2598). */
+  challengeSideMismatch?: boolean;
   /** Challenge route provenance for evals */
   challengeRouteContext?: ChallengeRouteContext | null;
   /** General route provenance for all evals */
@@ -164,12 +167,24 @@ export function attachChallengePairId(record: EvalRecord, challengePairId?: stri
   }
 }
 
+function markChallengeInvalid(record: EvalRecord, reason: InvalidChallengeReason): void {
+  record.challengeDivergenceReason = reason;
+  record.invalidChallenge = true;
+  record.trainingEligible = false;
+  record.nonRewardReason = {
+    code: 'INVALID_CHALLENGE',
+    message: `Invalid challenge: ${reason}`,
+  };
+}
+
 export function attachChallengeExecutionMetadata(
   record: EvalRecord,
   input?: {
     side?: 'primary' | 'challenger';
     intent?: ChallengeExecutionIntent | null;
     evidence?: ChallengeExecutionAttestation | null;
+    /** True when the canonical `challengeRole` state disagrees with the branch-name fallback (HOK-2598). */
+    sideMismatch?: boolean;
   },
 ): void {
   if (input?.side) {
@@ -186,14 +201,11 @@ export function attachChallengeExecutionMetadata(
       record.challengeExecutionRoute = input.evidence.effectiveRoute;
     }
     if (input.evidence.invalidReason) {
-      record.challengeDivergenceReason = input.evidence.invalidReason;
-      record.invalidChallenge = true;
-      record.trainingEligible = false;
-      record.nonRewardReason = {
-        code: 'INVALID_CHALLENGE',
-        message: `Invalid challenge: ${input.evidence.invalidReason}`,
-      };
+      markChallengeInvalid(record, input.evidence.invalidReason);
     }
+  }
+  if (input?.sideMismatch) {
+    markChallengeInvalid(record, 'side_attribution_mismatch');
   }
 }
 
@@ -1221,6 +1233,7 @@ export function enrichEvalRecord(record: EvalRecord, metadata: EvalRecordMetadat
     side: metadata.challengeSide,
     intent: metadata.challengeIntent,
     evidence: metadata.challengeExecutionEvidence,
+    sideMismatch: metadata.challengeSideMismatch,
   });
   attachChallengeStageEval(record, metadata.challengeStageEval);
   attachChallengeRouteContext(record, metadata.challengeRouteContext);
@@ -1250,6 +1263,7 @@ export function enrichEvalRecord(record: EvalRecord, metadata: EvalRecordMetadat
     side: metadata.challengeSide,
     intent: metadata.challengeIntent,
     evidence: metadata.challengeExecutionEvidence,
+    sideMismatch: metadata.challengeSideMismatch,
   });
 
   // Extract stageScores from record metadata (set by evaluateTask)
@@ -1277,6 +1291,7 @@ export function enrichTrainingMetadata(
     side: metadata.challengeSide,
     intent: metadata.challengeIntent,
     evidence: metadata.challengeExecutionEvidence,
+    sideMismatch: metadata.challengeSideMismatch,
   });
   attachChallengeStageEval(record, metadata.challengeStageEval);
   attachChallengeRouteContext(record, metadata.challengeRouteContext);
@@ -1306,6 +1321,7 @@ export function enrichTrainingMetadata(
     side: metadata.challengeSide,
     intent: metadata.challengeIntent,
     evidence: metadata.challengeExecutionEvidence,
+    sideMismatch: metadata.challengeSideMismatch,
   });
 
   const stageScores = record.metadata?.stageScores as

@@ -74,8 +74,8 @@ import type { InterventionSummary } from './intervention-detector.ts';
 import type { OperatingMode } from './operating-mode.ts';
 import {
   attestEvalRecordChallengeExecution,
-  loadChallengeIntentFromFeatureDir,
-  type ChallengeExecutionIntent,
+  resolveChallengeIntent,
+  resolveChallengeSide,
 } from './challenge-execution-contract.ts';
 
 function isFiniteNonNegativeBudget(value: unknown): value is number {
@@ -93,36 +93,6 @@ function resolvePostCompletionBudget(input: Pick<PostCompletionEnrichmentInput, 
     routingComplete?.constraints?.maxCostUsd,
     getMaxCostUsd(input.repoDir),
   ].find(isFiniteNonNegativeBudget);
-}
-
-function deriveChallengeSide(branchName: string | undefined, issueId: string | undefined, challengePairId?: string): 'primary' | 'challenger' | undefined {
-  if (!challengePairId) return undefined;
-  const slug = branchName?.replace(/^(task|bug)\//, '') || '';
-  if (issueId === `${challengePairId}_c` || slug.endsWith('_c')) return 'challenger';
-  return 'primary';
-}
-
-function loadPostCompletionChallengeIntent(input: PostCompletionEnrichmentInput): ChallengeExecutionIntent | undefined {
-  const slug = input.branchName?.replace(/^(task|bug)\//, '') || input.issueId?.toLowerCase() || '';
-  if (!input.challengePairId) return undefined;
-  if (input.worktreePath && slug) {
-    for (const dir of ['features', 'bugs']) {
-      const intent = loadChallengeIntentFromFeatureDir(path.join(input.worktreePath, dir, slug));
-      if (intent) return intent;
-    }
-  }
-  const statePath = path.join(input.repoDir, '.wavemill', 'state', 'workflow-state.json');
-  try {
-    if (input.issueId && existsSync(statePath)) {
-      const state = JSON.parse(readFileSync(statePath, 'utf-8')) as { tasks?: Record<string, { challengeIntent?: ChallengeExecutionIntent }> };
-      return state.tasks?.[input.issueId]?.challengeIntent
-        ?? state.tasks?.[input.challengePairId]?.challengeIntent
-        ?? state.tasks?.[`${input.challengePairId}_c`]?.challengeIntent;
-    }
-  } catch {
-    return undefined;
-  }
-  return undefined;
 }
 
 const __filename = fileURLToPath(import.meta.url);
@@ -451,15 +421,27 @@ export function enrichPostCompletionRecord(
     const errorMsg = errorMessage(err);
     console.warn(`Post-completion eval: failed to build task descriptor — ${errorMsg}`);
   }
-  const challengeSide = deriveChallengeSide(input.branchName, input.issueId, input.challengePairId);
-  const challengeIntent = loadPostCompletionChallengeIntent(input);
+  const challengeSideResolution = resolveChallengeSide({
+    repoDir: input.repoDir,
+    branchName: input.branchName,
+    issueId: input.issueId,
+    challengePairId: input.challengePairId,
+  });
+  const challengeIntent = resolveChallengeIntent({
+    repoDir: input.repoDir,
+    worktreePath: input.worktreePath,
+    branchName: input.branchName,
+    issueId: input.issueId,
+    challengePairId: input.challengePairId,
+  });
 
   enrichTrainingMetadata(record, {
     agentType: input.agentType,
     provider: getDeepSeekProviderMetadata(record.modelId, input.repoDir)?.provider,
     endpoint: getDeepSeekProviderMetadata(record.modelId, input.repoDir)?.endpoint,
     challengePairId: input.challengePairId,
-    challengeSide,
+    challengeSide: challengeSideResolution.side,
+    challengeSideMismatch: challengeSideResolution.mismatch,
     challengeIntent,
     challengeStageEval: buildChallengeStageEval({
       repoDir: input.repoDir,
@@ -506,6 +488,7 @@ export function enrichPostCompletionRecord(
     side: record.challengeSide,
     intent: record.challengeIntent,
     evidence: attestation,
+    sideMismatch: challengeSideResolution.mismatch,
   });
 }
 

@@ -767,7 +767,7 @@ function validPromptSizeDiagnostic() {
 }
 
 test('SCHEMA_VERSION is bumped for eval schema updates', () => {
-  assert.equal(SCHEMA_VERSION, '1.33.0');
+  assert.equal(SCHEMA_VERSION, '1.34.0');
 });
 
 test('Record without prompt size fields still validates', () => {
@@ -1793,7 +1793,7 @@ test('Wavemill router fields validate and schema stays in parity', () => {
 });
 
 test('Schema version constant is 1.32.0', () => {
-  assert.equal(SCHEMA_VERSION, '1.33.0');
+  assert.equal(SCHEMA_VERSION, '1.34.0');
 });
 
 test('Record with resolved-model routing validates', () => {
@@ -1946,6 +1946,115 @@ test('featureOutcomeDiagnostics: new eligibility error codes validate', () => {
 
   const result = validateAgainstSchema(record as unknown as Record<string, unknown>);
   assert.ok(result.valid, `New eligibility codes should validate: ${result.errors.join('; ')}`);
+});
+
+// ────────────────────────────────────────────────────────────────
+// Challenge Execution Contract Fields (HOK-2598)
+// ────────────────────────────────────────────────────────────────
+
+function makeChallengeRoute(overrides: Record<string, string> = {}) {
+  return {
+    planner: 'claude-opus-4-6',
+    coder: 'claude-sonnet-5',
+    reviewer: 'claude-opus-4-6',
+    planDepth: 'deep',
+    codeDepth: 'medium',
+    reviewMode: 'llm',
+    ...overrides,
+  };
+}
+
+function makeChallengeSideIntent(side: 'primary' | 'challenger') {
+  return {
+    pairId: 'HOK-2581',
+    side,
+    challengeStage: 'implementation',
+    expectedStageModel: side === 'primary' ? 'claude-sonnet-5' : 'gpt-5.4',
+    expectedRoute: makeChallengeRoute({ coder: side === 'primary' ? 'claude-sonnet-5' : 'gpt-5.4' }),
+  };
+}
+
+test('Record with challengeSide, challengeIntent, challengeExecutionRoute, challengeExecutionEvidence validates', () => {
+  const record: EvalRecord = {
+    ...scenarios[0].record,
+    schemaVersion: SCHEMA_VERSION,
+    challengePairId: 'HOK-2581',
+    challengeSide: 'challenger',
+    challengeIntent: {
+      pairId: 'HOK-2581',
+      challengeStage: 'implementation',
+      primary: makeChallengeSideIntent('primary'),
+      challenger: makeChallengeSideIntent('challenger'),
+    },
+    challengeExecutionRoute: makeChallengeRoute({ coder: 'gpt-5.4' }),
+    challengeExecutionEvidence: {
+      pairId: 'HOK-2581',
+      side: 'challenger',
+      validity: 'valid',
+      challengeStage: 'implementation',
+      expectedStageModel: 'gpt-5.4',
+      evidence: [
+        { stage: 'implementation', model: 'gpt-5.4', source: 'eval.modelId' },
+      ],
+    },
+  };
+
+  const result = validateAgainstSchema(record as unknown as Record<string, unknown>);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+
+  const properties = schema.properties as Record<string, Record<string, unknown>>;
+  assert.equal(properties.challengeSide?.enum ? true : false, true);
+  assert.equal((properties.challengeIntent as { $ref?: string }).$ref, '#/$defs/ChallengeExecutionIntent');
+  assert.equal((properties.challengeExecutionRoute as { $ref?: string }).$ref, '#/$defs/ChallengeRoutingMeta');
+  assert.equal((properties.challengeExecutionEvidence as { $ref?: string }).$ref, '#/$defs/ChallengeExecutionAttestation');
+});
+
+test('Record with invalidChallenge and challengeDivergenceReason validates, including the new side_attribution_mismatch reason', () => {
+  const record: EvalRecord = {
+    ...scenarios[0].record,
+    schemaVersion: SCHEMA_VERSION,
+    challengePairId: 'HOK-2581',
+    challengeSide: 'primary',
+    invalidChallenge: true,
+    challengeDivergenceReason: 'side_attribution_mismatch',
+  };
+
+  const result = validateAgainstSchema(record as unknown as Record<string, unknown>);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
+test('Rejects challengeSide with an unknown enum value', () => {
+  const record = {
+    ...scenarios[0].record,
+    schemaVersion: SCHEMA_VERSION,
+    challengeSide: 'observer',
+  } as unknown as Record<string, unknown>;
+
+  const result = validateAgainstSchema(record);
+  assert.ok(!result.valid, 'Should be invalid');
+  assert.ok(result.errors.some((e) => e.includes('challengeSide')));
+});
+
+test('Rejects challengeExecutionEvidence missing required fields', () => {
+  const record = {
+    ...scenarios[0].record,
+    schemaVersion: SCHEMA_VERSION,
+    challengeExecutionEvidence: {
+      side: 'primary',
+      // missing pairId, validity, challengeStage, expectedStageModel, evidence
+    },
+  } as unknown as Record<string, unknown>;
+
+  const result = validateAgainstSchema(record);
+  assert.ok(!result.valid, 'Should be invalid');
+});
+
+test('Legacy record without any HOK-2598 challenge fields still validates', () => {
+  const record = scenarios[0].record as unknown as Record<string, unknown>;
+  assert.ok(!('challengeSide' in record));
+  assert.ok(!('challengeIntent' in record));
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
 });
 
 // ────────────────────────────────────────────────────────────────
