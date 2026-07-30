@@ -116,6 +116,9 @@
  *   diagnostics.
  * - **1.33.0**: Added challenge execution contract fields (HOK-2575)
  *   so invalid challenge runs are excluded from reward/training attribution.
+ * - **1.34.0**: Synchronized challenge execution fields into the
+ *   authoritative JSON Schema and canonicalized challenge provenance loading
+ *   (HOK-2598).
  *
  * @module eval-schema
  */
@@ -131,7 +134,7 @@ import type {
 import type { ChallengeRoutingMeta } from './challenge-comparison.ts';
 
 /** Current eval schema version for newly emitted records. */
-export const SCHEMA_VERSION = '1.33.0';
+export const SCHEMA_VERSION = '1.34.0';
 
 export type RoutingRole = 'planner' | 'coder' | 'reviewer';
 
