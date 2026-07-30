@@ -303,25 +303,10 @@ const DEFAULT_ROUTER_OPTIONS = {
 
 function registryWithAgentOverride(
   modelId: string,
-  agentMap: Record<string, AgentType>,
+  _agentMap: Record<string, AgentType>,
   repoDir?: string,
 ) {
-  const registry = repoDir ? getEffectiveRegistry(repoDir) : DEFAULT_MODEL_REGISTRY;
-  const mappedAgent = agentMap[modelId];
-  if (!mappedAgent || !registry.models[modelId]) {
-    return registry;
-  }
-
-  return {
-    ...registry,
-    models: {
-      ...registry.models,
-      [modelId]: {
-        ...registry.models[modelId]!,
-        agent: mappedAgent,
-      },
-    },
-  };
+  return DEFAULT_MODEL_REGISTRY;
 }
 
 function modelResolutionError(
@@ -362,10 +347,9 @@ export function tryResolveAgent(
 /**
  * Resolve which agent CLI should run a given model.
  *
- * Resolution order:
- *   1. Explicit agentMap entry
- *   2. Prefix heuristic (claude- prefix = claude, gpt-/o prefix = codex)
- *   3. defaultAgent fallback
+ * Resolution is registry-authoritative for known models. The agentMap and
+ * defaultAgent parameters are accepted for legacy call-site compatibility but
+ * do not remap globally registered models.
  */
 export function resolveAgent(
   modelId: string,

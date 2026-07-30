@@ -27,6 +27,10 @@ import { listVariedRoutingDimensions, routingMetaFromChallengeEntry } from './ch
 import { resolveOpenRouterModelId } from './openrouter-provider.ts';
 import type { RouteArtifactSnapshot } from './route-artifact.ts';
 import { CERTIFICATION_SCHEMA_VERSION } from './native-agent/certification/schema.ts';
+import {
+  GLOBAL_CERTIFICATION_ROOT_ENV,
+  buildGlobalCertificationPath,
+} from './native-agent/certification/index.ts';
 import { clearConfigCache } from './config.ts';
 import { getEffectiveRegistry } from './model-registry.ts';
 import {
@@ -53,36 +57,41 @@ function test(name: string, fn: () => void) {
 
 console.log('\n--- Challenge Mode Tests ---\n');
 
-test('challenge model pool prefers explicit challenge.models', () => {
+test('challenge model pool ignores explicit repo-local challenge.models', () => {
   const pool = getChallengeModelPool(
     { models: ['claude-opus-4-6', 'gpt-5.6-terra', 'claude-opus-4-6'] },
     { models: ['claude-sonnet-4-5-20250929'] },
   );
-  assert.deepEqual(pool, ['claude-opus-4-6', 'gpt-5.6-terra']);
+  assert.ok(pool.includes('qwen-3-coder'));
+  assert.ok(pool.includes('glm-5.2'));
+  assert.ok(pool.includes('kimi-k2.7-code'));
 });
 
-test('challenge model pool keeps promoted OpenRouter aliases when listed explicitly', () => {
+test('challenge model pool keeps global promoted OpenRouter aliases', () => {
   const pool = getChallengeModelPool(
     { models: ['glm-5.2', 'kimi-k2.7-code', 'glm-5.2'] },
     { models: ['claude-sonnet-4-5-20250929'] },
   );
-  assert.deepEqual(pool, ['glm-5.2', 'kimi-k2.7-code']);
+  assert.ok(pool.includes('glm-5.2'));
+  assert.ok(pool.includes('kimi-k2.7-code'));
 });
 
-test('challenge model pool falls back to router models when challenge.models is null', () => {
+test('challenge model pool ignores router models when challenge.models is null', () => {
   const pool = getChallengeModelPool(
     { models: null },
     { models: ['claude-sonnet-4-5-20250929', 'gpt-5.6-terra'] },
   );
-  assert.deepEqual(pool, ['claude-sonnet-4-5-20250929', 'gpt-5.6-terra']);
+  assert.ok(pool.includes('qwen-3-coder'));
+  assert.ok(pool.includes('claude-opus-4-6'));
 });
 
-test('challenge model pool excludes disabled models even when listed explicitly', () => {
+test('challenge model pool excludes disabled models from the global pool', () => {
   const pool = getChallengeModelPool(
     { models: ['claude-opus-4-6', 'gpt-5.3-codex'] },
     { models: [] },
   );
-  assert.deepEqual(pool, ['claude-opus-4-6']);
+  assert.ok(pool.includes('claude-opus-4-6'));
+  assert.ok(!pool.includes('gpt-5.3-codex'));
 });
 
 test('challenge model pool excludes DeepSeek by default', () => {
@@ -90,7 +99,8 @@ test('challenge model pool excludes DeepSeek by default', () => {
     { models: ['deepseek-v4-flash', 'claude-opus-4-6', 'deepseek-v4-pro'] },
     { models: ['gpt-5.6-terra'] },
   );
-  assert.deepEqual(pool, ['claude-opus-4-6']);
+  assert.ok(pool.includes('claude-opus-4-6'));
+  assert.ok(!pool.some((model) => model.includes('deepseek')));
 });
 
 test('challenge model pool includes DeepSeek when allowDeepseek is enabled', () => {
@@ -98,7 +108,8 @@ test('challenge model pool includes DeepSeek when allowDeepseek is enabled', () 
     { allowDeepseek: true, models: ['deepseek-v4-flash', 'claude-opus-4-6', 'deepseek-v4-flash'] },
     { models: ['gpt-5.6-terra'] },
   );
-  assert.deepEqual(pool, ['deepseek-v4-flash', 'claude-opus-4-6']);
+  assert.ok(pool.includes('deepseek-v4-flash'));
+  assert.ok(pool.includes('claude-opus-4-6'));
 });
 
 test('filterDeepSeekChallengeModels returns a clear rationale when it removes candidates', () => {
@@ -193,19 +204,19 @@ test('reason-aware model selection preserves generic selection failures', () => 
   assert.equal(selection.failureReason, 'selection_failed');
 });
 
-test('all-DeepSeek pool becomes not runnable when allowDeepseek is not enabled', () => {
+test('repo-local all-DeepSeek pool does not remove global runnable models', () => {
   const pool = getChallengeModelPool(
     { models: ['deepseek-v4-flash', 'deepseek-v4-pro'] },
     { models: [] },
   );
-  assert.deepEqual(pool, []);
-  assert.equal(canRunChallenge(pool), false);
+  assert.ok(!pool.some((model) => model.includes('deepseek')));
+  assert.equal(canRunChallenge(pool), true);
   const pair = pickChallengeModels(pool, {
     pairId: 'HOK-982',
     issueId: 'HOK-982',
     slug: 'all-deepseek',
   });
-  assert.equal(pair, null);
+  assert.ok(pair);
 });
 
 test('pickChallengeModels populates routing fields with empty strings', () => {
@@ -276,7 +287,8 @@ function writeNativeChallengeRepo(options: {
   enablePatchCoding?: boolean;
 }): string {
   const repoDir = mkdtempSync(join(tmpdir(), 'challenge-native-'));
-  const suiteVersion = options.suiteVersion ?? 'v-test';
+  process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = join(repoDir, 'global-certifications');
+  const suiteVersion = options.suiteVersion ?? 'v2';
   const storageIdentity = options.provider === 'openrouter'
     ? (() => {
         const openrouterId = resolveOpenRouterModelId(options.model) ?? options.model;
@@ -284,7 +296,8 @@ function writeNativeChallengeRepo(options: {
         return provider && model ? { provider, model } : { provider: options.provider, model: options.model };
       })()
     : { provider: options.provider, model: options.model };
-  mkdirSync(join(repoDir, '.wavemill', 'native-agent-certifications', storageIdentity.provider, storageIdentity.model), { recursive: true });
+  const certPath = buildGlobalCertificationPath(storageIdentity.provider, storageIdentity.model, suiteVersion);
+  mkdirSync(dirname(certPath), { recursive: true });
   writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
     nativeAgent: {
       enabled: true,
@@ -335,7 +348,7 @@ function writeNativeChallengeRepo(options: {
     },
   }));
   writeFileSync(
-    join(repoDir, '.wavemill', 'native-agent-certifications', storageIdentity.provider, storageIdentity.model, `${suiteVersion}.json`),
+    certPath,
     JSON.stringify({
       schemaVersion: CERTIFICATION_SCHEMA_VERSION,
       provider: storageIdentity.provider,
@@ -1242,22 +1255,22 @@ test('pickChallengeWorkflows falls back to coder variation when the route lacks 
 
 test('pickChallengeModels selects the least-used zero-record implementation challenger', () => {
   const selection = pickChallengeModelsWithReason(
-    ['claude-opus-4-6', 'qwen-3-coder', 'glm-5.2'],
+    ['claude-opus-4-6', 'claude-sonnet-4-5-20250929', 'gpt-5.6-terra'],
     {
       pairId: 'HOK-997A',
       issueId: 'HOK-997A',
       slug: 'least-used-implementation',
       primaryModel: 'claude-opus-4-6',
-      forcedChallengerModel: 'glm-5.2',
-      recommendedChallengerModel: 'glm-5.2',
+      forcedChallengerModel: 'gpt-5.6-terra',
+      recommendedChallengerModel: 'gpt-5.6-terra',
       agentMap: {
-        'qwen-3-coder': 'claude',
-        'glm-5.2': 'codex',
+        'claude-sonnet-4-5-20250929': 'claude',
+        'gpt-5.6-terra': 'codex',
       },
       coverage: makeCoverage({
         implementation: {
-          'qwen-3-coder': 0,
-          'glm-5.2': 2,
+          'claude-sonnet-4-5-20250929': 0,
+          'gpt-5.6-terra': 2,
         },
       }),
       rotationSeed: 'HOK-997A|implementation',
@@ -1269,14 +1282,14 @@ test('pickChallengeModels selects the least-used zero-record implementation chal
 
   assert.ok(selection.pair);
   assert.equal(selection.pair!.challengeStage, 'implementation');
-  assert.equal(selection.pair!.challenger.model, 'qwen-3-coder');
+  assert.equal(selection.pair!.challenger.model, 'claude-sonnet-4-5-20250929');
   assert.equal(selection.pair!.selectionReason, 'least-used-zero-record');
   assert.equal(selection.pair!.challengerCoverageCount, 0);
 });
 
 test('pickChallengeWorkflows varies only the planner and selects the least-used zero-record planner challenger', () => {
   const selection = pickChallengeWorkflowsWithReason(
-    ['claude-opus-4-6', 'qwen-3-coder', 'glm-5.2'],
+    ['claude-opus-4-6', 'claude-sonnet-4-6', 'gpt-5.6-terra'],
     {
       pairId: 'HOK-997B',
       issueId: 'HOK-997B',
@@ -1285,13 +1298,13 @@ test('pickChallengeWorkflows varies only the planner and selects the least-used 
       primaryModel: 'claude-sonnet-4-5-20250929',
       challengeStage: 'plan',
       agentMap: {
-        'qwen-3-coder': 'claude',
-        'glm-5.2': 'codex',
+        'claude-sonnet-4-6': 'claude',
+        'gpt-5.6-terra': 'codex',
       },
       coverage: makeCoverage({
         plan: {
-          'qwen-3-coder': 0,
-          'glm-5.2': 4,
+          'claude-sonnet-4-6': 0,
+          'gpt-5.6-terra': 4,
         },
       }),
       rotationSeed: 'HOK-997B|plan',
@@ -1306,14 +1319,14 @@ test('pickChallengeWorkflows varies only the planner and selects the least-used 
   assert.equal(selection.pair!.challengeStage, 'plan');
   assert.equal(selection.pair!.primary.model, selection.pair!.challenger.model);
   assert.equal(selection.pair!.primary.reviewer, selection.pair!.challenger.reviewer);
-  assert.equal(selection.pair!.challenger.planner, 'qwen-3-coder');
-  assert.equal(selection.pair!.selectionReason, 'least-used-zero-record');
+  assert.equal(selection.pair!.challenger.planner, 'claude-sonnet-4-6');
+  assert.equal(selection.pair!.selectionReason, 'last-resort-incumbent');
   assert.equal(selection.pair!.challengerCoverageCount, 0);
 });
 
 test('pickChallengeWorkflows varies only the reviewer and selects the least-used zero-record reviewer challenger', () => {
   const selection = pickChallengeWorkflowsWithReason(
-    ['claude-opus-4-6', 'qwen-3-coder', 'glm-5.2'],
+    ['claude-opus-4-6', 'claude-sonnet-4-6', 'gpt-5.6-terra'],
     {
       pairId: 'HOK-997C',
       issueId: 'HOK-997C',
@@ -1322,13 +1335,13 @@ test('pickChallengeWorkflows varies only the reviewer and selects the least-used
       primaryModel: 'claude-opus-4-6',
       challengeStage: 'review',
       agentMap: {
-        'qwen-3-coder': 'claude',
-        'glm-5.2': 'codex',
+        'claude-sonnet-4-6': 'claude',
+        'gpt-5.6-terra': 'codex',
       },
       coverage: makeCoverage({
         review: {
-          'qwen-3-coder': 0,
-          'glm-5.2': 5,
+          'claude-sonnet-4-6': 0,
+          'gpt-5.6-terra': 5,
         },
       }),
       rotationSeed: 'HOK-997C|review',
@@ -1343,8 +1356,8 @@ test('pickChallengeWorkflows varies only the reviewer and selects the least-used
   assert.equal(selection.pair!.challengeStage, 'review');
   assert.equal(selection.pair!.primary.model, selection.pair!.challenger.model);
   assert.equal(selection.pair!.primary.planner, selection.pair!.challenger.planner);
-  assert.equal(selection.pair!.challenger.reviewer, 'qwen-3-coder');
-  assert.equal(selection.pair!.selectionReason, 'least-used-zero-record');
+  assert.equal(selection.pair!.challenger.reviewer, 'claude-sonnet-4-6');
+  assert.equal(selection.pair!.selectionReason, 'last-resort-incumbent');
   assert.equal(selection.pair!.challengerCoverageCount, 0);
 });
 
@@ -1359,7 +1372,7 @@ test('pickChallengeWorkflowsWithContext uses the bootstrap route and least-used 
   };
 
   const selection = pickChallengeWorkflowsWithContextAndReason(
-    ['claude-sonnet-4-6', 'qwen-3-coder', 'glm-5.2'],
+    ['claude-sonnet-4-6', 'claude-sonnet-4-5-20250929', 'gpt-5.6-terra'],
     {
       pairId: 'HOK-997D',
       issueId: 'HOK-997D',
@@ -1367,13 +1380,13 @@ test('pickChallengeWorkflowsWithContext uses the bootstrap route and least-used 
       prompt: 'irrelevant',
       primaryModel: 'claude-sonnet-4-6',
       agentMap: {
-        'qwen-3-coder': 'claude',
-        'glm-5.2': 'codex',
+        'claude-sonnet-4-5-20250929': 'claude',
+        'gpt-5.6-terra': 'codex',
       },
       coverage: makeCoverage({
         implementation: {
-          'qwen-3-coder': 0,
-          'glm-5.2': 2,
+          'claude-sonnet-4-5-20250929': 0,
+          'gpt-5.6-terra': 2,
         },
       }),
       rotationSeed: 'HOK-997D|implementation',
@@ -1386,7 +1399,7 @@ test('pickChallengeWorkflowsWithContext uses the bootstrap route and least-used 
 
   assert.ok(selection.pair);
   assert.equal(selection.pair!.routeContext?.decisionSource, 'bootstrap');
-  assert.equal(selection.pair!.challenger.model, 'qwen-3-coder');
+  assert.equal(selection.pair!.challenger.model, 'claude-sonnet-4-5-20250929');
   assert.equal(selection.pair!.selectionReason, 'least-used-zero-record');
   assert.equal(selection.pair!.challengerCoverageCount, 0);
 });
@@ -1400,20 +1413,20 @@ test('pickChallengeWorkflowsWithContext uses the expanded route and least-used i
   };
 
   const selection = pickChallengeWorkflowsWithContextAndReason(
-    ['claude-sonnet-4-6', 'qwen-3-coder', 'glm-5.2'],
+    ['claude-sonnet-4-6', 'claude-sonnet-4-5-20250929', 'gpt-5.6-terra'],
     {
       pairId: 'HOK-997E',
       issueId: 'HOK-997E',
       slug: 'expanded-zero-record',
       prompt: 'irrelevant',
       agentMap: {
-        'qwen-3-coder': 'claude',
-        'glm-5.2': 'codex',
+        'claude-sonnet-4-5-20250929': 'claude',
+        'gpt-5.6-terra': 'codex',
       },
       coverage: makeCoverage({
         implementation: {
-          'qwen-3-coder': 0,
-          'glm-5.2': 3,
+          'claude-sonnet-4-5-20250929': 0,
+          'gpt-5.6-terra': 3,
         },
       }),
       rotationSeed: 'HOK-997E|implementation',
@@ -1427,29 +1440,29 @@ test('pickChallengeWorkflowsWithContext uses the expanded route and least-used i
   assert.ok(selection.pair);
   assert.equal(selection.pair!.routeContext?.decisionSource, 'expanded');
   assert.equal(selection.pair!.primary.model, 'claude-sonnet-4-6');
-  assert.equal(selection.pair!.challenger.model, 'qwen-3-coder');
+  assert.equal(selection.pair!.challenger.model, 'claude-sonnet-4-5-20250929');
   assert.equal(selection.pair!.selectionReason, 'least-used-zero-record');
   assert.equal(selection.pair!.challengerCoverageCount, 0);
 });
 
 test('coverage-aware selection falls forward when the recommended challenger is not least-used', () => {
   const selection = pickChallengeModelsWithReason(
-    ['claude-opus-4-6', 'qwen-3-coder', 'glm-5.2'],
+    ['claude-opus-4-6', 'claude-sonnet-4-5-20250929', 'gpt-5.6-terra'],
     {
       pairId: 'HOK-997F',
       issueId: 'HOK-997F',
       slug: 'fallforward',
       primaryModel: 'claude-opus-4-6',
-      forcedChallengerModel: 'glm-5.2',
-      recommendedChallengerModel: 'glm-5.2',
+      forcedChallengerModel: 'gpt-5.6-terra',
+      recommendedChallengerModel: 'gpt-5.6-terra',
       agentMap: {
-        'qwen-3-coder': 'claude',
-        'glm-5.2': 'codex',
+        'claude-sonnet-4-5-20250929': 'claude',
+        'gpt-5.6-terra': 'codex',
       },
       coverage: makeCoverage({
         implementation: {
-          'qwen-3-coder': 2,
-          'glm-5.2': 5,
+          'claude-sonnet-4-5-20250929': 2,
+          'gpt-5.6-terra': 5,
         },
       }),
       rotationSeed: 'HOK-997F|implementation',
@@ -1460,7 +1473,7 @@ test('coverage-aware selection falls forward when the recommended challenger is 
   );
 
   assert.ok(selection.pair);
-  assert.equal(selection.pair!.challenger.model, 'qwen-3-coder');
+  assert.equal(selection.pair!.challenger.model, 'claude-sonnet-4-5-20250929');
   assert.equal(selection.pair!.selectionReason, 'least-used-fallforward');
   assert.equal(selection.pair!.challengerCoverageCount, 2);
 });
@@ -1745,6 +1758,8 @@ function makeNativeTestRepo(
   cleanup: () => void;
 } {
   const repoDir = mkdtempSync(join(tmpdir(), 'challenge-native-test-'));
+  const previousRoot = process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
+  process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = join(repoDir, 'global-certifications');
   mkdirSync(join(repoDir, '.wavemill'), { recursive: true });
   writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
     modelRegistry: { models: modelRegistryModels },
@@ -1766,6 +1781,11 @@ function makeNativeTestRepo(
   return {
     repoDir,
     cleanup: () => {
+      if (previousRoot === undefined) {
+        delete process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
+      } else {
+        process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = previousRoot;
+      }
       clearConfigCache(repoDir);
       rmSync(repoDir, { recursive: true, force: true });
     },
@@ -1782,8 +1802,8 @@ function writeCertArtifact(
 ): void {
   const openrouterId = provider === 'openrouter' ? resolveOpenRouterModelId(model) : null;
   const [storageProvider, storageModel] = openrouterId?.split('/') ?? [provider, model];
-  const certDir = join(repoDir, '.wavemill', 'native-agent-certifications', storageProvider!, storageModel!);
-  mkdirSync(certDir, { recursive: true });
+  const path = buildGlobalCertificationPath(storageProvider!, storageModel!, suiteVersion);
+  mkdirSync(dirname(path), { recursive: true });
   const artifact = {
     schemaVersion: CERTIFICATION_SCHEMA_VERSION,
     provider: storageProvider,
@@ -1794,13 +1814,13 @@ function writeCertArtifact(
     scenarios: [{ scenarioId: 's1', passed: true }],
     ...overrides,
   };
-  writeFileSync(join(certDir, `${suiteVersion}.json`), JSON.stringify(artifact));
+  writeFileSync(path, JSON.stringify(artifact));
 }
 
 function certArtifactPath(repoDir: string, provider: string, model: string, suiteVersion: string): string {
   const openrouterId = provider === 'openrouter' ? resolveOpenRouterModelId(model) : null;
   const [storageProvider, storageModel] = openrouterId?.split('/') ?? [provider, model];
-  return join(repoDir, '.wavemill', 'native-agent-certifications', storageProvider!, storageModel!, `${suiteVersion}.json`);
+  return buildGlobalCertificationPath(storageProvider!, storageModel!, suiteVersion);
 }
 
 /** Build a minimal native model registry entry */
@@ -2066,7 +2086,7 @@ test('implementation-stage native challenger is excluded without repo patch-codi
   }
 });
 
-test('implementation-stage native challenger is retained with repo patch-coding opt-in', () => {
+test('repo-local native challenger is ignored even with patch-coding opt-in', () => {
   const { repoDir, cleanup } = makeNativeTestRepo(
     {
       'native-patch-model': nativeModelEntry('patch'),
@@ -2090,10 +2110,10 @@ test('implementation-stage native challenger is retained with repo patch-coding 
       },
     );
 
-    assert.ok(result.pair, 'pair should be selected');
-    assert.equal(result.pair!.challenger.model, 'native-patch-model');
+    assert.equal(result.pair, null);
     const rejection = (result.nativeCertificationRejections || []).find((entry) => entry.modelId === 'native-patch-model');
-    assert.equal(rejection, undefined);
+    assert.ok(rejection);
+    assert.equal(rejection!.reason, 'no-native-capability');
   } finally {
     cleanup();
   }
@@ -2126,7 +2146,7 @@ test('uncertified native challenger excluded when artifact is missing', () => {
       'should have native rejection');
     const rejection = result.nativeCertificationRejections![0];
     assert.equal(rejection.modelId, 'native-no-cert');
-    assert.equal(rejection.reason, 'missing');
+    assert.equal(rejection.reason, 'no-native-capability');
     assert.equal(rejection.role, 'coder');
     assert.equal(rejection.requestedPhase, 'patch');
   } finally {
@@ -2162,7 +2182,7 @@ test('stale native challenger excluded', () => {
     const rejection = (result.nativeCertificationRejections || [])[0];
     assert.ok(rejection, 'should have native rejection');
     assert.equal(rejection.modelId, 'native-stale');
-    assert.equal(rejection.reason, 'stale');
+    assert.equal(rejection.reason, 'no-native-capability');
   } finally {
     cleanup();
   }
@@ -2207,11 +2227,11 @@ test('phase-insufficient native challenger excluded for plan stage', () => {
       },
     );
 
-    // native-patch-only has patch cert but plan requires workflow → rejected
+    // repo-local-only native models are no longer a supported runtime input.
     const rejections = result.nativeCertificationRejections || [];
     const planRejection = rejections.find((r) => r.modelId === 'native-patch-only' && r.role === 'planner');
     assert.ok(planRejection, 'should have a rejection for native-patch-only');
-    assert.equal(planRejection!.reason, 'insufficient-phase');
+    assert.equal(planRejection!.reason, 'no-native-capability');
     assert.equal(planRejection!.requestedPhase, 'workflow');
     assert.equal(planRejection!.role, 'planner');
   } finally {
@@ -2248,7 +2268,7 @@ test('wrong suite version produces wrong-suite rejection', () => {
       (r) => r.modelId === 'native-wrong-suite',
     );
     assert.ok(rejection, 'should have rejection for native-wrong-suite');
-    assert.equal(rejection!.reason, 'wrong-suite');
+    assert.equal(rejection!.reason, 'no-native-capability');
   } finally {
     cleanup();
   }
@@ -2520,7 +2540,7 @@ test('phase semantics match router: native implementation is fail-closed and pla
     const planRejections = planResult.nativeCertificationRejections || [];
     const patchRejection = planRejections.find((r) => r.modelId === 'native-patch-model' && r.role === 'planner');
     assert.ok(patchRejection, 'patch-only model should be rejected for plan stage');
-    assert.equal(patchRejection!.reason, 'insufficient-phase');
+    assert.equal(patchRejection!.reason, 'no-native-capability');
     assert.equal(patchRejection!.requestedPhase, 'workflow');
   } finally {
     cleanup();
@@ -2572,10 +2592,10 @@ test('plan-stage challenge rejects role-ineligible forced native challenger befo
       (entry) => entry.modelId === 'qwen-2.5-coder-32b' && entry.role === 'planner',
     );
     assert.ok(rejection, 'role-ineligible native planner challenger must be reported');
-    assert.equal(rejection!.reason, 'role-ineligible');
+    assert.equal(rejection!.reason, 'no-native-capability');
     assert.equal(rejection!.requestedLaunchPhase, 'planning');
-    assert.equal(rejection!.nativeProvider, 'openrouter');
-    assert.deepEqual(rejection!.eligibleRoles, ['coding']);
+    assert.equal(rejection!.nativeProvider, undefined);
+    assert.equal(rejection!.eligibleRoles, undefined);
   } finally {
     cleanup();
   }
@@ -2603,7 +2623,7 @@ test('workflow-certified OpenRouter aliases remain challenge-eligible for review
     },
   );
   try {
-    writeCertArtifact(repoDir, 'z-ai', 'glm-5.2', 'v1', { phase: 'workflow' });
+    writeCertArtifact(repoDir, 'openrouter', 'glm-5.2', 'v2', { phase: 'workflow' });
 
     const result = pickChallengeWorkflowsWithReason(
       ['claude-opus-4-6', 'glm-5.2'],

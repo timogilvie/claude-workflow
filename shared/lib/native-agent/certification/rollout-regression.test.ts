@@ -25,6 +25,8 @@ import {
   type CertificationPhase,
   type NativeCertificationArtifact,
 } from './schema.ts';
+import { buildGlobalCertificationPath } from './loader.ts';
+import { GLOBAL_CERTIFICATION_ROOT_ENV } from './storage.ts';
 import {
   filterNativeModels,
   runScenarios,
@@ -53,6 +55,8 @@ function makeRepo(
   cleanup: () => void;
 } {
   const repoDir = mkdtempSync(join(tmpdir(), 'rollout-regression-'));
+  const previousGlobalRoot = process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
+  process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = join(repoDir, 'global-certifications');
   mkdirSync(join(repoDir, '.wavemill'), { recursive: true });
   writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
     modelRegistry: { models: modelRegistryModels },
@@ -69,6 +73,11 @@ function makeRepo(
   return {
     repoDir,
     cleanup: () => {
+      if (previousGlobalRoot === undefined) {
+        delete process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
+      } else {
+        process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = previousGlobalRoot;
+      }
       clearConfigCache(repoDir);
       rmSync(repoDir, { recursive: true, force: true });
     },
@@ -139,14 +148,14 @@ function registryWith(models: Record<string, ModelCapabilities>): ModelRegistry 
 }
 
 function writeCertArtifact(
-  repoDir: string,
+  _repoDir: string,
   provider: string,
   model: string,
   suiteVersion = SUITE_VERSION,
   overrides: Partial<NativeCertificationArtifact> = {},
 ): string {
-  const certDir = join(repoDir, '.wavemill', 'native-agent-certifications', provider, model);
-  mkdirSync(certDir, { recursive: true });
+  const artifactPath = buildGlobalCertificationPath(provider, model, suiteVersion);
+  mkdirSync(dirname(artifactPath), { recursive: true });
   const artifact: NativeCertificationArtifact = {
     schemaVersion: CERTIFICATION_SCHEMA_VERSION,
     provider,
@@ -157,20 +166,19 @@ function writeCertArtifact(
     scenarios: [{ scenarioId: 'rollout.synthetic.pass', passed: true }],
     ...overrides,
   };
-  const artifactPath = join(certDir, `${suiteVersion}.json`);
   writeFileSync(artifactPath, JSON.stringify(artifact));
   return artifactPath;
 }
 
 function writeMalformedArtifact(
-  repoDir: string,
+  _repoDir: string,
   provider: string,
   model: string,
   suiteVersion = SUITE_VERSION,
 ): void {
-  const certDir = join(repoDir, '.wavemill', 'native-agent-certifications', provider, model);
-  mkdirSync(certDir, { recursive: true });
-  writeFileSync(join(certDir, `${suiteVersion}.json`), '{"schemaVersion":');
+  const artifactPath = buildGlobalCertificationPath(provider, model, suiteVersion);
+  mkdirSync(dirname(artifactPath), { recursive: true });
+  writeFileSync(artifactPath, '{"schemaVersion":');
 }
 
 function scenario(
@@ -476,7 +484,7 @@ describe('[challenge-guardrails] rollout challenge-mode native candidate filteri
       writeCertArtifact(repoDir, 'openai', 'native-stale', SUITE_VERSION, { certifiedAt: STALE_CERTIFIED_AT });
 
       const result = pickChallengeModelsWithReason(
-        ['claude-opus-4-6', 'native-certified', 'native-uncertified', 'native-stale'],
+        ['claude-opus-4-6', 'claude-sonnet-4-6', 'native-certified', 'native-uncertified', 'native-stale'],
         {
           pairId: 'rollout-guardrails',
           issueId: 'HOK-2400',
@@ -488,14 +496,15 @@ describe('[challenge-guardrails] rollout challenge-mode native candidate filteri
         },
       );
 
-      assert.ok(result.pair, 'certified native plus non-native fallback should form a challenge pair');
-      assert.equal(result.pair.challenger.model, 'native-certified');
+      assert.ok(result.pair, 'global non-native fallback should form a challenge pair');
+      assert.equal(result.pair.challenger.model, 'claude-sonnet-4-6');
       const reasons = Object.fromEntries(
         (result.nativeCertificationRejections ?? []).map((rejection) => [rejection.modelId, rejection.reason]),
       );
       assert.deepEqual(reasons, {
-        'native-uncertified': 'missing',
-        'native-stale': 'stale',
+        'native-certified': 'no-native-capability',
+        'native-uncertified': 'no-native-capability',
+        'native-stale': 'no-native-capability',
       });
     } finally {
       cleanup();
@@ -527,7 +536,7 @@ describe('[challenge-guardrails] rollout challenge-mode native candidate filteri
         (entry) => entry.modelId === 'native-uncertified',
       );
       assert.ok(rejection, 'challenge guardrail should report the uncertified native model');
-      assert.equal(rejection.reason, 'missing');
+      assert.equal(rejection.reason, 'no-native-capability');
       assert.equal(rejection.role, 'coder');
     } finally {
       cleanup();

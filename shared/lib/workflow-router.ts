@@ -9,12 +9,12 @@
 
 import { readFileSync } from 'node:fs';
 import { buildEvalSummary, evaluateChallenge, type ChallengeRecommendation } from './challenge-scheduler.ts';
-import { getAvailableModelsForStage, getBudgetConfig, getChallengeSchedulerConfig, getDifficultyClassifierConfig, getHokusaiRouterConfig, getRouterConfig, isRouterCapabilityFilteringEnabled, loadWavemillConfig } from './config.ts';
+import { getBudgetConfig, getChallengeSchedulerConfig, getDifficultyClassifierConfig, getHokusaiRouterConfig, getRouterConfig, isRouterCapabilityFilteringEnabled, loadWavemillConfig } from './config.ts';
 import { filterDeepSeekModels, type DeepSeekPoolFilterResult } from './deepseek-provider.ts';
 import { filterOpenRouterModels, type OpenRouterPoolFilterResult } from './openrouter-provider.ts';
 import { routeViaHokusai } from './hokusai-router.ts';
 import { analyzePrompt, loadRouterConfig, recommendModel, resolveAgent, type PromptCharacteristics, type TaskType } from './model-router.ts';
-import { compareLatencyTier, getEffectiveRegistry, getLadder, hasCapabilityConstraints, isCodexChatgptLaunchEligible, isModelEnabled, listSupportedModelsForStage, type CapabilityConstraints, type LatencyTier, type RegistryTaskType } from './model-registry.ts';
+import { compareLatencyTier, getEffectiveRegistry, getLadder, hasCapabilityConstraints, isCodexChatgptLaunchEligible, isModelEnabled, type CapabilityConstraints, type LatencyTier, type RegistryTaskType } from './model-registry.ts';
 import { readQuotaSnapshot, type QuotaSnapshot } from './quota-state.ts';
 import {
   formatExplorationReasoning,
@@ -45,6 +45,7 @@ import { validateModelOrThrow } from './model-validator.ts';
 import { filterDisabledModels, isDisabledModel } from './disabled-models.ts';
 import { filterNativeModels, type RouterCertificationRejection } from './native-agent/certification/router-filter.ts';
 import { applyModelExclusions, type ModelExclusionDiagnostic } from './model-exclusions.ts';
+import { getGlobalModelRegistry, listEffectiveModelsForStage, resolveEffectiveAgent } from './effective-models.ts';
 
 export type { RouterCertificationRejection } from './native-agent/certification/router-filter.ts';
 export { STAGE_PHASE_REQUIREMENT } from './native-agent/certification/router-filter.ts';
@@ -152,7 +153,6 @@ function withChallengeRecommendation<T extends WorkflowRouteDecision>(decision: 
     routingDecision: decision,
     evalSummary: buildEvalSummary(repoDir),
     config: challengeConfig,
-    challengeModels: loadWavemillConfig(repoDir).challenge?.models,
     repoDir,
   });
 
@@ -173,14 +173,14 @@ const STAGE_ROLE_TASK_TYPE: Record<'planner' | 'coder' | 'reviewer', RegistryTas
 };
 
 function registryModelPool(repoDir?: string): string[] {
-  return Object.entries(getEffectiveRegistry(repoDir).models)
+  return Object.entries(getGlobalModelRegistry().models)
     .filter(([, capabilities]) => isModelEnabled(capabilities))
     .map(([modelId]) => modelId);
 }
 
 function registryStageModelPool(role: 'planner' | 'coder' | 'reviewer', repoDir?: string): string[] {
-  const registry = getEffectiveRegistry(repoDir);
-  return listSupportedModelsForStage(role, registry)
+  const registry = getGlobalModelRegistry();
+  return listEffectiveModelsForStage(role, { repoDir, registry }).models
     .filter((modelId) => isModelEnabled(registry.models[modelId]));
 }
 
@@ -490,10 +490,8 @@ function filterProviderPool(
 }
 
 function getModelPool(repoDir?: string): ResolvedModelPool {
-  const routerConfig = loadRouterConfig(repoDir);
   const pricingModels = Object.keys(loadConfiguredPricingTable(repoDir));
   return filterProviderPool([...new Set([
-    ...(routerConfig.models || []),
     ...pricingModels,
     ...registryModelPool(repoDir),
   ])], repoDir);
@@ -538,10 +536,10 @@ function resolveStagePool(
   const explicitPool = options?.modelsAvailable && options.modelsAvailable.length > 0
     ? options.modelsAvailable
     : role === 'planner'
-      ? options?.plannerModelsAvailable ?? getAvailableModelsForStage(routerConfig, 'planner')
+      ? options?.plannerModelsAvailable
       : role === 'coder'
-        ? options?.coderModelsAvailable ?? getAvailableModelsForStage(routerConfig, 'coder')
-        : options?.reviewerModelsAvailable ?? getAvailableModelsForStage(routerConfig, 'reviewer');
+        ? options?.coderModelsAvailable
+        : options?.reviewerModelsAvailable;
 
   validateDeepSeekPool(explicitPool, options?.repoDir);
   const configuredPool = intersectPools(basePool, explicitPool);
@@ -559,7 +557,9 @@ function resolveStagePool(
   // Native models only appear in repo-specific registry configs, so this is
   // always a no-op when repoDir is absent.
   if (options?.repoDir) {
-    const registry = getEffectiveRegistry(options.repoDir);
+    const registry = explicitPool && explicitPool.length > 0 && options.repoDir
+      ? getEffectiveRegistry(options.repoDir)
+      : getGlobalModelRegistry();
     const nativeFiltered = filterNativeModels(
       providerFiltered.models,
       role,
@@ -1569,7 +1569,6 @@ function registerWorkflowDecisionResources(
     return;
   }
   const routerConfig = loadRouterConfig(repoDir);
-  const agentMap = routerConfig.agentMap || {};
   const defaultAgent = routerConfig.defaultAgent || 'claude';
 
   for (const [phase, model] of [
@@ -1580,10 +1579,11 @@ function registerWorkflowDecisionResources(
     if (!model) {
       continue;
     }
+    const agent = resolveEffectiveAgent(model, phase, { registry: getGlobalModelRegistry() });
     const ref = registerAgentConfig({
       phase,
       model,
-      cliCmd: resolveAgent(model, agentMap, defaultAgent, repoDir, phase),
+      cliCmd: agent.ok ? agent.agent : defaultAgent,
       repoDir,
     });
     if (ref) {
@@ -1916,11 +1916,12 @@ export async function routeWorkflowAutoWithContext(
 export function summarizeWorkflowRoute(decision: WorkflowRouteDecision, repoDir?: string): string {
   const routerConfig = loadRouterConfig(repoDir);
   const defaultAgent = routerConfig.defaultAgent || 'claude';
-  const agentMap = routerConfig.agentMap || {};
-
-  const plannerAgent = decision.planner ? resolveAgent(decision.planner, agentMap, defaultAgent, repoDir, 'planning') : 'unresolved';
-  const coderAgent = decision.coder ? resolveAgent(decision.coder, agentMap, defaultAgent, repoDir, 'coding') : 'unresolved';
-  const reviewerAgent = decision.reviewer ? resolveAgent(decision.reviewer, agentMap, defaultAgent, repoDir, 'review') : 'unresolved';
+  const plannerResolution = decision.planner ? resolveEffectiveAgent(decision.planner, 'planning') : undefined;
+  const coderResolution = decision.coder ? resolveEffectiveAgent(decision.coder, 'coding') : undefined;
+  const reviewerResolution = decision.reviewer ? resolveEffectiveAgent(decision.reviewer, 'review') : undefined;
+  const plannerAgent = plannerResolution?.ok ? plannerResolution.agent : 'unresolved';
+  const coderAgent = coderResolution?.ok ? coderResolution.agent : 'unresolved';
+  const reviewerAgent = reviewerResolution?.ok ? reviewerResolution.agent : 'unresolved';
 
   const difficultySuffix = decision.signals.taskDifficulty
     ? `  difficulty=${decision.signals.taskDifficulty}`

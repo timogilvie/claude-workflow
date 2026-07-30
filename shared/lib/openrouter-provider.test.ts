@@ -83,15 +83,14 @@ describe('openrouter-provider', () => {
     assert.equal(isOpenRouterDirectAgentsEnabled({}), false);
   });
 
-  it('filterOpenRouterModels keeps allowlisted OpenRouter models when provider access is configured', () => {
+  it('filterOpenRouterModels ignores configured model allowlists when provider access is configured', () => {
     const tmp = makeTempRepo();
     try {
       writeConfig(tmp, { providers: { openrouter: { enabled: true, apiKeyEnv: 'OPENROUTER_API_KEY', models: ['qwen-3-coder'], stages: ['coder'] } } });
       process.env.OPENROUTER_API_KEY = 'sk-test';
       const filtered = filterOpenRouterModels(['qwen-3-coder', 'kimi-k2', 'gpt-5'], tmp, 'coder');
-      assert.deepEqual(filtered.models, ['qwen-3-coder', 'gpt-5']);
-      assert.equal(filtered.warnings.length, 1);
-      assert.match(filtered.warnings[0] || '', /not allowlisted/);
+      assert.deepEqual(filtered.models, ['qwen-3-coder', 'kimi-k2', 'gpt-5']);
+      assert.deepEqual(filtered.warnings, []);
     } finally {
       delete process.env.OPENROUTER_API_KEY;
       cleanUp(tmp);
@@ -119,14 +118,14 @@ describe('openrouter-provider', () => {
     }
   });
 
-  it('filterOpenRouterModels excludes models for disabled stages', () => {
+  it('filterOpenRouterModels ignores configured provider stages', () => {
     const tmp = makeTempRepo();
     try {
       writeConfig(tmp, { providers: { openrouter: { enabled: true, apiKeyEnv: 'OPENROUTER_API_KEY', models: ['qwen-3-coder'], stages: ['planner'] } } });
       process.env.OPENROUTER_API_KEY = 'sk-test';
       const filtered = filterOpenRouterModels(['qwen-3-coder'], tmp, 'coder');
-      assert.deepEqual(filtered.models, []);
-      assert.match(filtered.warnings[0] || '', /stage is not enabled/);
+      assert.deepEqual(filtered.models, ['qwen-3-coder']);
+      assert.deepEqual(filtered.warnings, []);
     } finally {
       delete process.env.OPENROUTER_API_KEY;
       cleanUp(tmp);

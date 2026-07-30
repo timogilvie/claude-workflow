@@ -5,10 +5,11 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { runTool } from '../shared/lib/tool-runner.ts';
 import {
-  buildCertificationPath,
+  buildGlobalCertificationPath,
   buildModelCertificationReport,
   CERTIFICATION_SCHEMA_VERSION,
   DEFAULT_CERTIFICATION_SUITE_VERSION,
+  GLOBAL_CERTIFICATION_ROOT_ENV,
   type CertificationPhase,
   type NativeCertificationArtifact,
 } from '../shared/lib/native-agent/certification/index.ts';
@@ -116,6 +117,8 @@ export function verifyNativeProviderGateAgreement(
   now: Date = DEFAULT_NOW,
 ): ProviderGateVerificationSummary {
   const tempRoot = mkdtempSync(join(tmpdir(), 'hok2423-provider-gate-'));
+  const previousGlobalRoot = process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
+  process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = join(tempRoot, 'global-certifications');
 
   try {
     const cases = FIXTURE_CASES.map((fixture) => runFixtureCase(tempRoot, fixture, now));
@@ -125,6 +128,11 @@ export function verifyNativeProviderGateAgreement(
       cases,
     };
   } finally {
+    if (previousGlobalRoot === undefined) {
+      delete process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
+    } else {
+      process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = previousGlobalRoot;
+    }
     rmSync(tempRoot, { recursive: true, force: true });
   }
 }
@@ -219,6 +227,12 @@ function makeRegistry(
         reasoningTier: 'standard',
         costPerMillionInputTokensUsd: 1,
         costPerMillionOutputTokensUsd: 2,
+        supportedModel: {
+          stages: ['planning', 'coding', 'review'],
+          lifecycle: 'supported',
+          launchEligible: true,
+          routingEligible: true,
+        },
         nativeCapability: {
           nativeProvider: provider,
           piTransportKind: provider === 'openai' ? 'openai-responses' : 'openai-completions',
@@ -237,13 +251,13 @@ function makeRegistry(
 }
 
 function writeArtifact(
-  repoDir: string,
+  _repoDir: string,
   provider: NativeProviderName,
   modelId: string,
   now: Date,
   overrides: Partial<NativeCertificationArtifact>,
 ): void {
-  const path = buildCertificationPath(repoDir, provider, modelId, DEFAULT_CERTIFICATION_SUITE_VERSION);
+  const path = buildGlobalCertificationPath(provider, modelId, DEFAULT_CERTIFICATION_SUITE_VERSION);
   mkdirSync(dirname(path), { recursive: true });
   const artifact: NativeCertificationArtifact = {
     schemaVersion: CERTIFICATION_SCHEMA_VERSION,
