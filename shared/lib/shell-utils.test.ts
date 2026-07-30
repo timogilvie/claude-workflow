@@ -7,7 +7,10 @@
 
 import { describe, it } from 'node:test';
 import { strict as assert } from 'node:assert';
-import { escapeShellArg, execShellCommand } from './shell-utils.ts';
+import { mkdtempSync, realpathSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { escapeShellArg, execArgvCommand, execShellCommand } from './shell-utils.ts';
 
 describe('escapeShellArg', () => {
   it('should escape simple strings without special characters', () => {
@@ -124,6 +127,47 @@ describe('execShellCommand', () => {
     // On macOS, /tmp is a symlink to /private/tmp, so check for both
     const pwd = result.trim();
     assert.ok(pwd === '/tmp' || pwd === '/private/tmp', `Expected /tmp or /private/tmp, got ${pwd}`);
+  });
+});
+
+describe('execArgvCommand', () => {
+  it('passes shell-special values literally', () => {
+    const specialArgs = [
+      'with space',
+      'app/(auth)/page.tsx',
+      'quote"double',
+      "quote'single",
+      '[tenant]/*.tsx',
+      '$HOME',
+      '`whoami`',
+      'semi;colon',
+      'pipe|value',
+      '--leading-dash.ts',
+    ];
+
+    const result = execArgvCommand(process.execPath, [
+      '-e',
+      'console.log(JSON.stringify(process.argv.slice(1)))',
+      ...specialArgs,
+    ], { encoding: 'utf-8' });
+
+    assert.deepEqual(JSON.parse(result.trim()), specialArgs);
+  });
+
+  it('respects cwd option', () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'wavemill-argv-cwd-'));
+    const result = execArgvCommand(process.execPath, [
+      '-e',
+      'console.log(process.cwd())',
+    ], { encoding: 'utf-8', cwd });
+
+    assert.equal(result.trim(), realpathSync(cwd));
+  });
+
+  it('throws on command failure', () => {
+    assert.throws(() => {
+      execArgvCommand(process.execPath, ['-e', 'process.exit(7)'], { encoding: 'utf-8' });
+    });
   });
 });
 

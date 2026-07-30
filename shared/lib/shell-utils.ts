@@ -5,8 +5,10 @@
  * Use these utilities instead of execSync(..., { shell: '/bin/bash' }) with string interpolation.
  */
 
-import { execSync } from "node:child_process";
-import type { ExecSyncOptions } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
+import type { ExecFileSyncOptions, ExecSyncOptions } from "node:child_process";
+
+export type ExecArgvCommandOptions = Omit<ExecFileSyncOptions, 'shell'>;
 
 /**
  * Escape a string for safe use as a shell argument.
@@ -67,4 +69,22 @@ export function execShellCommand(
   };
 
   return execSync(command, shellOptions);
+}
+
+/**
+ * Execute a command with literal argv and no shell.
+ *
+ * Use this helper when any executable arguments come from repository paths,
+ * package names, user input, or other dynamic values. Pipes and redirections
+ * are intentionally unsupported; compose those operations in JavaScript.
+ */
+export function execArgvCommand(
+  file: string,
+  args: readonly string[],
+  options?: ExecArgvCommandOptions
+): Buffer | string {
+  return execFileSync(file, [...args], {
+    ...options,
+    shell: false,
+  });
 }

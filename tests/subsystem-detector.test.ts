@@ -6,8 +6,10 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { detectSubsystems } from '../shared/lib/subsystem-detector.ts';
-import { resolve, dirname } from 'node:path';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve, dirname } from 'node:path';
+import { detectSubsystems, subsystemDetectorDeps } from '../shared/lib/subsystem-detector.ts';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -57,6 +59,85 @@ describe('subsystem-detector', () => {
       // Should detect subsystems using different methods
       const methods = new Set(subsystems.map(s => s.detectionMethod));
       assert.ok(methods.size > 0, 'Should use at least one detection method');
+    });
+
+    it('detects package imports with shell-special dependency names and paths', () => {
+      const repoDir = mkdtempSync(join(tmpdir(), 'wavemill-subsystem-detector-'));
+      const packageName = 'react"pkg$(touch owned);[x]*';
+      const sourceDir = 'src/app/(auth)/onboarding';
+      const sourcePath = join(repoDir, sourceDir);
+      mkdirSync(sourcePath, { recursive: true });
+      writeFileSync(join(repoDir, 'package.json'), JSON.stringify({
+        dependencies: {
+          [packageName]: '1.0.0',
+        },
+      }));
+
+      for (const file of ['page.tsx', 'with space.tsx', '[tenant]*.tsx']) {
+        writeFileSync(
+          join(sourcePath, file),
+          `import thing from '${packageName}';\nexport default thing;\n`
+        );
+      }
+
+      const subsystems = detectSubsystems(repoDir, {
+        minFiles: 1,
+        useGitAnalysis: false,
+        maxSubsystems: 10,
+        sourceDirs: ['src'],
+      });
+
+      const subsystem = subsystems.find(s => s.keyFiles.includes(`${sourceDir}/page.tsx`));
+      assert.ok(subsystem, 'Should detect subsystem containing shell-special import path');
+      assert.ok(subsystem.keyFiles.includes(`${sourceDir}/with space.tsx`));
+      assert.ok(subsystem.keyFiles.includes(`${sourceDir}/[tenant]*.tsx`));
+    });
+
+    it('passes grep package patterns and source paths as literal argv', (t) => {
+      const repoDir = mkdtempSync(join(tmpdir(), 'wavemill-subsystem-detector-argv-'));
+      const packageName = 'react"pkg$(touch owned);[x]*';
+      const sourceDir = 'src/app/(auth)';
+      const sourcePath = join(repoDir, sourceDir);
+      mkdirSync(sourcePath, { recursive: true });
+      writeFileSync(join(repoDir, 'package.json'), JSON.stringify({
+        dependencies: {
+          [packageName]: '1.0.0',
+        },
+      }));
+
+      const matchedFile = join(sourcePath, 'page.tsx');
+      writeFileSync(matchedFile, `import thing from '${packageName}';\n`);
+
+      const calls: Array<{ file: string; args: readonly string[] }> = [];
+      t.mock.method(subsystemDetectorDeps, 'execArgvCommand', (file: string, args: readonly string[]) => {
+        calls.push({ file, args });
+        return `${matchedFile}\n`;
+      });
+
+      detectSubsystems(repoDir, {
+        minFiles: 1,
+        useGitAnalysis: false,
+        maxSubsystems: 10,
+        sourceDirs: ['src'],
+      });
+
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].file, 'grep');
+      assert.deepEqual(calls[0].args, [
+        '-r',
+        '-l',
+        '-F',
+        '--include=*.ts',
+        '--include=*.js',
+        '--include=*.tsx',
+        '--include=*.jsx',
+        '-e',
+        `from '${packageName}`,
+        '-e',
+        `from "${packageName}`,
+        '--',
+        join(repoDir, 'src'),
+      ]);
     });
   });
 });
