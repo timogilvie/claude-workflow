@@ -1,11 +1,6 @@
 import type { NativeProviderName } from '../../config.ts';
-import { getModel, type ModelRegistry, type ReadOnlyNativeCapability } from '../../model-registry.ts';
-import { checkIdentity } from './validator.ts';
-import {
-  buildCertificationPath,
-  checkSharedCertificationEligibility,
-} from './loader.ts';
-import { resolveCertificationStorageIdentity } from './identity.ts';
+import type { ModelRegistry, ReadOnlyNativeCapability } from '../../model-registry.ts';
+import { projectEffectiveModel, type EffectiveModelReasonCode } from '../../effective-models.ts';
 import type {
   CertificationPhase,
   NativeCertificationArtifact,
@@ -69,15 +64,25 @@ export function evaluateNativeProviderGate(input: NativeGateInput): NativeGateDe
     });
   }
 
-  const nativeCapability = getModel(input.registry, input.modelId)?.nativeCapability;
-  const nativeProvider = nativeCapability?.nativeProvider;
-  const capability = nativeCapability?.readOnlyNative ?? 'unregistered';
+  const projection = projectEffectiveModel({
+    modelId: input.modelId,
+    stage: phaseToStage(input.requiredPhase ?? 'read-only'),
+    useCase: input.mode === 'certification' ? 'certification' : 'provider-gate',
+    registry: input.registry,
+    repoDir: input.repoDir,
+    now: input.now,
+    apiKeyPresent: input.apiKeyPresent,
+    apiKeyEnv: input.apiKeyEnv,
+    requireNative: true,
+    requireCertification: input.mode !== 'certification',
+  });
 
+  const nativeProvider = projection.identity.nativeProvider;
   if (!nativeProvider) {
     return rejectDecision({
       modelId: input.modelId,
       reason: 'unregistered_model',
-      nativeCapability: capability,
+      nativeCapability: projection.registry.nativeCapability ?? 'unregistered',
     });
   }
 
@@ -98,64 +103,19 @@ export function evaluateNativeProviderGate(input: NativeGateInput): NativeGateDe
     throw new Error('evaluateNativeProviderGate: repoDir is required in task mode');
   }
 
-  const requiredSuiteVersion = nativeCapability?.certification?.certificationSuiteVersion?.trim();
-  if (!requiredSuiteVersion) {
+  if (!projection.eligible) {
+    const artifact = projection.certification.artifact;
     return rejectDecision({
       modelId: input.modelId,
-      reason: 'wrong_suite',
-      nativeCapability: capability,
-    });
-  }
-
-  const storageIdentity = resolveCertificationStorageIdentity(nativeProvider, input.modelId);
-  const artifactPath = buildCertificationPath(
-    input.repoDir,
-    nativeProvider,
-    input.modelId,
-    requiredSuiteVersion,
-  );
-  const eligibility = checkSharedCertificationEligibility(
-    input.repoDir,
-    nativeProvider,
-    input.modelId,
-    requiredSuiteVersion,
-    input.requiredPhase,
-    input.now,
-  );
-
-  if (!eligibility.eligible) {
-    const artifact = eligibility.artifact;
-    return rejectDecision({
-      modelId: input.modelId,
-      reason: mapEligibilityReason(eligibility.reason),
-      nativeCapability: capability,
+      reason: mapProjectionReason(projection.primaryReason),
+      nativeCapability: projection.registry.nativeCapability ?? 'unregistered',
       requiredPhase: input.requiredPhase,
-      foundPhase: artifact?.phase,
-      requiredSuiteVersion,
-      foundSuiteVersion: artifact?.suiteVersion,
-      certifiedAt: artifact?.certifiedAt,
-      artifactPath: eligibility.artifactPath ?? artifactPath,
-      artifactScope: eligibility.storageScope,
-    });
-  }
-
-  const identityError = checkIdentity(
-    eligibility.artifact,
-    storageIdentity.provider,
-    storageIdentity.model,
-  );
-  if (identityError) {
-    return rejectDecision({
-      modelId: input.modelId,
-      reason: 'missing_artifact',
-      nativeCapability: capability,
-      requiredPhase: input.requiredPhase,
-      foundPhase: eligibility.artifact.phase,
-      requiredSuiteVersion,
-      foundSuiteVersion: eligibility.artifact.suiteVersion,
-      certifiedAt: eligibility.artifact.certifiedAt,
-      artifactPath: eligibility.artifactPath ?? artifactPath,
-      artifactScope: eligibility.storageScope,
+      foundPhase: projection.certification.certifiedPhase,
+      requiredSuiteVersion: projection.certification.requiredSuiteVersion,
+      foundSuiteVersion: projection.certification.foundSuiteVersion,
+      certifiedAt: projection.certification.certifiedAt,
+      artifactPath: projection.certification.artifactPath,
+      artifactScope: projection.certification.artifactScope,
     });
   }
 
@@ -163,25 +123,44 @@ export function evaluateNativeProviderGate(input: NativeGateInput): NativeGateDe
     ok: true,
     modelId: input.modelId,
     nativeProvider,
-    storagePath: eligibility.artifactPath ?? artifactPath,
-    artifact: eligibility.artifact,
+    storagePath: projection.certification.artifactPath,
+    artifact: projection.certification.artifact,
     certified: true,
   };
 }
 
-function mapEligibilityReason(reason: 'missing' | 'malformed' | 'wrong-version' | 'stale' | 'phase-insufficient' | 'scenario-failure'): NativeGateRejectReason {
+function phaseToStage(phase: CertificationPhase): 'planner' | 'coder' | 'reviewer' {
+  if (phase === 'workflow') return 'planner';
+  if (phase === 'patch') return 'coder';
+  return 'reviewer';
+}
+
+function mapProjectionReason(reason: EffectiveModelReasonCode | undefined): NativeGateRejectReason {
   switch (reason) {
-    case 'missing':
+    case 'missing_api_key':
+    case 'provider_disabled':
+    case 'provider_stage_disabled':
+    case 'provider_model_not_allowed':
+    case 'direct_agents_disabled':
+      return 'missing_api_key';
+    case 'missing_artifact':
       return 'missing_artifact';
-    case 'malformed':
+    case 'malformed_artifact':
       return 'malformed_artifact';
-    case 'wrong-version':
+    case 'wrong_identity':
+      return 'missing_artifact';
+    case 'wrong_suite':
       return 'wrong_suite';
-    case 'stale':
+    case 'stale_artifact':
       return 'stale_artifact';
-    case 'phase-insufficient':
-    case 'scenario-failure':
+    case 'insufficient_phase':
+    case 'scenario_failure':
       return 'insufficient_phase';
+    case 'unregistered_model':
+    case 'no_native_capability':
+      return 'unregistered_model';
+    default:
+      return 'missing_artifact';
   }
 }
 

@@ -35,6 +35,7 @@ import {
 } from './native-agent/coding-certification.ts';
 import { PATCH_CODING_SMOKE_SUITE_REVISION } from './native-agent/smoke.ts';
 import { evaluateNativeProviderGate } from './native-agent/certification/eligibility-gate.ts';
+import { buildGlobalCertificationPath } from './native-agent/certification/index.ts';
 
 let passed = 0;
 let failed = 0;
@@ -276,6 +277,7 @@ function writeNativeChallengeRepo(options: {
   enablePatchCoding?: boolean;
 }): string {
   const repoDir = mkdtempSync(join(tmpdir(), 'challenge-native-'));
+  process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT = join(repoDir, 'global-certifications');
   const suiteVersion = options.suiteVersion ?? 'v-test';
   const storageIdentity = options.provider === 'openrouter'
     ? (() => {
@@ -284,7 +286,6 @@ function writeNativeChallengeRepo(options: {
         return provider && model ? { provider, model } : { provider: options.provider, model: options.model };
       })()
     : { provider: options.provider, model: options.model };
-  mkdirSync(join(repoDir, '.wavemill', 'native-agent-certifications', storageIdentity.provider, storageIdentity.model), { recursive: true });
   writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
     nativeAgent: {
       enabled: true,
@@ -334,8 +335,10 @@ function writeNativeChallengeRepo(options: {
       },
     },
   }));
+  const certPath = buildGlobalCertificationPath(storageIdentity.provider, storageIdentity.model, suiteVersion);
+  mkdirSync(dirname(certPath), { recursive: true });
   writeFileSync(
-    join(repoDir, '.wavemill', 'native-agent-certifications', storageIdentity.provider, storageIdentity.model, `${suiteVersion}.json`),
+    certPath,
     JSON.stringify({
       schemaVersion: CERTIFICATION_SCHEMA_VERSION,
       provider: storageIdentity.provider,
@@ -1745,6 +1748,9 @@ function makeNativeTestRepo(
   cleanup: () => void;
 } {
   const repoDir = mkdtempSync(join(tmpdir(), 'challenge-native-test-'));
+  const previousRoot = process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT;
+  const previousEnv = new Map<string, string | undefined>();
+  process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT = join(repoDir, 'global-certifications');
   mkdirSync(join(repoDir, '.wavemill'), { recursive: true });
   writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
     modelRegistry: { models: modelRegistryModels },
@@ -1757,6 +1763,10 @@ function makeNativeTestRepo(
     writePatchCodingCertification(repoDir, CERT_DATE_FRESH);
   }
   if (opts.env && Object.keys(opts.env).length > 0) {
+    for (const [key, value] of Object.entries(opts.env)) {
+      previousEnv.set(key, process.env[key]);
+      process.env[key] = value;
+    }
     writeFileSync(
       join(repoDir, '.env'),
       `${Object.entries(opts.env).map(([key, value]) => `${key}=${value}`).join('\n')}\n`,
@@ -1767,6 +1777,18 @@ function makeNativeTestRepo(
     repoDir,
     cleanup: () => {
       clearConfigCache(repoDir);
+      if (previousRoot === undefined) {
+        delete process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT;
+      } else {
+        process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT = previousRoot;
+      }
+      for (const [key, value] of previousEnv) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
       rmSync(repoDir, { recursive: true, force: true });
     },
   };
@@ -1782,8 +1804,8 @@ function writeCertArtifact(
 ): void {
   const openrouterId = provider === 'openrouter' ? resolveOpenRouterModelId(model) : null;
   const [storageProvider, storageModel] = openrouterId?.split('/') ?? [provider, model];
-  const certDir = join(repoDir, '.wavemill', 'native-agent-certifications', storageProvider!, storageModel!);
-  mkdirSync(certDir, { recursive: true });
+  const certPath = buildGlobalCertificationPath(storageProvider!, storageModel!, suiteVersion);
+  mkdirSync(dirname(certPath), { recursive: true });
   const artifact = {
     schemaVersion: CERTIFICATION_SCHEMA_VERSION,
     provider: storageProvider,
@@ -1794,13 +1816,13 @@ function writeCertArtifact(
     scenarios: [{ scenarioId: 's1', passed: true }],
     ...overrides,
   };
-  writeFileSync(join(certDir, `${suiteVersion}.json`), JSON.stringify(artifact));
+  writeFileSync(certPath, JSON.stringify(artifact));
 }
 
 function certArtifactPath(repoDir: string, provider: string, model: string, suiteVersion: string): string {
   const openrouterId = provider === 'openrouter' ? resolveOpenRouterModelId(model) : null;
   const [storageProvider, storageModel] = openrouterId?.split('/') ?? [provider, model];
-  return join(repoDir, '.wavemill', 'native-agent-certifications', storageProvider!, storageModel!, `${suiteVersion}.json`);
+  return buildGlobalCertificationPath(storageProvider!, storageModel!, suiteVersion);
 }
 
 /** Build a minimal native model registry entry */
@@ -1862,6 +1884,7 @@ function makeHok2569Repo(
       },
       env: {
         HOK_2569_OPENROUTER_KEY: 'test-openrouter-key',
+        OPENROUTER_DIRECT_AGENTS_ENABLED: 'true',
       },
     },
   );

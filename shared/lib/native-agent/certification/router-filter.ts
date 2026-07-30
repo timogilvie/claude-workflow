@@ -15,15 +15,11 @@
  * @module native-agent/certification/router-filter
  */
 
-import {
-  evaluateNativeProviderGate,
-  type NativeGateRejectReason,
-} from './eligibility-gate.ts';
-import { loadCertification } from './loader.ts';
 import type { CertificationPhase } from './schema.ts';
-import { getNativeAgentConfig, type NativeAgentAllowedPhase } from '../../config.ts';
+import type { NativeAgentAllowedPhase } from '../../config.ts';
 import type { ModelRegistry, NativeProviderName } from '../../model-registry.ts';
-import { resolveLaunchPriorityModel, type RoleEligibility } from '../../openrouter-catalog.ts';
+import type { RoleEligibility } from '../../openrouter-catalog.ts';
+import { projectRouterCandidates } from '../../effective-models.ts';
 
 /** Router role names as used in workflow-router.ts */
 export type RouterRole = 'planner' | 'coder' | 'reviewer';
@@ -98,59 +94,10 @@ export interface RouterCertificationRejection {
   requiredSuiteVersion: string;
   /** Normalized rejection reason */
   reason: RouterCertificationRejectionReason;
-}
-
-function mapGateReason(reason: NativeGateRejectReason): RouterCertificationRejectionReason {
-  switch (reason) {
-    case 'missing_api_key':
-    case 'missing_artifact':
-      return 'missing';
-    case 'malformed_artifact':
-      return 'malformed';
-    case 'unregistered_model':
-      return 'no-native-capability';
-    case 'wrong_suite':
-      return 'wrong-suite';
-    case 'stale_artifact':
-      return 'stale';
-    case 'insufficient_phase':
-      return 'insufficient-phase';
-  }
-}
-
-function launchPriorityRoleEligibility(modelId: string, phase: RoleEligibility): {
-  eligible: boolean;
-  eligibleRoles?: readonly RoleEligibility[];
-} {
-  const launchPriorityModel = resolveLaunchPriorityModel(modelId);
-  if (!launchPriorityModel) {
-    return { eligible: true };
-  }
-  return {
-    eligible: launchPriorityModel.roleEligibility.includes(phase),
-    eligibleRoles: launchPriorityModel.roleEligibility,
-  };
-}
-
-function nativeAgentPhaseEligibility(role: RouterRole, repoDir: string): {
-  eligible: boolean;
-  allowedNativeAgentPhases?: readonly NativeAgentAllowedPhase[];
-} {
-  const requestedLaunchPhase = ROUTER_ROLE_LAUNCH_PHASE[role];
-  if (requestedLaunchPhase === 'coding') {
-    return { eligible: true };
-  }
-
-  const config = getNativeAgentConfig(repoDir);
-  if (config.enabled !== true) {
-    return { eligible: true };
-  }
-
-  const allowedNativeAgentPhases = config.allowedPhases ?? [];
-  return {
-    eligible: allowedNativeAgentPhases.includes(requestedLaunchPhase as NativeAgentAllowedPhase),
-    allowedNativeAgentPhases,
-  };
+  /** Actual artifact path used for the lookup, when available */
+  artifactPath?: string;
+  /** Certification artifact scope. Normal runtime selection is global-only. */
+  artifactScope?: 'global' | 'legacy-repo';
 }
 
 /**
@@ -177,136 +124,6 @@ export function filterNativeModels(
   repoDir: string,
   now?: Date,
 ): { eligible: string[]; rejected: RouterCertificationRejection[] } {
-  const requiredPhase = STAGE_PHASE_REQUIREMENT[role];
-  const requestedLaunchPhase = ROUTER_ROLE_LAUNCH_PHASE[role];
-  const eligible: string[] = [];
-  const rejected: RouterCertificationRejection[] = [];
-
-  for (const modelId of models) {
-    const capabilities = registry.models[modelId];
-    const nativeCapability = capabilities?.nativeCapability;
-
-    // Hosted model without native metadata — pass through unchanged.
-    // OpenRouter/deepseek shim entries must fail closed until they carry
-    // native capability metadata and certification.
-    if (!nativeCapability) {
-      const registeredAgent = capabilities?.agent as string | undefined;
-      if (registeredAgent === 'claude-openrouter' || registeredAgent === 'claude-deepseek') {
-        rejected.push({
-          modelId,
-          role,
-          requestedLaunchPhase,
-          requestedPhase: requiredPhase,
-          nativeCapability: 'unregistered',
-          requiredSuiteVersion: '',
-          reason: 'no-native-capability',
-        });
-        continue;
-      }
-      eligible.push(modelId);
-      continue;
-    }
-
-    const readOnlyNative = nativeCapability.readOnlyNative;
-    const certMeta = nativeCapability.certification;
-    const nativeProvider = nativeCapability.nativeProvider;
-
-    const roleEligibility = launchPriorityRoleEligibility(modelId, requestedLaunchPhase);
-    if (!roleEligibility.eligible) {
-      rejected.push({
-        modelId,
-        role,
-        requestedLaunchPhase,
-        requestedPhase: requiredPhase,
-        nativeCapability: readOnlyNative,
-        ...(nativeProvider ? { nativeProvider } : {}),
-        ...(roleEligibility.eligibleRoles ? { eligibleRoles: roleEligibility.eligibleRoles } : {}),
-        requiredSuiteVersion: certMeta?.certificationSuiteVersion ?? '',
-        reason: 'role-ineligible',
-      });
-      continue;
-    }
-
-    const nativeAgentPhase = nativeAgentPhaseEligibility(role, repoDir);
-    if (!nativeAgentPhase.eligible) {
-      rejected.push({
-        modelId,
-        role,
-        requestedLaunchPhase,
-        requestedPhase: requiredPhase,
-        nativeCapability: readOnlyNative,
-        ...(nativeProvider ? { nativeProvider } : {}),
-        ...(nativeAgentPhase.allowedNativeAgentPhases
-          ? { allowedNativeAgentPhases: nativeAgentPhase.allowedNativeAgentPhases }
-          : {}),
-        requiredSuiteVersion: certMeta?.certificationSuiteVersion ?? '',
-        reason: 'phase-not-allowed',
-      });
-      continue;
-    }
-
-    // Missing registry metadata or provider — fail closed as `missing`
-    if (!certMeta || !nativeProvider) {
-      rejected.push({
-        modelId,
-        role,
-        requestedLaunchPhase,
-        requestedPhase: requiredPhase,
-        nativeCapability: readOnlyNative,
-        ...(nativeProvider ? { nativeProvider } : {}),
-        requiredSuiteVersion: certMeta?.certificationSuiteVersion ?? '',
-        reason: 'missing',
-      });
-      continue;
-    }
-
-    const loaded = loadCertification(
-      repoDir,
-      nativeProvider,
-      modelId,
-      certMeta.certificationSuiteVersion,
-    );
-
-    if (!loaded.ok) {
-      rejected.push({
-        modelId,
-        role,
-        requestedLaunchPhase,
-        requestedPhase: requiredPhase,
-        nativeCapability: readOnlyNative,
-        nativeProvider,
-        requiredSuiteVersion: certMeta.certificationSuiteVersion,
-        reason: loaded.reason,
-      });
-      continue;
-    }
-    const decision = evaluateNativeProviderGate({
-      modelId,
-      mode: 'task',
-      requiredPhase,
-      registry,
-      repoDir,
-      apiKeyPresent: true,
-      apiKeyEnv: 'ROUTER_FILTER_UNUSED',
-      now,
-    });
-
-    if (decision.ok) {
-      eligible.push(modelId);
-    } else {
-      rejected.push({
-        modelId,
-        role,
-        requestedLaunchPhase,
-        requestedPhase: requiredPhase,
-        certifiedPhase: decision.foundPhase,
-        nativeCapability: readOnlyNative,
-        nativeProvider,
-        requiredSuiteVersion: certMeta.certificationSuiteVersion,
-        reason: mapGateReason(decision.reason),
-      });
-    }
-  }
-
-  return { eligible, rejected };
+  const result = projectRouterCandidates({ models, role, registry, repoDir, now });
+  return { eligible: result.eligible, rejected: result.rejected };
 }

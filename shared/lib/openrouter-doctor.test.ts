@@ -8,16 +8,28 @@ import { diagnoseOpenRouter } from './openrouter-doctor.ts';
 import {
   CERTIFICATION_SCHEMA_VERSION,
   DEFAULT_CERTIFICATION_SUITE_VERSION,
-  buildCertificationPath,
+  buildGlobalCertificationPath,
   resolveCertificationStorageIdentity,
 } from './native-agent/certification/index.ts';
 
+const previousGlobalRoots = new Map<string, string | undefined>();
+
 function makeRepoDir(): string {
-  return mkdtempSync(join(tmpdir(), 'openrouter-doctor-'));
+  const repoDir = mkdtempSync(join(tmpdir(), 'openrouter-doctor-'));
+  previousGlobalRoots.set(repoDir, process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT);
+  process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT = join(repoDir, 'global-certifications');
+  return repoDir;
 }
 
 function cleanup(repoDir: string): void {
   clearConfigCache();
+  const previousRoot = previousGlobalRoots.get(repoDir);
+  previousGlobalRoots.delete(repoDir);
+  if (previousRoot === undefined) {
+    delete process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT;
+  } else {
+    process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT = previousRoot;
+  }
   rmSync(repoDir, { recursive: true, force: true });
 }
 
@@ -88,7 +100,7 @@ function writeOpenRouterCert(
   modelId: string,
   phase: 'read-only' | 'patch' | 'workflow' = 'workflow',
 ): string {
-  const path = buildCertificationPath(repoDir, 'openrouter', modelId, DEFAULT_CERTIFICATION_SUITE_VERSION);
+  const path = buildGlobalCertificationPath('openrouter', modelId, DEFAULT_CERTIFICATION_SUITE_VERSION);
   mkdirSync(dirname(path), { recursive: true });
   const identity = resolveCertificationStorageIdentity('openrouter', modelId);
   writeFileSync(path, JSON.stringify({

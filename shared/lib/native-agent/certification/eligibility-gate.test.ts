@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 import type { ModelRegistry } from '../../model-registry.ts';
 import {
-  buildCertificationPath,
+  buildGlobalCertificationPath,
   CERTIFICATION_SCHEMA_VERSION,
   evaluateNativeProviderGate,
   type CertificationPhase,
@@ -49,9 +49,41 @@ function makeRegistry(modelId: string, provider: 'openai' | 'openrouter', suiteV
 
 function makeRepo(): { repoDir: string; cleanup: () => void } {
   const repoDir = mkdtempSync(join(tmpdir(), 'eligibility-gate-'));
+  const previousRoot = process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT;
+  const previousOpenRouterKey = process.env.OPENROUTER_API_KEY;
+  const previousDirectAgents = process.env.OPENROUTER_DIRECT_AGENTS_ENABLED;
+  process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT = join(repoDir, 'global-certifications');
+  process.env.OPENROUTER_API_KEY = 'test-key';
+  process.env.OPENROUTER_DIRECT_AGENTS_ENABLED = 'true';
+  writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
+    providers: {
+      openrouter: {
+        enabled: true,
+        apiKeyEnv: 'OPENROUTER_API_KEY',
+        stages: ['planner', 'coder', 'reviewer'],
+      },
+    },
+  }));
   return {
     repoDir,
-    cleanup: () => rmSync(repoDir, { recursive: true, force: true }),
+    cleanup: () => {
+      if (previousRoot === undefined) {
+        delete process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT;
+      } else {
+        process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT = previousRoot;
+      }
+      if (previousOpenRouterKey === undefined) {
+        delete process.env.OPENROUTER_API_KEY;
+      } else {
+        process.env.OPENROUTER_API_KEY = previousOpenRouterKey;
+      }
+      if (previousDirectAgents === undefined) {
+        delete process.env.OPENROUTER_DIRECT_AGENTS_ENABLED;
+      } else {
+        process.env.OPENROUTER_DIRECT_AGENTS_ENABLED = previousDirectAgents;
+      }
+      rmSync(repoDir, { recursive: true, force: true });
+    },
   };
 }
 
@@ -81,7 +113,7 @@ function writeArtifact(
   suiteVersion: string,
   overrides: Partial<NativeCertificationArtifact> = {},
 ): string {
-  const path = buildCertificationPath(repoDir, provider, modelId, suiteVersion);
+  const path = buildGlobalCertificationPath(provider, modelId, suiteVersion);
   mkdirSync(dirname(path), { recursive: true });
   const openRouterIdentity = provider === 'openrouter'
     ? (modelId.includes('/') ? modelId.split('/') : ['z-ai', modelId])
@@ -179,7 +211,7 @@ describe('evaluateNativeProviderGate', () => {
 
       assert.equal(decision.ok, false);
       assert.equal(decision.reason, 'missing_artifact');
-      assert.match(decision.artifactPath ?? '', /\.wavemill\/native-agent-certifications\/openai\/gpt-4o\/v1\.json$/);
+      assert.match(decision.artifactPath ?? '', /global-certifications\/openai\/gpt-4o\/v1\.json$/);
     } finally {
       cleanup();
     }
@@ -189,7 +221,7 @@ describe('evaluateNativeProviderGate', () => {
     const { repoDir, cleanup } = makeRepo();
     try {
       const registry = makeRegistry('gpt-4o', 'openai');
-      const path = buildCertificationPath(repoDir, 'openai', 'gpt-4o', 'v1');
+      const path = buildGlobalCertificationPath('openai', 'gpt-4o', 'v1');
       mkdirSync(dirname(path), { recursive: true });
       writeFileSync(path, 'not json', 'utf8');
 

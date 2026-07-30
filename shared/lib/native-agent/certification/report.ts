@@ -13,7 +13,7 @@ import {
   type CertificationPhase,
   type NativeCertificationArtifact,
 } from './schema.ts';
-import { evaluateEligibility, loadCertification, loadSharedCertificationWithLegacyFallback } from './loader.ts';
+import { evaluateEligibility, loadCertification, loadGlobalCertification } from './loader.ts';
 import { STAGE_PHASE_REQUIREMENT, type RouterRole } from './router-filter.ts';
 import { getEffectiveRegistry, type ModelRegistry, type ReadOnlyNativeCapability } from '../../model-registry.ts';
 import { resolveCertificationStorageIdentity } from './identity.ts';
@@ -184,10 +184,11 @@ export function buildModelCertificationReport(
       continue;
     }
 
-    // Try loading the on-disk artifact
+    // Try loading the global on-disk artifact. Explicit injected loaders are
+    // reserved for compatibility tests and migration tooling.
     const loaded = opts.loadCertificationFn
       ? loadCertFn(repoDir, nativeCapability.nativeProvider, modelId, certMeta.certificationSuiteVersion)
-      : loadSharedCertificationWithLegacyFallback(repoDir, nativeCapability.nativeProvider, modelId, certMeta.certificationSuiteVersion);
+      : loadGlobalCertification(nativeCapability.nativeProvider, modelId, certMeta.certificationSuiteVersion);
 
     if (!loaded.ok) {
       rows.push({

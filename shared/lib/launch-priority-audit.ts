@@ -1,7 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { CertificationPhase } from './native-agent/certification/schema.ts';
-import { checkCertificationEligibility } from './native-agent/certification/loader.ts';
 import type {
   LaunchPriorityModel,
   ModelStatus,
@@ -17,6 +16,7 @@ import { readJsonlFile } from './jsonl-utils.ts';
 import { getEffectiveRegistry, getModel } from './model-registry.ts';
 import type { QuotaStatus } from './quota-state.ts';
 import { getModelStatus } from './quota-state.ts';
+import { projectEffectiveModel } from './effective-models.ts';
 
 export type LaunchPriorityRole = RoleEligibility;
 export type LaunchPriorityStatus = ModelStatus;
@@ -345,22 +345,22 @@ export function auditLaunchPriorityCoverage(options: AuditOptions = {}): LaunchP
   const quotaStatus = options.quotaStatus ?? ((modelId: string) => getModelStatus(modelId, options.repoDir));
   const costOfModel = options.costOfModel ?? defaultCostOfModel;
   const checkNativeCertification = options.checkNativeCertification
-    ?? ((provider: string, model: string, role: LaunchPriorityRole) => {
+    ?? ((_provider: string, model: string, role: LaunchPriorityRole) => {
       const capability = getModel(registry, model)?.nativeCapability;
-      const suiteVersion = capability?.certification?.certificationSuiteVersion;
-      if (!options.repoDir || !suiteVersion) {
+      if (!capability || !options.repoDir) {
         return { eligible: true };
       }
-      const result = checkCertificationEligibility(
-        options.repoDir,
-        provider,
-        model,
-        suiteVersion,
-        phaseForRole(role),
-      );
-      return result.eligible
+      const projection = projectEffectiveModel({
+        modelId: model,
+        stage: role,
+        useCase: 'audit',
+        registry,
+        repoDir: options.repoDir,
+        now: options.now,
+      });
+      return projection.eligible
         ? { eligible: true }
-        : { eligible: false, reason: result.reason };
+        : { eligible: false, reason: projection.primaryReason };
     });
 
   for (const record of records) {

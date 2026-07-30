@@ -14,9 +14,9 @@ import { listVariedRoutingDimensions, routingMetaFromChallengeEntry } from './ch
 export { routeChangedMaterially } from './route-artifact.ts';
 import { routeChangedMaterially, type RouteArtifactSnapshot } from './route-artifact.ts';
 import { routeWorkflow, type WorkflowRouteDecision } from './workflow-router.ts';
-import { filterNativeModels, type RouterCertificationRejection, type RouterRole } from './native-agent/certification/router-filter.ts';
-import { isPatchCodingEnabled } from './native-agent/coding-gate.ts';
+import { type RouterCertificationRejection, type RouterRole } from './native-agent/certification/router-filter.ts';
 import { applyModelExclusions, type ModelExclusionDiagnostic } from './model-exclusions.ts';
+import { projectChallengeCandidates } from './effective-models.ts';
 
 export type ChallengeRole = 'primary' | 'challenger';
 export type ChallengeDecisionSource = 'bootstrap' | 'expanded' | 'preserved';
@@ -246,46 +246,6 @@ function uniqueNonEmpty(values: string[]): string[] {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
 }
 
-function filterImplementationLaunchableNativeCandidates(
-  pool: string[],
-  repoDir: string,
-  now?: Date,
-): { models: string[]; rejections: ChallengeNativeRejection[] } {
-  const registry = getEffectiveRegistry(repoDir);
-  const gate = isPatchCodingEnabled(repoDir);
-  const models: string[] = [];
-  const rejections: ChallengeNativeRejection[] = [];
-
-  for (const modelId of pool) {
-    const nativeCapability = registry.models[modelId]?.nativeCapability;
-    if (!nativeCapability) {
-      models.push(modelId);
-      continue;
-    }
-
-    if (gate.enabled) {
-      models.push(modelId);
-      continue;
-    }
-
-    rejections.push({
-      modelId,
-      role: 'coder',
-      requestedLaunchPhase: 'coding',
-      requestedPhase: 'patch',
-      nativeCapability: nativeCapability.readOnlyNative,
-      ...(nativeCapability.nativeProvider ? { nativeProvider: nativeCapability.nativeProvider } : {}),
-      requiredSuiteVersion: nativeCapability.certification?.certificationSuiteVersion ?? '',
-      reason: 'no-native-capability',
-    });
-  }
-
-  return {
-    models,
-    rejections,
-  };
-}
-
 /**
  * Filter a model pool for native certification eligibility at the given challenge stage.
  *
@@ -303,8 +263,13 @@ function filterNativeChallengeCandidates(
     return { models: pool, rejections: [] };
   }
   const registry = getEffectiveRegistry(repoDir);
-  const role = STAGE_TO_ROLE[stage];
-  const { eligible, rejected } = filterNativeModels(uniqueNonEmpty(pool), role, registry, repoDir, now);
+  const { eligible, rejected } = projectChallengeCandidates({
+    models: uniqueNonEmpty(pool),
+    stage,
+    registry,
+    repoDir,
+    now,
+  });
   return { models: eligible, rejections: rejected };
 }
 
@@ -316,15 +281,12 @@ function filterEligibleChallengeCandidates(
 ): { models: string[]; rejections: ChallengeNativeRejection[]; exclusions: ModelExclusionDiagnostic[] } {
   const exclusionFiltered = applyModelExclusions(pool, stage, repoDir);
   const { models: nativeEligible, rejections } = filterNativeChallengeCandidates(exclusionFiltered.models, stage, repoDir, now);
-  const implementationLaunchable = repoDir && stage === 'implementation'
-    ? filterImplementationLaunchableNativeCandidates(nativeEligible, repoDir, now)
-    : { models: nativeEligible, rejections: [] };
   const openRouterEligible = repoDir
-    ? filterOpenRouterModels(implementationLaunchable.models, repoDir, STAGE_TO_ROLE[stage]).models
-    : implementationLaunchable.models;
+    ? filterOpenRouterModels(nativeEligible, repoDir, STAGE_TO_ROLE[stage]).models
+    : nativeEligible;
   return {
     models: filterDisabledModels(uniqueNonEmpty(openRouterEligible)),
-    rejections: [...rejections, ...implementationLaunchable.rejections],
+    rejections,
     exclusions: exclusionFiltered.exclusions,
   };
 }

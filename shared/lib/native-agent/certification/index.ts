@@ -52,6 +52,26 @@ export {
 } from './identity.ts';
 export { evaluateNativeProviderGate } from './eligibility-gate.ts';
 
+export type {
+  EffectiveModelCertification,
+  EffectiveModelIdentity,
+  EffectiveModelPolicy,
+  EffectiveModelProjection,
+  EffectiveModelProviderReadiness,
+  EffectiveModelReason,
+  EffectiveModelReasonCode,
+  EffectiveModelStage,
+  EffectiveModelUseCase,
+  ProjectEffectiveModelsOptions,
+} from '../../effective-models.ts';
+
+export {
+  projectChallengeCandidates,
+  projectEffectiveModel,
+  projectEffectiveModels,
+  projectRouterCandidates,
+} from '../../effective-models.ts';
+
 export type { ReadResult, StoreError, StoreErrorCode } from './store.ts';
 
 export {
