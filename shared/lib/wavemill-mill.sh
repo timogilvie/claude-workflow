@@ -6401,6 +6401,44 @@ _stop_task_recovery_contract_unavailable() {
   fi
 }
 
+# Prepare the runtime surfaces that make a recovered phase observable before
+# launching its agent. A recovery must never start work that the dashboard and
+# lifecycle records cannot represent; callers fail the task closed on error.
+_prepare_recovery_phase_launch() {
+  local issue="$1" slug="$2" phase="$3" feature_dir="$4" wt_dir="$5"
+  local agent="$6" model="$7" contract_payload="$8" lifecycle_phase="${9:-}"
+  local win contract_title resolved_window
+
+  if ! write_stage_result_with_history "$feature_dir" "$phase" "running" "$agent" "$model" "Recovery replay of persisted execution contract" \
+    || ! jq -e --arg phase "$phase" '.stage == $phase and .status == "running"' "$feature_dir/.${phase}-result.json" >/dev/null 2>&1; then
+    log_warn "$issue → failed to record recovered $phase stage"
+    return 1
+  fi
+
+  if ! configure_agent_hooks "$agent" "$wt_dir" "$REPO_DIR"; then
+    log_warn "$issue → failed to configure hooks for recovered $phase stage"
+    return 1
+  fi
+
+  if declare -F wavemill_hook_write >/dev/null 2>&1; then
+    wavemill_hook_write "working" "" "" "$agent" || true
+  fi
+
+  if ! win="$(_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir" "$lifecycle_phase")" || [[ -z "$win" ]]; then
+    log_warn "$issue → failed to restore tmux window for $phase stage"
+    return 1
+  fi
+  resolved_window="$(tmux display-message -p -t "$(_tmux_target_join "$SESSION" "$win")" '#{window_id}' 2>/dev/null || true)"
+  if [[ -z "$resolved_window" ]]; then
+    log_warn "$issue → restored tmux window could not be verified for $phase stage"
+    return 1
+  fi
+
+  contract_title="$(printf '%s' "$contract_payload" | jq -r '[.stageRole, .agent, .model] | map(select(type == "string" and length > 0)) | join(" · ")' 2>/dev/null || true)"
+  [[ -n "$contract_title" ]] && wavemill_set_tmux_pane_title "$(_tmux_target_join "$SESSION" "$win")" "$contract_title" || true
+  return 0
+}
+
 # Relaunch an in-flight task's phase agent when its tmux window has been lost
 # (typically after a `r`/`a` session resume, which kills the prior tmux session
 # before restarting the monitor).
@@ -6457,7 +6495,7 @@ _restore_inflight_task_window_if_missing() {
   fi
 
   contract_payload="$(printf '%s' "$contract_json" | jq -c '.contract' 2>/dev/null || echo '{}')"
-  local model agent_cmd provider depth rc=0 win contract_title
+  local model agent_cmd provider depth rc=0
   model="$(printf '%s' "$contract_payload" | jq -r '.model // empty')"
   agent_cmd="$(printf '%s' "$contract_payload" | jq -r '.agent // empty')"
   provider="$(printf '%s' "$contract_payload" | jq -r '.provider // empty')"
@@ -6491,14 +6529,11 @@ _restore_inflight_task_window_if_missing() {
       depth=$(read_phase_config "$feature_dir" "planning" "depth")
       [[ -z "$depth" ]] && depth=$(get_task_meta "$issue" "planDepth")
       [[ -z "$depth" ]] && depth="light"
-      write_stage_result_with_history "$feature_dir" "planning" "running" "$agent_cmd" "$model" "Recovery replay of persisted execution contract"
-      configure_agent_hooks "$agent_cmd" "$wt_dir" "$REPO_DIR"
-      if declare -F wavemill_hook_write >/dev/null 2>&1; then
-        wavemill_hook_write "working" "" "" "$agent_cmd" || true
+      if ! _prepare_recovery_phase_launch "$issue" "$slug" "planning" "$feature_dir" "$wt_dir" "$agent_cmd" "$model" "$contract_payload"; then
+        _stop_task_recovery_contract_unavailable "$issue" "$phase" "$feature_dir" "state_transition_failed" "failed to prepare recovery launch surfaces"
+        _RESTORE_STATE="failed"
+        return 0
       fi
-      win="$(_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir")"
-      contract_title="$(printf '%s' "$contract_payload" | jq -c '. ' 2>/dev/null || true)"
-      [[ -n "$contract_title" ]] && wavemill_set_tmux_pane_title "$(_tmux_target_join "$SESSION" "$win")" "$contract_title" || true
       launch_planning_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
         "$model" "$agent_cmd" "$depth" || rc=$?
       ;;
@@ -6506,14 +6541,11 @@ _restore_inflight_task_window_if_missing() {
       depth=$(read_phase_config "$feature_dir" "coding" "depth")
       [[ -z "$depth" ]] && depth=$(get_task_meta "$issue" "codeDepth")
       [[ -z "$depth" ]] && depth="medium"
-      write_stage_result_with_history "$feature_dir" "coding" "running" "$agent_cmd" "$model" "Recovery replay of persisted execution contract"
-      configure_agent_hooks "$agent_cmd" "$wt_dir" "$REPO_DIR"
-      if declare -F wavemill_hook_write >/dev/null 2>&1; then
-        wavemill_hook_write "working" "" "" "$agent_cmd" || true
+      if ! _prepare_recovery_phase_launch "$issue" "$slug" "coding" "$feature_dir" "$wt_dir" "$agent_cmd" "$model" "$contract_payload"; then
+        _stop_task_recovery_contract_unavailable "$issue" "$phase" "$feature_dir" "state_transition_failed" "failed to prepare recovery launch surfaces"
+        _RESTORE_STATE="failed"
+        return 0
       fi
-      win="$(_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir")"
-      contract_title="$(printf '%s' "$contract_payload" | jq -c '. ' 2>/dev/null || true)"
-      [[ -n "$contract_title" ]] && wavemill_set_tmux_pane_title "$(_tmux_target_join "$SESSION" "$win")" "$contract_title" || true
       launch_coding_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
         "$model" "$agent_cmd" "$depth" || rc=$?
       ;;
@@ -6522,14 +6554,11 @@ _restore_inflight_task_window_if_missing() {
       review_mode=$(read_phase_config "$feature_dir" "review" "mode")
       [[ -z "$review_mode" ]] && review_mode=$(get_task_meta "$issue" "reviewMode")
       [[ -z "$review_mode" ]] && review_mode="static"
-      write_stage_result_with_history "$feature_dir" "review" "running" "$agent_cmd" "$model" "Recovery replay of persisted execution contract"
-      configure_agent_hooks "$agent_cmd" "$wt_dir" "$REPO_DIR"
-      if declare -F wavemill_hook_write >/dev/null 2>&1; then
-        wavemill_hook_write "working" "" "" "$agent_cmd" || true
+      if ! _prepare_recovery_phase_launch "$issue" "$slug" "review" "$feature_dir" "$wt_dir" "$agent_cmd" "$model" "$contract_payload" "review"; then
+        _stop_task_recovery_contract_unavailable "$issue" "$phase" "$feature_dir" "state_transition_failed" "failed to prepare recovery launch surfaces"
+        _RESTORE_STATE="failed"
+        return 0
       fi
-      win="$(_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir" "review")"
-      contract_title="$(printf '%s' "$contract_payload" | jq -c '. ' 2>/dev/null || true)"
-      [[ -n "$contract_title" ]] && wavemill_set_tmux_pane_title "$(_tmux_target_join "$SESSION" "$win")" "$contract_title" || true
       launch_review_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
         "$model" "$agent_cmd" "$review_mode" || rc=$?
       ;;
@@ -6542,6 +6571,7 @@ _restore_inflight_task_window_if_missing() {
 
   if [[ "$rc" -ne 0 ]]; then
     log_warn "$issue → Failed to relaunch $phase phase after resume (rc=$rc)"
+    _stop_task_recovery_contract_unavailable "$issue" "$phase" "$feature_dir" "launch_failed" "recovery launch command exited with status $rc"
     _RESTORE_STATE="failed"
     return 0
   fi
