@@ -56,6 +56,9 @@ SCRIPT_DIR="${WAVEMILL_MILL_LIB_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pw
 WAVEMILL_MILL_SOURCE_LIB_DIR="$SCRIPT_DIR"
 WAVEMILL_COMMON_LIB_PATH="$SCRIPT_DIR/wavemill-common.sh"
 source "$SCRIPT_DIR/wavemill-common.sh"
+if [[ -f "$SCRIPT_DIR/queue-health.sh" ]]; then
+  source "$SCRIPT_DIR/queue-health.sh"
+fi
 source "$SCRIPT_DIR/agent-adapters.sh"
 if [[ -f "$SCRIPT_DIR/terminal-reconciler.sh" ]]; then
 source "$SCRIPT_DIR/terminal-reconciler.sh"
@@ -2792,6 +2795,9 @@ if [[ ! -f "$LIB_DIR/wavemill-common.sh" ]]; then
   exit 1
 fi
 source "$LIB_DIR/wavemill-common.sh"
+if [[ -f "$LIB_DIR/queue-health.sh" ]]; then
+  source "$LIB_DIR/queue-health.sh"
+fi
 if [[ -f "$LIB_DIR/terminal-reconciler.sh" ]]; then
 source "$LIB_DIR/terminal-reconciler.sh"
 fi
@@ -9387,6 +9393,11 @@ fetch_queue_plan() {
     record_fetch_queue_plan_failure "cache_empty" ""
     return 1
   }
+  if declare -F queue_health_should_retry_now >/dev/null 2>&1 \
+    && ! queue_health_should_retry_now "$REPO_DIR"; then
+    record_fetch_queue_plan_failure "backoff_active" "" 1
+    return 1
+  fi
   queue_plan=$(build_queue_plan_once "$BACKLOG_JSON_CACHE") || return 1
 
   QUEUE_PLAN_CACHE="$queue_plan"
@@ -9396,18 +9407,30 @@ fetch_queue_plan() {
 
 # fetch_queue_plan runs in command substitution, so diagnostics use a caller-owned file.
 record_fetch_queue_plan_failure() {
-  local step="$1" stderr_text="${2-}" exit_code="${3:-1}" diagnostics_file="${FETCH_QUEUE_PLAN_DIAGNOSTICS_FILE:-}"
+  local step="$1" stderr_text="${2-}" exit_code="${3:-1}" diagnostics_file="${FETCH_QUEUE_PLAN_DIAGNOSTICS_FILE:-}" extra="${4:-}"
   [[ -n "$diagnostics_file" ]] || return 0
 
   local bounded
   if [[ -n "$stderr_text" ]]; then
-    bounded="$(printf '%s' "$stderr_text" | sed -n '1,5p' | tr '\n' ' ' | head -c 512)"
+    if declare -F queue_health_redact_and_bound >/dev/null 2>&1; then
+      local tmp_redact
+      tmp_redact="$(mktemp -t wavemill-fqp-redact.XXXXXX 2>/dev/null || true)"
+      if [[ -n "$tmp_redact" ]]; then
+        printf '%s' "$stderr_text" > "$tmp_redact"
+        bounded="$(queue_health_redact_and_bound "$tmp_redact" 512 | tr '\n' ' ')"
+        rm -f "$tmp_redact"
+      else
+        bounded="$(printf '%s' "$stderr_text" | sed -n '1,5p' | tr '\n' ' ' | head -c 512)"
+      fi
+    else
+      bounded="$(printf '%s' "$stderr_text" | sed -n '1,5p' | tr '\n' ' ' | head -c 512)"
+    fi
     [[ -n "$bounded" ]] || bounded="(no stderr captured)"
   else
     bounded="(no stderr captured)"
   fi
 
-  printf 'step=%s exit=%s stderr=%s\n' "$step" "$exit_code" "$bounded" > "$diagnostics_file" 2>/dev/null || true
+  printf 'step=%s exit=%s %s stderr=%s\n' "$step" "$exit_code" "$extra" "$bounded" > "$diagnostics_file" 2>/dev/null || true
 }
 
 log_fetch_queue_plan_failure() {
@@ -9422,10 +9445,27 @@ log_fetch_queue_plan_failure() {
 }
 
 classify_queue_failure_reason() {
-  local step="$1" details="${2:-}" lowered
+  local step="$1" details="${2:-}" lowered cause exit_code
+  cause="$(printf '%s' "$details" | sed -n 's/.*cause=\([^ ]*\).*/\1/p')"
+  if [[ -n "$cause" ]] && declare -F queue_health_reason_for_cause >/dev/null 2>&1; then
+    queue_health_reason_for_cause "$cause"
+    return 0
+  fi
+  exit_code="$(printf '%s' "$details" | sed -n 's/.*exit=\([0-9][0-9]*\).*/\1/p')"
+  if [[ "$exit_code" =~ ^[0-9]+$ ]] && (( exit_code >= 128 )); then
+    echo "external_cancellation"
+    return 0
+  fi
   case "$step" in
     cache_empty|empty_queue)   echo "empty_queue" ;;
     jq_massage_failed)         echo "invalid_input" ;;
+    backoff_active)
+      if declare -F queue_health_read >/dev/null 2>&1; then
+        queue_health_read "$REPO_DIR" | jq -r '.reason // "dependency_planning_failed"' 2>/dev/null || echo "dependency_planning_failed"
+      else
+        echo "dependency_planning_failed"
+      fi
+      ;;
     plan_queue_failed)
       lowered="$(printf '%s' "$details" | tr '[:upper:]' '[:lower:]')"
       if [[ "$lowered" == *cache* || "$lowered" == *refresh* ]]; then
@@ -9445,6 +9485,136 @@ get_queue_failure_reason() {
   details="$(cat "$diagnostics_file" 2>/dev/null || true)"
   step="$(printf '%s' "$details" | sed -n 's/.*step=\([^ ]*\).*/\1/p')"
   classify_queue_failure_reason "$step" "$details"
+}
+
+queue_plan_dependency_graph_hash() {
+  local plan_input="$1"
+  if declare -F queue_health_hash_text >/dev/null 2>&1; then
+    jq -c '[.[] | {id, dependsOn, blocks, sharedSurface}] | sort_by(.id)' <<<"$plan_input" 2>/dev/null \
+      | queue_health_hash_text
+  else
+    jq -c '[.[] | {id, dependsOn, blocks, sharedSurface}] | sort_by(.id)' <<<"$plan_input" 2>/dev/null \
+      | cksum | awk '{print $1}'
+  fi
+}
+
+queue_plan_process_pgid() {
+  local pid="$1" pgid
+  pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true)"
+  [[ "$pgid" =~ ^[0-9]+$ ]] || pgid="$pid"
+  printf '%s\n' "$pgid"
+}
+
+queue_plan_kill_group() {
+  local pgid="$1" signal="${2:-TERM}"
+  [[ "$pgid" =~ ^[0-9]+$ && "$pgid" -gt 0 ]] || return 0
+  kill "-$signal" "-$pgid" 2>/dev/null || kill "-$signal" "$pgid" 2>/dev/null || true
+}
+
+run_queue_plan_lifecycle() {
+  local plan_input="$1"
+  shift
+  local -a planner_cmd=("$@")
+  local timeout_s input_file stdout_file stderr_file pid pgid start end elapsed exit_code
+  local deadline_hit=false term_sent=false kill_sent=false now grace_deadline cause signal signal_source
+  local stdout_excerpt stderr_excerpt input_hash graph_hash cmd_json metadata_json queue_plan proc_state
+
+  timeout_s="$(queue_health_timeout_seconds)"
+  input_file="$(mktemp -t wavemill-fqp-input.XXXXXX)" || return 1
+  stdout_file="$(mktemp -t wavemill-fqp-stdout.XXXXXX)" || { rm -f "$input_file"; return 1; }
+  stderr_file="$(mktemp -t wavemill-fqp-stderr.XXXXXX)" || { rm -f "$input_file" "$stdout_file"; return 1; }
+  printf '%s\n' "$plan_input" > "$input_file"
+
+  input_hash="$(printf '%s\n' "$plan_input" | queue_health_hash_text)"
+  graph_hash="$(queue_plan_dependency_graph_hash "$plan_input")"
+  cmd_json="$(printf '%s\n' "${planner_cmd[@]}" | jq -R . | jq -cs .)"
+  start="$(date +%s)"
+  if command -v setsid >/dev/null 2>&1; then
+    setsid "${planner_cmd[@]}" <"$input_file" >"$stdout_file" 2>"$stderr_file" &
+  else
+    perl -e 'setpgrp(0,0); exec @ARGV or die "exec failed: $!"' "${planner_cmd[@]}" <"$input_file" >"$stdout_file" 2>"$stderr_file" &
+  fi
+  pid="$!"
+  sleep 0.05
+  pgid="$(queue_plan_process_pgid "$pid")"
+  grace_deadline=0
+
+  while kill -0 "$pid" 2>/dev/null; do
+    proc_state="$(ps -o stat= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true)"
+    [[ "$proc_state" == Z* ]] && break
+    now="$(date +%s)"
+    if [[ "$deadline_hit" != "true" ]] && (( now - start >= timeout_s )); then
+      deadline_hit=true
+      term_sent=true
+      grace_deadline=$((now + 5))
+      queue_plan_kill_group "$pgid" TERM
+    elif [[ "$deadline_hit" == "true" && "$kill_sent" != "true" && "$grace_deadline" -gt 0 && "$now" -ge "$grace_deadline" ]]; then
+      kill_sent=true
+      queue_plan_kill_group "$pgid" KILL
+    fi
+    sleep 0.1
+  done
+
+  if wait "$pid" 2>/dev/null; then
+    exit_code=0
+  else
+    exit_code=$?
+  fi
+  end="$(date +%s)"
+  elapsed=$((end - start))
+  cause="$(queue_health_classify_exit "$exit_code" "$deadline_hit" "$stderr_file")"
+  signal=""
+  if [[ "$exit_code" =~ ^[0-9]+$ ]] && (( exit_code >= 128 )); then
+    signal="$((exit_code - 128))"
+  fi
+  signal_source="none"
+  [[ "$deadline_hit" == "true" ]] && signal_source="monitor_timeout"
+  [[ "$cause" == "external_cancellation" ]] && signal_source="external"
+  stdout_excerpt="$(queue_health_redact_and_bound "$stdout_file" 4096)"
+  stderr_excerpt="$(queue_health_redact_and_bound "$stderr_file" 4096)"
+  metadata_json="$(jq -cn \
+    --argjson command "$cmd_json" \
+    --argjson pid "${pid:-0}" \
+    --argjson pgid "${pgid:-0}" \
+    --argjson timeout_seconds "$timeout_s" \
+    --argjson elapsed_seconds "$elapsed" \
+    --argjson exit_code "$exit_code" \
+    --arg signal "$signal" \
+    --arg signal_source "$signal_source" \
+    --arg stderr_excerpt "$stderr_excerpt" \
+    --arg stdout_excerpt "$stdout_excerpt" \
+    --arg input_snapshot_hash "$input_hash" \
+    --arg dependency_graph_hash "$graph_hash" \
+    --arg detail "$stderr_excerpt" \
+    '{
+      command: $command,
+      pid: $pid,
+      pgid: $pgid,
+      timeout_seconds: $timeout_seconds,
+      elapsed_seconds: $elapsed_seconds,
+      exit_code: $exit_code,
+      signal: $signal,
+      signal_source: $signal_source,
+      stderr_excerpt: $stderr_excerpt,
+      stdout_excerpt: $stdout_excerpt,
+      input_snapshot_hash: $input_snapshot_hash,
+      dependency_graph_hash: $dependency_graph_hash,
+      detail: $detail
+    }')"
+
+  queue_plan="$(cat "$stdout_file" 2>/dev/null || true)"
+  rm -f "$input_file" "$stdout_file" "$stderr_file"
+
+  if (( exit_code == 0 )); then
+    queue_health_record_success "$metadata_json" "$REPO_DIR"
+    printf '%s\n' "$queue_plan"
+    return 0
+  fi
+
+  queue_health_record_failure "$cause" "$metadata_json" "$REPO_DIR"
+  record_fetch_queue_plan_failure "plan_queue_failed" "$stderr_excerpt" "$exit_code" \
+    "cause=$cause cmd=$(jq -r '@sh' <<<"$cmd_json" 2>/dev/null | tr ' ' ',' || echo unknown) pid=$pid pgid=$pgid timeout_s=$timeout_s elapsed_s=$elapsed signal_source=$signal_source"
+  return 1
 }
 
 build_queue_plan_once() {
@@ -9488,28 +9658,19 @@ build_queue_plan_once() {
   }
 
   : > "$tmp_stderr"
+  local -a planner_cmd=(npx tsx "$TOOLS_DIR/plan-queue.ts" --stdin --json)
   if [[ -n "${PROJECT_NAME:-}" ]]; then
     cache_key="$PROJECT_NAME"
-    queue_plan=$(printf '%s\n' "$plan_input" | _with_timeout 60 npx tsx "$TOOLS_DIR/plan-queue.ts" --stdin --json --cache-key "$cache_key" --refresh-missing-cache 2>"$tmp_stderr") || {
-      local exit_code=$?
-      stderr_text="$(cat "$tmp_stderr" 2>/dev/null || true)"
-      rm -f "$tmp_stderr"
-      record_fetch_queue_plan_failure "plan_queue_failed" "$stderr_text" "$exit_code"
-      return 1
-    }
-  else
-    queue_plan=$(printf '%s\n' "$plan_input" | _with_timeout 15 npx tsx "$TOOLS_DIR/plan-queue.ts" --stdin --json 2>"$tmp_stderr") || {
-      local exit_code=$?
-      stderr_text="$(cat "$tmp_stderr" 2>/dev/null || true)"
-      rm -f "$tmp_stderr"
-      record_fetch_queue_plan_failure "plan_queue_failed" "$stderr_text" "$exit_code"
-      return 1
-    }
+    planner_cmd+=(--cache-key "$cache_key" --refresh-missing-cache)
   fi
+  queue_plan=$(run_queue_plan_lifecycle "$plan_input" "${planner_cmd[@]}") || {
+    rm -f "$tmp_stderr"
+    return 1
+  }
 
   if [[ -z "${queue_plan//[[:space:]]/}" ]]; then
     rm -f "$tmp_stderr"
-    record_fetch_queue_plan_failure "empty_queue" "" 0
+    record_fetch_queue_plan_failure "empty_queue" "" 0 "cause=empty_queue"
     return 1
   fi
 
@@ -9518,7 +9679,12 @@ build_queue_plan_once() {
     local exit_code=$?
     stderr_text="$(cat "$tmp_stderr" 2>/dev/null || true)"
     rm -f "$tmp_stderr"
-    record_fetch_queue_plan_failure "validation_failed" "$stderr_text" "$exit_code"
+    if declare -F queue_health_record_failure >/dev/null 2>&1; then
+      local metadata_json
+      metadata_json="$(jq -cn --arg detail "$stderr_text" --arg stdout_excerpt "$(printf '%s' "$queue_plan" | head -c 4096)" --argjson exit_code "$exit_code" '{detail: $detail, stdout_excerpt: $stdout_excerpt, exit_code: $exit_code, signal_source: "none"}')"
+      queue_health_record_failure "malformed_graph" "$metadata_json" "$REPO_DIR"
+    fi
+    record_fetch_queue_plan_failure "validation_failed" "$stderr_text" "$exit_code" "cause=malformed_graph"
     return 1
   }
 
@@ -13559,8 +13725,25 @@ while :; do
             USING_GROUPED_VIEW=false
             if [[ -z "$queue_plan_json" ]]; then
               _queue_reason="$(get_queue_failure_reason "${queue_plan_diag_file:-}")"
-              log_warn "queue analysis unavailable (reason: ${_queue_reason:-unknown}), falling back to flat list"
+              if declare -F warn_once_per_session >/dev/null 2>&1; then
+                warn_once_per_session "queue-plan-degraded:${_queue_reason:-unknown}" \
+                  "queue analysis unavailable (reason: ${_queue_reason:-unknown}), falling back to dependency-safe flat list"
+              else
+                log_warn "queue analysis unavailable (reason: ${_queue_reason:-unknown}), falling back to dependency-safe flat list"
+              fi
               [[ -n "$queue_plan_diag_file" ]] && log_fetch_queue_plan_failure "$queue_plan_diag_file"
+              if declare -F queue_health_filter_dependency_safe_flat_candidates >/dev/null 2>&1; then
+                _dependency_held_count="$(queue_health_dependency_held_count "$available" "$BACKLOG_JSON_CACHE" 2>/dev/null || echo 0)"
+                avail_unblocked="$(queue_health_filter_dependency_safe_flat_candidates "$available" "$BACKLOG_JSON_CACHE" 2>/dev/null || true)"
+                if [[ "$_dependency_held_count" =~ ^[0-9]+$ ]] && (( _dependency_held_count > 0 )); then
+                  if declare -F warn_once_per_session >/dev/null 2>&1; then
+                    warn_once_per_session "queue-plan-holding:${_queue_reason:-unknown}:$_dependency_held_count" \
+                      "queue plan degraded; holding $_dependency_held_count dependency-gated task(s) until dependency ordering is available"
+                  else
+                    log_warn "queue plan degraded; holding $_dependency_held_count dependency-gated task(s) until dependency ordering is available"
+                  fi
+                fi
+              fi
             fi
           fi
           queue_fp="${queue_plan_json:0:50}"
@@ -13650,7 +13833,7 @@ while :; do
           log_warn "Unknown input: ${REPLY#unknown }"
         elif [[ "$REPLY" == "enter" ]]; then
           if [[ "${ENTER_LAUNCHES_WAVE:-true}" == "true" ]]; then
-            wave_plan_json="${queue_plan_json:-$QUEUE_PLAN_CACHE}"
+            wave_plan_json="$queue_plan_json"
             if [[ -n "$wave_plan_json" ]]; then
               wave_result=$(invoke_first_wave_helper "$wave_plan_json" "$avail_unblocked" "$free_slots" 2>/dev/null) || wave_result=""
             else

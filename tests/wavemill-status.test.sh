@@ -2449,6 +2449,34 @@ else
   fail "unknown state should not write hook file (got: $unknown_result)"
 fi
 
+# ── Queue health warning renders as one dashboard banner ───────────────────
+QUEUE_HEALTH_STATE_DIR="$TMP_DIR/queue-health-state"
+mkdir -p "$QUEUE_HEALTH_STATE_DIR"
+cat > "$QUEUE_HEALTH_STATE_DIR/queue-health.json" <<EOF
+{
+  "version": 1,
+  "status": "degraded",
+  "reason": "queue_plan_timeout",
+  "detail": "",
+  "backoff": { "next_retry_epoch": 1893456000 },
+  "planner": { "timeout_seconds": 120 }
+}
+EOF
+STATE_QUEUE_HEALTH="$TMP_DIR/state-queue-health.json"
+BEHAVIOR_QUEUE_HEALTH="$TMP_DIR/behavior-queue-health.json"
+OUTPUT_QUEUE_HEALTH="$TMP_DIR/output-queue-health.txt"
+printf '{"tasks":{}}\n' > "$STATE_QUEUE_HEALTH"
+printf '{}\n' > "$BEHAVIOR_QUEUE_HEALTH"
+WAVEMILL_QUEUE_HEALTH_STATE_DIR="$QUEUE_HEALTH_STATE_DIR" \
+  run_render "$STATE_QUEUE_HEALTH" "$WORKTREES_DIR" "$BEHAVIOR_QUEUE_HEALTH" "$OUTPUT_QUEUE_HEALTH"
+queue_health_warning_count="$(grep -c 'WARN: queue plan degraded:' "$OUTPUT_QUEUE_HEALTH" || true)"
+if [[ "$queue_health_warning_count" == "1" ]] \
+  && grep -q 'timeout after 120s; flat queue active' "$OUTPUT_QUEUE_HEALTH"; then
+  pass "queue health degraded state renders one dashboard warning"
+else
+  fail "queue health warning missing or duplicated"
+fi
+
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 

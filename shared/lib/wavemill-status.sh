@@ -17,6 +17,10 @@ if ! declare -f wavemill_pick_usage_tip >/dev/null 2>&1; then
     # shellcheck source=wavemill-common.sh
     source "${_wss_dir}/wavemill-common.sh"
   fi
+  if [[ -f "${_wss_dir}/queue-health.sh" ]]; then
+    # shellcheck source=queue-health.sh
+    source "${_wss_dir}/queue-health.sh"
+  fi
   unset _wss_dir
 fi
 if ! declare -f wavemill_apply_window_metadata >/dev/null 2>&1; then
@@ -26,6 +30,14 @@ if ! declare -f wavemill_apply_window_metadata >/dev/null 2>&1; then
     source "${_wss_title_dir}/wavemill-window-titles.sh"
   fi
   unset _wss_title_dir
+fi
+if ! declare -f queue_health_read >/dev/null 2>&1; then
+  _wss_qh_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null)" || true
+  if [[ -f "${_wss_qh_dir}/queue-health.sh" ]]; then
+    # shellcheck source=queue-health.sh
+    source "${_wss_qh_dir}/queue-health.sh"
+  fi
+  unset _wss_qh_dir
 fi
 
 PANE_MODE=""
@@ -1593,9 +1605,48 @@ cached_openrouter_warning() {
   return 1
 }
 
+render_queue_health_warning() {
+  declare -F queue_health_read >/dev/null 2>&1 || return 1
+  local record status reason detail next_retry next_retry_text next_action timeout_s
+  record="$(queue_health_read "$WAVEMILL_REPO_DIR" 2>/dev/null)" || return 1
+  status="$(jq -r '.status // "healthy_unknown"' <<<"$record" 2>/dev/null || echo healthy_unknown)"
+  [[ "$status" == "degraded" ]] || return 1
+  reason="$(jq -r '.reason // "unknown"' <<<"$record" 2>/dev/null || echo unknown)"
+  detail="$(jq -r '.detail // ""' <<<"$record" 2>/dev/null | tr '\n' ' ' | head -c 96)"
+  next_retry="$(jq -r '.backoff.next_retry_epoch // 0' <<<"$record" 2>/dev/null || echo 0)"
+  timeout_s="$(jq -r '.planner.timeout_seconds // 0' <<<"$record" 2>/dev/null || echo 0)"
+  next_action="$(jq -r '.next_action // ""' <<<"$record" 2>/dev/null | head -c 64)"
+  next_retry_text=""
+  if [[ "$next_retry" =~ ^[0-9]+$ && "$next_retry" -gt 0 ]]; then
+    next_retry_text="$(date -r "$next_retry" '+%H:%M:%S' 2>/dev/null || date -d "@$next_retry" '+%H:%M:%S' 2>/dev/null || true)"
+  fi
+  case "$reason" in
+    queue_plan_timeout)
+      if [[ "$timeout_s" =~ ^[0-9]+$ && "$timeout_s" -gt 0 ]]; then
+        printf 'queue plan degraded: timeout after %ss; flat queue active' "$timeout_s"
+      else
+        printf 'queue plan degraded: timeout; flat queue active'
+      fi
+      ;;
+    queue_plan_external_cancellation)
+      printf 'queue plan degraded: planner cancelled externally; flat queue active'
+      ;;
+    invalid_input)
+      printf 'queue plan degraded: invalid dependency graph; flat queue active'
+      ;;
+    *)
+      printf 'queue plan degraded: %s; flat queue active' "$reason"
+      ;;
+  esac
+  [[ -n "$next_retry_text" ]] && printf '; retry at %s' "$next_retry_text"
+  [[ -n "$detail" && "$detail" != "(no stderr captured)" ]] && printf '; %s' "$detail"
+  [[ -n "$next_action" && -z "$next_retry_text" ]] && printf '; %s' "$next_action"
+  printf '\n'
+}
+
 render_dashboard() {
   local tasks line issue slug branch worktree task_status task_phase state_pr
-  local win agent_state classification task_data free_slots usage_tip openrouter_warning
+  local win agent_state classification task_data free_slots usage_tip openrouter_warning queue_health_warning
   declare -ga inbox_tasks=()
   declare -ga active_tasks=()
 
@@ -1611,6 +1662,9 @@ render_dashboard() {
   fi
   if openrouter_warning="$(cached_openrouter_warning)"; then
     printf "${D}├─ WARN: %s${N}${EL}\n" "$openrouter_warning" >> "$FRAME"
+  fi
+  if queue_health_warning="$(render_queue_health_warning)"; then
+    printf "${D}├─ WARN: %s${N}${EL}\n" "$queue_health_warning" >> "$FRAME"
   fi
 
   tasks=$(gather_tasks)

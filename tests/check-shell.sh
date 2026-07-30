@@ -283,7 +283,7 @@ unset worktree_deps_status
 # script via heredoc. It does NOT inherit functions from the parent shell.
 # Every function it calls must be:
 #   (a) defined inline in the heredoc, OR
-#   (b) defined in agent-adapters.sh (which is sourced), OR
+#   (b) defined in sourced shared libraries, OR
 #   (c) an external command or bash builtin
 #
 # This test extracts the heredoc, parses function definitions and calls,
@@ -332,15 +332,21 @@ else
     # Extract function definitions from wavemill-common.sh (also sourced by monitor)
     COMMON_FUNCS=$(grep -oE '^[a-z_][a-z0-9_]*\(\)' "$LIB_DIR/wavemill-common.sh" | sed 's/()//' | sort -u)
 
+    # Extract function definitions from queue-health.sh (also sourced by monitor)
+    QUEUE_HEALTH_FUNCS=""
+    if [[ -f "$LIB_DIR/queue-health.sh" ]]; then
+      QUEUE_HEALTH_FUNCS=$(grep -oE '^[a-z_][a-z0-9_]*\(\)' "$LIB_DIR/queue-health.sh" | sed 's/()//' | sort -u)
+    fi
+
     # Extract function definitions from the hook protocol sourced by common helpers.
     HOOK_FUNCS=$(grep -oE '^[a-z_][a-z0-9_]*\(\)' "$REPO_DIR/shared/hooks/wavemill-hook-protocol.sh" | sed 's/()//' | sort -u)
 
     # Combine all available function definitions
-    ALL_DEFINED=$(printf '%s\n%s\n%s\n%s' "$HEREDOC_FUNCS" "$ADAPTER_FUNCS" "$COMMON_FUNCS" "$HOOK_FUNCS" | sort -u)
+    ALL_DEFINED=$(printf '%s\n%s\n%s\n%s\n%s' "$HEREDOC_FUNCS" "$ADAPTER_FUNCS" "$COMMON_FUNCS" "$QUEUE_HEALTH_FUNCS" "$HOOK_FUNCS" | sort -u)
 
     # Known external commands and bash builtins that are NOT custom functions
     # This list covers standard utilities, coreutils, and tools used by wavemill
-    KNOWN_EXTERNALS="bash|cat|cd|chmod|column|command|continue|cut|date|declare|diff|dirname|echo|eval|exec|exit|export|false|find|fold|git|grep|gh|head|jq|kill|local|ls|mkdir|mktemp|mv|node|npx|printf|read|readlink|return|rm|sed|set|shift|sleep|sort|source|sqlite3|stat|tail|tee|test|tmux|touch|tr|trap|true|tput|tsx|type|to_entries|uniq|unset|wait|wc|xargs|basename|awk|seq|ascii_downcase"
+    KNOWN_EXTERNALS="bash|cat|cd|chmod|cksum|column|command|continue|cut|date|declare|diff|dirname|echo|eval|exec|exit|export|false|find|fold|git|grep|gh|head|jq|kill|local|ls|mkdir|mktemp|mv|node|npx|perl|printf|ps|read|readlink|return|rm|sed|set|setsid|shift|sleep|sort|source|sqlite3|stat|tail|tee|test|tmux|touch|tr|trap|true|tput|tsx|type|to_entries|uniq|unset|wait|wc|xargs|basename|awk|seq|ascii_downcase"
 
     # Extract function calls from the heredoc.
     # Restrict matches to actual command positions instead of every bare word;
@@ -360,7 +366,7 @@ else
       | grep -vE '^(env|stdin|stdout|stderr|json|txt|csv|pid|utf)$' \
       | grep -vE '^(true|false|yes|string|number|empty|null|undefined)$' \
       | grep -vE '^(try|catch|fromjson|rollout_path|thread_id|thread_row|updated_at|exits|setting|falling|tostring)$' \
-      | grep -vE '^(bad|internal|keeping|marking|rate|reduce|service|skipping|timed|too|using|wavemill|waiting)$' \
+      | grep -vE '^(bad|holding|internal|keeping|marking|rate|reduce|service|skipping|timed|too|using|wavemill|waiting)$' \
       | grep -vE '^(advance|review)$' \
       | grep -vE '^(not_eligible|routing_error)$' \
       | grep -vE '^(a|aborted|already|available|blocked_by_count|break|coding|cp|debug|empty_queue|execute|file|fresh|gtimeout|id|launch|length|main|mapfile|missing|not|overloaded|plan|ready|required|reservation|slots|staleness|the|they|timeout|todate|todateiso8601|tonumber|tracked|user)$')
@@ -2745,7 +2751,7 @@ for script in "$LIB_DIR"/wavemill-*.sh; do
   [[ -f "$script" ]] || continue
   while IFS= read -r line; do
     # Extract the sourced file path (handle both $SCRIPT_DIR and $LIB_DIR variables)
-    sourced=$(echo "$line" | sed -E 's/^source "//;s/"$//' \
+    sourced=$(echo "$line" | sed -E 's/^[[:space:]]*source "//;s/"$//' \
       | sed "s|\\\$SCRIPT_DIR|$LIB_DIR|g" \
       | sed "s|\\\$LIB_DIR|$LIB_DIR|g" \
       | sed "s|\\\${BASH_SOURCE\[0\]}|$script|g")

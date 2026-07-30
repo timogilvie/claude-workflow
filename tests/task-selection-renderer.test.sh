@@ -84,6 +84,11 @@ extract_monitor_heredoc > "$MONITOR_BODY"
 
 FUNCTIONS_FILE="$TEST_TMP/task-selection-renderer-funcs.sh"
 {
+  printf ': "${WAVEMILL_QUEUE_HEALTH_STATE_DIR:=%s}"\n' "$TEST_TMP/queue-health-state"
+  printf 'export WAVEMILL_QUEUE_HEALTH_STATE_DIR\n'
+  printf 'source %q\n' "$REPO_DIR/shared/lib/wavemill-common.sh"
+  printf 'source %q\n' "$REPO_DIR/shared/lib/queue-health.sh"
+  echo
   extract_function "$MONITOR_BODY" "refresh_backlog_cache"
   echo
   extract_function "$MONITOR_BODY" "print_cached_candidates"
@@ -97,6 +102,14 @@ FUNCTIONS_FILE="$TEST_TMP/task-selection-renderer-funcs.sh"
   extract_function "$MONITOR_BODY" "classify_queue_failure_reason"
   echo
   extract_function "$MONITOR_BODY" "get_queue_failure_reason"
+  echo
+  extract_function "$MONITOR_BODY" "queue_plan_dependency_graph_hash"
+  echo
+  extract_function "$MONITOR_BODY" "queue_plan_process_pgid"
+  echo
+  extract_function "$MONITOR_BODY" "queue_plan_kill_group"
+  echo
+  extract_function "$MONITOR_BODY" "run_queue_plan_lifecycle"
   echo
   extract_function "$MONITOR_BODY" "build_queue_plan_once"
   echo
@@ -153,7 +166,7 @@ render_prompt_under_test() {
     if [[ -z "$queue_plan_json" ]]; then
       local _queue_reason
       _queue_reason="$(get_queue_failure_reason "${queue_plan_diag_file:-}")"
-      log_warn "queue analysis unavailable (reason: ${_queue_reason:-unknown}), falling back to flat list"
+      log_warn "queue analysis unavailable (reason: ${_queue_reason:-unknown}), falling back to dependency-safe flat list"
       [[ -n "$queue_plan_diag_file" ]] && log_fetch_queue_plan_failure "$queue_plan_diag_file"
     fi
     if [[ -n "$avail_unblocked" ]]; then
@@ -551,6 +564,13 @@ echo "DEPENDENCY PLANNING ERROR" >&2
 exit 1
 EOF
       ;;
+    plan_queue_terminated)
+      cat > "$bin_dir/npx" <<'EOF'
+#!/usr/bin/env bash
+echo "terminated by owner" >&2
+exit 143
+EOF
+      ;;
     validation_failed)
       cat > "$bin_dir/npx" <<'EOF'
 #!/usr/bin/env bash
@@ -575,7 +595,7 @@ EOF
 
   stdout="$case_tmp/stdout.txt"
   stderr="$case_tmp/stderr.txt"
-  FUNCTIONS_FILE="$FUNCTIONS_FILE" RENDER_PROMPT_FILE="$RENDER_PROMPT_FILE" CANDIDATES="$CANDIDATES" BACKLOG_FOR_CASE="$backlog_json" STUB_BIN_DIR="$bin_dir" TMPDIR="$case_tmp/tmp" DASHBOARD_VERBOSITY="$verbosity" bash -c '
+  FUNCTIONS_FILE="$FUNCTIONS_FILE" RENDER_PROMPT_FILE="$RENDER_PROMPT_FILE" CANDIDATES="$CANDIDATES" BACKLOG_FOR_CASE="$backlog_json" STUB_BIN_DIR="$bin_dir" TMPDIR="$case_tmp/tmp" DASHBOARD_VERBOSITY="$verbosity" WAVEMILL_QUEUE_HEALTH_STATE_DIR="$case_tmp/queue-state" bash -c '
     set -euo pipefail
     export PATH="$STUB_BIN_DIR:$PATH"
     # shellcheck source=/dev/null
@@ -623,7 +643,7 @@ test_fetch_queue_plan_failure_diagnostics_cache_empty() {
   check_contains "cache-empty fallback still renders flat list" "$(cat "$stdout")" "1. HOK-10 - Foundation task (score: 98)"
   check_contains "cache-empty warns once" "$stderr_text" "WARN:queue analysis unavailable"
   check_contains "cache-empty warning includes reason" "$stderr_text" "(reason: empty_queue)"
-  check_contains "cache-empty warning ends with fallback" "$stderr_text" "falling back to flat list"
+  check_contains "cache-empty warning ends with fallback" "$stderr_text" "falling back to dependency-safe flat list"
   check_contains "cache-empty debug names step" "$stderr_text" "step=cache_empty"
   check_contains "cache-empty debug includes reason" "$stderr_text" "reason=empty_queue"
   check_contains "cache-empty debug includes exit" "$stderr_text" "exit=1"
@@ -682,6 +702,19 @@ test_fetch_queue_plan_failure_diagnostics_dependency_planning() {
   assert_no_queue_plan_temp_files "dependency-planning temp files cleaned" "$tmp_dir"
 }
 
+test_fetch_queue_plan_failure_diagnostics_terminated_has_cause() {
+  local result stderr tmp_dir stderr_text
+  result="$(run_queue_plan_failure_case "plan_queue_terminated" "$LINEAR_BACKLOG_JSON")"
+  stderr="$(sed -n '2p' <<<"$result")"
+  tmp_dir="$(sed -n '3p' <<<"$result")"
+  stderr_text="$(cat "$stderr")"
+
+  check_contains "terminated debug includes exit" "$stderr_text" "exit=143"
+  check_contains "terminated debug includes explicit cause" "$stderr_text" "cause=external_cancellation"
+  check_contains "terminated warning classifies cancellation" "$stderr_text" "(reason: queue_plan_external_cancellation)"
+  assert_no_queue_plan_temp_files "terminated temp files cleaned" "$tmp_dir"
+}
+
 test_fetch_queue_plan_failure_diagnostics_validation() {
   local result stderr tmp_dir stderr_text
   result="$(run_queue_plan_failure_case "validation_failed" "$LINEAR_BACKLOG_JSON")"
@@ -723,7 +756,7 @@ test_fetch_queue_plan_warning_stays_quiet_without_debug() {
 
   check_contains "non-debug fallback warns" "$stderr_text" "WARN:queue analysis unavailable"
   check_contains "non-debug warning includes reason" "$stderr_text" "(reason: cache_refresh_failed)"
-  check_contains "non-debug warning ends with fallback" "$stderr_text" "falling back to flat list"
+  check_contains "non-debug warning ends with fallback" "$stderr_text" "falling back to dependency-safe flat list"
   check_not_contains "non-debug omits captured stderr" "$stderr_text" "CACHE REFRESH ERROR"
   check_not_contains "non-debug omits diagnostic step" "$stderr_text" "step=plan_queue_failed"
   check_eq "non-debug warning count" "1" "$(grep -c 'queue analysis unavailable' "$stderr" || true)"
@@ -745,6 +778,7 @@ test_fetch_queue_plan_failure_diagnostics_cache_empty
 test_fetch_queue_plan_failure_diagnostics_jq_massage
 test_fetch_queue_plan_failure_diagnostics_plan_queue
 test_fetch_queue_plan_failure_diagnostics_dependency_planning
+test_fetch_queue_plan_failure_diagnostics_terminated_has_cause
 test_fetch_queue_plan_failure_diagnostics_validation
 test_fetch_queue_plan_failure_diagnostics_empty_queue
 test_fetch_queue_plan_warning_stays_quiet_without_debug
