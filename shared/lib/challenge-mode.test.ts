@@ -2595,10 +2595,10 @@ test('plan-stage challenge rejects role-ineligible forced native challenger befo
       (entry) => entry.modelId === 'qwen-2.5-coder-32b' && entry.role === 'planner',
     );
     assert.ok(rejection, 'role-ineligible native planner challenger must be reported');
-    assert.equal(rejection!.reason, 'no-native-capability');
+    assert.equal(rejection!.reason, 'role-ineligible');
     assert.equal(rejection!.requestedLaunchPhase, 'planning');
-    assert.equal(rejection!.nativeProvider, undefined);
-    assert.equal(rejection!.eligibleRoles, undefined);
+    assert.equal(rejection!.nativeProvider, 'openrouter');
+    assert.deepEqual(rejection!.eligibleRoles, ['coding']);
   } finally {
     cleanup();
   }

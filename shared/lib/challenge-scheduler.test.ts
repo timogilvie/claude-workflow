@@ -219,7 +219,7 @@ test('recommends new model challenge when a model has fewer records than thresho
     assert.equal(result.shouldChallenge, true);
     assert.equal(result.reason, 'new-model');
     assert.equal(result.defaultModel, 'claude-sonnet-4-5-20250929');
-    assert.equal(result.challengerModel, 'claude-haiku-4-5-20251001');
+    assert.equal(result.challengerModel, 'claude-fable-5');
   } finally {
     cleanup();
   }
