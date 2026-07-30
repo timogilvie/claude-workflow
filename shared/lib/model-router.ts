@@ -25,7 +25,6 @@ import { resolveModelAgent, type AgentResolution, type AgentResolutionPhase } fr
 import {
   configuredDeepSeekModelIds,
   DEFAULT_MODEL_REGISTRY,
-  getEffectiveRegistry,
   isDeepSeekLikeModelId,
   ModelValidationError,
   type AgentType,
@@ -306,9 +305,10 @@ function registryWithAgentOverride(
   agentMap: Record<string, AgentType>,
   repoDir?: string,
 ) {
-  const registry = repoDir ? getEffectiveRegistry(repoDir) : DEFAULT_MODEL_REGISTRY;
+  const registry = DEFAULT_MODEL_REGISTRY;
   const mappedAgent = agentMap[modelId];
-  if (!mappedAgent || !registry.models[modelId]) {
+  const registryEntry = registry.models[modelId];
+  if (!mappedAgent || !registryEntry || registryEntry.agent === 'native-openai' || registryEntry.agent === 'native-openrouter') {
     return registry;
   }
 
@@ -317,7 +317,7 @@ function registryWithAgentOverride(
     models: {
       ...registry.models,
       [modelId]: {
-        ...registry.models[modelId]!,
+        ...registryEntry,
         agent: mappedAgent,
       },
     },

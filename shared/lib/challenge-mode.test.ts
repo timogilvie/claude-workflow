@@ -1843,7 +1843,7 @@ function nativeModelEntry(phase: string = 'patch', suiteVersion: string = 'v1') 
 function openRouterNativeModelEntry(phase: string = 'workflow', suiteVersion: string = 'v1') {
   return {
     class: 'strong_generalist',
-    agent: 'claude-openrouter',
+    agent: 'native-openrouter',
     nativeCapability: {
       nativeProvider: 'openrouter',
       piTransportKind: 'openai-completions',
@@ -2140,7 +2140,7 @@ test('uncertified native challenger excluded when artifact is missing', () => {
       },
     );
 
-    // Pool shrinks to just the primary → can't form a pair
+    // Direct pools with only a primary and rejected native candidate cannot form a pair.
     assert.equal(result.pair, null);
     assert.equal(result.failureReason, 'selection_failed');
     assert.ok(result.nativeCertificationRejections && result.nativeCertificationRejections.length > 0,
@@ -2166,7 +2166,7 @@ test('stale native challenger excluded', () => {
     });
 
     const result = pickChallengeModelsWithReason(
-      ['claude-opus-4-6', 'native-stale'],
+      ['claude-opus-4-6', 'native-stale', 'claude-sonnet-4-5-20250929'],
       {
         pairId: 'NC-003',
         issueId: 'NC-003',
@@ -2178,8 +2178,8 @@ test('stale native challenger excluded', () => {
       },
     );
 
-    assert.equal(result.pair, null);
-    assert.equal(result.failureReason, 'selection_failed');
+    assert.ok(result.pair);
+    assert.notEqual(result.pair!.challenger.model, 'native-stale');
     const rejection = (result.nativeCertificationRejections || [])[0];
     assert.ok(rejection, 'should have native rejection');
     assert.equal(rejection.modelId, 'native-stale');
@@ -2253,7 +2253,7 @@ test('wrong suite version produces wrong-suite rejection', () => {
     });
 
     const result = pickChallengeModelsWithReason(
-      ['claude-opus-4-6', 'native-wrong-suite'],
+      ['claude-opus-4-6', 'native-wrong-suite', 'claude-sonnet-4-5-20250929'],
       {
         pairId: 'NC-005',
         issueId: 'NC-005',
@@ -2268,6 +2268,8 @@ test('wrong suite version produces wrong-suite rejection', () => {
     const rejection = (result.nativeCertificationRejections || []).find(
       (r) => r.modelId === 'native-wrong-suite',
     );
+    assert.ok(result.pair);
+    assert.notEqual(result.pair!.challenger.model, 'native-wrong-suite');
     assert.ok(rejection, 'should have rejection for native-wrong-suite');
     assert.equal(rejection!.reason, 'no-native-capability');
   } finally {
