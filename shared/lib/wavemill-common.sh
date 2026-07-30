@@ -1267,6 +1267,27 @@ wavemill_pr_lookup_by_branch() {
     "${cache_file}" 2>/dev/null | head -1
 }
 
+wavemill_pr_live_state() {
+  local pr_number="${1:-}"
+  [[ -n "$pr_number" ]] || return 1
+  gh pr view "$pr_number" --json number,state,mergedAt --jq \
+    '{number, state, mergedAt, terminalState: (if .mergedAt != null then "MERGED" elif .state == "CLOSED" then "CLOSED" else .state end)}' 2>/dev/null
+}
+
+wavemill_reconcile_terminal() {
+  local lib_dir="${LIB_DIR:-}"
+  if [[ -z "$lib_dir" && -n "${BASH_SOURCE[0]:-}" ]]; then
+    lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || true)"
+  fi
+  if [[ -n "$lib_dir" && -f "$lib_dir/terminal-reconciler.sh" ]]; then
+    # shellcheck source=terminal-reconciler.sh
+    source "$lib_dir/terminal-reconciler.sh" || return 0
+    wavemill_reconcile_terminal "$@"
+    return $?
+  fi
+  return 0
+}
+
 # ============================================================================
 # GITHUB HELPERS
 # ============================================================================

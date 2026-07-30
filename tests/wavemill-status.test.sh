@@ -2389,6 +2389,39 @@ else
   fail "stale hook fallback classification unexpected: '$stale_classification'"
 fi
 
+# ── Terminal durable state overrides fresh stale hook semantics ────────────
+terminal_override_state="$TMP_DIR/terminal-override-state.json"
+cat > "$terminal_override_state" <<JSON
+{
+  "tasks": {
+    "HOK-2599": {
+      "slug": "terminal-task",
+      "branch": "task/terminal-task",
+      "worktree": "$WORKTREES_DIR/terminal-task",
+      "pr": "101",
+      "status": "closed",
+      "phase": "closed"
+    }
+  }
+}
+JSON
+terminal_override_result="$TMP_DIR/terminal-override-result.txt"
+(
+  set -- test-session "$WORKTREES_DIR" "$terminal_override_state"
+  exec 3>"$terminal_override_result"
+  exec >/dev/null 2>&1
+  source "$REPO_DIR/shared/lib/wavemill-status.sh"
+  trap - EXIT
+  pr_for_branch() { printf '101|CLOSED\n'; }
+  agent_terminal_override "HOK-2599" >&3
+) 2>/dev/null || true
+terminal_override="$(cat "$terminal_override_result" 2>/dev/null || true)"
+if [[ "$terminal_override" == "exited" ]]; then
+  pass "terminal workflow state overrides stale live hook display"
+else
+  fail "terminal override expected exited, got '$terminal_override'"
+fi
+
 # ── Unknown state in hook file falls back gracefully ───────────────────────
 # The protocol silently drops unknown states, so an old hook file with an
 # unknown state would have a stale timestamp and fall back to pane liveness.
