@@ -118,6 +118,9 @@ test('recommends challenge when confidence is below threshold', () => {
 
     assert.equal(result.shouldChallenge, true);
     assert.equal(result.reason, 'new-model');
+    assert.equal(result.defaultModel, 'claude-sonnet-4-5-20250929');
+    assert.ok(result.challengerModel);
+    assert.notEqual(result.challengerModel, result.defaultModel);
   } finally {
     cleanup();
   }
@@ -172,6 +175,7 @@ test('skips challenge when forceModel is set', () => {
       forceModel: 'gpt-5.4',
     });
 
+    assert.equal(result.shouldChallenge, false);
     assert.equal(result.reason, 'disabled');
     assert.equal(result.priority, 0);
   } finally {
