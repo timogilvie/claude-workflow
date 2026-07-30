@@ -18,6 +18,7 @@ import type {
   ChallengeStageEval,
   EvalChallengeRouteContext,
   EvalExecutedPlanning,
+  PlanningExecutionOutcome,
   EvalRouteArtifact,
   EvalRouteProvenance,
   RouteCalibration,
@@ -89,6 +90,8 @@ export interface EvalRecordMetadata {
   routeProvenance?: EvalRouteProvenance | null;
   /** Actual planning execution provenance from `.planning-result.json`. */
   executedPlanning?: EvalExecutedPlanning | null;
+  /** Structured native planning outcome from `.planning-result.json`. */
+  planningExecutionOutcome?: PlanningExecutionOutcome | null;
   /** Per-phase wall-clock durations derived from workflow result artifacts. */
   phaseDurations?: EvalPhaseDurations | null;
   /** Compact router prediction metadata for calibration. */
@@ -362,6 +365,60 @@ function toEvalExecutedPlanning(executedPlanning: EvalExecutedPlanning): EvalExe
   };
 }
 
+const PLANNING_OUTCOME_STATUSES = new Set(['running', 'awaiting_user', 'completed', 'aborted', 'failed']);
+const PLANNING_TERMINAL_REASONS = new Set([
+  'turn_limit',
+  'tool_call_limit',
+  'wall_clock_limit',
+  'tool_stagnation',
+  'invalid_final_plan',
+  'empty_final_plan',
+  'aborted',
+  'error',
+]);
+
+function toPlanningExecutionOutcome(outcome: PlanningExecutionOutcome): PlanningExecutionOutcome {
+  const status = PLANNING_OUTCOME_STATUSES.has(String(outcome.status)) ? outcome.status : undefined;
+  const failureReason = outcome.failureReason === null
+    ? null
+    : PLANNING_TERMINAL_REASONS.has(String(outcome.failureReason))
+      ? outcome.failureReason
+      : undefined;
+  const bounds = outcome.bounds
+    ? {
+        ...(isFiniteNonNegativeBudget(outcome.bounds.maxTurns) ? { maxTurns: outcome.bounds.maxTurns } : {}),
+        ...(isFiniteNonNegativeBudget(outcome.bounds.maxToolCalls) ? { maxToolCalls: outcome.bounds.maxToolCalls } : {}),
+        ...(isFiniteNonNegativeBudget(outcome.bounds.maxWallClockMs) ? { maxWallClockMs: outcome.bounds.maxWallClockMs } : {}),
+      }
+    : undefined;
+  const usage = outcome.usage
+    ? {
+        ...(isFiniteNonNegativeBudget(outcome.usage.turnsCompleted) ? { turnsCompleted: outcome.usage.turnsCompleted } : {}),
+        ...(isFiniteNonNegativeBudget(outcome.usage.toolCallsExecuted) ? { toolCallsExecuted: outcome.usage.toolCallsExecuted } : {}),
+        ...(isFiniteNonNegativeBudget(outcome.usage.wallClockMs) ? { wallClockMs: outcome.usage.wallClockMs } : {}),
+        ...(isFiniteNonNegativeBudget(outcome.usage.totalInputTokens) ? { totalInputTokens: outcome.usage.totalInputTokens } : {}),
+        ...(isFiniteNonNegativeBudget(outcome.usage.totalOutputTokens) ? { totalOutputTokens: outcome.usage.totalOutputTokens } : {}),
+        ...(isFiniteNonNegativeBudget(outcome.usage.totalCostUsd) ? { totalCostUsd: outcome.usage.totalCostUsd } : {}),
+      }
+    : undefined;
+  const promptRef = outcome.promptRef && isNonEmptyString(outcome.promptRef.id) && isNonEmptyString(outcome.promptRef.version)
+    ? { id: outcome.promptRef.id, version: outcome.promptRef.version }
+    : undefined;
+
+  return {
+    ...(isNonEmptyString(outcome.agent) ? { agent: outcome.agent } : {}),
+    ...(isNonEmptyString(outcome.model) ? { model: outcome.model } : {}),
+    ...(status ? { status } : {}),
+    ...(failureReason !== undefined ? { failureReason } : {}),
+    ...(typeof outcome.planArtifactValid === 'boolean' ? { planArtifactValid: outcome.planArtifactValid } : {}),
+    ...(typeof outcome.approvalReady === 'boolean' ? { approvalReady: outcome.approvalReady } : {}),
+    ...(bounds && Object.keys(bounds).length > 0 ? { bounds } : {}),
+    ...(usage && Object.keys(usage).length > 0 ? { usage } : {}),
+    ...(promptRef ? { promptRef } : {}),
+    ...(outcome.source === '.planning-result.json' ? { source: outcome.source } : {}),
+  };
+}
+
 export function attachChallengeRouteContext(
   record: EvalRecord,
   challengeRouteContext?: ChallengeRouteContext | null,
@@ -390,6 +447,20 @@ export function attachExecutedPlanning(
     return;
   }
   record.executedPlanning = toEvalExecutedPlanning(executedPlanning);
+}
+
+export function attachPlanningExecutionOutcome(
+  record: EvalRecord,
+  planningExecutionOutcome?: PlanningExecutionOutcome | null,
+): void {
+  if (!planningExecutionOutcome) {
+    return;
+  }
+  const sanitized = toPlanningExecutionOutcome(planningExecutionOutcome);
+  if (Object.keys(sanitized).length === 0) {
+    return;
+  }
+  record.planningExecutionOutcome = sanitized;
 }
 
 export function attachPhaseDurations(
@@ -1229,6 +1300,7 @@ export function enrichEvalRecord(record: EvalRecord, metadata: EvalRecordMetadat
   attachChallengeRouteContext(record, metadata.challengeRouteContext);
   attachRouteProvenance(record, metadata.routeProvenance);
   attachExecutedPlanning(record, metadata.executedPlanning);
+  attachPlanningExecutionOutcome(record, metadata.planningExecutionOutcome);
   attachPhaseDurations(record, metadata.phaseDurations);
   attachRouterPolicyMetadata(record, metadata.routeProvenance);
   attachRoutePrediction(record, metadata.routePrediction);
@@ -1285,6 +1357,7 @@ export function enrichTrainingMetadata(
   attachChallengeRouteContext(record, metadata.challengeRouteContext);
   attachRouteProvenance(record, metadata.routeProvenance);
   attachExecutedPlanning(record, metadata.executedPlanning);
+  attachPlanningExecutionOutcome(record, metadata.planningExecutionOutcome);
   attachRouterPolicyMetadata(record, metadata.routeProvenance);
   attachRoutePrediction(record, metadata.routePrediction);
   attachDifficultyMetadata(record, metadata.difficulty || null);

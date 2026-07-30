@@ -22,6 +22,7 @@ import type {
   EvalExecutedPlanning,
   EvalPhaseDurations,
   EvalRouting,
+  PlanningExecutionOutcome,
   RoutePrediction,
   RoutingDecision,
   RoutingCandidate,
@@ -926,6 +927,7 @@ export function gatherStageArtifacts(
   routing?: EvalRouting;
   routePrediction?: RoutePrediction;
   executedPlanning?: EvalExecutedPlanning;
+  planningExecutionOutcome?: PlanningExecutionOutcome;
   phaseDurations?: EvalPhaseDurations;
   executionModel?: string;
 } {
@@ -941,6 +943,7 @@ export function gatherStageArtifacts(
       routing: loadResolvedModelRouting(repoDir, issueId),
       routePrediction: buildRoutePrediction(loadRoutingCompleteRawFromArchive(repoDir, issueId) ?? undefined),
       executedPlanning: undefined,
+      planningExecutionOutcome: loadPlanningExecutionOutcomeFromArchive(repoDir, issueId),
       phaseDurations: undefined,
       executionModel: undefined,
     };
@@ -968,9 +971,131 @@ export function gatherStageArtifacts(
     routing,
     routePrediction: buildRoutePrediction(routingCompleteRaw),
     executedPlanning: loadExecutedPlanning(repoDir, slug, issueId, worktreePath),
+    planningExecutionOutcome: loadPlanningExecutionOutcome(repoDir, slug, issueId, worktreePath),
     phaseDurations: computePhaseDurations(repoDir, slug, worktreePath),
     executionModel: loadStageExecutionModel(repoDir, slug, worktreePath),
   };
+}
+
+const PLANNING_STATUSES = new Set(['running', 'awaiting_user', 'completed', 'aborted', 'failed']);
+const PLANNING_TERMINAL_REASONS = new Set([
+  'turn_limit',
+  'tool_call_limit',
+  'wall_clock_limit',
+  'tool_stagnation',
+  'invalid_final_plan',
+  'empty_final_plan',
+  'aborted',
+  'error',
+]);
+
+function isNonEmptyPlanningString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isFiniteNonNegativePlanningNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+function parsePlanningExecutionOutcome(parsed: Record<string, unknown>): PlanningExecutionOutcome | undefined {
+  const artifacts = parsed.artifacts && typeof parsed.artifacts === 'object'
+    ? parsed.artifacts as Record<string, unknown>
+    : {};
+  const boundsInput = artifacts.bounds && typeof artifacts.bounds === 'object'
+    ? artifacts.bounds as Record<string, unknown>
+    : {};
+  const usageInput = artifacts.usage && typeof artifacts.usage === 'object'
+    ? artifacts.usage as Record<string, unknown>
+    : {};
+  const promptRefInput = artifacts.promptRef && typeof artifacts.promptRef === 'object'
+    ? artifacts.promptRef as Record<string, unknown>
+    : undefined;
+
+  const bounds = {
+    ...(isFiniteNonNegativePlanningNumber(boundsInput.maxTurns) ? { maxTurns: boundsInput.maxTurns } : {}),
+    ...(isFiniteNonNegativePlanningNumber(boundsInput.maxToolCalls) ? { maxToolCalls: boundsInput.maxToolCalls } : {}),
+    ...(isFiniteNonNegativePlanningNumber(boundsInput.maxWallClockMs) ? { maxWallClockMs: boundsInput.maxWallClockMs } : {}),
+  };
+  const usage = {
+    ...(isFiniteNonNegativePlanningNumber(usageInput.turnsCompleted) ? { turnsCompleted: usageInput.turnsCompleted } : {}),
+    ...(isFiniteNonNegativePlanningNumber(usageInput.toolCallsExecuted) ? { toolCallsExecuted: usageInput.toolCallsExecuted } : {}),
+    ...(isFiniteNonNegativePlanningNumber(usageInput.wallClockMs) ? { wallClockMs: usageInput.wallClockMs } : {}),
+    ...(isFiniteNonNegativePlanningNumber(usageInput.totalInputTokens) ? { totalInputTokens: usageInput.totalInputTokens } : {}),
+    ...(isFiniteNonNegativePlanningNumber(usageInput.totalOutputTokens) ? { totalOutputTokens: usageInput.totalOutputTokens } : {}),
+    ...(isFiniteNonNegativePlanningNumber(usageInput.totalCostUsd) ? { totalCostUsd: usageInput.totalCostUsd } : {}),
+  };
+  const promptRef = promptRefInput
+    && isNonEmptyPlanningString(promptRefInput.id)
+    && isNonEmptyPlanningString(promptRefInput.version)
+    ? { id: promptRefInput.id, version: promptRefInput.version }
+    : undefined;
+  const agent = isNonEmptyPlanningString(parsed.agent) ? parsed.agent : undefined;
+  const model = isNonEmptyPlanningString(parsed.model) ? parsed.model : undefined;
+  const status = PLANNING_STATUSES.has(String(parsed.status)) ? parsed.status as PlanningExecutionOutcome['status'] : undefined;
+  const failureReason = parsed.failureReason === null
+    ? null
+    : PLANNING_TERMINAL_REASONS.has(String(parsed.failureReason))
+      ? parsed.failureReason as PlanningExecutionOutcome['failureReason']
+      : undefined;
+
+  const outcome: PlanningExecutionOutcome = {
+    ...(agent ? { agent } : {}),
+    ...(model ? { model } : {}),
+    ...(status ? { status } : {}),
+    ...(failureReason !== undefined ? { failureReason } : {}),
+    ...(typeof artifacts.planArtifactValid === 'boolean' ? { planArtifactValid: artifacts.planArtifactValid } : {}),
+    ...(typeof artifacts.approvalReady === 'boolean' ? { approvalReady: artifacts.approvalReady } : {}),
+    ...(Object.keys(bounds).length > 0 ? { bounds } : {}),
+    ...(Object.keys(usage).length > 0 ? { usage } : {}),
+    ...(promptRef ? { promptRef } : {}),
+    source: '.planning-result.json',
+  };
+
+  return Object.keys(outcome).length > 1 ? outcome : undefined;
+}
+
+function parsePlanningExecutionOutcomeText(content: string): PlanningExecutionOutcome | undefined {
+  try {
+    return parsePlanningExecutionOutcome(JSON.parse(content) as Record<string, unknown>);
+  } catch {
+    return undefined;
+  }
+}
+
+function loadPlanningExecutionOutcomeFromArchive(
+  repoDir: string,
+  issueId: string,
+): PlanningExecutionOutcome | undefined {
+  const archivedPlanning = loadFromArchive(repoDir, issueId, 'planning-result.json');
+  return archivedPlanning ? parsePlanningExecutionOutcomeText(archivedPlanning) : undefined;
+}
+
+function loadPlanningExecutionOutcome(
+  repoDir: string,
+  slug: string,
+  issueId: string,
+  worktreePath?: string,
+): PlanningExecutionOutcome | undefined {
+  const resultPaths = ['features', 'bugs'].flatMap((dir) => {
+    const paths: string[] = [];
+    if (worktreePath) {
+      paths.push(path.join(worktreePath, dir, slug, '.planning-result.json'));
+    }
+    paths.push(path.join(repoDir, dir, slug, '.planning-result.json'));
+    return paths;
+  });
+
+  for (const resultPath of resultPaths) {
+    if (!existsSync(resultPath)) {
+      continue;
+    }
+    const outcome = parsePlanningExecutionOutcomeText(readFileSync(resultPath, 'utf-8'));
+    if (outcome) {
+      return outcome;
+    }
+  }
+
+  return loadPlanningExecutionOutcomeFromArchive(repoDir, issueId);
 }
 
 function loadExecutedPlanning(
