@@ -6403,7 +6403,7 @@ _stop_task_recovery_contract_unavailable() {
 
 # Prepare the runtime surfaces that make a recovered phase observable before
 # launching its agent. A recovery must never start work that the dashboard and
-# lifecycle records cannot represent; callers fail the task closed on error.
+# lifecycle records cannot represent; failure is handled as a stopped task.
 _prepare_recovery_phase_launch() {
   local issue="$1" slug="$2" phase="$3" feature_dir="$4" wt_dir="$5"
   local agent="$6" model="$7" contract_payload="$8" lifecycle_phase="${9:-}"
