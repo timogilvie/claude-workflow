@@ -24,7 +24,7 @@ const PREFERRED_ROLLOUT_MODELS = [
   'z-ai/glm-5.2',
   'moonshotai/kimi-k2.7-code',
 ] as const;
-const UNREGISTERED_OPENROUTER_MODEL = 'mistral-large-2';
+const UNREGISTERED_OPENROUTER_MODEL = 'legacy-mistral-openrouter';
 const REAL_PROVIDER_ENV = 'OPENROUTER_API_KEY';
 const TEMP_OPENROUTER_ENV = 'TEST_OPENROUTER_KEY';
 

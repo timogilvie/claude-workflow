@@ -27,21 +27,21 @@ describe('model-router resolveAgent', () => {
     assert.equal(resolveAgent('gpt-5.6-terra', {}, 'claude'), 'codex');
   });
 
-  it('throws instead of routing OpenRouter aliases through codex fallback', () => {
+  it('throws instead of routing unsupported native OpenAI aliases through codex fallback', () => {
     assert.throws(
-      () => resolveAgent('mistral-large-2', {}, 'codex', undefined, 'planning'),
-      /agent-resolution.*mistral-large-2.*no-native-capability/,
+      () => resolveAgent('gpt-5.6-sol', {}, 'codex', undefined, 'planning'),
+      /agent-resolution.*gpt-5\.6-sol.*no-native-capability/,
     );
   });
 
   it('returns structured rejection details from tryResolveAgent', () => {
-    const result = tryResolveAgent('mistral-large-2', {}, 'codex', undefined, 'planning');
+    const result = tryResolveAgent('gpt-5.6-sol', {}, 'codex', undefined, 'planning');
     assert.equal(result.ok, false);
     if (result.ok) {
-      assert.fail('expected mistral-large-2 planning resolution to fail');
+      assert.fail('expected gpt-5.6-sol planning resolution to fail');
     }
     assert.equal(result.reason, 'no-native-capability');
-    assert.match(result.diagnostic, /provider=openrouter/);
+    assert.match(result.diagnostic, /provider=openai/);
   });
 
   it('resolves native-openai when registry metadata is phase-certified', () => {

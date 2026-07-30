@@ -5,6 +5,7 @@ import {
   runOpenRouterSmokeCli,
   sanitizeSmokeDetail,
   selectSmokeEntries,
+  WATCHLIST_SMOKE_MODELS,
 } from './openrouter-smoke.ts';
 
 async function runSmoke(args: string[], env: Record<string, string | undefined> = {}) {
@@ -71,6 +72,17 @@ describe('openrouter-smoke tool', () => {
     assert.equal(result.status, 0);
     const parsed = JSON.parse(result.stdout);
     assert.deepEqual(parsed.reports.map((report: { modelId: string }) => report.modelId), ['glm-5.2']);
+  });
+
+  it('targets the HOK-2582 watchlist with an explicit dry-run flag', async () => {
+    const result = await runSmoke(['--watchlist', '--json']);
+
+    assert.equal(result.status, 0);
+    const parsed = JSON.parse(result.stdout);
+    assert.deepEqual(
+      parsed.reports.map((report: { modelId: string }) => report.modelId),
+      [...WATCHLIST_SMOKE_MODELS],
+    );
   });
 
   it('filters entries by family and model id helpers', () => {

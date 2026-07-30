@@ -320,7 +320,7 @@ describe('operating-mode', () => {
       assert.equal(getCurrentOperatingMode(repoDir), 'normal');
       assert.equal(hasAnyHealthyModel(repoDir), true);
       assert.deepEqual(getOperatingModeResult(repoDir).vendorBreakdown, {
-        anthropic: { healthy: 0, degraded: 0, exhausted: 3, total: 3 },
+        anthropic: { healthy: 0, degraded: 0, exhausted: 4, total: 4 },
         openai: { healthy: 2, degraded: 0, exhausted: 0, total: 2 },
       });
     });
@@ -338,7 +338,7 @@ describe('operating-mode', () => {
 
       assert.equal(getCurrentOperatingMode(repoDir), 'constrained');
       assert.deepEqual(getOperatingModeResult(repoDir).vendorBreakdown, {
-        anthropic: { healthy: 0, degraded: 3, exhausted: 0, total: 3 },
+        anthropic: { healthy: 0, degraded: 4, exhausted: 0, total: 4 },
         openai: { healthy: 0, degraded: 2, exhausted: 0, total: 2 },
       });
     });
@@ -405,7 +405,7 @@ describe('operating-mode', () => {
 
     assert.equal(
       runOperatingModeTool(['global', '--verbose', '--repo-dir', repoDir]).stdout,
-      ['normal', 'Vendor breakdown:', '  anthropic: 2/3 healthy (1 degraded)', '  openai   : 1/2 healthy (1 exhausted)'].join('\n'),
+      ['normal', 'Vendor breakdown:', '  anthropic: 3/4 healthy (1 degraded)', '  openai   : 1/2 healthy (1 exhausted)'].join('\n'),
     );
   });
 
@@ -464,7 +464,7 @@ describe('operating-mode', () => {
 
       assert.equal(result.mode, 'normal');
       assert.deepEqual(result.vendorBreakdown, {
-        anthropic: { healthy: 3, degraded: 0, exhausted: 0, total: 3 },
+        anthropic: { healthy: 4, degraded: 0, exhausted: 0, total: 4 },
         openai: { healthy: 1, degraded: 0, exhausted: 0, total: 1 },
       });
     });
@@ -482,7 +482,7 @@ describe('operating-mode', () => {
 
       assert.equal(result.mode, 'normal');
       assert.deepEqual(result.vendorBreakdown, {
-        anthropic: { healthy: 1, degraded: 1, exhausted: 1, total: 3 },
+        anthropic: { healthy: 2, degraded: 1, exhausted: 1, total: 4 },
         openai: { healthy: 0, degraded: 1, exhausted: 0, total: 1 },
       });
     });
@@ -501,7 +501,7 @@ describe('operating-mode', () => {
 
       assert.equal(result.mode, 'survival');
       assert.deepEqual(result.vendorBreakdown, {
-        anthropic: { healthy: 0, degraded: 0, exhausted: 3, total: 3 },
+        anthropic: { healthy: 0, degraded: 0, exhausted: 4, total: 4 },
         openai: { healthy: 0, degraded: 0, exhausted: 1, total: 1 },
       });
     });
@@ -529,7 +529,7 @@ describe('operating-mode', () => {
 
       assert.equal(result.mode, 'normal');
       assert.deepEqual(result.vendorBreakdown, {
-        anthropic: { healthy: 2, degraded: 1, exhausted: 0, total: 3 },
+        anthropic: { healthy: 3, degraded: 1, exhausted: 0, total: 4 },
         openai: { healthy: 1, degraded: 0, exhausted: 1, total: 2 },
       });
     });
