@@ -852,6 +852,267 @@ test('recalculateWorkflowCost handles multiple models', () => {
 });
 
 // ────────────────────────────────────────────────────────────────
+// Tests: native workflow attribution
+// ────────────────────────────────────────────────────────────────
+
+function createNativeWorktree(): { worktreePath: string; cleanup: () => void } {
+  const base = join(tmpdir(), `wavemill-native-cost-${randomUUID()}`);
+  const worktreePath = join(base, 'worktree');
+  mkdirSync(worktreePath, { recursive: true });
+  return {
+    worktreePath,
+    cleanup: () => { try { rmSync(base, { recursive: true, force: true }); } catch {} },
+  };
+}
+
+function writeNativeSession(
+  worktreePath: string,
+  runId: string,
+  sessionId: string,
+  modelId: string,
+  assistantLines: string[],
+): void {
+  const nativeSessionsDir = join(worktreePath, '.wavemill', 'runs', runId, 'native-sessions');
+  mkdirSync(nativeSessionsDir, { recursive: true });
+  const started = JSON.stringify({
+    seq: 1,
+    sessionId,
+    timestamp: 1,
+    type: 'session_started',
+    model: modelId,
+    api: 'responses',
+    provider: 'pi',
+  });
+  writeFileSync(join(nativeSessionsDir, `${sessionId}.jsonl`), [started, ...assistantLines].join('\n'));
+}
+
+function nativeAssistant(sessionId: string, modelId: string, usage?: {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  providerCost?: number;
+}): string {
+  return JSON.stringify({
+    seq: 2,
+    sessionId,
+    timestamp: 2,
+    type: 'assistant_message',
+    model: modelId,
+    stopReason: 'end_turn',
+    ...(usage ? {
+      usage: {
+        input: usage.input ?? 0,
+        output: usage.output ?? 0,
+        cacheRead: usage.cacheRead ?? 0,
+        cacheWrite: usage.cacheWrite ?? 0,
+        totalTokens: (usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0),
+        ...(usage.providerCost !== undefined ? {
+          cost: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            total: usage.providerCost,
+          },
+        } : {}),
+      },
+    } : {}),
+    rawContent: [{ type: 'text', text: 'secret-token-should-not-persist' }],
+    replayContent: [{ type: 'text', text: 'secret-token-should-not-persist' }],
+    redacted: false,
+  });
+}
+
+test('Priced native session produces nonzero cost and complete coverage', () => {
+  const { worktreePath, cleanup } = createNativeWorktree();
+  try {
+    writeNativeSession(worktreePath, 'run-1', 'session-1', 'priced-native', [
+      nativeAssistant('session-1', 'priced-native', { input: 1_000_000, output: 500_000 }),
+    ]);
+
+    const result = computeWorkflowCost({
+      worktreePath,
+      branchName: 'task/native',
+      agentType: 'native',
+      pricingTable: {
+        'priced-native': { inputCostPerMTok: 2, outputCostPerMTok: 8 },
+      },
+    });
+
+    assert.equal(result.status, 'success');
+    if (result.status === 'success') {
+      assert.equal(result.totalCostUsd, 6);
+      assert.equal(result.attribution?.coverage, 'complete');
+      assert.equal(result.attribution?.pricedSessions, 1);
+      assert.equal(result.attribution?.unpricedSessions, 0);
+      assert.equal(result.attribution?.models[0].costUsd, 6);
+      assert.ok(!JSON.stringify(result.attribution).includes('secret-token-should-not-persist'));
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+test('Native sessions with missing and priced usage report partial coverage', () => {
+  const { worktreePath, cleanup } = createNativeWorktree();
+  try {
+    writeNativeSession(worktreePath, 'run-1', 'session-1', 'priced-native', [
+      nativeAssistant('session-1', 'priced-native', { input: 1_000_000, output: 0 }),
+    ]);
+    writeNativeSession(worktreePath, 'run-2', 'session-2', 'priced-native', [
+      nativeAssistant('session-2', 'priced-native'),
+    ]);
+
+    const result = computeWorkflowCost({
+      worktreePath,
+      branchName: 'task/native',
+      agentType: 'native',
+      pricingTable: {
+        'priced-native': { inputCostPerMTok: 2, outputCostPerMTok: 8 },
+      },
+    });
+
+    assert.equal(result.status, 'success');
+    if (result.status === 'success') {
+      assert.equal(result.totalCostUsd, 2);
+      assert.equal(result.attribution?.coverage, 'partial');
+      assert.equal(result.attribution?.reason, 'mixed_coverage');
+      assert.equal(result.attribution?.pricedSessions, 1);
+      assert.equal(result.attribution?.unpricedSessions, 1);
+      assert.equal(result.attribution?.models[0].reason, 'missing_token_usage');
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+test('Native session with unknown pricing is unavailable, not known zero', () => {
+  const { worktreePath, cleanup } = createNativeWorktree();
+  try {
+    writeNativeSession(worktreePath, 'run-1', 'session-1', 'unknown-native', [
+      nativeAssistant('session-1', 'unknown-native', { input: 1_000, output: 1_000 }),
+    ]);
+
+    const result = computeWorkflowCost({
+      worktreePath,
+      branchName: 'task/native',
+      agentType: 'native',
+      pricingTable: {},
+    });
+
+    assert.equal(result.status, 'success');
+    if (result.status === 'success') {
+      assert.equal(result.totalCostUsd, 0);
+      assert.equal(result.attribution?.coverage, 'unavailable');
+      assert.equal(result.attribution?.reason, 'unpriced_model');
+      assert.equal(result.attribution?.models[0].reason, 'unpriced_model');
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+test('Explicit zero native pricing records known zero coverage', () => {
+  const { worktreePath, cleanup } = createNativeWorktree();
+  try {
+    writeNativeSession(worktreePath, 'run-1', 'session-1', 'free-native', [
+      nativeAssistant('session-1', 'free-native', { input: 1_000_000, output: 1_000_000 }),
+    ]);
+
+    const result = computeWorkflowCost({
+      worktreePath,
+      branchName: 'task/native',
+      agentType: 'native',
+      pricingTable: {
+        'free-native': { inputCostPerMTok: 0, outputCostPerMTok: 0, cacheReadCostPerMTok: 0, cacheWriteCostPerMTok: 0 },
+      },
+    });
+
+    assert.equal(result.status, 'success');
+    if (result.status === 'success') {
+      assert.equal(result.totalCostUsd, 0);
+      assert.equal(result.attribution?.coverage, 'known_zero');
+      assert.equal(result.attribution?.pricedSessions, 1);
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+test('Duplicate native sessions aggregate exactly once', () => {
+  const { worktreePath, cleanup } = createNativeWorktree();
+  try {
+    const lines = [nativeAssistant('session-1', 'priced-native', { input: 1_000_000, output: 0 })];
+    writeNativeSession(worktreePath, 'run-1', 'session-1', 'priced-native', lines);
+    writeNativeSession(worktreePath, 'run-2', 'session-1', 'priced-native', lines);
+
+    const result = computeWorkflowCost({
+      worktreePath,
+      branchName: 'task/native',
+      agentType: 'native',
+      pricingTable: {
+        'priced-native': { inputCostPerMTok: 2, outputCostPerMTok: 8 },
+      },
+    });
+
+    assert.equal(result.status, 'success');
+    if (result.status === 'success') {
+      assert.equal(result.totalCostUsd, 2);
+      assert.equal(result.sessionCount, 1);
+      assert.equal(result.turnCount, 1);
+      assert.equal(result.attribution?.sessions, 1);
+      assert.equal(result.attribution?.turns, 1);
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+test('Native sessions without usable usage do not suppress non-native fallback', () => {
+  const tmpHome = join(tmpdir(), `wavemill-native-fallback-${randomUUID()}`);
+  const worktreePath = join(tmpHome, 'worktree');
+  const encoded = encodeProjectDir(worktreePath);
+  const projectsDir = join(tmpHome, '.claude', 'projects', encoded);
+  const origHome = process.env.HOME;
+  try {
+    process.env.HOME = tmpHome;
+    mkdirSync(projectsDir, { recursive: true });
+    writeNativeSession(worktreePath, 'run-1', 'session-1', 'priced-native', [
+      nativeAssistant('session-1', 'priced-native'),
+    ]);
+    writeFileSync(join(projectsDir, 'claude.jsonl'), assistantTurn({
+      branch: 'task/native',
+      model: 'claude-test',
+      inputTokens: 1_000_000,
+      outputTokens: 0,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+    }));
+
+    const result = computeWorkflowCost({
+      worktreePath,
+      branchName: 'task/native',
+      agentType: 'claude',
+      pricingTable: {
+        'claude-test': { inputCostPerMTok: 3, outputCostPerMTok: 10 },
+      },
+    });
+
+    assert.equal(result.status, 'success');
+    if (result.status === 'success') {
+      assert.equal(result.totalCostUsd, 3);
+      assert.equal(result.attribution, undefined);
+      assert.equal(result.sessionCount, 1);
+      assert.equal(result.turnCount, 1);
+    }
+  } finally {
+    process.env.HOME = origHome;
+    rmSync(tmpHome, { recursive: true, force: true });
+  }
+});
+
+// ────────────────────────────────────────────────────────────────
 // Summary
 // ────────────────────────────────────────────────────────────────
 

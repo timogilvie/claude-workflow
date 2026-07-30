@@ -241,6 +241,7 @@ describe('eval-record-builder', () => {
         },
         sessionCount: 2,
         turnCount: 10,
+        pricingUsed: {},
       };
 
       attachWorkflowCostMetadata(baseRecord, costOutcome);
@@ -248,6 +249,36 @@ describe('eval-record-builder', () => {
       expect(baseRecord.workflowCost).toBe(0.1234);
       expect(baseRecord.workflowTokenUsage).toEqual(costOutcome.models);
       expect(baseRecord.workflowCostStatus).toBe('success');
+    });
+
+    it('should attach native workflow cost attribution on success', () => {
+      const costOutcome = {
+        status: 'success' as const,
+        totalCostUsd: 0,
+        models: {},
+        sessionCount: 1,
+        turnCount: 1,
+        pricingUsed: {},
+        attribution: {
+          source: 'native' as const,
+          coverage: 'unavailable' as const,
+          reason: 'missing_token_usage' as const,
+          sessions: 1,
+          turns: 1,
+          pricedSessions: 0,
+          unpricedSessions: 1,
+          models: [{
+            provider: 'pi',
+            modelId: 'native-model',
+            priced: false,
+            reason: 'missing_token_usage' as const,
+          }],
+        },
+      };
+
+      attachWorkflowCostMetadata(baseRecord, costOutcome);
+
+      expect(baseRecord.workflowCostAttribution).toEqual(costOutcome.attribution);
     });
 
     it('should attach diagnostics on failure', () => {

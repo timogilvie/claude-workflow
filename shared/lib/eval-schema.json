@@ -242,6 +242,80 @@
       "minimum": 0,
       "description": "Total estimated cost in USD to build the feature (all agent sessions on this branch)."
     },
+    "workflowCostAttribution": {
+      "type": "object",
+      "description": "Native workflow-cost attribution and coverage metadata.",
+      "required": ["source", "coverage", "sessions", "turns", "pricedSessions", "unpricedSessions", "models"],
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "type": "string",
+          "enum": ["native"]
+        },
+        "coverage": {
+          "type": "string",
+          "enum": ["complete", "partial", "unavailable", "known_zero"]
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "missing_token_usage",
+            "invalid_token_usage",
+            "unpriced_model",
+            "mixed_coverage",
+            "provider_reported_cost",
+            "no_priced_sessions"
+          ]
+        },
+        "sessions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "turns": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "pricedSessions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unpricedSessions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "models": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["provider", "modelId", "priced"],
+            "additionalProperties": false,
+            "properties": {
+              "provider": { "type": "string" },
+              "modelId": { "type": "string" },
+              "inputTokens": { "type": "integer", "minimum": 0 },
+              "outputTokens": { "type": "integer", "minimum": 0 },
+              "cacheReadTokens": { "type": "integer", "minimum": 0 },
+              "cacheCreationTokens": { "type": "integer", "minimum": 0 },
+              "totalTokens": { "type": "integer", "minimum": 0 },
+              "costUsd": { "type": "number", "minimum": 0 },
+              "providerReportedCostUsd": { "type": "number", "minimum": 0 },
+              "priced": { "type": "boolean" },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "missing_token_usage",
+                  "invalid_token_usage",
+                  "unpriced_model",
+                  "mixed_coverage",
+                  "provider_reported_cost",
+                  "no_priced_sessions"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
     "trainingEligible": {
       "type": "boolean",
       "description": "Whether the record includes the fields required for training export."

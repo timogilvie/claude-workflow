@@ -767,7 +767,33 @@ function validPromptSizeDiagnostic() {
 }
 
 test('SCHEMA_VERSION is bumped for eval schema updates', () => {
-  assert.equal(SCHEMA_VERSION, '1.33.0');
+  assert.equal(SCHEMA_VERSION, '1.34.0');
+});
+
+test('Record with native workflow cost attribution validates', () => {
+  const record = {
+    ...scenarios[0].record,
+    workflowCost: 0,
+    workflowCostStatus: 'success',
+    workflowCostAttribution: {
+      source: 'native',
+      coverage: 'unavailable',
+      reason: 'missing_token_usage',
+      sessions: 1,
+      turns: 1,
+      pricedSessions: 0,
+      unpricedSessions: 1,
+      models: [{
+        provider: 'pi',
+        modelId: 'native-model',
+        priced: false,
+        reason: 'missing_token_usage',
+      }],
+    },
+  } as unknown as Record<string, unknown>;
+
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
 });
 
 test('Record without prompt size fields still validates', () => {
@@ -1792,8 +1818,8 @@ test('Wavemill router fields validate and schema stays in parity', () => {
   assert.equal(properties.wavemill_router_scoring?.$ref, '#/$defs/WavemillRouterScoringMetadata');
 });
 
-test('Schema version constant is 1.32.0', () => {
-  assert.equal(SCHEMA_VERSION, '1.33.0');
+test('Schema version constant is 1.34.0', () => {
+  assert.equal(SCHEMA_VERSION, '1.34.0');
 });
 
 test('Record with resolved-model routing validates', () => {

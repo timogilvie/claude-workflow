@@ -55,13 +55,8 @@ describe('piUsageToSessionModelUsage', () => {
     });
   });
 
-  it('returns zeros for undefined usage', () => {
-    assert.deepEqual(piUsageToSessionModelUsage(undefined), {
-      inputTokens: 0,
-      cacheCreationTokens: 0,
-      cacheReadTokens: 0,
-      outputTokens: 0,
-    });
+  it('preserves absent usage as undefined', () => {
+    assert.equal(piUsageToSessionModelUsage(undefined), undefined);
   });
 
   it('produces data consumable by computeModelCost', () => {
