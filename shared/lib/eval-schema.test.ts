@@ -19,6 +19,7 @@ import {
   SCORE_BANDS,
   getScoreBand,
 } from './eval-schema.ts';
+import { buildChallengeExecutionIntent } from './challenge-execution-contract.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const schema = JSON.parse(
@@ -767,7 +768,97 @@ function validPromptSizeDiagnostic() {
 }
 
 test('SCHEMA_VERSION is bumped for eval schema updates', () => {
-  assert.equal(SCHEMA_VERSION, '1.33.0');
+  assert.equal(SCHEMA_VERSION, '1.34.0');
+});
+
+test('Record with native workflow cost attribution validates', () => {
+  const record = {
+    ...scenarios[0].record,
+    workflowCost: 0,
+    workflowCostStatus: 'success',
+    workflowCostAttribution: {
+      source: 'native',
+      coverage: 'unavailable',
+      reason: 'missing_token_usage',
+      sessions: 1,
+      turns: 1,
+      pricedSessions: 0,
+      unpricedSessions: 1,
+      models: [{
+        provider: 'pi',
+        modelId: 'native-model',
+        priced: false,
+        reason: 'missing_token_usage',
+      }],
+    },
+  } as unknown as Record<string, unknown>;
+
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
+test('Challenge execution contract fields validate as emitted', () => {
+  const intent = buildChallengeExecutionIntent({
+    pairId: 'pair-schema',
+    challengeStage: 'implementation',
+    primary: {
+      model: 'claude-opus-4-6',
+      planner: 'claude-opus-4-6',
+      reviewer: 'claude-opus-4-6',
+      planDepth: 'standard',
+      codeDepth: 'standard',
+      reviewMode: 'standard',
+    },
+    challenger: {
+      model: 'gpt-5.4',
+      planner: 'claude-opus-4-6',
+      reviewer: 'claude-opus-4-6',
+      planDepth: 'standard',
+      codeDepth: 'deep',
+      reviewMode: 'standard',
+    },
+    routeContext: { source: 'unit-test' },
+    selectionReason: 'schema parity',
+  });
+  const record: EvalRecord = {
+    ...scenarios[0].record,
+    schemaVersion: '1.34.0',
+    challengePairId: 'pair-schema',
+    challengeSide: 'challenger',
+    challengeIntent: intent,
+    challengeExecutionRoute: intent.challenger.expectedRoute,
+    challengeExecutionEvidence: {
+      pairId: 'pair-schema',
+      side: 'challenger',
+      validity: 'valid',
+      challengeStage: 'implementation',
+      expectedStageModel: 'gpt-5.4',
+      effectiveRoute: intent.challenger.expectedRoute,
+      evidence: [
+        {
+          stage: 'implementation',
+          model: 'gpt-5.4',
+          source: 'eval.modelId',
+        },
+      ],
+    },
+  };
+
+  const result = validateAgainstSchema(record as unknown as Record<string, unknown>);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
+test('Invalid challenge markers validate without requiring challenge execution fields', () => {
+  const record: EvalRecord = {
+    ...scenarios[0].record,
+    schemaVersion: '1.34.0',
+    challengePairId: 'pair-schema',
+    challengeDivergenceReason: 'state_vs_derived_side_mismatch',
+    invalidChallenge: true,
+  };
+
+  const result = validateAgainstSchema(record as unknown as Record<string, unknown>);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
 });
 
 test('Record without prompt size fields still validates', () => {
@@ -1792,8 +1883,8 @@ test('Wavemill router fields validate and schema stays in parity', () => {
   assert.equal(properties.wavemill_router_scoring?.$ref, '#/$defs/WavemillRouterScoringMetadata');
 });
 
-test('Schema version constant is 1.32.0', () => {
-  assert.equal(SCHEMA_VERSION, '1.33.0');
+test('Schema version constant is 1.34.0', () => {
+  assert.equal(SCHEMA_VERSION, '1.34.0');
 });
 
 test('Record with resolved-model routing validates', () => {
