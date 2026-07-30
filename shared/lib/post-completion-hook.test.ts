@@ -12,6 +12,7 @@ import {
   runPostCompletionEval,
 } from './post-completion-hook.ts';
 import { evaluateTask, JudgeResponseRecoveryError } from './eval.ts';
+import { buildChallengeExecutionIntent } from './challenge-execution-contract.ts';
 
 let passed = 0;
 let failed = 0;
@@ -100,6 +101,63 @@ function makeEligibleRepo(repoDir: string, slug: string, issueId: string): void 
     }),
   );
   mkdirSync(join(repoDir, '.wavemill', 'evals', 'artifacts', issueId), { recursive: true });
+}
+
+function makeChallengeIntent(pairId: string) {
+  return buildChallengeExecutionIntent({
+    pairId,
+    challengeStage: 'implementation',
+    primary: {
+      model: 'claude-sonnet-4-5-20250929',
+      planner: 'gpt-5.5',
+      reviewer: 'claude-sonnet-4-6',
+      planDepth: 'standard',
+      codeDepth: 'standard',
+      reviewMode: 'standard',
+    },
+    challenger: {
+      model: 'gpt-5.4',
+      planner: 'gpt-5.5',
+      reviewer: 'claude-sonnet-4-6',
+      planDepth: 'standard',
+      codeDepth: 'deep',
+      reviewMode: 'standard',
+    },
+  });
+}
+
+function writeWorkflowState(repoDir: string, tasks: Record<string, unknown>): void {
+  mkdirSync(join(repoDir, '.wavemill', 'state'), { recursive: true });
+  writeFileSync(
+    join(repoDir, '.wavemill', 'state', 'workflow-state.json'),
+    JSON.stringify({ tasks }),
+  );
+}
+
+function enrichChallengeRecord(input: {
+  repoDir: string;
+  issueId: string;
+  branchName: string;
+  challengePairId: string;
+}): EvalRecord {
+  const record = makeRecord();
+  if (input.branchName.endsWith('-challenger')) {
+    record.modelId = 'gpt-5.4';
+    record.modelVersion = 'gpt-5.4';
+  }
+  enrichPostCompletionRecord(record, {
+    repoDir: input.repoDir,
+    issueId: input.issueId,
+    branchName: input.branchName,
+    challengePairId: input.challengePairId,
+    worktreePath: input.repoDir,
+    agentType: 'codex',
+    originalPrompt: 'Challenge eval',
+    prDiff: 'diff',
+    record,
+    interventionRecords: [],
+  });
+  return record;
 }
 
 function makeContextUpdateRepo(repoDir: string, slug: string, issueId: string): void {
@@ -642,6 +700,115 @@ await test('runPostCompletionEval leaves challenge stage evidence unset for non-
     });
 
     assert.equal(persistedRecord?.challengeStageEval, undefined);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+await test('enrichPostCompletionRecord uses canonical challengeRole and challengeExecutionIntent', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-canonical-challenge-'));
+  const intent = makeChallengeIntent('pair-2598');
+  try {
+    writeWorkflowState(repoDir, {
+      'HOK-2598': {
+        challengeRole: 'primary',
+        challengeExecutionIntent: intent,
+      },
+    });
+
+    const record = enrichChallengeRecord({
+      repoDir,
+      issueId: 'HOK-2598',
+      branchName: 'task/restore-challenge-eval-persistence-challenger',
+      challengePairId: 'pair-2598',
+    });
+
+    assert.equal(record.challengeSide, 'primary');
+    assert.equal(record.challengeIntent?.pairId, 'pair-2598');
+    assert.equal(record.challengeExecutionRoute?.coder, 'claude-sonnet-4-5-20250929');
+    assert.equal(record.invalidChallenge, true);
+    assert.equal(record.challengeDivergenceReason, 'state_vs_derived_side_mismatch');
+    assert.equal(record.trainingEligible, false);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+await test('enrichPostCompletionRecord recognizes -challenger branch fallback when state is absent', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-dash-challenger-'));
+  try {
+    const record = enrichChallengeRecord({
+      repoDir,
+      issueId: 'HOK-2598-challenger',
+      branchName: 'task/restore-challenge-eval-persistence-challenger',
+      challengePairId: 'HOK-2598',
+    });
+
+    assert.equal(record.challengeSide, 'challenger');
+    assert.equal(record.invalidChallenge, undefined);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+await test('enrichPostCompletionRecord persists challenger side from canonical state on -challenger branch', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-canonical-dash-challenger-'));
+  const intent = makeChallengeIntent('pair-2598');
+  try {
+    writeWorkflowState(repoDir, {
+      'HOK-2598-challenger': {
+        challengeRole: 'challenger',
+        challengeExecutionIntent: intent,
+      },
+    });
+
+    const record = enrichChallengeRecord({
+      repoDir,
+      issueId: 'HOK-2598-challenger',
+      branchName: 'task/restore-challenge-eval-persistence-challenger',
+      challengePairId: 'pair-2598',
+    });
+
+    assert.equal(record.challengeSide, 'challenger');
+    assert.equal(record.challengeIntent?.pairId, 'pair-2598');
+    assert.equal(record.challengeExecutionRoute?.coder, 'gpt-5.4');
+    assert.equal(record.invalidChallenge, undefined);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+await test('enrichPostCompletionRecord recognizes legacy _c fallback when state is absent', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-legacy-challenger-'));
+  try {
+    const record = enrichChallengeRecord({
+      repoDir,
+      issueId: 'HOK-2598_c',
+      branchName: 'task/restore-challenge-eval-persistence_c',
+      challengePairId: 'HOK-2598',
+    });
+
+    assert.equal(record.challengeSide, 'challenger');
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+await test('enrichPostCompletionRecord falls back safely when workflow state is malformed', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-malformed-state-'));
+  try {
+    mkdirSync(join(repoDir, '.wavemill', 'state'), { recursive: true });
+    writeFileSync(join(repoDir, '.wavemill', 'state', 'workflow-state.json'), '{bad json');
+
+    const record = enrichChallengeRecord({
+      repoDir,
+      issueId: 'HOK-2598-challenger',
+      branchName: 'task/restore-challenge-eval-persistence-challenger',
+      challengePairId: 'HOK-2598',
+    });
+
+    assert.equal(record.challengeSide, 'challenger');
+    assert.equal(record.challengeIntent, undefined);
   } finally {
     rmSync(repoDir, { recursive: true, force: true });
   }
