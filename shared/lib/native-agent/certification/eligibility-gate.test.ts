@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 import type { ModelRegistry } from '../../model-registry.ts';
 import {
-  buildCertificationPath,
+  buildGlobalCertificationPath,
   CERTIFICATION_SCHEMA_VERSION,
   evaluateNativeProviderGate,
   type CertificationPhase,
@@ -49,9 +49,18 @@ function makeRegistry(modelId: string, provider: 'openai' | 'openrouter', suiteV
 
 function makeRepo(): { repoDir: string; cleanup: () => void } {
   const repoDir = mkdtempSync(join(tmpdir(), 'eligibility-gate-'));
+  const previousRoot = process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT;
+  process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT = join(repoDir, 'global-native-agent-certifications');
   return {
     repoDir,
-    cleanup: () => rmSync(repoDir, { recursive: true, force: true }),
+    cleanup: () => {
+      if (previousRoot === undefined) {
+        delete process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT;
+      } else {
+        process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT = previousRoot;
+      }
+      rmSync(repoDir, { recursive: true, force: true });
+    },
   };
 }
 
@@ -81,7 +90,7 @@ function writeArtifact(
   suiteVersion: string,
   overrides: Partial<NativeCertificationArtifact> = {},
 ): string {
-  const path = buildCertificationPath(repoDir, provider, modelId, suiteVersion);
+  const path = buildGlobalCertificationPath(provider, modelId, suiteVersion);
   mkdirSync(dirname(path), { recursive: true });
   const openRouterIdentity = provider === 'openrouter'
     ? (modelId.includes('/') ? modelId.split('/') : ['z-ai', modelId])
@@ -163,12 +172,17 @@ describe('evaluateNativeProviderGate', () => {
     }
   });
 
-  it('requires repoDir in task mode', () => {
-    const registry = makeRegistry('gpt-4o', 'openai');
-    assert.throws(
-      () => evaluateNativeProviderGate(taskInput(registry, 'gpt-4o', '/tmp/unused', { repoDir: undefined })),
-      /repoDir is required/,
-    );
+  it('does not require repoDir in task mode when global storage is configured', () => {
+    const { repoDir, cleanup } = makeRepo();
+    try {
+      const registry = makeRegistry('gpt-4o', 'openai');
+      const decision = evaluateNativeProviderGate(taskInput(registry, 'gpt-4o', repoDir, { repoDir: undefined }));
+      assert.equal(decision.ok, false);
+      assert.equal(decision.reason, 'missing_artifact');
+      assert.match(decision.artifactPath ?? '', /global-native-agent-certifications\/openai\/gpt-4o\/v1\.json$/);
+    } finally {
+      cleanup();
+    }
   });
 
   it('maps missing artifacts to missing_artifact with a resolved path', () => {
@@ -179,7 +193,7 @@ describe('evaluateNativeProviderGate', () => {
 
       assert.equal(decision.ok, false);
       assert.equal(decision.reason, 'missing_artifact');
-      assert.match(decision.artifactPath ?? '', /\.wavemill\/native-agent-certifications\/openai\/gpt-4o\/v1\.json$/);
+      assert.match(decision.artifactPath ?? '', /global-native-agent-certifications\/openai\/gpt-4o\/v1\.json$/);
     } finally {
       cleanup();
     }
@@ -189,7 +203,7 @@ describe('evaluateNativeProviderGate', () => {
     const { repoDir, cleanup } = makeRepo();
     try {
       const registry = makeRegistry('gpt-4o', 'openai');
-      const path = buildCertificationPath(repoDir, 'openai', 'gpt-4o', 'v1');
+      const path = buildGlobalCertificationPath('openai', 'gpt-4o', 'v1');
       mkdirSync(dirname(path), { recursive: true });
       writeFileSync(path, 'not json', 'utf8');
 
@@ -326,7 +340,7 @@ describe('evaluateNativeProviderGate', () => {
     }
   });
 
-  it('rejects missing registry suite metadata as wrong_suite', () => {
+  it('rejects missing registry suite metadata as missing_artifact', () => {
     const { repoDir, cleanup } = makeRepo();
     try {
       const registry = makeRegistry('gpt-4o', 'openai');
@@ -335,7 +349,7 @@ describe('evaluateNativeProviderGate', () => {
       const decision = evaluateNativeProviderGate(taskInput(registry, 'gpt-4o', repoDir));
 
       assert.equal(decision.ok, false);
-      assert.equal(decision.reason, 'wrong_suite');
+      assert.equal(decision.reason, 'missing_artifact');
     } finally {
       cleanup();
     }

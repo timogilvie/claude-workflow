@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { CertificationPhase } from './native-agent/certification/schema.ts';
-import { checkCertificationEligibility } from './native-agent/certification/loader.ts';
+import { resolveEffectiveModel } from './effective-models.ts';
 import type {
   LaunchPriorityModel,
   ModelStatus,
@@ -347,20 +347,23 @@ export function auditLaunchPriorityCoverage(options: AuditOptions = {}): LaunchP
   const checkNativeCertification = options.checkNativeCertification
     ?? ((provider: string, model: string, role: LaunchPriorityRole) => {
       const capability = getModel(registry, model)?.nativeCapability;
-      const suiteVersion = capability?.certification?.certificationSuiteVersion;
-      if (!options.repoDir || !suiteVersion) {
+      if (!capability || !options.repoDir) {
         return { eligible: true };
       }
-      const result = checkCertificationEligibility(
-        options.repoDir,
-        provider,
-        model,
-        suiteVersion,
-        phaseForRole(role),
-      );
-      return result.eligible
+      const projection = resolveEffectiveModel({
+        modelId: model,
+        stage: role,
+        registry,
+        repoDir: options.repoDir,
+        now: options.now,
+        apiKeyPresent: true,
+        apiKeyEnv: `${provider.toUpperCase()}_API_KEY`,
+        checkRuntime: false,
+      });
+      const certificationExclusion = projection.exclusions.find((exclusion) => exclusion.source === 'certification');
+      return projection.usable
         ? { eligible: true }
-        : { eligible: false, reason: result.reason };
+        : { eligible: false, reason: certificationExclusion?.code ?? projection.exclusions[0]?.code };
     });
 
   for (const record of records) {

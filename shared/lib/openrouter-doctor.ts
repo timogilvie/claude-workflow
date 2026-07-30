@@ -26,7 +26,7 @@ import {
 } from './model-registry.ts';
 import { tryResolveAgent } from './model-router.ts';
 import {
-  buildCertificationPath,
+  buildGlobalCertificationPath,
   filterNativeModels,
   STAGE_PHASE_REQUIREMENT,
   type RouterCertificationRejection,
@@ -272,7 +272,7 @@ function resolveStoragePath(
     return null;
   }
   try {
-    return buildCertificationPath(repoDir, 'openrouter', modelId, suiteVersion);
+    return buildGlobalCertificationPath('openrouter', modelId, suiteVersion);
   } catch {
     return null;
   }

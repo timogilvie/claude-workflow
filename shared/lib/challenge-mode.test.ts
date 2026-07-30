@@ -276,6 +276,7 @@ function writeNativeChallengeRepo(options: {
   enablePatchCoding?: boolean;
 }): string {
   const repoDir = mkdtempSync(join(tmpdir(), 'challenge-native-'));
+  process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT = join(repoDir, 'global-native-agent-certifications');
   const suiteVersion = options.suiteVersion ?? 'v-test';
   const storageIdentity = options.provider === 'openrouter'
     ? (() => {
@@ -284,7 +285,7 @@ function writeNativeChallengeRepo(options: {
         return provider && model ? { provider, model } : { provider: options.provider, model: options.model };
       })()
     : { provider: options.provider, model: options.model };
-  mkdirSync(join(repoDir, '.wavemill', 'native-agent-certifications', storageIdentity.provider, storageIdentity.model), { recursive: true });
+  mkdirSync(join(repoDir, 'global-native-agent-certifications', storageIdentity.provider, storageIdentity.model), { recursive: true });
   writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
     nativeAgent: {
       enabled: true,
@@ -335,7 +336,7 @@ function writeNativeChallengeRepo(options: {
     },
   }));
   writeFileSync(
-    join(repoDir, '.wavemill', 'native-agent-certifications', storageIdentity.provider, storageIdentity.model, `${suiteVersion}.json`),
+    join(repoDir, 'global-native-agent-certifications', storageIdentity.provider, storageIdentity.model, `${suiteVersion}.json`),
     JSON.stringify({
       schemaVersion: CERTIFICATION_SCHEMA_VERSION,
       provider: storageIdentity.provider,
@@ -1780,9 +1781,10 @@ function writeCertArtifact(
   suiteVersion: string,
   overrides: Record<string, unknown> = {},
 ): void {
+  process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT = join(repoDir, 'global-native-agent-certifications');
   const openrouterId = provider === 'openrouter' ? resolveOpenRouterModelId(model) : null;
   const [storageProvider, storageModel] = openrouterId?.split('/') ?? [provider, model];
-  const certDir = join(repoDir, '.wavemill', 'native-agent-certifications', storageProvider!, storageModel!);
+  const certDir = join(repoDir, 'global-native-agent-certifications', storageProvider!, storageModel!);
   mkdirSync(certDir, { recursive: true });
   const artifact = {
     schemaVersion: CERTIFICATION_SCHEMA_VERSION,
@@ -1798,9 +1800,10 @@ function writeCertArtifact(
 }
 
 function certArtifactPath(repoDir: string, provider: string, model: string, suiteVersion: string): string {
+  process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT = join(repoDir, 'global-native-agent-certifications');
   const openrouterId = provider === 'openrouter' ? resolveOpenRouterModelId(model) : null;
   const [storageProvider, storageModel] = openrouterId?.split('/') ?? [provider, model];
-  return join(repoDir, '.wavemill', 'native-agent-certifications', storageProvider!, storageModel!, `${suiteVersion}.json`);
+  return join(repoDir, 'global-native-agent-certifications', storageProvider!, storageModel!, `${suiteVersion}.json`);
 }
 
 /** Build a minimal native model registry entry */

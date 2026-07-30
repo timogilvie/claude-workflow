@@ -140,9 +140,18 @@ function makeArtifact(overrides: Partial<NativeCertificationArtifact> = {}): Nat
 
 function makeTempRepo(): { repoDir: string; cleanup: () => void } {
   const repoDir = mkdtempSync(join(tmpdir(), 'native-cert-report-'));
+  const previousRoot = process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT;
+  process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT = join(repoDir, 'global-native-agent-certifications');
   return {
     repoDir,
-    cleanup: () => rmSync(repoDir, { recursive: true, force: true }),
+    cleanup: () => {
+      if (previousRoot === undefined) {
+        delete process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT;
+      } else {
+        process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT = previousRoot;
+      }
+      rmSync(repoDir, { recursive: true, force: true });
+    },
   };
 }
 
@@ -368,7 +377,7 @@ describe('buildModelCertificationReport', () => {
   it('loads mapped OpenRouter artifacts for aliased models', () => {
     const { repoDir, cleanup } = makeTempRepo();
     try {
-      const certDir = join(repoDir, '.wavemill', 'native-agent-certifications', 'qwen', 'qwen3-coder');
+      const certDir = join(repoDir, 'global-native-agent-certifications', 'qwen', 'qwen3-coder');
       mkdirSync(certDir, { recursive: true });
       writeFileSync(join(certDir, 'v1.json'), JSON.stringify({
         schemaVersion: CERTIFICATION_SCHEMA_VERSION,

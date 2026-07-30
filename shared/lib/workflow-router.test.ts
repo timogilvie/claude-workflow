@@ -109,6 +109,8 @@ function restoredFrontierQuotaState(status: QuotaStatus): Record<string, QuotaSt
 
 function makeRepo(configOverride?: Record<string, unknown>): { repoDir: string; cleanup: () => void } {
   const repoDir = mkdtempSync(join(tmpdir(), 'workflow-router-test-'));
+  const previousRoot = process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT;
+  process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT = join(repoDir, 'global-native-agent-certifications');
   mkdirSync(join(repoDir, '.wavemill', 'evals'), { recursive: true });
   writeFileSync(join(repoDir, '.wavemill', 'evals', 'records.jsonl'), [
     JSON.stringify({ id: '1', modelId: 'gpt-5.3-codex', originalPrompt: 'Create a CLI command', score: 0.91, timeSeconds: 100, interventionCount: 0 }),
@@ -139,6 +141,11 @@ function makeRepo(configOverride?: Record<string, unknown>): { repoDir: string; 
   return {
     repoDir,
     cleanup: () => {
+      if (previousRoot === undefined) {
+        delete process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT;
+      } else {
+        process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT = previousRoot;
+      }
       clearConfigCache(repoDir);
       rmSync(repoDir, { recursive: true, force: true });
     },
@@ -180,7 +187,7 @@ function writeNativeCertificationArtifact(
   phase: 'read-only' | 'patch' | 'workflow',
   certifiedAt = '2026-07-05T15:31:57.527Z',
 ): void {
-  const certDir = join(repoDir, '.wavemill', 'native-agent-certifications', provider, model);
+  const certDir = join(repoDir, 'global-native-agent-certifications', provider, model);
   mkdirSync(certDir, { recursive: true });
   writeFileSync(join(certDir, `${suiteVersion}.json`), JSON.stringify({
     schemaVersion: CERTIFICATION_SCHEMA_VERSION,
@@ -1580,7 +1587,7 @@ function writeCertArtifact(
   suiteVersion: string,
   overrides: Record<string, unknown> = {},
 ): void {
-  const certDir = join(repoDir, '.wavemill', 'native-agent-certifications', provider, model);
+  const certDir = join(repoDir, 'global-native-agent-certifications', provider, model);
   mkdirSync(certDir, { recursive: true });
   const artifact = {
     schemaVersion: CERTIFICATION_SCHEMA_VERSION,
@@ -1882,7 +1889,7 @@ await test('malformed artifact rejects native model', () => {
     },
   });
   try {
-    const certDir = join(repoDir, '.wavemill', 'native-agent-certifications', 'openai', 'native-malformed');
+    const certDir = join(repoDir, 'global-native-agent-certifications', 'openai', 'native-malformed');
     mkdirSync(certDir, { recursive: true });
     // Write an incomplete / structurally invalid artifact
     writeFileSync(join(certDir, 'v1.json'), JSON.stringify({ schemaVersion: 1, provider: 'openai' }));

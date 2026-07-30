@@ -1,12 +1,12 @@
 import {
   DEFAULT_MODEL_REGISTRY,
-  evaluateRegistryPhaseEligibility,
   getModel,
   isCodexChatgptLaunchEligible,
   type AgentType,
   type ModelRegistry,
   type NativeProviderName,
 } from './model-registry.ts';
+import { resolveEffectiveModel, type EffectiveModelReasonCode } from './effective-models.ts';
 import type { CertificationPhase } from './native-agent/certification/schema.ts';
 import { resolveLaunchPriorityModel, type RoleEligibility } from './openrouter-catalog.ts';
 
@@ -157,27 +157,52 @@ function resolveRegistryBackedNativeAgent(input: {
     return { ok: false, reason: 'role-ineligible', diagnostic };
   }
 
-  const eligibility = evaluateRegistryPhaseEligibility({
+  const projection = resolveEffectiveModel({
     modelId: input.modelId,
-    phase: certificationPhaseForAgentPhase(input.phase),
+    stage: input.phase,
     registry: input.registry,
     now: input.now,
+    apiKeyPresent: true,
+    apiKeyEnv: `${provider.toUpperCase()}_API_KEY`,
+    checkRuntime: false,
   });
 
-  if (!eligibility.eligible) {
+  if (!projection.usable) {
+    const reason = mapProjectionReasonToAgentResolution(projection.exclusions[0]?.code);
     const certifyCommand = certifyCommandFor(input.modelId, provider, input.phase);
     const diagnostic = buildDiagnostic({
       modelId: input.modelId,
       phase: input.phase,
       provider,
-      reason: 'uncertified',
-      certificationStatus: eligibility.reason,
+      reason,
+      certificationStatus: projection.exclusions.map((exclusion) => exclusion.code).join(',') || 'ineligible',
       certifyCommand,
     });
-    return { ok: false, reason: 'uncertified', diagnostic, certifyCommand };
+    return { ok: false, reason, diagnostic, certifyCommand };
   }
 
   return { ok: true, agent: input.nativeAgent };
+}
+
+function mapProjectionReasonToAgentResolution(reason: EffectiveModelReasonCode | undefined): UnroutableReason {
+  switch (reason) {
+    case 'invalid-model-id':
+      return 'invalid-model-id';
+    case 'unknown-model':
+      return 'unknown-model';
+    case 'no-native-capability':
+    case 'missing-registry-alias':
+    case 'provider-mismatch':
+      return 'no-native-capability';
+    case 'native-unsupported':
+      return 'native-unsupported';
+    case 'role-ineligible':
+      return 'role-ineligible';
+    case 'codex-chatgpt-ineligible':
+      return 'codex-chatgpt-ineligible';
+    default:
+      return 'uncertified';
+  }
 }
 
 export function resolveModelAgent(opts: ResolveModelAgentOptions): AgentResolution {

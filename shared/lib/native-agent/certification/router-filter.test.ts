@@ -87,9 +87,18 @@ async function test(name: string, fn: () => void | Promise<void>) {
 
 function makeRepo(): { repoDir: string; cleanup: () => void } {
   const repoDir = mkdtempSync(join(tmpdir(), 'router-filter-test-'));
+  const previousRoot = process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT;
+  process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT = join(repoDir, 'global-native-agent-certifications');
   return {
     repoDir,
-    cleanup: () => rmSync(repoDir, { recursive: true, force: true }),
+    cleanup: () => {
+      if (previousRoot === undefined) {
+        delete process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT;
+      } else {
+        process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT = previousRoot;
+      }
+      rmSync(repoDir, { recursive: true, force: true });
+    },
   };
 }
 
@@ -100,7 +109,8 @@ function writeCertArtifact(
   suiteVersion: string,
   overrides: Record<string, unknown> = {},
 ): void {
-  const certDir = join(repoDir, '.wavemill', 'native-agent-certifications', provider, model);
+  const root = process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT ?? join(repoDir, 'global-native-agent-certifications');
+  const certDir = join(root, provider, model);
   mkdirSync(certDir, { recursive: true });
   const artifact = {
     schemaVersion: CERTIFICATION_SCHEMA_VERSION,
@@ -114,6 +124,11 @@ function writeCertArtifact(
     ...overrides,
   };
   writeFileSync(join(certDir, `${suiteVersion}.json`), JSON.stringify(artifact));
+}
+
+function globalCertDir(repoDir: string, provider: string, model: string): string {
+  const root = process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT ?? join(repoDir, 'global-native-agent-certifications');
+  return join(root, provider, model);
 }
 
 /** Minimal registry with one native and one non-native model */
@@ -746,7 +761,7 @@ await test('failed scenario rejects with reason=insufficient-phase', () => {
 await test('malformed artifact rejects with reason=malformed', () => {
   const { repoDir, cleanup } = makeRepo();
   try {
-    const certDir = join(repoDir, '.wavemill', 'native-agent-certifications', 'openai', 'native-bad');
+    const certDir = globalCertDir(repoDir, 'openai', 'native-bad');
     mkdirSync(certDir, { recursive: true });
     writeFileSync(join(certDir, 'v1.json'), '{ not valid json ');
     const registry = makeRegistry('native-bad', 'patch', 'v1');
@@ -760,7 +775,7 @@ await test('malformed artifact rejects with reason=malformed', () => {
 await test('structurally invalid artifact rejects with reason=malformed', () => {
   const { repoDir, cleanup } = makeRepo();
   try {
-    const certDir = join(repoDir, '.wavemill', 'native-agent-certifications', 'openai', 'native-incomplete');
+    const certDir = globalCertDir(repoDir, 'openai', 'native-incomplete');
     mkdirSync(certDir, { recursive: true });
     writeFileSync(join(certDir, 'v1.json'), JSON.stringify({ schemaVersion: 1, provider: 'openai' }));
     const registry = makeRegistry('native-incomplete', 'patch', 'v1');
@@ -775,7 +790,7 @@ await test('negative patch-path diagnostics stay pairwise distinct across all re
   const { repoDir, cleanup } = makeRepo();
   try {
     const registry = makeRegistry('native-distinct', 'patch', 'v2');
-    const certDir = join(repoDir, '.wavemill', 'native-agent-certifications', 'openai', 'native-distinct');
+    const certDir = globalCertDir(repoDir, 'openai', 'native-distinct');
 
     const checkReason = (): string => {
       const result = filterNativeModels(['native-distinct'], 'coder', registry, repoDir);

@@ -1,5 +1,13 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
+import {
+  buildGlobalCertificationPath,
+  CERTIFICATION_SCHEMA_VERSION,
+  type NativeCertificationArtifact,
+} from './native-agent/certification/index.ts';
 import type { ModelRegistry } from './model-registry.ts';
 import { resolveModelAgent } from './model-agent-resolution.ts';
 
@@ -24,6 +32,43 @@ function makeRegistry(modelId: string, model: ModelRegistry['models'][string]): 
     },
     ladders: {},
   };
+}
+
+function withGlobalRoot(fn: () => void): void {
+  const tmp = mkdtempSync(join(tmpdir(), 'model-agent-resolution-'));
+  const previousRoot = process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT;
+  process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT = join(tmp, 'global-certs');
+  try {
+    fn();
+  } finally {
+    if (previousRoot === undefined) {
+      delete process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT;
+    } else {
+      process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT = previousRoot;
+    }
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function writeGlobalArtifact(
+  provider: string,
+  model: string,
+  suiteVersion = 'v1',
+  overrides: Partial<NativeCertificationArtifact> = {},
+): void {
+  const path = buildGlobalCertificationPath(provider, model, suiteVersion);
+  mkdirSync(dirname(path), { recursive: true });
+  const artifact: NativeCertificationArtifact = {
+    schemaVersion: CERTIFICATION_SCHEMA_VERSION,
+    provider,
+    model,
+    phase: 'workflow',
+    suiteVersion,
+    certifiedAt: '2099-01-01T00:00:00.000Z',
+    scenarios: [{ scenarioId: 's1', passed: true }],
+    ...overrides,
+  };
+  writeFileSync(path, JSON.stringify(artifact, null, 2), 'utf8');
 }
 
 describe('resolveModelAgent', () => {
@@ -108,29 +153,32 @@ describe('resolveModelAgent', () => {
   });
 
   it('resolves certified role-eligible claude-openrouter models to native-openrouter', () => {
-    const registry = makeRegistry('qwen-3-coder', {
-      agent: 'claude-openrouter',
-      nativeCapability: {
-        nativeProvider: 'openrouter',
-        piTransportKind: 'openai-completions',
-        readOnlyNative: 'certified',
-        compatFlags: { thinkingFormat: 'openrouter' },
-        certification: {
-          maxCertifiedPhase: 'workflow',
-          certifiedAt: '2099-01-01T00:00:00.000Z',
-          certificationSuiteVersion: 'v1',
+    withGlobalRoot(() => {
+      writeGlobalArtifact('qwen', 'qwen3-coder', 'v1', { phase: 'workflow' });
+      const registry = makeRegistry('qwen-3-coder', {
+        agent: 'claude-openrouter',
+        nativeCapability: {
+          nativeProvider: 'openrouter',
+          piTransportKind: 'openai-completions',
+          readOnlyNative: 'certified',
+          compatFlags: { thinkingFormat: 'openrouter' },
+          certification: {
+            maxCertifiedPhase: 'workflow',
+            certifiedAt: '2099-01-01T00:00:00.000Z',
+            certificationSuiteVersion: 'v1',
+          },
         },
-      },
-    });
+      });
 
-    const result = resolveModelAgent({
-      model: 'qwen-3-coder',
-      phase: 'review',
-      registry,
-      now: new Date('2098-01-01T00:00:00.000Z'),
-    });
+      const result = resolveModelAgent({
+        model: 'qwen-3-coder',
+        phase: 'review',
+        registry,
+        now: new Date('2098-01-01T00:00:00.000Z'),
+      });
 
-    assert.deepEqual(result, { ok: true, agent: 'native-openrouter' });
+      assert.deepEqual(result, { ok: true, agent: 'native-openrouter' });
+    });
   });
 
   it('rejects launch-priority models that are not eligible for the requested phase', () => {
@@ -166,39 +214,12 @@ describe('resolveModelAgent', () => {
   });
 
   it('rejects stale or phase-insufficient native metadata as uncertified', () => {
-    const registry = makeRegistry('native-plan-model', {
-      agent: 'claude-openrouter',
-      nativeCapability: {
-        nativeProvider: 'openrouter',
-        piTransportKind: 'openai-completions',
-        readOnlyNative: 'certified',
-        compatFlags: { thinkingFormat: 'openrouter' },
-        certification: {
-          maxCertifiedPhase: 'read-only',
-          certifiedAt: '2025-01-01T00:00:00.000Z',
-          certificationSuiteVersion: 'v1',
-        },
-      },
-    });
-
-    const stale = resolveModelAgent({
-      model: 'native-plan-model',
-      phase: 'planning',
-      registry,
-      now: new Date('2026-07-01T00:00:00.000Z'),
-    });
-    assert.equal(stale.ok, false);
-    if (stale.ok) {
-      assert.fail('expected rejection');
-    }
-    assert.equal(stale.reason, 'uncertified');
-    assert.match(stale.diagnostic, /provider=openrouter/);
-    assert.match(stale.diagnostic, /certification=stale|certification=phase-insufficient/);
-
-    const phaseInsufficient = resolveModelAgent({
-      model: 'native-plan-model',
-      phase: 'planning',
-      registry: makeRegistry('native-plan-model', {
+    withGlobalRoot(() => {
+      writeGlobalArtifact('openrouter', 'native-plan-model', 'v1', {
+        phase: 'workflow',
+        certifiedAt: '2025-01-01T00:00:00.000Z',
+      });
+      const registry = makeRegistry('native-plan-model', {
         agent: 'claude-openrouter',
         nativeCapability: {
           nativeProvider: 'openrouter',
@@ -207,19 +228,53 @@ describe('resolveModelAgent', () => {
           compatFlags: { thinkingFormat: 'openrouter' },
           certification: {
             maxCertifiedPhase: 'read-only',
-            certifiedAt: '2099-01-01T00:00:00.000Z',
+            certifiedAt: '2025-01-01T00:00:00.000Z',
             certificationSuiteVersion: 'v1',
           },
         },
-      }),
-      now: new Date('2098-01-01T00:00:00.000Z'),
+      });
+
+      const stale = resolveModelAgent({
+        model: 'native-plan-model',
+        phase: 'planning',
+        registry,
+        now: new Date('2026-07-01T00:00:00.000Z'),
+      });
+      assert.equal(stale.ok, false);
+      if (stale.ok) {
+        assert.fail('expected rejection');
+      }
+      assert.equal(stale.reason, 'uncertified');
+      assert.match(stale.diagnostic, /provider=openrouter/);
+      assert.match(stale.diagnostic, /certification=stale-artifact/);
+
+      writeGlobalArtifact('openrouter', 'native-plan-model', 'v1', { phase: 'read-only' });
+      const phaseInsufficient = resolveModelAgent({
+        model: 'native-plan-model',
+        phase: 'planning',
+        registry: makeRegistry('native-plan-model', {
+          agent: 'claude-openrouter',
+          nativeCapability: {
+            nativeProvider: 'openrouter',
+            piTransportKind: 'openai-completions',
+            readOnlyNative: 'certified',
+            compatFlags: { thinkingFormat: 'openrouter' },
+            certification: {
+              maxCertifiedPhase: 'read-only',
+              certifiedAt: '2099-01-01T00:00:00.000Z',
+              certificationSuiteVersion: 'v1',
+            },
+          },
+        }),
+        now: new Date('2098-01-01T00:00:00.000Z'),
+      });
+      assert.equal(phaseInsufficient.ok, false);
+      if (phaseInsufficient.ok) {
+        assert.fail('expected rejection');
+      }
+      assert.equal(phaseInsufficient.reason, 'uncertified');
+      assert.match(phaseInsufficient.diagnostic, /certification=insufficient-phase/);
+      assert.match(phaseInsufficient.diagnostic, /native-agent-certify\.ts --provider openrouter --model native-plan-model --phase workflow/);
     });
-    assert.equal(phaseInsufficient.ok, false);
-    if (phaseInsufficient.ok) {
-      assert.fail('expected rejection');
-    }
-    assert.equal(phaseInsufficient.reason, 'uncertified');
-    assert.match(phaseInsufficient.diagnostic, /certification=phase-insufficient/);
-    assert.match(phaseInsufficient.diagnostic, /native-agent-certify\.ts --provider openrouter --model native-plan-model --phase workflow/);
   });
 });
