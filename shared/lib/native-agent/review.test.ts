@@ -237,10 +237,9 @@ describe('native review', () => {
       const result = await runNativeReview(makeReviewContext(), repoDir, {});
       assert.equal(result.verdict, 'not_ready');
       assert.equal(result.codeReviewFindings[0].category, 'native-runtime-unavailable');
-      assert.match(result.codeReviewFindings[0].description, /openai:uncertified-model/);
-      assert.match(result.codeReviewFindings[0].description, /reason=unregistered_model/);
+      assert.match(result.codeReviewFindings[0].description, /no native providers are configured/);
       assert.match(result.codeReviewFindings[0].description, /wavemill native-agent models report --json/);
-      assert.match(result.codeReviewFindings[0].description, /native-agent-certify\.ts --provider openai --model uncertified-model --phase read-only/);
+      assert.match(result.codeReviewFindings[0].description, /Configure nativeAgent\.providers/);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }

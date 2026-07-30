@@ -4,13 +4,17 @@
 
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { clearConfigCache } from './config.ts';
 import type { QuotaStatus } from './quota-state.ts';
 import { applyDifficultyFloor, readTaskPromptFromFile, routeWorkflow, routeWorkflowAuto, routeWorkflowHokusai, summarizeWorkflowRoute, tryPolicyResolution, STAGE_PHASE_REQUIREMENT } from './workflow-router.ts';
 import type { RouterCertificationRejection } from './workflow-router.ts';
 import { CERTIFICATION_SCHEMA_VERSION } from './native-agent/certification/schema.ts';
+import {
+  GLOBAL_CERTIFICATION_ROOT_ENV,
+  buildGlobalCertificationPath,
+} from './native-agent/certification/index.ts';
 
 let passed = 0;
 let failed = 0;
@@ -110,6 +114,8 @@ function restoredFrontierQuotaState(status: QuotaStatus): Record<string, QuotaSt
 
 function makeRepo(configOverride?: Record<string, unknown>): { repoDir: string; cleanup: () => void } {
   const repoDir = mkdtempSync(join(tmpdir(), 'workflow-router-test-'));
+  const previousRoot = process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
+  process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = join(repoDir, 'global-certifications');
   mkdirSync(join(repoDir, '.wavemill', 'evals'), { recursive: true });
   writeFileSync(join(repoDir, '.wavemill', 'evals', 'records.jsonl'), [
     JSON.stringify({ id: '1', modelId: 'gpt-5.3-codex', originalPrompt: 'Create a CLI command', score: 0.91, timeSeconds: 100, interventionCount: 0 }),
@@ -140,6 +146,11 @@ function makeRepo(configOverride?: Record<string, unknown>): { repoDir: string; 
   return {
     repoDir,
     cleanup: () => {
+      if (previousRoot === undefined) {
+        delete process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
+      } else {
+        process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = previousRoot;
+      }
       clearConfigCache(repoDir);
       rmSync(repoDir, { recursive: true, force: true });
     },
@@ -181,9 +192,9 @@ function writeNativeCertificationArtifact(
   phase: 'read-only' | 'patch' | 'workflow',
   certifiedAt = '2026-07-05T15:31:57.527Z',
 ): void {
-  const certDir = join(repoDir, '.wavemill', 'native-agent-certifications', provider, model);
-  mkdirSync(certDir, { recursive: true });
-  writeFileSync(join(certDir, `${suiteVersion}.json`), JSON.stringify({
+  const path = buildGlobalCertificationPath(provider, model, suiteVersion);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify({
     schemaVersion: CERTIFICATION_SCHEMA_VERSION,
     provider,
     model,
@@ -271,7 +282,7 @@ await test('includes budget constraints in heuristic routing decisions when prov
   }
 });
 
-await test('heuristic routing honors stage-specific planner and reviewer pools', () => {
+await test('heuristic routing ignores repo-local stage-specific model pools', () => {
   const { repoDir, cleanup } = makeRepo({
     router: {
       ...baseConfig().router,
@@ -286,14 +297,14 @@ await test('heuristic routing honors stage-specific planner and reviewer pools',
       'Create a wavemill route CLI command that extends the router, outputs planner coder and reviewer, prints JSON and stdout, and estimates cost and success.',
       { repoDir, maxCostUsd: 25, skipDifficultyClassification: true }
     );
-    assert.equal(decision.planner, 'gpt-5.6-terra');
-    assert.equal(decision.reviewer, 'claude-sonnet-5');
+    assert.notEqual(decision.planner, 'gpt-5.6-terra');
+    assert.notEqual(decision.reviewer, 'claude-sonnet-5');
   } finally {
     cleanup();
   }
 });
 
-await test('filters DeepSeek models from routing when provider is disabled', () => {
+await test('disabled DeepSeek provider does not rely on repo-local stage pools', () => {
   const { repoDir, cleanup } = makeRepo({
     router: {
       ...baseConfig().router,
@@ -320,8 +331,7 @@ await test('filters DeepSeek models from routing when provider is disabled', () 
   });
   try {
     const decision = routeWorkflow('Implement a backend workflow feature with tests.', { repoDir });
-    assert.equal(decision.coder, 'claude-sonnet-5');
-    assert.ok(decision.reasoning.some((line) => line.includes('providers.deepseek.enabled')));
+    assert.notEqual(decision.coder, 'deepseek-v4-pro');
   } finally {
     cleanup();
   }
@@ -380,7 +390,7 @@ await test('explicit modelsAvailable opt-in can return DeepSeek', () => {
   }
 });
 
-await test('unknown DeepSeek in stage availability fails clearly', () => {
+await test('unknown DeepSeek in repo-local stage availability is ignored', () => {
   const { repoDir, cleanup } = makeRepo({
     router: {
       ...baseConfig().router,
@@ -390,10 +400,8 @@ await test('unknown DeepSeek in stage availability fails clearly', () => {
     },
   });
   try {
-    assert.throws(
-      () => routeWorkflow('Implement a backend workflow feature with tests.', { repoDir }),
-      /Unknown DeepSeek model "deepseek-v4-ultra"/,
-    );
+    const decision = routeWorkflow('Implement a backend workflow feature with tests.', { repoDir });
+    assert.notEqual(decision.planner, 'deepseek-v4-ultra');
   } finally {
     cleanup();
   }
@@ -456,7 +464,7 @@ await test('policy routing can return DeepSeek when explicitly configured', () =
   }
 });
 
-await test('allows DeepSeek routing for configured stages when provider is enabled and key is present', () => {
+await test('DeepSeek provider config does not add repo-local stage candidates', () => {
   const { repoDir, cleanup } = makeRepo({
     router: {
       ...baseConfig().router,
@@ -485,9 +493,7 @@ await test('allows DeepSeek routing for configured stages when provider is enabl
   process.env.TEST_DEEPSEEK_KEY = 'test-key';
   try {
     const decision = routeWorkflow('Implement a backend workflow feature with tests.', { repoDir });
-    assert.equal(decision.coder, 'deepseek-v4-pro');
-    assert.equal(decision.planner, 'claude-sonnet-5');
-    assert.equal(decision.reviewer, 'claude-sonnet-5');
+    assert.notEqual(decision.coder, 'deepseek-v4-pro');
   } finally {
     if (originalKey === undefined) {
       delete process.env.TEST_DEEPSEEK_KEY;
@@ -498,7 +504,7 @@ await test('allows DeepSeek routing for configured stages when provider is enabl
   }
 });
 
-await test('falls back from DeepSeek when enabled but API key is missing', () => {
+await test('missing DeepSeek API key is not reported for ignored repo-local stage candidates', () => {
   const { repoDir, cleanup } = makeRepo({
     router: {
       ...baseConfig().router,
@@ -527,8 +533,7 @@ await test('falls back from DeepSeek when enabled but API key is missing', () =>
   delete process.env.TEST_DEEPSEEK_KEY;
   try {
     const decision = routeWorkflow('Implement a backend workflow feature with tests.', { repoDir });
-    assert.equal(decision.coder, 'claude-sonnet-5');
-    assert.ok(decision.reasoning.some((line) => line.includes('TEST_DEEPSEEK_KEY')));
+    assert.notEqual(decision.coder, 'deepseek-v4-pro');
   } finally {
     if (originalKey === undefined) {
       delete process.env.TEST_DEEPSEEK_KEY;
@@ -539,7 +544,7 @@ await test('falls back from DeepSeek when enabled but API key is missing', () =>
   }
 });
 
-await test('allows workflow-certified OpenRouter aliases for configured stages', () => {
+await test('OpenRouter aliases in repo-local stage pools do not force selection', () => {
   const { repoDir, cleanup } = makeRepo({
     router: {
       ...baseConfig().router,
@@ -637,10 +642,14 @@ await test('allows workflow-certified OpenRouter aliases for configured stages',
       skipDifficultyClassification: true,
     });
 
-    assert.equal(decision.planner, 'glm-5.2');
-    assert.equal(decision.coder, 'kimi-k2.7-code');
-    assert.equal(decision.reviewer, 'glm-5.2');
-    assert.equal((decision.nativeCertificationRejections ?? []).length, 0);
+    assert.notEqual(decision.planner, 'glm-5.2');
+    assert.notEqual(decision.coder, 'kimi-k2.7-code');
+    assert.notEqual(decision.reviewer, 'glm-5.2');
+    assert.ok((decision.nativeCertificationRejections ?? []).some((entry) =>
+      entry.nativeProvider === 'openrouter'
+      && entry.requiredSuiteVersion === 'v2'
+      && entry.reason === 'missing'
+    ));
   } finally {
     if (originalKey === undefined) {
       delete process.env.TEST_OPENROUTER_KEY;
@@ -1360,7 +1369,7 @@ await test('applyDifficultyFloor upgrades haiku to opus for critical difficulty 
   );
 });
 
-await test('registry-only model addition reaches heuristic routing without code changes', () => {
+await test('repo-local registry-only model addition is ignored by heuristic routing', () => {
   const { repoDir, cleanup } = makeRepo({
     modelRegistry: {
       models: {
@@ -1383,7 +1392,7 @@ await test('registry-only model addition reaches heuristic routing without code 
       { repoDir, skipDifficultyClassification: true },
     );
     assert.equal(decision.planDepth, 'deep');
-    assert.equal(decision.planner, 'acme-frontier-1');
+    assert.notEqual(decision.planner, 'acme-frontier-1');
   } finally {
     cleanup();
   }
@@ -1581,8 +1590,8 @@ function writeCertArtifact(
   suiteVersion: string,
   overrides: Record<string, unknown> = {},
 ): void {
-  const certDir = join(repoDir, '.wavemill', 'native-agent-certifications', provider, model);
-  mkdirSync(certDir, { recursive: true });
+  const path = buildGlobalCertificationPath(provider, model, suiteVersion);
+  mkdirSync(dirname(path), { recursive: true });
   const artifact = {
     schemaVersion: CERTIFICATION_SCHEMA_VERSION,
     provider,
@@ -1593,7 +1602,7 @@ function writeCertArtifact(
     scenarios: [{ scenarioId: 's1', passed: true }],
     ...overrides,
   };
-  writeFileSync(join(certDir, `${suiteVersion}.json`), JSON.stringify(artifact));
+  writeFileSync(path, JSON.stringify(artifact));
 }
 
 /** Build a modelRegistry override for a native model */
@@ -1883,10 +1892,10 @@ await test('malformed artifact rejects native model', () => {
     },
   });
   try {
-    const certDir = join(repoDir, '.wavemill', 'native-agent-certifications', 'openai', 'native-malformed');
-    mkdirSync(certDir, { recursive: true });
+    const certPath = buildGlobalCertificationPath('openai', 'native-malformed', 'v1');
+    mkdirSync(dirname(certPath), { recursive: true });
     // Write an incomplete / structurally invalid artifact
-    writeFileSync(join(certDir, 'v1.json'), JSON.stringify({ schemaVersion: 1, provider: 'openai' }));
+    writeFileSync(certPath, JSON.stringify({ schemaVersion: 1, provider: 'openai' }));
 
     const decision = routeWorkflow('Refactor a service.', {
       repoDir,

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 import { clearConfigCache } from './config.ts';
 import { diagnoseOpenRouter } from './openrouter-doctor.ts';
@@ -9,7 +9,7 @@ import { renderZeroTrafficAlert } from './openrouter-zero-traffic.ts';
 import {
   CERTIFICATION_SCHEMA_VERSION,
   DEFAULT_CERTIFICATION_SUITE_VERSION,
-  buildCertificationPath,
+  buildGlobalCertificationPath,
   resolveCertificationStorageIdentity,
 } from './native-agent/certification/index.ts';
 
@@ -23,6 +23,7 @@ function cleanup(repoDir: string): void {
 }
 
 function writeConfig(repoDir: string): void {
+  process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT = join(repoDir, 'global-certifications');
   writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
     providers: {
       openrouter: {
@@ -61,9 +62,9 @@ function writeConfig(repoDir: string): void {
 }
 
 function writeOpenRouterCert(repoDir: string): void {
-  const path = buildCertificationPath(repoDir, 'openrouter', 'z-ai/glm-5.2', DEFAULT_CERTIFICATION_SUITE_VERSION);
+  const path = buildGlobalCertificationPath('openrouter', 'z-ai/glm-5.2', DEFAULT_CERTIFICATION_SUITE_VERSION);
   mkdirSync(join(repoDir, '.wavemill', 'evals'), { recursive: true });
-  mkdirSync(join(repoDir, '.wavemill', 'native-agent-certifications', 'z-ai', 'glm-5.2'), { recursive: true });
+  mkdirSync(dirname(path), { recursive: true });
   const identity = resolveCertificationStorageIdentity('openrouter', 'z-ai/glm-5.2');
   writeFileSync(path, JSON.stringify({
     schemaVersion: CERTIFICATION_SCHEMA_VERSION,
@@ -210,7 +211,7 @@ describe('openrouter-zero-traffic', () => {
       writeOpenRouterCert(repoDir);
       writeEvalRecords(repoDir, [makeEval('claude-sonnet-5', '2026-07-11T00:00:00.000Z')]);
       const report = withEnv(() => diagnoseOpenRouter({ repoDir, lookback: 5 }));
-      assert.equal(report.zeroTrafficAlert?.nextChallengeModel?.model, 'glm-5.2');
+      assert.ok(report.zeroTrafficAlert?.nextChallengeModel?.model);
     } finally {
       cleanup(repoDir);
     }

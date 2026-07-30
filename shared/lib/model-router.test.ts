@@ -1,12 +1,38 @@
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 import { aggregateEvalHistory, recommendModel, resolveAgent, tryResolveAgent } from './model-router.ts';
+import {
+  CERTIFICATION_SCHEMA_VERSION,
+  DEFAULT_CERTIFICATION_SUITE_VERSION,
+  buildGlobalCertificationPath,
+  resolveCertificationStorageIdentity,
+} from './native-agent/certification/index.ts';
 
 function writeRepoConfig(repoDir: string, config: unknown): void {
   writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify(config), 'utf-8');
+}
+
+function useGlobalCertificationRoot(repoDir: string): void {
+  process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT = join(repoDir, 'global-certifications');
+}
+
+function writeGlobalCertification(repoDir: string, provider: string, model: string): void {
+  useGlobalCertificationRoot(repoDir);
+  const path = buildGlobalCertificationPath(provider, model, DEFAULT_CERTIFICATION_SUITE_VERSION);
+  mkdirSync(dirname(path), { recursive: true });
+  const identity = resolveCertificationStorageIdentity(provider, model);
+  writeFileSync(path, JSON.stringify({
+    schemaVersion: CERTIFICATION_SCHEMA_VERSION,
+    provider: identity.provider,
+    model: identity.model,
+    phase: 'workflow',
+    suiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
+    certifiedAt: '2026-07-10T00:00:00.000Z',
+    scenarios: [{ scenarioId: 's1', passed: true }],
+  }));
 }
 
 describe('model-router resolveAgent', () => {
@@ -44,104 +70,43 @@ describe('model-router resolveAgent', () => {
     assert.match(result.diagnostic, /provider=openai/);
   });
 
-  it('resolves native-openai when registry metadata is phase-certified', () => {
+  it('does not allow repo-local metadata to restore a retired Codex model', () => {
     const repoDir = mkdtempSync(join(tmpdir(), 'model-router-native-openai-'));
 
     try {
       writeRepoConfig(repoDir, {
-        modelRegistry: {
-          models: {
-            'gpt-5.4': {
-              agent: 'native-openai',
-              nativeCapability: {
-                nativeProvider: 'openai',
-                piTransportKind: 'openai-responses',
-                readOnlyNative: 'certified',
-                certification: {
-                  maxCertifiedPhase: 'workflow',
-                  certifiedAt: '2099-01-01T00:00:00.000Z',
-                  certificationSuiteVersion: 'v1',
-                },
-              },
-            },
-          },
-        },
-      });
-
-      assert.equal(resolveAgent('gpt-5.4', {}, 'codex', repoDir, 'planning'), 'native-openai');
-      assert.equal(resolveAgent('gpt-5.4', {}, 'codex', repoDir, 'review'), 'native-openai');
-      assert.equal(resolveAgent('gpt-5.4', {}, 'codex', repoDir, 'coding'), 'native-openai');
-      assert.equal(resolveAgent('gpt-5.4', {}, 'codex', repoDir), 'native-openai');
-    } finally {
-      rmSync(repoDir, { recursive: true, force: true });
-    }
-  });
-
-  it('rejects native-openai when certification metadata is missing', () => {
-    const repoDir = mkdtempSync(join(tmpdir(), 'model-router-native-default-off-'));
-
-    try {
-      writeRepoConfig(repoDir, {
-        modelRegistry: {
-          models: {
-            'gpt-5.4': {
-              agent: 'native-openai',
-              nativeCapability: {
-                nativeProvider: 'openai',
-                piTransportKind: 'openai-responses',
-                readOnlyNative: 'certified',
-              },
-            },
-          },
-        },
+        modelRegistry: { models: { 'gpt-5.4': { agent: 'native-openai' } } },
       });
 
       assert.throws(
         () => resolveAgent('gpt-5.4', {}, 'codex', repoDir, 'planning'),
-        /agent-resolution.*gpt-5.4.*uncertified/,
+        /agent-resolution.*gpt-5\.4.*codex-chatgpt-ineligible/,
       );
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
   });
 
-  it('blocks native resolution when the model capability does not allow the mapped provider', () => {
+  it('keeps global Codex routing authoritative despite a global certification', () => {
+    const repoDir = mkdtempSync(join(tmpdir(), 'model-router-native-default-off-'));
+
+    try {
+      writeGlobalCertification(repoDir, 'openai', 'gpt-5.6-terra');
+
+      assert.equal(resolveAgent('gpt-5.6-terra', {}, 'codex', repoDir, 'planning'), 'codex');
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('resolves a globally certified native OpenRouter model', () => {
     const repoDir = mkdtempSync(join(tmpdir(), 'model-router-native-provider-mismatch-'));
 
     try {
-      writeRepoConfig(repoDir, {
-        modelRegistry: {
-          models: {
-            'qwen-3-coder': {
-              agent: 'claude-openrouter',
-              nativeCapability: {
-                nativeProvider: 'openrouter',
-                piTransportKind: 'openai-completions',
-                readOnlyNative: 'certified',
-                compatFlags: {
-                  thinkingFormat: 'openrouter',
-                },
-                certification: {
-                  maxCertifiedPhase: 'workflow',
-                  certifiedAt: '2099-01-01T00:00:00.000Z',
-                  certificationSuiteVersion: 'v1',
-                },
-              },
-            },
-          },
-        },
-      });
+      writeGlobalCertification(repoDir, 'openrouter', 'z-ai/glm-5.2');
 
-      assert.throws(
-        () => resolveAgent('qwen-3-coder', { 'qwen-3-coder': 'native-openai' }, 'codex', repoDir, 'planning'),
-        /provider-mismatch:openrouter->openai/,
-      );
-      assert.throws(
-        () => resolveAgent('qwen-3-coder', { 'qwen-3-coder': 'native-openrouter' }, 'codex', repoDir, 'planning'),
-        /reason=role-ineligible/,
-      );
       assert.equal(
-        resolveAgent('qwen-3-coder', { 'qwen-3-coder': 'native-openrouter' }, 'codex', repoDir, 'review'),
+        resolveAgent('glm-5.2', {}, 'codex', repoDir, 'planning'),
         'native-openrouter',
       );
     } finally {

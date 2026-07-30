@@ -5,8 +5,9 @@ import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 import type { ModelRegistry } from '../model-registry.ts';
 import {
-  buildCertificationPath,
+  buildGlobalCertificationPath,
   CERTIFICATION_SCHEMA_VERSION,
+  GLOBAL_CERTIFICATION_ROOT_ENV,
   type NativeCertificationArtifact,
 } from './certification/index.ts';
 import {
@@ -57,6 +58,12 @@ function makeCertifiedRegistry(
         reasoningTier: 'standard',
         costPerMillionInputTokensUsd: 1,
         costPerMillionOutputTokensUsd: 2,
+        supportedModel: {
+          stages: ['planning', 'coding', 'review'],
+          lifecycle: 'supported',
+          launchEligible: true,
+          routingEligible: true,
+        },
         nativeCapability: provider === 'openai'
           ? {
             nativeProvider: 'openai',
@@ -87,9 +94,18 @@ function makeCertifiedRegistry(
 
 function makeRepo(): { repoDir: string; cleanup: () => void } {
   const repoDir = mkdtempSync(join(tmpdir(), 'native-agent-provider-'));
+  const previousRoot = process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
+  process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = join(repoDir, 'global-certifications');
   return {
     repoDir,
-    cleanup: () => rmSync(repoDir, { recursive: true, force: true }),
+    cleanup: () => {
+      if (previousRoot === undefined) {
+        delete process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
+      } else {
+        process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = previousRoot;
+      }
+      rmSync(repoDir, { recursive: true, force: true });
+    },
   };
 }
 
@@ -100,7 +116,7 @@ function writeArtifact(
   suiteVersion: string,
   overrides: Partial<NativeCertificationArtifact> = {},
 ): string {
-  const path = buildCertificationPath(repoDir, provider, modelId, suiteVersion);
+  const path = buildGlobalCertificationPath(provider, modelId, suiteVersion);
   mkdirSync(dirname(path), { recursive: true });
   const openRouterIdentity = provider === 'openrouter'
     ? (modelId.includes('/') ? modelId.split('/') : ['z-ai', modelId])
@@ -383,7 +399,7 @@ describe('native-agent Pi provider lookup', () => {
 });
 
 describe('native-agent certification gate', () => {
-  it('uncertified model in task mode resolves to uncertified with actionable reason, no API key leaked', () => {
+  it('configured-only model lists do not create task-mode candidates', () => {
     const emptyRegistry = { models: {}, ladders: {} };
 
     const consoleLog = console.log;
@@ -406,14 +422,8 @@ describe('native-agent certification gate', () => {
         registry: emptyRegistry,
       });
 
-      assert.equal(entries.length, 1);
-      const [entry] = entries;
-      assert.equal(entry.status, 'uncertified');
-      assert.equal(entry.modelId, 'uncertified-model');
-      assert.equal(entry.rejectionReason, 'unregistered_model');
-      assert.match(entry.reason, /uncertified-model/);
-
-      const serialized = JSON.stringify(entry);
+      assert.equal(entries.length, 0);
+      const serialized = JSON.stringify(entries);
       assert(!serialized.includes('sk-secret-should-not-leak'), 'API key must not appear in serialized output');
       assert.deepEqual(events, []);
     } finally {
@@ -423,7 +433,7 @@ describe('native-agent certification gate', () => {
     }
   });
 
-  it('same uncertified model under certificationMode resolves to ready with certificationOnly: true', () => {
+  it('configured-only model lists do not create certification-mode candidates', () => {
     const emptyRegistry = { models: {}, ladders: {} };
 
     const entries = resolveNativeAgentProviders({
@@ -438,10 +448,7 @@ describe('native-agent certification gate', () => {
       certificationMode: true,
     });
 
-    assert.equal(entries.length, 1);
-    const [entry] = entries;
-    assert.equal(entry.status, 'ready');
-    assert.equal(entry.certificationOnly, true);
+    assert.equal(entries.length, 0);
   });
 
   it('certified model resolves to ready with certificationOnly: false', () => {
@@ -490,9 +497,10 @@ describe('native-agent certification gate', () => {
     assert.equal(entry.certificationOnly, false);
   });
 
-  it('distinct models are judged independently — no silent substitution', () => {
+  it('distinct registry models are judged independently without configured-list substitution', () => {
     const { repoDir, cleanup } = makeRepo();
     const registry = makeCertifiedRegistry('certified-a', 'openai');
+    registry.models['uncertified-b'] = makeCertifiedRegistry('uncertified-b', 'openai').models['uncertified-b']!;
 
     try {
       writeArtifact(repoDir, 'openai', 'certified-a', 'v1');
@@ -519,7 +527,7 @@ describe('native-agent certification gate', () => {
 
       assert(uncertifiedEntry);
       assert.equal(uncertifiedEntry.status, 'uncertified');
-      assert.equal(uncertifiedEntry.rejectionReason, 'unregistered_model');
+      assert.equal(uncertifiedEntry.rejectionReason, 'missing_artifact');
       assert.match(uncertifiedEntry.reason, /uncertified-b/);
     } finally {
       cleanup();
@@ -667,7 +675,7 @@ describe('native provider certification artifacts', () => {
   it('maps malformed artifacts to malformed_artifact for provider resolution', () => {
     const { repoDir, cleanup } = makeRepo();
     try {
-      const path = buildCertificationPath(repoDir, 'openai', 'gpt-4o', 'v1');
+      const path = buildGlobalCertificationPath('openai', 'gpt-4o', 'v1');
       mkdirSync(dirname(path), { recursive: true });
       writeFileSync(path, 'not json', 'utf8');
 
@@ -803,8 +811,8 @@ describe('native provider certification artifacts', () => {
 
       assert.equal(aliasEntry.status, 'ready');
       assert.equal(rawEntry.status, 'ready');
-      assert.equal(buildCertificationPath(repoDir, 'openrouter', 'glm-5.2', 'v1'), path);
-      assert.equal(buildCertificationPath(repoDir, 'openrouter', 'z-ai/glm-5.2', 'v1'), path);
+      assert.equal(buildGlobalCertificationPath('openrouter', 'glm-5.2', 'v1'), path);
+      assert.equal(buildGlobalCertificationPath('openrouter', 'z-ai/glm-5.2', 'v1'), path);
     } finally {
       cleanup();
     }

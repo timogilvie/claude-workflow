@@ -10,6 +10,10 @@ import {
   PATCH_CODING_CERTIFICATION_SCHEMA_VERSION,
   getPatchCodingCertificationPath,
 } from '../shared/lib/native-agent/coding-certification.ts';
+import {
+  GLOBAL_CERTIFICATION_ROOT_ENV,
+  buildGlobalCertificationPath,
+} from '../shared/lib/native-agent/certification/index.ts';
 import { PATCH_CODING_SMOKE_SUITE_REVISION } from '../shared/lib/native-agent/smoke.ts';
 import { checkNativeAgentLaunch } from './check-native-agent-launch.ts';
 
@@ -19,15 +23,16 @@ const REPO_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 function makeRepo(config: Record<string, unknown>): string {
   const repoDir = mkdtempSync(join(tmpdir(), 'check-native-agent-launch-'));
   repos.push(repoDir);
+  process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = join(repoDir, 'global-certifications');
   writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify(config, null, 2), 'utf-8');
   clearConfigCache(repoDir);
   return repoDir;
 }
 
 function writeOpenRouterCert(repoDir: string, provider: string, model: string, phase = 'workflow'): void {
-  const certDir = join(repoDir, '.wavemill', 'native-agent-certifications', provider, model);
-  mkdirSync(certDir, { recursive: true });
-  writeFileSync(join(certDir, 'v2.json'), JSON.stringify({
+  const path = buildGlobalCertificationPath(provider, model, 'v2');
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify({
     schemaVersion: 2,
     provider,
     model,
@@ -102,6 +107,7 @@ function baseConfig(overrides: Record<string, unknown> = {}): Record<string, unk
 
 afterEach(() => {
   delete process.env.TEST_OPENROUTER_KEY;
+  delete process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
   for (const repoDir of repos.splice(0)) {
     clearConfigCache(repoDir);
     rmSync(repoDir, { recursive: true, force: true });

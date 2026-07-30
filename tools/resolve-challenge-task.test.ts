@@ -5,7 +5,10 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { buildCertificationPath } from '../shared/lib/native-agent/certification/loader.ts';
+import {
+  GLOBAL_CERTIFICATION_ROOT_ENV,
+  buildGlobalCertificationPath,
+} from '../shared/lib/native-agent/certification/index.ts';
 import { resolveCertificationStorageIdentity } from '../shared/lib/native-agent/certification/identity.ts';
 import {
   PATCH_CODING_CERTIFICATION_SCHEMA_VERSION,
@@ -42,7 +45,9 @@ function writeCertArtifact(
   suiteVersion: string,
   phase: string = 'workflow',
 ) {
-  const certPath = buildCertificationPath(repoDir, provider, model, suiteVersion);
+  const certPath = buildGlobalCertificationPath(provider, model, suiteVersion, {
+    root: join(repoDir, 'global-certifications'),
+  });
   const identity = resolveCertificationStorageIdentity(provider, model);
   mkdirSync(dirname(certPath), { recursive: true });
   writeFileSync(certPath, JSON.stringify({
@@ -195,13 +200,16 @@ function runResolveChallengeTask(repoDir: string, args: string[]): Record<string
   const stdout = execFileSync('npx', ['tsx', resolveChallengeTaskTool, ...args], {
     encoding: 'utf-8',
     cwd: resolve(__dirname, '..'),
-    env: { ...process.env },
+    env: {
+      ...process.env,
+      [GLOBAL_CERTIFICATION_ROOT_ENV]: join(repoDir, 'global-certifications'),
+    },
   });
   return JSON.parse(stdout);
 }
 
 describe('resolve-challenge-task CLI', () => {
-  it('falls back to single mode when implementation challengers are native-only and not launchable', () => {
+  it('falls back to global challenge candidates when repo-local native challengers are not launchable', () => {
     const repoDir = makeRepo(['glm-5.2']);
     try {
       const result = runResolveChallengeTask(repoDir, [
@@ -213,10 +221,15 @@ describe('resolve-challenge-task CLI', () => {
         '--repo-dir', repoDir,
       ]);
 
-      assert.equal(result.mode, 'single');
-      assert.equal(result.reason, 'selection_failed');
-      const single = result.single as Record<string, unknown>;
-      assert.equal(single.model, 'claude-sonnet-4-6');
+      assert.equal(result.mode, 'challenge');
+      assert.equal(result.reason, 'selected');
+      const entries = result.entries as Array<Record<string, unknown>>;
+      const challenger = entries.find((entry) => entry.role === 'challenger');
+      assert.ok(challenger);
+      assert.ok(!['qwen-3-coder', 'glm-5.2'].includes(challenger.model as string));
+      const rejections = result.nativeCertificationRejections as Array<Record<string, unknown>>;
+      assert.ok(rejections.some((entry) => entry.modelId === 'qwen-3-coder' && entry.reason === 'missing'));
+      assert.ok(rejections.some((entry) => entry.modelId === 'glm-5.2' && entry.reason === 'missing'));
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
@@ -247,8 +260,15 @@ describe('resolve-challenge-task CLI', () => {
       assert.equal(entries.length, 2);
       const challenger = entries.find((entry) => entry.role === 'challenger');
       assert.ok(challenger);
-      assert.ok(aliases.includes(challenger!.model as string), 'challenger should be a configured native alias');
-      assert.equal(result.nativeCertificationRejections, undefined);
+      assert.ok(aliases.includes(challenger!.model as string), 'challenger should be a globally certified native alias');
+      const rejections = (result.nativeCertificationRejections || []) as Array<Record<string, unknown>>;
+      for (const alias of aliases) {
+        assert.equal(
+          rejections.find((entry) => entry.modelId === alias),
+          undefined,
+          `${alias} should not be rejected`,
+        );
+      }
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
@@ -282,10 +302,15 @@ describe('resolve-challenge-task CLI', () => {
         '--feature-dir', featureDir,
       ]);
 
-      assert.equal(result.mode, 'single');
-      assert.equal(result.reason, 'selection_failed');
-      const single = result.single as Record<string, unknown>;
-      assert.equal(single.model, 'claude-sonnet-4-6');
+      assert.equal(result.mode, 'challenge');
+      assert.equal(result.reason, 'selected');
+      assert.equal(result.selectionPath, 'recommendation-driven');
+      const entries = result.entries as Array<Record<string, unknown>>;
+      const challenger = entries.find((entry) => entry.role === 'challenger');
+      assert.ok(challenger);
+      assert.notEqual(challenger!.model, 'glm-5.2');
+      const rejections = result.nativeCertificationRejections as Array<Record<string, unknown>>;
+      assert.ok(rejections.some((entry) => entry.modelId === 'glm-5.2' && entry.reason === 'missing'));
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }

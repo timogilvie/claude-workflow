@@ -328,6 +328,29 @@ export function checkSharedCertificationEligibility(
   };
 }
 
+export function checkGlobalCertificationEligibility(
+  provider: string,
+  model: string,
+  suiteVersion: string,
+  requiredPhase: CertificationPhase,
+  now: Date = new Date(),
+): ScopedCertificationEligibility {
+  const loaded = loadGlobalCertification(provider, model, suiteVersion);
+  if (!loaded.ok) {
+    return {
+      eligible: false,
+      reason: loaded.reason,
+      ...(loaded.path ? { artifactPath: loaded.path } : {}),
+      storageScope: 'global',
+    };
+  }
+  return {
+    ...evaluateEligibility(loaded.artifact, suiteVersion, requiredPhase, now),
+    artifactPath: loaded.path,
+    storageScope: 'global',
+  };
+}
+
 function parseArtifact(input: unknown): NativeCertificationArtifact | undefined {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
     return undefined;
