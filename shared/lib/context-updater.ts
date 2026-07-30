@@ -1,10 +1,10 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { execSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { callHeadlessLLM } from './headless-llm.ts';
 import { confirm } from './cli-prompt.ts';
 import { extractKeyFiles, readContextSpec } from './context-tool.ts';
+import { execFileCommand, execShellCommand } from './shell-utils.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -38,11 +38,17 @@ export function readSourceFiles(files: string[], repoDir: string, maxSize = 3000
  * Get a short recent git history summary for subsystem files.
  */
 export function getRecentChanges(files: string[], repoDir: string): string {
+  if (files.length === 0) return '*(No recent changes)*';
+
   try {
-    const fileList = files.map((file) => `'${file}'`).join(' ');
-    const cmd = `git log --oneline --since="30 days ago" -- ${fileList} | head -10`;
-    const output = execSync(cmd, { cwd: repoDir, encoding: 'utf-8' }).trim();
-    return output || '*(No recent changes)*';
+    // Pass each path as its own argv element after `--` so paths with spaces,
+    // parentheses, quotes, brackets, or glob characters remain literal Git
+    // pathspecs. Truncate to 10 lines in TypeScript instead of piping to
+    // `head -10`, which would require a shell.
+    const args = ['log', '--oneline', '--since=30 days ago', '--', ...files];
+    const output = execFileCommand('git', args, { cwd: repoDir, encoding: 'utf-8' });
+    const lines = String(output).split('\n').filter(line => line.trim().length > 0).slice(0, 10);
+    return lines.length > 0 ? lines.join('\n') : '*(No recent changes)*';
   } catch {
     return '*(Unable to fetch git history)*';
   }
@@ -132,7 +138,9 @@ export function showSpecDiff(current: string, updated: string): void {
   console.log('');
 
   try {
-    execSync(`diff -u ${currentPath} ${updatedPath} || true`, { stdio: 'inherit' });
+    // Uses fixed /tmp paths and a shell `|| true` construct, so the shell-based
+    // helper is appropriate here. No dynamic subsystem paths are interpolated.
+    execShellCommand(`diff -u ${currentPath} ${updatedPath} || true`, { stdio: 'inherit' });
   } catch {
     // diff returns non-zero when files differ, ignore
   }

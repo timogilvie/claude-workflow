@@ -10,7 +10,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join, relative, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execShellCommand } from './shell-utils.ts';
+import { execFileCommand } from './shell-utils.ts';
 import type { Subsystem } from './subsystem-detector.ts';
 import type { RelatedSubsystem } from './subsystem-cross-reference.ts';
 
@@ -243,6 +243,24 @@ function generateFailureModes(): string {
 }
 
 /**
+ * Build the executable + argv used by {@link getFileTouchCount}.
+ *
+ * Exported for tests so the argv can be inspected without spawning git.
+ */
+export function buildGetFileTouchCountArgs(
+  keyFiles: string[],
+  sinceStr: string
+): { file: string; args: string[] } {
+  // Pass each path as its own argv element after `--` so parentheses, spaces,
+  // quotes, brackets, glob characters, and leading dashes remain literal Git
+  // pathspecs. Preserve the existing first-20 limit to avoid argv overflow.
+  return {
+    file: 'git',
+    args: ['log', `--since=${sinceStr}`, '--oneline', '--', ...keyFiles.slice(0, 20)],
+  };
+}
+
+/**
  * Get file touch count (number of commits touching files in last 30 days).
  */
 function getFileTouchCount(keyFiles: string[], repoDir: string): number {
@@ -253,15 +271,32 @@ function getFileTouchCount(keyFiles: string[], repoDir: string): number {
     since.setDate(since.getDate() - 30);
     const sinceStr = since.toISOString().split('T')[0];
 
-    // Count commits touching any of the key files
-    const fileArgs = keyFiles.slice(0, 20).join(' '); // Limit to avoid command line overflow
-    const cmd = `git log --since="${sinceStr}" --oneline -- ${fileArgs} 2>/dev/null | wc -l`;
-    const output = execShellCommand(cmd, { encoding: 'utf-8', cwd: repoDir });
+    const { file, args } = buildGetFileTouchCountArgs(keyFiles, sinceStr);
+    const output = execFileCommand(file, args, { encoding: 'utf-8', cwd: repoDir });
 
-    return parseInt(output.trim()) || 0;
+    // Count non-empty stdout lines in TypeScript instead of piping to `wc -l`,
+    // so empty output returns 0 rather than NaN.
+    const lines = String(output).split('\n').filter(line => line.trim().length > 0);
+    return lines.length;
   } catch {
     return 0;
   }
+}
+
+/**
+ * Build the executable + argv used by {@link getRecentChanges}.
+ *
+ * Exported for tests so the argv can be inspected without spawning git.
+ */
+export function buildGetRecentChangesArgs(
+  keyFiles: string[],
+  limit: number
+): { file: string; args: string[] } {
+  const safeLimit = Math.max(1, Math.floor(limit));
+  return {
+    file: 'git',
+    args: ['log', '--oneline', `-${safeLimit}`, '--', ...keyFiles.slice(0, 20)],
+  };
 }
 
 /**
@@ -271,13 +306,12 @@ function getRecentChanges(keyFiles: string[], repoDir: string, limit = 5): strin
   if (keyFiles.length === 0) return '*(No files to analyze)*';
 
   try {
-    const fileArgs = keyFiles.slice(0, 20).join(' ');
-    const cmd = `git log --oneline -${limit} -- ${fileArgs} 2>/dev/null`;
-    const output = execShellCommand(cmd, { encoding: 'utf-8', cwd: repoDir });
+    const { file, args } = buildGetRecentChangesArgs(keyFiles, limit);
+    const output = execFileCommand(file, args, { encoding: 'utf-8', cwd: repoDir });
 
-    if (!output.trim()) return '*(No recent changes)*';
+    if (!String(output).trim()) return '*(No recent changes)*';
 
-    const lines = output.trim().split('\n');
+    const lines = String(output).trim().split('\n');
     return lines.map(line => `- ${line}`).join('\n');
   } catch {
     return '*(Git history unavailable)*';

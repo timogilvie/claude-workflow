@@ -5,8 +5,8 @@
  * Use these utilities instead of execSync(..., { shell: '/bin/bash' }) with string interpolation.
  */
 
-import { execSync } from "node:child_process";
-import type { ExecSyncOptions } from "node:child_process";
+import { execSync, execFileSync } from "node:child_process";
+import type { ExecSyncOptions, ExecFileSyncOptions } from "node:child_process";
 
 /**
  * Escape a string for safe use as a shell argument.
@@ -67,4 +67,62 @@ export function execShellCommand(
   };
 
   return execSync(command, shellOptions);
+}
+
+/**
+ * Default argv-based process execution implementation.
+ *
+ * Runs an executable directly (no shell) with a literal argv array, so paths and
+ * package names containing shell-significant characters (spaces, parentheses,
+ * quotes, brackets, glob characters, semicolons, pipes, dollar signs, backticks,
+ * and leading dashes) are passed through verbatim.
+ */
+const defaultExecFileCommand = (
+  file: string,
+  args: readonly string[],
+  options?: ExecFileSyncOptions
+): Buffer | string => {
+  // execFileSync never invokes a shell, so argv entries stay literal.
+  return execFileSync(file, [...args], options);
+};
+
+// Internal seam: tests can override this to inspect argv without spawning real
+// grep/git processes. Production code should call execFileCommand(), which always
+// dispatches through this mutable reference.
+let execFileCommandImpl: typeof defaultExecFileCommand = defaultExecFileCommand;
+
+/**
+ * Execute an executable with a literal argv array, without invoking a shell.
+ *
+ * This is the safe alternative to `execShellCommand` for any command that
+ * interpolates dynamic values such as repository paths or package names. Because
+ * no shell is involved, metacharacters in arguments cannot break command parsing
+ * or trigger command injection.
+ *
+ * @param file - Executable name or path
+ * @param args - Literal argv entries (each passed to the child process verbatim)
+ * @param options - Options forwarded to `execFileSync` (cwd, encoding, env, stdio, ...)
+ * @returns The command stdout (Buffer by default, string when `encoding` is set)
+ */
+export function execFileCommand(
+  file: string,
+  args: readonly string[],
+  options?: ExecFileSyncOptions
+): Buffer | string {
+  return execFileCommandImpl(file, args, options);
+}
+
+/**
+ * @internal Test-only seam to override the argv execution helper.
+ *
+ * Pass `null` to restore the default implementation. Production code must not
+ * call this; it exists so tests can assert that callers construct argv with
+ * exact literal values without spawning real grep/git processes.
+ */
+export function _setExecFileCommandForTest(
+  fn:
+    | ((file: string, args: readonly string[], options?: ExecFileSyncOptions) => Buffer | string)
+    | null
+): void {
+  execFileCommandImpl = fn ?? defaultExecFileCommand;
 }

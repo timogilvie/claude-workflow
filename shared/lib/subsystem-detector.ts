@@ -14,7 +14,7 @@
 
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, dirname, basename } from 'node:path';
-import { execShellCommand } from './shell-utils.ts';
+import { execShellCommand, execFileCommand } from './shell-utils.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -270,6 +270,47 @@ function detectPackageSubsystems(repoDir: string, config: Required<SubsystemDete
 }
 
 /**
+ * Escape regex metacharacters in a package name so the package fragment can be
+ * embedded in a grep basic-regex pattern without becoming a meta-sequence.
+ *
+ * Escaping non-meta characters is harmless in BRE, so this single function is
+ * safe regardless of whether grep is invoked with `-E` or default BRE.
+ */
+function escapeRegexMetacharacters(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Build the executable + argv used by {@link findFilesImporting} to scan a single
+ * source directory for imports of a given package.
+ *
+ * Exported for tests so the argv can be inspected without spawning grep.
+ */
+export function buildFindFilesImportingArgs(
+  packageName: string,
+  sourcePath: string
+): { file: string; args: string[] } {
+  const escapedPkg = escapeRegexMetacharacters(packageName);
+  // Match `from '<pkg>'` or `from "<pkg>"`. The bracket expression ["'] is a
+  // character class containing a single and double quote; no shell interpolation
+  // happens here because execFileCommand passes argv entries verbatim.
+  const pattern = `from ["']${escapedPkg}`;
+  return {
+    file: 'grep',
+    args: [
+      '-r',
+      '--include=*.ts',
+      '--include=*.js',
+      '--include=*.tsx',
+      '--include=*.jsx',
+      '-l',
+      pattern,
+      sourcePath,
+    ],
+  };
+}
+
+/**
  * Find files that import a specific package.
  */
 function findFilesImporting(repoDir: string, packageName: string, sourceDirs: string[]): string[] {
@@ -280,13 +321,15 @@ function findFilesImporting(repoDir: string, packageName: string, sourceDirs: st
     if (!existsSync(sourcePath)) continue;
 
     try {
-      // Use grep to find imports (fast)
-      const cmd = `grep -r --include="*.{ts,js,tsx,jsx}" -l "from ['\"]${packageName}" ${sourcePath} 2>/dev/null || true`;
-      const output = execShellCommand(cmd, { encoding: 'utf-8', cwd: repoDir });
-      const matches = output.trim().split('\n').filter(Boolean);
+      // Use grep directly with a literal argv so paths and package names containing
+      // shell-significant characters are passed verbatim. grep exits non-zero on
+      // no matches, which we swallow to preserve the best-effort no-match behavior.
+      const { file, args } = buildFindFilesImportingArgs(packageName, sourcePath);
+      const output = execFileCommand(file, args, { encoding: 'utf-8', cwd: repoDir });
+      const matches = String(output).trim().split('\n').filter(Boolean);
       files.push(...matches.map(f => relative(repoDir, f)));
     } catch {
-      // Grep failed, skip
+      // Grep failed (no matches or unavailable), skip this source dir
     }
   }
 

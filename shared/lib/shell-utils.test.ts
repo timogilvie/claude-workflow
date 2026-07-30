@@ -7,7 +7,7 @@
 
 import { describe, it } from 'node:test';
 import { strict as assert } from 'node:assert';
-import { escapeShellArg, execShellCommand } from './shell-utils.ts';
+import { escapeShellArg, execShellCommand, execFileCommand, _setExecFileCommandForTest } from './shell-utils.ts';
 
 describe('escapeShellArg', () => {
   it('should escape simple strings without special characters', () => {
@@ -164,5 +164,122 @@ describe('Integration: escapeShellArg + execShellCommand', () => {
       { encoding: 'utf-8' }
     );
     assert.equal(result.trim(), malicious);
+  });
+});
+
+describe('execFileCommand', () => {
+  // Invoke `node -e <script>` to print process.argv as JSON, then parse the
+  // stdout back in the test. This proves argv entries reach the child process
+  // verbatim — no shell parsing, no quote stripping, no glob expansion. We use
+  // fs.writeSync(1, ...) for a synchronous, guaranteed-flushed write to the pipe.
+  const ARGV_SCRIPT = "require('fs').writeSync(1, JSON.stringify(process.argv.slice(1)))";
+  function runNodeWithArgs(extraArgs: string[]): string[] {
+    // The `--` separator tells Node to stop parsing options, so leading-dash
+    // arguments are treated as program arguments rather than Node flags. Node
+    // consumes the `--` itself, so it does not appear in process.argv.
+    const output = execFileCommand(process.execPath, ['-e', ARGV_SCRIPT, '--', ...extraArgs], {
+      encoding: 'utf-8',
+    });
+    return JSON.parse(String(output));
+  }
+
+  it('runs node --version', () => {
+    const output = execFileCommand(process.execPath, ['--version'], { encoding: 'utf-8' });
+    assert.match(String(output), /^v\d+/);
+  });
+
+  it('passes a path with parentheses as a single argv element', () => {
+    const arg = 'app/(auth)/dashboard/page.tsx';
+    const argv = runNodeWithArgs([arg]);
+    assert.deepEqual(argv, [arg]);
+  });
+
+  it('passes a path with a space as a single argv element', () => {
+    const arg = 'app/has space/page.tsx';
+    const argv = runNodeWithArgs([arg]);
+    assert.deepEqual(argv, [arg]);
+  });
+
+  it('passes a path with a double quote as a single argv element', () => {
+    const arg = 'app/quote"dir/page.tsx';
+    const argv = runNodeWithArgs([arg]);
+    assert.deepEqual(argv, [arg]);
+  });
+
+  it('passes a path with square brackets as a single argv element', () => {
+    const arg = 'app/[team]/page.tsx';
+    const argv = runNodeWithArgs([arg]);
+    assert.deepEqual(argv, [arg]);
+  });
+
+  it('passes a path with glob metacharacters as a single argv element', () => {
+    const arg = 'app/glob*literal/page.tsx';
+    const argv = runNodeWithArgs([arg]);
+    assert.deepEqual(argv, [arg]);
+  });
+
+  it('passes a leading-dash filename as a single argv element', () => {
+    const arg = '--leading-dash.ts';
+    const argv = runNodeWithArgs([arg]);
+    assert.deepEqual(argv, [arg]);
+  });
+
+  it('passes a string with shell metacharacters verbatim', () => {
+    const arg = 'semi;pipe|dollar$backtick`';
+    const argv = runNodeWithArgs([arg]);
+    assert.deepEqual(argv, [arg]);
+  });
+
+  it('passes multiple special paths as separate argv elements', () => {
+    const args = [
+      'app/(auth)/dashboard/page.tsx',
+      'app/has space/page.tsx',
+      'app/quote"dir/page.tsx',
+      'app/[team]/page.tsx',
+      'app/glob*literal/page.tsx',
+      '--leading-dash.ts',
+    ];
+    const argv = runNodeWithArgs(args);
+    assert.deepEqual(argv, args);
+  });
+
+  it('throws on non-zero exit, matching execShellCommand semantics', () => {
+    assert.throws(() => {
+      execFileCommand(process.execPath, ['-e', 'process.exit(1)'], { encoding: 'utf-8' });
+    });
+  });
+
+  it('respects cwd option', () => {
+    const output = execFileCommand(
+      process.execPath,
+      ['-e', "require('fs').writeSync(1, process.cwd())"],
+      { encoding: 'utf-8', cwd: '/tmp' }
+    );
+    // On macOS /tmp is a symlink to /private/tmp.
+    const cwd = String(output);
+    assert.ok(cwd === '/tmp' || cwd === '/private/tmp', `Expected /tmp or /private/tmp, got ${cwd}`);
+  });
+
+  it('test seam can override the implementation and is restorable', () => {
+    let captured: { file: string; args: readonly string[] } | null = null;
+    _setExecFileCommandForTest((file, args) => {
+      captured = { file, args };
+      return 'captured';
+    });
+    try {
+      const result = execFileCommand('grep', ['--help', 'path/with (parens)'], { encoding: 'utf-8' });
+      assert.equal(result, 'captured');
+      assert.ok(captured !== null);
+      assert.equal(captured!.file, 'grep');
+      assert.deepEqual(captured!.args, ['--help', 'path/with (parens)']);
+    } finally {
+      _setExecFileCommandForTest(null);
+    }
+
+    // After restoring, the helper spawns a real process again. A failing node
+    // command should throw, proving the default implementation is back in place.
+    assert.throws(() => {
+      execFileCommand(process.execPath, ['-e', 'process.exit(7)'], { encoding: 'utf-8' });
+    });
   });
 });

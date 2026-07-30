@@ -12,7 +12,7 @@
 
 import { existsSync, statSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { execShellCommand } from './shell-utils.ts';
+import { execFileCommand } from './shell-utils.ts';
 import type { Subsystem } from './subsystem-detector.ts';
 import { detectSubsystemsInIssue } from './subsystem-mapper.ts';
 
@@ -212,6 +212,28 @@ function getMostRecentFileModification(files: string[], repoDir: string): Date |
 }
 
 /**
+ * Build the executable + argv used by {@link getRecentPRsForSubsystem}.
+ *
+ * Exported for tests so the argv can be inspected without spawning git.
+ */
+export function buildGetRecentPRsForSubsystemArgs(
+  keyFiles: string[],
+  sinceStr: string
+): { file: string; args: string[] } {
+  return {
+    file: 'git',
+    args: [
+      'log',
+      `--since=${sinceStr}`,
+      '--oneline',
+      '--grep=Merge pull request',
+      '--',
+      ...keyFiles.slice(0, 20),
+    ],
+  };
+}
+
+/**
  * Get recent PRs that affected files in this subsystem.
  *
  * Looks at git log since the spec was last updated.
@@ -225,14 +247,11 @@ function getRecentPRsForSubsystem(
 
   try {
     const sinceStr = since.toISOString().split('T')[0];
-    const fileArgs = subsystem.keyFiles.slice(0, 20).join(' '); // Limit to avoid overflow
-
-    // Get commits since spec update
-    const cmd = `git log --since="${sinceStr}" --oneline --grep="Merge pull request" -- ${fileArgs} 2>/dev/null`;
-    const output = execShellCommand(cmd, { encoding: 'utf-8', cwd: repoDir });
+    const { file, args } = buildGetRecentPRsForSubsystemArgs(subsystem.keyFiles, sinceStr);
+    const output = execFileCommand(file, args, { encoding: 'utf-8', cwd: repoDir });
 
     // Extract PR numbers from commit messages
-    const lines = output.trim().split('\n').filter(Boolean);
+    const lines = String(output).trim().split('\n').filter(Boolean);
     for (const line of lines) {
       const match = line.match(/#(\d+)/);
       if (match) {

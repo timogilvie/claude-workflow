@@ -9,7 +9,9 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, utimesSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { checkSubsystemDrift, formatDriftWarning } from '../shared/lib/drift-detector.ts';
+import { execFileSync } from 'node:child_process';
+import { checkSubsystemDrift, formatDriftWarning, buildGetRecentPRsForSubsystemArgs } from '../shared/lib/drift-detector.ts';
+import { _setExecFileCommandForTest } from '../shared/lib/shell-utils.ts';
 import type { DriftCheckResult } from '../shared/lib/drift-detector.ts';
 import type { Subsystem } from '../shared/lib/subsystem-detector.ts';
 
@@ -22,6 +24,7 @@ afterEach(() => {
       rmSync(dir, { recursive: true, force: true });
     }
   }
+  _setExecFileCommandForTest(null);
 });
 
 function makeRepo(): string {
@@ -202,5 +205,33 @@ describe('drift-detector', () => {
       assert.deepStrictEqual(status.recentPRs, []);
       assert.strictEqual(status.specLastModified.getTime(), 0);
     });
+  });
+});
+
+describe('buildGetRecentPRsForSubsystemArgs (argv literal handling)', () => {
+  it('passes each key file as a separate argv element after --', () => {
+    const keyFiles = [
+      'app/(auth)/dashboard/page.tsx',
+      'app/has space/page.tsx',
+      '--leading-dash.ts',
+    ];
+    const { file, args } = buildGetRecentPRsForSubsystemArgs(keyFiles, '2024-01-01');
+    assert.equal(file, 'git');
+    assert.ok(args.includes('--grep=Merge pull request'));
+    assert.ok(args.includes('--since=2024-01-01'));
+    const dashIndex = args.indexOf('--');
+    assert.ok(dashIndex >= 0, 'args should contain --');
+    assert.deepEqual(args.slice(dashIndex + 1), keyFiles);
+    // Each path is its own argv element (no space-joining).
+    assert.ok(args.includes('app/(auth)/dashboard/page.tsx'));
+    assert.ok(args.includes('app/has space/page.tsx'));
+    assert.ok(args.includes('--leading-dash.ts'));
+  });
+
+  it('caps key files at 20 entries', () => {
+    const keyFiles = Array.from({ length: 25 }, (_, i) => `file${i}.ts`);
+    const { args } = buildGetRecentPRsForSubsystemArgs(keyFiles, '2024-01-01');
+    const dashIndex = args.indexOf('--');
+    assert.equal(args.slice(dashIndex + 1).length, 20);
   });
 });
