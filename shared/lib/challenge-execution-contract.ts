@@ -9,7 +9,8 @@ export type InvalidChallengeReason =
   | 'stage_override_lost'
   | 'native_launch_fallback'
   | 'identical_effective_route'
-  | 'state_vs_derived_side_mismatch';
+  | 'state_vs_derived_side_mismatch'
+  | 'operator_reroute';
 
 export interface ChallengeSideIntent {
   pairId: string;

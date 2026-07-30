@@ -13,6 +13,7 @@
 
 import {
   writeStageResult,
+  writeStageResultWithHistory,
   readStageResult,
   updateStageResult,
   isValidStage,
@@ -24,6 +25,7 @@ const USAGE = `stage-result-cli — manage controller-owned stage result files
 
 Subcommands:
   write  <feature_dir> <stage> <status>  Write a new stage result
+  write-with-history <feature_dir> <stage> <status>  Archive prior terminal result, then write
   read   <feature_dir> <stage>           Read a stage result (JSON to stdout)
   update <feature_dir> <stage>           Update an existing stage result
 
@@ -96,7 +98,7 @@ async function main(): Promise<void> {
 
   const flags = parseFlags(args.slice(3));
 
-  if (subcommand === 'write') {
+  if (subcommand === 'write' || subcommand === 'write-with-history') {
     const statusArg = args[3];
     if (!statusArg || !isValidStatus(statusArg)) {
       console.error(
@@ -139,7 +141,11 @@ async function main(): Promise<void> {
       ...(writeFlags['failure-reason'] !== undefined && { failureReason: writeFlags['failure-reason'] }),
     };
 
-    await writeStageResult(featureDir, result);
+    if (subcommand === 'write-with-history') {
+      await writeStageResultWithHistory(featureDir, stage, result);
+    } else {
+      await writeStageResult(featureDir, result);
+    }
     return;
   }
 
