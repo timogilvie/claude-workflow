@@ -683,9 +683,12 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
         });
 
         if (costOutcome.status === 'success') {
+          const coverage = costOutcome.attribution
+            ? `, coverage ${costOutcome.attribution.coverage}`
+            : '';
           console.log(
             `Post-completion eval: workflow cost $${costOutcome.totalCostUsd.toFixed(4)} ` +
-            `(${costOutcome.turnCount} turns across ${costOutcome.sessionCount} session(s))`
+            `(${costOutcome.turnCount} turns across ${costOutcome.sessionCount} session(s)${coverage})`
           );
         } else {
           console.warn(

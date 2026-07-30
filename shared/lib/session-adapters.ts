@@ -33,6 +33,22 @@ export interface SessionModelUsage {
   outputTokens: number;
 }
 
+export interface NativeSessionUsageRecord {
+  sessionId: string;
+  filePath: string;
+  provider: string;
+  modelId: string;
+  turnCount: number;
+  inputTokens?: number;
+  cacheCreationTokens?: number;
+  cacheReadTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  providerReportedCostUsd?: number;
+  usageAvailable: boolean;
+  invalidUsage: boolean;
+}
+
 /** Result of scanning sessions for a given agent. */
 export interface SessionUsageResult {
   /** Per-model token usage breakdown. */
@@ -41,6 +57,10 @@ export interface SessionUsageResult {
   sessionCount: number;
   /** Number of assistant turns counted (or 1 per session for agents with cumulative totals). */
   turnCount: number;
+  /** Agent-specific source identifier for native attribution. */
+  source?: AgentType;
+  /** Native per-session usage details. Present only for native transcript scans. */
+  nativeSessions?: NativeSessionUsageRecord[];
 }
 
 /** Options for scanning sessions. */
@@ -439,15 +459,24 @@ export class NativeSessionAdapter implements SessionAdapter {
     const models: Record<string, SessionModelUsage> = {};
     let sessionCount = 0;
     let turnCount = 0;
+    const nativeSessions: NativeSessionUsageRecord[] = [];
+    const seenSessionIds = new Set<string>();
 
     for (const filePath of sessionFiles) {
+      let sessionId = '';
       let sessionModel = 'unknown';
+      let sessionProvider = 'unknown';
       let sessionHadTurns = false;
+      let sessionTurnCount = 0;
+      const sessionModels = new Map<string, NativeSessionUsageRecord>();
+      const sessionModelUsage: Record<string, SessionModelUsage> = {};
 
       try {
         for (const entry of readJsonlFile<TranscriptEvent>(filePath)) {
+          sessionId ||= entry.sessionId || filePath;
           if (entry.type === 'session_started') {
             sessionModel = entry.model || sessionModel;
+            sessionProvider = entry.provider || sessionProvider;
             continue;
           }
 
@@ -456,7 +485,89 @@ export class NativeSessionAdapter implements SessionAdapter {
           }
 
           const modelId = entry.model || sessionModel || 'unknown';
+          const key = `${sessionProvider}\0${modelId}`;
+          let nativeRecord = sessionModels.get(key);
+          if (!nativeRecord) {
+            nativeRecord = {
+              sessionId: sessionId || entry.sessionId || filePath,
+              filePath,
+              provider: sessionProvider,
+              modelId,
+              turnCount: 0,
+              usageAvailable: false,
+              invalidUsage: false,
+            };
+            sessionModels.set(key, nativeRecord);
+          }
+
+          nativeRecord.turnCount++;
+          if (entry.usage?.cost?.total !== undefined) {
+            nativeRecord.providerReportedCostUsd =
+              (nativeRecord.providerReportedCostUsd ?? 0) + entry.usage.cost.total;
+          }
+
           const usage = piUsageToSessionModelUsage(entry.usage);
+          if (!usage) {
+            nativeRecord.invalidUsage = nativeRecord.invalidUsage || false;
+            sessionTurnCount++;
+            sessionHadTurns = true;
+            continue;
+          }
+
+          const tokenValues = [
+            usage.inputTokens,
+            usage.cacheCreationTokens,
+            usage.cacheReadTokens,
+            usage.outputTokens,
+            entry.usage?.totalTokens ?? 0,
+          ];
+          const usageValid = tokenValues.every((value) => Number.isFinite(value) && value >= 0);
+          if (!usageValid) {
+            nativeRecord.invalidUsage = true;
+            sessionTurnCount++;
+            sessionHadTurns = true;
+            continue;
+          }
+
+          nativeRecord.usageAvailable = true;
+          nativeRecord.inputTokens = (nativeRecord.inputTokens ?? 0) + usage.inputTokens;
+          nativeRecord.cacheCreationTokens = (nativeRecord.cacheCreationTokens ?? 0) + usage.cacheCreationTokens;
+          nativeRecord.cacheReadTokens = (nativeRecord.cacheReadTokens ?? 0) + usage.cacheReadTokens;
+          nativeRecord.outputTokens = (nativeRecord.outputTokens ?? 0) + usage.outputTokens;
+          nativeRecord.totalTokens =
+            (nativeRecord.totalTokens ?? 0) +
+            (entry.usage?.totalTokens ?? usage.inputTokens + usage.cacheCreationTokens + usage.cacheReadTokens + usage.outputTokens);
+
+          if (!sessionModelUsage[modelId]) {
+            sessionModelUsage[modelId] = {
+              inputTokens: 0,
+              cacheCreationTokens: 0,
+              cacheReadTokens: 0,
+              outputTokens: 0,
+            };
+          }
+
+          sessionModelUsage[modelId].inputTokens += usage.inputTokens;
+          sessionModelUsage[modelId].cacheCreationTokens += usage.cacheCreationTokens;
+          sessionModelUsage[modelId].cacheReadTokens += usage.cacheReadTokens;
+          sessionModelUsage[modelId].outputTokens += usage.outputTokens;
+
+          sessionTurnCount++;
+          sessionHadTurns = true;
+        }
+      } catch {
+        continue;
+      }
+
+      if (sessionHadTurns) {
+        const dedupeKey = sessionId || filePath;
+        if (seenSessionIds.has(dedupeKey)) {
+          continue;
+        }
+        seenSessionIds.add(dedupeKey);
+        sessionCount++;
+        turnCount += sessionTurnCount;
+        for (const [modelId, usage] of Object.entries(sessionModelUsage)) {
           if (!models[modelId]) {
             models[modelId] = {
               inputTokens: 0,
@@ -470,16 +581,8 @@ export class NativeSessionAdapter implements SessionAdapter {
           models[modelId].cacheCreationTokens += usage.cacheCreationTokens;
           models[modelId].cacheReadTokens += usage.cacheReadTokens;
           models[modelId].outputTokens += usage.outputTokens;
-
-          turnCount++;
-          sessionHadTurns = true;
         }
-      } catch {
-        continue;
-      }
-
-      if (sessionHadTurns) {
-        sessionCount++;
+        nativeSessions.push(...sessionModels.values());
       }
     }
 
@@ -487,7 +590,7 @@ export class NativeSessionAdapter implements SessionAdapter {
       return null;
     }
 
-    return { models, sessionCount, turnCount };
+    return { models, sessionCount, turnCount, source: 'native', nativeSessions };
   }
 }
 

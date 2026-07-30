@@ -540,6 +540,9 @@ export function attachWorkflowCostMetadata(
     record.workflowTokenUsage = success.models;
     record.workflowCostStatus = 'success';
     record.pricingSnapshot = success.pricingUsed;
+    if (success.attribution) {
+      record.workflowCostAttribution = success.attribution;
+    }
   } else {
     const failure = costOutcome as WorkflowCostFailure;
     record.workflowCostStatus = failure.status;

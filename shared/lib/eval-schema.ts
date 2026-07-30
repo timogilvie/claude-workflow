@@ -116,7 +116,10 @@
  *   diagnostics.
  * - **1.33.0**: Added challenge execution contract fields (HOK-2575)
  *   so invalid challenge runs are excluded from reward/training attribution.
- * - **1.34.0**: Synchronized challenge execution fields into the
+ * - **1.34.0**: Added optional native workflow-cost attribution coverage
+ *   metadata (HOK-2597) to distinguish known zero cost from unavailable usage
+ *   or pricing without changing legacy numeric workflowCost semantics.
+ *   Synchronized challenge execution fields into the
  *   authoritative JSON Schema and canonicalized challenge provenance loading
  *   (HOK-2598).
  *
@@ -162,6 +165,40 @@ export interface EvalPhaseDurations {
   coding?: number;
   review?: number;
   total?: number;
+}
+
+export type WorkflowCostAttributionCoverage = 'complete' | 'partial' | 'unavailable' | 'known_zero';
+export type WorkflowCostAttributionReason =
+  | 'missing_token_usage'
+  | 'invalid_token_usage'
+  | 'unpriced_model'
+  | 'mixed_coverage'
+  | 'provider_reported_cost'
+  | 'no_priced_sessions';
+
+export interface WorkflowCostAttributionModel {
+  provider: string;
+  modelId: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheCreationTokens?: number;
+  totalTokens?: number;
+  costUsd?: number;
+  providerReportedCostUsd?: number;
+  priced: boolean;
+  reason?: WorkflowCostAttributionReason;
+}
+
+export interface WorkflowCostAttribution {
+  source: 'native';
+  coverage: WorkflowCostAttributionCoverage;
+  reason?: WorkflowCostAttributionReason;
+  sessions: number;
+  turns: number;
+  pricedSessions: number;
+  unpricedSessions: number;
+  models: WorkflowCostAttributionModel[];
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -1522,6 +1559,9 @@ export interface EvalRecord {
 
   /** Total estimated cost in USD to build the feature (all agent sessions on this branch) */
   workflowCost?: number;
+
+  /** Native workflow-cost attribution and coverage metadata. */
+  workflowCostAttribution?: WorkflowCostAttribution;
 
   /** Whether the record includes the fields required for training export. */
   trainingEligible?: boolean;

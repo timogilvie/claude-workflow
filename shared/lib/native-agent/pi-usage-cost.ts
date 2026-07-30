@@ -11,11 +11,15 @@ import type { TranscriptUsage } from './transcript.ts';
  * - cacheRead -> cacheReadTokens
  * - cacheWrite -> cacheCreationTokens
  */
-export function piUsageToSessionModelUsage(usage: TranscriptUsage | undefined): SessionModelUsage {
+export function piUsageToSessionModelUsage(usage: TranscriptUsage | undefined): SessionModelUsage | undefined {
+  if (!usage) {
+    return undefined;
+  }
+
   return {
-    inputTokens: usage?.input ?? 0,
-    cacheCreationTokens: usage?.cacheWrite ?? 0,
-    cacheReadTokens: usage?.cacheRead ?? 0,
-    outputTokens: usage?.output ?? 0,
+    inputTokens: usage.input ?? 0,
+    cacheCreationTokens: usage.cacheWrite ?? 0,
+    cacheReadTokens: usage.cacheRead ?? 0,
+    outputTokens: usage.output ?? 0,
   };
 }

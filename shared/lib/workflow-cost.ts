@@ -12,9 +12,15 @@
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
-import { NativeSessionAdapter, getSessionAdapter, detectAgentType, type AgentType } from './session-adapters.ts';
+import {
+  NativeSessionAdapter,
+  getSessionAdapter,
+  detectAgentType,
+  type AgentType,
+  type SessionUsageResult,
+} from './session-adapters.ts';
 import { loadWavemillConfig } from './config.ts';
-import { getEffectiveRegistry } from './model-registry.ts';
+import { getEffectiveRegistry, resolveModelRegistryKey } from './model-registry.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -27,6 +33,40 @@ export interface ModelTokenUsage {
   cacheReadTokens: number;
   outputTokens: number;
   costUsd: number;
+}
+
+export type WorkflowCostAttributionCoverage = 'complete' | 'partial' | 'unavailable' | 'known_zero';
+export type WorkflowCostAttributionReason =
+  | 'missing_token_usage'
+  | 'invalid_token_usage'
+  | 'unpriced_model'
+  | 'mixed_coverage'
+  | 'provider_reported_cost'
+  | 'no_priced_sessions';
+
+export interface WorkflowCostAttributionModel {
+  provider: string;
+  modelId: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheCreationTokens?: number;
+  totalTokens?: number;
+  costUsd?: number;
+  providerReportedCostUsd?: number;
+  priced: boolean;
+  reason?: WorkflowCostAttributionReason;
+}
+
+export interface WorkflowCostAttribution {
+  source: 'native';
+  coverage: WorkflowCostAttributionCoverage;
+  reason?: WorkflowCostAttributionReason;
+  sessions: number;
+  turns: number;
+  pricedSessions: number;
+  unpricedSessions: number;
+  models: WorkflowCostAttributionModel[];
 }
 
 /** Result from scanning workflow sessions. */
@@ -43,6 +83,8 @@ export interface WorkflowCostResult {
   status: 'success';
   /** Snapshot of pricing table used for cost calculation (HOK-858) */
   pricingUsed: Record<string, ModelPricing>;
+  /** Optional additive attribution metadata for native workflow cost coverage. */
+  attribution?: WorkflowCostAttribution;
 }
 
 /** Failure result with diagnostic information (HOK-883). */
@@ -203,6 +245,177 @@ export function computeModelCost(
   return inputCost + cacheWriteCost + cacheReadCost + outputCost;
 }
 
+function isExplicitZeroPricing(pricing: ModelPricing): boolean {
+  return pricing.inputCostPerMTok === 0
+    && pricing.outputCostPerMTok === 0
+    && (pricing.cacheWriteCostPerMTok ?? 0) === 0
+    && (pricing.cacheReadCostPerMTok ?? 0) === 0;
+}
+
+function isFiniteNonNegative(value: number | undefined): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+function setOptionalNumber(target: WorkflowCostAttributionModel, key: keyof WorkflowCostAttributionModel, value: number | undefined): void {
+  if (value !== undefined) {
+    (target as Record<string, unknown>)[key] = value;
+  }
+}
+
+function computeNativeWorkflowCost(
+  scanResult: SessionUsageResult,
+  pricingTable: PricingTable,
+  repoDir: string | undefined,
+): WorkflowCostResult {
+  const registry = getEffectiveRegistry(repoDir);
+  const pricingUsed: Record<string, ModelPricing> = {};
+  const modelsWithCost: Record<string, ModelTokenUsage> = Object.fromEntries(
+    Object.entries(scanResult.models).map(([modelId, usage]) => [modelId, { ...usage, costUsd: 0 }]),
+  );
+  const attributionModels = new Map<string, WorkflowCostAttributionModel>();
+  let totalCostUsd = 0;
+  let pricedSessions = 0;
+  let unpricedSessions = 0;
+  let hasUnavailable = false;
+  let hasNonZeroCost = false;
+  let allPricedSessionsAreKnownZero = true;
+  let usedProviderReportedCost = false;
+  const reasons = new Set<WorkflowCostAttributionReason>();
+
+  for (const session of scanResult.nativeSessions ?? []) {
+    const canonicalModelId = resolveModelRegistryKey(registry, session.modelId);
+    const pricing = pricingTable[canonicalModelId] ?? pricingTable[session.modelId];
+    const providerCost = isFiniteNonNegative(session.providerReportedCostUsd)
+      ? session.providerReportedCostUsd
+      : undefined;
+    const aggregateKey = `${session.provider}\0${canonicalModelId}`;
+    let model = attributionModels.get(aggregateKey);
+    if (!model) {
+      model = {
+        provider: session.provider,
+        modelId: canonicalModelId,
+        priced: false,
+      };
+      attributionModels.set(aggregateKey, model);
+    }
+
+    model.inputTokens = (model.inputTokens ?? 0) + (session.inputTokens ?? 0);
+    model.outputTokens = (model.outputTokens ?? 0) + (session.outputTokens ?? 0);
+    model.cacheReadTokens = (model.cacheReadTokens ?? 0) + (session.cacheReadTokens ?? 0);
+    model.cacheCreationTokens = (model.cacheCreationTokens ?? 0) + (session.cacheCreationTokens ?? 0);
+    model.totalTokens = (model.totalTokens ?? 0) + (session.totalTokens ?? 0);
+    if (providerCost !== undefined) {
+      model.providerReportedCostUsd = (model.providerReportedCostUsd ?? 0) + providerCost;
+    }
+
+    let sessionCost: number | undefined;
+    let reason: WorkflowCostAttributionReason | undefined;
+    if (providerCost !== undefined) {
+      sessionCost = providerCost;
+      usedProviderReportedCost = true;
+    } else if (session.invalidUsage) {
+      reason = 'invalid_token_usage';
+    } else if (!session.usageAvailable) {
+      reason = 'missing_token_usage';
+    } else if (!pricing) {
+      reason = 'unpriced_model';
+    } else {
+      sessionCost = computeModelCost(
+        {
+          inputTokens: session.inputTokens ?? 0,
+          cacheCreationTokens: session.cacheCreationTokens ?? 0,
+          cacheReadTokens: session.cacheReadTokens ?? 0,
+          outputTokens: session.outputTokens ?? 0,
+        },
+        pricing,
+      );
+      pricingUsed[canonicalModelId] = pricing;
+    }
+
+    if (sessionCost !== undefined) {
+      pricedSessions++;
+      totalCostUsd += sessionCost;
+      model.costUsd = (model.costUsd ?? 0) + sessionCost;
+      model.priced = true;
+      if (sessionCost > 0) {
+        hasNonZeroCost = true;
+      }
+      if (sessionCost > 0 || (pricing && !isExplicitZeroPricing(pricing) && providerCost === undefined)) {
+        allPricedSessionsAreKnownZero = false;
+      }
+      if (!modelsWithCost[canonicalModelId]) {
+        modelsWithCost[canonicalModelId] = {
+          inputTokens: session.inputTokens ?? 0,
+          cacheCreationTokens: session.cacheCreationTokens ?? 0,
+          cacheReadTokens: session.cacheReadTokens ?? 0,
+          outputTokens: session.outputTokens ?? 0,
+          costUsd: 0,
+        };
+      }
+      modelsWithCost[canonicalModelId].costUsd += sessionCost;
+      continue;
+    }
+
+    unpricedSessions++;
+    hasUnavailable = true;
+    if (reason) {
+      reasons.add(reason);
+      model.reason ??= reason;
+    }
+  }
+
+  const coverage: WorkflowCostAttributionCoverage = pricedSessions === 0
+    ? 'unavailable'
+    : hasUnavailable
+      ? 'partial'
+      : !hasNonZeroCost && allPricedSessionsAreKnownZero
+        ? 'known_zero'
+        : 'complete';
+  const reason = coverage === 'partial'
+    ? 'mixed_coverage'
+    : coverage === 'known_zero'
+      ? undefined
+      : usedProviderReportedCost && reasons.size === 0
+        ? 'provider_reported_cost'
+        : reasons.values().next().value ?? (coverage === 'unavailable' ? 'no_priced_sessions' : undefined);
+
+  return {
+    totalCostUsd,
+    models: modelsWithCost,
+    sessionCount: scanResult.sessionCount,
+    turnCount: scanResult.turnCount,
+    status: 'success',
+    pricingUsed,
+    attribution: {
+      source: 'native',
+      coverage,
+      ...(reason ? { reason } : {}),
+      sessions: scanResult.sessionCount,
+      turns: scanResult.turnCount,
+      pricedSessions,
+      unpricedSessions,
+      models: [...attributionModels.values()].map((model) => {
+        const sanitized: WorkflowCostAttributionModel = {
+          provider: model.provider,
+          modelId: model.modelId,
+          priced: model.priced,
+        };
+        setOptionalNumber(sanitized, 'inputTokens', model.inputTokens);
+        setOptionalNumber(sanitized, 'outputTokens', model.outputTokens);
+        setOptionalNumber(sanitized, 'cacheReadTokens', model.cacheReadTokens);
+        setOptionalNumber(sanitized, 'cacheCreationTokens', model.cacheCreationTokens);
+        setOptionalNumber(sanitized, 'totalTokens', model.totalTokens);
+        setOptionalNumber(sanitized, 'costUsd', model.costUsd);
+        setOptionalNumber(sanitized, 'providerReportedCostUsd', model.providerReportedCostUsd);
+        if (model.reason) {
+          sanitized.reason = model.reason;
+        }
+        return sanitized;
+      }),
+    },
+  };
+}
+
 // ────────────────────────────────────────────────────────────────
 // Session scanning
 // ────────────────────────────────────────────────────────────────
@@ -236,7 +449,14 @@ export function computeWorkflowCost(opts: {
   }
 
   const nativeScanResult = new NativeSessionAdapter().scan({ worktreePath, branchName });
-  let scanResult = nativeScanResult && nativeScanResult.turnCount > 0 ? nativeScanResult : null;
+  const nativeHasUsableCostData = !!nativeScanResult?.nativeSessions?.some(
+    (session) => session.usageAvailable || isFiniteNonNegative(session.providerReportedCostUsd),
+  );
+  let scanResult = nativeScanResult
+    && nativeScanResult.turnCount > 0
+    && (agentType === 'native' || nativeHasUsableCostData)
+    ? nativeScanResult
+    : null;
   let adapter = getSessionAdapter(agentType);
 
   if (debug) {
@@ -303,6 +523,11 @@ export function computeWorkflowCost(opts: {
   const pricingTable = externalPricing && Object.keys(externalPricing).length > 0
     ? externalPricing
     : loadPricingTable(repoDir);
+
+  if (scanResult.source === 'native') {
+    return computeNativeWorkflowCost(scanResult, pricingTable, repoDir);
+  }
+
   let totalCostUsd = 0;
   const modelsWithCost: Record<string, ModelTokenUsage> = {};
   const pricingUsed: Record<string, ModelPricing> = {};
