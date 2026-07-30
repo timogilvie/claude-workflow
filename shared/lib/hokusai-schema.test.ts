@@ -24,6 +24,7 @@ import {
   toHokusaiModel30Request,
   validateHokusaiSubmission,
 } from './hokusai-schema.ts';
+import { buildChallengeExecutionIntent } from './challenge-execution-contract.ts';
 
 function makeDescriptor(overrides: Partial<TaskDescriptor> = {}): TaskDescriptor {
   return {
@@ -878,6 +879,52 @@ describe('hokusai-schema', () => {
       const redacted = redactHokusaiSubmission(submission, { salt: 'f'.repeat(64) }) as Record<string, unknown>;
 
       assert.equal('eligibilityErrors' in redacted, false);
+    });
+
+    it('omits local challenge execution fields from Hokusai submissions', () => {
+      const intent = buildChallengeExecutionIntent({
+        pairId: 'pair-2598',
+        challengeStage: 'implementation',
+        primary: {
+          model: 'coder-a',
+          planner: 'planner-a',
+          reviewer: 'reviewer-a',
+          planDepth: 'standard',
+          codeDepth: 'standard',
+          reviewMode: 'standard',
+        },
+        challenger: {
+          model: 'gpt-5.4',
+          planner: 'planner-a',
+          reviewer: 'reviewer-a',
+          planDepth: 'standard',
+          codeDepth: 'deep',
+          reviewMode: 'standard',
+        },
+      });
+      const submission = expectSuccess(toHokusaiSubmission(makeRecord({
+        challengePairId: 'pair-2598',
+        challengeSide: 'primary',
+        challengeIntent: intent,
+        challengeExecutionRoute: intent.primary.expectedRoute,
+        challengeExecutionEvidence: {
+          pairId: 'pair-2598',
+          side: 'primary',
+          validity: 'valid',
+          challengeStage: 'implementation',
+          expectedStageModel: 'coder-a',
+          effectiveRoute: intent.primary.expectedRoute,
+          evidence: [{ stage: 'implementation', model: 'coder-a', source: 'eval.modelId' }],
+        },
+      })));
+      const submissionRecord = submission as unknown as Record<string, unknown>;
+
+      assert.deepEqual(validateHokusaiSubmission(submission), { valid: true, errors: [] });
+      assert.equal('challengePairId' in submissionRecord, false);
+      assert.equal('challengeSide' in submissionRecord, false);
+      assert.equal('challengeIntent' in submissionRecord, false);
+      assert.equal('challengeExecutionRoute' in submissionRecord, false);
+      assert.equal('challengeExecutionEvidence' in submissionRecord, false);
     });
   });
 
