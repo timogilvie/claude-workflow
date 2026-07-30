@@ -2097,7 +2097,7 @@ test('repo-local native challenger is ignored even with patch-coding opt-in', ()
     writeCertArtifact(repoDir, 'openai', 'native-patch-model', 'v1', { phase: 'patch' });
 
     const result = pickChallengeModelsWithReason(
-      ['claude-opus-4-6', 'native-patch-model'],
+      ['claude-opus-4-6', 'native-patch-model', 'claude-sonnet-4-5-20250929'],
       {
         pairId: 'NC-001B',
         issueId: 'NC-001B',
@@ -2110,7 +2110,8 @@ test('repo-local native challenger is ignored even with patch-coding opt-in', ()
       },
     );
 
-    assert.equal(result.pair, null);
+    assert.ok(result.pair);
+    assert.notEqual(result.pair!.challenger.model, 'native-patch-model');
     const rejection = (result.nativeCertificationRejections || []).find((entry) => entry.modelId === 'native-patch-model');
     assert.ok(rejection);
     assert.equal(rejection!.reason, 'no-native-capability');
