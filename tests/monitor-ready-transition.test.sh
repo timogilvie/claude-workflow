@@ -42,7 +42,9 @@ extract_function "$MILL_SCRIPT" "ready_stage_warn_bypass_once" >> "$MONITOR_FUNC
 extract_function "$MILL_SCRIPT" "ready_stage_pending_verdict" >> "$MONITOR_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "ready_remediation_launch_head" >> "$MONITOR_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "ready_conflict_attention_head" >> "$MONITOR_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "ready_conflict_recheck_due" >> "$MONITOR_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "clear_transient_mergeability_state" >> "$MONITOR_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "mark_terminal_transition" >> "$MONITOR_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "monitor_issue_state" >> "$MONITOR_FUNC_FILE"
 
 if [[ ! -s "$MONITOR_FUNC_FILE" ]]; then
@@ -286,6 +288,8 @@ JSON
 
     log() { LOG_OUTPUT+="$*\n"; }
     log_warn() { LOG_OUTPUT+="WARN:$*\n"; }
+    state_mutate() { :; }
+    write_terminal_hook_state() { :; }
     read_state_value() { printf "%s\n" "${1-}"; }
     set_window_attention_state() { ATTENTION_STATE="$2"; }
     handle_agent_error_recovery() { :; }
@@ -348,6 +352,7 @@ JSON
         printf "%s\n" "old-head"
       fi
     }
+    ready_conflict_pr_is_clean() { return 1; }
     git() {
       if [[ "${1:-}" == "-C" && "${3:-}" == "rev-parse" && "${4:-}" == "HEAD" ]]; then
         printf "%s\n" "current-head"

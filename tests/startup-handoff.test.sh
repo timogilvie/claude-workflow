@@ -377,6 +377,9 @@ for fn in \
   _tmux_window_target_exists \
   _tmux_target_join \
   _tmux_task_window_target \
+  coding_pane_expected_replacement_path \
+  clear_coding_pane_expected_replacement \
+  consume_coding_pane_expected_replacement \
   _ensure_task_window_exists
 do
   extract_function() {
