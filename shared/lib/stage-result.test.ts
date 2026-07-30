@@ -351,7 +351,30 @@ describe('artifacts round-trip', () => {
   afterEach(async () => { await fs.rm(testDir, { recursive: true, force: true }); });
 
   it('round-trips PlanningArtifacts', async () => {
-    const artifacts: PlanningArtifacts = { type: 'planning', planFile: 'plan.md', taskPacketFile: 'task-packet.md' };
+    const artifacts: PlanningArtifacts = {
+      type: 'planning',
+      planFile: 'plan.md',
+      taskPacketFile: 'task-packet.md',
+      bounds: {
+        maxTurns: 40,
+        maxToolCalls: 120,
+        maxWallClockMs: 1200000,
+      },
+      usage: {
+        turnsCompleted: 12,
+        toolCallsExecuted: 31,
+        wallClockMs: 300000,
+        totalInputTokens: 10000,
+        totalOutputTokens: 2000,
+        totalCostUsd: 0.25,
+      },
+      planArtifactValid: true,
+      approvalReady: true,
+      promptRef: {
+        id: 'native-planning',
+        version: 'sha256:abc',
+      },
+    };
     await writeStageResult(testDir, makeResult({ stage: 'planning', artifacts }));
 
     const read = await readStageResult(testDir, 'planning');

@@ -2032,6 +2032,9 @@
       },
       "additionalProperties": false
     },
+    "planningExecutionOutcome": {
+      "$ref": "#/$defs/PlanningExecutionOutcome"
+    },
     "challengeStageEval": {
       "$ref": "#/$defs/ChallengeStageEval"
     },
@@ -2167,6 +2170,128 @@
     }
   },
   "$defs": {
+    "PlanningExecutionBounds": {
+      "type": "object",
+      "properties": {
+        "maxTurns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "maxToolCalls": {
+          "type": "number",
+          "minimum": 0
+        },
+        "maxWallClockMs": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "PlanningExecutionUsage": {
+      "type": "object",
+      "properties": {
+        "turnsCompleted": {
+          "type": "number",
+          "minimum": 0
+        },
+        "toolCallsExecuted": {
+          "type": "number",
+          "minimum": 0
+        },
+        "wallClockMs": {
+          "type": "number",
+          "minimum": 0
+        },
+        "totalInputTokens": {
+          "type": "number",
+          "minimum": 0
+        },
+        "totalOutputTokens": {
+          "type": "number",
+          "minimum": 0
+        },
+        "totalCostUsd": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "PlanningPromptProvenance": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "PlanningExecutionOutcome": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "running",
+            "awaiting_user",
+            "completed",
+            "aborted",
+            "failed"
+          ]
+        },
+        "failureReason": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "turn_limit",
+            "tool_call_limit",
+            "wall_clock_limit",
+            "tool_stagnation",
+            "invalid_final_plan",
+            "empty_final_plan",
+            "aborted",
+            "error",
+            null
+          ]
+        },
+        "planArtifactValid": {
+          "type": "boolean"
+        },
+        "approvalReady": {
+          "type": "boolean"
+        },
+        "bounds": {
+          "$ref": "#/$defs/PlanningExecutionBounds"
+        },
+        "usage": {
+          "$ref": "#/$defs/PlanningExecutionUsage"
+        },
+        "promptRef": {
+          "$ref": "#/$defs/PlanningPromptProvenance"
+        },
+        "source": {
+          "type": "string",
+          "const": ".planning-result.json"
+        }
+      },
+      "additionalProperties": false
+    },
     "ChallengeStage": {
       "type": "string",
       "enum": [
