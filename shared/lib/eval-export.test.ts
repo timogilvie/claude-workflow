@@ -421,6 +421,33 @@ test('flattenRecord handles missing workflow_cost_status', () => {
   assert.equal(row.workflow_cost_status, '');
 });
 
+test('flattenRecord does not export native workflow cost attribution', () => {
+  const record = makeRecord({
+    workflowCost: 0,
+    workflowCostStatus: 'success' as any,
+    workflowCostAttribution: {
+      source: 'native',
+      coverage: 'unavailable',
+      reason: 'missing_token_usage',
+      sessions: 1,
+      turns: 1,
+      pricedSessions: 0,
+      unpricedSessions: 1,
+      models: [{
+        provider: 'pi',
+        modelId: 'native-model',
+        priced: false,
+        reason: 'missing_token_usage',
+      }],
+    },
+  });
+  const row = flattenRecord(record) as Record<string, unknown>;
+  assert.equal(row.workflow_cost, 0);
+  assert.equal(row.workflow_cost_status, 'success');
+  assert.equal('workflowCostAttribution' in row, false);
+  assert.equal('workflow_cost_attribution' in row, false);
+});
+
 // ────────────────────────────────────────────────────────────────
 // Export Function Tests
 // ────────────────────────────────────────────────────────────────

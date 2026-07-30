@@ -8,7 +8,8 @@ export type ChallengeValidity = 'valid' | 'invalid_challenge' | 'identical_contr
 export type InvalidChallengeReason =
   | 'stage_override_lost'
   | 'native_launch_fallback'
-  | 'identical_effective_route';
+  | 'identical_effective_route'
+  | 'state_vs_derived_side_mismatch';
 
 export interface ChallengeSideIntent {
   pairId: string;
@@ -52,6 +53,26 @@ export interface ChallengeExecutionAttestation {
   invalidDetails?: string;
 }
 
+export type ChallengeSide = 'primary' | 'challenger';
+
+export interface ChallengeSideResolution {
+  side?: ChallengeSide;
+  canonicalSide?: ChallengeSide;
+  fallbackSide?: ChallengeSide;
+  invalidReason?: InvalidChallengeReason;
+  invalidDetails?: string;
+}
+
+type WorkflowChallengeTaskState = {
+  challengeRole?: unknown;
+  challengeExecutionIntent?: ChallengeExecutionIntent;
+  challengeIntent?: ChallengeExecutionIntent;
+};
+
+type WorkflowChallengeState = {
+  tasks?: Record<string, WorkflowChallengeTaskState>;
+};
+
 type ChallengeEntryLike = {
   model?: string;
   agent?: string;
@@ -66,6 +87,111 @@ type ChallengeEntryLike = {
 
 function clean(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function asChallengeSide(value: unknown): ChallengeSide | undefined {
+  return value === 'primary' || value === 'challenger' ? value : undefined;
+}
+
+function stateTaskKeys(issueId: string | undefined, challengePairId: string): string[] {
+  return Array.from(new Set([
+    issueId,
+    issueId?.replace(/-/g, '_'),
+    challengePairId,
+    challengePairId.replace(/-/g, '_'),
+    `${challengePairId}_c`,
+    `${challengePairId.replace(/-/g, '_')}_c`,
+    `${challengePairId}-challenger`,
+    `${challengePairId.replace(/-/g, '_')}-challenger`,
+  ].filter((key): key is string => Boolean(key))));
+}
+
+function loadWorkflowChallengeState(repoDir: string): WorkflowChallengeState | undefined {
+  const statePath = path.join(repoDir, '.wavemill', 'state', 'workflow-state.json');
+  try {
+    if (!existsSync(statePath)) return undefined;
+    return JSON.parse(readFileSync(statePath, 'utf-8')) as WorkflowChallengeState;
+  } catch {
+    return undefined;
+  }
+}
+
+export function loadChallengeRoleFromState(
+  repoDir: string,
+  issueId: string | undefined,
+  challengePairId?: string,
+): ChallengeSide | undefined {
+  if (!challengePairId) return undefined;
+  const state = loadWorkflowChallengeState(repoDir);
+  for (const key of stateTaskKeys(issueId, challengePairId)) {
+    const role = asChallengeSide(state?.tasks?.[key]?.challengeRole);
+    if (role) return role;
+  }
+  return undefined;
+}
+
+export function loadChallengeIntentFromState(
+  repoDir: string,
+  issueId: string | undefined,
+  challengePairId?: string,
+): ChallengeExecutionIntent | undefined {
+  if (!challengePairId) return undefined;
+  const state = loadWorkflowChallengeState(repoDir);
+  for (const key of stateTaskKeys(issueId, challengePairId)) {
+    const task = state?.tasks?.[key];
+    const canonical = task?.challengeExecutionIntent;
+    if (canonical) return canonical;
+    /* legacy fallback */
+    const legacy = task?.challengeIntent;
+    if (legacy) return legacy;
+  }
+  return undefined;
+}
+
+function deriveChallengeSideFromBranch(
+  slug: string | undefined,
+  issueId: string | undefined,
+  challengePairId?: string,
+): ChallengeSide | undefined {
+  if (!challengePairId) return undefined;
+  const cleanSlug = slug?.replace(/^(task|bug)\//, '') || '';
+  if (
+    issueId === `${challengePairId}_c`
+    || issueId === `${challengePairId}-challenger`
+    || cleanSlug.endsWith('_c')
+    || cleanSlug.endsWith('-challenger')
+  ) {
+    return 'challenger';
+  }
+  return cleanSlug || issueId ? 'primary' : undefined;
+}
+
+export function resolveChallengeSide(input: {
+  repoDir: string;
+  slug?: string;
+  branchName?: string;
+  issueId?: string;
+  challengePairId?: string;
+}): ChallengeSideResolution {
+  if (!input.challengePairId) return {};
+  const slug = input.slug ?? input.branchName;
+  const canonicalSide = loadChallengeRoleFromState(input.repoDir, input.issueId, input.challengePairId);
+  const fallbackSide = deriveChallengeSideFromBranch(slug, input.issueId, input.challengePairId);
+  if (canonicalSide) {
+    const mismatch = fallbackSide && fallbackSide !== canonicalSide;
+    return {
+      side: canonicalSide,
+      canonicalSide,
+      fallbackSide,
+      ...(mismatch
+        ? {
+          invalidReason: 'state_vs_derived_side_mismatch',
+          invalidDetails: `Workflow state challengeRole=${canonicalSide}, branch-derived side=${fallbackSide}.`,
+        }
+        : {}),
+    };
+  }
+  return { side: fallbackSide, fallbackSide };
 }
 
 function routeFromEntry(entry: ChallengeEntryLike): ChallengeRoutingMeta {

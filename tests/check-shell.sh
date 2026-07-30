@@ -25,6 +25,7 @@ echo "=== Syntax Check (bash -n) ==="
 
 for f in \
   "$LIB_DIR"/wavemill-*.sh \
+  "$LIB_DIR"/terminal-reconciler.sh \
   "$LIB_DIR"/startup-progress.sh \
   "$LIB_DIR"/agent-adapters.sh \
   "$REPO_DIR"/shared/hooks/*.sh \
@@ -44,6 +45,7 @@ for f in \
   "$REPO_DIR"/tests/wavemill-background-jobs-cleanup.test.sh \
   "$REPO_DIR"/tests/notification-waiting.test.sh \
   "$REPO_DIR"/tests/hook-osc-emit.test.sh \
+  "$REPO_DIR"/tests/terminal-reconciler.test.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_launches_concurrently.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_serializes_state_writes.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/worktree_collision.sh \

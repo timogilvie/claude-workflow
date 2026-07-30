@@ -343,9 +343,13 @@ export function classifyChallengeState(
 
   if (latestComparison.comparisonOutcome === 'double-forfeit') {
     return {
-      kind: 'loser',
+      // A double-forfeit deliberately names no winner. Treating both sides as
+      // losers sends both PRs to Tend's destructive loser-cleanup path. Keep
+      // the work intact for an operator to repair or compare manually.
+      kind: 'pair-unresolved',
       pairId,
-      winnerPr: null,
+      otherPr: findOtherOpenPr(pairId, prNumber, challengePairMap, allPrNumbers),
+      reason: 'pair-unresolved:double-forfeit-comparison',
     };
   }
 
@@ -492,6 +496,14 @@ export async function applyChallengePairGates<T extends ChallengeEligibleWorkIte
       } else {
         nextBlocked.push(toBlockedCandidate(item, `challenge:winner-held:${state.pairId}`));
       }
+      continue;
+    }
+
+    // A cleanup target is safe only when the comparison identifies a distinct,
+    // concrete winner. Missing PR identity must remain operator-actionable;
+    // it must never turn the current PR into an implicit loser.
+    if (state.winnerPr === null || state.winnerPr === item.pr.number) {
+      nextBlocked.push(toBlockedCandidate(item, `challenge:pair-unresolved:missing-winner:${state.pairId}`));
       continue;
     }
 

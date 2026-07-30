@@ -723,6 +723,71 @@ describe('NativeSessionAdapter', () => {
       cleanup();
     }
   });
+
+  it('preserves assistant turns with missing usage as unavailable native records', () => {
+    const { worktreePath, nativeSessionsDir, cleanup } = setupNativeSessionDir();
+    try {
+      const missingUsage = JSON.stringify({
+        seq: 2,
+        sessionId: 'native-session',
+        timestamp: 2,
+        type: 'assistant_message',
+        model: 'pi-model',
+        stopReason: 'end_turn',
+        rawContent: [],
+        replayContent: [],
+        redacted: false,
+      });
+      const lines = [
+        nativeSessionStarted('pi-model'),
+        missingUsage,
+      ].join('\n');
+
+      writeFileSync(join(nativeSessionsDir, 'session.jsonl'), lines);
+
+      const adapter = new NativeSessionAdapter();
+      const result = adapter.scan({ worktreePath, branchName: 'task/test' });
+
+      assert.ok(result);
+      assert.equal(result.sessionCount, 1);
+      assert.equal(result.turnCount, 1);
+      assert.deepEqual(result.models, {});
+      assert.equal(result.nativeSessions?.[0]?.usageAvailable, false);
+      assert.equal(result.nativeSessions?.[0]?.modelId, 'pi-model');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('deduplicates native sessions by session id across run paths', () => {
+    const { worktreePath, nativeSessionsDir, cleanup } = setupNativeSessionDir();
+    try {
+      const secondRunDir = join(worktreePath, '.wavemill', 'runs', 'HOK-2306', 'native-sessions');
+      mkdirSync(secondRunDir, { recursive: true });
+      const lines = [
+        nativeSessionStarted('pi-model'),
+        nativeAssistantMessage({ input: 100, output: 25 }),
+      ].join('\n');
+
+      writeFileSync(join(nativeSessionsDir, 'session.jsonl'), lines);
+      writeFileSync(join(secondRunDir, 'session-copy.jsonl'), lines);
+
+      const adapter = new NativeSessionAdapter();
+      const result = adapter.scan({ worktreePath, branchName: 'task/test' });
+
+      assert.ok(result);
+      assert.equal(result.sessionCount, 1);
+      assert.equal(result.turnCount, 1);
+      assert.deepEqual(result.models['pi-model'], {
+        inputTokens: 100,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+        outputTokens: 25,
+      });
+    } finally {
+      cleanup();
+    }
+  });
 });
 
 // ── Native Provider Metadata Tests ─────────────────────────────

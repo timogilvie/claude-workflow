@@ -57,6 +57,9 @@ WAVEMILL_MILL_SOURCE_LIB_DIR="$SCRIPT_DIR"
 WAVEMILL_COMMON_LIB_PATH="$SCRIPT_DIR/wavemill-common.sh"
 source "$SCRIPT_DIR/wavemill-common.sh"
 source "$SCRIPT_DIR/agent-adapters.sh"
+if [[ -f "$SCRIPT_DIR/terminal-reconciler.sh" ]]; then
+source "$SCRIPT_DIR/terminal-reconciler.sh"
+fi
 load_config "$REPO_DIR"
 
 # ── Nested invocation guards (HOK-1214) ──────────────────────────
@@ -2789,6 +2792,9 @@ if [[ ! -f "$LIB_DIR/wavemill-common.sh" ]]; then
   exit 1
 fi
 source "$LIB_DIR/wavemill-common.sh"
+if [[ -f "$LIB_DIR/terminal-reconciler.sh" ]]; then
+source "$LIB_DIR/terminal-reconciler.sh"
+fi
 _update_effective_max_parallel
 
 # Ensure gh commands target the correct GitHub repo (not inherited CWD)
@@ -5625,6 +5631,9 @@ emit_native_launch_failure_attention() {
     --arg exitCode "$exit_code" \
     '{type:"nativeLaunchFailure", paneTarget:$paneTarget, failureKind:$failureKind, exitCode:(if $exitCode == "" then null else ($exitCode | tonumber) end)}' 2>/dev/null || printf '{}')"
   write_stage_result "$feature_dir" "$stage" "failed" "$agent" "$model" "$notes" "$artifacts_json"
+  if [[ "${WAVEMILL_TERMINAL_RECONCILER_LOADED:-0}" == "1" ]]; then
+    wavemill_reconcile_terminal "$SESSION" "$issue" "recovery_failure" || true
+  fi
   set_window_attention_state "$win" "needs-user"
   log_warn "$issue → Native ${stage} launcher failed (${failure_kind}) in pane $win_target"
   active_count=$((active_count + 1))
@@ -5790,6 +5799,9 @@ handle_phase_launch_result() {
     log_task "status" "$issue" "⛔ $issue → Workflow aborted during ${launched_phase} launch"
     write_stage_result "$feature_dir" "$launched_phase" "aborted" "$agent" "$model"
     set_task_phase "$issue" "aborted"
+    if [[ "${WAVEMILL_TERMINAL_RECONCILER_LOADED:-0}" == "1" ]]; then
+      wavemill_reconcile_terminal "$SESSION" "$issue" "operator_abort" || true
+    fi
     set_window_attention_state "$win" "needs-user"
     return 1
   fi
@@ -11622,6 +11634,9 @@ monitor_issue_state() {
 
       local title launch_rc
       set_task_phase "$ISSUE" "ready"
+      if [[ "${WAVEMILL_TERMINAL_RECONCILER_LOADED:-0}" == "1" ]]; then
+        wavemill_reconcile_terminal "$SESSION" "$ISSUE" "review_complete" "$PR" || true
+      fi
       title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
       if [[ -z "$title" ]]; then
         issue_json=$(cat "/tmp/${SESSION}-${ISSUE}-issue.json" 2>/dev/null || echo "{}")
@@ -11663,6 +11678,9 @@ monitor_issue_state() {
       fi
       set_window_attention_state "$WIN" "needs-user"
       log "status" "$ISSUE → Ready checks completed for PR #$PR"
+      if [[ "${WAVEMILL_TERMINAL_RECONCILER_LOADED:-0}" == "1" ]]; then
+        wavemill_reconcile_terminal "$SESSION" "$ISSUE" "ready_complete" "$PR" || true
+      fi
       return 0
     else
       # No PR in current repo - check Linear issue state for cross-repo completion
@@ -12293,6 +12311,9 @@ monitor_issue_state() {
               fi
               write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "review" "claude-sonnet-5")" "PR #$pr_number" "{\"type\":\"review\",\"prNumber\":$pr_number}"
               dispatch_queued_children_for_parent "$ISSUE" "$pr_number"
+              if [[ "${WAVEMILL_TERMINAL_RECONCILER_LOADED:-0}" == "1" ]]; then
+                wavemill_reconcile_terminal "$SESSION" "$ISSUE" "review_complete" "$pr_number" || true
+              fi
               review_status="completed"
             elif emit_native_launch_failure_attention "$ISSUE" "$FEATURE_DIR" "review" "$WIN" "$WIN_TARGET" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "review" "claude-sonnet-5")"; then
               return 0
@@ -12332,6 +12353,9 @@ monitor_issue_state() {
 
             # Transition to ready phase
             set_task_phase "$ISSUE" "ready"
+            if [[ "${WAVEMILL_TERMINAL_RECONCILER_LOADED:-0}" == "1" ]]; then
+              wavemill_reconcile_terminal "$SESSION" "$ISSUE" "review_complete" "$pr_number" || true
+            fi
             title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
             if [[ -z "$title" ]]; then
               issue_json=$(cat "/tmp/${SESSION}-${ISSUE}-issue.json" 2>/dev/null || echo "{}")
@@ -12373,6 +12397,9 @@ monitor_issue_state() {
             fi
             set_window_attention_state "$WIN" "needs-user"
             log "status" "$ISSUE → Ready checks completed for PR #$pr_number"
+            if [[ "${WAVEMILL_TERMINAL_RECONCILER_LOADED:-0}" == "1" ]]; then
+              wavemill_reconcile_terminal "$SESSION" "$ISSUE" "ready_complete" "$pr_number" || true
+            fi
             return 0
           fi
           # No PR created or ready phase disabled - mark for attention
@@ -12611,7 +12638,9 @@ monitor_issue_state() {
         log "debug" "Eval already completed for $ISSUE"
       fi
       log "status" "  → Window stays open for review - close it when ready$(wavemill_config_annotation "mill.requireConfirm" "$REQUIRE_CONFIRM")"
-      if should_update_linear_state "$ISSUE"; then
+      if [[ "${WAVEMILL_TERMINAL_RECONCILER_LOADED:-0}" == "1" ]]; then
+        wavemill_reconcile_terminal "$SESSION" "$ISSUE" "pr_merged" "$PR" || true
+      elif should_update_linear_state "$ISSUE"; then
         linear_set_state "$(get_linear_issue_id "$ISSUE")" "Done"
       fi
       # Preserve agent when marking as merged
@@ -12621,7 +12650,9 @@ monitor_issue_state() {
       return 0
     fi
 
-    if should_update_linear_state "$ISSUE"; then
+    if [[ "${WAVEMILL_TERMINAL_RECONCILER_LOADED:-0}" == "1" ]]; then
+      wavemill_reconcile_terminal "$SESSION" "$ISSUE" "pr_merged" "$PR" || true
+    elif should_update_linear_state "$ISSUE"; then
       linear_set_state "$(get_linear_issue_id "$ISSUE")" "Done"
     fi
     cleanup_completed_task "$ISSUE" "$SLUG"
@@ -12665,8 +12696,12 @@ monitor_issue_state() {
           ;;
       esac
     fi
-    if [[ -n "$linear_status" ]] && should_update_linear_state "$ISSUE"; then
-      linear_set_state "$(get_linear_issue_id "$ISSUE")" "$linear_status"
+    if [[ -n "$linear_status" ]]; then
+      if [[ "${WAVEMILL_TERMINAL_RECONCILER_LOADED:-0}" == "1" ]]; then
+        wavemill_reconcile_terminal "$SESSION" "$ISSUE" "pr_closed_unmerged" "$PR" || true
+      elif should_update_linear_state "$ISSUE"; then
+        linear_set_state "$(get_linear_issue_id "$ISSUE")" "$linear_status"
+      fi
     fi
     if should_cleanup_closed_pr "$ISSUE"; then
       log "debug" "  ↳ Auto-cleaning closed challenger pane/worktree"
@@ -12700,6 +12735,9 @@ monitor_issue_state() {
         write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "" "PR #$PR" "{\"type\":\"review\",\"prNumber\":$PR}"
         dispatch_queued_children_for_parent "$ISSUE" "$PR"
         set_task_phase "$ISSUE" "ready"
+        if [[ "${WAVEMILL_TERMINAL_RECONCILER_LOADED:-0}" == "1" ]]; then
+          wavemill_reconcile_terminal "$SESSION" "$ISSUE" "review_complete" "$PR" || true
+        fi
         title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
         if [[ -z "$title" ]]; then
           issue_json=$(cat "/tmp/${SESSION}-${ISSUE}-issue.json" 2>/dev/null || echo "{}")
@@ -12741,6 +12779,9 @@ monitor_issue_state() {
         fi
         set_window_attention_state "$WIN" "needs-user"
         log "status" "$ISSUE → Ready checks completed for PR #$PR"
+        if [[ "${WAVEMILL_TERMINAL_RECONCILER_LOADED:-0}" == "1" ]]; then
+          wavemill_reconcile_terminal "$SESSION" "$ISSUE" "ready_complete" "$PR" || true
+        fi
         return 0
       fi
 
@@ -13020,6 +13061,9 @@ monitor_issue_state() {
       fi
 
       log "status" "$ISSUE → Ready checks completed for PR #$PR"
+      if [[ "${WAVEMILL_TERMINAL_RECONCILER_LOADED:-0}" == "1" ]]; then
+        wavemill_reconcile_terminal "$SESSION" "$ISSUE" "ready_complete" "$PR" || true
+      fi
       set_window_attention_state "$WIN" "clear"
       active_count=$((active_count + 1))
       return 0

@@ -253,6 +253,72 @@ wavemill_hook_write() {
   return 0
 }
 
+_wavemill_hook_feature_dir() {
+  if [[ -n "${WAVEMILL_FEATURE_DIR:-}" && -d "${WAVEMILL_FEATURE_DIR:-}" ]]; then
+    printf '%s\n' "$WAVEMILL_FEATURE_DIR"
+    return 0
+  fi
+
+  local slug="${WAVEMILL_FEATURE_SLUG:-${WAVEMILL_SLUG:-}}"
+  local wt_dir="${WAVEMILL_WT_DIR:-}"
+  if [[ -n "$slug" && -n "$wt_dir" ]]; then
+    for kind in features bugs; do
+      if [[ -d "${wt_dir%/}/$kind/$slug" ]]; then
+        printf '%s\n' "${wt_dir%/}/$kind/$slug"
+        return 0
+      fi
+    done
+  fi
+
+  return 1
+}
+
+wavemill_hook_archive_current() {
+  local session="${1:-${WAVEMILL_SESSION:-}}"
+  local issue="${2:-${WAVEMILL_ISSUE:-}}"
+  local reason="${3:-superseded}"
+  local hook_file="/tmp/wavemill-${session}-${issue}.hook"
+  local feature_dir history_file payload timestamp
+
+  [[ -n "$session" && -n "$issue" && -f "$hook_file" ]] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  jq -e . "$hook_file" >/dev/null 2>&1 || return 0
+  feature_dir="$(_wavemill_hook_feature_dir 2>/dev/null || true)"
+  [[ -n "$feature_dir" ]] || return 0
+
+  mkdir -p "$feature_dir" 2>/dev/null || return 0
+  history_file="$feature_dir/.terminal-history.jsonl"
+  payload="$(cat "$hook_file" 2>/dev/null || true)"
+  [[ -n "$payload" ]] || return 0
+  timestamp="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  jq -cn --arg archivedAt "$timestamp" --arg reason "$reason" --arg session "$session" --arg issue "$issue" --argjson payload "$payload" \
+    '{archivedAt:$archivedAt, reason:$reason, session:$session, issue:$issue, payload:$payload}' >> "$history_file" 2>/dev/null || true
+}
+
+wavemill_hook_terminalize() {
+  local state="$1"
+  local reason="$2"
+  local detail="${3:-}"
+  local agent="${4:-wavemill}"
+
+  case "$state" in
+    idle|error) ;;
+    *) return 0 ;;
+  esac
+
+  wavemill_hook_archive_current "${WAVEMILL_SESSION:-}" "${WAVEMILL_ISSUE:-}" "$reason" || true
+  wavemill_hook_write "$state" "$reason" "$detail" "$agent"
+}
+
+wavemill_hook_supersede() {
+  local session="$1" issue="$2" reason="${3:-superseded}"
+  local hook_file="/tmp/wavemill-${session}-${issue}.hook"
+
+  [[ -n "$session" && -n "$issue" ]] || return 0
+  wavemill_hook_archive_current "$session" "$issue" "$reason" || true
+  rm -f "$hook_file" 2>/dev/null || true
+}
+
 wavemill_hook_write_routing() {
   local role="$1"
   local routing_json="$2"

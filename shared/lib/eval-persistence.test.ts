@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import type { EvalRecord } from './eval-schema.ts';
 import { enrichEvalRecord } from './eval-record-builder.ts';
 import { appendEvalRecord, EvalValidationError, hasChallengeEvalRecord, hasChallengeEvalRecordPair, readEvalRecords } from './eval-persistence.ts';
+import { buildChallengeExecutionIntent } from './challenge-execution-contract.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Test Harness
@@ -86,6 +87,31 @@ function makeRecord(overrides?: Partial<EvalRecord>): EvalRecord {
 
 function makeTempDir(): string {
   return mkdtempSync(join(tmpdir(), 'eval-persist-test-'));
+}
+
+function makeChallengeIntent(pairId: string) {
+  return buildChallengeExecutionIntent({
+    pairId,
+    challengeStage: 'implementation',
+    primary: {
+      model: 'claude-opus-4-6',
+      planner: 'claude-opus-4-6',
+      reviewer: 'claude-opus-4-6',
+      planDepth: 'standard',
+      codeDepth: 'standard',
+      reviewMode: 'standard',
+    },
+    challenger: {
+      model: 'gpt-5.4',
+      planner: 'claude-opus-4-6',
+      reviewer: 'claude-opus-4-6',
+      planDepth: 'standard',
+      codeDepth: 'deep',
+      reviewMode: 'standard',
+    },
+    routeContext: { scenario: 'schema-sync' },
+    selectionReason: 'coverage',
+  });
 }
 
 function cleanUp(dir: string) {
@@ -171,6 +197,82 @@ test('append skipValidation bypasses the write-time gate for fixtures', () => {
     });
     const records = readEvalRecords({ dir: evalsDir });
     assert.equal(records.length, 1);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('append accepts exact emitted challenge execution fields for primary and challenger', () => {
+  const tmp = makeTempDir();
+  const evalsDir = join(tmp, 'evals');
+  const intent = makeChallengeIntent('pair-2598');
+  try {
+    appendEvalRecord(makeRecord({
+      id: 'primary-record',
+      issueId: 'HOK-2598',
+      prUrl: 'https://github.com/org/repo/pull/100',
+      challengePairId: 'pair-2598',
+      challengeSide: 'primary',
+      challengeIntent: intent,
+      challengeExecutionRoute: intent.primary.expectedRoute,
+      challengeExecutionEvidence: {
+        pairId: 'pair-2598',
+        side: 'primary',
+        validity: 'valid',
+        challengeStage: 'implementation',
+        expectedStageModel: 'claude-opus-4-6',
+        effectiveRoute: intent.primary.expectedRoute,
+        evidence: [{ stage: 'implementation', model: 'claude-opus-4-6', source: 'eval.modelId' }],
+      },
+    }), { dir: evalsDir });
+    appendEvalRecord(makeRecord({
+      id: 'challenger-record',
+      issueId: 'HOK-2598-challenger',
+      prUrl: 'https://github.com/org/repo/pull/101',
+      modelId: 'gpt-5.4',
+      modelVersion: 'gpt-5.4',
+      challengePairId: 'pair-2598',
+      challengeSide: 'challenger',
+      challengeIntent: intent,
+      challengeExecutionRoute: intent.challenger.expectedRoute,
+      challengeExecutionEvidence: {
+        pairId: 'pair-2598',
+        side: 'challenger',
+        validity: 'valid',
+        challengeStage: 'implementation',
+        expectedStageModel: 'gpt-5.4',
+        effectiveRoute: intent.challenger.expectedRoute,
+        evidence: [{ stage: 'implementation', model: 'gpt-5.4', source: 'eval.modelId' }],
+      },
+    }), { dir: evalsDir });
+
+    const records = readEvalRecords({ dir: evalsDir });
+    assert.equal(records.length, 2);
+    assert.equal(records[0].challengeSide, 'primary');
+    assert.equal(records[1].challengeSide, 'challenger');
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('append leaves failed schema writes retryable without a partial record', () => {
+  const tmp = makeTempDir();
+  const evalsDir = join(tmp, 'evals');
+  try {
+    assert.throws(
+      () => appendEvalRecord({
+        ...makeRecord({ id: 'retry-record' }),
+        unexpectedChallengeField: true,
+      } as unknown as EvalRecord, { dir: evalsDir }),
+      (error) => error instanceof EvalValidationError
+        && error.issues.some((issue) => issue.code === 'SCHEMA_VIOLATION' && issue.detail === 'unexpectedChallengeField'),
+    );
+    assert.equal(readEvalRecords({ dir: evalsDir }).length, 0);
+
+    appendEvalRecord(makeRecord({ id: 'retry-record' }), { dir: evalsDir });
+    const records = readEvalRecords({ dir: evalsDir });
+    assert.equal(records.length, 1);
+    assert.equal(records[0].id, 'retry-record');
   } finally {
     cleanUp(tmp);
   }
