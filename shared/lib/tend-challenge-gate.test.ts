@@ -288,7 +288,7 @@ describe('branch sibling detection in applyChallengePairGates', () => {
     }
   });
 
-  it('treats a double-forfeit terminal record as losing both sides', async () => {
+  it('holds both sides for manual recovery after a double-forfeit terminal record', async () => {
     const { repoDir, cleanup } = setupRepoDir();
     try {
       const items = [
@@ -332,11 +332,11 @@ describe('branch sibling detection in applyChallengePairGates', () => {
       assert.deepEqual(
         result.blocked.map((item) => [item.number, item.reason]).sort((a, b) => a[0] - b[0]),
         [
-          [101, 'challenge:loser:pair-1'],
-          [102, 'challenge:loser:pair-1'],
+          [101, 'challenge:pair-unresolved:double-forfeit-comparison'],
+          [102, 'challenge:pair-unresolved:double-forfeit-comparison'],
         ],
       );
-      assert.deepEqual(result.losers.sort((a, b) => a - b), [101, 102]);
+      assert.deepEqual(result.losers, []);
     } finally {
       cleanup();
     }
@@ -444,6 +444,47 @@ describe('branch sibling detection in applyChallengePairGates', () => {
           [102, 'challenge:pair-unresolved:inconclusive-comparison'],
         ],
       );
+      assert.deepEqual(result.losers, []);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('does not mark a PR as a loser when comparison evidence has no concrete winner PR', async () => {
+    const { repoDir, cleanup } = setupRepoDir();
+    try {
+      const items = [makeWorkItem({
+        number: 101,
+        headRefName: 'task/foo',
+        challengePairId: 'pair-1',
+        challenge: true,
+      })];
+
+      writeWorkflowState(repoDir, {
+        HOK_1: { pr: 101, challengePairId: 'pair-1', challengeRole: 'primary' },
+        HOK_1_c: { pr: 102, challengePairId: 'pair-1', challengeRole: 'challenger' },
+      });
+      writeFileSync(
+        join(repoDir, '.wavemill', 'evals', 'challenge-records.jsonl'),
+        JSON.stringify({
+          challengePairId: 'pair-1',
+          primaryPrUrl: 'https://github.com/org/repo/pull/101',
+          winner: 'challenger',
+          timestamp: '2026-07-30T12:00:00Z',
+          comparisonOutcome: 'forfeit',
+          terminalReason: 'primary_eval_hard_failed',
+        }),
+      );
+
+      const result = await applyChallengePairGates(items, [], repoDir, {
+        remoteBranches: ['task/foo'],
+        coolOffSeconds: 0,
+      });
+
+      assert.equal(result.eligible.length, 0);
+      assert.deepEqual(result.blocked.map((item) => [item.number, item.reason]), [
+        [101, 'challenge:pair-unresolved:missing-winner:pair-1'],
+      ]);
       assert.deepEqual(result.losers, []);
     } finally {
       cleanup();
