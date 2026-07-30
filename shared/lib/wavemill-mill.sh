@@ -1191,6 +1191,85 @@ set_task_phase() {
   fi
 }
 
+terminal_hook_file() {
+  local issue="$1"
+  printf '/tmp/wavemill-%s-%s.hook\n' "$SESSION" "$issue"
+}
+
+write_terminal_hook_state() {
+  local issue="$1" event="$2" detail="${3:-}" agent="${4:-unknown}"
+  command -v jq >/dev/null 2>&1 || return 0
+
+  local hook_file tmp_file timestamp base_json
+  hook_file="$(terminal_hook_file "$issue")"
+  tmp_file="${hook_file}.tmp.$$"
+  timestamp="$(date +%s)"
+  base_json='{}'
+  if [[ -f "$hook_file" ]] && jq -e . "$hook_file" >/dev/null 2>&1; then
+    base_json="$(cat "$hook_file")"
+  fi
+
+  if jq -n \
+    --argjson base "$base_json" \
+    --arg event "$event" \
+    --arg detail "$detail" \
+    --arg agent "$agent" \
+    --argjson timestamp "$timestamp" \
+    '$base + {
+      state: "idle",
+      event: $event,
+      agent: $agent,
+      timestamp: $timestamp,
+      terminal: true
+    }
+    + (if $detail != "" then {detail: $detail} else {} end)' > "$tmp_file" 2>/dev/null; then
+    mv "$tmp_file" "$hook_file" 2>/dev/null || rm -f "$tmp_file"
+  else
+    rm -f "$tmp_file"
+  fi
+}
+
+mark_terminal_transition() {
+  local issue="$1" outcome="$2" pr="${3:-}" reason="${4:-}" linear_state="${5:-}" agent="${6:-unknown}"
+  local event="Terminal"
+  case "$outcome" in
+    done) event="Merged" ;;
+    failed) event="ClosedUnmerged" ;;
+    aborted) event="Aborted" ;;
+  esac
+
+  state_mutate "$STATE_FILE" '
+    .terminalTransitions = (.terminalTransitions // {}) |
+    .terminalTransitions[$issue] = ((.terminalTransitions[$issue] // {}) + {
+      outcome: $outcome,
+      pr: $pr,
+      reason: $reason,
+      source: "mill-monitor",
+      updatedAt: (now | todateiso8601)
+    }
+    + (if $linearState != "" then {linearState: $linearState, linearStateUpdatedAt: (now | todateiso8601)} else {} end)) |
+    .tasks[$issue] = ((.tasks[$issue] // {}) + {
+      status: $outcome,
+      terminal: .terminalTransitions[$issue],
+      updated: (now | todateiso8601)
+    }) |
+    .tasks[$issue].phase = (if $outcome == "aborted" then "aborted" else "done" end)
+  ' \
+    --arg issue "$issue" \
+    --arg outcome "$outcome" \
+    --arg pr "$pr" \
+    --arg reason "$reason" \
+    --arg linearState "$linear_state" >/dev/null 2>&1 || true
+
+  write_terminal_hook_state "$issue" "$event" "$reason${pr:+ (PR #$pr)}" "$agent"
+}
+
+terminal_linear_state_already_applied() {
+  local issue="$1" state="$2"
+  [[ -n "$state" ]] || return 1
+  [[ "$(read_state_value "" --arg issue "$issue" '.terminalTransitions[$issue].linearState // .tasks[$issue].terminal.linearState // empty')" == "$state" ]]
+}
+
 
 get_task_phase() {
   local issue="$1"
@@ -3415,6 +3494,85 @@ set_task_phase() {
      --arg issue "$issue" --arg phase "$phase"; then
     log_warn "set_task_phase: failed to update $issue"
   fi
+}
+
+terminal_hook_file() {
+  local issue="$1"
+  printf '/tmp/wavemill-%s-%s.hook\n' "$SESSION" "$issue"
+}
+
+write_terminal_hook_state() {
+  local issue="$1" event="$2" detail="${3:-}" agent="${4:-unknown}"
+  command -v jq >/dev/null 2>&1 || return 0
+
+  local hook_file tmp_file timestamp base_json
+  hook_file="$(terminal_hook_file "$issue")"
+  tmp_file="${hook_file}.tmp.$$"
+  timestamp="$(date +%s)"
+  base_json='{}'
+  if [[ -f "$hook_file" ]] && jq -e . "$hook_file" >/dev/null 2>&1; then
+    base_json="$(cat "$hook_file")"
+  fi
+
+  if jq -n \
+    --argjson base "$base_json" \
+    --arg event "$event" \
+    --arg detail "$detail" \
+    --arg agent "$agent" \
+    --argjson timestamp "$timestamp" \
+    '$base + {
+      state: "idle",
+      event: $event,
+      agent: $agent,
+      timestamp: $timestamp,
+      terminal: true
+    }
+    + (if $detail != "" then {detail: $detail} else {} end)' > "$tmp_file" 2>/dev/null; then
+    mv "$tmp_file" "$hook_file" 2>/dev/null || rm -f "$tmp_file"
+  else
+    rm -f "$tmp_file"
+  fi
+}
+
+mark_terminal_transition() {
+  local issue="$1" outcome="$2" pr="${3:-}" reason="${4:-}" linear_state="${5:-}" agent="${6:-unknown}"
+  local event="Terminal"
+  case "$outcome" in
+    done) event="Merged" ;;
+    failed) event="ClosedUnmerged" ;;
+    aborted) event="Aborted" ;;
+  esac
+
+  state_mutate "$STATE_FILE" '
+    .terminalTransitions = (.terminalTransitions // {}) |
+    .terminalTransitions[$issue] = ((.terminalTransitions[$issue] // {}) + {
+      outcome: $outcome,
+      pr: $pr,
+      reason: $reason,
+      source: "mill-monitor",
+      updatedAt: (now | todateiso8601)
+    }
+    + (if $linearState != "" then {linearState: $linearState, linearStateUpdatedAt: (now | todateiso8601)} else {} end)) |
+    .tasks[$issue] = ((.tasks[$issue] // {}) + {
+      status: $outcome,
+      terminal: .terminalTransitions[$issue],
+      updated: (now | todateiso8601)
+    }) |
+    .tasks[$issue].phase = (if $outcome == "aborted" then "aborted" else "done" end)
+  ' \
+    --arg issue "$issue" \
+    --arg outcome "$outcome" \
+    --arg pr "$pr" \
+    --arg reason "$reason" \
+    --arg linearState "$linear_state" >/dev/null 2>&1 || true
+
+  write_terminal_hook_state "$issue" "$event" "$reason${pr:+ (PR #$pr)}" "$agent"
+}
+
+terminal_linear_state_already_applied() {
+  local issue="$1" state="$2"
+  [[ -n "$state" ]] || return 1
+  [[ "$(read_state_value "" --arg issue "$issue" '.terminalTransitions[$issue].linearState // .tasks[$issue].terminal.linearState // empty')" == "$state" ]]
 }
 
 read_state_value() {
@@ -8758,7 +8916,11 @@ cleanup_completed_task() {
 
   # Clean up state
   git -C "$REPO_DIR" worktree prune >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null || true
-  rm -f "/tmp/wavemill-${SESSION}-${issue}.hook" 2>/dev/null || true
+  if [[ -z "$completion_reason" ]]; then
+    rm -f "/tmp/wavemill-${SESSION}-${issue}.hook" 2>/dev/null || true
+  else
+    write_terminal_hook_state "$issue" "Terminal" "$completion_reason" "${current_agent:-unknown}" || true
+  fi
   remove_task_state "$issue"
   CLEANED["$issue"]=1
 
@@ -11635,6 +11797,7 @@ monitor_issue_state() {
       fi
       if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$FEATURE_DIR"; then
         log_task "status" "$ISSUE" "⛔ $ISSUE → Workflow aborted during ready launch"
+        mark_terminal_transition "$ISSUE" "aborted" "${PR:-}" "operator abort" "Backlog" "${current_agent:-$AGENT_CMD}"
         set_task_phase "$ISSUE" "aborted"
         set_window_attention_state "$WIN" "needs-user"
         return 0
@@ -12258,6 +12421,7 @@ monitor_issue_state() {
         review)
           if [[ "$resolved_phase" == "aborted" ]]; then
             log_task "status" "$ISSUE" "⛔ $ISSUE → Workflow aborted by user during review phase"
+            mark_terminal_transition "$ISSUE" "aborted" "${PR:-}" "operator abort" "Backlog" "${current_agent:-$AGENT_CMD}"
             write_stage_result "$FEATURE_DIR" "review" "aborted" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "review" "claude-sonnet-5")"
             set_task_phase "$ISSUE" "aborted"
             set_window_attention_state "$WIN" "needs-user"
@@ -12385,6 +12549,7 @@ monitor_issue_state() {
           # because ready always has a known PR.
           if [[ "$resolved_phase" == "aborted" ]]; then
             log_task "status" "$ISSUE" "⛔ $ISSUE → Workflow aborted by user during ready phase"
+            mark_terminal_transition "$ISSUE" "aborted" "${PR:-}" "operator abort" "Backlog" "${current_agent:-$AGENT_CMD}"
             write_stage_result "$FEATURE_DIR" "ready" "aborted" "$current_agent"
             set_task_phase "$ISSUE" "aborted"
             set_window_attention_state "$WIN" "needs-user"
@@ -12506,6 +12671,7 @@ monitor_issue_state() {
 
       if check_stage_aborted "$FEATURE_DIR"; then
         log_task "status" "$ISSUE" "⛔ $ISSUE → Workflow aborted (controller state)"
+        mark_terminal_transition "$ISSUE" "aborted" "${PR:-}" "operator abort" "Backlog" "${current_agent:-$AGENT_CMD}"
         set_task_phase "$ISSUE" "aborted"
         set_window_attention_state "$WIN" "needs-user"
         return 0
@@ -12590,6 +12756,7 @@ monitor_issue_state() {
 
     log "status" "$ISSUE → PR #$PR MERGED"
     set_window_attention_state "$WIN" "clear"
+    mark_terminal_transition "$ISSUE" "done" "$PR" "merged" "" "${current_agent:-$AGENT_CMD}"
 
     # Capture eval eligibility and agent before cleanup removes task state.
     local _eval_needed=false _eval_agent=""
@@ -12611,8 +12778,9 @@ monitor_issue_state() {
         log "debug" "Eval already completed for $ISSUE"
       fi
       log "status" "  → Window stays open for review - close it when ready$(wavemill_config_annotation "mill.requireConfirm" "$REQUIRE_CONFIRM")"
-      if should_update_linear_state "$ISSUE"; then
+      if should_update_linear_state "$ISSUE" && ! terminal_linear_state_already_applied "$ISSUE" "Done"; then
         linear_set_state "$(get_linear_issue_id "$ISSUE")" "Done"
+        mark_terminal_transition "$ISSUE" "done" "$PR" "merged" "Done" "${current_agent:-$AGENT_CMD}"
       fi
       # Preserve agent when marking as merged
       current_agent=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].agent // ""')
@@ -12621,10 +12789,11 @@ monitor_issue_state() {
       return 0
     fi
 
-    if should_update_linear_state "$ISSUE"; then
+    if should_update_linear_state "$ISSUE" && ! terminal_linear_state_already_applied "$ISSUE" "Done"; then
       linear_set_state "$(get_linear_issue_id "$ISSUE")" "Done"
+      mark_terminal_transition "$ISSUE" "done" "$PR" "merged" "Done" "${current_agent:-$AGENT_CMD}"
     fi
-    cleanup_completed_task "$ISSUE" "$SLUG"
+    cleanup_completed_task "$ISSUE" "$SLUG" "merged"
     if [[ "$_eval_needed" == "true" ]]; then
       log_task "info" "$ISSUE" "📊 Eval queued in background"
       launch_background_post_merge_eval "$ISSUE" "$PR" "$BRANCH" "$SLUG" "$ISSUE" "post-merge" "$_eval_agent"
@@ -12665,8 +12834,10 @@ monitor_issue_state() {
           ;;
       esac
     fi
-    if [[ -n "$linear_status" ]] && should_update_linear_state "$ISSUE"; then
+    mark_terminal_transition "$ISSUE" "failed" "$PR" "closed without merge" "" "${current_agent:-$AGENT_CMD}"
+    if [[ -n "$linear_status" ]] && should_update_linear_state "$ISSUE" && ! terminal_linear_state_already_applied "$ISSUE" "$linear_status"; then
       linear_set_state "$(get_linear_issue_id "$ISSUE")" "$linear_status"
+      mark_terminal_transition "$ISSUE" "failed" "$PR" "closed without merge" "$linear_status" "${current_agent:-$AGENT_CMD}"
     fi
     if should_cleanup_closed_pr "$ISSUE"; then
       log "debug" "  ↳ Auto-cleaning closed challenger pane/worktree"

@@ -144,6 +144,8 @@ for fn in \
   coding_uncommitted_output_should_announce \
   mark_coding_uncommitted_output_announced \
   write_coding_uncommitted_output_artifact \
+  _coding_terminal_blocked_completion_detected \
+  emit_terminal_blocked_completion_attention \
   native_launch_failure_artifact_path \
   stage_result_field \
   agent_or_model_is_native_for_recovery \
@@ -158,6 +160,10 @@ for fn in \
   merge_queue_enabled \
   mark_ready_stale \
   write_ready_queue_artifacts \
+  terminal_hook_file \
+  write_terminal_hook_state \
+  mark_terminal_transition \
+  terminal_linear_state_already_applied \
   monitor_issue_state
 do
   extract_function "$MILL_SCRIPT" "$fn" >> "$MONITOR_FUNC_FILE"
