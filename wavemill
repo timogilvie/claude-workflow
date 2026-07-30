@@ -483,7 +483,7 @@ run_mill() {
   fi
 
   echo -e "${CYAN}Starting Wavemill Mill...${NC}"
-  exec "$BASH" "$mill_script" "$@"
+  WAVEMILL_MILL_LIB_DIR="$LIB_DIR" exec "$BASH" "$mill_script" "$@"
 }
 
 validate_mill_model_override() {
