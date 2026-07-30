@@ -122,6 +122,9 @@
  *   Synchronized challenge execution fields into the
  *   authoritative JSON Schema and canonicalized challenge provenance loading
  *   (HOK-2598).
+ * - **1.35.0**: Added optional `planningExecutionOutcome` capturing native
+ *   planning terminal reason, configured bounds, observed usage, plan validity,
+ *   approval readiness, and prompt provenance (HOK-2593).
  *
  * @module eval-schema
  */
@@ -137,7 +140,7 @@ import type {
 import type { ChallengeRoutingMeta } from './challenge-comparison.ts';
 
 /** Current eval schema version for newly emitted records. */
-export const SCHEMA_VERSION = '1.34.0';
+export const SCHEMA_VERSION = '1.35.0';
 
 export type RoutingRole = 'planner' | 'coder' | 'reviewer';
 
@@ -157,6 +160,62 @@ export interface EvalExecutedPlanning {
   agent?: string;
   model?: string;
   status?: 'running' | 'awaiting_user' | 'completed' | 'aborted' | 'failed';
+  source?: '.planning-result.json';
+}
+
+/**
+ * Stable terminal/failure reason for native planning.
+ *
+ * Mirrors `PlanningFailureReason` from `native-agent/planning-guards.ts` while
+ * keeping the eval schema decoupled from native-agent internals.
+ */
+export type PlanningTerminalReason =
+  | 'turn_limit'
+  | 'tool_call_limit'
+  | 'wall_clock_limit'
+  | 'tool_stagnation'
+  | 'invalid_final_plan'
+  | 'empty_final_plan'
+  | 'aborted'
+  | 'error';
+
+export interface PlanningExecutionBounds {
+  maxTurns?: number;
+  maxToolCalls?: number;
+  maxWallClockMs?: number;
+}
+
+export interface PlanningExecutionUsage {
+  turnsCompleted?: number;
+  toolCallsExecuted?: number;
+  wallClockMs?: number;
+  totalInputTokens?: number;
+  totalOutputTokens?: number;
+  totalCostUsd?: number;
+}
+
+export interface PlanningPromptProvenance {
+  id: string;
+  version: string;
+}
+
+export interface PlanningExecutionOutcome {
+  agent?: string;
+  model?: string;
+  status?: 'running' | 'awaiting_user' | 'completed' | 'aborted' | 'failed';
+  /** Stable terminal/failure reason; null/absent when status is not a failure. */
+  failureReason?: PlanningTerminalReason | null;
+  /** Whether a syntactically/structurally valid final plan artifact was produced. */
+  planArtifactValid?: boolean;
+  /**
+   * Planning-stage completion gate: true only when planning finished within
+   * configured bounds and produced a valid plan that reached the approval-ready
+   * (`awaiting_user`) state. Plan-quality scoring remains downstream.
+   */
+  approvalReady?: boolean;
+  bounds?: PlanningExecutionBounds;
+  usage?: PlanningExecutionUsage;
+  promptRef?: PlanningPromptProvenance;
   source?: '.planning-result.json';
 }
 
@@ -1763,6 +1822,17 @@ export interface EvalRecord {
    * @since 1.25.0
    */
   executedPlanning?: EvalExecutedPlanning;
+
+  /**
+   * Structured native planning execution outcome from `.planning-result.json`.
+   *
+   * Captures terminal reason, configured bounds, observed usage, final artifact
+   * validity, approval readiness, and prompt provenance for diagnostic eval
+   * analysis. This local-only field is not projected to Hokusai submissions.
+   *
+   * @since 1.35.0
+   */
+  planningExecutionOutcome?: PlanningExecutionOutcome;
 
   /**
    * First-class planner/reviewer stage evidence for challenge evals.

@@ -768,7 +768,7 @@ function validPromptSizeDiagnostic() {
 }
 
 test('SCHEMA_VERSION is bumped for eval schema updates', () => {
-  assert.equal(SCHEMA_VERSION, '1.34.0');
+  assert.equal(SCHEMA_VERSION, '1.35.0');
 });
 
 test('Record with native workflow cost attribution validates', () => {
@@ -1810,6 +1810,93 @@ test('executedPlanning validates when present', () => {
   assert.equal(properties.executedPlanning?.type, 'object');
 });
 
+test('planningExecutionOutcome remains optional for legacy records', () => {
+  const record = scenarios[0].record as unknown as Record<string, unknown>;
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
+test('planningExecutionOutcome validates when present', () => {
+  const record: EvalRecord = {
+    ...scenarios[0].record,
+    schemaVersion: '1.35.0',
+    planningExecutionOutcome: {
+      agent: 'native',
+      model: 'moonshotai/kimi-k2.7-code',
+      status: 'failed',
+      failureReason: 'turn_limit',
+      planArtifactValid: false,
+      approvalReady: false,
+      bounds: {
+        maxTurns: 40,
+        maxToolCalls: 120,
+        maxWallClockMs: 1200000,
+      },
+      usage: {
+        turnsCompleted: 40,
+        toolCallsExecuted: 72,
+        wallClockMs: 900000,
+        totalInputTokens: 120000,
+        totalOutputTokens: 24000,
+        totalCostUsd: 0.42,
+      },
+      promptRef: {
+        id: 'native-planning',
+        version: 'sha256:abc123',
+      },
+      source: '.planning-result.json',
+    },
+  };
+
+  const result = validateAgainstSchema(record as unknown as Record<string, unknown>);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
+test('planningExecutionOutcome failureReason enum values validate', () => {
+  const reasons = [
+    'turn_limit',
+    'tool_call_limit',
+    'wall_clock_limit',
+    'tool_stagnation',
+    'invalid_final_plan',
+    'empty_final_plan',
+    'aborted',
+    'error',
+  ] as const;
+
+  for (const failureReason of reasons) {
+    const record: EvalRecord = {
+      ...scenarios[0].record,
+      schemaVersion: '1.35.0',
+      planningExecutionOutcome: {
+        status: failureReason === 'aborted' ? 'aborted' : 'failed',
+        failureReason,
+        planArtifactValid: false,
+        approvalReady: false,
+        source: '.planning-result.json',
+      },
+    };
+
+    const result = validateAgainstSchema(record as unknown as Record<string, unknown>);
+    assert.ok(result.valid, `${failureReason} should validate: ${result.errors.join('; ')}`);
+  }
+});
+
+test('planningExecutionOutcome rejects unknown failureReason', () => {
+  const record = {
+    ...scenarios[0].record,
+    schemaVersion: '1.35.0',
+    planningExecutionOutcome: {
+      status: 'failed',
+      failureReason: 'budget_gone',
+      source: '.planning-result.json',
+    },
+  };
+
+  const result = validateAgainstSchema(record as unknown as Record<string, unknown>);
+  assert.ok(!result.valid, 'unknown failureReason should fail validation');
+});
+
 test('phaseDurationsSeconds remains optional for legacy records', () => {
   const record = scenarios[0].record as unknown as Record<string, unknown>;
   const result = validateAgainstSchema(record);
@@ -1883,8 +1970,8 @@ test('Wavemill router fields validate and schema stays in parity', () => {
   assert.equal(properties.wavemill_router_scoring?.$ref, '#/$defs/WavemillRouterScoringMetadata');
 });
 
-test('Schema version constant is 1.34.0', () => {
-  assert.equal(SCHEMA_VERSION, '1.34.0');
+test('Schema version constant is 1.35.0', () => {
+  assert.equal(SCHEMA_VERSION, '1.35.0');
 });
 
 test('Record with resolved-model routing validates', () => {

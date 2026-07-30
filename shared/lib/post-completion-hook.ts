@@ -61,6 +61,7 @@ import type {
   EvalRouteProvenance,
   EvalRouting,
   InterventionRecord,
+  PlanningExecutionOutcome,
   RoutePrediction,
   RoutingDecision,
   TaskContext,
@@ -326,6 +327,7 @@ interface PostCompletionEnrichmentInput {
   routing?: EvalRouting | null;
   routePrediction?: RoutePrediction | null;
   executedPlanning?: EvalExecutedPlanning | null;
+  planningExecutionOutcome?: PlanningExecutionOutcome | null;
   phaseDurations?: EvalPhaseDurations | null;
   planContent?: string;
   selfReviewSummary?: string;
@@ -466,6 +468,7 @@ export function enrichPostCompletionRecord(
         routing: input.routing || undefined,
         routePrediction: input.routePrediction || undefined,
         executedPlanning: input.executedPlanning || undefined,
+        planningExecutionOutcome: input.planningExecutionOutcome || undefined,
         phaseDurations: input.phaseDurations || undefined,
       },
     }),
@@ -476,6 +479,7 @@ export function enrichPostCompletionRecord(
       input.worktreePath,
     ),
     executedPlanning: input.executedPlanning,
+    planningExecutionOutcome: input.planningExecutionOutcome,
     phaseDurations: input.phaseDurations,
     routePrediction: input.routePrediction,
     routing: input.routing,
@@ -745,6 +749,7 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
       routing: stageArtifacts.routing,
       routePrediction: stageArtifacts.routePrediction,
       executedPlanning: stageArtifacts.executedPlanning,
+      planningExecutionOutcome: stageArtifacts.planningExecutionOutcome,
       phaseDurations,
       planContent: stageArtifacts.planContent,
       selfReviewSummary: stageArtifacts.selfReviewSummary,

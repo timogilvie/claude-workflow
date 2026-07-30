@@ -40,11 +40,32 @@ import {
   validateFinalPlanningArtifact,
   type PlanningFailureReason,
 } from './planning-guards.ts';
+import { computeModelCost, loadPricingTable } from '../workflow-cost.ts';
 
 const DEFAULT_HELPER_TIMEOUT_MS = 12 * 60 * 1000;
 const HELPER_STDERR_TAIL_CHARS = 2000;
 
 type HookState = 'working' | 'idle' | 'error';
+
+interface PlanningOutcomeArtifacts {
+  bounds: {
+    maxTurns: number;
+    maxToolCalls: number;
+    maxWallClockMs: number;
+  };
+  usage: {
+    turnsCompleted: number;
+    toolCallsExecuted: number;
+    wallClockMs: number;
+    totalInputTokens: number;
+    totalOutputTokens: number;
+    totalCostUsd?: number;
+  };
+  promptRef: {
+    id: string;
+    version: string;
+  };
+}
 
 export interface LaunchNativePlanningOptions {
   session: string;
@@ -432,6 +453,55 @@ function planningFailureReasonForStopReason(stopReason: string): PlanningFailure
   }
 }
 
+function buildPlanningOutcomeArtifacts(input: {
+  repoDir: string;
+  modelId: string;
+  planningLimits: ReturnType<typeof resolveNativePlanningLimits>;
+  result: {
+    turnsCompleted: number;
+    toolCallsExecuted: number;
+    wallClockMs: number;
+    totalInputTokens: number;
+    totalOutputTokens: number;
+  };
+  promptRef: { id: string; version: string };
+}): PlanningOutcomeArtifacts {
+  let totalCostUsd: number | undefined;
+  try {
+    const pricing = loadPricingTable(input.repoDir)[input.modelId];
+    if (pricing) {
+      totalCostUsd = computeModelCost({
+        inputTokens: input.result.totalInputTokens,
+        outputTokens: input.result.totalOutputTokens,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+      }, pricing);
+    }
+  } catch {
+    totalCostUsd = undefined;
+  }
+
+  return {
+    bounds: {
+      maxTurns: input.planningLimits.maxTurns,
+      maxToolCalls: input.planningLimits.maxToolCalls,
+      maxWallClockMs: input.planningLimits.maxWallClockMs,
+    },
+    usage: {
+      turnsCompleted: input.result.turnsCompleted,
+      toolCallsExecuted: input.result.toolCallsExecuted,
+      wallClockMs: input.result.wallClockMs,
+      totalInputTokens: input.result.totalInputTokens,
+      totalOutputTokens: input.result.totalOutputTokens,
+      ...(typeof totalCostUsd === 'number' && Number.isFinite(totalCostUsd) ? { totalCostUsd } : {}),
+    },
+    promptRef: {
+      id: input.promptRef.id,
+      version: input.promptRef.version,
+    },
+  };
+}
+
 function makeTranscriptPath(repoDir: string, session: string, issue: string): string {
   const safeIssue = issue.replace(/[^A-Za-z0-9._-]+/g, '-');
   const baseDir = process.env.WAVEMILL_RUN_DIR
@@ -577,6 +647,13 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
       },
       budget: toLoopBudget(planningLimits),
     });
+    const planningOutcomeArtifacts = buildPlanningOutcomeArtifacts({
+      repoDir: options.repoDir,
+      modelId: model.name ?? model.id,
+      planningLimits,
+      result,
+      promptRef,
+    });
 
     const cleanupReason = cleanupReasonForStopReason(result.stopReason);
     let cleanupPatch: Record<string, unknown> = {};
@@ -605,6 +682,9 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
           type: 'planning',
           taskPacketFile: relative(options.wtDir, taskPacketPath),
           transcriptFile: transcriptPath,
+          ...planningOutcomeArtifacts,
+          planArtifactValid: false,
+          approvalReady: false,
         },
         failureReason: stopFailureReason,
         ...cleanupPatch,
@@ -628,6 +708,9 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
           type: 'planning',
           taskPacketFile: relative(options.wtDir, taskPacketPath),
           transcriptFile: transcriptPath,
+          ...planningOutcomeArtifacts,
+          planArtifactValid: false,
+          approvalReady: false,
         },
         failureReason: providerError ? 'error' : 'empty_final_plan',
       });
@@ -649,6 +732,9 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
           taskPacketFile: relative(options.wtDir, taskPacketPath),
           transcriptFile: transcriptPath,
           validationError: validation.reason ?? 'invalid',
+          ...planningOutcomeArtifacts,
+          planArtifactValid: false,
+          approvalReady: false,
         },
         failureReason: 'invalid_final_plan',
       });
@@ -668,6 +754,9 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
         type: 'planning',
         planFile: relative(options.wtDir, planPath),
         taskPacketFile: relative(options.wtDir, taskPacketPath),
+        ...planningOutcomeArtifacts,
+        planArtifactValid: true,
+        approvalReady: true,
       },
       failureReason: null,
     });
