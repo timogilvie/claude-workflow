@@ -33,6 +33,7 @@ import type {
   TaskDescriptor,
   EvalConstraints,
   EvalPhaseDurations,
+  PlanningExecutionOutcome,
   EvalRouting,
   ManifestRef,
   PromptSizeDiagnostic,
@@ -359,6 +360,55 @@ function toEvalExecutedPlanning(executedPlanning: EvalExecutedPlanning): EvalExe
     ...(executedPlanning.model ? { model: executedPlanning.model } : {}),
     ...(executedPlanning.status ? { status: executedPlanning.status } : {}),
     ...(executedPlanning.source ? { source: executedPlanning.source } : {}),
+    ...(executedPlanning.executionOutcome
+      ? { executionOutcome: toEvalPlanningExecutionOutcome(executedPlanning.executionOutcome) }
+      : {}),
+  };
+}
+
+function toEvalPlanningExecutionOutcome(outcome: PlanningExecutionOutcome): PlanningExecutionOutcome {
+  return {
+    status: outcome.status,
+    ...(outcome.failureReason ? { failureReason: outcome.failureReason } : {}),
+    artifactStatus: {
+      produced: outcome.artifactStatus.produced,
+      valid: outcome.artifactStatus.valid,
+      approvalReady: outcome.artifactStatus.approvalReady,
+      ...(outcome.artifactStatus.artifactPath ? { artifactPath: outcome.artifactStatus.artifactPath } : {}),
+      ...(outcome.artifactStatus.artifactHash ? { artifactHash: outcome.artifactStatus.artifactHash } : {}),
+    },
+    bounds: {
+      maxTurns: outcome.bounds.maxTurns,
+      maxToolCalls: outcome.bounds.maxToolCalls,
+      maxWallClockMs: outcome.bounds.maxWallClockMs,
+    },
+    metrics: {
+      completedTurns: outcome.metrics.completedTurns,
+      executedToolCalls: outcome.metrics.executedToolCalls,
+      wallClockMs: outcome.metrics.wallClockMs,
+      ...(outcome.metrics.inputTokens !== undefined ? { inputTokens: outcome.metrics.inputTokens } : {}),
+      ...(outcome.metrics.outputTokens !== undefined ? { outputTokens: outcome.metrics.outputTokens } : {}),
+      ...(outcome.metrics.costUsd !== undefined ? { costUsd: outcome.metrics.costUsd } : {}),
+    },
+    ...(outcome.provenance
+      ? {
+          provenance: {
+            ...(outcome.provenance.promptTemplateName ? { promptTemplateName: outcome.provenance.promptTemplateName } : {}),
+            ...(outcome.provenance.promptTemplateHash ? { promptTemplateHash: outcome.provenance.promptTemplateHash } : {}),
+            ...(outcome.provenance.promptFilledHash ? { promptFilledHash: outcome.provenance.promptFilledHash } : {}),
+            ...(outcome.provenance.promptRef ? { promptRef: outcome.provenance.promptRef } : {}),
+            ...(outcome.provenance.configHash ? { configHash: outcome.provenance.configHash } : {}),
+          },
+        }
+      : {}),
+    ...(outcome.qualityAssessment
+      ? {
+          qualityAssessment: {
+            ...(outcome.qualityAssessment.score !== undefined ? { score: outcome.qualityAssessment.score } : {}),
+            ...(outcome.qualityAssessment.rationale ? { rationale: outcome.qualityAssessment.rationale } : {}),
+          },
+        }
+      : {}),
   };
 }
 

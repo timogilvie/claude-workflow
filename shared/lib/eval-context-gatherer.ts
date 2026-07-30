@@ -22,6 +22,13 @@ import type {
   EvalExecutedPlanning,
   EvalPhaseDurations,
   EvalRouting,
+  PlanQualityAssessment,
+  PlanningArtifactStatus,
+  PlanningExecutionBounds,
+  PlanningExecutionFailureReason,
+  PlanningExecutionMetrics,
+  PlanningExecutionOutcome,
+  PlanningExecutionProvenance,
   RoutePrediction,
   RoutingDecision,
   RoutingCandidate,
@@ -1013,12 +1020,14 @@ function loadExecutedPlanning(
       if (!agent && !model && !status) {
         return undefined;
       }
+      const executionOutcome = parsePlanningExecutionOutcome(parsed.executionOutcome);
 
       return {
         ...(agent ? { agent } : {}),
         ...(model ? { model } : {}),
         ...(status ? { status } : {}),
         source: '.planning-result.json',
+        ...(executionOutcome ? { executionOutcome } : {}),
       };
     } catch {
       continue;
@@ -1050,16 +1059,164 @@ function loadExecutedPlanning(
     if (!agent && !model && !status) {
       return undefined;
     }
+    const executionOutcome = parsePlanningExecutionOutcome(parsed.executionOutcome);
 
     return {
       ...(agent ? { agent } : {}),
       ...(model ? { model } : {}),
       ...(status ? { status } : {}),
       source: '.planning-result.json',
+      ...(executionOutcome ? { executionOutcome } : {}),
     };
   } catch {
     return undefined;
   }
+}
+
+const PLANNING_EXECUTION_FAILURE_REASONS: ReadonlySet<string> = new Set([
+  'turn_limit',
+  'tool_call_limit',
+  'wall_clock_limit',
+  'tool_stagnation',
+  'invalid_final_plan',
+  'empty_final_plan',
+  'aborted',
+  'provider_error',
+  'runtime_error',
+]);
+
+function finiteNonNegativeNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? value
+    : undefined;
+}
+
+function positiveInteger(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0
+    ? value
+    : undefined;
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
+}
+
+function parsePlanningArtifactStatus(value: unknown): PlanningArtifactStatus | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  if (
+    typeof record.produced !== 'boolean'
+    || typeof record.valid !== 'boolean'
+    || typeof record.approvalReady !== 'boolean'
+  ) {
+    return null;
+  }
+  return {
+    produced: record.produced,
+    valid: record.valid,
+    approvalReady: record.approvalReady,
+    ...(nonEmptyString(record.artifactPath) ? { artifactPath: nonEmptyString(record.artifactPath) } : {}),
+    ...(nonEmptyString(record.artifactHash) ? { artifactHash: nonEmptyString(record.artifactHash) } : {}),
+  };
+}
+
+function parsePlanningBounds(value: unknown): PlanningExecutionBounds | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const maxTurns = positiveInteger(record.maxTurns);
+  const maxToolCalls = positiveInteger(record.maxToolCalls);
+  const maxWallClockMs = positiveInteger(record.maxWallClockMs);
+  if (maxTurns === undefined || maxToolCalls === undefined || maxWallClockMs === undefined) {
+    return null;
+  }
+  return { maxTurns, maxToolCalls, maxWallClockMs };
+}
+
+function parsePlanningMetrics(value: unknown): PlanningExecutionMetrics | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const completedTurns = finiteNonNegativeNumber(record.completedTurns);
+  const executedToolCalls = finiteNonNegativeNumber(record.executedToolCalls);
+  const wallClockMs = finiteNonNegativeNumber(record.wallClockMs);
+  if (completedTurns === undefined || executedToolCalls === undefined || wallClockMs === undefined) {
+    return null;
+  }
+  return {
+    completedTurns,
+    executedToolCalls,
+    wallClockMs,
+    ...(finiteNonNegativeNumber(record.inputTokens) !== undefined ? { inputTokens: finiteNonNegativeNumber(record.inputTokens) } : {}),
+    ...(finiteNonNegativeNumber(record.outputTokens) !== undefined ? { outputTokens: finiteNonNegativeNumber(record.outputTokens) } : {}),
+    ...(finiteNonNegativeNumber(record.costUsd) !== undefined ? { costUsd: finiteNonNegativeNumber(record.costUsd) } : {}),
+  };
+}
+
+function parsePlanningProvenance(value: unknown): PlanningExecutionProvenance | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const promptRef = record.promptRef && typeof record.promptRef === 'object' && !Array.isArray(record.promptRef)
+    ? record.promptRef as Record<string, unknown>
+    : null;
+  const parsed: PlanningExecutionProvenance = {
+    ...(nonEmptyString(record.promptTemplateName) ? { promptTemplateName: nonEmptyString(record.promptTemplateName) } : {}),
+    ...(nonEmptyString(record.promptTemplateHash) ? { promptTemplateHash: nonEmptyString(record.promptTemplateHash) } : {}),
+    ...(nonEmptyString(record.promptFilledHash) ? { promptFilledHash: nonEmptyString(record.promptFilledHash) } : {}),
+    ...(promptRef && nonEmptyString(promptRef.id) && nonEmptyString(promptRef.version)
+      ? { promptRef: { id: nonEmptyString(promptRef.id)!, version: nonEmptyString(promptRef.version)! } }
+      : {}),
+    ...(nonEmptyString(record.configHash) ? { configHash: nonEmptyString(record.configHash) } : {}),
+  };
+  return Object.keys(parsed).length > 0 ? parsed : undefined;
+}
+
+function parsePlanQualityAssessment(value: unknown): PlanQualityAssessment | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const score = finiteNonNegativeNumber(record.score);
+  const parsed: PlanQualityAssessment = {
+    ...(score !== undefined && score <= 1 ? { score } : {}),
+    ...(nonEmptyString(record.rationale) ? { rationale: nonEmptyString(record.rationale) } : {}),
+  };
+  return Object.keys(parsed).length > 0 ? parsed : undefined;
+}
+
+function parsePlanningExecutionOutcome(value: unknown): PlanningExecutionOutcome | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const status = record.status === 'success' || record.status === 'failed' ? record.status : undefined;
+  const failureReason = typeof record.failureReason === 'string' && PLANNING_EXECUTION_FAILURE_REASONS.has(record.failureReason)
+    ? record.failureReason as PlanningExecutionFailureReason
+    : undefined;
+  const artifactStatus = parsePlanningArtifactStatus(record.artifactStatus);
+  const bounds = parsePlanningBounds(record.bounds);
+  const metrics = parsePlanningMetrics(record.metrics);
+  if (!status || !artifactStatus || !bounds || !metrics) {
+    return undefined;
+  }
+  if (status === 'failed' && !failureReason) {
+    return undefined;
+  }
+  return {
+    status,
+    ...(failureReason ? { failureReason } : {}),
+    artifactStatus,
+    bounds,
+    metrics,
+    ...(parsePlanningProvenance(record.provenance) ? { provenance: parsePlanningProvenance(record.provenance) } : {}),
+    ...(parsePlanQualityAssessment(record.qualityAssessment) ? { qualityAssessment: parsePlanQualityAssessment(record.qualityAssessment) } : {}),
+  };
 }
 
 function loadStageExecutionModel(repoDir: string, slug: string, worktreePath?: string): string | undefined {

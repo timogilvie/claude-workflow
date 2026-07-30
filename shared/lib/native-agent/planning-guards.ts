@@ -1,5 +1,9 @@
 import { createHash } from 'node:crypto';
 import type { LoopBudget } from './loop.ts';
+import type {
+  PlanningExecutionBounds,
+  PlanningExecutionFailureReason,
+} from '../eval-schema.ts';
 
 export interface ToolStagnationPolicy {
   maxRepeatedSignatureCalls?: number;
@@ -32,6 +36,8 @@ export type PlanningFailureReason =
   | 'empty_final_plan'
   | 'aborted'
   | 'error';
+
+export type PlanningRuntimeErrorKind = 'provider' | 'runtime';
 
 export interface PlanningLoopBudget extends LoopBudget {
   stagnation?: ToolStagnationPolicy;
@@ -111,6 +117,33 @@ export function normalizedToolSignature(name: string, args: unknown): string {
 
 function hashValue(value: unknown): string {
   return createHash('sha256').update(stableStringify(value)).digest('hex');
+}
+
+export function planningBoundsFromLimits(limits: NativePlanningLimits): PlanningExecutionBounds {
+  return {
+    maxTurns: limits.maxTurns,
+    maxToolCalls: limits.maxToolCalls,
+    maxWallClockMs: limits.maxWallClockMs,
+  };
+}
+
+export function hashPlanningConfig(limits: NativePlanningLimits): string {
+  return hashValue({
+    maxTurns: limits.maxTurns,
+    maxToolCalls: limits.maxToolCalls,
+    maxWallClockMs: limits.maxWallClockMs,
+    toolStagnation: limits.toolStagnation,
+  });
+}
+
+export function toPlanningExecutionFailureReason(
+  reason: PlanningFailureReason,
+  errorKind: PlanningRuntimeErrorKind = 'runtime',
+): PlanningExecutionFailureReason {
+  if (reason === 'error') {
+    return errorKind === 'provider' ? 'provider_error' : 'runtime_error';
+  }
+  return reason;
 }
 
 function toolOutputFingerprint(ctx: ToolCallObservation, override: { content?: unknown; details?: unknown } | undefined): string {

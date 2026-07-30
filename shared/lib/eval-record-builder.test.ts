@@ -1303,6 +1303,41 @@ describe('eval-record-builder', () => {
       enrichEvalRecord(baseRecord, { executedPlanning });
       expect(baseRecord.executedPlanning).toEqual(executedPlanning);
     });
+
+    it('preserves structured planning execution outcome when provided', () => {
+      const withOutcome = {
+        ...executedPlanning,
+        executionOutcome: {
+          status: 'failed' as const,
+          failureReason: 'turn_limit' as const,
+          artifactStatus: {
+            produced: false,
+            valid: false,
+            approvalReady: false,
+          },
+          bounds: {
+            maxTurns: 40,
+            maxToolCalls: 120,
+            maxWallClockMs: 1_200_000,
+          },
+          metrics: {
+            completedTurns: 40,
+            executedToolCalls: 72,
+            wallClockMs: 1_200_000,
+          },
+          provenance: {
+            promptTemplateName: 'native-read-only-phase',
+            promptTemplateHash: 'a'.repeat(64),
+            promptFilledHash: 'b'.repeat(64),
+            configHash: 'c'.repeat(64),
+          },
+        },
+      };
+
+      attachExecutedPlanning(baseRecord, withOutcome);
+
+      expect(baseRecord.executedPlanning).toEqual(withOutcome);
+    });
   });
 
   describe('attachPhaseDurations', () => {

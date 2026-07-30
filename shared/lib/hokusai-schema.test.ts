@@ -570,6 +570,40 @@ describe('hokusai-schema', () => {
       });
     });
 
+    it('does not expose local planning execution outcome fields', () => {
+      const legacy = expectSuccess(toHokusaiSubmission(makeRecord()));
+      const withPlanningOutcome = expectSuccess(toHokusaiSubmission(makeRecord({
+        executedPlanning: {
+          agent: 'native',
+          model: 'moonshotai/kimi-k2.7-code',
+          status: 'failed',
+          source: '.planning-result.json',
+          executionOutcome: {
+            status: 'failed',
+            failureReason: 'turn_limit',
+            artifactStatus: {
+              produced: false,
+              valid: false,
+              approvalReady: false,
+            },
+            bounds: {
+              maxTurns: 40,
+              maxToolCalls: 120,
+              maxWallClockMs: 1_200_000,
+            },
+            metrics: {
+              completedTurns: 40,
+              executedToolCalls: 72,
+              wallClockMs: 1_200_000,
+            },
+          },
+        },
+      })));
+
+      assert.deepEqual(withPlanningOutcome, legacy);
+      assert.equal(validateHokusaiSubmission(withPlanningOutcome).valid, true);
+    });
+
     it('emits rubric signals and schema version 1.1 when rubric features are present', () => {
       const result = expectSuccess(toHokusaiSubmission(makeRecord({
         rubric_provenance: 'judge',

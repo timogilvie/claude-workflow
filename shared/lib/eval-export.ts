@@ -39,6 +39,24 @@ export interface ExportRow {
   planning_time_seconds: number | null;
   coding_time_seconds: number | null;
   review_time_seconds: number | null;
+  planning_execution_status: string;
+  planning_failure_reason: string;
+  planning_artifact_produced: boolean | null;
+  planning_artifact_valid: boolean | null;
+  planning_approval_ready: boolean | null;
+  planning_max_turns: number | null;
+  planning_max_tool_calls: number | null;
+  planning_max_wall_clock_ms: number | null;
+  planning_completed_turns: number | null;
+  planning_executed_tool_calls: number | null;
+  planning_wall_clock_ms: number | null;
+  planning_input_tokens: number | null;
+  planning_output_tokens: number | null;
+  planning_cost_usd: number | null;
+  planning_prompt_template_name: string;
+  planning_prompt_template_hash: string;
+  planning_prompt_filled_hash: string;
+  planning_config_hash: string;
 
   // Intervention signals
   intervention_required: boolean;
@@ -115,6 +133,24 @@ const COLUMNS: (keyof ExportRow)[] = [
   'planning_time_seconds',
   'coding_time_seconds',
   'review_time_seconds',
+  'planning_execution_status',
+  'planning_failure_reason',
+  'planning_artifact_produced',
+  'planning_artifact_valid',
+  'planning_approval_ready',
+  'planning_max_turns',
+  'planning_max_tool_calls',
+  'planning_max_wall_clock_ms',
+  'planning_completed_turns',
+  'planning_executed_tool_calls',
+  'planning_wall_clock_ms',
+  'planning_input_tokens',
+  'planning_output_tokens',
+  'planning_cost_usd',
+  'planning_prompt_template_name',
+  'planning_prompt_template_hash',
+  'planning_prompt_filled_hash',
+  'planning_config_hash',
   'intervention_required',
   'intervention_count',
   'intervention_details',
@@ -208,6 +244,7 @@ export function flattenRecord(
   const resourceVariants = summarizeResourceVariants(record);
   const rubric = record.rubricEval;
   const fod = record.featureOutcomeDiagnostics;
+  const planningOutcome = record.executedPlanning?.executionOutcome;
 
   const timeSeconds =
     typeof record.timeSeconds === 'number' && Number.isFinite(record.timeSeconds) && record.timeSeconds >= 0
@@ -233,6 +270,24 @@ export function flattenRecord(
     planning_time_seconds: record.phaseDurationsSeconds?.planning ?? null,
     coding_time_seconds: record.phaseDurationsSeconds?.coding ?? null,
     review_time_seconds: record.phaseDurationsSeconds?.review ?? null,
+    planning_execution_status: planningOutcome?.status ?? '',
+    planning_failure_reason: planningOutcome?.failureReason ?? '',
+    planning_artifact_produced: planningOutcome?.artifactStatus.produced ?? null,
+    planning_artifact_valid: planningOutcome?.artifactStatus.valid ?? null,
+    planning_approval_ready: planningOutcome?.artifactStatus.approvalReady ?? null,
+    planning_max_turns: planningOutcome?.bounds.maxTurns ?? null,
+    planning_max_tool_calls: planningOutcome?.bounds.maxToolCalls ?? null,
+    planning_max_wall_clock_ms: planningOutcome?.bounds.maxWallClockMs ?? null,
+    planning_completed_turns: planningOutcome?.metrics.completedTurns ?? null,
+    planning_executed_tool_calls: planningOutcome?.metrics.executedToolCalls ?? null,
+    planning_wall_clock_ms: planningOutcome?.metrics.wallClockMs ?? null,
+    planning_input_tokens: planningOutcome?.metrics.inputTokens ?? null,
+    planning_output_tokens: planningOutcome?.metrics.outputTokens ?? null,
+    planning_cost_usd: planningOutcome?.metrics.costUsd ?? null,
+    planning_prompt_template_name: planningOutcome?.provenance?.promptTemplateName ?? '',
+    planning_prompt_template_hash: planningOutcome?.provenance?.promptTemplateHash ?? '',
+    planning_prompt_filled_hash: planningOutcome?.provenance?.promptFilledHash ?? '',
+    planning_config_hash: planningOutcome?.provenance?.configHash ?? '',
 
     intervention_required: record.interventionRequired,
     intervention_count: record.interventionCount,

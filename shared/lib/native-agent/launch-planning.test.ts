@@ -360,6 +360,24 @@ describe('launchNativePlanning', () => {
         planFile: 'features/demo/plan.md',
         taskPacketFile: 'features/demo/task-packet.md',
       });
+      const outcome = stageResult.executionOutcome as Record<string, any>;
+      assert.equal(outcome.status, 'success');
+      assert.deepEqual(outcome.artifactStatus, {
+        produced: true,
+        valid: true,
+        approvalReady: true,
+        artifactPath: 'features/demo/plan.md',
+        artifactHash: 'e34dff3bb6ec738a473d9e58c5cb599e95699e0152fac698b2ddc0316644bf1e',
+      });
+      assert.equal(outcome.bounds.maxTurns, 40);
+      assert.equal(outcome.bounds.maxToolCalls, 120);
+      assert.equal(outcome.metrics.completedTurns, 1);
+      assert.equal(outcome.metrics.executedToolCalls, 0);
+      assert.equal(typeof outcome.metrics.wallClockMs, 'number');
+      assert.equal(outcome.provenance.promptTemplateName, 'native-read-only-phase');
+      assert.equal(typeof outcome.provenance.promptTemplateHash, 'string');
+      assert.equal(typeof outcome.provenance.promptFilledHash, 'string');
+      assert.equal(typeof outcome.provenance.configHash, 'string');
 
       const hook = JSON.parse(readFileSync(result.hookPath, 'utf-8')) as Record<string, unknown>;
       assert.equal(hook.state, 'idle');
@@ -851,9 +869,85 @@ describe('launchNativePlanning', () => {
       ) as Record<string, any>;
       assert.equal(stageResult.status, 'failed');
       assert.equal(stageResult.failureReason, 'tool_stagnation');
+      assert.equal(stageResult.executionOutcome.status, 'failed');
+      assert.equal(stageResult.executionOutcome.failureReason, 'tool_stagnation');
+      assert.equal(stageResult.executionOutcome.artifactStatus.approvalReady, false);
+      assert.equal(stageResult.executionOutcome.bounds.maxTurns, 10);
+      assert.equal(stageResult.executionOutcome.bounds.maxToolCalls, 10);
+      assert.equal(stageResult.executionOutcome.bounds.maxWallClockMs, 60_000);
+      assert.equal(stageResult.executionOutcome.metrics.executedToolCalls, 3);
       assert.ok(stageResult.artifacts?.transcriptFile);
       assert.equal(existsSync(stageResult.artifacts.transcriptFile), true);
       assert.match(readFileSync(stageResult.artifacts.transcriptFile, 'utf-8'), /search_text/);
+    } finally {
+      cleanup(wtDir);
+      rmSync(hookPath, { force: true });
+    }
+  });
+
+  it('records turn_limit planning execution outcome without approval artifacts', async () => {
+    const { wtDir, featureDir } = setupWorktree();
+    const api = uniqueApi('turn-limit');
+    const hookPath = `/tmp/wavemill-turn-limit-${Date.now()}.hook`;
+    writeNativeConfig(wtDir, {
+      nativeAgent: {
+        planning: {
+          maxTurns: 1,
+          maxToolCalls: 10,
+          maxWallClockMs: 60_000,
+        },
+      },
+    });
+
+    try {
+      registerScriptedPiProvider({
+        api,
+        turns: [{
+          content: [{
+            type: 'tool_call',
+            id: 'read-1',
+            name: 'read_file',
+            arguments: { path: 'src.ts', startLine: 1, maxLines: 5 },
+          }],
+          stopReason: 'tool_calls',
+        }],
+      });
+
+      await assert.rejects(
+        () => launchNativePlanning({
+          session: 'turn-limit',
+          issue: 'HOK-2593',
+          slug: 'demo',
+          wtDir,
+          repoDir: wtDir,
+          hookPath,
+          loopModelOverride: scriptedModel(api),
+          runTsxCommand: stubRunTsxCommand(),
+        }),
+        /turn_limit/,
+      );
+
+      assert.equal(existsSync(join(featureDir, 'plan.md')), false);
+      assert.equal(existsSync(join(featureDir, '.plan-approved')), false);
+      const stageResult = JSON.parse(
+        readFileSync(join(featureDir, '.planning-result.json'), 'utf-8'),
+      ) as Record<string, any>;
+      assert.equal(stageResult.status, 'failed');
+      assert.equal(stageResult.failureReason, 'turn_limit');
+      assert.equal(stageResult.executionOutcome.status, 'failed');
+      assert.equal(stageResult.executionOutcome.failureReason, 'turn_limit');
+      assert.deepEqual(stageResult.executionOutcome.artifactStatus, {
+        produced: false,
+        valid: false,
+        approvalReady: false,
+      });
+      assert.deepEqual(stageResult.executionOutcome.bounds, {
+        maxTurns: 1,
+        maxToolCalls: 10,
+        maxWallClockMs: 60_000,
+      });
+      assert.equal(stageResult.executionOutcome.metrics.completedTurns, 1);
+      assert.equal(stageResult.executionOutcome.metrics.executedToolCalls, 1);
     } finally {
       cleanup(wtDir);
       rmSync(hookPath, { force: true });

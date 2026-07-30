@@ -2028,6 +2028,9 @@
         "source": {
           "type": "string",
           "const": ".planning-result.json"
+        },
+        "executionOutcome": {
+          "$ref": "#/$defs/PlanningExecutionOutcome"
         }
       },
       "additionalProperties": false
@@ -2167,6 +2170,189 @@
     }
   },
   "$defs": {
+    "PlanningExecutionFailureReason": {
+      "type": "string",
+      "enum": [
+        "turn_limit",
+        "tool_call_limit",
+        "wall_clock_limit",
+        "tool_stagnation",
+        "invalid_final_plan",
+        "empty_final_plan",
+        "aborted",
+        "provider_error",
+        "runtime_error"
+      ]
+    },
+    "PlanningExecutionBounds": {
+      "type": "object",
+      "properties": {
+        "maxTurns": {
+          "type": "number",
+          "minimum": 1
+        },
+        "maxToolCalls": {
+          "type": "number",
+          "minimum": 1
+        },
+        "maxWallClockMs": {
+          "type": "number",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "maxTurns",
+        "maxToolCalls",
+        "maxWallClockMs"
+      ],
+      "additionalProperties": false
+    },
+    "PlanningExecutionMetrics": {
+      "type": "object",
+      "properties": {
+        "completedTurns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "executedToolCalls": {
+          "type": "number",
+          "minimum": 0
+        },
+        "wallClockMs": {
+          "type": "number",
+          "minimum": 0
+        },
+        "inputTokens": {
+          "type": "number",
+          "minimum": 0
+        },
+        "outputTokens": {
+          "type": "number",
+          "minimum": 0
+        },
+        "costUsd": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "completedTurns",
+        "executedToolCalls",
+        "wallClockMs"
+      ],
+      "additionalProperties": false
+    },
+    "PlanningArtifactStatus": {
+      "type": "object",
+      "properties": {
+        "produced": {
+          "type": "boolean"
+        },
+        "valid": {
+          "type": "boolean"
+        },
+        "approvalReady": {
+          "type": "boolean"
+        },
+        "artifactPath": {
+          "type": "string"
+        },
+        "artifactHash": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "produced",
+        "valid",
+        "approvalReady"
+      ],
+      "additionalProperties": false
+    },
+    "PlanQualityAssessment": {
+      "type": "object",
+      "properties": {
+        "score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "rationale": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "PlanningExecutionProvenance": {
+      "type": "object",
+      "properties": {
+        "promptTemplateName": {
+          "type": "string"
+        },
+        "promptTemplateHash": {
+          "type": "string"
+        },
+        "promptFilledHash": {
+          "type": "string"
+        },
+        "promptRef": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "version"
+          ],
+          "additionalProperties": false
+        },
+        "configHash": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "PlanningExecutionOutcome": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "success",
+            "failed"
+          ]
+        },
+        "failureReason": {
+          "$ref": "#/$defs/PlanningExecutionFailureReason"
+        },
+        "artifactStatus": {
+          "$ref": "#/$defs/PlanningArtifactStatus"
+        },
+        "bounds": {
+          "$ref": "#/$defs/PlanningExecutionBounds"
+        },
+        "metrics": {
+          "$ref": "#/$defs/PlanningExecutionMetrics"
+        },
+        "provenance": {
+          "$ref": "#/$defs/PlanningExecutionProvenance"
+        },
+        "qualityAssessment": {
+          "$ref": "#/$defs/PlanQualityAssessment"
+        }
+      },
+      "required": [
+        "status",
+        "artifactStatus",
+        "bounds",
+        "metrics"
+      ],
+      "additionalProperties": false
+    },
     "ChallengeStage": {
       "type": "string",
       "enum": [

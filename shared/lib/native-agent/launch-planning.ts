@@ -8,10 +8,11 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { randomUUID } from 'node:crypto';
-import { dirname, join, relative, resolve } from 'node:path';
+import { createHash, randomUUID } from 'node:crypto';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 import type { AgentMessage, AgentTurn, Message } from './messages.ts';
 import type { AgentContext, WavemillLoopConfig } from './loop.ts';
+import type { LoopResult } from './loop.ts';
 import { runWavemillLoop } from './loop.ts';
 import {
   buildNativeProviderResolutionFailureMessage,
@@ -26,7 +27,7 @@ import { createArtifactTools } from './tools/artifacts.ts';
 import { createToolRegistry } from './tools/registry.ts';
 import { toPiAgentTool, type AgentTool } from './tools/pi-adapter.ts';
 import type { ToolDescriptor, ToolMetadata, WavemillToolResult } from './tools/types.ts';
-import { loadNativePhasePrompt, registerAndRecordNativeProvenance } from './prompts.ts';
+import { loadNativePhasePrompt, NATIVE_PHASE_PROMPT_PATH, registerAndRecordNativeProvenance } from './prompts.ts';
 import { isTaskPacketContent } from '../task-packet-utils.ts';
 import { createCleanupTracker, runCleanup, type CleanupReason } from './cleanup.ts';
 import { updateStageResult } from '../stage-result.ts';
@@ -36,10 +37,22 @@ import {
 import { getNativeAgentConfig } from '../config.ts';
 import {
   resolveNativePlanningLimits,
+  hashPlanningConfig,
+  planningBoundsFromLimits,
   toLoopBudget,
+  toPlanningExecutionFailureReason,
   validateFinalPlanningArtifact,
+  type NativePlanningLimits,
   type PlanningFailureReason,
 } from './planning-guards.ts';
+import { hashString } from '../prompt-hash.ts';
+import type {
+  PlanningArtifactStatus,
+  PlanningExecutionFailureReason,
+  PlanningExecutionOutcome,
+  PlanningExecutionProvenance,
+} from '../eval-schema.ts';
+import type { ResourceRef } from '../resource-registry.ts';
 
 const DEFAULT_HELPER_TIMEOUT_MS = 12 * 60 * 1000;
 const HELPER_STDERR_TAIL_CHARS = 2000;
@@ -432,6 +445,65 @@ function planningFailureReasonForStopReason(stopReason: string): PlanningFailure
   }
 }
 
+function sha256Text(text: string): string {
+  return createHash('sha256').update(text, 'utf-8').digest('hex');
+}
+
+function promptTemplateName(): string {
+  return basename(NATIVE_PHASE_PROMPT_PATH).replace(/\.(md|txt)$/, '');
+}
+
+function planningMetrics(result: LoopResult): PlanningExecutionOutcome['metrics'] {
+  return {
+    completedTurns: result.turnsCompleted,
+    executedToolCalls: result.toolCallsExecuted,
+    wallClockMs: result.wallClockMs,
+    ...(result.totalInputTokens > 0 ? { inputTokens: result.totalInputTokens } : {}),
+    ...(result.totalOutputTokens > 0 ? { outputTokens: result.totalOutputTokens } : {}),
+    ...(result.totalCostUsd > 0 ? { costUsd: result.totalCostUsd } : {}),
+  };
+}
+
+function planningProvenance(input: {
+  systemPrompt: string;
+  userPrompt: string;
+  promptRef: ResourceRef | null | undefined;
+  limits: NativePlanningLimits;
+}): PlanningExecutionProvenance {
+  return {
+    promptTemplateName: promptTemplateName(),
+    promptTemplateHash: hashString(input.systemPrompt),
+    promptFilledHash: hashString(`${input.systemPrompt}\n\n${input.userPrompt}`),
+    ...(input.promptRef ? { promptRef: input.promptRef } : {}),
+    configHash: hashPlanningConfig(input.limits),
+  };
+}
+
+function buildPlanningExecutionOutcome(input: {
+  status: 'success' | 'failed';
+  failureReason?: PlanningExecutionFailureReason;
+  artifactStatus: PlanningArtifactStatus;
+  limits: NativePlanningLimits;
+  result: LoopResult;
+  systemPrompt: string;
+  userPrompt: string;
+  promptRef: ResourceRef | null | undefined;
+}): PlanningExecutionOutcome {
+  return {
+    status: input.status,
+    ...(input.failureReason ? { failureReason: input.failureReason } : {}),
+    artifactStatus: input.artifactStatus,
+    bounds: planningBoundsFromLimits(input.limits),
+    metrics: planningMetrics(input.result),
+    provenance: planningProvenance({
+      systemPrompt: input.systemPrompt,
+      userPrompt: input.userPrompt,
+      promptRef: input.promptRef,
+      limits: input.limits,
+    }),
+  };
+}
+
 function makeTranscriptPath(repoDir: string, session: string, issue: string): string {
   const safeIssue = issue.replace(/[^A-Za-z0-9._-]+/g, '-');
   const baseDir = process.env.WAVEMILL_RUN_DIR
@@ -538,21 +610,22 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
 
     const cleanupTracker = createCleanupTracker();
     const planningLimits = resolveNativePlanningLimits(getNativeAgentConfig(options.repoDir).planning);
+    const userPrompt = buildUserPrompt({
+      slug: options.slug,
+      title: options.title,
+      issue: options.issue,
+      planDepth,
+      operatingMode,
+      branch: options.branch,
+      baseBranch: options.baseBranch,
+      issueContext: options.issueContext,
+      taskPacket,
+    });
     const context: AgentContext = {
       systemPrompt,
       messages: [{
         role: 'user',
-        content: buildUserPrompt({
-          slug: options.slug,
-          title: options.title,
-          issue: options.issue,
-          planDepth,
-          operatingMode,
-          branch: options.branch,
-          baseBranch: options.baseBranch,
-          issueContext: options.issueContext,
-          taskPacket,
-        }),
+        content: userPrompt,
         timestamp: 0,
       }],
       tools: toPiTools(descriptors),
@@ -607,6 +680,20 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
           transcriptFile: transcriptPath,
         },
         failureReason: stopFailureReason,
+        executionOutcome: buildPlanningExecutionOutcome({
+          status: 'failed',
+          failureReason: toPlanningExecutionFailureReason(stopFailureReason),
+          artifactStatus: {
+            produced: false,
+            valid: false,
+            approvalReady: false,
+          },
+          limits: planningLimits,
+          result,
+          systemPrompt,
+          userPrompt,
+          promptRef,
+        }),
         ...cleanupPatch,
       });
       throw new Error(`Native planning rejected before approval: ${stopFailureReason}`);
@@ -630,6 +717,20 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
           transcriptFile: transcriptPath,
         },
         failureReason: providerError ? 'error' : 'empty_final_plan',
+        executionOutcome: buildPlanningExecutionOutcome({
+          status: 'failed',
+          failureReason: providerError ? 'provider_error' : 'empty_final_plan',
+          artifactStatus: {
+            produced: false,
+            valid: false,
+            approvalReady: false,
+          },
+          limits: planningLimits,
+          result,
+          systemPrompt,
+          userPrompt,
+          promptRef,
+        }),
       });
       throw new Error(providerError
         ? `Native planning failed: ${providerError}`
@@ -651,6 +752,20 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
           validationError: validation.reason ?? 'invalid',
         },
         failureReason: 'invalid_final_plan',
+        executionOutcome: buildPlanningExecutionOutcome({
+          status: 'failed',
+          failureReason: 'invalid_final_plan',
+          artifactStatus: {
+            produced: true,
+            valid: false,
+            approvalReady: false,
+          },
+          limits: planningLimits,
+          result,
+          systemPrompt,
+          userPrompt,
+          promptRef,
+        }),
       });
       throw new Error(`Native planning final artifact rejected: ${validation.reason ?? 'invalid'}`);
     }
@@ -670,6 +785,21 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
         taskPacketFile: relative(options.wtDir, taskPacketPath),
       },
       failureReason: null,
+      executionOutcome: buildPlanningExecutionOutcome({
+        status: 'success',
+        artifactStatus: {
+          produced: true,
+          valid: true,
+          approvalReady: true,
+          artifactPath: relative(options.wtDir, planPath),
+          artifactHash: sha256Text(finalText),
+        },
+        limits: planningLimits,
+        result,
+        systemPrompt,
+        userPrompt,
+        promptRef,
+      }),
     });
     await options.onAwaitingUserStagePublished?.();
     writeHookStatus(hookPath, 'idle', 'process_exit', 'planning_awaiting_user', 'native');

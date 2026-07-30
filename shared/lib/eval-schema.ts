@@ -122,6 +122,10 @@
  *   Synchronized challenge execution fields into the
  *   authoritative JSON Schema and canonicalized challenge provenance loading
  *   (HOK-2598).
+ * - **1.35.0**: Added optional structured planning execution outcomes
+ *   (HOK-2593) under `executedPlanning.executionOutcome` so eval records can
+ *   distinguish approval-ready plans from bounded native planning failures
+ *   while preserving legacy and Hokusai submission compatibility.
  *
  * @module eval-schema
  */
@@ -137,7 +141,7 @@ import type {
 import type { ChallengeRoutingMeta } from './challenge-comparison.ts';
 
 /** Current eval schema version for newly emitted records. */
-export const SCHEMA_VERSION = '1.34.0';
+export const SCHEMA_VERSION = '1.35.0';
 
 export type RoutingRole = 'planner' | 'coder' | 'reviewer';
 
@@ -153,11 +157,72 @@ export interface ResolvedModelRoutingDecision {
 
 export type EvalRouting = Partial<Record<RoutingRole, ResolvedModelRoutingDecision>>;
 
+export type PlanningExecutionFailureReason =
+  | 'turn_limit'
+  | 'tool_call_limit'
+  | 'wall_clock_limit'
+  | 'tool_stagnation'
+  | 'invalid_final_plan'
+  | 'empty_final_plan'
+  | 'aborted'
+  | 'provider_error'
+  | 'runtime_error';
+
+export interface PlanningExecutionBounds {
+  maxTurns: number;
+  maxToolCalls: number;
+  maxWallClockMs: number;
+}
+
+export interface PlanningExecutionMetrics {
+  completedTurns: number;
+  executedToolCalls: number;
+  wallClockMs: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  costUsd?: number;
+}
+
+export interface PlanningArtifactStatus {
+  produced: boolean;
+  valid: boolean;
+  approvalReady: boolean;
+  artifactPath?: string;
+  artifactHash?: string;
+}
+
+export interface PlanQualityAssessment {
+  score?: number;
+  rationale?: string;
+}
+
+export interface PlanningExecutionProvenance {
+  promptTemplateName?: string;
+  promptTemplateHash?: string;
+  promptFilledHash?: string;
+  promptRef?: {
+    id: string;
+    version: string;
+  };
+  configHash?: string;
+}
+
+export interface PlanningExecutionOutcome {
+  status: 'success' | 'failed';
+  failureReason?: PlanningExecutionFailureReason;
+  artifactStatus: PlanningArtifactStatus;
+  bounds: PlanningExecutionBounds;
+  metrics: PlanningExecutionMetrics;
+  provenance?: PlanningExecutionProvenance;
+  qualityAssessment?: PlanQualityAssessment;
+}
+
 export interface EvalExecutedPlanning {
   agent?: string;
   model?: string;
   status?: 'running' | 'awaiting_user' | 'completed' | 'aborted' | 'failed';
   source?: '.planning-result.json';
+  executionOutcome?: PlanningExecutionOutcome;
 }
 
 export interface EvalPhaseDurations {

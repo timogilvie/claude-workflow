@@ -39,6 +39,20 @@ type StageResultShape = {
   agent?: string;
   model?: string;
   notes?: string;
+  executionOutcome?: {
+    status?: string;
+    failureReason?: string;
+    artifactStatus?: {
+      produced?: unknown;
+      valid?: unknown;
+      approvalReady?: unknown;
+    };
+    metrics?: {
+      completedTurns?: unknown;
+      executedToolCalls?: unknown;
+      wallClockMs?: unknown;
+    };
+  };
   artifacts?: {
     type?: string;
     findingsCount?: unknown;
@@ -116,10 +130,20 @@ function readStageResult(
 
 function summarizePlanningResult(result: StageResultShape | null | undefined): string | undefined {
   if (!result) return undefined;
+  const outcome = result.executionOutcome;
+  const artifact = outcome?.artifactStatus;
+  const metrics = outcome?.metrics;
   const parts = [
     result.status ? `status=${result.status}` : '',
     result.model ? `model=${result.model}` : '',
     result.agent ? `agent=${result.agent}` : '',
+    outcome?.status ? `outcome=${outcome.status}` : '',
+    outcome?.failureReason ? `reason=${outcome.failureReason}` : '',
+    typeof artifact?.approvalReady === 'boolean' ? `approvalReady=${artifact.approvalReady}` : '',
+    typeof artifact?.valid === 'boolean' ? `artifactValid=${artifact.valid}` : '',
+    typeof metrics?.completedTurns === 'number' ? `turns=${metrics.completedTurns}` : '',
+    typeof metrics?.executedToolCalls === 'number' ? `toolCalls=${metrics.executedToolCalls}` : '',
+    typeof metrics?.wallClockMs === 'number' ? `wallClockMs=${metrics.wallClockMs}` : '',
     truncate(result.notes, 120) ? `notes=${truncate(result.notes, 120)}` : '',
   ].filter(Boolean);
   return parts.join(', ');
@@ -229,6 +253,15 @@ function buildPlannerStageEval(
         input.stageArtifacts.executedPlanning.status ? `status=${input.stageArtifacts.executedPlanning.status}` : '',
         input.stageArtifacts.executedPlanning.model ? `model=${input.stageArtifacts.executedPlanning.model}` : '',
         input.stageArtifacts.executedPlanning.agent ? `agent=${input.stageArtifacts.executedPlanning.agent}` : '',
+        input.stageArtifacts.executedPlanning.executionOutcome?.status
+          ? `outcome=${input.stageArtifacts.executedPlanning.executionOutcome.status}`
+          : '',
+        input.stageArtifacts.executedPlanning.executionOutcome?.failureReason
+          ? `reason=${input.stageArtifacts.executedPlanning.executionOutcome.failureReason}`
+          : '',
+        typeof input.stageArtifacts.executedPlanning.executionOutcome?.artifactStatus.approvalReady === 'boolean'
+          ? `approvalReady=${input.stageArtifacts.executedPlanning.executionOutcome.artifactStatus.approvalReady}`
+          : '',
       ].filter(Boolean).join(', '),
       input.stageArtifacts.executedPlanning.source,
     );

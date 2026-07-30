@@ -862,5 +862,110 @@ describe('eval-context-gatherer', () => {
         fs.rmSync(repoDir, { recursive: true, force: true });
       }
     });
+
+    it('loads structured planning execution outcome from planning-result', () => {
+      const repoDir = makeTmpDir();
+      const issueId = 'HOK-2593';
+      const branch = 'task/capture-planning-outcome';
+      const featureDir = nodePath.join(repoDir, 'features', 'capture-planning-outcome');
+      fs.mkdirSync(featureDir, { recursive: true });
+      fs.writeFileSync(
+        nodePath.join(featureDir, '.planning-result.json'),
+        JSON.stringify({
+          stage: 'planning',
+          status: 'failed',
+          agent: 'native',
+          model: 'moonshotai/kimi-k2.7-code',
+          startedAt: '2026-07-30T10:00:00.000Z',
+          finishedAt: '2026-07-30T10:20:00.000Z',
+          failureReason: 'turn_limit',
+          executionOutcome: {
+            status: 'failed',
+            failureReason: 'turn_limit',
+            artifactStatus: {
+              produced: false,
+              valid: false,
+              approvalReady: false,
+            },
+            bounds: {
+              maxTurns: 40,
+              maxToolCalls: 120,
+              maxWallClockMs: 1_200_000,
+            },
+            metrics: {
+              completedTurns: 40,
+              executedToolCalls: 72,
+              wallClockMs: 1_200_000,
+            },
+            provenance: {
+              promptTemplateName: 'native-read-only-phase',
+              configHash: 'a'.repeat(64),
+            },
+          },
+        }),
+      );
+
+      try {
+        const result = gatherStageArtifacts(repoDir, issueId, branch);
+        expect(result.executedPlanning?.executionOutcome).toEqual({
+          status: 'failed',
+          failureReason: 'turn_limit',
+          artifactStatus: {
+            produced: false,
+            valid: false,
+            approvalReady: false,
+          },
+          bounds: {
+            maxTurns: 40,
+            maxToolCalls: 120,
+            maxWallClockMs: 1_200_000,
+          },
+          metrics: {
+            completedTurns: 40,
+            executedToolCalls: 72,
+            wallClockMs: 1_200_000,
+          },
+          provenance: {
+            promptTemplateName: 'native-read-only-phase',
+            configHash: 'a'.repeat(64),
+          },
+        });
+      } finally {
+        fs.rmSync(repoDir, { recursive: true, force: true });
+      }
+    });
+
+    it('omits malformed planning execution outcome without dropping legacy provenance', () => {
+      const repoDir = makeTmpDir();
+      const issueId = 'HOK-2593';
+      const branch = 'task/malformed-planning-outcome';
+      const featureDir = nodePath.join(repoDir, 'features', 'malformed-planning-outcome');
+      fs.mkdirSync(featureDir, { recursive: true });
+      fs.writeFileSync(
+        nodePath.join(featureDir, '.planning-result.json'),
+        JSON.stringify({
+          stage: 'planning',
+          status: 'failed',
+          agent: 'native',
+          model: 'moonshotai/kimi-k2.7-code',
+          executionOutcome: {
+            status: 'failed',
+            failureReason: 'parsed_notes',
+          },
+        }),
+      );
+
+      try {
+        const result = gatherStageArtifacts(repoDir, issueId, branch);
+        expect(result.executedPlanning).toEqual({
+          agent: 'native',
+          model: 'moonshotai/kimi-k2.7-code',
+          status: 'failed',
+          source: '.planning-result.json',
+        });
+      } finally {
+        fs.rmSync(repoDir, { recursive: true, force: true });
+      }
+    });
   });
 });

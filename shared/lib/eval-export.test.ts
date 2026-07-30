@@ -254,6 +254,69 @@ test('flattenRecord exports phase duration columns when present', () => {
   assert.equal(row.review_time_seconds, 60);
 });
 
+test('flattenRecord exports planning execution outcome columns when present', () => {
+  const row = flattenRecord(makeRecord({
+    executedPlanning: {
+      agent: 'native',
+      model: 'moonshotai/kimi-k2.7-code',
+      status: 'failed',
+      source: '.planning-result.json',
+      executionOutcome: {
+        status: 'failed',
+        failureReason: 'turn_limit',
+        artifactStatus: {
+          produced: false,
+          valid: false,
+          approvalReady: false,
+        },
+        bounds: {
+          maxTurns: 40,
+          maxToolCalls: 120,
+          maxWallClockMs: 1_200_000,
+        },
+        metrics: {
+          completedTurns: 40,
+          executedToolCalls: 72,
+          wallClockMs: 1_200_000,
+          inputTokens: 1000,
+          outputTokens: 500,
+          costUsd: 0.12,
+        },
+        provenance: {
+          promptTemplateName: 'native-read-only-phase',
+          promptTemplateHash: 'a'.repeat(64),
+          promptFilledHash: 'b'.repeat(64),
+          configHash: 'c'.repeat(64),
+        },
+      },
+    },
+  }));
+
+  assert.equal(row.planning_execution_status, 'failed');
+  assert.equal(row.planning_failure_reason, 'turn_limit');
+  assert.equal(row.planning_artifact_produced, false);
+  assert.equal(row.planning_artifact_valid, false);
+  assert.equal(row.planning_approval_ready, false);
+  assert.equal(row.planning_max_turns, 40);
+  assert.equal(row.planning_executed_tool_calls, 72);
+  assert.equal(row.planning_wall_clock_ms, 1_200_000);
+  assert.equal(row.planning_input_tokens, 1000);
+  assert.equal(row.planning_cost_usd, 0.12);
+  assert.equal(row.planning_prompt_template_name, 'native-read-only-phase');
+  assert.equal(row.planning_config_hash, 'c'.repeat(64));
+});
+
+test('flattenRecord uses safe planning execution defaults for legacy records', () => {
+  const row = flattenRecord(makeRecord());
+
+  assert.equal(row.planning_execution_status, '');
+  assert.equal(row.planning_failure_reason, '');
+  assert.equal(row.planning_artifact_produced, null);
+  assert.equal(row.planning_max_turns, null);
+  assert.equal(row.planning_completed_turns, null);
+  assert.equal(row.planning_prompt_template_name, '');
+});
+
 // ────────────────────────────────────────────────────────────────
 // Redaction Tests
 // ────────────────────────────────────────────────────────────────
@@ -364,7 +427,10 @@ test('toCsv column count matches header count', () => {
   const lines = csv.trim().split('\n');
   const headerCols = lines[0].split(',').length;
 
-  assert.equal(headerCols, 56);
+  assert.equal(headerCols, 74);
+  for (const line of lines.slice(1)) {
+    assert.equal(line.split(',').length, headerCols);
+  }
 });
 
 // ────────────────────────────────────────────────────────────────

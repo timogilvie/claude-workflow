@@ -19,6 +19,7 @@ import path from 'node:path';
 import os from 'node:os';
 import type { CodingArtifacts } from './native-agent/coding-artifacts.ts';
 export type { CodingArtifacts } from './native-agent/coding-artifacts.ts';
+import type { PlanningExecutionOutcome } from './eval-schema.ts';
 import type { CleanupDecision, CleanupReport, TreeState } from './native-agent/cleanup.ts';
 export type { CleanupDecision, CleanupReport, TreeState } from './native-agent/cleanup.ts';
 import type { ReadyRemediationDecision } from './native-agent/workflow-tools/ready-remediation.ts';
@@ -125,6 +126,7 @@ export interface StageResult {
   notes: string;
   artifacts?: StageArtifacts;
   failureReason?: string | null;
+  executionOutcome?: PlanningExecutionOutcome;
   finalTreeState?: TreeState;
   cleanupDecision?: CleanupDecision;
   cleanupReport?: CleanupReport;
