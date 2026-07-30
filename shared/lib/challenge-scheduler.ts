@@ -13,6 +13,7 @@ import { getRouterConfig } from './config.ts';
 import type { EvalRecord } from './eval-schema.ts';
 import { readJsonlFile } from './jsonl-utils.ts';
 import { getEffectiveRegistry } from './model-registry.ts';
+import { listEffectiveModelsForStage } from './effective-models.ts';
 import { isWithinRecencyWindow, resolveExplorationConfig } from './router-exploration.ts';
 import { loadConfiguredPricingTable } from './workflow-cost.ts';
 import type { StageAwareDecision } from './stage-aware-router.ts';
@@ -139,15 +140,12 @@ function getAvailableModels(
     return filterDisabledModels([...new Set(challengeModels)]);
   }
 
-  const routerConfig = loadRouterConfig(repoDir);
   const pricingModels = Object.keys(loadConfiguredPricingTable(repoDir));
   return filterDisabledModels([...new Set([
-    ...(routerConfig.models || []),
-    ...pricingModels,
+    ...listEffectiveModelsForStage('coding', { repoDir }).models,
     routingDecision.planner,
     routingDecision.coder,
     routingDecision.reviewer,
-    routerConfig.defaultModel || '',
   ].filter(Boolean))]);
 }
 

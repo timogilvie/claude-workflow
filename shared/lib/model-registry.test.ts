@@ -188,6 +188,7 @@ describe('model-registry', () => {
   it('seeds the canonical Claude defaults with complete metadata', () => {
     const expectedModels = [
       'claude-fable-5',
+      'claude-haiku-4-5',
       'claude-opus-4-8',
       'claude-opus-4-7',
       'claude-opus-4-6',
@@ -196,6 +197,7 @@ describe('model-registry', () => {
       'claude-sonnet-4-5-20250929',
       'claude-haiku-4-5-20251001',
       'deepseek-chat',
+      'deepseek-coder-v2',
       'deepseek-r1',
       'deepseek-reasoner',
       'deepseek-v3',
@@ -204,9 +206,11 @@ describe('model-registry', () => {
       'deepseek-v4-pro[1m]',
       'devstral-medium',
       'devstral-small',
+      'gemini-2.0-flash',
       'gemini-2.5-flash',
       'gemini-2.5-pro',
       'glm-5.2',
+      'gpt-4.1',
       'gpt-5',
       'gpt-5-mini',
       'gpt-5.3-codex',
@@ -220,11 +224,14 @@ describe('model-registry', () => {
       'kimi-k2-thinking',
       'llama-3.3-70b',
       'llama-4-maverick',
+      'llama-4-scout',
       'mistral-large-2',
       'mistral-medium-3',
       'qwen-2.5-coder-32b',
+      'qwen-2.5-72b',
       'qwen-3-235b',
       'qwen-3-coder',
+      'grok-code-fast',
     ];
 
     assert.deepEqual(Object.keys(DEFAULT_MODEL_REGISTRY.models).sort(), expectedModels.sort());
@@ -263,6 +270,7 @@ describe('model-registry', () => {
       'claude-sonnet-5',
       'gpt-5.5',
       'gpt-5.6-terra',
+      'claude-fable-5',
     ]);
   });
 
@@ -355,6 +363,7 @@ describe('model-registry', () => {
 
     assert.deepEqual(once, [
       'gpt-5.5',
+      'claude-fable-5',
       'claude-opus-4-8',
       'claude-opus-4-7',
       'gpt-5.6-terra',
@@ -384,6 +393,7 @@ describe('model-registry', () => {
 
   it('rankCandidates returns the full ladder when no exclusions are provided', () => {
     assert.deepEqual(rankCandidates(DEFAULT_MODEL_REGISTRY, 'coding'), [
+      'claude-fable-5',
       'gpt-5.5',
       'gpt-5.6-terra',
       'deepseek-v4-pro',
@@ -399,8 +409,8 @@ describe('model-registry', () => {
   it('filters disabled models from configured and derived ladders', () => {
     assert.ok(!getLadder(DEFAULT_MODEL_REGISTRY, 'coding').includes('gpt-5.3-codex'));
     assert.ok(!rankCandidates(DEFAULT_MODEL_REGISTRY, 'coding').includes('gpt-5.3-codex'));
-    assert.ok(!getLadder(DEFAULT_MODEL_REGISTRY, 'coding').includes('claude-fable-5'));
-    assert.ok(!rankCandidates(DEFAULT_MODEL_REGISTRY, 'coding').includes('claude-fable-5'));
+    assert.ok(getLadder(DEFAULT_MODEL_REGISTRY, 'coding').includes('claude-fable-5'));
+    assert.ok(rankCandidates(DEFAULT_MODEL_REGISTRY, 'coding').includes('claude-fable-5'));
   });
 
   it('registers DeepSeek models with deepseek vendor metadata', () => {
@@ -615,6 +625,7 @@ describe('model-registry', () => {
   it('recognizes configured DeepSeek IDs and validates bracket syntax', () => {
     assert.deepEqual(configuredDeepSeekModelIds(DEFAULT_MODEL_REGISTRY), [
       'deepseek-chat',
+      'deepseek-coder-v2',
       'deepseek-r1',
       'deepseek-reasoner',
       'deepseek-v3',

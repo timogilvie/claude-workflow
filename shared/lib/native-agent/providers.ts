@@ -7,10 +7,13 @@ import {
 } from '../config.ts';
 import { resolveEnvValue } from '../env-file.ts';
 import {
-  getEffectiveRegistry,
   type ModelRegistry,
   type ReadOnlyNativeCapability,
 } from '../model-registry.ts';
+import {
+  getGlobalModelRegistry,
+  listEffectiveNativeProviderModels,
+} from '../effective-models.ts';
 import {
   evaluateNativeProviderGate,
   type CertificationPhase,
@@ -115,7 +118,7 @@ export function resolveNativeAgentProviders(
   const requiredCertificationPhase = mode === 'task'
     ? resolveRequiredCertificationPhase(phase, options.requiredCertificationPhase)
     : undefined;
-  const registry = options.registry ?? getEffectiveRegistry(repoDir);
+  const registry = options.registry ?? getGlobalModelRegistry();
 
   for (const providerName of DEFAULT_PROVIDER_ORDER) {
     const providerConfig = providers[providerName];
@@ -126,7 +129,7 @@ export function resolveNativeAgentProviders(
     const apiKeyEnv = normalizeApiKeyEnv(providerName, providerConfig.apiKeyEnv);
     const baseUrl = normalizeBaseUrl(providerName, providerConfig.baseUrl);
     const headers = normalizeHeaders(providerConfig.headers);
-    const modelIds = normalizeModels(providerName, providerConfig.models);
+    const modelIds = normalizeProviderModels(providerName, phase, registry, repoDir, providerConfig.models);
 
     if (providerConfig.enabled === false) {
       for (const modelId of modelIds) {
@@ -331,21 +334,19 @@ function normalizeBaseUrl(
     : OPENROUTER_DEFAULT_BASE_URL;
 }
 
-function normalizeModels(
+function normalizeProviderModels(
   providerName: NativeAgentProviderName,
-  models: string[] | undefined,
+  phase: string,
+  registry: ModelRegistry,
+  repoDir: string | undefined,
+  _configuredModels: string[] | undefined,
 ): string[] {
-  const candidates = models && models.length > 0
-    ? models
-    : providerName === OPENAI_NATIVE_PROVIDER
-      ? [...OPENAI_DEFAULT_MODELS]
-      : [...OPENROUTER_DEFAULT_MODELS];
-
-  return [...new Set(
-    candidates
-      .map((modelId) => modelId.trim())
-      .filter((modelId) => modelId.length > 0),
-  )];
+  const stage = phase === 'coding'
+    ? 'coding'
+    : phase === 'review'
+      ? 'review'
+      : 'planning';
+  return listEffectiveNativeProviderModels(providerName, stage, { repoDir, registry }).models;
 }
 
 function normalizeHeaders(headers: NativeAgentProviderConfig['headers']): Record<string, string> {

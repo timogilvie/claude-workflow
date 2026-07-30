@@ -15,7 +15,8 @@ import { readJsonlFile } from './jsonl-utils.ts';
 import { resolveFromMainRepo } from './git-utils.ts';
 import { computeModelCost, loadPricingTable } from './workflow-cost.ts';
 import type { WorkflowRouteDecision, PlanDepth, CodeDepth, ReviewMode } from './workflow-router.ts';
-import { getAvailableModelsForStage, getRouterConfig } from './config.ts';
+import { getRouterConfig } from './config.ts';
+import { listEffectiveModelsForStage } from './effective-models.ts';
 import { filterDeepSeekModels } from './deepseek-provider.ts';
 import { filterOpenRouterModels } from './openrouter-provider.ts';
 import {
@@ -986,9 +987,9 @@ export function routeStageAwareWithContext(
   options: StageAwareOptions = {},
 ): StageAwareDecision | null {
   const { repoDir, routerConfig, records } = context;
-  const plannerModels = filterProviderModels(getAvailableModelsForStage(routerConfig, 'planner') || [], repoDir, 'planner');
-  const coderModels = filterProviderModels(getAvailableModelsForStage(routerConfig, 'coder') || [], repoDir, 'coder');
-  const reviewerModels = filterProviderModels(getAvailableModelsForStage(routerConfig, 'reviewer') || [], repoDir, 'reviewer');
+  const plannerModels = filterProviderModels(listEffectiveModelsForStage('planner', { repoDir }).models, repoDir, 'planner');
+  const coderModels = filterProviderModels(listEffectiveModelsForStage('coder', { repoDir }).models, repoDir, 'coder');
+  const reviewerModels = filterProviderModels(listEffectiveModelsForStage('reviewer', { repoDir }).models, repoDir, 'reviewer');
   const filteredModelsAvailable = filterProviderModels(options.modelsAvailable || [], repoDir);
   const filteredPlannerOptions = filterProviderModels(options.plannerModelsAvailable || [], repoDir, 'planner');
   const filteredCoderOptions = filterProviderModels(options.coderModelsAvailable || [], repoDir, 'coder');

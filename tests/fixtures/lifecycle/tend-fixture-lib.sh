@@ -127,6 +127,10 @@ set -euo pipefail
 
 printf '%s\n' "$*" >> "$GIT_CALL_LOG"
 
+if [[ "${1:-}" == "-C" ]]; then
+  shift 2
+fi
+
 if [[ "${1:-}" == "rev-parse" && "${2:-}" == "--git-dir" ]]; then
   printf '%s\n' "$GIT_DIR"
   exit 0
@@ -153,10 +157,14 @@ if [[ "${1:-}" == "rev-parse" && "${2:-}" == origin/* ]]; then
 fi
 
 if [[ "${1:-}" == "show-ref" && "${2:-}" == "--verify" && "${3:-}" == "--quiet" ]]; then
+  if [[ "${GIT_STUB_BASE_REF_AVAILABLE:-1}" != "0" ]] \
+    && [[ "${4:-}" == "refs/remotes/origin/auto/integration" || "${4:-}" == "refs/heads/auto/integration" ]]; then
+    exit 0
+  fi
   exit 1
 fi
 
-if [[ "${1:-}" == "-C" && "${3:-}" == "ls-tree" ]]; then
+if [[ "${1:-}" == "ls-tree" ]]; then
   exit 0
 fi
 

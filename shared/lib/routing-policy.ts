@@ -14,7 +14,7 @@ import { filterDeepSeekModels } from './deepseek-provider.ts';
 import { filterOpenRouterModels } from './openrouter-provider.ts';
 import { type QuotaSnapshot, type QuotaStatus } from './quota-state.ts';
 import { getAllowedModelFloor, type RoutingDifficulty } from './task-difficulty-classifier.ts';
-import { getAvailableModelsForStage, getRouterConfig, isRouterCapabilityFilteringEnabled } from './config.ts';
+import { getRouterConfig, isRouterCapabilityFilteringEnabled } from './config.ts';
 
 export interface RoutingPolicy {
   taskType: RegistryTaskType;
@@ -168,16 +168,6 @@ function getActiveModelIds(
   for (const modelId of getLadder(registry, taskType)) {
     activeModelIds.add(modelId);
   }
-  const stage = TASK_TYPE_TO_STAGE[taskType];
-  if (stage) {
-    const routerConfig = getRouterConfig(repoDir);
-    for (const modelId of getAvailableModelsForStage(routerConfig, stage) ?? []) {
-      if (registry.models[modelId]) {
-        activeModelIds.add(modelId);
-      }
-    }
-  }
-
   return activeModelIds;
 }
 

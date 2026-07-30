@@ -442,7 +442,7 @@ test('rankModelsPerStage falls back when capability filtering empties a role', (
 test('routeStageAware returns a stage-aware decision from backfilled evals', () => {
   const records = [
     makeEvalRecord('1', 'claude-opus-4-6', { plan: 0.96, implementation: 0.83, review: 0.91 }),
-    makeEvalRecord('2', 'gpt-5.4', { plan: 0.72, implementation: 0.97, review: 0.68 }),
+    makeEvalRecord('2', 'gpt-5.6-terra', { plan: 0.72, implementation: 0.97, review: 0.68 }),
     makeEvalRecord('3', 'claude-haiku-4-5-20251001', { plan: 0.66, implementation: 0.63, review: 0.95 }),
   ];
   const { repoDir, cleanup } = makeRepoWithStageAwareData(records);
@@ -452,7 +452,7 @@ test('routeStageAware returns a stage-aware decision from backfilled evals', () 
     assert.ok(decision);
     assert.equal(decision?.routingMode, 'stage-aware');
     assert.equal(decision?.planner, 'claude-opus-4-6');
-    assert.equal(decision?.coder, 'gpt-5.4');
+    assert.equal(decision?.coder, 'gpt-5.6-terra');
     assert.equal(decision?.reviewer, 'claude-haiku-4-5-20251001');
     assert.equal(decision?.neighborCount, 3);
     assert.ok((decision?.expectedCost || 0) > 0);
@@ -524,7 +524,7 @@ test('routeStageAware reads per-stage model constraints from router config', () 
   }
 });
 
-test('routeStageAware falls back to router.models when a stage list is empty', () => {
+test('routeStageAware uses global stage pools when a repo stage list is empty', () => {
   const records = [
     makeEvalRecord('1', 'claude-opus-4-6', { plan: 0.96, implementation: 0.83, review: 0.91 }),
     makeEvalRecord('2', 'gpt-5.3-codex', { plan: 0.72, implementation: 0.97, review: 0.68 }),
@@ -548,8 +548,8 @@ test('routeStageAware falls back to router.models when a stage list is empty', (
   try {
     const decision = routeStageAware('Build a backend feature with tests and review.', { repoDir });
     assert.ok(decision);
-    assert.equal(decision?.planner, 'claude-haiku-4-5-20251001');
-    assert.equal(decision?.coder, 'claude-haiku-4-5-20251001');
+    assert.equal(decision?.planner, 'claude-opus-4-6');
+    assert.equal(decision?.coder, 'claude-opus-4-6');
     assert.equal(decision?.reviewer, 'claude-haiku-4-5-20251001');
   } finally {
     cleanup();
@@ -639,8 +639,8 @@ test('routeStageAware uses fresh local evals even when aggregate history exists'
     makeEvalRecord('3', 'claude-opus-4-6', { plan: 0.94, implementation: 0.63, review: 0.94 }),
   ];
   const local = [
-    makeEvalRecord('4', 'gpt-5.4', { plan: 0.7, implementation: 0.98, review: 0.68 }),
-    makeEvalRecord('5', 'gpt-5.4', { plan: 0.69, implementation: 0.97, review: 0.67 }),
+    makeEvalRecord('4', 'gpt-5.6-terra', { plan: 0.7, implementation: 0.98, review: 0.68 }),
+    makeEvalRecord('5', 'gpt-5.6-terra', { plan: 0.69, implementation: 0.97, review: 0.67 }),
   ];
   const { repoDir, cleanup } = makeRepoWithStageAwareData({ local, backfilled: aggregated });
 
@@ -652,7 +652,7 @@ test('routeStageAware uses fresh local evals even when aggregate history exists'
       kNeighbors: 5,
     });
     assert.ok(decision);
-    assert.equal(decision?.coder, 'gpt-5.4');
+    assert.equal(decision?.coder, 'gpt-5.6-terra');
     assert.equal(decision?.planner, 'claude-opus-4-6');
   } finally {
     cleanup();
@@ -661,7 +661,7 @@ test('routeStageAware uses fresh local evals even when aggregate history exists'
 
 test('routeStageAware does not overweight duplicate records across sources', () => {
   const opus = makeEvalRecord('opus-1', 'claude-opus-4-6', { plan: 0.96, implementation: 0.82, review: 0.93 });
-  const codex = makeEvalRecord('codex-1', 'gpt-5.4', { plan: 0.74, implementation: 0.97, review: 0.7 });
+  const codex = makeEvalRecord('codex-1', 'gpt-5.6-terra', { plan: 0.74, implementation: 0.97, review: 0.7 });
   const haiku = makeEvalRecord('haiku-1', 'claude-haiku-4-5-20251001', { plan: 0.68, implementation: 0.62, review: 0.95 });
   const { repoDir, cleanup } = makeRepoWithStageAwareData({
     local: [codex],
@@ -680,7 +680,7 @@ test('routeStageAware does not overweight duplicate records across sources', () 
       kNeighbors: 5,
     });
     assert.ok(decision);
-    assert.equal(decision?.coder, 'gpt-5.4');
+    assert.equal(decision?.coder, 'gpt-5.6-terra');
     assert.equal(decision?.neighborCount, 3);
   } finally {
     cleanup();
@@ -970,7 +970,7 @@ test('rubric-aware: records without rubric participate via scalar path', () => {
     )),
     ...Array.from({ length: 10 }, (_, index) => makeRubricEvalRecord(
       `rubric-mixed-aware-${index}`,
-      'gpt-5.4',
+      'gpt-5.6-terra',
       { plan: 0.78, implementation: 0.78, review: 0.78 },
       0.9,
     )),
@@ -1033,7 +1033,7 @@ test('rubric-aware: mode=on with sufficient coverage uses rubric scores', () => 
     )),
     ...Array.from({ length: 15 }, (_, index) => makeRubricEvalRecord(
       `rubric-on-codex-${index}`,
-      'gpt-5.4',
+      'gpt-5.6-terra',
       { plan: 0.7, implementation: 0.7, review: 0.7 },
       1,
     )),
@@ -1058,7 +1058,7 @@ test('rubric-aware: mode=on with sufficient coverage uses rubric scores', () => 
   try {
     const decision = routeStageAware('Build a backend feature with tests and review.', { repoDir, kNeighbors: 30 });
     assert.ok(decision);
-    assert.equal(decision?.planner, 'gpt-5.4');
+    assert.equal(decision?.planner, 'gpt-5.6-terra');
     assert.match(decision?.reasoning[0] || '', /rubric-aware \(mode=on/);
   } finally {
     cleanup();
@@ -1075,7 +1075,7 @@ test('rubric-aware: shadow mode emits scalar decision + side-channel', () => {
     )),
     ...Array.from({ length: 10 }, (_, index) => makeRubricEvalRecord(
       `rubric-shadow-codex-${index}`,
-      'gpt-5.4',
+      'gpt-5.6-terra',
       { plan: 0.7, implementation: 0.7, review: 0.7 },
       1,
     )),
@@ -1096,7 +1096,7 @@ test('rubric-aware: shadow mode emits scalar decision + side-channel', () => {
     assert.equal(shadowDecision?.coder, offDecision?.coder);
     assert.equal(shadowDecision?.reviewer, offDecision?.reviewer);
     assert.ok(shadowDecision?.shadowDecision);
-    assert.equal(shadowDecision?.shadowDecision?.planner, 'gpt-5.4');
+    assert.equal(shadowDecision?.shadowDecision?.planner, 'gpt-5.6-terra');
     assert.match(shadowDecision?.reasoning[0] || '', /rubric-aware \(mode=shadow/);
   } finally {
     off.cleanup();
@@ -1418,12 +1418,10 @@ test('routeStageAware with priors selects a zero-record allowlisted model end to
     });
     assert.ok(decision);
     assert.equal(decision?.routingMode, 'stage-aware');
-    // claude-opus-4-8 has zero eval records but the highest planning prior in
-    // the planner allowlist (claude-fable-5 would rank higher but is disabled).
-    assert.equal(decision?.planner, 'claude-opus-4-8');
-    // Stages without that model in their allowlist keep empirical winners
-    assert.notEqual(decision?.coder, 'claude-opus-4-8');
-    assert.notEqual(decision?.reviewer, 'claude-opus-4-8');
+    // The globally certified pool supplies the highest-prior zero-record model.
+    assert.equal(decision?.planner, 'claude-fable-5');
+    assert.equal(decision?.coder, 'claude-fable-5');
+    assert.equal(decision?.reviewer, 'claude-fable-5');
   } finally {
     cleanup();
   }

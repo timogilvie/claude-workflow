@@ -8,7 +8,7 @@ import { diagnoseOpenRouter } from './openrouter-doctor.ts';
 import {
   CERTIFICATION_SCHEMA_VERSION,
   DEFAULT_CERTIFICATION_SUITE_VERSION,
-  buildCertificationPath,
+  buildGlobalCertificationPath,
   resolveCertificationStorageIdentity,
 } from './native-agent/certification/index.ts';
 
@@ -78,6 +78,7 @@ function deepMerge<T extends Record<string, any>>(base: T, overrides: Record<str
 }
 
 function writeConfig(repoDir: string, overrides: Record<string, unknown> = {}): void {
+  process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT = join(repoDir, 'global-certifications');
   const config = deepMerge(baseConfig(), overrides as Record<string, any>);
   writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify(config, null, 2));
   clearConfigCache();
@@ -88,7 +89,7 @@ function writeOpenRouterCert(
   modelId: string,
   phase: 'read-only' | 'patch' | 'workflow' = 'workflow',
 ): string {
-  const path = buildCertificationPath(repoDir, 'openrouter', modelId, DEFAULT_CERTIFICATION_SUITE_VERSION);
+  const path = buildGlobalCertificationPath('openrouter', modelId, DEFAULT_CERTIFICATION_SUITE_VERSION);
   mkdirSync(dirname(path), { recursive: true });
   const identity = resolveCertificationStorageIdentity('openrouter', modelId);
   writeFileSync(path, JSON.stringify({
@@ -166,7 +167,7 @@ describe('openrouter-doctor', () => {
     }
   });
 
-  it('reports provider stage mismatches', () => {
+  it('uses the global registry stage pools', () => {
     const repoDir = makeRepoDir();
     try {
       writeConfig(repoDir, {
@@ -180,9 +181,7 @@ describe('openrouter-doctor', () => {
       const report = withEnv({ TEST_OPENROUTER_KEY: 'sk-test' }, () => diagnoseOpenRouter({ repoDir }));
       const glm = report.models.find((model) => model.id === 'glm-5.2');
       assert.ok(glm);
-      assert.equal(glm.cells.find((cell) => cell.stage === 'planner')?.primaryReason?.reason, 'STAGE_NOT_PERMITTED');
-      assert.equal(glm.cells.find((cell) => cell.stage === 'reviewer')?.primaryReason?.reason, 'STAGE_NOT_PERMITTED');
-      assert.equal(glm.cells.find((cell) => cell.stage === 'coder')?.eligible, true);
+      assert.equal(glm.cells.every((cell) => cell.eligible), true);
     } finally {
       cleanup(repoDir);
     }

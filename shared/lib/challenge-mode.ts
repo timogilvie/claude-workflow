@@ -7,7 +7,8 @@ import {
 import { loadWavemillConfig, type ChallengeConfig, type RouterConfig } from './config.ts';
 import { isDeepSeekModel } from './deepseek-provider.ts';
 import { filterDisabledModels, isDisabledModel } from './disabled-models.ts';
-import { getEffectiveRegistry, getModel, listSupportedModelsForStage } from './model-registry.ts';
+import { getGlobalModelRegistry, listEffectiveModelsForStage } from './effective-models.ts';
+import { resolveModelAgent } from './model-agent-resolution.ts';
 import { resolveAgent, tryResolveAgent, type AgentResolutionPhase } from './model-router.ts';
 import { filterOpenRouterModels } from './openrouter-provider.ts';
 import { listVariedRoutingDimensions, routingMetaFromChallengeEntry } from './challenge-comparison.ts';
@@ -29,6 +30,11 @@ const STAGE_TO_ROLE: Record<ChallengeStage, RouterRole> = {
   plan: 'planner',
   implementation: 'coder',
   review: 'reviewer',
+};
+const STAGE_TO_AGENT_PHASE: Record<ChallengeStage, AgentResolutionPhase> = {
+  plan: 'planning',
+  implementation: 'coding',
+  review: 'review',
 };
 
 export interface ChallengeTaskEntry {
@@ -251,7 +257,7 @@ function filterImplementationLaunchableNativeCandidates(
   repoDir: string,
   now?: Date,
 ): { models: string[]; rejections: ChallengeNativeRejection[] } {
-  const registry = getEffectiveRegistry(repoDir);
+  const registry = getGlobalModelRegistry();
   const gate = isPatchCodingEnabled(repoDir);
   const models: string[] = [];
   const rejections: ChallengeNativeRejection[] = [];
@@ -299,13 +305,31 @@ function filterNativeChallengeCandidates(
   repoDir?: string,
   now?: Date,
 ): { models: string[]; rejections: ChallengeNativeRejection[] } {
-  if (!repoDir) {
-    return { models: pool, rejections: [] };
-  }
-  const registry = getEffectiveRegistry(repoDir);
+  const registry = getGlobalModelRegistry();
   const role = STAGE_TO_ROLE[stage];
-  const { eligible, rejected } = filterNativeModels(uniqueNonEmpty(pool), role, registry, repoDir, now);
-  return { models: eligible, rejections: rejected };
+  const requestedPhase = stage === 'plan' ? 'workflow' : stage === 'review' ? 'read-only' : 'patch';
+  const requestedLaunchPhase = stage === 'plan' ? 'planning' : stage === 'review' ? 'review' : 'coding';
+  const knownModels: string[] = [];
+  const unknownRejections: ChallengeNativeRejection[] = [];
+
+  for (const modelId of uniqueNonEmpty(pool)) {
+    if (registry.models[modelId]) {
+      knownModels.push(modelId);
+      continue;
+    }
+    unknownRejections.push({
+      modelId,
+      role,
+      requestedLaunchPhase,
+      requestedPhase,
+      nativeCapability: 'unregistered',
+      requiredSuiteVersion: '',
+      reason: 'no-native-capability',
+    });
+  }
+
+  const { eligible, rejected } = filterNativeModels(knownModels, role, registry, repoDir ?? process.cwd(), now);
+  return { models: eligible, rejections: [...unknownRejections, ...rejected] };
 }
 
 function filterEligibleChallengeCandidates(
@@ -314,6 +338,7 @@ function filterEligibleChallengeCandidates(
   repoDir?: string,
   now?: Date,
 ): { models: string[]; rejections: ChallengeNativeRejection[]; exclusions: ModelExclusionDiagnostic[] } {
+  const registry = getGlobalModelRegistry();
   const exclusionFiltered = applyModelExclusions(pool, stage, repoDir);
   const { models: nativeEligible, rejections } = filterNativeChallengeCandidates(exclusionFiltered.models, stage, repoDir, now);
   const implementationLaunchable = repoDir && stage === 'implementation'
@@ -322,8 +347,15 @@ function filterEligibleChallengeCandidates(
   const openRouterEligible = repoDir
     ? filterOpenRouterModels(implementationLaunchable.models, repoDir, STAGE_TO_ROLE[stage]).models
     : implementationLaunchable.models;
+  const agentEligible = uniqueNonEmpty(openRouterEligible).filter((modelId) => resolveModelAgent({
+    model: modelId,
+    phase: STAGE_TO_AGENT_PHASE[stage],
+    repoDir: repoDir ?? process.cwd(),
+    registry,
+    now,
+  }).ok);
   return {
-    models: filterDisabledModels(uniqueNonEmpty(openRouterEligible)),
+    models: filterDisabledModels(agentEligible),
     rejections: [...rejections, ...implementationLaunchable.rejections],
     exclusions: exclusionFiltered.exclusions,
   };
@@ -432,23 +464,19 @@ export function filterDeepSeekChallengeModels(
 
 export function getChallengeModelPoolFromConfig(repoDir?: string): string[] {
   const config = loadWavemillConfig(repoDir);
-  if (!Array.isArray(config.challenge?.models) && repoDir) {
-    return filterDisabledModels(filterDeepSeekChallengeModels(
-      listSupportedModelsForStage('coding', getEffectiveRegistry(repoDir)),
-      config.challenge,
-    ).models);
-  }
-  return getChallengeModelPool(config.challenge, config.router);
+  return filterDisabledModels(filterDeepSeekChallengeModels(
+    listEffectiveModelsForStage('coding', { repoDir }).models,
+    config.challenge,
+  ).models);
 }
 
 export function getChallengeModelPool(
   challengeConfig?: ChallengeConfig,
   routerConfig?: RouterConfig,
 ): string[] {
-  const configured = challengeConfig?.models;
   // Disabled models must never enter the challenge pool, even when listed
   // explicitly in challenge.models — the disable set is authoritative.
-  const source = Array.isArray(configured) ? configured : (routerConfig?.models || []);
+  const source = listEffectiveModelsForStage('coding').models;
   return filterDisabledModels(filterDeepSeekChallengeModels(source, challengeConfig).models);
 }
 

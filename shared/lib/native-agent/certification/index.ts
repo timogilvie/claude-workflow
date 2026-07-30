@@ -30,6 +30,7 @@ export {
   buildCertificationPath,
   buildGlobalCertificationPath,
   checkCertificationEligibility,
+  checkGlobalCertificationEligibility,
   checkSharedCertificationEligibility,
   evaluateEligibility,
   isValidPathSegment,

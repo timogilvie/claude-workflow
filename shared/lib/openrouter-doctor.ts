@@ -26,7 +26,7 @@ import {
 } from './model-registry.ts';
 import { tryResolveAgent } from './model-router.ts';
 import {
-  buildCertificationPath,
+  buildGlobalCertificationPath,
   filterNativeModels,
   STAGE_PHASE_REQUIREMENT,
   type RouterCertificationRejection,
@@ -261,7 +261,6 @@ function resolveRegistryModelId(
 }
 
 function resolveStoragePath(
-  repoDir: string,
   candidate: CandidateAccumulator,
   registryModelId: string | null,
   capabilities: ModelCapabilities | undefined,
@@ -272,7 +271,7 @@ function resolveStoragePath(
     return null;
   }
   try {
-    return buildCertificationPath(repoDir, 'openrouter', modelId, suiteVersion);
+    return buildGlobalCertificationPath('openrouter', modelId, suiteVersion);
   } catch {
     return null;
   }
@@ -600,7 +599,7 @@ export function diagnoseOpenRouter(options: DiagnoseOpenRouterOptions = {}): Ope
   const models: OpenRouterDoctorModelReport[] = configuredCandidates.map((candidate) => {
     const registryModelId = resolveRegistryModelId(candidate, registry);
     const capabilities = registryModelId ? getModel(registry, registryModelId) : undefined;
-    const storagePath = resolveStoragePath(repoDir, candidate, registryModelId, capabilities);
+    const storagePath = resolveStoragePath(candidate, registryModelId, capabilities);
     const id = candidate.alias ?? candidate.nativeProviderId ?? candidate.key;
 
     const cells = activeStages.map((stage) => evaluateCell({

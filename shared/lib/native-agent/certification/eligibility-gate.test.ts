@@ -5,13 +5,14 @@ import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 import type { ModelRegistry } from '../../model-registry.ts';
 import {
-  buildCertificationPath,
+  buildGlobalCertificationPath,
   CERTIFICATION_SCHEMA_VERSION,
   evaluateNativeProviderGate,
   type CertificationPhase,
   type NativeCertificationArtifact,
   type NativeGateInput,
 } from './index.ts';
+import { GLOBAL_CERTIFICATION_ROOT_ENV } from './storage.ts';
 
 const FIXED_NOW = new Date('2026-07-12T12:00:00.000Z');
 
@@ -49,9 +50,18 @@ function makeRegistry(modelId: string, provider: 'openai' | 'openrouter', suiteV
 
 function makeRepo(): { repoDir: string; cleanup: () => void } {
   const repoDir = mkdtempSync(join(tmpdir(), 'eligibility-gate-'));
+  const previousRoot = process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
+  process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = join(repoDir, 'global-certifications');
   return {
     repoDir,
-    cleanup: () => rmSync(repoDir, { recursive: true, force: true }),
+    cleanup: () => {
+      if (previousRoot === undefined) {
+        delete process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
+      } else {
+        process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = previousRoot;
+      }
+      rmSync(repoDir, { recursive: true, force: true });
+    },
   };
 }
 
@@ -81,7 +91,7 @@ function writeArtifact(
   suiteVersion: string,
   overrides: Partial<NativeCertificationArtifact> = {},
 ): string {
-  const path = buildCertificationPath(repoDir, provider, modelId, suiteVersion);
+  const path = buildGlobalCertificationPath(provider, modelId, suiteVersion);
   mkdirSync(dirname(path), { recursive: true });
   const openRouterIdentity = provider === 'openrouter'
     ? (modelId.includes('/') ? modelId.split('/') : ['z-ai', modelId])
@@ -163,12 +173,12 @@ describe('evaluateNativeProviderGate', () => {
     }
   });
 
-  it('requires repoDir in task mode', () => {
+  it('does not require repoDir in task mode because artifacts are global', () => {
     const registry = makeRegistry('gpt-4o', 'openai');
-    assert.throws(
-      () => evaluateNativeProviderGate(taskInput(registry, 'gpt-4o', '/tmp/unused', { repoDir: undefined })),
-      /repoDir is required/,
-    );
+    const decision = evaluateNativeProviderGate(taskInput(registry, 'gpt-4o', '/tmp/unused', { repoDir: undefined }));
+    assert.equal(decision.ok, false);
+    assert.equal(decision.reason, 'missing_artifact');
+    assert.equal(decision.artifactScope, 'global');
   });
 
   it('maps missing artifacts to missing_artifact with a resolved path', () => {
@@ -179,7 +189,7 @@ describe('evaluateNativeProviderGate', () => {
 
       assert.equal(decision.ok, false);
       assert.equal(decision.reason, 'missing_artifact');
-      assert.match(decision.artifactPath ?? '', /\.wavemill\/native-agent-certifications\/openai\/gpt-4o\/v1\.json$/);
+      assert.match(decision.artifactPath ?? '', /global-certifications\/openai\/gpt-4o\/v1\.json$/);
     } finally {
       cleanup();
     }
@@ -189,7 +199,7 @@ describe('evaluateNativeProviderGate', () => {
     const { repoDir, cleanup } = makeRepo();
     try {
       const registry = makeRegistry('gpt-4o', 'openai');
-      const path = buildCertificationPath(repoDir, 'openai', 'gpt-4o', 'v1');
+      const path = buildGlobalCertificationPath('openai', 'gpt-4o', 'v1');
       mkdirSync(dirname(path), { recursive: true });
       writeFileSync(path, 'not json', 'utf8');
 

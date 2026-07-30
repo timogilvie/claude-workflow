@@ -114,13 +114,6 @@ export function filterOpenRouterModels(
     };
   }
 
-  if (stage && !provider.stages.includes(stage)) {
-    return {
-      models: requested.filter((modelId) => !isOpenRouterModel(modelId)),
-      warnings: [`OpenRouter models were ignored for ${stage} because that stage is not enabled in providers.openrouter.stages.`],
-    };
-  }
-
   if (!provider.hasApiKey) {
     return {
       models: requested.filter((modelId) => !isOpenRouterModel(modelId)),
@@ -128,22 +121,7 @@ export function filterOpenRouterModels(
     };
   }
 
-  const allowedModels = new Set(provider.models);
-  const filtered = requested.filter((modelId) => {
-    const identity = resolveOpenRouterModelIdentity(modelId);
-    return !identity?.nativeOpenRouter || allowedModels.has(identity.wavemillAlias);
-  });
-  const skippedConfiguredModels = openRouterRequested.filter((modelId) => {
-    const identity = resolveOpenRouterModelIdentity(modelId);
-    return !identity || !allowedModels.has(identity.wavemillAlias);
-  });
-
-  return {
-    models: filtered,
-    warnings: skippedConfiguredModels.length > 0
-      ? [`OpenRouter models were ignored because they are not allowlisted in providers.openrouter.models: ${skippedConfiguredModels.join(', ')}`]
-      : [],
-  };
+  return { models: requested, warnings: [] };
 }
 
 export function getOpenRouterProviderMetadata(

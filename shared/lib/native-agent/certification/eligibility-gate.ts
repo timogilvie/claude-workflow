@@ -2,8 +2,8 @@ import type { NativeProviderName } from '../../config.ts';
 import { getModel, type ModelRegistry, type ReadOnlyNativeCapability } from '../../model-registry.ts';
 import { checkIdentity } from './validator.ts';
 import {
-  buildCertificationPath,
-  checkSharedCertificationEligibility,
+  buildGlobalCertificationPath,
+  checkGlobalCertificationEligibility,
 } from './loader.ts';
 import { resolveCertificationStorageIdentity } from './identity.ts';
 import type {
@@ -94,10 +94,6 @@ export function evaluateNativeProviderGate(input: NativeGateInput): NativeGateDe
     throw new Error('evaluateNativeProviderGate: requiredPhase is required in task mode');
   }
 
-  if (!input.repoDir) {
-    throw new Error('evaluateNativeProviderGate: repoDir is required in task mode');
-  }
-
   const requiredSuiteVersion = nativeCapability?.certification?.certificationSuiteVersion?.trim();
   if (!requiredSuiteVersion) {
     return rejectDecision({
@@ -108,14 +104,12 @@ export function evaluateNativeProviderGate(input: NativeGateInput): NativeGateDe
   }
 
   const storageIdentity = resolveCertificationStorageIdentity(nativeProvider, input.modelId);
-  const artifactPath = buildCertificationPath(
-    input.repoDir,
+  const artifactPath = buildGlobalCertificationPath(
     nativeProvider,
     input.modelId,
     requiredSuiteVersion,
   );
-  const eligibility = checkSharedCertificationEligibility(
-    input.repoDir,
+  const eligibility = checkGlobalCertificationEligibility(
     nativeProvider,
     input.modelId,
     requiredSuiteVersion,

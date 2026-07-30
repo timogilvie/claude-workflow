@@ -682,6 +682,262 @@ wavemill_fetch_base_branch() {
   fi
 }
 
+wavemill_base_ref_checked_refs() {
+  local base_branch="${1:-}"
+  [[ -n "$base_branch" ]] || return 1
+
+  printf 'refs/heads/%s\n' "$base_branch"
+  printf 'refs/remotes/origin/%s\n' "$base_branch"
+
+  local upstream
+  upstream="$(git -C "${REPO_DIR:-$PWD}" rev-parse --abbrev-ref --symbolic-full-name "refs/heads/$base_branch@{upstream}" 2>/dev/null || true)"
+  if [[ -n "$upstream" && "$upstream" != "origin/$base_branch" ]]; then
+    printf 'refs/remotes/%s\n' "$upstream"
+  fi
+}
+
+wavemill_resolve_base_ref() {
+  local base_branch="${1:-}"
+  [[ -n "$base_branch" ]] || return 1
+
+  local ref
+  while IFS= read -r ref; do
+    [[ -n "$ref" ]] || continue
+    if git -C "${REPO_DIR:-$PWD}" show-ref --verify --quiet "$ref"; then
+      printf '%s\n' "$ref"
+      return 0
+    fi
+  done < <(wavemill_base_ref_checked_refs "$base_branch")
+
+  return 1
+}
+
+wavemill_default_remote_branch() {
+  local repo_dir="${REPO_DIR:-$PWD}"
+  local target
+
+  target="$(git -C "$repo_dir" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+  if [[ -n "$target" ]]; then
+    printf '%s\n' "$target"
+    return 0
+  fi
+
+  if git -C "$repo_dir" show-ref --verify --quiet refs/remotes/origin/main; then
+    printf '%s\n' "origin/main"
+    return 0
+  fi
+
+  return 1
+}
+
+wavemill_base_ref_preflight() {
+  local base_branch="${1:-}"
+  shift || true
+
+  local force_fetch="false"
+  local json_out=""
+  while (( $# > 0 )); do
+    case "$1" in
+      --force-fetch)
+        force_fetch="true"
+        ;;
+      --json-out)
+        json_out="${2:-}"
+        shift
+        ;;
+      *)
+        return 1
+        ;;
+    esac
+    shift
+  done
+
+  [[ -n "$base_branch" ]] || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+
+  local fetch_rc=0 fetch_attempted=true fetch_degraded=false resolved_ref="" reason="ok" status="ok" default_branch=""
+  if [[ "${WAVEMILL_DRY_RUN:-}" == "1" || "${DRY_RUN:-}" == "true" ]]; then
+    fetch_attempted=false
+  elif [[ "$force_fetch" == "true" ]]; then
+    wavemill_fetch_base_branch "$base_branch" --force || fetch_rc=$?
+  else
+    wavemill_fetch_base_branch "$base_branch" || fetch_rc=$?
+  fi
+
+  if resolved_ref="$(wavemill_resolve_base_ref "$base_branch" 2>/dev/null)"; then
+    status="ok"
+    reason="ok"
+    if [[ "$fetch_attempted" == "true" && "$fetch_rc" -ne 0 ]]; then
+      fetch_degraded=true
+    fi
+  else
+    status="failed"
+    if [[ "$fetch_attempted" == "true" && "$fetch_rc" -ne 0 ]]; then
+      reason="base_ref_fetch_failed"
+    else
+      reason="base_ref_unavailable"
+    fi
+  fi
+
+  default_branch="$(wavemill_default_remote_branch 2>/dev/null || true)"
+
+  local checked_refs_json
+  checked_refs_json="$(wavemill_base_ref_checked_refs "$base_branch" | jq -R . | jq -sc .)"
+
+  local payload
+  payload="$(jq -cn \
+    --arg status "$status" \
+    --arg reason "$reason" \
+    --arg configuredBranch "$base_branch" \
+    --arg resolvedRef "$resolved_ref" \
+    --arg defaultBranch "$default_branch" \
+    --argjson fetchExit "$fetch_rc" \
+    --argjson fetchAttempted "$fetch_attempted" \
+    --argjson fetchDegraded "$fetch_degraded" \
+    --argjson checkedRefs "$checked_refs_json" \
+    '{
+      status: $status,
+      reason: $reason,
+      configuredBranch: $configuredBranch,
+      checkedRefs: $checkedRefs,
+      fetchAttempted: $fetchAttempted,
+      fetchExit: $fetchExit,
+      fetchDegraded: $fetchDegraded
+    }
+    + (if $resolvedRef == "" then {} else {resolvedRef: $resolvedRef} end)
+    + (if $defaultBranch == "" then {} else {defaultBranch: $defaultBranch} end)')"
+
+  if [[ -n "$json_out" ]]; then
+    mkdir -p "$(dirname "$json_out")" 2>/dev/null || true
+    printf '%s\n' "$payload" > "$json_out"
+  else
+    printf '%s\n' "$payload"
+  fi
+
+  [[ "$status" == "ok" ]]
+}
+
+wavemill_format_base_ref_preflight_failure() {
+  local preflight_json="${1:-}"
+  [[ -n "$preflight_json" ]] || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+
+  local branch checked default_branch reason
+  branch="$(printf '%s' "$preflight_json" | jq -r '.configuredBranch // "unknown"')"
+  checked="$(printf '%s' "$preflight_json" | jq -r '.checkedRefs | join(" and ")')"
+  default_branch="$(printf '%s' "$preflight_json" | jq -r '.defaultBranch // empty')"
+  reason="$(printf '%s' "$preflight_json" | jq -r '.reason // "base_ref_unavailable"')"
+
+  if [[ "$reason" == "base_ref_fetch_failed" ]]; then
+    printf 'Wavemill cannot start: configured base branch "%s" could not be fetched or resolved.\n' "$branch"
+  else
+    printf 'Wavemill cannot start: configured base branch "%s" is unavailable.\n' "$branch"
+  fi
+  printf 'Checked: %s.\n' "$checked"
+  if [[ -n "$default_branch" ]]; then
+    printf 'Available default branch: %s.\n' "$default_branch"
+  fi
+  printf 'Update .wavemill-config.json (mill.baseBranch / integration.integrationBranch), create the branch, or rerun with BASE_BRANCH=main.\n'
+  printf 'No worktrees or agents were started.\n'
+}
+
+wavemill_record_startup_terminal_reason() {
+  local reason="${1:-startup_failed}" preflight_json="${2:-{}}" cleanup_status="${3:-not_attempted}"
+  command -v jq >/dev/null 2>&1 || return 0
+
+  local log_dir="${MILL_LOG_DIR:-}"
+  if [[ -z "$log_dir" && -n "${REPO_DIR:-}" ]]; then
+    log_dir="$REPO_DIR/.wavemill/logs"
+  fi
+  [[ -n "$log_dir" ]] || return 0
+  mkdir -p "$log_dir" 2>/dev/null || true
+
+  local record
+  record="$(printf '%s' "$preflight_json" | jq -c \
+    --arg event "startup_terminal" \
+    --arg reason "$reason" \
+    --arg session "${SESSION:-}" \
+    --arg repoDir "${REPO_DIR:-}" \
+    --arg cleanupStatus "$cleanup_status" \
+    '. as $p | {
+      event: $event,
+      reason: $reason,
+      configuredBranch: ($p.configuredBranch // null),
+      checkedRefs: ($p.checkedRefs // []),
+      resolvedRef: ($p.resolvedRef // null),
+      fetchDegraded: ($p.fetchDegraded // false),
+      session: $session,
+      repoDir: $repoDir,
+      cleanupStatus: $cleanupStatus
+    }' 2>/dev/null)" || return 0
+
+  printf '%s\n' "$record" >> "$log_dir/startup-terminal.jsonl" 2>/dev/null || true
+}
+
+wavemill_cleanup_launch_attempt() {
+  local cleanup_status="ok"
+  local session="${SESSION:-}"
+  local repo_dir="${REPO_DIR:-}"
+  local launch_plan_file="${LAUNCH_PLAN_FILE:-${PLAN_FILE:-}}"
+  local status_log_file="${STATUS_LOG_FILE:-}"
+  local launched_issues_file="${LAUNCHED_ISSUES_FILE:-}"
+  local monitor_script="${MONITOR_SCRIPT:-}"
+  local monitor_env="${MONITOR_ENV:-}"
+
+  if [[ -n "$session" ]] && command -v tmux >/dev/null 2>&1 && tmux has-session -t "$session" 2>/dev/null; then
+    local existing_dir
+    existing_dir="$(tmux show-environment -t "$session" REPO_DIR 2>/dev/null | sed 's/^REPO_DIR=//' || true)"
+    if [[ -n "$repo_dir" && "$existing_dir" == "$repo_dir" ]]; then
+      tmux kill-session -t "$session" 2>/dev/null || cleanup_status="partial"
+    fi
+  fi
+
+  if [[ -n "$launch_plan_file" && -f "$launch_plan_file" && -n "${STATE_FILE:-}" && -f "${STATE_FILE:-}" ]]; then
+    local tmp
+    tmp="$(mktemp "${STATE_FILE%/*}/cleanup.XXXXXX" 2>/dev/null || true)"
+    if [[ -n "$tmp" ]]; then
+      if jq --slurpfile plan "$launch_plan_file" '
+        ($plan[0].tasks // [] | map(.issue)) as $issues
+        | .tasks = ((.tasks // {}) | with_entries(select((.key as $k | $issues | index($k)) | not)))
+      ' "$STATE_FILE" > "$tmp" 2>/dev/null; then
+        mv "$tmp" "$STATE_FILE" 2>/dev/null || cleanup_status="partial"
+      else
+        rm -f "$tmp"
+        cleanup_status="partial"
+      fi
+    fi
+  fi
+
+  if [[ -n "$launch_plan_file" && -f "$launch_plan_file" ]]; then
+    while IFS= read -r path; do
+      [[ -n "$path" ]] || continue
+      case "$path" in
+        /tmp/"$session"-*)
+          rm -f "$path" 2>/dev/null || cleanup_status="partial"
+          ;;
+      esac
+    done < <(jq -r '.tasks[]? | .taskPacketFile, .taskPacketDetailsFile, .issueJsonFile, .routeFile | select(type == "string" and length > 0)' "$launch_plan_file" 2>/dev/null || true)
+  fi
+
+  local path
+  for path in "$launch_plan_file" "$status_log_file" "$launched_issues_file" "$monitor_script" "$monitor_env"; do
+    [[ -n "$path" ]] || continue
+    case "$path" in
+      /tmp/"$session"-*|/tmp/"$session".*)
+        rm -f "$path" 2>/dev/null || cleanup_status="partial"
+        ;;
+    esac
+  done
+
+  if declare -F startup_log >/dev/null 2>&1; then
+    startup_log "Cleanup after failed startup: $cleanup_status"
+  elif declare -F log_warn >/dev/null 2>&1; then
+    log_warn "Cleanup after failed startup: $cleanup_status"
+  fi
+
+  printf '%s\n' "$cleanup_status"
+}
+
 wavemill_warn() {
   local message="$*"
   if declare -F log_warn >/dev/null 2>&1; then

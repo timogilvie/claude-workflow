@@ -428,9 +428,8 @@ describe('quota fallback', () => {
   });
 
   it('filters task ladders to models supported by the selected provider', async () => {
-    // claude-fable-5 is disabled while upstream access is unavailable, and
-    // gpt-5.5 is not claude-compatible. The resolver should skip both and use
-    // the next Claude-compatible planning model.
+    // gpt-5.5 is not Claude-compatible. The resolver should skip it and use
+    // the highest-ranked Claude-compatible planning model.
     const { cliPath, logPath } = createMockCli('provider-filter', {
       'gpt-5.5': { type: 'other', message: 'invalid model for claude cli', code: 1 },
       'claude-opus-4-8': { type: 'success', text: 'anthropic planning winner' },
@@ -444,8 +443,8 @@ describe('quota fallback', () => {
       taskType: 'planning',
     });
 
-    assert.equal(result.model, 'claude-opus-4-8');
-    assert.deepEqual(readInvocations(logPath).map((entry) => entry.model), ['claude-opus-4-8']);
+    assert.equal(result.model, 'claude-fable-5');
+    assert.deepEqual(readInvocations(logPath).map((entry) => entry.model), ['claude-fable-5']);
   });
 
   it('excludes globally disabled models from the fallback ladder', async () => {

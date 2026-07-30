@@ -53,6 +53,8 @@ fi
 # Source common library and load layered config
 # Resolution: env vars > .wavemill-config.json > ~/.wavemill/config.json > defaults
 SCRIPT_DIR="${WAVEMILL_MILL_LIB_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+WAVEMILL_MILL_SOURCE_LIB_DIR="$SCRIPT_DIR"
+WAVEMILL_COMMON_LIB_PATH="$SCRIPT_DIR/wavemill-common.sh"
 source "$SCRIPT_DIR/wavemill-common.sh"
 source "$SCRIPT_DIR/agent-adapters.sh"
 load_config "$REPO_DIR"
@@ -571,6 +573,8 @@ write_launch_plan() {
     --arg session "$SESSION" \
     --arg repoDir "$REPO_DIR" \
     --arg baseBranch "$BASE_BRANCH" \
+    --arg resolvedBaseRef "${WAVEMILL_RESOLVED_BASE_REF:-}" \
+    --argjson baseRefPreflight "${WAVEMILL_BASE_REF_PREFLIGHT_JSON:-null}" \
     --arg worktreeRoot "$WORKTREE_ROOT" \
     --arg planningMode "$PLANNING_MODE" \
     --arg agentCmd "$AGENT_CMD" \
@@ -602,6 +606,8 @@ write_launch_plan() {
       session: $session,
       repoDir: $repoDir,
       baseBranch: $baseBranch,
+      resolvedBaseRef: (if $resolvedBaseRef == "" then null else $resolvedBaseRef end),
+      baseRefPreflight: $baseRefPreflight,
       worktreeRoot: $worktreeRoot,
       planningMode: $planningMode,
       agentCmd: $agentCmd,
@@ -13796,14 +13802,60 @@ fi
 chmod +x "$MONITOR_SCRIPT"
 
 
-# Fetch latest base branch so worktrees start from up-to-date main
-log "info" "Fetching latest $BASE_BRANCH from remote..."
-if [[ "$DRY_RUN" == "true" ]]; then
-  log "info" "Dry-run: skipping forced base-branch fetch."
-else
-  if ! wavemill_fetch_base_branch "$BASE_BRANCH" --force; then
-    log_warn "Startup fetch for $BASE_BRANCH degraded; continuing mill startup with local base-branch state"
+BASE_REF_PREFLIGHT_FILE="$(mktemp "/tmp/${SESSION}-base-ref-preflight.XXXXXX.json")"
+BASE_REF_PREFLIGHT_RC=0
+log "info" "Checking base branch $BASE_BRANCH..."
+(
+  source "$WAVEMILL_COMMON_LIB_PATH" || true
+  wavemill_base_ref_preflight "$BASE_BRANCH" --force-fetch --json-out "$BASE_REF_PREFLIGHT_FILE"
+) || BASE_REF_PREFLIGHT_RC=$?
+WAVEMILL_BASE_REF_PREFLIGHT_JSON="$(cat "$BASE_REF_PREFLIGHT_FILE" 2>/dev/null || echo '{}')"
+rm -f "$BASE_REF_PREFLIGHT_FILE"
+export WAVEMILL_BASE_REF_PREFLIGHT_JSON
+WAVEMILL_RESOLVED_BASE_REF="$(printf '%s' "$WAVEMILL_BASE_REF_PREFLIGHT_JSON" | jq -r '.resolvedRef // empty' 2>/dev/null || true)"
+export WAVEMILL_RESOLVED_BASE_REF
+if [[ "$BASE_REF_PREFLIGHT_RC" -ne 0 ]]; then
+  BASE_REF_FAILURE_REASON="$(printf '%s' "$WAVEMILL_BASE_REF_PREFLIGHT_JSON" | jq -r '.reason // "base_ref_unavailable"' 2>/dev/null || echo "base_ref_unavailable")"
+  (
+    source "$WAVEMILL_COMMON_LIB_PATH" || true
+    wavemill_format_base_ref_preflight_failure "$WAVEMILL_BASE_REF_PREFLIGHT_JSON"
+  ) >&2 || log_error "Wavemill cannot start: configured base branch \"$BASE_BRANCH\" is unavailable."
+  export SESSION REPO_DIR STATE_FILE LAUNCH_PLAN_FILE STATUS_LOG_FILE LAUNCHED_ISSUES_FILE MONITOR_SCRIPT MONITOR_ENV MILL_LOG_DIR
+  CLEANUP_STATUS="$(
+    (
+    source "$WAVEMILL_COMMON_LIB_PATH" || true
+    wavemill_cleanup_launch_attempt
+    ) 2>/dev/null || echo "partial"
+  )"
+  (
+    source "$WAVEMILL_COMMON_LIB_PATH" || true
+    wavemill_record_startup_terminal_reason "$BASE_REF_FAILURE_REASON" "$WAVEMILL_BASE_REF_PREFLIGHT_JSON" "$CLEANUP_STATUS"
+  ) || true
+  if [[ ! -s "$MILL_LOG_DIR/startup-terminal.jsonl" ]]; then
+    mkdir -p "$MILL_LOG_DIR" 2>/dev/null || true
+    printf '%s' "$WAVEMILL_BASE_REF_PREFLIGHT_JSON" | jq -c \
+      --arg event "startup_terminal" \
+      --arg reason "$BASE_REF_FAILURE_REASON" \
+      --arg session "$SESSION" \
+      --arg repoDir "$REPO_DIR" \
+      --arg cleanupStatus "$CLEANUP_STATUS" \
+      '. as $p | {
+        event: $event,
+        reason: $reason,
+        configuredBranch: ($p.configuredBranch // null),
+        checkedRefs: ($p.checkedRefs // []),
+        resolvedRef: ($p.resolvedRef // null),
+        fetchDegraded: ($p.fetchDegraded // false),
+        session: $session,
+        repoDir: $repoDir,
+        cleanupStatus: $cleanupStatus
+      }' >> "$MILL_LOG_DIR/startup-terminal.jsonl" 2>/dev/null || true
+    printf '\n' >> "$MILL_LOG_DIR/startup-terminal.jsonl" 2>/dev/null || true
   fi
+  exit 1
+fi
+if [[ "$(printf '%s' "$WAVEMILL_BASE_REF_PREFLIGHT_JSON" | jq -r '.fetchDegraded // false' 2>/dev/null)" == "true" ]]; then
+  log_warn "Startup fetch for $BASE_BRANCH degraded; continuing with verified local base ref $WAVEMILL_RESOLVED_BASE_REF"
 fi
 
 : > "$STATUS_LOG_FILE"
