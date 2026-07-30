@@ -1051,10 +1051,9 @@ describe('launchNativePlanning', () => {
           runTsxCommand: stubRunTsxCommand(),
         }),
         (error: unknown) => error instanceof Error
-          && /openai:uncertified-model/.test(error.message)
-          && /reason=unregistered_model/.test(error.message)
+          && /no native providers are configured/.test(error.message)
           && /wavemill native-agent models report --json/.test(error.message)
-          && /native-agent-certify\.ts --provider openai --model uncertified-model --phase read-only/.test(error.message),
+          && /Configure nativeAgent\.providers/.test(error.message),
       );
     } finally {
       if (originalOpenAiKey === undefined) {
