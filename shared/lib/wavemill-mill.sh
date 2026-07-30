@@ -57,6 +57,7 @@ WAVEMILL_MILL_SOURCE_LIB_DIR="$SCRIPT_DIR"
 WAVEMILL_COMMON_LIB_PATH="$SCRIPT_DIR/wavemill-common.sh"
 source "$SCRIPT_DIR/wavemill-common.sh"
 source "$SCRIPT_DIR/agent-adapters.sh"
+source "$SCRIPT_DIR/queue-health.sh"
 if [[ -f "$SCRIPT_DIR/terminal-reconciler.sh" ]]; then
 source "$SCRIPT_DIR/terminal-reconciler.sh"
 fi
@@ -9373,6 +9374,145 @@ fetch_candidates() {
   print_cached_candidates
 }
 
+# Run queue planner with rich process lifecycle tracking and diagnostics.
+# Handles timeout, external cancellation, and malformed graph classification.
+# Updates queue-health.json via queue_health_record_success/failure.
+#
+# Arguments:
+#   $1 = planner command (as single string: "npx tsx tools/plan-queue.ts --stdin --json ...")
+#   $2 = timeout seconds
+#   $3 = input snapshot JSON (e.g., {"taskCount":12,"explicitDependencyCount":4})
+#   stdin = plan input
+#
+# Output: queue plan JSON on success, nothing on failure
+# Exit: 0 = success, 1 = failure
+run_queue_planner_with_policy() {
+  local planner_cmd="$1" timeout_secs="$2" input_snapshot="${3:-}"
+  local tmp_stderr tmp_stdout exit_code signal_num pid pgid
+  local started_at ended_at duration_ms cancellation_owner reason step
+
+  tmp_stderr="$(mktemp -t wavemill-planner-stderr.XXXXXX)" || {
+    queue_health_record_failure "diagnostics_setup_failed" "diagnostics_setup_failed" \
+      "unknown" "unknown" "unknown" 1 "" "unknown" "" "stderr setup failed" "" 2>/dev/null || true
+    return 1
+  }
+
+  tmp_stdout="$(mktemp -t wavemill-planner-stdout.XXXXXX)" || {
+    rm -f "$tmp_stderr"
+    queue_health_record_failure "diagnostics_setup_failed" "diagnostics_setup_failed" \
+      "unknown" "unknown" "unknown" 1 "" "unknown" "" "stdout setup failed" "" 2>/dev/null || true
+    return 1
+  }
+
+  started_at="$(date +%s%3N 2>/dev/null || date +%s000)"
+
+  # Launch planner in a dedicated process group (or best-effort).
+  # Try setsid first; fall back to backgrounding if unavailable.
+  local cmd_array
+  if command -v setsid &>/dev/null; then
+    # Use setsid to create new session; child processes inherit PGID
+    eval "$planner_cmd" > "$tmp_stdout" 2> "$tmp_stderr" &
+    pid=$!
+    pgid=$(ps -o pgid= -p $pid 2>/dev/null | tr -d ' ' || echo "$pid")
+  else
+    # macOS fallback: background and use PID as PGID (less reliable)
+    eval "$planner_cmd" > "$tmp_stdout" 2> "$tmp_stderr" &
+    pid=$!
+    pgid=$pid
+  fi
+
+  # Set up watchdog to kill planner on timeout.
+  local watchdog_pipe watchdog_pid
+  watchdog_pipe=$(mktemp -t wavemill-watchdog-XXXXXX) || {
+    kill $pid 2>/dev/null || true
+    rm -f "$tmp_stderr" "$tmp_stdout"
+    queue_health_record_failure "diagnostics_setup_failed" "diagnostics_setup_failed" \
+      "$pid" "$pgid" "$timeout_secs" 1 "" "unknown" "" "watchdog setup failed" "" 2>/dev/null || true
+    return 1
+  }
+
+  # Watchdog subshell: wait for timeout, then kill
+  (
+    sleep "$timeout_secs"
+    # Mark that watchdog fired before killing
+    printf '1\n' > "$watchdog_pipe" 2>/dev/null || true
+    # Kill process group if available
+    kill -TERM -- "-$pgid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+    sleep 1
+    kill -KILL -- "-$pgid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
+  ) &
+  watchdog_pid=$!
+
+  # Wait for planner process
+  wait $pid 2>/dev/null
+  exit_code=$?
+
+  # Clean up watchdog
+  kill $watchdog_pid 2>/dev/null || true
+
+  ended_at="$(date +%s%3N 2>/dev/null || date +%s000)"
+  duration_ms=$(( (ended_at - started_at) + 1 ))  # Ensure at least 1ms
+
+  # Check if watchdog fired
+  cancellation_owner="unknown"
+  if [[ -s "$watchdog_pipe" ]]; then
+    cancellation_owner="queue_plan_timeout"
+  fi
+
+  # Classify failure
+  reason=""
+  if [[ "$cancellation_owner" == "queue_plan_timeout" ]]; then
+    reason="timeout"
+  elif [[ "$exit_code" == "143" || "$exit_code" == "137" ]]; then
+    reason="external_cancellation"
+  elif [[ "$exit_code" == "0" ]]; then
+    reason=""  # Success, will be handled below
+  else
+    # Try to infer from stderr
+    local stderr_text="$(cat "$tmp_stderr" 2>/dev/null | head -c 512 || echo '')"
+    if [[ "$stderr_text" == *"cycle"* || "$stderr_text" == *"Cycle"* ]]; then
+      reason="malformed_graph"
+      step="validation_failed"
+    else
+      reason="planner_error"
+      step="plan_queue_failed"
+    fi
+  fi
+
+  # Handle success
+  if [[ "$exit_code" == "0" && -z "$reason" ]]; then
+    local stdout_text
+    stdout_text="$(cat "$tmp_stdout" 2>/dev/null || echo '')"
+
+    # Validate output
+    if [[ -z "${stdout_text//[[:space:]]/}" ]] || ! jq -e 'has("availableNow")' >/dev/null 2>&1 <<<"$stdout_text"; then
+      queue_health_record_failure "malformed_graph" "validation_failed" \
+        "$pid" "$pgid" "$timeout_secs" 0 "" "unknown" \
+        "" "invalid queue plan JSON" "$input_snapshot" 2>/dev/null || true
+      rm -f "$tmp_stderr" "$tmp_stdout" "$watchdog_pipe"
+      return 1
+    fi
+
+    queue_health_record_success "$pid" "$pgid" "$duration_ms" "$planner_cmd" 2>/dev/null || true
+    cat "$tmp_stdout"
+    rm -f "$tmp_stderr" "$tmp_stdout" "$watchdog_pipe"
+    return 0
+  fi
+
+  # Handle failure: record diagnostics
+  local stderr_excerpt stdout_excerpt
+  stderr_excerpt="$(cat "$tmp_stderr" 2>/dev/null | tr '\n' ' ' | head -c 512 || echo '(no stderr)')"
+  stdout_excerpt="$(cat "$tmp_stdout" 2>/dev/null | tr '\n' ' ' | head -c 512 || echo '(no stdout)')"
+
+  [[ -z "$step" ]] && step="plan_queue_failed"
+  queue_health_record_failure "$reason" "$step" \
+    "$pid" "$pgid" "$timeout_secs" "$exit_code" "" "$cancellation_owner" \
+    "$stdout_excerpt" "$stderr_excerpt" "$input_snapshot" 2>/dev/null || true
+
+  rm -f "$tmp_stderr" "$tmp_stdout" "$watchdog_pipe"
+  return 1
+}
+
 fetch_queue_plan() {
   local now plan_input queue_plan
   now=$(date +%s)
@@ -9449,10 +9589,14 @@ get_queue_failure_reason() {
 
 build_queue_plan_once() {
   local backlog_json="$1"
-  local plan_input queue_plan tmp_stderr stderr_text cache_key
+  local plan_input queue_plan tmp_stderr stderr_text cache_key timeout_secs input_snapshot
 
+  # Massage backlog into plan input format
   tmp_stderr="$(mktemp -t wavemill-fqp-stderr.XXXXXX)" || {
     record_fetch_queue_plan_failure "diagnostics_setup_failed" "mktemp failed"
+    queue_health_init 2>/dev/null || true
+    queue_health_record_failure "diagnostics_setup_failed" "diagnostics_setup_failed" \
+      "unknown" "unknown" "unknown" 1 "" "unknown" "" "mktemp failed" "" 2>/dev/null || true
     return 1
   }
 
@@ -9484,45 +9628,51 @@ build_queue_plan_once() {
     stderr_text="$(cat "$tmp_stderr" 2>/dev/null || true)"
     rm -f "$tmp_stderr"
     record_fetch_queue_plan_failure "jq_massage_failed" "$stderr_text"
+    queue_health_init 2>/dev/null || true
+    queue_health_record_failure "invalid_input" "jq_massage_failed" \
+      "unknown" "unknown" "unknown" 1 "" "unknown" "" "$stderr_text" "" 2>/dev/null || true
     return 1
   }
 
-  : > "$tmp_stderr"
+  # Build input snapshot for diagnostics
+  local task_count explicit_dep_count
+  task_count=$(printf '%s' "$plan_input" | jq 'length // 0' 2>/dev/null || echo '0')
+  explicit_dep_count=$(printf '%s' "$plan_input" | jq 'map(.blocks | length) | add // 0' 2>/dev/null || echo '0')
+  cache_key="${PROJECT_NAME:-default}"
+  input_snapshot=$(jq -n \
+    --argjson taskCount "$task_count" \
+    --argjson explicitDependencyCount "$explicit_dep_count" \
+    --arg cacheKey "$cache_key" \
+    '{"taskCount": $taskCount, "explicitDependencyCount": $explicitDependencyCount, "cacheKey": $cacheKey}' 2>/dev/null)
+
+  # Determine timeout and build planner command
   if [[ -n "${PROJECT_NAME:-}" ]]; then
-    cache_key="$PROJECT_NAME"
-    queue_plan=$(printf '%s\n' "$plan_input" | _with_timeout 60 npx tsx "$TOOLS_DIR/plan-queue.ts" --stdin --json --cache-key "$cache_key" --refresh-missing-cache 2>"$tmp_stderr") || {
-      local exit_code=$?
-      stderr_text="$(cat "$tmp_stderr" 2>/dev/null || true)"
-      rm -f "$tmp_stderr"
-      record_fetch_queue_plan_failure "plan_queue_failed" "$stderr_text" "$exit_code"
-      return 1
-    }
+    timeout_secs=60
+    planner_cmd="npx tsx \"$TOOLS_DIR/plan-queue.ts\" --stdin --json --cache-key \"$cache_key\" --refresh-missing-cache"
   else
-    queue_plan=$(printf '%s\n' "$plan_input" | _with_timeout 15 npx tsx "$TOOLS_DIR/plan-queue.ts" --stdin --json 2>"$tmp_stderr") || {
-      local exit_code=$?
-      stderr_text="$(cat "$tmp_stderr" 2>/dev/null || true)"
-      rm -f "$tmp_stderr"
-      record_fetch_queue_plan_failure "plan_queue_failed" "$stderr_text" "$exit_code"
-      return 1
-    }
+    timeout_secs=15
+    planner_cmd="npx tsx \"$TOOLS_DIR/plan-queue.ts\" --stdin --json"
   fi
 
-  if [[ -z "${queue_plan//[[:space:]]/}" ]]; then
-    rm -f "$tmp_stderr"
-    record_fetch_queue_plan_failure "empty_queue" "" 0
-    return 1
-  fi
+  # Initialize queue-health file before attempting planner
+  queue_health_init 2>/dev/null || true
 
-  : > "$tmp_stderr"
-  jq -e 'has("availableNow")' >/dev/null 2>"$tmp_stderr" <<<"$queue_plan" || {
-    local exit_code=$?
-    stderr_text="$(cat "$tmp_stderr" 2>/dev/null || true)"
-    rm -f "$tmp_stderr"
-    record_fetch_queue_plan_failure "validation_failed" "$stderr_text" "$exit_code"
+  # Run planner with policy wrapper (handles timeout, process group, diagnostics)
+  rm -f "$tmp_stderr"
+  queue_plan=$(printf '%s' "$plan_input" | run_queue_planner_with_policy "$planner_cmd" "$timeout_secs" "$input_snapshot") || {
+    # Planner already recorded failure to queue-health; just propagate old diagnostics
+    record_fetch_queue_plan_failure "plan_queue_failed" "" 1
     return 1
   }
 
-  rm -f "$tmp_stderr"
+  # Validate output shape
+  if [[ -z "${queue_plan//[[:space:]]/}" ]] || ! jq -e 'has("availableNow")' >/dev/null 2>&1 <<<"$queue_plan"; then
+    record_fetch_queue_plan_failure "validation_failed" "" 1
+    queue_health_record_failure "malformed_graph" "validation_failed" \
+      "unknown" "unknown" "unknown" 1 "" "unknown" "" "invalid output shape" "$input_snapshot" 2>/dev/null || true
+    return 1
+  fi
+
   echo "$queue_plan"
 }
 
@@ -13544,7 +13694,13 @@ while :; do
             [[ -n "${CLEANED[$_ai]:-}" ]] && continue
             _active_issue_ids+="${_ai}"$'\n'
           done
-          if queue_plan_json=$(fetch_queue_plan 2>/dev/null); then
+
+          # Check queue-health backoff before attempting planner
+          queue_health_init 2>/dev/null || true
+          if queue_health_should_skip_attempt 2>/dev/null; then
+            # In backoff; skip planner attempt
+            record_fetch_queue_plan_failure "backoff_active" ""
+          elif queue_plan_json=$(fetch_queue_plan 2>/dev/null); then
             if [[ -n "$queue_plan_json" ]]; then
               QUEUE_PLAN_CACHE="$queue_plan_json"
               LAST_QUEUE_PLAN_FETCH=$(date +%s)
@@ -13559,7 +13715,15 @@ while :; do
             USING_GROUPED_VIEW=false
             if [[ -z "$queue_plan_json" ]]; then
               _queue_reason="$(get_queue_failure_reason "${queue_plan_diag_file:-}")"
-              log_warn "queue analysis unavailable (reason: ${_queue_reason:-unknown}), falling back to flat list"
+              # Deduplicate warning: only emit if episode is new
+              _health_status="$(queue_health_read 2>/dev/null || echo '{}')"
+              _episode_started="$(printf '%s' "$_health_status" | jq -r '.episodeStartedAt // ""' 2>/dev/null || echo '')"
+              _warn_cache_file="${STATE_DIR}/.queue-warn-episode"
+              _prev_episode="$(cat "$_warn_cache_file" 2>/dev/null || echo '')"
+              if [[ -z "$_prev_episode" || "$_prev_episode" != "$_episode_started" ]]; then
+                log_warn "queue analysis unavailable (reason: ${_queue_reason:-unknown}), falling back to flat list"
+                [[ -n "$_episode_started" ]] && printf '%s' "$_episode_started" > "$_warn_cache_file" 2>/dev/null || true
+              fi
               [[ -n "$queue_plan_diag_file" ]] && log_fetch_queue_plan_failure "$queue_plan_diag_file"
             fi
           fi

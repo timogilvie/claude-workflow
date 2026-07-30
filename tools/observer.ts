@@ -83,6 +83,8 @@ interface RepoSnapshot {
   repoDir: string;
   workflowStatePath?: string;
   millLogPath?: string;
+  queueHealthPath?: string;
+  queueHealth?: any;
   tasks: TaskState[];
   stateMtime?: string;
   logMtime?: string;
@@ -400,13 +402,24 @@ function snapshotRepos(sessions: string[]): RepoSnapshot[] {
     seen.add(`${session}:${repoDir}`);
     const stateDir = join(repoDir, '.wavemill');
     const workflowStatePath = join(stateDir, 'workflow-state.json');
+    const queueHealthPath = join(stateDir, 'queue-health.json');
     const logDir = join(stateDir, 'logs');
     const millLogPath = findNewestMillLog(logDir, session);
+    let queueHealth: any;
+    if (existsSync(queueHealthPath)) {
+      try {
+        queueHealth = JSON.parse(readFileSync(queueHealthPath, 'utf-8'));
+      } catch {
+        queueHealth = undefined;
+      }
+    }
     repos.push({
       session,
       repoDir,
       workflowStatePath: existsSync(workflowStatePath) ? workflowStatePath : undefined,
       millLogPath,
+      queueHealthPath: existsSync(queueHealthPath) ? queueHealthPath : undefined,
+      queueHealth,
       tasks: existsSync(workflowStatePath) ? readWorkflowTasks(workflowStatePath) : [],
       stateMtime: existsSync(workflowStatePath) ? statSync(workflowStatePath).mtime.toISOString() : undefined,
       logMtime: millLogPath && existsSync(millLogPath) ? statSync(millLogPath).mtime.toISOString() : undefined,
@@ -593,6 +606,43 @@ export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, opti
           recommendation: 'Watch for repeated occurrences. File an issue if the warning repeats or blocks progression.',
         });
       }
+    }
+
+    // Analyze queue-health degradation
+    if (repo.queueHealth && repo.queueHealth.status === 'degraded') {
+      const reason = repo.queueHealth.degradationReason || 'unknown';
+      const episodeStartedAt = repo.queueHealth.episodeStartedAt || 'unknown';
+      const failureCount = repo.queueHealth.failureCount || 1;
+      const severity = failureCount >= 5 ? 'high' : failureCount >= 3 ? 'medium' : 'low';
+
+      // Suppress generic "queue analysis unavailable" log-warning findings for this episode
+      const logWarningId = `log-warning-${repo.session}-${hashText('queue analysis unavailable')}`;
+      findings = findings.filter((f) => f.id !== logWarningId);
+
+      findings.push({
+        id: `queue-health-degraded-${repo.session}-${hashText(episodeStartedAt)}`,
+        severity,
+        category: 'warning',
+        confidence: 'high',
+        session: repo.session,
+        repoDir: repo.repoDir,
+        title: `Queue planning degraded: ${reason}`,
+        evidence: [
+          `episodeStartedAt=${episodeStartedAt}`,
+          `reason=${reason}`,
+          `failureCount=${failureCount}`,
+          `backoffSeconds=${repo.queueHealth.retryBackoffSeconds || 0}`,
+          `lastAttemptAt=${repo.queueHealth.lastAttemptAt || 'unknown'}`,
+          ...(repo.queueHealth.planner ? [
+            `plannerPid=${repo.queueHealth.planner.pid || 'unknown'}`,
+            `plannerOwner=${repo.queueHealth.planner.cancellationOwner || 'unknown'}`,
+          ] : []),
+          ...(repo.queueHealth.diagnostics?.stderrExcerpt ? [
+            `stderr=${repo.queueHealth.diagnostics.stderrExcerpt}`,
+          ] : []),
+        ],
+        recommendation: `Dependency-aware queue planning is unavailable. Flat fallback is active. Inspect the queue planner lifecycle and dependency graph. If this persists, file a diagnostic ticket with the queue-health snapshot.`,
+      });
     }
 
     for (const monitor of monitorProcesses) {
