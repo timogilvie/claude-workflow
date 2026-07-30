@@ -144,7 +144,7 @@ describe('hok2425 native workflow verification helpers', () => {
         }],
       },
       unregisteredOpenRouter: {
-        modelId: 'mistral-large-2',
+        modelId: 'legacy-mistral-openrouter',
         planner: '',
         reason: 'no-native-capability',
       },
@@ -155,7 +155,7 @@ describe('hok2425 native workflow verification helpers', () => {
 
     assert.match(markdown, /Deferred: OPENROUTER_API_KEY is not set/);
     assert.match(markdown, /\| missing \| `` \| `missing` \|/);
-    assert.match(markdown, /mistral-large-2/);
+    assert.match(markdown, /legacy-mistral-openrouter/);
     assert.match(markdown, /Existing checked-in workflow artifacts do not cover the full current workflow scenario set/);
   });
 });
