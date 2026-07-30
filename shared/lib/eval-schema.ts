@@ -119,6 +119,9 @@
  * - **1.34.0**: Added optional native workflow-cost attribution coverage
  *   metadata (HOK-2597) to distinguish known zero cost from unavailable usage
  *   or pricing without changing legacy numeric workflowCost semantics.
+ *   Synchronized challenge execution fields into the
+ *   authoritative JSON Schema and canonicalized challenge provenance loading
+ *   (HOK-2598).
  *
  * @module eval-schema
  */

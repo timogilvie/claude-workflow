@@ -196,6 +196,30 @@
       "type": "string",
       "description": "Shared identifier linking both sides of a challenge-mode pair."
     },
+    "challengeSide": {
+      "type": "string",
+      "enum": [
+        "primary",
+        "challenger"
+      ],
+      "description": "Side within a challenge pair, used to bind intent to evidence."
+    },
+    "challengeIntent": {
+      "$ref": "#/$defs/ChallengeExecutionIntent"
+    },
+    "challengeExecutionRoute": {
+      "$ref": "#/$defs/ChallengeRoutingMeta"
+    },
+    "challengeExecutionEvidence": {
+      "$ref": "#/$defs/ChallengeExecutionAttestation"
+    },
+    "challengeDivergenceReason": {
+      "$ref": "#/$defs/InvalidChallengeReason"
+    },
+    "invalidChallenge": {
+      "type": "boolean",
+      "description": "True when this eval record must not count as challenge/training evidence."
+    },
     "prUrl": {
       "type": "string",
       "format": "uri",
@@ -2143,6 +2167,212 @@
     }
   },
   "$defs": {
+    "ChallengeStage": {
+      "type": "string",
+      "enum": [
+        "plan",
+        "implementation",
+        "review"
+      ]
+    },
+    "ChallengeValidity": {
+      "type": "string",
+      "enum": [
+        "valid",
+        "invalid_challenge",
+        "identical_control"
+      ]
+    },
+    "InvalidChallengeReason": {
+      "type": "string",
+      "enum": [
+        "stage_override_lost",
+        "native_launch_fallback",
+        "identical_effective_route",
+        "state_vs_derived_side_mismatch"
+      ]
+    },
+    "ChallengeRoutingMeta": {
+      "type": "object",
+      "properties": {
+        "planner": {
+          "type": "string"
+        },
+        "coder": {
+          "type": "string"
+        },
+        "reviewer": {
+          "type": "string"
+        },
+        "planDepth": {
+          "type": "string"
+        },
+        "codeDepth": {
+          "type": "string"
+        },
+        "reviewMode": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "planner",
+        "coder",
+        "reviewer",
+        "planDepth",
+        "codeDepth",
+        "reviewMode"
+      ],
+      "additionalProperties": false
+    },
+    "ChallengeSideIntent": {
+      "type": "object",
+      "properties": {
+        "pairId": {
+          "type": "string"
+        },
+        "side": {
+          "type": "string",
+          "enum": [
+            "primary",
+            "challenger"
+          ]
+        },
+        "challengeStage": {
+          "$ref": "#/$defs/ChallengeStage"
+        },
+        "expectedStageModel": {
+          "type": "string"
+        },
+        "expectedStageAgent": {
+          "type": "string"
+        },
+        "expectedRoute": {
+          "$ref": "#/$defs/ChallengeRoutingMeta"
+        }
+      },
+      "required": [
+        "pairId",
+        "side",
+        "challengeStage",
+        "expectedStageModel",
+        "expectedRoute"
+      ],
+      "additionalProperties": false
+    },
+    "ChallengeExecutionIntent": {
+      "type": "object",
+      "properties": {
+        "pairId": {
+          "type": "string"
+        },
+        "challengeStage": {
+          "$ref": "#/$defs/ChallengeStage"
+        },
+        "intentionallyIdentical": {
+          "type": "boolean"
+        },
+        "routeContext": {
+          "description": "Free-form challenge route selection context."
+        },
+        "selectionReason": {
+          "type": "string"
+        },
+        "primary": {
+          "$ref": "#/$defs/ChallengeSideIntent"
+        },
+        "challenger": {
+          "$ref": "#/$defs/ChallengeSideIntent"
+        }
+      },
+      "required": [
+        "pairId",
+        "challengeStage",
+        "primary",
+        "challenger"
+      ],
+      "additionalProperties": false
+    },
+    "ChallengeStageEvidence": {
+      "type": "object",
+      "properties": {
+        "stage": {
+          "$ref": "#/$defs/ChallengeStage"
+        },
+        "agent": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "requestedModel": {
+          "type": "string"
+        },
+        "resolvedModel": {
+          "type": "string"
+        },
+        "fallbackReason": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "stage"
+      ],
+      "additionalProperties": false
+    },
+    "ChallengeExecutionAttestation": {
+      "type": "object",
+      "properties": {
+        "pairId": {
+          "type": "string"
+        },
+        "side": {
+          "type": "string",
+          "enum": [
+            "primary",
+            "challenger"
+          ]
+        },
+        "validity": {
+          "$ref": "#/$defs/ChallengeValidity"
+        },
+        "challengeStage": {
+          "$ref": "#/$defs/ChallengeStage"
+        },
+        "expectedStageModel": {
+          "type": "string"
+        },
+        "expectedStageAgent": {
+          "type": "string"
+        },
+        "effectiveRoute": {
+          "$ref": "#/$defs/ChallengeRoutingMeta"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ChallengeStageEvidence"
+          }
+        },
+        "invalidReason": {
+          "$ref": "#/$defs/InvalidChallengeReason"
+        },
+        "invalidDetails": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "pairId",
+        "side",
+        "validity",
+        "challengeStage",
+        "expectedStageModel",
+        "evidence"
+      ],
+      "additionalProperties": false
+    },
     "ChallengeRouteArtifact": {
       "type": "object",
       "properties": {
