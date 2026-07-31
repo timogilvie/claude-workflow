@@ -14,6 +14,27 @@ export type UnresolvableReason =
   | 'orphan-sibling'
   | 'sibling-eval-hard-failed'
   | 'both-eval-hard-failed';
+export type AutoCloseRefusalReason =
+  | 'missing_evidence_id'
+  | 'missing_or_invalid_comparison'
+  | 'missing_winner_pr'
+  | 'missing_loser_pr'
+  | 'winner_equals_loser'
+  | 'non_decisive_comparison'
+  | 'pr_identity_mismatch';
+
+export interface AutoCloseEligibilityResult {
+  eligible: boolean;
+  refusal?: AutoCloseRefusalReason;
+}
+
+export interface ChallengeLoserCleanupCandidate {
+  loserPr: number;
+  winnerPr: number;
+  evidenceId: string;
+  pairId: string;
+}
+
 const BRANCH_NAME_PATTERN = /^[a-zA-Z0-9._/-]+$/;
 const TASK_IDENTIFIER_PATTERN = /^[A-Z]+-\d+(?:_c)?$/;
 const ORPHAN_PAIR_GRACE_MS = 60_000;
@@ -137,7 +158,46 @@ export type ChallengeGate =
   | { kind: 'pair-unresolvable'; pairId: string; otherPr: number | null; reason: UnresolvableReason }
   | { kind: 'cool-off'; reason: string }
   | { kind: 'winner'; pairId: string; loserPr: number | null; autoMerge: boolean }
-  | { kind: 'loser'; pairId: string; winnerPr: number | null };
+  | {
+      kind: 'loser';
+      pairId: string;
+      winnerPr: number;
+      loserPr: number;
+      evidenceId: string;
+    };
+
+export function evaluateAutoCloseEligibility(input: {
+  loserPr: number | null;
+  winnerPr: number | null;
+  comparisonOutcome?: string;
+  evidenceId?: string;
+}): AutoCloseEligibilityResult {
+  if (!input.evidenceId) {
+    return { eligible: false, refusal: 'missing_evidence_id' };
+  }
+
+  if (typeof input.winnerPr !== 'number' || !Number.isInteger(input.winnerPr) || input.winnerPr <= 0) {
+    return { eligible: false, refusal: 'missing_winner_pr' };
+  }
+
+  if (typeof input.loserPr !== 'number' || !Number.isInteger(input.loserPr) || input.loserPr <= 0) {
+    return { eligible: false, refusal: 'missing_loser_pr' };
+  }
+
+  if (input.winnerPr === input.loserPr) {
+    return { eligible: false, refusal: 'winner_equals_loser' };
+  }
+
+  // If no comparisonOutcome is specified, assume it's a decisive comparison (legacy behavior)
+  // Only reject if it's explicitly marked as non-decisive
+  const outcome = input.comparisonOutcome ?? 'compared';
+  const nonDecisiveOutcomes = new Set(['invalid', 'inconclusive', 'invalid_challenge', 'double-forfeit', 'skipped']);
+  if (nonDecisiveOutcomes.has(outcome)) {
+    return { eligible: false, refusal: 'non_decisive_comparison' };
+  }
+
+  return { eligible: true };
+}
 
 export function loadWorkflowStateChallengePairs(repoDir: string): Map<number, ChallengePairInfo> {
   return loadWorkflowStateChallengeData(repoDir).challengePairMap;
@@ -385,10 +445,49 @@ export function classifyChallengeState(
     };
   }
 
+  // Check if we have concrete, distinct winner and loser PRs
+  // Missing PR identities must remain operator-actionable and never trigger auto-close
+  if (!winnerPr) {
+    return {
+      kind: 'pair-unresolved',
+      pairId,
+      otherPr: findOtherOpenPr(pairId, prNumber, challengePairMap, allPrNumbers),
+      reason: `pair-unresolved:missing-winner:${pairId}`,
+    };
+  }
+
+  if (!loserPr || winnerPr === loserPr) {
+    return {
+      kind: 'pair-unresolved',
+      pairId,
+      otherPr: findOtherOpenPr(pairId, prNumber, challengePairMap, allPrNumbers),
+      reason: `pair-unresolved:missing-loser:${pairId}`,
+    };
+  }
+
+  // Validate that we have the eligibility to automatically close based on comparison
+  const eligibilityCheck = evaluateAutoCloseEligibility({
+    loserPr,
+    winnerPr,
+    comparisonOutcome: latestComparison.comparisonOutcome,
+    evidenceId: latestComparison.timestamp,
+  });
+
+  if (!eligibilityCheck.eligible) {
+    return {
+      kind: 'pair-unresolved',
+      pairId,
+      otherPr: findOtherOpenPr(pairId, prNumber, challengePairMap, allPrNumbers),
+      reason: `pair-unresolved:ineligible-close:${eligibilityCheck.refusal ?? 'unknown'}`,
+    };
+  }
+
   return {
     kind: 'loser',
     pairId,
-    winnerPr: winnerPr ?? findOtherOpenPr(pairId, prNumber, challengePairMap, allPrNumbers),
+    winnerPr,
+    loserPr,
+    evidenceId: latestComparison.timestamp,
   };
 }
 
@@ -397,7 +496,7 @@ export async function applyChallengePairGates<T extends ChallengeEligibleWorkIte
   blocked: ChallengeBlockedCandidate[],
   repoDir: string,
   options: ChallengeGateOptions = {},
-): Promise<{ eligible: T[]; blocked: ChallengeBlockedCandidate[]; losers: number[] }> {
+): Promise<{ eligible: T[]; blocked: ChallengeBlockedCandidate[]; losers: number[]; loserCleanupCandidates: ChallengeLoserCleanupCandidate[] }> {
   const allPrNumbers = new Set([
     ...eligibleItems.map((item) => item.pr.number),
     ...blocked.map((item) => item.number),
@@ -428,6 +527,7 @@ export async function applyChallengePairGates<T extends ChallengeEligibleWorkIte
   const nextEligible: T[] = [];
   const nextBlocked = [...blocked];
   const losers = new Set<number>();
+  const loserCleanupCandidates: ChallengeLoserCleanupCandidate[] = [];
 
   for (const item of eligibleItems) {
     const siblingBranch = getSiblingBranch(item.pr.headRefName);
@@ -499,21 +599,20 @@ export async function applyChallengePairGates<T extends ChallengeEligibleWorkIte
       continue;
     }
 
-    // A cleanup target is safe only when the comparison identifies a distinct,
-    // concrete winner. Missing PR identity must remain operator-actionable;
-    // it must never turn the current PR into an implicit loser.
-    if (state.winnerPr === null || state.winnerPr === item.pr.number) {
-      nextBlocked.push(toBlockedCandidate(item, `challenge:pair-unresolved:missing-winner:${state.pairId}`));
-      continue;
-    }
-
+    // At this point, state.kind === 'loser' and has passed eligibility checks
     nextBlocked.push(toBlockedCandidate(item, `challenge:loser:${state.pairId}`));
     if (!labelSet(item.pr).has(WM_LABELS.superseded)) {
       losers.add(item.pr.number);
+      loserCleanupCandidates.push({
+        loserPr: state.loserPr,
+        winnerPr: state.winnerPr,
+        evidenceId: state.evidenceId,
+        pairId: state.pairId,
+      });
     }
   }
 
-  return { eligible: nextEligible, blocked: nextBlocked, losers: [...losers] };
+  return { eligible: nextEligible, blocked: nextBlocked, losers: [...losers], loserCleanupCandidates };
 }
 
 function createRuntimeDeps(
