@@ -2796,6 +2796,11 @@ source "$LIB_DIR/wavemill-common.sh"
 if [[ -f "$LIB_DIR/terminal-reconciler.sh" ]]; then
 source "$LIB_DIR/terminal-reconciler.sh"
 fi
+# Queue-health helpers used by the dependency queue planner path.
+# Sourced after wavemill-common.sh so state_mutate is available.
+if [[ -f "$LIB_DIR/queue-health.sh" ]]; then
+source "$LIB_DIR/queue-health.sh"
+fi
 _update_effective_max_parallel
 
 # Ensure gh commands target the correct GitHub repo (not inherited CWD)
