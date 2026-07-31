@@ -9394,7 +9394,9 @@ fetch_candidates() {
 run_queue_planner_with_policy() {
   local planner_cmd="$1" timeout_secs="$2" input_snapshot="${3:-}"
   local tmp_stderr tmp_stdout exit_code signal_num pid pgid
-  local started_at ended_at duration_ms cancellation_owner reason step
+  # step stays set: the timeout path never assigns it, and the monitor runs
+  # under `set -u`, where reading it unset would abort the diagnostics write.
+  local started_at ended_at duration_ms cancellation_owner reason step=""
 
   tmp_stderr="$(mktemp -t wavemill-planner-stderr.XXXXXX)" || {
     queue_health_record_failure "diagnostics_setup_failed" "diagnostics_setup_failed" \
@@ -9409,7 +9411,10 @@ run_queue_planner_with_policy() {
     return 1
   }
 
-  started_at="$(date +%s%3N 2>/dev/null || date +%s000)"
+  # BSD date has no %3N and emits a literal "N" with exit 0, so validate the
+  # result is numeric instead of relying on a command-failure fallback.
+  started_at="$(date +%s%3N 2>/dev/null || true)"
+  [[ "$started_at" =~ ^[0-9]+$ ]] || started_at="$(date +%s)000"
 
   # Launch planner in a dedicated process group (or best-effort).
   # Try setsid first; fall back to backgrounding if unavailable.
@@ -9436,16 +9441,30 @@ run_queue_planner_with_policy() {
     return 1
   }
 
-  # Watchdog subshell: wait for timeout, then kill
+  # Only group-kill when the planner really landed in its own process group.
+  # Without job control the child shares our group, and "kill -- -$pgid" would
+  # take down the monitor itself.
+  local self_pgid
+  self_pgid="$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ' || true)"
+
+  # Watchdog subshell: wait for timeout, then kill.
+  # stdout/stderr are detached because this function runs inside a command
+  # substitution: a watchdog holding that pipe open would stall the caller for
+  # the full timeout on every call, including successful ones.
   (
     sleep "$timeout_secs"
     # Mark that watchdog fired before killing
     printf '1\n' > "$watchdog_pipe" 2>/dev/null || true
-    # Kill process group if available
-    kill -TERM -- "-$pgid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
-    sleep 1
-    kill -KILL -- "-$pgid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
-  ) &
+    if [[ -n "$pgid" && "$pgid" != "$self_pgid" ]]; then
+      kill -TERM -- "-$pgid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+      sleep 1
+      kill -KILL -- "-$pgid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
+    else
+      kill -TERM "$pid" 2>/dev/null || true
+      sleep 1
+      kill -KILL "$pid" 2>/dev/null || true
+    fi
+  ) >/dev/null 2>&1 &
   watchdog_pid=$!
 
   # Wait for planner process
@@ -9455,7 +9474,8 @@ run_queue_planner_with_policy() {
   # Clean up watchdog
   kill $watchdog_pid 2>/dev/null || true
 
-  ended_at="$(date +%s%3N 2>/dev/null || date +%s000)"
+  ended_at="$(date +%s%3N 2>/dev/null || true)"
+  [[ "$ended_at" =~ ^[0-9]+$ ]] || ended_at="$(date +%s)000"
   duration_ms=$(( (ended_at - started_at) + 1 ))  # Ensure at least 1ms
 
   # Check if watchdog fired
@@ -9489,8 +9509,22 @@ run_queue_planner_with_policy() {
     local stdout_text
     stdout_text="$(cat "$tmp_stdout" 2>/dev/null || echo '')"
 
-    # Validate output
-    if [[ -z "${stdout_text//[[:space:]]/}" ]] || ! jq -e 'has("availableNow")' >/dev/null 2>&1 <<<"$stdout_text"; then
+    # Validate output. An empty plan and a malformed plan are distinct
+    # failures: the fallback diagnostics classify them as empty_queue vs
+    # invalid_input, so keep the two steps apart rather than collapsing both
+    # into validation_failed.
+    if [[ -z "${stdout_text//[[:space:]]/}" ]]; then
+      record_fetch_queue_plan_failure "empty_queue" "" 0
+      queue_health_record_failure "malformed_graph" "empty_queue" \
+        "$pid" "$pgid" "$timeout_secs" 0 "" "unknown" \
+        "" "empty queue plan" "$input_snapshot" 2>/dev/null || true
+      rm -f "$tmp_stderr" "$tmp_stdout" "$watchdog_pipe"
+      return 1
+    fi
+
+    if ! jq -e 'has("availableNow")' >/dev/null 2>&1 <<<"$stdout_text"; then
+      record_fetch_queue_plan_failure "validation_failed" \
+        "$(cat "$tmp_stderr" 2>/dev/null | tr '\n' ' ' | head -c 512 || true)" 1
       queue_health_record_failure "malformed_graph" "validation_failed" \
         "$pid" "$pgid" "$timeout_secs" 0 "" "unknown" \
         "" "invalid queue plan JSON" "$input_snapshot" 2>/dev/null || true
@@ -9510,6 +9544,14 @@ run_queue_planner_with_policy() {
   stdout_excerpt="$(cat "$tmp_stdout" 2>/dev/null | tr '\n' ' ' | head -c 512 || echo '(no stdout)')"
 
   [[ -z "$step" ]] && step="plan_queue_failed"
+
+  # Feed the fallback diagnostics too. This runs inside a command
+  # substitution, so caller-visible state has to travel through the
+  # diagnostics file rather than shell variables; without the real stderr and
+  # exit code the reason classifier degrades every planner failure to a
+  # generic dependency_planning_failed.
+  record_fetch_queue_plan_failure "$step" "$stderr_excerpt" "$exit_code"
+
   queue_health_record_failure "$reason" "$step" \
     "$pid" "$pgid" "$timeout_secs" "$exit_code" "" "$cancellation_owner" \
     "$stdout_excerpt" "$stderr_excerpt" "$input_snapshot" 2>/dev/null || true
@@ -9665,8 +9707,13 @@ build_queue_plan_once() {
   # Run planner with policy wrapper (handles timeout, process group, diagnostics)
   rm -f "$tmp_stderr"
   queue_plan=$(printf '%s' "$plan_input" | run_queue_planner_with_policy "$planner_cmd" "$timeout_secs" "$input_snapshot") || {
-    # Planner already recorded failure to queue-health; just propagate old diagnostics
-    record_fetch_queue_plan_failure "plan_queue_failed" "" 1
+    # The planner records the specific step/stderr/exit itself. Only fill in a
+    # generic record when it left nothing behind, so we never overwrite the
+    # detailed diagnostics with a placeholder.
+    local _diag_file="${FETCH_QUEUE_PLAN_DIAGNOSTICS_FILE:-}"
+    if [[ -z "$_diag_file" || ! -s "$_diag_file" ]]; then
+      record_fetch_queue_plan_failure "plan_queue_failed" "" 1
+    fi
     return 1
   }
 
