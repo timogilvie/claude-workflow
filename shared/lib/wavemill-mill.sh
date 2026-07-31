@@ -3935,6 +3935,32 @@ EOF
   _write_stage_result_trace_event "$feature_dir" "$stage" "$status" "$agent" "$model" "$previous_status"
 }
 
+write_stage_result_with_history() {
+  local feature_dir="$1" stage="$2" status="$3"
+  local agent="${4:-}" model="${5:-}" notes="${6:-}" artifacts_json="${7:-}"
+  local result_file="$feature_dir/.${stage}-result.json" previous_status=""
+
+  if [[ -f "$result_file" ]]; then
+    previous_status="$(jq -r '.status // empty' "$result_file" 2>/dev/null || true)"
+  fi
+
+  if [[ -n "${TOOLS_DIR:-}" ]]; then
+    local cli_args=("$feature_dir" "$stage" "$status")
+    [[ -n "$agent" ]] && cli_args+=(--agent "$agent")
+    [[ -n "$model" ]] && cli_args+=(--model "$model")
+    [[ -n "$notes" ]] && cli_args+=(--notes "$notes")
+    [[ -n "$artifacts_json" ]] && cli_args+=(--artifacts "$artifacts_json")
+
+    if npx tsx "$TOOLS_DIR/stage-result-cli.ts" write-with-history "${cli_args[@]}" 2>/dev/null; then
+      _write_stage_result_trace_event "$feature_dir" "$stage" "$status" "$agent" "$model" "$previous_status"
+      return 0
+    fi
+    log_warn "write_stage_result_with_history: TypeScript CLI failed, falling back to write_stage_result"
+  fi
+
+  write_stage_result "$feature_dir" "$stage" "$status" "$agent" "$model" "$notes" "$artifacts_json"
+}
+
 # Emit trace events when a stage result is written (HOK-2259).
 # Best-effort — never fails. Reads trace context from the feature directory.
 _write_stage_result_trace_event() {
@@ -5946,28 +5972,54 @@ write_phase_config() {
     reviewer_agent="$(agent_resolve_from_model "$reviewer_model" "review" || true)"
   fi
 
-  cat > "$tmp" <<EOF
-{
-  "planning": {
-    "model": "$planner_model",
-    "agent": "$planner_agent",
-    "depth": "$plan_depth"
-  },
-  "coding": {
-    "model": "$coder_model",
-    "agent": "$coder_agent",
-    "depth": "$code_depth"
-  },
-  "review": {
-    "model": "$reviewer_model",
-    "agent": "$reviewer_agent",
-    "mode": "$review_mode"
-  },
-  "resolvedAt": "$now",
-  "forceModel": $force_model_json
-}
-EOF
+  local planner_provider coder_provider reviewer_provider
+  planner_provider="$(_provider_for_model "$planner_model")"
+  coder_provider="$(_provider_for_model "$coder_model")"
+  reviewer_provider="$(_provider_for_model "$reviewer_model")"
+
+  jq -n \
+    --arg plannerModel "$planner_model" \
+    --arg plannerAgent "$planner_agent" \
+    --arg plannerProvider "$planner_provider" \
+    --arg planDepth "$plan_depth" \
+    --arg coderModel "$coder_model" \
+    --arg coderAgent "$coder_agent" \
+    --arg coderProvider "$coder_provider" \
+    --arg codeDepth "$code_depth" \
+    --arg reviewerModel "$reviewer_model" \
+    --arg reviewerAgent "$reviewer_agent" \
+    --arg reviewerProvider "$reviewer_provider" \
+    --arg reviewMode "$review_mode" \
+    --arg selectedAt "$now" \
+    --argjson forceModel "$force_model_json" \
+    '{
+      planning: {model:$plannerModel, provider:$plannerProvider, agent:$plannerAgent, stageRole:"planning", challengeSide:null, selectedAt:$selectedAt, depth:$planDepth},
+      coding: {model:$coderModel, provider:$coderProvider, agent:$coderAgent, stageRole:"coding", challengeSide:null, selectedAt:$selectedAt, depth:$codeDepth},
+      review: {model:$reviewerModel, provider:$reviewerProvider, agent:$reviewerAgent, stageRole:"review", challengeSide:null, selectedAt:$selectedAt, mode:$reviewMode},
+      resolvedAt: $selectedAt,
+      forceModel: $forceModel
+    }' > "$tmp" 2>/dev/null || {
+      rm -f "$tmp"
+      log_warn "write_phase_config: jq failed"
+      return 0
+    }
   mv "$tmp" "$feature_dir/.phase-config.json"
+}
+
+_provider_for_model() {
+  local model="$1" provider_json provider
+  if [[ -n "${TOOLS_DIR:-}" && -n "$model" ]]; then
+    provider_json="$(npx tsx "$TOOLS_DIR/recovery-contract.ts" provider --model "$model" --json 2>/dev/null || true)"
+    provider="$(printf '%s' "$provider_json" | jq -r '.provider // empty' 2>/dev/null || true)"
+    [[ -n "$provider" ]] && printf '%s\n' "$provider" && return 0
+  fi
+  case "$(agent_resolve_from_model "$model" "coding" 2>/dev/null || true)" in
+    native-openrouter) printf '%s\n' 'native-openrouter' ;;
+    native-openai) printf '%s\n' 'native-openai' ;;
+    claude) printf '%s\n' 'anthropic' ;;
+    codex) printf '%s\n' 'openai' ;;
+    *) printf '%s\n' '' ;;
+  esac
 }
 
 # Read a field from .phase-config.json for a given stage.
@@ -6293,6 +6345,98 @@ persist_task_window_id() {
     --arg windowId "$window_id" >/dev/null 2>&1 || true
 }
 
+_challenge_side_for_issue() {
+  local issue="$1" role=""
+  role="$(get_task_meta "$issue" "challengeRole" 2>/dev/null || true)"
+  if [[ "$role" == "primary" || "$role" == "challenger" ]]; then
+    printf '%s\n' "$role"
+    return 0
+  fi
+  if [[ "$issue" == *_c ]]; then
+    printf '%s\n' "challenger"
+    return 0
+  fi
+  printf '%s\n' ""
+}
+
+_append_recovery_contract_trace() {
+  local feature_dir="$1" issue="$2" slug="$3" phase="$4" model="$5" agent="$6" contract_json="$7"
+  local trace_id ctx_file line now
+  trace_id="$(trace_read_id "$feature_dir" 2>/dev/null || true)"
+  [[ -n "$trace_id" ]] || return 0
+  ctx_file="$feature_dir/.trace-context.json"
+  [[ -f "$ctx_file" ]] || return 0
+  command -v jq >/dev/null 2>&1 || return 1
+  now=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "")
+  line="$(jq -cn \
+    --arg sv "1.0" \
+    --arg tid "$trace_id" \
+    --arg iid "$issue" \
+    --arg sl "$slug" \
+    --arg ts "$now" \
+    --arg ph "$phase" \
+    --arg mo "$model" \
+    --arg ag "$agent" \
+    --argjson contract "$contract_json" \
+    '{schemaVersion:$sv,traceId:$tid,issueId:$iid,slug:$sl,timestamp:$ts,phase:$ph,event:"recovery_contract_replay",status:"ok",model:$mo,agent:$ag,meta:{contract:$contract}}')" || return 1
+  printf '%s\n' "$line" >> "$feature_dir/trace.jsonl"
+}
+
+_stop_task_recovery_contract_unavailable() {
+  local issue="$1" phase="$2" feature_dir="$3" sub_reason="$4" detail="$5"
+  if [[ -f "${STATE_FILE:-}" ]] && jq -e --arg issue "$issue" '.tasks[$issue]? // empty' "$STATE_FILE" >/dev/null 2>&1; then
+    state_mutate "$STATE_FILE" \
+      '.tasks[$issue].status = "stopped"
+       | .tasks[$issue].stopReason = "recovery_contract_unavailable"
+       | .tasks[$issue].stopSubReason = $subReason
+       | .tasks[$issue].stopDetail = $detail
+       | .tasks[$issue].updated = (now | todate)' \
+      --arg issue "$issue" \
+      --arg subReason "$sub_reason" \
+      --arg detail "$detail" >/dev/null 2>&1 || true
+  fi
+  write_stage_result "$feature_dir" "$phase" "failed" "" "" "recovery_contract_unavailable: $sub_reason - $detail"
+  if declare -F wavemill_hook_write >/dev/null 2>&1; then
+    wavemill_hook_write "blocked" "recovery_contract_unavailable" "$detail" "" "$sub_reason" || true
+  fi
+}
+
+# Prepare observable runtime surfaces before launching recovered work.
+_prepare_recovery_phase_launch() {
+  local issue="$1" slug="$2" phase="$3" feature_dir="$4" wt_dir="$5"
+  local agent="$6" model="$7" contract_payload="$8" lifecycle_phase="${9:-}"
+  local win contract_title resolved_window
+
+  if ! write_stage_result_with_history "$feature_dir" "$phase" "running" "$agent" "$model" "Recovery replay of persisted execution contract" \
+    || ! jq -e --arg phase "$phase" '.stage == $phase and .status == "running"' "$feature_dir/.${phase}-result.json" >/dev/null 2>&1; then
+    log_warn "$issue → failed to record recovered $phase stage"
+    return 1
+  fi
+
+  if ! configure_agent_hooks "$agent" "$wt_dir" "$REPO_DIR"; then
+    log_warn "$issue → failed to configure hooks for recovered $phase stage"
+    return 1
+  fi
+
+  if declare -F wavemill_hook_write >/dev/null 2>&1; then
+    wavemill_hook_write "working" "" "" "$agent" || true
+  fi
+
+  if ! win="$(_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir" "$lifecycle_phase")" || [[ -z "$win" ]]; then
+    log_warn "$issue → failed to restore tmux window for $phase stage"
+    return 1
+  fi
+  resolved_window="$(tmux display-message -p -t "$(_tmux_target_join "$SESSION" "$win")" '#{window_id}' 2>/dev/null || true)"
+  if [[ -z "$resolved_window" ]]; then
+    log_warn "$issue → restored tmux window could not be verified for $phase stage"
+    return 1
+  fi
+
+  contract_title="$(printf '%s' "$contract_payload" | jq -r '[.stageRole, .agent, .model] | map(select(type == "string" and length > 0)) | join(" · ")' 2>/dev/null || true)"
+  [[ -n "$contract_title" ]] && wavemill_set_tmux_pane_title "$(_tmux_target_join "$SESSION" "$win")" "$contract_title" || true
+  return 0
+}
+
 # Relaunch an in-flight task's phase agent when its tmux window has been lost
 # (typically after a `r`/`a` session resume, which kills the prior tmux session
 # before restarting the monitor).
@@ -6330,72 +6474,91 @@ _restore_inflight_task_window_if_missing() {
     title=$(echo "$issue_json" | jq -r '.title // "Task"' 2>/dev/null || echo "Task")
   fi
 
-  local model agent_cmd depth rc=0
+  local challenge_side contract_json contract_ok contract_payload reason detail
+  challenge_side="$(_challenge_side_for_issue "$issue")"
+  local recovery_args=(read-and-validate --feature-dir "$feature_dir" --stage "$phase" --repo "$REPO_DIR" --json)
+  [[ -n "$challenge_side" ]] && recovery_args+=(--challenge-side "$challenge_side")
+  if ! contract_json="$(npx tsx "$TOOLS_DIR/recovery-contract.ts" "${recovery_args[@]}" 2>/dev/null)"; then
+    _stop_task_recovery_contract_unavailable "$issue" "$phase" "$feature_dir" "contract_read_failed" "recovery-contract CLI exited non-zero"
+    _RESTORE_STATE="failed"
+    return 0
+  fi
+  contract_ok="$(printf '%s' "$contract_json" | jq -r '.ok // false' 2>/dev/null || echo "false")"
+  if [[ "$contract_ok" != "true" ]]; then
+    reason="$(printf '%s' "$contract_json" | jq -r '.reason // "contract_malformed"' 2>/dev/null || echo "contract_malformed")"
+    detail="$(printf '%s' "$contract_json" | jq -r '.detail // "Persisted recovery contract is unavailable."' 2>/dev/null || echo "Persisted recovery contract is unavailable.")"
+    _stop_task_recovery_contract_unavailable "$issue" "$phase" "$feature_dir" "$reason" "$detail"
+    _RESTORE_STATE="failed"
+    return 0
+  fi
+
+  contract_payload="$(printf '%s' "$contract_json" | jq -c '.contract' 2>/dev/null || echo '{}')"
+  local model agent_cmd provider depth rc=0
+  model="$(printf '%s' "$contract_payload" | jq -r '.model // empty')"
+  agent_cmd="$(printf '%s' "$contract_payload" | jq -r '.agent // empty')"
+  provider="$(printf '%s' "$contract_payload" | jq -r '.provider // empty')"
+
+  if ! _append_recovery_contract_trace "$feature_dir" "$issue" "$slug" "$phase" "$model" "$agent_cmd" "$contract_payload"; then
+    _stop_task_recovery_contract_unavailable "$issue" "$phase" "$feature_dir" "state_transition_failed" "failed to write recovery contract trace event"
+    _RESTORE_STATE="failed"
+    return 0
+  fi
+
+  if [[ -f "${STATE_FILE:-}" ]] && jq -e --arg issue "$issue" '.tasks[$issue]? // empty' "$STATE_FILE" >/dev/null 2>&1; then
+    if ! state_mutate "$STATE_FILE" \
+      '.tasks[$issue].model = $model
+       | .tasks[$issue].agent = $agent
+       | .tasks[$issue].provider = $provider
+       | .tasks[$issue].stageRole = $stageRole
+       | .tasks[$issue].updated = (now | todate)' \
+      --arg issue "$issue" \
+      --arg model "$model" \
+      --arg agent "$agent_cmd" \
+      --arg provider "$provider" \
+      --arg stageRole "$phase" >/dev/null 2>&1; then
+      _stop_task_recovery_contract_unavailable "$issue" "$phase" "$feature_dir" "state_transition_failed" "failed to update workflow task state"
+      _RESTORE_STATE="failed"
+      return 0
+    fi
+  fi
+
   case "$phase" in
     planning)
-      model=$(read_phase_config "$feature_dir" "planning" "model")
-      [[ -z "$model" ]] && model=$(get_task_meta "$issue" "plannerModel")
-      model="$(resolve_phase_model "planning" "$model" "claude-sonnet-5")"
-      if declare -F agent_resolve_model >/dev/null 2>&1; then
-        model="$(agent_resolve_model "planner" "$model" "$REPO_DIR")" || return 1
-      fi
       depth=$(read_phase_config "$feature_dir" "planning" "depth")
       [[ -z "$depth" ]] && depth=$(get_task_meta "$issue" "planDepth")
       [[ -z "$depth" ]] && depth="light"
-      if ! agent_cmd="$(agent_resolve_from_model "$model" "planning")"; then
-        rc=1
-      else
-        launch_planning_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
-          "$model" "$agent_cmd" "$depth" || rc=$?
+      if ! _prepare_recovery_phase_launch "$issue" "$slug" "planning" "$feature_dir" "$wt_dir" "$agent_cmd" "$model" "$contract_payload"; then
+        _stop_task_recovery_contract_unavailable "$issue" "$phase" "$feature_dir" "state_transition_failed" "failed to prepare recovery launch surfaces"
+        _RESTORE_STATE="failed"
+        return 0
       fi
+      launch_planning_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
+        "$model" "$agent_cmd" "$depth" || rc=$?
       ;;
     coding)
-      if ! reroute_expanded_packets_for_coding_handoff "$issue" "$slug" "$feature_dir"; then
-        handle_expanded_reroute_handoff_failure "$issue" "$feature_dir"
-      fi
-      if ! apply_expanded_route_if_present "$feature_dir" "$issue" "$slug" "$wt_dir" "$STATE_FILE"; then
-        log_warn "$issue → expanded route invalid; using existing execution state for coding relaunch"
-      fi
-      emit_execution_active_route "$feature_dir" "$issue"
-      model=$(read_phase_config "$feature_dir" "coding" "model")
-      [[ -z "$model" ]] && model=$(get_task_meta "$issue" "coderModel")
-      model="$(resolve_phase_model "coding" "$model" "claude-opus-4-7")"
-      if declare -F agent_resolve_model >/dev/null 2>&1; then
-        model="$(agent_resolve_model "coder" "$model" "$REPO_DIR")" || return 1
-      fi
       depth=$(read_phase_config "$feature_dir" "coding" "depth")
       [[ -z "$depth" ]] && depth=$(get_task_meta "$issue" "codeDepth")
       [[ -z "$depth" ]] && depth="medium"
-      if ! agent_cmd="$(agent_resolve_from_model "$model" "coding")"; then
-        rc=1
-      else
-        if [[ -f "${STATE_FILE:-}" ]] && jq -e --arg issue "$issue" '.tasks[$issue]? // empty' "$STATE_FILE" >/dev/null 2>&1; then
-          state_mutate "$STATE_FILE" \
-            '.tasks[$issue].agent = $agent | .tasks[$issue].updated = (now | todate)' \
-            --arg issue "$issue" \
-            --arg agent "$agent_cmd" >/dev/null 2>&1 || true
-        fi
-        launch_coding_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
-          "$model" "$agent_cmd" "$depth" || rc=$?
+      if ! _prepare_recovery_phase_launch "$issue" "$slug" "coding" "$feature_dir" "$wt_dir" "$agent_cmd" "$model" "$contract_payload"; then
+        _stop_task_recovery_contract_unavailable "$issue" "$phase" "$feature_dir" "state_transition_failed" "failed to prepare recovery launch surfaces"
+        _RESTORE_STATE="failed"
+        return 0
       fi
+      launch_coding_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
+        "$model" "$agent_cmd" "$depth" || rc=$?
       ;;
     review)
-      model=$(read_phase_config "$feature_dir" "review" "model")
-      [[ -z "$model" ]] && model=$(get_task_meta "$issue" "reviewerModel")
-      model="$(resolve_phase_model "review" "$model" "claude-sonnet-5")"
-      if declare -F agent_resolve_model >/dev/null 2>&1; then
-        model="$(agent_resolve_model "reviewer" "$model" "$REPO_DIR")" || return 1
-      fi
       local review_mode
       review_mode=$(read_phase_config "$feature_dir" "review" "mode")
       [[ -z "$review_mode" ]] && review_mode=$(get_task_meta "$issue" "reviewMode")
       [[ -z "$review_mode" ]] && review_mode="static"
-      if ! agent_cmd="$(agent_resolve_from_model "$model" "review")"; then
-        rc=1
-      else
-        launch_review_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
-          "$model" "$agent_cmd" "$review_mode" || rc=$?
+      if ! _prepare_recovery_phase_launch "$issue" "$slug" "review" "$feature_dir" "$wt_dir" "$agent_cmd" "$model" "$contract_payload" "review"; then
+        _stop_task_recovery_contract_unavailable "$issue" "$phase" "$feature_dir" "state_transition_failed" "failed to prepare recovery launch surfaces"
+        _RESTORE_STATE="failed"
+        return 0
       fi
+      launch_review_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
+        "$model" "$agent_cmd" "$review_mode" || rc=$?
       ;;
     *)
       log_warn "$issue → Cannot restore window for unsupported phase: $phase"
@@ -6406,6 +6569,7 @@ _restore_inflight_task_window_if_missing() {
 
   if [[ "$rc" -ne 0 ]]; then
     log_warn "$issue → Failed to relaunch $phase phase after resume (rc=$rc)"
+    _stop_task_recovery_contract_unavailable "$issue" "$phase" "$feature_dir" "launch_failed" "recovery launch command exited with status $rc"
     _RESTORE_STATE="failed"
     return 0
   fi

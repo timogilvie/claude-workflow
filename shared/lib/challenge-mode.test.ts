@@ -42,6 +42,8 @@ import { evaluateNativeProviderGate } from './native-agent/certification/eligibi
 
 let passed = 0;
 let failed = 0;
+// Some early native challenge fixtures are evaluated with wall-clock time.
+const RUNTIME_FRESH_CERTIFIED_AT = new Date().toISOString();
 
 function test(name: string, fn: () => void) {
   try {
@@ -264,7 +266,7 @@ function makeCoverage(
   return (model: string, stage: 'plan' | 'implementation' | 'review') => counts[stage]?.[model] ?? 0;
 }
 
-function writePatchCodingCertification(repoDir: string, certifiedAt = '2026-06-01T00:00:00.000Z'): void {
+function writePatchCodingCertification(repoDir: string, certifiedAt = RUNTIME_FRESH_CERTIFIED_AT): void {
   const certificationPath = getPatchCodingCertificationPath(repoDir);
   mkdirSync(dirname(certificationPath), { recursive: true });
   writeFileSync(certificationPath, JSON.stringify({
@@ -339,7 +341,7 @@ function writeNativeChallengeRepo(options: {
             readOnlyNative: 'certified',
             certification: {
               maxCertifiedPhase: options.phase,
-              certifiedAt: '2026-06-01T00:00:00.000Z',
+              certifiedAt: RUNTIME_FRESH_CERTIFIED_AT,
               certificationSuiteVersion: suiteVersion,
             },
           },
@@ -355,7 +357,7 @@ function writeNativeChallengeRepo(options: {
       model: storageIdentity.model,
       phase: options.phase,
       suiteVersion,
-      certifiedAt: '2026-06-01T00:00:00.000Z',
+      certifiedAt: RUNTIME_FRESH_CERTIFIED_AT,
       scenarios: [{ scenarioId: 'challenge.native.pass', passed: true }],
     }),
   );
@@ -1738,12 +1740,11 @@ test('reason-aware context selection preserves selection_failed diagnostics', ()
 // Native Certification Guardrail Tests
 // ===========================
 
-// Deterministic "now" anchored to 2026-06-30 so TTL checks are stable.
-const TEST_NOW = new Date('2026-06-30T00:00:00.000Z');
-// Recent enough to be within the 60-day TTL (29 days ago).
-const CERT_DATE_FRESH = '2026-06-01T00:00:00.000Z';
-// Well outside the 60-day TTL (180 days ago).
-const CERT_DATE_STALE = '2026-01-01T00:00:00.000Z';
+// Certification validation also runs against wall-clock time, so anchor all
+// fixture timestamps to this test run instead of a calendar date that expires.
+const TEST_NOW = new Date();
+const CERT_DATE_FRESH = TEST_NOW.toISOString();
+const CERT_DATE_STALE = new Date(TEST_NOW.getTime() - 90 * 24 * 60 * 60 * 1000).toISOString();
 
 /** Create a temp repo with the given model registry and return cleanup fn */
 function makeNativeTestRepo(
