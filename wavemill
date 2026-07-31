@@ -1332,6 +1332,17 @@ run_quota() {
   exec npx tsx "$quota_tool" "$@"
 }
 
+run_reroute() {
+  local reroute_tool="$TOOLS_DIR/reroute-task.ts"
+
+  if [[ ! -f "$reroute_tool" ]]; then
+    echo -e "${RED}Error:${NC} Reroute tool not found at: $reroute_tool" >&2
+    exit 1
+  fi
+
+  exec npx tsx "$reroute_tool" "$@"
+}
+
 # Main command dispatcher
 case "${1:-}" in
   mill)
@@ -1520,6 +1531,10 @@ case "${1:-}" in
   route)
     shift
     run_route "$@"
+    ;;
+  reroute)
+    shift
+    run_reroute "$@"
     ;;
   check-routing)
     shift

@@ -161,7 +161,17 @@ export interface StageResult {
   finalTreeState?: TreeState;
   cleanupDecision?: CleanupDecision;
   cleanupReport?: CleanupReport;
+  /** Previous terminal attempts preserved when recovery starts a fresh run. */
+  history?: StageResultHistoryEntry[];
 }
+
+export type StageResultHistoryEntry = Pick<
+  StageResult,
+  'status' | 'agent' | 'model' | 'startedAt' | 'finishedAt' | 'notes'
+> & {
+  error?: string;
+  failureReason?: string | null;
+};
 
 /** All stage result files found in a feature directory. */
 export interface StageResultMap {
@@ -317,6 +327,46 @@ export async function updateStageResult(
   };
 
   await writeStageResult(featureDir, merged);
+}
+
+export async function writeStageResultWithHistory(
+  featureDir: string,
+  stage: StageName,
+  patch: Partial<StageResult>,
+): Promise<void> {
+  const existing = await readStageResult(featureDir, stage);
+  const now = new Date().toISOString();
+  const existingHistory = existing?.history ?? [];
+  const shouldArchive = existing?.status === 'failed' || existing?.status === 'aborted';
+  const historyEntry: StageResultHistoryEntry[] = shouldArchive && existing
+    ? [{
+      status: existing.status,
+      agent: existing.agent,
+      model: existing.model,
+      startedAt: existing.startedAt,
+      finishedAt: existing.finishedAt,
+      notes: existing.notes,
+      ...(existing.failureReason !== undefined ? { failureReason: existing.failureReason } : {}),
+    }]
+    : [];
+
+  const result: StageResult = {
+    stage,
+    status: 'running',
+    startedAt: now,
+    finishedAt: null,
+    agent: '',
+    model: '',
+    notes: '',
+    ...patch,
+    stage,
+    status: patch.status ?? 'running',
+    startedAt: patch.startedAt ?? now,
+    finishedAt: patch.finishedAt ?? null,
+    history: [...existingHistory, ...historyEntry],
+  };
+
+  await writeStageResult(featureDir, result);
 }
 
 // ────────────────────────────────────────────────────────────────

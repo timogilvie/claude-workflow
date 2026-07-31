@@ -1677,6 +1677,7 @@ apply_expanded_route_if_present() {
   local feature_dir="$1" issue="$2" slug="$3" worktree_dir="$4" state_file="${5:-${STATE_FILE:-}}"
   local route_file routing_file phase_config_file planner_model plan_depth coder_model code_depth reviewer_model review_mode
   local planner_agent="" coder_agent="" reviewer_agent=""
+  local planner_provider="" coder_provider="" reviewer_provider=""
   local active_route="" bootstrap_route="" expanded_route="" route_changed="false" source="expanded"
   local challenge_intent_file="" challenge_intent_tmp="" challenge_side=""
 
@@ -1820,26 +1821,57 @@ apply_expanded_route_if_present() {
     [[ -n "$reviewer_model" ]] && reviewer_agent="$(agent_resolve_from_model "$reviewer_model" "review" || true)"
   fi
 
+  case "$planner_agent" in
+    native-openrouter) planner_provider="native-openrouter" ;;
+    native-openai) planner_provider="native-openai" ;;
+    claude) planner_provider="anthropic" ;;
+    codex) planner_provider="openai" ;;
+  esac
+  case "$coder_agent" in
+    native-openrouter) coder_provider="native-openrouter" ;;
+    native-openai) coder_provider="native-openai" ;;
+    claude) coder_provider="anthropic" ;;
+    codex) coder_provider="openai" ;;
+  esac
+  case "$reviewer_agent" in
+    native-openrouter) reviewer_provider="native-openrouter" ;;
+    native-openai) reviewer_provider="native-openai" ;;
+    claude) reviewer_provider="anthropic" ;;
+    codex) reviewer_provider="openai" ;;
+  esac
+
   if ! state_mutate "$phase_config_file" \
     '.planning.model = $plannerModel
      | .planning.agent = $plannerAgent
+     | .planning.provider = $plannerProvider
+     | .planning.stageRole = "planning"
+     | .planning.selectedAt = (.planning.selectedAt // .resolvedAt // (now | todateiso8601))
      | .planning.depth = $planDepth
      | .coding.model = $coderModel
      | .coding.agent = $coderAgent
+     | .coding.provider = $coderProvider
+     | .coding.stageRole = "coding"
+     | .coding.selectedAt = (.coding.selectedAt // .resolvedAt // (now | todateiso8601))
      | .coding.depth = $codeDepth
      | .review.model = $reviewerModel
      | .review.agent = $reviewerAgent
+     | .review.provider = $reviewerProvider
+     | .review.stageRole = "review"
+     | .review.selectedAt = (.review.selectedAt // .resolvedAt // (now | todateiso8601))
      | .review.mode = $reviewMode
      | .resolvedAt = (if (.resolvedAt // "") == "" then (now | todateiso8601) else .resolvedAt end)
      | .forceModel = (.forceModel // null)' \
     --arg plannerModel "$planner_model" \
     --arg plannerAgent "$planner_agent" \
+    --arg plannerProvider "$planner_provider" \
     --arg planDepth "$plan_depth" \
     --arg coderModel "$coder_model" \
     --arg coderAgent "$coder_agent" \
+    --arg coderProvider "$coder_provider" \
     --arg codeDepth "$code_depth" \
     --arg reviewerModel "$reviewer_model" \
     --arg reviewerAgent "$reviewer_agent" \
+    --arg reviewerProvider "$reviewer_provider" \
     --arg reviewMode "$review_mode"; then
     log "warn" "expanded route invalid: $route_file (failed to update .phase-config.json)"
     active_route="$(route_lifecycle_route_id "$routing_file" 2>/dev/null || true)"

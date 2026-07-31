@@ -18,6 +18,9 @@ import {
 
 let passed = 0;
 let failed = 0;
+// Native certification validation uses wall-clock time. Keep success fixtures
+// fresh relative to the test run so they do not silently become stale.
+const FRESH_CERTIFIED_AT = new Date().toISOString();
 
 async function test(name: string, fn: () => void | Promise<void>) {
   try {
@@ -190,7 +193,7 @@ function writeNativeCertificationArtifact(
   model: string,
   suiteVersion: string,
   phase: 'read-only' | 'patch' | 'workflow',
-  certifiedAt = '2026-07-05T15:31:57.527Z',
+  certifiedAt = FRESH_CERTIFIED_AT,
 ): void {
   const path = buildGlobalCertificationPath(provider, model, suiteVersion);
   mkdirSync(dirname(path), { recursive: true });
@@ -597,7 +600,7 @@ await test('OpenRouter aliases in repo-local stage pools do not force selection'
             compatFlags: { thinkingFormat: 'openrouter' },
             certification: {
               maxCertifiedPhase: 'workflow',
-              certifiedAt: '2026-07-05T15:31:57.527Z',
+              certifiedAt: FRESH_CERTIFIED_AT,
               certificationSuiteVersion: 'v1',
             },
           },
@@ -623,7 +626,7 @@ await test('OpenRouter aliases in repo-local stage pools do not force selection'
             compatFlags: { thinkingFormat: 'openrouter' },
             certification: {
               maxCertifiedPhase: 'workflow',
-              certifiedAt: '2026-07-05T15:31:57.748Z',
+              certifiedAt: FRESH_CERTIFIED_AT,
               certificationSuiteVersion: 'v1',
             },
           },
@@ -635,7 +638,7 @@ await test('OpenRouter aliases in repo-local stage pools do not force selection'
   process.env.TEST_OPENROUTER_KEY = 'test-key';
   try {
     writeNativeCertificationArtifact(repoDir, 'z-ai', 'glm-5.2', 'v1', 'workflow');
-    writeNativeCertificationArtifact(repoDir, 'moonshotai', 'kimi-k2.7-code', 'v1', 'workflow', '2026-07-05T15:31:57.748Z');
+    writeNativeCertificationArtifact(repoDir, 'moonshotai', 'kimi-k2.7-code', 'v1', 'workflow', FRESH_CERTIFIED_AT);
 
     const decision = routeWorkflow('Implement a backend workflow feature with tests.', {
       repoDir,
@@ -1598,7 +1601,7 @@ function writeCertArtifact(
     model,
     phase: 'patch',
     suiteVersion,
-    certifiedAt: '2026-06-01T00:00:00.000Z',
+    certifiedAt: FRESH_CERTIFIED_AT,
     scenarios: [{ scenarioId: 's1', passed: true }],
     ...overrides,
   };
@@ -1615,7 +1618,7 @@ function nativeModelConfig(certPhase: string = 'patch', suiteVersion: string = '
       readOnlyNative: 'certified',
       certification: {
         maxCertifiedPhase: certPhase,
-        certifiedAt: '2026-06-01T00:00:00.000Z',
+        certifiedAt: FRESH_CERTIFIED_AT,
         certificationSuiteVersion: suiteVersion,
       },
     },
@@ -1733,7 +1736,7 @@ await test('launch-priority roleEligibility removes coding-only Qwen from planne
             compatFlags: { thinkingFormat: 'openrouter' },
             certification: {
               maxCertifiedPhase: 'workflow',
-              certifiedAt: '2026-06-01T00:00:00.000Z',
+              certifiedAt: FRESH_CERTIFIED_AT,
               certificationSuiteVersion: 'v1',
             },
           },
@@ -1821,7 +1824,7 @@ await test('stale artifact rejects native model', () => {
             certification: {
               maxCertifiedPhase: 'patch',
               // Registry certifiedAt doesn't affect artifact staleness check
-              certifiedAt: '2026-06-01T00:00:00.000Z',
+              certifiedAt: FRESH_CERTIFIED_AT,
               certificationSuiteVersion: 'v1',
             },
           },
