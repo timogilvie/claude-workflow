@@ -100,11 +100,20 @@ else
   pass "empty artifact fails strict JSON parsing"
 fi
 
+restore_body="$(awk '
+  /^_restore_inflight_task_window_if_missing\(\) \{/ { capture=1; depth=0 }
+  capture {
+    print
+    depth += gsub(/\{/, "{")
+    depth -= gsub(/\}/, "}")
+    if (depth == 0) exit
+  }
+' "$MILL_SCRIPT")"
 if grep -Fq 'apply_expanded_route_if_present "$FEATURE_DIR" "$ISSUE" "$SLUG"' "$MILL_SCRIPT" \
-  && grep -Fq 'apply_expanded_route_if_present "$feature_dir" "$issue" "$slug"' "$MILL_SCRIPT"; then
-  pass "mill applies expanded route before coding launch and coding resume"
+  && ! grep -Fq 'apply_expanded_route_if_present' <<<"$restore_body"; then
+  pass "mill applies expanded route at initial coding handoff; recovery replays its persisted contract"
 else
-  fail "mill is missing expanded-route apply call sites"
+  fail "mill does not preserve initial routing while keeping recovery contract-bound"
 fi
 
 if grep -Fq 'agent: ${resolved_planner_agent}${planner_launch_model:+ --model $planner_launch_model}' "$MILL_SCRIPT"; then
