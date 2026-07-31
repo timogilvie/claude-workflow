@@ -132,7 +132,7 @@ export interface ChallengeComparison {
   workflowInsight?: string;
   comparisonOutcome?: ChallengeComparisonOutcome;
   skipReason?: 'identical-routing-dimensions';
-  invalidChallengeReason?: 'stage_override_lost' | 'native_launch_fallback' | 'identical_effective_route';
+  invalidChallengeReason?: 'stage_override_lost' | 'native_launch_fallback' | 'identical_effective_route' | 'operator_reroute';
   invalidChallengeDetails?: string;
   invalidChallenge?: boolean;
   primaryAttestation?: unknown;
@@ -704,7 +704,7 @@ export function buildInvalidChallengeComparison(input: {
   challengerPrUrl: string;
   primaryEvalScore: number;
   challengerEvalScore: number;
-  reason: 'stage_override_lost' | 'native_launch_fallback' | 'identical_effective_route';
+  reason: 'stage_override_lost' | 'native_launch_fallback' | 'identical_effective_route' | 'operator_reroute';
   details?: string;
   primaryRouting?: ChallengeRoutingMeta;
   challengerRouting?: ChallengeRoutingMeta;
