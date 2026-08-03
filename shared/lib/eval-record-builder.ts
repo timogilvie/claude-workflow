@@ -48,6 +48,7 @@ import type {
   ChallengeExecutionAttestation,
   ChallengeExecutionIntent,
 } from './challenge-execution-contract.ts';
+import { projectChallengeIntentForPersistence } from './challenge-execution-contract.ts';
 import type { WorkflowCostOutcome, WorkflowCostResult, WorkflowCostFailure } from './workflow-cost.ts';
 import { getManifest, getManifestRef } from './resource-manifest.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
@@ -179,9 +180,12 @@ export function attachChallengeExecutionMetadata(
     record.challengeSide = input.side;
   }
   if (input?.intent) {
-    record.challengeIntent = input.intent;
-    const sideIntent = input.side === 'challenger' ? input.intent.challenger : input.intent.primary;
-    record.challengeExecutionRoute = sideIntent.expectedRoute;
+    const persistedIntent = projectChallengeIntentForPersistence(input.intent);
+    if (persistedIntent) {
+      record.challengeIntent = persistedIntent;
+      const sideIntent = input.side === 'challenger' ? persistedIntent.challenger : persistedIntent.primary;
+      record.challengeExecutionRoute = sideIntent.expectedRoute;
+    }
   }
   if (input?.evidence) {
     record.challengeExecutionEvidence = input.evidence;

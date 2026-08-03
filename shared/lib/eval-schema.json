@@ -2384,14 +2384,181 @@
       ],
       "additionalProperties": false
     },
+    "ChallengeRuntimeStageRoute": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "agent": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "model",
+        "agent"
+      ],
+      "additionalProperties": false
+    },
+    "ChallengeRuntimeSideIntent": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "primary",
+            "challenger"
+          ]
+        },
+        "planner": {
+          "$ref": "#/$defs/ChallengeRuntimeStageRoute"
+        },
+        "coder": {
+          "$ref": "#/$defs/ChallengeRuntimeStageRoute"
+        },
+        "reviewer": {
+          "$ref": "#/$defs/ChallengeRuntimeStageRoute"
+        }
+      },
+      "required": [
+        "role",
+        "planner",
+        "coder",
+        "reviewer"
+      ],
+      "additionalProperties": false
+    },
+    "ChallengeNativeCertificationRejection": {
+      "type": "object",
+      "properties": {
+        "modelId": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        },
+        "requestedLaunchPhase": {
+          "type": "string"
+        },
+        "requestedPhase": {
+          "type": "string"
+        },
+        "certifiedPhase": {
+          "type": "string"
+        },
+        "nativeCapability": {
+          "type": "string"
+        },
+        "nativeProvider": {
+          "type": "string"
+        },
+        "eligibleRoles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "allowedNativeAgentPhases": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "requiredSuiteVersion": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "artifactPath": {
+          "type": "string"
+        },
+        "apiKeyEnv": {
+          "type": "string"
+        },
+        "field": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "ChallengeModelExclusionDiagnostic": {
+      "type": "object",
+      "properties": {
+        "modelId": {
+          "type": "string"
+        },
+        "stage": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "modelId",
+        "stage",
+        "source"
+      ],
+      "additionalProperties": false
+    },
     "ChallengeExecutionIntent": {
       "type": "object",
       "properties": {
         "pairId": {
           "type": "string"
         },
+        "schemaVersion": {
+          "type": [
+            "string",
+            "number"
+          ]
+        },
+        "issueId": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
         "challengeStage": {
           "$ref": "#/$defs/ChallengeStage"
+        },
+        "decisionSource": {
+          "type": "string",
+          "enum": [
+            "bootstrap",
+            "expanded",
+            "preserved"
+          ]
+        },
+        "selectedStage": {
+          "$ref": "#/$defs/ChallengeStage"
+        },
+        "selectionPath": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "challengerSource": {
+          "type": "string"
         },
         "intentionallyIdentical": {
           "type": "boolean"
@@ -2402,16 +2569,50 @@
         "selectionReason": {
           "type": "string"
         },
+        "challengeRecommendation": {
+          "description": "Free-form router recommendation that selected or skipped a challenge."
+        },
+        "nativeCertificationRejections": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ChallengeNativeCertificationRejection"
+          }
+        },
+        "modelExclusions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ChallengeModelExclusionDiagnostic"
+          }
+        },
+        "fallbackReason": {
+          "type": "string"
+        },
+        "noChallengeReason": {
+          "type": "string"
+        },
         "primary": {
-          "$ref": "#/$defs/ChallengeSideIntent"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChallengeSideIntent"
+            },
+            {
+              "$ref": "#/$defs/ChallengeRuntimeSideIntent"
+            }
+          ]
         },
         "challenger": {
-          "$ref": "#/$defs/ChallengeSideIntent"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChallengeSideIntent"
+            },
+            {
+              "$ref": "#/$defs/ChallengeRuntimeSideIntent"
+            }
+          ]
         }
       },
       "required": [
         "pairId",
-        "challengeStage",
         "primary",
         "challenger"
       ],
