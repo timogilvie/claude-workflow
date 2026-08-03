@@ -336,6 +336,66 @@ describe('hokusai-submission-trigger', () => {
     assert.equal(proj.outcomeArtifactPresent, undefined);
   });
 
+  it('does not project local planning execution outcome to Hokusai contribution rows', async () => {
+    const { repoDir, configDir } = makeRepo(true);
+    const capturedRows: unknown[] = [];
+
+    mock.method(hokusaiSubmissionTriggerDeps, 'buildSubmitDataContributionRow', (projection: unknown) => {
+      capturedRows.push(projection);
+      return { success_under_budget: true };
+    });
+    mock.method(hokusaiSubmissionTriggerDeps, 'enqueueContribution', async () => ({
+      status: 'enqueued' as const,
+      entry: { entryId: 'e-planning' },
+    }));
+    mock.method(hokusaiSubmissionTriggerDeps, 'drainContributionQueue', async () => ({}));
+
+    const legacyRecord = makeEligibleRecord();
+    delete (legacyRecord as Record<string, unknown>).planningExecutionOutcome;
+
+    const recordWithPlanningOutcome = makeEligibleRecord({
+      id: 'eval-456',
+      planningExecutionOutcome: {
+        agent: 'native',
+        model: 'moonshotai/kimi-k2.7-code',
+        status: 'failed',
+        failureReason: 'turn_limit',
+        planArtifactValid: false,
+        approvalReady: false,
+        bounds: { maxTurns: 40, maxToolCalls: 120, maxWallClockMs: 1200000 },
+        usage: {
+          turnsCompleted: 40,
+          toolCallsExecuted: 72,
+          wallClockMs: 900000,
+          totalInputTokens: 100000,
+          totalOutputTokens: 20000,
+          totalCostUsd: 0.32,
+        },
+        promptRef: { id: 'native-planning', version: 'sha256:test' },
+        source: '.planning-result.json',
+      },
+    });
+
+    await triggerHokusaiSubmission(legacyRecord, {
+      repoDir,
+      configDir,
+      redactionSalt: '3'.repeat(64),
+    });
+    await triggerHokusaiSubmission(recordWithPlanningOutcome, {
+      repoDir,
+      configDir,
+      redactionSalt: '4'.repeat(64),
+    });
+
+    assert.equal(capturedRows.length, 2);
+    for (const projection of capturedRows as Record<string, unknown>[]) {
+      const serialized = JSON.stringify(projection);
+      assert.equal('planningExecutionOutcome' in projection, false);
+      assert.equal(serialized.includes('turn_limit'), false);
+      assert.equal(serialized.includes('maxTurns'), false);
+    }
+  });
+
   it('marks invalid feature outcome artifacts as unknown instead of reconstructed', async () => {
     const { repoDir, configDir } = makeRepo(true);
     const capturedRows: unknown[] = [];

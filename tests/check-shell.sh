@@ -335,21 +335,29 @@ else
     # Extract function definitions from the hook protocol sourced by common helpers.
     HOOK_FUNCS=$(grep -oE '^[a-z_][a-z0-9_]*\(\)' "$REPO_DIR/shared/hooks/wavemill-hook-protocol.sh" | sed 's/()//' | sort -u)
 
+    # Extract function definitions from queue-health.sh (also sourced by monitor)
+    QUEUE_HEALTH_FUNCS=$(grep -oE '^[a-z_][a-z0-9_]*\(\)' "$LIB_DIR/queue-health.sh" | sed 's/()//' | sort -u)
+
     # Combine all available function definitions
-    ALL_DEFINED=$(printf '%s\n%s\n%s\n%s' "$HEREDOC_FUNCS" "$ADAPTER_FUNCS" "$COMMON_FUNCS" "$HOOK_FUNCS" | sort -u)
+    ALL_DEFINED=$(printf '%s\n%s\n%s\n%s\n%s' "$HEREDOC_FUNCS" "$ADAPTER_FUNCS" "$COMMON_FUNCS" "$HOOK_FUNCS" "$QUEUE_HEALTH_FUNCS" | sort -u)
 
     # Known external commands and bash builtins that are NOT custom functions
     # This list covers standard utilities, coreutils, and tools used by wavemill
-    KNOWN_EXTERNALS="bash|cat|cd|chmod|column|command|continue|cut|date|declare|diff|dirname|echo|eval|exec|exit|export|false|find|fold|git|grep|gh|head|jq|kill|local|ls|mkdir|mktemp|mv|node|npx|printf|read|readlink|return|rm|sed|set|shift|sleep|sort|source|sqlite3|stat|tail|tee|test|tmux|touch|tr|trap|true|tput|tsx|type|to_entries|uniq|unset|wait|wc|xargs|basename|awk|seq|ascii_downcase"
+    KNOWN_EXTERNALS="bash|cat|cd|chmod|column|command|continue|cut|date|declare|diff|dirname|echo|eval|exec|exit|export|false|find|fold|git|grep|gh|head|jq|kill|local|ls|mkdir|mktemp|mv|node|npx|printf|ps|read|readlink|return|rm|sed|set|shift|sleep|sort|source|sqlite3|stat|tail|tee|test|tmux|touch|tr|trap|true|tput|tsx|type|to_entries|uniq|unset|wait|wc|xargs|basename|awk|seq|ascii_downcase"
 
     # Extract function calls from the heredoc.
     # Restrict matches to actual command positions instead of every bare word;
     # the monitor body is large enough that tokenizing every identifier turns
     # this guard into an accidental quadratic scan.
+    # Comment-only lines are never executed, and English prose in them
+    # ("; skip planner attempt", "if watchdog fired") otherwise trips the
+    # command-position patterns below.
+    HEREDOC_CODE=$(grep -vE '^[[:space:]]*#' <<< "$HEREDOC_CONTENT")
+
     CALLED_FUNCS=$(
       {
-        grep -oE '^[[:space:]]*[a-z_][a-z0-9_]*[[:space:]]' <<< "$HEREDOC_CONTENT"
-        grep -oE '(if[[:space:]]+|\$\( *|[;&|][;&|]?[[:space:]]*)[a-z_][a-z0-9_]*([[:space:];)]|$)' <<< "$HEREDOC_CONTENT"
+        grep -oE '^[[:space:]]*[a-z_][a-z0-9_]*[[:space:]]' <<< "$HEREDOC_CODE"
+        grep -oE '(if[[:space:]]+|\$\( *|[;&|][;&|]?[[:space:]]*)[a-z_][a-z0-9_]*([[:space:];)]|$)' <<< "$HEREDOC_CODE"
       } \
       | sed -E 's/^[[:space:]]*//; s/^(if[[:space:]]+|\$\( *|[;&|][;&|]?[[:space:]]*)//; s/[[:space:];)]*$//' \
       | sort -u \
@@ -359,7 +367,7 @@ else
       | grep -vE '^(pipefail|euo|noglob|errexit|nounset)$' \
       | grep -vE '^(env|stdin|stdout|stderr|json|txt|csv|pid|utf)$' \
       | grep -vE '^(true|false|yes|string|number|empty|null|undefined)$' \
-      | grep -vE '^(try|catch|fromjson|rollout_path|thread_id|thread_row|updated_at|exits|setting|falling|tostring)$' \
+      | grep -vE '^(try|catch|fromjson|add|rollout_path|thread_id|thread_row|updated_at|exits|setting|falling|tostring)$' \
       | grep -vE '^(bad|internal|keeping|marking|rate|reduce|service|skipping|timed|too|using|wavemill|waiting)$' \
       | grep -vE '^(advance|review)$' \
       | grep -vE '^(not_eligible|routing_error)$' \

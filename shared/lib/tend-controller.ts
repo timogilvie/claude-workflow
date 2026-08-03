@@ -16,7 +16,13 @@ import { extractMetadataBlock, parsePrMetadata, type PrMetadata } from './pr-met
 import { evaluateReady } from './ready-engine.ts';
 import { runReadyStage } from './ready-stage.ts';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
-import { applyChallengePairGates, type ChallengeGateDeps, type ChallengeGateOptions } from './tend-challenge-gate.ts';
+import {
+  applyChallengePairGates,
+  evaluateAutoCloseEligibility,
+  type ChallengeGateDeps,
+  type ChallengeGateOptions,
+  type ChallengeLoserCleanupCandidate,
+} from './tend-challenge-gate.ts';
 
 export interface TendCandidate {
   number: number;
@@ -92,7 +98,7 @@ export interface SelectNextCandidateOptions {
   repoDir: string;
   prFetcher?: PrFetcher;
   healthChecker?: HealthChecker;
-  loserCleanup?: (prNumber: number, repoDir: string) => void;
+  loserCleanup?: (candidate: ChallengeLoserCleanupCandidate, repoDir: string) => void;
   challengeGateDeps?: ChallengeGateDeps;
   challengeGateOptions?: ChallengeGateOptions;
 }
@@ -299,9 +305,9 @@ export async function selectNextCandidate(options: SelectNextCandidateOptions): 
   blocked.push(...challengeResult.blocked);
 
   const cleanupLoser = options.loserCleanup ?? defaultLoserCleanup;
-  for (const loserPr of challengeResult.losers) {
+  for (const candidate of challengeResult.loserCleanupCandidates) {
     try {
-      cleanupLoser(loserPr, options.repoDir);
+      cleanupLoser(candidate, options.repoDir);
     } catch {
       // Cleanup failure is non-fatal; the loser remains blocked for manual review.
     }
@@ -983,12 +989,64 @@ function writeMergeRetryMarker(prNumber: number, untilIso: string | null, repoDi
   }
 }
 
-function defaultLoserCleanup(prNumber: number, repoDir: string): void {
-  setWavemillSuperseded(prNumber);
-  execShellCommand(
-    `gh pr close ${prNumber} --comment ${escapeShellArg('Closed: lost challenge comparison.')}`,
-    { encoding: 'utf-8', cwd: repoDir },
-  );
+function defaultLoserCleanup(candidate: ChallengeLoserCleanupCandidate, repoDir: string): void {
+  // Re-validate eligibility at cleanup time to be doubly sure
+  const eligibility = evaluateAutoCloseEligibility({
+    loserPr: candidate.loserPr,
+    winnerPr: candidate.winnerPr,
+    comparisonOutcome: 'decisive', // Already validated in gate
+    evidenceId: candidate.evidenceId,
+  });
+
+  if (!eligibility.eligible) {
+    console.warn(
+      `[tend-controller] Cleanup candidate PR #${candidate.loserPr} failed re-validation: ${eligibility.refusal}; skipping cleanup`,
+    );
+    return;
+  }
+
+  // Check current PR state to avoid duplicate mutations
+  try {
+    const prState = getPullRequest(candidate.loserPr, repoDir);
+    if (!prState) {
+      console.warn(`[tend-controller] Could not find PR #${candidate.loserPr} for cleanup; skipping`);
+      return;
+    }
+
+    if (prState.state === 'closed') {
+      // Already closed; check if label is already present
+      const hasSuperseded = prState.labels.some((label) => label.name === WM_LABELS.superseded);
+      if (hasSuperseded) {
+        // Already handled
+        return;
+      }
+    }
+  } catch (error) {
+    console.warn(
+      `[tend-controller] Failed to check PR #${candidate.loserPr} state: ${errorMessage(error)}; proceeding with cleanup`,
+    );
+  }
+
+  try {
+    setWavemillSuperseded(candidate.loserPr);
+  } catch (error) {
+    console.warn(
+      `[tend-controller] Failed to apply wm:superseded label to PR #${candidate.loserPr}: ${errorMessage(error)}`,
+    );
+  }
+
+  try {
+    execShellCommand(
+      `gh pr close ${candidate.loserPr} --comment ${escapeShellArg(
+        `Closed: lost challenge comparison.\nWinner: #${candidate.winnerPr}\nEvidence: ${candidate.evidenceId}`,
+      )}`,
+      { encoding: 'utf-8', cwd: repoDir },
+    );
+  } catch (error) {
+    console.warn(
+      `[tend-controller] Failed to close loser PR #${candidate.loserPr}: ${errorMessage(error)}`,
+    );
+  }
 }
 
 interface PrCheckRun {

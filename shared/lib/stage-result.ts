@@ -9,7 +9,7 @@
  * - Only the orchestrator writes these files — agents never modify them
  * - Writes are atomic (temp file + rename) to prevent partial JSON
  * - Reads never throw — they return null for missing or malformed files
- * - The schema is additive — old files without `artifacts`/`failureReason`/cleanup fields remain valid
+ * - The schema is additive — old files without `artifacts`/`failureReason`/cleanup/planning outcome fields remain valid
  *
  * @module stage-result
  */
@@ -42,6 +42,29 @@ const VALID_STATUSES: readonly StageStatus[] = ['running', 'awaiting_user', 'com
 
 // ── Per-stage artifact types ──
 
+/** Configured execution bounds for native planning. */
+export interface PlanningExecutionBounds {
+  maxTurns?: number;
+  maxToolCalls?: number;
+  maxWallClockMs?: number;
+}
+
+/** Observed execution usage for native planning. */
+export interface PlanningExecutionUsage {
+  turnsCompleted?: number;
+  toolCallsExecuted?: number;
+  wallClockMs?: number;
+  totalInputTokens?: number;
+  totalOutputTokens?: number;
+  totalCostUsd?: number;
+}
+
+/** Prompt registry reference used by native planning. */
+export interface PlanningPromptRef {
+  id: string;
+  version: string;
+}
+
 /** Artifacts produced during the planning stage. */
 export interface PlanningArtifacts {
   type: 'planning';
@@ -49,6 +72,16 @@ export interface PlanningArtifacts {
   taskPacketFile?: string;
   transcriptFile?: string;
   validationError?: string;
+  /** Configured native planning bounds, when available. */
+  bounds?: PlanningExecutionBounds;
+  /** Observed native planning usage, when available. */
+  usage?: PlanningExecutionUsage;
+  /** True when native planning produced a valid final plan artifact. */
+  planArtifactValid?: boolean;
+  /** True when native planning reached the approval-ready state. */
+  approvalReady?: boolean;
+  /** Prompt registry/provenance reference for the planning prompt. */
+  promptRef?: PlanningPromptRef;
 }
 
 /** Artifacts produced during the review stage. */
@@ -128,7 +161,17 @@ export interface StageResult {
   finalTreeState?: TreeState;
   cleanupDecision?: CleanupDecision;
   cleanupReport?: CleanupReport;
+  /** Previous terminal attempts preserved when recovery starts a fresh run. */
+  history?: StageResultHistoryEntry[];
 }
+
+export type StageResultHistoryEntry = Pick<
+  StageResult,
+  'status' | 'agent' | 'model' | 'startedAt' | 'finishedAt' | 'notes'
+> & {
+  error?: string;
+  failureReason?: string | null;
+};
 
 /** All stage result files found in a feature directory. */
 export interface StageResultMap {
@@ -284,6 +327,46 @@ export async function updateStageResult(
   };
 
   await writeStageResult(featureDir, merged);
+}
+
+export async function writeStageResultWithHistory(
+  featureDir: string,
+  stage: StageName,
+  patch: Partial<StageResult>,
+): Promise<void> {
+  const existing = await readStageResult(featureDir, stage);
+  const now = new Date().toISOString();
+  const existingHistory = existing?.history ?? [];
+  const shouldArchive = existing?.status === 'failed' || existing?.status === 'aborted';
+  const historyEntry: StageResultHistoryEntry[] = shouldArchive && existing
+    ? [{
+      status: existing.status,
+      agent: existing.agent,
+      model: existing.model,
+      startedAt: existing.startedAt,
+      finishedAt: existing.finishedAt,
+      notes: existing.notes,
+      ...(existing.failureReason !== undefined ? { failureReason: existing.failureReason } : {}),
+    }]
+    : [];
+
+  const result: StageResult = {
+    stage,
+    status: 'running',
+    startedAt: now,
+    finishedAt: null,
+    agent: '',
+    model: '',
+    notes: '',
+    ...patch,
+    stage,
+    status: patch.status ?? 'running',
+    startedAt: patch.startedAt ?? now,
+    finishedAt: patch.finishedAt ?? null,
+    history: [...existingHistory, ...historyEntry],
+  };
+
+  await writeStageResult(featureDir, result);
 }
 
 // ────────────────────────────────────────────────────────────────

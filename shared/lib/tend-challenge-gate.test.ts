@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -888,6 +888,201 @@ describe('git ls-remote failure fallback', () => {
 
       const result = await applyChallengePairGates(items, [], repoDir, options);
       assert.equal(result.eligible.length, 1);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe('HOK-2602: Regression tests for invalid comparison auto-close', () => {
+  it('never closes on double-forfeit record', async () => {
+    const { repoDir, cleanup } = setupRepoDir();
+    try {
+      const items = [
+        makeWorkItem({ number: 101, challengePairId: 'pair-1', challenge: true }),
+        makeWorkItem({ number: 102, challengePairId: 'pair-1', challenge: true }),
+      ];
+
+      writeWorkflowState(repoDir, {
+        HOK_1: { pr: 101, challengePairId: 'pair-1', challengeRole: 'primary' },
+        HOK_1_c: { pr: 102, challengePairId: 'pair-1', challengeRole: 'challenger' },
+      });
+
+      writeFileSync(
+        join(repoDir, '.wavemill', 'evals', 'challenge-records.jsonl'),
+        JSON.stringify({
+          challengePairId: 'pair-1',
+          primaryPrUrl: 'https://github.com/org/repo/pull/101',
+          challengerPrUrl: 'https://github.com/org/repo/pull/102',
+          comparisonOutcome: 'double-forfeit',
+          timestamp: '2026-07-30T12:00:00Z',
+        }),
+      );
+
+      const result = await applyChallengePairGates(items, [], repoDir, {
+        remoteBranches: ['task/test-pr'],
+        coolOffSeconds: 0,
+      });
+
+      assert.deepEqual(result.losers, []);
+      assert.equal(result.loserCleanupCandidates.length, 0);
+      // Both should be blocked with unresolved state, not marked as losers
+      assert.deepEqual(
+        result.blocked.map((b) => b.reason).filter((r) => r.includes('loser')),
+        [],
+      );
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('never closes on invalid comparison outcome', async () => {
+    const { repoDir, cleanup } = setupRepoDir();
+    try {
+      const items = [
+        makeWorkItem({ number: 101, challengePairId: 'pair-1', challenge: true }),
+        makeWorkItem({ number: 102, challengePairId: 'pair-1', challenge: true }),
+      ];
+
+      writeWorkflowState(repoDir, {
+        HOK_1: { pr: 101, challengePairId: 'pair-1', challengeRole: 'primary' },
+        HOK_1_c: { pr: 102, challengePairId: 'pair-1', challengeRole: 'challenger' },
+      });
+
+      writeFileSync(
+        join(repoDir, '.wavemill', 'evals', 'challenge-records.jsonl'),
+        JSON.stringify({
+          challengePairId: 'pair-1',
+          primaryPrUrl: 'https://github.com/org/repo/pull/101',
+          challengerPrUrl: 'https://github.com/org/repo/pull/102',
+          comparisonOutcome: 'invalid',
+          timestamp: '2026-07-30T12:00:00Z',
+        }),
+      );
+
+      const result = await applyChallengePairGates(items, [], repoDir, {
+        remoteBranches: ['task/test-pr'],
+        coolOffSeconds: 0,
+      });
+
+      assert.deepEqual(result.losers, []);
+      assert.equal(result.loserCleanupCandidates.length, 0);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('never closes on inconclusive comparison outcome', async () => {
+    const { repoDir, cleanup } = setupRepoDir();
+    try {
+      const items = [
+        makeWorkItem({ number: 101, challengePairId: 'pair-1', challenge: true }),
+        makeWorkItem({ number: 102, challengePairId: 'pair-1', challenge: true }),
+      ];
+
+      writeWorkflowState(repoDir, {
+        HOK_1: { pr: 101, challengePairId: 'pair-1', challengeRole: 'primary' },
+        HOK_1_c: { pr: 102, challengePairId: 'pair-1', challengeRole: 'challenger' },
+      });
+
+      writeFileSync(
+        join(repoDir, '.wavemill', 'evals', 'challenge-records.jsonl'),
+        JSON.stringify({
+          challengePairId: 'pair-1',
+          primaryPrUrl: 'https://github.com/org/repo/pull/101',
+          challengerPrUrl: 'https://github.com/org/repo/pull/102',
+          comparisonOutcome: 'inconclusive',
+          timestamp: '2026-07-30T12:00:00Z',
+        }),
+      );
+
+      const result = await applyChallengePairGates(items, [], repoDir, {
+        remoteBranches: ['task/test-pr'],
+        coolOffSeconds: 0,
+      });
+
+      assert.deepEqual(result.losers, []);
+      assert.equal(result.loserCleanupCandidates.length, 0);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('only closes identified loser when comparison is valid and decisive', async () => {
+    const { repoDir, cleanup } = setupRepoDir();
+    try {
+      const items = [
+        makeWorkItem({ number: 101, challengePairId: 'pair-1', challenge: true }),
+        makeWorkItem({ number: 102, challengePairId: 'pair-1', challenge: true }),
+      ];
+
+      writeWorkflowState(repoDir, {
+        HOK_1: { pr: 101, challengePairId: 'pair-1', challengeRole: 'primary' },
+        HOK_1_c: { pr: 102, challengePairId: 'pair-1', challengeRole: 'challenger' },
+      });
+
+      writeFileSync(
+        join(repoDir, '.wavemill', 'evals', 'challenge-records.jsonl'),
+        JSON.stringify({
+          challengePairId: 'pair-1',
+          primaryPrUrl: 'https://github.com/org/repo/pull/101',
+          challengerPrUrl: 'https://github.com/org/repo/pull/102',
+          winner: 'primary',
+          comparisonOutcome: 'compared',
+          timestamp: '2026-07-30T12:00:00Z',
+        }),
+      );
+
+      const result = await applyChallengePairGates(items, [], repoDir, {
+        remoteBranches: ['task/test-pr'],
+        coolOffSeconds: 0,
+      });
+
+      // Only the loser (challenger) should be marked for cleanup
+      assert.deepEqual(result.losers, [102]);
+      assert.equal(result.loserCleanupCandidates.length, 1);
+      assert.equal(result.loserCleanupCandidates[0].loserPr, 102);
+      assert.equal(result.loserCleanupCandidates[0].winnerPr, 101);
+      assert.equal(result.loserCleanupCandidates[0].pairId, 'pair-1');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('never closes a lone primary PR merely because challenge metadata exists', async () => {
+    const { repoDir, cleanup } = setupRepoDir();
+    try {
+      const items = [makeWorkItem({
+        number: 101,
+        headRefName: 'task/pair-primary',
+        challengePairId: 'pair-1',
+        challenge: true,
+      })];
+
+      writeWorkflowState(repoDir, {
+        HOK_1: {
+          pr: 101,
+          branch: 'task/pair-primary',
+          challengePairId: 'pair-1',
+          challengeRole: 'primary',
+        },
+      });
+
+      // No challenge comparison record at all
+      writeFileSync(
+        join(repoDir, '.wavemill', 'evals', 'challenge-records.jsonl'),
+        '', // Empty
+      );
+
+      const result = await applyChallengePairGates(items, [], repoDir, {
+        remoteBranches: [],
+        coolOffSeconds: 0,
+      });
+
+      assert.deepEqual(result.losers, []);
+      assert.equal(result.loserCleanupCandidates.length, 0);
+      // Should be blocked waiting for comparison, not marked as loser
+      assert(result.blocked.some((b) => b.number === 101));
     } finally {
       cleanup();
     }

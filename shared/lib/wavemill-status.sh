@@ -1593,6 +1593,32 @@ cached_openrouter_warning() {
   return 1
 }
 
+# Render queue-health degradation warning if active.
+# Returns 0 and prints warning if degraded, 1 if healthy/missing.
+queue_health_dashboard_warning() {
+  local state_file="${1:-}" state_dir reason backoff_secs next_action
+  [[ -n "$state_file" ]] || return 1
+  state_dir="$(dirname "$state_file" 2>/dev/null || echo '')"
+  [[ -n "$state_dir" ]] || return 1
+
+  local health_file="${state_dir}/queue-health.json"
+  [[ -r "$health_file" ]] || return 1
+
+  local status="$(jq -r '.status // "healthy"' "$health_file" 2>/dev/null || echo 'healthy')"
+  [[ "$status" == "healthy" ]] && return 1
+
+  reason="$(jq -r '.degradationReason // "unknown"' "$health_file" 2>/dev/null || echo 'unknown')"
+  backoff_secs="$(jq -r '.retryBackoffSeconds // 0' "$health_file" 2>/dev/null || echo '0')"
+  next_action="$(jq -r '.nextAction // "retry"' "$health_file" 2>/dev/null || echo 'retry')"
+
+  if [[ "$backoff_secs" -gt 0 ]]; then
+    printf 'queue planning degraded: %s; flat fallback active; retry in %ds' "$reason" "$backoff_secs"
+  else
+    printf 'queue planning degraded: %s; %s' "$reason" "$next_action"
+  fi
+  return 0
+}
+
 render_dashboard() {
   local tasks line issue slug branch worktree task_status task_phase state_pr
   local win agent_state classification task_data free_slots usage_tip openrouter_warning
@@ -1611,6 +1637,9 @@ render_dashboard() {
   fi
   if openrouter_warning="$(cached_openrouter_warning)"; then
     printf "${D}├─ WARN: %s${N}${EL}\n" "$openrouter_warning" >> "$FRAME"
+  fi
+  if queue_health_warning="$(queue_health_dashboard_warning "$STATE_FILE" 2>/dev/null)"; then
+    printf "${D}├─ WARN: %s${N}${EL}\n" "$queue_health_warning" >> "$FRAME"
   fi
 
   tasks=$(gather_tasks)

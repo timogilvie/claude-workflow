@@ -136,6 +136,49 @@ test('flattenRecord handles missing optional fields', () => {
   assert.equal(row.issue_id, '');
   assert.equal(row.pr_url, '');
   assert.equal(row.files_changed, null);
+  assert.equal(row.planning_outcome_status, '');
+  assert.equal(row.planning_outcome_failure_reason, '');
+  assert.equal(row.planning_outcome_max_turns, null);
+});
+
+test('flattenRecord exports planning execution outcome fields', () => {
+  const record = makeRecord({
+    planningExecutionOutcome: {
+      status: 'failed',
+      failureReason: 'turn_limit',
+      planArtifactValid: false,
+      approvalReady: false,
+      bounds: {
+        maxTurns: 40,
+        maxToolCalls: 120,
+        maxWallClockMs: 1200000,
+      },
+      usage: {
+        turnsCompleted: 40,
+        toolCallsExecuted: 72,
+        wallClockMs: 900000,
+        totalInputTokens: 100000,
+        totalOutputTokens: 20000,
+        totalCostUsd: 0.32,
+      },
+      source: '.planning-result.json',
+    },
+  });
+  const row = flattenRecord(record);
+
+  assert.equal(row.planning_outcome_status, 'failed');
+  assert.equal(row.planning_outcome_failure_reason, 'turn_limit');
+  assert.equal(row.planning_outcome_plan_valid, false);
+  assert.equal(row.planning_outcome_approval_ready, false);
+  assert.equal(row.planning_outcome_max_turns, 40);
+  assert.equal(row.planning_outcome_turns_completed, 40);
+  assert.equal(row.planning_outcome_max_tool_calls, 120);
+  assert.equal(row.planning_outcome_tool_calls_executed, 72);
+  assert.equal(row.planning_outcome_max_wall_clock_ms, 1200000);
+  assert.equal(row.planning_outcome_wall_clock_ms, 900000);
+  assert.equal(row.planning_outcome_input_tokens, 100000);
+  assert.equal(row.planning_outcome_output_tokens, 20000);
+  assert.equal(row.planning_outcome_cost_usd, 0.32);
 });
 
 test('flattenRecord exports resource selection variants', () => {
@@ -364,7 +407,9 @@ test('toCsv column count matches header count', () => {
   const lines = csv.trim().split('\n');
   const headerCols = lines[0].split(',').length;
 
-  assert.equal(headerCols, 56);
+  for (const line of lines.slice(1)) {
+    assert.equal(line.split(',').length, headerCols);
+  }
 });
 
 // ────────────────────────────────────────────────────────────────

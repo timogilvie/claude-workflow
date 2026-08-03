@@ -28,6 +28,7 @@ import {
   attachRepoContextMetadata,
   attachWorkflowCostMetadata,
   attachFeatureOutcomeDiagnostics,
+  attachPlanningExecutionOutcome,
   computeRouteCalibration,
   computeEligibility,
   enrichEvalRecord,
@@ -1302,6 +1303,79 @@ describe('eval-record-builder', () => {
     it('attaches executed planning through enrichEvalRecord', () => {
       enrichEvalRecord(baseRecord, { executedPlanning });
       expect(baseRecord.executedPlanning).toEqual(executedPlanning);
+    });
+  });
+
+  describe('attachPlanningExecutionOutcome (HOK-2593)', () => {
+    const planningExecutionOutcome = {
+      agent: 'native',
+      model: 'moonshotai/kimi-k2.7-code',
+      status: 'failed' as const,
+      failureReason: 'turn_limit' as const,
+      planArtifactValid: false,
+      approvalReady: false,
+      bounds: {
+        maxTurns: 40,
+        maxToolCalls: 120,
+        maxWallClockMs: 1200000,
+      },
+      usage: {
+        turnsCompleted: 40,
+        toolCallsExecuted: 72,
+        wallClockMs: 900000,
+        totalInputTokens: 1000,
+        totalOutputTokens: 200,
+        totalCostUsd: 0.01,
+      },
+      promptRef: {
+        id: 'native-planning',
+        version: 'sha256:test',
+      },
+      source: '.planning-result.json' as const,
+    };
+
+    it('is a no-op when planning outcome is undefined or null', () => {
+      const before = { ...baseRecord };
+      attachPlanningExecutionOutcome(baseRecord, undefined);
+      attachPlanningExecutionOutcome(baseRecord, null);
+      expect(baseRecord.planningExecutionOutcome).toBeUndefined();
+      expect(baseRecord).toEqual(before);
+    });
+
+    it('attaches structured planning outcome when provided', () => {
+      attachPlanningExecutionOutcome(baseRecord, planningExecutionOutcome);
+      expect(baseRecord.planningExecutionOutcome).toEqual(planningExecutionOutcome);
+    });
+
+    it('sanitizes malformed nested fields', () => {
+      attachPlanningExecutionOutcome(baseRecord, {
+        agent: '',
+        model: 'model-a',
+        status: 'failed',
+        failureReason: 'turn_limit',
+        bounds: { maxTurns: -1, maxToolCalls: 12 },
+        usage: { turnsCompleted: 3, totalCostUsd: Number.NaN },
+        promptRef: { id: 'prompt', version: '' },
+        source: '.planning-result.json',
+      });
+
+      expect(baseRecord.planningExecutionOutcome).toEqual({
+        model: 'model-a',
+        status: 'failed',
+        failureReason: 'turn_limit',
+        bounds: { maxToolCalls: 12 },
+        usage: { turnsCompleted: 3 },
+        source: '.planning-result.json',
+      });
+    });
+
+    it('attaches planning outcome through both enrichment paths', () => {
+      enrichEvalRecord(baseRecord, { planningExecutionOutcome });
+      expect(baseRecord.planningExecutionOutcome).toEqual(planningExecutionOutcome);
+
+      baseRecord = { id: 'test-id' } as EvalRecord;
+      enrichTrainingMetadata(baseRecord, { planningExecutionOutcome });
+      expect(baseRecord.planningExecutionOutcome).toEqual(planningExecutionOutcome);
     });
   });
 

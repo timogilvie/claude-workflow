@@ -98,6 +98,8 @@ FUNCTIONS_FILE="$TEST_TMP/task-selection-renderer-funcs.sh"
   echo
   extract_function "$MONITOR_BODY" "get_queue_failure_reason"
   echo
+  extract_function "$MONITOR_BODY" "run_queue_planner_with_policy"
+  echo
   extract_function "$MONITOR_BODY" "build_queue_plan_once"
   echo
   extract_function "$MONITOR_BODY" "invoke_first_wave_helper"

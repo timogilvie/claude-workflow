@@ -527,6 +527,22 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
   if (challengePairId && slug) {
     const challengeFeatureDir = deriveChallengeFeatureDir(worktreePath, slug);
     challengeIntent ??= challengeFeatureDir ? loadChallengeIntentFromFeatureDir(challengeFeatureDir) : undefined;
+  let challengeEvidenceInvalid: { reason: string; detail?: string } | undefined;
+    if (challengeFeatureDir) {
+      const invalidPath = path.join(challengeFeatureDir, '.challenge-evidence-invalid.json');
+      if (existsSync(invalidPath)) {
+        try {
+          const invalid = JSON.parse(readFileSync(invalidPath, 'utf-8')) as { reason?: unknown; detail?: unknown };
+          const reason = typeof invalid.reason === 'string' && invalid.reason.trim() ? invalid.reason.trim() : 'operator_reroute';
+          challengeEvidenceInvalid = {
+            reason,
+            ...(typeof invalid.detail === 'string' && invalid.detail.trim() ? { detail: invalid.detail.trim() } : {}),
+          };
+        } catch {
+          challengeEvidenceInvalid = { reason: 'operator_reroute', detail: 'challenge evidence invalidation marker is malformed' };
+        }
+      }
+    }
   }
   const challengeSide = resolveChallengeSide({
     repoDir,
@@ -637,6 +653,7 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
     challengeIntent,
     routeProvenance: deriveRouteProvenance(repoDir, branch, issueId, worktreePath),
     executedPlanning: stageArtifacts.executedPlanning,
+    planningExecutionOutcome: stageArtifacts.planningExecutionOutcome,
     phaseDurations,
     routePrediction: stageArtifacts.routePrediction,
     routing: stageArtifacts.routing,
@@ -649,6 +666,14 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
     featureOutcomeDiagnostics,
   });
   const attestation = attestEvalRecordChallengeExecution(record);
+  if (attestation && challengeEvidenceInvalid) {
+    attestation.validity = 'invalid_challenge';
+    attestation.invalidReason = challengeEvidenceInvalid.reason === 'operator_reroute'
+      ? 'operator_reroute'
+      : 'operator_reroute';
+    attestation.invalidDetails = challengeEvidenceInvalid.detail
+      ?? `Challenge evidence was invalidated by ${challengeEvidenceInvalid.reason}.`;
+  }
   attachChallengeExecutionMetadata(record, {
     side: record.challengeSide,
     intent: record.challengeIntent,

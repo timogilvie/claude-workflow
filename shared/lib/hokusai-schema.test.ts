@@ -926,6 +926,44 @@ describe('hokusai-schema', () => {
       assert.equal('challengeExecutionRoute' in submissionRecord, false);
       assert.equal('challengeExecutionEvidence' in submissionRecord, false);
     });
+
+    it('omits local planning execution outcome from Hokusai submissions', () => {
+      const submission = expectSuccess(toHokusaiSubmission(makeRecord({
+        planningExecutionOutcome: {
+          agent: 'native',
+          model: 'moonshotai/kimi-k2.7-code',
+          status: 'failed',
+          failureReason: 'turn_limit',
+          planArtifactValid: false,
+          approvalReady: false,
+          bounds: {
+            maxTurns: 40,
+            maxToolCalls: 120,
+            maxWallClockMs: 1200000,
+          },
+          usage: {
+            turnsCompleted: 40,
+            toolCallsExecuted: 72,
+            wallClockMs: 900000,
+            totalInputTokens: 100000,
+            totalOutputTokens: 20000,
+            totalCostUsd: 0.32,
+          },
+          promptRef: {
+            id: 'native-planning',
+            version: 'sha256:test',
+          },
+          source: '.planning-result.json',
+        },
+      })));
+      const submissionRecord = submission as unknown as Record<string, unknown>;
+      const serialized = JSON.stringify(submission);
+
+      assert.deepEqual(validateHokusaiSubmission(submission), { valid: true, errors: [] });
+      assert.equal('planningExecutionOutcome' in submissionRecord, false);
+      assert.equal(serialized.includes('turn_limit'), false);
+      assert.equal(serialized.includes('maxTurns'), false);
+    });
   });
 
   describe('validateHokusaiSubmission', () => {
