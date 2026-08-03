@@ -792,7 +792,7 @@ type ValidatorFunction = ((data: unknown) => boolean) & {
   errors?: ValidationError[] | null;
 };
 
-let compiledValidator: ValidatorFunction | null = null;
+const compiledValidators = new Map<string, ValidatorFunction>();
 let validatorDisabledReason: string | null = null;
 let didWarnValidatorDisabled = false;
 
@@ -809,9 +809,10 @@ function warnValidatorDisabled(reason: string): void {
 
 /**
  * Load and compile the JSON schema for validation.
- * Cached after first call.
+ * Cached per schema path so a canonical tool can safely validate a worktree
+ * configuration against the schema checked out with that worktree.
  */
-function getValidator(): ValidatorFunction | null {
+function getValidator(repoDir?: string): ValidatorFunction | null {
   if (process.env.WAVEMILL_DISABLE_AJV_VALIDATION === '1') {
     validatorDisabledReason = 'WAVEMILL_DISABLE_AJV_VALIDATION=1';
     warnValidatorDisabled(validatorDisabledReason);
@@ -823,15 +824,19 @@ function getValidator(): ValidatorFunction | null {
     return null;
   }
 
-  if (compiledValidator !== null) {
-    return compiledValidator;
-  }
-
-  // Load schema from repo root
-  const schemaPath = resolve(
+  const canonicalSchemaPath = resolve(
     import.meta.url.replace('file://', '').replace('/shared/lib/config.ts', ''),
     'wavemill-config.schema.json'
   );
+  const worktreeSchemaPath = repoDir ? resolve(repoDir, 'wavemill-config.schema.json') : '';
+  const schemaPath = worktreeSchemaPath && existsSync(worktreeSchemaPath)
+    ? worktreeSchemaPath
+    : canonicalSchemaPath;
+
+  const cachedValidator = compiledValidators.get(schemaPath);
+  if (cachedValidator) {
+    return cachedValidator;
+  }
 
   if (!existsSync(schemaPath)) {
     throw new Error(
@@ -870,16 +875,17 @@ function getValidator(): ValidatorFunction | null {
     strict: false, // Allow unknown keywords in schema
   });
 
-  compiledValidator = ajv.compile(schema);
-  return compiledValidator;
+  const validator = ajv.compile(schema);
+  compiledValidators.set(schemaPath, validator);
+  return validator;
 }
 
 /**
  * Validate a config object against the schema.
  * Throws on validation failure with detailed error messages.
  */
-function validateConfig(config: unknown): asserts config is WavemillConfig {
-  const validate = getValidator();
+function validateConfig(config: unknown, repoDir?: string): asserts config is WavemillConfig {
+  const validate = getValidator(repoDir);
   if (!validate) {
     return;
   }
@@ -1018,7 +1024,7 @@ function resolveRepoDir(repoDir?: string): string {
  * console.log(config.router?.enabled); // typed access
  * ```
  */
-function normalizeLegacyPlanningMode(config: unknown): WavemillConfig {
+function normalizeLegacyPlanningMode(config: unknown, repoDir?: string): WavemillConfig {
   if (
     typeof config === 'object' &&
     config !== null &&
@@ -1029,14 +1035,14 @@ function normalizeLegacyPlanningMode(config: unknown): WavemillConfig {
     (config as { mill: { planningMode: 'interactive' } }).mill.planningMode = 'interactive';
   }
 
-  validateConfig(config);
+  validateConfig(config, repoDir);
   return config as WavemillConfig;
 }
 
 function loadBaseConfigFromDisk(absRepoDir: string): WavemillConfig {
   const configPath = resolve(absRepoDir, '.wavemill-config.json');
   const base = existsSync(configPath) ? readAndParseConfig(configPath) : {};
-  return normalizeLegacyPlanningMode(base);
+  return normalizeLegacyPlanningMode(base, absRepoDir);
 }
 
 /**
@@ -1084,7 +1090,7 @@ export function loadWavemillConfig(repoDir?: string): WavemillConfig {
   // Validate the merged result against the schema. The overlay file is partial,
   // so validating it alone would be too permissive; validating the merge catches
   // type mismatches and unknown keys regardless of which file contributed them.
-  const validated = normalizeLegacyPlanningMode(merged);
+  const validated = normalizeLegacyPlanningMode(merged, absRepoDir);
 
   configCache.set(absRepoDir, validated);
   return validated;
@@ -1157,7 +1163,7 @@ export function clearConfigCache(repoDir?: string): void {
   }
 
   // Reset validator state for deterministic tests and long-lived processes.
-  compiledValidator = null;
+  compiledValidators.clear();
   validatorDisabledReason = null;
   didWarnValidatorDisabled = false;
 }
