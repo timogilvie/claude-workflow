@@ -651,7 +651,7 @@ await test('OpenRouter aliases in repo-local stage pools do not force selection'
     assert.ok((decision.nativeCertificationRejections ?? []).some((entry) =>
       entry.nativeProvider === 'openrouter'
       && entry.requiredSuiteVersion === 'v2'
-      && entry.reason === 'missing'
+      && entry.reason === 'missing-artifact'
     ));
   } finally {
     if (originalKey === undefined) {
@@ -1800,7 +1800,7 @@ await test('missing artifact rejects native model and routes to non-native fallb
     const coderRejection = (decision.nativeCertificationRejections ?? [])
       .find((r) => r.modelId === 'native-no-cert' && r.role === 'coder');
     assert.ok(coderRejection, 'missing artifact must produce a rejection record');
-    assert.equal(coderRejection?.reason, 'missing');
+    assert.equal(coderRejection?.reason, 'missing-artifact');
     assert.notEqual(decision.coder, 'native-no-cert', 'coder must fall back to non-native model');
     assert.ok(
       decision.reasoning.some((line) => line.includes('native-no-cert') && line.includes('missing')),
@@ -1937,7 +1937,7 @@ await test('native-only ineligible pool is rejected fail-closed, not silently tr
     const rejection = (decision.nativeCertificationRejections ?? [])
       .find((r) => r.modelId === 'native-only' && r.role === 'coder');
     assert.ok(rejection, 'rejection must be recorded even when no fallback exists in the pool');
-    assert.equal(rejection?.reason, 'missing');
+    assert.equal(rejection?.reason, 'missing-artifact');
     assert.ok(
       decision.reasoning.some((line) => line.includes('No eligible coder models remain')),
       'reasoning should surface the empty eligible pool failure',

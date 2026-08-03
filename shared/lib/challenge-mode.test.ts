@@ -1946,7 +1946,7 @@ test('HOK-2569 OpenRouter v2 patch aliases fail closed consistently for degraded
       name: 'missing',
       configure: () => {},
       gateReason: 'missing_artifact',
-      challengeReason: 'missing',
+      challengeReason: 'missing-artifact',
     },
     {
       name: 'stale',

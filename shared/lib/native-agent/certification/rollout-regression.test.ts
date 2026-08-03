@@ -328,17 +328,22 @@ describe('[router-policy] rollout native router phase and fail-closed policy', (
       );
 
       assert.deepEqual(result.eligible, ['native-patch', 'non-native']);
-      assert.deepEqual(result.rejected, [{
-        modelId: 'native-readonly',
-        role: 'coder',
-        requestedLaunchPhase: 'coding',
-        requestedPhase: 'patch',
-        certifiedPhase: 'read-only',
-        nativeCapability: 'certified',
-        nativeProvider: 'openai',
-        requiredSuiteVersion: SUITE_VERSION,
-        reason: 'insufficient-phase',
-      }]);
+      assert.equal(result.rejected.length, 1);
+      assert.deepEqual(
+        { ...result.rejected[0], artifactPath: undefined },
+        {
+          modelId: 'native-readonly',
+          role: 'coder',
+          requestedLaunchPhase: 'coding',
+          requestedPhase: 'patch',
+          certifiedPhase: 'read-only',
+          nativeCapability: 'certified',
+          nativeProvider: 'openai',
+          requiredSuiteVersion: SUITE_VERSION,
+          reason: 'insufficient-phase',
+          artifactPath: undefined,
+        },
+      );
     } finally {
       cleanup();
     }
@@ -373,7 +378,7 @@ describe('[router-policy] rollout native router phase and fail-closed policy', (
       assert.deepEqual(result.eligible, []);
       assert.deepEqual(reasons, {
         'native-stale': 'stale',
-        'native-missing': 'missing',
+        'native-missing': 'missing-artifact',
         'native-wrong-suite': 'wrong-suite',
         'native-malformed': 'malformed',
         'native-scenario-failure': 'insufficient-phase',

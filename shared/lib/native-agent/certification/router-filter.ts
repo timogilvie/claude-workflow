@@ -49,7 +49,8 @@ export const ROUTER_ROLE_LAUNCH_PHASE: Record<RouterRole, RoleEligibility> = {
 /**
  * Normalized router-facing certification rejection reasons.
  *
- * - `missing`           — artifact file is absent or unreadable
+ * - `missing-api-key`   — native provider API key is absent
+ * - `missing-artifact`  — artifact file is absent or unreadable
  * - `malformed`         — artifact cannot be parsed or fails schema validation
  * - `wrong-suite`       — schemaVersion or suiteVersion mismatch
  * - `stale`             — TTL or explicit expiresAt exceeded
@@ -60,7 +61,8 @@ export const ROUTER_ROLE_LAUNCH_PHASE: Record<RouterRole, RoleEligibility> = {
  */
 export type RouterCertificationRejectionReason =
   | 'no-native-capability'
-  | 'missing'
+  | 'missing-api-key'
+  | 'missing-artifact'
   | 'malformed'
   | 'wrong-suite'
   | 'stale'
@@ -97,13 +99,24 @@ export interface RouterCertificationRejection {
   requiredSuiteVersion: string;
   /** Normalized rejection reason */
   reason: RouterCertificationRejectionReason;
+  /** Global certification artifact path checked by the gate, when known */
+  artifactPath?: string;
+  /** API key environment variable checked by the gate, when relevant */
+  apiKeyEnv?: string;
+}
+
+export interface FilterNativeModelsOptions {
+  now?: Date;
+  apiKeyPresent?: boolean;
+  apiKeyEnv?: string;
 }
 
 function mapGateReason(reason: NativeGateRejectReason): RouterCertificationRejectionReason {
   switch (reason) {
     case 'missing_api_key':
+      return 'missing-api-key';
     case 'missing_artifact':
-      return 'missing';
+      return 'missing-artifact';
     case 'malformed_artifact':
       return 'malformed';
     case 'unregistered_model':
@@ -174,8 +187,9 @@ export function filterNativeModels(
   role: RouterRole,
   registry: ModelRegistry,
   repoDir: string,
-  now?: Date,
+  nowOrOptions?: Date | FilterNativeModelsOptions,
 ): { eligible: string[]; rejected: RouterCertificationRejection[] } {
+  const options = nowOrOptions instanceof Date ? { now: nowOrOptions } : nowOrOptions;
   const requiredPhase = STAGE_PHASE_REQUIREMENT[role];
   const requestedLaunchPhase = ROUTER_ROLE_LAUNCH_PHASE[role];
   const eligible: string[] = [];
@@ -244,7 +258,7 @@ export function filterNativeModels(
       continue;
     }
 
-    // Missing registry metadata or provider — fail closed as `missing`
+    // Missing registry metadata or provider — fail closed as missing artifact/config.
     if (!certMeta || !nativeProvider) {
       rejected.push({
         modelId,
@@ -254,7 +268,7 @@ export function filterNativeModels(
         nativeCapability: readOnlyNative,
         ...(nativeProvider ? { nativeProvider } : {}),
         requiredSuiteVersion: certMeta?.certificationSuiteVersion ?? '',
-        reason: 'missing',
+        reason: 'missing-artifact',
       });
       continue;
     }
@@ -265,9 +279,9 @@ export function filterNativeModels(
       requiredPhase,
       registry,
       repoDir,
-      apiKeyPresent: true,
-      apiKeyEnv: 'ROUTER_FILTER_UNUSED',
-      now,
+      apiKeyPresent: options?.apiKeyPresent ?? true,
+      apiKeyEnv: options?.apiKeyEnv ?? 'ROUTER_FILTER_UNUSED',
+      now: options?.now,
     });
 
     if (decision.ok) {
@@ -283,6 +297,8 @@ export function filterNativeModels(
         nativeProvider,
         requiredSuiteVersion: certMeta.certificationSuiteVersion,
         reason: mapGateReason(decision.reason),
+        ...(decision.artifactPath ? { artifactPath: decision.artifactPath } : {}),
+        ...(decision.apiKeyEnv ? { apiKeyEnv: decision.apiKeyEnv } : {}),
       });
     }
   }
