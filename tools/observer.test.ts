@@ -44,6 +44,7 @@ test('repeated ready watchdog auto-recoveries escalate to actionable stuck findi
       dryRun: false,
       maxLogLines: 240,
       printPrompt: false,
+      incidentDetector: true,
     });
 
     const stuck = findings.find((finding) => finding.id.startsWith('repeated-ready-watchdog-'));
@@ -103,6 +104,7 @@ test('service heartbeat is parseable and stores redacted finding counts only', a
       dryRun: true,
       maxLogLines: 240,
       printPrompt: false,
+      incidentDetector: true,
       repoDir,
       session: 'wavemill-test',
       serviceMode: true,

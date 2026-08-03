@@ -504,6 +504,22 @@ export interface ObserverConfig {
   };
 }
 
+export interface IncidentConfig {
+  enabled?: boolean;
+  store?: {
+    directory?: string;
+  };
+  detection?: {
+    dependencyThreshold?: number;
+    cooldownMinutes?: number;
+    maxEvidencePerRecord?: number;
+  };
+  escalation?: {
+    severityCutoff?: 'critical' | 'high' | 'medium' | 'low' | 'info';
+    onCritical?: 'log';
+  };
+}
+
 export type PromotionProtectedIntegrationStrategy =
   | 'skip-reconciliation'
   | 'block'
@@ -746,6 +762,7 @@ export interface WavemillConfig {
   nativeAgent?: NativeAgentConfig;
   integration?: Partial<IntegrationConfig>;
   observer?: Partial<ObserverConfig>;
+  incident?: IncidentConfig;
   promotion?: Partial<PromotionConfig>;
   ready?: ReadyConfig;
   mergeQueue?: MergeQueueConfig;
@@ -1562,6 +1579,25 @@ export function getObserverConfig(repoDir?: string): ObserverConfig {
     retention: {
       ...OBSERVER_DEFAULTS.retention,
       ...(observer.retention ?? {}),
+    },
+  };
+}
+
+export function getIncidentConfig(repoDir?: string): Required<Pick<IncidentConfig, 'enabled'>> & IncidentConfig {
+  const incident = loadWavemillConfig(repoDir).incident ?? {};
+  return {
+    enabled: incident.enabled ?? true,
+    store: {
+      directory: incident.store?.directory ?? '.wavemill/incidents',
+    },
+    detection: {
+      dependencyThreshold: incident.detection?.dependencyThreshold ?? 3,
+      cooldownMinutes: incident.detection?.cooldownMinutes ?? 5,
+      maxEvidencePerRecord: incident.detection?.maxEvidencePerRecord ?? 50,
+    },
+    escalation: {
+      severityCutoff: incident.escalation?.severityCutoff ?? 'medium',
+      onCritical: incident.escalation?.onCritical ?? 'log',
     },
   };
 }
