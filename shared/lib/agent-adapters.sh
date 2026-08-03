@@ -1822,7 +1822,7 @@ agent_launch_autonomous() {
   dashboard_pid="$(agent_resolve_dashboard_pid "$session")"
   local repo_dir="${REPO_DIR:-$(pwd)}"
   local role feature_dir launch_phase phase_env
-  launch_phase="$(agent_normalize_launch_phase "${WAVEMILL_PHASE:-}" "$window" "$instr_file" 2>/dev/null || true)"
+  launch_phase="$(agent_normalize_launch_phase "$window" "$instr_file" 2>/dev/null || true)"
   role="$(agent_role_from_phase "$launch_phase" 2>/dev/null || true)"
   feature_dir="${WAVEMILL_FEATURE_DIR:-}"
   if [[ -z "$feature_dir" && -n "${WAVEMILL_FEATURE_SLUG:-}" ]]; then
@@ -2260,7 +2260,7 @@ agent_launch_interactive() {
   dashboard_pid="$(agent_resolve_dashboard_pid "$session")"
   local repo_dir="${REPO_DIR:-$(pwd)}"
   local role feature_dir launch_phase phase_env
-  launch_phase="$(agent_normalize_launch_phase "${WAVEMILL_PHASE:-}" "$window" "$prompt_file" 2>/dev/null || true)"
+  launch_phase="$(agent_normalize_launch_phase "$window" "$prompt_file" 2>/dev/null || true)"
   role="$(agent_role_from_phase "$launch_phase" 2>/dev/null || true)"
   feature_dir="${WAVEMILL_FEATURE_DIR:-}"
   if [[ -z "$feature_dir" && -n "${WAVEMILL_FEATURE_SLUG:-}" ]]; then

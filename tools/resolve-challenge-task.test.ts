@@ -228,8 +228,8 @@ describe('resolve-challenge-task CLI', () => {
       assert.ok(challenger);
       assert.ok(!['qwen-3-coder', 'glm-5.2'].includes(challenger.model as string));
       const rejections = result.nativeCertificationRejections as Array<Record<string, unknown>>;
-      assert.ok(rejections.some((entry) => entry.modelId === 'qwen-3-coder' && entry.reason === 'missing'));
-      assert.ok(rejections.some((entry) => entry.modelId === 'glm-5.2' && entry.reason === 'missing'));
+      assert.ok(rejections.some((entry) => entry.modelId === 'qwen-3-coder' && entry.reason === 'missing-artifact'));
+      assert.ok(rejections.some((entry) => entry.modelId === 'glm-5.2' && entry.reason === 'missing-artifact'));
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
@@ -310,7 +310,7 @@ describe('resolve-challenge-task CLI', () => {
       assert.ok(challenger);
       assert.notEqual(challenger!.model, 'glm-5.2');
       const rejections = result.nativeCertificationRejections as Array<Record<string, unknown>>;
-      assert.ok(rejections.some((entry) => entry.modelId === 'glm-5.2' && entry.reason === 'missing'));
+      assert.ok(rejections.some((entry) => entry.modelId === 'glm-5.2' && entry.reason === 'missing-artifact'));
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }

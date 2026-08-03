@@ -21,6 +21,7 @@ import {
   getEffectiveRegistry,
   getModel,
   isModelEnabled,
+  resolveProviderNativeModelId,
   type AgentType,
   type ModelCapabilities,
 } from './model-registry.ts';
@@ -264,14 +265,17 @@ function resolveStoragePath(
   candidate: CandidateAccumulator,
   registryModelId: string | null,
   capabilities: ModelCapabilities | undefined,
+  registry: ReturnType<typeof getEffectiveRegistry>,
 ): string | null {
   const suiteVersion = capabilities?.nativeCapability?.certification?.certificationSuiteVersion ?? 'v1';
-  const modelId = candidate.nativeProviderId ?? registryModelId;
+  const identity = registryModelId ? resolveProviderNativeModelId(registryModelId, registry) : undefined;
+  const modelId = identity?.providerNativeId ?? candidate.nativeProviderId ?? registryModelId;
+  const provider = identity?.provider ?? 'openrouter';
   if (!modelId) {
     return null;
   }
   try {
-    return buildGlobalCertificationPath('openrouter', modelId, suiteVersion);
+    return buildGlobalCertificationPath(provider, modelId, suiteVersion);
   } catch {
     return null;
   }
@@ -371,9 +375,15 @@ function mapCertificationRejection(
   rejection: RouterCertificationRejection,
   storagePath: string | null,
 ): OpenRouterDoctorReason {
-  const configSurface = rejection.reason === 'no-native-capability'
-    ? `modelRegistry.models.${rejection.modelId}`
-    : 'nativeAgent.providers.openrouter.models';
+  const configSurface = (() => {
+    if (rejection.reason === 'no-native-capability') {
+      return `modelRegistry.models.${rejection.modelId}`;
+    }
+    if (rejection.reason === 'missing-api-key') {
+      return 'nativeAgent.providers.openrouter.apiKeyEnv';
+    }
+    return 'nativeAgent.providers.openrouter.models';
+  })();
   const detailParts = [
     `Native certification rejected ${rejection.modelId} for ${rejection.role}.`,
     `reason=${rejection.reason}`,
@@ -382,14 +392,30 @@ function mapCertificationRejection(
   if (rejection.certifiedPhase) {
     detailParts.push(`certifiedPhase=${rejection.certifiedPhase}`);
   }
-  if (storagePath) {
-    detailParts.push(`artifactPath=${storagePath}`);
+  const artifactPath = rejection.artifactPath ?? storagePath;
+  if (artifactPath) {
+    detailParts.push(`artifactPath=${artifactPath}`);
   }
+  if (rejection.apiKeyEnv) {
+    detailParts.push(`apiKeyEnv=${rejection.apiKeyEnv}`);
+  }
+  const remediation = (() => {
+    switch (rejection.reason) {
+      case 'missing-api-key':
+        return `Set ${rejection.apiKeyEnv ?? 'OPENROUTER_API_KEY'} before using native OpenRouter models.`;
+      case 'missing-artifact':
+        return artifactPath
+          ? `Generate and store the certification artifact at ${artifactPath}.`
+          : `Generate and store the certification artifact for ${candidate.nativeProviderId ?? rejection.modelId}.`;
+      default:
+        return `Refresh the certification artifact for ${candidate.nativeProviderId ?? rejection.modelId} with phase ${STAGE_PHASE_REQUIREMENT[rejection.role]}.`;
+    }
+  })();
   return buildReason(
     'CERTIFICATION_REJECTED',
     detailParts.join(' '),
     configSurface,
-    `Refresh the certification artifact for ${candidate.nativeProviderId ?? rejection.modelId} with phase ${STAGE_PHASE_REQUIREMENT[rejection.role]}.`,
+    remediation,
   );
 }
 
@@ -525,6 +551,10 @@ function evaluateCell(input: {
       input.stage,
       input.registry,
       input.repoDir,
+      {
+        apiKeyPresent: input.nativeHasApiKey,
+        apiKeyEnv: input.nativeApiKeyEnv,
+      },
     );
     if (nativeResult.rejected[0]) {
       appendReason(reasons, mapCertificationRejection(input.candidate, nativeResult.rejected[0], input.storagePath));
@@ -599,7 +629,7 @@ export function diagnoseOpenRouter(options: DiagnoseOpenRouterOptions = {}): Ope
   const models: OpenRouterDoctorModelReport[] = configuredCandidates.map((candidate) => {
     const registryModelId = resolveRegistryModelId(candidate, registry);
     const capabilities = registryModelId ? getModel(registry, registryModelId) : undefined;
-    const storagePath = resolveStoragePath(candidate, registryModelId, capabilities);
+    const storagePath = resolveStoragePath(candidate, registryModelId, capabilities, registry);
     const id = candidate.alias ?? candidate.nativeProviderId ?? candidate.key;
 
     const cells = activeStages.map((stage) => evaluateCell({

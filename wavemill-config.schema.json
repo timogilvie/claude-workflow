@@ -274,6 +274,48 @@
             },
             "additionalProperties": false
         },
+        "observer": {
+            "type": "object",
+            "description": "Controls the dedicated Backstage Wavemill Observer service. The service is default-disabled and only runs when integration mill-session monitoring is active.",
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "When true, eligible mill sessions launch a dedicated Backstage pane running wavemill observer --loop in detection-only mode."
+                },
+                "intervalSeconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 120,
+                    "description": "Seconds between observer snapshots."
+                },
+                "heartbeatStaleSeconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 300,
+                    "description": "Seconds after the last observer heartbeat before the Backstage watchdog treats the observer as stale."
+                },
+                "maxLogLines": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 240,
+                    "description": "Recent mill log lines inspected in each observer pass."
+                },
+                "retention": {
+                    "type": "object",
+                    "properties": {
+                        "maxSnapshots": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "default": 50,
+                            "description": "Reserved limit for retained observer snapshots when snapshot persistence is enabled."
+                        }
+                    },
+                    "additionalProperties": false
+                }
+            },
+            "additionalProperties": false
+        },
         "hooks": {
             "type": "object",
             "description": "Hook and status-emission settings.",
@@ -1220,6 +1262,30 @@
                     "default": [],
                     "description": "Reserved repository-specific forbidden migration patterns for future ready-stage policy extensions."
                 },
+                "transientRetryBudget": {
+                    "type": "integer",
+                    "default": 3,
+                    "minimum": 0,
+                    "description": "Number of transient post-PR CI failure observations to wait through before escalating to operator attention."
+                },
+                "remediationLogMaxBytes": {
+                    "type": "integer",
+                    "default": 20000,
+                    "minimum": 1,
+                    "description": "Maximum bytes of CI log evidence included in a ready remediation payload."
+                },
+                "verificationGatingEnabled": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Require a fresh controller-owned verification artifact after remediation pushes when the artifact protocol is present."
+                },
+                "localCommandMap": {
+                    "type": "object",
+                    "description": "Exact GitHub check/job name to local replay command mapping used for deterministic CI remediation.",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
                 "remediation": {
                     "type": "object",
                     "description": "Automatic remediation settings for fixable ready-check failures.",
@@ -2097,6 +2163,161 @@
                 }
             },
             "additionalProperties": false
+        },
+        "prePrVerification": {
+            "type": "object",
+            "description": "CI-derived, controller-owned pre-PR verification gate. Runs locally-reproducible CI checks before review/PR creation, discovered from GitHub branch protection and executed through explicit, audited recipe commands.",
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Master toggle for pre-PR verification. When false (default), the gate is disabled and all PRs proceed without local verification."
+                },
+                "required": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "When true, a passing verification artifact is mandatory before PR creation. When false, verification runs but failures do not block PR creation."
+                },
+                "source": {
+                    "type": "string",
+                    "enum": ["github-enforced", "explicit"],
+                    "default": "explicit",
+                    "description": "Source for discovering required checks: 'github-enforced' queries GitHub branch protection and rulesets; 'explicit' uses the configured recipe without discovery."
+                },
+                "requiredChecks": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "minLength": 1
+                    },
+                    "default": [],
+                    "description": "Check names to discover from GitHub when source is 'github-enforced'. Ignored when source is 'explicit'. Example: ['Shell and Unit Tests', 'Type Check']"
+                },
+                "recipe": {
+                    "type": "object",
+                    "description": "Ordered list of shell commands to execute for verification.",
+                    "properties": {
+                        "commands": {
+                            "type": "array",
+                            "items": {
+                                "type": "string",
+                                "minLength": 1
+                            },
+                            "default": [],
+                            "description": "Ordered list of shell commands to run. Each command is executed sequentially; if any fails, verification stops and fails overall. Example: ['npx tsx tools/check-pi-version.ts', 'npm test']"
+                        },
+                        "timeoutSeconds": {
+                            "type": "integer",
+                            "default": 300,
+                            "minimum": 10,
+                            "description": "Per-command timeout in seconds. Commands exceeding this timeout are marked as timeout failures."
+                        },
+                        "retryPolicy": {
+                            "type": "object",
+                            "description": "Retry behavior for flaky commands.",
+                            "properties": {
+                                "enabled": {
+                                    "type": "boolean",
+                                    "default": false,
+                                    "description": "Enable automatic retry on transient failures."
+                                },
+                                "maxAttempts": {
+                                    "type": "integer",
+                                    "default": 2,
+                                    "minimum": 1,
+                                    "description": "Maximum number of retry attempts for each command."
+                                },
+                                "backoffSeconds": {
+                                    "type": "integer",
+                                    "default": 2,
+                                    "minimum": 1,
+                                    "description": "Seconds to wait between retry attempts."
+                                }
+                            },
+                            "additionalProperties": false
+                        }
+                    },
+                    "required": ["commands"],
+                    "additionalProperties": false
+                },
+                "logCaptureLines": {
+                    "type": "integer",
+                    "default": 50,
+                    "minimum": 10,
+                    "description": "Number of lines to capture from the start and end of command output for bounded log storage. Full logs are stored separately."
+                },
+                "draftFallback": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "When true, allow draft PR creation if verification fails deterministically. When false, test failures block all PR creation (fail-closed)."
+                },
+                "staleTtlSeconds": {
+                    "type": "integer",
+                    "default": 3600,
+                    "minimum": 60,
+                    "description": "Seconds until a verification artifact is considered stale. Stale artifacts trigger re-verification before PR creation."
+                },
+                "compatibility": {
+                    "type": "object",
+                    "description": "Backward-compatibility mode for repos without configured recipes.",
+                    "properties": {
+                        "mode": {
+                            "type": "string",
+                            "enum": ["allow", "warn", "block"],
+                            "default": "allow",
+                            "description": "'allow': gate passes silently for unconfigured repos (backward compatible). 'warn': gate passes but logs migration warning. 'block': gate fails for unconfigured repos (strict mode)."
+                        },
+                        "warnAfterDays": {
+                            "type": "integer",
+                            "default": 7,
+                            "minimum": 1,
+                            "description": "Days between migration warnings in 'warn' mode (prevents spam)."
+                        }
+                    },
+                    "additionalProperties": false
+                }
+            },
+            "additionalProperties": false,
+            "allOf": [
+                {
+                    "if": {
+                        "properties": {
+                            "required": {
+                                "const": true
+                            }
+                        },
+                        "required": ["required"]
+                    },
+                    "then": {
+                        "properties": {
+                            "recipe": {
+                                "properties": {
+                                    "commands": {
+                                        "minItems": 1
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                {
+                    "if": {
+                        "properties": {
+                            "source": {
+                                "const": "github-enforced"
+                            }
+                        },
+                        "required": ["source"]
+                    },
+                    "then": {
+                        "properties": {
+                            "requiredChecks": {
+                                "minItems": 1
+                            }
+                        }
+                    }
+                }
+            ]
         },
         "constraints": {
             "type": "object",

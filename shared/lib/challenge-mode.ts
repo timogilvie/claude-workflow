@@ -304,6 +304,7 @@ function filterNativeChallengeCandidates(
   stage: ChallengeStage,
   repoDir?: string,
   now?: Date,
+  nativeCertificationRuntime?: { apiKeyPresent?: boolean; apiKeyEnv?: string },
 ): { models: string[]; rejections: ChallengeNativeRejection[] } {
   const registry = getGlobalModelRegistry();
   const role = STAGE_TO_ROLE[stage];
@@ -328,7 +329,11 @@ function filterNativeChallengeCandidates(
     });
   }
 
-  const { eligible, rejected } = filterNativeModels(knownModels, role, registry, repoDir ?? process.cwd(), now);
+  const { eligible, rejected } = filterNativeModels(knownModels, role, registry, repoDir ?? process.cwd(), {
+    now,
+    apiKeyPresent: nativeCertificationRuntime?.apiKeyPresent,
+    apiKeyEnv: nativeCertificationRuntime?.apiKeyEnv,
+  });
   return { models: eligible, rejections: [...unknownRejections, ...rejected] };
 }
 
@@ -337,10 +342,17 @@ function filterEligibleChallengeCandidates(
   stage: ChallengeStage,
   repoDir?: string,
   now?: Date,
+  nativeCertificationRuntime?: { apiKeyPresent?: boolean; apiKeyEnv?: string },
 ): { models: string[]; rejections: ChallengeNativeRejection[]; exclusions: ModelExclusionDiagnostic[] } {
   const registry = getGlobalModelRegistry();
   const exclusionFiltered = applyModelExclusions(pool, stage, repoDir);
-  const { models: nativeEligible, rejections } = filterNativeChallengeCandidates(exclusionFiltered.models, stage, repoDir, now);
+  const { models: nativeEligible, rejections } = filterNativeChallengeCandidates(
+    exclusionFiltered.models,
+    stage,
+    repoDir,
+    now,
+    nativeCertificationRuntime,
+  );
   const implementationLaunchable = repoDir && stage === 'implementation'
     ? filterImplementationLaunchableNativeCandidates(nativeEligible, repoDir, now)
     : { models: nativeEligible, rejections: [] };
@@ -709,10 +721,16 @@ export function pickChallengeModelsWithReason(
     randomFn?: () => number;
     repoDir?: string;
     now?: Date;
+    nativeCertificationApiKeyPresent?: boolean;
+    nativeCertificationApiKeyEnv?: string;
   } & ChallengeCoverageOptions,
 ): ChallengePairSelectionResult {
+  const nativeCertificationRuntime = {
+    apiKeyPresent: opts.nativeCertificationApiKeyPresent,
+    apiKeyEnv: opts.nativeCertificationApiKeyEnv,
+  };
   const { models: certifiedPool, rejections: poolRejections, exclusions: poolExclusions } =
-    filterEligibleChallengeCandidates(pool, 'implementation', opts.repoDir, opts.now);
+    filterEligibleChallengeCandidates(pool, 'implementation', opts.repoDir, opts.now, nativeCertificationRuntime);
   const uniquePool = filterDisabledModels(uniqueNonEmpty(certifiedPool));
   const allRejections: ChallengeNativeRejection[] = [...poolRejections];
   const allExclusions: ModelExclusionDiagnostic[] = [...poolExclusions];
@@ -727,7 +745,13 @@ export function pickChallengeModelsWithReason(
 
   // Reject an externally-supplied primary that is an uncertified native
   if (primaryModel && opts.repoDir) {
-    const { models, rejections, exclusions } = filterEligibleChallengeCandidates([primaryModel], 'implementation', opts.repoDir, opts.now);
+    const { models, rejections, exclusions } = filterEligibleChallengeCandidates(
+      [primaryModel],
+      'implementation',
+      opts.repoDir,
+      opts.now,
+      nativeCertificationRuntime,
+    );
     if (rejections.length > 0) {
       allRejections.push(...rejections);
     }
@@ -758,7 +782,13 @@ export function pickChallengeModelsWithReason(
   // Reject a forced challenger that is an uncertified native
   let forcedChallengerModel = opts.forcedChallengerModel;
   if (forcedChallengerModel && opts.repoDir) {
-    const { models, rejections, exclusions } = filterEligibleChallengeCandidates([forcedChallengerModel], 'implementation', opts.repoDir, opts.now);
+    const { models, rejections, exclusions } = filterEligibleChallengeCandidates(
+      [forcedChallengerModel],
+      'implementation',
+      opts.repoDir,
+      opts.now,
+      nativeCertificationRuntime,
+    );
     if (rejections.length > 0) {
       allRejections.push(...rejections);
     }
