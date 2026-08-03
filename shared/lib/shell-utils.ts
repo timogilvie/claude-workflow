@@ -10,6 +10,24 @@ import type { ExecFileSyncOptions, ExecSyncOptions } from "node:child_process";
 
 export type ExecArgvCommandOptions = Omit<ExecFileSyncOptions, 'shell'>;
 
+/** Result of an argv-based command invocation. */
+export interface ExecArgvCommandResult {
+  /** Standard output produced by the child process. */
+  stdout: string;
+  /** Standard error produced by the child process. */
+  stderr: string;
+  /** Process exit status, or -1 when the process could not be spawned. */
+  exitCode: number;
+  /** Whether spawning the executable itself failed (for example ENOENT). */
+  failed: boolean;
+}
+
+function commandOutputToString(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (Buffer.isBuffer(value)) return value.toString();
+  return '';
+}
+
 /**
  * Escape a string for safe use as a shell argument.
  *
@@ -82,9 +100,26 @@ export function execArgvCommand(
   file: string,
   args: readonly string[],
   options?: ExecArgvCommandOptions
-): Buffer | string {
-  return execFileSync(file, [...args], {
-    ...options,
-    shell: false,
-  });
+): ExecArgvCommandResult {
+  try {
+    const stdout = execFileSync(file, [...args], {
+      ...options,
+      shell: false,
+    });
+    return { stdout: commandOutputToString(stdout), stderr: '', exitCode: 0, failed: false };
+  } catch (error) {
+    const commandError = error as {
+      code?: string;
+      status?: number | null;
+      stdout?: string | Buffer;
+      stderr?: string | Buffer;
+    };
+    const failed = commandError.code === 'ENOENT';
+    return {
+      stdout: commandOutputToString(commandError.stdout),
+      stderr: commandOutputToString(commandError.stderr),
+      exitCode: typeof commandError.status === 'number' ? commandError.status : -1,
+      failed,
+    };
+  }
 }

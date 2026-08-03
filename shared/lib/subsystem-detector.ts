@@ -297,7 +297,7 @@ function findFilesImporting(repoDir: string, packageName: string, sourceDirs: st
     if (!existsSync(sourcePath)) continue;
 
     try {
-      const output = subsystemDetectorDeps.execArgvCommand('grep', [
+      const result = subsystemDetectorDeps.execArgvCommand('grep', [
         '-r',
         '-l',
         '-F',
@@ -312,7 +312,7 @@ function findFilesImporting(repoDir: string, packageName: string, sourceDirs: st
         '--',
         sourcePath,
       ], { encoding: 'utf-8', cwd: repoDir, stdio: ['ignore', 'pipe', 'ignore'] });
-      const matches = output.trim().split('\n').filter(Boolean);
+      const matches = result.stdout.trim().split('\n').filter(Boolean);
       files.push(...matches.map(f => relative(repoDir, f)));
     } catch {
       // Grep failed, skip
@@ -338,12 +338,13 @@ function detectGitClusterSubsystems(repoDir: string, config: Required<SubsystemD
 
   try {
     // Get recent commits with file changes
-    const output = subsystemDetectorDeps.execArgvCommand('git', [
+    const result = subsystemDetectorDeps.execArgvCommand('git', [
       'log',
       '--name-only',
       '--pretty=format:COMMIT:%H',
       '-100',
     ], { encoding: 'utf-8', cwd: repoDir });
+    const output = result.stdout;
 
     // Parse commit groups
     const commits = output.split('COMMIT:').filter(Boolean);

@@ -111,7 +111,7 @@ describe('subsystem-detector', () => {
       const calls: Array<{ file: string; args: readonly string[] }> = [];
       t.mock.method(subsystemDetectorDeps, 'execArgvCommand', (file: string, args: readonly string[]) => {
         calls.push({ file, args });
-        return `${matchedFile}\n`;
+        return { stdout: `${matchedFile}\n`, stderr: '', exitCode: 0, failed: false };
       });
 
       detectSubsystems(repoDir, {

@@ -99,7 +99,12 @@ describe('subsystem-spec-generator', () => {
 
     t.mock.method(subsystemSpecGeneratorDeps, 'execArgvCommand', (file: string, args: readonly string[]) => {
       calls.push({ file, args });
-      return calls.length === 1 ? 'abc123 touched files\n' : 'abc123 recent change\n';
+      return {
+        stdout: calls.length === 1 ? 'abc123 touched files\n' : 'abc123 recent change\n',
+        stderr: '',
+        exitCode: 0,
+        failed: false,
+      };
     });
 
     const subsystem: Subsystem = {

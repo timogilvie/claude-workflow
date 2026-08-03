@@ -257,7 +257,7 @@ function getFileTouchCount(keyFiles: string[], repoDir: string): number {
     since.setDate(since.getDate() - 30);
     const sinceStr = since.toISOString().split('T')[0];
 
-    const output = subsystemSpecGeneratorDeps.execArgvCommand('git', [
+    const result = subsystemSpecGeneratorDeps.execArgvCommand('git', [
       'log',
       `--since=${sinceStr}`,
       '--oneline',
@@ -265,7 +265,7 @@ function getFileTouchCount(keyFiles: string[], repoDir: string): number {
       ...keyFiles.slice(0, 20),
     ], { encoding: 'utf-8', cwd: repoDir, stdio: ['ignore', 'pipe', 'ignore'] });
 
-    return output.trim().split('\n').filter(Boolean).length;
+    return result.stdout.trim().split('\n').filter(Boolean).length;
   } catch {
     return 0;
   }
@@ -278,13 +278,14 @@ function getRecentChanges(keyFiles: string[], repoDir: string, limit = 5): strin
   if (keyFiles.length === 0) return '*(No files to analyze)*';
 
   try {
-    const output = subsystemSpecGeneratorDeps.execArgvCommand('git', [
+    const result = subsystemSpecGeneratorDeps.execArgvCommand('git', [
       'log',
       '--oneline',
       `-${limit}`,
       '--',
       ...keyFiles.slice(0, 20),
     ], { encoding: 'utf-8', cwd: repoDir, stdio: ['ignore', 'pipe', 'ignore'] });
+    const output = result.stdout;
 
     if (!output.trim()) return '*(No recent changes)*';
 

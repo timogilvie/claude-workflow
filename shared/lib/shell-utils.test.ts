@@ -151,7 +151,9 @@ describe('execArgvCommand', () => {
       ...specialArgs,
     ], { encoding: 'utf-8' });
 
-    assert.deepEqual(JSON.parse(result.trim()), specialArgs);
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.failed, false);
+    assert.deepEqual(JSON.parse(result.stdout.trim()), specialArgs);
   });
 
   it('respects cwd option', () => {
@@ -161,13 +163,23 @@ describe('execArgvCommand', () => {
       'console.log(process.cwd())',
     ], { encoding: 'utf-8', cwd });
 
-    assert.equal(result.trim(), realpathSync(cwd));
+    assert.equal(result.stdout.trim(), realpathSync(cwd));
   });
 
-  it('throws on command failure', () => {
-    assert.throws(() => {
-      execArgvCommand(process.execPath, ['-e', 'process.exit(7)'], { encoding: 'utf-8' });
-    });
+  it('returns a structured non-zero result without throwing', () => {
+    const result = execArgvCommand(process.execPath, [
+      '-e',
+      "process.stdout.write('out'); process.stderr.write('err'); process.exit(7)",
+    ], { encoding: 'utf-8' });
+
+    assert.deepEqual(result, { stdout: 'out', stderr: 'err', exitCode: 7, failed: false });
+  });
+
+  it('returns a structured spawn failure without throwing', () => {
+    const result = execArgvCommand('wavemill-missing-command-for-test', []);
+
+    assert.equal(result.exitCode, -1);
+    assert.equal(result.failed, true);
   });
 });
 
