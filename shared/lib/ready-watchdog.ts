@@ -1,16 +1,19 @@
 import { appendFile, readFile, rm, writeFile } from 'node:fs/promises';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { loadTraceContext, appendTraceEvent } from './trace-event.ts';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import {
+  getReadyFailureClassifierConfig,
   getReadyRemediationConfig,
+  getReadyVerificationConfig,
   getReadyWatchdogConfig,
   loadWavemillConfig,
   type ReadyWatchdogConfig,
 } from './config.ts';
+import { classifyCiFailure, type CiFailureCategory } from './ci-failure-classifier.ts';
 import { errorMessage } from './error-utils.ts';
 import { normalizeJobs, type MillJob, type WorkflowStateLike } from './job-tracker.ts';
 import { updateBranchWithBase, type BranchBaseUpdateResult } from './promotion-controller.ts';
@@ -107,6 +110,8 @@ export interface NormalizedCheckSummary {
   name: string;
   status: 'success' | 'pending' | 'failure' | 'neutral' | 'skipped' | 'unknown';
   rawStatus: string;
+  text?: string;
+  details?: unknown;
 }
 
 export interface GitHubPRTruth {
@@ -117,6 +122,10 @@ export interface GitHubPRTruth {
   headRefName?: string;
   baseRefName?: string;
   checks: NormalizedCheckSummary[];
+  checkReadError?: {
+    reason: string;
+    errorType: 'command-failed' | 'timeout' | 'malformed-json' | 'network' | 'unknown';
+  };
 }
 
 export interface ReadyWatchdogClassification {
@@ -127,6 +136,15 @@ export interface ReadyWatchdogClassification {
   remediationCategories?: string[];
   consecutiveFailurePolls?: number;
   autoRemediable?: boolean;
+  ciFailureCategory?: CiFailureCategory;
+  failingJob?: string;
+  localCommand?: string;
+  logExcerpt?: string;
+}
+
+interface ReadyTaskClassificationConfig extends ReadyWatchdogConfig {
+  localCommandMap?: Record<string, string>;
+  remediationLogMaxBytes?: number;
 }
 
 export interface ReadyWatchdogAuditRecord {
@@ -166,6 +184,16 @@ export interface ReadyWatchdogStateEntry {
   lastLoggedFingerprint?: string;
   lastLoggedClassification?: Exclude<ReadyWatchdogClassificationKind, 'fresh'>;
   lastLoggedAction?: string;
+  transientFailureCount?: number;
+  transientFailureHead?: string;
+  lastCiFailureCategory?: CiFailureCategory;
+  lastFailingJob?: string;
+  lastLocalCommand?: string;
+  terminal?: boolean;
+  terminalReason?: string;
+  terminalAttempts?: number;
+  terminalHeadSha?: string | null;
+  lastTerminalAt?: string;
 }
 
 export interface ReadyWatchdogStateFile {
@@ -247,31 +275,57 @@ const defaultDeps: ReadyWatchdogDeps = {
     return JSON.parse(await readFile(stateFile, 'utf-8')) as WorkflowStateLike;
   },
   async fetchGitHubTruth(prNumber, repoDir) {
-    const { stdout } = await execFileAsync(
-      'gh',
-      [
-        'pr',
-        'view',
-        String(prNumber),
-        '--json',
-        'state,mergeable,mergeStateStatus,statusCheckRollup,url,headRefName,baseRefName',
-      ],
-      {
-        cwd: repoDir,
-        encoding: 'utf-8',
-        maxBuffer: 1024 * 1024,
-      },
-    );
-    const parsed = JSON.parse(stdout) as Record<string, unknown>;
-    return {
-      state: String(parsed.state ?? ''),
-      mergeable: String(parsed.mergeable ?? ''),
-      mergeStateStatus: String(parsed.mergeStateStatus ?? ''),
-      url: typeof parsed.url === 'string' ? parsed.url : undefined,
-      headRefName: typeof parsed.headRefName === 'string' ? parsed.headRefName : undefined,
-      baseRefName: typeof parsed.baseRefName === 'string' ? parsed.baseRefName : undefined,
-      checks: normalizeStatusCheckRollup(parsed.statusCheckRollup),
-    };
+    let stdout = '';
+    try {
+      const result = await execFileAsync(
+        'gh',
+        [
+          'pr',
+          'view',
+          String(prNumber),
+          '--json',
+          'state,mergeable,mergeStateStatus,statusCheckRollup,url,headRefName,baseRefName',
+        ],
+        {
+          cwd: repoDir,
+          encoding: 'utf-8',
+          maxBuffer: 1024 * 1024,
+        },
+      );
+      stdout = result.stdout;
+    } catch (error) {
+      return {
+        state: '',
+        mergeable: 'UNKNOWN',
+        mergeStateStatus: 'UNKNOWN',
+        checks: [],
+        checkReadError: classifyCheckReadError(error),
+      };
+    }
+
+    try {
+      const parsed = JSON.parse(stdout) as Record<string, unknown>;
+      return {
+        state: String(parsed.state ?? ''),
+        mergeable: String(parsed.mergeable ?? ''),
+        mergeStateStatus: String(parsed.mergeStateStatus ?? ''),
+        url: typeof parsed.url === 'string' ? parsed.url : undefined,
+        headRefName: typeof parsed.headRefName === 'string' ? parsed.headRefName : undefined,
+        baseRefName: typeof parsed.baseRefName === 'string' ? parsed.baseRefName : undefined,
+        checks: normalizeStatusCheckRollup(parsed.statusCheckRollup),
+      };
+    } catch (error) {
+      return {
+        state: '',
+        mergeable: 'UNKNOWN',
+        mergeStateStatus: 'UNKNOWN',
+        checks: [],
+        checkReadError: {
+          errorType: 'malformed-json',
+          reason: `gh pr view returned malformed JSON: ${errorMessage(error)}`,
+        },
+      };
+    }
   },
   async getCurrentHead(worktree) {
     try {
@@ -477,6 +531,12 @@ export function normalizeStatusCheckRollup(raw: unknown): NormalizedCheckSummary
     const entry = typeof item === 'object' && item !== null ? item as Record<string, unknown> : {};
     const rawStatus = String(entry.conclusion ?? entry.state ?? '').toUpperCase();
     const name = String(entry.name ?? entry.context ?? `check-${index + 1}`);
+    const text = [
+      typeof entry.title === 'string' ? entry.title : '',
+      typeof entry.summary === 'string' ? entry.summary : '',
+      typeof entry.text === 'string' ? entry.text : '',
+      typeof entry.detailsUrl === 'string' ? entry.detailsUrl : '',
+    ].filter(Boolean).join('\n');
     let status: NormalizedCheckSummary['status'] = 'unknown';
 
     if (rawStatus === 'SUCCESS') status = 'success';
@@ -488,8 +548,28 @@ export function normalizeStatusCheckRollup(raw: unknown): NormalizedCheckSummary
       status = 'failure';
     }
 
-    return { name, status, rawStatus };
+    return { name, status, rawStatus, text: text || undefined, details: entry };
   });
+}
+
+function classifyCheckReadError(error: unknown): GitHubPRTruth['checkReadError'] {
+  const message = errorMessage(error);
+  const lower = message.toLowerCase();
+  if (lower.includes('timeout') || lower.includes('timed out')) {
+    return { errorType: 'timeout', reason: message };
+  }
+  if (
+    lower.includes('could not resolve host') ||
+    lower.includes('network') ||
+    lower.includes('econnreset') ||
+    lower.includes('etimedout')
+  ) {
+    return { errorType: 'network', reason: message };
+  }
+  if (lower.includes('spawn') || lower.includes('exit') || lower.includes('command failed')) {
+    return { errorType: 'command-failed', reason: message };
+  }
+  return { errorType: 'unknown', reason: message };
 }
 
 function summarizeChecks(checks: NormalizedCheckSummary[]): {
@@ -813,6 +893,15 @@ function shouldEmitReadyWatchdogFinding(
   if (JSON.stringify(prior.remediationCategories ?? []) !== JSON.stringify(next.remediationCategories ?? [])) return true;
   if (prior.failingChecksFingerprint !== next.failingChecksFingerprint) return true;
   if (prior.failingChecksObservedCount !== next.failingChecksObservedCount) return true;
+  if (prior.transientFailureCount !== next.transientFailureCount) return true;
+  if (prior.transientFailureHead !== next.transientFailureHead) return true;
+  if (prior.lastCiFailureCategory !== next.lastCiFailureCategory) return true;
+  if (prior.lastFailingJob !== next.lastFailingJob) return true;
+  if (prior.lastLocalCommand !== next.lastLocalCommand) return true;
+  if (prior.terminal !== next.terminal) return true;
+  if (prior.terminalReason !== next.terminalReason) return true;
+  if (prior.terminalAttempts !== next.terminalAttempts) return true;
+  if (prior.terminalHeadSha !== next.terminalHeadSha) return true;
 
   // Same classification/action/fingerprint: rate-limit repeated "reported" findings.
   if (next.action === 'reported') {
@@ -847,7 +936,7 @@ export function classifyReadyTask(
   snapshot: ReadyTaskSnapshot,
   githubTruth: GitHubPRTruth | null,
   now: Date,
-  config: ReadyWatchdogConfig,
+  config: ReadyTaskClassificationConfig,
   prior?: ReadyWatchdogStateEntry,
   challengeGate?: ChallengeGate,
 ): ReadyWatchdogClassification {
@@ -859,6 +948,8 @@ export function classifyReadyTask(
     stableFailureConsecutivePolls: 2,
     stableFailureEscalateAfterPolls: 4,
     safeRemediationCategories: ['lint', 'type', 'test', 'build', 'migration-chain', 'alembic'],
+    localCommandMap: {},
+    remediationLogMaxBytes: 20_000,
     ...config,
   };
   if (snapshot.lastProgressAt === null || snapshot.idleMinutes === null) {
@@ -915,6 +1006,14 @@ export function classifyReadyTask(
     };
   }
 
+  if (githubTruth.checkReadError) {
+    return {
+      kind: 'waiting-on-ci',
+      detail: `Required GitHub check status could not be read for PR #${snapshot.prNumber} (${githubTruth.checkReadError.errorType}): ${githubTruth.checkReadError.reason}`,
+      autoRemediable: false,
+    };
+  }
+
   if (githubTruth.state !== 'OPEN') {
     return {
       kind: 'needs-user',
@@ -963,23 +1062,69 @@ export function classifyReadyTask(
     const consecutiveFailurePolls = sameFailureState
       ? (prior.consecutiveFailurePolls ?? 1) + 1
       : 1;
-    const failureClassification = classifyFailingChecks(
+    const ciClassifications = githubTruth.checks
+      .filter((check) => check.status === 'failure')
+      .map((check) => classifyCiFailure(check, {
+        localCommandMap: normalizedConfig.localCommandMap,
+        logMaxBytes: normalizedConfig.remediationLogMaxBytes,
+      }));
+    const primaryClassification = ciClassifications[0];
+    const allDeterministic = ciClassifications.length > 0
+      && ciClassifications.every((classification) => classification.category === 'deterministic-local');
+    const allTransient = ciClassifications.length > 0
+      && ciClassifications.every((classification) => classification.category === 'transient-infra');
+    const hasOperatorOnly = ciClassifications.some((classification) =>
+      classification.category === 'github-only' || classification.category === 'unknown',
+    );
+
+    if (hasOperatorOnly) {
+      const reasons = ciClassifications.map((classification) => classification.reason).join(' ');
+      return {
+        kind: 'needs-user',
+        detail: `Failing checks require operator attention: ${checkSummary.failures.join(', ')}. ${reasons}`,
+        consecutiveFailurePolls,
+        ciFailureCategory: primaryClassification?.category,
+        failingJob: primaryClassification?.failingJob,
+        localCommand: primaryClassification?.localCommand,
+        logExcerpt: primaryClassification?.logExcerpt,
+      };
+    }
+
+    if (allTransient) {
+      return {
+        kind: 'waiting-on-ci',
+        detail: `Transient CI failure observed: ${checkSummary.failures.join(', ')}. ${ciClassifications.map((classification) => classification.reason).join(' ')}`,
+        consecutiveFailurePolls,
+        autoRemediable: false,
+        ciFailureCategory: 'transient-infra',
+        failingJob: primaryClassification?.failingJob,
+        localCommand: primaryClassification?.localCommand,
+        logExcerpt: primaryClassification?.logExcerpt,
+      };
+    }
+
+    if (allDeterministic
+      && consecutiveFailurePolls >= normalizedConfig.stableFailureConsecutivePolls) {
+      const commands = [...new Set(ciClassifications.map((classification) => classification.localCommand).filter(Boolean))].join('; ');
+      return {
+        kind: 'stable-failing-safe',
+        detail: `${detail} Local replay: ${commands}.`,
+        remediationCategories: ciClassifications.map((classification) => classification.failingJob),
+        consecutiveFailurePolls,
+        autoRemediable: true,
+        ciFailureCategory: 'deterministic-local',
+        failingJob: primaryClassification?.failingJob,
+        localCommand: primaryClassification?.localCommand,
+        logExcerpt: primaryClassification?.logExcerpt,
+      };
+    }
+
+    const legacyFailureClassification = classifyFailingChecks(
       checkSummary.failures,
       normalizedConfig.safeRemediationCategories,
     );
 
-    if (failureClassification.kind === 'stable-failing-safe'
-      && consecutiveFailurePolls >= normalizedConfig.stableFailureConsecutivePolls) {
-      return {
-        kind: 'stable-failing-safe',
-        detail,
-        remediationCategories: failureClassification.remediableNames,
-        consecutiveFailurePolls,
-        autoRemediable: true,
-      };
-    }
-
-    if (failureClassification.kind === 'waiting-on-ci'
+    if (legacyFailureClassification.kind === 'waiting-on-ci'
       && consecutiveFailurePolls >= normalizedConfig.stableFailureEscalateAfterPolls) {
       return {
         kind: 'needs-user',
@@ -992,7 +1137,11 @@ export function classifyReadyTask(
       kind: 'waiting-on-ci',
       detail,
       consecutiveFailurePolls,
-      autoRemediable: checkSummary.pending.length === 0,
+      autoRemediable: false,
+      ciFailureCategory: primaryClassification?.category,
+      failingJob: primaryClassification?.failingJob,
+      localCommand: primaryClassification?.localCommand,
+      logExcerpt: primaryClassification?.logExcerpt,
     };
   }
 
@@ -1325,7 +1474,16 @@ function materiallyChanged(
     || prior.consecutiveFailurePolls !== next.consecutiveFailurePolls
     || JSON.stringify(prior.remediationCategories ?? []) !== JSON.stringify(next.remediationCategories ?? [])
     || prior.failingChecksFingerprint !== next.failingChecksFingerprint
-    || prior.failingChecksObservedCount !== next.failingChecksObservedCount;
+    || prior.failingChecksObservedCount !== next.failingChecksObservedCount
+    || prior.transientFailureCount !== next.transientFailureCount
+    || prior.transientFailureHead !== next.transientFailureHead
+    || prior.lastCiFailureCategory !== next.lastCiFailureCategory
+    || prior.lastFailingJob !== next.lastFailingJob
+    || prior.lastLocalCommand !== next.lastLocalCommand
+    || prior.terminal !== next.terminal
+    || prior.terminalReason !== next.terminalReason
+    || prior.terminalAttempts !== next.terminalAttempts
+    || prior.terminalHeadSha !== next.terminalHeadSha;
 }
 
 function buildFindingEntry(input: {
@@ -1343,6 +1501,15 @@ function buildFindingEntry(input: {
   consecutiveFailurePolls?: number;
   failingChecksFingerprint?: string;
   failingChecksObservedCount?: number;
+  transientFailureCount?: number;
+  transientFailureHead?: string;
+  lastCiFailureCategory?: CiFailureCategory;
+  lastFailingJob?: string;
+  lastLocalCommand?: string;
+  terminal?: boolean;
+  terminalReason?: string;
+  terminalAttempts?: number;
+  terminalHeadSha?: string | null;
 }): ReadyWatchdogStateEntry {
   return {
     issueId: input.issueId,
@@ -1365,6 +1532,16 @@ function buildFindingEntry(input: {
     consecutiveFailurePolls: input.consecutiveFailurePolls,
     failingChecksFingerprint: input.failingChecksFingerprint,
     failingChecksObservedCount: input.failingChecksObservedCount,
+    transientFailureCount: input.transientFailureCount,
+    transientFailureHead: input.transientFailureHead,
+    lastCiFailureCategory: input.lastCiFailureCategory,
+    lastFailingJob: input.lastFailingJob,
+    lastLocalCommand: input.lastLocalCommand,
+    terminal: input.terminal,
+    terminalReason: input.terminalReason,
+    terminalAttempts: input.terminalAttempts,
+    terminalHeadSha: input.terminalHeadSha,
+    lastTerminalAt: input.terminal ? input.now.toISOString() : undefined,
   };
 }
 
@@ -1387,6 +1564,63 @@ function buildExhaustedAutoUpdateEntry(
     autoUpdateAttempts: attempts,
     lastAutoUpdateError: lastError,
   });
+}
+
+function evaluateVerificationArtifact(snapshot: ReadyTaskSnapshot): 'inactive' | 'fresh' | 'awaiting' {
+  if (!snapshot.remediationLaunchHead || !snapshot.currentHead || snapshot.remediationLaunchHead === snapshot.currentHead) {
+    return 'inactive';
+  }
+
+  const artifactPath = path.join(snapshot.readyStateDir, `.verification-artifact-${snapshot.currentHead}.json`);
+  if (!existsSync(artifactPath)) {
+    try {
+      const protocolPresent = readdirSync(snapshot.readyStateDir)
+        .some((entry) => /^\.verification-artifact-.+\.json$/.test(entry));
+      return protocolPresent ? 'awaiting' : 'inactive';
+    } catch {
+      return 'inactive';
+    }
+  }
+
+  try {
+    const parsed = JSON.parse(readFileSync(artifactPath, 'utf-8')) as Record<string, unknown>;
+    const artifactHead = typeof parsed.headSha === 'string'
+      ? parsed.headSha
+      : typeof parsed.head === 'string'
+        ? parsed.head
+        : null;
+    const timestamp = typeof parsed.timestamp === 'string'
+      ? parsed.timestamp
+      : typeof parsed.createdAt === 'string'
+        ? parsed.createdAt
+        : null;
+    const artifactTime = parseIsoDate(timestamp);
+    const pushTime = parseIsoDate(snapshot.readyResult?.startedAt ?? null);
+    if (artifactHead && artifactHead !== snapshot.currentHead) {
+      return 'awaiting';
+    }
+    if (pushTime && artifactTime && artifactTime < pushTime) {
+      return 'awaiting';
+    }
+    return 'fresh';
+  } catch {
+    return 'awaiting';
+  }
+}
+
+function buildRemediationPayloadSummary(classification: ReadyWatchdogClassification, fallbackSummary: string): string {
+  if (classification.ciFailureCategory !== 'deterministic-local') {
+    return fallbackSummary;
+  }
+
+  const parts = [
+    fallbackSummary,
+    `category: deterministic-local`,
+    classification.failingJob ? `failingJob: ${classification.failingJob}` : '',
+    classification.localCommand ? `localCommand: ${classification.localCommand}` : '',
+    classification.logExcerpt ? `logExcerpt:\n${classification.logExcerpt}` : '',
+  ].filter(Boolean);
+  return parts.join('\n');
 }
 
 /** Emit a ready-phase trace event from the feature directory — best-effort, never throws. */
@@ -1424,6 +1658,8 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
   const priorTasks = priorState?.tasks ?? {};
   const nextTasks = { ...priorTasks };
   const remediationConfig = getReadyRemediationConfig(options.repoDir);
+  const failureClassifierConfig = getReadyFailureClassifierConfig(options.repoDir);
+  const verificationConfig = getReadyVerificationConfig(options.repoDir);
   const readyWatchdogToolPath = options.readyWatchdogToolPath ?? READY_WATCHDOG_TOOL_PATH;
   const workflowState = await deps.readWorkflowState(options.stateFile);
   const tasks = workflowState.tasks ?? {};
@@ -1490,6 +1726,53 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
     let fetchError: string | undefined;
     const prior = priorTasks[issueId];
 
+    if (verificationConfig.gatingEnabled) {
+      const verificationState = evaluateVerificationArtifact(snapshot);
+      if (verificationState === 'awaiting') {
+        let entry = buildFindingEntry({
+          issueId,
+          snapshot,
+          classification: 'waiting-on-ci',
+          detail: `Awaiting fresh controller verification artifact for head ${snapshot.currentHead ?? 'unknown'} before polling CI again after remediation.`,
+          action: 'awaiting-verification',
+          now,
+          lastCiFailureCategory: prior?.lastCiFailureCategory,
+          lastFailingJob: prior?.lastFailingJob,
+          lastLocalCommand: prior?.lastLocalCommand,
+        });
+        if (shouldEmitReadyWatchdogFinding(prior, entry, now, getReportIntervalSeconds())) {
+          entry = {
+            ...entry,
+            lastLoggedAt: now.toISOString(),
+            lastLoggedFingerprint: entry.detailFingerprint,
+            lastLoggedClassification: entry.classification,
+            lastLoggedAction: entry.action,
+          };
+          newFindings.push(entry);
+          await writeAuditRecord(options.repoDir, {
+            timestamp: now.toISOString(),
+            taskId: issueId,
+            slug: snapshot.slug,
+            prNumber: snapshot.prNumber,
+            classification: entry.classification,
+            action: entry.action,
+            detail: entry.detail,
+            recoveryCommand: entry.recoveryCommand,
+          });
+        } else {
+          entry = {
+            ...entry,
+            lastLoggedAt: prior?.lastLoggedAt,
+            lastLoggedFingerprint: prior?.lastLoggedFingerprint,
+            lastLoggedClassification: prior?.lastLoggedClassification,
+            lastLoggedAction: prior?.lastLoggedAction,
+          };
+        }
+        nextTasks[issueId] = entry;
+        continue;
+      }
+    }
+
     // Compute the challenge gate for this PR if it has a challenge pair. Passes null
     // for PR metadata because workflow-state challenge pairs are sufficient to detect
     // the pair-unresolved:no-comparison case that the watchdog needs to surface.
@@ -1515,7 +1798,18 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
 
     try {
       githubTruth = await deps.fetchGitHubTruth(snapshot.prNumber, options.repoDir);
-      classification = classifyReadyTask(snapshot, githubTruth, now, config, prior, challengeGate);
+      classification = classifyReadyTask(
+        snapshot,
+        githubTruth,
+        now,
+        {
+          ...config,
+          localCommandMap: failureClassifierConfig.localCommandMap,
+          remediationLogMaxBytes: failureClassifierConfig.remediationLogMaxBytes,
+        },
+        prior,
+        challengeGate,
+      );
     } catch (error) {
       fetchError = errorMessage(error);
       classification = {
@@ -1640,62 +1934,88 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
       }
       if (
         (classification.kind === 'waiting-on-ci' || classification.kind === 'stable-failing-safe')
-        && classification.autoRemediable
         && githubTruth
-        && remediationConfig.enabled
       ) {
-        const attempts = snapshot.readyArtifacts?.remediationAttempts ?? 0;
-        if (failingChecksObservedCount < FAILING_CHECK_STABILITY_THRESHOLD) {
-          action = 'waiting-on-ci-stabilizing';
-          classification = {
-            ...classification,
-            detail: `Failing checks remain unstable (${failingChecksObservedCount}/${FAILING_CHECK_STABILITY_THRESHOLD}): ${classification.detail}`,
-          };
-        } else if (attempts >= remediationConfig.maxAttempts) {
-          action = 'remediation-exhausted';
-          classification = {
-            ...classification,
-            detail: `Ready remediation capped at ${attempts}/${remediationConfig.maxAttempts} attempts for PR #${snapshot.prNumber}.`,
-          };
-        } else if (
-          snapshot.remediationLaunchHead
-          && snapshot.currentHead
-          && snapshot.remediationLaunchHead === snapshot.currentHead
-        ) {
-          action = 'remediation-in-flight';
-          classification = {
-            ...classification,
-            detail: `Ready remediation is already running for PR #${snapshot.prNumber} at ${snapshot.currentHead}.`,
-          };
-        } else {
-          const checkSummary = summarizeChecks(githubTruth.checks);
-          const failedCheckNames = githubTruth.checks
-            .filter((check) => check.status === 'failure')
-            .map((check) => check.name);
-          const launchResult = await deps.launchReadyRemediation(
-            snapshot,
-            checkSummary.failures.join(', '),
-            failedCheckNames,
-            attempts + 1,
-            remediationConfig.maxAttempts,
-            options.repoDir,
-            readyWatchdogToolPath,
-          );
-
-          if (launchResult.status === 'launched') {
-            action = 'launched-remediation';
-          } else if (launchResult.status === 'skipped-in-flight') {
-            action = 'remediation-in-flight';
-          } else if (launchResult.status === 'skipped-max-attempts') {
-            action = 'remediation-exhausted';
+        if (classification.ciFailureCategory === 'transient-infra') {
+          const sameTransientHead = prior?.transientFailureHead === snapshot.currentHead
+            && prior?.lastCiFailureCategory === 'transient-infra';
+          const transientFailureCount = sameTransientHead ? (prior?.transientFailureCount ?? 0) + 1 : 1;
+          if (transientFailureCount <= failureClassifierConfig.transientRetryBudget) {
+            action = 'waiting-on-ci-transient';
+            classification = {
+              ...classification,
+              detail: `${classification.detail} Retrying without remediation (${transientFailureCount}/${failureClassifierConfig.transientRetryBudget}).`,
+            };
           } else {
-            action = 'remediation-launch-failed';
+            action = 'transient-retry-exhausted';
+            classification = {
+              ...classification,
+              kind: 'needs-user',
+              detail: `Transient CI failure budget exhausted after ${transientFailureCount - 1}/${failureClassifierConfig.transientRetryBudget} retries for PR #${snapshot.prNumber}: ${classification.detail}`,
+            };
+            await writeReadyAttention(snapshot, classification.detail);
           }
+        } else if (classification.ciFailureCategory === 'deterministic-local') {
+          const attempts = snapshot.readyArtifacts?.remediationAttempts ?? 0;
+          if (failingChecksObservedCount < FAILING_CHECK_STABILITY_THRESHOLD) {
+            action = 'waiting-on-ci-stabilizing';
+            classification = {
+              ...classification,
+              detail: `Failing checks remain unstable (${failingChecksObservedCount}/${FAILING_CHECK_STABILITY_THRESHOLD}): ${classification.detail}`,
+            };
+          } else if (!remediationConfig.enabled) {
+            action = 'reported';
+          } else if (attempts >= remediationConfig.maxAttempts) {
+            action = 'remediation-exhausted';
+            classification = {
+              ...classification,
+              detail: `Ready remediation capped at ${attempts}/${remediationConfig.maxAttempts} attempts for PR #${snapshot.prNumber}.`,
+            };
+            await writeReadyAttention(snapshot, classification.detail);
+          } else if (
+            snapshot.remediationLaunchHead
+            && snapshot.currentHead
+            && snapshot.remediationLaunchHead === snapshot.currentHead
+          ) {
+            action = 'remediation-in-flight';
+            classification = {
+              ...classification,
+              detail: `Ready remediation is already running for PR #${snapshot.prNumber} at ${snapshot.currentHead}.`,
+            };
+          } else {
+            const checkSummary = summarizeChecks(githubTruth.checks);
+            const failedCheckNames = githubTruth.checks
+              .filter((check) => check.status === 'failure')
+              .map((check) => check.name);
+            const failedCheckSummary = buildRemediationPayloadSummary(
+              classification,
+              checkSummary.failures.join(', '),
+            );
+            const launchResult = await deps.launchReadyRemediation(
+              snapshot,
+              failedCheckSummary,
+              failedCheckNames,
+              attempts + 1,
+              remediationConfig.maxAttempts,
+              options.repoDir,
+              readyWatchdogToolPath,
+            );
 
-          classification = {
-            ...classification,
-            detail: launchResult.detail,
-          };
+            if (launchResult.status === 'launched') {
+              action = 'launched-remediation';
+            } else if (launchResult.status === 'skipped-in-flight') {
+              action = 'remediation-in-flight';
+            } else if (launchResult.status === 'skipped-max-attempts') {
+              action = 'remediation-exhausted';
+            } else {
+              action = 'remediation-launch-failed';
+            }
+
+            classification = {
+              ...classification,
+              detail: launchResult.detail,
+            };
+          }
         }
       } else if (classification.kind === 'stuck') {
         recoveryCommand = makeRecoveryCommand(options.repoDir, options.stateFile, issueId, readyWatchdogToolPath);
@@ -1724,6 +2044,21 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
         consecutiveFailurePolls: classification.consecutiveFailurePolls,
         failingChecksFingerprint,
         failingChecksObservedCount,
+        transientFailureCount: classification.ciFailureCategory === 'transient-infra'
+          ? (action === 'waiting-on-ci-transient' || action === 'transient-retry-exhausted'
+              ? (prior?.transientFailureHead === snapshot.currentHead && prior?.lastCiFailureCategory === 'transient-infra'
+                  ? (prior?.transientFailureCount ?? 0) + 1
+                  : 1)
+              : prior?.transientFailureCount)
+          : undefined,
+        transientFailureHead: classification.ciFailureCategory === 'transient-infra' ? snapshot.currentHead ?? undefined : undefined,
+        lastCiFailureCategory: classification.ciFailureCategory,
+        lastFailingJob: classification.failingJob,
+        lastLocalCommand: classification.localCommand,
+        terminal: action === 'remediation-exhausted',
+        terminalReason: action === 'remediation-exhausted' ? 'remediation-attempts-exhausted' : undefined,
+        terminalAttempts: action === 'remediation-exhausted' ? snapshot.readyArtifacts?.remediationAttempts ?? 0 : undefined,
+        terminalHeadSha: action === 'remediation-exhausted' ? snapshot.currentHead : undefined,
       });
     }
 

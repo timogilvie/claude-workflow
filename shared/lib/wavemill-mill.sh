@@ -1550,7 +1550,18 @@ pr_state() {
 # Get PR details with base branch validation
 pr_details() {
   local pr="$1"
-  gh pr view "$pr" --json state,baseRefName,statusCheckRollup 2>/dev/null || echo ""
+  local output rc
+  output=$(gh pr view "$pr" --json state,baseRefName,statusCheckRollup 2>&1)
+  rc=$?
+  if [[ "$rc" -eq 0 ]]; then
+    printf '%s\n' "$output"
+    return 0
+  fi
+
+  # Fail closed: downstream ready logic must see an explicit check-read
+  # failure, never an empty successful check list.
+  jq -cn --arg pr "$pr" --arg reason "$output" --argjson exitCode "$rc" \
+    '{checkReadFailed:true, prNumber:($pr|tonumber? // $pr), errorType:"command-failed", exitCode:$exitCode, reason:$reason}'
 }
 
 

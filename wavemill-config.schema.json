@@ -1262,6 +1262,30 @@
                     "default": [],
                     "description": "Reserved repository-specific forbidden migration patterns for future ready-stage policy extensions."
                 },
+                "transientRetryBudget": {
+                    "type": "integer",
+                    "default": 3,
+                    "minimum": 0,
+                    "description": "Number of transient post-PR CI failure observations to wait through before escalating to operator attention."
+                },
+                "remediationLogMaxBytes": {
+                    "type": "integer",
+                    "default": 20000,
+                    "minimum": 1,
+                    "description": "Maximum bytes of CI log evidence included in a ready remediation payload."
+                },
+                "verificationGatingEnabled": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Require a fresh controller-owned verification artifact after remediation pushes when the artifact protocol is present."
+                },
+                "localCommandMap": {
+                    "type": "object",
+                    "description": "Exact GitHub check/job name to local replay command mapping used for deterministic CI remediation.",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
                 "remediation": {
                     "type": "object",
                     "description": "Automatic remediation settings for fixable ready-check failures.",
