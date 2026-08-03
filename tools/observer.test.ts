@@ -1,10 +1,10 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildFindings } from './observer.ts';
+import { buildFindings, parseArgs, redactObserverText, writeServiceHeartbeat } from './observer.ts';
 
 test('repeated ready watchdog auto-recoveries escalate to actionable stuck finding', () => {
   const repoDir = mkdtempSync(join(tmpdir(), 'observer-ready-watchdog-'));
@@ -58,4 +58,70 @@ test('repeated ready watchdog auto-recoveries escalate to actionable stuck findi
   } finally {
     rmSync(repoDir, { recursive: true, force: true });
   }
+});
+
+test('service mode rejects Linear filing', () => {
+  const previous = process.env.WAVEMILL_OBSERVER_SERVICE;
+  process.env.WAVEMILL_OBSERVER_SERVICE = '1';
+  try {
+    assert.throws(() => parseArgs(['--loop', '--file-linear']), /--file-linear is not allowed/);
+  } finally {
+    if (previous === undefined) {
+      delete process.env.WAVEMILL_OBSERVER_SERVICE;
+    } else {
+      process.env.WAVEMILL_OBSERVER_SERVICE = previous;
+    }
+  }
+});
+
+test('service heartbeat is parseable and stores redacted finding counts only', async () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'observer-heartbeat-'));
+  try {
+    await writeServiceHeartbeat({
+      timestamp: '2026-08-03T12:00:00.000Z',
+      sessions: ['wavemill-test'],
+      panes: [],
+      processes: [],
+      repos: [],
+      findings: [{
+        id: 'secret-finding',
+        severity: 'high',
+        category: 'warning',
+        confidence: 'high',
+        title: 'Secret in log',
+        evidence: ['OPENAI_API_KEY=sk-secret prompt=do the hidden task'],
+        recommendation: 'Inspect redacted evidence',
+      }],
+    }, {
+      loop: true,
+      once: false,
+      json: true,
+      intervalSeconds: 120,
+      staleMinutes: 10,
+      hungMinutes: 10,
+      fileLinear: false,
+      dryRun: true,
+      maxLogLines: 240,
+      printPrompt: false,
+      repoDir,
+      session: 'wavemill-test',
+      serviceMode: true,
+    });
+
+    const raw = readFileSync(join(repoDir, '.wavemill', 'backstage-health.json'), 'utf8');
+    const parsed = JSON.parse(raw);
+    assert.equal(parsed.services.observer.status, 'healthy');
+    assert.equal(parsed.services.observer.heartbeatAt, '2026-08-03T12:00:00.000Z');
+    assert.equal(parsed.services.observer.findingCounts.high, 1);
+    assert.doesNotMatch(raw, /sk-secret|hidden task/);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('observer redaction removes credentials and prompt-like evidence', () => {
+  assert.equal(
+    redactObserverText('OPENAI_API_KEY=sk-test token=abc123 prompt=full task'),
+    'OPENAI_API_KEY=[redacted] token=[redacted] prompt=[redacted]',
+  );
 });

@@ -1619,9 +1619,49 @@ queue_health_dashboard_warning() {
   return 0
 }
 
+format_backstage_service_status() {
+  local status="${1:-unknown}"
+  case "$status" in
+    healthy) printf '%b' "${G}healthy${N}" ;;
+    disabled) printf '%b' "${D}disabled${N}" ;;
+    needs-user) printf '%b' "${R}needs-user${N}" ;;
+    missing-*|stale-*|backstage-missing) printf '%b' "${Y}${status}${N}" ;;
+    *) printf '%b' "${D}${status}${N}" ;;
+  esac
+}
+
+backstage_health_dashboard_line() {
+  local state_file="${1:-}" state_dir health_file tend_status observer_status heartbeat_at heartbeat_age now_ts heartbeat_epoch
+  [[ -n "$state_file" ]] || return 1
+  state_dir="$(dirname "$state_file" 2>/dev/null || echo '')"
+  [[ -n "$state_dir" ]] || return 1
+  health_file="${state_dir}/backstage-health.json"
+  [[ -r "$health_file" ]] || return 1
+
+  tend_status="$(jq -r '.services.tend.status // .status // empty' "$health_file" 2>/dev/null || true)"
+  observer_status="$(jq -r '.services.observer.status // empty' "$health_file" 2>/dev/null || true)"
+  [[ -n "$tend_status$observer_status" ]] || return 1
+
+  printf 'Tend: %b' "$(format_backstage_service_status "${tend_status:-unknown}")"
+  if [[ -n "$observer_status" ]]; then
+    printf ' │ Observer: %b' "$(format_backstage_service_status "$observer_status")"
+    heartbeat_at="$(jq -r '.services.observer.heartbeatAt // empty' "$health_file" 2>/dev/null || true)"
+    if [[ -n "$heartbeat_at" ]]; then
+      now_ts="$(date +%s)"
+      heartbeat_epoch="$(wavemill_iso8601_to_epoch "$heartbeat_at" 2>/dev/null || echo 0)"
+      if [[ "$heartbeat_epoch" =~ ^[0-9]+$ && "$heartbeat_epoch" -gt 0 ]]; then
+        heartbeat_age=$(( now_ts - heartbeat_epoch ))
+        printf ' (%ss ago)' "$heartbeat_age"
+      fi
+    fi
+  fi
+  printf '\n'
+  return 0
+}
+
 render_dashboard() {
   local tasks line issue slug branch worktree task_status task_phase state_pr
-  local win agent_state classification task_data free_slots usage_tip openrouter_warning
+  local win agent_state classification task_data free_slots usage_tip openrouter_warning backstage_health_line
   declare -ga inbox_tasks=()
   declare -ga active_tasks=()
 
@@ -1640,6 +1680,9 @@ render_dashboard() {
   fi
   if queue_health_warning="$(queue_health_dashboard_warning "$STATE_FILE" 2>/dev/null)"; then
     printf "${D}├─ WARN: %s${N}${EL}\n" "$queue_health_warning" >> "$FRAME"
+  fi
+  if backstage_health_line="$(backstage_health_dashboard_line "$STATE_FILE" 2>/dev/null)"; then
+    printf "${D}├─ %b${N}${EL}\n" "$backstage_health_line" >> "$FRAME"
   fi
 
   tasks=$(gather_tasks)

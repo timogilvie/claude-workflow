@@ -446,6 +446,7 @@ write_monitor_env() {
     write_shell_assignment "WAVEMILL_BACKSTAGE_TEND_PANE_TITLE" "$WAVEMILL_BACKSTAGE_TEND_PANE_TITLE"
     write_shell_assignment "WAVEMILL_BACKSTAGE_JOBS_PANE_TITLE" "$WAVEMILL_BACKSTAGE_JOBS_PANE_TITLE"
     write_shell_assignment "WAVEMILL_BACKSTAGE_QUEUE_PANE_TITLE" "$WAVEMILL_BACKSTAGE_QUEUE_PANE_TITLE"
+    write_shell_assignment "WAVEMILL_BACKSTAGE_OBSERVER_PANE_TITLE" "$WAVEMILL_BACKSTAGE_OBSERVER_PANE_TITLE"
     # Plumb the monitor's own script/env paths so the control-pane health
     # watchdog can rebuild its launch command during recovery.
     write_shell_assignment "MONITOR_SCRIPT" "$MONITOR_SCRIPT"
@@ -489,7 +490,8 @@ setup_control_dashboard() {
 
 spawn_integration_window() {
   [[ "${DRY_RUN:-false}" == "true" ]] && return 0
-  local merged enabled use_mill_session integration_cmd status_script jobs_cmd queue_cmd tend_pane right_top_pane right_bottom_pane backstage_health_file
+  local merged enabled use_mill_session observer_enabled observer_interval observer_max_log_lines
+  local integration_cmd observer_cmd status_script jobs_cmd queue_cmd tend_pane right_top_pane right_bottom_pane observer_pane backstage_health_file
 
   merged="$(wavemill_load_config "$REPO_DIR")"
   enabled="$(printf '%s' "$merged" | jq -r '.integration.enabled // false' 2>/dev/null || echo false)"
@@ -497,6 +499,11 @@ spawn_integration_window() {
 
   if [[ "$enabled" != "true" || "$use_mill_session" != "true" ]]; then
     return 0
+  fi
+
+  observer_enabled=false
+  if wavemill_observer_config_enabled "$merged"; then
+    observer_enabled=true
   fi
 
   startup_log "Starting backstage window (tend loop + background status)..."
@@ -516,12 +523,23 @@ spawn_integration_window() {
   wavemill_set_tmux_pane_title "$right_top_pane" "$WAVEMILL_BACKSTAGE_JOBS_PANE_TITLE"
   wavemill_set_tmux_pane_title "$right_bottom_pane" "$WAVEMILL_BACKSTAGE_QUEUE_PANE_TITLE"
 
+  if [[ "$observer_enabled" == "true" ]]; then
+    observer_interval="$(wavemill_observer_interval_seconds "$merged")"
+    observer_max_log_lines="$(wavemill_observer_max_log_lines "$merged")"
+    observer_cmd="$(wavemill_build_observer_loop_command "$SESSION" "$REPO_DIR" "$TOOLS_DIR" "$observer_interval" "$observer_max_log_lines")"
+    observer_pane="$(tmux split-window -t "$right_bottom_pane" -v -p 50 -c "$REPO_DIR" -P -F '#{pane_id}' "$observer_cmd")"
+    wavemill_set_tmux_pane_title "$observer_pane" "$WAVEMILL_BACKSTAGE_OBSERVER_PANE_TITLE"
+  fi
+
   tmux set-window-option -u -t "$SESSION:$WAVEMILL_WINDOW_BACKSTAGE" window-status-style >/dev/null 2>&1 || true
   tmux set-window-option -u -t "$SESSION:$WAVEMILL_WINDOW_BACKSTAGE" window-status-current-style >/dev/null 2>&1 || true
   tmux set-option -t "$SESSION:$WAVEMILL_WINDOW_BACKSTAGE" remain-on-exit off >/dev/null 2>&1 || true
   backstage_health_file="$(wavemill_backstage_health_file "$STATE_DIR" 2>/dev/null || true)"
   if [[ -n "$backstage_health_file" ]]; then
     wavemill_write_backstage_health "$backstage_health_file" "healthy" "backstage tend loop is running" 0 "" "$tend_pane"
+    if [[ "$observer_enabled" == "true" && -n "${observer_pane:-}" ]]; then
+      wavemill_write_backstage_service_health "$backstage_health_file" "observer" "healthy" "backstage observer loop is running" 0 "" "$observer_pane"
+    fi
   fi
   startup_log "✓ Backstage window running."
 }

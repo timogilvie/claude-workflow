@@ -2449,6 +2449,38 @@ else
   fail "unknown state should not write hook file (got: $unknown_result)"
 fi
 
+# ── Backstage health renders Tend and Observer independently ───────────────
+backstage_state="$TMP_DIR/backstage-state.json"
+backstage_behavior="$TMP_DIR/backstage-behavior.json"
+backstage_output="$TMP_DIR/backstage-output.txt"
+cat > "$backstage_state" <<'JSON'
+{"tasks":{}}
+JSON
+cat > "$backstage_behavior" <<'JSON'
+{"pane":{}}
+JSON
+cat > "$TMP_DIR/backstage-health.json" <<JSON
+{
+  "status": "healthy",
+  "services": {
+    "tend": {
+      "status": "healthy"
+    },
+    "observer": {
+      "status": "needs-user",
+      "heartbeatAt": "$(iso_at_offset -20)"
+    }
+  }
+}
+JSON
+run_render "$backstage_state" "$WORKTREES_DIR" "$backstage_behavior" "$backstage_output"
+backstage_render="$(cat "$backstage_output")"
+if [[ "$backstage_render" == *"Tend: healthy"* && "$backstage_render" == *"Observer: needs-user"* ]]; then
+  pass "backstage health renders tend and observer separately"
+else
+  fail "backstage health did not render independent tend/observer status"
+fi
+
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 

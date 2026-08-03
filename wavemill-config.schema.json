@@ -274,6 +274,48 @@
             },
             "additionalProperties": false
         },
+        "observer": {
+            "type": "object",
+            "description": "Controls the dedicated Backstage Wavemill Observer service. The service is default-disabled and only runs when integration mill-session monitoring is active.",
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "When true, eligible mill sessions launch a dedicated Backstage pane running wavemill observer --loop in detection-only mode."
+                },
+                "intervalSeconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 120,
+                    "description": "Seconds between observer snapshots."
+                },
+                "heartbeatStaleSeconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 300,
+                    "description": "Seconds after the last observer heartbeat before the Backstage watchdog treats the observer as stale."
+                },
+                "maxLogLines": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 240,
+                    "description": "Recent mill log lines inspected in each observer pass."
+                },
+                "retention": {
+                    "type": "object",
+                    "properties": {
+                        "maxSnapshots": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "default": 50,
+                            "description": "Reserved limit for retained observer snapshots when snapshot persistence is enabled."
+                        }
+                    },
+                    "additionalProperties": false
+                }
+            },
+            "additionalProperties": false
+        },
         "hooks": {
             "type": "object",
             "description": "Hook and status-emission settings.",
