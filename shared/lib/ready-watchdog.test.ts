@@ -340,7 +340,7 @@ test('classify stable safe failing CI as stable-failing-safe after repeated poll
   );
 
   assert.equal(classification.kind, 'stable-failing-safe');
-  assert.deepEqual(classification.remediationCategories, ['lint (FAILURE)']);
+  assert.deepEqual(classification.remediationCategories, ['lint']);
   assert.equal(classification.autoRemediable, true);
 });
 
@@ -415,7 +415,7 @@ test('classify repeated unsafe failing CI as needs-user after the escalation thr
   );
 
   assert.equal(classification.kind, 'needs-user');
-  assert.match(classification.detail, /unsafe/);
+  assert.match(classification.detail, /operator attention/);
 });
 
 test('classify active eval or comparison as waiting-on-eval-comparison', () => {
@@ -809,6 +809,285 @@ test('tick launches remediation on stable completed failure', async () => {
     };
     assert.equal(watchdogState.tasks['HOK-2039'].failingChecksObservedCount, 2);
     assert.equal(watchdogState.tasks['HOK-2039'].action, 'launched-remediation');
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('tick passes deterministic remediation context with command and bounded log excerpt', async () => {
+  const { repoDir, stateDir, stateFile } = setupReadyTask('HOK-2604', 2604);
+  const contexts: unknown[] = [];
+
+  try {
+    const deps = {
+      fetchGitHubTruth: async () => makeTruth({
+        checks: [{
+          name: 'Unit Tests',
+          status: 'failure',
+          rawStatus: 'FAILURE',
+          logExcerpt: `${'x'.repeat(200)}expected true received false`,
+        }],
+      }),
+      getCurrentHead: async () => 'head-2604',
+      launchReadyRemediation: async (
+        _snapshot: ReadyTaskSnapshot,
+        _summary: string,
+        _names: string[],
+        attemptNumber: number,
+        _maxAttempts: number,
+        _repoDir: string,
+        _toolPath: string,
+        context?: unknown,
+      ) => {
+        contexts.push(context);
+        return {
+          status: 'launched' as const,
+          detail: 'launched with context',
+          attemptNumber,
+          launchHead: 'head-2604',
+        };
+      },
+      now: () => new Date('2030-05-05T12:30:00.000Z'),
+    };
+
+    await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: { ...WATCHDOG_CONFIG, remediationLogExcerptBytes: 64 },
+      deps,
+    });
+    const result = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: { ...WATCHDOG_CONFIG, remediationLogExcerptBytes: 64 },
+      deps: { ...deps, now: () => new Date('2030-05-05T12:31:00.000Z') },
+    });
+
+    assert.equal(result.findings[0].action, 'launched-remediation');
+    assert.equal(contexts.length, 1);
+    assert.deepEqual(contexts[0], {
+      failingJob: 'Unit Tests',
+      localCommand: 'npm test',
+      logExcerpt: '[truncated: showing last CI log bytes]\nected true received false',
+    });
+    const watchdogState = JSON.parse(readFileSync(path.join(stateDir, 'ready-watchdog-state.json'), 'utf-8')) as {
+      tasks: Record<string, { awaitingVerification?: boolean; verificationHeadSha?: string }>;
+    };
+    assert.equal(watchdogState.tasks['HOK-2604'].awaitingVerification, true);
+    assert.equal(watchdogState.tasks['HOK-2604'].verificationHeadSha, 'head-2604');
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('tick retries transient CI failures without launching remediation and exhausts budget', async () => {
+  const { repoDir, stateDir, stateFile, featureDir } = setupReadyTask('HOK-2604', 2604);
+  let launchCalled = false;
+
+  try {
+    const deps = {
+      fetchGitHubTruth: async () => makeTruth({
+        checks: [{
+          name: 'Unit Tests',
+          status: 'failure',
+          rawStatus: 'TIMED_OUT',
+          logExcerpt: 'runner lost communication with the actions service',
+        }],
+      }),
+      getCurrentHead: async () => 'transient-head',
+      launchReadyRemediation: async () => {
+        launchCalled = true;
+        return { status: 'failed' as const, detail: 'unexpected', attemptNumber: 1 };
+      },
+      now: () => new Date('2030-05-05T12:30:00.000Z'),
+    };
+
+    const first = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: { ...WATCHDOG_CONFIG, transientRetryBudget: 2 },
+      deps,
+    });
+    const second = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: { ...WATCHDOG_CONFIG, transientRetryBudget: 2 },
+      deps: { ...deps, now: () => new Date('2030-05-05T12:31:00.000Z') },
+    });
+    const third = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: { ...WATCHDOG_CONFIG, transientRetryBudget: 2 },
+      deps: { ...deps, now: () => new Date('2030-05-05T12:32:00.000Z') },
+    });
+
+    assert.equal(first.findings[0].action, 'transient-retry');
+    assert.equal(second.findings[0].action, 'transient-retry');
+    assert.equal(third.findings[0].classification, 'needs-user');
+    assert.equal(third.findings[0].action, 'needs-user');
+    assert.equal(launchCalled, false);
+    assert.match(readFileSync(path.join(featureDir, '.needs-attention'), 'utf-8'), /Transient CI failure exhausted retry budget/);
+    const watchdogState = JSON.parse(readFileSync(path.join(stateDir, 'ready-watchdog-state.json'), 'utf-8')) as {
+      tasks: Record<string, { transientRetryCount?: number; terminal?: { category?: string } }>;
+    };
+    assert.equal(watchdogState.tasks['HOK-2604'].transientRetryCount, 2);
+    assert.equal(watchdogState.tasks['HOK-2604'].terminal?.category, 'transient_exhausted');
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('tick waits for a fresh verification artifact before CI polling', async () => {
+  const { repoDir, stateDir, stateFile } = setupReadyTask('HOK-2604', 2604);
+  let fetched = false;
+  mkdirSync(path.join(stateDir, 'verification'), { recursive: true });
+  writeFileSync(path.join(stateDir, 'verification', 'head-awaiting.json'), JSON.stringify({
+    headSha: 'head-awaiting',
+    timestamp: new Date('2030-05-05T12:00:00.000Z').getTime(),
+  }));
+  writeFileSync(path.join(stateDir, 'ready-watchdog-state.json'), JSON.stringify({
+    updatedAt: '2030-05-05T12:00:00.000Z',
+    tasks: {
+      'HOK-2604': {
+        issueId: 'HOK-2604',
+        slug: 'ready-watchdog-task',
+        prNumber: 2604,
+        classification: 'waiting-on-ci',
+        displayLabel: 'waiting on CI',
+        detail: 'prior',
+        action: 'launched-remediation',
+        updatedAt: '2030-05-05T12:00:00.000Z',
+        idleMinutes: 30,
+        lastProgressAt: '2030-05-05T11:30:00.000Z',
+        awaitingVerification: true,
+        verificationHeadSha: 'head-awaiting',
+      },
+    },
+  }, null, 2));
+
+  try {
+    const result = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: WATCHDOG_CONFIG,
+      deps: {
+        fetchGitHubTruth: async () => {
+          fetched = true;
+          return makeTruth();
+        },
+        getCurrentHead: async () => 'head-awaiting',
+        now: () => new Date('2030-05-05T12:30:00.000Z'),
+      },
+    });
+
+    assert.equal(fetched, false);
+    assert.equal(result.findings[0].action, 'awaiting-verification');
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('tick proceeds when verification artifact contract is unavailable', async () => {
+  const { repoDir, stateDir, stateFile } = setupReadyTask('HOK-2604', 2604);
+  let fetched = false;
+  writeFileSync(path.join(stateDir, 'ready-watchdog-state.json'), JSON.stringify({
+    updatedAt: '2030-05-05T12:00:00.000Z',
+    tasks: {
+      'HOK-2604': {
+        issueId: 'HOK-2604',
+        slug: 'ready-watchdog-task',
+        prNumber: 2604,
+        classification: 'waiting-on-ci',
+        displayLabel: 'waiting on CI',
+        detail: 'prior',
+        action: 'launched-remediation',
+        updatedAt: '2030-05-05T12:00:00.000Z',
+        idleMinutes: 30,
+        lastProgressAt: '2030-05-05T11:30:00.000Z',
+        awaitingVerification: true,
+        verificationHeadSha: 'head-awaiting',
+      },
+    },
+  }, null, 2));
+
+  try {
+    const result = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: WATCHDOG_CONFIG,
+      deps: {
+        fetchGitHubTruth: async () => {
+          fetched = true;
+          return makeTruth();
+        },
+        getCurrentHead: async () => 'head-awaiting',
+        now: () => new Date('2030-05-05T12:30:00.000Z'),
+      },
+    });
+
+    assert.equal(fetched, true);
+    assert.notEqual(result.findings[0]?.action, 'awaiting-verification');
+    const watchdogState = JSON.parse(readFileSync(path.join(stateDir, 'ready-watchdog-state.json'), 'utf-8')) as {
+      tasks: Record<string, { awaitingVerification?: boolean }>;
+    };
+    assert.equal(watchdogState.tasks['HOK-2604'].awaitingVerification, false);
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('tick treats check read errors as needs-user and never merge-ready', async () => {
+  const { repoDir, stateFile, featureDir } = setupReadyTask('HOK-2604', 2604);
+
+  try {
+    const result = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: WATCHDOG_CONFIG,
+      deps: {
+        fetchGitHubTruth: async () => makeTruth({
+          checks: [],
+          checkReadError: { reason: 'statusCheckRollup missing', retryable: true },
+        }),
+        getCurrentHead: async () => 'head-1',
+        now: () => new Date('2030-05-05T12:30:00.000Z'),
+      },
+    });
+
+    assert.equal(result.findings[0].classification, 'needs-user');
+    assert.match(result.findings[0].detail, /could not be read/);
+    assert.match(readFileSync(path.join(featureDir, '.needs-attention'), 'utf-8'), /could not be read/);
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('tick escalates unknown and GitHub-only failures without remediation', async () => {
+  const { repoDir, stateFile, featureDir } = setupReadyTask('HOK-2604', 2604);
+  let launchCalled = false;
+
+  try {
+    const result = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: WATCHDOG_CONFIG,
+      deps: {
+        fetchGitHubTruth: async () => makeTruth({
+          checks: [{ name: 'Security approval', status: 'failure', rawStatus: 'ACTION_REQUIRED' }],
+        }),
+        getCurrentHead: async () => 'head-1',
+        launchReadyRemediation: async () => {
+          launchCalled = true;
+          return { status: 'failed', detail: 'unexpected', attemptNumber: 1 };
+        },
+        now: () => new Date('2030-05-05T12:30:00.000Z'),
+      },
+    });
+
+    assert.equal(result.findings[0].classification, 'needs-user');
+    assert.equal(result.findings[0].action, 'needs-user');
+    assert.equal(launchCalled, false);
+    assert.match(readFileSync(path.join(featureDir, '.needs-attention'), 'utf-8'), /operator attention/);
   } finally {
     await rm(repoDir, { recursive: true, force: true });
   }

@@ -596,6 +596,8 @@ export interface ReadyWatchdogConfig {
   stableFailureConsecutivePolls?: number;
   stableFailureEscalateAfterPolls?: number;
   safeRemediationCategories?: string[];
+  transientRetryBudget?: number;
+  remediationLogExcerptBytes?: number;
 }
 
 export interface MergeQueueConfig {
@@ -1324,6 +1326,8 @@ export function getReadyWatchdogConfig(repoDir?: string): Required<ReadyWatchdog
     stableFailureConsecutivePolls: merged.stableFailureConsecutivePolls ?? 2,
     stableFailureEscalateAfterPolls: merged.stableFailureEscalateAfterPolls ?? 4,
     safeRemediationCategories: merged.safeRemediationCategories ?? ['lint', 'type', 'test', 'build', 'migration-chain', 'alembic'],
+    transientRetryBudget: merged.transientRetryBudget ?? 3,
+    remediationLogExcerptBytes: merged.remediationLogExcerptBytes ?? 16_384,
   };
 }
 

@@ -384,6 +384,8 @@ test('ready watchdog defaults are returned when config is absent', () => {
       stableFailureConsecutivePolls: 2,
       stableFailureEscalateAfterPolls: 4,
       safeRemediationCategories: ['lint', 'type', 'test', 'build', 'migration-chain', 'alembic'],
+      transientRetryBudget: 3,
+      remediationLogExcerptBytes: 16384,
     });
     assert.deepEqual(getMigrationChecksConfig(tmp), {
       enabled: true,
@@ -456,6 +458,8 @@ test('ready watchdog supports canonical and legacy alias config', () => {
       stableFailureConsecutivePolls: 3,
       stableFailureEscalateAfterPolls: 4,
       safeRemediationCategories: ['lint', 'type', 'test', 'build', 'migration-chain', 'alembic'],
+      transientRetryBudget: 3,
+      remediationLogExcerptBytes: 16384,
     });
     assert.deepEqual(getMigrationChecksConfig(tmp), {
       enabled: false,

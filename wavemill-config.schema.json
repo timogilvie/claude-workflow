@@ -1337,6 +1337,18 @@
                                 "alembic"
                             ],
                             "description": "Allowlisted failure categories that the watchdog may route into automatic remediation once stable."
+                        },
+                        "transientRetryBudget": {
+                            "type": "integer",
+                            "default": 3,
+                            "minimum": 0,
+                            "description": "Maximum transient CI provider retries before operator escalation."
+                        },
+                        "remediationLogExcerptBytes": {
+                            "type": "integer",
+                            "default": 16384,
+                            "minimum": 1024,
+                            "description": "Maximum CI log excerpt bytes passed to ready remediation."
                         }
                     },
                     "additionalProperties": false
@@ -1428,6 +1440,16 @@
                                 "migration-chain",
                                 "alembic"
                             ]
+                        },
+                        "transientRetryBudget": {
+                            "type": "integer",
+                            "default": 3,
+                            "minimum": 0
+                        },
+                        "remediationLogExcerptBytes": {
+                            "type": "integer",
+                            "default": 16384,
+                            "minimum": 1024
                         }
                     },
                     "additionalProperties": false

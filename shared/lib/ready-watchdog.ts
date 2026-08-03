@@ -11,6 +11,12 @@ import {
   loadWavemillConfig,
   type ReadyWatchdogConfig,
 } from './config.ts';
+import {
+  classifyCiFailure,
+  truncateCiLogExcerpt,
+  type CiFailureCategory,
+  type CiFailureClassification,
+} from './ci-failure-classifier.ts';
 import { errorMessage } from './error-utils.ts';
 import { normalizeJobs, type MillJob, type WorkflowStateLike } from './job-tracker.ts';
 import { updateBranchWithBase, type BranchBaseUpdateResult } from './promotion-controller.ts';
@@ -107,6 +113,7 @@ export interface NormalizedCheckSummary {
   name: string;
   status: 'success' | 'pending' | 'failure' | 'neutral' | 'skipped' | 'unknown';
   rawStatus: string;
+  logExcerpt?: string;
 }
 
 export interface GitHubPRTruth {
@@ -117,6 +124,10 @@ export interface GitHubPRTruth {
   headRefName?: string;
   baseRefName?: string;
   checks: NormalizedCheckSummary[];
+  checkReadError?: {
+    reason: string;
+    retryable: boolean;
+  };
 }
 
 export interface ReadyWatchdogClassification {
@@ -162,10 +173,33 @@ export interface ReadyWatchdogStateEntry {
   consecutiveFailurePolls?: number;
   failingChecksFingerprint?: string;
   failingChecksObservedCount?: number;
+  transientRetryHead?: string;
+  transientRetryCount?: number;
+  lastClassification?: {
+    category: CiFailureCategory;
+    checkName: string;
+    timestamp: string;
+  };
+  remediationAttemptedAtHead?: string;
+  remediationAttemptCount?: number;
+  awaitingVerification?: boolean;
+  verificationHeadSha?: string;
+  terminal?: ReadyWatchdogTerminalDiagnostic;
   lastLoggedAt?: string;
   lastLoggedFingerprint?: string;
   lastLoggedClassification?: Exclude<ReadyWatchdogClassificationKind, 'fresh'>;
   lastLoggedAction?: string;
+}
+
+export interface ReadyWatchdogTerminalDiagnostic {
+  issue: string;
+  headSha: string | null;
+  category: CiFailureCategory | 'check_read_error' | 'remediation_exhausted' | 'transient_exhausted';
+  attemptCount: number;
+  maxAttempts: number;
+  lastCheck: string;
+  timestamp: string;
+  summary: string;
 }
 
 export interface ReadyWatchdogStateFile {
@@ -202,6 +236,7 @@ export interface ReadyWatchdogDeps {
     maxAttempts: number,
     repoDir: string,
     readyWatchdogToolPath: string,
+    context?: ReadyRemediationContext,
   ) => Promise<ReadyRemediationLaunchResult>;
   now: () => Date;
 }
@@ -216,6 +251,12 @@ export interface ReadyRemediationLaunchResult {
   detail: string;
   attemptNumber: number;
   launchHead?: string;
+}
+
+export interface ReadyRemediationContext {
+  failingJob?: string;
+  localCommand?: string;
+  logExcerpt?: string;
 }
 
 export interface TickReadyWatchdogOptions {
@@ -263,6 +304,9 @@ const defaultDeps: ReadyWatchdogDeps = {
       },
     );
     const parsed = JSON.parse(stdout) as Record<string, unknown>;
+    if (!Array.isArray(parsed.statusCheckRollup)) {
+      throw new Error('GitHub statusCheckRollup was missing or malformed');
+    }
     return {
       state: String(parsed.state ?? ''),
       mergeable: String(parsed.mergeable ?? ''),
@@ -361,26 +405,36 @@ const defaultDeps: ReadyWatchdogDeps = {
 
     return updateBranchWithBase(branch, baseBranch, snapshot.worktree);
   },
-  async launchReadyRemediation(snapshot, failedCheckSummary, failedCheckNames, attemptNumber, maxAttempts, repoDir, readyWatchdogToolPath) {
+  async launchReadyRemediation(snapshot, failedCheckSummary, failedCheckNames, attemptNumber, maxAttempts, repoDir, readyWatchdogToolPath, context) {
     try {
+      const args = [
+        'tsx',
+        readyWatchdogToolPath,
+        '--repo-dir',
+        repoDir,
+        '--launch-remediation',
+        snapshot.issueId,
+        '--failed-check-summary',
+        failedCheckSummary,
+        '--failed-check-names-json',
+        JSON.stringify(failedCheckNames),
+        '--attempt-number',
+        String(attemptNumber),
+        '--max-attempts',
+        String(maxAttempts),
+      ];
+      if (context?.failingJob) {
+        args.push('--failing-job', context.failingJob);
+      }
+      if (context?.localCommand) {
+        args.push('--local-command', context.localCommand);
+      }
+      if (context?.logExcerpt) {
+        args.push('--log-excerpt', context.logExcerpt);
+      }
       const { stdout } = await execFileAsync(
         'npx',
-        [
-          'tsx',
-          readyWatchdogToolPath,
-          '--repo-dir',
-          repoDir,
-          '--launch-remediation',
-          snapshot.issueId,
-          '--failed-check-summary',
-          failedCheckSummary,
-          '--failed-check-names-json',
-          JSON.stringify(failedCheckNames),
-          '--attempt-number',
-          String(attemptNumber),
-          '--max-attempts',
-          String(maxAttempts),
-        ],
+        args,
         {
           cwd: repoDir,
           encoding: 'utf-8',
@@ -477,6 +531,13 @@ export function normalizeStatusCheckRollup(raw: unknown): NormalizedCheckSummary
     const entry = typeof item === 'object' && item !== null ? item as Record<string, unknown> : {};
     const rawStatus = String(entry.conclusion ?? entry.state ?? '').toUpperCase();
     const name = String(entry.name ?? entry.context ?? `check-${index + 1}`);
+    const logExcerpt = typeof entry.logExcerpt === 'string'
+      ? entry.logExcerpt
+      : typeof entry.message === 'string'
+        ? entry.message
+        : typeof entry.summary === 'string'
+          ? entry.summary
+          : undefined;
     let status: NormalizedCheckSummary['status'] = 'unknown';
 
     if (rawStatus === 'SUCCESS') status = 'success';
@@ -488,7 +549,7 @@ export function normalizeStatusCheckRollup(raw: unknown): NormalizedCheckSummary
       status = 'failure';
     }
 
-    return { name, status, rawStatus };
+    return { name, status, rawStatus, logExcerpt };
   });
 }
 
@@ -514,6 +575,37 @@ function summarizeChecks(checks: NormalizedCheckSummary[]): {
   return { failures, pending, successes };
 }
 
+function failedChecks(checks: NormalizedCheckSummary[]): NormalizedCheckSummary[] {
+  return checks.filter((check) => check.status === 'failure');
+}
+
+function classifyFailedChecks(
+  checks: NormalizedCheckSummary[],
+): Array<{ check: NormalizedCheckSummary; classification: CiFailureClassification }> {
+  return failedChecks(checks).map((check) => ({
+    check,
+    classification: classifyCiFailure({
+      checkName: check.name,
+      conclusion: check.rawStatus || check.status,
+      logExcerpt: check.logExcerpt,
+    }),
+  }));
+}
+
+function strongestCiClassification(
+  checks: NormalizedCheckSummary[],
+): { check: NormalizedCheckSummary; classification: CiFailureClassification } | null {
+  const classified = classifyFailedChecks(checks);
+  const priority: CiFailureCategory[] = ['github_only', 'transient_infra', 'deterministic_local', 'unknown'];
+  for (const category of priority) {
+    const match = classified.find((entry) => entry.classification.category === category);
+    if (match) {
+      return match;
+    }
+  }
+  return null;
+}
+
 function buildFailingChecksFingerprint(checks: NormalizedCheckSummary[]): string | undefined {
   const fingerprint = checks
     .filter((check) => check.status === 'failure')
@@ -521,6 +613,93 @@ function buildFailingChecksFingerprint(checks: NormalizedCheckSummary[]): string
     .sort()
     .join(',');
   return fingerprint || undefined;
+}
+
+function buildTerminalDiagnostic(input: {
+  issueId: string;
+  snapshot: ReadyTaskSnapshot;
+  category: ReadyWatchdogTerminalDiagnostic['category'];
+  attemptCount: number;
+  maxAttempts: number;
+  lastCheck: string;
+  timestamp: string;
+  summary: string;
+}): ReadyWatchdogTerminalDiagnostic {
+  return {
+    issue: input.issueId,
+    headSha: input.snapshot.currentHead,
+    category: input.category,
+    attemptCount: input.attemptCount,
+    maxAttempts: input.maxAttempts,
+    lastCheck: input.lastCheck,
+    timestamp: input.timestamp,
+    summary: input.summary,
+  };
+}
+
+function terminalAlreadyRecorded(
+  prior: ReadyWatchdogStateEntry | undefined,
+  next: ReadyWatchdogTerminalDiagnostic,
+): boolean {
+  const priorTerminal = prior?.terminal;
+  return priorTerminal?.category === next.category
+    && priorTerminal.headSha === next.headSha
+    && priorTerminal.lastCheck === next.lastCheck
+    && priorTerminal.attemptCount === next.attemptCount
+    && priorTerminal.maxAttempts === next.maxAttempts;
+}
+
+type VerificationArtifactResult =
+  | { status: 'present'; timestamp: number; headSha: string }
+  | { status: 'absent' }
+  | { status: 'unavailable' };
+
+export async function loadFreshVerificationArtifact(
+  repoDir: string,
+  headSha: string,
+  now: Date,
+): Promise<VerificationArtifactResult> {
+  const candidates = [
+    path.join(repoDir, '.wavemill', 'verification', `${headSha}.json`),
+    path.join(repoDir, '.wavemill', 'verification-artifact.json'),
+    path.join(repoDir, '.wavemill', 'pre-pr-verification.json'),
+  ];
+
+  let sawContractPath = false;
+  for (const candidate of candidates) {
+    if (!existsSync(candidate)) {
+      continue;
+    }
+    sawContractPath = true;
+    try {
+      const parsed = JSON.parse(readFileSync(candidate, 'utf-8')) as Record<string, unknown>;
+      const artifactHead = typeof parsed.headSha === 'string'
+        ? parsed.headSha
+        : typeof parsed.head === 'string'
+          ? parsed.head
+          : '';
+      const timestampValue = typeof parsed.timestamp === 'number'
+        ? parsed.timestamp
+        : typeof parsed.createdAt === 'string' || typeof parsed.timestamp === 'string'
+          ? new Date(String(parsed.createdAt ?? parsed.timestamp)).getTime()
+          : Number.NaN;
+      if (!artifactHead || !Number.isFinite(timestampValue)) {
+        continue;
+      }
+      if (artifactHead !== headSha) {
+        return { status: 'absent' };
+      }
+      const ageMs = now.getTime() - timestampValue;
+      if (ageMs < 0 || ageMs > 5 * 60 * 1000) {
+        return { status: 'absent' };
+      }
+      return { status: 'present', timestamp: timestampValue, headSha: artifactHead };
+    } catch {
+      return { status: 'absent' };
+    }
+  }
+
+  return sawContractPath ? { status: 'absent' } : { status: 'unavailable' };
 }
 
 function displayLabel(kind: Exclude<ReadyWatchdogClassificationKind, 'fresh'>): string {
@@ -813,6 +992,14 @@ function shouldEmitReadyWatchdogFinding(
   if (JSON.stringify(prior.remediationCategories ?? []) !== JSON.stringify(next.remediationCategories ?? [])) return true;
   if (prior.failingChecksFingerprint !== next.failingChecksFingerprint) return true;
   if (prior.failingChecksObservedCount !== next.failingChecksObservedCount) return true;
+  if (prior.transientRetryHead !== next.transientRetryHead) return true;
+  if (prior.transientRetryCount !== next.transientRetryCount) return true;
+  if (prior.remediationAttemptedAtHead !== next.remediationAttemptedAtHead) return true;
+  if (prior.remediationAttemptCount !== next.remediationAttemptCount) return true;
+  if (prior.awaitingVerification !== next.awaitingVerification) return true;
+  if (prior.verificationHeadSha !== next.verificationHeadSha) return true;
+  if (JSON.stringify(prior.lastClassification ?? null) !== JSON.stringify(next.lastClassification ?? null)) return true;
+  if (JSON.stringify(prior.terminal ?? null) !== JSON.stringify(next.terminal ?? null)) return true;
 
   // Same classification/action/fingerprint: rate-limit repeated "reported" findings.
   if (next.action === 'reported') {
@@ -915,6 +1102,13 @@ export function classifyReadyTask(
     };
   }
 
+  if (githubTruth.checkReadError) {
+    return {
+      kind: 'needs-user',
+      detail: `Required GitHub check status could not be read for PR #${snapshot.prNumber}: ${githubTruth.checkReadError.reason}`,
+    };
+  }
+
   if (githubTruth.state !== 'OPEN') {
     return {
       kind: 'needs-user',
@@ -955,6 +1149,28 @@ export function classifyReadyTask(
       };
     }
 
+    const ciClassifications = classifyFailedChecks(githubTruth.checks);
+    const nonDeterministic = ciClassifications.find((entry) =>
+      entry.classification.category === 'github_only' || entry.classification.category === 'unknown'
+    );
+    if (nonDeterministic) {
+      return {
+        kind: 'needs-user',
+        detail: `Failing check requires operator attention: ${nonDeterministic.check.name} (${nonDeterministic.classification.reason}).`,
+        consecutiveFailurePolls: 1,
+      };
+    }
+
+    const transient = ciClassifications.find((entry) => entry.classification.category === 'transient_infra');
+    if (transient && ciClassifications.every((entry) => entry.classification.category === 'transient_infra')) {
+      return {
+        kind: 'waiting-on-ci',
+        detail: `Transient CI failure: ${transient.check.name} (${transient.classification.reason}).`,
+        consecutiveFailurePolls: 1,
+        autoRemediable: false,
+      };
+    }
+
     const prStateKey = buildPrStateKey(githubTruth);
     const sameFailureState = prior !== undefined
       && prior.prStateKey === prStateKey
@@ -963,10 +1179,11 @@ export function classifyReadyTask(
     const consecutiveFailurePolls = sameFailureState
       ? (prior.consecutiveFailurePolls ?? 1) + 1
       : 1;
-    const failureClassification = classifyFailingChecks(
-      checkSummary.failures,
-      normalizedConfig.safeRemediationCategories,
-    );
+    const allDeterministic = ciClassifications.length > 0
+      && ciClassifications.every((entry) => entry.classification.category === 'deterministic_local');
+    const failureClassification = allDeterministic
+      ? { kind: 'stable-failing-safe' as const, remediableNames: ciClassifications.map((entry) => entry.check.name) }
+      : classifyFailingChecks(checkSummary.failures, normalizedConfig.safeRemediationCategories);
 
     if (failureClassification.kind === 'stable-failing-safe'
       && consecutiveFailurePolls >= normalizedConfig.stableFailureConsecutivePolls) {
@@ -1325,7 +1542,15 @@ function materiallyChanged(
     || prior.consecutiveFailurePolls !== next.consecutiveFailurePolls
     || JSON.stringify(prior.remediationCategories ?? []) !== JSON.stringify(next.remediationCategories ?? [])
     || prior.failingChecksFingerprint !== next.failingChecksFingerprint
-    || prior.failingChecksObservedCount !== next.failingChecksObservedCount;
+    || prior.failingChecksObservedCount !== next.failingChecksObservedCount
+    || prior.transientRetryHead !== next.transientRetryHead
+    || prior.transientRetryCount !== next.transientRetryCount
+    || prior.remediationAttemptedAtHead !== next.remediationAttemptedAtHead
+    || prior.remediationAttemptCount !== next.remediationAttemptCount
+    || prior.awaitingVerification !== next.awaitingVerification
+    || prior.verificationHeadSha !== next.verificationHeadSha
+    || JSON.stringify(prior.lastClassification ?? null) !== JSON.stringify(next.lastClassification ?? null)
+    || JSON.stringify(prior.terminal ?? null) !== JSON.stringify(next.terminal ?? null);
 }
 
 function buildFindingEntry(input: {
@@ -1343,6 +1568,14 @@ function buildFindingEntry(input: {
   consecutiveFailurePolls?: number;
   failingChecksFingerprint?: string;
   failingChecksObservedCount?: number;
+  transientRetryHead?: string;
+  transientRetryCount?: number;
+  lastClassification?: ReadyWatchdogStateEntry['lastClassification'];
+  remediationAttemptedAtHead?: string;
+  remediationAttemptCount?: number;
+  awaitingVerification?: boolean;
+  verificationHeadSha?: string;
+  terminal?: ReadyWatchdogTerminalDiagnostic;
 }): ReadyWatchdogStateEntry {
   return {
     issueId: input.issueId,
@@ -1365,6 +1598,14 @@ function buildFindingEntry(input: {
     consecutiveFailurePolls: input.consecutiveFailurePolls,
     failingChecksFingerprint: input.failingChecksFingerprint,
     failingChecksObservedCount: input.failingChecksObservedCount,
+    transientRetryHead: input.transientRetryHead,
+    transientRetryCount: input.transientRetryCount,
+    lastClassification: input.lastClassification,
+    remediationAttemptedAtHead: input.remediationAttemptedAtHead,
+    remediationAttemptCount: input.remediationAttemptCount,
+    awaitingVerification: input.awaitingVerification,
+    verificationHeadSha: input.verificationHeadSha,
+    terminal: input.terminal,
   };
 }
 
@@ -1489,6 +1730,8 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
     let classification: ReadyWatchdogClassification;
     let fetchError: string | undefined;
     const prior = priorTasks[issueId];
+    let entry: ReadyWatchdogStateEntry | null = null;
+    let verificationGateSkipped = false;
 
     // Compute the challenge gate for this PR if it has a challenge pair. Passes null
     // for PR metadata because workflow-state challenge pairs are sufficient to detect
@@ -1513,6 +1756,49 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
         )
       : undefined;
 
+    if (prior?.awaitingVerification && prior.verificationHeadSha) {
+      const artifact = await loadFreshVerificationArtifact(options.repoDir, prior.verificationHeadSha, now);
+      if (artifact.status === 'absent') {
+        entry = buildFindingEntry({
+          issueId,
+          snapshot,
+          classification: 'waiting-on-ci',
+          detail: `Awaiting fresh pre-PR verification artifact for head ${prior.verificationHeadSha}.`,
+          action: 'awaiting-verification',
+          now,
+          awaitingVerification: true,
+          verificationHeadSha: prior.verificationHeadSha,
+        });
+      } else if (artifact.status === 'unavailable') {
+        verificationGateSkipped = true;
+      }
+
+      if (entry) {
+        const reportIntervalSeconds = getReportIntervalSeconds();
+        if (shouldEmitReadyWatchdogFinding(prior, entry, now, reportIntervalSeconds)) {
+          entry = {
+            ...entry,
+            lastLoggedAt: now.toISOString(),
+            lastLoggedFingerprint: entry.detailFingerprint,
+            lastLoggedClassification: entry.classification,
+            lastLoggedAction: entry.action,
+          };
+          newFindings.push(entry);
+          await writeAuditRecord(options.repoDir, {
+            timestamp: now.toISOString(),
+            taskId: issueId,
+            slug: snapshot.slug,
+            prNumber: snapshot.prNumber,
+            classification: entry.classification,
+            action: entry.action,
+            detail: entry.detail,
+          });
+        }
+        nextTasks[issueId] = entry;
+        continue;
+      }
+    }
+
     try {
       githubTruth = await deps.fetchGitHubTruth(snapshot.prNumber, options.repoDir);
       classification = classifyReadyTask(snapshot, githubTruth, now, config, prior, challengeGate);
@@ -1533,8 +1819,6 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
     if (classification.kind === 'fresh') {
       continue;
     }
-
-    let entry: ReadyWatchdogStateEntry | null = null;
 
     if (classification.kind === 'auto-update' && githubTruth) {
       const attempts = prior?.autoUpdateAttempts ?? 0;
@@ -1634,11 +1918,106 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
     } else {
       let action = 'reported';
       let recoveryCommand = classification.recoveryCommand;
+      const ciFailure = githubTruth ? strongestCiClassification(githubTruth.checks) : null;
       if (classification.kind === 'needs-user' && disconnectedMergeResidueDetected(snapshot)) {
         await writeReadyAttention(snapshot, classification.detail);
         action = 'needs-user';
       }
       if (
+        classification.kind === 'needs-user'
+        && (
+          githubTruth?.checkReadError
+          || ciFailure?.classification.category === 'github_only'
+          || ciFailure?.classification.category === 'unknown'
+        )
+      ) {
+        await writeReadyAttention(snapshot, classification.detail);
+        action = 'needs-user';
+      }
+      if (
+        classification.kind === 'waiting-on-ci'
+        && ciFailure?.classification.category === 'transient_infra'
+        && githubTruth
+      ) {
+        const sameHead = prior?.transientRetryHead === snapshot.currentHead;
+        const retryCount = sameHead ? (prior?.transientRetryCount ?? 0) + 1 : 1;
+        const budget = config.transientRetryBudget ?? 3;
+        const lastClassification = {
+          category: ciFailure.classification.category,
+          checkName: ciFailure.check.name,
+          timestamp: now.toISOString(),
+        };
+        if (retryCount > budget) {
+          const summary = `Transient CI failure exhausted retry budget (${budget}/${budget}): Check: ${ciFailure.check.name}; Reason: ${ciFailure.classification.reason}`;
+          const terminal = terminalAlreadyRecorded(prior, buildTerminalDiagnostic({
+            issueId,
+            snapshot,
+            category: 'transient_exhausted',
+            attemptCount: budget,
+            maxAttempts: budget,
+            lastCheck: ciFailure.check.name,
+            timestamp: now.toISOString(),
+            summary,
+          }))
+            ? prior?.terminal
+            : buildTerminalDiagnostic({
+                issueId,
+                snapshot,
+                category: 'transient_exhausted',
+                attemptCount: budget,
+                maxAttempts: budget,
+                lastCheck: ciFailure.check.name,
+                timestamp: now.toISOString(),
+                summary,
+              });
+          await writeReadyAttention(snapshot, summary);
+          action = 'needs-user';
+          classification = {
+            ...classification,
+            kind: 'needs-user',
+            detail: summary,
+          };
+          entry = buildFindingEntry({
+            issueId,
+            snapshot,
+            classification: 'needs-user',
+            detail: classification.detail,
+            action,
+            now,
+            githubTruth,
+            failingChecksFingerprint,
+            failingChecksObservedCount,
+            transientRetryHead: snapshot.currentHead ?? undefined,
+            transientRetryCount: budget,
+            lastClassification,
+            terminal,
+          });
+        } else {
+          action = 'transient-retry';
+          classification = {
+            ...classification,
+            detail: `Transient CI failure retry ${retryCount}/${budget}: ${ciFailure.check.name} (${ciFailure.classification.reason}).`,
+          };
+          entry = buildFindingEntry({
+            issueId,
+            snapshot,
+            classification: classification.kind,
+            detail: classification.detail,
+            action,
+            now,
+            githubTruth,
+            consecutiveFailurePolls: classification.consecutiveFailurePolls,
+            failingChecksFingerprint,
+            failingChecksObservedCount,
+            transientRetryHead: snapshot.currentHead ?? undefined,
+            transientRetryCount: retryCount,
+            lastClassification,
+          });
+        }
+      }
+      if (
+        !entry
+        &&
         (classification.kind === 'waiting-on-ci' || classification.kind === 'stable-failing-safe')
         && classification.autoRemediable
         && githubTruth
@@ -1653,6 +2032,18 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
           };
         } else if (attempts >= remediationConfig.maxAttempts) {
           action = 'remediation-exhausted';
+          const failedCheck = ciFailure?.check.name ?? 'unknown';
+          const terminal = buildTerminalDiagnostic({
+            issueId,
+            snapshot,
+            category: 'remediation_exhausted',
+            attemptCount: attempts,
+            maxAttempts: remediationConfig.maxAttempts,
+            lastCheck: failedCheck,
+            timestamp: now.toISOString(),
+            summary: `Remediation attempt cap reached (${attempts}/${remediationConfig.maxAttempts}): Check: ${failedCheck}; Head: ${snapshot.currentHead ?? 'unknown'}`,
+          });
+          await writeReadyAttention(snapshot, terminal.summary);
           classification = {
             ...classification,
             detail: `Ready remediation capped at ${attempts}/${remediationConfig.maxAttempts} attempts for PR #${snapshot.prNumber}.`,
@@ -1672,6 +2063,13 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
           const failedCheckNames = githubTruth.checks
             .filter((check) => check.status === 'failure')
             .map((check) => check.name);
+          const remediationContext = ciFailure
+            ? {
+                failingJob: ciFailure.check.name,
+                localCommand: ciFailure.classification.localCommand,
+                logExcerpt: truncateCiLogExcerpt(ciFailure.check.logExcerpt, config.remediationLogExcerptBytes ?? 16_384),
+              }
+            : undefined;
           const launchResult = await deps.launchReadyRemediation(
             snapshot,
             checkSummary.failures.join(', '),
@@ -1680,6 +2078,7 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
             remediationConfig.maxAttempts,
             options.repoDir,
             readyWatchdogToolPath,
+            remediationContext,
           );
 
           if (launchResult.status === 'launched') {
@@ -1696,8 +2095,35 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
             ...classification,
             detail: launchResult.detail,
           };
+          if (launchResult.status === 'launched') {
+            entry = buildFindingEntry({
+              issueId,
+              snapshot,
+              classification: classification.kind,
+              detail: classification.detail,
+              action,
+              now,
+              recoveryCommand,
+              githubTruth,
+              remediationCategories: classification.remediationCategories,
+              consecutiveFailurePolls: classification.consecutiveFailurePolls,
+              failingChecksFingerprint,
+              failingChecksObservedCount,
+              lastClassification: ciFailure
+                ? {
+                    category: ciFailure.classification.category,
+                    checkName: ciFailure.check.name,
+                    timestamp: now.toISOString(),
+                  }
+                : undefined,
+              remediationAttemptedAtHead: snapshot.currentHead ?? undefined,
+              remediationAttemptCount: attempts + 1,
+              awaitingVerification: true,
+              verificationHeadSha: launchResult.launchHead ?? snapshot.currentHead ?? undefined,
+            });
+          }
         }
-      } else if (classification.kind === 'stuck') {
+      } else if (!entry && classification.kind === 'stuck') {
         recoveryCommand = makeRecoveryCommand(options.repoDir, options.stateFile, issueId, readyWatchdogToolPath);
         const canRecover = (options.forceRecover || config.autoRecover)
           && classification.autoRecoverable
@@ -1711,7 +2137,7 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
         }
       }
 
-      entry = buildFindingEntry({
+      entry ??= buildFindingEntry({
         issueId,
         snapshot,
         classification: classification.kind,
@@ -1724,6 +2150,43 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
         consecutiveFailurePolls: classification.consecutiveFailurePolls,
         failingChecksFingerprint,
         failingChecksObservedCount,
+        lastClassification: ciFailure
+          ? {
+              category: ciFailure.classification.category,
+              checkName: ciFailure.check.name,
+              timestamp: now.toISOString(),
+            }
+          : undefined,
+        transientRetryHead: ciFailure?.classification.category === 'transient_infra'
+          ? snapshot.currentHead ?? undefined
+          : undefined,
+        transientRetryCount: ciFailure?.classification.category === 'transient_infra'
+          ? prior?.transientRetryCount
+          : undefined,
+        remediationAttemptedAtHead: action === 'launched-remediation' ? snapshot.currentHead ?? undefined : prior?.remediationAttemptedAtHead,
+        remediationAttemptCount: action === 'launched-remediation' ? (snapshot.readyArtifacts?.remediationAttempts ?? 0) + 1 : prior?.remediationAttemptCount,
+        awaitingVerification: action === 'launched-remediation'
+          ? true
+          : verificationGateSkipped
+            ? false
+            : prior?.awaitingVerification,
+        verificationHeadSha: action === 'launched-remediation'
+          ? snapshot.currentHead ?? undefined
+          : verificationGateSkipped
+            ? undefined
+            : prior?.verificationHeadSha,
+        terminal: action === 'remediation-exhausted'
+          ? buildTerminalDiagnostic({
+              issueId,
+              snapshot,
+              category: 'remediation_exhausted',
+              attemptCount: snapshot.readyArtifacts?.remediationAttempts ?? 0,
+              maxAttempts: remediationConfig.maxAttempts,
+              lastCheck: ciFailure?.check.name ?? 'unknown',
+              timestamp: now.toISOString(),
+              summary: `Remediation attempt cap reached (${snapshot.readyArtifacts?.remediationAttempts ?? 0}/${remediationConfig.maxAttempts}): Check: ${ciFailure?.check.name ?? 'unknown'}; Head: ${snapshot.currentHead ?? 'unknown'}`,
+            })
+          : prior?.terminal,
       });
     }
 

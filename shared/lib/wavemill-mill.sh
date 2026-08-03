@@ -4226,9 +4226,9 @@ ready_watchdog_config_json() {
     --argjson repo "$repo_json" \
     --argjson local "$local_json" \
     '
-    ({ready:{watchdog:{enabled:true,thresholdMinutes:10,autoRecover:true,timeoutSeconds:30,stableFailureConsecutivePolls:2,stableFailureEscalateAfterPolls:4,safeRemediationCategories:["lint","type","test","build","migration-chain","alembic"]}}} * $user * $repo * $local) as $merged
+    ({ready:{watchdog:{enabled:true,thresholdMinutes:10,autoRecover:true,timeoutSeconds:30,stableFailureConsecutivePolls:2,stableFailureEscalateAfterPolls:4,safeRemediationCategories:["lint","type","test","build","migration-chain","alembic"],transientRetryBudget:3,remediationLogExcerptBytes:16384}}} * $user * $repo * $local) as $merged
     | (($merged.monitor.readyWatchdog // {}) + ($merged.ready.watchdog // {}))
-    ' 2>/dev/null || echo '{"enabled":true,"thresholdMinutes":10,"autoRecover":true,"timeoutSeconds":30,"stableFailureConsecutivePolls":2,"stableFailureEscalateAfterPolls":4,"safeRemediationCategories":["lint","type","test","build","migration-chain","alembic"]}'
+    ' 2>/dev/null || echo '{"enabled":true,"thresholdMinutes":10,"autoRecover":true,"timeoutSeconds":30,"stableFailureConsecutivePolls":2,"stableFailureEscalateAfterPolls":4,"safeRemediationCategories":["lint","type","test","build","migration-chain","alembic"],"transientRetryBudget":3,"remediationLogExcerptBytes":16384}'
 }
 
 run_ready_watchdog_tick() {
@@ -7568,11 +7568,16 @@ _launch_ready_remediation_attempt() {
   local current_head="${12}" checks_run="${13}" checks_passed="${14}" merge_status="${15}"
   local remediation_attempt_number="${16}" remediation_max_attempts="${17}"
   local failed_check_names_json="${18}" failed_check_summary="${19}" ready_result_file="${20}"
-  local remediation_agent prompt_file launch_rc remediation_artifacts_json remediation_failed_artifacts_json
+  local failing_job="${21:-}" local_command="${22:-}" log_excerpt="${23:-}"
+  local remediation_agent prompt_file launch_rc remediation_artifacts_json remediation_failed_artifacts_json remediation_summary
 
   remediation_agent=$(ready_remediation_agent_cmd "$wt_dir")
   [[ -z "$remediation_agent" ]] && remediation_agent="$current_agent"
   [[ -z "$remediation_agent" ]] && remediation_agent="$AGENT_CMD"
+  remediation_summary="$failed_check_summary"
+  [[ -n "$failing_job" ]] && remediation_summary="${remediation_summary}"$'\n'"Failing job: $failing_job"
+  [[ -n "$local_command" ]] && remediation_summary="${remediation_summary}"$'\n'"Local replay command: $local_command"
+  [[ -n "$log_excerpt" ]] && remediation_summary="${remediation_summary}"$'\n'"CI log excerpt:"$'\n'"$log_excerpt"
 
   prompt_file="/tmp/${SESSION}-${issue}-ready-remediation-prompt.txt"
   build_ready_remediation_prompt \
@@ -7583,7 +7588,7 @@ _launch_ready_remediation_attempt() {
     "$base_branch" \
     "$remediation_attempt_number" \
     "$remediation_max_attempts" \
-    "$failed_check_summary" \
+    "$remediation_summary" \
     "$ready_result_file" > "$prompt_file"
 
   _launch_agent_in_pane "$win" "$remediation_agent" "$current_model" "$prompt_file" "$slug" "$issue"
@@ -7636,6 +7641,7 @@ _launch_ready_remediation_attempt() {
 launch_ready_watchdog_remediation() {
   local issue="$1" slug="$2" wt_dir="$3" branch="$4" base_branch="$5" pr_number="$6"
   local failed_check_summary="$7" attempt_number="$8" max_attempts="$9" failed_check_names_json="${10}"
+  local failing_job="${11:-}" local_command="${12:-}" log_excerpt="${13:-}"
   local win state_dir status_file current_agent current_model current_head remediation_attempts remediation_launch_head
   local ready_status checks_run checks_passed merge_status ready_result_file helper_rc
 
@@ -7672,7 +7678,8 @@ launch_ready_watchdog_remediation() {
     "$issue" "$slug" "$wt_dir" "$branch" "$base_branch" "$pr_number" \
     "$state_dir" "$win" "$status_file" "$current_agent" "$current_model" \
     "$current_head" "$checks_run" "$checks_passed" "$merge_status" \
-    "$attempt_number" "$max_attempts" "$failed_check_names_json" "$failed_check_summary" "$ready_result_file"
+    "$attempt_number" "$max_attempts" "$failed_check_names_json" "$failed_check_summary" "$ready_result_file" \
+    "$failing_job" "$local_command" "$log_excerpt"
   helper_rc=$?
 
   if [[ "$helper_rc" -eq 0 ]]; then

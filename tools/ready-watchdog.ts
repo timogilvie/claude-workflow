@@ -25,6 +25,9 @@ async function launchRemediation(args: {
   failedCheckNamesJson: string;
   attemptNumber: number;
   maxAttempts: number;
+  failingJob?: string;
+  localCommand?: string;
+  logExcerpt?: string;
 }) {
   const workflowState = JSON.parse(await readFile(args.stateFile, 'utf-8')) as WorkflowStateLike;
   const task = workflowState.tasks?.[args.issueId] as Record<string, unknown> | undefined;
@@ -65,7 +68,10 @@ async function launchRemediation(args: {
       "$WAVEMILL_FAILED_CHECK_SUMMARY" \
       "$WAVEMILL_ATTEMPT_NUMBER" \
       "$WAVEMILL_MAX_ATTEMPTS" \
-      "$WAVEMILL_FAILED_CHECK_NAMES_JSON"
+      "$WAVEMILL_FAILED_CHECK_NAMES_JSON" \
+      "$WAVEMILL_FAILING_JOB" \
+      "$WAVEMILL_LOCAL_COMMAND" \
+      "$WAVEMILL_LOG_EXCERPT"
   `;
   try {
     const childEnv = {
@@ -88,6 +94,9 @@ async function launchRemediation(args: {
       WAVEMILL_ATTEMPT_NUMBER: String(args.attemptNumber),
       WAVEMILL_MAX_ATTEMPTS: String(args.maxAttempts),
       WAVEMILL_FAILED_CHECK_NAMES_JSON: args.failedCheckNamesJson,
+      WAVEMILL_FAILING_JOB: args.failingJob ?? '',
+      WAVEMILL_LOCAL_COMMAND: args.localCommand ?? '',
+      WAVEMILL_LOG_EXCERPT: args.logExcerpt ?? '',
     };
     delete childEnv.npm_config_prefix;
 
@@ -153,6 +162,18 @@ runTool({
       type: 'string',
       description: 'Remediation attempt cap for launch mode',
     },
+    'failing-job': {
+      type: 'string',
+      description: 'Failing CI job name for launch mode',
+    },
+    'local-command': {
+      type: 'string',
+      description: 'Exact local replay command for launch mode',
+    },
+    'log-excerpt': {
+      type: 'string',
+      description: 'Bounded CI log excerpt for launch mode',
+    },
   },
   async run({ args }) {
     const repoDir = path.resolve(args['repo-dir'] || process.cwd());
@@ -166,6 +187,9 @@ runTool({
         failedCheckNamesJson: args['failed-check-names-json'] || '[]',
         attemptNumber: Number(args['attempt-number'] || '1'),
         maxAttempts: Number(args['max-attempts'] || '3'),
+        failingJob: args['failing-job'],
+        localCommand: args['local-command'],
+        logExcerpt: args['log-excerpt'],
       });
       console.log(JSON.stringify(result));
       return;
