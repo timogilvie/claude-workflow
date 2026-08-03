@@ -93,6 +93,21 @@ export interface ExportRow {
   feature_outcome_conflicts: boolean;
   feature_outcome_conflicting_fields: string;
 
+  // Planning execution outcome diagnostics (HOK-2593)
+  planning_outcome_status: string;
+  planning_outcome_failure_reason: string;
+  planning_outcome_plan_valid: boolean;
+  planning_outcome_approval_ready: boolean;
+  planning_outcome_max_turns: number | null;
+  planning_outcome_turns_completed: number | null;
+  planning_outcome_max_tool_calls: number | null;
+  planning_outcome_tool_calls_executed: number | null;
+  planning_outcome_max_wall_clock_ms: number | null;
+  planning_outcome_wall_clock_ms: number | null;
+  planning_outcome_input_tokens: number | null;
+  planning_outcome_output_tokens: number | null;
+  planning_outcome_cost_usd: number | null;
+
   // Eligibility summary columns
   eligibility_errors: string;
   training_eligible: boolean | null;
@@ -154,6 +169,19 @@ const COLUMNS: (keyof ExportRow)[] = [
   'feature_outcome_eligibility_diagnostic',
   'feature_outcome_conflicts',
   'feature_outcome_conflicting_fields',
+  'planning_outcome_status',
+  'planning_outcome_failure_reason',
+  'planning_outcome_plan_valid',
+  'planning_outcome_approval_ready',
+  'planning_outcome_max_turns',
+  'planning_outcome_turns_completed',
+  'planning_outcome_max_tool_calls',
+  'planning_outcome_tool_calls_executed',
+  'planning_outcome_max_wall_clock_ms',
+  'planning_outcome_wall_clock_ms',
+  'planning_outcome_input_tokens',
+  'planning_outcome_output_tokens',
+  'planning_outcome_cost_usd',
   'eligibility_errors',
   'training_eligible',
   'budget_eval_eligible',
@@ -208,6 +236,7 @@ export function flattenRecord(
   const resourceVariants = summarizeResourceVariants(record);
   const rubric = record.rubricEval;
   const fod = record.featureOutcomeDiagnostics;
+  const planningOutcome = record.planningExecutionOutcome;
 
   const timeSeconds =
     typeof record.timeSeconds === 'number' && Number.isFinite(record.timeSeconds) && record.timeSeconds >= 0
@@ -285,6 +314,20 @@ export function flattenRecord(
     feature_outcome_eligibility_diagnostic: fod?.eligibilityDiagnostic ?? '',
     feature_outcome_conflicts: fod?.conflictsWithReconstruction ?? false,
     feature_outcome_conflicting_fields: fod?.conflictingFields ? JSON.stringify(fod.conflictingFields) : '',
+
+    planning_outcome_status: planningOutcome?.status ?? '',
+    planning_outcome_failure_reason: planningOutcome?.failureReason ?? '',
+    planning_outcome_plan_valid: planningOutcome?.planArtifactValid ?? false,
+    planning_outcome_approval_ready: planningOutcome?.approvalReady ?? false,
+    planning_outcome_max_turns: planningOutcome?.bounds?.maxTurns ?? null,
+    planning_outcome_turns_completed: planningOutcome?.usage?.turnsCompleted ?? null,
+    planning_outcome_max_tool_calls: planningOutcome?.bounds?.maxToolCalls ?? null,
+    planning_outcome_tool_calls_executed: planningOutcome?.usage?.toolCallsExecuted ?? null,
+    planning_outcome_max_wall_clock_ms: planningOutcome?.bounds?.maxWallClockMs ?? null,
+    planning_outcome_wall_clock_ms: planningOutcome?.usage?.wallClockMs ?? null,
+    planning_outcome_input_tokens: planningOutcome?.usage?.totalInputTokens ?? null,
+    planning_outcome_output_tokens: planningOutcome?.usage?.totalOutputTokens ?? null,
+    planning_outcome_cost_usd: planningOutcome?.usage?.totalCostUsd ?? null,
 
     eligibility_errors: record.eligibilityErrors ? JSON.stringify(record.eligibilityErrors) : '',
     training_eligible: record.trainingEligible ?? null,

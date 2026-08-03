@@ -13,6 +13,7 @@ import * as os from 'node:os';
 
 import {
   writeStageResult,
+  writeStageResultWithHistory,
   readStageResult,
   readAllStageResults,
   updateStageResult,
@@ -343,6 +344,73 @@ describe('updateStageResult', () => {
 });
 
 // ────────────────────────────────────────────────────────────────
+// writeStageResultWithHistory
+// ────────────────────────────────────────────────────────────────
+
+describe('writeStageResultWithHistory', () => {
+  beforeEach(async () => { testDir = await createTestDir(); });
+  afterEach(async () => { await fs.rm(testDir, { recursive: true, force: true }); });
+
+  it('archives a failed current result and writes running top-level state', async () => {
+    await writeStageResult(testDir, makeResult({
+      stage: 'coding',
+      status: 'failed',
+      finishedAt: '2026-04-09T11:00:00Z',
+      agent: 'native-openrouter',
+      model: 'kimi-k2.7-code',
+      notes: 'provider error',
+    }));
+
+    await writeStageResultWithHistory(testDir, 'coding', {
+      status: 'running',
+      agent: 'native-openrouter',
+      model: 'kimi-k2.7-code',
+      notes: 'recovered',
+    });
+
+    const read = await readStageResult(testDir, 'coding');
+    assert.equal(read?.status, 'running');
+    assert.equal(read?.finishedAt, null);
+    assert.equal(read?.history?.length, 1);
+    assert.equal(read?.history?.[0]?.status, 'failed');
+    assert.equal(read?.history?.[0]?.model, 'kimi-k2.7-code');
+  });
+
+  it('archives an aborted result and appends to existing history', async () => {
+    await writeStageResult(testDir, {
+      ...makeResult({
+        stage: 'review',
+        status: 'aborted',
+        finishedAt: '2026-04-09T11:00:00Z',
+        agent: 'claude',
+        model: 'claude-sonnet-5',
+        notes: 'stopped',
+      }),
+      history: [{
+        status: 'failed',
+        agent: 'claude',
+        model: 'claude-sonnet-5',
+        startedAt: '2026-04-09T08:00:00Z',
+        finishedAt: '2026-04-09T09:00:00Z',
+        notes: 'first failure',
+      }],
+    });
+
+    await writeStageResultWithHistory(testDir, 'review', {
+      status: 'running',
+      agent: 'claude',
+      model: 'claude-sonnet-5',
+    });
+
+    const read = await readStageResult(testDir, 'review');
+    assert.equal(read?.status, 'running');
+    assert.equal(read?.history?.length, 2);
+    assert.equal(read?.history?.[0]?.notes, 'first failure');
+    assert.equal(read?.history?.[1]?.status, 'aborted');
+  });
+});
+
+// ────────────────────────────────────────────────────────────────
 // Artifacts round-trip
 // ────────────────────────────────────────────────────────────────
 
@@ -351,7 +419,30 @@ describe('artifacts round-trip', () => {
   afterEach(async () => { await fs.rm(testDir, { recursive: true, force: true }); });
 
   it('round-trips PlanningArtifacts', async () => {
-    const artifacts: PlanningArtifacts = { type: 'planning', planFile: 'plan.md', taskPacketFile: 'task-packet.md' };
+    const artifacts: PlanningArtifacts = {
+      type: 'planning',
+      planFile: 'plan.md',
+      taskPacketFile: 'task-packet.md',
+      bounds: {
+        maxTurns: 40,
+        maxToolCalls: 120,
+        maxWallClockMs: 1200000,
+      },
+      usage: {
+        turnsCompleted: 12,
+        toolCallsExecuted: 31,
+        wallClockMs: 300000,
+        totalInputTokens: 10000,
+        totalOutputTokens: 2000,
+        totalCostUsd: 0.25,
+      },
+      planArtifactValid: true,
+      approvalReady: true,
+      promptRef: {
+        id: 'native-planning',
+        version: 'sha256:abc',
+      },
+    };
     await writeStageResult(testDir, makeResult({ stage: 'planning', artifacts }));
 
     const read = await readStageResult(testDir, 'planning');

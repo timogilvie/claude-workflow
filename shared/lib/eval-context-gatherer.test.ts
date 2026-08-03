@@ -781,6 +781,12 @@ describe('eval-context-gatherer', () => {
           status: 'completed',
           source: '.planning-result.json',
         });
+        expect(result.planningExecutionOutcome).toEqual({
+          agent: 'codex',
+          model: 'claude-sonnet-4-6',
+          status: 'completed',
+          source: '.planning-result.json',
+        });
         expect(result.phaseDurations).toEqual({
           planning: 120,
           total: 120,
@@ -858,6 +864,121 @@ describe('eval-context-gatherer', () => {
       try {
         const result = gatherStageArtifacts(repoDir, issueId, branch);
         expect(result.executedPlanning).toBeUndefined();
+        expect(result.planningExecutionOutcome).toBeUndefined();
+      } finally {
+        fs.rmSync(repoDir, { recursive: true, force: true });
+      }
+    });
+
+    it('loads structured successful planning execution outcome', () => {
+      const repoDir = makeTmpDir();
+      const issueId = 'HOK-2593';
+      const branch = 'task/capture-planning-outcome';
+      const featureDir = nodePath.join(repoDir, 'features', 'capture-planning-outcome');
+      fs.mkdirSync(featureDir, { recursive: true });
+      fs.writeFileSync(
+        nodePath.join(featureDir, '.planning-result.json'),
+        JSON.stringify({
+          stage: 'planning',
+          status: 'awaiting_user',
+          agent: 'native',
+          model: 'claude-sonnet-5',
+          failureReason: null,
+          artifacts: {
+            type: 'planning',
+            planArtifactValid: true,
+            approvalReady: true,
+            bounds: {
+              maxTurns: 40,
+              maxToolCalls: 120,
+              maxWallClockMs: 1200000,
+            },
+            usage: {
+              turnsCompleted: 12,
+              toolCallsExecuted: 31,
+              wallClockMs: 300000,
+              totalInputTokens: 10000,
+              totalOutputTokens: 2000,
+              totalCostUsd: 0.25,
+            },
+            promptRef: {
+              id: 'native-planning',
+              version: 'sha256:abc',
+            },
+          },
+        }),
+      );
+
+      try {
+        const result = gatherStageArtifacts(repoDir, issueId, branch);
+        expect(result.planningExecutionOutcome).toEqual({
+          agent: 'native',
+          model: 'claude-sonnet-5',
+          status: 'awaiting_user',
+          failureReason: null,
+          planArtifactValid: true,
+          approvalReady: true,
+          bounds: {
+            maxTurns: 40,
+            maxToolCalls: 120,
+            maxWallClockMs: 1200000,
+          },
+          usage: {
+            turnsCompleted: 12,
+            toolCallsExecuted: 31,
+            wallClockMs: 300000,
+            totalInputTokens: 10000,
+            totalOutputTokens: 2000,
+            totalCostUsd: 0.25,
+          },
+          promptRef: {
+            id: 'native-planning',
+            version: 'sha256:abc',
+          },
+          source: '.planning-result.json',
+        });
+      } finally {
+        fs.rmSync(repoDir, { recursive: true, force: true });
+      }
+    });
+
+    it('loads structured turn_limit planning execution outcome', () => {
+      const repoDir = makeTmpDir();
+      const issueId = 'HOK-2593';
+      const branch = 'task/planner-hit-limit';
+      const featureDir = nodePath.join(repoDir, 'features', 'planner-hit-limit');
+      fs.mkdirSync(featureDir, { recursive: true });
+      fs.writeFileSync(
+        nodePath.join(featureDir, '.planning-result.json'),
+        JSON.stringify({
+          stage: 'planning',
+          status: 'failed',
+          agent: 'native',
+          model: 'moonshotai/kimi-k2.7-code',
+          failureReason: 'turn_limit',
+          artifacts: {
+            type: 'planning',
+            planArtifactValid: false,
+            approvalReady: false,
+            bounds: { maxTurns: 40 },
+            usage: { turnsCompleted: 40, toolCallsExecuted: 72 },
+          },
+        }),
+      );
+
+      try {
+        const result = gatherStageArtifacts(repoDir, issueId, branch);
+        expect(result.planningExecutionOutcome).toEqual({
+          agent: 'native',
+          model: 'moonshotai/kimi-k2.7-code',
+          status: 'failed',
+          failureReason: 'turn_limit',
+          planArtifactValid: false,
+          approvalReady: false,
+          bounds: { maxTurns: 40 },
+          usage: { turnsCompleted: 40, toolCallsExecuted: 72 },
+          source: '.planning-result.json',
+        });
       } finally {
         fs.rmSync(repoDir, { recursive: true, force: true });
       }

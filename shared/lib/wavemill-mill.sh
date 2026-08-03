@@ -57,6 +57,7 @@ WAVEMILL_MILL_SOURCE_LIB_DIR="$SCRIPT_DIR"
 WAVEMILL_COMMON_LIB_PATH="$SCRIPT_DIR/wavemill-common.sh"
 source "$SCRIPT_DIR/wavemill-common.sh"
 source "$SCRIPT_DIR/agent-adapters.sh"
+source "$SCRIPT_DIR/queue-health.sh"
 if [[ -f "$SCRIPT_DIR/terminal-reconciler.sh" ]]; then
 source "$SCRIPT_DIR/terminal-reconciler.sh"
 fi
@@ -2795,6 +2796,11 @@ source "$LIB_DIR/wavemill-common.sh"
 if [[ -f "$LIB_DIR/terminal-reconciler.sh" ]]; then
 source "$LIB_DIR/terminal-reconciler.sh"
 fi
+# Queue-health helpers used by the dependency queue planner path.
+# Sourced after wavemill-common.sh so state_mutate is available.
+if [[ -f "$LIB_DIR/queue-health.sh" ]]; then
+source "$LIB_DIR/queue-health.sh"
+fi
 _update_effective_max_parallel
 
 # Ensure gh commands target the correct GitHub repo (not inherited CWD)
@@ -3933,6 +3939,32 @@ write_stage_result() {
 EOF
   mv "$tmp" "$result_file"
   _write_stage_result_trace_event "$feature_dir" "$stage" "$status" "$agent" "$model" "$previous_status"
+}
+
+write_stage_result_with_history() {
+  local feature_dir="$1" stage="$2" status="$3"
+  local agent="${4:-}" model="${5:-}" notes="${6:-}" artifacts_json="${7:-}"
+  local result_file="$feature_dir/.${stage}-result.json" previous_status=""
+
+  if [[ -f "$result_file" ]]; then
+    previous_status="$(jq -r '.status // empty' "$result_file" 2>/dev/null || true)"
+  fi
+
+  if [[ -n "${TOOLS_DIR:-}" ]]; then
+    local cli_args=("$feature_dir" "$stage" "$status")
+    [[ -n "$agent" ]] && cli_args+=(--agent "$agent")
+    [[ -n "$model" ]] && cli_args+=(--model "$model")
+    [[ -n "$notes" ]] && cli_args+=(--notes "$notes")
+    [[ -n "$artifacts_json" ]] && cli_args+=(--artifacts "$artifacts_json")
+
+    if npx tsx "$TOOLS_DIR/stage-result-cli.ts" write-with-history "${cli_args[@]}" 2>/dev/null; then
+      _write_stage_result_trace_event "$feature_dir" "$stage" "$status" "$agent" "$model" "$previous_status"
+      return 0
+    fi
+    log_warn "write_stage_result_with_history: TypeScript CLI failed, falling back to write_stage_result"
+  fi
+
+  write_stage_result "$feature_dir" "$stage" "$status" "$agent" "$model" "$notes" "$artifacts_json"
 }
 
 # Emit trace events when a stage result is written (HOK-2259).
@@ -5946,28 +5978,54 @@ write_phase_config() {
     reviewer_agent="$(agent_resolve_from_model "$reviewer_model" "review" || true)"
   fi
 
-  cat > "$tmp" <<EOF
-{
-  "planning": {
-    "model": "$planner_model",
-    "agent": "$planner_agent",
-    "depth": "$plan_depth"
-  },
-  "coding": {
-    "model": "$coder_model",
-    "agent": "$coder_agent",
-    "depth": "$code_depth"
-  },
-  "review": {
-    "model": "$reviewer_model",
-    "agent": "$reviewer_agent",
-    "mode": "$review_mode"
-  },
-  "resolvedAt": "$now",
-  "forceModel": $force_model_json
-}
-EOF
+  local planner_provider coder_provider reviewer_provider
+  planner_provider="$(_provider_for_model "$planner_model")"
+  coder_provider="$(_provider_for_model "$coder_model")"
+  reviewer_provider="$(_provider_for_model "$reviewer_model")"
+
+  jq -n \
+    --arg plannerModel "$planner_model" \
+    --arg plannerAgent "$planner_agent" \
+    --arg plannerProvider "$planner_provider" \
+    --arg planDepth "$plan_depth" \
+    --arg coderModel "$coder_model" \
+    --arg coderAgent "$coder_agent" \
+    --arg coderProvider "$coder_provider" \
+    --arg codeDepth "$code_depth" \
+    --arg reviewerModel "$reviewer_model" \
+    --arg reviewerAgent "$reviewer_agent" \
+    --arg reviewerProvider "$reviewer_provider" \
+    --arg reviewMode "$review_mode" \
+    --arg selectedAt "$now" \
+    --argjson forceModel "$force_model_json" \
+    '{
+      planning: {model:$plannerModel, provider:$plannerProvider, agent:$plannerAgent, stageRole:"planning", challengeSide:null, selectedAt:$selectedAt, depth:$planDepth},
+      coding: {model:$coderModel, provider:$coderProvider, agent:$coderAgent, stageRole:"coding", challengeSide:null, selectedAt:$selectedAt, depth:$codeDepth},
+      review: {model:$reviewerModel, provider:$reviewerProvider, agent:$reviewerAgent, stageRole:"review", challengeSide:null, selectedAt:$selectedAt, mode:$reviewMode},
+      resolvedAt: $selectedAt,
+      forceModel: $forceModel
+    }' > "$tmp" 2>/dev/null || {
+      rm -f "$tmp"
+      log_warn "write_phase_config: jq failed"
+      return 0
+    }
   mv "$tmp" "$feature_dir/.phase-config.json"
+}
+
+_provider_for_model() {
+  local model="$1" provider_json provider
+  if [[ -n "${TOOLS_DIR:-}" && -n "$model" ]]; then
+    provider_json="$(npx tsx "$TOOLS_DIR/recovery-contract.ts" provider --model "$model" --json 2>/dev/null || true)"
+    provider="$(printf '%s' "$provider_json" | jq -r '.provider // empty' 2>/dev/null || true)"
+    [[ -n "$provider" ]] && printf '%s\n' "$provider" && return 0
+  fi
+  case "$(agent_resolve_from_model "$model" "coding" 2>/dev/null || true)" in
+    native-openrouter) printf '%s\n' 'native-openrouter' ;;
+    native-openai) printf '%s\n' 'native-openai' ;;
+    claude) printf '%s\n' 'anthropic' ;;
+    codex) printf '%s\n' 'openai' ;;
+    *) printf '%s\n' '' ;;
+  esac
 }
 
 # Read a field from .phase-config.json for a given stage.
@@ -6293,6 +6351,98 @@ persist_task_window_id() {
     --arg windowId "$window_id" >/dev/null 2>&1 || true
 }
 
+_challenge_side_for_issue() {
+  local issue="$1" role=""
+  role="$(get_task_meta "$issue" "challengeRole" 2>/dev/null || true)"
+  if [[ "$role" == "primary" || "$role" == "challenger" ]]; then
+    printf '%s\n' "$role"
+    return 0
+  fi
+  if [[ "$issue" == *_c ]]; then
+    printf '%s\n' "challenger"
+    return 0
+  fi
+  printf '%s\n' ""
+}
+
+_append_recovery_contract_trace() {
+  local feature_dir="$1" issue="$2" slug="$3" phase="$4" model="$5" agent="$6" contract_json="$7"
+  local trace_id ctx_file line now
+  trace_id="$(trace_read_id "$feature_dir" 2>/dev/null || true)"
+  [[ -n "$trace_id" ]] || return 0
+  ctx_file="$feature_dir/.trace-context.json"
+  [[ -f "$ctx_file" ]] || return 0
+  command -v jq >/dev/null 2>&1 || return 1
+  now=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "")
+  line="$(jq -cn \
+    --arg sv "1.0" \
+    --arg tid "$trace_id" \
+    --arg iid "$issue" \
+    --arg sl "$slug" \
+    --arg ts "$now" \
+    --arg ph "$phase" \
+    --arg mo "$model" \
+    --arg ag "$agent" \
+    --argjson contract "$contract_json" \
+    '{schemaVersion:$sv,traceId:$tid,issueId:$iid,slug:$sl,timestamp:$ts,phase:$ph,event:"recovery_contract_replay",status:"ok",model:$mo,agent:$ag,meta:{contract:$contract}}')" || return 1
+  printf '%s\n' "$line" >> "$feature_dir/trace.jsonl"
+}
+
+_stop_task_recovery_contract_unavailable() {
+  local issue="$1" phase="$2" feature_dir="$3" sub_reason="$4" detail="$5"
+  if [[ -f "${STATE_FILE:-}" ]] && jq -e --arg issue "$issue" '.tasks[$issue]? // empty' "$STATE_FILE" >/dev/null 2>&1; then
+    state_mutate "$STATE_FILE" \
+      '.tasks[$issue].status = "stopped"
+       | .tasks[$issue].stopReason = "recovery_contract_unavailable"
+       | .tasks[$issue].stopSubReason = $subReason
+       | .tasks[$issue].stopDetail = $detail
+       | .tasks[$issue].updated = (now | todate)' \
+      --arg issue "$issue" \
+      --arg subReason "$sub_reason" \
+      --arg detail "$detail" >/dev/null 2>&1 || true
+  fi
+  write_stage_result "$feature_dir" "$phase" "failed" "" "" "recovery_contract_unavailable: $sub_reason - $detail"
+  if declare -F wavemill_hook_write >/dev/null 2>&1; then
+    wavemill_hook_write "blocked" "recovery_contract_unavailable" "$detail" "" "$sub_reason" || true
+  fi
+}
+
+# Prepare observable runtime surfaces before launching recovered work.
+_prepare_recovery_phase_launch() {
+  local issue="$1" slug="$2" phase="$3" feature_dir="$4" wt_dir="$5"
+  local agent="$6" model="$7" contract_payload="$8" lifecycle_phase="${9:-}"
+  local win contract_title resolved_window
+
+  if ! write_stage_result_with_history "$feature_dir" "$phase" "running" "$agent" "$model" "Recovery replay of persisted execution contract" \
+    || ! jq -e --arg phase "$phase" '.stage == $phase and .status == "running"' "$feature_dir/.${phase}-result.json" >/dev/null 2>&1; then
+    log_warn "$issue → failed to record recovered $phase stage"
+    return 1
+  fi
+
+  if ! configure_agent_hooks "$agent" "$wt_dir" "$REPO_DIR"; then
+    log_warn "$issue → failed to configure hooks for recovered $phase stage"
+    return 1
+  fi
+
+  if declare -F wavemill_hook_write >/dev/null 2>&1; then
+    wavemill_hook_write "working" "" "" "$agent" || true
+  fi
+
+  if ! win="$(_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir" "$lifecycle_phase")" || [[ -z "$win" ]]; then
+    log_warn "$issue → failed to restore tmux window for $phase stage"
+    return 1
+  fi
+  resolved_window="$(tmux display-message -p -t "$(_tmux_target_join "$SESSION" "$win")" '#{window_id}' 2>/dev/null || true)"
+  if [[ -z "$resolved_window" ]]; then
+    log_warn "$issue → restored tmux window could not be verified for $phase stage"
+    return 1
+  fi
+
+  contract_title="$(printf '%s' "$contract_payload" | jq -r '[.stageRole, .agent, .model] | map(select(type == "string" and length > 0)) | join(" · ")' 2>/dev/null || true)"
+  [[ -n "$contract_title" ]] && wavemill_set_tmux_pane_title "$(_tmux_target_join "$SESSION" "$win")" "$contract_title" || true
+  return 0
+}
+
 # Relaunch an in-flight task's phase agent when its tmux window has been lost
 # (typically after a `r`/`a` session resume, which kills the prior tmux session
 # before restarting the monitor).
@@ -6330,72 +6480,91 @@ _restore_inflight_task_window_if_missing() {
     title=$(echo "$issue_json" | jq -r '.title // "Task"' 2>/dev/null || echo "Task")
   fi
 
-  local model agent_cmd depth rc=0
+  local challenge_side contract_json contract_ok contract_payload reason detail
+  challenge_side="$(_challenge_side_for_issue "$issue")"
+  local recovery_args=(read-and-validate --feature-dir "$feature_dir" --stage "$phase" --repo "$REPO_DIR" --json)
+  [[ -n "$challenge_side" ]] && recovery_args+=(--challenge-side "$challenge_side")
+  if ! contract_json="$(npx tsx "$TOOLS_DIR/recovery-contract.ts" "${recovery_args[@]}" 2>/dev/null)"; then
+    _stop_task_recovery_contract_unavailable "$issue" "$phase" "$feature_dir" "contract_read_failed" "recovery-contract CLI exited non-zero"
+    _RESTORE_STATE="failed"
+    return 0
+  fi
+  contract_ok="$(printf '%s' "$contract_json" | jq -r '.ok // false' 2>/dev/null || echo "false")"
+  if [[ "$contract_ok" != "true" ]]; then
+    reason="$(printf '%s' "$contract_json" | jq -r '.reason // "contract_malformed"' 2>/dev/null || echo "contract_malformed")"
+    detail="$(printf '%s' "$contract_json" | jq -r '.detail // "Persisted recovery contract is unavailable."' 2>/dev/null || echo "Persisted recovery contract is unavailable.")"
+    _stop_task_recovery_contract_unavailable "$issue" "$phase" "$feature_dir" "$reason" "$detail"
+    _RESTORE_STATE="failed"
+    return 0
+  fi
+
+  contract_payload="$(printf '%s' "$contract_json" | jq -c '.contract' 2>/dev/null || echo '{}')"
+  local model agent_cmd provider depth rc=0
+  model="$(printf '%s' "$contract_payload" | jq -r '.model // empty')"
+  agent_cmd="$(printf '%s' "$contract_payload" | jq -r '.agent // empty')"
+  provider="$(printf '%s' "$contract_payload" | jq -r '.provider // empty')"
+
+  if ! _append_recovery_contract_trace "$feature_dir" "$issue" "$slug" "$phase" "$model" "$agent_cmd" "$contract_payload"; then
+    _stop_task_recovery_contract_unavailable "$issue" "$phase" "$feature_dir" "state_transition_failed" "failed to write recovery contract trace event"
+    _RESTORE_STATE="failed"
+    return 0
+  fi
+
+  if [[ -f "${STATE_FILE:-}" ]] && jq -e --arg issue "$issue" '.tasks[$issue]? // empty' "$STATE_FILE" >/dev/null 2>&1; then
+    if ! state_mutate "$STATE_FILE" \
+      '.tasks[$issue].model = $model
+       | .tasks[$issue].agent = $agent
+       | .tasks[$issue].provider = $provider
+       | .tasks[$issue].stageRole = $stageRole
+       | .tasks[$issue].updated = (now | todate)' \
+      --arg issue "$issue" \
+      --arg model "$model" \
+      --arg agent "$agent_cmd" \
+      --arg provider "$provider" \
+      --arg stageRole "$phase" >/dev/null 2>&1; then
+      _stop_task_recovery_contract_unavailable "$issue" "$phase" "$feature_dir" "state_transition_failed" "failed to update workflow task state"
+      _RESTORE_STATE="failed"
+      return 0
+    fi
+  fi
+
   case "$phase" in
     planning)
-      model=$(read_phase_config "$feature_dir" "planning" "model")
-      [[ -z "$model" ]] && model=$(get_task_meta "$issue" "plannerModel")
-      model="$(resolve_phase_model "planning" "$model" "claude-sonnet-5")"
-      if declare -F agent_resolve_model >/dev/null 2>&1; then
-        model="$(agent_resolve_model "planner" "$model" "$REPO_DIR")" || return 1
-      fi
       depth=$(read_phase_config "$feature_dir" "planning" "depth")
       [[ -z "$depth" ]] && depth=$(get_task_meta "$issue" "planDepth")
       [[ -z "$depth" ]] && depth="light"
-      if ! agent_cmd="$(agent_resolve_from_model "$model" "planning")"; then
-        rc=1
-      else
-        launch_planning_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
-          "$model" "$agent_cmd" "$depth" || rc=$?
+      if ! _prepare_recovery_phase_launch "$issue" "$slug" "planning" "$feature_dir" "$wt_dir" "$agent_cmd" "$model" "$contract_payload"; then
+        _stop_task_recovery_contract_unavailable "$issue" "$phase" "$feature_dir" "state_transition_failed" "failed to prepare recovery launch surfaces"
+        _RESTORE_STATE="failed"
+        return 0
       fi
+      launch_planning_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
+        "$model" "$agent_cmd" "$depth" || rc=$?
       ;;
     coding)
-      if ! reroute_expanded_packets_for_coding_handoff "$issue" "$slug" "$feature_dir"; then
-        handle_expanded_reroute_handoff_failure "$issue" "$feature_dir"
-      fi
-      if ! apply_expanded_route_if_present "$feature_dir" "$issue" "$slug" "$wt_dir" "$STATE_FILE"; then
-        log_warn "$issue → expanded route invalid; using existing execution state for coding relaunch"
-      fi
-      emit_execution_active_route "$feature_dir" "$issue"
-      model=$(read_phase_config "$feature_dir" "coding" "model")
-      [[ -z "$model" ]] && model=$(get_task_meta "$issue" "coderModel")
-      model="$(resolve_phase_model "coding" "$model" "claude-opus-4-7")"
-      if declare -F agent_resolve_model >/dev/null 2>&1; then
-        model="$(agent_resolve_model "coder" "$model" "$REPO_DIR")" || return 1
-      fi
       depth=$(read_phase_config "$feature_dir" "coding" "depth")
       [[ -z "$depth" ]] && depth=$(get_task_meta "$issue" "codeDepth")
       [[ -z "$depth" ]] && depth="medium"
-      if ! agent_cmd="$(agent_resolve_from_model "$model" "coding")"; then
-        rc=1
-      else
-        if [[ -f "${STATE_FILE:-}" ]] && jq -e --arg issue "$issue" '.tasks[$issue]? // empty' "$STATE_FILE" >/dev/null 2>&1; then
-          state_mutate "$STATE_FILE" \
-            '.tasks[$issue].agent = $agent | .tasks[$issue].updated = (now | todate)' \
-            --arg issue "$issue" \
-            --arg agent "$agent_cmd" >/dev/null 2>&1 || true
-        fi
-        launch_coding_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
-          "$model" "$agent_cmd" "$depth" || rc=$?
+      if ! _prepare_recovery_phase_launch "$issue" "$slug" "coding" "$feature_dir" "$wt_dir" "$agent_cmd" "$model" "$contract_payload"; then
+        _stop_task_recovery_contract_unavailable "$issue" "$phase" "$feature_dir" "state_transition_failed" "failed to prepare recovery launch surfaces"
+        _RESTORE_STATE="failed"
+        return 0
       fi
+      launch_coding_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
+        "$model" "$agent_cmd" "$depth" || rc=$?
       ;;
     review)
-      model=$(read_phase_config "$feature_dir" "review" "model")
-      [[ -z "$model" ]] && model=$(get_task_meta "$issue" "reviewerModel")
-      model="$(resolve_phase_model "review" "$model" "claude-sonnet-5")"
-      if declare -F agent_resolve_model >/dev/null 2>&1; then
-        model="$(agent_resolve_model "reviewer" "$model" "$REPO_DIR")" || return 1
-      fi
       local review_mode
       review_mode=$(read_phase_config "$feature_dir" "review" "mode")
       [[ -z "$review_mode" ]] && review_mode=$(get_task_meta "$issue" "reviewMode")
       [[ -z "$review_mode" ]] && review_mode="static"
-      if ! agent_cmd="$(agent_resolve_from_model "$model" "review")"; then
-        rc=1
-      else
-        launch_review_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
-          "$model" "$agent_cmd" "$review_mode" || rc=$?
+      if ! _prepare_recovery_phase_launch "$issue" "$slug" "review" "$feature_dir" "$wt_dir" "$agent_cmd" "$model" "$contract_payload" "review"; then
+        _stop_task_recovery_contract_unavailable "$issue" "$phase" "$feature_dir" "state_transition_failed" "failed to prepare recovery launch surfaces"
+        _RESTORE_STATE="failed"
+        return 0
       fi
+      launch_review_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
+        "$model" "$agent_cmd" "$review_mode" || rc=$?
       ;;
     *)
       log_warn "$issue → Cannot restore window for unsupported phase: $phase"
@@ -6406,6 +6575,7 @@ _restore_inflight_task_window_if_missing() {
 
   if [[ "$rc" -ne 0 ]]; then
     log_warn "$issue → Failed to relaunch $phase phase after resume (rc=$rc)"
+    _stop_task_recovery_contract_unavailable "$issue" "$phase" "$feature_dir" "launch_failed" "recovery launch command exited with status $rc"
     _RESTORE_STATE="failed"
     return 0
   fi
@@ -9373,6 +9543,187 @@ fetch_candidates() {
   print_cached_candidates
 }
 
+# Run queue planner with rich process lifecycle tracking and diagnostics.
+# Handles timeout, external cancellation, and malformed graph classification.
+# Updates queue-health.json via queue_health_record_success/failure.
+#
+# Arguments:
+#   $1 = planner command (as single string: "npx tsx tools/plan-queue.ts --stdin --json ...")
+#   $2 = timeout seconds
+#   $3 = input snapshot JSON (e.g., {"taskCount":12,"explicitDependencyCount":4})
+#   stdin = plan input
+#
+# Output: queue plan JSON on success, nothing on failure
+# Exit: 0 = success, 1 = failure
+run_queue_planner_with_policy() {
+  local planner_cmd="$1" timeout_secs="$2" input_snapshot="${3:-}"
+  local tmp_stderr tmp_stdout exit_code signal_num pid pgid
+  # step stays set: the timeout path never assigns it, and the monitor runs
+  # under `set -u`, where reading it unset would abort the diagnostics write.
+  local started_at ended_at duration_ms cancellation_owner reason step=""
+
+  tmp_stderr="$(mktemp -t wavemill-planner-stderr.XXXXXX)" || {
+    queue_health_record_failure "diagnostics_setup_failed" "diagnostics_setup_failed" \
+      "unknown" "unknown" "unknown" 1 "" "unknown" "" "stderr setup failed" "" 2>/dev/null || true
+    return 1
+  }
+
+  tmp_stdout="$(mktemp -t wavemill-planner-stdout.XXXXXX)" || {
+    rm -f "$tmp_stderr"
+    queue_health_record_failure "diagnostics_setup_failed" "diagnostics_setup_failed" \
+      "unknown" "unknown" "unknown" 1 "" "unknown" "" "stdout setup failed" "" 2>/dev/null || true
+    return 1
+  }
+
+  # BSD date has no %3N and emits a literal "N" with exit 0, so validate the
+  # result is numeric instead of relying on a command-failure fallback.
+  started_at="$(date +%s%3N 2>/dev/null || true)"
+  [[ "$started_at" =~ ^[0-9]+$ ]] || started_at="$(date +%s)000"
+
+  # Launch planner in a dedicated process group (or best-effort).
+  # Try setsid first; fall back to backgrounding if unavailable.
+  local cmd_array
+  if command -v setsid &>/dev/null; then
+    # Use setsid to create new session; child processes inherit PGID
+    eval "$planner_cmd" > "$tmp_stdout" 2> "$tmp_stderr" &
+    pid=$!
+    pgid=$(ps -o pgid= -p $pid 2>/dev/null | tr -d ' ' || echo "$pid")
+  else
+    # macOS fallback: background and use PID as PGID (less reliable)
+    eval "$planner_cmd" > "$tmp_stdout" 2> "$tmp_stderr" &
+    pid=$!
+    pgid=$pid
+  fi
+
+  # Set up watchdog to kill planner on timeout.
+  local watchdog_pipe watchdog_pid
+  watchdog_pipe=$(mktemp -t wavemill-watchdog-XXXXXX) || {
+    kill $pid 2>/dev/null || true
+    rm -f "$tmp_stderr" "$tmp_stdout"
+    queue_health_record_failure "diagnostics_setup_failed" "diagnostics_setup_failed" \
+      "$pid" "$pgid" "$timeout_secs" 1 "" "unknown" "" "watchdog setup failed" "" 2>/dev/null || true
+    return 1
+  }
+
+  # Only group-kill when the planner really landed in its own process group.
+  # Without job control the child shares our group, and "kill -- -$pgid" would
+  # take down the monitor itself.
+  local self_pgid
+  self_pgid="$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ' || true)"
+
+  # Watchdog subshell: wait for timeout, then kill.
+  # stdout/stderr are detached because this function runs inside a command
+  # substitution: a watchdog holding that pipe open would stall the caller for
+  # the full timeout on every call, including successful ones.
+  (
+    sleep "$timeout_secs"
+    # Mark that watchdog fired before killing
+    printf '1\n' > "$watchdog_pipe" 2>/dev/null || true
+    if [[ -n "$pgid" && "$pgid" != "$self_pgid" ]]; then
+      kill -TERM -- "-$pgid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+      sleep 1
+      kill -KILL -- "-$pgid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
+    else
+      kill -TERM "$pid" 2>/dev/null || true
+      sleep 1
+      kill -KILL "$pid" 2>/dev/null || true
+    fi
+  ) >/dev/null 2>&1 &
+  watchdog_pid=$!
+
+  # Wait for planner process
+  wait $pid 2>/dev/null
+  exit_code=$?
+
+  # Clean up watchdog
+  kill $watchdog_pid 2>/dev/null || true
+
+  ended_at="$(date +%s%3N 2>/dev/null || true)"
+  [[ "$ended_at" =~ ^[0-9]+$ ]] || ended_at="$(date +%s)000"
+  duration_ms=$(( (ended_at - started_at) + 1 ))  # Ensure at least 1ms
+
+  # Check if watchdog fired
+  cancellation_owner="unknown"
+  if [[ -s "$watchdog_pipe" ]]; then
+    cancellation_owner="queue_plan_timeout"
+  fi
+
+  # Classify failure
+  reason=""
+  if [[ "$cancellation_owner" == "queue_plan_timeout" ]]; then
+    reason="timeout"
+  elif [[ "$exit_code" == "143" || "$exit_code" == "137" ]]; then
+    reason="external_cancellation"
+  elif [[ "$exit_code" == "0" ]]; then
+    reason=""  # Success, will be handled below
+  else
+    # Try to infer from stderr
+    local stderr_text="$(cat "$tmp_stderr" 2>/dev/null | head -c 512 || echo '')"
+    if [[ "$stderr_text" == *"cycle"* || "$stderr_text" == *"Cycle"* ]]; then
+      reason="malformed_graph"
+      step="validation_failed"
+    else
+      reason="planner_error"
+      step="plan_queue_failed"
+    fi
+  fi
+
+  # Handle success
+  if [[ "$exit_code" == "0" && -z "$reason" ]]; then
+    local stdout_text
+    stdout_text="$(cat "$tmp_stdout" 2>/dev/null || echo '')"
+
+    # Validate output. An empty plan and a malformed plan are distinct
+    # failures: the fallback diagnostics classify them as empty_queue vs
+    # invalid_input, so keep the two steps apart rather than collapsing both
+    # into validation_failed.
+    if [[ -z "${stdout_text//[[:space:]]/}" ]]; then
+      record_fetch_queue_plan_failure "empty_queue" "" 0
+      queue_health_record_failure "malformed_graph" "empty_queue" \
+        "$pid" "$pgid" "$timeout_secs" 0 "" "unknown" \
+        "" "empty queue plan" "$input_snapshot" 2>/dev/null || true
+      rm -f "$tmp_stderr" "$tmp_stdout" "$watchdog_pipe"
+      return 1
+    fi
+
+    if ! jq -e 'has("availableNow")' >/dev/null 2>&1 <<<"$stdout_text"; then
+      record_fetch_queue_plan_failure "validation_failed" \
+        "$(cat "$tmp_stderr" 2>/dev/null | tr '\n' ' ' | head -c 512 || true)" 1
+      queue_health_record_failure "malformed_graph" "validation_failed" \
+        "$pid" "$pgid" "$timeout_secs" 0 "" "unknown" \
+        "" "invalid queue plan JSON" "$input_snapshot" 2>/dev/null || true
+      rm -f "$tmp_stderr" "$tmp_stdout" "$watchdog_pipe"
+      return 1
+    fi
+
+    queue_health_record_success "$pid" "$pgid" "$duration_ms" "$planner_cmd" 2>/dev/null || true
+    cat "$tmp_stdout"
+    rm -f "$tmp_stderr" "$tmp_stdout" "$watchdog_pipe"
+    return 0
+  fi
+
+  # Handle failure: record diagnostics
+  local stderr_excerpt stdout_excerpt
+  stderr_excerpt="$(cat "$tmp_stderr" 2>/dev/null | tr '\n' ' ' | head -c 512 || echo '(no stderr)')"
+  stdout_excerpt="$(cat "$tmp_stdout" 2>/dev/null | tr '\n' ' ' | head -c 512 || echo '(no stdout)')"
+
+  [[ -z "$step" ]] && step="plan_queue_failed"
+
+  # Feed the fallback diagnostics too. This runs inside a command
+  # substitution, so caller-visible state has to travel through the
+  # diagnostics file rather than shell variables; without the real stderr and
+  # exit code the reason classifier degrades every planner failure to a
+  # generic dependency_planning_failed.
+  record_fetch_queue_plan_failure "$step" "$stderr_excerpt" "$exit_code"
+
+  queue_health_record_failure "$reason" "$step" \
+    "$pid" "$pgid" "$timeout_secs" "$exit_code" "" "$cancellation_owner" \
+    "$stdout_excerpt" "$stderr_excerpt" "$input_snapshot" 2>/dev/null || true
+
+  rm -f "$tmp_stderr" "$tmp_stdout" "$watchdog_pipe"
+  return 1
+}
+
 fetch_queue_plan() {
   local now plan_input queue_plan
   now=$(date +%s)
@@ -9449,10 +9800,14 @@ get_queue_failure_reason() {
 
 build_queue_plan_once() {
   local backlog_json="$1"
-  local plan_input queue_plan tmp_stderr stderr_text cache_key
+  local plan_input queue_plan tmp_stderr stderr_text cache_key timeout_secs input_snapshot
 
+  # Massage backlog into plan input format
   tmp_stderr="$(mktemp -t wavemill-fqp-stderr.XXXXXX)" || {
     record_fetch_queue_plan_failure "diagnostics_setup_failed" "mktemp failed"
+    queue_health_init 2>/dev/null || true
+    queue_health_record_failure "diagnostics_setup_failed" "diagnostics_setup_failed" \
+      "unknown" "unknown" "unknown" 1 "" "unknown" "" "mktemp failed" "" 2>/dev/null || true
     return 1
   }
 
@@ -9484,45 +9839,56 @@ build_queue_plan_once() {
     stderr_text="$(cat "$tmp_stderr" 2>/dev/null || true)"
     rm -f "$tmp_stderr"
     record_fetch_queue_plan_failure "jq_massage_failed" "$stderr_text"
+    queue_health_init 2>/dev/null || true
+    queue_health_record_failure "invalid_input" "jq_massage_failed" \
+      "unknown" "unknown" "unknown" 1 "" "unknown" "" "$stderr_text" "" 2>/dev/null || true
     return 1
   }
 
-  : > "$tmp_stderr"
+  # Build input snapshot for diagnostics
+  local task_count explicit_dep_count
+  task_count=$(printf '%s' "$plan_input" | jq 'length // 0' 2>/dev/null || echo '0')
+  explicit_dep_count=$(printf '%s' "$plan_input" | jq 'map(.blocks | length) | add // 0' 2>/dev/null || echo '0')
+  cache_key="${PROJECT_NAME:-default}"
+  input_snapshot=$(jq -n \
+    --argjson taskCount "$task_count" \
+    --argjson explicitDependencyCount "$explicit_dep_count" \
+    --arg cacheKey "$cache_key" \
+    '{"taskCount": $taskCount, "explicitDependencyCount": $explicitDependencyCount, "cacheKey": $cacheKey}' 2>/dev/null)
+
+  # Determine timeout and build planner command
   if [[ -n "${PROJECT_NAME:-}" ]]; then
-    cache_key="$PROJECT_NAME"
-    queue_plan=$(printf '%s\n' "$plan_input" | _with_timeout 60 npx tsx "$TOOLS_DIR/plan-queue.ts" --stdin --json --cache-key "$cache_key" --refresh-missing-cache 2>"$tmp_stderr") || {
-      local exit_code=$?
-      stderr_text="$(cat "$tmp_stderr" 2>/dev/null || true)"
-      rm -f "$tmp_stderr"
-      record_fetch_queue_plan_failure "plan_queue_failed" "$stderr_text" "$exit_code"
-      return 1
-    }
+    timeout_secs=60
+    planner_cmd="npx tsx \"$TOOLS_DIR/plan-queue.ts\" --stdin --json --cache-key \"$cache_key\" --refresh-missing-cache"
   else
-    queue_plan=$(printf '%s\n' "$plan_input" | _with_timeout 15 npx tsx "$TOOLS_DIR/plan-queue.ts" --stdin --json 2>"$tmp_stderr") || {
-      local exit_code=$?
-      stderr_text="$(cat "$tmp_stderr" 2>/dev/null || true)"
-      rm -f "$tmp_stderr"
-      record_fetch_queue_plan_failure "plan_queue_failed" "$stderr_text" "$exit_code"
-      return 1
-    }
+    timeout_secs=15
+    planner_cmd="npx tsx \"$TOOLS_DIR/plan-queue.ts\" --stdin --json"
   fi
 
-  if [[ -z "${queue_plan//[[:space:]]/}" ]]; then
-    rm -f "$tmp_stderr"
-    record_fetch_queue_plan_failure "empty_queue" "" 0
-    return 1
-  fi
+  # Initialize queue-health file before attempting planner
+  queue_health_init 2>/dev/null || true
 
-  : > "$tmp_stderr"
-  jq -e 'has("availableNow")' >/dev/null 2>"$tmp_stderr" <<<"$queue_plan" || {
-    local exit_code=$?
-    stderr_text="$(cat "$tmp_stderr" 2>/dev/null || true)"
-    rm -f "$tmp_stderr"
-    record_fetch_queue_plan_failure "validation_failed" "$stderr_text" "$exit_code"
+  # Run planner with policy wrapper (handles timeout, process group, diagnostics)
+  rm -f "$tmp_stderr"
+  queue_plan=$(printf '%s' "$plan_input" | run_queue_planner_with_policy "$planner_cmd" "$timeout_secs" "$input_snapshot") || {
+    # The planner records the specific step/stderr/exit itself. Only fill in a
+    # generic record when it left nothing behind, so we never overwrite the
+    # detailed diagnostics with a placeholder.
+    local _diag_file="${FETCH_QUEUE_PLAN_DIAGNOSTICS_FILE:-}"
+    if [[ -z "$_diag_file" || ! -s "$_diag_file" ]]; then
+      record_fetch_queue_plan_failure "plan_queue_failed" "" 1
+    fi
     return 1
   }
 
-  rm -f "$tmp_stderr"
+  # Validate output shape
+  if [[ -z "${queue_plan//[[:space:]]/}" ]] || ! jq -e 'has("availableNow")' >/dev/null 2>&1 <<<"$queue_plan"; then
+    record_fetch_queue_plan_failure "validation_failed" "" 1
+    queue_health_record_failure "malformed_graph" "validation_failed" \
+      "unknown" "unknown" "unknown" 1 "" "unknown" "" "invalid output shape" "$input_snapshot" 2>/dev/null || true
+    return 1
+  fi
+
   echo "$queue_plan"
 }
 
@@ -13544,7 +13910,13 @@ while :; do
             [[ -n "${CLEANED[$_ai]:-}" ]] && continue
             _active_issue_ids+="${_ai}"$'\n'
           done
-          if queue_plan_json=$(fetch_queue_plan 2>/dev/null); then
+
+          # Check queue-health backoff before attempting planner
+          queue_health_init 2>/dev/null || true
+          if queue_health_should_skip_attempt 2>/dev/null; then
+            # In backoff; skip planner attempt
+            record_fetch_queue_plan_failure "backoff_active" ""
+          elif queue_plan_json=$(fetch_queue_plan 2>/dev/null); then
             if [[ -n "$queue_plan_json" ]]; then
               QUEUE_PLAN_CACHE="$queue_plan_json"
               LAST_QUEUE_PLAN_FETCH=$(date +%s)
@@ -13559,7 +13931,15 @@ while :; do
             USING_GROUPED_VIEW=false
             if [[ -z "$queue_plan_json" ]]; then
               _queue_reason="$(get_queue_failure_reason "${queue_plan_diag_file:-}")"
-              log_warn "queue analysis unavailable (reason: ${_queue_reason:-unknown}), falling back to flat list"
+              # Deduplicate warning: only emit if episode is new
+              _health_status="$(queue_health_read 2>/dev/null || echo '{}')"
+              _episode_started="$(printf '%s' "$_health_status" | jq -r '.episodeStartedAt // ""' 2>/dev/null || echo '')"
+              _warn_cache_file="${STATE_DIR}/.queue-warn-episode"
+              _prev_episode="$(cat "$_warn_cache_file" 2>/dev/null || echo '')"
+              if [[ -z "$_prev_episode" || "$_prev_episode" != "$_episode_started" ]]; then
+                log_warn "queue analysis unavailable (reason: ${_queue_reason:-unknown}), falling back to flat list"
+                [[ -n "$_episode_started" ]] && printf '%s' "$_episode_started" > "$_warn_cache_file" 2>/dev/null || true
+              fi
               [[ -n "$queue_plan_diag_file" ]] && log_fetch_queue_plan_failure "$queue_plan_diag_file"
             fi
           fi
