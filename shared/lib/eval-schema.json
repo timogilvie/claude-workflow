@@ -2147,6 +2147,10 @@
         }
       }
     },
+    "verificationTelemetry": {
+      "$ref": "#/$defs/VerificationTelemetry",
+      "description": "Verification telemetry: complete lifecycle from pre-PR verification through first remote CI verdict. Captures whether CI-derived verification reduces remote CI repair loops. All fields optional."
+    },
     "metadata": {
       "type": "object",
       "additionalProperties": true,
@@ -3044,6 +3048,93 @@
         "resolvedModelId",
         "sourceLayer"
       ]
+    },
+    "VerificationTelemetry": {
+      "type": "object",
+      "properties": {
+        "contractSource": { "type": ["string", "null"] },
+        "contractVersion": { "type": ["string", "null"] },
+        "verifiedHeadSha": { "type": ["string", "null"] },
+        "verifiedBaseSha": { "type": ["string", "null"] },
+        "startedAt": { "type": ["string", "null"] },
+        "completedAt": { "type": ["string", "null"] },
+        "commands": {
+          "type": ["array", "null"],
+          "items": { "$ref": "#/$defs/VerificationCommand" }
+        },
+        "summary": { "$ref": "#/$defs/VerificationSummary" },
+        "firstCiVerdict": { "$ref": "#/$defs/FirstCiVerdict" },
+        "failedCheckFingerprint": { "type": ["string", "null"] },
+        "failureCategory": { "type": ["string", "null"] },
+        "remoteOnlyFailure": { "type": ["boolean", "null"] },
+        "remediation": {
+          "type": ["array", "null"],
+          "items": { "$ref": "#/$defs/RemediationAttempt" }
+        },
+        "operatorOverride": { "$ref": "#/$defs/OperatorOverride" }
+      },
+      "additionalProperties": false
+    },
+    "VerificationCommand": {
+      "type": "object",
+      "required": ["index", "commandName", "status"],
+      "properties": {
+        "index": { "type": "integer", "minimum": 1 },
+        "commandName": { "type": "string", "maxLength": 512 },
+        "status": { "enum": ["pass", "fail", "timeout", "error"] },
+        "exitCode": { "type": ["integer", "null"] },
+        "durationMs": { "type": ["integer", "null"], "minimum": 0 },
+        "failureReason": { "type": ["string", "null"], "maxLength": 256 }
+      },
+      "additionalProperties": false
+    },
+    "VerificationSummary": {
+      "type": "object",
+      "properties": {
+        "totalCommands": { "type": "integer", "minimum": 0 },
+        "passedCommands": { "type": "integer", "minimum": 0 },
+        "failedCommands": { "type": "integer", "minimum": 0 },
+        "timeoutCommands": { "type": "integer", "minimum": 0 },
+        "overallStatus": { "enum": ["pass", "fail", "timeout", "error"] },
+        "totalTimeSeconds": { "type": ["number", "null"], "minimum": 0 },
+        "wasOverridden": { "type": ["boolean", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "FirstCiVerdict": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "startedAt": { "type": ["string", "null"] },
+        "concludedAt": { "type": ["string", "null"] },
+        "status": { "enum": ["pass", "fail", "timeout", "error"] },
+        "timeToVerdictSeconds": { "type": ["integer", "null"], "minimum": 0 },
+        "workflowRunId": { "type": ["string", "null"] },
+        "ciLogsUrl": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "RemediationAttempt": {
+      "type": "object",
+      "required": ["attemptNumber", "description", "outcome"],
+      "properties": {
+        "attemptNumber": { "type": "integer", "minimum": 1 },
+        "description": { "type": "string", "maxLength": 512 },
+        "outcome": { "enum": ["passed", "still_failing", "timed_out"] },
+        "delaySeconds": { "type": ["integer", "null"], "minimum": 0 },
+        "durationSeconds": { "type": ["integer", "null"], "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "OperatorOverride": {
+      "type": "object",
+      "required": ["reason", "operator", "timestamp"],
+      "properties": {
+        "reason": { "type": "string", "maxLength": 256 },
+        "operator": { "type": "string", "maxLength": 256 },
+        "timestamp": { "type": "string" }
+      },
+      "additionalProperties": false
     }
   }
 }

@@ -125,6 +125,10 @@
  * - **1.35.0**: Added optional `planningExecutionOutcome` capturing native
  *   planning terminal reason, configured bounds, observed usage, plan validity,
  *   approval readiness, and prompt provenance (HOK-2593).
+ * - **1.36.0**: (reserved for future use)
+ * - **1.37.0**: Added optional `verificationTelemetry` field (HOK-2607)
+ *   capturing pre-PR verification and first CI lifecycle events.
+ *   All fields optional for backward compatibility.
  *
  * @module eval-schema
  */
@@ -138,9 +142,10 @@ import type {
   InvalidChallengeReason,
 } from './challenge-execution-contract.ts';
 import type { ChallengeRoutingMeta } from './challenge-comparison.ts';
+import type { VerificationTelemetry } from './verification-telemetry-types.ts';
 
 /** Current eval schema version for newly emitted records. */
-export const SCHEMA_VERSION = '1.35.0';
+export const SCHEMA_VERSION = '1.37.0';
 
 export type RoutingRole = 'planner' | 'coder' | 'reviewer';
 
@@ -1922,6 +1927,17 @@ export interface EvalRecord {
    * @since 1.30.0
    */
   featureOutcomeDiagnostics?: FeatureOutcomeDiagnostics;
+
+  /**
+   * Verification telemetry: complete lifecycle from pre-PR verification
+   * through first remote CI verdict.
+   *
+   * Captures whether CI-derived verification reduces remote CI repair loops.
+   * All fields optional to maintain backward compatibility.
+   *
+   * @since 1.37.0
+   */
+  verificationTelemetry?: VerificationTelemetry;
 
   /** Optional extensibility bag for additional metadata */
   metadata?: Record<string, unknown>;
