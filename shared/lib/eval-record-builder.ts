@@ -70,7 +70,7 @@ import {
   deriveNonRewardReasonFromIssues,
   validateEvalRecord,
 } from './eval-validator.ts';
-import { redactText } from './text-redaction.ts';
+import { redactText, redactVerificationTelemetry } from './text-redaction.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -514,7 +514,7 @@ function hashCheckOutput(logPath?: string): string | undefined {
   try {
     // Hash only a bounded excerpt to avoid run-specific noise (timestamps, etc)
     // This makes identical failures produce the same fingerprint
-    const { readFileSync, existsSync } = require('fs');
+    const { existsSync } = require('fs');
     if (!existsSync(logPath)) {
       return undefined;
     }
@@ -572,8 +572,8 @@ export function buildVerificationTelemetryFromArtifact(
     },
     local_verification: localVerification,
     timeline: {
-      local_start: artifact.startTime,
-      local_end: artifact.endTime,
+      local_start: artifact.startTime ? new Date(artifact.startTime).toISOString() : undefined,
+      local_end: artifact.endTime ? new Date(artifact.endTime).toISOString() : undefined,
     },
   };
 

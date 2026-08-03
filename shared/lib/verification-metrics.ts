@@ -68,11 +68,11 @@ function median(values: number[]): number | null {
 
 function computeFirstGreenRate(records: EvalRecord[]): number | null {
   const remoteRuns = records.filter((record) =>
-    record.verificationTelemetry?.remote_ci_verdict?.ran === true
-    && (record.verificationTelemetry.remote_ci_verdict.check_count ?? 0) >= 1,
+    record.verificationTelemetry?.remote_ci_verdict?.ran === true,
   );
   const firstGreen = remoteRuns.filter((record) =>
-    record.verificationTelemetry?.remote_ci_verdict?.passed === true,
+    record.verificationTelemetry?.remote_ci_verdict?.passed === true
+    && (record.verificationTelemetry.remote_ci_verdict.check_count ?? 0) >= 1,
   );
   return percent(firstGreen.length, remoteRuns.length);
 }
@@ -90,8 +90,7 @@ function computeDetectionRate(records: EvalRecord[]): number | null {
 
 function computeRemediationRate(records: EvalRecord[]): number | null {
   const remoteFailures = records.filter((record) =>
-    record.verificationTelemetry?.remote_ci_verdict?.passed === false
-    && record.verificationTelemetry.remediation?.remote_fix_outcome !== undefined,
+    record.verificationTelemetry?.remote_ci_verdict?.passed === false,
   );
   const remediated = remoteFailures.filter((record) =>
     record.verificationTelemetry?.remediation?.remote_fix_outcome === 'fixed',
@@ -102,8 +101,8 @@ function computeRemediationRate(records: EvalRecord[]): number | null {
 function computeMedianTimeToGreen(records: EvalRecord[]): number | null {
   const durations = records.flatMap((record) => {
     const timeline = record.verificationTelemetry?.timeline;
-    const start = typeof timeline?.local_start === 'number' ? timeline.local_start : validTimestamp(timeline?.local_start as unknown as string);
-    const green = typeof timeline?.remote_ci_first_green === 'number' ? timeline.remote_ci_first_green : validTimestamp(timeline?.remote_ci_first_green as unknown as string);
+    const start = validTimestamp(timeline?.local_start);
+    const green = validTimestamp(timeline?.remote_ci_first_green);
     if (start === null || green === null || green < start) {
       return [];
     }

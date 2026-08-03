@@ -392,9 +392,9 @@ function deriveRouteProvenance(
 function loadVerificationTelemetry(stateDir: string): ReturnType<typeof buildVerificationTelemetryFromArtifact> | null {
   try {
     const artifactPath = join(stateDir, '.wavemill/pre-pr-verification/artifact.json');
-    const { artifact, isValid } = readAndValidateArtifact(artifactPath);
+    const { artifact } = readAndValidateArtifact(artifactPath);
 
-    if (!artifact || !isValid) {
+    if (!artifact) {
       return null;
     }
 
