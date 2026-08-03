@@ -10,12 +10,16 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join, relative, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execShellCommand } from './shell-utils.ts';
+import { execArgvCommand } from './shell-utils.ts';
 import type { Subsystem } from './subsystem-detector.ts';
 import type { RelatedSubsystem } from './subsystem-cross-reference.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+
+export const subsystemSpecGeneratorDeps = {
+  execArgvCommand,
+};
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -253,12 +257,15 @@ function getFileTouchCount(keyFiles: string[], repoDir: string): number {
     since.setDate(since.getDate() - 30);
     const sinceStr = since.toISOString().split('T')[0];
 
-    // Count commits touching any of the key files
-    const fileArgs = keyFiles.slice(0, 20).join(' '); // Limit to avoid command line overflow
-    const cmd = `git log --since="${sinceStr}" --oneline -- ${fileArgs} 2>/dev/null | wc -l`;
-    const output = execShellCommand(cmd, { encoding: 'utf-8', cwd: repoDir });
+    const result = subsystemSpecGeneratorDeps.execArgvCommand('git', [
+      'log',
+      `--since=${sinceStr}`,
+      '--oneline',
+      '--',
+      ...keyFiles.slice(0, 20),
+    ], { encoding: 'utf-8', cwd: repoDir, stdio: ['ignore', 'pipe', 'ignore'] });
 
-    return parseInt(output.trim()) || 0;
+    return result.stdout.trim().split('\n').filter(Boolean).length;
   } catch {
     return 0;
   }
@@ -271,9 +278,14 @@ function getRecentChanges(keyFiles: string[], repoDir: string, limit = 5): strin
   if (keyFiles.length === 0) return '*(No files to analyze)*';
 
   try {
-    const fileArgs = keyFiles.slice(0, 20).join(' ');
-    const cmd = `git log --oneline -${limit} -- ${fileArgs} 2>/dev/null`;
-    const output = execShellCommand(cmd, { encoding: 'utf-8', cwd: repoDir });
+    const result = subsystemSpecGeneratorDeps.execArgvCommand('git', [
+      'log',
+      '--oneline',
+      `-${limit}`,
+      '--',
+      ...keyFiles.slice(0, 20),
+    ], { encoding: 'utf-8', cwd: repoDir, stdio: ['ignore', 'pipe', 'ignore'] });
+    const output = result.stdout;
 
     if (!output.trim()) return '*(No recent changes)*';
 
