@@ -27,9 +27,10 @@ import {
 import { tryResolveAgent } from './model-router.ts';
 import {
   buildGlobalCertificationPath,
-  filterNativeModels,
+  evaluateNativeProviderGate,
   STAGE_PHASE_REQUIREMENT,
-  type RouterCertificationRejection,
+  type NativeGateRejectReason,
+  type NativeGateReject,
 } from './native-agent/certification/index.ts';
 import {
   collectRecentSelections,
@@ -366,30 +367,55 @@ function mapProviderWarningsToReasons(
   return reasons;
 }
 
-function mapCertificationRejection(
+function mapGateDoctorReason(reason: NativeGateRejectReason): string {
+  switch (reason) {
+    case 'missing_api_key':
+      return 'missing-api-key';
+    case 'missing_artifact':
+      return 'missing-artifact';
+    case 'unregistered_model':
+      return 'unregistered-model';
+    case 'malformed_artifact':
+      return 'malformed-artifact';
+    case 'stale_artifact':
+      return 'stale-artifact';
+    case 'wrong_suite':
+      return 'wrong-suite';
+    case 'insufficient_phase':
+      return 'insufficient-phase';
+  }
+}
+
+function mapGateDecisionForDoctor(
   candidate: CandidateAccumulator,
-  rejection: RouterCertificationRejection,
-  storagePath: string | null,
+  decision: NativeGateReject,
+  stage: OpenRouterDoctorStage,
 ): OpenRouterDoctorReason {
-  const configSurface = rejection.reason === 'no-native-capability'
-    ? `modelRegistry.models.${rejection.modelId}`
+  const configSurface = decision.reason === 'unregistered_model'
+    ? `modelRegistry.models.${decision.modelId}`
     : 'nativeAgent.providers.openrouter.models';
+  const doctorReason = mapGateDoctorReason(decision.reason);
   const detailParts = [
-    `Native certification rejected ${rejection.modelId} for ${rejection.role}.`,
-    `reason=${rejection.reason}`,
-    `requiredPhase=${rejection.requestedPhase}`,
+    `Native certification rejected ${decision.modelId} for ${stage}.`,
+    `reason=${doctorReason}`,
+    `requiredPhase=${decision.requiredPhase ?? 'unknown'}`,
   ];
-  if (rejection.certifiedPhase) {
-    detailParts.push(`certifiedPhase=${rejection.certifiedPhase}`);
+  if (decision.foundPhase) {
+    detailParts.push(`certifiedPhase=${decision.foundPhase}`);
   }
-  if (storagePath) {
-    detailParts.push(`artifactPath=${storagePath}`);
+  if (decision.artifactPath) {
+    detailParts.push(`artifactPath=${decision.artifactPath}`);
   }
+  if (decision.artifactScope) {
+    detailParts.push(`artifactScope=${decision.artifactScope}`);
+  }
+
+  const remediationPhase = STAGE_PHASE_REQUIREMENT[stage as any] ?? decision.requiredPhase ?? 'read-only';
   return buildReason(
     'CERTIFICATION_REJECTED',
     detailParts.join(' '),
     configSurface,
-    `Refresh the certification artifact for ${candidate.nativeProviderId ?? rejection.modelId} with phase ${STAGE_PHASE_REQUIREMENT[rejection.role]}.`,
+    `Refresh the certification artifact for ${candidate.nativeProviderId ?? decision.modelId} with phase ${remediationPhase}.`,
   );
 }
 
@@ -520,14 +546,18 @@ function evaluateCell(input: {
       ));
     }
 
-    const nativeResult = filterNativeModels(
-      [input.registryModelId],
-      input.stage,
-      input.registry,
-      input.repoDir,
-    );
-    if (nativeResult.rejected[0]) {
-      appendReason(reasons, mapCertificationRejection(input.candidate, nativeResult.rejected[0], input.storagePath));
+    const requiredPhase = STAGE_PHASE_REQUIREMENT[input.stage as any];
+    const gateDecision = evaluateNativeProviderGate({
+      modelId: input.registryModelId,
+      mode: 'task',
+      requiredPhase,
+      registry: input.registry,
+      repoDir: input.repoDir,
+      apiKeyPresent: input.nativeHasApiKey,
+      apiKeyEnv: input.nativeApiKeyEnv,
+    });
+    if (!gateDecision.ok) {
+      appendReason(reasons, mapGateDecisionForDoctor(input.candidate, gateDecision, input.stage));
     }
 
     const codexFallbackReason = resolveAgentFallbackReason(input.registryModelId, input.repoDir, input.stage);
