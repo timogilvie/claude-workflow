@@ -3,9 +3,13 @@
  */
 
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { beforeEach, describe, it, mock } from 'node:test';
 import type { EvalRecord } from './eval-schema.ts';
 import {
+  attachChallengeExecutionMetadata,
   attachEligibility,
   attachAgentType,
   attachAttemptedModel,
@@ -35,6 +39,12 @@ import {
   enrichTrainingMetadata,
 } from './eval-record-builder.ts';
 import type { RubricEval } from './eval-schema.ts';
+import {
+  buildChallengeExecutionIntent,
+  type ChallengeExecutionIntentSide,
+} from './challenge-mode.ts';
+import { appendEvalRecord, readEvalRecords } from './eval-persistence.ts';
+import { validateEvalRecord } from './eval-validator.ts';
 
 function expect(actual: unknown) {
   return {
@@ -71,6 +81,66 @@ function expect(actual: unknown) {
   };
 }
 
+function challengeRoute(side: ChallengeExecutionIntentSide) {
+  return {
+    planner: side.planner.model,
+    coder: side.coder.model,
+    reviewer: side.reviewer.model,
+    planDepth: '',
+    codeDepth: '',
+    reviewMode: '',
+  };
+}
+
+function validEvalRecord(overrides: Partial<EvalRecord> = {}): EvalRecord {
+  return {
+    id: 'builder-schema-sync-record',
+    schemaVersion: '1.36.0',
+    originalPrompt: 'Prevent challenge intent schema drift',
+    modelId: 'claude-opus-4-6',
+    modelVersion: 'claude-opus-4-6',
+    score: 1,
+    scoreBand: 'Full Success',
+    timeSeconds: 120,
+    timestamp: '2026-08-03T11:46:50.000Z',
+    interventionRequired: false,
+    interventionCount: 0,
+    interventionDetails: [],
+    rationale: 'Completed without intervention.',
+    issueId: 'HOK-2604',
+    prUrl: 'https://github.com/org/repo/pull/1037',
+    taskDescriptor: {
+      schema_version: '1.0',
+      signals: {
+        heuristic: {
+          task_type: 'bugfix',
+          languages: ['typescript'],
+          framework_tags: [],
+          files_touched: 2,
+          repo_size_loc: 1000,
+          description_tokens: 25,
+          is_greenfield: false,
+          has_migration: false,
+          has_ui: false,
+          has_tests: true,
+          cross_service: false,
+        },
+        learned: {
+          complexity: 3,
+          domain: 'backend',
+          risk_flags: [],
+        },
+      },
+      constraints: {
+        models_available: ['claude-opus-4-6', 'gpt-5.4'],
+        objective: 'balanced',
+      },
+      stages: {},
+    },
+    ...overrides,
+  } as EvalRecord;
+}
+
 describe('eval-record-builder', () => {
   let baseRecord: EvalRecord;
 
@@ -102,6 +172,151 @@ describe('eval-record-builder', () => {
     it('should default to "claude" when empty string', () => {
       attachAgentType(baseRecord, '');
       expect(baseRecord.agentType).toBe('claude');
+    });
+  });
+
+  describe('attachChallengeExecutionMetadata', () => {
+    it('persists HOK-2604-style primary and challenger intents through AJV and JSONL', () => {
+      const tmp = mkdtempSync(join(tmpdir(), 'eval-builder-challenge-'));
+      const intent = buildChallengeExecutionIntent({
+        pairId: 'HOK-2604',
+        issueId: 'HOK-2604',
+        createdAt: '2026-08-03T11:46:50.000Z',
+        selectedStage: 'review',
+        decisionSource: 'expanded',
+        selectionPath: 'recommendation-driven',
+        selectionReason: 'recommendation-honored',
+        challengerSource: 'recommendation',
+        challengeRecommendation: {
+          shouldChallenge: true,
+          reason: 'low-data-stage',
+          challengerModel: 'gpt-5.4',
+          defaultModel: 'claude-opus-4-6',
+          stage: 'review',
+          priority: 200,
+        },
+        routeContext: {
+          decisionSource: 'expanded',
+          refreshRationale: 'post-completion regression fixture',
+        },
+        primary: {
+          key: 'HOK-2604',
+          issueId: 'HOK-2604',
+          slug: 'task/hok-2604',
+          branch: 'task/hok-2604',
+          role: 'primary',
+          model: 'claude-opus-4-6',
+          agent: 'codex',
+          planner: 'claude-opus-4-6',
+          plannerAgent: 'codex',
+          reviewer: 'claude-opus-4-6',
+          reviewerAgent: 'codex',
+          planDepth: 'standard',
+          codeDepth: 'standard',
+          reviewMode: 'standard',
+        },
+        challenger: {
+          key: 'HOK-2604_c',
+          issueId: 'HOK-2604_c',
+          slug: 'task/hok-2604_c',
+          branch: 'task/hok-2604-c',
+          role: 'challenger',
+          model: 'claude-opus-4-6',
+          agent: 'codex',
+          planner: 'claude-opus-4-6',
+          plannerAgent: 'codex',
+          reviewer: 'gpt-5.4',
+          reviewerAgent: 'codex',
+          planDepth: 'standard',
+          codeDepth: 'standard',
+          reviewMode: 'deep',
+        },
+        nativeCertificationRejections: [{
+          modelId: 'native/reviewer',
+          role: 'reviewer',
+          requestedLaunchPhase: 'review',
+          requestedPhase: 'read-only',
+          nativeCapability: 'certified',
+          nativeProvider: 'openai',
+          eligibleRoles: ['review'],
+          requiredSuiteVersion: '1.0.0',
+          reason: 'insufficient-phase',
+          artifactPath: '/tmp/native-cert.json',
+        }],
+        modelExclusions: [{
+          modelId: 'excluded/reviewer',
+          stage: 'review',
+          source: 'local',
+          reason: 'operator exclusion',
+        }],
+      });
+
+      try {
+        const primary = validEvalRecord({
+          id: 'hok-2604-primary',
+          challengePairId: 'HOK-2604',
+        });
+        attachChallengeExecutionMetadata(primary, {
+          side: 'primary',
+          intent,
+          evidence: {
+            pairId: 'HOK-2604',
+            side: 'primary',
+            validity: 'valid',
+            challengeStage: 'review',
+            expectedStageModel: 'claude-opus-4-6',
+            effectiveRoute: challengeRoute(intent.primary!),
+            evidence: [{ stage: 'review', model: 'claude-opus-4-6', source: 'challenge-stage-eval' }],
+          },
+        });
+
+        const challenger = validEvalRecord({
+          id: 'hok-2604-challenger',
+          issueId: 'HOK-2604_c',
+          modelId: 'gpt-5.4',
+          modelVersion: 'gpt-5.4',
+          challengePairId: 'HOK-2604',
+        });
+        attachChallengeExecutionMetadata(challenger, {
+          side: 'challenger',
+          intent,
+          evidence: {
+            pairId: 'HOK-2604',
+            side: 'challenger',
+            validity: 'valid',
+            challengeStage: 'review',
+            expectedStageModel: 'gpt-5.4',
+            effectiveRoute: challengeRoute(intent.challenger!),
+            evidence: [{ stage: 'review', model: 'gpt-5.4', source: 'challenge-stage-eval' }],
+          },
+        });
+
+        assert.deepEqual(validateEvalRecord(primary, { file: 'unit', line: 1 }), []);
+        assert.deepEqual(validateEvalRecord(challenger, { file: 'unit', line: 2 }), []);
+
+        appendEvalRecord(primary, { dir: tmp });
+        appendEvalRecord(challenger, { dir: tmp });
+        const records = readEvalRecords({ dir: tmp });
+        assert.equal(records.length, 2);
+        assert.equal(records[0].challengeIntent?.schemaVersion, 1);
+        assert.equal(records[0].challengeIntent?.challengeRecommendation?.challengerModel, 'gpt-5.4');
+        assert.equal(records[1].challengeIntent?.nativeCertificationRejections?.[0]?.reason, 'insufficient-phase');
+
+        const drifted = {
+          ...primary,
+          challengeIntent: {
+            ...primary.challengeIntent,
+            unmodeledRuntimeField: true,
+          },
+        } as unknown as EvalRecord;
+        assert.ok(
+          validateEvalRecord(drifted, { file: 'unit', line: 3 })
+            .some((issue) => issue.code === 'SCHEMA_VIOLATION'
+              && issue.detail === 'challengeIntent.unmodeledRuntimeField'),
+        );
+      } finally {
+        rmSync(tmp, { recursive: true, force: true });
+      }
     });
   });
 

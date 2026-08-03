@@ -11,7 +11,11 @@ import { tmpdir } from 'node:os';
 import type { EvalRecord } from './eval-schema.ts';
 import { enrichEvalRecord } from './eval-record-builder.ts';
 import { appendEvalRecord, EvalValidationError, hasChallengeEvalRecord, hasChallengeEvalRecordPair, readEvalRecords } from './eval-persistence.ts';
-import { buildChallengeExecutionIntent } from './challenge-execution-contract.ts';
+import {
+  buildChallengeExecutionIntent,
+  type ChallengeExecutionIntent,
+  type ChallengeExecutionIntentSide,
+} from './challenge-mode.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Test Harness
@@ -89,28 +93,86 @@ function makeTempDir(): string {
   return mkdtempSync(join(tmpdir(), 'eval-persist-test-'));
 }
 
-function makeChallengeIntent(pairId: string) {
+function routeFromSide(side: ChallengeExecutionIntentSide) {
+  return {
+    planner: side.planner.model,
+    coder: side.coder.model,
+    reviewer: side.reviewer.model,
+    planDepth: '',
+    codeDepth: '',
+    reviewMode: '',
+  };
+}
+
+function makeChallengeIntent(pairId: string): ChallengeExecutionIntent {
   return buildChallengeExecutionIntent({
     pairId,
-    challengeStage: 'implementation',
+    issueId: 'HOK-2598',
+    createdAt: '2026-08-03T11:46:50.000Z',
+    selectedStage: 'implementation',
+    decisionSource: 'bootstrap',
+    selectionPath: 'recommendation-driven',
+    selectionReason: 'least-used-zero-record',
+    challengerSource: 'recommendation',
     primary: {
+      key: 'HOK-2598',
+      issueId: 'HOK-2598',
+      slug: 'task/pair-2598',
+      branch: 'task/pair-2598',
+      role: 'primary',
+      agent: 'codex',
       model: 'claude-opus-4-6',
+      plannerAgent: 'codex',
       planner: 'claude-opus-4-6',
+      reviewerAgent: 'codex',
       reviewer: 'claude-opus-4-6',
       planDepth: 'standard',
       codeDepth: 'standard',
       reviewMode: 'standard',
     },
     challenger: {
+      key: 'HOK-2598_c',
+      issueId: 'HOK-2598_c',
+      slug: 'task/pair-2598_c',
+      branch: 'task/pair-2598-c',
+      role: 'challenger',
+      agent: 'codex',
       model: 'gpt-5.4',
+      plannerAgent: 'codex',
       planner: 'claude-opus-4-6',
+      reviewerAgent: 'codex',
       reviewer: 'claude-opus-4-6',
       planDepth: 'standard',
       codeDepth: 'deep',
       reviewMode: 'standard',
     },
-    routeContext: { scenario: 'schema-sync' },
-    selectionReason: 'coverage',
+    routeContext: {
+      decisionSource: 'bootstrap',
+      refreshRationale: 'schema-sync',
+    },
+    challengeRecommendation: {
+      shouldChallenge: true,
+      reason: 'low-data-stage',
+      challengerModel: 'gpt-5.4',
+      defaultModel: 'claude-opus-4-6',
+      stage: 'implementation',
+      priority: 200,
+    },
+    nativeCertificationRejections: [{
+      modelId: 'native/model',
+      role: 'coder',
+      requestedLaunchPhase: 'coding',
+      requestedPhase: 'patch',
+      nativeCapability: 'certified',
+      requiredSuiteVersion: '1.0.0',
+      reason: 'missing-artifact',
+    }],
+    modelExclusions: [{
+      modelId: 'disabled/model',
+      stage: 'coding',
+      source: 'repo',
+      reason: 'excluded for test',
+    }],
   });
 }
 
@@ -214,14 +276,14 @@ test('append accepts exact emitted challenge execution fields for primary and ch
       challengePairId: 'pair-2598',
       challengeSide: 'primary',
       challengeIntent: intent,
-      challengeExecutionRoute: intent.primary.expectedRoute,
+      challengeExecutionRoute: routeFromSide(intent.primary!),
       challengeExecutionEvidence: {
         pairId: 'pair-2598',
         side: 'primary',
         validity: 'valid',
         challengeStage: 'implementation',
         expectedStageModel: 'claude-opus-4-6',
-        effectiveRoute: intent.primary.expectedRoute,
+        effectiveRoute: routeFromSide(intent.primary!),
         evidence: [{ stage: 'implementation', model: 'claude-opus-4-6', source: 'eval.modelId' }],
       },
     }), { dir: evalsDir });
@@ -234,14 +296,14 @@ test('append accepts exact emitted challenge execution fields for primary and ch
       challengePairId: 'pair-2598',
       challengeSide: 'challenger',
       challengeIntent: intent,
-      challengeExecutionRoute: intent.challenger.expectedRoute,
+      challengeExecutionRoute: routeFromSide(intent.challenger!),
       challengeExecutionEvidence: {
         pairId: 'pair-2598',
         side: 'challenger',
         validity: 'valid',
         challengeStage: 'implementation',
         expectedStageModel: 'gpt-5.4',
-        effectiveRoute: intent.challenger.expectedRoute,
+        effectiveRoute: routeFromSide(intent.challenger!),
         evidence: [{ stage: 'implementation', model: 'gpt-5.4', source: 'eval.modelId' }],
       },
     }), { dir: evalsDir });
@@ -250,6 +312,9 @@ test('append accepts exact emitted challenge execution fields for primary and ch
     assert.equal(records.length, 2);
     assert.equal(records[0].challengeSide, 'primary');
     assert.equal(records[1].challengeSide, 'challenger');
+    assert.equal(records[0].challengeIntent?.schemaVersion, 1);
+    assert.equal(records[0].challengeIntent?.nativeCertificationRejections?.[0]?.reason, 'missing-artifact');
+    assert.equal(records[1].challengeIntent?.challengeRecommendation?.challengerModel, 'gpt-5.4');
   } finally {
     cleanUp(tmp);
   }

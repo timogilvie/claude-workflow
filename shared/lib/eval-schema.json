@@ -2351,6 +2351,7 @@
     },
     "ChallengeSideIntent": {
       "type": "object",
+      "description": "Deprecated challenge side intent shape retained for historical eval records.",
       "properties": {
         "pairId": {
           "type": "string"
@@ -2384,38 +2385,353 @@
       ],
       "additionalProperties": false
     },
-    "ChallengeExecutionIntent": {
+    "ChallengeExecutionIntentSideAgent": {
       "type": "object",
+      "description": "Resolved model and agent pair for a challenge execution stage.",
       "properties": {
-        "pairId": {
+        "model": {
           "type": "string"
         },
-        "challengeStage": {
-          "$ref": "#/$defs/ChallengeStage"
-        },
-        "intentionallyIdentical": {
-          "type": "boolean"
-        },
-        "routeContext": {
-          "description": "Free-form challenge route selection context."
-        },
-        "selectionReason": {
+        "agent": {
           "type": "string"
-        },
-        "primary": {
-          "$ref": "#/$defs/ChallengeSideIntent"
-        },
-        "challenger": {
-          "$ref": "#/$defs/ChallengeSideIntent"
         }
       },
       "required": [
-        "pairId",
-        "challengeStage",
-        "primary",
-        "challenger"
+        "model",
+        "agent"
       ],
       "additionalProperties": false
+    },
+    "ChallengeExecutionIntentSide": {
+      "type": "object",
+      "description": "Full-fidelity challenge side execution context with planner/coder/reviewer routing.",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "primary",
+            "challenger"
+          ]
+        },
+        "planner": {
+          "$ref": "#/$defs/ChallengeExecutionIntentSideAgent"
+        },
+        "coder": {
+          "$ref": "#/$defs/ChallengeExecutionIntentSideAgent"
+        },
+        "reviewer": {
+          "$ref": "#/$defs/ChallengeExecutionIntentSideAgent"
+        }
+      },
+      "required": [
+        "role",
+        "planner",
+        "coder",
+        "reviewer"
+      ],
+      "additionalProperties": false
+    },
+    "ChallengeRecommendation": {
+      "type": "object",
+      "description": "Scheduler recommendation provenance captured with challenge execution intent.",
+      "properties": {
+        "shouldChallenge": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "low-confidence",
+            "new-model",
+            "low-data-stage",
+            "disabled"
+          ]
+        },
+        "challengerModel": {
+          "type": "string"
+        },
+        "defaultModel": {
+          "type": "string"
+        },
+        "stage": {
+          "$ref": "#/$defs/ChallengeStage"
+        },
+        "priority": {
+          "type": "number"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ChallengeRouteContext": {
+      "type": "object",
+      "description": "Route provenance used when selecting or preserving a challenge pair.",
+      "properties": {
+        "decisionSource": {
+          "type": "string",
+          "enum": [
+            "bootstrap",
+            "expanded",
+            "preserved"
+          ]
+        },
+        "bootstrapRoute": {
+          "$ref": "#/$defs/RouteArtifact"
+        },
+        "expandedRoute": {
+          "$ref": "#/$defs/RouteArtifact"
+        },
+        "refreshRationale": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "decisionSource"
+      ],
+      "additionalProperties": false
+    },
+    "ChallengeNativeCertificationRejection": {
+      "type": "object",
+      "description": "Native model certification rejection captured during challenge candidate filtering.",
+      "properties": {
+        "modelId": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "planner",
+            "coder",
+            "reviewer"
+          ]
+        },
+        "requestedLaunchPhase": {
+          "type": "string"
+        },
+        "requestedPhase": {
+          "type": "string"
+        },
+        "certifiedPhase": {
+          "type": "string"
+        },
+        "nativeCapability": {
+          "type": "string"
+        },
+        "nativeProvider": {
+          "type": "string"
+        },
+        "eligibleRoles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "allowedNativeAgentPhases": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "requiredSuiteVersion": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "artifactPath": {
+          "type": "string"
+        },
+        "apiKeyEnv": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "modelId",
+        "role",
+        "requestedLaunchPhase",
+        "requestedPhase",
+        "nativeCapability",
+        "requiredSuiteVersion",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "ChallengeModelExclusionDiagnostic": {
+      "type": "object",
+      "description": "Repo/local model exclusion applied during challenge candidate filtering.",
+      "properties": {
+        "modelId": {
+          "type": "string"
+        },
+        "stage": {
+          "type": "string",
+          "enum": [
+            "expansion",
+            "planning",
+            "coding",
+            "review"
+          ]
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "repo",
+            "local"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "modelId",
+        "stage",
+        "source"
+      ],
+      "additionalProperties": false
+    },
+    "RuntimeChallengeExecutionIntent": {
+      "type": "object",
+      "description": "Versioned runtime challenge execution intent persisted with full selection and route provenance.",
+      "properties": {
+        "schemaVersion": {
+          "type": "number",
+          "const": 1
+        },
+        "pairId": {
+          "type": "string"
+        },
+        "issueId": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "selectedStage": {
+          "$ref": "#/$defs/ChallengeStage"
+        },
+        "decisionSource": {
+          "type": "string",
+          "enum": [
+            "bootstrap",
+            "expanded",
+            "preserved"
+          ]
+        },
+        "selectionPath": {
+          "type": "string",
+          "enum": [
+            "recommendation-driven",
+            "random-roll"
+          ]
+        },
+        "selectionReason": {
+          "type": "string",
+          "enum": [
+            "least-used-zero-record",
+            "least-used-nonzero",
+            "least-used-fallforward",
+            "recommendation-honored",
+            "tie-break-family-rotation",
+            "last-resort-incumbent"
+          ]
+        },
+        "challengerSource": {
+          "type": "string",
+          "enum": [
+            "least-used-zero-record",
+            "least-used-nonzero",
+            "least-used-fallforward",
+            "recommendation-honored",
+            "tie-break-family-rotation",
+            "last-resort-incumbent",
+            "recommendation",
+            "random"
+          ]
+        },
+        "challengeRecommendation": {
+          "$ref": "#/$defs/ChallengeRecommendation"
+        },
+        "routeContext": {
+          "$ref": "#/$defs/ChallengeRouteContext"
+        },
+        "primary": {
+          "$ref": "#/$defs/ChallengeExecutionIntentSide"
+        },
+        "challenger": {
+          "$ref": "#/$defs/ChallengeExecutionIntentSide"
+        },
+        "nativeCertificationRejections": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ChallengeNativeCertificationRejection"
+          }
+        },
+        "modelExclusions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ChallengeModelExclusionDiagnostic"
+          }
+        },
+        "fallbackReason": {
+          "type": "string"
+        },
+        "noChallengeReason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "pairId",
+        "issueId",
+        "createdAt",
+        "decisionSource"
+      ],
+      "additionalProperties": false
+    },
+    "ChallengeExecutionIntent": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/RuntimeChallengeExecutionIntent"
+        },
+        {
+          "type": "object",
+          "description": "Deprecated challenge execution intent shape retained for historical eval records.",
+          "properties": {
+            "pairId": {
+              "type": "string"
+            },
+            "challengeStage": {
+              "$ref": "#/$defs/ChallengeStage"
+            },
+            "intentionallyIdentical": {
+              "type": "boolean"
+            },
+            "routeContext": {
+              "description": "Free-form legacy challenge route selection context."
+            },
+            "selectionReason": {
+              "type": "string"
+            },
+            "primary": {
+              "$ref": "#/$defs/ChallengeSideIntent"
+            },
+            "challenger": {
+              "$ref": "#/$defs/ChallengeSideIntent"
+            }
+          },
+          "required": [
+            "pairId",
+            "challengeStage",
+            "primary",
+            "challenger"
+          ],
+          "additionalProperties": false
+        }
+      ]
     },
     "ChallengeStageEvidence": {
       "type": "object",

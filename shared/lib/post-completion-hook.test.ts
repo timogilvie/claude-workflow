@@ -12,7 +12,7 @@ import {
   runPostCompletionEval,
 } from './post-completion-hook.ts';
 import { evaluateTask, JudgeResponseRecoveryError } from './eval.ts';
-import { buildChallengeExecutionIntent } from './challenge-execution-contract.ts';
+import { buildChallengeExecutionIntent } from './challenge-mode.ts';
 
 let passed = 0;
 let failed = 0;
@@ -106,19 +106,38 @@ function makeEligibleRepo(repoDir: string, slug: string, issueId: string): void 
 function makeChallengeIntent(pairId: string) {
   return buildChallengeExecutionIntent({
     pairId,
-    challengeStage: 'implementation',
+    issueId: 'HOK-2598',
+    createdAt: '2026-08-03T11:46:50.000Z',
+    selectedStage: 'implementation',
+    decisionSource: 'bootstrap',
     primary: {
+      key: 'HOK-2598',
+      issueId: 'HOK-2598',
+      slug: 'task/restore-challenge-eval-persistence',
+      branch: 'task/restore-challenge-eval-persistence',
+      role: 'primary',
       model: 'claude-sonnet-4-5-20250929',
+      agent: 'codex',
       planner: 'gpt-5.5',
+      plannerAgent: 'codex',
       reviewer: 'claude-sonnet-4-6',
+      reviewerAgent: 'codex',
       planDepth: 'standard',
       codeDepth: 'standard',
       reviewMode: 'standard',
     },
     challenger: {
+      key: 'HOK-2598_c',
+      issueId: 'HOK-2598_c',
+      slug: 'task/restore-challenge-eval-persistence-challenger',
+      branch: 'task/restore-challenge-eval-persistence-challenger',
+      role: 'challenger',
       model: 'gpt-5.4',
+      agent: 'codex',
       planner: 'gpt-5.5',
+      plannerAgent: 'codex',
       reviewer: 'claude-sonnet-4-6',
+      reviewerAgent: 'codex',
       planDepth: 'standard',
       codeDepth: 'deep',
       reviewMode: 'standard',

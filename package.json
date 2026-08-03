@@ -9,6 +9,7 @@
   ],
   "scripts": {
     "check:review": "npx tsx tools/check-review-setup.ts",
+    "validate:challenge-intent-schema": "npx tsx scripts/validate-challenge-intent-schema.ts",
     "lint": "bash tests/check-shell.sh",
     "smoke:deepseek": "tsx tools/smoke-deepseek.ts",
     "smoke:native-readonly": "npx tsx shared/lib/native-agent/lifecycle-smoke.ts",

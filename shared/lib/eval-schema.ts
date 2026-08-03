@@ -125,6 +125,9 @@
  * - **1.35.0**: Added optional `planningExecutionOutcome` capturing native
  *   planning terminal reason, configured bounds, observed usage, plan validity,
  *   approval readiness, and prompt provenance (HOK-2593).
+ * - **1.36.0**: Synchronized persisted `ChallengeExecutionIntent` with the
+ *   versioned runtime workflow-state shape from `challenge-mode.ts`
+ *   (HOK-2610).
  *
  * @module eval-schema
  */
@@ -134,13 +137,13 @@ import type { ModelSelector, RegistryTaskType } from './model-registry.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
 import type {
   ChallengeExecutionAttestation,
-  ChallengeExecutionIntent,
   InvalidChallengeReason,
 } from './challenge-execution-contract.ts';
+import type { ChallengeExecutionIntent } from './challenge-mode.ts';
 import type { ChallengeRoutingMeta } from './challenge-comparison.ts';
 
 /** Current eval schema version for newly emitted records. */
-export const SCHEMA_VERSION = '1.35.0';
+export const SCHEMA_VERSION = '1.36.0';
 
 export type RoutingRole = 'planner' | 'coder' | 'reviewer';
 

@@ -19,7 +19,7 @@ import {
   SCORE_BANDS,
   getScoreBand,
 } from './eval-schema.ts';
-import { buildChallengeExecutionIntent } from './challenge-execution-contract.ts';
+import { buildChallengeExecutionIntent } from './challenge-mode.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const schema = JSON.parse(
@@ -768,7 +768,7 @@ function validPromptSizeDiagnostic() {
 }
 
 test('SCHEMA_VERSION is bumped for eval schema updates', () => {
-  assert.equal(SCHEMA_VERSION, '1.35.0');
+  assert.equal(SCHEMA_VERSION, '1.36.0');
 });
 
 test('Record with native workflow cost attribution validates', () => {
@@ -800,40 +800,86 @@ test('Record with native workflow cost attribution validates', () => {
 test('Challenge execution contract fields validate as emitted', () => {
   const intent = buildChallengeExecutionIntent({
     pairId: 'pair-schema',
-    challengeStage: 'implementation',
+    issueId: 'HOK-SCHEMA',
+    createdAt: '2026-08-03T11:46:50.000Z',
+    selectedStage: 'implementation',
+    decisionSource: 'bootstrap',
+    selectionPath: 'recommendation-driven',
+    selectionReason: 'least-used-zero-record',
+    challengerSource: 'recommendation',
     primary: {
+      key: 'HOK-SCHEMA',
+      issueId: 'HOK-SCHEMA',
+      slug: 'task/schema',
+      branch: 'task/schema',
+      role: 'primary',
+      agent: 'codex',
       model: 'claude-opus-4-6',
+      plannerAgent: 'codex',
       planner: 'claude-opus-4-6',
+      reviewerAgent: 'codex',
       reviewer: 'claude-opus-4-6',
       planDepth: 'standard',
       codeDepth: 'standard',
       reviewMode: 'standard',
     },
     challenger: {
+      key: 'HOK-SCHEMA_c',
+      issueId: 'HOK-SCHEMA_c',
+      slug: 'task/schema_c',
+      branch: 'task/schema-c',
+      role: 'challenger',
+      agent: 'codex',
       model: 'gpt-5.4',
+      plannerAgent: 'codex',
       planner: 'claude-opus-4-6',
+      reviewerAgent: 'codex',
       reviewer: 'claude-opus-4-6',
       planDepth: 'standard',
       codeDepth: 'deep',
       reviewMode: 'standard',
     },
-    routeContext: { source: 'unit-test' },
-    selectionReason: 'schema parity',
+    routeContext: {
+      decisionSource: 'bootstrap',
+      refreshRationale: 'unit test',
+    },
+    challengeRecommendation: {
+      shouldChallenge: true,
+      reason: 'low-data-stage',
+      challengerModel: 'gpt-5.4',
+      defaultModel: 'claude-opus-4-6',
+      stage: 'implementation',
+      priority: 200,
+    },
   });
   const record: EvalRecord = {
     ...scenarios[0].record,
-    schemaVersion: '1.34.0',
+    schemaVersion: '1.36.0',
     challengePairId: 'pair-schema',
     challengeSide: 'challenger',
     challengeIntent: intent,
-    challengeExecutionRoute: intent.challenger.expectedRoute,
+    challengeExecutionRoute: {
+      planner: intent.challenger?.planner.model || '',
+      coder: intent.challenger?.coder.model || '',
+      reviewer: intent.challenger?.reviewer.model || '',
+      planDepth: '',
+      codeDepth: '',
+      reviewMode: '',
+    },
     challengeExecutionEvidence: {
       pairId: 'pair-schema',
       side: 'challenger',
       validity: 'valid',
       challengeStage: 'implementation',
       expectedStageModel: 'gpt-5.4',
-      effectiveRoute: intent.challenger.expectedRoute,
+      effectiveRoute: {
+        planner: intent.challenger?.planner.model || '',
+        coder: intent.challenger?.coder.model || '',
+        reviewer: intent.challenger?.reviewer.model || '',
+        planDepth: '',
+        codeDepth: '',
+        reviewMode: '',
+      },
       evidence: [
         {
           stage: 'implementation',
@@ -1970,8 +2016,8 @@ test('Wavemill router fields validate and schema stays in parity', () => {
   assert.equal(properties.wavemill_router_scoring?.$ref, '#/$defs/WavemillRouterScoringMetadata');
 });
 
-test('Schema version constant is 1.35.0', () => {
-  assert.equal(SCHEMA_VERSION, '1.35.0');
+test('Schema version constant is 1.36.0', () => {
+  assert.equal(SCHEMA_VERSION, '1.36.0');
 });
 
 test('Record with resolved-model routing validates', () => {

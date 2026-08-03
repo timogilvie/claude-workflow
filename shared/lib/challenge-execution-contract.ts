@@ -1,6 +1,10 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import type { ChallengeStage } from './challenge-mode.ts';
+import type {
+  ChallengeExecutionIntent as RuntimeChallengeExecutionIntent,
+  ChallengeExecutionIntentSide,
+  ChallengeStage,
+} from './challenge-mode.ts';
 import type { ChallengeRoutingMeta } from './challenge-comparison.ts';
 import type { EvalRecord, EvalRouting } from './eval-schema.ts';
 
@@ -21,7 +25,8 @@ export interface ChallengeSideIntent {
   expectedRoute: ChallengeRoutingMeta;
 }
 
-export interface ChallengeExecutionIntent {
+/** Deprecated persisted shape kept only for historical eval rows and fixtures. */
+export interface LegacyChallengeExecutionIntent {
   pairId: string;
   challengeStage: ChallengeStage;
   intentionallyIdentical?: boolean;
@@ -30,6 +35,8 @@ export interface ChallengeExecutionIntent {
   primary: ChallengeSideIntent;
   challenger: ChallengeSideIntent;
 }
+
+export type ChallengeExecutionIntent = RuntimeChallengeExecutionIntent;
 
 export interface ChallengeStageEvidence {
   stage: ChallengeStage;
@@ -67,7 +74,7 @@ export interface ChallengeSideResolution {
 type WorkflowChallengeTaskState = {
   challengeRole?: unknown;
   challengeExecutionIntent?: ChallengeExecutionIntent;
-  challengeIntent?: ChallengeExecutionIntent;
+  challengeIntent?: ChallengeExecutionIntent | LegacyChallengeExecutionIntent;
 };
 
 type WorkflowChallengeState = {
@@ -144,9 +151,49 @@ export function loadChallengeIntentFromState(
     if (canonical) return canonical;
     /* legacy fallback */
     const legacy = task?.challengeIntent;
-    if (legacy) return legacy;
+    if (legacy) return normalizeChallengeExecutionIntent(legacy, issueId);
   }
   return undefined;
+}
+
+function isRuntimeChallengeExecutionIntent(value: ChallengeExecutionIntent | LegacyChallengeExecutionIntent): value is ChallengeExecutionIntent {
+  return 'schemaVersion' in value && value.schemaVersion === 1;
+}
+
+function sideFromLegacyIntent(side: ChallengeSideIntent): ChallengeExecutionIntentSide {
+  return {
+    role: side.side,
+    planner: {
+      model: side.expectedRoute.planner || '',
+      agent: side.challengeStage === 'plan' ? side.expectedStageAgent || '' : '',
+    },
+    coder: {
+      model: side.expectedRoute.coder || '',
+      agent: side.challengeStage === 'implementation' ? side.expectedStageAgent || '' : '',
+    },
+    reviewer: {
+      model: side.expectedRoute.reviewer || '',
+      agent: side.challengeStage === 'review' ? side.expectedStageAgent || '' : '',
+    },
+  };
+}
+
+function normalizeChallengeExecutionIntent(
+  intent: ChallengeExecutionIntent | LegacyChallengeExecutionIntent,
+  issueId?: string,
+): ChallengeExecutionIntent {
+  if (isRuntimeChallengeExecutionIntent(intent)) return intent;
+  return {
+    schemaVersion: 1,
+    pairId: intent.pairId,
+    issueId: issueId || intent.pairId,
+    createdAt: new Date(0).toISOString(),
+    decisionSource: 'bootstrap',
+    selectedStage: intent.challengeStage,
+    ...(intent.selectionReason ? { fallbackReason: intent.selectionReason } : {}),
+    primary: sideFromLegacyIntent(intent.primary),
+    challenger: sideFromLegacyIntent(intent.challenger),
+  };
 }
 
 function deriveChallengeSideFromBranch(
@@ -229,7 +276,7 @@ export function buildChallengeExecutionIntent(input: {
   routeContext?: unknown;
   selectionReason?: string;
   intentionallyIdentical?: boolean;
-}): ChallengeExecutionIntent {
+}): LegacyChallengeExecutionIntent {
   const primaryRoute = routeFromEntry(input.primary);
   const challengerRoute = routeFromEntry(input.challenger);
   return {
@@ -290,7 +337,60 @@ export function routesIdentical(a: ChallengeRoutingMeta | undefined, b: Challeng
 function sideIntentFromRecord(record: EvalRecord): ChallengeSideIntent | undefined {
   const intent = record.challengeIntent;
   if (!intent || !record.challengeSide) return undefined;
-  return record.challengeSide === 'challenger' ? intent.challenger : intent.primary;
+  const side = record.challengeSide === 'challenger' ? intent.challenger : intent.primary;
+  if (!side) return undefined;
+
+  if ('expectedStageModel' in side) {
+    return side as ChallengeSideIntent;
+  }
+
+  return sideIntentFromRuntimeIntent(intent, side, record.challengeSide);
+}
+
+function runtimeStage(intent: RuntimeChallengeExecutionIntent): ChallengeStage {
+  return intent.selectedStage ?? 'implementation';
+}
+
+function runtimeStageAgent(side: ChallengeExecutionIntentSide, stage: ChallengeStage): string | undefined {
+  const value = stage === 'plan'
+    ? side.planner.agent
+    : stage === 'review'
+      ? side.reviewer.agent
+      : side.coder.agent;
+  return value || undefined;
+}
+
+function runtimeStageModel(side: ChallengeExecutionIntentSide, stage: ChallengeStage): string {
+  if (stage === 'plan') return side.planner.model;
+  if (stage === 'review') return side.reviewer.model;
+  return side.coder.model;
+}
+
+function routeFromRuntimeSide(side: ChallengeExecutionIntentSide): ChallengeRoutingMeta {
+  return {
+    planner: side.planner.model,
+    coder: side.coder.model,
+    reviewer: side.reviewer.model,
+    planDepth: '',
+    codeDepth: '',
+    reviewMode: '',
+  };
+}
+
+function sideIntentFromRuntimeIntent(
+  intent: RuntimeChallengeExecutionIntent,
+  side: ChallengeExecutionIntentSide,
+  sideName: 'primary' | 'challenger',
+): ChallengeSideIntent {
+  const stage = runtimeStage(intent);
+  return {
+    pairId: intent.pairId,
+    side: sideName,
+    challengeStage: stage,
+    expectedStageModel: runtimeStageModel(side, stage),
+    ...(runtimeStageAgent(side, stage) ? { expectedStageAgent: runtimeStageAgent(side, stage) } : {}),
+    expectedRoute: routeFromRuntimeSide(side),
+  };
 }
 
 function stageRole(stage: ChallengeStage): keyof EvalRouting {
@@ -360,7 +460,7 @@ export function attestEvalRecordChallengeExecution(record: EvalRecord): Challeng
   return {
     pairId: sideIntent.pairId,
     side: sideIntent.side,
-    validity: invalidReason ? 'invalid_challenge' : (record.challengeIntent?.intentionallyIdentical ? 'identical_control' : 'valid'),
+    validity: invalidReason ? 'invalid_challenge' : (hasLegacyIdenticalControl(record.challengeIntent) ? 'identical_control' : 'valid'),
     challengeStage: sideIntent.challengeStage,
     expectedStageModel: expected,
     ...(sideIntent.expectedStageAgent ? { expectedStageAgent: sideIntent.expectedStageAgent } : {}),
@@ -370,12 +470,18 @@ export function attestEvalRecordChallengeExecution(record: EvalRecord): Challeng
   };
 }
 
+function hasLegacyIdenticalControl(intent: EvalRecord['challengeIntent']): boolean {
+  return Boolean(intent && 'intentionallyIdentical' in intent && intent.intentionallyIdentical);
+}
+
 export function loadChallengeIntentFromFeatureDir(featureDir: string): ChallengeExecutionIntent | undefined {
   for (const file of ['challenge-intent.json', '.challenge-intent.json']) {
     const candidate = path.join(featureDir, file);
     if (!existsSync(candidate)) continue;
     try {
-      return JSON.parse(readFileSync(candidate, 'utf-8')) as ChallengeExecutionIntent;
+      return normalizeChallengeExecutionIntent(
+        JSON.parse(readFileSync(candidate, 'utf-8')) as ChallengeExecutionIntent | LegacyChallengeExecutionIntent,
+      );
     } catch {
       return undefined;
     }

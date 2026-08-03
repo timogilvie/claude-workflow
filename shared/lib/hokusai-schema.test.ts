@@ -24,7 +24,10 @@ import {
   toHokusaiModel30Request,
   validateHokusaiSubmission,
 } from './hokusai-schema.ts';
-import { buildChallengeExecutionIntent } from './challenge-execution-contract.ts';
+import {
+  buildChallengeExecutionIntent,
+  type ChallengeExecutionIntentSide,
+} from './challenge-mode.ts';
 
 function makeDescriptor(overrides: Partial<TaskDescriptor> = {}): TaskDescriptor {
   return {
@@ -56,6 +59,17 @@ function makeDescriptor(overrides: Partial<TaskDescriptor> = {}): TaskDescriptor
     },
     stages: {},
     ...overrides,
+  };
+}
+
+function routeFromChallengeSide(side: ChallengeExecutionIntentSide) {
+  return {
+    planner: side.planner.model,
+    coder: side.coder.model,
+    reviewer: side.reviewer.model,
+    planDepth: '',
+    codeDepth: '',
+    reviewMode: '',
   };
 }
 
@@ -884,18 +898,37 @@ describe('hokusai-schema', () => {
     it('omits local challenge execution fields from Hokusai submissions', () => {
       const intent = buildChallengeExecutionIntent({
         pairId: 'pair-2598',
-        challengeStage: 'implementation',
+        issueId: 'HOK-2598',
+        createdAt: '2026-08-03T11:46:50.000Z',
+        selectedStage: 'implementation',
+        decisionSource: 'bootstrap',
         primary: {
+          key: 'HOK-2598',
+          issueId: 'HOK-2598',
+          slug: 'task/pair-2598',
+          branch: 'task/pair-2598',
+          role: 'primary',
+          agent: 'codex',
           model: 'coder-a',
+          plannerAgent: 'codex',
           planner: 'planner-a',
+          reviewerAgent: 'codex',
           reviewer: 'reviewer-a',
           planDepth: 'standard',
           codeDepth: 'standard',
           reviewMode: 'standard',
         },
         challenger: {
+          key: 'HOK-2598_c',
+          issueId: 'HOK-2598_c',
+          slug: 'task/pair-2598_c',
+          branch: 'task/pair-2598-c',
+          role: 'challenger',
+          agent: 'codex',
           model: 'gpt-5.4',
+          plannerAgent: 'codex',
           planner: 'planner-a',
+          reviewerAgent: 'codex',
           reviewer: 'reviewer-a',
           planDepth: 'standard',
           codeDepth: 'deep',
@@ -906,14 +939,14 @@ describe('hokusai-schema', () => {
         challengePairId: 'pair-2598',
         challengeSide: 'primary',
         challengeIntent: intent,
-        challengeExecutionRoute: intent.primary.expectedRoute,
+        challengeExecutionRoute: routeFromChallengeSide(intent.primary!),
         challengeExecutionEvidence: {
           pairId: 'pair-2598',
           side: 'primary',
           validity: 'valid',
           challengeStage: 'implementation',
           expectedStageModel: 'coder-a',
-          effectiveRoute: intent.primary.expectedRoute,
+          effectiveRoute: routeFromChallengeSide(intent.primary!),
           evidence: [{ stage: 'implementation', model: 'coder-a', source: 'eval.modelId' }],
         },
       })));

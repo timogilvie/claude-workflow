@@ -43,10 +43,13 @@ import type {
   FeatureOutcomeDiagnostics,
 } from './eval-schema.ts';
 import type { DifficultyAnalysis } from './difficulty-analyzer.ts';
-import type { ChallengeRouteContext } from './challenge-mode.ts';
+import type {
+  ChallengeExecutionIntent,
+  ChallengeExecutionIntentSide,
+  ChallengeRouteContext,
+} from './challenge-mode.ts';
 import type {
   ChallengeExecutionAttestation,
-  ChallengeExecutionIntent,
 } from './challenge-execution-contract.ts';
 import type { WorkflowCostOutcome, WorkflowCostResult, WorkflowCostFailure } from './workflow-cost.ts';
 import { getManifest, getManifestRef } from './resource-manifest.ts';
@@ -181,7 +184,9 @@ export function attachChallengeExecutionMetadata(
   if (input?.intent) {
     record.challengeIntent = input.intent;
     const sideIntent = input.side === 'challenger' ? input.intent.challenger : input.intent.primary;
-    record.challengeExecutionRoute = sideIntent.expectedRoute;
+    if (sideIntent) {
+      record.challengeExecutionRoute = routeFromRuntimeIntentSide(sideIntent);
+    }
   }
   if (input?.evidence) {
     record.challengeExecutionEvidence = input.evidence;
@@ -198,6 +203,17 @@ export function attachChallengeExecutionMetadata(
       };
     }
   }
+}
+
+function routeFromRuntimeIntentSide(side: ChallengeExecutionIntentSide): EvalRecord['challengeExecutionRoute'] {
+  return {
+    planner: side.planner.model,
+    coder: side.coder.model,
+    reviewer: side.reviewer.model,
+    planDepth: '',
+    codeDepth: '',
+    reviewMode: '',
+  };
 }
 
 export function attachAttemptedModel(
