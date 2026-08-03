@@ -7,35 +7,71 @@
  * 3. Successful first CI (no issues)
  */
 
-import { v4 as uuidv4 } from 'uuid';
-import type { EvalRecord } from '../shared/lib/eval-schema.ts';
+import { randomUUID } from 'node:crypto';
+import type { EvalRecord, TaskDescriptor } from '../shared/lib/eval-schema.ts';
+
+function makeMinimalTaskDescriptor(): TaskDescriptor {
+  return {
+    schema_version: '1.0',
+    signals: {
+      heuristic: {
+        task_type: 'feature',
+        languages: ['typescript'],
+        framework_tags: [],
+        files_touched: 3,
+        repo_size_loc: 5000,
+        description_tokens: 120,
+        is_greenfield: false,
+        has_migration: false,
+        has_ui: false,
+        has_tests: true,
+        cross_service: false,
+      },
+      learned: {
+        complexity: 2,
+        domain: 'backend',
+        risk_flags: [],
+      },
+    },
+    constraints: {
+      models_available: ['claude-sonnet-4-5-20250929'],
+      objective: 'balanced',
+    },
+    stages: {
+      planner: { model: 'claude-sonnet-4-5-20250929', cost_usd: 1 },
+      coder: { model: 'claude-sonnet-4-5-20250929', cost_usd: 2 },
+    },
+  };
+}
 
 /**
  * Fixture: Eval record for local failure (verification blocks PR)
  */
 export function createLocalFailureFixture(overrides?: Partial<EvalRecord>): EvalRecord {
+  const startedAt = '2026-01-01T12:00:00.000Z';
+  const completedAt = '2026-01-01T12:00:20.000Z';
   return {
-    id: uuidv4(),
+    id: randomUUID(),
     schemaVersion: '1.37.0',
     originalPrompt: 'Implement feature X',
-    modelId: 'claude-opus-4',
+    modelId: 'claude-sonnet-4-5-20250929',
     modelVersion: '2024-08-06',
     score: 0,
     scoreBand: 'Failure',
     timeSeconds: 180,
-    timestamp: new Date().toISOString(),
+    timestamp: '2026-01-01T12:10:00.000Z',
     interventionRequired: true,
     interventionCount: 1,
     interventionDetails: ['Manual verification override needed'],
     rationale: 'Verification failed locally; PR not created',
-    agentType: 'claude',
+    taskDescriptor: makeMinimalTaskDescriptor(),
     verificationTelemetry: {
       contractSource: 'github-enforced',
       contractVersion: '1.0.0',
       verifiedHeadSha: 'a'.repeat(40),
       verifiedBaseSha: 'b'.repeat(40),
-      startedAt: new Date(Date.now() - 600000).toISOString(),
-      completedAt: new Date(Date.now() - 580000).toISOString(),
+      startedAt,
+      completedAt,
       commands: [
         {
           index: 1,
@@ -71,19 +107,19 @@ export function createLocalFailureFixture(overrides?: Partial<EvalRecord>): Eval
  * Fixture: Eval record for remote-only failure (passes locally, fails on CI)
  */
 export function createRemoteOnlyFailureFixture(overrides?: Partial<EvalRecord>): EvalRecord {
-  const startTime = new Date(Date.now() - 1200000);
-  const ciStartTime = new Date(startTime.getTime() + 60000);
-
+  const startedAt = '2026-01-01T12:00:00.000Z';
+  const ciStartedAt = '2026-01-01T12:01:00.000Z';
+  const ciConcludedAt = '2026-01-01T12:16:00.000Z';
   return {
-    id: uuidv4(),
+    id: randomUUID(),
     schemaVersion: '1.37.0',
     originalPrompt: 'Implement feature Y',
-    modelId: 'claude-opus-4',
+    modelId: 'claude-sonnet-4-5-20250929',
     modelVersion: '2024-08-06',
     score: 0.3,
     scoreBand: 'Partial',
     timeSeconds: 600,
-    timestamp: new Date().toISOString(),
+    timestamp: '2026-01-01T12:30:00.000Z',
     prUrl: 'https://github.com/test/repo/pull/123',
     interventionRequired: true,
     interventionCount: 2,
@@ -92,14 +128,14 @@ export function createRemoteOnlyFailureFixture(overrides?: Partial<EvalRecord>):
       'Updated dependency version',
     ],
     rationale: 'CI tests failed; required remediation',
-    agentType: 'claude',
+    taskDescriptor: makeMinimalTaskDescriptor(),
     verificationTelemetry: {
       contractSource: 'github-enforced',
       contractVersion: '1.0.0',
       verifiedHeadSha: 'c'.repeat(40),
       verifiedBaseSha: 'd'.repeat(40),
-      startedAt: startTime.toISOString(),
-      completedAt: new Date(startTime.getTime() + 20000).toISOString(),
+      startedAt,
+      completedAt: '2026-01-01T12:00:20.000Z',
       commands: [
         {
           index: 1,
@@ -130,8 +166,8 @@ export function createRemoteOnlyFailureFixture(overrides?: Partial<EvalRecord>):
         wasOverridden: false,
       },
       firstCiVerdict: {
-        startedAt: ciStartTime.toISOString(),
-        concludedAt: new Date(ciStartTime.getTime() + 900000).toISOString(),
+        startedAt: ciStartedAt,
+        concludedAt: ciConcludedAt,
         status: 'fail',
         timeToVerdictSeconds: 900,
         workflowRunId: 'run_123456',
@@ -164,32 +200,32 @@ export function createRemoteOnlyFailureFixture(overrides?: Partial<EvalRecord>):
  * Fixture: Eval record for successful first CI (passes locally and on CI)
  */
 export function createSuccessfulFirstCiFixture(overrides?: Partial<EvalRecord>): EvalRecord {
-  const startTime = new Date(Date.now() - 1800000);
-  const ciStartTime = new Date(startTime.getTime() + 60000);
-
+  const startedAt = '2026-01-01T12:00:00.000Z';
+  const ciStartedAt = '2026-01-01T12:01:00.000Z';
+  const ciConcludedAt = '2026-01-01T12:11:00.000Z';
   return {
-    id: uuidv4(),
+    id: randomUUID(),
     schemaVersion: '1.37.0',
     originalPrompt: 'Implement feature Z',
-    modelId: 'claude-opus-4',
+    modelId: 'claude-sonnet-4-5-20250929',
     modelVersion: '2024-08-06',
     score: 0.95,
     scoreBand: 'Full Success',
     timeSeconds: 300,
-    timestamp: new Date().toISOString(),
+    timestamp: '2026-01-01T12:30:00.000Z',
     prUrl: 'https://github.com/test/repo/pull/124',
     interventionRequired: false,
     interventionCount: 0,
     interventionDetails: [],
     rationale: 'Clean implementation; passed all checks locally and on CI',
-    agentType: 'claude',
+    taskDescriptor: makeMinimalTaskDescriptor(),
     verificationTelemetry: {
       contractSource: 'github-enforced',
       contractVersion: '1.0.0',
       verifiedHeadSha: 'e'.repeat(40),
       verifiedBaseSha: 'f'.repeat(40),
-      startedAt: startTime.toISOString(),
-      completedAt: new Date(startTime.getTime() + 25000).toISOString(),
+      startedAt,
+      completedAt: '2026-01-01T12:00:25.000Z',
       commands: [
         {
           index: 1,
@@ -220,8 +256,8 @@ export function createSuccessfulFirstCiFixture(overrides?: Partial<EvalRecord>):
         wasOverridden: false,
       },
       firstCiVerdict: {
-        startedAt: ciStartTime.toISOString(),
-        concludedAt: new Date(ciStartTime.getTime() + 600000).toISOString(),
+        startedAt: ciStartedAt,
+        concludedAt: ciConcludedAt,
         status: 'pass',
         timeToVerdictSeconds: 600,
         workflowRunId: 'run_789012',

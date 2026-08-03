@@ -1,43 +1,76 @@
-import { describe, it, expect } from '@jest/globals';
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
 import { validateEvalRecord } from '../shared/lib/eval-validator.ts';
-import type { EvalRecord } from '../shared/lib/eval-schema.ts';
+import type { EvalRecord, TaskDescriptor } from '../shared/lib/eval-schema.ts';
+
+function baseTaskDescriptor(): TaskDescriptor {
+  return {
+    schema_version: '1.0',
+    signals: {
+      heuristic: {
+        task_type: 'feature',
+        languages: ['typescript'],
+        framework_tags: [],
+        files_touched: 3,
+        repo_size_loc: 5000,
+        description_tokens: 120,
+        is_greenfield: false,
+        has_migration: false,
+        has_ui: false,
+        has_tests: true,
+        cross_service: false,
+      },
+      learned: {
+        complexity: 2,
+        domain: 'backend',
+        risk_flags: [],
+      },
+    },
+    constraints: {
+      models_available: ['claude-sonnet-4-5-20250929'],
+      objective: 'balanced',
+    },
+    stages: {
+      planner: { model: 'claude-sonnet-4-5-20250929' },
+      coder: { model: 'claude-sonnet-4-5-20250929' },
+    },
+  };
+}
+
+function baseRecord(overrides: Partial<EvalRecord>): EvalRecord {
+  return {
+    id: 'test-record',
+    schemaVersion: '1.35.0',
+    originalPrompt: 'Some prompt',
+    modelId: 'claude-sonnet-4-5-20250929',
+    modelVersion: '2024-08-06',
+    score: 0.75,
+    scoreBand: 'Assisted Success',
+    timeSeconds: 300,
+    timestamp: '2026-01-01T00:00:00.000Z',
+    interventionRequired: false,
+    interventionCount: 0,
+    interventionDetails: [],
+    rationale: 'Good work',
+    taskDescriptor: baseTaskDescriptor(),
+    ...overrides,
+  };
+}
 
 describe('Eval Record Backward Compatibility', () => {
   it('should validate old eval record without verificationTelemetry', () => {
-    const oldRecord: EvalRecord = {
-      id: 'test-old-1',
-      schemaVersion: '1.35.0',
-      originalPrompt: 'Some prompt',
-      modelId: 'claude-opus-4',
-      modelVersion: '2024-08-06',
-      score: 0.75,
-      scoreBand: 'Assisted Success',
-      timeSeconds: 300,
-      timestamp: new Date().toISOString(),
-      interventionRequired: false,
-      interventionCount: 0,
-      interventionDetails: [],
-      rationale: 'Good work',
-    };
-
+    const oldRecord = baseRecord({ id: 'test-old-1' });
     const errors = validateEvalRecord(oldRecord, { file: 'test.jsonl', line: 1 });
-    expect(errors).toEqual([]);
+    assert.deepEqual(errors, []);
   });
 
   it('should validate new eval record with verificationTelemetry', () => {
-    const newRecord: EvalRecord = {
+    const newRecord = baseRecord({
       id: 'test-new-1',
       schemaVersion: '1.37.0',
-      originalPrompt: 'Some prompt',
-      modelId: 'claude-opus-4',
-      modelVersion: '2024-08-06',
       score: 0.85,
-      scoreBand: 'Full Success',
+      scoreBand: 'Minor Feedback',
       timeSeconds: 250,
-      timestamp: new Date().toISOString(),
-      interventionRequired: false,
-      interventionCount: 0,
-      interventionDetails: [],
       rationale: 'Excellent work',
       verificationTelemetry: {
         contractSource: 'github-enforced',
@@ -58,50 +91,30 @@ describe('Eval Record Backward Compatibility', () => {
           timeToVerdictSeconds: 600,
         },
       },
-    };
+    });
 
     const errors = validateEvalRecord(newRecord, { file: 'test.jsonl', line: 1 });
-    expect(errors).toEqual([]);
+    assert.deepEqual(errors, []);
   });
 
   it('should reject invalid SHAs in verificationTelemetry', () => {
-    const record: EvalRecord = {
+    const record = baseRecord({
       id: 'test-invalid-sha',
       schemaVersion: '1.37.0',
-      originalPrompt: 'Some prompt',
-      modelId: 'claude-opus-4',
-      modelVersion: '2024-08-06',
-      score: 0.75,
-      scoreBand: 'Assisted Success',
-      timeSeconds: 300,
-      timestamp: new Date().toISOString(),
-      interventionRequired: false,
-      interventionCount: 0,
-      interventionDetails: [],
       rationale: 'Test',
       verificationTelemetry: {
         verifiedHeadSha: 'invalid-sha',
       },
-    };
+    });
 
     const errors = validateEvalRecord(record, { file: 'test.jsonl', line: 1 });
-    expect(errors.length).toBeGreaterThan(0);
+    assert.ok(errors.length > 0, 'expected validation errors');
   });
 
   it('should reject out-of-bounds durations', () => {
-    const record: EvalRecord = {
+    const record = baseRecord({
       id: 'test-bad-duration',
       schemaVersion: '1.37.0',
-      originalPrompt: 'Some prompt',
-      modelId: 'claude-opus-4',
-      modelVersion: '2024-08-06',
-      score: 0.75,
-      scoreBand: 'Assisted Success',
-      timeSeconds: 300,
-      timestamp: new Date().toISOString(),
-      interventionRequired: false,
-      interventionCount: 0,
-      interventionDetails: [],
       rationale: 'Test',
       verificationTelemetry: {
         summary: {
@@ -110,30 +123,20 @@ describe('Eval Record Backward Compatibility', () => {
           failedCommands: 0,
           timeoutCommands: 0,
           overallStatus: 'pass',
-          totalTimeSeconds: 100000, // exceeds 86400
+          totalTimeSeconds: 100000,
           wasOverridden: false,
         },
       },
-    };
+    });
 
     const errors = validateEvalRecord(record, { file: 'test.jsonl', line: 1 });
-    expect(errors.length).toBeGreaterThan(0);
+    assert.ok(errors.length > 0, 'expected validation errors');
   });
 
   it('should detect secret patterns in failureReason', () => {
-    const record: EvalRecord = {
+    const record = baseRecord({
       id: 'test-secret-leak',
       schemaVersion: '1.37.0',
-      originalPrompt: 'Some prompt',
-      modelId: 'claude-opus-4',
-      modelVersion: '2024-08-06',
-      score: 0.75,
-      scoreBand: 'Assisted Success',
-      timeSeconds: 300,
-      timestamp: new Date().toISOString(),
-      interventionRequired: false,
-      interventionCount: 0,
-      interventionDetails: [],
       rationale: 'Test',
       verificationTelemetry: {
         commands: [
@@ -145,9 +148,9 @@ describe('Eval Record Backward Compatibility', () => {
           },
         ],
       },
-    };
+    });
 
     const errors = validateEvalRecord(record, { file: 'test.jsonl', line: 1 });
-    expect(errors.length).toBeGreaterThan(0);
+    assert.ok(errors.length > 0, 'expected validation errors');
   });
 });

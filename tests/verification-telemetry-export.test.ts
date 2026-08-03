@@ -1,6 +1,41 @@
-import { describe, it, expect } from '@jest/globals';
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
 import { projectForExport, redactVerificationTelemetry } from '../shared/lib/verification-telemetry-export.ts';
-import type { EvalRecord } from '../shared/lib/eval-schema.ts';
+import type { EvalRecord, TaskDescriptor } from '../shared/lib/eval-schema.ts';
+
+function baseTaskDescriptor(): TaskDescriptor {
+  return {
+    schema_version: '1.0',
+    signals: {
+      heuristic: {
+        task_type: 'feature',
+        languages: ['typescript'],
+        framework_tags: [],
+        files_touched: 3,
+        repo_size_loc: 5000,
+        description_tokens: 120,
+        is_greenfield: false,
+        has_migration: false,
+        has_ui: false,
+        has_tests: true,
+        cross_service: false,
+      },
+      learned: {
+        complexity: 2,
+        domain: 'backend',
+        risk_flags: [],
+      },
+    },
+    constraints: {
+      models_available: ['claude-sonnet-4-5-20250929'],
+      objective: 'balanced',
+    },
+    stages: {
+      planner: { model: 'claude-sonnet-4-5-20250929' },
+      coder: { model: 'claude-sonnet-4-5-20250929' },
+    },
+  };
+}
 
 describe('Verification Telemetry Export and Redaction', () => {
   describe('redactVerificationTelemetry', () => {
@@ -12,8 +47,8 @@ describe('Verification Telemetry Export and Redaction', () => {
 
       const redacted = redactVerificationTelemetry(telemetry);
 
-      expect(redacted.contractSource).toBe('github-enforced');
-      expect(redacted.contractVersion).toBe('1.0.0');
+      assert.equal(redacted.contractSource, 'github-enforced');
+      assert.equal(redacted.contractVersion, '1.0.0');
     });
 
     it('should preserve SHAs', () => {
@@ -24,8 +59,8 @@ describe('Verification Telemetry Export and Redaction', () => {
 
       const redacted = redactVerificationTelemetry(telemetry);
 
-      expect(redacted.verifiedHeadSha).toBe('a'.repeat(40));
-      expect(redacted.verifiedBaseSha).toBe('b'.repeat(40));
+      assert.equal(redacted.verifiedHeadSha, 'a'.repeat(40));
+      assert.equal(redacted.verifiedBaseSha, 'b'.repeat(40));
     });
 
     it('should preserve timestamps', () => {
@@ -36,8 +71,8 @@ describe('Verification Telemetry Export and Redaction', () => {
 
       const redacted = redactVerificationTelemetry(telemetry);
 
-      expect(redacted.startedAt).toBe('2024-01-01T12:00:00Z');
-      expect(redacted.completedAt).toBe('2024-01-01T12:05:00Z');
+      assert.equal(redacted.startedAt, '2024-01-01T12:00:00Z');
+      assert.equal(redacted.completedAt, '2024-01-01T12:05:00Z');
     });
 
     it('should redact command names but preserve durations', () => {
@@ -54,9 +89,9 @@ describe('Verification Telemetry Export and Redaction', () => {
 
       const redacted = redactVerificationTelemetry(telemetry);
 
-      expect(redacted.commands?.[0]?.commandName).toBe('[redacted]');
-      expect(redacted.commands?.[0]?.durationMs).toBe(2000);
-      expect(redacted.commands?.[0]?.failureReason).toBeUndefined();
+      assert.equal(redacted.commands?.[0]?.commandName, '[redacted]');
+      assert.equal(redacted.commands?.[0]?.durationMs, 2000);
+      assert.equal(redacted.commands?.[0]?.failureReason, undefined);
     });
 
     it('should preserve summary stats but redact override flag', () => {
@@ -74,11 +109,11 @@ describe('Verification Telemetry Export and Redaction', () => {
 
       const redacted = redactVerificationTelemetry(telemetry);
 
-      expect(redacted.summary?.totalCommands).toBe(3);
-      expect(redacted.summary?.passedCommands).toBe(2);
-      expect(redacted.summary?.failedCommands).toBe(1);
-      expect(redacted.summary?.overallStatus).toBe('fail');
-      expect(redacted.summary?.wasOverridden).toBeUndefined();
+      assert.equal(redacted.summary?.totalCommands, 3);
+      assert.equal(redacted.summary?.passedCommands, 2);
+      assert.equal(redacted.summary?.failedCommands, 1);
+      assert.equal(redacted.summary?.overallStatus, 'fail');
+      assert.equal(redacted.summary?.wasOverridden, undefined);
     });
 
     it('should preserve CI verdict status and timing but redact run IDs', () => {
@@ -93,10 +128,10 @@ describe('Verification Telemetry Export and Redaction', () => {
 
       const redacted = redactVerificationTelemetry(telemetry);
 
-      expect(redacted.firstCiVerdict?.status).toBe('pass');
-      expect(redacted.firstCiVerdict?.timeToVerdictSeconds).toBe(600);
-      expect(redacted.firstCiVerdict?.workflowRunId).toBeUndefined();
-      expect(redacted.firstCiVerdict?.ciLogsUrl).toBeUndefined();
+      assert.equal(redacted.firstCiVerdict?.status, 'pass');
+      assert.equal(redacted.firstCiVerdict?.timeToVerdictSeconds, 600);
+      assert.equal(redacted.firstCiVerdict?.workflowRunId, undefined);
+      assert.equal(redacted.firstCiVerdict?.ciLogsUrl, undefined);
     });
 
     it('should preserve failure category and fingerprint', () => {
@@ -108,9 +143,9 @@ describe('Verification Telemetry Export and Redaction', () => {
 
       const redacted = redactVerificationTelemetry(telemetry);
 
-      expect(redacted.failedCheckFingerprint).toBe('abc123def456');
-      expect(redacted.failureCategory).toBe('lint_error');
-      expect(redacted.remoteOnlyFailure).toBe(false);
+      assert.equal(redacted.failedCheckFingerprint, 'abc123def456');
+      assert.equal(redacted.failureCategory, 'lint_error');
+      assert.equal(redacted.remoteOnlyFailure, false);
     });
 
     it('should preserve remediation attempts but redact descriptions', () => {
@@ -128,11 +163,11 @@ describe('Verification Telemetry Export and Redaction', () => {
 
       const redacted = redactVerificationTelemetry(telemetry);
 
-      expect(redacted.remediation?.[0]?.attemptNumber).toBe(1);
-      expect(redacted.remediation?.[0]?.description).toBe('[redacted]');
-      expect(redacted.remediation?.[0]?.outcome).toBe('still_failing');
-      expect(redacted.remediation?.[0]?.delaySeconds).toBe(60);
-      expect(redacted.remediation?.[0]?.durationSeconds).toBe(300);
+      assert.equal(redacted.remediation?.[0]?.attemptNumber, 1);
+      assert.equal(redacted.remediation?.[0]?.description, '[redacted]');
+      assert.equal(redacted.remediation?.[0]?.outcome, 'still_failing');
+      assert.equal(redacted.remediation?.[0]?.delaySeconds, 60);
+      assert.equal(redacted.remediation?.[0]?.durationSeconds, 300);
     });
 
     it('should completely redact operator override', () => {
@@ -146,7 +181,7 @@ describe('Verification Telemetry Export and Redaction', () => {
 
       const redacted = redactVerificationTelemetry(telemetry);
 
-      expect(redacted.operatorOverride).toBeUndefined();
+      assert.equal(redacted.operatorOverride, undefined);
     });
   });
 
@@ -156,7 +191,7 @@ describe('Verification Telemetry Export and Redaction', () => {
         id: 'test-1',
         schemaVersion: '1.37.0',
         originalPrompt: 'Test',
-        modelId: 'claude-opus-4',
+        modelId: 'claude-sonnet-4-5-20250929',
         modelVersion: '2024',
         score: 0.8,
         scoreBand: 'Full Success',
@@ -166,6 +201,7 @@ describe('Verification Telemetry Export and Redaction', () => {
         interventionCount: 0,
         interventionDetails: [],
         rationale: 'Good',
+        taskDescriptor: baseTaskDescriptor(),
         verificationTelemetry: {
           contractSource: 'github-enforced',
           contractVersion: '1.0.0',
@@ -191,13 +227,12 @@ describe('Verification Telemetry Export and Redaction', () => {
 
       const projected = projectForExport(record);
 
-      expect(projected.verificationTelemetry).toBeDefined();
-      expect(projected.verificationTelemetry?.contractSource).toBe('github-enforced');
-      expect((projected.verificationTelemetry as any)?.summary).toBeDefined();
-      expect((projected.verificationTelemetry as any)?.summary?.totalCommands).toBe(2);
-      // Verify redaction happened
-      expect((projected.verificationTelemetry as any)?.commands?.[0]?.commandName).toBe('[redacted]');
-      expect((projected.verificationTelemetry as any)?.summary?.wasOverridden).toBeUndefined();
+      assert.ok(projected.verificationTelemetry);
+      assert.equal(projected.verificationTelemetry?.contractSource, 'github-enforced');
+      assert.ok((projected.verificationTelemetry as any)?.summary);
+      assert.equal((projected.verificationTelemetry as any)?.summary?.totalCommands, 2);
+      assert.equal((projected.verificationTelemetry as any)?.commands?.[0]?.commandName, '[redacted]');
+      assert.equal((projected.verificationTelemetry as any)?.summary?.wasOverridden, undefined);
     });
 
     it('should handle records without verificationTelemetry', () => {
@@ -205,7 +240,7 @@ describe('Verification Telemetry Export and Redaction', () => {
         id: 'test-2',
         schemaVersion: '1.35.0',
         originalPrompt: 'Test',
-        modelId: 'claude-opus-4',
+        modelId: 'claude-sonnet-4-5-20250929',
         modelVersion: '2024',
         score: 0.7,
         scoreBand: 'Assisted Success',
@@ -215,13 +250,14 @@ describe('Verification Telemetry Export and Redaction', () => {
         interventionCount: 0,
         interventionDetails: [],
         rationale: 'OK',
+        taskDescriptor: baseTaskDescriptor(),
       };
 
       const projected = projectForExport(record);
 
-      expect(projected.verificationTelemetry).toBeUndefined();
-      expect(projected.id).toBe('test-2');
-      expect(projected.score).toBe(0.7);
+      assert.equal(projected.verificationTelemetry, undefined);
+      assert.equal(projected.id, 'test-2');
+      assert.equal(projected.score, 0.7);
     });
 
     it('should include all core record fields', () => {
@@ -229,7 +265,7 @@ describe('Verification Telemetry Export and Redaction', () => {
         id: 'test-3',
         schemaVersion: '1.37.0',
         originalPrompt: 'Test prompt',
-        modelId: 'claude-opus-4',
+        modelId: 'claude-sonnet-4-5-20250929',
         modelVersion: '2024-08-06',
         score: 0.9,
         scoreBand: 'Minor Feedback',
@@ -241,18 +277,19 @@ describe('Verification Telemetry Export and Redaction', () => {
         rationale: 'Almost perfect',
         issueId: 'HOK-123',
         prUrl: 'https://github.com/pr/456',
+        taskDescriptor: baseTaskDescriptor(),
       };
 
       const projected = projectForExport(record);
 
-      expect(projected.id).toBe('test-3');
-      expect(projected.schemaVersion).toBe('1.37.0');
-      expect(projected.originalPrompt).toBe('Test prompt');
-      expect(projected.modelId).toBe('claude-opus-4');
-      expect(projected.score).toBe(0.9);
-      expect(projected.scoreBand).toBe('Minor Feedback');
-      expect(projected.issueId).toBe('HOK-123');
-      expect(projected.prUrl).toBe('https://github.com/pr/456');
+      assert.equal(projected.id, 'test-3');
+      assert.equal(projected.schemaVersion, '1.37.0');
+      assert.equal(projected.originalPrompt, 'Test prompt');
+      assert.equal(projected.modelId, 'claude-sonnet-4-5-20250929');
+      assert.equal(projected.score, 0.9);
+      assert.equal(projected.scoreBand, 'Minor Feedback');
+      assert.equal(projected.issueId, 'HOK-123');
+      assert.equal(projected.prUrl, 'https://github.com/pr/456');
     });
   });
 });
