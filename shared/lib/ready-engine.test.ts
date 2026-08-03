@@ -8,6 +8,7 @@ import {
   checkMigrationCoupling,
   checkRiskPolicy,
   evaluateReady,
+  readRequiredChecks,
   type ReadyEngineContext,
 } from './ready-engine.ts';
 import { WM_LABELS } from './pr-state-labels.ts';
@@ -45,6 +46,7 @@ function buildContext(overrides: Partial<ReadyEngineContext> = {}): ReadyEngineC
     fetchPrState: fetchPrState ?? (async () => ({ state: 'MERGED', mergedAt: '2026-04-27T00:00:00Z' })),
     fetchLinearIssueState: fetchLinearIssueState ?? (async () => ({ completedAt: '2026-04-27T00:00:00Z', canceledAt: null })),
     readChallengeComparisons: readChallengeComparisons ?? (() => []),
+    requiredCheckRead: overrides.requiredCheckRead,
   };
 }
 
@@ -291,6 +293,20 @@ describe('checkChallengePairs', () => {
 });
 
 describe('evaluateReady', () => {
+  it('blocks merge readiness when required GitHub checks cannot be read', async () => {
+    const result = await evaluateReady(buildContext({
+      requiredCheckRead: {
+        ok: false,
+        errorType: 'command-failed',
+        reason: 'gh pr view exited 1',
+      },
+    }));
+
+    assert.equal(result.status, 'pending');
+    assert.match(result.reasons.join('\n'), /Required GitHub check status could not be read/);
+    assert.match(result.output.comment, /Required Checks Unavailable/);
+  });
+
   it('applies verdict precedence fail over pending and warn', async () => {
     const result = await evaluateReady(buildContext({
       pr: {
@@ -324,5 +340,22 @@ describe('evaluateReady', () => {
       readChallengeComparisons: () => [],
     }));
     assert.deepEqual(result.output.labels, [WM_LABELS.wrongBase, WM_LABELS.challengeUnresolved]);
+  });
+});
+
+describe('readRequiredChecks', () => {
+  it('passes through successful check reads', () => {
+    assert.deepEqual(readRequiredChecks({ ok: true, checks: [] }), { status: 'pass' });
+  });
+
+  it('returns a fail-closed pending result for malformed check data', () => {
+    const result = readRequiredChecks({
+      ok: false,
+      errorType: 'malformed-json',
+      reason: 'Unexpected token',
+    });
+
+    assert.equal(result.status, 'pending');
+    assert.match(result.reason ?? '', /malformed-json/);
   });
 });

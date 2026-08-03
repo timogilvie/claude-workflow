@@ -7,7 +7,10 @@
 
 import { describe, it } from 'node:test';
 import { strict as assert } from 'node:assert';
-import { escapeShellArg, execShellCommand } from './shell-utils.ts';
+import { mkdtempSync, realpathSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { escapeShellArg, execArgvCommand, execShellCommand } from './shell-utils.ts';
 
 describe('escapeShellArg', () => {
   it('should escape simple strings without special characters', () => {
@@ -124,6 +127,59 @@ describe('execShellCommand', () => {
     // On macOS, /tmp is a symlink to /private/tmp, so check for both
     const pwd = result.trim();
     assert.ok(pwd === '/tmp' || pwd === '/private/tmp', `Expected /tmp or /private/tmp, got ${pwd}`);
+  });
+});
+
+describe('execArgvCommand', () => {
+  it('passes shell-special values literally', () => {
+    const specialArgs = [
+      'with space',
+      'app/(auth)/page.tsx',
+      'quote"double',
+      "quote'single",
+      '[tenant]/*.tsx',
+      '$HOME',
+      '`whoami`',
+      'semi;colon',
+      'pipe|value',
+      '--leading-dash.ts',
+    ];
+
+    const result = execArgvCommand(process.execPath, [
+      '-e',
+      'console.log(JSON.stringify(process.argv.slice(1)))',
+      ...specialArgs,
+    ], { encoding: 'utf-8' });
+
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.failed, false);
+    assert.deepEqual(JSON.parse(result.stdout.trim()), specialArgs);
+  });
+
+  it('respects cwd option', () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'wavemill-argv-cwd-'));
+    const result = execArgvCommand(process.execPath, [
+      '-e',
+      'console.log(process.cwd())',
+    ], { encoding: 'utf-8', cwd });
+
+    assert.equal(result.stdout.trim(), realpathSync(cwd));
+  });
+
+  it('returns a structured non-zero result without throwing', () => {
+    const result = execArgvCommand(process.execPath, [
+      '-e',
+      "process.stdout.write('out'); process.stderr.write('err'); process.exit(7)",
+    ], { encoding: 'utf-8' });
+
+    assert.deepEqual(result, { stdout: 'out', stderr: 'err', exitCode: 7, failed: false });
+  });
+
+  it('returns a structured spawn failure without throwing', () => {
+    const result = execArgvCommand('wavemill-missing-command-for-test', []);
+
+    assert.equal(result.exitCode, -1);
+    assert.equal(result.failed, true);
   });
 });
 

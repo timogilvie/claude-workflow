@@ -14,7 +14,7 @@
 
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, dirname, basename } from 'node:path';
-import { execShellCommand } from './shell-utils.ts';
+import { execArgvCommand } from './shell-utils.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -55,6 +55,10 @@ const DEFAULT_CONFIG: Required<SubsystemDetectionConfig> = {
   useGitAnalysis: true,
   maxSubsystems: 20,
   sourceDirs: ['src', 'lib', 'shared', 'tools', 'commands'],
+};
+
+export const subsystemDetectorDeps = {
+  execArgvCommand,
 };
 
 // ────────────────────────────────────────────────────────────────
@@ -239,9 +243,22 @@ function detectPackageSubsystems(repoDir: string, config: Required<SubsystemDete
 
     // Key packages that often define subsystems
     const keyPackages = ['linear', 'anthropic', 'openai', 'express', 'fastify', 'next', 'react'];
+    const depNames = Object.keys(deps);
+    const candidatePackages = new Set<string>();
 
     for (const pkg of keyPackages) {
-      if (!deps[pkg] && !Object.keys(deps).some(d => d.includes(pkg))) continue;
+      if (deps[pkg]) {
+        candidatePackages.add(pkg);
+      }
+
+      for (const depName of depNames) {
+        if (depName.includes(pkg)) {
+          candidatePackages.add(depName);
+        }
+      }
+    }
+
+    for (const pkg of candidatePackages) {
 
       // Find files that import this package
       const files = findFilesImporting(repoDir, pkg, config.sourceDirs);
@@ -280,10 +297,22 @@ function findFilesImporting(repoDir: string, packageName: string, sourceDirs: st
     if (!existsSync(sourcePath)) continue;
 
     try {
-      // Use grep to find imports (fast)
-      const cmd = `grep -r --include="*.{ts,js,tsx,jsx}" -l "from ['\"]${packageName}" ${sourcePath} 2>/dev/null || true`;
-      const output = execShellCommand(cmd, { encoding: 'utf-8', cwd: repoDir });
-      const matches = output.trim().split('\n').filter(Boolean);
+      const result = subsystemDetectorDeps.execArgvCommand('grep', [
+        '-r',
+        '-l',
+        '-F',
+        '--include=*.ts',
+        '--include=*.js',
+        '--include=*.tsx',
+        '--include=*.jsx',
+        '-e',
+        `from '${packageName}`,
+        '-e',
+        `from "${packageName}`,
+        '--',
+        sourcePath,
+      ], { encoding: 'utf-8', cwd: repoDir, stdio: ['ignore', 'pipe', 'ignore'] });
+      const matches = result.stdout.trim().split('\n').filter(Boolean);
       files.push(...matches.map(f => relative(repoDir, f)));
     } catch {
       // Grep failed, skip
@@ -309,8 +338,13 @@ function detectGitClusterSubsystems(repoDir: string, config: Required<SubsystemD
 
   try {
     // Get recent commits with file changes
-    const cmd = 'git log --name-only --pretty=format:"COMMIT:%H" -100';
-    const output = execShellCommand(cmd, { encoding: 'utf-8', cwd: repoDir });
+    const result = subsystemDetectorDeps.execArgvCommand('git', [
+      'log',
+      '--name-only',
+      '--pretty=format:COMMIT:%H',
+      '-100',
+    ], { encoding: 'utf-8', cwd: repoDir });
+    const output = result.stdout;
 
     // Parse commit groups
     const commits = output.split('COMMIT:').filter(Boolean);

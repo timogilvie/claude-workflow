@@ -89,9 +89,14 @@ Flags:
 - `--loop`: continue watching active sessions
 - `--interval <seconds>`: delay between loop iterations
 - `--json`: emit structured snapshots for a supervising Codex session
+- `--repo-dir <path>` / `--session <name>`: scope observation to one active mill repository/session
 - `--file-linear`: create Linear issues for high-confidence urgent/high findings using `LINEAR_API_KEY` from `.env` or the environment
 - `--dry-run`: report what would be found without creating Linear issues
 - `--print-prompt`: print the recommended long-running Codex supervisor prompt
+
+When launched as the Backstage service, Observer runs in detection-only mode
+with `WAVEMILL_OBSERVER_SERVICE=1`, `--json`, and `--dry-run`; Linear filing is
+rejected in that mode.
 
 The observer itself is conservative: it detects and reports stuck states, warnings, crashes, and visual pane/display issues. A supervising Codex session should decide whether to apply a narrow operational nudge, file a Linear issue, or make a Wavemill PR targeting `auto/integration`.
 

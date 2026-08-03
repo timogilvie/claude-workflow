@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { mutateJsonState } from '../shared/lib/state-mutex.ts';
 
 type Severity = 'urgent' | 'high' | 'medium' | 'low';
 type Category = 'stuck' | 'crash' | 'warning' | 'ux' | 'operational';
@@ -23,6 +24,9 @@ interface ObserverOptions {
   linearLabel?: string;
   maxLogLines: number;
   printPrompt: boolean;
+  repoDir?: string;
+  session?: string;
+  serviceMode?: boolean;
 }
 
 interface Pane {
@@ -123,12 +127,14 @@ Options:
   --stale-minutes <n>    State/log stale threshold (default: ${DEFAULT_STALE_MINUTES})
   --hung-minutes <n>     Child process hung threshold (default: ${DEFAULT_HUNG_MINUTES})
   --max-log-lines <n>    Recent mill log lines to inspect (default: 240)
+  --repo-dir <path>      Limit service observation to one repository
+  --session <name>       Limit service observation to one tmux session
   --print-prompt         Print the recommended long-running Codex prompt
   --help                 Show this help
 `;
 }
 
-function parseArgs(argv: string[]): ObserverOptions {
+export function parseArgs(argv: string[]): ObserverOptions {
   const options: ObserverOptions = {
     loop: false,
     once: true,
@@ -140,6 +146,7 @@ function parseArgs(argv: string[]): ObserverOptions {
     dryRun: false,
     maxLogLines: 240,
     printPrompt: false,
+    serviceMode: process.env.WAVEMILL_OBSERVER_SERVICE === '1',
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -186,6 +193,14 @@ function parseArgs(argv: string[]): ObserverOptions {
       options.maxLogLines = parsePositiveInt(next(), arg);
     } else if (arg.startsWith('--max-log-lines=')) {
       options.maxLogLines = parsePositiveInt(arg.slice('--max-log-lines='.length), '--max-log-lines');
+    } else if (arg === '--repo-dir') {
+      options.repoDir = resolve(next());
+    } else if (arg.startsWith('--repo-dir=')) {
+      options.repoDir = resolve(arg.slice('--repo-dir='.length));
+    } else if (arg === '--session') {
+      options.session = next();
+    } else if (arg.startsWith('--session=')) {
+      options.session = arg.slice('--session='.length);
     } else if (arg === '--linear-team') {
       options.linearTeam = next();
     } else if (arg.startsWith('--linear-team=')) {
@@ -201,6 +216,10 @@ function parseArgs(argv: string[]): ObserverOptions {
     } else {
       throw new Error(`Unknown observer option: ${arg}`);
     }
+  }
+
+  if (options.serviceMode && options.fileLinear) {
+    throw new Error('--file-linear is not allowed when WAVEMILL_OBSERVER_SERVICE=1');
   }
 
   return options;
@@ -392,9 +411,39 @@ function stringValue(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
-function snapshotRepos(sessions: string[]): RepoSnapshot[] {
+function snapshotRepos(sessions: string[], options: ObserverOptions): RepoSnapshot[] {
   const repos: RepoSnapshot[] = [];
   const seen = new Set<string>();
+  if (options.repoDir) {
+    const session = options.session || sessions[0] || process.env.WAVEMILL_SESSION || 'unknown';
+    const repoDir = options.repoDir;
+    const stateDir = join(repoDir, '.wavemill');
+    const workflowStatePath = join(stateDir, 'workflow-state.json');
+    const queueHealthPath = join(stateDir, 'queue-health.json');
+    const logDir = join(stateDir, 'logs');
+    const millLogPath = findNewestMillLog(logDir, session);
+    let queueHealth: any;
+    if (existsSync(queueHealthPath)) {
+      try {
+        queueHealth = JSON.parse(readFileSync(queueHealthPath, 'utf-8'));
+      } catch {
+        queueHealth = undefined;
+      }
+    }
+    repos.push({
+      session,
+      repoDir,
+      workflowStatePath: existsSync(workflowStatePath) ? workflowStatePath : undefined,
+      millLogPath,
+      queueHealthPath: existsSync(queueHealthPath) ? queueHealthPath : undefined,
+      queueHealth,
+      tasks: existsSync(workflowStatePath) ? readWorkflowTasks(workflowStatePath) : [],
+      stateMtime: existsSync(workflowStatePath) ? statSync(workflowStatePath).mtime.toISOString() : undefined,
+      logMtime: millLogPath && existsSync(millLogPath) ? statSync(millLogPath).mtime.toISOString() : undefined,
+    });
+    return repos;
+  }
+
   for (const session of sessions) {
     const env = sessionEnv(session);
     const repoDir = env.WAVEMILL_MILL_ACTIVE || env.REPO_DIR;
@@ -731,10 +780,10 @@ function dedupeFindings(findings: Finding[]): Finding[] {
 }
 
 function observe(options: ObserverOptions): ObserverSnapshot {
-  const sessions = listSessions();
-  const panes = listPanes();
+  const sessions = listSessions().filter((session) => !options.session || session === options.session);
+  const panes = listPanes().filter((pane) => !options.session || pane.session === options.session);
   const processes = filterRelevantProcesses(processRows(), panes);
-  const repos = snapshotRepos(sessions);
+  const repos = snapshotRepos(sessions, options);
   const partial = {
     timestamp: new Date().toISOString(),
     sessions,
@@ -746,6 +795,71 @@ function observe(options: ObserverOptions): ObserverSnapshot {
     ...partial,
     findings: buildFindings(partial, options),
   };
+}
+
+interface BackstageHealthFile {
+  updatedAt?: string;
+  services?: Record<string, Record<string, unknown>>;
+  [key: string]: unknown;
+}
+
+export function redactObserverText(value: string): string {
+  return value
+    .replace(/(LINEAR_API_KEY|OPENAI_API_KEY|OPENROUTER_API_KEY|GH_TOKEN|GITHUB_TOKEN|ANTHROPIC_API_KEY)=\S+/gi, '$1=[redacted]')
+    .replace(/(api[_-]?key|token|secret|password)=\S+/gi, '$1=[redacted]')
+    .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+\/=-]+/gi, '$1 [redacted]')
+    .replace(/(prompt|transcript)=.+/gi, '$1=[redacted]');
+}
+
+function redactFinding(finding: Finding): Finding {
+  return {
+    ...finding,
+    title: redactObserverText(finding.title),
+    evidence: finding.evidence.map(redactObserverText).filter((line) => !/\b(full prompt|transcript path|conversation transcript)\b/i.test(line)),
+    recommendation: redactObserverText(finding.recommendation),
+  };
+}
+
+function redactSnapshot(snapshot: ObserverSnapshot): ObserverSnapshot {
+  return {
+    ...snapshot,
+    processes: snapshot.processes.map((row) => ({ ...row, command: redactObserverText(row.command) })),
+    findings: snapshot.findings.map(redactFinding),
+  };
+}
+
+export async function writeServiceHeartbeat(snapshot: ObserverSnapshot, options: ObserverOptions): Promise<void> {
+  if (!options.serviceMode || !options.repoDir) return;
+  const healthPath = join(options.repoDir, '.wavemill', 'backstage-health.json');
+  const counts = snapshot.findings.reduce<Record<Severity, number>>((acc, finding) => {
+    acc[finding.severity] += 1;
+    return acc;
+  }, { urgent: 0, high: 0, medium: 0, low: 0 });
+
+  await mutateJsonState<BackstageHealthFile>(
+    healthPath,
+    (current) => {
+      const next = { ...(current ?? {}) };
+      const services = { ...(next.services ?? {}) };
+      const existing = { ...(services.observer ?? {}) };
+      services.observer = {
+        ...existing,
+        status: 'healthy',
+        detail: `observer heartbeat: findings urgent=${counts.urgent} high=${counts.high} medium=${counts.medium} low=${counts.low}`,
+        heartbeatAt: snapshot.timestamp,
+        updatedAt: snapshot.timestamp,
+        restartAttemptCount: 0,
+        lastRestartAttemptAt: null,
+        session: options.session ?? snapshot.sessions[0] ?? null,
+        repoDir: options.repoDir,
+        findingCounts: counts,
+      };
+      next.updatedAt = snapshot.timestamp;
+      next.services = services;
+      return next;
+    },
+    { createIfMissing: true, initial: {} },
+  );
 }
 
 function renderSummary(snapshot: ObserverSnapshot): string {
@@ -944,7 +1058,8 @@ async function main(): Promise<void> {
   }
 
   do {
-    const snapshot = observe(options);
+    const snapshot = options.serviceMode ? redactSnapshot(observe(options)) : observe(options);
+    await writeServiceHeartbeat(snapshot, options);
     await fileLinearIssues(snapshot, options);
     if (options.json) {
       process.stdout.write(`${JSON.stringify(snapshot, null, 2)}\n`);

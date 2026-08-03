@@ -49,6 +49,8 @@ import {
   getNativeExpansionConfig,
   getNativePatchCodingConfig,
   getReadyConfig,
+  getReadyFailureClassifierConfig,
+  getReadyVerificationConfig,
   getReadyWatchdogConfig,
   getMigrationChecksConfig,
   getMergeQueueConfig,
@@ -59,6 +61,7 @@ import {
   getQuotaConfig,
   getRuntimeResourceSelectionConfig,
   getEffectiveModelExclusions,
+  getPrePrVerificationConfig,
 } from './config.ts';
 
 // ────────────────────────────────────────────────────────────────
@@ -265,6 +268,33 @@ test('valid config passes validation', () => {
     assert.equal(config.resources?.runtimeSelection?.defaultVariant, 'optimized');
   } finally {
     cleanUp(tmp);
+  }
+});
+
+test('uses the schema checked out with the target worktree', () => {
+  const tmp = makeTempRepo();
+  try {
+    const schema = JSON.parse(
+      readFileSync(join(process.cwd(), 'wavemill-config.schema.json'), 'utf-8')
+    );
+    schema.properties.prePrVerification = {
+      type: 'object',
+      properties: { enabled: { type: 'boolean' } },
+      additionalProperties: false,
+    };
+    writeFileSync(
+      join(tmp, 'wavemill-config.schema.json'),
+      JSON.stringify(schema)
+    );
+    clearConfigCache();
+    writeFileSync(
+      join(tmp, '.wavemill-config.json'),
+      JSON.stringify({ prePrVerification: { enabled: true } })
+    );
+
+    assert.equal(loadWavemillConfig(tmp).prePrVerification?.enabled, true);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
   }
 });
 
@@ -2176,6 +2206,35 @@ test('getReadyConfig respects explicit remediation overrides', () => {
   }
 });
 
+test('ready failure classifier and verification accessors return configured values', () => {
+  const tmp = makeTempRepo();
+  try {
+    writeConfig(tmp, JSON.stringify({
+      ready: {
+        transientRetryBudget: 5,
+        remediationLogMaxBytes: 1234,
+        verificationGatingEnabled: false,
+        localCommandMap: {
+          'Unit Tests': 'npm test',
+        },
+      },
+    }));
+
+    assert.deepEqual(getReadyFailureClassifierConfig(tmp), {
+      transientRetryBudget: 5,
+      remediationLogMaxBytes: 1234,
+      localCommandMap: {
+        'Unit Tests': 'npm test',
+      },
+    });
+    assert.deepEqual(getReadyVerificationConfig(tmp), {
+      gatingEnabled: false,
+    });
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test('getMergeQueueConfig returns defaults when unset', () => {
   const tmp = makeTempRepo();
   try {
@@ -3475,6 +3534,277 @@ test('modelExclusions rejects invalid stages', () => {
     }));
 
     assert.throws(() => loadWavemillConfig(tmp), /validation failed/);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+// ────────────────────────────────────────────────────────────────
+// Pre-PR Verification Config Tests
+// ────────────────────────────────────────────────────────────────
+
+test('pre-PR verification: loads empty config when not configured', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      router: { enabled: true },
+    }));
+
+    const config = getPrePrVerificationConfig(tmp);
+    assert.deepEqual(config, {});
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('pre-PR verification: loads full configuration', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      prePrVerification: {
+        enabled: true,
+        required: true,
+        source: 'explicit',
+        recipe: {
+          commands: ['npm test', 'npm run lint'],
+          timeoutSeconds: 600,
+          retryPolicy: {
+            enabled: true,
+            maxAttempts: 2,
+            backoffSeconds: 5,
+          },
+        },
+        logCaptureLines: 100,
+        draftFallback: false,
+        staleTtlSeconds: 7200,
+        compatibility: {
+          mode: 'warn',
+          warnAfterDays: 14,
+        },
+      },
+    }));
+
+    const config = getPrePrVerificationConfig(tmp);
+    assert.equal(config.enabled, true);
+    assert.equal(config.required, true);
+    assert.equal(config.source, 'explicit');
+    assert.deepEqual(config.recipe?.commands, ['npm test', 'npm run lint']);
+    assert.equal(config.recipe?.timeoutSeconds, 600);
+    assert.equal(config.logCaptureLines, 100);
+    assert.equal(config.draftFallback, false);
+    assert.equal(config.staleTtlSeconds, 7200);
+    assert.equal(config.compatibility?.mode, 'warn');
+    assert.equal(config.compatibility?.warnAfterDays, 14);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('pre-PR verification: handles github-enforced source', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      prePrVerification: {
+        enabled: true,
+        source: 'github-enforced',
+        requiredChecks: ['Shell and Unit Tests', 'Type Check'],
+        recipe: {
+          commands: ['npm test'],
+        },
+      },
+    }));
+
+    const config = getPrePrVerificationConfig(tmp);
+    assert.equal(config.source, 'github-enforced');
+    assert.deepEqual(config.requiredChecks, ['Shell and Unit Tests', 'Type Check']);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('pre-PR verification: rejects empty commands when required is true', () => {
+  if (!hasAjv) return;
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      prePrVerification: {
+        enabled: true,
+        required: true,
+        recipe: {
+          commands: [], // Empty when required should fail schema validation
+        },
+      },
+    }));
+
+    // Schema should reject empty commands (minItems: 1 when required is true)
+    assert.throws(() => loadWavemillConfig(tmp), /validation failed|commands.*must NOT have fewer/);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('pre-PR verification: rejects empty requiredChecks when source is github-enforced', () => {
+  if (!hasAjv) return;
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      prePrVerification: {
+        enabled: true,
+        source: 'github-enforced',
+        requiredChecks: [], // Empty when source is github-enforced should fail
+        recipe: {
+          commands: ['npm test'],
+        },
+      },
+    }));
+
+    // Schema validates minItems: 1 when source is github-enforced
+    assert.throws(() => loadWavemillConfig(tmp), /validation failed|requiredChecks.*must NOT have fewer/);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('pre-PR verification: rejects invalid source enum', () => {
+  if (!hasAjv) return;
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      prePrVerification: {
+        enabled: true,
+        source: 'invalid-source',
+        recipe: {
+          commands: ['npm test'],
+        },
+      },
+    }));
+
+    assert.throws(() => loadWavemillConfig(tmp), /validation failed|source/);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('pre-PR verification: rejects invalid compatibility mode', () => {
+  if (!hasAjv) return;
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      prePrVerification: {
+        enabled: true,
+        recipe: {
+          commands: ['npm test'],
+        },
+        compatibility: {
+          mode: 'invalid-mode',
+        },
+      },
+    }));
+
+    assert.throws(() => loadWavemillConfig(tmp), /validation failed|mode/);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('pre-PR verification: rejects timeoutSeconds below minimum', () => {
+  if (!hasAjv) return;
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      prePrVerification: {
+        enabled: true,
+        recipe: {
+          commands: ['npm test'],
+          timeoutSeconds: 5, // Minimum is 10
+        },
+      },
+    }));
+
+    assert.throws(() => loadWavemillConfig(tmp), /validation failed|timeoutSeconds/);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('pre-PR verification: merges local config over base', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      prePrVerification: {
+        enabled: false,
+        recipe: {
+          commands: ['npm test'],
+        },
+      },
+    }));
+    writeFileSync(join(tmp, '.wavemill-config.local.json'), JSON.stringify({
+      prePrVerification: {
+        enabled: true,
+        required: true,
+      },
+    }), 'utf-8');
+
+    const config = getPrePrVerificationConfig(tmp);
+    assert.equal(config.enabled, true); // From local
+    assert.equal(config.required, true); // From local
+    assert.deepEqual(config.recipe?.commands, ['npm test']); // From base
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('pre-PR verification: handles multiple commands in recipe', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      prePrVerification: {
+        enabled: true,
+        recipe: {
+          commands: [
+            'npx tsx tools/check-pi-version.ts',
+            'npm test',
+            'npm run test:native-launch-certification',
+          ],
+        },
+      },
+    }));
+
+    const config = getPrePrVerificationConfig(tmp);
+    assert.equal(config.recipe?.commands?.length, 3);
+    assert.equal(config.recipe?.commands?.[0], 'npx tsx tools/check-pi-version.ts');
+    assert.equal(config.recipe?.commands?.[2], 'npm run test:native-launch-certification');
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('pre-PR verification: backward compatible with legacy configs', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      router: { enabled: true },
+      ready: { checks: ['ci-status'] },
+      verification: { enabled: true },
+      // No prePrVerification field
+    }));
+
+    const config = loadWavemillConfig(tmp);
+    assert.ok(config.router?.enabled);
+    assert.deepEqual(config.ready?.checks, ['ci-status']);
+    assert.ok(config.verification?.enabled);
+    assert.deepEqual(getPrePrVerificationConfig(tmp), {});
   } finally {
     cleanUp(tmp);
   }

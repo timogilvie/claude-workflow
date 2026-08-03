@@ -225,6 +225,7 @@ Configuration (`.wavemill-config.json`):
 - `mill.0` monitor + command input (`1 3`, `advance HOK-1639`, `m`, `d`, `q`)
 - `mill.1` dashboard
 - `mill.2` status log
+- When `observer.enabled` is true and integration mill-session monitoring is active, the Backstage window also includes a dedicated `Wavemill Observer` pane running detection-only `wavemill observer --loop`.
 - Input is decoupled from the monitor loop internally and written as session-scoped command events at `/tmp/wavemill-${SESSION}-commands`.
 - When coding writes a valid `features/<slug>/.coding-blocked-completion.json` that recommends review advancement and passes mill guardrails, mill auto-advances the task to review and records `features/<slug>/.coding-auto-advance.json`.
 - When a Codex coding pane is idle at the exact terminal capacity prompt for the confirmation dwell, mill writes `features/<slug>/.coding-blocked-completion.json` plus `features/<slug>/.coding-capacity-recovery.json`, keeps the task in coding, and marks it `needs-user` instead of waiting forever for `.coding-complete`.

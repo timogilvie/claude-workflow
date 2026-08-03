@@ -5,8 +5,28 @@
  * Use these utilities instead of execSync(..., { shell: '/bin/bash' }) with string interpolation.
  */
 
-import { execSync } from "node:child_process";
-import type { ExecSyncOptions } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
+import type { ExecFileSyncOptions, ExecSyncOptions } from "node:child_process";
+
+export type ExecArgvCommandOptions = Omit<ExecFileSyncOptions, 'shell'>;
+
+/** Result of an argv-based command invocation. */
+export interface ExecArgvCommandResult {
+  /** Standard output produced by the child process. */
+  stdout: string;
+  /** Standard error produced by the child process. */
+  stderr: string;
+  /** Process exit status, or -1 when the process could not be spawned. */
+  exitCode: number;
+  /** Whether spawning the executable itself failed (for example ENOENT). */
+  failed: boolean;
+}
+
+function commandOutputToString(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (Buffer.isBuffer(value)) return value.toString();
+  return '';
+}
 
 /**
  * Escape a string for safe use as a shell argument.
@@ -67,4 +87,39 @@ export function execShellCommand(
   };
 
   return execSync(command, shellOptions);
+}
+
+/**
+ * Execute a command with literal argv and no shell.
+ *
+ * Use this helper when any executable arguments come from repository paths,
+ * package names, user input, or other dynamic values. Pipes and redirections
+ * are intentionally unsupported; compose those operations in JavaScript.
+ */
+export function execArgvCommand(
+  file: string,
+  args: readonly string[],
+  options?: ExecArgvCommandOptions
+): ExecArgvCommandResult {
+  try {
+    const stdout = execFileSync(file, [...args], {
+      ...options,
+      shell: false,
+    });
+    return { stdout: commandOutputToString(stdout), stderr: '', exitCode: 0, failed: false };
+  } catch (error) {
+    const commandError = error as {
+      code?: string;
+      status?: number | null;
+      stdout?: string | Buffer;
+      stderr?: string | Buffer;
+    };
+    const failed = commandError.code === 'ENOENT';
+    return {
+      stdout: commandOutputToString(commandError.stdout),
+      stderr: commandOutputToString(commandError.stderr),
+      exitCode: typeof commandError.status === 'number' ? commandError.status : -1,
+      failed,
+    };
+  }
 }

@@ -494,6 +494,16 @@ export interface IntegrationConfig {
   readyPolicy?: IntegrationReadyPolicyConfig;
 }
 
+export interface ObserverConfig {
+  enabled: boolean;
+  intervalSeconds: number;
+  heartbeatStaleSeconds: number;
+  maxLogLines: number;
+  retention: {
+    maxSnapshots: number;
+  };
+}
+
 export type PromotionProtectedIntegrationStrategy =
   | 'skip-reconciliation'
   | 'block'
@@ -557,6 +567,10 @@ export interface ReadyConfig {
   migrationChecks?: ReadyMigrationChecksConfig;
   migrationDangerLabels?: Record<string, string>;
   migrationForbiddenPatterns?: string[];
+  transientRetryBudget?: number;
+  remediationLogMaxBytes?: number;
+  verificationGatingEnabled?: boolean;
+  localCommandMap?: Record<string, string>;
   remediation?: ReadyRemediationConfig;
   watchdog?: ReadyWatchdogConfig;
 }
@@ -586,6 +600,16 @@ export interface ReadyWatchdogConfig {
   stableFailureConsecutivePolls?: number;
   stableFailureEscalateAfterPolls?: number;
   safeRemediationCategories?: string[];
+}
+
+export interface ReadyFailureClassifierConfig {
+  transientRetryBudget: number;
+  remediationLogMaxBytes: number;
+  localCommandMap: Record<string, string>;
+}
+
+export interface ReadyVerificationConfig {
+  gatingEnabled: boolean;
 }
 
 export interface MergeQueueConfig {
@@ -661,6 +685,31 @@ export interface VerificationConfig {
   secondPassReview?: VerificationSecondPassReviewConfig;
 }
 
+export interface PrePrVerificationRecipeConfig {
+  commands: string[];
+  timeoutSeconds?: number;
+  retryPolicy?: {
+    enabled?: boolean;
+    maxAttempts?: number;
+    backoffSeconds?: number;
+  };
+}
+
+export interface PrePrVerificationConfigSchema {
+  enabled?: boolean;
+  required?: boolean;
+  source?: 'github-enforced' | 'explicit';
+  requiredChecks?: string[];
+  recipe?: PrePrVerificationRecipeConfig;
+  logCaptureLines?: number;
+  draftFallback?: boolean;
+  staleTtlSeconds?: number;
+  compatibility?: {
+    mode?: 'allow' | 'warn' | 'block';
+    warnAfterDays?: number;
+  };
+}
+
 export interface BudgetConfig {
   normalMode?: number;
   constrainedMode?: number;
@@ -688,6 +737,7 @@ export interface WavemillConfig {
   challenge?: ChallengeConfig;
   challengeScheduler?: ChallengeSchedulerConfig;
   validation?: ValidationConfig;
+  prePrVerification?: PrePrVerificationConfigSchema;
   constraints?: ConstraintsConfig;
   ui?: UiConfig;
   review?: ReviewConfig;
@@ -695,6 +745,7 @@ export interface WavemillConfig {
   providers?: ProvidersConfig;
   nativeAgent?: NativeAgentConfig;
   integration?: Partial<IntegrationConfig>;
+  observer?: Partial<ObserverConfig>;
   promotion?: Partial<PromotionConfig>;
   ready?: ReadyConfig;
   mergeQueue?: MergeQueueConfig;
@@ -719,6 +770,16 @@ export const INTEGRATION_DEFAULTS: IntegrationConfig = {
   requiredChecks: [],
   highRiskPolicy: 'manual',
   useMillSession: true,
+};
+
+export const OBSERVER_DEFAULTS: ObserverConfig = {
+  enabled: false,
+  intervalSeconds: 120,
+  heartbeatStaleSeconds: 300,
+  maxLogLines: 240,
+  retention: {
+    maxSnapshots: 50,
+  },
 };
 
 export const PROMOTION_DEFAULTS: PromotionConfig = {
@@ -757,7 +818,7 @@ type ValidatorFunction = ((data: unknown) => boolean) & {
   errors?: ValidationError[] | null;
 };
 
-let compiledValidator: ValidatorFunction | null = null;
+const compiledValidators = new Map<string, ValidatorFunction>();
 let validatorDisabledReason: string | null = null;
 let didWarnValidatorDisabled = false;
 
@@ -774,9 +835,10 @@ function warnValidatorDisabled(reason: string): void {
 
 /**
  * Load and compile the JSON schema for validation.
- * Cached after first call.
+ * Cached per schema path so a canonical tool can safely validate a worktree
+ * configuration against the schema checked out with that worktree.
  */
-function getValidator(): ValidatorFunction | null {
+function getValidator(repoDir?: string): ValidatorFunction | null {
   if (process.env.WAVEMILL_DISABLE_AJV_VALIDATION === '1') {
     validatorDisabledReason = 'WAVEMILL_DISABLE_AJV_VALIDATION=1';
     warnValidatorDisabled(validatorDisabledReason);
@@ -788,15 +850,19 @@ function getValidator(): ValidatorFunction | null {
     return null;
   }
 
-  if (compiledValidator !== null) {
-    return compiledValidator;
-  }
-
-  // Load schema from repo root
-  const schemaPath = resolve(
+  const canonicalSchemaPath = resolve(
     import.meta.url.replace('file://', '').replace('/shared/lib/config.ts', ''),
     'wavemill-config.schema.json'
   );
+  const worktreeSchemaPath = repoDir ? resolve(repoDir, 'wavemill-config.schema.json') : '';
+  const schemaPath = worktreeSchemaPath && existsSync(worktreeSchemaPath)
+    ? worktreeSchemaPath
+    : canonicalSchemaPath;
+
+  const cachedValidator = compiledValidators.get(schemaPath);
+  if (cachedValidator) {
+    return cachedValidator;
+  }
 
   if (!existsSync(schemaPath)) {
     throw new Error(
@@ -835,16 +901,17 @@ function getValidator(): ValidatorFunction | null {
     strict: false, // Allow unknown keywords in schema
   });
 
-  compiledValidator = ajv.compile(schema);
-  return compiledValidator;
+  const validator = ajv.compile(schema);
+  compiledValidators.set(schemaPath, validator);
+  return validator;
 }
 
 /**
  * Validate a config object against the schema.
  * Throws on validation failure with detailed error messages.
  */
-function validateConfig(config: unknown): asserts config is WavemillConfig {
-  const validate = getValidator();
+function validateConfig(config: unknown, repoDir?: string): asserts config is WavemillConfig {
+  const validate = getValidator(repoDir);
   if (!validate) {
     return;
   }
@@ -983,7 +1050,7 @@ function resolveRepoDir(repoDir?: string): string {
  * console.log(config.router?.enabled); // typed access
  * ```
  */
-function normalizeLegacyPlanningMode(config: unknown): WavemillConfig {
+function normalizeLegacyPlanningMode(config: unknown, repoDir?: string): WavemillConfig {
   if (
     typeof config === 'object' &&
     config !== null &&
@@ -994,14 +1061,14 @@ function normalizeLegacyPlanningMode(config: unknown): WavemillConfig {
     (config as { mill: { planningMode: 'interactive' } }).mill.planningMode = 'interactive';
   }
 
-  validateConfig(config);
+  validateConfig(config, repoDir);
   return config as WavemillConfig;
 }
 
 function loadBaseConfigFromDisk(absRepoDir: string): WavemillConfig {
   const configPath = resolve(absRepoDir, '.wavemill-config.json');
   const base = existsSync(configPath) ? readAndParseConfig(configPath) : {};
-  return normalizeLegacyPlanningMode(base);
+  return normalizeLegacyPlanningMode(base, absRepoDir);
 }
 
 /**
@@ -1049,7 +1116,7 @@ export function loadWavemillConfig(repoDir?: string): WavemillConfig {
   // Validate the merged result against the schema. The overlay file is partial,
   // so validating it alone would be too permissive; validating the merge catches
   // type mismatches and unknown keys regardless of which file contributed them.
-  const validated = normalizeLegacyPlanningMode(merged);
+  const validated = normalizeLegacyPlanningMode(merged, absRepoDir);
 
   configCache.set(absRepoDir, validated);
   return validated;
@@ -1122,7 +1189,7 @@ export function clearConfigCache(repoDir?: string): void {
   }
 
   // Reset validator state for deterministic tests and long-lived processes.
-  compiledValidator = null;
+  compiledValidators.clear();
   validatorDisabledReason = null;
   didWarnValidatorDisabled = false;
 }
@@ -1277,6 +1344,10 @@ export function getReadyConfig(repoDir?: string): ReadyConfig {
       ...(config.ready?.migrationDangerLabels ?? {}),
     },
     migrationForbiddenPatterns: config.ready?.migrationForbiddenPatterns ?? [],
+    transientRetryBudget: config.ready?.transientRetryBudget ?? 3,
+    remediationLogMaxBytes: config.ready?.remediationLogMaxBytes ?? 20_000,
+    verificationGatingEnabled: config.ready?.verificationGatingEnabled ?? true,
+    localCommandMap: config.ready?.localCommandMap ?? {},
     remediation: {
       enabled: config.ready?.remediation?.enabled ?? true,
       maxAttempts: config.ready?.remediation?.maxAttempts ?? 3,
@@ -1329,6 +1400,26 @@ export function getReadyRemediationConfig(repoDir?: string): Required<ReadyRemed
     enabled: remediation.enabled ?? true,
     maxAttempts: remediation.maxAttempts ?? 3,
     agentCmd: remediation.agentCmd ?? '',
+  };
+}
+
+export function getReadyFailureClassifierConfig(repoDir?: string): ReadyFailureClassifierConfig {
+  const ready = loadWavemillConfig(repoDir).ready ?? {};
+  return {
+    transientRetryBudget: Number.isInteger(ready.transientRetryBudget) && (ready.transientRetryBudget ?? 0) >= 0
+      ? ready.transientRetryBudget as number
+      : 3,
+    remediationLogMaxBytes: Number.isInteger(ready.remediationLogMaxBytes) && (ready.remediationLogMaxBytes ?? 0) > 0
+      ? ready.remediationLogMaxBytes as number
+      : 20_000,
+    localCommandMap: ready.localCommandMap ?? {},
+  };
+}
+
+export function getReadyVerificationConfig(repoDir?: string): ReadyVerificationConfig {
+  const ready = loadWavemillConfig(repoDir).ready ?? {};
+  return {
+    gatingEnabled: ready.verificationGatingEnabled ?? true,
   };
 }
 
@@ -1461,6 +1552,18 @@ export function getAgentsConfig(repoDir?: string): AgentsConfig {
  */
 export function getDashboardConfig(repoDir?: string): DashboardConfig {
   return loadWavemillConfig(repoDir).dashboard || {};
+}
+
+export function getObserverConfig(repoDir?: string): ObserverConfig {
+  const observer = loadWavemillConfig(repoDir).observer ?? {};
+  return {
+    ...OBSERVER_DEFAULTS,
+    ...observer,
+    retention: {
+      ...OBSERVER_DEFAULTS.retention,
+      ...(observer.retention ?? {}),
+    },
+  };
 }
 
 export function getTaskSelectionConfig(repoDir?: string): TaskSelectionConfig {
@@ -1603,4 +1706,12 @@ export function getRedactionConfig(repoDir?: string): Required<RedactionConfig> 
   return {
     secretEnvNames: config.secretEnvNames ?? [],
   };
+}
+
+/**
+ * Get the pre-PR verification config section.
+ * Returns empty object if not configured.
+ */
+export function getPrePrVerificationConfig(repoDir?: string): PrePrVerificationConfigSchema {
+  return loadWavemillConfig(repoDir).prePrVerification || {};
 }
