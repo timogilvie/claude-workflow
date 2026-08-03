@@ -16,6 +16,12 @@ export interface ReadyVerdict {
   output: { labels: string[]; comment: string };
 }
 
+export type CheckReadErrorType = 'command-failed' | 'timeout' | 'malformed-json' | 'network' | 'unknown';
+
+export type CheckReadResult<TCheck = unknown> =
+  | { ok: true; checks: TCheck[] }
+  | { ok: false; reason: string; errorType: CheckReadErrorType };
+
 export interface ReadyEngineContext {
   pr: {
     number: number;
@@ -29,6 +35,7 @@ export interface ReadyEngineContext {
   fetchPrState: (prNumber: number) => Promise<{ state: 'OPEN' | 'CLOSED' | 'MERGED'; mergedAt: string | null } | null>;
   fetchLinearIssueState: (id: string) => Promise<{ completedAt: string | null; canceledAt: string | null } | null>;
   readChallengeComparisons: () => ChallengeComparison[];
+  requiredCheckRead?: CheckReadResult;
 }
 
 const KNOWN_METADATA_FIELDS = new Set([
@@ -295,6 +302,19 @@ export async function checkChallengePairs(ctx: ReadyEngineContext): Promise<Guar
   }
 }
 
+export function readRequiredChecks<TCheck>(result: CheckReadResult<TCheck>): GuardResult {
+  if (result.ok) {
+    return { status: 'pass' };
+  }
+
+  const reason = `Required GitHub check status could not be read (${result.errorType}): ${result.reason}`;
+  return {
+    status: 'pending',
+    reason,
+    commentFragment: toFragment('Required Checks Unavailable', [reason]),
+  };
+}
+
 export async function evaluateReady(ctx: ReadyEngineContext): Promise<ReadyVerdict> {
   if (ctx.config.enabled !== true) {
     return {
@@ -305,6 +325,7 @@ export async function evaluateReady(ctx: ReadyEngineContext): Promise<ReadyVerdi
   }
 
   const guardResults = await Promise.all([
+    Promise.resolve(ctx.requiredCheckRead ? readRequiredChecks(ctx.requiredCheckRead) : { status: 'pass' as const }),
     checkBaseBranch(ctx),
     checkMetadata(ctx),
     checkDependencies(ctx).catch((error) => ({
