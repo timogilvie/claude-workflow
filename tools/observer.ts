@@ -2,9 +2,13 @@
 
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mutateJsonState } from '../shared/lib/state-mutex.ts';
+import { getIncidentConfig } from '../shared/lib/config.ts';
+import { detectIncidentsForTask } from '../shared/lib/wavemill-incident-detector.ts';
+import { IncidentStore } from '../shared/lib/wavemill-incident-store.ts';
+import type { IncidentRecord } from '../shared/lib/wavemill-incident-model.ts';
 
 type Severity = 'urgent' | 'high' | 'medium' | 'low';
 type Category = 'stuck' | 'crash' | 'warning' | 'ux' | 'operational';
@@ -27,6 +31,8 @@ interface ObserverOptions {
   repoDir?: string;
   session?: string;
   serviceMode?: boolean;
+  incidentDetector: boolean;
+  dependencyThreshold?: number;
 }
 
 interface Pane {
@@ -101,6 +107,7 @@ interface ObserverSnapshot {
   processes: ProcessRow[];
   repos: RepoSnapshot[];
   findings: Finding[];
+  incidents?: IncidentRecord[];
 }
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -129,6 +136,9 @@ Options:
   --max-log-lines <n>    Recent mill log lines to inspect (default: 240)
   --repo-dir <path>      Limit service observation to one repository
   --session <name>       Limit service observation to one tmux session
+  --no-incident-detector Disable repo-local incident reconciliation
+  --dependency-threshold <n>
+                         Consecutive dependency observations before incident escalation
   --print-prompt         Print the recommended long-running Codex prompt
   --help                 Show this help
 `;
@@ -147,6 +157,7 @@ export function parseArgs(argv: string[]): ObserverOptions {
     maxLogLines: 240,
     printPrompt: false,
     serviceMode: process.env.WAVEMILL_OBSERVER_SERVICE === '1',
+    incidentDetector: true,
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -177,6 +188,8 @@ export function parseArgs(argv: string[]): ObserverOptions {
       options.dryRun = true;
     } else if (arg === '--print-prompt') {
       options.printPrompt = true;
+    } else if (arg === '--no-incident-detector') {
+      options.incidentDetector = false;
     } else if (arg === '--interval') {
       options.intervalSeconds = parsePositiveInt(next(), arg);
     } else if (arg.startsWith('--interval=')) {
@@ -193,6 +206,10 @@ export function parseArgs(argv: string[]): ObserverOptions {
       options.maxLogLines = parsePositiveInt(next(), arg);
     } else if (arg.startsWith('--max-log-lines=')) {
       options.maxLogLines = parsePositiveInt(arg.slice('--max-log-lines='.length), '--max-log-lines');
+    } else if (arg === '--dependency-threshold') {
+      options.dependencyThreshold = parsePositiveInt(next(), arg);
+    } else if (arg.startsWith('--dependency-threshold=')) {
+      options.dependencyThreshold = parsePositiveInt(arg.slice('--dependency-threshold='.length), '--dependency-threshold');
     } else if (arg === '--repo-dir') {
       options.repoDir = resolve(next());
     } else if (arg.startsWith('--repo-dir=')) {
@@ -797,6 +814,121 @@ function observe(options: ObserverOptions): ObserverSnapshot {
   };
 }
 
+async function reconcileIncidents(snapshot: ObserverSnapshot, options: ObserverOptions): Promise<ObserverSnapshot> {
+  const incidents: IncidentRecord[] = [];
+  if (!options.incidentDetector) {
+    return { ...snapshot, incidents };
+  }
+
+  for (const repo of snapshot.repos) {
+    const incidentConfig = getIncidentConfig(repo.repoDir);
+    if (incidentConfig.enabled === false) continue;
+    const storeDir = incidentConfig.store?.directory ?? '.wavemill/incidents';
+    const store = new IncidentStore(
+      isAbsolute(storeDir) ? storeDir : join(repo.repoDir, storeDir),
+      {
+        escalationThreshold: options.dependencyThreshold ?? incidentConfig.detection?.dependencyThreshold ?? 3,
+        maxEvidencePerRecord: incidentConfig.detection?.maxEvidencePerRecord ?? 50,
+      },
+    );
+
+    for (const task of repo.tasks) {
+      if (!task.issue || terminalStatus(task.status)) continue;
+      const taskPath = resolveTaskArtifactDir(repo.repoDir, task);
+      if (!taskPath) continue;
+      const detected = detectIncidentsForTask(
+        taskPath,
+        task.issue,
+        { repoDir: repo.repoDir, session: repo.session, now: new Date(snapshot.timestamp) },
+        options.dependencyThreshold ?? incidentConfig.detection?.dependencyThreshold ?? 3,
+      );
+      for (const incident of detected) {
+        try {
+          const stored = await store.upsert(incident);
+          incidents.push(stored);
+        } catch (error) {
+          snapshot.findings.push({
+            id: `incident-store-error-${repo.session}-${hashText(repo.repoDir)}`,
+            severity: 'high',
+            category: 'operational',
+            confidence: 'high',
+            session: repo.session,
+            repoDir: repo.repoDir,
+            issue: task.issue,
+            title: 'Observer could not persist Wavemill incident state',
+            evidence: [`error=${error instanceof Error ? error.message : String(error)}`],
+            recommendation: 'Inspect .wavemill/incidents permissions and malformed state files; incident detection is read-only but persistence is required for deduplication.',
+          });
+        }
+      }
+    }
+  }
+
+  const uniqueIncidents = dedupeIncidents(incidents);
+  return {
+    ...snapshot,
+    findings: dedupeFindings([...snapshot.findings, ...uniqueIncidents.map(convertIncidentToFinding)]),
+    incidents: uniqueIncidents,
+  };
+}
+
+function resolveTaskArtifactDir(repoDir: string, task: TaskState): string | null {
+  const candidates = [
+    task.worktree && task.slug ? join(task.worktree, 'features', task.slug) : null,
+    task.slug ? join(repoDir, 'features', task.slug) : null,
+    task.worktree ?? null,
+  ].filter((candidate): candidate is string => candidate !== null);
+  return candidates.find((candidate) => existsSync(candidate)) ?? null;
+}
+
+function convertIncidentToFinding(incident: IncidentRecord): Finding {
+  return {
+    id: `incident-${incident.fingerprint}`,
+    severity: incidentSeverityToFindingSeverity(incident.severity, incident.lifecycle),
+    category: incidentCategoryToFindingCategory(incident.category),
+    confidence: incidentConfidenceToFindingConfidence(incident.confidence),
+    session: incident.session ?? undefined,
+    issue: incident.taskId ?? undefined,
+    title: incident.summary,
+    evidence: [
+      `incident=${incident.fingerprint}`,
+      `rootCause=${incident.rootCauseClass}`,
+      `lifecycle=${incident.lifecycle}`,
+      `occurrences=${incident.occurrenceCount}`,
+      ...incident.evidence.slice(-2).map((evidence) => `${evidence.type}:${basename(evidence.source)} ${evidence.redactedData}`),
+    ],
+    recommendation: incident.operatorAction,
+  };
+}
+
+function incidentSeverityToFindingSeverity(severity: IncidentRecord['severity'], lifecycle: IncidentRecord['lifecycle']): Severity {
+  if (severity === 'critical') return 'urgent';
+  if (severity === 'high') return lifecycle === 'active' ? 'urgent' : 'high';
+  if (severity === 'medium') return 'medium';
+  return 'low';
+}
+
+function incidentCategoryToFindingCategory(category: IncidentRecord['category']): Category {
+  if (category === 'product_defect') return 'crash';
+  if (category === 'stale_orphaned_state' || category === 'model_task_harness_outcome') return 'stuck';
+  if (category === 'configuration_operator_condition') return 'operational';
+  return 'warning';
+}
+
+function incidentConfidenceToFindingConfidence(confidence: IncidentRecord['confidence']): Confidence {
+  if (confidence === 'definite' || confidence === 'high') return 'high';
+  if (confidence === 'medium') return 'medium';
+  return 'low';
+}
+
+function dedupeIncidents(incidents: IncidentRecord[]): IncidentRecord[] {
+  const byFingerprint = new Map<string, IncidentRecord>();
+  for (const incident of incidents) {
+    byFingerprint.set(incident.fingerprint, incident);
+  }
+  return [...byFingerprint.values()].sort((a, b) => Date.parse(b.lastObservedAt) - Date.parse(a.lastObservedAt));
+}
+
 interface BackstageHealthFile {
   updatedAt?: string;
   services?: Record<string, Record<string, unknown>>;
@@ -890,6 +1022,14 @@ function renderSummary(snapshot: ObserverSnapshot): string {
   if (snapshot.findings.length > 20) {
     lines.push('');
     lines.push(`... ${snapshot.findings.length - 20} additional finding(s) omitted from text summary`);
+  }
+  if (snapshot.incidents && snapshot.incidents.length > 0) {
+    lines.push('');
+    lines.push(`Incidents: ${snapshot.incidents.length}`);
+    for (const incident of snapshot.incidents.slice(0, 8)) {
+      lines.push(`  [${incident.lifecycle}/${incident.category}] ${incident.rootCauseClass}: ${incident.summary}`);
+      lines.push(`  action: ${incident.operatorAction}`);
+    }
   }
   return `${lines.join('\n')}\n`;
 }
@@ -1058,7 +1198,8 @@ async function main(): Promise<void> {
   }
 
   do {
-    const snapshot = options.serviceMode ? redactSnapshot(observe(options)) : observe(options);
+    const observed = await reconcileIncidents(observe(options), options);
+    const snapshot = options.serviceMode ? redactSnapshot(observed) : observed;
     await writeServiceHeartbeat(snapshot, options);
     await fileLinearIssues(snapshot, options);
     if (options.json) {
