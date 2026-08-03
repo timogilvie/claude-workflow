@@ -139,6 +139,11 @@ describe('openrouter-doctor', () => {
       assert.ok(glm);
       for (const cell of glm.cells) {
         assert.equal(cell.primaryReason?.reason, 'MISSING_API_KEY');
+        const certificationReason = cell.secondaryReasons.find((reason) => reason.reason === 'CERTIFICATION_REJECTED');
+        assert.ok(certificationReason);
+        assert.match(certificationReason.detail, /reason=missing-api-key/);
+        assert.match(certificationReason.detail, /apiKeyEnv=TEST_OPENROUTER_KEY/);
+        assert.equal(certificationReason.configSurface, 'nativeAgent.providers.openrouter.apiKeyEnv');
       }
       assert.doesNotMatch(JSON.stringify(report), /sk-test|test-openrouter-key/i);
     } finally {
@@ -223,6 +228,10 @@ describe('openrouter-doctor', () => {
       const glm = report.models.find((model) => model.id === 'glm-5.2');
       assert.ok(glm);
       assert.equal(glm.cells.every((cell) => cell.primaryReason?.reason === 'CERTIFICATION_REJECTED'), true);
+      for (const cell of glm.cells) {
+        assert.match(cell.primaryReason?.detail ?? '', /reason=missing-artifact/);
+        assert.match(cell.primaryReason?.detail ?? '', /artifactPath=.*global-certifications/);
+      }
     } finally {
       cleanup(repoDir);
     }

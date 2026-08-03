@@ -592,25 +592,26 @@ for (const testCase of OPENROUTER_PATCH_CASES) {
 // Rejection reason: missing
 // ---------------------------------------------------------------------------
 
-await test('missing artifact rejects native model with reason=missing', () => {
+await test('missing artifact rejects native model with reason=missing-artifact', () => {
   const { repoDir, cleanup } = makeRepo();
   try {
     const registry = makeRegistry('native-miss', 'patch', 'v1');
     const result = filterNativeModels(['native-miss'], 'coder', registry, repoDir);
     assert.deepEqual(result.eligible, []);
     assert.equal(result.rejected.length, 1);
-    assert.equal(result.rejected[0].reason, 'missing');
+    assert.equal(result.rejected[0].reason, 'missing-artifact');
     assert.equal(result.rejected[0].modelId, 'native-miss');
     assert.equal(result.rejected[0].role, 'coder');
     assert.equal(result.rejected[0].requestedPhase, 'patch');
     assert.equal(result.rejected[0].requiredSuiteVersion, 'v1');
     assert.equal(result.rejected[0].nativeCapability, 'certified');
+    assert.equal(result.rejected[0].artifactPath, buildGlobalCertificationPath('openai', 'native-miss', 'v1'));
   } finally {
     cleanup();
   }
 });
 
-await test('missing registry certification metadata rejects with reason=missing', () => {
+await test('missing registry certification metadata rejects with reason=missing-artifact', () => {
   const { repoDir, cleanup } = makeRepo();
   try {
     const registry: ModelRegistry = {
@@ -639,7 +640,7 @@ await test('missing registry certification metadata rejects with reason=missing'
       ladders: {},
     };
     const result = filterNativeModels(['native-no-meta'], 'coder', registry, repoDir);
-    assert.equal(result.rejected[0].reason, 'missing');
+    assert.equal(result.rejected[0].reason, 'missing-artifact');
   } finally {
     cleanup();
   }
@@ -797,7 +798,7 @@ await test('negative patch-path diagnostics stay pairwise distinct across all re
 
     const reasons = new Map<string, string>();
 
-    reasons.set('missing', checkReason());
+    reasons.set('missing-artifact', checkReason());
 
     writeCertArtifact(repoDir, 'openai', 'native-distinct', 'v2', {
       phase: 'patch',
@@ -829,7 +830,7 @@ await test('negative patch-path diagnostics stay pairwise distinct across all re
     reasons.set('malformed', checkReason());
 
     assert.deepEqual(Object.fromEntries(reasons), {
-      missing: 'missing',
+      'missing-artifact': 'missing-artifact',
       stale: 'stale',
       'read-only-only': 'insufficient-phase',
       'wrong-suite': 'wrong-suite',
@@ -930,7 +931,7 @@ await test('eligible and rejected models are separated correctly in a mixed pool
     assert.deepEqual(result.eligible.sort(), ['native-ok', 'non-native-model'].sort());
     assert.equal(result.rejected.length, 1);
     assert.equal(result.rejected[0].modelId, 'native-bad');
-    assert.equal(result.rejected[0].reason, 'missing');
+    assert.equal(result.rejected[0].reason, 'missing-artifact');
   } finally {
     cleanup();
   }

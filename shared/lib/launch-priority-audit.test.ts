@@ -139,6 +139,8 @@ function makeZeroEvidenceFixture(): { catalog: LaunchPriorityModel[]; records: E
   return { catalog, records };
 }
 
+const allowAllNativeCertification = () => ({ eligible: true });
+
 after(() => {
   for (const dir of tempDirs) {
     rmSync(dir, { recursive: true, force: true });
@@ -153,6 +155,7 @@ describe('launch-priority-audit', () => {
       catalog,
       evalRecords: records,
       now: new Date('2026-07-13T14:00:00.000Z'),
+      checkNativeCertification: allowAllNativeCertification,
       costOfModel: (entry) => entry?.pricing.inputPerMTok ?? ({
         'qwen-3-coder': 0.2,
         'deepseek-v3': 0.4,
@@ -175,6 +178,7 @@ describe('launch-priority-audit', () => {
       catalog,
       evalRecords: [],
       now: new Date('2026-07-13T14:00:00.000Z'),
+      checkNativeCertification: allowAllNativeCertification,
     });
 
     assert.deepEqual(audit.zeroEvidence, [
@@ -246,6 +250,7 @@ describe('launch-priority-audit', () => {
       catalog,
       evalRecords: records,
       now: new Date('2026-07-13T14:00:00.000Z'),
+      checkNativeCertification: allowAllNativeCertification,
     });
 
     const coding = audit.models.find((entry) => entry.wavemillAlias === 'qwen-3-coder' && entry.role === 'coding');
@@ -294,6 +299,7 @@ describe('launch-priority-audit', () => {
       catalog,
       evalRecords: records,
       now: new Date('2026-07-13T14:00:00.000Z'),
+      checkNativeCertification: allowAllNativeCertification,
       costOfModel: (entry) => pricing.get(entry?.wavemillAlias ?? '') ?? null,
     });
 
@@ -311,6 +317,7 @@ describe('launch-priority-audit', () => {
       evalRecords: records,
       now: new Date('2026-07-13T14:00:00.000Z'),
       maxAttempts: 2,
+      checkNativeCertification: allowAllNativeCertification,
       costOfModel: (entry) => (entry?.wavemillAlias === 'deepseek-v3' ? null : ({
         'qwen-3-coder': 0.2,
         'kimi-k2': 0.15,
