@@ -186,6 +186,39 @@ describe('hokusai-submission-trigger', () => {
     assert.equal(entry.row.inputs?.coder_model_alias, undefined);
   });
 
+  it('submits compatible rows when verification telemetry is present on the eval record', async () => {
+    const { repoDir, configDir } = makeRepo(true);
+
+    await triggerHokusaiSubmission(makeEligibleRecord({
+      verificationTelemetry: {
+        schema_version: '1.0',
+        local_verification: {
+          ran: true,
+          passed: false,
+          first_failure_category: 'lint',
+          first_failure_fingerprint: 'a'.repeat(64),
+        },
+        operator_override: {
+          applied: true,
+          reason: 'manual approval from reviewer@example.com',
+        },
+      },
+    }), {
+      repoDir,
+      configDir,
+      redactionSalt: '9'.repeat(64),
+    });
+
+    const pendingPath = join(repoDir, '.wavemill', 'hokusai', 'queue', 'pending.jsonl');
+    const [line] = readFileSync(pendingPath, 'utf-8').trim().split('\n');
+    const entry = JSON.parse(line) as { row: { inputs?: Record<string, unknown> } };
+
+    assert.equal(line.includes('manual approval'), false);
+    assert.equal(line.includes('reviewer@example.com'), false);
+    assert.equal(line.includes('first_failure_fingerprint'), false);
+    assert.equal(entry.row.inputs?.planner_model, 'gpt-5.4');
+  });
+
   it('warns and swallows redaction failures', async () => {
     const { repoDir, configDir } = makeRepo(true);
     const warn = mock.method(console, 'warn', () => undefined);

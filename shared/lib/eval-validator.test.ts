@@ -9,6 +9,7 @@ import {
   validateEvalRecord,
   validateEvalsFile,
   validateEvalsStore,
+  validateVerificationTelemetry,
 } from './eval-validator.ts';
 
 function makeTaskDescriptor(overrides: Partial<NonNullable<EvalRecord['taskDescriptor']>> = {}): NonNullable<EvalRecord['taskDescriptor']> {
@@ -253,6 +254,104 @@ describe('eval-validator', () => {
       { file: 'evals.jsonl', line: 1 },
     );
     assert.ok(stringIssues.some((issue) => issue.code === 'SCHEMA_VIOLATION' && issue.detail === 'timeSeconds'));
+  });
+
+  it('accepts historical records without verification telemetry', () => {
+    const issues = validateEvalRecord(
+      makeRecord(),
+      { file: 'evals.jsonl', line: 1 },
+    );
+    assert.ok(!issues.some((issue) => issue.code === 'SCHEMA_VIOLATION' && issue.detail === 'verificationTelemetry'));
+  });
+
+  it('accepts additive verification telemetry and rejects invalid telemetry values', () => {
+    const validIssues = validateEvalRecord(
+      makeRecord({
+        verificationTelemetry: {
+          schema_version: '1.0',
+          contract: {
+            source: 'explicit',
+            version: '1.0',
+          },
+          checked_shas: {
+            head: 'a'.repeat(40),
+            base: 'b'.repeat(40),
+          },
+          local_verification: {
+            ran: true,
+            passed: false,
+            command_count: 1,
+            first_failure_index: 0,
+            first_failure_category: 'lint',
+            first_failure_fingerprint: 'c'.repeat(64),
+            total_duration_ms: 1200,
+            command_durations_ms: [1200],
+          },
+          remote_ci_verdict: {
+            ran: true,
+            passed: false,
+            check_count: 3,
+            first_failure_check: 'test',
+            first_failure_category: 'test',
+            first_failure_fingerprint: 'd'.repeat(64),
+            remote_only_failure: true,
+          },
+          remediation: {
+            local_attempt_count: 1,
+            local_remediation_outcome: 'fixed',
+            remote_fix_required: true,
+            remote_fix_commits: 1,
+            remote_fix_outcome: 'fixed',
+          },
+          operator_override: {
+            applied: false,
+          },
+          timeline: {
+            local_start: '2026-08-03T12:00:00.000Z',
+            local_end: '2026-08-03T12:02:00.000Z',
+            pr_created: '2026-08-03T12:05:00.000Z',
+            remote_ci_start: '2026-08-03T12:06:00.000Z',
+            remote_ci_first_green: '2026-08-03T12:20:00.000Z',
+          },
+        },
+      }),
+      { file: 'evals.jsonl', line: 1 },
+    );
+    assert.ok(!validIssues.some((issue) => issue.code === 'SCHEMA_VIOLATION'));
+
+    const invalidIssues = validateEvalRecord(
+      makeRecord({
+        verificationTelemetry: {
+          local_verification: {
+            ran: true,
+            passed: false,
+            first_failure_category: 'security' as 'lint',
+          },
+        },
+      }),
+      { file: 'evals.jsonl', line: 1 },
+    );
+    assert.ok(invalidIssues.some((issue) => issue.code === 'SCHEMA_VIOLATION' && issue.detail === 'verificationTelemetry.local_verification.first_failure_category'));
+  });
+
+  it('emits verification telemetry diagnostics without making warnings fatal', () => {
+    const diagnostics = validateVerificationTelemetry({
+      verificationTelemetry: {
+        schema_version: '1.0',
+        local_verification: {
+          ran: true,
+          passed: false,
+        },
+      },
+    });
+
+    assert.deepEqual(diagnostics, [
+      {
+        field: 'verificationTelemetry.local_verification',
+        message: 'Failed verification should include failure category.',
+        severity: 'warning',
+      },
+    ]);
   });
 
   it('reports missing taskDescriptor variants', () => {

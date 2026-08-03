@@ -16,6 +16,48 @@ import assert from 'node:assert';
 import { determineVerificationRequirements, isWeakModel } from '../shared/lib/verification-engine.ts';
 import { validatePatchSize } from '../shared/lib/patch-size-validator.ts';
 import { getEffectiveRegistry } from '../shared/lib/model-registry.ts';
+import { computeVerificationMetrics } from '../shared/lib/verification-metrics.ts';
+import type { EvalRecord } from '../shared/lib/eval-schema.ts';
+
+function makeTelemetryRecord(overrides: Partial<EvalRecord>): EvalRecord {
+  return {
+    id: 'eval-telemetry',
+    schemaVersion: '1.36.0',
+    originalPrompt: 'Ship a verified change',
+    modelId: 'gpt-5.4',
+    modelVersion: 'gpt-5.4',
+    score: 1,
+    scoreBand: 'Full Success',
+    timeSeconds: 60,
+    timestamp: '2026-08-03T12:00:00.000Z',
+    interventionRequired: false,
+    interventionCount: 0,
+    interventionDetails: [],
+    rationale: 'Verified.',
+    repoContext: {
+      repoId: 'wavemill',
+      repoVisibility: 'private',
+      primaryLanguage: 'TypeScript',
+    },
+    outcomes: {
+      success: true,
+      review: {
+        humanReviewRequired: false,
+        rounds: 1,
+        approvals: 1,
+        changeRequests: 0,
+      },
+      rework: {
+        agentIterations: 1,
+      },
+      delivery: {
+        prCreated: true,
+        merged: false,
+      },
+    },
+    ...overrides,
+  };
+}
 
 describe('Verification Engine', () => {
   describe('Quality Threshold Detection', () => {
@@ -287,5 +329,180 @@ describe('Integration Scenarios', () => {
       assert.strictEqual(requirements.secondPassReview.required, false);
       assert.strictEqual(requirements.patchSizeCap, undefined);
     });
+  });
+});
+
+describe('First-Green CI Telemetry Scenarios', () => {
+  const metricsWindow = {
+    startTime: new Date('2026-08-03T00:00:00.000Z'),
+    endTime: new Date('2026-08-04T00:00:00.000Z'),
+  };
+
+  it('records local verification failure as a prevented PR', () => {
+    const record = makeTelemetryRecord({
+      score: 0,
+      scoreBand: 'Failure',
+      outcomes: {
+        success: false,
+        review: {
+          humanReviewRequired: false,
+          rounds: 0,
+          approvals: 0,
+          changeRequests: 0,
+        },
+        rework: {
+          agentIterations: 1,
+        },
+        delivery: {
+          prCreated: false,
+          merged: false,
+        },
+      },
+      verificationTelemetry: {
+        schema_version: '1.0',
+        contract: {
+          source: 'explicit',
+          version: '1.0',
+        },
+        local_verification: {
+          ran: true,
+          passed: false,
+          first_failure_index: 0,
+          first_failure_category: 'lint',
+          first_failure_fingerprint: 'a'.repeat(64),
+        },
+      },
+    });
+
+    assert.strictEqual(record.outcomes?.delivery.prCreated, false);
+    assert.strictEqual(record.verificationTelemetry?.remote_ci_verdict, undefined);
+    assert.strictEqual(record.verificationTelemetry?.local_verification?.first_failure_category, 'lint');
+    assert.strictEqual(computeVerificationMetrics([record], metricsWindow).failures_prevented_before_pr, 100);
+  });
+
+  it('records remote-only CI failure after local verification passed', () => {
+    const record = makeTelemetryRecord({
+      verificationTelemetry: {
+        schema_version: '1.0',
+        contract: {
+          source: 'explicit',
+          version: '1.0',
+        },
+        local_verification: {
+          ran: true,
+          passed: true,
+        },
+        remote_ci_verdict: {
+          ran: true,
+          passed: false,
+          check_count: 2,
+          first_failure_check: 'node-version-specific-tests',
+          first_failure_category: 'test',
+          first_failure_fingerprint: 'b'.repeat(64),
+          remote_only_failure: true,
+        },
+        remediation: {
+          remote_fix_required: true,
+          remote_fix_commits: 1,
+          remote_fix_outcome: 'fixed',
+        },
+      },
+    });
+
+    const metrics = computeVerificationMetrics([record], metricsWindow);
+    assert.strictEqual(record.verificationTelemetry?.remote_ci_verdict?.remote_only_failure, true);
+    assert.strictEqual(metrics.first_green_ci_rate, 0);
+    assert.strictEqual(metrics.ci_remediation_rate, 100);
+  });
+
+  it('records successful first green CI after PR creation', () => {
+    const record = makeTelemetryRecord({
+      verificationTelemetry: {
+        schema_version: '1.0',
+        contract: {
+          source: 'explicit',
+          version: '1.0',
+        },
+        local_verification: {
+          ran: true,
+          passed: true,
+        },
+        remote_ci_verdict: {
+          ran: true,
+          passed: true,
+          passed_before_merge: true,
+          check_count: 4,
+          remote_only_failure: false,
+        },
+        remediation: {
+          local_remediation_outcome: 'none',
+          remote_fix_required: false,
+        },
+        timeline: {
+          local_start: '2026-08-03T12:00:00.000Z',
+          remote_ci_first_green: '2026-08-03T12:08:00.000Z',
+        },
+      },
+    });
+
+    const metrics = computeVerificationMetrics([record], metricsWindow);
+    assert.strictEqual(record.outcomes?.delivery.prCreated, true);
+    assert.strictEqual(metrics.first_green_ci_rate, 100);
+    assert.strictEqual(metrics.median_time_to_green_ms, 8 * 60 * 1000);
+  });
+
+  it('models stale artifact rejection as a fresh required verification run', () => {
+    const staleArtifact = {
+      timestamp: '2026-08-03T10:00:00.000Z',
+      headSha: 'old-head',
+      baseSha: 'old-base',
+    };
+    const currentHead = 'new-head';
+    const isStale = staleArtifact.headSha !== currentHead;
+    const record = makeTelemetryRecord({
+      verificationTelemetry: {
+        schema_version: '1.0',
+        checked_shas: {
+          head: currentHead,
+          base: 'old-base',
+        },
+        local_verification: {
+          ran: true,
+          passed: true,
+        },
+        timeline: {
+          local_start: '2026-08-03T12:00:00.000Z',
+        },
+      },
+    });
+
+    assert.strictEqual(isStale, true);
+    assert.notStrictEqual(record.verificationTelemetry?.checked_shas?.head, staleArtifact.headSha);
+  });
+
+  it('records operator override when PR proceeds after local failure', () => {
+    const record = makeTelemetryRecord({
+      verificationTelemetry: {
+        schema_version: '1.0',
+        local_verification: {
+          ran: true,
+          passed: false,
+          first_failure_category: 'custom',
+        },
+        operator_override: {
+          applied: true,
+          reason: 'manual check passed',
+          timestamp: '2026-08-03T12:05:00.000Z',
+        },
+        remediation: {
+          local_remediation_outcome: 'override',
+        },
+      },
+    });
+
+    const metrics = computeVerificationMetrics([record], metricsWindow);
+    assert.strictEqual(record.outcomes?.delivery.prCreated, true);
+    assert.strictEqual(record.verificationTelemetry?.operator_override?.applied, true);
+    assert.strictEqual(metrics.operator_override_rate, 100);
   });
 });

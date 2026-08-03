@@ -128,6 +128,9 @@
  * - **1.36.0**: Expanded the canonical challenge execution-intent contract
  *   and added a strict persisted projection so runtime challenge state cannot
  *   drift away from eval JSONL validation (HOK-2610).
+ * - **1.37.0**: Added optional `verificationTelemetry` for first-green CI
+ *   evaluation, including local verification, first remote CI verdict,
+ *   remediation, override, and lifecycle timing fields (HOK-2607).
  *
  * @module eval-schema
  */
@@ -143,7 +146,7 @@ import type {
 import type { ChallengeRoutingMeta } from './challenge-comparison.ts';
 
 /** Current eval schema version for newly emitted records. */
-export const SCHEMA_VERSION = '1.36.0';
+export const SCHEMA_VERSION = '1.37.0';
 
 export type RoutingRole = 'planner' | 'coder' | 'reviewer';
 
@@ -220,6 +223,92 @@ export interface PlanningExecutionOutcome {
   usage?: PlanningExecutionUsage;
   promptRef?: PlanningPromptProvenance;
   source?: '.planning-result.json';
+}
+
+export type VerificationTelemetryContractSource = 'github-enforced' | 'explicit' | 'default';
+export type VerificationTelemetryLocalFailureCategory =
+  | 'lint'
+  | 'test'
+  | 'build'
+  | 'type'
+  | 'custom'
+  | 'unknown';
+export type VerificationTelemetryRemoteFailureCategory =
+  | VerificationTelemetryLocalFailureCategory
+  | 'deploy';
+
+export interface VerificationTelemetryContract {
+  source: VerificationTelemetryContractSource;
+  version: string;
+}
+
+export interface VerificationTelemetryCheckedShas {
+  head: string;
+  base: string;
+}
+
+export interface VerificationTelemetryLocalExecution {
+  ran: boolean;
+  passed: boolean;
+  command_count?: number;
+  first_failure_index?: number;
+  first_failure_fingerprint?: string;
+  first_failure_category?: VerificationTelemetryLocalFailureCategory;
+  total_duration_ms?: number;
+  command_durations_ms?: number[];
+  timed_out?: boolean;
+}
+
+export interface VerificationTelemetryCIVerdict {
+  ran?: boolean;
+  passed?: boolean;
+  passed_before_merge?: boolean;
+  check_count?: number;
+  first_failure_check?: string;
+  first_failure_category?: VerificationTelemetryRemoteFailureCategory;
+  first_failure_fingerprint?: string;
+  remote_only_failure?: boolean;
+}
+
+export interface VerificationTelemetryRemediation {
+  local_attempt_count?: number;
+  local_remediation_outcome?: 'fixed' | 'abandoned' | 'override' | 'none';
+  remote_fix_required?: boolean;
+  remote_fix_commits?: number;
+  remote_fix_outcome?: 'fixed' | 'reverted' | 'abandoned';
+}
+
+export interface VerificationTelemetryOperatorOverride {
+  applied?: boolean;
+  reason?: string;
+  timestamp?: string;
+}
+
+export interface VerificationTelemetryTimeline {
+  local_start?: string;
+  local_end?: string;
+  pr_created?: string;
+  remote_ci_start?: string;
+  remote_ci_first_green?: string;
+  pr_merged?: string;
+}
+
+/**
+ * Additive first-green CI telemetry for pre-PR verification analysis.
+ *
+ * All nested sections are optional so historical eval records remain valid and
+ * partial lifecycle data can be persisted before remote CI classifications are
+ * available.
+ */
+export interface VerificationTelemetry {
+  schema_version?: '1.0';
+  contract?: VerificationTelemetryContract;
+  checked_shas?: VerificationTelemetryCheckedShas;
+  local_verification?: VerificationTelemetryLocalExecution;
+  remote_ci_verdict?: VerificationTelemetryCIVerdict;
+  remediation?: VerificationTelemetryRemediation;
+  operator_override?: VerificationTelemetryOperatorOverride;
+  timeline?: VerificationTelemetryTimeline;
 }
 
 export interface EvalPhaseDurations {
@@ -1836,6 +1925,16 @@ export interface EvalRecord {
    * @since 1.35.0
    */
   planningExecutionOutcome?: PlanningExecutionOutcome;
+
+  /**
+   * CI-derived pre-PR verification telemetry for first-green analysis.
+   *
+   * Stores bounded command outcomes, content fingerprints, first remote CI
+   * verdict, remediation, overrides, and lifecycle timestamps without raw logs.
+   *
+   * @since 1.36.0
+   */
+  verificationTelemetry?: VerificationTelemetry;
 
   /**
    * First-class planner/reviewer stage evidence for challenge evals.

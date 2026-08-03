@@ -11,6 +11,7 @@ import {
   toJsonl,
   exportEvalDataset,
 } from './eval-export.ts';
+import { redactVerificationTelemetry } from './text-redaction.ts';
 import type { ExportRow } from './eval-export.ts';
 
 // ────────────────────────────────────────────────────────────────
@@ -297,6 +298,50 @@ test('flattenRecord exports phase duration columns when present', () => {
   assert.equal(row.review_time_seconds, 60);
 });
 
+test('flattenRecord exports verification telemetry columns when present', () => {
+  const row = flattenRecord(makeRecord({
+    verificationTelemetry: {
+      schema_version: '1.0',
+      local_verification: {
+        ran: true,
+        passed: true,
+        total_duration_ms: 4200,
+      },
+      remote_ci_verdict: {
+        ran: true,
+        passed: false,
+        remote_only_failure: true,
+      },
+      remediation: {
+        local_remediation_outcome: 'none',
+      },
+      operator_override: {
+        applied: false,
+      },
+    },
+  }));
+
+  assert.equal(row.verification_local_passed, true);
+  assert.equal(row.verification_local_duration_ms, 4200);
+  assert.equal(row.verification_local_failure_category, '');
+  assert.equal(row.verification_remote_passed, false);
+  assert.equal(row.verification_remote_only_failure, true);
+  assert.equal(row.verification_remediation_outcome, 'none');
+  assert.equal(row.verification_operator_override, false);
+});
+
+test('flattenRecord handles missing verification telemetry gracefully', () => {
+  const row = flattenRecord(makeRecord());
+
+  assert.equal(row.verification_local_passed, null);
+  assert.equal(row.verification_local_duration_ms, null);
+  assert.equal(row.verification_local_failure_category, '');
+  assert.equal(row.verification_remote_passed, null);
+  assert.equal(row.verification_remote_only_failure, false);
+  assert.equal(row.verification_remediation_outcome, '');
+  assert.equal(row.verification_operator_override, false);
+});
+
 // ────────────────────────────────────────────────────────────────
 // Redaction Tests
 // ────────────────────────────────────────────────────────────────
@@ -350,6 +395,27 @@ test('flattenRecord preserves original prompt length even when redacted', () => 
 
   // prompt_length should reflect the original, not the redacted text
   assert.equal(row.prompt_length, record.originalPrompt.length);
+});
+
+test('redactVerificationTelemetry redacts operator override reasons only', () => {
+  const telemetry = {
+    schema_version: '1.0' as const,
+    operator_override: {
+      applied: true,
+      reason: 'Manual approval from reviewer@example.com for /Users/tim/repo',
+    },
+    local_verification: {
+      ran: true,
+      passed: false,
+      first_failure_fingerprint: 'a'.repeat(64),
+    },
+  };
+  const redacted = redactVerificationTelemetry(telemetry);
+
+  assert.equal(redacted.local_verification?.first_failure_fingerprint, 'a'.repeat(64));
+  assert.ok(redacted.operator_override?.reason?.includes('[EMAIL]'));
+  assert.ok(redacted.operator_override?.reason?.includes('[PATH]'));
+  assert.ok(!redacted.operator_override?.reason?.includes('reviewer@example.com'));
 });
 
 // ────────────────────────────────────────────────────────────────

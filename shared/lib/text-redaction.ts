@@ -8,6 +8,8 @@
  * @module text-redaction
  */
 
+import type { VerificationTelemetry } from './eval-schema.ts';
+
 const EMAIL_PATTERN =
   /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
 
@@ -40,4 +42,20 @@ export function redactText(text: string): string {
   result = result.replace(REPO_PATTERN, (_match, prefix: string) => `${prefix}[REPO]`);
 
   return result;
+}
+
+export function redactVerificationTelemetry(
+  telemetry: VerificationTelemetry,
+): VerificationTelemetry {
+  if (!telemetry.operator_override?.reason) {
+    return telemetry;
+  }
+
+  return {
+    ...telemetry,
+    operator_override: {
+      ...telemetry.operator_override,
+      reason: redactText(telemetry.operator_override.reason),
+    },
+  };
 }
