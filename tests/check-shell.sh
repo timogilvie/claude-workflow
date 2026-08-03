@@ -119,6 +119,31 @@ else
   fail "base branch fetch is missing the timeout helper"
 fi
 
+echo ""
+echo "=== Backstage Observer Service Guards ==="
+
+if grep -q 'WAVEMILL_BACKSTAGE_OBSERVER_PANE_TITLE' "$LIB_DIR/wavemill-common.sh" \
+  && grep -q 'wavemill_build_observer_loop_command' "$LIB_DIR/wavemill-common.sh" \
+  && grep -q 'WAVEMILL_OBSERVER_SERVICE=1' "$LIB_DIR/wavemill-common.sh"; then
+  pass "observer service launch helper exists"
+else
+  fail "observer service launch helper is missing"
+fi
+
+observer_helper="$(awk '/^wavemill_build_observer_loop_command\(\) \{/{capture=1} capture{print} capture && /^}/{exit}' "$LIB_DIR/wavemill-common.sh")"
+if [[ "$observer_helper" == *'--dry-run'* && "$observer_helper" != *'--file-linear'* ]]; then
+  pass "observer service launch is detection-only"
+else
+  fail "observer service launch is not detection-only"
+fi
+
+health_writer="$(awk '/^wavemill_write_backstage_service_health\(\) \{/{capture=1} capture{print} capture && /^}/{exit}' "$LIB_DIR/wavemill-common.sh")"
+if [[ "$health_writer" == *'state_mutate "$path"'* ]]; then
+  pass "backstage service health writes use state_mutate"
+else
+  fail "backstage service health writer does not use state_mutate"
+fi
+
 if grep -q 'wavemill_git_remote_with_timeout .*ls-remote origin' "$LIB_DIR/wavemill-mill.sh" \
   && ! grep -q 'git -C "\$wt_dir" ls-remote origin "refs/heads/\${base_branch}"' "$LIB_DIR/wavemill-mill.sh"; then
   pass "main head probe uses timeout helper"
@@ -3020,9 +3045,11 @@ echo "=== Integration Window Lifecycle Fixtures ==="
 
 for fixture in \
   "$REPO_DIR/tests/fixtures/lifecycle/integration_window_created.sh" \
+  "$REPO_DIR/tests/fixtures/lifecycle/integration_window_observer_enabled.sh" \
   "$REPO_DIR/tests/fixtures/lifecycle/integration_window_clean_shutdown.sh" \
   "$REPO_DIR/tests/fixtures/lifecycle/integration_window_disabled.sh" \
   "$REPO_DIR/tests/fixtures/lifecycle/integration_window_recovers_missing_tend.sh" \
+  "$REPO_DIR/tests/fixtures/lifecycle/integration_window_recovers_missing_observer.sh" \
 ; do
   if [[ ! -f "$fixture" ]]; then
     fail "Missing lifecycle fixture $(basename "$fixture")"

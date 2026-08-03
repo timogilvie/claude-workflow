@@ -46,6 +46,12 @@ fi
 
 case "${1:-}" in
   show-ref)
+    if [[ "$*" == *"refs/heads/main"* || "$*" == *"refs/remotes/origin/main"* ]]; then
+      exit 0
+    fi
+    exit 1
+    ;;
+  rev-parse)
     exit 1
     ;;
   worktree)

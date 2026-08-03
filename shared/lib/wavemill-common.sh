@@ -8,6 +8,7 @@ WAVEMILL_WINDOW_BACKSTAGE="${WAVEMILL_WINDOW_BACKSTAGE:-backstage}"
 WAVEMILL_BACKSTAGE_TEND_PANE_TITLE="${WAVEMILL_BACKSTAGE_TEND_PANE_TITLE:-Wavemill Tend Loop}"
 WAVEMILL_BACKSTAGE_JOBS_PANE_TITLE="${WAVEMILL_BACKSTAGE_JOBS_PANE_TITLE:-Wavemill Jobs}"
 WAVEMILL_BACKSTAGE_QUEUE_PANE_TITLE="${WAVEMILL_BACKSTAGE_QUEUE_PANE_TITLE:-Wavemill Pending + Queue}"
+WAVEMILL_BACKSTAGE_OBSERVER_PANE_TITLE="${WAVEMILL_BACKSTAGE_OBSERVER_PANE_TITLE:-Wavemill Observer}"
 
 # Dashboard footer tips should stay short enough to fit on one line with the
 # stable refresh prefix.
@@ -53,33 +54,66 @@ wavemill_build_tend_loop_command() {
   printf '%s\n' "$command"
 }
 
+wavemill_build_observer_loop_command() {
+  local session_name="${1:?session required}"
+  local repo_dir="${2:?repo dir required}"
+  local tools_dir="${3:?tools dir required}"
+  local interval_seconds="${4:-120}"
+  local max_log_lines="${5:-240}"
+  local command
+
+  printf -v command 'exec env WAVEMILL_SESSION=%q WAVEMILL_OBSERVER_SERVICE=1 npx tsx %q --loop --json --dry-run --repo-dir %q --session %q --interval %q --max-log-lines %q' \
+    "$session_name" "$tools_dir/observer.ts" "$repo_dir" "$session_name" "$interval_seconds" "$max_log_lines"
+  printf '%s\n' "$command"
+}
+
 wavemill_set_tmux_pane_title() {
   local target="${1:?target required}" title="${2:?title required}"
   tmux select-pane -t "$target" -T "$title" >/dev/null 2>&1
 }
 
+wavemill_init_backstage_health_file() {
+  local path="${1:?path required}"
+  mkdir -p "$(dirname "$path")"
+  [[ -f "$path" ]] || printf '{}\n' > "$path"
+}
+
 wavemill_write_backstage_health() {
   local path="${1:?path required}" status="${2:?status required}" detail="${3:-}" attempt_count="${4:-0}" last_attempt_at="${5:-}" executor_pane_id="${6:-}"
-  local tmp
-  mkdir -p "$(dirname "$path")"
-  tmp="${path}.tmp"
-  jq -cn \
-    --arg updatedAt "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
-    --arg status "$status" \
-    --arg detail "$detail" \
-    --argjson attemptCount "${attempt_count:-0}" \
-    --arg lastAttemptAt "$last_attempt_at" \
-    --arg executorPaneId "$executor_pane_id" '
-      {
+  wavemill_write_backstage_service_health "$path" "tend" "$status" "$detail" "$attempt_count" "$last_attempt_at" "$executor_pane_id"
+}
+
+wavemill_write_backstage_service_health() {
+  local path="${1:?path required}" service="${2:?service required}" status="${3:?status required}" detail="${4:-}" attempt_count="${5:-0}" last_attempt_at="${6:-}" pane_id="${7:-}" heartbeat_at="${8:-}"
+  wavemill_init_backstage_health_file "$path"
+  state_mutate "$path" '
+    .updatedAt = $updatedAt
+    | .services = (.services // {})
+    | .services[$service] = {
         updatedAt: $updatedAt,
         status: $status,
         detail: (if $detail == "" then null else $detail end),
         restartAttemptCount: $attemptCount,
         lastRestartAttemptAt: (if $lastAttemptAt == "" then null else $lastAttemptAt end),
-        executorPaneId: (if $executorPaneId == "" then null else $executorPaneId end)
+        paneId: (if $paneId == "" then null else $paneId end),
+        heartbeatAt: (if $heartbeatAt == "" then null else $heartbeatAt end)
       }
-    ' > "$tmp"
-  mv "$tmp" "$path"
+    | if $service == "tend" then
+        .status = $status
+        | .detail = (if $detail == "" then null else $detail end)
+        | .restartAttemptCount = $attemptCount
+        | .lastRestartAttemptAt = (if $lastAttemptAt == "" then null else $lastAttemptAt end)
+        | .executorPaneId = (if $paneId == "" then null else $paneId end)
+      else . end
+  ' \
+    --arg updatedAt "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+    --arg service "$service" \
+    --arg status "$status" \
+    --arg detail "$detail" \
+    --argjson attemptCount "${attempt_count:-0}" \
+    --arg lastAttemptAt "$last_attempt_at" \
+    --arg paneId "$pane_id" \
+    --arg heartbeatAt "$heartbeat_at"
 }
 
 wavemill_iso8601_to_epoch() {
@@ -230,6 +264,15 @@ _WAVEMILL_DEFAULTS='{
   "dashboard": {
     "verbosity": "info",
     "logToFile": true
+  },
+  "observer": {
+    "enabled": false,
+    "intervalSeconds": 120,
+    "heartbeatStaleSeconds": 300,
+    "maxLogLines": 240,
+    "retention": {
+      "maxSnapshots": 50
+    }
   },
   "challenge": {
     "enabled": false,
@@ -2066,6 +2109,36 @@ wavemill_load_config() {
   else
     echo '{}'
   fi
+}
+
+wavemill_observer_config_enabled() {
+  local merged="${1:-}"
+  [[ -n "$merged" ]] || merged="$(wavemill_load_config "${REPO_DIR:-$PWD}")"
+  [[ "$(printf '%s' "$merged" | jq -r '.observer.enabled // false' 2>/dev/null || echo false)" == "true" ]]
+}
+
+wavemill_observer_interval_seconds() {
+  local merged="${1:-}" value
+  [[ -n "$merged" ]] || merged="$(wavemill_load_config "${REPO_DIR:-$PWD}")"
+  value="$(printf '%s' "$merged" | jq -r '.observer.intervalSeconds // 120' 2>/dev/null || echo 120)"
+  [[ "$value" =~ ^[0-9]+$ && "$value" -gt 0 ]] || value=120
+  printf '%s\n' "$value"
+}
+
+wavemill_observer_heartbeat_stale_seconds() {
+  local merged="${1:-}" value
+  [[ -n "$merged" ]] || merged="$(wavemill_load_config "${REPO_DIR:-$PWD}")"
+  value="$(printf '%s' "$merged" | jq -r '.observer.heartbeatStaleSeconds // 300' 2>/dev/null || echo 300)"
+  [[ "$value" =~ ^[0-9]+$ && "$value" -gt 0 ]] || value=300
+  printf '%s\n' "$value"
+}
+
+wavemill_observer_max_log_lines() {
+  local merged="${1:-}" value
+  [[ -n "$merged" ]] || merged="$(wavemill_load_config "${REPO_DIR:-$PWD}")"
+  value="$(printf '%s' "$merged" | jq -r '.observer.maxLogLines // 240' 2>/dev/null || echo 240)"
+  [[ "$value" =~ ^[0-9]+$ && "$value" -gt 0 ]] || value=240
+  printf '%s\n' "$value"
 }
 
 wavemill_command_offset_path() {

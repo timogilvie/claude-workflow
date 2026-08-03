@@ -36,6 +36,36 @@ Merge behavior for local overrides:
 
 If the resolved integration ref does not exist in the repo, the checker skips gracefully instead of blocking ready on a config lookup failure.
 
+### Backstage Observer Service
+
+The dedicated Backstage Observer pane is opt-in and only runs when both
+`integration.enabled` and `integration.useMillSession` are true. Enable it in
+`.wavemill-config.json` or `.wavemill-config.local.json`:
+
+```json
+{
+  "observer": {
+    "enabled": true,
+    "intervalSeconds": 120,
+    "heartbeatStaleSeconds": 300,
+    "maxLogLines": 240,
+    "retention": {
+      "maxSnapshots": 50
+    }
+  }
+}
+```
+
+- `enabled` defaults to `false`; when false, Wavemill creates no Observer pane
+  or Observer health state.
+- `intervalSeconds` controls the `wavemill observer --loop` cadence.
+- `heartbeatStaleSeconds` controls when the mill monitor treats the service as
+  stale and attempts its single bounded restart.
+- `maxLogLines` bounds recent mill log evidence inspected on each pass.
+- `retention.maxSnapshots` is reserved for bounded snapshot persistence; the
+  current service writes only redacted heartbeat and finding counts to
+  `.wavemill/backstage-health.json`.
+
 ## Recommended Placement by Category
 
 Use `.wavemill-config.json` for:

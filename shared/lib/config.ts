@@ -494,6 +494,16 @@ export interface IntegrationConfig {
   readyPolicy?: IntegrationReadyPolicyConfig;
 }
 
+export interface ObserverConfig {
+  enabled: boolean;
+  intervalSeconds: number;
+  heartbeatStaleSeconds: number;
+  maxLogLines: number;
+  retention: {
+    maxSnapshots: number;
+  };
+}
+
 export type PromotionProtectedIntegrationStrategy =
   | 'skip-reconciliation'
   | 'block'
@@ -695,6 +705,7 @@ export interface WavemillConfig {
   providers?: ProvidersConfig;
   nativeAgent?: NativeAgentConfig;
   integration?: Partial<IntegrationConfig>;
+  observer?: Partial<ObserverConfig>;
   promotion?: Partial<PromotionConfig>;
   ready?: ReadyConfig;
   mergeQueue?: MergeQueueConfig;
@@ -719,6 +730,16 @@ export const INTEGRATION_DEFAULTS: IntegrationConfig = {
   requiredChecks: [],
   highRiskPolicy: 'manual',
   useMillSession: true,
+};
+
+export const OBSERVER_DEFAULTS: ObserverConfig = {
+  enabled: false,
+  intervalSeconds: 120,
+  heartbeatStaleSeconds: 300,
+  maxLogLines: 240,
+  retention: {
+    maxSnapshots: 50,
+  },
 };
 
 export const PROMOTION_DEFAULTS: PromotionConfig = {
@@ -1461,6 +1482,18 @@ export function getAgentsConfig(repoDir?: string): AgentsConfig {
  */
 export function getDashboardConfig(repoDir?: string): DashboardConfig {
   return loadWavemillConfig(repoDir).dashboard || {};
+}
+
+export function getObserverConfig(repoDir?: string): ObserverConfig {
+  const observer = loadWavemillConfig(repoDir).observer ?? {};
+  return {
+    ...OBSERVER_DEFAULTS,
+    ...observer,
+    retention: {
+      ...OBSERVER_DEFAULTS.retention,
+      ...(observer.retention ?? {}),
+    },
+  };
 }
 
 export function getTaskSelectionConfig(repoDir?: string): TaskSelectionConfig {
