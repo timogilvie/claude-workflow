@@ -46,6 +46,9 @@ fi
 
 case "${1:-}" in
   show-ref)
+    if [[ "${2:-}" == "--verify" ]]; then
+      exit 0
+    fi
     exit 1
     ;;
   worktree)
@@ -128,6 +131,7 @@ write_plan() {
     --arg session "$session" \
     --arg repoDir "$repo_dir" \
     --arg baseBranch "main" \
+    --arg resolvedBaseRef "refs/heads/main" \
     --arg worktreeRoot "$repo_dir/worktrees" \
     --arg planningMode "interactive" \
     --arg agentCmd "claude" \
@@ -145,6 +149,12 @@ write_plan() {
       session: $session,
       repoDir: $repoDir,
       baseBranch: $baseBranch,
+      resolvedBaseRef: $resolvedBaseRef,
+      baseRefPreflight: {
+        status: "ok",
+        configuredBranch: $baseBranch,
+        resolvedRef: $resolvedBaseRef
+      },
       worktreeRoot: $worktreeRoot,
       planningMode: $planningMode,
       agentCmd: $agentCmd,
@@ -327,7 +337,13 @@ run_layout_case() {
   tmux new-session -d -s "$TEST_SESSION" -x 200 -y 50
   tmux rename-window -t "$TEST_SESSION:0" mill
 
-  bash "$RUNNER_SCRIPT" "$plan_file" > "$output_file" 2>&1
+  if ! bash "$RUNNER_SCRIPT" "$plan_file" > "$output_file" 2>&1; then
+    fail "$case_name: startup runner failed"
+    sed 's/^/    /' "$output_file"
+    tmux kill-session -t "$TEST_SESSION" >/dev/null 2>&1 || true
+    TEST_SESSION=""
+    return
+  fi
 
   if ! panes_output="$(wait_for_pane_layout 30 0.2)"; then
     fail "$case_name: timed out waiting for three mill panes"

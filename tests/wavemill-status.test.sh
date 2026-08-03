@@ -2449,6 +2449,37 @@ else
   fail "unknown state should not write hook file (got: $unknown_result)"
 fi
 
+# ── Observer health renders independently ─────────────────────────────────
+STATE_FILE_OBSERVER="$TMP_DIR/state-observer.json"
+OUTPUT_OBSERVER="$TMP_DIR/output-observer.txt"
+cat > "$STATE_FILE_OBSERVER" <<'JSON'
+{"tasks":{}}
+JSON
+cat > "$(dirname "$STATE_FILE_OBSERVER")/observer-health.json" <<'JSON'
+{
+  "status": "needs-user",
+  "detail": "Backstage window cannot keep Wavemill Observer healthy.",
+  "restartAttemptCount": 1,
+  "observerPaneId": "%42",
+  "heartbeatAgeSeconds": 180
+}
+JSON
+run_render "$STATE_FILE_OBSERVER" "$WORKTREES_DIR" "$BEHAVIOR_ONE" "$OUTPUT_OBSERVER"
+if grep -q 'observer: needs-user; heartbeat age=180s; restarts=1; pane=%42' "$OUTPUT_OBSERVER" \
+  && grep -q 'Backstage window cannot keep Wavemill Observer healthy' "$OUTPUT_OBSERVER"; then
+  pass "observer needs-user health renders as separate dashboard row"
+else
+  fail "observer needs-user health row did not render"
+fi
+
+rm -f "$(dirname "$STATE_FILE_OBSERVER")/observer-health.json"
+run_render "$STATE_FILE_OBSERVER" "$WORKTREES_DIR" "$BEHAVIOR_ONE" "$TMP_DIR/output-observer-absent.txt"
+if ! grep -q 'observer:' "$TMP_DIR/output-observer-absent.txt"; then
+  pass "observer health row is absent when disabled/missing"
+else
+  fail "observer health row rendered without observer health state"
+fi
+
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 

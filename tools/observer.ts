@@ -4,6 +4,8 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { mutateJsonState } from '../shared/lib/state-mutex.ts';
+import { redactValue } from '../shared/lib/redaction-profiles.ts';
 
 type Severity = 'urgent' | 'high' | 'medium' | 'low';
 type Category = 'stuck' | 'crash' | 'warning' | 'ux' | 'operational';
@@ -23,6 +25,11 @@ interface ObserverOptions {
   linearLabel?: string;
   maxLogLines: number;
   printPrompt: boolean;
+  repoDir?: string;
+  session?: string;
+  heartbeatFile?: string;
+  findingsFile?: string;
+  retentionMaxEntries: number;
 }
 
 interface Pane {
@@ -103,6 +110,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_INTERVAL_SECONDS = 120;
 const DEFAULT_STALE_MINUTES = 10;
 const DEFAULT_HUNG_MINUTES = 10;
+const DEFAULT_RETENTION_MAX_ENTRIES = 100;
 
 function usage(): string {
   return `Wavemill Observer
@@ -115,6 +123,12 @@ Options:
   --loop                 Watch continuously
   --interval <seconds>   Loop interval (default: ${DEFAULT_INTERVAL_SECONDS})
   --json                 Emit JSON snapshots
+  --repo-dir <path>      Restrict observation to one repository
+  --session <name>       Restrict observation to one tmux session
+  --heartbeat-file <p>   Write service heartbeat JSON metadata
+  --findings-file <p>    Retain bounded structured findings entries
+  --retention-max-entries <n>
+                         Maximum retained findings entries (default: ${DEFAULT_RETENTION_MAX_ENTRIES})
   --file-linear          Create Linear issues for high-confidence findings
   --linear-team <key>    Linear team key/name/id for filed issues
   --linear-project <id>  Optional Linear project id/name for filed issues
@@ -128,7 +142,7 @@ Options:
 `;
 }
 
-function parseArgs(argv: string[]): ObserverOptions {
+export function parseArgs(argv: string[]): ObserverOptions {
   const options: ObserverOptions = {
     loop: false,
     once: true,
@@ -140,6 +154,7 @@ function parseArgs(argv: string[]): ObserverOptions {
     dryRun: false,
     maxLogLines: 240,
     printPrompt: false,
+    retentionMaxEntries: DEFAULT_RETENTION_MAX_ENTRIES,
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -186,6 +201,26 @@ function parseArgs(argv: string[]): ObserverOptions {
       options.maxLogLines = parsePositiveInt(next(), arg);
     } else if (arg.startsWith('--max-log-lines=')) {
       options.maxLogLines = parsePositiveInt(arg.slice('--max-log-lines='.length), '--max-log-lines');
+    } else if (arg === '--repo-dir') {
+      options.repoDir = resolve(next());
+    } else if (arg.startsWith('--repo-dir=')) {
+      options.repoDir = resolve(arg.slice('--repo-dir='.length));
+    } else if (arg === '--session') {
+      options.session = next();
+    } else if (arg.startsWith('--session=')) {
+      options.session = arg.slice('--session='.length);
+    } else if (arg === '--heartbeat-file') {
+      options.heartbeatFile = resolve(next());
+    } else if (arg.startsWith('--heartbeat-file=')) {
+      options.heartbeatFile = resolve(arg.slice('--heartbeat-file='.length));
+    } else if (arg === '--findings-file') {
+      options.findingsFile = resolve(next());
+    } else if (arg.startsWith('--findings-file=')) {
+      options.findingsFile = resolve(arg.slice('--findings-file='.length));
+    } else if (arg === '--retention-max-entries') {
+      options.retentionMaxEntries = parsePositiveInt(next(), arg);
+    } else if (arg.startsWith('--retention-max-entries=')) {
+      options.retentionMaxEntries = parsePositiveInt(arg.slice('--retention-max-entries='.length), '--retention-max-entries');
     } else if (arg === '--linear-team') {
       options.linearTeam = next();
     } else if (arg.startsWith('--linear-team=')) {
@@ -201,6 +236,10 @@ function parseArgs(argv: string[]): ObserverOptions {
     } else {
       throw new Error(`Unknown observer option: ${arg}`);
     }
+  }
+
+  if (process.env.WAVEMILL_OBSERVER_SERVICE === '1' && options.fileLinear) {
+    throw new Error('--file-linear is not allowed in WAVEMILL_OBSERVER_SERVICE mode');
   }
 
   return options;
@@ -392,12 +431,13 @@ function stringValue(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
-function snapshotRepos(sessions: string[]): RepoSnapshot[] {
+function snapshotRepos(sessions: string[], options: Pick<ObserverOptions, 'repoDir' | 'session'> = {}): RepoSnapshot[] {
   const repos: RepoSnapshot[] = [];
   const seen = new Set<string>();
   for (const session of sessions) {
+    if (options.session && session !== options.session) continue;
     const env = sessionEnv(session);
-    const repoDir = env.WAVEMILL_MILL_ACTIVE || env.REPO_DIR;
+    const repoDir = options.repoDir || env.WAVEMILL_MILL_ACTIVE || env.REPO_DIR;
     if (!repoDir || seen.has(`${session}:${repoDir}`)) continue;
     seen.add(`${session}:${repoDir}`);
     const stateDir = join(repoDir, '.wavemill');
@@ -731,10 +771,10 @@ function dedupeFindings(findings: Finding[]): Finding[] {
 }
 
 function observe(options: ObserverOptions): ObserverSnapshot {
-  const sessions = listSessions();
-  const panes = listPanes();
+  const sessions = listSessions().filter((session) => !options.session || session === options.session);
+  const panes = listPanes().filter((pane) => !options.session || pane.session === options.session);
   const processes = filterRelevantProcesses(processRows(), panes);
-  const repos = snapshotRepos(sessions);
+  const repos = snapshotRepos(sessions, options);
   const partial = {
     timestamp: new Date().toISOString(),
     sessions,
@@ -746,6 +786,47 @@ function observe(options: ObserverOptions): ObserverSnapshot {
     ...partial,
     findings: buildFindings(partial, options),
   };
+}
+
+export function redactedSnapshot(snapshot: ObserverSnapshot): ObserverSnapshot {
+  return redactValue(snapshot).value as ObserverSnapshot;
+}
+
+export async function writeHeartbeat(options: ObserverOptions, snapshot: ObserverSnapshot, cycle: number): Promise<void> {
+  if (!options.heartbeatFile) return;
+  await mutateJsonState<Record<string, unknown>>(
+    options.heartbeatFile,
+    () => ({
+      updatedAt: snapshot.timestamp,
+      pid: process.pid,
+      session: options.session ?? process.env.WAVEMILL_SESSION ?? null,
+      repoDir: options.repoDir ?? null,
+      cycle,
+      findingsCount: snapshot.findings.length,
+    }),
+    { createIfMissing: true, initial: {} },
+  );
+}
+
+export async function retainFindings(options: ObserverOptions, snapshot: ObserverSnapshot): Promise<void> {
+  if (!options.findingsFile) return;
+  const entry = {
+    timestamp: snapshot.timestamp,
+    session: options.session ?? process.env.WAVEMILL_SESSION ?? null,
+    repoDir: options.repoDir ?? null,
+    findings: snapshot.findings,
+  };
+  await mutateJsonState<{ updatedAt?: string; entries?: unknown[] }>(
+    options.findingsFile,
+    (current) => {
+      const entries = Array.isArray(current.entries) ? current.entries : [];
+      return {
+        updatedAt: snapshot.timestamp,
+        entries: [...entries, entry].slice(-options.retentionMaxEntries),
+      };
+    },
+    { createIfMissing: true, initial: { entries: [] } },
+  );
 }
 
 function renderSummary(snapshot: ObserverSnapshot): string {
@@ -943,8 +1024,12 @@ async function main(): Promise<void> {
     return;
   }
 
+  let cycle = 0;
   do {
-    const snapshot = observe(options);
+    cycle += 1;
+    const snapshot = redactedSnapshot(observe(options));
+    await writeHeartbeat(options, snapshot, cycle);
+    await retainFindings(options, snapshot);
     await fileLinearIssues(snapshot, options);
     if (options.json) {
       process.stdout.write(`${JSON.stringify(snapshot, null, 2)}\n`);

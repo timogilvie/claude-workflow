@@ -2304,6 +2304,43 @@
             },
             "additionalProperties": false
         },
+        "observer": {
+            "type": "object",
+            "description": "Settings for the dedicated Wavemill Observer Backstage service. Disabled by default and detection-only when enabled.",
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Launch a dedicated Wavemill Observer Backstage pane for eligible mill sessions."
+                },
+                "intervalSeconds": {
+                    "type": "integer",
+                    "default": 60,
+                    "minimum": 1,
+                    "description": "Seconds between structured observer snapshots."
+                },
+                "maxRestarts": {
+                    "type": "integer",
+                    "default": 1,
+                    "minimum": 0,
+                    "description": "Maximum automatic observer pane restarts before reporting needs-user."
+                },
+                "retention": {
+                    "type": "object",
+                    "description": "Bounded retained observer findings written under .wavemill.",
+                    "properties": {
+                        "maxEntries": {
+                            "type": "integer",
+                            "default": 100,
+                            "minimum": 1,
+                            "description": "Maximum retained observer snapshot entries."
+                        }
+                    },
+                    "additionalProperties": false
+                }
+            },
+            "additionalProperties": false
+        },
         "promotion": {
             "type": "object",
             "description": "Settings for how wavemill promote behaves when squash-snapshot reconciliation would need to mutate a protected integration branch.",

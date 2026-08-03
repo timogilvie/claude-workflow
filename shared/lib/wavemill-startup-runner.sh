@@ -446,6 +446,7 @@ write_monitor_env() {
     write_shell_assignment "WAVEMILL_BACKSTAGE_TEND_PANE_TITLE" "$WAVEMILL_BACKSTAGE_TEND_PANE_TITLE"
     write_shell_assignment "WAVEMILL_BACKSTAGE_JOBS_PANE_TITLE" "$WAVEMILL_BACKSTAGE_JOBS_PANE_TITLE"
     write_shell_assignment "WAVEMILL_BACKSTAGE_QUEUE_PANE_TITLE" "$WAVEMILL_BACKSTAGE_QUEUE_PANE_TITLE"
+    write_shell_assignment "WAVEMILL_BACKSTAGE_OBSERVER_PANE_TITLE" "$WAVEMILL_BACKSTAGE_OBSERVER_PANE_TITLE"
     # Plumb the monitor's own script/env paths so the control-pane health
     # watchdog can rebuild its launch command during recovery.
     write_shell_assignment "MONITOR_SCRIPT" "$MONITOR_SCRIPT"
@@ -489,11 +490,12 @@ setup_control_dashboard() {
 
 spawn_integration_window() {
   [[ "${DRY_RUN:-false}" == "true" ]] && return 0
-  local merged enabled use_mill_session integration_cmd status_script jobs_cmd queue_cmd tend_pane right_top_pane right_bottom_pane backstage_health_file
+  local merged enabled use_mill_session observer_enabled integration_cmd observer_cmd status_script jobs_cmd queue_cmd tend_pane right_top_pane right_bottom_pane observer_pane backstage_health_file observer_health_file
 
   merged="$(wavemill_load_config "$REPO_DIR")"
   enabled="$(printf '%s' "$merged" | jq -r '.integration.enabled // false' 2>/dev/null || echo false)"
   use_mill_session="$(printf '%s' "$merged" | jq -r '.integration.useMillSession // true' 2>/dev/null || echo true)"
+  observer_enabled="$(printf '%s' "$merged" | jq -r '.observer.enabled // false' 2>/dev/null || echo false)"
 
   if [[ "$enabled" != "true" || "$use_mill_session" != "true" ]]; then
     return 0
@@ -515,6 +517,46 @@ spawn_integration_window() {
   tmux respawn-pane -k -t "$right_bottom_pane" "$queue_cmd"
   wavemill_set_tmux_pane_title "$right_top_pane" "$WAVEMILL_BACKSTAGE_JOBS_PANE_TITLE"
   wavemill_set_tmux_pane_title "$right_bottom_pane" "$WAVEMILL_BACKSTAGE_QUEUE_PANE_TITLE"
+
+  if [[ "$observer_enabled" == "true" ]]; then
+    observer_cmd="$(wavemill_build_observer_loop_command "$SESSION" "$REPO_DIR" "$TOOLS_DIR" "$STATE_DIR")"
+    observer_pane="$(tmux split-window -t "$tend_pane" -v -p 35 -c "$REPO_DIR" -P -F '#{pane_id}' "$observer_cmd" 2>/dev/null || true)"
+    if [[ -n "$observer_pane" ]]; then
+      wavemill_set_tmux_pane_title "$observer_pane" "$WAVEMILL_BACKSTAGE_OBSERVER_PANE_TITLE"
+      tmux select-layout -t "$SESSION:$WAVEMILL_WINDOW_BACKSTAGE" tiled >/dev/null 2>&1 || true
+      observer_health_file="$(wavemill_observer_health_file "$STATE_DIR" 2>/dev/null || true)"
+      if [[ -n "$observer_health_file" ]]; then
+        mkdir -p "$(dirname "$observer_health_file")"
+        [[ -f "$observer_health_file" ]] || printf '{}\n' > "$observer_health_file"
+        state_mutate "$observer_health_file" \
+          '.updatedAt = $updatedAt
+           | .status = $status
+           | .detail = $detail
+           | .restartAttemptCount = (.restartAttemptCount // 0)
+           | .lastRestartAttemptAt = (.lastRestartAttemptAt // null)
+           | .observerPaneId = $paneId' \
+          --arg updatedAt "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+          --arg status "starting" \
+          --arg detail "observer service pane launched" \
+          --arg paneId "$observer_pane" >/dev/null || true
+      fi
+    else
+      observer_health_file="$(wavemill_observer_health_file "$STATE_DIR" 2>/dev/null || true)"
+      if [[ -n "$observer_health_file" ]]; then
+        mkdir -p "$(dirname "$observer_health_file")"
+        [[ -f "$observer_health_file" ]] || printf '{}\n' > "$observer_health_file"
+        state_mutate "$observer_health_file" \
+          '.updatedAt = $updatedAt
+           | .status = "needs-user"
+           | .detail = "observer service pane failed to launch"
+           | .restartAttemptCount = 0
+           | .lastRestartAttemptAt = null
+           | .observerPaneId = null' \
+          --arg updatedAt "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" >/dev/null || true
+      fi
+      startup_log "Observer pane failed to launch; backstage continues."
+    fi
+  fi
 
   tmux set-window-option -u -t "$SESSION:$WAVEMILL_WINDOW_BACKSTAGE" window-status-style >/dev/null 2>&1 || true
   tmux set-window-option -u -t "$SESSION:$WAVEMILL_WINDOW_BACKSTAGE" window-status-current-style >/dev/null 2>&1 || true

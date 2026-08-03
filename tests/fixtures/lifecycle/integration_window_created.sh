@@ -75,6 +75,15 @@ spawn_integration_window
 
 for _ in {1..20}; do
   if tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -qx 'backstage'; then
+    pane_count="$(tmux list-panes -t "$SESSION:backstage" -F '#{pane_id}' | wc -l | tr -d ' ')"
+    if [[ "$pane_count" != "3" ]]; then
+      echo "FAIL: observer-disabled backstage should have 3 panes (got $pane_count)"
+      exit 1
+    fi
+    if [[ -f "$STATE_DIR/observer-health.json" || -f "$STATE_DIR/observer-heartbeat.json" || -f "$STATE_DIR/observer-findings.json" ]]; then
+      echo "FAIL: observer artifacts should not exist when observer is disabled"
+      exit 1
+    fi
     echo "PASS: backstage window created"
     exit 0
   fi

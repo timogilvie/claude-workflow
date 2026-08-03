@@ -34,8 +34,11 @@ FAKE_BIN="$TMP_DIR/bin"
 REPO_DIR="$TMP_DIR/repo"
 TOOLS_DIR="$TMP_DIR/tools"
 STATUS_LOG_FILE="$TMP_DIR/status.log"
-mkdir -p "$FAKE_BIN" "$REPO_DIR" "$TOOLS_DIR"
-export REPO_DIR TOOLS_DIR STATUS_LOG_FILE PATH="$FAKE_BIN:$PATH"
+STATE_DIR="$REPO_DIR/.wavemill"
+STATE_FILE="$STATE_DIR/workflow-state.json"
+mkdir -p "$FAKE_BIN" "$REPO_DIR" "$TOOLS_DIR" "$STATE_DIR"
+printf '{"tasks":{}}' > "$STATE_FILE"
+export REPO_DIR TOOLS_DIR STATUS_LOG_FILE STATE_DIR STATE_FILE PATH="$FAKE_BIN:$PATH"
 
 cat > "$FAKE_BIN/npx" <<'EOF'
 #!/usr/bin/env bash
@@ -49,6 +52,9 @@ cat > "$REPO_DIR/.wavemill-config.json" <<'EOF'
   "integration": {
     "enabled": false,
     "useMillSession": true
+  },
+  "observer": {
+    "enabled": true
   }
 }
 EOF
@@ -66,6 +72,11 @@ sleep 0.2
 
 if tmux list-windows -t "$SESSION" -F '#{window_name}' | grep -qx 'backstage'; then
   echo "FAIL: backstage window should not be created"
+  exit 1
+fi
+
+if [[ -f "$STATE_DIR/observer-health.json" || -f "$STATE_DIR/observer-heartbeat.json" || -f "$STATE_DIR/observer-findings.json" ]]; then
+  echo "FAIL: observer artifacts should not be written when integration is disabled"
   exit 1
 fi
 

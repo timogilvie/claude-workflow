@@ -8,6 +8,10 @@ WAVEMILL_WINDOW_BACKSTAGE="${WAVEMILL_WINDOW_BACKSTAGE:-backstage}"
 WAVEMILL_BACKSTAGE_TEND_PANE_TITLE="${WAVEMILL_BACKSTAGE_TEND_PANE_TITLE:-Wavemill Tend Loop}"
 WAVEMILL_BACKSTAGE_JOBS_PANE_TITLE="${WAVEMILL_BACKSTAGE_JOBS_PANE_TITLE:-Wavemill Jobs}"
 WAVEMILL_BACKSTAGE_QUEUE_PANE_TITLE="${WAVEMILL_BACKSTAGE_QUEUE_PANE_TITLE:-Wavemill Pending + Queue}"
+WAVEMILL_BACKSTAGE_OBSERVER_PANE_TITLE="${WAVEMILL_BACKSTAGE_OBSERVER_PANE_TITLE:-Wavemill Observer}"
+WAVEMILL_OBSERVER_INTERVAL_SECONDS_DEFAULT="${WAVEMILL_OBSERVER_INTERVAL_SECONDS_DEFAULT:-60}"
+WAVEMILL_OBSERVER_MAX_RESTARTS_DEFAULT="${WAVEMILL_OBSERVER_MAX_RESTARTS_DEFAULT:-1}"
+WAVEMILL_OBSERVER_RETENTION_MAX_ENTRIES_DEFAULT="${WAVEMILL_OBSERVER_RETENTION_MAX_ENTRIES_DEFAULT:-100}"
 
 # Dashboard footer tips should stay short enough to fit on one line with the
 # stable refresh prefix.
@@ -41,6 +45,45 @@ wavemill_backstage_health_file() {
   return 1
 }
 
+wavemill_observer_health_file() {
+  local state_dir="${1:-${STATE_DIR:-}}"
+  if [[ -n "$state_dir" ]]; then
+    printf '%s\n' "$state_dir/observer-health.json"
+    return 0
+  fi
+  if [[ -n "${REPO_DIR:-}" ]]; then
+    printf '%s\n' "$REPO_DIR/.wavemill/observer-health.json"
+    return 0
+  fi
+  return 1
+}
+
+wavemill_observer_heartbeat_file() {
+  local state_dir="${1:-${STATE_DIR:-}}"
+  if [[ -n "$state_dir" ]]; then
+    printf '%s\n' "$state_dir/observer-heartbeat.json"
+    return 0
+  fi
+  if [[ -n "${REPO_DIR:-}" ]]; then
+    printf '%s\n' "$REPO_DIR/.wavemill/observer-heartbeat.json"
+    return 0
+  fi
+  return 1
+}
+
+wavemill_observer_findings_file() {
+  local state_dir="${1:-${STATE_DIR:-}}"
+  if [[ -n "$state_dir" ]]; then
+    printf '%s\n' "$state_dir/observer-findings.json"
+    return 0
+  fi
+  if [[ -n "${REPO_DIR:-}" ]]; then
+    printf '%s\n' "$REPO_DIR/.wavemill/observer-findings.json"
+    return 0
+  fi
+  return 1
+}
+
 wavemill_build_tend_loop_command() {
   local session_name="${1:?session required}"
   local repo_dir="${2:?repo dir required}"
@@ -50,6 +93,73 @@ wavemill_build_tend_loop_command() {
 
   printf -v command 'exec env WAVEMILL_SESSION=%q WAVEMILL_ISSUE=%q npx tsx %q --loop --repo-dir %q' \
     "$session_name" "$issue_name" "$tools_dir/tend.ts" "$repo_dir"
+  printf '%s\n' "$command"
+}
+
+wavemill_observer_config_value() {
+  local repo_dir="${1:-${REPO_DIR:-$PWD}}" jq_filter="${2:?jq filter required}" fallback="${3:-}"
+  local merged value
+  merged="$(wavemill_load_config "$repo_dir" 2>/dev/null)" || {
+    printf '%s\n' "$fallback"
+    return 0
+  }
+  value="$(printf '%s' "$merged" | jq -r "$jq_filter" 2>/dev/null)" || value=""
+  if [[ -z "$value" || "$value" == "null" ]]; then
+    printf '%s\n' "$fallback"
+  else
+    printf '%s\n' "$value"
+  fi
+}
+
+wavemill_observer_service_enabled() {
+  local repo_dir="${1:-${REPO_DIR:-$PWD}}" value
+  value="$(wavemill_observer_config_value "$repo_dir" '.observer.enabled // false' 'false')"
+  [[ "$value" == "true" ]]
+}
+
+wavemill_observer_interval_seconds() {
+  local repo_dir="${1:-${REPO_DIR:-$PWD}}" value
+  value="$(wavemill_observer_config_value "$repo_dir" '.observer.intervalSeconds // empty' "$WAVEMILL_OBSERVER_INTERVAL_SECONDS_DEFAULT")"
+  if [[ "$value" =~ ^[0-9]+$ && "$value" -gt 0 ]]; then
+    printf '%s\n' "$value"
+  else
+    printf '%s\n' "$WAVEMILL_OBSERVER_INTERVAL_SECONDS_DEFAULT"
+  fi
+}
+
+wavemill_observer_max_restarts() {
+  local repo_dir="${1:-${REPO_DIR:-$PWD}}" value
+  value="$(wavemill_observer_config_value "$repo_dir" '.observer.maxRestarts // empty' "$WAVEMILL_OBSERVER_MAX_RESTARTS_DEFAULT")"
+  if [[ "$value" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$value"
+  else
+    printf '%s\n' "$WAVEMILL_OBSERVER_MAX_RESTARTS_DEFAULT"
+  fi
+}
+
+wavemill_observer_retention_max_entries() {
+  local repo_dir="${1:-${REPO_DIR:-$PWD}}" value
+  value="$(wavemill_observer_config_value "$repo_dir" '.observer.retention.maxEntries // empty' "$WAVEMILL_OBSERVER_RETENTION_MAX_ENTRIES_DEFAULT")"
+  if [[ "$value" =~ ^[0-9]+$ && "$value" -gt 0 ]]; then
+    printf '%s\n' "$value"
+  else
+    printf '%s\n' "$WAVEMILL_OBSERVER_RETENTION_MAX_ENTRIES_DEFAULT"
+  fi
+}
+
+wavemill_build_observer_loop_command() {
+  local session_name="${1:?session required}"
+  local repo_dir="${2:?repo dir required}"
+  local tools_dir="${3:?tools dir required}"
+  local state_dir="${4:-${STATE_DIR:-$repo_dir/.wavemill}}"
+  local interval retention heartbeat_file findings_file command
+  interval="$(wavemill_observer_interval_seconds "$repo_dir")"
+  retention="$(wavemill_observer_retention_max_entries "$repo_dir")"
+  heartbeat_file="$(wavemill_observer_heartbeat_file "$state_dir")"
+  findings_file="$(wavemill_observer_findings_file "$state_dir")"
+
+  printf -v command 'exec env WAVEMILL_SESSION=%q WAVEMILL_ISSUE=observer WAVEMILL_OBSERVER_SERVICE=1 WAVEMILL_STATE_DIR=%q WAVEMILL_STATE_FILE=%q npx tsx %q --loop --json --repo-dir %q --session %q --interval %q --heartbeat-file %q --findings-file %q --retention-max-entries %q' \
+    "$session_name" "$state_dir" "${STATE_FILE:-}" "$tools_dir/observer.ts" "$repo_dir" "$session_name" "$interval" "$heartbeat_file" "$findings_file" "$retention"
   printf '%s\n' "$command"
 }
 

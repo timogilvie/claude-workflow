@@ -636,6 +636,17 @@ export interface SafetyConfig {
   redaction?: RedactionConfig;
 }
 
+export interface ObserverRetentionConfig {
+  maxEntries?: number;
+}
+
+export interface ObserverConfig {
+  enabled?: boolean;
+  intervalSeconds?: number;
+  maxRestarts?: number;
+  retention?: ObserverRetentionConfig;
+}
+
 export interface VerificationMandatoryChecksConfig {
   typecheck?: boolean;
   lint?: boolean;
@@ -695,6 +706,7 @@ export interface WavemillConfig {
   providers?: ProvidersConfig;
   nativeAgent?: NativeAgentConfig;
   integration?: Partial<IntegrationConfig>;
+  observer?: ObserverConfig;
   promotion?: Partial<PromotionConfig>;
   ready?: ReadyConfig;
   mergeQueue?: MergeQueueConfig;
@@ -1354,6 +1366,20 @@ export function getIntegrationConfig(repoDir?: string): IntegrationConfig {
     integration.integrationBranch = config.mill.baseBranch;
   }
   return integration;
+}
+
+export function getObserverConfig(repoDir?: string): Required<ObserverConfig> & {
+  retention: Required<ObserverRetentionConfig>;
+} {
+  const observer = loadWavemillConfig(repoDir).observer ?? {};
+  return {
+    enabled: observer.enabled ?? false,
+    intervalSeconds: observer.intervalSeconds ?? 60,
+    maxRestarts: observer.maxRestarts ?? 1,
+    retention: {
+      maxEntries: observer.retention?.maxEntries ?? 100,
+    },
+  };
 }
 
 /**

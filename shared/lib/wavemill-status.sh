@@ -1619,6 +1619,29 @@ queue_health_dashboard_warning() {
   return 0
 }
 
+observer_health_dashboard_row() {
+  local state_file="${1:-}" state_dir health_file status detail restarts heartbeat_age pane_id
+  [[ -n "$state_file" ]] || return 1
+  state_dir="$(dirname "$state_file" 2>/dev/null || echo '')"
+  [[ -n "$state_dir" ]] || return 1
+  health_file="${state_dir}/observer-health.json"
+  [[ -r "$health_file" ]] || return 1
+
+  status="$(jq -r '.status // empty' "$health_file" 2>/dev/null || true)"
+  [[ -n "$status" && "$status" != "disabled" ]] || return 1
+  restarts="$(jq -r '.restartAttemptCount // 0' "$health_file" 2>/dev/null || echo 0)"
+  heartbeat_age="$(jq -r '.heartbeatAgeSeconds // empty' "$health_file" 2>/dev/null || true)"
+  pane_id="$(jq -r '.observerPaneId // empty' "$health_file" 2>/dev/null || true)"
+  detail="$(jq -r '.detail // empty' "$health_file" 2>/dev/null || true)"
+
+  printf 'observer: %s' "$status"
+  [[ -n "$heartbeat_age" ]] && printf '; heartbeat age=%ss' "$heartbeat_age"
+  printf '; restarts=%s' "$restarts"
+  [[ -n "$pane_id" ]] && printf '; pane=%s' "$pane_id"
+  [[ "$status" == "needs-user" && -n "$detail" ]] && printf '; %s' "$detail"
+  return 0
+}
+
 render_dashboard() {
   local tasks line issue slug branch worktree task_status task_phase state_pr
   local win agent_state classification task_data free_slots usage_tip openrouter_warning
@@ -1640,6 +1663,9 @@ render_dashboard() {
   fi
   if queue_health_warning="$(queue_health_dashboard_warning "$STATE_FILE" 2>/dev/null)"; then
     printf "${D}├─ WARN: %s${N}${EL}\n" "$queue_health_warning" >> "$FRAME"
+  fi
+  if observer_health_row="$(observer_health_dashboard_row "$STATE_FILE" 2>/dev/null)"; then
+    printf "${D}├─ %s${N}${EL}\n" "$observer_health_row" >> "$FRAME"
   fi
 
   tasks=$(gather_tasks)

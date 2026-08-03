@@ -79,6 +79,33 @@ Coder routing has a third gate after repo opt-in and the smoke artifact: the cho
 
 See [Native Read-Only Runtime](./native-read-only-runtime.md) for the exact config shape and phase examples.
 
+### Dedicated Observer Service
+
+`observer.enabled` opts eligible mill sessions into a dedicated Backstage pane titled `Wavemill Observer`. It is disabled by default. When disabled, when integration mode is disabled, when `integration.useMillSession` is false, or when tmux is unavailable, Wavemill does not create observer panes, heartbeat files, health files, retained findings, or recurring warnings.
+
+Example:
+
+```json
+{
+  "integration": {
+    "enabled": true,
+    "useMillSession": true
+  },
+  "observer": {
+    "enabled": true,
+    "intervalSeconds": 60,
+    "maxRestarts": 1,
+    "retention": {
+      "maxEntries": 100
+    }
+  }
+}
+```
+
+The service launch runs `tools/observer.ts --loop --json` with repo/session context and writes metadata-only heartbeat state under `.wavemill/observer-heartbeat.json`. Retained structured findings are bounded by `observer.retention.maxEntries` in `.wavemill/observer-findings.json`.
+
+Observer service mode is detection-only. The Backstage launcher never passes `--file-linear`, and `tools/observer.ts` rejects `--file-linear` when launched with `WAVEMILL_OBSERVER_SERVICE=1`.
+
 ### Router Exploration Sampling
 
 `router.exploration` converts deterministic argmax model selection (stage-aware

@@ -13771,6 +13771,186 @@ check_backstage_health() {
   LAST_BACKSTAGE_HEALTH_STATUS="needs-user"
 }
 
+# ── Backstage observer health watchdog ─────────────────────────────────
+LAST_OBSERVER_HEALTH_CHECK=0
+OBSERVER_HEALTH_INTERVAL=30
+OBSERVER_RESTART_COOLDOWN=60
+LAST_OBSERVER_HEALTH_STATUS=""
+
+observer_health_enabled() {
+  local merged enabled use_mill_session observer_enabled
+  merged="$(wavemill_load_config "$REPO_DIR" 2>/dev/null)" || return 1
+  enabled="$(printf '%s' "$merged" | jq -r '.integration.enabled // false' 2>/dev/null || echo false)"
+  use_mill_session="$(printf '%s' "$merged" | jq -r '.integration.useMillSession // true' 2>/dev/null || echo true)"
+  observer_enabled="$(printf '%s' "$merged" | jq -r '.observer.enabled // false' 2>/dev/null || echo false)"
+  [[ "$enabled" == "true" && "$use_mill_session" == "true" && "$observer_enabled" == "true" ]]
+}
+
+read_observer_health_field() {
+  local field="$1" path
+  path="$(wavemill_observer_health_file "$STATE_DIR" 2>/dev/null || true)"
+  [[ -n "$path" && -f "$path" ]] || return 1
+  jq -r "$field // empty" "$path" 2>/dev/null
+}
+
+ensure_observer_health_file() {
+  local path="$1"
+  [[ -n "$path" ]] || return 1
+  mkdir -p "$(dirname "$path")"
+  [[ -f "$path" ]] || printf '{}\n' > "$path"
+}
+
+write_observer_health_state() {
+  local path="${1:?path required}" status="${2:?status required}" detail="${3:-}" attempt_count="${4:-0}" last_attempt_at="${5:-}" pane_id="${6:-}" heartbeat_at="${7:-}" heartbeat_age="${8:-}"
+  ensure_observer_health_file "$path" || return 1
+  state_mutate "$path" \
+    '.updatedAt = $updatedAt
+     | .status = $status
+     | .detail = (if $detail == "" then null else $detail end)
+     | .restartAttemptCount = $attemptCount
+     | .lastRestartAttemptAt = (if $lastAttemptAt == "" then null else $lastAttemptAt end)
+     | .observerPaneId = (if $paneId == "" then null else $paneId end)
+     | .heartbeatAt = (if $heartbeatAt == "" then null else $heartbeatAt end)
+     | .heartbeatAgeSeconds = $heartbeatAge' \
+    --arg updatedAt "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+    --arg status "$status" \
+    --arg detail "$detail" \
+    --argjson attemptCount "${attempt_count:-0}" \
+    --arg lastAttemptAt "$last_attempt_at" \
+    --arg paneId "$pane_id" \
+    --arg heartbeatAt "$heartbeat_at" \
+    --argjson heartbeatAge "${heartbeat_age:-0}" >/dev/null
+}
+
+probe_observer_panes() {
+  tmux list-panes -t "$SESSION:$WAVEMILL_WINDOW_BACKSTAGE" \
+    -F '#{pane_id}	#{pane_title}	#{pane_dead}	#{pane_current_command}	#{pane_start_command}'
+}
+
+classify_observer_health() {
+  local pane_details="${1-}" heartbeat_file="${2:-}" interval_seconds="${3:-60}" now="${4:-$(date +%s)}"
+  local observer_alive=0 pane_id="" line current_id pane_title pane_dead _pane_cmd _start_cmd
+  local heartbeat_at="" heartbeat_epoch=0 heartbeat_age=0 stale_after
+
+  while IFS=$'\t' read -r current_id pane_title pane_dead _pane_cmd _start_cmd; do
+    [[ -n "$current_id" ]] || continue
+    if [[ "$pane_title" == "$WAVEMILL_BACKSTAGE_OBSERVER_PANE_TITLE" && "$pane_dead" != "1" ]]; then
+      observer_alive=1
+      pane_id="$current_id"
+      break
+    fi
+  done <<< "$pane_details"
+
+  if (( observer_alive == 0 )); then
+    printf 'missing-observer\tbackstage window is missing the %s service pane\t%s\t\t0\n' "$WAVEMILL_BACKSTAGE_OBSERVER_PANE_TITLE" "$pane_id"
+    return 0
+  fi
+
+  if [[ -r "$heartbeat_file" ]]; then
+    heartbeat_at="$(jq -r '.updatedAt // empty' "$heartbeat_file" 2>/dev/null || true)"
+    if [[ -n "$heartbeat_at" ]]; then
+      heartbeat_epoch="$(wavemill_iso8601_to_epoch "$heartbeat_at" 2>/dev/null || echo 0)"
+      (( heartbeat_epoch > 0 )) && heartbeat_age=$(( now - heartbeat_epoch ))
+    fi
+  fi
+
+  stale_after=$(( interval_seconds * 3 ))
+  (( stale_after < 30 )) && stale_after=30
+  if [[ -z "$heartbeat_at" ]]; then
+    printf 'starting\tobserver service pane is running; waiting for first heartbeat\t%s\t\t0\n' "$pane_id"
+    return 0
+  fi
+  if (( heartbeat_age > stale_after )); then
+    printf 'stale\tobserver heartbeat is stale (%ss old)\t%s\t%s\t%s\n' "$heartbeat_age" "$pane_id" "$heartbeat_at" "$heartbeat_age"
+    return 0
+  fi
+
+  printf 'healthy\tobserver service is running\t%s\t%s\t%s\n' "$pane_id" "$heartbeat_at" "$heartbeat_age"
+}
+
+restart_backstage_observer() {
+  local observer_cmd new_pane
+  observer_cmd="$(wavemill_build_observer_loop_command "$SESSION" "$REPO_DIR" "$TOOLS_DIR" "$STATE_DIR")"
+  new_pane="$(tmux split-window -d -t "$SESSION:$WAVEMILL_WINDOW_BACKSTAGE.0" -v -p 35 -c "$REPO_DIR" -P -F '#{pane_id}' "$observer_cmd" 2>/dev/null || true)"
+  [[ -n "$new_pane" ]] || return 1
+  wavemill_set_tmux_pane_title "$new_pane" "$WAVEMILL_BACKSTAGE_OBSERVER_PANE_TITLE"
+  tmux select-layout -t "$SESSION:$WAVEMILL_WINDOW_BACKSTAGE" tiled >/dev/null 2>&1 || true
+  printf '%s\n' "$new_pane"
+}
+
+check_observer_health() {
+  local now health_file heartbeat_file interval_seconds max_restarts pane_probe pane_summary pane_status detail pane_id heartbeat_at heartbeat_age
+  local prior_attempt_at prior_attempt_count elapsed restart_pane_id
+
+  now=$(date +%s)
+  (( now - LAST_OBSERVER_HEALTH_CHECK < OBSERVER_HEALTH_INTERVAL )) && return 0
+  LAST_OBSERVER_HEALTH_CHECK=$now
+
+  observer_health_enabled || {
+    LAST_OBSERVER_HEALTH_STATUS="disabled"
+    return 0
+  }
+
+  health_file="$(wavemill_observer_health_file "$STATE_DIR" 2>/dev/null || true)"
+  heartbeat_file="$(wavemill_observer_heartbeat_file "$STATE_DIR" 2>/dev/null || true)"
+  interval_seconds="$(wavemill_observer_interval_seconds "$REPO_DIR")"
+  max_restarts="$(wavemill_observer_max_restarts "$REPO_DIR")"
+  pane_probe="$(probe_observer_panes 2>/dev/null || true)"
+  pane_summary="$(classify_observer_health "$pane_probe" "$heartbeat_file" "$interval_seconds" "$now")"
+  IFS=$'\t' read -r pane_status detail pane_id heartbeat_at heartbeat_age <<< "$pane_summary"
+  [[ "$heartbeat_age" =~ ^[0-9]+$ ]] || heartbeat_age=0
+
+  if [[ "$pane_status" == "healthy" || "$pane_status" == "starting" ]]; then
+    [[ -n "$health_file" ]] && write_observer_health_state "$health_file" "$pane_status" "$detail" "$(read_observer_health_field '.restartAttemptCount' || echo 0)" "$(read_observer_health_field '.lastRestartAttemptAt' || true)" "$pane_id" "$heartbeat_at" "$heartbeat_age" || true
+    LAST_OBSERVER_HEALTH_STATUS="$pane_status"
+    return 0
+  fi
+
+  prior_attempt_at="$(read_observer_health_field '.lastRestartAttemptAt' || true)"
+  prior_attempt_count="$(read_observer_health_field '.restartAttemptCount' || true)"
+  [[ "$prior_attempt_count" =~ ^[0-9]+$ ]] || prior_attempt_count=0
+  elapsed=$OBSERVER_RESTART_COOLDOWN
+  if [[ -n "$prior_attempt_at" ]]; then
+    local prior_attempt_epoch=0
+    prior_attempt_epoch="$(wavemill_iso8601_to_epoch "$prior_attempt_at" 2>/dev/null || echo 0)"
+    elapsed=$(( now - prior_attempt_epoch ))
+  fi
+
+  if (( prior_attempt_count < max_restarts )); then
+    if [[ "$LAST_OBSERVER_HEALTH_STATUS" != "$pane_status" ]]; then
+      log_warn "Observer health check detected ${pane_status}. Attempting restart in '$WAVEMILL_WINDOW_BACKSTAGE'."
+    fi
+    restart_pane_id="$(restart_backstage_observer || true)"
+    sleep 0.3
+    pane_probe="$(probe_observer_panes 2>/dev/null || true)"
+    pane_summary="$(classify_observer_health "$pane_probe" "$heartbeat_file" "$interval_seconds" "$(date +%s)")"
+    IFS=$'\t' read -r pane_status detail pane_id heartbeat_at heartbeat_age <<< "$pane_summary"
+    prior_attempt_count=$(( prior_attempt_count + 1 ))
+    if [[ "$pane_status" == "healthy" || "$pane_status" == "starting" ]]; then
+      [[ -n "$health_file" ]] && write_observer_health_state "$health_file" "restarted" "observer service was restarted automatically" "$prior_attempt_count" "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" "${pane_id:-$restart_pane_id}" "$heartbeat_at" "${heartbeat_age:-0}" || true
+      log "status" "Backstage observer restarted"
+      LAST_OBSERVER_HEALTH_STATUS="restarted"
+      return 0
+    fi
+    [[ -n "$health_file" ]] && write_observer_health_state "$health_file" "$pane_status" "$detail" "$prior_attempt_count" "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" "$pane_id" "$heartbeat_at" "${heartbeat_age:-0}" || true
+    LAST_OBSERVER_HEALTH_STATUS="$pane_status"
+    return 0
+  fi
+
+  if (( elapsed < OBSERVER_RESTART_COOLDOWN )); then
+    [[ -n "$health_file" ]] && write_observer_health_state "$health_file" "$pane_status" "$detail" "$prior_attempt_count" "$prior_attempt_at" "$pane_id" "$heartbeat_at" "$heartbeat_age" || true
+    LAST_OBSERVER_HEALTH_STATUS="$pane_status"
+    return 0
+  fi
+
+  detail="Backstage window '$WAVEMILL_WINDOW_BACKSTAGE' cannot keep ${WAVEMILL_BACKSTAGE_OBSERVER_PANE_TITLE} healthy. Restart 'npx tsx tools/observer.ts --loop --json --repo-dir $REPO_DIR --session $SESSION' in tmux."
+  [[ -n "$health_file" ]] && write_observer_health_state "$health_file" "needs-user" "$detail" "$prior_attempt_count" "$prior_attempt_at" "$pane_id" "$heartbeat_at" "$heartbeat_age" || true
+  if [[ "$LAST_OBSERVER_HEALTH_STATUS" != "needs-user" ]]; then
+    log_warn "$detail"
+  fi
+  LAST_OBSERVER_HEALTH_STATUS="needs-user"
+}
+
 while :; do
   # ── Phase A: Monitor existing tasks ──────────────────────────────────
   _update_effective_max_parallel
@@ -13789,6 +13969,7 @@ while :; do
   done
   poll_challenge_jobs
   check_backstage_health
+  check_observer_health || true
   run_ready_watchdog_tick
   check_mill_pane_health
   wavemill_pr_cache_refresh
