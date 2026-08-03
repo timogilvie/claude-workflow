@@ -486,7 +486,7 @@ export function attachVerificationTelemetry(
     return;
   }
 
-  record.verificationTelemetry = telemetry;
+  record.verificationTelemetry = redactVerificationTelemetry(telemetry);
 }
 
 function classifyCheckFailure(command: string): VerificationTelemetryLocalExecution['first_failure_category'] {
@@ -512,8 +512,22 @@ function hashCheckOutput(logPath?: string): string | undefined {
   }
 
   try {
+    // Hash only a bounded excerpt to avoid run-specific noise (timestamps, etc)
+    // This makes identical failures produce the same fingerprint
+    const { readFileSync, existsSync } = require('fs');
+    if (!existsSync(logPath)) {
+      return undefined;
+    }
     const content = readFileSync(logPath, 'utf-8');
-    return createHash('sha256').update(redactText(content)).digest('hex');
+    const lines = content.split('\n');
+
+    // Use first 50 and last 50 lines (matching extractBoundedLogExcerpt default)
+    const captureLines = 50;
+    const excerpt = lines.length <= captureLines * 2
+      ? content
+      : lines.slice(0, captureLines).concat(lines.slice(-captureLines)).join('\n');
+
+    return createHash('sha256').update(redactText(excerpt)).digest('hex');
   } catch {
     return undefined;
   }
@@ -558,8 +572,8 @@ export function buildVerificationTelemetryFromArtifact(
     },
     local_verification: localVerification,
     timeline: {
-      local_start: artifact.timestamp,
-      local_end: artifact.timestamp,
+      local_start: artifact.startTime,
+      local_end: artifact.endTime,
     },
   };
 

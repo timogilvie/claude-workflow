@@ -1,0 +1,10 @@
+{"seq":0,"sessionId":"empty-final-planning-HOK-2313","timestamp":1785788120134,"type":"session_started","model":"scripted:launch-planning-empty-final-12","api":"launch-planning-empty-final-12","provider":"scripted","worktreePath":"/var/folders/0v/2l0qx62n3tgf2p_32p6_0_ww0000gn/T/native-planning-wt-HOeiPb"}
+{"seq":1,"sessionId":"empty-final-planning-HOK-2313","timestamp":1785788120137,"type":"turn_started","turnIndex":0}
+{"seq":2,"sessionId":"empty-final-planning-HOK-2313","timestamp":1785788120138,"type":"assistant_message","model":"scripted:launch-planning-empty-final-12","stopReason":"stop","rawContent":[],"replayContent":[],"redacted":true,"usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}}}
+{"seq":3,"sessionId":"empty-final-planning-HOK-2313","timestamp":1785788120138,"type":"turn_ended","turnIndex":0,"stopReason":"stop","toolResultCount":0}
+{"seq":4,"sessionId":"empty-final-planning-HOK-2313","timestamp":1785788120138,"type":"session_ended","messageCount":1}
+{"seq":0,"sessionId":"empty-final-planning-HOK-2313","timestamp":1785788683882,"type":"session_started","model":"scripted:launch-planning-empty-final-12","api":"launch-planning-empty-final-12","provider":"scripted","worktreePath":"/var/folders/0v/2l0qx62n3tgf2p_32p6_0_ww0000gn/T/native-planning-wt-7dxDYF"}
+{"seq":1,"sessionId":"empty-final-planning-HOK-2313","timestamp":1785788683883,"type":"turn_started","turnIndex":0}
+{"seq":2,"sessionId":"empty-final-planning-HOK-2313","timestamp":1785788683883,"type":"assistant_message","model":"scripted:launch-planning-empty-final-12","stopReason":"stop","rawContent":[],"replayContent":[],"redacted":true,"usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}}}
+{"seq":3,"sessionId":"empty-final-planning-HOK-2313","timestamp":1785788683883,"type":"turn_ended","turnIndex":0,"stopReason":"stop","toolResultCount":0}
+{"seq":4,"sessionId":"empty-final-planning-HOK-2313","timestamp":1785788683883,"type":"session_ended","messageCount":1}

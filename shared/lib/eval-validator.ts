@@ -321,6 +321,14 @@ export function validateEvalRecord(
 
   issues.push(...collectStageModelIssues(record, opts, recordId));
 
+  // Validate verification telemetry if present
+  const telemetryDiagnostics = validateVerificationTelemetry({ verificationTelemetry: record.verificationTelemetry });
+  for (const diagnostic of telemetryDiagnostics) {
+    if (diagnostic.severity === 'error') {
+      issues.push(makeIssue('SCHEMA_VIOLATION', opts, `${diagnostic.field}: ${diagnostic.message}`, recordId));
+    }
+  }
+
   if (
     record.score === null ||
     !isNonEmptyString(record.rationale)

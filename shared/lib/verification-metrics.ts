@@ -68,18 +68,19 @@ function median(values: number[]): number | null {
 
 function computeFirstGreenRate(records: EvalRecord[]): number | null {
   const remoteRuns = records.filter((record) =>
-    record.verificationTelemetry?.remote_ci_verdict?.ran === true,
+    record.verificationTelemetry?.remote_ci_verdict?.ran === true
+    && (record.verificationTelemetry.remote_ci_verdict.check_count ?? 0) >= 1,
   );
   const firstGreen = remoteRuns.filter((record) =>
-    record.verificationTelemetry?.remote_ci_verdict?.passed === true
-    && (record.verificationTelemetry.remote_ci_verdict.check_count ?? 0) >= 1,
+    record.verificationTelemetry?.remote_ci_verdict?.passed === true,
   );
   return percent(firstGreen.length, remoteRuns.length);
 }
 
 function computeDetectionRate(records: EvalRecord[]): number | null {
   const remoteFailures = records.filter((record) =>
-    record.verificationTelemetry?.remote_ci_verdict?.passed === false,
+    record.verificationTelemetry?.remote_ci_verdict?.passed === false
+    && record.verificationTelemetry.remote_ci_verdict.remote_only_failure !== undefined,
   );
   const locallyDetected = remoteFailures.filter((record) =>
     record.verificationTelemetry?.remote_ci_verdict?.remote_only_failure === false,
@@ -89,10 +90,11 @@ function computeDetectionRate(records: EvalRecord[]): number | null {
 
 function computeRemediationRate(records: EvalRecord[]): number | null {
   const remoteFailures = records.filter((record) =>
-    record.verificationTelemetry?.remote_ci_verdict?.passed === false,
+    record.verificationTelemetry?.remote_ci_verdict?.passed === false
+    && record.verificationTelemetry.remediation?.remote_fix_outcome !== undefined,
   );
   const remediated = remoteFailures.filter((record) =>
-    record.verificationTelemetry?.remediation?.remote_fix_required === true,
+    record.verificationTelemetry?.remediation?.remote_fix_outcome === 'fixed',
   );
   return percent(remediated.length, remoteFailures.length);
 }
@@ -100,8 +102,8 @@ function computeRemediationRate(records: EvalRecord[]): number | null {
 function computeMedianTimeToGreen(records: EvalRecord[]): number | null {
   const durations = records.flatMap((record) => {
     const timeline = record.verificationTelemetry?.timeline;
-    const start = validTimestamp(timeline?.local_start);
-    const green = validTimestamp(timeline?.remote_ci_first_green);
+    const start = typeof timeline?.local_start === 'number' ? timeline.local_start : validTimestamp(timeline?.local_start as unknown as string);
+    const green = typeof timeline?.remote_ci_first_green === 'number' ? timeline.remote_ci_first_green : validTimestamp(timeline?.remote_ci_first_green as unknown as string);
     if (start === null || green === null || green < start) {
       return [];
     }
