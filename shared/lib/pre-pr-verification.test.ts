@@ -4,7 +4,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   runVerificationRecipe,
@@ -115,7 +115,7 @@ test('writeVerificationArtifact: writes atomic artifact', () => {
       baseSha: 'def456',
     });
 
-    assert(require('fs').existsSync(artifactPath));
+    assert(existsSync(artifactPath));
     const content = readFileSync(artifactPath, 'utf-8');
     const artifact = JSON.parse(content);
 

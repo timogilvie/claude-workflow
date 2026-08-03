@@ -240,7 +240,7 @@ test('getCompatibilityBehavior: allows unconfigured by default', () => {
 
 test('getCompatibilityBehavior: blocks when mode is "block"', () => {
   const behavior = getCompatibilityBehavior(
-    { enabled: false, recipe: { commands: [], compatibility: { mode: 'block' } } },
+    { enabled: false, recipe: { commands: [] }, compatibility: { mode: 'block' } },
     false,
   );
   assert.equal(behavior, 'block');

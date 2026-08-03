@@ -7,7 +7,7 @@
 
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { PrePrVerificationConfigSchema } from './config.ts';
+import type { PrePrVerificationConfigSchema } from './config.ts';
 import {
   readAndValidateArtifact,
   getRemediationGuidance,
@@ -117,7 +117,17 @@ export function checkPrePrVerificationGate(
     };
   }
 
-  // Check 7: Did verification pass?
+  // Check 7: Operator override present? (takes precedence over pass/fail)
+  if (artifact.overriddenBy) {
+    return {
+      passed: true,
+      artifact,
+      reason: `Verification passed (overridden by ${artifact.overriddenBy.operator})`,
+      recommendation: 'Override recorded in artifact metadata.',
+    };
+  }
+
+  // Check 8: Did verification pass?
   if (artifact.overallStatus !== 'pass') {
     const remediationGuidance = getRemediationGuidance({
       status: artifact.overallStatus,
@@ -133,16 +143,6 @@ export function checkPrePrVerificationGate(
         `The following verification command failed:\n\n` +
         `${remediationGuidance}\n\n` +
         `Fix the issue and re-run:\n  npx tsx tools/run-pre-pr-verification.ts --force`,
-    };
-  }
-
-  // Check 8: Operator override present?
-  if (artifact.overriddenBy) {
-    return {
-      passed: true,
-      artifact,
-      reason: `Verification passed (overridden by ${artifact.overriddenBy.operator})`,
-      recommendation: 'Override recorded in artifact metadata.',
     };
   }
 

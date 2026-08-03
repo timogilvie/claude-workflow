@@ -3,7 +3,7 @@
  * Prevents corruption from concurrent writes or unexpected termination.
  */
 
-import { writeFileSync, mkdirSync, renameSync } from 'node:fs';
+import { writeFileSync, mkdirSync, renameSync, unlinkSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 
@@ -49,7 +49,7 @@ export async function writeArtifactAtomic(
   } catch (err) {
     // Best-effort cleanup of temp file on error
     try {
-      require('fs').unlinkSync(tempFile);
+      unlinkSync(tempFile);
     } catch {
       // Ignore cleanup errors
     }
@@ -88,7 +88,7 @@ export function writeArtifactAtomicSync(
   } catch (err) {
     // Best-effort cleanup of temp file on error
     try {
-      require('fs').unlinkSync(tempFile);
+      unlinkSync(tempFile);
     } catch {
       // Ignore cleanup errors
     }
