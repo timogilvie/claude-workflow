@@ -225,6 +225,122 @@ function collectStageModelIssues(
   return issues;
 }
 
+/**
+ * Detect common secret patterns in strings.
+ */
+function hasSecretPatterns(s: string): boolean {
+  const secretPatterns = [
+    /password\s*[:=]/i,
+    /api[_-]?key\s*[:=]/i,
+    /token\s*[:=]/i,
+    /secret\s*[:=]/i,
+    /credentials\s*[:=]/i,
+    /bearer\s+[a-z0-9]+/i,
+  ];
+  return secretPatterns.some((pattern) => pattern.test(s));
+}
+
+/**
+ * Validate verification telemetry fields if present.
+ * Returns validation issues if telemetry is malformed.
+ */
+function validateVerificationTelemetry(
+  telemetry: unknown,
+  opts: ValidationLocation,
+  recordId: string | undefined,
+): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+
+  if (!telemetry || typeof telemetry !== 'object') {
+    return issues;
+  }
+
+  const t = telemetry as Record<string, unknown>;
+
+  // Validate SHAs
+  if (t.verifiedHeadSha && typeof t.verifiedHeadSha === 'string') {
+    if (!/^[a-f0-9]{40}$/.test(t.verifiedHeadSha)) {
+      issues.push(
+        makeIssue('SCHEMA_VIOLATION', opts, 'verificationTelemetry.verifiedHeadSha: Invalid SHA-1 hash', recordId),
+      );
+    }
+  }
+  if (t.verifiedBaseSha && typeof t.verifiedBaseSha === 'string') {
+    if (!/^[a-f0-9]{40}$/.test(t.verifiedBaseSha)) {
+      issues.push(
+        makeIssue('SCHEMA_VIOLATION', opts, 'verificationTelemetry.verifiedBaseSha: Invalid SHA-1 hash', recordId),
+      );
+    }
+  }
+
+  // Validate timestamps
+  if (t.startedAt && typeof t.startedAt === 'string') {
+    if (isNaN(Date.parse(t.startedAt))) {
+      issues.push(
+        makeIssue('SCHEMA_VIOLATION', opts, 'verificationTelemetry.startedAt: Invalid ISO 8601 timestamp', recordId),
+      );
+    }
+  }
+  if (t.completedAt && typeof t.completedAt === 'string') {
+    if (isNaN(Date.parse(t.completedAt))) {
+      issues.push(
+        makeIssue('SCHEMA_VIOLATION', opts, 'verificationTelemetry.completedAt: Invalid ISO 8601 timestamp', recordId),
+      );
+    }
+  }
+
+  // Validate duration bounds
+  if (t.summary && typeof t.summary === 'object') {
+    const summary = t.summary as Record<string, unknown>;
+    if (summary.totalTimeSeconds !== undefined) {
+      const val = summary.totalTimeSeconds as number;
+      if (typeof val === 'number' && (val < 0 || val > 86400)) {
+        issues.push(
+          makeIssue('SCHEMA_VIOLATION', opts, 'verificationTelemetry.summary.totalTimeSeconds: Must be 0-86400', recordId),
+        );
+      }
+    }
+  }
+
+  // Validate CI verdict time
+  if (t.firstCiVerdict && typeof t.firstCiVerdict === 'object') {
+    const verdict = t.firstCiVerdict as Record<string, unknown>;
+    if (verdict.timeToVerdictSeconds !== undefined) {
+      const val = verdict.timeToVerdictSeconds as number;
+      if (typeof val === 'number' && (val < 0 || val > 86400)) {
+        issues.push(
+          makeIssue('SCHEMA_VIOLATION', opts, 'verificationTelemetry.firstCiVerdict.timeToVerdictSeconds: Must be 0-86400', recordId),
+        );
+      }
+    }
+  }
+
+  // Validate no secrets in failure reasons
+  if (t.commands && Array.isArray(t.commands)) {
+    for (let i = 0; i < (t.commands as unknown[]).length; i++) {
+      const cmd = (t.commands as Record<string, unknown>[])[i];
+      if (cmd && typeof cmd === 'object' && cmd.failureReason && typeof cmd.failureReason === 'string') {
+        if (hasSecretPatterns(cmd.failureReason)) {
+          issues.push(
+            makeIssue('SCHEMA_VIOLATION', opts, `verificationTelemetry.commands[${i}].failureReason: Contains secret patterns`, recordId),
+          );
+        }
+      }
+    }
+  }
+
+  // Validate fingerprint length
+  if (t.failedCheckFingerprint && typeof t.failedCheckFingerprint === 'string') {
+    if (t.failedCheckFingerprint.length > 256) {
+      issues.push(
+        makeIssue('SCHEMA_VIOLATION', opts, 'verificationTelemetry.failedCheckFingerprint: Must be <= 256 chars', recordId),
+      );
+    }
+  }
+
+  return issues;
+}
+
 export function validateEvalRecord(
   record: unknown,
   opts: ValidationLocation,
@@ -300,6 +416,9 @@ export function validateEvalRecord(
       ),
     );
   }
+
+  // Validate verification telemetry if present
+  issues.push(...validateVerificationTelemetry(record.verificationTelemetry, opts, recordId));
 
   return issues;
 }
