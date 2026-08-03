@@ -42,6 +42,7 @@ import type {
   RubricDeterminativeBoundary,
   FeatureOutcomeDiagnostics,
 } from './eval-schema.ts';
+import type { VerificationTelemetry } from './verification-telemetry-types.ts';
 import type { DifficultyAnalysis } from './difficulty-analyzer.ts';
 import type { ChallengeRouteContext } from './challenge-mode.ts';
 import type {
@@ -118,6 +119,8 @@ export interface EvalRecordMetadata {
   featureOutcomeDiagnostics?: FeatureOutcomeDiagnostics | null;
   /** First-class planner/reviewer stage evidence for challenge evals. */
   challengeStageEval?: ChallengeStageEval | null;
+  /** Verification telemetry from pre-PR verification + first CI lifecycle */
+  verificationTelemetry?: VerificationTelemetry | null;
 }
 
 /** Richer eval metadata attachment used by training-facing eval entrypoints. */
@@ -839,6 +842,210 @@ function hasBudgetSnapshot(record: EvalRecord): boolean {
 }
 
 /**
+ * Remove common secret patterns from strings.
+ * Matches API keys, tokens, passwords (basic patterns).
+ */
+function removeSecretsFromString(s: string): string {
+  if (typeof s !== 'string') {
+    return '';
+  }
+  return s
+    .replace(/token[=:]\S+/gi, 'token=[REDACTED]')
+    .replace(/password[=:]\S+/gi, 'password=[REDACTED]')
+    .replace(/secret[=:]\S+/gi, 'secret=[REDACTED]')
+    .replace(/key[=:]\S+/gi, 'key=[REDACTED]')
+    .replace(/api[_-]?key[=:]\S+/gi, 'api_key=[REDACTED]')
+    .replace(/bearer\s+\S+/gi, 'bearer [REDACTED]')
+    .replace(/authorization[=:]\S+/gi, 'authorization=[REDACTED]')
+    .slice(0, 512);
+}
+
+/**
+ * Sanitize telemetry data for storage and export.
+ * - Validates duration bounds
+ * - Truncates long strings
+ * - Removes sensitive data patterns
+ */
+function sanitizeVerificationTelemetry(
+  telemetry: VerificationTelemetry,
+): VerificationTelemetry {
+  const sanitized: VerificationTelemetry = {};
+
+  // Copy scalar fields with validation
+  if (telemetry.contractSource && typeof telemetry.contractSource === 'string') {
+    sanitized.contractSource = telemetry.contractSource.slice(0, 128);
+  }
+  if (telemetry.contractVersion && typeof telemetry.contractVersion === 'string') {
+    sanitized.contractVersion = telemetry.contractVersion.slice(0, 32);
+  }
+  if (telemetry.verifiedHeadSha && typeof telemetry.verifiedHeadSha === 'string') {
+    sanitized.verifiedHeadSha = telemetry.verifiedHeadSha.slice(0, 40);
+  }
+  if (telemetry.verifiedBaseSha && typeof telemetry.verifiedBaseSha === 'string') {
+    sanitized.verifiedBaseSha = telemetry.verifiedBaseSha.slice(0, 40);
+  }
+  if (telemetry.startedAt && typeof telemetry.startedAt === 'string') {
+    sanitized.startedAt = telemetry.startedAt;
+  }
+  if (telemetry.completedAt && typeof telemetry.completedAt === 'string') {
+    sanitized.completedAt = telemetry.completedAt;
+  }
+
+  // Sanitize commands array
+  if (Array.isArray(telemetry.commands)) {
+    sanitized.commands = telemetry.commands.map((cmd) => ({
+      index: typeof cmd.index === 'number' ? Math.max(1, Math.min(cmd.index, 1000)) : 1,
+      commandName: typeof cmd.commandName === 'string' ? cmd.commandName.slice(0, 512) : '',
+      status: (
+        ['pass', 'fail', 'timeout', 'error'].includes(cmd.status)
+          ? cmd.status
+          : 'error'
+      ) as 'pass' | 'fail' | 'timeout' | 'error',
+      exitCode: typeof cmd.exitCode === 'number' ? Math.floor(cmd.exitCode) : undefined,
+      durationMs: typeof cmd.durationMs === 'number'
+        ? Math.max(0, Math.min(cmd.durationMs, 24 * 3600 * 1000))
+        : undefined,
+      failureReason: cmd.failureReason
+        ? removeSecretsFromString(cmd.failureReason).slice(0, 256)
+        : undefined,
+    }));
+  }
+
+  // Copy summary
+  if (telemetry.summary) {
+    sanitized.summary = {
+      totalCommands:
+        typeof telemetry.summary.totalCommands === 'number'
+          ? Math.max(0, telemetry.summary.totalCommands)
+          : 0,
+      passedCommands:
+        typeof telemetry.summary.passedCommands === 'number'
+          ? Math.max(0, telemetry.summary.passedCommands)
+          : 0,
+      failedCommands:
+        typeof telemetry.summary.failedCommands === 'number'
+          ? Math.max(0, telemetry.summary.failedCommands)
+          : 0,
+      timeoutCommands:
+        typeof telemetry.summary.timeoutCommands === 'number'
+          ? Math.max(0, telemetry.summary.timeoutCommands)
+          : 0,
+      overallStatus: (
+        ['pass', 'fail', 'timeout', 'error'].includes(telemetry.summary.overallStatus)
+          ? telemetry.summary.overallStatus
+          : 'error'
+      ) as 'pass' | 'fail' | 'timeout' | 'error',
+      totalTimeSeconds:
+        typeof telemetry.summary.totalTimeSeconds === 'number'
+          ? Math.max(0, Math.min(telemetry.summary.totalTimeSeconds, 86400))
+          : undefined,
+      wasOverridden:
+        typeof telemetry.summary.wasOverridden === 'boolean'
+          ? telemetry.summary.wasOverridden
+          : undefined,
+    };
+  }
+
+  // Copy CI verdict
+  if (telemetry.firstCiVerdict) {
+    sanitized.firstCiVerdict = {
+      startedAt: telemetry.firstCiVerdict.startedAt,
+      concludedAt: telemetry.firstCiVerdict.concludedAt,
+      status: (
+        ['pass', 'fail', 'timeout', 'error'].includes(telemetry.firstCiVerdict.status)
+          ? telemetry.firstCiVerdict.status
+          : 'error'
+      ) as 'pass' | 'fail' | 'timeout' | 'error',
+      timeToVerdictSeconds:
+        typeof telemetry.firstCiVerdict.timeToVerdictSeconds === 'number'
+          ? Math.max(0, Math.min(telemetry.firstCiVerdict.timeToVerdictSeconds, 86400))
+          : undefined,
+      workflowRunId: telemetry.firstCiVerdict.workflowRunId?.slice(0, 64),
+      ciLogsUrl: telemetry.firstCiVerdict.ciLogsUrl?.slice(0, 2048),
+    };
+  }
+
+  // Copy failure categorization
+  if (telemetry.failedCheckFingerprint && typeof telemetry.failedCheckFingerprint === 'string') {
+    sanitized.failedCheckFingerprint = telemetry.failedCheckFingerprint.slice(0, 256);
+  }
+  if (telemetry.failureCategory && typeof telemetry.failureCategory === 'string') {
+    sanitized.failureCategory = telemetry.failureCategory.slice(0, 64);
+  }
+  if (typeof telemetry.remoteOnlyFailure === 'boolean') {
+    sanitized.remoteOnlyFailure = telemetry.remoteOnlyFailure;
+  }
+
+  // Copy remediation attempts
+  if (Array.isArray(telemetry.remediation)) {
+    sanitized.remediation = telemetry.remediation.map((attempt) => ({
+      attemptNumber:
+        typeof attempt.attemptNumber === 'number'
+          ? Math.max(1, Math.min(attempt.attemptNumber, 100))
+          : 1,
+      description:
+        typeof attempt.description === 'string'
+          ? attempt.description.slice(0, 512)
+          : '',
+      outcome: (
+        ['passed', 'still_failing', 'timed_out'].includes(attempt.outcome)
+          ? attempt.outcome
+          : 'still_failing'
+      ) as 'passed' | 'still_failing' | 'timed_out',
+      delaySeconds:
+        typeof attempt.delaySeconds === 'number'
+          ? Math.max(0, Math.min(attempt.delaySeconds, 86400))
+          : undefined,
+      durationSeconds:
+        typeof attempt.durationSeconds === 'number'
+          ? Math.max(0, Math.min(attempt.durationSeconds, 86400))
+          : undefined,
+    }));
+  }
+
+  // Copy operator override (preserved for audit, redacted on export)
+  if (telemetry.operatorOverride) {
+    sanitized.operatorOverride = {
+      reason:
+        typeof telemetry.operatorOverride.reason === 'string'
+          ? telemetry.operatorOverride.reason.slice(0, 256)
+          : '',
+      operator:
+        typeof telemetry.operatorOverride.operator === 'string'
+          ? telemetry.operatorOverride.operator.slice(0, 256)
+          : '',
+      timestamp: telemetry.operatorOverride.timestamp,
+    };
+  }
+
+  return sanitized;
+}
+
+/**
+ * Attach verification telemetry to eval record.
+ *
+ * Skips gracefully if telemetry is undefined (null-safe).
+ * Sanitizes telemetry data:
+ * - Redacts raw command logs
+ * - Validates duration bounds
+ * - Truncates long strings
+ *
+ * @param record The eval record to enrich
+ * @param telemetry Verification telemetry (optional)
+ */
+export function attachVerificationTelemetry(
+  record: EvalRecord,
+  telemetry?: VerificationTelemetry | null,
+): void {
+  if (!telemetry) {
+    return;
+  }
+
+  const sanitized = sanitizeVerificationTelemetry(telemetry);
+  record.verificationTelemetry = sanitized;
+}
+
+/**
  * Compute deterministic eligibility diagnostics for downstream exports.
  */
 export function computeEligibility(record: EvalRecord): {
@@ -1374,6 +1581,7 @@ export function enrichTrainingMetadata(
     attachRubricEval(record, metadata.rubricEval);
   }
   attachFeatureOutcomeDiagnostics(record, metadata.featureOutcomeDiagnostics ?? null);
+  attachVerificationTelemetry(record, metadata.verificationTelemetry);
   attachManifestRef(record, process.env.WAVEMILL_SESSION, undefined);
   attachResourceSelections(record);
   attachEnrichmentDiagnostics(record);
