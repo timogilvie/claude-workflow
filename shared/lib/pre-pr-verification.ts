@@ -56,6 +56,10 @@ export function runVerificationRecipe(
   mkdirSync(logDir, { recursive: true });
 
   const timeoutSeconds = recipe.timeoutSeconds ?? 300;
+  const runStart = Date.now();
+
+  // Cap on-disk log size (~64KB per command) so we never balloon .wavemill.
+  const MAX_LOG_BYTES = 64 * 1024;
 
   for (let index = 0; index < recipe.commands.length; index++) {
     const command = recipe.commands[index];
@@ -64,31 +68,34 @@ export function runVerificationRecipe(
 
     let status: CommandResult['status'] = 'pass';
     let exitCode: number | undefined;
-    let output = '';
+    let stdout = '';
+    let stderr = '';
     let failureReason: string | undefined;
 
     try {
-      // Execute command with timeout (in milliseconds)
-      const timeoutMs = (timeoutSeconds ?? 300) * 1000;
+      // Execute command with timeout (in milliseconds). Capture stdout and
+      // stderr separately so failure diagnostics survive.
+      const timeoutMs = timeoutSeconds * 1000;
       try {
-        output = childExecSync(command, {
+        const buf = childExecSync(command, {
           cwd,
-          stdio: 'pipe',
+          stdio: ['ignore', 'pipe', 'pipe'],
           encoding: 'utf-8',
           timeout: timeoutMs,
-          shell: true,
+          shell: '/bin/sh',
         });
+        stdout = typeof buf === 'string' ? buf : String(buf);
         exitCode = 0;
       } catch (err) {
         const execErr = err as any;
-        if (execErr.killed || execErr.signal) {
+        stdout = typeof execErr.stdout === 'string' ? execErr.stdout : (execErr.stdout?.toString?.() ?? '');
+        stderr = typeof execErr.stderr === 'string' ? execErr.stderr : (execErr.stderr?.toString?.() ?? '');
+        if (execErr.killed || execErr.signal === 'SIGTERM') {
           status = 'timeout';
           failureReason = `Command timed out after ${timeoutSeconds}s`;
-          output = execErr.stdout || '';
         } else {
           status = 'fail';
-          exitCode = execErr.status || 1;
-          output = execErr.stdout || '';
+          exitCode = typeof execErr.status === 'number' ? execErr.status : 1;
           failureReason = `Command exited with code ${exitCode}`;
         }
       }
@@ -99,8 +106,15 @@ export function runVerificationRecipe(
 
     const durationMs = Date.now() - startTime;
 
-    // Write log file with bounded content (first + last N lines)
-    const logCapture = `Command: ${command}\nExit Code: ${exitCode ?? 'N/A'}\n\n${output}`;
+    // Write bounded log capture: command header + stdout + stderr, truncated
+    // to MAX_LOG_BYTES with a marker if we dropped content.
+    let logCapture =
+      `Command: ${command}\nExit Code: ${exitCode ?? 'N/A'}\n\n` +
+      `--- STDOUT ---\n${stdout}\n--- STDERR ---\n${stderr}\n`;
+    if (Buffer.byteLength(logCapture, 'utf-8') > MAX_LOG_BYTES) {
+      const truncated = Buffer.from(logCapture, 'utf-8').subarray(0, MAX_LOG_BYTES).toString('utf-8');
+      logCapture = truncated + '\n[... log truncated to 64KB ...]\n';
+    }
     writeFileSync(logFile, logCapture, 'utf-8');
 
     const result: CommandResult = {
@@ -129,7 +143,7 @@ export function runVerificationRecipe(
   return {
     status: overallStatus,
     commands,
-    startTime: Date.now() - (commands[0]?.durationMs || 0),
+    startTime: runStart,
     endTime: Date.now(),
   };
 }

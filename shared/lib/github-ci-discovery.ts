@@ -200,7 +200,7 @@ export async function getWorkflowJobs(repo: string): Promise<WorkflowJob[]> {
   try {
     const workflows = await retryWithBackoff(async () => {
       const output = execSync(
-        `gh api repos/${repo}/actions/workflows --jq '.workflows[] | {path: .path, name: .name}' 2>&1`,
+        `gh api repos/${repo}/actions/workflows --jq '[.workflows[] | {path: .path, name: .name}]' 2>&1`,
         { encoding: 'utf-8' },
       );
       return JSON.parse(output);

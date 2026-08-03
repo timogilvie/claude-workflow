@@ -4,7 +4,7 @@
  */
 
 import { writeFileSync, mkdirSync, renameSync, unlinkSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 
 /**
@@ -30,7 +30,7 @@ export async function writeArtifactAtomic(
   data: unknown,
 ): Promise<void> {
   const dir = dirname(filePath);
-  const filename = filePath.split('/').pop();
+  const filename = basename(filePath);
   const randomSuffix = randomBytes(4).toString('hex');
   const tempFile = join(dir, `.${filename}.${randomSuffix}.tmp`);
 
@@ -69,7 +69,7 @@ export function writeArtifactAtomicSync(
   data: unknown,
 ): void {
   const dir = dirname(filePath);
-  const filename = filePath.split('/').pop();
+  const filename = basename(filePath);
   const randomSuffix = randomBytes(4).toString('hex');
   const tempFile = join(dir, `.${filename}.${randomSuffix}.tmp`);
 

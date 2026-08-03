@@ -14,9 +14,8 @@
  */
 
 import { resolve, join } from 'node:path';
-import { existsSync } from 'node:fs';
 import { execSync } from 'node:child_process';
-import { getPrePrVerificationConfig } from '../shared/lib/config.ts';
+import { getPrePrVerificationConfig, getIntegrationConfig } from '../shared/lib/config.ts';
 import {
   runVerificationRecipe,
   writeVerificationArtifact,
@@ -93,27 +92,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Check if artifact is fresh (skip if --force)
-  if (!opts.force && !opts.dryRun) {
-    const artifactPath = join(opts.stateDir, '.wavemill/pre-pr-verification/artifact.json');
-    const { artifact } = readAndValidateArtifact(artifactPath);
-
-    if (artifact) {
-      const staleTtl = (config.staleTtlSeconds ?? 3600) * 1000;
-      const age = Date.now() - new Date(artifact.timestamp).getTime();
-
-      if (age < staleTtl && artifact.overallStatus === 'pass') {
-        if (!opts.json) {
-          console.log('✓ Verification artifact is fresh and valid.');
-        } else {
-          console.log(JSON.stringify({ status: 'pass', fresh: true }));
-        }
-        process.exit(0);
-      }
-    }
-  }
-
-  // Dry-run: show commands without executing
+  // Dry-run: show commands without executing (before git state resolution)
   if (opts.dryRun) {
     if (!opts.json) {
       console.log('📋 Verification recipe (dry-run):');
@@ -134,14 +113,18 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
-  // Get current git state
-  let headSha: string | undefined;
-  let baseSha: string | undefined;
-  let workingBranch: string | undefined;
+  // Resolve the controller's configured base branch (not hard-coded main).
+  const integration = getIntegrationConfig(opts.stateDir);
+  const baseBranch = integration.integrationBranch || 'auto/integration';
 
+  // Get current git state. Fail fast if unavailable — the artifact's
+  // whole purpose is SHA-anchored freshness.
+  let headSha: string;
+  let baseSha: string;
+  let workingBranch: string;
   try {
     headSha = execSync('git rev-parse HEAD', { cwd: opts.stateDir, encoding: 'utf-8' }).trim();
-    baseSha = execSync('git merge-base HEAD origin/main', {
+    baseSha = execSync(`git merge-base HEAD ${baseBranch}`, {
       cwd: opts.stateDir,
       encoding: 'utf-8',
     }).trim();
@@ -149,8 +132,38 @@ async function main(): Promise<void> {
       cwd: opts.stateDir,
       encoding: 'utf-8',
     }).trim();
-  } catch {
-    // Git state unavailable — continue anyway
+  } catch (err) {
+    const msg = (err as Error).message;
+    if (!opts.json) {
+      console.error(`✗ Unable to resolve git state against base '${baseBranch}': ${msg}`);
+    } else {
+      console.log(JSON.stringify({ error: 'git_state_unavailable', baseBranch, message: msg }));
+    }
+    process.exit(1);
+  }
+
+  // Check if artifact is fresh AND matches current HEAD/base (skip if --force).
+  if (!opts.force) {
+    const artifactPath = join(opts.stateDir, '.wavemill/pre-pr-verification/artifact.json');
+    const { artifact, isValid, shasMismatch } = readAndValidateArtifact(
+      artifactPath,
+      headSha,
+      baseSha,
+    );
+
+    if (artifact && isValid && !shasMismatch) {
+      const staleTtl = (config.staleTtlSeconds ?? 3600) * 1000;
+      const age = Date.now() - new Date(artifact.timestamp).getTime();
+
+      if (age < staleTtl && artifact.overallStatus === 'pass') {
+        if (!opts.json) {
+          console.log('✓ Verification artifact is fresh, SHA-matched, and passing.');
+        } else {
+          console.log(JSON.stringify({ status: 'pass', fresh: true, headSha, baseSha }));
+        }
+        process.exit(0);
+      }
+    }
   }
 
   // Run recipe
@@ -192,16 +205,39 @@ async function main(): Promise<void> {
     console.log(JSON.stringify({ status: result.status, commands: result.commands }));
   }
 
-  // Write artifact
+  // Write artifact. Operator override requires a non-empty reason and a
+  // resolvable operator identity (env WAVEMILL_PRE_PR_OVERRIDE_OPERATOR
+  // takes precedence over $USER for controller-driven overrides).
   const artifactPath = join(opts.stateDir, '.wavemill/pre-pr-verification/artifact.json');
-  const operator = opts.override ? process.env.USER || 'unknown' : undefined;
-  const overriddenBy: OperatorOverride | undefined = opts.override
-    ? {
-        reason: opts.override,
-        timestamp: new Date().toISOString(),
-        operator,
+  let overriddenBy: OperatorOverride | undefined;
+  if (opts.override !== undefined) {
+    const reason = opts.override.trim();
+    if (!reason) {
+      if (!opts.json) {
+        console.error('✗ --override requires a non-empty reason.');
+      } else {
+        console.log(JSON.stringify({ error: 'override_reason_required' }));
       }
-    : undefined;
+      process.exit(1);
+    }
+    const operator =
+      process.env.WAVEMILL_PRE_PR_OVERRIDE_OPERATOR || process.env.USER;
+    if (!operator) {
+      if (!opts.json) {
+        console.error(
+          '✗ Unable to resolve override operator. Set WAVEMILL_PRE_PR_OVERRIDE_OPERATOR or USER.',
+        );
+      } else {
+        console.log(JSON.stringify({ error: 'override_operator_unresolved' }));
+      }
+      process.exit(1);
+    }
+    overriddenBy = {
+      reason,
+      timestamp: new Date().toISOString(),
+      operator,
+    };
+  }
 
   writeVerificationArtifact(result, artifactPath, {
     workingBranch,

@@ -222,7 +222,7 @@ export function isRemediable(result: GateCheckResult): boolean {
 
   // Artifact missing or stale → re-run can fix
   if (!result.artifact) {
-    return result.reason?.includes('stale') ?? true;
+    return true;
   }
 
   // Command failure → agent can fix code and re-run
