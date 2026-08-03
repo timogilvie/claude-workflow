@@ -271,6 +271,33 @@ test('valid config passes validation', () => {
   }
 });
 
+test('uses the schema checked out with the target worktree', () => {
+  const tmp = makeTempRepo();
+  try {
+    const schema = JSON.parse(
+      readFileSync(join(process.cwd(), 'wavemill-config.schema.json'), 'utf-8')
+    );
+    schema.properties.prePrVerification = {
+      type: 'object',
+      properties: { enabled: { type: 'boolean' } },
+      additionalProperties: false,
+    };
+    writeFileSync(
+      join(tmp, 'wavemill-config.schema.json'),
+      JSON.stringify(schema)
+    );
+    clearConfigCache();
+    writeFileSync(
+      join(tmp, '.wavemill-config.json'),
+      JSON.stringify({ prePrVerification: { enabled: true } })
+    );
+
+    assert.equal(loadWavemillConfig(tmp).prePrVerification?.enabled, true);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test('eval prompt size config loads through getEvalConfig', () => {
   const tmp = makeTempRepo();
   try {
