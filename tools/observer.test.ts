@@ -1,6 +1,7 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -44,6 +45,7 @@ test('repeated ready watchdog auto-recoveries escalate to actionable stuck findi
       dryRun: false,
       maxLogLines: 240,
       printPrompt: false,
+      incidents: false,
     });
 
     const stuck = findings.find((finding) => finding.id.startsWith('repeated-ready-watchdog-'));
@@ -103,6 +105,7 @@ test('service heartbeat is parseable and stores redacted finding counts only', a
       dryRun: true,
       maxLogLines: 240,
       printPrompt: false,
+      incidents: false,
       repoDir,
       session: 'wavemill-test',
       serviceMode: true,
@@ -125,3 +128,54 @@ test('observer redaction removes credentials and prompt-like evidence', () => {
     'OPENAI_API_KEY=[redacted] token=[redacted] prompt=[redacted]',
   );
 });
+
+test('observer parses incidents flags', () => {
+  const parsed = parseArgs(['--incidents', '--incident-thresholds-config', '/tmp/thresholds.json']);
+  assert.equal(parsed.incidents, true);
+  assert.equal(parsed.incidentThresholdsConfig, '/tmp/thresholds.json');
+});
+
+test('observer --incidents emits JSON incidents and keeps findings array', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'observer-incidents-'));
+  try {
+    const featureDir = join(repoDir, 'features', 'detect-failure');
+    writeJson(join(repoDir, '.wavemill', 'workflow-state.json'), {
+      tasks: {
+        'HOK-2595': { slug: 'detect-failure', worktree: repoDir, phase: 'planning', status: 'running', agent: 'codex' },
+      },
+    });
+    writeJson(join(featureDir, '.planning-result.json'), {
+      stage: 'planning',
+      status: 'failed',
+      startedAt: '2026-08-03T12:00:00.000Z',
+      finishedAt: '2026-08-03T12:05:00.000Z',
+      agent: 'codex',
+      model: 'gpt-5',
+      notes: '',
+      failureReason: 'turn_limit',
+      artifacts: { type: 'planning', planArtifactValid: false, bounds: { maxTurns: 5 }, usage: { turnsCompleted: 5 } },
+    });
+
+    const output = execFileSync('npx', [
+      'tsx',
+      resolve('tools/observer.ts'),
+      '--once',
+      '--json',
+      '--incidents',
+      '--repo-dir',
+      repoDir,
+    ], { encoding: 'utf-8', cwd: resolve('.') });
+    const snapshot = JSON.parse(output);
+    assert.equal(Array.isArray(snapshot.findings), true);
+    assert.equal(Array.isArray(snapshot.incidents), true);
+    assert.equal(snapshot.incidents[0].normalizedRootCauseClass, 'native_planning_turn_limit');
+    assert.equal(snapshot.incidents[0].issue, 'HOK-2595');
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+function writeJson(path: string, value: unknown): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, 'utf-8');
+}

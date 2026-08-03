@@ -5,6 +5,9 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mutateJsonState } from '../shared/lib/state-mutex.ts';
+import { detectIncidents } from '../shared/lib/wavemill-incident-detector.ts';
+import { recordIncident, type IncidentThresholds } from '../shared/lib/wavemill-incident-store.ts';
+import type { WavemillIncident } from '../shared/lib/wavemill-incident-model.ts';
 
 type Severity = 'urgent' | 'high' | 'medium' | 'low';
 type Category = 'stuck' | 'crash' | 'warning' | 'ux' | 'operational';
@@ -27,6 +30,8 @@ interface ObserverOptions {
   repoDir?: string;
   session?: string;
   serviceMode?: boolean;
+  incidents: boolean;
+  incidentThresholdsConfig?: string;
 }
 
 interface Pane {
@@ -101,6 +106,7 @@ interface ObserverSnapshot {
   processes: ProcessRow[];
   repos: RepoSnapshot[];
   findings: Finding[];
+  incidents?: WavemillIncident[];
 }
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -129,6 +135,9 @@ Options:
   --max-log-lines <n>    Recent mill log lines to inspect (default: 240)
   --repo-dir <path>      Limit service observation to one repository
   --session <name>       Limit service observation to one tmux session
+  --incidents            Detect and persist deduplicated incident records
+  --incident-thresholds-config <path>
+                         Override incident thresholds from JSON
   --print-prompt         Print the recommended long-running Codex prompt
   --help                 Show this help
 `;
@@ -147,6 +156,7 @@ export function parseArgs(argv: string[]): ObserverOptions {
     maxLogLines: 240,
     printPrompt: false,
     serviceMode: process.env.WAVEMILL_OBSERVER_SERVICE === '1',
+    incidents: false,
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -177,6 +187,12 @@ export function parseArgs(argv: string[]): ObserverOptions {
       options.dryRun = true;
     } else if (arg === '--print-prompt') {
       options.printPrompt = true;
+    } else if (arg === '--incidents') {
+      options.incidents = true;
+    } else if (arg === '--incident-thresholds-config') {
+      options.incidentThresholdsConfig = resolve(next());
+    } else if (arg.startsWith('--incident-thresholds-config=')) {
+      options.incidentThresholdsConfig = resolve(arg.slice('--incident-thresholds-config='.length));
     } else if (arg === '--interval') {
       options.intervalSeconds = parsePositiveInt(next(), arg);
     } else if (arg.startsWith('--interval=')) {
@@ -779,7 +795,7 @@ function dedupeFindings(findings: Finding[]): Finding[] {
   });
 }
 
-function observe(options: ObserverOptions): ObserverSnapshot {
+async function observe(options: ObserverOptions): Promise<ObserverSnapshot> {
   const sessions = listSessions().filter((session) => !options.session || session === options.session);
   const panes = listPanes().filter((pane) => !options.session || pane.session === options.session);
   const processes = filterRelevantProcesses(processRows(), panes);
@@ -791,10 +807,64 @@ function observe(options: ObserverOptions): ObserverSnapshot {
     processes,
     repos,
   };
-  return {
+  const snapshot: ObserverSnapshot = {
     ...partial,
     findings: buildFindings(partial, options),
   };
+  if (options.incidents) {
+    snapshot.incidents = await detectAndRecordIncidents(snapshot, options);
+  }
+  return snapshot;
+}
+
+async function detectAndRecordIncidents(snapshot: ObserverSnapshot, options: ObserverOptions): Promise<WavemillIncident[]> {
+  const thresholds = readIncidentThresholds(options);
+  const incidents: WavemillIncident[] = [];
+  for (const repo of snapshot.repos) {
+    const detected = await detectIncidents({
+      repoDir: repo.repoDir,
+      session: repo.session,
+      timeWindowMinutes: thresholds?.timeWindowMinutes,
+    });
+    for (const incident of detected) {
+      const stored = await recordIncident({ repoDir: repo.repoDir, thresholds }, incident);
+      incidents.push(stored.incident);
+    }
+  }
+  return dedupeIncidents(incidents);
+}
+
+function readIncidentThresholds(options: ObserverOptions): Partial<IncidentThresholds> | undefined {
+  if (!options.incidentThresholdsConfig) return undefined;
+  try {
+    const parsed = JSON.parse(readFileSync(options.incidentThresholdsConfig, 'utf-8')) as Record<string, unknown>;
+    const source = (parsed.thresholds && typeof parsed.thresholds === 'object')
+      ? parsed.thresholds as Record<string, unknown>
+      : parsed;
+    return {
+      repeatedFailureCount: positiveNumber(source.repeatedFailureCount ?? source.repeated_failure_count),
+      timeWindowMinutes: positiveNumber(source.timeWindowMinutes ?? source.time_window_minutes),
+      cooldownMinutes: nonNegativeNumber(source.cooldownMinutes ?? source.cooldown_minutes),
+    };
+  } catch (error) {
+    throw new Error(`Failed to read incident thresholds config: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function positiveNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function nonNegativeNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function dedupeIncidents(incidents: WavemillIncident[]): WavemillIncident[] {
+  const byFingerprint = new Map<string, WavemillIncident>();
+  for (const incident of incidents) {
+    byFingerprint.set(incident.fingerprint, incident);
+  }
+  return [...byFingerprint.values()];
 }
 
 interface BackstageHealthFile {
@@ -825,6 +895,19 @@ function redactSnapshot(snapshot: ObserverSnapshot): ObserverSnapshot {
     ...snapshot,
     processes: snapshot.processes.map((row) => ({ ...row, command: redactObserverText(row.command) })),
     findings: snapshot.findings.map(redactFinding),
+    incidents: snapshot.incidents?.map(redactIncident),
+  };
+}
+
+function redactIncident(incident: WavemillIncident): WavemillIncident {
+  return {
+    ...incident,
+    redactedSummary: redactObserverText(incident.redactedSummary),
+    recommendedAction: redactObserverText(incident.recommendedAction),
+    evidence: incident.evidence.map((item) => ({
+      ...item,
+      description: redactObserverText(item.description),
+    })),
   };
 }
 
@@ -875,6 +958,13 @@ function renderSummary(snapshot: ObserverSnapshot): string {
     `Active tasks: ${activeTasks.length}`,
     `Findings: urgent=${counts.urgent} high=${counts.high} medium=${counts.medium} low=${counts.low}`,
   ];
+  if (snapshot.incidents) {
+    const incidentCounts = snapshot.incidents.reduce<Record<string, number>>((acc, incident) => {
+      acc[incident.severity] = (acc[incident.severity] ?? 0) + 1;
+      return acc;
+    }, {});
+    lines.push(`Incidents: ${Object.entries(incidentCounts).map(([severity, count]) => `${severity}=${count}`).join(' ') || '0'}`);
+  }
   for (const finding of snapshot.findings.slice(0, 20)) {
     lines.push('');
     lines.push(`[${finding.severity}/${finding.category}/${finding.confidence}] ${finding.title}`);
@@ -890,6 +980,22 @@ function renderSummary(snapshot: ObserverSnapshot): string {
   if (snapshot.findings.length > 20) {
     lines.push('');
     lines.push(`... ${snapshot.findings.length - 20} additional finding(s) omitted from text summary`);
+  }
+  for (const incident of snapshot.incidents?.slice(0, 20) ?? []) {
+    lines.push('');
+    lines.push(`[INCIDENT] ${incident.category} (severity=${incident.severity}, confidence=${incident.confidence})`);
+    lines.push(`  Cause: ${incident.normalizedRootCauseClass}`);
+    lines.push(`  Summary: ${incident.redactedSummary}`);
+    lines.push(`  Action: ${incident.recommendedAction}`);
+    if (incident.issue) lines.push(`  issue: ${incident.issue}`);
+    lines.push(`  fingerprint: ${incident.fingerprint}`);
+    for (const item of incident.evidence.slice(0, 4)) {
+      lines.push(`  evidence: ${item.evidenceType}${item.path ? ` ${item.path}` : ''} - ${item.description}`);
+    }
+  }
+  if ((snapshot.incidents?.length ?? 0) > 20) {
+    lines.push('');
+    lines.push(`... ${(snapshot.incidents?.length ?? 0) - 20} additional incident(s) omitted from text summary`);
   }
   return `${lines.join('\n')}\n`;
 }
@@ -1058,7 +1164,8 @@ async function main(): Promise<void> {
   }
 
   do {
-    const snapshot = options.serviceMode ? redactSnapshot(observe(options)) : observe(options);
+    const rawSnapshot = await observe(options);
+    const snapshot = options.serviceMode ? redactSnapshot(rawSnapshot) : rawSnapshot;
     await writeServiceHeartbeat(snapshot, options);
     await fileLinearIssues(snapshot, options);
     if (options.json) {
