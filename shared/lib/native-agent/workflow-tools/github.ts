@@ -1,5 +1,5 @@
 import type { ToolDescriptor, WavemillToolResult } from '../tools/types.ts';
-import { getRedactionConfig } from '../../config.ts';
+import { getPrePrVerificationConfig, getRedactionConfig } from '../../config.ts';
 import { buildTrustMetadata } from '../provenance.ts';
 import { buildProfileFromConfig, redact } from '../../redaction-profiles.ts';
 import {
@@ -25,6 +25,11 @@ import {
 import {
   isMutationAllowed,
 } from './mutation-policy.ts';
+import {
+  findFeatureDirForBranch,
+  prePrArtifactPath,
+  validateArtifactFreshness,
+} from '../../pre-pr-verification.ts';
 import type {
   GitHubAddLabelRequest,
   GitHubAddLabelResult,
@@ -185,10 +190,33 @@ export async function githubCreatePr(
     return createPrError(network.error, network.message, network.diagnostics);
   }
 
+  let bodyWithPrePrMetadata = request.body;
+  if (input.repoDir) {
+    const prePrConfig = getPrePrVerificationConfig(input.repoDir);
+    if (prePrConfig?.enabled === true && prePrConfig.policy === 'required') {
+      const featureDir = findFeatureDirForBranch(input.repoDir, request.head);
+      if (!featureDir) {
+        return createPrError('policy_denied', 'pre-PR verification is required but the feature artifact directory was not found');
+      }
+      const freshness = await validateArtifactFreshness({
+        artifactPath: prePrArtifactPath(featureDir),
+        worktreeDir: input.repoDir,
+        baseRef: request.base,
+      });
+      if (freshness.reason !== 'passed') {
+        return createPrError('policy_denied', `pre-PR verification is required before PR creation: ${freshness.reason}`);
+      }
+      if (freshness.artifact?.override) {
+        const override = freshness.artifact.override;
+        bodyWithPrePrMetadata = `${request.body.trim()}\n\n**Pre-PR verification**: OVERRIDDEN by ${override.operator} - ${override.reason}`.trim();
+      }
+    }
+  }
+
   // Redact secrets from title and body before any external exposure or comparison.
   const profile = buildProfileFromConfig(() => input.getSecretEnvNames(input.repoDir));
   const safeTitle = redact(request.title, profile);
-  const safeBody = redact(request.body, profile);
+  const safeBody = redact(bodyWithPrePrMetadata, profile);
 
   const idempotencyKey = githubCreatePrKey({
     repo: request.repo,

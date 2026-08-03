@@ -16,6 +16,30 @@
     "retryDelay": 2,
     "defaultMaxCostUsd": 25
   },
+  "prePrVerification": {
+    "enabled": true,
+    "policy": "required",
+    "source": "github-enforced",
+    "requiredChecks": [],
+    "commands": [
+      {
+        "name": "pi-version",
+        "run": "npx tsx tools/check-pi-version.ts",
+        "timeoutSeconds": 60
+      },
+      {
+        "name": "unit",
+        "run": "npm test",
+        "timeoutSeconds": 1800
+      },
+      {
+        "name": "native-cert",
+        "run": "npm run test:native-launch-certification",
+        "timeoutSeconds": 1800
+      }
+    ],
+    "overallTimeoutSeconds": 3600
+  },
   "expand": {
     "maxSelect": 3,
     "maxDisplay": 9

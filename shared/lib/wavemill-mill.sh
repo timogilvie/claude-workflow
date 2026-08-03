@@ -4741,6 +4741,16 @@ wavemill_owned_feature_artifact_path() {
   local normalized_path="$1" slug="$2"
   local artifact_prefix="features/$slug/"
 
+  if [[ "$normalized_path" == "${artifact_prefix}.pre-pr-verification.json" ]]; then
+    return 0
+  fi
+  if [[ "$normalized_path" == "${artifact_prefix}.pre-pr-remediation-prompt.md" ]]; then
+    return 0
+  fi
+  if [[ "$normalized_path" == "${artifact_prefix}pre-pr-logs/"*.log ]]; then
+    return 0
+  fi
+
   if [[ "$normalized_path" == ${artifact_prefix}.* ]]; then
     return 0
   fi
@@ -4903,6 +4913,98 @@ guard_coding_complete_handoff() {
   set_window_attention_state "$win" "needs-user"
   active_count=$((active_count + 1))
   return 0
+}
+
+pre_pr_verification_policy() {
+  local worktree="$1"
+  jq -r '.prePrVerification.policy // "compatibility"' "$worktree/.wavemill-config.json" 2>/dev/null || printf 'compatibility\n'
+}
+
+pre_pr_verification_enabled() {
+  local worktree="$1"
+  jq -e '.prePrVerification.enabled == true and (.prePrVerification.policy // "compatibility") != "compatibility"' "$worktree/.wavemill-config.json" >/dev/null 2>&1
+}
+
+emit_pre_pr_migration_warning_once() {
+  local feature_dir="$1" issue="$2"
+  local marker="$feature_dir/.pre-pr-verification-migration-warning"
+  [[ -f "$marker" ]] && return 0
+  log_warn "$issue → prePrVerification is not configured, proceeding under compatibility policy"
+  : > "$marker"
+}
+
+write_pre_pr_remediation_prompt() {
+  local issue="$1" feature_dir="$2" artifact="$3"
+  local prompt="$feature_dir/.pre-pr-remediation-prompt.md"
+  local command exit_code excerpt log_path
+
+  command="$(jq -r '.commands[-1].run // empty' "$artifact" 2>/dev/null || true)"
+  exit_code="$(jq -r '.commands[-1].exitCode // empty' "$artifact" 2>/dev/null || true)"
+  log_path="$(jq -r '.commands[-1].logPath // empty' "$artifact" 2>/dev/null || true)"
+  excerpt="$(jq -r '.commands[-1].logExcerpt // empty' "$artifact" 2>/dev/null || true)"
+
+  {
+    printf 'Pre-PR verification failed for %s.\n\n' "$issue"
+    printf 'Fix the deterministic local failure, commit the fix, and leave .coding-complete in place only when ready for the controller to rerun verification.\n\n'
+    printf 'Command: `%s`\n' "$command"
+    [[ -n "$exit_code" ]] && printf 'Exit code: `%s`\n' "$exit_code"
+    [[ -n "$log_path" ]] && printf 'Log: `%s`\n' "$log_path"
+    printf '\nBounded log excerpt:\n\n```text\n%s\n```\n' "$excerpt"
+  } > "$prompt"
+}
+
+run_pre_pr_verification_gate() {
+  local issue="$1" feature_dir="$2" worktree="$3" base_branch="$4"
+  local policy artifact validate_json validate_reason runner runner_rc status command
+
+  if ! pre_pr_verification_enabled "$worktree"; then
+    emit_pre_pr_migration_warning_once "$feature_dir" "$issue"
+    return 0
+  fi
+
+  policy="$(pre_pr_verification_policy "$worktree")"
+  artifact="$feature_dir/.pre-pr-verification.json"
+  runner="$REPO_DIR/tools/run-pre-pr-verification.ts"
+
+  validate_json="$(npx tsx "$runner" --mode validate --worktree "$worktree" --feature-dir "$feature_dir" --base-ref "$base_branch" 2>/dev/null || true)"
+  validate_reason="$(printf '%s\n' "$validate_json" | jq -r '.reason // empty' 2>/dev/null || true)"
+  if [[ "$validate_reason" == "passed" ]]; then
+    write_stage_result "$feature_dir" "coding" "running" "${current_agent:-}" "$(resolve_stage_result_model "$feature_dir" "coding" "claude-opus-4-7")" "Pre-PR verification artifact is fresh and passing" "{\"prePrVerification\":{\"status\":\"passed\",\"artifactPath\":\"features/$(basename "$feature_dir")/.pre-pr-verification.json\"}}"
+    return 0
+  fi
+
+  log "status" "$issue → Running pre-PR verification gate"
+  npx tsx "$runner" --worktree "$worktree" --feature-dir "$feature_dir" --base-ref "$base_branch" >/tmp/wavemill-pre-pr-${issue}.json 2>/tmp/wavemill-pre-pr-${issue}.err
+  runner_rc=$?
+  status="$(jq -r '.status // empty' "$artifact" 2>/dev/null || true)"
+  if [[ "$runner_rc" -eq 0 && "$status" == "passed" ]]; then
+    write_stage_result "$feature_dir" "coding" "running" "${current_agent:-}" "$(resolve_stage_result_model "$feature_dir" "coding" "claude-opus-4-7")" "Pre-PR verification passed" "{\"prePrVerification\":{\"status\":\"passed\",\"artifactPath\":\"features/$(basename "$feature_dir")/.pre-pr-verification.json\"}}"
+    return 0
+  fi
+
+  if [[ "$policy" == "advisory" ]]; then
+    log_warn "$issue → Pre-PR verification failed in advisory mode; review may proceed"
+    return 0
+  fi
+
+  if [[ -f "$artifact" ]]; then
+    status="$(jq -r '.status // "error"' "$artifact" 2>/dev/null || echo "error")"
+    command="$(jq -r '.commands[-1].run // "unknown command"' "$artifact" 2>/dev/null || echo "unknown command")"
+    if [[ "$status" == "failed" || "$status" == "timeout" ]]; then
+      write_pre_pr_remediation_prompt "$issue" "$feature_dir" "$artifact"
+      write_stage_result "$feature_dir" "coding" "running" "${current_agent:-}" "$(resolve_stage_result_model "$feature_dir" "coding" "claude-opus-4-7")" "Pre-PR verification failed: $command" "{\"prePrVerification\":{\"status\":\"$status\",\"artifactPath\":\"features/$(basename "$feature_dir")/.pre-pr-verification.json\"}}"
+      log_warn "$issue → Pre-PR verification failed ($command); review blocked until remediation"
+      set_window_attention_state "$WIN" "needs-user"
+      active_count=$((active_count + 1))
+      return 1
+    fi
+  fi
+
+  write_stage_result "$feature_dir" "coding" "failed" "${current_agent:-}" "$(resolve_stage_result_model "$feature_dir" "coding" "claude-opus-4-7")" "Pre-PR verification infrastructure error"
+  log_warn "$issue → Pre-PR verification infrastructure error; review blocked"
+  set_window_attention_state "$WIN" "needs-user"
+  active_count=$((active_count + 1))
+  return 1
 }
 
 blocked_completion_validate_for_advance() {
@@ -12514,6 +12616,9 @@ monitor_issue_state() {
             if guard_coding_complete_handoff "$ISSUE" "$FEATURE_DIR" "${WORKTREE_ROOT}/${SLUG}" "$BASE_BRANCH"; then
               return 0
             fi
+            if ! run_pre_pr_verification_gate "$ISSUE" "$FEATURE_DIR" "${WORKTREE_ROOT}/${SLUG}" "$BASE_BRANCH"; then
+              return 0
+            fi
             validate_coding_phase_output "$BRANCH"
             clear_coding_uncommitted_output_attention "$FEATURE_DIR"
             # Mark coding as completed (HOK-1177)
@@ -12578,6 +12683,9 @@ monitor_issue_state() {
             recover_misplaced_coding_complete_marker "$ISSUE" "${WORKTREE_ROOT}/${SLUG}" "$FEATURE_DIR" "$SLUG" || true
             if [[ -f "$FEATURE_DIR/.coding-complete" ]]; then
               if guard_coding_complete_handoff "$ISSUE" "$FEATURE_DIR" "${WORKTREE_ROOT}/${SLUG}" "$BASE_BRANCH"; then
+                return 0
+              fi
+              if ! run_pre_pr_verification_gate "$ISSUE" "$FEATURE_DIR" "${WORKTREE_ROOT}/${SLUG}" "$BASE_BRANCH"; then
                 return 0
               fi
               validate_coding_phase_output "$BRANCH"

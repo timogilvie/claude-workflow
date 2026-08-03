@@ -578,7 +578,7 @@ export async function runReviewFlow(options: ReviewFlowOptions): Promise<ReviewF
     headSha: options.headSha,
     title: options.title,
     body: buildPrBody(options.body, review, fixes),
-  }, options.githubDeps);
+  }, { ...options.githubDeps, repoDir: reviewWorktreeDir });
 
   recordToolEvent({
     options,

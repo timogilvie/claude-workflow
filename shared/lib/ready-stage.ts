@@ -20,6 +20,7 @@ import { extractReleaseReadiness, type ReleaseReadiness } from './task-packet-ut
 import {
   DEFAULT_READY_MIGRATION_PATTERNS,
   getMigrationChecksConfig,
+  getPrePrVerificationConfig,
   getReadyConfig,
   loadWavemillConfig,
 } from './config.ts';
@@ -36,6 +37,11 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { refreshBaseForMigration } from './ready-migration-base.ts';
+import {
+  findFeatureDirForBranch,
+  prePrArtifactPath,
+  validateArtifactFreshness,
+} from './pre-pr-verification.ts';
 
 /**
  * Status of an individual ready check.
@@ -2305,6 +2311,36 @@ export async function runReadyStage(options: {
       status: 'pass',
       message: `PR #${prNumber} is accessible`,
     });
+  }
+
+  const prePrConfig = getPrePrVerificationConfig(repoDir);
+  if (prePrConfig?.enabled === true && prePrConfig.policy === 'required') {
+    if (!policy.requiredChecks.includes('pre-pr-verification')) {
+      policy.requiredChecks = [...policy.requiredChecks, 'pre-pr-verification'];
+    }
+    const featureDir = findFeatureDirForBranch(repoDir, prContext.branch);
+    if (!featureDir) {
+      checks.push({
+        name: 'pre-pr-verification',
+        status: 'fail',
+        message: 'Pre-PR verification is required but the feature artifact directory was not found',
+      });
+    } else {
+      const freshness = await validateArtifactFreshness({
+        artifactPath: prePrArtifactPath(featureDir),
+        worktreeDir: repoDir,
+        baseRef: prContext.baseBranch,
+      });
+      checks.push({
+        name: 'pre-pr-verification',
+        status: freshness.reason === 'passed' ? 'pass' : 'fail',
+        message: freshness.message,
+        details: {
+          reason: freshness.reason,
+          override: freshness.artifact?.override,
+        },
+      });
+    }
   }
 
   const taskPacket = policy.checks.includes('release-requirements')

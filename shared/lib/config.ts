@@ -661,6 +661,32 @@ export interface VerificationConfig {
   secondPassReview?: VerificationSecondPassReviewConfig;
 }
 
+export type PrePrVerificationPolicy = 'required' | 'advisory' | 'compatibility';
+export type PrePrVerificationSource = 'github-enforced' | 'explicit';
+
+export interface PrePrVerificationCommandConfig {
+  name: string;
+  run: string;
+  timeoutSeconds?: number;
+  mapsToCheck?: string;
+}
+
+export interface PrePrVerificationRetryConfig {
+  maxAttempts?: number;
+  retryOn?: 'timeout' | 'any';
+}
+
+export interface PrePrVerificationConfig {
+  enabled?: boolean;
+  policy?: PrePrVerificationPolicy;
+  source?: PrePrVerificationSource;
+  requiredChecks?: string[];
+  commands?: PrePrVerificationCommandConfig[];
+  overallTimeoutSeconds?: number;
+  retry?: PrePrVerificationRetryConfig;
+  draftPrOnFailure?: boolean;
+}
+
 export interface BudgetConfig {
   normalMode?: number;
   constrainedMode?: number;
@@ -703,6 +729,7 @@ export interface WavemillConfig {
   modelRegistry?: ModelRegistryConfig;
   quota?: QuotaConfig;
   verification?: VerificationConfig;
+  prePrVerification?: PrePrVerificationConfig;
   budget?: BudgetConfig;
   registry?: RegistryConfig;
   resources?: ResourcesConfig;
@@ -1401,6 +1428,10 @@ export function getIntegrationReadyPolicy(repoDir?: string): IntegrationReadyPol
  */
 export function getVerificationConfig(repoDir?: string): VerificationConfig {
   return loadWavemillConfig(repoDir).verification || {};
+}
+
+export function getPrePrVerificationConfig(repoDir?: string): PrePrVerificationConfig | undefined {
+  return loadWavemillConfig(repoDir).prePrVerification;
 }
 
 /**

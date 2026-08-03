@@ -2543,6 +2543,99 @@
             },
             "additionalProperties": false
         },
+        "prePrVerification": {
+            "type": "object",
+            "description": "Controller-owned pre-PR verification gate. Commands are explicit local recipes and are not inferred from GitHub Actions YAML.",
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "default": false
+                },
+                "policy": {
+                    "type": "string",
+                    "enum": [
+                        "required",
+                        "advisory",
+                        "compatibility"
+                    ],
+                    "default": "compatibility"
+                },
+                "source": {
+                    "type": "string",
+                    "enum": [
+                        "github-enforced",
+                        "explicit"
+                    ],
+                    "default": "explicit"
+                },
+                "requiredChecks": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "default": []
+                },
+                "commands": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {
+                                "type": "string",
+                                "minLength": 1
+                            },
+                            "run": {
+                                "type": "string",
+                                "minLength": 1
+                            },
+                            "timeoutSeconds": {
+                                "type": "integer",
+                                "minimum": 1
+                            },
+                            "mapsToCheck": {
+                                "type": "string",
+                                "minLength": 1
+                            }
+                        },
+                        "required": [
+                            "name",
+                            "run"
+                        ],
+                        "additionalProperties": false
+                    },
+                    "default": []
+                },
+                "overallTimeoutSeconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 3600
+                },
+                "retry": {
+                    "type": "object",
+                    "properties": {
+                        "maxAttempts": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "default": 1
+                        },
+                        "retryOn": {
+                            "type": "string",
+                            "enum": [
+                                "timeout",
+                                "any"
+                            ],
+                            "default": "timeout"
+                        }
+                    },
+                    "additionalProperties": false
+                },
+                "draftPrOnFailure": {
+                    "type": "boolean",
+                    "default": false
+                }
+            },
+            "additionalProperties": false
+        },
         "budget": {
             "type": "object",
             "description": "Cost budget constraints per operating mode. Used by the router to enforce spending limits.",

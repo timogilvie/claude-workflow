@@ -59,6 +59,7 @@ import {
   getQuotaConfig,
   getRuntimeResourceSelectionConfig,
   getEffectiveModelExclusions,
+  getPrePrVerificationConfig,
 } from './config.ts';
 
 // ────────────────────────────────────────────────────────────────
@@ -263,6 +264,49 @@ test('valid config passes validation', () => {
     assert.deepEqual(config.router?.availableModels?.planner, ['claude-sonnet-4-5-20250929']);
     assert.deepEqual(config.router?.availableModels?.coder, ['gpt-5.4']);
     assert.equal(config.resources?.runtimeSelection?.defaultVariant, 'optimized');
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('prePrVerification valid config passes and accessor returns it', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      prePrVerification: {
+        enabled: true,
+        policy: 'required',
+        source: 'github-enforced',
+        requiredChecks: ['Shell and Unit Tests'],
+        commands: [
+          { name: 'unit', run: 'npm test', timeoutSeconds: 60, mapsToCheck: 'Shell and Unit Tests' },
+        ],
+        retry: { maxAttempts: 2, retryOn: 'timeout' },
+        draftPrOnFailure: false,
+      },
+    }));
+    const config = getPrePrVerificationConfig(tmp);
+    assert.equal(config?.policy, 'required');
+    assert.equal(config?.commands?.[0]?.run, 'npm test');
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('prePrVerification invalid policy is rejected', () => {
+  if (!hasAjv) return;
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      prePrVerification: {
+        enabled: true,
+        policy: 'strict',
+        commands: [{ name: 'unit', run: 'npm test' }],
+      },
+    }));
+    assert.throws(() => loadWavemillConfig(tmp), /prePrVerification\/policy|must be equal to one of the allowed values/);
   } finally {
     cleanUp(tmp);
   }

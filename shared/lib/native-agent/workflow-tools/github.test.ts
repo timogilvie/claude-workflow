@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 
 import {
   createGithubAddLabelTool,
@@ -13,6 +17,7 @@ import {
 import { githubAddLabelKey, githubCreatePrKey } from './dedupe.ts';
 import { isMutationAllowed } from './mutation-policy.ts';
 import type { NetworkPolicy } from '../network-policy.ts';
+import { runPrePrVerification } from '../../pre-pr-verification.ts';
 
 interface FixtureState {
   pullRequests: GitHubToolPullRequest[];
@@ -164,6 +169,39 @@ function createFixtureDeps(seed?: {
   return { deps, state };
 }
 
+function git(repo: string, args: string[]) {
+  return execFileSync('git', args, { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+}
+
+async function makePrePrRepo(): Promise<{ repoDir: string; featureDir: string; cleanup(): Promise<void> }> {
+  const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), 'github-pre-pr-'));
+  git(repoDir, ['init', '-b', 'main']);
+  git(repoDir, ['config', 'user.email', 'test@example.com']);
+  git(repoDir, ['config', 'user.name', 'Test User']);
+  git(repoDir, ['remote', 'add', 'origin', 'git@github.com:acme/widgets.git']);
+  await fs.writeFile(path.join(repoDir, '.wavemill-config.json'), JSON.stringify({
+    prePrVerification: {
+      enabled: true,
+      policy: 'required',
+      source: 'explicit',
+      commands: [{ name: 'ok', run: 'true' }],
+    },
+  }));
+  await fs.writeFile(path.join(repoDir, 'file.txt'), 'one\n');
+  git(repoDir, ['add', '.']);
+  git(repoDir, ['commit', '-m', 'initial']);
+  git(repoDir, ['checkout', '-b', 'task/test']);
+  await fs.writeFile(path.join(repoDir, 'file.txt'), 'two\n');
+  git(repoDir, ['commit', '-am', 'change']);
+  const featureDir = path.join(repoDir, 'features', 'test');
+  await fs.mkdir(featureDir, { recursive: true });
+  return {
+    repoDir,
+    featureDir,
+    cleanup: () => fs.rm(repoDir, { recursive: true, force: true }),
+  };
+}
+
 describe('githubCreatePr', () => {
   it('creates a new pull request when none exists', async () => {
     const { deps } = createFixtureDeps();
@@ -187,6 +225,61 @@ describe('githubCreatePr', () => {
     }));
     assert.equal(result.idempotency.ref?.number, 1);
     assert.match(String(result.idempotency.ref?.url), /pull\/1$/);
+  });
+
+  it('blocks PR creation when required pre-PR artifact is missing', async () => {
+    const fixture = await makePrePrRepo();
+    try {
+      const { deps, state } = createFixtureDeps();
+      const result = await githubCreatePr({
+        repo: 'acme/widgets',
+        head: 'task/test',
+        base: 'main',
+        headSha: git(fixture.repoDir, ['rev-parse', 'HEAD']),
+        title: 'Preflight gated',
+        body: 'Body',
+      }, { ...deps, repoDir: fixture.repoDir });
+
+      assert.equal(result.ok, false);
+      if (result.ok) return;
+      assert.equal(result.error, 'policy_denied');
+      assert.match(result.message, /pre-PR verification.*missing|required/i);
+      assert.equal(state.calls.createPullRequest, 0);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it('adds override metadata to PR body when artifact is overridden', async () => {
+    const fixture = await makePrePrRepo();
+    try {
+      await runPrePrVerification({
+        worktreeDir: fixture.repoDir,
+        featureDir: fixture.featureDir,
+        baseRef: 'main',
+        config: {
+          enabled: true,
+          policy: 'required',
+          source: 'explicit',
+          commands: [{ name: 'fail', run: 'exit 1' }],
+        },
+        override: { operator: 'operator@example.com', reason: 'CI provider outage' },
+      });
+      const { deps, state } = createFixtureDeps();
+      const result = await githubCreatePr({
+        repo: 'acme/widgets',
+        head: 'task/test',
+        base: 'main',
+        headSha: git(fixture.repoDir, ['rev-parse', 'HEAD']),
+        title: 'Preflight override',
+        body: 'Body',
+      }, { ...deps, repoDir: fixture.repoDir });
+
+      assert.equal(result.ok, true);
+      assert.match(state.pullRequests[0]?.body ?? '', /Pre-PR verification.*OVERRIDDEN by operator@example\.com - CI provider outage/);
+    } finally {
+      await fixture.cleanup();
+    }
   });
 
   it('reuses an existing matching pull request', async () => {
