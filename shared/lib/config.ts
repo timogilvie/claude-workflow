@@ -685,6 +685,31 @@ export interface VerificationConfig {
   secondPassReview?: VerificationSecondPassReviewConfig;
 }
 
+export interface PrePrVerificationRecipeConfig {
+  commands: string[];
+  timeoutSeconds?: number;
+  retryPolicy?: {
+    enabled?: boolean;
+    maxAttempts?: number;
+    backoffSeconds?: number;
+  };
+}
+
+export interface PrePrVerificationConfigSchema {
+  enabled?: boolean;
+  required?: boolean;
+  source?: 'github-enforced' | 'explicit';
+  requiredChecks?: string[];
+  recipe?: PrePrVerificationRecipeConfig;
+  logCaptureLines?: number;
+  draftFallback?: boolean;
+  staleTtlSeconds?: number;
+  compatibility?: {
+    mode?: 'allow' | 'warn' | 'block';
+    warnAfterDays?: number;
+  };
+}
+
 export interface BudgetConfig {
   normalMode?: number;
   constrainedMode?: number;
@@ -712,6 +737,7 @@ export interface WavemillConfig {
   challenge?: ChallengeConfig;
   challengeScheduler?: ChallengeSchedulerConfig;
   validation?: ValidationConfig;
+  prePrVerification?: PrePrVerificationConfigSchema;
   constraints?: ConstraintsConfig;
   ui?: UiConfig;
   review?: ReviewConfig;
@@ -1674,4 +1700,12 @@ export function getRedactionConfig(repoDir?: string): Required<RedactionConfig> 
   return {
     secretEnvNames: config.secretEnvNames ?? [],
   };
+}
+
+/**
+ * Get the pre-PR verification config section.
+ * Returns empty object if not configured.
+ */
+export function getPrePrVerificationConfig(repoDir?: string): PrePrVerificationConfigSchema {
+  return loadWavemillConfig(repoDir).prePrVerification || {};
 }
