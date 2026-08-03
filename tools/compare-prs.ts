@@ -92,6 +92,11 @@ runTool({
       const challengerNumber = prNumberFromValue(challengerPr);
       const primaryPrUrl = prUrlFromNumber(primaryPr, repoDir);
       const challengerPrUrl = prUrlFromNumber(challengerPr, repoDir);
+      // The comparison prompt needs each implementation diff.  Keep this
+      // retrieval next to the PR normalization so a failed or retried
+      // comparison never reaches the judge with undefined diff variables.
+      const primaryDiff = fetchPrContext(primaryNumber, repoDir).diff;
+      const challengerDiff = fetchPrContext(challengerNumber, repoDir).diff;
       const evalsDir = resolveEvalsDir(undefined, repoDir).dir;
       const hasRequiredEvalRecords = hasChallengeEvalRecordPair(
         pairId,
