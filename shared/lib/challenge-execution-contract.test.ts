@@ -1,0 +1,294 @@
+import assert from 'node:assert/strict';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
+import { test } from 'node:test';
+import { SCHEMA_VERSION, type EvalRecord } from './eval-schema.ts';
+import {
+  buildChallengeExecutionIntent,
+  projectChallengeIntentForPersistence,
+  type ChallengeExecutionIntent,
+} from './challenge-execution-contract.ts';
+import { attachChallengeExecutionMetadata } from './eval-record-builder.ts';
+import { appendEvalRecord, readEvalRecords } from './eval-persistence.ts';
+import { validateEvalRecord } from './eval-validator.ts';
+import { toHokusaiSubmission } from './hokusai-schema.ts';
+
+const require = createRequire(import.meta.url);
+const Ajv2020 = require('ajv/dist/2020').default || require('ajv/dist/2020');
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const evalSchema = JSON.parse(readFileSync(join(__dirname, 'eval-schema.json'), 'utf-8'));
+const ajv = new Ajv2020({ allErrors: true, strict: false, validateFormats: false });
+const validateChallengeIntent = ajv.compile({
+  ...evalSchema.$defs.ChallengeExecutionIntent,
+  $defs: evalSchema.$defs,
+});
+
+function makeRuntimeIntent(overrides: Partial<ChallengeExecutionIntent> = {}): ChallengeExecutionIntent {
+  return {
+    schemaVersion: 1,
+    pairId: 'pair-2604',
+    issueId: 'HOK-2604',
+    createdAt: '2026-08-03T11:46:50Z',
+    selectedStage: 'implementation',
+    decisionSource: 'expanded',
+    selectionPath: 'recommendation-driven',
+    selectionReason: 'stage_coverage_gap',
+    challengerSource: 'recommendation',
+    routeContext: {
+      decisionSource: 'expanded',
+      bootstrapRoute: {
+        planner: 'claude-opus-4-6',
+        coder: 'claude-opus-4-6',
+        reviewer: 'claude-opus-4-6',
+      },
+    },
+    challengeRecommendation: {
+      shouldChallenge: true,
+      score: 0.93,
+      reason: 'low-data-stage',
+      challengerModel: 'gpt-5.4',
+      defaultModel: 'claude-opus-4-6',
+      stage: 'implementation',
+    },
+    nativeCertificationRejections: [{
+      modelId: 'native-openrouter/example',
+      role: 'coder',
+      requestedLaunchPhase: 'coding',
+      requestedPhase: 'patch',
+      nativeCapability: 'workflow',
+      requiredSuiteVersion: '1',
+      reason: 'missing-artifact',
+      artifactPath: '/tmp/native-cert.json',
+    }],
+    modelExclusions: [{
+      modelId: 'slow-model',
+      stage: 'coding',
+      source: 'repo',
+      reason: 'disabled for this repo',
+    }],
+    fallbackReason: 'recommended_stage_plan_fell_back_to_implementation',
+    primary: {
+      key: 'HOK-2604',
+      role: 'primary',
+      planner: { model: 'claude-opus-4-6', agent: 'claude' },
+      coder: { model: 'claude-opus-4-6', agent: 'claude' },
+      reviewer: { model: 'claude-opus-4-6', agent: 'claude' },
+    },
+    challenger: {
+      key: 'HOK-2604_c',
+      role: 'challenger',
+      planner: { model: 'claude-opus-4-6', agent: 'claude' },
+      coder: { model: 'gpt-5.4', agent: 'codex' },
+      reviewer: { model: 'claude-opus-4-6', agent: 'claude' },
+    },
+    ...overrides,
+  };
+}
+
+function makeRecord(overrides: Partial<EvalRecord> = {}): EvalRecord {
+  return {
+    id: '550e8400-e29b-41d4-a716-446655440610',
+    schemaVersion: SCHEMA_VERSION,
+    originalPrompt: 'Harden post PR CI handling.',
+    modelId: 'claude-opus-4-6',
+    modelVersion: 'claude-opus-4-6',
+    score: 1,
+    scoreBand: 'Full Success',
+    timeSeconds: 245,
+    timestamp: '2026-08-03T11:46:50Z',
+    interventionRequired: false,
+    interventionCount: 0,
+    interventionDetails: [],
+    rationale: 'Task completed autonomously.',
+    issueId: 'HOK-2604',
+    prUrl: 'https://github.com/org/repo/pull/1037',
+    taskDescriptor: {
+      schema_version: '1.0',
+      signals: {
+        heuristic: {
+          task_type: 'feature',
+          languages: ['typescript'],
+          framework_tags: [],
+          files_touched: 2,
+          repo_size_loc: 1000,
+          description_tokens: 20,
+          is_greenfield: false,
+          has_migration: false,
+          has_ui: false,
+          has_tests: true,
+          cross_service: false,
+        },
+        learned: {
+          complexity: 4,
+          domain: 'eval',
+          risk_flags: [],
+        },
+      },
+      constraints: {
+        models_available: ['claude-opus-4-6', 'gpt-5.4'],
+        objective: 'balanced',
+      },
+      stages: {
+        planner: { model: 'claude-opus-4-6' },
+        coder: { model: 'claude-opus-4-6' },
+        reviewer: { model: 'claude-opus-4-6' },
+      },
+    },
+    ...overrides,
+  };
+}
+
+test('runtime ChallengeExecutionIntent satisfies the JSON schema contract', () => {
+  const intent = makeRuntimeIntent();
+  assert.equal(validateChallengeIntent(intent), true, JSON.stringify(validateChallengeIntent.errors));
+});
+
+test('projectChallengeIntentForPersistence preserves eval fields and omits runtime-only diagnostics', () => {
+  const projected = projectChallengeIntentForPersistence(makeRuntimeIntent());
+  assert.ok(projected);
+  assert.equal(projected.pairId, 'pair-2604');
+  assert.equal(projected.challengeStage, 'implementation');
+  assert.equal(projected.decisionSource, 'expanded');
+  assert.equal(projected.selectedStage, 'implementation');
+  assert.equal(projected.primary.expectedStageModel, 'claude-opus-4-6');
+  assert.equal(projected.challenger.expectedStageModel, 'gpt-5.4');
+  assert.equal(projected.challenger.expectedRoute.coder, 'gpt-5.4');
+
+  const raw = projected as unknown as Record<string, unknown>;
+  assert.equal('selectionPath' in raw, false);
+  assert.equal('challengeRecommendation' in raw, false);
+  assert.equal('nativeCertificationRejections' in raw, false);
+  assert.equal('modelExclusions' in raw, false);
+  assert.equal(validateChallengeIntent(projected), true, JSON.stringify(validateChallengeIntent.errors));
+});
+
+test('projection accepts the legacy compact intent emitted before HOK-2610', () => {
+  const legacy = buildChallengeExecutionIntent({
+    pairId: 'pair-legacy',
+    challengeStage: 'implementation',
+    primary: {
+      model: 'claude-opus-4-6',
+      planner: 'claude-opus-4-6',
+      reviewer: 'claude-opus-4-6',
+      planDepth: 'standard',
+      codeDepth: 'standard',
+      reviewMode: 'standard',
+    },
+    challenger: {
+      model: 'gpt-5.4',
+      planner: 'claude-opus-4-6',
+      reviewer: 'claude-opus-4-6',
+      planDepth: 'standard',
+      codeDepth: 'deep',
+      reviewMode: 'standard',
+    },
+  });
+  const projected = projectChallengeIntentForPersistence(legacy);
+  assert.deepEqual(projected, {
+    pairId: 'pair-legacy',
+    challengeStage: 'implementation',
+    primary: legacy.primary,
+    challenger: legacy.challenger,
+  });
+});
+
+test('builder to AJV validation to JSONL persistence works for primary and challenger', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'challenge-contract-'));
+  try {
+    const intent = makeRuntimeIntent();
+    const primary = makeRecord({
+      id: 'primary-record',
+      challengePairId: 'pair-2604',
+      challengeSide: 'primary',
+    });
+    primary.challengePairId = 'pair-2604';
+    attachChallengeExecutionMetadata(primary, {
+      side: 'primary',
+      intent,
+    });
+    assert.equal(validateEvalRecord(primary, { file: '<test>', line: 0 }).filter((issue) => issue.code === 'SCHEMA_VIOLATION').length, 0);
+    appendEvalRecord(primary, { dir: tmp });
+
+    const challenger = makeRecord({
+      id: 'challenger-record',
+      issueId: 'HOK-2604_c',
+      prUrl: 'https://github.com/org/repo/pull/1038',
+      modelId: 'gpt-5.4',
+      modelVersion: 'gpt-5.4',
+    });
+    challenger.challengePairId = 'pair-2604';
+    attachChallengeExecutionMetadata(challenger, {
+      side: 'challenger',
+      intent,
+    });
+    assert.equal(validateEvalRecord(challenger, { file: '<test>', line: 0 }).filter((issue) => issue.code === 'SCHEMA_VIOLATION').length, 0);
+    appendEvalRecord(challenger, { dir: tmp });
+
+    const records = readEvalRecords({ dir: tmp });
+    assert.equal(records.length, 2);
+    assert.equal(records[0].challengeIntent?.primary.expectedRoute.coder, 'claude-opus-4-6');
+    assert.equal(records[1].challengeIntent?.challenger.expectedRoute.coder, 'gpt-5.4');
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('schema remains strict for unmodeled runtime fields', () => {
+  const intent = {
+    ...makeRuntimeIntent(),
+    unmodeledRuntimeField: true,
+  };
+  assert.equal(validateChallengeIntent(intent), false);
+  assert.ok(validateChallengeIntent.errors?.some((error: { keyword: string }) => error.keyword === 'additionalProperties'));
+});
+
+test('historical eval record with challenge intent remains valid', () => {
+  const legacy = buildChallengeExecutionIntent({
+    pairId: 'pair-history',
+    challengeStage: 'review',
+    primary: {
+      model: 'claude-opus-4-6',
+      planner: 'claude-opus-4-6',
+      reviewer: 'claude-opus-4-6',
+      planDepth: 'standard',
+      codeDepth: 'standard',
+      reviewMode: 'standard',
+    },
+    challenger: {
+      model: 'claude-opus-4-6',
+      planner: 'claude-opus-4-6',
+      reviewer: 'gpt-5.4',
+      planDepth: 'standard',
+      codeDepth: 'standard',
+      reviewMode: 'deep',
+    },
+  });
+  const record = makeRecord({
+    schemaVersion: '1.34.0',
+    challengePairId: 'pair-history',
+    challengeSide: 'challenger',
+    challengeIntent: legacy,
+    challengeExecutionRoute: legacy.challenger.expectedRoute,
+  });
+  assert.equal(validateEvalRecord(record, { file: '<test>', line: 0 }).filter((issue) => issue.code === 'SCHEMA_VIOLATION').length, 0);
+});
+
+test('Hokusai submission boundary omits local challenge contract keys', () => {
+  const record = makeRecord();
+  const challengeIntent = projectChallengeIntentForPersistence(makeRuntimeIntent());
+  assert.ok(challengeIntent);
+  record.challengePairId = 'pair-2604';
+  record.challengeSide = 'primary';
+  record.challengeIntent = challengeIntent;
+  record.challengeExecutionRoute = challengeIntent.primary.expectedRoute;
+  const submission = toHokusaiSubmission(record);
+  assert.equal(submission.ok, true);
+  const payload = submission.ok ? submission.submission as unknown as Record<string, unknown> : {};
+  assert.equal('challengePairId' in payload, false);
+  assert.equal('challengeSide' in payload, false);
+  assert.equal('challengeIntent' in payload, false);
+  assert.equal('challengeExecutionRoute' in payload, false);
+});

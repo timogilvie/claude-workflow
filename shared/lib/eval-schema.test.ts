@@ -67,6 +67,18 @@ function validateNode(
   path: string,
   errors: string[],
 ): void {
+  if (Array.isArray(schemaNode.anyOf)) {
+    const branchErrors = schemaNode.anyOf.map((branch) => {
+      const nestedErrors: string[] = [];
+      validateNode(value, branch as Record<string, unknown>, path, nestedErrors);
+      return nestedErrors;
+    });
+    if (branchErrors.every((items) => items.length > 0)) {
+      errors.push(...branchErrors[0]);
+    }
+    return;
+  }
+
   if (typeof schemaNode.$ref === 'string') {
     const resolved = resolveRef(schemaNode.$ref);
     if (resolved) {
@@ -768,7 +780,7 @@ function validPromptSizeDiagnostic() {
 }
 
 test('SCHEMA_VERSION is bumped for eval schema updates', () => {
-  assert.equal(SCHEMA_VERSION, '1.35.0');
+  assert.equal(SCHEMA_VERSION, '1.36.0');
 });
 
 test('Record with native workflow cost attribution validates', () => {
@@ -1970,8 +1982,8 @@ test('Wavemill router fields validate and schema stays in parity', () => {
   assert.equal(properties.wavemill_router_scoring?.$ref, '#/$defs/WavemillRouterScoringMetadata');
 });
 
-test('Schema version constant is 1.35.0', () => {
-  assert.equal(SCHEMA_VERSION, '1.35.0');
+test('Schema version constant is 1.36.0', () => {
+  assert.equal(SCHEMA_VERSION, '1.36.0');
 });
 
 test('Record with resolved-model routing validates', () => {

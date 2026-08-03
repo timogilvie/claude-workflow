@@ -125,6 +125,9 @@
  * - **1.35.0**: Added optional `planningExecutionOutcome` capturing native
  *   planning terminal reason, configured bounds, observed usage, plan validity,
  *   approval readiness, and prompt provenance (HOK-2593).
+ * - **1.36.0**: Expanded the canonical challenge execution-intent contract
+ *   and added a strict persisted projection so runtime challenge state cannot
+ *   drift away from eval JSONL validation (HOK-2610).
  *
  * @module eval-schema
  */
@@ -134,13 +137,13 @@ import type { ModelSelector, RegistryTaskType } from './model-registry.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
 import type {
   ChallengeExecutionAttestation,
-  ChallengeExecutionIntent,
+  ChallengeExecutionIntentProjection,
   InvalidChallengeReason,
 } from './challenge-execution-contract.ts';
 import type { ChallengeRoutingMeta } from './challenge-comparison.ts';
 
 /** Current eval schema version for newly emitted records. */
-export const SCHEMA_VERSION = '1.35.0';
+export const SCHEMA_VERSION = '1.36.0';
 
 export type RoutingRole = 'planner' | 'coder' | 'reviewer';
 
@@ -1788,7 +1791,7 @@ export interface EvalRecord {
   challengeRouteContext?: EvalChallengeRouteContext;
 
   /** Selected challenge execution contract for both sides of the pair. */
-  challengeIntent?: ChallengeExecutionIntent;
+  challengeIntent?: ChallengeExecutionIntentProjection;
 
   /** Effective per-stage execution route after expanded routing/contract application. */
   challengeExecutionRoute?: ChallengeRoutingMeta;
