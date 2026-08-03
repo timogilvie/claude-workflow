@@ -1,7 +1,10 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { CertificationPhase } from './native-agent/certification/schema.ts';
-import { checkCertificationEligibility } from './native-agent/certification/loader.ts';
+import {
+  evaluateNativeProviderGate,
+  type NativeGateRejectReason,
+} from './native-agent/certification/eligibility-gate.ts';
 import type {
   LaunchPriorityModel,
   ModelStatus,
@@ -139,6 +142,25 @@ function statusIndex(status: LaunchPriorityStatus): number {
 
 function phaseForRole(role: LaunchPriorityRole): CertificationPhase {
   return role === 'coding' ? 'patch' : 'read-only';
+}
+
+function mapAuditReason(reason: NativeGateRejectReason): string {
+  switch (reason) {
+    case 'missing_api_key':
+      return 'missing-api-key';
+    case 'unregistered_model':
+      return 'no-native-capability';
+    case 'missing_artifact':
+      return 'missing-artifact';
+    case 'malformed_artifact':
+      return 'malformed-artifact';
+    case 'stale_artifact':
+      return 'stale-artifact';
+    case 'wrong_suite':
+      return 'wrong-suite';
+    case 'insufficient_phase':
+      return 'insufficient-phase';
+  }
 }
 
 function normalizeCoverageStatus(count: number, target: number): CoverageStatus {
@@ -347,20 +369,35 @@ export function auditLaunchPriorityCoverage(options: AuditOptions = {}): LaunchP
   const checkNativeCertification = options.checkNativeCertification
     ?? ((provider: string, model: string, role: LaunchPriorityRole) => {
       const capability = getModel(registry, model)?.nativeCapability;
-      const suiteVersion = capability?.certification?.certificationSuiteVersion;
-      if (!options.repoDir || !suiteVersion) {
+      if (!capability?.nativeProvider || !capability?.certification?.certificationSuiteVersion) {
+        return {
+          eligible: false,
+          reason: 'missing-certification-metadata',
+        };
+      }
+
+      if (!options.repoDir) {
         return { eligible: true };
       }
-      const result = checkCertificationEligibility(
-        options.repoDir,
-        provider,
-        model,
-        suiteVersion,
-        phaseForRole(role),
-      );
-      return result.eligible
-        ? { eligible: true }
-        : { eligible: false, reason: result.reason };
+
+      const phase = phaseForRole(role);
+      const decision = evaluateNativeProviderGate({
+        modelId: model,
+        mode: 'task',
+        requiredPhase: phase,
+        registry,
+        repoDir: options.repoDir,
+        apiKeyPresent: true,
+        apiKeyEnv: 'LAUNCH_PRIORITY_AUDIT_UNUSED',
+        now: options.now,
+      });
+
+      if (decision.ok) {
+        return { eligible: true };
+      }
+
+      const auditReason = mapAuditReason(decision.reason);
+      return { eligible: false, reason: auditReason };
     });
 
   for (const record of records) {
