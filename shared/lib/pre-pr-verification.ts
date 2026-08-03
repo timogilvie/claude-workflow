@@ -222,9 +222,10 @@ export function readAndValidateArtifact(
     const content = readFileSync(artifactPath, 'utf-8');
     const artifact = JSON.parse(content) as PrePrVerificationArtifact;
 
-    const shasMismatch =
+    const shasMismatch = Boolean(
       (expectedHeadSha && artifact.headSha !== expectedHeadSha) ||
-      (expectedBaseSha && artifact.baseSha !== expectedBaseSha);
+        (expectedBaseSha && artifact.baseSha !== expectedBaseSha),
+    );
 
     return {
       artifact,

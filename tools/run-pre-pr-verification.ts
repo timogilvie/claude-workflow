@@ -43,7 +43,15 @@ function parseCLI(): CLIOptions {
   let json = false;
   let override: string | undefined;
 
-  for (const arg of args) {
+  // Env-var override (per task packet): WAVEMILL_PRE_PR_OVERRIDE=1 activates
+  // the override; WAVEMILL_PRE_PR_OVERRIDE_REASON supplies the reason. The
+  // CLI --override flag remains for direct operator use.
+  if (process.env.WAVEMILL_PRE_PR_OVERRIDE === '1') {
+    override = process.env.WAVEMILL_PRE_PR_OVERRIDE_REASON ?? '';
+  }
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
     if (arg === '--force') {
       force = true;
     } else if (arg === '--dry-run') {
@@ -52,10 +60,12 @@ function parseCLI(): CLIOptions {
       json = true;
     } else if (arg.startsWith('--override=')) {
       override = arg.slice('--override='.length);
-    } else if (arg.startsWith('--override')) {
-      const idx = args.indexOf(arg);
-      if (idx < args.length - 1) {
-        override = args[idx + 1];
+    } else if (arg === '--override') {
+      if (i + 1 < args.length) {
+        override = args[i + 1];
+        i += 1; // consume the reason arg so it is not re-parsed as positional
+      } else {
+        override = '';
       }
     } else if (!arg.startsWith('--')) {
       // Positional argument = state-dir

@@ -54,14 +54,30 @@ export function checkPrePrVerificationGate(
   currentHeadSha?: string,
   currentBaseSha?: string,
 ): GateCheckResult {
-  // Check 1: Is verification configured?
+  // Check 1: Is verification configured? Consult compatibility mode so that
+  // unconfigured/disabled repos with strict compatibility fail closed.
+  const isConfigured = Boolean(
+    config?.enabled && config?.recipe && (config.recipe.commands?.length ?? 0) > 0,
+  );
   if (!config || !config.enabled) {
-    return { passed: true }; // Gate disabled, pass through
+    const compatMode = getCompatibilityBehavior(config, isConfigured);
+    if (compatMode === 'block') {
+      return {
+        passed: false,
+        reason:
+          'Pre-PR verification is unconfigured but compatibility.mode="block". ' +
+          'A verification recipe must be configured in .wavemill-config.json.',
+        recommendation:
+          'Configure prePrVerification.enabled + prePrVerification.recipe.commands in .wavemill-config.json, ' +
+          'or relax compatibility.mode to "allow" or "warn".',
+        requiresRemediation: false,
+      };
+    }
+    return { passed: true };
   }
 
   // Check 2: Is verification required?
   const isRequired = config.required ?? false;
-  const compatMode = config.compatibility?.mode ?? 'allow';
 
   if (!isRequired) {
     // Optional: pass, but could log warning

@@ -110,12 +110,15 @@ export async function discoverGitHubRequiredChecks(
   const checks = new Set<string>();
   let source: 'protection' | 'ruleset' | 'mixed' = 'protection';
 
-  // Try branch protection rules first
+  // Try branch protection rules first. Do NOT redirect stderr into stdout;
+  // gh writes API errors (HTTP 403/404) to stderr and we need to classify
+  // them off err.stderr on failure. Redirecting also pollutes stdout on
+  // success, which we split as a checks list.
   try {
     const protection = await retryWithBackoff(async () => {
       const output = execSync(
-        `gh api repos/${repo}/branches/${branch}/protection/required_status_checks --jq '.contexts[]' 2>&1`,
-        { encoding: 'utf-8' },
+        `gh api repos/${repo}/branches/${branch}/protection/required_status_checks --jq '.contexts[]'`,
+        { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] },
       );
       return output.trim().split('\n').filter((line) => line.length > 0);
     });
@@ -124,21 +127,8 @@ export async function discoverGitHubRequiredChecks(
       checks.add(check);
     }
   } catch (err) {
-    const msg = (err as Error).message;
-    if (/not found|404|does not exist/i.test(msg)) {
-      // Branch or repo doesn't exist
-      throw new GitHubNotFoundError(
-        `Repository or branch not found: ${repo}/${branch}\n` +
-        `Ensure the branch exists and is protected with required checks.`,
-      );
-    }
-    if (/permission denied|unauthorized|403|requires authentication/i.test(msg)) {
-      throw new GitHubPermissionError(
-        `GitHub API permission denied. Ensure you have access to the repository.\n` +
-        `Install gh CLI: https://cli.github.com\n` +
-        `Authenticate: gh auth login`,
-      );
-    }
+    const classified = classifyGhError(err, `${repo}/${branch}`);
+    if (classified) throw classified;
     // Other errors — try rulesets below
   }
 
@@ -146,8 +136,8 @@ export async function discoverGitHubRequiredChecks(
   try {
     const rulesets = await retryWithBackoff(async () => {
       const output = execSync(
-        `gh api repos/${repo}/rulesets --jq '.[] | select(.target == "branch") | .rules[] | select(.type == "required_status_checks") | .parameters.required_status_checks[]' 2>&1`,
-        { encoding: 'utf-8' },
+        `gh api repos/${repo}/rulesets --jq '.[] | select(.target == "branch") | .rules[] | select(.type == "required_status_checks") | .parameters.required_status_checks[]'`,
+        { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] },
       );
       return output.trim().split('\n').filter((line) => line.length > 0);
     });
@@ -200,8 +190,8 @@ export async function getWorkflowJobs(repo: string): Promise<WorkflowJob[]> {
   try {
     const workflows = await retryWithBackoff(async () => {
       const output = execSync(
-        `gh api repos/${repo}/actions/workflows --jq '[.workflows[] | {path: .path, name: .name}]' 2>&1`,
-        { encoding: 'utf-8' },
+        `gh api repos/${repo}/actions/workflows --jq '[.workflows[] | {path: .path, name: .name}]'`,
+        { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] },
       );
       return JSON.parse(output);
     });
@@ -210,8 +200,8 @@ export async function getWorkflowJobs(repo: string): Promise<WorkflowJob[]> {
       try {
         const content = await retryWithBackoff(async () => {
           return execSync(
-            `gh api repos/${repo}/contents/${workflow.path} --jq '.content | @base64d' 2>&1`,
-            { encoding: 'utf-8' },
+            `gh api repos/${repo}/contents/${workflow.path} --jq '.content | @base64d'`,
+            { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] },
           );
         });
 
@@ -232,16 +222,40 @@ export async function getWorkflowJobs(repo: string): Promise<WorkflowJob[]> {
       }
     }
   } catch (err) {
-    if (/permission denied|unauthorized|403/i.test((err as Error).message)) {
-      throw new GitHubPermissionError(
-        `GitHub API permission denied when fetching workflows.\n` +
-        `Authenticate with: gh auth login`,
-      );
+    const classified = classifyGhError(err, `${repo}/actions/workflows`);
+    if (classified instanceof GitHubPermissionError) {
+      throw classified;
     }
     // Other errors are non-fatal for workflow listing
   }
 
   return jobs;
+}
+
+/**
+ * Classify a failed `gh api` invocation. Inspects both err.message (Node's
+ * synthesized "Command failed …") AND err.stderr (where gh writes HTTP
+ * status messages like "HTTP 403" and "gh: Not Found (HTTP 404)"). Returns
+ * a typed error to throw, or null if the caller should treat this as
+ * recoverable / try-next-strategy.
+ */
+function classifyGhError(err: unknown, context: string): Error | null {
+  const raw = err as any;
+  const stderr = typeof raw?.stderr === 'string' ? raw.stderr : (raw?.stderr?.toString?.() ?? '');
+  const message = typeof raw?.message === 'string' ? raw.message : String(raw);
+  const combined = `${message}\n${stderr}`;
+
+  if (/HTTP 404|Not Found|does not exist/i.test(combined)) {
+    return new GitHubNotFoundError(
+      `GitHub resource not found: ${context}\n${stderr || message}`,
+    );
+  }
+  if (/HTTP 401|HTTP 403|permission denied|unauthorized|requires authentication/i.test(combined)) {
+    return new GitHubPermissionError(
+      `GitHub API permission denied for ${context}. Authenticate with: gh auth login\n${stderr || message}`,
+    );
+  }
+  return null;
 }
 
 // ────────────────────────────────────────────────────────────────
