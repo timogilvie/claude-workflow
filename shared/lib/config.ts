@@ -494,6 +494,16 @@ export interface IntegrationConfig {
   readyPolicy?: IntegrationReadyPolicyConfig;
 }
 
+export interface ObserverConfig {
+  enabled: boolean;
+  intervalSeconds: number;
+  heartbeatStaleSeconds: number;
+  maxLogLines: number;
+  retention: {
+    maxSnapshots: number;
+  };
+}
+
 export type PromotionProtectedIntegrationStrategy =
   | 'skip-reconciliation'
   | 'block'
@@ -557,6 +567,10 @@ export interface ReadyConfig {
   migrationChecks?: ReadyMigrationChecksConfig;
   migrationDangerLabels?: Record<string, string>;
   migrationForbiddenPatterns?: string[];
+  transientRetryBudget?: number;
+  remediationLogMaxBytes?: number;
+  verificationGatingEnabled?: boolean;
+  localCommandMap?: Record<string, string>;
   remediation?: ReadyRemediationConfig;
   watchdog?: ReadyWatchdogConfig;
 }
@@ -586,6 +600,16 @@ export interface ReadyWatchdogConfig {
   stableFailureConsecutivePolls?: number;
   stableFailureEscalateAfterPolls?: number;
   safeRemediationCategories?: string[];
+}
+
+export interface ReadyFailureClassifierConfig {
+  transientRetryBudget: number;
+  remediationLogMaxBytes: number;
+  localCommandMap: Record<string, string>;
+}
+
+export interface ReadyVerificationConfig {
+  gatingEnabled: boolean;
 }
 
 export interface MergeQueueConfig {
@@ -695,6 +719,7 @@ export interface WavemillConfig {
   providers?: ProvidersConfig;
   nativeAgent?: NativeAgentConfig;
   integration?: Partial<IntegrationConfig>;
+  observer?: Partial<ObserverConfig>;
   promotion?: Partial<PromotionConfig>;
   ready?: ReadyConfig;
   mergeQueue?: MergeQueueConfig;
@@ -719,6 +744,16 @@ export const INTEGRATION_DEFAULTS: IntegrationConfig = {
   requiredChecks: [],
   highRiskPolicy: 'manual',
   useMillSession: true,
+};
+
+export const OBSERVER_DEFAULTS: ObserverConfig = {
+  enabled: false,
+  intervalSeconds: 120,
+  heartbeatStaleSeconds: 300,
+  maxLogLines: 240,
+  retention: {
+    maxSnapshots: 50,
+  },
 };
 
 export const PROMOTION_DEFAULTS: PromotionConfig = {
@@ -1277,6 +1312,10 @@ export function getReadyConfig(repoDir?: string): ReadyConfig {
       ...(config.ready?.migrationDangerLabels ?? {}),
     },
     migrationForbiddenPatterns: config.ready?.migrationForbiddenPatterns ?? [],
+    transientRetryBudget: config.ready?.transientRetryBudget ?? 3,
+    remediationLogMaxBytes: config.ready?.remediationLogMaxBytes ?? 20_000,
+    verificationGatingEnabled: config.ready?.verificationGatingEnabled ?? true,
+    localCommandMap: config.ready?.localCommandMap ?? {},
     remediation: {
       enabled: config.ready?.remediation?.enabled ?? true,
       maxAttempts: config.ready?.remediation?.maxAttempts ?? 3,
@@ -1329,6 +1368,26 @@ export function getReadyRemediationConfig(repoDir?: string): Required<ReadyRemed
     enabled: remediation.enabled ?? true,
     maxAttempts: remediation.maxAttempts ?? 3,
     agentCmd: remediation.agentCmd ?? '',
+  };
+}
+
+export function getReadyFailureClassifierConfig(repoDir?: string): ReadyFailureClassifierConfig {
+  const ready = loadWavemillConfig(repoDir).ready ?? {};
+  return {
+    transientRetryBudget: Number.isInteger(ready.transientRetryBudget) && (ready.transientRetryBudget ?? 0) >= 0
+      ? ready.transientRetryBudget as number
+      : 3,
+    remediationLogMaxBytes: Number.isInteger(ready.remediationLogMaxBytes) && (ready.remediationLogMaxBytes ?? 0) > 0
+      ? ready.remediationLogMaxBytes as number
+      : 20_000,
+    localCommandMap: ready.localCommandMap ?? {},
+  };
+}
+
+export function getReadyVerificationConfig(repoDir?: string): ReadyVerificationConfig {
+  const ready = loadWavemillConfig(repoDir).ready ?? {};
+  return {
+    gatingEnabled: ready.verificationGatingEnabled ?? true,
   };
 }
 
@@ -1461,6 +1520,18 @@ export function getAgentsConfig(repoDir?: string): AgentsConfig {
  */
 export function getDashboardConfig(repoDir?: string): DashboardConfig {
   return loadWavemillConfig(repoDir).dashboard || {};
+}
+
+export function getObserverConfig(repoDir?: string): ObserverConfig {
+  const observer = loadWavemillConfig(repoDir).observer ?? {};
+  return {
+    ...OBSERVER_DEFAULTS,
+    ...observer,
+    retention: {
+      ...OBSERVER_DEFAULTS.retention,
+      ...(observer.retention ?? {}),
+    },
+  };
 }
 
 export function getTaskSelectionConfig(repoDir?: string): TaskSelectionConfig {

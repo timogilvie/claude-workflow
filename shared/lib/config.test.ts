@@ -49,6 +49,8 @@ import {
   getNativeExpansionConfig,
   getNativePatchCodingConfig,
   getReadyConfig,
+  getReadyFailureClassifierConfig,
+  getReadyVerificationConfig,
   getReadyWatchdogConfig,
   getMigrationChecksConfig,
   getMergeQueueConfig,
@@ -2173,6 +2175,35 @@ test('getReadyConfig respects explicit remediation overrides', () => {
     });
   } finally {
     cleanUp(tmp);
+  }
+});
+
+test('ready failure classifier and verification accessors return configured values', () => {
+  const tmp = makeTempRepo();
+  try {
+    writeConfig(tmp, JSON.stringify({
+      ready: {
+        transientRetryBudget: 5,
+        remediationLogMaxBytes: 1234,
+        verificationGatingEnabled: false,
+        localCommandMap: {
+          'Unit Tests': 'npm test',
+        },
+      },
+    }));
+
+    assert.deepEqual(getReadyFailureClassifierConfig(tmp), {
+      transientRetryBudget: 5,
+      remediationLogMaxBytes: 1234,
+      localCommandMap: {
+        'Unit Tests': 'npm test',
+      },
+    });
+    assert.deepEqual(getReadyVerificationConfig(tmp), {
+      gatingEnabled: false,
+    });
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
   }
 });
 
