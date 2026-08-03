@@ -14,7 +14,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { BUDGET_MISSING } from './eval-validator.ts';
 import type {
   ChallengeStageEval,
@@ -514,7 +514,6 @@ function hashCheckOutput(logPath?: string): string | undefined {
   try {
     // Hash only a bounded excerpt to avoid run-specific noise (timestamps, etc)
     // This makes identical failures produce the same fingerprint
-    const { existsSync } = require('fs');
     if (!existsSync(logPath)) {
       return undefined;
     }

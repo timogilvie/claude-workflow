@@ -38,6 +38,7 @@ import { buildTaskDescriptor } from './task-descriptor-builder.ts';
 import { getEvalContextUpdatesConfig, getMaxCostUsd } from './config.ts';
 import { formatHokusaiSubmissionTriggerResult, triggerHokusaiSubmission } from './hokusai-submission-trigger.ts';
 import { readAndValidateArtifact } from './pre-pr-verification.ts';
+import { getPrePrVerificationConfig } from './config.ts';
 import type { PrePrVerificationConfig } from './pre-pr-verification-types.ts';
 import { getConfiguredModelsForDescriptor } from './model-registry.ts';
 import { getCurrentOperatingMode } from './operating-mode.ts';
@@ -389,7 +390,7 @@ function deriveRouteProvenance(
   return buildRouteLifecycleProvenance(readRouteLifecycleArtifacts(featureDir, archiveDir), repoDir);
 }
 
-function loadVerificationTelemetry(stateDir: string): ReturnType<typeof buildVerificationTelemetryFromArtifact> | null {
+function loadVerificationTelemetry(stateDir: string, repoDir: string): ReturnType<typeof buildVerificationTelemetryFromArtifact> | null {
   try {
     const artifactPath = join(stateDir, '.wavemill/pre-pr-verification/artifact.json');
     const { artifact } = readAndValidateArtifact(artifactPath);
@@ -398,8 +399,9 @@ function loadVerificationTelemetry(stateDir: string): ReturnType<typeof buildVer
       return null;
     }
 
-    // Build telemetry with default config (source='explicit', version from artifact)
-    const config: PrePrVerificationConfig = {
+    // Load real config to determine source (github-enforced vs explicit)
+    const realConfig = getPrePrVerificationConfig(repoDir);
+    const config: PrePrVerificationConfig = realConfig || {
       enabled: true,
       required: false,
       source: 'explicit',
@@ -507,7 +509,7 @@ export function enrichPostCompletionRecord(
     ),
     executedPlanning: input.executedPlanning,
     planningExecutionOutcome: input.planningExecutionOutcome,
-    verificationTelemetry: input.worktreePath ? loadVerificationTelemetry(input.worktreePath) : null,
+    verificationTelemetry: loadVerificationTelemetry(input.worktreePath || input.repoDir, input.repoDir),
     phaseDurations: input.phaseDurations,
     routePrediction: input.routePrediction,
     routing: input.routing,
