@@ -77,6 +77,18 @@ function setupReadyTask(issueId = 'HOK-1579', prNumber = 528): {
   mkdirSync(featureDir, { recursive: true });
 
   const stateFile = path.join(stateDir, 'workflow-state.json');
+  writeFileSync(path.join(repoDir, '.wavemill-config.json'), JSON.stringify({
+    ready: {
+      transientRetryBudget: 2,
+      remediationLogMaxBytes: 200,
+      verificationGatingEnabled: true,
+      localCommandMap: {
+        'Alembic Check': 'npm run ready:migrations',
+        'Unit Tests': 'npm test',
+        lint: 'npm run lint',
+      },
+    },
+  }, null, 2));
   writeFileSync(stateFile, JSON.stringify({
     tasks: {
       [issueId]: {
@@ -112,6 +124,15 @@ const WATCHDOG_CONFIG = {
   thresholdMinutes: 10,
   autoRecover: true,
   timeoutSeconds: 30,
+} as const;
+
+const WATCHDOG_CLASSIFIER_CONFIG = {
+  ...WATCHDOG_CONFIG,
+  localCommandMap: {
+    lint: 'npm run lint',
+    'Alembic Check': 'npm run ready:migrations',
+  },
+  remediationLogMaxBytes: 20_000,
 } as const;
 
 test('classify clean green stale ready as stuck', () => {
@@ -269,8 +290,8 @@ test('classify failing CI as waiting-on-ci', () => {
     },
   );
 
-  assert.equal(classification.kind, 'waiting-on-ci');
-  assert.match(classification.detail, /Failing checks/);
+  assert.equal(classification.kind, 'needs-user');
+  assert.match(classification.detail, /operator attention/);
 });
 
 test('classify pending CI as waiting-on-ci', () => {
@@ -296,31 +317,28 @@ test('classify completed failing CI as auto-remediable waiting-on-ci', () => {
   const classification = classifyReadyTask(
     makeSnapshot(),
     makeTruth({
-      checks: [{ name: 'Alembic Check', status: 'failure', rawStatus: 'FAILURE' }],
+      checks: [{ name: 'Alembic Check', status: 'failure', rawStatus: 'FAILURE', text: 'Tests failed in migration chain' }],
     }),
     new Date('2026-05-05T12:30:00.000Z'),
-    WATCHDOG_CONFIG,
+    WATCHDOG_CLASSIFIER_CONFIG,
   );
 
   assert.equal(classification.kind, 'waiting-on-ci');
-  assert.equal(classification.autoRemediable, true);
+  assert.equal(classification.autoRemediable, false);
+  assert.equal(classification.ciFailureCategory, 'deterministic-local');
 });
 
 test('classify stable safe failing CI as stable-failing-safe after repeated polls', () => {
   const classification = classifyReadyTask(
     makeSnapshot(),
     makeTruth({
-      checks: [{ name: 'lint', status: 'failure', rawStatus: 'FAILURE' }],
+      checks: [{ name: 'lint', status: 'failure', rawStatus: 'FAILURE', text: 'eslint lint error: no-unused-vars' }],
     }),
     new Date('2026-05-05T12:30:00.000Z'),
     {
-      enabled: true,
-      thresholdMinutes: 10,
-      autoRecover: true,
-      timeoutSeconds: 30,
+      ...WATCHDOG_CLASSIFIER_CONFIG,
       stableFailureConsecutivePolls: 2,
       stableFailureEscalateAfterPolls: 4,
-      safeRemediationCategories: ['lint', 'type', 'test', 'build', 'migration-chain', 'alembic'],
     },
     {
       issueId: 'HOK-1579',
@@ -340,25 +358,22 @@ test('classify stable safe failing CI as stable-failing-safe after repeated poll
   );
 
   assert.equal(classification.kind, 'stable-failing-safe');
-  assert.deepEqual(classification.remediationCategories, ['lint (FAILURE)']);
+  assert.deepEqual(classification.remediationCategories, ['lint']);
   assert.equal(classification.autoRemediable, true);
+  assert.equal(classification.localCommand, 'npm run lint');
 });
 
 test('classify resets consecutiveFailurePolls when prStateKey changes between polls', () => {
   const classification = classifyReadyTask(
     makeSnapshot(),
     makeTruth({
-      checks: [{ name: 'lint', status: 'failure', rawStatus: 'FAILURE' }],
+      checks: [{ name: 'lint', status: 'failure', rawStatus: 'FAILURE', text: 'eslint lint error: no-unused-vars' }],
     }),
     new Date('2026-05-05T12:30:00.000Z'),
     {
-      enabled: true,
-      thresholdMinutes: 10,
-      autoRecover: true,
-      timeoutSeconds: 30,
+      ...WATCHDOG_CLASSIFIER_CONFIG,
       stableFailureConsecutivePolls: 2,
       stableFailureEscalateAfterPolls: 4,
-      safeRemediationCategories: ['lint', 'type', 'test', 'build', 'migration-chain', 'alembic'],
     },
     {
       issueId: 'HOK-1579',
@@ -415,7 +430,7 @@ test('classify repeated unsafe failing CI as needs-user after the escalation thr
   );
 
   assert.equal(classification.kind, 'needs-user');
-  assert.match(classification.detail, /unsafe/);
+  assert.match(classification.detail, /operator attention/);
 });
 
 test('classify active eval or comparison as waiting-on-eval-comparison', () => {
@@ -758,7 +773,7 @@ test('tick launches remediation on stable completed failure', async () => {
   try {
     const deps = {
       fetchGitHubTruth: async () => makeTruth({
-        checks: [{ name: 'Alembic Check', status: 'failure', rawStatus: 'FAILURE' }],
+        checks: [{ name: 'Alembic Check', status: 'failure', rawStatus: 'FAILURE', text: 'Tests failed in migration chain' }],
       }),
       getCurrentHead: async () => 'head-1',
       launchReadyRemediation: async (
@@ -796,13 +811,13 @@ test('tick launches remediation on stable completed failure', async () => {
     assert.equal(second.findings.length, 1);
     assert.equal(second.findings[0].action, 'launched-remediation');
     assert.equal(launches.length, 1);
-    assert.deepEqual(launches[0], {
-      summary: 'Alembic Check (FAILURE)',
-      names: ['Alembic Check'],
-      attemptNumber: 1,
-      maxAttempts: 3,
-      toolPath: readyWatchdogToolPath,
-    });
+    assert.match(launches[0].summary, /Alembic Check \(FAILURE\)/);
+    assert.match(launches[0].summary, /localCommand: npm run ready:migrations/);
+    assert.match(launches[0].summary, /logExcerpt:/);
+    assert.deepEqual(launches[0].names, ['Alembic Check']);
+    assert.equal(launches[0].attemptNumber, 1);
+    assert.equal(launches[0].maxAttempts, 3);
+    assert.equal(launches[0].toolPath, readyWatchdogToolPath);
 
     const watchdogState = JSON.parse(readFileSync(path.join(stateDir, 'ready-watchdog-state.json'), 'utf-8')) as {
       tasks: Record<string, { failingChecksObservedCount?: number; action: string }>;
@@ -826,7 +841,7 @@ test('tick does not launch remediation while checks are still pending', async ()
       deps: {
         fetchGitHubTruth: async () => makeTruth({
           checks: [
-            { name: 'Alembic Check', status: 'failure', rawStatus: 'FAILURE' },
+            { name: 'Alembic Check', status: 'failure', rawStatus: 'FAILURE', text: 'Tests failed in migration chain' },
             { name: 'Unit Tests', status: 'pending', rawStatus: 'IN_PROGRESS' },
           ],
         }),
@@ -842,6 +857,97 @@ test('tick does not launch remediation while checks are still pending', async ()
     assert.equal(result.findings.length, 1);
     assert.equal(result.findings[0].action, 'reported');
     assert.equal(launchCalled, false);
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('tick treats check read failures as non-remediable waiting-on-ci', async () => {
+  const { repoDir, stateFile } = setupReadyTask('HOK-2604', 2604);
+  let launchCalled = false;
+
+  try {
+    const result = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: WATCHDOG_CONFIG,
+      deps: {
+        fetchGitHubTruth: async () => makeTruth({
+          state: '',
+          mergeable: 'UNKNOWN',
+          mergeStateStatus: 'UNKNOWN',
+          checks: [],
+          checkReadError: { errorType: 'command-failed', reason: 'gh pr view exited 1' },
+        }),
+        getCurrentHead: async () => 'head-1',
+        launchReadyRemediation: async () => {
+          launchCalled = true;
+          return { status: 'failed', detail: 'unexpected', attemptNumber: 1 };
+        },
+        now: () => new Date('2030-05-05T12:30:00.000Z'),
+      },
+    });
+
+    assert.equal(result.findings.length, 1);
+    assert.equal(result.findings[0].classification, 'waiting-on-ci');
+    assert.equal(result.findings[0].action, 'reported');
+    assert.match(result.findings[0].detail, /Required GitHub check status could not be read/);
+    assert.equal(launchCalled, false);
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('tick retries transient CI failures without launching remediation and then escalates', async () => {
+  const { repoDir, stateFile, stateDir, featureDir } = setupReadyTask('HOK-2604', 2604);
+  let launchCalled = false;
+  const deps = {
+    fetchGitHubTruth: async () => makeTruth({
+      checks: [{
+        name: 'Unit Tests',
+        status: 'failure' as const,
+        rawStatus: 'TIMED_OUT',
+        text: 'The hosted runner encountered an error while running your job.',
+      }],
+    }),
+    getCurrentHead: async () => 'head-1',
+    launchReadyRemediation: async () => {
+      launchCalled = true;
+      return { status: 'failed' as const, detail: 'unexpected', attemptNumber: 1 };
+    },
+  };
+
+  try {
+    const first = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: WATCHDOG_CONFIG,
+      deps: { ...deps, now: () => new Date('2030-05-05T12:30:00.000Z') },
+    });
+    const second = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: WATCHDOG_CONFIG,
+      deps: { ...deps, now: () => new Date('2030-05-05T12:31:00.000Z') },
+    });
+    const third = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: WATCHDOG_CONFIG,
+      deps: { ...deps, now: () => new Date('2030-05-05T12:32:00.000Z') },
+    });
+
+    assert.equal(first.findings[0].action, 'waiting-on-ci-transient');
+    assert.equal(second.findings[0].action, 'waiting-on-ci-transient');
+    assert.equal(third.findings[0].action, 'transient-retry-exhausted');
+    assert.equal(third.findings[0].classification, 'needs-user');
+    assert.equal(launchCalled, false);
+    assert.match(readFileSync(path.join(featureDir, '.needs-attention'), 'utf-8'), /Transient CI failure budget exhausted/);
+    const state = JSON.parse(readFileSync(path.join(stateDir, 'ready-watchdog-state.json'), 'utf-8')) as {
+      tasks: Record<string, { transientFailureCount?: number; lastCiFailureCategory?: string }>;
+    };
+    assert.equal(state.tasks['HOK-2604'].transientFailureCount, 3);
+    assert.equal(state.tasks['HOK-2604'].lastCiFailureCategory, 'transient-infra');
   } finally {
     await rm(repoDir, { recursive: true, force: true });
   }
@@ -886,7 +992,7 @@ test('tick respects same-head remediation in-flight guard', async () => {
       config: WATCHDOG_CONFIG,
       deps: {
         fetchGitHubTruth: async () => makeTruth({
-          checks: [{ name: 'Alembic Check', status: 'failure', rawStatus: 'FAILURE' }],
+          checks: [{ name: 'Alembic Check', status: 'failure', rawStatus: 'FAILURE', text: 'Tests failed in migration chain' }],
         }),
         getCurrentHead: async () => 'head-1',
         launchReadyRemediation: async () => {
@@ -898,6 +1004,87 @@ test('tick respects same-head remediation in-flight guard', async () => {
 
     assert.equal(result.findings.length, 1);
     assert.equal(result.findings[0].action, 'remediation-in-flight');
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('tick waits for a fresh verification artifact after remediation push when protocol is present', async () => {
+  const { repoDir, stateFile, featureDir } = setupReadyTask('HOK-2604', 2604);
+  writeFileSync(path.join(featureDir, '.ready-result.json'), JSON.stringify({
+    stage: 'ready',
+    status: 'running',
+    startedAt: '2030-05-05T12:00:00.000Z',
+    finishedAt: null,
+    agent: 'codex',
+    model: 'gpt-5.5',
+    notes: null,
+    artifacts: { type: 'ready', verdict: 'fail', prNumber: 2604, remediationAttempts: 1, remediationLaunchHead: 'old-head' },
+  }, null, 2));
+  writeFileSync(path.join(featureDir, '.verification-artifact-old-head.json'), JSON.stringify({
+    headSha: 'old-head',
+    timestamp: '2030-05-05T11:59:00.000Z',
+  }, null, 2));
+  let fetchCalled = false;
+
+  try {
+    const result = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: WATCHDOG_CONFIG,
+      deps: {
+        fetchGitHubTruth: async () => {
+          fetchCalled = true;
+          return makeTruth();
+        },
+        getCurrentHead: async () => 'new-head',
+        now: () => new Date('2030-05-05T12:30:00.000Z'),
+      },
+    });
+
+    assert.equal(fetchCalled, false);
+    assert.equal(result.findings.length, 1);
+    assert.equal(result.findings[0].action, 'awaiting-verification');
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('tick proceeds to poll CI when verification artifact for remediated head is fresh', async () => {
+  const { repoDir, stateFile, featureDir } = setupReadyTask('HOK-2604', 2604);
+  writeFileSync(path.join(featureDir, '.ready-result.json'), JSON.stringify({
+    stage: 'ready',
+    status: 'running',
+    startedAt: '2030-05-05T12:00:00.000Z',
+    finishedAt: null,
+    agent: 'codex',
+    model: 'gpt-5.5',
+    notes: null,
+    artifacts: { type: 'ready', verdict: 'fail', prNumber: 2604, remediationAttempts: 1, remediationLaunchHead: 'old-head' },
+  }, null, 2));
+  writeFileSync(path.join(featureDir, '.verification-artifact-new-head.json'), JSON.stringify({
+    headSha: 'new-head',
+    timestamp: '2030-05-05T12:10:00.000Z',
+  }, null, 2));
+  let fetchCalled = false;
+
+  try {
+    const result = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: WATCHDOG_CONFIG,
+      deps: {
+        fetchGitHubTruth: async () => {
+          fetchCalled = true;
+          return makeTruth();
+        },
+        getCurrentHead: async () => 'new-head',
+        now: () => new Date('2030-05-05T12:30:00.000Z'),
+      },
+    });
+
+    assert.equal(fetchCalled, true);
+    assert.notEqual(result.findings[0]?.action, 'awaiting-verification');
   } finally {
     await rm(repoDir, { recursive: true, force: true });
   }
@@ -942,7 +1129,7 @@ test('tick respects remediation max attempts', async () => {
       config: WATCHDOG_CONFIG,
       deps: {
         fetchGitHubTruth: async () => makeTruth({
-          checks: [{ name: 'Alembic Check', status: 'failure', rawStatus: 'FAILURE' }],
+          checks: [{ name: 'Alembic Check', status: 'failure', rawStatus: 'FAILURE', text: 'Tests failed in migration chain' }],
         }),
         getCurrentHead: async () => 'head-2',
         launchReadyRemediation: async () => {
@@ -999,7 +1186,7 @@ test('tick relaunches remediation when head advances past prior launch head', as
       config: WATCHDOG_CONFIG,
       deps: {
         fetchGitHubTruth: async () => makeTruth({
-          checks: [{ name: 'Alembic Check', status: 'failure', rawStatus: 'FAILURE' }],
+          checks: [{ name: 'Alembic Check', status: 'failure', rawStatus: 'FAILURE', text: 'Tests failed in migration chain' }],
         }),
         getCurrentHead: async () => 'head-2',
         launchReadyRemediation: async (_snapshot, _summary, _names, attemptNumber, maxAttempts) => {
@@ -1053,7 +1240,7 @@ test('tick surfaces remediation launch failures', async () => {
       config: WATCHDOG_CONFIG,
       deps: {
         fetchGitHubTruth: async () => makeTruth({
-          checks: [{ name: 'Alembic Check', status: 'failure', rawStatus: 'FAILURE' }],
+          checks: [{ name: 'Alembic Check', status: 'failure', rawStatus: 'FAILURE', text: 'Tests failed in migration chain' }],
         }),
         getCurrentHead: async () => 'head-2',
         launchReadyRemediation: async () => ({
