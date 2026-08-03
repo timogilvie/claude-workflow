@@ -166,7 +166,9 @@ describe('verification metrics', () => {
     assert.equal(metrics.total_records_analyzed, 4);
     assert.equal(metrics.first_green_ci_rate, 50);
     assert.equal(metrics.local_vs_remote_detection_rate, 0);
-    assert.equal(metrics.ci_remediation_rate, 100);
+    // A remote fix was required, but no successful remediation outcome was
+    // recorded. Requiring remediation alone must not count as a remediation.
+    assert.equal(metrics.ci_remediation_rate, 0);
     assert.equal(metrics.median_time_to_green_ms, 10 * 60 * 1000);
     assert.equal(metrics.failures_prevented_before_pr, 25);
     assert.equal(metrics.operator_override_rate, 25);
