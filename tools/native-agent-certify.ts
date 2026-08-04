@@ -190,8 +190,8 @@ function resolveRegistryModelId(
   return modelId;
 }
 
-if (import.meta.main) {
-runTool({
+export function runCertifyCommand(argv = process.argv.slice(2)): Promise<void> {
+return runTool({
   name: 'native-agent-certify',
   description: 'Run the certification scenario harness for a native provider/model/phase and persist the artifact on success.',
   options: {
@@ -309,5 +309,9 @@ runTool({
       process.exit(1);
     }
   },
-});
+}, argv);
+}
+
+if (import.meta.main) {
+  await runCertifyCommand();
 }

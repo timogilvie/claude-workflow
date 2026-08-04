@@ -75,10 +75,14 @@ ${GREEN}Commands:${NC}
   ${CYAN}native-agent${NC}  Manage native provider certification and model reporting
              Subcommands:
                ${CYAN}wavemill native-agent models report${NC}
-                          List certification status, phase eligibility, suite
+                          List global certification status, phase eligibility, suite
                           version, age, and known limitations for all
                           native-capable models. Never triggers live provider calls.
-                          Options: --json, --provider <p>, --model <m>, --repo <dir>
+                          Options: --json, --provider <p>, --model <m>, --status <s>, --repo <dir>
+               ${CYAN}wavemill native-agent certifications <subcommand>${NC}
+                          Manage the global native-agent certification store.
+                          Subcommands: list, inspect, verify, report, certify,
+                          re-certify, migrate.
                ${CYAN}wavemill native-agent certify${NC}
                           Run the certification scenario harness for a specific
                           provider/model/phase. Persists a NativeCertificationArtifact
@@ -1204,11 +1208,15 @@ run_native_agent() {
     certify)
       exec npx tsx "$TOOLS_DIR/native-agent-certify.ts" "$@"
       ;;
+    certifications)
+      exec npx tsx "$TOOLS_DIR/native-agent-certifications.ts" "$@"
+      ;;
     *)
       echo "Usage: wavemill native-agent <subcommand> [options]" >&2
       echo "" >&2
       echo "Subcommands:" >&2
       echo "  models report    List certification status for all native-capable models" >&2
+      echo "  certifications   Manage global certification artifacts" >&2
       echo "  certify          Run the certification harness for a provider/model/phase" >&2
       exit 1
       ;;
