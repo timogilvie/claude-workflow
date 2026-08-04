@@ -27,7 +27,7 @@ describe('hok2423 native provider gate verifier', () => {
 
     const wrongIdentity = summary.cases.find((entry) => entry.caseId === 'wrong-identity-artifact');
     assert.ok(wrongIdentity);
-    assert.equal(wrongIdentity.reportState, 'uncertified');
+    assert.equal(wrongIdentity.reportState, 'not-certified');
     assert.deepEqual(wrongIdentity.reportEligibleStages, []);
   });
 });

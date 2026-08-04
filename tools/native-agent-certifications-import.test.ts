@@ -86,6 +86,34 @@ describe('importLegacyCertifications', () => {
     }
   });
 
+  it('refuses legacy v1 suite artifacts and schedules re-certification', () => {
+    const repoDir = makeTempDir();
+    const sharedRoot = makeTempDir();
+    const previousRoot = process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT;
+    process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT = sharedRoot;
+    try {
+      writeCertification(repoDir, makeArtifact({ suiteVersion: 'v1' }));
+      const summary = importLegacyCertifications({
+        repoDir,
+        now: new Date('2026-07-02T00:00:00.000Z'),
+      });
+
+      assert.equal(summary.imported.length, 0);
+      assert.deepEqual(summary.skipped.map((entry) => [entry.reason, entry.action]), [
+        ['wrong-suite', 're-certify'],
+      ]);
+    } finally {
+      if (previousRoot === undefined) {
+        delete process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT;
+      } else {
+        process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT = previousRoot;
+      }
+      cleanup(repoDir);
+      cleanup(sharedRoot);
+    }
+  });
+
+
   it('imports normalized OpenRouter storage identities', () => {
     const repoDir = makeTempDir();
     const sharedRoot = makeTempDir();

@@ -9,11 +9,12 @@
  */
 
 import {
+  CERTIFICATION_TTL_DAYS,
   phaseSatisfies,
   type CertificationPhase,
   type NativeCertificationArtifact,
 } from './schema.ts';
-import { evaluateEligibility, loadCertification, loadSharedCertificationWithLegacyFallback } from './loader.ts';
+import { evaluateEligibility, loadCertification, loadGlobalCertification } from './loader.ts';
 import { STAGE_PHASE_REQUIREMENT, type RouterRole } from './router-filter.ts';
 import { getEffectiveRegistry, type ModelRegistry, type ReadOnlyNativeCapability } from '../../model-registry.ts';
 import { resolveCertificationStorageIdentity } from './identity.ts';
@@ -30,11 +31,10 @@ import { PATCH_CODING_CERTIFICATION_RELATIVE_PATH } from '../coding-certificatio
 
 /** Operator-facing certification state for a single model. */
 export type ModelCertificationState =
-  | 'ready'
-  | 'uncertified'
+  | 'ready-for-challenge'
+  | 'not-certified'
   | 'stale'
-  | 'unsupported'
-  | 'certification-only';
+  | 'certified-unavailable';
 
 /** Outcome of a single scenario from the on-disk artifact. */
 export interface ScenarioOutcome {
@@ -60,6 +60,10 @@ export interface ModelCertificationReportRow {
   certifiedAt?: string;
   /** Age of certification in days (from certifiedAt to now). */
   ageDays?: number;
+  /** ISO 8601 datetime when the artifact expires. */
+  expiresAt?: string;
+  /** Days until expiry. Negative means already expired. */
+  expiresInDays?: number;
   /** Deduplicated known limitations from registry + artifact. */
   knownLimitations: string[];
   /** Per-scenario outcomes from the on-disk artifact. */
@@ -93,6 +97,8 @@ export interface BuildModelCertificationReportOptions {
   provider?: string;
   /** Optional model filter. Only rows matching this model ID are returned. */
   model?: string;
+  /** Optional status filter. */
+  status?: ModelCertificationState;
 }
 
 // ---------------------------------------------------------------------------
@@ -125,46 +131,23 @@ export function buildModelCertificationReport(
 
     const readOnlyNative = nativeCapability.readOnlyNative;
 
-    // Unsupported — short-circuit before disk access
-    if (readOnlyNative === 'unsupported') {
+    if (isRuntimeUnavailable(capabilities)) {
       rows.push({
         provider: nativeCapability.nativeProvider,
         model: modelId,
         native: readOnlyNative,
-        state: 'unsupported',
+        state: 'certified-unavailable',
         eligibleStages: [],
         knownLimitations: flattenLimitations([nativeCapability.limitations]),
         scenarios: [],
-        globalCertification: { state: 'unsupported' },
+        globalCertification: { state: 'certified-unavailable' },
         localReadiness: buildLocalReadiness(repoDir, []),
         ...(findModelExclusion(modelId, 'coding', repoDir) ? { exclusion: findModelExclusion(modelId, 'coding', repoDir) } : {}),
       });
       continue;
     }
 
-    // Partial — routable only in certification mode
-    if (readOnlyNative === 'partial') {
-      const registryMeta = nativeCapability.certification;
-      rows.push({
-        provider: nativeCapability.nativeProvider,
-        model: modelId,
-        native: readOnlyNative,
-        state: 'certification-only',
-        certifiedPhase: registryMeta?.maxCertifiedPhase,
-        eligibleStages: [],
-        suiteVersion: registryMeta?.certificationSuiteVersion,
-        certifiedAt: registryMeta?.certifiedAt,
-        ageDays: registryMeta?.certifiedAt ? computeAgeDays(registryMeta.certifiedAt, now) : undefined,
-        knownLimitations: flattenLimitations([nativeCapability.limitations, registryMeta?.knownLimitations]),
-        scenarios: [],
-        globalCertification: { state: 'certification-only' },
-        localReadiness: buildLocalReadiness(repoDir, []),
-        ...(findModelExclusion(modelId, 'coding', repoDir) ? { exclusion: findModelExclusion(modelId, 'coding', repoDir) } : {}),
-      });
-      continue;
-    }
-
-    // Certified — determine state from on-disk artifact only so the report
+    // Determine state from global on-disk artifact only so the report
     // matches provider-resolution fail-closed semantics.
     const certMeta = nativeCapability.certification;
 
@@ -173,11 +156,11 @@ export function buildModelCertificationReport(
         provider: nativeCapability.nativeProvider,
         model: modelId,
         native: readOnlyNative,
-        state: 'uncertified',
+        state: 'not-certified',
         eligibleStages: [],
         knownLimitations: flattenLimitations([nativeCapability.limitations]),
         scenarios: [],
-        globalCertification: { state: 'uncertified' },
+        globalCertification: { state: 'not-certified' },
         localReadiness: buildLocalReadiness(repoDir, []),
         ...(findModelExclusion(modelId, 'coding', repoDir) ? { exclusion: findModelExclusion(modelId, 'coding', repoDir) } : {}),
       });
@@ -187,20 +170,20 @@ export function buildModelCertificationReport(
     // Try loading the on-disk artifact
     const loaded = opts.loadCertificationFn
       ? loadCertFn(repoDir, nativeCapability.nativeProvider, modelId, certMeta.certificationSuiteVersion)
-      : loadSharedCertificationWithLegacyFallback(repoDir, nativeCapability.nativeProvider, modelId, certMeta.certificationSuiteVersion);
+      : loadGlobalCertification(nativeCapability.nativeProvider, modelId, certMeta.certificationSuiteVersion);
 
     if (!loaded.ok) {
       rows.push({
         provider: nativeCapability.nativeProvider,
         model: modelId,
         native: readOnlyNative,
-        state: 'uncertified',
+        state: 'not-certified',
         eligibleStages: [],
         suiteVersion: certMeta.certificationSuiteVersion,
         knownLimitations: flattenLimitations([nativeCapability.limitations, certMeta.knownLimitations]),
         scenarios: [],
         globalCertification: {
-          state: 'uncertified',
+          state: 'not-certified',
           ...(getLoadedPath(loaded) ? { artifactPath: getLoadedPath(loaded) } : {}),
           ...(getLoadedScope(loaded) ? { storageScope: getLoadedScope(loaded) } : {}),
         },
@@ -222,10 +205,10 @@ export function buildModelCertificationReport(
         modelId,
         readOnlyNative,
         loaded.artifact,
-        'uncertified',
+        'not-certified',
         now,
         flattenLimitations([nativeCapability.limitations, certMeta.knownLimitations]),
-      ), repoDir, [], 'uncertified', getLoadedPath(loaded), getLoadedScope(loaded), findModelExclusion(modelId, 'coding', repoDir)));
+      ), repoDir, [], 'not-certified', getLoadedPath(loaded), getLoadedScope(loaded), findModelExclusion(modelId, 'coding', repoDir)));
       continue;
     }
 
@@ -244,7 +227,7 @@ export function buildModelCertificationReport(
         now,
         flattenLimitations([nativeCapability.limitations, certMeta.knownLimitations]),
       );
-      rows.push(withReadiness(row, repoDir, row.eligibleStages, 'ready', getLoadedPath(loaded), getLoadedScope(loaded), findModelExclusion(modelId, 'coding', repoDir)));
+      rows.push(withReadiness(row, repoDir, row.eligibleStages, 'ready-for-challenge', getLoadedPath(loaded), getLoadedScope(loaded), findModelExclusion(modelId, 'coding', repoDir)));
       continue;
     }
 
@@ -253,7 +236,7 @@ export function buildModelCertificationReport(
       modelId,
       readOnlyNative,
       loaded.artifact,
-      eligibility.reason === 'stale' ? 'stale' : 'uncertified',
+      eligibility.reason === 'stale' ? 'stale' : 'not-certified',
       now,
       flattenLimitations([nativeCapability.limitations, certMeta.knownLimitations]),
     );
@@ -268,12 +251,13 @@ export function buildModelCertificationReport(
     ));
   }
 
-  rows.sort((a, b) => {
+  const filteredRows = opts.status ? rows.filter(row => row.state === opts.status) : rows;
+  filteredRows.sort((a, b) => {
     const providerCmp = a.provider.localeCompare(b.provider);
     return providerCmp !== 0 ? providerCmp : a.model.localeCompare(b.model);
   });
 
-  return rows;
+  return filteredRows;
 }
 
 // ---------------------------------------------------------------------------
@@ -288,7 +272,7 @@ function rowFromArtifact(
   now: Date,
   registryLimitations: string[],
 ): ModelCertificationReportRow {
-  return rowFromArtifactState(provider, model, native, artifact, 'ready', now, registryLimitations);
+  return rowFromArtifactState(provider, model, native, artifact, 'ready-for-challenge', now, registryLimitations);
 }
 
 function rowFromArtifactState(
@@ -296,7 +280,7 @@ function rowFromArtifactState(
   model: string,
   native: ReadOnlyNativeCapability,
   artifact: NativeCertificationArtifact,
-  state: Extract<ModelCertificationState, 'ready' | 'stale' | 'uncertified'>,
+  state: Extract<ModelCertificationState, 'ready-for-challenge' | 'stale' | 'not-certified'>,
   now: Date,
   registryLimitations: string[],
 ): ModelCertificationReportRow {
@@ -308,16 +292,20 @@ function rowFromArtifactState(
     ...(s.failureMessage ? { failureMessage: s.failureMessage } : {}),
   }));
   const ageDays = computeAgeDays(artifact.certifiedAt, now);
-  const eligibleStages = state === 'ready' ? computeEligibleStages(artifact.phase) : [];
+  const expiresAt = computeExpiresAt(artifact).toISOString();
+  const expiresInDays = computeDaysUntil(expiresAt, now);
+  const eligibleStages = state === 'ready-for-challenge' ? computeEligibleStages(artifact.phase) : [];
 
   return {
     provider, model, native,
-    state: state === 'ready' && eligibleStages.length === 0 ? 'uncertified' : state,
+    state: state === 'ready-for-challenge' && eligibleStages.length === 0 ? 'not-certified' : state,
     certifiedPhase: artifact.phase,
     eligibleStages,
     suiteVersion: artifact.suiteVersion,
     certifiedAt: artifact.certifiedAt,
     ageDays,
+    expiresAt,
+    expiresInDays,
     knownLimitations,
     scenarios,
     globalCertification: { state },
@@ -356,7 +344,7 @@ export function serializeReport(
 // Human-readable table
 // ---------------------------------------------------------------------------
 
-const COLUMN_HEADERS = ['Provider', 'Model', 'State', 'Local Ready', 'Eligible Stages', 'Suite', 'Age (days)', 'Exclusion', 'Limitations'] as const;
+const COLUMN_HEADERS = ['Provider', 'Model', 'Status', 'Local Ready', 'Eligible Stages', 'Phase', 'Suite', 'Age', 'Expires', 'Exclusion', 'Limitations'] as const;
 
 /**
  * Render the report as a human-readable table.
@@ -374,8 +362,10 @@ export function renderReportTable(rows: ModelCertificationReportRow[]): string {
       : row.globalCertification.state,
     summarizeLocalReadiness(row),
     row.eligibleStages.length > 0 ? row.eligibleStages.join(', ') : '—',
+    row.certifiedPhase ?? '—',
     row.suiteVersion ?? '—',
     row.ageDays !== undefined ? String(row.ageDays) : '—',
+    row.expiresInDays !== undefined ? String(row.expiresInDays) : '—',
     row.exclusion
       ? `${row.exclusion.source}${row.exclusion.reason ? `: ${row.exclusion.reason}` : ''}`
       : '—',
@@ -414,6 +404,26 @@ function computeEligibleStages(certifiedPhase: CertificationPhase): RouterRole[]
 function computeAgeDays(certifiedAt: string, now: Date): number {
   const ms = now.getTime() - Date.parse(certifiedAt);
   return Math.floor(ms / (24 * 60 * 60 * 1000));
+}
+
+function computeDaysUntil(isoTimestamp: string, now: Date): number {
+  const ms = Date.parse(isoTimestamp) - now.getTime();
+  return Math.ceil(ms / (24 * 60 * 60 * 1000));
+}
+
+function computeExpiresAt(artifact: NativeCertificationArtifact): Date {
+  if (artifact.expiresAt) {
+    return new Date(artifact.expiresAt);
+  }
+  return new Date(Date.parse(artifact.certifiedAt) + CERTIFICATION_TTL_DAYS * 24 * 60 * 60 * 1000);
+}
+
+function isRuntimeUnavailable(capabilities: { disabled?: boolean; supportedModel?: { lifecycle?: string }; nativeCapability?: { readOnlyNative?: string } }): boolean {
+  return capabilities.disabled === true
+    || capabilities.supportedModel?.lifecycle === 'deprecated'
+    || capabilities.supportedModel?.lifecycle === 'blocked'
+    || capabilities.nativeCapability?.readOnlyNative === 'unsupported'
+    || capabilities.nativeCapability?.readOnlyNative === 'partial';
 }
 
 function flattenLimitations(sources: (string[] | undefined)[]): string[] {
