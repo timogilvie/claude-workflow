@@ -23,6 +23,22 @@ export interface IncidentEvidenceLogEntry {
 
 type IncidentIndex = Record<string, IncidentRecord>;
 
+export interface LinearSyncMetadataInput {
+  linearIssueId: string;
+  linearIssueUrl?: string;
+  evidenceRevision: string;
+  syncedAt?: string;
+  cooldownUntil?: string;
+}
+
+export interface LinearSyncErrorInput {
+  action: string;
+  message: string;
+  category?: string;
+  retryQueued?: boolean;
+  at?: string;
+}
+
 export class IncidentStore {
   private readonly incidentsDir: string;
   private readonly escalationThreshold: number;
@@ -132,6 +148,80 @@ export class IncidentStore {
       }
     }
     return entries;
+  }
+
+  computeEvidenceRevision(incident: Pick<IncidentRecord, 'fingerprint' | 'occurrenceCount' | 'evidence'>): string {
+    const normalized = incident.evidence.map((evidence) => ({
+      type: evidence.type,
+      source: evidence.source,
+      timestamp: evidence.timestamp,
+      lineNumber: evidence.lineNumber ?? null,
+      key: evidence.key ?? null,
+      redactedData: evidence.redactedData,
+    })).sort((a, b) =>
+      `${a.type}:${a.source}:${a.key ?? ''}:${a.timestamp}`.localeCompare(`${b.type}:${b.source}:${b.key ?? ''}:${b.timestamp}`),
+    );
+    return createHash('sha256').update(JSON.stringify({
+      fingerprint: incident.fingerprint,
+      occurrenceCount: incident.occurrenceCount,
+      evidence: normalized,
+    })).digest('hex');
+  }
+
+  async getIncident(fingerprint: string): Promise<IncidentRecord | null> {
+    const index = this.readIndex(join(this.incidentsDir, 'index.json'));
+    return index[fingerprint] ?? null;
+  }
+
+  async recordLinearSync(fingerprint: string, input: LinearSyncMetadataInput): Promise<IncidentRecord | null> {
+    const indexPath = join(this.incidentsDir, 'index.json');
+    let updated: IncidentRecord | null = null;
+    await this.mutateIndex(indexPath, (index) => {
+      const existing = index[fingerprint];
+      if (!existing) return index;
+      updated = {
+        ...existing,
+        metadata: {
+          ...(existing.metadata ?? {}),
+          linkedLinearId: input.linearIssueId,
+          linkedLinearUrl: input.linearIssueUrl ?? existing.metadata?.linkedLinearUrl,
+          lastSyncedAt: input.syncedAt ?? this.now().toISOString(),
+          lastSyncedEvidenceRevision: input.evidenceRevision,
+          syncCooldownUntil: input.cooldownUntil,
+          updateCount: Number(existing.metadata?.updateCount ?? 0) + 1,
+          syncErrors: [],
+        },
+      };
+      index[fingerprint] = updated;
+      return index;
+    });
+    return updated;
+  }
+
+  async recordSyncError(fingerprint: string, input: LinearSyncErrorInput): Promise<IncidentRecord | null> {
+    const indexPath = join(this.incidentsDir, 'index.json');
+    let updated: IncidentRecord | null = null;
+    await this.mutateIndex(indexPath, (index) => {
+      const existing = index[fingerprint];
+      if (!existing) return index;
+      const errors = Array.isArray(existing.metadata?.syncErrors) ? existing.metadata.syncErrors : [];
+      updated = {
+        ...existing,
+        metadata: {
+          ...(existing.metadata ?? {}),
+          syncErrors: [...errors, {
+            at: input.at ?? this.now().toISOString(),
+            action: input.action,
+            category: input.category,
+            message: input.message,
+            retryQueued: input.retryQueued,
+          }].slice(-5),
+        },
+      };
+      index[fingerprint] = updated;
+      return index;
+    });
+    return updated;
   }
 
   async summaryReport(): Promise<string> {

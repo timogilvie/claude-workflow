@@ -502,6 +502,44 @@ export interface ObserverConfig {
   retention: {
     maxSnapshots: number;
   };
+  linear?: Partial<ObserverLinearConfig>;
+}
+
+export type ObserverLinearPolicyStrategy = 'create' | 'no_create' | 'threshold' | 'create_if_persistent';
+
+export interface ObserverLinearPolicyConfig {
+  strategy: ObserverLinearPolicyStrategy;
+  threshold?: number;
+  persistentThreshold?: number;
+  correlateIssueIds?: string[];
+}
+
+export interface ObserverLinearRedactionConfig {
+  enabled: boolean;
+  patterns: string[];
+  redactPaths: boolean;
+  redactEmails: boolean;
+  truncateTranscripts: boolean;
+  truncateLength: number;
+  markFormat: string;
+}
+
+export interface ObserverLinearConfig {
+  enabled: boolean;
+  detectionOnly: boolean;
+  project?: string;
+  team?: string;
+  label?: string;
+  retryQueuePath: string;
+  updateCooldownMinutes: number;
+  policies: {
+    product_defect: ObserverLinearPolicyConfig;
+    model_task_harness_outcome: ObserverLinearPolicyConfig;
+    external_transient_dependency: ObserverLinearPolicyConfig;
+    configuration_operator_condition: ObserverLinearPolicyConfig;
+    stale_orphaned_state: ObserverLinearPolicyConfig;
+  };
+  redaction: ObserverLinearRedactionConfig;
 }
 
 export interface IncidentConfig {
@@ -796,6 +834,29 @@ export const OBSERVER_DEFAULTS: ObserverConfig = {
   maxLogLines: 240,
   retention: {
     maxSnapshots: 50,
+  },
+};
+
+export const OBSERVER_LINEAR_DEFAULTS: ObserverLinearConfig = {
+  enabled: false,
+  detectionOnly: false,
+  retryQueuePath: '.wavemill/registry/linear-incident-queue.jsonl',
+  updateCooldownMinutes: 5,
+  policies: {
+    product_defect: { strategy: 'create' },
+    model_task_harness_outcome: { strategy: 'no_create', correlateIssueIds: ['HOK-2593'] },
+    external_transient_dependency: { strategy: 'threshold', threshold: 3 },
+    configuration_operator_condition: { strategy: 'create_if_persistent', persistentThreshold: 3 },
+    stale_orphaned_state: { strategy: 'create_if_persistent', persistentThreshold: 3 },
+  },
+  redaction: {
+    enabled: true,
+    patterns: ['api[_-]?key', 'token', 'secret', 'password', 'credential', 'private[_-]?key'],
+    redactPaths: true,
+    redactEmails: true,
+    truncateTranscripts: true,
+    truncateLength: 200,
+    markFormat: '[REDACTED: {type}]',
   },
 };
 
@@ -1579,6 +1640,46 @@ export function getObserverConfig(repoDir?: string): ObserverConfig {
     retention: {
       ...OBSERVER_DEFAULTS.retention,
       ...(observer.retention ?? {}),
+    },
+  };
+}
+
+export function getObserverLinearConfig(repoDir?: string): ObserverLinearConfig {
+  const observer = loadWavemillConfig(repoDir).observer ?? {};
+  const linear = observer.linear ?? {};
+  const envEnabled = process.env.WAVEMILL_OBSERVER_LINEAR_ENABLED;
+  const envProject = process.env.WAVEMILL_OBSERVER_LINEAR_PROJECT;
+  return {
+    ...OBSERVER_LINEAR_DEFAULTS,
+    ...linear,
+    enabled: envEnabled === undefined ? linear.enabled ?? OBSERVER_LINEAR_DEFAULTS.enabled : envEnabled === '1' || envEnabled.toLowerCase() === 'true',
+    project: envProject ?? linear.project,
+    policies: {
+      product_defect: {
+        ...OBSERVER_LINEAR_DEFAULTS.policies.product_defect,
+        ...(linear.policies?.product_defect ?? {}),
+      },
+      model_task_harness_outcome: {
+        ...OBSERVER_LINEAR_DEFAULTS.policies.model_task_harness_outcome,
+        ...(linear.policies?.model_task_harness_outcome ?? {}),
+      },
+      external_transient_dependency: {
+        ...OBSERVER_LINEAR_DEFAULTS.policies.external_transient_dependency,
+        ...(linear.policies?.external_transient_dependency ?? {}),
+      },
+      configuration_operator_condition: {
+        ...OBSERVER_LINEAR_DEFAULTS.policies.configuration_operator_condition,
+        ...(linear.policies?.configuration_operator_condition ?? {}),
+      },
+      stale_orphaned_state: {
+        ...OBSERVER_LINEAR_DEFAULTS.policies.stale_orphaned_state,
+        ...(linear.policies?.stale_orphaned_state ?? {}),
+      },
+    },
+    redaction: {
+      ...OBSERVER_LINEAR_DEFAULTS.redaction,
+      ...(linear.redaction ?? {}),
+      patterns: linear.redaction?.patterns ?? OBSERVER_LINEAR_DEFAULTS.redaction.patterns,
     },
   };
 }
