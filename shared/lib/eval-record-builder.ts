@@ -571,7 +571,11 @@ export function buildVerificationTelemetryFromArtifact(
     },
     local_verification: localVerification,
     timeline: {
-      local_start: artifact.startTime ? new Date(artifact.startTime).toISOString() : undefined,
+      // Legacy artifacts predate startTime/endTime. Their required timestamp
+      // still describes the verification start and must not be discarded.
+      local_start: artifact.startTime
+        ? new Date(artifact.startTime).toISOString()
+        : artifact.timestamp,
       local_end: artifact.endTime ? new Date(artifact.endTime).toISOString() : undefined,
     },
   };
