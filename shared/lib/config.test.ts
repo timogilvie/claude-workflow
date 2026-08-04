@@ -3584,6 +3584,32 @@ test('pre-PR verification: loads full configuration', () => {
           mode: 'warn',
           warnAfterDays: 14,
         },
+        remoteOnlyExceptions: [
+          {
+            checkName: 'Security Scan',
+            reason: 'Requires org secrets unavailable locally',
+            acknowledgedBy: 'security@example.com',
+            acknowledgedAt: '2026-08-04T12:00:00Z',
+          },
+        ],
+        driftValidation: {
+          enabled: true,
+          blockOnUnmapped: true,
+          warnOnDrift: true,
+          autoAcknowledgeThreshold: 0.9,
+        },
+        mappingAcknowledgements: {
+          checks: {
+            'Lint Check': 'npm run lint',
+            'Unit Tests': {
+              localCommand: 'npm test',
+              workflowPath: '.github/workflows/ci.yml',
+              jobName: 'unit',
+            },
+          },
+          acknowledgedBy: 'maintainer@example.com',
+          acknowledgedAt: '2026-08-04T12:00:00Z',
+        },
       },
     }));
 
@@ -3598,6 +3624,16 @@ test('pre-PR verification: loads full configuration', () => {
     assert.equal(config.staleTtlSeconds, 7200);
     assert.equal(config.compatibility?.mode, 'warn');
     assert.equal(config.compatibility?.warnAfterDays, 14);
+    assert.equal(config.remoteOnlyExceptions?.[0]?.checkName, 'Security Scan');
+    assert.equal(config.remoteOnlyExceptions?.[0]?.reason, 'Requires org secrets unavailable locally');
+    assert.equal(config.driftValidation?.blockOnUnmapped, true);
+    assert.equal(config.driftValidation?.autoAcknowledgeThreshold, 0.9);
+    assert.equal(config.mappingAcknowledgements?.checks?.['Lint Check'], 'npm run lint');
+    assert.deepEqual(config.mappingAcknowledgements?.checks?.['Unit Tests'], {
+      localCommand: 'npm test',
+      workflowPath: '.github/workflows/ci.yml',
+      jobName: 'unit',
+    });
   } finally {
     cleanUp(tmp);
   }
@@ -3710,6 +3746,54 @@ test('pre-PR verification: rejects invalid compatibility mode', () => {
     }));
 
     assert.throws(() => loadWavemillConfig(tmp), /validation failed|mode/);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('pre-PR verification: rejects remote-only exception without rationale', () => {
+  if (!hasAjv) return;
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      prePrVerification: {
+        enabled: true,
+        recipe: {
+          commands: ['npm test'],
+        },
+        remoteOnlyExceptions: [
+          {
+            checkName: 'Security Scan',
+          },
+        ],
+      },
+    }));
+
+    assert.throws(() => loadWavemillConfig(tmp), /validation failed|reason/);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('pre-PR verification: rejects drift threshold outside confidence range', () => {
+  if (!hasAjv) return;
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      prePrVerification: {
+        enabled: true,
+        recipe: {
+          commands: ['npm test'],
+        },
+        driftValidation: {
+          autoAcknowledgeThreshold: 1.5,
+        },
+      },
+    }));
+
+    assert.throws(() => loadWavemillConfig(tmp), /validation failed|autoAcknowledgeThreshold/);
   } finally {
     cleanUp(tmp);
   }
