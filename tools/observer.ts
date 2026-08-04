@@ -5,10 +5,15 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mutateJsonState } from '../shared/lib/state-mutex.ts';
-import { getIncidentConfig } from '../shared/lib/config.ts';
+import { getIncidentConfig, getIncidentLinearConfig } from '../shared/lib/config.ts';
 import { detectIncidentsForTask } from '../shared/lib/wavemill-incident-detector.ts';
 import { IncidentStore } from '../shared/lib/wavemill-incident-store.ts';
 import type { IncidentRecord } from '../shared/lib/wavemill-incident-model.ts';
+import {
+  defaultIncidentLinearClient,
+  IncidentToLinearSync,
+  writeIncidentLinearAudit,
+} from '../shared/lib/incident-to-linear-sync.ts';
 
 type Severity = 'urgent' | 'high' | 'medium' | 'low';
 type Category = 'stuck' | 'crash' | 'warning' | 'ux' | 'operational';
@@ -33,6 +38,9 @@ interface ObserverOptions {
   serviceMode?: boolean;
   incidentDetector: boolean;
   dependencyThreshold?: number;
+  linearSync: boolean;
+  linearDryRun: boolean;
+  replayUnsynced: boolean;
 }
 
 interface Pane {
@@ -137,6 +145,9 @@ Options:
   --repo-dir <path>      Limit service observation to one repository
   --session <name>       Limit service observation to one tmux session
   --no-incident-detector Disable repo-local incident reconciliation
+  --linear-sync          Sync confirmed deduplicated incidents to Linear
+  --linear-dryrun        Plan incident Linear sync without Linear writes
+  --replay-unsynced      Replay active incidents missing Linear links, then exit
   --dependency-threshold <n>
                          Consecutive dependency observations before incident escalation
   --print-prompt         Print the recommended long-running Codex prompt
@@ -158,6 +169,9 @@ export function parseArgs(argv: string[]): ObserverOptions {
     printPrompt: false,
     serviceMode: process.env.WAVEMILL_OBSERVER_SERVICE === '1',
     incidentDetector: true,
+    linearSync: false,
+    linearDryRun: false,
+    replayUnsynced: false,
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -190,6 +204,12 @@ export function parseArgs(argv: string[]): ObserverOptions {
       options.printPrompt = true;
     } else if (arg === '--no-incident-detector') {
       options.incidentDetector = false;
+    } else if (arg === '--linear-sync') {
+      options.linearSync = true;
+    } else if (arg === '--linear-dryrun') {
+      options.linearDryRun = true;
+    } else if (arg === '--replay-unsynced') {
+      options.replayUnsynced = true;
     } else if (arg === '--interval') {
       options.intervalSeconds = parsePositiveInt(next(), arg);
     } else if (arg.startsWith('--interval=')) {
@@ -872,6 +892,90 @@ async function reconcileIncidents(snapshot: ObserverSnapshot, options: ObserverO
   };
 }
 
+async function syncIncidentsToLinear(snapshot: ObserverSnapshot, options: ObserverOptions): Promise<void> {
+  for (const repo of snapshot.repos) {
+    let linearConfig;
+    try {
+      linearConfig = getIncidentLinearConfig(repo.repoDir);
+    } catch (error) {
+      snapshot.findings.push({
+        id: `incident-linear-config-error-${repo.session}-${hashText(repo.repoDir)}`,
+        severity: 'high',
+        category: 'operational',
+        confidence: 'high',
+        session: repo.session,
+        repoDir: repo.repoDir,
+        title: 'Observer could not load incident Linear sync config',
+        evidence: [`error=${error instanceof Error ? error.message : String(error)}`],
+        recommendation: 'Fix incident.linear configuration before enabling Observer-to-Linear writes.',
+      });
+      continue;
+    }
+
+    const enabled = linearConfig.enabled === true || options.linearSync || options.linearDryRun;
+    if (!enabled) continue;
+    const incidentConfig = getIncidentConfig(repo.repoDir);
+    if (incidentConfig.enabled === false) continue;
+    const storeDir = incidentConfig.store?.directory ?? '.wavemill/incidents';
+    const store = new IncidentStore(
+      isAbsolute(storeDir) ? storeDir : join(repo.repoDir, storeDir),
+      {
+        escalationThreshold: options.dependencyThreshold ?? incidentConfig.detection?.dependencyThreshold ?? 3,
+        maxEvidencePerRecord: incidentConfig.detection?.maxEvidencePerRecord ?? 50,
+      },
+    );
+    const incidents = (await store.getIncidents()).filter((incident) =>
+      incident.lifecycle === 'active' && incident.metadata.thresholdTriggered === true
+    );
+    if (incidents.length === 0) continue;
+    const sync = new IncidentToLinearSync(
+      defaultIncidentLinearClient,
+      store,
+      { ...linearConfig, dryRun: options.linearDryRun || linearConfig.dryRun },
+      { dryRun: options.linearDryRun || linearConfig.dryRun, log: console },
+    );
+    const results = await sync.sync(incidents);
+    writeIncidentLinearAudit(repo.repoDir, results, new Date(snapshot.timestamp));
+  }
+}
+
+async function replayUnsyncedIncidents(options: ObserverOptions): Promise<void> {
+  const repoDir = options.repoDir ?? process.cwd();
+  const incidentConfig = getIncidentConfig(repoDir);
+  const linearConfig = getIncidentLinearConfig(repoDir);
+  if (linearConfig.enabled !== true && !options.linearSync && !options.linearDryRun) {
+    throw new Error('incident.linear.enabled is false; pass --linear-sync or --linear-dryrun for explicit replay consent');
+  }
+  const storeDir = incidentConfig.store?.directory ?? '.wavemill/incidents';
+  const store = new IncidentStore(
+    isAbsolute(storeDir) ? storeDir : join(repoDir, storeDir),
+    {
+      escalationThreshold: options.dependencyThreshold ?? incidentConfig.detection?.dependencyThreshold ?? 3,
+      maxEvidencePerRecord: incidentConfig.detection?.maxEvidencePerRecord ?? 50,
+    },
+  );
+  const incidents = (await store.getIncidents()).filter((incident) =>
+    incident.lifecycle === 'active'
+    && incident.metadata.thresholdTriggered === true
+    && !incident.metadata.linearIssueId
+  );
+  if (incidents.length === 0) {
+    process.stdout.write('No unsynced incidents found.\n');
+    return;
+  }
+  const sync = new IncidentToLinearSync(
+    defaultIncidentLinearClient,
+    store,
+    { ...linearConfig, dryRun: options.linearDryRun || linearConfig.dryRun },
+    { dryRun: options.linearDryRun || linearConfig.dryRun, log: console },
+  );
+  const results = await sync.sync(incidents);
+  writeIncidentLinearAudit(repoDir, results);
+  for (const result of results) {
+    process.stdout.write(`${result.incident.fingerprint}: ${result.action}${result.linearIssueUrl ? ` ${result.linearIssueUrl}` : ''}\n`);
+  }
+}
+
 function resolveTaskArtifactDir(repoDir: string, task: TaskState): string | null {
   const candidates = [
     task.worktree && task.slug ? join(task.worktree, 'features', task.slug) : null,
@@ -1197,8 +1301,14 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (options.replayUnsynced) {
+    await replayUnsyncedIncidents(options);
+    return;
+  }
+
   do {
     const observed = await reconcileIncidents(observe(options), options);
+    await syncIncidentsToLinear(observed, options);
     const snapshot = options.serviceMode ? redactSnapshot(observed) : observed;
     await writeServiceHeartbeat(snapshot, options);
     await fileLinearIssues(snapshot, options);

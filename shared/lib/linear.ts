@@ -201,6 +201,7 @@ export interface LinearIssueSummary {
   state?: LinearState;
   completedAt?: string | null;
   canceledAt?: string | null;
+  url?: string;
 }
 
 /**
@@ -544,6 +545,61 @@ export async function getTeams(): Promise<LinearTeam[]> {
 
   const teams = data.teams as { nodes?: LinearTeam[] } | undefined;
   return teams?.nodes || [];
+}
+
+export async function resolveTeamId(teamKeyOrId: string): Promise<string> {
+  const teams = await getTeams();
+  const found = teams.find((team) =>
+    team.id === teamKeyOrId || team.key === teamKeyOrId || team.name === teamKeyOrId
+  );
+  if (!found) {
+    throw new Error(`Linear team not found: ${teamKeyOrId}`);
+  }
+  return found.id;
+}
+
+export async function searchIssues(
+  term: string,
+  options: { teamKey?: string; projectId?: string; includeCompleted?: boolean; first?: number } = {},
+): Promise<LinearIssueSummary[]> {
+  const filters = [];
+  if (options.teamKey) {
+    filters.push('team: { key: { eq: $teamKey } }');
+  }
+  if (options.projectId) {
+    filters.push('project: { id: { eq: $projectId } }');
+  }
+  if (!options.includeCompleted) {
+    filters.push('completedAt: { null: true }');
+    filters.push('canceledAt: { null: true }');
+  }
+  const filterClause = filters.length > 0 ? `filter: { ${filters.join('\n')} }` : '';
+  const data = await request(
+    `
+      query($term: String!, $teamKey: String, $projectId: String) {
+        searchIssues(
+          term: $term
+          first: ${options.first ?? 10}
+          includeArchived: false
+          ${filterClause}
+        ) {
+          nodes {
+            id
+            identifier
+            title
+            state { name id }
+            completedAt
+            canceledAt
+            url
+          }
+        }
+      }
+    `,
+    { term, teamKey: options.teamKey, projectId: options.projectId },
+  );
+
+  const issues = data.searchIssues as { nodes?: LinearIssueSummary[] } | undefined;
+  return issues?.nodes || [];
 }
 
 /**

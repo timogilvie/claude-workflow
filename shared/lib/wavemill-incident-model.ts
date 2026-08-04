@@ -32,6 +32,16 @@ export interface IncidentMetadata {
   thresholdTriggered?: boolean;
   cooldownExpiresAt?: string;
   escalatedAt?: string;
+  linearIssueId?: string;
+  linearIssueIdentifier?: string;
+  linearIssueUrl?: string;
+  linearSyncedAt?: string;
+  linearEvidenceRevision?: number;
+  linearEvidenceHash?: string;
+  linearSyncCooldownExpires?: string;
+  linearRelatedIssueId?: string;
+  relatedLinearId?: string;
+  persistent?: boolean;
   [key: string]: unknown;
 }
 

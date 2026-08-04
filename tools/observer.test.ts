@@ -45,6 +45,9 @@ test('repeated ready watchdog auto-recoveries escalate to actionable stuck findi
       maxLogLines: 240,
       printPrompt: false,
       incidentDetector: true,
+      linearSync: false,
+      linearDryRun: false,
+      replayUnsynced: false,
     });
 
     const stuck = findings.find((finding) => finding.id.startsWith('repeated-ready-watchdog-'));
@@ -105,6 +108,9 @@ test('service heartbeat is parseable and stores redacted finding counts only', a
       maxLogLines: 240,
       printPrompt: false,
       incidentDetector: true,
+      linearSync: false,
+      linearDryRun: false,
+      replayUnsynced: false,
       repoDir,
       session: 'wavemill-test',
       serviceMode: true,
@@ -126,4 +132,12 @@ test('observer redaction removes credentials and prompt-like evidence', () => {
     redactObserverText('OPENAI_API_KEY=sk-test token=abc123 prompt=full task'),
     'OPENAI_API_KEY=[redacted] token=[redacted] prompt=[redacted]',
   );
+});
+
+test('observer parses incident Linear sync flags', () => {
+  const options = parseArgs(['--linear-sync', '--linear-dryrun', '--replay-unsynced', '--repo-dir', process.cwd()]);
+  assert.equal(options.linearSync, true);
+  assert.equal(options.linearDryRun, true);
+  assert.equal(options.replayUnsynced, true);
+  assert.equal(options.repoDir, process.cwd());
 });

@@ -119,6 +119,26 @@ export class IncidentStore {
       .sort((a, b) => Date.parse(b.lastObservedAt) - Date.parse(a.lastObservedAt));
   }
 
+  async updateMetadata(
+    fingerprint: string,
+    transform: (incident: IncidentRecord) => IncidentRecord['metadata'],
+  ): Promise<IncidentRecord | null> {
+    mkdirSync(this.incidentsDir, { recursive: true });
+    const indexPath = join(this.incidentsDir, 'index.json');
+    let updated: IncidentRecord | null = null;
+    await this.mutateIndex(indexPath, (index) => {
+      const existing = index[fingerprint];
+      if (!existing) return index;
+      updated = {
+        ...existing,
+        metadata: transform(existing),
+      };
+      index[fingerprint] = updated;
+      return index;
+    });
+    return updated;
+  }
+
   async getEvidenceForIncident(fingerprint: string): Promise<IncidentEvidenceLogEntry[]> {
     const logPath = join(this.incidentsDir, `${fingerprint}.evidence.jsonl`);
     if (!existsSync(logPath)) return [];

@@ -62,6 +62,7 @@ import {
   getRuntimeResourceSelectionConfig,
   getEffectiveModelExclusions,
   getPrePrVerificationConfig,
+  getIncidentLinearConfig,
 } from './config.ts';
 
 // ────────────────────────────────────────────────────────────────
@@ -313,6 +314,53 @@ test('eval prompt size config loads through getEvalConfig', () => {
     const evalConfig = getEvalConfig(tmp);
     assert.equal(evalConfig.maxPromptBytes, 1234567);
     assert.equal(evalConfig.oversizePolicy, 'truncate');
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('incident Linear config applies defaults and validates required team', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      incident: {
+        linear: {
+          enabled: true,
+          teamKey: 'HOK',
+          policies: {
+            external_transient_dependency: {
+              minOccurrences: 5,
+            },
+          },
+        },
+      },
+    }));
+
+    const linear = getIncidentLinearConfig(tmp);
+    assert.equal(linear.enabled, true);
+    assert.equal(linear.teamKey, 'HOK');
+    assert.equal(linear.labelName, 'incident-detector');
+    assert.equal(linear.updateCooldownMinutes, 30);
+    assert.equal(linear.policies?.external_transient_dependency?.minOccurrences, 5);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('incident Linear config rejects enabled sync without team key', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      incident: {
+        linear: {
+          enabled: true,
+        },
+      },
+    }));
+
+    assert.throws(() => getIncidentLinearConfig(tmp), /teamKey/);
   } finally {
     cleanUp(tmp);
   }

@@ -518,6 +518,34 @@ export interface IncidentConfig {
     severityCutoff?: 'critical' | 'high' | 'medium' | 'low' | 'info';
     onCritical?: 'log';
   };
+  linear?: IncidentLinearConfig;
+}
+
+export interface IncidentLinearPolicyConfig {
+  enabled?: boolean;
+  priority?: number;
+  template?: string;
+  correlateWith?: string[];
+  updateExistingOnly?: boolean;
+  requireThreshold?: boolean;
+  minOccurrences?: number;
+  requirePersistent?: boolean;
+}
+
+export interface IncidentLinearConfig {
+  enabled?: boolean;
+  teamKey?: string;
+  projectId?: string;
+  labelName?: string;
+  dryRun?: boolean;
+  updateCooldownMinutes?: number;
+  policies?: {
+    product_defect?: IncidentLinearPolicyConfig;
+    model_task_harness_outcome?: IncidentLinearPolicyConfig;
+    external_transient_dependency?: IncidentLinearPolicyConfig;
+    configuration_operator_condition?: IncidentLinearPolicyConfig;
+    stale_orphaned_state?: IncidentLinearPolicyConfig;
+  };
 }
 
 export type PromotionProtectedIntegrationStrategy =
@@ -1599,6 +1627,23 @@ export function getIncidentConfig(repoDir?: string): Required<Pick<IncidentConfi
       severityCutoff: incident.escalation?.severityCutoff ?? 'medium',
       onCritical: incident.escalation?.onCritical ?? 'log',
     },
+    linear: incident.linear,
+  };
+}
+
+export function getIncidentLinearConfig(repoDir?: string): Required<Pick<IncidentLinearConfig, 'enabled' | 'labelName' | 'dryRun' | 'updateCooldownMinutes'>> & IncidentLinearConfig {
+  const linear = loadWavemillConfig(repoDir).incident?.linear ?? {};
+  if (linear.enabled === true && !linear.teamKey) {
+    throw new Error('incident.linear.teamKey is required when incident.linear.enabled is true');
+  }
+  return {
+    enabled: linear.enabled ?? false,
+    teamKey: linear.teamKey,
+    projectId: linear.projectId,
+    labelName: linear.labelName ?? 'incident-detector',
+    dryRun: linear.dryRun ?? false,
+    updateCooldownMinutes: linear.updateCooldownMinutes ?? 30,
+    policies: linear.policies,
   };
 }
 

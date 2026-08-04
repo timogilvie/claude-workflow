@@ -78,3 +78,24 @@ test('incident store handles concurrent upserts without duplicate records', asyn
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('incident store updates metadata without counting a new observation', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'incident-metadata-'));
+  try {
+    const store = new IncidentStore(dir, { escalationThreshold: 3 });
+    const first = await store.upsert(incident());
+
+    const updated = await store.updateMetadata(first.fingerprint, (stored) => ({
+      ...stored.metadata,
+      linearIssueId: 'issue-1',
+      linearEvidenceRevision: 1,
+    }));
+
+    assert.equal(updated?.metadata.linearIssueId, 'issue-1');
+    const incidents = await store.getIncidents();
+    assert.equal(incidents[0].occurrenceCount, 1);
+    assert.equal(incidents[0].metadata.linearEvidenceRevision, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

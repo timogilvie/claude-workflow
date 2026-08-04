@@ -370,6 +370,36 @@
                         }
                     },
                     "additionalProperties": false
+                },
+                "linear": {
+                    "type": "object",
+                    "description": "Opt-in synchronization from confirmed deduplicated incidents to Linear.",
+                    "properties": {
+                        "enabled": { "type": "boolean", "default": false },
+                        "teamKey": { "type": "string", "minLength": 1 },
+                        "projectId": { "type": "string", "minLength": 1 },
+                        "labelName": { "type": "string", "default": "incident-detector", "minLength": 1 },
+                        "dryRun": { "type": "boolean", "default": false },
+                        "updateCooldownMinutes": { "type": "integer", "minimum": 1, "default": 30 },
+                        "policies": {
+                            "type": "object",
+                            "properties": {
+                                "product_defect": { "$ref": "#/definitions/incidentLinearPolicy" },
+                                "model_task_harness_outcome": { "$ref": "#/definitions/incidentLinearPolicy" },
+                                "external_transient_dependency": { "$ref": "#/definitions/incidentLinearPolicy" },
+                                "configuration_operator_condition": { "$ref": "#/definitions/incidentLinearPolicy" },
+                                "stale_orphaned_state": { "$ref": "#/definitions/incidentLinearPolicy" }
+                            },
+                            "additionalProperties": false
+                        }
+                    },
+                    "additionalProperties": false,
+                    "allOf": [
+                        {
+                            "if": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] },
+                            "then": { "required": ["teamKey"] }
+                        }
+                    ]
                 }
             },
             "additionalProperties": false
@@ -2922,6 +2952,23 @@
         }
     },
     "definitions": {
+        "incidentLinearPolicy": {
+            "type": "object",
+            "properties": {
+                "enabled": { "type": "boolean" },
+                "priority": { "type": "integer", "minimum": 0, "maximum": 4 },
+                "template": { "type": "string" },
+                "correlateWith": {
+                    "type": "array",
+                    "items": { "type": "string", "minLength": 1 }
+                },
+                "updateExistingOnly": { "type": "boolean" },
+                "requireThreshold": { "type": "boolean" },
+                "minOccurrences": { "type": "integer", "minimum": 1 },
+                "requirePersistent": { "type": "boolean" }
+            },
+            "additionalProperties": false
+        },
         "runtimeSurfaceConfig": {
             "type": "object",
             "properties": {
