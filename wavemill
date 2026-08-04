@@ -1030,6 +1030,11 @@ INIT_EOF
     fi
   fi
 
+  local drift_tool="$TOOLS_DIR/init-drift-diagnostic.ts"
+  if [[ -f "$drift_tool" ]]; then
+    npx tsx "$drift_tool" "$PWD" || true
+  fi
+
   echo ""
   echo -e "${GREEN}Done!${NC} Your repository is configured for Wavemill."
 }

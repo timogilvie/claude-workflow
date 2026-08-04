@@ -2364,6 +2364,35 @@
                     "required": ["commands"],
                     "additionalProperties": false
                 },
+                "checks": {
+                    "type": "object",
+                    "description": "Map of GitHub-enforced check name to its local verification mapping or explicit remote-only acknowledgement.",
+                    "additionalProperties": {
+                        "$ref": "#/definitions/prePrVerificationCheckConfig"
+                    }
+                },
+                "driftPolicy": {
+                    "type": "object",
+                    "description": "Controls how CI-to-local verification contract drift is reported by validation tools.",
+                    "properties": {
+                        "failOnNewChecks": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "When true, new enforced GitHub checks without mappings should be treated as validation failures by callers that enforce drift."
+                        },
+                        "failOnWorkflowChanges": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "When true, renamed or removed mapped workflow files/jobs should be treated as validation failures by callers that enforce drift."
+                        },
+                        "allowRemoteOnly": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "When true, remote-only checks are allowed if they include explicit maintainer rationale and acknowledgement."
+                        }
+                    },
+                    "additionalProperties": false
+                },
                 "logCaptureLines": {
                     "type": "integer",
                     "default": 50,
@@ -2988,6 +3017,76 @@
         }
     },
     "definitions": {
+        "prePrVerificationCheckConfig": {
+            "type": "object",
+            "properties": {
+                "type": {
+                    "type": "string",
+                    "enum": ["workflow", "remote-only", "integration"],
+                    "description": "Check type: workflow has a local equivalent, remote-only is intentionally GitHub-only, and integration is a third-party app check."
+                },
+                "localEquivalent": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Local command equivalent for a workflow check, such as npm run test:ci."
+                },
+                "workflowFile": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Path to the GitHub Actions workflow file, such as .github/workflows/ci.yml."
+                },
+                "workflowJob": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Job key in the workflow file."
+                },
+                "rationale": {
+                    "type": "string",
+                    "minLength": 10,
+                    "description": "Explanation for an intentionally remote-only or integration check."
+                },
+                "acknowledgedBy": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Email of the maintainer who acknowledged the remote-only or integration mapping."
+                },
+                "acknowledgedDate": {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                    "description": "Date when the mapping was acknowledged."
+                }
+            },
+            "required": ["type"],
+            "additionalProperties": false,
+            "allOf": [
+                {
+                    "if": {
+                        "properties": {
+                            "type": {
+                                "const": "workflow"
+                            }
+                        },
+                        "required": ["type"]
+                    },
+                    "then": {
+                        "required": ["workflowFile", "workflowJob"]
+                    }
+                },
+                {
+                    "if": {
+                        "properties": {
+                            "type": {
+                                "const": "remote-only"
+                            }
+                        },
+                        "required": ["type"]
+                    },
+                    "then": {
+                        "required": ["rationale", "acknowledgedBy", "acknowledgedDate"]
+                    }
+                }
+            ]
+        },
         "observerLinearPolicy": {
             "type": "object",
             "properties": {

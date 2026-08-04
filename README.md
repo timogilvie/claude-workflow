@@ -95,6 +95,14 @@ Settings are loaded in layers (later wins):
 
 See `wavemill-config.schema.json` for the full schema.
 
+For repositories that use the controller-owned pre-PR verification gate,
+Wavemill can detect drift between GitHub-enforced checks and the local recipe.
+See [docs/ci-contract-drift.md](docs/ci-contract-drift.md) or run:
+
+```bash
+npx tsx tools/validate-drift.ts --propose
+```
+
 ### Permissions
 
 Auto-approve read-only commands in worktrees to reduce friction during autonomous workflows. See [docs/permissions.md](docs/permissions.md) for setup.

@@ -3626,6 +3626,76 @@ test('pre-PR verification: handles github-enforced source', () => {
   }
 });
 
+test('pre-PR verification: loads CI contract drift mappings', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      prePrVerification: {
+        enabled: true,
+        required: true,
+        source: 'github-enforced',
+        requiredChecks: ['ci / test'],
+        recipe: {
+          commands: ['npm test'],
+        },
+        checks: {
+          'ci / test': {
+            type: 'workflow',
+            localEquivalent: 'npm test',
+            workflowFile: '.github/workflows/ci.yml',
+            workflowJob: 'test',
+          },
+          'security/vendor-scan': {
+            type: 'remote-only',
+            rationale: 'Vendor scan has no safe local equivalent.',
+            acknowledgedBy: 'maintainer@example.com',
+            acknowledgedDate: '2026-08-04',
+          },
+        },
+        driftPolicy: {
+          failOnNewChecks: false,
+          failOnWorkflowChanges: true,
+          allowRemoteOnly: true,
+        },
+      },
+    }));
+
+    const config = getPrePrVerificationConfig(tmp);
+    assert.equal(config.checks?.['ci / test']?.type, 'workflow');
+    assert.equal(config.checks?.['security/vendor-scan']?.type, 'remote-only');
+    assert.equal(config.driftPolicy?.failOnWorkflowChanges, true);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('pre-PR verification: rejects remote-only check without acknowledgement', () => {
+  if (!hasAjv) return;
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      prePrVerification: {
+        enabled: true,
+        recipe: {
+          commands: ['npm test'],
+        },
+        checks: {
+          'security/vendor-scan': {
+            type: 'remote-only',
+            rationale: 'Vendor scan has no safe local equivalent.',
+          },
+        },
+      },
+    }));
+
+    assert.throws(() => loadWavemillConfig(tmp), /validation failed|acknowledgedBy/);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
 test('pre-PR verification: rejects empty commands when required is true', () => {
   if (!hasAjv) return;
   const tmp = makeTempRepo();

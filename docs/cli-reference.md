@@ -13,6 +13,18 @@ The default way to run Wavemill. Pulls backlog work, expands thin tasks, routes 
 ### `wavemill init`
 
 Initializes `.wavemill-config.json` in the current repository and can also create `.wavemill/project-context.md`.
+When `prePrVerification` is enabled, init also surfaces read-only CI contract drift diagnostics.
+
+### `validate-drift`
+
+Checks whether GitHub-enforced status checks still match the configured local pre-PR recipe.
+
+```bash
+npx tsx tools/validate-drift.ts --repo owner/repo --branch auto/integration
+npx tsx tools/validate-drift.ts --propose
+```
+
+`--propose` writes `.wavemill/drift-update-proposal.json`; it does not edit config.
 
 ## Supporting Workflow Tools
 

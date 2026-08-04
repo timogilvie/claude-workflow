@@ -27,6 +27,33 @@ export interface PrePrVerificationRecipe {
   };
 }
 
+/** Mapping for one GitHub-enforced check in the local verification contract. */
+export type PrePrVerificationCheckConfig =
+  | {
+      type: 'workflow';
+      localEquivalent?: string;
+      workflowFile: string;
+      workflowJob: string;
+    }
+  | {
+      type: 'remote-only';
+      rationale?: string;
+      acknowledgedBy?: string;
+      acknowledgedDate?: string;
+    }
+  | {
+      type: 'integration';
+      rationale?: string;
+      acknowledgedBy?: string;
+      acknowledgedDate?: string;
+    };
+
+export interface PrePrVerificationDriftPolicy {
+  failOnNewChecks?: boolean;
+  failOnWorkflowChanges?: boolean;
+  allowRemoteOnly?: boolean;
+}
+
 /** Result of a single command execution */
 export interface CommandResult {
   index: number;

@@ -15,7 +15,9 @@ import { resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import { errorMessage } from './error-utils.ts';
 import { parseModelSelector } from './model-registry.ts';
+import { detectContractDrift, formatDriftReport } from './ci-contract-drift-detector.ts';
 import type { CertificationPhase } from './native-agent/certification/schema.ts';
+import type { DriftReport } from './ci-contract-drift-detector.ts';
 import type {
   AgentType,
   LatencyTier,
@@ -25,6 +27,10 @@ import type {
   SupportedModelMetadata,
   ToolSupport,
 } from './model-registry.ts';
+import type {
+  PrePrVerificationCheckConfig,
+  PrePrVerificationDriftPolicy,
+} from './pre-pr-verification-types.ts';
 
 // ────────────────────────────────────────────────────────────────
 // TypeScript Types (matching wavemill-config.schema.json)
@@ -755,6 +761,8 @@ export interface PrePrVerificationConfigSchema {
   source?: 'github-enforced' | 'explicit';
   requiredChecks?: string[];
   recipe?: PrePrVerificationRecipeConfig;
+  checks?: Record<string, PrePrVerificationCheckConfig>;
+  driftPolicy?: PrePrVerificationDriftPolicy;
   logCaptureLines?: number;
   draftFallback?: boolean;
   staleTtlSeconds?: number;
@@ -762,6 +770,31 @@ export interface PrePrVerificationConfigSchema {
     mode?: 'allow' | 'warn' | 'block';
     warnAfterDays?: number;
   };
+}
+
+export async function validateDriftConfiguration(
+  config: WavemillConfig,
+  repoDir: string,
+  repo: string,
+  branch: string
+): Promise<DriftReport | null> {
+  const prePrVerification = config.prePrVerification;
+  if (!prePrVerification?.enabled) {
+    return null;
+  }
+
+  const report = await detectContractDrift({
+    repoDir,
+    repo,
+    branch,
+    recipe: prePrVerification,
+  });
+
+  if (report.status !== 'ALIGNED') {
+    console.warn(formatDriftReport(report));
+  }
+
+  return report;
 }
 
 export interface BudgetConfig {
