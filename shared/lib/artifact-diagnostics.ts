@@ -64,6 +64,42 @@ export interface DiagnoseArtifactsOptions {
   featureDir?: string;
 }
 
+export interface PlanningResultDiagnostic {
+  status?: 'completed' | 'failed';
+  failureReason?: string;
+  agent?: string;
+  model?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  planFile?: string;
+  transcriptFile?: string;
+  error?: string;
+}
+
+export interface JobStateDiagnostic {
+  id?: string;
+  kind?: 'eval' | 'comparison';
+  status?: 'running' | 'succeeded' | 'failed' | 'timeout';
+  issueId?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  exitCode?: number;
+  reason?: string;
+  error?: string;
+  resultPath?: string;
+  logPath?: string;
+  pairId?: string;
+}
+
+export interface HookStatusDiagnostic {
+  state?: string;
+  event?: string;
+  detail?: string;
+  timestamp?: number;
+  agent?: string;
+  error?: string;
+}
+
 // ── Internal Read Result Types ────────────────────────────────────────────────
 
 type JsonReadResult<T> =
@@ -96,6 +132,93 @@ function readJsonTolerant<T = Record<string, unknown>>(filePath: string): JsonRe
   } catch (err) {
     return { status: 'malformed', reason: err instanceof Error ? err.message : String(err) };
   }
+}
+
+export function readPlanningResult(filePath: string): PlanningResultDiagnostic | null {
+  const result = readJsonTolerant<Record<string, unknown>>(filePath);
+  if (result.status === 'missing') return null;
+  if (result.status === 'malformed') return { error: result.reason };
+
+  const value = result.value;
+  return {
+    status: stringEnum(value.status, ['completed', 'failed']),
+    failureReason: stringField(value.failureReason) ?? stringField(value.terminalReason) ?? stringField(value.reason),
+    agent: stringField(value.agent) ?? stringField(value.agentCmd) ?? stringField(value.planner),
+    model: stringField(value.model) ?? stringField(value.modelId),
+    startedAt: stringField(value.startedAt),
+    finishedAt: stringField(value.finishedAt) ?? stringField(value.completedAt),
+    planFile: stringField(value.planFile) ?? stringField(value.planPath),
+    transcriptFile: stringField(value.transcriptFile) ?? stringField(value.transcriptPath),
+  };
+}
+
+export function readJobState(jobPath: string): JobStateDiagnostic | null {
+  const result = readJsonTolerant<Record<string, unknown>>(jobPath);
+  if (result.status === 'missing') return null;
+  if (result.status === 'malformed') return { error: result.reason };
+
+  const value = result.value;
+  return {
+    id: stringField(value.id),
+    kind: stringEnum(value.kind, ['eval', 'comparison']),
+    status: stringEnum(value.status, ['running', 'succeeded', 'failed', 'timeout']),
+    issueId: stringField(value.issueId),
+    startedAt: stringField(value.startedAt),
+    finishedAt: stringField(value.finishedAt),
+    exitCode: numberField(value.exitCode),
+    reason: stringField(value.reason),
+    error: stringField(value.error) ?? stringField(value.excerpt),
+    resultPath: stringField(value.resultPath),
+    logPath: stringField(value.logPath),
+    pairId: stringField(value.pairId),
+  };
+}
+
+export function readHookStatus(hookPath: string): HookStatusDiagnostic | null {
+  const result = readJsonTolerant<Record<string, unknown>>(hookPath);
+  if (result.status === 'missing') return null;
+  if (result.status === 'malformed') return { error: result.reason, state: 'error' };
+
+  const value = result.value;
+  return {
+    state: stringField(value.state) ?? stringField(value.status),
+    event: stringField(value.event),
+    detail: stringField(value.detail) ?? stringField(value.message),
+    timestamp: numberField(value.timestamp),
+    agent: stringField(value.agent),
+    error: stringField(value.error),
+  };
+}
+
+export function redactIncidentData(text: string): string {
+  if (text.length > 2_000 && /\b(prompt|system|user|assistant|transcript)\b/i.test(text)) {
+    return `[REDACTED_PROMPT: ${text.length} chars]`;
+  }
+
+  const redacted = text
+    .replace(/Authorization:\s*[^\r\n]+/gi, 'Authorization: [REDACTED]')
+    .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+\/=-]+/gi, '$1 [REDACTED]')
+    .replace(/\b(sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9_]{12,})\b/g, '[REDACTED_TOKEN]')
+    .replace(/\b([A-Z0-9_]*(?:API_)?KEY|TOKEN|SECRET|PASSWORD)\s*=\s*\S{12,}/gi, '$1=[REDACTED]')
+    .replace(/\b(key|token|secret|password)\s*[:=]\s*\S{20,}/gi, '$1=[REDACTED]')
+    .replace(/([^\s"'=]+\/)?([^\/\s"'=]+\.jsonl)\b/g, '$2');
+
+  if (redacted.length > 500) {
+    return `${redacted.slice(0, 100)} [TRUNCATED ${redacted.length} chars]`;
+  }
+  return redacted;
+}
+
+function stringField(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function numberField(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function stringEnum<T extends string>(value: unknown, allowed: readonly T[]): T | undefined {
+  return typeof value === 'string' && allowed.includes(value as T) ? value as T : undefined;
 }
 
 function readJsonlTolerant<T>(filePath: string): JsonlReadResult<T> {

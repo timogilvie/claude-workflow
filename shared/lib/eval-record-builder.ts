@@ -13,6 +13,8 @@
  * @module eval-record-builder
  */
 
+import { createHash } from 'node:crypto';
+import { readFileSync, existsSync } from 'node:fs';
 import { BUDGET_MISSING } from './eval-validator.ts';
 import type {
   ChallengeStageEval,
@@ -41,13 +43,20 @@ import type {
   RubricCriterion,
   RubricDeterminativeBoundary,
   FeatureOutcomeDiagnostics,
+  VerificationTelemetry,
+  VerificationTelemetryLocalExecution,
 } from './eval-schema.ts';
+import type {
+  PrePrVerificationArtifact,
+  PrePrVerificationConfig,
+} from './pre-pr-verification-types.ts';
 import type { DifficultyAnalysis } from './difficulty-analyzer.ts';
 import type { ChallengeRouteContext } from './challenge-mode.ts';
 import type {
   ChallengeExecutionAttestation,
   ChallengeExecutionIntent,
 } from './challenge-execution-contract.ts';
+import { projectChallengeIntentForPersistence } from './challenge-execution-contract.ts';
 import type { WorkflowCostOutcome, WorkflowCostResult, WorkflowCostFailure } from './workflow-cost.ts';
 import { getManifest, getManifestRef } from './resource-manifest.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
@@ -61,6 +70,7 @@ import {
   deriveNonRewardReasonFromIssues,
   validateEvalRecord,
 } from './eval-validator.ts';
+import { redactText, redactVerificationTelemetry } from './text-redaction.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -118,6 +128,8 @@ export interface EvalRecordMetadata {
   featureOutcomeDiagnostics?: FeatureOutcomeDiagnostics | null;
   /** First-class planner/reviewer stage evidence for challenge evals. */
   challengeStageEval?: ChallengeStageEval | null;
+  /** Verification telemetry from pre-PR verification and remote CI. */
+  verificationTelemetry?: VerificationTelemetry | null;
 }
 
 /** Richer eval metadata attachment used by training-facing eval entrypoints. */
@@ -179,9 +191,12 @@ export function attachChallengeExecutionMetadata(
     record.challengeSide = input.side;
   }
   if (input?.intent) {
-    record.challengeIntent = input.intent;
-    const sideIntent = input.side === 'challenger' ? input.intent.challenger : input.intent.primary;
-    record.challengeExecutionRoute = sideIntent.expectedRoute;
+    const persistedIntent = projectChallengeIntentForPersistence(input.intent);
+    if (persistedIntent) {
+      record.challengeIntent = persistedIntent;
+      const sideIntent = input.side === 'challenger' ? persistedIntent.challenger : persistedIntent.primary;
+      record.challengeExecutionRoute = sideIntent.expectedRoute;
+    }
   }
   if (input?.evidence) {
     record.challengeExecutionEvidence = input.evidence;
@@ -461,6 +476,122 @@ export function attachPlanningExecutionOutcome(
     return;
   }
   record.planningExecutionOutcome = sanitized;
+}
+
+export function attachVerificationTelemetry(
+  record: EvalRecord,
+  telemetry?: VerificationTelemetry | null,
+): void {
+  if (!telemetry) {
+    return;
+  }
+
+  record.verificationTelemetry = redactVerificationTelemetry(telemetry);
+}
+
+function classifyCheckFailure(command: string): VerificationTelemetryLocalExecution['first_failure_category'] {
+  const normalized = command.toLowerCase();
+  if (/\blint\b|eslint|biome lint|ruff|flake8/.test(normalized)) {
+    return 'lint';
+  }
+  if (/\btest\b|vitest|jest|pytest|go test|cargo test/.test(normalized)) {
+    return 'test';
+  }
+  if (/\bbuild\b|webpack|vite build|next build|tsup/.test(normalized)) {
+    return 'build';
+  }
+  if (/\btypecheck\b|\btype-check\b|\btsc\b|mypy|pyright/.test(normalized)) {
+    return 'type';
+  }
+  return 'custom';
+}
+
+function hashCheckOutput(logPath?: string): string | undefined {
+  if (!logPath) {
+    return undefined;
+  }
+
+  try {
+    // Hash only a bounded excerpt to avoid run-specific noise (timestamps, etc)
+    // This makes identical failures produce the same fingerprint
+    if (!existsSync(logPath)) {
+      return undefined;
+    }
+    const content = readFileSync(logPath, 'utf-8');
+    const lines = content.split('\n');
+
+    // Use first 50 and last 50 lines (matching extractBoundedLogExcerpt default)
+    const captureLines = 50;
+    const excerpt = lines.length <= captureLines * 2
+      ? content
+      : lines.slice(0, captureLines).concat(lines.slice(-captureLines)).join('\n');
+
+    return createHash('sha256').update(redactText(excerpt)).digest('hex');
+  } catch {
+    return undefined;
+  }
+}
+
+export function buildVerificationTelemetryFromArtifact(
+  artifact: PrePrVerificationArtifact,
+  config: PrePrVerificationConfig,
+): VerificationTelemetry {
+  const commandDurations = artifact.commands
+    .map((command) => command.durationMs)
+    .filter((duration): duration is number => isFiniteNonNegativeBudget(duration));
+  const totalDurationMs = commandDurations.reduce((sum, duration) => sum + duration, 0);
+  const failedCommand = artifact.commands.find((command) => command.status !== 'pass');
+  const localVerification: VerificationTelemetryLocalExecution = {
+    ran: true,
+    passed: artifact.overallStatus === 'pass',
+    command_count: artifact.commands.length,
+    total_duration_ms: totalDurationMs,
+    command_durations_ms: commandDurations,
+    timed_out: artifact.overallStatus === 'timeout',
+  };
+
+  if (failedCommand) {
+    localVerification.first_failure_index = failedCommand.index;
+    localVerification.first_failure_category = classifyCheckFailure(failedCommand.command);
+    const fingerprint = hashCheckOutput(failedCommand.logPath);
+    if (fingerprint) {
+      localVerification.first_failure_fingerprint = fingerprint;
+    }
+  }
+
+  const telemetry: VerificationTelemetry = {
+    schema_version: '1.0',
+    contract: {
+      source: config.source,
+      version: artifact.version || '1.0',
+    },
+    checked_shas: {
+      head: artifact.headSha,
+      base: artifact.baseSha,
+    },
+    local_verification: localVerification,
+    timeline: {
+      // Legacy artifacts predate startTime/endTime. Their required timestamp
+      // still describes the verification start and must not be discarded.
+      local_start: artifact.startTime
+        ? new Date(artifact.startTime).toISOString()
+        : artifact.timestamp,
+      local_end: artifact.endTime ? new Date(artifact.endTime).toISOString() : undefined,
+    },
+  };
+
+  if (artifact.overriddenBy) {
+    telemetry.operator_override = {
+      applied: true,
+      reason: artifact.overriddenBy.reason,
+      timestamp: artifact.overriddenBy.timestamp,
+    };
+    telemetry.remediation = {
+      local_remediation_outcome: 'override',
+    };
+  }
+
+  return telemetry;
 }
 
 export function attachPhaseDurations(
@@ -1301,6 +1432,7 @@ export function enrichEvalRecord(record: EvalRecord, metadata: EvalRecordMetadat
   attachRouteProvenance(record, metadata.routeProvenance);
   attachExecutedPlanning(record, metadata.executedPlanning);
   attachPlanningExecutionOutcome(record, metadata.planningExecutionOutcome);
+  attachVerificationTelemetry(record, metadata.verificationTelemetry);
   attachPhaseDurations(record, metadata.phaseDurations);
   attachRouterPolicyMetadata(record, metadata.routeProvenance);
   attachRoutePrediction(record, metadata.routePrediction);
@@ -1358,6 +1490,7 @@ export function enrichTrainingMetadata(
   attachRouteProvenance(record, metadata.routeProvenance);
   attachExecutedPlanning(record, metadata.executedPlanning);
   attachPlanningExecutionOutcome(record, metadata.planningExecutionOutcome);
+  attachVerificationTelemetry(record, metadata.verificationTelemetry);
   attachRouterPolicyMetadata(record, metadata.routeProvenance);
   attachRoutePrediction(record, metadata.routePrediction);
   attachDifficultyMetadata(record, metadata.difficulty || null);
