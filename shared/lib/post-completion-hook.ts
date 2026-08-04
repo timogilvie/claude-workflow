@@ -31,11 +31,15 @@ import {
   attachPhaseDurations,
   attachStageOutcomes,
   enrichTrainingMetadata,
+  buildVerificationTelemetryFromArtifact,
 } from './eval-record-builder.ts';
 import { buildChallengeStageEval } from './stage-eval-evidence.ts';
 import { buildTaskDescriptor } from './task-descriptor-builder.ts';
 import { getEvalContextUpdatesConfig, getMaxCostUsd } from './config.ts';
 import { formatHokusaiSubmissionTriggerResult, triggerHokusaiSubmission } from './hokusai-submission-trigger.ts';
+import { readAndValidateArtifact } from './pre-pr-verification.ts';
+import { getPrePrVerificationConfig } from './config.ts';
+import type { PrePrVerificationConfig } from './pre-pr-verification-types.ts';
 import { getConfiguredModelsForDescriptor } from './model-registry.ts';
 import { getCurrentOperatingMode } from './operating-mode.ts';
 import { finalizeEvalSuccess } from './eval-success-policy.ts';
@@ -386,6 +390,31 @@ function deriveRouteProvenance(
   return buildRouteLifecycleProvenance(readRouteLifecycleArtifacts(featureDir, archiveDir), repoDir);
 }
 
+function loadVerificationTelemetry(stateDir: string, repoDir: string): ReturnType<typeof buildVerificationTelemetryFromArtifact> | null {
+  try {
+    const artifactPath = join(stateDir, '.wavemill/pre-pr-verification/artifact.json');
+    const { artifact } = readAndValidateArtifact(artifactPath);
+
+    if (!artifact) {
+      return null;
+    }
+
+    // Load real config to determine source (github-enforced vs explicit)
+    const realConfig = getPrePrVerificationConfig(repoDir);
+    const config: PrePrVerificationConfig = realConfig || {
+      enabled: true,
+      required: false,
+      source: 'explicit',
+      recipe: { commands: [] },
+    };
+
+    return buildVerificationTelemetryFromArtifact(artifact, config);
+  } catch (err) {
+    // Best-effort: silently ignore if artifact can't be loaded
+    return null;
+  }
+}
+
 export function buildTaskDescriptorForPostCompletion(
   input: Omit<PostCompletionEnrichmentInput, 'agentType' | 'challengePairId'>,
 ) {
@@ -480,6 +509,7 @@ export function enrichPostCompletionRecord(
     ),
     executedPlanning: input.executedPlanning,
     planningExecutionOutcome: input.planningExecutionOutcome,
+    verificationTelemetry: loadVerificationTelemetry(input.worktreePath || input.repoDir, input.repoDir),
     phaseDurations: input.phaseDurations,
     routePrediction: input.routePrediction,
     routing: input.routing,

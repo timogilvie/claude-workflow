@@ -21,15 +21,79 @@ export interface ChallengeSideIntent {
   expectedRoute: ChallengeRoutingMeta;
 }
 
+export type ChallengeDecisionSource = 'bootstrap' | 'expanded' | 'preserved';
+export type ChallengeSelectionPath = 'recommendation-driven' | 'random-roll' | string;
+
+export interface ChallengeRuntimeStageRoute {
+  model?: string;
+  agent?: string;
+}
+
+export interface ChallengeRuntimeSideIntent {
+  key?: string;
+  role?: ChallengeSide;
+  planner?: ChallengeRuntimeStageRoute;
+  coder?: ChallengeRuntimeStageRoute;
+  reviewer?: ChallengeRuntimeStageRoute;
+}
+
+export interface ChallengeNativeCertificationRejection {
+  modelId?: string;
+  role?: string;
+  requestedLaunchPhase?: string;
+  requestedPhase?: string;
+  certifiedPhase?: string;
+  nativeCapability?: string;
+  nativeProvider?: string;
+  eligibleRoles?: readonly string[];
+  allowedNativeAgentPhases?: readonly string[];
+  requiredSuiteVersion?: string;
+  reason: string;
+  artifactPath?: string;
+  apiKeyEnv?: string;
+  field?: string;
+}
+
+export interface ChallengeModelExclusionDiagnostic {
+  modelId: string;
+  stage: string;
+  source: string;
+  reason?: string;
+}
+
 export interface ChallengeExecutionIntent {
   pairId: string;
-  challengeStage: ChallengeStage;
+  challengeStage?: ChallengeStage;
+  schemaVersion?: string | number;
+  issueId?: string;
+  createdAt?: string;
+  decisionSource?: ChallengeDecisionSource;
+  selectedStage?: ChallengeStage;
+  selectionPath?: ChallengeSelectionPath | readonly string[];
+  challengerSource?: string;
   intentionallyIdentical?: boolean;
   routeContext?: unknown;
   selectionReason?: string;
+  challengeRecommendation?: unknown;
+  nativeCertificationRejections?: ChallengeNativeCertificationRejection[];
+  modelExclusions?: ChallengeModelExclusionDiagnostic[];
+  fallbackReason?: string;
+  noChallengeReason?: string;
+  primary?: ChallengeSideIntent | ChallengeRuntimeSideIntent;
+  challenger?: ChallengeSideIntent | ChallengeRuntimeSideIntent;
+}
+
+export interface ChallengeExecutionIntentProjection {
+  pairId: string;
+  challengeStage: ChallengeStage;
+  intentionallyIdentical?: boolean;
+  decisionSource?: ChallengeDecisionSource;
+  selectedStage?: ChallengeStage;
   primary: ChallengeSideIntent;
   challenger: ChallengeSideIntent;
 }
+
+export type BuiltChallengeExecutionIntent = ChallengeExecutionIntent & ChallengeExecutionIntentProjection;
 
 export interface ChallengeStageEvidence {
   stage: ChallengeStage;
@@ -221,6 +285,96 @@ function stageAgent(entry: ChallengeEntryLike, stage: ChallengeStage): string | 
   return value || undefined;
 }
 
+function stageFromIntent(intent: ChallengeExecutionIntent): ChallengeStage {
+  return intent.challengeStage ?? intent.selectedStage ?? 'implementation';
+}
+
+function isProjectedSideIntent(value: unknown): value is ChallengeSideIntent {
+  const side = value as Partial<ChallengeSideIntent> | null | undefined;
+  return Boolean(
+    side
+    && typeof side === 'object'
+    && (side.side === 'primary' || side.side === 'challenger')
+    && typeof side.pairId === 'string'
+    && typeof side.expectedStageModel === 'string'
+    && side.expectedRoute
+    && typeof side.expectedRoute === 'object',
+  );
+}
+
+function stageRouteFromRuntimeSide(
+  side: ChallengeRuntimeSideIntent | undefined,
+  stage: ChallengeStage,
+): ChallengeRuntimeStageRoute | undefined {
+  if (!side) return undefined;
+  if (stage === 'plan') return side.planner;
+  if (stage === 'review') return side.reviewer;
+  return side.coder;
+}
+
+function routeFromRuntimeSide(side: ChallengeRuntimeSideIntent | undefined): ChallengeRoutingMeta {
+  return {
+    planner: clean(side?.planner?.model),
+    coder: clean(side?.coder?.model),
+    reviewer: clean(side?.reviewer?.model),
+    planDepth: '',
+    codeDepth: '',
+    reviewMode: '',
+  };
+}
+
+function projectSideIntent(
+  intent: ChallengeExecutionIntent,
+  value: ChallengeSideIntent | ChallengeRuntimeSideIntent | undefined,
+  side: ChallengeSide,
+): ChallengeSideIntent | undefined {
+  const stage = stageFromIntent(intent);
+  if (isProjectedSideIntent(value)) {
+    return {
+      pairId: value.pairId,
+      side: value.side,
+      challengeStage: value.challengeStage,
+      expectedStageModel: value.expectedStageModel,
+      ...(value.expectedStageAgent ? { expectedStageAgent: value.expectedStageAgent } : {}),
+      expectedRoute: value.expectedRoute,
+    };
+  }
+
+  const runtimeSide = value as ChallengeRuntimeSideIntent | undefined;
+  const selectedRoute = stageRouteFromRuntimeSide(runtimeSide, stage);
+  const expectedStageModel = clean(selectedRoute?.model);
+  if (!expectedStageModel) return undefined;
+  const expectedStageAgent = clean(selectedRoute?.agent);
+  return {
+    pairId: intent.pairId,
+    side,
+    challengeStage: stage,
+    expectedStageModel,
+    ...(expectedStageAgent ? { expectedStageAgent } : {}),
+    expectedRoute: routeFromRuntimeSide(runtimeSide),
+  };
+}
+
+export function projectChallengeIntentForPersistence(
+  intent: ChallengeExecutionIntent | null | undefined,
+): ChallengeExecutionIntentProjection | undefined {
+  if (!intent) return undefined;
+  const challengeStage = stageFromIntent(intent);
+  const primary = projectSideIntent(intent, intent.primary, 'primary');
+  const challenger = projectSideIntent(intent, intent.challenger, 'challenger');
+  if (!primary || !challenger) return undefined;
+
+  return {
+    pairId: intent.pairId,
+    challengeStage,
+    ...(intent.intentionallyIdentical ? { intentionallyIdentical: true } : {}),
+    ...(intent.decisionSource ? { decisionSource: intent.decisionSource } : {}),
+    ...(intent.selectedStage ? { selectedStage: intent.selectedStage } : {}),
+    primary,
+    challenger,
+  };
+}
+
 export function buildChallengeExecutionIntent(input: {
   pairId: string;
   challengeStage: ChallengeStage;
@@ -229,7 +383,7 @@ export function buildChallengeExecutionIntent(input: {
   routeContext?: unknown;
   selectionReason?: string;
   intentionallyIdentical?: boolean;
-}): ChallengeExecutionIntent {
+}): BuiltChallengeExecutionIntent {
   const primaryRoute = routeFromEntry(input.primary);
   const challengerRoute = routeFromEntry(input.challenger);
   return {

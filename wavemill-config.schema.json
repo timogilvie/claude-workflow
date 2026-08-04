@@ -316,6 +316,64 @@
             },
             "additionalProperties": false
         },
+        "incident": {
+            "type": "object",
+            "description": "Controls repo-local Wavemill incident detection and deduplicated incident state.",
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "default": true
+                },
+                "store": {
+                    "type": "object",
+                    "properties": {
+                        "directory": {
+                            "type": "string",
+                            "default": ".wavemill/incidents"
+                        }
+                    },
+                    "additionalProperties": false
+                },
+                "detection": {
+                    "type": "object",
+                    "properties": {
+                        "dependencyThreshold": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "default": 3
+                        },
+                        "cooldownMinutes": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "default": 5
+                        },
+                        "maxEvidencePerRecord": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "default": 50
+                        }
+                    },
+                    "additionalProperties": false
+                },
+                "escalation": {
+                    "type": "object",
+                    "properties": {
+                        "severityCutoff": {
+                            "type": "string",
+                            "enum": ["critical", "high", "medium", "low", "info"],
+                            "default": "medium"
+                        },
+                        "onCritical": {
+                            "type": "string",
+                            "enum": ["log"],
+                            "default": "log"
+                        }
+                    },
+                    "additionalProperties": false
+                }
+            },
+            "additionalProperties": false
+        },
         "hooks": {
             "type": "object",
             "description": "Hook and status-emission settings.",

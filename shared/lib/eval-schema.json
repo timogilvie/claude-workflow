@@ -2035,6 +2035,232 @@
     "planningExecutionOutcome": {
       "$ref": "#/$defs/PlanningExecutionOutcome"
     },
+    "verificationTelemetry": {
+      "type": "object",
+      "description": "CI-derived pre-PR verification telemetry from HOK-2603 and HOK-2604.",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "type": "string",
+          "enum": ["1.0"],
+          "description": "Schema version for forward compatibility."
+        },
+        "contract": {
+          "type": "object",
+          "description": "Verification contract source and version.",
+          "required": ["source", "version"],
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "type": "string",
+              "enum": ["github-enforced", "explicit", "default"],
+              "description": "How the verification contract was sourced."
+            },
+            "version": {
+              "type": "string",
+              "description": "Semantic version of the verification contract."
+            }
+          }
+        },
+        "checked_shas": {
+          "type": "object",
+          "description": "Git SHAs checked during verification.",
+          "required": ["head", "base"],
+          "additionalProperties": false,
+          "properties": {
+            "head": {
+              "type": "string",
+              "description": "HEAD commit SHA when verification ran."
+            },
+            "base": {
+              "type": "string",
+              "description": "Base/integration branch SHA."
+            }
+          }
+        },
+        "local_verification": {
+          "type": "object",
+          "description": "Local pre-PR verification execution results.",
+          "required": ["ran", "passed"],
+          "additionalProperties": false,
+          "properties": {
+            "ran": {
+              "type": "boolean",
+              "description": "Whether local verification was attempted."
+            },
+            "passed": {
+              "type": "boolean",
+              "description": "Whether all local verification commands passed."
+            },
+            "command_count": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Number of verification commands executed."
+            },
+            "first_failure_index": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Index of the first failing command, if any."
+            },
+            "first_failure_fingerprint": {
+              "type": "string",
+              "description": "Content hash of failed check output after redaction."
+            },
+            "first_failure_category": {
+              "type": "string",
+              "enum": ["lint", "test", "build", "type", "custom", "unknown"],
+              "description": "Automated category of the first local failure."
+            },
+            "total_duration_ms": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Total time for all verification commands in milliseconds."
+            },
+            "command_durations_ms": {
+              "type": "array",
+              "items": {
+                "type": "number",
+                "minimum": 0
+              },
+              "description": "Individual command durations in milliseconds."
+            },
+            "timed_out": {
+              "type": "boolean",
+              "description": "Whether verification exceeded timeout."
+            }
+          }
+        },
+        "remote_ci_verdict": {
+          "type": "object",
+          "description": "First CI run result from remote CI classification.",
+          "additionalProperties": false,
+          "properties": {
+            "ran": {
+              "type": "boolean",
+              "description": "Whether remote CI was triggered."
+            },
+            "passed": {
+              "type": "boolean",
+              "description": "Whether all remote checks passed."
+            },
+            "passed_before_merge": {
+              "type": "boolean",
+              "description": "Whether CI passed at some point before PR merge."
+            },
+            "check_count": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Number of CI checks executed."
+            },
+            "first_failure_check": {
+              "type": "string",
+              "description": "Name of the first failing check."
+            },
+            "first_failure_category": {
+              "type": "string",
+              "enum": ["lint", "test", "build", "type", "deploy", "custom", "unknown"],
+              "description": "Automated category of the first remote failure."
+            },
+            "first_failure_fingerprint": {
+              "type": "string",
+              "description": "Content hash of failed check output after redaction."
+            },
+            "remote_only_failure": {
+              "type": "boolean",
+              "description": "True if CI failed after local verification passed."
+            }
+          }
+        },
+        "remediation": {
+          "type": "object",
+          "description": "Repair actions taken before or after PR creation.",
+          "additionalProperties": false,
+          "properties": {
+            "local_attempt_count": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Number of times local verification was re-run."
+            },
+            "local_remediation_outcome": {
+              "type": "string",
+              "enum": ["fixed", "abandoned", "override", "none"],
+              "description": "Result of local remediation attempts."
+            },
+            "remote_fix_required": {
+              "type": "boolean",
+              "description": "Whether remote CI required follow-up fixes."
+            },
+            "remote_fix_commits": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Number of follow-up commits to fix remote CI."
+            },
+            "remote_fix_outcome": {
+              "type": "string",
+              "enum": ["fixed", "reverted", "abandoned"],
+              "description": "Result of remote fixes."
+            }
+          }
+        },
+        "operator_override": {
+          "type": "object",
+          "description": "Human operator override of the verification gate.",
+          "additionalProperties": false,
+          "properties": {
+            "applied": {
+              "type": "boolean",
+              "description": "Whether override was applied."
+            },
+            "reason": {
+              "type": "string",
+              "description": "Operator-supplied reason for override."
+            },
+            "timestamp": {
+              "type": "string",
+              "format": "date-time",
+              "description": "When override was recorded."
+            }
+          }
+        },
+        "timeline": {
+          "type": "object",
+          "description": "Key timing points in the verification lifecycle.",
+          "additionalProperties": false,
+          "properties": {
+            "local_start": {
+              "type": "string",
+              "format": "date-time",
+              "description": "When local verification started."
+            },
+            "local_end": {
+              "type": "string",
+              "format": "date-time",
+              "description": "When local verification completed."
+            },
+            "pr_created": {
+              "type": "string",
+              "format": "date-time",
+              "description": "When PR was created after verification."
+            },
+            "remote_ci_start": {
+              "type": "string",
+              "format": "date-time",
+              "description": "When first remote CI run started."
+            },
+            "remote_ci_first_green": {
+              "type": "string",
+              "format": "date-time",
+              "description": "When remote CI first passed."
+            },
+            "pr_merged": {
+              "type": "string",
+              "format": "date-time",
+              "description": "When PR was merged."
+            }
+          }
+        }
+      }
+    },
     "challengeStageEval": {
       "$ref": "#/$defs/ChallengeStageEval"
     },
@@ -2384,14 +2610,181 @@
       ],
       "additionalProperties": false
     },
+    "ChallengeRuntimeStageRoute": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "agent": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "model",
+        "agent"
+      ],
+      "additionalProperties": false
+    },
+    "ChallengeRuntimeSideIntent": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "primary",
+            "challenger"
+          ]
+        },
+        "planner": {
+          "$ref": "#/$defs/ChallengeRuntimeStageRoute"
+        },
+        "coder": {
+          "$ref": "#/$defs/ChallengeRuntimeStageRoute"
+        },
+        "reviewer": {
+          "$ref": "#/$defs/ChallengeRuntimeStageRoute"
+        }
+      },
+      "required": [
+        "role",
+        "planner",
+        "coder",
+        "reviewer"
+      ],
+      "additionalProperties": false
+    },
+    "ChallengeNativeCertificationRejection": {
+      "type": "object",
+      "properties": {
+        "modelId": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        },
+        "requestedLaunchPhase": {
+          "type": "string"
+        },
+        "requestedPhase": {
+          "type": "string"
+        },
+        "certifiedPhase": {
+          "type": "string"
+        },
+        "nativeCapability": {
+          "type": "string"
+        },
+        "nativeProvider": {
+          "type": "string"
+        },
+        "eligibleRoles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "allowedNativeAgentPhases": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "requiredSuiteVersion": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "artifactPath": {
+          "type": "string"
+        },
+        "apiKeyEnv": {
+          "type": "string"
+        },
+        "field": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "ChallengeModelExclusionDiagnostic": {
+      "type": "object",
+      "properties": {
+        "modelId": {
+          "type": "string"
+        },
+        "stage": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "modelId",
+        "stage",
+        "source"
+      ],
+      "additionalProperties": false
+    },
     "ChallengeExecutionIntent": {
       "type": "object",
       "properties": {
         "pairId": {
           "type": "string"
         },
+        "schemaVersion": {
+          "type": [
+            "string",
+            "number"
+          ]
+        },
+        "issueId": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
         "challengeStage": {
           "$ref": "#/$defs/ChallengeStage"
+        },
+        "decisionSource": {
+          "type": "string",
+          "enum": [
+            "bootstrap",
+            "expanded",
+            "preserved"
+          ]
+        },
+        "selectedStage": {
+          "$ref": "#/$defs/ChallengeStage"
+        },
+        "selectionPath": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "challengerSource": {
+          "type": "string"
         },
         "intentionallyIdentical": {
           "type": "boolean"
@@ -2402,16 +2795,50 @@
         "selectionReason": {
           "type": "string"
         },
+        "challengeRecommendation": {
+          "description": "Free-form router recommendation that selected or skipped a challenge."
+        },
+        "nativeCertificationRejections": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ChallengeNativeCertificationRejection"
+          }
+        },
+        "modelExclusions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ChallengeModelExclusionDiagnostic"
+          }
+        },
+        "fallbackReason": {
+          "type": "string"
+        },
+        "noChallengeReason": {
+          "type": "string"
+        },
         "primary": {
-          "$ref": "#/$defs/ChallengeSideIntent"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChallengeSideIntent"
+            },
+            {
+              "$ref": "#/$defs/ChallengeRuntimeSideIntent"
+            }
+          ]
         },
         "challenger": {
-          "$ref": "#/$defs/ChallengeSideIntent"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChallengeSideIntent"
+            },
+            {
+              "$ref": "#/$defs/ChallengeRuntimeSideIntent"
+            }
+          ]
         }
       },
       "required": [
         "pairId",
-        "challengeStage",
         "primary",
         "challenger"
       ],

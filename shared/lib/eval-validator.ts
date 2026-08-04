@@ -3,7 +3,7 @@ import { stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import { createInterface } from 'node:readline';
-import { BUDGET_MISSING, SCHEMA_VERSION } from './eval-schema.ts';
+import { BUDGET_MISSING, SCHEMA_VERSION, type EvalRecord } from './eval-schema.ts';
 import { resolveEvalsDir } from './evals-paths.ts';
 import { getEffectiveRegistry, normalizeReviewerModelId } from './model-registry.ts';
 import {
@@ -58,6 +58,12 @@ export interface ValidationReport {
   issues: ValidationIssue[];
   countsByCode: Record<string, number>;
   files: string[];
+}
+
+export interface VerificationTelemetryDiagnostic {
+  field: string;
+  message: string;
+  severity: 'warning' | 'error';
 }
 
 interface ValidationLocation {
@@ -225,6 +231,38 @@ function collectStageModelIssues(
   return issues;
 }
 
+export function validateVerificationTelemetry(
+  record: Pick<EvalRecord, 'verificationTelemetry'>,
+): VerificationTelemetryDiagnostic[] {
+  const diagnostics: VerificationTelemetryDiagnostic[] = [];
+  const telemetry = record.verificationTelemetry;
+
+  if (!telemetry) {
+    return diagnostics;
+  }
+
+  if (telemetry.schema_version && telemetry.schema_version !== '1.0') {
+    diagnostics.push({
+      field: 'verificationTelemetry.schema_version',
+      message: `Invalid schema version: ${telemetry.schema_version}`,
+      severity: 'error',
+    });
+  }
+
+  if (
+    telemetry.local_verification?.passed === false
+    && !telemetry.local_verification.first_failure_category
+  ) {
+    diagnostics.push({
+      field: 'verificationTelemetry.local_verification',
+      message: 'Failed verification should include failure category.',
+      severity: 'warning',
+    });
+  }
+
+  return diagnostics;
+}
+
 export function validateEvalRecord(
   record: unknown,
   opts: ValidationLocation,
@@ -282,6 +320,14 @@ export function validateEvalRecord(
   }
 
   issues.push(...collectStageModelIssues(record, opts, recordId));
+
+  // Validate verification telemetry if present
+  const telemetryDiagnostics = validateVerificationTelemetry({ verificationTelemetry: record.verificationTelemetry });
+  for (const diagnostic of telemetryDiagnostics) {
+    if (diagnostic.severity === 'error') {
+      issues.push(makeIssue('SCHEMA_VIOLATION', opts, `${diagnostic.field}: ${diagnostic.message}`, recordId));
+    }
+  }
 
   if (
     record.score === null ||

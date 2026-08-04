@@ -41,6 +41,9 @@ jobs:
       - name: Check Pi pinned versions
         run: npx tsx tools/check-pi-version.ts
 
+      - name: Check challenge schema drift
+        run: npx tsx tools/check-challenge-schema-drift.ts
+
       - name: Run shell and unit tests
         run: npm test
 
