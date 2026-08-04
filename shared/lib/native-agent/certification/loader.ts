@@ -20,6 +20,7 @@ import {
   type CertificationStorageOptions,
   type CertificationStorageScope,
 } from './storage.ts';
+import { checkIdentity } from './validator.ts';
 
 /**
  * Stable reason codes returned when a certification is ineligible.
@@ -207,18 +208,19 @@ export function loadGlobalCertification(
     : { ...loaded, path, scope: 'global' };
 }
 
-export function loadSharedCertificationWithLegacyFallback(
-  repoDir: string | undefined,
+/**
+ * Load a repo-local certification artifact.
+ *
+ * Deprecated: this is migration-only compatibility for legacy v1/v2 repo
+ * artifacts. Runtime routing, provider gates, and reporting must read the
+ * global certification store instead.
+ */
+export function loadLegacyCertification(
+  repoDir: string,
   provider: string,
   model: string,
   suiteVersion: string,
-  options: Omit<CertificationStorageOptions, 'scope' | 'repoDir'> = {},
 ): ScopedLoadCertificationResult {
-  const global = loadGlobalCertification(provider, model, suiteVersion, options);
-  if (global.ok || global.reason === 'malformed' || !repoDir) {
-    return global;
-  }
-
   let path: string;
   try {
     path = buildCertificationPathFromRoot(
@@ -235,6 +237,22 @@ export function loadSharedCertificationWithLegacyFallback(
   return loaded.ok
     ? { ...loaded, path, scope: 'legacy-repo' }
     : { ...loaded, path, scope: 'legacy-repo' };
+}
+
+/**
+ * Compatibility wrapper retained for older callers.
+ *
+ * Despite the historical name, this no longer falls back to repo-local
+ * artifacts. The global store is the only runtime source of truth.
+ */
+export function loadSharedCertificationWithLegacyFallback(
+  _repoDir: string | undefined,
+  provider: string,
+  model: string,
+  suiteVersion: string,
+  options: Omit<CertificationStorageOptions, 'scope' | 'repoDir'> = {},
+): ScopedLoadCertificationResult {
+  return loadGlobalCertification(provider, model, suiteVersion, options);
 }
 
 /**
@@ -321,6 +339,16 @@ export function checkSharedCertificationEligibility(
       storageScope: loaded.scope,
     };
   }
+  const identity = resolveCertificationStorageIdentity(provider, model);
+  if (checkIdentity(loaded.artifact, identity.provider, identity.model)) {
+    return {
+      eligible: false,
+      reason: 'malformed',
+      artifact: loaded.artifact,
+      artifactPath: loaded.path,
+      storageScope: loaded.scope,
+    };
+  }
   return {
     ...evaluateEligibility(loaded.artifact, suiteVersion, requiredPhase, now),
     artifactPath: loaded.path,
@@ -341,6 +369,16 @@ export function checkGlobalCertificationEligibility(
       eligible: false,
       reason: loaded.reason,
       ...(loaded.path ? { artifactPath: loaded.path } : {}),
+      storageScope: 'global',
+    };
+  }
+  const identity = resolveCertificationStorageIdentity(provider, model);
+  if (checkIdentity(loaded.artifact, identity.provider, identity.model)) {
+    return {
+      eligible: false,
+      reason: 'malformed',
+      artifact: loaded.artifact,
+      artifactPath: loaded.path,
       storageScope: 'global',
     };
   }

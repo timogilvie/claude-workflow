@@ -10,6 +10,7 @@ import {
   resolveCertificationStorageIdentity,
   writeGlobalCertification,
 } from '../shared/lib/native-agent/certification/index.ts';
+import { DEFAULT_CERTIFICATION_SUITE_VERSION } from '../shared/lib/native-agent/certification/scenarios.ts';
 
 export interface ImportCertificationSummary {
   scanned: number;
@@ -41,6 +42,11 @@ export function importLegacyCertifications(opts: {
     }
 
     const storageIdentity = resolveCertificationStorageIdentity(read.artifact.provider, read.artifact.model);
+    if (read.artifact.suiteVersion !== DEFAULT_CERTIFICATION_SUITE_VERSION) {
+      summary.skipped.push({ path, reason: `suite-${read.artifact.suiteVersion}-requires-recertification` });
+      continue;
+    }
+
     if (opts.provider && storageIdentity.provider !== opts.provider && read.artifact.provider !== opts.provider) {
       summary.skipped.push({ path, reason: 'provider-filter' });
       continue;

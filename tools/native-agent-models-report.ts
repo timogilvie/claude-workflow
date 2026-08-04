@@ -38,6 +38,14 @@ runTool({
       type: 'string',
       description: 'Repository directory. Defaults to current working directory.',
     },
+    scope: {
+      type: 'string',
+      description: 'Certification storage scope. Only "global" is supported for runtime reports.',
+    },
+    'with-reasons': {
+      type: 'boolean',
+      description: 'Include status reason codes. Reasons are included in the default table and JSON output.',
+    },
   },
   examples: [
     'npx tsx tools/native-agent-models-report.ts',
@@ -47,6 +55,11 @@ runTool({
   ],
   async run({ args }) {
     const repoDir = (args.repo as string | undefined) || process.cwd();
+    const scope = args.scope as string | undefined;
+    if (scope && scope !== 'global') {
+      console.error('Error: --scope only supports "global"; repo-local certificates are migration input only.');
+      process.exit(2);
+    }
 
     const rows = buildModelCertificationReport({
       repoDir,

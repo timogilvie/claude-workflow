@@ -190,47 +190,47 @@ function resolveRegistryModelId(
   return modelId;
 }
 
-if (import.meta.main) {
-runTool({
-  name: 'native-agent-certify',
-  description: 'Run the certification scenario harness for a native provider/model/phase and persist the artifact on success.',
-  options: {
-    provider: {
-      type: 'string',
-      description: `Provider to certify. One of: ${NATIVE_PROVIDERS.join(', ')}.`,
+export function runNativeAgentCertifyCli(argv: string[] = process.argv.slice(2)): Promise<void> {
+  return runTool({
+    name: 'native-agent-certify',
+    description: 'Run the certification scenario harness for a native provider/model/phase and persist the artifact on success.',
+    options: {
+      provider: {
+        type: 'string',
+        description: `Provider to certify. One of: ${NATIVE_PROVIDERS.join(', ')}.`,
+      },
+      model: {
+        type: 'string',
+        description: 'Model ID to certify (e.g. gpt-4o).',
+      },
+      phase: {
+        type: 'string',
+        description: `Certification phase. One of: ${PHASE_ORDER.join(', ')}.`,
+      },
+      'dry-run': {
+        type: 'boolean',
+        description: 'Run scenarios without persisting a certification artifact.',
+      },
+      json: {
+        type: 'boolean',
+        description: 'Emit machine-readable JSON.',
+      },
+      repo: {
+        type: 'string',
+        description: 'Repository directory. Defaults to current working directory.',
+      },
     },
-    model: {
-      type: 'string',
-      description: 'Model ID to certify (e.g. gpt-4o).',
-    },
-    phase: {
-      type: 'string',
-      description: `Certification phase. One of: ${PHASE_ORDER.join(', ')}.`,
-    },
-    'dry-run': {
-      type: 'boolean',
-      description: 'Run scenarios without persisting a certification artifact.',
-    },
-    json: {
-      type: 'boolean',
-      description: 'Emit machine-readable JSON.',
-    },
-    repo: {
-      type: 'string',
-      description: 'Repository directory. Defaults to current working directory.',
-    },
-  },
-  examples: [
-    'npx tsx tools/native-agent-certify.ts --provider openai --model gpt-4o --phase read-only --dry-run',
-    'npx tsx tools/native-agent-certify.ts --provider openai --model gpt-4o --phase read-only',
-    'npx tsx tools/native-agent-certify.ts --provider openrouter --model openai/gpt-4o --phase read-only --json',
-  ],
-  async run({ args }) {
-    const repoDir = (args.repo as string | undefined) || process.cwd();
-    const rawProvider = args.provider as string | undefined;
-    const rawModel = args.model as string | undefined;
-    const rawPhase = args.phase as string | undefined;
-    const dryRun = args['dry-run'] === true;
+    examples: [
+      'npx tsx tools/native-agent-certify.ts --provider openai --model gpt-4o --phase read-only --dry-run',
+      'npx tsx tools/native-agent-certify.ts --provider openai --model gpt-4o --phase read-only',
+      'npx tsx tools/native-agent-certify.ts --provider openrouter --model openai/gpt-4o --phase read-only --json',
+    ],
+    async run({ args }) {
+      const repoDir = (args.repo as string | undefined) || process.cwd();
+      const rawProvider = args.provider as string | undefined;
+      const rawModel = args.model as string | undefined;
+      const rawPhase = args.phase as string | undefined;
+      const dryRun = args['dry-run'] === true;
 
     // Validate required flags
     if (!rawProvider) {
@@ -308,6 +308,10 @@ runTool({
     if (!result.harnessPassed) {
       process.exit(1);
     }
-  },
-});
+    },
+  }, argv);
+}
+
+if (import.meta.main) {
+  await runNativeAgentCertifyCli();
 }

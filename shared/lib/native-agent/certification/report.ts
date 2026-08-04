@@ -13,7 +13,12 @@ import {
   type CertificationPhase,
   type NativeCertificationArtifact,
 } from './schema.ts';
-import { evaluateEligibility, loadCertification, loadSharedCertificationWithLegacyFallback } from './loader.ts';
+import {
+  evaluateEligibility,
+  loadCertification,
+  loadGlobalCertification,
+  type IneligibilityReason,
+} from './loader.ts';
 import { STAGE_PHASE_REQUIREMENT, type RouterRole } from './router-filter.ts';
 import { getEffectiveRegistry, type ModelRegistry, type ReadOnlyNativeCapability } from '../../model-registry.ts';
 import { resolveCertificationStorageIdentity } from './identity.ts';
@@ -36,6 +41,22 @@ export type ModelCertificationState =
   | 'unsupported'
   | 'certification-only';
 
+export type ModelCertificationStatus =
+  | 'ready-for-challenge'
+  | 'not-certified'
+  | 'certified-but-runtime-unavailable'
+  | 'stale'
+  | 'unsupported'
+  | 'certification-only';
+
+export type ModelCertificationReason =
+  | IneligibilityReason
+  | 'eligible'
+  | 'unsupported'
+  | 'certification-only'
+  | 'identity-mismatch'
+  | 'no-registry-metadata';
+
 /** Outcome of a single scenario from the on-disk artifact. */
 export interface ScenarioOutcome {
   scenarioId: string;
@@ -50,6 +71,10 @@ export interface ModelCertificationReportRow {
   /** Raw `readOnlyNative` value from the registry. */
   native: ReadOnlyNativeCapability;
   state: ModelCertificationState;
+  /** Operator-facing status used by CLI/report consumers. */
+  status: ModelCertificationStatus;
+  /** Stable reason code behind `status`. */
+  reason: ModelCertificationReason;
   /** Certified phase from the best available certification. */
   certifiedPhase?: CertificationPhase;
   /** Router roles for which the model is eligible to run. */
@@ -132,6 +157,8 @@ export function buildModelCertificationReport(
         model: modelId,
         native: readOnlyNative,
         state: 'unsupported',
+        status: 'unsupported',
+        reason: 'unsupported',
         eligibleStages: [],
         knownLimitations: flattenLimitations([nativeCapability.limitations]),
         scenarios: [],
@@ -150,6 +177,8 @@ export function buildModelCertificationReport(
         model: modelId,
         native: readOnlyNative,
         state: 'certification-only',
+        status: 'certification-only',
+        reason: 'certification-only',
         certifiedPhase: registryMeta?.maxCertifiedPhase,
         eligibleStages: [],
         suiteVersion: registryMeta?.certificationSuiteVersion,
@@ -174,6 +203,8 @@ export function buildModelCertificationReport(
         model: modelId,
         native: readOnlyNative,
         state: 'uncertified',
+        status: 'not-certified',
+        reason: 'no-registry-metadata',
         eligibleStages: [],
         knownLimitations: flattenLimitations([nativeCapability.limitations]),
         scenarios: [],
@@ -187,7 +218,7 @@ export function buildModelCertificationReport(
     // Try loading the on-disk artifact
     const loaded = opts.loadCertificationFn
       ? loadCertFn(repoDir, nativeCapability.nativeProvider, modelId, certMeta.certificationSuiteVersion)
-      : loadSharedCertificationWithLegacyFallback(repoDir, nativeCapability.nativeProvider, modelId, certMeta.certificationSuiteVersion);
+      : loadGlobalCertification(nativeCapability.nativeProvider, modelId, certMeta.certificationSuiteVersion);
 
     if (!loaded.ok) {
       rows.push({
@@ -195,6 +226,8 @@ export function buildModelCertificationReport(
         model: modelId,
         native: readOnlyNative,
         state: 'uncertified',
+        status: loaded.reason === 'missing' ? 'not-certified' : 'certified-but-runtime-unavailable',
+        reason: loaded.reason,
         eligibleStages: [],
         suiteVersion: certMeta.certificationSuiteVersion,
         knownLimitations: flattenLimitations([nativeCapability.limitations, certMeta.knownLimitations]),
@@ -225,6 +258,8 @@ export function buildModelCertificationReport(
         'uncertified',
         now,
         flattenLimitations([nativeCapability.limitations, certMeta.knownLimitations]),
+        'certified-but-runtime-unavailable',
+        'identity-mismatch',
       ), repoDir, [], 'uncertified', getLoadedPath(loaded), getLoadedScope(loaded), findModelExclusion(modelId, 'coding', repoDir)));
       continue;
     }
@@ -244,6 +279,8 @@ export function buildModelCertificationReport(
         now,
         flattenLimitations([nativeCapability.limitations, certMeta.knownLimitations]),
       );
+      row.status = 'ready-for-challenge';
+      row.reason = 'eligible';
       rows.push(withReadiness(row, repoDir, row.eligibleStages, 'ready', getLoadedPath(loaded), getLoadedScope(loaded), findModelExclusion(modelId, 'coding', repoDir)));
       continue;
     }
@@ -256,6 +293,8 @@ export function buildModelCertificationReport(
       eligibility.reason === 'stale' ? 'stale' : 'uncertified',
       now,
       flattenLimitations([nativeCapability.limitations, certMeta.knownLimitations]),
+      eligibility.reason === 'stale' ? 'stale' : 'certified-but-runtime-unavailable',
+      eligibility.reason,
     );
     rows.push(withReadiness(
       row,
@@ -299,6 +338,8 @@ function rowFromArtifactState(
   state: Extract<ModelCertificationState, 'ready' | 'stale' | 'uncertified'>,
   now: Date,
   registryLimitations: string[],
+  status?: ModelCertificationStatus,
+  reason?: ModelCertificationReason,
 ): ModelCertificationReportRow {
   const artLimitations = artifact.knownLimitations ?? [];
   const knownLimitations = deduplicateStrings([...registryLimitations, ...artLimitations]);
@@ -313,6 +354,8 @@ function rowFromArtifactState(
   return {
     provider, model, native,
     state: state === 'ready' && eligibleStages.length === 0 ? 'uncertified' : state,
+    status: status ?? (state === 'ready' ? 'ready-for-challenge' : state === 'stale' ? 'stale' : 'certified-but-runtime-unavailable'),
+    reason: reason ?? (state === 'ready' ? 'eligible' : state === 'stale' ? 'stale' : 'malformed'),
     certifiedPhase: artifact.phase,
     eligibleStages,
     suiteVersion: artifact.suiteVersion,
@@ -356,7 +399,7 @@ export function serializeReport(
 // Human-readable table
 // ---------------------------------------------------------------------------
 
-const COLUMN_HEADERS = ['Provider', 'Model', 'State', 'Local Ready', 'Eligible Stages', 'Suite', 'Age (days)', 'Exclusion', 'Limitations'] as const;
+const COLUMN_HEADERS = ['Provider', 'Model', 'Status', 'Reason', 'Local Ready', 'Eligible Stages', 'Suite', 'Age (days)', 'Exclusion', 'Limitations'] as const;
 
 /**
  * Render the report as a human-readable table.
@@ -370,8 +413,9 @@ export function renderReportTable(rows: ModelCertificationReportRow[]): string {
     row.provider,
     row.model,
     row.globalCertification.storageScope
-      ? `${row.globalCertification.state} (${row.globalCertification.storageScope})`
-      : row.globalCertification.state,
+      ? `${row.status} (${row.globalCertification.storageScope})`
+      : row.status,
+    row.reason,
     summarizeLocalReadiness(row),
     row.eligibleStages.length > 0 ? row.eligibleStages.join(', ') : '—',
     row.suiteVersion ?? '—',

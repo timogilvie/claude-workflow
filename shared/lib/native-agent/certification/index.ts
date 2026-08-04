@@ -36,6 +36,7 @@ export {
   isValidPathSegment,
   loadCertification,
   loadGlobalCertification,
+  loadLegacyCertification,
   loadSharedCertificationWithLegacyFallback,
   parseCertificationPath,
 } from './loader.ts';
@@ -100,6 +101,8 @@ export { getDefaultScenarios, DEFAULT_CERTIFICATION_SUITE_VERSION } from './scen
 
 export type {
   ModelCertificationState,
+  ModelCertificationStatus,
+  ModelCertificationReason,
   ScenarioOutcome,
   ModelCertificationReportRow,
   BuildModelCertificationReportOptions,
@@ -111,6 +114,13 @@ export {
   serializeReport,
   renderReportTable,
 } from './report.ts';
+
+export type {
+  MigrationDecisionCode,
+  MigrationInspectionResult,
+} from './migration.ts';
+
+export { evaluateMigrationEligibility } from './migration.ts';
 
 export type {
   HarnessScenarioStatus,

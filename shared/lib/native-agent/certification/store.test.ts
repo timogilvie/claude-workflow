@@ -13,9 +13,11 @@ import {
   readCertification,
   serializeCertification,
   writeCertification,
+  writeGlobalCertification,
   writeScopedCertification,
 } from './store.ts';
-import { buildScopedCertificationPath } from './storage.ts';
+import { checkGlobalCertificationEligibility } from './loader.ts';
+import { buildScopedCertificationPath, GLOBAL_CERTIFICATION_ROOT_ENV } from './storage.ts';
 
 const FIXTURE_DIR = new URL('./fixtures', import.meta.url).pathname;
 
@@ -380,6 +382,69 @@ describe('scoped certification storage', () => {
       cleanupRepo(root);
       cleanupRepo(repoA);
       cleanupRepo(repoB);
+    }
+  });
+
+  it('round-trips global artifacts through eligibility checks', () => {
+    const root = makeTempRepo();
+    const previousRoot = process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
+    process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = root;
+    try {
+      const artifact = makeValidArtifact({
+        provider: 'openai',
+        model: 'gpt-4o',
+        phase: 'patch',
+        suiteVersion: 'v2',
+      });
+      const path = writeGlobalCertification(artifact);
+      assert.ok(path.endsWith('/openai/gpt-4o/v2.json'));
+
+      const eligibility = checkGlobalCertificationEligibility(
+        'openai',
+        'gpt-4o',
+        'v2',
+        'patch',
+        new Date('2026-06-02T00:00:00.000Z'),
+      );
+      assert.equal(eligibility.eligible, true);
+      assert.equal(eligibility.storageScope, 'global');
+      assert.equal(eligibility.artifactPath, path);
+    } finally {
+      if (previousRoot === undefined) {
+        delete process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
+      } else {
+        process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = previousRoot;
+      }
+      cleanupRepo(root);
+    }
+  });
+
+  it('normalizes OpenRouter aliases when writing global artifacts', () => {
+    const root = makeTempRepo();
+    const previousRoot = process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
+    process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = root;
+    try {
+      const artifact = makeValidArtifact({
+        provider: 'openrouter',
+        model: 'glm-5.2',
+        phase: 'patch',
+        suiteVersion: 'v2',
+      });
+      const path = writeGlobalCertification(artifact);
+      assert.ok(path.endsWith('/z-ai/glm-5.2/v2.json'));
+      const read = readCertification(path);
+      assert.equal(read.ok, true);
+      if (read.ok) {
+        assert.equal(read.artifact.provider, 'z-ai');
+        assert.equal(read.artifact.model, 'glm-5.2');
+      }
+    } finally {
+      if (previousRoot === undefined) {
+        delete process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
+      } else {
+        process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = previousRoot;
+      }
+      cleanupRepo(root);
     }
   });
 });

@@ -20,6 +20,7 @@ import {
   resolveCertificationStorage,
   type CertificationStorageOptions,
 } from './storage.ts';
+import { resolveCertificationStorageIdentity } from './identity.ts';
 
 const CERTIFICATION_JSON_SCHEMA = JSON.parse(
   readFileSync(new URL('./schema.json', import.meta.url), 'utf-8'),
@@ -247,13 +248,19 @@ export function writeScopedCertification(
   }
 
   const storage = resolveCertificationStorage(options);
+  const storageIdentity = resolveCertificationStorageIdentity(record.provider, record.model);
+  const canonicalRecord: NativeCertificationArtifact = {
+    ...record,
+    provider: storageIdentity.provider,
+    model: storageIdentity.model,
+  };
   const finalPath = buildCertificationPathFromRoot(
     storage.root,
-    record.provider,
-    record.model,
-    record.suiteVersion,
+    canonicalRecord.provider,
+    canonicalRecord.model,
+    canonicalRecord.suiteVersion,
   );
-  return writeCertificationToPath(finalPath, record);
+  return writeCertificationToPath(finalPath, canonicalRecord);
 }
 
 export function writeGlobalCertification(

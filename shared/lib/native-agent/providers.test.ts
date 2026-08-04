@@ -715,7 +715,7 @@ describe('native provider certification artifacts', () => {
       );
 
       assert.equal(entry.status, 'uncertified');
-      assert.equal(entry.rejectionReason, 'missing_artifact');
+      assert.equal(entry.rejectionReason, 'malformed_artifact');
     } finally {
       cleanup();
     }
@@ -739,7 +739,7 @@ describe('native provider certification artifacts', () => {
       );
 
       assert.equal(entry.status, 'uncertified');
-      assert.equal(entry.rejectionReason, 'missing_artifact');
+      assert.equal(entry.rejectionReason, 'malformed_artifact');
     } finally {
       cleanup();
     }

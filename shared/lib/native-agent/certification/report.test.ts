@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 import {
   buildModelCertificationReport,
@@ -9,6 +9,8 @@ import {
   renderReportTable,
 } from './report.ts';
 import { CERTIFICATION_SCHEMA_VERSION, CERTIFICATION_TTL_DAYS } from './schema.ts';
+import { buildGlobalCertificationPath } from './loader.ts';
+import { GLOBAL_CERTIFICATION_ROOT_ENV } from './storage.ts';
 import type { ModelRegistry } from '../../model-registry.ts';
 import type { NativeCertificationArtifact } from './schema.ts';
 
@@ -172,6 +174,8 @@ describe('buildModelCertificationReport', () => {
     const row = rows.find(r => r.model === 'gpt-4o');
     assert.ok(row, 'gpt-4o row missing');
     assert.equal(row.state, 'ready');
+    assert.equal(row.status, 'ready-for-challenge');
+    assert.equal(row.reason, 'eligible');
     assert.equal(row.certifiedPhase, 'read-only');
     assert.deepEqual(row.eligibleStages, ['reviewer']);
     assert.equal(row.suiteVersion, 'v1');
@@ -191,6 +195,8 @@ describe('buildModelCertificationReport', () => {
     const row = rows.find(r => r.model === 'gpt-4o');
     assert.ok(row, 'gpt-4o row missing');
     assert.equal(row.state, 'stale');
+    assert.equal(row.status, 'stale');
+    assert.equal(row.reason, 'stale');
     assert.deepEqual(row.eligibleStages, []);
   });
 
@@ -208,6 +214,8 @@ describe('buildModelCertificationReport', () => {
     const row = rows.find(r => r.model === 'gpt-4o');
     assert.ok(row, 'gpt-4o row missing');
     assert.equal(row.state, 'uncertified');
+    assert.equal(row.status, 'certified-but-runtime-unavailable');
+    assert.equal(row.reason, 'scenario-failure');
     assert.deepEqual(row.eligibleStages, []);
     assert.equal(row.scenarios[0].failureMessage, 'assertion failed');
   });
@@ -252,6 +260,8 @@ describe('buildModelCertificationReport', () => {
     const row = rows.find(r => r.model === 'no-cert-model');
     assert.ok(row, 'no-cert-model row missing');
     assert.equal(row.state, 'uncertified');
+    assert.equal(row.status, 'not-certified');
+    assert.equal(row.reason, 'no-registry-metadata');
   });
 
   it('excludes non-native models', () => {
@@ -276,6 +286,8 @@ describe('buildModelCertificationReport', () => {
     const row = rows.find(r => r.model === 'gpt-4o');
     assert.ok(row, 'gpt-4o row missing');
     assert.equal(row.state, 'uncertified');
+    assert.equal(row.status, 'not-certified');
+    assert.equal(row.reason, 'missing');
     assert.deepEqual(row.eligibleStages, []);
     assert.equal(row.scenarios.length, 0);
   });
@@ -365,12 +377,15 @@ describe('buildModelCertificationReport', () => {
     assert.deepEqual(row.eligibleStages.sort(), ['coder', 'planner', 'reviewer'].sort());
   });
 
-  it('loads mapped OpenRouter artifacts for aliased models', () => {
+  it('loads mapped OpenRouter artifacts for aliased models from the global store', () => {
     const { repoDir, cleanup } = makeTempRepo();
+    const previousRoot = process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
+    process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = join(repoDir, 'global-certifications');
     try {
-      const certDir = join(repoDir, '.wavemill', 'native-agent-certifications', 'qwen', 'qwen3-coder');
+      const globalPath = buildGlobalCertificationPath('openrouter', 'qwen-3-coder', 'v1');
+      const certDir = dirname(globalPath);
       mkdirSync(certDir, { recursive: true });
-      writeFileSync(join(certDir, 'v1.json'), JSON.stringify({
+      writeFileSync(globalPath, JSON.stringify({
         schemaVersion: CERTIFICATION_SCHEMA_VERSION,
         provider: 'qwen',
         model: 'qwen3-coder',
@@ -414,6 +429,35 @@ describe('buildModelCertificationReport', () => {
       assert.equal(row.state, 'ready');
       assert.deepEqual(row.eligibleStages.sort(), ['coder', 'planner', 'reviewer'].sort());
     } finally {
+      if (previousRoot === undefined) {
+        delete process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
+      } else {
+        process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = previousRoot;
+      }
+      cleanup();
+    }
+  });
+
+  it('does not fall back to repo-local artifacts in default reports', () => {
+    const { repoDir, cleanup } = makeTempRepo();
+    const previousRoot = process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
+    process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = join(repoDir, 'empty-global-certifications');
+    try {
+      const certDir = join(repoDir, '.wavemill', 'native-agent-certifications', 'openai', 'gpt-4o');
+      mkdirSync(certDir, { recursive: true });
+      writeFileSync(join(certDir, 'v1.json'), JSON.stringify(makeArtifact()), 'utf-8');
+
+      const rows = buildModelCertificationReport({ registry: makeRegistry(), repoDir, now: NOW });
+      const row = rows.find(r => r.model === 'gpt-4o');
+      assert.ok(row, 'gpt-4o row missing');
+      assert.equal(row.status, 'not-certified');
+      assert.equal(row.reason, 'missing');
+    } finally {
+      if (previousRoot === undefined) {
+        delete process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
+      } else {
+        process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = previousRoot;
+      }
       cleanup();
     }
   });
@@ -455,9 +499,10 @@ describe('renderReportTable', () => {
     const table = renderReportTable(rows);
     assert.ok(table.includes('Provider'), 'should include Provider header');
     assert.ok(table.includes('Model'), 'should include Model header');
-    assert.ok(table.includes('State'), 'should include State header');
+    assert.ok(table.includes('Status'), 'should include Status header');
+    assert.ok(table.includes('Reason'), 'should include Reason header');
     assert.ok(table.includes('openai'), 'should include openai provider');
-    assert.ok(table.includes('ready'), 'should include ready state');
+    assert.ok(table.includes('ready-for-challenge'), 'should include ready status');
   });
 
   it('renders a message when no rows exist', () => {

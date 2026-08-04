@@ -330,7 +330,7 @@ describe('evaluateNativeProviderGate', () => {
       const decision = evaluateNativeProviderGate(taskInput(registry, 'glm-5.2', repoDir));
 
       assert.equal(decision.ok, false);
-      assert.equal(decision.reason, 'missing_artifact');
+      assert.equal(decision.reason, 'malformed_artifact');
     } finally {
       cleanup();
     }
