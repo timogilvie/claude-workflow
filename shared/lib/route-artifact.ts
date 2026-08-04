@@ -260,12 +260,14 @@ export interface RouteLifecycleArtifacts {
   bootstrap: RouteArtifactSnapshot | null;
   expanded: RouteArtifactSnapshot | null;
   active: RouteArtifactSnapshot | null;
+  planningLaunch?: RouteArtifactSnapshot | null;
 }
 
 export interface RouteLifecycleProvenance {
   bootstrapRoute?: RouteArtifactView;
   expandedRoute?: RouteArtifactView;
   activeRoute?: RouteArtifactView;
+  planningLaunchRoute?: RouteArtifactView;
   routeChanged?: boolean;
   decisionSource?: 'bootstrap' | 'expanded' | 'preserved';
   expandedCacheHit?: boolean;
@@ -618,6 +620,44 @@ function loadExpandedRouteArtifact(filePath: string): RouteArtifactSnapshot | nu
   return payload ? parseExpandedRouteArtifact(payload.value, payload) : null;
 }
 
+function loadPlanningLaunchRouteArtifact(filePath: string): RouteArtifactSnapshot | null {
+  const payload = loadJson(filePath);
+  if (!payload || !payload.value || typeof payload.value !== 'object' || Array.isArray(payload.value)) {
+    return null;
+  }
+
+  const phaseConfig = payload.value as Record<string, unknown>;
+  const planning = phaseConfig.planning && typeof phaseConfig.planning === 'object' && !Array.isArray(phaseConfig.planning)
+    ? phaseConfig.planning as Record<string, unknown>
+    : undefined;
+  const launchRoute = planning?.launchRoute && typeof planning.launchRoute === 'object' && !Array.isArray(planning.launchRoute)
+    ? planning.launchRoute as Record<string, unknown>
+    : undefined;
+  const route = launchRoute?.route && typeof launchRoute.route === 'object' && !Array.isArray(launchRoute.route)
+    ? launchRoute.route as Record<string, unknown>
+    : undefined;
+  if (!planning || !launchRoute || !route) {
+    return null;
+  }
+
+  const planner = readString(route.planner) ?? readString(launchRoute.planner) ?? readString(planning.model);
+  if (!planner) {
+    return null;
+  }
+
+  return {
+    planner,
+    planDepth: readString(route.planDepth) ?? readString(launchRoute.planDepth) ?? readString(planning.depth),
+    coder: readString(route.coder) ?? '',
+    codeDepth: readString(route.codeDepth) ?? '',
+    reviewer: readString(route.reviewer) ?? '',
+    reviewMode: readString(route.reviewMode) ?? '',
+    artifactPath: payload.artifactPath,
+    artifactHash: payload.artifactHash,
+    source: readString(launchRoute.source) as RouteSource | undefined,
+  };
+}
+
 export function readBothRouteArtifacts(featureDir: string): {
   bootstrap: RouteArtifactSnapshot | null;
   expanded: RouteArtifactSnapshot | null;
@@ -655,8 +695,11 @@ export function readRouteLifecycleArtifacts(
     () => archiveDir ? loadBootstrapRouteArtifact(join(archiveDir, 'routing-complete.json')) : null,
     () => featureDir ? loadBootstrapRouteArtifact(join(featureDir, '.routing-complete')) : null,
   ]);
+  const planningLaunch = firstSnapshot([
+    () => featureDir ? loadPlanningLaunchRouteArtifact(join(featureDir, '.phase-config.json')) : null,
+  ]);
 
-  return { bootstrap, expanded, active };
+  return { bootstrap, expanded, active, planningLaunch };
 }
 
 export function toRouteArtifactView(route: RouteArtifactSnapshot): RouteArtifactView {
@@ -699,6 +742,18 @@ export function routeChangedMaterially(
     reasons.push('coder_class');
   }
 
+  if (
+    bootstrap.planner
+    && expanded.planner
+    && modelClassOrId(bootstrap.planner, repoDir) !== modelClassOrId(expanded.planner, repoDir)
+  ) {
+    reasons.push('planner_class');
+  }
+
+  if (bootstrap.planDepth && expanded.planDepth && bootstrap.planDepth !== expanded.planDepth) {
+    reasons.push('plan_depth');
+  }
+
   if (bootstrap.codeDepth !== expanded.codeDepth) {
     reasons.push('code_depth');
   }
@@ -723,6 +778,8 @@ function routesMatchExactly(
 
   return left.coder === right.coder
     && left.codeDepth === right.codeDepth
+    && (left.planner || '') === (right.planner || '')
+    && (left.planDepth || '') === (right.planDepth || '')
     && left.reviewer === right.reviewer
     && left.reviewMode === right.reviewMode;
 }
@@ -778,6 +835,7 @@ export function buildRouteLifecycleProvenance(
     ...(artifacts.bootstrap ? { bootstrapRoute: toRouteArtifactView(artifacts.bootstrap) } : {}),
     ...(artifacts.expanded ? { expandedRoute: toRouteArtifactView(artifacts.expanded) } : {}),
     ...(active ? { activeRoute: toRouteArtifactView(active) } : {}),
+    ...(artifacts.planningLaunch ? { planningLaunchRoute: toRouteArtifactView(artifacts.planningLaunch) } : {}),
     ...(typeof routeChanged === 'boolean' ? { routeChanged } : {}),
     decisionSource,
     ...(typeof metadataCarrier?.cache_hit === 'boolean' ? { expandedCacheHit: metadataCarrier.cache_hit } : {}),

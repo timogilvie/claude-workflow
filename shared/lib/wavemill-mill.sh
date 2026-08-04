@@ -2418,6 +2418,19 @@ elif [[ "${ROUTER_ENABLED:-true}" == "true" ]]; then
   fi
 fi
 
+challenge_plan_stage_requires_effective_route() {
+  local challenge_plan="$1"
+  local challenge_mode challenge_stage decision_source
+
+  challenge_mode=$(echo "$challenge_plan" | jq -r '.mode // "single"' 2>/dev/null || echo "single")
+  [[ "$challenge_mode" == "challenge" ]] || return 1
+
+  challenge_stage=$(echo "$challenge_plan" | jq -r '.challengeStage // "implementation"' 2>/dev/null || echo "implementation")
+  [[ "$challenge_stage" == "planning" || "$challenge_stage" == "plan" || "$challenge_stage" == "planner" ]] || return 1
+
+  decision_source=$(echo "$challenge_plan" | jq -r '.decisionSource // "bootstrap"' 2>/dev/null || echo "bootstrap")
+  [[ "$decision_source" != "expanded" && "$decision_source" != "preserved" ]]
+}
 
 # ── Phase 5: Challenge-mode launch planning ──────────────────────────────
 FINAL_LAUNCH_ARGS=()
@@ -2476,6 +2489,11 @@ for t in "${TASKS[@]}"; do
     challenge_plan=$(npx tsx "$TOOLS_DIR/resolve-challenge-task.ts" "${challenge_args[@]}" 2>/dev/null || echo "")
     challenge_mode=$(echo "$challenge_plan" | jq -r '.mode // "single"' 2>/dev/null || echo "single")
     challenge_reason=$(echo "$challenge_plan" | jq -r '.reason // empty' 2>/dev/null || echo "")
+    if challenge_plan_stage_requires_effective_route "$challenge_plan"; then
+      challenge_mode="single"
+      challenge_reason="plan_stage_expanded_route_unavailable"
+      log_warn "  $ISSUE: Planner challenge deferred until expanded route is available"
+    fi
   fi
 
   if [[ "$challenge_mode" == "challenge" ]]; then
@@ -3313,6 +3331,72 @@ persist_challenge_execution_intent() {
     --arg issue "$issue" \
     --arg challenger "$challenger_key" \
     --argjson intent "$intent_json" || true
+}
+
+challenge_plan_stage_requires_effective_route() {
+  local challenge_plan="$1"
+  local challenge_mode challenge_stage decision_source
+
+  challenge_mode=$(echo "$challenge_plan" | jq -r '.mode // "single"' 2>/dev/null || echo "single")
+  [[ "$challenge_mode" == "challenge" ]] || return 1
+
+  challenge_stage=$(echo "$challenge_plan" | jq -r '.challengeStage // "implementation"' 2>/dev/null || echo "implementation")
+  [[ "$challenge_stage" == "planning" || "$challenge_stage" == "plan" || "$challenge_stage" == "planner" ]] || return 1
+
+  decision_source=$(echo "$challenge_plan" | jq -r '.decisionSource // "bootstrap"' 2>/dev/null || echo "bootstrap")
+  [[ "$decision_source" != "expanded" && "$decision_source" != "preserved" ]]
+}
+
+record_planning_launch_route_snapshot() {
+  local feature_dir="$1" model="$2" agent="$3" depth="$4" source="${5:-effective-route}"
+  local route_file="$feature_dir/.routing-complete"
+  local phase_file="$feature_dir/.phase-config.json"
+  [[ -n "$feature_dir" && -n "$model" ]] || return 0
+  [[ -f "$phase_file" ]] || return 0
+
+  local snapshot
+  if [[ -f "$route_file" ]] && jq -e . "$route_file" >/dev/null 2>&1; then
+    snapshot=$(jq -c \
+      --arg model "$model" \
+      --arg agent "$agent" \
+      --arg depth "$depth" \
+      --arg source "$source" \
+      '{
+        source: $source,
+        planner: $model,
+        plannerAgent: $agent,
+        planDepth: $depth,
+        route: {
+          planner: $model,
+          coder: (.coder // ""),
+          reviewer: (.reviewer // ""),
+          planDepth: $depth,
+          codeDepth: (.codeDepth // ""),
+          reviewMode: (.reviewMode // .reviewRecommended // "")
+        },
+        routeProvenance: (.provenance // {}),
+        recordedAt: (now | todateiso8601)
+      }' "$route_file" 2>/dev/null || echo "")
+  else
+    snapshot=$(jq -cn \
+      --arg model "$model" \
+      --arg agent "$agent" \
+      --arg depth "$depth" \
+      --arg source "$source" \
+      '{source:$source, planner:$model, plannerAgent:$agent, planDepth:$depth, route:{planner:$model, planDepth:$depth}, recordedAt:(now | todateiso8601)}' 2>/dev/null || echo "")
+  fi
+  [[ -n "$snapshot" ]] || return 0
+
+  local tmp
+  tmp=$(mktemp) || return 0
+  if jq --argjson snapshot "$snapshot" '
+      .planning.launchRoute = (.planning.launchRoute // $snapshot)
+      | .planning.effectiveRoute = $snapshot.route
+    ' "$phase_file" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$phase_file"
+  else
+    rm -f "$tmp"
+  fi
 }
 
 finalize_challenge_execution_intent_before_coding() {
@@ -10647,6 +10731,11 @@ EOF
       challenge_plan=$(_with_timeout "$API_TIMEOUT" npx tsx "$TOOLS_DIR/resolve-challenge-task.ts" "${challenge_args[@]}" 2>/dev/null || echo "")
       challenge_mode=$(echo "$challenge_plan" | jq -r '.mode // "single"' 2>/dev/null || echo "single")
       challenge_reason=$(echo "$challenge_plan" | jq -r '.reason // empty' 2>/dev/null || echo "")
+      if challenge_plan_stage_requires_effective_route "$challenge_plan"; then
+        challenge_mode="single"
+        challenge_reason="plan_stage_expanded_route_unavailable"
+        log_warn "  $issue: Planner challenge deferred until expanded route is available"
+      fi
     fi
     if [[ "$challenge_mode" == "challenge" ]]; then
       challenge_enabled_for_launch="true"
@@ -11112,6 +11201,8 @@ Implement from the issue description plus direct codebase analysis."
     log_route_lifecycle "bootstrap_assigned" "issue=$issue" "route=\"$bootstrap_route\""
   fi
 
+  write_phase_config "$feature_dir" "${planner_model:-claude-sonnet-5}" "${task_model:-claude-opus-4-7}" "${reviewer_model:-claude-sonnet-5}" "${plan_depth:-light}" "${code_depth:-medium}" "${review_mode:-static}" "${FORCE_MODEL:-}"
+
   # Emit task_launched trace event (best-effort)
   trace_append_event "$feature_dir" "$_trace_id" "$issue" "$slug" "launch" "task_launched" "ok" "" "$AGENT_CMD" \
     "$(jq -cn --arg agent "$AGENT_CMD" --arg coder "${task_model:-}" --arg planner "${planner_model:-}" \
@@ -11140,6 +11231,7 @@ Implement from the issue description plus direct codebase analysis."
 
   # Record planning stage as running before the first launch so the monitor
   # keeps the task active even before any planning artifacts exist.
+  record_planning_launch_route_snapshot "$feature_dir" "$planner_launch_model" "$resolved_planner_agent" "${plan_depth:-light}" "effective-route"
   write_stage_result "$feature_dir" "planning" "running" "$resolved_planner_agent" "$planner_launch_model"
 
   launch_planning_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
@@ -12189,6 +12281,7 @@ monitor_issue_state() {
               fi
 
               # Record planning stage as running (HOK-1177)
+              record_planning_launch_route_snapshot "$FEATURE_DIR" "$planner_launch_model" "$planner_agent" "$plan_depth" "effective-route"
               write_stage_result "$FEATURE_DIR" "planning" "running" "$planner_agent" "$planner_launch_model"
 
               launch_planning_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$planner_launch_model" "$planner_agent" "$plan_depth"
