@@ -321,7 +321,8 @@ else
 fi
 
 ROLE_REPO="$TMPDIR_TEST/role-guard-repo"
-mkdir -p "$ROLE_REPO/.wavemill/native-agent-certifications/qwen/qwen3-coder"
+ROLE_CERT_ROOT="$TMPDIR_TEST/role-guard-global-certs"
+mkdir -p "$ROLE_CERT_ROOT/qwen/qwen3-coder" "$ROLE_REPO"
 cat > "$ROLE_REPO/.wavemill-config.json" <<'EOF'
 {
   "nativeAgent": {
@@ -337,7 +338,7 @@ cat > "$ROLE_REPO/.wavemill-config.json" <<'EOF'
   }
 }
 EOF
-cat > "$ROLE_REPO/.wavemill/native-agent-certifications/qwen/qwen3-coder/v2.json" <<'EOF'
+cat > "$ROLE_CERT_ROOT/qwen/qwen3-coder/v2.json" <<'EOF'
 {
   "schemaVersion": 2,
   "provider": "qwen",
@@ -349,7 +350,7 @@ cat > "$ROLE_REPO/.wavemill/native-agent-certifications/qwen/qwen3-coder/v2.json
 }
 EOF
 
-if TEST_OPENROUTER_KEY="sk-test" npx tsx "$REPO_DIR/tools/check-native-eligibility.ts" "$ROLE_REPO" "planning" >/dev/null 2>&1; then
+if TEST_OPENROUTER_KEY="sk-test" WAVEMILL_NATIVE_CERTIFICATION_ROOT="$ROLE_CERT_ROOT" npx tsx "$REPO_DIR/tools/check-native-eligibility.ts" "$ROLE_REPO" "planning" >/dev/null 2>&1; then
   fail "role-ineligible native planner is not selected"
 else
   pass "role-ineligible native planner is not selected"
