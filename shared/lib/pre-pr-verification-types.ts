@@ -71,6 +71,8 @@ export interface PrePrVerificationArtifact {
     failureReason?: string;
   }>;
   overallStatus: 'pass' | 'fail' | 'timeout' | 'error';
+  startTime?: number; // milliseconds since epoch
+  endTime?: number; // milliseconds since epoch
 }
 
 /** Gate check result */

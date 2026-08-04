@@ -108,6 +108,15 @@ export interface ExportRow {
   planning_outcome_output_tokens: number | null;
   planning_outcome_cost_usd: number | null;
 
+  // Verification telemetry (HOK-2607)
+  verification_local_duration_ms: number | null;
+  verification_local_failure_category: string;
+  verification_local_passed: boolean | null;
+  verification_operator_override: boolean;
+  verification_remote_only_failure: boolean;
+  verification_remote_passed: boolean | null;
+  verification_remediation_outcome: string;
+
   // Eligibility summary columns
   eligibility_errors: string;
   training_eligible: boolean | null;
@@ -182,6 +191,13 @@ const COLUMNS: (keyof ExportRow)[] = [
   'planning_outcome_input_tokens',
   'planning_outcome_output_tokens',
   'planning_outcome_cost_usd',
+  'verification_local_duration_ms',
+  'verification_local_failure_category',
+  'verification_local_passed',
+  'verification_operator_override',
+  'verification_remote_only_failure',
+  'verification_remote_passed',
+  'verification_remediation_outcome',
   'eligibility_errors',
   'training_eligible',
   'budget_eval_eligible',
@@ -237,6 +253,7 @@ export function flattenRecord(
   const rubric = record.rubricEval;
   const fod = record.featureOutcomeDiagnostics;
   const planningOutcome = record.planningExecutionOutcome;
+  const verificationTelemetry = record.verificationTelemetry;
 
   const timeSeconds =
     typeof record.timeSeconds === 'number' && Number.isFinite(record.timeSeconds) && record.timeSeconds >= 0
@@ -328,6 +345,14 @@ export function flattenRecord(
     planning_outcome_input_tokens: planningOutcome?.usage?.totalInputTokens ?? null,
     planning_outcome_output_tokens: planningOutcome?.usage?.totalOutputTokens ?? null,
     planning_outcome_cost_usd: planningOutcome?.usage?.totalCostUsd ?? null,
+
+    verification_local_duration_ms: verificationTelemetry?.local_verification?.total_duration_ms ?? null,
+    verification_local_failure_category: verificationTelemetry?.local_verification?.first_failure_category ?? '',
+    verification_local_passed: verificationTelemetry?.local_verification?.passed ?? null,
+    verification_operator_override: verificationTelemetry?.operator_override?.applied ?? false,
+    verification_remote_only_failure: verificationTelemetry?.remote_ci_verdict?.remote_only_failure ?? false,
+    verification_remote_passed: verificationTelemetry?.remote_ci_verdict?.passed ?? null,
+    verification_remediation_outcome: verificationTelemetry?.remediation?.local_remediation_outcome ?? '',
 
     eligibility_errors: record.eligibilityErrors ? JSON.stringify(record.eligibilityErrors) : '',
     training_eligible: record.trainingEligible ?? null,

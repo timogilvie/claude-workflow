@@ -191,6 +191,8 @@ export function writeVerificationArtifact(
       failureReason: cmd.failureReason,
     })),
     overallStatus: result.status,
+    startTime: result.startTime,
+    endTime: result.endTime,
   };
 
   // Write atomically

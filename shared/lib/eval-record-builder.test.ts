@@ -3,7 +3,10 @@
  */
 
 import assert from 'node:assert/strict';
-import { beforeEach, describe, it, mock } from 'node:test';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 import type { EvalRecord } from './eval-schema.ts';
 import {
   attachEligibility,
@@ -29,6 +32,8 @@ import {
   attachWorkflowCostMetadata,
   attachFeatureOutcomeDiagnostics,
   attachPlanningExecutionOutcome,
+  attachVerificationTelemetry,
+  buildVerificationTelemetryFromArtifact,
   computeRouteCalibration,
   computeEligibility,
   enrichEvalRecord,
@@ -73,6 +78,7 @@ function expect(actual: unknown) {
 
 describe('eval-record-builder', () => {
   let baseRecord: EvalRecord;
+  const tempDirs: string[] = [];
 
   beforeEach(() => {
     // Create a minimal eval record
@@ -86,6 +92,12 @@ describe('eval-record-builder', () => {
       prReviewOutput: 'Test PR',
       schemaVersion: '1.0.0',
     } as EvalRecord;
+  });
+
+  afterEach(() => {
+    while (tempDirs.length > 0) {
+      rmSync(tempDirs.pop()!, { recursive: true, force: true });
+    }
   });
 
   describe('attachAgentType', () => {
@@ -148,6 +160,71 @@ describe('eval-record-builder', () => {
       attachProviderMetadata(baseRecord, undefined, undefined);
       expect(baseRecord.provider).toBeUndefined();
       expect(baseRecord.endpoint).toBeUndefined();
+    });
+  });
+
+  describe('verification telemetry', () => {
+    it('attaches telemetry only when present', () => {
+      attachVerificationTelemetry(baseRecord, null);
+      expect(baseRecord.verificationTelemetry).toBeUndefined();
+
+      attachVerificationTelemetry(baseRecord, {
+        schema_version: '1.0',
+        local_verification: {
+          ran: true,
+          passed: true,
+        },
+      });
+
+      expect(baseRecord.verificationTelemetry?.local_verification?.passed).toBe(true);
+    });
+
+    it('builds bounded local failure telemetry from a verification artifact', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'verification-telemetry-'));
+      tempDirs.push(dir);
+      const logPath = join(dir, 'cmd-0.log');
+      writeFileSync(
+        logPath,
+        'Command failed for user@example.com in /Users/tim/private/repo\n',
+        'utf-8',
+      );
+
+      const telemetry = buildVerificationTelemetryFromArtifact(
+        {
+          version: '1.0',
+          timestamp: '2026-08-03T12:00:00.000Z',
+          workingBranch: 'task/hok-2607',
+          headSha: 'a'.repeat(40),
+          baseSha: 'b'.repeat(40),
+          overriddenBy: null,
+          commands: [
+            {
+              index: 0,
+              command: 'npm run lint',
+              status: 'fail',
+              exitCode: 1,
+              durationMs: 123,
+              logPath,
+            },
+          ],
+          overallStatus: 'fail',
+        },
+        {
+          enabled: true,
+          required: true,
+          source: 'explicit',
+          recipe: {
+            commands: ['npm run lint'],
+          },
+        },
+      );
+
+      assert.deepEqual(telemetry.contract, { source: 'explicit', version: '1.0' });
+      assert.equal(telemetry.local_verification?.passed, false);
+      assert.equal(telemetry.local_verification?.command_count, 1);
+      assert.equal(telemetry.local_verification?.first_failure_category, 'lint');
+      assert.match(telemetry.local_verification?.first_failure_fingerprint ?? '', /^[a-f0-9]{64}$/);
+      assert.equal(telemetry.timeline?.local_start, '2026-08-03T12:00:00.000Z');
     });
   });
 

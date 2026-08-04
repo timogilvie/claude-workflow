@@ -780,7 +780,7 @@ function validPromptSizeDiagnostic() {
 }
 
 test('SCHEMA_VERSION is bumped for eval schema updates', () => {
-  assert.equal(SCHEMA_VERSION, '1.36.0');
+  assert.equal(SCHEMA_VERSION, '1.37.0');
 });
 
 test('Record with native workflow cost attribution validates', () => {
@@ -1831,7 +1831,7 @@ test('planningExecutionOutcome remains optional for legacy records', () => {
 test('planningExecutionOutcome validates when present', () => {
   const record: EvalRecord = {
     ...scenarios[0].record,
-    schemaVersion: '1.35.0',
+    schemaVersion: '1.36.0',
     planningExecutionOutcome: {
       agent: 'native',
       model: 'moonshotai/kimi-k2.7-code',
@@ -1879,7 +1879,7 @@ test('planningExecutionOutcome failureReason enum values validate', () => {
   for (const failureReason of reasons) {
     const record: EvalRecord = {
       ...scenarios[0].record,
-      schemaVersion: '1.35.0',
+      schemaVersion: '1.36.0',
       planningExecutionOutcome: {
         status: failureReason === 'aborted' ? 'aborted' : 'failed',
         failureReason,
@@ -1897,7 +1897,7 @@ test('planningExecutionOutcome failureReason enum values validate', () => {
 test('planningExecutionOutcome rejects unknown failureReason', () => {
   const record = {
     ...scenarios[0].record,
-    schemaVersion: '1.35.0',
+    schemaVersion: '1.36.0',
     planningExecutionOutcome: {
       status: 'failed',
       failureReason: 'budget_gone',
@@ -1907,6 +1907,88 @@ test('planningExecutionOutcome rejects unknown failureReason', () => {
 
   const result = validateAgainstSchema(record as unknown as Record<string, unknown>);
   assert.ok(!result.valid, 'unknown failureReason should fail validation');
+});
+
+test('verificationTelemetry remains optional for legacy records', () => {
+  const record = scenarios[0].record as unknown as Record<string, unknown>;
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
+test('verificationTelemetry validates full first-green lifecycle fields', () => {
+  const record: EvalRecord = {
+    ...scenarios[0].record,
+    schemaVersion: '1.36.0',
+    verificationTelemetry: {
+      schema_version: '1.0',
+      contract: {
+        source: 'explicit',
+        version: '1.0',
+      },
+      checked_shas: {
+        head: 'a'.repeat(40),
+        base: 'b'.repeat(40),
+      },
+      local_verification: {
+        ran: true,
+        passed: true,
+        command_count: 3,
+        total_duration_ms: 5000,
+        command_durations_ms: [1000, 2000, 2000],
+        timed_out: false,
+      },
+      remote_ci_verdict: {
+        ran: true,
+        passed: true,
+        passed_before_merge: true,
+        check_count: 5,
+        remote_only_failure: false,
+      },
+      remediation: {
+        local_attempt_count: 1,
+        local_remediation_outcome: 'none',
+        remote_fix_required: false,
+        remote_fix_commits: 0,
+      },
+      operator_override: {
+        applied: false,
+      },
+      timeline: {
+        local_start: '2026-08-03T12:00:00.000Z',
+        local_end: '2026-08-03T12:05:00.000Z',
+        pr_created: '2026-08-03T12:06:00.000Z',
+        remote_ci_start: '2026-08-03T12:07:00.000Z',
+        remote_ci_first_green: '2026-08-03T12:15:00.000Z',
+        pr_merged: '2026-08-03T12:30:00.000Z',
+      },
+    },
+  };
+
+  const result = validateAgainstSchema(record as unknown as Record<string, unknown>);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+
+  const properties = schema.properties as Record<string, Record<string, unknown>>;
+  assert.equal(properties.verificationTelemetry?.type, 'object');
+});
+
+test('verificationTelemetry rejects unknown categories and raw extra fields', () => {
+  const record = {
+    ...scenarios[0].record,
+    schemaVersion: '1.36.0',
+    verificationTelemetry: {
+      local_verification: {
+        ran: true,
+        passed: false,
+        first_failure_category: 'security',
+        raw_log: 'must not be accepted',
+      },
+    },
+  };
+
+  const result = validateAgainstSchema(record as unknown as Record<string, unknown>);
+  assert.ok(!result.valid, 'unknown telemetry category and raw log field should fail validation');
+  assert.ok(result.errors.some((error) => error.includes('first_failure_category')));
+  assert.ok(result.errors.some((error) => error.includes('raw_log')));
 });
 
 test('phaseDurationsSeconds remains optional for legacy records', () => {
@@ -1982,8 +2064,8 @@ test('Wavemill router fields validate and schema stays in parity', () => {
   assert.equal(properties.wavemill_router_scoring?.$ref, '#/$defs/WavemillRouterScoringMetadata');
 });
 
-test('Schema version constant is 1.36.0', () => {
-  assert.equal(SCHEMA_VERSION, '1.36.0');
+test('Schema version constant is 1.37.0', () => {
+  assert.equal(SCHEMA_VERSION, '1.37.0');
 });
 
 test('Record with resolved-model routing validates', () => {
