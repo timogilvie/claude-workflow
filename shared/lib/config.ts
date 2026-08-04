@@ -755,6 +755,27 @@ export interface PrePrVerificationConfigSchema {
   source?: 'github-enforced' | 'explicit';
   requiredChecks?: string[];
   recipe?: PrePrVerificationRecipeConfig;
+  remoteOnlyExceptions?: Array<{
+    checkName: string;
+    reason: string;
+    acknowledgedBy?: string;
+    acknowledgedAt?: string;
+  }>;
+  driftValidation?: {
+    enabled?: boolean;
+    blockOnUnmapped?: boolean;
+    warnOnDrift?: boolean;
+    autoAcknowledgeThreshold?: number;
+  };
+  mappingAcknowledgements?: {
+    checks?: Record<string, string | {
+      localCommand?: string;
+      workflowPath?: string;
+      jobName?: string;
+    }>;
+    acknowledgedBy?: string;
+    acknowledgedAt?: string;
+  };
   logCaptureLines?: number;
   draftFallback?: boolean;
   staleTtlSeconds?: number;

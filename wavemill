@@ -180,6 +180,13 @@ ${GREEN}Commands:${NC}
                ${CYAN}wavemill check-routing --json${NC}
                ${CYAN}wavemill check-routing --repo-dir ~/src/wavemill${NC}
 
+  ${CYAN}check-ci-verification${NC}
+             Check drift between enforced GitHub checks and the local
+             pre-PR verification recipe. Proposes mappings without applying them.
+             Usage:
+               ${CYAN}wavemill check-ci-verification --propose-mapping${NC}
+               ${CYAN}wavemill check-ci-verification --json${NC}
+
   ${CYAN}doctor${NC}    Inspect operator-facing routing health diagnostics
              Subcommands:
                ${CYAN}wavemill doctor openrouter${NC}
@@ -448,6 +455,25 @@ check_project_context() {
     echo -e "${CYAN}Skipped.${NC} Initialize later with: ${CYAN}npx tsx tools/init-project-context.ts${NC}"
     echo -e "  Or run with: ${CYAN}SKIP_CONTEXT_CHECK=true wavemill mill${NC} to skip this prompt"
     echo ""
+  fi
+}
+
+check_ci_verification_drift_on_init() {
+  [[ -f ".wavemill-config.json" ]] || return 0
+  [[ -f "$TOOLS_DIR/check-ci-verification.ts" ]] || return 0
+
+  if node -e '
+const fs = require("fs");
+try {
+  const config = JSON.parse(fs.readFileSync(".wavemill-config.json", "utf8"));
+  process.exit(config?.prePrVerification?.enabled && config?.prePrVerification?.source === "github-enforced" ? 0 : 1);
+} catch {
+  process.exit(1);
+}
+'; then
+    echo ""
+    echo -e "${CYAN}Checking CI-to-local verification drift...${NC}"
+    npx tsx "$TOOLS_DIR/check-ci-verification.ts" --repo "$PWD" --propose-mapping || true
   fi
 }
 
@@ -1032,6 +1058,7 @@ INIT_EOF
 
   echo ""
   echo -e "${GREEN}Done!${NC} Your repository is configured for Wavemill."
+  check_ci_verification_drift_on_init
 }
 
 run_expand() {
@@ -1153,6 +1180,18 @@ run_check_routing() {
   fi
 
   echo -e "${CYAN}Starting Wavemill Routing Check...${NC}"
+  exec npx tsx "$check_tool" "$@"
+}
+
+run_check_ci_verification() {
+  local check_tool="$TOOLS_DIR/check-ci-verification.ts"
+
+  if [[ ! -f "$check_tool" ]]; then
+    echo -e "${RED}Error:${NC} CI verification drift tool not found at: $check_tool" >&2
+    exit 1
+  fi
+
+  echo -e "${CYAN}Starting Wavemill CI Verification Drift Check...${NC}"
   exec npx tsx "$check_tool" "$@"
 }
 
@@ -1547,6 +1586,10 @@ case "${1:-}" in
   check-routing)
     shift
     run_check_routing "$@"
+    ;;
+  check-ci-verification)
+    shift
+    run_check_ci_verification "$@"
     ;;
   doctor)
     shift

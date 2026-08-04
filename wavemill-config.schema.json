@@ -2364,6 +2364,118 @@
                     "required": ["commands"],
                     "additionalProperties": false
                 },
+                "remoteOnlyExceptions": {
+                    "type": "array",
+                    "default": [],
+                    "description": "Enforced GitHub checks that intentionally have no safe local equivalent. Each entry requires a rationale and should remain enforced in remote CI.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "checkName": {
+                                "type": "string",
+                                "minLength": 1,
+                                "description": "Exact enforced GitHub check name."
+                            },
+                            "reason": {
+                                "type": "string",
+                                "minLength": 1,
+                                "description": "Maintainer rationale for why this check cannot safely run locally."
+                            },
+                            "acknowledgedBy": {
+                                "type": "string",
+                                "minLength": 1,
+                                "description": "Maintainer or team that acknowledged the remote-only exception."
+                            },
+                            "acknowledgedAt": {
+                                "type": "string",
+                                "pattern": "^\\d{4}-\\d{2}-\\d{2}T",
+                                "description": "ISO 8601 timestamp for the acknowledgement."
+                            }
+                        },
+                        "required": ["checkName", "reason"],
+                        "additionalProperties": false
+                    }
+                },
+                "driftValidation": {
+                    "type": "object",
+                    "description": "Controls CI-to-local verification contract drift validation.",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Enable drift validation for github-enforced pre-PR verification."
+                        },
+                        "blockOnUnmapped": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "When true, unmapped enforced checks are treated as blocking validation errors."
+                        },
+                        "warnOnDrift": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Show drift warnings during diagnostics and initialization."
+                        },
+                        "autoAcknowledgeThreshold": {
+                            "type": "number",
+                            "default": 0.9,
+                            "minimum": 0,
+                            "maximum": 1,
+                            "description": "Confidence threshold for proposing mappings as safe candidates. Proposals are not applied automatically."
+                        }
+                    },
+                    "additionalProperties": false
+                },
+                "mappingAcknowledgements": {
+                    "type": "object",
+                    "description": "Explicit maintainer-reviewed mappings from enforced GitHub check names to local recipe commands and optional workflow provenance.",
+                    "properties": {
+                        "checks": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "oneOf": [
+                                    {
+                                        "type": "string",
+                                        "minLength": 1
+                                    },
+                                    {
+                                        "type": "object",
+                                        "properties": {
+                                            "localCommand": {
+                                                "type": "string",
+                                                "minLength": 1
+                                            },
+                                            "workflowPath": {
+                                                "type": "string",
+                                                "minLength": 1
+                                            },
+                                            "jobName": {
+                                                "type": "string",
+                                                "minLength": 1
+                                            }
+                                        },
+                                        "additionalProperties": false,
+                                        "anyOf": [
+                                            { "required": ["localCommand"] },
+                                            { "required": ["workflowPath"] },
+                                            { "required": ["jobName"] }
+                                        ]
+                                    }
+                                ]
+                            },
+                            "default": {},
+                            "description": "Map exact GitHub check names to local recipe commands or mapping metadata."
+                        },
+                        "acknowledgedBy": {
+                            "type": "string",
+                            "minLength": 1
+                        },
+                        "acknowledgedAt": {
+                            "type": "string",
+                            "pattern": "^\\d{4}-\\d{2}-\\d{2}T"
+                        }
+                    },
+                    "additionalProperties": false
+                },
                 "logCaptureLines": {
                     "type": "integer",
                     "default": 50,
