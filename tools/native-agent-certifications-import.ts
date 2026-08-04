@@ -4,6 +4,7 @@ import { runTool } from '../shared/lib/tool-runner.ts';
 import {
   buildGlobalCertificationPath,
   checkIdentity,
+  DEFAULT_CERTIFICATION_SUITE_VERSION,
   evaluateEligibility,
   listCertifications,
   readCertification,
@@ -14,7 +15,7 @@ import {
 export interface ImportCertificationSummary {
   scanned: number;
   imported: Array<{ path: string; artifactPath: string; provider: string; model: string; suiteVersion: string }>;
-  skipped: Array<{ path: string; reason: string }>;
+  skipped: Array<{ path: string; reason: string; reusable: false; action: 're-certify' | 'ignore' }>;
   dryRun: boolean;
 }
 
@@ -36,23 +37,28 @@ export function importLegacyCertifications(opts: {
   for (const path of paths) {
     const read = readCertification(path);
     if (!read.ok) {
-      summary.skipped.push({ path, reason: read.error.code });
+      summary.skipped.push({ path, reason: read.error.code, reusable: false, action: 're-certify' });
       continue;
     }
 
     const storageIdentity = resolveCertificationStorageIdentity(read.artifact.provider, read.artifact.model);
     if (opts.provider && storageIdentity.provider !== opts.provider && read.artifact.provider !== opts.provider) {
-      summary.skipped.push({ path, reason: 'provider-filter' });
+      summary.skipped.push({ path, reason: 'provider-filter', reusable: false, action: 'ignore' });
       continue;
     }
     if (opts.model && storageIdentity.model !== opts.model && read.artifact.model !== opts.model) {
-      summary.skipped.push({ path, reason: 'model-filter' });
+      summary.skipped.push({ path, reason: 'model-filter', reusable: false, action: 'ignore' });
       continue;
     }
 
     const identityError = checkIdentity(read.artifact, storageIdentity.provider, storageIdentity.model);
     if (identityError) {
-      summary.skipped.push({ path, reason: `identity-${identityError}` });
+      summary.skipped.push({ path, reason: `identity-${identityError}`, reusable: false, action: 're-certify' });
+      continue;
+    }
+
+    if (read.artifact.suiteVersion !== DEFAULT_CERTIFICATION_SUITE_VERSION) {
+      summary.skipped.push({ path, reason: 'wrong-suite', reusable: false, action: 're-certify' });
       continue;
     }
 
@@ -63,7 +69,7 @@ export function importLegacyCertifications(opts: {
       opts.now ?? new Date(),
     );
     if (!eligibility.eligible) {
-      summary.skipped.push({ path, reason: eligibility.reason });
+      summary.skipped.push({ path, reason: eligibility.reason, reusable: false, action: 're-certify' });
       continue;
     }
 
@@ -82,8 +88,8 @@ export function importLegacyCertifications(opts: {
   return summary;
 }
 
-if (import.meta.main) {
-  runTool({
+export function runImportCommand(argv = process.argv.slice(2)): Promise<void> {
+  return runTool({
     name: 'native-agent-certifications-import',
     description: 'Import valid legacy repo-local native-agent certification artifacts into shared Wavemill storage.',
     options: {
@@ -132,8 +138,12 @@ if (import.meta.main) {
         console.log(`  imported ${entry.provider}/${entry.model}/${entry.suiteVersion}${entry.artifactPath ? ` -> ${entry.artifactPath}` : ''}`);
       }
       for (const entry of summary.skipped) {
-        console.log(`  skipped ${entry.path}: ${entry.reason}`);
+        console.log(`  skipped ${entry.path}: ${entry.reason}; action=${entry.action}`);
       }
     },
-  });
+  }, argv);
+}
+
+if (import.meta.main) {
+  await runImportCommand();
 }

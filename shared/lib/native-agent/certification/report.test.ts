@@ -9,6 +9,7 @@ import {
   renderReportTable,
 } from './report.ts';
 import { CERTIFICATION_SCHEMA_VERSION, CERTIFICATION_TTL_DAYS } from './schema.ts';
+import { GLOBAL_CERTIFICATION_ROOT_ENV } from './storage.ts';
 import type { ModelRegistry } from '../../model-registry.ts';
 import type { NativeCertificationArtifact } from './schema.ts';
 
@@ -171,7 +172,7 @@ describe('buildModelCertificationReport', () => {
 
     const row = rows.find(r => r.model === 'gpt-4o');
     assert.ok(row, 'gpt-4o row missing');
-    assert.equal(row.state, 'ready');
+    assert.equal(row.state, 'ready-for-challenge');
     assert.equal(row.certifiedPhase, 'read-only');
     assert.deepEqual(row.eligibleStages, ['reviewer']);
     assert.equal(row.suiteVersion, 'v1');
@@ -207,7 +208,7 @@ describe('buildModelCertificationReport', () => {
 
     const row = rows.find(r => r.model === 'gpt-4o');
     assert.ok(row, 'gpt-4o row missing');
-    assert.equal(row.state, 'uncertified');
+    assert.equal(row.state, 'not-certified');
     assert.deepEqual(row.eligibleStages, []);
     assert.equal(row.scenarios[0].failureMessage, 'assertion failed');
   });
@@ -222,7 +223,7 @@ describe('buildModelCertificationReport', () => {
 
     const row = rows.find(r => r.model === 'unsupported-model');
     assert.ok(row, 'unsupported-model row missing');
-    assert.equal(row.state, 'unsupported');
+    assert.equal(row.state, 'certified-unavailable');
     assert.deepEqual(row.eligibleStages, []);
     assert.equal(row.scenarios.length, 0);
   });
@@ -237,7 +238,7 @@ describe('buildModelCertificationReport', () => {
 
     const row = rows.find(r => r.model === 'partial-model');
     assert.ok(row, 'partial-model row missing');
-    assert.equal(row.state, 'certification-only');
+    assert.equal(row.state, 'certified-unavailable');
     assert.deepEqual(row.eligibleStages, []);
   });
 
@@ -251,7 +252,7 @@ describe('buildModelCertificationReport', () => {
 
     const row = rows.find(r => r.model === 'no-cert-model');
     assert.ok(row, 'no-cert-model row missing');
-    assert.equal(row.state, 'uncertified');
+    assert.equal(row.state, 'not-certified');
   });
 
   it('excludes non-native models', () => {
@@ -275,7 +276,7 @@ describe('buildModelCertificationReport', () => {
 
     const row = rows.find(r => r.model === 'gpt-4o');
     assert.ok(row, 'gpt-4o row missing');
-    assert.equal(row.state, 'uncertified');
+    assert.equal(row.state, 'not-certified');
     assert.deepEqual(row.eligibleStages, []);
     assert.equal(row.scenarios.length, 0);
   });
@@ -290,7 +291,7 @@ describe('buildModelCertificationReport', () => {
 
     const row = rows.find(r => r.model === 'gpt-4o');
     assert.ok(row, 'gpt-4o row missing');
-    assert.equal(row.state, 'uncertified');
+    assert.equal(row.state, 'not-certified');
     assert.deepEqual(row.eligibleStages, []);
   });
 
@@ -304,7 +305,7 @@ describe('buildModelCertificationReport', () => {
 
     const row = rows.find(r => r.model === 'gpt-4o');
     assert.ok(row, 'gpt-4o row missing');
-    assert.equal(row.state, 'uncertified');
+    assert.equal(row.state, 'not-certified');
     assert.deepEqual(row.eligibleStages, []);
   });
 
@@ -361,15 +362,17 @@ describe('buildModelCertificationReport', () => {
 
     const row = rows.find(r => r.model === 'gpt-4o');
     assert.ok(row, 'gpt-4o row missing');
-    assert.equal(row.state, 'ready');
+    assert.equal(row.state, 'ready-for-challenge');
     assert.deepEqual(row.eligibleStages.sort(), ['coder', 'planner', 'reviewer'].sort());
   });
 
   it('loads mapped OpenRouter artifacts for aliased models', () => {
     const { repoDir, cleanup } = makeTempRepo();
     try {
-      const certDir = join(repoDir, '.wavemill', 'native-agent-certifications', 'qwen', 'qwen3-coder');
+      const certDir = join(repoDir, 'qwen', 'qwen3-coder');
       mkdirSync(certDir, { recursive: true });
+      const previousRoot = process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
+      process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = repoDir;
       writeFileSync(join(certDir, 'v1.json'), JSON.stringify({
         schemaVersion: CERTIFICATION_SCHEMA_VERSION,
         provider: 'qwen',
@@ -411,8 +414,13 @@ describe('buildModelCertificationReport', () => {
       const rows = buildModelCertificationReport({ registry, repoDir, now: NOW });
       const row = rows.find(r => r.model === 'qwen-3-coder');
       assert.ok(row, 'qwen-3-coder row missing');
-      assert.equal(row.state, 'ready');
+      assert.equal(row.state, 'ready-for-challenge');
       assert.deepEqual(row.eligibleStages.sort(), ['coder', 'planner', 'reviewer'].sort());
+      if (previousRoot === undefined) {
+        delete process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
+      } else {
+        process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = previousRoot;
+      }
     } finally {
       cleanup();
     }
@@ -434,7 +442,7 @@ describe('serializeReport', () => {
     assert.equal(report.generatedAt, NOW.toISOString());
     assert.equal(report.models.length, 1);
     assert.equal(report.models[0].model, 'gpt-4o');
-    assert.equal(report.models[0].state, 'ready');
+    assert.equal(report.models[0].state, 'ready-for-challenge');
 
     const json = JSON.stringify(report);
     assert.ok(json.includes('"schemaVersion":1'));
@@ -455,9 +463,9 @@ describe('renderReportTable', () => {
     const table = renderReportTable(rows);
     assert.ok(table.includes('Provider'), 'should include Provider header');
     assert.ok(table.includes('Model'), 'should include Model header');
-    assert.ok(table.includes('State'), 'should include State header');
+    assert.ok(table.includes('Status'), 'should include Status header');
     assert.ok(table.includes('openai'), 'should include openai provider');
-    assert.ok(table.includes('ready'), 'should include ready state');
+    assert.ok(table.includes('ready-for-challenge'), 'should include ready state');
   });
 
   it('renders a message when no rows exist', () => {

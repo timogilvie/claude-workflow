@@ -18,7 +18,8 @@ import {
   renderReportTable,
 } from '../shared/lib/native-agent/certification/report.ts';
 
-runTool({
+export function runModelsReportCommand(argv = process.argv.slice(2)): Promise<void> {
+return runTool({
   name: 'native-agent-models-report',
   description: 'List certification status, phase eligibility, suite version, age, and known limitations for all native-capable models.',
   options: {
@@ -38,12 +39,17 @@ runTool({
       type: 'string',
       description: 'Repository directory. Defaults to current working directory.',
     },
+    status: {
+      type: 'string',
+      description: 'Filter by status: not-certified, certified-unavailable, stale, ready-for-challenge.',
+    },
   },
   examples: [
     'npx tsx tools/native-agent-models-report.ts',
     'npx tsx tools/native-agent-models-report.ts --json',
     'npx tsx tools/native-agent-models-report.ts --provider openai',
     'npx tsx tools/native-agent-models-report.ts --model gpt-4o --json',
+    'npx tsx tools/native-agent-models-report.ts --status ready-for-challenge',
   ],
   async run({ args }) {
     const repoDir = (args.repo as string | undefined) || process.cwd();
@@ -52,6 +58,7 @@ runTool({
       repoDir,
       provider: args.provider as string | undefined,
       model: args.model as string | undefined,
+      status: args.status as never,
     });
 
     if (args.json === true) {
@@ -60,4 +67,9 @@ runTool({
       process.stdout.write(renderReportTable(rows));
     }
   },
-});
+}, argv);
+}
+
+if (import.meta.main) {
+  await runModelsReportCommand();
+}

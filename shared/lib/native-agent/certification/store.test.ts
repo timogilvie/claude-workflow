@@ -13,6 +13,7 @@ import {
   readCertification,
   serializeCertification,
   writeCertification,
+  validateCertificationForWrite,
   writeScopedCertification,
 } from './store.ts';
 import { buildScopedCertificationPath } from './storage.ts';
@@ -169,6 +170,34 @@ describe('writeCertification', () => {
     } finally {
       cleanupRepo(repoDir);
     }
+  });
+
+  it('throws before write when artifact identity is not canonical', () => {
+    const repoDir = makeTempRepo();
+    try {
+      const bad = makeValidArtifact({ provider: 'openrouter', model: 'qwen-3-coder', suiteVersion: 'v2' });
+      assert.throws(() => writeCertification(repoDir, bad), /canonical storage identity qwen\/qwen3-coder/);
+    } finally {
+      cleanupRepo(repoDir);
+    }
+  });
+
+  it('throws before write when known limitations contain local paths or secrets', () => {
+    const artifact = makeValidArtifact({
+      knownLimitations: ['debug log at /Users/example/project with API_KEY present'],
+    });
+    assert.throws(() => validateCertificationForWrite(artifact), /secrets or local paths/);
+  });
+
+  it('throws before write when certifiedAt is implausibly old or in the future', () => {
+    assert.throws(
+      () => validateCertificationForWrite(makeValidArtifact({ certifiedAt: '2020-01-01T00:00:00.000Z' })),
+      /outside the accepted publication window/,
+    );
+    assert.throws(
+      () => validateCertificationForWrite(makeValidArtifact({ certifiedAt: '2999-01-01T00:00:00.000Z' })),
+      /outside the accepted publication window/,
+    );
   });
 
   it('throws when provider contains path traversal characters', () => {
