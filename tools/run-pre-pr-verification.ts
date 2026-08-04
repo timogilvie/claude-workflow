@@ -21,6 +21,7 @@ import {
   writeVerificationArtifact,
   readAndValidateArtifact,
 } from '../shared/lib/pre-pr-verification.ts';
+import { resolveBaseSha, FetchError } from '../shared/lib/base-resolution.ts';
 import type { OperatorOverride } from '../shared/lib/pre-pr-verification-types.ts';
 
 // ────────────────────────────────────────────────────────────────
@@ -134,10 +135,6 @@ async function main(): Promise<void> {
   let workingBranch: string;
   try {
     headSha = execSync('git rev-parse HEAD', { cwd: opts.stateDir, encoding: 'utf-8' }).trim();
-    baseSha = execSync(`git merge-base HEAD ${baseBranch}`, {
-      cwd: opts.stateDir,
-      encoding: 'utf-8',
-    }).trim();
     workingBranch = execSync('git rev-parse --abbrev-ref HEAD', {
       cwd: opts.stateDir,
       encoding: 'utf-8',
@@ -145,9 +142,37 @@ async function main(): Promise<void> {
   } catch (err) {
     const msg = (err as Error).message;
     if (!opts.json) {
-      console.error(`✗ Unable to resolve git state against base '${baseBranch}': ${msg}`);
+      console.error(`✗ Unable to resolve git state (HEAD/branch): ${msg}`);
     } else {
-      console.log(JSON.stringify({ error: 'git_state_unavailable', baseBranch, message: msg }));
+      console.log(JSON.stringify({ error: 'git_state_unavailable', message: msg }));
+    }
+    process.exit(1);
+  }
+
+  // Resolve base SHA by fetching remote. Fail-closed: fetch failure blocks verification.
+  try {
+    const resolved = await resolveBaseSha({
+      cwd: opts.stateDir,
+      baseBranch,
+      remote: 'origin',
+    });
+    baseSha = resolved.baseSha;
+  } catch (err) {
+    const fetchErr = err instanceof FetchError ? err : new FetchError('unknown', String(err), baseBranch, 'origin', String(err));
+    if (!opts.json) {
+      console.error(`✗ Unable to fetch and resolve base '${baseBranch}': ${fetchErr.diagnostics}`);
+    } else {
+      console.log(
+        JSON.stringify({
+          error: 'base_fetch_failed',
+          details: {
+            type: fetchErr.type,
+            baseBranch: fetchErr.baseBranch,
+            remote: fetchErr.remote,
+            diagnostics: fetchErr.diagnostics,
+          },
+        }),
+      );
     }
     process.exit(1);
   }
@@ -155,13 +180,23 @@ async function main(): Promise<void> {
   // Check if artifact is fresh AND matches current HEAD/base (skip if --force).
   if (!opts.force) {
     const artifactPath = join(opts.stateDir, '.wavemill/pre-pr-verification/artifact.json');
-    const { artifact, isValid, shasMismatch } = readAndValidateArtifact(
+    const { artifact, isValid, shasMismatch, baseAdvanced } = readAndValidateArtifact(
       artifactPath,
       headSha,
       baseSha,
     );
 
-    if (artifact && isValid && !shasMismatch) {
+    // If base has advanced, reject the artifact and require rerun
+    if (baseAdvanced) {
+      if (!opts.json) {
+        console.log(
+          `ℹ️  Base branch '${baseBranch}' has advanced since last verification.`,
+        );
+        console.log(`   Old base: ${artifact?.baseSha?.substring(0, 7)}`);
+        console.log(`   New base: ${baseSha?.substring(0, 7)}`);
+        console.log('   Artifact is stale. Running verification with new base...\n');
+      }
+    } else if (artifact && isValid && !shasMismatch) {
       const staleTtl = (config.staleTtlSeconds ?? 3600) * 1000;
       const age = Date.now() - new Date(artifact.timestamp).getTime();
 

@@ -82,3 +82,12 @@ export interface GateCheckResult {
   artifact?: PrePrVerificationArtifact;
   recommendation?: string;
 }
+
+/** Fetch error details for base resolution */
+export interface FetchErrorDetails {
+  type: 'fetch_failed' | 'ref_not_found' | 'network_error' | 'auth_error' | 'unknown';
+  message: string;
+  baseBranch: string;
+  remote: string;
+  diagnostics: string;
+}

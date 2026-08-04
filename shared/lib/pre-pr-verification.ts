@@ -202,6 +202,10 @@ export function writeVerificationArtifact(
 /**
  * Read a verification artifact from disk and validate SHAs.
  *
+ * Detects:
+ * - shasMismatch: HEAD or base SHA differs
+ * - baseAdvanced: only base SHA differs (base has advanced)
+ *
  * @param artifactPath Path to artifact file
  * @param expectedHeadSha Expected HEAD SHA (for validation)
  * @param expectedBaseSha Expected base SHA (for validation)
@@ -215,6 +219,7 @@ export function readAndValidateArtifact(
   artifact: PrePrVerificationArtifact | null;
   isValid: boolean;
   shasMismatch: boolean;
+  baseAdvanced?: boolean;
 } {
   if (!existsSync(artifactPath)) {
     return { artifact: null, isValid: false, shasMismatch: false };
@@ -224,15 +229,18 @@ export function readAndValidateArtifact(
     const content = readFileSync(artifactPath, 'utf-8');
     const artifact = JSON.parse(content) as PrePrVerificationArtifact;
 
-    const shasMismatch = Boolean(
-      (expectedHeadSha && artifact.headSha !== expectedHeadSha) ||
-        (expectedBaseSha && artifact.baseSha !== expectedBaseSha),
-    );
+    const headMismatch = Boolean(expectedHeadSha && artifact.headSha !== expectedHeadSha);
+    const baseMismatch = Boolean(expectedBaseSha && artifact.baseSha !== expectedBaseSha);
+    const shasMismatch = headMismatch || baseMismatch;
+
+    // baseAdvanced: base changed but head stayed the same
+    const baseAdvanced = !headMismatch && baseMismatch;
 
     return {
       artifact,
       isValid: !shasMismatch && artifact.overallStatus === 'pass',
       shasMismatch,
+      baseAdvanced,
     };
   } catch (err) {
     return { artifact: null, isValid: false, shasMismatch: false };

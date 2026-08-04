@@ -243,6 +243,98 @@ test('getRemediationGuidance: formats failure message', () => {
   assert(guidance.includes('Linting errors found'));
 });
 
+test('readAndValidateArtifact: detects stale head', () => {
+  const tmpDir = mkdtempSync(join('/tmp', 'verify-test-'));
+  try {
+    const artifactPath = join(tmpDir, 'artifact.json');
+    const artifact = {
+      version: '1.0',
+      timestamp: new Date().toISOString(),
+      workingBranch: 'test',
+      headSha: 'old-head-sha',
+      baseSha: 'base-sha-same',
+      overallStatus: 'pass' as const,
+      commands: [],
+    };
+
+    writeFileSync(artifactPath, JSON.stringify(artifact), 'utf-8');
+
+    const { shasMismatch, baseAdvanced, isValid } = readAndValidateArtifact(
+      artifactPath,
+      'new-head-sha', // HEAD changed
+      'base-sha-same', // base unchanged
+    );
+
+    assert.equal(shasMismatch, true);
+    // baseAdvanced is only set to true when base changed but head didn't
+    assert(!baseAdvanced);
+    assert.equal(isValid, false);
+  } finally {
+    rmSync(tmpDir, { recursive: true });
+  }
+});
+
+test('readAndValidateArtifact: detects stale base', () => {
+  const tmpDir = mkdtempSync(join('/tmp', 'verify-test-'));
+  try {
+    const artifactPath = join(tmpDir, 'artifact.json');
+    const artifact = {
+      version: '1.0',
+      timestamp: new Date().toISOString(),
+      workingBranch: 'test',
+      headSha: 'head-sha-same',
+      baseSha: 'old-base-sha',
+      overallStatus: 'pass' as const,
+      commands: [],
+    };
+
+    writeFileSync(artifactPath, JSON.stringify(artifact), 'utf-8');
+
+    const { shasMismatch, baseAdvanced, isValid } = readAndValidateArtifact(
+      artifactPath,
+      'head-sha-same', // HEAD unchanged
+      'new-base-sha', // base changed
+    );
+
+    assert.equal(shasMismatch, true);
+    assert.equal(baseAdvanced, true); // baseAdvanced when only base changed
+    assert.equal(isValid, false);
+  } finally {
+    rmSync(tmpDir, { recursive: true });
+  }
+});
+
+test('readAndValidateArtifact: detects both SHAs changed', () => {
+  const tmpDir = mkdtempSync(join('/tmp', 'verify-test-'));
+  try {
+    const artifactPath = join(tmpDir, 'artifact.json');
+    const artifact = {
+      version: '1.0',
+      timestamp: new Date().toISOString(),
+      workingBranch: 'test',
+      headSha: 'old-head-sha',
+      baseSha: 'old-base-sha',
+      overallStatus: 'pass' as const,
+      commands: [],
+    };
+
+    writeFileSync(artifactPath, JSON.stringify(artifact), 'utf-8');
+
+    const { shasMismatch, baseAdvanced, isValid } = readAndValidateArtifact(
+      artifactPath,
+      'new-head-sha', // HEAD changed
+      'new-base-sha', // base changed
+    );
+
+    assert.equal(shasMismatch, true);
+    // baseAdvanced is not set when head also changed
+    assert(!baseAdvanced);
+    assert.equal(isValid, false);
+  } finally {
+    rmSync(tmpDir, { recursive: true });
+  }
+});
+
 // ────────────────────────────────────────────────────────────────
 // Results
 // ────────────────────────────────────────────────────────────────
