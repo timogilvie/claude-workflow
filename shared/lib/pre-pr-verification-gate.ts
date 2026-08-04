@@ -7,8 +7,10 @@
 
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { getIntegrationConfig } from './config.ts';
 import type { PrePrVerificationConfigSchema } from './config.ts';
 import {
+  fetchAndResolveBase,
   readAndValidateArtifact,
   getRemediationGuidance,
 } from './pre-pr-verification.ts';
@@ -84,13 +86,34 @@ export function checkPrePrVerificationGate(
     return { passed: true };
   }
 
+  const configuredBaseBranch =
+    process.env.WAVEMILL_BASE_BRANCH ||
+    getIntegrationConfig(stateDir).integrationBranch ||
+    'auto/integration';
+  const baseResolution = fetchAndResolveBase(stateDir, configuredBaseBranch);
+  if ('kind' in baseResolution) {
+    return {
+      passed: false,
+      reason: `Base branch refresh failed: ${baseResolution.message}`,
+      recommendation:
+        'The pre-PR verification gate cannot prove freshness because the remote base state is unknown.\n' +
+        `${baseResolution.diagnostics}\n\n` +
+        'Recommended action:\n' +
+        '  1. Fix connectivity, credentials, or the configured base branch.\n' +
+        '  2. Re-run verification: npx tsx tools/run-pre-pr-verification.ts --force',
+      requiresRemediation: false,
+    };
+  }
+
+  const latestBaseSha = baseResolution.baseSha;
+
   // Check 3: Locate artifact
   const artifactPath = join(stateDir, '.wavemill/pre-pr-verification/artifact.json');
 
   const { artifact, isValid, shasMismatch } = readAndValidateArtifact(
     artifactPath,
     currentHeadSha,
-    currentBaseSha,
+    latestBaseSha,
   );
 
   // Check 4: Artifact exists and is valid?
@@ -112,8 +135,9 @@ export function checkPrePrVerificationGate(
       artifact,
       reason: `Artifact SHAs do not match current HEAD/base (artifact is stale)`,
       recommendation:
-        'Rebase to latest base and re-run verification:\n' +
-        '  git fetch && git rebase origin/base\n' +
+        `Rebase to latest ${configuredBaseBranch} and re-run verification:\n` +
+        `  git fetch origin ${configuredBaseBranch}\n` +
+        `  git rebase origin/${configuredBaseBranch}\n` +
         '  npx tsx tools/run-pre-pr-verification.ts --force',
     };
   }

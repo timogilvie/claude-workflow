@@ -20,6 +20,7 @@ import {
   runVerificationRecipe,
   writeVerificationArtifact,
   readAndValidateArtifact,
+  fetchAndResolveBase,
 } from '../shared/lib/pre-pr-verification.ts';
 import type { OperatorOverride } from '../shared/lib/pre-pr-verification-types.ts';
 
@@ -32,6 +33,7 @@ interface CLIOptions {
   force: boolean;
   dryRun: boolean;
   json: boolean;
+  baseRef?: string;
   override?: string;
 }
 
@@ -41,6 +43,7 @@ function parseCLI(): CLIOptions {
   let force = false;
   let dryRun = false;
   let json = false;
+  let baseRef: string | undefined;
   let override: string | undefined;
 
   // Env-var override (per task packet): WAVEMILL_PRE_PR_OVERRIDE=1 activates
@@ -54,10 +57,36 @@ function parseCLI(): CLIOptions {
     const arg = args[i];
     if (arg === '--force') {
       force = true;
+    } else if (arg === '--help' || arg === '-h') {
+      console.log(
+        [
+          'Usage: npx tsx tools/run-pre-pr-verification.ts [state-dir] [options]',
+          '',
+          'Options:',
+          '  --force              Ignore an existing artifact and rerun the recipe',
+          '  --dry-run            Print the recipe without executing commands',
+          '  --json               Emit machine-readable output',
+          '  --base-ref <branch>   Override the configured base branch',
+          '  --override <reason>   Record an operator override with the artifact',
+          '  --help               Show this help',
+          '',
+          'The command automatically fetches the base branch before verification.',
+        ].join('\n'),
+      );
+      process.exit(0);
     } else if (arg === '--dry-run') {
       dryRun = true;
     } else if (arg === '--json') {
       json = true;
+    } else if (arg.startsWith('--base-ref=')) {
+      baseRef = arg.slice('--base-ref='.length);
+    } else if (arg === '--base-ref') {
+      if (i + 1 >= args.length) {
+        console.error('✗ --base-ref requires a branch name.');
+        process.exit(1);
+      }
+      baseRef = args[i + 1];
+      i += 1;
     } else if (arg.startsWith('--override=')) {
       override = arg.slice('--override='.length);
     } else if (arg === '--override') {
@@ -73,7 +102,7 @@ function parseCLI(): CLIOptions {
     }
   }
 
-  return { stateDir, force, dryRun, json, override };
+  return { stateDir, force, dryRun, json, baseRef, override };
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -112,11 +141,13 @@ async function main(): Promise<void> {
       console.log(
         `\nTimeout: ${config.recipe?.timeoutSeconds ?? 300}s per command`,
       );
+      console.log('Base branch will be fetched before required commands run.');
     } else {
       console.log(
         JSON.stringify({
           commands: config.recipe?.commands,
           timeout: config.recipe?.timeoutSeconds ?? 300,
+          fetchesBaseBeforeRun: true,
         }),
       );
     }
@@ -125,7 +156,11 @@ async function main(): Promise<void> {
 
   // Resolve the controller's configured base branch (not hard-coded main).
   const integration = getIntegrationConfig(opts.stateDir);
-  const baseBranch = integration.integrationBranch || 'auto/integration';
+  const baseBranch =
+    opts.baseRef ||
+    process.env.WAVEMILL_BASE_BRANCH ||
+    integration.integrationBranch ||
+    'auto/integration';
 
   // Get current git state. Fail fast if unavailable — the artifact's
   // whole purpose is SHA-anchored freshness.
@@ -134,10 +169,6 @@ async function main(): Promise<void> {
   let workingBranch: string;
   try {
     headSha = execSync('git rev-parse HEAD', { cwd: opts.stateDir, encoding: 'utf-8' }).trim();
-    baseSha = execSync(`git merge-base HEAD ${baseBranch}`, {
-      cwd: opts.stateDir,
-      encoding: 'utf-8',
-    }).trim();
     workingBranch = execSync('git rev-parse --abbrev-ref HEAD', {
       cwd: opts.stateDir,
       encoding: 'utf-8',
@@ -150,6 +181,30 @@ async function main(): Promise<void> {
       console.log(JSON.stringify({ error: 'git_state_unavailable', baseBranch, message: msg }));
     }
     process.exit(1);
+  }
+
+  if (!opts.json) {
+    console.log(`🔄 Fetching base branch '${baseBranch}'...`);
+  }
+  const baseResolution = fetchAndResolveBase(opts.stateDir, baseBranch);
+  if ('kind' in baseResolution) {
+    if (!opts.json) {
+      console.error(`✗ ${baseResolution.diagnostics}`);
+    } else {
+      console.log(
+        JSON.stringify({
+          error: baseResolution.kind,
+          baseBranch,
+          message: baseResolution.message,
+          diagnostics: baseResolution.diagnostics,
+        }),
+      );
+    }
+    process.exit(1);
+  }
+  baseSha = baseResolution.baseSha;
+  if (!opts.json) {
+    console.log(`✓ Base refreshed to ${baseSha}`);
   }
 
   // Check if artifact is fresh AND matches current HEAD/base (skip if --force).
@@ -169,7 +224,15 @@ async function main(): Promise<void> {
         if (!opts.json) {
           console.log('✓ Verification artifact is fresh, SHA-matched, and passing.');
         } else {
-          console.log(JSON.stringify({ status: 'pass', fresh: true, headSha, baseSha }));
+          console.log(
+            JSON.stringify({
+              status: 'pass',
+              fresh: true,
+              headSha,
+              baseSha,
+              baseRefresh: baseResolution,
+            }),
+          );
         }
         process.exit(0);
       }
@@ -212,7 +275,15 @@ async function main(): Promise<void> {
       `Result: ${passed}/${result.commands.length} passed - ${result.status.toUpperCase()}`,
     );
   } else {
-    console.log(JSON.stringify({ status: result.status, commands: result.commands }));
+    console.log(
+      JSON.stringify({
+        status: result.status,
+        commands: result.commands,
+        headSha,
+        baseSha,
+        baseRefresh: baseResolution,
+      }),
+    );
   }
 
   // Write artifact. Operator override requires a non-empty reason and a
