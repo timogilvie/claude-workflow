@@ -377,4 +377,67 @@ describe('resolve-challenge-task CLI', () => {
       rmSync(repoDir, { recursive: true, force: true });
     }
   });
+
+  it('uses expanded planner route for planner-stage challenge intent', () => {
+    const repoDir = makeRepo([], {
+      aliases: [],
+      primaryModels: ['gpt-5.6-terra', 'claude-opus-4-7', 'claude-haiku-4-5-20251001'],
+    });
+    const featureDir = join(repoDir, 'features', 'hok-2586-planner');
+    mkdirSync(featureDir, { recursive: true });
+    writeFileSync(join(featureDir, '.initial-route.json'), JSON.stringify({
+      planner: 'claude-haiku-4-5-20251001',
+      coder: 'gpt-5.6-terra',
+      reviewer: 'claude-sonnet-4-6',
+      planDepth: 'light',
+      codeDepth: 'medium',
+      reviewMode: 'static',
+      provenance: { source: 'bootstrap' },
+    }), 'utf-8');
+    writeFileSync(join(featureDir, '.post-expansion-route.json'), JSON.stringify({
+      planner: 'claude-opus-4-7',
+      coder: 'gpt-5.6-terra',
+      reviewer: 'claude-sonnet-4-6',
+      planDepth: 'deep',
+      codeDepth: 'medium',
+      reviewMode: 'static',
+      challengeRecommendation: {
+        shouldChallenge: true,
+        reason: 'low-data-stage',
+        challengerModel: 'claude-haiku-4-5-20251001',
+        stage: 'plan',
+        priority: 200,
+      },
+    }), 'utf-8');
+    writeFileSync(join(featureDir, 'task-packet.md'), '# Task\n\nPlan the expanded feature.\n', 'utf-8');
+
+    try {
+      const result = runResolveChallengeTask(repoDir, [
+        '--issue', 'HOK-2586',
+        '--slug', 'hok-2586-planner',
+        '--title', 'Publish certification matrix',
+        '--primary-model', 'gpt-5.6-terra',
+        '--remaining-slots', '2',
+        '--repo-dir', repoDir,
+        '--feature-dir', featureDir,
+        '--file', join(featureDir, 'task-packet.md'),
+      ]);
+
+      assert.equal(result.mode, 'challenge');
+      assert.equal(result.decisionSource, 'expanded');
+      assert.equal(result.challengeStage, 'plan');
+      const entries = result.entries as Array<Record<string, unknown>>;
+      const primary = entries.find((entry) => entry.role === 'primary');
+      const challenger = entries.find((entry) => entry.role === 'challenger');
+      assert.equal(primary?.planner, 'claude-opus-4-7');
+      assert.equal(challenger?.planner, 'claude-haiku-4-5-20251001');
+
+      const intent = result.challengeExecutionIntent as Record<string, unknown>;
+      assert.equal(intent.decisionSource, 'expanded');
+      assert.equal((intent.primary as Record<string, unknown> & { planner: Record<string, unknown> }).planner.model, 'claude-opus-4-7');
+      assert.equal((intent.challenger as Record<string, unknown> & { planner: Record<string, unknown> }).planner.model, 'claude-haiku-4-5-20251001');
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
 });

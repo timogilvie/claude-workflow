@@ -530,6 +530,7 @@ interface ChallengerSelectionResult {
 
 interface ChallengerSelectionOptions extends ChallengeCoverageOptions {
   stage?: ChallengeStage;
+  honorForced?: boolean;
 }
 
 function withSelectionMetadata(
@@ -557,6 +558,15 @@ function resolveChallengerModel(
 ): ChallengerSelectionResult {
   const enabledPool = filterDisabledModels(uniqueNonEmpty(pool));
   const trimmed = forced?.trim();
+  if (
+    (!selectionOpts?.coverage || selectionOpts?.honorForced)
+    && trimmed
+    && trimmed !== primaryModel
+    && !isDisabledModel(trimmed)
+    && enabledPool.includes(trimmed)
+  ) {
+    return { model: trimmed };
+  }
   if (selectionOpts?.coverage && selectionOpts.stage) {
     const selection = selectLeastUsedChallenger({
       stage: selectionOpts.stage,
@@ -574,9 +584,6 @@ function resolveChallengerModel(
       selectionReason: selection.selectionReason,
       coverageCount: selection.coverageCount,
     };
-  }
-  if (trimmed && trimmed !== primaryModel && !isDisabledModel(trimmed) && enabledPool.includes(trimmed)) {
-    return { model: trimmed };
   }
   return { model: chooseDistinctChallengerModel(enabledPool, primaryModel, randomFn) };
 }
@@ -1171,6 +1178,7 @@ export function pickChallengeWorkflowsWithReason(
 
   const challengerSelection = resolveChallengerModel(certifiedPool, primaryVaried, forcedChallengerModel, randomFn, {
     stage,
+    honorForced: stage !== 'implementation',
     coverage: opts.coverage,
     rotationSeed: opts.rotationSeed,
     recommendedChallengerModel: opts.recommendedChallengerModel,
@@ -1428,6 +1436,7 @@ function buildPairFromRouteSnapshotWithReason(
     opts.randomFn || Math.random,
     {
       stage,
+      honorForced: stage !== 'implementation',
       coverage: opts.coverage,
       rotationSeed: opts.rotationSeed,
       recommendedChallengerModel: opts.recommendedChallengerModel,
