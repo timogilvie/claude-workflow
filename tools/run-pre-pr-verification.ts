@@ -178,6 +178,8 @@ async function main(): Promise<void> {
   }
 
   // Check if artifact is fresh AND matches current HEAD/base (skip if --force).
+  // Note: baseAdvanced invalidates the artifact regardless of override status.
+  // The recipe must be re-run with the new base before creating/merging a PR.
   if (!opts.force) {
     const artifactPath = join(opts.stateDir, '.wavemill/pre-pr-verification/artifact.json');
     const { artifact, isValid, shasMismatch, baseAdvanced } = readAndValidateArtifact(
@@ -186,7 +188,7 @@ async function main(): Promise<void> {
       baseSha,
     );
 
-    // If base has advanced, reject the artifact and require rerun
+    // If base has advanced, reject the artifact and require rerun (cannot be overridden).
     if (baseAdvanced) {
       if (!opts.json) {
         console.log(
@@ -196,6 +198,7 @@ async function main(): Promise<void> {
         console.log(`   New base: ${baseSha?.substring(0, 7)}`);
         console.log('   Artifact is stale. Running verification with new base...\n');
       }
+      // Proceed to rerun recipe with fresh base (continue, don't exit)
     } else if (artifact && isValid && !shasMismatch) {
       const staleTtl = (config.staleTtlSeconds ?? 3600) * 1000;
       const age = Date.now() - new Date(artifact.timestamp).getTime();
@@ -246,8 +249,19 @@ async function main(): Promise<void> {
     console.log(
       `Result: ${passed}/${result.commands.length} passed - ${result.status.toUpperCase()}`,
     );
+
+    // Report SHA binding for audit trail
+    console.log(`\nVerification bound to:`);
+    console.log(`  HEAD: ${headSha.substring(0, 12)}`);
+    console.log(`  Base (${baseBranch}): ${baseSha.substring(0, 12)}`);
   } else {
-    console.log(JSON.stringify({ status: result.status, commands: result.commands }));
+    console.log(JSON.stringify({
+      status: result.status,
+      commands: result.commands,
+      headSha,
+      baseSha,
+      baseBranch,
+    }));
   }
 
   // Write artifact. Operator override requires a non-empty reason and a
