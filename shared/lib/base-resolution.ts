@@ -3,6 +3,17 @@
  *
  * Fetches the configured base branch from a remote, computes merge-base,
  * and detects when the base has advanced compared to a prior resolution.
+ *
+ * Configuration (defaults in resolveBaseSha/fetchRemoteBase):
+ * - remote: 'origin' (use 'upstream' for non-standard remotes)
+ * - timeoutSeconds: 30 (network operation timeout)
+ * - Fails closed: any fetch error blocks verification with diagnostics
+ *
+ * Error Handling:
+ * - Network errors (timeout, unreachable): FetchError with network_error type
+ * - Auth errors (SSH/HTTPS credential): FetchError with auth_error type
+ * - Ref not found: FetchError with ref_not_found type
+ * - All include diagnostics for troubleshooting
  */
 
 import { execSync } from 'node:child_process';
