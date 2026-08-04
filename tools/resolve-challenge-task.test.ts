@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -196,6 +196,32 @@ function makeRepo(coderHistory: string[], opts: {
   return repoDir;
 }
 
+function remapAgents(repoDir: string, agentMap: Record<string, string>): void {
+  const configPath = join(repoDir, '.wavemill-config.json');
+  const config = JSON.parse(readFileSync(configPath, 'utf-8')) as Record<string, unknown> & {
+    router?: { agentMap?: Record<string, string> };
+  };
+  config.router = config.router || {};
+  config.router.agentMap = {
+    ...(config.router.agentMap || {}),
+    ...agentMap,
+  };
+  writeFileSync(configPath, JSON.stringify(config), 'utf-8');
+}
+
+function constrainChallengeModels(repoDir: string, models: string[]): void {
+  const configPath = join(repoDir, '.wavemill-config.json');
+  const config = JSON.parse(readFileSync(configPath, 'utf-8')) as Record<string, unknown> & {
+    challenge?: { models?: string[] };
+    router?: { models?: string[] };
+  };
+  config.challenge = config.challenge || {};
+  config.router = config.router || {};
+  config.challenge.models = models;
+  config.router.models = models;
+  writeFileSync(configPath, JSON.stringify(config), 'utf-8');
+}
+
 function runResolveChallengeTask(repoDir: string, args: string[]): Record<string, unknown> {
   const stdout = execFileSync('npx', ['tsx', resolveChallengeTaskTool, ...args], {
     encoding: 'utf-8',
@@ -373,6 +399,116 @@ describe('resolve-challenge-task CLI', () => {
       assert.equal(intent.selectionPath, 'recommendation-driven');
       assert.equal((intent.challenger as Record<string, unknown> & { coder: Record<string, unknown> }).coder.model, 'glm-5.2');
       assert.equal((intent.challenger as Record<string, unknown> & { coder: Record<string, unknown> }).coder.agent, 'native-openrouter');
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('defers planner challenges until expanded routing is available', () => {
+    const repoDir = makeRepo([], {
+      primaryModels: ['claude-opus-4-7', 'claude-haiku-4-5'],
+    });
+    remapAgents(repoDir, {
+      'claude-opus-4-7': 'claude',
+      'claude-haiku-4-5': 'claude',
+    });
+    constrainChallengeModels(repoDir, ['claude-opus-4-7', 'claude-haiku-4-5']);
+    const featureDir = join(repoDir, 'features', 'hok-2586');
+    mkdirSync(featureDir, { recursive: true });
+    writeFileSync(join(featureDir, '.initial-route.json'), JSON.stringify({
+      planner: 'claude-haiku-4-5',
+      coder: 'claude-haiku-4-5',
+      reviewer: 'claude-haiku-4-5',
+      planDepth: 'light',
+      codeDepth: 'medium',
+      reviewMode: 'static',
+      challengeRecommendation: {
+        shouldChallenge: true,
+        reason: 'low-data-stage',
+        challengerModel: 'claude-haiku-4-5',
+        stage: 'plan',
+        priority: 200,
+      },
+      provenance: { source: 'bootstrap' },
+    }), 'utf-8');
+
+    try {
+      const result = runResolveChallengeTask(repoDir, [
+        '--issue', 'HOK-2586',
+        '--slug', 'hok-2586',
+        '--title', 'Publish certification matrix',
+        '--primary-model', 'claude-haiku-4-5',
+        '--remaining-slots', '2',
+        '--repo-dir', repoDir,
+        '--feature-dir', featureDir,
+      ]);
+
+      assert.equal(result.mode, 'deferred');
+      assert.equal(result.reason, 'expanded_route_unavailable');
+      assert.equal(result.selectedStage, 'plan');
+      const intent = result.challengeExecutionIntent as Record<string, unknown>;
+      assert.equal(intent.noChallengeReason, 'expanded_route_unavailable');
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('uses expanded planner overrides for planner challenge entries', () => {
+    const repoDir = makeRepo([], {
+      primaryModels: ['claude-opus-4-7', 'claude-haiku-4-5'],
+    });
+    remapAgents(repoDir, {
+      'claude-opus-4-7': 'claude',
+      'claude-haiku-4-5': 'claude',
+    });
+    constrainChallengeModels(repoDir, ['claude-opus-4-7', 'claude-haiku-4-5']);
+    const featureDir = join(repoDir, 'features', 'hok-2586');
+    mkdirSync(featureDir, { recursive: true });
+    writeFileSync(join(featureDir, '.initial-route.json'), JSON.stringify({
+      planner: 'claude-haiku-4-5',
+      coder: 'claude-haiku-4-5',
+      reviewer: 'claude-haiku-4-5',
+      planDepth: 'light',
+      codeDepth: 'medium',
+      reviewMode: 'static',
+      provenance: { source: 'bootstrap' },
+    }), 'utf-8');
+    writeFileSync(join(featureDir, '.post-expansion-route.json'), JSON.stringify({
+      planner: 'claude-opus-4-7',
+      coder: 'claude-haiku-4-5',
+      reviewer: 'claude-haiku-4-5',
+      planDepth: 'deep',
+      codeDepth: 'medium',
+      reviewMode: 'static',
+      challengeRecommendation: {
+        shouldChallenge: true,
+        reason: 'low-data-stage',
+        challengerModel: 'claude-haiku-4-5',
+        stage: 'plan',
+        priority: 200,
+      },
+      provenance: { source: 'expanded' },
+    }), 'utf-8');
+
+    try {
+      const result = runResolveChallengeTask(repoDir, [
+        '--issue', 'HOK-2586',
+        '--slug', 'hok-2586',
+        '--title', 'Publish certification matrix',
+        '--primary-model', 'claude-haiku-4-5',
+        '--remaining-slots', '2',
+        '--repo-dir', repoDir,
+        '--feature-dir', featureDir,
+      ]);
+
+      assert.equal(result.mode, 'challenge');
+      assert.equal(result.decisionSource, 'expanded');
+      assert.equal(result.challengeStage, 'plan');
+      const entries = result.entries as Array<Record<string, unknown>>;
+      assert.equal(entries[0].planner, 'claude-opus-4-7');
+      const intent = result.challengeIntent as Record<string, unknown>;
+      assert.equal((intent.primary as Record<string, unknown>).expectedStageModel, 'claude-opus-4-7');
+      assert.equal((intent.primary as Record<string, unknown>).expectedRoute.planner, 'claude-opus-4-7');
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }

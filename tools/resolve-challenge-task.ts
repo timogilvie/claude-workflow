@@ -163,6 +163,15 @@ runTool({
       weights: challenge.stageWeights,
       recommendedStage: launchDecision.recommendation?.stage,
     });
+    if (challengeStage === 'plan' && featureDir && !routeArtifacts.expanded) {
+      console.log(JSON.stringify(buildSingle('expanded_route_unavailable', {
+        mode: 'deferred',
+        selectedStage: challengeStage,
+        selectionPath: launchDecision.selectionPath,
+        ...(launchDecision.recommendation ? { challengeRecommendation: launchDecision.recommendation } : {}),
+      })));
+      return;
+    }
     const summary = buildEvalSummary(repoDir);
     const coverage = (model: string, stage: 'plan' | 'implementation' | 'review') =>
       modelStageCount(summary, model, stage);

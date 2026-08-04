@@ -1564,6 +1564,7 @@ export interface EvalRouteProvenance {
   bootstrapRoute?: EvalRouteArtifact;
   expandedRoute?: EvalRouteArtifact;
   activeRoute?: EvalRouteArtifact;
+  planningLaunchRoute?: EvalRouteArtifact;
   routeChanged?: boolean;
   decisionSource?: 'bootstrap' | 'expanded' | 'preserved';
   expandedCacheHit?: boolean;

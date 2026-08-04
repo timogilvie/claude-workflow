@@ -1716,6 +1716,81 @@ ensure_phase_config_state_file() {
 EOF
 }
 
+persist_planning_launch_route_snapshot() {
+  local feature_dir="$1" issue="$2" planner_model="$3" planner_agent="$4" plan_depth="$5"
+  local source_route_file="${6:-$feature_dir/.routing-complete}"
+  local snapshot_file="$feature_dir/.planning-launch-route.json"
+  local tmp
+
+  mkdir -p "$feature_dir"
+
+  if [[ -f "$snapshot_file" ]]; then
+    return 0
+  fi
+
+  tmp="$(mktemp "${TMPDIR:-/tmp}/wavemill-planning-launch-route.XXXXXX")" || return 1
+
+  if [[ -f "$source_route_file" ]] && jq -e . "$source_route_file" >/dev/null 2>&1; then
+    jq \
+      --arg issue "$issue" \
+      --arg planner "$planner_model" \
+      --arg plannerAgent "$planner_agent" \
+      --arg planDepth "$plan_depth" \
+      '(. // {}) as $route
+       | $route
+       | .planner = $planner
+       | .planDepth = $planDepth
+       | .launch = ((.launch // {}) + {
+           planning: {
+             issue: $issue,
+             model: $planner,
+             agent: $plannerAgent,
+             depth: $planDepth,
+             routeSource: "effective",
+             launchedAt: (now | todateiso8601)
+           }
+         })
+       | .provenance = ((.provenance // {}) + {
+           launchSnapshot: "planning",
+           launchSnapshotCreatedAt: (now | todateiso8601)
+         })' \
+      "$source_route_file" > "$tmp" 2>/dev/null || {
+        rm -f "$tmp"
+        return 1
+      }
+  else
+    jq -n \
+      --arg issue "$issue" \
+      --arg planner "$planner_model" \
+      --arg plannerAgent "$planner_agent" \
+      --arg planDepth "$plan_depth" \
+      '{
+        planner: $planner,
+        planDepth: $planDepth,
+        launch: {
+          planning: {
+            issue: $issue,
+            model: $planner,
+            agent: $plannerAgent,
+            depth: $planDepth,
+            routeSource: "effective",
+            launchedAt: (now | todateiso8601)
+          }
+        },
+        provenance: {
+          source: "launch-snapshot",
+          launchSnapshot: "planning",
+          launchSnapshotCreatedAt: (now | todateiso8601)
+        }
+      }' > "$tmp" 2>/dev/null || {
+        rm -f "$tmp"
+        return 1
+      }
+  fi
+
+  mv "$tmp" "$snapshot_file"
+}
+
 apply_expanded_route_if_present() {
   local feature_dir="$1" issue="$2" slug="$3" worktree_dir="$4" state_file="${5:-${STATE_FILE:-}}"
   local route_file routing_file phase_config_file planner_model plan_depth coder_model code_depth reviewer_model review_mode

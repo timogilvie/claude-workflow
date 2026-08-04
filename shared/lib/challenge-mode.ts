@@ -1521,6 +1521,7 @@ export function pickChallengeWorkflowsWithContextAndReason(
 ): ChallengePairSelectionResult<ChallengePairSelection & { routeContext: ChallengeRouteContext }> {
   const bootstrapRoute = routeArtifacts.bootstrap || undefined;
   const expandedRoute = routeArtifacts.expanded || undefined;
+  const requestedStage = opts.challengeStage || 'implementation';
 
   if (!expandedRoute) {
     const selection = bootstrapRoute
@@ -1563,7 +1564,12 @@ export function pickChallengeWorkflowsWithContextAndReason(
     };
   }
 
-  const materiality = routeChangedMaterially(bootstrapRoute, expandedRoute, opts.repoDir);
+  const materiality = routeChangedMateriallyForChallengeStage(
+    bootstrapRoute,
+    expandedRoute,
+    requestedStage,
+    opts.repoDir,
+  );
   if (materiality.changed) {
     const selection = buildPairFromRouteSnapshotWithReason(pool, {
       ...opts,
@@ -1606,6 +1612,30 @@ export function pickChallengeWorkflowsWithContextAndReason(
     },
     ...(selection.nativeCertificationRejections ? { nativeCertificationRejections: selection.nativeCertificationRejections } : {}),
     ...(selection.modelExclusions ? { modelExclusions: selection.modelExclusions } : {}),
+  };
+}
+
+function routeChangedMateriallyForChallengeStage(
+  bootstrapRoute: RouteArtifactSnapshot,
+  expandedRoute: RouteArtifactSnapshot,
+  challengeStage: ChallengeStage,
+  repoDir?: string,
+): { changed: boolean; reasons: string[] } {
+  const materiality = routeChangedMaterially(bootstrapRoute, expandedRoute, repoDir);
+  const reasons = [...materiality.reasons];
+
+  if (challengeStage === 'plan') {
+    if ((bootstrapRoute.planner || '') !== (expandedRoute.planner || '')) {
+      reasons.push('planner');
+    }
+    if ((bootstrapRoute.planDepth || '') !== (expandedRoute.planDepth || '')) {
+      reasons.push('plan_depth');
+    }
+  }
+
+  return {
+    changed: reasons.length > 0,
+    reasons,
   };
 }
 

@@ -2478,6 +2478,11 @@ for t in "${TASKS[@]}"; do
     challenge_reason=$(echo "$challenge_plan" | jq -r '.reason // empty' 2>/dev/null || echo "")
   fi
 
+  if [[ "$challenge_mode" == "deferred" ]]; then
+    log "status" "  $ISSUE: Deferring planner challenge until expanded route is available (${challenge_reason:-expanded_route_unavailable})"
+    continue
+  fi
+
   if [[ "$challenge_mode" == "challenge" ]]; then
     primary_model=$(echo "$challenge_plan" | jq -r '.entries[0].model // empty' 2>/dev/null)
     challenger_key=$(echo "$challenge_plan" | jq -r '.entries[1].key // empty' 2>/dev/null)
@@ -8851,6 +8856,14 @@ archive_stage_artifacts() {
       fi
     fi
 
+    if [[ -f "$feature_dir/.planning-launch-route.json" ]]; then
+      if jq -e . "$feature_dir/.planning-launch-route.json" >/dev/null 2>&1; then
+        cp "$feature_dir/.planning-launch-route.json" "$archive_dir/planning-launch-route.json" 2>/dev/null || true
+      else
+        log_warn "  Skipping invalid route artifact archive: $feature_dir/.planning-launch-route.json"
+      fi
+    fi
+
     if [[ -f "$feature_dir/.initial-route.json" ]]; then
       if jq -e . "$feature_dir/.initial-route.json" >/dev/null 2>&1; then
         cp "$feature_dir/.initial-route.json" "$archive_dir/initial-route.json" 2>/dev/null || true
@@ -10686,6 +10699,10 @@ EOF
       primary_varied=$(echo "$challenge_plan" | jq -r '.entries[0].variedModel // .entries[0].model // empty' 2>/dev/null)
       challenger_varied=$(echo "$challenge_plan" | jq -r '.entries[1].variedModel // .entries[1].model // empty' 2>/dev/null)
       log "status" "  Challenge selected (stage=${challenge_stage}: ${primary_varied} vs ${challenger_varied}) [challenger is extra pane]"
+    elif [[ "$challenge_mode" == "deferred" ]]; then
+      log "status" "  $issue: Deferring planner challenge until expanded route is available (${challenge_reason:-expanded_route_unavailable})"
+      LAST_LAUNCHED_SLOTS=0
+      return 0
     elif [[ -n "$challenge_reason" ]] && [[ "$challenge_reason" != "challenge_disabled" ]] && [[ "$challenge_reason" != "roll_not_selected" ]]; then
       log "debug" "  Challenge skipped ($challenge_reason), launching single-model run"
     fi
@@ -11112,6 +11129,8 @@ Implement from the issue description plus direct codebase analysis."
     log_route_lifecycle "bootstrap_assigned" "issue=$issue" "route=\"$bootstrap_route\""
   fi
 
+  write_phase_config "$feature_dir" "${planner_model:-claude-sonnet-5}" "${task_model:-claude-opus-4-7}" "${reviewer_model:-claude-sonnet-5}" "${plan_depth:-light}" "${code_depth:-medium}" "${review_mode:-static}" "${FORCE_MODEL:-}"
+
   # Emit task_launched trace event (best-effort)
   trace_append_event "$feature_dir" "$_trace_id" "$issue" "$slug" "launch" "task_launched" "ok" "" "$AGENT_CMD" \
     "$(jq -cn --arg agent "$AGENT_CMD" --arg coder "${task_model:-}" --arg planner "${planner_model:-}" \
@@ -11140,6 +11159,9 @@ Implement from the issue description plus direct codebase analysis."
 
   # Record planning stage as running before the first launch so the monitor
   # keeps the task active even before any planning artifacts exist.
+  if ! persist_planning_launch_route_snapshot "$feature_dir" "$issue" "$planner_launch_model" "$resolved_planner_agent" "${plan_depth:-light}" "$routing_file"; then
+    log_warn "$issue → failed to persist planning launch route snapshot"
+  fi
   write_stage_result "$feature_dir" "planning" "running" "$resolved_planner_agent" "$planner_launch_model"
 
   launch_planning_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
@@ -12189,6 +12211,9 @@ monitor_issue_state() {
               fi
 
               # Record planning stage as running (HOK-1177)
+              if ! persist_planning_launch_route_snapshot "$FEATURE_DIR" "$ISSUE" "$planner_launch_model" "$planner_agent" "$plan_depth" "$routing_file"; then
+                log_warn "$ISSUE → failed to persist planning launch route snapshot"
+              fi
               write_stage_result "$FEATURE_DIR" "planning" "running" "$planner_agent" "$planner_launch_model"
 
               launch_planning_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$planner_launch_model" "$planner_agent" "$plan_depth"

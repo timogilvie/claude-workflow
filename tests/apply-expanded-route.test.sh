@@ -331,6 +331,104 @@ EOF
 }
 
 {
+  mapfile -t fixture < <(new_fixture "planning-launch-route-immutable")
+  root="${fixture[0]}"
+  wt_dir="${fixture[1]}"
+  state_file="${fixture[2]}"
+  feature_dir="$wt_dir/features/test-slug"
+
+  if persist_planning_launch_route_snapshot "$feature_dir" "HOK-1512" "bootstrap-planner" "claude" "light" "$feature_dir/.routing-complete"; then
+    cp "$feature_dir/.planning-launch-route.json" "$root/planning-launch-before.json"
+    cat > "$feature_dir/.post-expansion-route.json" <<'EOF'
+{
+  "planner": "expanded-planner",
+  "coder": "gpt-5.4",
+  "reviewer": "claude-sonnet-5",
+  "planDepth": "deep",
+  "codeDepth": "deep",
+  "reviewMode": "static+llm"
+}
+EOF
+    if run_apply "$feature_dir" "$state_file" \
+      && cmp -s "$feature_dir/.planning-launch-route.json" "$root/planning-launch-before.json" \
+      && [[ "$(jq -r '.planner' "$feature_dir/.planning-launch-route.json")" == "bootstrap-planner" ]] \
+      && [[ "$(jq -r '.launch.planning.model' "$feature_dir/.planning-launch-route.json")" == "bootstrap-planner" ]] \
+      && [[ "$(jq -r '.planner' "$feature_dir/.routing-complete")" == "expanded-planner" ]]; then
+      pass "planning launch route snapshot is immutable across later expanded reroute"
+    else
+      fail "planning launch route snapshot changed after expanded reroute"
+    fi
+  else
+    fail "planning launch route snapshot should persist"
+  fi
+  rm -rf "$root"
+}
+
+{
+  mapfile -t fixture < <(new_fixture "expanded-route-challenge-plan-contract")
+  root="${fixture[0]}"
+  wt_dir="${fixture[1]}"
+  state_file="${fixture[2]}"
+  feature_dir="$wt_dir/features/test-slug"
+  cat > "$feature_dir/challenge-intent.json" <<'EOF'
+{
+  "pairId": "HOK-1512",
+  "challengeStage": "plan",
+  "primary": {
+    "pairId": "HOK-1512",
+    "side": "primary",
+    "challengeStage": "plan",
+    "expectedStageModel": "claude-opus-4-7",
+    "expectedRoute": {
+      "planner": "claude-opus-4-7",
+      "coder": "bootstrap-coder",
+      "reviewer": "bootstrap-reviewer",
+      "planDepth": "deep",
+      "codeDepth": "medium",
+      "reviewMode": "static"
+    }
+  },
+  "challenger": {
+    "pairId": "HOK-1512",
+    "side": "challenger",
+    "challengeStage": "plan",
+    "expectedStageModel": "claude-haiku-4-5",
+    "expectedRoute": {
+      "planner": "claude-haiku-4-5",
+      "coder": "bootstrap-coder",
+      "reviewer": "bootstrap-reviewer",
+      "planDepth": "light",
+      "codeDepth": "medium",
+      "reviewMode": "static"
+    }
+  }
+}
+EOF
+  cat > "$feature_dir/.post-expansion-route.json" <<'EOF'
+{
+  "planner": "claude-haiku-4-5",
+  "coder": "bootstrap-coder",
+  "reviewer": "bootstrap-reviewer",
+  "planDepth": "light",
+  "codeDepth": "medium",
+  "reviewMode": "static"
+}
+EOF
+
+  if run_apply "$feature_dir" "$state_file" "HOK-1512" \
+    && [[ "$(jq -r '.planner' "$feature_dir/.routing-complete")" == "claude-opus-4-7" ]] \
+    && [[ "$(jq -r '.planDepth' "$feature_dir/.routing-complete")" == "deep" ]] \
+    && [[ "$(jq -r '.planning.model' "$feature_dir/.phase-config.json")" == "claude-opus-4-7" ]] \
+    && [[ "$(jq -r '.tasks["HOK-1512"].plannerModel' "$state_file")" == "claude-opus-4-7" ]] \
+    && [[ "$(jq -r '.rawExpandedRoute.planner' "$feature_dir/.routing-complete")" == "claude-haiku-4-5" ]]; then
+    pass "primary plan intent overrides expanded planner before launch"
+  else
+    fail "primary plan intent did not override expanded planner"
+  fi
+  rm -rf "$root"
+}
+
+{
   mapfile -t fixture < <(new_fixture "expanded-route-challenge-review-contract")
   root="${fixture[0]}"
   wt_dir="${fixture[1]}"

@@ -260,12 +260,14 @@ export interface RouteLifecycleArtifacts {
   bootstrap: RouteArtifactSnapshot | null;
   expanded: RouteArtifactSnapshot | null;
   active: RouteArtifactSnapshot | null;
+  planningLaunch: RouteArtifactSnapshot | null;
 }
 
 export interface RouteLifecycleProvenance {
   bootstrapRoute?: RouteArtifactView;
   expandedRoute?: RouteArtifactView;
   activeRoute?: RouteArtifactView;
+  planningLaunchRoute?: RouteArtifactView;
   routeChanged?: boolean;
   decisionSource?: 'bootstrap' | 'expanded' | 'preserved';
   expandedCacheHit?: boolean;
@@ -655,8 +657,12 @@ export function readRouteLifecycleArtifacts(
     () => archiveDir ? loadBootstrapRouteArtifact(join(archiveDir, 'routing-complete.json')) : null,
     () => featureDir ? loadBootstrapRouteArtifact(join(featureDir, '.routing-complete')) : null,
   ]);
+  const planningLaunch = firstSnapshot([
+    () => archiveDir ? loadBootstrapRouteArtifact(join(archiveDir, 'planning-launch-route.json')) : null,
+    () => featureDir ? loadBootstrapRouteArtifact(join(featureDir, '.planning-launch-route.json')) : null,
+  ]);
 
-  return { bootstrap, expanded, active };
+  return { bootstrap, expanded, active, planningLaunch };
 }
 
 export function toRouteArtifactView(route: RouteArtifactSnapshot): RouteArtifactView {
@@ -778,6 +784,7 @@ export function buildRouteLifecycleProvenance(
     ...(artifacts.bootstrap ? { bootstrapRoute: toRouteArtifactView(artifacts.bootstrap) } : {}),
     ...(artifacts.expanded ? { expandedRoute: toRouteArtifactView(artifacts.expanded) } : {}),
     ...(active ? { activeRoute: toRouteArtifactView(active) } : {}),
+    ...(artifacts.planningLaunch ? { planningLaunchRoute: toRouteArtifactView(artifacts.planningLaunch) } : {}),
     ...(typeof routeChanged === 'boolean' ? { routeChanged } : {}),
     decisionSource,
     ...(typeof metadataCarrier?.cache_hit === 'boolean' ? { expandedCacheHit: metadataCarrier.cache_hit } : {}),

@@ -1960,6 +1960,9 @@
         "activeRoute": {
           "$ref": "#/$defs/RouteArtifact"
         },
+        "planningLaunchRoute": {
+          "$ref": "#/$defs/RouteArtifact"
+        },
         "routeChanged": {
           "type": "boolean"
         },

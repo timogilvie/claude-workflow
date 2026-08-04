@@ -455,7 +455,12 @@ export function attestEvalRecordChallengeExecution(record: EvalRecord): Challeng
   const sideIntent = sideIntentFromRecord(record);
   if (!sideIntent) return undefined;
 
+  const routeProvenance = record.routeProvenance as ({ planningLaunchRoute?: unknown; activeRoute?: unknown } | undefined);
+  const launchRoute = sideIntent.challengeStage === 'plan'
+    ? routingMetaFromRawRoute(routeProvenance?.planningLaunchRoute)
+    : undefined;
   const effectiveRoute = record.challengeExecutionRoute
+    ?? launchRoute
     ?? routingMetaFromRawRoute(record.routeProvenance?.activeRoute)
     ?? routingMetaFromRawRoute((record.taskDescriptor as { route?: unknown } | undefined)?.route);
   const role = stageRole(sideIntent.challengeStage);
