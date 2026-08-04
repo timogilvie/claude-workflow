@@ -1,0 +1,197 @@
+import assert from 'node:assert/strict';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import test from 'node:test';
+
+import { LinearApiError } from './linear.ts';
+import { DEFAULT_INCIDENT_LINEAR_CONFIG, type IncidentLinearClient } from './incident-to-linear-synchronizer.ts';
+import { computeIncidentBackoffMs, drainIncidentQueue, enqueueIncidentSync } from './incident-linear-retry-queue.ts';
+import { IncidentStore } from './wavemill-incident-store.ts';
+import { createIncidentDraft } from './wavemill-incident-model.ts';
+
+const queuePath = (repoDir: string) => join(repoDir, '.wavemill', 'registry', 'linear-incident-queue.jsonl');
+
+test('enqueueIncidentSync writes retryable incident action with short exponential backoff', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'incident-queue-enqueue-'));
+  const originalRandom = Math.random;
+  Math.random = () => 0;
+  try {
+    const record = enqueueIncidentSync({
+      repoDir,
+      incidentFingerprint: 'abc',
+      linearAction: 'create',
+      lastError: {
+        category: 'rate_limit',
+        httpStatus: 429,
+        graphqlErrors: [],
+        isRetryable: true,
+        message: 'rate limited',
+      },
+      now: new Date('2026-08-04T12:00:00.000Z'),
+    });
+    const rows = readFileSync(queuePath(repoDir), 'utf-8').trim().split('\n').map((line) => JSON.parse(line));
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].incidentFingerprint, 'abc');
+    assert.equal(record.nextRetryAt, '2026-08-04T12:00:01.000Z');
+    assert.equal(computeIncidentBackoffMs(2), 2000);
+  } finally {
+    Math.random = originalRandom;
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('drainIncidentQueue replays queued incident and tombstones success', async () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'incident-queue-drain-'));
+  const originalRandom = Math.random;
+  Math.random = () => 0;
+  try {
+    const store = new IncidentStore(join(repoDir, '.wavemill', 'incidents'));
+    const stored = await store.upsert(createIncidentDraft({
+      taskId: 'HOK-1',
+      category: 'product_defect',
+      severity: 'high',
+      confidence: 'definite',
+      lifecycle: 'active',
+      rootCauseClass: 'observer_crash',
+      summary: 'Observer crashed.',
+      operatorAction: 'Fix parser.',
+      evidence: [{
+        type: 'log_excerpt',
+        source: 'mill.log',
+        timestamp: '2026-08-04T12:00:00.000Z',
+        redactedData: 'ERROR',
+        key: 'error',
+      }],
+      metadata: { thresholdTriggered: true },
+    }));
+    enqueueIncidentSync({
+      repoDir,
+      incidentFingerprint: stored.fingerprint,
+      linearAction: 'create',
+      lastError: {
+        category: 'rate_limit',
+        httpStatus: 429,
+        graphqlErrors: [],
+        isRetryable: true,
+        message: 'rate limited',
+      },
+      now: new Date('2026-08-04T12:00:00.000Z'),
+    });
+    const result = await drainIncidentQueue({
+      repoDir,
+      store,
+      config: {
+        ...DEFAULT_INCIDENT_LINEAR_CONFIG,
+        enabled: true,
+        team: 'HOK',
+        project: 'Wavemill',
+      },
+      now: new Date('2026-08-04T12:01:00.000Z'),
+      client: successClient(),
+    });
+    const rows = readFileSync(queuePath(repoDir), 'utf-8').trim().split('\n').map((line) => JSON.parse(line));
+    assert.equal(result.succeeded, 1);
+    assert.equal(rows.at(-1).recordType, 'tombstone');
+  } finally {
+    Math.random = originalRandom;
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('drainIncidentQueue marks nonretryable replay failure permanent', async () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'incident-queue-permanent-'));
+  const originalRandom = Math.random;
+  Math.random = () => 0;
+  try {
+    const store = new IncidentStore(join(repoDir, '.wavemill', 'incidents'));
+    const stored = await store.upsert(createIncidentDraft({
+      taskId: 'HOK-1',
+      category: 'product_defect',
+      severity: 'high',
+      confidence: 'definite',
+      lifecycle: 'active',
+      rootCauseClass: 'observer_crash',
+      summary: 'Observer crashed.',
+      operatorAction: 'Fix parser.',
+      evidence: [{
+        type: 'log_excerpt',
+        source: 'mill.log',
+        timestamp: '2026-08-04T12:00:00.000Z',
+        redactedData: 'ERROR',
+        key: 'error',
+      }],
+      metadata: { thresholdTriggered: true },
+    }));
+    enqueueIncidentSync({
+      repoDir,
+      incidentFingerprint: stored.fingerprint,
+      linearAction: 'create',
+      lastError: {
+        category: 'rate_limit',
+        httpStatus: 429,
+        graphqlErrors: [],
+        isRetryable: true,
+        message: 'rate limited',
+      },
+      now: new Date('2026-08-04T12:00:00.000Z'),
+    });
+    const result = await drainIncidentQueue({
+      repoDir,
+      store,
+      config: {
+        ...DEFAULT_INCIDENT_LINEAR_CONFIG,
+        enabled: true,
+        team: 'HOK',
+        project: 'Wavemill',
+      },
+      now: new Date('2026-08-04T12:01:00.000Z'),
+      client: successClient({
+        getTeams: async () => {
+          throw new LinearApiError('forbidden', { httpStatus: 403 });
+        },
+      }),
+      log: { error: () => {} },
+    });
+    const rows = readFileSync(queuePath(repoDir), 'utf-8').trim().split('\n').map((line) => JSON.parse(line));
+    assert.equal(result.permanentFailures, 1);
+    assert.equal(rows.at(-1).recordType, 'permanently_failed');
+  } finally {
+    Math.random = originalRandom;
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+function successClient(overrides: Partial<IncidentLinearClient> = {}): IncidentLinearClient {
+  return {
+    getTeams: async () => [{ id: 'team-1', key: 'HOK', name: 'Hokusai' }],
+    getProjects: async () => [{ id: 'project-1', name: 'Wavemill', state: 'started' }],
+    searchIssues: async () => [],
+    getIssue: async () => {
+      throw new Error('not found');
+    },
+    createIssue: async (params) => ({
+      id: 'issue-uuid',
+      identifier: 'HOK-200',
+      title: params.title,
+      url: 'https://linear.app/hokusai/issue/HOK-200/test',
+      state: { name: 'Todo' },
+      labels: { nodes: [] },
+      team: { id: 'team-1', key: 'HOK', name: 'Hokusai' },
+    }),
+    createComment: async () => ({ id: 'comment-1', url: 'https://linear.app/comment' }),
+    getOrCreateLabel: async (name) => ({ id: `label-${name}`, name }),
+    addLabelsToIssue: async () => ({
+      success: true,
+      issue: {
+        id: 'issue-uuid',
+        identifier: 'HOK-200',
+        title: 'Issue',
+        state: { name: 'Todo' },
+        labels: { nodes: [] },
+        team: { id: 'team-1', key: 'HOK', name: 'Hokusai' },
+      },
+    }),
+    ...overrides,
+  };
+}

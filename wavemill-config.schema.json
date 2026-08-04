@@ -312,6 +312,72 @@
                         }
                     },
                     "additionalProperties": false
+                },
+                "linear": {
+                    "type": "object",
+                    "description": "Opt-in Observer-to-Linear synchronizer for confirmed, deduplicated incident records.",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "When true, confirmed incidents can create/update Linear issues. Defaults off for consent gating."
+                        },
+                        "detectionOnly": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "When true, compute planned sync actions but do not write to Linear."
+                        },
+                        "project": {
+                            "type": "string",
+                            "description": "Linear project id or name used for Wavemill incident correlation and issue creation."
+                        },
+                        "team": {
+                            "type": "string",
+                            "description": "Linear team id, key, or name used for Wavemill incident routing."
+                        },
+                        "label": {
+                            "type": "string",
+                            "description": "Optional additional Linear label attached to created/correlated incident issues."
+                        },
+                        "retryQueuePath": {
+                            "type": "string",
+                            "default": ".wavemill/registry/linear-incident-queue.jsonl"
+                        },
+                        "updateCooldownMinutes": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "default": 5
+                        },
+                        "policies": {
+                            "type": "object",
+                            "properties": {
+                                "product_defect": { "$ref": "#/definitions/observerLinearPolicy" },
+                                "model_task_harness_outcome": { "$ref": "#/definitions/observerLinearPolicy" },
+                                "external_transient_dependency": { "$ref": "#/definitions/observerLinearPolicy" },
+                                "configuration_operator_condition": { "$ref": "#/definitions/observerLinearPolicy" },
+                                "stale_orphaned_state": { "$ref": "#/definitions/observerLinearPolicy" }
+                            },
+                            "additionalProperties": false
+                        },
+                        "redaction": {
+                            "type": "object",
+                            "properties": {
+                                "enabled": { "type": "boolean", "default": true },
+                                "patterns": {
+                                    "type": "array",
+                                    "items": { "type": "string" },
+                                    "default": ["api[_-]?key", "token", "secret", "password", "credential", "private[_-]?key"]
+                                },
+                                "redactPaths": { "type": "boolean", "default": true },
+                                "redactEmails": { "type": "boolean", "default": true },
+                                "truncateTranscripts": { "type": "boolean", "default": true },
+                                "truncateLength": { "type": "integer", "minimum": 40, "default": 200 },
+                                "markFormat": { "type": "string", "default": "[REDACTED: {type}]" }
+                            },
+                            "additionalProperties": false
+                        }
+                    },
+                    "additionalProperties": false
                 }
             },
             "additionalProperties": false
@@ -2922,6 +2988,31 @@
         }
     },
     "definitions": {
+        "observerLinearPolicy": {
+            "type": "object",
+            "properties": {
+                "strategy": {
+                    "type": "string",
+                    "enum": ["create", "no_create", "threshold", "create_if_persistent"]
+                },
+                "threshold": {
+                    "type": "integer",
+                    "minimum": 1
+                },
+                "persistentThreshold": {
+                    "type": "integer",
+                    "minimum": 1
+                },
+                "correlateIssueIds": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "pattern": "^[A-Z]+-[0-9]+$"
+                    }
+                }
+            },
+            "additionalProperties": false
+        },
         "runtimeSurfaceConfig": {
             "type": "object",
             "properties": {

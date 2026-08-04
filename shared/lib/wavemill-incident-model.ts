@@ -32,6 +32,28 @@ export interface IncidentMetadata {
   thresholdTriggered?: boolean;
   cooldownExpiresAt?: string;
   escalatedAt?: string;
+  /** Linear issue identifier such as HOK-2596 linked to this incident fingerprint. */
+  linkedLinearId?: string;
+  /** Full Linear URL for the linked issue when Linear returned one. */
+  linkedLinearUrl?: string;
+  /** Last successful Observer-to-Linear sync timestamp. */
+  lastSyncedAt?: string;
+  /** Stable SHA256 revision of the evidence bundle last written to Linear. */
+  lastSyncedEvidenceRevision?: string;
+  /** Earliest timestamp at which a changed evidence revision may add another comment. */
+  syncCooldownUntil?: string;
+  /** Number of successful issue create/comment syncs for this incident. */
+  updateCount?: number;
+  /** Recent sync failures retained for audit without crashing the observer. */
+  syncErrors?: Array<{
+    at: string;
+    action: string;
+    category?: string;
+    message: string;
+    retryQueued?: boolean;
+  }>;
+  /** Explicit issue identifiers supplied by the incident detector for correlation. */
+  knownIssueIds?: string[];
   [key: string]: unknown;
 }
 

@@ -62,6 +62,7 @@ import {
   getRuntimeResourceSelectionConfig,
   getEffectiveModelExclusions,
   getPrePrVerificationConfig,
+  getObserverLinearConfig,
 } from './config.ts';
 
 // ────────────────────────────────────────────────────────────────
@@ -3806,6 +3807,64 @@ test('pre-PR verification: backward compatible with legacy configs', () => {
     assert.ok(config.verification?.enabled);
     assert.deepEqual(getPrePrVerificationConfig(tmp), {});
   } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('observer linear config defaults disabled with safe policy defaults', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    const config = getObserverLinearConfig(tmp);
+    assert.equal(config.enabled, false);
+    assert.equal(config.retryQueuePath, '.wavemill/registry/linear-incident-queue.jsonl');
+    assert.equal(config.policies.product_defect.strategy, 'create');
+    assert.equal(config.policies.model_task_harness_outcome.strategy, 'no_create');
+    assert.deepEqual(config.policies.model_task_harness_outcome.correlateIssueIds, ['HOK-2593']);
+    assert.equal(config.redaction.enabled, true);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('observer linear config normalizes partial policies and env project override', () => {
+  const tmp = makeTempRepo();
+  const previousProject = process.env.WAVEMILL_OBSERVER_LINEAR_PROJECT;
+  const previousEnabled = process.env.WAVEMILL_OBSERVER_LINEAR_ENABLED;
+  try {
+    clearConfigCache();
+    process.env.WAVEMILL_OBSERVER_LINEAR_PROJECT = 'Env Project';
+    process.env.WAVEMILL_OBSERVER_LINEAR_ENABLED = 'true';
+    writeConfig(tmp, JSON.stringify({
+      observer: {
+        linear: {
+          enabled: false,
+          team: 'HOK',
+          policies: {
+            external_transient_dependency: {
+              strategy: 'threshold',
+              threshold: 5,
+            },
+          },
+          redaction: {
+            patterns: ['custom_secret'],
+          },
+        },
+      },
+    }));
+    const config = getObserverLinearConfig(tmp);
+    assert.equal(config.enabled, true);
+    assert.equal(config.project, 'Env Project');
+    assert.equal(config.team, 'HOK');
+    assert.equal(config.policies.external_transient_dependency.threshold, 5);
+    assert.equal(config.policies.product_defect.strategy, 'create');
+    assert.deepEqual(config.redaction.patterns, ['custom_secret']);
+    assert.equal(config.redaction.redactPaths, true);
+  } finally {
+    if (previousProject === undefined) delete process.env.WAVEMILL_OBSERVER_LINEAR_PROJECT;
+    else process.env.WAVEMILL_OBSERVER_LINEAR_PROJECT = previousProject;
+    if (previousEnabled === undefined) delete process.env.WAVEMILL_OBSERVER_LINEAR_ENABLED;
+    else process.env.WAVEMILL_OBSERVER_LINEAR_ENABLED = previousEnabled;
     cleanUp(tmp);
   }
 });
