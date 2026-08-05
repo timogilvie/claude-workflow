@@ -486,8 +486,8 @@ export function getChallengeModelPool(
   challengeConfig?: ChallengeConfig,
   routerConfig?: RouterConfig,
 ): string[] {
-  // Disabled models must never enter the challenge pool, even when listed
-  // explicitly in challenge.models — the disable set is authoritative.
+  // Disabled models must never enter the challenge pool; the disable set is
+  // authoritative over the global effective-model projection.
   const source = listEffectiveModelsForStage('coding').models;
   return filterDisabledModels(filterDeepSeekChallengeModels(source, challengeConfig).models);
 }

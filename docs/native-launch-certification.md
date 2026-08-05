@@ -85,9 +85,8 @@ passes in the same environment that will run `wavemill mill`.
 - `nativeAgent.enabled` is `true`.
 - `nativeAgent.allowedPhases` includes the phase being launched.
 - `nativeAgent.providers.openrouter.enabled` is `true`.
-- The raw OpenRouter model ID is listed in
-  `nativeAgent.providers.openrouter.models`.
-- The model registry entry has a native capability for `native-openrouter`.
+- The model is present in the global effective-model projection for the launch phase.
+- The global model registry entry has a native capability for `native-openrouter`.
 - The model has a valid workflow certification artifact for the current
   certification suite.
 - Native coding additionally requires `nativeAgent.patchCoding.enabled` and a

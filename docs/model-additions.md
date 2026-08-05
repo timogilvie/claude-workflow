@@ -2,21 +2,23 @@
 title: Adding Models
 ---
 
-Wavemill model support is deliberately explicit. When adding a new model, update each surface that can select, launch, price, or evaluate it.
-Before finalizing defaults, use [Config Files](config-files.md) to decide whether each new model/router setting belongs in shared repo config, local override, or environment variables.
+Wavemill model support is deliberately global. Consumer repositories cannot add,
+hide, remap, or certify models through `.wavemill-config.json` or local overlay
+files. When adding a new model, update the Wavemill global catalog and effective
+model projection so every repository sees the same model universe.
 
 ## Checklist
 
-1. Add pricing to the canonical config template in `shared/lib/config-sync.ts`, the install-time default config in `wavemill`, and the repo config if this repository should use it immediately.
-2. Add the model to `challenge.models` so challenge mode can collect comparison data.
-3. Map the model to its launcher in `router.agentMap`; OpenAI `gpt-*` models normally map to `codex`.
-4. Add planner availability under `router.availableModels.planner` when the model is allowed to plan before there is eval history.
-5. Add capabilities and ladder placement in `shared/lib/model-registry.ts`; this is what quota policy and class-aware fallback use.
-6. If the model requires a provider-specific launcher path, add the provider gate in `.wavemill-config.json`, `wavemill-config.schema.json`, and the launcher/session-cost/eval attribution paths before exposing the model to routing.
-7. Add the model to `DEFAULT_MODEL_POOL` and any role-specific frontier preference lists in `shared/lib/workflow-router.ts`.
-8. Update DSPy routing metadata in `dspy/prepare_data.py`, `dspy/evaluators/model_router_evaluator.py`, `dspy/optimize.py`, and the active selector artifact when it carries explicit model candidates.
-9. Update tests that assert exact default model lists or ladders.
-10. Run focused config, registry, router, and provider-launch tests before merging.
+1. Add the model and metadata to the global registry/projection in Wavemill.
+2. Publish or update the global v2 certification catalog entry before exposing
+   native launch eligibility.
+3. Add pricing to the canonical Wavemill defaults when cost accounting needs it.
+4. Add or update launcher/provider code when the model requires a new runtime
+   integration. Keep credentials as environment variables.
+5. Update DSPy routing metadata and active selector artifacts when they carry
+   explicit model candidates.
+6. Update tests that assert exact global model lists, ladders, or launchability.
+7. Run focused config, registry, router, certification, and provider-launch tests.
 
 For frontier models, use `class: "frontier"` in the registry and include the model in the planning, coding, and review ladders. Prefer putting same-vendor successors next to the previous model so quota fallback can substitute within the same class cleanly.
 
@@ -31,7 +33,8 @@ Every canonical entry in `DEFAULT_MODEL_REGISTRY` must include:
 - `reasoningTier` as one of `basic`, `standard`, or `advanced`
 - `costPerMillionInputTokensUsd` and `costPerMillionOutputTokensUsd`
 
-Workspace `modelRegistry.models.<id>` overrides may provide any subset of those fields. Canonical registry entries must provide all of them.
+Repository-local `modelRegistry.models.<id>` overrides are no longer accepted.
+Canonical global registry entries must provide the complete metadata above.
 
 ## Family Aliases
 

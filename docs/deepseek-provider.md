@@ -141,7 +141,7 @@ Validate the exact workflow you care about before broad rollout.
 To roll back unattended or routed DeepSeek usage:
 
 1. Set `challenge.allowDeepseek` to `false` or remove it.
-2. Remove DeepSeek entries from `challenge.models`, `router.models`, or `router.agentMap` if you no longer want them eligible.
+2. Use `modelExclusions` for an explicit local exclusion, or remove DeepSeek from the global effective-model projection if it should no longer be eligible anywhere.
 3. Set `providers.deepseek.enabled` to `false` or remove the `providers.deepseek` block.
 4. Unset `DEEPSEEK_API_KEY` or remove the configured `apiKeyEnv`/`secretSource`.
 5. Delete `.wavemill/deepseek-state/` if you want to discard isolated local state.

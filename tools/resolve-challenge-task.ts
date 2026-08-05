@@ -58,7 +58,7 @@ runTool({
     const pool = getChallengeModelPool(challenge, router);
 
     const singleAgent = primaryModel
-      ? resolveAgent(primaryModel, router.agentMap || {}, defaultAgent, repoDir, 'coding')
+      ? resolveAgent(primaryModel, {}, defaultAgent, repoDir, 'coding')
       : defaultAgent;
 
     const base = {
@@ -184,7 +184,7 @@ runTool({
         primaryModel,
         forcedChallengerModel,
           challengeStage,
-          agentMap: router.agentMap,
+          agentMap: {},
           defaultAgent,
           repoDir,
           coverage,
@@ -208,7 +208,7 @@ runTool({
           primaryModel,
           forcedChallengerModel,
           challengeStage,
-          agentMap: router.agentMap,
+          agentMap: {},
           defaultAgent,
           repoDir,
           coverage,
@@ -234,7 +234,7 @@ runTool({
           slug,
           primaryModel,
           forcedChallengerModel,
-          agentMap: router.agentMap,
+          agentMap: {},
           defaultAgent,
           repoDir,
           coverage,
@@ -260,7 +260,7 @@ runTool({
         slug,
         primaryModel,
         forcedChallengerModel,
-        agentMap: router.agentMap,
+        agentMap: {},
         defaultAgent,
         repoDir,
         coverage,

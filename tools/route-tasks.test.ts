@@ -22,10 +22,6 @@ function makeRepo() {
       kNeighbors: 5,
       stageBlendWeight: 0.3,
       defaultAgent: 'claude',
-      agentMap: {
-        'claude-sonnet-5': 'claude',
-        'gpt-5.3-codex': 'codex',
-      },
     },
     eval: {
       pricing: {

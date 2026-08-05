@@ -662,7 +662,7 @@ describe('model-registry', () => {
     assert.match(warnings[0], /missing-model/);
   });
 
-  it('getEffectiveRegistry merges repo config into the seeded defaults', () => {
+  it('getEffectiveRegistry ignores repo-local registry overrides', () => {
     const repoDir = makeTempRepo();
 
     try {
@@ -683,64 +683,43 @@ describe('model-registry', () => {
       });
 
       const registry = getEffectiveRegistry(repoDir);
-      assert.equal(registry.models['claude-opus-4-7'].qualityScores.coding, 99);
-      assert.deepEqual(getLadder(registry, 'coding'), ['claude-opus-4-7', 'claude-sonnet-5']);
+      assert.equal(
+        registry.models['claude-opus-4-7'].qualityScores.coding,
+        DEFAULT_MODEL_REGISTRY.models['claude-opus-4-7'].qualityScores.coding,
+      );
+      assert.deepEqual(getLadder(registry, 'coding'), getLadder(DEFAULT_MODEL_REGISTRY, 'coding'));
     } finally {
       clearConfigCache();
       cleanUp(repoDir);
     }
   });
 
-  it('prefers stage-specific router availability for descriptor stages', () => {
+  it('uses global registry ladders for descriptor stages', () => {
     const repoDir = makeTempRepo();
 
     try {
-      writeConfig(repoDir, {
-        router: {
-          availableModels: {
-            planner: ['gpt-5.5', 'claude-opus-4-7'],
-            coder: ['gpt-5.6-terra', 'gpt-5.3-codex'],
-            reviewer: ['claude-sonnet-5'],
-          },
-        },
-        modelRegistry: {
-          models: {
-            'gpt-5.3-codex': {
-              vendor: 'openai',
-              class: 'strong_generalist',
-              strengths: ['coding'],
-              weaknesses: ['none'],
-              qualityScores: { coding: 89 },
-              contextWindowTokens: 128_000,
-              toolSupport: 'full',
-              multimodal: { text: true, image: false },
-              latencyTier: 'standard',
-              reasoningTier: 'standard',
-              costPerMillionInputTokensUsd: 1.75,
-              costPerMillionOutputTokensUsd: 14,
-              agent: 'codex',
-            },
-          },
-        },
-      });
+      writeConfig(repoDir, {});
       clearConfigCache(repoDir);
 
-      assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'planner'), ['gpt-5.5', 'claude-opus-4-7']);
-      assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'coder'), ['gpt-5.6-terra']);
-      assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'reviewer'), ['claude-sonnet-5']);
-      assert.deepEqual(getConfiguredModelsForDescriptor(repoDir), [
-        'gpt-5.5',
-        'claude-opus-4-7',
-        'gpt-5.6-terra',
-        'claude-sonnet-5',
-      ]);
+      const registry = getEffectiveRegistry(repoDir);
+      assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'planner'), filterDisabledModels(getLadder(registry, 'planning')));
+      assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'coder'), filterDisabledModels(getLadder(registry, 'coding')));
+      assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'reviewer'), filterDisabledModels(getLadder(registry, 'review')));
+      assert.deepEqual(
+        getConfiguredModelsForDescriptor(repoDir),
+        [...new Set(filterDisabledModels([
+          ...getLadder(registry, 'planning'),
+          ...getLadder(registry, 'coding'),
+          ...getLadder(registry, 'review'),
+        ]))],
+      );
     } finally {
       clearConfigCache(repoDir);
       cleanUp(repoDir);
     }
   });
 
-  it('falls back to shared router models for every descriptor stage', () => {
+  it('ignores removed router model lists for descriptor stages', () => {
     const repoDir = makeTempRepo();
 
     try {
@@ -751,9 +730,10 @@ describe('model-registry', () => {
       });
       clearConfigCache(repoDir);
 
-      assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'planner'), ['gpt-5.6-terra', 'claude-sonnet-5']);
-      assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'coder'), ['gpt-5.6-terra', 'claude-sonnet-5']);
-      assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'reviewer'), ['gpt-5.6-terra', 'claude-sonnet-5']);
+      const registry = getEffectiveRegistry(repoDir);
+      assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'planner'), filterDisabledModels(getLadder(registry, 'planning')));
+      assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'coder'), filterDisabledModels(getLadder(registry, 'coding')));
+      assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'reviewer'), filterDisabledModels(getLadder(registry, 'review')));
     } finally {
       clearConfigCache(repoDir);
       cleanUp(repoDir);
@@ -799,7 +779,7 @@ describe('model-registry', () => {
     }
   });
 
-  it('uses model registry ladder overrides when router availability is absent', () => {
+  it('ignores removed model registry ladder overrides for descriptor stages', () => {
     const repoDir = makeTempRepo();
 
     try {
@@ -822,7 +802,10 @@ describe('model-registry', () => {
       });
       clearConfigCache(repoDir);
 
-      assert.deepEqual(getConfiguredModelsForDescriptorStage(repoDir, 'coder'), ['custom-codex-model']);
+      assert.deepEqual(
+        getConfiguredModelsForDescriptorStage(repoDir, 'coder'),
+        filterDisabledModels(getLadder(getEffectiveRegistry(repoDir), 'coding')),
+      );
     } finally {
       clearConfigCache(repoDir);
       cleanUp(repoDir);
@@ -1243,7 +1226,7 @@ describe('model-registry', () => {
       assert.doesNotThrow(() => getEffectiveRegistry());
     });
 
-    it('merges config-provided native capability metadata and validates it', () => {
+    it('ignores config-provided native capability metadata', () => {
       const repoDir = makeTempRepo();
 
       try {
@@ -1263,14 +1246,17 @@ describe('model-registry', () => {
         clearConfigCache(repoDir);
 
         const registry = getEffectiveRegistry(repoDir);
-        assert.equal(registry.models['gpt-5.5'].nativeCapability?.readOnlyNative, 'certified');
+        assert.equal(
+          registry.models['gpt-5.5'].nativeCapability?.readOnlyNative,
+          DEFAULT_MODEL_REGISTRY.models['gpt-5.5'].nativeCapability?.readOnlyNative,
+        );
       } finally {
         clearConfigCache(repoDir);
         cleanUp(repoDir);
       }
     });
 
-    it('rejects invalid config-provided native capability metadata', () => {
+    it('does not load invalid repo-local native capability metadata through the registry', () => {
       const repoDir = makeTempRepo();
 
       try {
@@ -1289,7 +1275,7 @@ describe('model-registry', () => {
         });
         clearConfigCache(repoDir);
 
-        assert.throws(() => getEffectiveRegistry(repoDir), /contradicts compat flags/);
+        assert.doesNotThrow(() => getEffectiveRegistry(repoDir));
       } finally {
         clearConfigCache(repoDir);
         cleanUp(repoDir);

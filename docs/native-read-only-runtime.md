@@ -36,7 +36,7 @@ Required pieces:
 - `nativeAgent.enabled: true`
 - `nativeAgent.allowedPhases`: include only the read-only phases you want to enable
 - `nativeAgent.providers.<provider>.apiKeyEnv`: environment variable that holds the provider API key
-- `nativeAgent.providers.<provider>.models`: one or more certified model IDs for that provider
+- `nativeAgent.providers.<provider>.enabled`: enable the provider once its credentials are available
 
 Optional expansion-only behavior:
 
@@ -70,7 +70,7 @@ This flag is necessary but not sufficient. Native patch coding only becomes rout
 
 - `nativeAgent.patchCoding.enabled` is `true`
 - `.wavemill/native-agent/patch-coding-certification.json` exists and matches the current smoke-suite revision
-- the selected provider/model pair has a current phase certification artifact at `.wavemill/native-agent-certifications/<provider>/<model>/<suite-version>.json` whose phase satisfies `patch`
+- the selected provider/model pair has a current global phase certification artifact whose phase satisfies `patch`
 
 The runtime gate is exported from `shared/lib/native-agent/coding-gate.ts` as `isPatchCodingEnabled()` and `evaluatePatchCodingGate()`. That is the handoff seam for the follow-up command/test/git runtime work.
 
@@ -91,13 +91,13 @@ Native routing is fail-closed. A model must be registered as certified for nativ
 - planning
 - review
 
-If a model is configured but not certified, the native eligibility checks reject it instead of silently routing it.
+If a globally projected model is not certified, the native eligibility checks reject it instead of silently routing it.
 
 For coding, keep the three gates separate:
 
 - repo opt-in: `nativeAgent.patchCoding.enabled`
 - runtime smoke gate: `.wavemill/native-agent/patch-coding-certification.json`
-- provider/model phase gate: `.wavemill/native-agent-certifications/<provider>/<model>/<suite-version>.json`
+- provider/model phase gate: global certification artifact under `WAVEMILL_NATIVE_CERTIFICATION_ROOT` or the shared user root
 
 The smoke gate proves the local patch-coding runtime is enabled safely. The provider/model phase artifact proves a specific native provider/model pair passed the patch-path certification suite and may be routed into coder work.
 

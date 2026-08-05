@@ -20,24 +20,6 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const resolveChallengeTaskTool = resolve(__dirname, 'resolve-challenge-task.ts');
 const CERT_DATE_FRESH = '2026-06-20T00:00:00.000Z';
 
-function openRouterNativeModelEntry(phase: string = 'workflow', suiteVersion: string = 'v1') {
-  return {
-    class: 'strong_generalist',
-    agent: 'claude-openrouter',
-    nativeCapability: {
-      nativeProvider: 'openrouter',
-      piTransportKind: 'openai-completions',
-      readOnlyNative: 'certified',
-      compatFlags: { thinkingFormat: 'openrouter' },
-      certification: {
-        maxCertifiedPhase: phase,
-        certifiedAt: CERT_DATE_FRESH,
-        certificationSuiteVersion: suiteVersion,
-      },
-    },
-  };
-}
-
 function writeCertArtifact(
   repoDir: string,
   provider: string,
@@ -143,41 +125,26 @@ function makeRepo(coderHistory: string[], opts: {
   const repoDir = mkdtempSync(join(tmpdir(), 'resolve-challenge-task-'));
   const aliases = opts.aliases ?? ['qwen-3-coder', 'glm-5.2'];
   const primaryModels = opts.primaryModels ?? [];
-  const allModels = ['claude-sonnet-4-6', ...primaryModels, ...aliases];
   const suiteVersion = opts.suiteVersion ?? 'v1';
   const certificationPhase = opts.certificationPhase ?? 'workflow';
+  void certificationPhase;
   mkdirSync(join(repoDir, '.wavemill', 'evals'), { recursive: true });
   writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
     challenge: {
       enabled: true,
       rate: 1,
       recommendationRate: 1,
-      models: allModels,
     },
     router: {
       defaultAgent: 'claude',
-      models: allModels,
-      agentMap: {
-        'claude-sonnet-4-6': 'claude',
-        ...Object.fromEntries(primaryModels.map((model) => [model, 'codex'])),
-        ...Object.fromEntries(aliases.map((alias) => [alias, 'native-openrouter'])),
-      },
     },
     ...(opts.patchCodingEnabled
       ? { nativeAgent: { patchCoding: { enabled: true } } }
       : {}),
-    modelRegistry: {
-      models: Object.fromEntries(aliases.map((alias) => [
-        alias,
-        openRouterNativeModelEntry(certificationPhase, suiteVersion),
-      ])),
-    },
     providers: {
       openrouter: {
         enabled: true,
         apiKeyEnv: 'TEST_RESOLVE_OPENROUTER_KEY',
-        models: aliases,
-        stages: ['coder'],
       },
     },
   }), 'utf-8');

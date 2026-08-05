@@ -9,16 +9,15 @@
 
 import { existsSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { getRouterConfig } from './config.ts';
 import type { EvalRecord } from './eval-schema.ts';
 import { readJsonlFile } from './jsonl-utils.ts';
+import { getRouterConfig } from './config.ts';
 import { getEffectiveRegistry } from './model-registry.ts';
 import { listEffectiveModelsForStage } from './effective-models.ts';
 import { isWithinRecencyWindow, resolveExplorationConfig } from './router-exploration.ts';
 import { loadConfiguredPricingTable } from './workflow-cost.ts';
 import type { StageAwareDecision } from './stage-aware-router.ts';
 import type { WorkflowRouteDecision } from './workflow-router.ts';
-import { loadRouterConfig } from './model-router.ts';
 import { filterDisabledModels } from './disabled-models.ts';
 
 export type ChallengeReason = 'low-confidence' | 'new-model' | 'low-data-stage' | 'disabled';
@@ -127,8 +126,8 @@ function getDefaultModel(
   routingDecision: WorkflowRouteDecision | StageAwareDecision,
   repoDir?: string,
 ): string {
-  const routerConfig = loadRouterConfig(repoDir);
-  return routerConfig.defaultModel || routingDecision.coder;
+  const registry = getEffectiveRegistry(repoDir);
+  return registry.ladders.coding?.[0] || routingDecision.coder;
 }
 
 function getAvailableModels(

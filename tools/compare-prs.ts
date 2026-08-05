@@ -86,7 +86,7 @@ runTool({
       }
 
       const config = loadWavemillConfig(repoDir);
-      const comparisonModel = (args.model as string) || config.challenge?.comparisonModel || 'claude-opus-4-7';
+      const comparisonModel = (args.model as string) || 'claude-opus-4-7';
       const issuePrompt = formatIssueAsPrompt(fetchIssueData(issueId, repoDir), issueId);
       const primaryNumber = prNumberFromValue(primaryPr);
       const challengerNumber = prNumberFromValue(challengerPr);

@@ -40,8 +40,6 @@ import { registerAgentConfig } from './resource-adapters/agent-config-adapter.ts
 import { recordUse } from './resource-manifest.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
 import type { RouteProvenance } from './route-artifact.ts';
-import { isDeepSeekLikeModelId } from './model-registry.ts';
-import { validateModelOrThrow } from './model-validator.ts';
 import { filterDisabledModels, isDisabledModel } from './disabled-models.ts';
 import { filterNativeModels, type RouterCertificationRejection } from './native-agent/certification/router-filter.ts';
 import { applyModelExclusions, type ModelExclusionDiagnostic } from './model-exclusions.ts';
@@ -484,7 +482,7 @@ function filterProviderPool(
     models: openRouterFiltered.models.filter((modelId) => !codexRejected.includes(modelId)),
     warnings: [
       ...mergePoolWarnings(deepSeekFiltered, openRouterFiltered),
-      ...codexRejected.map((modelId) => `Excluded ${modelId}: modelRegistry declares it ineligible for the codex-chatgpt launch surface.`),
+      ...codexRejected.map((modelId) => `Excluded ${modelId}: global model projection declares it ineligible for the codex-chatgpt launch surface.`),
     ],
   };
 }
@@ -495,14 +493,6 @@ function getModelPool(repoDir?: string): ResolvedModelPool {
     ...pricingModels,
     ...registryModelPool(repoDir),
   ])], repoDir);
-}
-
-function validateDeepSeekPool(models: string[] | undefined, repoDir?: string): void {
-  for (const modelId of models ?? []) {
-    if (isDeepSeekLikeModelId(modelId)) {
-      validateModelOrThrow(modelId, repoDir);
-    }
-  }
 }
 
 function getEffectiveModelPool(options?: RouteWorkflowOptions): ResolvedModelPool {
@@ -541,7 +531,6 @@ function resolveStagePool(
         ? options?.coderModelsAvailable
         : options?.reviewerModelsAvailable;
 
-  validateDeepSeekPool(explicitPool, options?.repoDir);
   const configuredPool = intersectPools(basePool, explicitPool);
   const stageDefaultPool = explicitPool && explicitPool.length > 0
     ? configuredPool
@@ -1659,7 +1648,6 @@ export function tryPolicyResolution(
 ): StageAwareDecision | null {
   const repoDir = options?.repoDir;
   const routerConfig = loadRouterConfig(repoDir);
-  validateDeepSeekPool(routerConfig.models, repoDir);
   const taskDifficulty = resolveTaskDifficulty(options || {}, repoDir);
   if (!taskDifficulty) {
     return null;

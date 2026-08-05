@@ -28,11 +28,10 @@ export interface OpenRouterPoolFilterResult {
   warnings: string[];
 }
 
-function normalizeModels(models?: string[]): string[] {
+function normalizeModels(): string[] {
   const fixtureAliases = loadLaunchPriorityList().map((entry) => entry.wavemillAlias);
-  const candidates = models && models.length > 0 ? models : fixtureAliases;
   return [...new Set(
-    candidates
+    fixtureAliases
       .map((modelId) => resolveOpenRouterModelIdentity(modelId))
       .filter((identity): identity is NonNullable<typeof identity> => Boolean(identity?.nativeOpenRouter))
       .map((identity) => identity.wavemillAlias),
@@ -88,8 +87,8 @@ export function resolveOpenRouterProviderConfig(repoDir?: string): ResolvedOpenR
     enabled: config.enabled === true,
     apiKeyEnv,
     baseUrl: config.baseUrl?.trim() || OPENROUTER_BASE_URL,
-    models: normalizeModels(config.models),
-    stages: normalizeStages(config.stages),
+    models: normalizeModels(),
+    stages: normalizeStages(),
     hasApiKey,
     directAgentsEnabled: isOpenRouterDirectAgentsEnabled(),
   };
