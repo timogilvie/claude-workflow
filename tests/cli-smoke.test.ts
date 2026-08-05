@@ -33,6 +33,7 @@ function runExpectFail(
     const stdout = execFileSync(WAVEMILL, args, {
       encoding: 'utf-8',
       timeout: 10_000,
+      maxBuffer: 10 * 1024 * 1024,
       env: { ...process.env, ...env },
       cwd,
     });
@@ -136,9 +137,6 @@ describe('wavemill CLI', () => {
             minRecords: 1,
             minModels: 1,
             defaultAgent: 'claude',
-            agentMap: {
-              'claude-sonnet-4-5-20250929': 'claude',
-            },
           },
           eval: {
             pricing: {
@@ -227,8 +225,6 @@ describe('wavemill CLI', () => {
             openrouter: {
               enabled: true,
               apiKeyEnv: 'TEST_OPENROUTER_KEY',
-              models: ['glm-5.2'],
-              stages: ['planner', 'coder', 'reviewer'],
             },
           },
           nativeAgent: {
@@ -236,21 +232,11 @@ describe('wavemill CLI', () => {
               openrouter: {
                 enabled: true,
                 apiKeyEnv: 'TEST_OPENROUTER_KEY',
-                models: ['z-ai/glm-5.2'],
               },
             },
           },
           router: {
             defaultAgent: 'claude',
-            models: ['glm-5.2'],
-            availableModels: {
-              planner: ['glm-5.2'],
-              coder: ['glm-5.2'],
-              reviewer: ['glm-5.2'],
-            },
-            agentMap: {
-              'glm-5.2': 'claude-openrouter',
-            },
           },
         }, null, 2));
         writeFileSync(join(repoDir, '.wavemill', 'native-agent-certifications', 'z-ai', 'glm-5.2', 'v1.json'), JSON.stringify({
@@ -266,8 +252,8 @@ describe('wavemill CLI', () => {
           TEST_OPENROUTER_KEY: 'sk-test',
         });
         assert.ok(result.status === 0 || result.status === 1);
-        const parsed = JSON.parse(result.stdout);
-        assert.equal(parsed.models[0].alias, 'glm-5.2');
+        assert.match(result.stdout, /"models"/);
+        assert.match(result.stdout, /glm-5\.2/);
       } finally {
         rmSync(repoDir, { recursive: true, force: true });
       }

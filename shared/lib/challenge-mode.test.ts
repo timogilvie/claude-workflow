@@ -308,7 +308,6 @@ function writeNativeChallengeRepo(options: {
       providers: {
         [options.provider]: {
           enabled: true,
-          models: [options.model],
         },
       },
     },
@@ -316,36 +315,6 @@ function writeNativeChallengeRepo(options: {
       openrouter: {
         enabled: options.provider === 'openrouter',
         apiKeyEnv: 'OPENROUTER_API_KEY',
-        models: [options.model],
-        stages: ['coder', 'reviewer'],
-      },
-    },
-    modelRegistry: {
-      models: {
-        [options.model]: {
-          vendor: options.provider === 'openrouter' ? 'qwen' : 'openai',
-          class: 'strong_generalist',
-          strengths: ['coding'],
-          weaknesses: [],
-          qualityScores: { routing: 70, planning: 70, coding: 70, review: 70, classify: 70 },
-          contextWindowTokens: 128000,
-          toolSupport: 'full',
-          multimodal: { text: true, image: false },
-          latencyTier: 'standard',
-          reasoningTier: 'standard',
-          costPerMillionInputTokensUsd: 1,
-          costPerMillionOutputTokensUsd: 4,
-          nativeCapability: {
-            nativeProvider: options.provider,
-            piTransportKind: options.provider === 'openrouter' ? 'openai-completions' : 'openai-responses',
-            readOnlyNative: 'certified',
-            certification: {
-              maxCertifiedPhase: options.phase,
-              certifiedAt: RUNTIME_FRESH_CERTIFIED_AT,
-              certificationSuiteVersion: suiteVersion,
-            },
-          },
-        },
       },
     },
   }));
@@ -1748,7 +1717,7 @@ const CERT_DATE_STALE = new Date(TEST_NOW.getTime() - 90 * 24 * 60 * 60 * 1000).
 
 /** Create a temp repo with the given model registry and return cleanup fn */
 function makeNativeTestRepo(
-  modelRegistryModels: Record<string, unknown>,
+  _modelRegistryModels: Record<string, unknown>,
   opts: {
     config?: Record<string, unknown>;
     env?: Record<string, string>;
@@ -1763,7 +1732,6 @@ function makeNativeTestRepo(
   process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = join(repoDir, 'global-certifications');
   mkdirSync(join(repoDir, '.wavemill'), { recursive: true });
   writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
-    modelRegistry: { models: modelRegistryModels },
     ...(opts.patchCodingEnabled
       ? { nativeAgent: { patchCoding: { enabled: true } } }
       : {}),
@@ -1876,8 +1844,6 @@ function makeHok2569Repo(
           openrouter: {
             enabled: true,
             apiKeyEnv: 'HOK_2569_OPENROUTER_KEY',
-            models: [alias],
-            stages: ['coder'],
           },
         },
       },
@@ -2616,8 +2582,6 @@ test('workflow-certified OpenRouter aliases remain challenge-eligible for review
           openrouter: {
             enabled: true,
             apiKeyEnv: 'NC_OPENROUTER_KEY',
-            models: ['glm-5.2'],
-            stages: ['reviewer'],
           },
         },
       },
@@ -2677,8 +2641,6 @@ test('missing OPENROUTER_API_KEY excludes OpenRouter challengers and falls back 
           openrouter: {
             enabled: true,
             apiKeyEnv: 'NC_MISSING_OPENROUTER_KEY',
-            models: ['qwen-3-coder'],
-            stages: ['coder'],
           },
         },
     },

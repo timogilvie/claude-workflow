@@ -69,15 +69,7 @@ function makeEligibleRepo(repoDir: string, slug: string, issueId: string): void 
   mkdirSync(featureDir, { recursive: true });
   writeFileSync(
     join(repoDir, '.wavemill-config.json'),
-    JSON.stringify({
-      router: {
-        availableModels: {
-          planner: ['gpt-5.5'],
-          coder: ['gpt-5.4'],
-          reviewer: ['claude-sonnet-4-6'],
-        },
-      },
-    }),
+    JSON.stringify({}),
   );
   writeFileSync(
     join(featureDir, '.routing-complete'),
@@ -306,27 +298,7 @@ await test('enrichPostCompletionRecord attaches taskDescriptor for persisted rec
   mkdirSync(featureDir, { recursive: true });
   writeFileSync(
     join(repoDir, '.wavemill-config.json'),
-    JSON.stringify({
-      router: {
-        availableModels: {
-          planner: ['gpt-5.5', 'claude-opus-4-7'],
-          coder: ['gpt-5.4', 'gpt-5.3-codex'],
-          reviewer: ['claude-sonnet-4-6'],
-        },
-      },
-      modelRegistry: {
-        models: {
-          'gpt-5.3-codex': {
-            vendor: 'openai',
-            class: 'strong_generalist',
-            strengths: ['coding'],
-            weaknesses: ['none'],
-            qualityScores: { coding: 89 },
-            agent: 'codex',
-          },
-        },
-      },
-    }),
+    JSON.stringify({}),
   );
   clearConfigCache(repoDir);
   writeFileSync(
@@ -424,12 +396,9 @@ await test('enrichPostCompletionRecord attaches taskDescriptor for persisted rec
     assert.equal(record.taskDescriptor?.stages.coder?.model, 'gpt-5.3-codex');
     assert.equal(record.taskDescriptor?.outcome?.total_cost_usd, 4.25);
     assert.equal(record.taskDescriptor?.outcome?.interventions, 1);
-    assert.deepEqual(record.taskDescriptor?.constraints.models_available, [
-      'gpt-5.5',
-      'claude-opus-4-7',
-      'gpt-5.4',
-      'claude-sonnet-4-6',
-    ]);
+    assert.ok((record.taskDescriptor?.constraints.models_available.length || 0) > 0);
+    assert.ok(record.taskDescriptor?.constraints.models_available.includes('gpt-5.5'));
+    assert.ok(!record.taskDescriptor?.constraints.models_available.includes('gpt-5.3-codex'));
     assert.equal(record.workflowCostStatus, 'success');
     assert.equal(record.enrichmentDiagnostics, undefined);
   } finally {
@@ -1768,15 +1737,7 @@ await test('enrichPostCompletionRecord marks complete records with outcomes as t
   mkdirSync(featureDir, { recursive: true });
   writeFileSync(
     join(repoDir, '.wavemill-config.json'),
-    JSON.stringify({
-      router: {
-        availableModels: {
-          planner: ['gpt-5.5'],
-          coder: ['gpt-5.4'],
-          reviewer: ['claude-sonnet-4-6'],
-        },
-      },
-    }),
+    JSON.stringify({}),
   );
   writeFileSync(
     join(featureDir, '.routing-complete'),

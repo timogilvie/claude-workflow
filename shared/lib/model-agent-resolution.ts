@@ -257,7 +257,7 @@ export function resolveModelAgent(opts: ResolveModelAgentOptions): AgentResoluti
       return {
         ok: false,
         reason: 'codex-chatgpt-ineligible',
-        diagnostic: `[agent-resolution] model=${modelId} phase=${opts.phase} surface=codex-chatgpt reason=codex-chatgpt-ineligible source=modelRegistry.models.${modelId}.codexChatgptCapability detail="${reason}"`,
+        diagnostic: `[agent-resolution] model=${modelId} phase=${opts.phase} surface=codex-chatgpt reason=codex-chatgpt-ineligible source=globalModelRegistry.models.${modelId}.codexChatgptCapability detail="${reason}"`,
       };
     }
     return { ok: true, agent: resolvedAgent };

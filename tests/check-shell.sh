@@ -18,6 +18,63 @@ pass() { echo "  PASS  $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL  $1"; FAIL=$((FAIL + 1)); }
 skip() { echo "  SKIP  $1"; SKIP=$((SKIP + 1)); }
 
+# Runs independent fixture scripts concurrently, then reports them in the order
+# given so output and counters stay deterministic.
+#
+# Safe to parallelize because each fixture runs as its own bash process: names
+# derived from $$ are unique per fixture, and fixture roots come from mktemp.
+# Fixtures that share a fixed resource (the monitor_pr_cache_* pair reuse one
+# tmux session name) must NOT be run through this helper.
+#
+# Results are collected in subshells and reported from the parent, because
+# pass/fail/skip mutate counters that would be lost in a subshell.
+run_fixtures_parallel() {
+  local fixtures=("$@")
+  local max_jobs="${WAVEMILL_FIXTURE_JOBS:-4}"
+  local work idx=0 launched=0 fixture name rc out
+
+  work="$(mktemp -d "/tmp/wavemill-fixtures.XXXXXX")"
+
+  for fixture in "${fixtures[@]}"; do
+    if [[ -f "$fixture" ]]; then
+      (
+        set +e
+        fixture_out="$(bash "$fixture" 2>&1)"
+        printf '%s' "$?" > "$work/$idx.rc"
+        printf '%s' "$fixture_out" > "$work/$idx.out"
+      ) &
+      launched=$((launched + 1))
+      # Batch rather than `wait -n`, which needs bash 4.3+ (macOS ships 3.2).
+      if (( launched % max_jobs == 0 )); then
+        wait || true
+      fi
+    fi
+    idx=$((idx + 1))
+  done
+  wait || true
+
+  idx=0
+  for fixture in "${fixtures[@]}"; do
+    name="$(basename "$fixture")"
+    if [[ ! -f "$fixture" ]]; then
+      fail "Missing fixture $name"
+    else
+      rc="$(cat "$work/$idx.rc" 2>/dev/null || echo 1)"
+      out="$(cat "$work/$idx.out" 2>/dev/null || true)"
+      if [[ "$out" == SKIP:* ]]; then
+        skip "$name: ${out#SKIP: }"
+      elif [[ "$rc" == "0" ]]; then
+        pass "$name"
+      else
+        fail "$name: $out"
+      fi
+    fi
+    idx=$((idx + 1))
+  done
+
+  rm -rf "$work"
+}
+
 # ============================================================================
 # TEST 1: Bash syntax check on all shell scripts
 # ============================================================================
@@ -47,6 +104,7 @@ for f in \
   "$REPO_DIR"/tests/hook-osc-emit.test.sh \
   "$REPO_DIR"/tests/terminal-reconciler.test.sh \
   "$REPO_DIR"/tests/run-shell-suite.sh \
+  "$REPO_DIR"/tests/run-unit-tests.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_launches_concurrently.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_serializes_state_writes.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/worktree_collision.sh \
@@ -2297,6 +2355,14 @@ else
   # shellcheck source=/dev/null
   source "$ADAPTER_LIB"
 
+  # agent_launch_interactive paces tmux dispatch with real sleeps: two
+  # hardcoded 0.5s waits plus the settle/enter/retry delays. Setting the
+  # AGENT_LAUNCH_*_DELAY knobs to 0 would only cover the latter three, so stub
+  # sleep outright -- as the launch-verification section above already does.
+  # That stub is unset at the end of that section, so it must be redone here.
+  # These assertions check validation and dispatch behaviour, never timing.
+  sleep() { :; }
+
   agent_prepare_pane_for_launch() { return 0; }
   agent_verify_launch() { return 0; }
   tmux() { :; }
@@ -2342,8 +2408,6 @@ else
     "deepseek": {
       "enabled": true,
       "apiKeyEnv": "TEST_DEEPSEEK_KEY",
-      "models": ["deepseek-v4-pro"],
-      "stages": ["planner", "coder", "reviewer"],
       "effortLevel": "high"
     }
   }
@@ -2379,6 +2443,8 @@ EOF
   rm -rf "$deepseek_repo"
   REPO_DIR="$REPO_DIR_ORIG"
   export REPO_DIR
+
+  unset -f sleep
 
   rm -f "$prompt_file" "$launcher_file"
 fi
@@ -3077,33 +3143,14 @@ done
 echo ""
 echo "=== Tend Lifecycle Fixtures ==="
 
-for fixture in \
+run_fixtures_parallel \
   "$REPO_DIR/tests/fixtures/lifecycle/tend_blocked_by_dependency.sh" \
   "$REPO_DIR/tests/fixtures/lifecycle/tend_holds_high_risk_without_approval.sh" \
   "$REPO_DIR/tests/fixtures/lifecycle/tend_halts_when_integration_red.sh" \
   "$REPO_DIR/tests/fixtures/lifecycle/tend_merges_one_at_a_time.sh" \
   "$REPO_DIR/tests/fixtures/lifecycle/tend_surfaces_rebase_conflict.sh" \
   "$REPO_DIR/tests/fixtures/lifecycle/tend_challenge_winner_merges_loser_cleanup.sh" \
-  "$REPO_DIR/tests/fixtures/lifecycle/tend_status_line_not_repeated.sh" \
-; do
-  if [[ ! -f "$fixture" ]]; then
-    fail "Missing tend fixture $(basename "$fixture")"
-    continue
-  fi
-
-  fixture_output="$(bash "$fixture" 2>&1)" || fixture_status=$?
-  fixture_status="${fixture_status:-0}"
-
-  if [[ "$fixture_output" == SKIP:* ]]; then
-    skip "$(basename "$fixture"): ${fixture_output#SKIP: }"
-  elif [[ "$fixture_status" -eq 0 ]]; then
-    pass "$(basename "$fixture")"
-  else
-    fail "$(basename "$fixture"): $fixture_output"
-  fi
-
-  unset fixture_status
-done
+  "$REPO_DIR/tests/fixtures/lifecycle/tend_status_line_not_repeated.sh"
 
 # ============================================================================
 # TEST 15: Startup lifecycle fixtures
@@ -3111,31 +3158,12 @@ done
 echo ""
 echo "=== Startup Lifecycle Fixtures ==="
 
-for fixture in \
+run_fixtures_parallel \
   "$REPO_DIR/tests/fixtures/lifecycle/mill_dry_run_full_pipeline.sh" \
   "$REPO_DIR/tests/fixtures/lifecycle/startup_launches_concurrently.sh" \
   "$REPO_DIR/tests/fixtures/lifecycle/startup_serializes_state_writes.sh" \
   "$REPO_DIR/tests/fixtures/lifecycle/worktree_collision.sh" \
-  "$REPO_DIR/tests/fixtures/lifecycle/worktree_overlay_propagation.sh" \
-; do
-  if [[ ! -f "$fixture" ]]; then
-    fail "Missing startup fixture $(basename "$fixture")"
-    continue
-  fi
-
-  fixture_output="$(bash "$fixture" 2>&1)" || fixture_status=$?
-  fixture_status="${fixture_status:-0}"
-
-  if [[ "$fixture_output" == SKIP:* ]]; then
-    skip "$(basename "$fixture"): ${fixture_output#SKIP: }"
-  elif [[ "$fixture_status" -eq 0 ]]; then
-    pass "$(basename "$fixture")"
-  else
-    fail "$(basename "$fixture"): $fixture_output"
-  fi
-
-  unset fixture_status
-done
+  "$REPO_DIR/tests/fixtures/lifecycle/worktree_overlay_propagation.sh"
 
 # ============================================================================
 # TEST 16: Monitor PR cache fixture

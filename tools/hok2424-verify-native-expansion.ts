@@ -30,7 +30,7 @@ import { createReadOnlyTools } from '../shared/lib/native-agent/tools/read-only.
 import { createGitTools } from '../shared/lib/native-agent/tools/git.ts';
 import { closeManifest, openManifest, resolveManifestPath, type ResourceManifest } from '../shared/lib/resource-manifest.ts';
 import { listResources, resolveRegistryFile, type ResourceVersion } from '../shared/lib/resource-registry.ts';
-import type { ModelRegistry, ModelRegistryConfig } from '../shared/lib/model-registry.ts';
+import type { ModelCapabilities, ModelRegistry } from '../shared/lib/model-registry.ts';
 
 const ISSUE_ID = 'HOK-2424';
 const TARGET_MODELS = [
@@ -502,7 +502,7 @@ function baseConfig(modelId: string, options: { fallbackOnUnavailable?: boolean 
         },
       },
     },
-  } as ModelRegistryConfig['models'];
+  } as Record<string, Partial<ModelCapabilities>>;
 
   return {
     configVersion: '1.4.1',
@@ -547,7 +547,10 @@ function cleanupRepo(repoDir: string): void {
 
 function getRegistry(repoDir: string): ModelRegistry {
   const config = JSON.parse(readFileSync(join(repoDir, '.wavemill-config.json'), 'utf-8')) as {
-    modelRegistry?: ModelRegistryConfig;
+    modelRegistry?: {
+      models?: Record<string, Partial<ModelCapabilities>>;
+      ladders?: ModelRegistry['ladders'];
+    };
   };
   return {
     models: config.modelRegistry?.models ?? {},

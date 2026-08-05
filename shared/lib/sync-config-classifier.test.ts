@@ -22,11 +22,11 @@ console.log('\n--- sync-config-classifier tests ---\n');
 test('canonical local field missing from base => will add to repo default', () => {
   const entries = classifyLocalOverrideFields({
     baseConfig: {},
-    localConfig: { router: { defaultModel: 'gpt-5.5' } },
+    localConfig: { router: { defaultAgent: 'claude' } },
     canonicalConfig: CANONICAL_CONFIG_TEMPLATE as unknown as Record<string, unknown>,
   });
 
-  assert.equal(entries[0]?.path, 'router.defaultModel');
+  assert.equal(entries[0]?.path, 'router.defaultAgent');
   assert.equal(entries[0]?.label, 'will add to repo default');
 });
 

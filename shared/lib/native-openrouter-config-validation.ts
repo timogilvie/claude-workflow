@@ -1,8 +1,8 @@
 import {
   loadWavemillConfig,
-  type DeepSeekProviderStage,
 } from './config.ts';
-import { getEffectiveRegistry, getModel, type AgentType } from './model-registry.ts';
+import { listEffectiveModelsForStage } from './effective-models.ts';
+import { getEffectiveRegistry, getModel } from './model-registry.ts';
 import {
   OPENROUTER_DEFAULT_API_KEY_ENV,
   OPENROUTER_DEFAULT_BASE_URL,
@@ -18,11 +18,8 @@ export type NativeLaunchPhase = RoleEligibility;
 export type NativeOpenRouterConfigBlockerCode =
   | 'unknown-openrouter-model'
   | 'provider-disabled'
-  | 'provider-stage-mismatch'
-  | 'provider-model-mismatch'
   | 'native-provider-disabled'
-  | 'native-provider-model-mismatch'
-  | 'agent-map-mismatch'
+  | 'global-projection-missing'
   | 'registry-provider-mismatch';
 
 export interface NativeOpenRouterConfigBlocker {
@@ -51,40 +48,14 @@ export interface NativeOpenRouterConfigValidation {
   blockers: NativeOpenRouterConfigBlocker[];
 }
 
-const PHASE_TO_PROVIDER_STAGE: Record<NativeLaunchPhase, DeepSeekProviderStage> = {
-  planning: 'planner',
-  coding: 'coder',
-  review: 'reviewer',
+const PHASE_TO_EFFECTIVE_STAGE: Record<NativeLaunchPhase, 'planning' | 'coding' | 'review'> = {
+  planning: 'planning',
+  coding: 'coding',
+  review: 'review',
 };
-
-const NATIVE_OPENROUTER_AGENTS = new Set<AgentType>(['native-openrouter', 'claude-openrouter']);
-
-function includesEquivalentModel(values: readonly string[] | undefined, identity: OpenRouterModelIdentity): boolean {
-  if (!values || values.length === 0) {
-    return true;
-  }
-  const accepted = new Set(identity.equivalentIds);
-  return values.some((value) => accepted.has(value.trim()));
-}
 
 function formatModelPair(identity: OpenRouterModelIdentity): string {
   return `${identity.wavemillAlias} (${identity.openrouterId})`;
-}
-
-function firstMappedAgent(
-  agentMap: Record<string, AgentType> | undefined,
-  identity: OpenRouterModelIdentity,
-): { key: string; agent: AgentType } | null {
-  if (!agentMap) {
-    return null;
-  }
-  for (const key of identity.equivalentIds) {
-    const agent = agentMap[key];
-    if (agent) {
-      return { key, agent };
-    }
-  }
-  return null;
 }
 
 function buildCommandMetadata(config: ReturnType<typeof loadWavemillConfig>, identity: OpenRouterModelIdentity): NativeOpenRouterCommandMetadata {
@@ -124,7 +95,6 @@ export function validateNativeOpenRouterConfig(input: {
   }
 
   const providerConfig = config.providers?.openrouter;
-  const providerStage = PHASE_TO_PROVIDER_STAGE[input.phase];
   if (providerConfig) {
     if (providerConfig.enabled !== true) {
       blockers.push({
@@ -132,22 +102,6 @@ export function validateNativeOpenRouterConfig(input: {
         surface: 'providers.openrouter.enabled',
         detail: `providers.openrouter is disabled for ${formatModelPair(identity)}.`,
         remediation: 'Set providers.openrouter.enabled to true or remove the model from OpenRouter route pools.',
-      });
-    }
-    if (providerConfig.stages && providerConfig.stages.length > 0 && !providerConfig.stages.includes(providerStage)) {
-      blockers.push({
-        code: 'provider-stage-mismatch',
-        surface: 'providers.openrouter.stages',
-        detail: `providers.openrouter.stages does not include ${providerStage} for ${formatModelPair(identity)}.`,
-        remediation: `Add ${providerStage} to providers.openrouter.stages or remove the model from ${input.phase} routing pools.`,
-      });
-    }
-    if (!includesEquivalentModel(providerConfig.models, identity)) {
-      blockers.push({
-        code: 'provider-model-mismatch',
-        surface: 'providers.openrouter.models',
-        detail: `providers.openrouter.models does not include ${formatModelPair(identity)}.`,
-        remediation: `Add either ${identity.wavemillAlias} or ${identity.openrouterId} to providers.openrouter.models.`,
       });
     }
   }
@@ -162,23 +116,15 @@ export function validateNativeOpenRouterConfig(input: {
         remediation: 'Enable nativeAgent.providers.openrouter or route this model to a non-native agent.',
       });
     }
-    if (!includesEquivalentModel(nativeProviderConfig.models, identity)) {
-      blockers.push({
-        code: 'native-provider-model-mismatch',
-        surface: 'nativeAgent.providers.openrouter.models',
-        detail: `nativeAgent.providers.openrouter.models does not include ${formatModelPair(identity)}.`,
-        remediation: `Add either ${identity.wavemillAlias} or ${identity.openrouterId} to nativeAgent.providers.openrouter.models.`,
-      });
-    }
   }
 
-  const mappedAgent = firstMappedAgent(config.router?.agentMap, identity);
-  if (mappedAgent && !NATIVE_OPENROUTER_AGENTS.has(mappedAgent.agent)) {
+  const effectiveModels = listEffectiveModelsForStage(PHASE_TO_EFFECTIVE_STAGE[input.phase], { repoDir: input.repoDir }).models;
+  if (!effectiveModels.includes(identity.wavemillAlias) && !effectiveModels.includes(identity.openrouterId)) {
     blockers.push({
-      code: 'agent-map-mismatch',
-      surface: `router.agentMap.${mappedAgent.key}`,
-      detail: `router.agentMap maps ${mappedAgent.key} to ${mappedAgent.agent}, but ${formatModelPair(identity)} requires native-openrouter.`,
-      remediation: `Map ${mappedAgent.key} to native-openrouter/claude-openrouter or remove the conflicting agentMap entry.`,
+      code: 'global-projection-missing',
+      surface: `globalEffectiveModels.${input.phase}`,
+      detail: `Global effective-model projection for ${input.phase} does not include ${formatModelPair(identity)}.`,
+      remediation: 'Add the model to the global v2 certification catalog/effective-model projection before routing it through native OpenRouter.',
     });
   }
 
@@ -188,9 +134,9 @@ export function validateNativeOpenRouterConfig(input: {
   if (nativeProvider && nativeProvider !== 'openrouter') {
     blockers.push({
       code: 'registry-provider-mismatch',
-      surface: `modelRegistry.models.${identity.wavemillAlias}.nativeCapability.nativeProvider`,
-      detail: `model registry maps ${formatModelPair(identity)} to native provider ${nativeProvider}, expected openrouter.`,
-      remediation: 'Update modelRegistry nativeCapability.nativeProvider to openrouter or remove the model from native-openrouter routes.',
+      surface: `globalModelRegistry.models.${identity.wavemillAlias}.nativeCapability.nativeProvider`,
+      detail: `global model registry maps ${formatModelPair(identity)} to native provider ${nativeProvider}, expected openrouter.`,
+      remediation: 'Update the global v2 certification catalog/effective-model projection or remove the model from native-openrouter routes.',
     });
   }
 

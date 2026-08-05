@@ -17,7 +17,6 @@ export interface ResolvedDeepSeekProviderConfig {
   enabled: boolean;
   apiKeyEnv: string;
   baseUrl: string;
-  models: string[];
   stages: DeepSeekProviderStage[];
   effortLevel: 'low' | 'medium' | 'high';
   hasApiKey: boolean;
@@ -30,11 +29,6 @@ export interface DeepSeekPoolFilterResult {
 
 export function isDeepSeekModel(modelId: string | null | undefined): boolean {
   return typeof modelId === 'string' && modelId.startsWith('deepseek-');
-}
-
-function normalizeModels(models?: string[]): string[] {
-  const candidates = models && models.length > 0 ? models : [...DEEPSEEK_MODEL_IDS];
-  return [...new Set(candidates.filter((modelId) => isDeepSeekModel(modelId)))];
 }
 
 function normalizeStages(stages?: DeepSeekProviderStage[]): DeepSeekProviderStage[] {
@@ -57,8 +51,7 @@ export function resolveDeepSeekProviderConfig(repoDir?: string): ResolvedDeepSee
     enabled: config.enabled === true,
     apiKeyEnv,
     baseUrl: config.baseUrl?.trim() || DEEPSEEK_BASE_URL,
-    models: normalizeModels(config.models),
-    stages: normalizeStages(config.stages),
+    stages: normalizeStages(),
     effortLevel: normalizeEffortLevel(config.effortLevel),
     hasApiKey,
   };
@@ -70,8 +63,7 @@ export function filterDeepSeekModels(
   stage?: DeepSeekProviderStage,
 ): DeepSeekPoolFilterResult {
   const requested = [...new Set(models)];
-  const deepSeekRequested = requested.filter((modelId) => isDeepSeekModel(modelId));
-  if (deepSeekRequested.length === 0) {
+  if (!requested.some((modelId) => isDeepSeekModel(modelId))) {
     return { models: requested, warnings: [] };
   }
 
@@ -86,7 +78,7 @@ export function filterDeepSeekModels(
   if (stage && !provider.stages.includes(stage)) {
     return {
       models: requested.filter((modelId) => !isDeepSeekModel(modelId)),
-      warnings: [`DeepSeek models were ignored for ${stage} because that stage is not enabled in providers.deepseek.stages.`],
+      warnings: [`DeepSeek models were ignored for ${stage} because the global provider stage policy does not enable that stage.`],
     };
   }
 
@@ -97,16 +89,7 @@ export function filterDeepSeekModels(
     };
   }
 
-  const allowedModels = new Set(provider.models);
-  const filtered = requested.filter((modelId) => !isDeepSeekModel(modelId) || allowedModels.has(modelId));
-  const skippedConfiguredModels = deepSeekRequested.filter((modelId) => !allowedModels.has(modelId));
-
-  return {
-    models: filtered,
-    warnings: skippedConfiguredModels.length > 0
-      ? [`DeepSeek models were ignored because they are not allowlisted in providers.deepseek.models: ${skippedConfiguredModels.join(', ')}`]
-      : [],
-  };
+  return { models: requested, warnings: [] };
 }
 
 export function getDeepSeekProviderMetadata(

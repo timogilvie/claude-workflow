@@ -56,7 +56,7 @@ test('dry-run local classification includes all labels', () => {
       join(repoDir, '.wavemill-config.local.json'),
       JSON.stringify(
         {
-          router: { defaultModel: 'gpt-5.5', apiKey: 'secret-token' },
+          router: { defaultAgent: 'claude', apiKey: 'secret-token' },
           custom: { devOnly: true },
         },
         null,
