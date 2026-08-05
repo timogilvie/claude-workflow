@@ -516,8 +516,8 @@
           ],
           "certification": {
             "maxCertifiedPhase": "workflow",
-            "certifiedAt": "2026-07-05T15:31:57.711Z",
-            "certificationSuiteVersion": "v1",
+            "certifiedAt": "2026-07-15T00:00:00.000Z",
+            "certificationSuiteVersion": "v2",
             "knownLimitations": [
               "Live-judged scenarios require a paid provider call and are not run by the deterministic harness."
             ]
@@ -564,8 +564,8 @@
           ],
           "certification": {
             "maxCertifiedPhase": "workflow",
-            "certifiedAt": "2026-07-05T15:31:57.527Z",
-            "certificationSuiteVersion": "v1",
+            "certifiedAt": "2026-07-15T00:00:00.000Z",
+            "certificationSuiteVersion": "v2",
             "knownLimitations": [
               "Live-judged scenarios require a paid provider call and are not run by the deterministic harness."
             ]
@@ -612,8 +612,8 @@
           ],
           "certification": {
             "maxCertifiedPhase": "workflow",
-            "certifiedAt": "2026-07-05T15:31:57.748Z",
-            "certificationSuiteVersion": "v1",
+            "certifiedAt": "2026-07-15T00:00:00.000Z",
+            "certificationSuiteVersion": "v2",
             "knownLimitations": [
               "Live-judged scenarios require a paid provider call and are not run by the deterministic harness."
             ]
