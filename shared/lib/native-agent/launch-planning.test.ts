@@ -1133,9 +1133,9 @@ describe('launchNativePlanning', () => {
           runTsxCommand: stubRunTsxCommand(),
         }),
         (error: unknown) => error instanceof Error
-          && /no native providers are configured/.test(error.message)
-          && /wavemill native-agent models report --json/.test(error.message)
-          && /Configure nativeAgent\.providers/.test(error.message),
+          && /Repo-local model configuration removed/.test(error.message)
+          && /nativeAgent\.providers\.openai\.models/.test(error.message)
+          && /wavemill config migrate-model-settings/.test(error.message),
       );
     } finally {
       if (originalOpenAiKey === undefined) {

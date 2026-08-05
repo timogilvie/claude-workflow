@@ -55,7 +55,8 @@
                     "minimum": 0,
                     "description": "Seconds to reuse a successful base-branch fetch before fetching again. Set to 0 to always fetch."
                 }
-            }
+            },
+            "additionalProperties": false
         },
         "mill": {
             "type": "object",
@@ -883,32 +884,10 @@
                     },
                     "additionalProperties": false
                 },
-                "models": {
-                    "description": "Pool of model selectors eligible for challenge. Entries may be family aliases, 'inherit', or pinned model IDs. Null means use router.models.",
-                    "oneOf": [
-                        {
-                            "type": "array",
-                            "items": {
-                                "type": "string",
-                                "minLength": 1
-                            }
-                        },
-                        {
-                            "type": "null"
-                        }
-                    ],
-                    "default": null
-                },
                 "allowDeepseek": {
                     "type": "boolean",
                     "default": false,
                     "description": "Enables DeepSeek eligibility in unattended challenge mode after smoke validation has passed."
-                },
-                "comparisonModel": {
-                    "type": "string",
-                    "default": "claude-opus-4-8",
-                    "minLength": 1,
-                    "description": "Model selector used as the LLM judge for challenge PR comparison. Accepts a family alias such as 'opus', 'inherit', or a pinned model ID such as 'claude-opus-4-8'."
                 },
                 "autoMergeWinner": {
                     "type": "boolean",
@@ -1004,26 +983,6 @@
                             "default": "https://api.deepseek.com/anthropic",
                             "description": "Anthropic-compatible base URL for Claude Code requests."
                         },
-                        "models": {
-                            "type": "array",
-                            "description": "DeepSeek model IDs that Wavemill may route to when the provider is enabled.",
-                            "items": {
-                                "type": "string",
-                                "pattern": "^deepseek-"
-                            }
-                        },
-                        "stages": {
-                            "type": "array",
-                            "description": "Workflow stages allowed to use DeepSeek.",
-                            "items": {
-                                "type": "string",
-                                "enum": [
-                                    "planner",
-                                    "coder",
-                                    "reviewer"
-                                ]
-                            }
-                        },
                         "effortLevel": {
                             "type": "string",
                             "enum": [
@@ -1101,26 +1060,6 @@
                             "type": "string",
                             "default": "https://openrouter.ai/api",
                             "description": "Anthropic-compatible base URL for Claude Code requests routed through OpenRouter."
-                        },
-                        "models": {
-                            "type": "array",
-                            "description": "Launch-priority model aliases that Wavemill may route through OpenRouter when the provider is enabled.",
-                            "items": {
-                                "type": "string",
-                                "minLength": 1
-                            }
-                        },
-                        "stages": {
-                            "type": "array",
-                            "description": "Workflow stages allowed to use OpenRouter.",
-                            "items": {
-                                "type": "string",
-                                "enum": [
-                                    "planner",
-                                    "coder",
-                                    "reviewer"
-                                ]
-                            }
                         }
                     },
                     "additionalProperties": false,
@@ -1243,13 +1182,6 @@
                                     "additionalProperties": {
                                         "type": "string"
                                     }
-                                },
-                                "models": {
-                                    "type": "array",
-                                    "items": {
-                                        "type": "string",
-                                        "minLength": 1
-                                    }
                                 }
                             },
                             "additionalProperties": false
@@ -1273,13 +1205,6 @@
                                     "type": "object",
                                     "additionalProperties": {
                                         "type": "string"
-                                    }
-                                },
-                                "models": {
-                                    "type": "array",
-                                    "items": {
-                                        "type": "string",
-                                        "minLength": 1
                                     }
                                 }
                             },
@@ -1583,308 +1508,6 @@
             },
             "additionalProperties": false
         },
-        "modelRegistry": {
-            "type": "object",
-            "description": "Overrides for the canonical model capability registry. Models merge over defaults while ladders replace the default ladder for each task type.",
-            "properties": {
-                "models": {
-                    "type": "object",
-                    "description": "Map of model IDs to partial capability overrides.",
-                    "additionalProperties": {
-                        "type": "object",
-                        "properties": {
-                            "vendor": {
-                                "type": "string",
-                                "minLength": 1
-                            },
-                            "class": {
-                                "type": "string",
-                                "enum": [
-                                    "frontier",
-                                    "strong_generalist",
-                                    "fast_economy"
-                                ]
-                            },
-                            "strengths": {
-                                "type": "array",
-                                "items": {
-                                    "type": "string"
-                                }
-                            },
-                            "weaknesses": {
-                                "type": "array",
-                                "items": {
-                                    "type": "string"
-                                }
-                            },
-                            "disabled": {
-                                "type": "boolean"
-                            },
-                            "qualityScores": {
-                                "type": "object",
-                                "properties": {
-                                    "routing": {
-                                        "type": "number",
-                                        "minimum": 0,
-                                        "maximum": 100
-                                    },
-                                    "planning": {
-                                        "type": "number",
-                                        "minimum": 0,
-                                        "maximum": 100
-                                    },
-                                    "coding": {
-                                        "type": "number",
-                                        "minimum": 0,
-                                        "maximum": 100
-                                    },
-                                    "review": {
-                                        "type": "number",
-                                        "minimum": 0,
-                                        "maximum": 100
-                                    },
-                                    "classify": {
-                                        "type": "number",
-                                        "minimum": 0,
-                                        "maximum": 100
-                                    }
-                                },
-                                "additionalProperties": false
-                            },
-                            "pricing": {
-                                "type": "object",
-                                "properties": {
-                                    "inputCostPerMTok": {
-                                        "type": "number",
-                                        "minimum": 0
-                                    },
-                                    "outputCostPerMTok": {
-                                        "type": "number",
-                                        "minimum": 0
-                                    },
-                                    "cacheWriteCostPerMTok": {
-                                        "type": "number",
-                                        "minimum": 0
-                                    },
-                                    "cacheReadCostPerMTok": {
-                                        "type": "number",
-                                        "minimum": 0
-                                    }
-                                },
-                                "required": [
-                                    "inputCostPerMTok",
-                                    "outputCostPerMTok"
-                                ],
-                                "additionalProperties": false
-                            },
-                            "defaultLadderEligible": {
-                                "type": "boolean"
-                            },
-                            "contextWindowTokens": {
-                                "type": "integer",
-                                "minimum": 1
-                            },
-                            "toolSupport": {
-                                "type": "string",
-                                "enum": ["none", "basic", "full"]
-                            },
-                            "multimodal": {
-                                "type": "object",
-                                "properties": {
-                                    "text": {
-                                        "type": "boolean"
-                                    },
-                                    "image": {
-                                        "type": "boolean"
-                                    },
-                                    "audio": {
-                                        "type": "boolean"
-                                    },
-                                    "video": {
-                                        "type": "boolean"
-                                    }
-                                },
-                                "required": ["text", "image"],
-                                "additionalProperties": false
-                            },
-                            "latencyTier": {
-                                "type": "string",
-                                "enum": ["fast", "standard", "slow"]
-                            },
-                            "reasoningTier": {
-                                "type": "string",
-                                "enum": ["basic", "standard", "advanced"]
-                            },
-                            "costPerMillionInputTokensUsd": {
-                                "type": "number",
-                                "minimum": 0
-                            },
-                            "costPerMillionOutputTokensUsd": {
-                                "type": "number",
-                                "minimum": 0
-                            },
-                            "agent": {
-                                "type": "string",
-                                "enum": ["claude", "codex", "claude-openrouter", "native-openai", "native-openrouter"]
-                            },
-                            "codexChatgptCapability": {
-                                "type": "object",
-                                "properties": {
-                                    "supported": { "type": "boolean" },
-                                    "reason": { "type": "string" }
-                                },
-                                "additionalProperties": false
-                            },
-                            "nativeCapability": {
-                                "type": "object",
-                                "properties": {
-                                    "nativeProvider": {
-                                        "type": "string",
-                                        "enum": ["openai", "openrouter"]
-                                    },
-                                    "piTransportKind": {
-                                        "type": "string",
-                                        "enum": ["openai-responses", "openai-completions"]
-                                    },
-                                    "readOnlyNative": {
-                                        "type": "string",
-                                        "enum": ["certified", "unsupported", "partial"]
-                                    },
-                                    "compatFlags": {
-                                        "type": "object",
-                                        "additionalProperties": true
-                                    },
-                                    "limitations": {
-                                        "type": "array",
-                                        "items": {
-                                            "type": "string"
-                                        }
-                                    },
-                                    "certification": {
-                                        "type": "object",
-                                        "properties": {
-                                            "maxCertifiedPhase": {
-                                                "type": "string",
-                                                "enum": ["read-only", "patch", "workflow"]
-                                            },
-                                            "certifiedAt": {
-                                                "type": "string"
-                                            },
-                                            "certificationSuiteVersion": {
-                                                "type": "string",
-                                                "minLength": 1
-                                            },
-                                            "knownLimitations": {
-                                                "type": "array",
-                                                "items": {
-                                                    "type": "string"
-                                                }
-                                            }
-                                        },
-                                        "additionalProperties": false
-                                    }
-                                },
-                                "additionalProperties": false
-                            },
-                            "supportedModel": {
-                                "type": "object",
-                                "properties": {
-                                    "wavemillAlias": { "type": "string", "minLength": 1 },
-                                    "providerNativeId": { "type": "string", "minLength": 1 },
-                                    "provider": { "type": "string", "enum": ["openai", "openrouter"] },
-                                    "transport": { "type": "string", "enum": ["openai-responses", "openai-completions"] },
-                                    "stages": {
-                                        "type": "array",
-                                        "items": {
-                                            "type": "string",
-                                            "enum": ["expansion", "planning", "coding", "review"]
-                                        }
-                                    },
-                                    "requiredCertificationPhaseByStage": {
-                                        "type": "object",
-                                        "properties": {
-                                            "expansion": { "type": "string", "enum": ["read-only", "patch", "workflow"] },
-                                            "planning": { "type": "string", "enum": ["read-only", "patch", "workflow"] },
-                                            "coding": { "type": "string", "enum": ["read-only", "patch", "workflow"] },
-                                            "review": { "type": "string", "enum": ["read-only", "patch", "workflow"] }
-                                        },
-                                        "additionalProperties": false
-                                    },
-                                    "certificationSuiteVersion": { "type": "string", "minLength": 1 },
-                                    "certificationFreshnessDays": { "type": "integer", "minimum": 1 },
-                                    "canonicalArtifactIdentity": {
-                                        "type": "object",
-                                        "properties": {
-                                            "provider": { "type": "string", "minLength": 1 },
-                                            "model": { "type": "string", "minLength": 1 },
-                                            "suiteVersion": { "type": "string", "minLength": 1 }
-                                        },
-                                        "required": ["provider", "model", "suiteVersion"],
-                                        "additionalProperties": false
-                                    },
-                                    "lifecycle": { "type": "string", "enum": ["supported", "deprecated", "blocked"] },
-                                    "compatibilityFlags": {
-                                        "type": "object",
-                                        "additionalProperties": true
-                                    },
-                                    "limitations": {
-                                        "type": "array",
-                                        "items": { "type": "string" }
-                                    },
-                                    "launchEligible": { "type": "boolean" },
-                                    "routingEligible": { "type": "boolean" }
-                                },
-                                "additionalProperties": false
-                            },
-                            "releasedAt": {
-                                "type": "string",
-                                "pattern": "^\\d{4}-\\d{2}-\\d{2}",
-                                "description": "ISO date the model became generally available. Drives the recency-aware exploration boost (router.exploration.newModelBoost) and challenge scheduler prioritization."
-                            }
-                        },
-                        "additionalProperties": false
-                    }
-                },
-                "ladders": {
-                    "type": "object",
-                    "description": "Ordered fallback ladders for each task type.",
-                    "properties": {
-                        "routing": {
-                            "type": "array",
-                            "items": {
-                                "type": "string"
-                            }
-                        },
-                        "planning": {
-                            "type": "array",
-                            "items": {
-                                "type": "string"
-                            }
-                        },
-                        "coding": {
-                            "type": "array",
-                            "items": {
-                                "type": "string"
-                            }
-                        },
-                        "review": {
-                            "type": "array",
-                            "items": {
-                                "type": "string"
-                            }
-                        },
-                        "classify": {
-                            "type": "array",
-                            "items": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "additionalProperties": false
-                }
-            },
-            "additionalProperties": false
-        },
         "router": {
             "type": "object",
             "description": "Settings for the prompt-to-model router that suggests the best LLM for a task based on historical eval data.",
@@ -1893,11 +1516,6 @@
                     "type": "boolean",
                     "default": true,
                     "description": "Enable model routing suggestions before workflow execution."
-                },
-                "defaultModel": {
-                    "type": "string",
-                    "default": "gpt-5.5",
-                    "description": "Fallback model selector when insufficient eval data exists for routing. Accepts a family alias such as 'sonnet', 'inherit', or a pinned model ID such as 'claude-sonnet-5'."
                 },
                 "minRecords": {
                     "type": "integer",
@@ -1911,42 +1529,6 @@
                     "minimum": 1,
                     "description": "Minimum distinct models with eval data before routing is active."
                 },
-                "models": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    },
-                    "default": [],
-                    "description": "Candidate model selectors the router may recommend. Entries may be family aliases, 'inherit', or pinned model IDs. Empty array means all models found in eval data."
-                },
-                "availableModels": {
-                    "type": "object",
-                    "description": "Per-stage model availability lists. Stages without a list fall back to router.models.",
-                    "properties": {
-                        "planner": {
-                            "type": "array",
-                            "items": {
-                                "type": "string"
-                            },
-                            "description": "Model selectors available for the planning stage. Entries may be family aliases, 'inherit', or pinned model IDs."
-                        },
-                        "coder": {
-                            "type": "array",
-                            "items": {
-                                "type": "string"
-                            },
-                            "description": "Model selectors available for the coding stage. Entries may be family aliases, 'inherit', or pinned model IDs."
-                        },
-                        "reviewer": {
-                            "type": "array",
-                            "items": {
-                                "type": "string"
-                            },
-                            "description": "Model selectors available for the review stage. Entries may be family aliases, 'inherit', or pinned model IDs."
-                        }
-                    },
-                    "additionalProperties": false
-                },
                 "defaultAgent": {
                     "type": "string",
                     "default": "codex",
@@ -1958,21 +1540,6 @@
                         "native-openai",
                         "native-openrouter"
                     ]
-                },
-                "agentMap": {
-                    "type": "object",
-                    "description": "Maps model IDs to agent CLI commands. Used to determine which agent CLI to launch when the router recommends a model.",
-                    "additionalProperties": {
-                        "type": "string",
-                        "description": "Agent CLI command name.",
-                        "enum": [
-                            "claude",
-                            "codex",
-                            "claude-openrouter",
-                            "native-openai",
-                            "native-openrouter"
-                        ]
-                    }
                 },
                 "mode": {
                     "type": "string",
@@ -2225,7 +1792,8 @@
                     },
                     "additionalProperties": false
                 }
-            }
+            },
+            "additionalProperties": false
         },
         "validation": {
             "type": "object",

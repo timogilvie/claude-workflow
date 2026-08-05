@@ -47,7 +47,7 @@ The durable architecture should therefore normalize provider tool-call shapes in
 
 Native runtime work should extend these current surfaces instead of replacing them:
 
-- `router.agentMap`, model registry, and model selector handling from [Adding Models](model-additions.md) and [Model Field Configuration](model-field-configuration.md).
+- global model registry/projection and model selector handling from [Adding Models](model-additions.md) and [Model Field Configuration](model-field-configuration.md).
 - Mill phase orchestration from [Mill Mode](mill-mode.md).
 - Review contracts and JSON outputs from [Review Mode](review-mode.md).
 - Permission and command safety conventions from [Permission Configuration Guide](permissions.md).
@@ -288,7 +288,7 @@ These unblock native task expansion, research, planning, and code review.
 - `features/<slug>/task-packet*.md`
 - `features/<slug>/.native-agent-*.json`
 - `.wavemill/sessions/**`
-- `.wavemill/native-agent-certifications/**`
+- global native-agent certification artifacts
 
 The allowlist must be phase-scoped. A generic "safe path" exception is not acceptable because it defeats patch-first editing.
 
@@ -561,7 +561,7 @@ Adapter responsibilities:
 
 ## Capability And Certification Metadata
 
-Reuse the existing model registry dispatch model. Native runtime should be represented as another `agent` value, such as `native-openrouter` or `native-openai`, resolved by `resolveAgent()` through `router.agentMap` or `ModelCapabilities.agent`. Do not add a parallel `runtime` axis; that would duplicate routing concepts and collide conceptually with governed `resources.runtimeSelection`.
+Reuse the existing global model registry dispatch model. Native runtime should be represented as another `agent` value, such as `native-openrouter` or `native-openai`, resolved by `resolveAgent()` from global `ModelCapabilities.agent`. Do not add a parallel `runtime` axis; that would duplicate routing concepts and collide conceptually with governed `resources.runtimeSelection`.
 
 Extend model registry metadata around the existing `toolSupport: 'none' | 'basic' | 'full'` field. Do not add a second `toolCalling` enum with the same meaning.
 
@@ -610,7 +610,7 @@ Create a provider-neutral native tool-loop smoke suite before enabling live task
 Each provider/model run should produce a certification artifact:
 
 ```text
-.wavemill/native-agent-certifications/<provider>/<model>/<suite-version>.json
+<global-certification-root>/<provider>/<model>/<suite-version>.json
 ```
 
 Certification policy:
@@ -725,7 +725,7 @@ Deliverables:
 - Wire native runtime into task expansion, planning, and read-only review launch points.
 - Write normal Wavemill stage artifacts for native phases.
 - Register selected prompt/tool/runtime resources in the resource registry manifest.
-- Register `native-openrouter` and `native-openai` through `router.agentMap`/`ModelCapabilities.agent` and `resolveAgent()`.
+- Register `native-openrouter` and `native-openai` through global `ModelCapabilities.agent` and `resolveAgent()`.
 - Extend `AgentType`, `getSessionAdapter()`, and detection for native session files.
 - Reuse existing phase prompt surfaces: `build_planning_prompt`, `build_coding_prompt`, and `build_review_prompt`, or explicitly fork them with registry logging through `loadPromptTemplate()`/resource registry metadata.
 - Update [Prompt Locations](prompt-locations.md) whenever native phase prompt loading changes.
@@ -899,7 +899,7 @@ Acceptance:
 - Router selects native models only for certified phases.
 - Challenge mode excludes uncertified native coding models.
 - Certification reports show pass/fail by scenario and known limitations.
-- Certification artifacts are generated under `.wavemill/native-agent-certifications/`; deterministic router/CI capability flags are checked into the model registry or repo config so paid live reruns are not required for ordinary routing decisions.
+- Certification artifacts are generated under the global certification root; deterministic router/CI capability flags are checked into the global model registry so paid live reruns are not required for ordinary routing decisions.
 - Suite-version bumps require recertification; stale certifications fail closed after the configured TTL.
 - Flaky live scenarios get bounded retries and record retry counts.
 
@@ -1060,7 +1060,7 @@ Proposed high-level config:
 }
 ```
 
-Model registry entries should carry provider, native adapter, certification metadata, and the existing `agent` field. `router.agentMap` can then map certified models to `native-openrouter`, `native-openai`, or similar launchers. `rolloutMode` is a native-agent rollout flag, not a second router dispatch axis.
+Global model registry entries should carry provider, native adapter, certification metadata, and the existing `agent` field. Certified models resolve to `native-openrouter`, `native-openai`, or similar launchers from that global metadata. `rolloutMode` is a native-agent rollout flag, not a second router dispatch axis.
 
 ## Build vs. Adopt: Open-Source Harness Evaluation
 
@@ -1073,7 +1073,7 @@ The architecture above assumes Wavemill builds the native runtime itself. Before
 The runtime "owns" list in this plan splits cleanly into two layers:
 
 - **Generic runtime plumbing** — the provider tool-calling loop, a typed tool registry, patch/diff file editing, multi-provider model abstraction, cost/token accounting, JSONL transcripts, and session persistence. This maps to Epics 1-3 and parts of Epic 6. **Every serious harness below already provides most of it.**
-- **Wavemill's differentiation** — the phase-policy engine (per-phase tool permissions across task-expansion/planning/coding/review), completion contracts, provider certification, the stage-aware model router and `router.agentMap`, worktree isolation conventions, Linear/PR/ready workflow tools, eval/GEPA/challenge learning loops, and the dashboard/hook status contract. This maps to Epics 4-5, 7-9. **No harness provides this; it stays ours regardless of what we adopt.**
+- **Wavemill's differentiation** — the phase-policy engine (per-phase tool permissions across task-expansion/planning/coding/review), completion contracts, provider certification, the stage-aware model router and global model projection, worktree isolation conventions, Linear/PR/ready workflow tools, eval/GEPA/challenge learning loops, and the dashboard/hook status contract. This maps to Epics 4-5, 7-9. **No harness provides this; it stays ours regardless of what we adopt.**
 
 So adoption is not "build vs. buy the product." It is "build vs. borrow the runtime substrate underneath Epics 1-3," while Epics 4-9 remain Wavemill-owned in either case. The product principle that "Wavemill becomes the agent runtime" (and "owns tool execution, phase policy, safety, cost, state") is preserved even when the turn-loop primitive is borrowed, because Wavemill still owns the policy and tool-execution wrapper around it.
 

@@ -6,7 +6,7 @@ import {
   checkIdentity,
   DEFAULT_CERTIFICATION_SUITE_VERSION,
   evaluateEligibility,
-  listCertifications,
+  listScopedCertifications,
   readCertification,
   resolveCertificationStorageIdentity,
   writeGlobalCertification,
@@ -26,7 +26,7 @@ export function importLegacyCertifications(opts: {
   dryRun?: boolean;
   now?: Date;
 }): ImportCertificationSummary {
-  const paths = listCertifications(opts.repoDir);
+  const paths = listScopedCertifications({ repoDir: opts.repoDir, scope: 'legacy-repo' });
   const summary: ImportCertificationSummary = {
     scanned: paths.length,
     imported: [],

@@ -1,7 +1,8 @@
 #!/usr/bin/env -S npx tsx
 
 import { fileURLToPath } from 'node:url';
-import { getAvailableModelsForStage, getChallengeConfig, getOpenRouterProviderConfig, getRouterConfig } from '../shared/lib/config.ts';
+import { getOpenRouterProviderConfig } from '../shared/lib/config.ts';
+import { listEffectiveModelsForStage } from '../shared/lib/effective-models.ts';
 import { auditLaunchPriorityCoverage, type LaunchPriorityAudit, type LaunchPriorityRole, type ModelRoleEvidence } from '../shared/lib/launch-priority-audit.ts';
 import { loadLaunchPriorityList, type LaunchPriorityModel, type ModelFamily } from '../shared/lib/openrouter-catalog.ts';
 import { runTool, resolveRepoDir, type ParsedArgs } from '../shared/lib/tool-runner.ts';
@@ -201,24 +202,20 @@ export function buildCertificationPlan(input: {
 
 function buildPreflightBlockers(catalog: readonly LaunchPriorityModel[], repoDir: string): Map<string, string[]> {
   const provider = getOpenRouterProviderConfig(repoDir);
-  const challenge = getChallengeConfig(repoDir);
-  const router = getRouterConfig(repoDir);
   const blockers = new Map<string, string[]>();
 
   for (const model of catalog) {
     const messages: string[] = [];
-    if (provider.enabled !== true || !(provider.models ?? []).includes(model.wavemillAlias)) {
-      messages.push('not allowlisted in providers.openrouter.models');
-    }
-    if (!(challenge.models ?? []).includes(model.wavemillAlias)) {
-      messages.push('not present in challenge.models');
+    if (provider.enabled !== true) {
+      messages.push('providers.openrouter.enabled is not true');
     }
     const missingRoles = model.roleEligibility.filter((role) => {
-      const available = getAvailableModelsForStage(router, ROLE_TO_ROUTER_STAGE[role]);
-      return available !== undefined && !available.includes(model.wavemillAlias);
+      const stage = ROLE_TO_ROUTER_STAGE[role];
+      const effectiveStage = stage === 'planner' ? 'planning' : stage === 'coder' ? 'coding' : 'review';
+      return !listEffectiveModelsForStage(effectiveStage, { repoDir }).models.includes(model.wavemillAlias);
     });
     if (missingRoles.length > 0) {
-      messages.push(`missing from router pools for ${missingRoles.join(', ')}`);
+      messages.push(`missing from global effective-model pools for ${missingRoles.join(', ')}`);
     }
     if (messages.length > 0) {
       blockers.set(model.wavemillAlias, messages);

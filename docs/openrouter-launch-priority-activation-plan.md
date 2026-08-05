@@ -133,8 +133,8 @@ Implementation details:
 - Filter OpenRouter models out of router pools unless:
   - `providers.openrouter.enabled === true`
   - the configured API key env var is present
-  - the model is allowlisted in `providers.openrouter.models`
-  - the workflow stage is allowlisted in `providers.openrouter.stages`
+  - the model is present in the global effective-model projection
+  - the workflow stage is enabled by global catalog metadata
 - Emit clear router warnings when models are excluded for provider/key/stage
   reasons.
 
@@ -207,19 +207,14 @@ Acceptance:
 
 ### 5. Put Models Into Runtime Candidate Pools
 
-Update checked-in config and config-sync defaults so the models can actually
-receive traffic.
+Update the global v2 catalog/effective-model projection so the models can
+actually receive traffic.
 
-Base repo config:
+Global catalog/projection:
 
-- Add OpenRouter pricing entries for at least tier-1 active challengers.
-- Add tier-1 OpenRouter aliases to `challenge.models`.
-- Add `router.agentMap` entries for `claude-openrouter`.
-- Add stage-specific `router.availableModels` to control blast radius:
-  - `coder`: `qwen-3-coder`, `qwen-2.5-coder-32b`, `kimi-k2`, `deepseek-r1`,
-    `deepseek-v3`, `gemini-2.5-pro`
-  - `reviewer`: `qwen-3-coder`, `kimi-k2`, `deepseek-r1`, `gemini-2.5-pro`
-  - `planner`: start with `kimi-k2`, `deepseek-r1`, `gemini-2.5-pro`
+- Add pricing entries for at least tier-1 active challengers.
+- Add tier-1 OpenRouter aliases with native-agent metadata.
+- Add stage-specific global effective-model entries to control rollout.
 - Consider local override for API-key-dependent provider enablement if shared
   config should not assume everyone has access.
 
@@ -235,7 +230,7 @@ Acceptance:
 The current diversity defaults are not enough by themselves; exploration only
 samples from viable candidates. Add targeted traffic controls:
 
-- Seed `challenge.models` with all tier-1 active challengers.
+- Seed the global challenge-eligible projection with all tier-1 active challengers.
 - Lower `challengeScheduler.newModelChallengeCount` for launch-priority models
   if needed, so zero-record models are preferred until each has coverage.
 - Add an OpenRouter-specific coverage target:
@@ -330,6 +325,5 @@ Promotion rule:
 Rollback:
 
 - Set `providers.openrouter.enabled=false`.
-- Remove aliases from `challenge.models` and `router.availableModels`.
+- Remove aliases from the global effective-model projection.
 - Leave registry entries disabled so historical eval attribution remains valid.
-

@@ -14,9 +14,7 @@ import {
   resolveCertificationStorageIdentity,
 } from './identity.ts';
 import {
-  buildCertificationPathFromRoot,
   buildScopedCertificationPath,
-  resolveLegacyCertificationRoot,
   type CertificationStorageOptions,
   type CertificationStorageScope,
 } from './storage.ts';
@@ -44,7 +42,7 @@ export const isValidPathSegment = isValidCertificationPathSegment;
 /**
  * Build the storage path for a certification artifact.
  *
- * Path contract: `<repoDir>/.wavemill/native-agent-certifications/<provider>/<model>/<suiteVersion>.json`
+ * Path contract: `<global-root>/<provider>/<model>/<suiteVersion>.json`
  *
  * @throws {Error} if any segment fails the safety check
  */
@@ -214,27 +212,8 @@ export function loadSharedCertificationWithLegacyFallback(
   suiteVersion: string,
   options: Omit<CertificationStorageOptions, 'scope' | 'repoDir'> = {},
 ): ScopedLoadCertificationResult {
-  const global = loadGlobalCertification(provider, model, suiteVersion, options);
-  if (global.ok || global.reason === 'malformed' || !repoDir) {
-    return global;
-  }
-
-  let path: string;
-  try {
-    path = buildCertificationPathFromRoot(
-      resolveLegacyCertificationRoot(repoDir),
-      provider,
-      model,
-      suiteVersion,
-    );
-  } catch {
-    return { ok: false, reason: 'malformed', scope: 'legacy-repo' };
-  }
-
-  const loaded = loadCertificationFromPath(path);
-  return loaded.ok
-    ? { ...loaded, path, scope: 'legacy-repo' }
-    : { ...loaded, path, scope: 'legacy-repo' };
+  void repoDir;
+  return loadGlobalCertification(provider, model, suiteVersion, options);
 }
 
 /**

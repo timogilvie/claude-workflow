@@ -35,8 +35,7 @@ function makeRepo(config: Record<string, unknown> = {}): { repoDir: string; clea
   mkdirSync(join(repoDir, '.wavemill', 'evals'), { recursive: true });
   writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
     router: {
-      defaultModel: 'claude-sonnet-4-5-20250929',
-      models: ['claude-sonnet-4-5-20250929', 'gpt-5.4', 'gpt-5.3-codex'],
+      enabled: true,
     },
     eval: {
       pricing: {
@@ -118,7 +117,7 @@ test('recommends challenge when confidence is below threshold', () => {
 
     assert.equal(result.shouldChallenge, true);
     assert.equal(result.reason, 'new-model');
-    assert.equal(result.defaultModel, 'claude-sonnet-4-5-20250929');
+    assert.equal(result.defaultModel, 'claude-fable-5');
     assert.ok(result.challengerModel);
     assert.notEqual(result.challengerModel, result.defaultModel);
   } finally {
@@ -218,8 +217,8 @@ test('recommends new model challenge when a model has fewer records than thresho
 
     assert.equal(result.shouldChallenge, true);
     assert.equal(result.reason, 'new-model');
-    assert.equal(result.defaultModel, 'claude-sonnet-4-5-20250929');
-    assert.equal(result.challengerModel, 'claude-fable-5');
+    assert.equal(result.defaultModel, 'claude-fable-5');
+    assert.equal(result.challengerModel, 'claude-haiku-4-5');
   } finally {
     cleanup();
   }
@@ -488,32 +487,19 @@ test('low-data-stage recommendation picks the least-tested model for that stage'
 
 
 
-test('new-model recommendation prioritizes recently released models over older under-covered ones', () => {
-  const releasedAt = new Date(Date.now() - 5 * 86_400_000).toISOString().slice(0, 10);
-  const { repoDir, cleanup } = makeRepo({
-    router: {
-      defaultModel: 'claude-sonnet-4-5-20250929',
-      models: ['claude-sonnet-4-5-20250929', 'gpt-5.4', 'fresh-model-9000'],
-    },
-    modelRegistry: {
-      models: {
-        'fresh-model-9000': { releasedAt },
-      },
-    },
-  });
+test('new-model recommendation uses the global registry release metadata', () => {
+  const { repoDir, cleanup } = makeRepo();
   try {
     const result = evaluateChallenge({
       routingDecision: makeDecision({ confidence: 0.95 }),
       evalSummary: {
         totalRecords: 100,
-        recordsByModel: { 'claude-sonnet-4-5-20250929': 90, 'gpt-5.4': 0, 'fresh-model-9000': 9 },
+        recordsByModel: { 'claude-sonnet-4-5-20250929': 90, 'gpt-5.4': 0, 'claude-sonnet-5': 9 },
         recordsByStage: { plan: 100, implementation: 100, review: 100 },
         recordsByModelStage: {
           'claude-sonnet-4-5-20250929': { plan: 90, implementation: 90, review: 90 },
-          // gpt-5.4 (no releasedAt) has FEWER records, but the recent model
-          // must win exploration priority
           'gpt-5.4': {},
-          'fresh-model-9000': { plan: 3, implementation: 3, review: 3 },
+          'claude-sonnet-5': { plan: 3, implementation: 3, review: 3 },
         },
       },
       config: { enabled: true, confidenceThreshold: 0.5, newModelChallengeCount: 5, minEvalRecordsPerStage: 1 },

@@ -27,8 +27,6 @@ function baseConfig() {
       openrouter: {
         enabled: true,
         apiKeyEnv: 'TEST_OPENROUTER_KEY',
-        models: ['glm-5.2'],
-        stages: ['planner', 'coder', 'reviewer'],
       },
     },
     nativeAgent: {
@@ -36,24 +34,14 @@ function baseConfig() {
         openrouter: {
           enabled: true,
           apiKeyEnv: 'TEST_OPENROUTER_KEY',
-          models: ['z-ai/glm-5.2'],
         },
       },
     },
     router: {
       defaultAgent: 'claude',
-      models: ['claude-sonnet-5', 'glm-5.2'],
-      availableModels: {
-        planner: ['glm-5.2'],
-        coder: ['glm-5.2'],
-        reviewer: ['glm-5.2'],
-      },
-      agentMap: {
-        'glm-5.2': 'claude-openrouter',
-      },
     },
     challenge: {
-      models: ['claude-sonnet-5', 'glm-5.2'],
+      enabled: true,
     },
   };
 }
@@ -175,13 +163,7 @@ describe('openrouter-doctor', () => {
   it('uses the global registry stage pools', () => {
     const repoDir = makeRepoDir();
     try {
-      writeConfig(repoDir, {
-        providers: {
-          openrouter: {
-            stages: ['coder'],
-          },
-        },
-      });
+      writeConfig(repoDir);
       writeOpenRouterCert(repoDir, 'z-ai/glm-5.2');
       const report = withEnv({ TEST_OPENROUTER_KEY: 'sk-test' }, () => diagnoseOpenRouter({ repoDir }));
       const glm = report.models.find((model) => model.id === 'glm-5.2');
@@ -195,26 +177,12 @@ describe('openrouter-doctor', () => {
   it('distinguishes raw provider IDs from aliases', () => {
     const repoDir = makeRepoDir();
     try {
-      writeConfig(repoDir, {
-        providers: {
-          openrouter: {
-            models: ['z-ai/glm-5.2'],
-          },
-        },
-        nativeAgent: {
-          providers: {
-            openrouter: {
-              models: ['z-ai/glm-5.2'],
-            },
-          },
-        },
-      });
+      writeConfig(repoDir);
       const report = withEnv({ TEST_OPENROUTER_KEY: 'sk-test' }, () => diagnoseOpenRouter({ repoDir }));
       const glm = report.models.find((model) => model.nativeProviderId === 'z-ai/glm-5.2');
       assert.ok(glm);
       assert.equal(glm.alias, 'glm-5.2');
-      assert.equal(glm.cells[0]?.primaryReason?.reason, 'MISSING_REGISTRY_ALIAS');
-      assert.match(glm.cells[0]?.primaryReason?.detail ?? '', /raw OpenRouter ID/);
+      assert.equal(glm.registryModelId, 'glm-5.2');
     } finally {
       cleanup(repoDir);
     }
@@ -237,21 +205,18 @@ describe('openrouter-doctor', () => {
     }
   });
 
-  it('reports agent fallback to codex for non-Codex models', () => {
+  it('does not derive agent fallback from repo-local maps', () => {
     const repoDir = makeRepoDir();
     try {
-      writeConfig(repoDir, {
-        router: {
-          agentMap: {
-            'glm-5.2': 'codex',
-          },
-        },
-      });
+      writeConfig(repoDir);
       writeOpenRouterCert(repoDir, 'z-ai/glm-5.2');
       const report = withEnv({ TEST_OPENROUTER_KEY: 'sk-test' }, () => diagnoseOpenRouter({ repoDir }));
-      const glm = report.models.find((model) => model.id === 'glm-5.2');
-      assert.ok(glm);
-      assert.equal(glm.cells.every((cell) => cell.primaryReason?.reason === 'AGENT_FALLBACK_TO_CODEX'), true);
+      assert.equal(
+        report.models.some((model) =>
+          model.cells.some((cell) => cell.primaryReason?.reason === 'AGENT_FALLBACK_TO_CODEX')
+        ),
+        false,
+      );
     } finally {
       cleanup(repoDir);
     }

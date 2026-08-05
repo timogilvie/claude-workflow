@@ -2342,8 +2342,6 @@ else
     "deepseek": {
       "enabled": true,
       "apiKeyEnv": "TEST_DEEPSEEK_KEY",
-      "models": ["deepseek-v4-pro"],
-      "stages": ["planner", "coder", "reviewer"],
       "effortLevel": "high"
     }
   }

@@ -48,7 +48,7 @@ const SUITE_VERSION = 'v-rollout';
 const FIXTURE_DIR = new URL('./fixtures', import.meta.url).pathname;
 
 function makeRepo(
-  modelRegistryModels: Record<string, Partial<ModelCapabilities>> = {},
+  _modelRegistryModels: Record<string, Partial<ModelCapabilities>> = {},
   options: { patchCodingEnabled?: boolean; nativeCodingLauncher?: boolean } = {},
 ): {
   repoDir: string;
@@ -59,7 +59,6 @@ function makeRepo(
   process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = join(repoDir, 'global-certifications');
   mkdirSync(join(repoDir, '.wavemill'), { recursive: true });
   writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
-    modelRegistry: { models: modelRegistryModels },
     ...(options.patchCodingEnabled
       ? { nativeAgent: { patchCoding: { enabled: true } } }
       : {}),

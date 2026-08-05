@@ -23,8 +23,7 @@ import { expandIssue } from '../shared/lib/issue-expander.ts';
 import { NativeExpansionUnavailableError } from '../shared/lib/native-expansion.ts';
 import { reviewEngineTestUtils, runReview } from '../shared/lib/review-engine.ts';
 import { routeWorkflow } from '../shared/lib/workflow-router.ts';
-import type { ModelCapabilitiesOverride, ModelRegistryConfig } from '../shared/lib/config.ts';
-import type { ModelRegistry } from '../shared/lib/model-registry.ts';
+import type { ModelCapabilities, ModelRegistry } from '../shared/lib/model-registry.ts';
 import type { ReviewContext } from '../shared/lib/review-context-gatherer.ts';
 
 const MODELS = [
@@ -71,7 +70,12 @@ const MODELS = [
 
 type ModelCase = typeof MODELS[number];
 
-function modelConfig(model: ModelCase): ModelCapabilitiesOverride {
+type LocalModelRegistryConfig = {
+  models?: Record<string, Partial<ModelCapabilities>>;
+  ladders?: ModelRegistry['ladders'];
+};
+
+function modelConfig(model: ModelCase): Partial<ModelCapabilities> {
   return {
     vendor: model.vendor,
     class: model.modelClass,
@@ -103,7 +107,7 @@ function modelConfig(model: ModelCase): ModelCapabilitiesOverride {
 function baseConfig(): Record<string, unknown> {
   const registryModels = Object.fromEntries(
     MODELS.map((model) => [model.rawId, modelConfig(model)]),
-  ) as ModelRegistryConfig['models'];
+  ) as LocalModelRegistryConfig['models'];
 
   return {
     configVersion: '1.4.1',
@@ -166,7 +170,7 @@ function writeConfig(repoDir: string, config: unknown): void {
 
 function getRegistry(repoDir: string): ModelRegistry {
   const config = JSON.parse(readFileSync(join(repoDir, '.wavemill-config.json'), 'utf-8')) as {
-    modelRegistry?: ModelRegistryConfig;
+    modelRegistry?: LocalModelRegistryConfig;
   };
   return {
     models: config.modelRegistry?.models ?? {},

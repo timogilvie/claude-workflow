@@ -24,8 +24,6 @@ function baseConfig(overrides: Record<string, unknown> = {}): Record<string, unk
       openrouter: {
         enabled: true,
         apiKeyEnv: 'OPENROUTER_API_KEY',
-        models: ['z-ai/glm-5.2'],
-        stages: ['planner', 'coder', 'reviewer'],
       },
     },
     nativeAgent: {
@@ -35,13 +33,7 @@ function baseConfig(overrides: Record<string, unknown> = {}): Record<string, unk
         openrouter: {
           enabled: true,
           apiKeyEnv: 'OPENROUTER_API_KEY',
-          models: ['glm-5.2'],
         },
-      },
-    },
-    router: {
-      agentMap: {
-        'glm-5.2': 'native-openrouter',
       },
     },
     ...overrides,
@@ -88,14 +80,12 @@ describe('validateNativeOpenRouterConfig', () => {
     }
   });
 
-  it('reports provider-stage mismatches with actionable config surface', () => {
+  it('reports disabled provider with actionable config surface', () => {
     const repoDir = makeRepo(baseConfig({
       providers: {
         openrouter: {
-          enabled: true,
+          enabled: false,
           apiKeyEnv: 'OPENROUTER_API_KEY',
-          models: ['glm-5.2'],
-          stages: ['coder'],
         },
       },
     }));
@@ -107,34 +97,26 @@ describe('validateNativeOpenRouterConfig', () => {
       });
 
       assert.equal(result.ok, false);
-      assert.equal(result.blockers[0]?.code, 'provider-stage-mismatch');
-      assert.equal(result.blockers[0]?.surface, 'providers.openrouter.stages');
-      assert.match(result.blockers[0]?.detail ?? '', /does not include planner/);
+      assert.equal(result.blockers[0]?.code, 'provider-disabled');
+      assert.equal(result.blockers[0]?.surface, 'providers.openrouter.enabled');
     } finally {
       cleanup(repoDir);
     }
   });
 
-  it('reports challenge/router agent-map mismatches before launch', () => {
-    const repoDir = makeRepo(baseConfig({
-      router: {
-        agentMap: {
-          'glm-5.2': 'codex',
-        },
-      },
-    }));
+  it('reports global projection misses before launch', () => {
+    const repoDir = makeRepo(baseConfig());
     try {
       const result = validateNativeOpenRouterConfig({
         repoDir,
-        model: 'z-ai/glm-5.2',
-        phase: 'review',
+        model: 'qwen-3-coder',
+        phase: 'planning',
       });
 
       assert.equal(result.ok, false);
-      const mismatch = result.blockers.find((blocker) => blocker.code === 'agent-map-mismatch');
-      assert.ok(mismatch, 'expected an agent-map mismatch blocker');
-      assert.equal(mismatch?.surface, 'router.agentMap.glm-5.2');
-      assert.match(mismatch?.detail ?? '', /maps glm-5.2 to codex/);
+      const mismatch = result.blockers.find((blocker) => blocker.code === 'global-projection-missing');
+      assert.ok(mismatch, 'expected a global projection blocker');
+      assert.equal(mismatch?.surface, 'globalEffectiveModels.planning');
     } finally {
       cleanup(repoDir);
     }

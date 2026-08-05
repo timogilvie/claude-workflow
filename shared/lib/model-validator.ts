@@ -123,24 +123,16 @@ export function getKnownModels(repoDir?: string): KnownModelsResult {
     modelSet.add(modelId);
   }
 
-  // Add models from agentMap
-  if (config.router?.agentMap) {
-    for (const modelId of Object.keys(config.router.agentMap)) {
-      modelSet.add(modelId);
-    }
-  }
-
   const all = Array.from(modelSet)
     .filter((modelId) => !isDeepSeekLikeModelId(modelId) || isKnownModelId(registry, modelId))
     .sort();
 
   // Group by agent for display
   const byAgent = new Map<string, string[]>();
-  const agentMap = config.router?.agentMap || {};
   const defaultAgent = config.router?.defaultAgent || 'claude';
 
   for (const modelId of all) {
-    const resolution = tryResolveAgent(modelId, agentMap, defaultAgent, repoDir, 'coding');
+    const resolution = tryResolveAgent(modelId, {}, defaultAgent, repoDir, 'coding');
     const agent = resolution.ok ? resolution.agent : 'unroutable';
     const existing = byAgent.get(agent) || [];
     existing.push(modelId);
@@ -258,8 +250,8 @@ export function validateModelOrThrow(modelId: string, repoDir?: string): void {
   let message = `Error: Unknown model "${modelId}"\n\n`;
 
   if (all.length === 0) {
-    message += 'No models found in .wavemill-config.json\n';
-    message += 'Add models to "eval.pricing" or "router.agentMap" sections.\n';
+    message += 'No models found in the global effective-model projection or eval pricing table.\n';
+    message += 'Add models through the global v2 catalog/effective-model projection.\n';
   } else {
     message += 'Known models:\n';
 

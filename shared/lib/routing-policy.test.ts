@@ -66,17 +66,6 @@ function baseConfig(mode: 'auto' | 'heuristic' = 'auto') {
       defaultAgent: 'claude',
       minRecords: 4,
       minModels: 2,
-      defaultModel: 'claude-sonnet-4-5-20250929',
-      agentMap: {
-        'claude-opus-4-6': 'claude',
-        'claude-opus-4-7': 'claude',
-        'claude-sonnet-5': 'claude',
-        'claude-sonnet-4-5-20250929': 'claude',
-        'claude-haiku-4-5-20251001': 'claude',
-        'gpt-5.3-codex': 'codex',
-        'gpt-5.4': 'codex',
-        'gpt-5.5': 'codex',
-      },
     },
     eval: {
       pricing: {
