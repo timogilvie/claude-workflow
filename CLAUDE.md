@@ -117,21 +117,23 @@ Tests only run if they are registered. Adding a test file is not enough — regi
 | Test type | Register in |
 |-----------|-------------|
 | Bash test (`tests/*.test.sh`) | `TESTS=( ... )` array in `tests/run-shell-suite.sh` |
-| `node --test` unit test | `test:node-test` in `package.json` |
+| `node --test` unit test | `TESTS=( ... )` array in `tests/run-unit-tests.sh` |
 | Custom-harness test (`process.exit(1)` style) | `for f in ...` loop in `tests/run-custom-tests.sh` |
 | Any new `.sh` file | Also add to the syntax-check list in `tests/check-shell.sh` |
 
-Shell tests are **no longer listed in `package.json`**. `test:shell` delegates to `tests/run-shell-suite.sh`, which supports sharding:
+Shell and unit tests are **no longer listed in `package.json`**. Both delegate to a sharding runner:
 
 ```bash
-bash tests/run-shell-suite.sh              # all tests
+bash tests/run-shell-suite.sh              # all shell tests
 bash tests/run-shell-suite.sh --shard 2/4  # CI shard 2 of 4
-bash tests/run-shell-suite.sh --list       # print selection without running
+bash tests/run-unit-tests.sh               # all unit tests
+bash tests/run-unit-tests.sh --shard 2/3   # CI shard 2 of 3
+bash tests/run-unit-tests.sh --list        # print selection without running
 ```
 
-CI runs the shell suite as 4 parallel shards, assigned round-robin. Adding a test to the array is all that is needed — shard assignment is automatic.
+Both assign shards **round-robin, not in contiguous blocks** — cost is heavily skewed toward a few files, and those cluster together in the lists, so blocks would pile them into one shard. Adding a test to the array is all that is needed; shard assignment is automatic.
 
-**CI job layout** (`.github/workflows/ci.yml`): `preflight`, `shell` (×4 shards), `unit`, `custom`, `smoke`, and `certification` run in parallel. The `shell-and-unit` job aggregates them into the single status check named **"Shell and Unit Tests"**, which is a required check on `main` — do not rename it without updating branch protection.
+**CI job layout** (`.github/workflows/ci.yml`): `preflight`, `shell` (×4 shards), `unit` (×3 shards), `custom`, `smoke`, and `certification` run in parallel. The `shell-and-unit` job aggregates them into the single status check named **"Shell and Unit Tests"**, which is a required check on `main` — do not rename it without updating branch protection.
 
 ## Prompt Locations
 
