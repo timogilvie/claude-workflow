@@ -659,6 +659,109 @@ describe('CodexSessionAdapter', () => {
       cleanup();
     }
   });
+
+  it('discovers sessions correctly with large payloads after metadata', () => {
+    const { sessionsDir, cleanup } = setupCodexSessionDir();
+    try {
+      const worktreePath = '/test/worktree';
+      const branch = 'task/test';
+
+      // Create a large payload (10MB) to verify bounded read doesn't break on large files
+      const largePayload = JSON.stringify({
+        type: 'dummy_payload',
+        data: 'x'.repeat(10 * 1024 * 1024), // 10MB of dummy data
+      });
+
+      const sessionWithLargePayload = [
+        codexSessionMeta({ cwd: worktreePath, branch }),
+        codexTurnContext('gpt-5.3-codex'),
+        codexTokenCount({ inputTokens: 5000, cachedInputTokens: 3000, outputTokens: 500, reasoningOutputTokens: 100 }),
+        largePayload,
+      ].join('\n');
+
+      writeFileSync(join(sessionsDir, 'large-session.jsonl'), sessionWithLargePayload);
+
+      const adapter = new CodexSessionAdapter();
+      const result = adapter.scan({ worktreePath, branchName: branch });
+
+      // Should still find and parse the session correctly
+      assert.ok(result);
+      assert.equal(result.sessionCount, 1);
+
+      const model = result.models['gpt-5.3-codex'];
+      assert.ok(model);
+      assert.equal(model.inputTokens, 5000);
+      assert.equal(model.cacheReadTokens, 3000);
+      assert.equal(model.outputTokens, 600); // 500 + 100 reasoning
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('discovers sessions by branch matching with large payloads', () => {
+    const { sessionsDir, cleanup } = setupCodexSessionDir();
+    try {
+      const branch = 'task/my-feature';
+
+      // Create a large payload to ensure it doesn't interfere with branch matching
+      const largePayload = JSON.stringify({
+        type: 'dummy_payload',
+        data: 'y'.repeat(10 * 1024 * 1024), // 10MB of dummy data
+      });
+
+      const sessionWithLargePayload = [
+        codexSessionMeta({ cwd: '/different/cwd', branch }),
+        codexTurnContext('gpt-5.3-codex'),
+        codexTokenCount({ inputTokens: 2000, cachedInputTokens: 1000, outputTokens: 200, reasoningOutputTokens: 50 }),
+        largePayload,
+      ].join('\n');
+
+      writeFileSync(join(sessionsDir, 'large-branch-match.jsonl'), sessionWithLargePayload);
+
+      const adapter = new CodexSessionAdapter();
+      const result = adapter.scan({ worktreePath: '/some/other/path', branchName: branch });
+
+      // Should find it by branch match even though cwd differs and file is large
+      assert.ok(result);
+      assert.equal(result.sessionCount, 1);
+
+      const model = result.models['gpt-5.3-codex'];
+      assert.ok(model);
+      assert.equal(model.inputTokens, 2000);
+      assert.equal(model.cacheReadTokens, 1000);
+      assert.equal(model.outputTokens, 250); // 200 + 50 reasoning
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('does not match non-matching sessions even with large payloads', () => {
+    const { sessionsDir, cleanup } = setupCodexSessionDir();
+    try {
+      // Create a large payload
+      const largePayload = JSON.stringify({
+        type: 'dummy_payload',
+        data: 'z'.repeat(10 * 1024 * 1024), // 10MB of dummy data
+      });
+
+      const sessionWithLargePayload = [
+        codexSessionMeta({ cwd: '/other/cwd', branch: 'task/other-branch' }),
+        codexTurnContext('gpt-5.3-codex'),
+        codexTokenCount({ inputTokens: 500, cachedInputTokens: 400, outputTokens: 100, reasoningOutputTokens: 20 }),
+        largePayload,
+      ].join('\n');
+
+      writeFileSync(join(sessionsDir, 'large-non-match.jsonl'), sessionWithLargePayload);
+
+      const adapter = new CodexSessionAdapter();
+      const result = adapter.scan({ worktreePath: '/my/worktree', branchName: 'task/my-feature' });
+
+      // Should not match since neither cwd nor branch match
+      assert.equal(result, null);
+    } finally {
+      cleanup();
+    }
+  });
 });
 
 describe('NativeSessionAdapter', () => {

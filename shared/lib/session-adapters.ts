@@ -10,7 +10,7 @@
  * @module session-adapters
  */
 
-import { readdirSync, readFileSync, existsSync } from 'node:fs';
+import { readdirSync, readFileSync, existsSync, openSync, readSync, closeSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { readJsonlFile } from './jsonl-utils.ts';
@@ -212,6 +212,48 @@ export class ClaudeSessionAdapter implements SessionAdapter {
 }
 
 // ────────────────────────────────────────────────────────────────
+// Codex adapter helpers
+// ────────────────────────────────────────────────────────────────
+
+/**
+ * Read only the first line of a file with a bounded read.
+ * Returns null if the file cannot be read, is empty, or doesn't contain a newline within the prefix.
+ *
+ * This avoids reading entire files (which can be 1GB+) just to inspect the first line.
+ * A bounded read of 8KB is sufficient for session_meta records.
+ *
+ * @param filePath Path to the file
+ * @param maxBytes Maximum bytes to read (default 8192 = 8KB)
+ * @returns First line as string, or null if not readable
+ */
+function readFirstLineOnly(filePath: string, maxBytes = 8192): string | null {
+  let fd: number | null = null;
+  try {
+    fd = openSync(filePath, 'r');
+    const buffer = Buffer.alloc(maxBytes);
+    const bytesRead = readSync(fd, buffer, 0, maxBytes);
+    closeSync(fd);
+    fd = null;
+
+    if (bytesRead === 0) return null;
+
+    const content = buffer.toString('utf-8', 0, bytesRead);
+    const firstNewline = content.indexOf('\n');
+    return firstNewline >= 0 ? content.slice(0, firstNewline) : content;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Ignore close errors
+      }
+    }
+  }
+}
+
+// ────────────────────────────────────────────────────────────────
 // Codex adapter
 // ────────────────────────────────────────────────────────────────
 
@@ -311,10 +353,8 @@ export class CodexSessionAdapter implements SessionAdapter {
 
     this.walkJsonlFiles(sessionsRoot, (filePath) => {
       try {
-        const content = readFileSync(filePath, 'utf-8');
-        const firstNewline = content.indexOf('\n');
-        const firstLine = firstNewline >= 0 ? content.slice(0, firstNewline) : content;
-        if (!firstLine.trim()) return;
+        const firstLine = readFirstLineOnly(filePath);
+        if (!firstLine || !firstLine.trim()) return;
 
         const meta = JSON.parse(firstLine);
         if (meta.type !== 'session_meta') return;
