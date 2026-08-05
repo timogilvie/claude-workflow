@@ -20,7 +20,6 @@ const moduleDir = dirname(fileURLToPath(import.meta.url));
 const fixtureDir = join(moduleDir, '..', 'shared', 'fixtures', 'openrouter-responses', 'success');
 const OPENROUTER_URL_PATTERN = /https:\/\/openrouter\.ai\/\S+/g;
 export const WATCHLIST_SMOKE_MODELS = [
-  'claude-fable-5',
   'gpt-4.1',
   'deepseek-coder-v2',
   'qwen-3-235b',

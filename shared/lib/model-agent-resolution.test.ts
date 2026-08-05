@@ -79,6 +79,28 @@ describe('resolveModelAgent', () => {
     assert.deepEqual(result, { ok: true, agent: 'claude' });
   });
 
+  it('keeps Anthropic models on the Claude harness despite a native override', () => {
+    const registry = makeRegistry('anthropic-misconfigured', {
+      vendor: 'anthropic',
+      agent: 'native-openrouter',
+      nativeCapability: {
+        nativeProvider: 'openrouter',
+        piTransportKind: 'openai-completions',
+        readOnlyNative: 'certified',
+        certification: {
+          maxCertifiedPhase: 'workflow',
+          certifiedAt: '2099-01-01T00:00:00.000Z',
+          certificationSuiteVersion: 'v1',
+        },
+      },
+    });
+
+    assert.deepEqual(
+      resolveModelAgent({ model: 'anthropic-misconfigured', phase: 'planning', registry }),
+      { ok: true, agent: 'claude' },
+    );
+  });
+
   it('resolves hosted gpt models to codex', () => {
     const result = resolveModelAgent({
       model: 'gpt-5.5',
