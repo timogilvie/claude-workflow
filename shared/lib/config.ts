@@ -10,7 +10,7 @@
  * @module config
  */
 
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import { errorMessage } from './error-utils.ts';
@@ -832,7 +832,17 @@ type ValidatorFunction = ((data: unknown) => boolean) & {
   errors?: ValidationError[] | null;
 };
 
-const compiledValidators = new Map<string, ValidatorFunction>();
+/**
+ * A compiled validator plus the identity of the schema file it was compiled
+ * from, so a schema that changes on disk is detected rather than served stale.
+ */
+type CachedValidator = {
+  validator: ValidatorFunction;
+  mtimeMs: number;
+  size: number;
+};
+
+const compiledValidators = new Map<string, CachedValidator>();
 let validatorDisabledReason: string | null = null;
 let didWarnValidatorDisabled = false;
 
@@ -878,6 +888,19 @@ function removedModelConfigMessage(path: string): string | null {
   return null;
 }
 
+/**
+ * Identity of a schema file, used to detect on-disk changes.
+ * Returns null if the file cannot be stat'd, which forces a recompile.
+ */
+function schemaFingerprint(schemaPath: string): { mtimeMs: number; size: number } | null {
+  try {
+    const stats = statSync(schemaPath);
+    return { mtimeMs: stats.mtimeMs, size: stats.size };
+  } catch {
+    return null;
+  }
+}
+
 function warnValidatorDisabled(reason: string): void {
   if (didWarnValidatorDisabled) {
     return;
@@ -915,9 +938,19 @@ function getValidator(repoDir?: string): ValidatorFunction | null {
     ? worktreeSchemaPath
     : canonicalSchemaPath;
 
-  const cachedValidator = compiledValidators.get(schemaPath);
-  if (cachedValidator) {
-    return cachedValidator;
+  // Compiling this schema costs ~400ms, so a compiled validator is reused for
+  // as long as the underlying file is unchanged. The fingerprint check keeps a
+  // worktree whose schema changed on disk (git checkout, test fixture) from
+  // being validated against a stale validator.
+  const fingerprint = schemaFingerprint(schemaPath);
+  const cached = compiledValidators.get(schemaPath);
+  if (
+    cached &&
+    fingerprint &&
+    cached.mtimeMs === fingerprint.mtimeMs &&
+    cached.size === fingerprint.size
+  ) {
+    return cached.validator;
   }
 
   if (!existsSync(schemaPath)) {
@@ -958,7 +991,18 @@ function getValidator(repoDir?: string): ValidatorFunction | null {
   });
 
   const validator = ajv.compile(schema);
-  compiledValidators.set(schemaPath, validator);
+  // Store the fingerprint taken *before* the read, deliberately. If the file
+  // changed between that stat and the read, this stale-looking fingerprint
+  // forces a recompile on the next call. Re-stat'ing here instead would record
+  // the new file's identity against a validator compiled from the old content,
+  // and the staleness would never be detected.
+  if (fingerprint) {
+    compiledValidators.set(schemaPath, {
+      validator,
+      mtimeMs: fingerprint.mtimeMs,
+      size: fingerprint.size,
+    });
+  }
   return validator;
 }
 
@@ -1250,7 +1294,10 @@ export function clearConfigCache(repoDir?: string): void {
   }
 
   // Reset validator state for deterministic tests and long-lived processes.
-  compiledValidators.clear();
+  // The compiled validators themselves are deliberately kept: they are
+  // fingerprinted against their schema file in getValidator(), so a changed
+  // schema is picked up automatically. Clearing them here forced a ~400ms
+  // recompile on every call, which dominated test runtime.
   validatorDisabledReason = null;
   didWarnValidatorDisabled = false;
 }

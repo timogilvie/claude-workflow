@@ -282,6 +282,48 @@ test('uses the schema checked out with the target worktree', () => {
   }
 });
 
+// The compiled validator is cached across clearConfigCache() calls, so it must
+// notice when the schema file at a given path is replaced -- otherwise a
+// worktree that changed on disk would be validated against a stale validator.
+test('recompiles the validator when the schema at the same path changes', () => {
+  const tmp = makeTempRepo();
+  try {
+    const baseSchema = JSON.parse(
+      readFileSync(join(process.cwd(), 'wavemill-config.schema.json'), 'utf-8')
+    );
+    const schemaPath = join(tmp, 'wavemill-config.schema.json');
+
+    // First schema rejects the property outright.
+    const strict = JSON.parse(JSON.stringify(baseSchema));
+    strict.additionalProperties = false;
+    writeFileSync(schemaPath, JSON.stringify(strict));
+    writeFileSync(
+      join(tmp, '.wavemill-config.json'),
+      JSON.stringify({ totallyUnknownKey: true })
+    );
+    clearConfigCache();
+    assert.throws(
+      () => loadWavemillConfig(tmp),
+      /validation failed/i,
+      'strict schema should reject the unknown key'
+    );
+
+    // Replace the schema at the SAME path with one that permits it.
+    const permissive = JSON.parse(JSON.stringify(baseSchema));
+    permissive.additionalProperties = true;
+    writeFileSync(schemaPath, JSON.stringify(permissive));
+    clearConfigCache();
+
+    // A stale cached validator would still reject here.
+    assert.doesNotThrow(
+      () => loadWavemillConfig(tmp),
+      'validator should recompile after the schema file changes'
+    );
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
 test('eval prompt size config loads through getEvalConfig', () => {
   const tmp = makeTempRepo();
   try {
