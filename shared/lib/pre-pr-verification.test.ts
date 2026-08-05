@@ -4,6 +4,7 @@
  */
 
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -12,6 +13,7 @@ import {
   readAndValidateArtifact,
   extractBoundedLogExcerpt,
   getRemediationGuidance,
+  fetchAndResolveBase,
 } from './pre-pr-verification.ts';
 
 // ────────────────────────────────────────────────────────────────
@@ -31,6 +33,43 @@ function test(name: string, fn: () => void) {
     console.log(`  FAIL  ${name}`);
     console.log(`        ${(err as Error).message}`);
   }
+}
+
+function git(cwd: string, args: string[]): string {
+  return execFileSync('git', args, {
+    cwd,
+    encoding: 'utf-8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim();
+}
+
+function writeAndCommit(repo: string, fileName: string, content: string, message: string): string {
+  writeFileSync(join(repo, fileName), content, 'utf-8');
+  git(repo, ['add', fileName]);
+  git(repo, ['commit', '-m', message]);
+  return git(repo, ['rev-parse', 'HEAD']);
+}
+
+function createVerificationRepo(): { tmpDir: string; repoDir: string; remoteDir: string; baseSha: string; headSha: string } {
+  const tmpDir = mkdtempSync(join('/tmp', 'verify-git-test-'));
+  const remoteDir = join(tmpDir, 'origin.git');
+  const repoDir = join(tmpDir, 'work');
+
+  execFileSync('git', ['init', '--bare', remoteDir], { encoding: 'utf-8' });
+  execFileSync('git', ['init', repoDir], { encoding: 'utf-8' });
+  git(repoDir, ['config', 'user.email', 'test@example.com']);
+  git(repoDir, ['config', 'user.name', 'Verification Test']);
+  git(repoDir, ['remote', 'add', 'origin', remoteDir]);
+
+  writeAndCommit(repoDir, 'base.txt', 'base\n', 'base');
+  git(repoDir, ['branch', '-M', 'auto/integration']);
+  const baseSha = git(repoDir, ['rev-parse', 'HEAD']);
+  git(repoDir, ['push', '-u', 'origin', 'auto/integration']);
+
+  git(repoDir, ['switch', '-c', 'task/test']);
+  const headSha = writeAndCommit(repoDir, 'feature.txt', 'feature\n', 'feature');
+
+  return { tmpDir, repoDir, remoteDir, baseSha, headSha };
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -241,6 +280,67 @@ test('getRemediationGuidance: formats failure message', () => {
   assert(guidance.includes('Command #1 failed'));
   assert(guidance.includes('npm run lint'));
   assert(guidance.includes('Linting errors found'));
+});
+
+test('fetchAndResolveBase: fetches remote base tip before resolving', () => {
+  const { tmpDir, repoDir, baseSha } = createVerificationRepo();
+  try {
+    const result = fetchAndResolveBase(repoDir, 'auto/integration');
+
+    assert(!('kind' in result));
+    assert.equal(result.baseSha, baseSha);
+    assert.equal(result.fetchDiagnostics.upstreamBranch, 'auto/integration');
+    assert.equal(result.fetchDiagnostics.fetchedRef, 'origin/auto/integration');
+    assert(result.fetchedAt <= Date.now());
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('fetchAndResolveBase: rejects a branch that does not include refreshed base', () => {
+  const { tmpDir, repoDir } = createVerificationRepo();
+  try {
+    git(repoDir, ['switch', 'auto/integration']);
+    writeAndCommit(repoDir, 'base.txt', 'base\nadvanced\n', 'advance base');
+    git(repoDir, ['push', 'origin', 'auto/integration']);
+    git(repoDir, ['switch', 'task/test']);
+
+    const result = fetchAndResolveBase(repoDir, 'auto/integration');
+
+    assert('kind' in result);
+    assert.equal(result.kind, 'resolve-failed');
+    assert(result.diagnostics.includes('HEAD is not a descendant'));
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('fetchAndResolveBase: reports unavailable base branch clearly', () => {
+  const { tmpDir, repoDir } = createVerificationRepo();
+  try {
+    const result = fetchAndResolveBase(repoDir, 'does/not/exist');
+
+    assert('kind' in result);
+    assert.equal(result.kind, 'branch-unavailable');
+    assert(result.diagnostics.includes("Base branch 'does/not/exist' not found"));
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('fetchAndResolveBase: blocks when origin cannot be fetched', () => {
+  const { tmpDir, repoDir, remoteDir } = createVerificationRepo();
+  try {
+    rmSync(remoteDir, { recursive: true, force: true });
+
+    const result = fetchAndResolveBase(repoDir, 'auto/integration');
+
+    assert('kind' in result);
+    assert.equal(result.kind, 'fetch-failed');
+    assert(result.diagnostics.includes("base branch 'auto/integration'"));
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
 });
 
 // ────────────────────────────────────────────────────────────────

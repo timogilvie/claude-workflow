@@ -62,6 +62,7 @@ import {
   getRuntimeResourceSelectionConfig,
   getEffectiveModelExclusions,
   getPrePrVerificationConfig,
+  getObserverLinearConfig,
 } from './config.ts';
 
 // ────────────────────────────────────────────────────────────────
@@ -3583,6 +3584,32 @@ test('pre-PR verification: loads full configuration', () => {
           mode: 'warn',
           warnAfterDays: 14,
         },
+        remoteOnlyExceptions: [
+          {
+            checkName: 'Security Scan',
+            reason: 'Requires org secrets unavailable locally',
+            acknowledgedBy: 'security@example.com',
+            acknowledgedAt: '2026-08-04T12:00:00Z',
+          },
+        ],
+        driftValidation: {
+          enabled: true,
+          blockOnUnmapped: true,
+          warnOnDrift: true,
+          autoAcknowledgeThreshold: 0.9,
+        },
+        mappingAcknowledgements: {
+          checks: {
+            'Lint Check': 'npm run lint',
+            'Unit Tests': {
+              localCommand: 'npm test',
+              workflowPath: '.github/workflows/ci.yml',
+              jobName: 'unit',
+            },
+          },
+          acknowledgedBy: 'maintainer@example.com',
+          acknowledgedAt: '2026-08-04T12:00:00Z',
+        },
       },
     }));
 
@@ -3597,6 +3624,16 @@ test('pre-PR verification: loads full configuration', () => {
     assert.equal(config.staleTtlSeconds, 7200);
     assert.equal(config.compatibility?.mode, 'warn');
     assert.equal(config.compatibility?.warnAfterDays, 14);
+    assert.equal(config.remoteOnlyExceptions?.[0]?.checkName, 'Security Scan');
+    assert.equal(config.remoteOnlyExceptions?.[0]?.reason, 'Requires org secrets unavailable locally');
+    assert.equal(config.driftValidation?.blockOnUnmapped, true);
+    assert.equal(config.driftValidation?.autoAcknowledgeThreshold, 0.9);
+    assert.equal(config.mappingAcknowledgements?.checks?.['Lint Check'], 'npm run lint');
+    assert.deepEqual(config.mappingAcknowledgements?.checks?.['Unit Tests'], {
+      localCommand: 'npm test',
+      workflowPath: '.github/workflows/ci.yml',
+      jobName: 'unit',
+    });
   } finally {
     cleanUp(tmp);
   }
@@ -3714,6 +3751,54 @@ test('pre-PR verification: rejects invalid compatibility mode', () => {
   }
 });
 
+test('pre-PR verification: rejects remote-only exception without rationale', () => {
+  if (!hasAjv) return;
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      prePrVerification: {
+        enabled: true,
+        recipe: {
+          commands: ['npm test'],
+        },
+        remoteOnlyExceptions: [
+          {
+            checkName: 'Security Scan',
+          },
+        ],
+      },
+    }));
+
+    assert.throws(() => loadWavemillConfig(tmp), /validation failed|reason/);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('pre-PR verification: rejects drift threshold outside confidence range', () => {
+  if (!hasAjv) return;
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      prePrVerification: {
+        enabled: true,
+        recipe: {
+          commands: ['npm test'],
+        },
+        driftValidation: {
+          autoAcknowledgeThreshold: 1.5,
+        },
+      },
+    }));
+
+    assert.throws(() => loadWavemillConfig(tmp), /validation failed|autoAcknowledgeThreshold/);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
 test('pre-PR verification: rejects timeoutSeconds below minimum', () => {
   if (!hasAjv) return;
   const tmp = makeTempRepo();
@@ -3806,6 +3891,64 @@ test('pre-PR verification: backward compatible with legacy configs', () => {
     assert.ok(config.verification?.enabled);
     assert.deepEqual(getPrePrVerificationConfig(tmp), {});
   } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('observer linear config defaults disabled with safe policy defaults', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    const config = getObserverLinearConfig(tmp);
+    assert.equal(config.enabled, false);
+    assert.equal(config.retryQueuePath, '.wavemill/registry/linear-incident-queue.jsonl');
+    assert.equal(config.policies.product_defect.strategy, 'create');
+    assert.equal(config.policies.model_task_harness_outcome.strategy, 'no_create');
+    assert.deepEqual(config.policies.model_task_harness_outcome.correlateIssueIds, ['HOK-2593']);
+    assert.equal(config.redaction.enabled, true);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('observer linear config normalizes partial policies and env project override', () => {
+  const tmp = makeTempRepo();
+  const previousProject = process.env.WAVEMILL_OBSERVER_LINEAR_PROJECT;
+  const previousEnabled = process.env.WAVEMILL_OBSERVER_LINEAR_ENABLED;
+  try {
+    clearConfigCache();
+    process.env.WAVEMILL_OBSERVER_LINEAR_PROJECT = 'Env Project';
+    process.env.WAVEMILL_OBSERVER_LINEAR_ENABLED = 'true';
+    writeConfig(tmp, JSON.stringify({
+      observer: {
+        linear: {
+          enabled: false,
+          team: 'HOK',
+          policies: {
+            external_transient_dependency: {
+              strategy: 'threshold',
+              threshold: 5,
+            },
+          },
+          redaction: {
+            patterns: ['custom_secret'],
+          },
+        },
+      },
+    }));
+    const config = getObserverLinearConfig(tmp);
+    assert.equal(config.enabled, true);
+    assert.equal(config.project, 'Env Project');
+    assert.equal(config.team, 'HOK');
+    assert.equal(config.policies.external_transient_dependency.threshold, 5);
+    assert.equal(config.policies.product_defect.strategy, 'create');
+    assert.deepEqual(config.redaction.patterns, ['custom_secret']);
+    assert.equal(config.redaction.redactPaths, true);
+  } finally {
+    if (previousProject === undefined) delete process.env.WAVEMILL_OBSERVER_LINEAR_PROJECT;
+    else process.env.WAVEMILL_OBSERVER_LINEAR_PROJECT = previousProject;
+    if (previousEnabled === undefined) delete process.env.WAVEMILL_OBSERVER_LINEAR_ENABLED;
+    else process.env.WAVEMILL_OBSERVER_LINEAR_ENABLED = previousEnabled;
     cleanUp(tmp);
   }
 });

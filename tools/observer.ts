@@ -5,10 +5,12 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mutateJsonState } from '../shared/lib/state-mutex.ts';
-import { getIncidentConfig } from '../shared/lib/config.ts';
+import { getIncidentConfig, getObserverLinearConfig, type ObserverLinearConfig } from '../shared/lib/config.ts';
 import { detectIncidentsForTask } from '../shared/lib/wavemill-incident-detector.ts';
 import { IncidentStore } from '../shared/lib/wavemill-incident-store.ts';
 import type { IncidentRecord } from '../shared/lib/wavemill-incident-model.ts';
+import { syncIncident, type SyncResult } from '../shared/lib/incident-to-linear-synchronizer.ts';
+import { drainIncidentQueue, enqueueIncidentSync } from '../shared/lib/incident-linear-retry-queue.ts';
 
 type Severity = 'urgent' | 'high' | 'medium' | 'low';
 type Category = 'stuck' | 'crash' | 'warning' | 'ux' | 'operational';
@@ -22,7 +24,11 @@ interface ObserverOptions {
   staleMinutes: number;
   hungMinutes: number;
   fileLinear: boolean;
+  fileIncidents: boolean;
   dryRun: boolean;
+  incidentsDryRun: boolean;
+  incidentsReplay?: string;
+  incidentsPolicy?: string;
   linearTeam?: string;
   linearProject?: string;
   linearLabel?: string;
@@ -108,6 +114,21 @@ interface ObserverSnapshot {
   repos: RepoSnapshot[];
   findings: Finding[];
   incidents?: IncidentRecord[];
+  incidentSync?: IncidentSyncSnapshot;
+}
+
+interface IncidentSyncSnapshot {
+  totalProcessed: number;
+  created: number;
+  updated: number;
+  failed: number;
+  skipped: number;
+  queued: number;
+  retryProcessed: number;
+  retrySucceeded: number;
+  retryFailed: number;
+  results: SyncResult[];
+  errors: Array<{ fingerprint: string; action: string; reason: string; nextRetry?: string }>;
 }
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -127,6 +148,12 @@ Options:
   --interval <seconds>   Loop interval (default: ${DEFAULT_INTERVAL_SECONDS})
   --json                 Emit JSON snapshots
   --file-linear          Create Linear issues for high-confidence findings
+  --file-incidents       Create/update Linear issues for confirmed deduplicated incidents
+  --incidents-dry-run    Preview incident Linear actions without writes
+  --incidents-replay <fingerprint>
+                         Re-sync one incident fingerprint and bypass update cooldown
+  --incidents-policy <json>
+                         Override observer.linear.policies for this run
   --linear-team <key>    Linear team key/name/id for filed issues
   --linear-project <id>  Optional Linear project id/name for filed issues
   --linear-label <name>  Optional Linear label name to attach
@@ -153,7 +180,9 @@ export function parseArgs(argv: string[]): ObserverOptions {
     staleMinutes: DEFAULT_STALE_MINUTES,
     hungMinutes: DEFAULT_HUNG_MINUTES,
     fileLinear: false,
+    fileIncidents: false,
     dryRun: false,
+    incidentsDryRun: false,
     maxLogLines: 240,
     printPrompt: false,
     serviceMode: process.env.WAVEMILL_OBSERVER_SERVICE === '1',
@@ -184,6 +213,23 @@ export function parseArgs(argv: string[]): ObserverOptions {
       options.json = true;
     } else if (arg === '--file-linear') {
       options.fileLinear = true;
+    } else if (arg === '--file-incidents') {
+      options.fileIncidents = true;
+    } else if (arg === '--incidents-dry-run') {
+      options.incidentsDryRun = true;
+      options.fileIncidents = true;
+    } else if (arg === '--incidents-replay') {
+      options.incidentsReplay = next();
+      options.fileIncidents = true;
+    } else if (arg.startsWith('--incidents-replay=')) {
+      options.incidentsReplay = arg.slice('--incidents-replay='.length);
+      options.fileIncidents = true;
+    } else if (arg === '--incidents-policy') {
+      options.incidentsPolicy = next();
+      options.fileIncidents = true;
+    } else if (arg.startsWith('--incidents-policy=')) {
+      options.incidentsPolicy = arg.slice('--incidents-policy='.length);
+      options.fileIncidents = true;
     } else if (arg === '--dry-run') {
       options.dryRun = true;
     } else if (arg === '--print-prompt') {
@@ -929,6 +975,134 @@ function dedupeIncidents(incidents: IncidentRecord[]): IncidentRecord[] {
   return [...byFingerprint.values()].sort((a, b) => Date.parse(b.lastObservedAt) - Date.parse(a.lastObservedAt));
 }
 
+function mergeObserverLinearConfig(config: ObserverLinearConfig, options: ObserverOptions): ObserverLinearConfig {
+  let policies = config.policies;
+  if (options.incidentsPolicy) {
+    const parsed = JSON.parse(options.incidentsPolicy) as Partial<ObserverLinearConfig['policies']>;
+    policies = {
+      product_defect: { ...policies.product_defect, ...(parsed.product_defect ?? {}) },
+      model_task_harness_outcome: { ...policies.model_task_harness_outcome, ...(parsed.model_task_harness_outcome ?? {}) },
+      external_transient_dependency: { ...policies.external_transient_dependency, ...(parsed.external_transient_dependency ?? {}) },
+      configuration_operator_condition: { ...policies.configuration_operator_condition, ...(parsed.configuration_operator_condition ?? {}) },
+      stale_orphaned_state: { ...policies.stale_orphaned_state, ...(parsed.stale_orphaned_state ?? {}) },
+    };
+  }
+  return {
+    ...config,
+    enabled: config.enabled,
+    detectionOnly: config.detectionOnly || options.incidentsDryRun,
+    project: options.linearProject ?? config.project,
+    team: options.linearTeam ?? config.team,
+    label: options.linearLabel ?? config.label,
+    policies,
+  };
+}
+
+function emptyIncidentSyncSnapshot(): IncidentSyncSnapshot {
+  return {
+    totalProcessed: 0,
+    created: 0,
+    updated: 0,
+    failed: 0,
+    skipped: 0,
+    queued: 0,
+    retryProcessed: 0,
+    retrySucceeded: 0,
+    retryFailed: 0,
+    results: [],
+    errors: [],
+  };
+}
+
+function collectSyncResult(summary: IncidentSyncSnapshot, result: SyncResult): void {
+  summary.totalProcessed += 1;
+  summary.results.push(result);
+  if (result.status === 'created') summary.created += 1;
+  else if (result.status === 'updated') summary.updated += 1;
+  else if (result.status === 'queued') summary.queued += 1;
+  else if (result.status === 'failed') summary.failed += 1;
+  else summary.skipped += 1;
+  if (result.status === 'failed' || result.status === 'queued') {
+    summary.errors.push({
+      fingerprint: result.fingerprint,
+      action: result.action,
+      reason: result.reason ?? 'unknown',
+      nextRetry: result.nextRetryAt,
+    });
+  }
+}
+
+function incidentStoreForRepo(repo: RepoSnapshot, options: ObserverOptions): IncidentStore | null {
+  const incidentConfig = getIncidentConfig(repo.repoDir);
+  if (incidentConfig.enabled === false) return null;
+  const storeDir = incidentConfig.store?.directory ?? '.wavemill/incidents';
+  return new IncidentStore(
+    isAbsolute(storeDir) ? storeDir : join(repo.repoDir, storeDir),
+    {
+      escalationThreshold: options.dependencyThreshold ?? incidentConfig.detection?.dependencyThreshold ?? 3,
+      maxEvidencePerRecord: incidentConfig.detection?.maxEvidencePerRecord ?? 50,
+    },
+  );
+}
+
+export async function syncIncidentsToLinear(snapshot: ObserverSnapshot, options: ObserverOptions): Promise<ObserverSnapshot> {
+  if (!options.fileIncidents && !options.incidentsReplay) return snapshot;
+  const summary = emptyIncidentSyncSnapshot();
+  for (const repo of snapshot.repos) {
+    const store = incidentStoreForRepo(repo, options);
+    if (!store) continue;
+    const config = mergeObserverLinearConfig(getObserverLinearConfig(repo.repoDir), options);
+    try {
+      if (!config.detectionOnly) {
+        const retry = await drainIncidentQueue({
+          repoDir: repo.repoDir,
+          queuePath: config.retryQueuePath,
+          store,
+          config,
+          now: new Date(snapshot.timestamp),
+          log: console,
+        });
+        summary.retryProcessed += retry.processed;
+        summary.retrySucceeded += retry.succeeded;
+        summary.retryFailed += retry.failed;
+      }
+    } catch (error) {
+      summary.errors.push({
+        fingerprint: 'retry-queue',
+        action: 'failed',
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    const incidents = options.incidentsReplay
+      ? [await store.getIncident(options.incidentsReplay)].filter((incident): incident is IncidentRecord => incident !== null)
+      : await store.getIncidents();
+    for (const incident of incidents) {
+      const result = await syncIncident({
+        incident,
+        store,
+        config,
+        dryRun: options.incidentsDryRun,
+        replay: options.incidentsReplay === incident.fingerprint,
+        now: new Date(snapshot.timestamp),
+        retryQueue: {
+          enqueueIncidentSync: (input) => enqueueIncidentSync({
+            repoDir: repo.repoDir,
+            queuePath: config.retryQueuePath,
+            incidentFingerprint: input.incidentFingerprint,
+            linearAction: input.linearAction,
+            linearIssueId: input.linearIssueId,
+            lastError: input.lastError,
+            now: input.now,
+          }),
+        },
+      });
+      collectSyncResult(summary, result);
+    }
+  }
+  return { ...snapshot, incidentSync: summary };
+}
+
 interface BackstageHealthFile {
   updatedAt?: string;
   services?: Record<string, Record<string, unknown>>;
@@ -1029,6 +1203,17 @@ function renderSummary(snapshot: ObserverSnapshot): string {
     for (const incident of snapshot.incidents.slice(0, 8)) {
       lines.push(`  [${incident.lifecycle}/${incident.category}] ${incident.rootCauseClass}: ${incident.summary}`);
       lines.push(`  action: ${incident.operatorAction}`);
+    }
+  }
+  if (snapshot.incidentSync) {
+    const sync = snapshot.incidentSync;
+    lines.push('');
+    lines.push(`Incident Linear sync: processed=${sync.totalProcessed} created=${sync.created} updated=${sync.updated} queued=${sync.queued} skipped=${sync.skipped} failed=${sync.failed}`);
+    if (sync.retryProcessed > 0) {
+      lines.push(`Incident retry queue: processed=${sync.retryProcessed} succeeded=${sync.retrySucceeded} failed=${sync.retryFailed}`);
+    }
+    for (const result of sync.results.slice(0, 8)) {
+      lines.push(`  ${result.action}: ${result.fingerprint.slice(0, 16)} ${result.issueId ?? ''} ${result.reason ?? ''}`.trimEnd());
     }
   }
   return `${lines.join('\n')}\n`;
@@ -1198,7 +1383,7 @@ async function main(): Promise<void> {
   }
 
   do {
-    const observed = await reconcileIncidents(observe(options), options);
+    const observed = await syncIncidentsToLinear(await reconcileIncidents(observe(options), options), options);
     const snapshot = options.serviceMode ? redactSnapshot(observed) : observed;
     await writeServiceHeartbeat(snapshot, options);
     await fileLinearIssues(snapshot, options);

@@ -5,7 +5,7 @@
  * atomic artifacts that can be used to validate PR readiness.
  */
 
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdirSync, appendFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -22,6 +22,166 @@ import type {
 // ────────────────────────────────────────────────────────────────
 // Core Functions
 // ────────────────────────────────────────────────────────────────
+
+export interface BaseResolutionResult {
+  baseSha: string;
+  fetchedAt: number;
+  fetchDiagnostics: {
+    fetchedRef: string;
+    upstreamBranch: string;
+  };
+}
+
+export interface BaseFetchError {
+  kind: 'fetch-failed' | 'resolve-failed' | 'branch-unavailable';
+  message: string;
+  diagnostics: string;
+}
+
+function commandErrorOutput(err: unknown): string {
+  const execErr = err as {
+    message?: string;
+    stdout?: Buffer | string;
+    stderr?: Buffer | string;
+  };
+  const stdout =
+    typeof execErr.stdout === 'string'
+      ? execErr.stdout
+      : (execErr.stdout?.toString?.() ?? '');
+  const stderr =
+    typeof execErr.stderr === 'string'
+      ? execErr.stderr
+      : (execErr.stderr?.toString?.() ?? '');
+  return [stderr.trim(), stdout.trim(), execErr.message ?? '']
+    .filter(Boolean)
+    .join('\n');
+}
+
+function classifyFetchError(baseBranch: string, output: string): BaseFetchError {
+  const lower = output.toLowerCase();
+  if (
+    lower.includes("couldn't find remote ref") ||
+    lower.includes('could not find remote ref') ||
+    lower.includes('remote ref does not exist') ||
+    lower.includes('repository not found')
+  ) {
+    return {
+      kind: 'branch-unavailable',
+      message: `Base branch '${baseBranch}' is unavailable on origin.`,
+      diagnostics:
+        `Base branch '${baseBranch}' not found on remote origin. ` +
+        'Verify the configured integration branch in .wavemill-config.json, then retry verification.',
+    };
+  }
+
+  if (
+    lower.includes('permission denied') ||
+    lower.includes('authentication failed') ||
+    lower.includes('could not read from remote repository') ||
+    lower.includes('403') ||
+    lower.includes('401')
+  ) {
+    return {
+      kind: 'fetch-failed',
+      message: `Unable to authenticate while fetching base branch '${baseBranch}'.`,
+      diagnostics:
+        `Permission denied while fetching base branch '${baseBranch}' from origin. ` +
+        'Check git credentials and repository access, then retry verification.',
+    };
+  }
+
+  if (
+    lower.includes('could not resolve host') ||
+    lower.includes('failed to connect') ||
+    lower.includes('network is unreachable') ||
+    lower.includes('operation timed out') ||
+    lower.includes('unable to access')
+  ) {
+    return {
+      kind: 'fetch-failed',
+      message: `Unable to reach origin while fetching base branch '${baseBranch}'.`,
+      diagnostics:
+        `Unable to reach origin while fetching base branch '${baseBranch}'. ` +
+        'Check network connectivity and retry verification.',
+    };
+  }
+
+  return {
+    kind: 'fetch-failed',
+    message: `Failed to fetch base branch '${baseBranch}' from origin.`,
+    diagnostics:
+      `Failed to fetch base branch '${baseBranch}' from origin. ` +
+      `Git reported: ${output || 'no diagnostic output'}`,
+  };
+}
+
+/**
+ * Fetch and resolve the configured base branch against remote state.
+ *
+ * Freshness depends on remote state being known. Callers must treat any error
+ * result as blocking for required pre-PR verification; falling back to a local
+ * cached base would allow stale artifacts to pass.
+ */
+export function fetchAndResolveBase(
+  stateDir: string,
+  baseBranch: string,
+): BaseResolutionResult | BaseFetchError {
+  try {
+    execFileSync('git', ['fetch', '--quiet', 'origin', baseBranch], {
+      cwd: stateDir,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 30_000,
+    });
+  } catch (err) {
+    return classifyFetchError(baseBranch, commandErrorOutput(err));
+  }
+
+  try {
+    const baseSha = execFileSync('git', ['rev-parse', 'FETCH_HEAD'], {
+      cwd: stateDir,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 30_000,
+    }).trim();
+
+    if (!baseSha) {
+      return {
+        kind: 'resolve-failed',
+        message: `Unable to resolve fetched base branch '${baseBranch}'.`,
+        diagnostics:
+          `Unable to resolve fetched base branch '${baseBranch}' after a successful fetch. ` +
+          'Retry verification after refreshing the repository.',
+      };
+    }
+
+    execFileSync('git', ['merge-base', '--is-ancestor', 'FETCH_HEAD', 'HEAD'], {
+      cwd: stateDir,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 30_000,
+    });
+
+    return {
+      baseSha,
+      fetchedAt: Date.now(),
+      fetchDiagnostics: {
+        fetchedRef: `origin/${baseBranch}`,
+        upstreamBranch: baseBranch,
+      },
+    };
+  } catch (err) {
+    const output = commandErrorOutput(err);
+    return {
+      kind: 'resolve-failed',
+      message: `Unable to prove HEAD includes fetched base branch '${baseBranch}'.`,
+      diagnostics:
+        `HEAD is not a descendant of base branch '${baseBranch}', or the histories are unrelated. ` +
+        'Rebase onto the refreshed base and rerun verification. ' +
+        `Git reported: ${output || 'no diagnostic output'}`,
+    };
+  }
+}
 
 /**
  * Run the verification recipe: execute all commands in sequence.

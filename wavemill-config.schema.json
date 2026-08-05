@@ -312,6 +312,72 @@
                         }
                     },
                     "additionalProperties": false
+                },
+                "linear": {
+                    "type": "object",
+                    "description": "Opt-in Observer-to-Linear synchronizer for confirmed, deduplicated incident records.",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "When true, confirmed incidents can create/update Linear issues. Defaults off for consent gating."
+                        },
+                        "detectionOnly": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "When true, compute planned sync actions but do not write to Linear."
+                        },
+                        "project": {
+                            "type": "string",
+                            "description": "Linear project id or name used for Wavemill incident correlation and issue creation."
+                        },
+                        "team": {
+                            "type": "string",
+                            "description": "Linear team id, key, or name used for Wavemill incident routing."
+                        },
+                        "label": {
+                            "type": "string",
+                            "description": "Optional additional Linear label attached to created/correlated incident issues."
+                        },
+                        "retryQueuePath": {
+                            "type": "string",
+                            "default": ".wavemill/registry/linear-incident-queue.jsonl"
+                        },
+                        "updateCooldownMinutes": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "default": 5
+                        },
+                        "policies": {
+                            "type": "object",
+                            "properties": {
+                                "product_defect": { "$ref": "#/definitions/observerLinearPolicy" },
+                                "model_task_harness_outcome": { "$ref": "#/definitions/observerLinearPolicy" },
+                                "external_transient_dependency": { "$ref": "#/definitions/observerLinearPolicy" },
+                                "configuration_operator_condition": { "$ref": "#/definitions/observerLinearPolicy" },
+                                "stale_orphaned_state": { "$ref": "#/definitions/observerLinearPolicy" }
+                            },
+                            "additionalProperties": false
+                        },
+                        "redaction": {
+                            "type": "object",
+                            "properties": {
+                                "enabled": { "type": "boolean", "default": true },
+                                "patterns": {
+                                    "type": "array",
+                                    "items": { "type": "string" },
+                                    "default": ["api[_-]?key", "token", "secret", "password", "credential", "private[_-]?key"]
+                                },
+                                "redactPaths": { "type": "boolean", "default": true },
+                                "redactEmails": { "type": "boolean", "default": true },
+                                "truncateTranscripts": { "type": "boolean", "default": true },
+                                "truncateLength": { "type": "integer", "minimum": 40, "default": 200 },
+                                "markFormat": { "type": "string", "default": "[REDACTED: {type}]" }
+                            },
+                            "additionalProperties": false
+                        }
+                    },
+                    "additionalProperties": false
                 }
             },
             "additionalProperties": false
@@ -2298,6 +2364,118 @@
                     "required": ["commands"],
                     "additionalProperties": false
                 },
+                "remoteOnlyExceptions": {
+                    "type": "array",
+                    "default": [],
+                    "description": "Enforced GitHub checks that intentionally have no safe local equivalent. Each entry requires a rationale and should remain enforced in remote CI.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "checkName": {
+                                "type": "string",
+                                "minLength": 1,
+                                "description": "Exact enforced GitHub check name."
+                            },
+                            "reason": {
+                                "type": "string",
+                                "minLength": 1,
+                                "description": "Maintainer rationale for why this check cannot safely run locally."
+                            },
+                            "acknowledgedBy": {
+                                "type": "string",
+                                "minLength": 1,
+                                "description": "Maintainer or team that acknowledged the remote-only exception."
+                            },
+                            "acknowledgedAt": {
+                                "type": "string",
+                                "pattern": "^\\d{4}-\\d{2}-\\d{2}T",
+                                "description": "ISO 8601 timestamp for the acknowledgement."
+                            }
+                        },
+                        "required": ["checkName", "reason"],
+                        "additionalProperties": false
+                    }
+                },
+                "driftValidation": {
+                    "type": "object",
+                    "description": "Controls CI-to-local verification contract drift validation.",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Enable drift validation for github-enforced pre-PR verification."
+                        },
+                        "blockOnUnmapped": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "When true, unmapped enforced checks are treated as blocking validation errors."
+                        },
+                        "warnOnDrift": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Show drift warnings during diagnostics and initialization."
+                        },
+                        "autoAcknowledgeThreshold": {
+                            "type": "number",
+                            "default": 0.9,
+                            "minimum": 0,
+                            "maximum": 1,
+                            "description": "Confidence threshold for proposing mappings as safe candidates. Proposals are not applied automatically."
+                        }
+                    },
+                    "additionalProperties": false
+                },
+                "mappingAcknowledgements": {
+                    "type": "object",
+                    "description": "Explicit maintainer-reviewed mappings from enforced GitHub check names to local recipe commands and optional workflow provenance.",
+                    "properties": {
+                        "checks": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "oneOf": [
+                                    {
+                                        "type": "string",
+                                        "minLength": 1
+                                    },
+                                    {
+                                        "type": "object",
+                                        "properties": {
+                                            "localCommand": {
+                                                "type": "string",
+                                                "minLength": 1
+                                            },
+                                            "workflowPath": {
+                                                "type": "string",
+                                                "minLength": 1
+                                            },
+                                            "jobName": {
+                                                "type": "string",
+                                                "minLength": 1
+                                            }
+                                        },
+                                        "additionalProperties": false,
+                                        "anyOf": [
+                                            { "required": ["localCommand"] },
+                                            { "required": ["workflowPath"] },
+                                            { "required": ["jobName"] }
+                                        ]
+                                    }
+                                ]
+                            },
+                            "default": {},
+                            "description": "Map exact GitHub check names to local recipe commands or mapping metadata."
+                        },
+                        "acknowledgedBy": {
+                            "type": "string",
+                            "minLength": 1
+                        },
+                        "acknowledgedAt": {
+                            "type": "string",
+                            "pattern": "^\\d{4}-\\d{2}-\\d{2}T"
+                        }
+                    },
+                    "additionalProperties": false
+                },
                 "logCaptureLines": {
                     "type": "integer",
                     "default": 50,
@@ -2922,6 +3100,31 @@
         }
     },
     "definitions": {
+        "observerLinearPolicy": {
+            "type": "object",
+            "properties": {
+                "strategy": {
+                    "type": "string",
+                    "enum": ["create", "no_create", "threshold", "create_if_persistent"]
+                },
+                "threshold": {
+                    "type": "integer",
+                    "minimum": 1
+                },
+                "persistentThreshold": {
+                    "type": "integer",
+                    "minimum": 1
+                },
+                "correlateIssueIds": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "pattern": "^[A-Z]+-[0-9]+$"
+                    }
+                }
+            },
+            "additionalProperties": false
+        },
         "runtimeSurfaceConfig": {
             "type": "object",
             "properties": {

@@ -37,6 +37,13 @@ agent_normalize_linear_issue_id() {
   candidate="${candidate#"${candidate%%[![:space:]]*}"}"
   candidate="${candidate%"${candidate##*[![:space:]]}"}"
 
+  if [[ "$issue" =~ ^([A-Z][A-Z0-9]*-[0-9]+)_c$ ]]; then
+    local base_issue="${BASH_REMATCH[1]}"
+    if [[ "$candidate" != "$base_issue" ]]; then
+      printf '%s\n' "$base_issue"
+      return 0
+    fi
+  fi
   if [[ "$candidate" =~ ^[A-Z][A-Z0-9]*-[0-9]+$ ]]; then
     printf '%s\n' "$candidate"
     return 0
@@ -45,10 +52,6 @@ agent_normalize_linear_issue_id() {
     local linear_url_path="${candidate#*://linear.app/}"
     linear_url_path="${linear_url_path#*/issue/}"
     printf '%s\n' "${linear_url_path%%[/?#]*}"
-    return 0
-  fi
-  if [[ "$issue" =~ ^([A-Z][A-Z0-9]*-[0-9]+)_c$ ]]; then
-    printf '%s\n' "${BASH_REMATCH[1]}"
     return 0
   fi
   printf '%s\n' "$issue"

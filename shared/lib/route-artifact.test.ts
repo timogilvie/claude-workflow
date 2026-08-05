@@ -607,6 +607,30 @@ test('routeChangedMaterially tracks coder/reviewer class and depth changes', () 
   assert.deepEqual(result.reasons.sort(), ['code_depth', 'coder_class', 'reviewer_class']);
 });
 
+test('routeChangedMaterially tracks planner-only expanded route changes', () => {
+  const result = routeChangedMaterially(
+    {
+      planner: 'claude-haiku-4-5',
+      coder: 'gpt-5.4',
+      reviewer: 'claude-sonnet-5',
+      planDepth: 'light',
+      codeDepth: 'medium',
+      reviewMode: 'static',
+    },
+    {
+      planner: 'claude-opus-4-7',
+      coder: 'gpt-5.4',
+      reviewer: 'claude-sonnet-5',
+      planDepth: 'deep',
+      codeDepth: 'medium',
+      reviewMode: 'static',
+    },
+  );
+
+  assert.equal(result.changed, true);
+  assert.deepEqual(result.reasons.sort(), ['plan_depth', 'planner_class']);
+});
+
 test('readRouteLifecycleArtifacts falls back to archived bootstrap and active route files', () => {
   const featureDir = makeFeatureDir();
   const archiveDir = join(dirname(featureDir), 'archive');
@@ -638,6 +662,56 @@ test('readRouteLifecycleArtifacts falls back to archived bootstrap and active ro
   assert.equal(result.bootstrap?.coder, 'bootstrap-coder');
   assert.equal(result.expanded?.coder, 'expanded-coder');
   assert.equal(result.active?.coder, 'active-coder');
+});
+
+test('readRouteLifecycleArtifacts keeps immutable planning launch route separate from active route', () => {
+  const featureDir = makeFeatureDir();
+
+  writeFileSync(join(featureDir, '.initial-route.json'), JSON.stringify({
+    planner: 'claude-haiku-4-5',
+    coder: 'gpt-5.4',
+    reviewer: 'claude-sonnet-5',
+    planDepth: 'light',
+    codeDepth: 'medium',
+    reviewMode: 'static',
+  }));
+  writeFileSync(join(featureDir, '.routing-complete'), JSON.stringify({
+    planner: 'later-reroute-planner',
+    coder: 'later-reroute-coder',
+    reviewer: 'later-reroute-reviewer',
+    planDepth: 'light',
+    codeDepth: 'deep',
+    reviewMode: 'llm',
+  }));
+  writeFileSync(join(featureDir, '.phase-config.json'), JSON.stringify({
+    planning: {
+      model: 'claude-opus-4-7',
+      agent: 'claude',
+      depth: 'deep',
+      launchRoute: {
+        source: 'effective-route',
+        planner: 'claude-opus-4-7',
+        plannerAgent: 'claude',
+        planDepth: 'deep',
+        route: {
+          planner: 'claude-opus-4-7',
+          coder: 'gpt-5.4',
+          reviewer: 'claude-sonnet-5',
+          planDepth: 'deep',
+          codeDepth: 'medium',
+          reviewMode: 'static',
+        },
+      },
+    },
+  }));
+
+  const artifacts = readRouteLifecycleArtifacts(featureDir);
+  const provenance = buildRouteLifecycleProvenance(artifacts);
+
+  assert.equal(artifacts.active?.planner, 'later-reroute-planner');
+  assert.equal(artifacts.planningLaunch?.planner, 'claude-opus-4-7');
+  assert.equal(provenance?.activeRoute?.planner, 'later-reroute-planner');
+  assert.equal(provenance?.planningLaunchRoute?.planner, 'claude-opus-4-7');
 });
 
 test('deriveRouteDecisionSource returns preserved when active route stays bootstrap', () => {
