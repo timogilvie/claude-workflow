@@ -36,15 +36,6 @@ function baseConfig(mode: 'auto' | 'stage-aware' = 'auto') {
       kNeighbors: 10,
       stageBlendWeight: 0.3,
       defaultAgent: 'claude',
-      agentMap: {
-        'claude-opus-4-7': 'claude',
-        'claude-opus-4-6': 'claude',
-        'claude-sonnet-5': 'claude',
-        'claude-haiku-4-5-20251001': 'claude',
-        'gpt-5.3-codex': 'codex',
-        'gpt-5.4': 'codex',
-        'gpt-5.5': 'codex',
-      },
     },
     eval: {
       pricing: {
@@ -55,66 +46,6 @@ function baseConfig(mode: 'auto' | 'stage-aware' = 'auto') {
         'gpt-5.3-codex': { inputCostPerMTok: 1.75, outputCostPerMTok: 14, cacheWriteCostPerMTok: 2.1875, cacheReadCostPerMTok: 0.44 },
         'gpt-5.4': { inputCostPerMTok: 1.75, outputCostPerMTok: 14, cacheWriteCostPerMTok: 2.1875, cacheReadCostPerMTok: 0.44 },
         'gpt-5.5': { inputCostPerMTok: 5, outputCostPerMTok: 30, cacheWriteCostPerMTok: 6.25, cacheReadCostPerMTok: 0.5 },
-      },
-    },
-    modelRegistry: {
-      models: {
-        'claude-opus-4-7': {
-          vendor: 'anthropic',
-          class: 'frontier',
-          strengths: ['quality'],
-          weaknesses: [],
-          qualityScores: { planning: 92, coding: 92, review: 92, classify: 78, routing: 72 },
-        },
-        'claude-opus-4-6': {
-          vendor: 'anthropic',
-          class: 'frontier',
-          strengths: ['quality'],
-          weaknesses: [],
-          qualityScores: { planning: 90, coding: 90, review: 90, classify: 76, routing: 70 },
-        },
-        'claude-sonnet-5': {
-          vendor: 'anthropic',
-          class: 'strong_generalist',
-          strengths: ['balanced'],
-          weaknesses: [],
-          qualityScores: { planning: 84, coding: 84, review: 84, classify: 75, routing: 70 },
-        },
-        'claude-haiku-4-5-20251001': {
-          vendor: 'anthropic',
-          class: 'fast_economy',
-          strengths: ['cheap'],
-          weaknesses: [],
-          qualityScores: { planning: 72, coding: 72, review: 72, classify: 65, routing: 60 },
-        },
-        'gpt-5.3-codex': {
-          vendor: 'openai',
-          class: 'frontier',
-          strengths: ['coding'],
-          weaknesses: [],
-          qualityScores: { planning: 88, coding: 90, review: 86, classify: 78, routing: 72 },
-        },
-        'gpt-5.4': {
-          vendor: 'openai',
-          class: 'frontier',
-          strengths: ['coding'],
-          weaknesses: [],
-          qualityScores: { planning: 86, coding: 86, review: 84, classify: 76, routing: 70 },
-        },
-        'gpt-5.5': {
-          vendor: 'openai',
-          class: 'frontier',
-          strengths: ['coding'],
-          weaknesses: [],
-          qualityScores: { planning: 90, coding: 92, review: 88, classify: 78, routing: 72 },
-        },
-      },
-      ladders: {
-        planning: ['claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
-        coding: ['claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'gpt-5.3-codex', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
-        review: ['claude-opus-4-7', 'gpt-5.5', 'gpt-5.4', 'claude-sonnet-5', 'claude-haiku-4-5-20251001'],
-        routing: ['claude-haiku-4-5-20251001', 'claude-sonnet-5', 'gpt-5.3-codex', 'gpt-5.5', 'gpt-5.4'],
-        classify: ['claude-haiku-4-5-20251001', 'claude-sonnet-5', 'gpt-5.3-codex', 'gpt-5.5', 'gpt-5.4'],
       },
     },
   };

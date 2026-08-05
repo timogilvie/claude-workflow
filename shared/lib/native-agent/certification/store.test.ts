@@ -16,7 +16,7 @@ import {
   validateCertificationForWrite,
   writeScopedCertification,
 } from './store.ts';
-import { buildScopedCertificationPath } from './storage.ts';
+import { GLOBAL_CERTIFICATION_ROOT_ENV, buildScopedCertificationPath } from './storage.ts';
 
 const FIXTURE_DIR = new URL('./fixtures', import.meta.url).pathname;
 
@@ -43,6 +43,22 @@ function makeTempRepo(): string {
 
 function cleanupRepo(dir: string): void {
   rmSync(dir, { recursive: true, force: true });
+}
+
+function withIsolatedGlobalCertificationRoot<T>(fn: (root: string) => T): T {
+  const root = mkdtempSync(join(tmpdir(), 'native-cert-global-test-'));
+  const previous = process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
+  process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = root;
+  try {
+    return fn(root);
+  } finally {
+    if (previous === undefined) {
+      delete process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
+    } else {
+      process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = previous;
+    }
+    rmSync(root, { recursive: true, force: true });
+  }
 }
 
 // ─── serializeCertification ────────────────────────────────────────────────
@@ -318,8 +334,10 @@ describe('listCertifications', () => {
   it('returns empty array for a fresh repo with no certifications directory', () => {
     const repoDir = makeTempRepo();
     try {
-      const paths = listCertifications(repoDir);
-      assert.deepEqual(paths, []);
+      withIsolatedGlobalCertificationRoot(() => {
+        const paths = listCertifications(repoDir);
+        assert.deepEqual(paths, []);
+      });
     } finally {
       cleanupRepo(repoDir);
     }
@@ -328,19 +346,21 @@ describe('listCertifications', () => {
   it('returns all artifact paths after writing multiple artifacts', () => {
     const repoDir = makeTempRepo();
     try {
-      const a1 = makeValidArtifact({ provider: 'anthropic', model: 'claude-sonnet-4-6', suiteVersion: 'v1' });
-      const a2 = makeValidArtifact({ provider: 'anthropic', model: 'claude-opus-4-8', suiteVersion: 'v1' });
-      const a3 = makeValidArtifact({ provider: 'openai', model: 'gpt-4o', suiteVersion: 'v1' });
+      withIsolatedGlobalCertificationRoot(() => {
+        const a1 = makeValidArtifact({ provider: 'anthropic', model: 'claude-sonnet-4-6', suiteVersion: 'v1' });
+        const a2 = makeValidArtifact({ provider: 'anthropic', model: 'claude-opus-4-8', suiteVersion: 'v1' });
+        const a3 = makeValidArtifact({ provider: 'openai', model: 'gpt-4o', suiteVersion: 'v1' });
 
-      const p1 = writeCertification(repoDir, a1);
-      const p2 = writeCertification(repoDir, a2);
-      const p3 = writeCertification(repoDir, a3);
+        const p1 = writeScopedCertification(a1, { scope: 'global' });
+        const p2 = writeScopedCertification(a2, { scope: 'global' });
+        const p3 = writeScopedCertification(a3, { scope: 'global' });
 
-      const listed = listCertifications(repoDir);
-      assert.equal(listed.length, 3);
-      assert.ok(listed.includes(p1));
-      assert.ok(listed.includes(p2));
-      assert.ok(listed.includes(p3));
+        const listed = listCertifications(repoDir);
+        assert.equal(listed.length, 3);
+        assert.ok(listed.includes(p1));
+        assert.ok(listed.includes(p2));
+        assert.ok(listed.includes(p3));
+      });
     } finally {
       cleanupRepo(repoDir);
     }

@@ -72,12 +72,12 @@ Use `.wavemill-config.json` for:
 
 - Team-wide defaults that should be consistent for everyone.
 - Shared relative repo paths that apply across developers.
-- Canonical router/model defaults when the whole repo should use them.
+- Non-model workflow policy such as challenge rates, router exploration knobs,
+  budgets, task selection, and max parallelism.
 
 Use `.wavemill-config.local.json` for:
 
-- Personal model experiments and temporary model preferences.
-- Developer-specific challenge rate or local routing preferences.
+- Developer-specific challenge rate or other non-model workflow preferences.
 - Consent/data-submission preferences when they are personal opt-in choices.
 - Machine-specific values that should not be committed.
 
@@ -89,23 +89,50 @@ Use environment variables for:
 
 Never store secrets in either config file when an environment variable or secret manager is available.
 
-## Model and Router Defaults
+## Model Ownership
 
-When new model/router config fields are added in future versions:
+Model membership, model-to-agent mapping, provider model pools, and native
+certification metadata are owned by Wavemill's global effective-model
+projection. Repository config and local overlays must not define a different
+model universe.
 
-- Put them in `.wavemill-config.json` when the repository should share the same default behavior.
-- Keep personal model trials and developer-specific provider preferences in `.wavemill-config.local.json`.
-- Keep provider credentials in environment variables, not config files.
+The following repo-local fields were removed in config version `1.5.0`
+(August 5, 2026):
+
+- `modelRegistry`
+- `router.defaultModel`, `router.models`, `router.availableModels`, `router.agentMap`
+- `challenge.models`, `challenge.comparisonModel`
+- `providers.openrouter.models`, `providers.openrouter.stages`
+- `providers.deepseek.models`, `providers.deepseek.stages`
+- `nativeAgent.providers.*.models`
+- runtime lookup under `.wavemill/native-agent-certifications/`
+
+Run this before upgrading an existing repository:
+
+```bash
+wavemill config migrate-model-settings
+```
+
+The migrator inventories each removed field, explains the affected models or
+behavior, validates that the global projection is usable, backs up the config,
+and removes only the deprecated model-local settings. It does not move secrets.
 
 ### Native Read-Only Opt-In
 
-Use `.wavemill-config.json` for the shared `nativeAgent.enabled`, `nativeAgent.allowedPhases`, `nativeAgent.patchCoding.enabled`, and provider model allow-list values that define whether a repo opts into native read-only expansion, planning, review, or patch-coding alpha.
+Use `.wavemill-config.json` for the shared `nativeAgent.enabled`,
+`nativeAgent.allowedPhases`, `nativeAgent.patchCoding.enabled`, and non-secret
+provider credentials metadata (`enabled`, `apiKeyEnv`, `baseUrl`, `headers`).
+Do not configure provider model allowlists in repo config.
 
 Keep native provider secrets such as `OPENAI_API_KEY` and `OPENROUTER_API_KEY` in environment variables only.
 
 `nativeAgent.patchCoding.enabled` is fail-closed and defaults to `false`. Setting it to `true` does not enable native patch coding by itself; Wavemill also requires a current certification artifact at `.wavemill/native-agent/patch-coding-certification.json`.
 
-Coder routing has a third gate after repo opt-in and the smoke artifact: the chosen provider/model pair must also have a current phase certification artifact at `.wavemill/native-agent-certifications/<provider>/<model>/<suite-version>.json` whose phase satisfies `patch`.
+Coder routing has a third gate after repo opt-in and the smoke artifact: the
+chosen provider/model pair must also have a current global phase certification
+artifact whose phase satisfies `patch`. `WAVEMILL_NATIVE_CERTIFICATION_ROOT`
+can override the global certification store for tests and controlled operator
+environments.
 
 See [Native Read-Only Runtime](./native-read-only-runtime.md) for the exact config shape and phase examples.
 
@@ -158,12 +185,12 @@ or undersampled models keep receiving routing traffic:
   data, never a permanent one. The same window also makes the challenge
   scheduler prioritize recently released under-covered models over older
   deliberately-unused ones. Set `releasedAt` per model in the registry
-  defaults or via `modelRegistry.models.<id>.releasedAt` config overrides.
+  defaults in the global model registry.
   Boosted picks are marked `[recency-boosted]` in decision reasoning.
 
 Sampling, the UCB bonus, and prior seeding all operate inside the
-already-filtered candidate set (allowlists, capability constraints, disabled
-models, DeepSeek opt-in), and a sampled stage-aware combination that would
+already-filtered candidate set (global effective model projection, capability
+constraints, disabled models, DeepSeek opt-in), and a sampled stage-aware combination that would
 exceed `maxCostUsd` reverts to the exploit selection. Decisions record
 explore-vs-exploit attribution in `reasoning` and an `exploration` field that
 is persisted to route artifacts. Zero-record candidates get cost estimates

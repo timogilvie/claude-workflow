@@ -15,6 +15,7 @@ import {
 import { readCertification } from '../shared/lib/native-agent/certification/store.ts';
 import { filterNativeModels, type RouterCertificationRejection } from '../shared/lib/native-agent/certification/router-filter.ts';
 import { routeWorkflow } from '../shared/lib/workflow-router.ts';
+import { listEffectiveNativeProviderModels } from '../shared/lib/effective-models.ts';
 import type { ModelRegistry } from '../shared/lib/model-registry.ts';
 
 const ISSUE_ID = 'HOK-2425';
@@ -116,20 +117,8 @@ interface VerificationSummary {
 }
 
 export function getConfiguredNativeOpenRouterModels(config: unknown): string[] {
-  const parsed = config as {
-    nativeAgent?: {
-      providers?: {
-        openrouter?: {
-          models?: unknown;
-        };
-      };
-    };
-  };
-  const models = parsed.nativeAgent?.providers?.openrouter?.models;
-  if (!Array.isArray(models)) {
-    return [];
-  }
-  return models.filter((model): model is string => typeof model === 'string' && model.trim().length > 0);
+  void config;
+  return listEffectiveNativeProviderModels('openrouter', 'coding').models;
 }
 
 export function pickRepresentativeModel(config: unknown): string {
@@ -142,7 +131,7 @@ export function pickRepresentativeModel(config: unknown): string {
 
   const fallback = [...configured][0];
   if (!fallback) {
-    throw new Error('No configured native OpenRouter rollout models were found in .wavemill-config.json.');
+    throw new Error('No native OpenRouter rollout models were found in the global effective-model projection.');
   }
   return fallback;
 }

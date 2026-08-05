@@ -163,13 +163,6 @@ function makeRouterConfigWithRubricAware(rubricAware: Record<string, unknown>) {
       kNeighbors: 50,
       stageBlendWeight: 0.3,
       defaultAgent: 'claude',
-      agentMap: {
-        'claude-opus-4-6': 'claude',
-        'claude-sonnet-5': 'claude',
-        'claude-haiku-4-5-20251001': 'claude',
-        'gpt-5.4': 'codex',
-        'gpt-5.4': 'codex',
-      },
       rubricAware,
     },
   };
@@ -243,15 +236,6 @@ function makeRepoWithStageAwareData(
       kNeighbors: 3,
       stageBlendWeight: 0.3,
       defaultAgent: 'claude',
-      agentMap: {
-        'claude-opus-4-7': 'claude',
-        'claude-opus-4-6': 'claude',
-        'claude-sonnet-5': 'claude',
-        'claude-sonnet-4-5-20250929': 'claude',
-        'claude-haiku-4-5-20251001': 'claude',
-        'gpt-5.4': 'codex',
-        'gpt-5.4': 'codex',
-      },
     },
     eval: {
       pricing: {
@@ -491,7 +475,7 @@ test('routeStageAware records capability fallback reasoning when a role filter e
   }
 });
 
-test('routeStageAware reads per-stage model constraints from router config', () => {
+test('routeStageAware uses global stage pools instead of repo stage constraints', () => {
   const records = [
     makeEvalRecord('1', 'claude-opus-4-6', { plan: 0.96, implementation: 0.83, review: 0.91 }),
     makeEvalRecord('2', 'gpt-5.3-codex', { plan: 0.72, implementation: 0.97, review: 0.68 }),
@@ -504,11 +488,6 @@ test('routeStageAware reads per-stage model constraints from router config', () 
       minRecords: 2,
       minModels: 2,
       kNeighbors: 3,
-      models: ['claude-opus-4-6', 'gpt-5.3-codex', 'claude-haiku-4-5-20251001'],
-      availableModels: {
-        planner: ['gpt-5.3-codex'],
-        coder: ['claude-opus-4-6'],
-      },
       defaultAgent: 'claude',
     },
   });
@@ -524,7 +503,7 @@ test('routeStageAware reads per-stage model constraints from router config', () 
   }
 });
 
-test('routeStageAware uses global stage pools when a repo stage list is empty', () => {
+test('routeStageAware uses global stage pools without repo stage lists', () => {
   const records = [
     makeEvalRecord('1', 'claude-opus-4-6', { plan: 0.96, implementation: 0.83, review: 0.91 }),
     makeEvalRecord('2', 'gpt-5.3-codex', { plan: 0.72, implementation: 0.97, review: 0.68 }),
@@ -537,10 +516,6 @@ test('routeStageAware uses global stage pools when a repo stage list is empty', 
       minRecords: 2,
       minModels: 2,
       kNeighbors: 3,
-      models: ['gpt-5.3-codex', 'claude-haiku-4-5-20251001'],
-      availableModels: {
-        planner: [],
-      },
       defaultAgent: 'claude',
     },
   });
@@ -718,13 +693,6 @@ test('routeWorkflowStageAware attaches a challenge recommendation when policy tr
       minRecords: 2,
       minModels: 2,
       kNeighbors: 3,
-      defaultModel: 'claude-sonnet-4-5-20250929',
-      models: [
-        'claude-opus-4-6',
-        'claude-sonnet-4-5-20250929',
-        'claude-haiku-4-5-20251001',
-        'gpt-5.4',
-      ],
       defaultAgent: 'claude',
     },
     challengeScheduler: {
@@ -821,7 +789,6 @@ test('routeStageAware retries without constraints when allowlist filters all nei
       minRecords: 2,
       minModels: 2,
       kNeighbors: 20,
-      models: [],
       defaultAgent: 'claude',
     },
   });
@@ -868,7 +835,6 @@ await testAsync('routeWorkflowAuto preserves neighbor counts in survival mode wh
       minRecords: 2,
       minModels: 2,
       kNeighbors: 20,
-      models: [],
       defaultAgent: 'claude',
     },
   });
@@ -895,7 +861,6 @@ test('routeWorkflowStageAware still uses heuristic-fallback when there are no re
       minRecords: 2,
       minModels: 2,
       kNeighbors: 20,
-      models: [],
       defaultAgent: 'claude',
     },
   });
@@ -1180,10 +1145,6 @@ function explorationRouterConfig(exploration: Record<string, unknown>) {
       kNeighbors: 6,
       stageBlendWeight: 0.3,
       defaultAgent: 'claude',
-      agentMap: {
-        'claude-opus-4-6': 'claude',
-        'claude-sonnet-4-5-20250929': 'claude',
-      },
       exploration,
     },
   };
@@ -1400,11 +1361,6 @@ test('routeStageAware with priors selects a zero-record allowlisted model end to
       kNeighbors: 6,
       stageBlendWeight: 0.3,
       defaultAgent: 'claude',
-      availableModels: {
-        planner: ['claude-opus-4-8', 'claude-sonnet-4-5-20250929', 'gpt-5.4'],
-        coder: ['claude-sonnet-4-5-20250929', 'gpt-5.4'],
-        reviewer: ['claude-sonnet-4-5-20250929', 'gpt-5.4'],
-      },
       exploration: { priors: { enabled: true, blendSamples: 10 } },
     },
   });
@@ -1543,8 +1499,7 @@ test('records for disabled models never become stage candidates', () => {
 
 
 
-function recencyBoostRepo(releasedDaysAgo: number, multiplier: number) {
-  const releasedAt = new Date(Date.now() - releasedDaysAgo * 86_400_000).toISOString().slice(0, 10);
+function recencyBoostRepo(multiplier: number, windowDays = 45) {
   const records = [
     makeEvalRecord('a1', 'claude-opus-4-6', { plan: 0.9, implementation: 0.9, review: 0.9 }),
     makeEvalRecord('a2', 'claude-opus-4-6', { plan: 0.91, implementation: 0.89, review: 0.9 }),
@@ -1567,12 +1522,7 @@ function recencyBoostRepo(releasedDaysAgo: number, multiplier: number) {
         mode: 'epsilon',
         rate: 0.9,
         topK: 3,
-        newModelBoost: { windowDays: 45, multiplier },
-      },
-    },
-    modelRegistry: {
-      models: {
-        'claude-sonnet-5': { releasedAt },
+        newModelBoost: { windowDays, multiplier },
       },
     },
   });
@@ -1586,7 +1536,7 @@ const recencySequence = () => {
 };
 
 test('recency boost steers exploration toward recently released models', () => {
-  const { repoDir, cleanup } = recencyBoostRepo(2, 5);
+  const { repoDir, cleanup } = recencyBoostRepo(5);
   try {
     const decision = routeStageAware('Build a backend feature with tests.', {
       repoDir,
@@ -1606,7 +1556,7 @@ test('recency boost steers exploration toward recently released models', () => {
 });
 
 test('the same roll without the boost picks the older alternative', () => {
-  const { repoDir, cleanup } = recencyBoostRepo(2, 1);
+  const { repoDir, cleanup } = recencyBoostRepo(1);
   try {
     const decision = routeStageAware('Build a backend feature with tests.', {
       repoDir,
@@ -1625,7 +1575,7 @@ test('the same roll without the boost picks the older alternative', () => {
 });
 
 test('models outside the recency window get no boost', () => {
-  const { repoDir, cleanup } = recencyBoostRepo(100, 5);
+  const { repoDir, cleanup } = recencyBoostRepo(5, 1);
   try {
     const decision = routeStageAware('Build a backend feature with tests.', {
       repoDir,
@@ -1635,7 +1585,7 @@ test('models outside the recency window get no boost', () => {
       randomFn: recencySequence(),
     });
     assert.ok(decision);
-    // releasedAt 100 days ago, window 45: identical to the no-boost outcome
+    // A one-day global recency window makes this identical to the no-boost outcome.
     assert.equal(decision?.planner, 'claude-sonnet-4-5-20250929');
   } finally {
     cleanup();

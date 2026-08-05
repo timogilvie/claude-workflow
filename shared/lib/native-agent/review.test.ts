@@ -224,10 +224,10 @@ describe('native review', () => {
       nativeAgent: {
         enabled: true,
         allowedPhases: ['review'],
+        // Model membership is owned by the global effective-model projection,
+        // so a bare provider entry resolves to no certified models here.
         providers: {
-          openai: {
-            models: ['uncertified-model'],
-          },
+          openai: {},
         },
       },
     });

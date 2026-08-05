@@ -31,12 +31,12 @@ describe('openrouter-provider', () => {
   it('resolveOpenRouterProviderConfig reads config and API key', () => {
     const tmp = makeTempRepo();
     try {
-      writeConfig(tmp, { providers: { openrouter: { enabled: true, apiKeyEnv: 'OPENROUTER_API_KEY', models: ['qwen-3-coder'], stages: ['coder'] } } });
+      writeConfig(tmp, { providers: { openrouter: { enabled: true, apiKeyEnv: 'OPENROUTER_API_KEY' } } });
       process.env.OPENROUTER_API_KEY = 'sk-test';
       const config = resolveOpenRouterProviderConfig(tmp);
       assert.equal(config.enabled, true);
-      assert.deepEqual(config.models, ['qwen-3-coder']);
-      assert.deepEqual(config.stages, ['coder']);
+      assert.ok(config.models.includes('qwen-3-coder'));
+      assert.deepEqual(config.stages, ['planner', 'coder', 'reviewer']);
       assert.equal(config.hasApiKey, true);
     } finally {
       delete process.env.OPENROUTER_API_KEY;
@@ -47,7 +47,7 @@ describe('openrouter-provider', () => {
   it('resolveOpenRouterProviderConfig reads API key from repo .env', () => {
     const tmp = makeTempRepo();
     try {
-      writeConfig(tmp, { providers: { openrouter: { enabled: true, apiKeyEnv: 'OPENROUTER_API_KEY', models: ['qwen-3-coder'], stages: ['coder'] } } });
+      writeConfig(tmp, { providers: { openrouter: { enabled: true, apiKeyEnv: 'OPENROUTER_API_KEY' } } });
       writeFileSync(join(tmp, '.env'), 'OPENROUTER_API_KEY=sk-from-env-file\n');
       delete process.env.OPENROUTER_API_KEY;
       const config = resolveOpenRouterProviderConfig(tmp);
@@ -86,7 +86,7 @@ describe('openrouter-provider', () => {
   it('filterOpenRouterModels ignores configured model allowlists when provider access is configured', () => {
     const tmp = makeTempRepo();
     try {
-      writeConfig(tmp, { providers: { openrouter: { enabled: true, apiKeyEnv: 'OPENROUTER_API_KEY', models: ['qwen-3-coder'], stages: ['coder'] } } });
+      writeConfig(tmp, { providers: { openrouter: { enabled: true, apiKeyEnv: 'OPENROUTER_API_KEY' } } });
       process.env.OPENROUTER_API_KEY = 'sk-test';
       const filtered = filterOpenRouterModels(['qwen-3-coder', 'kimi-k2', 'gpt-5'], tmp, 'coder');
       assert.deepEqual(filtered.models, ['qwen-3-coder', 'kimi-k2', 'gpt-5']);
@@ -97,13 +97,13 @@ describe('openrouter-provider', () => {
     }
   });
 
-  it('filterOpenRouterModels treats raw OpenRouter ids and aliases as equivalent allowlist entries', () => {
+  it('filterOpenRouterModels accepts raw OpenRouter ids and aliases when provider access is configured', () => {
     const tmp = makeTempRepo();
     try {
-      writeConfig(tmp, { providers: { openrouter: { enabled: true, apiKeyEnv: 'OPENROUTER_API_KEY', models: ['qwen/qwen3-coder'], stages: ['coder'] } } });
+      writeConfig(tmp, { providers: { openrouter: { enabled: true, apiKeyEnv: 'OPENROUTER_API_KEY' } } });
       process.env.OPENROUTER_API_KEY = 'sk-test';
       const config = resolveOpenRouterProviderConfig(tmp);
-      assert.deepEqual(config.models, ['qwen-3-coder']);
+      assert.ok(config.models.includes('qwen-3-coder'));
 
       const aliasFiltered = filterOpenRouterModels(['qwen-3-coder'], tmp, 'coder');
       assert.deepEqual(aliasFiltered.models, ['qwen-3-coder']);
@@ -118,10 +118,10 @@ describe('openrouter-provider', () => {
     }
   });
 
-  it('filterOpenRouterModels ignores configured provider stages', () => {
+  it('filterOpenRouterModels does not use provider stage allowlists', () => {
     const tmp = makeTempRepo();
     try {
-      writeConfig(tmp, { providers: { openrouter: { enabled: true, apiKeyEnv: 'OPENROUTER_API_KEY', models: ['qwen-3-coder'], stages: ['planner'] } } });
+      writeConfig(tmp, { providers: { openrouter: { enabled: true, apiKeyEnv: 'OPENROUTER_API_KEY' } } });
       process.env.OPENROUTER_API_KEY = 'sk-test';
       const filtered = filterOpenRouterModels(['qwen-3-coder'], tmp, 'coder');
       assert.deepEqual(filtered.models, ['qwen-3-coder']);
@@ -140,7 +140,6 @@ describe('openrouter-provider', () => {
           openrouter: {
             enabled: true,
             apiKeyEnv: 'OPENROUTER_API_KEY',
-            models: ['qwen-3-coder', 'glm-5.2', 'kimi-k2.7-code'],
           },
         },
       });

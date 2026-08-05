@@ -97,7 +97,7 @@ test('prepareConfigSync alreadyCurrent ignores local overlay', () => {
       configVersion: '9.9.9',
       router: {
         enabled: false,
-        defaultModel: 'gpt-5.5',
+        defaultAgent: 'claude',
       },
       hokusai: {
         dataSubmission: {
@@ -185,47 +185,19 @@ test('CANONICAL_CONFIG_TEMPLATE.configVersion matches CURRENT_CONFIG_VERSION', (
   assert.equal(CANONICAL_CONFIG_TEMPLATE.configVersion, CURRENT_CONFIG_VERSION);
 });
 
-test('CANONICAL_CONFIG_TEMPLATE exposes promoted OpenRouter aliases on user-facing surfaces', () => {
+test('CANONICAL_CONFIG_TEMPLATE keeps promoted aliases out of repo-local model pools', () => {
   assert.ok(CANONICAL_CONFIG_TEMPLATE.eval?.pricing?.['glm-5.2']);
   assert.ok(CANONICAL_CONFIG_TEMPLATE.eval?.pricing?.['kimi-k2.7-code']);
-  assert.ok(CANONICAL_CONFIG_TEMPLATE.providers?.openrouter?.models?.includes('glm-5.2'));
-  assert.ok(CANONICAL_CONFIG_TEMPLATE.providers?.openrouter?.models?.includes('kimi-k2.7-code'));
-  assert.ok(CANONICAL_CONFIG_TEMPLATE.challenge?.models?.includes('glm-5.2'));
-  assert.ok(CANONICAL_CONFIG_TEMPLATE.challenge?.models?.includes('kimi-k2.7-code'));
-  assert.ok(CANONICAL_CONFIG_TEMPLATE.router?.availableModels?.planner?.includes('glm-5.2'));
-  assert.ok(CANONICAL_CONFIG_TEMPLATE.router?.availableModels?.planner?.includes('kimi-k2.7-code'));
-  assert.ok(CANONICAL_CONFIG_TEMPLATE.router?.availableModels?.coder?.includes('glm-5.2'));
-  assert.ok(CANONICAL_CONFIG_TEMPLATE.router?.availableModels?.coder?.includes('kimi-k2.7-code'));
-  assert.ok(CANONICAL_CONFIG_TEMPLATE.router?.availableModels?.reviewer?.includes('glm-5.2'));
-  assert.ok(CANONICAL_CONFIG_TEMPLATE.router?.availableModels?.reviewer?.includes('kimi-k2.7-code'));
+  assert.equal(CANONICAL_CONFIG_TEMPLATE.providers?.openrouter && 'models' in CANONICAL_CONFIG_TEMPLATE.providers.openrouter, false);
+  assert.equal(CANONICAL_CONFIG_TEMPLATE.providers?.openrouter && 'stages' in CANONICAL_CONFIG_TEMPLATE.providers.openrouter, false);
+  assert.equal(CANONICAL_CONFIG_TEMPLATE.challenge && 'models' in CANONICAL_CONFIG_TEMPLATE.challenge, false);
+  assert.equal(CANONICAL_CONFIG_TEMPLATE.router && 'availableModels' in CANONICAL_CONFIG_TEMPLATE.router, false);
 });
 
-test('CANONICAL_CONFIG_TEMPLATE exposes watchlist aliases only in launchable stages', () => {
-  const expected = {
-    'claude-fable-5': ['planner', 'coder', 'reviewer'],
-    'gpt-4.1': ['coder'],
-    'deepseek-coder-v2': ['coder'],
-    'qwen-3-235b': ['planner', 'coder', 'reviewer'],
-    'qwen-2.5-72b': ['coder'],
-    'kimi-k2-thinking': ['planner', 'coder', 'reviewer'],
-    'gemini-2.0-flash': ['coder'],
-    'llama-4-scout': ['coder'],
-    'mistral-medium-3': ['coder'],
-    'devstral-medium': ['coder'],
-    'grok-code-fast': ['coder'],
-  } as const;
-  const pools = CANONICAL_CONFIG_TEMPLATE.router?.availableModels;
-  assert.ok(pools);
-
-  for (const [modelId, stages] of Object.entries(expected)) {
-    assert.ok(CANONICAL_CONFIG_TEMPLATE.providers?.openrouter?.models?.includes(modelId));
-    for (const stage of ['planner', 'coder', 'reviewer'] as const) {
-      assert.equal(
-        pools[stage]?.includes(modelId),
-        (stages as readonly string[]).includes(stage),
-        `${modelId}:${stage}`,
-      );
-    }
+test('CANONICAL_CONFIG_TEMPLATE contains no removed model ownership fields', () => {
+  const serialized = JSON.stringify(CANONICAL_CONFIG_TEMPLATE);
+  for (const key of ['modelRegistry', 'availableModels', 'agentMap', 'comparisonModel']) {
+    assert.equal(serialized.includes(`"${key}"`), false, key);
   }
 });
 

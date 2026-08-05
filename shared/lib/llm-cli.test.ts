@@ -68,11 +68,6 @@ function createRepoDir(name: string): string {
   return dir;
 }
 
-function writeRegistryConfig(config: Record<string, unknown>): void {
-  writeFileSync(join(repoDir, '.wavemill-config.json'), `${JSON.stringify(config, null, 2)}\n`, 'utf-8');
-  clearConfigCache(repoDir);
-}
-
 function createMockCli(
   name: string,
   behavior: Record<string, Array<Record<string, unknown>> | Record<string, unknown>>
@@ -368,25 +363,10 @@ describe('quota fallback', () => {
     ]);
   });
 
-  it('uses task-specific ladders from the registry', async () => {
-    writeRegistryConfig({
-      configVersion: '1.3.0',
-      modelRegistry: {
-        models: {
-          'model-a': { class: 'frontier', qualityScores: { coding: 90, review: 50 } },
-          'model-b': { class: 'strong_generalist', qualityScores: { coding: 80, review: 95 } },
-          'model-c': { class: 'fast_economy', qualityScores: { coding: 70, review: 60 } },
-        },
-        ladders: {
-          coding: ['model-a', 'model-b', 'model-c'],
-          review: ['model-b', 'model-a', 'model-c'],
-        },
-      },
-    });
-
+  it('uses task-specific ladders from the global registry', async () => {
     const codingCli = createMockCli('coding-ladder', {
-      'model-a': { type: 'quota', message: '429 quota exceeded', code: 1 },
-      'model-b': { type: 'success', text: 'coding winner' },
+      'claude-fable-5': { type: 'quota', message: '429 quota exceeded', code: 1 },
+      'deepseek-v4-pro': { type: 'success', text: 'coding winner' },
     });
     const codingResult = await callLLM('coding prompt', {
       provider: 'claude',
@@ -395,36 +375,23 @@ describe('quota fallback', () => {
       repoDir,
       taskType: 'coding',
     });
-    assert.equal(codingResult.model, 'model-b');
+    assert.equal(codingResult.model, 'deepseek-v4-pro');
 
-    repoDir = createRepoDir('review-repo');
-    writeRegistryConfig({
-      configVersion: '1.3.0',
-      modelRegistry: {
-        models: {
-          'model-a': { class: 'frontier', qualityScores: { coding: 90, review: 50 } },
-          'model-b': { class: 'strong_generalist', qualityScores: { coding: 80, review: 95 } },
-          'model-c': { class: 'fast_economy', qualityScores: { coding: 70, review: 60 } },
-        },
-        ladders: {
-          coding: ['model-a', 'model-b', 'model-c'],
-          review: ['model-b', 'model-a', 'model-c'],
-        },
-      },
-    });
+    repoDir = createRepoDir('planning-repo');
+    clearConfigCache(repoDir);
 
-    const reviewCli = createMockCli('review-ladder', {
-      'model-b': { type: 'quota', message: '429 quota exceeded', code: 1 },
-      'model-a': { type: 'success', text: 'review winner' },
+    const planningCli = createMockCli('planning-ladder', {
+      'claude-fable-5': { type: 'quota', message: '429 quota exceeded', code: 1 },
+      'claude-opus-4-8': { type: 'success', text: 'planning winner' },
     });
-    const reviewResult = await callLLM('review prompt', {
+    const planningResult = await callLLM('planning prompt', {
       provider: 'claude',
       mode: 'stream',
-      cliCmd: reviewCli.cliPath,
+      cliCmd: planningCli.cliPath,
       repoDir,
-      taskType: 'review',
+      taskType: 'planning',
     });
-    assert.equal(reviewResult.model, 'model-a');
+    assert.equal(planningResult.model, 'claude-opus-4-8');
   });
 
   it('filters task ladders to models supported by the selected provider', async () => {
@@ -447,32 +414,10 @@ describe('quota fallback', () => {
     assert.deepEqual(readInvocations(logPath).map((entry) => entry.model), ['claude-fable-5']);
   });
 
-  it('excludes globally disabled models from the fallback ladder', async () => {
-    // gpt-5.3-codex is permanently disabled in DISABLED_MODEL_IDS. Even though it is
-    // ladder-first for planning in this registry, it must never be invoked — the
-    // resolver should skip straight to claude-opus-4-8. Regression guard for the
-    // silent failures when a model's upstream access is restricted.
-    writeRegistryConfig({
-      configVersion: '1.3.0',
-      modelRegistry: {
-        models: {
-          'gpt-5.3-codex': {
-            vendor: 'openai',
-            class: 'frontier',
-            agent: 'claude',
-            qualityScores: { routing: 0, planning: 99, coding: 0, review: 0, classify: 0 },
-          },
-          'claude-opus-4-8': {
-            vendor: 'anthropic',
-            class: 'strong_generalist',
-            qualityScores: { routing: 0, planning: 80, coding: 0, review: 0, classify: 0 },
-          },
-        },
-        ladders: {
-          planning: ['gpt-5.3-codex', 'claude-opus-4-8'],
-        },
-      },
-    });
+  it('excludes globally disabled models from explicit fallback candidates', async () => {
+    // gpt-5.3-codex is permanently disabled in DISABLED_MODEL_IDS. Even when a
+    // caller asks for it explicitly, the resolver should skip straight to the
+    // next globally usable candidate.
     const { cliPath, logPath } = createMockCli('disabled-filter', {
       'gpt-5.3-codex': { type: 'other', message: 'codex access restricted', code: 1 },
       'claude-opus-4-8': { type: 'success', text: 'planning winner' },
@@ -484,6 +429,7 @@ describe('quota fallback', () => {
       cliCmd: cliPath,
       repoDir,
       taskType: 'planning',
+      fallbackModels: ['gpt-5.3-codex', 'claude-opus-4-8'],
     });
 
     assert.equal(result.model, 'claude-opus-4-8');
@@ -492,29 +438,8 @@ describe('quota fallback', () => {
   });
 
   it('keeps DeepSeek Claude-compatible models in provider-filtered ladders', async () => {
-    writeRegistryConfig({
-      configVersion: '1.3.0',
-      modelRegistry: {
-        models: {
-          'deepseek-v4-pro': {
-            vendor: 'deepseek',
-            class: 'strong_generalist',
-            agent: 'claude',
-            qualityScores: { routing: 0, planning: 0, coding: 95, review: 0, classify: 0 },
-          },
-          'gpt-5.5': {
-            vendor: 'openai',
-            class: 'frontier',
-            qualityScores: { routing: 0, planning: 0, coding: 99, review: 0, classify: 0 },
-          },
-        },
-        ladders: {
-          coding: ['gpt-5.5', 'deepseek-v4-pro'],
-        },
-      },
-    });
-
     const { cliPath, logPath } = createMockCli('deepseek-provider-filter', {
+      'claude-fable-5': { type: 'quota', message: '429 quota exceeded', code: 1 },
       'deepseek-v4-pro': { type: 'success', text: 'deepseek coding winner' },
     });
 
@@ -527,7 +452,7 @@ describe('quota fallback', () => {
     });
 
     assert.equal(result.model, 'deepseek-v4-pro');
-    assert.deepEqual(readInvocations(logPath).map((entry) => entry.model), ['deepseek-v4-pro']);
+    assert.deepEqual(readInvocations(logPath).map((entry) => entry.model), ['claude-fable-5', 'deepseek-v4-pro']);
   });
 
   it('persists an all_exhausted fallback event when later candidates fail for mixed reasons', async () => {

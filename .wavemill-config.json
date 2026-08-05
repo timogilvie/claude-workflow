@@ -1,5 +1,5 @@
 {
-  "configVersion": "1.4.1",
+  "configVersion": "1.5.0",
   "linear": {
     "project": "wavemill"
   },
@@ -196,31 +196,7 @@
     "openrouter": {
       "enabled": true,
       "apiKeyEnv": "OPENROUTER_API_KEY",
-      "baseUrl": "https://openrouter.ai/api",
-      "models": [
-        "deepseek-r1",
-        "deepseek-v3",
-        "qwen-3-coder",
-        "qwen-3-235b",
-        "qwen-2.5-coder-32b",
-        "glm-5.2",
-        "kimi-k2",
-        "kimi-k2.7-code",
-        "kimi-k2-thinking",
-        "gemini-2.5-pro",
-        "gemini-2.5-flash",
-        "llama-3.3-70b",
-        "llama-4-maverick",
-        "mistral-large-2",
-        "mistral-medium-3",
-        "devstral-small",
-        "devstral-medium"
-      ],
-      "stages": [
-        "planner",
-        "coder",
-        "reviewer"
-      ]
+      "baseUrl": "https://openrouter.ai/api"
     }
   },
   "nativeAgent": {
@@ -250,12 +226,7 @@
       "openrouter": {
         "enabled": true,
         "apiKeyEnv": "OPENROUTER_API_KEY",
-        "baseUrl": "https://openrouter.ai/api/v1",
-        "models": [
-          "qwen/qwen3-coder",
-          "z-ai/glm-5.2",
-          "moonshotai/kimi-k2.7-code"
-        ]
+        "baseUrl": "https://openrouter.ai/api/v1"
       }
     }
   },
@@ -268,11 +239,6 @@
       "implementation": 0.5,
       "review": 0.25
     },
-    "models": [
-      "glm-5.2",
-      "kimi-k2.7-code"
-    ],
-    "comparisonModel": "claude-opus-4-7",
     "autoMergeWinner": false
   },
   "review": {
@@ -285,10 +251,8 @@
   },
   "router": {
     "enabled": true,
-    "defaultModel": "gpt-5.5",
     "minRecords": 20,
     "minModels": 2,
-    "models": [],
     "exploration": {
       "enabled": true,
       "mode": "epsilon",
@@ -309,93 +273,7 @@
       "maxStageShare": 0.7,
       "window": 50
     },
-    "availableModels": {
-      "planner": [
-        "claude-fable-5",
-        "claude-opus-4-8",
-        "claude-opus-4-7",
-        "gpt-5.5",
-        "gpt-5.6-terra",
-        "deepseek-r1",
-        "glm-5.2",
-        "kimi-k2",
-        "kimi-k2.7-code",
-        "kimi-k2-thinking",
-        "gemini-2.5-pro",
-        "qwen-3-235b",
-        "llama-4-maverick",
-        "mistral-large-2",
-        "mistral-medium-3"
-      ],
-      "coder": [
-        "claude-fable-5",
-        "claude-sonnet-5",
-        "gpt-5.5",
-        "gpt-5.6-terra",
-        "deepseek-r1",
-        "deepseek-v3",
-        "qwen-3-coder",
-        "qwen-3-235b",
-        "qwen-2.5-coder-32b",
-        "glm-5.2",
-        "kimi-k2",
-        "kimi-k2.7-code",
-        "kimi-k2-thinking",
-        "gemini-2.5-pro",
-        "gemini-2.5-flash",
-        "llama-3.3-70b",
-        "llama-4-maverick",
-        "mistral-large-2",
-        "mistral-medium-3",
-        "devstral-small",
-        "devstral-medium"
-      ],
-      "reviewer": [
-        "claude-fable-5",
-        "claude-opus-4-8",
-        "claude-opus-4-7",
-        "gpt-5.5",
-        "gpt-5.6-terra",
-        "deepseek-r1",
-        "deepseek-v3",
-        "qwen-3-coder",
-        "qwen-3-235b",
-        "glm-5.2",
-        "kimi-k2",
-        "kimi-k2.7-code",
-        "kimi-k2-thinking",
-        "gemini-2.5-pro",
-        "gemini-2.5-flash",
-        "llama-3.3-70b",
-        "mistral-large-2",
-        "mistral-medium-3"
-      ]
-    },
     "defaultAgent": "codex",
-    "agentMap": {
-      "claude-fable-5": "claude",
-      "claude-opus-4-8": "claude",
-      "claude-opus-4-7": "claude",
-      "claude-sonnet-5": "claude",
-      "claude-sonnet-4-6": "claude",
-      "claude-opus-4-6": "claude",
-      "claude-sonnet-4-5-20250929": "claude",
-      "claude-haiku-4-5-20251001": "claude",
-      "gpt-5.6-terra": "codex",
-      "gpt-5.5": "codex",
-      "gpt-5.3-codex": "codex",
-      "gpt-5.3-codex-spark": "codex",
-      "qwen-3-coder": "claude-openrouter",
-      "qwen-2.5-coder-32b": "claude-openrouter",
-      "glm-5.2": "claude-openrouter",
-      "kimi-k2": "claude-openrouter",
-      "kimi-k2.7-code": "claude-openrouter",
-      "gemini-2.5-pro": "claude-openrouter",
-      "gemini-2.5-flash": "claude-openrouter",
-      "llama-3.3-70b": "claude-openrouter",
-      "mistral-large-2": "claude-openrouter",
-      "devstral-small": "claude-openrouter"
-    },
     "mode": "auto",
     "llmModel": "gpt-4o-mini",
     "llmProvider": "openai"
@@ -455,10 +333,6 @@
       "autoApproveReadOnly": true
     }
   },
-  "challengeScheduler": {
-    "enabled": true,
-    "newModelChallengeCount": 25
-  },
   "integration": {
     "enabled": false,
     "integrationBranch": "auto/integration",
@@ -473,154 +347,6 @@
     ],
     "highRiskPolicy": "manual",
     "useMillSession": true
-  },
-  "modelRegistry": {
-    "models": {
-      "qwen-3-coder": {
-        "vendor": "qwen",
-        "class": "strong_generalist",
-        "strengths": [
-          "coding",
-          "review",
-          "native OpenRouter pilot"
-        ],
-        "weaknesses": [
-          "native task-expansion pilot pending validation"
-        ],
-        "qualityScores": {
-          "review": 78,
-          "coding": 82,
-          "planning": 65
-        },
-        "defaultLadderEligible": false,
-        "contextWindowTokens": 262144,
-        "toolSupport": "full",
-        "multimodal": {
-          "text": true,
-          "image": false
-        },
-        "latencyTier": "standard",
-        "reasoningTier": "advanced",
-        "costPerMillionInputTokensUsd": 0.35,
-        "costPerMillionOutputTokensUsd": 1.05,
-        "agent": "native-openrouter",
-        "nativeCapability": {
-          "nativeProvider": "openrouter",
-          "piTransportKind": "openai-completions",
-          "readOnlyNative": "certified",
-          "compatFlags": {
-            "thinkingFormat": "openrouter"
-          },
-          "limitations": [
-            "Pilot use is limited to configured OpenRouter-native routing surfaces while broader rollout matures."
-          ],
-          "certification": {
-            "maxCertifiedPhase": "workflow",
-            "certifiedAt": "2026-07-15T00:00:00.000Z",
-            "certificationSuiteVersion": "v2",
-            "knownLimitations": [
-              "Live-judged scenarios require a paid provider call and are not run by the deterministic harness."
-            ]
-          }
-        }
-      },
-      "glm-5.2": {
-        "vendor": "z-ai",
-        "class": "frontier",
-        "strengths": [
-          "long-context review",
-          "agentic coding analysis",
-          "native OpenRouter pilot"
-        ],
-        "weaknesses": [
-          "native task-expansion pilot pending validation"
-        ],
-        "qualityScores": {
-          "review": 84,
-          "coding": 80,
-          "planning": 80
-        },
-        "defaultLadderEligible": false,
-        "contextWindowTokens": 1048576,
-        "toolSupport": "full",
-        "multimodal": {
-          "text": true,
-          "image": false
-        },
-        "latencyTier": "standard",
-        "reasoningTier": "advanced",
-        "costPerMillionInputTokensUsd": 0.93,
-        "costPerMillionOutputTokensUsd": 3,
-        "agent": "native-openrouter",
-        "nativeCapability": {
-          "nativeProvider": "openrouter",
-          "piTransportKind": "openai-completions",
-          "readOnlyNative": "certified",
-          "compatFlags": {
-            "thinkingFormat": "openrouter"
-          },
-          "limitations": [
-            "Pilot use is limited to configured OpenRouter-native routing surfaces while broader rollout matures."
-          ],
-          "certification": {
-            "maxCertifiedPhase": "workflow",
-            "certifiedAt": "2026-07-15T00:00:00.000Z",
-            "certificationSuiteVersion": "v2",
-            "knownLimitations": [
-              "Live-judged scenarios require a paid provider call and are not run by the deterministic harness."
-            ]
-          }
-        }
-      },
-      "kimi-k2.7-code": {
-        "vendor": "moonshotai",
-        "class": "strong_generalist",
-        "strengths": [
-          "coding-focused review",
-          "long-context code analysis",
-          "native OpenRouter pilot"
-        ],
-        "weaknesses": [
-          "native task-expansion pilot pending validation"
-        ],
-        "qualityScores": {
-          "review": 82,
-          "coding": 82,
-          "planning": 72
-        },
-        "defaultLadderEligible": false,
-        "contextWindowTokens": 262144,
-        "toolSupport": "full",
-        "multimodal": {
-          "text": true,
-          "image": true
-        },
-        "latencyTier": "standard",
-        "reasoningTier": "advanced",
-        "costPerMillionInputTokensUsd": 0.74,
-        "costPerMillionOutputTokensUsd": 3.5,
-        "agent": "native-openrouter",
-        "nativeCapability": {
-          "nativeProvider": "openrouter",
-          "piTransportKind": "openai-completions",
-          "readOnlyNative": "certified",
-          "compatFlags": {
-            "thinkingFormat": "openrouter"
-          },
-          "limitations": [
-            "Pilot use is limited to configured OpenRouter-native routing surfaces while broader rollout matures."
-          ],
-          "certification": {
-            "maxCertifiedPhase": "workflow",
-            "certifiedAt": "2026-07-15T00:00:00.000Z",
-            "certificationSuiteVersion": "v2",
-            "knownLimitations": [
-              "Live-judged scenarios require a paid provider call and are not run by the deterministic harness."
-            ]
-          }
-        }
-      }
-    }
   },
   "promotion": {
     "protectedIntegrationStrategy": "use-promotion-head",

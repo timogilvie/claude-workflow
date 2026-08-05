@@ -1,10 +1,10 @@
 import { resolve } from 'node:path';
 import {
-  getAvailableModelsForStage,
   getNativeAgentConfig,
   getOpenRouterProviderConfig,
   getRouterConfig,
 } from './config.ts';
+import { listEffectiveModelsForStage, listEffectiveNativeProviderModels } from './effective-models.ts';
 import { resolveEnvValue } from './env-file.ts';
 import { getCurrentOperatingMode, type OperatingMode } from './operating-mode.ts';
 import {
@@ -189,8 +189,8 @@ function isRawOpenRouterId(value: string): boolean {
 }
 
 function collectConfiguredCandidates(repoDir: string): CandidateAccumulator[] {
-  const providerModels = normalizeList(getOpenRouterProviderConfig(repoDir).models);
-  const nativeModels = normalizeList(getNativeAgentConfig(repoDir).providers?.openrouter?.models);
+  const providerModels = normalizeList(listEffectiveNativeProviderModels('openrouter', 'coding', { repoDir }).models);
+  const nativeModels: string[] = [];
   const byKey = new Map<string, CandidateAccumulator>();
 
   const ensureCandidate = (input: {
@@ -231,7 +231,7 @@ function collectConfiguredCandidates(repoDir: string): CandidateAccumulator[] {
       alias,
       nativeProviderId,
       configuredValue: value,
-      configSurface: 'providers.openrouter.models',
+      configSurface: 'globalEffectiveModels.openrouter',
       source: 'provider',
     });
   }
@@ -241,7 +241,7 @@ function collectConfiguredCandidates(repoDir: string): CandidateAccumulator[] {
       alias: resolveWavemillAliasFromOpenRouterId(value),
       nativeProviderId: value,
       configuredValue: value,
-      configSurface: 'nativeAgent.providers.openrouter.models',
+      configSurface: 'globalEffectiveModels.openrouter',
       source: 'native',
     });
   }
@@ -294,8 +294,9 @@ function stagePoolValues(
   stage: OpenRouterDoctorStage,
   fallbackModels: string[],
 ): string[] {
-  const routerConfig = getRouterConfig(repoDir);
-  return normalizeList(getAvailableModelsForStage(routerConfig, stage) ?? fallbackModels);
+  void fallbackModels;
+  const effectiveStage = stage === 'planner' ? 'planning' : stage === 'coder' ? 'coding' : 'review';
+  return normalizeList(listEffectiveModelsForStage(effectiveStage, { repoDir }).models);
 }
 
 function candidateAppearsInPool(candidate: CandidateAccumulator, pool: readonly string[]): boolean {
@@ -342,8 +343,8 @@ function mapProviderWarningsToReasons(
       appendReason(reasons, buildReason(
         'STAGE_NOT_PERMITTED',
         warning,
-        'providers.openrouter.stages',
-        `Add ${stage} to providers.openrouter.stages or remove the model from ${stage} routing pools.`,
+        'global effective-model projection',
+        `Add ${stage} support to the global model catalog projection or remove the model from ${stage} routing pools.`,
       ));
       continue;
     }
@@ -362,8 +363,8 @@ function mapProviderWarningsToReasons(
       appendReason(reasons, buildReason(
         'STAGE_NOT_PERMITTED',
         warning,
-        'providers.openrouter.models',
-        'Add the alias to providers.openrouter.models or remove it from router/challenge pools.',
+        'globalEffectiveModels.openrouter',
+        'Add the alias to the global v2 catalog/effective-model projection or remove it from OpenRouter routing eligibility.',
       ));
     }
   }
@@ -377,12 +378,12 @@ function mapCertificationRejection(
 ): OpenRouterDoctorReason {
   const configSurface = (() => {
     if (rejection.reason === 'no-native-capability') {
-      return `modelRegistry.models.${rejection.modelId}`;
+      return `globalModelRegistry.models.${rejection.modelId}`;
     }
     if (rejection.reason === 'missing-api-key') {
       return 'nativeAgent.providers.openrouter.apiKeyEnv';
     }
-    return 'nativeAgent.providers.openrouter.models';
+    return 'globalEffectiveModels.openrouter';
   })();
   const detailParts = [
     `Native certification rejected ${rejection.modelId} for ${rejection.role}.`,
@@ -425,22 +426,9 @@ function resolveAgentFallbackReason(
   stage: OpenRouterDoctorStage,
 ): OpenRouterDoctorReason | null {
   const routerConfig = getRouterConfig(repoDir);
-  const explicitAgent = routerConfig.agentMap?.[modelId];
-
-  // An explicit Codex mapping is invalid for an OpenRouter candidate even
-  // when the stricter agent resolver rejects it before producing an agent.
-  if (explicitAgent === 'codex') {
-    return buildReason(
-      'AGENT_FALLBACK_TO_CODEX',
-      `router.agentMap resolves ${modelId} to codex for ${stage}.`,
-      `router.agentMap.${modelId}`,
-      `Map ${modelId} to a native OpenRouter agent or remove it from ${stage} routing pools.`,
-    );
-  }
-
   const resolution = tryResolveAgent(
     modelId,
-    routerConfig.agentMap ?? {},
+    {},
     (routerConfig.defaultAgent ?? 'claude') as AgentType,
     repoDir,
     DOCTOR_STAGE_BY_AGENT_PHASE[stage],
@@ -457,8 +445,8 @@ function resolveAgentFallbackReason(
   return buildReason(
     'AGENT_FALLBACK_TO_CODEX',
     `Model ${modelId} resolves to codex for ${stage}.`,
-    `modelRegistry.models.${modelId}.agent`,
-    `Give ${modelId} an OpenRouter/native mapping instead of codex, or remove it from ${stage} routing pools.`,
+    `globalModelRegistry.models.${modelId}.agent`,
+    `Update the global effective-model projection so ${modelId} resolves to an OpenRouter/native agent, or remove it from global ${stage} eligibility.`,
   );
 }
 
@@ -488,8 +476,8 @@ function evaluateCell(input: {
     appendReason(reasons, buildReason(
       'STAGE_NOT_PERMITTED',
       `Model is not present in the effective ${input.stage} pool.`,
-      `router.availableModels.${input.stage}`,
-      `Add ${input.candidate.alias ?? input.candidate.nativeProviderId ?? input.candidate.key} to the ${input.stage} pool or remove the OpenRouter config entry.`,
+      `globalEffectiveModels.${input.stage}`,
+      `Add ${input.candidate.alias ?? input.candidate.nativeProviderId ?? input.candidate.key} to the global v2 catalog/effective-model projection for ${input.stage}.`,
     ));
   }
 
@@ -497,9 +485,9 @@ function evaluateCell(input: {
   if (providerRawId) {
     appendReason(reasons, buildReason(
       'MISSING_REGISTRY_ALIAS',
-      `providers.openrouter.models contains raw OpenRouter ID "${providerRawId}" instead of a Wavemill alias.`,
-      'providers.openrouter.models',
-      `Replace "${providerRawId}" with "${input.candidate.alias ?? providerRawId}".`,
+      `Global OpenRouter projection contains raw OpenRouter ID "${providerRawId}" instead of a Wavemill alias.`,
+      'globalEffectiveModels.openrouter',
+      `Publish "${input.candidate.alias ?? providerRawId}" as a Wavemill alias in the global v2 catalog/effective-model projection.`,
     ));
   }
 
@@ -533,8 +521,8 @@ function evaluateCell(input: {
     appendReason(reasons, buildReason(
       'MISSING_REGISTRY_ALIAS',
       `No enabled registry entry could be resolved for alias=${input.candidate.alias ?? 'none'} rawId=${input.candidate.nativeProviderId ?? 'none'}.`,
-      'modelRegistry.models',
-      'Add a matching modelRegistry entry or fix the alias/raw ID in the config.',
+      'globalModelRegistry.models',
+      'Add a matching entry to the global v2 catalog/effective-model projection.',
     ));
   } else {
     if (!isAllowedInOperatingMode(input.capabilities, input.operatingMode)) {
