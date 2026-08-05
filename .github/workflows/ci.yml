@@ -51,8 +51,12 @@ jobs:
         run: bash tests/run-shell-suite.sh --shard ${{ matrix.shard }}/4
 
   unit:
-    name: Unit Tests
+    name: Unit Tests (shard ${{ matrix.shard }}/3)
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
 
     steps:
       - name: Checkout
@@ -61,8 +65,8 @@ jobs:
       - name: Setup
         uses: ./.github/actions/setup
 
-      - name: Run node:test unit tests
-        run: npm run test:node-test
+      - name: Run unit test shard
+        run: bash tests/run-unit-tests.sh --shard ${{ matrix.shard }}/3
 
   custom:
     name: Custom Harness Tests
