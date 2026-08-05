@@ -1272,13 +1272,9 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       reasoningTier: 'advanced',
       costPerMillionInputTokensUsd: 10,
       costPerMillionOutputTokensUsd: 50,
-      agent: 'native-openrouter',
-      nativeCapability: OPENROUTER_NATIVE_CAPABILITY,
-      supportedModel: openRouterSupportedModel({
-        alias: 'claude-fable-5',
-        providerNativeId: 'anthropic/claude-fable-5',
-        stages: ['planning', 'coding', 'review'],
-      }),
+      // Anthropic models run through the Claude Code harness. They must never
+      // be sent through the native OpenRouter adapter.
+      agent: 'claude',
     },
     'claude-opus-4-8': {
       vendor: 'anthropic',

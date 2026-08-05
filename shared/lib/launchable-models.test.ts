@@ -11,7 +11,6 @@ import { buildCertificationPath } from './native-agent/certification/loader.ts';
 import { loadLaunchPriorityList } from './openrouter-catalog.ts';
 
 const WATCHLIST_STAGE_MAP = {
-  'claude-fable-5': ['planner', 'coder', 'reviewer'],
   'gpt-4.1': ['coder'],
   'deepseek-coder-v2': ['coder'],
   'qwen-3-235b': ['planner', 'coder', 'reviewer'],

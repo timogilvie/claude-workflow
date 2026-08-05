@@ -232,6 +232,11 @@ export function resolveModelAgent(opts: ResolveModelAgentOptions): AgentResoluti
 
   const registry = opts.registry ?? DEFAULT_MODEL_REGISTRY;
   const capabilities = getModel(registry, modelId);
+  // Keep the provider boundary authoritative even if a future registry entry
+  // accidentally declares an Anthropic model as an OpenRouter-native agent.
+  if (capabilities?.vendor === 'anthropic') {
+    return { ok: true, agent: 'claude' };
+  }
   const resolvedAgent = capabilities?.agent
     ?? (capabilities?.nativeCapability?.nativeProvider
       ? (capabilities.nativeCapability.nativeProvider === 'openai' ? 'native-openai' : 'native-openrouter')
