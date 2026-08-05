@@ -24,7 +24,6 @@ import {
   REVIEW_MERGE_DEFAULTS,
   getChallengeConfig,
   getChallengeSchedulerConfig,
-  getAvailableModelsForStage,
   getRouterConfig,
   getEvalConfig,
   getIntegrationConfig,
@@ -54,7 +53,6 @@ import {
   getReadyWatchdogConfig,
   getMigrationChecksConfig,
   getMergeQueueConfig,
-  getModelRegistryConfig,
   getMintEligibilityConfig,
   getEvalContextUpdatesConfig,
   isRouterCapabilityFilteringEnabled,
@@ -172,43 +170,10 @@ test('valid config passes validation', () => {
   try {
     clearConfigCache();
     writeConfig(tmp, JSON.stringify({
-      modelRegistry: {
-        models: {
-          'claude-opus-4-7': {
-            qualityScores: { coding: 99 },
-          },
-          'deepseek-v4-pro': {
-            pricing: {
-              inputCostPerMTok: 0.435,
-              outputCostPerMTok: 0.87,
-              cacheReadCostPerMTok: 0.003625,
-            },
-            defaultLadderEligible: false,
-            contextWindowTokens: 1000000,
-            toolSupport: 'basic',
-            multimodal: {
-              text: true,
-              image: false,
-            },
-            latencyTier: 'standard',
-            reasoningTier: 'advanced',
-            costPerMillionInputTokensUsd: 0.435,
-            costPerMillionOutputTokensUsd: 0.87,
-            agent: 'claude',
-          },
-        },
-        ladders: {
-          review: ['claude-opus-4-7', 'claude-sonnet-4-6'],
-        },
-      },
       router: {
         enabled: true,
-        defaultModel: 'claude-sonnet-4-5-20250929',
-        models: ['claude-sonnet-4-5-20250929', 'gpt-5.4'],
-        availableModels: {
-          planner: ['claude-sonnet-4-5-20250929'],
-          coder: ['gpt-5.4'],
-        },
+        minRecords: 20,
+        minModels: 2,
       },
       resources: {
         runtimeSelection: {
@@ -228,7 +193,6 @@ test('valid config passes validation', () => {
       challenge: {
         enabled: true,
         rate: 0.25,
-        models: ['claude-opus-4-6', 'gpt-5.3-codex'],
         allowDeepseek: true,
       },
       challengeScheduler: { enabled: true, confidenceThreshold: 0.65, newModelChallengeCount: 4 },
@@ -236,8 +200,6 @@ test('valid config passes validation', () => {
         deepseek: {
           enabled: true,
           apiKeyEnv: 'DEEPSEEK_API_KEY',
-          models: ['deepseek-v4-pro'],
-          stages: ['coder'],
         },
       },
       eval: { evalsDir: '.wavemill/evals' },
@@ -250,25 +212,46 @@ test('valid config passes validation', () => {
     assert.equal(config.challenge?.allowDeepseek, true);
     assert.equal(config.challengeScheduler?.confidenceThreshold, 0.65);
     assert.equal(config.providers?.deepseek?.enabled, true);
-    assert.equal(config.modelRegistry?.models?.['claude-opus-4-7']?.qualityScores?.coding, 99);
-    assert.equal(config.modelRegistry?.models?.['deepseek-v4-pro']?.pricing?.inputCostPerMTok, 0.435);
-    assert.equal(config.modelRegistry?.models?.['deepseek-v4-pro']?.defaultLadderEligible, false);
-    assert.equal(config.modelRegistry?.models?.['deepseek-v4-pro']?.contextWindowTokens, 1000000);
-    assert.equal(config.modelRegistry?.models?.['deepseek-v4-pro']?.toolSupport, 'basic');
-    assert.deepEqual(config.modelRegistry?.models?.['deepseek-v4-pro']?.multimodal, { text: true, image: false });
-    assert.equal(config.modelRegistry?.models?.['deepseek-v4-pro']?.latencyTier, 'standard');
-    assert.equal(config.modelRegistry?.models?.['deepseek-v4-pro']?.reasoningTier, 'advanced');
-    assert.equal(config.modelRegistry?.models?.['deepseek-v4-pro']?.costPerMillionInputTokensUsd, 0.435);
-    assert.equal(config.modelRegistry?.models?.['deepseek-v4-pro']?.costPerMillionOutputTokensUsd, 0.87);
-    assert.equal(config.modelRegistry?.models?.['deepseek-v4-pro']?.agent, 'claude');
-    assert.deepEqual(config.modelRegistry?.ladders?.review, ['claude-opus-4-7', 'claude-sonnet-4-6']);
     assert.equal(config.eval?.evalsDir, '.wavemill/evals');
     assert.equal(config.mill?.maxParallel, 5);
-    assert.deepEqual(config.router?.availableModels?.planner, ['claude-sonnet-4-5-20250929']);
-    assert.deepEqual(config.router?.availableModels?.coder, ['gpt-5.4']);
     assert.equal(config.resources?.runtimeSelection?.defaultVariant, 'optimized');
   } finally {
     cleanUp(tmp);
+  }
+});
+
+test('removed repo-local model fields are rejected with migration guidance', () => {
+  const cases: Array<{ path: string; config: Record<string, unknown> }> = [
+    { path: 'modelRegistry', config: { modelRegistry: { models: { local: {} } } } },
+    { path: 'router.defaultModel', config: { router: { defaultModel: 'local-model' } } },
+    { path: 'router.models', config: { router: { models: ['local-model'] } } },
+    { path: 'router.availableModels', config: { router: { availableModels: { coder: ['local-model'] } } } },
+    { path: 'router.agentMap', config: { router: { agentMap: { 'local-model': 'codex' } } } },
+    { path: 'challenge.models', config: { challenge: { models: ['local-model'] } } },
+    { path: 'challenge.comparisonModel', config: { challenge: { comparisonModel: 'local-model' } } },
+    { path: 'providers.openrouter.models', config: { providers: { openrouter: { models: ['local-model'] } } } },
+    { path: 'providers.openrouter.stages', config: { providers: { openrouter: { stages: ['coder'] } } } },
+    { path: 'providers.deepseek.models', config: { providers: { deepseek: { models: ['deepseek-local'] } } } },
+    { path: 'providers.deepseek.stages', config: { providers: { deepseek: { stages: ['coder'] } } } },
+    { path: 'nativeAgent.providers.openai.models', config: { nativeAgent: { providers: { openai: { models: ['local-model'] } } } } },
+    { path: 'nativeAgent.providers.openrouter.models', config: { nativeAgent: { providers: { openrouter: { models: ['local-model'] } } } } },
+  ];
+
+  for (const testCase of cases) {
+    const tmp = makeTempRepo();
+    try {
+      clearConfigCache();
+      writeConfig(tmp, JSON.stringify(testCase.config));
+      assert.throws(
+        () => loadWavemillConfig(tmp),
+        (err: unknown) => {
+          const message = String((err as Error).message);
+          return message.includes(testCase.path) && message.includes('wavemill config migrate-model-settings');
+        },
+      );
+    } finally {
+      cleanUp(tmp);
+    }
   }
 });
 
@@ -621,202 +604,6 @@ test('invalid runtime resource variant fails validation', () => {
   }
 });
 
-test('invalid model registry shape throws validation error', () => {
-  const tmp = makeTempRepo();
-  try {
-    clearConfigCache();
-    writeConfig(tmp, JSON.stringify({
-      modelRegistry: {
-        ladders: {
-          coding: 'claude-sonnet-4-6',
-        },
-      },
-    }));
-
-    if (hasAjv) {
-      assert.throws(() => {
-        loadWavemillConfig(tmp);
-      }, /validation failed/);
-    } else {
-      assert.doesNotThrow(() => {
-        loadWavemillConfig(tmp);
-      });
-    }
-  } finally {
-    cleanUp(tmp);
-  }
-});
-
-test('minimal model registry override remains valid', () => {
-  const tmp = makeTempRepo();
-  try {
-    clearConfigCache();
-    writeConfig(tmp, JSON.stringify({
-      modelRegistry: {
-        models: {
-          'claude-sonnet-4-6': {
-            strengths: ['speed', 'triage'],
-          },
-        },
-      },
-    }));
-
-    const config = loadWavemillConfig(tmp);
-    assert.deepEqual(config.modelRegistry?.models?.['claude-sonnet-4-6'], {
-      strengths: ['speed', 'triage'],
-    });
-  } finally {
-    cleanUp(tmp);
-  }
-});
-
-test('invalid model registry capability enum fails validation', () => {
-  const tmp = makeTempRepo();
-  try {
-    clearConfigCache();
-    writeConfig(tmp, JSON.stringify({
-      modelRegistry: {
-        models: {
-          'claude-sonnet-4-6': {
-            latencyTier: 'instant',
-          },
-        },
-      },
-    }));
-
-    if (hasAjv) {
-      assert.throws(() => {
-        loadWavemillConfig(tmp);
-      }, /latencyTier|validation failed/);
-    } else {
-      assert.doesNotThrow(() => {
-        loadWavemillConfig(tmp);
-      });
-    }
-  } finally {
-    cleanUp(tmp);
-  }
-});
-
-test('model registry native certification override passes schema validation', () => {
-  const tmp = makeTempRepo();
-  try {
-    clearConfigCache();
-    writeConfig(tmp, JSON.stringify({
-      modelRegistry: {
-        models: {
-          'claude-sonnet-4-6': {
-            nativeCapability: {
-              certification: {
-                maxCertifiedPhase: 'patch',
-                certifiedAt: '2026-06-01T00:00:00.000Z',
-                certificationSuiteVersion: 'v1',
-                knownLimitations: ['long-context degraded'],
-              },
-            },
-          },
-        },
-      },
-    }));
-
-    const config = loadWavemillConfig(tmp);
-    assert.equal(
-      config.modelRegistry?.models?.['claude-sonnet-4-6']?.nativeCapability?.certification?.maxCertifiedPhase,
-      'patch',
-    );
-  } finally {
-    cleanUp(tmp);
-  }
-});
-
-test('model registry native certification override rejects unexpected fields', () => {
-  const tmp = makeTempRepo();
-  try {
-    clearConfigCache();
-    writeConfig(tmp, JSON.stringify({
-      modelRegistry: {
-        models: {
-          'claude-sonnet-4-6': {
-            nativeCapability: {
-              certification: {
-                maxCertifiedPhase: 'patch',
-                extra: true,
-              },
-            },
-          },
-        },
-      },
-    }));
-
-    if (hasAjv) {
-      assert.throws(() => {
-        loadWavemillConfig(tmp);
-      }, /certification|validation failed/);
-    } else {
-      assert.doesNotThrow(() => {
-        loadWavemillConfig(tmp);
-      });
-    }
-  } finally {
-    cleanUp(tmp);
-  }
-});
-
-test('invalid model registry multimodal shape fails validation', () => {
-  const tmp = makeTempRepo();
-  try {
-    clearConfigCache();
-    writeConfig(tmp, JSON.stringify({
-      modelRegistry: {
-        models: {
-          'claude-sonnet-4-6': {
-            multimodal: 'image',
-          },
-        },
-      },
-    }));
-
-    if (hasAjv) {
-      assert.throws(() => {
-        loadWavemillConfig(tmp);
-      }, /multimodal|validation failed/);
-    } else {
-      assert.doesNotThrow(() => {
-        loadWavemillConfig(tmp);
-      });
-    }
-  } finally {
-    cleanUp(tmp);
-  }
-});
-
-test('invalid model registry negative normalized cost fails validation', () => {
-  const tmp = makeTempRepo();
-  try {
-    clearConfigCache();
-    writeConfig(tmp, JSON.stringify({
-      modelRegistry: {
-        models: {
-          'claude-sonnet-4-6': {
-            costPerMillionInputTokensUsd: -1,
-          },
-        },
-      },
-    }));
-
-    if (hasAjv) {
-      assert.throws(() => {
-        loadWavemillConfig(tmp);
-      }, /costPerMillionInputTokensUsd|validation failed/);
-    } else {
-      assert.doesNotThrow(() => {
-        loadWavemillConfig(tmp);
-      });
-    }
-  } finally {
-    cleanUp(tmp);
-  }
-});
 
 test('invalid type in config throws validation error', () => {
   const tmp = makeTempRepo();
@@ -888,8 +675,6 @@ test('deepseek provider accessor returns typed config', () => {
           enabled: true,
           apiKeyEnv: 'CUSTOM_DEEPSEEK_KEY',
           baseUrl: 'https://api.deepseek.com/anthropic',
-          models: ['deepseek-v4-pro', 'deepseek-v4-flash'],
-          stages: ['planner', 'coder'],
           effortLevel: 'high',
         },
       },
@@ -899,8 +684,6 @@ test('deepseek provider accessor returns typed config', () => {
       enabled: true,
       apiKeyEnv: 'CUSTOM_DEEPSEEK_KEY',
       baseUrl: 'https://api.deepseek.com/anthropic',
-      models: ['deepseek-v4-pro', 'deepseek-v4-flash'],
-      stages: ['planner', 'coder'],
       effortLevel: 'high',
     });
   } finally {
@@ -1147,48 +930,6 @@ test('unknown fields are allowed (schema additionalProperties: false)', () => {
   }
 });
 
-test('getModelRegistryConfig returns configured overrides', () => {
-  const tmp = makeTempRepo();
-  try {
-    clearConfigCache();
-    writeConfig(tmp, JSON.stringify({
-      modelRegistry: {
-        models: {
-          'claude-haiku-4-5-20251001': {
-            strengths: ['speed', 'triage'],
-            toolSupport: 'full',
-            multimodal: {
-              text: true,
-              image: true,
-            },
-          },
-        },
-        ladders: {
-          classify: ['claude-haiku-4-5-20251001'],
-        },
-      },
-    }));
-
-    assert.deepEqual(getModelRegistryConfig(tmp), {
-      models: {
-        'claude-haiku-4-5-20251001': {
-          strengths: ['speed', 'triage'],
-          toolSupport: 'full',
-          multimodal: {
-            text: true,
-            image: true,
-          },
-        },
-      },
-      ladders: {
-        classify: ['claude-haiku-4-5-20251001'],
-      },
-    });
-  } finally {
-    cleanUp(tmp);
-  }
-});
-
 test('getQuotaConfig returns configured overrides and thresholds', () => {
   const tmp = makeTempRepo();
   try {
@@ -1425,13 +1166,13 @@ test('getRouterConfig returns router section', () => {
   try {
     clearConfigCache();
     writeConfig(tmp, JSON.stringify({
-      router: { enabled: true, defaultModel: 'claude-sonnet-4-5-20250929' },
+      router: { enabled: true, minRecords: 10 },
       eval: { evalsDir: '.wavemill/evals' },
     }));
 
     const routerConfig = getRouterConfig(tmp);
     assert.equal(routerConfig.enabled, true);
-    assert.equal(routerConfig.defaultModel, 'claude-sonnet-4-5-20250929');
+    assert.equal(routerConfig.minRecords, 10);
   } finally {
     cleanUp(tmp);
   }
@@ -1495,35 +1236,6 @@ test('router capability filtering rejects unexpected nested properties', () => {
   }
 });
 
-test('getAvailableModelsForStage prefers stage-specific models over router.models', () => {
-  const routerConfig = {
-    models: ['shared-model'],
-    availableModels: {
-      planner: ['planner-only'],
-      coder: ['coder-only'],
-    },
-  };
-
-  assert.deepEqual(getAvailableModelsForStage(routerConfig, 'planner'), ['planner-only']);
-  assert.deepEqual(getAvailableModelsForStage(routerConfig, 'coder'), ['coder-only']);
-  assert.deepEqual(getAvailableModelsForStage(routerConfig, 'reviewer'), ['shared-model']);
-});
-
-test('getAvailableModelsForStage treats empty stage lists as unspecified', () => {
-  const routerConfig = {
-    models: ['shared-model'],
-    availableModels: {
-      planner: [],
-    },
-  };
-
-  assert.deepEqual(getAvailableModelsForStage(routerConfig, 'planner'), ['shared-model']);
-});
-
-test('getAvailableModelsForStage returns undefined when no model constraints exist', () => {
-  assert.equal(getAvailableModelsForStage({}, 'planner'), undefined);
-});
-
 test('getChallengeConfig returns challenge section', () => {
   const tmp = makeTempRepo();
   try {
@@ -1533,7 +1245,6 @@ test('getChallengeConfig returns challenge section', () => {
         enabled: true,
         rate: 0.5,
         allowDeepseek: true,
-        comparisonModel: 'claude-opus-4-6',
         autoMergeWinner: true,
       },
     }));
@@ -1542,7 +1253,6 @@ test('getChallengeConfig returns challenge section', () => {
     assert.equal(challengeConfig.enabled, true);
     assert.equal(challengeConfig.rate, 0.5);
     assert.equal(challengeConfig.allowDeepseek, true);
-    assert.equal(challengeConfig.comparisonModel, 'claude-opus-4-6');
     assert.equal(challengeConfig.autoMergeWinner, true);
   } finally {
     cleanUp(tmp);
@@ -3462,13 +3172,11 @@ test('valid nativeAgent provider config validates and is returned by the accesso
             headers: {
               'X-Trace': 'wavemill',
             },
-            models: ['gpt-4o'],
           },
           openrouter: {
             enabled: true,
             apiKeyEnv: 'OPENROUTER_API_KEY',
             baseUrl: 'https://openrouter.ai/api/v1',
-            models: ['openai/gpt-4o-mini'],
           },
         },
       },
@@ -3484,13 +3192,11 @@ test('valid nativeAgent provider config validates and is returned by the accesso
           headers: {
             'X-Trace': 'wavemill',
           },
-          models: ['gpt-4o'],
         },
         openrouter: {
           enabled: true,
           apiKeyEnv: 'OPENROUTER_API_KEY',
           baseUrl: 'https://openrouter.ai/api/v1',
-          models: ['openai/gpt-4o-mini'],
         },
       },
     });

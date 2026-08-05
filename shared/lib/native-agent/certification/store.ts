@@ -13,7 +13,7 @@ import {
 import { randomBytes } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import Ajv from 'ajv';
-import { CERTIFICATION_BASE_PATH, type NativeCertificationArtifact } from './schema.ts';
+import type { NativeCertificationArtifact } from './schema.ts';
 import { buildCertificationPath } from './loader.ts';
 import { resolveCertificationStorageIdentity } from './identity.ts';
 import {
@@ -327,14 +327,12 @@ export function validateCertificationForWrite(
 }
 
 /**
- * Return absolute paths of all `.json` artifacts under
- * <repoDir>/.wavemill/native-agent-certifications/, recursing through
- * provider/model directories. Does not parse contents.
- * Returns [] if the base directory does not exist.
+ * Return absolute paths of all global certification `.json` artifacts.
+ * The repoDir parameter is retained for API compatibility and is ignored.
  */
 export function listCertifications(repoDir: string): string[] {
-  const baseDir = join(repoDir, CERTIFICATION_BASE_PATH);
-  return listCertificationFilesUnderRoot(baseDir);
+  void repoDir;
+  return listGlobalCertifications();
 }
 
 export function listScopedCertifications(options: CertificationStorageOptions = {}): string[] {

@@ -13,13 +13,13 @@ All certification evaluation is **fail-closed**: missing, malformed, stale, wron
 ## Storage Path Contract
 
 ```
-.wavemill/native-agent-certifications/<provider>/<model>/<suite-version>.json
+<global-certification-root>/<provider>/<model>/<suite-version>.json
 ```
 
 **Example:**
 
 ```
-.wavemill/native-agent-certifications/anthropic/claude-sonnet-4-6/v2.json
+~/.wavemill/native-agent-certifications/anthropic/claude-sonnet-4-6/v2.json
 ```
 
 ### Path segment rules
@@ -95,7 +95,7 @@ Native coding rollout uses three separate fail-closed gates:
 
 1. Repo opt-in: `nativeAgent.patchCoding.enabled` in `.wavemill-config.json`
 2. Runtime smoke gate: `.wavemill/native-agent/patch-coding-certification.json`
-3. Provider/model phase gate: `.wavemill/native-agent-certifications/<provider>/<model>/<suite-version>.json`
+3. Provider/model phase gate: global certification artifact under `WAVEMILL_NATIVE_CERTIFICATION_ROOT` or the shared user root
 
 The smoke artifact proves the local patch-coding runtime is enabled safely. The provider/model artifact proves a specific native provider/model pair passed the certification suite for the requested phase. For coder routing, the artifact phase must satisfy `patch`; for planner routing, it must satisfy `workflow`.
 
@@ -218,7 +218,7 @@ if (result.ok) {
   console.error(result.error.code, result.error.message);
 }
 
-// List all .json artifact paths under .wavemill/native-agent-certifications/
+// List all .json artifact paths under the global certification root.
 const paths = listCertifications(repoDir);
 ```
 

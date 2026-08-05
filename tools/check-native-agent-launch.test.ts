@@ -86,8 +86,6 @@ function baseConfig(overrides: Record<string, unknown> = {}): Record<string, unk
       openrouter: {
         enabled: true,
         apiKeyEnv: 'TEST_OPENROUTER_KEY',
-        models: ['z-ai/glm-5.2'],
-        stages: ['planner', 'reviewer'],
       },
     },
     nativeAgent: {
@@ -97,7 +95,6 @@ function baseConfig(overrides: Record<string, unknown> = {}): Record<string, unk
         openrouter: {
           enabled: true,
           apiKeyEnv: 'TEST_OPENROUTER_KEY',
-          models: ['z-ai/glm-5.2'],
         },
       },
     },
@@ -133,42 +130,10 @@ describe('checkNativeAgentLaunch', () => {
     assert.equal(result.ok ? result.command?.apiBaseUrl : undefined, 'https://openrouter.ai/api/v1');
   });
 
-  it('rejects provider-stage mismatches with actionable blocker metadata before launch', () => {
-    const repoDir = makeRepo(baseConfig({
-      providers: {
-        openrouter: {
-          enabled: true,
-          apiKeyEnv: 'TEST_OPENROUTER_KEY',
-          models: ['z-ai/glm-5.2'],
-          stages: ['coder'],
-        },
-      },
-      nativeAgent: {
-        enabled: true,
-        allowedPhases: ['planning', 'review'],
-        providers: {
-          openrouter: {
-            enabled: true,
-            apiKeyEnv: 'TEST_OPENROUTER_KEY',
-            models: ['glm-5.2'],
-          },
-        },
-      },
-    }));
-    process.env.TEST_OPENROUTER_KEY = 'sk-test';
-
-    const result = checkNativeAgentLaunch({
-      repoDir,
-      phase: 'planning',
-      agent: 'native-openrouter',
-      model: 'glm-5.2',
-    });
-
-    assert.equal(result.ok, false);
-    assert.equal(result.ok ? undefined : result.code, 'provider-stage-mismatch');
-    assert.equal(result.ok ? undefined : result.surface, 'providers.openrouter.stages');
-    assert.match(result.ok ? '' : result.reason, /does not include planner/);
-  });
+  // Removed: 'rejects provider-stage mismatches ...'. Repo-local
+  // providers.openrouter.stages no longer exists, so checkNativeAgentLaunch has
+  // no provider-stage-mismatch path. Stage eligibility is now decided by the
+  // global effective-model projection and covered by its own tests.
 
   it('rejects unknown native OpenRouter aliases before launch', () => {
     const repoDir = makeRepo(baseConfig());
@@ -273,8 +238,6 @@ describe('checkNativeAgentLaunch', () => {
         openrouter: {
           enabled: true,
           apiKeyEnv: 'TEST_OPENROUTER_KEY',
-          models: ['qwen/qwen3-coder'],
-          stages: ['coder'],
         },
       },
       nativeAgent: {
@@ -287,7 +250,6 @@ describe('checkNativeAgentLaunch', () => {
           openrouter: {
             enabled: true,
             apiKeyEnv: 'TEST_OPENROUTER_KEY',
-            models: ['qwen-3-coder'],
           },
         },
       },

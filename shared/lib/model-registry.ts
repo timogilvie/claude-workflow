@@ -1,12 +1,3 @@
-import {
-  getAvailableModelsForStage,
-  getModelRegistryConfig,
-  getRouterConfig,
-  type ModelCapabilitiesOverride,
-  type CodexChatgptCapabilityOverride,
-  type ModelRegistryConfig,
-  type NativeCapabilityOverride,
-} from './config.ts';
 import { filterDisabledModels } from './disabled-models.ts';
 import {
   CERTIFICATION_TTL_DAYS,
@@ -191,6 +182,43 @@ const OPENROUTER_NATIVE_CAPABILITY: NativeCapability = Object.freeze({
   compatFlags: Object.freeze({ thinkingFormat: 'openrouter' }),
   certification: OPENROUTER_CERTIFICATION_SEED,
 });
+
+interface CodexChatgptCapabilityOverride {
+  supported?: boolean;
+  reason?: string;
+}
+
+interface NativeCapabilityOverride {
+  nativeProvider?: NativeProviderName;
+  piTransportKind?: PiTransportKind;
+  readOnlyNative?: ReadOnlyNativeCapability;
+  compatFlags?: PiCompatFlags;
+  limitations?: string[];
+  certification?: Partial<NativeCertificationMetadata>;
+}
+
+interface ModelCapabilitiesOverride {
+  vendor?: string;
+  class?: ModelClass;
+  strengths?: string[];
+  weaknesses?: string[];
+  disabled?: boolean;
+  qualityScores?: Partial<Record<RegistryTaskType, number>>;
+  pricing?: ModelCapabilities['pricing'];
+  defaultLadderEligible?: boolean;
+  contextWindowTokens?: number;
+  toolSupport?: ToolSupport;
+  multimodal?: MultimodalSupport;
+  latencyTier?: LatencyTier;
+  reasoningTier?: ReasoningTier;
+  costPerMillionInputTokensUsd?: number;
+  costPerMillionOutputTokensUsd?: number;
+  agent?: AgentType;
+  codexChatgptCapability?: CodexChatgptCapabilityOverride;
+  nativeCapability?: NativeCapabilityOverride;
+  supportedModel?: Partial<SupportedModelMetadata>;
+  releasedAt?: string;
+}
 
 function openRouterSupportedModel(input: {
   alias: string;
@@ -621,7 +649,7 @@ function warnUnknownModel(taskType: RegistryTaskType, modelId: string): void {
   }
   warnedUnknownLadders.add(key);
   console.warn(
-    `Ignoring unknown model "${modelId}" in modelRegistry.ladders.${taskType}`
+    `Ignoring unknown model "${modelId}" in the global ${taskType} model ladder`
   );
 }
 
@@ -1227,8 +1255,8 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       class: 'frontier',
       strengths: ['frontier reasoning', 'long-horizon agentic work', 'code review', 'architecture'],
       weaknesses: ['highest cost', 'slower', 'minutes-long turns on hard tasks', 'OpenRouter dependency'],
-      // Seed dates are approximate; override via modelRegistry config if exact
-      // launch dates matter for the recency boost window.
+      // Seed dates are approximate; update the global registry if exact launch
+      // dates matter for the recency boost window.
       releasedAt: '2026-06-10',
       qualityScores: scores(62, 99, 95, 98, 62),
       pricing: {
@@ -2277,16 +2305,9 @@ export function rankCandidates(
   return getLadder(registry, taskType).filter((modelId) => !excluded.has(modelId));
 }
 
-/**
- * Merge config overrides into the seeded registry.
- *
- * Arrays replace the default value when present. `qualityScores` merges per task.
- * Unknown ladder model IDs are retained in the merged data and filtered during lookup
- * so the effective output remains deterministic while surfacing config mistakes.
- */
 export function mergeModelRegistry(
   defaults: ModelRegistry,
-  overrides?: ModelRegistryConfig,
+  overrides?: { models?: Record<string, ModelCapabilitiesOverride>; ladders?: Partial<Record<RegistryTaskType, string[]>> },
 ): ModelRegistry {
   const merged = cloneRegistry(defaults);
   if (!overrides) {
@@ -2309,7 +2330,8 @@ export function mergeModelRegistry(
 }
 
 export function getEffectiveRegistry(repoDir?: string): ModelRegistry {
-  return mergeModelRegistry(DEFAULT_MODEL_REGISTRY, getModelRegistryConfig(repoDir));
+  void repoDir;
+  return DEFAULT_MODEL_REGISTRY;
 }
 
 export function normalizeSupportedModelStage(stage: SupportedModelStage | DescriptorModelStage | RegistryTaskType): SupportedModelStage {
@@ -2625,6 +2647,7 @@ export function getConfiguredModelsForDescriptorStage(
   repoDir: string | undefined,
   stage: DescriptorModelStage,
 ): string[] {
+  void repoDir;
   const registry = getEffectiveRegistry(repoDir);
   const filterDescriptorModels = (modelIds: string[]): string[] =>
     filterDisabledModels(dedupeModelIds(modelIds))
@@ -2632,11 +2655,6 @@ export function getConfiguredModelsForDescriptorStage(
         const capabilities = registry.models[modelId];
         return capabilities === undefined || isModelEnabled(capabilities);
       });
-
-  const configuredModels = getAvailableModelsForStage(getRouterConfig(repoDir), stage);
-  if (configuredModels && configuredModels.length > 0) {
-    return filterDescriptorModels(configuredModels);
-  }
 
   return filterDescriptorModels(getLadder(registry, DESCRIPTOR_STAGE_TO_TASK_TYPE[stage]));
 }

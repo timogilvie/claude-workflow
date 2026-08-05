@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getAvailableModelsForStage, getChallengeConfig, getOpenRouterProviderConfig, getRouterConfig } from '../shared/lib/config.ts';
+import { listEffectiveModelsForStage } from '../shared/lib/effective-models.ts';
 import { auditLaunchPriorityCoverage, type LaunchPriorityAudit, type LaunchPriorityRole, type ModelRoleEvidence } from '../shared/lib/launch-priority-audit.ts';
 import { getEffectiveRegistry, getModel } from '../shared/lib/model-registry.ts';
 import {
@@ -47,7 +47,7 @@ const options = {
 type CliArgs = ParsedArgs<typeof options>;
 
 export interface CertificationCheck {
-  name: 'fixture' | 'registry' | 'provider-config' | 'challenge-pool' | 'router-pools';
+  name: 'fixture' | 'registry' | 'global-effective-pools';
   status: 'ok' | 'blocker';
   detail: string;
 }
@@ -144,13 +144,10 @@ function plannedRunsFor(rows: readonly ModelRoleEvidence[], target: number): num
 
 function buildChecks(model: LaunchPriorityModel, repoDir: string): CertificationCheck[] {
   const registry = getEffectiveRegistry(repoDir);
-  const provider = getOpenRouterProviderConfig(repoDir);
-  const challenge = getChallengeConfig(repoDir);
-  const router = getRouterConfig(repoDir);
   const routerMissingRoles = model.roleEligibility.filter((role) => {
     const stage = ROLE_TO_ROUTER_STAGE[role];
-    const available = getAvailableModelsForStage(router, stage);
-    return available !== undefined && !available.includes(model.wavemillAlias);
+    const effectiveStage = stage === 'planner' ? 'planning' : stage === 'coder' ? 'coding' : 'review';
+    return !listEffectiveModelsForStage(effectiveStage, { repoDir }).models.includes(model.wavemillAlias);
   });
 
   return [
@@ -167,25 +164,11 @@ function buildChecks(model: LaunchPriorityModel, repoDir: string): Certification
         : `${model.wavemillAlias} is missing from the effective model registry.`,
     },
     {
-      name: 'provider-config',
-      status: provider.enabled === true && (provider.models ?? []).includes(model.wavemillAlias) ? 'ok' : 'blocker',
-      detail: provider.enabled === true && (provider.models ?? []).includes(model.wavemillAlias)
-        ? `${model.wavemillAlias} is allowlisted in providers.openrouter.models.`
-        : `${model.wavemillAlias} is not currently allowlisted in providers.openrouter.models.`,
-    },
-    {
-      name: 'challenge-pool',
-      status: (challenge.models ?? []).includes(model.wavemillAlias) ? 'ok' : 'blocker',
-      detail: (challenge.models ?? []).includes(model.wavemillAlias)
-        ? `${model.wavemillAlias} is present in challenge.models.`
-        : `${model.wavemillAlias} is not currently present in challenge.models.`,
-    },
-    {
-      name: 'router-pools',
+      name: 'global-effective-pools',
       status: routerMissingRoles.length === 0 ? 'ok' : 'blocker',
       detail: routerMissingRoles.length === 0
-        ? `${model.wavemillAlias} is present in all eligible router role pools.`
-        : `${model.wavemillAlias} is missing from router role pools for: ${routerMissingRoles.join(', ')}.`,
+        ? `${model.wavemillAlias} is present in all eligible global effective-model pools.`
+        : `${model.wavemillAlias} is missing from global effective-model pools for: ${routerMissingRoles.join(', ')}.`,
     },
   ];
 }

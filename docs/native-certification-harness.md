@@ -333,14 +333,14 @@ Successful provider/model certifications are Wavemill-wide. `wavemill native-age
 ~/.wavemill/native-agent-certifications/<provider>/<model>/<suite>.json
 ```
 
-Set `WAVEMILL_NATIVE_CERTIFICATION_ROOT` to override the shared root in tests or controlled operator environments. Legacy repo-local artifacts under `.wavemill/native-agent-certifications/` are still readable as a compatibility fallback and can be imported explicitly:
+Set `WAVEMILL_NATIVE_CERTIFICATION_ROOT` to override the shared root in tests or controlled operator environments. Legacy repo-local artifacts can be imported explicitly:
 
 ```bash
 wavemill native-agent certifications import --repo /path/to/repo --dry-run --json
 wavemill native-agent certifications import --repo /path/to/repo
 ```
 
-Routing and challenge mode default to broad exploration: when no `router.models`, `router.availableModels.<stage>`, or `challenge.models` allowlist is configured, Wavemill derives candidates from the canonical model registry and then applies provider availability, API-key checks, disabled-model policy, budgets, stage capability filters, global certification validity, and local readiness checks.
+Routing and challenge mode derive candidates from the global effective-model projection, then apply provider availability, API-key checks, disabled-model policy, budgets, stage capability filters, global certification validity, and local readiness checks.
 
 Use `modelExclusions` to remove models without hiding newly supported models added by a Wavemill update:
 

@@ -15,16 +15,7 @@ import { resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import { errorMessage } from './error-utils.ts';
 import { parseModelSelector } from './model-registry.ts';
-import type { CertificationPhase } from './native-agent/certification/schema.ts';
-import type {
-  AgentType,
-  LatencyTier,
-  MultimodalSupport,
-  ReasoningTier,
-  RegistryTaskType,
-  SupportedModelMetadata,
-  ToolSupport,
-} from './model-registry.ts';
+import type { AgentType, RegistryTaskType } from './model-registry.ts';
 
 // ────────────────────────────────────────────────────────────────
 // TypeScript Types (matching wavemill-config.schema.json)
@@ -34,7 +25,7 @@ import type {
  * Current config format version.
  * Increment when making breaking changes to config structure.
  */
-export const CURRENT_CONFIG_VERSION = '1.4.1';
+export const CURRENT_CONFIG_VERSION = '1.5.0';
 
 export interface MillConfig {
   session?: string;
@@ -140,12 +131,6 @@ export interface HokusaiConfig {
   contributions?: HokusaiContributionsConfig;
 }
 
-export interface AvailableModelsConfig {
-  planner?: string[];
-  coder?: string[];
-  reviewer?: string[];
-}
-
 export type ModelExclusionStage =
   | 'planner'
   | 'coder'
@@ -167,66 +152,6 @@ export type ModelExclusionSource = 'repo' | 'local';
 
 export interface EffectiveModelExclusion extends ModelExclusionConfig {
   source: ModelExclusionSource;
-}
-
-export type ModelRegistryClass = 'frontier' | 'strong_generalist' | 'fast_economy';
-export type NativeProviderName = 'openai' | 'openrouter';
-export type PiTransportKind = 'openai-responses' | 'openai-completions';
-export type ReadOnlyNativeCapability = 'certified' | 'unsupported' | 'partial';
-
-export interface PiCompatFlagsOverride {
-  thinkingFormat?: 'openrouter';
-  [key: string]: unknown;
-}
-
-export interface NativeCertificationMetadataOverride {
-  maxCertifiedPhase?: CertificationPhase;
-  certifiedAt?: string;
-  certificationSuiteVersion?: string;
-  knownLimitations?: string[];
-}
-
-export interface NativeCapabilityOverride {
-  nativeProvider?: NativeProviderName;
-  piTransportKind?: PiTransportKind;
-  readOnlyNative?: ReadOnlyNativeCapability;
-  compatFlags?: PiCompatFlagsOverride;
-  limitations?: string[];
-  certification?: NativeCertificationMetadataOverride;
-}
-
-/** Explicit eligibility for launches through a ChatGPT-authenticated Codex CLI. */
-export interface CodexChatgptCapabilityOverride {
-  supported?: boolean;
-  reason?: string;
-}
-
-export interface ModelCapabilitiesOverride {
-  vendor?: string;
-  class?: ModelRegistryClass;
-  strengths?: string[];
-  weaknesses?: string[];
-  disabled?: boolean;
-  qualityScores?: Partial<Record<RegistryTaskType, number>>;
-  pricing?: PricingEntry;
-  defaultLadderEligible?: boolean;
-  contextWindowTokens?: number;
-  toolSupport?: ToolSupport;
-  multimodal?: MultimodalSupport;
-  latencyTier?: LatencyTier;
-  reasoningTier?: ReasoningTier;
-  costPerMillionInputTokensUsd?: number;
-  costPerMillionOutputTokensUsd?: number;
-  agent?: AgentType;
-  codexChatgptCapability?: CodexChatgptCapabilityOverride;
-  nativeCapability?: NativeCapabilityOverride;
-  supportedModel?: SupportedModelMetadata;
-  releasedAt?: string;
-}
-
-export interface ModelRegistryConfig {
-  models?: Record<string, ModelCapabilitiesOverride>;
-  ladders?: Partial<Record<RegistryTaskType, string[]>>;
 }
 
 export interface AggregationConfig {
@@ -276,13 +201,9 @@ export interface DifficultyClassifierConfig {
 
 export interface RouterConfig {
   enabled?: boolean;
-  defaultModel?: string;
   minRecords?: number;
   minModels?: number;
-  models?: string[];
-  availableModels?: AvailableModelsConfig;
   defaultAgent?: AgentType;
-  agentMap?: Record<string, AgentType>;
   mode?: 'heuristic' | 'llm' | 'auto' | 'stage-aware' | 'hokusai';
   llmModel?: string;
   llmProvider?: 'openai' | 'anthropic';
@@ -334,9 +255,7 @@ export interface ChallengeConfig {
   enabled?: boolean;
   rate?: number;
   recommendationRate?: number;
-  models?: string[] | null;
   allowDeepseek?: boolean;
-  comparisonModel?: string;
   autoMergeWinner?: boolean;
   gate?: ChallengeGateConfig;
   stageWeights?: {
@@ -397,7 +316,7 @@ export interface ReviewMergeConfig {
   crossPrRevertCheck?: CrossPrRevertCheckConfig;
 }
 
-export type DeepSeekProviderStage = keyof AvailableModelsConfig;
+export type DeepSeekProviderStage = 'planner' | 'coder' | 'reviewer';
 
 export interface DeepSeekLauncherConfig {
   model?: string;
@@ -410,8 +329,6 @@ export interface DeepSeekProviderConfig {
   enabled?: boolean;
   apiKeyEnv?: string;
   baseUrl?: string;
-  models?: string[];
-  stages?: DeepSeekProviderStage[];
   effortLevel?: 'low' | 'medium' | 'high';
   launcher?: DeepSeekLauncherConfig;
 }
@@ -420,8 +337,6 @@ export interface OpenRouterProviderConfig {
   enabled?: boolean;
   apiKeyEnv?: string;
   baseUrl?: string;
-  models?: string[];
-  stages?: DeepSeekProviderStage[];
 }
 
 export interface ProvidersConfig {
@@ -437,7 +352,6 @@ export interface NativeAgentProviderConfig {
   apiKeyEnv?: string;
   baseUrl?: string;
   headers?: Record<string, string>;
-  models?: string[];
 }
 
 export interface NativeAgentProvidersConfig {
@@ -827,7 +741,6 @@ export interface WavemillConfig {
   mergeQueue?: MergeQueueConfig;
   monitor?: MonitorConfig;
   permissions?: PermissionsConfig;
-  modelRegistry?: ModelRegistryConfig;
   quota?: QuotaConfig;
   verification?: VerificationConfig;
   budget?: BudgetConfig;
@@ -911,6 +824,8 @@ export const DEFAULT_READY_MIGRATION_DANGER_LABELS = {
 interface ValidationError {
   instancePath?: string;
   message?: string;
+  keyword?: string;
+  params?: Record<string, unknown>;
 }
 
 type ValidatorFunction = ((data: unknown) => boolean) & {
@@ -930,6 +845,48 @@ type CachedValidator = {
 const compiledValidators = new Map<string, CachedValidator>();
 let validatorDisabledReason: string | null = null;
 let didWarnValidatorDisabled = false;
+
+const REMOVED_MODEL_CONFIG_FIELDS = new Map<string, string>([
+  ['modelRegistry', 'repo-local model registry overrides and ladders'],
+  ['router.defaultModel', 'router fallback model selection'],
+  ['router.models', 'router model membership'],
+  ['router.availableModels', 'per-stage router model membership'],
+  ['router.agentMap', 'repo-local model-to-agent mappings'],
+  ['challenge.models', 'challenge model selection'],
+  ['challenge.comparisonModel', 'challenge comparison model selection'],
+  ['providers.openrouter.models', 'OpenRouter provider model allowlist'],
+  ['providers.openrouter.stages', 'OpenRouter provider stage allowlist'],
+  ['providers.deepseek.models', 'DeepSeek provider model allowlist'],
+  ['providers.deepseek.stages', 'DeepSeek provider stage allowlist'],
+  ['nativeAgent.providers.openai.models', 'native OpenAI provider model allowlist'],
+  ['nativeAgent.providers.openrouter.models', 'native OpenRouter provider model allowlist'],
+]);
+
+function additionalPropertyPath(err: ValidationError): string | null {
+  if (err.keyword !== 'additionalProperties') {
+    return null;
+  }
+  const property = err.params?.additionalProperty;
+  if (typeof property !== 'string') {
+    return null;
+  }
+  const parent = (err.instancePath || '').replace(/^\//, '').replace(/\//g, '.');
+  return parent ? `${parent}.${property}` : property;
+}
+
+function removedModelConfigMessage(path: string): string | null {
+  const behavior = REMOVED_MODEL_CONFIG_FIELDS.get(path);
+  if (behavior) {
+    return `  /${path.replace(/\./g, '/')}: Repo-local model configuration removed. Field "${path}" formerly affected ${behavior}; model membership is now owned by the global effective-model projection. Run: wavemill config migrate-model-settings`;
+  }
+
+  for (const [removedPath, removedBehavior] of REMOVED_MODEL_CONFIG_FIELDS) {
+    if (path.startsWith(`${removedPath}.`)) {
+      return `  /${path.replace(/\./g, '/')}: Repo-local model configuration removed. Field "${removedPath}" formerly affected ${removedBehavior}; model membership is now owned by the global effective-model projection. Run: wavemill config migrate-model-settings`;
+    }
+  }
+  return null;
+}
 
 /**
  * Identity of a schema file, used to detect on-disk changes.
@@ -1063,6 +1020,11 @@ function validateConfig(config: unknown, repoDir?: string): asserts config is Wa
   if (!valid && validate.errors) {
     const errorMessages = validate.errors
       .map((err) => {
+        const removedPath = additionalPropertyPath(err);
+        const removedMessage = removedPath ? removedModelConfigMessage(removedPath) : null;
+        if (removedMessage) {
+          return removedMessage;
+        }
         const path = err.instancePath || 'root';
         const message = err.message || 'unknown error';
         return `  ${path}: ${message}`;
@@ -1368,31 +1330,6 @@ export function getEffectiveModelExclusions(repoDir?: string): EffectiveModelExc
 
 export function isRouterCapabilityFilteringEnabled(repoDir?: string): boolean {
   return getRouterConfig(repoDir).capabilityFiltering?.enabled === true;
-}
-
-/**
- * Resolve the model allowlist for a single workflow stage.
- *
- * Resolution order:
- * 1. `router.availableModels.<stage>` when non-empty
- * 2. `router.models` when non-empty
- * 3. `undefined` when no config-based restriction exists
- */
-export function getAvailableModelsForStage(
-  routerConfig: RouterConfig,
-  stage: keyof AvailableModelsConfig,
-): string[] | undefined {
-  const stageModels = routerConfig.availableModels?.[stage];
-  if (stageModels && stageModels.length > 0) {
-    return stageModels;
-  }
-
-  const sharedModels = routerConfig.models;
-  if (sharedModels && sharedModels.length > 0) {
-    return sharedModels;
-  }
-
-  return undefined;
 }
 
 /**
@@ -1837,14 +1774,6 @@ export function getDeepSeekLauncherConfig(repoDir?: string): DeepSeekLauncherCon
  */
 export function getPermissionsConfig(repoDir?: string): PermissionsConfig {
   return loadWavemillConfig(repoDir).permissions || {};
-}
-
-/**
- * Get the model registry override config section.
- * Returns empty object if not configured.
- */
-export function getModelRegistryConfig(repoDir?: string): ModelRegistryConfig {
-  return loadWavemillConfig(repoDir).modelRegistry || {};
 }
 
 /**

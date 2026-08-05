@@ -35,10 +35,6 @@ function makeRepo(opts: { records?: string[]; config?: Record<string, unknown> }
       kNeighbors: 2,
       stageBlendWeight: 0.3,
       defaultAgent: 'claude',
-      agentMap: {
-        'claude-sonnet-4-5-20250929': 'claude',
-        'gpt-5.3-codex': 'codex',
-      },
     },
     eval: {
       pricing: {
