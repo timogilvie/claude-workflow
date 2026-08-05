@@ -13729,6 +13729,8 @@ LAST_BACKSTAGE_HEALTH_CHECK=0
 LAST_BACKSTAGE_OBSERVER_HEALTH_CHECK=0
 BACKSTAGE_HEALTH_INTERVAL=30
 BACKSTAGE_RESTART_COOLDOWN=60
+BACKSTAGE_TEND_HEARTBEAT_STALE_SECONDS=210
+BACKSTAGE_CLASSIFICATION_HOLD_STALE_SECONDS=900
 LAST_BACKSTAGE_HEALTH_STATUS=""
 LAST_BACKSTAGE_OBSERVER_HEALTH_STATUS=""
 
@@ -13761,10 +13763,55 @@ read_backstage_service_health_field() {
   jq -r --arg service "$service" ".services[\$service] | $field // empty" "$path" 2>/dev/null
 }
 
+classify_ready_watchdog_hold_health() {
+  local now="${1:-$(date +%s)}" stale_seconds="${2:-$BACKSTAGE_CLASSIFICATION_HOLD_STALE_SECONDS}"
+  local state_file="${STATE_DIR:-}/ready-watchdog-state.json"
+  local row issue classification since updated_at detail epoch held_seconds held_minutes oldest_seconds=0
+  local oldest_issue="" oldest_classification="" oldest_held_minutes=0
+
+  [[ -r "$state_file" ]] || return 1
+
+  while IFS=$'\t' read -r issue classification since updated_at detail; do
+    [[ -n "$issue" && -n "$classification" ]] || continue
+    if [[ "$classification" != "needs-user" && "$classification" != "stuck" ]]; then
+      continue
+    fi
+
+    [[ -n "$since" ]] || since="$updated_at"
+    [[ -n "$since" ]] || continue
+    epoch="$(wavemill_iso8601_to_epoch "$since" 2>/dev/null || echo 0)"
+    [[ "$epoch" =~ ^[0-9]+$ && "$epoch" -gt 0 ]] || continue
+    held_seconds=$(( now - epoch ))
+    (( held_seconds > stale_seconds )) || continue
+    if (( held_seconds > oldest_seconds )); then
+      held_minutes=$(( held_seconds / 60 ))
+      oldest_seconds="$held_seconds"
+      oldest_issue="$issue"
+      oldest_classification="$classification"
+      oldest_held_minutes="$held_minutes"
+    fi
+  done < <(
+    jq -r '
+      (.tasks // {}) | to_entries[] |
+      [
+        .key,
+        (.value.classification // ""),
+        (.value.classificationSince // ""),
+        (.value.updatedAt // ""),
+        (.value.detail // "")
+      ] | @tsv
+    ' "$state_file" 2>/dev/null || true
+  )
+
+  [[ -n "$oldest_issue" ]] || return 1
+  printf 'task %s has held %s for %sm\n' "$oldest_issue" "$oldest_classification" "$oldest_held_minutes"
+}
+
 classify_backstage_health() {
-  local pane_details="${1-}"
+  local pane_details="${1-}" now="${2:-$(date +%s)}" stale_seconds="${3:-$BACKSTAGE_TEND_HEARTBEAT_STALE_SECONDS}" hold_stale_seconds="${4:-$BACKSTAGE_CLASSIFICATION_HOLD_STALE_SECONDS}"
   local pane_count=0 tend_alive=0 status_panes=0
-  local executor_pane_id="" line pane_id pane_title pane_dead _pane_cmd _start_cmd
+  local executor_pane_id="" pane_id pane_title pane_dead _pane_cmd _start_cmd
+  local heartbeat_at="" heartbeat_epoch=0 heartbeat_age="" updated_at="" updated_epoch=0 updated_age="" hold_detail=""
 
   if [[ -z "$pane_details" ]]; then
     printf 'backstage-missing\t\t0\t0\n'
@@ -13784,6 +13831,36 @@ classify_backstage_health() {
   done <<< "$pane_details"
 
   if (( tend_alive == 1 )); then
+    heartbeat_at="$(read_backstage_service_health_field "tend" '.heartbeatAt' || true)"
+    if [[ -n "$heartbeat_at" ]]; then
+      heartbeat_epoch="$(wavemill_iso8601_to_epoch "$heartbeat_at" 2>/dev/null || echo 0)"
+      if (( heartbeat_epoch > 0 )); then
+        heartbeat_age=$(( now - heartbeat_epoch ))
+        if (( heartbeat_age > stale_seconds )); then
+          printf 'stalled\ttend heartbeat is stale (%ss old)\t%s\t%s\n' "$heartbeat_age" "$pane_count" "$executor_pane_id"
+          return 0
+        fi
+      fi
+    else
+      updated_at="$(read_backstage_service_health_field "tend" '.updatedAt' || read_backstage_health_field '.updatedAt' || true)"
+      if [[ -n "$updated_at" ]]; then
+        updated_epoch="$(wavemill_iso8601_to_epoch "$updated_at" 2>/dev/null || echo 0)"
+        if (( updated_epoch > 0 )); then
+          updated_age=$(( now - updated_epoch ))
+          if (( updated_age > stale_seconds )); then
+            printf 'stalled\ttend heartbeat is missing and health update is stale (%ss old)\t%s\t%s\n' "$updated_age" "$pane_count" "$executor_pane_id"
+            return 0
+          fi
+        fi
+      fi
+    fi
+
+    hold_detail="$(classify_ready_watchdog_hold_health "$now" "$hold_stale_seconds" || true)"
+    if [[ -n "$hold_detail" ]]; then
+      printf 'stalled\t%s\t%s\t%s\n' "$hold_detail" "$pane_count" "$executor_pane_id"
+      return 0
+    fi
+
     printf 'healthy\tbackstage tend loop is running\t%s\t%s\n' "$pane_count" "$executor_pane_id"
     return 0
   fi
@@ -13945,7 +14022,7 @@ check_backstage_observer_health() {
 }
 
 check_backstage_health() {
-  local now health_file pane_probe pane_summary pane_status detail pane_count executor_pane_id
+  local now health_file pane_probe pane_summary pane_status detail pane_count executor_pane_id heartbeat_at
   local prior_attempt_at prior_attempt_count elapsed restart_pane_id
 
   now=$(date +%s)
@@ -13965,8 +14042,18 @@ check_backstage_health() {
 
   case "$pane_status" in
     healthy)
-      [[ -n "$health_file" ]] && wavemill_write_backstage_health "$health_file" "healthy" "$detail" 0 "" "$executor_pane_id"
+      heartbeat_at="$(read_backstage_service_health_field "tend" '.heartbeatAt' || true)"
+      [[ -n "$health_file" ]] && wavemill_write_backstage_service_health "$health_file" "tend" "healthy" "$detail" 0 "" "$executor_pane_id" "$heartbeat_at"
       LAST_BACKSTAGE_HEALTH_STATUS="healthy"
+      return 0
+      ;;
+    stalled)
+      heartbeat_at="$(read_backstage_service_health_field "tend" '.heartbeatAt' || true)"
+      [[ -n "$health_file" ]] && wavemill_write_backstage_service_health "$health_file" "tend" "stalled" "$detail" 0 "" "$executor_pane_id" "$heartbeat_at"
+      if [[ "$LAST_BACKSTAGE_HEALTH_STATUS" != "stalled" ]]; then
+        log_warn "Backstage tend loop is stalled: $detail"
+      fi
+      LAST_BACKSTAGE_HEALTH_STATUS="stalled"
       return 0
       ;;
     'backstage-missing')
@@ -13999,7 +14086,8 @@ check_backstage_health() {
     pane_summary="$(classify_backstage_health "$pane_probe")"
     IFS=$'\t' read -r pane_status detail pane_count executor_pane_id <<< "$pane_summary"
     if [[ "$pane_status" == "healthy" ]]; then
-      [[ -n "$health_file" ]] && wavemill_write_backstage_health "$health_file" "healthy" "backstage tend loop was restarted automatically" 0 "" "${executor_pane_id:-$restart_pane_id}"
+      heartbeat_at="$(read_backstage_service_health_field "tend" '.heartbeatAt' || true)"
+      [[ -n "$health_file" ]] && wavemill_write_backstage_service_health "$health_file" "tend" "healthy" "backstage tend loop was restarted automatically" 0 "" "${executor_pane_id:-$restart_pane_id}" "$heartbeat_at"
       log "status" "Backstage tend loop restarted"
       LAST_BACKSTAGE_HEALTH_STATUS="healthy"
       return 0
