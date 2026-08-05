@@ -12,31 +12,19 @@ permissions:
   contents: read
 
 jobs:
-  shell-and-unit:
-    name: Shell and Unit Tests
+  preflight:
+    name: Preflight Checks
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: '22'
+      - name: Setup
+        uses: ./.github/actions/setup
 
-      - name: Install system test tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y jq shellcheck tmux
-
-      - name: Configure git for tests
-        run: |
-          git config --global user.email "ci@wavemill.test"
-          git config --global user.name "Wavemill CI"
-
-      - name: Install dependencies
-        run: npm install --ignore-scripts
+      - name: Shell lint and syntax check
+        run: npm run lint
 
       - name: Check Pi pinned versions
         run: npx tsx tools/check-pi-version.ts
@@ -44,11 +32,111 @@ jobs:
       - name: Check challenge schema drift
         run: npx tsx tools/check-challenge-schema-drift.ts
 
-      - name: Run shell and unit tests
-        run: npm test
+  shell:
+    name: Shell Tests (shard ${{ matrix.shard }}/4)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup
+        uses: ./.github/actions/setup
+
+      - name: Run shell test shard
+        run: bash tests/run-shell-suite.sh --shard ${{ matrix.shard }}/4
+
+  unit:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup
+        uses: ./.github/actions/setup
+
+      - name: Run node:test unit tests
+        run: npm run test:node-test
+
+  custom:
+    name: Custom Harness Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup
+        uses: ./.github/actions/setup
+
+      - name: Run custom harness tests
+        run: npm run test:custom
+
+  smoke:
+    name: Smoke and Config Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup
+        uses: ./.github/actions/setup
+
+      - name: Run smoke tests
+        run: npm run test:smoke
+
+      - name: Run config loading tests
+        run: npm run test:config
+
+  certification:
+    name: Native Launch Certification
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup
+        uses: ./.github/actions/setup
 
       - name: Run native launch certification
         run: npm run test:native-launch-certification
+
+  # Aggregates every test job above into one status check.
+  #
+  # The name is load-bearing: "Shell and Unit Tests" is a required status check
+  # on main. Keeping it lets the suite be split into parallel jobs without
+  # touching branch protection. Rename only alongside the protection rule.
+  shell-and-unit:
+    name: Shell and Unit Tests
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [preflight, shell, unit, custom, smoke, certification]
+
+    steps:
+      - name: Report job results
+        run: |
+          echo "preflight:     ${{ needs.preflight.result }}"
+          echo "shell:         ${{ needs.shell.result }}"
+          echo "unit:          ${{ needs.unit.result }}"
+          echo "custom:        ${{ needs.custom.result }}"
+          echo "smoke:         ${{ needs.smoke.result }}"
+          echo "certification: ${{ needs.certification.result }}"
+
+      # Anything other than success fails the check, so a skipped or cancelled
+      # job can never be reported green.
+      - name: Fail if any test job did not succeed
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')
+        run: |
+          echo "::error::One or more test jobs did not succeed."
+          exit 1
 
   check-paths:
     name: Check Lifecycle Paths
@@ -115,23 +203,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - name: Setup
+        uses: ./.github/actions/setup
         with:
-          node-version: '22'
-
-      - name: Install system test tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y jq tmux
-
-      - name: Configure git for tests
-        run: |
-          git config --global user.email "ci@wavemill.test"
-          git config --global user.name "Wavemill CI"
-
-      - name: Install dependencies
-        run: npm install --ignore-scripts
+          packages: jq tmux
 
       - name: Run lifecycle integration tests
         run: bash tests/run-lifecycle-tests.sh

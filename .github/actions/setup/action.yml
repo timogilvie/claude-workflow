@@ -1,0 +1,33 @@
+name: Setup test environment
+description: Node.js, system test tools, git identity, and dependencies shared by all CI test jobs.
+
+inputs:
+  packages:
+    description: Space-separated apt packages to install.
+    required: false
+    default: jq shellcheck tmux
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Node.js
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      with:
+        node-version: '22'
+        cache: npm
+
+    - name: Install system test tools
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ${{ inputs.packages }}
+
+    - name: Configure git for tests
+      shell: bash
+      run: |
+        git config --global user.email "ci@wavemill.test"
+        git config --global user.name "Wavemill CI"
+
+    - name: Install dependencies
+      shell: bash
+      run: npm install --ignore-scripts
