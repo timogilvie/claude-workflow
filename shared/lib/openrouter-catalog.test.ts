@@ -80,7 +80,7 @@ describe('loadLaunchPriorityFixture', () => {
     const list = loadLaunchPriorityList();
     assert.ok(list.length >= 25, `expected at least 25 launch-priority models, got ${list.length}`);
     const aliases = new Set(list.map((m) => m.wavemillAlias));
-    for (const required of ['claude-fable-5', 'gpt-5.5', 'deepseek-r1', 'qwen-2.5-coder-32b', 'kimi-k2', 'glm-5.2', 'kimi-k2.7-code']) {
+    for (const required of ['gpt-5.5', 'deepseek-r1', 'qwen-2.5-coder-32b', 'kimi-k2', 'glm-5.2', 'kimi-k2.7-code']) {
       assert.ok(aliases.has(required), `expected fixture to include ${required}`);
     }
   });
@@ -282,12 +282,12 @@ describe('normalizeCatalog', () => {
     assert.equal(entries[0]?.contextTokens, 200000);
   });
 
-  it('Claude and GPT aliases both resolve via their OpenRouter ids', () => {
+  it('GPT and Kimi aliases both resolve via their OpenRouter ids', () => {
     const list: LaunchPriorityModel[] = [
       lp({
-        wavemillAlias: 'claude-fable-5',
-        openrouterId: 'anthropic/claude-fable-5',
-        family: 'claude',
+        wavemillAlias: 'kimi-k2',
+        openrouterId: 'moonshotai/kimi-k2',
+        family: 'kimi',
         priorityTier: 1,
         roleEligibility: ['planning', 'coding', 'review'],
       }),
@@ -301,7 +301,7 @@ describe('normalizeCatalog', () => {
     ];
     const map = buildOpenRouterMap([
       {
-        id: 'anthropic/claude-fable-5',
+        id: 'moonshotai/kimi-k2',
         context_length: 200000,
         pricing: { prompt: '0.000015', completion: '0.000075' },
       },
@@ -315,8 +315,8 @@ describe('normalizeCatalog', () => {
     assert.equal(blockers.length, 0);
     assert.equal(entries.length, 2);
     const byAlias = new Map(entries.map((e) => [e.wavemillAlias, e]));
-    assert.equal(byAlias.get('claude-fable-5')?.family, 'claude');
-    assert.equal(byAlias.get('claude-fable-5')?.contextTokens, 200000);
+    assert.equal(byAlias.get('kimi-k2')?.family, 'kimi');
+    assert.equal(byAlias.get('kimi-k2')?.contextTokens, 200000);
     assert.equal(byAlias.get('gpt-5.5')?.family, 'gpt');
     assert.equal(byAlias.get('gpt-5.5')?.contextTokens, 400000);
     assert.equal(byAlias.get('gpt-5.5')?.pricing.inputPerMTok, 5);
