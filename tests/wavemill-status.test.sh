@@ -2464,7 +2464,8 @@ cat > "$TMP_DIR/backstage-health.json" <<JSON
   "status": "healthy",
   "services": {
     "tend": {
-      "status": "healthy"
+      "status": "healthy",
+      "heartbeatAt": "$(iso_at_offset -10)"
     },
     "observer": {
       "status": "needs-user",
@@ -2475,10 +2476,27 @@ cat > "$TMP_DIR/backstage-health.json" <<JSON
 JSON
 run_render "$backstage_state" "$WORKTREES_DIR" "$backstage_behavior" "$backstage_output"
 backstage_render="$(cat "$backstage_output")"
-if [[ "$backstage_render" == *"Tend: healthy"* && "$backstage_render" == *"Observer: needs-user"* ]]; then
+if [[ "$backstage_render" == *"Tend: healthy"* && "$backstage_render" == *"Tend: healthy ("* && "$backstage_render" == *"Observer: needs-user"* ]]; then
   pass "backstage health renders tend and observer separately"
 else
   fail "backstage health did not render independent tend/observer status"
+fi
+
+cat > "$TMP_DIR/queue-health.json" <<'JSON'
+{
+  "status": "degraded",
+  "degradationReason": "external_cancellation",
+  "failureStep": "plan_queue_failed",
+  "retryBackoffSeconds": 60,
+  "nextAction": "retry"
+}
+JSON
+run_render "$backstage_state" "$WORKTREES_DIR" "$backstage_behavior" "$backstage_output"
+queue_backstage_render="$(cat "$backstage_output")"
+if [[ "$queue_backstage_render" == *"Queue: degraded"* && "$queue_backstage_render" == *"external_cancellation"* ]]; then
+  pass "backstage health summary renders degraded queue health"
+else
+  fail "backstage health summary did not render degraded queue health"
 fi
 
 echo ""

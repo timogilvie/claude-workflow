@@ -173,6 +173,7 @@ export interface ReadyWatchdogStateEntry {
   lastProgressAt: string | null;
   prStateKey?: string;
   detailFingerprint?: string;
+  classificationSince?: string;
   autoUpdateAttempts?: number;
   lastAutoUpdateError?: string;
   lastReportedAction?: string;
@@ -1545,6 +1546,23 @@ function buildFindingEntry(input: {
   };
 }
 
+function withClassificationSince(
+  prior: ReadyWatchdogStateEntry | undefined,
+  entry: ReadyWatchdogStateEntry,
+  now: Date,
+): ReadyWatchdogStateEntry {
+  const unchanged = prior
+    && prior.classification === entry.classification
+    && prior.detailFingerprint === entry.detailFingerprint
+    && typeof prior.classificationSince === 'string'
+    && prior.classificationSince.length > 0;
+
+  return {
+    ...entry,
+    classificationSince: unchanged ? prior.classificationSince : now.toISOString(),
+  };
+}
+
 function buildExhaustedAutoUpdateEntry(
   issueId: string,
   snapshot: ReadyTaskSnapshot,
@@ -1740,6 +1758,7 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
           lastFailingJob: prior?.lastFailingJob,
           lastLocalCommand: prior?.lastLocalCommand,
         });
+        entry = withClassificationSince(prior, entry, now);
         if (shouldEmitReadyWatchdogFinding(prior, entry, now, getReportIntervalSeconds())) {
           entry = {
             ...entry,
@@ -2066,6 +2085,7 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
       continue;
     }
 
+    entry = withClassificationSince(prior, entry, now);
     const reportIntervalSeconds = getReportIntervalSeconds();
     if (shouldEmitReadyWatchdogFinding(prior, entry, now, reportIntervalSeconds)) {
       entry = {

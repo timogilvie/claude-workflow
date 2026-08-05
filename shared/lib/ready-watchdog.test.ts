@@ -1924,10 +1924,76 @@ test('tick suppresses repeated merge-lane stall needs-user when only waited minu
     assert.equal(first.findings[0].classification, 'needs-user');
     assert.match(first.findings[0].detail, /merge lane appears stalled/i);
     assert.match(first.findings[0].detail, /waited 83m/i);
+    const stateAfterFirst = JSON.parse(readFileSync(path.join(repoDir, '.wavemill', 'ready-watchdog-state.json'), 'utf-8')) as {
+      tasks: Record<string, { classificationSince?: string }>;
+    };
+    assert.equal(stateAfterFirst.tasks['HOK-2298'].classificationSince, '2030-06-23T12:23:00.000Z');
 
     const secondDeps = { ...baseDeps, now: () => new Date('2030-06-23T12:24:00.000Z') };
     const second = await tickReadyWatchdog({ repoDir, stateFile, config: escalateConfig, deps: secondDeps });
     assert.equal(second.findings.length, 0, 'second tick must be suppressed — only waited minutes changed');
+    const stateAfterSecond = JSON.parse(readFileSync(path.join(repoDir, '.wavemill', 'ready-watchdog-state.json'), 'utf-8')) as {
+      tasks: Record<string, { classificationSince?: string }>;
+    };
+    assert.equal(
+      stateAfterSecond.tasks['HOK-2298'].classificationSince,
+      '2030-06-23T12:23:00.000Z',
+      'classificationSince should be preserved while classification and fingerprint are stable',
+    );
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('tick resets classificationSince when classification fingerprint changes', async () => {
+  const { repoDir, stateFile, featureDir } = setupReadyTask('HOK-2677', 2677);
+  writeFileSync(path.join(featureDir, '.ready-result.json'), JSON.stringify({
+    stage: 'ready',
+    status: 'completed',
+    startedAt: '2030-06-23T10:00:00.000Z',
+    finishedAt: '2030-06-23T11:00:00.000Z',
+    agent: 'claude',
+    model: 'claude-sonnet-4-6',
+    notes: null,
+    artifacts: { type: 'ready', verdict: 'pass', prNumber: 2677, queueState: 'merge-candidate' },
+  }, null, 2));
+  writeFileSync(path.join(repoDir, '.wavemill', 'ready-watchdog-state.json'), JSON.stringify({
+    updatedAt: '2030-06-23T12:00:00.000Z',
+    tasks: {
+      'HOK-2677': {
+        issueId: 'HOK-2677',
+        slug: 'ready-watchdog-task',
+        prNumber: 2677,
+        classification: 'needs-user',
+        displayLabel: 'Needs user',
+        detail: 'old detail',
+        action: 'needs-user',
+        updatedAt: '2030-06-23T12:00:00.000Z',
+        classificationSince: '2030-06-23T12:00:00.000Z',
+        idleMinutes: 83,
+        lastProgressAt: null,
+        detailFingerprint: 'old-fingerprint',
+        lastReportedAction: 'needs-user',
+      },
+    },
+  }, null, 2));
+
+  const deps = {
+    fetchGitHubTruth: async () => makeTruth({ mergeStateStatus: 'CLEAN' }),
+    getCurrentHead: async () => 'head-1',
+    getWorktreeMergeState: async () => ({
+      mergeHead: null, unmergedPaths: [], stagedPaths: [], unstagedPaths: [], untrackedPaths: [], rawStatus: [],
+    }),
+    isTaskPaneActive: async () => null,
+    now: () => new Date('2030-06-23T12:23:00.000Z'),
+  };
+
+  try {
+    await tickReadyWatchdog({ repoDir, stateFile, config: { ...WATCHDOG_CONFIG, thresholdMinutes: 10 }, deps });
+    const stateAfter = JSON.parse(readFileSync(path.join(repoDir, '.wavemill', 'ready-watchdog-state.json'), 'utf-8')) as {
+      tasks: Record<string, { classificationSince?: string }>;
+    };
+    assert.equal(stateAfter.tasks['HOK-2677'].classificationSince, '2030-06-23T12:23:00.000Z');
   } finally {
     await rm(repoDir, { recursive: true, force: true });
   }
