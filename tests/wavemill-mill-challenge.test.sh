@@ -34,13 +34,13 @@ fi
 STARTUP_BLOCK="$(awk '
   /challenge_args=\(--issue "\$ISSUE"/ { capture=1 }
   capture { print }
-  /challenge_plan=\$\(npx tsx "\$TOOLS_DIR\/resolve-challenge-task\.ts"/ && capture { capture=0; exit }
+  /log_warn "  \$ISSUE: Planner challenge deferred until expanded route is available"/ && capture { capture=0; exit }
 ' "$MILL_SCRIPT")"
 
 RUNTIME_BLOCK="$(awk '
   /challenge_args=\(--issue "\$issue"/ { capture=1 }
   capture { print }
-  /challenge_plan=\$\(_with_timeout "\$API_TIMEOUT" npx tsx "\$TOOLS_DIR\/resolve-challenge-task\.ts"/ && capture { capture=0; exit }
+  /log_warn "  \$issue: Planner challenge deferred until expanded route is available"/ && capture { capture=0; exit }
 ' "$MILL_SCRIPT")"
 
 if [[ -n "$STARTUP_BLOCK" ]]; then
@@ -139,6 +139,24 @@ if [[ -n "$FINALIZATION_HELPER" ]]; then
 else
   fail "could not extract challenge execution finalizer"
 fi
+
+PLANNER_GATE_HELPER="$(awk '
+  /^challenge_plan_stage_requires_effective_route\(\) \{/ { capture=1 }
+  capture { print }
+  /^}/ && capture { exit }
+' "$MILL_SCRIPT")"
+
+if [[ -n "$PLANNER_GATE_HELPER" ]]; then
+  check_contains "planner challenge gate detects planning stage" "$PLANNER_GATE_HELPER" '[[ "$challenge_stage" == "planning" || "$challenge_stage" == "plan" || "$challenge_stage" == "planner" ]]'
+  check_contains "planner challenge gate requires effective route source" "$PLANNER_GATE_HELPER" '[[ "$decision_source" != "expanded" && "$decision_source" != "preserved" ]]'
+else
+  fail "could not extract planner challenge route gate"
+fi
+
+check_contains "startup planner challenge defers without effective route" "$STARTUP_BLOCK" 'challenge_plan_stage_requires_effective_route "$challenge_plan"'
+check_contains "startup planner challenge records defer reason" "$STARTUP_BLOCK" 'plan_stage_expanded_route_unavailable'
+check_contains "runtime planner challenge defers without effective route" "$RUNTIME_BLOCK" 'challenge_plan_stage_requires_effective_route "$challenge_plan"'
+check_contains "runtime planner challenge records defer reason" "$RUNTIME_BLOCK" 'plan_stage_expanded_route_unavailable'
 
 if [[ -n "$CODING_FINALIZATION_BLOCK" ]]; then
   check_contains "coding handoff calls finalizer" "$CODING_FINALIZATION_BLOCK" 'finalize_challenge_execution_intent_before_coding "$ISSUE" "$SLUG" "$BRANCH" "$WT_DIR" "$FEATURE_DIR" "$coder_model"'

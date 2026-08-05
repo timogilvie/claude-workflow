@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildFindings, parseArgs, redactObserverText, writeServiceHeartbeat } from './observer.ts';
+import { buildFindings, parseArgs, redactObserverText, syncIncidentsToLinear, writeServiceHeartbeat } from './observer.ts';
 
 test('repeated ready watchdog auto-recoveries escalate to actionable stuck finding', () => {
   const repoDir = mkdtempSync(join(tmpdir(), 'observer-ready-watchdog-'));
@@ -41,7 +41,9 @@ test('repeated ready watchdog auto-recoveries escalate to actionable stuck findi
       staleMinutes: 10,
       hungMinutes: 10,
       fileLinear: false,
+      fileIncidents: false,
       dryRun: false,
+      incidentsDryRun: false,
       maxLogLines: 240,
       printPrompt: false,
       incidentDetector: true,
@@ -101,7 +103,9 @@ test('service heartbeat is parseable and stores redacted finding counts only', a
       staleMinutes: 10,
       hungMinutes: 10,
       fileLinear: false,
+      fileIncidents: false,
       dryRun: true,
+      incidentsDryRun: false,
       maxLogLines: 240,
       printPrompt: false,
       incidentDetector: true,
@@ -126,4 +130,45 @@ test('observer redaction removes credentials and prompt-like evidence', () => {
     redactObserverText('OPENAI_API_KEY=sk-test token=abc123 prompt=full task'),
     'OPENAI_API_KEY=[redacted] token=[redacted] prompt=[redacted]',
   );
+});
+
+test('incident Linear flags imply filing mode and parse replay/policy controls', () => {
+  const options = parseArgs([
+    '--file-incidents',
+    '--incidents-dry-run',
+    '--incidents-replay',
+    'abc123',
+    '--incidents-policy',
+    '{"external_transient_dependency":{"strategy":"threshold","threshold":5}}',
+  ]);
+  assert.equal(options.fileIncidents, true);
+  assert.equal(options.incidentsDryRun, true);
+  assert.equal(options.incidentsReplay, 'abc123');
+  assert.match(options.incidentsPolicy ?? '', /external_transient_dependency/);
+});
+
+test('incident sync snapshot is omitted when incident filing is disabled', async () => {
+  const snapshot = await syncIncidentsToLinear({
+    timestamp: '2026-08-04T12:00:00.000Z',
+    sessions: [],
+    panes: [],
+    processes: [],
+    repos: [],
+    findings: [],
+  }, {
+    loop: false,
+    once: true,
+    json: false,
+    intervalSeconds: 120,
+    staleMinutes: 10,
+    hungMinutes: 10,
+    fileLinear: false,
+    fileIncidents: false,
+    dryRun: false,
+    incidentsDryRun: false,
+    maxLogLines: 240,
+    printPrompt: false,
+    incidentDetector: true,
+  });
+  assert.equal(snapshot.incidentSync, undefined);
 });

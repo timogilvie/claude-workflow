@@ -199,6 +199,12 @@ export interface LinearIssueSummary {
   identifier: string;
   title: string;
   state?: LinearState;
+  labels?: {
+    nodes: LinearLabel[];
+  };
+  project?: Pick<LinearProject, 'id' | 'name'>;
+  team?: Pick<LinearTeam, 'id' | 'name' | 'key'>;
+  url?: string;
   completedAt?: string | null;
   canceledAt?: string | null;
 }
@@ -1100,6 +1106,63 @@ export async function listOpenIssuesByIdentifierPrefix(prefix: string): Promise<
     && issue.canceledAt == null
     && identifiers.has(issue.identifier),
   );
+}
+
+export async function searchIssues(
+  term: string,
+  opts: {
+    teamKey?: string;
+    projectName?: string;
+    includeArchived?: boolean;
+    includeCompleted?: boolean;
+    first?: number;
+  } = {},
+): Promise<LinearIssueSummary[]> {
+  const filters: string[] = [];
+  if (opts.teamKey) filters.push('team: { key: { eq: $teamKey } }');
+  if (opts.projectName) filters.push('project: { name: { eq: $projectName } }');
+  if (opts.includeCompleted !== true) {
+    filters.push('completedAt: { null: true }');
+    filters.push('canceledAt: { null: true }');
+  }
+  const filter = filters.length > 0 ? `filter: { ${filters.join('\n')} }` : '';
+  const variableDefs = ['$term: String!'];
+  const variables: Record<string, unknown> = { term };
+  if (opts.teamKey) {
+    variableDefs.push('$teamKey: String!');
+    variables.teamKey = opts.teamKey;
+  }
+  if (opts.projectName) {
+    variableDefs.push('$projectName: String!');
+    variables.projectName = opts.projectName;
+  }
+  const data = await request(
+    `
+      query(${variableDefs.join(', ')}) {
+        searchIssues(
+          term: $term
+          first: ${Math.max(1, Math.min(opts.first ?? 20, 50))}
+          includeArchived: ${opts.includeArchived === true ? 'true' : 'false'}
+          ${filter}
+        ) {
+          nodes {
+            id
+            identifier
+            title
+            state { name }
+            labels { nodes { id name } }
+            project { id name }
+            team { id name key }
+            url
+            completedAt
+            canceledAt
+          }
+        }
+      }
+    `,
+    variables,
+  );
+  return (data.searchIssues as { nodes?: LinearIssueSummary[] } | undefined)?.nodes ?? [];
 }
 
 /**

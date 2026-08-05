@@ -15,6 +15,7 @@ import { dirname, join } from 'node:path';
 import Ajv from 'ajv';
 import { CERTIFICATION_BASE_PATH, type NativeCertificationArtifact } from './schema.ts';
 import { buildCertificationPath } from './loader.ts';
+import { resolveCertificationStorageIdentity } from './identity.ts';
 import {
   buildCertificationPathFromRoot,
   resolveCertificationStorage,
@@ -27,6 +28,9 @@ const CERTIFICATION_JSON_SCHEMA = JSON.parse(
 
 const ajv = new Ajv({ allErrors: true, strict: false, validateFormats: false });
 const validateSchema = ajv.compile(CERTIFICATION_JSON_SCHEMA);
+const SECRET_OR_PATH_PATTERN = /\b(?:api[_-]?key|token|secret|password|bearer|authorization|\/users\/|\/home\/|[a-z]:\\|\.wavemill\/|worktrees\/|dropbox\/)\b/i;
+const MIN_CERTIFIED_AT = Date.parse('2024-01-01T00:00:00.000Z');
+const MAX_FUTURE_SKEW_MS = 5 * 60 * 1000;
 
 export type StoreErrorCode = 'not-found' | 'unreadable' | 'invalid-json' | 'schema-mismatch';
 
@@ -163,14 +167,7 @@ function sortKeys(v: unknown): unknown {
  * that fail schema validation (write-side guard against corrupt artifacts).
  */
 export function writeCertification(repoDir: string, record: NativeCertificationArtifact): string {
-  // Write-side schema validation: reject malformed records before touching disk.
-  const valid = validateSchema(record);
-  if (!valid) {
-    const summary = (validateSchema.errors ?? [])
-      .map(e => `${e.instancePath || '(root)'} ${e.message}`)
-      .join('; ');
-    throw new Error(`writeCertification: record fails schema validation: ${summary}`);
-  }
+  validateCertificationForWrite(record, 'writeCertification');
 
   // buildCertificationPath throws on bad segment chars (path traversal, etc.)
   const finalPath = buildCertificationPath(repoDir, record.provider, record.model, record.suiteVersion);
@@ -202,6 +199,17 @@ export function writeCertification(repoDir: string, record: NativeCertificationA
     throw err;
   }
 
+  try {
+    const dirFd = openSync(dirname(finalPath), 'r');
+    try {
+      fsyncSync(dirFd);
+    } finally {
+      closeSync(dirFd);
+    }
+  } catch {
+    // Best-effort directory fsync for filesystems that permit it.
+  }
+
   return finalPath;
 }
 
@@ -231,6 +239,17 @@ function writeCertificationToPath(finalPath: string, record: NativeCertification
     throw err;
   }
 
+  try {
+    const dirFd = openSync(dirname(finalPath), 'r');
+    try {
+      fsyncSync(dirFd);
+    } finally {
+      closeSync(dirFd);
+    }
+  } catch {
+    // Best-effort directory fsync for filesystems that permit it.
+  }
+
   return finalPath;
 }
 
@@ -238,13 +257,7 @@ export function writeScopedCertification(
   record: NativeCertificationArtifact,
   options: CertificationStorageOptions = {},
 ): string {
-  const valid = validateSchema(record);
-  if (!valid) {
-    const summary = (validateSchema.errors ?? [])
-      .map(e => `${e.instancePath || '(root)'} ${e.message}`)
-      .join('; ');
-    throw new Error(`writeScopedCertification: record fails schema validation: ${summary}`);
-  }
+  validateCertificationForWrite(record, 'writeScopedCertification');
 
   const storage = resolveCertificationStorage(options);
   const finalPath = buildCertificationPathFromRoot(
@@ -261,6 +274,56 @@ export function writeGlobalCertification(
   options: Omit<CertificationStorageOptions, 'scope' | 'repoDir'> = {},
 ): string {
   return writeScopedCertification(record, { ...options, scope: 'global' });
+}
+
+/**
+ * Validate write-side invariants before any filesystem mutation.
+ *
+ * Atomic write contract: callers provide an already canonical v2 artifact.
+ * The store serializes stable JSON to a sibling temporary file, fsyncs it,
+ * renames over the final path, then best-effort fsyncs the parent directory.
+ * Artifacts containing secrets, local paths, non-canonical identity, or
+ * implausible timestamps are rejected before the temporary file is created.
+ */
+export function validateCertificationForWrite(
+  record: NativeCertificationArtifact,
+  label = 'writeCertification',
+): void {
+  const valid = validateSchema(record);
+  if (!valid) {
+    const summary = (validateSchema.errors ?? [])
+      .map(e => `${e.instancePath || '(root)'} ${e.message}`)
+      .join('; ');
+    throw new Error(`${label}: record fails schema validation: ${summary}`);
+  }
+
+  const storageIdentity = resolveCertificationStorageIdentity(record.provider, record.model);
+  if (record.provider !== storageIdentity.provider || record.model !== storageIdentity.model) {
+    throw new Error(
+      `${label}: artifact identity must be canonical storage identity ${storageIdentity.provider}/${storageIdentity.model}`,
+    );
+  }
+
+  const certifiedAtMs = Date.parse(record.certifiedAt);
+  if (!Number.isFinite(certifiedAtMs)) {
+    throw new Error(`${label}: certifiedAt must be a valid ISO timestamp`);
+  }
+  const now = Date.now();
+  if (certifiedAtMs < MIN_CERTIFIED_AT || certifiedAtMs > now + MAX_FUTURE_SKEW_MS) {
+    throw new Error(`${label}: certifiedAt is outside the accepted publication window`);
+  }
+  if (record.expiresAt) {
+    const expiresAtMs = Date.parse(record.expiresAt);
+    if (!Number.isFinite(expiresAtMs) || expiresAtMs <= certifiedAtMs) {
+      throw new Error(`${label}: expiresAt must be after certifiedAt`);
+    }
+  }
+
+  for (const limitation of record.knownLimitations ?? []) {
+    if (SECRET_OR_PATH_PATTERN.test(limitation)) {
+      throw new Error(`${label}: knownLimitations must not contain secrets or local paths`);
+    }
+  }
 }
 
 /**

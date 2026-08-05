@@ -61,6 +61,7 @@ export {
   listScopedCertifications,
   readCertification,
   serializeCertification,
+  validateCertificationForWrite,
   writeCertification,
   writeGlobalCertification,
   writeScopedCertification,
