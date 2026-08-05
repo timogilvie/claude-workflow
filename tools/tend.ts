@@ -37,44 +37,21 @@ async function writeTendHeartbeat(repoDir: string, timestamp: string): Promise<v
       const next = { ...(current ?? {}) };
       const services = { ...(next.services ?? {}) };
       const existing = { ...(services.tend ?? {}) };
-      const existingStatus = typeof existing.status === 'string'
-        ? existing.status
-        : typeof next.status === 'string'
-          ? next.status
-          : '';
-      const preserveActionableStatus = existingStatus === 'stalled' || existingStatus === 'needs-user';
-      const status = preserveActionableStatus ? existingStatus : 'healthy';
-      const detail = preserveActionableStatus
-        ? (typeof existing.detail === 'string'
-            ? existing.detail
-            : typeof next.detail === 'string'
-              ? next.detail
-              : 'backstage tend loop is running')
-        : 'backstage tend loop is running';
-      const restartAttemptCount = preserveActionableStatus && typeof existing.restartAttemptCount === 'number'
-        ? existing.restartAttemptCount
-        : 0;
-      const existingLastRestartAttemptAt = typeof existing.lastRestartAttemptAt === 'string'
-        ? existing.lastRestartAttemptAt
-        : null;
-      const lastRestartAttemptAt = preserveActionableStatus
-        ? existingLastRestartAttemptAt ?? next.lastRestartAttemptAt ?? null
-        : null;
       services.tend = {
         ...existing,
-        status,
-        detail,
+        status: 'healthy',
+        detail: 'backstage tend loop is running',
         heartbeatAt: timestamp,
         updatedAt: timestamp,
-        restartAttemptCount,
-        lastRestartAttemptAt,
+        restartAttemptCount: 0,
+        lastRestartAttemptAt: null,
         repoDir,
       };
       next.updatedAt = timestamp;
-      next.status = status;
-      next.detail = detail;
-      next.restartAttemptCount = restartAttemptCount;
-      next.lastRestartAttemptAt = lastRestartAttemptAt;
+      next.status = 'healthy';
+      next.detail = 'backstage tend loop is running';
+      next.restartAttemptCount = 0;
+      next.lastRestartAttemptAt = null;
       next.services = services;
       return next;
     },
