@@ -359,6 +359,128 @@
     "highRiskPolicy": "manual",
     "useMillSession": true
   },
+  "prePrVerification": {
+    "enabled": true,
+    "required": false,
+    "source": "explicit",
+    "requiredChecks": [
+      "Preflight Checks",
+      "Shell Tests (shard 1/4)",
+      "Shell Tests (shard 2/4)",
+      "Shell Tests (shard 3/4)",
+      "Shell Tests (shard 4/4)",
+      "Unit Tests (shard 1/3)",
+      "Unit Tests (shard 2/3)",
+      "Unit Tests (shard 3/3)",
+      "Custom Harness Tests",
+      "Smoke and Config Tests",
+      "Native Launch Certification"
+    ],
+    "recipe": {
+      "commands": [
+        "npm run lint",
+        "npm run test:preflight",
+        "bash tests/run-shell-suite.sh",
+        "bash tests/run-unit-tests.sh",
+        "npm run test:custom",
+        "npm run test:smoke",
+        "npm run test:config",
+        "npm run test:native-launch-certification"
+      ],
+      "timeoutSeconds": 900
+    },
+    "mappingAcknowledgements": {
+      "acknowledgedBy": "wavemill-maintainers",
+      "acknowledgedAt": "2026-08-05T22:55:26Z",
+      "checks": {
+        "Preflight Checks": {
+          "localCommand": "npm run test:preflight",
+          "workflowPath": ".github/workflows/ci.yml",
+          "jobName": "Preflight Checks"
+        },
+        "Shell Tests (shard 1/4)": {
+          "localCommand": "bash tests/run-shell-suite.sh",
+          "workflowPath": ".github/workflows/ci.yml",
+          "jobName": "Shell Tests (shard 1/4)"
+        },
+        "Shell Tests (shard 2/4)": {
+          "localCommand": "bash tests/run-shell-suite.sh",
+          "workflowPath": ".github/workflows/ci.yml",
+          "jobName": "Shell Tests (shard 2/4)"
+        },
+        "Shell Tests (shard 3/4)": {
+          "localCommand": "bash tests/run-shell-suite.sh",
+          "workflowPath": ".github/workflows/ci.yml",
+          "jobName": "Shell Tests (shard 3/4)"
+        },
+        "Shell Tests (shard 4/4)": {
+          "localCommand": "bash tests/run-shell-suite.sh",
+          "workflowPath": ".github/workflows/ci.yml",
+          "jobName": "Shell Tests (shard 4/4)"
+        },
+        "Unit Tests (shard 1/3)": {
+          "localCommand": "bash tests/run-unit-tests.sh",
+          "workflowPath": ".github/workflows/ci.yml",
+          "jobName": "Unit Tests (shard 1/3)"
+        },
+        "Unit Tests (shard 2/3)": {
+          "localCommand": "bash tests/run-unit-tests.sh",
+          "workflowPath": ".github/workflows/ci.yml",
+          "jobName": "Unit Tests (shard 2/3)"
+        },
+        "Unit Tests (shard 3/3)": {
+          "localCommand": "bash tests/run-unit-tests.sh",
+          "workflowPath": ".github/workflows/ci.yml",
+          "jobName": "Unit Tests (shard 3/3)"
+        },
+        "Custom Harness Tests": {
+          "localCommand": "npm run test:custom",
+          "workflowPath": ".github/workflows/ci.yml",
+          "jobName": "Custom Harness Tests"
+        },
+        "Smoke and Config Tests": {
+          "localCommand": "npm run test:smoke",
+          "workflowPath": ".github/workflows/ci.yml",
+          "jobName": "Smoke and Config Tests"
+        },
+        "Native Launch Certification": {
+          "localCommand": "npm run test:native-launch-certification",
+          "workflowPath": ".github/workflows/ci.yml",
+          "jobName": "Native Launch Certification"
+        }
+      }
+    },
+    "driftValidation": {
+      "enabled": true,
+      "blockOnUnmapped": true,
+      "warnOnDrift": true
+    },
+    "remoteOnlyExceptions": [
+      {
+        "checkName": "Shell and Unit Tests",
+        "reason": "Aggregator status check for the test jobs above; no independent local equivalent because the local recipe runs each command directly.",
+        "acknowledgedBy": "wavemill-maintainers",
+        "acknowledgedAt": "2026-08-05T22:55:26Z"
+      },
+      {
+        "checkName": "Check Lifecycle Paths",
+        "reason": "GitHub path-filter gate for lifecycle integration; not directly reproducible outside a PR context.",
+        "acknowledgedBy": "wavemill-maintainers",
+        "acknowledgedAt": "2026-08-05T22:55:26Z"
+      },
+      {
+        "checkName": "Lifecycle Integration Tests",
+        "reason": "Path-filtered integration harness enforced through integration.requiredChecks; local reproduction is bash tests/run-lifecycle-tests.sh.",
+        "acknowledgedBy": "wavemill-maintainers",
+        "acknowledgedAt": "2026-08-05T22:55:26Z"
+      }
+    ],
+    "nonEnforcedJobs": [
+      "Shell and Unit Tests",
+      "Check Lifecycle Paths",
+      "Lifecycle Integration Tests"
+    ]
+  },
   "promotion": {
     "protectedIntegrationStrategy": "use-promotion-head",
     "promotionHeadBranch": "auto/promotion"
