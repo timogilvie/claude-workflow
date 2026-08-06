@@ -1,12 +1,25 @@
 #!/usr/bin/env -S npx tsx
 
+import { join } from 'node:path';
 import { createStatusRenderer } from '../shared/lib/tend-status-renderer.ts';
 import { executeMerge, formatStatusLine, selectNextCandidate } from '../shared/lib/tend-controller.ts';
 import { runPromotion } from '../shared/lib/promotion-controller.ts';
 import { acquireTendLock } from '../shared/lib/tend-singleton.ts';
 import { runTool } from '../shared/lib/tool-runner.ts';
+import { mutateJsonState } from '../shared/lib/state-mutex.ts';
 
 const TEND_LOOP_INTERVAL_MS = 60_000;
+
+interface BackstageHealthFile {
+  updatedAt?: string;
+  status?: string;
+  detail?: string | null;
+  restartAttemptCount?: number;
+  lastRestartAttemptAt?: string | null;
+  executorPaneId?: string | null;
+  services?: Record<string, Record<string, unknown>>;
+  [key: string]: unknown;
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -14,6 +27,44 @@ function sleep(ms: number): Promise<void> {
 
 function statusActionForResult(status: string, prNumber: number): string {
   return status === 'merged' ? `merged-#${prNumber}` : `${status}-#${prNumber}`;
+}
+
+async function writeTendHeartbeat(repoDir: string, timestamp: string): Promise<void> {
+  const healthPath = join(repoDir, '.wavemill', 'backstage-health.json');
+  await mutateJsonState<BackstageHealthFile>(
+    healthPath,
+    (current) => {
+      const next = { ...(current ?? {}) };
+      const services = { ...(next.services ?? {}) };
+      const existing = { ...(services.tend ?? {}) };
+      services.tend = {
+        ...existing,
+        status: 'healthy',
+        detail: 'backstage tend loop is running',
+        heartbeatAt: timestamp,
+        updatedAt: timestamp,
+        restartAttemptCount: 0,
+        lastRestartAttemptAt: null,
+        repoDir,
+      };
+      next.updatedAt = timestamp;
+      next.status = 'healthy';
+      next.detail = 'backstage tend loop is running';
+      next.restartAttemptCount = 0;
+      next.lastRestartAttemptAt = null;
+      next.services = services;
+      return next;
+    },
+    { createIfMissing: true, initial: {} },
+  );
+}
+
+async function writeTendHeartbeatBestEffort(repoDir: string): Promise<void> {
+  try {
+    await writeTendHeartbeat(repoDir, new Date().toISOString());
+  } catch (error) {
+    console.error(`tend: failed to write heartbeat: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 runTool({
@@ -87,6 +138,7 @@ runTool({
 
       try {
         while (true) {
+          await writeTendHeartbeatBestEffort(repoDir);
           const decision = await selectNextCandidate({ repoDir });
           if (decision.nextPR === null) {
             renderer.write(formatStatusLine(decision, { action: 'idle', lastPR: lastMergedPR }));
