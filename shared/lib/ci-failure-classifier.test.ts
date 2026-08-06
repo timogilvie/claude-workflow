@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { classifyCiFailure, tailBytes } from './ci-failure-classifier.ts';
+import { classifyCiFailure, lookupLocalCommand, tailBytes } from './ci-failure-classifier.ts';
 
 describe('classifyCiFailure', () => {
   it('classifies deterministic locally replayable failures with the exact command', () => {
@@ -85,5 +85,31 @@ describe('classifyCiFailure', () => {
 describe('tailBytes', () => {
   it('returns small strings unchanged', () => {
     assert.equal(tailBytes('small', 10), 'small');
+  });
+});
+
+describe('lookupLocalCommand', () => {
+  it('resolves sharded CI job names through the base job key', () => {
+    assert.equal(
+      lookupLocalCommand('Shell Tests (shard 2/4)', { 'Shell Tests': 'npm run test:shell' }),
+      'npm run test:shell',
+    );
+  });
+
+  it('does not strip malformed shard-like suffixes', () => {
+    assert.equal(
+      lookupLocalCommand('Shell Tests (shard 2)', { 'Shell Tests': 'npm run test:shell' }),
+      undefined,
+    );
+  });
+
+  it('keeps exact-match recipes ahead of stripped shard fallback', () => {
+    assert.equal(
+      lookupLocalCommand('Shell Tests (shard 2/4)', {
+        'Shell Tests': 'npm run test:shell',
+        'Shell Tests (shard 2/4)': 'npm run test:shell -- --shard 2/4',
+      }),
+      'npm run test:shell -- --shard 2/4',
+    );
   });
 });

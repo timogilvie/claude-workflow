@@ -177,6 +177,7 @@ TESTS=(
   tools/certify-patch-coding.test.ts
   tools/check-config-version.test.ts
   tools/check-pi-version.test.ts
+  tools/check-ci-command-map-drift.test.ts
   tools/check-cross-pr-reverts.test.ts
   tools/hok2423-verify-native-provider-gate.test.ts
   tools/hok2424-verify-native-expansion.test.ts
