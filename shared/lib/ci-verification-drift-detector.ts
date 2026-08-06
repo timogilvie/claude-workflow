@@ -5,6 +5,7 @@ export type DriftFindingType =
   | 'aligned'
   | 'recipe-missing'
   | 'unmapped-check'
+  | 'workflow-uncovered'
   | 'workflow-changed'
   | 'metadata-unavailable'
   | 'manual-review';
@@ -39,6 +40,7 @@ export interface VerificationDriftInput {
   repository: string;
   discovery?: GitHubDiscoveryResult | null;
   config?: PrePrVerificationConfigSchema | null;
+  localWorkflowJobs?: Array<{ jobName: string; workflowPath: string }>;
   metadataError?: Error | string | null;
   timestamp?: string;
 }
@@ -92,7 +94,7 @@ export function detectVerificationDrift(input: VerificationDriftInput): Verifica
 
   const checks = uniqueSorted(input.discovery.checks);
   const mappings = buildMappingIndex(checks, commands, config);
-  const workflowByCheck = buildWorkflowIndex(input.discovery.workflows ?? [], checks);
+  const workflowByCheck = buildWorkflowIndex(buildWorkflowProvenance(input), checks);
   const findings: DriftFinding[] = [];
 
   if (checks.length === 0) {
@@ -210,6 +212,35 @@ export function detectVerificationDrift(input: VerificationDriftInput): Verifica
       severity: 'info',
       reason: `Mapped to local command by ${best.reason}.`,
       requiresAcknowledgement: false,
+    });
+  }
+
+  const coveredCheckNames = new Set(checks.map(normalizeForCaseInsensitiveMatch));
+  const nonEnforcedJobs = new Set((config.nonEnforcedJobs ?? []).map(normalizeForCaseInsensitiveMatch));
+  const remoteOnlyChecks = new Set((config.remoteOnlyExceptions ?? []).map((entry) => (
+    normalizeForCaseInsensitiveMatch(entry.checkName)
+  )));
+
+  for (const workflowJob of input.localWorkflowJobs ?? []) {
+    const normalizedJobName = normalizeForCaseInsensitiveMatch(workflowJob.jobName);
+    if (
+      coveredCheckNames.has(normalizedJobName) ||
+      nonEnforcedJobs.has(normalizedJobName) ||
+      remoteOnlyChecks.has(normalizedJobName)
+    ) {
+      continue;
+    }
+
+    findings.push({
+      type: 'workflow-uncovered',
+      checkName: workflowJob.jobName,
+      githubJobName: workflowJob.jobName,
+      githubWorkflowPath: workflowJob.workflowPath,
+      severity: 'error',
+      reason: 'Local workflow scan found a CI job that is not represented in prePrVerification.requiredChecks, remoteOnlyExceptions, or nonEnforcedJobs.',
+      suggestedFix:
+        `Add "${workflowJob.jobName}" to prePrVerification.requiredChecks with a local mapping, or acknowledge it in remoteOnlyExceptions/nonEnforcedJobs with rationale.`,
+      requiresAcknowledgement: true,
     });
   }
 
@@ -478,6 +509,10 @@ function uniqueSorted(values: string[]): string[] {
   return Array.from(new Set(values.filter(Boolean))).sort((a, b) => a.localeCompare(b));
 }
 
+function normalizeForCaseInsensitiveMatch(value: string): string {
+  return value.trim().toLowerCase();
+}
+
 function findRemoteOnlyException(config: PrePrVerificationConfigSchema, checkName: string) {
   return (config.remoteOnlyExceptions ?? []).find(
     (entry) => entry.checkName.toLowerCase() === checkName.toLowerCase(),
@@ -506,9 +541,27 @@ function getAcknowledgedWorkflow(
   };
 }
 
+function buildWorkflowProvenance(input: VerificationDriftInput): WorkflowJob[] {
+  const remoteWorkflows = input.discovery?.workflows ?? [];
+  const localWorkflows = (input.localWorkflowJobs ?? []).map((job) => ({
+    name: job.jobName,
+    path: job.workflowPath,
+    triggers: ['local-scan'],
+  }));
+  return [...remoteWorkflows, ...localWorkflows];
+}
+
 function buildWorkflowIndex(workflows: WorkflowJob[], checks: string[]): Map<string, WorkflowJob> {
   const result = new Map<string, WorkflowJob>();
   for (const check of checks) {
+    const literal = workflows.find((workflow) => (
+      normalizeForCaseInsensitiveMatch(workflow.name) === normalizeForCaseInsensitiveMatch(check)
+    ));
+    if (literal) {
+      result.set(check, literal);
+      continue;
+    }
+
     const normalizedCheck = normalizeForMatching(check);
     const exact = workflows.find((workflow) => normalizeForMatching(workflow.name) === normalizedCheck);
     if (exact) {

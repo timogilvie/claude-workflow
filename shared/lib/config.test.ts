@@ -3340,6 +3340,7 @@ test('pre-PR verification: loads full configuration', () => {
             acknowledgedAt: '2026-08-04T12:00:00Z',
           },
         ],
+        nonEnforcedJobs: ['Aggregate Status'],
         driftValidation: {
           enabled: true,
           blockOnUnmapped: true,
@@ -3374,6 +3375,7 @@ test('pre-PR verification: loads full configuration', () => {
     assert.equal(config.compatibility?.warnAfterDays, 14);
     assert.equal(config.remoteOnlyExceptions?.[0]?.checkName, 'Security Scan');
     assert.equal(config.remoteOnlyExceptions?.[0]?.reason, 'Requires org secrets unavailable locally');
+    assert.deepEqual(config.nonEnforcedJobs, ['Aggregate Status']);
     assert.equal(config.driftValidation?.blockOnUnmapped, true);
     assert.equal(config.driftValidation?.autoAcknowledgeThreshold, 0.9);
     assert.equal(config.mappingAcknowledgements?.checks?.['Lint Check'], 'npm run lint');
