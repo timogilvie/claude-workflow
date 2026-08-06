@@ -7,6 +7,7 @@ import {
   fetchOpenRouterModels,
   loadLaunchPriorityFixture,
   normalizeCatalog,
+  resolveOpenRouterModelIdentity,
   resolveWavemillAliasFromOpenRouterId,
   type ModelFamily,
   type NormalizedCatalogEntry,
@@ -20,8 +21,6 @@ const moduleDir = dirname(fileURLToPath(import.meta.url));
 const fixtureDir = join(moduleDir, '..', 'shared', 'fixtures', 'openrouter-responses', 'success');
 const OPENROUTER_URL_PATTERN = /https:\/\/openrouter\.ai\/\S+/g;
 export const WATCHLIST_SMOKE_MODELS = [
-  'gpt-4.1',
-  'deepseek-coder-v2',
   'qwen-3-235b',
   'qwen-2.5-72b',
   'kimi-k2-thinking',
@@ -57,7 +56,8 @@ export function createDryRunEntries(): NormalizedCatalogEntry[] {
       },
     ]),
   );
-  return normalizeCatalog(fixture.models, mockModels, { resolvedAt: 'dry-run' }).entries;
+  return normalizeCatalog(fixture.models, mockModels, { resolvedAt: 'dry-run' }).entries
+    .filter((entry) => resolveOpenRouterModelIdentity(entry.wavemillAlias)?.nativeOpenRouter === true);
 }
 
 export function createDryRunTransport(entries: readonly NormalizedCatalogEntry[]): OpenRouterTransport {
@@ -215,7 +215,8 @@ export async function runOpenRouterSmokeCli(argv: string[] = process.argv.slice(
 
     const liveModels = await fetchOpenRouterModels();
     const liveEntries = selectSmokeEntries(
-      normalizeCatalog(loadLaunchPriorityFixture().models, liveModels).entries,
+      normalizeCatalog(loadLaunchPriorityFixture().models, liveModels).entries
+        .filter((entry) => resolveOpenRouterModelIdentity(entry.wavemillAlias)?.nativeOpenRouter === true),
       filters,
     );
     const live = sanitizeSmokeReports(await runOpenRouterSmoke({

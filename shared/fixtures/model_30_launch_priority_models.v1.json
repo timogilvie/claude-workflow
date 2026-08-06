@@ -67,14 +67,6 @@
       "roleEligibility": ["coding", "review"]
     },
     {
-      "wavemillAlias": "gpt-4.1",
-      "openrouterId": "openai/gpt-4.1",
-      "family": "gpt",
-      "status": "watchlist",
-      "priorityTier": 3,
-      "roleEligibility": ["coding"]
-    },
-    {
       "wavemillAlias": "o3-mini",
       "openrouterId": "openai/o3-mini",
       "family": "gpt",
