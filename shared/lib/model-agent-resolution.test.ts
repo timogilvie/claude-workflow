@@ -101,6 +101,49 @@ describe('resolveModelAgent', () => {
     );
   });
 
+  it('keeps OpenAI models on the ChatGPT Codex harness despite native overrides', () => {
+    for (const agent of ['native-openai', 'native-openrouter'] as const) {
+      const registry = makeRegistry(`openai-misconfigured-${agent}`, {
+        vendor: 'openai',
+        agent,
+        codexChatgptCapability: { supported: true },
+        nativeCapability: {
+          nativeProvider: agent === 'native-openai' ? 'openai' : 'openrouter',
+          piTransportKind: 'openai-completions',
+          readOnlyNative: 'certified',
+          certification: {
+            maxCertifiedPhase: 'workflow',
+            certifiedAt: '2099-01-01T00:00:00.000Z',
+            certificationSuiteVersion: 'v1',
+          },
+        },
+      });
+
+      assert.deepEqual(
+        resolveModelAgent({ model: `openai-misconfigured-${agent}`, phase: 'planning', registry }),
+        { ok: true, agent: 'codex' },
+      );
+    }
+  });
+
+  it('rejects an OpenAI native override when the model is not ChatGPT Codex eligible', () => {
+    const registry = makeRegistry('openai-native-ineligible', {
+      vendor: 'openai',
+      agent: 'native-openrouter',
+      codexChatgptCapability: { supported: false, reason: 'Not available in the ChatGPT Codex app.' },
+      nativeCapability: {
+        nativeProvider: 'openrouter',
+        piTransportKind: 'openai-completions',
+        readOnlyNative: 'certified',
+      },
+    });
+
+    const result = resolveModelAgent({ model: 'openai-native-ineligible', phase: 'planning', registry });
+    assert.equal(result.ok, false);
+    if (result.ok) assert.fail('expected ChatGPT Codex eligibility rejection');
+    assert.equal(result.reason, 'codex-chatgpt-ineligible');
+  });
+
   it('resolves hosted gpt models to codex', () => {
     const result = resolveModelAgent({
       model: 'gpt-5.5',
@@ -129,7 +172,7 @@ describe('resolveModelAgent', () => {
       assert.equal(result.reason, 'codex-chatgpt-ineligible');
       assert.match(result.diagnostic, new RegExp(`model=${model}`));
       assert.match(result.diagnostic, /surface=codex-chatgpt/);
-      assert.match(result.diagnostic, /source=modelRegistry/);
+      assert.match(result.diagnostic, /source=globalModelRegistry/);
     }
   });
 
