@@ -14,6 +14,7 @@ import {
   type ReadyWatchdogConfig,
 } from './config.ts';
 import { classifyCiFailure, type CiFailureCategory } from './ci-failure-classifier.ts';
+import { enrichFailingChecks as enrichFailingChecksDefault } from './ci-log-fetcher.ts';
 import { errorMessage } from './error-utils.ts';
 import { normalizeJobs, type MillJob, type WorkflowStateLike } from './job-tracker.ts';
 import { updateBranchWithBase, type BranchBaseUpdateResult } from './promotion-controller.ts';
@@ -111,6 +112,9 @@ export interface NormalizedCheckSummary {
   status: 'success' | 'pending' | 'failure' | 'neutral' | 'skipped' | 'unknown';
   rawStatus: string;
   text?: string;
+  annotations?: string[];
+  detailsUrl?: string;
+  databaseId?: number;
   details?: unknown;
 }
 
@@ -210,6 +214,10 @@ export interface TickReadyWatchdogResult {
 export interface ReadyWatchdogDeps {
   readWorkflowState: (stateFile: string) => Promise<WorkflowStateLike>;
   fetchGitHubTruth: (prNumber: number, repoDir: string) => Promise<GitHubPRTruth>;
+  enrichFailingChecks: (
+    checks: NormalizedCheckSummary[],
+    options: { repoDir: string; maxBytes: number },
+  ) => Promise<NormalizedCheckSummary[]>;
   getCurrentHead: (worktree: string) => Promise<string | null>;
   getWorktreeMergeState: (worktree: string) => Promise<WorktreeMergeState>;
   isTaskPaneActive: (task: WorkflowTaskRecord) => Promise<boolean | null>;
@@ -327,6 +335,9 @@ const defaultDeps: ReadyWatchdogDeps = {
         },
       };
     }
+  },
+  async enrichFailingChecks(checks, options) {
+    return enrichFailingChecksDefault(checks, options);
   },
   async getCurrentHead(worktree) {
     try {
@@ -538,6 +549,8 @@ export function normalizeStatusCheckRollup(raw: unknown): NormalizedCheckSummary
       typeof entry.text === 'string' ? entry.text : '',
       typeof entry.detailsUrl === 'string' ? entry.detailsUrl : '',
     ].filter(Boolean).join('\n');
+    const detailsUrl = typeof entry.detailsUrl === 'string' ? entry.detailsUrl : undefined;
+    const databaseId = typeof entry.databaseId === 'number' ? entry.databaseId : undefined;
     let status: NormalizedCheckSummary['status'] = 'unknown';
 
     if (rawStatus === 'SUCCESS') status = 'success';
@@ -549,7 +562,7 @@ export function normalizeStatusCheckRollup(raw: unknown): NormalizedCheckSummary
       status = 'failure';
     }
 
-    return { name, status, rawStatus, text: text || undefined, details: entry };
+    return { name, status, rawStatus, text: text || undefined, detailsUrl, databaseId, details: entry };
   });
 }
 
@@ -1817,6 +1830,20 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
 
     try {
       githubTruth = await deps.fetchGitHubTruth(snapshot.prNumber, options.repoDir);
+      if (githubTruth.checks.some((check) => check.status === 'failure')) {
+        try {
+          githubTruth = {
+            ...githubTruth,
+            checks: await deps.enrichFailingChecks(githubTruth.checks, {
+              repoDir: options.repoDir,
+              maxBytes: failureClassifierConfig.remediationLogMaxBytes,
+            }),
+          };
+        } catch {
+          // Log enrichment is best-effort; classification can still proceed with
+          // the statusCheckRollup fields GitHub already returned.
+        }
+      }
       classification = classifyReadyTask(
         snapshot,
         githubTruth,

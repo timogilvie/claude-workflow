@@ -20,6 +20,35 @@ describe('classifyCiFailure', () => {
     assert.match(result.logExcerpt, /Assertion failed/);
   });
 
+  it('classifies config validation failures as locally replayable', () => {
+    const result = classifyCiFailure({
+      name: 'Shell and Unit Tests',
+      rawStatus: 'FAILURE',
+      text: 'Config validation failed:\n  /nativeAgent/providers/openai/models: Repo-local model configuration removed',
+    }, {
+      localCommandMap: { 'Shell and Unit Tests': 'npm test' },
+      logMaxBytes: 500,
+    });
+
+    assert.equal(result.category, 'deterministic-local');
+    assert.equal(result.localCommand, 'npm test');
+    assert.match(result.logExcerpt, /Repo-local model configuration removed/);
+  });
+
+  it('classifies ERR_TEST_FAILURE as locally replayable', () => {
+    const result = classifyCiFailure({
+      name: 'Unit Tests',
+      rawStatus: 'FAILURE',
+      text: 'node:test reported ERR_TEST_FAILURE after assertion output',
+    }, {
+      localCommandMap: { 'Unit Tests': 'npm test' },
+    });
+
+    assert.equal(result.category, 'deterministic-local');
+    assert.equal(result.localCommand, 'npm test');
+    assert.match(result.reason, /ERR_TEST_FAILURE/);
+  });
+
   it('classifies transient infrastructure failures without requiring a command', () => {
     const result = classifyCiFailure({
       name: 'build',

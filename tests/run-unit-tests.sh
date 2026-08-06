@@ -90,6 +90,7 @@ TESTS=(
   shared/lib/ready-engine.test.ts
   shared/lib/ready-stage.test.ts
   shared/lib/ci-failure-classifier.test.ts
+  shared/lib/ci-log-fetcher.test.ts
   shared/lib/ready-watchdog.test.ts
   shared/lib/migration-ast.test.ts
   shared/lib/tend-challenge-gate.test.ts
