@@ -8,6 +8,7 @@ import { loadWavemillConfig } from '../shared/lib/config.ts';
 import {
   discoverGitHubRequiredChecks,
   getWorkflowJobs,
+  readLocalWorkflowJobs,
   type GitHubDiscoveryResult,
 } from '../shared/lib/github-ci-discovery.ts';
 import {
@@ -47,11 +48,21 @@ runTool({
       type: 'string',
       description: 'Read discovery metadata from a fixture JSON file instead of GitHub',
     },
+    'workflow-file': {
+      type: 'string',
+      multiple: true,
+      description: 'Repo-relative workflow file to scan for uncovered jobs; repeatable',
+    },
+    'no-workflow-scan': {
+      type: 'boolean',
+      description: 'Disable local workflow YAML scan',
+    },
   },
   examples: [
     'npx tsx tools/check-ci-verification.ts',
     'npx tsx tools/check-ci-verification.ts --repo /path/to/repo --propose-mapping',
     'npx tsx tools/check-ci-verification.ts --json',
+    'npx tsx tools/check-ci-verification.ts --workflow-file .github/workflows/ci.yml',
   ],
   additionalHelp: `Description:
   Compares discovered enforced GitHub check names and workflow job provenance
@@ -99,10 +110,15 @@ Exit Codes:
       };
     }
 
+    const localWorkflowJobs = args['no-workflow-scan']
+      ? []
+      : readWorkflowJobsForDiagnostics(repoDir, args['workflow-file']);
+
     const result = validateVerificationDrift({
       repository,
       discovery,
       config: prePrVerification,
+      localWorkflowJobs,
       metadataError,
     });
 
@@ -117,6 +133,20 @@ Exit Codes:
     }
   },
 });
+
+function readWorkflowJobsForDiagnostics(
+  repoDir: string,
+  workflowFiles: string[] | undefined,
+): Array<{ jobName: string; workflowPath: string }> {
+  const { jobs, skipped } = readLocalWorkflowJobs(repoDir, workflowFiles);
+  for (const file of skipped) {
+    console.warn(`Skipping unreadable workflow file: ${file}`);
+  }
+  return jobs.map((job) => ({
+    jobName: job.jobName,
+    workflowPath: job.workflowPath,
+  }));
+}
 
 function readDiscoveryFixture(filePath: string): { discovery: GitHubDiscoveryResult | null; error: string | null } {
   const raw = JSON.parse(readFileSync(filePath, 'utf-8')) as FixtureShape;

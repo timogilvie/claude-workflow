@@ -1964,6 +1964,15 @@
                         "additionalProperties": false
                     }
                 },
+                "nonEnforcedJobs": {
+                    "type": "array",
+                    "default": [],
+                    "description": "Local workflow job names intentionally excluded from CI-to-local drift coverage, such as aggregators or PR-context-only gate jobs. Prefer remoteOnlyExceptions when the job is also an enforced check.",
+                    "items": {
+                        "type": "string",
+                        "minLength": 1
+                    }
+                },
                 "driftValidation": {
                     "type": "object",
                     "description": "Controls CI-to-local verification contract drift validation.",
