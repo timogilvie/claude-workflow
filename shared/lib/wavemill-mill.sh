@@ -3405,6 +3405,20 @@ finalize_challenge_execution_intent_before_coding() {
   [[ "$challenge_role_meta" != "challenger" ]] || return 0
   [[ -f "$feature_dir/.post-expansion-route.json" ]] || return 0
 
+  # A challenge has already chosen its experimental arm before either side is
+  # expanded.  The expanded route is useful for filling in the shared route,
+  # but it must never resample that arm: doing so lets Hokusai replace the
+  # challenger and turns an exploration run into another incumbent route.
+  # apply_expanded_route_if_present preserves the selected-stage fields from
+  # this intent while applying every non-varied field from the expanded route.
+  local existing_intent
+  existing_intent=$(read_state_value "" --arg i "$issue" '.tasks[$i].challengeExecutionIntent // empty' 2>/dev/null || true)
+  if [[ -n "$existing_intent" ]] \
+    && echo "$existing_intent" | jq -e '.schemaVersion == 1 and (.pairId // "") != "" and (.selectedStage // .challengeStage // "") != "" and (.primary // null) != null and (.challenger // null) != null' >/dev/null 2>&1; then
+    log "status" "  $issue: Preserving selected challenge arm through expanded routing"
+    return 0
+  fi
+
   local refresh_title issue_json packet_arg refreshed_plan refreshed_source refreshed_mode refreshed_reason
   refresh_title=$(read_state_value "" --arg i "$issue" '.tasks[$i].title // ""')
   if [[ -z "$refresh_title" ]]; then

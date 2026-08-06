@@ -127,6 +127,8 @@ CODING_FINALIZATION_BLOCK="$(awk '
 if [[ -n "$FINALIZATION_HELPER" ]]; then
   check_contains "finalizer skips challenger side" "$FINALIZATION_HELPER" '[[ "$challenge_role_meta" != "challenger" ]] || return 0'
   check_contains "finalizer requires expanded artifact" "$FINALIZATION_HELPER" '[[ -f "$feature_dir/.post-expansion-route.json" ]] || return 0'
+  check_contains "finalizer preserves an already selected challenge arm" "$FINALIZATION_HELPER" 'Preserving selected challenge arm through expanded routing'
+  check_contains "finalizer reads the persisted challenge intent before rerouting" "$FINALIZATION_HELPER" '.tasks[$i].challengeExecutionIntent // empty'
   check_contains "finalizer passes feature-dir to resolver" "$FINALIZATION_HELPER" '--feature-dir "$feature_dir"'
   check_contains "finalizer passes task packet when present" "$FINALIZATION_HELPER" 'packet_arg=(--file "$feature_dir/task-packet.md")'
   check_contains "finalizer requires expanded or preserved source" "$FINALIZATION_HELPER" 'refreshed_source" != "expanded" && "$refreshed_source" != "preserved"'
