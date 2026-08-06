@@ -363,6 +363,50 @@ test('classify stable safe failing CI as stable-failing-safe after repeated poll
   assert.equal(classification.localCommand, 'npm run lint');
 });
 
+test('classify sharded deterministic CI failure with local replay command', () => {
+  const classification = classifyReadyTask(
+    makeSnapshot(),
+    makeTruth({
+      checks: [{
+        name: 'Shell Tests (shard 2/4)',
+        status: 'failure',
+        rawStatus: 'FAILURE',
+        text: 'Assertion failed: expected shell output actual error',
+      }],
+    }),
+    new Date('2026-05-05T12:30:00.000Z'),
+    {
+      ...WATCHDOG_CLASSIFIER_CONFIG,
+      stableFailureConsecutivePolls: 2,
+      stableFailureEscalateAfterPolls: 4,
+      localCommandMap: {
+        ...WATCHDOG_CLASSIFIER_CONFIG.localCommandMap,
+        'Shell Tests': 'npm run test:shell',
+      },
+    },
+    {
+      issueId: 'HOK-1579',
+      slug: 'ready-watchdog-task',
+      prNumber: 528,
+      classification: 'waiting-on-ci',
+      displayLabel: 'waiting on CI',
+      detail: 'Failing checks: Shell Tests (shard 2/4) (FAILURE).',
+      action: 'reported',
+      updatedAt: '2026-05-05T12:20:00.000Z',
+      idleMinutes: 20,
+      lastProgressAt: '2026-05-05T12:00:00.000Z',
+      prStateKey: 'OPEN|MERGEABLE|CLEAN',
+      detailFingerprint: 'Failing checks: Shell Tests (shard 2/4) (FAILURE).',
+      consecutiveFailurePolls: 1,
+    },
+  );
+
+  assert.equal(classification.kind, 'stable-failing-safe');
+  assert.equal(classification.ciFailureCategory, 'deterministic-local');
+  assert.equal(classification.localCommand, 'npm run test:shell');
+  assert.match(classification.detail, /Local replay: npm run test:shell/);
+});
+
 test('classify resets consecutiveFailurePolls when prStateKey changes between polls', () => {
   const classification = classifyReadyTask(
     makeSnapshot(),

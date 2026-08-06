@@ -465,6 +465,119 @@ describe('CodexSessionAdapter', () => {
     }
   });
 
+  it('discovers matching sessions without depending on transcript body size', () => {
+    const { sessionsDir, cleanup } = setupCodexSessionDir();
+    try {
+      const worktreePath = '/test/large-worktree';
+      const branch = 'task/large-session';
+      const largeBodyEvent = JSON.stringify({
+        timestamp: '2026-02-20T15:17:31.000Z',
+        type: 'event_msg',
+        payload: {
+          type: 'agent_reasoning',
+          text: 'x'.repeat(1024 * 1024),
+        },
+      });
+
+      const lines = [
+        codexSessionMeta({ cwd: worktreePath, branch }),
+        largeBodyEvent,
+        codexTurnContext('gpt-5.3-codex'),
+        codexTokenCount({ inputTokens: 1234, cachedInputTokens: 567, outputTokens: 89, reasoningOutputTokens: 10 }),
+      ].join('\n');
+
+      writeFileSync(join(sessionsDir, 'rollout-large.jsonl'), lines);
+
+      const adapter = new CodexSessionAdapter();
+      const result = adapter.scan({ worktreePath, branchName: branch });
+
+      assert.ok(result);
+      assert.equal(result.sessionCount, 1);
+      assert.equal(result.turnCount, 1);
+      assert.deepEqual(result.models['gpt-5.3-codex'], {
+        inputTokens: 1234,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 567,
+        outputTokens: 99,
+      });
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('skips Codex files with oversized first records', () => {
+    const { sessionsDir, cleanup } = setupCodexSessionDir();
+    try {
+      const worktreePath = '/test/oversized-meta';
+      const branch = 'task/oversized-meta';
+      const oversizedMeta = JSON.stringify({
+        timestamp: '2026-02-20T15:17:29.630Z',
+        type: 'session_meta',
+        payload: {
+          id: '019c7ba0-test',
+          timestamp: '2026-02-20T15:17:29.541Z',
+          cwd: worktreePath,
+          originator: 'codex_exec',
+          cli_version: '0.99.0',
+          source: 'exec',
+          notes: 'x'.repeat(80 * 1024),
+          model_provider: 'openai',
+          git: {
+            commit_hash: 'abc123',
+            branch,
+            repository_url: 'git@github.com:test/repo.git',
+          },
+        },
+      });
+
+      const lines = [
+        oversizedMeta,
+        codexTurnContext('gpt-5.3-codex'),
+        codexTokenCount({ inputTokens: 100, cachedInputTokens: 50, outputTokens: 20, reasoningOutputTokens: 5 }),
+      ].join('\n');
+
+      writeFileSync(join(sessionsDir, 'rollout-oversized-meta.jsonl'), lines);
+
+      const adapter = new CodexSessionAdapter();
+      const result = adapter.scan({ worktreePath, branchName: branch });
+
+      assert.equal(result, null);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('refreshes cached Codex metadata when a session file changes', () => {
+    const { sessionsDir, cleanup } = setupCodexSessionDir();
+    try {
+      const worktreePath = '/test/cache-refresh';
+      const branch = 'task/cache-refresh';
+      const filePath = join(sessionsDir, 'rollout-cache-refresh.jsonl');
+      const adapter = new CodexSessionAdapter();
+
+      writeFileSync(filePath, [
+        codexSessionMeta({ cwd: '/other/cwd', branch: 'task/other' }),
+        codexTurnContext('gpt-5.3-codex'),
+        codexTokenCount({ inputTokens: 10, cachedInputTokens: 5, outputTokens: 2, reasoningOutputTokens: 1 }),
+      ].join('\n'));
+
+      assert.equal(adapter.scan({ worktreePath, branchName: branch }), null);
+
+      writeFileSync(filePath, [
+        codexSessionMeta({ cwd: worktreePath, branch }),
+        codexTurnContext('gpt-5.3-codex'),
+        codexTokenCount({ inputTokens: 100, cachedInputTokens: 50, outputTokens: 20, reasoningOutputTokens: 5 }),
+      ].join('\n'));
+
+      const result = adapter.scan({ worktreePath, branchName: branch });
+      assert.ok(result);
+      assert.equal(result.sessionCount, 1);
+      assert.equal(result.models['gpt-5.3-codex'].inputTokens, 100);
+    } finally {
+      cleanup();
+    }
+  });
+
   it('discovers sessions by matching branch when cwd differs', () => {
     const { sessionsDir, cleanup } = setupCodexSessionDir();
     try {
