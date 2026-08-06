@@ -53,7 +53,7 @@ else
   else
     fail "gpt-5.6-sol planning leaves stdout empty" "got: $(cat "$stdout_file")"
   fi
-  if grep -q '\[agent-resolution\].*gpt-5.6-sol.*phase=planning' "$stderr_file" && grep -q 'native-agent-certify.ts' "$stderr_file"; then
+  if grep -q '\[agent-resolution\].*gpt-5.6-sol.*phase=planning' "$stderr_file" && grep -q 'surface=codex-chatgpt.*codex-chatgpt-ineligible' "$stderr_file"; then
     pass "gpt-5.6-sol planning emits actionable diagnostic"
   else
     fail "gpt-5.6-sol planning emits actionable diagnostic" "$(cat "$stderr_file")"
