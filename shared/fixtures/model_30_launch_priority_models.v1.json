@@ -43,14 +43,6 @@
       "roleEligibility": ["coding", "review"]
     },
     {
-      "wavemillAlias": "claude-fable-5",
-      "openrouterId": "anthropic/claude-fable-5",
-      "family": "claude",
-      "status": "watchlist",
-      "priorityTier": 2,
-      "roleEligibility": ["planning", "coding", "review"]
-    },
-    {
       "wavemillAlias": "gpt-5.5",
       "openrouterId": "openai/gpt-5.5",
       "family": "gpt",

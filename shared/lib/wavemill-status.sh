@@ -1625,13 +1625,45 @@ format_backstage_service_status() {
     healthy) printf '%b' "${G}healthy${N}" ;;
     disabled) printf '%b' "${D}disabled${N}" ;;
     needs-user) printf '%b' "${R}needs-user${N}" ;;
+    stalled) printf '%b' "${R}${status}${N}" ;;
     missing-*|stale-*|backstage-missing) printf '%b' "${Y}${status}${N}" ;;
     *) printf '%b' "${D}${status}${N}" ;;
   esac
 }
 
+format_backstage_heartbeat_age() {
+  local heartbeat_at="${1:-}" now_ts heartbeat_epoch heartbeat_age
+  [[ -n "$heartbeat_at" ]] || return 1
+  now_ts="$(date +%s)"
+  heartbeat_epoch="$(wavemill_iso8601_to_epoch "$heartbeat_at" 2>/dev/null || echo 0)"
+  if [[ "$heartbeat_epoch" =~ ^[0-9]+$ && "$heartbeat_epoch" -gt 0 ]]; then
+    heartbeat_age=$(( now_ts - heartbeat_epoch ))
+    printf '%ss ago' "$heartbeat_age"
+    return 0
+  fi
+  return 1
+}
+
+queue_health_dashboard_status() {
+  local state_file="${1:-}" state_dir health_file status reason
+  [[ -n "$state_file" ]] || return 1
+  state_dir="$(dirname "$state_file" 2>/dev/null || echo '')"
+  [[ -n "$state_dir" ]] || return 1
+  health_file="${state_dir}/queue-health.json"
+  [[ -r "$health_file" ]] || return 1
+
+  status="$(jq -r '.status // "healthy"' "$health_file" 2>/dev/null || echo 'healthy')"
+  [[ -n "$status" ]] || status="healthy"
+  printf 'Queue: %b' "$(format_backstage_service_status "$status")"
+  if [[ "$status" != "healthy" ]]; then
+    reason="$(jq -r '.degradationReason // .failureStep // empty' "$health_file" 2>/dev/null || true)"
+    [[ -n "$reason" ]] && printf ' (%s)' "$reason"
+  fi
+  return 0
+}
+
 backstage_health_dashboard_line() {
-  local state_file="${1:-}" state_dir health_file tend_status observer_status heartbeat_at heartbeat_age now_ts heartbeat_epoch
+  local state_file="${1:-}" state_dir health_file tend_status observer_status heartbeat_at heartbeat_age queue_status_line
   [[ -n "$state_file" ]] || return 1
   state_dir="$(dirname "$state_file" 2>/dev/null || echo '')"
   [[ -n "$state_dir" ]] || return 1
@@ -1643,17 +1675,19 @@ backstage_health_dashboard_line() {
   [[ -n "$tend_status$observer_status" ]] || return 1
 
   printf 'Tend: %b' "$(format_backstage_service_status "${tend_status:-unknown}")"
+  heartbeat_at="$(jq -r '.services.tend.heartbeatAt // empty' "$health_file" 2>/dev/null || true)"
+  if heartbeat_age="$(format_backstage_heartbeat_age "$heartbeat_at" 2>/dev/null)"; then
+    printf ' (%s)' "$heartbeat_age"
+  fi
   if [[ -n "$observer_status" ]]; then
     printf ' │ Observer: %b' "$(format_backstage_service_status "$observer_status")"
     heartbeat_at="$(jq -r '.services.observer.heartbeatAt // empty' "$health_file" 2>/dev/null || true)"
-    if [[ -n "$heartbeat_at" ]]; then
-      now_ts="$(date +%s)"
-      heartbeat_epoch="$(wavemill_iso8601_to_epoch "$heartbeat_at" 2>/dev/null || echo 0)"
-      if [[ "$heartbeat_epoch" =~ ^[0-9]+$ && "$heartbeat_epoch" -gt 0 ]]; then
-        heartbeat_age=$(( now_ts - heartbeat_epoch ))
-        printf ' (%ss ago)' "$heartbeat_age"
-      fi
+    if heartbeat_age="$(format_backstage_heartbeat_age "$heartbeat_at" 2>/dev/null)"; then
+      printf ' (%s)' "$heartbeat_age"
     fi
+  fi
+  if queue_status_line="$(queue_health_dashboard_status "$state_file" 2>/dev/null)"; then
+    printf ' │ %s' "$queue_status_line"
   fi
   printf '\n'
   return 0

@@ -55,7 +55,7 @@ const successFixture = {
 describe('runOpenRouterSmoke', () => {
   it('returns per-model results and continues after a provider failure', async () => {
     const entries = [
-      makeEntry('claude-fable-5', 'claude', 'anthropic/claude-fable-5'),
+      makeEntry('kimi-k2', 'kimi', 'moonshotai/kimi-k2'),
       makeEntry('qwen-3-coder', 'qwen', 'qwen/qwen3-coder'),
       makeEntry('glm-5.2', 'glm', 'z-ai/glm-5.2'),
     ];
@@ -104,7 +104,7 @@ describe('runOpenRouterSmoke', () => {
 
   it('records transport throws for one entry and continues', async () => {
     const entries = [
-      makeEntry('claude-fable-5', 'claude', 'anthropic/claude-fable-5'),
+      makeEntry('glm-5.2', 'glm', 'z-ai/glm-5.2'),
       makeEntry('kimi-k2', 'kimi', 'moonshotai/kimi-k2'),
     ];
     const transport: OpenRouterTransport = async (_url, init) => {
