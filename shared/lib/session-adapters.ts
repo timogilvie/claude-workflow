@@ -10,13 +10,23 @@
  * @module session-adapters
  */
 
-import { readdirSync, readFileSync, existsSync } from 'node:fs';
+import { closeSync, existsSync, openSync, readSync, readdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { readJsonlFile } from './jsonl-utils.ts';
 import { piUsageToSessionModelUsage } from './native-agent/pi-usage-cost.ts';
 import type { TranscriptEvent } from './native-agent/transcript.ts';
 import { resolveProjectsDirs } from './workflow-cost.ts';
+
+const CODEX_SESSION_META_READ_BYTES = 64 * 1024;
+
+interface CodexSessionMetaCacheEntry {
+  size: number;
+  mtimeMs: number;
+  isSessionMeta: boolean;
+  cwd?: string;
+  branch?: string;
+}
 
 // ────────────────────────────────────────────────────────────────
 // Common types
@@ -226,6 +236,8 @@ export class ClaudeSessionAdapter implements SessionAdapter {
  * session total. Model ID comes from turn_context entries.
  */
 export class CodexSessionAdapter implements SessionAdapter {
+  private static readonly sessionMetaCache = new Map<string, Map<string, CodexSessionMetaCacheEntry>>();
+
   scan(opts: SessionScanOptions): SessionUsageResult | null {
     const debug = process.env.DEBUG_COST === '1' || process.env.DEBUG_COST === 'true';
     const sessionsRoot = join(homedir(), '.codex', 'sessions');
@@ -304,26 +316,31 @@ export class CodexSessionAdapter implements SessionAdapter {
   private discoverMatchingFiles(sessionsRoot: string, opts: SessionScanOptions, debug = false): string[] {
     const matching: string[] = [];
     const resolvedWorktree = resolve(opts.worktreePath);
+    let rootCache = CodexSessionAdapter.sessionMetaCache.get(sessionsRoot);
+    if (!rootCache) {
+      rootCache = new Map();
+      CodexSessionAdapter.sessionMetaCache.set(sessionsRoot, rootCache);
+    }
+    const seenFiles = new Set<string>();
 
     if (debug) {
       console.log(`[DEBUG_COST]   Scanning for session files matching worktree or branch...`);
     }
 
     this.walkJsonlFiles(sessionsRoot, (filePath) => {
+      seenFiles.add(filePath);
       try {
-        const content = readFileSync(filePath, 'utf-8');
-        const firstNewline = content.indexOf('\n');
-        const firstLine = firstNewline >= 0 ? content.slice(0, firstNewline) : content;
-        if (!firstLine.trim()) return;
+        const stat = statSync(filePath);
+        let meta = rootCache.get(filePath);
+        if (!meta || meta.size !== stat.size || meta.mtimeMs !== stat.mtimeMs) {
+          meta = readCodexSessionMeta(filePath, stat.size, stat.mtimeMs);
+          rootCache.set(filePath, meta);
+        }
 
-        const meta = JSON.parse(firstLine);
-        if (meta.type !== 'session_meta') return;
+        if (!meta.isSessionMeta) return;
 
-        const cwd = meta.payload?.cwd;
-        const branch = meta.payload?.git?.branch;
-
-        const cwdMatches = cwd && resolve(cwd) === resolvedWorktree;
-        const branchMatches = branch === opts.branchName;
+        const cwdMatches = meta.cwd && resolve(meta.cwd) === resolvedWorktree;
+        const branchMatches = meta.branch === opts.branchName;
 
         if (cwdMatches || branchMatches) {
           matching.push(filePath);
@@ -332,6 +349,12 @@ export class CodexSessionAdapter implements SessionAdapter {
         // Skip unreadable files
       }
     });
+
+    for (const filePath of rootCache.keys()) {
+      if (!seenFiles.has(filePath)) {
+        rootCache.delete(filePath);
+      }
+    }
 
     return matching;
   }
@@ -408,6 +431,64 @@ export class CodexSessionAdapter implements SessionAdapter {
       };
     } catch {
       return null;
+    }
+  }
+}
+
+function readCodexSessionMeta(filePath: string, size: number, mtimeMs: number): CodexSessionMetaCacheEntry {
+  const emptyEntry = { size, mtimeMs, isSessionMeta: false };
+  try {
+    const firstLine = readFirstLineBounded(filePath, CODEX_SESSION_META_READ_BYTES);
+    if (firstLine === null || !firstLine.trim()) {
+      return emptyEntry;
+    }
+
+    const meta = JSON.parse(firstLine);
+    if (meta.type !== 'session_meta') {
+      return emptyEntry;
+    }
+
+    return {
+      size,
+      mtimeMs,
+      isSessionMeta: true,
+      cwd: typeof meta.payload?.cwd === 'string' ? meta.payload.cwd : undefined,
+      branch: typeof meta.payload?.git?.branch === 'string' ? meta.payload.git.branch : undefined,
+    };
+  } catch {
+    return emptyEntry;
+  }
+}
+
+function readFirstLineBounded(filePath: string, maxBytes: number): string | null {
+  let fd: number | null = null;
+  try {
+    fd = openSync(filePath, 'r');
+    const buffer = Buffer.allocUnsafe(maxBytes);
+    const bytesRead = readSync(fd, buffer, 0, maxBytes, 0);
+    if (bytesRead === 0) {
+      return null;
+    }
+
+    const newlineIndex = buffer.subarray(0, bytesRead).indexOf(0x0a);
+    if (newlineIndex >= 0) {
+      return buffer.toString('utf8', 0, newlineIndex);
+    }
+
+    if (bytesRead < maxBytes) {
+      return buffer.toString('utf8', 0, bytesRead);
+    }
+
+    return null;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Ignore close failures; discovery treats the file as best-effort.
+      }
     }
   }
 }

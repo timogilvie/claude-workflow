@@ -153,4 +153,44 @@ describe('ci-verification-drift-detector', () => {
     assert.equal(report.findings[0].type, 'workflow-changed');
     assert.match(report.findings[0].suggestedFix ?? '', /Do not execute arbitrary workflow YAML locally/);
   });
+
+  it('flags local workflow jobs that are not covered by the explicit contract', () => {
+    const report = detectVerificationDrift({
+      repository: 'acme/widgets',
+      discovery: discovery(['Unit Tests']),
+      localWorkflowJobs: [
+        { jobName: 'Unit Tests', workflowPath: '.github/workflows/ci.yml' },
+        { jobName: 'Security Scan', workflowPath: '.github/workflows/ci.yml' },
+      ],
+      config: {
+        enabled: true,
+        source: 'explicit',
+        recipe: { commands: ['npm run test:unit'] },
+      },
+    });
+
+    const uncovered = report.findings.find((finding) => finding.type === 'workflow-uncovered');
+    assert.equal(uncovered?.checkName, 'Security Scan');
+    assert.equal(uncovered?.severity, 'error');
+    assert.equal(uncovered?.requiresAcknowledgement, true);
+  });
+
+  it('does not flag local workflow jobs allowlisted as non-enforced', () => {
+    const report = detectVerificationDrift({
+      repository: 'acme/widgets',
+      discovery: discovery(['Unit Tests']),
+      localWorkflowJobs: [
+        { jobName: 'Unit Tests', workflowPath: '.github/workflows/ci.yml' },
+        { jobName: 'Aggregate Status', workflowPath: '.github/workflows/ci.yml' },
+      ],
+      config: {
+        enabled: true,
+        source: 'explicit',
+        recipe: { commands: ['npm run test:unit'] },
+        nonEnforcedJobs: ['Aggregate Status'],
+      },
+    });
+
+    assert.ok(!report.findings.some((finding) => finding.type === 'workflow-uncovered'));
+  });
 });

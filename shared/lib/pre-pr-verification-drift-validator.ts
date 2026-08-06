@@ -39,11 +39,14 @@ export function validateVerificationDrift(
     if (finding.type === 'aligned') continue;
 
     const message = `${finding.checkName}: ${finding.reason}`;
+    const blockableMappingDrift =
+      finding.type === 'unmapped-check' ||
+      finding.type === 'workflow-uncovered';
     const blocking =
       finding.type === 'metadata-unavailable' ||
       (
         finding.severity === 'error' &&
-        (blockOnUnmapped || finding.type === 'recipe-missing')
+        ((blockOnUnmapped && blockableMappingDrift) || finding.type === 'recipe-missing')
       );
 
     if (blocking) {

@@ -9,7 +9,8 @@
  */
 
 import { execSync } from 'node:child_process';
-import { resolve } from 'node:path';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { join, relative, resolve } from 'node:path';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -26,6 +27,12 @@ export interface WorkflowJob {
   name: string;
   path: string; // Relative path to workflow file
   triggers: string[]; // Event triggers (push, pull_request, etc.)
+}
+
+export interface ParsedWorkflowJob {
+  jobName: string;
+  jobKey: string;
+  workflowPath: string;
 }
 
 export class GitHubPermissionError extends Error {
@@ -208,11 +215,11 @@ export async function getWorkflowJobs(repo: string): Promise<WorkflowJob[]> {
         // Parse YAML to extract jobs and triggers (simplified)
         // In production, use a YAML parser library
         const triggers = parseWorkflowTriggers(content);
-        const workflowJobs = parseWorkflowJobs(content);
+        const workflowJobs = parseWorkflowJobsFromYaml(content, workflow.path);
 
         for (const job of workflowJobs) {
           jobs.push({
-            name: job,
+            name: job.jobName,
             path: workflow.path,
             triggers,
           });
@@ -230,6 +237,35 @@ export async function getWorkflowJobs(repo: string): Promise<WorkflowJob[]> {
   }
 
   return jobs;
+}
+
+/**
+ * Read local GitHub Actions workflow job names without executing workflow YAML.
+ *
+ * @param repoDir Repository root.
+ * @param workflowFiles Optional repo-relative workflow file allowlist.
+ */
+export function readLocalWorkflowJobs(
+  repoDir: string,
+  workflowFiles?: string[],
+): { jobs: ParsedWorkflowJob[]; skipped: string[] } {
+  const files = workflowFiles?.length
+    ? workflowFiles
+    : listLocalWorkflowFiles(repoDir);
+  const jobs: ParsedWorkflowJob[] = [];
+  const skipped: string[] = [];
+
+  for (const file of files) {
+    const absolutePath = resolve(repoDir, file);
+    try {
+      const yaml = readFileSync(absolutePath, 'utf-8');
+      jobs.push(...parseWorkflowJobsFromYaml(yaml, normalizeWorkflowPath(repoDir, absolutePath)));
+    } catch {
+      skipped.push(file);
+    }
+  }
+
+  return { jobs, skipped };
 }
 
 /**
@@ -269,10 +305,8 @@ function classifyGhError(err: unknown, context: string): Error | null {
 function parseWorkflowTriggers(yaml: string): string[] {
   const triggers: string[] = [];
 
-  // Match 'on:' section
-  const onMatch = yaml.match(/^on:\s*\n([\s\S]*?)(?=^\w|$)/m);
-  if (onMatch) {
-    const onContent = onMatch[1];
+  const onContent = collectTopLevelSection(yaml, 'on');
+  if (onContent) {
     // Extract trigger names (push, pull_request, etc.)
     const lines = onContent.split('\n');
     for (const line of lines) {
@@ -290,23 +324,128 @@ function parseWorkflowTriggers(yaml: string): string[] {
  * Extract job names from GitHub Actions workflow YAML.
  * Simplified parser — uses regex to find 'jobs:' section.
  */
-function parseWorkflowJobs(yaml: string): string[] {
-  const jobs: string[] = [];
+export function parseWorkflowJobsFromYaml(yaml: string, workflowPath: string): ParsedWorkflowJob[] {
+  const jobs: ParsedWorkflowJob[] = [];
 
-  // Match 'jobs:' section
-  const jobsMatch = yaml.match(/^jobs:\s*\n([\s\S]*?)(?=^\w|$)/m);
-  if (jobsMatch) {
-    const jobsContent = jobsMatch[1];
-    // Extract job names (keys at start of line with colon)
+  const jobsContent = collectTopLevelSection(yaml, 'jobs');
+  if (jobsContent) {
     const lines = jobsContent.split('\n');
-    for (const line of lines) {
+    for (let index = 0; index < lines.length; index++) {
+      const line = lines[index] ?? '';
       const match = line.match(/^(\s*)([a-zA-Z_][a-zA-Z0-9_-]*):\s*(?:$|#)/);
       if (match && match[1].length === 2) {
-        // Top-level job (2 spaces)
-        jobs.push(match[2]);
+        const jobKey = match[2];
+        const block = collectIndentedBlock(lines, index + 1, 2);
+        const configuredName = extractJobName(block) ?? jobKey;
+        for (const jobName of expandMatrixJobNames(configuredName, block)) {
+          jobs.push({
+            jobName,
+            jobKey,
+            workflowPath,
+          });
+        }
       }
     }
   }
 
   return jobs;
+}
+
+function collectTopLevelSection(yaml: string, key: string): string | null {
+  const lines = yaml.split('\n');
+  const startIndex = lines.findIndex((line) => line.match(new RegExp(`^${escapeRegExp(key)}:\\s*(?:$|#)`)));
+  if (startIndex === -1) return null;
+
+  const section: string[] = [];
+  for (let index = startIndex + 1; index < lines.length; index++) {
+    const line = lines[index] ?? '';
+    if (/^[A-Za-z_][A-Za-z0-9_-]*:\s*/.test(line)) break;
+    section.push(line);
+  }
+  return section.join('\n');
+}
+
+function listLocalWorkflowFiles(repoDir: string): string[] {
+  const workflowDir = resolve(repoDir, '.github', 'workflows');
+  if (!existsSync(workflowDir)) return [];
+  return readdirSync(workflowDir)
+    .filter((entry) => /\.(ya?ml)$/i.test(entry))
+    .sort((a, b) => a.localeCompare(b))
+    .map((entry) => join('.github', 'workflows', entry));
+}
+
+function normalizeWorkflowPath(repoDir: string, absolutePath: string): string {
+  return relative(repoDir, absolutePath).replaceAll('\\', '/');
+}
+
+function collectIndentedBlock(lines: string[], startIndex: number, parentIndent: number): string[] {
+  const block: string[] = [];
+  for (let index = startIndex; index < lines.length; index++) {
+    const line = lines[index] ?? '';
+    if (line.trim() === '') {
+      block.push(line);
+      continue;
+    }
+    const indent = line.match(/^ */)?.[0].length ?? 0;
+    if (indent <= parentIndent) break;
+    block.push(line);
+  }
+  return block;
+}
+
+function extractJobName(lines: string[]): string | undefined {
+  for (const line of lines) {
+    const match = line.match(/^\s{4}name:\s*(.+?)\s*$/);
+    if (match) {
+      return unquoteYamlScalar(match[1]);
+    }
+  }
+  return undefined;
+}
+
+function expandMatrixJobNames(jobName: string, jobBlock: string[]): string[] {
+  const matrixVariables = extractInlineMatrixVariables(jobBlock);
+  let names = [jobName];
+
+  for (const [variable, values] of matrixVariables) {
+    const pattern = new RegExp(`\\$\\{\\{\\s*matrix\\.${escapeRegExp(variable)}\\s*\\}\\}`);
+    const globalPattern = new RegExp(`\\$\\{\\{\\s*matrix\\.${escapeRegExp(variable)}\\s*\\}\\}`, 'g');
+    names = names.flatMap((name) => (
+      pattern.test(name)
+        ? values.map((value) => name.replace(globalPattern, value))
+        : [name]
+    ));
+  }
+
+  return uniqueStable(names);
+}
+
+function extractInlineMatrixVariables(jobBlock: string[]): Map<string, string[]> {
+  const variables = new Map<string, string[]>();
+  for (const line of jobBlock) {
+    const match = line.match(/^\s{8}([A-Za-z_][A-Za-z0-9_-]*):\s*\[(.+)]\s*$/);
+    if (!match) continue;
+    const values = match[2]
+      .split(',')
+      .map((value) => unquoteYamlScalar(value.trim()))
+      .filter(Boolean);
+    if (values.length > 0) {
+      variables.set(match[1], values);
+    }
+  }
+  return variables;
+}
+
+function unquoteYamlScalar(value: string): string {
+  const trimmed = value.trim();
+  const quoted = trimmed.match(/^(['"])(.*)\1$/);
+  return quoted ? quoted[2] : trimmed;
+}
+
+function uniqueStable(values: string[]): string[] {
+  return Array.from(new Set(values));
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
