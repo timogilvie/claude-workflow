@@ -14,6 +14,7 @@ import {
   type ReadyWatchdogConfig,
 } from './config.ts';
 import { classifyCiFailure, type CiFailureCategory } from './ci-failure-classifier.ts';
+import { enrichFailingChecks as enrichFailingChecksDefault } from './ci-log-fetcher.ts';
 import { errorMessage } from './error-utils.ts';
 import { normalizeJobs, type MillJob, type WorkflowStateLike } from './job-tracker.ts';
 import { updateBranchWithBase, type BranchBaseUpdateResult } from './promotion-controller.ts';
@@ -111,6 +112,9 @@ export interface NormalizedCheckSummary {
   status: 'success' | 'pending' | 'failure' | 'neutral' | 'skipped' | 'unknown';
   rawStatus: string;
   text?: string;
+  annotations?: string[];
+  detailsUrl?: string;
+  databaseId?: number;
   details?: unknown;
 }
 
@@ -173,6 +177,7 @@ export interface ReadyWatchdogStateEntry {
   lastProgressAt: string | null;
   prStateKey?: string;
   detailFingerprint?: string;
+  classificationSince?: string;
   autoUpdateAttempts?: number;
   lastAutoUpdateError?: string;
   lastReportedAction?: string;
@@ -209,6 +214,10 @@ export interface TickReadyWatchdogResult {
 export interface ReadyWatchdogDeps {
   readWorkflowState: (stateFile: string) => Promise<WorkflowStateLike>;
   fetchGitHubTruth: (prNumber: number, repoDir: string) => Promise<GitHubPRTruth>;
+  enrichFailingChecks: (
+    checks: NormalizedCheckSummary[],
+    options: { repoDir: string; maxBytes: number },
+  ) => Promise<NormalizedCheckSummary[]>;
   getCurrentHead: (worktree: string) => Promise<string | null>;
   getWorktreeMergeState: (worktree: string) => Promise<WorktreeMergeState>;
   isTaskPaneActive: (task: WorkflowTaskRecord) => Promise<boolean | null>;
@@ -326,6 +335,9 @@ const defaultDeps: ReadyWatchdogDeps = {
         },
       };
     }
+  },
+  async enrichFailingChecks(checks, options) {
+    return enrichFailingChecksDefault(checks, options);
   },
   async getCurrentHead(worktree) {
     try {
@@ -537,6 +549,8 @@ export function normalizeStatusCheckRollup(raw: unknown): NormalizedCheckSummary
       typeof entry.text === 'string' ? entry.text : '',
       typeof entry.detailsUrl === 'string' ? entry.detailsUrl : '',
     ].filter(Boolean).join('\n');
+    const detailsUrl = typeof entry.detailsUrl === 'string' ? entry.detailsUrl : undefined;
+    const databaseId = typeof entry.databaseId === 'number' ? entry.databaseId : undefined;
     let status: NormalizedCheckSummary['status'] = 'unknown';
 
     if (rawStatus === 'SUCCESS') status = 'success';
@@ -548,7 +562,7 @@ export function normalizeStatusCheckRollup(raw: unknown): NormalizedCheckSummary
       status = 'failure';
     }
 
-    return { name, status, rawStatus, text: text || undefined, details: entry };
+    return { name, status, rawStatus, text: text || undefined, detailsUrl, databaseId, details: entry };
   });
 }
 
@@ -884,15 +898,16 @@ function shouldEmitReadyWatchdogFinding(
     return true;
   }
 
-  // Other material changes from non-volatile structured fields.
+  // Other material changes from non-volatile structured fields. Monotonic
+  // counters are intentionally excluded: their threshold effects are surfaced
+  // through classification/action/detail changes above, and comparing raw
+  // increments would bypass the rate-limit branch below.
   if (prior.prStateKey !== next.prStateKey) return true;
   if (prior.autoUpdateAttempts !== next.autoUpdateAttempts) return true;
   if (prior.lastAutoUpdateError !== next.lastAutoUpdateError) return true;
-  if (prior.consecutiveFailurePolls !== next.consecutiveFailurePolls) return true;
   if (prior.recoveryCommand !== next.recoveryCommand) return true;
   if (JSON.stringify(prior.remediationCategories ?? []) !== JSON.stringify(next.remediationCategories ?? [])) return true;
   if (prior.failingChecksFingerprint !== next.failingChecksFingerprint) return true;
-  if (prior.failingChecksObservedCount !== next.failingChecksObservedCount) return true;
   if (prior.transientFailureCount !== next.transientFailureCount) return true;
   if (prior.transientFailureHead !== next.transientFailureHead) return true;
   if (prior.lastCiFailureCategory !== next.lastCiFailureCategory) return true;
@@ -1455,37 +1470,6 @@ async function writeStateFile(repoDir: string, findings: ReadyWatchdogStateEntry
   );
 }
 
-function materiallyChanged(
-  prior: ReadyWatchdogStateEntry | undefined,
-  next: ReadyWatchdogStateEntry,
-): boolean {
-  if (!prior) {
-    return true;
-  }
-
-  return prior.classification !== next.classification
-    || prior.detailFingerprint !== next.detailFingerprint
-    || prior.prStateKey !== next.prStateKey
-    || prior.autoUpdateAttempts !== next.autoUpdateAttempts
-    || prior.lastAutoUpdateError !== next.lastAutoUpdateError
-    || prior.lastReportedAction !== next.lastReportedAction
-    || prior.consecutiveFailurePolls !== next.consecutiveFailurePolls
-    || prior.recoveryCommand !== next.recoveryCommand
-    || prior.consecutiveFailurePolls !== next.consecutiveFailurePolls
-    || JSON.stringify(prior.remediationCategories ?? []) !== JSON.stringify(next.remediationCategories ?? [])
-    || prior.failingChecksFingerprint !== next.failingChecksFingerprint
-    || prior.failingChecksObservedCount !== next.failingChecksObservedCount
-    || prior.transientFailureCount !== next.transientFailureCount
-    || prior.transientFailureHead !== next.transientFailureHead
-    || prior.lastCiFailureCategory !== next.lastCiFailureCategory
-    || prior.lastFailingJob !== next.lastFailingJob
-    || prior.lastLocalCommand !== next.lastLocalCommand
-    || prior.terminal !== next.terminal
-    || prior.terminalReason !== next.terminalReason
-    || prior.terminalAttempts !== next.terminalAttempts
-    || prior.terminalHeadSha !== next.terminalHeadSha;
-}
-
 function buildFindingEntry(input: {
   issueId: string;
   snapshot: ReadyTaskSnapshot;
@@ -1542,6 +1526,23 @@ function buildFindingEntry(input: {
     terminalAttempts: input.terminalAttempts,
     terminalHeadSha: input.terminalHeadSha,
     lastTerminalAt: input.terminal ? input.now.toISOString() : undefined,
+  };
+}
+
+function withClassificationSince(
+  prior: ReadyWatchdogStateEntry | undefined,
+  entry: ReadyWatchdogStateEntry,
+  now: Date,
+): ReadyWatchdogStateEntry {
+  const unchanged = prior
+    && prior.classification === entry.classification
+    && prior.detailFingerprint === entry.detailFingerprint
+    && typeof prior.classificationSince === 'string'
+    && prior.classificationSince.length > 0;
+
+  return {
+    ...entry,
+    classificationSince: unchanged ? prior.classificationSince : now.toISOString(),
   };
 }
 
@@ -1740,6 +1741,7 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
           lastFailingJob: prior?.lastFailingJob,
           lastLocalCommand: prior?.lastLocalCommand,
         });
+        entry = withClassificationSince(prior, entry, now);
         if (shouldEmitReadyWatchdogFinding(prior, entry, now, getReportIntervalSeconds())) {
           entry = {
             ...entry,
@@ -1798,6 +1800,20 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
 
     try {
       githubTruth = await deps.fetchGitHubTruth(snapshot.prNumber, options.repoDir);
+      if (githubTruth.checks.some((check) => check.status === 'failure')) {
+        try {
+          githubTruth = {
+            ...githubTruth,
+            checks: await deps.enrichFailingChecks(githubTruth.checks, {
+              repoDir: options.repoDir,
+              maxBytes: failureClassifierConfig.remediationLogMaxBytes,
+            }),
+          };
+        } catch {
+          // Log enrichment is best-effort; classification can still proceed with
+          // the statusCheckRollup fields GitHub already returned.
+        }
+      }
       classification = classifyReadyTask(
         snapshot,
         githubTruth,
@@ -2066,6 +2082,7 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
       continue;
     }
 
+    entry = withClassificationSince(prior, entry, now);
     const reportIntervalSeconds = getReportIntervalSeconds();
     if (shouldEmitReadyWatchdogFinding(prior, entry, now, reportIntervalSeconds)) {
       entry = {

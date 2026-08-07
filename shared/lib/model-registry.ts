@@ -1515,7 +1515,11 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       reasoningTier: 'advanced',
       costPerMillionInputTokensUsd: 5,
       costPerMillionOutputTokensUsd: 30,
-      agent: 'native-openai',
+      agent: 'codex',
+      codexChatgptCapability: {
+        supported: false,
+        reason: 'gpt-5.6-sol is not certified for the ChatGPT Codex launch surface.',
+      },
     },
     'gpt-5.6-terra': {
       vendor: 'openai',
@@ -1549,7 +1553,11 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       reasoningTier: 'advanced',
       costPerMillionInputTokensUsd: 1,
       costPerMillionOutputTokensUsd: 6,
-      agent: 'native-openai',
+      agent: 'codex',
+      codexChatgptCapability: {
+        supported: false,
+        reason: 'gpt-5.6-luna is not certified for the ChatGPT Codex launch surface.',
+      },
     },
     'gpt-5.3-codex': {
       vendor: 'openai',
@@ -1620,7 +1628,7 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       vendor: 'openai',
       class: 'strong_generalist',
       strengths: ['coding', 'tool use', 'low-latency implementation work'],
-      weaknesses: ['coding-only watchlist entry', 'OpenRouter dependency'],
+      weaknesses: ['coding-only watchlist entry', 'not available to the ChatGPT Codex surface'],
       qualityScores: scores(52, 0, 78, 0, 50),
       pricing: { inputCostPerMTok: 2, outputCostPerMTok: 8 },
       defaultLadderEligible: false,
@@ -1631,13 +1639,14 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       reasoningTier: 'standard',
       costPerMillionInputTokensUsd: 2,
       costPerMillionOutputTokensUsd: 8,
-      agent: 'native-openrouter',
-      nativeCapability: OPENROUTER_NATIVE_CAPABILITY,
-      supportedModel: openRouterSupportedModel({
-        alias: 'gpt-4.1',
-        providerNativeId: 'openai/gpt-4.1',
-        stages: ['coding'],
-      }),
+      // OpenAI models must use the ChatGPT-authenticated Codex harness, never
+      // OpenRouter or a native API path. Keep this watchlist model fail-closed
+      // until it is explicitly certified for that surface.
+      agent: 'codex',
+      codexChatgptCapability: {
+        supported: false,
+        reason: 'gpt-4.1 is not certified for the ChatGPT Codex launch surface.',
+      },
     },
     'gemini-2.5-pro': {
       vendor: 'google',

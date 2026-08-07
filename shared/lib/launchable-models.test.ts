@@ -11,7 +11,6 @@ import { buildCertificationPath } from './native-agent/certification/loader.ts';
 import { loadLaunchPriorityList } from './openrouter-catalog.ts';
 
 const WATCHLIST_STAGE_MAP = {
-  'gpt-4.1': ['coder'],
   'deepseek-coder-v2': ['coder'],
   'qwen-3-235b': ['planner', 'coder', 'reviewer'],
   'qwen-2.5-72b': ['coder'],
@@ -118,6 +117,7 @@ describe('launch-priority watchlist launchability', () => {
     assert.equal(pools.coder?.includes('gpt-5.6-luna'), false);
     assert.equal(pools.reviewer?.includes('gpt-5.6-luna'), false);
     assert.equal(pools.coder?.includes('gpt-5.6-terra'), true);
+    assert.equal(pools.coder?.includes('gpt-4.1'), false);
   });
 
   it('builds a deterministic matrix that rejects role-ineligible and missing-certification cells', () => {

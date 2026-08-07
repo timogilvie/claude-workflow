@@ -18,6 +18,10 @@ import { routeWorkflow, type WorkflowRouteDecision } from './workflow-router.ts'
 import { filterNativeModels, type RouterCertificationRejection, type RouterRole } from './native-agent/certification/router-filter.ts';
 import { isPatchCodingEnabled } from './native-agent/coding-gate.ts';
 import { applyModelExclusions, type ModelExclusionDiagnostic } from './model-exclusions.ts';
+import {
+  buildChallengeUnavailable,
+  type ChallengeUnavailableResult,
+} from './challenge-unavailable.ts';
 
 export type ChallengeRole = 'primary' | 'challenger';
 export type ChallengeDecisionSource = 'bootstrap' | 'expanded' | 'preserved';
@@ -84,7 +88,10 @@ export interface ChallengeCoverageOptions {
 
 const CHALLENGE_STAGES: readonly ChallengeStage[] = ['plan', 'implementation', 'review'];
 const NO_VALID_CHALLENGE_DIVERGENCE_REASON = 'no_valid_challenge_divergence';
-export type ChallengeSelectionFailureReason = 'selection_failed' | typeof NO_VALID_CHALLENGE_DIVERGENCE_REASON;
+export type ChallengeSelectionFailureReason =
+  | 'selection_failed'
+  | typeof NO_VALID_CHALLENGE_DIVERGENCE_REASON
+  | 'challenge_unavailable';
 
 export interface ChallengePairSelectionResult<T extends ChallengePairSelection = ChallengePairSelection> {
   pair: T | null;
@@ -93,6 +100,8 @@ export interface ChallengePairSelectionResult<T extends ChallengePairSelection =
   nativeCertificationRejections?: ChallengeNativeRejection[];
   /** Models removed by repo/user exclusions */
   modelExclusions?: ModelExclusionDiagnostic[];
+  /** Stable strict-mode result when a requested 100% challenge cannot form. */
+  challengeUnavailable?: ChallengeUnavailableResult;
 }
 
 export interface ChallengeExecutionIntentSide {
@@ -409,6 +418,36 @@ function mergeExclusions<T extends ChallengePairSelection>(
   }
   if (combined.length === 0) return result;
   return { ...result, modelExclusions: combined };
+}
+
+function withStrictChallengeUnavailable<T extends ChallengePairSelection>(
+  result: ChallengePairSelectionResult<T>,
+  opts: {
+    strictWhenRequired?: boolean;
+    requestedRate?: number;
+    pool: string[];
+    certifiedPool?: string[];
+    primaryModel?: string;
+    repoDir?: string;
+  },
+): ChallengePairSelectionResult<T> {
+  if (!opts.strictWhenRequired || result.pair || !opts.repoDir) {
+    return result;
+  }
+  const challengeUnavailable = buildChallengeUnavailable({
+    requestedRate: opts.requestedRate ?? 1,
+    pool: opts.pool,
+    certifiedPool: opts.certifiedPool,
+    primaryModel: opts.primaryModel,
+    repoDir: opts.repoDir,
+    nativeCertificationRejections: result.nativeCertificationRejections,
+    modelExclusions: result.modelExclusions,
+  });
+  return {
+    ...result,
+    failureReason: 'challenge_unavailable',
+    challengeUnavailable,
+  };
 }
 
 function selectCertifiedImplementationPrimary(
@@ -730,6 +769,8 @@ export function pickChallengeModelsWithReason(
     now?: Date;
     nativeCertificationApiKeyPresent?: boolean;
     nativeCertificationApiKeyEnv?: string;
+    strictWhenRequired?: boolean;
+    requestedRate?: number;
   } & ChallengeCoverageOptions,
 ): ChallengePairSelectionResult {
   const nativeCertificationRuntime = {
@@ -770,20 +811,34 @@ export function pickChallengeModelsWithReason(
 
   if (!primaryModel) {
     if (!canRunChallenge(uniquePool)) {
-      return mergeExclusions(
+      return withStrictChallengeUnavailable(mergeExclusions(
         mergeRejections({ pair: null, failureReason: 'selection_failed' }, allRejections),
         allExclusions,
-      );
+      ), {
+        strictWhenRequired: opts.strictWhenRequired,
+        requestedRate: opts.requestedRate,
+        pool,
+        certifiedPool: uniquePool,
+        primaryModel: opts.primaryModel,
+        repoDir: opts.repoDir,
+      });
     }
     const primaryIndex = Math.floor(randomFn() * uniquePool.length);
     primaryModel = uniquePool[primaryIndex] || '';
   }
 
   if (!primaryModel) {
-    return mergeExclusions(
+    return withStrictChallengeUnavailable(mergeExclusions(
       mergeRejections({ pair: null, failureReason: 'selection_failed' }, allRejections),
       allExclusions,
-    );
+    ), {
+      strictWhenRequired: opts.strictWhenRequired,
+      requestedRate: opts.requestedRate,
+      pool,
+      certifiedPool: uniquePool,
+      primaryModel: opts.primaryModel,
+      repoDir: opts.repoDir,
+    });
   }
 
   // Reject a forced challenger that is an uncertified native
@@ -812,10 +867,17 @@ export function pickChallengeModelsWithReason(
     recommendedChallengerModel: opts.recommendedChallengerModel,
   });
   if (!challengerSelection.model) {
-    return mergeExclusions(
+    return withStrictChallengeUnavailable(mergeExclusions(
       mergeRejections({ pair: null, failureReason: 'selection_failed' }, allRejections),
       allExclusions,
-    );
+    ), {
+      strictWhenRequired: opts.strictWhenRequired,
+      requestedRate: opts.requestedRate,
+      pool,
+      certifiedPool: uniquePool,
+      primaryModel,
+      repoDir: opts.repoDir,
+    });
   }
 
   const result = finalizeChallengePairWithReason(
@@ -836,7 +898,17 @@ export function pickChallengeModelsWithReason(
       recommendedChallengerModel: opts.recommendedChallengerModel,
     },
   );
-  return mergeExclusions(mergeRejections(result, allRejections), allExclusions);
+  return withStrictChallengeUnavailable(
+    mergeExclusions(mergeRejections(result, allRejections), allExclusions),
+    {
+      strictWhenRequired: opts.strictWhenRequired,
+      requestedRate: opts.requestedRate,
+      pool,
+      certifiedPool: uniquePool,
+      primaryModel,
+      repoDir: opts.repoDir,
+    },
+  );
 }
 
 /**

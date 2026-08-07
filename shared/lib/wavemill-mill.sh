@@ -2432,6 +2432,21 @@ challenge_plan_stage_requires_effective_route() {
   [[ "$decision_source" != "expanded" && "$decision_source" != "preserved" ]]
 }
 
+log_challenge_unavailable_plan() {
+  local issue="$1"
+  local challenge_plan="$2"
+  local requested_rate
+
+  requested_rate=$(echo "$challenge_plan" | jq -r '.requestedRate // empty' 2>/dev/null || echo "")
+  log_error "  $issue: challenge required${requested_rate:+ (rate=$requested_rate)} but no valid pair could form"
+  echo "$challenge_plan" | jq -r '.blockers[]? | "  blocker: \(.kind) \(.field // .modelId // "") \(.reason // "")"' 2>/dev/null | while IFS= read -r line; do
+    [[ -n "$line" ]] && log_error "$line"
+  done
+  echo "$challenge_plan" | jq -r '.candidateDiagnostics[]? | "  candidate: \(.modelId) reason=\(.reason) provider=\(.provider // "unknown")"' 2>/dev/null | while IFS= read -r line; do
+    [[ -n "$line" ]] && log_error "$line"
+  done
+}
+
 # ── Phase 5: Challenge-mode launch planning ──────────────────────────────
 FINAL_LAUNCH_ARGS=()
 slots_used=0
@@ -2489,6 +2504,10 @@ for t in "${TASKS[@]}"; do
     challenge_plan=$(npx tsx "$TOOLS_DIR/resolve-challenge-task.ts" "${challenge_args[@]}" 2>/dev/null || echo "")
     challenge_mode=$(echo "$challenge_plan" | jq -r '.mode // "single"' 2>/dev/null || echo "single")
     challenge_reason=$(echo "$challenge_plan" | jq -r '.reason // empty' 2>/dev/null || echo "")
+    if [[ "$challenge_mode" == "challenge_unavailable" ]]; then
+      log_challenge_unavailable_plan "$ISSUE" "$challenge_plan"
+      continue
+    fi
     if challenge_plan_stage_requires_effective_route "$challenge_plan"; then
       challenge_mode="single"
       challenge_reason="plan_stage_expanded_route_unavailable"
@@ -3347,6 +3366,21 @@ challenge_plan_stage_requires_effective_route() {
   [[ "$decision_source" != "expanded" && "$decision_source" != "preserved" ]]
 }
 
+log_challenge_unavailable_plan() {
+  local issue="$1"
+  local challenge_plan="$2"
+  local requested_rate
+
+  requested_rate=$(echo "$challenge_plan" | jq -r '.requestedRate // empty' 2>/dev/null || echo "")
+  log_error "  $issue: challenge required${requested_rate:+ (rate=$requested_rate)} but no valid pair could form"
+  echo "$challenge_plan" | jq -r '.blockers[]? | "  blocker: \(.kind) \(.field // .modelId // "") \(.reason // "")"' 2>/dev/null | while IFS= read -r line; do
+    [[ -n "$line" ]] && log_error "$line"
+  done
+  echo "$challenge_plan" | jq -r '.candidateDiagnostics[]? | "  candidate: \(.modelId) reason=\(.reason) provider=\(.provider // "unknown")"' 2>/dev/null | while IFS= read -r line; do
+    [[ -n "$line" ]] && log_error "$line"
+  done
+}
+
 record_planning_launch_route_snapshot() {
   local feature_dir="$1" model="$2" agent="$3" depth="$4" source="${5:-effective-route}"
   local route_file="$feature_dir/.routing-complete"
@@ -3404,6 +3438,20 @@ finalize_challenge_execution_intent_before_coding() {
   local challenge_role_meta="${7:-}" challenge_stage_meta="${8:-}"
   [[ "$challenge_role_meta" != "challenger" ]] || return 0
   [[ -f "$feature_dir/.post-expansion-route.json" ]] || return 0
+
+  # A challenge has already chosen its experimental arm before either side is
+  # expanded.  The expanded route is useful for filling in the shared route,
+  # but it must never resample that arm: doing so lets Hokusai replace the
+  # challenger and turns an exploration run into another incumbent route.
+  # apply_expanded_route_if_present preserves the selected-stage fields from
+  # this intent while applying every non-varied field from the expanded route.
+  local existing_intent
+  existing_intent=$(read_state_value "" --arg i "$issue" '.tasks[$i].challengeExecutionIntent // empty' 2>/dev/null || true)
+  if [[ -n "$existing_intent" ]] \
+    && echo "$existing_intent" | jq -e '.schemaVersion == 1 and (.pairId // "") != "" and (.selectedStage // .challengeStage // "") != "" and (.primary // null) != null and (.challenger // null) != null' >/dev/null 2>&1; then
+    log "status" "  $issue: Preserving selected challenge arm through expanded routing"
+    return 0
+  fi
 
   local refresh_title issue_json packet_arg refreshed_plan refreshed_source refreshed_mode refreshed_reason
   refresh_title=$(read_state_value "" --arg i "$issue" '.tasks[$i].title // ""')
@@ -10731,6 +10779,10 @@ EOF
       challenge_plan=$(_with_timeout "$API_TIMEOUT" npx tsx "$TOOLS_DIR/resolve-challenge-task.ts" "${challenge_args[@]}" 2>/dev/null || echo "")
       challenge_mode=$(echo "$challenge_plan" | jq -r '.mode // "single"' 2>/dev/null || echo "single")
       challenge_reason=$(echo "$challenge_plan" | jq -r '.reason // empty' 2>/dev/null || echo "")
+      if [[ "$challenge_mode" == "challenge_unavailable" ]]; then
+        log_challenge_unavailable_plan "$issue" "$challenge_plan"
+        return 1
+      fi
       if challenge_plan_stage_requires_effective_route "$challenge_plan"; then
         challenge_mode="single"
         challenge_reason="plan_stage_expanded_route_unavailable"
@@ -13729,6 +13781,8 @@ LAST_BACKSTAGE_HEALTH_CHECK=0
 LAST_BACKSTAGE_OBSERVER_HEALTH_CHECK=0
 BACKSTAGE_HEALTH_INTERVAL=30
 BACKSTAGE_RESTART_COOLDOWN=60
+BACKSTAGE_TEND_HEARTBEAT_STALE_SECONDS=210
+BACKSTAGE_CLASSIFICATION_HOLD_STALE_SECONDS=900
 LAST_BACKSTAGE_HEALTH_STATUS=""
 LAST_BACKSTAGE_OBSERVER_HEALTH_STATUS=""
 
@@ -13761,10 +13815,55 @@ read_backstage_service_health_field() {
   jq -r --arg service "$service" ".services[\$service] | $field // empty" "$path" 2>/dev/null
 }
 
+classify_ready_watchdog_hold_health() {
+  local now="${1:-$(date +%s)}" stale_seconds="${2:-$BACKSTAGE_CLASSIFICATION_HOLD_STALE_SECONDS}"
+  local state_file="${STATE_DIR:-}/ready-watchdog-state.json"
+  local row issue classification since updated_at detail epoch held_seconds held_minutes oldest_seconds=0
+  local oldest_issue="" oldest_classification="" oldest_held_minutes=0
+
+  [[ -r "$state_file" ]] || return 1
+
+  while IFS=$'\t' read -r issue classification since updated_at detail; do
+    [[ -n "$issue" && -n "$classification" ]] || continue
+    if [[ "$classification" != "needs-user" && "$classification" != "stuck" ]]; then
+      continue
+    fi
+
+    [[ -n "$since" ]] || since="$updated_at"
+    [[ -n "$since" ]] || continue
+    epoch="$(wavemill_iso8601_to_epoch "$since" 2>/dev/null || echo 0)"
+    [[ "$epoch" =~ ^[0-9]+$ && "$epoch" -gt 0 ]] || continue
+    held_seconds=$(( now - epoch ))
+    (( held_seconds > stale_seconds )) || continue
+    if (( held_seconds > oldest_seconds )); then
+      held_minutes=$(( held_seconds / 60 ))
+      oldest_seconds="$held_seconds"
+      oldest_issue="$issue"
+      oldest_classification="$classification"
+      oldest_held_minutes="$held_minutes"
+    fi
+  done < <(
+    jq -r '
+      (.tasks // {}) | to_entries[] |
+      [
+        .key,
+        (.value.classification // ""),
+        (.value.classificationSince // ""),
+        (.value.updatedAt // ""),
+        (.value.detail // "")
+      ] | @tsv
+    ' "$state_file" 2>/dev/null || true
+  )
+
+  [[ -n "$oldest_issue" ]] || return 1
+  printf 'task %s has held %s for %sm\n' "$oldest_issue" "$oldest_classification" "$oldest_held_minutes"
+}
+
 classify_backstage_health() {
-  local pane_details="${1-}"
+  local pane_details="${1-}" now="${2:-$(date +%s)}" stale_seconds="${3:-$BACKSTAGE_TEND_HEARTBEAT_STALE_SECONDS}" hold_stale_seconds="${4:-$BACKSTAGE_CLASSIFICATION_HOLD_STALE_SECONDS}"
   local pane_count=0 tend_alive=0 status_panes=0
-  local executor_pane_id="" line pane_id pane_title pane_dead _pane_cmd _start_cmd
+  local executor_pane_id="" pane_id pane_title pane_dead _pane_cmd _start_cmd
+  local heartbeat_at="" heartbeat_epoch=0 heartbeat_age="" updated_at="" updated_epoch=0 updated_age="" hold_detail=""
 
   if [[ -z "$pane_details" ]]; then
     printf 'backstage-missing\t\t0\t0\n'
@@ -13784,6 +13883,36 @@ classify_backstage_health() {
   done <<< "$pane_details"
 
   if (( tend_alive == 1 )); then
+    heartbeat_at="$(read_backstage_service_health_field "tend" '.heartbeatAt' || true)"
+    if [[ -n "$heartbeat_at" ]]; then
+      heartbeat_epoch="$(wavemill_iso8601_to_epoch "$heartbeat_at" 2>/dev/null || echo 0)"
+      if (( heartbeat_epoch > 0 )); then
+        heartbeat_age=$(( now - heartbeat_epoch ))
+        if (( heartbeat_age > stale_seconds )); then
+          printf 'stalled\ttend heartbeat is stale (%ss old)\t%s\t%s\n' "$heartbeat_age" "$pane_count" "$executor_pane_id"
+          return 0
+        fi
+      fi
+    else
+      updated_at="$(read_backstage_service_health_field "tend" '.updatedAt' || read_backstage_health_field '.updatedAt' || true)"
+      if [[ -n "$updated_at" ]]; then
+        updated_epoch="$(wavemill_iso8601_to_epoch "$updated_at" 2>/dev/null || echo 0)"
+        if (( updated_epoch > 0 )); then
+          updated_age=$(( now - updated_epoch ))
+          if (( updated_age > stale_seconds )); then
+            printf 'stalled\ttend heartbeat is missing and health update is stale (%ss old)\t%s\t%s\n' "$updated_age" "$pane_count" "$executor_pane_id"
+            return 0
+          fi
+        fi
+      fi
+    fi
+
+    hold_detail="$(classify_ready_watchdog_hold_health "$now" "$hold_stale_seconds" || true)"
+    if [[ -n "$hold_detail" ]]; then
+      printf 'stalled\t%s\t%s\t%s\n' "$hold_detail" "$pane_count" "$executor_pane_id"
+      return 0
+    fi
+
     printf 'healthy\tbackstage tend loop is running\t%s\t%s\n' "$pane_count" "$executor_pane_id"
     return 0
   fi
@@ -13945,7 +14074,7 @@ check_backstage_observer_health() {
 }
 
 check_backstage_health() {
-  local now health_file pane_probe pane_summary pane_status detail pane_count executor_pane_id
+  local now health_file pane_probe pane_summary pane_status detail pane_count executor_pane_id heartbeat_at
   local prior_attempt_at prior_attempt_count elapsed restart_pane_id
 
   now=$(date +%s)
@@ -13965,8 +14094,18 @@ check_backstage_health() {
 
   case "$pane_status" in
     healthy)
-      [[ -n "$health_file" ]] && wavemill_write_backstage_health "$health_file" "healthy" "$detail" 0 "" "$executor_pane_id"
+      heartbeat_at="$(read_backstage_service_health_field "tend" '.heartbeatAt' || true)"
+      [[ -n "$health_file" ]] && wavemill_write_backstage_service_health "$health_file" "tend" "healthy" "$detail" 0 "" "$executor_pane_id" "$heartbeat_at"
       LAST_BACKSTAGE_HEALTH_STATUS="healthy"
+      return 0
+      ;;
+    stalled)
+      heartbeat_at="$(read_backstage_service_health_field "tend" '.heartbeatAt' || true)"
+      [[ -n "$health_file" ]] && wavemill_write_backstage_service_health "$health_file" "tend" "stalled" "$detail" 0 "" "$executor_pane_id" "$heartbeat_at"
+      if [[ "$LAST_BACKSTAGE_HEALTH_STATUS" != "stalled" ]]; then
+        log_warn "Backstage tend loop is stalled: $detail"
+      fi
+      LAST_BACKSTAGE_HEALTH_STATUS="stalled"
       return 0
       ;;
     'backstage-missing')
@@ -13999,7 +14138,8 @@ check_backstage_health() {
     pane_summary="$(classify_backstage_health "$pane_probe")"
     IFS=$'\t' read -r pane_status detail pane_count executor_pane_id <<< "$pane_summary"
     if [[ "$pane_status" == "healthy" ]]; then
-      [[ -n "$health_file" ]] && wavemill_write_backstage_health "$health_file" "healthy" "backstage tend loop was restarted automatically" 0 "" "${executor_pane_id:-$restart_pane_id}"
+      heartbeat_at="$(read_backstage_service_health_field "tend" '.heartbeatAt' || true)"
+      [[ -n "$health_file" ]] && wavemill_write_backstage_service_health "$health_file" "tend" "healthy" "backstage tend loop was restarted automatically" 0 "" "${executor_pane_id:-$restart_pane_id}" "$heartbeat_at"
       log "status" "Backstage tend loop restarted"
       LAST_BACKSTAGE_HEALTH_STATUS="healthy"
       return 0

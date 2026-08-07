@@ -90,6 +90,7 @@ TESTS=(
   shared/lib/ready-engine.test.ts
   shared/lib/ready-stage.test.ts
   shared/lib/ci-failure-classifier.test.ts
+  shared/lib/ci-log-fetcher.test.ts
   shared/lib/ready-watchdog.test.ts
   shared/lib/migration-ast.test.ts
   shared/lib/tend-challenge-gate.test.ts
@@ -102,6 +103,8 @@ TESTS=(
   shared/lib/headless-llm.test.ts
   shared/lib/router-log.test.ts
   shared/lib/challenge-analyzer.test.ts
+  shared/lib/challenge-unavailable.test.ts
+  shared/lib/cross-repo-parity.test.ts
   shared/lib/challenge-execution-contract.test.ts
   shared/lib/challenge-pairing-repair.test.ts
   shared/lib/config.test.ts
@@ -171,17 +174,20 @@ TESTS=(
   shared/lib/openrouter-provider.test.ts
   shared/lib/openrouter-doctor.test.ts
   shared/lib/openrouter-zero-traffic.test.ts
+  shared/lib/parity-report.test.ts
   src/evaluation/scorers/wavemill/success-rate-under-budget.test.ts
   src/evaluation/adapters/wavemill-router-adapter.test.ts
   tools/add-pr-label.test.ts
   tools/certify-patch-coding.test.ts
   tools/check-config-version.test.ts
   tools/check-pi-version.test.ts
+  tools/check-ci-command-map-drift.test.ts
   tools/check-cross-pr-reverts.test.ts
   tools/hok2423-verify-native-provider-gate.test.ts
   tools/hok2424-verify-native-expansion.test.ts
   tools/launch-validation.test.ts
   tools/observer.test.ts
+  tools/parity-report.test.ts
   tools/resolve-challenge-task.test.ts
   tools/route-tasks.test.ts
   tools/plan-queue.test.ts

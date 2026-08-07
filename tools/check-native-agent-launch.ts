@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getNativeAgentConfig } from '../shared/lib/config.ts';
+import { getEffectiveRegistry, getModel } from '../shared/lib/model-registry.ts';
 import { isPatchCodingEnabled } from '../shared/lib/native-agent/coding-gate.ts';
 import { validateNativeOpenRouterConfig } from '../shared/lib/native-openrouter-config-validation.ts';
 import { resolveNativeAgentProviders } from '../shared/lib/native-agent/providers.ts';
@@ -84,6 +85,21 @@ export function checkNativeAgentLaunch(input: CheckNativeAgentLaunchInput): Chec
   }
   if (!model) {
     return reject('native launch requires a resolved model', { code: 'missing-model' });
+  }
+
+  // A first-party OpenAI model belongs on the ChatGPT-authenticated Codex
+  // surface. Do not let a direct native-launch invocation bypass the router
+  // and spend API/OpenRouter credentials for the same model.
+  const capabilities = getModel(getEffectiveRegistry(repoDir), model);
+  if (capabilities?.vendor === 'openai') {
+    return reject(
+      `OpenAI model ${model} must use the ChatGPT Codex harness, not ${agent}.`,
+      {
+        code: 'hosted-openai-model',
+        surface: 'globalModelRegistry.models',
+        remediation: 'Route the model through codex, or choose a third-party model certified for the requested native provider.',
+      },
+    );
   }
 
   const providerName = providerNameForAgent(agent);

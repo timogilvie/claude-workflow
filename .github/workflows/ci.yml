@@ -32,6 +32,9 @@ jobs:
       - name: Check challenge schema drift
         run: npx tsx tools/check-challenge-schema-drift.ts
 
+      - name: Check CI-to-local verification contract (hard fail on drift)
+        run: npx tsx tools/check-ci-verification.ts --repo .
+
   shell:
     name: Shell Tests (shard ${{ matrix.shard }}/4)
     runs-on: ubuntu-latest

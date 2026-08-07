@@ -36,6 +36,12 @@ Merge behavior for local overrides:
 
 If the resolved integration ref does not exist in the repo, the checker skips gracefully instead of blocking ready on a config lookup failure.
 
+### Pre-PR Verification Drift
+
+`prePrVerification` maps CI job names to locally runnable verification commands. Repositories can use `source: "explicit"` when CI cannot query GitHub branch protection, but the explicit list must still cover every CI test job that has a local equivalent.
+
+`tools/check-ci-verification.ts` scans `.github/workflows/*.yml` and reports `workflow-uncovered` when a workflow job is not listed in `requiredChecks`, `remoteOnlyExceptions`, or `nonEnforcedJobs`. Configure `driftValidation.blockOnUnmapped: true` to hard-fail preflight when CI adds a job without a local recipe, while reserving `nonEnforcedJobs` for aggregators or PR-context gates that are intentionally outside the local contract.
+
 ### Backstage Observer Service
 
 The dedicated Backstage Observer pane is opt-in and only runs when both

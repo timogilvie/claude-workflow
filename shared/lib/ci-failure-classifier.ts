@@ -53,6 +53,8 @@ const GITHUB_ONLY_PATTERNS = [
 ];
 
 const DETERMINISTIC_PATTERNS = [
+  /\bconfig validation failed\b/i,
+  /\bERR_TEST_FAILURE\b/,
   /assert(?:ion)? failed/i,
   /\bexpected\b.*\bactual\b/i,
   /\btest(?:s)? failed\b/i,
@@ -166,18 +168,23 @@ function firstMatch(text: string, patterns: RegExp[]): string | null {
   return null;
 }
 
-function lookupLocalCommand(jobName: string, localCommandMap: Record<string, string>): string | undefined {
+export function lookupLocalCommand(jobName: string, localCommandMap: Record<string, string>): string | undefined {
   const exact = localCommandMap[jobName];
   if (typeof exact === 'string' && exact.trim()) {
     return exact.trim();
   }
   const normalizedJob = normalizeKey(jobName);
+  const normalizedUnshardedJob = normalizeKey(stripShardSuffix(jobName));
   for (const [key, command] of Object.entries(localCommandMap)) {
-    if (normalizeKey(key) === normalizedJob && command.trim()) {
+    if ((normalizeKey(key) === normalizedJob || normalizeKey(key) === normalizedUnshardedJob) && command.trim()) {
       return command.trim();
     }
   }
   return undefined;
+}
+
+function stripShardSuffix(value: string): string {
+  return value.replace(/\s*\(shard\s+\d+\s*\/\s*\d+\)\s*$/i, '');
 }
 
 function normalizeKey(value: string): string {
