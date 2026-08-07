@@ -135,10 +135,16 @@ _with_timeout() { return 1; }
 TOOLS_DIR="$REPO_DIR/tools"
 REPO_DIR="$REPO_DIR"
 watchdog_warned=0
-log_warn() { watchdog_warned=$((watchdog_warned + 1)); }
+watchdog_warning=""
+READY_WATCHDOG_FAILURE_LOG_INTERVAL=60
+LAST_READY_WATCHDOG_FAILURE_DETAIL=""
+LAST_READY_WATCHDOG_FAILURE_AT=0
+log_warn() { watchdog_warned=$((watchdog_warned + 1)); watchdog_warning="$*"; }
 
 run_ready_watchdog_tick
-assert_eq "failed watchdog tick is downgraded to a warning" "1" "$watchdog_warned"
+run_ready_watchdog_tick
+assert_eq "failed watchdog tick is diagnosed and rate-limited" "1" "$watchdog_warned"
+assert_true "failed watchdog warning includes a reason" "[[ \"$watchdog_warning\" == *'command exited non-zero'* ]]"
 
 log_warn() { :; }
 

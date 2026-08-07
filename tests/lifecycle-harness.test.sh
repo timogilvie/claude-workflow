@@ -2120,6 +2120,30 @@ test_coding_complete_trace_only_dirty_worktree_advances() {
   check_file_absent "trace only: no dedupe marker written" "$feature_dir/.coding-uncommitted-output-announced"
 }
 
+test_coding_complete_tracked_claude_settings_advances() {
+  local slug="coding-complete-tracked-claude-settings"
+  local issue="HOK-2454-CLAUDE-SETTINGS"
+  local repo tick feature_dir
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  feature_dir="$repo/features/$slug"
+
+  mkdir -p "$repo/.claude"
+  printf '{}\n' > "$repo/.claude/settings.local.json"
+  git -C "$repo" add -f .claude/settings.local.json
+  git -C "$repo" commit -q -m "test: track Claude local settings"
+
+  touch "$feature_dir/.coding-complete"
+  printf '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"wavemill-hook.sh"}]}]}}\n' > "$repo/.claude/settings.local.json"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
+
+  check_eq "tracked Claude settings: coding becomes completed" "completed" "$(harness_read_stage_status "$repo" "$slug" coding)"
+  check_eq "tracked Claude settings: no needs-user attention" "" "$(kv_value "$tick" attention)"
+  check_file_absent "tracked Claude settings: no uncommitted artifact written" "$feature_dir/.coding-uncommitted-output.json"
+}
+
 test_coding_complete_metadata_only_routing_advances_to_review() {
   local slug="coding-complete-routing-only"
   local issue="HOK-2446-ROUTING"
@@ -3231,6 +3255,7 @@ test_coding_complete_wins_over_blocked_completion
 test_coding_complete_dirty_worktree_without_commits_needs_attention
 test_coding_complete_dirty_worktree_with_commits_needs_attention
 test_coding_complete_trace_only_dirty_worktree_advances
+test_coding_complete_tracked_claude_settings_advances
 test_coding_complete_trace_and_source_dirty_worktree_needs_attention
 test_stage_result_trace_events_are_idempotent
 test_completed_coding_pane_is_quarantined_best_effort

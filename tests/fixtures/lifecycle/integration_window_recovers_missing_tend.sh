@@ -115,10 +115,13 @@ eval "$(extract_function "$MILL" read_backstage_service_health_field)"
 eval "$(extract_function "$MILL" classify_backstage_health)"
 eval "$(extract_function "$MILL" classify_ready_watchdog_hold_health)"
 eval "$(extract_function "$MILL" restart_backstage_tend_loop)"
+eval "$(extract_function "$MILL" backstage_tend_restart_confirmed)"
+eval "$(extract_function "$MILL" backstage_tend_restart_diagnostic)"
 eval "$(extract_function "$MILL" check_backstage_health)"
 
 BACKSTAGE_TEND_HEARTBEAT_STALE_SECONDS=210
 BACKSTAGE_CLASSIFICATION_HOLD_STALE_SECONDS=900
+BACKSTAGE_TEND_RESTART_CONFIRM_SECONDS=3
 pane_details=$'%1\tWavemill Tend Loop\t0\tnpx\tcmd\n%2\tWavemill Jobs\t0\tbash\tcmd'
 cat > "$STATE_DIR/backstage-health.json" <<'JSON'
 {
@@ -218,6 +221,16 @@ LAST_BACKSTAGE_HEALTH_CHECK=0
 LAST_BACKSTAGE_HEALTH_STATUS=""
 BACKSTAGE_HEALTH_INTERVAL=0
 BACKSTAGE_RESTART_COOLDOWN=60
+(
+  sleep 1
+  timestamp="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  jq --arg timestamp "$timestamp" '
+    .updatedAt = $timestamp
+    | .services.tend.heartbeatAt = $timestamp
+    | .services.tend.updatedAt = $timestamp
+  ' "$STATE_DIR/backstage-health.json" > "$STATE_DIR/backstage-health.json.heartbeat"
+  mv "$STATE_DIR/backstage-health.json.heartbeat" "$STATE_DIR/backstage-health.json"
+) &
 check_backstage_health
 
 recovered_pane="$(wait_for_tend_pane)" || {
@@ -233,6 +246,23 @@ fi
 
 if [[ -z "$recovered_pane" ]]; then
   echo "FAIL: recovered tend pane id missing"
+  exit 1
+fi
+
+# A replacement pane alone is not recovery. It must write a heartbeat newer
+# than the restart attempt, otherwise the supervisor retains the failed
+# attempt and stops retrying after the configured one attempt.
+tmux kill-pane -t "$recovered_pane"
+sleep 0.3
+LAST_BACKSTAGE_HEALTH_CHECK=0
+LAST_BACKSTAGE_HEALTH_STATUS=""
+check_backstage_health
+
+failed_restart_status="$(jq -r '.status' "$STATE_DIR/backstage-health.json")"
+failed_restart_attempts="$(jq -r '.restartAttemptCount' "$STATE_DIR/backstage-health.json")"
+failed_restart_detail="$(jq -r '.detail' "$STATE_DIR/backstage-health.json")"
+if [[ "$failed_restart_status" != "missing-tend-loop" || "$failed_restart_attempts" != "1" || "$failed_restart_detail" != *"fresh heartbeat"* ]]; then
+  echo "FAIL: unconfirmed tend restart should retain failure state (status=$failed_restart_status attempts=$failed_restart_attempts detail=$failed_restart_detail)"
   exit 1
 fi
 

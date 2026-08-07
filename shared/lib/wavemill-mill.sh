@@ -4375,7 +4375,7 @@ ready_watchdog_config_json() {
 }
 
 run_ready_watchdog_tick() {
-  local watchdog_json watchdog_enabled watchdog_timeout
+  local watchdog_json watchdog_enabled watchdog_timeout watchdog_stderr watchdog_error now
   watchdog_json=$(ready_watchdog_config_json "$REPO_DIR")
   watchdog_enabled=$(printf '%s' "$watchdog_json" | jq -r '.enabled // true' 2>/dev/null || echo "true")
   [[ "$watchdog_enabled" == "true" ]] || return 0
@@ -4383,16 +4383,32 @@ run_ready_watchdog_tick() {
   watchdog_timeout=$(printf '%s' "$watchdog_json" | jq -r '.timeoutSeconds // 30' 2>/dev/null || echo "30")
   [[ "$watchdog_timeout" =~ ^[0-9]+$ ]] || watchdog_timeout=30
 
+  watchdog_stderr="$(mktemp "${TMPDIR:-/tmp}/wavemill-ready-watchdog.XXXXXX")" || {
+    log_warn "ready watchdog tick failed: could not create diagnostic file"
+    return 0
+  }
+
   local watchdog_output
   if ! watchdog_output=$(_with_timeout "$watchdog_timeout" \
     npx tsx "$TOOLS_DIR/ready-watchdog.ts" \
       --once \
       --repo-dir "$REPO_DIR" \
       --state-file "$STATE_FILE" \
-      --json 2>/dev/null); then
-    log_warn "ready watchdog tick failed"
+      --json 2>"$watchdog_stderr"); then
+    watchdog_error="$(tail -n 1 "$watchdog_stderr" 2>/dev/null | tr '\n' ' ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')"
+    rm -f "$watchdog_stderr"
+    [[ -n "$watchdog_error" ]] || watchdog_error="command exited non-zero or timed out after ${watchdog_timeout}s"
+    now=$(date +%s)
+    if [[ "${LAST_READY_WATCHDOG_FAILURE_DETAIL:-}" != "$watchdog_error" || $(( now - ${LAST_READY_WATCHDOG_FAILURE_AT:-0} )) -ge "$READY_WATCHDOG_FAILURE_LOG_INTERVAL" ]]; then
+      log_warn "ready watchdog tick failed: $watchdog_error"
+      LAST_READY_WATCHDOG_FAILURE_DETAIL="$watchdog_error"
+      LAST_READY_WATCHDOG_FAILURE_AT=$now
+    fi
     return 0
   fi
+  rm -f "$watchdog_stderr"
+  LAST_READY_WATCHDOG_FAILURE_DETAIL=""
+  LAST_READY_WATCHDOG_FAILURE_AT=0
 
   while IFS= read -r finding; do
     [[ -n "$finding" ]] || continue
@@ -4903,6 +4919,13 @@ wavemill_owned_feature_artifact_path() {
 
 blocked_completion_auto_allowed_dirty_path() {
   local normalized_path="$1" slug="$2"
+
+  # Wavemill injects status hooks into this Claude-local settings file. Some
+  # repositories track it, so it must not prevent an otherwise committed task
+  # from advancing into review.
+  if [[ "$normalized_path" == ".claude/settings.local.json" ]]; then
+    return 0
+  fi
 
   if [[ "$normalized_path" == .wavemill/* ]]; then
     return 0
@@ -13783,8 +13806,12 @@ BACKSTAGE_HEALTH_INTERVAL=30
 BACKSTAGE_RESTART_COOLDOWN=60
 BACKSTAGE_TEND_HEARTBEAT_STALE_SECONDS=210
 BACKSTAGE_CLASSIFICATION_HOLD_STALE_SECONDS=900
+BACKSTAGE_TEND_RESTART_CONFIRM_SECONDS=5
+READY_WATCHDOG_FAILURE_LOG_INTERVAL=60
 LAST_BACKSTAGE_HEALTH_STATUS=""
 LAST_BACKSTAGE_OBSERVER_HEALTH_STATUS=""
+LAST_READY_WATCHDOG_FAILURE_DETAIL=""
+LAST_READY_WATCHDOG_FAILURE_AT=0
 
 backstage_health_enabled() {
   local merged enabled use_mill_session
@@ -13931,8 +13958,40 @@ restart_backstage_tend_loop() {
   new_pane="$(tmux split-window -d -t "$SESSION:$WAVEMILL_WINDOW_BACKSTAGE.0" -h -b -p 60 -c "$REPO_DIR" -P -F '#{pane_id}' "$integration_cmd" 2>/dev/null || true)"
   [[ -n "$new_pane" ]] || return 1
   wavemill_set_tmux_pane_title "$new_pane" "$WAVEMILL_BACKSTAGE_TEND_PANE_TITLE"
+  wavemill_capture_tend_pane_output "$new_pane" "$SESSION" "$REPO_DIR"
   tmux select-layout -t "$SESSION:$WAVEMILL_WINDOW_BACKSTAGE" main-vertical >/dev/null 2>&1 || true
   printf '%s\n' "$new_pane"
+}
+
+backstage_tend_restart_confirmed() {
+  local prior_heartbeat="${1:-}" restart_epoch="${2:?restart epoch required}" expected_pane="${3:-}"
+  local deadline now pane_probe pane_summary pane_status _detail _pane_count executor_pane_id heartbeat_at heartbeat_epoch
+
+  deadline=$(( $(date +%s) + BACKSTAGE_TEND_RESTART_CONFIRM_SECONDS ))
+  while (( $(date +%s) <= deadline )); do
+    pane_probe="$(probe_backstage_panes 2>/dev/null || true)"
+    pane_summary="$(classify_backstage_health "$pane_probe")"
+    IFS=$'\t' read -r pane_status _detail _pane_count executor_pane_id <<< "$pane_summary"
+    if [[ "$pane_status" == "healthy" && ( -z "$expected_pane" || "$executor_pane_id" == "$expected_pane" ) ]]; then
+      heartbeat_at="$(read_backstage_service_health_field "tend" '.heartbeatAt' || true)"
+      heartbeat_epoch="$(wavemill_iso8601_to_epoch "$heartbeat_at" 2>/dev/null || echo 0)"
+      if [[ -n "$heartbeat_at" && "$heartbeat_at" != "$prior_heartbeat" && "$heartbeat_epoch" =~ ^[0-9]+$ ]] && (( heartbeat_epoch >= restart_epoch )); then
+        printf '%s\n' "$heartbeat_at"
+        return 0
+      fi
+    fi
+    sleep 0.25
+  done
+  return 1
+}
+
+backstage_tend_restart_diagnostic() {
+  local log_file="$REPO_DIR/.wavemill/logs/tend-${SESSION}.log"
+  local detail
+
+  detail="$(tail -n 1 "$log_file" 2>/dev/null | tr '\n' ' ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')"
+  [[ -n "$detail" ]] || detail="no tend output was captured"
+  printf '%s\n' "$detail"
 }
 
 observer_health_enabled() {
@@ -14075,7 +14134,7 @@ check_backstage_observer_health() {
 
 check_backstage_health() {
   local now health_file pane_probe pane_summary pane_status detail pane_count executor_pane_id heartbeat_at
-  local prior_attempt_at prior_attempt_count elapsed restart_pane_id
+  local prior_attempt_at prior_attempt_count elapsed restart_pane_id prior_heartbeat restart_error
 
   now=$(date +%s)
   (( now - LAST_BACKSTAGE_HEALTH_CHECK < BACKSTAGE_HEALTH_INTERVAL )) && return 0
@@ -14132,18 +14191,16 @@ check_backstage_health() {
     if [[ "$LAST_BACKSTAGE_HEALTH_STATUS" != "missing-tend-loop" ]]; then
       log_warn "Backstage health check detected a missing tend loop. Attempting one restart in '$WAVEMILL_WINDOW_BACKSTAGE'."
     fi
+    prior_heartbeat="$(read_backstage_service_health_field "tend" '.heartbeatAt' || true)"
     restart_pane_id="$(restart_backstage_tend_loop || true)"
-    sleep 0.3
-    pane_probe="$(probe_backstage_panes 2>/dev/null || true)"
-    pane_summary="$(classify_backstage_health "$pane_probe")"
-    IFS=$'\t' read -r pane_status detail pane_count executor_pane_id <<< "$pane_summary"
-    if [[ "$pane_status" == "healthy" ]]; then
-      heartbeat_at="$(read_backstage_service_health_field "tend" '.heartbeatAt' || true)"
+    if [[ -n "$restart_pane_id" ]] && heartbeat_at="$(backstage_tend_restart_confirmed "$prior_heartbeat" "$now" "$restart_pane_id")"; then
       [[ -n "$health_file" ]] && wavemill_write_backstage_service_health "$health_file" "tend" "healthy" "backstage tend loop was restarted automatically" 0 "" "${executor_pane_id:-$restart_pane_id}" "$heartbeat_at"
-      log "status" "Backstage tend loop restarted"
+      log "status" "Backstage tend loop restart confirmed by heartbeat"
       LAST_BACKSTAGE_HEALTH_STATUS="healthy"
       return 0
     fi
+    restart_error="$(backstage_tend_restart_diagnostic)"
+    detail="Backstage tend restart did not produce a fresh heartbeat within ${BACKSTAGE_TEND_RESTART_CONFIRM_SECONDS}s: $restart_error"
     [[ -n "$health_file" ]] && wavemill_write_backstage_health "$health_file" "missing-tend-loop" "$detail" 1 "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
     LAST_BACKSTAGE_HEALTH_STATUS="missing-tend-loop"
     return 0
