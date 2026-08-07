@@ -111,9 +111,91 @@ eval "$(extract_function "$RUNNER" spawn_integration_window)"
 eval "$(extract_function "$MILL" backstage_health_enabled)"
 eval "$(extract_function "$MILL" probe_backstage_panes)"
 eval "$(extract_function "$MILL" read_backstage_health_field)"
+eval "$(extract_function "$MILL" read_backstage_service_health_field)"
 eval "$(extract_function "$MILL" classify_backstage_health)"
+eval "$(extract_function "$MILL" classify_ready_watchdog_hold_health)"
 eval "$(extract_function "$MILL" restart_backstage_tend_loop)"
 eval "$(extract_function "$MILL" check_backstage_health)"
+
+BACKSTAGE_TEND_HEARTBEAT_STALE_SECONDS=210
+BACKSTAGE_CLASSIFICATION_HOLD_STALE_SECONDS=900
+pane_details=$'%1\tWavemill Tend Loop\t0\tnpx\tcmd\n%2\tWavemill Jobs\t0\tbash\tcmd'
+cat > "$STATE_DIR/backstage-health.json" <<'JSON'
+{
+  "updatedAt": "2030-01-01T00:00:00Z",
+  "services": {
+    "tend": {
+      "status": "healthy",
+      "updatedAt": "2030-01-01T00:00:00Z",
+      "heartbeatAt": "2030-01-01T00:00:00Z"
+    }
+  }
+}
+JSON
+fresh_summary="$(classify_backstage_health "$pane_details" 1893456060 210 900)"
+IFS=$'\t' read -r fresh_status _fresh_detail _fresh_count _fresh_pane <<< "$fresh_summary"
+if [[ "$fresh_status" != "healthy" ]]; then
+  echo "FAIL: fresh tend heartbeat should be healthy (got $fresh_status)"
+  exit 1
+fi
+
+stale_summary="$(classify_backstage_health "$pane_details" 1893456301 210 900)"
+IFS=$'\t' read -r stale_status stale_detail _stale_count _stale_pane <<< "$stale_summary"
+if [[ "$stale_status" != "stalled" || "$stale_detail" != *"heartbeat is stale"* ]]; then
+  echo "FAIL: stale tend heartbeat should be stalled (got $stale_status: $stale_detail)"
+  exit 1
+fi
+
+cat > "$STATE_DIR/backstage-health.json" <<'JSON'
+{
+  "updatedAt": "2030-01-01T00:00:30Z",
+  "services": {
+    "tend": {
+      "status": "healthy",
+      "updatedAt": "2030-01-01T00:00:30Z"
+    }
+  }
+}
+JSON
+startup_summary="$(classify_backstage_health "$pane_details" 1893456060 210 900)"
+IFS=$'\t' read -r startup_status _startup_detail _startup_count _startup_pane <<< "$startup_summary"
+if [[ "$startup_status" != "healthy" ]]; then
+  echo "FAIL: fresh startup health without heartbeat should be healthy (got $startup_status)"
+  exit 1
+fi
+
+cat > "$STATE_DIR/ready-watchdog-state.json" <<'JSON'
+{
+  "updatedAt": "2030-01-01T00:01:00Z",
+  "tasks": {
+    "HOK-2677": {
+      "classification": "needs-user",
+      "classificationSince": "2030-01-01T00:00:00Z",
+      "updatedAt": "2030-01-01T00:01:00Z",
+      "detail": "same finding"
+    }
+  }
+}
+JSON
+cat > "$STATE_DIR/backstage-health.json" <<'JSON'
+{
+  "updatedAt": "2030-01-01T00:01:00Z",
+  "services": {
+    "tend": {
+      "status": "healthy",
+      "updatedAt": "2030-01-01T00:01:00Z",
+      "heartbeatAt": "2030-01-01T00:01:00Z"
+    }
+  }
+}
+JSON
+hold_summary="$(classify_backstage_health "$pane_details" 1893456060 210 10)"
+IFS=$'\t' read -r hold_status hold_detail _hold_count _hold_pane <<< "$hold_summary"
+if [[ "$hold_status" != "stalled" || "$hold_detail" != *"HOK-2677"* || "$hold_detail" != *"needs-user"* ]]; then
+  echo "FAIL: old needs-user classification should stall backstage health (got $hold_status: $hold_detail)"
+  exit 1
+fi
+rm -f "$STATE_DIR/ready-watchdog-state.json"
 
 tmux new-session -d -s "$SESSION" -n mill -x 220 -y 50 -c "$TEST_REPO" 'sleep 300'
 spawn_integration_window

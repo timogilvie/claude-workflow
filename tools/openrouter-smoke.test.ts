@@ -53,7 +53,8 @@ describe('openrouter-smoke tool', () => {
     const parsed = JSON.parse(result.stdout);
     assert.equal(parsed.mode, 'dry-run');
     assert.equal(Array.isArray(parsed.reports), true);
-    assert.ok(parsed.reports.length >= 25);
+    assert.equal(parsed.reports.length, createDryRunEntries().length);
+    assert.equal(parsed.reports.some((report: { modelId: string }) => report.modelId.startsWith('gpt-')), false);
   });
 
   it('skips live runs cleanly when the env gate is missing', async () => {
@@ -93,6 +94,15 @@ describe('openrouter-smoke tool', () => {
 
     const glm = selectSmokeEntries(entries, { models: ['z-ai/glm-5.2'] });
     assert.deepEqual(glm.map((entry) => entry.wavemillAlias), ['glm-5.2']);
+  });
+
+  it('does not include OpenAI-hosted models in an OpenRouter smoke sweep', () => {
+    const entries = createDryRunEntries();
+    assert.equal(entries.some((entry) => entry.openrouterId.startsWith('openai/')), false);
+    assert.throws(
+      () => selectSmokeEntries(entries, { models: ['gpt-5.5'] }),
+      /Unknown launch-priority model/,
+    );
   });
 
   it('redacts OpenRouter management URLs from blocker details', () => {

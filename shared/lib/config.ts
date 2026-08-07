@@ -675,6 +675,7 @@ export interface PrePrVerificationConfigSchema {
     acknowledgedBy?: string;
     acknowledgedAt?: string;
   }>;
+  nonEnforcedJobs?: string[];
   driftValidation?: {
     enabled?: boolean;
     blockOnUnmapped?: boolean;

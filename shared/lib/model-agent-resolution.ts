@@ -232,12 +232,17 @@ export function resolveModelAgent(opts: ResolveModelAgentOptions): AgentResoluti
 
   const registry = opts.registry ?? DEFAULT_MODEL_REGISTRY;
   const capabilities = getModel(registry, modelId);
-  // Keep the provider boundary authoritative even if a future registry entry
-  // accidentally declares an Anthropic model as an OpenRouter-native agent.
+  // Keep hosted-provider boundaries authoritative even if a future registry
+  // entry accidentally declares a first-party model as a native/OpenRouter
+  // agent. Claude Code and ChatGPT-authenticated Codex use distinct account
+  // surfaces from their API counterparts, so silently falling through to an
+  // API-backed runtime would spend the wrong quota and bypass that surface.
   if (capabilities?.vendor === 'anthropic') {
     return { ok: true, agent: 'claude' };
   }
-  const resolvedAgent = capabilities?.agent
+  const resolvedAgent = capabilities?.vendor === 'openai'
+    ? 'codex'
+    : capabilities?.agent
     ?? (capabilities?.nativeCapability?.nativeProvider
       ? (capabilities.nativeCapability.nativeProvider === 'openai' ? 'native-openai' : 'native-openrouter')
       : undefined)

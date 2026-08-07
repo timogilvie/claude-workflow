@@ -37,7 +37,7 @@ export interface ModelSettingsMigrationOptions {
   ackMissingCerts?: string[];
 }
 
-const REMOVED_PATHS = [
+export const REMOVED_MODEL_SETTING_PATHS = [
   'modelRegistry',
   'router.defaultModel',
   'router.models',
@@ -52,6 +52,8 @@ const REMOVED_PATHS = [
   'nativeAgent.providers.openai.models',
   'nativeAgent.providers.openrouter.models',
 ] as const;
+
+const REMOVED_PATHS = REMOVED_MODEL_SETTING_PATHS;
 
 const STAGES = ['planner', 'coder', 'reviewer'] as const;
 
@@ -147,6 +149,17 @@ function inventoryRemovedSettings(file: string, config: unknown): RemovedModelSe
       summary: summarizePath(path, value),
       modelIds: collectModelIds(value),
     }];
+  });
+}
+
+export function scanForbiddenModelSettings(repoDir: string): RemovedModelSettingInventoryItem[] {
+  const files = ['.wavemill-config.json', '.wavemill-config.local.json']
+    .map((name) => resolve(repoDir, name))
+    .filter((path) => existsSync(path));
+
+  return files.flatMap((path) => {
+    const raw = readFileSync(path, 'utf-8');
+    return inventoryRemovedSettings(basename(path), JSON.parse(raw));
   });
 }
 

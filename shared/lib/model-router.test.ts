@@ -53,10 +53,10 @@ describe('model-router resolveAgent', () => {
     assert.equal(resolveAgent('gpt-5.6-terra', {}, 'claude'), 'codex');
   });
 
-  it('throws instead of routing unsupported native OpenAI aliases through codex fallback', () => {
+  it('fails closed when an OpenAI model is not eligible for the ChatGPT Codex surface', () => {
     assert.throws(
       () => resolveAgent('gpt-5.6-sol', {}, 'codex', undefined, 'planning'),
-      /agent-resolution.*gpt-5\.6-sol.*no-native-capability/,
+      /agent-resolution.*gpt-5\.6-sol.*codex-chatgpt-ineligible/,
     );
   });
 
@@ -66,8 +66,8 @@ describe('model-router resolveAgent', () => {
     if (result.ok) {
       assert.fail('expected gpt-5.6-sol planning resolution to fail');
     }
-    assert.equal(result.reason, 'no-native-capability');
-    assert.match(result.diagnostic, /provider=openai/);
+    assert.equal(result.reason, 'codex-chatgpt-ineligible');
+    assert.match(result.diagnostic, /surface=codex-chatgpt/);
   });
 
   it('does not allow repo-local metadata to restore a retired Codex model', () => {

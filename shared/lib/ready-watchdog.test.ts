@@ -6,6 +6,7 @@ import path from 'node:path';
 import os from 'node:os';
 import {
   classifyReadyTask,
+  normalizeStatusCheckRollup,
   tickReadyWatchdog,
   type GitHubPRTruth,
   type ReadyTaskSnapshot,
@@ -313,6 +314,21 @@ test('classify pending CI as waiting-on-ci', () => {
   assert.match(classification.detail, /pending/);
 });
 
+test('normalizes check detailsUrl and databaseId for failed log enrichment', () => {
+  const checks = normalizeStatusCheckRollup([{
+    name: 'Unit Tests',
+    conclusion: 'FAILURE',
+    detailsUrl: 'https://github.com/acme/widgets/actions/runs/12345/job/67890',
+    databaseId: 112233,
+  }]);
+
+  assert.equal(checks.length, 1);
+  assert.equal(checks[0].status, 'failure');
+  assert.equal(checks[0].detailsUrl, 'https://github.com/acme/widgets/actions/runs/12345/job/67890');
+  assert.equal(checks[0].databaseId, 112233);
+  assert.match(checks[0].text ?? '', /actions\/runs\/12345/);
+});
+
 test('classify completed failing CI as auto-remediable waiting-on-ci', () => {
   const classification = classifyReadyTask(
     makeSnapshot(),
@@ -361,6 +377,50 @@ test('classify stable safe failing CI as stable-failing-safe after repeated poll
   assert.deepEqual(classification.remediationCategories, ['lint']);
   assert.equal(classification.autoRemediable, true);
   assert.equal(classification.localCommand, 'npm run lint');
+});
+
+test('classify sharded deterministic CI failure with local replay command', () => {
+  const classification = classifyReadyTask(
+    makeSnapshot(),
+    makeTruth({
+      checks: [{
+        name: 'Shell Tests (shard 2/4)',
+        status: 'failure',
+        rawStatus: 'FAILURE',
+        text: 'Assertion failed: expected shell output actual error',
+      }],
+    }),
+    new Date('2026-05-05T12:30:00.000Z'),
+    {
+      ...WATCHDOG_CLASSIFIER_CONFIG,
+      stableFailureConsecutivePolls: 2,
+      stableFailureEscalateAfterPolls: 4,
+      localCommandMap: {
+        ...WATCHDOG_CLASSIFIER_CONFIG.localCommandMap,
+        'Shell Tests': 'npm run test:shell',
+      },
+    },
+    {
+      issueId: 'HOK-1579',
+      slug: 'ready-watchdog-task',
+      prNumber: 528,
+      classification: 'waiting-on-ci',
+      displayLabel: 'waiting on CI',
+      detail: 'Failing checks: Shell Tests (shard 2/4) (FAILURE).',
+      action: 'reported',
+      updatedAt: '2026-05-05T12:20:00.000Z',
+      idleMinutes: 20,
+      lastProgressAt: '2026-05-05T12:00:00.000Z',
+      prStateKey: 'OPEN|MERGEABLE|CLEAN',
+      detailFingerprint: 'Failing checks: Shell Tests (shard 2/4) (FAILURE).',
+      consecutiveFailurePolls: 1,
+    },
+  );
+
+  assert.equal(classification.kind, 'stable-failing-safe');
+  assert.equal(classification.ciFailureCategory, 'deterministic-local');
+  assert.equal(classification.localCommand, 'npm run test:shell');
+  assert.match(classification.detail, /Local replay: npm run test:shell/);
 });
 
 test('classify resets consecutiveFailurePolls when prStateKey changes between polls', () => {
@@ -898,6 +958,91 @@ test('tick treats check read failures as non-remediable waiting-on-ci', async ()
   }
 });
 
+test('tick enriches failed check logs before classifying CI failures', async () => {
+  const { repoDir, stateFile } = setupReadyTask('HOK-2674', 2674);
+  const launches: Array<{ summary: string }> = [];
+  const deps = {
+    fetchGitHubTruth: async () => makeTruth({
+      checks: [{ name: 'Unit Tests', status: 'failure' as const, rawStatus: 'FAILURE' }],
+    }),
+    enrichFailingChecks: async (checks: GitHubPRTruth['checks']) => checks.map((check) => check.status === 'failure'
+      ? {
+          ...check,
+          text: 'Config validation failed:\n  /nativeAgent/providers/openai/models: Repo-local model configuration removed',
+        }
+      : check),
+    getCurrentHead: async () => 'head-1',
+    launchReadyRemediation: async (
+      _snapshot: ReadyTaskSnapshot,
+      failedCheckSummary: string,
+    ) => {
+      launches.push({ summary: failedCheckSummary });
+      return {
+        status: 'launched' as const,
+        detail: 'Launched remediation for Unit Tests.',
+        attemptNumber: 1,
+        launchHead: 'head-1',
+      };
+    },
+  };
+
+  try {
+    const first = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: WATCHDOG_CONFIG,
+      deps: { ...deps, now: () => new Date('2030-05-05T12:30:00.000Z') },
+    });
+    assert.equal(first.findings[0].action, 'waiting-on-ci-stabilizing');
+    assert.equal(first.findings[0].lastCiFailureCategory, 'deterministic-local');
+
+    const second = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: WATCHDOG_CONFIG,
+      deps: { ...deps, now: () => new Date('2030-05-05T12:31:00.000Z') },
+    });
+    assert.equal(second.findings[0].action, 'launched-remediation');
+    assert.equal(launches.length, 1);
+    assert.match(launches[0].summary, /Config validation failed/);
+    assert.match(launches[0].summary, /Repo-local model configuration removed/);
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('tick degrades to current classification when failed check log enrichment throws', async () => {
+  const { repoDir, stateFile } = setupReadyTask('HOK-2674', 2674);
+
+  try {
+    const result = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: WATCHDOG_CONFIG,
+      deps: {
+        fetchGitHubTruth: async () => makeTruth({
+          checks: [{ name: 'Unit Tests', status: 'failure', rawStatus: 'FAILURE' }],
+        }),
+        enrichFailingChecks: async () => {
+          throw new Error('gh api failed');
+        },
+        getCurrentHead: async () => 'head-1',
+        launchReadyRemediation: async () => {
+          throw new Error('should not launch');
+        },
+        now: () => new Date('2030-05-05T12:30:00.000Z'),
+      },
+    });
+
+    assert.equal(result.findings.length, 1);
+    assert.equal(result.findings[0].classification, 'needs-user');
+    assert.equal(result.findings[0].action, 'reported');
+    assert.match(result.findings[0].detail, /operator attention/);
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
 test('tick retries transient CI failures without launching remediation and then escalates', async () => {
   const { repoDir, stateFile, stateDir, featureDir } = setupReadyTask('HOK-2604', 2604);
   let launchCalled = false;
@@ -1317,6 +1462,181 @@ test('tick suppresses repeated needs-user when classification and detail are unc
   assert.equal(second.findings.length, 0, 'repeated needs-user should be suppressed on second tick');
 
   await rm(repoDir, { recursive: true, force: true });
+});
+
+test('tick suppresses repeated stable-failure findings across N identical polls', async () => {
+  const { repoDir, stateDir, stateFile } = setupReadyTask('HOK-2675', 2675);
+  const savedEnv = process.env.WAVEMILL_READY_WATCHDOG_REPORT_INTERVAL_SECONDS;
+  process.env.WAVEMILL_READY_WATCHDOG_REPORT_INTERVAL_SECONDS = '3600';
+
+  try {
+    const start = new Date('2030-05-05T12:30:00.000Z');
+    const configPath = path.join(repoDir, '.wavemill-config.json');
+    const repoConfig = JSON.parse(readFileSync(configPath, 'utf-8')) as {
+      ready?: Record<string, unknown>;
+    };
+    writeFileSync(configPath, JSON.stringify({
+      ...repoConfig,
+      ready: {
+        ...(repoConfig.ready ?? {}),
+        remediation: { enabled: false },
+      },
+    }, null, 2));
+    let checks: GitHubPRTruth['checks'] = [
+      { name: 'lint', status: 'failure', rawStatus: 'FAILURE', text: 'eslint lint error: no-unused-vars' },
+      { name: 'Network Probe', status: 'failure', rawStatus: 'FAILURE', text: 'workflow timed out' },
+    ];
+    writeFileSync(path.join(stateDir, 'ready-watchdog-state.json'), JSON.stringify({
+      updatedAt: start.toISOString(),
+      tasks: {
+        'HOK-2675': {
+          issueId: 'HOK-2675',
+          slug: 'ready-watchdog-task',
+          prNumber: 2675,
+          classification: 'waiting-on-ci',
+          displayLabel: 'waiting on CI',
+          detail: 'Failing checks: lint (FAILURE), Network Probe (FAILURE).',
+          action: 'reported',
+          updatedAt: start.toISOString(),
+          idleMinutes: 30,
+          lastProgressAt: '2026-05-05T12:00:00.000Z',
+          prStateKey: 'OPEN|MERGEABLE|CLEAN',
+          detailFingerprint: 'Failing checks: lint (FAILURE), Network Probe (FAILURE).',
+          consecutiveFailurePolls: 1,
+          failingChecksFingerprint: 'lint:failure,network probe:failure',
+          failingChecksObservedCount: 2,
+          lastLoggedAt: start.toISOString(),
+          lastLoggedFingerprint: 'Failing checks: lint (FAILURE), Network Probe (FAILURE).',
+          lastLoggedClassification: 'waiting-on-ci',
+          lastLoggedAction: 'reported',
+          lastCiFailureCategory: 'deterministic-local',
+          lastFailingJob: 'lint',
+          lastLocalCommand: 'npm run lint',
+          terminal: false,
+        },
+      },
+    }, null, 2));
+
+    const runTick = (index: number) => tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: {
+        ...WATCHDOG_CLASSIFIER_CONFIG,
+        stableFailureEscalateAfterPolls: 99,
+      },
+      deps: {
+        fetchGitHubTruth: async () => makeTruth({ checks }),
+        getCurrentHead: async () => 'head-1',
+        now: () => new Date(start.getTime() + index * 23_000),
+      },
+    });
+
+    for (let index = 1; index <= 5; index += 1) {
+      const repeated = await runTick(index);
+      assert.equal(repeated.findings.length, 0, `poll ${index} should be rate-limited`);
+    }
+
+    const watchdogState = JSON.parse(readFileSync(path.join(stateDir, 'ready-watchdog-state.json'), 'utf-8')) as {
+      tasks: Record<string, {
+        consecutiveFailurePolls?: number;
+        failingChecksObservedCount?: number;
+        lastLoggedAt?: string;
+      }>;
+    };
+    assert.equal(watchdogState.tasks['HOK-2675'].consecutiveFailurePolls, 6);
+    assert.equal(watchdogState.tasks['HOK-2675'].failingChecksObservedCount, 7);
+    assert.equal(watchdogState.tasks['HOK-2675'].lastLoggedAt, start.toISOString());
+
+    checks = [
+      { name: 'lint', status: 'failure', rawStatus: 'FAILURE', text: 'eslint lint error: no-unused-vars' },
+      { name: 'Network Probe', status: 'failure', rawStatus: 'FAILURE', text: 'workflow timed out' },
+      { name: 'Deploy Gate', status: 'failure', rawStatus: 'FAILURE', text: 'manual approval' },
+    ];
+    const changedFailureSet = await runTick(6);
+    assert.equal(changedFailureSet.findings.length, 1, 'new failing check should emit immediately');
+  } finally {
+    if (savedEnv === undefined) {
+      delete process.env.WAVEMILL_READY_WATCHDOG_REPORT_INTERVAL_SECONDS;
+    } else {
+      process.env.WAVEMILL_READY_WATCHDOG_REPORT_INTERVAL_SECONDS = savedEnv;
+    }
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('tick emits when stable failure crosses escalation threshold', async () => {
+  const { repoDir, stateDir, stateFile } = setupReadyTask('HOK-2676', 2676);
+  const configPath = path.join(repoDir, '.wavemill-config.json');
+  const repoConfig = JSON.parse(readFileSync(configPath, 'utf-8')) as {
+    ready?: Record<string, unknown>;
+  };
+  writeFileSync(configPath, JSON.stringify({
+    ...repoConfig,
+    ready: {
+      ...(repoConfig.ready ?? {}),
+      remediation: { enabled: false },
+    },
+  }, null, 2));
+  const savedEnv = process.env.WAVEMILL_READY_WATCHDOG_REPORT_INTERVAL_SECONDS;
+  process.env.WAVEMILL_READY_WATCHDOG_REPORT_INTERVAL_SECONDS = '3600';
+
+  try {
+    const start = new Date('2030-05-05T12:30:00.000Z');
+    writeFileSync(path.join(stateDir, 'ready-watchdog-state.json'), JSON.stringify({
+      updatedAt: start.toISOString(),
+      tasks: {
+        'HOK-2676': {
+          issueId: 'HOK-2676',
+          slug: 'ready-watchdog-task',
+          prNumber: 2676,
+          classification: 'waiting-on-ci',
+          displayLabel: 'waiting on CI',
+          detail: 'Failing checks: lint (FAILURE).',
+          action: 'reported',
+          updatedAt: start.toISOString(),
+          idleMinutes: 30,
+          lastProgressAt: '2026-05-05T12:00:00.000Z',
+          prStateKey: 'OPEN|MERGEABLE|CLEAN',
+          detailFingerprint: 'Failing checks: lint (FAILURE).',
+          consecutiveFailurePolls: 1,
+          failingChecksFingerprint: 'lint:failure',
+          failingChecksObservedCount: 1,
+          lastLoggedAt: start.toISOString(),
+          lastLoggedFingerprint: 'Failing checks: lint (FAILURE).',
+          lastLoggedClassification: 'waiting-on-ci',
+          lastLoggedAction: 'reported',
+        },
+      },
+    }, null, 2));
+
+    const thresholdCrossing = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: {
+        ...WATCHDOG_CLASSIFIER_CONFIG,
+        stableFailureConsecutivePolls: 2,
+        stableFailureEscalateAfterPolls: 4,
+      },
+      deps: {
+        fetchGitHubTruth: async () => makeTruth({
+          checks: [{ name: 'lint', status: 'failure', rawStatus: 'FAILURE', text: 'eslint lint error: no-unused-vars' }],
+        }),
+        getCurrentHead: async () => 'head-1',
+        now: () => new Date(start.getTime() + 23_000),
+      },
+    });
+
+    assert.equal(thresholdCrossing.findings.length, 1, 'classification threshold crossing should emit immediately');
+    assert.equal(thresholdCrossing.findings[0].classification, 'stable-failing-safe');
+    assert.equal(thresholdCrossing.findings[0].action, 'reported');
+  } finally {
+    if (savedEnv === undefined) {
+      delete process.env.WAVEMILL_READY_WATCHDOG_REPORT_INTERVAL_SECONDS;
+    } else {
+      process.env.WAVEMILL_READY_WATCHDOG_REPORT_INTERVAL_SECONDS = savedEnv;
+    }
+    await rm(repoDir, { recursive: true, force: true });
+  }
 });
 
 test('tick re-surfaces needs-user when detail changes', async () => {
@@ -1924,10 +2244,76 @@ test('tick suppresses repeated merge-lane stall needs-user when only waited minu
     assert.equal(first.findings[0].classification, 'needs-user');
     assert.match(first.findings[0].detail, /merge lane appears stalled/i);
     assert.match(first.findings[0].detail, /waited 83m/i);
+    const stateAfterFirst = JSON.parse(readFileSync(path.join(repoDir, '.wavemill', 'ready-watchdog-state.json'), 'utf-8')) as {
+      tasks: Record<string, { classificationSince?: string }>;
+    };
+    assert.equal(stateAfterFirst.tasks['HOK-2298'].classificationSince, '2030-06-23T12:23:00.000Z');
 
     const secondDeps = { ...baseDeps, now: () => new Date('2030-06-23T12:24:00.000Z') };
     const second = await tickReadyWatchdog({ repoDir, stateFile, config: escalateConfig, deps: secondDeps });
     assert.equal(second.findings.length, 0, 'second tick must be suppressed — only waited minutes changed');
+    const stateAfterSecond = JSON.parse(readFileSync(path.join(repoDir, '.wavemill', 'ready-watchdog-state.json'), 'utf-8')) as {
+      tasks: Record<string, { classificationSince?: string }>;
+    };
+    assert.equal(
+      stateAfterSecond.tasks['HOK-2298'].classificationSince,
+      '2030-06-23T12:23:00.000Z',
+      'classificationSince should be preserved while classification and fingerprint are stable',
+    );
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('tick resets classificationSince when classification fingerprint changes', async () => {
+  const { repoDir, stateFile, featureDir } = setupReadyTask('HOK-2677', 2677);
+  writeFileSync(path.join(featureDir, '.ready-result.json'), JSON.stringify({
+    stage: 'ready',
+    status: 'completed',
+    startedAt: '2030-06-23T10:00:00.000Z',
+    finishedAt: '2030-06-23T11:00:00.000Z',
+    agent: 'claude',
+    model: 'claude-sonnet-4-6',
+    notes: null,
+    artifacts: { type: 'ready', verdict: 'pass', prNumber: 2677, queueState: 'merge-candidate' },
+  }, null, 2));
+  writeFileSync(path.join(repoDir, '.wavemill', 'ready-watchdog-state.json'), JSON.stringify({
+    updatedAt: '2030-06-23T12:00:00.000Z',
+    tasks: {
+      'HOK-2677': {
+        issueId: 'HOK-2677',
+        slug: 'ready-watchdog-task',
+        prNumber: 2677,
+        classification: 'needs-user',
+        displayLabel: 'Needs user',
+        detail: 'old detail',
+        action: 'needs-user',
+        updatedAt: '2030-06-23T12:00:00.000Z',
+        classificationSince: '2030-06-23T12:00:00.000Z',
+        idleMinutes: 83,
+        lastProgressAt: null,
+        detailFingerprint: 'old-fingerprint',
+        lastReportedAction: 'needs-user',
+      },
+    },
+  }, null, 2));
+
+  const deps = {
+    fetchGitHubTruth: async () => makeTruth({ mergeStateStatus: 'CLEAN' }),
+    getCurrentHead: async () => 'head-1',
+    getWorktreeMergeState: async () => ({
+      mergeHead: null, unmergedPaths: [], stagedPaths: [], unstagedPaths: [], untrackedPaths: [], rawStatus: [],
+    }),
+    isTaskPaneActive: async () => null,
+    now: () => new Date('2030-06-23T12:23:00.000Z'),
+  };
+
+  try {
+    await tickReadyWatchdog({ repoDir, stateFile, config: { ...WATCHDOG_CONFIG, thresholdMinutes: 10 }, deps });
+    const stateAfter = JSON.parse(readFileSync(path.join(repoDir, '.wavemill', 'ready-watchdog-state.json'), 'utf-8')) as {
+      tasks: Record<string, { classificationSince?: string }>;
+    };
+    assert.equal(stateAfter.tasks['HOK-2677'].classificationSince, '2030-06-23T12:23:00.000Z');
   } finally {
     await rm(repoDir, { recursive: true, force: true });
   }

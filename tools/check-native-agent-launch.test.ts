@@ -112,6 +112,22 @@ afterEach(() => {
 });
 
 describe('checkNativeAgentLaunch', () => {
+  it('rejects direct native launches of OpenAI models before provider setup', () => {
+    const repoDir = makeRepo(baseConfig());
+
+    const result = checkNativeAgentLaunch({
+      repoDir,
+      phase: 'planning',
+      agent: 'native-openai',
+      model: 'gpt-5.6-sol',
+    });
+
+    assert.equal(result.ok, false);
+    if (result.ok) assert.fail('expected hosted OpenAI model rejection');
+    assert.equal(result.code, 'hosted-openai-model');
+    assert.match(result.reason, /ChatGPT Codex harness/);
+  });
+
   it('accepts equivalent native OpenRouter aliases and provider ids before launch', () => {
     const repoDir = makeRepo(baseConfig());
     writeOpenRouterCert(repoDir, 'z-ai', 'glm-5.2');

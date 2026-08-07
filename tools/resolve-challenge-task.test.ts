@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -15,6 +15,7 @@ import {
   getPatchCodingCertificationPath,
 } from '../shared/lib/native-agent/coding-certification.ts';
 import { PATCH_CODING_SMOKE_SUITE_REVISION } from '../shared/lib/native-agent/smoke.ts';
+import { listEffectiveModelsForStage } from '../shared/lib/effective-models.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const resolveChallengeTaskTool = resolve(__dirname, 'resolve-challenge-task.ts');
@@ -236,6 +237,38 @@ describe('resolve-challenge-task CLI', () => {
           `${alias} should not be rejected`,
         );
       }
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns challenge_unavailable instead of single mode when a required challenge has no pair', () => {
+    const repoDir = makeRepo([], { aliases: [] });
+    try {
+      const configPath = join(repoDir, '.wavemill-config.json');
+      const config = JSON.parse(readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
+      config.modelExclusions = listEffectiveModelsForStage('coding').models
+        .filter((model) => model !== 'qwen-3-coder')
+        .map((model) => ({ model, stages: ['coding'], reason: 'strict challenge no-pair fixture' }));
+      writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
+
+      const result = runResolveChallengeTask(repoDir, [
+        '--issue', 'HOK-2588-NO-PAIR',
+        '--slug', 'no-pair',
+        '--title', 'No pair fixture',
+        '--primary-model', 'qwen-3-coder',
+        '--remaining-slots', '2',
+        '--repo-dir', repoDir,
+      ]);
+
+      assert.equal(result.mode, 'challenge_unavailable');
+      assert.equal(result.reason, 'challenge_unavailable');
+      assert.equal(result.slotsRequired, 0);
+      assert.equal(result.cleanupHint, 'no_worktree_created');
+      assert.ok(Array.isArray(result.blockers));
+      assert.ok((result.blockers as Array<Record<string, unknown>>)
+        .some((blocker) => blocker.kind === 'insufficient_certified_pool'));
+      assert.ok(!('single' in result), 'strict challenge must not carry a single launch payload');
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }

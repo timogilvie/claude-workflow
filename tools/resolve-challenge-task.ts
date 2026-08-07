@@ -17,10 +17,11 @@ import {
 } from '../shared/lib/challenge-mode.ts';
 import type { ModelExclusionDiagnostic } from '../shared/lib/model-exclusions.ts';
 import { buildEvalSummary, modelStageCount } from '../shared/lib/challenge-scheduler.ts';
-import { resolveAgent } from '../shared/lib/model-router.ts';
+import { resolveAgent, tryResolveAgent } from '../shared/lib/model-router.ts';
 import { readBothRouteArtifacts } from '../shared/lib/route-artifact.ts';
 import { readTaskPromptFromFile } from '../shared/lib/workflow-router.ts';
 import { buildChallengeExecutionIntent as buildChallengeIntent } from '../shared/lib/challenge-execution-contract.ts';
+import { buildChallengeUnavailable } from '../shared/lib/challenge-unavailable.ts';
 
 runTool({
   name: 'resolve-challenge-task',
@@ -56,10 +57,13 @@ runTool({
     const router = config.router || {};
     const defaultAgent = router.defaultAgent || 'claude';
     const pool = getChallengeModelPool(challenge, router);
+    const requestedRate = challenge.rate ?? 0.10;
+    const strictWhenRequired = challenge.enabled === true && requestedRate >= 1;
 
-    const singleAgent = primaryModel
-      ? resolveAgent(primaryModel, {}, defaultAgent, repoDir, 'coding')
-      : defaultAgent;
+    const singleAgentResolution = primaryModel
+      ? tryResolveAgent(primaryModel, {}, defaultAgent, repoDir, 'coding')
+      : undefined;
+    const singleAgent = singleAgentResolution?.ok ? singleAgentResolution.agent : defaultAgent;
 
     const base = {
       issue,
@@ -129,6 +133,25 @@ runTool({
     }
 
     if (!canRunChallenge(pool)) {
+      if (strictWhenRequired) {
+        console.log(JSON.stringify({
+          issue,
+          slug,
+          title,
+          ...buildChallengeUnavailable({
+            requestedRate,
+            pool,
+            certifiedPool: [],
+            primaryModel,
+            repoDir,
+            nativeCertificationRejections: [],
+            modelExclusions: [],
+          }),
+          slotsRequired: 0,
+          reason: 'challenge_unavailable',
+        }));
+        return;
+      }
       console.log(JSON.stringify(buildSingle('insufficient_models')));
       return;
     }
@@ -141,7 +164,7 @@ runTool({
     const launchDecision = decideChallengeLaunch({
       pool,
       primaryModel,
-      rate: challenge.rate ?? 0.10,
+      rate: requestedRate,
       recommendationRate: challenge.recommendationRate,
       recommendation,
     });
@@ -240,6 +263,8 @@ runTool({
           coverage,
           rotationSeed,
           recommendedChallengerModel,
+          strictWhenRequired,
+          requestedRate,
         });
         pair = selection.pair;
         selectionFailureReason = selection.failureReason || selectionFailureReason;
@@ -266,9 +291,15 @@ runTool({
         coverage,
         rotationSeed,
         recommendedChallengerModel,
+        strictWhenRequired,
+        requestedRate,
       });
       pair = selection.pair;
       selectionFailureReason = selection.failureReason || selectionFailureReason;
+      if (selection.challengeUnavailable) {
+        nativeCertificationRejections = selection.nativeCertificationRejections;
+        modelExclusions = selection.modelExclusions;
+      }
       nativeCertificationRejections = [
         ...(nativeCertificationRejections || []),
         ...(selection.nativeCertificationRejections || []),
@@ -303,6 +334,27 @@ runTool({
     }
 
     if (!pair) {
+      if (strictWhenRequired) {
+        const unavailable = buildChallengeUnavailable({
+          requestedRate,
+          pool,
+          primaryModel,
+          repoDir,
+          nativeCertificationRejections,
+          modelExclusions,
+        });
+        console.log(JSON.stringify({
+          issue,
+          slug,
+          title,
+          ...unavailable,
+          slotsRequired: 0,
+          reason: 'challenge_unavailable',
+          selectionPath: launchDecision.selectionPath,
+          ...(launchDecision.recommendation ? { challengeRecommendation: launchDecision.recommendation } : {}),
+        }));
+        return;
+      }
       console.log(JSON.stringify(buildSingle(
         selectionFailureReason,
         {
