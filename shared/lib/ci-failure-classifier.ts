@@ -53,6 +53,8 @@ const GITHUB_ONLY_PATTERNS = [
 ];
 
 const DETERMINISTIC_PATTERNS = [
+  /\bconfig validation failed\b/i,
+  /\bERR_TEST_FAILURE\b/,
   /assert(?:ion)? failed/i,
   /\bexpected\b.*\bactual\b/i,
   /\btest(?:s)? failed\b/i,

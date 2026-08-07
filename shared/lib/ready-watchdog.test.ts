@@ -6,6 +6,7 @@ import path from 'node:path';
 import os from 'node:os';
 import {
   classifyReadyTask,
+  normalizeStatusCheckRollup,
   tickReadyWatchdog,
   type GitHubPRTruth,
   type ReadyTaskSnapshot,
@@ -311,6 +312,21 @@ test('classify pending CI as waiting-on-ci', () => {
 
   assert.equal(classification.kind, 'waiting-on-ci');
   assert.match(classification.detail, /pending/);
+});
+
+test('normalizes check detailsUrl and databaseId for failed log enrichment', () => {
+  const checks = normalizeStatusCheckRollup([{
+    name: 'Unit Tests',
+    conclusion: 'FAILURE',
+    detailsUrl: 'https://github.com/acme/widgets/actions/runs/12345/job/67890',
+    databaseId: 112233,
+  }]);
+
+  assert.equal(checks.length, 1);
+  assert.equal(checks[0].status, 'failure');
+  assert.equal(checks[0].detailsUrl, 'https://github.com/acme/widgets/actions/runs/12345/job/67890');
+  assert.equal(checks[0].databaseId, 112233);
+  assert.match(checks[0].text ?? '', /actions\/runs\/12345/);
 });
 
 test('classify completed failing CI as auto-remediable waiting-on-ci', () => {
@@ -937,6 +953,91 @@ test('tick treats check read failures as non-remediable waiting-on-ci', async ()
     assert.equal(result.findings[0].action, 'reported');
     assert.match(result.findings[0].detail, /Required GitHub check status could not be read/);
     assert.equal(launchCalled, false);
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('tick enriches failed check logs before classifying CI failures', async () => {
+  const { repoDir, stateFile } = setupReadyTask('HOK-2674', 2674);
+  const launches: Array<{ summary: string }> = [];
+  const deps = {
+    fetchGitHubTruth: async () => makeTruth({
+      checks: [{ name: 'Unit Tests', status: 'failure' as const, rawStatus: 'FAILURE' }],
+    }),
+    enrichFailingChecks: async (checks: GitHubPRTruth['checks']) => checks.map((check) => check.status === 'failure'
+      ? {
+          ...check,
+          text: 'Config validation failed:\n  /nativeAgent/providers/openai/models: Repo-local model configuration removed',
+        }
+      : check),
+    getCurrentHead: async () => 'head-1',
+    launchReadyRemediation: async (
+      _snapshot: ReadyTaskSnapshot,
+      failedCheckSummary: string,
+    ) => {
+      launches.push({ summary: failedCheckSummary });
+      return {
+        status: 'launched' as const,
+        detail: 'Launched remediation for Unit Tests.',
+        attemptNumber: 1,
+        launchHead: 'head-1',
+      };
+    },
+  };
+
+  try {
+    const first = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: WATCHDOG_CONFIG,
+      deps: { ...deps, now: () => new Date('2030-05-05T12:30:00.000Z') },
+    });
+    assert.equal(first.findings[0].action, 'waiting-on-ci-stabilizing');
+    assert.equal(first.findings[0].lastCiFailureCategory, 'deterministic-local');
+
+    const second = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: WATCHDOG_CONFIG,
+      deps: { ...deps, now: () => new Date('2030-05-05T12:31:00.000Z') },
+    });
+    assert.equal(second.findings[0].action, 'launched-remediation');
+    assert.equal(launches.length, 1);
+    assert.match(launches[0].summary, /Config validation failed/);
+    assert.match(launches[0].summary, /Repo-local model configuration removed/);
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('tick degrades to current classification when failed check log enrichment throws', async () => {
+  const { repoDir, stateFile } = setupReadyTask('HOK-2674', 2674);
+
+  try {
+    const result = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: WATCHDOG_CONFIG,
+      deps: {
+        fetchGitHubTruth: async () => makeTruth({
+          checks: [{ name: 'Unit Tests', status: 'failure', rawStatus: 'FAILURE' }],
+        }),
+        enrichFailingChecks: async () => {
+          throw new Error('gh api failed');
+        },
+        getCurrentHead: async () => 'head-1',
+        launchReadyRemediation: async () => {
+          throw new Error('should not launch');
+        },
+        now: () => new Date('2030-05-05T12:30:00.000Z'),
+      },
+    });
+
+    assert.equal(result.findings.length, 1);
+    assert.equal(result.findings[0].classification, 'needs-user');
+    assert.equal(result.findings[0].action, 'reported');
+    assert.match(result.findings[0].detail, /operator attention/);
   } finally {
     await rm(repoDir, { recursive: true, force: true });
   }
