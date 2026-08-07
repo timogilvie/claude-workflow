@@ -52,6 +52,7 @@ TESTS=(
   wavemill-mill-session.test.sh
   merge-retry-marker.test.sh
   openrouter-warning-surfaces.test.sh
+  global-model-parity.test.sh
 )
 
 SHARD_INDEX=1

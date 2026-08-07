@@ -103,6 +103,8 @@ TESTS=(
   shared/lib/headless-llm.test.ts
   shared/lib/router-log.test.ts
   shared/lib/challenge-analyzer.test.ts
+  shared/lib/challenge-unavailable.test.ts
+  shared/lib/cross-repo-parity.test.ts
   shared/lib/challenge-execution-contract.test.ts
   shared/lib/challenge-pairing-repair.test.ts
   shared/lib/config.test.ts
@@ -172,6 +174,7 @@ TESTS=(
   shared/lib/openrouter-provider.test.ts
   shared/lib/openrouter-doctor.test.ts
   shared/lib/openrouter-zero-traffic.test.ts
+  shared/lib/parity-report.test.ts
   src/evaluation/scorers/wavemill/success-rate-under-budget.test.ts
   src/evaluation/adapters/wavemill-router-adapter.test.ts
   tools/add-pr-label.test.ts
@@ -184,6 +187,7 @@ TESTS=(
   tools/hok2424-verify-native-expansion.test.ts
   tools/launch-validation.test.ts
   tools/observer.test.ts
+  tools/parity-report.test.ts
   tools/resolve-challenge-task.test.ts
   tools/route-tasks.test.ts
   tools/plan-queue.test.ts

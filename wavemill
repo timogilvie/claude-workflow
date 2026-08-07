@@ -187,6 +187,13 @@ ${GREEN}Commands:${NC}
                ${CYAN}wavemill check-ci-verification --propose-mapping${NC}
                ${CYAN}wavemill check-ci-verification --json${NC}
 
+  ${CYAN}parity-report${NC}
+             Report global certified-model parity, runtime readiness, and
+             challenge pair availability for startup/CI.
+             Usage:
+               ${CYAN}wavemill parity-report${NC}
+               ${CYAN}wavemill parity-report --json --strict-challenge${NC}
+
   ${CYAN}doctor${NC}    Inspect operator-facing routing health diagnostics
              Subcommands:
                ${CYAN}wavemill doctor openrouter${NC}
@@ -1168,6 +1175,17 @@ run_check_ci_verification() {
   exec npx tsx "$check_tool" "$@"
 }
 
+run_parity_report() {
+  local report_tool="$TOOLS_DIR/parity-report.ts"
+
+  if [[ ! -f "$report_tool" ]]; then
+    echo -e "${RED}Error:${NC} Parity report tool not found at: $report_tool" >&2
+    exit 1
+  fi
+
+  exec npx tsx "$report_tool" "$@"
+}
+
 run_doctor() {
   local subcommand="${1:-}"
   shift || true
@@ -1578,6 +1596,10 @@ case "${1:-}" in
   check-ci-verification)
     shift
     run_check_ci_verification "$@"
+    ;;
+  parity-report)
+    shift
+    run_parity_report "$@"
     ;;
   doctor)
     shift

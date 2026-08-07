@@ -2432,6 +2432,21 @@ challenge_plan_stage_requires_effective_route() {
   [[ "$decision_source" != "expanded" && "$decision_source" != "preserved" ]]
 }
 
+log_challenge_unavailable_plan() {
+  local issue="$1"
+  local challenge_plan="$2"
+  local requested_rate
+
+  requested_rate=$(echo "$challenge_plan" | jq -r '.requestedRate // empty' 2>/dev/null || echo "")
+  log_error "  $issue: challenge required${requested_rate:+ (rate=$requested_rate)} but no valid pair could form"
+  echo "$challenge_plan" | jq -r '.blockers[]? | "  blocker: \(.kind) \(.field // .modelId // "") \(.reason // "")"' 2>/dev/null | while IFS= read -r line; do
+    [[ -n "$line" ]] && log_error "$line"
+  done
+  echo "$challenge_plan" | jq -r '.candidateDiagnostics[]? | "  candidate: \(.modelId) reason=\(.reason) provider=\(.provider // "unknown")"' 2>/dev/null | while IFS= read -r line; do
+    [[ -n "$line" ]] && log_error "$line"
+  done
+}
+
 # ── Phase 5: Challenge-mode launch planning ──────────────────────────────
 FINAL_LAUNCH_ARGS=()
 slots_used=0
@@ -2489,6 +2504,10 @@ for t in "${TASKS[@]}"; do
     challenge_plan=$(npx tsx "$TOOLS_DIR/resolve-challenge-task.ts" "${challenge_args[@]}" 2>/dev/null || echo "")
     challenge_mode=$(echo "$challenge_plan" | jq -r '.mode // "single"' 2>/dev/null || echo "single")
     challenge_reason=$(echo "$challenge_plan" | jq -r '.reason // empty' 2>/dev/null || echo "")
+    if [[ "$challenge_mode" == "challenge_unavailable" ]]; then
+      log_challenge_unavailable_plan "$ISSUE" "$challenge_plan"
+      continue
+    fi
     if challenge_plan_stage_requires_effective_route "$challenge_plan"; then
       challenge_mode="single"
       challenge_reason="plan_stage_expanded_route_unavailable"
@@ -3345,6 +3364,21 @@ challenge_plan_stage_requires_effective_route() {
 
   decision_source=$(echo "$challenge_plan" | jq -r '.decisionSource // "bootstrap"' 2>/dev/null || echo "bootstrap")
   [[ "$decision_source" != "expanded" && "$decision_source" != "preserved" ]]
+}
+
+log_challenge_unavailable_plan() {
+  local issue="$1"
+  local challenge_plan="$2"
+  local requested_rate
+
+  requested_rate=$(echo "$challenge_plan" | jq -r '.requestedRate // empty' 2>/dev/null || echo "")
+  log_error "  $issue: challenge required${requested_rate:+ (rate=$requested_rate)} but no valid pair could form"
+  echo "$challenge_plan" | jq -r '.blockers[]? | "  blocker: \(.kind) \(.field // .modelId // "") \(.reason // "")"' 2>/dev/null | while IFS= read -r line; do
+    [[ -n "$line" ]] && log_error "$line"
+  done
+  echo "$challenge_plan" | jq -r '.candidateDiagnostics[]? | "  candidate: \(.modelId) reason=\(.reason) provider=\(.provider // "unknown")"' 2>/dev/null | while IFS= read -r line; do
+    [[ -n "$line" ]] && log_error "$line"
+  done
 }
 
 record_planning_launch_route_snapshot() {
@@ -10745,6 +10779,10 @@ EOF
       challenge_plan=$(_with_timeout "$API_TIMEOUT" npx tsx "$TOOLS_DIR/resolve-challenge-task.ts" "${challenge_args[@]}" 2>/dev/null || echo "")
       challenge_mode=$(echo "$challenge_plan" | jq -r '.mode // "single"' 2>/dev/null || echo "single")
       challenge_reason=$(echo "$challenge_plan" | jq -r '.reason // empty' 2>/dev/null || echo "")
+      if [[ "$challenge_mode" == "challenge_unavailable" ]]; then
+        log_challenge_unavailable_plan "$issue" "$challenge_plan"
+        return 1
+      fi
       if challenge_plan_stage_requires_effective_route "$challenge_plan"; then
         challenge_mode="single"
         challenge_reason="plan_stage_expanded_route_unavailable"
