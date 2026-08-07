@@ -4920,6 +4920,13 @@ wavemill_owned_feature_artifact_path() {
 blocked_completion_auto_allowed_dirty_path() {
   local normalized_path="$1" slug="$2"
 
+  # Wavemill injects status hooks into this Claude-local settings file. Some
+  # repositories track it, so it must not prevent an otherwise committed task
+  # from advancing into review.
+  if [[ "$normalized_path" == ".claude/settings.local.json" ]]; then
+    return 0
+  fi
+
   if [[ "$normalized_path" == .wavemill/* ]]; then
     return 0
   fi
