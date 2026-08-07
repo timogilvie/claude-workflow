@@ -511,7 +511,10 @@ spawn_integration_window() {
   integration_cmd="$(wavemill_build_tend_loop_command "$SESSION" "$REPO_DIR" "$TOOLS_DIR" "integration")"
   tmux new-window -d -t "$SESSION" -n "$WAVEMILL_WINDOW_BACKSTAGE" -c "$REPO_DIR" "$integration_cmd" >/dev/null
   tend_pane="$(tmux display-message -p -t "$SESSION:$WAVEMILL_WINDOW_BACKSTAGE.0" '#{pane_id}' 2>/dev/null || true)"
-  [[ -n "$tend_pane" ]] && wavemill_set_tmux_pane_title "$tend_pane" "$WAVEMILL_BACKSTAGE_TEND_PANE_TITLE"
+  if [[ -n "$tend_pane" ]]; then
+    wavemill_set_tmux_pane_title "$tend_pane" "$WAVEMILL_BACKSTAGE_TEND_PANE_TITLE"
+    wavemill_capture_tend_pane_output "$tend_pane" "$SESSION" "$REPO_DIR"
+  fi
   right_top_pane="$(tmux split-window -t "$SESSION:$WAVEMILL_WINDOW_BACKSTAGE.0" -h -p 40 -P -F '#{pane_id}')"
   right_bottom_pane="$(tmux split-window -t "$right_top_pane" -v -p 50 -P -F '#{pane_id}')"
 
