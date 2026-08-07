@@ -1464,6 +1464,181 @@ test('tick suppresses repeated needs-user when classification and detail are unc
   await rm(repoDir, { recursive: true, force: true });
 });
 
+test('tick suppresses repeated stable-failure findings across N identical polls', async () => {
+  const { repoDir, stateDir, stateFile } = setupReadyTask('HOK-2675', 2675);
+  const savedEnv = process.env.WAVEMILL_READY_WATCHDOG_REPORT_INTERVAL_SECONDS;
+  process.env.WAVEMILL_READY_WATCHDOG_REPORT_INTERVAL_SECONDS = '3600';
+
+  try {
+    const start = new Date('2030-05-05T12:30:00.000Z');
+    const configPath = path.join(repoDir, '.wavemill-config.json');
+    const repoConfig = JSON.parse(readFileSync(configPath, 'utf-8')) as {
+      ready?: Record<string, unknown>;
+    };
+    writeFileSync(configPath, JSON.stringify({
+      ...repoConfig,
+      ready: {
+        ...(repoConfig.ready ?? {}),
+        remediation: { enabled: false },
+      },
+    }, null, 2));
+    let checks: GitHubPRTruth['checks'] = [
+      { name: 'lint', status: 'failure', rawStatus: 'FAILURE', text: 'eslint lint error: no-unused-vars' },
+      { name: 'Network Probe', status: 'failure', rawStatus: 'FAILURE', text: 'workflow timed out' },
+    ];
+    writeFileSync(path.join(stateDir, 'ready-watchdog-state.json'), JSON.stringify({
+      updatedAt: start.toISOString(),
+      tasks: {
+        'HOK-2675': {
+          issueId: 'HOK-2675',
+          slug: 'ready-watchdog-task',
+          prNumber: 2675,
+          classification: 'waiting-on-ci',
+          displayLabel: 'waiting on CI',
+          detail: 'Failing checks: lint (FAILURE), Network Probe (FAILURE).',
+          action: 'reported',
+          updatedAt: start.toISOString(),
+          idleMinutes: 30,
+          lastProgressAt: '2026-05-05T12:00:00.000Z',
+          prStateKey: 'OPEN|MERGEABLE|CLEAN',
+          detailFingerprint: 'Failing checks: lint (FAILURE), Network Probe (FAILURE).',
+          consecutiveFailurePolls: 1,
+          failingChecksFingerprint: 'lint:failure,network probe:failure',
+          failingChecksObservedCount: 2,
+          lastLoggedAt: start.toISOString(),
+          lastLoggedFingerprint: 'Failing checks: lint (FAILURE), Network Probe (FAILURE).',
+          lastLoggedClassification: 'waiting-on-ci',
+          lastLoggedAction: 'reported',
+          lastCiFailureCategory: 'deterministic-local',
+          lastFailingJob: 'lint',
+          lastLocalCommand: 'npm run lint',
+          terminal: false,
+        },
+      },
+    }, null, 2));
+
+    const runTick = (index: number) => tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: {
+        ...WATCHDOG_CLASSIFIER_CONFIG,
+        stableFailureEscalateAfterPolls: 99,
+      },
+      deps: {
+        fetchGitHubTruth: async () => makeTruth({ checks }),
+        getCurrentHead: async () => 'head-1',
+        now: () => new Date(start.getTime() + index * 23_000),
+      },
+    });
+
+    for (let index = 1; index <= 5; index += 1) {
+      const repeated = await runTick(index);
+      assert.equal(repeated.findings.length, 0, `poll ${index} should be rate-limited`);
+    }
+
+    const watchdogState = JSON.parse(readFileSync(path.join(stateDir, 'ready-watchdog-state.json'), 'utf-8')) as {
+      tasks: Record<string, {
+        consecutiveFailurePolls?: number;
+        failingChecksObservedCount?: number;
+        lastLoggedAt?: string;
+      }>;
+    };
+    assert.equal(watchdogState.tasks['HOK-2675'].consecutiveFailurePolls, 6);
+    assert.equal(watchdogState.tasks['HOK-2675'].failingChecksObservedCount, 7);
+    assert.equal(watchdogState.tasks['HOK-2675'].lastLoggedAt, start.toISOString());
+
+    checks = [
+      { name: 'lint', status: 'failure', rawStatus: 'FAILURE', text: 'eslint lint error: no-unused-vars' },
+      { name: 'Network Probe', status: 'failure', rawStatus: 'FAILURE', text: 'workflow timed out' },
+      { name: 'Deploy Gate', status: 'failure', rawStatus: 'FAILURE', text: 'manual approval' },
+    ];
+    const changedFailureSet = await runTick(6);
+    assert.equal(changedFailureSet.findings.length, 1, 'new failing check should emit immediately');
+  } finally {
+    if (savedEnv === undefined) {
+      delete process.env.WAVEMILL_READY_WATCHDOG_REPORT_INTERVAL_SECONDS;
+    } else {
+      process.env.WAVEMILL_READY_WATCHDOG_REPORT_INTERVAL_SECONDS = savedEnv;
+    }
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('tick emits when stable failure crosses escalation threshold', async () => {
+  const { repoDir, stateDir, stateFile } = setupReadyTask('HOK-2676', 2676);
+  const configPath = path.join(repoDir, '.wavemill-config.json');
+  const repoConfig = JSON.parse(readFileSync(configPath, 'utf-8')) as {
+    ready?: Record<string, unknown>;
+  };
+  writeFileSync(configPath, JSON.stringify({
+    ...repoConfig,
+    ready: {
+      ...(repoConfig.ready ?? {}),
+      remediation: { enabled: false },
+    },
+  }, null, 2));
+  const savedEnv = process.env.WAVEMILL_READY_WATCHDOG_REPORT_INTERVAL_SECONDS;
+  process.env.WAVEMILL_READY_WATCHDOG_REPORT_INTERVAL_SECONDS = '3600';
+
+  try {
+    const start = new Date('2030-05-05T12:30:00.000Z');
+    writeFileSync(path.join(stateDir, 'ready-watchdog-state.json'), JSON.stringify({
+      updatedAt: start.toISOString(),
+      tasks: {
+        'HOK-2676': {
+          issueId: 'HOK-2676',
+          slug: 'ready-watchdog-task',
+          prNumber: 2676,
+          classification: 'waiting-on-ci',
+          displayLabel: 'waiting on CI',
+          detail: 'Failing checks: lint (FAILURE).',
+          action: 'reported',
+          updatedAt: start.toISOString(),
+          idleMinutes: 30,
+          lastProgressAt: '2026-05-05T12:00:00.000Z',
+          prStateKey: 'OPEN|MERGEABLE|CLEAN',
+          detailFingerprint: 'Failing checks: lint (FAILURE).',
+          consecutiveFailurePolls: 1,
+          failingChecksFingerprint: 'lint:failure',
+          failingChecksObservedCount: 1,
+          lastLoggedAt: start.toISOString(),
+          lastLoggedFingerprint: 'Failing checks: lint (FAILURE).',
+          lastLoggedClassification: 'waiting-on-ci',
+          lastLoggedAction: 'reported',
+        },
+      },
+    }, null, 2));
+
+    const thresholdCrossing = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: {
+        ...WATCHDOG_CLASSIFIER_CONFIG,
+        stableFailureConsecutivePolls: 2,
+        stableFailureEscalateAfterPolls: 4,
+      },
+      deps: {
+        fetchGitHubTruth: async () => makeTruth({
+          checks: [{ name: 'lint', status: 'failure', rawStatus: 'FAILURE', text: 'eslint lint error: no-unused-vars' }],
+        }),
+        getCurrentHead: async () => 'head-1',
+        now: () => new Date(start.getTime() + 23_000),
+      },
+    });
+
+    assert.equal(thresholdCrossing.findings.length, 1, 'classification threshold crossing should emit immediately');
+    assert.equal(thresholdCrossing.findings[0].classification, 'stable-failing-safe');
+    assert.equal(thresholdCrossing.findings[0].action, 'reported');
+  } finally {
+    if (savedEnv === undefined) {
+      delete process.env.WAVEMILL_READY_WATCHDOG_REPORT_INTERVAL_SECONDS;
+    } else {
+      process.env.WAVEMILL_READY_WATCHDOG_REPORT_INTERVAL_SECONDS = savedEnv;
+    }
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
 test('tick re-surfaces needs-user when detail changes', async () => {
   const repoDir = mkdtempSync(path.join(os.tmpdir(), 'ready-watchdog-'));
   const stateDir = path.join(repoDir, '.wavemill');

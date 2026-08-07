@@ -898,15 +898,16 @@ function shouldEmitReadyWatchdogFinding(
     return true;
   }
 
-  // Other material changes from non-volatile structured fields.
+  // Other material changes from non-volatile structured fields. Monotonic
+  // counters are intentionally excluded: their threshold effects are surfaced
+  // through classification/action/detail changes above, and comparing raw
+  // increments would bypass the rate-limit branch below.
   if (prior.prStateKey !== next.prStateKey) return true;
   if (prior.autoUpdateAttempts !== next.autoUpdateAttempts) return true;
   if (prior.lastAutoUpdateError !== next.lastAutoUpdateError) return true;
-  if (prior.consecutiveFailurePolls !== next.consecutiveFailurePolls) return true;
   if (prior.recoveryCommand !== next.recoveryCommand) return true;
   if (JSON.stringify(prior.remediationCategories ?? []) !== JSON.stringify(next.remediationCategories ?? [])) return true;
   if (prior.failingChecksFingerprint !== next.failingChecksFingerprint) return true;
-  if (prior.failingChecksObservedCount !== next.failingChecksObservedCount) return true;
   if (prior.transientFailureCount !== next.transientFailureCount) return true;
   if (prior.transientFailureHead !== next.transientFailureHead) return true;
   if (prior.lastCiFailureCategory !== next.lastCiFailureCategory) return true;
@@ -1467,37 +1468,6 @@ async function writeStateFile(repoDir: string, findings: ReadyWatchdogStateEntry
       },
     },
   );
-}
-
-function materiallyChanged(
-  prior: ReadyWatchdogStateEntry | undefined,
-  next: ReadyWatchdogStateEntry,
-): boolean {
-  if (!prior) {
-    return true;
-  }
-
-  return prior.classification !== next.classification
-    || prior.detailFingerprint !== next.detailFingerprint
-    || prior.prStateKey !== next.prStateKey
-    || prior.autoUpdateAttempts !== next.autoUpdateAttempts
-    || prior.lastAutoUpdateError !== next.lastAutoUpdateError
-    || prior.lastReportedAction !== next.lastReportedAction
-    || prior.consecutiveFailurePolls !== next.consecutiveFailurePolls
-    || prior.recoveryCommand !== next.recoveryCommand
-    || prior.consecutiveFailurePolls !== next.consecutiveFailurePolls
-    || JSON.stringify(prior.remediationCategories ?? []) !== JSON.stringify(next.remediationCategories ?? [])
-    || prior.failingChecksFingerprint !== next.failingChecksFingerprint
-    || prior.failingChecksObservedCount !== next.failingChecksObservedCount
-    || prior.transientFailureCount !== next.transientFailureCount
-    || prior.transientFailureHead !== next.transientFailureHead
-    || prior.lastCiFailureCategory !== next.lastCiFailureCategory
-    || prior.lastFailingJob !== next.lastFailingJob
-    || prior.lastLocalCommand !== next.lastLocalCommand
-    || prior.terminal !== next.terminal
-    || prior.terminalReason !== next.terminalReason
-    || prior.terminalAttempts !== next.terminalAttempts
-    || prior.terminalHeadSha !== next.terminalHeadSha;
 }
 
 function buildFindingEntry(input: {
