@@ -54,6 +54,17 @@ wavemill_build_tend_loop_command() {
   printf '%s\n' "$command"
 }
 
+wavemill_capture_tend_pane_output() {
+  local pane_id="${1:?pane id required}" session_name="${2:?session required}" repo_dir="${3:?repo dir required}"
+  local log_dir log_file pipe_command
+
+  log_dir="$repo_dir/.wavemill/logs"
+  log_file="$log_dir/tend-${session_name}.log"
+  mkdir -p "$log_dir"
+  printf -v pipe_command 'cat >> %q' "$log_file"
+  tmux pipe-pane -o -t "$pane_id" "$pipe_command" >/dev/null 2>&1 || true
+}
+
 wavemill_build_observer_loop_command() {
   local session_name="${1:?session required}"
   local repo_dir="${2:?repo dir required}"
@@ -117,16 +128,20 @@ wavemill_write_backstage_service_health() {
 }
 
 wavemill_iso8601_to_epoch() {
-  local timestamp="${1-}"
+  local timestamp="${1-}" normalized_timestamp
   [[ -n "$timestamp" ]] || return 1
 
-  if date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$timestamp" +%s >/dev/null 2>&1; then
-    date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$timestamp" +%s
+  # Node's toISOString() includes milliseconds, while BSD date's strptime
+  # format used below does not. Epoch comparisons only need whole seconds.
+  normalized_timestamp="$(printf '%s' "$timestamp" | sed -E 's/\.[0-9]+Z$/Z/')"
+
+  if date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$normalized_timestamp" +%s >/dev/null 2>&1; then
+    date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$normalized_timestamp" +%s
     return 0
   fi
 
-  if date -u -d "$timestamp" +%s >/dev/null 2>&1; then
-    date -u -d "$timestamp" +%s
+  if date -u -d "$normalized_timestamp" +%s >/dev/null 2>&1; then
+    date -u -d "$normalized_timestamp" +%s
     return 0
   fi
 
