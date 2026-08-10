@@ -659,6 +659,7 @@ export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, opti
     }
 
     const logLines = repo.millLogPath ? tailLines(repo.millLogPath, options.maxLogLines) : [];
+    const queueHealthDegraded = repo.queueHealth?.status === 'degraded';
     const repeatedReadyWatchdogLines = new Set<string>();
     const readyWatchdogEntries = logLines.map(parseReadyWatchdogLine).filter((entry): entry is ReadyWatchdogLogEntry => entry !== null);
     const readyWatchdogGroups = new Map<string, ReadyWatchdogLogEntry[]>();
@@ -706,6 +707,7 @@ export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, opti
         });
       } else if (/\bWARN\b|warning|ready watchdog|queue analysis unavailable|timed out|timeout/i.test(line)) {
         if (repeatedReadyWatchdogLines.has(line)) continue;
+        if (queueHealthDegraded && /queue analysis unavailable/i.test(line)) continue;
         findings.push({
           id: `log-warning-${repo.session}-${hashText(line)}`,
           severity: line.includes('ready watchdog') ? 'medium' : 'low',
@@ -721,15 +723,11 @@ export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, opti
     }
 
     // Analyze queue-health degradation
-    if (repo.queueHealth && repo.queueHealth.status === 'degraded') {
+    if (queueHealthDegraded) {
       const reason = repo.queueHealth.degradationReason || 'unknown';
       const episodeStartedAt = repo.queueHealth.episodeStartedAt || 'unknown';
       const failureCount = repo.queueHealth.failureCount || 1;
       const severity = failureCount >= 5 ? 'high' : failureCount >= 3 ? 'medium' : 'low';
-
-      // Suppress generic "queue analysis unavailable" log-warning findings for this episode
-      const logWarningId = `log-warning-${repo.session}-${hashText('queue analysis unavailable')}`;
-      findings = findings.filter((f) => f.id !== logWarningId);
 
       findings.push({
         id: `queue-health-degraded-${repo.session}-${hashText(episodeStartedAt)}`,

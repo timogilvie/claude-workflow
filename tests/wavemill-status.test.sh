@@ -2482,6 +2482,25 @@ else
   fail "backstage health did not render independent tend/observer status"
 fi
 
+cat > "$TMP_DIR/backstage-health.json" <<JSON
+{
+  "status": "healthy",
+  "services": {
+    "tend": {
+      "status": "healthy",
+      "heartbeatAt": "$(iso_at_offset -10)"
+    }
+  }
+}
+JSON
+run_render "$backstage_state" "$WORKTREES_DIR" "$backstage_behavior" "$backstage_output"
+backstage_disabled_render="$(cat "$backstage_output")"
+if [[ "$backstage_disabled_render" == *"Tend: healthy"* && "$backstage_disabled_render" == *"Observer: disabled"* ]]; then
+  pass "backstage health renders disabled observer when no observer service is configured"
+else
+  fail "backstage health did not render disabled observer status"
+fi
+
 cat > "$TMP_DIR/queue-health.json" <<'JSON'
 {
   "status": "degraded",

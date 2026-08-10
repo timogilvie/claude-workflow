@@ -47,6 +47,7 @@ TESTS=(
   shared/lib/native-agent/completion-gate.test.ts
   shared/lib/native-agent/coding-certification.test.ts
   shared/lib/native-agent/coding-gate.test.ts
+  shared/lib/native-agent/coding-handoff.test.ts
   shared/lib/native-agent/recovery.test.ts
   shared/lib/native-agent/cleanup.test.ts
   shared/lib/native-agent/coding-lifecycle.test.ts
@@ -114,6 +115,7 @@ TESTS=(
   shared/lib/model-registry.test.ts
   shared/lib/model-resolution.test.ts
   shared/lib/model-resolution-display.test.ts
+  shared/lib/mill-config-preflight.test.ts
   shared/lib/routing-policy.test.ts
   shared/lib/hokusai-consent.test.ts
   shared/lib/hokusai-redaction.test.ts
