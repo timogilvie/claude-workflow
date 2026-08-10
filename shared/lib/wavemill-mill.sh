@@ -5063,7 +5063,7 @@ coding_compare_commit_counts() {
 
 write_coding_uncommitted_output_artifact() {
   local issue="$1" feature_dir="$2" base_branch="$3" ahead_count="$4" behind_count="$5" dirty_paths_raw="${6:-}" summary="$7" action="$8" reason="${9:-coding_output_not_committed}"
-  local artifact slug artifact_tmp first_path dirty_paths_json
+  local artifact slug artifact_tmp first_path dirty_paths_json existing_norm new_norm
 
   artifact="$(coding_uncommitted_output_artifact_path "$feature_dir")"
   slug="$(basename "$feature_dir")"
@@ -5098,6 +5098,15 @@ write_coding_uncommitted_output_artifact() {
     }' > "$artifact_tmp"; then
     rm -f "$artifact_tmp"
     return 1
+  fi
+
+  if [[ -f "$artifact" ]]; then
+    existing_norm="$(jq -cS 'del(.detectedAt)' "$artifact" 2>/dev/null || true)"
+    new_norm="$(jq -cS 'del(.detectedAt)' "$artifact_tmp" 2>/dev/null || true)"
+    if [[ -n "$existing_norm" && -n "$new_norm" && "$existing_norm" == "$new_norm" ]]; then
+      rm -f "$artifact_tmp"
+      return 0
+    fi
   fi
 
   mv "$artifact_tmp" "$artifact" 2>/dev/null || {
