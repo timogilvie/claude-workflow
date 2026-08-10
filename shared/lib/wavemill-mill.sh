@@ -113,6 +113,21 @@ EFFECTIVE_MAX_PARALLEL="$MAX_PARALLEL"
 # Persists queue plan for launch-plan JSON emission (set during task selection).
 LAUNCH_QUEUE_PLAN=""
 
+if [[ "${WAVEMILL_READY_WATCHDOG_SOURCE_ONLY:-}" != "1" ]]; then
+  MILL_CONFIG_PREFLIGHT_TOOL="${TOOLS_DIR}/mill-config-preflight.ts"
+  if [[ "${WAVEMILL_SKIP_CONFIG_PREFLIGHT:-}" == "1" ]]; then
+    echo "WARN: skipping Mill config preflight (WAVEMILL_SKIP_CONFIG_PREFLIGHT=1)" >&2
+  elif [[ -f "$MILL_CONFIG_PREFLIGHT_TOOL" ]]; then
+    if ! npx tsx "$MILL_CONFIG_PREFLIGHT_TOOL" --repo-dir "$REPO_DIR"; then
+      echo "ERROR: Mill config preflight failed. Run: wavemill config migrate-model-settings" >&2
+      exit 1
+    fi
+  else
+    echo "ERROR: Mill config preflight tool not found at: $MILL_CONFIG_PREFLIGHT_TOOL" >&2
+    exit 1
+  fi
+fi
+
 trim_outer_whitespace() {
   local value="${1-}"
   value="${value#"${value%%[![:space:]]*}"}"
@@ -3330,6 +3345,65 @@ save_task_state() {
      --arg traceId "$_trace_id_for_state"; then
     log_warn "save_task_state: failed to save $issue"
   fi
+}
+
+mark_task_needs_user_and_defer() {
+  local issue="$1" slug="${2:-}" reason="${3:-launch_failed}" detail="${4:-launch failed}"
+  local branch wt_dir feature_dir linear_issue win recovery_action
+
+  if [[ -z "$slug" && -n "${STATE_FILE:-}" && -f "$STATE_FILE" ]]; then
+    slug="$(jq -r --arg issue "$issue" '.tasks[$issue].slug // empty' "$STATE_FILE" 2>/dev/null || true)"
+  fi
+  [[ -n "$slug" ]] || slug="$(printf '%s' "$issue" | tr '[:upper:]' '[:lower:]')"
+
+  branch="task/${slug}"
+  wt_dir="${WORKTREE_ROOT}/${slug}"
+  feature_dir="${wt_dir}/features/${slug}"
+  linear_issue="$(get_linear_issue_id "$issue" 2>/dev/null || printf '%s' "$issue")"
+  recovery_action="Retry with enter ${issue} after fixing routing, or run: wavemill config migrate-model-settings"
+
+  mkdir -p "$feature_dir" 2>/dev/null || true
+  cat > "$feature_dir/.routing-failure" <<EOF
+issue=$issue
+reason=$reason
+detail=$detail
+recovery=$recovery_action
+EOF
+  jq -n \
+    --arg issue "$issue" \
+    --arg reason "$reason" \
+    --arg detail "$detail" \
+    --arg recovery "$recovery_action" \
+    '{issue: $issue, reason: $reason, detail: $detail, recoveryAction: $recovery, createdAt: (now | todateiso8601)}' \
+    > "$feature_dir/.routing-failure.json" 2>/dev/null || true
+
+  save_task_state "$issue" "$slug" "$branch" "$wt_dir" "" "needs-user" "${AGENT_CMD:-}" "$linear_issue"
+  if [[ -n "${STATE_FILE:-}" && -f "$STATE_FILE" ]]; then
+    state_mutate "$STATE_FILE" '
+      .tasks[$issue].phase = "needs-user"
+      | .tasks[$issue].launchFailure = {
+          reason: $reason,
+          detail: $detail,
+          recoveryAction: $recovery,
+          updated: (now | todateiso8601)
+        }
+      | .tasks[$issue].updated = (now | todate)
+    ' --arg issue "$issue" --arg reason "$reason" --arg detail "$detail" --arg recovery "$recovery_action" >/dev/null || true
+  fi
+  win="${issue}-${slug}"
+  set_window_attention_state "$win" "needs-user"
+  log_error "  Selected route is not launchable for $issue: $detail. $recovery_action"
+  return 0
+}
+
+dispatch_task_and_persist() {
+  local issue="${1:-unknown}" slug="${2:-}" rc=0
+  launch_task "$@" || rc=$?
+  if (( rc != 0 )); then
+    log_error "launch_task failed for $issue (exit $rc); monitor continues"
+    mark_task_needs_user_and_defer "$issue" "$slug" "launch_failed" "launch_task exit $rc"
+  fi
+  return 0
 }
 
 persist_challenge_execution_intent() {
@@ -10743,6 +10817,15 @@ launch_task() {
           log "info" "  $issue Route (heuristic fallback): planner=$planner_model ($plan_depth), coder=$task_model ($code_depth), reviewer=$reviewer_model ($review_mode)"
         fi
       else
+        task_agent_cmd="$AGENT_CMD"
+        task_model=""
+        planner_agent=""
+        planner_model=""
+        reviewer_agent=""
+        reviewer_model=""
+        plan_depth="light"
+        code_depth="medium"
+        review_mode="static"
         cat > "$routing_failure_file" <<EOF
 issue=$issue
 packet=$route_input_file
@@ -10750,6 +10833,8 @@ saved_route=$saved_route
 reason=${route_reason:-unknown}
 exit_code=${route_rc:-0}
 debug_log=$routing_log_file
+fallback_agent=$task_agent_cmd
+recovery=Retry with enter $issue, or run: wavemill config migrate-model-settings
 EOF
         log "info" "  Workflow routing unavailable (${route_reason:-unknown}), using default agent"
       fi
@@ -10760,8 +10845,8 @@ EOF
   # Validate the selected agent exists
   if ! agent_validate_phase_launch "$task_agent_cmd" "coding" "$task_model" "$REPO_DIR"; then
     if agent_is_native_cmd "$task_agent_cmd"; then
-      log_error "  Native coder route is not launchable: agent=$task_agent_cmd model=$task_model"
-      return 1
+      mark_task_needs_user_and_defer "$issue" "$slug" "coder_route_not_launchable" "Native coder route is not launchable: agent=$task_agent_cmd model=${task_model:-agent-default}"
+      return 0
     fi
     log_warn "  Agent '$task_agent_cmd' not found, falling back to '$AGENT_CMD'"
     task_agent_cmd="$AGENT_CMD"
@@ -10771,8 +10856,8 @@ EOF
   # Validate planner and reviewer agents if they were set
   if [[ -n "$planner_agent" ]] && ! agent_validate_phase_launch "$planner_agent" "planning" "$planner_model" "$REPO_DIR"; then
     if agent_is_native_cmd "$planner_agent"; then
-      log_error "  Native planner route is not launchable: agent=$planner_agent model=$planner_model"
-      return 1
+      mark_task_needs_user_and_defer "$issue" "$slug" "planner_route_not_launchable" "Native planner route is not launchable: agent=$planner_agent model=$planner_model"
+      return 0
     fi
     log_warn "  Planner agent '$planner_agent' not found, using coder agent"
     planner_agent="$task_agent_cmd"
@@ -10780,8 +10865,8 @@ EOF
   fi
   if [[ -n "$reviewer_agent" ]] && ! agent_validate_phase_launch "$reviewer_agent" "review" "$reviewer_model" "$REPO_DIR"; then
     if agent_is_native_cmd "$reviewer_agent"; then
-      log_error "  Native reviewer route is not launchable: agent=$reviewer_agent model=$reviewer_model"
-      return 1
+      mark_task_needs_user_and_defer "$issue" "$slug" "reviewer_route_not_launchable" "Native reviewer route is not launchable: agent=$reviewer_agent model=$reviewer_model"
+      return 0
     fi
     log_warn "  Reviewer agent '$reviewer_agent' not found, using coder agent"
     reviewer_agent="$task_agent_cmd"
@@ -10867,59 +10952,65 @@ EOF
     [[ -n "${WAVEMILL_REVIEWER_MODEL:-}" ]] && reviewer_model="$WAVEMILL_REVIEWER_MODEL"
   fi
 
-  if declare -F agent_resolve_models_for_roles >/dev/null 2>&1; then
+  if declare -F agent_resolve_models_for_roles >/dev/null 2>&1 && [[ -n "$planner_model$task_model$reviewer_model" ]]; then
     if ! agent_resolve_models_for_roles "$planner_model" "$task_model" "$reviewer_model"; then
-      log_error "  Selected route is not launchable: ${AGENT_RESOLVE_LAST_DIAGNOSTIC:-agent resolution failed}"
-      return 1
+      mark_task_needs_user_and_defer "$issue" "$slug" "route_not_launchable" "${AGENT_RESOLVE_LAST_DIAGNOSTIC:-agent resolution failed}"
+      return 0
     fi
-    planner_agent="$(agent_resolve_batch_agent_for_role "planner")"
-    task_agent_cmd="$(agent_resolve_batch_agent_for_role "coder")"
-    reviewer_agent="$(agent_resolve_batch_agent_for_role "reviewer")"
+    [[ -n "$planner_model" ]] && planner_agent="$(agent_resolve_batch_agent_for_role "planner")"
+    if [[ -n "$task_model" ]]; then
+      task_agent_cmd="$(agent_resolve_batch_agent_for_role "coder")"
+    else
+      task_agent_cmd="${task_agent_cmd:-$AGENT_CMD}"
+    fi
+    [[ -n "$reviewer_model" ]] && reviewer_agent="$(agent_resolve_batch_agent_for_role "reviewer")"
   else
     if [[ -n "$planner_model" ]]; then
       if ! planner_agent="$(agent_resolve_from_model "$planner_model" "planning")"; then
-        log_error "  Selected planner route is not launchable: ${AGENT_RESOLVE_LAST_DIAGNOSTIC:-agent resolution failed}"
-        return 1
+        mark_task_needs_user_and_defer "$issue" "$slug" "planner_route_not_launchable" "${AGENT_RESOLVE_LAST_DIAGNOSTIC:-agent resolution failed}"
+        return 0
       fi
     fi
     if [[ -n "$task_model" ]]; then
       if ! task_agent_cmd="$(agent_resolve_from_model "$task_model" "coding")"; then
-        log_error "  Selected coder route is not launchable: ${AGENT_RESOLVE_LAST_DIAGNOSTIC:-agent resolution failed}"
-        return 1
+        mark_task_needs_user_and_defer "$issue" "$slug" "coder_route_not_launchable" "${AGENT_RESOLVE_LAST_DIAGNOSTIC:-agent resolution failed}"
+        return 0
       fi
+    else
+      task_agent_cmd="${task_agent_cmd:-$AGENT_CMD}"
     fi
     if [[ -n "$reviewer_model" ]]; then
       if ! reviewer_agent="$(agent_resolve_from_model "$reviewer_model" "review")"; then
-        log_error "  Selected reviewer route is not launchable: ${AGENT_RESOLVE_LAST_DIAGNOSTIC:-agent resolution failed}"
-        return 1
+        mark_task_needs_user_and_defer "$issue" "$slug" "reviewer_route_not_launchable" "${AGENT_RESOLVE_LAST_DIAGNOSTIC:-agent resolution failed}"
+        return 0
       fi
     fi
   fi
 
   if [[ -n "$planner_model" && -z "$planner_agent" ]]; then
-    log_error "  Selected planner route is not launchable: agent resolution returned empty for model=$planner_model"
-    return 1
+    mark_task_needs_user_and_defer "$issue" "$slug" "planner_route_not_launchable" "Selected planner route is not launchable: agent resolution returned empty for model=$planner_model"
+    return 0
   fi
-  if [[ -n "$task_model" && -z "$task_agent_cmd" ]]; then
-    log_error "  Selected coder route is not launchable: agent resolution returned empty for model=$task_model"
-    return 1
+  if [[ -z "$task_agent_cmd" ]]; then
+    mark_task_needs_user_and_defer "$issue" "$slug" "coder_route_not_launchable" "Selected coder route is not launchable: agent resolution returned empty for model=${task_model:-agent-default}"
+    return 0
   fi
   if [[ -n "$reviewer_model" && -z "$reviewer_agent" ]]; then
-    log_error "  Selected reviewer route is not launchable: agent resolution returned empty for model=$reviewer_model"
-    return 1
+    mark_task_needs_user_and_defer "$issue" "$slug" "reviewer_route_not_launchable" "Selected reviewer route is not launchable: agent resolution returned empty for model=$reviewer_model"
+    return 0
   fi
 
   if ! agent_validate_phase_launch "$task_agent_cmd" "coding" "$task_model" "$REPO_DIR"; then
-    log_error "  Selected coder route is not launchable: agent=$task_agent_cmd model=$task_model"
-    return 1
+    mark_task_needs_user_and_defer "$issue" "$slug" "coder_route_not_launchable" "Selected coder route is not launchable: agent=$task_agent_cmd model=${task_model:-agent-default}"
+    return 0
   fi
   if [[ -n "$planner_model" ]] && ! agent_validate_phase_launch "$planner_agent" "planning" "$planner_model" "$REPO_DIR"; then
-    log_error "  Selected planner route is not launchable: agent=$planner_agent model=$planner_model"
-    return 1
+    mark_task_needs_user_and_defer "$issue" "$slug" "planner_route_not_launchable" "Selected planner route is not launchable: agent=$planner_agent model=$planner_model"
+    return 0
   fi
   if [[ -n "$reviewer_model" ]] && ! agent_validate_phase_launch "$reviewer_agent" "review" "$reviewer_model" "$REPO_DIR"; then
-    log_error "  Selected reviewer route is not launchable: agent=$reviewer_agent model=$reviewer_model"
-    return 1
+    mark_task_needs_user_and_defer "$issue" "$slug" "reviewer_route_not_launchable" "Selected reviewer route is not launchable: agent=$reviewer_agent model=$reviewer_model"
+    return 0
   fi
 
   local challenger_planner_agent="" challenger_reviewer_agent=""
@@ -10975,16 +11066,16 @@ EOF
   fi
 
   if ! agent_validate_phase_launch "$task_agent_cmd" "coding" "$task_model" "$REPO_DIR"; then
-    log_error "  Selected coder route is not launchable: agent=$task_agent_cmd model=$task_model"
-    return 1
+    mark_task_needs_user_and_defer "$issue" "$slug" "coder_route_not_launchable" "Selected coder route is not launchable: agent=$task_agent_cmd model=${task_model:-agent-default}"
+    return 0
   fi
   if [[ -n "$planner_agent" ]] && ! agent_validate_phase_launch "$planner_agent" "planning" "$planner_model" "$REPO_DIR"; then
-    log_error "  Selected planner route is not launchable: agent=$planner_agent model=$planner_model"
-    return 1
+    mark_task_needs_user_and_defer "$issue" "$slug" "planner_route_not_launchable" "Selected planner route is not launchable: agent=$planner_agent model=$planner_model"
+    return 0
   fi
   if [[ -n "$reviewer_agent" ]] && ! agent_validate_phase_launch "$reviewer_agent" "review" "$reviewer_model" "$REPO_DIR"; then
-    log_error "  Selected reviewer route is not launchable: agent=$reviewer_agent model=$reviewer_model"
-    return 1
+    mark_task_needs_user_and_defer "$issue" "$slug" "reviewer_route_not_launchable" "Selected reviewer route is not launchable: agent=$reviewer_agent model=$reviewer_model"
+    return 0
   fi
 
   local challenger_planner_agent="" challenger_reviewer_agent=""
@@ -11663,7 +11754,7 @@ launch_selected_task_lines() {
     [[ -z "$local_line" ]] && continue
     (( launched >= free_slots )) && break
     IFS='|' read -r sel_issue sel_slug sel_title _rest <<<"$local_line"
-    launch_task "$sel_issue" "$sel_slug" "$sel_title" "$((free_slots - launched))"
+    dispatch_task_and_persist "$sel_issue" "$sel_slug" "$sel_title" "$((free_slots - launched))"
     launched=$((launched + LAST_LAUNCHED_SLOTS))
   done <<<"$selected_lines"
 
@@ -14511,7 +14602,7 @@ while :; do
                     [[ -z "$local_line" ]] && continue
                     (( launched >= free_slots )) && break
                     IFS='|' read -r sel_issue sel_slug sel_title _rest <<<"$local_line"
-                    launch_task "$sel_issue" "$sel_slug" "$sel_title" "$((free_slots - launched))"
+                    dispatch_task_and_persist "$sel_issue" "$sel_slug" "$sel_title" "$((free_slots - launched))"
                     launched=$((launched + LAST_LAUNCHED_SLOTS))
                   done <<<"$wave_selected_lines"
                   LAST_BACKLOG_FETCH=0; LAST_DISPLAY=""; SELECT_SHOW_ALL=false
@@ -14561,7 +14652,7 @@ while :; do
           while IFS= read -r local_line; do
             [[ -z "$local_line" ]] && continue
             IFS='|' read -r sel_issue sel_slug sel_title _sel_area _sel_score _sel_blocked <<<"$local_line"
-            launch_task "$sel_issue" "$sel_slug" "$sel_title" "$((free_slots - launched))"
+            dispatch_task_and_persist "$sel_issue" "$sel_slug" "$sel_title" "$((free_slots - launched))"
             launched=$((launched + LAST_LAUNCHED_SLOTS))
             if (( launched >= free_slots )); then
               break
