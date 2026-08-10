@@ -507,6 +507,12 @@ spawn_integration_window() {
   fi
 
   startup_log "Starting backstage window (tend loop + background status)..."
+  if [[ "$observer_enabled" == "true" ]]; then
+    observer_interval="$(wavemill_observer_interval_seconds "$merged")"
+    startup_log "Observer: enabled (interval=${observer_interval}s)"
+  else
+    startup_log "Observer: disabled (opt-in; enable via .observer.enabled in .wavemill-config.json; see HOK-2594)"
+  fi
   WORKTREE_ROOT="${WORKTREE_ROOT:-$REPO_DIR}"
   integration_cmd="$(wavemill_build_tend_loop_command "$SESSION" "$REPO_DIR" "$TOOLS_DIR" "integration")"
   tmux new-window -d -t "$SESSION" -n "$WAVEMILL_WINDOW_BACKSTAGE" -c "$REPO_DIR" "$integration_cmd" >/dev/null
@@ -527,7 +533,6 @@ spawn_integration_window() {
   wavemill_set_tmux_pane_title "$right_bottom_pane" "$WAVEMILL_BACKSTAGE_QUEUE_PANE_TITLE"
 
   if [[ "$observer_enabled" == "true" ]]; then
-    observer_interval="$(wavemill_observer_interval_seconds "$merged")"
     observer_max_log_lines="$(wavemill_observer_max_log_lines "$merged")"
     observer_cmd="$(wavemill_build_observer_loop_command "$SESSION" "$REPO_DIR" "$TOOLS_DIR" "$observer_interval" "$observer_max_log_lines")"
     observer_pane="$(tmux split-window -t "$right_bottom_pane" -v -p 50 -c "$REPO_DIR" -P -F '#{pane_id}' "$observer_cmd")"
