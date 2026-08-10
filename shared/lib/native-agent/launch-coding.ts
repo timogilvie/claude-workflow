@@ -46,6 +46,13 @@ import { toPiAgentTool, type AgentTool } from './tools/pi-adapter.ts';
 import type { ToolDescriptor, ToolMetadata } from './tools/types.ts';
 import { parseCodingComplete, validateCodingArtifacts, type CodingArtifacts } from './coding-artifacts.ts';
 import { registerAndRecordNativeProvenance } from './prompts.ts';
+import { buildNativePatchGuidance } from './patch-contract.ts';
+import {
+  CODING_FAILURE_HANDOFF_SCHEMA_VERSION,
+  getCodingFailureHandoffPath,
+  writeCodingFailureHandoff,
+  type CodingFailureToolError,
+} from './coding-failure-handoff.ts';
 import { updateStageResult } from '../stage-result.ts';
 import { equivalentOpenRouterModelIds } from '../openrouter-catalog.ts';
 import { logPromptUsage } from '../prompt-registry.ts';
@@ -59,6 +66,16 @@ const CODING_PROMPT_PATH = new URL('../../../tools/prompts/coding-phase.md', imp
 const CODING_PROMPT_FILE = fileURLToPath(CODING_PROMPT_PATH);
 
 type HookState = 'working' | 'idle' | 'error';
+
+interface MutationFailureTracker {
+  count: number;
+  last: CodingFailureToolError | null;
+}
+
+interface ToolCallFailureContext {
+  toolCall: { name: string };
+  result: { details: unknown; content?: Array<{ type: string; text: string }> };
+}
 
 export interface LaunchNativeCodingOptions {
   session: string;
@@ -222,7 +239,7 @@ function buildModeGuidance(operatingMode: string): string {
   return '';
 }
 
-function renderCodingSystemPrompt(input: {
+export function renderCodingSystemPrompt(input: {
   template: string;
   codeDepth: string;
   operatingMode: string;
@@ -244,6 +261,10 @@ function renderCodingSystemPrompt(input: {
     '',
     '### Native Coding Tool Rules',
     '- Use apply_patch for source edits; do not use whole-file writes for source files.',
+    '',
+    '#### apply_patch NativePatch Contract',
+    buildNativePatchGuidance(),
+    '',
     '- Use write_artifact/create_marker only for Wavemill-owned artifacts under the feature directory.',
     '- Use run_tests/run_format for verification and formatting commands inside the worktree.',
     '- Use git_add/git_commit to commit intended changed files before completion.',
@@ -285,6 +306,127 @@ function readOptional(path: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function hasCompletionArtifact(featureDir: string): boolean {
+  return existsSync(join(featureDir, '.coding-complete')) || existsSync(getBlockedCompletionPath(featureDir));
+}
+
+function isMutationToolName(toolName: string): boolean {
+  return [
+    'apply_patch',
+    'write_artifact',
+    'create_marker',
+    'update_status',
+    'run_tests',
+    'run_format',
+    'run_command',
+    'git_add',
+    'git_commit',
+  ].includes(toolName);
+}
+
+function recordMutationFailure(
+  tracker: MutationFailureTracker,
+  context: ToolCallFailureContext,
+  isError = false,
+): void {
+  const details = context.result.details;
+  const hasStructuredFailure = details
+    && typeof details === 'object'
+    && 'ok' in details
+    && (details as { ok?: unknown }).ok === false;
+  if (!hasStructuredFailure && !isError) {
+    return;
+  }
+  const raw = hasStructuredFailure ? details as Record<string, unknown> : {};
+  const tool = typeof raw.tool === 'string' ? raw.tool : context.toolCall.name;
+  const rawError = raw.error;
+  const message = formatToolErrorMessage(raw, context.result.content);
+  const error = formatToolErrorCode(rawError, message);
+  tracker.count += 1;
+  tracker.last = {
+    tool,
+    error,
+    message,
+    ...(typeof raw.retryHint === 'string' ? { retryHint: raw.retryHint } : {}),
+    ...(Object.prototype.hasOwnProperty.call(raw, 'diagnostics') ? { diagnostics: raw.diagnostics } : {}),
+  };
+}
+
+function formatToolErrorCode(rawError: unknown, message?: string): string {
+  if (typeof rawError === 'string') {
+    return rawError;
+  }
+  if (rawError && typeof rawError === 'object' && typeof (rawError as { code?: unknown }).code === 'string') {
+    return (rawError as { code: string }).code;
+  }
+  const prefix = message?.match(/^([a-z][a-z0-9_]*):/i)?.[1];
+  if (prefix) {
+    return prefix;
+  }
+  return 'tool_error';
+}
+
+function formatToolErrorMessage(
+  raw: Record<string, unknown>,
+  content?: Array<{ type: string; text: string }>,
+): string {
+  if (typeof raw.message === 'string') {
+    return raw.message;
+  }
+  const rawError = raw.error;
+  if (rawError && typeof rawError === 'object' && typeof (rawError as { message?: unknown }).message === 'string') {
+    return (rawError as { message: string }).message;
+  }
+  const text = content?.find((block) => block.type === 'text')?.text;
+  if (text) {
+    return text;
+  }
+  return 'Tool call failed.';
+}
+
+function buildNoCompletionRecoveryPrompt(tracker: MutationFailureTracker): string {
+  const last = tracker.last;
+  const lastError = last
+    ? [
+      `Last failed mutation tool: ${last.tool}`,
+      `Error code: ${last.error}`,
+      `Message: ${last.message}`,
+      last.retryHint ? `Retry hint: ${last.retryHint}` : '',
+      last.diagnostics ? `Diagnostics: ${JSON.stringify(last.diagnostics, null, 2)}` : '',
+    ].filter(Boolean).join('\n')
+    : 'No structured last mutation-tool error was recorded.';
+
+  return [
+    'The previous coding turn stopped normally without writing .coding-complete or .coding-blocked-completion.json after a mutation tool failure.',
+    '',
+    lastError,
+    '',
+    'Recover now: retry the needed edit with the documented NativePatch contract, then verify, commit, and write .coding-complete. If implementation is complete but verification is blocked by unrelated or environmental failures, write .coding-blocked-completion.json instead.',
+    '',
+    buildNativePatchGuidance(),
+  ].join('\n');
+}
+
+function buildFailureHandoffInput(input: {
+  stopReason: string;
+  tracker: MutationFailureTracker;
+  recoveryAttempted: boolean;
+}): Parameters<typeof writeCodingFailureHandoff>[1] {
+  return {
+    stage: 'coding',
+    reason: 'no_completion_artifact',
+    stopReason: input.stopReason,
+    mutationFailures: input.tracker.count,
+    lastToolError: input.tracker.last,
+    recoveryAttempted: input.recoveryAttempted,
+    suggestedAction: input.tracker.last
+      ? 'Retry native coding with the documented tool contract and the preserved last tool error.'
+      : 'Review the transcript and rerun native coding; the model stopped without a completion artifact.',
+    createdAt: new Date().toISOString(),
+    schemaVersion: CODING_FAILURE_HANDOFF_SCHEMA_VERSION,
+  };
 }
 
 function findFinalAssistantErrorMessage(messages: AgentMessage[]): string {
@@ -342,6 +484,9 @@ async function inspectCompletion(input: {
   featureDir: string;
   model: string;
   trackerCommitCount: number;
+  stopReason: string;
+  mutationFailureTracker: MutationFailureTracker;
+  recoveryAttempted: boolean;
 }): Promise<'complete' | 'blocked'> {
   const markerPath = join(input.featureDir, '.coding-complete');
   if (existsSync(markerPath)) {
@@ -383,7 +528,18 @@ async function inspectCompletion(input: {
     return 'blocked';
   }
 
-  throw new Error('Native coding completed without .coding-complete or .coding-blocked-completion.json');
+  writeCodingFailureHandoff(input.featureDir, buildFailureHandoffInput({
+    stopReason: input.stopReason,
+    tracker: input.mutationFailureTracker,
+    recoveryAttempted: input.recoveryAttempted,
+  }));
+  const handoffRelativePath = relative(process.cwd(), getCodingFailureHandoffPath(input.featureDir));
+  const last = input.mutationFailureTracker.last;
+  const lastErrorText = last ? `; last tool error (${last.tool}/${last.error}): ${last.message}` : '';
+  throw new Error(
+    'Native coding completed without .coding-complete or .coding-blocked-completion.json'
+    + `${lastErrorText}; structured handoff: ${handoffRelativePath}`,
+  );
 }
 
 export async function launchNativeCoding(options: LaunchNativeCodingOptions): Promise<LaunchNativeCodingResult> {
@@ -499,8 +655,9 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
       tools: toPiTools(descriptors),
     };
 
-    writeHookStatus(hookPath, 'working', 'run_native_model', modelName, 'native');
-    const result = await runWavemillLoop({
+    const mutationFailureTracker: MutationFailureTracker = { count: 0, last: null };
+
+    const runCodingLoop = () => runWavemillLoop({
       model,
       context,
       convertToLlm: (messages) => messages as unknown as Message[],
@@ -509,15 +666,25 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
         await intendedFilesAfterToolCall(toolContext, tracker);
 
         const commandResult = await commandToolsAfterToolCall(toolContext);
-        if (commandResult?.isError) return commandResult;
+        if (commandResult?.isError) {
+          recordMutationFailure(mutationFailureTracker, toolContext);
+          return commandResult;
+        }
 
         const gitResult = await gitAfterToolCall(toolContext);
         if (gitResult?.isError) return gitResult;
 
         const gitMutationResult = await gitMutationAfterToolCall(toolContext);
-        if (gitMutationResult?.isError) return gitMutationResult;
+        if (gitMutationResult?.isError) {
+          recordMutationFailure(mutationFailureTracker, toolContext);
+          return gitMutationResult;
+        }
 
-        return codingMutationAfterToolCall(toolContext);
+        const codingMutationResult = await codingMutationAfterToolCall(toolContext);
+        if (codingMutationResult?.isError) {
+          recordMutationFailure(mutationFailureTracker, toolContext);
+        }
+        return codingMutationResult;
       },
       toolPolicy: {
         phase: 'coding',
@@ -533,19 +700,66 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
         },
       },
       onEvent: (event) => {
+        if (event.type === 'tool_execution_end' && event.isError) {
+          const details = (event.result as { details?: unknown } | undefined)?.details;
+          const alreadyRecordedByAfterToolCall = Boolean(
+            details
+            && typeof details === 'object'
+            && 'ok' in details
+            && (details as { ok?: unknown }).ok === false,
+          );
+          if (!alreadyRecordedByAfterToolCall && isMutationToolName(event.toolName)) {
+            recordMutationFailure(mutationFailureTracker, {
+              toolCall: { name: event.toolName },
+              result: {
+                details,
+                content: (event.result as { content?: Array<{ type: string; text: string }> } | undefined)?.content,
+              },
+            }, true);
+          }
+        }
         transcriptWriter.handleEvent(event);
       },
     });
+
+    writeHookStatus(hookPath, 'working', 'run_native_model', modelName, 'native');
+    let result = await runCodingLoop();
+    let recoveryAttempted = false;
 
     const providerError = findFinalAssistantErrorMessage(result.messages);
     if (providerError) {
       throw new Error(`Native coding failed: ${providerError}`);
     }
 
+    if (
+      result.stopReason === 'stop'
+      && !hasCompletionArtifact(featureDir)
+      && mutationFailureTracker.count > 0
+    ) {
+      recoveryAttempted = true;
+      writeHookStatus(hookPath, 'working', 'native_coding_recovery', 'no completion artifact after mutation failure', 'native');
+      context.messages = [
+        ...result.messages,
+        {
+          role: 'user',
+          content: buildNoCompletionRecoveryPrompt(mutationFailureTracker),
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ];
+      result = await runCodingLoop();
+      const recoveryProviderError = findFinalAssistantErrorMessage(result.messages);
+      if (recoveryProviderError) {
+        throw new Error(`Native coding failed: ${recoveryProviderError}`);
+      }
+    }
+
     const completion = await inspectCompletion({
       featureDir,
       model: modelName,
       trackerCommitCount: tracker.commitCount,
+      stopReason: result.stopReason,
+      mutationFailureTracker,
+      recoveryAttempted,
     });
     writeHookStatus(hookPath, completion === 'complete' ? 'idle' : 'working', 'process_exit', completion, 'native');
     writeTextStatus(options.session, options.issue, completion === 'complete' ? 'coding complete' : 'coding blocked-completion');
