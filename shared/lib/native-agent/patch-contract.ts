@@ -66,22 +66,118 @@ export const NATIVE_PATCH_EXAMPLE: NativePatch = {
     {
       op: 'edit',
       path: 'src/example.ts',
-      oldText: "const value = 'before';",
-      newText: "const value = 'after';",
+      oldText: 'export const value = "before";\n',
+      newText: 'export const value = "after";\n',
     },
   ],
 };
 
-export function formatNativePatchContractSummary(): string {
+export const NATIVE_PATCH_CONTRACT_SUMMARY = [
+  'NativePatch envelope: version must be 1, atomic must be true, and operations must be a non-empty array.',
+  'Operation variants:',
+  '- edit: requires path, oldText, and newText.',
+  '- edit-diff: requires path and diff.',
+  'Paths are repo-relative POSIX paths. Operations may include anchorBefore, anchorAfter, and expectedOccurrences.',
+  'Optional fuzzyMatch supports minSimilarity, maxMatchCandidates, maxContextLines, ignoreWhitespace, and requireAnchorOverlap.',
+].join('\n');
+
+export const NATIVE_PATCH_PARAMETERS_SCHEMA = {
+  type: 'object',
+  description: 'NativePatch payload. Required envelope: version: 1, atomic: true, operations: non-empty array. Use op "edit" with path/oldText/newText or op "edit-diff" with path/diff.',
+  properties: {
+    version: {
+      type: 'number',
+      enum: [NATIVE_PATCH_VERSION],
+      description: 'Required NativePatch contract version. Must be 1.',
+    },
+    atomic: {
+      type: 'boolean',
+      enum: [true],
+      description: 'Required. Must be true; all operations apply atomically or none are applied.',
+    },
+    operations: {
+      type: 'array',
+      minItems: 1,
+      description: 'Required non-empty array of edit operations. For op "edit", include path, oldText, newText. For op "edit-diff", include path and diff.',
+      items: {
+        type: 'object',
+        properties: {
+          op: {
+            type: 'string',
+            enum: ['edit', 'edit-diff'],
+            description: 'Operation variant. "edit" requires oldText/newText; "edit-diff" requires diff.',
+          },
+          path: {
+            type: 'string',
+            description: 'Repo-relative POSIX path without traversal, for example "src/app.ts".',
+          },
+          oldText: {
+            type: 'string',
+            description: 'Required for op "edit": exact existing text to replace. Must be non-empty.',
+          },
+          newText: {
+            type: 'string',
+            description: 'Required for op "edit": replacement text. May be empty to delete oldText.',
+          },
+          diff: {
+            type: 'string',
+            description: 'Required for op "edit-diff": unified diff hunk text for this path.',
+          },
+          anchorBefore: {
+            type: 'string',
+            description: 'Optional non-empty context that should appear before the edit.',
+          },
+          anchorAfter: {
+            type: 'string',
+            description: 'Optional non-empty context that should appear after the edit.',
+          },
+          expectedOccurrences: {
+            type: 'number',
+            description: 'Optional positive integer for the expected count of oldText matches.',
+          },
+        },
+        additionalProperties: true,
+      },
+    },
+    fuzzyMatch: {
+      type: 'object',
+      description: 'Optional fuzzy matching settings used when exact oldText matching needs controlled recovery.',
+      properties: {
+        minSimilarity: {
+          type: 'number',
+          description: 'Optional number between 0 and 1.',
+        },
+        maxMatchCandidates: {
+          type: 'number',
+          description: 'Optional positive integer.',
+        },
+        maxContextLines: {
+          type: 'number',
+          description: 'Optional integer greater than or equal to 0.',
+        },
+        ignoreWhitespace: {
+          type: 'boolean',
+          description: 'Optional boolean.',
+        },
+        requireAnchorOverlap: {
+          type: 'boolean',
+          description: 'Optional boolean.',
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  additionalProperties: true,
+} as const;
+
+export function buildNativePatchGuidance(): string {
   return [
-    'NativePatch contract:',
-    '- Required envelope: version: 1, atomic: true, and a non-empty operations array.',
-    '- Operation variants: edit requires path, oldText, and newText; oldText must match file content exactly and differ from newText.',
-    '- Operation variants: edit-diff requires path and diff containing a unified diff hunk.',
-    '- Optional per-operation anchors: anchorBefore, anchorAfter, expectedOccurrences.',
-    '- Optional envelope fuzzyMatch can tune fuzzy matching.',
-    '- path must be repo-relative POSIX with no absolute path or traversal.',
-    `Valid example: ${JSON.stringify(NATIVE_PATCH_EXAMPLE)}`,
+    NATIVE_PATCH_CONTRACT_SUMMARY,
+    '',
+    'Valid NativePatch example:',
+    '```json',
+    JSON.stringify(NATIVE_PATCH_EXAMPLE, null, 2),
+    '```',
   ].join('\n');
 }
 

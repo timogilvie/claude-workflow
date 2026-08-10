@@ -45,18 +45,14 @@ import { createToolRegistry } from './tools/registry.ts';
 import { toPiAgentTool, type AgentTool } from './tools/pi-adapter.ts';
 import type { ToolDescriptor, ToolMetadata } from './tools/types.ts';
 import { parseCodingComplete, validateCodingArtifacts, type CodingArtifacts } from './coding-artifacts.ts';
-import {
-  buildNoMarkerHandoff,
-  getNoMarkerHandoffPath,
-  writeNoMarkerHandoff,
-  type CodingMutationFailure,
-} from './coding-handoff.ts';
-import {
-  NATIVE_PATCH_EXAMPLE,
-  validateNativePatch,
-  type NativePatchValidationError,
-} from './patch-contract.ts';
 import { registerAndRecordNativeProvenance } from './prompts.ts';
+import { buildNativePatchGuidance } from './patch-contract.ts';
+import {
+  CODING_FAILURE_HANDOFF_SCHEMA_VERSION,
+  getCodingFailureHandoffPath,
+  writeCodingFailureHandoff,
+  type CodingFailureToolError,
+} from './coding-failure-handoff.ts';
 import { updateStageResult } from '../stage-result.ts';
 import { equivalentOpenRouterModelIds } from '../openrouter-catalog.ts';
 import { logPromptUsage } from '../prompt-registry.ts';
@@ -68,11 +64,18 @@ import {
 
 const CODING_PROMPT_PATH = new URL('../../../tools/prompts/coding-phase.md', import.meta.url);
 const CODING_PROMPT_FILE = fileURLToPath(CODING_PROMPT_PATH);
-const MUTATION_FAILURE_TOOLS = new Set(['apply_patch', 'write_artifact', 'create_marker', 'git_add', 'git_commit']);
-const NO_MARKER_FAILURE_PREFIX = 'Native coding completed without .coding-complete or .coding-blocked-completion.json';
-const TRACKED_TEXT_LIMIT = 4096;
 
 type HookState = 'working' | 'idle' | 'error';
+
+interface MutationFailureTracker {
+  count: number;
+  last: CodingFailureToolError | null;
+}
+
+interface ToolCallFailureContext {
+  toolCall: { name: string };
+  result: { details: unknown; content?: Array<{ type: string; text: string }> };
+}
 
 export interface LaunchNativeCodingOptions {
   session: string;
@@ -236,7 +239,7 @@ function buildModeGuidance(operatingMode: string): string {
   return '';
 }
 
-function renderCodingSystemPrompt(input: {
+export function renderCodingSystemPrompt(input: {
   template: string;
   codeDepth: string;
   operatingMode: string;
@@ -258,7 +261,10 @@ function renderCodingSystemPrompt(input: {
     '',
     '### Native Coding Tool Rules',
     '- Use apply_patch for source edits; do not use whole-file writes for source files.',
-    `- apply_patch payloads must follow the NativePatch envelope: {"version": 1, "atomic": true, "operations": [{"op": "edit", "path": "...", "oldText": "...", "newText": "..."}]} (or {"op": "edit-diff", "path": "...", "diff": "..."}). Example: ${JSON.stringify(NATIVE_PATCH_EXAMPLE)}`,
+    '',
+    '#### apply_patch NativePatch Contract',
+    buildNativePatchGuidance(),
+    '',
     '- Use write_artifact/create_marker only for Wavemill-owned artifacts under the feature directory.',
     '- Use run_tests/run_format for verification and formatting commands inside the worktree.',
     '- Use git_add/git_commit to commit intended changed files before completion.',
@@ -300,6 +306,127 @@ function readOptional(path: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function hasCompletionArtifact(featureDir: string): boolean {
+  return existsSync(join(featureDir, '.coding-complete')) || existsSync(getBlockedCompletionPath(featureDir));
+}
+
+function isMutationToolName(toolName: string): boolean {
+  return [
+    'apply_patch',
+    'write_artifact',
+    'create_marker',
+    'update_status',
+    'run_tests',
+    'run_format',
+    'run_command',
+    'git_add',
+    'git_commit',
+  ].includes(toolName);
+}
+
+function recordMutationFailure(
+  tracker: MutationFailureTracker,
+  context: ToolCallFailureContext,
+  isError = false,
+): void {
+  const details = context.result.details;
+  const hasStructuredFailure = details
+    && typeof details === 'object'
+    && 'ok' in details
+    && (details as { ok?: unknown }).ok === false;
+  if (!hasStructuredFailure && !isError) {
+    return;
+  }
+  const raw = hasStructuredFailure ? details as Record<string, unknown> : {};
+  const tool = typeof raw.tool === 'string' ? raw.tool : context.toolCall.name;
+  const rawError = raw.error;
+  const message = formatToolErrorMessage(raw, context.result.content);
+  const error = formatToolErrorCode(rawError, message);
+  tracker.count += 1;
+  tracker.last = {
+    tool,
+    error,
+    message,
+    ...(typeof raw.retryHint === 'string' ? { retryHint: raw.retryHint } : {}),
+    ...(Object.prototype.hasOwnProperty.call(raw, 'diagnostics') ? { diagnostics: raw.diagnostics } : {}),
+  };
+}
+
+function formatToolErrorCode(rawError: unknown, message?: string): string {
+  if (typeof rawError === 'string') {
+    return rawError;
+  }
+  if (rawError && typeof rawError === 'object' && typeof (rawError as { code?: unknown }).code === 'string') {
+    return (rawError as { code: string }).code;
+  }
+  const prefix = message?.match(/^([a-z][a-z0-9_]*):/i)?.[1];
+  if (prefix) {
+    return prefix;
+  }
+  return 'tool_error';
+}
+
+function formatToolErrorMessage(
+  raw: Record<string, unknown>,
+  content?: Array<{ type: string; text: string }>,
+): string {
+  if (typeof raw.message === 'string') {
+    return raw.message;
+  }
+  const rawError = raw.error;
+  if (rawError && typeof rawError === 'object' && typeof (rawError as { message?: unknown }).message === 'string') {
+    return (rawError as { message: string }).message;
+  }
+  const text = content?.find((block) => block.type === 'text')?.text;
+  if (text) {
+    return text;
+  }
+  return 'Tool call failed.';
+}
+
+function buildNoCompletionRecoveryPrompt(tracker: MutationFailureTracker): string {
+  const last = tracker.last;
+  const lastError = last
+    ? [
+      `Last failed mutation tool: ${last.tool}`,
+      `Error code: ${last.error}`,
+      `Message: ${last.message}`,
+      last.retryHint ? `Retry hint: ${last.retryHint}` : '',
+      last.diagnostics ? `Diagnostics: ${JSON.stringify(last.diagnostics, null, 2)}` : '',
+    ].filter(Boolean).join('\n')
+    : 'No structured last mutation-tool error was recorded.';
+
+  return [
+    'The previous coding turn stopped normally without writing .coding-complete or .coding-blocked-completion.json after a mutation tool failure.',
+    '',
+    lastError,
+    '',
+    'Recover now: retry the needed edit with the documented NativePatch contract, then verify, commit, and write .coding-complete. If implementation is complete but verification is blocked by unrelated or environmental failures, write .coding-blocked-completion.json instead.',
+    '',
+    buildNativePatchGuidance(),
+  ].join('\n');
+}
+
+function buildFailureHandoffInput(input: {
+  stopReason: string;
+  tracker: MutationFailureTracker;
+  recoveryAttempted: boolean;
+}): Parameters<typeof writeCodingFailureHandoff>[1] {
+  return {
+    stage: 'coding',
+    reason: 'no_completion_artifact',
+    stopReason: input.stopReason,
+    mutationFailures: input.tracker.count,
+    lastToolError: input.tracker.last,
+    recoveryAttempted: input.recoveryAttempted,
+    suggestedAction: input.tracker.last
+      ? 'Retry native coding with the documented tool contract and the preserved last tool error.'
+      : 'Review the transcript and rerun native coding; the model stopped without a completion artifact.',
+    createdAt: new Date().toISOString(),
+    schemaVersion: CODING_FAILURE_HANDOFF_SCHEMA_VERSION,
+  };
 }
 
 function findFinalAssistantErrorMessage(messages: AgentMessage[]): string {
@@ -358,12 +485,11 @@ async function inspectCompletion(input: {
   model: string;
   trackerCommitCount: number;
   stopReason: string;
-  mutationFailures: MutationFailureSnapshot;
-  wtDir: string;
+  mutationFailureTracker: MutationFailureTracker;
+  recoveryAttempted: boolean;
 }): Promise<'complete' | 'blocked'> {
   const markerPath = join(input.featureDir, '.coding-complete');
   if (existsSync(markerPath)) {
-    rmSync(getNoMarkerHandoffPath(input.featureDir), { force: true });
     const parsed = parseCodingComplete(readFileSync(markerPath, 'utf-8'));
     if (!parsed.ok) {
       throw new Error(`Native coding wrote invalid .coding-complete: ${parsed.errors.map((error) => error.message).join('; ')}`);
@@ -384,7 +510,6 @@ async function inspectCompletion(input: {
 
   const blockedPath = getBlockedCompletionPath(input.featureDir);
   if (existsSync(blockedPath)) {
-    rmSync(getNoMarkerHandoffPath(input.featureDir), { force: true });
     const blocked = await readBlockedCompletion(blockedPath);
     if (!blocked.ok) {
       throw new Error(`Native coding wrote invalid .coding-blocked-completion.json: ${blocked.message}`);
@@ -403,185 +528,18 @@ async function inspectCompletion(input: {
     return 'blocked';
   }
 
-  const handoff = buildNoMarkerHandoff({
+  writeCodingFailureHandoff(input.featureDir, buildFailureHandoffInput({
     stopReason: input.stopReason,
-    model: input.model,
-    mutationFailureCount: input.mutationFailures.count,
-    lastMutationFailure: input.mutationFailures.last,
-  });
-  let handoffPath = getNoMarkerHandoffPath(input.featureDir);
-  try {
-    handoffPath = writeNoMarkerHandoff(input.featureDir, handoff);
-  } catch {
-    // Best-effort artifact; preserve the enriched terminal failure below.
-  }
-
-  let message = NO_MARKER_FAILURE_PREFIX;
-  if (input.mutationFailures.last) {
-    const failure = input.mutationFailures.last;
-    message += `. Last mutation tool failure: ${failure.tool} ${failure.error}: ${failure.message}`;
-  }
-  message += `. Structured handoff: ${relative(input.wtDir, handoffPath)}.`;
-  throw new Error(message);
-}
-
-interface MutationFailureSnapshot {
-  count: number;
-  last: CodingMutationFailure | null;
-}
-
-function createMutationFailureTracker() {
-  let count = 0;
-  let last: CodingMutationFailure | null = null;
-  const handledToolCallIds = new Set<string>();
-
-  return {
-    record(toolName: string, result: unknown, toolCallId?: string): void {
-      if (toolCallId && handledToolCallIds.has(toolCallId)) {
-        return;
-      }
-      const failure = extractMutationFailure(toolName, result);
-      if (!failure) {
-        return;
-      }
-      if (toolCallId) {
-        handledToolCallIds.add(toolCallId);
-      }
-      count += 1;
-      last = failure;
-    },
-    recordBeforeToolCall(toolCall: unknown, args: unknown): void {
-      if (!isRecord(toolCall) || toolCall.name !== 'apply_patch' || typeof toolCall.id !== 'string') {
-        return;
-      }
-      if (handledToolCallIds.has(toolCall.id)) {
-        return;
-      }
-      const patch = isRecord(args) ? args.patch : undefined;
-      const validation = validateNativePatch(patch);
-      if (validation.ok) {
-        return;
-      }
-      handledToolCallIds.add(toolCall.id);
-      count += 1;
-      last = {
-        tool: 'apply_patch',
-        error: 'invalid_patch',
-        message: 'Patch payload did not match the NativePatch contract.',
-        retryHint: 'Fix the listed schema errors and retry; follow the valid example in this message.',
-        diagnostics: truncateTrackedValue(validation.errors) as NativePatchValidationError[],
-      };
-    },
-    recordEvent(event: unknown): void {
-      if (!isRecord(event) || event.type !== 'tool_execution_end' || typeof event.toolName !== 'string') {
-        return;
-      }
-      this.record(event.toolName, event.result, typeof event.toolCallId === 'string' ? event.toolCallId : undefined);
-    },
-    snapshot(): MutationFailureSnapshot {
-      return { count, last };
-    },
-  };
-}
-
-function extractMutationFailure(toolName: string, result: unknown): CodingMutationFailure | null {
-  if (!MUTATION_FAILURE_TOOLS.has(toolName)) {
-    return null;
-  }
-  const details = isRecord(result) ? result.details : undefined;
-  if (isRecord(details) && details.ok === false) {
-    const normalizedError = normalizeFailureError(details.error);
-    const message = typeof details.message === 'string'
-      ? details.message
-      : normalizedError.message || JSON.stringify(details.error ?? 'tool failed');
-    const retryHint = typeof details.retryHint === 'string' ? truncateTrackedText(details.retryHint) : undefined;
-
-    return {
-      tool: toolName,
-      error: truncateTrackedText(normalizedError.code),
-      message: truncateTrackedText(message),
-      ...(retryHint ? { retryHint } : {}),
-      ...(Object.prototype.hasOwnProperty.call(details, 'diagnostics')
-        ? { diagnostics: truncateTrackedValue(details.diagnostics) }
-        : {}),
-    };
-  }
-
-  const contentText = extractToolContentText(result);
-  if (!contentText) {
-    return null;
-  }
-  const patchDiagnostics = toolName === 'apply_patch' && contentText.includes('NativePatch contract')
-    ? parseNativePatchDiagnostics(contentText)
-    : [];
-  return {
-    tool: toolName,
-    error: toolName === 'apply_patch' && contentText.includes('NativePatch contract') ? 'invalid_patch' : 'tool_error',
-    message: truncateTrackedText(firstNonEmptyLine(contentText)),
-    ...(patchDiagnostics.length > 0 ? { diagnostics: patchDiagnostics } : {}),
-  };
-}
-
-function extractToolContentText(result: unknown): string {
-  if (!isRecord(result) || !Array.isArray(result.content)) {
-    return '';
-  }
-  return result.content
-    .map((block) => (isRecord(block) && block.type === 'text' && typeof block.text === 'string' ? block.text : ''))
-    .filter(Boolean)
-    .join('\n');
-}
-
-function parseNativePatchDiagnostics(text: string): Array<{ path: string; message: string }> {
-  const diagnostics: Array<{ path: string; message: string }> = [];
-  for (const line of text.split('\n')) {
-    const match = /^- (\$[^:]+): (.+)$/.exec(line.trim());
-    if (match) {
-      diagnostics.push({ path: match[1]!, message: match[2]! });
-    }
-  }
-  return diagnostics;
-}
-
-function firstNonEmptyLine(text: string): string {
-  return text.split('\n').find((line) => line.trim())?.trim() ?? text;
-}
-
-function normalizeFailureError(error: unknown): { code: string; message: string } {
-  if (typeof error === 'string') {
-    return { code: error, message: '' };
-  }
-  if (isRecord(error)) {
-    const code = typeof error.code === 'string' ? error.code : 'tool_error';
-    const message = typeof error.message === 'string' ? error.message : '';
-    return { code, message };
-  }
-  return { code: 'tool_error', message: '' };
-}
-
-function truncateTrackedValue(value: unknown): unknown {
-  const serialized = truncateTrackedText(safeStringify(value));
-  try {
-    return JSON.parse(serialized) as unknown;
-  } catch {
-    return serialized;
-  }
-}
-
-function truncateTrackedText(text: string): string {
-  return text.length > TRACKED_TEXT_LIMIT ? `${text.slice(0, TRACKED_TEXT_LIMIT)}...[truncated]` : text;
-}
-
-function safeStringify(value: unknown): string {
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+    tracker: input.mutationFailureTracker,
+    recoveryAttempted: input.recoveryAttempted,
+  }));
+  const handoffRelativePath = relative(process.cwd(), getCodingFailureHandoffPath(input.featureDir));
+  const last = input.mutationFailureTracker.last;
+  const lastErrorText = last ? `; last tool error (${last.tool}/${last.error}): ${last.message}` : '';
+  throw new Error(
+    'Native coding completed without .coding-complete or .coding-blocked-completion.json'
+    + `${lastErrorText}; structured handoff: ${handoffRelativePath}`,
+  );
 }
 
 export async function launchNativeCoding(options: LaunchNativeCodingOptions): Promise<LaunchNativeCodingResult> {
@@ -593,13 +551,11 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
   const operatingMode = options.operatingMode ?? 'normal';
 
   mkdirSync(featureDir, { recursive: true });
-  rmSync(getNoMarkerHandoffPath(featureDir), { force: true });
   writeHookStatus(hookPath, 'working', 'launch_native_coding', options.loopModelOverride?.name ?? 'native', 'native');
   writeTextStatus(options.session, options.issue, 'native coding starting');
 
   try {
     const tracker = createIntendedFileTracker();
-    const mutationFailureTracker = createMutationFailureTracker();
     const descriptors = [
       ...createReadOnlyTools(options.wtDir),
       ...createGitTools(options.wtDir),
@@ -699,29 +655,36 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
       tools: toPiTools(descriptors),
     };
 
-    writeHookStatus(hookPath, 'working', 'run_native_model', modelName, 'native');
-    const result = await runWavemillLoop({
+    const mutationFailureTracker: MutationFailureTracker = { count: 0, last: null };
+
+    const runCodingLoop = () => runWavemillLoop({
       model,
       context,
       convertToLlm: (messages) => messages as unknown as Message[],
       signal: options.signal,
-      beforeToolCall: async (toolContext) => {
-        mutationFailureTracker.recordBeforeToolCall(toolContext.toolCall, toolContext.args);
-        return undefined;
-      },
       afterToolCall: async (toolContext, signal) => {
         await intendedFilesAfterToolCall(toolContext, tracker);
 
         const commandResult = await commandToolsAfterToolCall(toolContext);
-        if (commandResult?.isError) return commandResult;
+        if (commandResult?.isError) {
+          recordMutationFailure(mutationFailureTracker, toolContext);
+          return commandResult;
+        }
 
         const gitResult = await gitAfterToolCall(toolContext);
         if (gitResult?.isError) return gitResult;
 
         const gitMutationResult = await gitMutationAfterToolCall(toolContext);
-        if (gitMutationResult?.isError) return gitMutationResult;
+        if (gitMutationResult?.isError) {
+          recordMutationFailure(mutationFailureTracker, toolContext);
+          return gitMutationResult;
+        }
 
-        return codingMutationAfterToolCall(toolContext);
+        const codingMutationResult = await codingMutationAfterToolCall(toolContext);
+        if (codingMutationResult?.isError) {
+          recordMutationFailure(mutationFailureTracker, toolContext);
+        }
+        return codingMutationResult;
       },
       toolPolicy: {
         phase: 'coding',
@@ -737,14 +700,57 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
         },
       },
       onEvent: (event) => {
-        mutationFailureTracker.recordEvent(event);
+        if (event.type === 'tool_execution_end' && event.isError) {
+          const details = (event.result as { details?: unknown } | undefined)?.details;
+          const alreadyRecordedByAfterToolCall = Boolean(
+            details
+            && typeof details === 'object'
+            && 'ok' in details
+            && (details as { ok?: unknown }).ok === false,
+          );
+          if (!alreadyRecordedByAfterToolCall && isMutationToolName(event.toolName)) {
+            recordMutationFailure(mutationFailureTracker, {
+              toolCall: { name: event.toolName },
+              result: {
+                details,
+                content: (event.result as { content?: Array<{ type: string; text: string }> } | undefined)?.content,
+              },
+            }, true);
+          }
+        }
         transcriptWriter.handleEvent(event);
       },
     });
 
+    writeHookStatus(hookPath, 'working', 'run_native_model', modelName, 'native');
+    let result = await runCodingLoop();
+    let recoveryAttempted = false;
+
     const providerError = findFinalAssistantErrorMessage(result.messages);
     if (providerError) {
       throw new Error(`Native coding failed: ${providerError}`);
+    }
+
+    if (
+      result.stopReason === 'stop'
+      && !hasCompletionArtifact(featureDir)
+      && mutationFailureTracker.count > 0
+    ) {
+      recoveryAttempted = true;
+      writeHookStatus(hookPath, 'working', 'native_coding_recovery', 'no completion artifact after mutation failure', 'native');
+      context.messages = [
+        ...result.messages,
+        {
+          role: 'user',
+          content: buildNoCompletionRecoveryPrompt(mutationFailureTracker),
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ];
+      result = await runCodingLoop();
+      const recoveryProviderError = findFinalAssistantErrorMessage(result.messages);
+      if (recoveryProviderError) {
+        throw new Error(`Native coding failed: ${recoveryProviderError}`);
+      }
     }
 
     const completion = await inspectCompletion({
@@ -752,8 +758,8 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
       model: modelName,
       trackerCommitCount: tracker.commitCount,
       stopReason: result.stopReason,
-      mutationFailures: mutationFailureTracker.snapshot(),
-      wtDir: options.wtDir,
+      mutationFailureTracker,
+      recoveryAttempted,
     });
     writeHookStatus(hookPath, completion === 'complete' ? 'idle' : 'working', 'process_exit', completion, 'native');
     writeTextStatus(options.session, options.issue, completion === 'complete' ? 'coding complete' : 'coding blocked-completion');

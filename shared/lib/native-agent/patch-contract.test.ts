@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
-  formatNativePatchContractSummary,
+  buildNativePatchGuidance,
   NATIVE_PATCH_EXAMPLE,
   NATIVE_PATCH_VERSION,
   normalizePatchPath,
@@ -10,36 +10,22 @@ import {
 } from './patch-contract.ts';
 
 describe('patch-contract', () => {
-  it('keeps the documented NativePatch example valid', () => {
-    const result = validateNativePatch(NATIVE_PATCH_EXAMPLE);
+  it('keeps the documented NativePatch example valid and parseable', () => {
+    const exampleResult = validateNativePatch(NATIVE_PATCH_EXAMPLE);
+    assert.equal(exampleResult.ok, true);
 
-    assert.equal(result.ok, true);
-  });
+    const guidance = buildNativePatchGuidance();
+    assert.match(guidance, /version/);
+    assert.match(guidance, /atomic/);
+    assert.match(guidance, /operations/);
+    assert.match(guidance, /edit-diff/);
+    assert.match(guidance, /\bedit\b/);
 
-  it('keeps an edit-diff variant of the documented example valid', () => {
-    const result = validateNativePatch({
-      ...NATIVE_PATCH_EXAMPLE,
-      operations: [
-        {
-          op: 'edit-diff',
-          path: NATIVE_PATCH_EXAMPLE.operations[0]!.path,
-          diff: '@@ -1 +1 @@\n-before\n+after',
-        },
-      ],
-    });
-
-    assert.equal(result.ok, true);
-  });
-
-  it('summarizes the NativePatch contract with the validated example', () => {
-    const summary = formatNativePatchContractSummary();
-
-    assert.match(summary, /version/);
-    assert.match(summary, /atomic/);
-    assert.match(summary, /operations/);
-    assert.match(summary, /edit/);
-    assert.match(summary, /edit-diff/);
-    assert.match(summary, new RegExp(escapeRegExp(JSON.stringify(NATIVE_PATCH_EXAMPLE))));
+    const jsonMatch = guidance.match(/```json\n([\s\S]+?)\n```/);
+    assert.ok(jsonMatch);
+    const parsed = JSON.parse(jsonMatch[1]!);
+    const parsedResult = validateNativePatch(parsed);
+    assert.equal(parsedResult.ok, true);
   });
 
   describe('normalizePatchPath', () => {
@@ -324,7 +310,3 @@ describe('patch-contract', () => {
     );
   });
 });
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}

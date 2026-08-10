@@ -3,12 +3,12 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, describe, it } from 'node:test';
-import { NATIVE_PATCH_EXAMPLE } from '../patch-contract.ts';
 import {
   applyPatchAfterToolCall,
   createApplyPatchTool,
   type ApplyPatchDetails,
 } from './apply-patch-tool.ts';
+import { validateNativePatch } from '../patch-contract.ts';
 
 const dirsToClean = new Set<string>();
 
@@ -66,7 +66,7 @@ describe('native-agent apply_patch tool', () => {
     assert.equal(details.ok, false);
     if (!details.ok) {
       assert.equal(details.error, 'invalid_patch');
-      assert.equal(details.retryHint, 'Fix the listed schema errors and retry; follow the valid example in this message.');
+      assert.equal(details.retryHint, 'Fix the patch schema errors and retry with the valid NativePatch example shown in the tool result.');
       assert.ok(Array.isArray(details.diagnostics));
       assert.match(result.content[0]!.text, /NativePatch contract/);
     }
@@ -78,40 +78,40 @@ describe('native-agent apply_patch tool', () => {
     assert.deepEqual(afterCall, { isError: true });
   });
 
-  it('returns actionable diagnostics for a Kimi-like malformed patch payload', async () => {
-    const repo = createRepo('apply-patch-kimi-invalid-');
+  it('returns actionable diagnostics and a valid example for Kimi-like missing envelope fields', async () => {
+    const repo = createRepo('apply-patch-missing-envelope-');
     const tool = createApplyPatchTool(repo);
 
-    const result = await tool.execute('call-kimi', {
+    const result = await tool.execute('call-missing-envelope', {
       patch: {
-        operations: [
-          {
-            path: 'src/app.ts',
-            oldText: "export const message = 'before';\n",
-            newText: "export const message = 'after';\n",
-          },
-        ],
+        operations: [{
+          op: 'edit',
+          path: 'src/app.ts',
+          oldText: 'a',
+          newText: 'b',
+        }],
       } as any,
     });
 
-    const details = result.details as ApplyPatchDetails;
-    assert.equal(details.ok, false);
-    if (!details.ok) {
-      assert.equal(details.error, 'invalid_patch');
-      assert.ok(Array.isArray(details.diagnostics));
-      assert.deepEqual(details.diagnostics.map((diagnostic) => diagnostic.path), [
-        '$.version',
-        '$.atomic',
-        '$.operations[0].op',
-      ]);
-    }
     const text = result.content[0]!.text;
     assert.match(text, /\$\.version/);
     assert.match(text, /\$\.atomic/);
-    assert.match(text, /Required envelope/);
-    assert.match(text, /\{op: "edit", path, oldText, newText\}/);
-    assert.match(text, /\{op: "edit-diff", path, diff\}/);
-    assert.match(text, new RegExp(escapeRegExp(JSON.stringify(NATIVE_PATCH_EXAMPLE))));
+    assertValidExampleInText(text);
+  });
+
+  it('returns actionable diagnostics and a valid example for wrong-shaped payloads', async () => {
+    const repo = createRepo('apply-patch-wrong-shape-');
+    const tool = createApplyPatchTool(repo);
+
+    const result = await tool.execute('call-wrong-shape', {
+      patch: { files: [{ path: 'src/app.ts', content: 'b' }] } as any,
+    });
+
+    const text = result.content[0]!.text;
+    assert.match(text, /\$\.version/);
+    assert.match(text, /\$\.atomic/);
+    assert.match(text, /\$\.operations/);
+    assertValidExampleInText(text);
   });
 
   it('surfaces patch rejection diagnostics and retry hints', async () => {
@@ -190,6 +190,9 @@ function writeFixture(repo: string, relativePath: string, contents: string): voi
   writeFileSync(absolutePath, contents, 'utf-8');
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function assertValidExampleInText(text: string): void {
+  const jsonMatch = text.match(/```json\n([\s\S]+?)\n```/);
+  assert.ok(jsonMatch);
+  const validation = validateNativePatch(JSON.parse(jsonMatch[1]!));
+  assert.equal(validation.ok, true);
 }
