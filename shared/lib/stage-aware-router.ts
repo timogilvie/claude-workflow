@@ -65,6 +65,8 @@ export interface StageAwareOptions extends StageAwareConstraints {
   stageBlendWeight?: number;
   queryInput?: Partial<TaskDescriptorInput>;
   randomFn?: () => number;
+  /** Optional clock injection for deterministic exploration/recency evaluation. */
+  nowMs?: number;
 }
 
 export interface StageAwareDecision extends WorkflowRouteDecision {
@@ -1130,7 +1132,7 @@ export function routeStageAwareWithContext(
       options.maxCostUsd,
       options.randomFn || Math.random,
       (modelId) => boostRegistry
-        ? recencyMultiplier(boostRegistry.models[modelId]?.releasedAt, explorationConfig)
+        ? recencyMultiplier(boostRegistry.models[modelId]?.releasedAt, explorationConfig, options.nowMs)
         : 1,
     );
     finalSelection = explorationResult.selection;
