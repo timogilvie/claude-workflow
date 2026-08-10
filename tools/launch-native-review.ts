@@ -17,7 +17,16 @@ import { createComment, getIssue, updateComment } from '../shared/lib/linear.ts'
 function readOption(name: string): string | undefined {
   const index = process.argv.indexOf(`--${name}`);
   if (index === -1) return undefined;
-  return process.argv[index + 1];
+  return firstNonEmpty(process.argv[index + 1]);
+}
+
+/** Treat empty launcher exports as omitted values so they cannot suppress defaults. */
+export function firstNonEmpty(...values: Array<string | undefined>): string | undefined {
+  for (const value of values) {
+    const normalized = value?.trim();
+    if (normalized) return normalized;
+  }
+  return undefined;
 }
 
 function git(args: string[], cwd: string): string {
@@ -138,15 +147,15 @@ function buildPrBody(input: {
 }
 
 async function main(): Promise<void> {
-  const session = readOption('session') ?? process.env.WAVEMILL_SESSION ?? '';
-  const issue = readOption('issue') ?? process.env.WAVEMILL_ISSUE ?? '';
-  const slug = readOption('slug') ?? process.env.WAVEMILL_FEATURE_SLUG ?? process.env.WAVEMILL_SLUG ?? '';
-  const wtDir = resolve(readOption('wt-dir') ?? process.env.WAVEMILL_WT_DIR ?? process.cwd());
-  const repoDir = resolve(readOption('repo-dir') ?? process.env.WAVEMILL_REPO_DIR ?? process.cwd());
-  const featureDir = resolve(readOption('feature-dir') ?? join(wtDir, 'features', slug));
-  const title = readOption('title') ?? process.env.WAVEMILL_TITLE ?? issue;
-  const baseBranch = readOption('base-branch') ?? process.env.WAVEMILL_BASE_BRANCH ?? 'main';
-  const reviewerModel = process.env.WAVEMILL_RESOLVED_MODEL ?? '';
+  const session = firstNonEmpty(readOption('session'), process.env.WAVEMILL_SESSION) ?? '';
+  const issue = firstNonEmpty(readOption('issue'), process.env.WAVEMILL_ISSUE) ?? '';
+  const slug = firstNonEmpty(readOption('slug'), process.env.WAVEMILL_FEATURE_SLUG, process.env.WAVEMILL_SLUG) ?? '';
+  const wtDir = resolve(firstNonEmpty(readOption('wt-dir'), process.env.WAVEMILL_WT_DIR) ?? process.cwd());
+  const repoDir = resolve(firstNonEmpty(readOption('repo-dir'), process.env.WAVEMILL_REPO_DIR) ?? process.cwd());
+  const featureDir = resolve(firstNonEmpty(readOption('feature-dir')) ?? join(wtDir, 'features', slug));
+  const title = firstNonEmpty(readOption('title'), process.env.WAVEMILL_TITLE) ?? issue;
+  const baseBranch = firstNonEmpty(readOption('base-branch'), process.env.WAVEMILL_BASE_BRANCH) ?? 'main';
+  const reviewerModel = firstNonEmpty(process.env.WAVEMILL_RESOLVED_MODEL) ?? '';
 
   if (!session || !issue || !slug) {
     throw new Error('session, issue, and slug are required');
@@ -157,7 +166,7 @@ async function main(): Promise<void> {
     throw new Error(`could not resolve GitHub owner/repo from ${wtDir}`);
   }
 
-  const headBranch = readOption('branch') ?? process.env.WAVEMILL_BRANCH ?? git(['rev-parse', '--abbrev-ref', 'HEAD'], wtDir);
+  const headBranch = firstNonEmpty(readOption('branch'), process.env.WAVEMILL_BRANCH) ?? git(['rev-parse', '--abbrev-ref', 'HEAD'], wtDir);
   const headSha = git(['rev-parse', 'HEAD'], wtDir);
   const prTitle = title.includes(issue) ? title : `${issue}: ${title}`;
   const linearIssue = readLinearIdentifier(session, issue);
