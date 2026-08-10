@@ -25,6 +25,7 @@ describe('native review', () => {
     setReadyProvider();
 
     nativeReviewTestUtils.setRunWavemillLoop(async (config) => {
+      assert.equal(config.maxTokens, 8192);
       const message = assistantMessage(JSON.stringify({
         verdict: 'ready',
         codeReviewFindings: [],
