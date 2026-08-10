@@ -98,6 +98,8 @@ for f in \
   "$REPO_DIR"/tests/wavemill-dependency-queue-filter.test.sh \
   "$REPO_DIR"/tests/wavemill-backlog-pane-no-flash.test.sh \
   "$REPO_DIR"/tests/wavemill-mill-model-flags.test.sh \
+  "$REPO_DIR"/tests/wavemill-mill-config-preflight.test.sh \
+  "$REPO_DIR"/tests/wavemill-mill-router-fallback.test.sh \
   "$REPO_DIR"/tests/model-inheritance-chain.test.sh \
   "$REPO_DIR"/tests/wavemill-background-jobs-cleanup.test.sh \
   "$REPO_DIR"/tests/global-model-parity.test.sh \
@@ -453,7 +455,7 @@ else
       | grep -vE '^(env|stdin|stdout|stderr|json|txt|csv|pid|utf)$' \
       | grep -vE '^(true|false|yes|string|number|empty|null|undefined)$' \
       | grep -vE '^(try|catch|fromjson|add|rollout_path|thread_id|thread_row|updated_at|exits|setting|falling|tostring)$' \
-      | grep -vE '^(bad|internal|keeping|marking|rate|reduce|service|skipping|timed|too|using|wavemill|waiting)$' \
+      | grep -vE '^(bad|internal|keeping|marking|monitor|rate|reduce|service|skipping|timed|too|using|wavemill|waiting)$' \
       | grep -vE '^(advance|review)$' \
       | grep -vE '^(not_eligible|routing_error)$' \
       | grep -vE '^(a|aborted|already|available|blocked_by_count|break|coding|cp|debug|empty_queue|execute|file|fresh|gtimeout|id|launch|length|main|mapfile|missing|not|overloaded|plan|ready|required|reservation|slots|staleness|the|they|timeout|todate|todateiso8601|tonumber|tracked|user)$')
@@ -484,7 +486,7 @@ else
       linear_set_state linear_is_completed
       check_routing_complete
       fetch_candidates filter_active_issues
-      launch_task is_task_packet
+      launch_task dispatch_task_and_persist mark_task_needs_user_and_defer is_task_packet
       cleanup_dashboard_pane
       save_migration_reservation
       run_linear_retry_drain_tick
