@@ -397,6 +397,57 @@ EOF
   rm -rf "$root"
 }
 
+{
+  mapfile -t fixture < <(new_fixture "expanded-route-execution-intent-fallback")
+  root="${fixture[0]}"
+  wt_dir="${fixture[1]}"
+  state_file="${fixture[2]}"
+  feature_dir="$wt_dir/features/test-slug"
+
+  # Model the runtime state after a launch that persisted only the canonical
+  # execution intent.  There is deliberately no feature-local intent file and
+  # no legacy challengeIntent field.
+  jq '.tasks["HOK-1512_c"] = (.tasks["HOK-1512"] + {
+    challengePairId: "HOK-1512",
+    challengeRole: "challenger",
+    challengeExecutionIntent: {
+      schemaVersion: 1,
+      pairId: "HOK-1512",
+      selectedStage: "review",
+      primary: {
+        pairId: "HOK-1512", side: "primary", challengeStage: "review",
+        expectedRoute: {planner: "bootstrap-planner", coder: "bootstrap-coder", reviewer: "bootstrap-reviewer", planDepth: "light", codeDepth: "medium", reviewMode: "static"}
+      },
+      challenger: {
+        pairId: "HOK-1512", side: "challenger", challengeStage: "review",
+        expectedRoute: {planner: "bootstrap-planner", coder: "bootstrap-coder", reviewer: "qwen-3-coder", planDepth: "light", codeDepth: "medium", reviewMode: "llm"}
+      }
+    }
+  })' "$state_file" > "$root/state.tmp"
+  mv "$root/state.tmp" "$state_file"
+  cat > "$feature_dir/.post-expansion-route.json" <<'EOF'
+{
+  "planner": "bootstrap-planner",
+  "coder": "bootstrap-coder",
+  "reviewer": "gpt-5.5",
+  "planDepth": "light",
+  "codeDepth": "medium",
+  "reviewMode": "llm"
+}
+EOF
+
+  if run_apply "$feature_dir" "$state_file" "HOK-1512_c" \
+    && [[ "$(jq -r '.reviewer' "$feature_dir/.routing-complete")" == "qwen-3-coder" ]] \
+    && [[ "$(jq -r '.review.model' "$feature_dir/.phase-config.json")" == "qwen-3-coder" ]] \
+    && [[ "$(jq -r '.tasks["HOK-1512_c"].reviewerModel' "$state_file")" == "qwen-3-coder" ]] \
+    && [[ "$(jq -r '.challengeIntentApplied' "$feature_dir/.routing-complete")" == "true" ]]; then
+    pass "canonical execution intent preserves a Qwen reviewer through rerouting"
+  else
+    fail "canonical execution intent did not preserve the Qwen reviewer"
+  fi
+  rm -rf "$root"
+}
+
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 

@@ -72,6 +72,56 @@ All key components are trimmed. Repo slugs and labels are lower-cased for case-i
 
 ## Tool Request/Response Schemas
 
+### Native coding `apply_patch`
+
+Native coding source edits use the `NativePatch` envelope from
+`shared/lib/native-agent/patch-contract.ts`.
+
+**Request:**
+```json
+{
+  "patch": {
+    "version": 1,
+    "atomic": true,
+    "operations": [
+      {
+        "op": "edit",
+        "path": "src/example.ts",
+        "oldText": "const value = 'before';",
+        "newText": "const value = 'after';"
+      }
+    ]
+  }
+}
+```
+
+`version: 1`, `atomic: true`, and a non-empty `operations` array are required.
+`path` is repo-relative POSIX with no absolute path or traversal. Operation
+variants are:
+
+- `edit`: requires `path`, `oldText`, and `newText`; `oldText` must match file
+  content exactly and differ from `newText`.
+- `edit-diff`: requires `path` and `diff` containing a unified diff hunk.
+
+Operations may include `anchorBefore`, `anchorAfter`, and
+`expectedOccurrences`. The envelope may include `fuzzyMatch` settings.
+
+**Validation errors:** `invalid_patch` means the payload did not match the
+NativePatch schema. The tool response includes visible per-field diagnostics,
+the required envelope, operation variants, and a compact valid example.
+
+**Runtime rejections:** `patch_rejected` means the payload schema was valid but
+the edit could not be applied, for example because `oldText` was not found or an
+anchor was ambiguous. The response includes a retry hint and live-context
+diagnostics when available.
+
+**No-marker recovery artifact:** if a native coding model stops normally without
+`.coding-complete` or `.coding-blocked-completion.json` after mutation-tool
+failures, the controller writes `.coding-no-marker-handoff.json` in the feature
+directory. The artifact has `schemaVersion: 1`, `stage: "coding"`,
+`reason: "no_completion_marker"`, `stopReason`, `model`,
+`mutationFailureCount`, `lastMutationFailure`, and `suggestedNextActions`.
+
 ### `linear_get_issue`
 
 **Request:**
@@ -410,6 +460,50 @@ Fix policy:
 - Instead, the flow accepts an injected narrow fix executor. When no executor is supplied, fixes are skipped cleanly. When an executor returns `denied`, the finding remains in the review summary and the flow continues to PR/stage-result handling.
 
 This guarantees policy-denied mutations short-circuit before side effects.
+
+---
+
+## Native Coding `apply_patch` Contract
+
+The native coding `apply_patch` tool accepts a single `patch` argument whose value is a `NativePatch` object. `shared/lib/native-agent/patch-contract.ts` is the validator source of truth and exports the prompt/tool guidance used by native coding.
+
+Required envelope:
+
+- `version`: must be `1`
+- `atomic`: must be `true`
+- `operations`: non-empty array
+
+Operation variants:
+
+- `edit`: requires `path`, `oldText`, and `newText`
+- `edit-diff`: requires `path` and `diff`
+
+Paths are repo-relative POSIX paths without traversal. Operations may include `anchorBefore`, `anchorAfter`, and `expectedOccurrences`. The optional top-level `fuzzyMatch` object supports controlled fuzzy recovery settings.
+
+Compact valid example:
+
+```json
+{
+  "version": 1,
+  "atomic": true,
+  "operations": [
+    {
+      "op": "edit",
+      "path": "src/example.ts",
+      "oldText": "export const value = \"before\";\n",
+      "newText": "export const value = \"after\";\n"
+    }
+  ]
+}
+```
+
+Malformed patch calls are rejected by `validateNativePatch` and return model-visible diagnostics as `<json-path>: <message>` plus the same compact example.
+
+## Coding Failure Handoff
+
+`.coding-failure-handoff.json` is controller-authored diagnostic output for terminal native coding failures where the model stopped without `.coding-complete` or `.coding-blocked-completion.json`. It is distinct from `.coding-blocked-completion.json`: blocked-completion is model-authored and can drive review advancement, while failure handoff preserves failure context and the stage result remains failed.
+
+The handoff records `reason: "no_completion_artifact"`, the final stop reason, mutation failure count, the last mutation-tool error when available, whether the one-time recovery prompt was attempted, and a suggested retry path.
 
 ---
 

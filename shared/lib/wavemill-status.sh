@@ -1685,6 +1685,8 @@ backstage_health_dashboard_line() {
     if heartbeat_age="$(format_backstage_heartbeat_age "$heartbeat_at" 2>/dev/null)"; then
       printf ' (%s)' "$heartbeat_age"
     fi
+  else
+    printf ' │ Observer: %b' "$(format_backstage_service_status "disabled")"
   fi
   if queue_status_line="$(queue_health_dashboard_status "$state_file" 2>/dev/null)"; then
     printf ' │ %s' "$queue_status_line"

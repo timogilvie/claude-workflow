@@ -2,12 +2,32 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  buildNativePatchGuidance,
+  NATIVE_PATCH_EXAMPLE,
   NATIVE_PATCH_VERSION,
   normalizePatchPath,
   validateNativePatch,
 } from './patch-contract.ts';
 
 describe('patch-contract', () => {
+  it('keeps the documented NativePatch example valid and parseable', () => {
+    const exampleResult = validateNativePatch(NATIVE_PATCH_EXAMPLE);
+    assert.equal(exampleResult.ok, true);
+
+    const guidance = buildNativePatchGuidance();
+    assert.match(guidance, /version/);
+    assert.match(guidance, /atomic/);
+    assert.match(guidance, /operations/);
+    assert.match(guidance, /edit-diff/);
+    assert.match(guidance, /\bedit\b/);
+
+    const jsonMatch = guidance.match(/```json\n([\s\S]+?)\n```/);
+    assert.ok(jsonMatch);
+    const parsed = JSON.parse(jsonMatch[1]!);
+    const parsedResult = validateNativePatch(parsed);
+    assert.equal(parsedResult.ok, true);
+  });
+
   describe('normalizePatchPath', () => {
     it('normalizes repo-relative POSIX paths', () => {
       assert.equal(normalizePatchPath('./src//native-agent/../native-agent/patch.ts'), null);

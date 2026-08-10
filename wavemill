@@ -492,6 +492,7 @@ run_preflight_checks() {
 
 run_mill() {
   local mill_script="$LIB_DIR/wavemill-mill.sh"
+  local preflight_tool="$TOOLS_DIR/mill-config-preflight.ts"
 
   if [[ ! -f "$mill_script" ]]; then
     echo -e "${RED}Error:${NC} Mill script not found at: $mill_script" >&2
@@ -517,6 +518,19 @@ run_mill() {
 
   if [[ ! -x "$mill_script" ]]; then
     chmod +x "$mill_script"
+  fi
+
+  if [[ "${WAVEMILL_SKIP_CONFIG_PREFLIGHT:-}" == "1" ]]; then
+    echo -e "${YELLOW}Warning:${NC} skipping Mill config preflight (WAVEMILL_SKIP_CONFIG_PREFLIGHT=1)" >&2
+  elif [[ -f "$preflight_tool" ]]; then
+    if ! npx tsx "$preflight_tool" --repo-dir "$PWD"; then
+      echo -e "${RED}Error:${NC} Mill config preflight failed." >&2
+      echo "  Run: wavemill config migrate-model-settings" >&2
+      exit 1
+    fi
+  else
+    echo -e "${RED}Error:${NC} Mill config preflight tool not found at: $preflight_tool" >&2
+    exit 1
   fi
 
   echo -e "${CYAN}Starting Wavemill Mill...${NC}"
