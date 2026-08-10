@@ -4,9 +4,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { buildNativeCodingHandoff } from './launch-native-review.ts';
+import { buildNativeCodingHandoff, firstNonEmpty } from './launch-native-review.ts';
 
 describe('launch-native-review helpers', () => {
+  it('ignores blank launcher context so required defaults remain available', () => {
+    assert.equal(firstNonEmpty('', '   ', undefined, 'main'), 'main');
+    assert.equal(firstNonEmpty('', undefined), undefined);
+  });
+
   it('builds a compact native coding handoff from completion artifacts', () => {
     const featureDir = mkdtempSync(join(tmpdir(), 'native-review-feature-'));
     try {
