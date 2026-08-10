@@ -3258,6 +3258,11 @@ save_task_state() {
       (.tasks[$issue].challengeRole // "") as $old_challenge_role |
       (.tasks[$issue].challengeModel // "") as $old_challenge_model |
       (.tasks[$issue].challengeStage // "") as $old_challenge_stage |
+      # challengeIntent is the projected, route-preservation contract created
+      # before either member of a challenge pair is expanded.  Keep it across
+      # status updates so apply_expanded_route_if_present can still protect the
+      # selected arm when a challenger reaches coding first.
+      (.tasks[$issue].challengeIntent // null) as $old_challenge_intent |
       (.tasks[$issue].challengeExecutionIntent // null) as $old_challenge_execution_intent |
       (.tasks[$issue].evalRunning // null) as $old_eval_running |
       (.tasks[$issue].comparisonRunning // null) as $old_comparison_running |
@@ -3289,6 +3294,7 @@ save_task_state() {
         challengeRole: (if $challengeRole != "" then $challengeRole else $old_challenge_role end),
         challengeModel: (if $challengeModel != "" then $challengeModel else $old_challenge_model end),
         challengeStage: (if $challengeStage != "" then $challengeStage else $old_challenge_stage end),
+        challengeIntent: $old_challenge_intent,
         challengeExecutionIntent: $old_challenge_execution_intent,
         coderModel: (if $coderModel != "" then $coderModel else $old_coderModel end),
         plannerModel: (if $plannerModel != "" then $plannerModel else $old_plannerModel end),
