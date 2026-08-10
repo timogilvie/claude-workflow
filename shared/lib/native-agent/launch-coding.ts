@@ -45,6 +45,17 @@ import { createToolRegistry } from './tools/registry.ts';
 import { toPiAgentTool, type AgentTool } from './tools/pi-adapter.ts';
 import type { ToolDescriptor, ToolMetadata } from './tools/types.ts';
 import { parseCodingComplete, validateCodingArtifacts, type CodingArtifacts } from './coding-artifacts.ts';
+import {
+  buildNoMarkerHandoff,
+  getNoMarkerHandoffPath,
+  writeNoMarkerHandoff,
+  type CodingMutationFailure,
+} from './coding-handoff.ts';
+import {
+  NATIVE_PATCH_EXAMPLE,
+  validateNativePatch,
+  type NativePatchValidationError,
+} from './patch-contract.ts';
 import { registerAndRecordNativeProvenance } from './prompts.ts';
 import { updateStageResult } from '../stage-result.ts';
 import { equivalentOpenRouterModelIds } from '../openrouter-catalog.ts';
@@ -57,6 +68,9 @@ import {
 
 const CODING_PROMPT_PATH = new URL('../../../tools/prompts/coding-phase.md', import.meta.url);
 const CODING_PROMPT_FILE = fileURLToPath(CODING_PROMPT_PATH);
+const MUTATION_FAILURE_TOOLS = new Set(['apply_patch', 'write_artifact', 'create_marker', 'git_add', 'git_commit']);
+const NO_MARKER_FAILURE_PREFIX = 'Native coding completed without .coding-complete or .coding-blocked-completion.json';
+const TRACKED_TEXT_LIMIT = 4096;
 
 type HookState = 'working' | 'idle' | 'error';
 
@@ -244,6 +258,7 @@ function renderCodingSystemPrompt(input: {
     '',
     '### Native Coding Tool Rules',
     '- Use apply_patch for source edits; do not use whole-file writes for source files.',
+    `- apply_patch payloads must follow the NativePatch envelope: {"version": 1, "atomic": true, "operations": [{"op": "edit", "path": "...", "oldText": "...", "newText": "..."}]} (or {"op": "edit-diff", "path": "...", "diff": "..."}). Example: ${JSON.stringify(NATIVE_PATCH_EXAMPLE)}`,
     '- Use write_artifact/create_marker only for Wavemill-owned artifacts under the feature directory.',
     '- Use run_tests/run_format for verification and formatting commands inside the worktree.',
     '- Use git_add/git_commit to commit intended changed files before completion.',
@@ -342,9 +357,13 @@ async function inspectCompletion(input: {
   featureDir: string;
   model: string;
   trackerCommitCount: number;
+  stopReason: string;
+  mutationFailures: MutationFailureSnapshot;
+  wtDir: string;
 }): Promise<'complete' | 'blocked'> {
   const markerPath = join(input.featureDir, '.coding-complete');
   if (existsSync(markerPath)) {
+    rmSync(getNoMarkerHandoffPath(input.featureDir), { force: true });
     const parsed = parseCodingComplete(readFileSync(markerPath, 'utf-8'));
     if (!parsed.ok) {
       throw new Error(`Native coding wrote invalid .coding-complete: ${parsed.errors.map((error) => error.message).join('; ')}`);
@@ -365,6 +384,7 @@ async function inspectCompletion(input: {
 
   const blockedPath = getBlockedCompletionPath(input.featureDir);
   if (existsSync(blockedPath)) {
+    rmSync(getNoMarkerHandoffPath(input.featureDir), { force: true });
     const blocked = await readBlockedCompletion(blockedPath);
     if (!blocked.ok) {
       throw new Error(`Native coding wrote invalid .coding-blocked-completion.json: ${blocked.message}`);
@@ -383,7 +403,185 @@ async function inspectCompletion(input: {
     return 'blocked';
   }
 
-  throw new Error('Native coding completed without .coding-complete or .coding-blocked-completion.json');
+  const handoff = buildNoMarkerHandoff({
+    stopReason: input.stopReason,
+    model: input.model,
+    mutationFailureCount: input.mutationFailures.count,
+    lastMutationFailure: input.mutationFailures.last,
+  });
+  let handoffPath = getNoMarkerHandoffPath(input.featureDir);
+  try {
+    handoffPath = writeNoMarkerHandoff(input.featureDir, handoff);
+  } catch {
+    // Best-effort artifact; preserve the enriched terminal failure below.
+  }
+
+  let message = NO_MARKER_FAILURE_PREFIX;
+  if (input.mutationFailures.last) {
+    const failure = input.mutationFailures.last;
+    message += `. Last mutation tool failure: ${failure.tool} ${failure.error}: ${failure.message}`;
+  }
+  message += `. Structured handoff: ${relative(input.wtDir, handoffPath)}.`;
+  throw new Error(message);
+}
+
+interface MutationFailureSnapshot {
+  count: number;
+  last: CodingMutationFailure | null;
+}
+
+function createMutationFailureTracker() {
+  let count = 0;
+  let last: CodingMutationFailure | null = null;
+  const handledToolCallIds = new Set<string>();
+
+  return {
+    record(toolName: string, result: unknown, toolCallId?: string): void {
+      if (toolCallId && handledToolCallIds.has(toolCallId)) {
+        return;
+      }
+      const failure = extractMutationFailure(toolName, result);
+      if (!failure) {
+        return;
+      }
+      if (toolCallId) {
+        handledToolCallIds.add(toolCallId);
+      }
+      count += 1;
+      last = failure;
+    },
+    recordBeforeToolCall(toolCall: unknown, args: unknown): void {
+      if (!isRecord(toolCall) || toolCall.name !== 'apply_patch' || typeof toolCall.id !== 'string') {
+        return;
+      }
+      if (handledToolCallIds.has(toolCall.id)) {
+        return;
+      }
+      const patch = isRecord(args) ? args.patch : undefined;
+      const validation = validateNativePatch(patch);
+      if (validation.ok) {
+        return;
+      }
+      handledToolCallIds.add(toolCall.id);
+      count += 1;
+      last = {
+        tool: 'apply_patch',
+        error: 'invalid_patch',
+        message: 'Patch payload did not match the NativePatch contract.',
+        retryHint: 'Fix the listed schema errors and retry; follow the valid example in this message.',
+        diagnostics: truncateTrackedValue(validation.errors) as NativePatchValidationError[],
+      };
+    },
+    recordEvent(event: unknown): void {
+      if (!isRecord(event) || event.type !== 'tool_execution_end' || typeof event.toolName !== 'string') {
+        return;
+      }
+      this.record(event.toolName, event.result, typeof event.toolCallId === 'string' ? event.toolCallId : undefined);
+    },
+    snapshot(): MutationFailureSnapshot {
+      return { count, last };
+    },
+  };
+}
+
+function extractMutationFailure(toolName: string, result: unknown): CodingMutationFailure | null {
+  if (!MUTATION_FAILURE_TOOLS.has(toolName)) {
+    return null;
+  }
+  const details = isRecord(result) ? result.details : undefined;
+  if (isRecord(details) && details.ok === false) {
+    const normalizedError = normalizeFailureError(details.error);
+    const message = typeof details.message === 'string'
+      ? details.message
+      : normalizedError.message || JSON.stringify(details.error ?? 'tool failed');
+    const retryHint = typeof details.retryHint === 'string' ? truncateTrackedText(details.retryHint) : undefined;
+
+    return {
+      tool: toolName,
+      error: truncateTrackedText(normalizedError.code),
+      message: truncateTrackedText(message),
+      ...(retryHint ? { retryHint } : {}),
+      ...(Object.prototype.hasOwnProperty.call(details, 'diagnostics')
+        ? { diagnostics: truncateTrackedValue(details.diagnostics) }
+        : {}),
+    };
+  }
+
+  const contentText = extractToolContentText(result);
+  if (!contentText) {
+    return null;
+  }
+  const patchDiagnostics = toolName === 'apply_patch' && contentText.includes('NativePatch contract')
+    ? parseNativePatchDiagnostics(contentText)
+    : [];
+  return {
+    tool: toolName,
+    error: toolName === 'apply_patch' && contentText.includes('NativePatch contract') ? 'invalid_patch' : 'tool_error',
+    message: truncateTrackedText(firstNonEmptyLine(contentText)),
+    ...(patchDiagnostics.length > 0 ? { diagnostics: patchDiagnostics } : {}),
+  };
+}
+
+function extractToolContentText(result: unknown): string {
+  if (!isRecord(result) || !Array.isArray(result.content)) {
+    return '';
+  }
+  return result.content
+    .map((block) => (isRecord(block) && block.type === 'text' && typeof block.text === 'string' ? block.text : ''))
+    .filter(Boolean)
+    .join('\n');
+}
+
+function parseNativePatchDiagnostics(text: string): Array<{ path: string; message: string }> {
+  const diagnostics: Array<{ path: string; message: string }> = [];
+  for (const line of text.split('\n')) {
+    const match = /^- (\$[^:]+): (.+)$/.exec(line.trim());
+    if (match) {
+      diagnostics.push({ path: match[1]!, message: match[2]! });
+    }
+  }
+  return diagnostics;
+}
+
+function firstNonEmptyLine(text: string): string {
+  return text.split('\n').find((line) => line.trim())?.trim() ?? text;
+}
+
+function normalizeFailureError(error: unknown): { code: string; message: string } {
+  if (typeof error === 'string') {
+    return { code: error, message: '' };
+  }
+  if (isRecord(error)) {
+    const code = typeof error.code === 'string' ? error.code : 'tool_error';
+    const message = typeof error.message === 'string' ? error.message : '';
+    return { code, message };
+  }
+  return { code: 'tool_error', message: '' };
+}
+
+function truncateTrackedValue(value: unknown): unknown {
+  const serialized = truncateTrackedText(safeStringify(value));
+  try {
+    return JSON.parse(serialized) as unknown;
+  } catch {
+    return serialized;
+  }
+}
+
+function truncateTrackedText(text: string): string {
+  return text.length > TRACKED_TEXT_LIMIT ? `${text.slice(0, TRACKED_TEXT_LIMIT)}...[truncated]` : text;
+}
+
+function safeStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 export async function launchNativeCoding(options: LaunchNativeCodingOptions): Promise<LaunchNativeCodingResult> {
@@ -395,11 +593,13 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
   const operatingMode = options.operatingMode ?? 'normal';
 
   mkdirSync(featureDir, { recursive: true });
+  rmSync(getNoMarkerHandoffPath(featureDir), { force: true });
   writeHookStatus(hookPath, 'working', 'launch_native_coding', options.loopModelOverride?.name ?? 'native', 'native');
   writeTextStatus(options.session, options.issue, 'native coding starting');
 
   try {
     const tracker = createIntendedFileTracker();
+    const mutationFailureTracker = createMutationFailureTracker();
     const descriptors = [
       ...createReadOnlyTools(options.wtDir),
       ...createGitTools(options.wtDir),
@@ -505,6 +705,10 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
       context,
       convertToLlm: (messages) => messages as unknown as Message[],
       signal: options.signal,
+      beforeToolCall: async (toolContext) => {
+        mutationFailureTracker.recordBeforeToolCall(toolContext.toolCall, toolContext.args);
+        return undefined;
+      },
       afterToolCall: async (toolContext, signal) => {
         await intendedFilesAfterToolCall(toolContext, tracker);
 
@@ -533,6 +737,7 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
         },
       },
       onEvent: (event) => {
+        mutationFailureTracker.recordEvent(event);
         transcriptWriter.handleEvent(event);
       },
     });
@@ -546,6 +751,9 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
       featureDir,
       model: modelName,
       trackerCommitCount: tracker.commitCount,
+      stopReason: result.stopReason,
+      mutationFailures: mutationFailureTracker.snapshot(),
+      wtDir: options.wtDir,
     });
     writeHookStatus(hookPath, completion === 'complete' ? 'idle' : 'working', 'process_exit', completion, 'native');
     writeTextStatus(options.session, options.issue, completion === 'complete' ? 'coding complete' : 'coding blocked-completion');

@@ -72,6 +72,56 @@ All key components are trimmed. Repo slugs and labels are lower-cased for case-i
 
 ## Tool Request/Response Schemas
 
+### Native coding `apply_patch`
+
+Native coding source edits use the `NativePatch` envelope from
+`shared/lib/native-agent/patch-contract.ts`.
+
+**Request:**
+```json
+{
+  "patch": {
+    "version": 1,
+    "atomic": true,
+    "operations": [
+      {
+        "op": "edit",
+        "path": "src/example.ts",
+        "oldText": "const value = 'before';",
+        "newText": "const value = 'after';"
+      }
+    ]
+  }
+}
+```
+
+`version: 1`, `atomic: true`, and a non-empty `operations` array are required.
+`path` is repo-relative POSIX with no absolute path or traversal. Operation
+variants are:
+
+- `edit`: requires `path`, `oldText`, and `newText`; `oldText` must match file
+  content exactly and differ from `newText`.
+- `edit-diff`: requires `path` and `diff` containing a unified diff hunk.
+
+Operations may include `anchorBefore`, `anchorAfter`, and
+`expectedOccurrences`. The envelope may include `fuzzyMatch` settings.
+
+**Validation errors:** `invalid_patch` means the payload did not match the
+NativePatch schema. The tool response includes visible per-field diagnostics,
+the required envelope, operation variants, and a compact valid example.
+
+**Runtime rejections:** `patch_rejected` means the payload schema was valid but
+the edit could not be applied, for example because `oldText` was not found or an
+anchor was ambiguous. The response includes a retry hint and live-context
+diagnostics when available.
+
+**No-marker recovery artifact:** if a native coding model stops normally without
+`.coding-complete` or `.coding-blocked-completion.json` after mutation-tool
+failures, the controller writes `.coding-no-marker-handoff.json` in the feature
+directory. The artifact has `schemaVersion: 1`, `stage: "coding"`,
+`reason: "no_completion_marker"`, `stopReason`, `model`,
+`mutationFailureCount`, `lastMutationFailure`, and `suggestedNextActions`.
+
 ### `linear_get_issue`
 
 **Request:**

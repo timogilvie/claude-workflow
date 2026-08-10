@@ -59,6 +59,32 @@ export interface NativePatch {
   fuzzyMatch?: NativePatchFuzzyMatch;
 }
 
+export const NATIVE_PATCH_EXAMPLE: NativePatch = {
+  version: NATIVE_PATCH_VERSION,
+  atomic: true,
+  operations: [
+    {
+      op: 'edit',
+      path: 'src/example.ts',
+      oldText: "const value = 'before';",
+      newText: "const value = 'after';",
+    },
+  ],
+};
+
+export function formatNativePatchContractSummary(): string {
+  return [
+    'NativePatch contract:',
+    '- Required envelope: version: 1, atomic: true, and a non-empty operations array.',
+    '- Operation variants: edit requires path, oldText, and newText; oldText must match file content exactly and differ from newText.',
+    '- Operation variants: edit-diff requires path and diff containing a unified diff hunk.',
+    '- Optional per-operation anchors: anchorBefore, anchorAfter, expectedOccurrences.',
+    '- Optional envelope fuzzyMatch can tune fuzzy matching.',
+    '- path must be repo-relative POSIX with no absolute path or traversal.',
+    `Valid example: ${JSON.stringify(NATIVE_PATCH_EXAMPLE)}`,
+  ].join('\n');
+}
+
 export type NativePatchRuntimeRejectionCode =
   | 'path_denied'
   | 'old_text_not_found'
