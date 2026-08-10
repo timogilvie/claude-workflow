@@ -327,6 +327,10 @@ export async function runNativeReview(
   const loopResult = await nativeReviewDeps.runWavemillLoop({
     model: modelConfig,
     context: loopContext,
+    // Pi otherwise lets some OpenRouter models request their provider maximum
+    // (65,536 for Gemini), which can exceed a key's remaining credit before a
+    // concise JSON review gets a first turn.
+    maxTokens: 8192,
     // AgentMessage and Message are structurally compatible at runtime; pi-agent-core
     // exports diverged nominal types so a direct cast is required.
     convertToLlm: (messages) => messages as unknown as Message[],
