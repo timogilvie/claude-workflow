@@ -94,6 +94,26 @@ kv_value() {
   awk -F= -v key="$key" '$1 == key { print substr($0, length(key) + 2); exit }' <<< "$output"
 }
 
+harness_file_mtime_epoch() {
+  local path="$1"
+  if stat -c %Y "$path" 2>/dev/null; then
+    return 0
+  fi
+  if stat -f %m "$path" 2>/dev/null; then
+    return 0
+  fi
+  return 1
+}
+
+harness_backdate_uncommitted_output_announcement() {
+  local feature_dir="$1" back_epoch="$2"
+  local artifact="$feature_dir/.coding-uncommitted-output.json"
+  local marker="$feature_dir/.coding-uncommitted-output-announced"
+
+  perl -e 'my ($p,$t)=@ARGV; utime $t,$t,$p or die $!;' "$artifact" "$back_epoch"
+  printf '%s\n' "$back_epoch" > "$marker"
+}
+
 extract_function() {
   local source_file="$1"
   local function_name="$2"
@@ -2097,6 +2117,158 @@ test_coding_complete_dirty_worktree_with_commits_needs_attention() {
   check_file_exists "dirty tree: dedupe marker written" "$feature_dir/.coding-uncommitted-output-announced"
 }
 
+test_coding_complete_uncommitted_output_dedupes_repeat_ticks() {
+  local slug="coding-complete-uncommitted-output-dedupe"
+  local issue="HOK-2405-DEDUP"
+  local repo tick1 tick2 feature_dir artifact back_epoch artifact_mtime
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  feature_dir="$repo/features/$slug"
+  artifact="$feature_dir/.coding-uncommitted-output.json"
+
+  touch "$feature_dir/.coding-complete"
+  printf 'pending implementation\n' > "$repo/src-uncommitted.ts"
+
+  tick1="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
+
+  check_contains "uncommitted dedupe: first tick logs attention" "$(kv_value "$tick1" log_output)" "branch has no commits beyond main and worktree still contains uncommitted coding output"
+  check_file_exists "uncommitted dedupe: artifact written" "$artifact"
+  check_file_exists "uncommitted dedupe: marker written" "$feature_dir/.coding-uncommitted-output-announced"
+
+  back_epoch=$(( $(date +%s) - 300 ))
+  harness_backdate_uncommitted_output_announcement "$feature_dir" "$back_epoch"
+
+  tick2="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
+  artifact_mtime="$(harness_file_mtime_epoch "$artifact")"
+
+  check_eq "uncommitted dedupe: second tick stays active" "1" "$(kv_value "$tick2" active_count)"
+  check_eq "uncommitted dedupe: second tick keeps needs-user attention" "needs-user" "$(kv_value "$tick2" attention)"
+  check_not_contains "uncommitted dedupe: second tick emits no duplicate log" "$(kv_value "$tick2" log_output)" "needs attention"
+  check_eq "uncommitted dedupe: artifact mtime unchanged" "$back_epoch" "$artifact_mtime"
+}
+
+test_coding_complete_uncommitted_output_reannounces_on_dirty_path_change() {
+  local slug="coding-complete-uncommitted-output-new-path"
+  local issue="HOK-2405-PATH"
+  local repo tick1 tick2 feature_dir artifact back_epoch
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  feature_dir="$repo/features/$slug"
+  artifact="$feature_dir/.coding-uncommitted-output.json"
+
+  touch "$feature_dir/.coding-complete"
+  printf 'pending implementation\n' > "$repo/src-uncommitted.ts"
+
+  tick1="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
+  check_contains "dirty path change: first tick logs attention" "$(kv_value "$tick1" log_output)" "branch has no commits beyond main and worktree still contains uncommitted coding output"
+
+  back_epoch=$(( $(date +%s) - 300 ))
+  harness_backdate_uncommitted_output_announcement "$feature_dir" "$back_epoch"
+
+  printf 'additional dirty output\n' > "$repo/src-new-dirty.ts"
+  tick2="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
+
+  check_eq "dirty path change: second tick stays active" "1" "$(kv_value "$tick2" active_count)"
+  check_eq "dirty path change: second tick keeps needs-user attention" "needs-user" "$(kv_value "$tick2" attention)"
+  check_contains "dirty path change: second tick reannounces" "$(kv_value "$tick2" log_output)" "needs attention: coding completed marker detected, but branch has no commits beyond main and worktree still contains uncommitted coding output"
+  check_contains "dirty path change: artifact includes new path" "$(jq -r '.dirtyPaths[]' "$artifact")" "src-new-dirty.ts"
+}
+
+test_coding_complete_uncommitted_output_reannounces_on_ahead_count_change() {
+  local slug="coding-complete-uncommitted-output-ahead"
+  local issue="HOK-2405-AHEAD"
+  local repo tick1 tick2 feature_dir back_epoch
+  repo="$(harness_init_repo "$slug")"
+  git -C "$repo" checkout -q -b "task/$slug"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  feature_dir="$repo/features/$slug"
+
+  touch "$feature_dir/.coding-complete"
+  printf 'pending implementation\n' > "$repo/src-uncommitted.ts"
+
+  tick1="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
+  check_contains "ahead change: first tick logs no-commits variant" "$(kv_value "$tick1" log_output)" "branch has no commits beyond main and worktree still contains uncommitted coding output"
+
+  back_epoch=$(( $(date +%s) - 300 ))
+  harness_backdate_uncommitted_output_announcement "$feature_dir" "$back_epoch"
+
+  printf 'committed coding output\n' >> "$repo/README.md"
+  git -C "$repo" add README.md
+  git -C "$repo" commit -m "feat: commit coding output" >/dev/null 2>&1
+
+  tick2="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
+
+  check_eq "ahead change: second tick stays active" "1" "$(kv_value "$tick2" active_count)"
+  check_eq "ahead change: second tick keeps needs-user attention" "needs-user" "$(kv_value "$tick2" attention)"
+  check_contains "ahead change: second tick reannounces dirty-tree variant" "$(kv_value "$tick2" log_output)" "needs attention: coding completed marker detected, but worktree still contains uncommitted coding output. Clean the dirty paths, then retry review."
+}
+
+test_write_coding_uncommitted_output_artifact_is_idempotent() {
+  local result first_mtime second_mtime third_mtime dirty_paths
+  result="$(
+    set -euo pipefail
+    source "$REPO_DIR/shared/lib/wavemill-common.sh"
+    source "$REAL_FUNC_FILE"
+
+    feature_dir="$TEST_TMP/writer-idempotent/features/writer-idempotent"
+    mkdir -p "$feature_dir"
+    dirty_paths=$'src-one.ts\nsrc-two.ts'
+    changed_dirty_paths=$'src-one.ts\nsrc-two.ts\nsrc-three.ts'
+    artifact="$(coding_uncommitted_output_artifact_path "$feature_dir")"
+    back_epoch=$(( $(date +%s) - 300 ))
+
+    write_coding_uncommitted_output_artifact \
+      "HOK-2405-WRITER" \
+      "$feature_dir" \
+      "main" \
+      "0" \
+      "0" \
+      "$dirty_paths" \
+      "coding completed marker detected, but branch has no commits beyond main and worktree still contains uncommitted coding output" \
+      "Commit the coding output, then retry review." \
+      "coding_output_not_committed"
+    perl -e 'my ($p,$t)=@ARGV; utime $t,$t,$p or die $!;' "$artifact" "$back_epoch"
+    printf 'first_mtime=%s\n' "$(portable_file_mtime_epoch "$artifact")"
+
+    write_coding_uncommitted_output_artifact \
+      "HOK-2405-WRITER" \
+      "$feature_dir" \
+      "main" \
+      "0" \
+      "0" \
+      "$dirty_paths" \
+      "coding completed marker detected, but branch has no commits beyond main and worktree still contains uncommitted coding output" \
+      "Commit the coding output, then retry review." \
+      "coding_output_not_committed"
+    printf 'second_mtime=%s\n' "$(portable_file_mtime_epoch "$artifact")"
+
+    write_coding_uncommitted_output_artifact \
+      "HOK-2405-WRITER" \
+      "$feature_dir" \
+      "main" \
+      "0" \
+      "0" \
+      "$changed_dirty_paths" \
+      "coding completed marker detected, but branch has no commits beyond main and worktree still contains uncommitted coding output" \
+      "Commit the coding output, then retry review." \
+      "coding_output_not_committed"
+    printf 'third_mtime=%s\n' "$(portable_file_mtime_epoch "$artifact")"
+    printf 'dirty_paths=%s\n' "$(jq -r '.dirtyPaths | join(",")' "$artifact")"
+  )"
+
+  first_mtime="$(kv_value "$result" first_mtime)"
+  second_mtime="$(kv_value "$result" second_mtime)"
+  third_mtime="$(kv_value "$result" third_mtime)"
+  dirty_paths="$(kv_value "$result" dirty_paths)"
+
+  check_eq "writer idempotent: first mtime backdated" "$first_mtime" "$second_mtime"
+  check_not_contains "writer idempotent: changed paths rewrite artifact" "$third_mtime" "$second_mtime"
+  check_contains "writer idempotent: artifact includes changed path" "$dirty_paths" "src-three.ts"
+}
+
 test_coding_complete_trace_only_dirty_worktree_advances() {
   local slug="coding-complete-trace-only"
   local issue="HOK-2454-TRACE"
@@ -3254,6 +3426,10 @@ test_coding_blocked_completion_reannounces_on_mtime_change
 test_coding_complete_wins_over_blocked_completion
 test_coding_complete_dirty_worktree_without_commits_needs_attention
 test_coding_complete_dirty_worktree_with_commits_needs_attention
+test_coding_complete_uncommitted_output_dedupes_repeat_ticks
+test_coding_complete_uncommitted_output_reannounces_on_dirty_path_change
+test_coding_complete_uncommitted_output_reannounces_on_ahead_count_change
+test_write_coding_uncommitted_output_artifact_is_idempotent
 test_coding_complete_trace_only_dirty_worktree_advances
 test_coding_complete_tracked_claude_settings_advances
 test_coding_complete_trace_and_source_dirty_worktree_needs_attention
