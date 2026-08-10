@@ -47,6 +47,7 @@ TESTS=(
   shared/lib/native-agent/completion-gate.test.ts
   shared/lib/native-agent/coding-certification.test.ts
   shared/lib/native-agent/coding-gate.test.ts
+  shared/lib/native-agent/coding-handoff.test.ts
   shared/lib/native-agent/recovery.test.ts
   shared/lib/native-agent/cleanup.test.ts
   shared/lib/native-agent/coding-lifecycle.test.ts

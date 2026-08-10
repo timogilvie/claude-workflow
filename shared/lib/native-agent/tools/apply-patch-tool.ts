@@ -1,6 +1,8 @@
 import { applyNativePatch, type NativePatchAppliedResult } from '../patch-runtime.ts';
 import type { MutationRecorder } from '../cleanup.ts';
 import {
+  formatNativePatchContractSummary,
+  NATIVE_PATCH_EXAMPLE,
   validateNativePatch,
   type NativePatch,
   type NativePatchRejectedResult,
@@ -38,12 +40,77 @@ interface AfterToolCallContext {
   result: { details: unknown };
 }
 
+const nativePatchContractSummary = formatNativePatchContractSummary();
+
 const applyPatchParameters = {
   type: 'object',
   properties: {
     patch: {
       type: 'object',
-      description: 'NativePatch payload containing one or more atomic edit operations.',
+      description: [
+        'NativePatch payload containing one or more atomic edit operations.',
+        'Envelope fields: version must be 1, atomic must be true, operations must be a non-empty array.',
+        'Each operation needs op and path. For op "edit", include oldText and newText. For op "edit-diff", include diff.',
+      ].join(' '),
+      properties: {
+        version: {
+          type: 'number',
+          enum: [1],
+          description: 'Always 1.',
+        },
+        atomic: {
+          type: 'boolean',
+          enum: [true],
+          description: 'Always true.',
+        },
+        operations: {
+          type: 'array',
+          minItems: 1,
+          description: 'Non-empty list of atomic edit operations.',
+          items: {
+            type: 'object',
+            properties: {
+              op: {
+                type: 'string',
+                enum: ['edit', 'edit-diff'],
+                description: 'Use edit with oldText/newText or edit-diff with diff.',
+              },
+              path: {
+                type: 'string',
+                description: 'Repo-relative POSIX path with no traversal.',
+              },
+              oldText: {
+                type: 'string',
+                description: 'Required for edit; exact text currently in the file.',
+              },
+              newText: {
+                type: 'string',
+                description: 'Required for edit; replacement text different from oldText.',
+              },
+              diff: {
+                type: 'string',
+                description: 'Required for edit-diff; unified diff hunk for this file.',
+              },
+              anchorBefore: {
+                type: 'string',
+                description: 'Optional context before the edit.',
+              },
+              anchorAfter: {
+                type: 'string',
+                description: 'Optional context after the edit.',
+              },
+              expectedOccurrences: {
+                type: 'number',
+                description: 'Optional expected number of oldText occurrences.',
+              },
+            },
+          },
+        },
+        fuzzyMatch: {
+          type: 'object',
+          description: 'Optional envelope-level fuzzy matching settings.',
+        },
+      },
     },
   },
   required: ['patch'],
@@ -58,7 +125,7 @@ export function createApplyPatchTool(
   return {
     metadata: {
       name: 'apply_patch',
-      description: 'Apply an atomic native patch to source files inside the active worktree.',
+      description: `Apply an atomic native patch to source files inside the active worktree.\n\n${nativePatchContractSummary}`,
       class: 'mutation',
       allowedPhases: ['coding'],
       executionMode: 'sequential',
@@ -92,16 +159,17 @@ async function executeApplyPatch(
 ): Promise<WavemillToolResult<ApplyPatchDetails>> {
   const validation = validateNativePatch(params.patch);
   if (!validation.ok) {
+    const message = 'Patch payload did not match the NativePatch contract.';
     const details: ApplyPatchErrorDetails = {
       ok: false,
       tool: 'apply_patch',
       error: 'invalid_patch',
-      message: 'Patch payload did not match the NativePatch contract.',
-      retryHint: 'Fix the patch schema errors and retry with a valid NativePatch payload.',
+      message,
+      retryHint: 'Fix the listed schema errors and retry; follow the valid example in this message.',
       diagnostics: validation.errors,
     };
     return {
-      content: [{ type: 'text', text: details.message }],
+      content: [{ type: 'text', text: formatInvalidPatchMessage(message, validation.errors) }],
       details,
     };
   }
@@ -170,6 +238,19 @@ function rejectedPatchResult(
     content: [{ type: 'text', text: `${result.rejection.code}: ${result.rejection.message}` }],
     details,
   };
+}
+
+function formatInvalidPatchMessage(
+  message: string,
+  errors: NativePatchValidationError[],
+): string {
+  return [
+    message,
+    ...errors.map((error) => `- ${error.path}: ${error.message}`),
+    'Required envelope: {"version": 1, "atomic": true, "operations": [...]}.',
+    'Operations: {op: "edit", path, oldText, newText} or {op: "edit-diff", path, diff}.',
+    `Valid example: ${JSON.stringify(NATIVE_PATCH_EXAMPLE)}`,
+  ].join('\n');
 }
 
 function summarizeApplyPatch(result: ApplyPatchSuccessDetails): string {

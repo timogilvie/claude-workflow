@@ -2,12 +2,46 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  formatNativePatchContractSummary,
+  NATIVE_PATCH_EXAMPLE,
   NATIVE_PATCH_VERSION,
   normalizePatchPath,
   validateNativePatch,
 } from './patch-contract.ts';
 
 describe('patch-contract', () => {
+  it('keeps the documented NativePatch example valid', () => {
+    const result = validateNativePatch(NATIVE_PATCH_EXAMPLE);
+
+    assert.equal(result.ok, true);
+  });
+
+  it('keeps an edit-diff variant of the documented example valid', () => {
+    const result = validateNativePatch({
+      ...NATIVE_PATCH_EXAMPLE,
+      operations: [
+        {
+          op: 'edit-diff',
+          path: NATIVE_PATCH_EXAMPLE.operations[0]!.path,
+          diff: '@@ -1 +1 @@\n-before\n+after',
+        },
+      ],
+    });
+
+    assert.equal(result.ok, true);
+  });
+
+  it('summarizes the NativePatch contract with the validated example', () => {
+    const summary = formatNativePatchContractSummary();
+
+    assert.match(summary, /version/);
+    assert.match(summary, /atomic/);
+    assert.match(summary, /operations/);
+    assert.match(summary, /edit/);
+    assert.match(summary, /edit-diff/);
+    assert.match(summary, new RegExp(escapeRegExp(JSON.stringify(NATIVE_PATCH_EXAMPLE))));
+  });
+
   describe('normalizePatchPath', () => {
     it('normalizes repo-relative POSIX paths', () => {
       assert.equal(normalizePatchPath('./src//native-agent/../native-agent/patch.ts'), null);
@@ -290,3 +324,7 @@ describe('patch-contract', () => {
     );
   });
 });
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}

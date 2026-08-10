@@ -14,6 +14,8 @@ import { afterEach, describe, it } from 'node:test';
 import { readStageResult } from '../stage-result.ts';
 import { registerScriptedPiProvider, type ScriptedPiProviderTurn } from './provider.ts';
 import { launchNativeCoding } from './launch-coding.ts';
+import { getNoMarkerHandoffPath, readNoMarkerHandoff } from './coding-handoff.ts';
+import { NATIVE_PATCH_EXAMPLE } from './patch-contract.ts';
 
 const repos: string[] = [];
 
@@ -226,5 +228,104 @@ describe('launchNativeCoding', () => {
     const stageResult = await readStageResult(featureDir, 'coding');
     assert.equal(stageResult?.status, 'failed');
     assert.match(stageResult?.failureReason ?? '', /without \.coding-complete/);
+    const handoff = readNoMarkerHandoff(getNoMarkerHandoffPath(featureDir));
+    assert.equal(handoff.ok, true);
+    if (handoff.ok) {
+      assert.equal(handoff.value.lastMutationFailure?.tool, 'create_marker');
+    }
+  });
+
+  it('writes a structured no-marker handoff after Kimi-like invalid patches and normal stop', async () => {
+    const { repoDir, featureDir, slug } = makeRepo();
+    const invalidPatch = {
+      patch: {
+        operations: [
+          {
+            path: 'src/app.ts',
+            oldText: "export const message = 'before';\n",
+            newText: "export const message = 'after';\n",
+          },
+        ],
+      },
+    };
+    const model = scriptedModel([
+      toolTurn('bad-patch-1', 'apply_patch', invalidPatch),
+      toolTurn('bad-patch-2', 'apply_patch', invalidPatch),
+      finalTurn('I am done.'),
+    ], 'kimi-invalid');
+
+    await assert.rejects(
+      () => launchNativeCoding({
+        session: 'sess',
+        issue: 'HOK-2577',
+        slug,
+        wtDir: repoDir,
+        repoDir,
+        loopModelOverride: model,
+      }),
+      /Native coding completed without \.coding-complete or \.coding-blocked-completion\.json\. Last mutation tool failure: apply_patch invalid_patch/,
+    );
+
+    const handoffPath = getNoMarkerHandoffPath(featureDir);
+    assert.ok(existsSync(handoffPath));
+    const handoff = readNoMarkerHandoff(handoffPath);
+    assert.equal(handoff.ok, true);
+    if (!handoff.ok) return;
+    assert.equal(handoff.value.reason, 'no_completion_marker');
+    assert.equal(handoff.value.mutationFailureCount, 2);
+    assert.equal(handoff.value.lastMutationFailure?.tool, 'apply_patch');
+    assert.equal(handoff.value.lastMutationFailure?.error, 'invalid_patch');
+    assert.deepEqual(
+      (handoff.value.lastMutationFailure?.diagnostics as Array<{ path: string }>).map((diagnostic) => diagnostic.path).slice(0, 2),
+      ['$.version', '$.atomic'],
+    );
+    const stageResult = await readStageResult(featureDir, 'coding');
+    assert.equal(stageResult?.status, 'failed');
+    assert.match(stageResult?.failureReason ?? '', /Last mutation tool failure: apply_patch invalid_patch/);
+  });
+
+  it('recovers after an invalid apply_patch when the documented contract is used', async () => {
+    const { repoDir, featureDir, slug } = makeRepo();
+    writeFileSync(getNoMarkerHandoffPath(featureDir), '{"stale":true}\n', 'utf-8');
+    const validPatch = {
+      ...NATIVE_PATCH_EXAMPLE,
+      operations: [
+        {
+          op: 'edit',
+          path: 'src/app.ts',
+          oldText: "export const message = 'before';\n",
+          newText: "export const message = 'after';\n",
+        },
+      ],
+    };
+    const model = scriptedModel([
+      toolTurn('bad-patch-1', 'apply_patch', {
+        patch: {
+          operations: [{ path: 'src/app.ts', oldText: 'before', newText: 'after' }],
+        },
+      }),
+      toolTurn('patch-1', 'apply_patch', { patch: validPatch }),
+      toolTurn('test-1', 'run_tests', { command: 'node -e "process.stdout.write(\\\"ok\\\")"' }),
+      toolTurn('add-1', 'git_add', { paths: ['src/app.ts'] }),
+      toolTurn('commit-1', 'git_commit', { message: 'feat: recover native patch' }),
+      toolTurn('marker-1', 'create_marker', {
+        path: `features/${slug}/.coding-complete`,
+        content: 'confidence=high\nproducer=native-agent\n',
+      }),
+      finalTurn('Coding complete.'),
+    ], 'recover');
+
+    const result = await launchNativeCoding({
+      session: 'sess',
+      issue: 'HOK-2577',
+      slug,
+      wtDir: repoDir,
+      repoDir,
+      loopModelOverride: model,
+    });
+
+    assert.equal(result.completion, 'complete');
+    assert.equal(existsSync(getNoMarkerHandoffPath(featureDir)), false);
+    assert.equal(readFileSync(join(repoDir, 'src', 'app.ts'), 'utf-8'), "export const message = 'after';\n");
   });
 });
