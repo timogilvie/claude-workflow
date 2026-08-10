@@ -47,6 +47,8 @@ TESTS=(
   wavemill-expand-selection.test.sh
   wavemill-mill-challenge.test.sh
   wavemill-mill-model-flags.test.sh
+  wavemill-mill-config-preflight.test.sh
+  wavemill-mill-router-fallback.test.sh
   model-inheritance-chain.test.sh
   wavemill-monitor-command-draining.test.sh
   wavemill-mill-session.test.sh
