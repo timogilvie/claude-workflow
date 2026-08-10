@@ -142,6 +142,36 @@ else
   fail "could not extract challenge execution finalizer"
 fi
 
+SAVE_STATE_HELPER="$(awk '
+  /^save_task_state\(\) \{/ { count++; if (count == 2) capture=1 }
+  capture { print }
+  /^}/ && capture { exit }
+' "$MILL_SCRIPT")"
+
+if [[ -n "$SAVE_STATE_HELPER" ]]; then
+  check_contains "runtime state saves preserve projected challenge intent" "$SAVE_STATE_HELPER" '(.tasks[$issue].challengeIntent // null) as $old_challenge_intent'
+  check_contains "runtime state writes projected challenge intent back" "$SAVE_STATE_HELPER" 'challengeIntent: $old_challenge_intent'
+
+  # Exercise the production helper: startup pairing stores this projected
+  # contract before either member is expanded, and later state updates must not
+  # erase it before the coding handoff consumes it.
+  RUNTIME_STATE_TMP="$(mktemp -d)"
+  RUNTIME_STATE_FILE="$RUNTIME_STATE_TMP/state.json"
+  printf '%s\n' '{"tasks":{"HOK-2724_c":{"slug":"native-review","branch":"task/native-review","worktree":"/tmp/native-review","status":"active","challenge":true,"challengePairId":"HOK-2724","challengeRole":"challenger","challengeStage":"review","challengeIntent":{"pairId":"HOK-2724","challengeStage":"review","challenger":{"expectedRoute":{"reviewer":"qwen-3-coder"}}}}}}' > "$RUNTIME_STATE_FILE"
+  source "$REPO_DIR/shared/lib/wavemill-common.sh"
+  STATE_FILE="$RUNTIME_STATE_FILE"
+  eval "$SAVE_STATE_HELPER"
+  save_task_state "HOK-2724_c" "native-review" "task/native-review" "/tmp/native-review" "" "coding" "codex" "HOK-2724_c" "true" "HOK-2724" "challenger" "qwen-3-coder" "bootstrap-planner" "bootstrap-coder" "qwen-3-coder" "light" "medium" "llm" "review"
+  if [[ "$(jq -r '.tasks["HOK-2724_c"].challengeIntent.challenger.expectedRoute.reviewer' "$RUNTIME_STATE_FILE")" == "qwen-3-coder" ]]; then
+    pass "runtime state update retains challenge intent for native reviewer"
+  else
+    fail "runtime state update discarded challenge intent for native reviewer"
+  fi
+  rm -rf "$RUNTIME_STATE_TMP"
+else
+  fail "could not extract runtime save_task_state helper"
+fi
+
 PLANNER_GATE_HELPER="$(awk '
   /^challenge_plan_stage_requires_effective_route\(\) \{/ { capture=1 }
   capture { print }

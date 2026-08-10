@@ -13,7 +13,8 @@ import { join } from 'node:path';
 import { afterEach, describe, it } from 'node:test';
 import { readStageResult } from '../stage-result.ts';
 import { registerScriptedPiProvider, type ScriptedPiProviderTurn } from './provider.ts';
-import { launchNativeCoding } from './launch-coding.ts';
+import { getCodingFailureHandoffPath, readCodingFailureHandoff } from './coding-failure-handoff.ts';
+import { launchNativeCoding, renderCodingSystemPrompt } from './launch-coding.ts';
 
 const repos: string[] = [];
 
@@ -91,6 +92,25 @@ afterEach(() => {
 });
 
 describe('launchNativeCoding', () => {
+  it('renders NativePatch guidance in the native coding system prompt', () => {
+    const prompt = renderCodingSystemPrompt({
+      template: 'Implement {{SLUG}} at {{FEATURE_DIR}} with {{CODE_DEPTH}}.',
+      codeDepth: 'medium',
+      operatingMode: 'normal',
+      featureDir: '/repo/features/demo',
+      planPath: '/repo/features/demo/plan.md',
+      slug: 'demo',
+      blockedCompletionPath: 'features/demo/.coding-blocked-completion.json',
+    });
+
+    assert.match(prompt, /NativePatch envelope/);
+    assert.match(prompt, /version/);
+    assert.match(prompt, /atomic/);
+    assert.match(prompt, /operations/);
+    assert.match(prompt, /edit-diff/);
+    assert.match(prompt, /"version": 1/);
+  });
+
   it('runs a scripted native coding loop, commits a scoped patch, and records completion', async () => {
     const { repoDir, featureDir, slug } = makeRepo();
     const model = scriptedModel([
@@ -208,6 +228,7 @@ describe('launchNativeCoding', () => {
         content: 'confidence=high\n',
       }),
       finalTurn('Tried to write outside.'),
+      finalTurn('Still no completion marker.'),
     ], 'outside');
 
     await assert.rejects(
@@ -223,8 +244,111 @@ describe('launchNativeCoding', () => {
     );
 
     assert.equal(existsSync(outsidePath), false);
+    const handoff = await readCodingFailureHandoff(getCodingFailureHandoffPath(featureDir));
+    assert.equal(handoff.ok, true);
+    if (handoff.ok) {
+      assert.equal(handoff.value.lastToolError?.tool, 'create_marker');
+      assert.equal(handoff.value.recoveryAttempted, true);
+    }
     const stageResult = await readStageResult(featureDir, 'coding');
     assert.equal(stageResult?.status, 'failed');
     assert.match(stageResult?.failureReason ?? '', /without \.coding-complete/);
+  });
+
+  it('recovers from Kimi-like invalid patches with the documented contract after a normal stop', async () => {
+    const { repoDir, featureDir, slug } = makeRepo();
+    const model = scriptedModel([
+      toolTurn('bad-patch-1', 'apply_patch', {
+        patch: {
+          operations: [{
+            op: 'edit',
+            path: 'src/app.ts',
+            oldText: "export const message = 'before';\n",
+            newText: "export const message = 'after';\n",
+          }],
+        },
+      }),
+      toolTurn('bad-patch-2', 'apply_patch', {
+        patch: { files: [{ path: 'src/app.ts', content: "export const message = 'after';\n" }] },
+      }),
+      finalTurn('I could not apply the patch.'),
+      toolTurn('good-patch-1', 'apply_patch', {
+        patch: {
+          version: 1,
+          atomic: true,
+          operations: [{
+            op: 'edit',
+            path: 'src/app.ts',
+            oldText: "export const message = 'before';\n",
+            newText: "export const message = 'after';\n",
+          }],
+        },
+      }),
+      toolTurn('add-1', 'git_add', { paths: ['src/app.ts'] }),
+      toolTurn('commit-1', 'git_commit', { message: 'feat: recover native patch contract' }),
+      toolTurn('marker-1', 'create_marker', {
+        path: `features/${slug}/.coding-complete`,
+        content: 'confidence=high\nproducer=native-agent\n',
+      }),
+      finalTurn('Recovered and completed.'),
+    ], 'kimi-recover');
+
+    const result = await launchNativeCoding({
+      session: 'sess',
+      issue: 'HOK-2580',
+      slug,
+      wtDir: repoDir,
+      repoDir,
+      loopModelOverride: model,
+    });
+
+    assert.equal(result.completion, 'complete');
+    assert.equal(readFileSync(join(repoDir, 'src', 'app.ts'), 'utf-8'), "export const message = 'after';\n");
+    assert.equal(existsSync(getCodingFailureHandoffPath(featureDir)), false);
+    const transcript = readFileSync(result.transcriptPath, 'utf-8');
+    assert.match(transcript, /Valid NativePatch example/);
+    assert.match(transcript, /\\"version\\": 1/);
+  });
+
+  it('writes a structured handoff when Kimi-like invalid patches are followed by another normal stop', async () => {
+    const { repoDir, featureDir, slug } = makeRepo();
+    const model = scriptedModel([
+      toolTurn('bad-patch-1', 'apply_patch', {
+        patch: {
+          operations: [{
+            op: 'edit',
+            path: 'src/app.ts',
+            oldText: "export const message = 'before';\n",
+            newText: "export const message = 'after';\n",
+          }],
+        },
+      }),
+      finalTurn('I stopped without a marker.'),
+      finalTurn('Still stopped without a marker.'),
+    ], 'kimi-handoff');
+
+    await assert.rejects(
+      () => launchNativeCoding({
+        session: 'sess',
+        issue: 'HOK-2580',
+        slug,
+        wtDir: repoDir,
+        repoDir,
+        loopModelOverride: model,
+      }),
+      /without \.coding-complete or \.coding-blocked-completion\.json; last tool error \(apply_patch\/invalid_patch\): Patch payload did not match the NativePatch contract/,
+    );
+
+    const handoff = await readCodingFailureHandoff(getCodingFailureHandoffPath(featureDir));
+    assert.equal(handoff.ok, true);
+    if (!handoff.ok) return;
+    assert.equal(handoff.value.lastToolError?.tool, 'apply_patch');
+    assert.equal(handoff.value.lastToolError?.error, 'invalid_patch');
+    assert.ok(handoff.value.mutationFailures >= 1);
+    assert.equal(handoff.value.recoveryAttempted, true);
+
+    const stageResult = await readStageResult(featureDir, 'coding');
+    assert.equal(stageResult?.status, 'failed');
+    assert.match(stageResult?.failureReason ?? '', /last tool error \(apply_patch\/invalid_patch\)/);
   });
 });

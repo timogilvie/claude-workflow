@@ -1,6 +1,8 @@
 import { applyNativePatch, type NativePatchAppliedResult } from '../patch-runtime.ts';
 import type { MutationRecorder } from '../cleanup.ts';
 import {
+  buildNativePatchGuidance,
+  NATIVE_PATCH_PARAMETERS_SCHEMA,
   validateNativePatch,
   type NativePatch,
   type NativePatchRejectedResult,
@@ -41,10 +43,7 @@ interface AfterToolCallContext {
 const applyPatchParameters = {
   type: 'object',
   properties: {
-    patch: {
-      type: 'object',
-      description: 'NativePatch payload containing one or more atomic edit operations.',
-    },
+    patch: NATIVE_PATCH_PARAMETERS_SCHEMA,
   },
   required: ['patch'],
   additionalProperties: false,
@@ -58,7 +57,11 @@ export function createApplyPatchTool(
   return {
     metadata: {
       name: 'apply_patch',
-      description: 'Apply an atomic native patch to source files inside the active worktree.',
+      description: [
+        'Apply an atomic native patch to source files inside the active worktree.',
+        'See docs/native-workflow-tool-contracts.md for the full contract.',
+        buildNativePatchGuidance(),
+      ].join('\n\n'),
       class: 'mutation',
       allowedPhases: ['coding'],
       executionMode: 'sequential',
@@ -97,11 +100,11 @@ async function executeApplyPatch(
       tool: 'apply_patch',
       error: 'invalid_patch',
       message: 'Patch payload did not match the NativePatch contract.',
-      retryHint: 'Fix the patch schema errors and retry with a valid NativePatch payload.',
+      retryHint: 'Fix the patch schema errors and retry with the valid NativePatch example shown in the tool result.',
       diagnostics: validation.errors,
     };
     return {
-      content: [{ type: 'text', text: details.message }],
+      content: [{ type: 'text', text: formatInvalidPatchMessage(details.message, validation.errors) }],
       details,
     };
   }
@@ -170,6 +173,23 @@ function rejectedPatchResult(
     content: [{ type: 'text', text: `${result.rejection.code}: ${result.rejection.message}` }],
     details,
   };
+}
+
+function formatInvalidPatchMessage(
+  message: string,
+  diagnostics: NativePatchValidationError[],
+): string {
+  const diagnosticText = diagnostics
+    .map((diagnostic) => `- ${diagnostic.path}: ${diagnostic.message}`)
+    .join('\n');
+  return [
+    message,
+    '',
+    'Validation errors:',
+    diagnosticText || '- No diagnostics returned.',
+    '',
+    buildNativePatchGuidance(),
+  ].join('\n');
 }
 
 function summarizeApplyPatch(result: ApplyPatchSuccessDetails): string {

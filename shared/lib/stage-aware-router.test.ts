@@ -1535,6 +1535,10 @@ const recencySequence = () => {
   return () => values[Math.min(index++, values.length - 1)];
 };
 
+// Keep these tests independent of the calendar: Sonnet 5 was released on
+// 2026-06-30, so this fixed clock places it squarely inside the 45-day window.
+const recencyTestNow = Date.UTC(2026, 6, 1);
+
 test('recency boost steers exploration toward recently released models', () => {
   const { repoDir, cleanup } = recencyBoostRepo(5);
   try {
@@ -1544,6 +1548,7 @@ test('recency boost steers exploration toward recently released models', () => {
       minModels: 2,
       kNeighbors: 6,
       randomFn: recencySequence(),
+      nowMs: recencyTestNow,
     });
     assert.ok(decision);
     // Boosted weights [~5, 1]: the 0.6 roll lands on the recent runner-up
@@ -1564,6 +1569,7 @@ test('the same roll without the boost picks the older alternative', () => {
       minModels: 2,
       kNeighbors: 6,
       randomFn: recencySequence(),
+      nowMs: recencyTestNow,
     });
     assert.ok(decision);
     // Uniform weights [1, 1]: the 0.6 roll lands on the second alternative
@@ -1583,6 +1589,7 @@ test('models outside the recency window get no boost', () => {
       minModels: 2,
       kNeighbors: 6,
       randomFn: recencySequence(),
+      nowMs: recencyTestNow,
     });
     assert.ok(decision);
     // A one-day global recency window makes this identical to the no-boost outcome.

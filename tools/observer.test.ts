@@ -6,6 +6,24 @@ import assert from 'node:assert/strict';
 
 import { buildFindings, parseArgs, redactObserverText, syncIncidentsToLinear, writeServiceHeartbeat } from './observer.ts';
 
+function defaultObserverOptions() {
+  return {
+    loop: false,
+    once: true,
+    json: false,
+    intervalSeconds: 120,
+    staleMinutes: 10,
+    hungMinutes: 10,
+    fileLinear: false,
+    fileIncidents: false,
+    dryRun: false,
+    incidentsDryRun: false,
+    maxLogLines: 240,
+    printPrompt: false,
+    incidentDetector: true,
+  };
+}
+
 test('repeated ready watchdog auto-recoveries escalate to actionable stuck finding', () => {
   const repoDir = mkdtempSync(join(tmpdir(), 'observer-ready-watchdog-'));
   const logPath = join(repoDir, 'mill-wavemill.log');
@@ -58,6 +76,114 @@ test('repeated ready watchdog auto-recoveries escalate to actionable stuck findi
     assert.match(stuck.title, /repeatedly triggers ready watchdog auto-recovered/);
     assert.equal(stuck.evidence[0], 'occurrences=4');
     assert.equal(findings.filter((finding) => finding.title === 'Recent mill log contains a warning').length, 0);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('degraded queue health returns structured finding without throwing', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'observer-queue-degraded-'));
+  try {
+    const findings = buildFindings({
+      timestamp: '2026-08-10T12:00:00.000Z',
+      sessions: ['wavemill'],
+      panes: [],
+      processes: [],
+      repos: [{
+        session: 'wavemill',
+        repoDir,
+        queueHealth: {
+          status: 'degraded',
+          degradationReason: 'dependency_planning_failed',
+          episodeStartedAt: '2026-08-10T00:00:00Z',
+          failureCount: 3,
+          retryBackoffSeconds: 60,
+          lastAttemptAt: '2026-08-10T00:05:00Z',
+          diagnostics: { stderrExcerpt: 'plan_queue_failed exit 143' },
+        },
+        tasks: [],
+      }],
+    }, defaultObserverOptions());
+
+    const degraded = findings.find((finding) => finding.id.startsWith('queue-health-degraded-'));
+    assert.ok(degraded);
+    assert.equal(degraded.severity, 'medium');
+    assert.equal(degraded.category, 'warning');
+    assert.match(degraded.title, /dependency_planning_failed/);
+    assert.ok(degraded.evidence.includes('failureCount=3'));
+    assert.ok(degraded.evidence.includes('stderr=plan_queue_failed exit 143'));
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('degraded queue health suppresses only generic queue analysis warning', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'observer-queue-warning-suppressed-'));
+  const logPath = join(repoDir, 'mill-wavemill.log');
+  writeFileSync(logPath, [
+    '12:01:02 [status] WARN queue analysis unavailable; using flat fallback',
+    '12:02:03 [status] WARN task handoff timed out',
+  ].join('\n'));
+
+  try {
+    const findings = buildFindings({
+      timestamp: '2026-08-10T12:00:00.000Z',
+      sessions: ['wavemill'],
+      panes: [],
+      processes: [],
+      repos: [{
+        session: 'wavemill',
+        repoDir,
+        millLogPath: logPath,
+        queueHealth: {
+          status: 'degraded',
+          degradationReason: 'plan_queue_failed',
+          episodeStartedAt: '2026-08-10T00:00:00Z',
+          failureCount: 5,
+        },
+        tasks: [],
+      }],
+    }, defaultObserverOptions());
+
+    assert.ok(findings.some((finding) => finding.id.startsWith('queue-health-degraded-')));
+    assert.equal(findings.some((finding) => (
+      finding.id.startsWith('log-warning-') &&
+      finding.evidence.some((line) => /queue analysis unavailable/i.test(line))
+    )), false);
+    assert.ok(findings.some((finding) => (
+      finding.id.startsWith('log-warning-') &&
+      finding.evidence.some((line) => /task handoff timed out/i.test(line))
+    )));
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('healthy queue health keeps generic queue analysis warning', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'observer-queue-warning-healthy-'));
+  const logPath = join(repoDir, 'mill-wavemill.log');
+  writeFileSync(logPath, '12:01:02 [status] WARN queue analysis unavailable; using flat fallback\n');
+
+  try {
+    const findings = buildFindings({
+      timestamp: '2026-08-10T12:00:00.000Z',
+      sessions: ['wavemill'],
+      panes: [],
+      processes: [],
+      repos: [{
+        session: 'wavemill',
+        repoDir,
+        millLogPath: logPath,
+        queueHealth: { status: 'ok' },
+        tasks: [],
+      }],
+    }, defaultObserverOptions());
+
+    assert.equal(findings.some((finding) => finding.id.startsWith('queue-health-degraded-')), false);
+    assert.ok(findings.some((finding) => (
+      finding.id.startsWith('log-warning-') &&
+      finding.evidence.some((line) => /queue analysis unavailable/i.test(line))
+    )));
   } finally {
     rmSync(repoDir, { recursive: true, force: true });
   }

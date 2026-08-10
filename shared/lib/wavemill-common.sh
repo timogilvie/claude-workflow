@@ -1768,9 +1768,12 @@ apply_expanded_route_if_present() {
     fi
   done
   if [[ -z "$challenge_intent_file" && -n "$state_file" && -f "$state_file" ]]; then
-    if jq -e --arg issue "$issue" '.tasks[$issue].challengeIntent? // empty' "$state_file" >/dev/null 2>&1; then
+    # Newer launches persist the canonical execution intent; startup launches
+    # persist its projected challengeIntent.  Both carry expectedRoute and are
+    # valid inputs for retaining the arm selected before expansion.
+    if jq -e --arg issue "$issue" '(.tasks[$issue].challengeIntent? // .tasks[$issue].challengeExecutionIntent? // empty)' "$state_file" >/dev/null 2>&1; then
       challenge_intent_tmp="$(mktemp "${TMPDIR:-/tmp}/wavemill-challenge-intent.XXXXXX")"
-      jq --arg issue "$issue" '.tasks[$issue].challengeIntent' "$state_file" > "$challenge_intent_tmp" 2>/dev/null || true
+      jq --arg issue "$issue" '(.tasks[$issue].challengeIntent? // .tasks[$issue].challengeExecutionIntent? // empty)' "$state_file" > "$challenge_intent_tmp" 2>/dev/null || true
       if [[ -s "$challenge_intent_tmp" ]] && jq -e . "$challenge_intent_tmp" >/dev/null 2>&1; then
         challenge_intent_file="$challenge_intent_tmp"
       fi

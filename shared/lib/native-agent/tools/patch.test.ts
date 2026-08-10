@@ -32,7 +32,7 @@ describe('native-agent patch recovery smoke', () => {
     assert.equal(invalidDetails.ok, false);
     if (!invalidDetails.ok) {
       assert.equal(invalidDetails.error, 'invalid_patch');
-      assert.equal(invalidDetails.retryHint, 'Fix the patch schema errors and retry with a valid NativePatch payload.');
+      assert.equal(invalidDetails.retryHint, 'Fix the patch schema errors and retry with the valid NativePatch example shown in the tool result.');
       assert.ok(Array.isArray(invalidDetails.diagnostics));
       assert.ok(invalidDetails.diagnostics.length > 0);
     }
