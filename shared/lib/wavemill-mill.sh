@@ -4616,6 +4616,10 @@ validate_planning_phase_output() {
     case "$changed_file" in
       features/*) ;;
       .wavemill/*) ;;
+      # The local overlay is per-developer runtime configuration. It is
+      # intentionally propagated into worktrees and must not invalidate an
+      # approved plan when an agent/runtime updates it.
+      .wavemill-config.local.json) ;;
       .claude/settings.local.json) ;;
       *)
         out_of_scope_files+=("$changed_file")
