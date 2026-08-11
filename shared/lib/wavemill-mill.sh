@@ -3480,12 +3480,22 @@ challenge_varied_stage_model() {
   [[ -n "$issue" ]] || return 0
   task_stage=$(get_task_meta "$issue" "challengeStage" 2>/dev/null || true)
   [[ -n "$task_stage" ]] || return 0
+
+  # Map the launch phase name onto the challenge stage vocabulary.  Each arm is
+  # a single pattern rather than an `a|b)` alternation: the monitor heredoc
+  # guard in tests/check-shell.sh reads `|word)` as a command position and would
+  # report `planning` and `implementation` as undefined function calls.
+  local wanted=""
   case "$stage" in
-    plan|planning)          [[ "$task_stage" == "plan" ]] || return 0 ;;
-    review)                 [[ "$task_stage" == "review" ]] || return 0 ;;
-    coding|implementation)  [[ "$task_stage" == "implementation" ]] || return 0 ;;
+    plan) wanted="plan" ;;
+    planning) wanted="plan" ;;
+    review) wanted="review" ;;
+    coding) wanted="implementation" ;;
+    implementation) wanted="implementation" ;;
     *) return 0 ;;
   esac
+  [[ "$task_stage" == "$wanted" ]] || return 0
+
   varied=$(get_task_meta "$issue" "challengeVariedModel" 2>/dev/null || true)
   [[ -n "$varied" ]] || return 0
   printf '%s' "$varied"

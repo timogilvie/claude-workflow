@@ -207,6 +207,30 @@ if [[ -n "$SAVE_STATE_HELPER" ]]; then
     else
       fail "varied stage model leaked into a shared stage"
     fi
+
+    # Launch sites spell the phase differently than the challenge stage does
+    # ("planning" vs "plan", "coding" vs "implementation"). Pin every alias so a
+    # dropped case arm cannot silently stop restoring an arm.
+    jq '.tasks["HOK-2724_c"].challengeStage = "implementation"' "$RUNTIME_STATE_FILE" > "$RUNTIME_STATE_TMP/state.next" \
+      && mv "$RUNTIME_STATE_TMP/state.next" "$RUNTIME_STATE_FILE"
+    if [[ "$(challenge_varied_stage_model "HOK-2724_c" "coding")" == "kimi-k2" ]] \
+      && [[ "$(challenge_varied_stage_model "HOK-2724_c" "implementation")" == "kimi-k2" ]] \
+      && [[ -z "$(challenge_varied_stage_model "HOK-2724_c" "review")" ]] \
+      && [[ -z "$(challenge_varied_stage_model "HOK-2724_c" "nonsense")" ]]; then
+      pass "coding and implementation both resolve the implementation stage"
+    else
+      fail "implementation stage aliases did not resolve"
+    fi
+
+    jq '.tasks["HOK-2724_c"].challengeStage = "plan"' "$RUNTIME_STATE_FILE" > "$RUNTIME_STATE_TMP/state.next" \
+      && mv "$RUNTIME_STATE_TMP/state.next" "$RUNTIME_STATE_FILE"
+    if [[ "$(challenge_varied_stage_model "HOK-2724_c" "plan")" == "kimi-k2" ]] \
+      && [[ "$(challenge_varied_stage_model "HOK-2724_c" "planning")" == "kimi-k2" ]] \
+      && [[ -z "$(challenge_varied_stage_model "HOK-2724_c" "coding")" ]]; then
+      pass "plan and planning both resolve the plan stage"
+    else
+      fail "plan stage aliases did not resolve"
+    fi
   else
     fail "could not extract challenge_varied_stage_model helper"
   fi
