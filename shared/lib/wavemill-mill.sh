@@ -6722,6 +6722,19 @@ _restore_inflight_task_window_if_missing() {
   local feature_dir="${wt_dir}/features/${slug}"
   _RESTORE_STATE="none"
 
+  # A prior resume may already have determined that this task has no valid
+  # recovery contract.  Its phase remains persisted for diagnosis, but it is
+  # terminal from the resume controller's perspective; retrying it every poll
+  # only produces a missing-window log storm.
+  if [[ -f "${STATE_FILE:-}" ]] \
+    && jq -e --arg issue "$issue" '
+      .tasks[$issue].status == "stopped"
+      and .tasks[$issue].stopReason == "recovery_contract_unavailable"
+    ' "$STATE_FILE" >/dev/null 2>&1; then
+    _RESTORE_STATE="failed"
+    return 0
+  fi
+
   if _tmux_task_window_target "$SESSION" "$issue" "$slug" "${STATE_FILE:-}" "$wt_dir" >/dev/null 2>&1; then
     return 0
   fi
