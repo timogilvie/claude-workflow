@@ -8,8 +8,10 @@ import { test } from 'node:test';
 import { SCHEMA_VERSION, type EvalRecord } from './eval-schema.ts';
 import {
   buildChallengeExecutionIntent,
+  enforceChallengeIntentPresence,
   projectChallengeIntentForPersistence,
   type ChallengeExecutionIntent,
+  type InvalidChallengeReason,
 } from './challenge-execution-contract.ts';
 import { attachChallengeExecutionMetadata } from './eval-record-builder.ts';
 import { appendEvalRecord, readEvalRecords } from './eval-persistence.ts';
@@ -291,4 +293,71 @@ test('Hokusai submission boundary omits local challenge contract keys', () => {
   assert.equal('challengeSide' in payload, false);
   assert.equal('challengeIntent' in payload, false);
   assert.equal('challengeExecutionRoute' in payload, false);
+});
+
+// --- a challenge record without an intent must not pass as clean evidence ---
+//
+// attestEvalRecordChallengeExecution returns undefined when there is no intent,
+// so such a record used to land with no verdict AND trainingEligible left
+// intact. Silence read as success, which is how an arm whose selected model had
+// been replaced by rerouting still counted as evidence for the model that ran.
+
+test('a challenge record with no intent is marked invalid rather than training-eligible', () => {
+  const record = makeRecord({ trainingEligible: true });
+  record.challengePairId = 'HOK-2726';
+  record.challengeSide = 'challenger';
+
+  const marked = enforceChallengeIntentPresence(record, 'HOK-2726');
+
+  assert.equal(marked, true);
+  assert.equal(record.invalidChallenge, true);
+  assert.equal(record.trainingEligible, false);
+  assert.equal(record.challengeDivergenceReason, 'missing_challenge_intent');
+  assert.equal(record.nonRewardReason?.code, 'INVALID_CHALLENGE');
+});
+
+test('a challenge record that carries an intent is left alone', () => {
+  const intent = projectChallengeIntentForPersistence(makeRuntimeIntent());
+  assert.ok(intent);
+  const record = makeRecord({ trainingEligible: true });
+  record.challengePairId = 'HOK-2726';
+  record.challengeSide = 'primary';
+  record.challengeIntent = intent!;
+
+  assert.equal(enforceChallengeIntentPresence(record, 'HOK-2726'), false);
+  assert.equal(record.invalidChallenge, undefined);
+  assert.equal(record.trainingEligible, true);
+});
+
+test('a non-challenge record is never touched by the intent guard', () => {
+  const record = makeRecord({ trainingEligible: true });
+
+  assert.equal(enforceChallengeIntentPresence(record, undefined), false);
+  assert.equal(record.invalidChallenge, undefined);
+  assert.equal(record.trainingEligible, true);
+});
+
+test('every TypeScript divergence reason is accepted by the eval JSON schema', () => {
+  const validateReason = ajv.compile({
+    ...evalSchema.$defs.InvalidChallengeReason,
+    $defs: evalSchema.$defs,
+  });
+  // Mirrors the InvalidChallengeReason union. The schema enum had already
+  // drifted (operator_reroute was missing), so pin both directions here.
+  const reasons: InvalidChallengeReason[] = [
+    'stage_override_lost',
+    'native_launch_fallback',
+    'identical_effective_route',
+    'state_vs_derived_side_mismatch',
+    'operator_reroute',
+    'missing_challenge_intent',
+  ];
+  for (const reason of reasons) {
+    assert.equal(validateReason(reason), true, `schema rejects divergence reason ${reason}`);
+  }
+  assert.deepEqual(
+    [...(evalSchema.$defs.InvalidChallengeReason.enum as string[])].sort(),
+    [...reasons].sort(),
+    'eval-schema.json enum and the InvalidChallengeReason union have drifted',
+  );
 });

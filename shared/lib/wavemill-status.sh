@@ -383,6 +383,23 @@ planning_rejection_detail() {
   printf 'Planning needs attention: edited %s; reverted. Review plan.md and re-approve.\n' "$files"
 }
 
+# Read the arm-preservation flag that apply_expanded_route_if_present stamps on
+# .routing-complete.  Prints "true", "false", or nothing when the task has no
+# worktree, no routing artifact, or predates the flag.
+challenge_arm_preserved_flag() {
+  local issue="$1"
+  local worktree slug routing_file
+
+  [[ -n "$issue" && -n "${STATE_FILE:-}" && -f "${STATE_FILE:-}" ]] || return 0
+  worktree=$(jq -r --arg issue "$issue" '.tasks[$issue].worktree // empty' "$STATE_FILE" 2>/dev/null || true)
+  slug=$(jq -r --arg issue "$issue" '.tasks[$issue].slug // empty' "$STATE_FILE" 2>/dev/null || true)
+  [[ -n "$worktree" && -n "$slug" ]] || return 0
+
+  routing_file="$worktree/features/$slug/.routing-complete"
+  [[ -f "$routing_file" ]] || return 0
+  jq -r '.challengeArmPreserved // empty' "$routing_file" 2>/dev/null || true
+}
+
 native_launch_failure_detail() {
   local worktree="$1" slug="$2"
   local feature_dir="$worktree/features/$slug"
@@ -1046,6 +1063,33 @@ task_running_detail() {
       printf 'comparison running: pair=%s prs=#%s/#%s\n' "$pair_id" "$primary_pr" "$challenger_pr"
     fi
     return 0
+  fi
+
+  # Surface the varied stage and both arms from the selection record, so an arm
+  # replaced by rerouting is visible while the run is still live rather than
+  # only after the comparison rejects the pair.
+  local challenge_stage challenge_varied challenge_other challenge_role arm_preserved
+  challenge_stage=$(jq -r --arg issue "$issue" '.tasks[$issue].challengeStage // empty' "$STATE_FILE" 2>/dev/null || true)
+  if [[ -n "$challenge_stage" ]]; then
+    challenge_role=$(jq -r --arg issue "$issue" '.tasks[$issue].challengeRole // "primary"' "$STATE_FILE" 2>/dev/null || echo "primary")
+    challenge_varied=$(jq -r --arg issue "$issue" '.tasks[$issue].challengeVariedModel // empty' "$STATE_FILE" 2>/dev/null || true)
+    challenge_other=$(jq -r --arg issue "$issue" --arg role "$challenge_role" '
+      (.tasks[$issue].challengeExecutionIntent // .tasks[$issue].challengeIntent // {}) as $i
+      | (if $role == "challenger" then $i.primary else $i.challenger end) // {}
+      | .expectedStageModel // empty' "$STATE_FILE" 2>/dev/null || true)
+    if [[ -n "$challenge_varied" ]]; then
+      if [[ -n "$challenge_other" ]]; then
+        printf 'challenge %s (stage=%s): this=%s vs %s\n' "$challenge_role" "$challenge_stage" "$challenge_varied" "$challenge_other"
+      else
+        printf 'challenge %s (stage=%s): this=%s\n' "$challenge_role" "$challenge_stage" "$challenge_varied"
+      fi
+      # apply_expanded_route_if_present stamps this false when it could not
+      # retain the selected arm through rerouting.
+      arm_preserved=$(challenge_arm_preserved_flag "$issue")
+      if [[ "$arm_preserved" == "false" ]]; then
+        printf 'challenge arm NOT preserved through rerouting — comparison will be unattributable\n'
+      fi
+    fi
   fi
 
   local comparison_state blocked_reason retry_count retry_max timed_out_sides manual_artifact

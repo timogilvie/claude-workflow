@@ -12,6 +12,10 @@ import { resolveModelAgent } from './model-agent-resolution.ts';
 import { resolveAgent, tryResolveAgent, type AgentResolutionPhase } from './model-router.ts';
 import { filterOpenRouterModels } from './openrouter-provider.ts';
 import { listVariedRoutingDimensions, routingMetaFromChallengeEntry } from './challenge-comparison.ts';
+import type { ChallengeRoutingMeta } from './challenge-comparison.ts';
+// Value import is safe: challenge-execution-contract.ts imports only *types*
+// from this module, so there is no runtime cycle.
+import { projectEntryToSideIntent } from './challenge-execution-contract.ts';
 export { routeChangedMaterially } from './route-artifact.ts';
 import { routeChangedMaterially, type RouteArtifactSnapshot } from './route-artifact.ts';
 import { routeWorkflow, type WorkflowRouteDecision } from './workflow-router.ts';
@@ -104,12 +108,29 @@ export interface ChallengePairSelectionResult<T extends ChallengePairSelection =
   challengeUnavailable?: ChallengeUnavailableResult;
 }
 
+/**
+ * One side of a persisted challenge intent.
+ *
+ * This is deliberately a *superset*: the runtime fields (`planner`/`coder`/
+ * `reviewer`) that launchers read, plus the projection fields (`side`,
+ * `challengeStage`, `expectedStageModel`, `expectedRoute`) that the rerouting
+ * merge and eval attestation read. They were once two separate schemas sharing
+ * one field name, which made arm preservation a silent no-op for whichever
+ * consumer received the other shape. Anything added here must be added once.
+ */
 export interface ChallengeExecutionIntentSide {
   key?: string;
   role: ChallengeRole;
   planner: { model: string; agent: string };
   coder: { model: string; agent: string };
   reviewer: { model: string; agent: string };
+  /** Projection: duplicate of `role`, named as the contract consumers expect. */
+  side?: ChallengeRole;
+  pairId?: string;
+  challengeStage?: ChallengeStage;
+  expectedStageModel?: string;
+  expectedStageAgent?: string;
+  expectedRoute?: ChallengeRoutingMeta;
 }
 
 export interface ChallengeExecutionIntent {
@@ -118,6 +139,8 @@ export interface ChallengeExecutionIntent {
   issueId: string;
   createdAt: string;
   selectedStage?: ChallengeStage;
+  /** Always equal to `selectedStage`; emitted for contract-schema consumers. */
+  challengeStage?: ChallengeStage;
   decisionSource: ChallengeDecisionSource;
   selectionPath?: ChallengeSelectionPath;
   selectionReason?: ChallengeSelectionReason;
@@ -132,7 +155,16 @@ export interface ChallengeExecutionIntent {
   noChallengeReason?: string;
 }
 
-function intentSideFromEntry(entry: ChallengeTaskEntry): ChallengeExecutionIntentSide {
+function intentSideFromEntry(
+  entry: ChallengeTaskEntry,
+  context: { pairId: string; stage: ChallengeStage },
+): ChallengeExecutionIntentSide {
+  const projection = projectEntryToSideIntent({
+    pairId: context.pairId,
+    side: entry.role,
+    challengeStage: context.stage,
+    entry,
+  });
   return {
     key: entry.key,
     role: entry.role,
@@ -148,7 +180,38 @@ function intentSideFromEntry(entry: ChallengeTaskEntry): ChallengeExecutionInten
       model: entry.reviewer || '',
       agent: entry.reviewerAgent || '',
     },
+    ...projection,
   };
+}
+
+/**
+ * Backfill the projection fields on a side that was supplied pre-built.
+ *
+ * `buildSingle` in resolve-challenge-task.ts hands us a runtime-only side for
+ * the no-challenge case. Filling it here keeps the invariant that every side
+ * written to disk carries both halves of the schema.
+ */
+function withSideProjection(
+  side: ChallengeExecutionIntentSide,
+  context: { pairId: string; stage: ChallengeStage },
+): ChallengeExecutionIntentSide {
+  if (side.expectedRoute && side.side) {
+    return side;
+  }
+  const projection = projectEntryToSideIntent({
+    pairId: context.pairId,
+    side: side.role,
+    challengeStage: context.stage,
+    entry: {
+      model: side.coder?.model,
+      agent: side.coder?.agent,
+      planner: side.planner?.model,
+      plannerAgent: side.planner?.agent,
+      reviewer: side.reviewer?.model,
+      reviewerAgent: side.reviewer?.agent,
+    },
+  });
+  return { ...side, ...projection };
 }
 
 export function buildChallengeExecutionIntent(input: {
@@ -169,12 +232,16 @@ export function buildChallengeExecutionIntent(input: {
   fallbackReason?: string;
   noChallengeReason?: string;
 }): ChallengeExecutionIntent {
+  // `challengeStage` and `selectedStage` are emitted together and always agree.
+  // Consumers historically read one or the other; emitting both means neither
+  // can silently fall through to the "implementation" default.
+  const stage: ChallengeStage = input.selectedStage || 'implementation';
   const asIntentSide = (
     side: ChallengeTaskEntry | ChallengeExecutionIntentSide | undefined,
   ): ChallengeExecutionIntentSide | undefined => {
     if (!side) return undefined;
-    if ('coder' in side) return side;
-    return intentSideFromEntry(side);
+    if ('coder' in side) return withSideProjection(side, { pairId: input.pairId, stage });
+    return intentSideFromEntry(side, { pairId: input.pairId, stage });
   };
 
   return {
@@ -183,7 +250,7 @@ export function buildChallengeExecutionIntent(input: {
     issueId: input.issueId,
     createdAt: input.createdAt || new Date().toISOString(),
     decisionSource: input.decisionSource || 'bootstrap',
-    ...(input.selectedStage ? { selectedStage: input.selectedStage } : {}),
+    ...(input.selectedStage ? { selectedStage: input.selectedStage, challengeStage: input.selectedStage } : {}),
     ...(input.selectionPath ? { selectionPath: input.selectionPath } : {}),
     ...(input.selectionReason ? { selectionReason: input.selectionReason } : {}),
     ...(input.challengerSource ? { challengerSource: input.challengerSource } : {}),
