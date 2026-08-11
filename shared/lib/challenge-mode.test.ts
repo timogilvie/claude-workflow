@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { WorkflowRouteDecision } from './workflow-router.ts';
 import {
+  buildChallengeExecutionIntent,
   canRunChallenge,
   chooseChallengeStage,
   chooseDistinctChallengerModel,
@@ -24,6 +25,7 @@ import {
   variedModelForStage,
 } from './challenge-mode.ts';
 import { listVariedRoutingDimensions, routingMetaFromChallengeEntry } from './challenge-comparison.ts';
+import { projectChallengeIntentForPersistence } from './challenge-execution-contract.ts';
 import { resolveOpenRouterModelId } from './openrouter-provider.ts';
 import type { RouteArtifactSnapshot } from './route-artifact.ts';
 import { CERTIFICATION_SCHEMA_VERSION } from './native-agent/certification/schema.ts';
@@ -2678,6 +2680,115 @@ test('missing OPENROUTER_API_KEY excludes OpenRouter challengers and falls back 
   } finally {
     cleanup();
   }
+});
+
+// --- persisted intent is one schema, not two -------------------------------
+//
+// The rerouting merge in wavemill-common.sh and the eval attestation in
+// challenge-execution-contract.ts historically read different, incompatible
+// objects that shared the field name `challengeIntent`. Whichever consumer got
+// the shape it could not parse silently degraded — the merge to a no-op that
+// let the expanded route replace the selected arm, the attestation to a
+// permanent `undefined`. These tests pin the superset invariant.
+
+function intentEntry(role: 'primary' | 'challenger', overrides: Record<string, string> = {}) {
+  return {
+    key: role === 'primary' ? 'HOK-536' : 'HOK-536_c',
+    issueId: 'HOK-536',
+    slug: 'credit-service',
+    branch: 'task/credit-service',
+    role,
+    model: 'gpt-5.5',
+    agent: 'codex',
+    planner: 'gpt-5.6-terra',
+    plannerAgent: 'codex',
+    reviewer: 'gpt-5.6-terra',
+    reviewerAgent: 'codex',
+    planDepth: 'light',
+    codeDepth: 'light',
+    reviewMode: 'llm',
+    ...overrides,
+  } as const;
+}
+
+test('persisted intent carries both stage keys in agreement', () => {
+  const intent = buildChallengeExecutionIntent({
+    pairId: 'HOK-536',
+    issueId: 'HOK-536',
+    selectedStage: 'review',
+    primary: intentEntry('primary'),
+    challenger: intentEntry('challenger', { reviewer: 'kimi-k2', reviewerAgent: 'native-openrouter' }),
+  });
+
+  assert.equal(intent.selectedStage, 'review');
+  assert.equal(intent.challengeStage, 'review');
+});
+
+test('persisted intent sides carry runtime and projection fields together', () => {
+  const intent = buildChallengeExecutionIntent({
+    pairId: 'HOK-536',
+    issueId: 'HOK-536',
+    selectedStage: 'review',
+    primary: intentEntry('primary'),
+    challenger: intentEntry('challenger', { reviewer: 'kimi-k2', reviewerAgent: 'native-openrouter' }),
+  });
+
+  const challenger = intent.challenger!;
+  // Runtime half, read by the launchers.
+  assert.deepEqual(challenger.reviewer, { model: 'kimi-k2', agent: 'native-openrouter' });
+  assert.deepEqual(challenger.coder, { model: 'gpt-5.5', agent: 'codex' });
+  // Projection half, read by the rerouting merge and eval attestation.
+  assert.equal(challenger.side, 'challenger');
+  assert.equal(challenger.pairId, 'HOK-536');
+  assert.equal(challenger.challengeStage, 'review');
+  assert.equal(challenger.expectedStageModel, 'kimi-k2');
+  assert.equal(challenger.expectedStageAgent, 'native-openrouter');
+  assert.equal(challenger.expectedRoute?.reviewer, 'kimi-k2');
+  assert.equal(challenger.expectedRoute?.coder, 'gpt-5.5');
+});
+
+test('persisted intent projects for eval attestation without translation', () => {
+  const intent = buildChallengeExecutionIntent({
+    pairId: 'HOK-536',
+    issueId: 'HOK-536',
+    selectedStage: 'implementation',
+    primary: intentEntry('primary'),
+    challenger: intentEntry('challenger', { model: 'qwen-2.5-coder-32b', agent: 'native-openrouter' }),
+  });
+
+  const projection = projectChallengeIntentForPersistence(intent as never);
+  assert.ok(projection, 'canonical intent must project for persistence');
+  assert.equal(projection!.challengeStage, 'implementation');
+  assert.equal(projection!.primary.expectedStageModel, 'gpt-5.5');
+  assert.equal(projection!.challenger.expectedStageModel, 'qwen-2.5-coder-32b');
+  assert.equal(projection!.challenger.expectedStageAgent, 'native-openrouter');
+});
+
+test('a runtime-only side is backfilled rather than persisted half-formed', () => {
+  const intent = buildChallengeExecutionIntent({
+    pairId: 'HOK-777',
+    issueId: 'HOK-777',
+    selectedStage: 'plan',
+    primary: {
+      key: 'HOK-777',
+      role: 'primary',
+      planner: { model: 'claude-fable-5', agent: 'claude' },
+      coder: { model: 'gpt-5.5', agent: 'codex' },
+      reviewer: { model: '', agent: '' },
+    },
+    challenger: {
+      key: 'HOK-777_c',
+      role: 'challenger',
+      planner: { model: 'glm-5.2', agent: 'native-openrouter' },
+      coder: { model: 'gpt-5.5', agent: 'codex' },
+      reviewer: { model: '', agent: '' },
+    },
+  });
+
+  assert.equal(intent.challenger!.expectedStageModel, 'glm-5.2');
+  assert.equal(intent.challenger!.expectedStageAgent, 'native-openrouter');
+  assert.equal(intent.challenger!.side, 'challenger');
+  assert.equal(intent.primary!.expectedStageModel, 'claude-fable-5');
 });
 
 process.on('exit', () => {
