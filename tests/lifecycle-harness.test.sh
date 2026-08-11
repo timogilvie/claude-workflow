@@ -2276,6 +2276,25 @@ test_coding_complete_trace_only_dirty_worktree_advances() {
   check_file_absent "trace only: no dedupe marker written" "$feature_dir/.coding-uncommitted-output-announced"
 }
 
+test_coding_complete_local_config_overlay_advances() {
+  local slug="coding-complete-local-config-overlay"
+  local issue="HOK-2454-LOCAL-CONFIG"
+  local repo tick feature_dir
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  feature_dir="$repo/features/$slug"
+
+  touch "$feature_dir/.coding-complete"
+  printf '{"mill":{"maxParallel":1}}\n' > "$repo/.wavemill-config.local.json"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
+
+  check_eq "local config overlay: coding becomes completed" "completed" "$(harness_read_stage_status "$repo" "$slug" coding)"
+  check_eq "local config overlay: no needs-user attention" "" "$(kv_value "$tick" attention)"
+  check_file_absent "local config overlay: no uncommitted artifact written" "$feature_dir/.coding-uncommitted-output.json"
+}
+
 test_coding_complete_tracked_claude_settings_advances() {
   local slug="coding-complete-tracked-claude-settings"
   local issue="HOK-2454-CLAUDE-SETTINGS"

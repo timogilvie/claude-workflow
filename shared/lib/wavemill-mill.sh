@@ -5015,6 +5015,12 @@ blocked_completion_auto_allowed_dirty_path() {
     return 0
   fi
 
+  # This repository-local overlay is generated and consumed by Wavemill, but
+  # intentionally remains untracked so each session can carry local settings.
+  if [[ "$normalized_path" == ".wavemill-config.local.json" ]]; then
+    return 0
+  fi
+
   # Root prompt registry updates are Wavemill-owned generated metadata.
   if [[ "$normalized_path" == "prompt-registry.jsonl" ]]; then
     return 0
