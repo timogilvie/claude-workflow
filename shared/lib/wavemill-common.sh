@@ -1788,30 +1788,69 @@ apply_expanded_route_if_present() {
   fi
 
   if ! state_mutate "$routing_file" \
-    '. as $base
+    '# nz: first argument unless it is null/empty string, else the fallback.
+     # jq "//" only rejects null and false, so "" would otherwise win.
+     def nz(a; b): if ((a) // "") == "" then (b) else (a) end;
+     # Both persisted intent schemas are accepted here.  The projection schema
+     # (challenge-execution-contract.ts) carries challengeStage and a per-side
+     # expectedRoute; the envelope schema (challenge-mode.ts) carries
+     # selectedStage and per-side {planner,coder,reviewer}:{model,agent}.
+     # Reading only one of them silently degrades to a no-op merge, which is
+     # how selected challenge arms were being replaced by the expanded route.
+     def stage_of($intentObj; $sideObj):
+       (nz($intentObj.challengeStage;
+           nz($intentObj.selectedStage; $sideObj.challengeStage)) | tostring | ascii_downcase) as $raw
+       | if   $raw == "plan"   or $raw == "planning" or $raw == "planner" then "plan"
+         elif $raw == "review" or $raw == "reviewer" then "review"
+         elif $raw == "implementation" or $raw == "coding" or $raw == "coder" then "implementation"
+         else "" end;
+     def expected_of($sideObj):
+       nz($sideObj.expectedRoute;
+          { planner:  ($sideObj.planner.model  // ""),
+            coder:    ($sideObj.coder.model    // ""),
+            reviewer: ($sideObj.reviewer.model // ""),
+            planDepth: "", codeDepth: "", reviewMode: "" });
+     . as $base
      | $route[0] as $route
      | ($intent[0]? // null) as $intentObj
      | ($side // "") as $sideName
      | ($base + $route) as $rawEffective
      | (if $intentObj == null or $sideName == "" then $rawEffective
         else
-          ($intentObj[$sideName].expectedRoute // {}) as $expected
-          | ($intentObj.challengeStage // $intentObj[$sideName].challengeStage // "implementation") as $stage
-          | $rawEffective
-          | if $stage == "plan" then
-              .planner = ($expected.planner // .planner)
-              | .planDepth = ($expected.planDepth // .planDepth)
-            elif $stage == "review" then
-              .reviewer = ($expected.reviewer // .reviewer)
-              | .reviewMode = ($expected.reviewMode // .reviewMode // .reviewRecommended)
-              | .reviewRecommended = .reviewMode
+          ($intentObj[$sideName] // {}) as $sideObj
+          | expected_of($sideObj) as $expected
+          | stage_of($intentObj; $sideObj) as $stage
+          | (if   $stage == "plan"   then ($expected.planner  // "")
+             elif $stage == "review" then ($expected.reviewer // "")
+             elif $stage == "implementation" then ($expected.coder // "")
+             else "" end) as $variedModel
+          | if $stage == "" or $variedModel == "" then
+              # The intent could not be read.  Leave the expanded route alone
+              # rather than claiming a preservation that did not happen: a false
+              # challengeIntentApplied hides the loss from every later check.
+              $rawEffective
+              | .challengeArmPreserved = false
+              | .challengeArmPreserveReason =
+                  (if $stage == "" then "unresolved_challenge_stage" else "missing_expected_stage_model" end)
             else
-              .coder = ($expected.coder // .coder)
-              | .codeDepth = ($expected.codeDepth // .codeDepth)
+              $rawEffective
+              | if $stage == "plan" then
+                  .planner = $variedModel
+                  | .planDepth = nz($expected.planDepth; .planDepth)
+                elif $stage == "review" then
+                  .reviewer = $variedModel
+                  | .reviewMode = nz($expected.reviewMode; nz(.reviewMode; .reviewRecommended))
+                  | .reviewRecommended = .reviewMode
+                else
+                  .coder = $variedModel
+                  | .codeDepth = nz($expected.codeDepth; .codeDepth)
+                end
+              | .challengeIntentApplied = true
+              | .challengeArmPreserved = true
+              | .challengeArmPreserveReason = "applied"
+              | .intendedStage = $stage
+              | .rawExpandedRoute = $route
             end
-          | .challengeIntentApplied = true
-          | .intendedStage = $stage
-          | .rawExpandedRoute = $route
         end)
      | .reviewMode = (
          if (.challengeIntentApplied == true and .intendedStage == "review") then
@@ -1844,10 +1883,33 @@ apply_expanded_route_if_present() {
     log_route_lifecycle "expansion_failed" "issue=$issue" "reason=invalid_artifact" "active_route=\"${active_route}\""
     return 1
   fi
-  if [[ -n "$challenge_intent_file" && "$challenge_intent_file" != "$feature_dir/challenge-intent.json" ]]; then
-    if cp "$challenge_intent_file" "$feature_dir/challenge-intent.json" 2>/dev/null; then
-      challenge_intent_file="$feature_dir/challenge-intent.json"
+  if [[ -n "$challenge_intent_file" ]]; then
+    local arm_preserved arm_reason
+    arm_preserved="$(jq -r '.challengeArmPreserved // "unset"' "$routing_file" 2>/dev/null || echo "unset")"
+    arm_reason="$(jq -r '.challengeArmPreserveReason // "unknown"' "$routing_file" 2>/dev/null || echo "unknown")"
+    if [[ "$arm_preserved" != "true" ]]; then
+      # The selected experimental arm was NOT retained through rerouting.  The
+      # pair will still run, but its varied stage now matches the expanded
+      # route instead of the selection, so any comparison is unattributable.
+      local arm_msg="  $issue: challenge arm NOT preserved through expanded routing (reason=$arm_reason, side=${challenge_side:-unknown}, intent=$challenge_intent_file)"
+      if declare -F log_error >/dev/null 2>&1; then
+        log_error "$arm_msg"
+      else
+        log "warn" "$arm_msg"
+      fi
+      log_route_lifecycle "challenge_arm_lost" \
+        "issue=$issue" \
+        "reason=$arm_reason" \
+        "side=${challenge_side:-unknown}"
     fi
+  fi
+  # The intent is written once at selection and is read-only from here on.
+  # Copying the consumed intent back over the feature-dir file (and, previously,
+  # over .tasks[].challengeIntent) let a rerouting pass overwrite the selection
+  # record with whichever schema it happened to load — one-way corruption that
+  # disarmed preservation for every later phase of the same task.
+  if [[ -n "$challenge_intent_file" && ! -f "$feature_dir/challenge-intent.json" ]]; then
+    cp "$challenge_intent_file" "$feature_dir/challenge-intent.json" 2>/dev/null || true
   fi
   if [[ -n "$challenge_intent_tmp" ]]; then
     rm -f "$challenge_intent_tmp" 2>/dev/null || true
@@ -1942,7 +2004,8 @@ apply_expanded_route_if_present() {
        | .tasks[$issue].planDepth = $planDepth
        | .tasks[$issue].codeDepth = $codeDepth
        | .tasks[$issue].reviewMode = $reviewMode
-       | if $challengeIntentFile != "" then .tasks[$issue].challengeIntent = $challengeIntent[0] else . end
+       # challengeIntent is deliberately NOT written here.  It records the arm
+       # chosen at selection time; rerouting consumes it and must never author it.
        | .tasks[$issue].slug = (.tasks[$issue].slug // $slug)
        | .tasks[$issue].worktree = (.tasks[$issue].worktree // $worktree)
        | .tasks[$issue].updated = (now | todate)' \
@@ -1954,9 +2017,7 @@ apply_expanded_route_if_present() {
       --arg reviewerModel "$reviewer_model" \
       --arg planDepth "$plan_depth" \
       --arg codeDepth "$code_depth" \
-      --arg reviewMode "$review_mode" \
-      --arg challengeIntentFile "$challenge_intent_file" \
-      --slurpfile challengeIntent "${challenge_intent_file:-/dev/null}"; then
+      --arg reviewMode "$review_mode"; then
       log "warn" "expanded route invalid: $route_file (failed to update workflow state)"
       active_route="$(route_lifecycle_route_id "$routing_file" 2>/dev/null || true)"
       log_route_lifecycle "expansion_failed" "issue=$issue" "reason=invalid_artifact" "active_route=\"${active_route}\""

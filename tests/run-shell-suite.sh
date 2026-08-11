@@ -25,6 +25,7 @@ TESTS=(
   wavemill-expand-direct.test.sh
   routing-complete-writes.test.sh
   apply-expanded-route.test.sh
+  challenge-intent-roundtrip.test.sh
   expansion-handshake.test.sh
   config-version-prompt.test.sh
   monitor-ready-transition.test.sh
