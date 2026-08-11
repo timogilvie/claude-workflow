@@ -6728,8 +6728,9 @@ _restore_inflight_task_window_if_missing() {
   # only produces a missing-window log storm.
   if [[ -f "${STATE_FILE:-}" ]] \
     && jq -e --arg issue "$issue" '
-      .tasks[$issue].status == "stopped"
-      and .tasks[$issue].stopReason == "recovery_contract_unavailable"
+      .tasks[$issue]
+      | select(.status == "stopped")
+      | select(.stopReason == "recovery_contract_unavailable")
     ' "$STATE_FILE" >/dev/null 2>&1; then
     _RESTORE_STATE="failed"
     return 0
