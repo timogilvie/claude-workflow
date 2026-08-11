@@ -128,7 +128,9 @@ if [[ -n "$FINALIZATION_HELPER" ]]; then
   check_contains "finalizer skips challenger side" "$FINALIZATION_HELPER" '[[ "$challenge_role_meta" != "challenger" ]] || return 0'
   check_contains "finalizer requires expanded artifact" "$FINALIZATION_HELPER" '[[ -f "$feature_dir/.post-expansion-route.json" ]] || return 0'
   check_contains "finalizer preserves an already selected challenge arm" "$FINALIZATION_HELPER" 'Preserving selected challenge arm through expanded routing'
-  check_contains "finalizer reads the persisted challenge intent before rerouting" "$FINALIZATION_HELPER" '.tasks[$i].challengeExecutionIntent // empty'
+  check_contains "finalizer reads the persisted challenge intent before rerouting" "$FINALIZATION_HELPER" '(.tasks[$i].challengeExecutionIntent // .tasks[$i].challengeIntent) // empty'
+  check_contains "finalizer pins the already-selected stage when it must reroute" "$FINALIZATION_HELPER" 'pinned_stage_arg=(--pinned-stage "$pinned_stage")'
+  check_contains "finalizer passes the pinned stage to the resolver" "$FINALIZATION_HELPER" '"${pinned_stage_arg[@]}"'
   check_contains "finalizer passes feature-dir to resolver" "$FINALIZATION_HELPER" '--feature-dir "$feature_dir"'
   check_contains "finalizer passes task packet when present" "$FINALIZATION_HELPER" 'packet_arg=(--file "$feature_dir/task-packet.md")'
   check_contains "finalizer requires expanded or preserved source" "$FINALIZATION_HELPER" 'refreshed_source" != "expanded" && "$refreshed_source" != "preserved"'
@@ -138,6 +140,10 @@ if [[ -n "$FINALIZATION_HELPER" ]]; then
   check_contains "finalizer saves challenger planner" "$FINALIZATION_HELPER" 'new_challenger_planner'
   check_contains "finalizer persists paired intent" "$FINALIZATION_HELPER" 'persist_challenge_execution_intent "$issue" "$new_challenger_key" "$feature_dir" "$intent_json"'
   check_contains "finalizer exposes in-memory coder" "$FINALIZATION_HELPER" 'FINALIZED_CHALLENGE_CODER="$new_primary"'
+  # Printing the coders made every plan/review pair look degenerate in the log
+  # ("gpt-5.5 vs gpt-5.5") because those stages share a coder by design.
+  check_contains "finalizer logs the varied models and stage" "$FINALIZATION_HELPER" 'stage=$new_challenge_stage): $new_primary_varied vs $new_challenger_varied'
+  check_contains "finalizer checks the arms actually diverge" "$FINALIZATION_HELPER" 'challenge_assert_arms_diverge "$issue" "$new_challenge_stage"'
 else
   fail "could not extract challenge execution finalizer"
 fi
@@ -167,9 +173,83 @@ if [[ -n "$SAVE_STATE_HELPER" ]]; then
   else
     fail "runtime state update discarded challenge intent for native reviewer"
   fi
+
+  # The varied model/agent are the launch-time backstop for plan- and
+  # review-stage arms. A routine status update must not drop them.
+  jq '.tasks["HOK-2724_c"].challengeVariedModel = "kimi-k2"
+      | .tasks["HOK-2724_c"].challengeVariedAgent = "native-openrouter"' \
+    "$RUNTIME_STATE_FILE" > "$RUNTIME_STATE_TMP/state.next" \
+    && mv "$RUNTIME_STATE_TMP/state.next" "$RUNTIME_STATE_FILE"
+  save_task_state "HOK-2724_c" "native-review" "task/native-review" "/tmp/native-review" "" "active" "codex" "HOK-2724_c" "true" "HOK-2724" "challenger" "qwen-3-coder" "bootstrap-planner" "bootstrap-coder" "qwen-3-coder" "light" "medium" "llm" "review"
+  if [[ "$(jq -r '.tasks["HOK-2724_c"].challengeVariedModel' "$RUNTIME_STATE_FILE")" == "kimi-k2" ]] \
+    && [[ "$(jq -r '.tasks["HOK-2724_c"].challengeVariedAgent' "$RUNTIME_STATE_FILE")" == "native-openrouter" ]]; then
+    pass "runtime state update retains the varied stage model and agent"
+  else
+    fail "runtime state update discarded the varied stage model or agent"
+  fi
+
+  # challenge_varied_stage_model must only speak up for the stage the pair varies.
+  CHALLENGE_VARIED_HELPER="$(awk '
+    /^challenge_varied_stage_model\(\) \{/ { capture=1 }
+    capture { print }
+    /^}/ && capture { exit }
+  ' "$MILL_SCRIPT")"
+  if [[ -n "$CHALLENGE_VARIED_HELPER" ]]; then
+    eval "$CHALLENGE_VARIED_HELPER"
+    # Stand in for the mill helper; wavemill-common.sh does not define read_state_value.
+    get_task_meta() {
+      jq -r --arg issue "$1" --arg field "$2" '.tasks[$issue][$field] // empty' "$RUNTIME_STATE_FILE" 2>/dev/null
+    }
+    if [[ "$(challenge_varied_stage_model "HOK-2724_c" "review")" == "kimi-k2" ]] \
+      && [[ -z "$(challenge_varied_stage_model "HOK-2724_c" "coding")" ]] \
+      && [[ -z "$(challenge_varied_stage_model "HOK-2724_c" "plan")" ]]; then
+      pass "varied stage model applies only to the stage the pair varies"
+    else
+      fail "varied stage model leaked into a shared stage"
+    fi
+  else
+    fail "could not extract challenge_varied_stage_model helper"
+  fi
   rm -rf "$RUNTIME_STATE_TMP"
 else
   fail "could not extract runtime save_task_state helper"
+fi
+
+DIVERGE_HELPER="$(awk '
+  /^challenge_assert_arms_diverge\(\) \{/ { capture=1 }
+  capture { print }
+  /^}/ && capture { exit }
+' "$MILL_SCRIPT")"
+
+if [[ -n "$DIVERGE_HELPER" ]]; then
+  DIVERGE_TMP="$(mktemp -d)"
+  (
+    eval "$DIVERGE_HELPER"
+    log_error() { printf 'ERROR %s\n' "$*" >> "$DIVERGE_TMP/out"; }
+    log_route_lifecycle() { printf 'LIFECYCLE %s\n' "$*" >> "$DIVERGE_TMP/out"; }
+    : > "$DIVERGE_TMP/out"
+    challenge_assert_arms_diverge "HOK-1" "implementation" "kimi-k2" "gpt-5.5" ""
+    challenge_assert_arms_diverge "HOK-2" "review" "gpt-5.5" "gpt-5.5" ""
+    challenge_assert_arms_diverge "HOK-3" "plan" "gpt-5.5" "gpt-5.5" '{"intentionallyIdentical":true}'
+    challenge_assert_arms_diverge "HOK-4" "plan" "" "" ""
+  )
+  DIVERGE_OUT="$(cat "$DIVERGE_TMP/out" 2>/dev/null || true)"
+  if [[ "$DIVERGE_OUT" != *"HOK-1"* ]] \
+    && [[ "$DIVERGE_OUT" == *"HOK-2"* ]] \
+    && [[ "$DIVERGE_OUT" != *"HOK-3"* ]] \
+    && [[ "$DIVERGE_OUT" != *"HOK-4"* ]]; then
+    pass "identical challenge arms alarm only when the pair truly measures nothing"
+  else
+    fail "identical-arm alarm misfired: $DIVERGE_OUT"
+  fi
+  if [[ "$DIVERGE_OUT" == *"challenge_arms_identical"* ]]; then
+    pass "identical challenge arms emit a route lifecycle event"
+  else
+    fail "identical challenge arms did not emit a lifecycle event"
+  fi
+  rm -rf "$DIVERGE_TMP"
+else
+  fail "could not extract challenge_assert_arms_diverge helper"
 fi
 
 PLANNER_GATE_HELPER="$(awk '
@@ -189,6 +269,10 @@ check_contains "startup planner challenge defers without effective route" "$STAR
 check_contains "startup planner challenge records defer reason" "$STARTUP_BLOCK" 'plan_stage_expanded_route_unavailable'
 check_contains "runtime planner challenge defers without effective route" "$RUNTIME_BLOCK" 'challenge_plan_stage_requires_effective_route "$challenge_plan"'
 check_contains "runtime planner challenge records defer reason" "$RUNTIME_BLOCK" 'plan_stage_expanded_route_unavailable'
+# A plan-stage challenge that cannot form yet must be retargeted, not deleted:
+# dropping to single is how an already-selected open-weight coder arm vanished.
+check_contains "runtime planner challenge retargets to implementation before dropping" "$RUNTIME_BLOCK" '--pinned-stage implementation'
+check_contains "runtime planner challenge keeps the pair when retargeting works" "$RUNTIME_BLOCK" 'retargeted to implementation stage'
 
 if [[ -n "$CODING_FINALIZATION_BLOCK" ]]; then
   check_contains "coding handoff calls finalizer" "$CODING_FINALIZATION_BLOCK" 'finalize_challenge_execution_intent_before_coding "$ISSUE" "$SLUG" "$BRANCH" "$WT_DIR" "$FEATURE_DIR" "$coder_model"'

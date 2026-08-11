@@ -3279,6 +3279,11 @@ save_task_state() {
       # selected arm when a challenger reaches coding first.
       (.tasks[$issue].challengeIntent // null) as $old_challenge_intent |
       (.tasks[$issue].challengeExecutionIntent // null) as $old_challenge_execution_intent |
+      # The varied stage model/agent are the launch-time backstop for plan- and
+      # review-stage challenges, mirroring challengeModel for implementation.
+      # A status update must never drop them or the arm loses its last defense.
+      (.tasks[$issue].challengeVariedModel // "") as $old_challenge_varied_model |
+      (.tasks[$issue].challengeVariedAgent // "") as $old_challenge_varied_agent |
       (.tasks[$issue].evalRunning // null) as $old_eval_running |
       (.tasks[$issue].comparisonRunning // null) as $old_comparison_running |
       (.tasks[$issue].comparisonState // null) as $old_comparison_state |
@@ -3311,6 +3316,8 @@ save_task_state() {
         challengeStage: (if $challengeStage != "" then $challengeStage else $old_challenge_stage end),
         challengeIntent: $old_challenge_intent,
         challengeExecutionIntent: $old_challenge_execution_intent,
+        challengeVariedModel: $old_challenge_varied_model,
+        challengeVariedAgent: $old_challenge_varied_agent,
         coderModel: (if $coderModel != "" then $coderModel else $old_coderModel end),
         plannerModel: (if $plannerModel != "" then $plannerModel else $old_plannerModel end),
         reviewerModel: (if $reviewerModel != "" then $reviewerModel else $old_reviewerModel end),
@@ -3406,30 +3413,82 @@ dispatch_task_and_persist() {
   return 0
 }
 
+# Single writer for the challenge intent, on every surface it is read from.
+#
+# Accepts one or more feature directories so both arms of a pair get an
+# identical on-disk copy.  Previously only the primary's worktree received a
+# file, so the two sides resolved their intent from different sources and could
+# disagree about which stage was varied.
 persist_challenge_execution_intent() {
   local issue="$1" challenger_key="${2:-}" feature_dir="${3:-}" intent_json="${4:-}"
+  shift 4 2>/dev/null || true
+  local extra_feature_dirs=("$@")
   [[ -n "$issue" && -n "$intent_json" ]] || return 0
   echo "$intent_json" | jq -e '.schemaVersion == 1 and (.pairId // "") != "" and (.issueId // "") != ""' >/dev/null 2>&1 || return 0
 
-  local intent_file=""
-  if [[ -n "$feature_dir" && -d "$feature_dir" ]]; then
-    intent_file="$feature_dir/.challenge-intent.json"
-    local phase=""
-    phase=$(read_state_value "" --arg i "$issue" '.tasks[$i].phase // empty' 2>/dev/null || true)
+  local phase=""
+  phase=$(read_state_value "" --arg i "$issue" '.tasks[$i].phase // empty' 2>/dev/null || true)
+
+  local dir intent_file
+  for dir in "$feature_dir" "${extra_feature_dirs[@]}"; do
+    [[ -n "$dir" && -d "$dir" ]] || continue
+    intent_file="$dir/.challenge-intent.json"
     if [[ ! -f "$intent_file" || "$phase" != "coding" ]]; then
       printf '%s\n' "$intent_json" | jq -S . > "$intent_file" 2>/dev/null || true
     fi
-  fi
+  done
 
+  # Promote each side's varied stage model into first-class state fields.
+  #
+  # Until now the varied model for a plan- or review-stage challenge lived only
+  # inside .routing-complete, the one artifact a rerouting pass overwrites, so
+  # those stages had no equivalent of the challengeModel backstop that the
+  # implementation stage has always enjoyed.  Deriving them here keeps a single
+  # writer: they come straight off the canonical intent.
   state_mutate "$STATE_FILE" \
-    '.tasks[$issue].challengeExecutionIntent = $intent
+    '($intent.selectedStage // $intent.challengeStage // "") as $stage
+     | ($intent.primary // {}) as $p
+     | ($intent.challenger // {}) as $c
+     | .tasks[$issue].challengeExecutionIntent = $intent
+     | (if $stage != "" then .tasks[$issue].challengeStage = $stage else . end)
+     | (if ($p.expectedStageModel // "") != ""
+        then .tasks[$issue].challengeVariedModel = $p.expectedStageModel
+             | .tasks[$issue].challengeVariedAgent = ($p.expectedStageAgent // "")
+        else . end)
      | if $challenger != "" and (.tasks[$challenger] != null)
        then .tasks[$challenger].challengeExecutionIntent = $intent
+            | (if $stage != "" then .tasks[$challenger].challengeStage = $stage else . end)
+            | (if ($c.expectedStageModel // "") != ""
+               then .tasks[$challenger].challengeVariedModel = $c.expectedStageModel
+                    | .tasks[$challenger].challengeVariedAgent = ($c.expectedStageAgent // "")
+               else . end)
        else .
        end' \
     --arg issue "$issue" \
     --arg challenger "$challenger_key" \
     --argjson intent "$intent_json" || true
+}
+
+# The model this task's challenge selected for the stage about to launch.
+#
+# Returns empty unless the task is a challenge participant AND the stage being
+# launched is the one the pair varies — so it can be applied unconditionally at
+# every launch site without disturbing non-challenge runs or shared stages.
+challenge_varied_stage_model() {
+  local issue="$1" stage="$2"
+  local task_stage varied
+  [[ -n "$issue" ]] || return 0
+  task_stage=$(get_task_meta "$issue" "challengeStage" 2>/dev/null || true)
+  [[ -n "$task_stage" ]] || return 0
+  case "$stage" in
+    plan|planning)          [[ "$task_stage" == "plan" ]] || return 0 ;;
+    review)                 [[ "$task_stage" == "review" ]] || return 0 ;;
+    coding|implementation)  [[ "$task_stage" == "implementation" ]] || return 0 ;;
+    *) return 0 ;;
+  esac
+  varied=$(get_task_meta "$issue" "challengeVariedModel" 2>/dev/null || true)
+  [[ -n "$varied" ]] || return 0
+  printf '%s' "$varied"
 }
 
 challenge_plan_stage_requires_effective_route() {
@@ -3525,15 +3584,29 @@ finalize_challenge_execution_intent_before_coding() {
   # challenger and turns an exploration run into another incumbent route.
   # apply_expanded_route_if_present preserves the selected-stage fields from
   # this intent while applying every non-varied field from the expanded route.
-  local existing_intent
-  existing_intent=$(read_state_value "" --arg i "$issue" '.tasks[$i].challengeExecutionIntent // empty' 2>/dev/null || true)
+  local existing_intent pinned_stage=""
+  existing_intent=$(read_state_value "" --arg i "$issue" '(.tasks[$i].challengeExecutionIntent // .tasks[$i].challengeIntent) // empty' 2>/dev/null || true)
+  if [[ -n "$existing_intent" ]]; then
+    pinned_stage=$(echo "$existing_intent" | jq -r '(.selectedStage // .challengeStage // "")' 2>/dev/null || true)
+  fi
+  # Fall back to the stage recorded directly on the task; either way the stage
+  # is decided once, at selection, and is never re-sampled below.
+  [[ -n "$pinned_stage" && "$pinned_stage" != "null" ]] || pinned_stage="$challenge_stage_meta"
+
   if [[ -n "$existing_intent" ]] \
-    && echo "$existing_intent" | jq -e '.schemaVersion == 1 and (.pairId // "") != "" and (.selectedStage // .challengeStage // "") != "" and (.primary // null) != null and (.challenger // null) != null' >/dev/null 2>&1; then
+    && echo "$existing_intent" | jq -e '(.pairId // "") != "" and (.primary // null) != null and (.challenger // null) != null' >/dev/null 2>&1; then
     log "status" "  $issue: Preserving selected challenge arm through expanded routing"
     return 0
   fi
 
   local refresh_title issue_json packet_arg refreshed_plan refreshed_source refreshed_mode refreshed_reason
+  local pinned_stage_arg=()
+  if [[ -n "$pinned_stage" && "$pinned_stage" != "null" ]]; then
+    # Without this the refresh rolls a fresh stage from challenge.stageWeights,
+    # which is how an already-selected implementation-stage arm (a Qwen or Kimi
+    # coder) became an unrelated plan-stage pair on the way to coding.
+    pinned_stage_arg=(--pinned-stage "$pinned_stage")
+  fi
   refresh_title=$(read_state_value "" --arg i "$issue" '.tasks[$i].title // ""')
   if [[ -z "$refresh_title" ]]; then
     issue_json=$(cat "/tmp/${SESSION}-${issue}-issue.json" 2>/dev/null || echo "{}")
@@ -3555,6 +3628,7 @@ finalize_challenge_execution_intent_before_coding() {
     --remaining-slots 2 \
     --primary-model "$primary_coder" \
     --feature-dir "$feature_dir" \
+    "${pinned_stage_arg[@]}" \
     "${packet_arg[@]}" 2>/dev/null || echo "")
   refreshed_source=$(echo "$refreshed_plan" | jq -r '.decisionSource // "bootstrap"' 2>/dev/null || echo "bootstrap")
   refreshed_mode=$(echo "$refreshed_plan" | jq -r '.mode // "single"' 2>/dev/null || echo "single")
@@ -3621,7 +3695,34 @@ finalize_challenge_execution_intent_before_coding() {
   persist_challenge_execution_intent "$issue" "$new_challenger_key" "$feature_dir" "$intent_json"
   FINALIZED_CHALLENGE_CODER="$new_primary"
   FINALIZED_CHALLENGE_STAGE="$new_challenge_stage"
-  log "status" "  $issue: Challenge intent finalized ($refreshed_source route): $new_primary vs $new_challenger_model"
+
+  # Report the models the pair actually varies, not the coders.  For a plan- or
+  # review-stage challenge the coders are shared by design, so printing them
+  # made every such pair look degenerate ("gpt-5.5 vs gpt-5.5") in the log.
+  local new_primary_varied new_challenger_varied
+  new_primary_varied=$(echo "$refreshed_plan" | jq -r '.entries[0].variedModel // .entries[0].model // empty' 2>/dev/null)
+  new_challenger_varied=$(echo "$refreshed_plan" | jq -r '.entries[1].variedModel // .entries[1].model // empty' 2>/dev/null)
+  log "status" "  $issue: Challenge intent finalized ($refreshed_source route, stage=$new_challenge_stage): $new_primary_varied vs $new_challenger_varied"
+  challenge_assert_arms_diverge "$issue" "$new_challenge_stage" "$new_primary_varied" "$new_challenger_varied" "$intent_json"
+}
+
+# A pair whose two sides run the same model at the varied stage measures
+# nothing.  The comparison stage already rejects these, but only after both arms
+# have run; surfacing it at selection time makes the waste visible immediately.
+challenge_assert_arms_diverge() {
+  local issue="$1" stage="$2" primary_varied="$3" challenger_varied="$4" intent_json="${5:-}"
+  [[ -n "$primary_varied" && -n "$challenger_varied" ]] || return 0
+  [[ "$primary_varied" == "$challenger_varied" ]] || return 0
+  if [[ -n "$intent_json" ]] \
+    && echo "$intent_json" | jq -e '.intentionallyIdentical == true' >/dev/null 2>&1; then
+    return 0
+  fi
+  log_error "  $issue: challenge arms are identical at stage=$stage ($primary_varied vs $challenger_varied) — comparison will measure nothing"
+  log_route_lifecycle "challenge_arms_identical" \
+    "issue=$issue" \
+    "stage=$stage" \
+    "model=\"$primary_varied\""
+  return 0
 }
 
 update_free_slots_state() {
@@ -4583,6 +4684,12 @@ resolve_stage_result_model() {
       model=$(read_phase_config "$feature_dir" "review" "model")
       [[ -z "$model" ]] && model=$(get_task_meta "$ISSUE" "reviewerModel")
       [[ -z "$model" ]] && model=$(jq -r '.model // empty' "$feature_dir/.review-result.json" 2>/dev/null || echo "")
+      local challenge_varied_review
+      challenge_varied_review="$(challenge_varied_stage_model "$ISSUE" "review" 2>/dev/null || true)"
+      if [[ -n "$challenge_varied_review" && "$challenge_varied_review" != "$model" ]]; then
+        log_warn "  $ISSUE: review-stage challenge arm restored from state ($model → $challenge_varied_review)"
+        model="$challenge_varied_review"
+      fi
       model="$(resolve_phase_model "review" "$model" "${fallback:-claude-sonnet-5}")"
       if declare -F agent_resolve_model >/dev/null 2>&1; then
         launch_model="$(agent_resolve_model "reviewer" "$model" "$REPO_DIR" 2>/dev/null || true)"
@@ -10931,9 +11038,24 @@ EOF
         return 1
       fi
       if challenge_plan_stage_requires_effective_route "$challenge_plan"; then
-        challenge_mode="single"
-        challenge_reason="plan_stage_expanded_route_unavailable"
-        log_warn "  $issue: Planner challenge deferred until expanded route is available"
+        # A plan-stage challenge cannot be formed before the expanded route
+        # exists.  Retarget it to the implementation stage rather than dropping
+        # to a single-model run: discarding the pair here is how an already
+        # selected open-weight coder arm disappeared entirely (HOK-534).
+        local retargeted_plan retargeted_mode
+        retargeted_plan=$(_with_timeout "$API_TIMEOUT" npx tsx "$TOOLS_DIR/resolve-challenge-task.ts" \
+          "${challenge_args[@]}" --pinned-stage implementation 2>/dev/null || echo "")
+        retargeted_mode=$(echo "$retargeted_plan" | jq -r '.mode // "single"' 2>/dev/null || echo "single")
+        if [[ "$retargeted_mode" == "challenge" ]]; then
+          challenge_plan="$retargeted_plan"
+          challenge_mode="challenge"
+          challenge_reason=$(echo "$challenge_plan" | jq -r '.reason // empty' 2>/dev/null || echo "")
+          log_warn "  $issue: Planner challenge unavailable before expansion — retargeted to implementation stage"
+        else
+          challenge_mode="single"
+          challenge_reason="plan_stage_expanded_route_unavailable"
+          log_warn "  $issue: Planner challenge deferred until expanded route is available"
+        fi
       fi
     fi
     if [[ "$challenge_mode" == "challenge" ]]; then
@@ -10974,6 +11096,7 @@ EOF
       primary_varied=$(echo "$challenge_plan" | jq -r '.entries[0].variedModel // .entries[0].model // empty' 2>/dev/null)
       challenger_varied=$(echo "$challenge_plan" | jq -r '.entries[1].variedModel // .entries[1].model // empty' 2>/dev/null)
       log "status" "  Challenge selected (stage=${challenge_stage}: ${primary_varied} vs ${challenger_varied}) [challenger is extra pane]"
+      challenge_assert_arms_diverge "$issue" "$challenge_stage" "$primary_varied" "$challenger_varied" "$challenge_execution_intent"
     elif [[ -n "$challenge_reason" ]] && [[ "$challenge_reason" != "challenge_disabled" ]] && [[ "$challenge_reason" != "roll_not_selected" ]]; then
       log "debug" "  Challenge skipped ($challenge_reason), launching single-model run"
     fi
@@ -11153,11 +11276,14 @@ EOF
   if [[ "$challenge_enabled_for_launch" == "true" ]]; then
     save_task_state "$challenger_key" "$challenger_slug" "task/${challenger_slug}" "${WORKTREE_ROOT}/${challenger_slug}" "" "" "${challenger_planner_agent:-$challenger_agent}" "$linear_issue" "true" "$challenge_pair" "challenger" "$challenger_model" "$challenger_planner" "$challenger_model" "$challenger_reviewer" "$challenger_plan_depth" "$challenger_code_depth" "$challenger_review_mode" "$challenge_stage"
     state_mutate "$STATE_FILE" '.tasks[$issue].challengeStage = $stage' --arg issue "$challenger_key" --arg stage "$challenge_stage" || true
-    persist_challenge_execution_intent "$issue" "$challenger_key" "${WORKTREE_ROOT}/${slug}/features/${slug}" "$challenge_execution_intent"
-    state_mutate "$STATE_FILE" '
-      .tasks[$primary].challengeIntent = $intent
-      | .tasks[$challenger].challengeIntent = $intent
-    ' --arg primary "$issue" --arg challenger "$challenger_key" --argjson intent "${challenge_intent:-null}" || true
+    # One writer, both arms, both surfaces.  The separate challengeIntent write
+    # that used to live here persisted a second, independently-built schema
+    # under a different key; resolve-challenge-task.ts now emits the canonical
+    # intent alone and persist_challenge_execution_intent is its only writer.
+    persist_challenge_execution_intent "$issue" "$challenger_key" \
+      "${WORKTREE_ROOT}/${slug}/features/${slug}" \
+      "$challenge_execution_intent" \
+      "${WORKTREE_ROOT}/${challenger_slug}/features/${challenger_slug}"
   fi
   if [[ -n "${challenge_stage:-}" ]]; then
     state_mutate "$STATE_FILE" '.tasks[$issue].challengeStage = $stage' --arg issue "$issue" --arg stage "$challenge_stage" || true
@@ -11453,6 +11579,12 @@ Implement from the issue description plus direct codebase analysis."
 
   if [[ "$should_launch_challenger" == "true" ]]; then
     WAVEMILL_DISABLE_CHALLENGE=1 launch_task "$challenger_key" "$challenger_slug" "$challenger_title" 0
+    # The challenger worktree only exists after its launch, so backfill the
+    # intent file now.  Both arms must resolve the same intent from the same
+    # kind of source, or rerouting can preserve one side and not the other.
+    persist_challenge_execution_intent "$issue" "$challenger_key" \
+      "${WORKTREE_ROOT}/${challenger_slug}/features/${challenger_slug}" \
+      "$challenge_execution_intent"
   fi
 }
 
@@ -12443,6 +12575,21 @@ monitor_issue_state() {
                 plan_depth=$(jq -r '.planDepth // "light"' "$routing_file" 2>/dev/null || echo "light")
                 code_depth=$(jq -r '.codeDepth // "medium"' "$routing_file" 2>/dev/null || echo "medium")
                 review_mode=$(jq -r '.reviewMode // "static"' "$routing_file" 2>/dev/null || echo "static")
+              fi
+
+              # Restore the arm this pair was selected to vary before it is
+              # written to state and phase config.  The routing file is the
+              # artifact rerouting overwrites, so it cannot be the only source.
+              local challenge_varied_plan challenge_varied_review_stage
+              challenge_varied_plan="$(challenge_varied_stage_model "$ISSUE" "plan" 2>/dev/null || true)"
+              if [[ -n "$challenge_varied_plan" && "$challenge_varied_plan" != "$planner_model" ]]; then
+                log_warn "  $ISSUE: plan-stage challenge arm restored from state ($planner_model → $challenge_varied_plan)"
+                planner_model="$challenge_varied_plan"
+              fi
+              challenge_varied_review_stage="$(challenge_varied_stage_model "$ISSUE" "review" 2>/dev/null || true)"
+              if [[ -n "$challenge_varied_review_stage" && "$challenge_varied_review_stage" != "$reviewer_model" ]]; then
+                log_warn "  $ISSUE: review-stage challenge arm restored from state ($reviewer_model → $challenge_varied_review_stage)"
+                reviewer_model="$challenge_varied_review_stage"
               fi
 
               planner_model="$(resolve_phase_model "planning" "$planner_model" "claude-sonnet-5")"

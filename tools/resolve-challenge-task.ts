@@ -14,13 +14,13 @@ import {
   variedModelForStage,
   buildChallengeExecutionIntent,
   type ChallengeNativeRejection,
+  type ChallengeStage,
 } from '../shared/lib/challenge-mode.ts';
 import type { ModelExclusionDiagnostic } from '../shared/lib/model-exclusions.ts';
 import { buildEvalSummary, modelStageCount } from '../shared/lib/challenge-scheduler.ts';
 import { resolveAgent, tryResolveAgent } from '../shared/lib/model-router.ts';
 import { readBothRouteArtifacts } from '../shared/lib/route-artifact.ts';
 import { readTaskPromptFromFile } from '../shared/lib/workflow-router.ts';
-import { buildChallengeExecutionIntent as buildChallengeIntent } from '../shared/lib/challenge-execution-contract.ts';
 import { buildChallengeUnavailable } from '../shared/lib/challenge-unavailable.ts';
 
 runTool({
@@ -36,6 +36,10 @@ runTool({
     'repo-dir': { type: 'string', description: 'Repository directory' },
     file: { type: 'string', description: 'Task packet file path (for routing)' },
     'feature-dir': { type: 'string', description: 'Feature directory for reading route artifacts' },
+    'pinned-stage': {
+      type: 'string',
+      description: 'Stage already chosen for this pair (plan|implementation|review); suppresses stage re-sampling',
+    },
   },
   async run({ args }) {
     const repoDir = (args['repo-dir'] as string) || process.cwd();
@@ -47,6 +51,7 @@ runTool({
     const remainingSlots = Number(args['remaining-slots'] || '1');
     const taskFile = args.file as string | undefined;
     const featureDir = args['feature-dir'] as string | undefined;
+    const pinnedStage = normalizeChallengeStage(args['pinned-stage'] as string | undefined);
 
     if (!issue || !slug || !title) {
       throw new Error('--issue, --slug, and --title are required');
@@ -179,10 +184,13 @@ runTool({
 
     const forcedChallengerModel = launchDecision.forcedChallengerModel;
 
-    // A recommendation carrying a stage (low-data-stage, or new-model with a
-    // least-covered cell) pins the varied stage; otherwise sample from the
-    // configured weights (implementation-only by default).
-    const challengeStage = chooseChallengeStage({
+    // A stage pinned by the caller wins outright. Re-sampling the stage on a
+    // refresh is how an already-selected implementation-stage challenge (e.g.
+    // a Qwen or Kimi coder arm) turned into an unrelated plan-stage pair: the
+    // second roll is independent, so an open-weight coder had to win twice.
+    // Otherwise a recommendation carrying a stage pins it, and failing that we
+    // sample from the configured weights.
+    const challengeStage = pinnedStage ?? chooseChallengeStage({
       weights: challenge.stageWeights,
       recommendedStage: launchDecision.recommendation?.stage,
     });
@@ -370,14 +378,6 @@ runTool({
     // route missing the requested stage model) — report the effective stage.
     const effectiveStage = pair.challengeStage || 'implementation';
     const challengerVaried = variedModelForStage(pair.challenger, effectiveStage);
-    const challengeIntent = buildChallengeIntent({
-      pairId: issue,
-      challengeStage: effectiveStage,
-      primary: pair.primary,
-      challenger: pair.challenger,
-      routeContext: pair.routeContext,
-      selectionReason: pair.selectionReason,
-    });
     const challengerSource = pair.selectionReason || (
       forcedChallengerModel && challengerVaried === forcedChallengerModel
         ? 'recommendation'
@@ -410,6 +410,12 @@ runTool({
       modelExclusions,
       fallbackReason,
     });
+    // `challengeIntent` is a byte-identical alias of the canonical intent, kept
+    // for one release so in-flight tasks and older readers keep resolving. It is
+    // NOT a second schema: emitting two independently-built objects under two
+    // keys is exactly what let the rerouting merge read a shape it could not
+    // parse and silently discard the selected arm.
+    const challengeIntent = intent;
 
     console.log(JSON.stringify({
       issue,
@@ -443,6 +449,20 @@ runTool({
     }));
   },
 });
+
+/**
+ * Accept the stage aliases that leak in from shell state and route artifacts
+ * (`planning`, `coding`, `reviewer`, …) and reject anything unrecognized so a
+ * typo degrades to normal sampling rather than pinning a bogus stage.
+ */
+function normalizeChallengeStage(value: string | undefined): ChallengeStage | undefined {
+  const raw = value?.trim().toLowerCase();
+  if (!raw) return undefined;
+  if (raw === 'plan' || raw === 'planning' || raw === 'planner') return 'plan';
+  if (raw === 'review' || raw === 'reviewer') return 'review';
+  if (raw === 'implementation' || raw === 'coding' || raw === 'coder') return 'implementation';
+  return undefined;
+}
 
 function recommendationForIntent(value: unknown) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {

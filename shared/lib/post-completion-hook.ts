@@ -79,6 +79,7 @@ import type { InterventionSummary } from './intervention-detector.ts';
 import type { OperatingMode } from './operating-mode.ts';
 import {
   attestEvalRecordChallengeExecution,
+  enforceChallengeIntentPresence,
   loadChallengeIntentFromFeatureDir,
   loadChallengeIntentFromState,
   resolveChallengeSide,
@@ -540,6 +541,14 @@ export function enrichPostCompletionRecord(
       code: 'INVALID_CHALLENGE',
       message: `Invalid challenge: ${challengeSide.invalidReason}`,
     };
+  }
+  // Same fail-closed rule the eval orchestrator applies: a challenge
+  // participant with no intent cannot be attested, so it must not pass as
+  // training-eligible evidence just because the attestation was silent.
+  if (enforceChallengeIntentPresence(record, input.challengePairId)) {
+    console.warn(
+      `Warning: challenge record for ${input.issueId} (pair ${input.challengePairId}) has no persisted intent; marking invalid rather than training-eligible.`,
+    );
   }
 }
 

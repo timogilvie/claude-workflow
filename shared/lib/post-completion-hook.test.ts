@@ -713,8 +713,15 @@ await test('enrichPostCompletionRecord recognizes -challenger branch fallback wh
       challengePairId: 'HOK-2598',
     });
 
+    // Side derivation still works from the branch name alone...
     assert.equal(record.challengeSide, 'challenger');
-    assert.equal(record.invalidChallenge, undefined);
+    assert.equal(record.challengeDivergenceReason, 'missing_challenge_intent');
+    // ...but with no persisted intent there is nothing to attest the varied
+    // stage against, so the record must not count as training evidence.
+    // Absence used to read as success, which let an arm whose model had been
+    // replaced by rerouting pass as clean data.
+    assert.equal(record.invalidChallenge, true);
+    assert.equal(record.trainingEligible, false);
   } finally {
     rmSync(repoDir, { recursive: true, force: true });
   }

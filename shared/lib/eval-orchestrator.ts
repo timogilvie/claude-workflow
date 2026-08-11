@@ -58,6 +58,7 @@ import { appendEvalRecord } from './eval-persistence.ts';
 import { buildTaskDescriptor } from './task-descriptor-builder.ts';
 import {
   attestEvalRecordChallengeExecution,
+  enforceChallengeIntentPresence,
   loadChallengeIntentFromFeatureDir,
   loadChallengeIntentFromState,
   resolveChallengeSide,
@@ -687,6 +688,12 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
       code: 'INVALID_CHALLENGE',
       message: `Invalid challenge: ${challengeSide.invalidReason}`,
     };
+  }
+
+  if (enforceChallengeIntentPresence(record, challengePairId)) {
+    console.warn(
+      `Warning: challenge record for ${issueId} (pair ${challengePairId}) has no persisted intent; marking invalid rather than training-eligible.`,
+    );
   }
 
   // 10a. Attach trace correlation ID (HOK-2259) — best-effort

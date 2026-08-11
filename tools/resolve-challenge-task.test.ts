@@ -440,4 +440,110 @@ describe('resolve-challenge-task CLI', () => {
       rmSync(repoDir, { recursive: true, force: true });
     }
   });
+
+  // A refresh that re-samples the stage turns an already-selected arm into an
+  // unrelated pair. The mill pins the stage it chose the first time; nothing
+  // downstream — not even a scheduler recommendation — may override it.
+  function makePlannerRecommendationRepo() {
+    const repoDir = makeRepo([], {
+      aliases: [],
+      primaryModels: ['gpt-5.6-terra', 'claude-opus-4-7', 'claude-haiku-4-5-20251001'],
+    });
+    const featureDir = join(repoDir, 'features', 'pinned-stage');
+    mkdirSync(featureDir, { recursive: true });
+    writeFileSync(join(featureDir, '.initial-route.json'), JSON.stringify({
+      planner: 'claude-haiku-4-5-20251001',
+      coder: 'gpt-5.6-terra',
+      reviewer: 'claude-sonnet-4-6',
+      planDepth: 'light',
+      codeDepth: 'medium',
+      reviewMode: 'static',
+      provenance: { source: 'bootstrap' },
+    }), 'utf-8');
+    writeFileSync(join(featureDir, '.post-expansion-route.json'), JSON.stringify({
+      planner: 'claude-opus-4-7',
+      coder: 'gpt-5.6-terra',
+      reviewer: 'claude-sonnet-4-6',
+      planDepth: 'deep',
+      codeDepth: 'medium',
+      reviewMode: 'static',
+      challengeRecommendation: {
+        shouldChallenge: true,
+        reason: 'low-data-stage',
+        challengerModel: 'claude-haiku-4-5-20251001',
+        stage: 'plan',
+        priority: 200,
+      },
+    }), 'utf-8');
+    writeFileSync(join(featureDir, 'task-packet.md'), '# Task\n\nPlan the expanded feature.\n', 'utf-8');
+    return { repoDir, featureDir };
+  }
+
+  it('honors --pinned-stage over a scheduler stage recommendation', () => {
+    const { repoDir, featureDir } = makePlannerRecommendationRepo();
+    try {
+      const result = runResolveChallengeTask(repoDir, [
+        '--issue', 'HOK-PIN-1',
+        '--slug', 'pinned-stage',
+        '--title', 'Publish certification matrix',
+        '--primary-model', 'gpt-5.6-terra',
+        '--remaining-slots', '2',
+        '--repo-dir', repoDir,
+        '--feature-dir', featureDir,
+        '--file', join(featureDir, 'task-packet.md'),
+        '--pinned-stage', 'implementation',
+      ]);
+
+      assert.equal(result.mode, 'challenge');
+      assert.equal(result.challengeStage, 'implementation');
+      const intent = result.challengeExecutionIntent as Record<string, unknown>;
+      assert.equal(intent.selectedStage, 'implementation');
+      assert.equal(intent.challengeStage, 'implementation');
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('accepts stage aliases from shell state when pinning', () => {
+    const { repoDir, featureDir } = makePlannerRecommendationRepo();
+    try {
+      const result = runResolveChallengeTask(repoDir, [
+        '--issue', 'HOK-PIN-2',
+        '--slug', 'pinned-stage',
+        '--title', 'Publish certification matrix',
+        '--primary-model', 'gpt-5.6-terra',
+        '--remaining-slots', '2',
+        '--repo-dir', repoDir,
+        '--feature-dir', featureDir,
+        '--file', join(featureDir, 'task-packet.md'),
+        '--pinned-stage', 'coding',
+      ]);
+
+      assert.equal(result.challengeStage, 'implementation');
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('ignores an unrecognized pinned stage instead of pinning a bogus one', () => {
+    const { repoDir, featureDir } = makePlannerRecommendationRepo();
+    try {
+      const result = runResolveChallengeTask(repoDir, [
+        '--issue', 'HOK-PIN-3',
+        '--slug', 'pinned-stage',
+        '--title', 'Publish certification matrix',
+        '--primary-model', 'gpt-5.6-terra',
+        '--remaining-slots', '2',
+        '--repo-dir', repoDir,
+        '--feature-dir', featureDir,
+        '--file', join(featureDir, 'task-packet.md'),
+        '--pinned-stage', 'not-a-stage',
+      ]);
+
+      // Falls through to the recommendation, which pins 'plan'.
+      assert.equal(result.challengeStage, 'plan');
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
 });

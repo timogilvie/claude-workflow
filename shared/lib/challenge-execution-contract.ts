@@ -10,7 +10,14 @@ export type InvalidChallengeReason =
   | 'native_launch_fallback'
   | 'identical_effective_route'
   | 'state_vs_derived_side_mismatch'
-  | 'operator_reroute';
+  | 'operator_reroute'
+  /**
+   * The record belongs to a challenge pair but carries no intent, so there is
+   * nothing to attest against. Absence used to read as success: the record
+   * stayed training-eligible with no verdict at all, which is how an arm whose
+   * selected model had been replaced still counted as clean evidence.
+   */
+  | 'missing_challenge_intent';
 
 export interface ChallengeSideIntent {
   pairId: string;
@@ -138,7 +145,7 @@ type WorkflowChallengeState = {
   tasks?: Record<string, WorkflowChallengeTaskState>;
 };
 
-type ChallengeEntryLike = {
+export type ChallengeEntryLike = {
   model?: string;
   agent?: string;
   planner?: string;
@@ -171,14 +178,32 @@ function stateTaskKeys(issueId: string | undefined, challengePairId: string): st
   ].filter((key): key is string => Boolean(key))));
 }
 
+/**
+ * Candidate workflow-state locations, most authoritative first.
+ *
+ * The mill writes `<repo>/.wavemill/workflow-state.json` (STATE_DIR defaults to
+ * `<repo>/.wavemill` in wavemill-mill.sh). The `.wavemill/state/` variant was a
+ * transcription error that made every lookup here miss, which in turn left eval
+ * records without a challengeIntent and disabled execution attestation entirely.
+ * Both are probed so an operator with a relocated STATE_DIR still resolves.
+ */
+function workflowStateCandidates(repoDir: string): string[] {
+  return [
+    path.join(repoDir, '.wavemill', 'workflow-state.json'),
+    path.join(repoDir, '.wavemill', 'state', 'workflow-state.json'),
+  ];
+}
+
 function loadWorkflowChallengeState(repoDir: string): WorkflowChallengeState | undefined {
-  const statePath = path.join(repoDir, '.wavemill', 'state', 'workflow-state.json');
-  try {
-    if (!existsSync(statePath)) return undefined;
-    return JSON.parse(readFileSync(statePath, 'utf-8')) as WorkflowChallengeState;
-  } catch {
-    return undefined;
+  for (const statePath of workflowStateCandidates(repoDir)) {
+    try {
+      if (!existsSync(statePath)) continue;
+      return JSON.parse(readFileSync(statePath, 'utf-8')) as WorkflowChallengeState;
+    } catch {
+      continue;
+    }
   }
+  return undefined;
 }
 
 export function loadChallengeRoleFromState(
@@ -289,6 +314,31 @@ function stageFromIntent(intent: ChallengeExecutionIntent): ChallengeStage {
   return intent.challengeStage ?? intent.selectedStage ?? 'implementation';
 }
 
+/**
+ * Derive the persisted projection for one side of a pair from its route entry.
+ *
+ * This is the single implementation of "what does the selected arm expect to
+ * run". Every producer of a challenge intent must go through it — a second,
+ * independently-written projection is what let the envelope and projection
+ * schemas drift apart and silently disarm arm preservation during rerouting.
+ */
+export function projectEntryToSideIntent(input: {
+  pairId: string;
+  side: ChallengeSide;
+  challengeStage: ChallengeStage;
+  entry: ChallengeEntryLike;
+}): ChallengeSideIntent {
+  const agent = stageAgent(input.entry, input.challengeStage);
+  return {
+    pairId: input.pairId,
+    side: input.side,
+    challengeStage: input.challengeStage,
+    expectedStageModel: stageModel(input.entry, input.challengeStage),
+    ...(agent ? { expectedStageAgent: agent } : {}),
+    expectedRoute: routeFromEntry(input.entry),
+  };
+}
+
 function isProjectedSideIntent(value: unknown): value is ChallengeSideIntent {
   const side = value as Partial<ChallengeSideIntent> | null | undefined;
   return Boolean(
@@ -384,30 +434,24 @@ export function buildChallengeExecutionIntent(input: {
   selectionReason?: string;
   intentionallyIdentical?: boolean;
 }): BuiltChallengeExecutionIntent {
-  const primaryRoute = routeFromEntry(input.primary);
-  const challengerRoute = routeFromEntry(input.challenger);
   return {
     pairId: input.pairId,
     challengeStage: input.challengeStage,
     ...(input.intentionallyIdentical ? { intentionallyIdentical: true } : {}),
     ...(input.routeContext ? { routeContext: input.routeContext } : {}),
     ...(input.selectionReason ? { selectionReason: input.selectionReason } : {}),
-    primary: {
+    primary: projectEntryToSideIntent({
       pairId: input.pairId,
       side: 'primary',
       challengeStage: input.challengeStage,
-      expectedStageModel: stageModel(input.primary, input.challengeStage),
-      ...(stageAgent(input.primary, input.challengeStage) ? { expectedStageAgent: stageAgent(input.primary, input.challengeStage) } : {}),
-      expectedRoute: primaryRoute,
-    },
-    challenger: {
+      entry: input.primary,
+    }),
+    challenger: projectEntryToSideIntent({
       pairId: input.pairId,
       side: 'challenger',
       challengeStage: input.challengeStage,
-      expectedStageModel: stageModel(input.challenger, input.challengeStage),
-      ...(stageAgent(input.challenger, input.challengeStage) ? { expectedStageAgent: stageAgent(input.challenger, input.challengeStage) } : {}),
-      expectedRoute: challengerRoute,
-    },
+      entry: input.challenger,
+    }),
   };
 }
 
@@ -522,6 +566,34 @@ export function attestEvalRecordChallengeExecution(record: EvalRecord): Challeng
     evidence,
     ...(invalidReason ? { invalidReason, invalidDetails } : {}),
   };
+}
+
+/**
+ * Fail closed when a challenge participant carries no intent to attest against.
+ *
+ * `attestEvalRecordChallengeExecution` returns undefined without an intent, so
+ * such a record previously landed with no verdict at all AND full training
+ * eligibility — absence read as success. That is how an arm whose selected
+ * model had already been replaced by rerouting still counted as clean
+ * evidence for the model that actually ran.
+ *
+ * Returns true when the record was marked invalid.
+ */
+export function enforceChallengeIntentPresence(
+  record: EvalRecord,
+  challengePairId: string | undefined,
+): boolean {
+  if (!challengePairId || record.challengeIntent) {
+    return false;
+  }
+  record.challengeDivergenceReason = 'missing_challenge_intent';
+  record.invalidChallenge = true;
+  record.trainingEligible = false;
+  record.nonRewardReason = {
+    code: 'INVALID_CHALLENGE',
+    message: `Invalid challenge: no persisted intent for pair ${challengePairId}; cannot attest which stage was varied.`,
+  };
+  return true;
 }
 
 export function loadChallengeIntentFromFeatureDir(featureDir: string): ChallengeExecutionIntent | undefined {
