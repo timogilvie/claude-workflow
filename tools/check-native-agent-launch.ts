@@ -1,11 +1,12 @@
 #!/usr/bin/env -S npx tsx
 
 import { existsSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getNativeAgentConfig } from '../shared/lib/config.ts';
 import { getEffectiveRegistry, getModel } from '../shared/lib/model-registry.ts';
 import { isPatchCodingEnabled } from '../shared/lib/native-agent/coding-gate.ts';
+import { resolveNativeLauncherPath } from '../shared/lib/native-agent/install-paths.ts';
 import { validateNativeOpenRouterConfig } from '../shared/lib/native-openrouter-config-validation.ts';
 import { resolveNativeAgentProviders } from '../shared/lib/native-agent/providers.ts';
 import {
@@ -137,9 +138,12 @@ export function checkNativeAgentLaunch(input: CheckNativeAgentLaunchInput): Chec
       return reject(`native coding is not enabled (${gate.reason})`);
     }
 
-    const launcherPath = join(repoDir, 'tools', 'launch-native-coding.ts');
+    // Resolved from the wavemill installation, not repoDir: consumer repos
+    // have no tools/ directory, and the launcher imports ../shared/lib/... so
+    // a copy inside one could not run anyway.
+    const launcherPath = resolveNativeLauncherPath('coding');
     if (!existsSync(launcherPath)) {
-      return reject('native coding launcher is unavailable (missing tools/launch-native-coding.ts)');
+      return reject(`native coding launcher is unavailable (missing ${launcherPath})`);
     }
   }
 

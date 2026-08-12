@@ -104,8 +104,13 @@ STATE_FILE="$STATE_DIR/workflow-state.json"
 MILL_LOG_DIR="$REPO_DIR/.wavemill/logs"
 mkdir -p "$MILL_LOG_DIR"
 MILL_LOG_FILE="$MILL_LOG_DIR/mill-${SESSION}.log"
-TOOLS_DIR="${TOOLS_DIR:-$REPO_DIR/tools}"
-LIB_DIR="${LIB_DIR:-$REPO_DIR/shared/lib}"
+# Wavemill's own tools/ and shared/lib/, derived from the installation rather
+# than from REPO_DIR. REPO_DIR is the repo being worked on, which has no
+# tools/ of its own unless wavemill is driving itself; the old default silently
+# pointed every helper lookup at a nonexistent directory in consumer repos.
+# SCRIPT_DIR survives the /tmp re-exec above via WAVEMILL_MILL_LIB_DIR.
+TOOLS_DIR="${TOOLS_DIR:-${SCRIPT_DIR%/shared/lib}/tools}"
+LIB_DIR="${LIB_DIR:-$SCRIPT_DIR}"
 MONITOR_PR_CACHE="/tmp/${SESSION}-pr-cache.json"
 export MONITOR_PR_CACHE
 MERGE_QUEUE_SELECTION_FILE="${STATE_DIR}/merge-queue-selection.json"
@@ -266,11 +271,24 @@ log_task() {
   shift 2
   log "$level" "$(wavemill_task_log_message "$task_id" "$*")"
 }
+# Errors and warnings are mirrored into the durable per-repo mill log as well
+# as the ephemeral /tmp status log. log() already writes to both; these two
+# bypassed it, so the highest-value lines — launch and routing failures — were
+# the only ones missing from .wavemill/logs/mill-<session>.log. They are not
+# routed through log() because the status-log fallback here writes to stderr,
+# and these are called from inside command substitutions.
+_mirror_to_mill_log() {
+  local level="$1" msg="$2"
+  [[ "${DASHBOARD_LOG_TO_FILE:-true}" == "true" ]] || return 0
+  [[ -n "${MILL_LOG_FILE:-}" ]] || return 0
+  printf '%s [%s] %s\n' "$(date '+%H:%M:%S')" "$level" "$msg" >> "$MILL_LOG_FILE" 2>/dev/null || true
+}
 log_error() {
   local m="$*"
   m="${m#"${m%%[![:space:]]*}"}"
   local formatted
   formatted="$(date '+%H:%M:%S')  ERROR: $m"
+  _mirror_to_mill_log "error" "$m"
   append_status_log "$formatted" || echo "$formatted" >&2
 }
 log_warn() {
@@ -278,6 +296,7 @@ log_warn() {
   m="${m#"${m%%[![:space:]]*}"}"
   local formatted
   formatted="$(date '+%H:%M:%S')  WARN: $m"
+  _mirror_to_mill_log "warn" "$m"
   append_status_log "$formatted" || echo "$formatted" >&2
 }
 
@@ -2701,11 +2720,24 @@ log_task() {
   shift 2
   log "$level" "$(wavemill_task_log_message "$task_id" "$*")"
 }
+# Errors and warnings are mirrored into the durable per-repo mill log as well
+# as the ephemeral /tmp status log. log() already writes to both; these two
+# bypassed it, so the highest-value lines — launch and routing failures — were
+# the only ones missing from .wavemill/logs/mill-<session>.log. They are not
+# routed through log() because the status-log fallback here writes to stderr,
+# and these are called from inside command substitutions.
+_mirror_to_mill_log() {
+  local level="$1" msg="$2"
+  [[ "${DASHBOARD_LOG_TO_FILE:-true}" == "true" ]] || return 0
+  [[ -n "${MILL_LOG_FILE:-}" ]] || return 0
+  printf '%s [%s] %s\n' "$(date '+%H:%M:%S')" "$level" "$msg" >> "$MILL_LOG_FILE" 2>/dev/null || true
+}
 log_error() {
   local m="$*"
   m="${m#"${m%%[![:space:]]*}"}"
   local formatted
   formatted="$(date '+%H:%M:%S')  ERROR: $m"
+  _mirror_to_mill_log "error" "$m"
   append_status_log "$formatted" || echo "$formatted" >&2
 }
 log_warn() {
@@ -2713,6 +2745,7 @@ log_warn() {
   m="${m#"${m%%[![:space:]]*}"}"
   local formatted
   formatted="$(date '+%H:%M:%S')  WARN: $m"
+  _mirror_to_mill_log "warn" "$m"
   append_status_log "$formatted" || echo "$formatted" >&2
 }
 
@@ -3301,6 +3334,14 @@ save_task_state() {
       (.tasks[$issue].codeDepth // "") as $old_codeDepth |
       (.tasks[$issue].reviewMode // "") as $old_reviewMode |
       (.tasks[$issue].traceId // "") as $old_traceId |
+      # Why a launch failed must outlive the status update that follows it.
+      # The monitor marks a failed task "error" a few seconds after
+      # mark_task_needs_user_and_defer records the diagnosis, and this writer
+      # REPLACES the task object rather than merging it — so any field missing
+      # from the literal below is silently dropped. launchFailure was, which is
+      # what made "No PR created" the only surviving trace of a routing failure.
+      # Cleared on the next launch attempt in launch_task.
+      (.tasks[$issue].launchFailure // null) as $old_launch_failure |
       .tasks[$issue] = {
         slug: $slug,
         branch: $branch,
@@ -3339,6 +3380,7 @@ save_task_state() {
         comparisonRetryTargetIssue: $old_comparison_retry_target_issue,
         comparisonTimedOutSides: $old_comparison_timed_out_sides,
         manualComparisonArtifact: $old_manual_comparison_artifact,
+        launchFailure: $old_launch_failure,
         updated: (now | todate)
       }' \
      --arg issue "$issue" --arg slug "$slug" --arg branch "$branch" \
@@ -10608,6 +10650,13 @@ launch_task() {
   challenge_model=$(get_task_meta "$issue" "challengeModel")
 
   log "status" "$issue: Launching - $title"
+
+  # A new attempt invalidates any recorded launch failure. Cleared here rather
+  # than on success so a retry that fails a second time records the new reason
+  # instead of leaving the previous one in place.
+  if [[ -n "${STATE_FILE:-}" && -f "$STATE_FILE" ]]; then
+    state_mutate "$STATE_FILE" 'del(.tasks[$issue].launchFailure)' --arg issue "$issue" >/dev/null || true
+  fi
 
   # Fetch issue details
   local issue_json

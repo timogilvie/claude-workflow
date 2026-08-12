@@ -1,5 +1,14 @@
 #!/usr/bin/env bash
 
+# Wavemill's own tools/ directory, resolved from this file's location. Defined
+# locally rather than reusing agent-adapters.sh so this file stays sourceable
+# on its own. See agent_wavemill_tools_dir for the rationale.
+routing_wavemill_tools_dir() {
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  echo "${script_dir%/shared/lib}/tools"
+}
+
 routing_role_from_window() {
   local window="${1:-}"
   case "$window" in
@@ -27,7 +36,7 @@ routing_emit_phase() {
   command -v jq >/dev/null 2>&1 || return 0
   command -v npx >/dev/null 2>&1 || return 0
 
-  local tools_dir="${TOOLS_DIR:-$repo_dir/tools}"
+  local tools_dir="${TOOLS_DIR:-$(routing_wavemill_tools_dir)}"
   local resolver="$tools_dir/resolve-routing.ts"
   [[ -f "$resolver" ]] || return 0
 
