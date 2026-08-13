@@ -15,6 +15,7 @@ import { getRouterConfig } from './config.ts';
 import { getEffectiveRegistry } from './model-registry.ts';
 import { listEffectiveModelsForStage } from './effective-models.ts';
 import { isWithinRecencyWindow, resolveExplorationConfig } from './router-exploration.ts';
+import { getLaunchPriorityByAlias } from './challenge-coverage-selector.ts';
 import { loadConfiguredPricingTable } from './workflow-cost.ts';
 import type { StageAwareDecision } from './stage-aware-router.ts';
 import type { WorkflowRouteDecision } from './workflow-router.ts';
@@ -148,13 +149,47 @@ function getAvailableModels(
   ].filter(Boolean))]);
 }
 
+/**
+ * Restrict exploration candidates to non-incumbent launch-priority families
+ * whenever any are available, mirroring `selectLeastUsedChallenger`.
+ *
+ * Exploration exists to buy coverage for models that do not already dominate
+ * the corpus, so a `claude`/`gpt` candidate should only win when nothing else
+ * is eligible. Without this the count and name tiebreaks below hand every
+ * zero-coverage cell to a `claude-*` model on alphabetical order alone.
+ */
+function preferNonIncumbents(models: string[]): string[] {
+  const launchPriority = getLaunchPriorityByAlias();
+  const preferred = models.filter((model) => launchPriority.get(model)?.isIncumbent === false);
+  return preferred.length > 0 ? preferred : models;
+}
+
+/**
+ * Launch-priority tier for a model, with unlisted models sorting last.
+ */
+function priorityTier(model: string): number {
+  return getLaunchPriorityByAlias().get(model)?.priorityTier ?? Number.POSITIVE_INFINITY;
+}
+
+/**
+ * Compare two equally-covered candidates: lower launch-priority tier first,
+ * then model name for a stable, reproducible result.
+ */
+function compareByPriority(left: string, right: string): number {
+  const tierDelta = priorityTier(left) - priorityTier(right);
+  if (tierDelta !== 0) {
+    return tierDelta;
+  }
+  return left.localeCompare(right);
+}
+
 function chooseLeastTestedModel(
   models: string[],
   recordsByModel: Record<string, number>,
   excludedModels: string[],
 ): string | undefined {
   const excluded = new Set(excludedModels.filter(Boolean));
-  const candidates = [...new Set(models.filter((model) => !excluded.has(model)))];
+  const candidates = preferNonIncumbents([...new Set(models.filter((model) => !excluded.has(model)))]);
   return candidates
     .sort((left, right) => {
       const leftCount = recordsByModel[left] ?? 0;
@@ -162,7 +197,7 @@ function chooseLeastTestedModel(
       if (leftCount !== rightCount) {
         return leftCount - rightCount;
       }
-      return left.localeCompare(right);
+      return compareByPriority(left, right);
     })[0];
 }
 
@@ -173,7 +208,7 @@ function chooseLeastTestedModelForStage(
   excludedModels: string[],
 ): string | undefined {
   const excluded = new Set(excludedModels.filter(Boolean));
-  const candidates = [...new Set(models.filter((model) => !excluded.has(model)))];
+  const candidates = preferNonIncumbents([...new Set(models.filter((model) => !excluded.has(model)))]);
   return candidates
     .sort((left, right) => {
       const leftCount = modelStageCount(summary, left, stage);
@@ -181,13 +216,13 @@ function chooseLeastTestedModelForStage(
       if (leftCount !== rightCount) {
         return leftCount - rightCount;
       }
-      // Stage-blind counts as a secondary signal, then a stable name tiebreak
+      // Stage-blind counts as a secondary signal, then launch priority
       const leftTotal = summary.recordsByModel[left] ?? 0;
       const rightTotal = summary.recordsByModel[right] ?? 0;
       if (leftTotal !== rightTotal) {
         return leftTotal - rightTotal;
       }
-      return left.localeCompare(right);
+      return compareByPriority(left, right);
     })[0];
 }
 
@@ -195,11 +230,18 @@ function chooseLeastTestedModelForStage(
  * Find the least-covered (model, stage) cell among the available models,
  * considering only cells below `maxRecords`.
  *
- * Recently released models (releasedAt inside the recency window) take
+ * Candidates are narrowed to non-incumbent launch-priority families whenever
+ * any are available, so a zero-coverage `claude-*` cell cannot outrank an
+ * equally uncovered `glm`/`qwen`/`kimi` one on name order alone. Within that
+ * pool, recently released models (releasedAt inside the recency window) take
  * priority over older under-covered models regardless of count — an old,
- * deliberately unused model should not dominate exploration. Within the same
- * recency class, ties break by lower count, then model name, then stage
+ * deliberately unused model should not dominate exploration. Remaining ties
+ * break by lower count, then launch-priority tier, then model name, then stage
  * order — deterministic for tests and idempotent runs.
+ *
+ * `isStageEligible` keeps a cell out of the running when the model cannot
+ * actually serve that stage's role; without it the scheduler can recommend a
+ * coder-only model as a planner, which downstream filters then discard.
  */
 function leastCoveredModelStage(
   models: string[],
@@ -207,16 +249,20 @@ function leastCoveredModelStage(
   maxRecords: number,
   excludedModels: string[],
   isRecent: (model: string) => boolean = () => false,
+  isStageEligible: (model: string, stage: ChallengeStage) => boolean = () => true,
 ): { model: string; stage: ChallengeStage; count: number; recent: boolean } | null {
   const excluded = new Set(excludedModels.filter(Boolean));
+  const candidates = preferNonIncumbents(
+    [...new Set(models)].filter((model) => !excluded.has(model)),
+  ).sort(compareByPriority);
   let best: { model: string; stage: ChallengeStage; count: number; recent: boolean } | null = null;
 
-  for (const model of [...new Set(models)].sort()) {
-    if (excluded.has(model)) {
-      continue;
-    }
+  for (const model of candidates) {
     const recent = isRecent(model);
     for (const stage of STAGES) {
+      if (!isStageEligible(model, stage)) {
+        continue;
+      }
       const count = modelStageCount(summary, model, stage);
       if (count >= maxRecords) {
         continue;
@@ -241,6 +287,29 @@ function makeRecencyChecker(repoDir?: string): (model: string) => boolean {
     registry.models[model]?.releasedAt,
     explorationConfig.boostWindowDays,
   );
+}
+
+const CHALLENGE_STAGE_TO_MODEL_STAGE: Record<ChallengeStage, 'planning' | 'coding' | 'review'> = {
+  plan: 'planning',
+  implementation: 'coding',
+  review: 'review',
+};
+
+/**
+ * Build a `(model, stage)` eligibility predicate from the effective per-stage
+ * model lists, computed once per call rather than per cell.
+ */
+function makeStageEligibilityChecker(
+  repoDir?: string,
+): (model: string, stage: ChallengeStage) => boolean {
+  const byStage = new Map<ChallengeStage, Set<string>>();
+  for (const stage of STAGES) {
+    byStage.set(
+      stage,
+      new Set(listEffectiveModelsForStage(CHALLENGE_STAGE_TO_MODEL_STAGE[stage], { repoDir }).models),
+    );
+  }
+  return (model, stage) => byStage.get(stage)?.has(model) ?? false;
 }
 
 function checkLowConfidence(
@@ -296,6 +365,7 @@ function checkNewModel(
       maxRecords,
       [defaultModel],
       makeRecencyChecker(repoDir),
+      makeStageEligibilityChecker(repoDir),
     );
     if (!cell) {
       return null;
@@ -340,6 +410,7 @@ function checkLowDataStage(
   summary: EvalSummary,
   minEvalRecordsPerStage: number,
   availableModels: string[],
+  repoDir?: string,
 ): ChallengeRecommendation | null {
   const lowStage = STAGES
     .map((stage) => ({ stage, count: summary.recordsByStage[stage] ?? 0 }))
@@ -356,11 +427,15 @@ function checkLowDataStage(
   }
 
   const defaultModel = getDecisionModel(routingDecision, lowStage.stage);
+  // Only models that can actually serve the starved stage's role are viable
+  // challengers for it.
+  const isStageEligible = makeStageEligibilityChecker(repoDir);
+  const stageModels = availableModels.filter((model) => isStageEligible(model, lowStage.stage));
   // Pick the least-tested model for the starved stage specifically, falling
   // back to overall counts when per-stage attribution is unavailable.
   const challengerModel = summary.recordsByModelStage
-    ? chooseLeastTestedModelForStage(availableModels, summary, lowStage.stage, [defaultModel])
-    : chooseLeastTestedModel(availableModels, summary.recordsByModel, [defaultModel]);
+    ? chooseLeastTestedModelForStage(stageModels, summary, lowStage.stage, [defaultModel])
+    : chooseLeastTestedModel(stageModels, summary.recordsByModel, [defaultModel]);
   if (!challengerModel) {
     return null;
   }
@@ -417,6 +492,7 @@ export function evaluateChallenge(input: ChallengeSchedulerInput): ChallengeReco
       input.evalSummary,
       config.minEvalRecordsPerStage,
       availableModels,
+      input.repoDir,
     ),
   ].filter((recommendation): recommendation is ChallengeRecommendation => recommendation !== null);
 

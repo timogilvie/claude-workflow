@@ -431,6 +431,10 @@ test('new-model recommendation targets the least-covered (model, stage) cell', (
   try {
     const result = evaluateChallenge({
       routingDecision: makeDecision({ confidence: 0.95 }),
+      // Pinned pool: without it the recommendation is drawn from the whole
+      // registry, where some unrelated zero-coverage model wins and the cell
+      // logic under test never decides anything.
+      challengeModels: ['claude-sonnet-4-5-20250929', 'gpt-5.4'],
       evalSummary: {
         totalRecords: 60,
         recordsByModel: { 'claude-sonnet-4-5-20250929': 40, 'gpt-5.4': 20 },
@@ -447,8 +451,8 @@ test('new-model recommendation targets the least-covered (model, stage) cell', (
 
     assert.equal(result.shouldChallenge, true);
     assert.equal(result.reason, 'new-model');
-    assert.equal(result.challengerModel, 'claude-sonnet-5');
-    assert.equal(result.stage, 'plan');
+    assert.equal(result.challengerModel, 'gpt-5.4');
+    assert.equal(result.stage, 'review');
   } finally {
     cleanup();
   }
@@ -459,6 +463,11 @@ test('low-data-stage recommendation picks the least-tested model for that stage'
   try {
     const result = evaluateChallenge({
       routingDecision: makeDecision({ confidence: 0.95, coder: 'claude-haiku-4-5-20251001' }),
+      // Pinned pool: every model here already clears newModelChallengeCount, so
+      // the low-data-stage rule is what decides. Left unpinned, the registry
+      // supplies zero-coverage models and the higher-priority new-model rule
+      // pre-empts the behaviour this test is named for.
+      challengeModels: ['claude-sonnet-4-5-20250929', 'gpt-5.4', 'claude-haiku-4-5-20251001'],
       evalSummary: {
         totalRecords: 44,
         recordsByModel: { 'claude-sonnet-4-5-20250929': 40, 'gpt-5.4': 31, 'claude-haiku-4-5-20251001': 10 },
@@ -477,9 +486,9 @@ test('low-data-stage recommendation picks the least-tested model for that stage'
     });
 
     assert.equal(result.shouldChallenge, true);
-    assert.equal(result.reason, 'new-model');
+    assert.equal(result.reason, 'low-data-stage');
     assert.equal(result.stage, 'plan');
-    assert.equal(result.challengerModel, 'claude-sonnet-5');
+    assert.equal(result.challengerModel, 'gpt-5.4');
   } finally {
     cleanup();
   }
@@ -492,6 +501,10 @@ test('new-model recommendation uses the global registry release metadata', () =>
   try {
     const result = evaluateChallenge({
       routingDecision: makeDecision({ confidence: 0.95 }),
+      // All incumbents, so the launch-priority preference is a no-op here and
+      // recency is the only thing that can decide: claude-sonnet-5 must win
+      // despite gpt-5.4 having strictly fewer records in every stage.
+      challengeModels: ['claude-sonnet-4-5-20250929', 'gpt-5.4', 'claude-sonnet-5'],
       evalSummary: {
         totalRecords: 100,
         recordsByModel: { 'claude-sonnet-4-5-20250929': 90, 'gpt-5.4': 0, 'claude-sonnet-5': 9 },
@@ -510,6 +523,58 @@ test('new-model recommendation uses the global registry release metadata', () =>
     assert.equal(result.reason, 'new-model');
     assert.equal(result.challengerModel, 'claude-sonnet-5');
     assert.equal(result.stage, 'plan');
+  } finally {
+    cleanup();
+  }
+});
+
+test('exploration recommendations prefer non-incumbent families over recency', () => {
+  const { repoDir, cleanup } = makeRepo();
+  try {
+    const result = evaluateChallenge({
+      routingDecision: makeDecision({ confidence: 0.95 }),
+      challengeModels: ['claude-sonnet-5', 'glm-5.2'],
+      evalSummary: {
+        totalRecords: 20,
+        recordsByModel: { 'claude-sonnet-5': 0, 'glm-5.2': 0 },
+        recordsByStage: { plan: 20, implementation: 20, review: 20 },
+        // Both fully uncovered. claude-sonnet-5 is inside the recency window
+        // and sorts first alphabetically, so it used to win every cell; the
+        // launch-priority preference must hand exploration to glm-5.2 instead.
+        recordsByModelStage: { 'claude-sonnet-5': {}, 'glm-5.2': {} },
+      },
+      config: { enabled: true, confidenceThreshold: 0.5, newModelChallengeCount: 5, minEvalRecordsPerStage: 1 },
+      repoDir,
+    });
+
+    assert.equal(result.shouldChallenge, true);
+    assert.equal(result.reason, 'new-model');
+    assert.equal(result.challengerModel, 'glm-5.2');
+  } finally {
+    cleanup();
+  }
+});
+
+test('exploration recommendations skip stages a model cannot serve', () => {
+  const { repoDir, cleanup } = makeRepo();
+  try {
+    const result = evaluateChallenge({
+      routingDecision: makeDecision({ confidence: 0.95 }),
+      // qwen-3-coder is role-ineligible as a planner, so its uncovered plan
+      // cell must not be recommended even though it sorts first on count.
+      challengeModels: ['qwen-3-coder'],
+      evalSummary: {
+        totalRecords: 20,
+        recordsByModel: { 'qwen-3-coder': 0 },
+        recordsByStage: { plan: 20, implementation: 20, review: 20 },
+        recordsByModelStage: { 'qwen-3-coder': {} },
+      },
+      config: { enabled: true, confidenceThreshold: 0.5, newModelChallengeCount: 5, minEvalRecordsPerStage: 1 },
+      repoDir,
+    });
+
+    assert.equal(result.challengerModel, 'qwen-3-coder');
+    assert.notEqual(result.stage, 'plan');
   } finally {
     cleanup();
   }

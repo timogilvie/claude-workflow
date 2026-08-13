@@ -1345,22 +1345,24 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       weaknesses: ['less deep reasoning'],
       releasedAt: '2026-06-30',
       qualityScores: scores(77, 84, 92, 84, 80),
-      // Sonnet 5 is under introductory pricing ($2/$10; cache 2.50/4.00/0.20;
-      // batch 1.00/5.00) through 2026-08-31. Keep the durable standard rate
-      // here until HOK-2407 adds effective-dated pricing schedules.
+      // Sonnet 5's launch pricing ($2/$10; 5m cache write 2.50, 1h cache write
+      // 4.00, cache read 0.20; batch 1.00/5.00) is permanent going forward, so
+      // these are the durable rates rather than a temporary promotion. The 1h
+      // cache-write tier has no field here; `cacheWriteCostPerMTok` carries the
+      // 5m rate, which is what the cost model bills against.
       pricing: {
-        inputCostPerMTok: 3,
-        outputCostPerMTok: 15,
-        cacheWriteCostPerMTok: 3.75,
-        cacheReadCostPerMTok: 0.3,
+        inputCostPerMTok: 2,
+        outputCostPerMTok: 10,
+        cacheWriteCostPerMTok: 2.5,
+        cacheReadCostPerMTok: 0.2,
       },
       contextWindowTokens: 1_000_000,
       toolSupport: 'full',
       multimodal: { text: true, image: true },
       latencyTier: 'standard',
       reasoningTier: 'standard',
-      costPerMillionInputTokensUsd: 3,
-      costPerMillionOutputTokensUsd: 15,
+      costPerMillionInputTokensUsd: 2,
+      costPerMillionOutputTokensUsd: 10,
     },
     'claude-sonnet-4-6': {
       vendor: 'anthropic',
