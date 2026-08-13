@@ -124,10 +124,12 @@ function makeConsumer(root: string, name: ConsumerRepoName): ConsumerRepoFixture
   const emptyLocalCertDir = join(repoDir, CERTIFICATION_BASE_PATH);
   const legacyConfig = legacyConfigFor(name);
   mkdirSync(emptyLocalCertDir, { recursive: true });
-  mkdirSync(join(repoDir, 'tools'), { recursive: true });
   writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify(legacyConfig, null, 2), 'utf-8');
   writeFileSync(join(repoDir, '.env'), 'TEST_PARITY_OPENROUTER_KEY=test-key\n', 'utf-8');
-  writeFileSync(join(repoDir, 'tools', 'launch-native-coding.ts'), 'export {};\n', 'utf-8');
+  // Deliberately no tools/launch-native-coding.ts: consumer repos never carry
+  // one. The launcher is resolved from the wavemill installation. Stubbing a
+  // copy here previously made repo-relative launcher paths look valid in tests
+  // while failing in every real consumer repo.
   writePatchCodingCertification(repoDir);
   return { name, repoDir, legacyConfig, emptyLocalCertDir };
 }

@@ -24,6 +24,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { getNativePatchCodingConfig } from '../../config.ts';
 import { PATCH_CODING_CERTIFICATION_RELATIVE_PATH } from '../coding-certification.ts';
+import { resolveNativeLauncherPath } from '../install-paths.ts';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -487,7 +488,9 @@ function buildLocalReadiness(
   const readiness: Partial<Record<RouterRole, { ready: boolean; reasons: string[] }>> = {};
   const patchCodingConfig = getNativePatchCodingConfig(repoDir);
   const patchCertificationPresent = existsSync(join(repoDir, PATCH_CODING_CERTIFICATION_RELATIVE_PATH));
-  const hasCodingLauncher = existsSync(join(repoDir, 'tools', 'launch-native-coding.ts'));
+  // Installation-relative: the launcher ships with wavemill, so its presence
+  // is a property of the install, not of the repo being worked on.
+  const hasCodingLauncher = existsSync(resolveNativeLauncherPath('coding'));
 
   for (const role of ALL_ROLES) {
     const reasons: string[] = [];

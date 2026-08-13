@@ -49,7 +49,7 @@ const FIXTURE_DIR = new URL('./fixtures', import.meta.url).pathname;
 
 function makeRepo(
   _modelRegistryModels: Record<string, Partial<ModelCapabilities>> = {},
-  options: { patchCodingEnabled?: boolean; nativeCodingLauncher?: boolean } = {},
+  options: { patchCodingEnabled?: boolean } = {},
 ): {
   repoDir: string;
   cleanup: () => void;
@@ -63,10 +63,8 @@ function makeRepo(
       ? { nativeAgent: { patchCoding: { enabled: true } } }
       : {}),
   }));
-  if (options.nativeCodingLauncher) {
-    mkdirSync(join(repoDir, 'tools'), { recursive: true });
-    writeFileSync(join(repoDir, 'tools', 'launch-native-coding.ts'), 'export {};\n');
-  }
+  // The native coding launcher lives in the wavemill installation, not in the
+  // repo under test, so there is nothing repo-local to stage here.
   clearConfigCache(repoDir);
 
   return {
@@ -480,7 +478,6 @@ describe('[challenge-guardrails] rollout challenge-mode native candidate filteri
       'native-stale': nativeModel('patch'),
     }, {
       patchCodingEnabled: true,
-      nativeCodingLauncher: true,
     });
     try {
       writePatchCodingCertification(repoDir);

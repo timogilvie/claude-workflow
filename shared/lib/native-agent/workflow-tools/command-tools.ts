@@ -11,6 +11,7 @@ import {
 } from '../../issue-expander.ts';
 import { getCurrentOperatingMode } from '../../operating-mode.ts';
 import { loadPromptTemplate } from '../../prompt-utils.ts';
+import { resolveWavemillPromptPath } from '../install-paths.ts';
 import { formatReviewResult } from '../../review-formatter.ts';
 import {
   reviewChanges,
@@ -702,8 +703,13 @@ export function createDefaultExpander(options: DefaultExpanderOptions): Expander
   const getOperatingModeImpl = options.getOperatingModeImpl ?? getCurrentOperatingMode;
   const splitTaskPacketImpl = options.splitTaskPacketImpl ?? splitTaskPacket;
   const writeTaskPacketArtifactsImpl = options.writeTaskPacketArtifactsImpl ?? writeTaskPacketArtifacts;
+  // tools/prompts/ is wavemill-owned and ships with the installation. The
+  // non-native path already resolves it install-relative via
+  // resolvePromptPath(import.meta.url, ...) in tools/expand-issue.ts; this
+  // resolved it against the repo being worked on, which only exists when
+  // wavemill drives itself.
   const resolvePromptPath = options.resolvePromptPath
-    ?? ((repoDir: string) => path.join(repoDir, 'tools', 'prompts', 'issue-writer.md'));
+    ?? (() => resolveWavemillPromptPath('issue-writer.md'));
   const resolveOutputPath = options.resolveOutputPath
     ?? ((issue: string, outputDir?: string) => path.join(outputDir ?? path.join(options.repoDir, 'features', issue.toLowerCase()), 'task-packet.md'));
 

@@ -270,8 +270,7 @@ describe('checkNativeAgentLaunch', () => {
         },
       },
     }));
-    mkdirSync(join(repoDir, 'tools'), { recursive: true });
-    writeFileSync(join(repoDir, 'tools', 'launch-native-coding.ts'), 'export {};\n', 'utf-8');
+    // No repo-local launcher: it is resolved from the wavemill installation.
     writeOpenRouterCert(repoDir, 'qwen', 'qwen3-coder', 'patch');
     writePatchCodingCertification(repoDir);
     process.env.TEST_OPENROUTER_KEY = 'sk-test';
