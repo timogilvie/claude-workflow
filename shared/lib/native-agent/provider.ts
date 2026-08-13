@@ -27,6 +27,7 @@ import {
   buildProviderPayloadTrustMetadata,
   type ToolTrustMetadata,
 } from './provenance.ts';
+import { DEFAULT_MAX_OUTPUT_TOKENS } from './output-limits.ts';
 
 export type ProviderFinishReason =
   | 'stop'
@@ -132,6 +133,9 @@ export interface ScriptedProviderContext {
   messages: NativeAgentMessage[];
   sawToolResults: boolean;
   rawContext: unknown;
+  /** Stream options Pi received for this turn, so tests can assert on
+   *  request-shaping fields such as `maxTokens`. */
+  options?: SimpleStreamOptions;
 }
 
 export function createPiToolCallingProvider(): ToolCallingProvider {
@@ -140,8 +144,8 @@ export function createPiToolCallingProvider(): ToolCallingProvider {
 
 export function registerScriptedPiProvider(definition: ScriptedPiProviderDefinition): void {
   let turnIndex = 0;
-  const stream: StreamFunction<Api, SimpleStreamOptions> = (model, context) => {
-    const scriptContext = toScriptedProviderContext(context);
+  const stream: StreamFunction<Api, SimpleStreamOptions> = (model, context, options) => {
+    const scriptContext = toScriptedProviderContext(context, options);
     const turn = typeof definition.turns === 'function'
       ? definition.turns(scriptContext)
       : definition.turns[Math.min(turnIndex++, definition.turns.length - 1)];
@@ -170,7 +174,12 @@ class PiToolCallingProvider implements ToolCallingProvider {
   async createTurn(input: ToolCallingProviderInput): Promise<ProviderTurnResult> {
     const context = createPiContext(input.state.messages, input.tools?.map(toPiTool));
     const model = toPiModel(input.model);
-    const stream = streamSimple(model, context, input.options);
+    // An undefined ceiling makes Pi drop `max_tokens` from the payload, which
+    // inflates the provider-side credit reservation. See ./output-limits.ts.
+    const stream = streamSimple(model, context, {
+      ...input.options,
+      maxTokens: input.options?.maxTokens ?? model.maxTokens,
+    });
     const events: ProviderTurnEvent[] = [];
     let finalMessage: AssistantMessage | undefined;
     let finishReason: ProviderFinishReason = 'unknown';
@@ -270,7 +279,7 @@ function toPiModel(config: ProviderModelConfig): Model<Api> {
     input: config.input ?? ['text'],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: config.contextWindow ?? 200000,
-    maxTokens: config.maxTokens ?? 8192,
+    maxTokens: config.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
   };
 }
 
@@ -338,7 +347,10 @@ function createPiUsage(usage: Partial<Usage> | undefined): Usage {
   };
 }
 
-function toScriptedProviderContext(context: Context): ScriptedProviderContext {
+function toScriptedProviderContext(
+  context: Context,
+  options?: SimpleStreamOptions,
+): ScriptedProviderContext {
   return {
     messages: context.messages.map((message): NativeAgentMessage => {
       if (message.role === 'user') {
@@ -362,5 +374,6 @@ function toScriptedProviderContext(context: Context): ScriptedProviderContext {
     }),
     sawToolResults: context.messages.some((message) => message.role === 'toolResult'),
     rawContext: context,
+    ...(options !== undefined ? { options } : {}),
   };
 }
