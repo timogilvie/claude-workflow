@@ -25,6 +25,7 @@ import {
   type ReplayCompactionOptions,
 } from './compaction.ts';
 import { buildTrustMetadata } from './provenance.ts';
+import { DEFAULT_MAX_OUTPUT_TOKENS } from './output-limits.ts';
 import { toProviderRequestModelId, type ProviderModelConfig } from './provider.ts';
 import { evaluateBeforeToolCallPolicy, type ToolPolicyConfig } from './tools/policies.ts';
 import { redactSecrets, redactSecretsInValue } from './tools/redaction.ts';
@@ -121,6 +122,8 @@ export interface WavemillLoopConfig {
   /** Optional registry override for tool compatibility validation. */
   compatRegistry?: ModelRegistry;
   temperature?: number;
+  /** Per-turn output ceiling. Falls back to `model.maxTokens`, then
+   *  DEFAULT_MAX_OUTPUT_TOKENS; it is never sent as undefined. */
   maxTokens?: number;
 }
 
@@ -200,7 +203,16 @@ function deriveOutputCapMetadata(
   return result;
 }
 
-function toPiModel(config: ProviderModelConfig): Model<string> {
+/**
+ * Resolve the per-turn output ceiling for a loop run. Never returns undefined:
+ * an unset ceiling makes Pi omit `max_tokens`, which inflates the provider-side
+ * credit reservation to the endpoint maximum. See ./output-limits.ts.
+ */
+export function resolveMaxOutputTokens(config: Pick<WavemillLoopConfig, 'maxTokens' | 'model'>): number {
+  return config.maxTokens ?? config.model.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
+}
+
+function toPiModel(config: ProviderModelConfig, maxTokens: number): Model<string> {
   const requestModelId = toProviderRequestModelId(config);
   return {
     id: requestModelId,
@@ -214,7 +226,7 @@ function toPiModel(config: ProviderModelConfig): Model<string> {
     input: config.input ?? ['text'],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: config.contextWindow ?? 200_000,
-    maxTokens: config.maxTokens ?? 8192,
+    maxTokens,
   } as unknown as Model<string>;
 }
 
@@ -270,7 +282,8 @@ function composeAbortSignal(
  * heartbeat emission, and deterministic fail-fast batch semantics.
  */
 export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopResult> {
-  const { context, convertToLlm, budget, signal: callerSignal, onHeartbeat, modelPricing, temperature, maxTokens } = config;
+  const { context, convertToLlm, budget, signal: callerSignal, onHeartbeat, modelPricing, temperature } = config;
+  const maxTokens = resolveMaxOutputTokens(config);
 
   const startTime = Date.now();
   const composed = composeAbortSignal(callerSignal, budget?.maxWallClockMs);
@@ -337,7 +350,7 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
   }
 
   const piConfig: AgentLoopConfig = {
-    model: toPiModel(config.model),
+    model: toPiModel(config.model, maxTokens),
     convertToLlm,
     temperature,
     maxTokens,
