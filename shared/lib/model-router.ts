@@ -20,7 +20,7 @@ import { loadWavemillConfig } from './config.ts';
 import { aggregateEvals } from './eval-aggregator.ts';
 import { resolveFromMainRepo } from './git-utils.ts';
 import { errorMessage } from './error-utils.ts';
-import { resolveGlobalAggregatedEvalsPath } from './evals-paths.ts';
+import { resolveEvalsDir, resolveGlobalAggregatedEvalsPath } from './evals-paths.ts';
 import { resolveModelAgent, type AgentResolution, type AgentResolutionPhase } from './model-agent-resolution.ts';
 import {
   configuredDeepSeekModelIds,
@@ -480,9 +480,14 @@ function loadMergedEvalRecords(opts: Required<RouterOptions>): EvalRecord[] {
   // Auto-aggregate if needed
   ensureAggregatedData(repoDir);
 
-  const perRepo = readEvalRecords(
-    opts.evalsDir ? { dir: opts.evalsDir } : undefined,
-  );
+  // Resolve the per-repo evals dir against `repoDir`, not the ambient cwd.
+  // `readEvalRecords()` with no dir resolves relative to whatever repo the
+  // process happens to be running in, so routing for repo A would read repo
+  // B's eval history whenever the two differ (worktrees, cross-repo mill runs,
+  // tests using a fixture repo).
+  const perRepo = readEvalRecords({
+    dir: opts.evalsDir || resolveEvalsDir(undefined, repoDir).dir,
+  });
   console.error(`Router: Loaded ${perRepo.length} records from per-repo file`);
 
   // Try loading aggregated cross-repo data:
