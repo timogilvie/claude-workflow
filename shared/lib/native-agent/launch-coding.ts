@@ -11,6 +11,7 @@ import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { AgentContext, WavemillLoopConfig } from './loop.ts';
 import { runWavemillLoop } from './loop.ts';
+import { CODING_MAX_OUTPUT_TOKENS } from './output-limits.ts';
 import type { AgentMessage, AgentTurn, Message } from './messages.ts';
 import {
   buildNativeProviderResolutionFailureMessage,
@@ -660,6 +661,7 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
     const runCodingLoop = () => runWavemillLoop({
       model,
       context,
+      maxTokens: CODING_MAX_OUTPUT_TOKENS,
       convertToLlm: (messages) => messages as unknown as Message[],
       signal: options.signal,
       afterToolCall: async (toolContext, signal) => {

@@ -65,6 +65,7 @@ TESTS=(
   shared/lib/native-agent/tools/redaction.test.ts
   shared/lib/native-agent/tools/artifacts.test.ts
   shared/lib/native-agent/loop.test.ts
+  shared/lib/native-agent/output-limits.test.ts
   shared/lib/native-agent/transcript.test.ts
   shared/lib/native-expansion.test.ts
   shared/lib/native-agent/workflow-tools/contracts.test.ts

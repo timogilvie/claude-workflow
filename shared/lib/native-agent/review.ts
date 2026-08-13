@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import type { AgentMessage, Message } from './messages.ts';
 import type { AgentContext, LoopStopReason, WavemillLoopConfig } from './loop.ts';
 import { runWavemillLoop } from './loop.ts';
+import { REVIEW_MAX_OUTPUT_TOKENS } from './output-limits.ts';
 import { TranscriptWriter, type TranscriptEvent, type TranscriptToolResult } from './transcript.ts';
 import {
   buildNativeProviderResolutionFailureMessage,
@@ -327,10 +328,7 @@ export async function runNativeReview(
   const loopResult = await nativeReviewDeps.runWavemillLoop({
     model: modelConfig,
     context: loopContext,
-    // Pi otherwise lets some OpenRouter models request their provider maximum
-    // (65,536 for Gemini), which can exceed a key's remaining credit before a
-    // concise JSON review gets a first turn.
-    maxTokens: 8192,
+    maxTokens: REVIEW_MAX_OUTPUT_TOKENS,
     // AgentMessage and Message are structurally compatible at runtime; pi-agent-core
     // exports diverged nominal types so a direct cast is required.
     convertToLlm: (messages) => messages as unknown as Message[],

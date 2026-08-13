@@ -11,6 +11,7 @@ import {
 } from '@earendil-works/pi-ai';
 import type { AgentTool, AgentToolResult } from '@earendil-works/pi-agent-core';
 import type { TSchema } from 'typebox';
+import { DEFAULT_MAX_OUTPUT_TOKENS } from '../output-limits.ts';
 import type { ToolDescriptor } from './types.ts';
 
 // Re-export Pi tool types through the adapter seam so callers (e.g. smoke
@@ -80,7 +81,7 @@ export function buildPiModel({
     input: ['text'],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 200_000,
-    maxTokens: 8192,
+    maxTokens: DEFAULT_MAX_OUTPUT_TOKENS,
   } as PiModel;
 }
 
