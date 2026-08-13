@@ -132,8 +132,15 @@ function makeRepo(configOverride?: Record<string, unknown>): { repoDir: string; 
   const repoDir = mkdtempSync(join(tmpdir(), 'workflow-router-test-'));
   const previousRoot = process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
   process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = join(repoDir, 'global-certifications');
+  // Pin the cross-repo aggregated path inside the fixture. It otherwise falls
+  // back to the wavemill install dir, so a developer's own eval history would
+  // merge into these routing decisions and diverge from CI, where that file
+  // does not exist.
+  const previousAggregated = process.env.WAVEMILL_AGGREGATED_EVALS_PATH;
+  process.env.WAVEMILL_AGGREGATED_EVALS_PATH = join(repoDir, '.wavemill', 'evals', 'aggregated-evals.jsonl');
   mkdirSync(join(repoDir, '.wavemill', 'evals'), { recursive: true });
-  writeFileSync(join(repoDir, '.wavemill', 'evals', 'records.jsonl'), [
+  // Must be evals.jsonl — the name readEvalRecords() looks for.
+  writeFileSync(join(repoDir, '.wavemill', 'evals', 'evals.jsonl'), [
     JSON.stringify({ id: '1', modelId: 'gpt-5.3-codex', originalPrompt: 'Create a CLI command', score: 0.91, timeSeconds: 100, interventionCount: 0 }),
     JSON.stringify({ id: '2', modelId: 'gpt-5.3-codex', originalPrompt: 'Add a route tool', score: 0.88, timeSeconds: 110, interventionCount: 0 }),
     JSON.stringify({ id: '3', modelId: 'gpt-5.3-codex', originalPrompt: 'Implement a feature', score: 0.9, timeSeconds: 95, interventionCount: 1 }),
@@ -166,6 +173,11 @@ function makeRepo(configOverride?: Record<string, unknown>): { repoDir: string; 
         delete process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
       } else {
         process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = previousRoot;
+      }
+      if (previousAggregated === undefined) {
+        delete process.env.WAVEMILL_AGGREGATED_EVALS_PATH;
+      } else {
+        process.env.WAVEMILL_AGGREGATED_EVALS_PATH = previousAggregated;
       }
       clearConfigCache(repoDir);
       rmSync(repoDir, { recursive: true, force: true });
@@ -277,7 +289,10 @@ await test('routes broad CLI workflow work to deep planning and medium-or-higher
       { repoDir },
     );
     assert.equal(decision.planDepth, 'deep');
+    // Capable coders for broad workflow work. Keep in sync with the top of the
+    // coding ladder in model-registry.ts when new frontier models land.
     assert.ok([
+      'claude-fable-5',
       'gpt-5.5',
       'gpt-5.6-terra',
       'claude-sonnet-5',
