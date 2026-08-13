@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import type { Message } from '@earendil-works/pi-ai';
+import type { Message } from './messages.ts';
 import { registerScriptedPiProvider, type ScriptedProviderContext } from './provider.ts';
 import { runWavemillLoop, resolveMaxOutputTokens } from './loop.ts';
 import {
