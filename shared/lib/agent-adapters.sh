@@ -72,7 +72,7 @@ agent_resolve_from_model() {
   local model="$1"
   local phase="$2"
   local repo_dir="${REPO_DIR:-$(pwd)}"
-  local tools_dir="${TOOLS_DIR:-$repo_dir/tools}"
+  local tools_dir="${TOOLS_DIR:-$(agent_wavemill_tools_dir)}"
   local resolver_tool="$tools_dir/resolve-model-agent.ts"
   local stderr_file="" json_output="" agent="" diagnostic=""
   AGENT_RESOLVE_LAST_DIAGNOSTIC=""
@@ -145,7 +145,7 @@ agent_resolve_models_for_roles() {
   local coder_model="${2:-}"
   local reviewer_model="${3:-}"
   local repo_dir="${REPO_DIR:-$(pwd)}"
-  local tools_dir="${TOOLS_DIR:-$repo_dir/tools}"
+  local tools_dir="${TOOLS_DIR:-$(agent_wavemill_tools_dir)}"
   local resolver_tool="$tools_dir/resolve-model-agent.ts"
   local stderr_file="" json_output="" diagnostic=""
   local -a resolver_args=()
@@ -238,9 +238,11 @@ agent_validate_model() {
   # Convert to absolute path
   repo_dir="$(cd "$repo_dir" 2>/dev/null && pwd || echo "$repo_dir")"
 
-  # Derive lib directory from TOOLS_DIR (TOOLS_DIR = repo/tools, LIB_DIR = repo/shared/lib)
-  # and fall back to the repo argument when the adapter is sourced directly.
-  local tools_dir="${TOOLS_DIR:-$repo_dir/tools}"
+  # Derive lib directory from TOOLS_DIR (TOOLS_DIR = <install>/tools,
+  # LIB_DIR = <install>/shared/lib), falling back to this file's own location
+  # when the adapter is sourced directly. Both point into the wavemill
+  # installation, never into the repo being worked on.
+  local tools_dir="${TOOLS_DIR:-$(agent_wavemill_tools_dir)}"
   local lib_dir="${tools_dir%/tools}/shared/lib"
   local validator="model-validator.ts"
   local validation_stderr
@@ -276,7 +278,7 @@ agent_resolve_model() {
 
   repo_dir="$(cd "$repo_dir" 2>/dev/null && pwd || echo "$repo_dir")"
 
-  local tools_dir="${TOOLS_DIR:-$repo_dir/tools}"
+  local tools_dir="${TOOLS_DIR:-$(agent_wavemill_tools_dir)}"
   local lib_dir="${tools_dir%/tools}/shared/lib"
   local validator="model-validator.ts"
 
@@ -324,6 +326,39 @@ agent_hooks_dir() {
   local script_dir
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   echo "${script_dir%/lib}/hooks"
+}
+
+# Wavemill's own tools/ directory, resolved from this file's location.
+#
+# This is deliberately NOT derived from the target repo or from TOOLS_DIR.
+# Mill runs against consumer repos that have no tools/ of their own, and
+# wavemill-mill.sh historically defaulted TOOLS_DIR to "$REPO_DIR/tools",
+# so both sources point at a directory that does not exist once wavemill
+# drives any repo other than itself.
+agent_wavemill_tools_dir() {
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  echo "${script_dir%/shared/lib}/tools"
+}
+
+# Absolute path to the native launcher for a phase.
+#
+# Native launchers import ../shared/lib/native-agent/*, so a copy placed
+# inside a consumer repo cannot resolve its own imports. The installation
+# copy is the only one that can ever run — resolve it, never $repo_dir.
+agent_native_launcher_path() {
+  local phase="$1"
+  local tools_dir
+  tools_dir="$(agent_wavemill_tools_dir)"
+  case "$phase" in
+    planning) echo "$tools_dir/launch-native-planning.ts" ;;
+    coding)   echo "$tools_dir/launch-native-coding.ts" ;;
+    review)   echo "$tools_dir/launch-native-review.ts" ;;
+    *)
+      echo "agent_native_launcher_path: unknown phase '$phase'" >&2
+      return 1
+      ;;
+  esac
 }
 
 agent_runtime_resource_selection_enabled() {
@@ -483,7 +518,7 @@ agent_native_launch_probe() {
   local phase="$2"
   local model="$3"
   local repo_dir="${4:-${REPO_DIR:-$(pwd)}}"
-  local tool="${TOOLS_DIR:-$repo_dir/tools}/check-native-agent-launch.ts"
+  local tool="${TOOLS_DIR:-$(agent_wavemill_tools_dir)}/check-native-agent-launch.ts"
   local output=""
 
   AGENT_NATIVE_LAUNCH_LAST_JSON=""
@@ -636,7 +671,7 @@ agent_json_get() {
 
 agent_deepseek_config() {
   local repo_dir="${1:-${REPO_DIR:-$(pwd)}}"
-  local tools_dir="${TOOLS_DIR:-$repo_dir/tools}"
+  local tools_dir="${TOOLS_DIR:-$(agent_wavemill_tools_dir)}"
   local lib_dir="${tools_dir%/tools}/shared/lib"
 
   (
@@ -647,7 +682,7 @@ agent_deepseek_config() {
 
 agent_openrouter_config() {
   local repo_dir="${1:-${REPO_DIR:-$(pwd)}}"
-  local tools_dir="${TOOLS_DIR:-$repo_dir/tools}"
+  local tools_dir="${TOOLS_DIR:-$(agent_wavemill_tools_dir)}"
   local lib_dir="${tools_dir%/tools}/shared/lib"
 
   (
@@ -1881,6 +1916,10 @@ agent_launch_autonomous() {
   case "$agent_cmd" in
     native-openai|native-openrouter)
       local launcher="/tmp/${session}-${issue}-autonomous-launcher.sh"
+      # Resolved once here; the unknown-phase branch below still owns its own
+      # error, so this stays empty rather than failing for unsupported phases.
+      local native_launcher
+      native_launcher="$(agent_native_launcher_path "$native_phase" 2>/dev/null || true)"
       case "$native_phase" in
         planning)
           cat > "$launcher" <<LAUNCHEOF
@@ -1905,7 +1944,7 @@ if [[ -n '$issue' ]]; then
   printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
 fi
 set +e
-npx tsx '$repo_dir/tools/launch-native-planning.ts' --session '$session' --issue '$issue' --linear-issue '$linear_issue' --slug '$feature_slug' --wt-dir '$worktree_dir' --repo-dir '$repo_dir'
+npx tsx '$native_launcher' --session '$session' --issue '$issue' --linear-issue '$linear_issue' --slug '$feature_slug' --wt-dir '$worktree_dir' --repo-dir '$repo_dir'
 native_rc=\$?
 set -e
 if [[ -n "\${STATUS_LOG_FILE:-}" ]]; then
@@ -1936,7 +1975,7 @@ if [[ -n '$issue' ]]; then
   printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
 fi
 set +e
-npx tsx '$repo_dir/tools/launch-native-review.ts' --session '$session' --issue '$issue' --slug '$feature_slug' --wt-dir '$worktree_dir' --repo-dir '$repo_dir'
+npx tsx '$native_launcher' --session '$session' --issue '$issue' --slug '$feature_slug' --wt-dir '$worktree_dir' --repo-dir '$repo_dir'
 native_rc=\$?
 set -e
 if [[ -n "\${STATUS_LOG_FILE:-}" ]]; then
@@ -1969,7 +2008,7 @@ if [[ -n '$issue' ]]; then
   printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
 fi
 set +e
-npx tsx '$repo_dir/tools/launch-native-coding.ts' --session '$session' --issue '$issue' --slug '$feature_slug' --wt-dir '$worktree_dir' --repo-dir '$repo_dir'
+npx tsx '$native_launcher' --session '$session' --issue '$issue' --slug '$feature_slug' --wt-dir '$worktree_dir' --repo-dir '$repo_dir'
 native_rc=\$?
 set -e
 if [[ -n "\${STATUS_LOG_FILE:-}" ]]; then
@@ -1989,7 +2028,7 @@ LAUNCHEOF
       tmux send-keys -t "$target" C-m
       ;;
     claude-deepseek)
-      local tools_dir="${TOOLS_DIR:-$repo_dir/tools}"
+      local tools_dir="${TOOLS_DIR:-$(agent_wavemill_tools_dir)}"
       local lib_dir="${tools_dir%/tools}/shared/lib"
       local launcher="/tmp/${session}-${issue}-autonomous-launcher.sh"
       local env_block resolved_model
@@ -2366,6 +2405,10 @@ agent_launch_interactive() {
   # Don't use exec — keep the shell alive so the window persists after agent exit
   case "$agent_cmd" in
     native-openai|native-openrouter)
+      # Resolved once here; the unknown-phase branch below still owns its own
+      # error, so this stays empty rather than failing for unsupported phases.
+      local native_launcher
+      native_launcher="$(agent_native_launcher_path "$native_phase" 2>/dev/null || true)"
       case "$native_phase" in
         planning)
           cat > "$launcher" <<LAUNCHEOF
@@ -2390,7 +2433,7 @@ if [[ -n '$issue' ]]; then
   printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
 fi
 set +e
-npx tsx '$repo_dir/tools/launch-native-planning.ts' --session '$session' --issue '$issue' --linear-issue '$linear_issue' --slug '$feature_slug' --wt-dir '$worktree_dir' --repo-dir '$repo_dir'
+npx tsx '$native_launcher' --session '$session' --issue '$issue' --linear-issue '$linear_issue' --slug '$feature_slug' --wt-dir '$worktree_dir' --repo-dir '$repo_dir'
 native_rc=\$?
 set -e
 if [[ -n "\${STATUS_LOG_FILE:-}" ]]; then
@@ -2421,7 +2464,7 @@ if [[ -n '$issue' ]]; then
   printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
 fi
 set +e
-npx tsx '$repo_dir/tools/launch-native-review.ts' --session '$session' --issue '$issue' --slug '$feature_slug' --wt-dir '$worktree_dir' --repo-dir '$repo_dir'
+npx tsx '$native_launcher' --session '$session' --issue '$issue' --slug '$feature_slug' --wt-dir '$worktree_dir' --repo-dir '$repo_dir'
 native_rc=\$?
 set -e
 if [[ -n "\${STATUS_LOG_FILE:-}" ]]; then
@@ -2454,7 +2497,7 @@ if [[ -n '$issue' ]]; then
   printf '%s\n' "working" > "/tmp/${session}-${issue}-status.txt"
 fi
 set +e
-npx tsx '$repo_dir/tools/launch-native-coding.ts' --session '$session' --issue '$issue' --slug '$feature_slug' --wt-dir '$worktree_dir' --repo-dir '$repo_dir'
+npx tsx '$native_launcher' --session '$session' --issue '$issue' --slug '$feature_slug' --wt-dir '$worktree_dir' --repo-dir '$repo_dir'
 native_rc=\$?
 set -e
 if [[ -n "\${STATUS_LOG_FILE:-}" ]]; then
@@ -2471,7 +2514,7 @@ LAUNCHEOF
       esac
       ;;
     claude-deepseek)
-      local tools_dir="${TOOLS_DIR:-$repo_dir/tools}"
+      local tools_dir="${TOOLS_DIR:-$(agent_wavemill_tools_dir)}"
       local lib_dir="${tools_dir%/tools}/shared/lib"
       local env_block resolved_model
 
