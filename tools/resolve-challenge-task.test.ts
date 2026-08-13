@@ -430,12 +430,18 @@ describe('resolve-challenge-task CLI', () => {
       const primary = entries.find((entry) => entry.role === 'primary');
       const challenger = entries.find((entry) => entry.role === 'challenger');
       assert.equal(primary?.planner, 'claude-opus-4-7');
-      assert.equal(challenger?.planner, 'claude-haiku-4-5-20251001');
+      // The scheduler recommended claude-haiku-4-5-20251001, but a plan-stage
+      // recommendation is advisory: the challenger still comes from the
+      // launch-priority ranking, same as an implementation-stage challenge.
+      // This repo has no launchable natives, so the ranking falls back to the
+      // highest-priority incumbent that is not already the primary planner.
+      assert.notEqual(challenger?.planner, primary?.planner);
+      assert.equal(challenger?.planner, 'claude-opus-4-8');
 
       const intent = result.challengeExecutionIntent as Record<string, unknown>;
       assert.equal(intent.decisionSource, 'expanded');
       assert.equal((intent.primary as Record<string, unknown> & { planner: Record<string, unknown> }).planner.model, 'claude-opus-4-7');
-      assert.equal((intent.challenger as Record<string, unknown> & { planner: Record<string, unknown> }).planner.model, 'claude-haiku-4-5-20251001');
+      assert.equal((intent.challenger as Record<string, unknown> & { planner: Record<string, unknown> }).planner.model, 'claude-opus-4-8');
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }

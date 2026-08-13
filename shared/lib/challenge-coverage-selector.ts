@@ -42,7 +42,15 @@ interface RankedCandidate {
 
 let launchPriorityByAliasCache: Map<string, ChallengeLaunchPriorityMetadata> | null = null;
 
-function getLaunchPriorityByAlias(): Map<string, ChallengeLaunchPriorityMetadata> {
+/**
+ * Launch-priority metadata keyed by wavemill alias.
+ *
+ * This is the single definition of "incumbent" (the `claude` and `gpt`
+ * families) used by every challenger-ranking path, so the coverage selector
+ * and the challenge scheduler cannot drift apart on which families exploration
+ * should favour.
+ */
+export function getLaunchPriorityByAlias(): Map<string, ChallengeLaunchPriorityMetadata> {
   if (!launchPriorityByAliasCache) {
     launchPriorityByAliasCache = new Map(
       loadLaunchPriorityList().map((entry) => [

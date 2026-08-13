@@ -636,7 +636,6 @@ interface ChallengerSelectionResult {
 
 interface ChallengerSelectionOptions extends ChallengeCoverageOptions {
   stage?: ChallengeStage;
-  honorForced?: boolean;
 }
 
 function withSelectionMetadata(
@@ -664,8 +663,13 @@ function resolveChallengerModel(
 ): ChallengerSelectionResult {
   const enabledPool = filterDisabledModels(uniqueNonEmpty(pool));
   const trimmed = forced?.trim();
+  // Without coverage data a forced challenger is the only signal available.
+  // With it, the forced model is demoted to a recommendation so every stage —
+  // not just implementation — runs through the launch-priority ranking that
+  // favours non-incumbent families. Honouring it verbatim here let a scheduler
+  // recommendation pin plan and review challenges to claude/gpt indefinitely.
   if (
-    (!selectionOpts?.coverage || selectionOpts?.honorForced)
+    !selectionOpts?.coverage
     && trimmed
     && trimmed !== primaryModel
     && !isDisabledModel(trimmed)
@@ -1317,7 +1321,6 @@ export function pickChallengeWorkflowsWithReason(
 
   const challengerSelection = resolveChallengerModel(certifiedPool, primaryVaried, forcedChallengerModel, randomFn, {
     stage,
-    honorForced: stage !== 'implementation',
     coverage: opts.coverage,
     rotationSeed: opts.rotationSeed,
     recommendedChallengerModel: opts.recommendedChallengerModel,
@@ -1575,7 +1578,6 @@ function buildPairFromRouteSnapshotWithReason(
     opts.randomFn || Math.random,
     {
       stage,
-      honorForced: stage !== 'implementation',
       coverage: opts.coverage,
       rotationSeed: opts.rotationSeed,
       recommendedChallengerModel: opts.recommendedChallengerModel,
