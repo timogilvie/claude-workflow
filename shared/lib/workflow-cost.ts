@@ -310,7 +310,23 @@ function computeNativeWorkflowCost(
 
     let sessionCost: number | undefined;
     let reason: WorkflowCostAttributionReason | undefined;
-    if (providerCost !== undefined) {
+    // A provider that simply omits cost reports 0, which is indistinguishable
+    // from a genuinely free call. Trusting it zeroed the cost of every
+    // OpenRouter-backed run that had real token usage. Only accept a reported
+    // zero when the model is priced at zero, or when there is no usage to
+    // price from; otherwise fall through and compute from the pricing table.
+    // A reported zero is still authoritative when there is nothing better to
+    // fall back to: no usage to price, no pricing entry for the model, or a
+    // model priced at zero. Without the `pricing === undefined` case, genuinely
+    // free models absent from the pricing table (OpenRouter `:free` variants,
+    // local providers) would flip from a correct $0 to `unpriced_model` and
+    // report no cost at all.
+    const providerCostIsTrustworthy = providerCost !== undefined
+      && (providerCost > 0
+        || !session.usageAvailable
+        || pricing === undefined
+        || isExplicitZeroPricing(pricing));
+    if (providerCostIsTrustworthy) {
       sessionCost = providerCost;
       usedProviderReportedCost = true;
     } else if (session.invalidUsage) {
@@ -436,8 +452,10 @@ export function computeWorkflowCost(opts: {
   repoDir?: string;
   pricingTable?: PricingTable;
   agentType?: AgentType | string;
+  /** Issue being costed; scopes native transcripts to this task. */
+  issueId?: string;
 }): WorkflowCostOutcome {
-  const { worktreePath, branchName, repoDir, pricingTable: externalPricing, agentType } = opts;
+  const { worktreePath, branchName, repoDir, pricingTable: externalPricing, agentType, issueId } = opts;
   const debug = process.env.DEBUG_COST === '1' || process.env.DEBUG_COST === 'true';
 
   if (debug) {
@@ -448,7 +466,7 @@ export function computeWorkflowCost(opts: {
     console.log(`[DEBUG_COST]   agentType: ${agentType || '(undefined, will default to claude)'}`);
   }
 
-  const nativeScanResult = new NativeSessionAdapter().scan({ worktreePath, branchName });
+  const nativeScanResult = new NativeSessionAdapter().scan({ worktreePath, branchName, repoDir, issueId });
   const nativeHasUsableCostData = !!nativeScanResult?.nativeSessions?.some(
     (session) => session.usageAvailable || isFiniteNonNegative(session.providerReportedCostUsd),
   );
@@ -467,7 +485,7 @@ export function computeWorkflowCost(opts: {
   }
 
   if (!scanResult) {
-    scanResult = adapter.scan({ worktreePath, branchName });
+    scanResult = adapter.scan({ worktreePath, branchName, repoDir, issueId });
   }
 
   // If no sessions found, try auto-detection as a fallback
@@ -476,7 +494,7 @@ export function computeWorkflowCost(opts: {
       console.log(`[DEBUG_COST]   No sessions found for agentType '${agentType || 'claude'}', attempting auto-detection`);
     }
 
-    const detectedAgent = detectAgentType({ worktreePath, branchName });
+    const detectedAgent = detectAgentType({ worktreePath, branchName, repoDir, issueId });
 
     if (detectedAgent && detectedAgent !== agentType) {
       // WARNING: Auto-detection was needed - this indicates a bug in agent assignment
@@ -492,7 +510,7 @@ export function computeWorkflowCost(opts: {
       }
 
       adapter = getSessionAdapter(detectedAgent);
-      scanResult = adapter.scan({ worktreePath, branchName });
+      scanResult = adapter.scan({ worktreePath, branchName, repoDir, issueId });
     }
   }
 

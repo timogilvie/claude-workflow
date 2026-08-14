@@ -9,6 +9,8 @@ import {
   HOKUSAI_CONTRIBUTION_ENDPOINT,
   HOKUSAI_ENDPOINT_TOKEN_ENV,
   HOKUSAI_BATCH_SIZE,
+  HOKUSAI_DEFAULT_MODEL_ID,
+  buildHokusaiContributionEndpoint,
 } from './hokusai-local-config.ts';
 
 const tempDirs: string[] = [];
@@ -129,5 +131,40 @@ describe('hokusai-local-config', () => {
       const count = (content.match(/\.wavemill-config\.local\.json/g) ?? []).length;
       assert.equal(count, 1);
     });
+  });
+});
+
+describe('contribution endpoint', () => {
+  // The ingest route is model-scoped: POST /api/v1/models/{model_id}/contributions.
+  // It is registered that way by the data-pipeline API
+  // (src/api/endpoints/contributions.py) and built that way by the SDK
+  // (packages/core/src/client.ts buildModelContributionsPath).
+  //
+  // Wavemill previously defaulted to an unscoped /api/v1/contributions, which
+  // the API does not serve. It returned 404, the queue classified that as a
+  // permanent failure, and every contribution was dead-lettered instead of
+  // uploaded. Pin the shape so the model scope cannot be dropped again.
+  it('matches the SDK canonical model-scoped route', () => {
+    assert.equal(
+      HOKUSAI_CONTRIBUTION_ENDPOINT,
+      'https://api.hokus.ai/api/v1/models/30/contributions',
+    );
+  });
+
+  it('is model-scoped, never a bare /api/v1/contributions', () => {
+    assert.match(HOKUSAI_CONTRIBUTION_ENDPOINT, /\/api\/v1\/models\/[^/]+\/contributions$/);
+    assert.doesNotMatch(HOKUSAI_CONTRIBUTION_ENDPOINT, /\/api\/v1\/contributions$/);
+  });
+
+  it('defaults to the SDK router model id', () => {
+    assert.equal(HOKUSAI_DEFAULT_MODEL_ID, '30');
+    assert.equal(buildHokusaiContributionEndpoint(), HOKUSAI_CONTRIBUTION_ENDPOINT);
+  });
+
+  it('scopes to an explicit model id when given one', () => {
+    assert.equal(
+      buildHokusaiContributionEndpoint('42'),
+      'https://api.hokus.ai/api/v1/models/42/contributions',
+    );
   });
 });

@@ -17,6 +17,7 @@ import {
   getSessionAdapter,
   detectAgentType,
   getNativeProviderMetadata,
+  matchesIssue,
 } from './session-adapters.ts';
 import { encodeProjectDir } from './workflow-cost.ts';
 
@@ -1230,5 +1231,51 @@ describe('getSessionAdapter', () => {
   it('returns ClaudeSessionAdapter for "claude-deepseek"', () => {
     const adapter = getSessionAdapter('claude-deepseek');
     assert.ok(adapter instanceof ClaudeSessionAdapter);
+  });
+});
+
+describe('matchesIssue', () => {
+  // Native transcripts for every task share one directory, so without this
+  // filter each task's cost absorbed every other task's tokens.
+  it('matches the transcript belonging to the issue', () => {
+    assert.equal(matchesIssue('coding-HOK-2728_c.jsonl', 'HOK-2728_c'), true);
+    assert.equal(matchesIssue('planning-HOK-2728_c.jsonl', 'HOK-2728_c'), true);
+  });
+
+  it('does not match a different issue', () => {
+    assert.equal(matchesIssue('coding-HOK-537_c.jsonl', 'HOK-2728_c'), false);
+  });
+
+  it('does not let a primary issue match its challenger', () => {
+    assert.equal(matchesIssue('coding-HOK-2728_c.jsonl', 'HOK-2728'), false);
+    assert.equal(matchesIssue('coding-HOK-2728.jsonl', 'HOK-2728'), true);
+  });
+
+  it('applies the same sanitisation makeTranscriptPath uses', () => {
+    assert.equal(matchesIssue('coding-HOK-123-x.jsonl', 'HOK-123/x'), true);
+  });
+
+  it('matches everything when no issue is supplied', () => {
+    assert.equal(matchesIssue('coding-HOK-2728_c.jsonl'), true);
+  });
+
+  // Review and expansion transcripts do not encode the issue, so an
+  // issue-only filter would silently drop the whole review phase from cost.
+  it('keeps this task\'s review transcript, which is named by branch', () => {
+    assert.equal(
+      matchesIssue('gtm-backend-review-task-my-slug.jsonl', 'HOK-2728_c', 'task/my-slug'),
+      true,
+    );
+  });
+
+  it('drops another task\'s review transcript', () => {
+    assert.equal(
+      matchesIssue('gtm-backend-review-task-other-slug.jsonl', 'HOK-2728_c', 'task/my-slug'),
+      false,
+    );
+  });
+
+  it('keeps unattributable transcripts such as expansion', () => {
+    assert.equal(matchesIssue('expansion-abc123.jsonl', 'HOK-2728_c', 'task/my-slug'), true);
   });
 });

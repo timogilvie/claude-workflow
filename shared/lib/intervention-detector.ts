@@ -10,7 +10,7 @@
  */
 
 import { readFileSync, readdirSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { resolveProjectsDirs } from './workflow-cost.ts';
 import { loadWavemillConfig } from './config.ts';
 import { errorMessage } from './error-utils.ts';
@@ -269,19 +269,52 @@ function isAgentCommit(subject: string, author: string, body: string): boolean {
  * "human", "by hand"). This prevents false positives when agents commit
  * under the user's git identity without co-author tags.
  */
+/**
+ * Whether an agent commits under the user's own git identity, leaving nothing
+ * for `isAgentCommit` to recognise.
+ *
+ * Claude tags its commits (Co-Authored-By trailer), so its work is
+ * distinguishable from a human's. Codex and every native/provider-backed
+ * harness (`native`, `native-openrouter`, …) do not, so attributing authorship
+ * from git metadata would mark all of their output as human manual edits.
+ */
+export function agentCommitsAsUser(agentType?: string): boolean {
+  if (!agentType) return false;
+  return agentType === 'codex' || agentType.startsWith('native');
+}
+
 export function isWavemillManagedBranch(branchName: string, repoDir?: string): boolean {
   const cwd = repoDir || process.cwd();
   const match = branchName.match(/^(?:task|feature|bugfix|bug)\/(.+)$/);
   if (!match) return false;
 
   const slug = match[1];
-  for (const dir of ['features', 'bugs']) {
-    const taskDir = join(cwd, dir, slug);
-    if (
-      existsSync(join(taskDir, 'selected-task.json')) ||
-      existsSync(join(taskDir, '.coding-complete'))
-    ) {
-      return true;
+
+  // Task metadata lives in the main repo for interactive runs, but mill mode
+  // writes it inside the task's own worktree (<worktreeRoot>/<slug>/features/
+  // <slug>/). Checking only the main repo made this return false for every
+  // mill task, which in turn let detectManualEdits flag an agent's own commits
+  // as human edits for any agent that commits under the user's git identity.
+  // Only roots wavemill actually uses: the configured worktreeRoot (resolved
+  // relative to the repo, as wavemill-common.sh does) and the default beside
+  // it. A bare '../worktrees' would resolve *outside* the repo, where two
+  // sibling repos sharing a slug could make this return true for the wrong
+  // one — which then suppresses real manual-edit detection on that branch.
+  const roots = [cwd];
+  const configuredRoot = loadWavemillConfig(repoDir).mill?.worktreeRoot;
+  for (const root of [configuredRoot, 'worktrees']) {
+    if (root) roots.push(join(resolve(cwd, root), slug));
+  }
+
+  for (const root of roots) {
+    for (const dir of ['features', 'bugs']) {
+      const taskDir = join(root, dir, slug);
+      if (
+        existsSync(join(taskDir, 'selected-task.json')) ||
+        existsSync(join(taskDir, '.coding-complete'))
+      ) {
+        return true;
+      }
     }
   }
   return false;
@@ -614,10 +647,13 @@ export function detectAllInterventions(
   const base = opts.baseBranch || 'main';
   let manualEditEvent: InterventionEvent = { type: 'manual_edit', count: 0, details: [] };
 
-  // Manual edit detection: skip for Codex — it runs autonomously and commits
-  // under the user's git identity with no agent markers. Human interventions
-  // on Codex tasks are caught by detectPostPrCommits and detectReviewComments.
-  if ((branch || opts.prNumber) && opts.agentType !== 'codex') {
+  // Manual edit detection: skip for agents that commit under the user's git
+  // identity with no agent markers (Codex, and every native/provider-backed
+  // harness). isAgentCommit can only recognise Claude- and Codex-tagged
+  // commits, so for these agents their own work reads as a human edit. Human
+  // interventions on such tasks are caught by detectPostPrCommits and
+  // detectReviewComments instead.
+  if ((branch || opts.prNumber) && !agentCommitsAsUser(opts.agentType)) {
     manualEditEvent = detectManualEdits(branch, base, opts.repoDir, opts.prNumber, prCommits);
   }
 

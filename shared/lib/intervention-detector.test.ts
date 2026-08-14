@@ -11,6 +11,7 @@ import {
   detectSessionRedirects,
   isWorkflowAutomationMessage,
   isWavemillManagedBranch,
+  agentCommitsAsUser,
   deduplicatePostPrAndManualEdits,
   detectManualEdits,
   detectTestFixes,
@@ -558,6 +559,22 @@ describe('intervention-detector', () => {
     });
   });
 
+  describe('agentCommitsAsUser', () => {
+    it('covers every agent that commits under the user git identity', () => {
+      // These leave no marker for isAgentCommit to recognise, so attributing
+      // authorship from git metadata would read their work as human edits.
+      assert.equal(agentCommitsAsUser('codex'), true);
+      assert.equal(agentCommitsAsUser('native'), true);
+      assert.equal(agentCommitsAsUser('native-openrouter'), true);
+    });
+
+    it('does not cover Claude, whose commits carry a Co-Authored-By trailer', () => {
+      assert.equal(agentCommitsAsUser('claude'), false);
+      assert.equal(agentCommitsAsUser('claude-deepseek'), false);
+      assert.equal(agentCommitsAsUser(undefined), false);
+    });
+  });
+
   describe('isWavemillManagedBranch', () => {
     it('returns true when features/<slug>/selected-task.json exists', () => {
       const tmpDir = mkdtempSync(join(tmpdir(), 'wavemill-branch-'));
@@ -580,6 +597,39 @@ describe('intervention-detector', () => {
         assert.equal(isWavemillManagedBranch('task/my-feature', tmpDir), true);
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('returns true when task metadata lives in a mill worktree', () => {
+      // Mill mode writes task metadata into <repo>/worktrees/<slug>/features/
+      // <slug>/, not the main repo. Checking only the main repo made this
+      // return false for every mill task, letting an agent's own commits be
+      // flagged as human manual edits.
+      const tmpDir = mkdtempSync(join(tmpdir(), 'wavemill-branch-'));
+      try {
+        const taskDir = join(tmpDir, 'worktrees', 'my-feature', 'features', 'my-feature');
+        mkdirSync(taskDir, { recursive: true });
+        writeFileSync(join(taskDir, 'selected-task.json'), '{}');
+        assert.equal(isWavemillManagedBranch('task/my-feature', tmpDir), true);
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('does not treat a sibling repo\'s worktree as this repo\'s', () => {
+      // Worktree roots resolve relative to the repo, so a same-named slug
+      // under a sibling directory must not match: claiming it does would
+      // suppress real manual-edit detection on the wrong branch.
+      const parent = mkdtempSync(join(tmpdir(), 'wavemill-parent-'));
+      try {
+        const repoDir = join(parent, 'repo');
+        mkdirSync(repoDir, { recursive: true });
+        const taskDir = join(parent, 'worktrees', 'my-feature', 'features', 'my-feature');
+        mkdirSync(taskDir, { recursive: true });
+        writeFileSync(join(taskDir, '.coding-complete'), 'confidence=high\n');
+        assert.equal(isWavemillManagedBranch('task/my-feature', repoDir), false);
+      } finally {
+        rmSync(parent, { recursive: true, force: true });
       }
     });
 

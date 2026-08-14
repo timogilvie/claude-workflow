@@ -22,6 +22,17 @@ The implementation plan is ready at: {{PLAN_PATH}}
 4. **Mark completion**:
    - When implementation is complete and tests pass
    - Create the marker: {{FEATURE_DIR}}/.coding-complete
+   - The marker is **not** JSON. It is plain `key=value` lines, one per line, and it
+     **must** contain a `confidence` line or the phase is rejected and your work is discarded:
+     ```
+     confidence=high
+     ```
+     `confidence` must be exactly `high`, `medium`, or `low` — record your own
+     confidence that the implementation is correct after validation. Use `low` if
+     correctness is still uncertain. You may add further `key=value` lines (for
+     example `commit=<sha>`); any other format fails validation.
+   - Write it with, for example:
+     `printf 'confidence=high\n' > "{{FEATURE_DIR}}/.coding-complete"`
    - Your work is done - the next phase (review) will be launched automatically
 
 ### Coding Depth: {{CODE_DEPTH}}
@@ -35,7 +46,7 @@ The implementation plan is ready at: {{PLAN_PATH}}
 - [ ] All tests pass
 - [ ] Linting passes
 - [ ] No regressions in existing functionality
-- [ ] Completion marker created at {{FEATURE_DIR}}/.coding-complete
+- [ ] Completion marker created at {{FEATURE_DIR}}/.coding-complete, containing a valid `confidence=high|medium|low` line
 
 ### Important Notes
 - Follow the plan - don't deviate without good reason

@@ -14,6 +14,7 @@
  */
 
 import path from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
 import { errorMessage } from './error-utils.ts';
 import { finalizeEvalSuccess } from './eval-success-policy.ts';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
@@ -21,6 +22,7 @@ import { getDeepSeekProviderMetadata } from './deepseek-provider.ts';
 import { getNativeProviderMetadata } from './session-adapters.ts';
 import {
   autoDetectContext,
+  resolveContextGaps,
   computeWallClockSeconds,
   gatherEvalContext,
   gatherStageArtifacts,
@@ -79,6 +81,7 @@ import type { RoutingCompleteData } from './eval-context-gatherer.ts';
 
 export const evalOrchestratorDeps = {
   autoDetectContext,
+  resolveContextGaps,
   computeWallClockSeconds,
   gatherEvalContext,
   gatherStageArtifacts,
@@ -247,8 +250,8 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
     solutionModel,
     routingDecision,
     evalModel,
-    challengePairId,
-    worktreePath,
+    challengePairId: explicitChallengePairId,
+    worktreePath: explicitWorktreePath,
   } = options;
 
   // 1. Gather context (auto-detect or explicit)
@@ -260,12 +263,22 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
   let prUrl = explicitPrUrl || '';
 
   // Auto-detect if not explicitly provided
+  let challengePairId = explicitChallengePairId;
+  let worktreePath = explicitWorktreePath;
   if (!issueId && !prNumber) {
     const detected = evalOrchestratorDeps.autoDetectContext(repoDir);
     issueId = detected.issueId;
     prNumber = detected.prNumber;
     branch = detected.branch;
     prUrl = detected.prUrl;
+  } else {
+    // Explicit issue/PR still needs branch, prUrl, worktree and challenge
+    // identity resolved — eligibility and challenge pairing depend on them.
+    const gaps = evalOrchestratorDeps.resolveContextGaps({ repoDir, issueId, prNumber });
+    branch = branch || gaps.branch;
+    prUrl = prUrl || gaps.prUrl;
+    challengePairId = challengePairId || gaps.challengePairId || undefined;
+    worktreePath = worktreePath || gaps.worktree || undefined;
   }
 
   const evalContext = evalOrchestratorDeps.gatherEvalContext({
@@ -462,6 +475,7 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
         repoDir,
         pricingTable,
         agentType,
+        issueId,
       });
     } catch (err) {
       const errorMsg = errorMessage(err);
@@ -517,18 +531,21 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
   // 'native' before reaching this layer.
   let providerMetadata: { provider: string; endpoint?: string } | null = null;
   if (agentType === 'native' && worktreePath) {
-    providerMetadata = getNativeProviderMetadata(worktreePath);
+    providerMetadata = getNativeProviderMetadata(worktreePath, repoDir);
   }
   if (!providerMetadata) {
     providerMetadata = getDeepSeekProviderMetadata(executionModel, repoDir);
   }
   const slug = branch.replace(/^(task|bug)\//, '') || issueId.toLowerCase();
   let challengeIntent: ChallengeExecutionIntent | undefined;
+  // Declared at function scope: it is read much later, where the attestation is
+  // finalised. It used to be declared inside the block below, which threw a
+  // ReferenceError as soon as an attestation existed to test it against.
+  let challengeEvidenceInvalid: { reason: string; detail?: string } | undefined;
   challengeIntent = loadChallengeIntentFromState(repoDir, issueId, challengePairId);
   if (challengePairId && slug) {
     const challengeFeatureDir = deriveChallengeFeatureDir(worktreePath, slug);
     challengeIntent ??= challengeFeatureDir ? loadChallengeIntentFromFeatureDir(challengeFeatureDir) : undefined;
-  let challengeEvidenceInvalid: { reason: string; detail?: string } | undefined;
     if (challengeFeatureDir) {
       const invalidPath = path.join(challengeFeatureDir, '.challenge-evidence-invalid.json');
       if (existsSync(invalidPath)) {
