@@ -4800,34 +4800,56 @@ resolve_stage_result_model() {
 # Validate that planning stayed within its phase boundary before coding starts.
 # Usage: validate_planning_phase_output <wt_dir>
 # Returns non-zero after reverting out-of-scope changes and removing approval.
+# Records the paths already dirty when planning launches. Write-once: relaunches
+# must not re-baseline planning leftovers after a rejection.
+capture_planning_baseline() {
+  local wt_dir="$1"
+  local slug feature_dir baseline_file tmp_file
+
+  [[ -d "$wt_dir/.git" || -f "$wt_dir/.git" ]] || return 0
+
+  slug="$(basename "$wt_dir")"
+  feature_dir="$wt_dir/features/$slug"
+  baseline_file="$feature_dir/.planning-baseline-dirty"
+
+  [[ -f "$baseline_file" ]] && return 0
+  mkdir -p "$feature_dir" || return 0
+  tmp_file="$(mktemp "$feature_dir/.planning-baseline-dirty.tmp.XXXXXX" 2>/dev/null)" || return 0
+
+  {
+    git -C "$wt_dir" diff --name-only HEAD -- 2>/dev/null || true
+    git -C "$wt_dir" ls-files --others --exclude-standard 2>/dev/null || true
+  } | sort -u > "$tmp_file"
+
+  mv "$tmp_file" "$baseline_file" 2>/dev/null || rm -f "$tmp_file"
+}
+
 validate_planning_phase_output() {
   local wt_dir="$1"
-  local feature_dir="$wt_dir/features/$(basename "$wt_dir")"
+  local slug
+  slug="$(basename "$wt_dir")"
+  local feature_dir="$wt_dir/features/$slug"
+  local baseline_file="$feature_dir/.planning-baseline-dirty"
   local changed_file
   local -a out_of_scope_files=()
-  local -a tracked_out_of_scope=()
-  local -a untracked_out_of_scope=()
 
   VALIDATE_PLANNING_LAST_OUT_OF_SCOPE_FILES=()
+  VALIDATE_PLANNING_LAST_STASH_REF=""
 
   [[ -d "$wt_dir/.git" || -f "$wt_dir/.git" ]] || return 0
 
   while IFS= read -r changed_file; do
     [[ -n "$changed_file" ]] || continue
+    if [[ -f "$baseline_file" ]] && grep -Fxq -- "$changed_file" "$baseline_file"; then
+      continue
+    fi
     case "$changed_file" in
       features/*) ;;
-      .wavemill/*) ;;
-      # The local overlay is per-developer runtime configuration. It is
-      # intentionally propagated into worktrees and must not invalidate an
-      # approved plan when an agent/runtime updates it.
-      .wavemill-config.local.json) ;;
-      .claude/settings.local.json) ;;
       *)
-        out_of_scope_files+=("$changed_file")
-        if git -C "$wt_dir" ls-files --error-unmatch -- "$changed_file" >/dev/null 2>&1; then
-          tracked_out_of_scope+=("$changed_file")
+        if wavemill_owned_dirty_path "$changed_file" "$slug"; then
+          continue
         else
-          untracked_out_of_scope+=("$changed_file")
+          out_of_scope_files+=("$changed_file")
         fi
         ;;
     esac
@@ -4847,34 +4869,15 @@ validate_planning_phase_output() {
 
   local cleanup_failed=0
 
-  # Attempt tracked file cleanup
-  if [[ ${#tracked_out_of_scope[@]} -gt 0 ]]; then
-    git -C "$wt_dir" reset -q HEAD -- "${tracked_out_of_scope[@]}" 2>/dev/null || true
-
-    # Try to checkout each file individually to handle files that don't exist in HEAD
-    local file
-    for file in "${tracked_out_of_scope[@]}"; do
-      if ! git -C "$wt_dir" checkout -- "$file" 2>/dev/null; then
-        # If checkout failed, check if file is now untracked and delete it
-        if ! git -C "$wt_dir" ls-files --error-unmatch -- "$file" >/dev/null 2>&1; then
-          rm -f "$wt_dir/$file" 2>/dev/null || {
-            log_warn "Planning phase validation could not remove untracked file: $file"
-            cleanup_failed=1
-          }
-        else
-          log_warn "Planning phase validation could not revert tracked file: $file"
-          cleanup_failed=1
-        fi
-      fi
-    done
-  fi
-
-  # Always attempt untracked file cleanup (don't skip if tracked cleanup failed)
-  if [[ ${#untracked_out_of_scope[@]} -gt 0 ]]; then
-    rm -f -- "${untracked_out_of_scope[@]/#/$wt_dir/}" 2>/dev/null || {
-      log_warn "Planning phase validation could not remove untracked source changes"
-      cleanup_failed=1
-    }
+  # refs/stash is local to this worktree clone; recover before task cleanup.
+  if git -C "$wt_dir" stash push --quiet --include-untracked \
+    -m "wavemill planning guard: out-of-scope planning output ($slug)" \
+    -- "${out_of_scope_files[@]}" 2>/dev/null; then
+    VALIDATE_PLANNING_LAST_STASH_REF="stash@{0}"
+    log_warn "Planning phase validation stashed out-of-scope files. Recovery command: git stash pop stash@{0}"
+  else
+    log_warn "Planning phase validation could not stash out-of-scope files. Files were left in place"
+    cleanup_failed=1
   fi
 
   # Report overall cleanup status
@@ -4915,7 +4918,16 @@ write_planning_rejection_artifact() {
   shift 2
   local -a files=("$@")
   local artifact="$feature_dir/.planning-rejected.json"
-  local files_json created_at
+  local files_json created_at stash_ref stash_ref_json recommended_action
+
+  stash_ref="${VALIDATE_PLANNING_LAST_STASH_REF:-}"
+  if [[ -n "$stash_ref" ]]; then
+    stash_ref_json="$(printf '%s' "$stash_ref" | jq -R . 2>/dev/null || printf 'null')"
+    recommended_action="Review plan.md and re-approve the plan. Out-of-scope planning output was stashed and can be recovered with git stash pop $stash_ref before task cleanup."
+  else
+    stash_ref_json="null"
+    recommended_action="Review plan.md and re-approve the plan. Planning may only write feature artifacts; out-of-scope files were left in place because recovery-safe revert failed."
+  fi
 
   mkdir -p "$feature_dir"
   if (( ${#files[@]} == 0 )); then
@@ -4931,9 +4943,10 @@ write_planning_rejection_artifact() {
     --arg status "awaiting_user" \
     --arg reason "planning_modified_out_of_scope_files" \
     --arg createdAt "$created_at" \
-    --arg recommendedAction "Review plan.md and re-approve the plan. Planning may only write feature artifacts." \
+    --arg recommendedAction "$recommended_action" \
     --argjson outOfScopeFiles "$files_json" \
-    '{issue: $issue, stage: $stage, status: $status, reason: $reason, outOfScopeFiles: $outOfScopeFiles, reverted: true, approvalMarkerRemoved: true, recommendedAction: $recommendedAction, createdAt: $createdAt}' > "$artifact"
+    --argjson stashRef "$stash_ref_json" \
+    '{issue: $issue, stage: $stage, status: $status, reason: $reason, outOfScopeFiles: $outOfScopeFiles, reverted: ($stashRef != null), stashRef: $stashRef, approvalMarkerRemoved: true, recommendedAction: $recommendedAction, createdAt: $createdAt}' > "$artifact"
 }
 
 notify_planning_rejection_agent() {
@@ -4967,7 +4980,7 @@ notify_planning_rejection_agent() {
   fi
 
   files_summary="$(planning_rejection_files_summary "${files[@]}")"
-  message="Planning approval was rejected because planning modified out-of-scope files: $files_summary. Those changes were reverted and .plan-approved was removed. Do not edit source/config files during planning. Update only features/$slug/plan.md if needed, then wait for user approval again."
+  message="Planning approval was rejected because planning modified out-of-scope files: $files_summary. Those changes were stashed when possible and .plan-approved was removed. Do not edit source/config files during planning. Update only features/$slug/plan.md if needed, then wait for user approval again."
 
   tmux send-keys -t "$target" "$message" C-m 2>/dev/null || return 0
 
@@ -5189,9 +5202,11 @@ wavemill_owned_feature_artifact_path() {
     return 0
   fi
 
+  # challenge-intent.json is the write-once challenger selection record.
   case "$normalized_path" in
     "${artifact_prefix}plan.md"|\
     "${artifact_prefix}task-packet"*.md|\
+    "${artifact_prefix}challenge-intent.json"|\
     "${artifact_prefix}selected-task.json"|\
     "${artifact_prefix}trace.jsonl"|\
     "${artifact_prefix}routing.jsonl")
@@ -5202,7 +5217,9 @@ wavemill_owned_feature_artifact_path() {
   return 1
 }
 
-blocked_completion_auto_allowed_dirty_path() {
+# wavemill_owned_dirty_path <normalized_path> <slug>
+# Single source of truth for Wavemill-owned generated/runtime paths.
+wavemill_owned_dirty_path() {
   local normalized_path="$1" slug="$2"
 
   # Wavemill injects status hooks into this Claude-local settings file. Some
@@ -5228,6 +5245,12 @@ blocked_completion_auto_allowed_dirty_path() {
   fi
 
   wavemill_owned_feature_artifact_path "$normalized_path" "$slug"
+}
+
+blocked_completion_auto_allowed_dirty_path() {
+  local normalized_path="$1" slug="$2"
+
+  wavemill_owned_dirty_path "$normalized_path" "$slug"
 }
 
 blocked_completion_worktree_clean_for_auto() {
@@ -5752,11 +5775,17 @@ handle_planning_overreach_rejection() {
   local issue="$1" feature_dir="$2" win="$3" current_agent="${4:-}"
   local -a files=("${VALIDATE_PLANNING_LAST_OUT_OF_SCOPE_FILES[@]:-}")
   local files_summary
+  local stash_ref="${VALIDATE_PLANNING_LAST_STASH_REF:-}"
 
   files_summary="$(planning_rejection_files_summary "${files[@]}")"
   write_planning_rejection_artifact "$issue" "$feature_dir" "${files[@]}"
-  log_warn "$issue needs attention: planning edited $files_summary. Reverted. Review plan.md and re-approve to continue."
-  write_stage_result "$feature_dir" "planning" "awaiting_user" "$current_agent" "" "Planning edited $files_summary. Reverted and awaiting re-approval"
+  if [[ -n "$stash_ref" ]]; then
+    log_warn "$issue needs attention: planning edited $files_summary. Reverted recoverably via git stash ($stash_ref). Review plan.md and re-approve to continue."
+    write_stage_result "$feature_dir" "planning" "awaiting_user" "$current_agent" "" "Planning edited $files_summary. Reverted recoverably via git stash and awaiting re-approval"
+  else
+    log_warn "$issue needs attention: planning edited $files_summary. Could not revert safely. Files were left in place. Review plan.md and re-approve to continue."
+    write_stage_result "$feature_dir" "planning" "awaiting_user" "$current_agent" "" "Planning edited $files_summary. Could not revert safely and awaiting re-approval"
+  fi
   notify_planning_rejection_agent "$feature_dir" "$win" "${files[@]}"
   set_window_attention_state "$win" "needs-user"
 }
@@ -7128,6 +7157,7 @@ launch_planning_phase() {
   win="$(_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir")"
   persist_task_window_id "$issue" "$win"
   configure_agent_hooks "$planner_agent" "$wt_dir" "$REPO_DIR"
+  capture_planning_baseline "$wt_dir"
 
   # Read issue context
   local issue_json issue_desc issue_context

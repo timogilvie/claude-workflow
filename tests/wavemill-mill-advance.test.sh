@@ -98,6 +98,8 @@ for fn in \
   normalize_prompt_command_reply \
   blocked_completion_current_head \
   blocked_completion_commit_matches_head \
+  wavemill_owned_feature_artifact_path \
+  wavemill_owned_dirty_path \
   blocked_completion_auto_allowed_dirty_path \
   coding_output_dirty_paths \
   blocked_completion_worktree_clean_for_auto \

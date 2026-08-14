@@ -93,6 +93,7 @@ for f in \
   "$REPO_DIR"/tests/project-context-suggestion.test.sh \
   "$REPO_DIR"/tests/wavemill-usage-tips.test.sh \
   "$REPO_DIR"/tests/wavemill-dependent-launch.test.sh \
+  "$REPO_DIR"/tests/wavemill-guards.test.sh \
   "$REPO_DIR"/tests/wavemill-mill-advance.test.sh \
   "$REPO_DIR"/tests/wavemill-backlog-budget.test.sh \
   "$REPO_DIR"/tests/wavemill-dependency-queue-filter.test.sh \
@@ -832,8 +833,8 @@ else
 
   if grep -qE '^validate_planning_phase_output\(\) \{' <<< "$HEREDOC_CONTENT" \
     && grep -qE '^handle_planning_overreach_rejection\(\) \{' <<< "$HEREDOC_CONTENT" \
-    && grep -Fq '.wavemill/*) ;;' <<< "$HEREDOC_CONTENT" \
-    && grep -Fq '.claude/settings.local.json) ;;' <<< "$HEREDOC_CONTENT" \
+    && grep -qE '^wavemill_owned_dirty_path\(\) \{' <<< "$HEREDOC_CONTENT" \
+    && grep -Fq 'prompt-registry.jsonl' <<< "$HEREDOC_CONTENT" \
     && grep -Fq 'validate_planning_phase_output "$WT_DIR"' <<< "$MONITOR_ISSUE_BLOCK" \
     && grep -Fq 'handle_planning_overreach_rejection "$ISSUE" "$FEATURE_DIR" "$WIN" "$current_agent"' <<< "$MONITOR_ISSUE_BLOCK" \
     && grep -Fq '.planning-rejected.json' <<< "$HEREDOC_CONTENT" \
@@ -2084,11 +2085,21 @@ echo "=== Dashboard Log Filtering ==="
 if [[ ! -f "$MILL_SCRIPT" ]]; then
   fail "wavemill-mill.sh not found for log filtering checks"
 else
-  if ! grep -Fq 'log "status" "Next tasks:"' "$MILL_SCRIPT" \
-    && (grep -Fq 'echo "Next tasks:"' "$MILL_SCRIPT" || grep -Fq '_task_frame="Next tasks:"' "$MILL_SCRIPT") \
-    && grep -Fq 'log "info" "All tasks:"' "$MILL_SCRIPT" \
-    && ! grep -Fq 'slot(s) available. Next tasks:' "$MILL_SCRIPT" \
-    && ! grep -Fq 'slot(s) available. All tasks:' "$MILL_SCRIPT"; then
+  selection_prompt_uses_echo=1
+  if grep -Fq 'log "status" "Next tasks:"' "$MILL_SCRIPT"; then
+    selection_prompt_uses_echo=0
+  fi
+  if ! grep -Fq 'echo "Next tasks:"' "$MILL_SCRIPT" && ! grep -Fq '_task_frame="Next tasks:"' "$MILL_SCRIPT"; then
+    selection_prompt_uses_echo=0
+  fi
+  if ! grep -Fq 'log "info" "All tasks:"' "$MILL_SCRIPT"; then
+    selection_prompt_uses_echo=0
+  fi
+  if grep -Fq 'slot(s) available. Next tasks:' "$MILL_SCRIPT" || grep -Fq 'slot(s) available. All tasks:' "$MILL_SCRIPT"; then
+    selection_prompt_uses_echo=0
+  fi
+
+  if [[ "$selection_prompt_uses_echo" -eq 1 ]]; then
     pass "monitor uses echo for interactive prompts, not log"
   else
     fail "monitor should use echo (not log) for task selection prompt"
