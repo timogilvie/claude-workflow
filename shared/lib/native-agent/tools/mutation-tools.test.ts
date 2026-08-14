@@ -113,13 +113,89 @@ describe('native-agent mutation tools', () => {
 
     const result = await tool.execute('call-4', {
       path: 'features/demo/.coding-complete',
+      content: 'confidence=high\n',
     });
 
     const details = result.details as CreateMarkerDetails;
     assert.equal(details.ok, true);
     if (details.ok) {
       assert.equal(details.resolvedPath, 'features/demo/.coding-complete');
-      assert.equal(readFileSync(path.join(repo, details.resolvedPath), 'utf-8'), '');
+      assert.equal(readFileSync(path.join(repo, details.resolvedPath), 'utf-8'), 'confidence=high\n');
+    }
+  });
+
+  it('rejects invalid phase-boundary artifacts without writing them', async () => {
+    const repo = createRepo('mutation-invalid-boundary-artifact-');
+    const tracker = createCleanupTracker();
+    const tool = createCreateMarkerTool(repo, { recorder: tracker });
+
+    const result = await tool.execute('call-invalid-marker', {
+      path: 'features/demo/.coding-complete',
+      content: '{"commit":"abc123"}',
+    });
+
+    const details = result.details as CreateMarkerDetails;
+    assert.equal(details.ok, false);
+    if (!details.ok) {
+      assert.equal(details.error, 'invalid_artifact_content');
+      assert.match(details.message, /missing_confidence/);
+      assert.match(details.retryHint ?? '', /confidence=high\|medium\|low/);
+      assert.deepEqual(tracker.mutations, [{
+        tool: 'create_marker',
+        status: 'failed',
+        path: 'features/demo/.coding-complete',
+        reason: details.message,
+      }]);
+    }
+    assert.throws(() => readFileSync(path.join(repo, 'features/demo/.coding-complete'), 'utf-8'));
+  });
+
+  it('normalizes JSON .coding-complete content to key=value on disk', async () => {
+    const repo = createRepo('mutation-normalize-complete-');
+    const tool = createCreateMarkerTool(repo);
+
+    const result = await tool.execute('call-normalize-marker', {
+      path: 'features/demo/.coding-complete',
+      content: '{"confidence":"medium","commit":"abc123"}',
+    });
+
+    const details = result.details as CreateMarkerDetails;
+    assert.equal(details.ok, true);
+    if (details.ok) {
+      assert.equal(details.normalizedFrom, 'json');
+      assert.equal(readFileSync(path.join(repo, details.resolvedPath), 'utf-8'), 'confidence=medium\ncommit=abc123\n');
+      assert.match(result.content[0]!.text, /normalized from json/);
+    }
+  });
+
+  it('normalizes YAML blocked-completion content to strict JSON on disk', async () => {
+    const repo = createRepo('mutation-normalize-blocked-');
+    const tool = createWriteArtifactTool(repo);
+
+    const result = await tool.execute('call-normalize-blocked', {
+      path: 'features/demo/.coding-blocked-completion.json',
+      content: [
+        'stage: coding',
+        'implementationComplete: true',
+        'committed: true',
+        'passingChecks: [npm test]',
+        'blockingChecks:',
+        '  - npm run typecheck',
+        'blockingReason: baseline_tests_failing',
+        'evidence: baseline failed',
+        'recommendedAction: advance_to_review',
+        '',
+      ].join('\n'),
+    });
+
+    const details = result.details as WriteArtifactDetails;
+    assert.equal(details.ok, true);
+    if (details.ok) {
+      assert.equal(details.normalizedFrom, 'yaml');
+      const saved = JSON.parse(readFileSync(path.join(repo, details.resolvedPath), 'utf-8')) as Record<string, unknown>;
+      assert.equal(saved.stage, 'coding');
+      assert.deepEqual(saved.passingChecks, ['npm test']);
+      assert.deepEqual(saved.blockingChecks, ['npm run typecheck']);
     }
   });
 

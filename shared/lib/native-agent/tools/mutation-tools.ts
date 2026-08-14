@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { dirname, isAbsolute, join, relative } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 import {
   evaluateMutationWritePolicy,
   type MutationPolicyReason,
@@ -15,6 +15,10 @@ import type { MutationRecorder } from '../cleanup.ts';
 import { createApplyPatchTool } from './apply-patch-tool.ts';
 import type { ToolDescriptor, ToolPhase, WavemillToolResult } from './types.ts';
 import type { ApplyPatchDetails } from './apply-patch-tool.ts';
+import {
+  normalizeBlockedCompletion,
+  normalizeCodingComplete,
+} from '../artifact-normalizer.ts';
 
 const DEFAULT_WHOLE_FILE_ALLOWLIST: NormalizedWholeFileWriteAllowlistInput = {
   generatedPaths: ['.wavemill/**'],
@@ -47,6 +51,7 @@ export interface WholeFileWriteSuccessDetails {
   tool: 'write_artifact' | 'create_marker';
   resolvedPath: string;
   bytesWritten: number;
+  normalizedFrom?: 'json' | 'yaml';
 }
 
 export interface StatusSuccessDetails {
@@ -61,7 +66,7 @@ export interface StatusSuccessDetails {
 export interface MutationToolErrorDetails {
   ok: false;
   tool: MutationToolName | 'apply_patch';
-  error: 'invalid_input' | MutationPolicyReason | 'io_error';
+  error: 'invalid_input' | MutationPolicyReason | 'io_error' | 'invalid_artifact_content';
   message: string;
   retryHint?: string;
   diagnostics?: unknown;
@@ -240,9 +245,27 @@ async function executeWholeFileWrite(
     return deniedWriteResult(tool, decision.reason, decision.message);
   }
 
+  const artifactValidation = normalizePhaseBoundaryArtifact(decision.resolvedPath, content);
+  if (!artifactValidation.ok) {
+    options.recorder?.recordMutation({
+      tool,
+      status: 'failed',
+      path: decision.resolvedPath,
+      reason: artifactValidation.message,
+    });
+    return errorResult(
+      tool,
+      'invalid_artifact_content',
+      artifactValidation.message,
+      artifactValidation.retryHint,
+      artifactValidation.diagnostics,
+    );
+  }
+
   // Redact secrets before writing to disk (artifact-write redaction chokepoint).
   const profile = buildProfileFromConfig(() => getRedactionConfig(worktreePath).secretEnvNames);
-  const safeContent = redact(content, profile);
+  const contentToWrite = artifactValidation.content;
+  const safeContent = redact(contentToWrite, profile);
   const absolutePath = join(worktreePath, decision.resolvedPath);
   try {
     atomicWriteText(absolutePath, safeContent);
@@ -251,6 +274,7 @@ async function executeWholeFileWrite(
       tool,
       resolvedPath: decision.resolvedPath,
       bytesWritten: Buffer.byteLength(safeContent, 'utf-8'),
+      ...(artifactValidation.normalizedFrom ? { normalizedFrom: artifactValidation.normalizedFrom } : {}),
     };
     options.recorder?.recordMutation({
       tool,
@@ -258,7 +282,12 @@ async function executeWholeFileWrite(
       path: decision.resolvedPath,
     });
     return {
-      content: [{ type: 'text', text: `${tool} wrote ${decision.resolvedPath}` }],
+      content: [{
+        type: 'text',
+        text: artifactValidation.normalizedFrom
+          ? `${tool} wrote ${decision.resolvedPath} (normalized from ${artifactValidation.normalizedFrom})`
+          : `${tool} wrote ${decision.resolvedPath}`,
+      }],
       details,
     };
   } catch (error: unknown) {
@@ -368,6 +397,7 @@ function errorResult(
   error: MutationToolErrorDetails['error'],
   message: string,
   retryHint?: string,
+  diagnostics?: unknown,
 ): WavemillToolResult<any> {
   const details: MutationToolErrorDetails = {
     ok: false,
@@ -375,11 +405,80 @@ function errorResult(
     error,
     message,
     ...(retryHint !== undefined ? { retryHint } : {}),
+    ...(diagnostics !== undefined ? { diagnostics } : {}),
   };
   return {
     content: [{ type: 'text', text: message }],
     details,
   };
+}
+
+function normalizePhaseBoundaryArtifact(
+  resolvedPath: string,
+  content: string,
+): {
+  ok: true;
+  content: string;
+  normalizedFrom?: 'json' | 'yaml';
+} | {
+  ok: false;
+  message: string;
+  retryHint: string;
+  diagnostics: unknown;
+} {
+  const name = basename(resolvedPath);
+  if (name === '.coding-complete') {
+    const normalized = normalizeCodingComplete(content);
+    if (!normalized.ok) {
+      const message = normalized.errors
+        .map((error) => `${error.code} ${error.path}: ${error.message}`)
+        .join('; ');
+      return {
+        ok: false,
+        message: `Invalid .coding-complete content: ${message}`,
+        retryHint: codingCompleteRetryHint(),
+        diagnostics: { errors: normalized.errors },
+      };
+    }
+    return {
+      ok: true,
+      content: normalized.normalizedFrom ? normalized.canonicalText : content,
+      ...(normalized.normalizedFrom ? { normalizedFrom: normalized.normalizedFrom } : {}),
+    };
+  }
+
+  if (name === '.coding-blocked-completion.json') {
+    const normalized = normalizeBlockedCompletion(content);
+    if (!normalized.ok) {
+      return {
+        ok: false,
+        message: `Invalid .coding-blocked-completion.json content: ${normalized.code}${normalized.field ? ` ${normalized.field}` : ''}: ${normalized.message}`,
+        retryHint: blockedCompletionRetryHint(),
+        diagnostics: { error: normalized },
+      };
+    }
+    return {
+      ok: true,
+      content: normalized.normalizedFrom ? normalized.canonicalJson : content,
+      ...(normalized.normalizedFrom ? { normalizedFrom: normalized.normalizedFrom } : {}),
+    };
+  }
+
+  return { ok: true, content };
+}
+
+function codingCompleteRetryHint(): string {
+  return [
+    '.coding-complete must be plain key=value lines and must include confidence=high|medium|low.',
+    "Example: printf 'confidence=high\\n' > features/<slug>/.coding-complete",
+  ].join(' ');
+}
+
+function blockedCompletionRetryHint(): string {
+  return [
+    '.coding-blocked-completion.json must be strict JSON with fields stage, implementationComplete, committed, passingChecks, blockingChecks, blockingReason, evidence, recommendedAction.',
+    'Example: {"stage":"coding","implementationComplete":true,"committed":true,"passingChecks":["npm test"],"blockingChecks":["npm run typecheck"],"blockingReason":"baseline_tests_failing","evidence":"Scoped tests passed; baseline failed.","recommendedAction":"advance_to_review"}',
+  ].join(' ');
 }
 
 function atomicWriteText(path: string, content: string): void {

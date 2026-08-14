@@ -45,7 +45,7 @@ import {
 import { createToolRegistry } from './tools/registry.ts';
 import { toPiAgentTool, type AgentTool } from './tools/pi-adapter.ts';
 import type { ToolDescriptor, ToolMetadata } from './tools/types.ts';
-import { parseCodingComplete, validateCodingArtifacts, type CodingArtifacts } from './coding-artifacts.ts';
+import { validateCodingArtifacts, type CodingArtifacts } from './coding-artifacts.ts';
 import { registerAndRecordNativeProvenance } from './prompts.ts';
 import { buildNativePatchGuidance } from './patch-contract.ts';
 import {
@@ -60,8 +60,13 @@ import { logPromptUsage } from '../prompt-registry.ts';
 import type { ResourceRef } from '../resource-registry.ts';
 import {
   getBlockedCompletionPath,
-  readBlockedCompletion,
 } from '../blocked-completion.ts';
+import {
+  applyVerificationEvidenceGuard,
+  normalizeBlockedCompletion,
+  normalizeCodingComplete,
+  type NormalizeBlockedResult,
+} from './artifact-normalizer.ts';
 
 const CODING_PROMPT_PATH = new URL('../../../tools/prompts/coding-phase.md', import.meta.url);
 const CODING_PROMPT_FILE = fileURLToPath(CODING_PROMPT_PATH);
@@ -72,6 +77,27 @@ interface MutationFailureTracker {
   count: number;
   last: CodingFailureToolError | null;
 }
+
+interface VerificationTracker {
+  verificationCommandsSucceeded: number;
+}
+
+type CompletionValidationError = { code: string; field?: string; message: string };
+
+type CompletionInspection =
+  | { status: 'complete' }
+  | { status: 'blocked' }
+  | {
+    status: 'invalid';
+    artifact: 'coding-complete' | 'blocked-completion';
+    path: string;
+    errors: CompletionValidationError[];
+    falseCompletionOnly?: boolean;
+    blockedNormalization?: Extract<NormalizeBlockedResult, { ok: true }>;
+  }
+  | { status: 'missing'; errorMessage: string };
+
+const MAX_ARTIFACT_RETRIES = 2;
 
 interface ToolCallFailureContext {
   toolCall: { name: string };
@@ -410,21 +436,82 @@ function buildNoCompletionRecoveryPrompt(tracker: MutationFailureTracker): strin
   ].join('\n');
 }
 
+function buildArtifactRetryPrompt(inspection: Extract<CompletionInspection, { status: 'invalid' }>): string {
+  const errors = inspection.errors
+    .map((error) => `- ${error.code}${error.field ? ` (${error.field})` : ''}: ${error.message}`)
+    .join('\n');
+  const contract = inspection.artifact === 'coding-complete'
+    ? [
+      '.coding-complete contract:',
+      '- Plain key=value lines only.',
+      '- Must include exactly one confidence line: confidence=high, confidence=medium, or confidence=low.',
+      "Example command: printf 'confidence=high\\n' > features/<slug>/.coding-complete",
+    ].join('\n')
+    : [
+      '.coding-blocked-completion.json contract:',
+      '- Strict JSON object with required fields: stage, implementationComplete, committed, passingChecks, blockingChecks, blockingReason, evidence, recommendedAction.',
+      '- implementationComplete=true requires non-empty passingChecks and evidence from a successful verification command in this session.',
+      '- If verification did not run or did not pass, set implementationComplete=false.',
+      'Example JSON: {"stage":"coding","implementationComplete":true,"committed":true,"passingChecks":["npm test"],"blockingChecks":["npm run typecheck"],"blockingReason":"baseline_tests_failing","evidence":"Scoped tests passed; baseline failed.","recommendedAction":"advance_to_review"}',
+    ].join('\n');
+
+  return [
+    `Your previous completion artifact was invalid: ${inspection.artifact}.`,
+    '',
+    'Validation errors:',
+    errors,
+    '',
+    contract,
+    '',
+    'Rewrite only the completion artifact now. The implementation is already committed; do not redo unrelated work.',
+  ].join('\n');
+}
+
+function quarantineInvalidArtifact(path: string, attempt: number): string {
+  const quarantinePath = `${path}.invalid-${attempt}`;
+  renameSync(path, quarantinePath);
+  return quarantinePath;
+}
+
+function isSuccessfulVerificationToolCall(toolContext: ToolCallFailureContext): boolean {
+  if (!['run_tests', 'run_format', 'run_command'].includes(toolContext.toolCall.name)) {
+    return false;
+  }
+  const details = toolContext.result.details;
+  return Boolean(
+    details
+    && typeof details === 'object'
+    && 'ok' in details
+    && (details as { ok?: unknown }).ok === true,
+  );
+}
+
 function buildFailureHandoffInput(input: {
   stopReason: string;
   tracker: MutationFailureTracker;
   recoveryAttempted: boolean;
+  invalidArtifact?: {
+    validationErrors: CompletionValidationError[];
+    quarantinedArtifacts: string[];
+  };
 }): Parameters<typeof writeCodingFailureHandoff>[1] {
+  const invalidArtifact = input.invalidArtifact;
   return {
     stage: 'coding',
-    reason: 'no_completion_artifact',
+    reason: invalidArtifact ? 'invalid_completion_artifact' : 'no_completion_artifact',
     stopReason: input.stopReason,
     mutationFailures: input.tracker.count,
     lastToolError: input.tracker.last,
     recoveryAttempted: input.recoveryAttempted,
     suggestedAction: input.tracker.last
       ? 'Retry native coding with the documented tool contract and the preserved last tool error.'
-      : 'Review the transcript and rerun native coding; the model stopped without a completion artifact.',
+      : invalidArtifact
+        ? 'Retry native coding with the structured completion artifact validation errors.'
+        : 'Review the transcript and rerun native coding; the model stopped without a completion artifact.',
+    ...(invalidArtifact ? {
+      validationErrors: invalidArtifact.validationErrors,
+      quarantinedArtifacts: invalidArtifact.quarantinedArtifacts,
+    } : {}),
     createdAt: new Date().toISOString(),
     schemaVersion: CODING_FAILURE_HANDOFF_SCHEMA_VERSION,
   };
@@ -488,12 +575,26 @@ async function inspectCompletion(input: {
   stopReason: string;
   mutationFailureTracker: MutationFailureTracker;
   recoveryAttempted: boolean;
-}): Promise<'complete' | 'blocked'> {
+  verificationTracker: VerificationTracker;
+  allowFalseCompletionCoercion?: boolean;
+}): Promise<CompletionInspection> {
   const markerPath = join(input.featureDir, '.coding-complete');
   if (existsSync(markerPath)) {
-    const parsed = parseCodingComplete(readFileSync(markerPath, 'utf-8'));
-    if (!parsed.ok) {
-      throw new Error(`Native coding wrote invalid .coding-complete: ${parsed.errors.map((error) => error.message).join('; ')}`);
+    const normalized = normalizeCodingComplete(readFileSync(markerPath, 'utf-8'));
+    if (!normalized.ok) {
+      return {
+        status: 'invalid',
+        artifact: 'coding-complete',
+        path: markerPath,
+        errors: normalized.errors.map((error) => ({
+          code: error.code,
+          field: error.path,
+          message: error.message,
+        })),
+      };
+    }
+    if (normalized.normalizedFrom) {
+      atomicWriteText(markerPath, normalized.canonicalText);
     }
     const artifacts = loadCodingArtifacts(input.featureDir, input.trackerCommitCount);
     removeAgentCodingArtifactBeforeStageResult(input.featureDir);
@@ -502,18 +603,50 @@ async function inspectCompletion(input: {
       finishedAt: new Date().toISOString(),
       agent: 'native',
       model: input.model,
-      notes: `Native coding completed with ${parsed.value.confidence} confidence`,
+      notes: [
+        `Native coding completed with ${normalized.value.confidence} confidence`,
+        normalized.normalizedFrom ? `normalized .coding-complete from ${normalized.normalizedFrom}` : '',
+      ].filter(Boolean).join('; '),
       artifacts,
       failureReason: null,
     });
-    return 'complete';
+    return { status: 'complete' };
   }
 
   const blockedPath = getBlockedCompletionPath(input.featureDir);
   if (existsSync(blockedPath)) {
-    const blocked = await readBlockedCompletion(blockedPath);
-    if (!blocked.ok) {
-      throw new Error(`Native coding wrote invalid .coding-blocked-completion.json: ${blocked.message}`);
+    const normalized = normalizeBlockedCompletion(readFileSync(blockedPath, 'utf-8'));
+    if (!normalized.ok) {
+      return {
+        status: 'invalid',
+        artifact: 'blocked-completion',
+        path: blockedPath,
+        errors: [{
+          code: normalized.code,
+          ...(normalized.field ? { field: normalized.field } : {}),
+          message: normalized.message,
+        }],
+      };
+    }
+    const guarded = applyVerificationEvidenceGuard(normalized.value, input.verificationTracker);
+    if (guarded.coerced && !input.allowFalseCompletionCoercion) {
+      return {
+        status: 'invalid',
+        artifact: 'blocked-completion',
+        path: blockedPath,
+        falseCompletionOnly: true,
+        blockedNormalization: normalized,
+        errors: [{
+          code: guarded.reason ?? 'verification_evidence_missing',
+          field: 'implementationComplete',
+          message: guarded.reason === 'empty_passing_checks'
+            ? 'implementationComplete=true requires non-empty passingChecks; run verification or set implementationComplete=false.'
+            : 'implementationComplete=true requires evidence that a verification command succeeded in this native session; run verification or set implementationComplete=false.',
+        }],
+      };
+    }
+    if (normalized.normalizedFrom || guarded.coerced) {
+      atomicWriteText(blockedPath, `${JSON.stringify(guarded.value, null, 2)}\n`);
     }
     const artifacts = loadCodingArtifacts(input.featureDir, input.trackerCommitCount);
     removeAgentCodingArtifactBeforeStageResult(input.featureDir);
@@ -522,11 +655,15 @@ async function inspectCompletion(input: {
       finishedAt: null,
       agent: 'native',
       model: input.model,
-      notes: 'Native coding produced a blocked-completion handoff for monitor recovery',
+      notes: [
+        'Native coding produced a blocked-completion handoff for monitor recovery',
+        normalized.normalizedFrom ? `normalized blocked-completion from ${normalized.normalizedFrom}` : '',
+        guarded.coerced ? `implementationComplete coerced to false: ${guarded.reason}` : '',
+      ].filter(Boolean).join('; '),
       artifacts,
       failureReason: null,
     });
-    return 'blocked';
+    return { status: 'blocked' };
   }
 
   writeCodingFailureHandoff(input.featureDir, buildFailureHandoffInput({
@@ -537,10 +674,11 @@ async function inspectCompletion(input: {
   const handoffRelativePath = relative(process.cwd(), getCodingFailureHandoffPath(input.featureDir));
   const last = input.mutationFailureTracker.last;
   const lastErrorText = last ? `; last tool error (${last.tool}/${last.error}): ${last.message}` : '';
-  throw new Error(
-    'Native coding completed without .coding-complete or .coding-blocked-completion.json'
-    + `${lastErrorText}; structured handoff: ${handoffRelativePath}`,
-  );
+  return {
+    status: 'missing',
+    errorMessage: 'Native coding completed without .coding-complete or .coding-blocked-completion.json'
+      + `${lastErrorText}; structured handoff: ${handoffRelativePath}`,
+  };
 }
 
 export async function launchNativeCoding(options: LaunchNativeCodingOptions): Promise<LaunchNativeCodingResult> {
@@ -657,6 +795,7 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
     };
 
     const mutationFailureTracker: MutationFailureTracker = { count: 0, last: null };
+    const verificationTracker: VerificationTracker = { verificationCommandsSucceeded: 0 };
 
     const runCodingLoop = () => runWavemillLoop({
       model,
@@ -668,6 +807,9 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
         await intendedFilesAfterToolCall(toolContext, tracker);
 
         const commandResult = await commandToolsAfterToolCall(toolContext);
+        if (!commandResult?.isError && isSuccessfulVerificationToolCall(toolContext)) {
+          verificationTracker.verificationCommandsSucceeded += 1;
+        }
         if (commandResult?.isError) {
           recordMutationFailure(mutationFailureTracker, toolContext);
           return commandResult;
@@ -755,14 +897,83 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
       }
     }
 
-    const completion = await inspectCompletion({
-      featureDir,
-      model: modelName,
-      trackerCommitCount: tracker.commitCount,
-      stopReason: result.stopReason,
-      mutationFailureTracker,
-      recoveryAttempted,
-    });
+    let completionInspection: CompletionInspection | null = null;
+    const quarantinedArtifacts: string[] = [];
+    for (let artifactAttempt = 0; artifactAttempt <= MAX_ARTIFACT_RETRIES; artifactAttempt += 1) {
+      completionInspection = await inspectCompletion({
+        featureDir,
+        model: modelName,
+        trackerCommitCount: tracker.commitCount,
+        stopReason: result.stopReason,
+        mutationFailureTracker,
+        recoveryAttempted,
+        verificationTracker,
+        allowFalseCompletionCoercion: artifactAttempt >= MAX_ARTIFACT_RETRIES,
+      });
+
+      if (completionInspection.status === 'complete' || completionInspection.status === 'blocked') {
+        break;
+      }
+      if (completionInspection.status === 'missing') {
+        throw new Error(completionInspection.errorMessage);
+      }
+
+      if (completionInspection.falseCompletionOnly && artifactAttempt >= MAX_ARTIFACT_RETRIES) {
+        completionInspection = await inspectCompletion({
+          featureDir,
+          model: modelName,
+          trackerCommitCount: tracker.commitCount,
+          stopReason: result.stopReason,
+          mutationFailureTracker,
+          recoveryAttempted,
+          verificationTracker,
+          allowFalseCompletionCoercion: true,
+        });
+        break;
+      }
+
+      if (artifactAttempt >= MAX_ARTIFACT_RETRIES || options.signal?.aborted) {
+        writeCodingFailureHandoff(featureDir, buildFailureHandoffInput({
+          stopReason: result.stopReason,
+          tracker: mutationFailureTracker,
+          recoveryAttempted,
+          invalidArtifact: {
+            validationErrors: completionInspection.errors,
+            quarantinedArtifacts: quarantinedArtifacts.map((entry) => relative(options.wtDir, entry)),
+          },
+        }));
+        throw new Error(`Native coding wrote invalid ${completionInspection.artifact}: ${completionInspection.errors.map((error) => error.message).join('; ')}`);
+      }
+
+      const quarantined = quarantineInvalidArtifact(completionInspection.path, artifactAttempt + 1);
+      quarantinedArtifacts.push(quarantined);
+      writeHookStatus(
+        hookPath,
+        'working',
+        'native_coding_artifact_retry',
+        completionInspection.errors.map((error) => error.code).join(', '),
+        'native',
+      );
+      writeTextStatus(options.session, options.issue, 'native coding artifact retry');
+      context.messages = [
+        ...result.messages,
+        {
+          role: 'user',
+          content: buildArtifactRetryPrompt(completionInspection),
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ];
+      result = await runCodingLoop();
+      const retryProviderError = findFinalAssistantErrorMessage(result.messages);
+      if (retryProviderError) {
+        throw new Error(`Native coding failed: ${retryProviderError}`);
+      }
+    }
+
+    if (!completionInspection || (completionInspection.status !== 'complete' && completionInspection.status !== 'blocked')) {
+      throw new Error('Native coding completion inspection ended without a terminal completion status.');
+    }
+    const completion = completionInspection.status;
     writeHookStatus(hookPath, completion === 'complete' ? 'idle' : 'working', 'process_exit', completion, 'native');
     writeTextStatus(options.session, options.issue, completion === 'complete' ? 'coding complete' : 'coding blocked-completion');
 

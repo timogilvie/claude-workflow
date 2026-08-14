@@ -15,6 +15,7 @@ import { readStageResult } from '../stage-result.ts';
 import { registerScriptedPiProvider, type ScriptedPiProviderTurn } from './provider.ts';
 import { getCodingFailureHandoffPath, readCodingFailureHandoff } from './coding-failure-handoff.ts';
 import { launchNativeCoding, renderCodingSystemPrompt } from './launch-coding.ts';
+import type { ToolDescriptor, WavemillToolResult } from './tools/types.ts';
 
 const repos: string[] = [];
 
@@ -82,6 +83,35 @@ function finalTurn(text: string): ScriptedPiProviderTurn {
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
     stopReason: 'stop',
+  };
+}
+
+function rawWriteTool(repoDir: string): ToolDescriptor<{ path: string; content: string }, { ok: true }> {
+  return {
+    metadata: {
+      name: 'raw_write',
+      description: 'Test-only raw write that bypasses mutation artifact validation.',
+      class: 'mutation',
+      allowedPhases: ['coding'],
+      executionMode: 'sequential',
+      outputCapPolicy: { strategy: 'none' },
+    },
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string' },
+        content: { type: 'string' },
+      },
+      required: ['path', 'content'],
+      additionalProperties: false,
+    },
+    async execute(_toolCallId, params): Promise<WavemillToolResult<{ ok: true }>> {
+      writeFileSync(join(repoDir, params.path), params.content, 'utf-8');
+      return {
+        content: [{ type: 'text', text: `raw_write wrote ${params.path}` }],
+        details: { ok: true },
+      };
+    },
   };
 }
 
@@ -217,6 +247,131 @@ describe('launchNativeCoding', () => {
     const stageResult = await readStageResult(featureDir, 'coding');
     assert.equal(stageResult?.status, 'running');
     assert.match(stageResult?.notes ?? '', /blocked-completion/);
+  });
+
+  it('retries invalid completion artifacts written outside mutation validation', async () => {
+    const { repoDir, featureDir, slug } = makeRepo();
+    const model = scriptedModel([
+      toolTurn('raw-invalid-marker', 'raw_write', {
+        path: `features/${slug}/.coding-complete`,
+        content: '{"commit":"abc123"}',
+      }),
+      finalTurn('Wrote malformed marker.'),
+      toolTurn('marker-retry', 'create_marker', {
+        path: `features/${slug}/.coding-complete`,
+        content: 'confidence=high\n',
+      }),
+      finalTurn('Rewrote valid marker.'),
+    ], 'artifact-retry');
+
+    const result = await launchNativeCoding({
+      session: 'sess',
+      issue: 'HOK-2761',
+      slug,
+      wtDir: repoDir,
+      repoDir,
+      loopModelOverride: model,
+      extraDescriptors: [rawWriteTool(repoDir)],
+    });
+
+    assert.equal(result.completion, 'complete');
+    assert.equal(readFileSync(join(featureDir, '.coding-complete'), 'utf-8'), 'confidence=high\n');
+    assert.ok(existsSync(join(featureDir, '.coding-complete.invalid-1')));
+    assert.ok(existsSync(result.transcriptPath));
+  });
+
+  it('fails only after bounded artifact retries are exhausted', async () => {
+    const { repoDir, featureDir, slug } = makeRepo();
+    const model = scriptedModel([
+      toolTurn('raw-invalid-1', 'raw_write', {
+        path: `features/${slug}/.coding-complete`,
+        content: '{"commit":"abc123"}',
+      }),
+      finalTurn('Malformed once.'),
+      toolTurn('raw-invalid-2', 'raw_write', {
+        path: `features/${slug}/.coding-complete`,
+        content: '{"commit":"def456"}',
+      }),
+      finalTurn('Malformed twice.'),
+      toolTurn('raw-invalid-3', 'raw_write', {
+        path: `features/${slug}/.coding-complete`,
+        content: '{"commit":"ghi789"}',
+      }),
+      finalTurn('Malformed third time.'),
+    ], 'artifact-exhausted');
+
+    await assert.rejects(
+      () => launchNativeCoding({
+        session: 'sess',
+        issue: 'HOK-2761',
+        slug,
+        wtDir: repoDir,
+        repoDir,
+        loopModelOverride: model,
+        extraDescriptors: [rawWriteTool(repoDir)],
+      }),
+      /invalid coding-complete/,
+    );
+
+    assert.ok(existsSync(join(featureDir, '.coding-complete.invalid-1')));
+    assert.ok(existsSync(join(featureDir, '.coding-complete.invalid-2')));
+    const handoff = await readCodingFailureHandoff(getCodingFailureHandoffPath(featureDir));
+    assert.equal(handoff.ok, true);
+    if (handoff.ok) {
+      assert.equal(handoff.value.reason, 'invalid_completion_artifact');
+      assert.equal(handoff.value.validationErrors?.[0]?.code, 'missing_confidence');
+      assert.deepEqual(handoff.value.quarantinedArtifacts, [
+        `features/${slug}/.coding-complete.invalid-1`,
+        `features/${slug}/.coding-complete.invalid-2`,
+      ]);
+    }
+  });
+
+  it('coerces repeated false blocked-completion claims to implementationComplete=false', async () => {
+    const { repoDir, featureDir, slug } = makeRepo();
+    const falseClaim = JSON.stringify({
+      stage: 'coding',
+      implementationComplete: true,
+      committed: true,
+      passingChecks: [],
+      blockingChecks: ['npm test'],
+      blockingReason: 'baseline_tests_failing',
+      evidence: 'Claimed complete without running verification.',
+      recommendedAction: 'advance_to_review',
+    });
+    const model = scriptedModel([
+      toolTurn('blocked-1', 'write_artifact', {
+        path: `features/${slug}/.coding-blocked-completion.json`,
+        content: falseClaim,
+      }),
+      finalTurn('False complete once.'),
+      toolTurn('blocked-2', 'write_artifact', {
+        path: `features/${slug}/.coding-blocked-completion.json`,
+        content: falseClaim,
+      }),
+      finalTurn('False complete twice.'),
+      toolTurn('blocked-3', 'write_artifact', {
+        path: `features/${slug}/.coding-blocked-completion.json`,
+        content: falseClaim,
+      }),
+      finalTurn('False complete third time.'),
+    ], 'false-completion');
+
+    const result = await launchNativeCoding({
+      session: 'sess',
+      issue: 'HOK-2761',
+      slug,
+      wtDir: repoDir,
+      repoDir,
+      loopModelOverride: model,
+    });
+
+    assert.equal(result.completion, 'blocked');
+    const saved = JSON.parse(readFileSync(join(featureDir, '.coding-blocked-completion.json'), 'utf-8')) as Record<string, unknown>;
+    assert.equal(saved.implementationComplete, false);
+    assert.match(String(saved.evidence), /passingChecks was empty/);
+    const stageResult = await readStageResult(featureDir, 'coding');
+    assert.equal(stageResult?.status, 'running');
   });
 
   it('fails closed when a coding agent tries to write outside the worktree', async () => {

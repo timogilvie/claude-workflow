@@ -207,6 +207,8 @@ harness_extract_real_functions() {
     _coding_terminal_blocked_completion_detected \
     emit_terminal_blocked_completion_attention \
     recover_misplaced_coding_complete_marker \
+    recover_misplaced_plan_markdown \
+    preserve_premature_plan_approval \
     _coding_divergence_announce_marker \
     _detect_coding_pane_divergence \
     emit_pane_divergence_attention \
@@ -2924,12 +2926,13 @@ test_misplaced_coding_complete_marker_is_recovered() {
   feature_dir="$repo/features/$slug"
   misplaced_dir="$repo/services/contract-deployer/features/$slug"
   mkdir -p "$misplaced_dir"
-  touch "$misplaced_dir/.coding-complete"
+  printf 'confidence=high\n' > "$misplaced_dir/.coding-complete"
 
   tick="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
 
   check_eq "misplaced marker: coding stage becomes completed" "completed" "$(harness_read_stage_status "$repo" "$slug" coding)"
   check_file_exists "misplaced marker: expected marker recovered" "$feature_dir/.coding-complete"
+  check_eq "misplaced marker: marker content preserved" "confidence=high" "$(tr -d '\n' < "$feature_dir/.coding-complete")"
   check_file_exists "misplaced marker: recovery audit written" "$feature_dir/.coding-marker-recovered.json"
   check_eq "misplaced marker: audit found path" "services/contract-deployer/features/$slug/.coding-complete" "$(jq -r '.found' "$feature_dir/.coding-marker-recovered.json")"
   check_contains "misplaced marker: warning logged" "$(kv_value "$tick" warn_output)" "Recovered misplaced .coding-complete"
@@ -2972,6 +2975,78 @@ test_tracked_root_level_coding_complete_marker_is_ignored() {
   check_file_absent "tracked root marker: expected marker not recovered" "$feature_dir/.coding-complete"
   check_file_absent "tracked root marker: recovery audit not written" "$feature_dir/.coding-marker-recovered.json"
   check_not_contains "tracked root marker: no recovery warning logged" "$(kv_value "$tick" warn_output)" "Recovered misplaced .coding-complete"
+}
+
+test_root_level_plan_markdown_is_recovered() {
+  local slug="root-level-plan-markdown"
+  local issue="HOK-2761-ROOT-PLAN"
+  local repo feature_dir warnings
+  repo="$(harness_init_repo "$slug")"
+  feature_dir="$repo/features/$slug"
+  rm -f "$feature_dir/plan.md"
+  printf '# Misplaced plan\n' > "$repo/plan.md"
+
+  source "$REAL_FUNC_FILE"
+  warnings=""
+  log_warn() { warnings="${warnings}$*"$'\n'; }
+
+  recover_misplaced_plan_markdown "$issue" "$repo" "$feature_dir" "$slug"
+
+  check_file_exists "root plan: expected plan recovered" "$feature_dir/plan.md"
+  check_eq "root plan: content preserved" "# Misplaced plan" "$(tr -d '\n' < "$feature_dir/plan.md")"
+  check_file_absent "root plan: misplaced plan removed" "$repo/plan.md"
+  check_file_exists "root plan: recovery audit written" "$feature_dir/.plan-recovered.json"
+  check_eq "root plan: audit found path" "plan.md" "$(jq -r '.found' "$feature_dir/.plan-recovered.json")"
+  check_contains "root plan: warning logged" "$warnings" "Recovered misplaced plan.md"
+  unset -f log_warn
+}
+
+test_tracked_root_level_plan_markdown_is_ignored() {
+  local slug="tracked-root-level-plan-markdown"
+  local issue="HOK-2761-TRACKED-PLAN"
+  local repo feature_dir rc
+  repo="$(harness_init_repo "$slug")"
+  feature_dir="$repo/features/$slug"
+  rm -f "$feature_dir/plan.md"
+  printf '# Repository plan\n' > "$repo/plan.md"
+  git -C "$repo" add plan.md
+  git -C "$repo" commit -q -m "Track root plan"
+
+  source "$REAL_FUNC_FILE"
+  log_warn() { :; }
+
+  rc=0
+  recover_misplaced_plan_markdown "$issue" "$repo" "$feature_dir" "$slug" || rc=$?
+
+  check_eq "tracked root plan: recovery skipped" "1" "$rc"
+  check_file_absent "tracked root plan: expected plan not recovered" "$feature_dir/plan.md"
+  check_file_absent "tracked root plan: audit not written" "$feature_dir/.plan-recovered.json"
+  unset -f log_warn
+}
+
+test_premature_plan_approval_is_preserved_for_attention() {
+  local slug="premature-plan-approval"
+  local issue="HOK-2761-PREMATURE"
+  local repo feature_dir attention warnings
+  repo="$(harness_init_repo "$slug")"
+  feature_dir="$repo/features/$slug"
+  touch "$feature_dir/.plan-approved"
+
+  source "$REAL_FUNC_FILE"
+  attention=""
+  warnings=""
+  set_window_attention_state() { attention="$2"; }
+  log() { [[ "$1" == "warn" ]] && warnings="${warnings}$2"$'\n'; }
+
+  preserve_premature_plan_approval "$issue" "$feature_dir" "$issue-$slug"
+
+  check_file_absent "premature approval: marker removed" "$feature_dir/.plan-approved"
+  check_file_exists "premature approval: audit preserved" "$feature_dir/.plan-approved-premature.json"
+  check_eq "premature approval: attention set" "needs-user" "$attention"
+  check_eq "premature approval: audit type" "premature-plan-approved" "$(jq -r '.type' "$feature_dir/.plan-approved-premature.json")"
+  check_contains "premature approval: warning logged" "$warnings" "Preserved premature .plan-approved"
+  unset -f set_window_attention_state
+  unset -f log
 }
 
 test_not_eligible_expanded_reroute_does_not_emit_helper_failure_warn() {
@@ -3459,6 +3534,9 @@ test_coding_capacity_hook_ignores_stale_signal
 test_misplaced_coding_complete_marker_is_recovered
 test_root_level_coding_complete_marker_is_recovered
 test_tracked_root_level_coding_complete_marker_is_ignored
+test_root_level_plan_markdown_is_recovered
+test_tracked_root_level_plan_markdown_is_ignored
+test_premature_plan_approval_is_preserved_for_attention
 test_not_eligible_expanded_reroute_does_not_emit_helper_failure_warn
 test_disabled_expanded_reroute_does_not_emit_helper_failure_warn
 test_routing_error_expanded_reroute_emits_helper_failure_warn

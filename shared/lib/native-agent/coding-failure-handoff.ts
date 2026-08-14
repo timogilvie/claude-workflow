@@ -6,7 +6,8 @@ import path from 'node:path';
 export const CODING_FAILURE_HANDOFF_SCHEMA_VERSION = '1.0';
 export const CODING_FAILURE_HANDOFF_FILENAME = '.coding-failure-handoff.json';
 export const CODING_FAILURE_HANDOFF_STAGE = 'coding';
-export const CODING_FAILURE_HANDOFF_REASON = 'no_completion_artifact';
+export const CODING_FAILURE_HANDOFF_REASONS = ['no_completion_artifact', 'invalid_completion_artifact'] as const;
+export type CodingFailureHandoffReason = (typeof CODING_FAILURE_HANDOFF_REASONS)[number];
 
 export interface CodingFailureToolError {
   tool: string;
@@ -18,12 +19,14 @@ export interface CodingFailureToolError {
 
 export interface CodingFailureHandoff {
   stage: typeof CODING_FAILURE_HANDOFF_STAGE;
-  reason: typeof CODING_FAILURE_HANDOFF_REASON;
+  reason: CodingFailureHandoffReason;
   stopReason: string;
   mutationFailures: number;
   lastToolError: CodingFailureToolError | null;
   recoveryAttempted: boolean;
   suggestedAction: string;
+  validationErrors?: Array<{ code: string; field?: string; message: string }>;
+  quarantinedArtifacts?: string[];
   createdAt: string;
   schemaVersion: typeof CODING_FAILURE_HANDOFF_SCHEMA_VERSION;
 }
@@ -75,8 +78,8 @@ export function validateCodingFailureHandoff(
   if (value.stage !== CODING_FAILURE_HANDOFF_STAGE) {
     return error('INVALID_ENUM_VALUE', `Coding failure handoff stage must be "${CODING_FAILURE_HANDOFF_STAGE}".`, 'stage');
   }
-  if (value.reason !== CODING_FAILURE_HANDOFF_REASON) {
-    return error('INVALID_ENUM_VALUE', `Coding failure handoff reason must be "${CODING_FAILURE_HANDOFF_REASON}".`, 'reason');
+  if (typeof value.reason !== 'string' || !CODING_FAILURE_HANDOFF_REASONS.includes(value.reason as CodingFailureHandoffReason)) {
+    return error('INVALID_ENUM_VALUE', `Coding failure handoff reason must be one of: ${CODING_FAILURE_HANDOFF_REASONS.join(', ')}.`, 'reason');
   }
   if (value.schemaVersion !== CODING_FAILURE_HANDOFF_SCHEMA_VERSION) {
     return error('INVALID_ENUM_VALUE', `Coding failure handoff schemaVersion must be "${CODING_FAILURE_HANDOFF_SCHEMA_VERSION}".`, 'schemaVersion');
@@ -100,6 +103,16 @@ export function validateCodingFailureHandoff(
     const toolError = validateToolError(value.lastToolError);
     if (!toolError.ok) {
       return toolError;
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(value, 'validationErrors') && value.validationErrors !== undefined) {
+    if (!Array.isArray(value.validationErrors)) {
+      return error('INVALID_FIELD_TYPE', 'Coding failure handoff validationErrors must be an array when present.', 'validationErrors');
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(value, 'quarantinedArtifacts') && value.quarantinedArtifacts !== undefined) {
+    if (!Array.isArray(value.quarantinedArtifacts) || !value.quarantinedArtifacts.every((entry) => typeof entry === 'string')) {
+      return error('INVALID_FIELD_TYPE', 'Coding failure handoff quarantinedArtifacts must be an array of strings when present.', 'quarantinedArtifacts');
     }
   }
 

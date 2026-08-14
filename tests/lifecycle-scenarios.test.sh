@@ -135,6 +135,7 @@ for fn in \
   handle_expanded_reroute_handoff_failure \
   recover_missing_expansion_artifact \
   recover_misplaced_coding_complete_marker \
+  recover_misplaced_plan_markdown \
   guard_coding_complete_handoff \
   clear_coding_uncommitted_output_attention \
   coding_output_dirty_paths \
@@ -150,6 +151,8 @@ for fn in \
   native_launch_failure_kind \
   write_native_launch_failure_artifact \
   emit_native_launch_failure_attention \
+  _coding_terminal_blocked_completion_detected \
+  emit_terminal_blocked_completion_attention \
   resolve_stage_result_model \
   coding_pane_replacement_intent_path \
   record_coding_pane_replacement_intent \

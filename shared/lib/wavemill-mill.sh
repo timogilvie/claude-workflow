@@ -5832,14 +5832,120 @@ recover_misplaced_coding_complete_marker() {
     return 1
   fi
 
-  if ! touch "$expected_marker"; then
-    log_warn "$issue → Found misplaced .coding-complete at $rel_marker but could not create expected marker"
+  mkdir -p "$feature_dir" 2>/dev/null || true
+  if ! mv "$misplaced_marker" "$expected_marker" 2>/dev/null; then
+    if ! cp "$misplaced_marker" "$expected_marker" 2>/dev/null; then
+      log_warn "$issue → Found misplaced .coding-complete at $rel_marker but could not move expected marker"
+      return 1
+    fi
+    rm -f "$misplaced_marker" 2>/dev/null || true
+  fi
+
+  log_warn "$issue → Recovered misplaced .coding-complete from $rel_marker"
+  return 0
+}
+
+recover_misplaced_plan_markdown() {
+  local issue="$1" worktree="$2" feature_dir="$3" slug="$4"
+  local expected_plan misplaced_plan rel_plan audit_path audit_tmp recovered_at
+
+  expected_plan="$feature_dir/plan.md"
+  [[ -f "$expected_plan" ]] && return 1
+  [[ -d "$worktree" ]] || return 1
+
+  misplaced_plan="$(
+    find "$worktree" \
+      -path "$expected_plan" -prune -o \
+      -path "*/features/$slug/plan.md" -type f -print -quit 2>/dev/null || true
+  )"
+  if [[ -z "$misplaced_plan" && -f "$worktree/plan.md" ]]; then
+    if git -C "$worktree" ls-files --error-unmatch plan.md >/dev/null 2>&1; then
+      return 1
+    fi
+    misplaced_plan="$worktree/plan.md"
+  fi
+  [[ -n "$misplaced_plan" ]] || return 1
+  [[ "$misplaced_plan" != "$expected_plan" ]] || return 1
+
+  if [[ "$misplaced_plan" == "$worktree/plan.md" ]]; then
+    rel_plan="plan.md"
+  else
+    rel_plan="${misplaced_plan#"$worktree"/}"
+  fi
+  recovered_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  audit_path="$feature_dir/.plan-recovered.json"
+  mkdir -p "$feature_dir" 2>/dev/null || true
+  audit_tmp="$(mktemp "$audit_path.tmp.XXXXXX" 2>/dev/null)" || {
+    log_warn "$issue → Found misplaced plan.md at $rel_plan but could not create recovery audit"
+    return 1
+  }
+
+  jq -n \
+    --arg issue "$issue" \
+    --arg expected "features/$slug/plan.md" \
+    --arg found "$rel_plan" \
+    --arg timestamp "$recovered_at" \
+    '{
+      issue: $issue,
+      type: "misplaced-plan-markdown",
+      expected: $expected,
+      found: $found,
+      recoveredAt: $timestamp
+    }' > "$audit_tmp" || {
+      rm -f "$audit_tmp"
+      log_warn "$issue → Found misplaced plan.md at $rel_plan but could not write recovery audit"
+      return 1
+    }
+
+  if ! mv "$audit_tmp" "$audit_path"; then
+    rm -f "$audit_tmp"
+    log_warn "$issue → Found misplaced plan.md at $rel_plan but could not finalize recovery audit"
     return 1
   fi
 
-  rm -f "$misplaced_marker" 2>/dev/null || true
+  if ! mv "$misplaced_plan" "$expected_plan" 2>/dev/null; then
+    if ! cp "$misplaced_plan" "$expected_plan" 2>/dev/null; then
+      log_warn "$issue → Found misplaced plan.md at $rel_plan but could not move expected plan"
+      return 1
+    fi
+    rm -f "$misplaced_plan" 2>/dev/null || true
+  fi
 
-  log_warn "$issue → Recovered misplaced .coding-complete from $rel_marker"
+  log_warn "$issue → Recovered misplaced plan.md from $rel_plan"
+  return 0
+}
+
+preserve_premature_plan_approval() {
+  local issue="$1" feature_dir="$2" win="$3"
+  local marker="$feature_dir/.plan-approved" audit_path="$feature_dir/.plan-approved-premature.json"
+  local audit_tmp discovered_at original_mtime
+
+  [[ -f "$marker" ]] || return 1
+  discovered_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  original_mtime="$(stat -f '%Sm' -t '%Y-%m-%dT%H:%M:%SZ' "$marker" 2>/dev/null || stat -c '%y' "$marker" 2>/dev/null || echo "")"
+  audit_tmp="$(mktemp "$audit_path.tmp.XXXXXX" 2>/dev/null)" || return 1
+  jq -n \
+    --arg issue "$issue" \
+    --arg marker "features/$(basename "$feature_dir")/.plan-approved" \
+    --arg discoveredAt "$discovered_at" \
+    --arg originalMtime "$original_mtime" \
+    '{
+      issue: $issue,
+      type: "premature-plan-approved",
+      marker: $marker,
+      discoveredAt: $discoveredAt,
+      originalMtime: $originalMtime
+    }' > "$audit_tmp" || {
+      rm -f "$audit_tmp"
+      return 1
+    }
+  if ! mv "$audit_tmp" "$audit_path"; then
+    rm -f "$audit_tmp"
+    return 1
+  fi
+  rm -f "$marker" 2>/dev/null || true
+  log "warn" "$issue → Preserved premature .plan-approved as .plan-approved-premature.json; planning still awaits plan.md"
+  set_window_attention_state "$win" "needs-user"
   return 0
 }
 
@@ -12957,12 +13063,22 @@ monitor_issue_state() {
           local planning_status
           planning_status=$(read_stage_status "$FEATURE_DIR" "planning")
 
-          # Transition 1: awaiting_user + .plan-approved → completed.
-          # Approval markers created before the run reaches awaiting_user are
-          # stale/in-run markers and must not bypass the operator gate.
-          if [[ "$planning_status" == "running" ]] && [[ -f "$FEATURE_DIR/.plan-approved" ]]; then
-            rm -f "$FEATURE_DIR/.plan-approved"
-            log "warn" "$ISSUE → Ignoring .plan-approved created before planning was awaiting user approval"
+          if [[ "$planning_status" == "running" ]] && [[ ! -f "$FEATURE_DIR/plan.md" ]]; then
+            recover_misplaced_plan_markdown "$ISSUE" "$WT_DIR" "$FEATURE_DIR" "$SLUG" || true
+          fi
+
+          # Transition 2: running + plan.md → awaiting_user. This runs before
+          # the premature-approval guard so a valid recovered plan is not
+          # deadlocked by an approval marker written in the same stopped run.
+          if [[ "$planning_status" == "running" ]]; then
+            if [[ -f "$FEATURE_DIR/plan.md" ]]; then
+              unset "$approval_wait_var" 2>/dev/null || true
+              log "status" "$ISSUE → plan.md detected, marking planning as awaiting_user"
+              write_stage_result "$FEATURE_DIR" "planning" "awaiting_user" "$current_agent" "" "Plan ready for review"
+              set_window_attention_state "$WIN" "needs-user"
+              active_count=$((active_count + 1))
+              return 0
+            fi
           fi
 
           if [[ "$planning_status" == "awaiting_user" ]]; then
@@ -12981,16 +13097,14 @@ monitor_issue_state() {
             fi
           fi
 
-          # Transition 2: running + plan.md → awaiting_user
-          if [[ "$planning_status" == "running" ]]; then
-            if [[ -f "$FEATURE_DIR/plan.md" ]]; then
-              unset "$approval_wait_var" 2>/dev/null || true
-              log "status" "$ISSUE → plan.md detected, marking planning as awaiting_user"
-              write_stage_result "$FEATURE_DIR" "planning" "awaiting_user" "$current_agent" "" "Plan ready for review"
+          # Approval markers created before the run reaches awaiting_user are
+          # stale/in-run markers and must not bypass the operator gate.
+          if [[ "$planning_status" == "running" ]] && [[ -f "$FEATURE_DIR/.plan-approved" ]]; then
+            preserve_premature_plan_approval "$ISSUE" "$FEATURE_DIR" "$WIN" || {
+              rm -f "$FEATURE_DIR/.plan-approved"
+              log "warn" "$ISSUE → Ignoring .plan-approved created before planning was awaiting user approval"
               set_window_attention_state "$WIN" "needs-user"
-              active_count=$((active_count + 1))
-              return 0
-            fi
+            }
           fi
 
           if emit_native_launch_failure_attention "$ISSUE" "$FEATURE_DIR" "planning" "$WIN" "$WIN_TARGET" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "planning" "")"; then
