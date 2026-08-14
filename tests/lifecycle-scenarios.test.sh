@@ -136,14 +136,21 @@ for fn in \
   recover_missing_expansion_artifact \
   recover_misplaced_coding_complete_marker \
   guard_coding_complete_handoff \
+  coding_attempt_stamp_path \
+  write_coding_attempt_stamp \
+  quarantine_stale_coding_artifacts \
   clear_coding_uncommitted_output_attention \
   coding_output_dirty_paths \
+  wavemill_owned_feature_artifact_path \
   blocked_completion_auto_allowed_dirty_path \
   coding_compare_commit_counts \
   coding_uncommitted_output_announce_marker \
   coding_uncommitted_output_should_announce \
   mark_coding_uncommitted_output_announced \
   write_coding_uncommitted_output_artifact \
+  coding_missing_blocked_completion_announce_marker \
+  _coding_terminal_blocked_completion_detected \
+  emit_terminal_blocked_completion_attention \
   native_launch_failure_artifact_path \
   stage_result_field \
   agent_or_model_is_native_for_recovery \

@@ -183,6 +183,10 @@ harness_extract_real_functions() {
     blocked_completion_current_head \
     coding_output_dirty_paths \
     blocked_completion_commit_matches_head \
+    coding_attempt_stamp_path \
+    write_coding_attempt_stamp \
+    quarantine_stale_coding_artifacts \
+    blocked_completion_artifact_fresh_for_attempt \
     wavemill_owned_feature_artifact_path \
     blocked_completion_auto_allowed_dirty_path \
     blocked_completion_worktree_clean_for_auto \
@@ -1729,6 +1733,72 @@ printf "%s\n" "$review_win" > "$REPO_UNDER_TEST/review-window-target"
   check_not_contains "auto blocked completion review: no missing-window warning" "$(cat "$repo/review-warn-output" 2>/dev/null || true)" "missing, recreating"
   check_file_absent "auto blocked completion review: expected replacement consumed" "$repo/features/$slug/.coding-pane-expected-replacement.json"
   check_file_absent "auto blocked completion review: replacement intent consumed" "$repo/features/$slug/.coding-pane-replacement-intent.json"
+}
+
+test_fresh_coding_launch_quarantines_stale_blocked_completion() {
+  local slug="coding-stale-blocked-relaunch"
+  local issue="HOK-2757-STALE"
+  local repo tick1 tick2 tick3 tick4 commit feature_dir
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_planning_state "$repo" "$slug" "awaiting_user"
+  harness_setup_runtime_artifacts "$repo"
+  feature_dir="$repo/features/$slug"
+  commit="$(git -C "$repo" rev-parse --short HEAD)"
+
+  cat > "$feature_dir/.coding-blocked-completion.json" <<EOF
+{
+  "stage": "coding",
+  "implementationComplete": true,
+  "committed": true,
+  "commit": "$commit",
+  "passingChecks": ["bash tests/lifecycle-harness.test.sh"],
+  "blockingChecks": ["pnpm typecheck"],
+  "blockingReason": "baseline_failures",
+  "evidence": "Old coding attempt finished against the same HEAD.",
+  "recommendedAction": "advance_to_review"
+}
+EOF
+  printf 'confidence=high\n' > "$feature_dir/.coding-complete"
+  printf '{}\n' > "$feature_dir/.coding-auto-advance.json"
+
+  tick1="$(harness_run_tick "$repo" "$slug" "$issue")"
+  check_eq "stale relaunch tick1: planning completes" "completed" "$(harness_read_stage_status "$repo" "$slug" planning)"
+  check_eq "stale relaunch tick1: coding not launched" "false" "$(kv_value "$tick1" coding_launched)"
+
+  tick2="$(harness_run_tick "$repo" "$slug" "$issue")"
+  check_eq "stale relaunch tick2: coding phase active" "coding" "$(kv_value "$tick2" phase)"
+  check_eq "stale relaunch tick2: coding launched" "true" "$(kv_value "$tick2" coding_launched)"
+  check_eq "stale relaunch tick2: coding running" "running" "$(harness_read_stage_status "$repo" "$slug" coding)"
+  check_file_exists "stale relaunch tick2: attempt stamp written" "$feature_dir/.coding-attempt.json"
+  check_file_exists "stale relaunch tick2: quarantine audit written" "$feature_dir/.coding-artifact-quarantine.json"
+  check_file_absent "stale relaunch tick2: stale blocked artifact removed from live path" "$feature_dir/.coding-blocked-completion.json"
+  check_file_absent "stale relaunch tick2: stale complete marker removed from live path" "$feature_dir/.coding-complete"
+  check_file_absent "stale relaunch tick2: derived auto-advance marker removed" "$feature_dir/.coding-auto-advance.json"
+  check_eq "stale relaunch tick2: gate artifacts renamed" "2" "$(jq -r '.renamed | length' "$feature_dir/.coding-artifact-quarantine.json")"
+
+  tick3="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
+  check_eq "stale relaunch tick3: coding stays running without stale live artifact" "running" "$(harness_read_stage_status "$repo" "$slug" coding)"
+  check_eq "stale relaunch tick3: no auto advance audit" "false" "$([[ -f "$feature_dir/.coding-auto-advance.json" ]] && echo true || echo false)"
+
+  cat > "$feature_dir/.coding-blocked-completion.json" <<EOF
+{
+  "stage": "coding",
+  "implementationComplete": true,
+  "committed": true,
+  "commit": "$commit",
+  "passingChecks": ["bash tests/lifecycle-harness.test.sh"],
+  "blockingChecks": ["pnpm typecheck"],
+  "blockingReason": "baseline_failures",
+  "evidence": "Fresh coding attempt finished after relaunch.",
+  "recommendedAction": "advance_to_review"
+}
+EOF
+
+  tick4="$(harness_run_tick "$repo" "$slug" "$issue" "$(harness_auto_advance_clear_liveness_setup)")"
+  check_eq "stale relaunch tick4: fresh artifact advances" "completed" "$(harness_read_stage_status "$repo" "$slug" coding)"
+  check_eq "stale relaunch tick4: attention cleared" "clear" "$(kv_value "$tick4" attention)"
+  check_file_exists "stale relaunch tick4: auto audit written" "$feature_dir/.coding-auto-advance.json"
+  check_eq "stale relaunch tick4: artifactFresh true" "true" "$(jq -r '.guardrails.artifactFresh' "$feature_dir/.coding-auto-advance.json")"
 }
 
 test_coding_blocked_completion_auto_advances_with_wavemill_metadata_noise() {
@@ -3418,6 +3488,7 @@ test_merge_queue_preserved_merged_tasks_do_not_block_ready_pr
 test_merge_queue_closed_unmerged_pr_does_not_block_ready_pr
 test_coding_blocked_completion_needs_user_without_advancing
 test_coding_blocked_completion_auto_advances_when_valid
+test_fresh_coding_launch_quarantines_stale_blocked_completion
 test_coding_blocked_completion_auto_advances_with_wavemill_metadata_noise
 test_coding_blocked_completion_live_process_needs_attention
 test_coding_blocked_completion_terminates_live_process_when_configured

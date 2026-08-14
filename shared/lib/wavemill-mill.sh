@@ -5235,6 +5235,139 @@ blocked_completion_worktree_clean_for_auto() {
   [[ -z "$(coding_output_dirty_paths "$worktree" "$slug")" ]]
 }
 
+coding_attempt_stamp_path() {
+  local feature_dir="$1"
+  printf '%s\n' "$feature_dir/.coding-attempt.json"
+}
+
+write_coding_attempt_stamp() {
+  local issue="$1" feature_dir="$2"
+  local stamp_path stamp_tmp prev_attempt launched_at launched_epoch
+
+  stamp_path="$(coding_attempt_stamp_path "$feature_dir")"
+  prev_attempt="$(jq -r 'if (.attempt | type) == "number" then .attempt else 0 end' "$stamp_path" 2>/dev/null || echo 0)"
+  [[ "$prev_attempt" =~ ^[0-9]+$ ]] || prev_attempt=0
+  launched_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  launched_epoch="$(date -u +%s)"
+
+  stamp_tmp="$(mktemp "$stamp_path.tmp.XXXXXX" 2>/dev/null)" || return 1
+  if ! jq -n \
+    --arg issue "$issue" \
+    --arg launchedAt "$launched_at" \
+    --argjson launchedAtEpoch "$launched_epoch" \
+    --argjson attempt "$((prev_attempt + 1))" \
+    '{
+      issue: $issue,
+      launchedAt: $launchedAt,
+      launchedAtEpoch: $launchedAtEpoch,
+      attempt: $attempt
+    }' > "$stamp_tmp"; then
+    rm -f "$stamp_tmp"
+    return 1
+  fi
+
+  mv "$stamp_tmp" "$stamp_path" 2>/dev/null || {
+    rm -f "$stamp_tmp"
+    return 1
+  }
+}
+
+quarantine_stale_coding_artifacts() {
+  local issue="$1" feature_dir="$2"
+  local timestamp audit_path audit_tmp path base destination removed_json renamed_json
+  local -a renamed_from=()
+  local -a renamed_to=()
+  local -a removed_paths=()
+  local -a gate_artifacts=(
+    ".coding-complete"
+    ".coding-blocked-completion.json"
+  )
+  local -a derived_artifacts=(
+    ".coding-auto-advance.json"
+    ".coding-advance-override.json"
+    ".coding-uncommitted-output.json"
+    ".coding-uncommitted-output-announced"
+    ".coding-missing-blocked-completion.json"
+    ".missing-blocked-completion-announced"
+    ".blocked-completion-announced"
+  )
+
+  timestamp="$(date -u +"%Y%m%dT%H%M%SZ")"
+
+  for base in "${gate_artifacts[@]}"; do
+    path="$feature_dir/$base"
+    [[ -e "$path" ]] || continue
+    destination="$feature_dir/$base.stale.$timestamp"
+    if [[ -e "$destination" ]]; then
+      destination="$feature_dir/$base.stale.$timestamp.$$"
+    fi
+    if mv "$path" "$destination" 2>/dev/null; then
+      renamed_from+=("$base")
+      renamed_to+=("$(basename "$destination")")
+    fi
+  done
+
+  for base in "${derived_artifacts[@]}"; do
+    path="$feature_dir/$base"
+    [[ -e "$path" ]] || continue
+    if rm -f "$path" 2>/dev/null; then
+      removed_paths+=("$base")
+    fi
+  done
+
+  if (( ${#renamed_from[@]} == 0 && ${#removed_paths[@]} == 0 )); then
+    return 0
+  fi
+
+  renamed_json="$(
+    for i in "${!renamed_from[@]}"; do
+      jq -n --arg from "${renamed_from[$i]}" --arg to "${renamed_to[$i]}" '{from: $from, to: $to}'
+    done | jq -s .
+  )"
+  removed_json="$(
+    for path in "${removed_paths[@]}"; do
+      jq -n --arg path "$path" '$path'
+    done | jq -s .
+  )"
+
+  audit_path="$feature_dir/.coding-artifact-quarantine.json"
+  audit_tmp="$(mktemp "$audit_path.tmp.XXXXXX" 2>/dev/null)" || return 1
+  if ! jq -n \
+    --arg issue "$issue" \
+    --arg timestamp "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+    --argjson renamed "$renamed_json" \
+    --argjson removed "$removed_json" \
+    '{
+      issue: $issue,
+      timestamp: $timestamp,
+      renamed: $renamed,
+      removed: $removed
+    }' > "$audit_tmp"; then
+    rm -f "$audit_tmp"
+    return 1
+  fi
+  mv "$audit_tmp" "$audit_path" 2>/dev/null || {
+    rm -f "$audit_tmp"
+    return 1
+  }
+
+  log "status" "$issue → quarantined stale coding artifacts before fresh coding launch (renamed=${#renamed_from[@]}, removed=${#removed_paths[@]})"
+}
+
+blocked_completion_artifact_fresh_for_attempt() {
+  local feature_dir="$1" artifact_path="$2"
+  local stamp_path launched_epoch artifact_mtime
+
+  stamp_path="$(coding_attempt_stamp_path "$feature_dir")"
+  [[ -f "$stamp_path" ]] || return 0
+  launched_epoch="$(jq -r 'if (.launchedAtEpoch | type) == "number" then (.launchedAtEpoch | tostring) else empty end' "$stamp_path" 2>/dev/null || true)"
+  [[ "$launched_epoch" =~ ^[0-9]+$ ]] || return 0
+  artifact_mtime="$(portable_file_mtime_epoch "$artifact_path" 2>/dev/null || true)"
+  [[ "$artifact_mtime" =~ ^[0-9]+$ ]] || return 0
+
+  (( artifact_mtime >= launched_epoch ))
+}
+
 coding_uncommitted_output_announce_marker() {
   local feature_dir="$1"
   printf '%s\n' "$feature_dir/.coding-uncommitted-output-announced"
@@ -5377,7 +5510,7 @@ blocked_completion_validate_for_advance() {
   local json_valid=false schema_valid=false stage_running=false stage_is_coding=false
   local implementation_complete=false committed=false recommended_action_matches=false
   local has_passing_checks=false has_blocking_checks=false commit_matches_head=true
-  local worktree_clean=true artifact_commit="" current_head="" decision_reason=""
+  local worktree_clean=true artifact_fresh=true artifact_commit="" current_head="" decision_reason=""
   local manual_soft_failure=false
 
   slug="$(basename "$feature_dir")"
@@ -5465,6 +5598,15 @@ blocked_completion_validate_for_advance() {
     fi
   fi
 
+  if [[ "$json_valid" == true && "$schema_valid" == true ]] && ! blocked_completion_artifact_fresh_for_attempt "$feature_dir" "$artifact_path"; then
+    artifact_fresh=false
+    if [[ "$mode" == "auto" ]]; then
+      decision_reason="${decision_reason:-blocked-completion artifact predates current coding attempt}"
+    else
+      manual_soft_failure=true
+    fi
+  fi
+
   if [[ -z "$decision_reason" && "$mode" == "manual" && "$manual_soft_failure" == true ]]; then
     decision_reason="manual override accepted with soft guardrail failures"
   fi
@@ -5489,6 +5631,7 @@ blocked_completion_validate_for_advance() {
     --argjson hasBlockingChecks "$has_blocking_checks" \
     --argjson commitMatchesHead "$commit_matches_head" \
     --argjson worktreeClean "$worktree_clean" \
+    --argjson artifactFresh "$artifact_fresh" \
     --argjson eligible "$(
       if [[ "$decision_reason" == "eligible" || "$decision_reason" == "manual override accepted with soft guardrail failures" ]]; then
         printf 'true'
@@ -5516,7 +5659,8 @@ blocked_completion_validate_for_advance() {
         hasPassingChecks: $hasPassingChecks,
         hasBlockingChecks: $hasBlockingChecks,
         commitMatchesHead: $commitMatchesHead,
-        worktreeClean: $worktreeClean
+        worktreeClean: $worktreeClean,
+        artifactFresh: $artifactFresh
       }
     }'
 
@@ -5642,6 +5786,14 @@ auto_advance_blocked_completion() {
   slug="$(basename "$feature_dir")"
   decision_json="$(blocked_completion_validate_for_advance "$issue" "$feature_dir" auto 2>/dev/null)" || {
     AUTO_ADVANCE_BLOCKED_COMPLETION_REASON="$(jq -r '.reason // "blocked-completion artifact is ineligible"' <<<"$decision_json" 2>/dev/null || echo "blocked-completion artifact is ineligible")"
+    if [[ "$AUTO_ADVANCE_BLOCKED_COMPLETION_REASON" == "blocked-completion artifact predates current coding attempt" ]]; then
+      emit_blocked_completion_liveness_attention \
+        "$issue" \
+        "$feature_dir" \
+        "$win" \
+        "blocked-completion auto-advance refused because the artifact predates the current coding attempt" \
+        "Inspect the current coding pane for $issue. To advance deliberately anyway, run advance $issue."
+    fi
     return 1
   }
 
@@ -12275,7 +12427,7 @@ handle_advance_command() {
   soft_failures_json="$(jq -c '
     .guardrails
     | to_entries
-    | map(select((.key == "commitMatchesHead" or .key == "worktreeClean") and (.value == false)))
+    | map(select((.key == "commitMatchesHead" or .key == "worktreeClean" or .key == "artifactFresh") and (.value == false)))
     | map(.key)
   ' <<<"$decision_json" 2>/dev/null || echo '[]')"
 
@@ -12940,6 +13092,12 @@ monitor_issue_state() {
             fi
 
             # Record coding stage as running (HOK-1177)
+            if ! quarantine_stale_coding_artifacts "$ISSUE" "$FEATURE_DIR"; then
+              log_warn "$ISSUE → failed to quarantine stale coding artifacts before launch"
+            fi
+            if ! write_coding_attempt_stamp "$ISSUE" "$FEATURE_DIR"; then
+              log_warn "$ISSUE → failed to write coding attempt stamp before launch"
+            fi
             write_stage_result "$FEATURE_DIR" "coding" "running" "$coder_agent" "$coder_launch_model"
 
             launch_coding_phase "$ISSUE" "$SLUG" "$title" "$WT_DIR" "$BRANCH" "$BASE_BRANCH" "$coder_launch_model" "$coder_agent" "$code_depth"

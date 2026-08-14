@@ -98,6 +98,11 @@ for fn in \
   normalize_prompt_command_reply \
   blocked_completion_current_head \
   blocked_completion_commit_matches_head \
+  coding_attempt_stamp_path \
+  write_coding_attempt_stamp \
+  quarantine_stale_coding_artifacts \
+  blocked_completion_artifact_fresh_for_attempt \
+  wavemill_owned_feature_artifact_path \
   blocked_completion_auto_allowed_dirty_path \
   coding_output_dirty_paths \
   blocked_completion_worktree_clean_for_auto \
@@ -211,6 +216,14 @@ setup_git_worktree() {
   )
 }
 
+track_feature_dir() {
+  local worktree="$1" feature_dir="$2"
+  mkdir -p "$feature_dir"
+  printf 'tracked\n' > "$feature_dir/.keep"
+  git -C "$worktree" add "${feature_dir#$worktree/}/.keep"
+  git -C "$worktree" commit -m "track feature dir" >/dev/null 2>&1
+}
+
 write_blocked_completion() {
   local feature_dir="$1" commit="$2" extra_json="${3:-}"
   cat > "$feature_dir/.coding-blocked-completion.json" <<EOF
@@ -226,6 +239,21 @@ write_blocked_completion() {
   "recommendedAction": "advance_to_review"$extra_json
 }
 EOF
+}
+
+write_attempt_stamp() {
+  local feature_dir="$1" launched_epoch="$2"
+  jq -n \
+    --arg issue "HOK-TEST" \
+    --arg launchedAt "2026-08-13T00:00:00Z" \
+    --argjson launchedAtEpoch "$launched_epoch" \
+    '{issue: $issue, launchedAt: $launchedAt, launchedAtEpoch: $launchedAtEpoch, attempt: 1}' \
+    > "$feature_dir/.coding-attempt.json"
+}
+
+touch_epoch() {
+  local path="$1" epoch="$2"
+  perl -e 'utime $ARGV[1], $ARGV[1], $ARGV[0] or die "utime failed\n"' "$path" "$epoch"
 }
 
 run_advance() {
@@ -265,6 +293,7 @@ assert_eq "success audit path" "features/test-slug/.coding-blocked-completion.js
 assert_eq "success audit action" "advance_to_review" "$(jq -r '.artifact_summary.recommendedAction' "$FEATURE_SUCCESS/.coding-advance-override.json")"
 assert_eq "success audit passing count" "1" "$(jq -r '.artifact_summary.passing_checks_count' "$FEATURE_SUCCESS/.coding-advance-override.json")"
 assert_eq "success audit stage running guardrail" "true" "$(jq -r '.guardrails.stageRunning' "$FEATURE_SUCCESS/.coding-advance-override.json")"
+assert_eq "success audit artifact fresh guardrail defaults true" "true" "$(jq -r '.guardrails.artifactFresh' "$FEATURE_SUCCESS/.coding-advance-override.json")"
 assert_eq "success replacement intent issue" "HOK-1639" "$(jq -r '.issue' "$FEATURE_SUCCESS/.coding-pane-replacement-intent.json")"
 assert_eq "success replacement intent to review" "review" "$(jq -r '.to' "$FEATURE_SUCCESS/.coding-pane-replacement-intent.json")"
 assert_contains "success audit timestamp present" "T" "$(jq -r '.timestamp' "$FEATURE_SUCCESS/.coding-advance-override.json")"
@@ -286,6 +315,115 @@ assert_file_exists "challenger records expected review window replacement" "$FEA
 assert_contains "challenger success log message" "HOK-1639_c -> advance recorded; review will launch on the next monitor tick" "${log_lines[*]}"
 assert_eq "challenger audit issue" "HOK-1639_c" "$(jq -r '.issue' "$FEATURE_CHALLENGER/.coding-advance-override.json")"
 assert_eq "challenger prompt preserves advance command" "advance HOK-1639_c" "$(normalize_prompt_command_reply "advance HOK-1639_c")"
+
+# Stale blocked-completion artifact is not auto-eligible for a newer coding attempt
+WORKTREE_STALE_ATTEMPT="$SCENARIO_DIR/worktree-stale-attempt"
+FEATURE_STALE_ATTEMPT="$WORKTREE_STALE_ATTEMPT/features/stale-attempt-slug"
+mkdir -p "$FEATURE_STALE_ATTEMPT"
+setup_git_worktree "$WORKTREE_STALE_ATTEMPT"
+track_feature_dir "$WORKTREE_STALE_ATTEMPT" "$FEATURE_STALE_ATTEMPT"
+write_coding_result "$FEATURE_STALE_ATTEMPT" "running"
+write_blocked_completion "$FEATURE_STALE_ATTEMPT" "$(git -C "$WORKTREE_STALE_ATTEMPT" rev-parse --short HEAD)"
+touch_epoch "$FEATURE_STALE_ATTEMPT/.coding-blocked-completion.json" 1000
+write_attempt_stamp "$FEATURE_STALE_ATTEMPT" 1001
+decision="$(blocked_completion_validate_for_advance "HOK-STALE" "$FEATURE_STALE_ATTEMPT" auto 2>/dev/null || true)"
+assert_eq "stale attempt auto ineligible" "false" "$(jq -r '.eligible' <<<"$decision")"
+assert_eq "stale attempt artifactFresh false" "false" "$(jq -r '.guardrails.artifactFresh' <<<"$decision")"
+assert_contains "stale attempt reason" "predates current coding attempt" "$(jq -r '.reason' <<<"$decision")"
+
+# Fresh blocked-completion artifact remains auto-eligible
+WORKTREE_FRESH_ATTEMPT="$SCENARIO_DIR/worktree-fresh-attempt"
+FEATURE_FRESH_ATTEMPT="$WORKTREE_FRESH_ATTEMPT/features/fresh-attempt-slug"
+mkdir -p "$FEATURE_FRESH_ATTEMPT"
+setup_git_worktree "$WORKTREE_FRESH_ATTEMPT"
+track_feature_dir "$WORKTREE_FRESH_ATTEMPT" "$FEATURE_FRESH_ATTEMPT"
+write_coding_result "$FEATURE_FRESH_ATTEMPT" "running"
+write_blocked_completion "$FEATURE_FRESH_ATTEMPT" "$(git -C "$WORKTREE_FRESH_ATTEMPT" rev-parse --short HEAD)"
+touch_epoch "$FEATURE_FRESH_ATTEMPT/.coding-blocked-completion.json" 1002
+write_attempt_stamp "$FEATURE_FRESH_ATTEMPT" 1001
+decision="$(blocked_completion_validate_for_advance "HOK-FRESH" "$FEATURE_FRESH_ATTEMPT" auto 2>/dev/null)"
+assert_eq "fresh attempt auto eligible" "true" "$(jq -r '.eligible' <<<"$decision")"
+assert_eq "fresh attempt artifactFresh true" "true" "$(jq -r '.guardrails.artifactFresh' <<<"$decision")"
+
+# Missing attempt stamp keeps legacy behavior
+WORKTREE_LEGACY_ATTEMPT="$SCENARIO_DIR/worktree-legacy-attempt"
+FEATURE_LEGACY_ATTEMPT="$WORKTREE_LEGACY_ATTEMPT/features/legacy-attempt-slug"
+mkdir -p "$FEATURE_LEGACY_ATTEMPT"
+setup_git_worktree "$WORKTREE_LEGACY_ATTEMPT"
+track_feature_dir "$WORKTREE_LEGACY_ATTEMPT" "$FEATURE_LEGACY_ATTEMPT"
+write_coding_result "$FEATURE_LEGACY_ATTEMPT" "running"
+write_blocked_completion "$FEATURE_LEGACY_ATTEMPT" "$(git -C "$WORKTREE_LEGACY_ATTEMPT" rev-parse --short HEAD)"
+touch_epoch "$FEATURE_LEGACY_ATTEMPT/.coding-blocked-completion.json" 1000
+decision="$(blocked_completion_validate_for_advance "HOK-LEGACY" "$FEATURE_LEGACY_ATTEMPT" auto 2>/dev/null)"
+assert_eq "legacy no stamp auto eligible" "true" "$(jq -r '.eligible' <<<"$decision")"
+assert_eq "legacy no stamp artifactFresh true" "true" "$(jq -r '.guardrails.artifactFresh' <<<"$decision")"
+
+# Manual advance can override staleness and records artifactFresh as a soft failure
+WORKTREE_MANUAL_STALE="$SCENARIO_DIR/worktree-manual-stale"
+FEATURE_MANUAL_STALE="$WORKTREE_MANUAL_STALE/features/manual-stale-slug"
+mkdir -p "$FEATURE_MANUAL_STALE"
+setup_git_worktree "$WORKTREE_MANUAL_STALE"
+track_feature_dir "$WORKTREE_MANUAL_STALE" "$FEATURE_MANUAL_STALE"
+write_task_state "HOK-2757" "manual-stale-slug" "$WORKTREE_MANUAL_STALE" "coding"
+write_coding_result "$FEATURE_MANUAL_STALE" "running"
+write_blocked_completion "$FEATURE_MANUAL_STALE" "$(git -C "$WORKTREE_MANUAL_STALE" rev-parse --short HEAD)"
+touch_epoch "$FEATURE_MANUAL_STALE/.coding-blocked-completion.json" 1000
+write_attempt_stamp "$FEATURE_MANUAL_STALE" 1001
+run_advance "advance HOK-2757"
+assert_eq "stale manual status" "handled" "$MONITOR_COMMAND_STATUS"
+assert_eq "stale manual soft failure" "true" "$(jq -e '.soft_failures | index("artifactFresh")' "$FEATURE_MANUAL_STALE/.coding-advance-override.json" >/dev/null && echo true || echo false)"
+
+# Same-second mtime boundary is fresh
+WORKTREE_SAME_SECOND="$SCENARIO_DIR/worktree-same-second"
+FEATURE_SAME_SECOND="$WORKTREE_SAME_SECOND/features/same-second-slug"
+mkdir -p "$FEATURE_SAME_SECOND"
+setup_git_worktree "$WORKTREE_SAME_SECOND"
+track_feature_dir "$WORKTREE_SAME_SECOND" "$FEATURE_SAME_SECOND"
+write_coding_result "$FEATURE_SAME_SECOND" "running"
+write_blocked_completion "$FEATURE_SAME_SECOND" "$(git -C "$WORKTREE_SAME_SECOND" rev-parse --short HEAD)"
+touch_epoch "$FEATURE_SAME_SECOND/.coding-blocked-completion.json" 1001
+write_attempt_stamp "$FEATURE_SAME_SECOND" 1001
+decision="$(blocked_completion_validate_for_advance "HOK-SAMESECOND" "$FEATURE_SAME_SECOND" auto 2>/dev/null)"
+assert_eq "same-second attempt auto eligible" "true" "$(jq -r '.eligible' <<<"$decision")"
+assert_eq "same-second artifactFresh true" "true" "$(jq -r '.guardrails.artifactFresh' <<<"$decision")"
+
+# Fresh coding launch quarantine preserves gate artifacts and removes derived markers
+FEATURE_QUARANTINE="$SCENARIO_DIR/quarantine-feature"
+mkdir -p "$FEATURE_QUARANTINE"
+printf 'confidence=high\n' > "$FEATURE_QUARANTINE/.coding-complete"
+printf '{}\n' > "$FEATURE_QUARANTINE/.coding-blocked-completion.json"
+for marker in \
+  .coding-auto-advance.json \
+  .coding-advance-override.json \
+  .coding-uncommitted-output.json \
+  .coding-uncommitted-output-announced \
+  .coding-missing-blocked-completion.json \
+  .missing-blocked-completion-announced \
+  .blocked-completion-announced
+do
+  printf 'x\n' > "$FEATURE_QUARANTINE/$marker"
+done
+quarantine_stale_coding_artifacts "HOK-QUARANTINE" "$FEATURE_QUARANTINE"
+assert_file_missing "quarantine removes coding complete" "$FEATURE_QUARANTINE/.coding-complete"
+assert_file_missing "quarantine removes blocked completion" "$FEATURE_QUARANTINE/.coding-blocked-completion.json"
+assert_file_exists "quarantine writes audit" "$FEATURE_QUARANTINE/.coding-artifact-quarantine.json"
+assert_eq "quarantine renames gate artifacts" "2" "$(jq -r '.renamed | length' "$FEATURE_QUARANTINE/.coding-artifact-quarantine.json")"
+assert_eq "quarantine removes derived artifacts" "7" "$(jq -r '.removed | length' "$FEATURE_QUARANTINE/.coding-artifact-quarantine.json")"
+assert_eq "quarantine stale copies exist" "2" "$(find "$FEATURE_QUARANTINE" -name '*.stale.*' -type f | wc -l | tr -d ' ')"
+for marker in \
+  .coding-auto-advance.json \
+  .coding-advance-override.json \
+  .coding-uncommitted-output.json \
+  .coding-uncommitted-output-announced \
+  .coding-missing-blocked-completion.json \
+  .missing-blocked-completion-announced \
+  .blocked-completion-announced
+do
+  assert_file_missing "quarantine removes $marker" "$FEATURE_QUARANTINE/$marker"
+done
+rm -f "$FEATURE_QUARANTINE/.coding-artifact-quarantine.json"
+quarantine_stale_coding_artifacts "HOK-QUARANTINE" "$FEATURE_QUARANTINE"
+assert_file_missing "quarantine no-op writes no audit" "$FEATURE_QUARANTINE/.coding-artifact-quarantine.json"
 
 # Unknown issue
 init_state "$STATE_FILE"
