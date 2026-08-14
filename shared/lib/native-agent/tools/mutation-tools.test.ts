@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, describe, it } from 'node:test';
@@ -113,14 +113,103 @@ describe('native-agent mutation tools', () => {
 
     const result = await tool.execute('call-4', {
       path: 'features/demo/.coding-complete',
+      content: 'confidence=high\n',
     });
 
     const details = result.details as CreateMarkerDetails;
     assert.equal(details.ok, true);
     if (details.ok) {
       assert.equal(details.resolvedPath, 'features/demo/.coding-complete');
-      assert.equal(readFileSync(path.join(repo, details.resolvedPath), 'utf-8'), '');
+      assert.equal(readFileSync(path.join(repo, details.resolvedPath), 'utf-8'), 'confidence=high\n');
     }
+  });
+
+  it('normalizes YAML blocked-completion writes to canonical JSON', async () => {
+    const repo = createRepo('mutation-blocked-normalize-');
+    const tool = createWriteArtifactTool(repo);
+
+    const result = await tool.execute('call-blocked-yaml', {
+      path: 'features/demo/.coding-blocked-completion.json',
+      content: [
+        'stage: coding',
+        'implementationComplete: true',
+        'committed: true',
+        'commit: abc1234',
+        'passingChecks:',
+        '  - node --test shared/lib/example.test.ts',
+        'blockingChecks: [npm test]',
+        'blockingReason: baseline_tests_failing',
+        'evidence: Scoped tests passed.',
+        'recommendedAction: advance_to_review',
+        '',
+      ].join('\n'),
+    });
+
+    const details = result.details as WriteArtifactDetails;
+    assert.equal(details.ok, true);
+    assert.match(result.content[0]!.text, /normalized yaml payload/);
+    const saved = JSON.parse(readFileSync(path.join(repo, 'features/demo/.coding-blocked-completion.json'), 'utf-8'));
+    assert.equal(saved.stage, 'coding');
+    assert.deepEqual(saved.passingChecks, ['node --test shared/lib/example.test.ts']);
+  });
+
+  it('rejects empty .coding-complete markers with retry guidance', async () => {
+    const repo = createRepo('mutation-marker-invalid-complete-');
+    const tool = createCreateMarkerTool(repo);
+
+    const result = await tool.execute('call-empty-complete', {
+      path: 'features/demo/.coding-complete',
+    });
+
+    const details = result.details as CreateMarkerDetails;
+    assert.equal(details.ok, false);
+    if (!details.ok) {
+      assert.equal(details.error, 'completion_artifact_validation_failed');
+      assert.match(details.message, /confidence/);
+      assert.match(details.retryHint ?? '', /confidence=high/);
+    }
+    assert.equal(existsSync(path.join(repo, 'features/demo/.coding-complete')), false);
+  });
+
+  it('rejects blocked completion claims with no verification evidence', async () => {
+    const repo = createRepo('mutation-blocked-no-evidence-');
+    const tool = createWriteArtifactTool(repo);
+
+    const result = await tool.execute('call-no-evidence', {
+      path: 'features/demo/.coding-blocked-completion.json',
+      content: JSON.stringify({
+        stage: 'coding',
+        implementationComplete: true,
+        committed: true,
+        passingChecks: [],
+        blockingChecks: ['npm test'],
+        blockingReason: 'baseline_tests_failing',
+        evidence: 'Did not run checks.',
+        recommendedAction: 'advance_to_review',
+      }),
+    });
+
+    const details = result.details as WriteArtifactDetails;
+    assert.equal(details.ok, false);
+    if (!details.ok) {
+      assert.equal(details.error, 'no_verification_evidence');
+      assert.match(details.retryHint ?? '', /implementationComplete to false/);
+    }
+    assert.equal(existsSync(path.join(repo, 'features/demo/.coding-blocked-completion.json')), false);
+  });
+
+  it('does not apply completion validation to non-completion artifacts', async () => {
+    const repo = createRepo('mutation-non-completion-');
+    const tool = createWriteArtifactTool(repo);
+
+    const result = await tool.execute('call-non-completion', {
+      path: 'features/demo/.coding-result.json',
+      content: '{not-json',
+    });
+
+    const details = result.details as WriteArtifactDetails;
+    assert.equal(details.ok, true);
+    assert.equal(readFileSync(path.join(repo, 'features/demo/.coding-result.json'), 'utf-8'), '{not-json');
   });
 
   it('rejects markers outside the whole-file allowlist', async () => {
