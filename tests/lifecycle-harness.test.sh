@@ -194,6 +194,7 @@ harness_extract_real_functions() {
     write_coding_uncommitted_output_artifact \
     guard_coding_complete_handoff \
     blocked_completion_validate_for_advance \
+    archive_stale_coding_artifacts \
     complete_coding_advance \
     auto_advance_blocked_completion \
     emit_blocked_completion_attention \

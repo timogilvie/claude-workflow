@@ -4294,13 +4294,14 @@ check_routing_complete() {
 # ────────────────────────────────────────────────────────────────
 
 # Write a structured stage result JSON file.
-# Usage: write_stage_result <feature_dir> <stage> <status> [agent] [model] [notes] [artifacts_json]
+# Usage: write_stage_result <feature_dir> <stage> <status> [agent] [model] [notes] [artifacts_json] [started_at]
 # Stages: routing, planning, coding, review, ready
 # Statuses: running, awaiting_user, completed, aborted, failed
 # artifacts_json: optional JSON string for stage-specific artifacts (HOK-1192)
 write_stage_result() {
   local feature_dir="$1" stage="$2" status="$3"
   local agent="${4:-}" model="${5:-}" notes="${6:-}" artifacts_json="${7:-}"
+  local started_at_override="${8:-}"
   local result_file="$feature_dir/.${stage}-result.json" previous_status=""
 
   # Capture the transition before either writer replaces the result. A malformed
@@ -4316,6 +4317,7 @@ write_stage_result() {
     [[ -n "$model" ]] && cli_args+=(--model "$model")
     [[ -n "$notes" ]] && cli_args+=(--notes "$notes")
     [[ -n "$artifacts_json" ]] && cli_args+=(--artifacts "$artifacts_json")
+    [[ -n "$started_at_override" ]] && cli_args+=(--started-at "$started_at_override")
 
     if npx tsx "$TOOLS_DIR/stage-result-cli.ts" write "${cli_args[@]}" 2>/dev/null; then
       _write_stage_result_trace_event "$feature_dir" "$stage" "$status" "$agent" "$model" "$previous_status"
@@ -4330,11 +4332,11 @@ write_stage_result() {
 
   mkdir -p "$feature_dir"
 
-  local started_at="$now"
+  local started_at="${started_at_override:-$now}"
   if [[ -f "$result_file" ]]; then
     local prev_start
     prev_start=$(jq -r '.startedAt // empty' "$result_file" 2>/dev/null || echo "")
-    [[ -n "$prev_start" ]] && started_at="$prev_start"
+    [[ -z "$started_at_override" && -n "$prev_start" ]] && started_at="$prev_start"
   fi
 
   local finished_at="null"
@@ -4362,6 +4364,7 @@ EOF
 write_stage_result_with_history() {
   local feature_dir="$1" stage="$2" status="$3"
   local agent="${4:-}" model="${5:-}" notes="${6:-}" artifacts_json="${7:-}"
+  local started_at_override="${8:-}"
   local result_file="$feature_dir/.${stage}-result.json" previous_status=""
 
   if [[ -f "$result_file" ]]; then
@@ -4374,6 +4377,7 @@ write_stage_result_with_history() {
     [[ -n "$model" ]] && cli_args+=(--model "$model")
     [[ -n "$notes" ]] && cli_args+=(--notes "$notes")
     [[ -n "$artifacts_json" ]] && cli_args+=(--artifacts "$artifacts_json")
+    [[ -n "$started_at_override" ]] && cli_args+=(--started-at "$started_at_override")
 
     if npx tsx "$TOOLS_DIR/stage-result-cli.ts" write-with-history "${cli_args[@]}" 2>/dev/null; then
       _write_stage_result_trace_event "$feature_dir" "$stage" "$status" "$agent" "$model" "$previous_status"
@@ -4382,7 +4386,7 @@ write_stage_result_with_history() {
     log_warn "write_stage_result_with_history: TypeScript CLI failed, falling back to write_stage_result"
   fi
 
-  write_stage_result "$feature_dir" "$stage" "$status" "$agent" "$model" "$notes" "$artifacts_json"
+  write_stage_result "$feature_dir" "$stage" "$status" "$agent" "$model" "$notes" "$artifacts_json" "$started_at_override"
 }
 
 # Emit trace events when a stage result is written (HOK-2259).
@@ -5377,7 +5381,8 @@ blocked_completion_validate_for_advance() {
   local json_valid=false schema_valid=false stage_running=false stage_is_coding=false
   local implementation_complete=false committed=false recommended_action_matches=false
   local has_passing_checks=false has_blocking_checks=false commit_matches_head=true
-  local worktree_clean=true artifact_commit="" current_head="" decision_reason=""
+  local worktree_clean=true artifact_fresh=true artifact_commit="" current_head="" decision_reason=""
+  local started_at="" artifact_epoch="" started_epoch=""
   local manual_soft_failure=false
 
   slug="$(basename "$feature_dir")"
@@ -5456,6 +5461,22 @@ blocked_completion_validate_for_advance() {
     fi
   fi
 
+  if [[ -f "$artifact_path" && -f "$result_path" ]]; then
+    started_at="$(jq -r '.startedAt // empty' "$result_path" 2>/dev/null || echo "")"
+    artifact_epoch="$(portable_file_mtime_epoch "$artifact_path" 2>/dev/null || echo "")"
+    started_epoch="$(wavemill_iso8601_to_epoch "$started_at" 2>/dev/null || echo "")"
+    if [[ -n "$artifact_epoch" && "$artifact_epoch" != "0" && -n "$started_epoch" && "$started_epoch" != "0" ]]; then
+      if (( artifact_epoch < started_epoch )); then
+        artifact_fresh=false
+        if [[ "$mode" == "auto" ]]; then
+          decision_reason="${decision_reason:-blocked-completion artifact predates current coding attempt}"
+        else
+          manual_soft_failure=true
+        fi
+      fi
+    fi
+  fi
+
   if ! blocked_completion_worktree_clean_for_auto "$worktree" "$slug"; then
     worktree_clean=false
     if [[ "$mode" == "auto" ]]; then
@@ -5489,6 +5510,7 @@ blocked_completion_validate_for_advance() {
     --argjson hasBlockingChecks "$has_blocking_checks" \
     --argjson commitMatchesHead "$commit_matches_head" \
     --argjson worktreeClean "$worktree_clean" \
+    --argjson artifactFresh "$artifact_fresh" \
     --argjson eligible "$(
       if [[ "$decision_reason" == "eligible" || "$decision_reason" == "manual override accepted with soft guardrail failures" ]]; then
         printf 'true'
@@ -5516,7 +5538,8 @@ blocked_completion_validate_for_advance() {
         hasPassingChecks: $hasPassingChecks,
         hasBlockingChecks: $hasBlockingChecks,
         commitMatchesHead: $commitMatchesHead,
-        worktreeClean: $worktreeClean
+        worktreeClean: $worktreeClean,
+        artifactFresh: $artifactFresh
       }
     }'
 
@@ -5525,6 +5548,41 @@ blocked_completion_validate_for_advance() {
   fi
 
   return 1
+}
+
+archive_stale_coding_artifacts() {
+  local issue="$1" feature_dir="$2"
+  local candidates=(
+    ".coding-complete"
+    ".coding-blocked-completion.json"
+    ".blocked-completion-announced"
+    ".coding-uncommitted-output-announced"
+    ".coding-failure-handoff.json"
+  )
+  local present=() name archive_dir archived_names=()
+
+  for name in "${candidates[@]}"; do
+    [[ -e "$feature_dir/$name" ]] && present+=("$name")
+  done
+  ((${#present[@]} > 0)) || return 0
+
+  archive_dir="$feature_dir/.stale-artifacts/coding-$(date -u +%Y%m%dT%H%M%SZ)"
+  if ! mkdir -p "$archive_dir" 2>/dev/null; then
+    log_warn "$issue → Could not create stale coding artifact archive, continuing launch"
+    return 0
+  fi
+
+  for name in "${present[@]}"; do
+    if mv "$feature_dir/$name" "$archive_dir/$name" 2>/dev/null; then
+      archived_names+=("$name")
+    fi
+  done
+
+  if ((${#archived_names[@]} > 0)); then
+    local IFS=', '
+    log "status" "$issue → archived stale coding artifacts from a previous attempt: ${archived_names[*]}"
+  fi
+  return 0
 }
 
 complete_coding_advance() {
@@ -12939,8 +12997,12 @@ monitor_issue_state() {
               title=$(echo "$issue_json" | jq -r '.title // "Task"' 2>/dev/null || echo "Task")
             fi
 
+            archive_stale_coding_artifacts "$ISSUE" "$FEATURE_DIR"
+
             # Record coding stage as running (HOK-1177)
-            write_stage_result "$FEATURE_DIR" "coding" "running" "$coder_agent" "$coder_launch_model"
+            local coding_started_at
+            coding_started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+            write_stage_result "$FEATURE_DIR" "coding" "running" "$coder_agent" "$coder_launch_model" "" "" "$coding_started_at"
 
             launch_coding_phase "$ISSUE" "$SLUG" "$title" "$WT_DIR" "$BRANCH" "$BASE_BRANCH" "$coder_launch_model" "$coder_agent" "$code_depth"
             local launch_rc=$?
