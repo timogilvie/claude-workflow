@@ -30,6 +30,15 @@ function test(name: string, fn: () => void) {
   }
 }
 
+/**
+ * A recency window wide enough that any real registry release date stays
+ * inside it. Used by tests whose subject is "recency decides", not "the window
+ * boundary" — the boundary itself is covered in router-exploration tests.
+ * Without this they quietly expire once the newest registry model ages past
+ * DEFAULT_BOOST_WINDOW_DAYS.
+ */
+const RECENCY_WINDOW_SPANNING_ANY_RELEASE_DAYS = 36_500;
+
 function makeRepo(config: Record<string, unknown> = {}): { repoDir: string; cleanup: () => void } {
   const repoDir = mkdtempSync(join(tmpdir(), 'challenge-scheduler-test-'));
   mkdirSync(join(repoDir, '.wavemill', 'evals'), { recursive: true });
@@ -497,7 +506,24 @@ test('low-data-stage recommendation picks the least-tested model for that stage'
 
 
 test('new-model recommendation uses the global registry release metadata', () => {
-  const { repoDir, cleanup } = makeRepo();
+  // Pin the recency window rather than inheriting DEFAULT_BOOST_WINDOW_DAYS.
+  //
+  // This assertion depends on claude-sonnet-5 still being inside the window,
+  // and the registry dates it 2026-06-30. Against the 45-day default that made
+  // the test expire on 2026-08-14 — from that day on, no model in the pool is
+  // recent, the recency tiebreak stops firing, and gpt-5.4 wins on record
+  // counts instead. It broke on a date, not on a change.
+  //
+  // The point here is that the scheduler reads releasedAt from the *global*
+  // registry, so the registry is deliberately not stubbed; only the window is
+  // fixed, which keeps the assertion about recency-beats-record-count and
+  // makes it independent of how long ago the release was.
+  const { repoDir, cleanup } = makeRepo({
+    router: {
+      enabled: true,
+      exploration: { newModelBoost: { windowDays: RECENCY_WINDOW_SPANNING_ANY_RELEASE_DAYS } },
+    },
+  });
   try {
     const result = evaluateChallenge({
       routingDecision: makeDecision({ confidence: 0.95 }),
@@ -529,7 +555,17 @@ test('new-model recommendation uses the global registry release metadata', () =>
 });
 
 test('exploration recommendations prefer non-incumbent families over recency', () => {
-  const { repoDir, cleanup } = makeRepo();
+  // Pin the window for the same reason as the test above, but note the failure
+  // mode here is the inverse: this one kept passing after claude-sonnet-5 aged
+  // out of the default window, because with no recent model there was no
+  // recency left for launch-priority to beat. It asserted the right answer for
+  // the wrong reason. Pinning restores the contest the test describes.
+  const { repoDir, cleanup } = makeRepo({
+    router: {
+      enabled: true,
+      exploration: { newModelBoost: { windowDays: RECENCY_WINDOW_SPANNING_ANY_RELEASE_DAYS } },
+    },
+  });
   try {
     const result = evaluateChallenge({
       routingDecision: makeDecision({ confidence: 0.95 }),
