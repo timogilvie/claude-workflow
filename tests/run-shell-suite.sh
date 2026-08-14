@@ -26,6 +26,7 @@ TESTS=(
   routing-complete-writes.test.sh
   apply-expanded-route.test.sh
   challenge-intent-roundtrip.test.sh
+  challenge-varied-model-abort.test.sh
   expansion-handshake.test.sh
   config-version-prompt.test.sh
   monitor-ready-transition.test.sh
