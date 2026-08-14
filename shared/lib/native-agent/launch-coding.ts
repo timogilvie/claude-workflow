@@ -317,6 +317,8 @@ function archiveStaleCodingArtifacts(featureDir: string): string[] {
   const candidates = [
     '.coding-complete',
     '.coding-blocked-completion.json',
+    '.blocked-completion-announced',
+    '.coding-uncommitted-output-announced',
     '.coding-failure-handoff.json',
   ];
   const present = candidates.filter((name) => existsSync(join(featureDir, name)));
