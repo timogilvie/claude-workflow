@@ -110,6 +110,14 @@ export function appendEvalRecord(
   record: EvalRecord,
   options?: PersistenceOptions,
 ): void {
+  // NOTE: deliberately does *not* thread options.repoDir into resolveEvalsDir.
+  // A tool invoked from another checkout (e.g. eval-workflow run from the
+  // wavemill repo with --repo-dir pointing elsewhere) does write its record
+  // into the wrong repo, but fixing it here alone would split reads from
+  // writes: readEvalRecords/hasChallengeEvalRecord* still resolve via
+  // resolveEvalsFile(options?.dir) with no repoDir, and assertSafePath still
+  // validates against process.cwd(). Threading repoDir through all three
+  // together is the actual fix.
   const { dir: evalsDir, fromConfig } = resolveEvalsDir(options?.dir);
   if (fromConfig) assertSafePath(evalsDir);
 

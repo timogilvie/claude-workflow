@@ -721,6 +721,7 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
           worktreePath: ctx.worktreePath,
           branchName,
           repoDir,
+          issueId: ctx.issueId,
           pricingTable,
           agentType: ctx.agentType,
         });

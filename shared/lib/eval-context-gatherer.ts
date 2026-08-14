@@ -229,6 +229,61 @@ export function gatherEvalContext(params: GatherContextParams): EvalContext {
  * @param repoDir - Repository directory
  * @returns Detected context (issueId, prNumber, branch, prUrl)
  */
+/**
+ * Fill in context an explicit invocation did not supply.
+ *
+ * `autoDetectContext` is skipped entirely when a caller passes an issue or PR,
+ * which used to leave `branch`, `prUrl`, `worktree` and `challengePairId`
+ * empty — so `--issue X --pr N` produced a *worse* record than auto-detection,
+ * missing the PR link and challenge identity that eligibility depends on.
+ *
+ * Everything here is best-effort: unresolved fields come back empty.
+ */
+export function resolveContextGaps(input: {
+  repoDir: string;
+  issueId?: string;
+  prNumber?: string;
+}): { branch: string; prUrl: string; worktree: string; challengePairId: string; slug: string } {
+  const out = { branch: '', prUrl: '', worktree: '', challengePairId: '', slug: '' };
+
+  // Probe both layouts, as challenge-execution-contract.ts does — a relocated
+  // STATE_DIR otherwise makes every lookup here miss.
+  const stateFiles = [
+    path.join(input.repoDir, '.wavemill', 'workflow-state.json'),
+    path.join(input.repoDir, '.wavemill', 'state', 'workflow-state.json'),
+  ];
+  for (const stateFile of input.issueId ? stateFiles : []) {
+    if (!existsSync(stateFile)) continue;
+    try {
+      const task = (JSON.parse(readFileSync(stateFile, 'utf-8')).tasks || {})[input.issueId];
+      if (!task) continue;
+      out.branch = task.branch || '';
+      out.worktree = task.worktree || '';
+      out.challengePairId = task.challengePairId || '';
+      out.slug = task.slug || '';
+      break;
+    } catch {
+      // Best-effort
+    }
+  }
+
+  if (input.prNumber && (!out.prUrl || !out.branch)) {
+    try {
+      const prJson = execShellCommand(
+        `gh pr view ${escapeShellArg(input.prNumber)} --json url,headRefName 2>/dev/null || echo "{}"`,
+        { encoding: 'utf-8', cwd: input.repoDir }
+      ).trim();
+      const prData = JSON.parse(prJson);
+      if (prData.url) out.prUrl = prData.url;
+      if (!out.branch && prData.headRefName) out.branch = prData.headRefName;
+    } catch {
+      // Best-effort
+    }
+  }
+
+  return out;
+}
+
 export function autoDetectContext(repoDir: string): {
   issueId: string;
   prNumber: string;
