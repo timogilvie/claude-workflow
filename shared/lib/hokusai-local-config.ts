@@ -4,7 +4,29 @@ import { clearConfigCache } from './config.ts';
 import { deepMergeConfig } from './config-sync.ts';
 import { errorMessage } from './error-utils.ts';
 
-export const HOKUSAI_CONTRIBUTION_ENDPOINT = 'https://api.hokus.ai/api/v1/contributions';
+/**
+ * Default router model the contribution API is scoped to. Matches
+ * `DEFAULT_ROUTER_MODEL_ID` in the Hokusai SDK (`packages/core/src/client.ts`).
+ */
+export const HOKUSAI_DEFAULT_MODEL_ID = '30';
+
+export const HOKUSAI_API_BASE_URL = 'https://api.hokus.ai';
+
+/**
+ * Build the canonical contributions ingest path for a model.
+ *
+ * Mirrors the SDK's `buildModelContributionsPath` and the data-pipeline route
+ * `POST /api/v1/models/{model_id}/contributions`. The endpoint is
+ * **model-scoped**: an unscoped `/api/v1/contributions` is not served and
+ * returns HTTP 404, which the queue classifies as a permanent failure and
+ * dead-letters — so every contribution silently failed to upload while the
+ * default omitted `/models/<id>`.
+ */
+export function buildHokusaiContributionEndpoint(modelId: string = HOKUSAI_DEFAULT_MODEL_ID): string {
+  return `${HOKUSAI_API_BASE_URL}/api/v1/models/${modelId}/contributions`;
+}
+
+export const HOKUSAI_CONTRIBUTION_ENDPOINT = buildHokusaiContributionEndpoint();
 export const HOKUSAI_ENDPOINT_TOKEN_ENV = 'HOKUSAI_API_TOKEN';
 export const HOKUSAI_BATCH_SIZE = 50;
 

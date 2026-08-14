@@ -3455,6 +3455,27 @@ dispatch_task_and_persist() {
   return 0
 }
 
+# A challenge intent is sealed once any stage it describes has produced a
+# result. After that point it is evidence about a run that already happened,
+# not a routing decision that can still be revised.
+# Usage: challenge_intent_is_sealed <feature_dir>
+challenge_intent_is_sealed() {
+  local feature_dir="$1" stage status
+  [[ -n "$feature_dir" ]] || return 1
+
+  for stage in planning coding review; do
+    status=$(read_stage_status "$feature_dir" "$stage" 2>/dev/null || true)
+    # `running` is deliberately included: a stage that has started is already
+    # executing against this intent.
+    case "$status" in
+      running|awaiting_user|completed|failed|aborted) return 0 ;;
+    esac
+  done
+
+  [[ -f "$feature_dir/.coding-complete" ]] && return 0
+  return 1
+}
+
 # Single writer for the challenge intent, on every surface it is read from.
 #
 # Accepts one or more feature directories so both arms of a pair get an
@@ -3468,15 +3489,36 @@ persist_challenge_execution_intent() {
   [[ -n "$issue" && -n "$intent_json" ]] || return 0
   echo "$intent_json" | jq -e '.schemaVersion == 1 and (.pairId // "") != "" and (.issueId // "") != ""' >/dev/null 2>&1 || return 0
 
-  local phase=""
-  phase=$(read_state_value "" --arg i "$issue" '.tasks[$i].phase // empty' 2>/dev/null || true)
-
   local dir intent_file
   for dir in "$feature_dir" "${extra_feature_dirs[@]}"; do
     [[ -n "$dir" && -d "$dir" ]] || continue
     intent_file="$dir/.challenge-intent.json"
-    if [[ ! -f "$intent_file" || "$phase" != "coding" ]]; then
-      printf '%s\n' "$intent_json" | jq -S . > "$intent_file" 2>/dev/null || true
+
+    # The intent is the pre-registered hypothesis: which stage is varied and
+    # with which model. Once any stage it describes has produced a result it
+    # must never be rewritten, or the record ends up describing a challenge
+    # that never ran.
+    #
+    # This was previously gated on the task being in the `coding` phase, which
+    # left it writable during planning and after review. A re-approval during
+    # planning could therefore overwrite an intent whose coding phase had
+    # already completed hours earlier — see HOK-2767, where a pair that
+    # actually ran an implementation-stage challenge was relabelled as a
+    # plan-stage challenge against a model that never executed.
+    if [[ -f "$intent_file" ]] && challenge_intent_is_sealed "$dir"; then
+      continue
+    fi
+
+    printf '%s\n' "$intent_json" | jq -S . > "$intent_file" 2>/dev/null || true
+
+    # Seed the write-once selection record that readers prefer over the mutable
+    # file above. Only the challenger arm used to receive one, so when the
+    # mutable copy was later overwritten the two sides of a pair resolved
+    # different intents and disagreed about which stage was varied. Reached
+    # only while the intent is still unsealed, so it always captures the
+    # pre-execution selection.
+    if [[ ! -f "$dir/challenge-intent.json" ]]; then
+      printf '%s\n' "$intent_json" | jq -S . > "$dir/challenge-intent.json" 2>/dev/null || true
     fi
   done
 

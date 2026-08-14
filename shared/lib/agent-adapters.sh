@@ -1460,10 +1460,8 @@ Apply minimal scope. A focused small PR is better than a large incomplete one:
 - Limit changes to at most 5 files. If more are needed, implement only the critical path and document deferrals.
 - Commit after every 1-2 file changes; do not batch large edit sets.
 - Run tests/lint after every commit to catch regressions early.
-- When implementation is complete, record your self-confidence in the completion marker:
-  echo 'confidence=high' > \"$feature_dir/.coding-complete\"
-  echo 'confidence=low' > \"$feature_dir/.coding-complete\"
-- Use the low-confidence marker if correctness is uncertain even after validation."
+- Scope is reduced here, so the confidence you record in the completion marker matters more than usual:
+  prefer 'confidence=low' whenever correctness is uncertain even after validation, so review scrutinizes it."
       ;;
   esac
 
