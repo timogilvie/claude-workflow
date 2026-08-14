@@ -77,6 +77,19 @@ export interface SessionUsageResult {
 export interface SessionScanOptions {
   worktreePath: string;
   branchName: string;
+  /**
+   * Main repository directory. Native transcripts are written under the *repo*
+   * (`makeTranscriptPath` uses `repoDir`), not the task worktree, so scanning
+   * only `worktreePath` finds nothing for any mill task and the run's cost is
+   * silently reported as unavailable.
+   */
+  repoDir?: string;
+  /**
+   * Issue being evaluated. Native transcripts for every task share one
+   * directory (`<repo>/.wavemill/runs/<session>/native-sessions/`), so without
+   * this every task's usage is summed into whichever task is being costed.
+   */
+  issueId?: string;
 }
 
 /** A session adapter knows how to scan an agent's session files. */
@@ -504,28 +517,68 @@ function readFirstLineBounded(filePath: string, maxBytes: number): string | null
  * for discovery. Assistant message usage is aggregated per model, preferring
  * the event's model and falling back to the session_started model when needed.
  */
+/**
+ * Whether a native transcript belongs to the task being costed.
+ *
+ * Transcripts for every task share one directory, so without this each task's
+ * cost absorbs every other task's tokens. Naming is not uniform across stages:
+ * coding and planning use `<stage>-<ISSUE>.jsonl`, review uses
+ * `<session>-review-<branch>.jsonl`, and expansion uses
+ * `expansion-<sessionId>.jsonl` with no task identity at all.
+ *
+ * So this excludes transcripts that demonstrably belong to a *different* task
+ * rather than including only those that match a single naming convention —
+ * filtering on the issue alone would silently drop the whole review phase from
+ * a native run's cost. Unattributable files are kept, matching the previous
+ * repo-wide behaviour.
+ */
+export function matchesIssue(fileName: string, issueId?: string, branchName?: string): boolean {
+  if (!issueId && !branchName) return true;
+  const sanitize = (value: string) => value.replace(/[^A-Za-z0-9._-]+/g, '-');
+  const base = fileName.replace(/\.jsonl$/, '');
+
+  if (issueId && base.endsWith(`-${sanitize(issueId)}`)) return true;
+  if (branchName && base.endsWith(`-${sanitize(branchName)}`)) return true;
+
+  // Names another issue (`coding-HOK-537_c`) — belongs to a different task.
+  if (issueId && /-[A-Za-z]+-\d+(_c)?$/.test(base)) return false;
+  // Names another branch (`gtm-backend-review-task-some-other-slug`).
+  if (branchName && /-(task|feature|bug|bugfix)-/.test(base)) return false;
+
+  return true;
+}
+
 export class NativeSessionAdapter implements SessionAdapter {
   scan(opts: SessionScanOptions): SessionUsageResult | null {
-    const runsDir = join(resolve(opts.worktreePath), '.wavemill', 'runs');
-    if (!existsSync(runsDir)) {
+    // Check the repo root as well as the worktree: mill tasks run in a
+    // worktree but their transcripts are written under the main repo.
+    const runsDirs = [
+      join(resolve(opts.worktreePath), '.wavemill', 'runs'),
+      ...(opts.repoDir ? [join(resolve(opts.repoDir), '.wavemill', 'runs')] : []),
+    ].filter((dir, index, all) => all.indexOf(dir) === index && existsSync(dir));
+
+    if (runsDirs.length === 0) {
       return null;
     }
 
     let sessionFiles: string[] = [];
     try {
-      for (const runEntry of readdirSync(runsDir, { withFileTypes: true })) {
-        if (!runEntry.isDirectory()) {
-          continue;
+      for (const runsDir of runsDirs) {
+        for (const runEntry of readdirSync(runsDir, { withFileTypes: true })) {
+          if (!runEntry.isDirectory()) {
+            continue;
+          }
+          const nativeSessionsDir = join(runsDir, runEntry.name, 'native-sessions');
+          if (!existsSync(nativeSessionsDir)) {
+            continue;
+          }
+          sessionFiles.push(
+            ...readdirSync(nativeSessionsDir)
+              .filter((fileName) => fileName.endsWith('.jsonl'))
+              .filter((fileName) => matchesIssue(fileName, opts.issueId, opts.branchName))
+              .map((fileName) => join(nativeSessionsDir, fileName)),
+          );
         }
-        const nativeSessionsDir = join(runsDir, runEntry.name, 'native-sessions');
-        if (!existsSync(nativeSessionsDir)) {
-          continue;
-        }
-        sessionFiles.push(
-          ...readdirSync(nativeSessionsDir)
-            .filter((fileName) => fileName.endsWith('.jsonl'))
-            .map((fileName) => join(nativeSessionsDir, fileName)),
-        );
       }
     } catch {
       return null;
@@ -689,13 +742,22 @@ export class NativeSessionAdapter implements SessionAdapter {
  */
 export function getNativeProviderMetadata(
   worktreePath: string,
+  repoDir?: string,
 ): { provider: string; endpoint?: string } | null {
-  const runsDir = join(resolve(worktreePath), '.wavemill', 'runs');
-  if (!existsSync(runsDir)) {
+  // Same worktree-vs-repo mismatch NativeSessionAdapter.scan has: transcripts
+  // are written under the repo, so a worktree-only lookup returns null for
+  // every mill task and the eval record loses its provider metadata.
+  const runsDirs = [
+    join(resolve(worktreePath), '.wavemill', 'runs'),
+    ...(repoDir ? [join(resolve(repoDir), '.wavemill', 'runs')] : []),
+  ].filter((dir, index, all) => all.indexOf(dir) === index && existsSync(dir));
+
+  if (runsDirs.length === 0) {
     return null;
   }
 
   try {
+    for (const runsDir of runsDirs) {
     for (const runEntry of readdirSync(runsDir, { withFileTypes: true })) {
       if (!runEntry.isDirectory()) {
         continue;
@@ -724,6 +786,7 @@ export function getNativeProviderMetadata(
           continue;
         }
       }
+    }
     }
   } catch {
     return null;

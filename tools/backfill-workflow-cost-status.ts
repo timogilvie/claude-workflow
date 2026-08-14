@@ -50,6 +50,7 @@ function attemptCostRecovery(
       worktreePath,
       branchName,
       repoDir,
+      issueId: record.issueId,
       pricingTable,
       agentType: record.agentType,
     });
