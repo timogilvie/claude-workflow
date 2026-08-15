@@ -832,8 +832,8 @@ else
 
   if grep -qE '^validate_planning_phase_output\(\) \{' <<< "$HEREDOC_CONTENT" \
     && grep -qE '^handle_planning_overreach_rejection\(\) \{' <<< "$HEREDOC_CONTENT" \
-    && grep -Fq '.wavemill/*) ;;' <<< "$HEREDOC_CONTENT" \
-    && grep -Fq '.claude/settings.local.json) ;;' <<< "$HEREDOC_CONTENT" \
+    && grep -qE '^wavemill_owned_runtime_path\(\) \{' <<< "$HEREDOC_CONTENT" \
+    && grep -Fq 'wavemill_owned_runtime_path "$changed_file" "$slug"' <<< "$HEREDOC_CONTENT" \
     && grep -Fq 'validate_planning_phase_output "$WT_DIR"' <<< "$MONITOR_ISSUE_BLOCK" \
     && grep -Fq 'handle_planning_overreach_rejection "$ISSUE" "$FEATURE_DIR" "$WIN" "$current_agent"' <<< "$MONITOR_ISSUE_BLOCK" \
     && grep -Fq '.planning-rejected.json' <<< "$HEREDOC_CONTENT" \

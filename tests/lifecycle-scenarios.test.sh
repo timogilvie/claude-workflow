@@ -98,6 +98,8 @@ trap 'rm -rf "$TEST_TMP"' EXIT
 MONITOR_FUNC_FILE="$TEST_TMP/lifecycle-controller-functions.sh"
 for fn in \
   approve_plan \
+  planning_phase_dirty_paths \
+  capture_planning_dirty_baseline \
   validate_planning_phase_output \
   planning_rejection_files_summary \
   write_planning_rejection_artifact \
@@ -137,6 +139,8 @@ for fn in \
   recover_misplaced_coding_complete_marker \
   guard_coding_complete_handoff \
   clear_coding_uncommitted_output_attention \
+  wavemill_owned_feature_artifact_path \
+  wavemill_owned_runtime_path \
   coding_output_dirty_paths \
   blocked_completion_auto_allowed_dirty_path \
   coding_compare_commit_counts \

@@ -98,6 +98,8 @@ for fn in \
   normalize_prompt_command_reply \
   blocked_completion_current_head \
   blocked_completion_commit_matches_head \
+  wavemill_owned_feature_artifact_path \
+  wavemill_owned_runtime_path \
   blocked_completion_auto_allowed_dirty_path \
   coding_output_dirty_paths \
   blocked_completion_worktree_clean_for_auto \
@@ -117,6 +119,19 @@ do
   printf '%s\n\n' "$extracted" >> "$FUNCS_FILE"
 done
 source "$FUNCS_FILE"
+
+blocked_completion_auto_allowed_dirty_path "features/test-slug/challenge-intent.json" "test-slug" || {
+  echo "FAIL: challenge-intent.json should be auto-allowed"
+  exit 1
+}
+blocked_completion_auto_allowed_dirty_path "prompt-registry.jsonl" "test-slug" || {
+  echo "FAIL: prompt-registry.jsonl should be auto-allowed"
+  exit 1
+}
+if blocked_completion_auto_allowed_dirty_path "src/x.ts" "test-slug"; then
+  echo "FAIL: source path should not be auto-allowed"
+  exit 1
+fi
 
 resolve_stage_result_model() {
   local _feature_dir="$1" _stage="$2" fallback="$3"

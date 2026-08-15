@@ -161,6 +161,8 @@ harness_extract_real_functions() {
     ready_stage_pending_verdict \
     log_ready_stale_merge_lane_once \
     monitor_issue_state \
+    planning_phase_dirty_paths \
+    capture_planning_dirty_baseline \
     validate_planning_phase_output \
     planning_rejection_files_summary \
     write_planning_rejection_artifact \
@@ -184,6 +186,7 @@ harness_extract_real_functions() {
     coding_output_dirty_paths \
     blocked_completion_commit_matches_head \
     wavemill_owned_feature_artifact_path \
+    wavemill_owned_runtime_path \
     blocked_completion_auto_allowed_dirty_path \
     blocked_completion_worktree_clean_for_auto \
     coding_uncommitted_output_announce_marker \
