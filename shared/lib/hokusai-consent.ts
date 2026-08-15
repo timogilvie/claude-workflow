@@ -65,6 +65,7 @@ export interface ContributionStatus {
   uploadEndpoint: 'configured' | 'missing';
   mode: ContributionMode;
   pendingCount: number;
+  deadLetterCount: number;
   warning?: string;
 }
 
@@ -281,17 +282,34 @@ export function getContributionStatus(
   }
 
   const pendingCount = queueStatus.pendingCount;
-  let warning: string | undefined;
+  const deadLetterCount = queueStatus.deadLetterCount;
+  const warnings: string[] = [];
   if (pendingCount > 0 && mode === 'export-only') {
-    warning =
+    warnings.push(
       `${pendingCount} pending row${pendingCount === 1 ? '' : 's'} cannot upload because` +
       ` hokusai.contributions.endpoint is not configured.` +
-      ` Add it to .wavemill-config.local.json or run \`wavemill hokusai configure\`.`;
+      ` Add it to .wavemill-config.local.json or run \`wavemill hokusai configure\`.`,
+    );
   } else if (pendingCount > 0 && mode === 'disabled') {
-    warning = `${pendingCount} pending row${pendingCount === 1 ? '' : 's'} are queued but contributions are disabled.`;
+    warnings.push(`${pendingCount} pending row${pendingCount === 1 ? '' : 's'} are queued but contributions are disabled.`);
   }
 
-  return { consent, queue, uploadEndpoint, mode, pendingCount, warning };
+  if (deadLetterCount > 0) {
+    warnings.push(
+      `${deadLetterCount} dead-lettered row${deadLetterCount === 1 ? '' : 's'} will not be retried.` +
+      ` Inspect with \`hokusai-manage requeue --dead-letter --dry-run\` and requeue after fixing the cause.`,
+    );
+  }
+
+  return {
+    consent,
+    queue,
+    uploadEndpoint,
+    mode,
+    pendingCount,
+    deadLetterCount,
+    warning: warnings.length > 0 ? warnings.join(' ') : undefined,
+  };
 }
 
 export function getStatusDisplay(options: { configDir?: string; repoDir?: string } = {}): string {
