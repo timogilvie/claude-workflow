@@ -204,6 +204,11 @@ harness_extract_real_functions() {
     native_launch_failure_kind \
     write_native_launch_failure_artifact \
     emit_native_launch_failure_attention \
+    challenge_varied_stage_model \
+    challenge_result_stage_for_launch \
+    challenge_stage_for_launch_env \
+    challenge_abort_for_unresolvable_varied_model \
+    challenge_guard_varied_model_resolvable \
     coding_missing_blocked_completion_announce_marker \
     _coding_terminal_blocked_completion_detected \
     emit_terminal_blocked_completion_attention \
