@@ -6312,13 +6312,13 @@ native_terminal_failure_kind() {
 native_terminal_failure_next_action() {
   case "${1:-}" in
     context-window-exceeded)
-      printf 'relaunch with compressed context; the prompt exceeded the model context window\n' ;;
+      printf 'relaunch with compressed context. The prompt exceeded the model context window\n' ;;
     invalid-model-id)
-      printf 'provider rejected the model ID; verify catalog alias resolution before relaunching\n' ;;
+      printf 'check catalog alias resolution, then relaunch. The provider rejected the model ID\n' ;;
     provider-rate-limited)
-      printf 'provider rate limited the request; relaunch after the limit window\n' ;;
+      printf 'relaunch after the rate limit window\n' ;;
     provider-quota-exhausted)
-      printf 'provider quota exhausted; restore credit before relaunching\n' ;;
+      printf 'add provider credit, then relaunch. The quota is exhausted\n' ;;
     *)
       printf 'inspect the native provider error, then relaunch the phase\n' ;;
   esac
