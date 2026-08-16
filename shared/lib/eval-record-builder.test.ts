@@ -1212,6 +1212,34 @@ describe('eval-record-builder', () => {
         message: 'Reward not paid: record has no judge evaluation result.',
       });
     });
+
+    it('clears stale validation-derived reason when derivation returns null', () => {
+      const record: EvalRecord = {
+        ...baseRecord,
+        nonRewardReason: {
+          code: 'EVAL_MISSING_TASK_DESCRIPTOR',
+          message: 'Task descriptor missing.',
+        },
+      };
+      attachNonRewardReason(record, null);
+      expect(record.nonRewardReason).toBeUndefined();
+    });
+
+    it('preserves out-of-band challenge quarantine reason even when derivation returns null', () => {
+      const record: EvalRecord = {
+        ...baseRecord,
+        invalidChallenge: true,
+        nonRewardReason: {
+          code: 'INVALID_CHALLENGE',
+          message: 'Challenge execution diverged from intent.',
+        },
+      };
+      attachNonRewardReason(record, null);
+      expect(record.nonRewardReason).toEqual({
+        code: 'INVALID_CHALLENGE',
+        message: 'Challenge execution diverged from intent.',
+      });
+    });
   });
 
   describe('attachChallengeRouteContext (HOK-1515)', () => {

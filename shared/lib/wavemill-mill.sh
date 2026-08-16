@@ -3489,7 +3489,7 @@ persist_challenge_execution_intent() {
   [[ -n "$issue" && -n "$intent_json" ]] || return 0
   echo "$intent_json" | jq -e '.schemaVersion == 1 and (.pairId // "") != "" and (.issueId // "") != ""' >/dev/null 2>&1 || return 0
 
-  local dir intent_file
+  local dir intent_file sealed=0
   for dir in "$feature_dir" "${extra_feature_dirs[@]}"; do
     [[ -n "$dir" && -d "$dir" ]] || continue
     intent_file="$dir/.challenge-intent.json"
@@ -3506,6 +3506,7 @@ persist_challenge_execution_intent() {
     # actually ran an implementation-stage challenge was relabelled as a
     # plan-stage challenge against a model that never executed.
     if [[ -f "$intent_file" ]] && challenge_intent_is_sealed "$dir"; then
+      sealed=1
       continue
     fi
 
@@ -3521,6 +3522,45 @@ persist_challenge_execution_intent() {
       printf '%s\n' "$intent_json" | jq -S . > "$dir/challenge-intent.json" 2>/dev/null || true
     fi
   done
+
+  # When sealed, do not promote the re-derived intent into state.
+  # Instead re-promote the sealed on-disk intent so state converges back to truth.
+  if [[ "$sealed" -eq 1 ]]; then
+    log_warn "$issue: challenge intent is sealed; ignoring re-derived intent"
+    local sealed_intent=""
+    # Prefer the immutable non-dot copy, fall back to the dot-prefixed version
+    if [[ -f "$feature_dir/challenge-intent.json" ]]; then
+      sealed_intent="$(jq -c . "$feature_dir/challenge-intent.json" 2>/dev/null || true)"
+    elif [[ -f "$feature_dir/.challenge-intent.json" ]]; then
+      sealed_intent="$(jq -c . "$feature_dir/.challenge-intent.json" 2>/dev/null || true)"
+    fi
+    if [[ -n "$sealed_intent" ]]; then
+      # Re-promote the sealed intent to state, preserving fallbackReason
+      state_mutate "$STATE_FILE" \
+        '($sealed_intent.selectedStage // $sealed_intent.challengeStage // "") as $stage
+         | ($sealed_intent.primary // {}) as $p
+         | ($sealed_intent.challenger // {}) as $c
+         | .tasks[$issue].challengeExecutionIntent = $sealed_intent
+         | (if $stage != "" then .tasks[$issue].challengeStage = $stage else . end)
+         | (if ($p.expectedStageModel // "") != ""
+            then .tasks[$issue].challengeVariedModel = $p.expectedStageModel
+                 | .tasks[$issue].challengeVariedAgent = ($p.expectedStageAgent // "")
+            else . end)
+         | if $challenger != "" and (.tasks[$challenger] != null)
+           then .tasks[$challenger].challengeExecutionIntent = $sealed_intent
+                | (if $stage != "" then .tasks[$challenger].challengeStage = $stage else . end)
+                | (if ($c.expectedStageModel // "") != ""
+                   then .tasks[$challenger].challengeVariedModel = $c.expectedStageModel
+                        | .tasks[$challenger].challengeVariedAgent = ($c.expectedStageAgent // "")
+                   else . end)
+           else .
+           end' \
+        --arg issue "$issue" \
+        --arg challenger "$challenger_key" \
+        --argjson sealed_intent "$sealed_intent" || true
+    fi
+    return 0
+  fi
 
   # Promote each side's varied stage model into first-class state fields.
   #
@@ -3583,6 +3623,80 @@ challenge_varied_stage_model() {
   varied=$(get_task_meta "$issue" "challengeVariedModel" 2>/dev/null || true)
   [[ -n "$varied" ]] || return 0
   printf '%s' "$varied"
+}
+
+# Abort a challenge when the varied model cannot be launched.
+# This prevents silent fallback to a different model which would invalidate the experiment.
+# Usage: challenge_abort_varied_model <issue> <feature_dir> <stage> <expected> <actual> <win>
+challenge_abort_varied_model() {
+  local issue="$1" feature_dir="$2" stage="$3" expected="$4" actual="$5" win="$6"
+  [[ -n "$issue" ]] || return 0
+
+  local pair
+  pair=$(get_task_meta "$issue" "challengePairId" 2>/dev/null || true)
+
+  local details="expected=$expected actual=$actual stage=$stage"
+  if [[ -n "$pair" ]]; then
+    mark_challenge_invalid "$pair" "challenge_varied_model_unresolvable" "$details"
+  else
+    # No pair id - mark just this task
+    state_mutate "$STATE_FILE" '
+      .tasks[$issue].challengeCompared = false |
+      .tasks[$issue].comparisonState = "invalid_challenge" |
+      .tasks[$issue].invalidChallengeReason = "challenge_varied_model_unresolvable" |
+      .tasks[$issue].invalidChallengeDetails = $details |
+      .tasks[$issue].challengeRepairAction = ("wavemill mill challenge repair " + $issue)
+    ' --arg issue "$issue" --arg details "$details" >/dev/null 2>&1 || true
+  fi
+
+  local stage_name="$stage"
+  [[ "$stage" == "plan" ]] && stage_name="planning"
+  [[ "$stage" == "implementation" ]] && stage_name="coding"
+
+  write_stage_result "$feature_dir" "$stage_name" "failed" "" "$expected" \
+    "Challenge varied model could not be launched; challenge aborted rather than substituted."
+
+  # Park the task in needs-user state
+  set_task_phase "$issue" "needs-user"
+  set_window_attention_state "$win" "needs-user"
+
+  log_error "$issue: CHALLENGE_ABORT_VARIED_MODEL pair=$pair stage=$stage expected=$expected actual=$actual"
+}
+
+# Guard that aborts a challenge if the varied model would be silently replaced.
+# Returns 0 if launch should proceed, 1 if challenge was aborted.
+# Usage: challenge_guard_varied_stage_launch <issue> <feature_dir> <stage> <final_model> <win>
+challenge_guard_varied_stage_launch() {
+  local issue="$1" feature_dir="$2" stage="$3" final_model="$4" win="$5"
+  [[ -n "$issue" && -n "$feature_dir" && -n "$stage" && -n "$final_model" ]] || return 0
+
+  local varied
+  varied=$(challenge_varied_stage_model "$issue" "$stage")
+  [[ -n "$varied" ]] || return 0
+
+  # Resolve the varied model through the same resolution path to compare canonical forms
+  local varied_resolved="$varied"
+  local role=""
+  case "$stage" in
+    plan|planning) role="planner" ;;
+    review) role="reviewer" ;;
+    *) role="coder" ;;
+  esac
+
+  if declare -F agent_resolve_model >/dev/null 2>&1; then
+    if ! varied_resolved="$(agent_resolve_model "$role" "$varied" "$REPO_DIR" 2>/dev/null)"; then
+      # Varied model itself is unresolvable
+      challenge_abort_varied_model "$issue" "$feature_dir" "$stage" "$varied" "" "$win"
+      return 1
+    fi
+  fi
+
+  if [[ "$final_model" != "$varied_resolved" ]]; then
+    challenge_abort_varied_model "$issue" "$feature_dir" "$stage" "$varied_resolved" "$final_model" "$win"
+    return 1
+  fi
+
+  return 0
 }
 
 challenge_plan_stage_requires_effective_route() {
@@ -7092,11 +7206,28 @@ _launch_agent_in_pane() {
   local abort_check_cmd=""
   local feature_dir=""
   local esc_session esc_issue esc_slug esc_linear_issue linear_issue=""
+  local varied_model=""
 
   [[ "$agent_cmd" == "codex" ]] && agent_flags="--dangerously-bypass-approvals-and-sandbox"
   if [[ -n "$slug" ]]; then
     feature_dir="${WORKTREE_ROOT}/${slug}/features/${slug}"
     abort_check_cmd="check_stage_aborted '$feature_dir'"
+  fi
+
+  # Check if this is a varied stage launch - export for defense-in-depth (HOK-2767 RC4)
+  if [[ -n "$issue" ]] && declare -F challenge_varied_stage_model >/dev/null 2>&1; then
+    varied_model="$(challenge_varied_stage_model "$issue" "coding" 2>/dev/null || true)"
+    if [[ -n "$varied_model" ]]; then
+      # Also check planning and review stages
+      local varied_plan varied_review
+      varied_plan="$(challenge_varied_stage_model "$issue" "planning" 2>/dev/null || true)"
+      varied_review="$(challenge_varied_stage_model "$issue" "review" 2>/dev/null || true)"
+      if [[ -n "$varied_plan" ]]; then
+        varied_model="$varied_plan"
+      elif [[ -n "$varied_review" ]]; then
+        varied_model="$varied_review"
+      fi
+    fi
   fi
 
   # Export wavemill context environment variables for hook protocol
@@ -7108,12 +7239,20 @@ _launch_agent_in_pane() {
   esc_issue=${issue//\'/\'\\\'\'}
   esc_slug=${slug//\'/\'\\\'\'}
   esc_linear_issue=${linear_issue//\'/\'\\\'\'}
-  tmux send-keys -t "$target" \
-    "export WAVEMILL_SESSION='$esc_session' WAVEMILL_ISSUE='$esc_issue' WAVEMILL_LINEAR_ISSUE='$esc_linear_issue' WAVEMILL_SLUG='$esc_slug' WAVEMILL_FEATURE_SLUG='$esc_slug' WAVEMILL_FEATURE_DIR='$feature_dir'" C-m
+  if [[ -n "$varied_model" ]]; then
+    tmux send-keys -t "$target" \
+      "export WAVEMILL_SESSION='$esc_session' WAVEMILL_ISSUE='$esc_issue' WAVEMILL_LINEAR_ISSUE='$esc_linear_issue' WAVEMILL_SLUG='$esc_slug' WAVEMILL_FEATURE_SLUG='$esc_slug' WAVEMILL_FEATURE_DIR='$feature_dir' WAVEMILL_CHALLENGE_VARIED_MODEL='$varied_model'" C-m
+  else
+    tmux send-keys -t "$target" \
+      "export WAVEMILL_SESSION='$esc_session' WAVEMILL_ISSUE='$esc_issue' WAVEMILL_LINEAR_ISSUE='$esc_linear_issue' WAVEMILL_SLUG='$esc_slug' WAVEMILL_FEATURE_SLUG='$esc_slug' WAVEMILL_FEATURE_DIR='$feature_dir'" C-m
+  fi
 
   export WAVEMILL_FEATURE_SLUG="$slug"
   export WAVEMILL_FEATURE_DIR="$feature_dir"
   export WAVEMILL_LINEAR_ISSUE="$linear_issue"
+  if [[ -n "$varied_model" ]]; then
+    export WAVEMILL_CHALLENGE_VARIED_MODEL="$varied_model"
+  fi
 
   agent_launch_interactive "$session" "$window" "$prompt_file" "$agent_cmd" "$model" "$agent_flags" "$abort_check_cmd" "$issue"
 }
@@ -12726,6 +12865,12 @@ monitor_issue_state() {
                 return 0
               fi
 
+              # Guard: abort if varied model cannot be launched (HOK-2767 RC4)
+              if ! challenge_guard_varied_stage_launch "$ISSUE" "$FEATURE_DIR" "planning" "$planner_launch_model" "$WIN"; then
+                active_count=$((active_count + 1))
+                return 0
+              fi
+
               # Get title from state or Linear
               title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
               if [[ -z "$title" ]]; then
@@ -12734,7 +12879,7 @@ monitor_issue_state() {
               fi
 
               # Record planning stage as running (HOK-1177)
-              record_planning_launch_route_snapshot "$FEATURE_DIR" "$planner_launch_model" "$planner_agent" "$plan_depth" "effective-route"
+              record_planning_launch_route_snapshot "$FEATURE_DIR" "$planner_launch_model" "$planner_agent" "$planner_agent" "$plan_depth" "effective-route"
               write_stage_result "$FEATURE_DIR" "planning" "running" "$planner_agent" "$planner_launch_model"
 
               launch_planning_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$planner_launch_model" "$planner_agent" "$plan_depth"
@@ -12923,6 +13068,12 @@ monitor_issue_state() {
               active_count=$((active_count + 1))
               return 0
             fi
+
+            # Guard: abort if varied model cannot be launched (HOK-2767 RC4)
+            if ! challenge_guard_varied_stage_launch "$ISSUE" "$FEATURE_DIR" "coding" "$coder_launch_model" "$WIN"; then
+              active_count=$((active_count + 1))
+              return 0
+            fi
             if [[ -f "${STATE_FILE:-}" ]] && jq -e --arg issue "$ISSUE" '.tasks[$issue]? // empty' "$STATE_FILE" >/dev/null 2>&1; then
               if ! state_mutate "$STATE_FILE" \
                 '.tasks[$issue].agent = $agent | .tasks[$issue].updated = (now | todate)' \
@@ -13101,6 +13252,12 @@ monitor_issue_state() {
               set_task_phase "$ISSUE" "coding"
               set_window_attention_state "$WIN" "needs-user"
               log "warn" "⚠ $ISSUE → Review launch blocked: ${AGENT_RESOLVE_LAST_DIAGNOSTIC:-agent resolution failed}"
+              active_count=$((active_count + 1))
+              return 0
+            fi
+
+            # Guard: abort if varied model cannot be launched (HOK-2767 RC4)
+            if ! challenge_guard_varied_stage_launch "$ISSUE" "$FEATURE_DIR" "review" "$reviewer_launch_model" "$WIN"; then
               active_count=$((active_count + 1))
               return 0
             fi

@@ -546,6 +546,48 @@ bash -lc '
   || fail "missing entries[1].model incorrectly triggered challenger save"
 
 echo ""
+echo "=== Phase 1 — Varied-Stage Launch Guard (RC4) ==="
+
+# Check for Phase 1 guard functions and launch sites
+if [[ -f "$MILL_SCRIPT" ]] && grep -q "^challenge_guard_varied_stage_launch()" "$MILL_SCRIPT"; then
+  pass "challenge_guard_varied_stage_launch function exists"
+else
+  fail "challenge_guard_varied_stage_launch function not found"
+fi
+
+if [[ -f "$MILL_SCRIPT" ]] && grep -q "^challenge_abort_varied_model()" "$MILL_SCRIPT"; then
+  pass "challenge_abort_varied_model function exists"
+else
+  fail "challenge_abort_varied_model function not found"
+fi
+
+if [[ -f "$MILL_SCRIPT" ]] && grep -q "challenge_guard_varied_stage_launch.*\"planning\"" "$MILL_SCRIPT"; then
+  pass "guard is called at planning launch site"
+else
+  fail "guard call not found at planning launch site"
+fi
+
+if [[ -f "$MILL_SCRIPT" ]] && grep -q "challenge_guard_varied_stage_launch.*\"coding\"" "$MILL_SCRIPT"; then
+  pass "guard is called at coding launch site"
+else
+  fail "guard call not found at coding launch site"
+fi
+
+if [[ -f "$MILL_SCRIPT" ]] && grep -q "challenge_guard_varied_stage_launch.*\"review\"" "$MILL_SCRIPT"; then
+  pass "guard is called at review launch site"
+else
+  fail "guard call not found at review launch site"
+fi
+
+# Check for defense-in-depth in agent-adapters.sh
+ADAPTERS_SCRIPT="$REPO_DIR/shared/lib/agent-adapters.sh"
+if [[ -f "$ADAPTERS_SCRIPT" ]] && grep -q "WAVEMILL_CHALLENGE_VARIED_MODEL" "$ADAPTERS_SCRIPT"; then
+  pass "defense-in-depth env variable check in agent-adapters.sh"
+else
+  fail "WAVEMILL_CHALLENGE_VARIED_MODEL check not found in agent-adapters.sh"
+fi
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 
 if (( FAIL > 0 )); then

@@ -161,6 +161,7 @@ TESTS=(
   shared/lib/eval-aggregator.test.ts
   shared/lib/eval-corpus-migrator.test.ts
   shared/lib/eval-record-builder.test.ts
+  shared/lib/challenge-intent-audit.test.ts
   shared/lib/eval-orchestrator.test.ts
   shared/lib/stage-eval-evidence.test.ts
   shared/lib/eval-schema.test.ts

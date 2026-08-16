@@ -1047,6 +1047,12 @@ export function attachNonRewardReason(
   reason?: { code: string; message: string } | null,
 ): void {
   if (!reason) {
+    // Stale validation-derived reasons must not outlive the defect they describe,
+    // but out-of-band challenge quarantine markers are not validation-derived and
+    // must survive re-runs of attachEligibility.
+    if (record.invalidChallenge !== true) {
+      delete record.nonRewardReason;
+    }
     return;
   }
 

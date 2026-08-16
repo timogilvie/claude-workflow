@@ -2309,6 +2309,12 @@ agent_launch_interactive() {
   phase_env="${launch_phase:-$window}"
 
   if [[ -n "$model" ]] && ! agent_validate_model "$model" "${REPO_DIR:-$(pwd)}" >/dev/null 2>&1; then
+    # Defense in depth: never fall back when this is a challenge varied model (HOK-2767 RC4)
+    if [[ -n "${WAVEMILL_CHALLENGE_VARIED_MODEL:-}" && "$model" == "$WAVEMILL_CHALLENGE_VARIED_MODEL" ]]; then
+      _agent_log_warn "Challenge varied model '$model' is not available; aborting launch"
+      return 1
+    fi
+
     local fallback_model=""
     fallback_model="$(agent_default_model_for_cmd "$agent_cmd")"
     if agent_model_looks_like_depth_tag "$model"; then
