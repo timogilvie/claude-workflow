@@ -3560,7 +3560,7 @@ persist_challenge_execution_intent() {
 # every launch site without disturbing non-challenge runs or shared stages.
 challenge_varied_stage_model() {
   local issue="$1" stage="$2"
-  local task_stage varied
+  local task_stage selected_model
   [[ -n "$issue" ]] || return 0
   task_stage=$(get_task_meta "$issue" "challengeStage" 2>/dev/null || true)
   [[ -n "$task_stage" ]] || return 0
@@ -3580,9 +3580,125 @@ challenge_varied_stage_model() {
   esac
   [[ "$task_stage" == "$wanted" ]] || return 0
 
-  varied=$(get_task_meta "$issue" "challengeVariedModel" 2>/dev/null || true)
-  [[ -n "$varied" ]] || return 0
-  printf '%s' "$varied"
+  selected_model=$(get_task_meta "$issue" "challengeVariedModel" 2>/dev/null || true)
+  [[ -n "$selected_model" ]] || return 0
+  printf '%s' "$selected_model"
+}
+
+challenge_result_stage_for_launch() {
+  case "${1:-}" in
+    plan) printf '%s\n' "planning" ;;
+    planning) printf '%s\n' "planning" ;;
+    coding) printf '%s\n' "coding" ;;
+    implementation) printf '%s\n' "coding" ;;
+    review) printf '%s\n' "review" ;;
+    *) printf '%s\n' "${1:-}" ;;
+  esac
+}
+
+challenge_stage_for_launch_env() {
+  case "${1:-}" in
+    plan) printf '%s\n' "plan" ;;
+    planning) printf '%s\n' "plan" ;;
+    coding) printf '%s\n' "implementation" ;;
+    implementation) printf '%s\n' "implementation" ;;
+    review) printf '%s\n' "review" ;;
+    *) printf '%s\n' "${1:-}" ;;
+  esac
+}
+
+# Quarantine both arms of a challenge pair and record why.
+#
+# A challenge is only meaningful when both arms actually ran, so a terminal
+# failure on either side invalidates the comparison. Marking both arms (and
+# writing the artifact) keeps the comparison from being scored later, and keeps
+# the reason attached to the evidence rather than inferred after the fact.
+challenge_abort_pair() {
+  local issue="$1" feature_dir="$2" win="$3" stage="$4" model="$5" reason="$6" detail="$7" next_action="${8:-}"
+  local result_stage pair_id role peer now artifact tmp
+  [[ -n "$issue" && -n "$feature_dir" && -n "$stage" && -n "$reason" ]] || return 1
+
+  result_stage="$(challenge_result_stage_for_launch "$stage")"
+  pair_id="$(get_task_meta "$issue" "challengePairId" 2>/dev/null || true)"
+  role="$(get_task_meta "$issue" "challengeRole" 2>/dev/null || true)"
+  if [[ -n "$pair_id" ]]; then
+    if [[ "$role" == "challenger" ]]; then
+      peer="$pair_id"
+    else
+      peer="${pair_id}_c"
+    fi
+  fi
+  now="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+  write_stage_result "$feature_dir" "$result_stage" "failed" "" "$model" "$detail"
+
+  if [[ -n "${STATE_FILE:-}" && -f "$STATE_FILE" ]]; then
+    state_mutate "$STATE_FILE" \
+      'def mark($key):
+         if ($key != "" and .tasks[$key] != null)
+         then .tasks[$key].challengeAborted = $reason
+              | .tasks[$key].challengeAbortedDetail = $detail
+              | (if $nextAction != "" then .tasks[$key].challengeAbortedNextAction = $nextAction else . end)
+              | .tasks[$key].updated = (now | todate)
+         else .
+         end;
+       mark($issue) | mark($peer)' \
+      --arg issue "$issue" \
+      --arg peer "${peer:-}" \
+      --arg reason "$reason" \
+      --arg detail "$detail" \
+      --arg nextAction "$next_action" >/dev/null 2>&1 || true
+  fi
+
+  mkdir -p "$feature_dir"
+  artifact="$feature_dir/.challenge-aborted.json"
+  tmp="$artifact.tmp.$$"
+  jq -n -S \
+    --arg pairId "${pair_id:-$issue}" \
+    --arg stage "$(challenge_stage_for_launch_env "$stage")" \
+    --arg model "$model" \
+    --arg reason "$reason" \
+    --arg abortedAt "$now" \
+    --arg detail "$detail" \
+    --arg nextAction "$next_action" \
+    '{pairId:$pairId, stage:$stage, model:$model, reason:$reason, abortedAt:$abortedAt, detail:$detail}
+     + (if $nextAction == "" then {} else {nextAction:$nextAction} end)' \
+    > "$tmp" 2>/dev/null && mv "$tmp" "$artifact" || rm -f "$tmp"
+
+  set_window_attention_state "$win" "needs-user"
+  return 0
+}
+
+challenge_abort_for_unresolvable_varied_model() {
+  local issue="$1" feature_dir="$2" win="$3" stage="$4" model="$5" diagnostic="${6:-}"
+  local detail
+  [[ -n "$issue" && -n "$feature_dir" && -n "$stage" && -n "$model" ]] || return 1
+
+  detail="Challenge aborted: varied ${stage} model ${model} failed validation"
+  [[ -n "$diagnostic" ]] && detail="${detail}: ${diagnostic}"
+
+  log_error "  $issue: challenge aborted because selected ${stage} model '$model' failed validation${diagnostic:+ ($diagnostic)}"
+  challenge_abort_pair "$issue" "$feature_dir" "$win" "$stage" "$model" "varied_model_unresolvable" "$detail"
+}
+
+challenge_guard_varied_model_resolvable() {
+  local issue="$1" feature_dir="$2" win="$3" stage="$4" candidate_model="${5:-}"
+  local selected_model diagnostic
+  selected_model="$(challenge_varied_stage_model "$issue" "$stage" 2>/dev/null || true)"
+  [[ -n "$selected_model" ]] || return 0
+  [[ -z "$candidate_model" || "$candidate_model" == "$selected_model" ]] || return 0
+
+  if agent_validate_model "$selected_model" "$REPO_DIR" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if agent_model_looks_like_depth_tag "$selected_model"; then
+    diagnostic="model selector looks like a depth tag"
+  else
+    diagnostic="model selector is not valid for this repo"
+  fi
+  challenge_abort_for_unresolvable_varied_model "$issue" "$feature_dir" "$win" "$stage" "$selected_model" "$diagnostic"
+  return 1
 }
 
 challenge_plan_stage_requires_effective_route() {
@@ -4294,13 +4410,14 @@ check_routing_complete() {
 # ────────────────────────────────────────────────────────────────
 
 # Write a structured stage result JSON file.
-# Usage: write_stage_result <feature_dir> <stage> <status> [agent] [model] [notes] [artifacts_json]
+# Usage: write_stage_result <feature_dir> <stage> <status> [agent] [model] [notes] [artifacts_json] [started_at]
 # Stages: routing, planning, coding, review, ready
 # Statuses: running, awaiting_user, completed, aborted, failed
 # artifacts_json: optional JSON string for stage-specific artifacts (HOK-1192)
 write_stage_result() {
   local feature_dir="$1" stage="$2" status="$3"
   local agent="${4:-}" model="${5:-}" notes="${6:-}" artifacts_json="${7:-}"
+  local started_at_override="${8:-}"
   local result_file="$feature_dir/.${stage}-result.json" previous_status=""
 
   # Capture the transition before either writer replaces the result. A malformed
@@ -4316,6 +4433,7 @@ write_stage_result() {
     [[ -n "$model" ]] && cli_args+=(--model "$model")
     [[ -n "$notes" ]] && cli_args+=(--notes "$notes")
     [[ -n "$artifacts_json" ]] && cli_args+=(--artifacts "$artifacts_json")
+    [[ -n "$started_at_override" ]] && cli_args+=(--started-at "$started_at_override")
 
     if npx tsx "$TOOLS_DIR/stage-result-cli.ts" write "${cli_args[@]}" 2>/dev/null; then
       _write_stage_result_trace_event "$feature_dir" "$stage" "$status" "$agent" "$model" "$previous_status"
@@ -4330,11 +4448,11 @@ write_stage_result() {
 
   mkdir -p "$feature_dir"
 
-  local started_at="$now"
+  local started_at="${started_at_override:-$now}"
   if [[ -f "$result_file" ]]; then
     local prev_start
     prev_start=$(jq -r '.startedAt // empty' "$result_file" 2>/dev/null || echo "")
-    [[ -n "$prev_start" ]] && started_at="$prev_start"
+    [[ -z "$started_at_override" && -n "$prev_start" ]] && started_at="$prev_start"
   fi
 
   local finished_at="null"
@@ -4362,6 +4480,7 @@ EOF
 write_stage_result_with_history() {
   local feature_dir="$1" stage="$2" status="$3"
   local agent="${4:-}" model="${5:-}" notes="${6:-}" artifacts_json="${7:-}"
+  local started_at_override="${8:-}"
   local result_file="$feature_dir/.${stage}-result.json" previous_status=""
 
   if [[ -f "$result_file" ]]; then
@@ -4374,6 +4493,7 @@ write_stage_result_with_history() {
     [[ -n "$model" ]] && cli_args+=(--model "$model")
     [[ -n "$notes" ]] && cli_args+=(--notes "$notes")
     [[ -n "$artifacts_json" ]] && cli_args+=(--artifacts "$artifacts_json")
+    [[ -n "$started_at_override" ]] && cli_args+=(--started-at "$started_at_override")
 
     if npx tsx "$TOOLS_DIR/stage-result-cli.ts" write-with-history "${cli_args[@]}" 2>/dev/null; then
       _write_stage_result_trace_event "$feature_dir" "$stage" "$status" "$agent" "$model" "$previous_status"
@@ -4382,7 +4502,7 @@ write_stage_result_with_history() {
     log_warn "write_stage_result_with_history: TypeScript CLI failed, falling back to write_stage_result"
   fi
 
-  write_stage_result "$feature_dir" "$stage" "$status" "$agent" "$model" "$notes" "$artifacts_json"
+  write_stage_result "$feature_dir" "$stage" "$status" "$agent" "$model" "$notes" "$artifacts_json" "$started_at_override"
 }
 
 # Emit trace events when a stage result is written (HOK-2259).
@@ -4763,14 +4883,20 @@ approve_plan() {
 resolve_stage_result_model() {
   local feature_dir="$1" stage="$2" fallback="${3:-}"
   local model="" launch_model=""
+  local challenge_varied_model
 
   case "$stage" in
     coding)
       model=$(read_phase_config "$feature_dir" "coding" "model")
       [[ -z "$model" ]] && model=$(get_task_meta "$ISSUE" "coderModel")
       [[ -z "$model" ]] && model=$(jq -r '.model // empty' "$feature_dir/.coding-result.json" 2>/dev/null || echo "")
-      model="$(resolve_phase_model "coding" "$model" "${fallback:-claude-opus-4-7}")"
-      if declare -F agent_resolve_model >/dev/null 2>&1; then
+      challenge_varied_model="$(challenge_varied_stage_model "$ISSUE" "coding" 2>/dev/null || true)"
+      if [[ -n "$challenge_varied_model" ]]; then
+        model="$challenge_varied_model"
+      else
+        model="$(resolve_phase_model "coding" "$model" "${fallback:-claude-opus-4-7}")"
+      fi
+      if [[ -z "$challenge_varied_model" ]] && declare -F agent_resolve_model >/dev/null 2>&1; then
         launch_model="$(agent_resolve_model "coder" "$model" "$REPO_DIR" 2>/dev/null || true)"
       fi
       ;;
@@ -4784,8 +4910,10 @@ resolve_stage_result_model() {
         log_warn "  $ISSUE: review-stage challenge arm restored from state ($model → $challenge_varied_review)"
         model="$challenge_varied_review"
       fi
-      model="$(resolve_phase_model "review" "$model" "${fallback:-claude-sonnet-5}")"
-      if declare -F agent_resolve_model >/dev/null 2>&1; then
+      if [[ -z "$challenge_varied_review" ]]; then
+        model="$(resolve_phase_model "review" "$model" "${fallback:-claude-sonnet-5}")"
+      fi
+      if [[ -z "$challenge_varied_review" ]] && declare -F agent_resolve_model >/dev/null 2>&1; then
         launch_model="$(agent_resolve_model "reviewer" "$model" "$REPO_DIR" 2>/dev/null || true)"
       fi
       ;;
@@ -5377,7 +5505,8 @@ blocked_completion_validate_for_advance() {
   local json_valid=false schema_valid=false stage_running=false stage_is_coding=false
   local implementation_complete=false committed=false recommended_action_matches=false
   local has_passing_checks=false has_blocking_checks=false commit_matches_head=true
-  local worktree_clean=true artifact_commit="" current_head="" decision_reason=""
+  local worktree_clean=true artifact_fresh=true artifact_commit="" current_head="" decision_reason=""
+  local started_at="" artifact_epoch="" started_epoch=""
   local manual_soft_failure=false
 
   slug="$(basename "$feature_dir")"
@@ -5456,6 +5585,22 @@ blocked_completion_validate_for_advance() {
     fi
   fi
 
+  if [[ -f "$artifact_path" && -f "$result_path" ]]; then
+    started_at="$(jq -r '.startedAt // empty' "$result_path" 2>/dev/null || echo "")"
+    artifact_epoch="$(portable_file_mtime_epoch "$artifact_path" 2>/dev/null || echo "")"
+    started_epoch="$(wavemill_iso8601_to_epoch "$started_at" 2>/dev/null || echo "")"
+    if [[ -n "$artifact_epoch" && "$artifact_epoch" != "0" && -n "$started_epoch" && "$started_epoch" != "0" ]]; then
+      if (( artifact_epoch < started_epoch )); then
+        artifact_fresh=false
+        if [[ "$mode" == "auto" ]]; then
+          decision_reason="${decision_reason:-blocked-completion artifact predates current coding attempt}"
+        else
+          manual_soft_failure=true
+        fi
+      fi
+    fi
+  fi
+
   if ! blocked_completion_worktree_clean_for_auto "$worktree" "$slug"; then
     worktree_clean=false
     if [[ "$mode" == "auto" ]]; then
@@ -5489,6 +5634,7 @@ blocked_completion_validate_for_advance() {
     --argjson hasBlockingChecks "$has_blocking_checks" \
     --argjson commitMatchesHead "$commit_matches_head" \
     --argjson worktreeClean "$worktree_clean" \
+    --argjson artifactFresh "$artifact_fresh" \
     --argjson eligible "$(
       if [[ "$decision_reason" == "eligible" || "$decision_reason" == "manual override accepted with soft guardrail failures" ]]; then
         printf 'true'
@@ -5516,7 +5662,8 @@ blocked_completion_validate_for_advance() {
         hasPassingChecks: $hasPassingChecks,
         hasBlockingChecks: $hasBlockingChecks,
         commitMatchesHead: $commitMatchesHead,
-        worktreeClean: $worktreeClean
+        worktreeClean: $worktreeClean,
+        artifactFresh: $artifactFresh
       }
     }'
 
@@ -5525,6 +5672,41 @@ blocked_completion_validate_for_advance() {
   fi
 
   return 1
+}
+
+archive_stale_coding_artifacts() {
+  local issue="$1" feature_dir="$2"
+  local candidates=(
+    ".coding-complete"
+    ".coding-blocked-completion.json"
+    ".blocked-completion-announced"
+    ".coding-uncommitted-output-announced"
+    ".coding-failure-handoff.json"
+  )
+  local present=() name archive_dir archived_names=()
+
+  for name in "${candidates[@]}"; do
+    [[ -e "$feature_dir/$name" ]] && present+=("$name")
+  done
+  ((${#present[@]} > 0)) || return 0
+
+  archive_dir="$feature_dir/.stale-artifacts/coding-$(date -u +%Y%m%dT%H%M%SZ)"
+  if ! mkdir -p "$archive_dir" 2>/dev/null; then
+    log_warn "$issue → Could not create stale coding artifact archive, continuing launch"
+    return 0
+  fi
+
+  for name in "${present[@]}"; do
+    if mv "$feature_dir/$name" "$archive_dir/$name" 2>/dev/null; then
+      archived_names+=("$name")
+    fi
+  done
+
+  if ((${#archived_names[@]} > 0)); then
+    local IFS=', '
+    log "status" "$issue → archived stale coding artifacts from a previous attempt: ${archived_names[*]}"
+  fi
+  return 0
 }
 
 complete_coding_advance() {
@@ -6135,6 +6317,155 @@ emit_native_launch_failure_attention() {
   set_window_attention_state "$win" "needs-user"
   log_warn "$issue → Native ${stage} launcher failed (${failure_kind}) in pane $win_target"
   active_count=$((active_count + 1))
+  return 0
+}
+
+# ── Terminal native failure detection (hook-driven) ──────────────────
+# The pane-scraping heuristics above only recognise *exec-level* failures:
+# exit 127, bare `--model` invocations, probe failures. A provider that accepts
+# the launch and then rejects the request — an unrecognised model ID, or a
+# prompt larger than the model's context window — produces none of those
+# signatures, and `_pane_is_dead_or_idle` may not hold either. Such arms stayed
+# parked in `phase: coding` indefinitely, blocking the merge lane.
+#
+# The agent's own status hook already records these as a terminal
+# {"state":"error","event":"process_exit"} write. Unlike the liveness reads in
+# wavemill-status.sh, a terminal state is deliberately NOT TTL-gated: a dead
+# process never refreshes its hook, so staleness corroborates the failure
+# instead of invalidating it.
+
+native_hook_terminal_failure_detail() {
+  local issue="$1"
+  local hook_file="/tmp/wavemill-${SESSION}-${issue}.hook"
+  local state detail
+  [[ -n "$issue" ]] || return 1
+  [[ -f "$hook_file" ]] || return 1
+
+  state="$(jq -r '.state // empty' "$hook_file" 2>/dev/null || true)"
+  [[ "$state" == "error" ]] || return 1
+
+  detail="$(jq -r '.detail // empty' "$hook_file" 2>/dev/null || true)"
+  [[ -n "$detail" ]] || return 1
+  printf '%s\n' "$detail"
+}
+
+native_terminal_failure_kind() {
+  local detail="${1:-}"
+  local lower
+  lower="$(printf '%s' "$detail" | tr '[:upper:]' '[:lower:]')"
+
+  case "$lower" in
+    *"maximum context length"*|*"context length is"*|*"reduce the length"*|*"context_length_exceeded"*)
+      printf 'context-window-exceeded\n'; return 0 ;;
+    *"is not a valid model id"*|*"invalid model"*|*"unknown model"*|*"model_not_found"*)
+      printf 'invalid-model-id\n'; return 0 ;;
+    *"rate limit"*|*"429"*)
+      printf 'provider-rate-limited\n'; return 0 ;;
+    *"insufficient"*"credit"*|*"quota"*)
+      printf 'provider-quota-exhausted\n'; return 0 ;;
+  esac
+  printf 'native-provider-error\n'
+}
+
+native_terminal_failure_next_action() {
+  case "${1:-}" in
+    context-window-exceeded)
+      printf 'relaunch with compressed context. The prompt exceeded the model context window\n' ;;
+    invalid-model-id)
+      printf 'check catalog alias resolution, then relaunch. The provider rejected the model ID\n' ;;
+    provider-rate-limited)
+      printf 'relaunch after the rate limit window\n' ;;
+    provider-quota-exhausted)
+      printf 'add provider credit, then relaunch. The quota is exhausted\n' ;;
+    *)
+      printf 'inspect the native provider error, then relaunch the phase\n' ;;
+  esac
+}
+
+# Turn a terminal hook error into a failed stage plus, for challenge arms, a
+# quarantined pair. Returns 0 when it handled the issue (caller should stop).
+emit_native_terminal_failure_attention() {
+  local issue="$1" feature_dir="$2" stage="$3" win="$4" win_target="$5" fallback_agent="${6:-}" fallback_model="${7:-}"
+  local stage_status detail failure_kind next_action agent model notes artifacts_json is_challenge
+
+  stage_status="$(read_stage_status "$feature_dir" "$stage")"
+  [[ "$stage_status" == "running" ]] || return 1
+
+  # Never override a run that actually produced its completion artifact.
+  [[ ! -f "$feature_dir/.${stage}-complete" ]] || return 1
+
+  detail="$(native_hook_terminal_failure_detail "$issue")" || return 1
+  failure_kind="$(native_terminal_failure_kind "$detail")"
+  next_action="$(native_terminal_failure_next_action "$failure_kind")"
+
+  agent="$(stage_result_field "$feature_dir" "$stage" "agent")"
+  model="$(stage_result_field "$feature_dir" "$stage" "model")"
+  [[ -n "$agent" ]] || agent="$fallback_agent"
+  [[ -n "$model" ]] || model="$fallback_model"
+
+  notes="Native ${stage} failed (${failure_kind}): ${detail} Next: ${next_action}"
+
+  artifacts_json="$(jq -cn \
+    --arg paneTarget "$win_target" \
+    --arg failureKind "$failure_kind" \
+    --arg detail "$detail" \
+    --arg nextAction "$next_action" \
+    '{type:"nativeTerminalFailure", paneTarget:$paneTarget, failureKind:$failureKind, detail:$detail, nextAction:$nextAction}' \
+    2>/dev/null || printf '{}')"
+
+  # Quarantine first: challenge_abort_pair also writes a stage result, so the
+  # richer artifact-bearing write below must land last and win.
+  is_challenge="$(get_task_meta "$issue" "challenge" 2>/dev/null || true)"
+  if [[ "$is_challenge" == "true" ]]; then
+    challenge_abort_pair "$issue" "$feature_dir" "$win" "$stage" "$model" \
+      "terminal_launch_failure:${failure_kind}" "$notes" "$next_action" || true
+  fi
+
+  write_stage_result "$feature_dir" "$stage" "failed" "$agent" "$model" "$notes" "$artifacts_json"
+
+  if [[ "${WAVEMILL_TERMINAL_RECONCILER_LOADED:-0}" == "1" ]]; then
+    wavemill_reconcile_terminal "$SESSION" "$issue" "recovery_failure" || true
+  fi
+  set_window_attention_state "$win" "needs-user"
+  log_warn "$issue → Native ${stage} failed (${failure_kind}). ${next_action}"
+  active_count=$((active_count + 1))
+  return 0
+}
+
+# Quarantine a challenge arm whose stage the launcher already marked `failed`.
+#
+# emit_native_terminal_failure_attention() only fires while the stage is still
+# `running` — the case where the agent died without recording anything. When the
+# native launcher writes its own `failed` stage result (as it does for a provider
+# 404), that handler never runs, and nothing else quarantines the pair. The
+# comparison it was supposed to supply will never arrive, so the merge gate sits
+# at `pair-unresolved:no-comparison` and holds the sibling's green PR forever.
+#
+# Idempotent: an already-quarantined arm is left alone so this does not rewrite
+# state on every monitor cycle.
+emit_challenge_stage_failure_quarantine() {
+  local issue="$1" feature_dir="$2" stage="$3" win="$4"
+  local is_challenge existing detail failure_kind next_action model
+
+  is_challenge="$(get_task_meta "$issue" "challenge" 2>/dev/null || true)"
+  [[ "$is_challenge" == "true" ]] || return 1
+
+  existing="$(get_task_meta "$issue" "challengeAborted" 2>/dev/null || true)"
+  [[ -z "$existing" ]] || return 1
+
+  # Prefer the agent's own terminal hook detail; fall back to the stage notes.
+  detail="$(native_hook_terminal_failure_detail "$issue" 2>/dev/null || true)"
+  [[ -n "$detail" ]] || detail="$(stage_result_field "$feature_dir" "$stage" "notes")"
+  [[ -n "$detail" ]] || detail="${stage} stage reported failed without detail"
+
+  failure_kind="$(native_terminal_failure_kind "$detail")"
+  next_action="$(native_terminal_failure_next_action "$failure_kind")"
+  model="$(stage_result_field "$feature_dir" "$stage" "model")"
+
+  challenge_abort_pair "$issue" "$feature_dir" "$win" "$stage" "$model" \
+    "terminal_stage_failure:${failure_kind}" "$detail" "$next_action" || return 1
+
+  log_warn "$issue → challenge arm failed at ${stage} (${failure_kind}). Pair quarantined. ${next_action}"
   return 0
 }
 
@@ -7092,12 +7423,20 @@ _launch_agent_in_pane() {
   local abort_check_cmd=""
   local feature_dir=""
   local esc_session esc_issue esc_slug esc_linear_issue linear_issue=""
+  local launch_phase="" varied_launch_stage="" varied_launch_model=""
+  local esc_varied_stage="" esc_varied_model=""
 
   [[ "$agent_cmd" == "codex" ]] && agent_flags="--dangerously-bypass-approvals-and-sandbox"
   if [[ -n "$slug" ]]; then
     feature_dir="${WORKTREE_ROOT}/${slug}/features/${slug}"
     abort_check_cmd="check_stage_aborted '$feature_dir'"
   fi
+  if declare -F agent_normalize_launch_phase >/dev/null 2>&1; then
+    launch_phase="$(agent_normalize_launch_phase "$window" "$prompt_file" 2>/dev/null || true)"
+  fi
+  [[ -n "$launch_phase" ]] || launch_phase="$window"
+  varied_launch_stage="$(challenge_stage_for_launch_env "$launch_phase")"
+  varied_launch_model="$(challenge_varied_stage_model "$issue" "$varied_launch_stage" 2>/dev/null || true)"
 
   # Export wavemill context environment variables for hook protocol
   if declare -F get_linear_issue_id >/dev/null 2>&1; then
@@ -7108,12 +7447,16 @@ _launch_agent_in_pane() {
   esc_issue=${issue//\'/\'\\\'\'}
   esc_slug=${slug//\'/\'\\\'\'}
   esc_linear_issue=${linear_issue//\'/\'\\\'\'}
+  esc_varied_stage=${varied_launch_stage//\'/\'\\\'\'}
+  esc_varied_model=${varied_launch_model//\'/\'\\\'\'}
   tmux send-keys -t "$target" \
-    "export WAVEMILL_SESSION='$esc_session' WAVEMILL_ISSUE='$esc_issue' WAVEMILL_LINEAR_ISSUE='$esc_linear_issue' WAVEMILL_SLUG='$esc_slug' WAVEMILL_FEATURE_SLUG='$esc_slug' WAVEMILL_FEATURE_DIR='$feature_dir'" C-m
+    "export WAVEMILL_SESSION='$esc_session' WAVEMILL_ISSUE='$esc_issue' WAVEMILL_LINEAR_ISSUE='$esc_linear_issue' WAVEMILL_SLUG='$esc_slug' WAVEMILL_FEATURE_SLUG='$esc_slug' WAVEMILL_FEATURE_DIR='$feature_dir' WAVEMILL_CHALLENGE_VARIED_STAGE='$esc_varied_stage' WAVEMILL_CHALLENGE_VARIED_MODEL='$esc_varied_model'" C-m
 
   export WAVEMILL_FEATURE_SLUG="$slug"
   export WAVEMILL_FEATURE_DIR="$feature_dir"
   export WAVEMILL_LINEAR_ISSUE="$linear_issue"
+  export WAVEMILL_CHALLENGE_VARIED_STAGE="$varied_launch_stage"
+  export WAVEMILL_CHALLENGE_VARIED_MODEL="$varied_launch_model"
 
   agent_launch_interactive "$session" "$window" "$prompt_file" "$agent_cmd" "$model" "$agent_flags" "$abort_check_cmd" "$issue"
 }
@@ -12693,6 +13036,11 @@ monitor_issue_state() {
                 reviewer_model="$challenge_varied_review_stage"
               fi
 
+              if ! challenge_guard_varied_model_resolvable "$ISSUE" "$FEATURE_DIR" "$WIN" "plan" "$planner_model"; then
+                set_task_phase "$ISSUE" "routing"
+                active_count=$((active_count + 1))
+                return 0
+              fi
               planner_model="$(resolve_phase_model "planning" "$planner_model" "claude-sonnet-5")"
               coder_model="$(resolve_phase_model "coding" "$coder_model" "claude-opus-4-7")"
               reviewer_model="$(resolve_phase_model "review" "$reviewer_model" "claude-sonnet-5")"
@@ -12903,6 +13251,11 @@ monitor_issue_state() {
                 esac
               fi
             fi
+            if ! challenge_guard_varied_model_resolvable "$ISSUE" "$FEATURE_DIR" "$WIN" "coding" "$coder_model"; then
+              set_task_phase "$ISSUE" "planning"
+              active_count=$((active_count + 1))
+              return 0
+            fi
             coder_model="$(resolve_phase_model "coding" "$coder_model" "claude-opus-4-7")"
             [[ -n "${WAVEMILL_CODER_MODEL:-}" && -z "${FORCE_MODEL:-}" ]] && coder_model="$WAVEMILL_CODER_MODEL"
             code_depth=$(read_phase_config "$FEATURE_DIR" "coding" "depth")
@@ -12939,8 +13292,12 @@ monitor_issue_state() {
               title=$(echo "$issue_json" | jq -r '.title // "Task"' 2>/dev/null || echo "Task")
             fi
 
+            archive_stale_coding_artifacts "$ISSUE" "$FEATURE_DIR"
+
             # Record coding stage as running (HOK-1177)
-            write_stage_result "$FEATURE_DIR" "coding" "running" "$coder_agent" "$coder_launch_model"
+            local coding_started_at
+            coding_started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+            write_stage_result "$FEATURE_DIR" "coding" "running" "$coder_agent" "$coder_launch_model" "" "" "$coding_started_at"
 
             launch_coding_phase "$ISSUE" "$SLUG" "$title" "$WT_DIR" "$BRANCH" "$BASE_BRANCH" "$coder_launch_model" "$coder_agent" "$code_depth"
             local launch_rc=$?
@@ -12993,6 +13350,9 @@ monitor_issue_state() {
             fi
           fi
 
+          if emit_native_terminal_failure_attention "$ISSUE" "$FEATURE_DIR" "planning" "$WIN" "$WIN_TARGET" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "planning" "")"; then
+            return 0
+          fi
           if emit_native_launch_failure_attention "$ISSUE" "$FEATURE_DIR" "planning" "$WIN" "$WIN_TARGET" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "planning" "")"; then
             return 0
           fi
@@ -13037,6 +13397,7 @@ monitor_issue_state() {
           fi
 
           if [[ "$planning_status" == "failed" ]]; then
+            emit_challenge_stage_failure_quarantine "$ISSUE" "$FEATURE_DIR" "planning" "$WIN" || true
             set_window_attention_state "$WIN" "needs-user"
             active_count=$((active_count + 1))
             return 0
@@ -13083,6 +13444,10 @@ monitor_issue_state() {
             else
               reviewer_model=$(read_phase_config "$FEATURE_DIR" "review" "model")
               [[ -z "$reviewer_model" ]] && reviewer_model=$(get_task_meta "$ISSUE" "reviewerModel")
+            fi
+            if ! challenge_guard_varied_model_resolvable "$ISSUE" "$FEATURE_DIR" "$WIN" "review" "$reviewer_model"; then
+              active_count=$((active_count + 1))
+              return 0
             fi
             reviewer_model="$(resolve_phase_model "review" "$reviewer_model" "claude-sonnet-5")"
             [[ -n "${WAVEMILL_REVIEWER_MODEL:-}" && -z "${FORCE_MODEL:-}" ]] && reviewer_model="$WAVEMILL_REVIEWER_MODEL"
@@ -13169,6 +13534,9 @@ monitor_issue_state() {
             if emit_pane_divergence_attention "$ISSUE" "$SLUG" "$FEATURE_DIR" "$WIN" "$WIN_TARGET"; then
               return 0
             fi
+            if emit_native_terminal_failure_attention "$ISSUE" "$FEATURE_DIR" "coding" "$WIN" "$WIN_TARGET" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "coding" "claude-opus-4-7")"; then
+              return 0
+            fi
             if emit_native_launch_failure_attention "$ISSUE" "$FEATURE_DIR" "coding" "$WIN" "$WIN_TARGET" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "coding" "claude-opus-4-7")"; then
               return 0
             fi
@@ -13187,6 +13555,7 @@ monitor_issue_state() {
           fi
 
           if [[ "$coding_status" == "failed" ]]; then
+            emit_challenge_stage_failure_quarantine "$ISSUE" "$FEATURE_DIR" "coding" "$WIN" || true
             set_window_attention_state "$WIN" "needs-user"
             active_count=$((active_count + 1))
             return 0
@@ -13238,6 +13607,8 @@ monitor_issue_state() {
                 wavemill_reconcile_terminal "$SESSION" "$ISSUE" "review_complete" "$pr_number" || true
               fi
               review_status="completed"
+            elif emit_native_terminal_failure_attention "$ISSUE" "$FEATURE_DIR" "review" "$WIN" "$WIN_TARGET" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "review" "claude-sonnet-5")"; then
+              return 0
             elif emit_native_launch_failure_attention "$ISSUE" "$FEATURE_DIR" "review" "$WIN" "$WIN_TARGET" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "review" "claude-sonnet-5")"; then
               return 0
             else
@@ -13255,6 +13626,7 @@ monitor_issue_state() {
           fi
 
           if [[ "$review_status" == "failed" ]]; then
+            emit_challenge_stage_failure_quarantine "$ISSUE" "$FEATURE_DIR" "review" "$WIN" || true
             set_window_attention_state "$WIN" "needs-user"
             active_count=$((active_count + 1))
             return 0
