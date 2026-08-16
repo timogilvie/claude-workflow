@@ -5,13 +5,14 @@
  */
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { EvalRecord } from './eval-schema.ts';
 import { enrichEvalRecord } from './eval-record-builder.ts';
 import { appendEvalRecord, EvalValidationError, hasChallengeEvalRecord, hasChallengeEvalRecordPair, readEvalRecords } from './eval-persistence.ts';
 import { buildChallengeExecutionIntent } from './challenge-execution-contract.ts';
+import { clearConfigCache } from './config.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Test Harness
@@ -150,6 +151,59 @@ test('append writes a valid JSONL line', () => {
     assert.equal(parsed.score, record.score);
     assert.equal(parsed.modelId, record.modelId);
   } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('append and read use repoDir when no explicit dir is provided', () => {
+  const tmp = makeTempDir();
+  const repoA = join(tmp, 'repo-a');
+  const repoB = join(tmp, 'repo-b');
+  mkdirSync(repoA, { recursive: true });
+  mkdirSync(repoB, { recursive: true });
+  const originalCwd = process.cwd();
+  try {
+    process.chdir(repoA);
+    appendEvalRecord(makeRecord({ id: 'repo-aware-default' }), { repoDir: repoB });
+
+    assert.equal(existsSync(join(repoA, '.wavemill', 'evals', 'evals.jsonl')), false);
+    assert.equal(existsSync(join(repoB, '.wavemill', 'evals', 'evals.jsonl')), true);
+    assert.deepEqual(
+      readEvalRecords({ repoDir: repoB }).map((record) => record.id),
+      ['repo-aware-default'],
+    );
+  } finally {
+    process.chdir(originalCwd);
+    cleanUp(tmp);
+  }
+});
+
+test('append and read use configured eval dir from repoDir', () => {
+  const tmp = makeTempDir();
+  const repoA = join(tmp, 'repo-a');
+  const repoB = join(tmp, 'repo-b');
+  mkdirSync(repoA, { recursive: true });
+  mkdirSync(repoB, { recursive: true });
+  writeFileSync(
+    join(repoB, '.wavemill-config.json'),
+    JSON.stringify({ eval: { evalsDir: '.wavemill/custom-evals' } }),
+    'utf-8',
+  );
+  clearConfigCache(repoB);
+  const originalCwd = process.cwd();
+  try {
+    process.chdir(repoA);
+    appendEvalRecord(makeRecord({ id: 'repo-aware-config' }), { repoDir: repoB });
+
+    assert.equal(existsSync(join(repoA, '.wavemill', 'custom-evals', 'evals.jsonl')), false);
+    assert.equal(existsSync(join(repoB, '.wavemill', 'custom-evals', 'evals.jsonl')), true);
+    assert.deepEqual(
+      readEvalRecords({ repoDir: repoB }).map((record) => record.id),
+      ['repo-aware-config'],
+    );
+  } finally {
+    process.chdir(originalCwd);
+    clearConfigCache(repoB);
     cleanUp(tmp);
   }
 });
