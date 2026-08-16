@@ -31,6 +31,7 @@ eval "$(extract_function native_hook_terminal_failure_detail)"
 eval "$(extract_function native_terminal_failure_kind)"
 eval "$(extract_function native_terminal_failure_next_action)"
 eval "$(extract_function emit_native_terminal_failure_attention)"
+eval "$(extract_function emit_challenge_stage_failure_quarantine)"
 eval "$(extract_function challenge_abort_pair)"
 
 TMP_ROOT="$(mktemp -d)"
@@ -217,6 +218,53 @@ if emit_native_terminal_failure_attention "PAIR-1_c" "$fd" "coding" "win-6" "%6"
   fi
 else
   fail "non-challenge terminal failure was not detected"
+fi
+
+# ── Stage already marked failed by the launcher ───────────────────────
+# emit_native_terminal_failure_attention only fires while the stage is still
+# `running`. When the native launcher writes its own `failed` result (a provider
+# 404, say), that handler never runs — and before this, nothing quarantined the
+# pair, so the gate sat at `pair-unresolved:no-comparison` indefinitely.
+# This is the real HOK-2771_c shape: qwen-2.5-coder-32b, tool-use 404, status=failed.
+seed "PAIR-1_c"
+fd="$TMP_ROOT/f-stage-failed"
+write_stage_result "$fd" "coding" "failed" "native" "qwen-2.5-coder-32b" "Native coding failed: 404 No endpoints found that support tool use."
+write_hook "PAIR-1_c" "error" "Native coding failed: 404 No endpoints found that support tool use. Try disabling \"read_file\"."
+
+# The running-only handler must decline this case.
+if emit_native_terminal_failure_attention "PAIR-1_c" "$fd" "coding" "win-7" "%7" "native" "qwen-2.5-coder-32b"; then
+  fail "running-only handler fired on an already-failed stage"
+else
+  pass "running-only handler declines an already-failed stage"
+fi
+
+if emit_challenge_stage_failure_quarantine "PAIR-1_c" "$fd" "coding" "win-7"; then
+  if [[ "$(jq -r '.tasks["PAIR-1_c"].challengeAborted' "$STATE_FILE")" == "terminal_stage_failure:native-provider-error" ]] \
+    && [[ "$(jq -r '.tasks["PAIR-1"].challengeAborted' "$STATE_FILE")" == "terminal_stage_failure:native-provider-error" ]] \
+    && [[ -f "$fd/.challenge-aborted.json" ]]; then
+    pass "launcher-reported stage failure quarantines both arms"
+  else
+    fail "stage-failure quarantine side effects incomplete"
+  fi
+else
+  fail "stage-failure quarantine did not fire"
+fi
+
+# Idempotent: a second cycle must not rewrite an already-quarantined arm.
+if emit_challenge_stage_failure_quarantine "PAIR-1_c" "$fd" "coding" "win-7"; then
+  fail "stage-failure quarantine re-fired on an already-quarantined arm"
+else
+  pass "stage-failure quarantine is idempotent"
+fi
+
+# Non-challenge tasks must never gain challenge quarantine state.
+seed "PAIR-1_c" false
+fd="$TMP_ROOT/f-stage-failed-solo"
+write_stage_result "$fd" "coding" "failed" "native" "kimi-k2" "Native coding failed: boom"
+if emit_challenge_stage_failure_quarantine "PAIR-1_c" "$fd" "coding" "win-8"; then
+  fail "non-challenge task was quarantined"
+else
+  pass "non-challenge stage failure is not quarantined"
 fi
 
 rm -f "/tmp/wavemill-${SESSION}-PAIR-1_c.hook"

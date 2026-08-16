@@ -136,6 +136,7 @@ for fn in \
   recover_missing_expansion_artifact \
   recover_misplaced_coding_complete_marker \
   guard_coding_complete_handoff \
+  archive_stale_coding_artifacts \
   clear_coding_uncommitted_output_attention \
   coding_output_dirty_paths \
   blocked_completion_auto_allowed_dirty_path \
