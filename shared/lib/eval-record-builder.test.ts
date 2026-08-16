@@ -704,6 +704,63 @@ describe('eval-record-builder', () => {
       }).toEqual(once);
     });
 
+    it('clears stale validation nonRewardReason once the record validates', () => {
+      const record = {
+        ...makeEligibleRecord(),
+        originalPrompt: 'Implement structured tweet generation.',
+        modelVersion: 'gpt-5.4',
+        scoreBand: 'Full Success',
+        timeSeconds: 120,
+        interventionRequired: false,
+        interventionCount: 0,
+        interventionDetails: [],
+        rationale: 'Task completed successfully.',
+        nonRewardReason: {
+          code: 'EVAL_MISSING_TASK_DESCRIPTOR',
+          message: 'Eval record is missing a valid taskDescriptor object.',
+        },
+      } as EvalRecord;
+      delete (record as EvalRecord & { reasoning?: string }).reasoning;
+      delete (record as EvalRecord & { taskPrompt?: string }).taskPrompt;
+      delete (record as EvalRecord & { prReviewOutput?: string }).prReviewOutput;
+
+      attachEligibility(record);
+
+      expect(record.trainingEligible).toBe(true);
+      expect(record.nonRewardReason).toBeUndefined();
+    });
+
+    it('preserves INVALID_CHALLENGE and ineligibility across a clean eligibility pass', () => {
+      const record = {
+        ...makeEligibleRecord(),
+        originalPrompt: 'Implement structured tweet generation.',
+        modelVersion: 'gpt-5.4',
+        scoreBand: 'Full Success',
+        timeSeconds: 120,
+        interventionRequired: false,
+        interventionCount: 0,
+        interventionDetails: [],
+        rationale: 'Task completed successfully.',
+        invalidChallenge: true,
+        trainingEligible: true,
+        nonRewardReason: {
+          code: 'INVALID_CHALLENGE',
+          message: 'Invalid challenge: native_launch_fallback',
+        },
+      } as EvalRecord;
+      delete (record as EvalRecord & { reasoning?: string }).reasoning;
+      delete (record as EvalRecord & { taskPrompt?: string }).taskPrompt;
+      delete (record as EvalRecord & { prReviewOutput?: string }).prReviewOutput;
+
+      attachEligibility(record);
+
+      expect(record.trainingEligible).toBe(false);
+      expect(record.nonRewardReason).toEqual({
+        code: 'INVALID_CHALLENGE',
+        message: 'Invalid challenge: native_launch_fallback',
+      });
+    });
+
     it('does not mark valid full routeProvenance as a schema violation', () => {
       const record = makeEligibleRecord();
       record.routeProvenance = {
