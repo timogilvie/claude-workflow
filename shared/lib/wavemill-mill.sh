@@ -6374,6 +6374,43 @@ emit_native_terminal_failure_attention() {
   return 0
 }
 
+# Quarantine a challenge arm whose stage the launcher already marked `failed`.
+#
+# emit_native_terminal_failure_attention() only fires while the stage is still
+# `running` — the case where the agent died without recording anything. When the
+# native launcher writes its own `failed` stage result (as it does for a provider
+# 404), that handler never runs, and nothing else quarantines the pair. The
+# comparison it was supposed to supply will never arrive, so the merge gate sits
+# at `pair-unresolved:no-comparison` and holds the sibling's green PR forever.
+#
+# Idempotent: an already-quarantined arm is left alone so this does not rewrite
+# state on every monitor cycle.
+emit_challenge_stage_failure_quarantine() {
+  local issue="$1" feature_dir="$2" stage="$3" win="$4"
+  local is_challenge existing detail failure_kind next_action model
+
+  is_challenge="$(get_task_meta "$issue" "challenge" 2>/dev/null || true)"
+  [[ "$is_challenge" == "true" ]] || return 1
+
+  existing="$(get_task_meta "$issue" "challengeAborted" 2>/dev/null || true)"
+  [[ -z "$existing" ]] || return 1
+
+  # Prefer the agent's own terminal hook detail; fall back to the stage notes.
+  detail="$(native_hook_terminal_failure_detail "$issue" 2>/dev/null || true)"
+  [[ -n "$detail" ]] || detail="$(stage_result_field "$feature_dir" "$stage" "notes")"
+  [[ -n "$detail" ]] || detail="${stage} stage reported failed without detail"
+
+  failure_kind="$(native_terminal_failure_kind "$detail")"
+  next_action="$(native_terminal_failure_next_action "$failure_kind")"
+  model="$(stage_result_field "$feature_dir" "$stage" "model")"
+
+  challenge_abort_pair "$issue" "$feature_dir" "$win" "$stage" "$model" \
+    "terminal_stage_failure:${failure_kind}" "$detail" "$next_action" || return 1
+
+  log_warn "$issue → challenge arm failed at ${stage} (${failure_kind}). Pair quarantined. ${next_action}"
+  return 0
+}
+
 coding_missing_blocked_completion_announce_marker() {
   local feature_dir="$1"
   printf '%s\n' "$feature_dir/.missing-blocked-completion-announced"
@@ -13298,6 +13335,7 @@ monitor_issue_state() {
           fi
 
           if [[ "$planning_status" == "failed" ]]; then
+            emit_challenge_stage_failure_quarantine "$ISSUE" "$FEATURE_DIR" "planning" "$WIN" || true
             set_window_attention_state "$WIN" "needs-user"
             active_count=$((active_count + 1))
             return 0
@@ -13455,6 +13493,7 @@ monitor_issue_state() {
           fi
 
           if [[ "$coding_status" == "failed" ]]; then
+            emit_challenge_stage_failure_quarantine "$ISSUE" "$FEATURE_DIR" "coding" "$WIN" || true
             set_window_attention_state "$WIN" "needs-user"
             active_count=$((active_count + 1))
             return 0
@@ -13525,6 +13564,7 @@ monitor_issue_state() {
           fi
 
           if [[ "$review_status" == "failed" ]]; then
+            emit_challenge_stage_failure_quarantine "$ISSUE" "$FEATURE_DIR" "review" "$WIN" || true
             set_window_attention_state "$WIN" "needs-user"
             active_count=$((active_count + 1))
             return 0
