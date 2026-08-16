@@ -3607,10 +3607,16 @@ challenge_stage_for_launch_env() {
   esac
 }
 
-challenge_abort_for_unresolvable_varied_model() {
-  local issue="$1" feature_dir="$2" win="$3" stage="$4" model="$5" diagnostic="${6:-}"
-  local result_stage pair_id role peer now artifact tmp detail
-  [[ -n "$issue" && -n "$feature_dir" && -n "$stage" && -n "$model" ]] || return 1
+# Quarantine both arms of a challenge pair and record why.
+#
+# A challenge is only meaningful when both arms actually ran, so a terminal
+# failure on either side invalidates the comparison. Marking both arms (and
+# writing the artifact) keeps the comparison from being scored later, and keeps
+# the reason attached to the evidence rather than inferred after the fact.
+challenge_abort_pair() {
+  local issue="$1" feature_dir="$2" win="$3" stage="$4" model="$5" reason="$6" detail="$7" next_action="${8:-}"
+  local result_stage pair_id role peer now artifact tmp
+  [[ -n "$issue" && -n "$feature_dir" && -n "$stage" && -n "$reason" ]] || return 1
 
   result_stage="$(challenge_result_stage_for_launch "$stage")"
   pair_id="$(get_task_meta "$issue" "challengePairId" 2>/dev/null || true)"
@@ -3623,23 +3629,25 @@ challenge_abort_for_unresolvable_varied_model() {
     fi
   fi
   now="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-  detail="Challenge aborted: varied ${stage} model ${model} failed validation"
-  [[ -n "$diagnostic" ]] && detail="${detail}: ${diagnostic}"
 
-  log_error "  $issue: challenge aborted because selected ${stage} model '$model' failed validation${diagnostic:+ ($diagnostic)}"
   write_stage_result "$feature_dir" "$result_stage" "failed" "" "$model" "$detail"
 
   if [[ -n "${STATE_FILE:-}" && -f "$STATE_FILE" ]]; then
     state_mutate "$STATE_FILE" \
       'def mark($key):
          if ($key != "" and .tasks[$key] != null)
-         then .tasks[$key].challengeAborted = "varied_model_unresolvable"
+         then .tasks[$key].challengeAborted = $reason
+              | .tasks[$key].challengeAbortedDetail = $detail
+              | (if $nextAction != "" then .tasks[$key].challengeAbortedNextAction = $nextAction else . end)
               | .tasks[$key].updated = (now | todate)
          else .
          end;
        mark($issue) | mark($peer)' \
       --arg issue "$issue" \
-      --arg peer "${peer:-}" >/dev/null 2>&1 || true
+      --arg peer "${peer:-}" \
+      --arg reason "$reason" \
+      --arg detail "$detail" \
+      --arg nextAction "$next_action" >/dev/null 2>&1 || true
   fi
 
   mkdir -p "$feature_dir"
@@ -3649,14 +3657,28 @@ challenge_abort_for_unresolvable_varied_model() {
     --arg pairId "${pair_id:-$issue}" \
     --arg stage "$(challenge_stage_for_launch_env "$stage")" \
     --arg model "$model" \
-    --arg reason "varied_model_unresolvable" \
+    --arg reason "$reason" \
     --arg abortedAt "$now" \
     --arg detail "$detail" \
-    '{pairId:$pairId, stage:$stage, model:$model, reason:$reason, abortedAt:$abortedAt, detail:$detail}' \
+    --arg nextAction "$next_action" \
+    '{pairId:$pairId, stage:$stage, model:$model, reason:$reason, abortedAt:$abortedAt, detail:$detail}
+     + (if $nextAction == "" then {} else {nextAction:$nextAction} end)' \
     > "$tmp" 2>/dev/null && mv "$tmp" "$artifact" || rm -f "$tmp"
 
   set_window_attention_state "$win" "needs-user"
   return 0
+}
+
+challenge_abort_for_unresolvable_varied_model() {
+  local issue="$1" feature_dir="$2" win="$3" stage="$4" model="$5" diagnostic="${6:-}"
+  local detail
+  [[ -n "$issue" && -n "$feature_dir" && -n "$stage" && -n "$model" ]] || return 1
+
+  detail="Challenge aborted: varied ${stage} model ${model} failed validation"
+  [[ -n "$diagnostic" ]] && detail="${detail}: ${diagnostic}"
+
+  log_error "  $issue: challenge aborted because selected ${stage} model '$model' failed validation${diagnostic:+ ($diagnostic)}"
+  challenge_abort_pair "$issue" "$feature_dir" "$win" "$stage" "$model" "varied_model_unresolvable" "$detail"
 }
 
 challenge_guard_varied_model_resolvable() {
@@ -6236,6 +6258,118 @@ emit_native_launch_failure_attention() {
   fi
   set_window_attention_state "$win" "needs-user"
   log_warn "$issue → Native ${stage} launcher failed (${failure_kind}) in pane $win_target"
+  active_count=$((active_count + 1))
+  return 0
+}
+
+# ── Terminal native failure detection (hook-driven) ──────────────────
+# The pane-scraping heuristics above only recognise *exec-level* failures:
+# exit 127, bare `--model` invocations, probe failures. A provider that accepts
+# the launch and then rejects the request — an unrecognised model ID, or a
+# prompt larger than the model's context window — produces none of those
+# signatures, and `_pane_is_dead_or_idle` may not hold either. Such arms stayed
+# parked in `phase: coding` indefinitely, blocking the merge lane.
+#
+# The agent's own status hook already records these as a terminal
+# {"state":"error","event":"process_exit"} write. Unlike the liveness reads in
+# wavemill-status.sh, a terminal state is deliberately NOT TTL-gated: a dead
+# process never refreshes its hook, so staleness corroborates the failure
+# instead of invalidating it.
+
+native_hook_terminal_failure_detail() {
+  local issue="$1"
+  local hook_file="/tmp/wavemill-${SESSION}-${issue}.hook"
+  local state detail
+  [[ -n "$issue" ]] || return 1
+  [[ -f "$hook_file" ]] || return 1
+
+  state="$(jq -r '.state // empty' "$hook_file" 2>/dev/null || true)"
+  [[ "$state" == "error" ]] || return 1
+
+  detail="$(jq -r '.detail // empty' "$hook_file" 2>/dev/null || true)"
+  [[ -n "$detail" ]] || return 1
+  printf '%s\n' "$detail"
+}
+
+native_terminal_failure_kind() {
+  local detail="${1:-}"
+  local lower
+  lower="$(printf '%s' "$detail" | tr '[:upper:]' '[:lower:]')"
+
+  case "$lower" in
+    *"maximum context length"*|*"context length is"*|*"reduce the length"*|*"context_length_exceeded"*)
+      printf 'context-window-exceeded\n'; return 0 ;;
+    *"is not a valid model id"*|*"invalid model"*|*"unknown model"*|*"model_not_found"*)
+      printf 'invalid-model-id\n'; return 0 ;;
+    *"rate limit"*|*"429"*)
+      printf 'provider-rate-limited\n'; return 0 ;;
+    *"insufficient"*"credit"*|*"quota"*)
+      printf 'provider-quota-exhausted\n'; return 0 ;;
+  esac
+  printf 'native-provider-error\n'
+}
+
+native_terminal_failure_next_action() {
+  case "${1:-}" in
+    context-window-exceeded)
+      printf 'relaunch with compressed context; the prompt exceeded the model context window\n' ;;
+    invalid-model-id)
+      printf 'provider rejected the model ID; verify catalog alias resolution before relaunching\n' ;;
+    provider-rate-limited)
+      printf 'provider rate limited the request; relaunch after the limit window\n' ;;
+    provider-quota-exhausted)
+      printf 'provider quota exhausted; restore credit before relaunching\n' ;;
+    *)
+      printf 'inspect the native provider error, then relaunch the phase\n' ;;
+  esac
+}
+
+# Turn a terminal hook error into a failed stage plus, for challenge arms, a
+# quarantined pair. Returns 0 when it handled the issue (caller should stop).
+emit_native_terminal_failure_attention() {
+  local issue="$1" feature_dir="$2" stage="$3" win="$4" win_target="$5" fallback_agent="${6:-}" fallback_model="${7:-}"
+  local stage_status detail failure_kind next_action agent model notes artifacts_json is_challenge
+
+  stage_status="$(read_stage_status "$feature_dir" "$stage")"
+  [[ "$stage_status" == "running" ]] || return 1
+
+  # Never override a run that actually produced its completion artifact.
+  [[ ! -f "$feature_dir/.${stage}-complete" ]] || return 1
+
+  detail="$(native_hook_terminal_failure_detail "$issue")" || return 1
+  failure_kind="$(native_terminal_failure_kind "$detail")"
+  next_action="$(native_terminal_failure_next_action "$failure_kind")"
+
+  agent="$(stage_result_field "$feature_dir" "$stage" "agent")"
+  model="$(stage_result_field "$feature_dir" "$stage" "model")"
+  [[ -n "$agent" ]] || agent="$fallback_agent"
+  [[ -n "$model" ]] || model="$fallback_model"
+
+  notes="Native ${stage} failed (${failure_kind}): ${detail} Next: ${next_action}"
+
+  artifacts_json="$(jq -cn \
+    --arg paneTarget "$win_target" \
+    --arg failureKind "$failure_kind" \
+    --arg detail "$detail" \
+    --arg nextAction "$next_action" \
+    '{type:"nativeTerminalFailure", paneTarget:$paneTarget, failureKind:$failureKind, detail:$detail, nextAction:$nextAction}' \
+    2>/dev/null || printf '{}')"
+
+  # Quarantine first: challenge_abort_pair also writes a stage result, so the
+  # richer artifact-bearing write below must land last and win.
+  is_challenge="$(get_task_meta "$issue" "challenge" 2>/dev/null || true)"
+  if [[ "$is_challenge" == "true" ]]; then
+    challenge_abort_pair "$issue" "$feature_dir" "$win" "$stage" "$model" \
+      "terminal_launch_failure:${failure_kind}" "$notes" "$next_action" || true
+  fi
+
+  write_stage_result "$feature_dir" "$stage" "failed" "$agent" "$model" "$notes" "$artifacts_json"
+
+  if [[ "${WAVEMILL_TERMINAL_RECONCILER_LOADED:-0}" == "1" ]]; then
+    wavemill_reconcile_terminal "$SESSION" "$issue" "recovery_failure" || true
+  fi
+  set_window_attention_state "$win" "needs-user"
+  log_warn "$issue → Native ${stage} failed (${failure_kind}). ${next_action}"
   active_count=$((active_count + 1))
   return 0
 }
@@ -13117,6 +13251,9 @@ monitor_issue_state() {
             fi
           fi
 
+          if emit_native_terminal_failure_attention "$ISSUE" "$FEATURE_DIR" "planning" "$WIN" "$WIN_TARGET" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "planning" "")"; then
+            return 0
+          fi
           if emit_native_launch_failure_attention "$ISSUE" "$FEATURE_DIR" "planning" "$WIN" "$WIN_TARGET" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "planning" "")"; then
             return 0
           fi
@@ -13297,6 +13434,9 @@ monitor_issue_state() {
             if emit_pane_divergence_attention "$ISSUE" "$SLUG" "$FEATURE_DIR" "$WIN" "$WIN_TARGET"; then
               return 0
             fi
+            if emit_native_terminal_failure_attention "$ISSUE" "$FEATURE_DIR" "coding" "$WIN" "$WIN_TARGET" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "coding" "claude-opus-4-7")"; then
+              return 0
+            fi
             if emit_native_launch_failure_attention "$ISSUE" "$FEATURE_DIR" "coding" "$WIN" "$WIN_TARGET" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "coding" "claude-opus-4-7")"; then
               return 0
             fi
@@ -13366,6 +13506,8 @@ monitor_issue_state() {
                 wavemill_reconcile_terminal "$SESSION" "$ISSUE" "review_complete" "$pr_number" || true
               fi
               review_status="completed"
+            elif emit_native_terminal_failure_attention "$ISSUE" "$FEATURE_DIR" "review" "$WIN" "$WIN_TARGET" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "review" "claude-sonnet-5")"; then
+              return 0
             elif emit_native_launch_failure_attention "$ISSUE" "$FEATURE_DIR" "review" "$WIN" "$WIN_TARGET" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "review" "claude-sonnet-5")"; then
               return 0
             else
