@@ -107,6 +107,7 @@ TESTS=(
   shared/lib/router-log.test.ts
   shared/lib/challenge-analyzer.test.ts
   shared/lib/challenge-unavailable.test.ts
+  shared/lib/challenge-attestation-backfill.test.ts
   shared/lib/cross-repo-parity.test.ts
   shared/lib/challenge-execution-contract.test.ts
   shared/lib/challenge-pairing-repair.test.ts
