@@ -150,6 +150,11 @@ for fn in \
   native_launch_failure_kind \
   write_native_launch_failure_artifact \
   emit_native_launch_failure_attention \
+  challenge_varied_stage_model \
+  challenge_result_stage_for_launch \
+  challenge_stage_for_launch_env \
+  challenge_abort_for_unresolvable_varied_model \
+  challenge_guard_varied_model_resolvable \
   resolve_stage_result_model \
   coding_pane_replacement_intent_path \
   record_coding_pane_replacement_intent \

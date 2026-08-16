@@ -2309,6 +2309,19 @@ agent_launch_interactive() {
   phase_env="${launch_phase:-$window}"
 
   if [[ -n "$model" ]] && ! agent_validate_model "$model" "${REPO_DIR:-$(pwd)}" >/dev/null 2>&1; then
+    local challenge_launch_stage=""
+    case "${launch_phase:-}" in
+      plan|planning) challenge_launch_stage="plan" ;;
+      coding|implementation) challenge_launch_stage="implementation" ;;
+      review) challenge_launch_stage="review" ;;
+    esac
+    if [[ -n "${WAVEMILL_CHALLENGE_VARIED_MODEL:-}" \
+      && "$model" == "$WAVEMILL_CHALLENGE_VARIED_MODEL" \
+      && -n "$challenge_launch_stage" \
+      && "$challenge_launch_stage" == "${WAVEMILL_CHALLENGE_VARIED_STAGE:-}" ]]; then
+      echo "Error: challenge varied ${challenge_launch_stage} model '$model' failed validation; refusing fallback substitution" >&2
+      return 1
+    fi
     local fallback_model=""
     fallback_model="$(agent_default_model_for_cmd "$agent_cmd")"
     if agent_model_looks_like_depth_tag "$model"; then
