@@ -396,6 +396,34 @@ describe('native-agent Pi provider lookup', () => {
 
     assert.equal(provider, undefined);
   });
+
+  // Regression: provider entries are enumerated by wavemill alias, but the alias is
+  // not a valid OpenRouter model ID. Sending it unresolved made native coding launches
+  // die with `400 qwen-2.5-coder-32b is not a valid model ID`, which the monitor then
+  // left parked in `phase: coding` forever.
+  it('sends the provider-native model ID on the wire, not the wavemill alias', () => {
+    const model = buildOpenRouterModel({ modelId: 'qwen-2.5-coder-32b' });
+
+    assert.equal(model.name, 'qwen/qwen-2.5-coder-32b-instruct');
+    // The entry stays keyed by alias so provider matching and certification lookups
+    // continue to resolve the same entry.
+    assert.equal(model.id, 'openrouter:qwen-2.5-coder-32b');
+  });
+
+  it('leaves already provider-native and unknown model IDs unchanged', () => {
+    assert.equal(
+      buildOpenRouterModel({ modelId: 'qwen/qwen-2.5-coder-32b-instruct' }).name,
+      'qwen/qwen-2.5-coder-32b-instruct',
+    );
+    assert.equal(
+      buildOpenRouterModel({ modelId: 'openai/gpt-4o-mini' }).name,
+      'openai/gpt-4o-mini',
+    );
+    assert.equal(
+      buildOpenRouterModel({ modelId: 'definitely-not-in-the-catalog' }).name,
+      'definitely-not-in-the-catalog',
+    );
+  });
 });
 
 describe('native-agent certification gate', () => {
