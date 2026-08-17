@@ -809,6 +809,33 @@ test('Record with native workflow cost attribution validates', () => {
   assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
 });
 
+test('Record with codex workflow cost attribution validates', () => {
+  const record = {
+    ...scenarios[0].record,
+    workflowCost: 0,
+    workflowCostStatus: 'success',
+    workflowCostAttribution: {
+      source: 'codex',
+      coverage: 'partial',
+      reason: 'unpriced_model',
+      sessions: 1,
+      turns: 1,
+      pricedSessions: 0,
+      unpricedSessions: 1,
+      models: [{
+        provider: 'codex',
+        modelId: 'gpt-5.5',
+        priced: false,
+        reason: 'unpriced_model',
+        pricingSource: 'local_estimate',
+      }],
+    },
+  } as unknown as Record<string, unknown>;
+
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
 test('Challenge execution contract fields validate as emitted', () => {
   const intent = buildChallengeExecutionIntent({
     pairId: 'pair-schema',
