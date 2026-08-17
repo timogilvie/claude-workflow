@@ -1554,7 +1554,7 @@ else
 fi
 
 if grep -q 'SURVIVAL MODE' "$PROMPT_RENDER_DIR/coding-survival.txt" \
-  && grep -q "confidence=low" "$PROMPT_RENDER_DIR/coding-survival.txt"; then
+  && grep -q '"confidence":"low"' "$PROMPT_RENDER_DIR/coding-survival.txt"; then
   pass "coding prompt renders survival-mode confidence marker guidance"
 else
   fail "coding prompt is missing survival-mode confidence guidance"

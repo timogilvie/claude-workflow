@@ -632,7 +632,7 @@ function formatInvalidArtifactError(
   inspection: Extract<CompletionInspectionResult, { kind: 'invalid' }>,
   attempts: number,
 ): string {
-  const errors = inspection.errors.map((error) => `${error.code}: ${error.message}`).join('; ');
+  const errors = inspection.errors.map((error) => `${error.code} at ${error.path}: ${error.message}`).join('; ');
   const filename = inspection.artifact === 'coding-complete'
     ? '.coding-complete'
     : '.coding-blocked-completion.json';
@@ -906,7 +906,10 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
     if (inspection.kind === 'invalid') {
       if (
         inspection.artifact === 'blocked-completion'
-        && inspection.errors.some((error) => error.code === 'INVALID_FIELD_TYPE' && error.field === 'passingChecks')
+        && inspection.errors.some((error) => (
+          error.code === 'NO_VERIFICATION_EVIDENCE'
+          || (error.code === 'INVALID_FIELD_TYPE' && 'field' in error && error.field === 'passingChecks')
+        ))
       ) {
         inspection = await inspectCompletion({
           featureDir,

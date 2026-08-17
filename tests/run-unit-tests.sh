@@ -178,6 +178,7 @@ TESTS=(
   shared/lib/plan-queue-utils.test.ts
   shared/lib/scaffold-migrate-dryrun.test.ts
   shared/lib/deepseek-smoke.test.ts
+  shared/lib/seam-artifacts.test.ts
   shared/lib/blocked-completion.test.ts
   shared/lib/task-contract.test.ts
   shared/lib/feature-state.test.ts
@@ -201,6 +202,7 @@ TESTS=(
   tools/parity-report.test.ts
   tools/resolve-challenge-task.test.ts
   tools/route-tasks.test.ts
+  tools/seam-artifact-cli.test.ts
   tools/plan-queue.test.ts
   tools/select-wave.test.ts
   tools/smoke-deepseek.test.ts

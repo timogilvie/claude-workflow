@@ -71,10 +71,9 @@ export const CODING_FIXTURE_ARTIFACTS: CodingArtifacts = {
 };
 
 export const CODING_FIXTURE_MARKER_CONTENT = serializeCodingComplete({
+  stage: 'coding',
   confidence: 'high',
-  fields: {
-    producer: 'native-agent',
-  },
+  producer: 'native-agent',
 });
 
 export const codingLifecycleSessionTurns: ScriptedPiProviderTurn[] = [

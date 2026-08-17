@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stage-result.schema.json",
+  "title": "StageResult",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "stage",
+    "status"
+  ],
+  "properties": {
+    "stage": {
+      "enum": [
+        "planning",
+        "coding",
+        "review",
+        "ready"
+      ]
+    },
+    "status": {
+      "enum": [
+        "running",
+        "awaiting_user",
+        "completed",
+        "aborted",
+        "failed"
+      ]
+    },
+    "startedAt": {
+      "type": "string"
+    },
+    "finishedAt": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "agent": {
+      "type": "string"
+    },
+    "model": {
+      "type": "string"
+    },
+    "notes": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "failureReason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "history": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    }
+  },
+  "$defs": {
+    "codingArtifacts": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "type",
+        "filesChanged",
+        "linesAdded",
+        "linesRemoved",
+        "commitCount"
+      ],
+      "properties": {
+        "type": {
+          "const": "coding"
+        },
+        "filesChanged": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "linesAdded": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "linesRemoved": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "commitCount": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}
