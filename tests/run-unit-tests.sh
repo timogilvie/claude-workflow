@@ -54,6 +54,7 @@ TESTS=(
   shared/lib/native-agent/cleanup.test.ts
   shared/lib/native-agent/coding-lifecycle.test.ts
   shared/lib/native-agent/command-transcript.test.ts
+  shared/lib/native-agent/command-argv.test.ts
   shared/lib/native-agent/command-substrate.test.ts
   shared/lib/native-agent/tools/policies.test.ts
   shared/lib/native-agent/tools/registry.test.ts

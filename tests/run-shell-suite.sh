@@ -28,6 +28,7 @@ TESTS=(
   challenge-intent-roundtrip.test.sh
   challenge-varied-model-abort.test.sh
   native-terminal-failure.test.sh
+  native-agent-shell-operators.test.sh
   hook-write-context-guard.test.sh
   expansion-handshake.test.sh
   config-version-prompt.test.sh

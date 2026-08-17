@@ -5,6 +5,7 @@ import type { ChildProcess, SpawnOptions } from 'node:child_process';
 
 import type { CommandClass } from './command-classifier.ts';
 import { classifyCommand } from './command-classifier.ts';
+import { parseCommandArgv } from './command-argv.ts';
 import { buildCommandTranscript } from './command-transcript.ts';
 import type { TranscriptWriter } from './transcript.ts';
 import type { ApprovalGateFn } from './workflow-tools/approval-gate.ts';
@@ -18,6 +19,7 @@ export type ApprovalOutcome = 'approved' | 'rejected' | 'approval_needed';
 
 export type RejectionReason =
   | 'empty-command'
+  | 'unsupported-shell-syntax'
   | 'dangerous-command-pattern'
   | 'cwd-outside-allowed-roots'
   | 'approval-denied'
@@ -62,6 +64,7 @@ export interface CommandResult {
   commandClass: CommandClass;
   approval: ApprovalOutcome;
   rejectionReason?: RejectionReason | string;
+  rejectionDetail?: string;
   /** Present when approval === 'approval_needed'. */
   approvalNeeded?: CommandApprovalNeededMetadata;
   exitCode: number | null;
@@ -146,11 +149,39 @@ export async function runCommand(options: RunCommandOptions): Promise<CommandRes
     );
   }
 
+  let commandClass = classification.commandClass;
+  let spawnCommand: readonly string[] | string = options.command;
+  if (typeof options.command === 'string' && options.shell !== true) {
+    const parsed = parseCommandArgv(options.command);
+    if (!parsed.ok) {
+      return rejectionResult(
+        options,
+        commandClass,
+        parsed.reason,
+        startedAt,
+        classification.normalizedCommand,
+        parsed.detail,
+      );
+    }
+    const argvClassification = classifyCommand(parsed.argv);
+    if (argvClassification.commandClass === 'dangerous') {
+      return rejectionResult(
+        options,
+        argvClassification.commandClass,
+        argvClassification.rejectionReason ?? 'dangerous-command-pattern',
+        startedAt,
+        classification.normalizedCommand,
+      );
+    }
+    commandClass = argvClassification.commandClass;
+    spawnCommand = parsed.argv;
+  }
+
   const cwdResolution = resolveAllowedCwd(options.cwd, options.allowedRoots);
   if (cwdResolution.kind === 'outside') {
     return rejectionResult(
       options,
-      classification.commandClass,
+      commandClass,
       'cwd-outside-allowed-roots',
       startedAt,
       classification.normalizedCommand,
@@ -160,11 +191,11 @@ export async function runCommand(options: RunCommandOptions): Promise<CommandRes
   // Check approval gate before spawning (HOK-2364).
   if (options.approvalGate) {
     const sessionId = options.sessionId ?? '';
-    const argSummary = options.argSummary ?? `${options.toolName ?? 'command'}:${classification.commandClass}`;
+    const argSummary = options.argSummary ?? `${options.toolName ?? 'command'}:${commandClass}`;
     const decision = await options.approvalGate({
       sessionId,
       tool: options.toolName ?? 'command',
-      action: classification.commandClass,
+      action: commandClass,
       argSummary,
     });
 
@@ -172,7 +203,7 @@ export async function runCommand(options: RunCommandOptions): Promise<CommandRes
       const durationMs = Date.now() - startedAt;
       if (decision.outcome === 'approval_needed') {
         return {
-          commandClass: classification.commandClass,
+          commandClass,
           approval: 'approval_needed',
           approvalNeeded: {
             requestId: decision.requestId,
@@ -192,7 +223,7 @@ export async function runCommand(options: RunCommandOptions): Promise<CommandRes
       // denied or expired — treat as rejection
       return rejectionResult(
         options,
-        classification.commandClass,
+        commandClass,
         decision.outcome === 'denied' ? 'approval-denied' : 'approval-expired',
         startedAt,
         classification.normalizedCommand,
@@ -202,7 +233,7 @@ export async function runCommand(options: RunCommandOptions): Promise<CommandRes
 
   const env = buildChildEnv(options.allowedEnvKeys, process.env);
   const spawnFn = options.spawnFn ?? spawn;
-  const spawnSpec = buildSpawnSpec(options.command, options.shell === true);
+  const spawnSpec = buildSpawnSpec(spawnCommand, options.shell === true);
   const spawnOptions: SpawnOptions = {
     cwd: cwdResolution.resolved,
     env,
@@ -214,7 +245,7 @@ export async function runCommand(options: RunCommandOptions): Promise<CommandRes
   return await waitForProcess({
     child,
     command: classification.normalizedCommand,
-    commandClass: classification.commandClass,
+    commandClass,
     maxOutputBytes,
     timeoutMs,
     cwd: cwdResolution.resolved,
@@ -243,6 +274,7 @@ function rejectionResult(
   rejectionReason: RejectionReason,
   startedAt: number,
   normalizedCommand: string,
+  rejectionDetail?: string,
 ): CommandResult {
   const durationMs = Date.now() - startedAt;
   const built = buildCommandTranscript({
@@ -267,6 +299,7 @@ function rejectionResult(
     commandClass,
     approval: 'rejected',
     rejectionReason,
+    rejectionDetail,
     exitCode: null,
     signal: null,
     stdout: built.stdout,
@@ -285,17 +318,7 @@ function buildSpawnSpec(command: string | readonly string[], shell: boolean): { 
         args: ['-c', command],
       };
     }
-    const parts = command
-      .trim()
-      .split(/\s+/)
-      .filter((part) => part.length > 0);
-    if (parts.length === 0) {
-      throw new Error('command must not be empty.');
-    }
-    return {
-      file: parts[0]!,
-      args: parts.slice(1),
-    };
+    throw new Error('string commands must be tokenized before exec-form spawn.');
   }
 
   if (command.length === 0) {

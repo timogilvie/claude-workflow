@@ -285,7 +285,7 @@ export function renderCodingSystemPrompt(input: {
     buildNativePatchGuidance(),
     '',
     '- Use write_artifact/create_marker only for Wavemill-owned artifacts under the feature directory.',
-    '- Use run_tests/run_format for verification and formatting commands inside the worktree.',
+    '- Use run_tests/run_format for verification and formatting commands inside the worktree. Commands run without a shell: use one program per call, pass cwd instead of cd ... &&, and avoid pipes, redirects, &&/;, $VAR, and backticks; POSIX-style quoting is honored.',
     '- Use git_add/git_commit to commit intended changed files before completion.',
     `- Prefer .coding-complete when full verification passes; otherwise write ${input.blockedCompletionPath} only when implementation is complete, scoped checks passed, changes are committed, and remaining blockers are unrelated or environmental.`,
   ].join('\n');
