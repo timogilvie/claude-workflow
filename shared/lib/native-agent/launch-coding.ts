@@ -45,7 +45,15 @@ import {
 import { createToolRegistry } from './tools/registry.ts';
 import { toPiAgentTool, type AgentTool } from './tools/pi-adapter.ts';
 import type { ToolDescriptor, ToolMetadata } from './tools/types.ts';
-import { parseCodingComplete, validateCodingArtifacts, type CodingArtifacts } from './coding-artifacts.ts';
+import { validateCodingArtifacts, type CodingArtifacts } from './coding-artifacts.ts';
+import {
+  buildCompletionArtifactRetryGuidance,
+  normalizeBlockedCompletionContent,
+  normalizeCodingCompleteContent,
+  noVerificationEvidenceError,
+  type CompletionArtifact,
+  type RetryGuidanceError,
+} from './completion-normalizer.ts';
 import { registerAndRecordNativeProvenance } from './prompts.ts';
 import { buildNativePatchGuidance } from './patch-contract.ts';
 import {
@@ -60,11 +68,11 @@ import { logPromptUsage } from '../prompt-registry.ts';
 import type { ResourceRef } from '../resource-registry.ts';
 import {
   getBlockedCompletionPath,
-  readBlockedCompletion,
 } from '../blocked-completion.ts';
 
 const CODING_PROMPT_PATH = new URL('../../../tools/prompts/coding-phase.md', import.meta.url);
 const CODING_PROMPT_FILE = fileURLToPath(CODING_PROMPT_PATH);
+const MAX_ARTIFACT_RETRIES = 2;
 
 type HookState = 'working' | 'idle' | 'error';
 
@@ -77,6 +85,16 @@ interface ToolCallFailureContext {
   toolCall: { name: string };
   result: { details: unknown; content?: Array<{ type: string; text: string }> };
 }
+
+type CompletionInspectionResult =
+  | { kind: 'complete' }
+  | { kind: 'blocked' }
+  | {
+    kind: 'invalid';
+    artifact: CompletionArtifact;
+    path: string;
+    errors: RetryGuidanceError[];
+  };
 
 export interface LaunchNativeCodingOptions {
   session: string;
@@ -515,12 +533,22 @@ async function inspectCompletion(input: {
   stopReason: string;
   mutationFailureTracker: MutationFailureTracker;
   recoveryAttempted: boolean;
-}): Promise<'complete' | 'blocked'> {
+  coerceUnverifiedCompletionClaim: boolean;
+}): Promise<CompletionInspectionResult> {
   const markerPath = join(input.featureDir, '.coding-complete');
   if (existsSync(markerPath)) {
-    const parsed = parseCodingComplete(readFileSync(markerPath, 'utf-8'));
-    if (!parsed.ok) {
-      throw new Error(`Native coding wrote invalid .coding-complete: ${parsed.errors.map((error) => error.message).join('; ')}`);
+    const raw = readFileSync(markerPath, 'utf-8');
+    const normalized = normalizeCodingCompleteContent(raw);
+    if (!normalized.ok) {
+      return {
+        kind: 'invalid',
+        artifact: 'coding-complete',
+        path: markerPath,
+        errors: normalized.errors,
+      };
+    }
+    if (normalized.changed) {
+      atomicWriteText(markerPath, normalized.canonicalContent);
     }
     const artifacts = loadCodingArtifacts(input.featureDir, input.trackerCommitCount);
     removeAgentCodingArtifactBeforeStageResult(input.featureDir);
@@ -529,18 +557,38 @@ async function inspectCompletion(input: {
       finishedAt: new Date().toISOString(),
       agent: 'native',
       model: input.model,
-      notes: `Native coding completed with ${parsed.value.confidence} confidence`,
+      notes: [
+        `Native coding completed with ${normalized.value.confidence} confidence`,
+        ...normalized.warnings,
+      ].join('\n'),
       artifacts,
       failureReason: null,
     });
-    return 'complete';
+    return { kind: 'complete' };
   }
 
   const blockedPath = getBlockedCompletionPath(input.featureDir);
   if (existsSync(blockedPath)) {
-    const blocked = await readBlockedCompletion(blockedPath);
-    if (!blocked.ok) {
-      throw new Error(`Native coding wrote invalid .coding-blocked-completion.json: ${blocked.message}`);
+    const raw = readFileSync(blockedPath, 'utf-8');
+    const normalized = normalizeBlockedCompletionContent(raw);
+    if (!normalized.ok) {
+      return {
+        kind: 'invalid',
+        artifact: 'blocked-completion',
+        path: blockedPath,
+        errors: normalized.errors,
+      };
+    }
+    if (normalized.coercedUnverifiedClaim && !input.coerceUnverifiedCompletionClaim) {
+      return {
+        kind: 'invalid',
+        artifact: 'blocked-completion',
+        path: blockedPath,
+        errors: [noVerificationEvidenceError()],
+      };
+    }
+    if (normalized.changed) {
+      atomicWriteText(blockedPath, normalized.canonicalContent);
     }
     const artifacts = loadCodingArtifacts(input.featureDir, input.trackerCommitCount);
     removeAgentCodingArtifactBeforeStageResult(input.featureDir);
@@ -549,11 +597,14 @@ async function inspectCompletion(input: {
       finishedAt: null,
       agent: 'native',
       model: input.model,
-      notes: 'Native coding produced a blocked-completion handoff for monitor recovery',
+      notes: [
+        'Native coding produced a blocked-completion handoff for monitor recovery',
+        ...normalized.warnings,
+      ].join('\n'),
       artifacts,
       failureReason: null,
     });
-    return 'blocked';
+    return { kind: 'blocked' };
   }
 
   writeCodingFailureHandoff(input.featureDir, buildFailureHandoffInput({
@@ -568,6 +619,24 @@ async function inspectCompletion(input: {
     'Native coding completed without .coding-complete or .coding-blocked-completion.json'
     + `${lastErrorText}; structured handoff: ${handoffRelativePath}`,
   );
+}
+
+function preserveInvalidArtifact(path: string, attempt: number): string {
+  const preservedPath = `${path}.invalid-${attempt}`;
+  rmSync(preservedPath, { force: true });
+  renameSync(path, preservedPath);
+  return preservedPath;
+}
+
+function formatInvalidArtifactError(
+  inspection: Extract<CompletionInspectionResult, { kind: 'invalid' }>,
+  attempts: number,
+): string {
+  const errors = inspection.errors.map((error) => `${error.code}: ${error.message}`).join('; ');
+  const filename = inspection.artifact === 'coding-complete'
+    ? '.coding-complete'
+    : '.coding-blocked-completion.json';
+  return `Native coding wrote invalid ${filename} after ${attempts} artifact retry attempt(s): ${errors}`;
 }
 
 export async function launchNativeCoding(options: LaunchNativeCodingOptions): Promise<LaunchNativeCodingResult> {
@@ -790,14 +859,71 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
       }
     }
 
-    const completion = await inspectCompletion({
+    let inspection = await inspectCompletion({
       featureDir,
       model: modelName,
       trackerCommitCount: tracker.commitCount,
       stopReason: result.stopReason,
       mutationFailureTracker,
       recoveryAttempted,
+      coerceUnverifiedCompletionClaim: false,
     });
+    let artifactRetryAttempt = 0;
+    while (inspection.kind === 'invalid' && artifactRetryAttempt < MAX_ARTIFACT_RETRIES) {
+      artifactRetryAttempt += 1;
+      const preservedPath = preserveInvalidArtifact(inspection.path, artifactRetryAttempt);
+      writeHookStatus(
+        hookPath,
+        'working',
+        'native_coding_artifact_retry',
+        `${inspection.artifact} validation failed; preserved ${relative(options.wtDir, preservedPath)}`,
+        'native',
+      );
+      context.messages = [
+        ...result.messages,
+        {
+          role: 'user',
+          content: buildCompletionArtifactRetryGuidance(inspection.artifact, inspection.errors),
+          timestamp: Date.now(),
+        } as AgentMessage,
+      ];
+      result = await runCodingLoop();
+      const retryProviderError = findFinalAssistantErrorMessage(result.messages);
+      if (retryProviderError) {
+        throw new Error(`Native coding failed: ${retryProviderError}`);
+      }
+      inspection = await inspectCompletion({
+        featureDir,
+        model: modelName,
+        trackerCommitCount: tracker.commitCount,
+        stopReason: result.stopReason,
+        mutationFailureTracker,
+        recoveryAttempted,
+        coerceUnverifiedCompletionClaim: false,
+      });
+    }
+
+    if (inspection.kind === 'invalid') {
+      if (
+        inspection.artifact === 'blocked-completion'
+        && inspection.errors.some((error) => error.code === 'INVALID_FIELD_TYPE' && error.field === 'passingChecks')
+      ) {
+        inspection = await inspectCompletion({
+          featureDir,
+          model: modelName,
+          trackerCommitCount: tracker.commitCount,
+          stopReason: result.stopReason,
+          mutationFailureTracker,
+          recoveryAttempted,
+          coerceUnverifiedCompletionClaim: true,
+        });
+      }
+      if (inspection.kind === 'invalid') {
+        throw new Error(formatInvalidArtifactError(inspection, artifactRetryAttempt));
+      }
+    }
+
+    const completion = inspection.kind;
     writeHookStatus(hookPath, completion === 'complete' ? 'idle' : 'working', 'process_exit', completion, 'native');
     writeTextStatus(options.session, options.issue, completion === 'complete' ? 'coding complete' : 'coding blocked-completion');
 
