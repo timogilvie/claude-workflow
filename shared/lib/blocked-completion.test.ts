@@ -35,6 +35,12 @@ function buildValidArtifact(overrides: Record<string, unknown> = {}): Record<str
   };
 }
 
+function errorSummary(result: ReturnType<typeof validateBlockedCompletion>): Array<{ code: string; path: string }> {
+  assert.equal(result.ok, false);
+  if (result.ok) return [];
+  return result.errors.map((error) => ({ code: error.code, path: error.path }));
+}
+
 test('validateBlockedCompletion accepts the minimal valid artifact', () => {
   const result = validateBlockedCompletion(buildValidArtifact());
 
@@ -57,6 +63,17 @@ test('validateBlockedCompletion accepts optional commit and createdAt fields', (
   }
 });
 
+test('validateBlockedCompletion accepts orchestrator capacity values', () => {
+  const result = validateBlockedCompletion(buildValidArtifact({
+    implementationComplete: false,
+    passingChecks: [],
+    blockingReason: 'model_at_capacity',
+    recommendedAction: 'relaunch_coding',
+  }));
+
+  assert.equal(result.ok, true);
+});
+
 test('validateBlockedCompletion preserves unknown extra fields', () => {
   const result = validateBlockedCompletion(buildValidArtifact({
     extraContext: { source: 'targeted-check' },
@@ -68,19 +85,15 @@ test('validateBlockedCompletion preserves unknown extra fields', () => {
   }
 });
 
-test('validateBlockedCompletion reports each missing required field deterministically', () => {
-  for (const field of BLOCKED_COMPLETION_REQUIRED_FIELDS) {
-    const artifact = buildValidArtifact();
-    delete artifact[field];
+test('validateBlockedCompletion reports missing required fields with shared paths', () => {
+  const artifact = buildValidArtifact();
+  delete artifact.stage;
+  delete artifact.committed;
 
-    const result = validateBlockedCompletion(artifact);
-    assert.deepEqual(result, {
-      ok: false,
-      code: 'MISSING_REQUIRED_FIELD',
-      field,
-      message: `Blocked completion artifact is missing required field "${field}".`,
-    });
-  }
+  assert.deepEqual(errorSummary(validateBlockedCompletion(artifact)), [
+    { code: 'MISSING_REQUIRED_FIELD', path: '$.stage' },
+    { code: 'MISSING_REQUIRED_FIELD', path: '$.committed' },
+  ]);
 });
 
 test('readBlockedCompletion returns MALFORMED_JSON for malformed content', async () => {
@@ -90,11 +103,12 @@ test('readBlockedCompletion returns MALFORMED_JSON for malformed content', async
     writeFileSync(filePath, '{not valid json', 'utf-8');
 
     const result = await readBlockedCompletion(filePath);
-    assert.deepEqual(result, {
-      ok: false,
-      code: 'MALFORMED_JSON',
-      message: `Blocked completion artifact at ${filePath} contains malformed JSON.`,
-    });
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      assert.deepEqual(result.errors.map((error) => ({ code: error.code, path: error.path })), [
+        { code: 'MALFORMED_JSON', path: '$' },
+      ]);
+    }
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
@@ -102,105 +116,78 @@ test('readBlockedCompletion returns MALFORMED_JSON for malformed content', async
 
 test('validateBlockedCompletion rejects non-object inputs without throwing', () => {
   for (const input of [null, [], 'nope']) {
-    const result = validateBlockedCompletion(input);
-    assert.deepEqual(result, {
-      ok: false,
-      code: 'INVALID_FIELD_TYPE',
-      field: 'artifact',
-      message: 'Blocked completion artifact must be a JSON object.',
-    });
+    assert.deepEqual(errorSummary(validateBlockedCompletion(input)), [
+      { code: 'INVALID_FIELD_TYPE', path: '$' },
+    ]);
   }
 });
 
 test('validateBlockedCompletion rejects the wrong stage', () => {
-  const result = validateBlockedCompletion(buildValidArtifact({ stage: 'review' }));
-
-  assert.deepEqual(result, {
-    ok: false,
-    code: 'INVALID_STAGE',
-    field: 'stage',
-    message: 'Blocked completion stage must be "coding".',
-  });
+  assert.deepEqual(errorSummary(validateBlockedCompletion(buildValidArtifact({ stage: 'review' }))), [
+    { code: 'INVALID_STAGE', path: '$.stage' },
+  ]);
 });
 
 test('validateBlockedCompletion rejects unknown blockingReason values', () => {
-  const result = validateBlockedCompletion(buildValidArtifact({
-    blockingReason: 'something_else',
-  }));
-
-  assert.deepEqual(result, {
-    ok: false,
-    code: 'INVALID_ENUM_VALUE',
-    field: 'blockingReason',
-    message: 'Blocked completion field "blockingReason" must be a recognized value.',
-  });
+  for (const value of ['something_else', 'environment_or_baseline_tests_failing', 'environmental_and_baseline_collection_failures']) {
+    assert.deepEqual(errorSummary(validateBlockedCompletion(buildValidArtifact({ blockingReason: value }))), [
+      { code: 'INVALID_ENUM_VALUE', path: '$.blockingReason' },
+    ]);
+  }
 });
 
 test('validateBlockedCompletion rejects unknown recommendedAction values', () => {
-  const result = validateBlockedCompletion(buildValidArtifact({
+  assert.deepEqual(errorSummary(validateBlockedCompletion(buildValidArtifact({
     recommendedAction: 'retry_later',
-  }));
-
-  assert.deepEqual(result, {
-    ok: false,
-    code: 'INVALID_ENUM_VALUE',
-    field: 'recommendedAction',
-    message: 'Blocked completion field "recommendedAction" must be a recognized value.',
-  });
+  }))), [
+    { code: 'INVALID_ENUM_VALUE', path: '$.recommendedAction' },
+  ]);
 });
 
 test('validateBlockedCompletion rejects non-string-array checks', () => {
-  const passingResult = validateBlockedCompletion(buildValidArtifact({
+  assert.deepEqual(errorSummary(validateBlockedCompletion(buildValidArtifact({
     passingChecks: ['ok', 1],
-  }));
-  assert.deepEqual(passingResult, {
-    ok: false,
-    code: 'INVALID_FIELD_TYPE',
-    field: 'passingChecks',
-    message: 'Blocked completion field "passingChecks" must be an array of strings.',
-  });
+  }))), [
+    { code: 'INVALID_FIELD_TYPE', path: '$.passingChecks[1]' },
+  ]);
 
-  const blockingResult = validateBlockedCompletion(buildValidArtifact({
+  assert.deepEqual(errorSummary(validateBlockedCompletion(buildValidArtifact({
     blockingChecks: 'npm test',
-  }));
-  assert.deepEqual(blockingResult, {
-    ok: false,
-    code: 'INVALID_FIELD_TYPE',
-    field: 'blockingChecks',
-    message: 'Blocked completion field "blockingChecks" must be an array of strings.',
-  });
+  }))), [
+    { code: 'INVALID_FIELD_TYPE', path: '$.blockingChecks' },
+  ]);
 });
 
 test('validateBlockedCompletion rejects invalid optional field types', () => {
-  const commitResult = validateBlockedCompletion(buildValidArtifact({ commit: 1234 }));
-  assert.deepEqual(commitResult, {
-    ok: false,
-    code: 'INVALID_FIELD_TYPE',
-    field: 'commit',
-    message: 'Blocked completion field "commit" must be a string when present.',
-  });
+  assert.deepEqual(errorSummary(validateBlockedCompletion(buildValidArtifact({ commit: 1234 }))), [
+    { code: 'INVALID_FIELD_TYPE', path: '$.commit' },
+  ]);
 
-  const createdAtResult = validateBlockedCompletion(buildValidArtifact({
+  assert.deepEqual(errorSummary(validateBlockedCompletion(buildValidArtifact({
     createdAt: false,
-  }));
-  assert.deepEqual(createdAtResult, {
-    ok: false,
-    code: 'INVALID_FIELD_TYPE',
-    field: 'createdAt',
-    message: 'Blocked completion field "createdAt" must be a string when present.',
-  });
+  }))), [
+    { code: 'INVALID_FIELD_TYPE', path: '$.createdAt' },
+  ]);
 });
 
-test('readBlockedCompletion propagates ENOENT for a non-existent file', async () => {
+test('validateBlockedCompletion rejects implementationComplete without evidence', () => {
+  assert.deepEqual(errorSummary(validateBlockedCompletion(buildValidArtifact({
+    passingChecks: [],
+  }))), [
+    { code: 'NO_VERIFICATION_EVIDENCE', path: '$.passingChecks' },
+  ]);
+});
+
+test('readBlockedCompletion returns ARTIFACT_NOT_FOUND for a non-existent file', async () => {
   const missingPath = join(tmpdir(), 'no-such-file-.coding-blocked-completion.json');
 
-  await assert.rejects(
-    () => readBlockedCompletion(missingPath),
-    (err: NodeJS.ErrnoException) => {
-      assert.equal(err.code, 'ENOENT');
-      return true;
-    },
-  );
+  const result = await readBlockedCompletion(missingPath);
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.deepEqual(result.errors.map((error) => ({ code: error.code, path: error.path })), [
+      { code: 'ARTIFACT_NOT_FOUND', path: '$' },
+    ]);
+  }
 });
 
 test('schema required fields and enums stay aligned with the validator exports', () => {

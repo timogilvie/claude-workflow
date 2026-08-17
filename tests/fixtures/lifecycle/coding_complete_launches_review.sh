@@ -7,7 +7,7 @@ setup_coding_complete_launches_review() {
   CURRENT_PHASE="coding"
   MONITOR_ITERATIONS=2
   write_stage_result "$FEATURE_DIR" "coding" "running" "$CURRENT_AGENT"
-  touch "$FEATURE_DIR/.coding-complete"
+  printf '{"stage":"coding","confidence":"high"}\n' > "$FEATURE_DIR/.coding-complete"
 }
 
 assert_coding_complete_launches_review() {

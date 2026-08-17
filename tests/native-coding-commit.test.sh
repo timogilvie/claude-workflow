@@ -201,7 +201,7 @@ function buildTurns(mode: string, featureSlug: string): ScriptedPiProviderTurn[]
       }),
       toolTurn('coding-marker-1', 'create_marker', {
         path: `features/${featureSlug}/.coding-complete`,
-        content: 'confidence=high\nproducer=native-agent\n',
+        content: '{"stage":"coding","confidence":"high","producer":"native-agent"}\n',
       }),
       {
         content: [{ type: 'text', text: 'Coding complete.' }],
@@ -309,7 +309,7 @@ else
   fail "commit only includes intended source file" "$(git -C "$TEST_REPO" show --name-only --format= HEAD)"
 fi
 
-if jq -e '.markerExists == true and .artifactExists == true and .markerParse.ok == true and .markerParse.value.confidence == "high" and .markerParse.value.fields.producer == "native-agent"' "$HAPPY_JSON" >/dev/null; then
+if jq -e '.markerExists == true and .artifactExists == true and .markerParse.ok == true and .markerParse.value.confidence == "high" and .markerParse.value.producer == "native-agent"' "$HAPPY_JSON" >/dev/null; then
   pass "completion marker is valid"
 else
   fail "completion marker is valid" "$(cat "$HAPPY_JSON")"

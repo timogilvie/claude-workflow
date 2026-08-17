@@ -22,23 +22,26 @@ const validBlockedCompletion = {
   recommendedAction: 'advance_to_review',
 };
 
-test('normalizes JSON object written as .coding-complete to key=value', () => {
+test('normalizes compact JSON .coding-complete to canonical JSON', () => {
   const result = normalizeCodingCompleteContent(JSON.stringify({
+    stage: 'coding',
     confidence: 'high',
     commit: 'abc1234',
-    attempts: 2,
+    producer: 'native-agent',
   }));
 
   assert.equal(result.ok, true);
   if (result.ok) {
     assert.equal(result.changed, true);
-    assert.equal(result.canonicalContent, 'confidence=high\nattempts=2\ncommit=abc1234\n');
-    assert.match(result.warnings.join('\n'), /normalized json payload/);
+    assert.equal(
+      result.canonicalContent,
+      '{\n  "stage": "coding",\n  "confidence": "high",\n  "commit": "abc1234",\n  "producer": "native-agent"\n}\n',
+    );
   }
 });
 
 test('passes canonical .coding-complete through unchanged', () => {
-  const input = 'confidence=medium\ncommit=abc1234\n';
+  const input = '{\n  "stage": "coding",\n  "confidence": "medium",\n  "commit": "abc1234"\n}\n';
   const result = normalizeCodingCompleteContent(input);
 
   assert.equal(result.ok, true);
@@ -67,7 +70,7 @@ recommendedAction: advance_to_review
     assert.equal(result.changed, true);
     assert.equal(result.value.passingChecks[0], 'node --test shared/lib/example.test.ts');
     assert.equal(JSON.parse(result.canonicalContent).stage, 'coding');
-    assert.match(result.warnings.join('\n'), /normalized yaml payload/);
+    assert.match(result.warnings.join('\n'), /normalized flat YAML payload/);
   }
 });
 
@@ -131,4 +134,3 @@ test('evidence helpers coerce unverified completion claims only', () => {
     implementationComplete: false,
   }).coerced, false);
 });
-

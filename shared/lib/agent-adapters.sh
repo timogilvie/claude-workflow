@@ -1461,7 +1461,7 @@ Apply minimal scope. A focused small PR is better than a large incomplete one:
 - Commit after every 1-2 file changes; do not batch large edit sets.
 - Run tests/lint after every commit to catch regressions early.
 - Scope is reduced here, so the confidence you record in the completion marker matters more than usual:
-  prefer 'confidence=low' whenever correctness is uncertain even after validation, so review scrutinizes it."
+  prefer '\"confidence\":\"low\"' whenever correctness is uncertain even after validation, so review scrutinizes it."
       ;;
   esac
 
@@ -1550,6 +1550,9 @@ Use this compact JSON shape:
       "evidence": "Short summary of why the failure is unrelated.",
       "recommendedAction": "advance_to_review"
     }
+
+Allowed agent-facing blockingReason values: repo_verification_blocked, environment_blocked, baseline_tests_failing.
+The recommendedAction for review handoff is advance_to_review.
 
 .coding-complete remains the preferred signal when full verification passes. The blocked-completion artifact is not a substitute for incomplete implementation, uncommitted work, or skipped scoped verification.
 
@@ -1726,7 +1729,7 @@ build_review_prompt() {
 
 Read the coding confidence signal from the completion marker:
 \`\`\`bash
-coding_confidence=\$(grep '^confidence=' \"$feature_dir/.coding-complete\" 2>/dev/null | cut -d= -f2 | tr -d '[:space:]')
+coding_confidence=\$(jq -r '.confidence // empty' \"$feature_dir/.coding-complete\" 2>/dev/null)
 \`\`\`
 
 If \`\$coding_confidence\` is \`low\`, or if the initial self-review run exits 1:

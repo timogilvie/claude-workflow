@@ -95,6 +95,7 @@ for fn in \
   resolve_phase \
   resolve_stage_result_model \
   write_stage_result \
+  wavemill_run_tsx_tool \
   normalize_prompt_command_reply \
   blocked_completion_current_head \
   blocked_completion_commit_matches_head \
@@ -103,6 +104,11 @@ for fn in \
   blocked_completion_auto_allowed_dirty_path \
   coding_output_dirty_paths \
   blocked_completion_worktree_clean_for_auto \
+  seam_artifact_cli_path \
+  seam_validate_artifact \
+  seam_validation_error_summary \
+  seam_validation_has_code \
+  write_coding_complete_marker \
   blocked_completion_validate_for_advance \
   archive_stale_coding_artifacts \
   coding_pane_replacement_intent_path \
@@ -224,7 +230,7 @@ write_blocked_completion() {
   "commit": "$commit",
   "passingChecks": ["tests/wavemill-mill-advance.test.sh"],
   "blockingChecks": ["pnpm typecheck"],
-  "blockingReason": "baseline_failures",
+  "blockingReason": "baseline_tests_failing",
   "evidence": "Repo-level verification is failing outside this change.",
   "recommendedAction": "advance_to_review"$extra_json
 }
@@ -351,7 +357,7 @@ cat > "$FEATURE_BAD_STATUS/.coding-blocked-completion.json" <<'EOF'
   "committed": true,
   "passingChecks": [],
   "blockingChecks": ["pnpm typecheck"],
-  "blockingReason": "baseline_failures",
+  "blockingReason": "baseline_tests_failing",
   "evidence": "Repo-level verification is failing outside this change.",
   "recommendedAction": "advance_to_review"
 }
@@ -392,7 +398,7 @@ setup_git_worktree "$WORKTREE_IDEMP"
 write_task_state "HOK-2005" "idempotent-slug" "$WORKTREE_IDEMP" "coding"
 write_coding_result "$FEATURE_IDEMP" "running"
 write_blocked_completion "$FEATURE_IDEMP" "$(git -C "$WORKTREE_IDEMP" rev-parse --short HEAD)"
-touch "$FEATURE_IDEMP/.coding-complete"
+printf '{"stage":"coding","confidence":"high"}\n' > "$FEATURE_IDEMP/.coding-complete"
 run_advance "advance HOK-2005"
 assert_eq "idempotent handled" "handled" "$MONITOR_COMMAND_STATUS"
 assert_file_exists "idempotent audit exists" "$FEATURE_IDEMP/.coding-advance-override.json"
@@ -460,7 +466,7 @@ assert_eq "missing startedAt freshness fail-open" "true" "$(jq -r '.guardrails.a
 # Stale coding artifacts are archived non-destructively and repeated calls are no-ops
 FEATURE_ARCHIVE="$SCENARIO_DIR/archive-feature"
 mkdir -p "$FEATURE_ARCHIVE"
-printf 'confidence=high\n' > "$FEATURE_ARCHIVE/.coding-complete"
+printf '{"stage":"coding","confidence":"high"}\n' > "$FEATURE_ARCHIVE/.coding-complete"
 printf '{"stage":"coding"}\n' > "$FEATURE_ARCHIVE/.coding-blocked-completion.json"
 printf 'announced\n' > "$FEATURE_ARCHIVE/.blocked-completion-announced"
 printf 'dirty\n' > "$FEATURE_ARCHIVE/.coding-uncommitted-output-announced"

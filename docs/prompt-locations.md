@@ -18,8 +18,11 @@ Runtime code should prefer typed lookup through `shared/lib/resource-retrieval.t
 - `tools/prompts/coding-phase.md`: Coding phase instructions (loaded by `build_coding_prompt`). GEPA-optimizable.
 - `tools/prompts/review-phase.md`: Review phase instructions (loaded by `build_review_prompt`). GEPA-optimizable.
 - `tools/resolve-runtime-resource.ts`: Shell-safe runtime resolver for planner/reviewer prompt content plus selection metadata.
-- `shared/lib/blocked-completion.ts`: Shared validation/read helper for the coding blocked-completion artifact contract.
-- `shared/schemas/blocked-completion.schema.json`: JSON Schema mirror for `.coding-blocked-completion.json`.
+- `shared/lib/seam-artifacts.ts`: Shared seam artifact registry, schema-backed validator, retry guidance, and contract descriptions.
+- `shared/lib/blocked-completion.ts`: Thin compatibility wrapper for the coding blocked-completion artifact contract.
+- `shared/schemas/*.schema.json`: JSON Schemas for JSON-kind seam artifacts including `.coding-complete`, `.coding-blocked-completion.json`, stage results, and planning rejection.
+- `tools/seam-artifact-cli.ts`: Shell-callable seam artifact validator used by mill paths.
+- `docs/seam-artifacts.md`: Human-readable seam artifact contract, timing rule, CLI usage, and error vocabulary.
 - `tools/prompts/review-general.md`: Default general-purpose review persona prompt (resolved by typed lookup in `shared/lib/resource-retrieval.ts`, consumed by `shared/lib/review-engine.ts` in normal operating mode).
 - `tools/prompts/review-general-scoped.md`: Degraded-mode scoped review persona prompt (resolved by typed lookup in `shared/lib/resource-retrieval.ts`, consumed by `shared/lib/review-engine.ts` when operating mode is `constrained` or `survival`).
 - `tools/prompts/initiative-planner.md`: Standard initiative decomposition prompt (resolved by typed lookup in `shared/lib/resource-retrieval.ts`, consumed by `tools/plan-initiative.ts` via `shared/lib/plan-prompt-selector.ts`). Used when operating mode is `normal`. GEPA-optimizable.
