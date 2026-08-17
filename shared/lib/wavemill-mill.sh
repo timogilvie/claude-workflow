@@ -5110,16 +5110,65 @@ notify_planning_rejection_agent() {
   files_summary="$(planning_rejection_files_summary "${files[@]}")"
   message="Planning approval was rejected because planning modified out-of-scope files: $files_summary. Those changes were stashed when possible and .plan-approved was removed. Do not edit source/config files during planning. Update only features/$slug/plan.md if needed, then wait for user approval again."
 
-  if ! wavemill_pane_send_message "$target" "$message" "$issue" "$SESSION"; then
-    log_warn "$issue: failed to deliver planning rejection notification to agent pane ($WAVEMILL_PANE_MESSAGE_LAST_STATUS: $WAVEMILL_PANE_MESSAGE_LAST_DETAIL)"
-    return 0 # Do not block on notification failure
+  local now_iso status signal attempts detail
+  now_iso="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+  if wavemill_pane_send_message "$target" "$message" "$issue" "$SESSION"; then
+    status="${WAVEMILL_PANE_MESSAGE_LAST_STATUS:-delivered}"
+    signal="${WAVEMILL_PANE_MESSAGE_LAST_SIGNAL:-none}"
+    attempts="${WAVEMILL_PANE_MESSAGE_LAST_ATTEMPTS:-1}"
+    detail="${WAVEMILL_PANE_MESSAGE_LAST_DETAIL:-}"
+    tmp=$(mktemp "${artifact}.tmp.XXXXXX" 2>/dev/null) || return 0
+    jq --arg notifiedAt "$now_iso" \
+       --arg notifyStatus "$status" \
+       --arg notifySignal "$signal" \
+       --arg notifyDetail "$detail" \
+       --arg notifyTarget "$target" \
+       --argjson notifyAttempts "$attempts" \
+       '.notifiedAt = $notifiedAt | .notifyStatus = $notifyStatus | .notifySignal = $notifySignal | .notifyDetail = $notifyDetail | .notifyTarget = $notifyTarget | .notifyAttempts = $notifyAttempts' "$artifact" > "$tmp" 2>/dev/null \
+      && mv "$tmp" "$artifact" 2>/dev/null \
+      || rm -f "$tmp"
+    return 0
   fi
 
-  tmp=$(mktemp "${artifact}.tmp.XXXXXX" 2>/dev/null) || return 0
-  jq --arg notifiedAt "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" --arg deliveryStatus "${WAVEMILL_PANE_MESSAGE_LAST_STATUS:-unconfirmed}" \
-    '.notifiedAt = $notifiedAt | .deliveryStatus = $deliveryStatus' "$artifact" > "$tmp" 2>/dev/null \
-    && mv "$tmp" "$artifact" 2>/dev/null \
-    || rm -f "$tmp"
+  # Delivery failed after retries. Record the failure durably on the artifact
+  # (so it survives the hook TTL) and escalate to the dashboard inbox via the
+  # blocked hook state so an operator can recover manually.
+  status="${WAVEMILL_PANE_MESSAGE_LAST_STATUS:-unconfirmed}"
+  signal="${WAVEMILL_PANE_MESSAGE_LAST_SIGNAL:-none}"
+  attempts="${WAVEMILL_PANE_MESSAGE_LAST_ATTEMPTS:-0}"
+  detail="${WAVEMILL_PANE_MESSAGE_LAST_DETAIL:-delivery not confirmed}"
+
+  log_warn "$issue: failed to deliver planning rejection notification to agent pane ($status after $attempts attempts): $detail"
+
+  tmp=$(mktemp "${artifact}.tmp.XXXXXX" 2>/dev/null)
+  if [[ -n "$tmp" ]]; then
+    jq --arg notifyStatus "$status" \
+       --arg notifySignal "$signal" \
+       --arg notifyDetail "$detail" \
+       --arg notifyTarget "$target" \
+       --arg notifyLastAttemptAt "$now_iso" \
+       --argjson notifyAttempts "$attempts" \
+       'del(.notifiedAt) | .notifyStatus = $notifyStatus | .notifySignal = $notifySignal | .notifyDetail = $notifyDetail | .notifyTarget = $notifyTarget | .notifyLastAttemptAt = $notifyLastAttemptAt | .notifyAttempts = $notifyAttempts' "$artifact" > "$tmp" 2>/dev/null \
+      && mv "$tmp" "$artifact" 2>/dev/null \
+      || rm -f "$tmp"
+  fi
+
+  local hook_protocol="$LIB_DIR/../hooks/wavemill-hook-protocol.sh"
+  local next_action="Press Enter in tmux window $target to submit the pending planning-rejection notice, or relay it manually."
+  if [[ -f "$hook_protocol" ]]; then
+    # shellcheck disable=SC1090
+    source "$hook_protocol" || true
+    if declare -F wavemill_hook_write >/dev/null 2>&1; then
+      WAVEMILL_SESSION="$SESSION" WAVEMILL_ISSUE="$issue" \
+        wavemill_hook_write "blocked" "planning_rejection_notify_failed" \
+          "planning rejection notice $status after $attempts attempts" \
+          "${current_agent:-unknown}" \
+          "$next_action" || true
+    fi
+  fi
+
+  return 0
 }
 
 blocked_completion_announce_marker() {
