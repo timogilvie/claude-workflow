@@ -89,9 +89,19 @@ export function buildNativeCodingHandoff(featureDir: string): string {
   }
 
   if (codingComplete?.trim()) {
+    let confidenceLine: string | null = null;
+    try {
+      const parsed = JSON.parse(codingComplete) as { confidence?: unknown };
+      if (typeof parsed.confidence === 'string') {
+        confidenceLine = `Confidence: ${parsed.confidence}`;
+      }
+    } catch {
+      confidenceLine = null;
+    }
     sections.push([
       '### Coding Completion Marker',
-      '```text',
+      ...(confidenceLine ? [confidenceLine] : []),
+      '```json',
       truncateText(codingComplete.trim(), 2_000),
       '```',
     ].join('\n'));

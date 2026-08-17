@@ -24,7 +24,7 @@ describe('launch-native-review helpers', () => {
           commitCount: 1,
         },
       }, null, 2));
-      writeFileSync(join(featureDir, '.coding-complete'), 'confidence=high\n');
+      writeFileSync(join(featureDir, '.coding-complete'), '{"stage":"coding","confidence":"high"}\n');
 
       const handoff = buildNativeCodingHandoff(featureDir);
 
@@ -32,7 +32,9 @@ describe('launch-native-review helpers', () => {
       assert.match(handoff, /"status": "completed"/);
       assert.match(handoff, /"commitCount": 1/);
       assert.match(handoff, /Coding Completion Marker/);
-      assert.match(handoff, /confidence=high/);
+      assert.match(handoff, /Confidence: high/);
+      assert.match(handoff, /```json/);
+      assert.match(handoff, /"confidence":"high"/);
     } finally {
       rmSync(featureDir, { recursive: true, force: true });
     }

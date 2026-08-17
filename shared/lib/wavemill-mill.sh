@@ -5267,10 +5267,11 @@ write_codex_capacity_blocked_completion() {
   artifact_tmp="$(mktemp "$artifact.tmp.XXXXXX" 2>/dev/null)" || return 1
   if ! jq -n \
     --arg reason "$capacity_reason" \
-    --arg blockingReason "${capacity_reason}: $capacity_message" \
+    --arg blockingReason "model_at_capacity" \
     --arg evidence "Codex pane was idle at the terminal capacity prompt after confirmation dwell." \
-    --arg recommendedAction "retry_with_available_model_or_relaunch_coding" \
+    --arg recommendedAction "relaunch_coding" \
     --arg summary "coding blocked: Codex model at capacity" \
+    --arg humanReason "$capacity_message" \
     --arg detectedAt "$timestamp" \
     --arg issue "$issue" \
     --arg slug "$slug" \
@@ -5286,7 +5287,8 @@ write_codex_capacity_blocked_completion() {
       evidence: $evidence,
       recommendedAction: $recommendedAction,
       summary: $summary,
-      reason: $reason,
+      reason: $humanReason,
+      capacityReason: $reason,
       detectedAt: $detectedAt,
       issue: $issue,
       slug: $slug,
@@ -5572,6 +5574,64 @@ guard_coding_complete_handoff() {
   return 0
 }
 
+seam_artifact_cli_path() {
+  local candidate
+  for candidate in \
+    "${REPO_DIR:-}/tools/seam-artifact-cli.ts" \
+    "${TOOLS_DIR:-}/seam-artifact-cli.ts" \
+    "${LIB_DIR:-}/../../tools/seam-artifact-cli.ts"; do
+    [[ -n "$candidate" && -f "$candidate" ]] || continue
+    printf '%s\n' "$candidate"
+    return 0
+  done
+
+  printf '%s\n' "${REPO_DIR:-${LIB_DIR%/shared/lib}}/tools/seam-artifact-cli.ts"
+}
+
+seam_validate_artifact() {
+  local artifact="$1" artifact_path="$2"
+  shift 2
+  local cli stderr_file rc
+
+  cli="$(seam_artifact_cli_path)"
+  stderr_file="$(mktemp "${TMPDIR:-/tmp}/seam-validate.XXXXXX" 2>/dev/null)" || return 2
+  SEAM_VALIDATION_JSON="$(wavemill_run_tsx_tool "$cli" validate "$artifact" "$artifact_path" "$@" 2>"$stderr_file")"
+  rc=$?
+  if [[ "$rc" -eq 2 ]]; then
+    log_warn "seam validator unavailable for $artifact ($artifact_path): $(tail -n 3 "$stderr_file" | tr '\n' ' ')"
+  fi
+  rm -f "$stderr_file"
+  return "$rc"
+}
+
+seam_validation_error_summary() {
+  local json="${1:-${SEAM_VALIDATION_JSON:-}}"
+  jq -r '[.errors[]? | "\(.code) at \(.path): \(.message)"] | join("; ")' <<<"$json" 2>/dev/null
+}
+
+seam_validation_has_code() {
+  local code="$1" json="${2:-${SEAM_VALIDATION_JSON:-}}"
+  jq -e --arg code "$code" '.errors[]? | select(.code == $code)' <<<"$json" >/dev/null 2>&1
+}
+
+write_coding_complete_marker() {
+  local feature_dir="$1" confidence="$2" source="$3"
+  local marker_path tmp timestamp
+
+  marker_path="$feature_dir/.coding-complete"
+  timestamp="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  tmp="$(mktemp "$marker_path.tmp.XXXXXX" 2>/dev/null)" || return 1
+  if ! jq -n \
+    --arg confidence "$confidence" \
+    --arg source "$source" \
+    --arg createdAt "$timestamp" \
+    '{stage: "coding", confidence: $confidence, source: $source, createdAt: $createdAt}' > "$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  mv "$tmp" "$marker_path"
+}
+
 blocked_completion_validate_for_advance() {
   local issue="$1" feature_dir="$2" mode="${3:-auto}"
   local slug artifact_path artifact_rel_path result_path result_rel_path worktree
@@ -5581,6 +5641,8 @@ blocked_completion_validate_for_advance() {
   local worktree_clean=true artifact_fresh=true artifact_commit="" current_head="" decision_reason=""
   local started_at="" artifact_epoch="" started_epoch=""
   local manual_soft_failure=false
+  local validation_errors_json='[]'
+  local _blocked_completion_bool
 
   slug="$(basename "$feature_dir")"
   worktree="$(git -C "$feature_dir/../.." rev-parse --show-toplevel 2>/dev/null || true)"
@@ -5591,28 +5653,25 @@ blocked_completion_validate_for_advance() {
 
   if [[ ! -f "$artifact_path" ]]; then
     decision_reason="missing blocked-completion artifact"
-  elif ! jq empty "$artifact_path" >/dev/null 2>&1; then
-    decision_reason="invalid JSON in $artifact_rel_path"
   else
-    json_valid=true
-
-    if jq -e '
-      type == "object" and
-      (.stage | type == "string") and
-      (.implementationComplete | type == "boolean") and
-      (.committed | type == "boolean") and
-      (.passingChecks | type == "array") and
-      all(.passingChecks[]?; type == "string") and
-      ((has("blockingChecks") | not) or (.blockingChecks | type == "array")) and
-      all((.blockingChecks // [])[]?; type == "string") and
-      (.blockingReason | type == "string") and
-      (.evidence | type == "string") and
-      (.recommendedAction | type == "string") and
-      ((has("commit") | not) or (.commit | type == "string"))
-    ' "$artifact_path" >/dev/null 2>&1; then
+    if seam_validate_artifact blocked-completion "$artifact_path" --canonicalize; then
+      json_valid=true
       schema_valid=true
     else
-      decision_reason="blocked-completion artifact is missing required fields"
+      case "$?" in
+        1)
+          validation_errors_json="$(jq -c '.errors // []' <<<"$SEAM_VALIDATION_JSON" 2>/dev/null || echo '[]')"
+          if seam_validation_has_code MALFORMED_JSON "$SEAM_VALIDATION_JSON"; then
+            decision_reason="invalid JSON in $artifact_rel_path"
+          else
+            json_valid=true
+            decision_reason="invalid blocked-completion artifact: $(seam_validation_error_summary "$SEAM_VALIDATION_JSON")"
+          fi
+          ;;
+        *)
+          decision_reason="seam validator unavailable"
+          ;;
+      esac
     fi
   fi
 
@@ -5688,6 +5747,17 @@ blocked_completion_validate_for_advance() {
   fi
   [[ -z "$decision_reason" ]] && decision_reason="eligible"
 
+  local _blocked_completion_bools=(stage_running json_valid schema_valid stage_is_coding implementation_complete committed recommended_action_matches has_passing_checks has_blocking_checks commit_matches_head worktree_clean artifact_fresh)
+  for _blocked_completion_bool in "${_blocked_completion_bools[@]}"; do
+    case "${!_blocked_completion_bool:-}" in
+      true|false) ;;
+      *) printf -v "$_blocked_completion_bool" '%s' false ;;
+    esac
+  done
+  if ! jq empty <<<"$validation_errors_json" >/dev/null 2>&1; then
+    validation_errors_json='[]'
+  fi
+
   jq -n \
     --arg issue "$issue" \
     --arg mode "$mode" \
@@ -5696,19 +5766,20 @@ blocked_completion_validate_for_advance() {
     --arg reason "$decision_reason" \
     --arg commit "$artifact_commit" \
     --arg head "$current_head" \
-    --argjson stageRunning "$stage_running" \
-    --argjson jsonValid "$json_valid" \
-    --argjson schemaValid "$schema_valid" \
-    --argjson stageIsCoding "$stage_is_coding" \
-    --argjson implementationComplete "$implementation_complete" \
-    --argjson committed "$committed" \
-    --argjson recommendedActionMatches "$recommended_action_matches" \
-    --argjson hasPassingChecks "$has_passing_checks" \
-    --argjson hasBlockingChecks "$has_blocking_checks" \
-    --argjson commitMatchesHead "$commit_matches_head" \
-    --argjson worktreeClean "$worktree_clean" \
-    --argjson artifactFresh "$artifact_fresh" \
-    --argjson eligible "$(
+    --arg stageRunning "$stage_running" \
+    --arg jsonValid "$json_valid" \
+    --arg schemaValid "$schema_valid" \
+    --arg stageIsCoding "$stage_is_coding" \
+    --arg implementationComplete "$implementation_complete" \
+    --arg committed "$committed" \
+    --arg recommendedActionMatches "$recommended_action_matches" \
+    --arg hasPassingChecks "$has_passing_checks" \
+    --arg hasBlockingChecks "$has_blocking_checks" \
+    --arg commitMatchesHead "$commit_matches_head" \
+    --arg worktreeClean "$worktree_clean" \
+    --arg artifactFresh "$artifact_fresh" \
+    --arg validationErrorsJson "$validation_errors_json" \
+    --arg eligibleValue "$(
       if [[ "$decision_reason" == "eligible" || "$decision_reason" == "manual override accepted with soft guardrail failures" ]]; then
         printf 'true'
       else
@@ -5718,26 +5789,27 @@ blocked_completion_validate_for_advance() {
     '{
       issue: $issue,
       mode: $mode,
-      eligible: $eligible,
+      eligible: ($eligibleValue == "true"),
       reason: $reason,
       artifactPath: $artifactPath,
       resultPath: $resultPath,
       commit: $commit,
       head: $head,
       guardrails: {
-        stageRunning: $stageRunning,
-        jsonValid: $jsonValid,
-        schemaValid: $schemaValid,
-        stageIsCoding: $stageIsCoding,
-        implementationComplete: $implementationComplete,
-        committed: $committed,
-        recommendedActionMatches: $recommendedActionMatches,
-        hasPassingChecks: $hasPassingChecks,
-        hasBlockingChecks: $hasBlockingChecks,
-        commitMatchesHead: $commitMatchesHead,
-        worktreeClean: $worktreeClean,
-        artifactFresh: $artifactFresh
-      }
+        "stageRunning": ($stageRunning == "true"),
+        "jsonValid": ($jsonValid == "true"),
+        "schemaValid": ($schemaValid == "true"),
+        "stageIsCoding": ($stageIsCoding == "true"),
+        "implementationComplete": ($implementationComplete == "true"),
+        "committed": ($committed == "true"),
+        "recommendedActionMatches": ($recommendedActionMatches == "true"),
+        "hasPassingChecks": ($hasPassingChecks == "true"),
+        "hasBlockingChecks": ($hasBlockingChecks == "true"),
+        "commitMatchesHead": ($commitMatchesHead == "true"),
+        "worktreeClean": ($worktreeClean == "true"),
+        "artifactFresh": ($artifactFresh == "true")
+      },
+      validationErrors: ($validationErrorsJson | fromjson? // [])
     }'
 
   if [[ "$decision_reason" == "eligible" || "$decision_reason" == "manual override accepted with soft guardrail failures" ]]; then
@@ -5785,6 +5857,7 @@ archive_stale_coding_artifacts() {
 complete_coding_advance() {
   local issue="$1" feature_dir="$2" audit_path="$3" stage_notes="$4"
   local audit_timestamp="${5:-}" summary="${6:-}" slug="${7:-}" passing_count="${8:-}" blocking_count="${9:-}" decision_json="${10:-}" blocked_json="${11:-}"
+  local marker_source="${12:-blocked-completion-manual-advance}"
   local marker_path advance_agent result_path result_model finished_at audit_tmp
 
   if [[ -n "$audit_timestamp" ]]; then
@@ -5870,7 +5943,7 @@ complete_coding_advance() {
   _write_stage_result_trace_event "$feature_dir" "coding" "completed" "$advance_agent" "$result_model"
 
   marker_path="$feature_dir/.coding-complete"
-  if ! touch "$marker_path"; then
+  if ! write_coding_complete_marker "$feature_dir" "medium" "$marker_source"; then
     log_warn "$issue advance failed: could not create $marker_path"
     return 1
   fi
@@ -5995,7 +6068,8 @@ auto_advance_blocked_completion() {
     "$passing_count" \
     "$blocking_count" \
     "$decision_json" \
-    "$blocked_json"; then
+    "$blocked_json" \
+    "blocked-completion-auto-advance"; then
     return 1
   fi
 
@@ -6093,12 +6167,10 @@ recover_misplaced_coding_complete_marker() {
     return 1
   fi
 
-  if ! touch "$expected_marker"; then
-    log_warn "$issue → Found misplaced .coding-complete at $rel_marker but could not create expected marker"
+  if ! mv "$misplaced_marker" "$expected_marker"; then
+    log_warn "$issue → Found misplaced .coding-complete at $rel_marker but could not move expected marker"
     return 1
   fi
-
-  rm -f "$misplaced_marker" 2>/dev/null || true
 
   log_warn "$issue → Recovered misplaced .coding-complete from $rel_marker"
   return 0
@@ -13686,6 +13758,22 @@ monitor_issue_state() {
           if [[ "$coding_status" == "running" ]]; then
             recover_misplaced_coding_complete_marker "$ISSUE" "${WORKTREE_ROOT}/${SLUG}" "$FEATURE_DIR" "$SLUG" || true
             if [[ -f "$FEATURE_DIR/.coding-complete" ]]; then
+              local coding_complete_validation_rc=0
+              seam_validate_artifact coding-complete "$FEATURE_DIR/.coding-complete" --canonicalize
+              coding_complete_validation_rc=$?
+              if [[ "$coding_complete_validation_rc" -ne 0 ]]; then
+                local coding_complete_summary
+                if [[ "$coding_complete_validation_rc" -eq 1 ]]; then
+                  coding_complete_summary="$(seam_validation_error_summary "$SEAM_VALIDATION_JSON")"
+                else
+                  coding_complete_summary="seam validator unavailable"
+                fi
+                log_warn "$ISSUE needs attention: invalid .coding-complete: $coding_complete_summary"
+                write_stage_result "$FEATURE_DIR" "coding" "running" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "coding" "claude-opus-4-7")" "Invalid .coding-complete: $coding_complete_summary"
+                set_window_attention_state "$WIN" "needs-user"
+                active_count=$((active_count + 1))
+                return 0
+              fi
               if guard_coding_complete_handoff "$ISSUE" "$FEATURE_DIR" "${WORKTREE_ROOT}/${SLUG}" "$BASE_BRANCH"; then
                 return 0
               fi

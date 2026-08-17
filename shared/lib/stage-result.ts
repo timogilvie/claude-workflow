@@ -19,6 +19,7 @@ import path from 'node:path';
 import os from 'node:os';
 import type { CodingArtifacts } from './native-agent/coding-artifacts.ts';
 export type { CodingArtifacts } from './native-agent/coding-artifacts.ts';
+import { validateSeamArtifactValue } from './seam-artifacts.ts';
 import type { CleanupDecision, CleanupReport, TreeState } from './native-agent/cleanup.ts';
 export type { CleanupDecision, CleanupReport, TreeState } from './native-agent/cleanup.ts';
 import type { ReadyRemediationDecision } from './native-agent/workflow-tools/ready-remediation.ts';
@@ -223,17 +224,20 @@ export async function readStageResult(
       return null;
     }
     const parsed = JSON.parse(content) as StageResult;
-    if (parsed.stage !== stage) {
+    const validation = validateSeamArtifactValue<StageResult>('stage-result', parsed);
+    if (!validation.ok) {
       process.stderr.write(
-        `stage-result: stage mismatch in ${resultPath} (expected '${stage}', got '${parsed.stage}')\n`,
+        `stage-result: invalid ${resultPath}: ${formatSeamErrors(validation.errors)}\n`,
       );
       return null;
     }
-    if (!parsed.status) {
-      process.stderr.write(`stage-result: missing status in ${resultPath}\n`);
+    if (validation.value.stage !== stage) {
+      process.stderr.write(
+        `stage-result: invalid ${resultPath}: INVALID_STAGE at $.stage: expected '${stage}', got '${validation.value.stage}'\n`,
+      );
       return null;
     }
-    return parsed;
+    return validation.value;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
       return null;
@@ -283,6 +287,11 @@ export async function writeStageResult(
   result: StageResult,
 ): Promise<void> {
   await fs.mkdir(featureDir, { recursive: true });
+
+  const validation = validateSeamArtifactValue('stage-result', result);
+  if (!validation.ok) {
+    throw new Error(`Invalid stage result: ${formatSeamErrors(validation.errors)}`);
+  }
 
   const resultPath = getResultFilePath(featureDir, result.stage);
   const tmpPath = path.join(featureDir, `.tmp-${result.stage}-result.json`);
@@ -381,4 +390,8 @@ export function isValidStage(value: string): value is StageName {
 /** Check if a string is a valid stage status. */
 export function isValidStatus(value: string): value is StageStatus {
   return (VALID_STATUSES as readonly string[]).includes(value);
+}
+
+function formatSeamErrors(errors: readonly { code: string; path: string; message: string }[]): string {
+  return errors.map((error) => `${error.code} at ${error.path}: ${error.message}`).join('; ');
 }

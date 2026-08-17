@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "coding-complete.schema.json",
+  "title": "CodingComplete",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "stage",
+    "confidence"
+  ],
+  "properties": {
+    "stage": {
+      "const": "coding"
+    },
+    "confidence": {
+      "enum": [
+        "high",
+        "medium",
+        "low"
+      ]
+    },
+    "commit": {
+      "type": "string"
+    },
+    "notes": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string"
+    },
+    "createdAt": {
+      "type": "string"
+    }
+  }
+}

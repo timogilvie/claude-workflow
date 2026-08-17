@@ -514,7 +514,7 @@ check "both present → true" "0" "$result"
 # Test 10: coding legacy marker does not count as complete
 FD8="$TEST_DIR/test8"
 mkdir -p "$FD8"
-touch "$FD8/.coding-complete"
+printf '{"stage":"coding","confidence":"high"}\n' > "$FD8/.coding-complete"
 check_stage_complete "$FD8" "coding" && result=0 || result=1
 check "coding legacy marker → false" "1" "$result"
 
@@ -748,14 +748,14 @@ check "legacy .plan-approved only → planning" "planning" "$(resolve_phase "$FD
 # Test 32: Legacy .coding-complete only falls back to planning
 FD32="$TEST_DIR/test32"
 mkdir -p "$FD32"
-touch "$FD32/.coding-complete"
+printf '{"stage":"coding","confidence":"high"}\n' > "$FD32/.coding-complete"
 check "legacy .coding-complete only → planning" "planning" "$(resolve_phase "$FD32")"
 
 # Test 33: Legacy both markers still fall back to planning
 FD33="$TEST_DIR/test33"
 mkdir -p "$FD33"
 touch "$FD33/.plan-approved"
-touch "$FD33/.coding-complete"
+printf '{"stage":"coding","confidence":"high"}\n' > "$FD33/.coding-complete"
 check "legacy both markers → planning" "planning" "$(resolve_phase "$FD33")"
 
 # Test 34: Mixed - stage result + legacy marker (stage wins)
@@ -769,7 +769,7 @@ check "mixed: stage awaiting_user + legacy marker → awaiting_user" "awaiting_u
 FD35="$TEST_DIR/test35"
 mkdir -p "$FD35"
 write_stage_result "$FD35" "planning" "completed" "claude" "opus"
-touch "$FD35/.coding-complete"
+printf '{"stage":"coding","confidence":"high"}\n' > "$FD35/.coding-complete"
 check "mixed: planning completed + legacy coding marker → coding" "coding" "$(resolve_phase "$FD35")"
 
 # Test 36: Malformed JSON falls through to default
@@ -802,7 +802,7 @@ cat > "$FD38/.coding-result.json" <<'EOF'
   "timestamp": "2026-04-09T10:00:00Z"
 }
 EOF
-touch "$FD38/.coding-complete"
+printf '{"stage":"coding","confidence":"high"}\n' > "$FD38/.coding-complete"
 check "coding running + .coding-complete → coding" "coding" "$(resolve_phase "$FD38")"
 check "read_stage_status detects running" "running" "$(read_stage_status "$FD38" "coding")"
 
@@ -824,7 +824,7 @@ check "check_stage_complete detects completion" "0" "$([[ $(check_stage_complete
 # Test 40: Legacy .coding-complete no longer resolves the phase
 FD40="$TEST_DIR/test40"
 mkdir -p "$FD40"
-touch "$FD40/.coding-complete"
+printf '{"stage":"coding","confidence":"high"}\n' > "$FD40/.coding-complete"
 check "legacy .coding-complete only → planning" "planning" "$(resolve_phase "$FD40")"
 
 # Test 41: Coding running without .coding-complete
@@ -854,7 +854,7 @@ cat > "$FD42/.coding-result.json" <<'EOF'
   "timestamp": "2026-04-09T10:00:00Z"
 }
 EOF
-touch "$FD42/.coding-complete"
+printf '{"stage":"coding","confidence":"high"}\n' > "$FD42/.coding-complete"
 # Before monitor transition: still shows as coding (status is "running")
 check "running + legacy marker (pre-transition) → coding" "coding" "$(resolve_phase "$FD42")"
 # Simulate monitor transition
@@ -1089,7 +1089,7 @@ check "explicit post-awaiting approval completes planning" "completed" "$(simula
 FD55="$TEST_DIR/test55"
 mkdir -p "$FD55"
 write_stage_result "$FD55" "coding" "running" "claude" "claude-opus-4-6"
-touch "$FD55/.coding-complete"
+printf '{"stage":"coding","confidence":"high"}\n' > "$FD55/.coding-complete"
 check "coding transition ignores pane state" "completed" "$(simulate_coding_transition "$FD55")"
 check "coding transition writes completed" "completed" "$(read_stage_status "$FD55" "coding")"
 
@@ -1105,7 +1105,7 @@ check "review completion resolves to ready" "ready" "$(resolve_phase "$FD56")"
 FD57="$TEST_DIR/test57"
 mkdir -p "$FD57"
 write_stage_result "$FD57" "coding" "running" "claude" "claude-opus-4-6"
-touch "$FD57/.coding-complete"
+printf '{"stage":"coding","confidence":"high"}\n' > "$FD57/.coding-complete"
 check "stuck handoff regression stays completed with pane alive" "completed" "$(simulate_coding_transition "$FD57")"
 check "coding completion persists despite pane alive" "completed" "$(read_stage_status "$FD57" "coding")"
 
@@ -1113,7 +1113,7 @@ check "coding completion persists despite pane alive" "completed" "$(read_stage_
 FD57B="$TEST_DIR/test57b"
 mkdir -p "$FD57B"
 write_stage_result "$FD57B" "coding" "running" "claude" "deepseek-v4-pro"
-touch "$FD57B/.coding-complete"
+printf '{"stage":"coding","confidence":"high"}\n' > "$FD57B/.coding-complete"
 check "deepseek coding completion preserves model" "completed" "$(simulate_coding_transition "$FD57B")"
 check "deepseek coding result keeps model" "deepseek-v4-pro" "$(jq -r '.model' "$FD57B/.coding-result.json")"
 

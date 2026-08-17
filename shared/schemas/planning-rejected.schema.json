@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "planning-rejected.schema.json",
+  "title": "PlanningRejected",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "issue",
+    "stage",
+    "status",
+    "reason",
+    "outOfScopeFiles",
+    "recommendedAction",
+    "createdAt"
+  ],
+  "properties": {
+    "issue": {
+      "type": "string"
+    },
+    "stage": {
+      "const": "planning"
+    },
+    "status": {
+      "const": "awaiting_user"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "outOfScopeFiles": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "recommendedAction": {
+      "type": "string"
+    },
+    "createdAt": {
+      "type": "string"
+    },
+    "reverted": {
+      "type": "boolean"
+    },
+    "stashRef": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "approvalMarkerRemoved": {
+      "type": "boolean"
+    },
+    "notifiedAt": {
+      "type": "string"
+    }
+  }
+}
