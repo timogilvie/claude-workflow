@@ -5077,17 +5077,83 @@ write_planning_rejection_artifact() {
     '{issue: $issue, stage: $stage, status: $status, reason: $reason, outOfScopeFiles: $outOfScopeFiles, reverted: ($stashRef != null), stashRef: $stashRef, approvalMarkerRemoved: true, recommendedAction: $recommendedAction, createdAt: $createdAt}' > "$artifact"
 }
 
+planning_rejection_notify_retry_due() {
+  local feature_dir="$1"
+  local artifact="$feature_dir/.planning-rejected.json"
+  local status notified rounds last_attempt_at last_attempt_epoch now_epoch retry_rounds retry_interval max_rounds
+
+  [[ -f "$artifact" ]] || return 1
+  notified="$(jq -r '.notifiedAt // empty' "$artifact" 2>/dev/null || true)"
+  [[ -z "$notified" ]] || return 1
+  status="$(jq -r '.notifyDelivery.status // empty' "$artifact" 2>/dev/null || true)"
+  [[ "$status" == "failed" ]] || return 1
+
+  rounds="$(jq -r '.notifyDelivery.rounds // 0' "$artifact" 2>/dev/null || echo 0)"
+  retry_rounds="${WAVEMILL_PANE_NOTIFY_RETRY_ROUNDS:-2}"
+  max_rounds=$((1 + retry_rounds))
+  (( rounds < max_rounds )) || return 1
+
+  last_attempt_at="$(jq -r '.notifyDelivery.lastAttemptAt // empty' "$artifact" 2>/dev/null || true)"
+  [[ -n "$last_attempt_at" ]] || return 0
+  last_attempt_epoch="$(wavemill_iso8601_to_epoch "$last_attempt_at" 2>/dev/null || echo 0)"
+  [[ "$last_attempt_epoch" =~ ^[0-9]+$ ]] || last_attempt_epoch=0
+  now_epoch="$(date +%s)"
+  retry_interval="${WAVEMILL_PANE_NOTIFY_RETRY_INTERVAL:-30}"
+  (( now_epoch - last_attempt_epoch >= retry_interval ))
+}
+
+planning_rejection_hook_confirms_after() {
+  local session="$1" issue="$2" timestamp="$3"
+  local hook_file hook_event hook_state hook_ts attempt_epoch
+  [[ -n "$session" && -n "$issue" && -n "$timestamp" ]] || return 1
+  hook_file="/tmp/wavemill-${session}-${issue}.hook"
+  [[ -f "$hook_file" ]] || return 1
+  hook_event="$(jq -r '.event // empty' "$hook_file" 2>/dev/null || true)"
+  hook_state="$(jq -r '.state // empty' "$hook_file" 2>/dev/null || true)"
+  [[ "$hook_event" == "UserPromptSubmit" || "$hook_state" == "working" ]] || return 1
+  hook_ts="$(jq -r '.timestamp // empty' "$hook_file" 2>/dev/null || true)"
+  [[ "$hook_ts" =~ ^[0-9]+$ ]] || return 1
+  attempt_epoch="$(wavemill_iso8601_to_epoch "$timestamp" 2>/dev/null || echo 0)"
+  [[ "$attempt_epoch" =~ ^[0-9]+$ ]] || attempt_epoch=0
+  (( hook_ts >= attempt_epoch ))
+}
+
+escalate_planning_rejection_undelivered() {
+  local issue="$1" feature_dir="$2" win="$3" attempts="$4" reason="$5"
+  local detail next_action hook_protocol
+
+  detail="Planning rejection notice was not delivered to the agent after ${attempts:-0} attempt(s) (${reason:-unknown})"
+  next_action="Open tmux window $win: the notice may be stranded in the agent input box. Press Enter to submit it, or relay it manually, then re-approve the plan."
+  log_warn "$issue needs attention: $detail. $next_action"
+
+  hook_protocol="$LIB_DIR/../hooks/wavemill-hook-protocol.sh"
+  if ! declare -F wavemill_hook_write >/dev/null 2>&1 && [[ -f "$hook_protocol" ]]; then
+    source "$hook_protocol" || true
+  fi
+  if declare -F wavemill_hook_write >/dev/null 2>&1; then
+    WAVEMILL_SESSION="$SESSION" WAVEMILL_ISSUE="$issue" \
+      wavemill_hook_write "blocked" "planning_notify_undelivered" "$detail" "${current_agent:-unknown}" "$next_action" || true
+  fi
+  set_window_attention_state "$win" "needs-user"
+}
+
 notify_planning_rejection_agent() {
   local feature_dir="$1" win="$2"
   shift 2
   local -a files=("$@")
   local artifact="$feature_dir/.planning-rejected.json"
-  local slug files_summary notified tmp message target issue
+  local slug files_summary notified message target issue
+  local status prior_attempts prior_rounds last_attempt_at
+  local ts send_rc method reason attempts rounds total_attempts
 
   [[ -n "${SESSION:-}" && -n "$win" && -f "$artifact" ]] || return 0
 
   notified=$(jq -r '.notifiedAt // empty' "$artifact" 2>/dev/null || true)
   [[ -z "$notified" ]] || return 0
+  status="$(jq -r '.notifyDelivery.status // empty' "$artifact" 2>/dev/null || true)"
+  if [[ "$status" == "unverifiable" || "$status" == "skipped" ]]; then
+    return 0
+  fi
 
   slug="$(basename "$feature_dir")"
   if [[ "$win" =~ ^([A-Z]+-[0-9]+(_c)?)-(.+)$ ]]; then
@@ -5099,23 +5165,160 @@ notify_planning_rejection_agent() {
   [[ -n "$target" ]] || target="$win"
   target="$(_tmux_target_join "$SESSION" "$target" 2>/dev/null || printf '%s:%s\n' "$SESSION" "$target")"
 
+  prior_attempts="$(jq -r '.notifyDelivery.attempts // 0' "$artifact" 2>/dev/null || echo 0)"
+  prior_rounds="$(jq -r '.notifyDelivery.rounds // 0' "$artifact" 2>/dev/null || echo 0)"
+  last_attempt_at="$(jq -r '.notifyDelivery.lastAttemptAt // empty' "$artifact" 2>/dev/null || true)"
+  if [[ "$status" == "failed" && "${prior_rounds:-0}" -ge 1 ]] \
+    && planning_rejection_hook_confirms_after "$SESSION" "$issue" "$last_attempt_at"; then
+    ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    state_mutate "$artifact" '
+      .notifiedAt = $notifiedAt
+      | .notifyDelivery = {
+          status: "confirmed",
+          method: "operator",
+          reason: "confirmed",
+          attempts: ($attempts | tonumber),
+          rounds: ($rounds | tonumber),
+          lastAttemptAt: $lastAttemptAt,
+          confirmedAt: $notifiedAt
+        }
+    ' \
+      --arg notifiedAt "$ts" \
+      --arg attempts "${prior_attempts:-0}" \
+      --arg rounds "${prior_rounds:-0}" \
+      --arg lastAttemptAt "$last_attempt_at" 2>/dev/null || true
+    log "status" "$issue → planning rejection notice confirmed after operator delivery"
+    return 0
+  fi
+  if [[ "$status" == "failed" ]] && ! planning_rejection_notify_retry_due "$feature_dir"; then
+    return 0
+  fi
+
   if command -v _pane_is_dead_or_idle >/dev/null 2>&1 && _pane_is_dead_or_idle "$target"; then
+    ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    state_mutate "$artifact" '
+      .notifyDelivery = {
+        status: "skipped",
+        method: "none",
+        reason: "agent_not_running",
+        attempts: 0,
+        rounds: 0,
+        lastAttemptAt: $lastAttemptAt
+      }
+    ' --arg lastAttemptAt "$ts" 2>/dev/null || true
+    log_warn "$issue → planning rejection notice not sent because the agent pane is not running"
     return 0
   fi
 
   if [[ "$(tmux list-panes -t "$target" -F '#{pane_dead}' 2>/dev/null | head -1)" == "1" ]]; then
+    ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    state_mutate "$artifact" '
+      .notifyDelivery = {
+        status: "skipped",
+        method: "none",
+        reason: "agent_not_running",
+        attempts: 0,
+        rounds: 0,
+        lastAttemptAt: $lastAttemptAt
+      }
+    ' --arg lastAttemptAt "$ts" 2>/dev/null || true
+    log_warn "$issue → planning rejection notice not sent because the agent pane is dead"
     return 0
   fi
 
   files_summary="$(planning_rejection_files_summary "${files[@]}")"
+  if [[ "$files_summary" == "out-of-scope files" ]]; then
+    files=()
+    while IFS= read -r file; do
+      [[ -n "$file" ]] && files+=("$file")
+    done < <(jq -r '.outOfScopeFiles[]?' "$artifact" 2>/dev/null || true)
+    files_summary="$(planning_rejection_files_summary "${files[@]}")"
+  fi
   message="Planning approval was rejected because planning modified out-of-scope files: $files_summary. Those changes were stashed when possible and .plan-approved was removed. Do not edit source/config files during planning. Update only features/$slug/plan.md if needed, then wait for user approval again."
 
-  tmux send-keys -t "$target" "$message" C-m 2>/dev/null || return 0
+  if ! declare -F agent_pane_send_message_confirmed >/dev/null 2>&1; then
+    ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    state_mutate "$artifact" '
+      .notifyDelivery = {
+        status: "unverifiable",
+        method: "none",
+        reason: "helper_unavailable",
+        attempts: ($attempts | tonumber),
+        rounds: ($rounds | tonumber),
+        lastAttemptAt: $lastAttemptAt
+      }
+    ' --arg attempts "${prior_attempts:-0}" --arg rounds "${prior_rounds:-0}" --arg lastAttemptAt "$ts" 2>/dev/null || true
+    log_warn "$issue → planning rejection notice delivery could not be verified because the helper is unavailable"
+    return 0
+  fi
 
-  tmp=$(mktemp "${artifact}.tmp.XXXXXX" 2>/dev/null) || return 0
-  jq --arg notifiedAt "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" '.notifiedAt = $notifiedAt' "$artifact" > "$tmp" 2>/dev/null \
-    && mv "$tmp" "$artifact" 2>/dev/null \
-    || rm -f "$tmp"
+  if agent_pane_send_message_confirmed "$target" "$message" "$issue" "$SESSION"; then
+    send_rc=0
+  else
+    send_rc=$?
+  fi
+  method="${AGENT_PANE_SEND_LAST_METHOD:-none}"
+  reason="${AGENT_PANE_SEND_LAST_REASON:-unknown}"
+  attempts="${AGENT_PANE_SEND_LAST_ATTEMPTS:-0}"
+  rounds=$(( ${prior_rounds:-0} + 1 ))
+  total_attempts=$(( ${prior_attempts:-0} + ${attempts:-0} ))
+  ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+  if [[ "$send_rc" -eq 0 ]]; then
+    state_mutate "$artifact" '
+      .notifiedAt = $notifiedAt
+      | .notifyDelivery = {
+          status: "confirmed",
+          method: $method,
+          reason: $reason,
+          attempts: ($attempts | tonumber),
+          rounds: ($rounds | tonumber),
+          lastAttemptAt: $lastAttemptAt,
+          confirmedAt: $notifiedAt
+        }
+    ' \
+      --arg notifiedAt "$ts" \
+      --arg method "$method" \
+      --arg reason "$reason" \
+      --arg attempts "$total_attempts" \
+      --arg rounds "$rounds" \
+      --arg lastAttemptAt "$ts" 2>/dev/null || true
+    log "status" "$issue → planning rejection notice delivered to agent (via $method, ${total_attempts} attempt(s))"
+  elif [[ "$send_rc" -eq 2 ]]; then
+    state_mutate "$artifact" '
+      .notifyDelivery = {
+        status: "unverifiable",
+        method: $method,
+        reason: $reason,
+        attempts: ($attempts | tonumber),
+        rounds: ($rounds | tonumber),
+        lastAttemptAt: $lastAttemptAt
+      }
+    ' \
+      --arg method "$method" \
+      --arg reason "$reason" \
+      --arg attempts "$total_attempts" \
+      --arg rounds "$rounds" \
+      --arg lastAttemptAt "$ts" 2>/dev/null || true
+    log_warn "$issue → planning rejection notice sent but delivery could not be verified"
+  else
+    state_mutate "$artifact" '
+      .notifyDelivery = {
+        status: "failed",
+        method: $method,
+        reason: $reason,
+        attempts: ($attempts | tonumber),
+        rounds: ($rounds | tonumber),
+        lastAttemptAt: $lastAttemptAt
+      }
+    ' \
+      --arg method "$method" \
+      --arg reason "$reason" \
+      --arg attempts "$total_attempts" \
+      --arg rounds "$rounds" \
+      --arg lastAttemptAt "$ts" 2>/dev/null || true
+    escalate_planning_rejection_undelivered "$issue" "$feature_dir" "$win" "$total_attempts" "$reason"
+  fi
 }
 
 blocked_completion_announce_marker() {
@@ -7575,8 +7778,12 @@ _launch_agent_in_pane() {
   esc_linear_issue=${linear_issue//\'/\'\\\'\'}
   esc_varied_stage=${varied_launch_stage//\'/\'\\\'\'}
   esc_varied_model=${varied_launch_model//\'/\'\\\'\'}
-  tmux send-keys -t "$target" \
-    "export WAVEMILL_SESSION='$esc_session' WAVEMILL_ISSUE='$esc_issue' WAVEMILL_LINEAR_ISSUE='$esc_linear_issue' WAVEMILL_SLUG='$esc_slug' WAVEMILL_FEATURE_SLUG='$esc_slug' WAVEMILL_FEATURE_DIR='$feature_dir' WAVEMILL_CHALLENGE_VARIED_STAGE='$esc_varied_stage' WAVEMILL_CHALLENGE_VARIED_MODEL='$esc_varied_model'" C-m
+  if _pane_is_dead_or_idle "$target"; then
+    tmux send-keys -t "$target" \
+      "export WAVEMILL_SESSION='$esc_session' WAVEMILL_ISSUE='$esc_issue' WAVEMILL_LINEAR_ISSUE='$esc_linear_issue' WAVEMILL_SLUG='$esc_slug' WAVEMILL_FEATURE_SLUG='$esc_slug' WAVEMILL_FEATURE_DIR='$feature_dir' WAVEMILL_CHALLENGE_VARIED_STAGE='$esc_varied_stage' WAVEMILL_CHALLENGE_VARIED_MODEL='$esc_varied_model'" C-m
+  else
+    log "debug" "Skipping pre-launch pane export for $issue because $target is not at an idle shell"
+  fi
 
   export WAVEMILL_FEATURE_SLUG="$slug"
   export WAVEMILL_FEATURE_DIR="$feature_dir"
@@ -13505,6 +13712,15 @@ monitor_issue_state() {
               # Now completed — next poll iteration will pick up and launch coding
               active_count=$((active_count + 1))
               return 0
+            fi
+
+            if [[ -f "$FEATURE_DIR/.planning-rejected.json" ]] && planning_rejection_notify_retry_due "$FEATURE_DIR"; then
+              local -a planning_rejection_files=()
+              local planning_rejection_file
+              while IFS= read -r planning_rejection_file; do
+                [[ -n "$planning_rejection_file" ]] && planning_rejection_files+=("$planning_rejection_file")
+              done < <(jq -r '.outOfScopeFiles[]?' "$FEATURE_DIR/.planning-rejected.json" 2>/dev/null || true)
+              notify_planning_rejection_agent "$FEATURE_DIR" "$WIN" "${planning_rejection_files[@]}"
             fi
 
             # HOK-1210: Do NOT auto-approve just because the pane is idle.

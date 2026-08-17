@@ -186,7 +186,44 @@ case "$cmd" in
       printf '%s\n' "${TMUX_CURRENT_PATH:-$PWD}"
     fi
     ;;
-  send-keys|respawn-pane)
+  send-keys)
+    printf '%s %s\n' "$cmd" "$*" >> "${TMUX_LOG:?}"
+    if [[ "$*" == *" C-m"* ]]; then
+      count="$(cat "${TMUX_ENTER_COUNT:-/dev/null}" 2>/dev/null || echo 0)"
+      count=$((count + 1))
+      [[ -n "${TMUX_ENTER_COUNT:-}" ]] && printf '%s\n' "$count" > "$TMUX_ENTER_COUNT"
+      case "${TMUX_CONFIRM_MODE:-}" in
+        pane)
+          [[ -n "${TMUX_PANE_STATE:-}" ]] && printf 'submitted\n' > "$TMUX_PANE_STATE"
+          ;;
+        stranded_then_submit)
+          if (( count >= 2 )); then
+            [[ -n "${TMUX_PANE_STATE:-}" ]] && printf 'submitted\n' > "$TMUX_PANE_STATE"
+          else
+            [[ -n "${TMUX_PANE_STATE:-}" ]] && printf 'stranded\n' > "$TMUX_PANE_STATE"
+          fi
+          ;;
+        never)
+          [[ -n "${TMUX_PANE_STATE:-}" ]] && printf 'stranded\n' > "$TMUX_PANE_STATE"
+          ;;
+      esac
+    fi
+    ;;
+  capture-pane)
+    state="$(cat "${TMUX_PANE_STATE:-/dev/null}" 2>/dev/null || echo ready)"
+    case "$state" in
+      submitted)
+        printf 'transcript\n> The previous attempt encountered a transient API error\n> \n'
+        ;;
+      stranded)
+        printf 'transcript\n> The previous attempt encountered a transient API error\n'
+        ;;
+      *)
+        printf 'transcript\n> \n'
+        ;;
+    esac
+    ;;
+  respawn-pane)
     printf '%s %s\n' "$cmd" "$*" >> "${TMUX_LOG:?}"
     ;;
 esac
@@ -219,22 +256,47 @@ TMUX_WINDOW_NAME="HOK-3-test-slug"
 TMUX_PANE_DEAD=0
 TMUX_PANE_PID=4242
 TMUX_LOG="$TEST_TMP/tmux-ready.log"
+TMUX_ENTER_COUNT="$TEST_TMP/tmux-ready.enter"
+TMUX_PANE_STATE="$TEST_TMP/tmux-ready.pane"
 TMUX_CURRENT_COMMAND="bash"
 TMUX_CHILD_COUNT=0
 CLAUDE_HELP_TEXT="usage: claude --resume"
-export TMUX_WINDOW_NAME TMUX_PANE_DEAD TMUX_PANE_PID TMUX_LOG TMUX_CURRENT_COMMAND TMUX_CHILD_COUNT CLAUDE_HELP_TEXT
+export TMUX_WINDOW_NAME TMUX_PANE_DEAD TMUX_PANE_PID TMUX_LOG TMUX_ENTER_COUNT TMUX_PANE_STATE TMUX_CURRENT_COMMAND TMUX_CHILD_COUNT CLAUDE_HELP_TEXT
 : > "$TMUX_LOG"
+printf '0\n' > "$TMUX_ENTER_COUNT"
+printf 'ready\n' > "$TMUX_PANE_STATE"
 check_true "claude shell resume succeeds" agent_resume_after_error "sess" "HOK-3" "claude"
 check_true "claude uses --resume from shell" grep -q 'claude --resume' "$TMUX_LOG"
 
 TMUX_LOG="$TEST_TMP/tmux-busy.log"
+TMUX_ENTER_COUNT="$TEST_TMP/tmux-busy.enter"
+TMUX_PANE_STATE="$TEST_TMP/tmux-busy.pane"
 TMUX_CURRENT_COMMAND="claude"
 TMUX_CHILD_COUNT=1
-export TMUX_LOG TMUX_CURRENT_COMMAND TMUX_CHILD_COUNT
+TMUX_CONFIRM_MODE="pane"
+export TMUX_LOG TMUX_ENTER_COUNT TMUX_PANE_STATE TMUX_CURRENT_COMMAND TMUX_CHILD_COUNT TMUX_CONFIRM_MODE
 : > "$TMUX_LOG"
+printf '0\n' > "$TMUX_ENTER_COUNT"
+printf 'ready\n' > "$TMUX_PANE_STATE"
 check_true "busy agent resume succeeds" agent_resume_after_error "sess" "HOK-3" "claude"
 check_true "busy agent gets continuation prompt" grep -q 'Please continue working on the task from where you left off' "$TMUX_LOG"
 check_false "busy agent does not inject shell resume command" grep -q 'claude --resume' "$TMUX_LOG"
+
+TMUX_LOG="$TEST_TMP/tmux-busy-fail.log"
+TMUX_ENTER_COUNT="$TEST_TMP/tmux-busy-fail.enter"
+TMUX_PANE_STATE="$TEST_TMP/tmux-busy-fail.pane"
+TMUX_CONFIRM_MODE="never"
+WAVEMILL_PANE_SEND_CONFIRM_WAIT=0.05
+WAVEMILL_PANE_SEND_POLL=0.01
+WAVEMILL_PANE_SEND_ENTER_DELAY=0.01
+export TMUX_LOG TMUX_ENTER_COUNT TMUX_PANE_STATE TMUX_CONFIRM_MODE WAVEMILL_PANE_SEND_CONFIRM_WAIT WAVEMILL_PANE_SEND_POLL WAVEMILL_PANE_SEND_ENTER_DELAY
+: > "$TMUX_LOG"
+printf '0\n' > "$TMUX_ENTER_COUNT"
+printf 'ready\n' > "$TMUX_PANE_STATE"
+check_false "busy agent resume fails when prompt is not confirmed" agent_resume_after_error "sess" "HOK-3" "claude"
+check_eq "failed busy resume avoids retyping prompt" "1" "$(grep -c -- ' -l -- ' "$TMUX_LOG")"
+check_eq "failed busy resume retries enter only" "3" "$(grep -c -- ' C-m' "$TMUX_LOG")"
+unset TMUX_CONFIRM_MODE WAVEMILL_PANE_SEND_CONFIRM_WAIT WAVEMILL_PANE_SEND_POLL WAVEMILL_PANE_SEND_ENTER_DELAY
 
 AUTONOMOUS_ISSUE="HOK-10"
 AUTONOMOUS_INSTR="$TEST_TMP/autonomous-instructions.txt"

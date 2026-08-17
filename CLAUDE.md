@@ -173,6 +173,7 @@ Append-only files such as JSONL logs and `.wavemill/registry/` entries remain lo
 - Reads JSON hook files with TTL validation (300s)
 - Falls back to tmux pane liveness if hook is stale or missing
 - Extracts `detail` and `next_action` fields for dashboard display
+- Planning rejection pane notices use confirmed delivery before `notifiedAt`; undelivered notices write `blocked`/`planning_notify_undelivered`. Tunables: `WAVEMILL_PANE_SEND_*` for per-send confirmation and `WAVEMILL_PANE_NOTIFY_*` for monitor retry rounds.
 
 **Hook Configuration** ([wavemill-common.sh](shared/lib/wavemill-common.sh)):
 - `configure_agent_hooks()` dynamically writes `.claude/settings.local.json` per-worktree

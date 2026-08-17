@@ -372,7 +372,7 @@ planning_rejection_detail() {
   local worktree="$1" slug="$2"
   local feature_dir="$worktree/features/$slug"
   local artifact="$feature_dir/.planning-rejected.json"
-  local reason files
+  local reason files notified delivery_status delivery_reason delivery_attempts delivery_suffix
 
   [[ -f "$artifact" ]] || return 0
   reason=$(jq -r '.reason // empty' "$artifact" 2>/dev/null || true)
@@ -380,7 +380,21 @@ planning_rejection_detail() {
 
   files=$(jq -r '(.outOfScopeFiles // []) | join(", ")' "$artifact" 2>/dev/null || true)
   [[ -n "$files" ]] || files="out-of-scope files"
-  printf 'Planning needs attention: edited %s; reverted. Review plan.md and re-approve.\n' "$files"
+  notified=$(jq -r '.notifiedAt // empty' "$artifact" 2>/dev/null || true)
+  delivery_status=$(jq -r '.notifyDelivery.status // empty' "$artifact" 2>/dev/null || true)
+  delivery_reason=$(jq -r '.notifyDelivery.reason // empty' "$artifact" 2>/dev/null || true)
+  delivery_attempts=$(jq -r '.notifyDelivery.attempts // 0' "$artifact" 2>/dev/null || echo 0)
+  delivery_suffix=""
+  if [[ -n "$notified" ]]; then
+    delivery_suffix=" Agent was notified in its pane."
+  elif [[ "$delivery_status" == "failed" ]]; then
+    delivery_suffix=" ⚠ Agent NOT notified (${delivery_attempts:-0} attempts, ${delivery_reason:-unknown}) — open its window and press Enter, or relay the notice manually."
+  elif [[ "$delivery_status" == "unverifiable" ]]; then
+    delivery_suffix=" Agent notice sent but delivery is unconfirmed."
+  elif [[ "$delivery_status" == "skipped" ]]; then
+    delivery_suffix=" Agent was not running; notice not sent."
+  fi
+  printf 'Planning needs attention: edited %s; reverted. Review plan.md and re-approve.%s\n' "$files" "$delivery_suffix"
 }
 
 # Read the arm-preservation flag that apply_expanded_route_if_present stamps on

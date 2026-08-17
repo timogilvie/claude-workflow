@@ -2235,6 +2235,7 @@ agent_resume_after_error() {
   local agent_cmd="${3:-claude}"
   local window target
   local resume_prompt="The previous attempt encountered a transient API error. Please continue working on the task from where you left off."
+  local send_rc
 
   window=$(_agent_find_issue_window "$session" "$issue")
   if [[ -z "$window" ]]; then
@@ -2254,18 +2255,58 @@ agent_resume_after_error() {
         if claude --help 2>/dev/null | grep -q -- '--resume'; then
           tmux send-keys -t "$target" "claude --resume" C-m
         else
-          tmux send-keys -t "$target" "$resume_prompt" C-m
+          if agent_pane_send_message_confirmed "$target" "$resume_prompt" "$issue" "$session"; then
+            :
+          else
+            send_rc=$?
+            if [[ "$send_rc" -eq 2 ]]; then
+              _agent_log_warn "Resume prompt delivery to $issue could not be verified; treating as best-effort"
+              return 0
+            fi
+            _agent_log_warn "Resume prompt not confirmed delivered to $issue (${AGENT_PANE_SEND_LAST_REASON:-unknown})"
+            return 1
+          fi
         fi
         ;;
       codex)
-        tmux send-keys -t "$target" "$resume_prompt" C-m
+        if agent_pane_send_message_confirmed "$target" "$resume_prompt" "$issue" "$session"; then
+          :
+        else
+          send_rc=$?
+          if [[ "$send_rc" -eq 2 ]]; then
+            _agent_log_warn "Resume prompt delivery to $issue could not be verified; treating as best-effort"
+            return 0
+          fi
+          _agent_log_warn "Resume prompt not confirmed delivered to $issue (${AGENT_PANE_SEND_LAST_REASON:-unknown})"
+          return 1
+        fi
         ;;
       *)
-        tmux send-keys -t "$target" "$resume_prompt" C-m
+        if agent_pane_send_message_confirmed "$target" "$resume_prompt" "$issue" "$session"; then
+          :
+        else
+          send_rc=$?
+          if [[ "$send_rc" -eq 2 ]]; then
+            _agent_log_warn "Resume prompt delivery to $issue could not be verified; treating as best-effort"
+            return 0
+          fi
+          _agent_log_warn "Resume prompt not confirmed delivered to $issue (${AGENT_PANE_SEND_LAST_REASON:-unknown})"
+          return 1
+        fi
         ;;
     esac
   else
-    tmux send-keys -t "$target" "$resume_prompt" C-m
+    if agent_pane_send_message_confirmed "$target" "$resume_prompt" "$issue" "$session"; then
+      :
+    else
+      send_rc=$?
+      if [[ "$send_rc" -eq 2 ]]; then
+        _agent_log_warn "Resume prompt delivery to $issue could not be verified; treating as best-effort"
+        return 0
+      fi
+      _agent_log_warn "Resume prompt not confirmed delivered to $issue (${AGENT_PANE_SEND_LAST_REASON:-unknown})"
+      return 1
+    fi
   fi
 
   return 0
@@ -2983,6 +3024,173 @@ agent_pane_is_ready() {
   local children
   children=$(_pane_child_count "$target")
   [[ "$children" == "0" ]]
+}
+
+# ============================================================================
+# PANE MESSAGE DELIVERY
+# ============================================================================
+
+# Send a message to a live agent TUI and confirm that Enter was accepted before
+# callers record delivery. Confirmation is via the agent hook file when present
+# and falls back to pane capture. If a retry sees the message stranded in the
+# input line, it sends Enter only so retries do not stack duplicate text.
+#
+# Return codes:
+#   0 confirmed, 1 not delivered, 2 no confirmation channel was available.
+# Tunables:
+#   WAVEMILL_PANE_SEND_MAX_ATTEMPTS (3)
+#   WAVEMILL_PANE_SEND_CONFIRM_WAIT (1.2)
+#   WAVEMILL_PANE_SEND_POLL (0.25)
+#   WAVEMILL_PANE_SEND_ENTER_DELAY (0.3)
+#
+# Sets:
+#   AGENT_PANE_SEND_LAST_METHOD  hook|pane|none
+#   AGENT_PANE_SEND_LAST_ATTEMPTS
+#   AGENT_PANE_SEND_LAST_REASON  confirmed|stranded_input|no_change|send_failed|unverifiable
+_pane_hook_file() {
+  local session="$1" issue="$2"
+  [[ -n "$session" && -n "$issue" ]] || return 1
+  printf '/tmp/wavemill-%s-%s.hook\n' "$session" "$issue"
+}
+
+_pane_capture_visible() {
+  local target="$1"
+  tmux capture-pane -p -t "$target" 2>/dev/null || true
+}
+
+_pane_message_needle() {
+  local message="$1"
+  printf '%s\n' "$message" \
+    | sed -n '1{s/^[[:space:]]*//;s/[[:space:]]*$//;s/^\(................................\).*/\1/p;q;}'
+}
+
+_pane_last_prompt_line() {
+  awk '
+    /^[[:space:]]*(>|›|❯)/ { last=$0 }
+    END { if (last != "") print last }
+  '
+}
+
+_pane_input_holds_text() {
+  local capture="$1" needle="$2"
+  local prompt_line
+  [[ -n "$capture" && -n "$needle" ]] || return 1
+  prompt_line="$(printf '%s\n' "$capture" | _pane_last_prompt_line)"
+  [[ -n "$prompt_line" && "$prompt_line" == *"$needle"* ]]
+}
+
+_pane_hook_indicates_submit() {
+  local before="$1" after="$2"
+  local before_state after_state after_event
+  [[ -n "$after" && "$after" != "$before" ]] || return 1
+  after_event="$(printf '%s' "$after" | jq -r '.event // empty' 2>/dev/null || true)"
+  [[ "$after_event" == "UserPromptSubmit" ]] && return 0
+  before_state="$(printf '%s' "$before" | jq -r '.state // empty' 2>/dev/null || true)"
+  after_state="$(printf '%s' "$after" | jq -r '.state // empty' 2>/dev/null || true)"
+  [[ "$before_state" != "working" && "$after_state" == "working" ]]
+}
+
+_pane_capture_confirms_submit() {
+  local before="$1" after="$2" needle="$3"
+  [[ -n "$after" && -n "$needle" && "$after" != "$before" ]] || return 1
+  [[ "$after" == *"$needle"* ]] || return 1
+  ! _pane_input_holds_text "$after" "$needle"
+}
+
+_pane_send_sleep_attempts() {
+  local wait_seconds="$1" poll_seconds="$2"
+  awk "BEGIN { v = $wait_seconds / $poll_seconds; if (v < 1) v = 1; printf \"%d\", (v == int(v) ? v : int(v) + 1) }"
+}
+
+agent_pane_send_message_confirmed() {
+  local target="$1" message="$2" issue="${3:-}" session="${4:-}"
+  local max_attempts="${WAVEMILL_PANE_SEND_MAX_ATTEMPTS:-3}"
+  local confirm_wait="${WAVEMILL_PANE_SEND_CONFIRM_WAIT:-1.2}"
+  local poll_interval="${WAVEMILL_PANE_SEND_POLL:-0.25}"
+  local enter_delay="${WAVEMILL_PANE_SEND_ENTER_DELAY:-0.3}"
+  local needle hook_file=""
+  local attempt poll_count poll_index
+  local hook_before hook_after pane_before pane_after
+  local hook_available=0 pane_available=0
+
+  AGENT_PANE_SEND_LAST_METHOD="none"
+  AGENT_PANE_SEND_LAST_ATTEMPTS=0
+  AGENT_PANE_SEND_LAST_REASON="unverifiable"
+
+  [[ -n "$target" && -n "$message" ]] || return 2
+  needle="$(_pane_message_needle "$message")"
+  [[ -n "$needle" ]] || return 2
+  if [[ -n "$issue" && -n "$session" ]]; then
+    hook_file="$(_pane_hook_file "$session" "$issue" 2>/dev/null || true)"
+  fi
+
+  poll_count="$(_pane_send_sleep_attempts "$confirm_wait" "$poll_interval")"
+  attempt=1
+  while (( attempt <= max_attempts )); do
+    AGENT_PANE_SEND_LAST_ATTEMPTS="$attempt"
+    hook_before=""
+    hook_after=""
+    pane_before="$(_pane_capture_visible "$target")"
+    pane_after=""
+    [[ -n "$pane_before" ]] && pane_available=1
+    if [[ -n "$hook_file" && -f "$hook_file" ]]; then
+      hook_before="$(cat "$hook_file" 2>/dev/null || true)"
+      [[ -n "$hook_before" ]] && hook_available=1
+    fi
+
+    if (( attempt > 1 )) && _pane_input_holds_text "$pane_before" "$needle"; then
+      if ! tmux send-keys -t "$target" C-m 2>/dev/null; then
+        AGENT_PANE_SEND_LAST_REASON="send_failed"
+        return 1
+      fi
+    else
+      if ! tmux send-keys -t "$target" -l -- "$message" 2>/dev/null; then
+        AGENT_PANE_SEND_LAST_REASON="send_failed"
+        return 1
+      fi
+      sleep "$enter_delay"
+      if ! tmux send-keys -t "$target" C-m 2>/dev/null; then
+        AGENT_PANE_SEND_LAST_REASON="send_failed"
+        return 1
+      fi
+    fi
+
+    poll_index=1
+    while (( poll_index <= poll_count )); do
+      sleep "$poll_interval"
+      if [[ -n "$hook_file" && -f "$hook_file" ]]; then
+        hook_after="$(cat "$hook_file" 2>/dev/null || true)"
+        [[ -n "$hook_after" ]] && hook_available=1
+        if _pane_hook_indicates_submit "$hook_before" "$hook_after"; then
+          AGENT_PANE_SEND_LAST_METHOD="hook"
+          AGENT_PANE_SEND_LAST_REASON="confirmed"
+          return 0
+        fi
+      fi
+
+      pane_after="$(_pane_capture_visible "$target")"
+      [[ -n "$pane_after" ]] && pane_available=1
+      if _pane_capture_confirms_submit "$pane_before" "$pane_after" "$needle"; then
+        AGENT_PANE_SEND_LAST_METHOD="pane"
+        AGENT_PANE_SEND_LAST_REASON="confirmed"
+        return 0
+      fi
+      poll_index=$((poll_index + 1))
+    done
+
+    if (( hook_available == 0 && pane_available == 0 )); then
+      AGENT_PANE_SEND_LAST_REASON="unverifiable"
+      return 2
+    fi
+    if _pane_input_holds_text "$pane_after" "$needle"; then
+      AGENT_PANE_SEND_LAST_REASON="stranded_input"
+    else
+      AGENT_PANE_SEND_LAST_REASON="no_change"
+    fi
+    attempt=$((attempt + 1))
+  done
+
+  return 1
 }
 
 # Verify that a launched command actually started in the pane.

@@ -15,7 +15,7 @@ setup_planning_rejects_source_edit() {
 
 assert_planning_rejects_source_edit() {
   local output="$1"
-  local feature_dir wt_dir
+  local feature_dir wt_dir delivery_status
   feature_dir="$(awk -F= '/^feature_dir=/{print substr($0, index($0,$2))}' <<< "$output")"
   wt_dir="$(awk -F= '/^wt_dir=/{print substr($0, index($0,$2))}' <<< "$output")"
 
@@ -28,4 +28,10 @@ assert_planning_rejects_source_edit() {
   check_file_exists "planning rejection artifact is written" "$feature_dir/.planning-rejected.json"
   check_eq "planning rejection reason is explicit" "planning_modified_out_of_scope_files" "$(jq -r '.reason' "$feature_dir/.planning-rejected.json")"
   check_eq "planning rejection records edited file" "src/new-feature.ts" "$(jq -r '.outOfScopeFiles[0]' "$feature_dir/.planning-rejected.json")"
+  check_eq "planning rejection is not silently marked delivered" "" "$(jq -r '.notifiedAt // empty' "$feature_dir/.planning-rejected.json")"
+  delivery_status="$(jq -r '.notifyDelivery.status // empty' "$feature_dir/.planning-rejected.json")"
+  case "$delivery_status" in
+    failed|unverifiable|skipped) check_eq "planning rejection records non-confirmed delivery state" "$delivery_status" "$delivery_status" ;;
+    *) check_eq "planning rejection records non-confirmed delivery state" "failed|unverifiable|skipped" "$delivery_status" ;;
+  esac
 }

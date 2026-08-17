@@ -39,6 +39,7 @@ TESTS=(
   lifecycle-harness.test.sh
   cleanup-branch.test.sh
   error-recovery.test.sh
+  pane-notification-delivery.test.sh
   planning-validation.test.sh
   wavemill-guards.test.sh
   wavemill-status.test.sh

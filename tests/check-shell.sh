@@ -105,6 +105,7 @@ for f in \
   "$REPO_DIR"/tests/wavemill-background-jobs-cleanup.test.sh \
   "$REPO_DIR"/tests/global-model-parity.test.sh \
   "$REPO_DIR"/tests/notification-waiting.test.sh \
+  "$REPO_DIR"/tests/pane-notification-delivery.test.sh \
   "$REPO_DIR"/tests/hook-osc-emit.test.sh \
   "$REPO_DIR"/tests/hook-write-context-guard.test.sh \
   "$REPO_DIR"/tests/terminal-reconciler.test.sh \
@@ -2734,6 +2735,12 @@ else
     pass "protected pane launcher initializes linear_issue for strict-mode watchdog launches"
   else
     fail "protected pane launcher can read unbound linear_issue under set -u"
+  fi
+  if grep -q 'if _pane_is_dead_or_idle "$target"; then' <<< "$LAUNCH_AGENT_BLOCK" \
+    && grep -q 'Skipping pre-launch pane export' <<< "$LAUNCH_AGENT_BLOCK"; then
+    pass "protected pane launcher only sends pre-launch exports to idle shells"
+  else
+    fail "protected pane launcher can send pre-launch exports into a busy agent TUI"
   fi
 fi
 

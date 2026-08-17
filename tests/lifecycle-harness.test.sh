@@ -165,6 +165,9 @@ harness_extract_real_functions() {
     validate_planning_phase_output \
     planning_rejection_files_summary \
     write_planning_rejection_artifact \
+    planning_rejection_notify_retry_due \
+    planning_rejection_hook_confirms_after \
+    escalate_planning_rejection_undelivered \
     notify_planning_rejection_agent \
     blocked_completion_announce_marker \
     blocked_completion_should_announce \

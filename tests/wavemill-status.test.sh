@@ -118,6 +118,17 @@ run_blocked_detail() {
   ) | strip_ansi | head -1
 }
 
+run_planning_detail() {
+  local workspace_root="$1"
+  local slug="$2"
+
+  (
+    set -- test-session "$workspace_root"
+    source "$REPO_DIR/shared/lib/wavemill-status.sh" >/dev/null 2>&1
+    planning_rejection_detail "$workspace_root/$slug" "$slug"
+  ) | strip_ansi | head -1
+}
+
 echo "=== wavemill-status inbox renderer ==="
 
 TMP_DIR="$(mktemp -d)"
@@ -405,6 +416,53 @@ if grep -q '📥 INBOX (1)' "$OUTPUT_PLANNING_REJECTED" \
   pass "surfaces planning rejection artifact as actionable needs-attention row"
 else
   fail "planning rejection artifact is not surfaced as actionable dashboard detail"
+fi
+
+cat > "$WORKTREES_DIR/rejected-plan-task/features/rejected-plan-task/.planning-rejected.json" <<'EOF'
+{
+  "reason": "planning_modified_out_of_scope_files",
+  "outOfScopeFiles": ["src/new-feature.ts"],
+  "reverted": true,
+  "notifyDelivery": {
+    "status": "failed",
+    "reason": "stranded_input",
+    "attempts": 3
+  }
+}
+EOF
+
+OUTPUT_PLANNING_NOTIFY_FAILED="$TMP_DIR/output-planning-notify-failed.txt"
+run_render "$STATE_FILE_PLANNING_REJECTED" "$WORKTREES_DIR" "$BEHAVIOR_PLANNING_REJECTED" "$OUTPUT_PLANNING_NOTIFY_FAILED"
+PLANNING_NOTIFY_FAILED_DETAIL="$(run_planning_detail "$WORKTREES_DIR" "rejected-plan-task")"
+
+if [[ "$PLANNING_NOTIFY_FAILED_DETAIL" == *'Agent NOT notified (3 attempts, stranded_input)'* ]]; then
+  pass "planning rejection detail distinguishes undelivered agent notice"
+else
+  fail "planning rejection detail does not show undelivered agent notice"
+fi
+
+cat > "$WORKTREES_DIR/rejected-plan-task/features/rejected-plan-task/.planning-rejected.json" <<'EOF'
+{
+  "reason": "planning_modified_out_of_scope_files",
+  "outOfScopeFiles": ["src/new-feature.ts"],
+  "reverted": true,
+  "notifiedAt": "2026-08-17T12:00:00Z",
+  "notifyDelivery": {
+    "status": "confirmed",
+    "method": "hook",
+    "attempts": 1
+  }
+}
+EOF
+
+OUTPUT_PLANNING_NOTIFY_CONFIRMED="$TMP_DIR/output-planning-notify-confirmed.txt"
+run_render "$STATE_FILE_PLANNING_REJECTED" "$WORKTREES_DIR" "$BEHAVIOR_PLANNING_REJECTED" "$OUTPUT_PLANNING_NOTIFY_CONFIRMED"
+PLANNING_NOTIFY_CONFIRMED_DETAIL="$(run_planning_detail "$WORKTREES_DIR" "rejected-plan-task")"
+
+if [[ "$PLANNING_NOTIFY_CONFIRMED_DETAIL" == *'Agent was notified in its pane'* ]]; then
+  pass "planning rejection detail shows confirmed agent notice"
+else
+  fail "planning rejection detail does not show confirmed agent notice"
 fi
 
 cat > "$WORKTREES_DIR/coding-task/features/coding-task/.coding-blocked-completion.json" <<'EOF'
