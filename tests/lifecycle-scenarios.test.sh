@@ -410,6 +410,10 @@ run_lifecycle_scenario() {
 {"stage":"$stage","status":"$status","agent":"$agent","model":"$model","notes":"$notes"}
 JSON
     }
+    # Keep stage-history writes observable through the scenario stage recorder.
+    write_stage_result_with_history() {
+      write_stage_result "$@"
+    }
     set_task_phase() {
       CURRENT_PHASE="$2"
       printf -v SET_PHASE_CALLS "%s%s|%s\n" "$SET_PHASE_CALLS" "$1" "$2"
