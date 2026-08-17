@@ -5110,10 +5110,14 @@ notify_planning_rejection_agent() {
   files_summary="$(planning_rejection_files_summary "${files[@]}")"
   message="Planning approval was rejected because planning modified out-of-scope files: $files_summary. Those changes were stashed when possible and .plan-approved was removed. Do not edit source/config files during planning. Update only features/$slug/plan.md if needed, then wait for user approval again."
 
-  tmux send-keys -t "$target" "$message" C-m 2>/dev/null || return 0
+  if ! wavemill_pane_send_message "$target" "$message" "$issue" "$SESSION"; then
+    log_warn "$issue: failed to deliver planning rejection notification to agent pane ($WAVEMILL_PANE_MESSAGE_LAST_STATUS: $WAVEMILL_PANE_MESSAGE_LAST_DETAIL)"
+    return 0 # Do not block on notification failure
+  fi
 
   tmp=$(mktemp "${artifact}.tmp.XXXXXX" 2>/dev/null) || return 0
-  jq --arg notifiedAt "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" '.notifiedAt = $notifiedAt' "$artifact" > "$tmp" 2>/dev/null \
+  jq --arg notifiedAt "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" --arg deliveryStatus "${WAVEMILL_PANE_MESSAGE_LAST_STATUS:-unconfirmed}" \
+    '.notifiedAt = $notifiedAt | .deliveryStatus = $deliveryStatus' "$artifact" > "$tmp" 2>/dev/null \
     && mv "$tmp" "$artifact" 2>/dev/null \
     || rm -f "$tmp"
 }
