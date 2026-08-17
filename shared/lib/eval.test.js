@@ -1130,13 +1130,13 @@ describe('evaluateTask', () => {
         undefined,
         {
           _callFn: callFn,
-          _promptSizeConfig: { maxPromptBytes: 26_000, oversizePolicy: 'truncate' },
+          _promptSizeConfig: { maxPromptBytes: 28_000, oversizePolicy: 'truncate' },
         }
       );
 
       assert.equal(callFn.mock.callCount(), 1);
       const sentPrompt = callFn.mock.calls[0].arguments[0];
-      assert.ok(Buffer.byteLength(sentPrompt, 'utf8') <= 26_000);
+      assert.ok(Buffer.byteLength(sentPrompt, 'utf8') <= 28_000);
       assert.match(sentPrompt, /TRUNCATED \d+ bytes from prReviewOutput/);
       assert.equal(result.promptSizeDiagnostic.action, 'truncated');
       assert.equal(result.failureReason, undefined);

@@ -116,6 +116,7 @@ for fn in \
   resolve_phase \
   _persist_phase \
   write_stage_result_with_history \
+  _write_stage_result_trace_event \
   ready_base_sha \
   get_main_head_sha \
   ready_stage_allows_merge \

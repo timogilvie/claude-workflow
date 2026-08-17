@@ -211,6 +211,11 @@ harness_extract_real_functions() {
     native_launch_failure_kind \
     write_native_launch_failure_artifact \
     emit_native_launch_failure_attention \
+    native_hook_terminal_failure_detail \
+    native_terminal_failure_kind \
+    native_terminal_failure_next_action \
+    challenge_abort_pair \
+    emit_native_terminal_failure_attention \
     challenge_varied_stage_model \
     challenge_result_stage_for_launch \
     challenge_stage_for_launch_env \
