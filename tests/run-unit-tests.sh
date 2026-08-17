@@ -122,8 +122,11 @@ TESTS=(
   shared/lib/model-resolution-display.test.ts
   shared/lib/mill-config-preflight.test.ts
   shared/lib/routing-policy.test.ts
+  shared/lib/hokusai-adapter.test.ts
   shared/lib/hokusai-consent.test.ts
   shared/lib/hokusai-redaction.test.ts
+  shared/lib/hokusai-router.test.ts
+  shared/lib/hokusai-schema.test.ts
   shared/lib/hokusai-router-audit.test.ts
   shared/lib/hokusai-contribution-schema.test.ts
   shared/lib/hokusai-contribution-builder.test.ts

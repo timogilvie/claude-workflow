@@ -56,6 +56,7 @@ for f in \
   task-context-analyzer.test.ts \
   post-completion-hook.test.ts \
   task-packet-validator.test.ts \
+  openrouter-generation-api.test.ts \
   workflow-router.test.ts \
   workflow-cost.test.ts \
   native-agent/certification/router-filter.test.ts \

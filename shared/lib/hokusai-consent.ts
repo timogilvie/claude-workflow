@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { getHokusaiContributionsConfig, getHokusaiSubmissionConfig } from './config.ts';
 import { errorMessage } from './error-utils.ts';
+import { isLegacyUnscopedContributionEndpoint } from './hokusai-local-config.ts';
 import { hokusaiQueueStatus } from './hokusai-queue.ts';
 
 export const CURRENT_CONSENT_VERSION = '1.0';
@@ -66,6 +67,8 @@ export interface ContributionStatus {
   mode: ContributionMode;
   pendingCount: number;
   deadLetterCount: number;
+  endpointLooksUnscoped: boolean;
+  endpoint?: string;
   warning?: string;
 }
 
@@ -283,7 +286,17 @@ export function getContributionStatus(
 
   const pendingCount = queueStatus.pendingCount;
   const deadLetterCount = queueStatus.deadLetterCount;
+  const endpoint = contributionsConfig.endpoint ?? undefined;
+  const endpointLooksUnscoped = endpoint !== undefined
+    && isLegacyUnscopedContributionEndpoint(endpoint);
   const warnings: string[] = [];
+  if (endpointLooksUnscoped) {
+    warnings.push(
+      `Contribution endpoint is the legacy unscoped path ${endpoint}.` +
+      ` The Hokusai API is model-scoped at /api/v1/models/{model_id}/contributions;` +
+      ` run \`wavemill hokusai migrate\` or \`wavemill hokusai configure\`.`,
+    );
+  }
   if (pendingCount > 0 && mode === 'export-only') {
     warnings.push(
       `${pendingCount} pending row${pendingCount === 1 ? '' : 's'} cannot upload because` +
@@ -308,6 +321,8 @@ export function getContributionStatus(
     mode,
     pendingCount,
     deadLetterCount,
+    endpointLooksUnscoped,
+    ...(endpoint ? { endpoint } : {}),
     warning: warnings.length > 0 ? warnings.join(' ') : undefined,
   };
 }
@@ -329,13 +344,12 @@ export function getStatusDisplay(options: { configDir?: string; repoDir?: string
     `Mode: ${contrib.mode}`,
   ];
 
-  if (!status.submissionAllowed) {
-    lines.push('Run `wavemill hokusai enable` to opt in, or `wavemill hokusai disable` to stay opted out.');
+  if (contrib.warning) {
+    lines.unshift(`Warning: ${contrib.warning}`, '');
   }
 
-  if (contrib.warning) {
-    lines.push('');
-    lines.push(`Warning: ${contrib.warning}`);
+  if (!status.submissionAllowed) {
+    lines.push('Run `wavemill hokusai enable` to opt in, or `wavemill hokusai disable` to stay opted out.');
   }
 
   return lines.join('\n');

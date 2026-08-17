@@ -18,6 +18,7 @@ import {
   recordConsent,
   saveUserConfig,
 } from './hokusai-consent.ts';
+import { LEGACY_UNSCOPED_ENDPOINT } from './hokusai-local-config.ts';
 
 const tempDirs: string[] = [];
 
@@ -465,6 +466,10 @@ describe('hokusai-consent', () => {
       assert.equal(s.queue, 'enabled');
       assert.equal(s.uploadEndpoint, 'configured');
       assert.equal(s.mode, 'uploading');
+      assert.equal(s.endpointLooksUnscoped, true);
+      assert.equal(s.endpoint, LEGACY_UNSCOPED_ENDPOINT);
+      assert.match(s.warning ?? '', /legacy unscoped path/);
+      assert.match(s.warning ?? '', /wavemill hokusai migrate/);
     });
 
     it('returns disabled mode when consent is not valid', () => {
@@ -546,6 +551,8 @@ describe('hokusai-consent', () => {
       assert.match(display, /Consent: enabled/);
       assert.match(display, /Upload endpoint: configured/);
       assert.match(display, /Mode: uploading/);
+      assert.match(display, /^Warning: .*legacy unscoped path/);
+      assert.match(display, /wavemill hokusai migrate/);
     });
   });
 });

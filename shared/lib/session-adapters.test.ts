@@ -268,6 +268,7 @@ function nativeSessionStarted(model = 'pi-model'): string {
 
 function nativeAssistantMessage(opts: {
   model?: string;
+  responseId?: string;
   input?: number;
   output?: number;
   cacheRead?: number;
@@ -279,6 +280,7 @@ function nativeAssistantMessage(opts: {
     timestamp: 2,
     type: 'assistant_message',
     model: opts.model,
+    ...(opts.responseId ? { responseId: opts.responseId } : {}),
     stopReason: 'end_turn',
     usage: {
       input: opts.input ?? 0,
@@ -790,8 +792,8 @@ describe('NativeSessionAdapter', () => {
     try {
       const lines = [
         nativeSessionStarted('pi-model'),
-        nativeAssistantMessage({ input: 100, output: 25, cacheRead: 20, cacheWrite: 10 }),
-        nativeAssistantMessage({ model: 'pi-model', input: 200, output: 50, cacheRead: 40, cacheWrite: 30 }),
+        nativeAssistantMessage({ responseId: 'gen-one', input: 100, output: 25, cacheRead: 20, cacheWrite: 10 }),
+        nativeAssistantMessage({ model: 'pi-model', responseId: 'gen-two', input: 200, output: 50, cacheRead: 40, cacheWrite: 30 }),
       ].join('\n');
 
       writeFileSync(join(nativeSessionsDir, 'session.jsonl'), lines);
@@ -808,6 +810,9 @@ describe('NativeSessionAdapter', () => {
         cacheReadTokens: 60,
         outputTokens: 75,
       });
+      assert.deepEqual(result.nativeSessions?.[0].responseIds, ['gen-one', 'gen-two']);
+      assert.equal(result.nativeSessions?.[0].turns[0].responseId, 'gen-one');
+      assert.equal(result.nativeSessions?.[0].turns[0].inputTokens, 100);
     } finally {
       cleanup();
     }

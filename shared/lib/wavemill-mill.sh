@@ -5082,7 +5082,7 @@ notify_planning_rejection_agent() {
   shift 2
   local -a files=("$@")
   local artifact="$feature_dir/.planning-rejected.json"
-  local slug files_summary notified tmp message target issue
+  local slug files_summary notified message target issue
 
   [[ -n "${SESSION:-}" && -n "$win" && -f "$artifact" ]] || return 0
 
@@ -5110,12 +5110,62 @@ notify_planning_rejection_agent() {
   files_summary="$(planning_rejection_files_summary "${files[@]}")"
   message="Planning approval was rejected because planning modified out-of-scope files: $files_summary. Those changes were stashed when possible and .plan-approved was removed. Do not edit source/config files during planning. Update only features/$slug/plan.md if needed, then wait for user approval again."
 
-  tmux send-keys -t "$target" "$message" C-m 2>/dev/null || return 0
+  local now_iso status signal attempts detail
+  now_iso="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
-  tmp=$(mktemp "${artifact}.tmp.XXXXXX" 2>/dev/null) || return 0
-  jq --arg notifiedAt "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" '.notifiedAt = $notifiedAt' "$artifact" > "$tmp" 2>/dev/null \
-    && mv "$tmp" "$artifact" 2>/dev/null \
-    || rm -f "$tmp"
+  if wavemill_pane_send_message "$target" "$message" "$issue" "$SESSION"; then
+    status="${WAVEMILL_PANE_MESSAGE_LAST_STATUS:-delivered}"
+    signal="${WAVEMILL_PANE_MESSAGE_LAST_SIGNAL:-none}"
+    attempts="${WAVEMILL_PANE_MESSAGE_LAST_ATTEMPTS:-1}"
+    detail="${WAVEMILL_PANE_MESSAGE_LAST_DETAIL:-}"
+    # Use state_mutate for concurrency-safe artifact writes (CLAUDE.md).
+    state_mutate "$artifact" \
+      '.notifiedAt = $notifiedAt | .notifyStatus = $notifyStatus | .notifySignal = $notifySignal | .notifyDetail = $notifyDetail | .notifyTarget = $notifyTarget | .notifyAttempts = $notifyAttempts' \
+      --arg notifiedAt "$now_iso" \
+      --arg notifyStatus "$status" \
+      --arg notifySignal "$signal" \
+      --arg notifyDetail "$detail" \
+      --arg notifyTarget "$target" \
+      --argjson notifyAttempts "$attempts" \
+      2>/dev/null || true
+    return 0
+  fi
+
+  # Delivery failed after retries. Record the failure durably on the artifact
+  # (so it survives the hook TTL) and escalate to the dashboard inbox via the
+  # blocked hook state so an operator can recover manually.
+  status="${WAVEMILL_PANE_MESSAGE_LAST_STATUS:-unconfirmed}"
+  signal="${WAVEMILL_PANE_MESSAGE_LAST_SIGNAL:-none}"
+  attempts="${WAVEMILL_PANE_MESSAGE_LAST_ATTEMPTS:-0}"
+  detail="${WAVEMILL_PANE_MESSAGE_LAST_DETAIL:-delivery not confirmed}"
+
+  log_warn "$issue: failed to deliver planning rejection notification to agent pane ($status after $attempts attempts): $detail"
+
+  state_mutate "$artifact" \
+    'del(.notifiedAt) | .notifyStatus = $notifyStatus | .notifySignal = $notifySignal | .notifyDetail = $notifyDetail | .notifyTarget = $notifyTarget | .notifyLastAttemptAt = $notifyLastAttemptAt | .notifyAttempts = $notifyAttempts' \
+    --arg notifyStatus "$status" \
+    --arg notifySignal "$signal" \
+    --arg notifyDetail "$detail" \
+    --arg notifyTarget "$target" \
+    --arg notifyLastAttemptAt "$now_iso" \
+    --argjson notifyAttempts "$attempts" \
+    2>/dev/null || true
+
+  local hook_protocol="$LIB_DIR/../hooks/wavemill-hook-protocol.sh"
+  local next_action="Press Enter in tmux window $target to submit the pending planning-rejection notice, or relay it manually."
+  if [[ -f "$hook_protocol" ]]; then
+    # shellcheck disable=SC1090
+    source "$hook_protocol" || true
+    if declare -F wavemill_hook_write >/dev/null 2>&1; then
+      WAVEMILL_SESSION="$SESSION" WAVEMILL_ISSUE="$issue" \
+        wavemill_hook_write "blocked" "planning_rejection_notify_failed" \
+          "planning rejection notice $status after $attempts attempts" \
+          "${current_agent:-unknown}" \
+          "$next_action" || true
+    fi
+  fi
+
+  return 0
 }
 
 blocked_completion_announce_marker() {
@@ -13375,6 +13425,10 @@ monitor_issue_state() {
               active_count=$((active_count + 1))
               return 0
             fi
+            # A superseded rejection artifact would keep rendering "agent NOT
+            # notified" on the dashboard even after the plan was re-approved
+            # (HOK-2765). Drop it now that we're transitioning to coding.
+            rm -f "$FEATURE_DIR/.planning-rejected.json" 2>/dev/null || true
             # Record approval via approve_plan (HOK-1193: controller-owned stage result)
             approve_plan "$FEATURE_DIR" "$current_agent" ""
 

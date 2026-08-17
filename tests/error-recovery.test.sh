@@ -186,6 +186,9 @@ case "$cmd" in
       printf '%s\n' "${TMUX_CURRENT_PATH:-$PWD}"
     fi
     ;;
+  capture-pane)
+    printf '%s' "${TMUX_CAPTURE_TAIL:-}"
+    ;;
   send-keys|respawn-pane)
     printf '%s %s\n' "$cmd" "$*" >> "${TMUX_LOG:?}"
     ;;
@@ -227,14 +230,33 @@ export TMUX_WINDOW_NAME TMUX_PANE_DEAD TMUX_PANE_PID TMUX_LOG TMUX_CURRENT_COMMA
 check_true "claude shell resume succeeds" agent_resume_after_error "sess" "HOK-3" "claude"
 check_true "claude uses --resume from shell" grep -q 'claude --resume' "$TMUX_LOG"
 
+# Fast tunables for the confirmed-send helper so tests don't wait 3s per attempt.
+WAVEMILL_PANE_MESSAGE_ATTEMPTS=2
+WAVEMILL_PANE_MESSAGE_CONFIRM_WAIT=1
+WAVEMILL_PANE_MESSAGE_POLL=0.05
+WAVEMILL_PANE_MESSAGE_ENTER_DELAY=0.05
+WAVEMILL_PANE_MESSAGE_RETRY_DELAY=0.05
+export WAVEMILL_PANE_MESSAGE_ATTEMPTS WAVEMILL_PANE_MESSAGE_CONFIRM_WAIT WAVEMILL_PANE_MESSAGE_POLL WAVEMILL_PANE_MESSAGE_ENTER_DELAY WAVEMILL_PANE_MESSAGE_RETRY_DELAY
+
 TMUX_LOG="$TEST_TMP/tmux-busy.log"
 TMUX_CURRENT_COMMAND="claude"
 TMUX_CHILD_COUNT=1
-export TMUX_LOG TMUX_CURRENT_COMMAND TMUX_CHILD_COUNT
+# Submitted-tail: echo of the prompt above an empty input line — confirmed_delivery=true.
+TMUX_CAPTURE_TAIL=$'──────\n❯ The previous attempt encountered a transient API error. Please continue working on the task from where you left off.\n──────\n❯ '
+export TMUX_LOG TMUX_CURRENT_COMMAND TMUX_CHILD_COUNT TMUX_CAPTURE_TAIL
 : > "$TMUX_LOG"
 check_true "busy agent resume succeeds" agent_resume_after_error "sess" "HOK-3" "claude"
 check_true "busy agent gets continuation prompt" grep -q 'Please continue working on the task from where you left off' "$TMUX_LOG"
 check_false "busy agent does not inject shell resume command" grep -q 'claude --resume' "$TMUX_LOG"
+
+# HOK-2765: stranded tail — prompt text still sitting in the input line, never submitted.
+# The confirmed-send helper must return non-zero and agent_resume_after_error must surface it.
+TMUX_LOG="$TEST_TMP/tmux-busy-stranded.log"
+TMUX_CAPTURE_TAIL=$'──────\n❯ The previous attempt encountered a transient API error. Please continue working on the task from where you left off.\n──────'
+export TMUX_LOG TMUX_CAPTURE_TAIL
+: > "$TMUX_LOG"
+check_false "busy agent resume fails on stranded pane" agent_resume_after_error "sess" "HOK-3" "claude"
+unset TMUX_CAPTURE_TAIL
 
 AUTONOMOUS_ISSUE="HOK-10"
 AUTONOMOUS_INSTR="$TEST_TMP/autonomous-instructions.txt"
