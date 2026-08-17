@@ -157,7 +157,7 @@ export interface ChallengeClassificationOptions {
   activeJobsByPair?: Map<string, MillJob[]>;
   taskStateByPair?: Map<string, PairTaskState>;
   evalHardFailureRetryMax?: number;
-  hasSiblingBranch?: boolean;
+  siblingLive?: boolean;
   nowMs?: number;
   orphanGraceMs?: number;
 }
@@ -380,7 +380,7 @@ export function classifyChallengeState(
       };
     }
 
-    if (isOrphanedPair(pairState, otherPr, options.hasSiblingBranch, options.nowMs, options.orphanGraceMs)) {
+    if (isOrphanedPair(pairState, otherPr, options.siblingLive ?? false, options.nowMs, options.orphanGraceMs)) {
       return {
         kind: 'pair-unresolvable',
         pairId,
@@ -545,6 +545,13 @@ export async function applyChallengePairGates<T extends ChallengeEligibleWorkIte
   for (const item of eligibleItems) {
     const siblingBranch = getSiblingBranch(item.pr.headRefName);
     const hasSiblingBranch = Boolean(siblingBranch && remoteBranchSet.has(siblingBranch));
+    const pairInfo = challengePairMap.get(item.pr.number);
+    const siblingLive = isSiblingLive({
+      hasSiblingBranch,
+      openPrNumbers: allPrNumbers,
+      pairState: pairInfo ? taskStateByPair.get(pairInfo.pairId) : undefined,
+      side: pairInfo?.role ?? 'primary',
+    });
     const state = classifyChallengeState(
       item.pr.number,
       item.metadata,
@@ -556,12 +563,16 @@ export async function applyChallengePairGates<T extends ChallengeEligibleWorkIte
         activeJobsByPair,
         taskStateByPair,
         evalHardFailureRetryMax,
-        hasSiblingBranch,
+        siblingLive,
         nowMs,
       },
     );
 
     if (state.kind === 'not-in-challenge') {
+      // Deliberately still keyed on branch existence, not liveness. Without a
+      // pairId there is no workflow state to judge the sibling from, so the
+      // conservative block stays: an unpaired PR whose twin branch exists may
+      // have lost its challenge metadata.
       if (hasSiblingBranch) {
         nextBlocked.push(toBlockedCandidate(item, 'challenge:pair-unresolved:branch-pair'));
         continue;
@@ -742,10 +753,53 @@ function isHardFailureExhausted(task: TaskEvalState | undefined, retryMax: numbe
   return Boolean(task?.evalFailed && task.evalHardFailureRetryCount >= retryMax);
 }
 
+/**
+ * Whether the paired arm is still live.
+ *
+ * Branch existence alone is a poor proxy. Post-review cleanup deletes a
+ * completed task's local branch and worktree but leaves the remote ref, so a
+ * merged, cleaned-up sibling looks identical to one still working. Treating
+ * that leftover as live kept the survivor's PR at
+ * `pair-unresolved:no-comparison` forever instead of reaching a terminal,
+ * operator-actionable state.
+ *
+ * Keyed on PR numbers rather than branch names so every caller can supply the
+ * same evidence. Only meaningful for a known pair, where workflow state is the
+ * authority on that pair's arms.
+ */
+export function isSiblingLive(input: {
+  hasSiblingBranch: boolean;
+  openPrNumbers: ReadonlySet<number>;
+  pairState: PairTaskState | undefined;
+  side: ChallengeRole;
+}): boolean {
+  const { hasSiblingBranch, openPrNumbers, pairState, side } = input;
+
+  if (!hasSiblingBranch) {
+    return false;
+  }
+
+  const sibling = side === 'primary' ? pairState?.challenger : pairState?.primary;
+  if (!sibling) {
+    // Workflow state no longer tracks the sibling: it completed and was cleaned
+    // up. The remote ref is a leftover, not a live arm.
+    return false;
+  }
+  if (sibling.challengeAborted) {
+    return false;
+  }
+  if (sibling.prNumber === null) {
+    // Tracked but no PR yet — work in flight.
+    return true;
+  }
+  // Live only while its PR is still in play; a merged or closed one is settled.
+  return openPrNumbers.has(sibling.prNumber);
+}
+
 function isOrphanedPair(
   pairState: PairTaskState | undefined,
   otherPr: number | null,
-  hasSiblingBranch: boolean | undefined,
+  siblingLive: boolean,
   nowMs: (() => number) | undefined,
   orphanGraceMs: number | undefined,
 ): boolean {
@@ -755,7 +809,7 @@ function isOrphanedPair(
   if (pairState.primary && pairState.challenger) {
     return false;
   }
-  if (otherPr !== null || hasSiblingBranch) {
+  if (otherPr !== null || siblingLive) {
     return false;
   }
   const loneTask = pairState.primary ?? pairState.challenger;
