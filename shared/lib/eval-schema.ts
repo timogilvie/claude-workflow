@@ -325,7 +325,10 @@ export type WorkflowCostAttributionReason =
   | 'unpriced_model'
   | 'mixed_coverage'
   | 'provider_reported_cost'
+  | 'no_pricing_data'
   | 'no_priced_sessions';
+
+export type WorkflowCostPricingSource = 'openrouter_api' | 'local_estimate' | 'mixed';
 
 export interface WorkflowCostAttributionModel {
   provider: string;
@@ -337,12 +340,13 @@ export interface WorkflowCostAttributionModel {
   totalTokens?: number;
   costUsd?: number;
   providerReportedCostUsd?: number;
+  pricingSource?: WorkflowCostPricingSource;
   priced: boolean;
   reason?: WorkflowCostAttributionReason;
 }
 
 export interface WorkflowCostAttribution {
-  source: 'native';
+  source: 'native' | 'codex' | 'claude';
   coverage: WorkflowCostAttributionCoverage;
   reason?: WorkflowCostAttributionReason;
   sessions: number;
