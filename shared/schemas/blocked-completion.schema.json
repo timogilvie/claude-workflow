@@ -43,7 +43,8 @@
       "enum": [
         "repo_verification_blocked",
         "environment_blocked",
-        "baseline_tests_failing"
+        "baseline_tests_failing",
+        "model_at_capacity"
       ]
     },
     "evidence": {
@@ -51,7 +52,8 @@
     },
     "recommendedAction": {
       "enum": [
-        "advance_to_review"
+        "advance_to_review",
+        "relaunch_coding"
       ]
     },
     "createdAt": {

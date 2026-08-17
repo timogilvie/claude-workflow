@@ -16,7 +16,7 @@
  */
 
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
@@ -1182,6 +1182,26 @@ async function assertPatchCommandSafety(_ctx: ScenarioContext): Promise<Scenario
       return { kind: 'fail', detail: 'run_tests should reject dangerous commands.' };
     }
 
+    const shellOperator = await runTestsTool.execute('call-shell-operator', {
+      command: 'touch marker.txt && echo created',
+    });
+    const shellOperatorDetails = shellOperator.details as { ok: boolean; error?: string; reason?: string };
+    if (
+      shellOperatorDetails.ok ||
+      shellOperatorDetails.error !== 'unsupported_shell_syntax' ||
+      shellOperatorDetails.reason !== 'unsupported-shell-syntax'
+    ) {
+      return { kind: 'fail', detail: 'run_tests should reject shell operators.' };
+    }
+    if (readdirSync(worktreePath).length > 0) {
+      return { kind: 'fail', detail: 'rejected shell-operator command should leave no junk files.' };
+    }
+    for (const junk of ['marker.txt', '&&', 'echo', 'created']) {
+      if (existsSync(join(worktreePath, junk))) {
+        return { kind: 'fail', detail: `rejected shell-operator command created ${junk}.` };
+      }
+    }
+
     const outside = await runFormatTool.execute('call-outside', {
       command: 'node -e process.exit(0)',
       cwd: outsidePath,
@@ -1457,7 +1477,7 @@ const DEFAULT_SCENARIOS: CertificationScenario[] = [
     category: 'tool',
     classification: 'deterministic',
     description:
-      'Patch command tools allow safe in-worktree commands, reject dangerous commands, and deny cwd escapes for tests and formatters.',
+      'Patch command tools allow safe in-worktree commands, reject dangerous commands and shell syntax, and deny cwd escapes for tests and formatters.',
     assertion: assertPatchCommandSafety,
   },
   {

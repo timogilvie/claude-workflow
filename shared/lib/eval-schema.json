@@ -275,7 +275,7 @@
       "properties": {
         "source": {
           "type": "string",
-          "enum": ["native"]
+          "enum": ["native", "codex", "claude"]
         },
         "coverage": {
           "type": "string",
@@ -289,6 +289,7 @@
             "unpriced_model",
             "mixed_coverage",
             "provider_reported_cost",
+            "no_pricing_data",
             "no_priced_sessions"
           ]
         },
@@ -324,6 +325,10 @@
               "totalTokens": { "type": "integer", "minimum": 0 },
               "costUsd": { "type": "number", "minimum": 0 },
               "providerReportedCostUsd": { "type": "number", "minimum": 0 },
+              "pricingSource": {
+                "type": "string",
+                "enum": ["openrouter_api", "local_estimate", "mixed"]
+              },
               "priced": { "type": "boolean" },
               "reason": {
                 "type": "string",
@@ -333,6 +338,7 @@
                   "unpriced_model",
                   "mixed_coverage",
                   "provider_reported_cost",
+                  "no_pricing_data",
                   "no_priced_sessions"
                 ]
               }

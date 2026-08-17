@@ -116,7 +116,7 @@ describe('native-agent coding lifecycle', () => {
     assert.equal(parsedMarker.ok, true);
     if (parsedMarker.ok) {
       assert.equal(parsedMarker.value.confidence, 'high');
-      assert.equal(parsedMarker.value.fields?.producer, 'native-agent');
+      assert.equal(parsedMarker.value.producer, 'native-agent');
     }
 
     const parsedArtifacts = JSON.parse(readFileSync(path.join(repo, CODING_FIXTURE_RESULT_PATH), 'utf-8')) as unknown;

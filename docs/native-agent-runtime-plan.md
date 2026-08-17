@@ -303,6 +303,8 @@ The allowlist must be phase-scoped. A generic "safe path" exception is not accep
 
 Use structured tools for common workflows instead of raw shell. Keep generic `run_command` for later, with strict classification and approval policy.
 
+`run_tests` and `run_format` execute parsed argv directly without a shell. They honor POSIX-style quoting for arguments, reject shell operators, redirects, `$` expansion, backticks, and leading environment assignments, and require callers to use one program per call plus the `cwd` parameter for directory changes.
+
 ### Tier 4: Workflow Tools
 
 - `linear_get_issue({ issue })`

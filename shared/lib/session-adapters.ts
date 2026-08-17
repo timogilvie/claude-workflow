@@ -49,6 +49,18 @@ export interface NativeSessionUsageRecord {
   provider: string;
   modelId: string;
   turnCount: number;
+  responseIds: string[];
+  turns: Array<{
+    responseId?: string;
+    inputTokens?: number;
+    cacheCreationTokens?: number;
+    cacheReadTokens?: number;
+    outputTokens?: number;
+    totalTokens?: number;
+    providerReportedCostUsd?: number;
+    usageAvailable: boolean;
+    invalidUsage: boolean;
+  }>;
   inputTokens?: number;
   cacheCreationTokens?: number;
   cacheReadTokens?: number;
@@ -230,7 +242,7 @@ export class ClaudeSessionAdapter implements SessionAdapter {
       console.log(`[DEBUG_COST]   ✓ Successfully scanned ${sessionCount} session(s) with ${turnCount} turn(s)`);
     }
 
-    return { models, sessionCount, turnCount };
+    return { models, sessionCount, turnCount, source: 'claude' };
   }
 }
 
@@ -319,7 +331,7 @@ export class CodexSessionAdapter implements SessionAdapter {
       console.log(`[DEBUG_COST]   ✓ Successfully scanned ${sessionCount} session(s)`);
     }
 
-    return { models, sessionCount, turnCount };
+    return { models, sessionCount, turnCount, source: 'codex' };
   }
 
   /**
@@ -628,6 +640,8 @@ export class NativeSessionAdapter implements SessionAdapter {
               provider: sessionProvider,
               modelId,
               turnCount: 0,
+              responseIds: [],
+              turns: [],
               usageAvailable: false,
               invalidUsage: false,
             };
@@ -635,14 +649,24 @@ export class NativeSessionAdapter implements SessionAdapter {
           }
 
           nativeRecord.turnCount++;
+          const turnRecord: NativeSessionUsageRecord['turns'][number] = {
+            ...(entry.responseId ? { responseId: entry.responseId } : {}),
+            usageAvailable: false,
+            invalidUsage: false,
+          };
+          if (entry.responseId) {
+            nativeRecord.responseIds.push(entry.responseId);
+          }
           if (entry.usage?.cost?.total !== undefined) {
             nativeRecord.providerReportedCostUsd =
               (nativeRecord.providerReportedCostUsd ?? 0) + entry.usage.cost.total;
+            turnRecord.providerReportedCostUsd = entry.usage.cost.total;
           }
 
           const usage = piUsageToSessionModelUsage(entry.usage);
           if (!usage) {
             nativeRecord.invalidUsage = nativeRecord.invalidUsage || false;
+            nativeRecord.turns.push(turnRecord);
             sessionTurnCount++;
             sessionHadTurns = true;
             continue;
@@ -658,12 +682,21 @@ export class NativeSessionAdapter implements SessionAdapter {
           const usageValid = tokenValues.every((value) => Number.isFinite(value) && value >= 0);
           if (!usageValid) {
             nativeRecord.invalidUsage = true;
+            turnRecord.invalidUsage = true;
+            nativeRecord.turns.push(turnRecord);
             sessionTurnCount++;
             sessionHadTurns = true;
             continue;
           }
 
           nativeRecord.usageAvailable = true;
+          turnRecord.usageAvailable = true;
+          turnRecord.inputTokens = usage.inputTokens;
+          turnRecord.cacheCreationTokens = usage.cacheCreationTokens;
+          turnRecord.cacheReadTokens = usage.cacheReadTokens;
+          turnRecord.outputTokens = usage.outputTokens;
+          turnRecord.totalTokens =
+            entry.usage?.totalTokens ?? usage.inputTokens + usage.cacheCreationTokens + usage.cacheReadTokens + usage.outputTokens;
           nativeRecord.inputTokens = (nativeRecord.inputTokens ?? 0) + usage.inputTokens;
           nativeRecord.cacheCreationTokens = (nativeRecord.cacheCreationTokens ?? 0) + usage.cacheCreationTokens;
           nativeRecord.cacheReadTokens = (nativeRecord.cacheReadTokens ?? 0) + usage.cacheReadTokens;
@@ -671,6 +704,7 @@ export class NativeSessionAdapter implements SessionAdapter {
           nativeRecord.totalTokens =
             (nativeRecord.totalTokens ?? 0) +
             (entry.usage?.totalTokens ?? usage.inputTokens + usage.cacheCreationTokens + usage.cacheReadTokens + usage.outputTokens);
+          nativeRecord.turns.push(turnRecord);
 
           if (!sessionModelUsage[modelId]) {
             sessionModelUsage[modelId] = {

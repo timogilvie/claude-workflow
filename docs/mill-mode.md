@@ -238,11 +238,12 @@ Configuration (`.wavemill-config.json`):
 - `mill.2` status log
 - When `observer.enabled` is true and integration mill-session monitoring is active, the Backstage window also includes a dedicated `Wavemill Observer` pane running detection-only `wavemill observer --loop`.
 - Input is decoupled from the monitor loop internally and written as session-scoped command events at `/tmp/wavemill-${SESSION}-commands`.
+- Seam artifact formats and validation timing are documented in [Seam Artifacts](seam-artifacts.md).
 - When coding writes a valid `features/<slug>/.coding-blocked-completion.json` that recommends review advancement and passes mill guardrails, mill auto-advances the task to review and records `features/<slug>/.coding-auto-advance.json`.
 - When a Codex coding pane is idle at the exact terminal capacity prompt for the confirmation dwell, mill writes `features/<slug>/.coding-blocked-completion.json` plus `features/<slug>/.coding-capacity-recovery.json`, keeps the task in coding, and marks it `needs-user` instead of waiting forever for `.coding-complete`.
 - The auto-advance dirty-worktree guardrail ignores controller-owned metadata noise including `.wavemill/*`, `features/<slug>/.*`, `features/<slug>/plan.md`, `features/<slug>/task-packet*.md`, `features/<slug>/selected-task.json`, and the root `prompt-registry.jsonl`.
 - Root `prompt-registry.jsonl` is intentionally treated as Wavemill-owned generated metadata for this guardrail only. Unknown source changes and unknown non-dotfiles under `features/<slug>/` still block auto-advance and require user review or manual `advance <issue-id>`.
-- `advance <issue-id>` remains the manual fallback for tracked coding tasks with a valid blocked-completion artifact. It writes `features/<slug>/.coding-advance-override.json` and creates `features/<slug>/.coding-complete` so review launches on the next monitor tick.
+- `advance <issue-id>` remains the manual fallback for tracked coding tasks with a valid blocked-completion artifact. It writes `features/<slug>/.coding-advance-override.json` and a JSON `features/<slug>/.coding-complete` with `confidence: medium` so review launches on the next monitor tick.
 - `WAVEMILL_CAPACITY_STALL_SECONDS` controls the confirmation dwell before mill classifies the Codex capacity prompt as terminal. Default: `45`. Values are clamped below the 300 second hook TTL.
 
 ## When to Prefer Mill Mode

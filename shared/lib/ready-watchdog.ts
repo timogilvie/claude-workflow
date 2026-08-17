@@ -25,6 +25,7 @@ import { readChallengeComparisons, type StoredChallengeComparison } from './chal
 import {
   classifyChallengeState,
   getSiblingBranch,
+  isSiblingLive,
   listRemoteTaskBranches,
   loadWorkflowStateChallengeData,
   type ChallengeGate,
@@ -1790,9 +1791,14 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
             activeJobsByPair: challengeWorkflowState.activeJobsByPair,
             taskStateByPair: challengeWorkflowState.taskStateByPair,
             evalHardFailureRetryMax: challengeEvalRetryMax,
-            hasSiblingBranch: Boolean(
-              getSiblingBranch(snapshot.branch) && remoteTaskBranches.has(getSiblingBranch(snapshot.branch) as string),
-            ),
+            siblingLive: isSiblingLive({
+              hasSiblingBranch: Boolean(
+                getSiblingBranch(snapshot.branch) && remoteTaskBranches.has(getSiblingBranch(snapshot.branch) as string),
+              ),
+              openPrNumbers: allReadyPrNumbers,
+              pairState: challengeWorkflowState.taskStateByPair.get(snapshot.challengePairId),
+              side: challengePairMap.get(snapshot.prNumber)?.role ?? 'primary',
+            }),
             nowMs: () => now.getTime(),
           },
         )
