@@ -10,12 +10,13 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, describe, it } from 'node:test';
 import { readStageResult } from '../stage-result.ts';
 import { registerScriptedPiProvider, type ScriptedPiProviderTurn } from './provider.ts';
 import { getCodingFailureHandoffPath, readCodingFailureHandoff } from './coding-failure-handoff.ts';
 import { launchNativeCoding, renderCodingSystemPrompt } from './launch-coding.ts';
+import type { ToolDescriptor } from './tools/types.ts';
 
 const repos: string[] = [];
 
@@ -83,6 +84,37 @@ function finalTurn(text: string): ScriptedPiProviderTurn {
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
     stopReason: 'stop',
+  };
+}
+
+function createRawFileTool(repoDir: string): ToolDescriptor<{ path: string; content: string }, { ok: true }> {
+  return {
+    metadata: {
+      name: 'write_raw_file',
+      description: 'Test-only tool that bypasses mutation validation.',
+      class: 'mutation',
+      allowedPhases: ['coding'],
+      executionMode: 'sequential',
+      outputCapPolicy: { strategy: 'none' },
+    },
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string' },
+        content: { type: 'string' },
+      },
+      required: ['path', 'content'],
+      additionalProperties: false,
+    },
+    async execute(_toolCallId, params) {
+      const target = join(repoDir, params.path);
+      mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, params.content, 'utf-8');
+      return {
+        content: [{ type: 'text', text: `wrote ${params.path}` }],
+        details: { ok: true },
+      };
+    },
   };
 }
 
@@ -323,6 +355,123 @@ describe('launchNativeCoding', () => {
     const transcript = readFileSync(result.transcriptPath, 'utf-8');
     assert.match(transcript, /Valid NativePatch example/);
     assert.match(transcript, /\\"version\\": 1/);
+  });
+
+  it('retries after an invalid post-exit .coding-complete and preserves the malformed file', async () => {
+    const { repoDir, featureDir, slug } = makeRepo();
+    const model = scriptedModel([
+      toolTurn('raw-invalid-complete', 'write_raw_file', {
+        path: `features/${slug}/.coding-complete`,
+        content: 'not a valid marker\n',
+      }),
+      finalTurn('Wrote malformed marker.'),
+      toolTurn('valid-complete', 'create_marker', {
+        path: `features/${slug}/.coding-complete`,
+        content: 'confidence=high\n',
+      }),
+      finalTurn('Rewrote marker.'),
+    ], 'artifact-retry-complete');
+
+    const result = await launchNativeCoding({
+      session: 'sess',
+      issue: 'HOK-2761',
+      slug,
+      wtDir: repoDir,
+      repoDir,
+      loopModelOverride: model,
+      extraDescriptors: [createRawFileTool(repoDir)],
+    });
+
+    assert.equal(result.completion, 'complete');
+    assert.equal(readFileSync(join(featureDir, '.coding-complete'), 'utf-8'), 'confidence=high\n');
+    assert.equal(readFileSync(join(featureDir, '.coding-complete.invalid-1'), 'utf-8'), 'not a valid marker\n');
+  });
+
+  it('fails after bounded artifact retries keep writing malformed completion markers', async () => {
+    const { repoDir, featureDir, slug } = makeRepo();
+    const model = scriptedModel([
+      toolTurn('raw-invalid-complete-1', 'write_raw_file', {
+        path: `features/${slug}/.coding-complete`,
+        content: 'still invalid 1\n',
+      }),
+      finalTurn('Invalid once.'),
+      toolTurn('raw-invalid-complete-2', 'write_raw_file', {
+        path: `features/${slug}/.coding-complete`,
+        content: 'still invalid 2\n',
+      }),
+      finalTurn('Invalid twice.'),
+      toolTurn('raw-invalid-complete-3', 'write_raw_file', {
+        path: `features/${slug}/.coding-complete`,
+        content: 'still invalid 3\n',
+      }),
+      finalTurn('Invalid third time.'),
+    ], 'artifact-retry-exhausted');
+
+    await assert.rejects(
+      () => launchNativeCoding({
+        session: 'sess',
+        issue: 'HOK-2761',
+        slug,
+        wtDir: repoDir,
+        repoDir,
+        loopModelOverride: model,
+        extraDescriptors: [createRawFileTool(repoDir)],
+      }),
+      /after 2 artifact retry attempt\(s\)/,
+    );
+
+    assert.equal(readFileSync(join(featureDir, '.coding-complete.invalid-1'), 'utf-8'), 'still invalid 1\n');
+    assert.equal(readFileSync(join(featureDir, '.coding-complete.invalid-2'), 'utf-8'), 'still invalid 2\n');
+    const stageResult = await readStageResult(featureDir, 'coding');
+    assert.equal(stageResult?.status, 'failed');
+  });
+
+  it('coerces repeated unverified blocked completion claims to non-complete after retries', async () => {
+    const { repoDir, featureDir, slug } = makeRepo();
+    const unverifiedBlocked = JSON.stringify({
+      stage: 'coding',
+      implementationComplete: true,
+      committed: true,
+      passingChecks: [],
+      blockingChecks: ['npm test'],
+      blockingReason: 'baseline_tests_failing',
+      evidence: 'No scoped verification was executed.',
+      recommendedAction: 'advance_to_review',
+    }, null, 2);
+    const model = scriptedModel([
+      toolTurn('raw-unverified-1', 'write_raw_file', {
+        path: `features/${slug}/.coding-blocked-completion.json`,
+        content: unverifiedBlocked,
+      }),
+      finalTurn('Blocked with no evidence.'),
+      toolTurn('raw-unverified-2', 'write_raw_file', {
+        path: `features/${slug}/.coding-blocked-completion.json`,
+        content: unverifiedBlocked,
+      }),
+      finalTurn('Still blocked with no evidence.'),
+      toolTurn('raw-unverified-3', 'write_raw_file', {
+        path: `features/${slug}/.coding-blocked-completion.json`,
+        content: unverifiedBlocked,
+      }),
+      finalTurn('Still no evidence.'),
+    ], 'artifact-unverified-coerce');
+
+    const result = await launchNativeCoding({
+      session: 'sess',
+      issue: 'HOK-2761',
+      slug,
+      wtDir: repoDir,
+      repoDir,
+      loopModelOverride: model,
+      extraDescriptors: [createRawFileTool(repoDir)],
+    });
+
+    assert.equal(result.completion, 'blocked');
+    const saved = JSON.parse(readFileSync(join(featureDir, '.coding-blocked-completion.json'), 'utf-8'));
+    assert.equal(saved.implementationComplete, false);
+    const stageResult = await readStageResult(featureDir, 'coding');
+    assert.equal(stageResult?.status, 'running');
+    assert.match(stageResult?.notes ?? '', /coerced to false/);
   });
 
   it('writes a structured handoff when Kimi-like invalid patches are followed by another normal stop', async () => {

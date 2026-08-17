@@ -43,6 +43,7 @@ TESTS=(
   shared/lib/native-agent/patch-matcher.test.ts
   shared/lib/native-agent/coding-failure-handoff.test.ts
   shared/lib/native-agent/coding-artifacts.test.ts
+  shared/lib/native-agent/completion-normalizer.test.ts
   shared/lib/native-agent/mutation-policy.test.ts
   shared/lib/native-agent/network-policy.test.ts
   shared/lib/native-agent/completion-gate.test.ts

@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { dirname, isAbsolute, join, relative } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 import {
   evaluateMutationWritePolicy,
   type MutationPolicyReason,
@@ -11,6 +11,12 @@ import type {
   NormalizedWholeFileWriteAllowlistInput,
   WholeFileWriteAllowlistInput,
 } from '../coding-artifacts.ts';
+import {
+  buildCompletionArtifactRetryGuidance,
+  normalizeBlockedCompletionContent,
+  normalizeCodingCompleteContent,
+  noVerificationEvidenceError,
+} from '../completion-normalizer.ts';
 import type { MutationRecorder } from '../cleanup.ts';
 import { createApplyPatchTool } from './apply-patch-tool.ts';
 import type { ToolDescriptor, ToolPhase, WavemillToolResult } from './types.ts';
@@ -61,7 +67,12 @@ export interface StatusSuccessDetails {
 export interface MutationToolErrorDetails {
   ok: false;
   tool: MutationToolName | 'apply_patch';
-  error: 'invalid_input' | MutationPolicyReason | 'io_error';
+  error:
+    | 'invalid_input'
+    | MutationPolicyReason
+    | 'io_error'
+    | 'completion_artifact_validation_failed'
+    | 'no_verification_evidence';
   message: string;
   retryHint?: string;
   diagnostics?: unknown;
@@ -242,8 +253,28 @@ async function executeWholeFileWrite(
 
   // Redact secrets before writing to disk (artifact-write redaction chokepoint).
   const profile = buildProfileFromConfig(() => getRedactionConfig(worktreePath).secretEnvNames);
-  const safeContent = redact(content, profile);
+  let safeContent = redact(content, profile);
   const absolutePath = join(worktreePath, decision.resolvedPath);
+  const completionArtifactValidation = validateCompletionArtifactWrite(
+    basename(decision.resolvedPath),
+    safeContent,
+  );
+  if (!completionArtifactValidation.ok) {
+    options.recorder?.recordMutation({
+      tool,
+      status: 'failed',
+      path: decision.resolvedPath,
+      reason: completionArtifactValidation.message,
+    });
+    return errorResult(
+      tool,
+      completionArtifactValidation.error,
+      completionArtifactValidation.message,
+      completionArtifactValidation.retryHint,
+    );
+  }
+  safeContent = completionArtifactValidation.content;
+
   try {
     atomicWriteText(absolutePath, safeContent);
     const details: WholeFileWriteSuccessDetails = {
@@ -258,7 +289,13 @@ async function executeWholeFileWrite(
       path: decision.resolvedPath,
     });
     return {
-      content: [{ type: 'text', text: `${tool} wrote ${decision.resolvedPath}` }],
+      content: [{
+        type: 'text',
+        text: [
+          `${tool} wrote ${decision.resolvedPath}`,
+          ...completionArtifactValidation.warnings,
+        ].join('\n'),
+      }],
       details,
     };
   } catch (error: unknown) {
@@ -271,6 +308,63 @@ async function executeWholeFileWrite(
     });
     return errorResult(tool, 'io_error', `Failed to write ${decision.resolvedPath}: ${message}`);
   }
+}
+
+function validateCompletionArtifactWrite(
+  filename: string,
+  content: string,
+):
+  | { ok: true; content: string; warnings: string[] }
+  | {
+    ok: false;
+    error: 'completion_artifact_validation_failed' | 'no_verification_evidence';
+    message: string;
+    retryHint: string;
+  } {
+  if (filename === '.coding-complete') {
+    const normalized = normalizeCodingCompleteContent(content);
+    if (normalized.ok) {
+      return {
+        ok: true,
+        content: normalized.canonicalContent,
+        warnings: normalized.warnings,
+      };
+    }
+    return {
+      ok: false,
+      error: 'completion_artifact_validation_failed',
+      message: `Invalid .coding-complete: ${normalized.errors.map((error) => error.message).join('; ')}`,
+      retryHint: buildCompletionArtifactRetryGuidance('coding-complete', normalized.errors),
+    };
+  }
+
+  if (filename === '.coding-blocked-completion.json') {
+    const normalized = normalizeBlockedCompletionContent(content);
+    if (normalized.ok) {
+      if (normalized.coercedUnverifiedClaim) {
+        const evidenceError = noVerificationEvidenceError();
+        return {
+          ok: false,
+          error: 'no_verification_evidence',
+          message: evidenceError.message,
+          retryHint: buildCompletionArtifactRetryGuidance('blocked-completion', [evidenceError]),
+        };
+      }
+      return {
+        ok: true,
+        content: normalized.canonicalContent,
+        warnings: normalized.warnings,
+      };
+    }
+    return {
+      ok: false,
+      error: 'completion_artifact_validation_failed',
+      message: `Invalid .coding-blocked-completion.json: ${normalized.errors.map((error) => error.message).join('; ')}`,
+      retryHint: buildCompletionArtifactRetryGuidance('blocked-completion', normalized.errors),
+    };
+  }
+
+  return { ok: true, content, warnings: [] };
 }
 
 async function executeUpdateStatus(

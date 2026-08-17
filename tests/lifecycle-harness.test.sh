@@ -161,6 +161,7 @@ harness_extract_real_functions() {
     ready_stage_pending_verdict \
     log_ready_stale_merge_lane_once \
     monitor_issue_state \
+    capture_planning_baseline \
     validate_planning_phase_output \
     planning_rejection_files_summary \
     write_planning_rejection_artifact \
@@ -184,6 +185,7 @@ harness_extract_real_functions() {
     coding_output_dirty_paths \
     blocked_completion_commit_matches_head \
     wavemill_owned_feature_artifact_path \
+    wavemill_owned_dirty_path \
     blocked_completion_auto_allowed_dirty_path \
     blocked_completion_worktree_clean_for_auto \
     coding_uncommitted_output_announce_marker \
@@ -213,6 +215,9 @@ harness_extract_real_functions() {
     _coding_terminal_blocked_completion_detected \
     emit_terminal_blocked_completion_attention \
     recover_misplaced_coding_complete_marker \
+    recover_misplaced_plan_md \
+    planning_premature_approval_announce_marker \
+    surface_premature_plan_approval \
     _coding_divergence_announce_marker \
     _detect_coding_pane_divergence \
     emit_pane_divergence_attention \
@@ -2980,6 +2985,74 @@ test_tracked_root_level_coding_complete_marker_is_ignored() {
   check_not_contains "tracked root marker: no recovery warning logged" "$(kv_value "$tick" warn_output)" "Recovered misplaced .coding-complete"
 }
 
+test_root_level_plan_md_is_recovered_before_approval_guard() {
+  local slug="root-level-plan-recovered"
+  local issue="HOK-2761-ROOT-PLAN"
+  local repo feature_dir tick
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_planning_state "$repo" "$slug" "running"
+  feature_dir="$repo/features/$slug"
+  git -C "$repo" rm -q "features/$slug/plan.md" "features/$slug/.plan-approved"
+  git -C "$repo" commit -q -m "Remove generated planning artifacts"
+  printf '# Plan\n\nRecovered from root.\n' > "$repo/plan.md"
+  touch "$feature_dir/.plan-approved"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="planning"')"
+
+  check_eq "root plan: planning becomes awaiting_user" "awaiting_user" "$(harness_read_stage_status "$repo" "$slug" planning)"
+  check_file_exists "root plan: expected plan recovered" "$feature_dir/plan.md"
+  check_file_absent "root plan: root plan moved away" "$repo/plan.md"
+  check_file_exists "root plan: approval marker preserved" "$feature_dir/.plan-approved"
+  check_file_exists "root plan: recovery audit written" "$feature_dir/.plan-recovered.json"
+  check_eq "root plan: audit found path" "plan.md" "$(jq -r '.found' "$feature_dir/.plan-recovered.json")"
+  check_eq "root plan: task needs user" "needs-user" "$(kv_value "$tick" attention)"
+}
+
+test_tracked_root_level_plan_md_is_ignored() {
+  local slug="tracked-root-level-plan"
+  local issue="HOK-2761-TRACKED-ROOT-PLAN"
+  local repo feature_dir tick
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_planning_state "$repo" "$slug" "running"
+  feature_dir="$repo/features/$slug"
+  git -C "$repo" rm -q "features/$slug/plan.md" "features/$slug/.plan-approved"
+  printf '# Repo Plan\n\nTracked root plan.\n' > "$repo/plan.md"
+  git -C "$repo" add plan.md
+  git -C "$repo" commit -q -m "Track root plan"
+  touch "$feature_dir/.plan-approved"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="planning"')"
+
+  check_eq "tracked root plan: planning remains running" "running" "$(harness_read_stage_status "$repo" "$slug" planning)"
+  check_file_absent "tracked root plan: expected plan not recovered" "$feature_dir/plan.md"
+  check_file_absent "tracked root plan: recovery audit not written" "$feature_dir/.plan-recovered.json"
+  check_file_exists "tracked root plan: premature marker quarantined" "$feature_dir/.plan-approved.premature"
+  check_eq "tracked root plan: task needs user" "needs-user" "$(kv_value "$tick" attention)"
+}
+
+test_premature_plan_approval_is_quarantined_not_deleted() {
+  local slug="premature-plan-approval"
+  local issue="HOK-2761-PREMATURE"
+  local repo feature_dir tick
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_planning_state "$repo" "$slug" "running"
+  feature_dir="$repo/features/$slug"
+  git -C "$repo" rm -q "features/$slug/plan.md" "features/$slug/.plan-approved"
+  git -C "$repo" commit -q -m "Remove generated plan"
+  touch "$feature_dir/.plan-approved"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="planning"')"
+
+  check_eq "premature plan approval: planning remains running" "running" "$(harness_read_stage_status "$repo" "$slug" planning)"
+  check_file_absent "premature plan approval: marker no longer re-triggers" "$feature_dir/.plan-approved"
+  check_file_exists "premature plan approval: marker quarantined" "$feature_dir/.plan-approved.premature"
+  check_contains "premature plan approval: warning logged" "$(kv_value "$tick" warn_output)" ".plan-approved arrived before plan.md"
+  check_eq "premature plan approval: task needs user" "needs-user" "$(kv_value "$tick" attention)"
+}
+
 test_not_eligible_expanded_reroute_does_not_emit_helper_failure_warn() {
   local slug="not-eligible-expanded-reroute"
   local issue="HOK-2274-NOT-ELIGIBLE"
@@ -3465,6 +3538,9 @@ test_coding_capacity_hook_ignores_stale_signal
 test_misplaced_coding_complete_marker_is_recovered
 test_root_level_coding_complete_marker_is_recovered
 test_tracked_root_level_coding_complete_marker_is_ignored
+test_root_level_plan_md_is_recovered_before_approval_guard
+test_tracked_root_level_plan_md_is_ignored
+test_premature_plan_approval_is_quarantined_not_deleted
 test_not_eligible_expanded_reroute_does_not_emit_helper_failure_warn
 test_disabled_expanded_reroute_does_not_emit_helper_failure_warn
 test_routing_error_expanded_reroute_emits_helper_failure_warn

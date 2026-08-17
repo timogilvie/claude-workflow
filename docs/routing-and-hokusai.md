@@ -171,6 +171,23 @@ wavemill hokusai drain
 
 `drain` reports the outcome clearly: `uploaded N rows`, `exported N rows (export-only mode)`, `empty`, `waiting for retry backoff`, or `disabled`.
 
+### Recovering Dead-Lettered Contributions
+
+Dead-lettered rows are terminal for automatic retry, but they can still be valid data after an operator fixes the cause, such as a wrong endpoint or stale local overlay. Preview recoverable rows first:
+
+```
+wavemill hokusai requeue --dead-letter --dry-run
+```
+
+After fixing the configuration or service issue, move matching rows back to the pending queue and drain them:
+
+```
+wavemill hokusai requeue --dead-letter
+wavemill hokusai drain
+```
+
+Use `--entry-id <id>` to recover one row or `--since <iso timestamp>` to recover failures after a known incident start. Requeue appends fresh pending attempts and leaves the queue cursor intact, so already accepted historical rows are not replayed.
+
 Contribution lifecycle history is stored in an append-only ledger at `.wavemill/hokusai/ledger.jsonl`. Accepted and rejected terminal events track idempotency key, Model `30`, row count, timestamps, job/submission identifiers when present, and reward state (`pending`, `none`, `awarded`, `unknown`). Missing rewards are never inferred as zero.
 
 `wavemill hokusai status` shows structured facets:
@@ -180,11 +197,13 @@ Contribution lifecycle history is stored in an append-only ledger at `.wavemill/
 - **Upload endpoint**: configured/missing
 - **Mode**: uploading, export-only, or disabled
 
-When pending rows exist but the upload endpoint is missing, status emits an explicit warning with the count and instructions to fix.
+When pending rows exist but the upload endpoint is missing, status emits an explicit warning with the count and instructions to fix. When dead-lettered rows exist, status shows the dead-letter count and points to `hokusai-manage requeue --dead-letter --dry-run`.
 
 The status command also includes queue and ledger summary fields:
 
 - pending queue count
+- dead-letter queue count
+- last queue error
 - accepted submission count
 - accepted row count
 - rejected submission count

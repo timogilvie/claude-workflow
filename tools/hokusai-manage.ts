@@ -15,7 +15,7 @@ import {
   configureContributionUpload,
   ensureGitignoreEntry,
 } from '../shared/lib/hokusai-local-config.ts';
-import { hokusaiQueueStatus } from '../shared/lib/hokusai-queue.ts';
+import { hokusaiQueueStatus, requeueDeadLetterEntries, type RequeueReportEntry } from '../shared/lib/hokusai-queue.ts';
 import { drainContributionQueue } from '../shared/lib/hokusai-queue-drain.ts';
 
 function parseOptionalNumber(value: string | undefined, name: string): number | undefined {
@@ -41,6 +41,10 @@ runTool({
     'repo-dir': { type: 'string', description: 'Override the repo directory used to read .wavemill-config.json' },
     input: { type: 'string', description: 'JSONL file to audit instead of the local pending queue' },
     queue: { type: 'boolean', description: 'Audit the local pending queue (.wavemill/hokusai/queue/pending.jsonl)' },
+    'dead-letter': { type: 'boolean', description: 'Requeue entries from the dead-letter queue' },
+    'entry-id': { type: 'string', description: 'Only requeue a single dead-letter entry id' },
+    since: { type: 'string', description: 'Only requeue dead-letter entries failed at or after this ISO timestamp' },
+    'dry-run': { type: 'boolean', description: 'Preview requeue changes without modifying queue files' },
     'coverage-threshold': { type: 'string', description: 'Candidate-pool coverage threshold between 0 and 1' },
     'max-invalid-rate': { type: 'string', description: 'Maximum allowed conformance-invalid rate between 0 and 1' },
     'threshold-mode': { type: 'string', description: 'Threshold handling mode: warn or fail' },
@@ -51,7 +55,7 @@ runTool({
     name: 'command',
     required: true,
     multiple: true,
-    description: 'Command (enable|disable|status|check-consent)',
+    description: 'Command (enable|disable|status|check-consent|configure|drain|requeue|audit)',
   },
   examples: [
     'npx tsx tools/hokusai-manage.ts status',
@@ -60,6 +64,7 @@ runTool({
     'npx tsx tools/hokusai-manage.ts check-consent',
     'npx tsx tools/hokusai-manage.ts configure',
     'npx tsx tools/hokusai-manage.ts drain',
+    'npx tsx tools/hokusai-manage.ts requeue --dead-letter --dry-run',
     'npx tsx tools/hokusai-manage.ts audit --input path/to/contributions.jsonl --json',
   ],
   async run({ args, positional }) {
@@ -110,6 +115,8 @@ runTool({
           uploadEndpoint: contribStatus.uploadEndpoint,
           mode: contribStatus.mode,
           pendingQueueCount: queue.pendingCount,
+          deadLetterQueueCount: queue.deadLetterCount,
+          lastQueueError: queue.lastError,
           acceptedSubmissionCount: summary.acceptedSubmissionCount,
           acceptedRowCount: summary.acceptedRowCount,
           rejectedSubmissionCount: summary.rejectedSubmissionCount,
@@ -122,6 +129,11 @@ runTool({
         } else {
           console.log(getStatusDisplay(options));
           console.log(`Pending queue: ${contributions.pendingQueueCount}`);
+          console.log(`Dead-letter queue: ${contributions.deadLetterQueueCount}`);
+          if (contributions.lastQueueError) {
+            const failure = contributions.lastQueueError;
+            console.log(`Last queue error: ${failure.code} (${failure.message}) at ${failure.at}`);
+          }
           console.log(`Accepted submissions: ${contributions.acceptedSubmissionCount}`);
           console.log(`Accepted rows: ${contributions.acceptedRowCount}`);
           if (contributions.lastSubmission) {
@@ -145,6 +157,65 @@ runTool({
           console.log(JSON.stringify(status, null, 2));
         }
         process.exitCode = status.submissionAllowed ? 0 : 1;
+        return;
+      }
+
+      case 'requeue': {
+        if (!args['dead-letter']) {
+          throw new Error('requeue currently requires --dead-letter');
+        }
+
+        const result = await requeueDeadLetterEntries({
+          entryId: args['entry-id'],
+          since: args.since,
+        }, {
+          ...options,
+          dryRun: !!args['dry-run'],
+        });
+
+        if (args.json) {
+          console.log(JSON.stringify(result, null, 2));
+          return;
+        }
+
+        const renderEntry = (entry: RequeueReportEntry) => {
+          const status = entry.failureStatus === undefined ? '' : ` HTTP ${entry.failureStatus}`;
+          return `  ${entry.entryId}  ${entry.failureCode}${status}  ${entry.failedAt}`;
+        };
+        const skippedNote = result.skippedMalformed > 0
+          ? ` Preserved ${result.skippedMalformed} malformed dead-letter line${result.skippedMalformed === 1 ? '' : 's'}.`
+          : '';
+
+        switch (result.status) {
+          case 'disabled':
+            console.log('Contribution queue is disabled. Enable with `wavemill hokusai enable` and ensure hokusai.contributions.enabled is true in .wavemill-config.json.');
+            break;
+          case 'nothing_to_requeue':
+            if (result.remaining === 0 && result.skippedMalformed === 0) {
+              console.log('Dead-letter queue is empty. Nothing to requeue.');
+            } else {
+              console.log(`No matching entries found in dead-letter queue.${skippedNote}`);
+            }
+            break;
+          case 'dry_run':
+            console.log(`Would requeue ${result.requeued.length} of ${result.remaining} dead-lettered entr${result.remaining === 1 ? 'y' : 'ies'}:`);
+            for (const entry of result.requeued) {
+              console.log(renderEntry(entry));
+            }
+            if (skippedNote) {
+              console.log(skippedNote.trim());
+            }
+            break;
+          case 'requeued':
+            console.log(`Requeued ${result.requeued.length} dead-lettered entr${result.requeued.length === 1 ? 'y' : 'ies'} back to pending. Run 'hokusai-manage drain' to resend.`);
+            for (const entry of result.requeued) {
+              console.log(renderEntry(entry));
+            }
+            if (skippedNote) {
+              console.log(skippedNote.trim());
+            }
+            break;
+        }
         return;
       }
 
@@ -248,7 +319,7 @@ runTool({
 
       default:
         throw new Error(
-          `Unknown command "${command}"\nValid commands: enable, disable, status, check-consent, configure, drain, audit`,
+          `Unknown command "${command}"\nValid commands: enable, disable, status, check-consent, configure, drain, requeue, audit`,
         );
     }
   },
