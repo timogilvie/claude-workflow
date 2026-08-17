@@ -107,6 +107,12 @@ ${GREEN}Commands:${NC}
                ${CYAN}eval aggregate${NC}  Aggregate eval logs from multiple repos
                               --discover, --repos, --output, --[no-]deduplicate-by-hash
 
+  ${CYAN}intervention${NC}
+             Record or inspect operator recovery artifacts for eval scoring
+             Usage:
+               ${CYAN}wavemill intervention record <target> --severity major --trigger <tag> --summary <text>${NC}
+               ${CYAN}wavemill intervention show <target> --json${NC}
+
   ${CYAN}review${NC}    Review a pull request with LLM analysis
              - Lists PRs for interactive selection with optional filtering
              - Supports filtering by state, author, and branch pattern
@@ -1102,6 +1108,17 @@ run_eval() {
   exec npx tsx "$eval_tool" "$@"
 }
 
+run_intervention() {
+  local intervention_tool="$TOOLS_DIR/operator-intervention.ts"
+
+  if [[ ! -f "$intervention_tool" ]]; then
+    echo -e "${RED}Error:${NC} Intervention tool not found at: $intervention_tool" >&2
+    exit 1
+  fi
+
+  exec npx tsx "$intervention_tool" "$@"
+}
+
 run_eval_report() {
   local report_script="$LIB_DIR/wavemill-eval-report.sh"
 
@@ -1594,6 +1611,10 @@ case "${1:-}" in
   eval)
     shift
     run_eval "$@"
+    ;;
+  intervention)
+    shift
+    run_intervention "$@"
     ;;
   route)
     shift

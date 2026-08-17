@@ -188,6 +188,17 @@ For operator details, see [Ready Stage](ready-stage.md).
 
 - `Ctrl+B D` detach from `tmux`
 - `touch ~/.wavemill/.stop-loop` stop after current cycle
+
+### Recording an Operator Intervention
+
+When an operator recovers a failed attempt without committing a fix, record the recovery so evals do not score the next attempt as a clean first pass:
+
+```bash
+wavemill intervention record <target> --stage coding --attempt 1 --severity major --trigger <tag> --summary "<what happened>" --archive-failed-result
+wavemill intervention show <target>
+```
+
+The command writes `features/<slug>/.operator-intervention.json`. Mill archives that artifact and stage-result failed-attempt sidecars before cleanup so post-merge evals can see them.
 - `Ctrl+C` interrupt and reset in-progress tasks
 
 ### Project Context Size Warning

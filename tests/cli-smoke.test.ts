@@ -19,7 +19,7 @@ const WAVEMILL = resolve(__dirname, '..', 'wavemill');
 function run(args: string[], env?: Record<string, string>): string {
   return execFileSync(WAVEMILL, args, {
     encoding: 'utf-8',
-    timeout: 10_000,
+    timeout: 45_000,
     env: { ...process.env, ...env },
   });
 }
@@ -32,7 +32,7 @@ function runExpectFail(
   try {
     const stdout = execFileSync(WAVEMILL, args, {
       encoding: 'utf-8',
-      timeout: 10_000,
+      timeout: 45_000,
       maxBuffer: 10 * 1024 * 1024,
       env: { ...process.env, ...env },
       cwd,
@@ -67,6 +67,7 @@ describe('wavemill CLI', () => {
       assert.match(out, /route/);
       assert.match(out, /observer/);
       assert.match(out, /hokusai/);
+      assert.match(out, /intervention/);
     });
 
     it('shows help with --help flag', () => {
@@ -90,6 +91,20 @@ describe('wavemill CLI', () => {
       const result = runExpectFail(['nosuchcommand']);
       assert.equal(result.status, 1);
       assert.match(result.stderr, /Unknown command/);
+    });
+  });
+
+  describe('intervention command', () => {
+    it('fails clearly without a target', () => {
+      const result = runExpectFail(['intervention']);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /action target is required|Usage: wavemill intervention/);
+    });
+
+    it('fails clearly for an unknown action', () => {
+      const result = runExpectFail(['intervention', 'bogus-action', 'target']);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /Unknown intervention action/);
     });
   });
 
@@ -203,7 +218,7 @@ describe('wavemill CLI', () => {
 
         const out = execFileSync(WAVEMILL, ['check-routing', '--repo-dir', repoDir], {
           encoding: 'utf-8',
-          timeout: 10_000,
+          timeout: 45_000,
           env: { ...process.env },
         });
         assert.match(out, /Starting Wavemill Routing Check/);

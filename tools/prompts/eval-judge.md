@@ -34,6 +34,8 @@ The intervention metadata below contains structured data about human interventio
 - **post_pr_commit**: Commits pushed after the initial PR indicate fixes were needed post-review. These are stronger signals of incomplete autonomous execution than review comments alone.
 - **manual_edit**: Commits not attributed to the AI agent indicate a human had to directly modify the code. This is the strongest signal of intervention.
 - **test_fix**: Commits that fix failing tests indicate the agent's initial implementation had test failures that required correction.
+- **operator_recovery**: An operator supplied diagnosis, artifact repair, plan edits, or a relaunch outside the agent's own channel. Treat this as a heavy intervention; if `codeWrittenByOperator=true` appears, treat it like a manual edit. Honor any `scoringNote`.
+- **prior_failed_attempt**: A completed run required an earlier failed or aborted stage attempt. This is not a clean first pass; cap it in the Assisted Success band unless other evidence is stronger.
 
 Use the `penaltyWeights` as a **floor** for score reduction. Apply judgment to increase penalties further when warranted, but never reduce them below the weighted sum.
 

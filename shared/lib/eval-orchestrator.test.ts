@@ -68,6 +68,7 @@ describe('eval-orchestrator', () => {
   let interventionRecords: InterventionRecord[];
   let costOutcome: WorkflowCostOutcome;
   let evaluateTaskInput: Record<string, unknown> | undefined;
+  let detectAllInput: Record<string, unknown> | undefined;
 
   beforeEach(() => {
     mock.restoreAll();
@@ -135,10 +136,13 @@ describe('eval-orchestrator', () => {
     }));
     mock.method(evalOrchestratorDeps, 'execShellCommand', () => 'task/unified-eval');
     mock.method(evalOrchestratorDeps, 'computeWallClockSeconds', () => 180);
-    mock.method(evalOrchestratorDeps, 'detectAllInterventions', () => ({
+    mock.method(evalOrchestratorDeps, 'detectAllInterventions', (input) => {
+      detectAllInput = input as Record<string, unknown>;
+      return {
       interventions: [{ type: 'clarification', count: 1 }],
       totalInterventionScore: 0.1,
-    }));
+      };
+    });
     mock.method(evalOrchestratorDeps, 'toInterventionMeta', () => [{ description: 'Clarified one requirement', severity: 'minor' }]);
     mock.method(evalOrchestratorDeps, 'toInterventionRecords', () => interventionRecords);
     mock.method(evalOrchestratorDeps, 'loadPenalties', () => ({}));
@@ -226,6 +230,8 @@ describe('eval-orchestrator', () => {
     assert.equal(record.taskDescriptor?.outcome?.total_cost_usd, 3.75);
     assert.equal(record.constraints?.maxCostUsd, 6.5);
     assert.equal(record.enrichmentDiagnostics, undefined);
+    assert.equal(detectAllInput?.worktreePath, repoDir);
+    assert.equal(detectAllInput?.issueId, 'HOK-1495');
   });
 
   it('enriches eval records with native provider metadata for native runs', async () => {

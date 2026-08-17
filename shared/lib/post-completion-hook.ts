@@ -638,6 +638,7 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
       repoDir,
       worktreePath: ctx.worktreePath,
       agentType: ctx.agentType,
+      issueId: ctx.issueId,
     });
 
     console.log(`Post-completion eval: ${formatInterventionDisplay(interventionData.totalCount)}`);

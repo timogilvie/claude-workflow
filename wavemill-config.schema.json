@@ -655,6 +655,20 @@
                             "minimum": 0,
                             "maximum": 1,
                             "description": "Penalty per blocker-severity finding in self-review (critical issue that blocks PR, such as security vulnerabilities or correctness bugs)."
+                        },
+                        "operatorRecovery": {
+                            "type": "number",
+                            "default": 0.15,
+                            "minimum": 0,
+                            "maximum": 1,
+                            "description": "Penalty per operator-recorded recovery intervention."
+                        },
+                        "priorFailedAttempt": {
+                            "type": "number",
+                            "default": 0.1,
+                            "minimum": 0,
+                            "maximum": 1,
+                            "description": "Penalty per failed or aborted prior stage attempt."
                         }
                     },
                     "additionalProperties": false

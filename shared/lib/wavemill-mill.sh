@@ -9817,6 +9817,39 @@ archive_stage_artifacts() {
       cp "$feature_dir/routing.jsonl" "$archive_dir/routing.jsonl" 2>/dev/null || true
     fi
 
+    # Operator intervention artifact
+    if [[ -f "$feature_dir/.operator-intervention.json" ]]; then
+      if jq -e . "$feature_dir/.operator-intervention.json" >/dev/null 2>&1; then
+        cp "$feature_dir/.operator-intervention.json" "$archive_dir/operator-intervention.json" 2>/dev/null || true
+      else
+        log_warn "  Skipping invalid operator intervention archive: $feature_dir/.operator-intervention.json"
+      fi
+    fi
+
+    # Stage result artifacts and failed-attempt sidecars
+    local stage result_file sidecar sidecar_name
+    for stage in planning coding review; do
+      result_file="$feature_dir/.${stage}-result.json"
+      if [[ -f "$result_file" ]]; then
+        if jq -e . "$result_file" >/dev/null 2>&1; then
+          cp "$result_file" "$archive_dir/${stage}-result.json" 2>/dev/null || true
+        else
+          log_warn "  Skipping invalid stage result archive: $result_file"
+        fi
+      fi
+
+      for sidecar in "$feature_dir/.${stage}-result.attempt-"*-failed.json; do
+        [[ -f "$sidecar" ]] || continue
+        sidecar_name="$(basename "$sidecar")"
+        sidecar_name="${sidecar_name#.}"
+        if jq -e . "$sidecar" >/dev/null 2>&1; then
+          cp "$sidecar" "$archive_dir/$sidecar_name" 2>/dev/null || true
+        else
+          log_warn "  Skipping invalid failed attempt archive: $sidecar"
+        fi
+      done
+    done
+
     # Trace JSONL (HOK-2259)
     if [[ -f "$feature_dir/trace.jsonl" ]]; then
       cp "$feature_dir/trace.jsonl" "$archive_dir/trace.jsonl" 2>/dev/null || true
@@ -12140,7 +12173,7 @@ Implement from the issue description plus direct codebase analysis."
   # Record planning stage as running before the first launch so the monitor
   # keeps the task active even before any planning artifacts exist.
   record_planning_launch_route_snapshot "$feature_dir" "$planner_launch_model" "$resolved_planner_agent" "${plan_depth:-light}" "effective-route"
-  write_stage_result "$feature_dir" "planning" "running" "$resolved_planner_agent" "$planner_launch_model"
+  write_stage_result_with_history "$feature_dir" "planning" "running" "$resolved_planner_agent" "$planner_launch_model"
 
   launch_planning_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
     "$planner_launch_model" "$resolved_planner_agent" "${plan_depth:-light}"
@@ -13216,7 +13249,7 @@ monitor_issue_state() {
 
               # Record planning stage as running (HOK-1177)
               record_planning_launch_route_snapshot "$FEATURE_DIR" "$planner_launch_model" "$planner_agent" "$plan_depth" "effective-route"
-              write_stage_result "$FEATURE_DIR" "planning" "running" "$planner_agent" "$planner_launch_model"
+              write_stage_result_with_history "$FEATURE_DIR" "planning" "running" "$planner_agent" "$planner_launch_model"
 
               launch_planning_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$planner_launch_model" "$planner_agent" "$plan_depth"
               local launch_rc=$?
@@ -13430,7 +13463,7 @@ monitor_issue_state() {
             # Record coding stage as running (HOK-1177)
             local coding_started_at
             coding_started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-            write_stage_result "$FEATURE_DIR" "coding" "running" "$coder_agent" "$coder_launch_model" "" "" "$coding_started_at"
+            write_stage_result_with_history "$FEATURE_DIR" "coding" "running" "$coder_agent" "$coder_launch_model" "" "" "$coding_started_at"
 
             launch_coding_phase "$ISSUE" "$SLUG" "$title" "$WT_DIR" "$BRANCH" "$BASE_BRANCH" "$coder_launch_model" "$coder_agent" "$code_depth"
             local launch_rc=$?
@@ -13611,7 +13644,7 @@ monitor_issue_state() {
             fi
 
             # Record review stage as running (HOK-1177)
-            write_stage_result "$FEATURE_DIR" "review" "running" "$reviewer_agent" "$reviewer_launch_model"
+            write_stage_result_with_history "$FEATURE_DIR" "review" "running" "$reviewer_agent" "$reviewer_launch_model"
 
             launch_review_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$reviewer_launch_model" "$reviewer_agent" "$review_mode"
             local launch_rc=$?
