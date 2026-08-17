@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { getHokusaiContributionsConfig } from './config.ts';
 import {
@@ -89,6 +89,32 @@ export interface HokusaiQueueStatus {
   lastError: HokusaiQueueFailureDetail | null;
 }
 
+export interface DeadLetterRecord {
+  entry: HokusaiQueueEnvelope;
+  failure: HokusaiQueueFailureDetail;
+}
+
+export interface RequeueFilter {
+  entryId?: string;
+  since?: string;
+}
+
+export interface RequeueReportEntry {
+  entryId: string;
+  idempotencyKey: string;
+  failureCode: string;
+  failureStatus?: number;
+  failedAt: string;
+  enqueuedAt: string;
+}
+
+export interface RequeueResult {
+  status: 'disabled' | 'nothing_to_requeue' | 'dry_run' | 'requeued';
+  requeued: RequeueReportEntry[];
+  remaining: number;
+  skippedMalformed: number;
+}
+
 function initialState(): HokusaiQueueState {
   return {
     schemaVersion: STATE_SCHEMA_VERSION,
@@ -151,6 +177,13 @@ function readLines(path: string): string[] {
     .filter((line) => line.trim().length > 0);
 }
 
+function rewriteJsonlLines(path: string, lines: string[]): void {
+  mkdirSync(dirname(path), { recursive: true });
+  const tempPath = `${path}.tmp.${process.pid}.${randomUUID()}`;
+  writeFileSync(tempPath, lines.length > 0 ? `${lines.join('\n')}\n` : '', 'utf-8');
+  renameSync(tempPath, path);
+}
+
 function loadStateOrDefault(statePath: string): HokusaiQueueState {
   if (!existsSync(statePath)) {
     return initialState();
@@ -177,6 +210,191 @@ function safeFailure(code: string, message: string, now: Date, status?: number):
     message,
     ...(status !== undefined ? { status } : {}),
     at: now.toISOString(),
+  };
+}
+
+interface ParsedDeadLetterLine {
+  line: string;
+  record?: DeadLetterRecord;
+}
+
+interface DeadLetterPartition {
+  matched: ParsedDeadLetterLine[];
+  unmatched: ParsedDeadLetterLine[];
+  malformed: string[];
+}
+
+function isDeadLetterRecord(value: unknown): value is DeadLetterRecord {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  const record = value as { entry?: unknown; failure?: unknown };
+  if (!record.entry || typeof record.entry !== 'object') {
+    return false;
+  }
+  const entry = record.entry as Partial<HokusaiQueueEnvelope>;
+  const failure = record.failure as Partial<HokusaiQueueFailureDetail> | undefined;
+  return typeof entry.entryId === 'string'
+    && entry.entryId.length > 0
+    && typeof entry.idempotencyKey === 'string'
+    && entry.idempotencyKey.length > 0
+    && Boolean(entry.row)
+    && Boolean(failure)
+    && typeof failure?.code === 'string'
+    && typeof failure?.at === 'string';
+}
+
+function parseDeadLetterLine(line: string): ParsedDeadLetterLine {
+  try {
+    const parsed = JSON.parse(line) as unknown;
+    if (!isDeadLetterRecord(parsed)) {
+      return { line };
+    }
+    return { line, record: parsed };
+  } catch {
+    return { line };
+  }
+}
+
+function matchesRequeueFilter(record: DeadLetterRecord, filter: RequeueFilter, sinceTime?: number): boolean {
+  if (filter.entryId && record.entry.entryId !== filter.entryId) {
+    return false;
+  }
+  if (sinceTime !== undefined) {
+    const failedAt = new Date(record.failure.at).getTime();
+    if (!Number.isFinite(failedAt) || failedAt < sinceTime) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function partitionDeadLetterLines(
+  lines: string[],
+  filter: RequeueFilter,
+  sinceTime?: number,
+): DeadLetterPartition {
+  const matched: ParsedDeadLetterLine[] = [];
+  const unmatched: ParsedDeadLetterLine[] = [];
+  const malformed: string[] = [];
+
+  for (const line of lines) {
+    const parsed = parseDeadLetterLine(line);
+    if (!parsed.record) {
+      malformed.push(line);
+    } else if (matchesRequeueFilter(parsed.record, filter, sinceTime)) {
+      matched.push(parsed);
+    } else {
+      unmatched.push(parsed);
+    }
+  }
+
+  return { matched, unmatched, malformed };
+}
+
+function toRequeueReportEntry(record: DeadLetterRecord): RequeueReportEntry {
+  return {
+    entryId: record.entry.entryId,
+    idempotencyKey: record.entry.idempotencyKey,
+    failureCode: record.failure.code,
+    ...(record.failure.status !== undefined ? { failureStatus: record.failure.status } : {}),
+    failedAt: record.failure.at,
+    enqueuedAt: record.entry.enqueuedAt,
+  };
+}
+
+function validateRequeueFilter(filter: RequeueFilter): number | undefined {
+  if (!filter.since) {
+    return undefined;
+  }
+  const sinceTime = new Date(filter.since).getTime();
+  if (!Number.isFinite(sinceTime)) {
+    throw new Error(`Invalid --since timestamp: ${filter.since}`);
+  }
+  return sinceTime;
+}
+
+export async function requeueDeadLetterEntries(
+  filter: RequeueFilter = {},
+  opts: QueueAccessOptions & { dryRun?: boolean } = {},
+): Promise<RequeueResult> {
+  const sinceTime = validateRequeueFilter(filter);
+  const consent = getContributionConsentStatus(opts);
+  if (!consent.submissionAllowed) {
+    return { status: 'disabled', requeued: [], remaining: 0, skippedMalformed: 0 };
+  }
+
+  const paths = resolveHokusaiQueuePaths(opts.repoDir);
+  const lines = readLines(paths.deadLetterPath);
+  const partition = partitionDeadLetterLines(lines, filter, sinceTime);
+  const totalValidRecords = partition.matched.length + partition.unmatched.length;
+  const report = partition.matched.map((entry) => toRequeueReportEntry(entry.record!));
+
+  if (partition.matched.length === 0) {
+    return {
+      status: 'nothing_to_requeue',
+      requeued: [],
+      remaining: totalValidRecords,
+      skippedMalformed: partition.malformed.length,
+    };
+  }
+
+  if (opts.dryRun) {
+    return {
+      status: 'dry_run',
+      requeued: report,
+      remaining: totalValidRecords,
+      skippedMalformed: partition.malformed.length,
+    };
+  }
+
+  let movedReport: RequeueReportEntry[] = [];
+  let remaining = 0;
+  let skippedMalformed = 0;
+
+  await mutateJsonState<HokusaiQueueState>(
+    paths.statePath,
+    (current) => {
+      const lockedPartition = partitionDeadLetterLines(readLines(paths.deadLetterPath), filter, sinceTime);
+      const now = (opts.now ?? new Date()).toISOString();
+      movedReport = lockedPartition.matched.map((entry) => toRequeueReportEntry(entry.record!));
+      skippedMalformed = lockedPartition.malformed.length;
+      remaining = lockedPartition.unmatched.length;
+
+      for (const parsed of lockedPartition.matched) {
+        appendEnvelope(paths, {
+          ...parsed.record!.entry,
+          attempts: 0,
+          nextAttemptAt: now,
+        });
+      }
+
+      rewriteJsonlLines(paths.deadLetterPath, [
+        ...lockedPartition.unmatched.map((entry) => entry.line),
+        ...lockedPartition.malformed,
+      ]);
+
+      if (lockedPartition.matched.length === 0) {
+        return current;
+      }
+
+      return {
+        ...current,
+        lastError: null,
+      };
+    },
+    { createIfMissing: true, initial: initialState() },
+  );
+
+  if (movedReport.length === 0) {
+    return { status: 'nothing_to_requeue', requeued: [], remaining, skippedMalformed };
+  }
+
+  return {
+    status: 'requeued',
+    requeued: movedReport,
+    remaining,
+    skippedMalformed,
   };
 }
 
