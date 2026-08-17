@@ -20,6 +20,7 @@ import {
   type InterventionPenalties,
   type PrCommit,
 } from './intervention-detector.ts';
+import { clearConfigCache } from './config.ts';
 import { encodeProjectDir } from './workflow-cost.ts';
 
 // ── Helpers for session JSONL fixtures ──────────────────────────
@@ -612,6 +613,25 @@ describe('intervention-detector', () => {
         writeFileSync(join(taskDir, 'selected-task.json'), '{}');
         assert.equal(isWavemillManagedBranch('task/my-feature', tmpDir), true);
       } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('returns true when task metadata lives under configured mill.worktreeRoot', () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'wavemill-branch-'));
+      try {
+        writeFileSync(
+          join(tmpDir, '.wavemill-config.json'),
+          JSON.stringify({ mill: { worktreeRoot: 'custom-worktrees' } }),
+          'utf-8',
+        );
+        clearConfigCache(tmpDir);
+        const taskDir = join(tmpDir, 'custom-worktrees', 'my-feature', 'features', 'my-feature');
+        mkdirSync(taskDir, { recursive: true });
+        writeFileSync(join(taskDir, 'selected-task.json'), '{}');
+        assert.equal(isWavemillManagedBranch('task/my-feature', tmpDir), true);
+      } finally {
+        clearConfigCache(tmpDir);
         rmSync(tmpDir, { recursive: true, force: true });
       }
     });

@@ -13,7 +13,9 @@ export type ChallengeRole = 'primary' | 'challenger';
 export type UnresolvableReason =
   | 'orphan-sibling'
   | 'sibling-eval-hard-failed'
-  | 'both-eval-hard-failed';
+  | 'both-eval-hard-failed'
+  | 'sibling-challenge-aborted'
+  | 'both-challenge-aborted';
 export type AutoCloseRefusalReason =
   | 'missing_evidence_id'
   | 'missing_or_invalid_comparison'
@@ -59,6 +61,13 @@ export interface TaskEvalState {
   evalCompleted: boolean;
   evalHardFailureRetryCount: number;
   comparisonState: string | null;
+  /**
+   * Set when an arm hit a terminal launch failure (unknown model ID, prompt
+   * larger than the context window). Such an arm never produces a PR, so the
+   * eval-based hard-failure signals never fire and the pair would otherwise sit
+   * at `pair-unresolved:no-comparison` forever, blocking the merge lane.
+   */
+  challengeAborted: string | null;
 }
 
 export interface PairTaskState {
@@ -84,6 +93,7 @@ interface WorkflowStateTask {
   evalCompleted?: unknown;
   evalHardFailureRetryCount?: unknown;
   comparisonState?: unknown;
+  challengeAborted?: unknown;
 }
 
 type WorkflowStateFile = WorkflowStateLike & {
@@ -253,6 +263,9 @@ export function loadWorkflowStateChallengeData(repoDir: string): WorkflowStateCh
           evalCompleted: task.evalCompleted === true,
           evalHardFailureRetryCount: parseNonNegativeInteger(task.evalHardFailureRetryCount),
           comparisonState: typeof task.comparisonState === 'string' ? task.comparisonState : null,
+          challengeAborted: typeof task.challengeAborted === 'string' && task.challengeAborted
+            ? task.challengeAborted
+            : null,
         };
         taskStateByPair.set(task.challengePairId, pairTaskState);
       }
@@ -710,6 +723,17 @@ function classifyHardFailureState(
   }
   if (primaryExhausted || challengerExhausted) {
     return 'sibling-eval-hard-failed';
+  }
+
+  // A terminally aborted arm is unrecoverable without a fresh launch, so the
+  // comparison it was supposed to supply will never arrive.
+  const primaryAborted = Boolean(pairState.primary?.challengeAborted);
+  const challengerAborted = Boolean(pairState.challenger?.challengeAborted);
+  if (primaryAborted && challengerAborted) {
+    return 'both-challenge-aborted';
+  }
+  if (primaryAborted || challengerAborted) {
+    return 'sibling-challenge-aborted';
   }
   return null;
 }
