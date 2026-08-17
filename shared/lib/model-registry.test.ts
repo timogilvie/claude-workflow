@@ -2214,4 +2214,37 @@ describe('canonical supported-model helpers', () => {
     assert.equal(getRequiredCertificationPhaseForStage('wavemill-alias', 'coder', registry), 'patch');
     assert.equal(getRequiredCertificationPhaseForStage('wavemill-alias', 'planner', registry), 'workflow');
   });
+
+  // Regression: kimi-k2 was declared at 200_000 while the OpenRouter endpoint
+  // enforces 131_072. A coding launch packed ~131_182 tokens and died with a
+  // 400 that no pre-flight check could have caught, because the value it would
+  // have checked against was itself wrong.
+  //
+  // Overstating a context window is the unsafe direction: it lets through
+  // prompts the provider will reject. Understating only wastes capacity. These
+  // pin the values that were corrected against the live catalog so a future
+  // edit cannot silently reintroduce an overstatement.
+  it('declares context windows that do not exceed the provider limit', () => {
+    const registry = DEFAULT_MODEL_REGISTRY;
+    const knownProviderLimits: Record<string, number> = {
+      'kimi-k2': 131_072,
+      'kimi-k2-thinking': 262_144,
+      'glm-5.2': 1_048_576,
+      'llama-4-maverick': 1_048_576,
+      'llama-4-scout': 1_310_720,
+      'qwen-3-coder': 262_144,
+      'qwen-2.5-coder-32b': 32_768,
+      'gemini-2.5-pro': 1_048_576,
+      'gemini-2.5-flash': 1_048_576,
+    };
+
+    for (const [alias, limit] of Object.entries(knownProviderLimits)) {
+      const declared = registry.models[alias]?.contextWindowTokens;
+      assert.ok(declared !== undefined, `${alias} should exist in the registry`);
+      assert.ok(
+        declared <= limit,
+        `${alias} declares ${declared} but the provider enforces ${limit}; overstating lets through prompts the provider rejects`,
+      );
+    }
+  });
 });

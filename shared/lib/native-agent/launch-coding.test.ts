@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -115,6 +116,20 @@ function createRawFileTool(repoDir: string): ToolDescriptor<{ path: string; cont
       };
     },
   };
+}
+
+function archivedArtifactPath(featureDir: string, artifactName: string): string | undefined {
+  const archiveRoot = join(featureDir, '.stale-artifacts');
+  if (!existsSync(archiveRoot)) {
+    return undefined;
+  }
+  for (const entry of readdirSync(archiveRoot)) {
+    const candidate = join(archiveRoot, entry, artifactName);
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return undefined;
 }
 
 afterEach(() => {
@@ -499,5 +514,68 @@ describe('launchNativeCoding', () => {
     const stageResult = await readStageResult(featureDir, 'coding');
     assert.equal(stageResult?.status, 'failed');
     assert.match(stageResult?.failureReason ?? '', /last tool error \(apply_patch\/invalid_patch\)/);
+  });
+
+  it('sweeps a pre-existing .coding-complete before classifying native completion', async () => {
+    const { repoDir, featureDir, slug } = makeRepo();
+    writeFileSync(join(featureDir, '.coding-complete'), 'confidence=high\nproducer=stale\n', 'utf-8');
+    const model = scriptedModel([
+      finalTurn('Stopped without writing a fresh marker.'),
+    ], 'stale-complete');
+
+    await assert.rejects(
+      () => launchNativeCoding({
+        session: 'sess',
+        issue: 'HOK-2757',
+        slug,
+        wtDir: repoDir,
+        repoDir,
+        loopModelOverride: model,
+      }),
+      /without \.coding-complete or \.coding-blocked-completion\.json/,
+    );
+
+    assert.equal(existsSync(join(featureDir, '.coding-complete')), false);
+    assert.ok(archivedArtifactPath(featureDir, '.coding-complete'));
+    assert.ok(existsSync(getCodingFailureHandoffPath(featureDir)));
+    const stageResult = await readStageResult(featureDir, 'coding');
+    assert.equal(stageResult?.status, 'failed');
+  });
+
+  it('sweeps a stale blocked-completion and accepts a fresh .coding-complete from the current run', async () => {
+    const { repoDir, featureDir, slug } = makeRepo();
+    writeFileSync(join(featureDir, '.coding-blocked-completion.json'), JSON.stringify({
+      stage: 'coding',
+      implementationComplete: true,
+      committed: true,
+      passingChecks: ['old check'],
+      blockingChecks: ['old blocker'],
+      blockingReason: 'old',
+      evidence: 'old run',
+      recommendedAction: 'advance_to_review',
+    }), 'utf-8');
+    const model = scriptedModel([
+      toolTurn('marker-1', 'create_marker', {
+        path: `features/${slug}/.coding-complete`,
+        content: 'confidence=high\nproducer=native-agent\n',
+      }),
+      finalTurn('Coding complete.'),
+    ], 'stale-blocked-fresh-complete');
+
+    const result = await launchNativeCoding({
+      session: 'sess',
+      issue: 'HOK-2757',
+      slug,
+      wtDir: repoDir,
+      repoDir,
+      loopModelOverride: model,
+    });
+
+    assert.equal(result.completion, 'complete');
+    assert.ok(archivedArtifactPath(featureDir, '.coding-blocked-completion.json'));
+    assert.equal(existsSync(join(featureDir, '.coding-blocked-completion.json')), false);
+    assert.ok(existsSync(join(featureDir, '.coding-complete')));
+    const stageResult = await readStageResult(featureDir, 'coding');
+    assert.equal(stageResult?.status, 'completed');
   });
 });

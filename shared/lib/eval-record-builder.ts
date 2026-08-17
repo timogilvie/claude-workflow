@@ -68,6 +68,7 @@ import {
 } from './route-artifact.ts';
 import {
   deriveNonRewardReasonFromIssues,
+  isValidationNonRewardCode,
   validateEvalRecord,
 } from './eval-validator.ts';
 import { redactText, redactVerificationTelemetry } from './text-redaction.ts';
@@ -1026,7 +1027,7 @@ export function attachEligibility(record: EvalRecord | null | undefined): void {
   }
 
   const eligibility = computeEligibility(record);
-  record.trainingEligible = eligibility.trainingEligible;
+  record.trainingEligible = record.invalidChallenge === true ? false : eligibility.trainingEligible;
   record.budgetEvalEligible = eligibility.budgetEvalEligible;
   record.eligibilityErrors = eligibility.eligibilityErrors;
   if (eligibility.eligibilityErrors.includes(BUDGET_MISSING)) {
@@ -1034,12 +1035,14 @@ export function attachEligibility(record: EvalRecord | null | undefined): void {
   } else {
     delete record.budgetEvalEligibilityError;
   }
-  attachNonRewardReason(
-    record,
-    deriveNonRewardReasonFromIssues(
-      validateEvalRecord(record, { file: '<inline>', line: 0 }),
-    ),
+  const reason = deriveNonRewardReasonFromIssues(
+    validateEvalRecord(record, { file: '<inline>', line: 0 }),
   );
+  if (!reason && isValidationNonRewardCode(record.nonRewardReason?.code)) {
+    delete record.nonRewardReason;
+    return;
+  }
+  attachNonRewardReason(record, reason);
 }
 
 export function attachNonRewardReason(

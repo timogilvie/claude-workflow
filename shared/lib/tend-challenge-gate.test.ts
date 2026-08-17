@@ -731,6 +731,51 @@ describe('unresolvable pair states in applyChallengePairGates', () => {
     }
   });
 
+  // Regression: a terminal launch failure (unknown model ID, prompt larger than
+  // the context window) means the arm never produces a PR, so no eval ever runs
+  // and the eval-based hard-failure signals stay silent. Before this, such a
+  // pair sat at `pair-unresolved:no-comparison` indefinitely and its sibling's
+  // green PR could never leave the merge lane.
+  it('treats a terminally aborted challenger as unresolvable, not merely unresolved', async () => {
+    const { repoDir, cleanup } = setupRepoDir({});
+    try {
+      const items = [makeWorkItem({
+        number: 101,
+        headRefName: 'task/pair-primary',
+        challengePairId: 'pair-1',
+        challenge: true,
+      })];
+
+      writeWorkflowState(repoDir, {
+        HOK_1: {
+          pr: 101,
+          branch: 'task/pair-primary',
+          challengePairId: 'pair-1',
+          challengeRole: 'primary',
+          evalCompleted: true,
+          updated: '2026-07-01T00:00:00Z',
+        },
+        HOK_1_c: {
+          // No PR: the launch died before producing one.
+          branch: 'task/pair-primary-challenger',
+          challengePairId: 'pair-1',
+          challengeRole: 'challenger',
+          challengeAborted: 'terminal_launch_failure:invalid-model-id',
+          updated: '2026-07-01T00:00:00Z',
+        },
+      });
+
+      const result = await applyChallengePairGates(items, [], repoDir, {
+        remoteBranches: ['task/pair-primary', 'task/pair-primary-challenger'],
+        coolOffSeconds: 0,
+      });
+
+      assert.equal(result.blocked[0].reason, 'challenge:pair-unresolvable:sibling-challenge-aborted');
+    } finally {
+      cleanup();
+    }
+  });
+
   it('blocks a pair when both sides exhausted eval hard-failure retries', async () => {
     const { repoDir, cleanup } = setupRepoDir({
       challenge: { eval: { retryMaxAttempts: 2 } },

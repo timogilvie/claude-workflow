@@ -1,0 +1,284 @@
+import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, it } from 'node:test';
+import { assessChallengePair, runChallengeRecovery } from './challenge-pair-recovery.ts';
+
+const NOW = () => '2026-01-01T00:00:00.000Z';
+
+interface ArmSpec {
+  slug: string;
+  intentCreatedAt?: string;
+  intentStage?: string;
+  stageStatus?: string;
+  stageModel?: string;
+  writeStageResult?: boolean;
+}
+
+interface FixtureSpec {
+  pairId: string;
+  primary?: ArmSpec;
+  challenger?: ArmSpec;
+  record?: Record<string, unknown>;
+  evalPrUrls?: string[];
+}
+
+function makeRepo(spec: FixtureSpec): string {
+  const repoDir = mkdtempSync(join(tmpdir(), 'challenge-recovery-'));
+  const evalsDir = join(repoDir, '.wavemill', 'evals');
+  mkdirSync(evalsDir, { recursive: true });
+
+  const tasks: Record<string, unknown> = {};
+
+  const addArm = (issueId: string, arm: ArmSpec | undefined) => {
+    if (!arm) return;
+    tasks[issueId] = {
+      slug: arm.slug,
+      challengePairId: spec.pairId,
+      challengeExecutionIntent: arm.intentCreatedAt
+        ? { createdAt: arm.intentCreatedAt, selectedStage: arm.intentStage ?? 'review' }
+        : null,
+    };
+    if (arm.writeStageResult === false) return;
+    const featureDir = join(repoDir, 'worktrees', arm.slug, 'features', arm.slug);
+    mkdirSync(featureDir, { recursive: true });
+    writeFileSync(
+      join(featureDir, '.review-result.json'),
+      JSON.stringify({ stage: 'review', status: arm.stageStatus ?? 'completed', model: arm.stageModel }),
+    );
+  };
+
+  addArm(spec.pairId, spec.primary);
+  addArm(`${spec.pairId}_c`, spec.challenger);
+
+  writeFileSync(join(repoDir, '.wavemill', 'workflow-state.json'), JSON.stringify({ tasks }));
+
+  const record = spec.record ?? {
+    challengePairId: spec.pairId,
+    comparisonOutcome: 'invalid_challenge',
+    invalidChallenge: true,
+    invalidChallengeReason: 'state_vs_derived_side_mismatch',
+    timestamp: '2026-08-14T23:00:38.257Z',
+    primaryPrUrl: 'https://example.test/pull/1',
+    challengerPrUrl: 'https://example.test/pull/2',
+    primaryEvalScore: 0.9,
+    challengerEvalScore: 0.93,
+  };
+  writeFileSync(join(evalsDir, 'challenge-records.jsonl'), `${JSON.stringify(record)}\n`);
+
+  const prUrls = spec.evalPrUrls ?? ['https://example.test/pull/1', 'https://example.test/pull/2'];
+  writeFileSync(
+    join(evalsDir, 'evals.jsonl'),
+    prUrls.map((prUrl) => JSON.stringify({ prUrl })).join('\n') + (prUrls.length ? '\n' : ''),
+  );
+
+  return repoDir;
+}
+
+function provenFixture(): FixtureSpec {
+  return {
+    pairId: 'PAIR-1',
+    primary: { slug: 'p', intentCreatedAt: '2026-08-14T21:19:26.862Z', stageModel: 'claude-haiku-4-5-20251001' },
+    challenger: { slug: 'c', intentCreatedAt: '2026-08-14T21:19:26.862Z', stageModel: 'glm-5.2' },
+  };
+}
+
+describe('challenge recovery assessment', () => {
+  it('supersedes only when both arms and a shared immutable intent are proven', () => {
+    const repoDir = makeRepo(provenFixture());
+    try {
+      const assessment = assessChallengePair(repoDir, 'PAIR-1', NOW);
+      assert.equal(assessment.verdict, 'supersedable');
+      assert.equal(assessment.intentProven, true);
+      assert.deepEqual(assessment.blockers, []);
+      // Models come from execution evidence, not from the prior (bad) attestation.
+      assert.equal(assessment.arms[0].stageModel, 'claude-haiku-4-5-20251001');
+      assert.equal(assessment.arms[1].stageModel, 'glm-5.2');
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('upholds quarantine when intent is missing on either arm', () => {
+    const spec = provenFixture();
+    delete spec.challenger!.intentCreatedAt;
+    const repoDir = makeRepo(spec);
+    try {
+      const assessment = assessChallengePair(repoDir, 'PAIR-1', NOW);
+      assert.equal(assessment.verdict, 'quarantine-upheld');
+      assert.equal(assessment.intentProven, false);
+      assert.ok(assessment.blockers.some((b) => b.includes('intent is missing')));
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('upholds quarantine when the arms disagree about the intent', () => {
+    const spec = provenFixture();
+    spec.challenger!.intentCreatedAt = '2026-08-15T09:00:00.000Z';
+    const repoDir = makeRepo(spec);
+    try {
+      const assessment = assessChallengePair(repoDir, 'PAIR-1', NOW);
+      assert.equal(assessment.verdict, 'quarantine-upheld');
+      assert.ok(assessment.blockers.some((b) => b.includes('disagree on intent createdAt')));
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses to supersede an identical control', () => {
+    const spec = provenFixture();
+    spec.challenger!.stageModel = 'claude-haiku-4-5-20251001';
+    const repoDir = makeRepo(spec);
+    try {
+      const assessment = assessChallengePair(repoDir, 'PAIR-1', NOW);
+      assert.equal(assessment.verdict, 'quarantine-upheld');
+      assert.ok(assessment.blockers.some((b) => b.includes('identical control')));
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('upholds quarantine when the challenge stage never completed', () => {
+    const spec = provenFixture();
+    spec.challenger!.stageStatus = 'failed';
+    const repoDir = makeRepo(spec);
+    try {
+      const assessment = assessChallengePair(repoDir, 'PAIR-1', NOW);
+      assert.equal(assessment.verdict, 'quarantine-upheld');
+      assert.ok(assessment.blockers.some((b) => b.includes('did not complete')));
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('upholds quarantine when worktree evidence is gone', () => {
+    const spec = provenFixture();
+    spec.challenger!.writeStageResult = false;
+    const repoDir = makeRepo(spec);
+    try {
+      const assessment = assessChallengePair(repoDir, 'PAIR-1', NOW);
+      assert.equal(assessment.verdict, 'quarantine-upheld');
+      assert.ok(assessment.blockers.some((b) => b.includes('worktree evidence')));
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('reports pair-not-found without inventing evidence', () => {
+    const repoDir = makeRepo(provenFixture());
+    try {
+      const assessment = assessChallengePair(repoDir, 'PAIR-NOPE', NOW);
+      assert.equal(assessment.verdict, 'pair-not-found');
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('challenge recovery application', () => {
+  it('has no recover-all mode', () => {
+    const repoDir = makeRepo(provenFixture());
+    try {
+      assert.throws(
+        () => runChallengeRecovery({ repoDir, pairIds: [], apply: true }),
+        /explicit pair IDs/,
+      );
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('writes nothing on a dry run', () => {
+    const repoDir = makeRepo(provenFixture());
+    const recordsPath = join(repoDir, '.wavemill', 'evals', 'challenge-records.jsonl');
+    const before = readFileSync(recordsPath, 'utf8');
+    try {
+      const result = runChallengeRecovery({ repoDir, pairIds: ['PAIR-1'], now: NOW });
+      assert.equal(result.applied, false);
+      assert.equal(result.supersedingRecordsWritten, 0);
+      assert.equal(result.auditEntriesWritten, 0);
+      assert.equal(readFileSync(recordsPath, 'utf8'), before);
+      assert.equal(existsSync(join(repoDir, '.wavemill', 'evals', 'challenge-recovery-audit.jsonl')), false);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('appends the superseding record and preserves the invalid original', () => {
+    const repoDir = makeRepo(provenFixture());
+    const recordsPath = join(repoDir, '.wavemill', 'evals', 'challenge-records.jsonl');
+    const originalLine = readFileSync(recordsPath, 'utf8').trim();
+    try {
+      const result = runChallengeRecovery({ repoDir, pairIds: ['PAIR-1'], apply: true, now: NOW });
+      assert.equal(result.supersedingRecordsWritten, 1);
+
+      const lines = readFileSync(recordsPath, 'utf8').trim().split('\n');
+      assert.equal(lines.length, 2);
+      // Original line is byte-identical — recovery is append-only.
+      assert.equal(lines[0], originalLine);
+
+      const superseding = JSON.parse(lines[1]);
+      assert.equal(superseding.recordKind, 'superseding-comparison');
+      assert.equal(superseding.invalidChallenge, false);
+      assert.equal(superseding.primaryModel, 'claude-haiku-4-5-20251001');
+      assert.equal(superseding.challengerModel, 'glm-5.2');
+      // 0.93 challenger vs 0.90 primary
+      assert.equal(superseding.comparisonOutcome, 'compared');
+      // `winner` is the field the merge gate actually keys off.
+      assert.equal(superseding.winner, 'challenger');
+      assert.equal(superseding.supersedes.invalidChallengeReason, 'state_vs_derived_side_mismatch');
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('never names a winner on a tie', () => {
+    const spec = provenFixture();
+    spec.record = {
+      challengePairId: 'PAIR-1',
+      comparisonOutcome: 'invalid_challenge',
+      invalidChallenge: true,
+      invalidChallengeReason: 'state_vs_derived_side_mismatch',
+      timestamp: '2026-08-14T23:00:38.257Z',
+      primaryPrUrl: 'https://example.test/pull/1',
+      challengerPrUrl: 'https://example.test/pull/2',
+      primaryEvalScore: 0.9,
+      challengerEvalScore: 0.9,
+    };
+    const repoDir = makeRepo(spec);
+    const recordsPath = join(repoDir, '.wavemill', 'evals', 'challenge-records.jsonl');
+    try {
+      runChallengeRecovery({ repoDir, pairIds: ['PAIR-1'], apply: true, now: NOW });
+      const lines = readFileSync(recordsPath, 'utf8').trim().split('\n');
+      const superseding = JSON.parse(lines[1]);
+      // Naming a winner arbitrarily would send an equally-scored PR to the
+      // gate's destructive loser-cleanup path.
+      assert.equal(superseding.winner, undefined);
+      assert.equal(superseding.comparisonOutcome, 'inconclusive');
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('audits an upheld quarantine without touching challenge records', () => {
+    const spec = provenFixture();
+    delete spec.challenger!.intentCreatedAt;
+    const repoDir = makeRepo(spec);
+    const recordsPath = join(repoDir, '.wavemill', 'evals', 'challenge-records.jsonl');
+    const before = readFileSync(recordsPath, 'utf8');
+    try {
+      const result = runChallengeRecovery({ repoDir, pairIds: ['PAIR-1'], apply: true, now: NOW });
+      assert.equal(result.supersedingRecordsWritten, 0);
+      assert.equal(result.auditEntriesWritten, 1);
+      assert.equal(readFileSync(recordsPath, 'utf8'), before);
+
+      const audit = JSON.parse(readFileSync(result.auditPath, 'utf8').trim());
+      assert.equal(audit.verdict, 'quarantine-upheld');
+      assert.ok(audit.blockers.length > 0);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+});

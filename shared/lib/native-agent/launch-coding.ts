@@ -331,6 +331,33 @@ function hasCompletionArtifact(featureDir: string): boolean {
   return existsSync(join(featureDir, '.coding-complete')) || existsSync(getBlockedCompletionPath(featureDir));
 }
 
+function archiveStaleCodingArtifacts(featureDir: string): string[] {
+  const candidates = [
+    '.coding-complete',
+    '.coding-blocked-completion.json',
+    '.blocked-completion-announced',
+    '.coding-uncommitted-output-announced',
+    '.coding-failure-handoff.json',
+  ];
+  const present = candidates.filter((name) => existsSync(join(featureDir, name)));
+  if (present.length === 0) {
+    return [];
+  }
+
+  const stamp = new Date().toISOString()
+    .replace(/[-:]/g, '')
+    .replace(/\.\d{3}Z$/, 'Z');
+  const archiveDir = join(featureDir, '.stale-artifacts', `coding-${stamp}`);
+  mkdirSync(archiveDir, { recursive: true });
+
+  const archived: string[] = [];
+  for (const name of present) {
+    renameSync(join(featureDir, name), join(archiveDir, name));
+    archived.push(name);
+  }
+  return archived;
+}
+
 function isMutationToolName(toolName: string): boolean {
   return [
     'apply_patch',
@@ -621,8 +648,16 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
   const operatingMode = options.operatingMode ?? 'normal';
 
   mkdirSync(featureDir, { recursive: true });
+  const archivedStaleArtifacts = archiveStaleCodingArtifacts(featureDir);
   writeHookStatus(hookPath, 'working', 'launch_native_coding', options.loopModelOverride?.name ?? 'native', 'native');
   writeTextStatus(options.session, options.issue, 'native coding starting');
+  if (archivedStaleArtifacts.length > 0) {
+    writeTextStatus(
+      options.session,
+      options.issue,
+      `archived stale coding artifacts: ${archivedStaleArtifacts.join(', ')}`,
+    );
+  }
 
   try {
     const tracker = createIntendedFileTracker();
