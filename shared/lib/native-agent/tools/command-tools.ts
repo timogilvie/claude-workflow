@@ -60,7 +60,7 @@ export interface RunCommandRejectedDetails {
   tool: RunCommandToolName;
   kind: RunCommandKind;
   status: 'rejected';
-  error: 'unsafe_command' | 'cwd_outside_allowed_roots' | 'invalid_input';
+  error: 'unsafe_command' | 'cwd_outside_allowed_roots' | 'unsupported_shell_syntax' | 'invalid_input';
   commandClass: CommandClass;
   reason: string;
   command: string;
@@ -122,7 +122,7 @@ export function createRunTestsTool(
     metadata: {
       name: 'run_tests',
       description:
-        'Run the project test suite or a scoped subset inside the active worktree, returning capped output and structured execution metadata.',
+        'Run the project test suite or a scoped subset inside the active worktree, returning capped output and structured execution metadata. Commands are executed directly without a shell: shell operators, redirects and $-expansion are rejected; quoting follows POSIX rules; use cwd to change directory.',
       class: 'read-only',
       allowedPhases: ['coding'],
       executionMode: 'sequential',
@@ -160,7 +160,7 @@ export function createRunFormatTool(
     metadata: {
       name: 'run_format',
       description:
-        'Run a formatter or other scoped code-style command inside the active worktree, returning capped output and structured execution metadata.',
+        'Run a formatter or other scoped code-style command inside the active worktree, returning capped output and structured execution metadata. Commands are executed directly without a shell: shell operators, redirects and $-expansion are rejected; quoting follows POSIX rules; use cwd to change directory.',
       class: 'mutation',
       allowedPhases: ['coding'],
       executionMode: 'sequential',
@@ -320,7 +320,7 @@ export async function runScopedCommand(
       command: normalizedCommand,
       cwd: effectiveCwd,
       durationMs: result.durationMs,
-      message: rejectionMessage(result.rejectionReason),
+      message: rejectionMessage(result.rejectionReason, result.rejectionDetail),
       retryHint: rejectionRetryHint(result.rejectionReason),
     };
     return rejectedResult(details);
@@ -394,13 +394,16 @@ function mapRejectionToError(
   if (rejectionReason === 'dangerous-command-pattern') {
     return 'unsafe_command';
   }
+  if (rejectionReason === 'unsupported-shell-syntax') {
+    return 'unsupported_shell_syntax';
+  }
   if (rejectionReason === 'empty-command') {
     return 'invalid_input';
   }
   return 'invalid_input';
 }
 
-function rejectionMessage(rejectionReason: RejectionReason | string | undefined): string {
+function rejectionMessage(rejectionReason: RejectionReason | string | undefined, detail?: string): string {
   if (rejectionReason === 'cwd-outside-allowed-roots') {
     return 'Command cwd must stay inside the active worktree.';
   }
@@ -409,6 +412,10 @@ function rejectionMessage(rejectionReason: RejectionReason | string | undefined)
   }
   if (rejectionReason === 'empty-command') {
     return 'command must be a non-empty string.';
+  }
+  if (rejectionReason === 'unsupported-shell-syntax') {
+    const suffix = detail ? ` (offending token: "${detail}").` : '.';
+    return `Command rejected: shell operators and expansions are not supported because commands run without a shell${suffix}`;
   }
   return 'Command could not be executed due to invalid input.';
 }
@@ -422,6 +429,9 @@ function rejectionRetryHint(rejectionReason: RejectionReason | string | undefine
   }
   if (rejectionReason === 'empty-command') {
     return 'Provide a concrete command and retry.';
+  }
+  if (rejectionReason === 'unsupported-shell-syntax') {
+    return 'Run one program per call, pass the cwd parameter instead of "cd ... &&", and quote arguments as for a POSIX shell. Pipes, redirects, &&, ||, ;, $VAR and backticks are not supported.';
   }
   return undefined;
 }
