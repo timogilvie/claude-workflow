@@ -1,6 +1,11 @@
-import { getHokusaiContributionsConfig } from './config.ts';
+import { clearConfigCache, getHokusaiContributionsConfig } from './config.ts';
 import { resolveEnvValue } from './env-file.ts';
 import { getContributionConsentStatus } from './hokusai-consent.ts';
+import {
+  HOKUSAI_CONTRIBUTION_ENDPOINT,
+  isLegacyUnscopedContributionEndpoint,
+  migrateContributionEndpoint,
+} from './hokusai-local-config.ts';
 import { appendHokusaiLedgerEntry, type HokusaiRewardStatus } from './hokusai-ledger.ts';
 import {
   createSafeFailure,
@@ -116,11 +121,11 @@ function earliestQueuedAt(batch: PendingBatch): string | undefined {
 async function postBatch(
   batch: PendingBatch,
   opts: DrainQueueOptions,
+  config = getHokusaiContributionsConfig(opts.repoDir),
 ): Promise<
 { status: 'accepted'; jobIds: string[]; jobId?: string; submissionId?: string; tokenReward?: number }
 | { status: 'transient' | 'permanent'; error: string; httpStatus?: number }
 > {
-  const config = getHokusaiContributionsConfig(opts.repoDir);
   const fetchImpl = opts.fetchImpl ?? fetch;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
@@ -194,7 +199,21 @@ export async function drainContributionQueue(
     return { status: 'disabled' };
   }
 
-  const config = getHokusaiContributionsConfig(opts.repoDir);
+  let config = getHokusaiContributionsConfig(opts.repoDir);
+  if (config.endpoint && isLegacyUnscopedContributionEndpoint(config.endpoint)) {
+    const migration = migrateContributionEndpoint({ repoDir: opts.repoDir });
+    if (migration.action === 'migrated') {
+      console.warn(`[hokusai] migrated legacy unscoped endpoint -> ${migration.to}`);
+    } else {
+      console.warn(`[hokusai] legacy unscoped endpoint configured; using canonical endpoint for this drain -> ${HOKUSAI_CONTRIBUTION_ENDPOINT}`);
+    }
+    clearConfigCache(opts.repoDir);
+    config = getHokusaiContributionsConfig(opts.repoDir);
+    if (config.endpoint && isLegacyUnscopedContributionEndpoint(config.endpoint)) {
+      config = { ...config, endpoint: HOKUSAI_CONTRIBUTION_ENDPOINT };
+    }
+  }
+
   if (!config.endpoint) {
     if (config.exportPath) {
       const result = await exportPendingContributions(opts);
@@ -218,7 +237,7 @@ export async function drainContributionQueue(
   const batch = pending.batch!;
   const now = opts.now ?? new Date();
   const submittedAt = now.toISOString();
-  const posted = await postBatch(batch, opts);
+  const posted = await postBatch(batch, opts, config);
 
   if (posted.status === 'accepted') {
     await markBatchAccepted(batch, { jobIds: posted.jobIds }, opts);
@@ -276,8 +295,13 @@ export async function drainContributionQueue(
       errorCode: 'permanent_http_failure',
       summary: posted.error,
     }, opts);
+    const endpointHint = posted.httpStatus === 404
+      ? ` endpoint=${config.endpoint}` +
+        ` hint: the API is model-scoped at /api/v1/models/{model_id}/contributions;` +
+        ` run \`wavemill hokusai migrate\` if your overlay pins the legacy path.`
+      : '';
     console.warn(
-      `[hokusai] contribution drain rejected rows=${batch.entries.length} error=${posted.error}`,
+      `[hokusai] contribution drain rejected rows=${batch.entries.length} error=${posted.error}${endpointHint}`,
     );
     return {
       status: 'permanent_failure',

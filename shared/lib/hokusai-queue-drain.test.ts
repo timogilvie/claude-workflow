@@ -7,6 +7,7 @@ import { clearConfigCache } from './config.ts';
 import { saveUserConfig } from './hokusai-consent.ts';
 import type { ContributionRow } from './hokusai-contribution-schema.ts';
 import { summarizeHokusaiLedger } from './hokusai-ledger.ts';
+import { HOKUSAI_CONTRIBUTION_ENDPOINT, LEGACY_UNSCOPED_ENDPOINT } from './hokusai-local-config.ts';
 import { drainContributionQueue } from './hokusai-queue-drain.ts';
 import { enqueueContribution, hokusaiQueueStatus, readPending, requeueDeadLetterEntries } from './hokusai-queue.ts';
 
@@ -247,6 +248,77 @@ describe('hokusai-queue-drain', () => {
     assert.equal(second.status, 'uploaded');
     const summary = summarizeHokusaiLedger({ repoDir, configDir });
     assert.equal(summary.rejectedSubmissionCount, 1);
+  });
+
+  it('migrates a legacy local endpoint overlay before posting', async () => {
+    const { repoDir, configDir } = makeRepo({ batchSize: 1 });
+    writeFileSync(join(repoDir, '.wavemill-config.local.json'), `${JSON.stringify({
+      hokusai: {
+        contributions: {
+          endpoint: LEGACY_UNSCOPED_ENDPOINT,
+          endpointTokenEnv: 'HOKUSAI_API_KEY',
+        },
+      },
+    }, null, 2)}\n`, 'utf-8');
+    clearConfigCache(repoDir);
+    await enqueueContribution(makeRow('a'), { repoDir, configDir });
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    let postedEndpoint = '';
+    console.warn = (message?: unknown) => {
+      warnings.push(String(message));
+    };
+
+    try {
+      const result = await drainContributionQueue({
+        repoDir,
+        configDir,
+        fetchImpl: async (input) => {
+          postedEndpoint = String(input);
+          return new Response(JSON.stringify({ jobIds: ['job-migrated'] }), { status: 200 });
+        },
+      });
+
+      assert.equal(result.status, 'uploaded');
+    } finally {
+      console.warn = originalWarn;
+    }
+
+    assert.equal(postedEndpoint, HOKUSAI_CONTRIBUTION_ENDPOINT);
+    assert.match(warnings.join('\n'), /migrated legacy unscoped endpoint/);
+    const overlay = JSON.parse(readFileSync(join(repoDir, '.wavemill-config.local.json'), 'utf-8')) as {
+      hokusai: { contributions: { endpoint: string; endpointTokenEnv: string } };
+    };
+    assert.equal(overlay.hokusai.contributions.endpoint, HOKUSAI_CONTRIBUTION_ENDPOINT);
+    assert.equal(overlay.hokusai.contributions.endpointTokenEnv, 'HOKUSAI_API_KEY');
+  });
+
+  it('includes endpoint diagnostics when a permanent 404 occurs', async () => {
+    const endpoint = 'https://example.com/wrong';
+    const { repoDir, configDir } = makeRepo({ batchSize: 1, endpoint });
+    await enqueueContribution(makeRow('a'), { repoDir, configDir });
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (message?: unknown) => {
+      warnings.push(String(message));
+    };
+
+    try {
+      const result = await drainContributionQueue({
+        repoDir,
+        configDir,
+        fetchImpl: async () => new Response(JSON.stringify({ error: 'not found' }), { status: 404 }),
+      });
+
+      assert.equal(result.status, 'permanent_failure');
+    } finally {
+      console.warn = originalWarn;
+    }
+
+    const warning = warnings.join('\n');
+    assert.match(warning, /endpoint=https:\/\/example\.com\/wrong/);
+    assert.match(warning, /model-scoped at \/api\/v1\/models\/\{model_id\}\/contributions/);
+    assert.match(warning, /wavemill hokusai migrate/);
   });
 
   it('requeues a dead-lettered permanent failure and uploads it after configuration is fixed', async () => {
