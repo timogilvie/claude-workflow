@@ -122,29 +122,35 @@
         "outputCostPerMTok": 0.6
       },
       "deepseek-v3": {
-        "inputCostPerMTok": 0.2145,
-        "outputCostPerMTok": 0.32175,
-        "cacheReadCostPerMTok": 0.02145
+        "inputCostPerMTok": 0.25,
+        "outputCostPerMTok": 0.95,
+        "cacheReadCostPerMTok": 0.13
       },
       "glm-5.2": {
-        "inputCostPerMTok": 0.9,
-        "outputCostPerMTok": 4.2
+        "inputCostPerMTok": 1.19,
+        "outputCostPerMTok": 3.74,
+        "cacheReadCostPerMTok": 0.221
       },
       "kimi-k2": {
-        "inputCostPerMTok": 1,
-        "outputCostPerMTok": 3
+        "inputCostPerMTok": 0.57,
+        "outputCostPerMTok": 2.3
       },
       "kimi-k2.7-code": {
-        "inputCostPerMTok": 1.2,
-        "outputCostPerMTok": 3.6
+        "inputCostPerMTok": 0.71,
+        "outputCostPerMTok": 3.5,
+        "cacheReadCostPerMTok": 0.15
       },
       "gemini-2.5-pro": {
         "inputCostPerMTok": 1.25,
-        "outputCostPerMTok": 10
+        "outputCostPerMTok": 10,
+        "cacheReadCostPerMTok": 0.125,
+        "cacheWriteCostPerMTok": 0.375
       },
       "gemini-2.5-flash": {
         "inputCostPerMTok": 0.3,
-        "outputCostPerMTok": 2.5
+        "outputCostPerMTok": 2.5,
+        "cacheReadCostPerMTok": 0.03,
+        "cacheWriteCostPerMTok": 0.0833333333333333
       },
       "llama-3.3-70b": {
         "inputCostPerMTok": 0.12,

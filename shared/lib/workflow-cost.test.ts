@@ -14,6 +14,7 @@ import {
   encodeProjectDir,
   computeModelCost,
   computeWorkflowCost,
+  computeWorkflowCostWithExactPricing,
   recalculateWorkflowCost,
   resolveProjectsDirs,
   type ModelPricing,
@@ -30,6 +31,18 @@ let failed = 0;
 function test(name: string, fn: () => void) {
   try {
     fn();
+    passed++;
+    console.log(`  PASS  ${name}`);
+  } catch (err) {
+    failed++;
+    console.log(`  FAIL  ${name}`);
+    console.log(`        ${(err as Error).message}`);
+  }
+}
+
+async function asyncTest(name: string, fn: () => Promise<void>) {
+  try {
+    await fn();
     passed++;
     console.log(`  PASS  ${name}`);
   } catch (err) {
@@ -887,6 +900,7 @@ function writeNativeSession(
 }
 
 function nativeAssistant(sessionId: string, modelId: string, usage?: {
+  responseId?: string;
   input?: number;
   output?: number;
   cacheRead?: number;
@@ -899,6 +913,7 @@ function nativeAssistant(sessionId: string, modelId: string, usage?: {
     timestamp: 2,
     type: 'assistant_message',
     model: modelId,
+    ...(usage?.responseId ? { responseId: usage.responseId } : {}),
     stopReason: 'end_turn',
     ...(usage ? {
       usage: {
@@ -1108,6 +1123,238 @@ test('Native sessions without usable usage do not suppress non-native fallback',
     }
   } finally {
     process.env.HOME = origHome;
+    rmSync(tmpHome, { recursive: true, force: true });
+  }
+});
+
+await asyncTest('computeWorkflowCostWithExactPricing uses OpenRouter generation costs', async () => {
+  const { worktreePath, cleanup } = createNativeWorktree();
+  try {
+    writeNativeSession(worktreePath, 'run-1', 'session-1', 'priced-native', [
+      nativeAssistant('session-1', 'priced-native', { responseId: 'gen-one', input: 1_000_000, output: 0 }),
+      nativeAssistant('session-1', 'priced-native', { responseId: 'gen-two', input: 1_000_000, output: 0 }),
+    ]);
+
+    const result = await computeWorkflowCostWithExactPricing({
+      worktreePath,
+      branchName: 'task/native',
+      agentType: 'native',
+      pricingTable: {
+        'priced-native': { inputCostPerMTok: 100, outputCostPerMTok: 100 },
+      },
+      exact: {
+        enabled: true,
+        fetchGenerationCost: async (id) => ({ totalCostUsd: id === 'gen-one' ? 0.5 : 0.75 }),
+      },
+    });
+
+    assert.equal(result.status, 'success');
+    if (result.status === 'success') {
+      assert.equal(result.totalCostUsd, 1.25);
+      assert.equal(result.models['priced-native'].costUsd, 1.25);
+      assert.equal(Object.keys(result.pricingUsed).length, 0);
+      assert.equal(result.attribution?.coverage, 'complete');
+      assert.equal(result.attribution?.reason, 'provider_reported_cost');
+      assert.equal(result.attribution?.models[0].providerReportedCostUsd, 1.25);
+      assert.equal(result.attribution?.models[0].pricingSource, 'openrouter_api');
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+await asyncTest('computeWorkflowCostWithExactPricing falls back per missing generation', async () => {
+  const { worktreePath, cleanup } = createNativeWorktree();
+  const warnings: string[] = [];
+  try {
+    writeNativeSession(worktreePath, 'run-1', 'session-1', 'priced-native', [
+      nativeAssistant('session-1', 'priced-native', { responseId: 'gen-one', input: 1_000_000, output: 0 }),
+      nativeAssistant('session-1', 'priced-native', { responseId: 'gen-two', input: 2_000_000, output: 0 }),
+    ]);
+
+    const result = await computeWorkflowCostWithExactPricing({
+      worktreePath,
+      branchName: 'task/native',
+      agentType: 'native',
+      pricingTable: {
+        'priced-native': { inputCostPerMTok: 2, outputCostPerMTok: 8 },
+      },
+      exact: {
+        enabled: true,
+        logger: { warn: (message: unknown) => { warnings.push(String(message)); } },
+        fetchGenerationCost: async (id) => (id === 'gen-one' ? { totalCostUsd: 0.5 } : null),
+      },
+    });
+
+    assert.equal(result.status, 'success');
+    if (result.status === 'success') {
+      assert.equal(result.totalCostUsd, 4.5);
+      assert.equal(result.attribution?.coverage, 'partial');
+      assert.equal(result.attribution?.reason, 'mixed_coverage');
+      assert.equal(result.attribution?.models[0].providerReportedCostUsd, 0.5);
+      assert.equal(result.attribution?.models[0].pricingSource, 'mixed');
+      assert.equal(result.pricingUsed['priced-native'].inputCostPerMTok, 2);
+      assert.ok(warnings.some((message) => message.includes('1 generation')));
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+await asyncTest('computeWorkflowCostWithExactPricing skips API for turns without responseId', async () => {
+  const { worktreePath, cleanup } = createNativeWorktree();
+  let calls = 0;
+  try {
+    writeNativeSession(worktreePath, 'run-1', 'session-1', 'priced-native', [
+      nativeAssistant('session-1', 'priced-native', { input: 1_000_000, output: 0 }),
+    ]);
+
+    const result = await computeWorkflowCostWithExactPricing({
+      worktreePath,
+      branchName: 'task/native',
+      agentType: 'native',
+      pricingTable: {
+        'priced-native': { inputCostPerMTok: 2, outputCostPerMTok: 8 },
+      },
+      exact: {
+        enabled: true,
+        fetchGenerationCost: async () => {
+          calls++;
+          return { totalCostUsd: 99 };
+        },
+      },
+    });
+
+    assert.equal(result.status, 'success');
+    if (result.status === 'success') {
+      assert.equal(result.totalCostUsd, 2);
+      assert.equal(result.attribution?.models[0].pricingSource, 'local_estimate');
+    }
+    assert.equal(calls, 0);
+  } finally {
+    cleanup();
+  }
+});
+
+await asyncTest('computeWorkflowCostWithExactPricing disabled matches sync result object', async () => {
+  const { worktreePath, cleanup } = createNativeWorktree();
+  try {
+    writeNativeSession(worktreePath, 'run-1', 'session-1', 'priced-native', [
+      nativeAssistant('session-1', 'priced-native', { responseId: 'gen-one', input: 1_000_000, output: 0 }),
+    ]);
+
+    const syncResult = computeWorkflowCost({
+      worktreePath,
+      branchName: 'task/native',
+      agentType: 'native',
+      pricingTable: {
+        'priced-native': { inputCostPerMTok: 2, outputCostPerMTok: 8 },
+      },
+    });
+
+    const asyncResult = await computeWorkflowCostWithExactPricing({
+      worktreePath,
+      branchName: 'task/native',
+      agentType: 'native',
+      pricingTable: {
+        'priced-native': { inputCostPerMTok: 2, outputCostPerMTok: 8 },
+      },
+      exact: { enabled: false },
+    });
+    assert.deepEqual(asyncResult, syncResult);
+  } finally {
+    cleanup();
+  }
+});
+
+function writeCodexSession(tmpHome: string, worktreePath: string, branch: string, modelId: string): void {
+  const sessionsDir = join(tmpHome, '.codex', 'sessions', '2026', '08', '17');
+  mkdirSync(sessionsDir, { recursive: true });
+  writeFileSync(join(sessionsDir, `${randomUUID()}.jsonl`), [
+    JSON.stringify({
+      type: 'session_meta',
+      payload: { cwd: worktreePath, git: { branch } },
+    }),
+    JSON.stringify({
+      type: 'turn_context',
+      payload: { model: modelId },
+    }),
+    JSON.stringify({
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: {
+          total_token_usage: {
+            input_tokens: 1_000_000,
+            cached_input_tokens: 500_000,
+            output_tokens: 250_000,
+            reasoning_output_tokens: 50_000,
+          },
+        },
+      },
+    }),
+  ].join('\n'));
+}
+
+test('computeWorkflowCost attaches complete codex attribution for priced model', () => {
+  const tmpHome = join(tmpdir(), `wavemill-codex-cost-${randomUUID()}`);
+  const originalHome = process.env.HOME;
+  try {
+    process.env.HOME = tmpHome;
+    const worktreePath = join(tmpHome, 'worktree');
+    const branch = 'task/codex-cost';
+    mkdirSync(worktreePath, { recursive: true });
+    writeCodexSession(tmpHome, worktreePath, branch, 'gpt-test');
+
+    const result = computeWorkflowCost({
+      worktreePath,
+      branchName: branch,
+      agentType: 'codex',
+      pricingTable: {
+        'gpt-test': { inputCostPerMTok: 2, outputCostPerMTok: 10, cacheReadCostPerMTok: 0.2 },
+      },
+    });
+
+    assert.equal(result.status, 'success');
+    if (result.status === 'success') {
+      assert.equal(result.attribution?.source, 'codex');
+      assert.equal(result.attribution?.coverage, 'complete');
+      assert.equal(result.attribution?.models[0].priced, true);
+    }
+  } finally {
+    process.env.HOME = originalHome;
+    rmSync(tmpHome, { recursive: true, force: true });
+  }
+});
+
+test('computeWorkflowCost attaches partial codex attribution for unpriced model', () => {
+  const tmpHome = join(tmpdir(), `wavemill-codex-cost-${randomUUID()}`);
+  const originalHome = process.env.HOME;
+  try {
+    process.env.HOME = tmpHome;
+    const worktreePath = join(tmpHome, 'worktree');
+    const branch = 'task/codex-cost';
+    mkdirSync(worktreePath, { recursive: true });
+    writeCodexSession(tmpHome, worktreePath, branch, 'unpriced-codex');
+
+    const result = computeWorkflowCost({
+      worktreePath,
+      branchName: branch,
+      agentType: 'codex',
+      pricingTable: {},
+    });
+
+    assert.equal(result.status, 'success');
+    if (result.status === 'success') {
+      assert.equal(result.totalCostUsd, 0);
+      assert.equal(result.attribution?.source, 'codex');
+      assert.equal(result.attribution?.coverage, 'partial');
+      assert.equal(result.attribution?.reason, 'unpriced_model');
+      assert.equal(result.attribution?.models[0].priced, false);
+      assert.equal(result.attribution?.models[0].reason, 'unpriced_model');
+    }
+  } finally {
+    process.env.HOME = originalHome;
     rmSync(tmpHome, { recursive: true, force: true });
   }
 });
