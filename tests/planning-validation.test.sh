@@ -66,7 +66,10 @@ extract_function() {
 }
 
 log_warn() { :; }
+eval "$(extract_function "$MILL_SCRIPT" capture_planning_baseline)"
 eval "$(extract_function "$MILL_SCRIPT" validate_planning_phase_output)"
+eval "$(extract_function "$MILL_SCRIPT" wavemill_owned_feature_artifact_path)"
+eval "$(extract_function "$MILL_SCRIPT" wavemill_owned_dirty_path)"
 
 TEST_TMP="$(mktemp -d)"
 trap 'rm -rf "$TEST_TMP"' EXIT
@@ -150,6 +153,88 @@ printf '{"ok":true}\n' > "$repo/.wavemill/logs/allowed.jsonl"
 touch "$repo/features/source-overreach-marker/.plan-approved"
 check_eq "rejects true source overreach even with allowed artifacts" "1" "$(run_validation "$repo")"
 check_file_absent "removes .plan-approved only when source overreach exists" "$repo/features/source-overreach-marker/.plan-approved"
+
+repo="$(create_repo pre-existing-dirty)"
+mkdir -p "$repo/src" "$repo/features/pre-existing-dirty"
+printf 'original\n' > "$repo/src/existing.ts"
+git -C "$repo" add src/existing.ts
+git -C "$repo" commit -q -m "Add existing source"
+printf 'pre-existing tracked\n' > "$repo/src/existing.ts"
+printf 'pre-existing untracked\n' > "$repo/src/pre-existing.txt"
+printf 'src/existing.ts\nsrc/pre-existing.txt\n' > "$repo/features/pre-existing-dirty/.planning-baseline-dirty"
+printf 'planning overreach\n' > "$repo/src/new-overreach.ts"
+touch "$repo/features/pre-existing-dirty/.plan-approved"
+check_eq "rejects only planning delta beyond baseline" "1" "$(run_validation "$repo")"
+check_file_content "keeps baseline tracked content" "pre-existing tracked" "$repo/src/existing.ts"
+check_file_content "keeps baseline untracked content" "pre-existing untracked" "$repo/src/pre-existing.txt"
+check_file_absent "stashes new planning overreach" "$repo/src/new-overreach.ts"
+check_eq "creates one recovery stash" "1" "$(git -C "$repo" stash list | wc -l | tr -d ' ')"
+check_eq "stash contains only planning delta" "src/new-overreach.ts" "$(git -C "$repo" stash show --include-untracked --name-only stash@{0})"
+git -C "$repo" stash pop -q stash@{0}
+check_file_content "stash pop restores planning overreach" "planning overreach" "$repo/src/new-overreach.ts"
+
+repo="$(create_repo baseline-only-dirty)"
+mkdir -p "$repo/src" "$repo/features/baseline-only-dirty"
+printf 'baseline only\n' > "$repo/src/baseline-only.ts"
+printf 'src/baseline-only.ts\n' > "$repo/features/baseline-only-dirty/.planning-baseline-dirty"
+touch "$repo/features/baseline-only-dirty/.plan-approved"
+check_eq "allows baseline-only dirt" "0" "$(run_validation "$repo")"
+check_file_exists "keeps approval for baseline-only dirt" "$repo/features/baseline-only-dirty/.plan-approved"
+check_eq "does not stash baseline-only dirt" "0" "$(git -C "$repo" stash list | wc -l | tr -d ' ')"
+
+repo="$(create_repo prompt-registry-tracked)"
+mkdir -p "$repo/features/prompt-registry-tracked"
+printf 'old\n' > "$repo/prompt-registry.jsonl"
+git -C "$repo" add prompt-registry.jsonl
+git -C "$repo" commit -q -m "Track prompt registry"
+printf 'new\n' > "$repo/prompt-registry.jsonl"
+touch "$repo/features/prompt-registry-tracked/.plan-approved"
+check_eq "allows tracked root prompt registry" "0" "$(run_validation "$repo")"
+check_file_content "keeps tracked root prompt registry" "new" "$repo/prompt-registry.jsonl"
+
+repo="$(create_repo prompt-registry-untracked)"
+mkdir -p "$repo/features/prompt-registry-untracked"
+printf 'generated\n' > "$repo/prompt-registry.jsonl"
+touch "$repo/features/prompt-registry-untracked/.plan-approved"
+check_eq "allows untracked root prompt registry" "0" "$(run_validation "$repo")"
+check_file_content "keeps untracked root prompt registry" "generated" "$repo/prompt-registry.jsonl"
+
+repo="$(create_repo no-substring-match)"
+printf 'not allowed\n' > "$repo/my-prompt-registry.jsonl"
+touch "$repo/features/no-substring-match/.plan-approved"
+check_eq "rejects prompt registry substring" "1" "$(run_validation "$repo")"
+check_file_absent "stashes prompt registry substring" "$repo/my-prompt-registry.jsonl"
+
+repo="$(create_repo missing-baseline)"
+mkdir -p "$repo/src"
+printf 'planning output\n' > "$repo/src/missing-baseline.ts"
+touch "$repo/features/missing-baseline/.plan-approved"
+check_eq "missing baseline rejects via stash" "1" "$(run_validation "$repo")"
+check_file_absent "missing baseline stashes overreach" "$repo/src/missing-baseline.ts"
+git -C "$repo" stash pop -q stash@{0}
+check_file_content "missing baseline stash is recoverable" "planning output" "$repo/src/missing-baseline.ts"
+
+repo="$(create_repo stash-failure)"
+mkdir -p "$repo/src" "$repo/features/stash-failure"
+printf 'do not delete\n' > "$repo/src/keep.ts"
+touch "$repo/features/stash-failure/.plan-approved"
+stub_dir="$TEST_TMP/git-stub"
+mkdir -p "$stub_dir"
+real_git="$(command -v git)"
+cat > "$stub_dir/git" <<STUB
+#!/usr/bin/env bash
+if [[ "\$*" == *" stash push "* ]]; then
+  exit 1
+fi
+exec "$real_git" "\$@"
+STUB
+chmod +x "$stub_dir/git"
+old_path="$PATH"
+PATH="$stub_dir:$PATH"
+check_eq "stash failure still rejects" "1" "$(run_validation "$repo")"
+PATH="$old_path"
+check_file_content "stash failure leaves file in place" "do not delete" "$repo/src/keep.ts"
+check_file_absent "stash failure removes approval" "$repo/features/stash-failure/.plan-approved"
 
 repo="$(create_repo allowed-marker)"
 mkdir -p "$repo/features/allowed-marker" "$repo/.wavemill/logs"

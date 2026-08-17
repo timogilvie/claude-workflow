@@ -8,7 +8,7 @@ import { saveUserConfig } from './hokusai-consent.ts';
 import type { ContributionRow } from './hokusai-contribution-schema.ts';
 import { summarizeHokusaiLedger } from './hokusai-ledger.ts';
 import { drainContributionQueue } from './hokusai-queue-drain.ts';
-import { enqueueContribution, hokusaiQueueStatus, readPending } from './hokusai-queue.ts';
+import { enqueueContribution, hokusaiQueueStatus, readPending, requeueDeadLetterEntries } from './hokusai-queue.ts';
 
 const tempDirs: string[] = [];
 
@@ -247,6 +247,39 @@ describe('hokusai-queue-drain', () => {
     assert.equal(second.status, 'uploaded');
     const summary = summarizeHokusaiLedger({ repoDir, configDir });
     assert.equal(summary.rejectedSubmissionCount, 1);
+  });
+
+  it('requeues a dead-lettered permanent failure and uploads it after configuration is fixed', async () => {
+    const { repoDir, configDir } = makeRepo({ batchSize: 1 });
+    await enqueueContribution(makeRow('a'), { repoDir, configDir });
+
+    const failed = await drainContributionQueue({
+      repoDir,
+      configDir,
+      fetchImpl: async () => new Response(JSON.stringify({ error: 'not found' }), { status: 404 }),
+    });
+    assert.equal(failed.status, 'permanent_failure');
+    assert.equal(hokusaiQueueStatus({ repoDir, configDir }).deadLetterCount, 1);
+
+    const requeued = await requeueDeadLetterEntries({}, {
+      repoDir,
+      configDir,
+      now: new Date('2026-06-03T12:00:00.000Z'),
+    });
+    assert.equal(requeued.status, 'requeued');
+
+    const uploaded = await drainContributionQueue({
+      repoDir,
+      configDir,
+      now: new Date('2026-06-03T12:00:00.000Z'),
+      fetchImpl: async () => new Response(JSON.stringify({ jobIds: ['job-recovered'] }), { status: 200 }),
+    });
+
+    assert.equal(uploaded.status, 'uploaded');
+    assert.deepEqual(uploaded.jobIds, ['job-recovered']);
+    const deadLetterPath = join(repoDir, '.wavemill', 'hokusai', 'queue', 'dead-letter.jsonl');
+    assert.equal(readFileSync(deadLetterPath, 'utf-8'), '');
+    assert.equal(hokusaiQueueStatus({ repoDir, configDir }).deadLetterCount, 0);
   });
 
   it('deduplicates accepted submissions by job id in summary', async () => {

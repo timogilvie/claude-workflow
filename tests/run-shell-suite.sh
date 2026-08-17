@@ -40,6 +40,7 @@ TESTS=(
   cleanup-branch.test.sh
   error-recovery.test.sh
   planning-validation.test.sh
+  wavemill-guards.test.sh
   wavemill-status.test.sh
   control-layout.test.sh
   challenge-comparison-state.test.sh

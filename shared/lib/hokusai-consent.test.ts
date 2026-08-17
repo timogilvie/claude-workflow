@@ -481,6 +481,25 @@ describe('hokusai-consent', () => {
       assert.equal(s.consent, 'disabled');
       assert.equal(s.mode, 'disabled');
     });
+
+    it('surfaces dead-letter depth and requeue guidance', () => {
+      const configDir = makeTempDir('hokusai-contrib-status-');
+      const repoDir = makeTempRepo({
+        hokusai: {
+          dataSubmission: { consentVersion: '1.0' },
+          contributions: { enabled: true, endpoint: 'https://example.com/contributions' },
+        },
+      });
+      makeEnabledConsent(configDir);
+      const queueDir = join(repoDir, '.wavemill', 'hokusai', 'queue');
+      mkdirSync(queueDir, { recursive: true });
+      writeFileSync(join(queueDir, 'dead-letter.jsonl'), `${JSON.stringify({ entry: { entryId: 'a' } })}\n`, 'utf-8');
+
+      const s = getContributionStatus({ configDir, repoDir });
+      assert.equal(s.deadLetterCount, 1);
+      assert.match(s.warning ?? '', /1 dead-lettered row will not be retried/);
+      assert.match(s.warning ?? '', /hokusai-manage requeue --dead-letter --dry-run/);
+    });
   });
 
   describe('getStatusDisplay with contribution facets', () => {

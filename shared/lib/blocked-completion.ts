@@ -72,6 +72,26 @@ export type BlockedCompletionValidationResult =
   | BlockedCompletionValidationSuccess
   | BlockedCompletionValidationError;
 
+export function hasVerificationEvidence(value: BlockedCompletion): boolean {
+  return value.implementationComplete !== true || value.passingChecks.length > 0;
+}
+
+export function coerceUnverifiedCompletionClaim(
+  value: BlockedCompletion,
+): { value: BlockedCompletion; coerced: boolean } {
+  if (hasVerificationEvidence(value)) {
+    return { value, coerced: false };
+  }
+
+  return {
+    value: {
+      ...value,
+      implementationComplete: false,
+    },
+    coerced: true,
+  };
+}
+
 function validationError(
   code: BlockedCompletionValidationErrorCode,
   message: string,
