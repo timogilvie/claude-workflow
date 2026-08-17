@@ -731,7 +731,7 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
   // 11. Persist eval record to disk
   let persisted = false;
   try {
-    evalOrchestratorDeps.appendEvalRecord(record);
+    evalOrchestratorDeps.appendEvalRecord(record, { repoDir });
     persisted = true;
   } catch (err) {
     const errorMsg = errorMessage(err);

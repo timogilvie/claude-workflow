@@ -380,6 +380,10 @@ export function deriveNonRewardReasonFromIssues(
   };
 }
 
+export function isValidationNonRewardCode(code: string | undefined): code is EvalErrorCode {
+  return !!code && (EVAL_ERROR_SEVERITY_ORDER as readonly string[]).includes(code);
+}
+
 export async function validateEvalsFile(filePath: string): Promise<ValidationReport> {
   const resolvedPath = resolve(filePath);
   try {

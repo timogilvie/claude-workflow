@@ -14,6 +14,7 @@ import {
   getGlobalModelRegistry,
   listEffectiveNativeProviderModels,
 } from '../effective-models.ts';
+import { resolveOpenRouterModelId } from '../openrouter-provider.ts';
 import {
   evaluateNativeProviderGate,
   type CertificationPhase,
@@ -269,6 +270,25 @@ export function buildOpenAiResponsesModel({
   });
 }
 
+/**
+ * Resolve a wavemill model alias to the model string OpenRouter expects on the wire.
+ *
+ * Provider entries are enumerated from the model registry, which is keyed by
+ * wavemill alias (`qwen-2.5-coder-32b`), not by the provider-native id
+ * (`qwen/qwen-2.5-coder-32b-instruct`). Sending the alias straight through makes
+ * OpenRouter reject the launch with `400 <alias> is not a valid model ID`.
+ *
+ * Aliases that are already in provider form, or that the catalog does not know,
+ * pass through unchanged so unknown/bespoke ids keep working.
+ */
+export function resolveOpenRouterWireModel(modelId: string): string {
+  try {
+    return resolveOpenRouterModelId(modelId) ?? modelId;
+  } catch {
+    return modelId;
+  }
+}
+
 export function buildOpenRouterModel({
   modelId,
   baseUrl = OPENROUTER_DEFAULT_BASE_URL,
@@ -279,8 +299,10 @@ export function buildOpenRouterModel({
   headers?: Record<string, string>;
 }): PiModel {
   return buildPiModel({
+    // `id` stays keyed by the wavemill alias so provider matching, logging and
+    // certification lookups keep resolving the same entry. Only `name` goes on the wire.
     id: `${OPENROUTER_NATIVE_PROVIDER}:${modelId}`,
-    name: modelId,
+    name: resolveOpenRouterWireModel(modelId),
     api: 'openai-completions',
     provider: OPENROUTER_NATIVE_PROVIDER,
     baseUrl,

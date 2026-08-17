@@ -475,8 +475,10 @@ describe('eval-orchestrator', () => {
     const order: string[] = [];
     let triggeredRecord: EvalRecord | undefined;
     let triggeredRepoDir: string | undefined;
-    mock.method(evalOrchestratorDeps, 'appendEvalRecord', () => {
+    let persistedRepoDir: string | undefined;
+    mock.method(evalOrchestratorDeps, 'appendEvalRecord', (_record, options) => {
       order.push('persist');
+      persistedRepoDir = options?.repoDir;
     });
     mock.method(evalOrchestratorDeps, 'triggerHokusaiSubmission', async (record, options) => {
       order.push('trigger');
@@ -494,6 +496,7 @@ describe('eval-orchestrator', () => {
     });
 
     assert.deepEqual(order, ['persist', 'trigger']);
+    assert.equal(persistedRepoDir, repoDir);
     assert.equal(triggeredRepoDir, repoDir);
     assert.equal(triggeredRecord?.id, record.id);
     assert.equal(triggeredRecord?.workflowCost, 3.75);

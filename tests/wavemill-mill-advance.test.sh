@@ -104,6 +104,7 @@ for fn in \
   coding_output_dirty_paths \
   blocked_completion_worktree_clean_for_auto \
   blocked_completion_validate_for_advance \
+  archive_stale_coding_artifacts \
   coding_pane_replacement_intent_path \
   record_coding_pane_replacement_intent \
   quarantine_completed_coding_pane \
@@ -413,5 +414,80 @@ run_advance "advance HOK-2006"
 assert_eq "soft guardrail override handled" "handled" "$MONITOR_COMMAND_STATUS"
 assert_eq "soft guardrail commit mismatch recorded" "false" "$(jq -r '.guardrails.commitMatchesHead' "$FEATURE_SOFT/.coding-advance-override.json")"
 assert_eq "soft guardrail dirty worktree recorded" "false" "$(jq -r '.guardrails.worktreeClean' "$FEATURE_SOFT/.coding-advance-override.json")"
+
+# Stale blocked-completion artifacts are rejected in auto mode
+WORKTREE_STALE_AUTO="$SCENARIO_DIR/worktree-stale-auto"
+FEATURE_STALE_AUTO="$WORKTREE_STALE_AUTO/features/stale-auto-slug"
+mkdir -p "$FEATURE_STALE_AUTO"
+setup_git_worktree "$WORKTREE_STALE_AUTO"
+write_coding_result "$FEATURE_STALE_AUTO" "running" '{"stage":"coding","status":"running","startedAt":"2030-01-01T00:00:00Z"}'
+write_blocked_completion "$FEATURE_STALE_AUTO" "$(git -C "$WORKTREE_STALE_AUTO" rev-parse --short HEAD)"
+touch -t 202001010000 "$FEATURE_STALE_AUTO/.coding-blocked-completion.json"
+stale_auto_decision="$(blocked_completion_validate_for_advance "HOK-2007" "$FEATURE_STALE_AUTO" auto 2>/dev/null || true)"
+assert_eq "stale auto ineligible" "false" "$(jq -r '.eligible' <<<"$stale_auto_decision")"
+assert_eq "stale auto freshness guardrail" "false" "$(jq -r '.guardrails.artifactFresh' <<<"$stale_auto_decision")"
+assert_contains "stale auto reason" "predates" "$(jq -r '.reason' <<<"$stale_auto_decision")"
+
+# Stale blocked-completion artifacts are soft failures in manual mode
+stale_manual_decision="$(blocked_completion_validate_for_advance "HOK-2007" "$FEATURE_STALE_AUTO" manual)"
+assert_eq "stale manual eligible" "true" "$(jq -r '.eligible' <<<"$stale_manual_decision")"
+assert_eq "stale manual freshness guardrail" "false" "$(jq -r '.guardrails.artifactFresh' <<<"$stale_manual_decision")"
+assert_contains "stale manual reason" "manual override accepted" "$(jq -r '.reason' <<<"$stale_manual_decision")"
+
+# Fresh blocked-completion artifacts remain eligible in auto mode
+WORKTREE_FRESH_AUTO="$SCENARIO_DIR/worktree-fresh-auto"
+FEATURE_FRESH_AUTO="$WORKTREE_FRESH_AUTO/features/fresh-auto-slug"
+mkdir -p "$FEATURE_FRESH_AUTO"
+setup_git_worktree "$WORKTREE_FRESH_AUTO"
+write_coding_result "$FEATURE_FRESH_AUTO" "running" '{"stage":"coding","status":"running","startedAt":"2020-01-01T00:00:00Z"}'
+write_blocked_completion "$FEATURE_FRESH_AUTO" "$(git -C "$WORKTREE_FRESH_AUTO" rev-parse --short HEAD)"
+fresh_auto_decision="$(blocked_completion_validate_for_advance "HOK-2008" "$FEATURE_FRESH_AUTO" auto)"
+assert_eq "fresh auto eligible" "true" "$(jq -r '.eligible' <<<"$fresh_auto_decision")"
+assert_eq "fresh auto freshness guardrail" "true" "$(jq -r '.guardrails.artifactFresh' <<<"$fresh_auto_decision")"
+
+# Missing startedAt skips the freshness guardrail to preserve prior behavior
+WORKTREE_NO_START="$SCENARIO_DIR/worktree-no-start"
+FEATURE_NO_START="$WORKTREE_NO_START/features/no-start-slug"
+mkdir -p "$FEATURE_NO_START"
+setup_git_worktree "$WORKTREE_NO_START"
+write_coding_result "$FEATURE_NO_START" "running"
+write_blocked_completion "$FEATURE_NO_START" "$(git -C "$WORKTREE_NO_START" rev-parse --short HEAD)"
+touch -t 202001010000 "$FEATURE_NO_START/.coding-blocked-completion.json"
+no_start_decision="$(blocked_completion_validate_for_advance "HOK-2009" "$FEATURE_NO_START" auto)"
+assert_eq "missing startedAt eligible" "true" "$(jq -r '.eligible' <<<"$no_start_decision")"
+assert_eq "missing startedAt freshness fail-open" "true" "$(jq -r '.guardrails.artifactFresh' <<<"$no_start_decision")"
+
+# Stale coding artifacts are archived non-destructively and repeated calls are no-ops
+FEATURE_ARCHIVE="$SCENARIO_DIR/archive-feature"
+mkdir -p "$FEATURE_ARCHIVE"
+printf 'confidence=high\n' > "$FEATURE_ARCHIVE/.coding-complete"
+printf '{"stage":"coding"}\n' > "$FEATURE_ARCHIVE/.coding-blocked-completion.json"
+printf 'announced\n' > "$FEATURE_ARCHIVE/.blocked-completion-announced"
+printf 'dirty\n' > "$FEATURE_ARCHIVE/.coding-uncommitted-output-announced"
+printf '{"stage":"coding"}\n' > "$FEATURE_ARCHIVE/.coding-failure-handoff.json"
+archive_stale_coding_artifacts "HOK-2010" "$FEATURE_ARCHIVE"
+archive_dir="$(find "$FEATURE_ARCHIVE/.stale-artifacts" -mindepth 1 -maxdepth 1 -type d -name 'coding-*' -print -quit)"
+[[ -n "$archive_dir" ]] || {
+  echo "FAIL: archive helper created archive directory"
+  exit 1
+}
+assert_file_exists "archive moved coding complete" "$archive_dir/.coding-complete"
+assert_file_exists "archive moved blocked completion" "$archive_dir/.coding-blocked-completion.json"
+assert_file_exists "archive moved blocked announcement" "$archive_dir/.blocked-completion-announced"
+assert_file_exists "archive moved dirty announcement" "$archive_dir/.coding-uncommitted-output-announced"
+assert_file_exists "archive moved failure handoff" "$archive_dir/.coding-failure-handoff.json"
+assert_file_missing "archive removed original coding complete" "$FEATURE_ARCHIVE/.coding-complete"
+assert_contains "archive log lists artifacts" ".coding-complete" "${log_lines[*]}"
+archive_stale_coding_artifacts "HOK-2010" "$FEATURE_ARCHIVE"
+archive_count="$(find "$FEATURE_ARCHIVE/.stale-artifacts" -mindepth 1 -maxdepth 1 -type d -name 'coding-*' | wc -l | tr -d ' ')"
+assert_eq "archive second call no-op" "1" "$archive_count"
+
+FEATURE_ARCHIVE_EMPTY="$SCENARIO_DIR/archive-empty-feature"
+mkdir -p "$FEATURE_ARCHIVE_EMPTY"
+archive_stale_coding_artifacts "HOK-2011" "$FEATURE_ARCHIVE_EMPTY"
+[[ ! -e "$FEATURE_ARCHIVE_EMPTY/.stale-artifacts" ]] || {
+  echo "FAIL: empty archive helper should not create archive root"
+  exit 1
+}
 
 echo "PASS: advance command validates, audits, and advances coding tasks"

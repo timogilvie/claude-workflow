@@ -211,6 +211,18 @@ wavemill_hook_write() {
   local agent="$4"
   local next_action="${5:-}"
 
+  # Hooks are a no-op outside a wavemill agent context. wavemill_hook_check()
+  # enforces this for adapter scripts by exiting, but wavemill_hook_write() is
+  # also called directly from long-running processes (the monitor loop, worktree
+  # setup) and several of those callers guard only on `declare -F`, not on the
+  # env. Expanding the vars unguarded under `set -u` killed the monitor outright:
+  #
+  #   wavemill-hook-protocol.sh: line NNN: WAVEMILL_SESSION: unbound variable
+  #
+  # Return rather than exit — exiting here would take the calling loop down,
+  # which is the very failure this guard exists to prevent.
+  [[ -n "${WAVEMILL_SESSION:-}" && -n "${WAVEMILL_ISSUE:-}" ]] || return 0
+
   # Only write recognized states; unknown states are silently dropped so that
   # readers never see partial or malformed JSON from an unrecognized write.
   case "$state" in
