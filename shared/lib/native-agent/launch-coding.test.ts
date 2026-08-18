@@ -417,13 +417,87 @@ describe('launchNativeCoding', () => {
         loopModelOverride: model,
         extraDescriptors: [createRawFileTool(repoDir)],
       }),
-      /after 2 artifact retry attempt\(s\)/,
+      /after 2 artifact retry attempt\(s\).*structured handoff: /,
     );
 
+    assert.equal(existsSync(join(featureDir, '.coding-complete')), false);
     assert.equal(readFileSync(join(featureDir, '.coding-complete.invalid-1'), 'utf-8'), 'still invalid 1\n');
     assert.equal(readFileSync(join(featureDir, '.coding-complete.invalid-2'), 'utf-8'), 'still invalid 2\n');
+    assert.equal(readFileSync(join(featureDir, '.coding-complete.invalid-3'), 'utf-8'), 'still invalid 3\n');
+    const handoff = await readCodingFailureHandoff(getCodingFailureHandoffPath(featureDir));
+    assert.equal(handoff.ok, true);
+    if (!handoff.ok) return;
+    assert.equal(handoff.value.reason, 'invalid_completion_artifact');
+    assert.ok((handoff.value.validationErrors?.length ?? 0) > 0);
+    assert.deepEqual(
+      handoff.value.quarantinedArtifacts,
+      [
+        `features/${slug}/.coding-complete.invalid-1`,
+        `features/${slug}/.coding-complete.invalid-2`,
+        `features/${slug}/.coding-complete.invalid-3`,
+      ],
+    );
+    assert.equal(handoff.value.recoveryAttempted, false);
+    assert.equal(handoff.value.mutationFailures, 0);
+    assert.equal(handoff.value.lastToolError, null);
     const stageResult = await readStageResult(featureDir, 'coding');
     assert.equal(stageResult?.status, 'failed');
+    assert.match(stageResult?.failureReason ?? '', /structured handoff: /);
+  });
+
+  it('fails after bounded artifact retries keep writing malformed blocked-completion markers', async () => {
+    const { repoDir, featureDir, slug } = makeRepo();
+    const model = scriptedModel([
+      toolTurn('raw-invalid-blocked-1', 'write_raw_file', {
+        path: `features/${slug}/.coding-blocked-completion.json`,
+        content: 'still invalid 1\n',
+      }),
+      finalTurn('Invalid once.'),
+      toolTurn('raw-invalid-blocked-2', 'write_raw_file', {
+        path: `features/${slug}/.coding-blocked-completion.json`,
+        content: 'still invalid 2\n',
+      }),
+      finalTurn('Invalid twice.'),
+      toolTurn('raw-invalid-blocked-3', 'write_raw_file', {
+        path: `features/${slug}/.coding-blocked-completion.json`,
+        content: 'still invalid 3\n',
+      }),
+      finalTurn('Invalid third time.'),
+    ], 'artifact-retry-blocked-exhausted');
+
+    await assert.rejects(
+      () => launchNativeCoding({
+        session: 'sess',
+        issue: 'HOK-2761',
+        slug,
+        wtDir: repoDir,
+        repoDir,
+        loopModelOverride: model,
+        extraDescriptors: [createRawFileTool(repoDir)],
+      }),
+      /invalid \.coding-blocked-completion\.json after 2 artifact retry attempt\(s\).*structured handoff: /,
+    );
+
+    assert.equal(existsSync(join(featureDir, '.coding-blocked-completion.json')), false);
+    assert.equal(readFileSync(join(featureDir, '.coding-blocked-completion.json.invalid-1'), 'utf-8'), 'still invalid 1\n');
+    assert.equal(readFileSync(join(featureDir, '.coding-blocked-completion.json.invalid-2'), 'utf-8'), 'still invalid 2\n');
+    assert.equal(readFileSync(join(featureDir, '.coding-blocked-completion.json.invalid-3'), 'utf-8'), 'still invalid 3\n');
+    const handoff = await readCodingFailureHandoff(getCodingFailureHandoffPath(featureDir));
+    assert.equal(handoff.ok, true);
+    if (!handoff.ok) return;
+    assert.equal(handoff.value.reason, 'invalid_completion_artifact');
+    assert.ok((handoff.value.validationErrors?.length ?? 0) > 0);
+    assert.deepEqual(
+      handoff.value.quarantinedArtifacts,
+      [
+        `features/${slug}/.coding-blocked-completion.json.invalid-1`,
+        `features/${slug}/.coding-blocked-completion.json.invalid-2`,
+        `features/${slug}/.coding-blocked-completion.json.invalid-3`,
+      ],
+    );
+    const stageResult = await readStageResult(featureDir, 'coding');
+    assert.equal(stageResult?.status, 'failed');
+    assert.match(stageResult?.failureReason ?? '', /structured handoff: /);
   });
 
   it('coerces repeated unverified blocked completion claims to non-complete after retries', async () => {
@@ -467,6 +541,7 @@ describe('launchNativeCoding', () => {
     });
 
     assert.equal(result.completion, 'blocked');
+    assert.equal(existsSync(getCodingFailureHandoffPath(featureDir)), false);
     const saved = JSON.parse(readFileSync(join(featureDir, '.coding-blocked-completion.json'), 'utf-8'));
     assert.equal(saved.implementationComplete, false);
     const stageResult = await readStageResult(featureDir, 'coding');
@@ -510,6 +585,9 @@ describe('launchNativeCoding', () => {
     assert.equal(handoff.value.lastToolError?.error, 'invalid_patch');
     assert.ok(handoff.value.mutationFailures >= 1);
     assert.equal(handoff.value.recoveryAttempted, true);
+    assert.equal(handoff.value.reason, 'no_completion_artifact');
+    assert.equal(handoff.value.validationErrors, undefined);
+    assert.equal(handoff.value.quarantinedArtifacts, undefined);
 
     const stageResult = await readStageResult(featureDir, 'coding');
     assert.equal(stageResult?.status, 'failed');
