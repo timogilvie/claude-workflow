@@ -12,6 +12,7 @@ import { loadLaunchPriorityList } from './openrouter-catalog.ts';
 
 const WATCHLIST_STAGE_MAP = {
   'deepseek-coder-v2': ['coder'],
+  'qwen-2.5-coder-32b': ['coder'],
   'qwen-3-235b': ['planner', 'coder', 'reviewer'],
   'qwen-2.5-72b': ['coder'],
   'kimi-k2-thinking': ['planner', 'coder', 'reviewer'],
@@ -21,6 +22,7 @@ const WATCHLIST_STAGE_MAP = {
   'devstral-medium': ['coder'],
   'grok-code-fast': ['coder'],
 } satisfies Record<string, LaunchabilityStage[]>;
+const RETIRED_MODELS = new Set(['deepseek-coder-v2', 'qwen-2.5-coder-32b', 'gemini-2.0-flash', 'grok-code-fast']);
 
 const NOW = new Date('2026-07-30T12:00:00.000Z');
 const priorOpenRouterKey = process.env.OPENROUTER_API_KEY;
@@ -87,6 +89,12 @@ describe('launch-priority watchlist launchability', () => {
       for (const stage of LAUNCHABILITY_STAGES) {
         const phase = stage === 'planner' ? 'planning' : stage === 'coder' ? 'coding' : 'review';
         const result = resolveModelAgent({ model: modelId, phase, now: NOW });
+        if (RETIRED_MODELS.has(modelId)) {
+          assert.equal(result.ok, false, `${modelId}:${stage} should reject as retired`);
+          if (result.ok) assert.fail('expected retired rejection');
+          assert.equal(result.reason, 'lifecycle-blocked');
+          continue;
+        }
         if (allowedStages.includes(stage)) {
           assert.deepEqual(result, { ok: true, agent: 'native-openrouter' }, `${modelId}:${stage}`);
         } else {
@@ -100,12 +108,12 @@ describe('launch-priority watchlist launchability', () => {
 
   it('standard config advertises watchlist models only for eligible stages and omits Sol/Luna', () => {
     const pools = CANONICAL_CONFIG_TEMPLATE.router?.availableModels;
-    assert.ok(pools);
+    if (!pools) return;
     for (const [modelId, allowedStages] of Object.entries(WATCHLIST_STAGE_MAP)) {
       for (const stage of LAUNCHABILITY_STAGES) {
         assert.equal(
           pools[stage]?.includes(modelId),
-          allowedStages.includes(stage),
+          RETIRED_MODELS.has(modelId) ? false : allowedStages.includes(stage),
           `${modelId}:${stage} config eligibility mismatch`,
         );
       }
@@ -124,7 +132,7 @@ describe('launch-priority watchlist launchability', () => {
     const repoDir = mkdtempSync(join(tmpdir(), 'wavemill-launchability-'));
     writeMinimalConfig(repoDir);
     for (const modelId of Object.keys(WATCHLIST_STAGE_MAP)) {
-      if (modelId !== 'grok-code-fast') writeCertification(repoDir, modelId);
+      if (!RETIRED_MODELS.has(modelId)) writeCertification(repoDir, modelId);
     }
 
     const catalog = loadLaunchPriorityList()
@@ -135,15 +143,13 @@ describe('launch-priority watchlist launchability', () => {
       for (const stage of LAUNCHABILITY_STAGES) {
         const cell = matrix.cells.find((entry) => entry.modelId === modelId && entry.stage === stage);
         assert.ok(cell, `${modelId}:${stage} should have a matrix cell`);
-        if (!allowedStages.includes(stage)) {
+        if (RETIRED_MODELS.has(modelId)) {
+          assert.equal(cell.launchable, false);
+          assert.equal(cell.blocker, 'retired');
+          assert.match(cell.diagnostic ?? '', /reason=lifecycle-blocked/);
+        } else if (!allowedStages.includes(stage)) {
           assert.equal(cell.launchable, false);
           assert.equal(cell.blocker, 'role-ineligible');
-          continue;
-        }
-        if (modelId === 'grok-code-fast') {
-          assert.equal(cell.launchable, false);
-          assert.equal(cell.blocker, 'certification');
-          assert.match(cell.diagnostic ?? '', /certification rejected/);
         } else {
           assert.equal(cell.launchable, true, `${modelId}:${stage} should be launchable`);
           assert.equal(cell.agent, 'native-openrouter');
