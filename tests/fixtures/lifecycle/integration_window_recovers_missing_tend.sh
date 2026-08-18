@@ -109,6 +109,7 @@ log() {
 source "$SOURCE_REPO_DIR/shared/lib/wavemill-common.sh"
 eval "$(extract_function "$RUNNER" spawn_integration_window)"
 eval "$(extract_function "$MILL" backstage_health_enabled)"
+eval "$(extract_function "$MILL" backstage_restart_backoff_seconds)"
 eval "$(extract_function "$MILL" probe_backstage_panes)"
 eval "$(extract_function "$MILL" read_backstage_health_field)"
 eval "$(extract_function "$MILL" read_backstage_service_health_field)"
@@ -122,6 +123,10 @@ eval "$(extract_function "$MILL" check_backstage_health)"
 BACKSTAGE_TEND_HEARTBEAT_STALE_SECONDS=210
 BACKSTAGE_CLASSIFICATION_HOLD_STALE_SECONDS=900
 BACKSTAGE_TEND_RESTART_CONFIRM_SECONDS=3
+BACKSTAGE_RESTART_COOLDOWN=60
+BACKSTAGE_RESTART_BACKOFF_MAX_SECONDS=900
+BACKSTAGE_RESTART_NEEDS_USER_AFTER_ATTEMPTS=3
+BACKSTAGE_TEND_RESTART_GRACE_SECONDS=120
 pane_details=$'%1\tWavemill Tend Loop\t0\tnpx\tcmd\n%2\tWavemill Jobs\t0\tbash\tcmd'
 cat > "$STATE_DIR/backstage-health.json" <<'JSON'
 {
@@ -224,6 +229,7 @@ BACKSTAGE_RESTART_COOLDOWN=60
 (
   sleep 1
   timestamp="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  mkdir -p "$(dirname "$STATE_DIR/backstage-health.json")"
   jq --arg timestamp "$timestamp" '
     .updatedAt = $timestamp
     | .services.tend.heartbeatAt = $timestamp

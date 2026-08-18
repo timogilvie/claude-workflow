@@ -1,71 +1,11 @@
 #!/usr/bin/env -S npx tsx
 
-import { join } from 'node:path';
 import { createStatusRenderer } from '../shared/lib/tend-status-renderer.ts';
 import { executeMerge, formatStatusLine, selectNextCandidate } from '../shared/lib/tend-controller.ts';
 import { runPromotion } from '../shared/lib/promotion-controller.ts';
 import { acquireTendLock } from '../shared/lib/tend-singleton.ts';
 import { runTool } from '../shared/lib/tool-runner.ts';
-import { mutateJsonState } from '../shared/lib/state-mutex.ts';
-
-const TEND_LOOP_INTERVAL_MS = 60_000;
-
-interface BackstageHealthFile {
-  updatedAt?: string;
-  status?: string;
-  detail?: string | null;
-  restartAttemptCount?: number;
-  lastRestartAttemptAt?: string | null;
-  executorPaneId?: string | null;
-  services?: Record<string, Record<string, unknown>>;
-  [key: string]: unknown;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function statusActionForResult(status: string, prNumber: number): string {
-  return status === 'merged' ? `merged-#${prNumber}` : `${status}-#${prNumber}`;
-}
-
-async function writeTendHeartbeat(repoDir: string, timestamp: string): Promise<void> {
-  const healthPath = join(repoDir, '.wavemill', 'backstage-health.json');
-  await mutateJsonState<BackstageHealthFile>(
-    healthPath,
-    (current) => {
-      const next = { ...(current ?? {}) };
-      const services = { ...(next.services ?? {}) };
-      const existing = { ...(services.tend ?? {}) };
-      services.tend = {
-        ...existing,
-        status: 'healthy',
-        detail: 'backstage tend loop is running',
-        heartbeatAt: timestamp,
-        updatedAt: timestamp,
-        restartAttemptCount: 0,
-        lastRestartAttemptAt: null,
-        repoDir,
-      };
-      next.updatedAt = timestamp;
-      next.status = 'healthy';
-      next.detail = 'backstage tend loop is running';
-      next.restartAttemptCount = 0;
-      next.lastRestartAttemptAt = null;
-      next.services = services;
-      return next;
-    },
-    { createIfMissing: true, initial: {} },
-  );
-}
-
-async function writeTendHeartbeatBestEffort(repoDir: string): Promise<void> {
-  try {
-    await writeTendHeartbeat(repoDir, new Date().toISOString());
-  } catch (error) {
-    console.error(`tend: failed to write heartbeat: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
+import { runTendLoop, statusActionForResult } from '../shared/lib/tend-loop.ts';
 
 runTool({
   name: 'tend',
@@ -117,7 +57,6 @@ runTool({
     const repoDir = String(args['repo-dir'] || process.cwd());
 
     if (args.loop) {
-      let lastMergedPR: number | null = null;
       const renderer = createStatusRenderer(process.stdout as NodeJS.WriteStream);
       const lock = acquireTendLock({
         repoDir,
@@ -137,42 +76,9 @@ runTool({
       process.once('SIGTERM', () => handleSignal('SIGTERM'));
 
       try {
-        while (true) {
-          await writeTendHeartbeatBestEffort(repoDir);
-          const decision = await selectNextCandidate({ repoDir });
-          if (decision.nextPR === null) {
-            renderer.write(formatStatusLine(decision, { action: 'idle', lastPR: lastMergedPR }));
-            await sleep(TEND_LOOP_INTERVAL_MS);
-            continue;
-          }
-
-          const candidate = decision.eligible.find((item) => item.number === decision.nextPR);
-          if (!candidate) {
-            throw new Error(`tend: selected PR #${decision.nextPR} was not found in eligible candidates`);
-          }
-
-          renderer.write(formatStatusLine(decision, {
-            action: `merging-#${candidate.number}`,
-            lastPR: lastMergedPR,
-          }));
-
-          const result = await executeMerge(candidate, { repoDir });
-          if (result.status === 'merged') {
-            lastMergedPR = result.prNumber;
-          }
-
-          renderer.write(formatStatusLine(decision, {
-            action: statusActionForResult(result.status, result.prNumber),
-            lastPR: lastMergedPR,
-          }));
-
-          if (result.haltLoop) {
-            renderer.finalize();
-            process.exitCode = 1;
-            break;
-          }
-
-          await sleep(TEND_LOOP_INTERVAL_MS);
+        const exit = await runTendLoop({ repoDir, renderer });
+        if (exit.reason === 'halted') {
+          process.exitCode = 1;
         }
       } finally {
         lock.release();

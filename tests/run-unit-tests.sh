@@ -101,6 +101,8 @@ TESTS=(
   shared/lib/ready-watchdog.test.ts
   shared/lib/migration-ast.test.ts
   shared/lib/tend-challenge-gate.test.ts
+  shared/lib/transient-retry.test.ts
+  shared/lib/tend-loop.test.ts
   shared/lib/tend-controller.test.ts
   shared/lib/tend-status-renderer.test.ts
   shared/lib/tend-singleton.test.ts
