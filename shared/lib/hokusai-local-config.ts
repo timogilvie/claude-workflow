@@ -27,6 +27,7 @@ export function buildHokusaiContributionEndpoint(modelId: string = HOKUSAI_DEFAU
 }
 
 export const HOKUSAI_CONTRIBUTION_ENDPOINT = buildHokusaiContributionEndpoint();
+export const LEGACY_UNSCOPED_ENDPOINT = 'https://api.hokus.ai/api/v1/contributions';
 export const HOKUSAI_ENDPOINT_TOKEN_ENV = 'HOKUSAI_API_TOKEN';
 export const HOKUSAI_BATCH_SIZE = 50;
 
@@ -41,6 +42,48 @@ export interface ConfigureContributionsResult {
   action: 'created' | 'updated' | 'unchanged';
   localConfigPath: string;
   endpoint: string;
+}
+
+export type MigrateContributionEndpointAction = 'migrated' | 'unchanged' | 'absent';
+
+export interface MigrateContributionEndpointResult {
+  action: MigrateContributionEndpointAction;
+  localConfigPath: string;
+  from?: string;
+  to?: string;
+}
+
+function getContributionEndpoint(config: Record<string, unknown>): string | undefined {
+  const hokusai = config.hokusai;
+  if (typeof hokusai !== 'object' || hokusai === null || Array.isArray(hokusai)) {
+    return undefined;
+  }
+  const contributions = (hokusai as Record<string, unknown>).contributions;
+  if (
+    typeof contributions !== 'object'
+    || contributions === null
+    || Array.isArray(contributions)
+  ) {
+    return undefined;
+  }
+  const endpoint = (contributions as Record<string, unknown>).endpoint;
+  return typeof endpoint === 'string' ? endpoint : undefined;
+}
+
+export function isLegacyUnscopedContributionEndpoint(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    const legacy = new URL(LEGACY_UNSCOPED_ENDPOINT);
+    const normalizePath = (path: string) => path.replace(/\/+$/, '').toLowerCase();
+    return parsed.protocol.toLowerCase() === legacy.protocol.toLowerCase()
+      && parsed.host.toLowerCase() === legacy.host.toLowerCase()
+      && normalizePath(parsed.pathname) === normalizePath(legacy.pathname)
+      && parsed.search === ''
+      && parsed.hash === '';
+  } catch {
+    return value.trim().replace(/\/+$/, '').toLowerCase()
+      === LEGACY_UNSCOPED_ENDPOINT.toLowerCase();
+  }
 }
 
 function readLocalConfig(path: string): Record<string, unknown> {
@@ -67,11 +110,53 @@ function writeTextFileAtomic(path: string, content: string): void {
   renameSync(tempPath, path);
 }
 
+export function migrateContributionEndpoint(
+  opts: { repoDir?: string; dryRun?: boolean } = {},
+): MigrateContributionEndpointResult {
+  const repoDir = opts.repoDir ?? process.cwd();
+  const localConfigPath = join(repoDir, '.wavemill-config.local.json');
+
+  if (!existsSync(localConfigPath)) {
+    return { action: 'absent', localConfigPath };
+  }
+
+  const existing = readLocalConfig(localConfigPath);
+  const endpoint = getContributionEndpoint(existing);
+  if (endpoint === undefined || !isLegacyUnscopedContributionEndpoint(endpoint)) {
+    return { action: 'unchanged', localConfigPath };
+  }
+
+  const result = {
+    action: 'migrated' as const,
+    localConfigPath,
+    from: endpoint,
+    to: HOKUSAI_CONTRIBUTION_ENDPOINT,
+  };
+
+  if (opts.dryRun) {
+    return result;
+  }
+
+  const patch = {
+    hokusai: {
+      contributions: {
+        endpoint: HOKUSAI_CONTRIBUTION_ENDPOINT,
+      },
+    },
+  };
+  const merged = deepMergeConfig(existing, patch) as Record<string, unknown>;
+  writeLocalConfig(localConfigPath, merged);
+  clearConfigCache(repoDir);
+
+  return result;
+}
+
 export function configureContributionUpload(
   opts: ConfigureContributionsOptions = {},
 ): ConfigureContributionsResult {
   const repoDir = opts.repoDir ?? process.cwd();
   const localConfigPath = join(repoDir, '.wavemill-config.local.json');
+  migrateContributionEndpoint({ repoDir });
 
   const endpoint = opts.endpoint ?? HOKUSAI_CONTRIBUTION_ENDPOINT;
   const endpointTokenEnv = opts.endpointTokenEnv ?? HOKUSAI_ENDPOINT_TOKEN_ENV;

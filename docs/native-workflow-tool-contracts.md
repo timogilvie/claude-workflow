@@ -115,6 +115,11 @@ the edit could not be applied, for example because `oldText` was not found or an
 anchor was ambiguous. The response includes a retry hint and live-context
 diagnostics when available.
 
+**Coding seam artifacts:** `.coding-complete` is a JSON marker with
+`"stage": "coding"` and `"confidence": "high" | "medium" | "low"`.
+`.coding-blocked-completion.json` is validated against the shared blocked
+completion schema. See [Seam Artifacts](seam-artifacts.md).
+
 **No-marker recovery artifact:** if a native coding model stops normally without
 `.coding-complete` or `.coding-blocked-completion.json` after mutation-tool
 failures, the controller writes `.coding-no-marker-handoff.json` in the feature

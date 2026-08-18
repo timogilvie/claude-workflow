@@ -285,7 +285,7 @@ export function renderCodingSystemPrompt(input: {
     buildNativePatchGuidance(),
     '',
     '- Use write_artifact/create_marker only for Wavemill-owned artifacts under the feature directory.',
-    '- Use run_tests/run_format for verification and formatting commands inside the worktree.',
+    '- Use run_tests/run_format for verification and formatting commands inside the worktree. Commands run without a shell: use one program per call, pass cwd instead of cd ... &&, and avoid pipes, redirects, &&/;, $VAR, and backticks; POSIX-style quoting is honored.',
     '- Use git_add/git_commit to commit intended changed files before completion.',
     `- Prefer .coding-complete when full verification passes; otherwise write ${input.blockedCompletionPath} only when implementation is complete, scoped checks passed, changes are committed, and remaining blockers are unrelated or environmental.`,
   ].join('\n');
@@ -632,7 +632,7 @@ function formatInvalidArtifactError(
   inspection: Extract<CompletionInspectionResult, { kind: 'invalid' }>,
   attempts: number,
 ): string {
-  const errors = inspection.errors.map((error) => `${error.code}: ${error.message}`).join('; ');
+  const errors = inspection.errors.map((error) => `${error.code} at ${error.path}: ${error.message}`).join('; ');
   const filename = inspection.artifact === 'coding-complete'
     ? '.coding-complete'
     : '.coding-blocked-completion.json';
@@ -906,7 +906,10 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
     if (inspection.kind === 'invalid') {
       if (
         inspection.artifact === 'blocked-completion'
-        && inspection.errors.some((error) => error.code === 'INVALID_FIELD_TYPE' && error.field === 'passingChecks')
+        && inspection.errors.some((error) => (
+          error.code === 'NO_VERIFICATION_EVIDENCE'
+          || (error.code === 'INVALID_FIELD_TYPE' && 'field' in error && error.field === 'passingChecks')
+        ))
       ) {
         inspection = await inspectCompletion({
           featureDir,

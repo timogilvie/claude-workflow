@@ -176,7 +176,7 @@ seed "PAIR-1_c"
 fd="$TMP_ROOT/f-complete"
 write_stage_result "$fd" "coding" "running" "native" "kimi-k2"
 write_hook "PAIR-1_c" "error" "$ctx_detail"
-touch "$fd/.coding-complete"
+printf '{"stage":"coding","confidence":"high"}\n' > "$fd/.coding-complete"
 if emit_native_terminal_failure_attention "PAIR-1_c" "$fd" "coding" "win-3" "%3" "native" "kimi-k2"; then
   fail "terminal handler overrode a completed run"
 else

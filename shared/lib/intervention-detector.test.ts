@@ -15,6 +15,11 @@ import {
   deduplicatePostPrAndManualEdits,
   detectManualEdits,
   detectTestFixes,
+  detectAllInterventions,
+  detectOperatorInterventions,
+  detectPriorFailedAttempts,
+  resolveTaskArtifactDirs,
+  toInterventionRecords,
   type InterventionSummary,
   type InterventionEvent,
   type InterventionPenalties,
@@ -959,6 +964,117 @@ describe('intervention-detector', () => {
         assert.equal(event.count, 1);
       } finally {
         cleanup();
+      }
+    });
+  });
+
+  describe('operator and failed-attempt artifacts', () => {
+    it('loads operator interventions from feature dirs and archive dirs', () => {
+      const repo = mkdtempSync(join(tmpdir(), 'intervention-artifacts-'));
+      try {
+        const featureDir = join(repo, 'features', 'demo');
+        mkdirSync(featureDir, { recursive: true });
+        writeFileSync(join(featureDir, '.operator-intervention.json'), JSON.stringify({
+          severity: 'major',
+          occurredAt: '2026-08-14T13:25:00Z',
+          trigger: 'native_coding_failed_invalid_artifact',
+          summary: 'Relaunched after invalid artifact',
+          scoringNote: 'Score as failed first attempt.',
+        }));
+
+        const dirs = resolveTaskArtifactDirs({ repoDir: repo, branchName: 'task/demo', issueId: 'HOK-1' });
+        const event = detectOperatorInterventions(dirs);
+        assert.equal(event.count, 1);
+        assert.equal(event.severities?.[0], 'high');
+        assert.match(event.details[0], /scoringNote=Score as failed first attempt/);
+      } finally {
+        rmSync(repo, { recursive: true, force: true });
+      }
+    });
+
+    it('counts history and sidecar failed attempts without double-counting', () => {
+      const repo = mkdtempSync(join(tmpdir(), 'intervention-failed-attempts-'));
+      try {
+        const featureDir = join(repo, 'features', 'demo');
+        mkdirSync(featureDir, { recursive: true });
+        const failed = {
+          stage: 'coding',
+          status: 'failed',
+          startedAt: '2026-08-14T12:00:00Z',
+          finishedAt: '2026-08-14T12:10:00Z',
+          agent: 'native',
+          model: 'glm-5.2',
+          notes: 'invalid artifact',
+          failureReason: 'malformed result',
+        };
+        writeFileSync(join(featureDir, '.coding-result.json'), JSON.stringify({
+          stage: 'coding',
+          status: 'completed',
+          startedAt: '2026-08-14T12:30:00Z',
+          finishedAt: '2026-08-14T13:00:00Z',
+          agent: 'native',
+          model: 'glm-5.2',
+          notes: '',
+          history: [failed],
+        }));
+        writeFileSync(join(featureDir, '.coding-result.attempt-1-failed.json'), JSON.stringify(failed));
+
+        const event = detectPriorFailedAttempts({ featureDirs: [featureDir] });
+        assert.equal(event.count, 1);
+        assert.match(event.details[0], /coding attempt 1 failed/);
+      } finally {
+        rmSync(repo, { recursive: true, force: true });
+      }
+    });
+
+    it('detects native operator recovery and prior failure as interventions', () => {
+      const repo = mkdtempSync(join(tmpdir(), 'intervention-native-'));
+      const oldHome = process.env.HOME;
+      process.env.HOME = mkdtempSync(join(tmpdir(), 'intervention-home-'));
+      try {
+        const featureDir = join(repo, 'features', 'demo');
+        mkdirSync(featureDir, { recursive: true });
+        writeFileSync(join(featureDir, '.operator-intervention.json'), JSON.stringify({
+          severity: 'major',
+          occurredAt: '2026-08-14T13:25:00Z',
+          trigger: 'native_coding_failed_invalid_artifact',
+          summary: 'Relaunched after invalid artifact',
+        }));
+        writeFileSync(join(featureDir, '.coding-result.json'), JSON.stringify({
+          stage: 'coding',
+          status: 'completed',
+          startedAt: '2026-08-14T13:30:00Z',
+          finishedAt: '2026-08-14T14:00:00Z',
+          agent: 'native',
+          model: 'glm-5.2',
+          notes: '',
+          history: [{
+            status: 'failed',
+            startedAt: '2026-08-14T12:00:00Z',
+            finishedAt: '2026-08-14T12:10:00Z',
+            agent: 'native',
+            model: 'glm-5.2',
+            notes: 'invalid artifact',
+          }],
+        }));
+
+        const summary = detectAllInterventions({
+          repoDir: repo,
+          branchName: 'task/demo',
+          baseBranch: 'main',
+          agentType: 'native',
+        }, DEFAULT_PENALTIES);
+
+        assert.equal(summary.totalInterventionScore, 0.25);
+        assert.equal(summary.interventions.some((event) => event.type === 'operator_recovery'), true);
+        assert.equal(summary.interventions.some((event) => event.type === 'prior_failed_attempt'), true);
+        const records = toInterventionRecords(summary);
+        assert.equal(records.some((record) => record.type === 'recovery' && record.severity === 'high'), true);
+        assert.equal(records.some((record) => record.type === 'rollback' && record.severity === 'med'), true);
+      } finally {
+        rmSync(repo, { recursive: true, force: true });
+        rmSync(process.env.HOME || '', { recursive: true, force: true });
+        process.env.HOME = oldHome;
       }
     });
   });

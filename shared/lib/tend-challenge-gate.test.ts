@@ -776,6 +776,85 @@ describe('unresolvable pair states in applyChallengePairGates', () => {
     }
   });
 
+  // Regression: post-review cleanup deletes a completed task's local branch and
+  // worktree but leaves the remote ref. Treating that leftover as a live sibling
+  // kept the survivor's PR at `pair-unresolved:no-comparison` forever instead of
+  // reaching a terminal state. Observed on HOK-2767 / PR #1130 on 2026-08-17.
+  it('treats a cleaned-up sibling as settled, not live, despite the stale remote ref', async () => {
+    const { repoDir, cleanup } = setupRepoDir({});
+    try {
+      const items = [makeWorkItem({
+        number: 101,
+        headRefName: 'task/pair-primary-challenger',
+        challengePairId: 'pair-1',
+        challenge: true,
+      })];
+
+      // Only the challenger remains in workflow state: the primary completed and
+      // was cleaned up. Its remote ref is still present.
+      writeWorkflowState(repoDir, {
+        HOK_1_c: {
+          pr: 101,
+          branch: 'task/pair-primary-challenger',
+          challengePairId: 'pair-1',
+          challengeRole: 'challenger',
+          updated: '2026-07-01T00:00:00Z',
+        },
+      });
+
+      const result = await applyChallengePairGates(items, [], repoDir, {
+        remoteBranches: ['task/pair-primary', 'task/pair-primary-challenger'],
+        coolOffSeconds: 0,
+        nowMs: () => Date.parse('2026-07-01T01:00:00Z'),
+      });
+
+      assert.equal(result.blocked[0].reason, 'challenge:pair-unresolvable:orphan-sibling');
+    } finally {
+      cleanup();
+    }
+  });
+
+  // The counterpart: a sibling that really is still working must keep blocking.
+  it('treats a sibling tracked without a PR as live', async () => {
+    const { repoDir, cleanup } = setupRepoDir({});
+    try {
+      const items = [makeWorkItem({
+        number: 101,
+        headRefName: 'task/pair-primary-challenger',
+        challengePairId: 'pair-1',
+        challenge: true,
+      })];
+
+      writeWorkflowState(repoDir, {
+        HOK_1_c: {
+          pr: 101,
+          branch: 'task/pair-primary-challenger',
+          challengePairId: 'pair-1',
+          challengeRole: 'challenger',
+          updated: '2026-07-01T00:00:00Z',
+        },
+        // Sibling is in flight: tracked, no PR yet.
+        HOK_1: {
+          branch: 'task/pair-primary',
+          challengePairId: 'pair-1',
+          challengeRole: 'primary',
+          updated: '2026-07-01T00:00:00Z',
+        },
+      });
+
+      const result = await applyChallengePairGates(items, [], repoDir, {
+        remoteBranches: ['task/pair-primary', 'task/pair-primary-challenger'],
+        coolOffSeconds: 0,
+        nowMs: () => Date.parse('2026-07-01T01:00:00Z'),
+      });
+
+      // Not orphan-sibling: the in-flight primary is still a live arm.
+      assert.notEqual(result.blocked[0].reason, 'challenge:pair-unresolvable:orphan-sibling');
+    } finally {
+      cleanup();
+    }
+  });
+
   it('blocks a pair when both sides exhausted eval hard-failure retries', async () => {
     const { repoDir, cleanup } = setupRepoDir({
       challenge: { eval: { retryMaxAttempts: 2 } },

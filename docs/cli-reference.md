@@ -49,6 +49,24 @@ Flags:
 
 - `--repo-dir <path>`: inspect a repository other than the current working directory
 
+### `wavemill intervention`
+
+Records and inspects operator recovery artifacts that eval scoring reads even when there is no commit, PR comment, or Claude transcript.
+
+```bash
+wavemill intervention record features/my-task --severity major --trigger invalid_artifact --summary "Relaunched after failed coding attempt"
+wavemill intervention record HOK-537_c --stage coding --attempt 1 --severity major --trigger native_coding_failed_invalid_artifact --summary "Triaged failing suite" --archive-failed-result
+wavemill intervention show HOK-537_c --json
+```
+
+Important flags:
+
+- `--severity minor|major`, `--trigger`, and `--summary` are required for `record`.
+- `--action "<text>"` can be repeated.
+- `--scoring-note` gives the eval judge incident-specific scoring guidance.
+- `--archive-failed-result` preserves the current failed or aborted stage result as a failed-attempt sidecar.
+- `--replace` overwrites the artifact instead of appending.
+
 ## Autonomous Integration
 
 ### `wavemill tend`

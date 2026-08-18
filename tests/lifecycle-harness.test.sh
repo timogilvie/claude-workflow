@@ -171,6 +171,11 @@ harness_extract_real_functions() {
     mark_blocked_completion_announced \
     blocked_completion_live_process_mode \
     emit_blocked_completion_liveness_attention \
+    seam_artifact_cli_path \
+    seam_validate_artifact \
+    seam_validation_error_summary \
+    seam_validation_has_code \
+    write_coding_complete_marker \
     wavemill_capacity_stall_seconds \
     codex_capacity_recovery_marker \
     codex_capacity_dwell_marker \
@@ -240,6 +245,7 @@ harness_extract_real_functions() {
     resolve_stage_result_model \
     approve_plan \
     write_stage_result \
+    write_stage_result_with_history \
     _write_stage_result_trace_event \
     read_stage_status \
     read_stage_result \
@@ -1695,7 +1701,7 @@ test_coding_blocked_completion_auto_advances_when_valid() {
   "commit": "$commit",
   "passingChecks": ["bash tests/wavemill-mill-advance.test.sh"],
   "blockingChecks": ["pnpm typecheck"],
-  "blockingReason": "baseline_failures",
+  "blockingReason": "baseline_tests_failing",
   "evidence": "Repo-level typecheck is failing outside this change.",
   "recommendedAction": "advance_to_review"
 }
@@ -1759,7 +1765,7 @@ test_coding_blocked_completion_auto_advances_with_wavemill_metadata_noise() {
   "commit": "$commit",
   "passingChecks": ["bash tests/wavemill-mill-advance.test.sh"],
   "blockingChecks": ["pnpm typecheck"],
-  "blockingReason": "baseline_failures",
+  "blockingReason": "baseline_tests_failing",
   "evidence": "Repo-level typecheck is failing outside this change.",
   "recommendedAction": "advance_to_review"
 }
@@ -1800,7 +1806,7 @@ test_coding_blocked_completion_live_process_needs_attention() {
   "commit": "$commit",
   "passingChecks": ["bash tests/wavemill-mill-advance.test.sh"],
   "blockingChecks": ["pytest -v"],
-  "blockingReason": "baseline_failures",
+  "blockingReason": "baseline_tests_failing",
   "evidence": "Repo-level typecheck is failing outside this change.",
   "recommendedAction": "advance_to_review"
 }
@@ -1845,7 +1851,7 @@ test_coding_blocked_completion_terminates_live_process_when_configured() {
   "commit": "$commit",
   "passingChecks": ["bash tests/wavemill-mill-advance.test.sh"],
   "blockingChecks": ["pytest -v"],
-  "blockingReason": "baseline_failures",
+  "blockingReason": "baseline_tests_failing",
   "evidence": "Repo-level typecheck is failing outside this change.",
   "recommendedAction": "advance_to_review"
 }
@@ -1903,7 +1909,7 @@ test_coding_blocked_completion_indeterminate_liveness_needs_attention() {
   "commit": "$commit",
   "passingChecks": ["bash tests/wavemill-mill-advance.test.sh"],
   "blockingChecks": ["pytest -v"],
-  "blockingReason": "baseline_failures",
+  "blockingReason": "baseline_tests_failing",
   "evidence": "Repo-level typecheck is failing outside this change.",
   "recommendedAction": "advance_to_review"
 }
@@ -1943,7 +1949,7 @@ test_coding_blocked_completion_missing_blocking_checks_advances_when_pane_is_gon
   "committed": true,
   "commit": "$commit",
   "passingChecks": ["bash tests/wavemill-mill-advance.test.sh"],
-  "blockingReason": "baseline_failures",
+  "blockingReason": "baseline_tests_failing",
   "evidence": "Repo-level typecheck is failing outside this change.",
   "recommendedAction": "advance_to_review"
 }
@@ -1964,10 +1970,10 @@ EOF
 
   tick="$(harness_run_tick "$repo" "$slug" "$issue" "$overrides")"
 
-  check_eq "missing blocking checks: coding stage becomes completed" "completed" "$(harness_read_stage_status "$repo" "$slug" coding)"
-  check_eq "missing blocking checks: attention cleared" "clear" "$(kv_value "$tick" attention)"
-  check_file_exists "missing blocking checks: auto audit written" "$repo/features/$slug/.coding-auto-advance.json"
-  check_file_exists "missing blocking checks: coding complete marker written" "$repo/features/$slug/.coding-complete"
+  check_eq "missing blocking checks: coding stage stays running" "running" "$(harness_read_stage_status "$repo" "$slug" coding)"
+  check_eq "missing blocking checks: needs-user attention set" "needs-user" "$(kv_value "$tick" attention)"
+  check_file_absent "missing blocking checks: no auto audit written" "$repo/features/$slug/.coding-auto-advance.json"
+  check_file_absent "missing blocking checks: no coding complete marker written" "$repo/features/$slug/.coding-complete"
 }
 
 test_coding_blocked_completion_empty_blocking_checks_falls_back_to_any_descendant() {
@@ -1986,7 +1992,7 @@ test_coding_blocked_completion_empty_blocking_checks_falls_back_to_any_descendan
   "commit": "$commit",
   "passingChecks": ["bash tests/wavemill-mill-advance.test.sh"],
   "blockingChecks": [],
-  "blockingReason": "baseline_failures",
+  "blockingReason": "baseline_tests_failing",
   "evidence": "Repo-level typecheck is failing outside this change.",
   "recommendedAction": "advance_to_review"
 }
@@ -2065,7 +2071,7 @@ test_coding_complete_wins_over_blocked_completion() {
   repo="$(harness_init_repo "$slug")"
   harness_setup_runtime_artifacts "$repo"
   harness_setup_coding_state "$repo" "$slug" "running"
-  touch "$repo/features/$slug/.coding-complete"
+  printf '{"stage":"coding","confidence":"high"}\n' > "$repo/features/$slug/.coding-complete"
   cat > "$repo/features/$slug/.coding-blocked-completion.json" <<'EOF'
 {
   "summary": "coding done; verification blocked by Docker"
@@ -2088,7 +2094,7 @@ test_coding_complete_dirty_worktree_without_commits_needs_attention() {
   harness_setup_coding_state "$repo" "$slug" "running"
   feature_dir="$repo/features/$slug"
 
-  touch "$feature_dir/.coding-complete"
+  printf '{"stage":"coding","confidence":"high"}\n' > "$feature_dir/.coding-complete"
   printf 'pending implementation\n' > "$repo/src-uncommitted.ts"
 
   tick="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
@@ -2114,7 +2120,7 @@ test_coding_complete_uncommitted_output_dedupes_stable_condition() {
   artifact="$feature_dir/.coding-uncommitted-output.json"
   marker="$feature_dir/.coding-uncommitted-output-announced"
 
-  touch "$feature_dir/.coding-complete"
+  printf '{"stage":"coding","confidence":"high"}\n' > "$feature_dir/.coding-complete"
   printf 'pending implementation\n' > "$repo/src-uncommitted.ts"
 
   tick1="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
@@ -2147,7 +2153,7 @@ test_coding_complete_uncommitted_output_reannounces_on_dirty_path_change() {
   artifact="$feature_dir/.coding-uncommitted-output.json"
   marker="$feature_dir/.coding-uncommitted-output-announced"
 
-  touch "$feature_dir/.coding-complete"
+  printf '{"stage":"coding","confidence":"high"}\n' > "$feature_dir/.coding-complete"
   printf 'pending implementation\n' > "$repo/src-uncommitted.ts"
 
   tick1="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
@@ -2181,7 +2187,7 @@ test_coding_complete_uncommitted_output_reannounces_on_ahead_count_change() {
 
   git -C "$repo" branch auto/integration
 
-  touch "$feature_dir/.coding-complete"
+  printf '{"stage":"coding","confidence":"high"}\n' > "$feature_dir/.coding-complete"
   printf 'pending implementation\n' > "$repo/src-uncommitted.ts"
 
   tick1="$(harness_run_tick "$repo" "$slug" "$issue" "$tick_overrides")"
@@ -2249,7 +2255,7 @@ test_coding_complete_dirty_worktree_with_commits_needs_attention() {
   git -C "$repo" add README.md
   git -C "$repo" commit -m "feat: committed coding output" >/dev/null 2>&1
 
-  touch "$feature_dir/.coding-complete"
+  printf '{"stage":"coding","confidence":"high"}\n' > "$feature_dir/.coding-complete"
   printf 'still dirty\n' >> "$repo/src-dirty.ts"
 
   tick="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
@@ -2273,7 +2279,7 @@ test_coding_complete_trace_only_dirty_worktree_advances() {
   harness_setup_coding_state "$repo" "$slug" "running"
   feature_dir="$repo/features/$slug"
 
-  touch "$feature_dir/.coding-complete"
+  printf '{"stage":"coding","confidence":"high"}\n' > "$feature_dir/.coding-complete"
   printf '{"event":"phase_completed"}\n' > "$feature_dir/trace.jsonl"
 
   tick="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
@@ -2296,7 +2302,7 @@ test_coding_complete_local_config_overlay_advances() {
   harness_setup_coding_state "$repo" "$slug" "running"
   feature_dir="$repo/features/$slug"
 
-  touch "$feature_dir/.coding-complete"
+  printf '{"stage":"coding","confidence":"high"}\n' > "$feature_dir/.coding-complete"
   printf '{"mill":{"maxParallel":1}}\n' > "$repo/.wavemill-config.local.json"
 
   tick="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
@@ -2320,7 +2326,7 @@ test_coding_complete_tracked_claude_settings_advances() {
   git -C "$repo" add -f .claude/settings.local.json
   git -C "$repo" commit -q -m "test: track Claude local settings"
 
-  touch "$feature_dir/.coding-complete"
+  printf '{"stage":"coding","confidence":"high"}\n' > "$feature_dir/.coding-complete"
   printf '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"wavemill-hook.sh"}]}]}}\n' > "$repo/.claude/settings.local.json"
 
   tick="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
@@ -2339,7 +2345,7 @@ test_coding_complete_metadata_only_routing_advances_to_review() {
   harness_setup_coding_state "$repo" "$slug" "running"
   feature_dir="$repo/features/$slug"
 
-  touch "$feature_dir/.coding-complete"
+  printf '{"stage":"coding","confidence":"high"}\n' > "$feature_dir/.coding-complete"
   printf '{"agent":"codex"}\n' > "$feature_dir/routing.jsonl"
 
   tick="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
@@ -2365,7 +2371,7 @@ test_coding_complete_source_dirty_still_blocks() {
   printf 'committed change\n' >> "$repo/README.md"
   git -C "$repo" add README.md
   git -C "$repo" commit -m "feat: committed coding output" >/dev/null 2>&1
-  touch "$feature_dir/.coding-complete"
+  printf '{"stage":"coding","confidence":"high"}\n' > "$feature_dir/.coding-complete"
   printf 'export const extra = true;\n' > "$feature_dir/extra.ts"
 
   tick="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
@@ -2392,7 +2398,7 @@ test_coding_complete_trace_and_source_dirty_worktree_needs_attention() {
   printf 'committed change\n' >> "$repo/README.md"
   git -C "$repo" add README.md
   git -C "$repo" commit -m "feat: committed coding output" >/dev/null 2>&1
-  touch "$feature_dir/.coding-complete"
+  printf '{"stage":"coding","confidence":"high"}\n' > "$feature_dir/.coding-complete"
   printf '{"event":"phase_started"}\n' > "$feature_dir/trace.jsonl"
   printf 'still dirty\n' > "$repo/src-dirty.ts"
 
@@ -2441,7 +2447,7 @@ test_completed_coding_pane_is_quarantined_best_effort() {
   harness_setup_runtime_artifacts "$repo"
   harness_setup_coding_state "$repo" "$slug" "running"
   feature_dir="$repo/features/$slug"
-  touch "$feature_dir/.coding-complete"
+  printf '{"stage":"coding","confidence":"high"}\n' > "$feature_dir/.coding-complete"
 
   tick="$(harness_run_tick "$repo" "$slug" "$issue" '
     CURRENT_PHASE="coding"
@@ -2509,7 +2515,7 @@ test_coding_blocked_completion_missing_required_field_does_not_auto_advance() {
   "commit": "$commit",
   "passingChecks": ["bash tests/wavemill-mill-advance.test.sh"],
   "blockingChecks": ["pnpm typecheck"],
-  "blockingReason": "baseline_failures",
+  "blockingReason": "baseline_tests_failing",
   "evidence": "Repo-level typecheck is failing outside this change.",
   "recommendedAction": "advance_to_review"
 }
@@ -2538,7 +2544,7 @@ test_coding_blocked_completion_empty_passing_checks_does_not_auto_advance() {
   "commit": "$commit",
   "passingChecks": [],
   "blockingChecks": ["pnpm typecheck"],
-  "blockingReason": "baseline_failures",
+  "blockingReason": "baseline_tests_failing",
   "evidence": "Repo-level typecheck is failing outside this change.",
   "recommendedAction": "advance_to_review"
 }
@@ -2566,7 +2572,7 @@ test_coding_blocked_completion_stale_commit_does_not_auto_advance() {
   "commit": "deadbee",
   "passingChecks": ["bash tests/wavemill-mill-advance.test.sh"],
   "blockingChecks": ["pnpm typecheck"],
-  "blockingReason": "baseline_failures",
+  "blockingReason": "baseline_tests_failing",
   "evidence": "Repo-level typecheck is failing outside this change.",
   "recommendedAction": "advance_to_review"
 }
@@ -2596,7 +2602,7 @@ test_coding_blocked_completion_dirty_worktree_does_not_auto_advance() {
   "commit": "$commit",
   "passingChecks": ["bash tests/wavemill-mill-advance.test.sh"],
   "blockingChecks": ["pnpm typecheck"],
-  "blockingReason": "baseline_failures",
+  "blockingReason": "baseline_tests_failing",
   "evidence": "Repo-level typecheck is failing outside this change.",
   "recommendedAction": "advance_to_review"
 }
@@ -2627,7 +2633,7 @@ test_coding_blocked_completion_unknown_feature_file_does_not_auto_advance() {
   "commit": "$commit",
   "passingChecks": ["bash tests/wavemill-mill-advance.test.sh"],
   "blockingChecks": ["pnpm typecheck"],
-  "blockingReason": "baseline_failures",
+  "blockingReason": "baseline_tests_failing",
   "evidence": "Repo-level typecheck is failing outside this change.",
   "recommendedAction": "advance_to_review"
 }
@@ -2809,7 +2815,8 @@ test_coding_capacity_prompt_writes_blocked_completion() {
   check_file_exists "capacity pane: blocked completion written" "$feature_dir/.coding-blocked-completion.json"
   check_file_exists "capacity pane: recovery audit written" "$feature_dir/.coding-capacity-recovery.json"
   check_eq "capacity pane: needs-user attention set" "needs-user" "$(kv_value "$tick" attention)"
-  check_eq "capacity pane: artifact reason set" "model_at_capacity" "$(jq -r '.reason' "$feature_dir/.coding-blocked-completion.json")"
+  check_eq "capacity pane: artifact blocking reason set" "model_at_capacity" "$(jq -r '.blockingReason' "$feature_dir/.coding-blocked-completion.json")"
+  check_eq "capacity pane: artifact recommended action set" "relaunch_coding" "$(jq -r '.recommendedAction' "$feature_dir/.coding-blocked-completion.json")"
 }
 
 test_coding_complete_wins_over_capacity_prompt() {
@@ -2820,7 +2827,7 @@ test_coding_complete_wins_over_capacity_prompt() {
   harness_setup_runtime_artifacts "$repo"
   harness_setup_coding_state "$repo" "$slug" "running"
   feature_dir="$repo/features/$slug"
-  touch "$feature_dir/.coding-complete"
+  printf '{"stage":"coding","confidence":"high"}\n' > "$feature_dir/.coding-complete"
 
   tick="$(harness_run_tick "$repo" "$slug" "$issue" '
     CURRENT_PHASE="coding"
@@ -2935,7 +2942,7 @@ test_misplaced_coding_complete_marker_is_recovered() {
   feature_dir="$repo/features/$slug"
   misplaced_dir="$repo/services/contract-deployer/features/$slug"
   mkdir -p "$misplaced_dir"
-  touch "$misplaced_dir/.coding-complete"
+  printf '{"stage":"coding","confidence":"high"}\n' > "$misplaced_dir/.coding-complete"
 
   tick="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
 
@@ -2954,7 +2961,7 @@ test_root_level_coding_complete_marker_is_recovered() {
   harness_setup_runtime_artifacts "$repo"
   harness_setup_coding_state "$repo" "$slug" "running"
   feature_dir="$repo/features/$slug"
-  touch "$repo/.coding-complete"
+  printf '{"stage":"coding","confidence":"high"}\n' > "$repo/.coding-complete"
 
   tick="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
 
@@ -2973,7 +2980,7 @@ test_tracked_root_level_coding_complete_marker_is_ignored() {
   harness_setup_runtime_artifacts "$repo"
   harness_setup_coding_state "$repo" "$slug" "running"
   feature_dir="$repo/features/$slug"
-  touch "$repo/.coding-complete"
+  printf '{"stage":"coding","confidence":"high"}\n' > "$repo/.coding-complete"
   git -C "$repo" add .coding-complete
   git -C "$repo" commit -q -m "Track accidental root coding marker"
 
@@ -3346,7 +3353,7 @@ test_coding_pane_divergence_idle_pane_ignores_stale_unrelated_marker() {
   # Simulate: a reused worktree contains a stale completion marker for an unrelated task.
   other_feature_dir="$repo/features/other-task-slug"
   mkdir -p "$other_feature_dir"
-  touch "$other_feature_dir/.coding-complete"
+  printf '{"stage":"coding","confidence":"high"}\n' > "$other_feature_dir/.coding-complete"
 
   tick="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
 
@@ -3407,7 +3414,7 @@ EOF
   # Simulate: different task marker exists (would trigger divergence without hook guard)
   other_dir="$repo/features/other-slug-task"
   mkdir -p "$other_dir"
-  touch "$other_dir/.coding-complete"
+  printf '{"stage":"coding","confidence":"high"}\n' > "$other_dir/.coding-complete"
 
   tick="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
 
@@ -3431,7 +3438,7 @@ test_coding_pane_divergence_same_slug_marker_still_recovers() {
   feature_dir="$repo/features/$slug"
   misplaced_dir="$repo/services/some-service/features/$slug"
   mkdir -p "$misplaced_dir"
-  touch "$misplaced_dir/.coding-complete"
+  printf '{"stage":"coding","confidence":"high"}\n' > "$misplaced_dir/.coding-complete"
 
   tick="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
 

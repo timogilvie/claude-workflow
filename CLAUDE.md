@@ -44,6 +44,7 @@ All business logic lives in `shared/lib/` for reusability across CLI tools, comm
 - `eval-summary-printer.ts` - One-line eval summaries
 - `eval-record-builder.ts` - Enrich records with metadata
 - `intervention-detector.ts` - Detect human interventions
+- `operator-intervention.ts` - Read/write operator recovery artifacts
 - `difficulty-analyzer.ts` - Analyze PR difficulty
 - `task-context-analyzer.ts` - Analyze task characteristics
 - `repo-context-analyzer.ts` - Analyze repository context

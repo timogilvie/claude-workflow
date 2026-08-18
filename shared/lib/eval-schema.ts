@@ -131,6 +131,8 @@
  * - **1.37.0**: Added optional `verificationTelemetry` for first-green CI
  *   evaluation, including local verification, first remote CI verdict,
  *   remediation, override, and lifecycle timing fields (HOK-2607).
+ * - **1.38.0**: Added `recovery` intervention type for operator-recorded
+ *   recovery interventions (HOK-2766).
  *
  * @module eval-schema
  */
@@ -146,7 +148,7 @@ import type {
 import type { ChallengeRoutingMeta } from './challenge-comparison.ts';
 
 /** Current eval schema version for newly emitted records. */
-export const SCHEMA_VERSION = '1.37.0';
+export const SCHEMA_VERSION = '1.38.0';
 
 export type RoutingRole = 'planner' | 'coder' | 'reviewer';
 
@@ -325,7 +327,10 @@ export type WorkflowCostAttributionReason =
   | 'unpriced_model'
   | 'mixed_coverage'
   | 'provider_reported_cost'
+  | 'no_pricing_data'
   | 'no_priced_sessions';
+
+export type WorkflowCostPricingSource = 'openrouter_api' | 'local_estimate' | 'mixed';
 
 export interface WorkflowCostAttributionModel {
   provider: string;
@@ -337,12 +342,13 @@ export interface WorkflowCostAttributionModel {
   totalTokens?: number;
   costUsd?: number;
   providerReportedCostUsd?: number;
+  pricingSource?: WorkflowCostPricingSource;
   priced: boolean;
   reason?: WorkflowCostAttributionReason;
 }
 
 export interface WorkflowCostAttribution {
-  source: 'native';
+  source: 'native' | 'codex' | 'claude';
   coverage: WorkflowCostAttributionCoverage;
   reason?: WorkflowCostAttributionReason;
   sessions: number;
@@ -502,6 +508,7 @@ export type InterventionType =
   | 'environment_fix'
   | 'prompt_edit'
   | 'scope_change'
+  | 'recovery'
   | 'rollback';
 
 /**

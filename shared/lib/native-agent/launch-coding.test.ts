@@ -189,7 +189,7 @@ describe('launchNativeCoding', () => {
       }),
       toolTurn('marker-1', 'create_marker', {
         path: `features/${slug}/.coding-complete`,
-        content: 'confidence=high\nproducer=native-agent\n',
+        content: '{"stage":"coding","confidence":"high","producer":"native-agent"}\n',
       }),
       finalTurn('Coding complete.'),
     ], 'complete');
@@ -272,7 +272,7 @@ describe('launchNativeCoding', () => {
     const model = scriptedModel([
       toolTurn('bad-marker-1', 'create_marker', {
         path: '../outside-native-coding-marker',
-        content: 'confidence=high\n',
+        content: '{"stage":"coding","confidence":"high"}\n',
       }),
       finalTurn('Tried to write outside.'),
       finalTurn('Still no completion marker.'),
@@ -335,7 +335,7 @@ describe('launchNativeCoding', () => {
       toolTurn('commit-1', 'git_commit', { message: 'feat: recover native patch contract' }),
       toolTurn('marker-1', 'create_marker', {
         path: `features/${slug}/.coding-complete`,
-        content: 'confidence=high\nproducer=native-agent\n',
+        content: '{"stage":"coding","confidence":"high","producer":"native-agent"}\n',
       }),
       finalTurn('Recovered and completed.'),
     ], 'kimi-recover');
@@ -367,7 +367,7 @@ describe('launchNativeCoding', () => {
       finalTurn('Wrote malformed marker.'),
       toolTurn('valid-complete', 'create_marker', {
         path: `features/${slug}/.coding-complete`,
-        content: 'confidence=high\n',
+        content: '{"stage":"coding","confidence":"high"}\n',
       }),
       finalTurn('Rewrote marker.'),
     ], 'artifact-retry-complete');
@@ -383,7 +383,7 @@ describe('launchNativeCoding', () => {
     });
 
     assert.equal(result.completion, 'complete');
-    assert.equal(readFileSync(join(featureDir, '.coding-complete'), 'utf-8'), 'confidence=high\n');
+    assert.equal(readFileSync(join(featureDir, '.coding-complete'), 'utf-8'), '{\n  "stage": "coding",\n  "confidence": "high"\n}\n');
     assert.equal(readFileSync(join(featureDir, '.coding-complete.invalid-1'), 'utf-8'), 'not a valid marker\n');
   });
 
@@ -518,7 +518,7 @@ describe('launchNativeCoding', () => {
 
   it('sweeps a pre-existing .coding-complete before classifying native completion', async () => {
     const { repoDir, featureDir, slug } = makeRepo();
-    writeFileSync(join(featureDir, '.coding-complete'), 'confidence=high\nproducer=stale\n', 'utf-8');
+    writeFileSync(join(featureDir, '.coding-complete'), '{"stage":"coding","confidence":"high","producer":"stale"}\n', 'utf-8');
     const model = scriptedModel([
       finalTurn('Stopped without writing a fresh marker.'),
     ], 'stale-complete');
@@ -557,7 +557,7 @@ describe('launchNativeCoding', () => {
     const model = scriptedModel([
       toolTurn('marker-1', 'create_marker', {
         path: `features/${slug}/.coding-complete`,
-        content: 'confidence=high\nproducer=native-agent\n',
+        content: '{"stage":"coding","confidence":"high","producer":"native-agent"}\n',
       }),
       finalTurn('Coding complete.'),
     ], 'stale-blocked-fresh-complete');

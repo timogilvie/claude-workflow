@@ -69,7 +69,7 @@ import {
 import { getMaxCostUsd } from './config.ts';
 import { formatHokusaiSubmissionTriggerResult, triggerHokusaiSubmission } from './hokusai-submission-trigger.ts';
 import { getConfiguredModelsForDescriptor } from './model-registry.ts';
-import { computeWorkflowCost, loadPricingTable, type WorkflowCostOutcome } from './workflow-cost.ts';
+import { computeWorkflowCostWithExactPricing, loadPricingTable, type WorkflowCostOutcome } from './workflow-cost.ts';
 import type {
   EvalRecord,
   EvalRouteProvenance,
@@ -101,7 +101,7 @@ export const evalOrchestratorDeps = {
   buildTaskDescriptor,
   appendEvalRecord,
   triggerHokusaiSubmission,
-  computeWorkflowCost,
+  computeWorkflowCost: computeWorkflowCostWithExactPricing,
   loadPricingTable,
   execShellCommand,
 };
@@ -333,6 +333,7 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
         branchName: branch,
         baseBranch: 'main',
         repoDir,
+        worktreePath,
         agentType,
         issueId,
       });
@@ -469,7 +470,7 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
   if (worktreePath && branch) {
     try {
       const pricingTable = evalOrchestratorDeps.loadPricingTable(repoDir);
-      workflowCostOutcome = evalOrchestratorDeps.computeWorkflowCost({
+      workflowCostOutcome = await evalOrchestratorDeps.computeWorkflowCost({
         worktreePath,
         branchName: branch,
         repoDir,

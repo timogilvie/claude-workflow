@@ -18,9 +18,14 @@ import {
   detectAgentType,
   type AgentType,
   type SessionUsageResult,
+  type NativeSessionUsageRecord,
 } from './session-adapters.ts';
 import { loadWavemillConfig } from './config.ts';
 import { getEffectiveRegistry, resolveModelRegistryKey } from './model-registry.ts';
+import {
+  fetchGenerationCostsBatched,
+  type OpenRouterGenerationCost,
+} from './openrouter-generation-api.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -42,7 +47,10 @@ export type WorkflowCostAttributionReason =
   | 'unpriced_model'
   | 'mixed_coverage'
   | 'provider_reported_cost'
+  | 'no_pricing_data'
   | 'no_priced_sessions';
+
+export type WorkflowCostPricingSource = 'openrouter_api' | 'local_estimate' | 'mixed';
 
 export interface WorkflowCostAttributionModel {
   provider: string;
@@ -54,12 +62,13 @@ export interface WorkflowCostAttributionModel {
   totalTokens?: number;
   costUsd?: number;
   providerReportedCostUsd?: number;
+  pricingSource?: WorkflowCostPricingSource;
   priced: boolean;
   reason?: WorkflowCostAttributionReason;
 }
 
 export interface WorkflowCostAttribution {
-  source: 'native';
+  source: 'native' | 'codex' | 'claude';
   coverage: WorkflowCostAttributionCoverage;
   reason?: WorkflowCostAttributionReason;
   sessions: number;
@@ -117,6 +126,13 @@ export interface ModelPricing {
 }
 
 export type PricingTable = Record<string, ModelPricing>;
+
+export interface ExactPricingOptions {
+  fetchGenerationCost?: (id: string) => Promise<OpenRouterGenerationCost | null>;
+  concurrency?: number;
+  enabled?: boolean;
+  logger?: Pick<Console, 'warn'>;
+}
 
 // ────────────────────────────────────────────────────────────────
 // Project directory resolution
@@ -262,10 +278,38 @@ function setOptionalNumber(target: WorkflowCostAttributionModel, key: keyof Work
   }
 }
 
+function mergePricingSource(
+  current: WorkflowCostPricingSource | undefined,
+  next: WorkflowCostPricingSource,
+): WorkflowCostPricingSource {
+  return current === undefined || current === next ? next : 'mixed';
+}
+
+function usageFromNativeTurn(
+  turn: NativeSessionUsageRecord['turns'][number],
+): Omit<ModelTokenUsage, 'costUsd'> {
+  return {
+    inputTokens: turn.inputTokens ?? 0,
+    cacheCreationTokens: turn.cacheCreationTokens ?? 0,
+    cacheReadTokens: turn.cacheReadTokens ?? 0,
+    outputTokens: turn.outputTokens ?? 0,
+  };
+}
+
+function usageFromNativeSession(session: NativeSessionUsageRecord): Omit<ModelTokenUsage, 'costUsd'> {
+  return {
+    inputTokens: session.inputTokens ?? 0,
+    cacheCreationTokens: session.cacheCreationTokens ?? 0,
+    cacheReadTokens: session.cacheReadTokens ?? 0,
+    outputTokens: session.outputTokens ?? 0,
+  };
+}
+
 function computeNativeWorkflowCost(
   scanResult: SessionUsageResult,
   pricingTable: PricingTable,
   repoDir: string | undefined,
+  exactCosts?: ReadonlyMap<string, OpenRouterGenerationCost | null>,
 ): WorkflowCostResult {
   const registry = getEffectiveRegistry(repoDir);
   const pricingUsed: Record<string, ModelPricing> = {};
@@ -280,6 +324,8 @@ function computeNativeWorkflowCost(
   let hasNonZeroCost = false;
   let allPricedSessionsAreKnownZero = true;
   let usedProviderReportedCost = false;
+  let usedLocalEstimateFallback = false;
+  let exactPricingAttempted = false;
   const reasons = new Set<WorkflowCostAttributionReason>();
 
   for (const session of scanResult.nativeSessions ?? []) {
@@ -304,12 +350,48 @@ function computeNativeWorkflowCost(
     model.cacheReadTokens = (model.cacheReadTokens ?? 0) + (session.cacheReadTokens ?? 0);
     model.cacheCreationTokens = (model.cacheCreationTokens ?? 0) + (session.cacheCreationTokens ?? 0);
     model.totalTokens = (model.totalTokens ?? 0) + (session.totalTokens ?? 0);
-    if (providerCost !== undefined) {
-      model.providerReportedCostUsd = (model.providerReportedCostUsd ?? 0) + providerCost;
-    }
 
     let sessionCost: number | undefined;
     let reason: WorkflowCostAttributionReason | undefined;
+    let sessionPricingSource: WorkflowCostPricingSource | undefined;
+
+    if (exactCosts && session.turns.length > 0) {
+      for (const turn of session.turns) {
+        const exactCost = turn.responseId ? exactCosts.get(turn.responseId) : undefined;
+        if (turn.responseId && exactCosts.has(turn.responseId)) {
+          exactPricingAttempted = true;
+        }
+        if (exactCost) {
+          const cost = exactCost.totalCostUsd;
+          sessionCost = (sessionCost ?? 0) + cost;
+          model.providerReportedCostUsd = (model.providerReportedCostUsd ?? 0) + cost;
+          sessionPricingSource = mergePricingSource(sessionPricingSource, 'openrouter_api');
+          usedProviderReportedCost = true;
+          continue;
+        }
+
+        if (turn.invalidUsage) {
+          reason ??= 'invalid_token_usage';
+          continue;
+        }
+        if (!turn.usageAvailable) {
+          reason ??= 'missing_token_usage';
+          continue;
+        }
+        if (!pricing) {
+          reason ??= 'unpriced_model';
+          continue;
+        }
+
+        const cost = computeModelCost(usageFromNativeTurn(turn), pricing);
+        sessionCost = (sessionCost ?? 0) + cost;
+        pricingUsed[canonicalModelId] = pricing;
+        sessionPricingSource = mergePricingSource(sessionPricingSource, 'local_estimate');
+        if (turn.responseId) {
+          usedLocalEstimateFallback = true;
+        }
+      }
+    } else {
     // A provider that simply omits cost reports 0, which is indistinguishable
     // from a genuinely free call. Trusting it zeroed the cost of every
     // OpenRouter-backed run that had real token usage. Only accept a reported
@@ -329,6 +411,10 @@ function computeNativeWorkflowCost(
     if (providerCostIsTrustworthy) {
       sessionCost = providerCost;
       usedProviderReportedCost = true;
+      sessionPricingSource = 'openrouter_api';
+      if (providerCost !== undefined) {
+        model.providerReportedCostUsd = (model.providerReportedCostUsd ?? 0) + providerCost;
+      }
     } else if (session.invalidUsage) {
       reason = 'invalid_token_usage';
     } else if (!session.usageAvailable) {
@@ -337,15 +423,12 @@ function computeNativeWorkflowCost(
       reason = 'unpriced_model';
     } else {
       sessionCost = computeModelCost(
-        {
-          inputTokens: session.inputTokens ?? 0,
-          cacheCreationTokens: session.cacheCreationTokens ?? 0,
-          cacheReadTokens: session.cacheReadTokens ?? 0,
-          outputTokens: session.outputTokens ?? 0,
-        },
+        usageFromNativeSession(session),
         pricing,
       );
       pricingUsed[canonicalModelId] = pricing;
+      sessionPricingSource = 'local_estimate';
+    }
     }
 
     if (sessionCost !== undefined) {
@@ -353,6 +436,9 @@ function computeNativeWorkflowCost(
       totalCostUsd += sessionCost;
       model.costUsd = (model.costUsd ?? 0) + sessionCost;
       model.priced = true;
+      if (sessionPricingSource) {
+        model.pricingSource = mergePricingSource(model.pricingSource, sessionPricingSource);
+      }
       if (sessionCost > 0) {
         hasNonZeroCost = true;
       }
@@ -382,7 +468,7 @@ function computeNativeWorkflowCost(
 
   const coverage: WorkflowCostAttributionCoverage = pricedSessions === 0
     ? 'unavailable'
-    : hasUnavailable
+    : hasUnavailable || (exactPricingAttempted && usedLocalEstimateFallback)
       ? 'partial'
       : !hasNonZeroCost && allPricedSessionsAreKnownZero
         ? 'known_zero'
@@ -425,6 +511,9 @@ function computeNativeWorkflowCost(
         setOptionalNumber(sanitized, 'providerReportedCostUsd', model.providerReportedCostUsd);
         if (model.reason) {
           sanitized.reason = model.reason;
+        }
+        if (model.pricingSource) {
+          sanitized.pricingSource = model.pricingSource;
         }
         return sanitized;
       }),
@@ -549,6 +638,9 @@ export function computeWorkflowCost(opts: {
   let totalCostUsd = 0;
   const modelsWithCost: Record<string, ModelTokenUsage> = {};
   const pricingUsed: Record<string, ModelPricing> = {};
+  const attributionModels: WorkflowCostAttributionModel[] = [];
+  let pricedSessions = 0;
+  let unpricedSessions = 0;
 
   for (const [modelId, usage] of Object.entries(scanResult.models)) {
     const pricing = pricingTable[modelId];
@@ -558,12 +650,40 @@ export function computeWorkflowCost(opts: {
       costUsd = computeModelCost(usage, pricing);
       // Capture pricing snapshot for models that were actually used
       pricingUsed[modelId] = pricing;
+      pricedSessions++;
+    } else {
+      unpricedSessions++;
     }
     // If model not in pricing table, cost stays 0 (best-effort)
 
     modelsWithCost[modelId] = { ...usage, costUsd };
     totalCostUsd += costUsd;
+    attributionModels.push({
+      provider: scanResult.source ?? 'claude',
+      modelId,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      cacheReadTokens: usage.cacheReadTokens,
+      cacheCreationTokens: usage.cacheCreationTokens,
+      totalTokens: usage.inputTokens + usage.cacheCreationTokens + usage.cacheReadTokens + usage.outputTokens,
+      costUsd,
+      priced: !!pricing,
+      ...(pricing ? { pricingSource: 'local_estimate' as const } : { reason: 'unpriced_model' as const }),
+    });
   }
+
+  const attribution = (scanResult.source === 'codex' || unpricedSessions > 0)
+    ? {
+        source: (scanResult.source === 'codex' ? 'codex' : 'claude') as 'codex' | 'claude',
+        coverage: unpricedSessions > 0 ? 'partial' as const : 'complete' as const,
+        ...(unpricedSessions > 0 ? { reason: 'unpriced_model' as const } : {}),
+        sessions: scanResult.sessionCount,
+        turns: scanResult.turnCount,
+        pricedSessions,
+        unpricedSessions,
+        models: attributionModels,
+      }
+    : undefined;
 
   return {
     totalCostUsd,
@@ -572,7 +692,81 @@ export function computeWorkflowCost(opts: {
     turnCount: scanResult.turnCount,
     status: 'success',
     pricingUsed,
+    ...(attribution ? { attribution } : {}),
   };
+}
+
+export async function computeWorkflowCostWithExactPricing(
+  opts: Parameters<typeof computeWorkflowCost>[0] & { exact?: ExactPricingOptions },
+): Promise<WorkflowCostOutcome> {
+  const baseline = computeWorkflowCost(opts);
+  if (baseline.status !== 'success') {
+    return baseline;
+  }
+  if (process.env.WAVEMILL_DISABLE_OPENROUTER_COST === '1') {
+    return baseline;
+  }
+
+  const enabled = opts.exact?.enabled ?? !!process.env.OPENROUTER_API_KEY;
+  if (!enabled) {
+    return baseline;
+  }
+
+  const scanResult = new NativeSessionAdapter().scan({
+    worktreePath: opts.worktreePath,
+    branchName: opts.branchName,
+    repoDir: opts.repoDir,
+    issueId: opts.issueId,
+  });
+  if (!scanResult || scanResult.source !== 'native' || !scanResult.nativeSessions?.length) {
+    return baseline;
+  }
+
+  const responseIds = scanResult.nativeSessions.flatMap((session) => session.responseIds);
+  if (responseIds.length === 0) {
+    return computeNativeWorkflowCost(
+      scanResult,
+      opts.pricingTable && Object.keys(opts.pricingTable).length > 0 ? opts.pricingTable : loadPricingTable(opts.repoDir),
+      opts.repoDir,
+    );
+  }
+
+  const exactCosts = opts.exact?.fetchGenerationCost
+    ? await fetchWithInjectedCost(responseIds, opts.exact.fetchGenerationCost, opts.exact.concurrency)
+    : await fetchGenerationCostsBatched(responseIds, { concurrency: opts.exact?.concurrency });
+  const failedCount = [...exactCosts.values()].filter((cost) => cost === null).length;
+  if (failedCount > 0) {
+    opts.exact?.logger?.warn?.(`[COST] OpenRouter exact cost unavailable for ${failedCount} generation(s); using local pricing fallback`);
+  }
+
+  return computeNativeWorkflowCost(
+    scanResult,
+    opts.pricingTable && Object.keys(opts.pricingTable).length > 0 ? opts.pricingTable : loadPricingTable(opts.repoDir),
+    opts.repoDir,
+    exactCosts,
+  );
+}
+
+async function fetchWithInjectedCost(
+  generationIds: readonly string[],
+  fetchGenerationCost: (id: string) => Promise<OpenRouterGenerationCost | null>,
+  concurrency = 6,
+): Promise<Map<string, OpenRouterGenerationCost | null>> {
+  const uniqueIds = [...new Set(generationIds)];
+  const results = new Map<string, OpenRouterGenerationCost | null>();
+  let nextIndex = 0;
+  async function worker(): Promise<void> {
+    while (nextIndex < uniqueIds.length) {
+      const id = uniqueIds[nextIndex++];
+      try {
+        results.set(id, await fetchGenerationCost(id));
+      } catch {
+        results.set(id, null);
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(Math.max(1, concurrency), uniqueIds.length) }, () => worker()));
+  return results;
 }
 
 // ────────────────────────────────────────────────────────────────

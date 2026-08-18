@@ -10,7 +10,9 @@ import {
   HOKUSAI_ENDPOINT_TOKEN_ENV,
   HOKUSAI_BATCH_SIZE,
   HOKUSAI_DEFAULT_MODEL_ID,
+  LEGACY_UNSCOPED_ENDPOINT,
   buildHokusaiContributionEndpoint,
+  migrateContributionEndpoint,
 } from './hokusai-local-config.ts';
 
 const tempDirs: string[] = [];
@@ -89,6 +91,126 @@ describe('hokusai-local-config', () => {
         hokusai: { contributions: { endpoint: string } };
       };
       assert.equal(written.hokusai.contributions.endpoint, 'https://custom.example.com/v1/contributions');
+    });
+
+    it('self-heals a legacy overlay before configuring upload', () => {
+      const repoDir = makeTempRepo({
+        hokusai: {
+          contributions: {
+            endpoint: LEGACY_UNSCOPED_ENDPOINT,
+            endpointTokenEnv: 'HOKUSAI_API_KEY',
+            exportPath: '.wavemill/hokusai/contributions.jsonl',
+          },
+        },
+      });
+
+      const result = configureContributionUpload({ repoDir });
+
+      assert.equal(result.action, 'updated');
+      const written = JSON.parse(readFileSync(result.localConfigPath, 'utf-8')) as {
+        hokusai: { contributions: { endpoint: string; endpointTokenEnv: string; exportPath: string } };
+      };
+      assert.equal(written.hokusai.contributions.endpoint, HOKUSAI_CONTRIBUTION_ENDPOINT);
+      assert.equal(written.hokusai.contributions.endpointTokenEnv, HOKUSAI_ENDPOINT_TOKEN_ENV);
+      assert.equal(written.hokusai.contributions.exportPath, '.wavemill/hokusai/contributions.jsonl');
+    });
+  });
+
+  describe('migrateContributionEndpoint', () => {
+    it('returns absent when no local overlay exists', () => {
+      const repoDir = makeTempRepo();
+      const result = migrateContributionEndpoint({ repoDir });
+
+      assert.equal(result.action, 'absent');
+      assert.equal(result.localConfigPath, join(repoDir, '.wavemill-config.local.json'));
+    });
+
+    it('leaves an already model-scoped overlay unchanged', () => {
+      const repoDir = makeTempRepo({
+        hokusai: {
+          contributions: {
+            endpoint: HOKUSAI_CONTRIBUTION_ENDPOINT,
+            endpointTokenEnv: 'HOKUSAI_API_KEY',
+          },
+        },
+      });
+
+      const result = migrateContributionEndpoint({ repoDir });
+
+      assert.equal(result.action, 'unchanged');
+      const written = JSON.parse(readFileSync(result.localConfigPath, 'utf-8')) as {
+        hokusai: { contributions: { endpoint: string; endpointTokenEnv: string } };
+      };
+      assert.equal(written.hokusai.contributions.endpoint, HOKUSAI_CONTRIBUTION_ENDPOINT);
+      assert.equal(written.hokusai.contributions.endpointTokenEnv, 'HOKUSAI_API_KEY');
+    });
+
+    it('leaves legitimate custom endpoints unchanged', () => {
+      const repoDir = makeTempRepo({
+        hokusai: {
+          contributions: {
+            endpoint: 'https://staging.example.com/api/v1/contributions',
+          },
+        },
+      });
+
+      const result = migrateContributionEndpoint({ repoDir });
+
+      assert.equal(result.action, 'unchanged');
+      const written = JSON.parse(readFileSync(result.localConfigPath, 'utf-8')) as {
+        hokusai: { contributions: { endpoint: string } };
+      };
+      assert.equal(written.hokusai.contributions.endpoint, 'https://staging.example.com/api/v1/contributions');
+    });
+
+    it('migrates a legacy unscoped overlay and preserves sibling keys', () => {
+      const repoDir = makeTempRepo({
+        mill: { maxParallel: 3 },
+        hokusai: {
+          contributions: {
+            endpoint: 'HTTPS://API.HOKUS.AI/api/v1/contributions/',
+            endpointTokenEnv: 'HOKUSAI_API_KEY',
+            batchSize: 10,
+          },
+        },
+      });
+
+      const result = migrateContributionEndpoint({ repoDir });
+
+      assert.deepEqual(result, {
+        action: 'migrated',
+        localConfigPath: join(repoDir, '.wavemill-config.local.json'),
+        from: 'HTTPS://API.HOKUS.AI/api/v1/contributions/',
+        to: HOKUSAI_CONTRIBUTION_ENDPOINT,
+      });
+      const written = JSON.parse(readFileSync(result.localConfigPath, 'utf-8')) as {
+        mill: { maxParallel: number };
+        hokusai: { contributions: { endpoint: string; endpointTokenEnv: string; batchSize: number } };
+      };
+      assert.equal(written.mill.maxParallel, 3);
+      assert.equal(written.hokusai.contributions.endpoint, HOKUSAI_CONTRIBUTION_ENDPOINT);
+      assert.equal(written.hokusai.contributions.endpointTokenEnv, 'HOKUSAI_API_KEY');
+      assert.equal(written.hokusai.contributions.batchSize, 10);
+    });
+
+    it('reports dry-run migration without writing', () => {
+      const repoDir = makeTempRepo({
+        hokusai: {
+          contributions: {
+            endpoint: LEGACY_UNSCOPED_ENDPOINT,
+          },
+        },
+      });
+
+      const result = migrateContributionEndpoint({ repoDir, dryRun: true });
+
+      assert.equal(result.action, 'migrated');
+      assert.equal(result.from, LEGACY_UNSCOPED_ENDPOINT);
+      assert.equal(result.to, HOKUSAI_CONTRIBUTION_ENDPOINT);
+      const written = JSON.parse(readFileSync(result.localConfigPath, 'utf-8')) as {
+        hokusai: { contributions: { endpoint: string } };
+      };
+      assert.equal(written.hokusai.contributions.endpoint, LEGACY_UNSCOPED_ENDPOINT);
     });
   });
 

@@ -28,6 +28,7 @@ TESTS=(
   challenge-intent-roundtrip.test.sh
   challenge-varied-model-abort.test.sh
   native-terminal-failure.test.sh
+  native-agent-shell-operators.test.sh
   hook-write-context-guard.test.sh
   expansion-handshake.test.sh
   config-version-prompt.test.sh
@@ -37,6 +38,7 @@ TESTS=(
   log-hygiene.test.sh
   lifecycle-scenarios.test.sh
   lifecycle-harness.test.sh
+  archive-stage-artifacts.test.sh
   cleanup-branch.test.sh
   error-recovery.test.sh
   planning-validation.test.sh
@@ -59,6 +61,7 @@ TESTS=(
   wavemill-mill-session.test.sh
   merge-retry-marker.test.sh
   openrouter-warning-surfaces.test.sh
+  hokusai-test-registration.test.sh
   global-model-parity.test.sh
 )
 

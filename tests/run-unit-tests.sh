@@ -27,7 +27,9 @@ TESTS=(
   shared/lib/eval-prompt-size.test.ts
   shared/lib/eval.test.js
   shared/lib/json-repair.test.ts
+  shared/lib/operator-intervention.test.ts
   shared/lib/intervention-detector.test.ts
+  shared/lib/stage-result.test.ts
   shared/lib/session-adapters.test.ts
   shared/lib/native-agent/provider.test.ts
   shared/lib/native-agent/providers.test.ts
@@ -54,6 +56,7 @@ TESTS=(
   shared/lib/native-agent/cleanup.test.ts
   shared/lib/native-agent/coding-lifecycle.test.ts
   shared/lib/native-agent/command-transcript.test.ts
+  shared/lib/native-agent/command-argv.test.ts
   shared/lib/native-agent/command-substrate.test.ts
   shared/lib/native-agent/tools/policies.test.ts
   shared/lib/native-agent/tools/registry.test.ts
@@ -122,8 +125,11 @@ TESTS=(
   shared/lib/model-resolution-display.test.ts
   shared/lib/mill-config-preflight.test.ts
   shared/lib/routing-policy.test.ts
+  shared/lib/hokusai-adapter.test.ts
   shared/lib/hokusai-consent.test.ts
   shared/lib/hokusai-redaction.test.ts
+  shared/lib/hokusai-router.test.ts
+  shared/lib/hokusai-schema.test.ts
   shared/lib/hokusai-router-audit.test.ts
   shared/lib/hokusai-contribution-schema.test.ts
   shared/lib/hokusai-contribution-builder.test.ts
@@ -175,6 +181,7 @@ TESTS=(
   shared/lib/plan-queue-utils.test.ts
   shared/lib/scaffold-migrate-dryrun.test.ts
   shared/lib/deepseek-smoke.test.ts
+  shared/lib/seam-artifacts.test.ts
   shared/lib/blocked-completion.test.ts
   shared/lib/task-contract.test.ts
   shared/lib/feature-state.test.ts
@@ -198,6 +205,7 @@ TESTS=(
   tools/parity-report.test.ts
   tools/resolve-challenge-task.test.ts
   tools/route-tasks.test.ts
+  tools/seam-artifact-cli.test.ts
   tools/plan-queue.test.ts
   tools/select-wave.test.ts
   tools/smoke-deepseek.test.ts
