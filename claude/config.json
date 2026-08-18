@@ -1,7 +1,7 @@
 {
   "linear": {
-    "defaultProject": "Hokusai infrastructure",
-    "projects": ["Hokusai infrastructure", "Hokusai data pipeline"]
+    "defaultProject": "wavemill",
+    "projects": ["wavemill", "Hokusai infrastructure", "Hokusai data pipeline"]
   },
   "git": {
     "featurePrefix": "feature",
