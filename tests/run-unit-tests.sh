@@ -35,6 +35,7 @@ TESTS=(
   shared/lib/native-agent/providers.test.ts
   shared/lib/native-agent/messages.test.ts
   shared/lib/native-agent/compaction.test.ts
+  shared/lib/native-agent/context-window-guard.test.ts
   shared/lib/native-agent/pi-usage-cost.test.ts
   shared/lib/native-agent/provenance.test.ts
   shared/lib/native-agent/redaction.test.ts

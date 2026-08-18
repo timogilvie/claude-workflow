@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, it } from 'node:test';
 import { readStageResult } from '../stage-result.ts';
-import { registerScriptedPiProvider, type ScriptedPiProviderTurn } from './provider.ts';
+import { registerScriptedPiProvider, type ScriptedPiProviderTurn, type ScriptedProviderContext } from './provider.ts';
 import { getCodingFailureHandoffPath, readCodingFailureHandoff } from './coding-failure-handoff.ts';
 import { launchNativeCoding, renderCodingSystemPrompt } from './launch-coding.ts';
 import type { ToolDescriptor } from './tools/types.ts';
@@ -213,6 +213,51 @@ describe('launchNativeCoding', () => {
     assert.equal(stageResult?.artifacts?.type, 'coding');
     assert.equal(stageResult?.artifacts?.filesChanged, 1);
     assert.equal(stageResult?.artifacts?.commitCount, 1);
+  });
+
+  it('fails before the provider when the prompt plus reserved output exceeds the model context window', async () => {
+    const { repoDir, featureDir, slug } = makeRepo();
+    writeFileSync(join(featureDir, 'task-packet.md'), `# Task Packet\n\n${'x'.repeat(40_000)}\n`, 'utf-8');
+    const seen: ScriptedProviderContext[] = [];
+    const api = `native-coding-context-window-${process.pid}-${Date.now()}`;
+    registerScriptedPiProvider({
+      api,
+      provider: 'scripted',
+      turns: (context) => {
+        seen.push(context);
+        return finalTurn('unreachable');
+      },
+    });
+    const model = {
+      id: `scripted:${api}`,
+      name: `scripted:${api}`,
+      api,
+      provider: 'scripted',
+      contextWindow: 40_000,
+    };
+    const hookPath = join(featureDir, 'native-coding.hook');
+
+    await assert.rejects(
+      () => launchNativeCoding({
+        session: 'sess',
+        issue: 'HOK-2772',
+        slug,
+        wtDir: repoDir,
+        repoDir,
+        hookPath,
+        loopModelOverride: model,
+        branch: 'task/context-window',
+      }),
+      /context window/,
+    );
+
+    assert.equal(seen.length, 0);
+    const stageResult = await readStageResult(featureDir, 'coding');
+    assert.equal(stageResult?.status, 'failed');
+    assert.match(stageResult?.failureReason ?? '', /context window/);
+    const hook = JSON.parse(readFileSync(hookPath, 'utf-8')) as Record<string, unknown>;
+    assert.equal(hook.state, 'error');
+    assert.match(String(hook.detail), /context_length_exceeded/);
   });
 
   it('accepts a valid blocked-completion handoff without writing .coding-complete', async () => {
