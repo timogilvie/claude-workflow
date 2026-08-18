@@ -333,6 +333,7 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
         branchName: branch,
         baseBranch: 'main',
         repoDir,
+        worktreePath,
         agentType,
         issueId,
       });

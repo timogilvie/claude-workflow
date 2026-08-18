@@ -139,6 +139,7 @@ async function main(): Promise<void> {
       notes: writeFlags['notes'] ?? '',
       ...(artifacts !== undefined && { artifacts }),
       ...(writeFlags['failure-reason'] !== undefined && { failureReason: writeFlags['failure-reason'] }),
+      ...(existing?.history?.length ? { history: existing.history } : {}),
     };
 
     if (subcommand === 'write-with-history') {

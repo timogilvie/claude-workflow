@@ -27,7 +27,9 @@ TESTS=(
   shared/lib/eval-prompt-size.test.ts
   shared/lib/eval.test.js
   shared/lib/json-repair.test.ts
+  shared/lib/operator-intervention.test.ts
   shared/lib/intervention-detector.test.ts
+  shared/lib/stage-result.test.ts
   shared/lib/session-adapters.test.ts
   shared/lib/native-agent/provider.test.ts
   shared/lib/native-agent/providers.test.ts

@@ -38,6 +38,7 @@ TESTS=(
   log-hygiene.test.sh
   lifecycle-scenarios.test.sh
   lifecycle-harness.test.sh
+  archive-stage-artifacts.test.sh
   cleanup-branch.test.sh
   error-recovery.test.sh
   planning-validation.test.sh

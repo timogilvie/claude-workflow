@@ -165,6 +165,10 @@ export interface InterventionPenaltiesConfig {
   manualEdit?: number;
   testFix?: number;
   sessionRedirect?: number;
+  selfReviewWarning?: number;
+  selfReviewBlocker?: number;
+  operatorRecovery?: number;
+  priorFailedAttempt?: number;
 }
 
 export interface MintEligibilityConfig {

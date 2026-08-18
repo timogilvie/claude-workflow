@@ -475,11 +475,22 @@ await test('enrichPostCompletionRecord attaches direct planner challenge stage e
 await test('runPostCompletionEval passes and persists phase durations', async () => {
   const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-hook-phase-'));
   let capturedEvalInput: Record<string, unknown> | undefined;
+  let capturedInterventionInput: Record<string, unknown> | undefined;
   let persistedRecord: EvalRecord | undefined;
 
   try {
     await withMockedPostCompletionDeps(async () => {
       stubBaseEvalDeps();
+      postCompletionHookDeps.detectAndFormatInterventions = (input) => {
+        capturedInterventionInput = input as Record<string, unknown>;
+        return {
+          meta: [],
+          records: [],
+          text: 'No interventions.',
+          totalCount: 0,
+          summary: makeInterventionSummary(0),
+        };
+      };
       postCompletionHookDeps.evaluateTask = async (input, outcomes) => {
         capturedEvalInput = input as Record<string, unknown>;
         const timeSeconds =
@@ -512,6 +523,8 @@ await test('runPostCompletionEval passes and persists phase durations', async ()
     });
 
     assert.equal(capturedEvalInput?.timeSeconds, 660);
+    assert.equal(capturedInterventionInput?.issueId, 'HOK-1930');
+    assert.equal(capturedInterventionInput?.worktreePath, repoDir);
     assert.deepEqual(persistedRecord?.phaseDurationsSeconds, {
       planning: 120,
       coding: 480,

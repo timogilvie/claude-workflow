@@ -158,6 +158,7 @@
               "environment_fix",
               "prompt_edit",
               "scope_change",
+              "recovery",
               "rollback"
             ],
             "description": "Type of intervention (reason for human involvement)."

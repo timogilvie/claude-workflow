@@ -115,6 +115,8 @@ for fn in \
   finalize_challenge_execution_intent_before_coding \
   resolve_phase \
   _persist_phase \
+  write_stage_result_with_history \
+  _write_stage_result_trace_event \
   ready_base_sha \
   get_main_head_sha \
   ready_stage_allows_merge \
@@ -407,6 +409,10 @@ run_lifecycle_scenario() {
       cat > "$feature_dir/.${stage}-result.json" <<JSON
 {"stage":"$stage","status":"$status","agent":"$agent","model":"$model","notes":"$notes"}
 JSON
+    }
+    # Keep stage-history writes observable through the scenario stage recorder.
+    write_stage_result_with_history() {
+      write_stage_result "$@"
     }
     set_task_phase() {
       CURRENT_PHASE="$2"

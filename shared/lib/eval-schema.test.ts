@@ -780,7 +780,7 @@ function validPromptSizeDiagnostic() {
 }
 
 test('SCHEMA_VERSION is bumped for eval schema updates', () => {
-  assert.equal(SCHEMA_VERSION, '1.37.0');
+  assert.equal(SCHEMA_VERSION, '1.38.0');
 });
 
 test('Record with native workflow cost attribution validates', () => {
@@ -2091,8 +2091,8 @@ test('Wavemill router fields validate and schema stays in parity', () => {
   assert.equal(properties.wavemill_router_scoring?.$ref, '#/$defs/WavemillRouterScoringMetadata');
 });
 
-test('Schema version constant is 1.37.0', () => {
-  assert.equal(SCHEMA_VERSION, '1.37.0');
+test('Schema version constant is 1.38.0', () => {
+  assert.equal(SCHEMA_VERSION, '1.38.0');
 });
 
 test('Record with resolved-model routing validates', () => {

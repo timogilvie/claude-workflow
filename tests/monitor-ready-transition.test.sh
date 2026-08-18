@@ -42,6 +42,10 @@ extract_function "$MILL_SCRIPT" "ready_stage_warn_bypass_once" >> "$MONITOR_FUNC
 extract_function "$MILL_SCRIPT" "ready_stage_pending_verdict" >> "$MONITOR_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "ready_remediation_launch_head" >> "$MONITOR_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "ready_conflict_attention_head" >> "$MONITOR_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "ready_conflict_recheck_interval_seconds" >> "$MONITOR_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "ready_conflict_recheck_due" >> "$MONITOR_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "ready_conflict_pr_is_clean" >> "$MONITOR_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "write_ready_conflict_recheck_at" >> "$MONITOR_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "clear_transient_mergeability_state" >> "$MONITOR_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "monitor_issue_state" >> "$MONITOR_FUNC_FILE"
 
