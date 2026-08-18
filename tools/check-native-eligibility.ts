@@ -34,7 +34,10 @@ try {
     process.exit(1);
   }
 
-  const ready = resolveNativeAgentProviders(repoDir, { phase })
+  const ready = resolveNativeAgentProviders(repoDir, {
+    phase,
+    ...(phase === 'planning' ? { requiredCertificationPhase: 'workflow' as const } : {}),
+  })
     .find((entry) => entry.status === 'ready' && isRoleEligible(entry.modelId, phase));
 
   if (!ready) {

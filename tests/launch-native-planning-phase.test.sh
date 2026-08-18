@@ -278,6 +278,12 @@ CODING_GUARD_REPO="$TMPDIR_TEST/coding-guard-repo"
 mkdir -p "$CODING_GUARD_REPO"
 cat > "$CODING_GUARD_REPO/.wavemill-config.json" <<'EOF'
 {
+  "providers": {
+    "openrouter": {
+      "enabled": true,
+      "apiKeyEnv": "TEST_OPENROUTER_KEY"
+    }
+  },
   "nativeAgent": {
     "enabled": true,
     "allowedPhases": ["task-expansion", "planning", "review"]
@@ -322,20 +328,36 @@ fi
 
 ROLE_REPO="$TMPDIR_TEST/role-guard-repo"
 ROLE_CERT_ROOT="$TMPDIR_TEST/role-guard-global-certs"
-mkdir -p "$ROLE_CERT_ROOT/qwen/qwen3-coder" "$ROLE_REPO"
+mkdir -p "$ROLE_CERT_ROOT/qwen/qwen-2.5-coder-32b-instruct" "$ROLE_CERT_ROOT/qwen/qwen3-coder" "$ROLE_REPO"
 cat > "$ROLE_REPO/.wavemill-config.json" <<'EOF'
 {
+  "providers": {
+    "openrouter": {
+      "enabled": true,
+      "apiKeyEnv": "TEST_OPENROUTER_KEY"
+    }
+  },
   "nativeAgent": {
     "enabled": true,
     "allowedPhases": ["planning", "review"],
     "providers": {
       "openrouter": {
         "enabled": true,
-        "apiKeyEnv": "TEST_OPENROUTER_KEY",
-        "models": ["qwen/qwen3-coder"]
+        "apiKeyEnv": "TEST_OPENROUTER_KEY"
       }
     }
   }
+}
+EOF
+cat > "$ROLE_CERT_ROOT/qwen/qwen-2.5-coder-32b-instruct/v2.json" <<'EOF'
+{
+  "schemaVersion": 2,
+  "provider": "qwen",
+  "model": "qwen-2.5-coder-32b-instruct",
+  "phase": "workflow",
+  "suiteVersion": "v2",
+  "certifiedAt": "2099-01-01T00:00:00.000Z",
+  "scenarios": [{ "scenarioId": "s1", "passed": true }]
 }
 EOF
 cat > "$ROLE_CERT_ROOT/qwen/qwen3-coder/v2.json" <<'EOF'
@@ -351,18 +373,28 @@ cat > "$ROLE_CERT_ROOT/qwen/qwen3-coder/v2.json" <<'EOF'
 EOF
 
 if TEST_OPENROUTER_KEY="sk-test" WAVEMILL_NATIVE_CERTIFICATION_ROOT="$ROLE_CERT_ROOT" npx tsx "$REPO_DIR/tools/check-native-eligibility.ts" "$ROLE_REPO" "planning" >/dev/null 2>&1; then
-  fail "role-ineligible native planner is not selected"
+  pass "qwen-3-coder native planner is selected when workflow-certified"
 else
-  pass "role-ineligible native planner is not selected"
+  fail "qwen-3-coder native planner is selected when workflow-certified"
+fi
+
+if TEST_OPENROUTER_KEY="sk-test" WAVEMILL_NATIVE_CERTIFICATION_ROOT="$ROLE_CERT_ROOT" npx tsx "$REPO_DIR/tools/check-native-agent-launch.ts" \
+  --repo-dir "$ROLE_REPO" \
+  --phase planning \
+  --agent native-openrouter \
+  --model qwen-3-coder >/dev/null 2>&1; then
+  pass "qwen-3-coder native planning preflight passes with workflow cert"
+else
+  fail "qwen-3-coder native planning preflight passes with workflow cert"
 fi
 
 probe_stdout="$TMPDIR_TEST/role-probe.stdout"
 probe_stderr="$TMPDIR_TEST/role-probe.stderr"
 agent_run_tsx_tool() {
-  printf '%s\n' '{"ok":false,"reason":"native provider openrouter/qwen-3-coder is not eligible for planning (eligible roles: coding, review)"}'
+  printf '%s\n' '{"ok":false,"reason":"native provider openrouter/qwen-2.5-coder-32b is not eligible for planning (eligible roles: coding)"}'
   return 1
 }
-if TEST_OPENROUTER_KEY="sk-test" TOOLS_DIR="$REPO_DIR/tools" agent_native_launch_probe "native-openrouter" "planning" "qwen-3-coder" "$ROLE_REPO" >"$probe_stdout" 2>"$probe_stderr"; then
+if TEST_OPENROUTER_KEY="sk-test" TOOLS_DIR="$REPO_DIR/tools" agent_native_launch_probe "native-openrouter" "planning" "qwen-2.5-coder-32b" "$ROLE_REPO" >"$probe_stdout" 2>"$probe_stderr"; then
   fail "role-ineligible native launch probe rejects planner route"
 else
   pass "role-ineligible native launch probe rejects planner route"
@@ -389,9 +421,10 @@ tmux() { :; }
 if TEST_OPENROUTER_KEY="sk-test" \
   TOOLS_DIR="$REPO_DIR/tools" \
   REPO_DIR="$ROLE_REPO" \
+  WAVEMILL_NATIVE_CERTIFICATION_ROOT="$ROLE_CERT_ROOT" \
   WAVEMILL_FEATURE_DIR="$ROLE_REPO/features/demo" \
   WAVEMILL_FEATURE_SLUG="demo" \
-  agent_launch_interactive "sess" "planning" "$BAD_INTERACTIVE_PROMPT" "native-openrouter" "qwen-3-coder" "" "" "HOK-2319_c" \
+  agent_launch_interactive "sess" "planning" "$BAD_INTERACTIVE_PROMPT" "native-openrouter" "qwen-2.5-coder-32b" "" "" "HOK-2319_c" \
     >"$TMPDIR_TEST/bad-interactive.stdout" 2>"$TMPDIR_TEST/bad-interactive.stderr"; then
   fail "interactive native planner rejects role-ineligible qwen route"
 else
@@ -402,7 +435,7 @@ if [[ -f "$BAD_INTERACTIVE_LAUNCHER" ]]; then
 else
   pass "role-ineligible interactive native planner does not write launcher"
 fi
-if grep -Eq "not eligible for planning|Failed to resolve model selector 'qwen-3-coder'|Rejecting invalid model 'qwen-3-coder'|native launch probe failed for native-openrouter/planning|model=qwen-3-coder.*reason=role-ineligible" "$TMPDIR_TEST/bad-interactive.stderr"; then
+if grep -Eq "not eligible for planning|Failed to resolve model selector 'qwen-2.5-coder-32b'|Rejecting invalid model 'qwen-2.5-coder-32b'|native launch probe failed for native-openrouter/planning|model=qwen-2.5-coder-32b.*reason=(role-ineligible|global-projection-missing)" "$TMPDIR_TEST/bad-interactive.stderr"; then
   pass "interactive native planner emits role rejection"
 else
   fail "interactive native planner emits role rejection" "$(cat "$TMPDIR_TEST/bad-interactive.stderr")"

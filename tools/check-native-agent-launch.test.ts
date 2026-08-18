@@ -287,4 +287,22 @@ describe('checkNativeAgentLaunch', () => {
     assert.equal(result.ok ? result.command?.wavemillAlias : undefined, 'qwen-3-coder');
     assert.equal(result.ok ? result.command?.openrouterId : undefined, 'qwen/qwen3-coder');
   });
+
+  it('requires a workflow artifact for native OpenRouter planning readiness', () => {
+    const repoDir = makeRepo(baseConfig());
+    writeOpenRouterCert(repoDir, 'qwen', 'qwen3-coder', 'patch');
+    process.env.TEST_OPENROUTER_KEY = 'sk-test';
+
+    const result = checkNativeAgentLaunch({
+      repoDir,
+      phase: 'planning',
+      agent: 'native-openrouter',
+      model: 'qwen/qwen3-coder',
+    });
+
+    assert.equal(result.ok, false);
+    if (result.ok) assert.fail('expected patch-only planning rejection');
+    assert.match(result.reason, /insufficient_phase/);
+    assert.match(result.reason, /requiredPhase=workflow/);
+  });
 });

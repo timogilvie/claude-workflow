@@ -169,8 +169,8 @@ Initial ladder intent:
 - Review ladder: include `qwen-3-coder`, `kimi-k2`, `deepseek-r1`,
   `gemini-2.5-pro`, `llama-3.3-70b`, and `mistral-large-2`.
 - Planning ladder: include only higher-context/reasoning candidates at first:
-  `kimi-k2`, `deepseek-r1`, `gemini-2.5-pro`, `qwen-3-235b`, and
-  `mistral-large-2`.
+  `qwen-3-coder`, `kimi-k2`, `deepseek-r1`, `gemini-2.5-pro`,
+  `qwen-3-235b`, and `mistral-large-2`, subject to fresh workflow certification.
 
 Acceptance:
 

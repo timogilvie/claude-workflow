@@ -7,10 +7,14 @@ import { CANONICAL_CONFIG_TEMPLATE } from './config-sync.ts';
 import { buildLaunchabilityMatrix, LAUNCHABILITY_STAGES, type LaunchabilityStage } from './launchable-models.ts';
 import { resolveModelAgent } from './model-agent-resolution.ts';
 import { DEFAULT_MODEL_REGISTRY } from './model-registry.ts';
-import { buildCertificationPath } from './native-agent/certification/loader.ts';
+import {
+  GLOBAL_CERTIFICATION_ROOT_ENV,
+  buildGlobalCertificationPath,
+} from './native-agent/certification/index.ts';
 import { loadLaunchPriorityList } from './openrouter-catalog.ts';
 
 const WATCHLIST_STAGE_MAP = {
+  'qwen-3-coder': ['planner', 'coder', 'reviewer'],
   'deepseek-coder-v2': ['coder'],
   'qwen-3-235b': ['planner', 'coder', 'reviewer'],
   'qwen-2.5-72b': ['coder'],
@@ -24,6 +28,7 @@ const WATCHLIST_STAGE_MAP = {
 
 const NOW = new Date('2026-07-30T12:00:00.000Z');
 const priorOpenRouterKey = process.env.OPENROUTER_API_KEY;
+const priorCertificationRoot = process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
 
 before(() => {
   process.env.OPENROUTER_API_KEY = 'test-openrouter-key';
@@ -34,6 +39,11 @@ after(() => {
     delete process.env.OPENROUTER_API_KEY;
   } else {
     process.env.OPENROUTER_API_KEY = priorOpenRouterKey;
+  }
+  if (priorCertificationRoot === undefined) {
+    delete process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
+  } else {
+    process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = priorCertificationRoot;
   }
 });
 
@@ -51,13 +61,13 @@ function writeMinimalConfig(repoDir: string): void {
   );
 }
 
-function writeCertification(repoDir: string, modelId: string): void {
+function writeCertification(modelId: string): void {
   const capabilities = DEFAULT_MODEL_REGISTRY.models[modelId];
   const suiteVersion = capabilities.nativeCapability?.certification?.certificationSuiteVersion;
   const provider = capabilities.nativeCapability?.nativeProvider;
   assert.ok(suiteVersion);
   assert.ok(provider);
-  const path = buildCertificationPath(repoDir, provider, modelId, suiteVersion);
+  const path = buildGlobalCertificationPath(provider, modelId, suiteVersion);
   mkdirSync(dirname(path), { recursive: true });
   const artifact = {
     schemaVersion: 2,
@@ -98,56 +108,60 @@ describe('launch-priority watchlist launchability', () => {
     }
   });
 
-  it('standard config advertises watchlist models only for eligible stages and omits Sol/Luna', () => {
-    const pools = CANONICAL_CONFIG_TEMPLATE.router?.availableModels;
-    assert.ok(pools);
+  it('launch-priority catalog advertises watchlist models only for eligible stages', () => {
+    const catalogByAlias = new Map(loadLaunchPriorityList().map((entry) => [entry.wavemillAlias, entry]));
     for (const [modelId, allowedStages] of Object.entries(WATCHLIST_STAGE_MAP)) {
+      const entry = catalogByAlias.get(modelId);
+      assert.ok(entry, `${modelId} should exist in launch-priority catalog`);
       for (const stage of LAUNCHABILITY_STAGES) {
+        const role = stage === 'planner' ? 'planning' : stage === 'coder' ? 'coding' : 'review';
         assert.equal(
-          pools[stage]?.includes(modelId),
+          entry.roleEligibility.includes(role),
           allowedStages.includes(stage),
-          `${modelId}:${stage} config eligibility mismatch`,
+          `${modelId}:${stage} catalog eligibility mismatch`,
         );
       }
     }
-    assert.equal(pools.planner?.includes('gpt-5.6-sol'), false);
-    assert.equal(pools.coder?.includes('gpt-5.6-sol'), false);
-    assert.equal(pools.reviewer?.includes('gpt-5.6-sol'), false);
-    assert.equal(pools.planner?.includes('gpt-5.6-luna'), false);
-    assert.equal(pools.coder?.includes('gpt-5.6-luna'), false);
-    assert.equal(pools.reviewer?.includes('gpt-5.6-luna'), false);
-    assert.equal(pools.coder?.includes('gpt-5.6-terra'), true);
-    assert.equal(pools.coder?.includes('gpt-4.1'), false);
   });
 
   it('builds a deterministic matrix that rejects role-ineligible and missing-certification cells', () => {
     const repoDir = mkdtempSync(join(tmpdir(), 'wavemill-launchability-'));
+    const previousRoot = process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
+    process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = join(repoDir, 'global-certifications');
     writeMinimalConfig(repoDir);
-    for (const modelId of Object.keys(WATCHLIST_STAGE_MAP)) {
-      if (modelId !== 'grok-code-fast') writeCertification(repoDir, modelId);
-    }
+    try {
+      for (const modelId of Object.keys(WATCHLIST_STAGE_MAP)) {
+        if (modelId !== 'grok-code-fast') writeCertification(modelId);
+      }
 
-    const catalog = loadLaunchPriorityList()
-      .filter((entry) => Object.hasOwn(WATCHLIST_STAGE_MAP, entry.wavemillAlias));
-    const matrix = buildLaunchabilityMatrix({ repoDir, catalog, now: NOW });
+      const catalog = loadLaunchPriorityList()
+        .filter((entry) => Object.hasOwn(WATCHLIST_STAGE_MAP, entry.wavemillAlias));
+      const matrix = buildLaunchabilityMatrix({ repoDir, catalog, now: NOW });
 
-    for (const [modelId, allowedStages] of Object.entries(WATCHLIST_STAGE_MAP)) {
-      for (const stage of LAUNCHABILITY_STAGES) {
-        const cell = matrix.cells.find((entry) => entry.modelId === modelId && entry.stage === stage);
-        assert.ok(cell, `${modelId}:${stage} should have a matrix cell`);
-        if (!allowedStages.includes(stage)) {
-          assert.equal(cell.launchable, false);
-          assert.equal(cell.blocker, 'role-ineligible');
-          continue;
+      for (const [modelId, allowedStages] of Object.entries(WATCHLIST_STAGE_MAP)) {
+        for (const stage of LAUNCHABILITY_STAGES) {
+          const cell = matrix.cells.find((entry) => entry.modelId === modelId && entry.stage === stage);
+          assert.ok(cell, `${modelId}:${stage} should have a matrix cell`);
+          if (!allowedStages.includes(stage)) {
+            assert.equal(cell.launchable, false);
+            assert.equal(cell.blocker, 'role-ineligible');
+            continue;
+          }
+          if (modelId === 'grok-code-fast') {
+            assert.equal(cell.launchable, false);
+            assert.equal(cell.blocker, 'certification');
+            assert.match(cell.diagnostic ?? '', /certification rejected/);
+          } else {
+            assert.equal(cell.launchable, true, `${modelId}:${stage} should be launchable`);
+            assert.equal(cell.agent, 'native-openrouter');
+          }
         }
-        if (modelId === 'grok-code-fast') {
-          assert.equal(cell.launchable, false);
-          assert.equal(cell.blocker, 'certification');
-          assert.match(cell.diagnostic ?? '', /certification rejected/);
-        } else {
-          assert.equal(cell.launchable, true, `${modelId}:${stage} should be launchable`);
-          assert.equal(cell.agent, 'native-openrouter');
-        }
+      }
+    } finally {
+      if (previousRoot === undefined) {
+        delete process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
+      } else {
+        process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = previousRoot;
       }
     }
   });

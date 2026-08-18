@@ -147,7 +147,10 @@ export function checkNativeAgentLaunch(input: CheckNativeAgentLaunchInput): Chec
     }
   }
 
-  const entries = resolveNativeAgentProviders(repoDir, { phase });
+  const entries = resolveNativeAgentProviders(repoDir, {
+    phase,
+    ...(phase === 'planning' ? { requiredCertificationPhase: 'workflow' as const } : {}),
+  });
   const requestedModels = canonicalModelIds(providerName, model);
   const entry = entries.find((candidate) => (
     candidate.providerName === providerName

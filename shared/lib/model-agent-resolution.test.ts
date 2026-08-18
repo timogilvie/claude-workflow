@@ -1,7 +1,32 @@
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, it } from 'node:test';
 import type { ModelRegistry } from './model-registry.ts';
 import { resolveModelAgent } from './model-agent-resolution.ts';
+import { GLOBAL_CERTIFICATION_ROOT_ENV } from './native-agent/certification/index.ts';
+
+const tempRoots: string[] = [];
+const previousGlobalRoot = process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
+
+function useTempGlobalCertRoot(): string {
+  const root = mkdtempSync(join(tmpdir(), 'agent-resolution-cert-'));
+  tempRoots.push(root);
+  process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = root;
+  return root;
+}
+
+afterEach(() => {
+  if (previousGlobalRoot === undefined) {
+    delete process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
+  } else {
+    process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = previousGlobalRoot;
+  }
+  for (const root of tempRoots.splice(0)) {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 function makeRegistry(modelId: string, model: ModelRegistry['models'][string]): ModelRegistry {
   return {
@@ -203,6 +228,38 @@ describe('resolveModelAgent', () => {
   });
 
   it('rejects launch-priority models that are not eligible for the requested phase', () => {
+    const registry = makeRegistry('qwen-2.5-coder-32b', {
+      agent: 'claude-openrouter',
+      nativeCapability: {
+        nativeProvider: 'openrouter',
+        piTransportKind: 'openai-completions',
+        readOnlyNative: 'certified',
+        compatFlags: { thinkingFormat: 'openrouter' },
+        certification: {
+          maxCertifiedPhase: 'workflow',
+          certifiedAt: '2099-01-01T00:00:00.000Z',
+          certificationSuiteVersion: 'v1',
+        },
+      },
+    });
+
+    const result = resolveModelAgent({
+      model: 'qwen-2.5-coder-32b',
+      phase: 'planning',
+      registry,
+      now: new Date('2098-01-01T00:00:00.000Z'),
+    });
+
+    assert.equal(result.ok, false);
+    if (result.ok) {
+      assert.fail('expected rejection');
+    }
+    assert.equal(result.reason, 'role-ineligible');
+    assert.match(result.diagnostic, /phase=planning/);
+    assert.match(result.diagnostic, /certification=eligible-roles:coding/);
+  });
+
+  it('resolves qwen-3-coder as a certified role-eligible planner', () => {
     const registry = makeRegistry('qwen-3-coder', {
       agent: 'claude-openrouter',
       nativeCapability: {
@@ -225,13 +282,39 @@ describe('resolveModelAgent', () => {
       now: new Date('2098-01-01T00:00:00.000Z'),
     });
 
+    assert.deepEqual(result, { ok: true, agent: 'native-openrouter' });
+  });
+
+  it('fails closed for qwen-3-coder planning when the global workflow artifact is missing', () => {
+    const repoDir = useTempGlobalCertRoot();
+    const registry = makeRegistry('qwen-3-coder', {
+      agent: 'claude-openrouter',
+      nativeCapability: {
+        nativeProvider: 'openrouter',
+        piTransportKind: 'openai-completions',
+        readOnlyNative: 'certified',
+        compatFlags: { thinkingFormat: 'openrouter' },
+        certification: {
+          maxCertifiedPhase: 'workflow',
+          certifiedAt: '2099-01-01T00:00:00.000Z',
+          certificationSuiteVersion: 'v2',
+        },
+      },
+    });
+
+    const result = resolveModelAgent({
+      model: 'qwen-3-coder',
+      phase: 'planning',
+      registry,
+      repoDir,
+      now: new Date('2098-01-01T00:00:00.000Z'),
+    });
+
     assert.equal(result.ok, false);
-    if (result.ok) {
-      assert.fail('expected rejection');
-    }
-    assert.equal(result.reason, 'role-ineligible');
-    assert.match(result.diagnostic, /phase=planning/);
-    assert.match(result.diagnostic, /certification=eligible-roles:coding,review/);
+    if (result.ok) assert.fail('expected missing artifact rejection');
+    assert.equal(result.reason, 'uncertified');
+    assert.match(result.diagnostic, /certification=missing_artifact/);
+    assert.match(result.diagnostic, /--provider openrouter --model qwen-3-coder --phase workflow/);
   });
 
   it('rejects stale or phase-insufficient native metadata as uncertified', () => {

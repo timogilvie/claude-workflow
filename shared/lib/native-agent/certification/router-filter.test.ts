@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os';
 import {
   filterNativeModels,
   STAGE_PHASE_REQUIREMENT,
+  type RouterCertificationRejection,
   type RouterRole,
 } from './router-filter.ts';
 import {
@@ -467,6 +468,99 @@ await test('launch-priority roleEligibility rejects coding-only Qwen aliases for
     assert.equal(result.rejected[0]?.requestedLaunchPhase, 'planning');
     assert.equal(result.rejected[0]?.nativeProvider, 'openrouter');
     assert.deepEqual(result.rejected[0]?.eligibleRoles, ['coding']);
+  } finally {
+    cleanup();
+  }
+});
+
+await test('qwen-3-coder planning is admitted only by a fresh workflow artifact', () => {
+  const freshCases: RouterRole[] = ['planner', 'coder', 'reviewer'];
+  for (const role of freshCases) {
+    const { repoDir, cleanup } = makeRepo();
+    try {
+      writeCertArtifact(repoDir, 'qwen', 'qwen3-coder', 'v2', { phase: 'workflow' });
+      const registry = makeOpenRouterRegistry('qwen-3-coder', 'workflow', 'v2');
+      const result = filterNativeModels(['qwen-3-coder'], role, registry, repoDir);
+      assert.deepEqual(result.eligible, ['qwen-3-coder'], `qwen-3-coder should be eligible for ${role}`);
+      assert.deepEqual(result.rejected, [], `qwen-3-coder should not be rejected for ${role}`);
+    } finally {
+      cleanup();
+    }
+  }
+});
+
+await test('qwen-3-coder planning fails closed for invalid workflow artifacts', () => {
+  const cases: Array<{
+    name: string;
+    expected: RouterCertificationRejection['reason'];
+    write?: (repoDir: string) => void;
+  }> = [
+    { name: 'missing', expected: 'missing-artifact' },
+    {
+      name: 'stale',
+      expected: 'stale',
+      write: (repoDir) => writeCertArtifact(repoDir, 'qwen', 'qwen3-coder', 'v2', {
+        phase: 'workflow',
+        certifiedAt: new Date(Date.now() - (CERTIFICATION_TTL_DAYS + 1) * 24 * 60 * 60 * 1000).toISOString(),
+      }),
+    },
+    {
+      name: 'malformed',
+      expected: 'malformed',
+      write: () => {
+        const path = buildGlobalCertificationPath('qwen', 'qwen3-coder', 'v2');
+        mkdirSync(dirname(path), { recursive: true });
+        writeFileSync(path, '{not valid json');
+      },
+    },
+    {
+      name: 'wrong-suite',
+      expected: 'wrong-suite',
+      write: (repoDir) => writeCertArtifact(repoDir, 'qwen', 'qwen3-coder', 'v2', {
+        phase: 'workflow',
+        suiteVersion: 'v1',
+      }),
+    },
+    {
+      name: 'patch-only',
+      expected: 'insufficient-phase',
+      write: (repoDir) => writeCertArtifact(repoDir, 'qwen', 'qwen3-coder', 'v2', { phase: 'patch' }),
+    },
+  ];
+
+  for (const testCase of cases) {
+    const { repoDir, cleanup } = makeRepo();
+    try {
+      testCase.write?.(repoDir);
+      const registry = makeOpenRouterRegistry('qwen-3-coder', 'workflow', 'v2');
+      const result = filterNativeModels(['qwen-3-coder'], 'planner', registry, repoDir);
+      assert.deepEqual(result.eligible, [], `${testCase.name} should not be eligible`);
+      assert.equal(result.rejected.length, 1, `${testCase.name} should produce one rejection`);
+      assert.equal(result.rejected[0]?.reason, testCase.expected, testCase.name);
+      assert.notEqual(result.rejected[0]?.reason, 'role-ineligible', testCase.name);
+      assert.equal(result.rejected[0]?.requestedLaunchPhase, 'planning');
+      assert.equal(result.rejected[0]?.requestedPhase, 'workflow');
+    } finally {
+      cleanup();
+    }
+  }
+});
+
+await test('patch-only qwen-3-coder artifact still admits coding and review but not planning', () => {
+  const { repoDir, cleanup } = makeRepo();
+  try {
+    writeCertArtifact(repoDir, 'qwen', 'qwen3-coder', 'v2', { phase: 'patch' });
+    const registry = makeOpenRouterRegistry('qwen-3-coder', 'workflow', 'v2');
+
+    const planner = filterNativeModels(['qwen-3-coder'], 'planner', registry, repoDir);
+    assert.deepEqual(planner.eligible, []);
+    assert.equal(planner.rejected[0]?.reason, 'insufficient-phase');
+
+    const coder = filterNativeModels(['qwen-3-coder'], 'coder', registry, repoDir);
+    assert.deepEqual(coder.eligible, ['qwen-3-coder']);
+
+    const reviewer = filterNativeModels(['qwen-3-coder'], 'reviewer', registry, repoDir);
+    assert.deepEqual(reviewer.eligible, ['qwen-3-coder']);
   } finally {
     cleanup();
   }

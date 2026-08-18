@@ -40,15 +40,16 @@ launches, not a general list of models that the router knows about.
 | --- | --- | --- | --- | --- |
 | `glm-5.2` | `z-ai/glm-5.2` | yes | yes | yes |
 | `kimi-k2.7-code` | `moonshotai/kimi-k2.7-code` | yes | yes | yes |
-| `qwen-3-coder` | `qwen/qwen3-coder` | no | yes | yes |
+| `qwen-3-coder` | `qwen/qwen3-coder` | yes | yes | yes |
 
 Native coding is enabled by the checked-in `nativeAgent.allowedPhases` and
 `nativeAgent.patchCoding.enabled` settings. The repo-level patch-coding smoke
 artifact certifies the native patch runtime, and the provider/model workflow
 certification artifacts certify the configured OpenRouter model identities.
 
-`qwen-3-coder` is review-executable but not planning-executable because its
-launch-priority role eligibility is `coding` and `review`, not `planning`.
+`qwen-3-coder` is planning-executable only while its global v2 `workflow`
+certification artifact is fresh and valid. Missing, stale, malformed, wrong-suite,
+or phase-insufficient artifacts keep it out of the planner pool.
 
 ## Runability Versus Certification
 
@@ -60,10 +61,9 @@ Native model rollout has two separate gates:
 2. **Launch runability** proves that the exact phase/model pair can pass
    preflight for the current repository configuration and environment.
 
-A model can be certified but still not launchable for a specific phase. The
-remaining `qwen-3-coder` planning rejection is the main example: the model is
-known and certified for native execution, but its role eligibility excludes
-planning.
+A model can be certified but still not launchable for a specific phase. A
+patch-only `qwen-3-coder` artifact remains launchable for coding and review, but
+planning requires a `workflow` artifact and fails closed otherwise.
 
 Use this preflight command when checking a specific launch path:
 

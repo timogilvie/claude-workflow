@@ -109,7 +109,7 @@ describe('validateNativeOpenRouterConfig', () => {
     try {
       const result = validateNativeOpenRouterConfig({
         repoDir,
-        model: 'qwen-3-coder',
+        model: 'qwen-2.5-coder-32b',
         phase: 'planning',
       });
 
@@ -117,6 +117,22 @@ describe('validateNativeOpenRouterConfig', () => {
       const mismatch = result.blockers.find((blocker) => blocker.code === 'global-projection-missing');
       assert.ok(mismatch, 'expected a global projection blocker');
       assert.equal(mismatch?.surface, 'globalEffectiveModels.planning');
+    } finally {
+      cleanup(repoDir);
+    }
+  });
+
+  it('includes qwen-3-coder in the global planning projection', () => {
+    const repoDir = makeRepo(baseConfig());
+    try {
+      const result = validateNativeOpenRouterConfig({
+        repoDir,
+        model: 'qwen-3-coder',
+        phase: 'planning',
+      });
+
+      assert.equal(result.ok, true, JSON.stringify(result));
+      assert.equal(result.ok ? result.command.openrouterId : undefined, 'qwen/qwen3-coder');
     } finally {
       cleanup(repoDir);
     }

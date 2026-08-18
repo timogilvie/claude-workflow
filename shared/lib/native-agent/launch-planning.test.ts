@@ -9,6 +9,10 @@ import { describe, it } from 'node:test';
 import { registerScriptedPiProvider } from './provider.ts';
 import { describeNativePlanningHelperFailure, launchNativePlanning } from './launch-planning.ts';
 import {
+  GLOBAL_CERTIFICATION_ROOT_ENV,
+  buildGlobalCertificationPath,
+} from './certification/index.ts';
+import {
   parseNativePlanningApprovalCommand,
   resolveNativePlanningApprovalMode,
   runNativePlanningApprovalGate,
@@ -51,6 +55,20 @@ function setupWorktree(): { wtDir: string; featureDir: string; packetPath: strin
 
 function cleanup(path: string): void {
   rmSync(path, { recursive: true, force: true });
+}
+
+function writeOpenRouterCert(provider: string, model: string, phase = 'workflow'): void {
+  const path = buildGlobalCertificationPath(provider, model, 'v2');
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify({
+    schemaVersion: 2,
+    provider,
+    model,
+    phase,
+    suiteVersion: 'v2',
+    certifiedAt: '2099-01-01T00:00:00.000Z',
+    scenarios: [{ scenarioId: 's1', passed: true }],
+  }, null, 2), 'utf-8');
 }
 
 function scriptedModel(api: string) {
@@ -715,6 +733,44 @@ describe('launchNativePlanning', () => {
       assert.equal(result.model, 'moonshotai/kimi-k2.7-code');
       assert.match(readFileSync(join(featureDir, 'plan.md'), 'utf-8'), /# Kimi Provider/);
     } finally {
+      cleanup(wtDir);
+    }
+  });
+
+  it('requires a workflow artifact when resolving qwen-3-coder for planning', async () => {
+    const { wtDir } = setupWorktree();
+    const certRoot = mkdtempSync(join(tmpdir(), 'launch-planning-cert-'));
+    const previousRoot = process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
+    const previousKey = process.env.OPENROUTER_API_KEY;
+    process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = certRoot;
+    process.env.OPENROUTER_API_KEY = 'sk-test';
+    writeOpenRouterCert('qwen', 'qwen3-coder', 'patch');
+
+    try {
+      await assert.rejects(
+        () => launchNativePlanning({
+          session: 'sess',
+          issue: 'HOK-2779_c',
+          slug: 'demo',
+          wtDir,
+          repoDir: REPO_DIR,
+          resolvedModel: 'qwen-3-coder',
+          runTsxCommand: stubRunTsxCommand(),
+        }),
+        /Native planning requested model "qwen-3-coder", but no ready native provider matched it|No ready native provider is configured for phase=planning|qwen-3-coder rejected \(reason=insufficient_phase/,
+      );
+    } finally {
+      if (previousRoot === undefined) {
+        delete process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
+      } else {
+        process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = previousRoot;
+      }
+      if (previousKey === undefined) {
+        delete process.env.OPENROUTER_API_KEY;
+      } else {
+        process.env.OPENROUTER_API_KEY = previousKey;
+      }
+      cleanup(certRoot);
       cleanup(wtDir);
     }
   });

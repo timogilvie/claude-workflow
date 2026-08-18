@@ -596,20 +596,20 @@ test('exploration recommendations skip stages a model cannot serve', () => {
   try {
     const result = evaluateChallenge({
       routingDecision: makeDecision({ confidence: 0.95 }),
-      // qwen-3-coder is role-ineligible as a planner, so its uncovered plan
+      // qwen-2.5-coder-32b is role-ineligible as a planner, so its uncovered plan
       // cell must not be recommended even though it sorts first on count.
-      challengeModels: ['qwen-3-coder'],
+      challengeModels: ['qwen-2.5-coder-32b'],
       evalSummary: {
         totalRecords: 20,
-        recordsByModel: { 'qwen-3-coder': 0 },
+        recordsByModel: { 'qwen-2.5-coder-32b': 0 },
         recordsByStage: { plan: 20, implementation: 20, review: 20 },
-        recordsByModelStage: { 'qwen-3-coder': {} },
+        recordsByModelStage: { 'qwen-2.5-coder-32b': {} },
       },
       config: { enabled: true, confidenceThreshold: 0.5, newModelChallengeCount: 5, minEvalRecordsPerStage: 1 },
       repoDir,
     });
 
-    assert.equal(result.challengerModel, 'qwen-3-coder');
+    assert.equal(result.challengerModel, 'qwen-2.5-coder-32b');
     assert.notEqual(result.stage, 'plan');
   } finally {
     cleanup();

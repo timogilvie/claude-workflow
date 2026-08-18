@@ -554,7 +554,10 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
     const registryMetadata = options.registryMetadataOverride ?? registry.list();
 
     const providerEntries = options.providerEntries
-      ?? resolveNativeAgentProviders(options.repoDir, { phase: 'planning' });
+      ?? resolveNativeAgentProviders(options.repoDir, {
+        phase: 'planning',
+        requiredCertificationPhase: 'workflow',
+      });
     const readyProviders = providerEntries.filter(
       (entry): entry is ReadyNativeProviderEntry => entry.status === 'ready',
     );
@@ -569,7 +572,7 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
     }
 
     if (!readyProvider && !options.loopModelOverride) {
-      throw new Error(buildNativeProviderResolutionFailureMessage('planning', providerEntries));
+      throw new Error(buildNativeProviderResolutionFailureMessage('planning', providerEntries, 'workflow'));
     }
 
     const taskPacket = readFileSync(taskPacketPath, 'utf-8');

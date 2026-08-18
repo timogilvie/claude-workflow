@@ -1,0 +1,96 @@
+{
+  "schemaVersion": 1,
+  "issue": "HOK-2779",
+  "generatedAt": "2026-08-18T16:37:12.759Z",
+  "dryRun": false,
+  "model": {
+    "alias": "qwen-3-coder",
+    "openrouterId": "qwen/qwen3-coder"
+  },
+  "artifact": {
+    "path": "/Users/timothyogilvie/.wavemill/native-agent-certifications/qwen/qwen3-coder/v2.json",
+    "present": true,
+    "certifiedAt": "2026-08-17T21:38:17.963Z",
+    "phase": "workflow",
+    "suiteVersion": "v2",
+    "scenarioCount": 24
+  },
+  "gates": {
+    "gateOk": true,
+    "preflight": {
+      "ok": true,
+      "phase": "planning",
+      "agent": "native-openrouter",
+      "model": "qwen-3-coder",
+      "provider": "openrouter",
+      "command": {
+        "agent": "native-openrouter",
+        "provider": "openrouter",
+        "wavemillAlias": "qwen-3-coder",
+        "openrouterId": "qwen/qwen3-coder",
+        "providerName": "qwen",
+        "providerModel": "qwen3-coder",
+        "commandModel": "qwen/qwen3-coder",
+        "apiBaseUrl": "https://openrouter.ai/api/v1",
+        "apiKeyEnv": "OPENROUTER_API_KEY"
+      },
+      "launcher": "native-planning"
+    },
+    "router": {
+      "eligible": [
+        "qwen-3-coder"
+      ],
+      "rejected": []
+    },
+    "resolution": {
+      "ok": true,
+      "agent": "native-openrouter"
+    },
+    "advertisedPlanner": true
+  },
+  "launch": {
+    "planPath": "/var/folders/0v/2l0qx62n3tgf2p_32p6_0_ww0000gn/T/hok2779-qwen-planning-lzwX8S/features/hok-2779-qwen-planning-canary/plan.md",
+    "approvalMarkerPath": "/var/folders/0v/2l0qx62n3tgf2p_32p6_0_ww0000gn/T/hok2779-qwen-planning-lzwX8S/features/hok-2779-qwen-planning-canary/.plan-approved",
+    "hookPath": "/tmp/wavemill-hok2779-HOK-2779.hook",
+    "provider": "openrouter",
+    "model": "qwen/qwen3-coder",
+    "stopReason": "stop",
+    "transcriptPath": "/Users/timothyogilvie/Dropbox/wavemill/worktrees/qualify-qwen-3-coder-for-native-openrouter-planning/.wavemill/runs/hok2779/native-sessions/planning-HOK-2779.jsonl",
+    "planBytes": 1656,
+    "transcriptBytes": 37436,
+    "planningResult": {
+      "stage": "planning",
+      "status": "awaiting_user",
+      "startedAt": "2026-08-18T16:37:12.537Z",
+      "finishedAt": null,
+      "agent": "native",
+      "model": "qwen/qwen3-coder",
+      "notes": "Native planning ready for approval",
+      "artifacts": {
+        "type": "planning",
+        "planFile": "features/hok-2779-qwen-planning-canary/plan.md",
+        "taskPacketFile": "features/hok-2779-qwen-planning-canary/task-packet.md",
+        "bounds": {
+          "maxTurns": 40,
+          "maxToolCalls": 120,
+          "maxWallClockMs": 1200000
+        },
+        "usage": {
+          "turnsCompleted": 1,
+          "toolCallsExecuted": 0,
+          "wallClockMs": 3690,
+          "totalInputTokens": 209,
+          "totalOutputTokens": 370
+        },
+        "promptRef": {
+          "id": "prompt:native-read-only-phase@sha256:cc12bb63bfdd",
+          "version": "sha256:cc12bb63bfdd"
+        },
+        "planArtifactValid": true,
+        "approvalReady": true
+      },
+      "failureReason": null
+    }
+  },
+  "launchError": null
+}
