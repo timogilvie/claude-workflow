@@ -17,8 +17,8 @@ Use this skill when:
 ## Instructions
 
 ### Step 1: Determine Project Name
-- Check CLAUDE.md for the correct Linear project name
-- Common projects: "SalesBot MVP", "Hokusai data pipeline", "Hokusai infrastructure"
+- Prefer `linear.defaultProject` from `claude/config.json` (currently "wavemill"); CLAUDE.md may also name the project
+- Common projects: "wavemill", "SalesBot MVP", "Hokusai data pipeline", "Hokusai infrastructure"
 - If unclear, ask the user which project to use
 
 ### Step 2: Fetch Linear Backlog
