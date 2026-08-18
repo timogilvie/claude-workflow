@@ -282,7 +282,9 @@ The four pipeline stages are:
 - `tend`: runs the integration queue, rebases the selected PR onto `auto/integration`, waits for PR checks, reruns ready-policy enforcement, and merges one candidate at a time.
 - `promote`: opens or refreshes the `auto/integration -> main` promotion PR and reports whether that release PR is green.
 
-When `integration.enabled` and `integration.useMillSession` are both `true`, mill starts a dedicated `backstage` tmux window inside the existing mill session and runs the tend loop there with the normal session lifecycle. For tests and manual debugging, `wavemill tend --once --repo-dir <repo>` still runs a single pass without starting mill mode.
+When `integration.enabled` and `integration.useMillSession` are both `true`, mill starts a dedicated `backstage` tmux window inside the existing mill session and runs the tend loop there with the normal session lifecycle. The loop survives transient GitHub, network, rate-limit, and timeout failures by retrying the failed `gh` call first, then backing off the next loop iteration if the outage persists. Fatal state such as invalid config, auth failures, programming errors, or a red integration branch after merge still halts the loop.
+
+The backstage watchdog treats a missing tend pane as recoverable. It confirms restarts with a fresh heartbeat using a 30 second window, records slow live starts as pending heartbeat confirmation, and retries failed restarts on an exponential backoff capped at 15 minutes. `needs-user` means the failure has been escalated for visibility, but automatic restart attempts continue. For tests and manual debugging, `wavemill tend --once --repo-dir <repo>` still runs a single pass without starting mill mode.
 
 ### Dependent Task Auto-Dispatch
 

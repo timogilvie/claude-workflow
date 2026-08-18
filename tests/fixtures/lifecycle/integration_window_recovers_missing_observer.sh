@@ -113,6 +113,10 @@ eval "$(extract_function "$MILL" classify_backstage_observer_health)"
 eval "$(extract_function "$MILL" restart_backstage_observer_loop)"
 eval "$(extract_function "$MILL" check_backstage_observer_health)"
 
+BACKSTAGE_RESTART_COOLDOWN=60
+BACKSTAGE_RESTART_BACKOFF_MAX=900
+BACKSTAGE_RESTART_NEEDS_USER_AFTER=3
+
 tmux new-session -d -s "$SESSION" -n mill -x 220 -y 50 -c "$TEST_REPO" 'sleep 300'
 spawn_integration_window
 
@@ -145,7 +149,8 @@ if [[ "$tend_status" != "healthy" || "$observer_status" != "healthy" || "$observ
 fi
 
 tmux kill-pane -t "$recovered_observer_pane"
-wavemill_write_backstage_service_health "$STATE_DIR/backstage-health.json" "observer" "missing-observer-loop" "forced retry state" 1 "2026-01-01T00:00:00Z"
+restart_backstage_observer_loop() { return 1; }
+wavemill_write_backstage_service_health "$STATE_DIR/backstage-health.json" "observer" "missing-observer-loop" "forced retry state" "$BACKSTAGE_RESTART_NEEDS_USER_AFTER" "2026-01-01T00:00:00Z"
 LAST_BACKSTAGE_OBSERVER_HEALTH_CHECK=0
 BACKSTAGE_RESTART_COOLDOWN=0
 check_backstage_observer_health

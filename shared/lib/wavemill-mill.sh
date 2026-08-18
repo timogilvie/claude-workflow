@@ -14862,9 +14862,11 @@ LAST_BACKSTAGE_HEALTH_CHECK=0
 LAST_BACKSTAGE_OBSERVER_HEALTH_CHECK=0
 BACKSTAGE_HEALTH_INTERVAL=30
 BACKSTAGE_RESTART_COOLDOWN=60
+BACKSTAGE_RESTART_BACKOFF_MAX=900
+BACKSTAGE_RESTART_NEEDS_USER_AFTER=3
 BACKSTAGE_TEND_HEARTBEAT_STALE_SECONDS=210
 BACKSTAGE_CLASSIFICATION_HOLD_STALE_SECONDS=900
-BACKSTAGE_TEND_RESTART_CONFIRM_SECONDS=5
+BACKSTAGE_TEND_RESTART_CONFIRM_SECONDS=30
 READY_WATCHDOG_FAILURE_LOG_INTERVAL=60
 LAST_BACKSTAGE_HEALTH_STATUS=""
 LAST_BACKSTAGE_OBSERVER_HEALTH_STATUS=""
@@ -15023,11 +15025,23 @@ restart_backstage_tend_loop() {
 
 backstage_tend_restart_confirmed() {
   local prior_heartbeat="${1:-}" restart_epoch="${2:?restart epoch required}" expected_pane="${3:-}"
-  local deadline now pane_probe pane_summary pane_status _detail _pane_count executor_pane_id heartbeat_at heartbeat_epoch
+  local deadline now pane_probe pane_summary pane_status _detail _pane_count executor_pane_id heartbeat_at heartbeat_epoch expected_seen expected_dead pane_id pane_dead _pane_title _pane_cmd _start_cmd
 
   deadline=$(( $(date +%s) + BACKSTAGE_TEND_RESTART_CONFIRM_SECONDS ))
   while (( $(date +%s) <= deadline )); do
     pane_probe="$(probe_backstage_panes 2>/dev/null || true)"
+    if [[ -n "$expected_pane" ]]; then
+      expected_seen=0
+      expected_dead=0
+      while IFS=$'\t' read -r pane_id _pane_title pane_dead _pane_cmd _start_cmd; do
+        [[ "$pane_id" == "$expected_pane" ]] || continue
+        expected_seen=1
+        [[ "$pane_dead" == "1" ]] && expected_dead=1
+      done <<< "$pane_probe"
+      if [[ "$expected_seen" -eq 0 || "$expected_dead" -eq 1 ]]; then
+        return 1
+      fi
+    fi
     pane_summary="$(classify_backstage_health "$pane_probe")"
     IFS=$'\t' read -r pane_status _detail _pane_count executor_pane_id <<< "$pane_summary"
     if [[ "$pane_status" == "healthy" && ( -z "$expected_pane" || "$executor_pane_id" == "$expected_pane" ) ]]; then
@@ -15040,6 +15054,16 @@ backstage_tend_restart_confirmed() {
     fi
     sleep 0.25
   done
+  return 1
+}
+
+backstage_tend_pane_alive() {
+  local expected_pane="${1:?pane id required}" pane_probe pane_id _pane_title pane_dead _pane_cmd _start_cmd
+  pane_probe="$(probe_backstage_panes 2>/dev/null || true)"
+  while IFS=$'\t' read -r pane_id _pane_title pane_dead _pane_cmd _start_cmd; do
+    [[ "$pane_id" == "$expected_pane" && "$pane_dead" != "1" ]] || continue
+    return 0
+  done <<< "$pane_probe"
   return 1
 }
 
@@ -15116,6 +15140,7 @@ restart_backstage_observer_loop() {
 check_backstage_observer_health() {
   local now health_file merged stale_seconds pane_probe pane_summary pane_status detail pane_count observer_pane_id heartbeat_at
   local prior_attempt_at prior_attempt_count elapsed restart_pane_id
+  local backoff remaining attempt attempt_at next_status next_backoff
 
   now=$(date +%s)
   (( now - LAST_BACKSTAGE_OBSERVER_HEALTH_CHECK < BACKSTAGE_HEALTH_INTERVAL )) && return 0
@@ -15156,10 +15181,11 @@ check_backstage_observer_health() {
     elapsed=$(( now - prior_attempt_epoch ))
   fi
 
-  if (( prior_attempt_count == 0 )); then
-    if [[ "$LAST_BACKSTAGE_OBSERVER_HEALTH_STATUS" != "$pane_status" ]]; then
-      log_warn "Backstage health check detected an unhealthy observer ($pane_status). Attempting one restart in '$WAVEMILL_WINDOW_BACKSTAGE'."
-    fi
+  backoff="$(wavemill_backstage_restart_backoff_seconds "$prior_attempt_count" "$BACKSTAGE_RESTART_COOLDOWN" "$BACKSTAGE_RESTART_BACKOFF_MAX")"
+
+  if [[ "$prior_attempt_count" -eq 0 || "$elapsed" -ge "$backoff" ]]; then
+    attempt=$(( prior_attempt_count + 1 ))
+    log_warn "Backstage health check detected an unhealthy observer ($pane_status). Restart attempt ${attempt} in '$WAVEMILL_WINDOW_BACKSTAGE'."
     restart_pane_id="$(restart_backstage_observer_loop || true)"
     sleep 0.3
     pane_probe="$(probe_backstage_panes 2>/dev/null || true)"
@@ -15171,28 +15197,36 @@ check_backstage_observer_health() {
       LAST_BACKSTAGE_OBSERVER_HEALTH_STATUS="healthy"
       return 0
     fi
-    [[ -n "$health_file" ]] && wavemill_write_backstage_service_health "$health_file" "observer" "$pane_status" "$detail" 1 "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" "${observer_pane_id:-$restart_pane_id}" "$heartbeat_at"
-    LAST_BACKSTAGE_OBSERVER_HEALTH_STATUS="$pane_status"
-    return 0
-  fi
-
-  if (( elapsed < BACKSTAGE_RESTART_COOLDOWN )); then
-    [[ -n "$health_file" ]] && wavemill_write_backstage_service_health "$health_file" "observer" "$pane_status" "$detail" "$prior_attempt_count" "$prior_attempt_at" "$observer_pane_id" "$heartbeat_at"
-    LAST_BACKSTAGE_OBSERVER_HEALTH_STATUS="$pane_status"
-    return 0
-  fi
-
-  detail="Backstage window '$WAVEMILL_WINDOW_BACKSTAGE' observer service needs user attention. Restart 'npx tsx tools/observer.ts --loop --json --dry-run --repo-dir $REPO_DIR --session $SESSION' in tmux."
-  [[ -n "$health_file" ]] && wavemill_write_backstage_service_health "$health_file" "observer" "needs-user" "$detail" "$prior_attempt_count" "$prior_attempt_at" "$observer_pane_id" "$heartbeat_at"
-  if [[ "$LAST_BACKSTAGE_OBSERVER_HEALTH_STATUS" != "needs-user" ]]; then
+    attempt_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    next_backoff="$(wavemill_backstage_restart_backoff_seconds "$attempt" "$BACKSTAGE_RESTART_COOLDOWN" "$BACKSTAGE_RESTART_BACKOFF_MAX")"
+    if (( attempt >= BACKSTAGE_RESTART_NEEDS_USER_AFTER )); then
+      next_status="needs-user"
+      detail="Backstage window '$WAVEMILL_WINDOW_BACKSTAGE' observer service needs user attention after ${attempt} restart attempts. Wavemill keeps retrying automatically every ~${next_backoff}s. Manual command: npx tsx tools/observer.ts --loop --json --dry-run --repo-dir $REPO_DIR --session $SESSION"
+    else
+      next_status="$pane_status"
+      detail="${detail}. Automatic retry in ~${next_backoff}s."
+    fi
+    [[ -n "$health_file" ]] && wavemill_write_backstage_service_health "$health_file" "observer" "$next_status" "$detail" "$attempt" "$attempt_at" "${observer_pane_id:-$restart_pane_id}" "$heartbeat_at"
     log_warn "$detail"
+    LAST_BACKSTAGE_OBSERVER_HEALTH_STATUS="$next_status"
+    return 0
   fi
-  LAST_BACKSTAGE_OBSERVER_HEALTH_STATUS="needs-user"
+
+  remaining=$(( backoff - elapsed ))
+  if [[ "$prior_attempt_count" -ge "$BACKSTAGE_RESTART_NEEDS_USER_AFTER" ]]; then
+    pane_status="needs-user"
+    detail="Backstage window '$WAVEMILL_WINDOW_BACKSTAGE' observer service needs user attention after ${prior_attempt_count} restart attempts. Wavemill keeps retrying automatically. Retry in ~${remaining}s."
+  else
+    detail="${detail}. Next automatic retry in ~${remaining}s."
+  fi
+  [[ -n "$health_file" ]] && wavemill_write_backstage_service_health "$health_file" "observer" "$pane_status" "$detail" "$prior_attempt_count" "$prior_attempt_at" "$observer_pane_id" "$heartbeat_at"
+  LAST_BACKSTAGE_OBSERVER_HEALTH_STATUS="$pane_status"
 }
 
 check_backstage_health() {
   local now health_file pane_probe pane_summary pane_status detail pane_count executor_pane_id heartbeat_at
   local prior_attempt_at prior_attempt_count elapsed restart_pane_id prior_heartbeat restart_error
+  local backoff remaining attempt next_backoff attempt_at next_status command_detail
 
   now=$(date +%s)
   (( now - LAST_BACKSTAGE_HEALTH_CHECK < BACKSTAGE_HEALTH_INTERVAL )) && return 0
@@ -15245,10 +15279,11 @@ check_backstage_health() {
     elapsed=$(( now - prior_attempt_epoch ))
   fi
 
-  if (( prior_attempt_count == 0 )); then
-    if [[ "$LAST_BACKSTAGE_HEALTH_STATUS" != "missing-tend-loop" ]]; then
-      log_warn "Backstage health check detected a missing tend loop. Attempting one restart in '$WAVEMILL_WINDOW_BACKSTAGE'."
-    fi
+  backoff="$(wavemill_backstage_restart_backoff_seconds "$prior_attempt_count" "$BACKSTAGE_RESTART_COOLDOWN" "$BACKSTAGE_RESTART_BACKOFF_MAX")"
+
+  if [[ "$prior_attempt_count" -eq 0 || "$elapsed" -ge "$backoff" ]]; then
+    attempt=$(( prior_attempt_count + 1 ))
+    log_warn "Backstage health check detected a missing tend loop. Restart attempt ${attempt} in '$WAVEMILL_WINDOW_BACKSTAGE'."
     prior_heartbeat="$(read_backstage_service_health_field "tend" '.heartbeatAt' || true)"
     restart_pane_id="$(restart_backstage_tend_loop || true)"
     if [[ -n "$restart_pane_id" ]] && heartbeat_at="$(backstage_tend_restart_confirmed "$prior_heartbeat" "$now" "$restart_pane_id")"; then
@@ -15257,25 +15292,38 @@ check_backstage_health() {
       LAST_BACKSTAGE_HEALTH_STATUS="healthy"
       return 0
     fi
+    attempt_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    if [[ -n "$restart_pane_id" ]] && backstage_tend_pane_alive "$restart_pane_id"; then
+      detail="Backstage tend restart attempt ${attempt} is pending heartbeat confirmation (pane ${restart_pane_id})"
+      [[ -n "$health_file" ]] && wavemill_write_backstage_health "$health_file" "missing-tend-loop" "$detail" "$attempt" "$attempt_at" "$restart_pane_id"
+      LAST_BACKSTAGE_HEALTH_STATUS="missing-tend-loop"
+      return 0
+    fi
     restart_error="$(backstage_tend_restart_diagnostic)"
-    detail="Backstage tend restart did not produce a fresh heartbeat within ${BACKSTAGE_TEND_RESTART_CONFIRM_SECONDS}s: $restart_error"
-    [[ -n "$health_file" ]] && wavemill_write_backstage_health "$health_file" "missing-tend-loop" "$detail" 1 "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-    LAST_BACKSTAGE_HEALTH_STATUS="missing-tend-loop"
-    return 0
-  fi
-
-  if (( elapsed < BACKSTAGE_RESTART_COOLDOWN )); then
-    [[ -n "$health_file" ]] && wavemill_write_backstage_health "$health_file" "missing-tend-loop" "$detail" "$prior_attempt_count" "$prior_attempt_at"
-    LAST_BACKSTAGE_HEALTH_STATUS="missing-tend-loop"
-    return 0
-  fi
-
-  detail="Backstage window '$WAVEMILL_WINDOW_BACKSTAGE' is missing the ${WAVEMILL_BACKSTAGE_TEND_PANE_TITLE} executor. Restart 'npx tsx tools/tend.ts --loop --repo-dir $REPO_DIR' in tmux."
-  [[ -n "$health_file" ]] && wavemill_write_backstage_health "$health_file" "needs-user" "$detail" "$prior_attempt_count" "$prior_attempt_at"
-  if [[ "$LAST_BACKSTAGE_HEALTH_STATUS" != "needs-user" ]]; then
+    next_backoff="$(wavemill_backstage_restart_backoff_seconds "$attempt" "$BACKSTAGE_RESTART_COOLDOWN" "$BACKSTAGE_RESTART_BACKOFF_MAX")"
+    if (( attempt >= BACKSTAGE_RESTART_NEEDS_USER_AFTER )); then
+      next_status="needs-user"
+      command_detail="npx tsx tools/tend.ts --loop --repo-dir $REPO_DIR"
+      detail="Backstage window '$WAVEMILL_WINDOW_BACKSTAGE' is missing the ${WAVEMILL_BACKSTAGE_TEND_PANE_TITLE} executor after ${attempt} restart attempts (last: $restart_error). Wavemill keeps retrying automatically every ~${next_backoff}s. Manual command: ${command_detail}"
+    else
+      next_status="missing-tend-loop"
+      detail="Backstage tend restart attempt ${attempt} did not produce a fresh heartbeat within ${BACKSTAGE_TEND_RESTART_CONFIRM_SECONDS}s: $restart_error. Automatic retry in ~${next_backoff}s."
+    fi
+    [[ -n "$health_file" ]] && wavemill_write_backstage_health "$health_file" "$next_status" "$detail" "$attempt" "$attempt_at"
     log_warn "$detail"
+    LAST_BACKSTAGE_HEALTH_STATUS="$next_status"
+    return 0
   fi
-  LAST_BACKSTAGE_HEALTH_STATUS="needs-user"
+
+  remaining=$(( backoff - elapsed ))
+  if [[ "$prior_attempt_count" -ge "$BACKSTAGE_RESTART_NEEDS_USER_AFTER" ]]; then
+    pane_status="needs-user"
+    detail="Backstage window '$WAVEMILL_WINDOW_BACKSTAGE' is missing the ${WAVEMILL_BACKSTAGE_TEND_PANE_TITLE} executor after ${prior_attempt_count} restart attempts. Wavemill keeps retrying automatically. Retry in ~${remaining}s."
+  else
+    detail="${detail}. Next automatic retry in ~${remaining}s."
+  fi
+  [[ -n "$health_file" ]] && wavemill_write_backstage_health "$health_file" "$pane_status" "$detail" "$prior_attempt_count" "$prior_attempt_at"
+  LAST_BACKSTAGE_HEALTH_STATUS="$pane_status"
 }
 
 while :; do

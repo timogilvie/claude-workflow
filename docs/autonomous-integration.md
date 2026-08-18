@@ -82,7 +82,9 @@ Set `mill.baseBranch` to the same branch as `integration.integrationBranch`. Tha
 - `tend` merges at most one eligible PR into `auto/integration` per pass.
 - `promote` opens or refreshes the `auto/integration -> main` promotion PR.
 
-When `integration.useMillSession = true`, the tend loop runs in the `backstage` tmux window inside the existing mill session.
+When `integration.useMillSession = true`, the tend loop runs in the `backstage` tmux window inside the existing mill session. Transient GitHub, network, timeout, and rate-limit failures are retried around the `gh` call and then backed off at the loop level, so a short outage does not terminate tend. Invalid config, authentication failures, programming errors, and post-merge red integration health remain fatal.
+
+The mill watchdog restarts a missing backstage tend loop with exponential backoff, capped at 15 minutes, and uses a 30 second heartbeat confirmation window. If the dashboard shows `needs-user`, Wavemill has escalated the condition for visibility but keeps retrying automatically unless you stop mill.
 
 ## Branch Protection
 

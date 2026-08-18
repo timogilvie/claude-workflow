@@ -99,6 +99,8 @@ TESTS=(
   shared/lib/ci-failure-classifier.test.ts
   shared/lib/ci-log-fetcher.test.ts
   shared/lib/ready-watchdog.test.ts
+  shared/lib/gh-retry.test.ts
+  shared/lib/tend-loop.test.ts
   shared/lib/migration-ast.test.ts
   shared/lib/tend-challenge-gate.test.ts
   shared/lib/tend-controller.test.ts

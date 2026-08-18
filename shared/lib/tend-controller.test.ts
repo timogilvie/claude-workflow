@@ -102,6 +102,7 @@ function buildMergeTestOptions(overrides: {
   repoDir: string;
   calls: string[];
   labels: string[];
+  sleeps: number[];
   deps: Partial<MergeExecutionDeps>;
   cleanup: () => void;
 } {
@@ -113,6 +114,7 @@ function buildMergeTestOptions(overrides: {
 
   const calls: string[] = [];
   const labels: string[] = [];
+  const sleeps: number[] = [];
   const defaultShellRunner: MergeExecutionDeps['shellRunner'] = (cmd) => {
     calls.push(cmd);
     if (cmd.includes('gh pr list --label')) return '[]';
@@ -135,6 +137,7 @@ function buildMergeTestOptions(overrides: {
     repoDir,
     calls,
     labels,
+    sleeps,
     deps: {
       shellRunner: overrides.shellRunner ?? defaultShellRunner,
       readyChecker: overrides.readyChecker ?? (async () => ({ ready: true })),
@@ -150,6 +153,9 @@ function buildMergeTestOptions(overrides: {
       },
       restoreReady: (prNumber) => {
         labels.push(`ready:${prNumber}`);
+      },
+      retrySleep: async (ms) => {
+        sleeps.push(ms);
       },
     },
     cleanup: () => rmSync(repoDir, { recursive: true, force: true }),
@@ -1758,6 +1764,82 @@ describe('executeMerge', () => {
       assert.deepEqual(result, { status: 'skipped', prNumber: 42, haltLoop: false });
       assert.ok(!hasCall(options.calls, /git worktree add/));
       assert.deepEqual(options.labels, []);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('retries transient merging-label list failures before merging', async () => {
+    const options = buildMergeTestOptions();
+    const baseRunner = options.deps.shellRunner as MergeExecutionDeps['shellRunner'];
+    let listCalls = 0;
+    options.deps.shellRunner = (cmd, opts) => {
+      if (cmd.includes('gh pr list --label')) {
+        options.calls.push(cmd);
+        listCalls += 1;
+        if (listCalls === 1) {
+          throw Object.assign(new Error('Command failed'), { stderr: 'HTTP 503: Service Unavailable' });
+        }
+        return '[]';
+      }
+      return baseRunner(cmd, opts);
+    };
+
+    try {
+      const result = await executeMerge(candidate(), { repoDir: options.repoDir, deps: options.deps });
+
+      assert.equal(result.status, 'merged');
+      assert.equal(listCalls, 2);
+      assert.equal(options.sleeps.length, 1);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('retries transient gh pr checks output before parsing', async () => {
+    const options = buildMergeTestOptions();
+    const baseRunner = options.deps.shellRunner as MergeExecutionDeps['shellRunner'];
+    let checksCalls = 0;
+    options.deps.shellRunner = (cmd, opts) => {
+      if (cmd.includes('gh pr checks')) {
+        options.calls.push(cmd);
+        checksCalls += 1;
+        if (checksCalls === 1) return 'HTTP 502: Bad Gateway';
+        return JSON.stringify([{ name: 'ci', state: 'COMPLETED', conclusion: 'success' }]);
+      }
+      return baseRunner(cmd, opts);
+    };
+
+    try {
+      const result = await executeMerge(candidate(), { repoDir: options.repoDir, deps: options.deps });
+
+      assert.equal(result.status, 'merged');
+      assert.equal(checksCalls, 2);
+      assert.equal(options.labels.includes('blocked:42'), false);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('skips instead of blocking when transient gh pr checks retries exhaust', async () => {
+    const options = buildMergeTestOptions();
+    const baseRunner = options.deps.shellRunner as MergeExecutionDeps['shellRunner'];
+    options.deps.shellRunner = (cmd, opts) => {
+      if (cmd.includes('gh pr checks')) {
+        options.calls.push(cmd);
+        return 'HTTP 503: Service Unavailable';
+      }
+      return baseRunner(cmd, opts);
+    };
+
+    try {
+      const result = await executeMerge(candidate(), { repoDir: options.repoDir, deps: options.deps });
+
+      assert.equal(result.status, 'skipped');
+      assert.equal(result.phase, 'checks-transient');
+      assert.equal(options.labels.includes('ready:42'), true);
+      assert.equal(options.labels.includes('blocked:42'), false);
+      assert.equal(options.calls.some((cmd) => cmd.includes('gh pr comment')), false);
     } finally {
       options.cleanup();
     }

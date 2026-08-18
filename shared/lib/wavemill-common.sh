@@ -65,6 +65,23 @@ wavemill_capture_tend_pane_output() {
   tmux pipe-pane -o -t "$pane_id" "$pipe_command" >/dev/null 2>&1 || true
 }
 
+wavemill_backstage_restart_backoff_seconds() {
+  local attempt_count="${1:-0}" base="${2:-60}" max="${3:-900}" delay i
+  [[ "$attempt_count" =~ ^[0-9]+$ ]] || { printf '0\n'; return 0; }
+  [[ "$base" =~ ^[0-9]+$ ]] || base=60
+  [[ "$max" =~ ^[0-9]+$ ]] || max=900
+  (( attempt_count > 0 )) || { printf '0\n'; return 0; }
+
+  delay="$base"
+  i=1
+  while (( i < attempt_count && delay < max )); do
+    delay=$(( delay * 2 ))
+    (( delay > max )) && delay="$max"
+    i=$(( i + 1 ))
+  done
+  printf '%s\n' "$delay"
+}
+
 wavemill_build_observer_loop_command() {
   local session_name="${1:?session required}"
   local repo_dir="${2:?repo dir required}"
