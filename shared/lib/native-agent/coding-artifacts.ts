@@ -1,10 +1,20 @@
 import { normalizePatchPath } from './patch-contract.ts';
+import {
+  validateSeamArtifactContent,
+  validateSeamSubschemaValue,
+  type SeamValidationError,
+} from '../seam-artifacts.ts';
 
 export type CodingCompleteConfidence = 'high' | 'medium' | 'low';
 
 export interface CodingComplete {
+  stage: 'coding';
   confidence: CodingCompleteConfidence;
-  fields?: Record<string, string>;
+  commit?: string;
+  notes?: string;
+  source?: string;
+  createdAt?: string;
+  [key: string]: unknown;
 }
 
 export interface CodingArtifacts {
@@ -15,15 +25,6 @@ export interface CodingArtifacts {
   commitCount: number;
   [futureField: string]: unknown;
 }
-
-const CODING_ARTIFACT_METRIC_FIELDS = [
-  'filesChanged',
-  'linesAdded',
-  'linesRemoved',
-  'commitCount',
-] as const;
-
-type CodingArtifactMetricField = (typeof CODING_ARTIFACT_METRIC_FIELDS)[number];
 
 /**
  * Whole-file write allowlist inputs are kept separate from mutation policy so
@@ -39,15 +40,10 @@ export interface NormalizedWholeFileWriteAllowlistInput {
   wavemillOwnedPaths: string[];
 }
 
-export interface CodingArtifactsValidationError {
-  code:
-    | 'invalid_type'
-    | 'missing_field'
-    | 'negative_value'
-    | 'non_integer_value'
-    | 'invalid_confidence'
-    | 'missing_confidence'
-    | 'invalid_allowlist';
+export type CodingArtifactsValidationError = SeamValidationError;
+
+export interface WholeFileAllowlistValidationError {
+  code: 'invalid_allowlist';
   path: string;
   message: string;
 }
@@ -62,7 +58,7 @@ export type ParseCodingCompleteResult =
 
 export type ValidateWholeFileWriteAllowlistResult =
   | { ok: true; value: NormalizedWholeFileWriteAllowlistInput }
-  | { ok: false; errors: CodingArtifactsValidationError[] };
+  | { ok: false; errors: WholeFileAllowlistValidationError[] };
 
 const CODING_COMPLETE_CONFIDENCE_VALUES: readonly CodingCompleteConfidence[] = ['high', 'medium', 'low'] as const;
 
@@ -71,93 +67,20 @@ export function isCodingCompleteConfidence(value: string): value is CodingComple
 }
 
 export function parseCodingComplete(input: string): ParseCodingCompleteResult {
-  const errors: CodingArtifactsValidationError[] = [];
-  const fields: Record<string, string> = {};
-
-  for (const rawLine of input.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (line.length === 0) {
-      continue;
-    }
-
-    const separator = line.indexOf('=');
-    if (separator <= 0) {
-      continue;
-    }
-
-    const key = line.slice(0, separator).trim();
-    const value = line.slice(separator + 1).trim();
-    if (key.length === 0 || value.length === 0) {
-      continue;
-    }
-
-    fields[key] = value;
-  }
-
-  const rawConfidence = fields.confidence;
-  if (!rawConfidence) {
-    errors.push({
-      code: 'missing_confidence',
-      path: '$.confidence',
-      message: 'Coding completion marker must include confidence=<high|medium|low>.',
-    });
-    return { ok: false, errors };
-  }
-  if (!isCodingCompleteConfidence(rawConfidence)) {
-    errors.push({
-      code: 'invalid_confidence',
-      path: '$.confidence',
-      message: 'Coding completion confidence must be high, medium, or low.',
-    });
-    return { ok: false, errors };
-  }
-
-  delete fields.confidence;
-
-  return {
-    ok: true,
-    value: {
-      confidence: rawConfidence,
-      ...(Object.keys(fields).length > 0 ? { fields } : {}),
-    },
-  };
+  const result = validateSeamArtifactContent<CodingComplete>('coding-complete', input);
+  return result.ok ? { ok: true, value: result.value } : { ok: false, errors: result.errors };
 }
 
 export function serializeCodingComplete(input: CodingComplete): string {
-  const lines = [`confidence=${input.confidence}`];
-  const fields = input.fields ?? {};
-  for (const key of Object.keys(fields).sort()) {
-    lines.push(`${key}=${fields[key]}`);
-  }
-  return `${lines.join('\n')}\n`;
+  return `${JSON.stringify(input, null, 2)}\n`;
 }
 
 export function validateCodingArtifacts(input: unknown): ValidateCodingArtifactsResult {
-  if (!isRecord(input)) {
-    return {
-      ok: false,
-      errors: [{ code: 'invalid_type', path: '$', message: 'CodingArtifacts must be an object.' }],
-    };
-  }
-
-  const errors: CodingArtifactsValidationError[] = [];
-  if (input.type !== 'coding') {
-    errors.push({
-      code: 'invalid_type',
-      path: '$.type',
-      message: 'CodingArtifacts.type must be "coding".',
-    });
-  }
-
-  for (const field of CODING_ARTIFACT_METRIC_FIELDS) {
-    validateMetric(field, input[field], errors);
-  }
-
-  if (errors.length > 0) {
-    return { ok: false, errors };
-  }
-
-  return { ok: true, value: input as CodingArtifacts };
+  return validateSeamSubschemaValue<CodingArtifacts>(
+    'stage-result.schema.json',
+    '/$defs/codingArtifacts',
+    input,
+  );
 }
 
 export function validateWholeFileWriteAllowlistInput(
@@ -170,7 +93,7 @@ export function validateWholeFileWriteAllowlistInput(
     };
   }
 
-  const errors: CodingArtifactsValidationError[] = [];
+  const errors: WholeFileAllowlistValidationError[] = [];
   const generatedPaths = validateAllowlistPaths(input.generatedPaths, '$.generatedPaths', errors);
   const wavemillOwnedPaths = validateAllowlistPaths(input.wavemillOwnedPaths, '$.wavemillOwnedPaths', errors);
 
@@ -187,43 +110,10 @@ export function validateWholeFileWriteAllowlistInput(
   };
 }
 
-function validateMetric(
-  field: CodingArtifactMetricField,
-  input: unknown,
-  errors: CodingArtifactsValidationError[],
-): void {
-  const path = `$.${field}`;
-  if (input === undefined) {
-    errors.push({
-      code: 'missing_field',
-      path,
-      message: `${path} is required.`,
-    });
-    return;
-  }
-
-  if (typeof input !== 'number' || !Number.isInteger(input)) {
-    errors.push({
-      code: 'non_integer_value',
-      path,
-      message: `${path} must be a finite integer.`,
-    });
-    return;
-  }
-
-  if (input < 0) {
-    errors.push({
-      code: 'negative_value',
-      path,
-      message: `${path} must be non-negative.`,
-    });
-  }
-}
-
 function validateAllowlistPaths(
   input: unknown,
   pathKey: string,
-  errors: CodingArtifactsValidationError[],
+  errors: WholeFileAllowlistValidationError[],
 ): string[] {
   if (input === undefined) {
     return [];

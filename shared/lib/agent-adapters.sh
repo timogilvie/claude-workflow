@@ -1461,7 +1461,7 @@ Apply minimal scope. A focused small PR is better than a large incomplete one:
 - Commit after every 1-2 file changes; do not batch large edit sets.
 - Run tests/lint after every commit to catch regressions early.
 - Scope is reduced here, so the confidence you record in the completion marker matters more than usual:
-  prefer 'confidence=low' whenever correctness is uncertain even after validation, so review scrutinizes it."
+  prefer '\"confidence\":\"low\"' whenever correctness is uncertain even after validation, so review scrutinizes it."
       ;;
   esac
 
@@ -1550,6 +1550,9 @@ Use this compact JSON shape:
       "evidence": "Short summary of why the failure is unrelated.",
       "recommendedAction": "advance_to_review"
     }
+
+Allowed agent-facing blockingReason values: repo_verification_blocked, environment_blocked, baseline_tests_failing.
+The recommendedAction for review handoff is advance_to_review.
 
 .coding-complete remains the preferred signal when full verification passes. The blocked-completion artifact is not a substitute for incomplete implementation, uncommitted work, or skipped scoped verification.
 
@@ -1726,7 +1729,7 @@ build_review_prompt() {
 
 Read the coding confidence signal from the completion marker:
 \`\`\`bash
-coding_confidence=\$(grep '^confidence=' \"$feature_dir/.coding-complete\" 2>/dev/null | cut -d= -f2 | tr -d '[:space:]')
+coding_confidence=\$(jq -r '.confidence // empty' \"$feature_dir/.coding-complete\" 2>/dev/null)
 \`\`\`
 
 If \`\$coding_confidence\` is \`low\`, or if the initial self-review run exits 1:
@@ -2248,24 +2251,44 @@ agent_resume_after_error() {
     return 1
   fi
 
+  # Helper: send a resume prompt to a live agent TUI with delivery confirmation
+  # when the confirmed-send helper is loaded; fall back to plain send-keys when
+  # the helper isn't available (adapter-only test contexts). Returns rc from
+  # the helper on the confirmed path, 0 on the unverified fallback path.
+  _agent_resume_send_confirmed() {
+    local _target="$1" _prompt="$2" _issue="$3" _session="$4"
+    if declare -F wavemill_pane_send_message >/dev/null 2>&1; then
+      if wavemill_pane_send_message "$_target" "$_prompt" "$_issue" "$_session"; then
+        return 0
+      fi
+      _agent_log_warn "Resume prompt for $_issue not confirmed (${WAVEMILL_PANE_MESSAGE_LAST_STATUS:-unknown}: ${WAVEMILL_PANE_MESSAGE_LAST_DETAIL:-})"
+      return 1
+    fi
+    tmux send-keys -t "$_target" "$_prompt" C-m
+    _agent_log_debug "Resume prompt sent to $_target without delivery confirmation (helper not loaded)"
+    return 0
+  }
+
   if agent_pane_is_ready "$session" "$window"; then
     case "$agent_cmd" in
       claude)
         if claude --help 2>/dev/null | grep -q -- '--resume'; then
+          # Shell command to an idle shell, not an agent TUI message. See
+          # plan audit #3 in HOK-2765 — pre-existing behavior, left as-is.
           tmux send-keys -t "$target" "claude --resume" C-m
         else
-          tmux send-keys -t "$target" "$resume_prompt" C-m
+          _agent_resume_send_confirmed "$target" "$resume_prompt" "$issue" "$session" || return 1
         fi
         ;;
       codex)
-        tmux send-keys -t "$target" "$resume_prompt" C-m
+        _agent_resume_send_confirmed "$target" "$resume_prompt" "$issue" "$session" || return 1
         ;;
       *)
-        tmux send-keys -t "$target" "$resume_prompt" C-m
+        _agent_resume_send_confirmed "$target" "$resume_prompt" "$issue" "$session" || return 1
         ;;
     esac
   else
-    tmux send-keys -t "$target" "$resume_prompt" C-m
+    _agent_resume_send_confirmed "$target" "$resume_prompt" "$issue" "$session" || return 1
   fi
 
   return 0

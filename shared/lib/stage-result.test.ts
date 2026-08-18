@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import { execFileSync } from 'node:child_process';
 
 import {
   writeStageResult,
@@ -144,6 +145,30 @@ describe('writeStageResult and readStageResult', () => {
     const files = await fs.readdir(testDir);
     const tmpFiles = files.filter(f => f.startsWith('.tmp-'));
     assert.equal(tmpFiles.length, 0, 'No temp files should remain');
+  });
+
+  it('stage-result-cli write preserves history after write-with-history', async () => {
+    const failed = makeResult({
+      stage: 'coding',
+      status: 'failed',
+      finishedAt: '2026-04-09T11:00:00Z',
+      notes: 'invalid artifact',
+    });
+    await writeStageResult(testDir, failed);
+
+    execFileSync('npx', ['tsx', 'tools/stage-result-cli.ts', 'write-with-history', testDir, 'coding', 'running', '--agent', 'native', '--model', 'glm-5.2'], {
+      cwd: process.cwd(),
+      encoding: 'utf-8',
+    });
+    execFileSync('npx', ['tsx', 'tools/stage-result-cli.ts', 'write', testDir, 'coding', 'completed', '--agent', 'native', '--model', 'glm-5.2'], {
+      cwd: process.cwd(),
+      encoding: 'utf-8',
+    });
+
+    const read = await readStageResult(testDir, 'coding');
+    assert.equal(read?.status, 'completed');
+    assert.equal(read?.history?.length, 1);
+    assert.equal(read?.history?.[0].status, 'failed');
   });
 });
 

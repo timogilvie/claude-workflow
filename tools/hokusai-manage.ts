@@ -14,6 +14,7 @@ import { summarizeHokusaiLedger } from '../shared/lib/hokusai-ledger.ts';
 import {
   configureContributionUpload,
   ensureGitignoreEntry,
+  migrateContributionEndpoint,
 } from '../shared/lib/hokusai-local-config.ts';
 import { hokusaiQueueStatus, requeueDeadLetterEntries, type RequeueReportEntry } from '../shared/lib/hokusai-queue.ts';
 import { drainContributionQueue } from '../shared/lib/hokusai-queue-drain.ts';
@@ -44,7 +45,7 @@ runTool({
     'dead-letter': { type: 'boolean', description: 'Requeue entries from the dead-letter queue' },
     'entry-id': { type: 'string', description: 'Only requeue a single dead-letter entry id' },
     since: { type: 'string', description: 'Only requeue dead-letter entries failed at or after this ISO timestamp' },
-    'dry-run': { type: 'boolean', description: 'Preview requeue changes without modifying queue files' },
+    'dry-run': { type: 'boolean', description: 'Preview changes without modifying queue files or config' },
     'coverage-threshold': { type: 'string', description: 'Candidate-pool coverage threshold between 0 and 1' },
     'max-invalid-rate': { type: 'string', description: 'Maximum allowed conformance-invalid rate between 0 and 1' },
     'threshold-mode': { type: 'string', description: 'Threshold handling mode: warn or fail' },
@@ -55,7 +56,7 @@ runTool({
     name: 'command',
     required: true,
     multiple: true,
-    description: 'Command (enable|disable|status|check-consent|configure|drain|requeue|audit)',
+    description: 'Command (enable|disable|status|check-consent|configure|migrate|drain|requeue|audit)',
   },
   examples: [
     'npx tsx tools/hokusai-manage.ts status',
@@ -63,6 +64,7 @@ runTool({
     'npx tsx tools/hokusai-manage.ts disable',
     'npx tsx tools/hokusai-manage.ts check-consent',
     'npx tsx tools/hokusai-manage.ts configure',
+    'npx tsx tools/hokusai-manage.ts migrate --dry-run',
     'npx tsx tools/hokusai-manage.ts drain',
     'npx tsx tools/hokusai-manage.ts requeue --dead-letter --dry-run',
     'npx tsx tools/hokusai-manage.ts audit --input path/to/contributions.jsonl --json',
@@ -114,6 +116,9 @@ runTool({
           queue: contribStatus.queue,
           uploadEndpoint: contribStatus.uploadEndpoint,
           mode: contribStatus.mode,
+          endpoint: contribStatus.endpoint,
+          endpointLooksUnscoped: contribStatus.endpointLooksUnscoped,
+          warning: contribStatus.warning,
           pendingQueueCount: queue.pendingCount,
           deadLetterQueueCount: queue.deadLetterCount,
           lastQueueError: queue.lastError,
@@ -271,6 +276,33 @@ runTool({
         return;
       }
 
+      case 'migrate': {
+        const result = migrateContributionEndpoint({
+          repoDir: args['repo-dir'] ?? process.cwd(),
+          dryRun: !!args['dry-run'],
+        });
+
+        if (args.json) {
+          console.log(JSON.stringify(result, null, 2));
+          return;
+        }
+
+        switch (result.action) {
+          case 'absent':
+            console.log(`No local contribution overlay found at ${result.localConfigPath}.`);
+            break;
+          case 'unchanged':
+            console.log(`Contribution endpoint overlay already does not use the legacy unscoped path: ${result.localConfigPath}`);
+            break;
+          case 'migrated':
+            console.log(`${args['dry-run'] ? 'Would migrate' : 'Migrated'} contribution endpoint in ${result.localConfigPath}`);
+            console.log(`  From: ${result.from}`);
+            console.log(`  To: ${result.to}`);
+            break;
+        }
+        return;
+      }
+
       case 'drain': {
         const result = await drainContributionQueue(options);
         if (args.json) {
@@ -319,7 +351,7 @@ runTool({
 
       default:
         throw new Error(
-          `Unknown command "${command}"\nValid commands: enable, disable, status, check-consent, configure, drain, requeue, audit`,
+          `Unknown command "${command}"\nValid commands: enable, disable, status, check-consent, configure, migrate, drain, requeue, audit`,
         );
     }
   },

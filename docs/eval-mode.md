@@ -47,18 +47,22 @@ It then fetches:
 
 ### 2) Intervention Detection
 
-The tool analyzes git history and GitHub activity to detect intervention events:
+The tool analyzes git history, GitHub activity, Claude transcripts, and Wavemill artifacts to detect intervention events:
 
 | Intervention Type | Detection Method | Severity |
 |------------------|------------------|----------|
-| Manual commits | Author ≠ agent user | High |
-| Review comments | PR review activity | Medium |
-| Force pushes | `git reflog` analysis | High |
-| CI failures | GitHub checks API | Medium |
-| Tool failures | Agent log analysis | Low |
-| Branch resets | `git reflog` inspection | High |
+| `review_comment` | PR review activity | Low |
+| `post_pr_commit` | Commits after PR creation | Medium |
+| `manual_edit` | Commit not attributed to the agent | Medium |
+| `test_fix` | Test-fix commit message patterns | Low |
+| `session_redirect` | Claude session transcript user redirections | Medium |
+| `self_review_warning` | Self-review warning findings | Low |
+| `self_review_blocker` | Self-review blocker findings | High |
+| `operator_recovery` | `features/<slug>/.operator-intervention.json` or eval archive | High |
+| `prior_failed_attempt` | Stage-result `history[]` or failed-attempt sidecars | Medium |
 
 Each intervention has a weighted penalty (configured in `.wavemill-config.json`).
+New operator recovery keys are `eval.interventionPenalties.operatorRecovery` and `eval.interventionPenalties.priorFailedAttempt`.
 
 ### 3) Difficulty Analysis
 

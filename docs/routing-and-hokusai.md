@@ -145,13 +145,15 @@ To enable uploads, add the endpoint to `.wavemill-config.local.json` (never comm
 {
   "hokusai": {
     "contributions": {
-      "endpoint": "https://api.hokus.ai/api/v1/contributions",
+      "endpoint": "https://api.hokus.ai/api/v1/models/30/contributions",
       "endpointTokenEnv": "HOKUSAI_API_TOKEN",
       "batchSize": 50
     }
   }
 }
 ```
+
+The contribution route is model-scoped: `/api/v1/models/{model_id}/contributions`. Wavemill's default uses model id `30`; override it only when your Hokusai model id differs.
 
 Or run the first-class configure command:
 

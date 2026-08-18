@@ -10,7 +10,7 @@
  */
 
 import { readFileSync, readdirSync, existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { resolveProjectsDirs } from './workflow-cost.ts';
 import { loadWavemillConfig } from './config.ts';
 import { errorMessage } from './error-utils.ts';
@@ -18,6 +18,16 @@ import { fetchPrReviews, resolveOwnerRepo } from './github.ts';
 import { readJsonlFile } from './jsonl-utils.ts';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 import { loadReviewInterventions } from './review-intervention-mapper.ts';
+import { resolveRouteArtifactArchiveDir } from './evals-paths.ts';
+import type { StageName, StageResult, StageResultHistoryEntry, StageStatus } from './stage-result.ts';
+import {
+  OPERATOR_INTERVENTION_ARCHIVE_FILENAME,
+  OPERATOR_INTERVENTION_FILENAME,
+  formatOperatorInterventionDetail,
+  parseOperatorInterventions,
+  readOperatorInterventions,
+  type OperatorInterventionSeverity,
+} from './operator-intervention.ts';
 import type {
   InterventionRecord,
   InterventionType,
@@ -43,10 +53,11 @@ export interface PrCommit {
 }
 
 export interface InterventionEvent {
-  type: 'review_comment' | 'post_pr_commit' | 'manual_edit' | 'test_fix' | 'session_redirect' | 'self_review_blocker' | 'self_review_warning';
+  type: 'review_comment' | 'post_pr_commit' | 'manual_edit' | 'test_fix' | 'session_redirect' | 'self_review_blocker' | 'self_review_warning' | 'operator_recovery' | 'prior_failed_attempt';
   count: number;
   details: string[];
   timestamps?: string[]; // ISO 8601 timestamps parallel to details array
+  severities?: InterventionSeverity[]; // Structured severity parallel to details array
 }
 
 export interface InterventionSummary {
@@ -62,6 +73,8 @@ export interface InterventionPenalties {
   session_redirect: number;
   self_review_blocker: number;
   self_review_warning: number;
+  operator_recovery: number;
+  prior_failed_attempt: number;
 }
 
 /** Format expected by evaluateTask() in eval.js */
@@ -82,6 +95,8 @@ export const DEFAULT_PENALTIES: InterventionPenalties = {
   session_redirect: 0.12,
   self_review_warning: 0.05,   // Minor issue caught in review
   self_review_blocker: 0.20,   // Critical issue that blocks PR
+  operator_recovery: 0.15,     // Operator-recorded diagnosis/recovery outside agent output
+  prior_failed_attempt: 0.10,  // Earlier failed/aborted attempt before the scored run
 };
 
 // ────────────────────────────────────────────────────────────────
@@ -103,6 +118,8 @@ export function loadPenalties(repoDir?: string): InterventionPenalties {
     session_redirect: configured.sessionRedirect ?? DEFAULT_PENALTIES.session_redirect,
     self_review_blocker: configured.selfReviewBlocker ?? DEFAULT_PENALTIES.self_review_blocker,
     self_review_warning: configured.selfReviewWarning ?? DEFAULT_PENALTIES.self_review_warning,
+    operator_recovery: configured.operatorRecovery ?? DEFAULT_PENALTIES.operator_recovery,
+    prior_failed_attempt: configured.priorFailedAttempt ?? DEFAULT_PENALTIES.prior_failed_attempt,
   };
 }
 
@@ -603,6 +620,177 @@ export function deduplicatePostPrAndManualEdits(
 }
 
 // ────────────────────────────────────────────────────────────────
+// Operator Artifact Detection
+// ────────────────────────────────────────────────────────────────
+
+const FAILED_ATTEMPT_STAGES: StageName[] = ['planning', 'coding', 'review'];
+const FAILED_ATTEMPT_STATUSES: StageStatus[] = ['failed', 'aborted'];
+
+function branchSlug(branchName?: string): string | undefined {
+  if (!branchName) return undefined;
+  return branchName.match(/^(?:task|feature|bugfix|bug)\/(.+)$/)?.[1];
+}
+
+function existingUnique(paths: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const path of paths) {
+    const resolved = resolve(path);
+    if (seen.has(resolved) || !existsSync(resolved)) continue;
+    seen.add(resolved);
+    out.push(resolved);
+  }
+  return out;
+}
+
+export interface ResolvedTaskArtifactDirs {
+  featureDirs: string[];
+  archiveDir?: string;
+}
+
+export function resolveTaskArtifactDirs(opts: DetectOptions): ResolvedTaskArtifactDirs {
+  const repoDir = resolve(opts.repoDir || process.cwd());
+  const config = loadWavemillConfig(repoDir);
+  const slug = branchSlug(opts.branchName) || (opts.worktreePath ? basename(opts.worktreePath) : undefined);
+  const roots = [
+    opts.worktreePath,
+    repoDir,
+    slug && config.mill?.worktreeRoot ? join(resolve(repoDir, config.mill.worktreeRoot), slug) : undefined,
+    slug ? join(resolve(repoDir, 'worktrees'), slug) : undefined,
+  ].filter((value): value is string => Boolean(value));
+
+  const featureDirs = slug
+    ? existingUnique(roots.flatMap((root) => [join(root, 'features', slug), join(root, 'bugs', slug)]))
+    : [];
+  const archiveDir = resolveRouteArtifactArchiveDir(opts.issueId, repoDir);
+  return {
+    featureDirs,
+    archiveDir: archiveDir && existsSync(archiveDir) ? archiveDir : undefined,
+  };
+}
+
+function severityForOperator(severity: OperatorInterventionSeverity): InterventionSeverity {
+  return severity === 'major' ? 'high' : 'med';
+}
+
+export function detectOperatorInterventions(dirs: ResolvedTaskArtifactDirs): InterventionEvent {
+  const event: InterventionEvent = {
+    type: 'operator_recovery',
+    count: 0,
+    details: [],
+    timestamps: [],
+    severities: [],
+  };
+  const seen = new Set<string>();
+  let foundFeatureRecord = false;
+
+  for (const dir of dirs.featureDirs) {
+    const path = join(dir, OPERATOR_INTERVENTION_FILENAME);
+    if (!existsSync(path)) continue;
+    foundFeatureRecord = true;
+    for (const record of readOperatorInterventions(path)) {
+      const key = `${record.occurredAt}|${record.stage ?? ''}|${record.attempt ?? ''}|${record.trigger ?? ''}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      event.details.push(formatOperatorInterventionDetail(record));
+      event.timestamps!.push(record.occurredAt);
+      event.severities!.push(severityForOperator(record.severity));
+    }
+  }
+
+  if (!foundFeatureRecord && dirs.archiveDir) {
+    const path = join(dirs.archiveDir, OPERATOR_INTERVENTION_ARCHIVE_FILENAME);
+    if (existsSync(path)) {
+      try {
+        const raw = JSON.parse(readFileSync(path, 'utf-8'));
+        for (const record of parseOperatorInterventions(raw, path)) {
+          const key = `${record.occurredAt}|${record.stage ?? ''}|${record.attempt ?? ''}|${record.trigger ?? ''}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          event.details.push(formatOperatorInterventionDetail(record));
+          event.timestamps!.push(record.occurredAt);
+          event.severities!.push(severityForOperator(record.severity));
+        }
+      } catch (err) {
+        console.warn(`[intervention-detector] Failed to read operator intervention archive: ${errorMessage(err)}`);
+      }
+    }
+  }
+
+  event.count = event.details.length;
+  return event;
+}
+
+function readStageResultSync(path: string): StageResult | undefined {
+  try {
+    if (!existsSync(path)) return undefined;
+    const parsed = JSON.parse(readFileSync(path, 'utf-8')) as Partial<StageResult>;
+    if (!parsed || typeof parsed !== 'object') return undefined;
+    if (!parsed.stage || !parsed.status || !parsed.startedAt) return undefined;
+    return parsed as StageResult;
+  } catch (err) {
+    console.warn(`[intervention-detector] Failed to read stage result ${path}: ${errorMessage(err)}`);
+    return undefined;
+  }
+}
+
+function truncateDetail(value: string, max: number): string {
+  return value.length <= max ? value : `${value.slice(0, max - 3)}...`;
+}
+
+function failedAttemptDetail(stage: StageName, attempt: number, entry: StageResultHistoryEntry | StageResult): string {
+  const status = entry.status;
+  const agentModel = [entry.agent, entry.model].filter(Boolean).join('/');
+  const note = entry.failureReason || entry.notes || '';
+  return truncateDetail(`${stage} attempt ${attempt} ${status}${agentModel ? ` (${agentModel})` : ''}${note ? `: ${note}` : ''}`, 200);
+}
+
+export function detectPriorFailedAttempts(dirs: ResolvedTaskArtifactDirs): InterventionEvent {
+  const event: InterventionEvent = { type: 'prior_failed_attempt', count: 0, details: [], timestamps: [] };
+  const seen = new Set<string>();
+  const resultDirs = dirs.featureDirs.length > 0 ? dirs.featureDirs : [];
+  if (dirs.archiveDir) resultDirs.push(dirs.archiveDir);
+
+  for (const dir of existingUnique(resultDirs)) {
+    const archiveStyle = Boolean(dirs.archiveDir && resolve(dir) === resolve(dirs.archiveDir));
+    for (const stage of FAILED_ATTEMPT_STAGES) {
+      const resultPath = join(dir, archiveStyle ? `${stage}-result.json` : `.${stage}-result.json`);
+      const result = readStageResultSync(resultPath);
+      result?.history?.forEach((entry, index) => {
+        if (!FAILED_ATTEMPT_STATUSES.includes(entry.status)) return;
+        const key = `${stage}|${entry.startedAt}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        event.details.push(failedAttemptDetail(stage, index + 1, entry));
+        event.timestamps!.push(entry.finishedAt || entry.startedAt);
+      });
+
+      try {
+        if (!existsSync(dir)) continue;
+        const prefix = archiveStyle ? `${stage}-result.attempt-` : `.${stage}-result.attempt-`;
+        const suffix = '-failed.json';
+        for (const file of readdirSync(dir)) {
+          if (!file.startsWith(prefix) || !file.endsWith(suffix)) continue;
+          const sidecar = readStageResultSync(join(dir, file));
+          if (!sidecar || !FAILED_ATTEMPT_STATUSES.includes(sidecar.status)) continue;
+          const key = `${stage}|${sidecar.startedAt}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          const attempt = Number(file.slice(prefix.length, -suffix.length)) || event.details.length + 1;
+          event.details.push(failedAttemptDetail(stage, attempt, sidecar));
+          event.timestamps!.push(sidecar.finishedAt || sidecar.startedAt);
+        }
+      } catch (err) {
+        console.warn(`[intervention-detector] Failed to scan failed attempt sidecars in ${dir}: ${errorMessage(err)}`);
+      }
+    }
+  }
+
+  event.count = event.details.length;
+  return event;
+}
+
+// ────────────────────────────────────────────────────────────────
 // Aggregation
 // ────────────────────────────────────────────────────────────────
 
@@ -675,6 +863,12 @@ export function detectAllInterventions(
     interventions.push(detectSessionRedirects(opts.worktreePath, branch));
   }
 
+  const artifactDirs = resolveTaskArtifactDirs(opts);
+  const operatorEvent = detectOperatorInterventions(artifactDirs);
+  if (operatorEvent.count > 0) interventions.push(operatorEvent);
+  const priorFailedEvent = detectPriorFailedAttempts(artifactDirs);
+  if (priorFailedEvent.count > 0) interventions.push(priorFailedEvent);
+
   // Self-review findings detection (requires issueId or branchName + repoDir)
   if ((opts.issueId || branch) && opts.repoDir) {
     try {
@@ -733,9 +927,7 @@ export function toInterventionMeta(summary: InterventionSummary): InterventionMe
   for (const event of summary.interventions) {
     if (event.count === 0) continue;
 
-    const severity: 'minor' | 'major' =
-      event.type === 'manual_edit' || event.type === 'post_pr_commit' || event.type === 'session_redirect'
-        ? 'major' : 'minor';
+    const severity = legacySeverityFor(event.type);
 
     for (const detail of event.details) {
       meta.push({ description: `[${event.type}] ${detail}`, severity });
@@ -768,9 +960,23 @@ function mapToInterventionType(detectionType: string, detail: string): Intervent
       // Could be scope_change or clarification
       // Default to scope_change for user redirections
       return 'scope_change';
+    case 'operator_recovery':
+      return 'recovery';
+    case 'prior_failed_attempt':
+      return 'rollback';
     default:
       return 'clarification';
   }
+}
+
+function legacySeverityFor(detectionType: InterventionEvent['type']): 'minor' | 'major' {
+  return detectionType === 'manual_edit'
+    || detectionType === 'post_pr_commit'
+    || detectionType === 'session_redirect'
+    || detectionType === 'operator_recovery'
+    || detectionType === 'prior_failed_attempt'
+    ? 'major'
+    : 'minor';
 }
 
 /**
@@ -792,11 +998,7 @@ export function toInterventionRecords(summary: InterventionSummary): Interventio
   for (const event of summary.interventions) {
     if (event.count === 0) continue;
 
-    const legacySeverity: 'minor' | 'major' =
-      event.type === 'manual_edit' || event.type === 'post_pr_commit' || event.type === 'session_redirect'
-        ? 'major' : 'minor';
-
-    const severity = mapToSeverity(legacySeverity);
+    const severity = event.severities?.[0] ?? mapToSeverity(legacySeverityFor(event.type));
 
     for (let i = 0; i < event.details.length; i++) {
       const detail = event.details[i];
@@ -806,7 +1008,7 @@ export function toInterventionRecords(summary: InterventionSummary): Interventio
       records.push({
         timestamp,
         type,
-        severity,
+        severity: event.severities?.[i] ?? severity,
         note: `[${event.type}] ${detail}`,
       });
     }

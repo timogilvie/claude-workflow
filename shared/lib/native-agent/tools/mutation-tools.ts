@@ -333,7 +333,7 @@ function validateCompletionArtifactWrite(
     return {
       ok: false,
       error: 'completion_artifact_validation_failed',
-      message: `Invalid .coding-complete: ${normalized.errors.map((error) => error.message).join('; ')}`,
+      message: `Invalid .coding-complete: ${formatSeamValidationErrors(normalized.errors)}`,
       retryHint: buildCompletionArtifactRetryGuidance('coding-complete', normalized.errors),
     };
   }
@@ -359,12 +359,16 @@ function validateCompletionArtifactWrite(
     return {
       ok: false,
       error: 'completion_artifact_validation_failed',
-      message: `Invalid .coding-blocked-completion.json: ${normalized.errors.map((error) => error.message).join('; ')}`,
+      message: `Invalid .coding-blocked-completion.json: ${formatSeamValidationErrors(normalized.errors)}`,
       retryHint: buildCompletionArtifactRetryGuidance('blocked-completion', normalized.errors),
     };
   }
 
   return { ok: true, content, warnings: [] };
+}
+
+function formatSeamValidationErrors(errors: readonly { code: string; path: string; message: string }[]): string {
+  return errors.map((error) => `${error.code} at ${error.path}: ${error.message}`).join('; ');
 }
 
 async function executeUpdateStatus(

@@ -372,7 +372,7 @@ planning_rejection_detail() {
   local worktree="$1" slug="$2"
   local feature_dir="$worktree/features/$slug"
   local artifact="$feature_dir/.planning-rejected.json"
-  local reason files
+  local reason files notified_at notify_status notify_attempts notify_target notify_suffix
 
   [[ -f "$artifact" ]] || return 0
   reason=$(jq -r '.reason // empty' "$artifact" 2>/dev/null || true)
@@ -380,7 +380,42 @@ planning_rejection_detail() {
 
   files=$(jq -r '(.outOfScopeFiles // []) | join(", ")' "$artifact" 2>/dev/null || true)
   [[ -n "$files" ]] || files="out-of-scope files"
-  printf 'Planning needs attention: edited %s; reverted. Review plan.md and re-approve.\n' "$files"
+
+  # Delivery status of the notification sent to the agent pane. Distinguishes a
+  # successfully notified agent from one where the message was stranded in the
+  # input box or otherwise never confirmed as submitted (HOK-2765).
+  notified_at=$(jq -r '.notifiedAt // empty' "$artifact" 2>/dev/null || true)
+  notify_status=$(jq -r '.notifyStatus // empty' "$artifact" 2>/dev/null || true)
+  notify_attempts=$(jq -r '.notifyAttempts // empty' "$artifact" 2>/dev/null || true)
+  notify_target=$(jq -r '.notifyTarget // empty' "$artifact" 2>/dev/null || true)
+
+  if [[ -n "$notified_at" ]]; then
+    notify_suffix=" Agent notified."
+  else
+    case "$notify_status" in
+      stranded)
+        notify_suffix=" Agent NOT notified: message stranded in pane input after ${notify_attempts:-?} attempts"
+        [[ -n "$notify_target" ]] && notify_suffix+=" — press Enter in $notify_target"
+        notify_suffix+="."
+        ;;
+      unconfirmed)
+        notify_suffix=" Agent NOT notified: delivery unconfirmed after ${notify_attempts:-?} attempts"
+        [[ -n "$notify_target" ]] && notify_suffix+=" — check $notify_target"
+        notify_suffix+="."
+        ;;
+      unavailable)
+        notify_suffix=" Agent NOT notified: pane unavailable."
+        ;;
+      "")
+        notify_suffix=" Agent not notified."
+        ;;
+      *)
+        notify_suffix=" Agent NOT notified: ${notify_status}."
+        ;;
+    esac
+  fi
+
+  printf 'Planning needs attention: edited %s; reverted. Review plan.md and re-approve.%s\n' "$files" "$notify_suffix"
 }
 
 # Read the arm-preservation flag that apply_expanded_route_if_present stamps on

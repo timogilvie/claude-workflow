@@ -115,6 +115,8 @@ for fn in \
   finalize_challenge_execution_intent_before_coding \
   resolve_phase \
   _persist_phase \
+  write_stage_result_with_history \
+  _write_stage_result_trace_event \
   ready_base_sha \
   get_main_head_sha \
   ready_stage_allows_merge \
@@ -136,6 +138,12 @@ for fn in \
   handle_expanded_reroute_handoff_failure \
   recover_missing_expansion_artifact \
   recover_misplaced_coding_complete_marker \
+  seam_artifact_cli_path \
+  seam_validate_artifact \
+  seam_validation_error_summary \
+  seam_validation_has_code \
+  write_coding_complete_marker \
+  wavemill_run_tsx_tool \
   guard_coding_complete_handoff \
   archive_stale_coding_artifacts \
   clear_coding_uncommitted_output_attention \
@@ -188,6 +196,7 @@ run_lifecycle_scenario() {
   MONITOR_FUNC_FILE="$MONITOR_FUNC_FILE" \
   COMMON_LIB="$COMMON_LIB" \
   FIXTURE_DIR="$FIXTURE_DIR" \
+  SOURCE_REPO_DIR="$REPO_DIR" \
   bash -c '
     set -euo pipefail
     source "$COMMON_LIB"
@@ -220,8 +229,8 @@ run_lifecycle_scenario() {
       REQUIRE_CONFIRM="false"
       QUIT_REQUESTED="false"
       FORCE_MODEL=""
-      TOOLS_DIR="$SCENARIO_DIR/tools"
-      LIB_DIR="$SCENARIO_DIR/lib"
+      TOOLS_DIR="$SOURCE_REPO_DIR/tools"
+      LIB_DIR="$SOURCE_REPO_DIR/shared/lib"
       STATUS_LOG_FILE="$SCENARIO_DIR/status.log"
 
       CURRENT_PHASE="planning"
@@ -268,7 +277,7 @@ run_lifecycle_scenario() {
       READY_ATTENTION_CALLS=""
       SAVE_MIGRATION_CALLS=""
 
-      mkdir -p "$WORKTREE_ROOT/$SLUG/features/$SLUG" "$REPO_DIR" "$TOOLS_DIR" "$LIB_DIR"
+      mkdir -p "$WORKTREE_ROOT/$SLUG/features/$SLUG" "$REPO_DIR"
       FEATURE_DIR="$WORKTREE_ROOT/$SLUG/features/$SLUG"
       WT_DIR="$WORKTREE_ROOT/$SLUG"
       printf "{\"title\":\"%s\"}\n" "$TASK_TITLE" > "/tmp/${SESSION}-${ISSUE}-issue.json"
@@ -400,6 +409,10 @@ run_lifecycle_scenario() {
       cat > "$feature_dir/.${stage}-result.json" <<JSON
 {"stage":"$stage","status":"$status","agent":"$agent","model":"$model","notes":"$notes"}
 JSON
+    }
+    # Keep stage-history writes observable through the scenario stage recorder.
+    write_stage_result_with_history() {
+      write_stage_result "$@"
     }
     set_task_phase() {
       CURRENT_PHASE="$2"

@@ -32,16 +32,16 @@ describe('coding-artifacts', () => {
       });
     });
 
-    it('rejects payloads with missing metric fields with per-field missing_field codes', () => {
+    it('rejects payloads with missing metric fields with shared codes', () => {
       const result = validateCodingArtifacts({ type: 'coding', filesChanged: 1 });
       assert.equal(result.ok, false);
       if (result.ok) return;
       assert.deepEqual(
         result.errors.map((error) => ({ code: error.code, path: error.path })),
         [
-          { code: 'missing_field', path: '$.linesAdded' },
-          { code: 'missing_field', path: '$.linesRemoved' },
-          { code: 'missing_field', path: '$.commitCount' },
+          { code: 'MISSING_REQUIRED_FIELD', path: '$.linesAdded' },
+          { code: 'MISSING_REQUIRED_FIELD', path: '$.linesRemoved' },
+          { code: 'MISSING_REQUIRED_FIELD', path: '$.commitCount' },
         ],
       );
     });
@@ -60,10 +60,10 @@ describe('coding-artifacts', () => {
       assert.deepEqual(
         result.errors.map((error) => ({ code: error.code, path: error.path })),
         [
-          { code: 'negative_value', path: '$.filesChanged' },
-          { code: 'non_integer_value', path: '$.linesAdded' },
-          { code: 'non_integer_value', path: '$.linesRemoved' },
-          { code: 'non_integer_value', path: '$.commitCount' },
+          { code: 'INVALID_VALUE', path: '$.filesChanged' },
+          { code: 'INVALID_FIELD_TYPE', path: '$.linesAdded' },
+          { code: 'INVALID_FIELD_TYPE', path: '$.linesRemoved' },
+          { code: 'INVALID_FIELD_TYPE', path: '$.commitCount' },
         ],
       );
     });
@@ -81,28 +81,40 @@ describe('coding-artifacts', () => {
       const result = parseCodingComplete('confidence=certain\n');
       assert.equal(result.ok, false);
       if (result.ok) return;
-      assert.equal(result.errors[0]?.code, 'invalid_confidence');
+      assert.equal(result.errors[0]?.code, 'INVALID_ENUM_VALUE');
     });
 
-    it('parses the current marker format and preserves forward-compatible fields', () => {
-      const result = parseCodingComplete('confidence=high\nproducer=native-agent\n');
+    it('parses JSON markers and preserves forward-compatible fields', () => {
+      const result = parseCodingComplete('{"stage":"coding","confidence":"high","producer":"native-agent"}\n');
       assert.deepEqual(result, {
         ok: true,
         value: {
+          stage: 'coding',
           confidence: 'high',
-          fields: {
-            producer: 'native-agent',
-          },
+          producer: 'native-agent',
         },
       });
 
       assert.equal(
         serializeCodingComplete({
+          stage: 'coding',
           confidence: 'low',
-          fields: { producer: 'native-agent' },
+          producer: 'native-agent',
         }),
-        'confidence=low\nproducer=native-agent\n',
+        '{\n  "stage": "coding",\n  "confidence": "low",\n  "producer": "native-agent"\n}\n',
       );
+    });
+
+    it('accepts legacy key=value markers through the shared normalizer', () => {
+      const result = parseCodingComplete('confidence=high\nproducer=native-agent\n');
+      assert.deepEqual(result, {
+        ok: true,
+        value: {
+          stage: 'coding',
+          confidence: 'high',
+          producer: 'native-agent',
+        },
+      });
     });
   });
 

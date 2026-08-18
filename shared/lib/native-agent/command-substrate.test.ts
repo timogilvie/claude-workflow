@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, describe, it } from 'node:test';
@@ -131,6 +131,116 @@ describe('dangerous command rejection', () => {
     assert.equal(result.approval, 'approved');
     assert.equal(result.commandClass, 'safe');
     assert.equal(spawnCalls, 1);
+  });
+});
+
+describe('exec-form string parsing', () => {
+  it('rejects shell operators before spawn and leaves the cwd untouched', async () => {
+    const cwd = makeTempDir('command-substrate-shell-reject-');
+    let spawnCalls = 0;
+    const transcriptPath = path.join(cwd, 'native-transcript.jsonl');
+    const writer = new TranscriptWriter({ ...TRANSCRIPT_BASE_OPTS, path: transcriptPath });
+
+    const result = await runCommand({
+      command: 'touch x && echo created',
+      cwd,
+      allowedRoots: [cwd],
+      transcriptWriter: writer,
+      spawnFn(file, args, options) {
+        spawnCalls += 1;
+        return spawn(file, args, options);
+      },
+    });
+
+    assert.equal(result.approval, 'rejected');
+    assert.equal(result.rejectionReason, 'unsupported-shell-syntax');
+    assert.equal(result.rejectionDetail, '&&');
+    assert.equal(spawnCalls, 0);
+    assert.deepEqual(readdirSync(cwd).filter((entry) => entry !== 'native-transcript.jsonl'), []);
+
+    const parsed = parseTranscriptJsonl(readFileSync(transcriptPath, 'utf-8'));
+    assert.equal(parsed[0]?.type, 'command_result');
+    if (parsed[0]?.type === 'command_result') {
+      assert.equal(parsed[0].rejectionReason, 'unsupported-shell-syntax');
+    }
+  });
+
+  it('passes quoted string commands to spawn as argv', async () => {
+    const cwd = makeTempDir('command-substrate-quoted-');
+    let captured: { file: string; args: readonly string[] } | undefined;
+
+    const result = await runCommand({
+      command: `node -e "process.exit(0)"`,
+      cwd,
+      allowedRoots: [cwd],
+      spawnFn(file, args, options) {
+        captured = { file, args };
+        return spawn(file, args, options);
+      },
+    });
+
+    assert.equal(result.approval, 'approved');
+    assert.equal(result.exitCode, 0);
+    assert.deepEqual(captured, { file: 'node', args: ['-e', 'process.exit(0)'] });
+  });
+
+  it('reclassifies tokenized argv before spawn', async () => {
+    const cwd = makeTempDir('command-substrate-reclassified-');
+    for (const command of [`"rm" -rf /`, `\\rm -rf /`]) {
+      let spawnCalls = 0;
+      const result = await runCommand({
+        command,
+        cwd,
+        allowedRoots: [cwd],
+        spawnFn(file, args, options) {
+          spawnCalls += 1;
+          return spawn(file, args, options);
+        },
+      });
+
+      assert.equal(result.approval, 'rejected');
+      assert.equal(result.rejectionReason, 'dangerous-command-pattern');
+      assert.equal(spawnCalls, 0);
+    }
+  });
+
+  it('leaves array-form commands untouched', async () => {
+    const cwd = makeTempDir('command-substrate-array-form-');
+    let captured: { file: string; args: readonly string[] } | undefined;
+
+    const result = await runCommand({
+      command: ['node', '-e', 'process.exit(0)', '&&'],
+      cwd,
+      allowedRoots: [cwd],
+      spawnFn(file, args, options) {
+        captured = { file, args };
+        return spawn(file, args, options);
+      },
+    });
+
+    assert.equal(result.approval, 'approved');
+    assert.equal(result.exitCode, 0);
+    assert.deepEqual(captured, { file: 'node', args: ['-e', 'process.exit(0)', '&&'] });
+  });
+
+  it('preserves explicit shell opt-in', async () => {
+    const cwd = makeTempDir('command-substrate-shell-true-');
+    let captured: { file: string; args: readonly string[] } | undefined;
+
+    const result = await runCommand({
+      command: 'exit 0',
+      cwd,
+      allowedRoots: [cwd],
+      shell: true,
+      spawnFn(file, args, options) {
+        captured = { file, args };
+        return spawn(file, args, options);
+      },
+    });
+
+    assert.equal(result.approval, 'approved');
+    assert.equal(result.exitCode, 0);
+    assert.deepEqual(captured, { file: '/bin/sh', args: ['-c', 'exit 0'] });
   });
 });
 

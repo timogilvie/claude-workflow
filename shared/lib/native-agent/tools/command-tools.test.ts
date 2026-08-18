@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, describe, it } from 'node:test';
@@ -74,7 +74,7 @@ describe('native-agent command tools', () => {
     const runTests = createRunTestsTool(repo);
 
     const result = await runTests.execute('call-tests-fail', {
-      command: `node -e process.stderr.write(String.fromCharCode(98,111,111,109)+'\\n');process.exit(2)`,
+      command: `node -e "process.stderr.write(String.fromCharCode(98,111,111,109)+'\\n');process.exit(2)"`,
     });
 
     const details = result.details as RunCommandDetails;
@@ -98,7 +98,7 @@ describe('native-agent command tools', () => {
 
     const result = await Promise.race([
       runTests.execute('call-tests-timeout', {
-        command: `node -e setTimeout(()=>{},5000)`,
+        command: `node -e "setTimeout(()=>{},5000)"`,
         timeoutMs: 200,
       }),
       new Promise<never>((_, reject) => {
@@ -123,7 +123,7 @@ describe('native-agent command tools', () => {
 
     const largeResult = await runTests.execute('call-tests-truncate', {
       command:
-        `node -e console.log('HEAD_MARKER');for(i=0;i<5000;i++)console.log('x'.repeat(50));console.log('TAIL_MARKER')`,
+        `node -e "console.log('HEAD_MARKER');for(i=0;i<5000;i++)console.log('x'.repeat(50));console.log('TAIL_MARKER')"`,
       maxOutputBytes: 1024,
     });
 
@@ -140,7 +140,7 @@ describe('native-agent command tools', () => {
     }
 
     const exactResult = await runTests.execute('call-tests-exact', {
-      command: `node -e process.stdout.write('hello')`,
+      command: `node -e "process.stdout.write('hello')"`,
       maxOutputBytes: 5,
     });
     const exactDetails = exactResult.details as RunCommandDetails;
@@ -190,12 +190,84 @@ describe('native-agent command tools', () => {
     assert.equal(testResult.metadata?.trust?.sourceKind, 'command_output');
   });
 
+  it('rejects shell operators before spawn for run_tests and run_format', async () => {
+    const repo = makeTempDir('command-tools-shell-operators-');
+    let spawnCalls = 0;
+    const spawnSpy = (file: string, args: readonly string[], options: any) => {
+      spawnCalls += 1;
+      return spawn(file, [...args], options);
+    };
+
+    const runTests = createRunTestsTool(repo, { spawnFn: spawnSpy });
+    const runFormat = createRunFormatTool(repo, { spawnFn: spawnSpy });
+
+    for (const [tool, command] of [
+      [runTests, 'touch X && echo created'],
+      [runFormat, 'touch Y && echo created'],
+    ] as const) {
+      const result = await tool.execute('call-shell-reject', { command });
+      const details = result.details as RunCommandDetails;
+
+      assert.equal(details.ok, false);
+      if (!details.ok) {
+        assert.equal(details.status, 'rejected');
+        assert.equal(details.error, 'unsupported_shell_syntax');
+        assert.equal(details.reason, 'unsupported-shell-syntax');
+        assert.match(details.message, /offending token: "&&"/);
+        assert.match(details.retryHint ?? '', /one program per call/);
+        const afterCall = await commandToolsAfterToolCall({
+          toolCall: { name: details.tool },
+          result,
+        });
+        assert.deepEqual(afterCall, { isError: true });
+      }
+    }
+
+    assert.equal(spawnCalls, 0);
+    assert.deepEqual(readdirSync(repo), []);
+    for (const name of ['&&', 'echo', 'created', 'X', 'Y']) {
+      assert.equal(existsSync(path.join(repo, name)), false);
+    }
+  });
+
+  it('rejects pipes redirects and expansions as unsupported shell syntax', async () => {
+    const repo = makeTempDir('command-tools-shell-variants-');
+    const runTests = createRunTestsTool(repo);
+
+    for (const command of ['ls -l | cat', 'echo hello > output.txt', 'echo $VAR']) {
+      const result = await runTests.execute('call-shell-variant', { command });
+      const details = result.details as RunCommandDetails;
+      assert.equal(details.ok, false);
+      if (!details.ok) {
+        assert.equal(details.error, 'unsupported_shell_syntax');
+        assert.equal(details.reason, 'unsupported-shell-syntax');
+      }
+    }
+    assert.equal(existsSync(path.join(repo, 'output.txt')), false);
+  });
+
+  it('round-trips quoted arguments through the command substrate', async () => {
+    const repo = makeTempDir('command-tools-quoted-');
+    const runTests = createRunTestsTool(repo);
+
+    const result = await runTests.execute('call-tests-quoted', {
+      command: `node -e "console.log('meta')"`,
+    });
+
+    const details = result.details as RunCommandDetails;
+    assert.equal(details.ok, true);
+    if (details.ok) {
+      assert.equal(details.exitCode, 0);
+      assert.equal(details.stdout.trim(), 'meta');
+    }
+  });
+
   it('includes required execution metadata on completed results', async () => {
     const repo = makeTempDir('command-tools-metadata-');
     const runTests = createRunTestsTool(repo);
 
     const result = await runTests.execute('call-tests-metadata', {
-      command: `node -e console.log('meta')`,
+      command: `node -e "console.log('meta')"`,
     });
 
     const details = result.details as RunCommandDetails;
@@ -268,7 +340,7 @@ describe('native-agent command tools', () => {
       command: 'sudo ls',
     });
     const completed = await runTests.execute('call-tests-completed', {
-      command: `node -e process.exit(3)`,
+      command: `node -e "process.exit(3)"`,
     });
 
     const rejectedAfter = await commandToolsAfterToolCall({

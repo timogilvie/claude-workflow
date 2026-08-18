@@ -113,14 +113,14 @@ describe('native-agent mutation tools', () => {
 
     const result = await tool.execute('call-4', {
       path: 'features/demo/.coding-complete',
-      content: 'confidence=high\n',
+      content: '{"stage":"coding","confidence":"high"}\n',
     });
 
     const details = result.details as CreateMarkerDetails;
     assert.equal(details.ok, true);
     if (details.ok) {
       assert.equal(details.resolvedPath, 'features/demo/.coding-complete');
-      assert.equal(readFileSync(path.join(repo, details.resolvedPath), 'utf-8'), 'confidence=high\n');
+      assert.equal(readFileSync(path.join(repo, details.resolvedPath), 'utf-8'), '{\n  "stage": "coding",\n  "confidence": "high"\n}\n');
     }
   });
 
@@ -147,7 +147,7 @@ describe('native-agent mutation tools', () => {
 
     const details = result.details as WriteArtifactDetails;
     assert.equal(details.ok, true);
-    assert.match(result.content[0]!.text, /normalized yaml payload/);
+    assert.match(result.content[0]!.text, /normalized flat YAML payload/);
     const saved = JSON.parse(readFileSync(path.join(repo, 'features/demo/.coding-blocked-completion.json'), 'utf-8'));
     assert.equal(saved.stage, 'coding');
     assert.deepEqual(saved.passingChecks, ['node --test shared/lib/example.test.ts']);
@@ -165,8 +165,8 @@ describe('native-agent mutation tools', () => {
     assert.equal(details.ok, false);
     if (!details.ok) {
       assert.equal(details.error, 'completion_artifact_validation_failed');
-      assert.match(details.message, /confidence/);
-      assert.match(details.retryHint ?? '', /confidence=high/);
+      assert.match(details.message, /MALFORMED_JSON/);
+      assert.match(details.retryHint ?? '', /"confidence"/);
     }
     assert.equal(existsSync(path.join(repo, 'features/demo/.coding-complete')), false);
   });

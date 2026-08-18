@@ -3245,9 +3245,256 @@ wavemill_pane_repaint() {
   WAVEMILL_PANE_REPAINT_LAST_LINES=$current_lines
 }
 
+
+# ============================================================================
+# PANE MESSAGE DELIVERY (HOK-2765)
+# ============================================================================
+# Helper to send a message to a tmux pane and confirm it was submitted by the
+# agent TUI, with retries. This avoids "fire-and-forget" sends that can
+# leave messages stranded in the input buffer if the TUI is unresponsive.
+
+WAVEMILL_PANE_MESSAGE_ATTEMPTS="${WAVEMILL_PANE_MESSAGE_ATTEMPTS:-3}"
+WAVEMILL_PANE_MESSAGE_CONFIRM_WAIT="${WAVEMILL_PANE_MESSAGE_CONFIRM_WAIT:-3}"
+WAVEMILL_PANE_MESSAGE_POLL="${WAVEMILL_PANE_MESSAGE_POLL:-0.3}"
+WAVEMILL_PANE_MESSAGE_ENTER_DELAY="${WAVEMILL_PANE_MESSAGE_ENTER_DELAY:-0.3}"
+WAVEMILL_PANE_MESSAGE_RETRY_DELAY="${WAVEMILL_PANE_MESSAGE_RETRY_DELAY:-1}"
+WAVEMILL_PANE_MESSAGE_CAPTURE_LINES="${WAVEMILL_PANE_MESSAGE_CAPTURE_LINES:-60}"
+
+# Captures the tail of a pane, joining wrapped lines so that long inputs
+# that wrap in the TUI can still be detected on a single logical line.
+# Args: <target-pane>
+wavemill_pane_capture_tail() {
+  local target="$1"
+  local lines="${WAVEMILL_PANE_MESSAGE_CAPTURE_LINES:-60}"
+  # -J joins wrapped lines. -S gives history from the bottom up.
+  # -N prevents capturing output that has scrolled off screen.
+  tmux capture-pane -p -J -t "$target" -S -"$lines" -N 2>/dev/null || true
+}
+
+# Produces a stable, whitespace-trimmed prefix of a message to use as a marker
+# for detecting if the message is present in the pane's input buffer.
+# Args: <message>
+wavemill_pane_message_marker() {
+  local message="$1"
+  # Take the first 32 chars, strip leading/trailing whitespace.
+  printf '%s' "${message:0:32}" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g'
+}
+
+# Inspects a captured pane tail to determine the state of the input line.
+# Args: <tail-text> <marker-text>
+# Output: pending | submitted | cleared | unknown
+wavemill_pane_tail_input_state() {
+  local tail="$1" marker="$2"
+  local last_prompt_line="" prompt_line_count=0 has_marker_elsewhere=false
+
+  # Find the last input prompt line (❯, ›, >) in the tail.
+  # The `case` statement is a portable, locale-safe way to match these specific
+  # UTF-8 glyphs, avoiding `grep '[...]'` which can have surprising behavior
+  # with multibyte characters under some locales (e.g., LC_ALL=C).
+  while IFS= read -r line; do
+    # Strip leading whitespace for prompt check
+    local stripped_line
+    stripped_line="${line#*"${line%%[![:space:]]*}"}"
+
+    case "$stripped_line" in
+      # Note: space after glyph is optional for some TUIs.
+      "❯ "*|"❯"*|"› "*|"›"*|"> "*|">"*)
+        last_prompt_line="$line"
+        prompt_line_count=$((prompt_line_count + 1))
+        ;;
+      *)
+        # If a line that is NOT the last prompt line contains the marker, it's an echo.
+        if [[ "$last_prompt_line" != "" && "$line" == *"$marker"* ]]; then
+          has_marker_elsewhere=true
+        fi
+        ;;
+    esac
+  done <<< "$tail"
+
+  if [[ -z "$last_prompt_line" ]]; then
+    # No prompt line found at all (e.g., TUI showing a modal dialog).
+    if [[ "$tail" == *"$marker"* ]]; then
+      # Marker is visible, but we can't determine if it is in an input box.
+      # This can happen if the prompt line scrolled off the captured tail.
+      # Treat as pending to be safe.
+      printf 'pending\n'
+    else
+      printf 'unknown\n'
+    fi
+    return
+  fi
+
+  if [[ "$last_prompt_line" == *"$marker"* ]]; then
+    # The last prompt line itself contains the marker text. It's pending.
+    printf 'pending\n'
+  elif [[ "$has_marker_elsewhere" == true || "$prompt_line_count" -gt 1 && "$tail" == *"$marker"* ]]; then
+    # The last prompt is clear, but the marker exists elsewhere in the tail
+    # (likely an echo of the submitted command). It's submitted.
+    printf 'submitted\n'
+  else
+    # The last prompt line is clear, and the marker is not found elsewhere. Cleared.
+    printf 'cleared\n'
+  fi
+}
+
+# Checks if a wavemill status hook file confirms a recent submission.
+# Args: <hook_file> <send_timestamp_epoch> <baseline_hook_state>
+# Returns 0 if confirmed, 1 otherwise.
+wavemill_pane_hook_confirms_submit() {
+  local hook_file="$1" send_ts="$2" baseline_state="$3"
+  local state event timestamp hook_ts
+
+  [[ -f "$hook_file" ]] || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+
+  # Read the latest hook state.
+  local hook_json
+  hook_json=$(jq -c . "$hook_file" 2>/dev/null) || return 1
+  state=$(printf '%s' "$hook_json" | jq -r '.state // empty')
+  event=$(printf '%s' "$hook_json" | jq -r '.event // empty')
+  timestamp=$(printf '%s' "$hook_json" | jq -r '.timestamp // 0')
+  hook_ts="${timestamp%.*}" # truncate fractional seconds
+
+  # Confirm the hook event is fresh (happened at or after our send).
+  (( hook_ts < send_ts )) && return 1
+
+  # Signal 1: Explicit submission event from the TUI.
+  if [[ "$event" == "UserPromptSubmit" ]]; then
+    return 0
+  fi
+
+  # Signal 2: State transitioned from something else to 'working'. This covers
+  # cases where a `PreToolUse` event might overwrite the `UserPromptSubmit` event
+  # within our polling window.
+  if [[ "$state" == "working" && "$baseline_state" != "working" ]]; then
+    return 0
+  fi
+
+  return 1
+}
+
+# Send a message to a tmux pane and confirm its submission, with retries.
+# Sets global variables with the outcome:
+#   WAVEMILL_PANE_MESSAGE_LAST_STATUS: delivered|stranded|unconfirmed|unavailable
+#   WAVEMILL_PANE_MESSAGE_LAST_SIGNAL: hook|pane|none
+#   WAVEMILL_PANE_MESSAGE_LAST_ATTEMPTS: <number>
+#   WAVEMILL_PANE_MESSAGE_LAST_DETAIL: <string>
+#
+# Args: <target-pane> <message> [issue_id] [session_name]
+# Returns 0 on successful (confirmed) delivery, 1 otherwise.
+wavemill_pane_send_message() {
+  local target="$1" message="$2" issue="${3:-}" session="${4:-}"
+
+  # Reset output globals
+  WAVEMILL_PANE_MESSAGE_LAST_STATUS="unconfirmed"
+  WAVEMILL_PANE_MESSAGE_LAST_SIGNAL="none"
+  WAVEMILL_PANE_MESSAGE_LAST_ATTEMPTS=0
+  WAVEMILL_PANE_MESSAGE_LAST_DETAIL=""
+
+  # 1. Precondition: Check if pane exists and is alive.
+  if ! tmux list-panes -t "$target" -F '#{pane_dead}' 2>/dev/null | grep -q '^0$'; then
+    WAVEMILL_PANE_MESSAGE_LAST_STATUS="unavailable"
+    WAVEMILL_PANE_MESSAGE_LAST_DETAIL="Pane $target not found or is dead."
+    return 1
+  fi
+
+  local marker
+  marker="$(wavemill_pane_message_marker "$message")"
+  [[ -z "$marker" ]] && {
+    WAVEMILL_PANE_MESSAGE_LAST_STATUS="unconfirmed"
+    WAVEMILL_PANE_MESSAGE_LAST_DETAIL="Message is empty or whitespace-only; cannot track."
+    return 1 # Cannot track an empty message
+  }
+
+  # 2. Baseline: Capture initial hook state if available.
+  local hook_file="" baseline_hook_state="" baseline_hook_ts=0
+  if [[ -n "$session" && -n "$issue" ]]; then
+    hook_file="/tmp/wavemill-${session}-${issue}.hook"
+    if [[ -f "$hook_file" ]] && command -v jq >/dev/null 2>&1; then
+      local hook_json
+      hook_json=$(jq -c . "$hook_file" 2>/dev/null || echo '{}')
+      baseline_hook_state=$(printf '%s' "$hook_json" | jq -r '.state // empty')
+      baseline_hook_ts=$(printf '%s' "$hook_json" | jq -r '.timestamp // 0' | sed 's/\..*//')
+    fi
+  fi
+
+  local attempt last_pane_state="unknown" text_needs_sending=true
+  for attempt in $(seq 1 "$WAVEMILL_PANE_MESSAGE_ATTEMPTS"); do
+    WAVEMILL_PANE_MESSAGE_LAST_ATTEMPTS=$attempt
+    local send_ts
+    send_ts="$(date +%s)"
+
+    # 3. Send keys. If the last attempt left the text in the input box,
+    #    only send Enter this time. Otherwise, send the full literal text.
+    if [[ "$text_needs_sending" == "true" ]]; then
+      # The -l flag sends the message literally, avoiding shell interpretation.
+      # A small delay between typing and Enter can help reliability in some TUIs.
+      tmux send-keys -t "$target" -l -- "$message"
+      sleep "$WAVEMILL_PANE_MESSAGE_ENTER_DELAY"
+    fi
+    tmux send-keys -t "$target" C-m
+
+    # 4. Poll for confirmation.
+    local poll_end_ts
+    poll_end_ts=$(( $(date +%s) + WAVEMILL_PANE_MESSAGE_CONFIRM_WAIT ))
+    while [[ $(date +%s) -lt "$poll_end_ts" ]]; do
+      # a. Check hook first (most reliable signal for supported agents).
+      if [[ -n "$hook_file" ]]; then
+        if wavemill_pane_hook_confirms_submit "$hook_file" "$send_ts" "$baseline_hook_state"; then
+          WAVEMILL_PANE_MESSAGE_LAST_STATUS="delivered"
+          WAVEMILL_PANE_MESSAGE_LAST_SIGNAL="hook"
+          WAVEMILL_PANE_MESSAGE_LAST_DETAIL="Confirmed by agent hook."
+          return 0
+        fi
+      fi
+
+      # b. Check pane content as a fallback.
+      local tail
+      tail="$(wavemill_pane_capture_tail "$target")"
+      last_pane_state="$(wavemill_pane_tail_input_state "$tail" "$marker")"
+
+      if [[ "$last_pane_state" == "submitted" || "$last_pane_state" == "cleared" ]]; then
+        WAVEMILL_PANE_MESSAGE_LAST_STATUS="delivered"
+        WAVEMILL_PANE_MESSAGE_LAST_SIGNAL="pane"
+        WAVEMILL_PANE_MESSAGE_LAST_DETAIL="Confirmed by pane content analysis (state: $last_pane_state)."
+        return 0
+      fi
+
+      sleep "$WAVEMILL_PANE_MESSAGE_POLL"
+    done
+
+    # 5. End of attempt: Decide whether to re-type or just press Enter next time.
+    local tail
+    tail="$(wavemill_pane_capture_tail "$target")"
+    last_pane_state="$(wavemill_pane_tail_input_state "$tail" "$marker")"
+
+    if [[ "$last_pane_state" == "pending" ]]; then
+      # Text is sitting in the input box. Next attempt should just send Enter.
+      text_needs_sending=false
+      WAVEMILL_PANE_MESSAGE_LAST_STATUS="stranded"
+      WAVEMILL_PANE_MESSAGE_LAST_DETAIL="Message text remained in the pane input line."
+    else
+      # Text is not in the input box. Maybe it was cleared, maybe it never arrived.
+      # Re-send the full text on the next attempt to be safe.
+      text_needs_sending=true
+      WAVEMILL_PANE_MESSAGE_LAST_STATUS="unconfirmed"
+      WAVEMILL_PANE_MESSAGE_LAST_DETAIL="Submission not confirmed by hook or pane content (last state: $last_pane_state)."
+    fi
+
+    # If not the last attempt, wait before retrying.
+    if (( attempt < WAVEMILL_PANE_MESSAGE_ATTEMPTS )); then
+      sleep "$WAVEMILL_PANE_MESSAGE_RETRY_DELAY"
+    fi
+  done
+
+  # 6. Retries exhausted.
+  return 1
+}
+
 # ============================================================================
 # TRACE CORRELATION HELPERS (HOK-2259)
 # ============================================================================
+
 # Best-effort task lifecycle event stream written to features/<slug>/trace.jsonl.
 # All functions are no-ops on error and never fail the calling workflow.
 

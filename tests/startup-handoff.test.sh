@@ -602,7 +602,8 @@ mkdir -p "$STALE_FEATURE_DIR"
 printf '{"stage":"coding","status":"running"}\n' > "$STALE_FEATURE_DIR/.coding-result.json"
 printf '{"stage":"review","status":"running"}\n' > "$STALE_FEATURE_DIR/.review-result.json"
 printf 'stale plan\n' > "$STALE_FEATURE_DIR/plan.md"
-touch "$STALE_FEATURE_DIR/.plan-approved" "$STALE_FEATURE_DIR/.coding-complete"
+touch "$STALE_FEATURE_DIR/.plan-approved"
+printf '{"stage":"coding","confidence":"high"}\n' > "$STALE_FEATURE_DIR/.coding-complete"
 
 SUCCESS_OUTPUT="$TMP_ROOT/success-output.txt"
 bash "$RUNNER_SCRIPT" "$SUCCESS_PLAN" > "$SUCCESS_OUTPUT" 2>&1
