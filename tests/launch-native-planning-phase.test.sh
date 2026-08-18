@@ -322,7 +322,7 @@ fi
 
 ROLE_REPO="$TMPDIR_TEST/role-guard-repo"
 ROLE_CERT_ROOT="$TMPDIR_TEST/role-guard-global-certs"
-mkdir -p "$ROLE_CERT_ROOT/qwen/qwen3-coder" "$ROLE_REPO"
+mkdir -p "$ROLE_CERT_ROOT/google/gemini-2.5-flash" "$ROLE_REPO"
 cat > "$ROLE_REPO/.wavemill-config.json" <<'EOF'
 {
   "nativeAgent": {
@@ -332,17 +332,17 @@ cat > "$ROLE_REPO/.wavemill-config.json" <<'EOF'
       "openrouter": {
         "enabled": true,
         "apiKeyEnv": "TEST_OPENROUTER_KEY",
-        "models": ["qwen/qwen3-coder"]
+        "models": ["google/gemini-2.5-flash"]
       }
     }
   }
 }
 EOF
-cat > "$ROLE_CERT_ROOT/qwen/qwen3-coder/v2.json" <<'EOF'
+cat > "$ROLE_CERT_ROOT/google/gemini-2.5-flash/v2.json" <<'EOF'
 {
   "schemaVersion": 2,
-  "provider": "qwen",
-  "model": "qwen3-coder",
+  "provider": "google",
+  "model": "gemini-2.5-flash",
   "phase": "workflow",
   "suiteVersion": "v2",
   "certifiedAt": "2099-01-01T00:00:00.000Z",
@@ -359,10 +359,10 @@ fi
 probe_stdout="$TMPDIR_TEST/role-probe.stdout"
 probe_stderr="$TMPDIR_TEST/role-probe.stderr"
 agent_run_tsx_tool() {
-  printf '%s\n' '{"ok":false,"reason":"native provider openrouter/qwen-3-coder is not eligible for planning (eligible roles: coding, review)"}'
+  printf '%s\n' '{"ok":false,"reason":"native provider openrouter/gemini-2.5-flash is not eligible for planning (eligible roles: coding, review)"}'
   return 1
 }
-if TEST_OPENROUTER_KEY="sk-test" TOOLS_DIR="$REPO_DIR/tools" agent_native_launch_probe "native-openrouter" "planning" "qwen-3-coder" "$ROLE_REPO" >"$probe_stdout" 2>"$probe_stderr"; then
+if TEST_OPENROUTER_KEY="sk-test" TOOLS_DIR="$REPO_DIR/tools" agent_native_launch_probe "native-openrouter" "planning" "gemini-2.5-flash" "$ROLE_REPO" >"$probe_stdout" 2>"$probe_stderr"; then
   fail "role-ineligible native launch probe rejects planner route"
 else
   pass "role-ineligible native launch probe rejects planner route"
@@ -391,7 +391,7 @@ if TEST_OPENROUTER_KEY="sk-test" \
   REPO_DIR="$ROLE_REPO" \
   WAVEMILL_FEATURE_DIR="$ROLE_REPO/features/demo" \
   WAVEMILL_FEATURE_SLUG="demo" \
-  agent_launch_interactive "sess" "planning" "$BAD_INTERACTIVE_PROMPT" "native-openrouter" "qwen-3-coder" "" "" "HOK-2319_c" \
+  agent_launch_interactive "sess" "planning" "$BAD_INTERACTIVE_PROMPT" "native-openrouter" "gemini-2.5-flash" "" "" "HOK-2319_c" \
     >"$TMPDIR_TEST/bad-interactive.stdout" 2>"$TMPDIR_TEST/bad-interactive.stderr"; then
   fail "interactive native planner rejects role-ineligible qwen route"
 else
@@ -402,7 +402,7 @@ if [[ -f "$BAD_INTERACTIVE_LAUNCHER" ]]; then
 else
   pass "role-ineligible interactive native planner does not write launcher"
 fi
-if grep -Eq "not eligible for planning|Failed to resolve model selector 'qwen-3-coder'|Rejecting invalid model 'qwen-3-coder'|native launch probe failed for native-openrouter/planning|model=qwen-3-coder.*reason=role-ineligible" "$TMPDIR_TEST/bad-interactive.stderr"; then
+if grep -Eq "not eligible for planning|Failed to resolve model selector 'gemini-2.5-flash'|Rejecting invalid model 'gemini-2.5-flash'|native launch probe failed for native-openrouter/planning|model=gemini-2.5-flash.*reason=role-ineligible" "$TMPDIR_TEST/bad-interactive.stderr"; then
   pass "interactive native planner emits role rejection"
 else
   fail "interactive native planner emits role rejection" "$(cat "$TMPDIR_TEST/bad-interactive.stderr")"

@@ -112,7 +112,7 @@
       "family": "qwen",
       "status": "active",
       "priorityTier": 1,
-      "roleEligibility": ["coding", "review"]
+      "roleEligibility": ["planning", "coding", "review"]
     },
     {
       "wavemillAlias": "qwen-3-235b",

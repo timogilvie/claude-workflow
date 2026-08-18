@@ -25,11 +25,18 @@ import {
   OPENROUTER_NATIVE_PROVIDER,
   OPENAI_DEFAULT_MODELS,
   OPENROUTER_DEFAULT_MODELS,
+  OPENAI_DEFAULT_API_KEY_ENV,
+  OPENROUTER_DEFAULT_API_KEY_ENV,
+  OPENAI_DEFAULT_BASE_URL,
+  OPENROUTER_DEFAULT_BASE_URL,
+  buildOpenAiResponsesModel,
+  buildOpenRouterModel,
   type ReadyNativeProviderEntry,
   type UnavailableNativeProviderEntry,
   type SkippedNativeProviderEntry,
   type ResolvedNativeProviderEntry,
 } from './providers.ts';
+import { resolveEnvValue } from '../env-file.ts';
 import { createReadOnlyTools, READ_ONLY_PATH_FIELDS } from './tools/read-only.ts';
 import {
   createGitCommitTools,
@@ -186,8 +193,57 @@ function resolveProviderEntry(
   const defaultEntries = resolveNativeAgentProviders(defaultConfig, { env, repoDir, registry, certificationMode });
   const fallback = defaultEntries.find((e) => e.providerName === provider);
   if (!fallback) {
-    // Should not happen — we just added the provider to the config.
-    throw new Error(`Failed to resolve default entry for provider "${provider}"`);
+    // Smoke runs still need stable provider metadata even when the production
+    // effective pool is empty because no task-launchable default is certified.
+    const modelId = modelIdOverride
+      ?? (provider === OPENAI_NATIVE_PROVIDER ? OPENAI_DEFAULT_MODELS[0] : OPENROUTER_DEFAULT_MODELS[0]);
+    const apiKeyEnv = providerConfig.apiKeyEnv?.trim()
+      || (provider === OPENAI_NATIVE_PROVIDER ? OPENAI_DEFAULT_API_KEY_ENV : OPENROUTER_DEFAULT_API_KEY_ENV);
+    const baseUrl = providerConfig.baseUrl?.trim()
+      || (provider === OPENAI_NATIVE_PROVIDER ? OPENAI_DEFAULT_BASE_URL : OPENROUTER_DEFAULT_BASE_URL);
+    const headers = Object.fromEntries(
+      Object.entries(providerConfig.headers ?? {})
+        .map(([name, value]) => [name.trim(), value])
+        .filter(([name]) => name.length > 0),
+    );
+    const apiKey = env?.[apiKeyEnv]?.trim() || resolveEnvValue([apiKeyEnv], repoDir);
+    if (!apiKey) {
+      return {
+        providerName: provider,
+        modelId,
+        status: 'unavailable',
+        apiKeyEnv,
+        baseUrl,
+        headers,
+        reason: `${apiKeyEnv} is not set`,
+      };
+    }
+    if (certificationMode) {
+      const readyEntry: ReadyNativeProviderEntry = {
+        providerName: provider,
+        modelId,
+        status: 'ready',
+        apiKeyEnv,
+        baseUrl,
+        headers,
+        model: provider === OPENAI_NATIVE_PROVIDER
+          ? buildOpenAiResponsesModel({ modelId, baseUrl, headers })
+          : buildOpenRouterModel({ modelId, baseUrl, headers }),
+        certificationOnly: true,
+      };
+      return readyEntry;
+    }
+    return {
+      providerName: provider,
+      modelId,
+      status: 'uncertified',
+      apiKeyEnv,
+      baseUrl,
+      headers,
+      reason: 'no task-launchable default model resolved for smoke fallback',
+      capability: registry?.models[modelId]?.nativeCapability?.readOnlyNative ?? 'unregistered',
+      rejectionReason: 'missing_artifact',
+    };
   }
   return fallback;
 }
@@ -409,7 +465,9 @@ export async function runNativeAgentLive(
   }
 
   const readyEntry = entry as ReadyNativeProviderEntry;
-  const apiKey = getNativeProviderApiKey(readyEntry);
+  const apiKey = getNativeProviderApiKey(readyEntry)
+    ?? env?.[readyEntry.apiKeyEnv]?.trim()
+    ?? resolveEnvValue([readyEntry.apiKeyEnv], repoDir);
   if (!apiKey) {
     // Defensive: should not happen when status === 'ready'.
     return {
