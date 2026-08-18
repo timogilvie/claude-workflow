@@ -29,6 +29,7 @@ import {
   listRemoteTaskBranches,
   loadWorkflowStateChallengeData,
   type ChallengeGate,
+  type UnresolvableReason,
 } from './tend-challenge-gate.ts';
 
 const execFileAsync = promisify(execFile);
@@ -1274,6 +1275,20 @@ function classifyMergeLaneChallengeBlocker(
       recoveryCommand,
     };
   }
+  if (challengeGate.reason === 'sibling-challenge-aborted') {
+    return {
+      kind: 'needs-user',
+      detail: `PR #${snapshot.prNumber} is blocked from merging: challenge pair ${challengeGate.pairId}${pairLabel} cannot produce a comparison because one arm hit a terminal launch/stage failure and was quarantined.`,
+      recoveryCommand,
+    };
+  }
+  if (challengeGate.reason === 'both-challenge-aborted') {
+    return {
+      kind: 'needs-user',
+      detail: `PR #${snapshot.prNumber} is blocked from merging: challenge pair ${challengeGate.pairId}${pairLabel} was quarantined after a terminal stage failure (both arms marked aborted), so no comparison can be produced.`,
+      recoveryCommand,
+    };
+  }
   return {
     kind: 'needs-user',
     detail: `PR #${snapshot.prNumber} is blocked from merging: challenge pair ${challengeGate.pairId}${pairLabel} cannot produce a comparison because both sides exhausted challenge eval hard-failure retries.`,
@@ -1284,7 +1299,7 @@ function classifyMergeLaneChallengeBlocker(
 function buildChallengePairRecoveryCommand(
   snapshot: ReadyTaskSnapshot,
   pairId: string,
-  reason: 'orphan-sibling' | 'sibling-eval-hard-failed' | 'both-eval-hard-failed',
+  reason: UnresolvableReason,
 ): string {
   return [
     'npx',

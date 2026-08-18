@@ -36,7 +36,28 @@ Every canonical entry in `DEFAULT_MODEL_REGISTRY` must include:
 Repository-local `modelRegistry.models.<id>` overrides are no longer accepted.
 Canonical global registry entries must provide the complete metadata above.
 
+## Retiring a model
+
+Retire a model that can no longer launch (absent from the OpenRouter catalog,
+no tool support, etc.) without deleting its registry entry, so historical eval
+records and cost attribution still resolve via `getModel()` /
+`resolveModelRegistryKey()`.
+
+1. In `shared/lib/model-registry.ts`, set `supportedModel.lifecycle: 'blocked'`
+   on the entry and add a dated `limitations` note. `explainModelSupportExclusion`
+   returns `'blocked-lifecycle'` for blocked entries, excluding them from every
+   effective stage pool.
+2. Correct any capability field that was untruthful (e.g. set `toolSupport: 'none'`
+   when the provider advertises no tool support).
+3. In `shared/fixtures/model_30_launch_priority_models.v1.json`, set the same
+   alias to `"status": "deprecated"` so `sync-openrouter-catalog` reports it as
+   `deprecated` instead of `not_found_in_openrouter` drift, and
+   `normalizeModels()` drops it from the advertised OpenRouter model list.
+4. Run `npx tsx tools/audit-openrouter-aliases.ts --offline` to confirm the
+   retired alias is flagged but not selectable (exit 0).
+
 ## Family Aliases
+
 
 Family aliases are stable developer-facing names that parse into `ModelSelector` values in `shared/lib/model-registry.ts`. `parseModelSelector` only validates selector syntax and shape; it does not resolve aliases against the active registry.
 

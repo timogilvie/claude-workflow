@@ -29,7 +29,12 @@ export interface OpenRouterPoolFilterResult {
 }
 
 function normalizeModels(): string[] {
-  const fixtureAliases = loadLaunchPriorityList().map((entry) => entry.wavemillAlias);
+  // Deprecated aliases (retired native-openrouter models, HOK-2773) are skipped
+  // so providers.openrouter.models no longer advertises them. isOpenRouterModel()
+  // and resolveOpenRouterModelId() still resolve them for attribution and doctor.
+  const fixtureAliases = loadLaunchPriorityList()
+    .filter((entry) => entry.status !== 'deprecated')
+    .map((entry) => entry.wavemillAlias);
   return [...new Set(
     fixtureAliases
       .map((modelId) => resolveOpenRouterModelIdentity(modelId))

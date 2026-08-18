@@ -168,6 +168,30 @@ const PI_TRANSPORT_KINDS: readonly PiTransportKind[] = ['openai-responses', 'ope
 const CERTIFICATION_PHASES: readonly CertificationPhase[] = PHASE_ORDER;
 const MODEL_LIFECYCLE_STATUSES: readonly ModelLifecycleStatus[] = ['supported', 'deprecated', 'blocked'];
 const SUPPORTED_MODEL_STAGES: readonly SupportedModelStage[] = ['expansion', 'planning', 'coding', 'review'];
+const TOOL_SUPPORT_RANK: Record<ToolSupport, number> = { none: 0, basic: 1, full: 2 };
+
+/**
+ * Minimum tool support a model must declare to be selectable for a stage.
+ *
+ * Every agentic stage drives the model through tool calls (read_file, patch,
+ * shell), so a model with no tool support cannot complete a launch at all
+ * (HOK-2773: qwen-2.5-coder-32b failed with "404 No endpoints found that
+ * support tool use"). Raise a stage's floor here if it ever needs 'full'.
+ */
+export const MINIMUM_TOOL_SUPPORT_BY_STAGE: Readonly<Record<SupportedModelStage, ToolSupport>> = Object.freeze({
+  expansion: 'basic',
+  planning: 'basic',
+  coding: 'basic',
+  review: 'basic',
+});
+
+export function satisfiesStageToolSupport(
+  toolSupport: ToolSupport | undefined,
+  stage: SupportedModelStage,
+): boolean {
+  const required = MINIMUM_TOOL_SUPPORT_BY_STAGE[stage];
+  return TOOL_SUPPORT_RANK[toolSupport ?? 'none'] >= TOOL_SUPPORT_RANK[required];
+}
 const UNSAFE_CERTIFICATION_SEGMENT = /[/\\.\0]/;
 const OPENROUTER_CERTIFICATION_SEED = Object.freeze({
   maxCertifiedPhase: 'workflow' as const,
@@ -225,6 +249,7 @@ function openRouterSupportedModel(input: {
   providerNativeId: string;
   stages: SupportedModelStage[];
   lifecycle?: ModelLifecycleStatus;
+  limitations?: string[];
 }): SupportedModelMetadata {
   const [provider, model] = input.providerNativeId.split('/');
   return {
@@ -247,6 +272,7 @@ function openRouterSupportedModel(input: {
     compatibilityFlags: { thinkingFormat: 'openrouter' },
     launchEligible: true,
     routingEligible: true,
+    ...(input.limitations ? { limitations: [...input.limitations] } : {}),
   };
 }
 
@@ -1696,11 +1722,18 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
         stages: ['coding', 'review'],
       }),
     },
+    // Retired native-openrouter models (HOK-2773) keep their registry entry
+    // with `lifecycle: 'blocked'` so historical eval records still resolve via
+    // getModel()/resolveModelRegistryKey(); they are excluded from every
+    // effective stage pool by explainModelSupportExclusion (which checks
+    // `blocked-lifecycle` before any stage/tool gate). Their fixture rows are
+    // also marked `deprecated` so sync-openrouter-catalog reports them as
+    // `deprecated` instead of `not_found_in_openrouter` drift.
     'gemini-2.0-flash': {
       vendor: 'google',
       class: 'fast_economy',
       strengths: ['fast coding assistance', 'low latency', 'Gemini family coverage'],
-      weaknesses: ['coding-only watchlist entry', 'older than Gemini 2.5 flash', 'OpenRouter dependency'],
+      weaknesses: ['coding-only watchlist entry', 'older than Gemini 2.5 flash', 'OpenRouter dependency', 'retired: absent from OpenRouter catalog'],
       qualityScores: scores(52, 0, 74, 0, 60),
       defaultLadderEligible: false,
       contextWindowTokens: 1_000_000,
@@ -1716,6 +1749,8 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
         alias: 'gemini-2.0-flash',
         providerNativeId: 'google/gemini-2.0-flash-001',
         stages: ['coding'],
+        lifecycle: 'blocked',
+        limitations: ['retired 2026-08-18: google/gemini-2.0-flash-001 is absent from the live OpenRouter catalog'],
       }),
     },
     'llama-4-maverick': {
@@ -1933,6 +1968,8 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
         alias: 'deepseek-coder-v2',
         providerNativeId: 'deepseek/deepseek-coder-v2-instruct',
         stages: ['coding'],
+        lifecycle: 'blocked',
+        limitations: ['retired 2026-08-18: alias resolves to no OpenRouter wire id (deepseek/* is not routed natively) and deepseek/deepseek-coder-v2-instruct is absent from the live catalog'],
       }),
     },
     'qwen-2.5-coder-32b': {
@@ -1944,7 +1981,7 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       pricing: { inputCostPerMTok: 0.2, outputCostPerMTok: 0.6 },
       defaultLadderEligible: false,
       contextWindowTokens: 32_768,
-      toolSupport: 'basic',
+      toolSupport: 'none',
       multimodal: { text: true, image: false },
       latencyTier: 'fast',
       reasoningTier: 'standard',
@@ -1956,6 +1993,8 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
         alias: 'qwen-2.5-coder-32b',
         providerNativeId: 'qwen/qwen-2.5-coder-32b-instruct',
         stages: ['coding'],
+        lifecycle: 'blocked',
+        limitations: ['retired 2026-08-18: no OpenRouter endpoint supports tool use (404 No endpoints found that support tool use); 32k context is too small for task packets'],
       }),
     },
     'qwen-3-coder': {
@@ -2248,6 +2287,8 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
         alias: 'grok-code-fast',
         providerNativeId: 'x-ai/grok-code-fast-1',
         stages: ['coding'],
+        lifecycle: 'blocked',
+        limitations: ['retired 2026-08-18: x-ai/grok-code-fast-1 is absent from the live OpenRouter catalog'],
       }),
     },
   },
@@ -2401,6 +2442,9 @@ export function explainModelSupportExclusion(
   const configuredStages = capabilities.supportedModel?.stages;
   if (configuredStages && !configuredStages.includes(normalized)) {
     return 'stage-incompatible';
+  }
+  if (!satisfiesStageToolSupport(capabilities.toolSupport, normalized)) {
+    return 'tool-support-insufficient';
   }
   if ((capabilities.supportedModel?.routingEligible ?? true) === false) {
     return 'routing-ineligible';

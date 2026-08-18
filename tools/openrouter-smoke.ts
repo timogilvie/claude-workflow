@@ -20,15 +20,15 @@ import type { OpenRouterTransport } from '../shared/lib/openrouter-runtime.ts';
 const moduleDir = dirname(fileURLToPath(import.meta.url));
 const fixtureDir = join(moduleDir, '..', 'shared', 'fixtures', 'openrouter-responses', 'success');
 const OPENROUTER_URL_PATTERN = /https:\/\/openrouter\.ai\/\S+/g;
+// Non-deprecated watchlist aliases from HOK-2582. Retired aliases
+// (gemini-2.0-flash, grok-code-fast) were dropped in HOK-2773.
 export const WATCHLIST_SMOKE_MODELS = [
   'qwen-3-235b',
   'qwen-2.5-72b',
   'kimi-k2-thinking',
-  'gemini-2.0-flash',
   'llama-4-scout',
   'mistral-medium-3',
   'devstral-medium',
-  'grok-code-fast',
 ] as const;
 
 function readFixture(name: string): Record<string, unknown> {
@@ -163,7 +163,7 @@ const options = {
   json: { type: 'boolean', description: 'Emit machine-readable JSON.' },
   prompt: { type: 'string', description: 'Override the smoke prompt (default: ping).' },
   models: { type: 'string', description: 'Comma-separated Wavemill aliases or OpenRouter IDs to smoke.' },
-  watchlist: { type: 'boolean', description: 'Smoke the 11 non-deprecated watchlist aliases from HOK-2582.' },
+  watchlist: { type: 'boolean', description: 'Smoke the non-deprecated watchlist aliases from HOK-2582.' },
   families: { type: 'string', description: 'Comma-separated launch-priority families to smoke.' },
   'repo-dir': { type: 'string', description: 'Repository directory to resolve before running.' },
 } as const;

@@ -64,7 +64,14 @@ Tier 3 watchlist/deprecated:
 - `mistral-medium-3` -> `mistralai/mistral-medium-3`
 - `grok-code-fast` -> `x-ai/grok-code-fast-1`
 
+> **Retired 2026-08-18 (HOK-2773):** `deepseek-coder-v2`, `gemini-2.0-flash`,
+> `grok-code-fast`, and `qwen-2.5-coder-32b` were retired because they cannot
+> actually launch (absent from the live OpenRouter catalog, or no tool support).
+> They are `deprecated` in the fixture and `lifecycle: 'blocked'` in the
+> registry; entries are retained for historical eval/cost attribution.
+
 ## Goal
+
 
 Make OpenRouter launch-priority models eligible for real traffic in three ways:
 

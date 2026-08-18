@@ -113,6 +113,7 @@ TESTS=(
   shared/lib/challenge-unavailable.test.ts
   shared/lib/challenge-attestation-backfill.test.ts
   shared/lib/challenge-pair-recovery.test.ts
+  shared/lib/challenge-pair-resolver.test.ts
   shared/lib/cross-repo-parity.test.ts
   shared/lib/challenge-execution-contract.test.ts
   shared/lib/challenge-pairing-repair.test.ts
@@ -189,6 +190,7 @@ TESTS=(
   shared/lib/openrouter-provider.test.ts
   shared/lib/openrouter-doctor.test.ts
   shared/lib/openrouter-zero-traffic.test.ts
+  shared/lib/openrouter-alias-audit.test.ts
   shared/lib/parity-report.test.ts
   src/evaluation/scorers/wavemill/success-rate-under-budget.test.ts
   src/evaluation/adapters/wavemill-router-adapter.test.ts
@@ -210,6 +212,9 @@ TESTS=(
   tools/select-wave.test.ts
   tools/smoke-deepseek.test.ts
   tools/openrouter-doctor.test.ts
+  tools/audit-openrouter-aliases.test.ts
+  tools/resolve-orphan-challenge-pair.test.ts
+
   tests/drift-detector.test.ts
   tests/check-drift-tool.test.ts
   tests/jq-filter-smoke.test.ts

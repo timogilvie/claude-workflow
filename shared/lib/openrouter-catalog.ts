@@ -88,6 +88,13 @@ export interface OpenRouterModel {
   top_provider?: {
     context_length?: number;
   };
+  supported_parameters?: string[];
+}
+
+/** OpenRouter advertises tool calling through `supported_parameters` containing "tools". Returns null when the field is absent (unknown). */
+export function openRouterModelSupportsTools(model: OpenRouterModel): boolean | null {
+  if (!Array.isArray(model.supported_parameters)) return null; // unknown
+  return model.supported_parameters.includes('tools');
 }
 
 export interface NormalizedPricing {

@@ -10,12 +10,31 @@ import { WM_LABELS } from './pr-state-labels.ts';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 
 export type ChallengeRole = 'primary' | 'challenger';
-export type UnresolvableReason =
-  | 'orphan-sibling'
-  | 'sibling-eval-hard-failed'
-  | 'both-eval-hard-failed'
-  | 'sibling-challenge-aborted'
-  | 'both-challenge-aborted';
+
+/**
+ * Canonical list of every reason a challenge pair can be classified as
+ * unresolvable. This is the single source of truth: the `UnresolvableReason`
+ * type is derived from it, `tools/resolve-orphan-challenge-pair.ts` validates
+ * its `--reason` flag against it, and `shared/lib/ready-watchdog.ts` types its
+ * recovery command on it. Add a value here and every consumer updates at
+ * once (HOK-2773).
+ */
+export const UNRESOLVABLE_REASONS = [
+  'orphan-sibling',
+  'sibling-eval-hard-failed',
+  'both-eval-hard-failed',
+  'sibling-challenge-aborted',
+  'both-challenge-aborted',
+] as const;
+export type UnresolvableReason = typeof UNRESOLVABLE_REASONS[number];
+
+/**
+ * Runtime guard narrowing an unknown value to {@link UnresolvableReason}.
+ * Used by operator CLIs so a future reason value cannot desynchronize them.
+ */
+export function isUnresolvableReason(value: unknown): value is UnresolvableReason {
+  return typeof value === 'string' && (UNRESOLVABLE_REASONS as readonly string[]).includes(value);
+}
 export type AutoCloseRefusalReason =
   | 'missing_evidence_id'
   | 'missing_or_invalid_comparison'
@@ -40,7 +59,12 @@ export interface ChallengeLoserCleanupCandidate {
 const BRANCH_NAME_PATTERN = /^[a-zA-Z0-9._/-]+$/;
 const TASK_IDENTIFIER_PATTERN = /^[A-Z]+-\d+(?:_c)?$/;
 const ORPHAN_PAIR_GRACE_MS = 60_000;
-const DEFAULT_HARD_FAILURE_RETRY_MAX = 2;
+/**
+ * Default maximum number of eval hard-failure retries before a side is
+ * considered exhausted. Exported so operator tooling can reference the same
+ * fallback the gate uses when `.wavemill-config.json` omits a value.
+ */
+export const DEFAULT_HARD_FAILURE_RETRY_MAX = 2;
 
 interface ChallengePairInfo {
   pairId: string;
@@ -370,7 +394,7 @@ export function classifyChallengeState(
       };
     }
 
-    const hardFailureState = classifyHardFailureState(pairState, options.evalHardFailureRetryMax ?? DEFAULT_HARD_FAILURE_RETRY_MAX);
+    const hardFailureState = classifyPairUnresolvableState(pairState, options.evalHardFailureRetryMax ?? DEFAULT_HARD_FAILURE_RETRY_MAX);
     if (hardFailureState) {
       return {
         kind: 'pair-unresolvable',
@@ -719,7 +743,17 @@ function hasRunningComparison(
     || pairState?.challenger?.comparisonState === 'comparison_running';
 }
 
-function classifyHardFailureState(
+/**
+ * Shared by the merge gate and `challenge-pair-resolver` so both agree on
+ * state-derived unresolvable reasons (hard-failure exhaustion and challenge
+ * aborts). Orphan detection is separate because it needs sibling PR/branch
+ * evidence the pair state alone does not carry.
+ *
+ * Order matters: hard-failure exhaustion is checked first because an arm that
+ * has burned all eval retries is unrecoverable regardless of an abort flag; an
+ * abort only becomes the deciding signal when no arm is hard-failure-exhausted.
+ */
+export function classifyPairUnresolvableState(
   pairState: PairTaskState | undefined,
   retryMax: number,
 ): UnresolvableReason | null {

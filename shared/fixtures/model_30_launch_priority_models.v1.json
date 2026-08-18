@@ -1,6 +1,6 @@
 {
   "schemaVersion": "1",
-  "description": "Launch-priority model list (HOK-2211) for OpenRouter catalog sync. Each entry maps a Wavemill alias to its OpenRouter API id with family/status/priority/role metadata.",
+  "description": "Launch-priority model list (HOK-2211) for OpenRouter catalog sync. Each entry maps a Wavemill alias to its OpenRouter API id with family/status/priority/role metadata. Deprecated entries are retired aliases kept for attribution (HOK-2773).",
   "models": [
     {
       "wavemillAlias": "claude-opus-4-8",
@@ -94,7 +94,7 @@
       "wavemillAlias": "deepseek-coder-v2",
       "openrouterId": "deepseek/deepseek-coder-v2-instruct",
       "family": "deepseek",
-      "status": "watchlist",
+      "status": "deprecated",
       "priorityTier": 2,
       "roleEligibility": ["coding"]
     },
@@ -102,7 +102,7 @@
       "wavemillAlias": "qwen-2.5-coder-32b",
       "openrouterId": "qwen/qwen-2.5-coder-32b-instruct",
       "family": "qwen",
-      "status": "active",
+      "status": "deprecated",
       "priorityTier": 1,
       "roleEligibility": ["coding"]
     },
@@ -182,7 +182,7 @@
       "wavemillAlias": "gemini-2.0-flash",
       "openrouterId": "google/gemini-2.0-flash-001",
       "family": "gemini",
-      "status": "watchlist",
+      "status": "deprecated",
       "priorityTier": 3,
       "roleEligibility": ["coding"]
     },
@@ -246,7 +246,7 @@
       "wavemillAlias": "grok-code-fast",
       "openrouterId": "x-ai/grok-code-fast-1",
       "family": "grok",
-      "status": "watchlist",
+      "status": "deprecated",
       "priorityTier": 3,
       "roleEligibility": ["coding"]
     }

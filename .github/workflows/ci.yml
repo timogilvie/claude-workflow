@@ -102,6 +102,11 @@ jobs:
       - name: Run config loading tests
         run: npm run test:config
 
+      - name: Audit OpenRouter registry aliases against the live catalog (scheduled only)
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: npx tsx tools/audit-openrouter-aliases.ts
+
+
   certification:
     name: Native Launch Certification
     runs-on: ubuntu-latest

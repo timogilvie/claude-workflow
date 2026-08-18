@@ -5,11 +5,15 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import {
   applyChallengePairGates,
+  classifyPairUnresolvableState,
   getSiblingBranch,
+  isUnresolvableReason,
   parseRemoteBranchOutput,
+  UNRESOLVABLE_REASONS,
   type ChallengeBlockedCandidate,
   type ChallengeEligibleWorkItem,
   type ChallengeGateOptions,
+  type PairTaskState,
 } from './tend-challenge-gate.ts';
 
 function makeWorkItem(overrides: {
@@ -1210,5 +1214,94 @@ describe('HOK-2602: Regression tests for invalid comparison auto-close', () => {
     } finally {
       cleanup();
     }
+  });
+});
+
+describe('UnresolvableReason canonical const and classifier', () => {
+  it('UNRESOLVABLE_REASONS contains all five reason values', () => {
+    assert.deepEqual([...UNRESOLVABLE_REASONS], [
+      'orphan-sibling',
+      'sibling-eval-hard-failed',
+      'both-eval-hard-failed',
+      'sibling-challenge-aborted',
+      'both-challenge-aborted',
+    ]);
+  });
+
+  it('isUnresolvableReason narrows the canonical values and rejects unknown strings', () => {
+    assert.equal(isUnresolvableReason('orphan-sibling'), true);
+    assert.equal(isUnresolvableReason('sibling-challenge-aborted'), true);
+    assert.equal(isUnresolvableReason('both-challenge-aborted'), true);
+    assert.equal(isUnresolvableReason('nope'), false);
+    assert.equal(isUnresolvableReason(undefined), false);
+    assert.equal(isUnresolvableReason(123), false);
+  });
+
+  it('classifyPairUnresolvableState returns both-challenge-aborted when both arms carry challengeAborted', () => {
+    const pairState: PairTaskState = {
+      primary: {
+        issueId: 'HOK_1', prNumber: 101, role: 'primary', branch: 'task/a', model: 'gpt-5.5',
+        updatedAt: null, evalFailed: false, evalCompleted: true, evalHardFailureRetryCount: 0,
+        comparisonState: null, challengeAborted: 'terminal_launch_failure:invalid-model-id',
+      },
+      challenger: {
+        issueId: 'HOK_1_c', prNumber: null, role: 'challenger', branch: 'task/a-challenger', model: 'claude-opus-4-8',
+        updatedAt: null, evalFailed: false, evalCompleted: false, evalHardFailureRetryCount: 0,
+        comparisonState: null, challengeAborted: 'terminal_launch_failure:invalid-model-id',
+      },
+    };
+    assert.equal(classifyPairUnresolvableState(pairState, 2), 'both-challenge-aborted');
+  });
+
+  it('classifyPairUnresolvableState returns sibling-challenge-aborted when only one arm is aborted', () => {
+    const pairState: PairTaskState = {
+      primary: {
+        issueId: 'HOK_1', prNumber: 101, role: 'primary', branch: 'task/a', model: 'gpt-5.5',
+        updatedAt: null, evalFailed: false, evalCompleted: true, evalHardFailureRetryCount: 0,
+        comparisonState: null, challengeAborted: null,
+      },
+      challenger: {
+        issueId: 'HOK_1_c', prNumber: null, role: 'challenger', branch: 'task/a-challenger', model: 'claude-opus-4-8',
+        updatedAt: null, evalFailed: false, evalCompleted: false, evalHardFailureRetryCount: 0,
+        comparisonState: null, challengeAborted: 'terminal_launch_failure:invalid-model-id',
+      },
+    };
+    assert.equal(classifyPairUnresolvableState(pairState, 2), 'sibling-challenge-aborted');
+  });
+
+  it('classifyPairUnresolvableState returns null when no arm is aborted or hard-failure-exhausted', () => {
+    const pairState: PairTaskState = {
+      primary: {
+        issueId: 'HOK_1', prNumber: 101, role: 'primary', branch: 'task/a', model: 'gpt-5.5',
+        updatedAt: null, evalFailed: false, evalCompleted: true, evalHardFailureRetryCount: 0,
+        comparisonState: null, challengeAborted: null,
+      },
+      challenger: {
+        issueId: 'HOK_1_c', prNumber: 102, role: 'challenger', branch: 'task/a-challenger', model: 'claude-opus-4-8',
+        updatedAt: null, evalFailed: false, evalCompleted: false, evalHardFailureRetryCount: 0,
+        comparisonState: null, challengeAborted: null,
+      },
+    };
+    assert.equal(classifyPairUnresolvableState(pairState, 2), null);
+  });
+
+  it('classifyPairUnresolvableState prefers hard-failure exhaustion over an abort flag', () => {
+    const pairState: PairTaskState = {
+      primary: {
+        issueId: 'HOK_1', prNumber: 101, role: 'primary', branch: 'task/a', model: 'gpt-5.5',
+        updatedAt: null, evalFailed: true, evalCompleted: false, evalHardFailureRetryCount: 2,
+        comparisonState: null, challengeAborted: 'terminal_launch_failure:invalid-model-id',
+      },
+      challenger: {
+        issueId: 'HOK_1_c', prNumber: 102, role: 'challenger', branch: 'task/a-challenger', model: 'claude-opus-4-8',
+        updatedAt: null, evalFailed: true, evalCompleted: false, evalHardFailureRetryCount: 2,
+        comparisonState: null, challengeAborted: 'terminal_launch_failure:invalid-model-id',
+      },
+    };
+    assert.equal(classifyPairUnresolvableState(pairState, 2), 'both-eval-hard-failed');
+  });
+
+  it('classifyPairUnresolvableState returns null for undefined pair state', () => {
+    assert.equal(classifyPairUnresolvableState(undefined, 2), null);
   });
 });

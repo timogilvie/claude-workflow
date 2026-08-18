@@ -33,10 +33,12 @@ import {
   parseModelSelector,
   rankCandidates,
   REVIEWER_ALIAS_MAP,
+  resolveModelRegistryKey,
   resolveProviderNativeModelId,
   resolveSelector,
   listSupportedModelsForStage,
   satisfiesCapabilities,
+  satisfiesStageToolSupport,
   validateNativeCapability,
   validateModelId,
 } from './model-registry.ts';
@@ -47,6 +49,8 @@ import {
   resolveSelectorWithPolicy,
 } from './model-resolution-policy.ts';
 import type { QuotaSnapshot, QuotaStatus } from './quota-state.ts';
+import { resolveOpenRouterModelId } from './openrouter-provider.ts';
+import { auditRegistryAliasResolution } from './openrouter-alias-audit.ts';
 
 type TaskType = 'routing' | 'planning' | 'coding' | 'review' | 'classify';
 type ToolSupport = 'none' | 'basic' | 'full';
@@ -2246,5 +2250,96 @@ describe('canonical supported-model helpers', () => {
         `${alias} declares ${declared} but the provider enforces ${limit}; overstating lets through prompts the provider rejects`,
       );
     }
+  });
+
+  // HOK-2773: four native-openrouter models that cannot actually launch are
+  // retired via `lifecycle: 'blocked'` (entries retained for attribution).
+  it('retires the four unrunnable native-openrouter models but keeps them resolvable', () => {
+    const retired = ['deepseek-coder-v2', 'gemini-2.0-flash', 'grok-code-fast', 'qwen-2.5-coder-32b'];
+    for (const modelId of retired) {
+      const capabilities = getModel(DEFAULT_MODEL_REGISTRY, modelId);
+      assert.ok(capabilities, `${modelId} should still be in the registry`);
+      assert.equal(capabilities?.agent, 'native-openrouter');
+      assert.equal(capabilities?.supportedModel?.lifecycle, 'blocked', `${modelId} should be lifecycle=blocked`);
+      assert.ok(
+        capabilities?.supportedModel?.limitations?.some((l) => l.startsWith('retired 2026-08-18')),
+        `${modelId} should carry a dated retirement limitation`,
+      );
+      // Excluded from every effective stage pool.
+      assert.equal(explainModelSupportExclusion(modelId, 'coding'), 'blocked-lifecycle');
+      for (const stage of ['planning', 'coding', 'review'] as const) {
+        assert.ok(
+          !listSupportedModelsForStage(stage, DEFAULT_MODEL_REGISTRY).includes(modelId),
+          `${modelId} should not be selectable for ${stage}`,
+        );
+      }
+    }
+    // qwen-2.5-coder-32b is now truthfully toolSupport: 'none'.
+    assert.equal(getModel(DEFAULT_MODEL_REGISTRY, 'qwen-2.5-coder-32b')?.toolSupport, 'none');
+    // Historical attribution still resolves the raw OpenRouter id back to the alias.
+    assert.equal(resolveModelRegistryKey(DEFAULT_MODEL_REGISTRY, 'x-ai/grok-code-fast-1'), 'grok-code-fast');
+    assert.equal(resolveModelRegistryKey(DEFAULT_MODEL_REGISTRY, 'google/gemini-2.0-flash-001'), 'gemini-2.0-flash');
+  });
+
+  it('excludes tool-support-insufficient models from stage pools (HOK-2773 tool gate)', () => {
+    const registry: ModelRegistry = {
+      models: {
+        'no-tools-coder': makeCapabilities({
+          toolSupport: 'none',
+          qualityScores: { coding: 90 },
+          supportedModel: { lifecycle: 'supported', stages: ['coding'], routingEligible: true },
+        }),
+        'basic-tools-coder': makeCapabilities({
+          toolSupport: 'basic',
+          qualityScores: { coding: 80 },
+          supportedModel: { lifecycle: 'supported', stages: ['coding'], routingEligible: true },
+        }),
+        'full-tools-coder': makeCapabilities({
+          toolSupport: 'full',
+          qualityScores: { coding: 70 },
+          supportedModel: { lifecycle: 'supported', stages: ['coding'], routingEligible: true },
+        }),
+      },
+      ladders: {},
+    };
+
+    assert.equal(explainModelSupportExclusion('no-tools-coder', 'coding', registry), 'tool-support-insufficient');
+    assert.equal(explainModelSupportExclusion('basic-tools-coder', 'coding', registry), undefined);
+    assert.equal(explainModelSupportExclusion('full-tools-coder', 'coding', registry), undefined);
+    const selectable = listSupportedModelsForStage('coder', registry);
+    assert.ok(!selectable.includes('no-tools-coder'));
+    assert.ok(selectable.includes('basic-tools-coder'));
+    assert.ok(selectable.includes('full-tools-coder'));
+
+    assert.equal(satisfiesStageToolSupport('none', 'coding'), false);
+    assert.equal(satisfiesStageToolSupport('basic', 'coding'), true);
+    assert.equal(satisfiesStageToolSupport('full', 'review'), true);
+    assert.equal(satisfiesStageToolSupport(undefined, 'planning'), false);
+  });
+
+  it('offline launch invariant: every selectable native-openrouter model resolves to a wire id matching its providerNativeId and has toolSupport !== none', () => {
+    const stages: Array<'planning' | 'coding' | 'review'> = ['planning', 'coding', 'review'];
+    for (const stage of stages) {
+      for (const modelId of listSupportedModelsForStage(stage, DEFAULT_MODEL_REGISTRY)) {
+        const capabilities = getModel(DEFAULT_MODEL_REGISTRY, modelId);
+        if (capabilities?.agent !== 'native-openrouter') {
+          continue;
+        }
+        const wireId = resolveOpenRouterModelId(modelId);
+        assert.ok(wireId !== null, `${modelId} should resolve to a wire id (selectable native-openrouter)`);
+        assert.equal(
+          wireId,
+          capabilities?.supportedModel?.providerNativeId,
+          `${modelId} wire id should match registry providerNativeId`,
+        );
+        assert.notEqual(capabilities?.toolSupport, 'none', `${modelId} should declare toolSupport !== 'none'`);
+      }
+    }
+    // The offline alias audit must surface no selectable findings.
+    const findings = auditRegistryAliasResolution(DEFAULT_MODEL_REGISTRY);
+    assert.equal(findings.filter((f) => f.selectable).length, 0);
+    const deepseek = findings.find((f) => f.modelId === 'deepseek-coder-v2');
+    assert.equal(deepseek?.reason, 'unresolvable-alias');
+    assert.equal(deepseek?.selectable, false);
   });
 });

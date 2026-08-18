@@ -24,9 +24,13 @@ export type EffectiveModelAvailabilityReason =
   | 'blocked-lifecycle'
   | 'disabled'
   | 'stage-incompatible'
+  | 'tool-support-insufficient'
   | 'routing-ineligible'
   | 'policy-excluded'
   | 'runtime-unavailable';
+
+// 'tool-support-insufficient' (HOK-2773) is emitted by explainModelSupportExclusion
+// when a model's toolSupport is below the stage's minimum (see MINIMUM_TOOL_SUPPORT_BY_STAGE).
 
 export interface EffectiveModelIdentity {
   modelId: string;

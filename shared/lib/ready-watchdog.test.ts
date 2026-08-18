@@ -2639,6 +2639,57 @@ test('classify challenge PR with exhausted sibling eval as needs-user with recov
   assert.match(classification.recoveryCommand ?? '', /--reason 'sibling-eval-hard-failed'/);
 });
 
+test('classify challenge PR with a sibling-challenge-aborted gate as needs-user with recovery command', () => {
+  const classification = classifyReadyTask(
+    makeSnapshot({
+      idleMinutes: 15,
+      challengePairId: 'HOK-2358',
+      readyArtifacts: { type: 'ready', verdict: 'pass', queueState: 'merge-candidate' },
+    }),
+    makeTruth(),
+    new Date('2026-05-05T12:30:00.000Z'),
+    WATCHDOG_CONFIG,
+    undefined,
+    {
+      kind: 'pair-unresolvable',
+      pairId: 'HOK-2358',
+      otherPr: 900,
+      reason: 'sibling-challenge-aborted',
+    },
+  );
+
+  assert.equal(classification.kind, 'needs-user');
+  assert.match(classification.detail, /quarantined/i);
+  assert.match(classification.detail, /terminal launch\/stage failure/i);
+  assert.match(classification.recoveryCommand ?? '', /resolve-orphan-challenge-pair\.ts/);
+  assert.match(classification.recoveryCommand ?? '', /--reason 'sibling-challenge-aborted'/);
+});
+
+test('classify challenge PR with a both-challenge-aborted gate as needs-user with recovery command', () => {
+  const classification = classifyReadyTask(
+    makeSnapshot({
+      idleMinutes: 15,
+      challengePairId: 'HOK-2358',
+      readyArtifacts: { type: 'ready', verdict: 'pass', queueState: 'merge-candidate' },
+    }),
+    makeTruth(),
+    new Date('2026-05-05T12:30:00.000Z'),
+    WATCHDOG_CONFIG,
+    undefined,
+    {
+      kind: 'pair-unresolvable',
+      pairId: 'HOK-2358',
+      otherPr: null,
+      reason: 'both-challenge-aborted',
+    },
+  );
+
+  assert.equal(classification.kind, 'needs-user');
+  assert.match(classification.detail, /quarantined/i);
+  assert.match(classification.detail, /both arms marked aborted/i);
+  assert.match(classification.recoveryCommand ?? '', /--reason 'both-challenge-aborted'/);
+});
+
 test('classify running comparison gate as waiting-on-eval-comparison with specific detail', () => {
   const classification = classifyReadyTask(
     makeSnapshot({

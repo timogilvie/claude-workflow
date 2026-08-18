@@ -8,6 +8,7 @@ import {
   type ChallengeComparison,
 } from './challenge-comparison.ts';
 import {
+  classifyPairUnresolvableState,
   getSiblingBranch,
   listRemoteTaskBranches,
   loadWorkflowStateChallengeData,
@@ -70,6 +71,21 @@ export function resolveUnresolvablePair(input: UnresolvablePairInput): ResolveOu
     return { status: 'skipped', reason: `Pair ${input.pairId} is not currently unresolvable.` };
   }
 
+  // For aborted pairs, buildResolutionRecord may return null when no arm has a
+  // completed eval yet (the survivor may still be working). Surface an
+  // accurate skip reason rather than the generic manual-repair message.
+  if (resolvedReason === 'both-challenge-aborted' || resolvedReason === 'sibling-challenge-aborted') {
+    const primaryCompleted = pairState.primary?.evalCompleted === true;
+    const challengerCompleted = pairState.challenger?.evalCompleted === true;
+    if (!primaryCompleted && !challengerCompleted) {
+      const abortReason = pairState.primary?.challengeAborted ?? pairState.challenger?.challengeAborted ?? resolvedReason;
+      return {
+        status: 'skipped',
+        reason: `Pair ${input.pairId} is quarantined (${abortReason}) but no arm has a completed eval yet; re-run once the surviving arm's eval persists.`,
+      };
+    }
+  }
+
   const resolution = buildResolutionRecord({
     pairId: input.pairId,
     pairState,
@@ -102,15 +118,16 @@ function detectUnresolvableReason(
   now: () => Date,
   retryMax: number,
 ): UnresolvableReason | null {
-  const primaryExhausted = isHardFailureExhausted(pairState.primary, retryMax);
-  const challengerExhausted = isHardFailureExhausted(pairState.challenger, retryMax);
-  if (primaryExhausted && challengerExhausted) {
-    return 'both-eval-hard-failed';
-  }
-  if (primaryExhausted || challengerExhausted) {
-    return 'sibling-eval-hard-failed';
+  // State-derived reasons (hard-failure exhaustion and challenge aborts) are
+  // shared with the merge gate via classifyPairUnresolvableState so the gate
+  // and resolver cannot disagree (HOK-2773).
+  const stateReason = classifyPairUnresolvableState(pairState, retryMax);
+  if (stateReason) {
+    return stateReason;
   }
 
+  // Orphan detection is separate: it needs sibling branch/PR evidence that
+  // the pair state alone does not carry.
   if (pairState.primary && pairState.challenger) {
     return null;
   }
@@ -156,6 +173,10 @@ function buildResolutionRecord(input: {
 }): { record: ChallengeComparison; outcome: 'forfeit' | 'double-forfeit' } | null {
   const primary = input.pairState.primary;
   const challenger = input.pairState.challenger;
+
+  if (input.reason === 'both-challenge-aborted' || input.reason === 'sibling-challenge-aborted') {
+    return buildAbortedResolution(input);
+  }
 
   if (input.reason === 'both-eval-hard-failed') {
     return {
@@ -249,6 +270,71 @@ function buildResolutionRecord(input: {
 
 function getTaskModel(task: TaskEvalState | undefined): string {
   return task?.model?.trim() || UNKNOWN_MODEL;
+}
+
+/**
+ * `challenge_abort_pair` (wavemill-mill.sh) quarantines BOTH arms with the same
+ * `challengeAborted` reason/detail, so the flag alone cannot say which arm
+ * actually failed. Persisted evidence can: an arm whose eval completed ran to
+ * the end; an arm with no PR never did.
+ *
+ *  - exactly one side completed its eval and the other never produced a PR
+ *      -> forfeit to the completed side
+ *  - some side completed but the other also produced a PR (both ran; the
+ *    challenge is void without a real comparison)
+ *      -> double-forfeit; `challenge-pair-recovery` can supersede it later
+ *  - no side has a completed eval yet
+ *      -> null (survivor may still be working; writing a terminal record now
+ *        would wrongly park a future PR at double-forfeit)
+ */
+function buildAbortedResolution(input: {
+  pairId: string;
+  pairState: PairTaskState;
+  reason: UnresolvableReason;
+  timestamp: string;
+}): { record: ChallengeComparison; outcome: 'forfeit' | 'double-forfeit' } | null {
+  const primary = input.pairState.primary;
+  const challenger = input.pairState.challenger;
+  const abortReason = primary?.challengeAborted ?? challenger?.challengeAborted ?? input.reason;
+  const primaryCompleted = primary?.evalCompleted === true;
+  const challengerCompleted = challenger?.evalCompleted === true;
+  const common = {
+    challengePairId: input.pairId,
+    primaryModel: getTaskModel(primary),
+    challengerModel: getTaskModel(challenger),
+    primaryPrUrl: getTaskPrUrl(primary),
+    challengerPrUrl: getTaskPrUrl(challenger),
+    timestamp: input.timestamp,
+  };
+
+  if (!primaryCompleted && !challengerCompleted) {
+    return null;
+  }
+
+  if (primaryCompleted !== challengerCompleted) {
+    const winner = primaryCompleted ? 'primary' : 'challenger';
+    const loser = winner === 'primary' ? challenger : primary;
+    if (!loser || loser.prNumber === null) {
+      return {
+        outcome: 'forfeit',
+        record: buildForfeitComparison({
+          ...common,
+          winner,
+          rationale: `Sibling arm aborted (${abortReason}) before producing a PR; the surviving side wins by forfeit.`,
+          terminalReason: winner === 'primary' ? 'challenger_challenge_aborted' : 'primary_challenge_aborted',
+        }),
+      };
+    }
+  }
+
+  return {
+    outcome: 'double-forfeit',
+    record: buildDoubleForfeitComparison({
+      ...common,
+      rationale: `Challenge pair was quarantined (${abortReason}) after both arms produced work; no winner can be named without a comparison.`,
+      terminalReason: 'both_challenge_aborted',
+    }),
+  };
 }
 
 function getTaskPrUrl(task: TaskEvalState | undefined): string {
