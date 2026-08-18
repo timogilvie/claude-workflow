@@ -2314,7 +2314,8 @@ describe('canonical supported-model helpers', () => {
     assert.equal(satisfiesStageToolSupport('none', 'coding'), false);
     assert.equal(satisfiesStageToolSupport('basic', 'coding'), true);
     assert.equal(satisfiesStageToolSupport('full', 'review'), true);
-    assert.equal(satisfiesStageToolSupport(undefined, 'planning'), false);
+    // Undefined toolSupport (synthetic/legacy registries) is not excluded by the gate.
+    assert.equal(satisfiesStageToolSupport(undefined, 'planning'), true);
   });
 
   it('offline launch invariant: every selectable native-openrouter model resolves to a wire id matching its providerNativeId and has toolSupport !== none', () => {

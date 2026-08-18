@@ -189,8 +189,14 @@ export function satisfiesStageToolSupport(
   toolSupport: ToolSupport | undefined,
   stage: SupportedModelStage,
 ): boolean {
+  // A model that has not declared toolSupport (undefined) is not excluded by
+  // this gate; only an explicit 'none' fails. The real registry always sets
+  // toolSupport, so undefined only arises in synthetic/legacy test registries.
+  if (toolSupport === undefined) {
+    return true;
+  }
   const required = MINIMUM_TOOL_SUPPORT_BY_STAGE[stage];
-  return TOOL_SUPPORT_RANK[toolSupport ?? 'none'] >= TOOL_SUPPORT_RANK[required];
+  return TOOL_SUPPORT_RANK[toolSupport] >= TOOL_SUPPORT_RANK[required];
 }
 const UNSAFE_CERTIFICATION_SEGMENT = /[/\\.\0]/;
 const OPENROUTER_CERTIFICATION_SEED = Object.freeze({
