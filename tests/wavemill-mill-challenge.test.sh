@@ -131,6 +131,8 @@ if [[ -n "$FINALIZATION_HELPER" ]]; then
   check_contains "finalizer reads the persisted challenge intent before rerouting" "$FINALIZATION_HELPER" '(.tasks[$i].challengeExecutionIntent // .tasks[$i].challengeIntent) // empty'
   check_contains "finalizer pins the already-selected stage when it must reroute" "$FINALIZATION_HELPER" 'pinned_stage_arg=(--pinned-stage "$pinned_stage")'
   check_contains "finalizer passes the pinned stage to the resolver" "$FINALIZATION_HELPER" '"${pinned_stage_arg[@]}"'
+  check_contains "finalizer reads the persisted challenger varied model" "$FINALIZATION_HELPER" '.tasks[$i].challengeVariedModel // ""'
+  check_contains "finalizer passes preserved challenger model to resolver" "$FINALIZATION_HELPER" '"${preserved_challenger_arg[@]}"'
   check_contains "finalizer passes feature-dir to resolver" "$FINALIZATION_HELPER" '--feature-dir "$feature_dir"'
   check_contains "finalizer passes task packet when present" "$FINALIZATION_HELPER" 'packet_arg=(--file "$feature_dir/task-packet.md")'
   check_contains "finalizer requires expanded or preserved source" "$FINALIZATION_HELPER" 'refreshed_source" != "expanded" && "$refreshed_source" != "preserved"'
@@ -139,6 +141,7 @@ if [[ -n "$FINALIZATION_HELPER" ]]; then
   check_contains "finalizer saves primary planner" "$FINALIZATION_HELPER" 'new_primary_planner'
   check_contains "finalizer saves challenger planner" "$FINALIZATION_HELPER" 'new_challenger_planner'
   check_contains "finalizer persists paired intent" "$FINALIZATION_HELPER" 'persist_challenge_execution_intent "$issue" "$new_challenger_key" "$feature_dir" "$intent_json"'
+  check_contains "finalizer cancels collapsed identical challenger" "$FINALIZATION_HELPER" 'challenge_cancel_challenger_arm "$issue" "$slug" "$new_challenger_key"'
   check_contains "finalizer exposes in-memory coder" "$FINALIZATION_HELPER" 'FINALIZED_CHALLENGE_CODER="$new_primary"'
   # Printing the coders made every plan/review pair look degenerate in the log
   # ("gpt-5.5 vs gpt-5.5") because those stages share a coder by design.
@@ -146,6 +149,21 @@ if [[ -n "$FINALIZATION_HELPER" ]]; then
   check_contains "finalizer checks the arms actually diverge" "$FINALIZATION_HELPER" 'challenge_assert_arms_diverge "$issue" "$new_challenge_stage"'
 else
   fail "could not extract challenge execution finalizer"
+fi
+
+CANCEL_HELPER="$(awk '
+  /^challenge_cancel_challenger_arm\(\) \{/ { capture=1 }
+  capture { print }
+  /^}/ && capture { exit }
+' "$MILL_SCRIPT")"
+
+if [[ -n "$CANCEL_HELPER" ]]; then
+  check_contains "collapse helper removes challenger state" "$CANCEL_HELPER" 'remove_task_state "$challenger_key"'
+  check_contains "collapse helper marks primary reason" "$CANCEL_HELPER" 'challengeCollapseReason = $reason'
+  check_contains "collapse helper clears primary challenge role" "$CANCEL_HELPER" '.tasks[$issue].challengeRole'
+  check_contains "collapse helper emits lifecycle event" "$CANCEL_HELPER" 'log_route_lifecycle "challenge_collapsed"'
+else
+  fail "could not extract challenge_cancel_challenger_arm helper"
 fi
 
 SAVE_STATE_HELPER="$(awk '

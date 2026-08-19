@@ -7,7 +7,8 @@ export type ChallengeSelectionReason =
   | 'least-used-fallforward'
   | 'recommendation-honored'
   | 'tie-break-family-rotation'
-  | 'last-resort-incumbent';
+  | 'last-resort-incumbent'
+  | 'preserved';
 
 export interface ChallengeLaunchPriorityMetadata {
   family: ModelFamily | string;

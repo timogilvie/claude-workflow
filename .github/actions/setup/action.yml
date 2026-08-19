@@ -19,8 +19,41 @@ runs:
     - name: Install system test tools
       shell: bash
       run: |
-        sudo apt-get update
-        sudo apt-get install -y ${{ inputs.packages }}
+        # `sudo apt-get update` is the step that hangs in CI: it has been
+        # observed exceeding 300s and previously wedged jobs until the 6h
+        # ceiling. jq/shellcheck/tmux are normally preinstalled on
+        # ubuntu-latest, so touch the network only when something is missing.
+        missing=()
+        for pkg in ${{ inputs.packages }}; do
+          command -v "$pkg" >/dev/null 2>&1 || missing+=("$pkg")
+        done
+        if [ "${#missing[@]}" -eq 0 ]; then
+          echo "All required tools already present: ${{ inputs.packages }}"
+          exit 0
+        fi
+        echo "Missing tools, installing: ${missing[*]}"
+        updated=0
+        for attempt in 1 2 3; do
+          rc=0
+          timeout "${APT_UPDATE_TIMEOUT_SECONDS}" sudo apt-get update || rc=$?
+          if [ "$rc" -eq 0 ]; then updated=1; break; fi
+          echo "apt-get update attempt ${attempt} failed (rc=${rc}); retrying"
+          sleep $((attempt * 10))
+        done
+        if [ "$updated" -ne 1 ]; then
+          echo "::warning::apt-get update did not succeed; attempting install against existing lists."
+        fi
+        rc=0
+        timeout "${APT_INSTALL_TIMEOUT_SECONDS}" sudo apt-get install -y "${missing[@]}" || rc=$?
+        if [ "$rc" -ne 0 ]; then
+          if [ "$rc" -eq 124 ]; then
+            echo "::error::apt-get install exceeded ${APT_INSTALL_TIMEOUT_SECONDS}s; failing fast so the job can be retried."
+          fi
+          exit "$rc"
+        fi
+      env:
+        APT_UPDATE_TIMEOUT_SECONDS: '120'
+        APT_INSTALL_TIMEOUT_SECONDS: '180'
 
     - name: Configure git for tests
       shell: bash
@@ -30,4 +63,14 @@ runs:
 
     - name: Install dependencies
       shell: bash
-      run: npm install --ignore-scripts
+      run: |
+        rc=0
+        timeout "${SETUP_STEP_TIMEOUT_SECONDS}" npm install --ignore-scripts || rc=$?
+        if [ "$rc" -ne 0 ]; then
+          if [ "$rc" -eq 124 ]; then
+            echo "::error::npm install exceeded ${SETUP_STEP_TIMEOUT_SECONDS}s in CI setup; failing fast so the job can be retried."
+          fi
+          exit "$rc"
+        fi
+      env:
+        SETUP_STEP_TIMEOUT_SECONDS: '300'
