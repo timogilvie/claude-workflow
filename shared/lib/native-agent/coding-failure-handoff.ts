@@ -6,7 +6,8 @@ import path from 'node:path';
 export const CODING_FAILURE_HANDOFF_SCHEMA_VERSION = '1.0';
 export const CODING_FAILURE_HANDOFF_FILENAME = '.coding-failure-handoff.json';
 export const CODING_FAILURE_HANDOFF_STAGE = 'coding';
-export const CODING_FAILURE_HANDOFF_REASON = 'no_completion_artifact';
+export const CODING_FAILURE_HANDOFF_REASONS = ['no_completion_artifact', 'invalid_completion_artifact'] as const;
+export type CodingFailureHandoffReason = (typeof CODING_FAILURE_HANDOFF_REASONS)[number];
 
 export interface CodingFailureToolError {
   tool: string;
@@ -16,9 +17,15 @@ export interface CodingFailureToolError {
   diagnostics?: unknown;
 }
 
+export interface CodingFailureValidationError {
+  code: string;
+  field?: string;
+  message: string;
+}
+
 export interface CodingFailureHandoff {
   stage: typeof CODING_FAILURE_HANDOFF_STAGE;
-  reason: typeof CODING_FAILURE_HANDOFF_REASON;
+  reason: CodingFailureHandoffReason;
   stopReason: string;
   mutationFailures: number;
   lastToolError: CodingFailureToolError | null;
@@ -26,6 +33,8 @@ export interface CodingFailureHandoff {
   suggestedAction: string;
   createdAt: string;
   schemaVersion: typeof CODING_FAILURE_HANDOFF_SCHEMA_VERSION;
+  validationErrors?: CodingFailureValidationError[];
+  quarantinedArtifacts?: string[];
 }
 
 export type CodingFailureHandoffValidationResult =
@@ -75,8 +84,8 @@ export function validateCodingFailureHandoff(
   if (value.stage !== CODING_FAILURE_HANDOFF_STAGE) {
     return error('INVALID_ENUM_VALUE', `Coding failure handoff stage must be "${CODING_FAILURE_HANDOFF_STAGE}".`, 'stage');
   }
-  if (value.reason !== CODING_FAILURE_HANDOFF_REASON) {
-    return error('INVALID_ENUM_VALUE', `Coding failure handoff reason must be "${CODING_FAILURE_HANDOFF_REASON}".`, 'reason');
+  if (typeof value.reason !== 'string' || !isCodingFailureHandoffReason(value.reason)) {
+    return error('INVALID_ENUM_VALUE', `Coding failure handoff reason must be one of: ${CODING_FAILURE_HANDOFF_REASONS.map((reason) => `"${reason}"`).join(', ')}.`, 'reason');
   }
   if (value.schemaVersion !== CODING_FAILURE_HANDOFF_SCHEMA_VERSION) {
     return error('INVALID_ENUM_VALUE', `Coding failure handoff schemaVersion must be "${CODING_FAILURE_HANDOFF_SCHEMA_VERSION}".`, 'schemaVersion');
@@ -101,6 +110,23 @@ export function validateCodingFailureHandoff(
     if (!toolError.ok) {
       return toolError;
     }
+  }
+  if (Object.prototype.hasOwnProperty.call(value, 'validationErrors') && value.validationErrors !== undefined) {
+    const validationErrors = validateValidationErrors(value.validationErrors);
+    if (!validationErrors.ok) {
+      return validationErrors;
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(value, 'quarantinedArtifacts') && value.quarantinedArtifacts !== undefined) {
+    if (!Array.isArray(value.quarantinedArtifacts) || !value.quarantinedArtifacts.every((artifact) => typeof artifact === 'string')) {
+      return error('INVALID_FIELD_TYPE', 'Coding failure handoff quarantinedArtifacts must be an array of strings when present.', 'quarantinedArtifacts');
+    }
+  }
+  if (
+    value.reason === 'invalid_completion_artifact'
+    && (!Array.isArray(value.validationErrors) || value.validationErrors.length === 0)
+  ) {
+    return error('MISSING_REQUIRED_FIELD', 'Coding failure handoff validationErrors must be present for invalid_completion_artifact.', 'validationErrors');
   }
 
   return { ok: true, value: value as CodingFailureHandoff };
@@ -130,6 +156,30 @@ function validateToolError(value: unknown): CodingFailureHandoffValidationResult
     return error('INVALID_FIELD_TYPE', 'Coding failure handoff lastToolError.retryHint must be a string when present.', 'lastToolError.retryHint');
   }
   return { ok: true, value: undefined as unknown as CodingFailureHandoff };
+}
+
+function validateValidationErrors(value: unknown): CodingFailureHandoffValidationResult {
+  if (!Array.isArray(value)) {
+    return error('INVALID_FIELD_TYPE', 'Coding failure handoff validationErrors must be an array when present.', 'validationErrors');
+  }
+  for (const [index, item] of value.entries()) {
+    if (!isRecord(item)) {
+      return error('INVALID_FIELD_TYPE', 'Coding failure handoff validationErrors entries must be objects.', `validationErrors.${index}`);
+    }
+    for (const field of ['code', 'message'] as const) {
+      if (typeof item[field] !== 'string' || item[field].length === 0) {
+        return error('INVALID_FIELD_TYPE', `Coding failure handoff validationErrors.${index}.${field} must be a non-empty string.`, `validationErrors.${index}.${field}`);
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(item, 'field') && item.field !== undefined && typeof item.field !== 'string') {
+      return error('INVALID_FIELD_TYPE', `Coding failure handoff validationErrors.${index}.field must be a string when present.`, `validationErrors.${index}.field`);
+    }
+  }
+  return { ok: true, value: undefined as unknown as CodingFailureHandoff };
+}
+
+function isCodingFailureHandoffReason(value: string): value is CodingFailureHandoffReason {
+  return CODING_FAILURE_HANDOFF_REASONS.includes(value as CodingFailureHandoffReason);
 }
 
 function error(
