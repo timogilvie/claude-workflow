@@ -102,6 +102,7 @@ TESTS=(
   shared/lib/migration-ast.test.ts
   shared/lib/tend-challenge-gate.test.ts
   shared/lib/challenge-pair-resolver.test.ts
+  shared/lib/stale-task-branches.test.ts
   shared/lib/tend-controller.test.ts
   shared/lib/tend-status-renderer.test.ts
   shared/lib/tend-singleton.test.ts

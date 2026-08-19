@@ -446,3 +446,123 @@ test('resolver and gate agree on aborted pair reason and unblock after resolutio
     cleanup();
   }
 });
+test('resolver treats a removed primary with stale refs as orphan-sibling', async () => {
+  const { repoDir, cleanup } = setupRepoDir();
+  try {
+    writeWorkflowState(repoDir, {
+      HOK_1_c: {
+        pr: 1130,
+        branch: 'task/challenge-intent-is-rewritten-challenger',
+        updated: '2026-08-17T12:00:00Z',
+        challengePairId: 'pair-2767',
+        challengeRole: 'challenger',
+        challengeModel: 'claude-opus-4-8',
+        evalCompleted: true,
+      },
+    });
+
+    const resolution = resolveUnresolvablePair({
+      pairId: 'pair-2767',
+      repoDir,
+      remoteBranches: [
+        'task/challenge-intent-is-rewritten',
+        'task/challenge-intent-is-rewritten-challenger',
+      ],
+      now: () => new Date('2026-08-17T12:02:00Z'),
+    });
+
+    assert.equal(resolution.status, 'resolved');
+    assert.equal(resolution.reason, 'orphan-sibling');
+    assert.equal(resolution.outcome, 'forfeit');
+    assert.equal(resolution.record.winner, 'challenger');
+
+    const gate = await applyChallengePairGates(
+      [makeWorkItem(1130, 'task/challenge-intent-is-rewritten-challenger', 'pair-2767')],
+      [],
+      repoDir,
+      {
+        remoteBranches: [
+          'task/challenge-intent-is-rewritten',
+          'task/challenge-intent-is-rewritten-challenger',
+        ],
+        coolOffSeconds: 0,
+        autoMergeWinner: true,
+      },
+    );
+
+    assert.equal(gate.eligible.length, 1);
+    assert.equal(gate.eligible[0].pr.number, 1130);
+    assert.equal(gate.blocked.length, 0);
+  } finally {
+    cleanup();
+  }
+});
+
+test('resolver keeps both tracked arms unresolved even with stale refs', () => {
+  const { repoDir, cleanup } = setupRepoDir();
+  try {
+    writeWorkflowState(repoDir, {
+      HOK_1: {
+        pr: 101,
+        branch: 'task/pair-primary',
+        updated: '2026-07-01T00:00:00Z',
+        challengePairId: 'pair-1',
+        challengeRole: 'primary',
+        challengeModel: 'gpt-5.5',
+        evalCompleted: true,
+      },
+      HOK_1_c: {
+        pr: 102,
+        branch: 'task/pair-primary-challenger',
+        updated: '2026-07-01T00:00:00Z',
+        challengePairId: 'pair-1',
+        challengeRole: 'challenger',
+        challengeModel: 'claude-opus-4-8',
+        evalCompleted: true,
+      },
+    });
+
+    const result = resolveUnresolvablePair({
+      pairId: 'pair-1',
+      repoDir,
+      remoteBranches: ['task/pair-primary', 'task/pair-primary-challenger'],
+      now: () => new Date('2026-07-01T00:02:00Z'),
+    });
+
+    assert.equal(result.status, 'skipped');
+    assert.match(result.reason, /not currently unresolvable/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('resolver dry run reports orphan-sibling without writing a comparison', () => {
+  const { repoDir, cleanup } = setupRepoDir();
+  try {
+    writeWorkflowState(repoDir, {
+      HOK_1_c: {
+        pr: 102,
+        branch: 'task/pair-primary-challenger',
+        updated: '2026-07-01T00:00:00Z',
+        challengePairId: 'pair-1',
+        challengeRole: 'challenger',
+        challengeModel: 'claude-opus-4-8',
+        evalCompleted: true,
+      },
+    });
+
+    const result = resolveUnresolvablePair({
+      pairId: 'pair-1',
+      repoDir,
+      dryRun: true,
+      remoteBranches: ['task/pair-primary', 'task/pair-primary-challenger'],
+      now: () => new Date('2026-07-01T00:02:00Z'),
+    });
+
+    assert.equal(result.status, 'resolved');
+    assert.equal(result.dryRun, true);
+    assert.equal(readChallengeComparisons(join(repoDir, '.wavemill', 'evals')).length, 0);
+  } finally {
+    cleanup();
+  }
+});
