@@ -40,6 +40,7 @@ TESTS=(
   lifecycle-harness.test.sh
   archive-stage-artifacts.test.sh
   cleanup-branch.test.sh
+  completed-task-cleanup.test.sh
   error-recovery.test.sh
   planning-validation.test.sh
   wavemill-guards.test.sh

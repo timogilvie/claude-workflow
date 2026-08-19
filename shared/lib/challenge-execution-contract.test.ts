@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -7,6 +7,7 @@ import { createRequire } from 'node:module';
 import { test } from 'node:test';
 import { SCHEMA_VERSION, type EvalRecord } from './eval-schema.ts';
 import {
+  resolveChallengeSide,
   buildChallengeExecutionIntent,
   enforceChallengeIntentPresence,
   projectChallengeIntentForPersistence,
@@ -360,4 +361,79 @@ test('every TypeScript divergence reason is accepted by the eval JSON schema', (
     [...reasons].sort(),
     'eval-schema.json enum and the InvalidChallengeReason union have drifted',
   );
+});
+
+// Regression: both arms of a pair share one Linear issue, so `issueId` cannot
+// distinguish them. The challenger's eval was launched with the primary's Linear
+// id while running on `task/<slug>-challenger`; state lookup said `primary`,
+// branch derivation said `challenger`, and the pair was invalidated as
+// `state_vs_derived_side_mismatch`. Observed on HOK-2757, then again on HOK-2773
+// and HOK-2777 after PR #1118 shipped.
+//
+// The workflow state below is what makes this reproduce: without it the state
+// lookup returns nothing and the mismatch branch is never reached.
+function seedPairState(repoDir: string): void {
+  mkdirSync(join(repoDir, '.wavemill'), { recursive: true });
+  writeFileSync(
+    join(repoDir, '.wavemill', 'workflow-state.json'),
+    JSON.stringify({
+      tasks: {
+        'HOK-2773': { challengePairId: 'HOK-2773', challengeRole: 'primary' },
+        'HOK-2773_c': { challengePairId: 'HOK-2773', challengeRole: 'challenger' },
+      },
+    }),
+  );
+}
+
+test('resolveChallengeSide: a shared Linear id on a challenger branch is a mismatch without an explicit side', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'challenge-side-'));
+  try {
+    seedPairState(repoDir);
+    const res = resolveChallengeSide({
+      repoDir,
+      challengePairId: 'HOK-2773',
+      issueId: 'HOK-2773',                            // shared Linear id -> resolves to primary
+      branchName: 'task/retire-models-challenger',    // unambiguously the challenger
+    });
+    assert.equal(res.canonicalSide, 'primary');
+    assert.equal(res.fallbackSide, 'challenger');
+    assert.equal(res.invalidReason, 'state_vs_derived_side_mismatch');
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('resolveChallengeSide: an explicit side resolves that same case cleanly', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'challenge-side-'));
+  try {
+    seedPairState(repoDir);
+    const res = resolveChallengeSide({
+      repoDir,
+      challengePairId: 'HOK-2773',
+      issueId: 'HOK-2773',
+      branchName: 'task/retire-models-challenger',
+      explicitSide: 'challenger',
+    });
+    assert.equal(res.side, 'challenger');
+    assert.equal(res.invalidReason, undefined);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('resolveChallengeSide: inference still applies when no explicit side is given', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'challenge-side-'));
+  try {
+    seedPairState(repoDir);
+    const res = resolveChallengeSide({
+      repoDir,
+      challengePairId: 'HOK-2773',
+      issueId: 'HOK-2773_c',
+      branchName: 'task/retire-models-challenger',
+    });
+    assert.equal(res.side, 'challenger');
+    assert.equal(res.invalidReason, undefined);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
 });

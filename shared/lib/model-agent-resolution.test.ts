@@ -291,4 +291,48 @@ describe('resolveModelAgent', () => {
     assert.match(phaseInsufficient.diagnostic, /certification=phase-insufficient/);
     assert.match(phaseInsufficient.diagnostic, /native-agent-certify\.ts --provider openrouter --model native-plan-model --phase workflow/);
   });
+
+  it('rejects retired native-openrouter models before certification checks', () => {
+    for (const model of ['deepseek-coder-v2', 'gemini-2.0-flash', 'grok-code-fast', 'qwen-2.5-coder-32b']) {
+      const result = resolveModelAgent({ model, phase: 'coding' });
+      assert.equal(result.ok, false, `${model} should reject`);
+      if (result.ok) assert.fail('expected rejection');
+      assert.equal(result.reason, 'lifecycle-blocked');
+      assert.match(result.diagnostic, /certification=retired/);
+    }
+  });
+
+  it('rejects supported native-openrouter models with no tool support', () => {
+    const registry = makeRegistry('native-no-tools', {
+      agent: 'native-openrouter',
+      toolSupport: 'none',
+      nativeCapability: {
+        nativeProvider: 'openrouter',
+        piTransportKind: 'openai-completions',
+        readOnlyNative: 'certified',
+        compatFlags: { thinkingFormat: 'openrouter' },
+        certification: {
+          maxCertifiedPhase: 'workflow',
+          certifiedAt: '2099-01-01T00:00:00.000Z',
+          certificationSuiteVersion: 'v1',
+        },
+      },
+      supportedModel: {
+        lifecycle: 'supported',
+        stages: ['coding'],
+      },
+    });
+
+    const result = resolveModelAgent({
+      model: 'native-no-tools',
+      phase: 'coding',
+      registry,
+      now: new Date('2098-01-01T00:00:00.000Z'),
+    });
+
+    assert.equal(result.ok, false);
+    if (result.ok) assert.fail('expected rejection');
+    assert.equal(result.reason, 'tool-support-insufficient');
+    assert.match(result.diagnostic, /certification=tool-support:none/);
+  });
 });
