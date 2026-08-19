@@ -663,6 +663,70 @@ describe('native provider certification artifacts', () => {
     });
   }
 
+  it('requires workflow certification for planning by default while keeping read-only phases lenient', () => {
+    const { repoDir, cleanup } = makeRepo();
+    try {
+      writeArtifact(repoDir, 'openrouter', 'glm-5.2', 'v1', { phase: 'patch' });
+      const registry = makeCertifiedRegistry('glm-5.2', 'openrouter');
+
+      const [planningEntry] = resolveNativeAgentProviders(
+        makeProviderConfig('openrouter', 'glm-5.2'),
+        {
+          repoDir,
+          env: { OPENROUTER_API_KEY: 'sk-openrouter-test' },
+          phase: 'planning',
+          registry,
+          now: FIXED_NOW,
+        },
+      );
+      assert(planningEntry);
+      assert.equal(planningEntry.status, 'uncertified');
+      assert.equal(planningEntry.rejectionReason, 'insufficient_phase');
+
+      const [reviewEntry] = resolveNativeAgentProviders(
+        makeProviderConfig('openrouter', 'glm-5.2'),
+        {
+          repoDir,
+          env: { OPENROUTER_API_KEY: 'sk-openrouter-test' },
+          phase: 'review',
+          registry,
+          now: FIXED_NOW,
+        },
+      );
+      assert(reviewEntry);
+      assert.equal(reviewEntry.status, 'ready');
+
+      const [taskExpansionEntry] = resolveNativeAgentProviders(
+        makeProviderConfig('openrouter', 'glm-5.2'),
+        {
+          repoDir,
+          env: { OPENROUTER_API_KEY: 'sk-openrouter-test' },
+          phase: 'task-expansion',
+          registry,
+          now: FIXED_NOW,
+        },
+      );
+      assert(taskExpansionEntry);
+      assert.equal(taskExpansionEntry.status, 'ready');
+
+      writeArtifact(repoDir, 'openrouter', 'glm-5.2', 'v1', { phase: 'workflow' });
+      const [workflowPlanningEntry] = resolveNativeAgentProviders(
+        makeProviderConfig('openrouter', 'glm-5.2'),
+        {
+          repoDir,
+          env: { OPENROUTER_API_KEY: 'sk-openrouter-test' },
+          phase: 'planning',
+          registry,
+          now: FIXED_NOW,
+        },
+      );
+      assert(workflowPlanningEntry);
+      assert.equal(workflowPlanningEntry.status, 'ready');
+    } finally {
+      cleanup();
+    }
+  });
+
   it('keeps certification mode lenient for stale registered candidates', () => {
     const { repoDir, cleanup } = makeRepo();
     try {

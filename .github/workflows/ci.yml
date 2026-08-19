@@ -15,6 +15,7 @@ jobs:
   preflight:
     name: Preflight Checks
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -38,6 +39,7 @@ jobs:
   shell:
     name: Shell Tests (shard ${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -56,6 +58,7 @@ jobs:
   unit:
     name: Unit Tests (shard ${{ matrix.shard }}/3)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -74,6 +77,7 @@ jobs:
   custom:
     name: Custom Harness Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -88,6 +92,7 @@ jobs:
   smoke:
     name: Smoke and Config Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -105,6 +110,7 @@ jobs:
   certification:
     name: Native Launch Certification
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -116,6 +122,23 @@ jobs:
       - name: Run native launch certification
         run: npm run test:native-launch-certification
 
+  openrouter-alias-audit:
+    name: OpenRouter Alias Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: preflight
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup
+        uses: ./.github/actions/setup
+
+      - name: Audit OpenRouter aliases
+        run: npx tsx tools/audit-openrouter-aliases.ts --json --no-write
+
   # Aggregates every test job above into one status check.
   #
   # The name is load-bearing: "Shell and Unit Tests" is a required status check
@@ -124,6 +147,7 @@ jobs:
   shell-and-unit:
     name: Shell and Unit Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     if: always()
     needs: [preflight, shell, unit, custom, smoke, certification]
 
@@ -148,6 +172,7 @@ jobs:
   check-paths:
     name: Check Lifecycle Paths
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     outputs:
       lifecycle: ${{ steps.filter.outputs.lifecycle == 'true' }}
 
@@ -203,6 +228,7 @@ jobs:
   lifecycle-integration:
     name: Lifecycle Integration Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs: check-paths
     if: needs.check-paths.outputs.lifecycle == 'true' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
 

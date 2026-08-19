@@ -42,33 +42,20 @@ function makeRepo(): string {
       openrouter: {
         enabled: true,
         apiKeyEnv: 'TEST_OPENROUTER_KEY',
-        models: ['glm-5.2'],
-        stages: ['planner', 'coder', 'reviewer'],
       },
     },
     nativeAgent: {
+      enabled: true,
+      allowedPhases: ['planning', 'review'],
       providers: {
         openrouter: {
           enabled: true,
           apiKeyEnv: 'TEST_OPENROUTER_KEY',
-          models: ['z-ai/glm-5.2'],
         },
       },
     },
     router: {
       defaultAgent: 'claude',
-      models: ['claude-sonnet-5', 'glm-5.2'],
-      availableModels: {
-        planner: ['glm-5.2'],
-        coder: ['glm-5.2'],
-        reviewer: ['glm-5.2'],
-      },
-      agentMap: {
-        'glm-5.2': 'claude-openrouter',
-      },
-    },
-    challenge: {
-      models: ['claude-sonnet-5', 'glm-5.2'],
     },
   }));
   clearConfigCache(repoDir);

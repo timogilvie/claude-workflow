@@ -284,6 +284,8 @@ The four pipeline stages are:
 
 When `integration.enabled` and `integration.useMillSession` are both `true`, mill starts a dedicated `backstage` tmux window inside the existing mill session and runs the tend loop there with the normal session lifecycle. For tests and manual debugging, `wavemill tend --once --repo-dir <repo>` still runs a single pass without starting mill mode.
 
+The backstage tend loop is resilient to transient GitHub/network failures: it retries `gh` calls, backs off failed loop iterations while publishing `failureCount`/`lastError`, and the mill watchdog keeps restarting a dead tend loop on a 60s-to-15m backoff even after showing `needs-user`.
+
 ### Dependent Task Auto-Dispatch
 
 When the monitor loop detects that a parent task has opened a PR, mill automatically re-checks queued children whose `depends_on` edge targets that parent issue.
@@ -323,10 +325,11 @@ See [Task Dependency Queue Plan](task-dependency-queue-plan.md) for the implemen
 
 ### Challenge-Mode Interaction
 
-Challenge mode adds a second PR for the same task and records a comparison result under `.wavemill/evals`. During tend selection, `tend-challenge-gate.ts` classifies each pair into one of four states:
+Challenge mode adds a second PR for the same task and records a comparison result under `.wavemill/evals`. During tend selection, `tend-challenge-gate.ts` classifies each pair into these states:
 
 - not in a challenge pair
 - unresolved pair with no comparison yet
+- unresolvable pair that needs a terminal forfeit record
 - winner
 - loser
 
@@ -339,6 +342,10 @@ Challenge post-PR evals and PR comparisons now run as monitored background jobs 
 - Failed or timed-out jobs surface compact excerpts in the dashboard so the monitor can keep draining commands and launching other work.
 
 If the pair is unresolved, tend blocks both sides from autonomous merge. If a winner is recorded and challenge auto-merge is enabled, the winner remains eligible, the loser is marked superseded, and tend closes the loser PR with a cleanup comment. If auto-merge is disabled for winners, the winning PR is still held for manual action.
+
+`pair-unresolvable` covers terminal states where a normal comparison will not arrive, including an orphaned sibling, a challenge arm that aborted before opening a PR, or exhausted eval hard-failure retries. The watchdog recovery command `tools/resolve-orphan-challenge-pair.ts` and the mill's automatic resolver write a terminal comparison/forfeit record so the surviving PR can leave the blocked state.
+
+Remote task branches are cleaned up after local post-review cleanup only when GitHub reports the task PR as `MERGED`; merged-ness is not inferred from ancestry because promotion uses squash history. Non-merged, unknown, or missing-PR refs are retained with a logged reason. `tools/cleanup-stale-branches.ts` audits remote `task/*` refs and can delete merged leftovers with `--execute` after a dry run.
 
 ## Promotion
 

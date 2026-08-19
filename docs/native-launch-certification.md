@@ -40,15 +40,16 @@ launches, not a general list of models that the router knows about.
 | --- | --- | --- | --- | --- |
 | `glm-5.2` | `z-ai/glm-5.2` | yes | yes | yes |
 | `kimi-k2.7-code` | `moonshotai/kimi-k2.7-code` | yes | yes | yes |
-| `qwen-3-coder` | `qwen/qwen3-coder` | no | yes | yes |
+| `qwen-3-coder` | `qwen/qwen3-coder` | yes | yes | yes |
 
 Native coding is enabled by the checked-in `nativeAgent.allowedPhases` and
 `nativeAgent.patchCoding.enabled` settings. The repo-level patch-coding smoke
 artifact certifies the native patch runtime, and the provider/model workflow
 certification artifacts certify the configured OpenRouter model identities.
 
-`qwen-3-coder` is review-executable but not planning-executable because its
-launch-priority role eligibility is `coding` and `review`, not `planning`.
+Planning launchability is still fail-closed at runtime: a model must have a
+fresh global `workflow` certification artifact for the active suite before
+planner preflight, workflow routing, or challenge routing can select it.
 
 ## Runability Versus Certification
 
@@ -60,10 +61,10 @@ Native model rollout has two separate gates:
 2. **Launch runability** proves that the exact phase/model pair can pass
    preflight for the current repository configuration and environment.
 
-A model can be certified but still not launchable for a specific phase. The
-remaining `qwen-3-coder` planning rejection is the main example: the model is
-known and certified for native execution, but its role eligibility excludes
-planning.
+A model can be certified but still not launchable for a specific phase. For
+example, `gemini-2.5-flash` is known to the native OpenRouter catalog but its
+launch-priority role eligibility is `coding` and `review`, so planning preflight
+rejects it before launch.
 
 Use this preflight command when checking a specific launch path:
 
@@ -87,10 +88,24 @@ passes in the same environment that will run `wavemill mill`.
 - `nativeAgent.providers.openrouter.enabled` is `true`.
 - The model is present in the global effective-model projection for the launch phase.
 - The global model registry entry has a native capability for `native-openrouter`.
-- The model has a valid workflow certification artifact for the current
-  certification suite.
+- Planning requires a valid global `workflow` certification artifact for the
+  current certification suite at preflight. Missing, stale, malformed,
+  wrong-suite, or lower-phase artifacts keep the model out of planner pools.
 - Native coding additionally requires `nativeAgent.patchCoding.enabled` and a
   valid `.wavemill/native-agent/patch-coding-certification.json` smoke artifact.
+
+## Native Planning Canary
+
+Use the reusable Qwen planning canary before broad native planner rollout:
+
+```bash
+npx tsx tools/native-planning-canary.ts --model qwen-3-coder --issue HOK-2779 --json
+```
+
+`--dry-run` checks gate agreement without live model spend. A full run writes
+secrets-free evidence to
+`.wavemill/audits/canaries/qwen-3-coder-native-planning.json`, including the
+preflight/router/projection/challenge gate matrix and launch artifact metadata.
 
 Run the HOK-2074 canary fixture in
 `tests/fixtures/native-routing-canary/README.md` before broad rollout. It

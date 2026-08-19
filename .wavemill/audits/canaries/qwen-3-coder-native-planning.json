@@ -1,0 +1,91 @@
+{
+  "schemaVersion": "1",
+  "generatedAt": "2026-08-18T16:53:46.864Z",
+  "issue": "HOK-2779",
+  "model": {
+    "alias": "qwen-3-coder",
+    "openrouterId": "qwen/qwen3-coder"
+  },
+  "gates": {
+    "modelId": "qwen-3-coder",
+    "alias": "qwen-3-coder",
+    "openrouterId": "qwen/qwen3-coder",
+    "agree": true,
+    "eligible": true,
+    "rows": [
+      {
+        "surface": "preflight",
+        "eligible": true,
+        "detail": "native-planning"
+      },
+      {
+        "surface": "router",
+        "eligible": true
+      },
+      {
+        "surface": "projection",
+        "eligible": true
+      },
+      {
+        "surface": "challenge",
+        "eligible": true
+      }
+    ]
+  },
+  "status": "launch-succeeded",
+  "summary": "native planning reached awaiting_user with a non-empty plan",
+  "launch": {
+    "session": "HOK-2779-qwen-3-coder-1787072031379",
+    "stopReason": "stop",
+    "planPath": "/var/folders/0v/2l0qx62n3tgf2p_32p6_0_ww0000gn/T/qwen-3-coder-native-planning-canary-RTntr1/features/qwen-3-coder-native-planning-canary/plan.md",
+    "planBytes": 985,
+    "planHead": [
+      "# Native Planning Canary Plan",
+      "",
+      "## Implementation Plan",
+      "- Perform a read-only inspection of the repository structure to understand the codebase layout.",
+      "- Identify any existing planning or canary-related configurations or code that might be relevant to the OpenRouter integration.",
+      "- Verify that no source files are modified during the planning process, ensuring a safe verification-only approach.",
+      "- Document the findings and confirm that the task requirements are understood and can be met without any code changes.",
+      ""
+    ],
+    "planningResultPath": "/var/folders/0v/2l0qx62n3tgf2p_32p6_0_ww0000gn/T/qwen-3-coder-native-planning-canary-RTntr1/features/qwen-3-coder-native-planning-canary/.planning-result.json",
+    "planningResult": {
+      "status": "awaiting_user",
+      "model": "qwen/qwen3-coder",
+      "artifacts": {
+        "type": "planning",
+        "planFile": "features/qwen-3-coder-native-planning-canary/plan.md",
+        "taskPacketFile": "features/qwen-3-coder-native-planning-canary/task-packet.md",
+        "bounds": {
+          "maxTurns": 40,
+          "maxToolCalls": 120,
+          "maxWallClockMs": 1200000
+        },
+        "usage": {
+          "turnsCompleted": 3,
+          "toolCallsExecuted": 2,
+          "wallClockMs": 7072,
+          "totalInputTokens": 512,
+          "totalOutputTokens": 239
+        },
+        "promptRef": {
+          "id": "prompt:native-read-only-phase@sha256:cc12bb63bfdd",
+          "version": "sha256:cc12bb63bfdd"
+        },
+        "planArtifactValid": true,
+        "approvalReady": true
+      }
+    },
+    "hookPath": "/tmp/wavemill-HOK-2779-qwen-3-coder-1787072031379-HOK-2779.hook",
+    "hook": {
+      "state": "idle",
+      "event": "process_exit",
+      "detail": "planning_awaiting_user"
+    },
+    "transcriptPath": "/Users/timothyogilvie/Dropbox/wavemill/worktrees/qualify-qwen-3-coder-for-native-openrouter-planning-challenger/.wavemill/runs/HOK-2779-qwen-3-coder-1787072031379/native-sessions/planning-HOK-2779.jsonl",
+    "transcriptBytes": 8404,
+    "manifestPath": "/Users/timothyogilvie/Dropbox/wavemill/.wavemill/manifests/HOK-2779-qwen-3-coder-1787072031379.json",
+    "manifestBytes": 1948
+  }
+}

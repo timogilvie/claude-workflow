@@ -101,6 +101,7 @@ for f in \
   "$REPO_DIR"/tests/wavemill-mill-model-flags.test.sh \
   "$REPO_DIR"/tests/wavemill-mill-config-preflight.test.sh \
   "$REPO_DIR"/tests/wavemill-mill-router-fallback.test.sh \
+  "$REPO_DIR"/tests/backstage-tend-watchdog.test.sh \
   "$REPO_DIR"/tests/model-inheritance-chain.test.sh \
   "$REPO_DIR"/tests/wavemill-background-jobs-cleanup.test.sh \
   "$REPO_DIR"/tests/global-model-parity.test.sh \
@@ -112,6 +113,7 @@ for f in \
   "$REPO_DIR"/tests/challenge-varied-model-abort.test.sh \
   "$REPO_DIR"/tests/native-terminal-failure.test.sh \
   "$REPO_DIR"/tests/archive-stage-artifacts.test.sh \
+  "$REPO_DIR"/tests/completed-task-cleanup.test.sh \
   "$REPO_DIR"/tests/native-agent-shell-operators.test.sh \
   "$REPO_DIR"/tests/hokusai-test-registration.test.sh \
   "$REPO_DIR"/tests/run-shell-suite.sh \
@@ -466,7 +468,7 @@ else
       | grep -vE '^(bad|internal|keeping|marking|monitor|rate|reduce|service|skipping|timed|too|using|wavemill|waiting)$' \
       | grep -vE '^(advance|review)$' \
       | grep -vE '^(not_eligible|routing_error)$' \
-      | grep -vE '^(a|aborted|already|available|blocked_by_count|break|coding|cp|debug|empty_queue|execute|file|fresh|gtimeout|id|launch|length|main|mapfile|missing|not|overloaded|plan|ready|required|reservation|slots|staleness|the|they|timeout|todate|todateiso8601|tonumber|tracked|user)$')
+      | grep -vE '^(a|aborted|already|available|blocked_by_count|break|coding|cp|debug|elapsed|empty_queue|execute|file|fresh|gtimeout|heartbeat_epoch|i|id|launch|length|main|mapfile|missing|next|not|overloaded|plan|ready|required|reservation|slots|staleness|the|they|timeout|todate|todateiso8601|tonumber|tracked|user)$')
 
     # Check which called names look like they could be custom functions
     # and verify they're defined

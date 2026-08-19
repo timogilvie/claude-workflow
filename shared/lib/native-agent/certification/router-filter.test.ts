@@ -426,6 +426,107 @@ await test('openrouter aliases load certifications from mapped provider/model st
   }
 });
 
+await test('qwen-3-coder planner eligibility requires a fresh workflow v2 artifact', () => {
+  const { repoDir, cleanup } = makeRepo();
+  try {
+    writeCertArtifact(repoDir, 'qwen', 'qwen3-coder', 'v2', { phase: 'workflow' });
+
+    for (const modelId of ['qwen-3-coder', 'qwen/qwen3-coder']) {
+      const result = filterNativeModels(
+        [modelId],
+        'planner',
+        makeOpenRouterRegistry(modelId, 'workflow', 'v2'),
+        repoDir,
+        { apiKeyPresent: true },
+      );
+      assert.deepEqual(result.eligible, [modelId], `${modelId} should be planner-eligible`);
+      assert.deepEqual(result.rejected, [], `${modelId} should not be rejected`);
+    }
+  } finally {
+    cleanup();
+  }
+});
+
+for (const testCase of [
+  {
+    name: 'missing artifact',
+    reason: 'missing-artifact',
+    write: () => {},
+  },
+  {
+    name: 'stale artifact',
+    reason: 'stale',
+    write: (repoDir: string) => writeCertArtifact(repoDir, 'qwen', 'qwen3-coder', 'v2', {
+      phase: 'workflow',
+      certifiedAt: new Date(Date.now() - (CERTIFICATION_TTL_DAYS + 1) * 24 * 60 * 60 * 1000).toISOString(),
+    }),
+  },
+  {
+    name: 'malformed artifact',
+    reason: 'malformed',
+    write: (_repoDir: string) => {
+      const path = buildGlobalCertificationPath('qwen', 'qwen3-coder', 'v2');
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, '{not-json');
+    },
+  },
+  {
+    name: 'wrong-suite artifact',
+    reason: 'wrong-suite',
+    write: (repoDir: string) => writeCertArtifact(repoDir, 'qwen', 'qwen3-coder', 'v2', {
+      phase: 'workflow',
+      suiteVersion: 'v1',
+    }),
+  },
+  {
+    name: 'patch-only artifact',
+    reason: 'insufficient-phase',
+    write: (repoDir: string) => writeCertArtifact(repoDir, 'qwen', 'qwen3-coder', 'v2', { phase: 'patch' }),
+  },
+] as const) {
+  await test(`qwen-3-coder planner rejects ${testCase.name}`, () => {
+    const { repoDir, cleanup } = makeRepo();
+    try {
+      testCase.write(repoDir);
+      const registry = makeOpenRouterRegistry('qwen-3-coder', 'workflow', 'v2');
+      const result = filterNativeModels(['qwen-3-coder'], 'planner', registry, repoDir, {
+        apiKeyPresent: true,
+      });
+
+      assert.deepEqual(result.eligible, []);
+      assert.equal(result.rejected.length, 1);
+      assert.equal(result.rejected[0]?.reason, testCase.reason);
+      assert.equal(result.rejected[0]?.modelId, 'qwen-3-coder');
+      assert.equal(result.rejected[0]?.role, 'planner');
+      assert.equal(result.rejected[0]?.requestedPhase, 'workflow');
+      assert.equal(result.rejected[0]?.nativeProvider, 'openrouter');
+      if (testCase.reason === 'insufficient-phase') {
+        assert.equal(result.rejected[0]?.certifiedPhase, 'patch');
+      }
+    } finally {
+      cleanup();
+    }
+  });
+}
+
+await test('qwen-3-coder patch artifact remains eligible for coding and review', () => {
+  const { repoDir, cleanup } = makeRepo();
+  try {
+    writeCertArtifact(repoDir, 'qwen', 'qwen3-coder', 'v2', { phase: 'patch' });
+    const registry = makeOpenRouterRegistry('qwen-3-coder', 'patch', 'v2');
+
+    for (const role of ['coder', 'reviewer'] as const) {
+      const result = filterNativeModels(['qwen-3-coder'], role, registry, repoDir, {
+        apiKeyPresent: true,
+      });
+      assert.deepEqual(result.eligible, ['qwen-3-coder'], `expected ${role} eligibility`);
+      assert.deepEqual(result.rejected, []);
+    }
+  } finally {
+    cleanup();
+  }
+});
+
 await test('launch-priority roleEligibility rejects coding-only Qwen aliases for planner role', () => {
   const { repoDir, cleanup } = makeRepo();
   try {

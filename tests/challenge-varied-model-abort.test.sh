@@ -28,6 +28,7 @@ HELPERS="$(awk '
 eval "$HELPERS"
 eval "$(extract_function resolve_phase_model)"
 eval "$(extract_function resolve_stage_result_model)"
+eval "$(extract_function challenge_cancel_challenger_arm)"
 
 TMP_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TMP_ROOT"' EXIT
@@ -35,13 +36,26 @@ trap 'rm -rf "$TMP_ROOT"' EXIT
 STATE_FILE="$TMP_ROOT/state.json"
 REPO_DIR="$TMP_ROOT/repo"
 mkdir -p "$REPO_DIR"
+WORKTREE_ROOT="$TMP_ROOT/worktrees"
+SESSION="test-session"
+MILL_LOG_FILE="$TMP_ROOT/mill.log"
 ATTENTION_FILE="$TMP_ROOT/attention.txt"
+LIFECYCLE_FILE="$TMP_ROOT/lifecycle.txt"
 
 log_error() { :; }
 log_warn() { :; }
+log_route_lifecycle() { printf '%s\n' "$*" >> "$LIFECYCLE_FILE"; }
 agent_model_looks_like_depth_tag() { [[ "${1:-}" == light || "${1:-}" == medium || "${1:-}" == deep ]]; }
 agent_validate_model() { [[ "${1:-}" != "bad-model" ]]; }
 set_window_attention_state() { printf '%s=%s\n' "$1" "$2" >> "$ATTENTION_FILE"; }
+_tmux_task_window_target() { return 1; }
+_tmux_target_join() { printf '%s:%s\n' "$1" "$2"; }
+_tmux_window_target_exists() { return 1; }
+reset_retry_count() { :; }
+remove_task_state() {
+  local issue="$1"
+  state_mutate "$STATE_FILE" 'del(.tasks[$issue])' --arg issue "$issue"
+}
 state_mutate() {
   local state_path="$1" filter="$2"
   shift 2
@@ -147,6 +161,50 @@ if [[ "$(resolve_stage_result_model "$feature_dir" "coding" "fallback-model")" =
   pass "stage result model records varied model without substitution"
 else
   fail "stage result model substituted the varied model"
+fi
+
+cat > "$STATE_FILE" <<JSON
+{
+  "tasks": {
+    "HOK-2": {
+      "challenge": true,
+      "challengePairId": "HOK-2",
+      "challengeRole": "primary",
+      "challengeStage": "review",
+      "challengeVariedModel": "claude-opus-4-7",
+      "challengeVariedAgent": "claude",
+      "challengeModel": "claude-opus-4-7"
+    },
+    "HOK-2_c": {
+      "slug": "hok-2-challenger",
+      "worktree": "$TMP_ROOT/worktrees/hok-2-challenger",
+      "challenge": true,
+      "challengePairId": "HOK-2",
+      "challengeRole": "challenger",
+      "challengeStage": "review",
+      "challengeVariedModel": "claude-opus-4-7"
+    }
+  }
+}
+JSON
+mkdir -p "$TMP_ROOT/worktrees/hok-2-challenger"
+: > "$LIFECYCLE_FILE"
+challenge_cancel_challenger_arm "HOK-2" "hok-2" "HOK-2_c" "$TMP_ROOT/feature-collapse" "review" "claude-opus-4-7" "identical-at-varied-stage" "collapsed reviewer"
+if [[ "$(jq -r '.tasks["HOK-2_c"] // empty' "$STATE_FILE")" == "" ]] \
+  && [[ "$(jq -r '.tasks["HOK-2"].challenge' "$STATE_FILE")" == "false" ]] \
+  && [[ "$(jq -r '.tasks["HOK-2"].challengeCollapseReason' "$STATE_FILE")" == "identical-at-varied-stage" ]] \
+  && [[ "$(jq -r 'has("challengeRole")' < <(jq '.tasks["HOK-2"]' "$STATE_FILE"))" == "false" ]] \
+  && grep -q 'challenge_collapsed' "$LIFECYCLE_FILE"; then
+  pass "collapsed identical challenge removes challenger and marks primary"
+else
+  fail "collapsed challenge cancellation side effects were incomplete"
+fi
+
+challenge_cancel_challenger_arm "HOK-2" "hok-2" "" "$TMP_ROOT/feature-collapse" "review" "claude-opus-4-7" "empty-key-noop" "no challenger key"
+if [[ "$(jq -r '.tasks["HOK-2"].challengeCollapseReason' "$STATE_FILE")" == "empty-key-noop" ]]; then
+  pass "challenge cancellation handles an empty challenger key"
+else
+  fail "challenge cancellation with empty challenger key failed"
 fi
 
 echo ""
