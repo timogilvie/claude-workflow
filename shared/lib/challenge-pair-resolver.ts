@@ -9,6 +9,7 @@ import {
 } from './challenge-comparison.ts';
 import {
   getSiblingBranch,
+  isSiblingLive,
   listRemoteTaskBranches,
   loadWorkflowStateChallengeData,
   type PairTaskState,
@@ -27,6 +28,8 @@ export interface UnresolvablePairInput {
   reason?: UnresolvableReason;
   dryRun?: boolean;
   now?: () => Date;
+  remoteBranches?: string[];
+  listRemoteBranches?: (repoDir: string) => string[];
 }
 
 export type ResolveOutcome =
@@ -65,6 +68,7 @@ export function resolveUnresolvablePair(input: UnresolvablePairInput): ResolveOu
     workflow.challengePairMap,
     input.now ?? (() => new Date()),
     retryMax,
+    input.remoteBranches ?? input.listRemoteBranches?.(input.repoDir),
   );
   if (!resolvedReason) {
     return { status: 'skipped', reason: `Pair ${input.pairId} is not currently unresolvable.` };
@@ -101,6 +105,7 @@ function detectUnresolvableReason(
   challengePairMap: Map<number, { pairId: string }>,
   now: () => Date,
   retryMax: number,
+  remoteBranchesInput?: string[],
 ): UnresolvableReason | null {
   const primaryExhausted = isHardFailureExhausted(pairState.primary, retryMax);
   const challengerExhausted = isHardFailureExhausted(pairState.challenger, retryMax);
@@ -121,8 +126,15 @@ function detectUnresolvableReason(
   }
 
   const siblingBranch = representative.branch ? getSiblingBranch(representative.branch) : null;
-  const remoteBranches = new Set(listRemoteTaskBranches(repoDir));
-  if (siblingBranch && remoteBranches.has(siblingBranch)) {
+  const remoteBranches = new Set(remoteBranchesInput ?? listRemoteTaskBranches(repoDir));
+  const hasSiblingBranch = Boolean(siblingBranch && remoteBranches.has(siblingBranch));
+  const openPrNumbers = new Set(challengePairMap.keys());
+  if (isSiblingLive({
+    hasSiblingBranch,
+    openPrNumbers,
+    pairState,
+    side: representative.role,
+  })) {
     return null;
   }
 

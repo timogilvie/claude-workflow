@@ -34,6 +34,8 @@ Launch invariant: non-control challenge pairs must differ on at least one routin
 - Failed comparison jobs must not leave `comparison_running` behind after settlement. They transition the pair to `manual_comparison_needed` and preserve the failure in `comparisonBlockedReason`.
 - Identical-routing pairs are a terminal skipped-comparison outcome, not a failed comparison job. The compare backstop records `comparisonOutcome=skipped`, `skipReason=identical-routing-dimensions`, and `cleanupPolicy=primary-wins-close-challenger`.
 - Skipped identical pairs deterministically declare the primary as winner and the challenger as the cleanup target. This keeps the merge lane moving and prevents watchdog retry spam.
+- `pair-unresolvable` is terminal once the resolver writes a forfeit or double-forfeit comparison record. Orphaned siblings can be resolved by the mill automatically or with `tools/resolve-orphan-challenge-pair.ts`.
+- Post-review cleanup deletes remote `task/*` refs only after GitHub reports the PR as `MERGED`; stale merged leftovers can be audited with `tools/cleanup-stale-branches.ts`.
 
 ## Stage-Specific Score Selection (HOK-2373)
 
