@@ -6764,7 +6764,7 @@ native_terminal_failure_kind() {
   lower="$(printf '%s' "$detail" | tr '[:upper:]' '[:lower:]')"
 
   case "$lower" in
-    *"maximum context length"*|*"context length is"*|*"reduce the length"*|*"context_length_exceeded"*)
+    *"maximum context length"*|*"context length is"*|*"reduce the length"*|*"context_length_exceeded"*|*"context window"*|*"context-window"*)
       printf 'context-window-exceeded\n'; return 0 ;;
     *"is not a valid model id"*|*"invalid model"*|*"unknown model"*|*"model_not_found"*)
       printf 'invalid-model-id\n'; return 0 ;;
@@ -6779,7 +6779,7 @@ native_terminal_failure_kind() {
 native_terminal_failure_next_action() {
   case "${1:-}" in
     context-window-exceeded)
-      printf 'relaunch with compressed context. The prompt exceeded the model context window\n' ;;
+      printf 'relaunch with compressed context or a larger-context model; the prompt exceeded the model context window\n' ;;
     invalid-model-id)
       printf 'check catalog alias resolution, then relaunch. The provider rejected the model ID\n' ;;
     provider-rate-limited)

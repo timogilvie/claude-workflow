@@ -97,12 +97,19 @@ echo "=== Native Terminal Failure Handling ==="
 
 # ── Classifier ────────────────────────────────────────────────────────
 ctx_detail="Native coding failed: 400 This endpoint's maximum context length is 131072 tokens. However, you requested about 131182 tokens"
+preflight_ctx_detail="Native coding pre-flight rejected the launch: estimated prompt is ~98414 input tokens plus 32768 reserved output tokens = 131182, which exceeds the 131072-token context window of moonshotai/kimi-k2 (openrouter, limit from registry). The provider would reject this request (context_length_exceeded)."
 bad_model_detail="Native coding failed: 400 qwen-2.5-coder-32b is not a valid model ID"
 
 if [[ "$(native_terminal_failure_kind "$ctx_detail")" == "context-window-exceeded" ]]; then
   pass "context overflow is classified"
 else
   fail "context overflow misclassified as $(native_terminal_failure_kind "$ctx_detail")"
+fi
+
+if [[ "$(native_terminal_failure_kind "$preflight_ctx_detail")" == "context-window-exceeded" ]]; then
+  pass "pre-flight context overflow is classified"
+else
+  fail "pre-flight context overflow misclassified as $(native_terminal_failure_kind "$preflight_ctx_detail")"
 fi
 
 if [[ "$(native_terminal_failure_kind "$bad_model_detail")" == "invalid-model-id" ]]; then

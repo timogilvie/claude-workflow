@@ -160,5 +160,6 @@ When a native read-only phase runs successfully:
 - provider/model/api metadata is available to downstream session, cost, and eval consumers
 - read-only mutation attempts are denied and recorded as denial events
 - normal success hook state is preserved for correctly denied mutation attempts
+- oversized native prompts fail before launch with a context-window diagnostic naming the model, estimated tokens, reserved output, and configured limit
 
 For prompt and runtime wiring details, see [Prompt Locations](./prompt-locations.md).

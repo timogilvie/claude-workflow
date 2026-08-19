@@ -5,6 +5,10 @@ import type { Message, TextContent } from '@earendil-works/pi-ai';
 import type { ModelRegistry } from '../model-registry.ts';
 import { registerScriptedPiProvider, type ScriptedProviderContext } from './provider.ts';
 import { runWavemillLoop, HEARTBEAT_AGENT, type HeartbeatEvent, type WavemillLoopConfig } from './loop.ts';
+import {
+  ContextWindowExceededError,
+  ContextWindowUnverifiableError,
+} from './context-window-guard.ts';
 import { ToolCompatError } from './tool-compat-validator.ts';
 import type { ToolMetadata } from './tools/types.ts';
 
@@ -90,6 +94,7 @@ function makeCompatRegistry(
   provider: 'openai' | 'openrouter',
   transport: 'openai-responses' | 'openai-completions',
   compatFlags?: Record<string, unknown>,
+  contextWindowTokens = 128_000,
 ): ModelRegistry {
   return {
     models: {
@@ -100,7 +105,7 @@ function makeCompatRegistry(
         weaknesses: ['none'],
         qualityScores: { routing: 0, planning: 0, coding: 0, review: 0, classify: 0 },
         defaultLadderEligible: true,
-        contextWindowTokens: 128_000,
+        contextWindowTokens,
         toolSupport: 'full',
         multimodal: { text: true, image: false },
         latencyTier: 'standard',
@@ -445,6 +450,145 @@ describe('loop — budget stops', () => {
     assert.equal(result.stopReason, 'stop');
     assert.equal(result.toolCallsExecuted, 3);
     assert.equal(executions, 3);
+  });
+});
+
+describe('loop — context-window pre-flight', () => {
+  it('rejects before reaching the provider when reserved output exceeds the usable window', async () => {
+    const api = uniqueApi('context-window-small');
+    const seen: ScriptedProviderContext[] = [];
+    registerScriptedPiProvider({
+      api,
+      turns: (context) => {
+        seen.push(context);
+        return { content: [{ type: 'text', text: 'unreachable' }], stopReason: 'stop' };
+      },
+    });
+
+    await assert.rejects(
+      () => runWavemillLoop({
+        ...baseConfig(api),
+        model: { id: 'tiny', api, provider: 'test-provider', contextWindow: 1_000 },
+      }),
+      ContextWindowExceededError,
+    );
+    assert.equal(seen.length, 0);
+  });
+
+  it('uses compatRegistry limits instead of model placeholder limits', async () => {
+    const api = uniqueApi('context-window-registry');
+    const seen: ScriptedProviderContext[] = [];
+    registerScriptedPiProvider({
+      api,
+      turns: (context) => {
+        seen.push(context);
+        return { content: [{ type: 'text', text: 'ok' }], stopReason: 'stop' };
+      },
+    });
+    const context: AgentContext = {
+      systemPrompt: 'You are a test agent.',
+      messages: [userMsg('x'.repeat(10_000))],
+      tools: [],
+    };
+    const model = {
+      id: 'openrouter:openai/gpt-4o-mini',
+      name: 'openai/gpt-4o-mini',
+      api,
+      provider: 'openrouter',
+      contextWindow: 200_000,
+    };
+
+    await assert.rejects(
+      () => runWavemillLoop({
+        model,
+        context,
+        convertToLlm: piIdentity,
+        compatRegistry: makeCompatRegistry(
+          'openai/gpt-4o-mini',
+          'certified',
+          'openrouter',
+          'openai-completions',
+          { thinkingFormat: 'openrouter' },
+          2_000,
+        ),
+      }),
+      ContextWindowExceededError,
+    );
+    assert.equal(seen.length, 0);
+
+    const result = await runWavemillLoop({
+      model,
+      context,
+      convertToLlm: piIdentity,
+      compatRegistry: makeCompatRegistry(
+        'openai/gpt-4o-mini',
+        'certified',
+        'openrouter',
+        'openai-completions',
+        { thinkingFormat: 'openrouter' },
+        200_000,
+      ),
+    });
+    assert.equal(result.stopReason, 'stop');
+    assert.equal(seen.length, 1);
+  });
+
+  it('fails closed for native providers without a resolvable context-window limit', async () => {
+    const api = uniqueApi('context-window-unverifiable');
+    const seen: ScriptedProviderContext[] = [];
+    registerScriptedPiProvider({
+      api,
+      turns: (context) => {
+        seen.push(context);
+        return { content: [{ type: 'text', text: 'unreachable' }], stopReason: 'stop' };
+      },
+    });
+
+    await assert.rejects(
+      () => runWavemillLoop({
+        ...baseConfig(api),
+        model: { id: 'openrouter:unknown-model', api, provider: 'openrouter' },
+        compatRegistry: { models: {}, ladders: {} },
+      }),
+      ContextWindowUnverifiableError,
+    );
+    assert.equal(seen.length, 0);
+  });
+
+  it('still validates tool transport compatibility before context-window verification', async () => {
+    const api = uniqueApi('context-window-transport-order');
+    const tool = makeTool('noop', 'parallel', async () => 'done');
+
+    await assert.rejects(
+      () => runWavemillLoop({
+        model: { id: 'openai:gpt-future', api: 'unknown-transport', provider: 'openai' },
+        context: makeContext([tool]),
+        convertToLlm: piIdentity,
+        toolPolicy: {
+          phase: 'coding',
+          worktreePath: process.cwd(),
+          registry: [makeToolMetadata('noop', 'read')],
+        },
+        compatRegistry: { models: {}, ladders: {} },
+      }),
+      /Unknown provider transport/,
+    );
+    assert.equal(api.length > 0, true);
+  });
+
+  it('proceeds normally when the prompt fits the model context window', async () => {
+    const api = uniqueApi('context-window-fits');
+    registerScriptedPiProvider({
+      api,
+      turns: [{ content: [{ type: 'text', text: 'Done' }], stopReason: 'stop' }],
+    });
+
+    const result = await runWavemillLoop({
+      ...baseConfig(api),
+      model: { id: 'fits', api, provider: 'test-provider', contextWindow: 50_000 },
+    });
+
+    assert.equal(result.stopReason, 'stop');
   });
 });
 
