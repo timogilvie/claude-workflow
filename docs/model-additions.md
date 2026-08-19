@@ -36,6 +36,28 @@ Every canonical entry in `DEFAULT_MODEL_REGISTRY` must include:
 Repository-local `modelRegistry.models.<id>` overrides are no longer accepted.
 Canonical global registry entries must provide the complete metadata above.
 
+## Retiring Models
+
+Retire models by keeping their registry entry and setting
+`supportedModel.lifecycle: "blocked"`. Do not delete the alias, provider-native
+ID, pricing, or certification identity, because historical eval records use
+those mappings for attribution.
+
+For native OpenRouter models, also set the launch-priority fixture row to
+`status: "deprecated"` and remove retired aliases from smoke watchlists. A model
+with `toolSupport: "none"` is never selectable for Wavemill stages because every
+stage drives a tool-using agent.
+
+After retiring or adding a native OpenRouter alias, run:
+
+```bash
+npx tsx tools/audit-openrouter-aliases.ts
+```
+
+The audit flags aliases that resolve to no OpenRouter wire ID or to an ID absent
+from the current OpenRouter catalog. Retired aliases may appear in the report as
+expected non-selectable findings.
+
 ## Family Aliases
 
 Family aliases are stable developer-facing names that parse into `ModelSelector` values in `shared/lib/model-registry.ts`. `parseModelSelector` only validates selector syntax and shape; it does not resolve aliases against the active registry.

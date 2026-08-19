@@ -9698,6 +9698,7 @@ maybe_run_challenge_eval() {
     --agent "$eval_agent" \
     --solution-model "$solution_model" \
     --challenge-pair "$pair_id" \
+    --challenge-side "$side" \
     --challenge-stage "${challenge_stage:-}" \
     --result-file "$result_path" \
     --debug \

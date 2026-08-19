@@ -26,6 +26,7 @@ runTool({
     agent: { type: 'string', description: 'Agent type: claude or codex (default: claude)' },
     'solution-model': { type: 'string', description: 'Model that produced the solution being evaluated' },
     'challenge-pair': { type: 'string', description: 'Shared challenge pair identifier' },
+    'challenge-side': { type: 'string', description: 'Authoritative challenge side (primary|challenger) from the task key' },
     'challenge-stage': { type: 'string', description: 'Varied challenge stage: plan, implementation, or review' },
     'repo-dir': { type: 'string', description: 'Repository directory (default: current directory)' },
     'result-file': { type: 'string', description: 'Optional path for structured job results' },
@@ -80,6 +81,7 @@ runTool({
       agentType: args.agent,
       solutionModel: args['solution-model'],
       challengePairId: args['challenge-pair'],
+      challengeSide: args['challenge-side'] as 'primary' | 'challenger' | undefined,
       challengeStage,
     };
 

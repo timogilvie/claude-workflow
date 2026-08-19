@@ -131,6 +131,8 @@ export interface PostCompletionContext {
   agentType?: string;
   solutionModel?: string;
   challengePairId?: string;
+  /** Authoritative side from the task key; the Linear issueId cannot distinguish arms. */
+  challengeSide?: 'primary' | 'challenger';
   challengeStage?: 'plan' | 'implementation' | 'review';
   onPersisted?: () => void;
 }
@@ -319,6 +321,8 @@ interface PostCompletionEnrichmentInput {
   worktreePath?: string;
   agentType?: string;
   challengePairId?: string;
+  /** Authoritative side from the task key; the Linear issueId cannot distinguish arms. */
+  challengeSide?: 'primary' | 'challenger';
   challengeStage?: 'plan' | 'implementation' | 'review';
   originalPrompt: string;
   prDiff: string;
@@ -474,6 +478,7 @@ export function enrichPostCompletionRecord(
     branchName: input.branchName,
     issueId: input.issueId,
     challengePairId: input.challengePairId,
+    explicitSide: input.challengeSide,
   });
   const challengeIntent = loadPostCompletionChallengeIntent(input);
 
@@ -777,6 +782,7 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
       worktreePath: ctx.worktreePath,
       agentType: ctx.agentType,
       challengePairId: ctx.challengePairId,
+      challengeSide: ctx.challengeSide,
       challengeStage: ctx.challengeStage,
       originalPrompt: evalContext.taskPrompt,
       prDiff: evalContext.prDiff,

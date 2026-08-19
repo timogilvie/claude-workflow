@@ -239,7 +239,7 @@ export function resolveOpenRouterIdFromWavemillAlias(
   fixturePath?: string,
 ): string | null {
   const identity = resolveOpenRouterModelIdentity(wavemillAlias, fixturePath);
-  return identity?.input === identity?.wavemillAlias ? identity.openrouterId : null;
+  return identity && identity.input === identity.wavemillAlias ? identity.openrouterId : null;
 }
 
 /**
