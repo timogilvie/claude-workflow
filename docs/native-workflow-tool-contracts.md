@@ -506,9 +506,16 @@ Malformed patch calls are rejected by `validateNativePatch` and return model-vis
 
 ## Coding Failure Handoff
 
-`.coding-failure-handoff.json` is controller-authored diagnostic output for terminal native coding failures where the model stopped without `.coding-complete` or `.coding-blocked-completion.json`. It is distinct from `.coding-blocked-completion.json`: blocked-completion is model-authored and can drive review advancement, while failure handoff preserves failure context and the stage result remains failed.
+`.coding-failure-handoff.json` is controller-authored diagnostic output for terminal native coding failures where the model either stopped without `.coding-complete` or `.coding-blocked-completion.json`, or kept writing a present-but-invalid completion artifact after bounded retries. It is distinct from `.coding-blocked-completion.json`: blocked-completion is model-authored and can drive review advancement, while failure handoff preserves failure context and the stage result remains failed.
 
-The handoff records `reason: "no_completion_artifact"`, the final stop reason, mutation failure count, the last mutation-tool error when available, whether the one-time recovery prompt was attempted, and a suggested retry path.
+The handoff records `schemaVersion: "1.0"`, the final stop reason, mutation failure count, the last mutation-tool error when available, whether the one-time recovery prompt was attempted, and a suggested retry path. Version `1.0` readers must tolerate both `reason` values and ignore unknown optional fields.
+
+Valid reasons:
+
+- `no_completion_artifact`: no `.coding-complete` or `.coding-blocked-completion.json` was produced. Existing behavior is unchanged.
+- `invalid_completion_artifact`: a completion artifact was present but failed validation after retries. The handoff includes `validationErrors` and `quarantinedArtifacts`.
+
+For `invalid_completion_artifact`, `validationErrors` is an array of `{ code, field?, message }` entries derived from seam validation. `quarantinedArtifacts` lists invalid marker files preserved as `<path>.invalid-N`, relative to the worktree, including the final invalid artifact. The canonical `.coding-complete` or `.coding-blocked-completion.json` path is removed by that quarantine step.
 
 ---
 

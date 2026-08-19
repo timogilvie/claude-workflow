@@ -61,6 +61,7 @@ import {
   getCodingFailureHandoffPath,
   writeCodingFailureHandoff,
   type CodingFailureToolError,
+  type CodingFailureValidationError,
 } from './coding-failure-handoff.ts';
 import { updateStageResult } from '../stage-result.ts';
 import { equivalentOpenRouterModelIds } from '../openrouter-catalog.ts';
@@ -459,20 +460,41 @@ function buildFailureHandoffInput(input: {
   stopReason: string;
   tracker: MutationFailureTracker;
   recoveryAttempted: boolean;
+  invalidArtifact?: {
+    validationErrors: CodingFailureValidationError[];
+    quarantinedArtifacts: string[];
+  };
 }): Parameters<typeof writeCodingFailureHandoff>[1] {
+  const invalidArtifact = input.invalidArtifact;
   return {
     stage: 'coding',
-    reason: 'no_completion_artifact',
+    reason: invalidArtifact ? 'invalid_completion_artifact' : 'no_completion_artifact',
     stopReason: input.stopReason,
     mutationFailures: input.tracker.count,
     lastToolError: input.tracker.last,
     recoveryAttempted: input.recoveryAttempted,
-    suggestedAction: input.tracker.last
-      ? 'Retry native coding with the documented tool contract and the preserved last tool error.'
-      : 'Review the transcript and rerun native coding; the model stopped without a completion artifact.',
+    suggestedAction: invalidArtifact
+      ? 'Rewrite the completion artifact to match the seam contract; validation errors and quarantined artifacts are preserved on this handoff.'
+      : input.tracker.last
+        ? 'Retry native coding with the documented tool contract and the preserved last tool error.'
+        : 'Review the transcript and rerun native coding; the model stopped without a completion artifact.',
     createdAt: new Date().toISOString(),
     schemaVersion: CODING_FAILURE_HANDOFF_SCHEMA_VERSION,
+    ...(invalidArtifact
+      ? {
+        validationErrors: invalidArtifact.validationErrors,
+        quarantinedArtifacts: invalidArtifact.quarantinedArtifacts,
+      }
+      : {}),
   };
+}
+
+function toHandoffValidationErrors(errors: readonly RetryGuidanceError[]): CodingFailureValidationError[] {
+  return errors.map((error) => ({
+    code: error.code,
+    ...(error.path ?? error.field ? { field: error.path ?? error.field } : {}),
+    message: error.message,
+  }));
 }
 
 function findFinalAssistantErrorMessage(messages: AgentMessage[]): string {
@@ -869,9 +891,11 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
       coerceUnverifiedCompletionClaim: false,
     });
     let artifactRetryAttempt = 0;
+    const quarantinedArtifacts: string[] = [];
     while (inspection.kind === 'invalid' && artifactRetryAttempt < MAX_ARTIFACT_RETRIES) {
       artifactRetryAttempt += 1;
       const preservedPath = preserveInvalidArtifact(inspection.path, artifactRetryAttempt);
+      quarantinedArtifacts.push(relative(options.wtDir, preservedPath));
       writeHookStatus(
         hookPath,
         'working',
@@ -922,7 +946,19 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
         });
       }
       if (inspection.kind === 'invalid') {
-        throw new Error(formatInvalidArtifactError(inspection, artifactRetryAttempt));
+        const preservedPath = preserveInvalidArtifact(inspection.path, artifactRetryAttempt + 1);
+        quarantinedArtifacts.push(relative(options.wtDir, preservedPath));
+        writeCodingFailureHandoff(featureDir, buildFailureHandoffInput({
+          stopReason: result.stopReason,
+          tracker: mutationFailureTracker,
+          recoveryAttempted,
+          invalidArtifact: {
+            validationErrors: toHandoffValidationErrors(inspection.errors),
+            quarantinedArtifacts,
+          },
+        }));
+        const handoffRelativePath = relative(process.cwd(), getCodingFailureHandoffPath(featureDir));
+        throw new Error(`${formatInvalidArtifactError(inspection, artifactRetryAttempt)}; structured handoff: ${handoffRelativePath}`);
       }
     }
 

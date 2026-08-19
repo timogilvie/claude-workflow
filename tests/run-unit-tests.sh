@@ -101,6 +101,8 @@ TESTS=(
   shared/lib/ready-watchdog.test.ts
   shared/lib/migration-ast.test.ts
   shared/lib/tend-challenge-gate.test.ts
+  shared/lib/challenge-pair-resolver.test.ts
+  shared/lib/stale-task-branches.test.ts
   shared/lib/tend-controller.test.ts
   shared/lib/tend-status-renderer.test.ts
   shared/lib/tend-singleton.test.ts
@@ -113,7 +115,6 @@ TESTS=(
   shared/lib/challenge-unavailable.test.ts
   shared/lib/challenge-attestation-backfill.test.ts
   shared/lib/challenge-pair-recovery.test.ts
-  shared/lib/challenge-pair-resolver.test.ts
   shared/lib/cross-repo-parity.test.ts
   shared/lib/challenge-execution-contract.test.ts
   shared/lib/challenge-pairing-repair.test.ts
