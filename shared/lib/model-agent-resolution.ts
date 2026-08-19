@@ -1,11 +1,13 @@
 import {
   DEFAULT_MODEL_REGISTRY,
   evaluateRegistryPhaseEligibility,
+  explainModelSupportExclusion,
   getModel,
   isCodexChatgptLaunchEligible,
   type AgentType,
   type ModelRegistry,
   type NativeProviderName,
+  type SupportedModelStage,
 } from './model-registry.ts';
 import type { CertificationPhase } from './native-agent/certification/schema.ts';
 import { evaluateNativeProviderGate } from './native-agent/certification/eligibility-gate.ts';
@@ -18,6 +20,8 @@ export type UnroutableReason =
   | 'unknown-model'
   | 'no-native-capability'
   | 'native-unsupported'
+  | 'lifecycle-blocked'
+  | 'tool-support-insufficient'
   | 'role-ineligible'
   | 'uncertified'
   | 'codex-chatgpt-ineligible';
@@ -40,6 +44,11 @@ const CERTIFICATION_PHASE_BY_AGENT_PHASE: Record<AgentResolutionPhase, Certifica
   planning: 'workflow',
   coding: 'patch',
   review: 'read-only',
+};
+const SUPPORTED_STAGE_BY_AGENT_PHASE: Record<AgentResolutionPhase, SupportedModelStage> = {
+  planning: 'planning',
+  coding: 'coding',
+  review: 'review',
 };
 
 function certificationPhaseForAgentPhase(phase: AgentResolutionPhase): CertificationPhase {
@@ -144,6 +153,23 @@ function resolveRegistryBackedNativeAgent(input: {
       diagnostic,
       certifyCommand: certifyCommandFor(input.modelId, provider, input.phase),
     };
+  }
+
+  const supportReason = explainModelSupportExclusion(
+    input.modelId,
+    SUPPORTED_STAGE_BY_AGENT_PHASE[input.phase],
+    input.registry,
+  );
+  if (supportReason === 'blocked-lifecycle' || supportReason === 'tool-support-insufficient') {
+    const reason = supportReason === 'blocked-lifecycle' ? 'lifecycle-blocked' : 'tool-support-insufficient';
+    const diagnostic = buildDiagnostic({
+      modelId: input.modelId,
+      phase: input.phase,
+      provider,
+      reason,
+      certificationStatus: supportReason === 'blocked-lifecycle' ? 'retired' : 'tool-support:none',
+    });
+    return { ok: false, reason, diagnostic };
   }
 
   const roleEligibility = launchPriorityRoleEligibility(input.modelId, input.phase);

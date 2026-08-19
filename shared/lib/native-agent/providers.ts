@@ -99,7 +99,7 @@ const DEFAULT_PROVIDER_ORDER: readonly NativeAgentProviderName[] = [
 
 const NATIVE_AGENT_PHASE_TO_CERT_PHASE: Record<NativeAgentAllowedPhase, CertificationPhase> = {
   'task-expansion': 'read-only',
-  planning: 'read-only',
+  planning: 'workflow',
   coding: 'patch',
   review: 'read-only',
 };

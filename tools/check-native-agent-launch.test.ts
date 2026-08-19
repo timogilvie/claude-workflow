@@ -146,6 +146,50 @@ describe('checkNativeAgentLaunch', () => {
     assert.equal(result.ok ? result.command?.apiBaseUrl : undefined, 'https://openrouter.ai/api/v1');
   });
 
+  it('accepts qwen-3-coder planning only with a workflow certification artifact', () => {
+    const repoDir = makeRepo(baseConfig());
+    writeOpenRouterCert(repoDir, 'qwen', 'qwen3-coder', 'workflow');
+    process.env.TEST_OPENROUTER_KEY = 'sk-test';
+
+    for (const model of ['qwen-3-coder', 'qwen/qwen3-coder']) {
+      const result = checkNativeAgentLaunch({
+        repoDir,
+        phase: 'planning',
+        agent: 'native-openrouter',
+        model,
+      });
+
+      assert.equal(result.ok, true, JSON.stringify(result));
+      assert.equal(result.ok ? result.launcher : undefined, 'native-planning');
+      assert.equal(result.ok ? result.command?.wavemillAlias : undefined, 'qwen-3-coder');
+      assert.equal(result.ok ? result.command?.openrouterId : undefined, 'qwen/qwen3-coder');
+    }
+  });
+
+  it('rejects qwen-3-coder planning for missing or phase-insufficient artifacts', () => {
+    const missingRepo = makeRepo(baseConfig());
+    process.env.TEST_OPENROUTER_KEY = 'sk-test';
+    const missing = checkNativeAgentLaunch({
+      repoDir: missingRepo,
+      phase: 'planning',
+      agent: 'native-openrouter',
+      model: 'qwen-3-coder',
+    });
+    assert.equal(missing.ok, false);
+    assert.match(missing.ok ? '' : missing.reason, /missing_artifact/);
+
+    const patchOnlyRepo = makeRepo(baseConfig());
+    writeOpenRouterCert(patchOnlyRepo, 'qwen', 'qwen3-coder', 'patch');
+    const patchOnly = checkNativeAgentLaunch({
+      repoDir: patchOnlyRepo,
+      phase: 'planning',
+      agent: 'native-openrouter',
+      model: 'qwen-3-coder',
+    });
+    assert.equal(patchOnly.ok, false);
+    assert.match(patchOnly.ok ? '' : patchOnly.reason, /insufficient_phase/);
+  });
+
   // Removed: 'rejects provider-stage mismatches ...'. Repo-local
   // providers.openrouter.stages no longer exists, so checkNativeAgentLaunch has
   // no provider-stage-mismatch path. Stage eligibility is now decided by the

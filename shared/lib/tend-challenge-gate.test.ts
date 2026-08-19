@@ -5,12 +5,56 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import {
   applyChallengePairGates,
+  classifyPairUnresolvableState,
   getSiblingBranch,
+  isUnresolvableReason,
+  isSiblingLive,
   parseRemoteBranchOutput,
+  UNRESOLVABLE_REASONS,
   type ChallengeBlockedCandidate,
   type ChallengeEligibleWorkItem,
   type ChallengeGateOptions,
+  type PairTaskState,
 } from './tend-challenge-gate.ts';
+
+describe('unresolvable reason helpers', () => {
+  it('recognizes every supported unresolvable reason', () => {
+    assert.deepEqual(UNRESOLVABLE_REASONS, [
+      'orphan-sibling',
+      'sibling-eval-hard-failed',
+      'both-eval-hard-failed',
+      'sibling-challenge-aborted',
+      'both-challenge-aborted',
+    ]);
+    assert.equal(isUnresolvableReason('both-challenge-aborted'), true);
+    assert.equal(isUnresolvableReason('foo'), false);
+  });
+
+  it('classifies eval hard failures before aborted challenge state', () => {
+    const task = (role: 'primary' | 'challenger', overrides: { evalFailed?: boolean; retry?: number; aborted?: string }) => ({
+      issueId: role === 'primary' ? 'HOK-1' : 'HOK-1_c',
+      prNumber: role === 'primary' ? 101 : 102,
+      role,
+      branch: null,
+      model: null,
+      updatedAt: null,
+      evalFailed: overrides.evalFailed ?? false,
+      evalCompleted: false,
+      evalHardFailureRetryCount: overrides.retry ?? 0,
+      comparisonState: null,
+      challengeAborted: overrides.aborted ?? null,
+    });
+
+    assert.equal(classifyPairUnresolvableState({
+      primary: task('primary', { evalFailed: true, retry: 2, aborted: 'terminal' }),
+      challenger: task('challenger', { aborted: 'terminal' }),
+    }, 2), 'sibling-eval-hard-failed');
+    assert.equal(classifyPairUnresolvableState({
+      primary: task('primary', { aborted: 'terminal' }),
+      challenger: task('challenger', { aborted: 'terminal' }),
+    }, 2), 'both-challenge-aborted');
+  });
+});
 
 function makeWorkItem(overrides: {
   number?: number;
@@ -81,6 +125,91 @@ describe('getSiblingBranch', () => {
 
   it('handles nested task branch paths', () => {
     assert.equal(getSiblingBranch('task/some/nested/path'), 'task/some/nested/path-challenger');
+  });
+});
+
+describe('isSiblingLive', () => {
+  const pairState: PairTaskState = {
+    primary: {
+      issueId: 'HOK-1',
+      prNumber: 101,
+      branch: 'task/pair-primary',
+      role: 'primary',
+      model: null,
+      evalCompleted: false,
+      evalFailed: false,
+      evalHardFailureRetryCount: 0,
+      comparisonState: null,
+      challengeAborted: null,
+      updatedAt: 0,
+    },
+    challenger: {
+      issueId: 'HOK-1-c',
+      prNumber: 102,
+      branch: 'task/pair-primary-challenger',
+      role: 'challenger',
+      model: null,
+      evalCompleted: false,
+      evalFailed: false,
+      evalHardFailureRetryCount: 0,
+      comparisonState: null,
+      challengeAborted: null,
+      updatedAt: 0,
+    },
+  };
+
+  it('treats missing and untracked sibling refs as not live', () => {
+    assert.equal(isSiblingLive({
+      hasSiblingBranch: false,
+      openPrNumbers: new Set([102]),
+      pairState,
+      side: 'primary',
+    }), false);
+    assert.equal(isSiblingLive({
+      hasSiblingBranch: true,
+      openPrNumbers: new Set([102]),
+      pairState: { primary: pairState.primary },
+      side: 'primary',
+    }), false);
+  });
+
+  it('treats aborted siblings as not live', () => {
+    assert.equal(isSiblingLive({
+      hasSiblingBranch: true,
+      openPrNumbers: new Set([102]),
+      pairState: {
+        ...pairState,
+        challenger: { ...pairState.challenger!, challengeAborted: 'terminal_launch_failure:invalid-model-id' },
+      },
+      side: 'primary',
+    }), false);
+  });
+
+  it('treats tracked siblings without a PR as live', () => {
+    assert.equal(isSiblingLive({
+      hasSiblingBranch: true,
+      openPrNumbers: new Set(),
+      pairState: {
+        ...pairState,
+        challenger: { ...pairState.challenger!, prNumber: null },
+      },
+      side: 'primary',
+    }), true);
+  });
+
+  it('keys tracked siblings with PRs on whether the PR is open', () => {
+    assert.equal(isSiblingLive({
+      hasSiblingBranch: true,
+      openPrNumbers: new Set([102]),
+      pairState,
+      side: 'primary',
+    }), true);
+    assert.equal(isSiblingLive({
+      hasSiblingBranch: true,
+      openPrNumbers: new Set([101]),
+      pairState,
+      side: 'primary',
+    }), false);
   });
 });
 

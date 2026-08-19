@@ -33,21 +33,66 @@ else
   fail "expected two cleanup_completed_task definitions, found $cleanup_defs"
 fi
 
-if ! grep -Fq 'push origin --delete "$task_branch"' <<< "$HEREDOC_CONTENT"; then
-  pass "monitor cleanup leaves remote branch deletion to tend"
+remote_cleanup_defs=$(grep -c '^cleanup_remote_task_branch()' "$MILL_SCRIPT" || true)
+if [[ "$remote_cleanup_defs" == "2" ]]; then
+  pass "cleanup_remote_task_branch exists in both script contexts"
 else
-  fail "monitor cleanup still deletes remote task branches"
+  fail "expected two cleanup_remote_task_branch definitions, found $remote_cleanup_defs"
 fi
 
 outer_cleanup=$(awk '
+  /^cleanup_completed_task\(\) \{/ { count++; if (count == 1) in_fn=1 }
+  in_fn { print }
+  in_fn && /^}$/ { exit }
+' "$MILL_SCRIPT")
+
+monitor_cleanup=$(awk '
   /^cleanup_completed_task\(\) \{/ { count++; if (count == 2) in_fn=1 }
   in_fn { print }
   in_fn && /^}$/ { exit }
 ' "$MILL_SCRIPT")
-if ! grep -Fq 'push origin --delete "$task_branch"' <<< "$outer_cleanup"; then
-  pass "outer cleanup leaves remote branch deletion to tend"
+
+outer_remote_cleanup=$(awk '
+  /^cleanup_remote_task_branch\(\) \{/ { count++; if (count == 1) in_fn=1 }
+  in_fn { print }
+  in_fn && /^}$/ { exit }
+' "$MILL_SCRIPT")
+
+monitor_remote_cleanup=$(awk '
+  /^cleanup_remote_task_branch\(\) \{/ { count++; if (count == 2) in_fn=1 }
+  in_fn { print }
+  in_fn && /^}$/ { exit }
+' "$MILL_SCRIPT")
+
+if grep -Fq 'cleanup_remote_task_branch "$issue" "$task_branch" "$pr"' <<< "$HEREDOC_CONTENT" \
+  && grep -Fq 'cleanup_remote_task_branch "$issue" "$task_branch" "$pr"' <<< "$outer_cleanup"; then
+  pass "both cleanup copies invoke remote branch cleanup"
 else
-  fail "outer cleanup still deletes remote task branches"
+  fail "cleanup_completed_task is missing remote branch cleanup calls"
+fi
+
+# HOK-2774 reverses the HOK-1547/#524 split: tend deletes refs only for
+# tend-driven merges, while manual merges leaked stale remote refs that blocked
+# sibling challenge PRs indefinitely.
+for needle in \
+  'push origin --delete "$task_branch"' \
+  'pr_state "$pr"' \
+  'Deleted remote branch: $task_branch' \
+  'retaining remote branch' \
+  'Refusing to delete protected branch: $task_branch'; do
+  if grep -Fq "$needle" <<< "$outer_remote_cleanup" \
+    && grep -Fq "$needle" <<< "$monitor_remote_cleanup"; then
+    pass "remote cleanup helper contains: $needle"
+  else
+    fail "remote cleanup helper missing: $needle"
+  fi
+done
+
+if grep -Fq 'execute _with_timeout "$API_TIMEOUT" git -C "$REPO_DIR" push origin --delete "$task_branch"' <<< "$outer_remote_cleanup" \
+  && grep -Fq '_with_timeout "$API_TIMEOUT" git -C "$REPO_DIR" push origin --delete "$task_branch"' <<< "$monitor_remote_cleanup"; then
+  pass "outer cleanup dry-runs remote deletion and monitor performs it directly"
+else
+  fail "remote deletion is not wired with the expected outer/monitor execution style"
 fi
 
 if grep -Fq 'Deleted local branch: $task_branch' <<< "$HEREDOC_CONTENT" \

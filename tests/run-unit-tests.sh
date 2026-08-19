@@ -86,6 +86,7 @@ TESTS=(
   shared/lib/native-agent/workflow-tools/ready-remediation-integration.test.ts
   shared/lib/issue-expander.test.ts
   shared/lib/native-agent/launch-planning.test.ts
+  shared/lib/native-agent/planning-canary.test.ts
   shared/lib/feature-outcome-consumer.test.ts
   shared/lib/outcome-collectors.test.ts
   shared/lib/context-analyzer.test.ts
@@ -102,6 +103,8 @@ TESTS=(
   shared/lib/ready-watchdog.test.ts
   shared/lib/migration-ast.test.ts
   shared/lib/tend-challenge-gate.test.ts
+  shared/lib/challenge-pair-resolver.test.ts
+  shared/lib/stale-task-branches.test.ts
   shared/lib/tend-controller.test.ts
   shared/lib/tend-status-renderer.test.ts
   shared/lib/tend-singleton.test.ts
@@ -122,6 +125,8 @@ TESTS=(
   shared/lib/launch-validation.test.ts
   shared/lib/merge-queue.test.ts
   shared/lib/model-registry.test.ts
+  shared/lib/effective-models.test.ts
+  shared/lib/model-agent-resolution.test.ts
   shared/lib/model-resolution.test.ts
   shared/lib/model-resolution-display.test.ts
   shared/lib/mill-config-preflight.test.ts
@@ -189,7 +194,10 @@ TESTS=(
   shared/lib/feature-state.test.ts
   shared/lib/soft-gates.test.ts
   shared/lib/openrouter-provider.test.ts
+  shared/lib/openrouter-catalog.test.ts
+  shared/lib/openrouter-alias-audit.test.ts
   shared/lib/openrouter-doctor.test.ts
+  shared/lib/launchable-models.test.ts
   shared/lib/openrouter-zero-traffic.test.ts
   shared/lib/parity-report.test.ts
   src/evaluation/scorers/wavemill/success-rate-under-budget.test.ts
@@ -212,6 +220,8 @@ TESTS=(
   tools/select-wave.test.ts
   tools/smoke-deepseek.test.ts
   tools/openrouter-doctor.test.ts
+  tools/audit-openrouter-aliases.test.ts
+  tools/resolve-orphan-challenge-pair.test.ts
   tests/drift-detector.test.ts
   tests/check-drift-tool.test.ts
   tests/jq-filter-smoke.test.ts
