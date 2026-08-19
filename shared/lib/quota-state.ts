@@ -28,7 +28,21 @@ export interface QuotaEntry {
 
 export interface QuotaSnapshot {
   models: Readonly<Record<string, Readonly<QuotaEntry>>>;
+  providers?: ProvidersQuotaState;
   snapshotAt: string;
+}
+
+export interface OpenRouterCreditsSnapshot {
+  totalCredits: number | null;
+  totalUsage: number | null;
+  balanceUsd: number | null;
+  usageDaily: number | null;
+  updatedAt: string;
+  lastFetchError: { message: string; at: string } | null;
+}
+
+export interface ProvidersQuotaState {
+  openrouter?: OpenRouterCreditsSnapshot;
 }
 
 export interface VendorQuotaStats {
@@ -87,6 +101,7 @@ interface QuotaStateFile {
   version: number;
   updatedAt: string;
   models: Record<string, StoredQuotaEntry>;
+  providers?: ProvidersQuotaState;
 }
 
 interface LoadedQuotaState {
@@ -104,7 +119,7 @@ interface LockHandle {
   lockPath: string;
 }
 
-const QUOTA_STATE_VERSION = 1;
+const QUOTA_STATE_VERSION = 2;
 export const QUOTA_STATE_TIMINGS = {
   HEALTHY_DECAY_MS: 5 * 60_000,
   DEGRADING_DECAY_MS: 10 * 60_000,
@@ -380,6 +395,49 @@ function normalizeStoredEntry(value: unknown): StoredQuotaEntry | null {
   };
 }
 
+function normalizeNullableNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function normalizeOpenRouterCredits(value: unknown): OpenRouterCreditsSnapshot | undefined {
+  if (!value || typeof value !== 'object') {
+    return undefined;
+  }
+
+  const candidate = value as Partial<OpenRouterCreditsSnapshot>;
+  const updatedAt = normalizeIsoDate(candidate.updatedAt ?? null);
+  if (!updatedAt) {
+    return undefined;
+  }
+
+  let lastFetchError: OpenRouterCreditsSnapshot['lastFetchError'] = null;
+  if (candidate.lastFetchError && typeof candidate.lastFetchError === 'object') {
+    const error = candidate.lastFetchError as { message?: unknown; at?: unknown };
+    const at = normalizeIsoDate(error.at as string | null);
+    if (typeof error.message === 'string' && at) {
+      lastFetchError = { message: error.message, at };
+    }
+  }
+
+  return {
+    totalCredits: normalizeNullableNumber(candidate.totalCredits),
+    totalUsage: normalizeNullableNumber(candidate.totalUsage),
+    balanceUsd: normalizeNullableNumber(candidate.balanceUsd),
+    usageDaily: normalizeNullableNumber(candidate.usageDaily),
+    updatedAt,
+    lastFetchError,
+  };
+}
+
+function normalizeProviders(value: unknown): ProvidersQuotaState | undefined {
+  if (!value || typeof value !== 'object') {
+    return undefined;
+  }
+
+  const openrouter = normalizeOpenRouterCredits((value as { openrouter?: unknown }).openrouter);
+  return openrouter ? { openrouter } : undefined;
+}
+
 function loadFile(repoDir?: string): LoadedQuotaState {
   const { statePath } = resolveStatePaths(repoDir);
 
@@ -404,7 +462,7 @@ function loadFile(repoDir?: string): LoadedQuotaState {
       return { state: emptyState(), writeAllowed: false };
     }
 
-    if (parsed.version !== QUOTA_STATE_VERSION) {
+    if (parsed.version !== 1 && parsed.version !== QUOTA_STATE_VERSION) {
       return { state: emptyState(), writeAllowed: true };
     }
 
@@ -423,6 +481,7 @@ function loadFile(repoDir?: string): LoadedQuotaState {
         version: QUOTA_STATE_VERSION,
         updatedAt: normalizeIsoDate(parsed.updatedAt ?? null) ?? new Date(now()).toISOString(),
         models,
+        providers: normalizeProviders(parsed.providers),
       },
       writeAllowed: true,
     };
@@ -522,6 +581,20 @@ function toPublicEntry(entry: StoredQuotaEntry): QuotaEntry {
     lastLimitErrorAt: entry.lastLimitErrorAt,
     lastSuccessAt: entry.lastSuccessAt,
     lastReason: entry.lastReason,
+  };
+}
+
+function cloneProviders(providers: ProvidersQuotaState | undefined): ProvidersQuotaState | undefined {
+  if (!providers?.openrouter) {
+    return undefined;
+  }
+  return {
+    openrouter: {
+      ...providers.openrouter,
+      lastFetchError: providers.openrouter.lastFetchError
+        ? { ...providers.openrouter.lastFetchError }
+        : null,
+    },
   };
 }
 
@@ -702,8 +775,50 @@ export function readQuotaSnapshot(repoDir?: string): QuotaSnapshot {
 
   return freezeValue({
     models,
+    providers: cloneProviders(state.providers),
     snapshotAt,
   });
+}
+
+export function readOpenRouterCredits(repoDir?: string): OpenRouterCreditsSnapshot | null {
+  return cloneProviders(loadFile(repoDir).state.providers)?.openrouter ?? null;
+}
+
+export function writeOpenRouterCredits(
+  repoDir: string | undefined,
+  input: OpenRouterCreditsSnapshot | { error: string },
+): void {
+  try {
+    mutateWithLock(repoDir, (state) => {
+      const nowIso = new Date(now()).toISOString();
+      const current = state.providers?.openrouter;
+      state.providers = state.providers ?? {};
+
+      if ('error' in input) {
+        state.providers.openrouter = {
+          totalCredits: current?.totalCredits ?? null,
+          totalUsage: current?.totalUsage ?? null,
+          balanceUsd: current?.balanceUsd ?? null,
+          usageDaily: current?.usageDaily ?? null,
+          updatedAt: current?.updatedAt ?? nowIso,
+          lastFetchError: { message: input.error, at: nowIso },
+        };
+        return true;
+      }
+
+      state.providers.openrouter = {
+        totalCredits: normalizeNullableNumber(input.totalCredits),
+        totalUsage: normalizeNullableNumber(input.totalUsage),
+        balanceUsd: normalizeNullableNumber(input.balanceUsd),
+        usageDaily: normalizeNullableNumber(input.usageDaily),
+        updatedAt: normalizeIsoDate(input.updatedAt) ?? nowIso,
+        lastFetchError: input.lastFetchError,
+      };
+      return true;
+    });
+  } catch (error) {
+    warnWriteFailure('write OpenRouter credits', error);
+  }
 }
 
 export function getVendorQuotaBreakdown(

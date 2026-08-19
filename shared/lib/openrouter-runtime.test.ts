@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { describe, it } from 'node:test';
+import { afterEach, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { getFamilyCapabilities } from './openrouter-capabilities.ts';
 import type {
@@ -17,9 +18,17 @@ import {
   type OpenRouterTransport,
   type TokenUsage,
 } from './openrouter-runtime.ts';
+import { writeOpenRouterCredits } from './quota-state.ts';
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
 const fixtureDir = join(moduleDir, '..', 'fixtures', 'openrouter-responses');
+const tempDirs: string[] = [];
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 function readFixture(path: string): unknown {
   return JSON.parse(readFileSync(join(fixtureDir, path), 'utf-8')) as unknown;
@@ -93,6 +102,20 @@ describe('classifyOpenRouterError', () => {
     });
 
     assert.equal(result.category, 'unsupported_parameter');
+  });
+
+  it('maps payment-required responses to billing_exhausted', () => {
+    const result = classifyOpenRouterError({
+      status: 402,
+      body: {
+        error: {
+          message: 'This request requires more credits, or fewer max_tokens. You requested up to 32768 tokens, but can only afford 1123.',
+        },
+      },
+    });
+
+    assert.equal(result.category, 'billing_exhausted');
+    assert.match(result.detail, /requires more credits/);
   });
 
   it('treats malformed 200 responses as model_response_error', () => {
@@ -304,6 +327,41 @@ describe('dispatchOpenRouterRequest', () => {
 
     assert.equal(result.status, 'blocker');
     assert.equal(result.category, 'provider_unavailable');
+  });
+
+  it('caps max_tokens against cached affordable OpenRouter balance', async () => {
+    const repoDir = mkdtempSync(join(tmpdir(), 'openrouter-runtime-'));
+    tempDirs.push(repoDir);
+    writeOpenRouterCredits(repoDir, {
+      totalCredits: 1,
+      totalUsage: 0.95,
+      balanceUsd: 0.05,
+      usageDaily: 0,
+      updatedAt: new Date().toISOString(),
+      lastFetchError: null,
+    });
+
+    const entry = makeEntry('qwen', {
+      pricing: { inputPerMTok: 1, outputPerMTok: 10 },
+    });
+    let requestBody: Record<string, unknown> | null = null;
+    const transport: OpenRouterTransport = async (_url, init) => {
+      requestBody = JSON.parse(String(init.body)) as Record<string, unknown>;
+      return jsonResponse(readFixture('success/qwen.json'));
+    };
+
+    const result = await dispatchOpenRouterRequest(
+      {
+        modelId: entry.wavemillAlias,
+        messages: [{ role: 'user', content: 'ping' }],
+        maxOutputTokens: 32768,
+      },
+      entry,
+      { apiKey: 'sk-test', transport, repoDir },
+    );
+
+    assert.equal(result.status, 'ok');
+    assert.equal(requestBody?.max_tokens, 5000);
   });
 
   it('covers representative family success fixtures', async () => {
