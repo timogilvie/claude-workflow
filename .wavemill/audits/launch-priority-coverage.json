@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-16T15:17:28.358Z",
+  "generatedAt": "2026-08-18T16:18:48.197Z",
   "schemaVersion": "1",
   "coverageTargetPerRole": 3,
   "models": [
@@ -11,7 +11,7 @@
       "priorityTier": 1,
       "role": "planning",
       "directEvidenceCount": 1,
-      "availablePoolExposureCount": 184,
+      "availablePoolExposureCount": 261,
       "evalAttempts": 1,
       "evalSuccesses": 1,
       "blockers": [],
@@ -25,7 +25,7 @@
       "priorityTier": 1,
       "role": "coding",
       "directEvidenceCount": 1,
-      "availablePoolExposureCount": 184,
+      "availablePoolExposureCount": 261,
       "evalAttempts": 1,
       "evalSuccesses": 1,
       "blockers": [],
@@ -39,7 +39,7 @@
       "priorityTier": 1,
       "role": "review",
       "directEvidenceCount": 1,
-      "availablePoolExposureCount": 184,
+      "availablePoolExposureCount": 261,
       "evalAttempts": 1,
       "evalSuccesses": 1,
       "blockers": [],
@@ -53,7 +53,7 @@
       "priorityTier": 1,
       "role": "planning",
       "directEvidenceCount": 18,
-      "availablePoolExposureCount": 201,
+      "availablePoolExposureCount": 278,
       "evalAttempts": 18,
       "evalSuccesses": 17,
       "blockers": [],
@@ -67,7 +67,7 @@
       "priorityTier": 1,
       "role": "coding",
       "directEvidenceCount": 18,
-      "availablePoolExposureCount": 201,
+      "availablePoolExposureCount": 278,
       "evalAttempts": 18,
       "evalSuccesses": 17,
       "blockers": [],
@@ -81,7 +81,7 @@
       "priorityTier": 1,
       "role": "review",
       "directEvidenceCount": 18,
-      "availablePoolExposureCount": 201,
+      "availablePoolExposureCount": 278,
       "evalAttempts": 18,
       "evalSuccesses": 17,
       "blockers": [],
@@ -136,12 +136,12 @@
       "launchPriorityStatus": "active",
       "priorityTier": 1,
       "role": "planning",
-      "directEvidenceCount": 1,
-      "availablePoolExposureCount": 63,
-      "evalAttempts": 1,
-      "evalSuccesses": 0,
+      "directEvidenceCount": 5,
+      "availablePoolExposureCount": 204,
+      "evalAttempts": 5,
+      "evalSuccesses": 3,
       "blockers": [],
-      "status": "below-target"
+      "status": "at-target"
     },
     {
       "wavemillAlias": "claude-sonnet-5",
@@ -150,12 +150,12 @@
       "launchPriorityStatus": "active",
       "priorityTier": 1,
       "role": "coding",
-      "directEvidenceCount": 1,
-      "availablePoolExposureCount": 63,
-      "evalAttempts": 1,
-      "evalSuccesses": 0,
+      "directEvidenceCount": 5,
+      "availablePoolExposureCount": 204,
+      "evalAttempts": 5,
+      "evalSuccesses": 3,
       "blockers": [],
-      "status": "below-target"
+      "status": "at-target"
     },
     {
       "wavemillAlias": "claude-sonnet-5",
@@ -164,12 +164,12 @@
       "launchPriorityStatus": "active",
       "priorityTier": 1,
       "role": "review",
-      "directEvidenceCount": 1,
-      "availablePoolExposureCount": 63,
-      "evalAttempts": 1,
-      "evalSuccesses": 0,
+      "directEvidenceCount": 5,
+      "availablePoolExposureCount": 204,
+      "evalAttempts": 5,
+      "evalSuccesses": 3,
       "blockers": [],
-      "status": "below-target"
+      "status": "at-target"
     },
     {
       "wavemillAlias": "deepseek-r1",
@@ -179,7 +179,7 @@
       "priorityTier": 1,
       "role": "planning",
       "directEvidenceCount": 3,
-      "availablePoolExposureCount": 3,
+      "availablePoolExposureCount": 51,
       "evalAttempts": 3,
       "evalSuccesses": 0,
       "blockers": [],
@@ -193,7 +193,7 @@
       "priorityTier": 1,
       "role": "coding",
       "directEvidenceCount": 3,
-      "availablePoolExposureCount": 3,
+      "availablePoolExposureCount": 51,
       "evalAttempts": 3,
       "evalSuccesses": 0,
       "blockers": [],
@@ -207,7 +207,7 @@
       "priorityTier": 1,
       "role": "review",
       "directEvidenceCount": 3,
-      "availablePoolExposureCount": 3,
+      "availablePoolExposureCount": 51,
       "evalAttempts": 3,
       "evalSuccesses": 0,
       "blockers": [],
@@ -221,7 +221,7 @@
       "priorityTier": 1,
       "role": "coding",
       "directEvidenceCount": 3,
-      "availablePoolExposureCount": 3,
+      "availablePoolExposureCount": 51,
       "evalAttempts": 3,
       "evalSuccesses": 0,
       "blockers": [],
@@ -235,7 +235,7 @@
       "priorityTier": 1,
       "role": "review",
       "directEvidenceCount": 3,
-      "availablePoolExposureCount": 3,
+      "availablePoolExposureCount": 51,
       "evalAttempts": 3,
       "evalSuccesses": 0,
       "blockers": [],
@@ -248,10 +248,10 @@
       "launchPriorityStatus": "active",
       "priorityTier": 1,
       "role": "planning",
-      "directEvidenceCount": 3,
-      "availablePoolExposureCount": 183,
-      "evalAttempts": 3,
-      "evalSuccesses": 0,
+      "directEvidenceCount": 4,
+      "availablePoolExposureCount": 231,
+      "evalAttempts": 4,
+      "evalSuccesses": 1,
       "blockers": [],
       "status": "at-target"
     },
@@ -262,10 +262,10 @@
       "launchPriorityStatus": "active",
       "priorityTier": 1,
       "role": "coding",
-      "directEvidenceCount": 3,
-      "availablePoolExposureCount": 183,
-      "evalAttempts": 3,
-      "evalSuccesses": 0,
+      "directEvidenceCount": 4,
+      "availablePoolExposureCount": 231,
+      "evalAttempts": 4,
+      "evalSuccesses": 1,
       "blockers": [],
       "status": "at-target"
     },
@@ -276,10 +276,10 @@
       "launchPriorityStatus": "active",
       "priorityTier": 1,
       "role": "review",
-      "directEvidenceCount": 3,
-      "availablePoolExposureCount": 183,
-      "evalAttempts": 3,
-      "evalSuccesses": 0,
+      "directEvidenceCount": 4,
+      "availablePoolExposureCount": 231,
+      "evalAttempts": 4,
+      "evalSuccesses": 1,
       "blockers": [],
       "status": "at-target"
     },
@@ -291,7 +291,7 @@
       "priorityTier": 1,
       "role": "planning",
       "directEvidenceCount": 3,
-      "availablePoolExposureCount": 34,
+      "availablePoolExposureCount": 82,
       "evalAttempts": 3,
       "evalSuccesses": 0,
       "blockers": [],
@@ -305,7 +305,7 @@
       "priorityTier": 1,
       "role": "coding",
       "directEvidenceCount": 3,
-      "availablePoolExposureCount": 34,
+      "availablePoolExposureCount": 82,
       "evalAttempts": 3,
       "evalSuccesses": 0,
       "blockers": [],
@@ -319,7 +319,7 @@
       "priorityTier": 1,
       "role": "review",
       "directEvidenceCount": 3,
-      "availablePoolExposureCount": 34,
+      "availablePoolExposureCount": 82,
       "evalAttempts": 3,
       "evalSuccesses": 0,
       "blockers": [],
@@ -333,7 +333,7 @@
       "priorityTier": 1,
       "role": "planning",
       "directEvidenceCount": 3,
-      "availablePoolExposureCount": 3,
+      "availablePoolExposureCount": 12,
       "evalAttempts": 3,
       "evalSuccesses": 0,
       "blockers": [],
@@ -347,7 +347,7 @@
       "priorityTier": 1,
       "role": "coding",
       "directEvidenceCount": 3,
-      "availablePoolExposureCount": 3,
+      "availablePoolExposureCount": 12,
       "evalAttempts": 3,
       "evalSuccesses": 0,
       "blockers": [],
@@ -361,7 +361,7 @@
       "priorityTier": 1,
       "role": "review",
       "directEvidenceCount": 3,
-      "availablePoolExposureCount": 3,
+      "availablePoolExposureCount": 12,
       "evalAttempts": 3,
       "evalSuccesses": 0,
       "blockers": [],
@@ -374,10 +374,10 @@
       "launchPriorityStatus": "active",
       "priorityTier": 1,
       "role": "planning",
-      "directEvidenceCount": 247,
-      "availablePoolExposureCount": 422,
-      "evalAttempts": 247,
-      "evalSuccesses": 6,
+      "directEvidenceCount": 443,
+      "availablePoolExposureCount": 633,
+      "evalAttempts": 443,
+      "evalSuccesses": 58,
       "blockers": [],
       "status": "at-target"
     },
@@ -388,10 +388,10 @@
       "launchPriorityStatus": "active",
       "priorityTier": 1,
       "role": "coding",
-      "directEvidenceCount": 247,
-      "availablePoolExposureCount": 422,
-      "evalAttempts": 247,
-      "evalSuccesses": 6,
+      "directEvidenceCount": 443,
+      "availablePoolExposureCount": 633,
+      "evalAttempts": 443,
+      "evalSuccesses": 58,
       "blockers": [],
       "status": "at-target"
     },
@@ -402,10 +402,10 @@
       "launchPriorityStatus": "active",
       "priorityTier": 1,
       "role": "review",
-      "directEvidenceCount": 247,
-      "availablePoolExposureCount": 422,
-      "evalAttempts": 247,
-      "evalSuccesses": 6,
+      "directEvidenceCount": 443,
+      "availablePoolExposureCount": 633,
+      "evalAttempts": 443,
+      "evalSuccesses": 58,
       "blockers": [],
       "status": "at-target"
     },
@@ -417,16 +417,10 @@
       "priorityTier": 1,
       "role": "planning",
       "directEvidenceCount": 0,
-      "availablePoolExposureCount": 180,
+      "availablePoolExposureCount": 228,
       "evalAttempts": 0,
       "evalSuccesses": 0,
-      "blockers": [
-        {
-          "reason": "missing-native-certification",
-          "role": "planning",
-          "detail": "kimi-k2 lacks read-only certification (missing)"
-        }
-      ],
+      "blockers": [],
       "status": "zero-evidence"
     },
     {
@@ -437,16 +431,10 @@
       "priorityTier": 1,
       "role": "coding",
       "directEvidenceCount": 0,
-      "availablePoolExposureCount": 180,
+      "availablePoolExposureCount": 228,
       "evalAttempts": 0,
       "evalSuccesses": 0,
-      "blockers": [
-        {
-          "reason": "missing-native-certification",
-          "role": "coding",
-          "detail": "kimi-k2 lacks patch certification (missing)"
-        }
-      ],
+      "blockers": [],
       "status": "zero-evidence"
     },
     {
@@ -457,16 +445,10 @@
       "priorityTier": 1,
       "role": "review",
       "directEvidenceCount": 0,
-      "availablePoolExposureCount": 180,
+      "availablePoolExposureCount": 228,
       "evalAttempts": 0,
       "evalSuccesses": 0,
-      "blockers": [
-        {
-          "reason": "missing-native-certification",
-          "role": "review",
-          "detail": "kimi-k2 lacks read-only certification (missing)"
-        }
-      ],
+      "blockers": [],
       "status": "zero-evidence"
     },
     {
@@ -477,7 +459,7 @@
       "priorityTier": 1,
       "role": "planning",
       "directEvidenceCount": 3,
-      "availablePoolExposureCount": 33,
+      "availablePoolExposureCount": 81,
       "evalAttempts": 3,
       "evalSuccesses": 0,
       "blockers": [],
@@ -491,7 +473,7 @@
       "priorityTier": 1,
       "role": "coding",
       "directEvidenceCount": 3,
-      "availablePoolExposureCount": 33,
+      "availablePoolExposureCount": 81,
       "evalAttempts": 3,
       "evalSuccesses": 0,
       "blockers": [],
@@ -505,7 +487,7 @@
       "priorityTier": 1,
       "role": "review",
       "directEvidenceCount": 3,
-      "availablePoolExposureCount": 33,
+      "availablePoolExposureCount": 81,
       "evalAttempts": 3,
       "evalSuccesses": 0,
       "blockers": [],
@@ -519,7 +501,21 @@
       "priorityTier": 1,
       "role": "coding",
       "directEvidenceCount": 3,
-      "availablePoolExposureCount": 183,
+      "availablePoolExposureCount": 231,
+      "evalAttempts": 3,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "at-target"
+    },
+    {
+      "wavemillAlias": "qwen-3-coder",
+      "openrouterId": "qwen/qwen3-coder",
+      "family": "qwen",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "planning",
+      "directEvidenceCount": 3,
+      "availablePoolExposureCount": 248,
       "evalAttempts": 3,
       "evalSuccesses": 0,
       "blockers": [],
@@ -533,7 +529,7 @@
       "priorityTier": 1,
       "role": "coding",
       "directEvidenceCount": 3,
-      "availablePoolExposureCount": 200,
+      "availablePoolExposureCount": 248,
       "evalAttempts": 3,
       "evalSuccesses": 0,
       "blockers": [],
@@ -547,7 +543,7 @@
       "priorityTier": 1,
       "role": "review",
       "directEvidenceCount": 3,
-      "availablePoolExposureCount": 200,
+      "availablePoolExposureCount": 248,
       "evalAttempts": 3,
       "evalSuccesses": 0,
       "blockers": [],
@@ -560,18 +556,12 @@
       "launchPriorityStatus": "active",
       "priorityTier": 2,
       "role": "coding",
-      "directEvidenceCount": 0,
+      "directEvidenceCount": 3,
       "availablePoolExposureCount": 0,
-      "evalAttempts": 0,
-      "evalSuccesses": 0,
-      "blockers": [
-        {
-          "reason": "agent-resolution-fails-closed",
-          "role": "coding",
-          "detail": "claude-haiku-4-5 is missing or disabled in the active model registry"
-        }
-      ],
-      "status": "zero-evidence"
+      "evalAttempts": 3,
+      "evalSuccesses": 1,
+      "blockers": [],
+      "status": "at-target"
     },
     {
       "wavemillAlias": "claude-haiku-4-5",
@@ -580,18 +570,12 @@
       "launchPriorityStatus": "active",
       "priorityTier": 2,
       "role": "review",
-      "directEvidenceCount": 0,
+      "directEvidenceCount": 3,
       "availablePoolExposureCount": 0,
-      "evalAttempts": 0,
-      "evalSuccesses": 0,
-      "blockers": [
-        {
-          "reason": "agent-resolution-fails-closed",
-          "role": "review",
-          "detail": "claude-haiku-4-5 is missing or disabled in the active model registry"
-        }
-      ],
-      "status": "zero-evidence"
+      "evalAttempts": 3,
+      "evalSuccesses": 1,
+      "blockers": [],
+      "status": "at-target"
     },
     {
       "wavemillAlias": "devstral-small",
@@ -601,7 +585,7 @@
       "priorityTier": 2,
       "role": "coding",
       "directEvidenceCount": 3,
-      "availablePoolExposureCount": 183,
+      "availablePoolExposureCount": 231,
       "evalAttempts": 3,
       "evalSuccesses": 0,
       "blockers": [],
@@ -615,7 +599,7 @@
       "priorityTier": 2,
       "role": "coding",
       "directEvidenceCount": 3,
-      "availablePoolExposureCount": 183,
+      "availablePoolExposureCount": 231,
       "evalAttempts": 3,
       "evalSuccesses": 0,
       "blockers": [],
@@ -629,7 +613,7 @@
       "priorityTier": 2,
       "role": "review",
       "directEvidenceCount": 3,
-      "availablePoolExposureCount": 183,
+      "availablePoolExposureCount": 231,
       "evalAttempts": 3,
       "evalSuccesses": 0,
       "blockers": [],
@@ -643,7 +627,7 @@
       "priorityTier": 2,
       "role": "coding",
       "directEvidenceCount": 3,
-      "availablePoolExposureCount": 3,
+      "availablePoolExposureCount": 12,
       "evalAttempts": 3,
       "evalSuccesses": 0,
       "blockers": [],
@@ -657,7 +641,7 @@
       "priorityTier": 2,
       "role": "review",
       "directEvidenceCount": 3,
-      "availablePoolExposureCount": 3,
+      "availablePoolExposureCount": 12,
       "evalAttempts": 3,
       "evalSuccesses": 0,
       "blockers": [],
@@ -671,7 +655,7 @@
       "priorityTier": 2,
       "role": "coding",
       "directEvidenceCount": 1,
-      "availablePoolExposureCount": 180,
+      "availablePoolExposureCount": 228,
       "evalAttempts": 1,
       "evalSuccesses": 1,
       "blockers": [],
@@ -685,7 +669,7 @@
       "priorityTier": 2,
       "role": "review",
       "directEvidenceCount": 1,
-      "availablePoolExposureCount": 180,
+      "availablePoolExposureCount": 228,
       "evalAttempts": 1,
       "evalSuccesses": 1,
       "blockers": [],
@@ -699,7 +683,7 @@
       "priorityTier": 2,
       "role": "planning",
       "directEvidenceCount": 3,
-      "availablePoolExposureCount": 3,
+      "availablePoolExposureCount": 51,
       "evalAttempts": 3,
       "evalSuccesses": 0,
       "blockers": [],
@@ -713,7 +697,7 @@
       "priorityTier": 2,
       "role": "coding",
       "directEvidenceCount": 3,
-      "availablePoolExposureCount": 3,
+      "availablePoolExposureCount": 51,
       "evalAttempts": 3,
       "evalSuccesses": 0,
       "blockers": [],
@@ -727,7 +711,7 @@
       "priorityTier": 2,
       "role": "planning",
       "directEvidenceCount": 3,
-      "availablePoolExposureCount": 183,
+      "availablePoolExposureCount": 231,
       "evalAttempts": 3,
       "evalSuccesses": 0,
       "blockers": [],
@@ -741,7 +725,7 @@
       "priorityTier": 2,
       "role": "coding",
       "directEvidenceCount": 3,
-      "availablePoolExposureCount": 183,
+      "availablePoolExposureCount": 231,
       "evalAttempts": 3,
       "evalSuccesses": 0,
       "blockers": [],
@@ -755,71 +739,11 @@
       "priorityTier": 2,
       "role": "review",
       "directEvidenceCount": 3,
-      "availablePoolExposureCount": 183,
+      "availablePoolExposureCount": 231,
       "evalAttempts": 3,
       "evalSuccesses": 0,
       "blockers": [],
       "status": "at-target"
-    },
-    {
-      "wavemillAlias": "claude-fable-5",
-      "openrouterId": "anthropic/claude-fable-5",
-      "family": "claude",
-      "launchPriorityStatus": "watchlist",
-      "priorityTier": 2,
-      "role": "planning",
-      "directEvidenceCount": 0,
-      "availablePoolExposureCount": 6,
-      "evalAttempts": 0,
-      "evalSuccesses": 0,
-      "blockers": [
-        {
-          "reason": "agent-resolution-fails-closed",
-          "role": "planning",
-          "detail": "claude-fable-5 is missing or disabled in the active model registry"
-        }
-      ],
-      "status": "zero-evidence"
-    },
-    {
-      "wavemillAlias": "claude-fable-5",
-      "openrouterId": "anthropic/claude-fable-5",
-      "family": "claude",
-      "launchPriorityStatus": "watchlist",
-      "priorityTier": 2,
-      "role": "coding",
-      "directEvidenceCount": 0,
-      "availablePoolExposureCount": 6,
-      "evalAttempts": 0,
-      "evalSuccesses": 0,
-      "blockers": [
-        {
-          "reason": "agent-resolution-fails-closed",
-          "role": "coding",
-          "detail": "claude-fable-5 is missing or disabled in the active model registry"
-        }
-      ],
-      "status": "zero-evidence"
-    },
-    {
-      "wavemillAlias": "claude-fable-5",
-      "openrouterId": "anthropic/claude-fable-5",
-      "family": "claude",
-      "launchPriorityStatus": "watchlist",
-      "priorityTier": 2,
-      "role": "review",
-      "directEvidenceCount": 0,
-      "availablePoolExposureCount": 6,
-      "evalAttempts": 0,
-      "evalSuccesses": 0,
-      "blockers": [
-        {
-          "reason": "agent-resolution-fails-closed",
-          "role": "review",
-          "detail": "claude-fable-5 is missing or disabled in the active model registry"
-        }
-      ],
-      "status": "zero-evidence"
     },
     {
       "wavemillAlias": "deepseek-coder-v2",
@@ -832,13 +756,7 @@
       "availablePoolExposureCount": 0,
       "evalAttempts": 0,
       "evalSuccesses": 0,
-      "blockers": [
-        {
-          "reason": "agent-resolution-fails-closed",
-          "role": "coding",
-          "detail": "deepseek-coder-v2 is missing or disabled in the active model registry"
-        }
-      ],
+      "blockers": [],
       "status": "zero-evidence"
     },
     {
@@ -849,7 +767,7 @@
       "priorityTier": 2,
       "role": "coding",
       "directEvidenceCount": 3,
-      "availablePoolExposureCount": 3,
+      "availablePoolExposureCount": 51,
       "evalAttempts": 3,
       "evalSuccesses": 0,
       "blockers": [],
@@ -863,7 +781,7 @@
       "priorityTier": 2,
       "role": "planning",
       "directEvidenceCount": 3,
-      "availablePoolExposureCount": 3,
+      "availablePoolExposureCount": 51,
       "evalAttempts": 3,
       "evalSuccesses": 0,
       "blockers": [],
@@ -877,7 +795,7 @@
       "priorityTier": 2,
       "role": "coding",
       "directEvidenceCount": 3,
-      "availablePoolExposureCount": 3,
+      "availablePoolExposureCount": 51,
       "evalAttempts": 3,
       "evalSuccesses": 0,
       "blockers": [],
@@ -891,7 +809,7 @@
       "priorityTier": 2,
       "role": "review",
       "directEvidenceCount": 3,
-      "availablePoolExposureCount": 3,
+      "availablePoolExposureCount": 51,
       "evalAttempts": 3,
       "evalSuccesses": 0,
       "blockers": [],
@@ -905,7 +823,7 @@
       "priorityTier": 2,
       "role": "planning",
       "directEvidenceCount": 3,
-      "availablePoolExposureCount": 3,
+      "availablePoolExposureCount": 51,
       "evalAttempts": 3,
       "evalSuccesses": 0,
       "blockers": [],
@@ -919,7 +837,7 @@
       "priorityTier": 2,
       "role": "coding",
       "directEvidenceCount": 3,
-      "availablePoolExposureCount": 3,
+      "availablePoolExposureCount": 51,
       "evalAttempts": 3,
       "evalSuccesses": 0,
       "blockers": [],
@@ -933,7 +851,7 @@
       "priorityTier": 2,
       "role": "review",
       "directEvidenceCount": 3,
-      "availablePoolExposureCount": 3,
+      "availablePoolExposureCount": 51,
       "evalAttempts": 3,
       "evalSuccesses": 0,
       "blockers": [],
@@ -950,33 +868,7 @@
       "availablePoolExposureCount": 0,
       "evalAttempts": 0,
       "evalSuccesses": 0,
-      "blockers": [
-        {
-          "reason": "agent-resolution-fails-closed",
-          "role": "coding",
-          "detail": "gemini-2.0-flash is missing or disabled in the active model registry"
-        }
-      ],
-      "status": "zero-evidence"
-    },
-    {
-      "wavemillAlias": "gpt-4.1",
-      "openrouterId": "openai/gpt-4.1",
-      "family": "gpt",
-      "launchPriorityStatus": "watchlist",
-      "priorityTier": 3,
-      "role": "coding",
-      "directEvidenceCount": 0,
-      "availablePoolExposureCount": 0,
-      "evalAttempts": 0,
-      "evalSuccesses": 0,
-      "blockers": [
-        {
-          "reason": "agent-resolution-fails-closed",
-          "role": "coding",
-          "detail": "gpt-4.1 is missing or disabled in the active model registry"
-        }
-      ],
+      "blockers": [],
       "status": "zero-evidence"
     },
     {
@@ -990,13 +882,7 @@
       "availablePoolExposureCount": 0,
       "evalAttempts": 0,
       "evalSuccesses": 0,
-      "blockers": [
-        {
-          "reason": "agent-resolution-fails-closed",
-          "role": "coding",
-          "detail": "grok-code-fast is missing or disabled in the active model registry"
-        }
-      ],
+      "blockers": [],
       "status": "zero-evidence"
     },
     {
@@ -1010,13 +896,7 @@
       "availablePoolExposureCount": 0,
       "evalAttempts": 0,
       "evalSuccesses": 0,
-      "blockers": [
-        {
-          "reason": "agent-resolution-fails-closed",
-          "role": "coding",
-          "detail": "llama-4-scout is missing or disabled in the active model registry"
-        }
-      ],
+      "blockers": [],
       "status": "zero-evidence"
     },
     {
@@ -1027,7 +907,7 @@
       "priorityTier": 3,
       "role": "coding",
       "directEvidenceCount": 3,
-      "availablePoolExposureCount": 3,
+      "availablePoolExposureCount": 51,
       "evalAttempts": 3,
       "evalSuccesses": 0,
       "blockers": [],
@@ -1044,13 +924,7 @@
       "availablePoolExposureCount": 0,
       "evalAttempts": 0,
       "evalSuccesses": 0,
-      "blockers": [
-        {
-          "reason": "agent-resolution-fails-closed",
-          "role": "coding",
-          "detail": "qwen-2.5-72b is missing or disabled in the active model registry"
-        }
-      ],
+      "blockers": [],
       "status": "zero-evidence"
     },
     {
@@ -1079,13 +953,91 @@
       "status": "zero-evidence"
     }
   ],
-  "zeroEvidence": [],
+  "zeroEvidence": [
+    "deepseek-coder-v2",
+    "gemini-2.0-flash",
+    "grok-code-fast",
+    "kimi-k2",
+    "llama-4-scout",
+    "qwen-2.5-72b"
+  ],
   "belowTarget": [
     "claude-opus-4-7",
-    "claude-sonnet-5",
     "llama-3.3-70b"
   ],
   "samplingPlan": [
+    {
+      "wavemillAlias": "kimi-k2",
+      "openrouterId": "moonshotai/kimi-k2",
+      "role": "planning",
+      "tier": "zero-evidence-active",
+      "reason": "kimi-k2 has zero direct evidence for planning",
+      "gap": 3,
+      "cost": null
+    },
+    {
+      "wavemillAlias": "kimi-k2",
+      "openrouterId": "moonshotai/kimi-k2",
+      "role": "coding",
+      "tier": "zero-evidence-active",
+      "reason": "kimi-k2 has zero direct evidence for coding",
+      "gap": 3,
+      "cost": null
+    },
+    {
+      "wavemillAlias": "kimi-k2",
+      "openrouterId": "moonshotai/kimi-k2",
+      "role": "review",
+      "tier": "zero-evidence-active",
+      "reason": "kimi-k2 has zero direct evidence for review",
+      "gap": 3,
+      "cost": null
+    },
+    {
+      "wavemillAlias": "deepseek-coder-v2",
+      "openrouterId": "deepseek/deepseek-coder-v2-instruct",
+      "role": "coding",
+      "tier": "zero-evidence-watchlist",
+      "reason": "deepseek-coder-v2 has zero direct evidence for coding",
+      "gap": 3,
+      "cost": null
+    },
+    {
+      "wavemillAlias": "gemini-2.0-flash",
+      "openrouterId": "google/gemini-2.0-flash-001",
+      "role": "coding",
+      "tier": "zero-evidence-watchlist",
+      "reason": "gemini-2.0-flash has zero direct evidence for coding",
+      "gap": 3,
+      "cost": null
+    },
+    {
+      "wavemillAlias": "grok-code-fast",
+      "openrouterId": "x-ai/grok-code-fast-1",
+      "role": "coding",
+      "tier": "zero-evidence-watchlist",
+      "reason": "grok-code-fast has zero direct evidence for coding",
+      "gap": 3,
+      "cost": null
+    },
+    {
+      "wavemillAlias": "llama-4-scout",
+      "openrouterId": "meta-llama/llama-4-scout",
+      "role": "coding",
+      "tier": "zero-evidence-watchlist",
+      "reason": "llama-4-scout has zero direct evidence for coding",
+      "gap": 3,
+      "cost": null
+    },
+    {
+      "wavemillAlias": "qwen-2.5-72b",
+      "openrouterId": "qwen/qwen-2.5-72b-instruct",
+      "role": "coding",
+      "tier": "zero-evidence-watchlist",
+      "reason": "qwen-2.5-72b has zero direct evidence for coding",
+      "gap": 3,
+      "cost": null
+    },
     {
       "wavemillAlias": "claude-opus-4-7",
       "openrouterId": "anthropic/claude-opus-4.7",
@@ -1103,81 +1055,27 @@
       "reason": "claude-opus-4-7 is below target for coding",
       "gap": 2,
       "cost": null
-    },
-    {
-      "wavemillAlias": "claude-opus-4-7",
-      "openrouterId": "anthropic/claude-opus-4.7",
-      "role": "review",
-      "tier": "below-target",
-      "reason": "claude-opus-4-7 is below target for review",
-      "gap": 2,
-      "cost": null
-    },
-    {
-      "wavemillAlias": "claude-sonnet-5",
-      "openrouterId": "anthropic/claude-sonnet-5",
-      "role": "planning",
-      "tier": "below-target",
-      "reason": "claude-sonnet-5 is below target for planning",
-      "gap": 2,
-      "cost": null
-    },
-    {
-      "wavemillAlias": "claude-sonnet-5",
-      "openrouterId": "anthropic/claude-sonnet-5",
-      "role": "coding",
-      "tier": "below-target",
-      "reason": "claude-sonnet-5 is below target for coding",
-      "gap": 2,
-      "cost": null
-    },
-    {
-      "wavemillAlias": "claude-sonnet-5",
-      "openrouterId": "anthropic/claude-sonnet-5",
-      "role": "review",
-      "tier": "below-target",
-      "reason": "claude-sonnet-5 is below target for review",
-      "gap": 2,
-      "cost": null
-    },
-    {
-      "wavemillAlias": "llama-3.3-70b",
-      "openrouterId": "meta-llama/llama-3.3-70b-instruct",
-      "role": "coding",
-      "tier": "below-target",
-      "reason": "llama-3.3-70b is below target for coding",
-      "gap": 2,
-      "cost": null
-    },
-    {
-      "wavemillAlias": "llama-3.3-70b",
-      "openrouterId": "meta-llama/llama-3.3-70b-instruct",
-      "role": "review",
-      "tier": "below-target",
-      "reason": "llama-3.3-70b is below target for review",
-      "gap": 2,
-      "cost": null
     }
   ],
   "summary": {
-    "totalLaunchPriority": 33,
-    "blockedCount": 15,
-    "sampledCount": 8,
+    "totalLaunchPriority": 31,
+    "blockedCount": 1,
+    "sampledCount": 10,
     "byRole": {
       "planning": {
-        "zero": 2,
-        "below": 2,
-        "at": 12
+        "zero": 1,
+        "below": 1,
+        "at": 14
       },
       "coding": {
-        "zero": 10,
-        "below": 3,
-        "at": 20
+        "zero": 7,
+        "below": 2,
+        "at": 22
       },
       "review": {
-        "zero": 3,
-        "below": 3,
-        "at": 15
+        "zero": 1,
+        "below": 2,
+        "at": 17
       }
     }
   }

@@ -203,7 +203,7 @@ describe('resolveModelAgent', () => {
   });
 
   it('rejects launch-priority models that are not eligible for the requested phase', () => {
-    const registry = makeRegistry('qwen-3-coder', {
+    const registry = makeRegistry('qwen-2.5-coder-32b', {
       agent: 'claude-openrouter',
       nativeCapability: {
         nativeProvider: 'openrouter',
@@ -219,7 +219,7 @@ describe('resolveModelAgent', () => {
     });
 
     const result = resolveModelAgent({
-      model: 'qwen-3-coder',
+      model: 'qwen-2.5-coder-32b',
       phase: 'planning',
       registry,
       now: new Date('2098-01-01T00:00:00.000Z'),
@@ -231,7 +231,7 @@ describe('resolveModelAgent', () => {
     }
     assert.equal(result.reason, 'role-ineligible');
     assert.match(result.diagnostic, /phase=planning/);
-    assert.match(result.diagnostic, /certification=eligible-roles:coding,review/);
+    assert.match(result.diagnostic, /certification=eligible-roles:coding/);
   });
 
   it('rejects stale or phase-insufficient native metadata as uncertified', () => {

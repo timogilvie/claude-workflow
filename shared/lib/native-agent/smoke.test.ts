@@ -263,7 +263,11 @@ describe('runNativeAgentLive — key absent', () => {
     }
   });
 
-  it('returns a skipped result for openrouter when OPENROUTER_API_KEY is not set', async () => {
+  it('returns a skipped result for openrouter when OPENROUTER_API_KEY is not set', async (t) => {
+    if (process.env.OPENROUTER_API_KEY) {
+      t.skip('OPENROUTER_API_KEY is set in this environment; skip path not testable here');
+      return;
+    }
     const transcriptDir = makeTempTranscriptDir();
     try {
       const result = await runNativeAgentLive({
@@ -348,6 +352,8 @@ describe('runNativeAgentLive — scripted provider', () => {
           headers: {},
         },
         _registryOverride: makeCertifiedScriptedRegistry(),
+        _modelIdOverride: 'gpt-4o',
+        _certificationMode: true,
       };
 
       const result = await runNativeAgentLive(options);
@@ -405,6 +411,8 @@ describe('runNativeAgentLive — scripted provider', () => {
             headers: {},
           },
           _registryOverride: makeCertifiedScriptedRegistry(),
+          _modelIdOverride: 'gpt-4o',
+          _certificationMode: true,
         }),
         /did not execute the required read-only tool call|returned zero usage|did not complete any turns/,
       );
@@ -450,6 +458,8 @@ describe('runNativeAgentLive — scripted provider', () => {
           headers: {},
         },
         _registryOverride: makeCertifiedScriptedRegistry(),
+        _modelIdOverride: 'gpt-4o',
+        _certificationMode: true,
       });
 
       // API key must not appear in result JSON

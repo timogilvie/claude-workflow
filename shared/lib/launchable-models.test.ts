@@ -146,6 +146,26 @@ describe('launch-priority watchlist launchability', () => {
     assert.equal(pools.coder?.includes('gpt-4.1'), false);
   });
 
+
+  it('launch-priority catalog advertises watchlist models only for eligible stages and omits Sol/Luna', () => {
+    const catalog = loadLaunchPriorityList();
+    for (const [modelId, allowedStages] of Object.entries(WATCHLIST_STAGE_MAP)) {
+      const entry = catalog.find((candidate) => candidate.wavemillAlias === modelId);
+      assert.ok(entry, `${modelId} should exist in launch-priority catalog`);
+      for (const stage of LAUNCHABILITY_STAGES) {
+        const phase = stage === 'planner' ? 'planning' : stage === 'coder' ? 'coding' : 'review';
+        assert.equal(
+          entry.roleEligibility.includes(phase),
+          allowedStages.includes(stage),
+          `${modelId}:${stage} config eligibility mismatch`,
+        );
+      }
+    }
+    assert.equal(catalog.some((entry) => entry.wavemillAlias === 'gpt-5.6-sol'), false);
+    assert.equal(catalog.some((entry) => entry.wavemillAlias === 'gpt-5.6-luna'), false);
+    assert.equal(catalog.some((entry) => entry.wavemillAlias === 'gpt-4.1'), false);
+  });
+
   it('builds a deterministic matrix that rejects role-ineligible and missing-certification cells', () => {
     const repoDir = mkdtempSync(join(tmpdir(), 'wavemill-launchability-'));
     writeMinimalConfig(repoDir);

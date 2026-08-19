@@ -1993,7 +1993,7 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
     'qwen-3-coder': {
       vendor: 'qwen',
       class: 'strong_generalist',
-      strengths: ['coding', 'review', 'challenger family coverage'],
+      strengths: ['planning', 'coding', 'review', 'challenger family coverage'],
       weaknesses: ['opt-in only', 'provider routing dependency'],
       qualityScores: scores(58, 72, 84, 78, 58),
       pricing: { inputCostPerMTok: 0.35, outputCostPerMTok: 1.05 },
@@ -2010,7 +2010,7 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       supportedModel: openRouterSupportedModel({
         alias: 'qwen-3-coder',
         providerNativeId: 'qwen/qwen3-coder',
-        stages: ['coding', 'review'],
+        stages: ['planning', 'coding', 'review'],
       }),
     },
     'qwen-3-235b': {
