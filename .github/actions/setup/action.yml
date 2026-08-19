@@ -19,8 +19,26 @@ runs:
     - name: Install system test tools
       shell: bash
       run: |
-        sudo apt-get update
-        sudo apt-get install -y ${{ inputs.packages }}
+        # Composite-action steps do not support timeout-minutes
+        # (actions/runner#1979), so bound each network-bound command with
+        # coreutils timeout. Setup completes in 23-143s when healthy; jobs that
+        # wedge here otherwise run to the 6h job ceiling and bill the whole time.
+        run_bounded() {
+          # Capture via `|| rc=$?`: inside `if ! cmd`, $? is the status of the
+          # negation (always 0), which would silently swallow the failure.
+          local rc=0
+          timeout "${SETUP_STEP_TIMEOUT_SECONDS}" "$@" || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            if [ "$rc" -eq 124 ]; then
+              echo "::error::'$*' exceeded ${SETUP_STEP_TIMEOUT_SECONDS}s in CI setup; failing fast so the job can be retried."
+            fi
+            exit "$rc"
+          fi
+        }
+        run_bounded sudo apt-get update
+        run_bounded sudo apt-get install -y ${{ inputs.packages }}
+      env:
+        SETUP_STEP_TIMEOUT_SECONDS: '300'
 
     - name: Configure git for tests
       shell: bash
@@ -30,4 +48,14 @@ runs:
 
     - name: Install dependencies
       shell: bash
-      run: npm install --ignore-scripts
+      run: |
+        rc=0
+        timeout "${SETUP_STEP_TIMEOUT_SECONDS}" npm install --ignore-scripts || rc=$?
+        if [ "$rc" -ne 0 ]; then
+          if [ "$rc" -eq 124 ]; then
+            echo "::error::npm install exceeded ${SETUP_STEP_TIMEOUT_SECONDS}s in CI setup; failing fast so the job can be retried."
+          fi
+          exit "$rc"
+        fi
+      env:
+        SETUP_STEP_TIMEOUT_SECONDS: '300'
