@@ -111,6 +111,7 @@ export interface DiagnoseOpenRouterOptions {
   repoDir?: string;
   stage?: OpenRouterDoctorStage;
   lookback?: number;
+  certificationRoot?: string;
 }
 
 interface CandidateAccumulator {
@@ -266,6 +267,7 @@ function resolveStoragePath(
   registryModelId: string | null,
   capabilities: ModelCapabilities | undefined,
   registry: ReturnType<typeof getEffectiveRegistry>,
+  certificationRoot?: string,
 ): string | null {
   const suiteVersion = capabilities?.nativeCapability?.certification?.certificationSuiteVersion ?? 'v1';
   const identity = registryModelId ? resolveProviderNativeModelId(registryModelId, registry) : undefined;
@@ -275,7 +277,7 @@ function resolveStoragePath(
     return null;
   }
   try {
-    return buildGlobalCertificationPath(provider, modelId, suiteVersion);
+    return buildGlobalCertificationPath(provider, modelId, suiteVersion, { root: certificationRoot });
   } catch {
     return null;
   }
@@ -293,10 +295,11 @@ function stagePoolValues(
   repoDir: string,
   stage: OpenRouterDoctorStage,
   fallbackModels: string[],
+  certificationRoot?: string,
 ): string[] {
   void fallbackModels;
   const effectiveStage = stage === 'planner' ? 'planning' : stage === 'coder' ? 'coding' : 'review';
-  return normalizeList(listEffectiveModelsForStage(effectiveStage, { repoDir }).models);
+  return normalizeList(listEffectiveModelsForStage(effectiveStage, { repoDir, certificationRoot }).models);
 }
 
 function candidateAppearsInPool(candidate: CandidateAccumulator, pool: readonly string[]): boolean {
@@ -467,10 +470,11 @@ function evaluateCell(input: {
   storagePath: string | null;
   fallbackModels: string[];
   observedSelections: number;
+  certificationRoot?: string;
 }): OpenRouterDoctorCell {
   const reasons: OpenRouterDoctorReason[] = [];
   const secondaryReasons: OpenRouterDoctorReason[] = [];
-  const stagePool = stagePoolValues(input.repoDir, input.stage, input.fallbackModels);
+  const stagePool = stagePoolValues(input.repoDir, input.stage, input.fallbackModels, input.certificationRoot);
 
   if (!candidateAppearsInPool(input.candidate, stagePool)) {
     appendReason(reasons, buildReason(
@@ -542,6 +546,7 @@ function evaluateCell(input: {
       {
         apiKeyPresent: input.nativeHasApiKey,
         apiKeyEnv: input.nativeApiKeyEnv,
+        certificationRoot: input.certificationRoot,
       },
     );
     if (nativeResult.rejected[0]) {
@@ -617,7 +622,7 @@ export function diagnoseOpenRouter(options: DiagnoseOpenRouterOptions = {}): Ope
   const models: OpenRouterDoctorModelReport[] = configuredCandidates.map((candidate) => {
     const registryModelId = resolveRegistryModelId(candidate, registry);
     const capabilities = registryModelId ? getModel(registry, registryModelId) : undefined;
-    const storagePath = resolveStoragePath(candidate, registryModelId, capabilities, registry);
+    const storagePath = resolveStoragePath(candidate, registryModelId, capabilities, registry, options.certificationRoot);
     const id = candidate.alias ?? candidate.nativeProviderId ?? candidate.key;
 
     const cells = activeStages.map((stage) => evaluateCell({
@@ -636,6 +641,7 @@ export function diagnoseOpenRouter(options: DiagnoseOpenRouterOptions = {}): Ope
       capabilities,
       storagePath,
       fallbackModels,
+      certificationRoot: options.certificationRoot,
       observedSelections: calculateObservedSelections(
         { id, alias: candidate.alias, nativeProviderId: candidate.nativeProviderId, registryModelId },
         stage,

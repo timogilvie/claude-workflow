@@ -14,7 +14,7 @@ import { randomBytes } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import Ajv from 'ajv';
 import type { NativeCertificationArtifact } from './schema.ts';
-import { buildCertificationPath } from './loader.ts';
+import { buildLegacyRepoCertificationPath } from './loader.ts';
 import { resolveCertificationStorageIdentity } from './identity.ts';
 import {
   buildCertificationPathFromRoot,
@@ -169,8 +169,8 @@ function sortKeys(v: unknown): unknown {
 export function writeCertification(repoDir: string, record: NativeCertificationArtifact): string {
   validateCertificationForWrite(record, 'writeCertification');
 
-  // buildCertificationPath throws on bad segment chars (path traversal, etc.)
-  const finalPath = buildCertificationPath(repoDir, record.provider, record.model, record.suiteVersion);
+  // buildLegacyRepoCertificationPath throws on bad segment chars (path traversal, etc.)
+  const finalPath = buildLegacyRepoCertificationPath(repoDir, record.provider, record.model, record.suiteVersion);
 
   mkdirSync(dirname(finalPath), { recursive: true });
 
