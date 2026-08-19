@@ -1321,6 +1321,42 @@ check_plan_exists() {
 }
 
 
+cleanup_remote_task_branch() {
+  local issue="$1" task_branch="$2" pr="${3:-}"
+  if [[ "$task_branch" == "main" || "$task_branch" == "master" ]]; then
+    log_warn "  Refusing to delete protected branch: $task_branch"
+    return 0
+  fi
+  case "$task_branch" in
+    task/*) ;;
+    *) log "debug" "$issue: retaining non-task remote branch $task_branch"; return 0 ;;
+  esac
+
+  if [[ -z "$pr" ]]; then
+    log "debug" "$issue: retaining remote branch $task_branch (no PR recorded)"
+    return 0
+  fi
+
+  local state
+  state=$(pr_state "$pr")
+  if [[ "$state" != "MERGED" ]]; then
+    log "debug" "$issue: retaining remote branch $task_branch (PR #$pr state=${state:-unknown}, not merged)"
+    return 0
+  fi
+
+  if ! _with_timeout "$API_TIMEOUT" git -C "$REPO_DIR" ls-remote --exit-code --heads origin "refs/heads/$task_branch" >/dev/null 2>&1; then
+    log "debug" "$issue: remote branch already absent: $task_branch"
+    return 0
+  fi
+
+  if execute _with_timeout "$API_TIMEOUT" git -C "$REPO_DIR" push origin --delete "$task_branch" >>"${MILL_LOG_FILE:-/dev/null}" 2>&1; then
+    log "debug" "Deleted remote branch: $task_branch"
+  else
+    log_warn "  Remote branch cleanup failed (retained): $task_branch"
+  fi
+}
+
+
 # Clean up completed task: close window, remove worktree/branch, update state
 # Args: issue_id, slug, completion_reason (optional, for logging)
 cleanup_completed_task() {
@@ -1330,6 +1366,10 @@ cleanup_completed_task() {
   local win="$issue-$slug"
   local target=""
   local target_gone="false"
+  local pr=""
+
+  pr=$(jq -r --arg i "$issue" '.tasks[$i].pr // empty' "$STATE_FILE" 2>/dev/null || true)
+  [[ -z "$pr" ]] && pr="${PR_BY_ISSUE[$issue]:-}"
 
   # Kill tmux window only when the target is confirmed gone afterward.
   target="$(_tmux_task_window_target "$SESSION" "$issue" "$slug" "${STATE_FILE:-}" "${WORKTREE_ROOT}/${slug}" 2>/dev/null || true)"
@@ -1368,6 +1408,7 @@ cleanup_completed_task() {
       log_warn "  Local branch cleanup failed after worktree removal: $task_branch"
     fi
   fi
+  cleanup_remote_task_branch "$issue" "$task_branch" "$pr"
 
   # Clean up state
   execute git -C "$REPO_DIR" worktree prune >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null || true
@@ -10007,6 +10048,10 @@ cleanup_completed_task() {
   local win="$issue-$slug"
   local target=""
   local target_gone="false"
+  local pr=""
+
+  pr=$(jq -r --arg i "$issue" '.tasks[$i].pr // empty' "$STATE_FILE" 2>/dev/null || true)
+  [[ -z "$pr" ]] && pr="${PR_BY_ISSUE[$issue]:-}"
 
   # Archive stage artifacts before removing worktree (for eval judge attribution)
   archive_stage_artifacts "$issue" "$slug"
@@ -10048,6 +10093,7 @@ cleanup_completed_task() {
       log_warn "  Local branch cleanup failed after worktree removal: $task_branch"
     fi
   fi
+  cleanup_remote_task_branch "$issue" "$task_branch" "$pr"
 
   # Clean up state
   git -C "$REPO_DIR" worktree prune >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null || true
@@ -10060,6 +10106,42 @@ cleanup_completed_task() {
     log "$issue: Complete ($completion_reason)"
   else
     log "$issue: Complete"
+  fi
+}
+
+
+cleanup_remote_task_branch() {
+  local issue="$1" task_branch="$2" pr="${3:-}"
+  if [[ "$task_branch" == "main" || "$task_branch" == "master" ]]; then
+    log_warn "  Refusing to delete protected branch: $task_branch"
+    return 0
+  fi
+  case "$task_branch" in
+    task/*) ;;
+    *) log "debug" "$issue: retaining non-task remote branch $task_branch"; return 0 ;;
+  esac
+
+  if [[ -z "$pr" ]]; then
+    log "debug" "$issue: retaining remote branch $task_branch (no PR recorded)"
+    return 0
+  fi
+
+  local state
+  state=$(pr_state "$pr")
+  if [[ "$state" != "MERGED" ]]; then
+    log "debug" "$issue: retaining remote branch $task_branch (PR #$pr state=${state:-unknown}, not merged)"
+    return 0
+  fi
+
+  if ! _with_timeout "$API_TIMEOUT" git -C "$REPO_DIR" ls-remote --exit-code --heads origin "refs/heads/$task_branch" >/dev/null 2>&1; then
+    log "debug" "$issue: remote branch already absent: $task_branch"
+    return 0
+  fi
+
+  if _with_timeout "$API_TIMEOUT" git -C "$REPO_DIR" push origin --delete "$task_branch" >>"${MILL_LOG_FILE:-/dev/null}" 2>&1; then
+    log "debug" "Deleted remote branch: $task_branch"
+  else
+    log_warn "  Remote branch cleanup failed (retained): $task_branch"
   fi
 }
 
