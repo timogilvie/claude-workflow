@@ -33,6 +33,7 @@ export type LaunchabilityBlocker =
   | 'certification'
   | 'role-ineligible'
   | 'disabled-deprecated'
+  | 'retired'
   | 'unsupported-launch-path';
 
 export interface LaunchabilityCell {
@@ -77,8 +78,14 @@ function inferBlocker(input: {
   certificationRejection: RouterCertificationRejection | null;
   resolution: AgentResolution;
 }): LaunchabilityBlocker | null {
-  if (input.catalog.status === 'deprecated' || !input.enabled) return 'disabled-deprecated';
   if (!input.registryModelId) return 'missing-registry';
+  if (input.resolution.ok === false && (
+    input.resolution.reason === 'lifecycle-blocked'
+    || input.resolution.reason === 'tool-support-insufficient'
+  )) {
+    return 'retired';
+  }
+  if (input.catalog.status === 'deprecated' || !input.enabled) return 'disabled-deprecated';
   if (!input.stageEligible) return 'role-ineligible';
   if (!input.providerAvailable) {
     return input.providerWarnings.some((warning) => warning.includes('not set')) ? 'credential' : 'provider';
@@ -88,6 +95,7 @@ function inferBlocker(input: {
     if (input.resolution.reason === 'role-ineligible') return 'role-ineligible';
     if (input.resolution.reason === 'uncertified') return 'certification';
     if (input.resolution.reason === 'unknown-model') return 'missing-registry';
+    if (input.resolution.reason === 'lifecycle-blocked' || input.resolution.reason === 'tool-support-insufficient') return 'retired';
     return 'unsupported-launch-path';
   }
   return null;
@@ -101,6 +109,7 @@ function buildDiagnostic(input: {
 }): string | null {
   if (!input.blocker) return null;
   if (input.providerWarnings.length > 0) return input.providerWarnings.join(' ');
+  if (input.blocker === 'retired') return input.resolution.ok ? input.blocker : input.resolution.diagnostic;
   if (input.certificationRejection) {
     return `certification rejected reason=${input.certificationRejection.reason} requiredPhase=${input.certificationRejection.requestedPhase}`;
   }
