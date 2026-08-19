@@ -479,12 +479,19 @@
         "reason": "Path-filtered integration harness enforced through integration.requiredChecks; local reproduction is bash tests/run-lifecycle-tests.sh.",
         "acknowledgedBy": "wavemill-maintainers",
         "acknowledgedAt": "2026-08-05T22:55:26Z"
+      },
+      {
+        "checkName": "OpenRouter Alias Audit",
+        "reason": "Runs only on schedule/workflow_dispatch, never on pull_request, and reconciles the registry against the live OpenRouter catalog. It needs network access and provider credentials, so it cannot gate a PR or run as part of the local recipe; drift it detects is acted on out of band.",
+        "acknowledgedBy": "wavemill-maintainers",
+        "acknowledgedAt": "2026-08-19T00:00:00Z"
       }
     ],
     "nonEnforcedJobs": [
       "Shell and Unit Tests",
       "Check Lifecycle Paths",
-      "Lifecycle Integration Tests"
+      "Lifecycle Integration Tests",
+      "OpenRouter Alias Audit"
     ]
   },
   "promotion": {

@@ -37,9 +37,12 @@ import {
   resolveSelector,
   listSupportedModelsForStage,
   satisfiesCapabilities,
+  stageRequiresTools,
+  hasSufficientToolSupport,
   validateNativeCapability,
   validateModelId,
 } from './model-registry.ts';
+import { resolveOpenRouterModelId } from './openrouter-provider.ts';
 import { clearConfigCache } from './config.ts';
 import { filterDisabledModels } from './disabled-models.ts';
 import {
@@ -2177,6 +2180,14 @@ describe('canonical supported-model helpers', () => {
             stages: ['planning'],
           },
         }),
+        'no-tools-coder': makeCapabilities({
+          qualityScores: { coding: 91 },
+          toolSupport: 'none',
+          supportedModel: {
+            lifecycle: 'supported',
+            stages: ['coding'],
+          },
+        }),
       },
       ladders: {},
     };
@@ -2184,6 +2195,35 @@ describe('canonical supported-model helpers', () => {
     assert.deepEqual(listSupportedModelsForStage('coder', registry), ['native-coder']);
     assert.equal(explainModelSupportExclusion('blocked-coder', 'coding', registry), 'blocked-lifecycle');
     assert.equal(explainModelSupportExclusion('planner-only', 'coding', registry), 'stage-incompatible');
+    assert.equal(explainModelSupportExclusion('no-tools-coder', 'coding', registry), 'tool-support-insufficient');
+  });
+
+  it('retains retired native-openrouter aliases for attribution but excludes them from stages', () => {
+    for (const alias of ['deepseek-coder-v2', 'gemini-2.0-flash', 'grok-code-fast', 'qwen-2.5-coder-32b']) {
+      const capabilities = DEFAULT_MODEL_REGISTRY.models[alias];
+      assert.ok(capabilities, `${alias} should remain in the registry`);
+      assert.equal(capabilities.supportedModel?.lifecycle, 'blocked', `${alias} should be lifecycle-blocked`);
+      assert.equal(explainModelSupportExclusion(alias, 'coding'), 'blocked-lifecycle');
+      assert.equal(listSupportedModelsForStage('coding').includes(alias), false);
+    }
+    assert.equal(DEFAULT_MODEL_REGISTRY.models['qwen-2.5-coder-32b'].toolSupport, 'none');
+  });
+
+  it('requires tool support for every supported Wavemill stage', () => {
+    for (const stage of ['expansion', 'planning', 'coding', 'review'] as const) {
+      assert.equal(stageRequiresTools(stage), true);
+      assert.equal(hasSufficientToolSupport(makeCapabilities({ toolSupport: 'none' }), stage), false);
+      assert.equal(hasSufficientToolSupport(makeCapabilities({ toolSupport: 'basic' }), stage), true);
+    }
+  });
+
+  it('does not leave selectable native-openrouter aliases without wire IDs or tool support', () => {
+    for (const [alias, capabilities] of Object.entries(DEFAULT_MODEL_REGISTRY.models)) {
+      if (capabilities.agent !== 'native-openrouter') continue;
+      if (capabilities.supportedModel?.lifecycle === 'blocked') continue;
+      assert.notEqual(resolveOpenRouterModelId(alias), null, `${alias} should resolve to an OpenRouter wire ID`);
+      assert.notEqual(capabilities.toolSupport, 'none', `${alias} should provide tool support`);
+    }
   });
 
   it('resolves provider-native identity and required phase metadata', () => {

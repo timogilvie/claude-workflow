@@ -259,6 +259,193 @@ test('resolver unblocks the surviving PR in applyChallengePairGates', async () =
   }
 });
 
+test('resolver auto-detects both aborted arms and forfeits to completed survivor', () => {
+  const { repoDir, cleanup } = setupRepoDir();
+  try {
+    writeWorkflowState(repoDir, {
+      HOK_1: {
+        pr: 101,
+        branch: 'task/primary',
+        updated: '2026-07-01T00:00:00Z',
+        challengePairId: 'pair-abort',
+        challengeRole: 'primary',
+        challengeModel: 'gpt-5.5',
+        evalCompleted: true,
+        challengeAborted: 'Native coding failed: quarantined peer',
+      },
+      HOK_1_c: {
+        branch: 'task/primary-challenger',
+        updated: '2026-07-01T00:00:00Z',
+        challengePairId: 'pair-abort',
+        challengeRole: 'challenger',
+        challengeModel: 'qwen-2.5-coder-32b',
+        challengeAborted: 'Native coding failed: 404 No endpoints found that support tool use.',
+      },
+    });
+
+    const result = resolveUnresolvablePair({ pairId: 'pair-abort', repoDir });
+
+    assert.equal(result.status, 'resolved');
+    assert.equal(result.reason, 'both-challenge-aborted');
+    assert.equal(result.outcome, 'forfeit');
+    assert.equal(result.record.winner, 'primary');
+    assert.equal(result.record.terminalReason, 'challenger_challenge_aborted');
+  } finally {
+    cleanup();
+  }
+});
+
+test('resolver skips aborted pair when lone surviving PR has not persisted eval', () => {
+  const { repoDir, cleanup } = setupRepoDir();
+  try {
+    writeWorkflowState(repoDir, {
+      HOK_1: {
+        pr: 101,
+        branch: 'task/primary',
+        updated: '2026-07-01T00:00:00Z',
+        challengePairId: 'pair-abort',
+        challengeRole: 'primary',
+        challengeModel: 'gpt-5.5',
+        challengeAborted: 'Native coding failed: quarantined peer',
+      },
+      HOK_1_c: {
+        branch: 'task/primary-challenger',
+        updated: '2026-07-01T00:00:00Z',
+        challengePairId: 'pair-abort',
+        challengeRole: 'challenger',
+        challengeModel: 'qwen-2.5-coder-32b',
+        challengeAborted: 'Native coding failed: no endpoints support tool use',
+      },
+    });
+
+    const result = resolveUnresolvablePair({ pairId: 'pair-abort', repoDir });
+
+    assert.equal(result.status, 'skipped');
+    assert.match(result.reason, /surviving arm has not persisted an eval/);
+    assert.equal(readChallengeComparisons(join(repoDir, '.wavemill', 'evals')).length, 0);
+  } finally {
+    cleanup();
+  }
+});
+
+test('resolver writes forfeit when a sibling challenge-aborted and survivor completed eval', () => {
+  const { repoDir, cleanup } = setupRepoDir();
+  try {
+    writeWorkflowState(repoDir, {
+      HOK_1: {
+        pr: 101,
+        branch: 'task/primary',
+        updated: '2026-07-01T00:00:00Z',
+        challengePairId: 'pair-abort',
+        challengeRole: 'primary',
+        challengeModel: 'gpt-5.5',
+        evalCompleted: true,
+      },
+      HOK_1_c: {
+        pr: 102,
+        branch: 'task/primary-challenger',
+        updated: '2026-07-01T00:00:00Z',
+        challengePairId: 'pair-abort',
+        challengeRole: 'challenger',
+        challengeModel: 'qwen-2.5-coder-32b',
+        challengeAborted: 'Native coding failed: no endpoints support tool use',
+      },
+    });
+
+    const result = resolveUnresolvablePair({ pairId: 'pair-abort', repoDir });
+
+    assert.equal(result.status, 'resolved');
+    assert.equal(result.reason, 'sibling-challenge-aborted');
+    assert.equal(result.outcome, 'forfeit');
+    assert.equal(result.record.winner, 'primary');
+    assert.equal(result.record.terminalReason, 'challenger_challenge_aborted');
+  } finally {
+    cleanup();
+  }
+});
+
+test('resolver writes double-forfeit when both aborted arms have no completed evals but both produced PRs', () => {
+  const { repoDir, cleanup } = setupRepoDir();
+  try {
+    writeWorkflowState(repoDir, {
+      HOK_1: {
+        pr: 101,
+        branch: 'task/primary',
+        updated: '2026-07-01T00:00:00Z',
+        challengePairId: 'pair-abort',
+        challengeRole: 'primary',
+        challengeModel: 'gpt-5.5',
+        challengeAborted: 'Native coding failed: context overflow',
+      },
+      HOK_1_c: {
+        pr: 102,
+        branch: 'task/primary-challenger',
+        updated: '2026-07-01T00:00:00Z',
+        challengePairId: 'pair-abort',
+        challengeRole: 'challenger',
+        challengeModel: 'qwen-2.5-coder-32b',
+        challengeAborted: 'Native coding failed: no endpoints support tool use',
+      },
+    });
+
+    const result = resolveUnresolvablePair({ pairId: 'pair-abort', repoDir });
+
+    assert.equal(result.status, 'resolved');
+    assert.equal(result.outcome, 'double-forfeit');
+    assert.equal(result.record.terminalReason, 'both_challenge_aborted');
+  } finally {
+    cleanup();
+  }
+});
+
+test('resolver and gate agree on aborted pair reason and unblock after resolution', async () => {
+  const { repoDir, cleanup } = setupRepoDir();
+  try {
+    writeWorkflowState(repoDir, {
+      HOK_1: {
+        pr: 101,
+        branch: 'task/primary',
+        updated: '2026-07-01T00:00:00Z',
+        challengePairId: 'pair-abort',
+        challengeRole: 'primary',
+        challengeModel: 'gpt-5.5',
+        evalCompleted: true,
+        challengeAborted: 'Native coding failed: quarantined peer',
+      },
+      HOK_1_c: {
+        branch: 'task/primary-challenger',
+        updated: '2026-07-01T00:00:00Z',
+        challengePairId: 'pair-abort',
+        challengeRole: 'challenger',
+        challengeModel: 'qwen-2.5-coder-32b',
+        challengeAborted: 'Native coding failed: no endpoints support tool use',
+      },
+    });
+
+    const blocked = await applyChallengePairGates(
+      [makeWorkItem(101, 'task/primary', 'pair-abort')],
+      [],
+      repoDir,
+      { remoteBranches: ['task/primary'], coolOffSeconds: 0 },
+    );
+    assert.equal(blocked.eligible.length, 0);
+    assert.equal(blocked.blocked[0]?.reason, 'challenge:pair-unresolvable:both-challenge-aborted');
+
+    const resolution = resolveUnresolvablePair({ pairId: 'pair-abort', repoDir });
+    assert.equal(resolution.status, 'resolved');
+
+    const unblocked = await applyChallengePairGates(
+      [makeWorkItem(101, 'task/primary', 'pair-abort')],
+      [],
+      repoDir,
+      { remoteBranches: ['task/primary'], coolOffSeconds: 0 },
+    );
+    assert.equal(unblocked.eligible.length, 1);
+    assert.equal(unblocked.blocked.length, 0);
+  } finally {
+    cleanup();
+  }
+});
 test('resolver treats a removed primary with stale refs as orphan-sibling', async () => {
   const { repoDir, cleanup } = setupRepoDir();
   try {

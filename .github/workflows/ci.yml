@@ -116,6 +116,22 @@ jobs:
       - name: Run native launch certification
         run: npm run test:native-launch-certification
 
+  openrouter-alias-audit:
+    name: OpenRouter Alias Audit
+    runs-on: ubuntu-latest
+    needs: preflight
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup
+        uses: ./.github/actions/setup
+
+      - name: Audit OpenRouter aliases
+        run: npx tsx tools/audit-openrouter-aliases.ts --json --no-write
+
   # Aggregates every test job above into one status check.
   #
   # The name is load-bearing: "Shell and Unit Tests" is a required status check
