@@ -10,12 +10,14 @@ import { WM_LABELS } from './pr-state-labels.ts';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 
 export type ChallengeRole = 'primary' | 'challenger';
-export type UnresolvableReason =
-  | 'orphan-sibling'
-  | 'sibling-eval-hard-failed'
-  | 'both-eval-hard-failed'
-  | 'sibling-challenge-aborted'
-  | 'both-challenge-aborted';
+export const UNRESOLVABLE_REASONS = [
+  'orphan-sibling',
+  'sibling-eval-hard-failed',
+  'both-eval-hard-failed',
+  'sibling-challenge-aborted',
+  'both-challenge-aborted',
+] as const;
+export type UnresolvableReason = typeof UNRESOLVABLE_REASONS[number];
 export type AutoCloseRefusalReason =
   | 'missing_evidence_id'
   | 'missing_or_invalid_comparison'
@@ -41,6 +43,7 @@ const BRANCH_NAME_PATTERN = /^[a-zA-Z0-9._/-]+$/;
 const TASK_IDENTIFIER_PATTERN = /^[A-Z]+-\d+(?:_c)?$/;
 const ORPHAN_PAIR_GRACE_MS = 60_000;
 const DEFAULT_HARD_FAILURE_RETRY_MAX = 2;
+const UNRESOLVABLE_REASON_SET = new Set<string>(UNRESOLVABLE_REASONS);
 
 interface ChallengePairInfo {
   pairId: string;
@@ -370,7 +373,7 @@ export function classifyChallengeState(
       };
     }
 
-    const hardFailureState = classifyHardFailureState(pairState, options.evalHardFailureRetryMax ?? DEFAULT_HARD_FAILURE_RETRY_MAX);
+    const hardFailureState = classifyPairUnresolvableState(pairState, options.evalHardFailureRetryMax ?? DEFAULT_HARD_FAILURE_RETRY_MAX);
     if (hardFailureState) {
       return {
         kind: 'pair-unresolvable',
@@ -719,7 +722,12 @@ function hasRunningComparison(
     || pairState?.challenger?.comparisonState === 'comparison_running';
 }
 
-function classifyHardFailureState(
+export function isUnresolvableReason(value: unknown): value is UnresolvableReason {
+  return typeof value === 'string' && UNRESOLVABLE_REASON_SET.has(value);
+}
+
+/** Shared unresolvable-pair classifier used by the gate and terminal resolver. */
+export function classifyPairUnresolvableState(
   pairState: PairTaskState | undefined,
   retryMax: number,
 ): UnresolvableReason | null {

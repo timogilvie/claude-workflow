@@ -145,6 +145,17 @@ describe('OpenRouter alias mapping', () => {
     assert.equal(resolveOpenRouterIdFromWavemillAlias('kimi-k2.7-code'), 'moonshotai/kimi-k2.7-code');
   });
 
+  it('returns null instead of throwing for unknown aliases', () => {
+    assert.equal(resolveOpenRouterIdFromWavemillAlias('does-not-exist'), null);
+  });
+
+  it('keeps retired aliases in the fixture as deprecated rows', () => {
+    const byAlias = new Map(loadLaunchPriorityList().map((model) => [model.wavemillAlias, model]));
+    for (const alias of ['deepseek-coder-v2', 'gemini-2.0-flash', 'grok-code-fast', 'qwen-2.5-coder-32b']) {
+      assert.equal(byAlias.get(alias)?.status, 'deprecated', `${alias} should remain as deprecated`);
+    }
+  });
+
   it('resolves Kimi/Qwen/GLM aliases and ids through one native OpenRouter identity', () => {
     const cases = [
       ['qwen-3-coder', 'qwen/qwen3-coder'],
