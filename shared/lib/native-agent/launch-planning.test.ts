@@ -6,7 +6,7 @@ import { dirname, join, resolve } from 'node:path';
 import { Readable, Writable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
-import { registerScriptedPiProvider } from './provider.ts';
+import { registerScriptedPiProvider, type ScriptedProviderContext } from './provider.ts';
 import { describeNativePlanningHelperFailure, launchNativePlanning } from './launch-planning.ts';
 import {
   parseNativePlanningApprovalCommand,
@@ -379,6 +379,55 @@ describe('launchNativePlanning', () => {
       assert.equal(hook.detail, 'planning_awaiting_user');
     } finally {
       cleanup(wtDir);
+    }
+  });
+
+  it('fails before the provider when the prompt plus reserved output exceeds the model context window', async () => {
+    const { wtDir, featureDir, packetPath } = setupWorktree();
+    const api = uniqueApi('context-window');
+    const seen: ScriptedProviderContext[] = [];
+    const hookPath = join(featureDir, 'native-planning.hook');
+    writeFileSync(packetPath, `# Task Packet\n\n${'x'.repeat(30_000)}\n`, 'utf-8');
+
+    try {
+      registerScriptedPiProvider({
+        api,
+        turns: (context) => {
+          seen.push(context);
+          return {
+            content: [{ type: 'text', text: validPlan('Unreachable Plan') }],
+            stopReason: 'stop',
+          };
+        },
+      });
+
+      await assert.rejects(
+        () => launchNativePlanning({
+          session: 'sess',
+          issue: 'HOK-2772',
+          slug: 'demo',
+          wtDir,
+          repoDir: REPO_DIR,
+          title: 'Check context window',
+          hookPath,
+          loopModelOverride: {
+            ...scriptedModel(api),
+            contextWindow: 10_000,
+          },
+          runTsxCommand: stubRunTsxCommand(),
+        }),
+        /context window/,
+      );
+
+      assert.equal(seen.length, 0);
+      assert.equal(existsSync(join(featureDir, 'plan.md')), false);
+      assert.equal(existsSync(join(featureDir, '.plan-approved')), false);
+      const hook = JSON.parse(readFileSync(hookPath, 'utf-8')) as Record<string, unknown>;
+      assert.equal(hook.state, 'error');
+      assert.match(String(hook.detail), /context_length_exceeded/);
+    } finally {
+      cleanup(wtDir);
+      rmSync(hookPath, { force: true });
     }
   });
 

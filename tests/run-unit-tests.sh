@@ -35,6 +35,7 @@ TESTS=(
   shared/lib/native-agent/providers.test.ts
   shared/lib/native-agent/messages.test.ts
   shared/lib/native-agent/compaction.test.ts
+  shared/lib/native-agent/context-window-guard.test.ts
   shared/lib/native-agent/pi-usage-cost.test.ts
   shared/lib/native-agent/provenance.test.ts
   shared/lib/native-agent/redaction.test.ts
@@ -85,6 +86,7 @@ TESTS=(
   shared/lib/native-agent/workflow-tools/ready-remediation-integration.test.ts
   shared/lib/issue-expander.test.ts
   shared/lib/native-agent/launch-planning.test.ts
+  shared/lib/native-agent/planning-canary.test.ts
   shared/lib/feature-outcome-consumer.test.ts
   shared/lib/outcome-collectors.test.ts
   shared/lib/context-analyzer.test.ts

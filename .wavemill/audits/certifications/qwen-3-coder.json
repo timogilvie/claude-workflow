@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1",
-  "generatedAt": "2026-07-16T14:29:44.118Z",
-  "issue": "HOK-2532",
+  "generatedAt": "2026-08-18T16:19:02.006Z",
+  "issue": "HOK-2779",
   "model": {
     "wavemillAlias": "qwen-3-coder",
     "openrouterId": "qwen/qwen3-coder",
@@ -9,12 +9,13 @@
     "status": "active",
     "priorityTier": 1,
     "roleEligibility": [
+      "planning",
       "coding",
       "review"
     ]
   },
   "target": 3,
-  "persist": true,
+  "persist": false,
   "checks": [
     {
       "name": "fixture",
@@ -27,19 +28,9 @@
       "detail": "qwen-3-coder is present in the effective model registry."
     },
     {
-      "name": "provider-config",
+      "name": "global-effective-pools",
       "status": "ok",
-      "detail": "qwen-3-coder is allowlisted in providers.openrouter.models."
-    },
-    {
-      "name": "challenge-pool",
-      "status": "ok",
-      "detail": "qwen-3-coder is present in challenge.models."
-    },
-    {
-      "name": "router-pools",
-      "status": "ok",
-      "detail": "qwen-3-coder is present in all eligible router role pools."
+      "detail": "qwen-3-coder is present in all eligible global effective-model pools."
     }
   ],
   "smoke": {
@@ -51,47 +42,47 @@
         "costUsd": 0.000128
       }
     ],
-    "live": [
-      {
-        "modelId": "qwen-3-coder",
-        "family": "qwen",
-        "status": "ok",
-        "costUsd": 0.0000049
-      }
-    ]
+    "live": {
+      "skipped": true,
+      "message": "live smoke skipped because OPENROUTER_LIVE_SMOKE=1 and OPENROUTER_API_KEY are required."
+    }
   },
   "eval": {
-    "plannedRuns": 3,
-    "executedRuns": 3,
-    "persistedIds": [
-      "9799b41b-8d54-418f-8a84-eff67bb8b157",
-      "fc2e85cc-cd77-45bc-903b-fd9152623936",
-      "40167e64-c222-4c70-a824-d12261598251"
-    ]
+    "plannedRuns": 0,
+    "executedRuns": 0,
+    "persistedIds": []
   },
   "audit": {
-    "zeroEvidenceBefore": true,
+    "zeroEvidenceBefore": false,
     "zeroEvidenceAfter": false,
     "roles": [
       {
-        "role": "coding",
-        "before": 0,
+        "role": "planning",
+        "before": 3,
         "after": 3,
         "target": 3,
-        "gapBefore": 3,
+        "gapBefore": 0,
+        "status": "at-target"
+      },
+      {
+        "role": "coding",
+        "before": 3,
+        "after": 3,
+        "target": 3,
+        "gapBefore": 0,
         "status": "at-target"
       },
       {
         "role": "review",
-        "before": 0,
+        "before": 3,
         "after": 3,
         "target": 3,
-        "gapBefore": 3,
+        "gapBefore": 0,
         "status": "at-target"
       }
     ]
   },
-  "reportPath": "/Users/timothyogilvie/Dropbox/wavemill/.wavemill/audits/certifications/qwen-3-coder.json",
-  "auditPath": "/Users/timothyogilvie/Dropbox/wavemill/.wavemill/audits/launch-priority-coverage.json",
-  "summary": "Certified qwen-3-coder: coding 0->3/3 (at-target); review 0->3/3 (at-target). Dry smoke: qwen-3-coder:ok. Live smoke: qwen-3-coder:ok. Eval runs: 3/3. Zero-evidence after: no."
+  "reportPath": "/Users/timothyogilvie/Dropbox/wavemill/worktrees/qualify-qwen-3-coder-for-native-openrouter-planning-challenger/.wavemill/audits/certifications/qwen-3-coder.json",
+  "auditPath": "/Users/timothyogilvie/Dropbox/wavemill/worktrees/qualify-qwen-3-coder-for-native-openrouter-planning-challenger/.wavemill/audits/launch-priority-coverage.json",
+  "summary": "Certified qwen-3-coder: planning 3->3/3 (at-target); coding 3->3/3 (at-target); review 3->3/3 (at-target). Dry smoke: qwen-3-coder:ok. Live smoke: skipped. Eval runs: 0/0. Zero-evidence after: no."
 }

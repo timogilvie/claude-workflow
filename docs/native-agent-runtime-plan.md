@@ -254,6 +254,7 @@ Required strategy:
 - Recent mutation results and the latest live-file context around pending patch failures must be retained until resolved.
 - For stateful providers, compaction must not discard provider state such as `previous_response_id` or encrypted reasoning.
 - For stateless providers, compaction should use the model registry context window and phase budget to reserve output space before the next request.
+- Before the first request of every native loop, `shared/lib/native-agent/context-window-guard.ts` estimates prompt tokens with the bytes/4 heuristic plus a 10% input safety margin, adds the phase's reserved output tokens, and refuses to launch when the total exceeds the registry `contextWindowTokens`; the diagnostic names the model, estimate, and limit.
 - Compaction events must be written to the native transcript so eval/debugging can distinguish raw history from replay history.
 
 This is separate from `.wavemill/project-context.md` compaction; it manages per-session conversation growth.

@@ -286,7 +286,7 @@ function writePatchCodingCertification(repoDir: string, certifiedAt = RUNTIME_FR
 function writeNativeChallengeRepo(options: {
   model: string;
   provider: 'openai' | 'openrouter';
-  phase: 'read-only' | 'patch';
+  phase: 'read-only' | 'patch' | 'workflow';
   suiteVersion?: string;
   enablePatchCoding?: boolean;
 }): string {
@@ -415,6 +415,120 @@ test('review-stage challenge preserves native OpenRouter reviewer routing', () =
     assert.equal(pair!.challenger.model, 'gpt-5.6-terra');
     assert.equal(pair!.challenger.reviewer, 'qwen-3-coder');
     assert.equal(pair!.challenger.reviewerAgent, 'native-openrouter');
+  } finally {
+    clearConfigCache(repoDir);
+    rmSync(repoDir, { recursive: true, force: true });
+    if (previousApiKey === undefined) {
+      delete process.env.OPENROUTER_API_KEY;
+    } else {
+      process.env.OPENROUTER_API_KEY = previousApiKey;
+    }
+  }
+});
+
+test('plan-stage challenge preserves native OpenRouter planner routing with workflow certification', () => {
+  const previousApiKey = process.env.OPENROUTER_API_KEY;
+  process.env.OPENROUTER_API_KEY = 'test-openrouter-key';
+  const repoDir = writeNativeChallengeRepo({
+    model: 'qwen-3-coder',
+    provider: 'openrouter',
+    phase: 'workflow',
+  });
+
+  try {
+    const result = pickChallengeWorkflowsWithReason(
+      ['gpt-5.6-terra', 'claude-opus-4-6', 'qwen-3-coder'],
+      {
+        pairId: 'HOK-2779-PLAN',
+        issueId: 'HOK-2779-PLAN',
+        slug: 'native-plan-stage',
+        prompt: 'Plan the implementation.',
+        primaryModel: 'gpt-5.6-terra',
+        challengeStage: 'plan',
+        forcedChallengerModel: 'qwen-3-coder',
+        repoDir,
+        routeFn: () => ({
+          planner: 'gpt-5.6-terra',
+          coder: 'gpt-5.6-terra',
+          reviewer: 'gpt-5.6-terra',
+          planDepth: 'light',
+          codeDepth: 'medium',
+          reviewRecommended: 'llm',
+          expectedSuccess: 0.85,
+          expectedCostPlan: 10,
+          expectedCostCode: 20,
+          expectedCostReview: 5,
+          reasoning: [],
+          signals: {},
+        }),
+      },
+    );
+
+    assert.ok(result.pair);
+    assert.equal(result.pair!.challengeStage, 'plan');
+    assert.equal(result.pair!.challenger.planner, 'qwen-3-coder');
+    assert.equal(result.pair!.challenger.plannerAgent, 'native-openrouter');
+    const rejection = (result.nativeCertificationRejections || []).find(
+      (entry) => entry.modelId === 'qwen-3-coder' && entry.role === 'planner',
+    );
+    assert.equal(rejection, undefined);
+  } finally {
+    clearConfigCache(repoDir);
+    rmSync(repoDir, { recursive: true, force: true });
+    if (previousApiKey === undefined) {
+      delete process.env.OPENROUTER_API_KEY;
+    } else {
+      process.env.OPENROUTER_API_KEY = previousApiKey;
+    }
+  }
+});
+
+test('plan-stage challenge rejects qwen-3-coder when only patch-certified', () => {
+  const previousApiKey = process.env.OPENROUTER_API_KEY;
+  process.env.OPENROUTER_API_KEY = 'test-openrouter-key';
+  const repoDir = writeNativeChallengeRepo({
+    model: 'qwen-3-coder',
+    provider: 'openrouter',
+    phase: 'patch',
+  });
+
+  try {
+    const result = pickChallengeWorkflowsWithReason(
+      ['gpt-5.6-terra', 'claude-opus-4-6', 'qwen-3-coder'],
+      {
+        pairId: 'HOK-2779-PATCH',
+        issueId: 'HOK-2779-PATCH',
+        slug: 'native-plan-stage-patch',
+        prompt: 'Plan the implementation.',
+        primaryModel: 'gpt-5.6-terra',
+        challengeStage: 'plan',
+        forcedChallengerModel: 'qwen-3-coder',
+        repoDir,
+        randomFn: () => 0,
+        routeFn: () => ({
+          planner: 'gpt-5.6-terra',
+          coder: 'gpt-5.6-terra',
+          reviewer: 'gpt-5.6-terra',
+          planDepth: 'light',
+          codeDepth: 'medium',
+          reviewRecommended: 'llm',
+          expectedSuccess: 0.85,
+          expectedCostPlan: 10,
+          expectedCostCode: 20,
+          expectedCostReview: 5,
+          reasoning: [],
+          signals: {},
+        }),
+      },
+    );
+
+    assert.ok(result.pair);
+    assert.notEqual(result.pair!.challenger.planner, 'qwen-3-coder');
+    const rejection = (result.nativeCertificationRejections || []).find(
+      (entry) => entry.modelId === 'qwen-3-coder' && entry.role === 'planner',
+    );
+    assert.ok(rejection);
+    assert.equal(rejection!.reason, 'insufficient-phase');
   } finally {
     clearConfigCache(repoDir);
     rmSync(repoDir, { recursive: true, force: true });
@@ -1258,6 +1372,70 @@ test('pickChallengeModels selects the least-used zero-record implementation chal
   assert.equal(selection.pair!.challenger.model, 'claude-sonnet-4-5-20250929');
   assert.equal(selection.pair!.selectionReason, 'least-used-zero-record');
   assert.equal(selection.pair!.challengerCoverageCount, 0);
+});
+
+test('preserved challenger pins the varied model past coverage selection', () => {
+  const selection = pickChallengeModelsWithReason(
+    ['claude-opus-4-6', 'claude-sonnet-4-5-20250929', 'gpt-5.6-terra'],
+    {
+      pairId: 'HOK-997P',
+      issueId: 'HOK-997P',
+      slug: 'preserved-implementation',
+      primaryModel: 'claude-opus-4-6',
+      preservedChallengerModel: 'gpt-5.6-terra',
+      agentMap: {
+        'claude-sonnet-4-5-20250929': 'claude',
+        'gpt-5.6-terra': 'codex',
+      },
+      coverage: makeCoverage({
+        implementation: {
+          'claude-sonnet-4-5-20250929': 0,
+          'gpt-5.6-terra': 7,
+        },
+      }),
+      rotationSeed: 'HOK-997P|implementation',
+      randomFn: () => {
+        throw new Error('random fallback should not run');
+      },
+    },
+  );
+
+  assert.ok(selection.pair);
+  assert.equal(selection.pair!.challenger.model, 'gpt-5.6-terra');
+  assert.equal(selection.pair!.selectionReason, 'preserved');
+});
+
+test('ineligible preserved challenger fails instead of silently selecting a substitute', () => {
+  const absent = pickChallengeModelsWithReason(
+    ['claude-opus-4-6', 'claude-sonnet-4-5-20250929', 'gpt-5.6-terra'],
+    {
+      pairId: 'HOK-997Q',
+      issueId: 'HOK-997Q',
+      slug: 'preserved-absent',
+      primaryModel: 'claude-opus-4-6',
+      preservedChallengerModel: 'qwen-3-coder',
+      coverage: makeCoverage({
+        implementation: {
+          'claude-sonnet-4-5-20250929': 0,
+          'gpt-5.6-terra': 1,
+        },
+      }),
+    },
+  );
+  assert.equal(absent.pair, null);
+
+  const sameAsPrimary = pickChallengeModelsWithReason(
+    ['claude-opus-4-6', 'claude-sonnet-4-5-20250929'],
+    {
+      pairId: 'HOK-997R',
+      issueId: 'HOK-997R',
+      slug: 'preserved-primary',
+      primaryModel: 'claude-opus-4-6',
+      preservedChallengerModel: 'claude-opus-4-6',
+      coverage: makeCoverage({ implementation: { 'claude-sonnet-4-5-20250929': 0 } }),
+    },
+  );
+  assert.equal(sameAsPrimary.pair, null);
 });
 
 test('pickChallengeWorkflows varies only the planner and selects the least-used zero-record planner challenger', () => {

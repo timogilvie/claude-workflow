@@ -40,6 +40,10 @@ runTool({
       type: 'string',
       description: 'Stage already chosen for this pair (plan|implementation|review); suppresses stage re-sampling',
     },
+    'preserved-challenger-model': {
+      type: 'string',
+      description: 'Previously selected varied-stage challenger model to preserve during re-resolution',
+    },
   },
   async run({ args }) {
     const repoDir = (args['repo-dir'] as string) || process.cwd();
@@ -52,6 +56,7 @@ runTool({
     const taskFile = args.file as string | undefined;
     const featureDir = args['feature-dir'] as string | undefined;
     const pinnedStage = normalizeChallengeStage(args['pinned-stage'] as string | undefined);
+    const preservedChallengerModel = (args['preserved-challenger-model'] as string | undefined)?.trim() || undefined;
 
     if (!issue || !slug || !title) {
       throw new Error('--issue, --slug, and --title are required');
@@ -200,42 +205,32 @@ runTool({
     const rotationSeed = `${issue}|${challengeStage}`;
     const recommendedChallengerModel = launchDecision.recommendation?.challengerModel;
 
-    // If task file provided, use workflow routing for both sides
-    let selectionFailureReason = 'selection_failed';
-    let pair;
-    let nativeCertificationRejections: ChallengeNativeRejection[] | undefined;
-    let modelExclusions: ModelExclusionDiagnostic[] | undefined;
+    const resolvePair = (activePreservedChallengerModel?: string) => {
+      let selectionFailureReason = 'selection_failed';
+      let pair;
+      let nativeCertificationRejections: ChallengeNativeRejection[] | undefined;
+      let modelExclusions: ModelExclusionDiagnostic[] | undefined;
 
-    if (featureDir) {
-      const selection = pickChallengeWorkflowsWithContextAndReason(pool, {
-        pairId: issue,
-        issueId: issue,
-        slug,
-        prompt: title,
-        primaryModel,
-        forcedChallengerModel,
-          challengeStage,
-          agentMap: {},
-          defaultAgent,
-          repoDir,
-          coverage,
-          rotationSeed,
-          recommendedChallengerModel,
-        }, routeArtifacts);
-      pair = selection.pair;
-      selectionFailureReason = selection.failureReason || selectionFailureReason;
-      nativeCertificationRejections = selection.nativeCertificationRejections;
-      modelExclusions = selection.modelExclusions;
-    }
+      const mergeDiagnostics = (selection: {
+        nativeCertificationRejections?: ChallengeNativeRejection[];
+        modelExclusions?: ModelExclusionDiagnostic[];
+      }) => {
+        nativeCertificationRejections = [
+          ...(nativeCertificationRejections || []),
+          ...(selection.nativeCertificationRejections || []),
+        ];
+        modelExclusions = [
+          ...(modelExclusions || []),
+          ...(selection.modelExclusions || []),
+        ];
+      };
 
-    if (!pair && taskFile) {
-      try {
-        const prompt = readTaskPromptFromFile(taskFile);
-        const selection = pickChallengeWorkflowsWithReason(pool, {
+      if (featureDir) {
+        const selection = pickChallengeWorkflowsWithContextAndReason(pool, {
           pairId: issue,
           issueId: issue,
           slug,
-          prompt,
+          prompt: title,
           primaryModel,
           forcedChallengerModel,
           challengeStage,
@@ -245,20 +240,61 @@ runTool({
           coverage,
           rotationSeed,
           recommendedChallengerModel,
-        });
+          preservedChallengerModel: activePreservedChallengerModel,
+        }, routeArtifacts);
         pair = selection.pair;
         selectionFailureReason = selection.failureReason || selectionFailureReason;
-        nativeCertificationRejections = [
-          ...(nativeCertificationRejections || []),
-          ...(selection.nativeCertificationRejections || []),
-        ];
-        modelExclusions = [
-          ...(modelExclusions || []),
-          ...(selection.modelExclusions || []),
-        ];
-      } catch (error) {
-        // Fall back to model-only selection if task file is unreadable
-        console.error(`Warning: Failed to read task file for routing: ${error}`);
+        nativeCertificationRejections = selection.nativeCertificationRejections;
+        modelExclusions = selection.modelExclusions;
+      }
+
+      if (!pair && taskFile) {
+        try {
+          const prompt = readTaskPromptFromFile(taskFile);
+          const selection = pickChallengeWorkflowsWithReason(pool, {
+            pairId: issue,
+            issueId: issue,
+            slug,
+            prompt,
+            primaryModel,
+            forcedChallengerModel,
+            challengeStage,
+            agentMap: {},
+            defaultAgent,
+            repoDir,
+            coverage,
+            rotationSeed,
+            recommendedChallengerModel,
+            preservedChallengerModel: activePreservedChallengerModel,
+          });
+          pair = selection.pair;
+          selectionFailureReason = selection.failureReason || selectionFailureReason;
+          mergeDiagnostics(selection);
+        } catch (error) {
+          // Fall back to model-only selection if task file is unreadable
+          console.error(`Warning: Failed to read task file for routing: ${error}`);
+          const selection = pickChallengeModelsWithReason(pool, {
+            pairId: issue,
+            issueId: issue,
+            slug,
+            primaryModel,
+            forcedChallengerModel,
+            agentMap: {},
+            defaultAgent,
+            repoDir,
+            coverage,
+            rotationSeed,
+            recommendedChallengerModel,
+            preservedChallengerModel: activePreservedChallengerModel,
+            strictWhenRequired,
+            requestedRate,
+          });
+          pair = selection.pair;
+          selectionFailureReason = selection.failureReason || selectionFailureReason;
+          mergeDiagnostics(selection);
+        }
+      } else if (!pair) {
+        // No task file provided - use model-only selection (backward compatibility)
         const selection = pickChallengeModelsWithReason(pool, {
           pairId: issue,
           issueId: issue,
@@ -271,51 +307,41 @@ runTool({
           coverage,
           rotationSeed,
           recommendedChallengerModel,
+          preservedChallengerModel: activePreservedChallengerModel,
           strictWhenRequired,
           requestedRate,
         });
         pair = selection.pair;
         selectionFailureReason = selection.failureReason || selectionFailureReason;
-        nativeCertificationRejections = [
-          ...(nativeCertificationRejections || []),
-          ...(selection.nativeCertificationRejections || []),
-        ];
-        modelExclusions = [
-          ...(modelExclusions || []),
-          ...(selection.modelExclusions || []),
-        ];
+        if (selection.challengeUnavailable) {
+          nativeCertificationRejections = selection.nativeCertificationRejections;
+          modelExclusions = selection.modelExclusions;
+        }
+        mergeDiagnostics(selection);
       }
-    } else if (!pair) {
-      // No task file provided - use model-only selection (backward compatibility)
-      const selection = pickChallengeModelsWithReason(pool, {
-        pairId: issue,
-        issueId: issue,
-        slug,
-        primaryModel,
-        forcedChallengerModel,
-        agentMap: {},
-        defaultAgent,
-        repoDir,
-        coverage,
-        rotationSeed,
-        recommendedChallengerModel,
-        strictWhenRequired,
-        requestedRate,
-      });
-      pair = selection.pair;
-      selectionFailureReason = selection.failureReason || selectionFailureReason;
-      if (selection.challengeUnavailable) {
-        nativeCertificationRejections = selection.nativeCertificationRejections;
-        modelExclusions = selection.modelExclusions;
+
+      return { pair, selectionFailureReason, nativeCertificationRejections, modelExclusions };
+    };
+
+    let {
+      pair,
+      selectionFailureReason,
+      nativeCertificationRejections,
+      modelExclusions,
+    } = resolvePair(preservedChallengerModel);
+    let preservationFallbackReason: string | undefined;
+    if (preservedChallengerModel) {
+      const selectedStage = pair?.challengeStage || challengeStage;
+      const selectedChallenger = pair ? variedModelForStage(pair.challenger, selectedStage) : '';
+      if (!pair || selectedChallenger !== preservedChallengerModel) {
+        preservationFallbackReason = 'preserved_challenger_ineligible';
+        ({
+          pair,
+          selectionFailureReason,
+          nativeCertificationRejections,
+          modelExclusions,
+        } = resolvePair(undefined));
       }
-      nativeCertificationRejections = [
-        ...(nativeCertificationRejections || []),
-        ...(selection.nativeCertificationRejections || []),
-      ];
-      modelExclusions = [
-        ...(modelExclusions || []),
-        ...(selection.modelExclusions || []),
-      ];
     }
 
     // Emit human-readable warnings for skipped native models (mirrors router reasoning output)
@@ -360,6 +386,7 @@ runTool({
           reason: 'challenge_unavailable',
           selectionPath: launchDecision.selectionPath,
           ...(launchDecision.recommendation ? { challengeRecommendation: launchDecision.recommendation } : {}),
+          ...(preservationFallbackReason ? { fallbackReason: preservationFallbackReason } : {}),
         }));
         return;
       }
@@ -368,6 +395,7 @@ runTool({
         {
           selectionPath: launchDecision.selectionPath,
           ...(launchDecision.recommendation ? { challengeRecommendation: launchDecision.recommendation } : {}),
+          ...(preservationFallbackReason ? { fallbackReason: preservationFallbackReason } : {}),
         },
         { nativeCertificationRejections, modelExclusions },
       )));
@@ -383,9 +411,10 @@ runTool({
         ? 'recommendation'
         : 'random'
     );
-    const fallbackReason = launchDecision.recommendation?.stage && launchDecision.recommendation.stage !== effectiveStage
+    const routeFallbackReason = launchDecision.recommendation?.stage && launchDecision.recommendation.stage !== effectiveStage
       ? `recommended_stage_${launchDecision.recommendation.stage}_fell_back_to_${effectiveStage}`
       : undefined;
+    const fallbackReason = preservationFallbackReason || routeFallbackReason;
     const challengeRecommendation = launchDecision.recommendation
       ? {
           reason: launchDecision.recommendation.reason,
