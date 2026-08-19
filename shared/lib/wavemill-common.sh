@@ -100,7 +100,7 @@ wavemill_write_backstage_service_health() {
   state_mutate "$path" '
     .updatedAt = $updatedAt
     | .services = (.services // {})
-    | .services[$service] = {
+    | .services[$service] = ((.services[$service] // {}) + {
         updatedAt: $updatedAt,
         status: $status,
         detail: (if $detail == "" then null else $detail end),
@@ -108,7 +108,7 @@ wavemill_write_backstage_service_health() {
         lastRestartAttemptAt: (if $lastAttemptAt == "" then null else $lastAttemptAt end),
         paneId: (if $paneId == "" then null else $paneId end),
         heartbeatAt: (if $heartbeatAt == "" then null else $heartbeatAt end)
-      }
+      })
     | if $service == "tend" then
         .status = $status
         | .detail = (if $detail == "" then null else $detail end)

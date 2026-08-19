@@ -7,6 +7,7 @@ import { describe, it } from 'node:test';
 import type { LinearIssueSummary } from './linear.ts';
 import { WM_LABELS } from './pr-state-labels.ts';
 import {
+  createPrFetcher,
   defaultHealthChecker,
   executeMerge,
   formatStatusLine,
@@ -1120,6 +1121,49 @@ describe('formatStatusLine', () => {
   });
 });
 
+describe('createPrFetcher', () => {
+  it('retries transient gh pr list failures and preserves terminal failures', async () => {
+    const sleeps: number[] = [];
+    let calls = 0;
+    const transient = Object.assign(new Error('Command failed: gh pr list\nHTTP 503: No server is currently available'), {
+      status: 1,
+      stderr: 'HTTP 503: No server is currently available',
+    });
+    const fetcher = createPrFetcher({
+      exec: () => {
+        calls += 1;
+        if (calls < 3) throw transient;
+        return JSON.stringify([pr()]);
+      },
+      sleep: async (ms) => { sleeps.push(ms); },
+      random: () => 0.5,
+    });
+
+    const result = await fetcher('auto/integration', '/repo');
+    assert.equal(result.length, 1);
+    assert.equal(calls, 3);
+    assert.deepEqual(sleeps, [2_000, 4_000]);
+
+    const terminal = Object.assign(new Error('HTTP 404 Not Found'), { stderr: 'HTTP 404 Not Found' });
+    const terminalFetcher = createPrFetcher({ exec: () => { throw terminal; }, sleep: async () => undefined });
+    await assert.rejects(terminalFetcher('auto/integration', '/repo'), (error) => error === terminal);
+  });
+
+  it('does not retry non-array JSON because that is an unknown data error', async () => {
+    let calls = 0;
+    const fetcher = createPrFetcher({
+      exec: () => {
+        calls += 1;
+        return '{}';
+      },
+      sleep: async () => undefined,
+    });
+
+    await assert.rejects(fetcher('auto/integration', '/repo'), /non-array JSON/);
+    assert.equal(calls, 1);
+  });
+});
+
 describe('merge transient error classification', () => {
   it('matches GitHub required-checks expected errors without depending on the count prefix', () => {
     assert.equal(
@@ -1758,6 +1802,141 @@ describe('executeMerge', () => {
       assert.deepEqual(result, { status: 'skipped', prNumber: 42, haltLoop: false });
       assert.ok(!hasCall(options.calls, /git worktree add/));
       assert.deepEqual(options.labels, []);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('retries transient merge-lane probe failures before proceeding', async () => {
+    const options = buildMergeTestOptions();
+    let probeAttempts = 0;
+    const sleeps: number[] = [];
+    const shellRunner: MergeExecutionDeps['shellRunner'] = (cmd, opts) => {
+      options.calls.push(cmd);
+      const defaultRunner = options.deps.shellRunner as MergeExecutionDeps['shellRunner'];
+      if (cmd.includes('gh pr list --label')) {
+        probeAttempts += 1;
+        if (probeAttempts < 3) {
+          const error = Object.assign(new Error('HTTP 503 Service Unavailable'), { stderr: 'HTTP 503 Service Unavailable' });
+          throw error;
+        }
+      }
+      return defaultRunner(cmd, opts);
+    };
+
+    try {
+      const result = await executeMerge(candidate(), {
+        repoDir: options.repoDir,
+        deps: {
+          ...options.deps,
+          shellRunner,
+          retrySleep: async (ms) => { sleeps.push(ms); },
+        },
+      });
+
+      assert.equal(result.status, 'merged');
+      assert.equal(probeAttempts, 3);
+      assert.equal(sleeps.length, 2);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('skips the cycle when merge-lane probe transient retries exhaust', async () => {
+    const options = buildMergeTestOptions();
+    const sleeps: number[] = [];
+    const shellRunner: MergeExecutionDeps['shellRunner'] = (cmd, opts) => {
+      options.calls.push(cmd);
+      if (cmd.includes('gh pr list --label')) {
+        throw Object.assign(new Error('HTTP 503 Service Unavailable'), { stderr: 'HTTP 503 Service Unavailable' });
+      }
+      const defaultRunner = options.deps.shellRunner as MergeExecutionDeps['shellRunner'];
+      return defaultRunner(cmd, opts);
+    };
+
+    try {
+      const result = await executeMerge(candidate(), {
+        repoDir: options.repoDir,
+        deps: {
+          ...options.deps,
+          shellRunner,
+          retrySleep: async (ms) => { sleeps.push(ms); },
+        },
+      });
+
+      assert.equal(result.status, 'skipped');
+      assert.equal(result.phase, 'merge-lane-probe');
+      assert.deepEqual(options.labels, []);
+      assert.equal(sleeps.length, 3);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('retries transient gh pr checks output instead of blocking the PR', async () => {
+    const options = buildMergeTestOptions();
+    let checkAttempts = 0;
+    const sleeps: number[] = [];
+    const shellRunner: MergeExecutionDeps['shellRunner'] = (cmd, opts) => {
+      options.calls.push(cmd);
+      if (cmd.includes('gh pr checks')) {
+        checkAttempts += 1;
+        if (checkAttempts === 1) return 'HTTP 502 Bad Gateway';
+      }
+      const defaultRunner = options.deps.shellRunner as MergeExecutionDeps['shellRunner'];
+      return defaultRunner(cmd, opts);
+    };
+
+    try {
+      const result = await executeMerge(candidate(), {
+        repoDir: options.repoDir,
+        deps: {
+          ...options.deps,
+          shellRunner,
+          retrySleep: async (ms) => { sleeps.push(ms); },
+        },
+      });
+
+      assert.equal(result.status, 'merged');
+      assert.equal(checkAttempts, 2);
+      assert.equal(options.labels.includes('blocked:42'), false);
+      assert.equal(sleeps.length, 1);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('treats an already-merged retry response as merge success', async () => {
+    const options = buildMergeTestOptions();
+    let mergeAttempts = 0;
+    const sleeps: number[] = [];
+    const shellRunner: MergeExecutionDeps['shellRunner'] = (cmd, opts) => {
+      options.calls.push(cmd);
+      if (cmd.includes('gh pr merge 42')) {
+        mergeAttempts += 1;
+        if (mergeAttempts === 1) {
+          throw Object.assign(new Error('HTTP 503 Service Unavailable'), { stderr: 'HTTP 503 Service Unavailable' });
+        }
+        throw Object.assign(new Error('Pull request #42 is already merged'), { stderr: 'Pull request #42 is already merged' });
+      }
+      const defaultRunner = options.deps.shellRunner as MergeExecutionDeps['shellRunner'];
+      return defaultRunner(cmd, opts);
+    };
+
+    try {
+      const result = await executeMerge(candidate(), {
+        repoDir: options.repoDir,
+        deps: {
+          ...options.deps,
+          shellRunner,
+          retrySleep: async (ms) => { sleeps.push(ms); },
+          currentTimeMs: () => 0,
+        },
+      });
+
+      assert.equal(result.status, 'merged');
+      assert.equal(mergeAttempts, 2);
+      assert.deepEqual(options.labels, ['merging:42', 'merged:42']);
     } finally {
       options.cleanup();
     }

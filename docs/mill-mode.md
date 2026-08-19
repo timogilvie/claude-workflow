@@ -284,6 +284,8 @@ The four pipeline stages are:
 
 When `integration.enabled` and `integration.useMillSession` are both `true`, mill starts a dedicated `backstage` tmux window inside the existing mill session and runs the tend loop there with the normal session lifecycle. For tests and manual debugging, `wavemill tend --once --repo-dir <repo>` still runs a single pass without starting mill mode.
 
+The backstage tend loop is resilient to transient GitHub/network failures: it retries `gh` calls, backs off failed loop iterations while publishing `failureCount`/`lastError`, and the mill watchdog keeps restarting a dead tend loop on a 60s-to-15m backoff even after showing `needs-user`.
+
 ### Dependent Task Auto-Dispatch
 
 When the monitor loop detects that a parent task has opened a PR, mill automatically re-checks queued children whose `depends_on` edge targets that parent issue.
