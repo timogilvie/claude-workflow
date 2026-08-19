@@ -7,7 +7,8 @@ import { CANONICAL_CONFIG_TEMPLATE } from './config-sync.ts';
 import { buildLaunchabilityMatrix, LAUNCHABILITY_STAGES, type LaunchabilityStage } from './launchable-models.ts';
 import { resolveModelAgent } from './model-agent-resolution.ts';
 import { DEFAULT_MODEL_REGISTRY } from './model-registry.ts';
-import { buildCertificationPath } from './native-agent/certification/loader.ts';
+import { buildGlobalCertificationPath } from './native-agent/certification/loader.ts';
+import { GLOBAL_CERTIFICATION_ROOT_ENV } from './native-agent/certification/storage.ts';
 import { loadLaunchPriorityList } from './openrouter-catalog.ts';
 
 const WATCHLIST_STAGE_MAP = {
@@ -26,9 +27,18 @@ const RETIRED_MODELS = new Set(['deepseek-coder-v2', 'qwen-2.5-coder-32b', 'gemi
 
 const NOW = new Date('2026-07-30T12:00:00.000Z');
 const priorOpenRouterKey = process.env.OPENROUTER_API_KEY;
+const priorCertificationRoot = process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
 
 before(() => {
   process.env.OPENROUTER_API_KEY = 'test-openrouter-key';
+  // Certification lookup falls back to a global store under the user's home
+  // directory. Without this override the matrix reads whatever certifications
+  // the developer happens to have run locally, so the suite passes on a
+  // populated machine and fails on a clean CI runner. Point it at an empty
+  // directory so launchability depends only on what each test writes.
+  process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = mkdtempSync(
+    join(tmpdir(), 'wavemill-cert-root-'),
+  );
 });
 
 after(() => {
@@ -36,6 +46,11 @@ after(() => {
     delete process.env.OPENROUTER_API_KEY;
   } else {
     process.env.OPENROUTER_API_KEY = priorOpenRouterKey;
+  }
+  if (priorCertificationRoot === undefined) {
+    delete process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
+  } else {
+    process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = priorCertificationRoot;
   }
 });
 
@@ -53,13 +68,16 @@ function writeMinimalConfig(repoDir: string): void {
   );
 }
 
-function writeCertification(repoDir: string, modelId: string): void {
+function writeCertification(modelId: string): void {
   const capabilities = DEFAULT_MODEL_REGISTRY.models[modelId];
   const suiteVersion = capabilities.nativeCapability?.certification?.certificationSuiteVersion;
   const provider = capabilities.nativeCapability?.nativeProvider;
   assert.ok(suiteVersion);
   assert.ok(provider);
-  const path = buildCertificationPath(repoDir, provider, modelId, suiteVersion);
+  // Write to the global scope, which is what the launchability matrix reads.
+  // The repo-scoped legacy path is never consulted here, so writing there left
+  // these assertions depending on the developer's real ~/.wavemill store.
+  const path = buildGlobalCertificationPath(provider, modelId, suiteVersion);
   mkdirSync(dirname(path), { recursive: true });
   const artifact = {
     schemaVersion: 2,
@@ -132,7 +150,7 @@ describe('launch-priority watchlist launchability', () => {
     const repoDir = mkdtempSync(join(tmpdir(), 'wavemill-launchability-'));
     writeMinimalConfig(repoDir);
     for (const modelId of Object.keys(WATCHLIST_STAGE_MAP)) {
-      if (!RETIRED_MODELS.has(modelId)) writeCertification(repoDir, modelId);
+      if (!RETIRED_MODELS.has(modelId)) writeCertification(modelId);
     }
 
     const catalog = loadLaunchPriorityList()
