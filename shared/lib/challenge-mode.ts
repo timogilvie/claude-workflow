@@ -88,6 +88,7 @@ export interface ChallengeCoverageOptions {
   coverage?: (model: string, stage: ChallengeStage) => number;
   rotationSeed?: string;
   recommendedChallengerModel?: string;
+  preservedChallengerModel?: string;
 }
 
 const CHALLENGE_STAGES: readonly ChallengeStage[] = ['plan', 'implementation', 'review'];
@@ -662,6 +663,13 @@ function resolveChallengerModel(
   selectionOpts?: ChallengerSelectionOptions,
 ): ChallengerSelectionResult {
   const enabledPool = filterDisabledModels(uniqueNonEmpty(pool));
+  const preserved = selectionOpts?.preservedChallengerModel?.trim();
+  if (preserved) {
+    if (preserved !== primaryModel && !isDisabledModel(preserved) && enabledPool.includes(preserved)) {
+      return { model: preserved, selectionReason: 'preserved' };
+    }
+    return { model: null };
+  }
   const trimmed = forced?.trim();
   // Without coverage data a forced challenger is the only signal available.
   // With it, the forced model is demoted to a recommendation so every stage —
@@ -936,6 +944,7 @@ export function pickChallengeModelsWithReason(
     coverage: opts.coverage,
     rotationSeed: opts.rotationSeed,
     recommendedChallengerModel: opts.recommendedChallengerModel,
+    preservedChallengerModel: opts.preservedChallengerModel,
   });
   if (!challengerSelection.model) {
     return withStrictChallengeUnavailable(mergeExclusions(
@@ -967,6 +976,7 @@ export function pickChallengeModelsWithReason(
       coverage: opts.coverage,
       rotationSeed: opts.rotationSeed,
       recommendedChallengerModel: opts.recommendedChallengerModel,
+      preservedChallengerModel: opts.preservedChallengerModel,
     },
   );
   return withStrictChallengeUnavailable(
@@ -1324,6 +1334,7 @@ export function pickChallengeWorkflowsWithReason(
     coverage: opts.coverage,
     rotationSeed: opts.rotationSeed,
     recommendedChallengerModel: opts.recommendedChallengerModel,
+    preservedChallengerModel: opts.preservedChallengerModel,
   });
   if (!challengerSelection.model) {
     return mergeExclusions(
@@ -1389,6 +1400,7 @@ export function pickChallengeWorkflowsWithReason(
       coverage: opts.coverage,
       rotationSeed: opts.rotationSeed,
       recommendedChallengerModel: opts.recommendedChallengerModel,
+      preservedChallengerModel: opts.preservedChallengerModel,
     },
   );
   return mergeExclusions(mergeRejections(result, allRejections), allExclusions);
@@ -1507,6 +1519,7 @@ function buildPairFromRouteSnapshotWithReason(
       coverage: opts.coverage,
       rotationSeed: opts.rotationSeed,
       recommendedChallengerModel: opts.recommendedChallengerModel,
+      preservedChallengerModel: opts.preservedChallengerModel,
     });
 
     if (!selection.pair) {
@@ -1526,6 +1539,7 @@ function buildPairFromRouteSnapshotWithReason(
         coverage: opts.coverage,
         rotationSeed: opts.rotationSeed,
         recommendedChallengerModel: opts.recommendedChallengerModel,
+        preservedChallengerModel: opts.preservedChallengerModel,
       },
     );
     return mergeExclusions(
@@ -1581,6 +1595,7 @@ function buildPairFromRouteSnapshotWithReason(
       coverage: opts.coverage,
       rotationSeed: opts.rotationSeed,
       recommendedChallengerModel: opts.recommendedChallengerModel,
+      preservedChallengerModel: opts.preservedChallengerModel,
     },
   );
   if (!challengerSelection.model) {
@@ -1617,6 +1632,7 @@ function buildPairFromRouteSnapshotWithReason(
       coverage: opts.coverage,
       rotationSeed: opts.rotationSeed,
       recommendedChallengerModel: opts.recommendedChallengerModel,
+      preservedChallengerModel: opts.preservedChallengerModel,
     },
   );
   return mergeExclusions(mergeRejections(result, allRejections), allExclusions);

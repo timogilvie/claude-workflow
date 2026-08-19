@@ -3850,13 +3850,22 @@ finalize_challenge_execution_intent_before_coding() {
     return 0
   fi
 
-  local refresh_title issue_json packet_arg refreshed_plan refreshed_source refreshed_mode refreshed_reason
-  local pinned_stage_arg=()
+  local refresh_title issue_json packet_arg refreshed_plan refreshed_source refreshed_mode refreshed_reason refreshed_fallback_reason
+  local pinned_stage_arg=() preserved_challenger_arg=()
   if [[ -n "$pinned_stage" && "$pinned_stage" != "null" ]]; then
     # Without this the refresh rolls a fresh stage from challenge.stageWeights,
     # which is how an already-selected implementation-stage arm (a Qwen or Kimi
     # coder) became an unrelated plan-stage pair on the way to coding.
     pinned_stage_arg=(--pinned-stage "$pinned_stage")
+  fi
+  local preserved_challenger_key preserved_challenger_model
+  preserved_challenger_key="${issue}_c"
+  preserved_challenger_model=$(read_state_value "" --arg i "$preserved_challenger_key" '.tasks[$i].challengeVariedModel // ""' 2>/dev/null || true)
+  if [[ -z "$preserved_challenger_model" && "$pinned_stage" == "implementation" ]]; then
+    preserved_challenger_model=$(read_state_value "" --arg i "$preserved_challenger_key" '.tasks[$i].coderModel // ""' 2>/dev/null || true)
+  fi
+  if [[ -n "$preserved_challenger_model" && "$preserved_challenger_model" != "null" ]]; then
+    preserved_challenger_arg=(--preserved-challenger-model "$preserved_challenger_model")
   fi
   refresh_title=$(read_state_value "" --arg i "$issue" '.tasks[$i].title // ""')
   if [[ -z "$refresh_title" ]]; then
@@ -3880,10 +3889,12 @@ finalize_challenge_execution_intent_before_coding() {
     --primary-model "$primary_coder" \
     --feature-dir "$feature_dir" \
     "${pinned_stage_arg[@]}" \
+    "${preserved_challenger_arg[@]}" \
     "${packet_arg[@]}" 2>/dev/null || echo "")
   refreshed_source=$(echo "$refreshed_plan" | jq -r '.decisionSource // "bootstrap"' 2>/dev/null || echo "bootstrap")
   refreshed_mode=$(echo "$refreshed_plan" | jq -r '.mode // "single"' 2>/dev/null || echo "single")
   refreshed_reason=$(echo "$refreshed_plan" | jq -r '.reason // empty' 2>/dev/null || echo "")
+  refreshed_fallback_reason=$(echo "$refreshed_plan" | jq -r '.fallbackReason // empty' 2>/dev/null || echo "")
 
   if [[ "$refreshed_source" != "expanded" && "$refreshed_source" != "preserved" ]]; then
     log_warn "$issue → expanded challenge finalization did not use expanded/preserved route (source=$refreshed_source); keeping current challenge state"
@@ -3894,8 +3905,20 @@ finalize_challenge_execution_intent_before_coding() {
   intent_json=$(echo "$refreshed_plan" | jq -c '.challengeExecutionIntent // empty' 2>/dev/null || true)
 
   if [[ "$refreshed_mode" != "challenge" ]]; then
+    if [[ -n "$refreshed_reason" ]]; then
+      state_mutate "$STATE_FILE" \
+        '.tasks[$issue].challengeCollapseReason = $reason
+         | .tasks[$issue].challengeCollapseDetail = $detail
+         | .tasks[$issue].updated = (now | todate)' \
+        --arg issue "$issue" \
+        --arg reason "$refreshed_reason" \
+        --arg detail "Challenge finalization produced no challenge: $refreshed_reason" >/dev/null 2>&1 || true
+    fi
     persist_challenge_execution_intent "$issue" "" "$feature_dir" "$intent_json"
     [[ -n "$refreshed_reason" ]] && log_warn "$issue → challenge finalization produced no challenge ($refreshed_reason)"
+    if [[ "$refreshed_fallback_reason" == "preserved_challenger_ineligible" ]]; then
+      log_warn "$issue → preserved challenger model was ineligible during challenge finalization"
+    fi
     return 0
   fi
 
@@ -3919,6 +3942,34 @@ finalize_challenge_execution_intent_before_coding() {
 
   if [[ -z "$new_primary" || -z "$new_challenger_key" || -z "$new_challenger_model" ]]; then
     log_warn "$issue → expanded challenge finalization returned incomplete pair; keeping current challenge state"
+    return 0
+  fi
+
+  # Compare the varied-stage models, not the coders. Plan/review challenges
+  # intentionally share the coder on both sides.
+  local new_primary_varied new_challenger_varied
+  new_primary_varied=$(echo "$refreshed_plan" | jq -r '.entries[0].variedModel // .entries[0].model // empty' 2>/dev/null)
+  new_challenger_varied=$(echo "$refreshed_plan" | jq -r '.entries[1].variedModel // .entries[1].model // empty' 2>/dev/null)
+  if [[ -n "$new_primary_varied" && "$new_primary_varied" == "$new_challenger_varied" ]] \
+    && ! echo "$intent_json" | jq -e '.intentionallyIdentical == true' >/dev/null 2>&1; then
+    local collapse_reason collapse_detail collapsed_intent
+    collapse_reason="identical-at-varied-stage"
+    collapse_detail="Challenge finalization collapsed to identical ${new_challenge_stage} model ${new_primary_varied}"
+    collapsed_intent=$(echo "$intent_json" | jq -c \
+      --arg reason "$collapse_reason" \
+      --arg detail "$collapse_detail" \
+      'del(.challenger)
+       | .noChallengeReason = $reason
+       | .challengeCollapseReason = $reason
+       | .challengeCollapseDetail = $detail' 2>/dev/null || echo "$intent_json")
+    challenge_cancel_challenger_arm "$issue" "$slug" "$new_challenger_key" "$feature_dir" "$new_challenge_stage" "$new_primary_varied" "$collapse_reason" "$collapse_detail"
+    persist_challenge_execution_intent "$issue" "" "$feature_dir" "$collapsed_intent"
+    log_warn "$issue → challenge finalization cancelled challenger ($collapse_reason)"
+    if [[ "$refreshed_fallback_reason" == "preserved_challenger_ineligible" ]]; then
+      log_warn "$issue → preserved challenger model was ineligible during challenge finalization"
+    fi
+    FINALIZED_CHALLENGE_CODER=""
+    FINALIZED_CHALLENGE_STAGE=""
     return 0
   fi
 
@@ -3947,14 +3998,83 @@ finalize_challenge_execution_intent_before_coding() {
   FINALIZED_CHALLENGE_CODER="$new_primary"
   FINALIZED_CHALLENGE_STAGE="$new_challenge_stage"
 
-  # Report the models the pair actually varies, not the coders.  For a plan- or
-  # review-stage challenge the coders are shared by design, so printing them
-  # made every such pair look degenerate ("gpt-5.5 vs gpt-5.5") in the log.
-  local new_primary_varied new_challenger_varied
-  new_primary_varied=$(echo "$refreshed_plan" | jq -r '.entries[0].variedModel // .entries[0].model // empty' 2>/dev/null)
-  new_challenger_varied=$(echo "$refreshed_plan" | jq -r '.entries[1].variedModel // .entries[1].model // empty' 2>/dev/null)
+  if [[ "$refreshed_fallback_reason" == "preserved_challenger_ineligible" ]]; then
+    log_warn "$issue → preserved challenger model was ineligible during challenge finalization"
+  fi
   log "status" "  $issue: Challenge intent finalized ($refreshed_source route, stage=$new_challenge_stage): $new_primary_varied vs $new_challenger_varied"
   challenge_assert_arms_diverge "$issue" "$new_challenge_stage" "$new_primary_varied" "$new_challenger_varied" "$intent_json"
+}
+
+challenge_cancel_challenger_arm() {
+  local issue="$1" primary_slug="$2" challenger_key="${3:-}" feature_dir="${4:-}" stage="${5:-}" varied_model="${6:-}" reason="${7:-}" detail="${8:-}"
+  [[ -n "$issue" && -n "$reason" ]] || return 1
+
+  local challenger_slug challenger_worktree target target_gone="false" win
+  if [[ -n "$challenger_key" ]]; then
+    challenger_slug=$(read_state_value "" --arg i "$challenger_key" '.tasks[$i].slug // ""' 2>/dev/null || true)
+    challenger_worktree=$(read_state_value "" --arg i "$challenger_key" '.tasks[$i].worktree // ""' 2>/dev/null || true)
+    win="$challenger_key-$challenger_slug"
+
+    target="$(_tmux_task_window_target "$SESSION" "$challenger_key" "$challenger_slug" "${STATE_FILE:-}" "$challenger_worktree" 2>/dev/null || true)"
+    if [[ -z "$target" ]] || ! command -v tmux >/dev/null 2>&1; then
+      target_gone="true"
+    else
+      tmux kill-window -t "$(_tmux_target_join "$SESSION" "$target")" 2>/dev/null || true
+      if ! _tmux_window_target_exists "$SESSION" "$target"; then
+        target_gone="true"
+      fi
+    fi
+
+    if [[ "$target_gone" != "true" ]]; then
+      set_window_attention_state "$win" "needs-user"
+      log_warn "  $challenger_key cleanup could not close tmux window during challenge collapse"
+    fi
+
+    if [[ -n "$challenger_slug" ]]; then
+      local wt_dir="${WORKTREE_ROOT}/${challenger_slug}"
+      [[ -n "$challenger_worktree" ]] && wt_dir="$challenger_worktree"
+      if [[ -d "$wt_dir" ]]; then
+        git -C "$REPO_DIR" worktree remove "$wt_dir" --force >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null || true
+      fi
+
+      local task_branch="task/${challenger_slug}"
+      if [[ "$task_branch" != "main" && "$task_branch" != "master" ]] \
+        && git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$task_branch" 2>/dev/null; then
+        git -C "$REPO_DIR" branch -D "$task_branch" >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null || true
+      fi
+    fi
+
+    git -C "$REPO_DIR" worktree prune >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null || true
+    rm -f "/tmp/wavemill-${SESSION}-${challenger_key}.hook" 2>/dev/null || true
+    reset_retry_count "$SESSION" "$challenger_key" 2>/dev/null || true
+    remove_task_state "$challenger_key"
+    if declare -p CLEANED >/dev/null 2>&1; then
+      CLEANED["$challenger_key"]=1
+    fi
+  fi
+
+  state_mutate "$STATE_FILE" \
+    '.tasks[$issue].challengeCollapseReason = $reason
+     | .tasks[$issue].challengeCollapseDetail = $detail
+     | .tasks[$issue].challenge = false
+     | del(.tasks[$issue].challengeRole,
+           .tasks[$issue].challengePairId,
+           .tasks[$issue].challengeStage,
+           .tasks[$issue].challengeVariedModel,
+           .tasks[$issue].challengeVariedAgent,
+           .tasks[$issue].challengeModel)
+     | .tasks[$issue].updated = (now | todate)' \
+    --arg issue "$issue" \
+    --arg reason "$reason" \
+    --arg detail "$detail" >/dev/null 2>&1 || true
+
+  log_route_lifecycle "challenge_collapsed" \
+    "issue=$issue" \
+    "slug=$primary_slug" \
+    "stage=$stage" \
+    "model=\"$varied_model\"" \
+    "reason=$reason"
+  return 0
 }
 
 # A pair whose two sides run the same model at the varied stage measures
