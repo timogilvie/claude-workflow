@@ -19,7 +19,15 @@ import { listEffectiveModelsForStage } from '../shared/lib/effective-models.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const resolveChallengeTaskTool = resolve(__dirname, 'resolve-challenge-task.ts');
-const CERT_DATE_FRESH = '2026-06-20T00:00:00.000Z';
+// Relative, not absolute. A hardcoded date silently becomes stale once
+// CERTIFICATION_TTL_DAYS elapses from it: '2026-06-20' + 60d expired on
+// 2026-08-19, at which point every seeded native certification was rejected as
+// `stale`, challenge selection fell back to a non-native model, and this suite
+// began failing on every branch including a pristine base.
+const CERT_FRESH_OFFSET_DAYS = 1;
+const CERT_DATE_FRESH = new Date(
+  Date.now() - CERT_FRESH_OFFSET_DAYS * 24 * 60 * 60 * 1000,
+).toISOString();
 
 function writeCertArtifact(
   repoDir: string,
