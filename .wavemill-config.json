@@ -245,7 +245,7 @@
       "implementation": 0.5,
       "review": 0.25
     },
-    "autoMergeWinner": false
+    "autoMergeWinner": true
   },
   "review": {
     "maxIterations": 3,
