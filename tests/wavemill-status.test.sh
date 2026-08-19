@@ -2488,17 +2488,18 @@ cat > "$TMP_DIR/backstage-health.json" <<JSON
   "services": {
     "tend": {
       "status": "healthy",
-      "heartbeatAt": "$(iso_at_offset -10)"
+      "heartbeatAt": "$(iso_at_offset -10)",
+      "failureCount": 2
     }
   }
 }
 JSON
 run_render "$backstage_state" "$WORKTREES_DIR" "$backstage_behavior" "$backstage_output"
 backstage_disabled_render="$(cat "$backstage_output")"
-if [[ "$backstage_disabled_render" == *"Tend: healthy"* && "$backstage_disabled_render" == *"Observer: disabled"* ]]; then
-  pass "backstage health renders disabled observer when no observer service is configured"
+if [[ "$backstage_disabled_render" == *"Tend: healthy"* && "$backstage_disabled_render" == *"retrying:2"* && "$backstage_disabled_render" == *"Observer: disabled"* ]]; then
+  pass "backstage health renders disabled observer and tend retry count"
 else
-  fail "backstage health did not render disabled observer status"
+  fail "backstage health did not render disabled observer status and retry count"
 fi
 
 cat > "$TMP_DIR/queue-health.json" <<'JSON'

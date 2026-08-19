@@ -4,6 +4,10 @@ import { fileURLToPath } from 'node:url';
 import type { AgentMessage, Message } from './messages.ts';
 import type { AgentContext, LoopStopReason, WavemillLoopConfig } from './loop.ts';
 import { runWavemillLoop } from './loop.ts';
+import {
+  ContextWindowExceededError,
+  ContextWindowUnverifiableError,
+} from './context-window-guard.ts';
 import { REVIEW_MAX_OUTPUT_TOKENS } from './output-limits.ts';
 import { TranscriptWriter, type TranscriptEvent, type TranscriptToolResult } from './transcript.ts';
 import {
@@ -325,37 +329,45 @@ export async function runNativeReview(
 
   const maxRetries = options.maxRetries ?? 1;
   const cleanupTracker = createCleanupTracker();
-  const loopResult = await nativeReviewDeps.runWavemillLoop({
-    model: modelConfig,
-    context: loopContext,
-    maxTokens: REVIEW_MAX_OUTPUT_TOKENS,
-    // AgentMessage and Message are structurally compatible at runtime; pi-agent-core
-    // exports diverged nominal types so a direct cast is required.
-    convertToLlm: (messages) => messages as unknown as Message[],
-    afterToolCall: gitAfterToolCall,
-    toolPolicy: {
-      phase: 'review',
-      worktreePath: repoDir,
-      registry: registry.list(),
-      config: {
-        pathFieldsByTool: {
-          ...READ_ONLY_PATH_FIELDS,
-          ...gitToolPolicyConfig.pathFieldsByTool,
+  let loopResult;
+  try {
+    loopResult = await nativeReviewDeps.runWavemillLoop({
+      model: modelConfig,
+      context: loopContext,
+      maxTokens: REVIEW_MAX_OUTPUT_TOKENS,
+      // AgentMessage and Message are structurally compatible at runtime; pi-agent-core
+      // exports diverged nominal types so a direct cast is required.
+      convertToLlm: (messages) => messages as unknown as Message[],
+      afterToolCall: gitAfterToolCall,
+      toolPolicy: {
+        phase: 'review',
+        worktreePath: repoDir,
+        registry: registry.list(),
+        config: {
+          pathFieldsByTool: {
+            ...READ_ONLY_PATH_FIELDS,
+            ...gitToolPolicyConfig.pathFieldsByTool,
+          },
         },
       },
-    },
-    onEvent: (event) => {
-      const derived = transcriptWriter.handleEvent(event);
-      if (derived) {
-        transcriptEvents.push(derived);
-      }
-    },
-    budget: {
-      maxTurns: maxRetries + 1,
-      maxToolCalls: 12,
-      maxWallClockMs: options.timeout ?? 300_000,
-    },
-  });
+      onEvent: (event) => {
+        const derived = transcriptWriter.handleEvent(event);
+        if (derived) {
+          transcriptEvents.push(derived);
+        }
+      },
+      budget: {
+        maxTurns: maxRetries + 1,
+        maxToolCalls: 12,
+        maxWallClockMs: options.timeout ?? 300_000,
+      },
+    });
+  } catch (error) {
+    if (error instanceof ContextWindowExceededError || error instanceof ContextWindowUnverifiableError) {
+      return nativeReviewFailure(context, 'native-context-window-exceeded', error.message);
+    }
+    throw error;
+  }
 
   const cleanupReason = cleanupReasonForStopReason(loopResult.stopReason);
   if (cleanupReason) {

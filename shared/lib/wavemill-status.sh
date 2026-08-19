@@ -1742,7 +1742,7 @@ queue_health_dashboard_status() {
 }
 
 backstage_health_dashboard_line() {
-  local state_file="${1:-}" state_dir health_file tend_status observer_status heartbeat_at heartbeat_age queue_status_line
+  local state_file="${1:-}" state_dir health_file tend_status observer_status heartbeat_at heartbeat_age queue_status_line tend_failure_count
   [[ -n "$state_file" ]] || return 1
   state_dir="$(dirname "$state_file" 2>/dev/null || echo '')"
   [[ -n "$state_dir" ]] || return 1
@@ -1757,6 +1757,10 @@ backstage_health_dashboard_line() {
   heartbeat_at="$(jq -r '.services.tend.heartbeatAt // empty' "$health_file" 2>/dev/null || true)"
   if heartbeat_age="$(format_backstage_heartbeat_age "$heartbeat_at" 2>/dev/null)"; then
     printf ' (%s)' "$heartbeat_age"
+  fi
+  tend_failure_count="$(jq -r '.services.tend.failureCount // 0' "$health_file" 2>/dev/null || echo 0)"
+  if [[ "$tend_failure_count" =~ ^[0-9]+$ ]] && (( tend_failure_count > 0 )); then
+    printf ' retrying:%s' "$tend_failure_count"
   fi
   if [[ -n "$observer_status" ]]; then
     printf ' │ Observer: %b' "$(format_backstage_service_status "$observer_status")"

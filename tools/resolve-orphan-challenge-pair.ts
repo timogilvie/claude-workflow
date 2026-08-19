@@ -2,6 +2,7 @@
 
 import { runTool } from '../shared/lib/tool-runner.ts';
 import { resolveUnresolvablePair } from '../shared/lib/challenge-pair-resolver.ts';
+import { isUnresolvableReason, UNRESOLVABLE_REASONS } from '../shared/lib/tend-challenge-gate.ts';
 
 runTool({
   name: 'resolve-orphan-challenge-pair',
@@ -15,6 +16,7 @@ runTool({
   examples: [
     'npx tsx tools/resolve-orphan-challenge-pair.ts --pair-id HOK-2350 --repo-dir . --dry-run',
     'npx tsx tools/resolve-orphan-challenge-pair.ts --pair-id HOK-2351 --reason sibling-eval-hard-failed --repo-dir .',
+    'npx tsx tools/resolve-orphan-challenge-pair.ts --pair-id HOK-2352 --reason both-challenge-aborted --repo-dir . --dry-run',
   ],
   async run({ args }) {
     const pairId = (args['pair-id'] as string | undefined)?.trim();
@@ -25,14 +27,14 @@ runTool({
       throw new Error('--pair-id is required');
     }
 
-    if (reason && !['orphan-sibling', 'sibling-eval-hard-failed', 'both-eval-hard-failed'].includes(reason)) {
-      throw new Error(`Unsupported --reason value: ${reason}`);
+    if (reason && !isUnresolvableReason(reason)) {
+      throw new Error(`Unsupported --reason value: ${reason}. Supported values: ${UNRESOLVABLE_REASONS.join(', ')}`);
     }
 
     const result = resolveUnresolvablePair({
       pairId,
       repoDir,
-      reason: reason as 'orphan-sibling' | 'sibling-eval-hard-failed' | 'both-eval-hard-failed' | undefined,
+      reason,
       dryRun: args['dry-run'] === true,
     });
 

@@ -262,9 +262,24 @@ export function resolveChallengeSide(input: {
   branchName?: string;
   issueId?: string;
   challengePairId?: string;
+  /**
+   * Authoritative side supplied by the launcher.
+   *
+   * `issueId` is the *Linear* issue, which both arms of a pair share, so it
+   * cannot distinguish them: looking up `HOK-1234` resolves to the primary even
+   * when the run is the challenger on `task/<slug>-challenger`. The branch then
+   * derives `challenger`, the two disagree, and a valid pair is invalidated as
+   * `state_vs_derived_side_mismatch`.
+   *
+   * The launcher knows the side from the task key, so prefer it over inference.
+   */
+  explicitSide?: ChallengeSide;
 }): ChallengeSideResolution {
   if (!input.challengePairId) return {};
   const slug = input.slug ?? input.branchName;
+  if (input.explicitSide) {
+    return { side: input.explicitSide, canonicalSide: input.explicitSide };
+  }
   const canonicalSide = loadChallengeRoleFromState(input.repoDir, input.issueId, input.challengePairId);
   const fallbackSide = deriveChallengeSideFromBranch(slug, input.issueId, input.challengePairId);
   if (canonicalSide) {

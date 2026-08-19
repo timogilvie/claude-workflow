@@ -23,6 +23,7 @@ import {
   type ChallengeGateOptions,
   type ChallengeLoserCleanupCandidate,
 } from './tend-challenge-gate.ts';
+import { isTransientErrorText, retryTransient, TransientError } from './transient-retry.ts';
 
 export interface TendCandidate {
   number: number;
@@ -60,7 +61,7 @@ export interface MergeExecutionResult {
 }
 
 export interface MergeExecutionDeps {
-  shellRunner: (cmd: string, opts?: { encoding?: string; cwd?: string }) => string;
+  shellRunner: (cmd: string, opts?: { encoding?: string; cwd?: string; timeout?: number }) => string;
   readyChecker: (prNumber: number, repoDir: string) => Promise<{ ready: boolean; reason?: string }>;
   healthChecker: HealthChecker;
   acquireMerging: (prNumber: number) => void;
@@ -124,6 +125,7 @@ const TRANSIENT_REQUIRED_CHECKS_EXPECTED = 'required status checks are expected'
 const MERGE_RETRY_MAX_ATTEMPTS = 8;
 const MERGE_RETRY_BACKOFF_MS = 30_000;
 const MERGE_RETRY_WINDOW_MS = 5 * 60 * 1000;
+const GH_COMMAND_TIMEOUT_MS = 120_000;
 
 interface PrMergeDiagnostics {
   mergeStateStatus?: string;
@@ -133,31 +135,45 @@ interface PrMergeDiagnostics {
   unavailableReason?: string;
 }
 
-export async function defaultPrFetcher(integrationBranch: string, repoDir: string): Promise<GhPrListEntry[]> {
-  validateIntegrationBranch(integrationBranch);
+export function createPrFetcher(deps: {
+  exec?: typeof execShellCommand;
+  sleep?: (ms: number) => Promise<void>;
+  random?: () => number;
+} = {}): PrFetcher {
+  const exec = deps.exec ?? execShellCommand;
+  return async (integrationBranch: string, repoDir: string): Promise<GhPrListEntry[]> => {
+    validateIntegrationBranch(integrationBranch);
 
-  const output = String(execShellCommand(
-    [
-      'gh',
-      'pr',
-      'list',
-      '--base',
-      escapeShellArg(integrationBranch),
-      '--state',
-      'open',
-      '--json',
-      'number,title,headRefName,createdAt,isDraft,labels,body',
-    ].join(' '),
-    { encoding: 'utf-8', cwd: repoDir },
-  ));
-  const parsed = JSON.parse(output) as unknown;
+    return retryTransient(
+      () => {
+        const output = String(exec(
+          [
+            'gh',
+            'pr',
+            'list',
+            '--base',
+            escapeShellArg(integrationBranch),
+            '--state',
+            'open',
+            '--json',
+            'number,title,headRefName,createdAt,isDraft,labels,body',
+          ].join(' '),
+          { encoding: 'utf-8', cwd: repoDir, timeout: GH_COMMAND_TIMEOUT_MS },
+        ));
+        const parsed = JSON.parse(output) as unknown;
 
-  if (!Array.isArray(parsed)) {
-    throw new Error('tend: gh pr list returned non-array JSON');
-  }
+        if (!Array.isArray(parsed)) {
+          throw new Error('tend: gh pr list returned non-array JSON');
+        }
 
-  return parsed as GhPrListEntry[];
+        return parsed as GhPrListEntry[];
+      },
+      { label: 'gh pr list', sleep: deps.sleep, random: deps.random },
+    );
+  };
 }
+
+export const defaultPrFetcher: PrFetcher = createPrFetcher();
 
 export async function defaultHealthChecker(integrationBranch: string, repoDir: string): Promise<IntegrationHealth> {
   try {
@@ -172,7 +188,7 @@ export async function defaultHealthChecker(integrationBranch: string, repoDir: s
 
     let checkRuns: Array<{ name?: string; conclusion?: string | null }>;
     try {
-      checkRuns = readCheckRuns(repo, resolution.sha, repoDir);
+      checkRuns = await readCheckRuns(repo, resolution.sha, repoDir);
     } catch (error) {
       const remoteResolution = resolveRemoteIntegrationBranchSha(integrationBranch, repoDir);
       if (
@@ -183,7 +199,7 @@ export async function defaultHealthChecker(integrationBranch: string, repoDir: s
       ) {
         throw error;
       }
-      checkRuns = readCheckRuns(repo, remoteResolution.sha, repoDir);
+      checkRuns = await readCheckRuns(repo, remoteResolution.sha, repoDir);
     }
 
     for (const checkRun of checkRuns) {
@@ -199,13 +215,22 @@ export async function defaultHealthChecker(integrationBranch: string, repoDir: s
   }
 }
 
-function readCheckRuns(repo: string, sha: string, repoDir: string): Array<{ name?: string; conclusion?: string | null }> {
-  const raw = String(execShellCommand(
-    `gh api ${escapeShellArg(`repos/${repo}/commits/${sha}/check-runs`)}`,
-    { encoding: 'utf-8', cwd: repoDir },
-  ));
-  const parsed = JSON.parse(raw) as { check_runs?: Array<{ name?: string; conclusion?: string | null }> };
-  return Array.isArray(parsed.check_runs) ? parsed.check_runs : [];
+async function readCheckRuns(
+  repo: string,
+  sha: string,
+  repoDir: string,
+): Promise<Array<{ name?: string; conclusion?: string | null }>> {
+  return retryTransient(
+    () => {
+      const raw = String(execShellCommand(
+        `gh api ${escapeShellArg(`repos/${repo}/commits/${sha}/check-runs`)}`,
+        { encoding: 'utf-8', cwd: repoDir, timeout: GH_COMMAND_TIMEOUT_MS },
+      ));
+      const parsed = JSON.parse(raw) as { check_runs?: Array<{ name?: string; conclusion?: string | null }> };
+      return Array.isArray(parsed.check_runs) ? parsed.check_runs : [];
+    },
+    { label: 'gh check-runs' },
+  );
 }
 
 function isMissingCommitCheckRunsError(error: unknown): boolean {
@@ -352,13 +377,28 @@ export async function executeMerge(
 
   validateBranchName(candidate.headBranch, 'PR branch');
 
-  const activeMerges = listMergingPrs(options.repoDir, deps.shellRunner);
+  let activeMerges: number[];
+  try {
+    activeMerges = await listMergingPrs(options.repoDir, deps);
+  } catch (error) {
+    console.warn(`tend: merge-lane probe failed for PR #${candidate.number}: ${errorMessage(error)}`);
+    return {
+      status: 'skipped',
+      prNumber: candidate.number,
+      phase: 'merge-lane-probe',
+      failureExcerpt: truncateOutput(outputFromError(error)),
+      haltLoop: false,
+    };
+  }
   if (activeMerges.length > 0) {
     return { status: 'skipped', prNumber: candidate.number, haltLoop: false };
   }
 
   try {
-    deps.acquireMerging(candidate.number);
+    await retryTransient(() => deps.acquireMerging(candidate.number), {
+      label: 'set merging label',
+      sleep: deps.retrySleep,
+    });
   } catch (error) {
     try {
       deps.restoreReady(candidate.number);
@@ -406,7 +446,7 @@ export async function executeMerge(
           candidate.number,
           options.repoDir,
           deps.shellRunner,
-          { requiredChecks: integrationConfig.requiredChecks },
+          { requiredChecks: integrationConfig.requiredChecks, retrySleep: deps.retrySleep },
         );
         if (checks.outcome !== 'pass') {
           return block('checks', checks.summary);
@@ -446,7 +486,14 @@ export async function executeMerge(
           }
         }
 
-        deps.releaseMerged(candidate.number);
+        try {
+          await retryTransient(() => deps.releaseMerged(candidate.number), {
+            label: 'set merged label',
+            sleep: deps.retrySleep,
+          });
+        } catch (error) {
+          console.warn(`tend: failed to mark PR #${candidate.number} merged after merge completed: ${errorMessage(error)}`);
+        }
         return null;
       },
       deps.shellRunner,
@@ -468,12 +515,16 @@ export async function executeMerge(
 
   if (health.state === 'unhealthy') {
     const reason = health.reason || 'integration branch is unhealthy after merge';
-    postFailureComment(
-      candidate.number,
-      buildFailureComment('integration', `Integration branch \`${integrationBranch}\` is unhealthy after merge: ${reason}`),
-      options.repoDir,
-      deps.shellRunner,
-    );
+    try {
+      postFailureComment(
+        candidate.number,
+        buildFailureComment('integration', `Integration branch \`${integrationBranch}\` is unhealthy after merge: ${reason}`),
+        options.repoDir,
+        deps.shellRunner,
+      );
+    } catch (error) {
+      console.warn(`tend: failed to post integration halt comment for PR #${candidate.number}: ${errorMessage(error)}`);
+    }
     return {
       status: 'halted',
       prNumber: candidate.number,
@@ -555,18 +606,23 @@ async function withScratchWorktree<T>(
   }
 }
 
-function listMergingPrs(repoDir: string, shellRunner: MergeExecutionDeps['shellRunner']): number[] {
-  const output = shellRunner(
-    `gh pr list --label ${escapeShellArg(WM_LABELS.merging)} --state open --json number`,
-    { encoding: 'utf-8', cwd: repoDir },
+async function listMergingPrs(repoDir: string, deps: MergeExecutionDeps): Promise<number[]> {
+  return retryTransient(
+    () => {
+      const output = deps.shellRunner(
+        `gh pr list --label ${escapeShellArg(WM_LABELS.merging)} --state open --json number`,
+        { encoding: 'utf-8', cwd: repoDir, timeout: GH_COMMAND_TIMEOUT_MS },
+      );
+      const parsed = JSON.parse(String(output)) as unknown;
+      if (!Array.isArray(parsed)) {
+        throw new Error('tend: gh pr list returned non-array JSON');
+      }
+      return parsed
+        .map((entry) => (typeof entry === 'object' && entry !== null ? (entry as { number?: unknown }).number : null))
+        .filter((number): number is number => typeof number === 'number');
+    },
+    { label: 'gh pr list merging', sleep: deps.retrySleep },
   );
-  const parsed = JSON.parse(String(output)) as unknown;
-  if (!Array.isArray(parsed)) {
-    throw new Error('tend: gh pr list returned non-array JSON');
-  }
-  return parsed
-    .map((entry) => (typeof entry === 'object' && entry !== null ? (entry as { number?: unknown }).number : null))
-    .filter((number): number is number => typeof number === 'number');
 }
 
 function rebaseAndPush(
@@ -659,14 +715,14 @@ export async function waitForChecks(
   prNumber: number,
   repoDir: string,
   shellRunner: MergeExecutionDeps['shellRunner'],
-  options: { timeoutMs?: number; requiredChecks?: string[] } = {},
+  options: { timeoutMs?: number; requiredChecks?: string[]; retrySleep?: (ms: number) => Promise<void> } = {},
 ): Promise<CheckWaitResult> {
   const timeoutMs = options.timeoutMs ?? 30 * 60 * 1000;
   const requiredChecks = options.requiredChecks ?? [];
   const deadline = Date.now() + timeoutMs;
 
   while (true) {
-    const output = readPrChecks(prNumber, repoDir, shellRunner);
+    const output = await readPrChecks(prNumber, repoDir, shellRunner, options.retrySleep ?? sleep);
     const checks = parseCheckRuns(output);
     const failed = checks.find((check) => isFailingCheck(check));
     if (failed) {
@@ -690,19 +746,32 @@ export async function waitForChecks(
   }
 }
 
-function readPrChecks(
+async function readPrChecks(
   prNumber: number,
   repoDir: string,
   shellRunner: MergeExecutionDeps['shellRunner'],
-): string {
-  const output = shellRunner(
-    `gh pr checks ${prNumber} --json name,state,bucket 2>&1 || true`,
-    { encoding: 'utf-8', cwd: repoDir },
+  retrySleep: (ms: number) => Promise<void>,
+): Promise<string> {
+  return retryTransient(
+    () => {
+      const output = String(shellRunner(
+        `gh pr checks ${prNumber} --json name,state,bucket 2>&1 || true`,
+        { encoding: 'utf-8', cwd: repoDir, timeout: GH_COMMAND_TIMEOUT_MS },
+      ));
+      if (output.includes('no checks reported')) {
+        return '[]';
+      }
+      try {
+        JSON.parse(output);
+      } catch (error) {
+        if (isTransientErrorText(output)) {
+          throw new TransientError(output, { cause: error });
+        }
+      }
+      return output;
+    },
+    { label: 'gh pr checks', sleep: retrySleep },
   );
-  if (String(output).includes('no checks reported')) {
-    return '[]';
-  }
-  return output;
 }
 
 async function defaultRunReadyCheck(
@@ -795,7 +864,10 @@ async function mergeWithTransientRetry(
         return;
       } catch (error) {
         const output = outputFromError(error);
-        if (!isRequiredChecksExpectedMergeError(output)) {
+        if (isAlreadyMergedOutput(output)) {
+          return;
+        }
+        if (!isRequiredChecksExpectedMergeError(output) && !isTransientErrorText(output)) {
           throw error;
         }
 
@@ -830,6 +902,10 @@ export function isRequiredChecksExpectedMergeError(output: string): boolean {
   return output.toLowerCase().includes(TRANSIENT_REQUIRED_CHECKS_EXPECTED);
 }
 
+function isAlreadyMergedOutput(output: string): boolean {
+  return /\balready merged\b|pull request .* was merged/i.test(output);
+}
+
 function readPrMergeDiagnostics(
   prNumber: number,
   repoDir: string,
@@ -838,7 +914,7 @@ function readPrMergeDiagnostics(
   try {
     const output = shellRunner(
       `gh pr view ${prNumber} --json mergeStateStatus,statusCheckRollup,headRefOid,baseRefOid`,
-      { encoding: 'utf-8', cwd: repoDir },
+      { encoding: 'utf-8', cwd: repoDir, timeout: GH_COMMAND_TIMEOUT_MS },
     );
     const parsed = JSON.parse(String(output)) as unknown;
     if (!parsed || typeof parsed !== 'object') {
@@ -867,7 +943,9 @@ function buildTransientMergeFailureDiagnostics(
   requiredChecks: string[],
 ): string {
   const lines = [
-    'GitHub continued to report a transient required-checks protection error after Wavemill checks passed.',
+    isRequiredChecksExpectedMergeError(githubError)
+      ? 'GitHub continued to report a transient required-checks protection error after Wavemill checks passed.'
+      : 'GitHub continued to report a transient merge error after Wavemill checks passed.',
     '',
     'Exact GitHub error:',
     githubError || '(no output)',

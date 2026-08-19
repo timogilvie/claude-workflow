@@ -84,6 +84,10 @@ Set `mill.baseBranch` to the same branch as `integration.integrationBranch`. Tha
 
 When `integration.useMillSession = true`, the tend loop runs in the `backstage` tmux window inside the existing mill session.
 
+## Resilience
+
+The tend loop treats transient GitHub/network errors as retryable: source `gh` calls use bounded exponential backoff, and a failed loop iteration records `failureCount`, `lastError`, and `lastErrorAt` in `.wavemill/backstage-health.json` before continuing. The backstage watchdog restarts a dead tend loop on a widening backoff from 60s up to 15m and keeps retrying after escalating to `needs-user` for visibility. Manual recovery remains the same command shown in the health detail: restart `npx tsx tools/tend.ts --loop --repo-dir <repo>` in tmux.
+
 ## Branch Protection
 
 Recommended GitHub settings for `auto/integration`:

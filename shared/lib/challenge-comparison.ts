@@ -51,6 +51,9 @@ export type ChallengeTerminalReason =
   | 'primary_eval_hard_failed'
   | 'challenger_eval_hard_failed'
   | 'both_eval_hard_failed'
+  | 'primary_challenge_aborted'
+  | 'challenger_challenge_aborted'
+  | 'both_challenge_aborted'
   | 'orphan_pair'
   | 'provenance_validation_failed';
 export type ChallengeStageRole = 'planner' | 'coder' | 'reviewer';

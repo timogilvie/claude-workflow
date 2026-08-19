@@ -1,7 +1,7 @@
 import type { AgentMessage } from '@earendil-works/pi-agent-core';
 
 const DEFAULT_COMPACTABLE_TOOLS = new Set(['read_file', 'search_text', 'git_diff']);
-const TOKEN_BYTES = 4;
+export const TOKEN_BYTES = 4;
 
 export type CompactionLimitReason = 'byte_limit' | 'token_limit' | 'byte_and_token_limit';
 
@@ -44,7 +44,7 @@ function byteLength(text: string): number {
   return Buffer.byteLength(text, 'utf8');
 }
 
-function estimateTokensFromBytes(bytes: number): number {
+export function estimateTokensFromBytes(bytes: number): number {
   return Math.ceil(bytes / TOKEN_BYTES);
 }
 

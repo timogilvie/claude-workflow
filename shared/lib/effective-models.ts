@@ -24,6 +24,7 @@ export type EffectiveModelAvailabilityReason =
   | 'blocked-lifecycle'
   | 'disabled'
   | 'stage-incompatible'
+  | 'tool-support-insufficient'
   | 'routing-ineligible'
   | 'policy-excluded'
   | 'runtime-unavailable';

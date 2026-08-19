@@ -20,6 +20,12 @@ import { computeModelCost, type ModelPricing } from '../workflow-cost.ts';
 import type { ModelRegistry } from '../model-registry.ts';
 import { assertToolCompat } from './tool-compat-validator.ts';
 import {
+  assertPromptFitsContextWindow,
+  resolveContextWindowLimit,
+  ContextWindowUnverifiableError,
+  type ContextWindowLimit,
+} from './context-window-guard.ts';
+import {
   transformContext,
   type ReplayCompactionEvent,
   type ReplayCompactionOptions,
@@ -212,7 +218,7 @@ export function resolveMaxOutputTokens(config: Pick<WavemillLoopConfig, 'maxToke
   return config.maxTokens ?? config.model.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
 }
 
-function toPiModel(config: ProviderModelConfig, maxTokens: number): Model<string> {
+function toPiModel(config: ProviderModelConfig, maxTokens: number, contextWindow?: number): Model<string> {
   const requestModelId = toProviderRequestModelId(config);
   return {
     id: requestModelId,
@@ -225,7 +231,7 @@ function toPiModel(config: ProviderModelConfig, maxTokens: number): Model<string
     reasoning: config.reasoning ?? false,
     input: config.input ?? ['text'],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: config.contextWindow ?? 200_000,
+    contextWindow: contextWindow ?? config.contextWindow ?? 200_000,
     maxTokens,
   } as unknown as Model<string>;
 }
@@ -336,21 +342,43 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
       executionMode: tool.executionMode ?? 'sequential',
     }));
 
-  if (toolsForCompat.length > 0 && isNativeCompatProvider(config.model.provider)) {
-    // Native providers must always be validated. Unknown transports throw via
-    // `assertToolCompat`'s transport-capability lookup, so adding a new transport
-    // to `ProviderModelConfig` cannot silently bypass the fail-fast gate.
-    assertToolCompat({
-      model: resolveRegistryModelId(config.model),
-      provider: config.model.provider as 'openai' | 'openrouter',
-      transport: config.model.api,
-      tools: toolsForCompat,
-      registry: config.compatRegistry,
-    });
+  let contextWindowLimit: ContextWindowLimit | undefined;
+  try {
+    if (toolsForCompat.length > 0 && isNativeCompatProvider(config.model.provider)) {
+      // Native providers must always be validated. Unknown transports throw via
+      // `assertToolCompat`'s transport-capability lookup, so adding a new transport
+      // to `ProviderModelConfig` cannot silently bypass the fail-fast gate.
+      assertToolCompat({
+        model: resolveRegistryModelId(config.model),
+        provider: config.model.provider as 'openai' | 'openrouter',
+        transport: config.model.api,
+        tools: toolsForCompat,
+        registry: config.compatRegistry,
+      });
+    }
+
+    contextWindowLimit = resolveContextWindowLimit(config.model, config.compatRegistry);
+    if (contextWindowLimit) {
+      // When replay compaction is configured, this checks the untransformed
+      // history, so it is conservative relative to the provider request.
+      assertPromptFitsContextWindow({
+        phase: config.toolPolicy?.phase,
+        model: config.model,
+        context,
+        reservedOutputTokens: maxTokens,
+        registry: config.compatRegistry,
+        limit: contextWindowLimit,
+      });
+    } else if (isNativeCompatProvider(config.model.provider)) {
+      throw new ContextWindowUnverifiableError(config.toolPolicy?.phase ?? 'native', config.model);
+    }
+  } catch (error) {
+    composed.cleanup();
+    throw error;
   }
 
   const piConfig: AgentLoopConfig = {
-    model: toPiModel(config.model, maxTokens),
+    model: toPiModel(config.model, maxTokens, contextWindowLimit?.limit),
     convertToLlm,
     temperature,
     maxTokens,
