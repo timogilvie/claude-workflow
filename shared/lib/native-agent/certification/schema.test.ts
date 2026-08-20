@@ -219,9 +219,10 @@ describe('isCertificationFresh', () => {
   });
 
   it('returns true exactly at TTL boundary minus 1ms', () => {
-    const certifiedAt = new Date(Date.now() - (CERTIFICATION_TTL_DAYS * 24 * 60 * 60 * 1000 - 1));
+    const now = new Date();
+    const certifiedAt = new Date(now.getTime() - (CERTIFICATION_TTL_DAYS * 24 * 60 * 60 * 1000 - 1));
     const artifact = makeValidArtifact({ certifiedAt: certifiedAt.toISOString() });
-    assert.ok(isCertificationFresh(artifact, new Date()));
+    assert.ok(isCertificationFresh(artifact, now));
   });
 
   it('expiresAt takes precedence over derived TTL — future expiresAt on old certifiedAt', () => {
