@@ -60,6 +60,7 @@ describe('openrouter alias audit', () => {
     });
 
     assert.equal(report.checked, 4);
+    assert.equal(report.schemaVersion, '2');
     assert.equal(report.selectableFindings, 0);
     assert.deepEqual(report.findings.map((finding) => [finding.alias, finding.reason, finding.selectable]), [
       ['deepseek-coder-v2', 'unresolved-openrouter-id', false],
@@ -90,5 +91,134 @@ describe('openrouter alias audit', () => {
     assert.equal(report.findings[0]?.alias, 'qwen-3-coder');
     assert.equal(report.findings[0]?.reason, 'not-found-in-openrouter');
     assert.equal(report.findings[0]?.selectable, true);
+  });
+
+  it('reports overstated registry context windows but accepts equal or conservative declarations', () => {
+    const registry: ModelRegistry = {
+      models: {
+        'qwen-3-coder': makeModel({
+          contextWindowTokens: 200_000,
+          supportedModel: { lifecycle: 'supported', stages: ['coding'], providerNativeId: 'qwen/qwen3-coder' },
+        }),
+        'qwen-3-235b': makeModel({
+          contextWindowTokens: 131_072,
+          supportedModel: { lifecycle: 'supported', stages: ['coding'], providerNativeId: 'qwen/qwen3-235b-a22b-2507' },
+        }),
+        'kimi-k2': makeModel({
+          contextWindowTokens: 65_536,
+          supportedModel: { lifecycle: 'supported', stages: ['coding'], providerNativeId: 'moonshotai/kimi-k2' },
+        }),
+      },
+      ladders: {},
+    };
+    const report = auditOpenRouterAliases({
+      registry,
+      openRouterModels: new Map<string, OpenRouterModel>([
+        ['qwen/qwen3-coder', { id: 'qwen/qwen3-coder', context_length: 131_072 }],
+        ['qwen/qwen3-235b-a22b-2507', { id: 'qwen/qwen3-235b-a22b-2507', context_length: 131_072 }],
+        ['moonshotai/kimi-k2', { id: 'moonshotai/kimi-k2', context_length: 131_072 }],
+      ]),
+      now: new Date('2026-08-18T00:00:00.000Z'),
+      catalogSource: 'file',
+    });
+
+    assert.deepEqual(report.findings.map((finding) => [finding.alias, finding.reason]), [
+      ['qwen-3-coder', 'context-window-overstated'],
+    ]);
+    assert.match(report.findings[0]?.detail ?? '', /200000/);
+    assert.match(report.findings[0]?.detail ?? '', /131072/);
+  });
+
+  it('uses top_provider context length and skips context checks when provider context is absent', () => {
+    const registry: ModelRegistry = {
+      models: {
+        'qwen-3-coder': makeModel({
+          contextWindowTokens: 200_000,
+          supportedModel: { lifecycle: 'supported', stages: ['coding'], providerNativeId: 'qwen/qwen3-coder' },
+        }),
+        'qwen-3-235b': makeModel({
+          contextWindowTokens: 200_000,
+          supportedModel: { lifecycle: 'supported', stages: ['coding'], providerNativeId: 'qwen/qwen3-235b-a22b-2507' },
+        }),
+      },
+      ladders: {},
+    };
+    const report = auditOpenRouterAliases({
+      registry,
+      openRouterModels: new Map<string, OpenRouterModel>([
+        ['qwen/qwen3-coder', { id: 'qwen/qwen3-coder', top_provider: { context_length: 131_072 } }],
+        ['qwen/qwen3-235b-a22b-2507', { id: 'qwen/qwen3-235b-a22b-2507' }],
+      ]),
+      now: new Date('2026-08-18T00:00:00.000Z'),
+      catalogSource: 'file',
+    });
+
+    assert.deepEqual(report.findings.map((finding) => [finding.alias, finding.reason]), [
+      ['qwen-3-coder', 'context-window-overstated'],
+    ]);
+  });
+
+  it('reports catalog tool-support mismatches and skips absent supported_parameters', () => {
+    const registry: ModelRegistry = {
+      models: {
+        'qwen-3-coder': makeModel({
+          toolSupport: 'basic',
+          supportedModel: { lifecycle: 'supported', stages: ['coding'], providerNativeId: 'qwen/qwen3-coder' },
+        }),
+        'qwen-3-235b': makeModel({
+          toolSupport: 'full',
+          supportedModel: { lifecycle: 'supported', stages: ['coding'], providerNativeId: 'qwen/qwen3-235b-a22b-2507' },
+        }),
+        'kimi-k2': makeModel({
+          toolSupport: 'none',
+          supportedModel: { lifecycle: 'blocked', stages: ['coding'], providerNativeId: 'moonshotai/kimi-k2' },
+        }),
+      },
+      ladders: {},
+    };
+    const report = auditOpenRouterAliases({
+      registry,
+      openRouterModels: new Map<string, OpenRouterModel>([
+        ['qwen/qwen3-coder', { id: 'qwen/qwen3-coder', supported_parameters: ['temperature'] }],
+        ['qwen/qwen3-235b-a22b-2507', { id: 'qwen/qwen3-235b-a22b-2507' }],
+        ['moonshotai/kimi-k2', { id: 'moonshotai/kimi-k2', supported_parameters: ['temperature'] }],
+      ]),
+      now: new Date('2026-08-18T00:00:00.000Z'),
+      catalogSource: 'file',
+    });
+
+    assert.deepEqual(report.findings.map((finding) => [finding.alias, finding.reason, finding.selectable]), [
+      ['qwen-3-coder', 'tool-support-mismatch', true],
+    ]);
+  });
+
+  it('reports blocked provider drift as non-selectable', () => {
+    const registry: ModelRegistry = {
+      models: {
+        'qwen-3-coder': makeModel({
+          contextWindowTokens: 200_000,
+          supportedModel: { lifecycle: 'blocked', stages: ['coding'], providerNativeId: 'qwen/qwen3-coder' },
+        }),
+      },
+      ladders: {},
+    };
+    const report = auditOpenRouterAliases({
+      registry,
+      openRouterModels: new Map<string, OpenRouterModel>([
+        ['qwen/qwen3-coder', {
+          id: 'qwen/qwen3-coder',
+          context_length: 131_072,
+          supported_parameters: ['temperature'],
+        }],
+      ]),
+      now: new Date('2026-08-18T00:00:00.000Z'),
+      catalogSource: 'file',
+    });
+
+    assert.equal(report.selectableFindings, 0);
+    assert.deepEqual(report.findings.map((finding) => [finding.reason, finding.selectable]), [
+      ['context-window-overstated', false],
+      ['tool-support-mismatch', false],
+    ]);
   });
 });
