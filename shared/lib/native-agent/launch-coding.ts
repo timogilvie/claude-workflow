@@ -790,6 +790,12 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
       maxTokens: CODING_MAX_OUTPUT_TOKENS,
       convertToLlm: (messages) => messages as unknown as Message[],
       signal: options.signal,
+      promptSizeLog: options.repoDir ? {
+        repoDir: options.repoDir,
+        stage: 'coding',
+        session: options.session,
+        issue: options.issue,
+      } : undefined,
       afterToolCall: async (toolContext, signal) => {
         await intendedFilesAfterToolCall(toolContext, tracker);
 

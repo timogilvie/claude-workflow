@@ -25,6 +25,7 @@ export type EffectiveModelAvailabilityReason =
   | 'disabled'
   | 'stage-incompatible'
   | 'tool-support-insufficient'
+  | 'context-window-insufficient'
   | 'routing-ineligible'
   | 'policy-excluded'
   | 'runtime-unavailable';

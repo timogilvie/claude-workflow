@@ -336,6 +336,12 @@ export async function runNativeExpansion(options: NativeExpansionOptions): Promi
     context,
     convertToLlm: (messages) => messages as unknown as Message[],
     afterToolCall: gitAfterToolCall,
+    promptSizeLog: options.repoDir ? {
+      repoDir: options.repoDir,
+      stage: 'expansion',
+      session: options.session,
+      issue: options.issue,
+    } : undefined,
     toolPolicy: {
       phase: 'planning',
       worktreePath: options.repoDir,

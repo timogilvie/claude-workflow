@@ -30,6 +30,18 @@ const RETIRED_MODELS = new Set([
   'gemini-2.0-flash',
   'grok-code-fast',
 ]);
+// Watchlist models whose declared coding-stage context window falls below the
+// built-in coding floor (STAGE_CONTEXT_WINDOW_FLOORS.coding = 144_384). These
+// are correctly rejected by the new context-window gate; the assertions below
+// treat them as `context-window-insufficient` rather than resolving OK.
+function contextWindowInsufficientForStage(
+  modelId: string,
+  stage: LaunchabilityStage,
+): boolean {
+  if (stage !== 'coder') return false;
+  const window = DEFAULT_MODEL_REGISTRY.models[modelId]?.contextWindowTokens;
+  return typeof window === 'number' && window < 144_384;
+}
 
 const NOW = new Date('2026-07-30T12:00:00.000Z');
 const priorOpenRouterKey = process.env.OPENROUTER_API_KEY;
@@ -119,7 +131,11 @@ describe('launch-priority watchlist launchability', () => {
           assert.equal(result.reason, 'lifecycle-blocked');
           continue;
         }
-        if (allowedStages.includes(stage)) {
+        if (allowedStages.includes(stage) && contextWindowInsufficientForStage(modelId, stage)) {
+          assert.equal(result.ok, false, `${modelId}:${stage} should reject on context window`);
+          if (result.ok) assert.fail('expected context-window rejection');
+          assert.equal(result.reason, 'context-window-insufficient');
+        } else if (allowedStages.includes(stage)) {
           assert.deepEqual(result, { ok: true, agent: 'native-openrouter' }, `${modelId}:${stage}`);
         } else {
           assert.equal(result.ok, false, `${modelId}:${stage} should reject`);
@@ -195,12 +211,47 @@ describe('launch-priority watchlist launchability', () => {
         } else if (!allowedStages.includes(stage)) {
           assert.equal(cell.launchable, false);
           assert.equal(cell.blocker, 'role-ineligible');
+        } else if (contextWindowInsufficientForStage(modelId, stage)) {
+          assert.equal(cell.launchable, false, `${modelId}:${stage} should not be launchable (context window)`);
+          assert.equal(cell.blocker, 'context-window');
         } else {
           assert.equal(cell.launchable, true, `${modelId}:${stage} should be launchable`);
           assert.equal(cell.agent, 'native-openrouter');
         }
       }
     }
+  });
+
+  it('builds a matrix that excludes models with insufficient context window for coding', () => {
+    // Models with context windows below the coding floor (144,384) should be blocked
+    const repoDir = mkdtempSync(join(tmpdir(), 'wavemill-launchability-context-window-'));
+    writeMinimalConfig(repoDir);
+    
+    // Add certifications for models we want to test
+    writeCertification('kimi-k2');
+    writeCertification('mistral-large-2');
+    
+    const catalog = loadLaunchPriorityList()
+      .filter((entry) => ['kimi-k2', 'mistral-large-2'].includes(entry.wavemillAlias));
+    const matrix = buildLaunchabilityMatrix({ repoDir, catalog, now: NOW });
+
+    // Check kimi-k2 for coding - should be blocked due to context window
+    const kimiCodingCell = matrix.cells.find(cell => cell.modelId === 'kimi-k2' && cell.stage === 'coder');
+    assert.ok(kimiCodingCell, 'kimi-k2 coding cell should exist');
+    assert.equal(kimiCodingCell.launchable, false, 'kimi-k2 should not be launchable for coding');
+    assert.equal(kimiCodingCell.blocker, 'context-window', 'kimi-k2 should be blocked due to context window');
+    
+    // Check kimi-k2 for planning - should be launchable (no floor)
+    const kimiPlanningCell = matrix.cells.find(cell => cell.modelId === 'kimi-k2' && cell.stage === 'planner');
+    assert.ok(kimiPlanningCell, 'kimi-k2 planning cell should exist');
+    assert.equal(kimiPlanningCell.launchable, true, 'kimi-k2 should be launchable for planning');
+    assert.equal(kimiPlanningCell.agent, 'native-openrouter', 'kimi-k2 should resolve to native-openrouter');
+    
+    // Check mistral-large-2 for coding - should be blocked due to context window
+    const mistralCodingCell = matrix.cells.find(cell => cell.modelId === 'mistral-large-2' && cell.stage === 'coder');
+    assert.ok(mistralCodingCell, 'mistral-large-2 coding cell should exist');
+    assert.equal(mistralCodingCell.launchable, false, 'mistral-large-2 should not be launchable for coding');
+    assert.equal(mistralCodingCell.blocker, 'context-window', 'mistral-large-2 should be blocked due to context window');
   });
 
   it('uses explicit certificationRoot instead of the ambient global root', () => {

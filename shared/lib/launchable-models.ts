@@ -34,6 +34,7 @@ export type LaunchabilityBlocker =
   | 'role-ineligible'
   | 'disabled-deprecated'
   | 'retired'
+  | 'context-window'
   | 'unsupported-launch-path';
 
 export interface LaunchabilityCell {
@@ -83,8 +84,9 @@ function inferBlocker(input: {
   if (input.resolution.ok === false && (
     input.resolution.reason === 'lifecycle-blocked'
     || input.resolution.reason === 'tool-support-insufficient'
+    || input.resolution.reason === 'context-window-insufficient'
   )) {
-    return 'retired';
+    return input.resolution.reason === 'context-window-insufficient' ? 'context-window' : 'retired';
   }
   if (input.catalog.status === 'deprecated' || !input.enabled) return 'disabled-deprecated';
   if (!input.stageEligible) return 'role-ineligible';
@@ -96,7 +98,7 @@ function inferBlocker(input: {
     if (input.resolution.reason === 'role-ineligible') return 'role-ineligible';
     if (input.resolution.reason === 'uncertified') return 'certification';
     if (input.resolution.reason === 'unknown-model') return 'missing-registry';
-    if (input.resolution.reason === 'lifecycle-blocked' || input.resolution.reason === 'tool-support-insufficient') return 'retired';
+    if (input.resolution.reason === 'lifecycle-blocked' || input.resolution.reason === 'tool-support-insufficient' || input.resolution.reason === 'context-window-insufficient') return input.resolution.reason === 'context-window-insufficient' ? 'context-window' : 'retired';
     return 'unsupported-launch-path';
   }
   return null;
