@@ -2163,6 +2163,9 @@ describe('canonical supported-model helpers', () => {
       models: {
         'native-coder': makeCapabilities({
           qualityScores: { coding: 90, planning: 10 },
+          // Above the built-in coding floor (144,384) so the new
+          // context-window predicate does not exclude this test fixture.
+          contextWindowTokens: 200_000,
           supportedModel: {
             lifecycle: 'supported',
             stages: ['coding'],
@@ -2344,14 +2347,30 @@ describe('canonical supported-model helpers', () => {
     assert.equal(reason, 'context-window-insufficient', 'llama-3.3-70b should be excluded from coding due to context window');
   });
 
-  it('deepseek-coder-v2 is excluded from coding due to insufficient context window', () => {
+  // deepseek-coder-v2 and qwen-2.5-coder-32b are lifecycle-blocked by prior
+  // work (HOK-2773); blocked-lifecycle is checked before the context-window
+  // predicate. Their windows would also fail the coding floor if they were
+  // ever unblocked, which the listSupportedModelsForStage assertion below
+  // still covers. The point here is that lifecycle-blocked selection remains
+  // the primary reason for these two.
+  it('deepseek-coder-v2 stays excluded from coding (lifecycle-blocked; context window would also fail)', () => {
     const reason = explainModelSupportExclusion('deepseek-coder-v2', 'coding');
-    assert.equal(reason, 'context-window-insufficient', 'deepseek-coder-v2 should be excluded from coding due to context window');
+    assert.equal(reason, 'blocked-lifecycle');
+    const declaredWindow = DEFAULT_MODEL_REGISTRY.models['deepseek-coder-v2'].contextWindowTokens;
+    assert.ok(
+      declaredWindow < 144_384,
+      `deepseek-coder-v2 declares ${declaredWindow} which is already below the coding floor`,
+    );
   });
 
-  it('qwen-2.5-coder-32b is excluded from coding due to insufficient context window', () => {
+  it('qwen-2.5-coder-32b stays excluded from coding (lifecycle-blocked; context window would also fail)', () => {
     const reason = explainModelSupportExclusion('qwen-2.5-coder-32b', 'coding');
-    assert.equal(reason, 'context-window-insufficient', 'qwen-2.5-coder-32b should be excluded from coding due to context window');
+    assert.equal(reason, 'blocked-lifecycle');
+    const declaredWindow = DEFAULT_MODEL_REGISTRY.models['qwen-2.5-coder-32b'].contextWindowTokens;
+    assert.ok(
+      declaredWindow < 144_384,
+      `qwen-2.5-coder-32b declares ${declaredWindow} which is already below the coding floor`,
+    );
   });
 
   it('qwen-2.5-72b is excluded from coding due to insufficient context window', () => {
@@ -2372,10 +2391,51 @@ describe('canonical supported-model helpers', () => {
     assert.ok(!codingModels.includes('deepseek-coder-v2'), 'deepseek-coder-v2 should not be in coding models');
     assert.ok(!codingModels.includes('qwen-2.5-coder-32b'), 'qwen-2.5-coder-32b should not be in coding models');
     assert.ok(!codingModels.includes('qwen-2.5-72b'), 'qwen-2.5-72b should not be in coding models');
-    
+
     // But they should still be eligible for planning
     const planningModels = listSupportedModelsForStage('planning');
     assert.ok(planningModels.includes('kimi-k2'), 'kimi-k2 should be in planning models');
     assert.ok(planningModels.includes('mistral-large-2'), 'mistral-large-2 should be in planning models');
+  });
+
+  // REQ-F2: floors are configurable via .wavemill-config.json. A configured
+  // floor overrides the built-in derived floor for that stage; unconfigured
+  // stages fall back to the built-in (or fail-open when there is no built-in).
+  it('.wavemill-config.json contextWindowFloors.<stage> overrides the built-in floor', async () => {
+    const { clearConfigCache } = await import('./config.ts');
+    const tmpRepo = mkdtempSync(join(tmpdir(), 'wm-cwf-'));
+    try {
+      // Configure a planning floor higher than kimi-k2's declared 131,072.
+      writeFileSync(
+        join(tmpRepo, '.wavemill-config.json'),
+        JSON.stringify({ contextWindowFloors: { planning: 200_000 } }),
+      );
+      clearConfigCache(tmpRepo);
+      assert.equal(getStageContextWindowFloor('planning', tmpRepo), 200_000);
+      // Coding still uses the built-in floor (200_000 not configured for coding).
+      assert.equal(getStageContextWindowFloor('coding', tmpRepo), 144_384);
+    } finally {
+      clearConfigCache(tmpRepo);
+      rmSync(tmpRepo, { recursive: true, force: true });
+    }
+  });
+
+  it('.wavemill-config.json contextWindowFloors.coding overrides the built-in coding floor', async () => {
+    const { clearConfigCache } = await import('./config.ts');
+    const tmpRepo = mkdtempSync(join(tmpdir(), 'wm-cwf-'));
+    try {
+      // Lower the coding floor via config; a model with 100k would now be
+      // eligible even though the built-in default excludes it.
+      writeFileSync(
+        join(tmpRepo, '.wavemill-config.json'),
+        JSON.stringify({ contextWindowFloors: { coding: 100_000 } }),
+      );
+      clearConfigCache(tmpRepo);
+      assert.equal(getStageContextWindowFloor('coding', tmpRepo), 100_000);
+      assert.ok(hasSufficientContextWindow({ contextWindowTokens: 131_072 }, 'coding', tmpRepo));
+    } finally {
+      clearConfigCache(tmpRepo);
+      rmSync(tmpRepo, { recursive: true, force: true });
+    }
   });
 });

@@ -1100,6 +1100,33 @@
             },
             "additionalProperties": false
         },
+        "contextWindowFloors": {
+            "type": "object",
+            "description": "Optional per-stage context window floors (in tokens). A model whose declared contextWindowTokens is below the floor for a stage is excluded from selection for that stage. When a stage has no floor here, the built-in derived floor from shared/lib/model-registry.ts (STAGE_CONTEXT_WINDOW_FLOORS) is used; when neither is set, all models pass the check for that stage.",
+            "properties": {
+                "expansion": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Minimum contextWindowTokens for expansion-stage selection."
+                },
+                "planning": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Minimum contextWindowTokens for planning-stage selection."
+                },
+                "coding": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Minimum contextWindowTokens for coding-stage selection."
+                },
+                "review": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Minimum contextWindowTokens for review-stage selection."
+                }
+            },
+            "additionalProperties": false
+        },
         "nativeAgent": {
             "type": "object",
             "description": "Native-agent provider configuration resolved into Pi provider models.",

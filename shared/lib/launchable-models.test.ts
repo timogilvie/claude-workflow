@@ -24,6 +24,18 @@ const WATCHLIST_STAGE_MAP = {
   'grok-code-fast': ['coder'],
 } satisfies Record<string, LaunchabilityStage[]>;
 const RETIRED_MODELS = new Set(['deepseek-coder-v2', 'qwen-2.5-coder-32b', 'gemini-2.0-flash', 'grok-code-fast']);
+// Watchlist models whose declared coding-stage context window falls below the
+// built-in coding floor (STAGE_CONTEXT_WINDOW_FLOORS.coding = 144_384). These
+// are correctly rejected by the new context-window gate; the assertions below
+// treat them as `context-window-insufficient` rather than resolving OK.
+function contextWindowInsufficientForStage(
+  modelId: string,
+  stage: LaunchabilityStage,
+): boolean {
+  if (stage !== 'coder') return false;
+  const window = DEFAULT_MODEL_REGISTRY.models[modelId]?.contextWindowTokens;
+  return typeof window === 'number' && window < 144_384;
+}
 
 const NOW = new Date('2026-07-30T12:00:00.000Z');
 const priorOpenRouterKey = process.env.OPENROUTER_API_KEY;
@@ -113,7 +125,11 @@ describe('launch-priority watchlist launchability', () => {
           assert.equal(result.reason, 'lifecycle-blocked');
           continue;
         }
-        if (allowedStages.includes(stage)) {
+        if (allowedStages.includes(stage) && contextWindowInsufficientForStage(modelId, stage)) {
+          assert.equal(result.ok, false, `${modelId}:${stage} should reject on context window`);
+          if (result.ok) assert.fail('expected context-window rejection');
+          assert.equal(result.reason, 'context-window-insufficient');
+        } else if (allowedStages.includes(stage)) {
           assert.deepEqual(result, { ok: true, agent: 'native-openrouter' }, `${modelId}:${stage}`);
         } else {
           assert.equal(result.ok, false, `${modelId}:${stage} should reject`);
@@ -188,6 +204,9 @@ describe('launch-priority watchlist launchability', () => {
         } else if (!allowedStages.includes(stage)) {
           assert.equal(cell.launchable, false);
           assert.equal(cell.blocker, 'role-ineligible');
+        } else if (contextWindowInsufficientForStage(modelId, stage)) {
+          assert.equal(cell.launchable, false, `${modelId}:${stage} should not be launchable (context window)`);
+          assert.equal(cell.blocker, 'context-window');
         } else {
           assert.equal(cell.launchable, true, `${modelId}:${stage} should be launchable`);
           assert.equal(cell.agent, 'native-openrouter');

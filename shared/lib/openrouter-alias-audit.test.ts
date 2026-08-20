@@ -12,7 +12,10 @@ function makeModel(overrides: Partial<ModelRegistry['models'][string]> = {}): Mo
     weaknesses: ['test'],
     qualityScores: { routing: 0, planning: 0, coding: 80, review: 0, classify: 0 },
     defaultLadderEligible: false,
-    contextWindowTokens: 128_000,
+    // Above the built-in coding floor (144_384) so the context-window predicate
+    // does not exclude these fixtures from selectability. Individual tests can
+    // still override via `overrides.contextWindowTokens`.
+    contextWindowTokens: 200_000,
     toolSupport: 'basic',
     multimodal: { text: true, image: false },
     latencyTier: 'standard',

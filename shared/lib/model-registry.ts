@@ -1,3 +1,4 @@
+import { getContextWindowFloorsConfig } from './config.ts';
 import { filterDisabledModels } from './disabled-models.ts';
 import {
   CERTIFICATION_TTL_DAYS,
@@ -223,15 +224,34 @@ export const STAGE_CONTEXT_WINDOW_FLOORS: Partial<Record<SupportedModelStage, St
   // No floor for planning, review, expansion stages initially - no measured data yet
 };
 
-export function getStageContextWindowFloor(stage: SupportedModelStage): number | undefined {
+/**
+ * Resolve the effective context window floor for a stage.
+ *
+ * Precedence:
+ *   1. `contextWindowFloors.<stage>` from `.wavemill-config.json` (per REQ-F2).
+ *   2. Built-in derived floor in `STAGE_CONTEXT_WINDOW_FLOORS`.
+ *   3. Fail-open (undefined) when neither is set.
+ *
+ * `repoDir` is optional; when omitted, `loadWavemillConfig` uses the current
+ * working directory (matches the rest of the codebase's config-lookup pattern).
+ */
+export function getStageContextWindowFloor(
+  stage: SupportedModelStage,
+  repoDir?: string,
+): number | undefined {
+  const configured = getContextWindowFloorsConfig(repoDir)[stage];
+  if (typeof configured === 'number' && configured > 0) {
+    return configured;
+  }
   return STAGE_CONTEXT_WINDOW_FLOORS[stage]?.floorTokens;
 }
 
 export function hasSufficientContextWindow(
   capabilities: Pick<ModelCapabilities, 'contextWindowTokens'>,
   stage: SupportedModelStage,
+  repoDir?: string,
 ): boolean {
-  const floor = getStageContextWindowFloor(stage);
+  const floor = getStageContextWindowFloor(stage, repoDir);
   // Fail-open: if no floor is defined for the stage, all models are considered sufficient
   if (floor === undefined) {
     return true;
