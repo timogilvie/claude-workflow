@@ -6,6 +6,7 @@
 # additive compatibility.
 #
 # Uses state_mutate for atomic JSON updates (requires caller to initialize file).
+# Uses wavemill_iso8601_to_epoch from wavemill-common.sh, sourced by callers.
 
 # Derive the queue-health file path from STATE_DIR or STATE_FILE.
 # Caller must ensure STATE_DIR or STATE_FILE is set.
@@ -356,8 +357,7 @@ queue_health_should_skip_attempt() {
   [[ -n "$next_retry_at" ]] || return 1
 
   current_epoch=$(date +%s 2>/dev/null || echo '0')
-  next_retry_epoch=$(date -d "$next_retry_at" +%s 2>/dev/null || \
-                     date -jf '%Y-%m-%dT%H:%M:%SZ' "$next_retry_at" '+%s' 2>/dev/null || echo '0')
+  next_retry_epoch="$(wavemill_iso8601_to_epoch "$next_retry_at" 2>/dev/null || echo '0')"
 
   # If current time is before next retry, skip
   (( current_epoch < next_retry_epoch ))
