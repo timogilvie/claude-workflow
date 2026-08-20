@@ -8,7 +8,7 @@
  * under .wavemill/artifacts/ with SHA-256 digests.
  */
 
-import { appendFileSync, mkdirSync, existsSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, existsSync, rmSync, writeFileSync, readFileSync, openSync, writeSync, fsyncSync, closeSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import type {
@@ -564,7 +564,18 @@ export class SessionStreamWriter {
   private append(event: SessionEvent): void {
     const releaseLock = acquireLock(this.options.sessionId, this.repoDir);
     try {
-      appendFileSync(this.options.path, JSON.stringify(event) + '\n', 'utf-8');
+      // Ensure durable append: write then fsync to prevent partial JSON on crash
+      const content = JSON.stringify(event) + '\n';
+      const flags = existsSync(this.options.path) ? 'a' : 'w';
+      mkdirSync(dirname(this.options.path), { recursive: true });
+
+      const fd = openSync(this.options.path, flags);
+      try {
+        writeSync(fd, content, 'utf-8');
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
     } finally {
       releaseLock();
     }
