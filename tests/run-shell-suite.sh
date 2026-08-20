@@ -63,6 +63,7 @@ TESTS=(
   wavemill-mill-session.test.sh
   merge-retry-marker.test.sh
   queue-health.test.sh
+  queue-planner-stdin-policy.test.sh
   openrouter-warning-surfaces.test.sh
   hokusai-test-registration.test.sh
   global-model-parity.test.sh
