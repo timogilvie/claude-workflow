@@ -45,6 +45,7 @@ TESTS=(
   planning-validation.test.sh
   wavemill-guards.test.sh
   wavemill-status.test.sh
+  queue-health-backoff-utc.test.sh
   backstage-tend-watchdog.test.sh
   control-layout.test.sh
   challenge-comparison-state.test.sh
