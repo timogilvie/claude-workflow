@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   runAgentLoopContinue,
   type AfterToolCallResult,
@@ -402,6 +402,8 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
   const batchFailed = new WeakMap<AssistantMessage, boolean>();
   // Tool call ids that were skipped by beforeToolCall (not real failures).
   const skippedCallIds = new Set<string>();
+  // Track current turn's model request event ID for linking response
+  let currentTurnRequestEventId: string | undefined;
 
   const toolsForCompat = config.toolPolicy?.registry.length
     ? config.toolPolicy.registry
@@ -670,6 +672,31 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
       };
       (override as AfterToolCallResult & { metadata?: ToolResultMetadata }).metadata = metadata;
 
+      // Log tool result event
+      if (sessionStreamWriter) {
+        try {
+          const contentSummary = redactedContent
+            .filter((block) => block.type === 'text')
+            .map((block) => (block as { type: string; text: string }).text)
+            .join('\n');
+          sessionStreamWriter.writeToolResult({
+            callId: ctx.toolCall.id,
+            toolName: ctx.toolCall.name,
+            isError: override.isError ?? false,
+            contentSummary: contentSummary || undefined,
+            redaction: redaction.redacted
+              ? {
+                  redacted: true,
+                  matchCount: redaction.matchCount,
+                  categories: redaction.categories,
+                }
+              : undefined,
+          });
+        } catch (error) {
+          console.warn(`Failed to log tool result event: ${(error as Error).message}`);
+        }
+      }
+
       return override;
     },
   };
@@ -697,6 +724,27 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
     switch (event.type) {
       case 'turn_start':
         onHeartbeat?.({ state: 'working', event: 'turn_start', agent: HEARTBEAT_AGENT });
+        // Log model request event when turn starts
+        if (sessionStreamWriter) {
+          try {
+            const modelRequestEvent = sessionStreamWriter.writeModelRequest({
+              callId: randomUUID(),
+              turnIndex: turnsCompleted,
+              provider: config.model.provider,
+              modelId: toProviderRequestModelId(config.model),
+              config: {
+                temperature,
+                maxTokens,
+              },
+              contextDigest: computeArgsFingerprint(context),
+              promptRefs: config.sessionStreamConfig?.promptRefs ?? [],
+              injectedContextRefs: config.sessionStreamConfig?.injectedContextRefs,
+            });
+            currentTurnRequestEventId = modelRequestEvent.eventId;
+          } catch (error) {
+            console.warn(`Failed to log model request event: ${(error as Error).message}`);
+          }
+        }
         break;
       case 'message_update':
         onHeartbeat?.({ state: 'working', event: 'message_update', agent: HEARTBEAT_AGENT });
@@ -708,9 +756,36 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
           detail: event.toolName,
           agent: HEARTBEAT_AGENT,
         });
+        // Log tool call event when tool execution starts
+        if (sessionStreamWriter) {
+          try {
+            sessionStreamWriter.writeToolCall({
+              callId: event.callId ?? randomUUID(),
+              toolName: event.toolName,
+            });
+          } catch (error) {
+            console.warn(`Failed to log tool call event: ${(error as Error).message}`);
+          }
+        }
         break;
       case 'agent_end':
         finalMessages = event.messages;
+        // Log model response event when agent ends this turn
+        if (sessionStreamWriter && currentTurnRequestEventId) {
+          try {
+            const finalMsg = event.messages[event.messages.length - 1] as AssistantMessage;
+            if (finalMsg && finalMsg.role === 'assistant') {
+              sessionStreamWriter.writeModelResponse({
+                requestEventId: currentTurnRequestEventId,
+                callId: randomUUID(),
+                stopReason: finalMsg.stopReason ?? 'unknown',
+                usage: finalMsg.usage as Record<string, unknown> | undefined,
+              });
+            }
+          } catch (error) {
+            console.warn(`Failed to log model response event: ${(error as Error).message}`);
+          }
+        }
         break;
       default:
         break;
