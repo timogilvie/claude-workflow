@@ -1259,6 +1259,23 @@ test('getChallengeConfig returns challenge section', () => {
   }
 });
 
+test('challenge autoMergeWinner schema default matches runtime default', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({}));
+
+    const schema = JSON.parse(readFileSync(join(process.cwd(), 'wavemill-config.schema.json'), 'utf-8'));
+    const schemaDefault = schema.properties.challenge.properties.autoMergeWinner.default;
+    const runtimeDefault = getChallengeConfig(tmp).autoMergeWinner ?? false;
+
+    assert.equal(schemaDefault, false);
+    assert.equal(runtimeDefault, schemaDefault);
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
 test('getEvalConfig returns eval section', () => {
   const tmp = makeTempRepo();
   try {

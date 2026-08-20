@@ -72,6 +72,18 @@ The dedicated Backstage Observer pane is opt-in and only runs when both
   current service writes only redacted heartbeat and finding counts to
   `.wavemill/backstage-health.json`.
 
+### Challenge Winner Handling
+
+`challenge.autoMergeWinner` controls what tend does after a decisive challenge
+comparison identifies a winner.
+
+- Default: `false`.
+- `false`: tend holds the winning PR for manual action. With the current
+  TypeScript tend controller, the identified loser can still be closed or
+  cleaned up once the comparison is decisive.
+- `true`: tend lets the winning PR enter the merge path automatically and
+  closes or cleans up the loser.
+
 ## Recommended Placement by Category
 
 Use `.wavemill-config.json` for:

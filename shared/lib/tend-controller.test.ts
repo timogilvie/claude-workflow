@@ -485,7 +485,9 @@ describe('challenge-mode gating', () => {
       createdAt: '2026-04-02T00:00:00Z',
       body: metadata(['task: HOK-1439_c', 'challenge: true', 'challengePairId: pair-1']),
     });
-    const options = buildTestOptions([first, second]);
+    const options = buildTestOptions([first, second], { state: 'healthy' }, {
+      challenge: { autoMergeWinner: true },
+    });
     const cleaned: number[] = [];
     options.loserCleanup = (candidate) => {
       cleaned.push(candidate.loserPr);
@@ -531,7 +533,9 @@ describe('challenge-mode gating', () => {
       labels: [label(WM_LABELS.wavemill), label(WM_LABELS.ready), label(WM_LABELS.superseded)],
       body: metadata(['task: HOK-1439_c', 'challenge: true', 'challengePairId: pair-1']),
     });
-    const options = buildTestOptions([first, second]);
+    const options = buildTestOptions([first, second], { state: 'healthy' }, {
+      challenge: { autoMergeWinner: true },
+    });
     const cleaned: number[] = [];
     options.loserCleanup = (candidate) => {
       cleaned.push(candidate.loserPr);
@@ -556,6 +560,54 @@ describe('challenge-mode gating', () => {
         [[102, 'challenge:loser:pair-1']],
       );
       assert.deepEqual(cleaned, []);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('holds the winner by default when autoMergeWinner is omitted', async () => {
+    const first = pr({
+      number: 101,
+      title: 'Primary',
+      headRefName: 'task/primary',
+      body: metadata(['task: HOK-1439', 'challenge: true', 'challengePairId: pair-1']),
+    });
+    const second = pr({
+      number: 102,
+      title: 'Challenger',
+      headRefName: 'task/challenger',
+      createdAt: '2026-04-02T00:00:00Z',
+      body: metadata(['task: HOK-1439_c', 'challenge: true', 'challengePairId: pair-1']),
+    });
+    const options = buildTestOptions([first, second]);
+    const cleaned: number[] = [];
+    options.loserCleanup = (candidate) => {
+      cleaned.push(candidate.loserPr);
+    };
+    writeWorkflowState(options.repoDir, {
+      HOK_1439: { pr: 101, challengePairId: 'pair-1', challengeRole: 'primary' },
+      HOK_1439_c: { pr: 102, challengePairId: 'pair-1', challengeRole: 'challenger' },
+    });
+    writeChallengeComparisons(options.repoDir, [{
+      challengePairId: 'pair-1',
+      primaryPrUrl: 'https://github.com/example/repo/pull/101',
+      challengerPrUrl: 'https://github.com/example/repo/pull/102',
+      winner: 'primary',
+      timestamp: '2026-04-28T12:00:00Z',
+    }]);
+
+    try {
+      const decision = await selectNextCandidate(options);
+      assert.equal(decision.eligible.length, 0);
+      assert.equal(decision.nextPR, null);
+      assert.deepEqual(
+        decision.blocked.map((candidate) => [candidate.number, candidate.reason]),
+        [
+          [101, 'challenge:winner-held:pair-1'],
+          [102, 'challenge:loser:pair-1'],
+        ],
+      );
+      assert.deepEqual(cleaned, [102]);
     } finally {
       options.cleanup();
     }
@@ -761,7 +813,9 @@ describe('challenge-mode gating', () => {
       createdAt: '2026-04-01T00:10:00Z',
       body: metadata(['task: HOK-1523_c', 'challenge: true', 'challengePairId: pair-1523']),
     });
-    const options = buildTestOptions([primary]);
+    const options = buildTestOptions([primary], { state: 'healthy' }, {
+      challenge: { autoMergeWinner: true },
+    });
     options.challengeGateDeps = {
       linearSiblingLookup: async (): Promise<LinearIssueSummary[]> => [
         {
