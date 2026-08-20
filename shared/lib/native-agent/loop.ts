@@ -12,7 +12,7 @@ import {
 } from '@earendil-works/pi-agent-core';
 import type { AgentEvent } from '@earendil-works/pi-agent-core';
 import type { AssistantMessage, Model } from '@earendil-works/pi-ai';
-import { SessionStreamWriter, type SessionStreamWriterOptions } from './session-stream.ts';
+import { SessionStreamWriter, type SessionStreamWriterOptions, storeArtifact } from './session-stream.ts';
 
 // Re-export the Pi agent context type through the loop seam so loop callers can
 // construct an AgentContext without importing Pi vendor packages directly.
@@ -547,6 +547,19 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
             arguments: ctx.args as Record<string, unknown>,
           },
         });
+        // Log tool policy decision event
+        if (sessionStreamWriter) {
+          try {
+            sessionStreamWriter.writeToolPolicyDecision({
+              callId: ctx.toolCall.id,
+              toolName: ctx.toolCall.name,
+              decision: decision.kind === 'deny' ? 'deny' : 'allow',
+              denialReason: decision.kind === 'deny' ? decision.message : undefined,
+            });
+          } catch (error) {
+            console.warn(`Failed to log tool policy decision event: ${(error as Error).message}`);
+          }
+        }
         if (decision.kind === 'deny') {
           return { block: true, reason: decision.message };
         }
@@ -679,11 +692,29 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
             .filter((block) => block.type === 'text')
             .map((block) => (block as { type: string; text: string }).text)
             .join('\n');
+
+          // Store large or truncated results as artifacts
+          let artifactRef = undefined;
+          if (outputCap.capped || (contentSummary?.length ?? 0) > 10000) {
+            try {
+              artifactRef = storeArtifact(
+                contentSummary || JSON.stringify(enrichedDetails),
+                config.sessionStreamConfig?.repoDir,
+                outputCap.capped,
+                typeof enrichedDetails === 'string' ? enrichedDetails.length : undefined,
+              );
+            } catch (artifactError) {
+              console.warn(`Failed to store tool result artifact: ${(artifactError as Error).message}`);
+            }
+          }
+
           sessionStreamWriter.writeToolResult({
             callId: ctx.toolCall.id,
             toolName: ctx.toolCall.name,
             isError: override.isError ?? false,
-            contentSummary: contentSummary || undefined,
+            contentSummary: contentSummary ? contentSummary.slice(0, 500) : undefined,
+            byteSize: contentSummary?.length,
+            artifactRef,
             redaction: redaction.redacted
               ? {
                   redacted: true,

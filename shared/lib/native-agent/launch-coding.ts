@@ -886,6 +886,21 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
       && mutationFailureTracker.count > 0
     ) {
       recoveryAttempted = true;
+      // Log session_resume event for recovery attempt
+      try {
+        const sessionStreamWriter = new SessionStreamWriter({
+          sessionId: codingNativeSessionId,
+          traceId: options.session,
+          phase: 'coding',
+          path: eventStreamPath,
+        }, options.repoDir);
+        sessionStreamWriter.writeSessionResume({
+          reason: 'recovery: no completion artifact after mutation failure',
+        });
+      } catch (error) {
+        console.warn(`Failed to log session_resume event: ${(error as Error).message}`);
+      }
+
       writeHookStatus(hookPath, 'working', 'native_coding_recovery', 'no completion artifact after mutation failure', 'native');
       context.messages = [
         ...result.messages,
@@ -917,6 +932,24 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
       artifactRetryAttempt += 1;
       const preservedPath = preserveInvalidArtifact(inspection.path, artifactRetryAttempt);
       quarantinedArtifacts.push(relative(options.wtDir, preservedPath));
+
+      // Log retry event for artifact validation failure
+      try {
+        const sessionStreamWriter = new SessionStreamWriter({
+          sessionId: codingNativeSessionId,
+          traceId: options.session,
+          phase: 'coding',
+          path: eventStreamPath,
+        }, options.repoDir);
+        sessionStreamWriter.writeRetry({
+          failedEventId: randomUUID(),
+          reason: `${inspection.artifact} validation failed: ${inspection.errors.map((e) => `${e.code}:${e.message}`).join('; ')}`,
+          retryCount: artifactRetryAttempt,
+        });
+      } catch (error) {
+        console.warn(`Failed to log retry event: ${(error as Error).message}`);
+      }
+
       writeHookStatus(
         hookPath,
         'working',
