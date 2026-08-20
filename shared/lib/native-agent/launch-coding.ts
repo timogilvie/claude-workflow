@@ -956,12 +956,12 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
       // Log approval and retry events for artifact validation failure
       try {
         if (persistentSessionStreamWriter) {
-          persistentSessionStreamWriter.writeApproval({
+          const approvalEvent = persistentSessionStreamWriter.writeApproval({
             stage: 'ready',
             notes: `artifact retry: implicit approval to retry after ${inspection.artifact} validation failed`,
           });
           persistentSessionStreamWriter.writeRetry({
-            failedEventId: randomUUID(),
+            failedEventId: approvalEvent.eventId,
             reason: `${inspection.artifact} validation failed: ${inspection.errors.map((e) => `${e.code}:${e.message}`).join('; ')}`,
             retryCount: artifactRetryAttempt,
           });
