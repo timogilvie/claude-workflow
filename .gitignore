@@ -62,6 +62,8 @@ weekly-competitive-review-prompt.md
 .wavemill/state/
 .wavemill/locks/
 .wavemill/runs/
+.wavemill/session-events/
+.wavemill/artifacts/
 .wavemill/linear-retry-drain.last-run
 .wavemill/workflow-state.json.bak-*
 prompt-registry.jsonl

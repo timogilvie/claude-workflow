@@ -20,6 +20,8 @@ import {
   type ReadyNativeProviderEntry,
 } from './providers.ts';
 import { TranscriptWriter } from './transcript.ts';
+import { SessionStreamWriter, resolveSessionEventStreamPath } from './session-stream.ts';
+import type { SessionStreamConfig } from './loop.ts';
 import { createReadOnlyTools, READ_ONLY_PATH_FIELDS } from './tools/read-only.ts';
 import {
   createGitCommitTools,
@@ -732,6 +734,38 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
       path: transcriptPath,
     });
 
+    // Construct session stream configuration and create persistent writer
+    const codingNativeSessionId = `${options.session}-coding-${options.issue}`;
+    const eventStreamPath = resolveSessionEventStreamPath(codingNativeSessionId, options.repoDir);
+
+    // Create a persistent session stream writer for the entire launch lifecycle
+    let persistentSessionStreamWriter: SessionStreamWriter | undefined;
+    try {
+      persistentSessionStreamWriter = new SessionStreamWriter({
+        sessionId: codingNativeSessionId,
+        traceId: options.session,
+        phase: 'coding',
+        path: eventStreamPath,
+      }, options.repoDir);
+      persistentSessionStreamWriter.writeSessionStarted({
+        initialConfigDigest: `model:${model.provider}:${modelName}`,
+      });
+    } catch (error) {
+      console.warn(`Failed to create persistent session stream writer: ${(error as Error).message}`);
+      persistentSessionStreamWriter = undefined;
+    }
+
+    const sessionStreamConfig: SessionStreamConfig = {
+      sessionId: codingNativeSessionId,
+      traceId: options.session,
+      phase: 'coding',
+      eventStreamPath,
+      repoDir: options.repoDir,
+      initialConfigDigest: `model:${model.provider}:${modelName}`,
+      externalWriterManagesSessionBoundaries: true, // Launch level manages session boundaries
+      writerInstance: persistentSessionStreamWriter, // Reuse writer to maintain seq counter
+    };
+
     const { content: promptTemplate, promptRef } = loadCodingPrompt(options.repoDir);
     registerAndRecordNativeProvenance({
       sessionId: options.session,
@@ -796,6 +830,7 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
         session: options.session,
         issue: options.issue,
       } : undefined,
+      sessionStreamConfig,
       afterToolCall: async (toolContext, signal) => {
         await intendedFilesAfterToolCall(toolContext, tracker);
 
@@ -871,6 +906,21 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
       && mutationFailureTracker.count > 0
     ) {
       recoveryAttempted = true;
+      // Log session_resume and approval events for recovery attempt
+      try {
+        if (persistentSessionStreamWriter) {
+          persistentSessionStreamWriter.writeApproval({
+            stage: 'ready',
+            notes: 'recovery: implicit approval to retry after mutation failure',
+          });
+          persistentSessionStreamWriter.writeSessionResume({
+            reason: 'recovery: no completion artifact after mutation failure',
+          });
+        }
+      } catch (error) {
+        console.warn(`Failed to log recovery events: ${(error as Error).message}`);
+      }
+
       writeHookStatus(hookPath, 'working', 'native_coding_recovery', 'no completion artifact after mutation failure', 'native');
       context.messages = [
         ...result.messages,
@@ -902,6 +952,24 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
       artifactRetryAttempt += 1;
       const preservedPath = preserveInvalidArtifact(inspection.path, artifactRetryAttempt);
       quarantinedArtifacts.push(relative(options.wtDir, preservedPath));
+
+      // Log approval and retry events for artifact validation failure
+      try {
+        if (persistentSessionStreamWriter) {
+          persistentSessionStreamWriter.writeApproval({
+            stage: 'ready',
+            notes: `artifact retry: implicit approval to retry after ${inspection.artifact} validation failed`,
+          });
+          persistentSessionStreamWriter.writeRetry({
+            failedEventId: randomUUID(),
+            reason: `${inspection.artifact} validation failed: ${inspection.errors.map((e) => `${e.code}:${e.message}`).join('; ')}`,
+            retryCount: artifactRetryAttempt,
+          });
+        }
+      } catch (error) {
+        console.warn(`Failed to log artifact retry events: ${(error as Error).message}`);
+      }
+
       writeHookStatus(
         hookPath,
         'working',
@@ -983,6 +1051,20 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
         agent: 'native',
         model: modelName,
       }, null, 2));
+    }
+
+    // Write session_ended event
+    try {
+      if (persistentSessionStreamWriter) {
+        persistentSessionStreamWriter.writeSessionEnded({
+          stopReason: result.stopReason,
+          totalTurns: result.turnsCompleted,
+          totalToolCalls: result.toolCallsExecuted,
+          totalTokens: result.totalInputTokens + result.totalOutputTokens,
+        });
+      }
+    } catch (error) {
+      console.warn(`Failed to write session_ended event: ${(error as Error).message}`);
     }
 
     return {
