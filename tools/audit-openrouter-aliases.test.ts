@@ -22,7 +22,9 @@ function makeModel(lifecycle: 'supported' | 'blocked' = 'supported'): ModelRegis
     strengths: ['test'],
     weaknesses: ['test'],
     qualityScores: { routing: 0, planning: 0, coding: 80, review: 0, classify: 0 },
-    contextWindowTokens: 128_000,
+    // Above the built-in coding floor (144_384) so the context-window predicate
+    // does not exclude this fixture from selectability.
+    contextWindowTokens: 200_000,
     toolSupport: 'basic',
     multimodal: { text: true, image: false },
     latencyTier: 'standard',

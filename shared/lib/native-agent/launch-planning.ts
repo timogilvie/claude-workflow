@@ -634,6 +634,12 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
       convertToLlm: (messages) => messages as unknown as Message[],
       afterToolCall: gitAfterToolCall,
       signal: options.signal,
+      promptSizeLog: options.repoDir ? {
+        repoDir: options.repoDir,
+        stage: 'planning',
+        session: options.session,
+        issue: options.issue,
+      } : undefined,
       toolPolicy: {
         phase: 'planning',
         worktreePath: options.wtDir,

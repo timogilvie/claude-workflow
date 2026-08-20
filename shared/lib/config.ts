@@ -713,9 +713,17 @@ export interface BudgetConfig {
   survivalMode?: number;
 }
 
+export interface ContextWindowFloorsConfig {
+  expansion?: number;
+  planning?: number;
+  coding?: number;
+  review?: number;
+}
+
 export interface WavemillConfig {
   configVersion?: string;
   modelExclusions?: ModelExclusionConfig[];
+  contextWindowFloors?: ContextWindowFloorsConfig;
   safety?: SafetyConfig;
   linear?: LinearConfig;
   git?: GitConfig;
@@ -1359,6 +1367,16 @@ export function getHokusaiSubmissionEnableSources(repoDir?: string): HokusaiSubm
 
 export function isRouterCapabilityFilteringEnabled(repoDir?: string): boolean {
   return getRouterConfig(repoDir).capabilityFiltering?.enabled === true;
+}
+
+/**
+ * Get the per-stage context window floors config.
+ * Returns empty object when no floors are configured.
+ */
+export function getContextWindowFloorsConfig(
+  repoDir?: string,
+): ContextWindowFloorsConfig {
+  return loadWavemillConfig(repoDir).contextWindowFloors || {};
 }
 
 /**

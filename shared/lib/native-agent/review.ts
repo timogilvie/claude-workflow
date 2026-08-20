@@ -335,6 +335,12 @@ export async function runNativeReview(
       model: modelConfig,
       context: loopContext,
       maxTokens: REVIEW_MAX_OUTPUT_TOKENS,
+      promptSizeLog: options.repoDir ? {
+        repoDir: options.repoDir,
+        stage: 'review',
+        session: options.session,
+        issue: options.issue,
+      } : undefined,
       // AgentMessage and Message are structurally compatible at runtime; pi-agent-core
       // exports diverged nominal types so a direct cast is required.
       convertToLlm: (messages) => messages as unknown as Message[],

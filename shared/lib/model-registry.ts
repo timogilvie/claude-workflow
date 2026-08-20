@@ -1,3 +1,4 @@
+import { getContextWindowFloorsConfig } from './config.ts';
 import { filterDisabledModels } from './disabled-models.ts';
 import {
   CERTIFICATION_TTL_DAYS,
@@ -26,6 +27,7 @@ export type ModelSupportExclusionReason =
   | 'disabled'
   | 'stage-incompatible'
   | 'tool-support-insufficient'
+  | 'context-window-insufficient'
   | 'routing-ineligible';
 export type AgentType =
   | 'claude'
@@ -197,6 +199,80 @@ export const STAGE_MIN_CONTEXT_WINDOW_TOKENS: Readonly<Record<SupportedModelStag
   review: 65_536,
 });
 const INSUFFICIENT_TOOL_SUPPORT: ReadonlySet<ToolSupport> = new Set(['none']);
+
+/**
+ * Minimum context window size requirements per stage, derived from measured prompt sizes.
+ * 
+ * For coding stage: 144,384 tokens derived from the 2026-08-17 kimi-k2 incident (~131,182 tokens)
+ * with 10% headroom (matching CONTEXT_WINDOW_SAFETY_MARGIN) = 144,300.2, rounded up to nearest 1024.
+ * 
+ * Other stages have no floor initially as we have no measured prompt-size data.
+ * 
+ * Relationship to evaluateCapabilityConstraints: That function implements heuristic,
+ * config-gated constraints based on cost-profile estimates. This gate is unconditional
+ * and based on actual measured prompt sizes. They are complementary, not duplicates.
+ */
+export interface StageContextWindowFloor {
+  floorTokens: number;
+  derivation: {
+    observedMaxPromptTokens: number;
+    sampleCount: number;
+    observationWindow: string;   // e.g. '2026-08-17 incident' or '2026-07-01..2026-08-19 transcripts'
+    headroomFraction: number;    // e.g. 0.10
+    derivedAt: string;           // ISO date
+    method: string;              // human-readable formula
+  };
+}
+
+export const STAGE_CONTEXT_WINDOW_FLOORS: Partial<Record<SupportedModelStage, StageContextWindowFloor>> = {
+  coding: {
+    floorTokens: 144_384,
+    derivation: {
+      observedMaxPromptTokens: 131_182,
+      sampleCount: 1,
+      observationWindow: '2026-08-17 incident',
+      headroomFraction: 0.10,
+      derivedAt: '2026-08-18',
+      method: 'observedMaxPromptTokens * (1 + headroomFraction), rounded up to nearest 1024',
+    },
+  },
+  // No floor for planning, review, expansion stages initially - no measured data yet
+};
+
+/**
+ * Resolve the effective context window floor for a stage.
+ *
+ * Precedence:
+ *   1. `contextWindowFloors.<stage>` from `.wavemill-config.json` (per REQ-F2).
+ *   2. Built-in derived floor in `STAGE_CONTEXT_WINDOW_FLOORS`.
+ *   3. Fail-open (undefined) when neither is set.
+ *
+ * `repoDir` is optional; when omitted, `loadWavemillConfig` uses the current
+ * working directory (matches the rest of the codebase's config-lookup pattern).
+ */
+export function getStageContextWindowFloor(
+  stage: SupportedModelStage,
+  repoDir?: string,
+): number | undefined {
+  const configured = getContextWindowFloorsConfig(repoDir)[stage];
+  if (typeof configured === 'number' && configured > 0) {
+    return configured;
+  }
+  return STAGE_CONTEXT_WINDOW_FLOORS[stage]?.floorTokens;
+}
+
+export function hasSufficientContextWindow(
+  capabilities: Pick<ModelCapabilities, 'contextWindowTokens'>,
+  stage: SupportedModelStage,
+  repoDir?: string,
+): boolean {
+  const floor = getStageContextWindowFloor(stage, repoDir);
+  // Fail-open: if no floor is defined for the stage, all models are considered sufficient
+  if (floor === undefined) {
+    return true;
+  }
+  return capabilities.contextWindowTokens >= floor;
+}
 const UNSAFE_CERTIFICATION_SEGMENT = /[/\\.\0]/;
 const OPENROUTER_CERTIFICATION_SEED = Object.freeze({
   maxCertifiedPhase: 'workflow' as const,
@@ -2525,6 +2601,9 @@ export function explainModelSupportExclusion(
   }
   if (stageRequiresTools(normalized) && !hasSufficientToolSupport(capabilities, normalized)) {
     return 'tool-support-insufficient';
+  }
+  if (!hasSufficientContextWindow(capabilities, normalized)) {
+    return 'context-window-insufficient';
   }
   if ((capabilities.supportedModel?.routingEligible ?? true) === false) {
     return 'routing-ineligible';

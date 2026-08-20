@@ -18,6 +18,7 @@ import type { AssistantMessage, Model } from '@earendil-works/pi-ai';
 export type { AgentContext } from '@earendil-works/pi-agent-core';
 import { computeModelCost, type ModelPricing } from '../workflow-cost.ts';
 import type { ModelRegistry } from '../model-registry.ts';
+import { appendPromptSizeSample, type PromptSizeSample } from './prompt-size-log.ts';
 import { assertToolCompat } from './tool-compat-validator.ts';
 import {
   assertPromptFitsContextWindow,
@@ -115,6 +116,16 @@ export interface WavemillLoopConfig {
   priorState?: { messages: AgentMessage[] };
   budget?: LoopBudget;
   signal?: AbortSignal;
+  /**
+   * Optional prompt size logging configuration. When provided, prompt sizes will be logged.
+   * This is used to gather data for determining context window floors.
+   */
+  promptSizeLog?: {
+    repoDir: string;
+    stage: string;
+    session?: string;
+    issue?: string;
+  };
   /** Invoked on Pi progress events so the dashboard sees a live agent. */
   onHeartbeat?: (event: HeartbeatEvent) => void;
   /** Optional sink for all Pi AgentEvents. Used for transcript writing and monitoring. */
@@ -327,6 +338,8 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
   let totalOutputTokens = 0;
   let totalCostUsd = 0;
   let budgetStopReason: LoopStopReason | undefined;
+  // Track peak tokens for prompt size logging
+  let peakInputTokens = 0;
 
   // Per-turn batch failure tracking for fail-fast semantics.
   // Key: the Pi AssistantMessage object for the current turn.
@@ -361,7 +374,7 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
     if (contextWindowLimit) {
       // When replay compaction is configured, this checks the untransformed
       // history, so it is conservative relative to the provider request.
-      assertPromptFitsContextWindow({
+      const estimateResult = assertPromptFitsContextWindow({
         phase: config.toolPolicy?.phase,
         model: config.model,
         context,
@@ -369,6 +382,25 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
         registry: config.compatRegistry,
         limit: contextWindowLimit,
       });
+      
+      // Log the preflight estimate if prompt size logging is configured
+      if (config.promptSizeLog && !Array.isArray(estimateResult) && estimateResult.diagnostic?.estimate) {
+        const estimate = estimateResult.diagnostic.estimate;
+        const sample: PromptSizeSample = {
+          recordedAt: new Date().toISOString(),
+          stage: config.promptSizeLog.stage,
+          model: config.model.id,
+          provider: config.model.provider,
+          source: 'preflight-estimate',
+          promptTokens: estimate.inputTokens,
+          contextWindowLimit: contextWindowLimit.limit,
+          session: config.promptSizeLog.session,
+          issue: config.promptSizeLog.issue,
+        };
+        appendPromptSizeSample(config.promptSizeLog.repoDir, sample).catch(() => {
+          // Ignore errors - logging should never break a run
+        });
+      }
     } else if (isNativeCompatProvider(config.model.provider)) {
       throw new ContextWindowUnverifiableError(config.toolPolicy?.phase ?? 'native', config.model);
     }
@@ -398,6 +430,12 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
             { inputTokens: input, outputTokens: output, cacheCreationTokens: cacheWrite, cacheReadTokens: cacheRead },
             modelPricing,
           );
+        }
+        
+        // Track peak input tokens (what must fit in context window)
+        const totalTokens = input + cacheRead + cacheWrite;
+        if (totalTokens > peakInputTokens) {
+          peakInputTokens = totalTokens;
         }
       }
       turnsCompleted++;
@@ -628,6 +666,23 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
   } catch (err) {
     loopError = err;
   } finally {
+    // Log the run peak if prompt size logging is configured
+    if (config.promptSizeLog && peakInputTokens > 0) {
+      const sample: PromptSizeSample = {
+        recordedAt: new Date().toISOString(),
+        stage: config.promptSizeLog.stage,
+        model: config.model.id,
+        provider: config.model.provider,
+        source: 'run-peak',
+        promptTokens: peakInputTokens,
+        contextWindowLimit: contextWindowLimit?.limit,
+        session: config.promptSizeLog.session,
+        issue: config.promptSizeLog.issue,
+      };
+      appendPromptSizeSample(config.promptSizeLog.repoDir, sample).catch(() => {
+        // Ignore errors - logging should never break a run
+      });
+    }
     composed.cleanup();
   }
 

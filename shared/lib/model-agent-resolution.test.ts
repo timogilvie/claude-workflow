@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { ModelRegistry } from './model-registry.ts';
-import { resolveModelAgent } from './model-agent-resolution.ts';
+import { resolveModelAgent, type AgentResolution } from './model-agent-resolution.ts';
+import { getStageContextWindowFloor } from './model-registry.ts';
 
 function makeRegistry(modelId: string, model: ModelRegistry['models'][string]): ModelRegistry {
   return {
@@ -334,5 +335,99 @@ describe('resolveModelAgent', () => {
     if (result.ok) assert.fail('expected rejection');
     assert.equal(result.reason, 'tool-support-insufficient');
     assert.match(result.diagnostic, /certification=tool-support:none/);
+  });
+
+  it('rejects models with insufficient context window for the coding stage', () => {
+    const registry = makeRegistry('kimi-k2', {
+      agent: 'native-openrouter',
+      contextWindowTokens: 131_072, // Below the coding floor of 144,384
+      toolSupport: 'basic',
+      nativeCapability: {
+        nativeProvider: 'openrouter',
+        piTransportKind: 'openai-completions',
+        readOnlyNative: 'certified',
+        compatFlags: { thinkingFormat: 'openrouter' },
+        certification: {
+          maxCertifiedPhase: 'workflow',
+          certifiedAt: '2099-01-01T00:00:00.000Z',
+          certificationSuiteVersion: 'v1',
+        },
+      },
+      supportedModel: {
+        wavemillAlias: 'kimi-k2',
+        providerNativeId: 'moonshotai/kimi-k2',
+        stages: ['planning', 'coding', 'review'],
+        lifecycle: 'supported',
+      },
+    });
+
+    const result = resolveModelAgent({
+      model: 'kimi-k2',
+      phase: 'coding',
+      registry,
+      now: new Date('2098-01-01T00:00:00.000Z'),
+    });
+
+    assert.equal(result.ok, false);
+    if (result.ok) assert.fail('expected rejection');
+    assert.equal(result.reason, 'context-window-insufficient');
+    const floor = getStageContextWindowFloor('coding');
+    assert.ok(floor !== undefined);
+    assert.match(result.diagnostic, new RegExp(`context-window:131072<${floor}`));
+  });
+
+  it('allows models with sufficient context window for the coding stage', () => {
+    const registry = makeRegistry('claude-sonnet-5', {
+      agent: 'claude',
+      vendor: 'anthropic',
+      contextWindowTokens: 1_000_000, // Above the coding floor
+      toolSupport: 'full',
+    });
+
+    const result = resolveModelAgent({
+      model: 'claude-sonnet-5',
+      phase: 'coding',
+      registry,
+    });
+
+    assert.equal(result.ok, true);
+    if (!result.ok) assert.fail('expected successful resolution');
+    assert.equal(result.agent, 'claude');
+  });
+
+  it('still allows models with insufficient context window for stages without floors', () => {
+    const registry = makeRegistry('kimi-k2', {
+      agent: 'native-openrouter',
+      contextWindowTokens: 131_072, // Below the coding floor but acceptable for planning (no floor)
+      toolSupport: 'basic',
+      nativeCapability: {
+        nativeProvider: 'openrouter',
+        piTransportKind: 'openai-completions',
+        readOnlyNative: 'certified',
+        compatFlags: { thinkingFormat: 'openrouter' },
+        certification: {
+          maxCertifiedPhase: 'workflow',
+          certifiedAt: '2099-01-01T00:00:00.000Z',
+          certificationSuiteVersion: 'v1',
+        },
+      },
+      supportedModel: {
+        wavemillAlias: 'kimi-k2',
+        providerNativeId: 'moonshotai/kimi-k2',
+        stages: ['planning', 'coding', 'review'],
+        lifecycle: 'supported',
+      },
+    });
+
+    const result = resolveModelAgent({
+      model: 'kimi-k2',
+      phase: 'planning', // Planning has no floor
+      registry,
+      now: new Date('2098-01-01T00:00:00.000Z'),
+    });
+
+    assert.equal(result.ok, true);
+    if (!result.ok) assert.fail('expected successful resolution for planning stage');
+    assert.equal(result.agent, 'native-openrouter');
   });
 });
