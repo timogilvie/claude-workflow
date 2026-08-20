@@ -6,7 +6,12 @@ import { after, beforeEach, describe, it, mock } from 'node:test';
 import { clearConfigCache } from './config.ts';
 import { saveUserConfig } from './hokusai-consent.ts';
 import type { EvalRecord, RoutingDecision } from './eval-schema.ts';
-import { hokusaiSubmissionTriggerDeps, triggerHokusaiSubmission } from './hokusai-submission-trigger.ts';
+import { summarizeTriggerLog } from './hokusai-trigger-log.ts';
+import {
+  formatHokusaiSubmissionTriggerResult,
+  hokusaiSubmissionTriggerDeps,
+  triggerHokusaiSubmission,
+} from './hokusai-submission-trigger.ts';
 
 const tempDirs: string[] = [];
 
@@ -95,18 +100,52 @@ beforeEach(() => {
 });
 
 describe('hokusai-submission-trigger', () => {
-  it('skips queueing silently when data submission is disabled', async () => {
+  it('reports repo-config details when data submission is disabled', async () => {
     const { repoDir, configDir } = makeRepo(false);
     const warn = mock.method(console, 'warn', () => undefined);
 
-    await triggerHokusaiSubmission(makeEligibleRecord(), {
+    const result = await triggerHokusaiSubmission(makeEligibleRecord(), {
       repoDir,
       configDir,
       redactionSalt: 'a'.repeat(64),
     });
 
-    assert.equal(existsSync(join(repoDir, '.wavemill', 'hokusai')), false);
+    assert.equal(result.status, 'disabled');
+    assert.equal(result.source, 'repo_config');
+    assert.match(result.detail, /base=false local=unset/);
+    assert.match(formatHokusaiSubmissionTriggerResult(result), /disabled \(repo_config:/);
+    assert.equal(existsSync(join(repoDir, '.wavemill', 'hokusai', 'queue', 'pending.jsonl')), false);
+    assert.equal(summarizeTriggerLog(repoDir)?.counts.disabled, 1);
     assert.equal(warn.mock.calls.length, 0);
+  });
+
+  it('reports consent blockers when the user store disables submission', async () => {
+    const { repoDir, configDir } = makeRepo(true);
+    saveUserConfig({
+      hokusai: {
+        enabled: false,
+        consentedAt: '2026-05-31T12:00:00.000Z',
+        consentVersion: '1.0',
+      },
+    }, configDir);
+    const warn = mock.method(console, 'warn', () => undefined);
+
+    const result = await triggerHokusaiSubmission(makeEligibleRecord(), {
+      repoDir,
+      configDir,
+      redactionSalt: 'a'.repeat(64),
+    });
+
+    assert.equal(result.status, 'disabled');
+    assert.equal(result.source, 'consent');
+    assert.match(result.detail, /user_store_disabled/);
+    assert.match(result.detail, new RegExp(join(configDir, 'config.json').replaceAll('/', '\\/')));
+    assert.match(result.detail, /wavemill hokusai enable/);
+    assert.match(formatHokusaiSubmissionTriggerResult(result), /disabled \(consent:/);
+    assert.equal(existsSync(join(repoDir, '.wavemill', 'hokusai', 'queue', 'pending.jsonl')), false);
+    assert.equal(summarizeTriggerLog(repoDir)?.counts.disabled, 1);
+    assert.equal(warn.mock.calls.length, 1);
+    assert.match(String(warn.mock.calls[0].arguments[0]), /\[hokusai\] submission disabled by consent gate/);
   });
 
   it('redacts and enqueues an eligible record when submission is enabled', async () => {
@@ -234,7 +273,8 @@ describe('hokusai-submission-trigger', () => {
 
     assert.equal(warn.mock.calls.length, 1);
     assert.match(String(warn.mock.calls[0].arguments[0]), /\[hokusai\] submission trigger failed: redaction failed/);
-    assert.equal(existsSync(join(repoDir, '.wavemill', 'hokusai')), false);
+    assert.equal(existsSync(join(repoDir, '.wavemill', 'hokusai', 'queue', 'pending.jsonl')), false);
+    assert.equal(summarizeTriggerLog(repoDir)?.counts.failed, 1);
   });
 
   it('warns and swallows enqueue failures', async () => {
@@ -252,6 +292,25 @@ describe('hokusai-submission-trigger', () => {
 
     assert.equal(warn.mock.calls.length, 1);
     assert.match(String(warn.mock.calls[0].arguments[0]), /\[hokusai\] submission trigger failed: queue unavailable/);
+    assert.equal(summarizeTriggerLog(repoDir)?.counts.failed, 1);
+  });
+
+  it('does not change the returned result when trigger log append fails', async () => {
+    const { repoDir, configDir } = makeRepo(true);
+    const warn = mock.method(console, 'warn', () => undefined);
+    mock.method(hokusaiSubmissionTriggerDeps, 'appendTriggerLogEntry', () => {
+      throw new Error('disk full');
+    });
+
+    const result = await triggerHokusaiSubmission(makeEligibleRecord(), {
+      repoDir,
+      configDir,
+      redactionSalt: '8'.repeat(64),
+    });
+
+    assert.equal(result.status, 'enqueued');
+    assert.equal(warn.mock.calls.length, 1);
+    assert.match(String(warn.mock.calls[0].arguments[0]), /failed to append trigger log: disk full/);
   });
 
   it('warns asynchronously when opportunistic drain rejects', async () => {

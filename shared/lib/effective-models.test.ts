@@ -39,7 +39,6 @@ describe('effective-models', () => {
       'kimi-k2',
       'mistral-large-2',
       'llama-3.3-70b',
-      'qwen-2.5-72b',
     ];
     for (const modelId of contextWindowExcluded) {
       assert.equal(models.includes(modelId), false, `${modelId} should not be effective for coding`);
@@ -49,8 +48,9 @@ describe('effective-models', () => {
     }
 
     // Models retained for historical attribution but lifecycle-blocked by prior
-    // work (HOK-2773). blocked-lifecycle wins over context-window-insufficient.
-    const lifecycleExcluded = ['deepseek-coder-v2', 'qwen-2.5-coder-32b'];
+    // work (HOK-2773, and qwen-2.5-72b by HOK-2783's registry admission
+    // criteria). blocked-lifecycle wins over context-window-insufficient.
+    const lifecycleExcluded = ['deepseek-coder-v2', 'qwen-2.5-coder-32b', 'qwen-2.5-72b'];
     for (const modelId of lifecycleExcluded) {
       assert.equal(models.includes(modelId), false, `${modelId} should not be effective for coding`);
       const availability = explainEffectiveModelAvailability(modelId, 'coding');

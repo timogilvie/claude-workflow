@@ -80,7 +80,8 @@ describe('audit-openrouter-aliases command', () => {
       assert.equal(code, 0);
       const path = join(repoDir, '.wavemill', 'audits', 'openrouter-alias-drift.json');
       assert.equal(existsSync(path), true);
-      const report = JSON.parse(readFileSync(path, 'utf-8')) as { selectableFindings: number };
+      const report = JSON.parse(readFileSync(path, 'utf-8')) as { schemaVersion: string; selectableFindings: number };
+      assert.equal(report.schemaVersion, '2');
       assert.equal(report.selectableFindings, 0);
       assert.match(output.stdout.join('\n'), /retired - expected/);
     } finally {

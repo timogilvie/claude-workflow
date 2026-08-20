@@ -10,7 +10,9 @@ import { resolveOpenRouterModelId } from './openrouter-provider.ts';
 export type AliasAuditReason =
   | 'unresolved-openrouter-id'
   | 'not-found-in-openrouter'
-  | 'provider-native-id-mismatch';
+  | 'provider-native-id-mismatch'
+  | 'context-window-overstated'
+  | 'tool-support-mismatch';
 
 export interface AliasAuditFinding {
   alias: string;
@@ -23,12 +25,23 @@ export interface AliasAuditFinding {
 }
 
 export interface AliasAuditReport {
-  schemaVersion: '1';
+  schemaVersion: '2';
   generatedAt: string;
   catalogSource: 'live' | 'file' | 'fixture';
   checked: number;
   findings: AliasAuditFinding[];
   selectableFindings: number;
+}
+
+function resolveCatalogContextTokens(model: OpenRouterModel): number | null {
+  if (typeof model.context_length === 'number' && Number.isFinite(model.context_length)) {
+    return model.context_length;
+  }
+  const fromProvider = model.top_provider?.context_length;
+  if (typeof fromProvider === 'number' && Number.isFinite(fromProvider)) {
+    return fromProvider;
+  }
+  return null;
 }
 
 export function auditOpenRouterAliases(input: {
@@ -64,7 +77,8 @@ export function auditOpenRouterAliases(input: {
       continue;
     }
 
-    if (!input.openRouterModels.has(wireModelId)) {
+    const catalogModel = input.openRouterModels.get(wireModelId);
+    if (!catalogModel) {
       findings.push({
         alias,
         providerNativeId,
@@ -88,10 +102,42 @@ export function auditOpenRouterAliases(input: {
         detail: `Registry providerNativeId ${providerNativeId} does not match resolved wire id ${wireModelId}.`,
       });
     }
+
+    const catalogContextWindow = resolveCatalogContextTokens(catalogModel);
+    if (
+      catalogContextWindow !== null
+      && capabilities.contextWindowTokens > catalogContextWindow
+    ) {
+      findings.push({
+        alias,
+        providerNativeId,
+        wireModelId,
+        reason: 'context-window-overstated',
+        lifecycle,
+        selectable,
+        detail: `Registry contextWindowTokens ${capabilities.contextWindowTokens} exceeds OpenRouter catalog context length ${catalogContextWindow}.`,
+      });
+    }
+
+    if (
+      capabilities.toolSupport !== 'none'
+      && catalogModel.supported_parameters !== undefined
+      && !catalogModel.supported_parameters.includes('tools')
+    ) {
+      findings.push({
+        alias,
+        providerNativeId,
+        wireModelId,
+        reason: 'tool-support-mismatch',
+        lifecycle,
+        selectable,
+        detail: `Registry toolSupport ${capabilities.toolSupport} declares tool use, but OpenRouter supported_parameters omits tools.`,
+      });
+    }
   }
 
   return {
-    schemaVersion: '1',
+    schemaVersion: '2',
     generatedAt: (input.now ?? new Date()).toISOString(),
     catalogSource: input.catalogSource,
     checked: aliases.length,

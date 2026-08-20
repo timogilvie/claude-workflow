@@ -1,8 +1,8 @@
 #!/usr/bin/env tsx
 import { buildLaunchabilityMatrix, LAUNCHABILITY_STAGES } from '../shared/lib/launchable-models.ts';
 
-function parseArgs(argv: string[]): { repoDir?: string; json: boolean } {
-  const parsed: { repoDir?: string; json: boolean } = { json: false };
+function parseArgs(argv: string[]): { repoDir?: string; json: boolean; certificationRoot?: string } {
+  const parsed: { repoDir?: string; json: boolean; certificationRoot?: string } = { json: false };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--json') {
@@ -14,12 +14,20 @@ function parseArgs(argv: string[]): { repoDir?: string; json: boolean } {
       i += 1;
       continue;
     }
+    if (arg === '--certification-root') {
+      parsed.certificationRoot = argv[i + 1];
+      i += 1;
+      continue;
+    }
   }
   return parsed;
 }
 
 const options = parseArgs(process.argv.slice(2));
-const matrix = buildLaunchabilityMatrix({ repoDir: options.repoDir });
+const matrix = buildLaunchabilityMatrix({
+  repoDir: options.repoDir,
+  certificationRoot: options.certificationRoot,
+});
 
 if (options.json) {
   console.log(JSON.stringify(matrix, null, 2));

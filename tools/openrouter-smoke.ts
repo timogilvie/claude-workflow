@@ -22,7 +22,6 @@ const fixtureDir = join(moduleDir, '..', 'shared', 'fixtures', 'openrouter-respo
 const OPENROUTER_URL_PATTERN = /https:\/\/openrouter\.ai\/\S+/g;
 export const WATCHLIST_SMOKE_MODELS = [
   'qwen-3-235b',
-  'qwen-2.5-72b',
   'kimi-k2-thinking',
   'llama-4-scout',
   'mistral-medium-3',

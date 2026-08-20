@@ -356,6 +356,9 @@ export interface NativeAgentProviderConfig {
   apiKeyEnv?: string;
   baseUrl?: string;
   headers?: Record<string, string>;
+  minCreditsUsd?: number;
+  warnCreditsUsd?: number;
+  creditRefreshTtlSeconds?: number;
 }
 
 export interface NativeAgentProvidersConfig {
@@ -1341,6 +1344,27 @@ export function getEffectiveModelExclusions(repoDir?: string): EffectiveModelExc
   ];
 }
 
+export interface HokusaiSubmissionEnableSources {
+  baseEnabled: boolean | undefined;
+  localEnabled: boolean | undefined;
+  effectiveEnabled: boolean;
+}
+
+export function getHokusaiSubmissionEnableSources(repoDir?: string): HokusaiSubmissionEnableSources {
+  const absRepoDir = resolveRepoDir(repoDir);
+  const baseEnabled = loadWavemillBaseConfig(absRepoDir).hokusai?.dataSubmission?.enabled;
+  const localConfigPath = resolve(absRepoDir, '.wavemill-config.local.json');
+  const localEnabled = existsSync(localConfigPath)
+    ? (readAndParseConfig(localConfigPath) as WavemillConfig).hokusai?.dataSubmission?.enabled
+    : undefined;
+
+  return {
+    baseEnabled,
+    localEnabled,
+    effectiveEnabled: getHokusaiSubmissionConfig(absRepoDir).enabled === true,
+  };
+}
+
 export function isRouterCapabilityFilteringEnabled(repoDir?: string): boolean {
   return getRouterConfig(repoDir).capabilityFiltering?.enabled === true;
 }
@@ -1753,6 +1777,10 @@ export function getProvidersConfig(repoDir?: string): ProvidersConfig {
 
 export function getNativeAgentConfig(repoDir?: string): NativeAgentConfig {
   return loadWavemillConfig(repoDir).nativeAgent || {};
+}
+
+export function getNativeOpenRouterProviderConfig(repoDir?: string): NativeAgentProviderConfig {
+  return getNativeAgentConfig(repoDir).providers?.openrouter || {};
 }
 
 export function getNativeExpansionConfig(repoDir?: string): NativeExpansionConfig {

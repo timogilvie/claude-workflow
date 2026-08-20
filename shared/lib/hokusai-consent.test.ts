@@ -10,6 +10,7 @@ import {
   getContributionStatus,
   getStatusDisplay,
   getContributionConsentStatus,
+  getSubmissionSwitchReport,
   getConsentState,
   getSubmissionStatus,
   isHokusaiContributionsEnabled,
@@ -359,7 +360,7 @@ describe('hokusai-consent', () => {
       const configDir = makeTempDir('hokusai-consent-config-');
       const repoDir = makeTempRepo({
         hokusai: {
-          dataSubmission: { consentVersion: '1.0' },
+          dataSubmission: { enabled: true, consentVersion: '1.0' },
           contributions: { enabled: true },
         },
       });
@@ -376,6 +377,8 @@ describe('hokusai-consent', () => {
         consentValid: true,
         contributionsEnabled: true,
         submissionAllowed: true,
+        userStoreEnabled: true,
+        userConfigPath: join(configDir, 'config.json'),
       });
       assert.equal(isHokusaiContributionsEnabled({ configDir, repoDir }), true);
     });
@@ -401,8 +404,56 @@ describe('hokusai-consent', () => {
         consentValid: true,
         contributionsEnabled: false,
         submissionAllowed: false,
+        userStoreEnabled: true,
+        userConfigPath: join(configDir, 'config.json'),
       });
       assert.equal(isHokusaiContributionsEnabled({ configDir, repoDir }), false);
+    });
+
+    it('reports the repo-on/user-off switch mismatch', () => {
+      const configDir = makeTempDir('hokusai-consent-config-');
+      const repoDir = makeTempRepo({
+        hokusai: {
+          dataSubmission: { enabled: true, consentVersion: '1.0' },
+          contributions: { enabled: true },
+        },
+      });
+      saveUserConfig({
+        hokusai: {
+          enabled: false,
+          consentedAt: '2026-04-14T12:00:00.000Z',
+          consentVersion: '1.0',
+        },
+      }, configDir);
+
+      const report = getSubmissionSwitchReport({ configDir, repoDir });
+      assert.equal(report.sources.effectiveEnabled, true);
+      assert.equal(report.userStoreEnabled, false);
+      assert.match(report.mismatch ?? '', /repo submission config is enabled/);
+      assert.match(getStatusDisplay({ configDir, repoDir }), /Warning: repo submission config is enabled/);
+      assert.match(getStatusDisplay({ configDir, repoDir }), /Submission switches: repo base=true local=unset effective=true \| user store=false consent=valid contributions=true/);
+    });
+
+    it('reports the repo-off/user-on switch mismatch', () => {
+      const configDir = makeTempDir('hokusai-consent-config-');
+      const repoDir = makeTempRepo({
+        hokusai: {
+          dataSubmission: { enabled: false, consentVersion: '1.0' },
+          contributions: { enabled: true },
+        },
+      });
+      saveUserConfig({
+        hokusai: {
+          enabled: true,
+          consentedAt: '2026-04-14T12:00:00.000Z',
+          consentVersion: '1.0',
+        },
+      }, configDir);
+
+      const report = getSubmissionSwitchReport({ configDir, repoDir });
+      assert.equal(report.sources.effectiveEnabled, false);
+      assert.equal(report.submissionAllowed, true);
+      assert.match(report.mismatch ?? '', /repo submission config is disabled/);
     });
   });
 
@@ -535,7 +586,7 @@ describe('hokusai-consent', () => {
       const configDir = makeTempDir('hokusai-status-display-');
       const repoDir = makeTempRepo({
         hokusai: {
-          dataSubmission: { consentVersion: '1.0' },
+          dataSubmission: { enabled: true, consentVersion: '1.0' },
           contributions: { enabled: true, endpoint: 'https://api.hokus.ai/api/v1/contributions' },
         },
       });

@@ -40,6 +40,15 @@ export type CapabilityConstraintName =
   | 'requiresTools'
   | 'requiresMultimodal'
   | 'maxLatencyTier';
+export type AdmissionViolationReason =
+  | 'context-window-below-minimum'
+  | 'tool-support-insufficient';
+
+export interface AdmissionViolation {
+  stage: SupportedModelStage;
+  reason: AdmissionViolationReason;
+  detail: string;
+}
 
 export interface MultimodalSupport {
   text: boolean;
@@ -183,6 +192,12 @@ const STAGE_REQUIRES_TOOLS: Record<SupportedModelStage, boolean> = {
   coding: true,
   review: true,
 };
+export const STAGE_MIN_CONTEXT_WINDOW_TOKENS: Readonly<Record<SupportedModelStage, number>> = Object.freeze({
+  expansion: 65_536,
+  planning: 65_536,
+  coding: 65_536,
+  review: 65_536,
+});
 const INSUFFICIENT_TOOL_SUPPORT: ReadonlySet<ToolSupport> = new Set(['none']);
 
 /**
@@ -1274,6 +1289,70 @@ export function assertRegistryConsistency(registry: ModelRegistry): void {
     validateNativeCapability(modelId, capabilities);
     validateSupportedModelMetadata(modelId, capabilities);
   }
+  assertRegistryAdmissionCriteria(registry);
+}
+
+export function claimedStagesForModel(
+  capabilities: Pick<ModelCapabilities, 'supportedModel' | 'qualityScores'>,
+): SupportedModelStage[] {
+  if (capabilities.supportedModel?.stages !== undefined) {
+    return [...capabilities.supportedModel.stages];
+  }
+
+  return SUPPORTED_MODEL_STAGES.filter((stage) => {
+    if (stage === 'expansion') return false;
+    return (capabilities.qualityScores[stage] ?? 0) > 0;
+  });
+}
+
+export function explainAdmissionViolations(
+  modelId: string,
+  capabilities: Pick<ModelCapabilities, 'contextWindowTokens' | 'disabled' | 'qualityScores' | 'supportedModel' | 'toolSupport'>,
+): AdmissionViolation[] {
+  void modelId;
+  if (capabilities.disabled === true || capabilities.supportedModel?.lifecycle === 'blocked') {
+    return [];
+  }
+
+  const violations: AdmissionViolation[] = [];
+  for (const stage of claimedStagesForModel(capabilities)) {
+    const minimumContextWindow = STAGE_MIN_CONTEXT_WINDOW_TOKENS[stage];
+    if (capabilities.contextWindowTokens < minimumContextWindow) {
+      violations.push({
+        stage,
+        reason: 'context-window-below-minimum',
+        detail: `declares contextWindowTokens=${capabilities.contextWindowTokens}, below ${stage} minimum ${minimumContextWindow}`,
+      });
+    }
+
+    if (!hasSufficientToolSupport(capabilities, stage)) {
+      violations.push({
+        stage,
+        reason: 'tool-support-insufficient',
+        detail: `declares toolSupport=${capabilities.toolSupport}, insufficient for ${stage}`,
+      });
+    }
+  }
+
+  return violations;
+}
+
+export function assertRegistryAdmissionCriteria(registry: ModelRegistry): void {
+  const failures = Object.entries(registry.models)
+    .flatMap(([modelId, capabilities]) => explainAdmissionViolations(modelId, capabilities)
+      .map((violation) => ({ modelId, violation })));
+  if (failures.length === 0) {
+    return;
+  }
+
+  const [first] = failures;
+  const details = failures
+    .map(({ modelId, violation }) => `model ${modelId} stage ${violation.stage}: ${violation.detail}`)
+    .join('; ');
+  throw new ModelValidationError(
+    first?.modelId ?? 'registry',
+    `${details}. Narrow supportedModel.stages to stages the model can run, raise declared capabilities, set disabled=true, or set supportedModel.lifecycle='blocked' for retained historical entries.`,
+  );
 }
 
 export function resolveSelector(selector: ModelSelector, context?: ResolutionContext): ResolvedModel {
@@ -2116,7 +2195,11 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       vendor: 'qwen',
       class: 'fast_economy',
       strengths: ['coding', 'low-cost Qwen family coverage'],
-      weaknesses: ['coding-only watchlist entry', 'OpenRouter dependency'],
+      weaknesses: [
+        'coding-only watchlist entry',
+        'OpenRouter dependency',
+        'retired 2026-08-19: 32k context window fails HOK-2783 admission floor',
+      ],
       qualityScores: scores(46, 0, 72, 0, 44),
       defaultLadderEligible: false,
       contextWindowTokens: 32_768,
@@ -2132,6 +2215,7 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
         alias: 'qwen-2.5-72b',
         providerNativeId: 'qwen/qwen-2.5-72b-instruct',
         stages: ['coding'],
+        lifecycle: 'blocked',
       }),
     },
     'kimi-k2': {

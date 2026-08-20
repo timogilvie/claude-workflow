@@ -31,6 +31,7 @@ export interface NativeGateInput {
   apiKeyPresent: boolean;
   apiKeyEnv: string;
   now?: Date;
+  certificationRoot?: string;
 }
 
 export interface NativeGateReady {
@@ -108,6 +109,7 @@ export function evaluateNativeProviderGate(input: NativeGateInput): NativeGateDe
     nativeProvider,
     input.modelId,
     requiredSuiteVersion,
+    { root: input.certificationRoot },
   );
   const eligibility = checkGlobalCertificationEligibility(
     nativeProvider,
@@ -115,6 +117,7 @@ export function evaluateNativeProviderGate(input: NativeGateInput): NativeGateDe
     requiredSuiteVersion,
     input.requiredPhase,
     input.now,
+    { root: input.certificationRoot },
   );
 
   if (!eligibility.eligible) {

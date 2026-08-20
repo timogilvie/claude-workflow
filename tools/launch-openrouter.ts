@@ -9,6 +9,7 @@ import {
   InvalidPathSegmentError,
   UnsafeStateDirError,
 } from '../shared/lib/openrouter-launcher.ts';
+import { InsufficientOpenRouterCreditsError } from '../shared/lib/native-agent/openrouter-credits-guard.ts';
 
 function parseArgs(argv: string[]): { repo: string; session: string; issue: string; model?: string } {
   const args = argv.slice(2);
@@ -58,6 +59,10 @@ async function main(): Promise<void> {
     writeOpenRouterStateDiscoveryFile(session, issue, env.WAVEMILL_OPENROUTER_STATE_DIR);
     printEnvBlock(env);
   } catch (err) {
+    if (err instanceof InsufficientOpenRouterCreditsError) {
+      console.error(`Error: ${err.kind}: ${err.message}`);
+      process.exit(3);
+    }
     if (err instanceof MissingOpenRouterApiKeyError) {
       console.error(`Error: ${err.message}`);
       process.exit(2);

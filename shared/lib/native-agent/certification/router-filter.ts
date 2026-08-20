@@ -109,6 +109,7 @@ export interface FilterNativeModelsOptions {
   now?: Date;
   apiKeyPresent?: boolean;
   apiKeyEnv?: string;
+  certificationRoot?: string;
 }
 
 function mapGateReason(reason: NativeGateRejectReason): RouterCertificationRejectionReason {
@@ -282,6 +283,7 @@ export function filterNativeModels(
       apiKeyPresent: options?.apiKeyPresent ?? true,
       apiKeyEnv: options?.apiKeyEnv ?? 'ROUTER_FILTER_UNUSED',
       now: options?.now,
+      certificationRoot: options?.certificationRoot,
     });
 
     if (decision.ok) {

@@ -38,6 +38,7 @@ interface ResolveModelAgentOptions {
   repoDir?: string;
   registry?: ModelRegistry;
   now?: Date;
+  certificationRoot?: string;
 }
 
 const SAFE_MODEL_ID_PATTERN = /^[A-Za-z0-9._/-]+(?:\[[A-Za-z0-9._-]+\])?$/;
@@ -104,6 +105,7 @@ function resolveRegistryBackedNativeAgent(input: {
   repoDir?: string;
   registry: ModelRegistry;
   now?: Date;
+  certificationRoot?: string;
   nativeAgent: Extract<AgentType, 'native-openai' | 'native-openrouter'>;
 }): AgentResolution {
   const capabilities = getModel(input.registry, input.modelId);
@@ -208,6 +210,7 @@ function resolveRegistryBackedNativeAgent(input: {
       apiKeyPresent: true,
       apiKeyEnv: 'AGENT_RESOLUTION_UNUSED',
       now: input.now,
+      certificationRoot: input.certificationRoot,
     });
     if (!gate.ok) {
       const certifyCommand = certifyCommandFor(input.modelId, provider, input.phase);
@@ -317,6 +320,7 @@ export function resolveModelAgent(opts: ResolveModelAgentOptions): AgentResoluti
       repoDir: opts.repoDir,
       registry,
       now: opts.now,
+      certificationRoot: opts.certificationRoot,
       nativeAgent: resolvedAgent,
     });
   }
@@ -328,6 +332,7 @@ export function resolveModelAgent(opts: ResolveModelAgentOptions): AgentResoluti
       repoDir: opts.repoDir,
       registry,
       now: opts.now,
+      certificationRoot: opts.certificationRoot,
       nativeAgent: 'native-openrouter',
     });
   }

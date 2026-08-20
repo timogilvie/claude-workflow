@@ -6,8 +6,10 @@ import { describe, it } from 'node:test';
 import type { ModelRegistry } from './model-registry.ts';
 import {
   assertNativeReadOnlyRoutable,
+  assertRegistryAdmissionCriteria,
   assertRegistryConsistency,
   CHANNELS,
+  claimedStagesForModel,
   compareLatencyTier,
   deriveReadOnlyNativeCapability,
   evaluateCapabilityConstraints,
@@ -42,6 +44,7 @@ import {
   satisfiesCapabilities,
   stageRequiresTools,
   hasSufficientToolSupport,
+  STAGE_MIN_CONTEXT_WINDOW_TOKENS,
   validateNativeCapability,
   validateModelId,
 } from './model-registry.ts';
@@ -253,6 +256,126 @@ describe('model-registry', () => {
         assert.equal(typeof model.qualityScores[taskType], 'number');
       }
     }
+  });
+
+  describe('registry admission criteria', () => {
+    it('accepts the default registry', () => {
+      assert.doesNotThrow(() => assertRegistryAdmissionCriteria(DEFAULT_MODEL_REGISTRY));
+    });
+
+    it('rejects a supported model that claims coding below the context floor', () => {
+      const registry: ModelRegistry = {
+        models: {
+          tiny: makeCapabilities({
+            contextWindowTokens: 32_768,
+            qualityScores: { coding: 80 },
+            supportedModel: { lifecycle: 'supported', stages: ['coding'] },
+          }),
+        },
+        ladders: {},
+      };
+
+      assert.throws(
+        () => assertRegistryAdmissionCriteria(registry),
+        (error) => {
+          assert.ok(error instanceof ModelValidationError);
+          assert.match(error.message, /stage coding/);
+          assert.match(error.message, /contextWindowTokens=32768/);
+          assert.match(error.message, new RegExp(String(STAGE_MIN_CONTEXT_WINDOW_TOKENS.coding)));
+          return true;
+        },
+      );
+    });
+
+    it('rejects a supported model without tool support for a tool-using stage', () => {
+      const registry: ModelRegistry = {
+        models: {
+          noTools: makeCapabilities({
+            toolSupport: 'none',
+            qualityScores: { review: 80 },
+            supportedModel: { lifecycle: 'supported', stages: ['review'] },
+          }),
+        },
+        ladders: {},
+      };
+
+      assert.throws(
+        () => assertRegistryAdmissionCriteria(registry),
+        /stage review: declares toolSupport=none, insufficient for review/,
+      );
+    });
+
+    it('exempts blocked and disabled retained models from admission checks', () => {
+      const blocked = makeCapabilities({
+        contextWindowTokens: 32_768,
+        toolSupport: 'none',
+        qualityScores: { coding: 80 },
+        supportedModel: { lifecycle: 'blocked', stages: ['coding'] },
+      });
+      const disabled = {
+        ...makeCapabilities({
+          contextWindowTokens: 32_768,
+          toolSupport: 'none',
+          qualityScores: { coding: 80 },
+          supportedModel: { lifecycle: 'supported', stages: ['coding'] },
+        }),
+        disabled: true,
+      };
+
+      assert.doesNotThrow(() => assertRegistryAdmissionCriteria({
+        models: { blocked, disabled },
+        ladders: {},
+      }));
+    });
+
+    it('accepts explicitly narrowed stage claims', () => {
+      const registry: ModelRegistry = {
+        models: {
+          narrowed: makeCapabilities({
+            qualityScores: { planning: 90, coding: 90, review: 90 },
+            supportedModel: { lifecycle: 'supported', stages: ['coding'] },
+          }),
+        },
+        ladders: {},
+      };
+
+      assert.deepEqual(claimedStagesForModel(registry.models.narrowed), ['coding']);
+      assert.doesNotThrow(() => assertRegistryAdmissionCriteria(registry));
+    });
+
+    it('falls back to positive quality-score stages when supportedModel.stages is absent', () => {
+      const registry: ModelRegistry = {
+        models: {
+          scored: makeCapabilities({
+            contextWindowTokens: 32_768,
+            qualityScores: { planning: 10, coding: 0, review: 20 },
+          }),
+        },
+        ladders: {},
+      };
+
+      assert.deepEqual(claimedStagesForModel(registry.models.scored), ['planning', 'review']);
+      assert.throws(() => assertRegistryAdmissionCriteria(registry), /stage planning: declares contextWindowTokens=32768/);
+    });
+
+    it('enforces admission criteria when merging registry overrides', () => {
+      assert.throws(
+        () => mergeModelRegistry(DEFAULT_MODEL_REGISTRY, {
+          models: {
+            'qwen-3-coder': { contextWindowTokens: 32_768 },
+          },
+        }),
+        /qwen-3-coder stage planning: declares contextWindowTokens=32768/,
+      );
+    });
+
+    it('retains qwen-2.5-72b as blocked and keeps qwen-3-235b eligible', () => {
+      assert.equal(explainModelSupportExclusion('qwen-2.5-72b', 'coding'), 'blocked-lifecycle');
+      assert.equal(listSupportedModelsForStage('coding').includes('qwen-2.5-72b'), false);
+      assert.equal(listSupportedModelsForStage('planning').includes('qwen-3-235b'), true);
+      assert.equal(listSupportedModelsForStage('coding').includes('qwen-3-235b'), true);
+      assert.equal(listSupportedModelsForStage('review').includes('qwen-3-235b'), true);
+    });
   });
 
   it('getModel returns undefined for unknown or empty IDs', () => {
@@ -2373,9 +2496,18 @@ describe('canonical supported-model helpers', () => {
     );
   });
 
-  it('qwen-2.5-72b is excluded from coding due to insufficient context window', () => {
+  // HOK-2783's registry admission criteria set this model's lifecycle to
+  // `blocked`, and explainModelSupportExclusion() checks lifecycle before the
+  // context floor, so blocked-lifecycle is the reported reason. Assert the
+  // window separately so the floor's coverage is still documented.
+  it('qwen-2.5-72b is blocked by lifecycle and also sits below the coding floor', () => {
     const reason = explainModelSupportExclusion('qwen-2.5-72b', 'coding');
-    assert.equal(reason, 'context-window-insufficient', 'qwen-2.5-72b should be excluded from coding due to context window');
+    assert.equal(reason, 'blocked-lifecycle');
+    const declaredWindow = DEFAULT_MODEL_REGISTRY.models['qwen-2.5-72b'].contextWindowTokens;
+    assert.ok(
+      declaredWindow < 144_384,
+      `qwen-2.5-72b declares ${declaredWindow} which is already below the coding floor`,
+    );
   });
 
   it('models with sufficient context windows are not excluded', () => {

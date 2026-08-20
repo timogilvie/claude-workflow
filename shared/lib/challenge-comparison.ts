@@ -4,6 +4,7 @@ import { appendJsonlRecord, readJsonlFile } from './jsonl-utils.ts';
 import { getEffectiveRegistry, resolveModelRegistryKey } from './model-registry.ts';
 import { resolveWavemillAliasFromOpenRouterId } from './openrouter-catalog.ts';
 import type { StageName, StageResult, StageStatus } from './stage-result.ts';
+import type { ChallengeArmFailure } from './arm-failure-taxonomy.ts';
 
 export interface ChallengeRoutingMeta {
   planner: string;
@@ -116,8 +117,11 @@ export interface ChallengeComparison {
   challengerModel: string;
   primaryPrUrl: string;
   challengerPrUrl: string;
-  primaryEvalScore: number;
-  challengerEvalScore: number;
+  primaryEvalScore: number | null;
+  challengerEvalScore: number | null;
+  primaryCompleted?: boolean;
+  challengerCompleted?: boolean;
+  armFailures?: ChallengeArmFailure[];
   winner?: 'primary' | 'challenger';
   winnerModel?: string;
   rationale: string;
@@ -747,6 +751,9 @@ export function buildForfeitComparison(input: {
   primaryPrUrl: string;
   challengerPrUrl: string;
   winner: 'primary' | 'challenger';
+  primaryCompleted?: boolean;
+  challengerCompleted?: boolean;
+  armFailures?: ChallengeArmFailure[];
   rationale: string;
   terminalReason: ChallengeTerminalReason;
   timestamp?: string;
@@ -757,8 +764,11 @@ export function buildForfeitComparison(input: {
     challengerModel: input.challengerModel,
     primaryPrUrl: input.primaryPrUrl,
     challengerPrUrl: input.challengerPrUrl,
-    primaryEvalScore: 0,
-    challengerEvalScore: 0,
+    primaryEvalScore: null,
+    challengerEvalScore: null,
+    primaryCompleted: input.primaryCompleted ?? (input.winner === 'primary'),
+    challengerCompleted: input.challengerCompleted ?? (input.winner === 'challenger'),
+    ...(input.armFailures?.length ? { armFailures: input.armFailures } : {}),
     winner: input.winner,
     winnerModel: input.winner === 'primary' ? input.primaryModel : input.challengerModel,
     rationale: input.rationale,
@@ -775,6 +785,9 @@ export function buildDoubleForfeitComparison(input: {
   challengerModel: string;
   primaryPrUrl: string;
   challengerPrUrl: string;
+  primaryCompleted?: boolean;
+  challengerCompleted?: boolean;
+  armFailures?: ChallengeArmFailure[];
   rationale: string;
   terminalReason: ChallengeTerminalReason;
   timestamp?: string;
@@ -785,8 +798,11 @@ export function buildDoubleForfeitComparison(input: {
     challengerModel: input.challengerModel,
     primaryPrUrl: input.primaryPrUrl,
     challengerPrUrl: input.challengerPrUrl,
-    primaryEvalScore: 0,
-    challengerEvalScore: 0,
+    primaryEvalScore: null,
+    challengerEvalScore: null,
+    primaryCompleted: input.primaryCompleted ?? false,
+    challengerCompleted: input.challengerCompleted ?? false,
+    ...(input.armFailures?.length ? { armFailures: input.armFailures } : {}),
     winner: 'primary',
     winnerModel: input.primaryModel,
     rationale: input.rationale,

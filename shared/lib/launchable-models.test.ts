@@ -23,7 +23,13 @@ const WATCHLIST_STAGE_MAP = {
   'devstral-medium': ['coder'],
   'grok-code-fast': ['coder'],
 } satisfies Record<string, LaunchabilityStage[]>;
-const RETIRED_MODELS = new Set(['deepseek-coder-v2', 'qwen-2.5-coder-32b', 'gemini-2.0-flash', 'grok-code-fast']);
+const RETIRED_MODELS = new Set([
+  'deepseek-coder-v2',
+  'qwen-2.5-coder-32b',
+  'qwen-2.5-72b',
+  'gemini-2.0-flash',
+  'grok-code-fast',
+]);
 // Watchlist models whose declared coding-stage context window falls below the
 // built-in coding floor (STAGE_CONTEXT_WINDOW_FLOORS.coding = 144_384). These
 // are correctly rejected by the new context-window gate; the assertions below
@@ -80,7 +86,7 @@ function writeMinimalConfig(repoDir: string): void {
   );
 }
 
-function writeCertification(modelId: string): void {
+function writeCertification(modelId: string, certificationRoot?: string): void {
   const capabilities = DEFAULT_MODEL_REGISTRY.models[modelId];
   const suiteVersion = capabilities.nativeCapability?.certification?.certificationSuiteVersion;
   const provider = capabilities.nativeCapability?.nativeProvider;
@@ -89,7 +95,7 @@ function writeCertification(modelId: string): void {
   // Write to the global scope, which is what the launchability matrix reads.
   // The repo-scoped legacy path is never consulted here, so writing there left
   // these assertions depending on the developer's real ~/.wavemill store.
-  const path = buildGlobalCertificationPath(provider, modelId, suiteVersion);
+  const path = buildGlobalCertificationPath(provider, modelId, suiteVersion, { root: certificationRoot });
   mkdirSync(dirname(path), { recursive: true });
   const artifact = {
     schemaVersion: 2,
@@ -184,14 +190,15 @@ describe('launch-priority watchlist launchability', () => {
 
   it('builds a deterministic matrix that rejects role-ineligible and missing-certification cells', () => {
     const repoDir = mkdtempSync(join(tmpdir(), 'wavemill-launchability-'));
+    const certificationRoot = mkdtempSync(join(tmpdir(), 'wavemill-launchability-certs-'));
     writeMinimalConfig(repoDir);
     for (const modelId of Object.keys(WATCHLIST_STAGE_MAP)) {
-      if (!RETIRED_MODELS.has(modelId)) writeCertification(modelId);
+      if (!RETIRED_MODELS.has(modelId)) writeCertification(modelId, certificationRoot);
     }
 
     const catalog = loadLaunchPriorityList()
       .filter((entry) => Object.hasOwn(WATCHLIST_STAGE_MAP, entry.wavemillAlias));
-    const matrix = buildLaunchabilityMatrix({ repoDir, catalog, now: NOW });
+    const matrix = buildLaunchabilityMatrix({ repoDir, catalog, now: NOW, certificationRoot });
 
     for (const [modelId, allowedStages] of Object.entries(WATCHLIST_STAGE_MAP)) {
       for (const stage of LAUNCHABILITY_STAGES) {
@@ -245,5 +252,50 @@ describe('launch-priority watchlist launchability', () => {
     assert.ok(mistralCodingCell, 'mistral-large-2 coding cell should exist');
     assert.equal(mistralCodingCell.launchable, false, 'mistral-large-2 should not be launchable for coding');
     assert.equal(mistralCodingCell.blocker, 'context-window', 'mistral-large-2 should be blocked due to context window');
+  });
+
+  it('uses explicit certificationRoot instead of the ambient global root', () => {
+    const repoDir = mkdtempSync(join(tmpdir(), 'wavemill-launchability-explicit-'));
+    const populatedAmbientRoot = mkdtempSync(join(tmpdir(), 'wavemill-launchability-ambient-'));
+    const otherAmbientRoot = mkdtempSync(join(tmpdir(), 'wavemill-launchability-other-'));
+    const explicitEmptyRoot = mkdtempSync(join(tmpdir(), 'wavemill-launchability-empty-'));
+    const previousRoot = process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
+    writeMinimalConfig(repoDir);
+    writeCertification('qwen-3-235b', populatedAmbientRoot);
+
+    const catalog = loadLaunchPriorityList()
+      .filter((entry) => entry.wavemillAlias === 'qwen-3-235b');
+
+    try {
+      process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = populatedAmbientRoot;
+      const matrixWithPopulatedAmbient = buildLaunchabilityMatrix({
+        repoDir,
+        catalog,
+        now: NOW,
+        certificationRoot: explicitEmptyRoot,
+      });
+
+      process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = otherAmbientRoot;
+      const matrixWithEmptyAmbient = buildLaunchabilityMatrix({
+        repoDir,
+        catalog,
+        now: NOW,
+        certificationRoot: explicitEmptyRoot,
+      });
+
+      assert.deepEqual(matrixWithPopulatedAmbient, matrixWithEmptyAmbient);
+      const plannerCell = matrixWithPopulatedAmbient.cells.find((cell) =>
+        cell.modelId === 'qwen-3-235b' && cell.stage === 'planner');
+      assert.ok(plannerCell);
+      assert.equal(plannerCell.launchable, false);
+      assert.equal(plannerCell.blocker, 'certification');
+      assert.match(plannerCell.diagnostic ?? '', /reason=missing-artifact/);
+    } finally {
+      if (previousRoot === undefined) {
+        delete process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
+      } else {
+        process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = previousRoot;
+      }
+    }
   });
 });
