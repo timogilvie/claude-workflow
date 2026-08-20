@@ -112,6 +112,8 @@ export interface SessionStreamConfig {
   injectedContextRefs?: Array<{ resourceId: string; contentHash: string; version?: string }>;
   /** Optional policy config digest. */
   policyConfigDigest?: string;
+  /** When true, external code (launch-level) manages session start/end events. */
+  externalWriterManagesSessionBoundaries?: boolean;
 }
 
 export interface WavemillLoopConfig {
@@ -345,7 +347,9 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
       : undefined;
 
   // Initialize optional session event stream writer
+  // Session boundary events (started/ended) are only written if not provided externally
   let sessionStreamWriter: SessionStreamWriter | undefined;
+  let skipSessionBoundaryEvents = false;
   try {
     if (config.sessionStreamConfig) {
       const streamConfig = config.sessionStreamConfig;
@@ -358,11 +362,16 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
         },
         streamConfig.repoDir,
       );
-      // Write session_started event
-      sessionStreamWriter.writeSessionStarted({
-        initialConfigDigest: streamConfig.initialConfigDigest ?? computeArgsFingerprint(config.model),
-        manifestId: streamConfig.manifestId,
-      });
+      // Only write session_started if no external writer flag is set
+      // This allows launch-level code to control session boundaries for recovery/retry
+      if (!streamConfig.externalWriterManagesSessionBoundaries) {
+        sessionStreamWriter.writeSessionStarted({
+          initialConfigDigest: streamConfig.initialConfigDigest ?? computeArgsFingerprint(config.model),
+          manifestId: streamConfig.manifestId,
+        });
+      } else {
+        skipSessionBoundaryEvents = true;
+      }
     }
   } catch (error) {
     console.warn(`Failed to initialize session event stream: ${(error as Error).message}`);
@@ -871,9 +880,9 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
     stopReason = 'stop';
   }
 
-  // Write session_ended event if session stream is enabled
+  // Write session_ended event if session stream is enabled and not externally managed
   try {
-    if (sessionStreamWriter) {
+    if (sessionStreamWriter && !skipSessionBoundaryEvents) {
       sessionStreamWriter.writeSessionEnded({
         stopReason,
         totalTurns: turnsCompleted,

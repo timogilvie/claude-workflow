@@ -734,9 +734,27 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
       path: transcriptPath,
     });
 
-    // Construct session stream configuration
+    // Construct session stream configuration and create persistent writer
     const codingNativeSessionId = `${options.session}-coding-${options.issue}`;
     const eventStreamPath = resolveSessionEventStreamPath(codingNativeSessionId, options.repoDir);
+
+    // Create a persistent session stream writer for the entire launch lifecycle
+    let persistentSessionStreamWriter: SessionStreamWriter | undefined;
+    try {
+      persistentSessionStreamWriter = new SessionStreamWriter({
+        sessionId: codingNativeSessionId,
+        traceId: options.session,
+        phase: 'coding',
+        path: eventStreamPath,
+      }, options.repoDir);
+      persistentSessionStreamWriter.writeSessionStarted({
+        initialConfigDigest: `model:${model.provider}:${modelName}`,
+      });
+    } catch (error) {
+      console.warn(`Failed to create persistent session stream writer: ${(error as Error).message}`);
+      persistentSessionStreamWriter = undefined;
+    }
+
     const sessionStreamConfig: SessionStreamConfig = {
       sessionId: codingNativeSessionId,
       traceId: options.session,
@@ -744,6 +762,7 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
       eventStreamPath,
       repoDir: options.repoDir,
       initialConfigDigest: `model:${model.provider}:${modelName}`,
+      externalWriterManagesSessionBoundaries: true, // Launch level manages session boundaries
     };
 
     const { content: promptTemplate, promptRef } = loadCodingPrompt(options.repoDir);
@@ -888,15 +907,11 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
       recoveryAttempted = true;
       // Log session_resume event for recovery attempt
       try {
-        const sessionStreamWriter = new SessionStreamWriter({
-          sessionId: codingNativeSessionId,
-          traceId: options.session,
-          phase: 'coding',
-          path: eventStreamPath,
-        }, options.repoDir);
-        sessionStreamWriter.writeSessionResume({
-          reason: 'recovery: no completion artifact after mutation failure',
-        });
+        if (persistentSessionStreamWriter) {
+          persistentSessionStreamWriter.writeSessionResume({
+            reason: 'recovery: no completion artifact after mutation failure',
+          });
+        }
       } catch (error) {
         console.warn(`Failed to log session_resume event: ${(error as Error).message}`);
       }
@@ -935,17 +950,13 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
 
       // Log retry event for artifact validation failure
       try {
-        const sessionStreamWriter = new SessionStreamWriter({
-          sessionId: codingNativeSessionId,
-          traceId: options.session,
-          phase: 'coding',
-          path: eventStreamPath,
-        }, options.repoDir);
-        sessionStreamWriter.writeRetry({
-          failedEventId: randomUUID(),
-          reason: `${inspection.artifact} validation failed: ${inspection.errors.map((e) => `${e.code}:${e.message}`).join('; ')}`,
-          retryCount: artifactRetryAttempt,
-        });
+        if (persistentSessionStreamWriter) {
+          persistentSessionStreamWriter.writeRetry({
+            failedEventId: randomUUID(),
+            reason: `${inspection.artifact} validation failed: ${inspection.errors.map((e) => `${e.code}:${e.message}`).join('; ')}`,
+            retryCount: artifactRetryAttempt,
+          });
+        }
       } catch (error) {
         console.warn(`Failed to log retry event: ${(error as Error).message}`);
       }
@@ -1031,6 +1042,20 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
         agent: 'native',
         model: modelName,
       }, null, 2));
+    }
+
+    // Write session_ended event
+    try {
+      if (persistentSessionStreamWriter) {
+        persistentSessionStreamWriter.writeSessionEnded({
+          stopReason: result.stopReason,
+          totalTurns: result.turnsCompleted,
+          totalToolCalls: result.toolCallsExecuted,
+          totalTokens: result.totalInputTokens + result.totalOutputTokens,
+        });
+      }
+    } catch (error) {
+      console.warn(`Failed to write session_ended event: ${(error as Error).message}`);
     }
 
     return {
