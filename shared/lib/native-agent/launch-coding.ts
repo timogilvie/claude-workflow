@@ -763,6 +763,7 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
       repoDir: options.repoDir,
       initialConfigDigest: `model:${model.provider}:${modelName}`,
       externalWriterManagesSessionBoundaries: true, // Launch level manages session boundaries
+      writerInstance: persistentSessionStreamWriter, // Reuse writer to maintain seq counter
     };
 
     const { content: promptTemplate, promptRef } = loadCodingPrompt(options.repoDir);

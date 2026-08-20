@@ -114,6 +114,8 @@ export interface SessionStreamConfig {
   policyConfigDigest?: string;
   /** When true, external code (launch-level) manages session start/end events. */
   externalWriterManagesSessionBoundaries?: boolean;
+  /** Optional pre-created SessionStreamWriter instance to reuse (prevents duplicate seq counters). */
+  writerInstance?: SessionStreamWriter;
 }
 
 export interface WavemillLoopConfig {
@@ -353,7 +355,8 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
   try {
     if (config.sessionStreamConfig) {
       const streamConfig = config.sessionStreamConfig;
-      sessionStreamWriter = new SessionStreamWriter(
+      // Use provided writer instance if available to avoid duplicate seq counters
+      sessionStreamWriter = streamConfig.writerInstance ?? new SessionStreamWriter(
         {
           sessionId: streamConfig.sessionId,
           traceId: streamConfig.traceId,
