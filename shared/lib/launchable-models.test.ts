@@ -23,7 +23,13 @@ const WATCHLIST_STAGE_MAP = {
   'devstral-medium': ['coder'],
   'grok-code-fast': ['coder'],
 } satisfies Record<string, LaunchabilityStage[]>;
-const RETIRED_MODELS = new Set(['deepseek-coder-v2', 'qwen-2.5-coder-32b', 'gemini-2.0-flash', 'grok-code-fast']);
+const RETIRED_MODELS = new Set([
+  'deepseek-coder-v2',
+  'qwen-2.5-coder-32b',
+  'qwen-2.5-72b',
+  'gemini-2.0-flash',
+  'grok-code-fast',
+]);
 
 const NOW = new Date('2026-07-30T12:00:00.000Z');
 const priorOpenRouterKey = process.env.OPENROUTER_API_KEY;

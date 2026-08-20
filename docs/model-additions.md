@@ -36,6 +36,31 @@ Every canonical entry in `DEFAULT_MODEL_REGISTRY` must include:
 Repository-local `modelRegistry.models.<id>` overrides are no longer accepted.
 Canonical global registry entries must provide the complete metadata above.
 
+## Admission Criteria
+
+A model may only claim stages it can run. For each claimed
+`supportedModel.stages` value, the entry must declare `toolSupport` other than
+`none` and a `contextWindowTokens` value at or above that stage's floor:
+
+| Stage | Minimum context window |
+| --- | ---: |
+| `expansion` | 65,536 |
+| `planning` | 65,536 |
+| `coding` | 65,536 |
+| `review` | 65,536 |
+
+If a model qualifies for only some stages, narrow `supportedModel.stages` to
+those stages before adding it. Do not add it broadly and rely on downstream
+selection filters to compensate. Pre-existing entries that must be preserved
+for historical attribution but cannot run any claimed stage should remain in
+the registry with `supportedModel.lifecycle: "blocked"`.
+
+Admission is enforced by the registry unit tests, by
+`assertRegistryConsistency()` when registry overrides are merged, and by the
+scheduled OpenRouter alias audit. The audit reconciles declared context windows
+and tool support against the live provider catalog so provider drift is caught
+outside runtime launches.
+
 ## Retiring Models
 
 Retire models by keeping their registry entry and setting
@@ -55,8 +80,10 @@ npx tsx tools/audit-openrouter-aliases.ts
 ```
 
 The audit flags aliases that resolve to no OpenRouter wire ID or to an ID absent
-from the current OpenRouter catalog. Retired aliases may appear in the report as
-expected non-selectable findings.
+from the current OpenRouter catalog. It also flags declared context windows that
+exceed the provider catalog and declared tool support when the provider catalog
+omits tool support. The CI workflow runs this audit daily and on demand. Retired
+aliases may appear in the report as expected non-selectable findings.
 
 ## Family Aliases
 
