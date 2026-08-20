@@ -732,6 +732,53 @@ test_fetch_queue_plan_warning_stays_quiet_without_debug() {
   assert_no_queue_plan_temp_files "non-debug temp files cleaned" "$tmp_dir"
 }
 
+test_planner_receives_stdin_via_backgrounded_wrapper() {
+  local tmp_dir planner_stub planner_output result
+  tmp_dir="$(mktemp -d)"
+
+  planner_stub="$tmp_dir/stub-planner.sh"
+  cat > "$planner_stub" <<'EOF'
+#!/bin/bash
+set -e
+stdin_content=$(cat <&0)
+if [[ -z "$stdin_content" ]]; then
+  echo '{"error":"empty_stdin"}' >&2
+  exit 1
+fi
+if ! echo "$stdin_content" | jq -e '.[0]' >/dev/null 2>&1; then
+  echo '{"error":"invalid_json"}' >&2
+  exit 1
+fi
+echo '{"availableNow":["task1"],"queuedAfterDependencies":[],"avoidRunningTogether":[],"needsTriage":[]}'
+EOF
+  chmod +x "$planner_stub"
+
+  # Test: planner receives stdin correctly
+  planner_output=$(printf '[{"id":"task1"}]' | \
+    run_queue_planner_with_policy "$planner_stub" 15 '{"taskCount":1}' 2>/dev/null)
+
+  check_contains "backgrounded planner receives stdin" "$planner_output" '"availableNow"'
+  check_contains "backgrounded planner output is valid JSON" "$planner_output" 'queuedAfterDependencies'
+
+  rm -rf "$tmp_dir"
+}
+
+test_planner_stdin_missing_error_handling() {
+  local tmp_dir stderr_text
+  tmp_dir="$(mktemp -d)"
+
+  # Source the mill script to get run_queue_planner_with_policy and diagnostics
+  source "$MILL_SCRIPT"
+
+  # Test: empty stdin is handled as planner_input_missing
+  stderr_text=$({ printf '' | run_queue_planner_with_policy "cat" 15 '{}' 2>&1 >/dev/null; } 2>&1 || true)
+
+  check_contains "empty stdin triggers planner_input_missing" "$stderr_text" "planner_input_missing" || \
+    check_contains "empty stdin triggers error" "$stderr_text" "empty"
+
+  rm -rf "$tmp_dir"
+}
+
 echo "=== Task Selection Renderer ==="
 test_fetch_queue_plan_transforms_linear_backlog
 test_backlog_refresh_persists_cache_in_parent_shell
@@ -750,6 +797,8 @@ test_fetch_queue_plan_failure_diagnostics_dependency_planning
 test_fetch_queue_plan_failure_diagnostics_validation
 test_fetch_queue_plan_failure_diagnostics_empty_queue
 test_fetch_queue_plan_warning_stays_quiet_without_debug
+test_planner_receives_stdin_via_backgrounded_wrapper
+test_planner_stdin_missing_error_handling
 
 echo
 echo "Passed: $PASS"
