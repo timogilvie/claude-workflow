@@ -555,4 +555,97 @@ describe('hokusai-consent', () => {
       assert.match(display, /wavemill hokusai migrate/);
     });
   });
+
+  describe('blockers', () => {
+    it('returns empty blockers when submission is allowed', () => {
+      const configDir = makeTempDir('hokusai-consent-config-');
+      const repoDir = makeTempRepo({
+        hokusai: { contributions: { enabled: true } },
+      });
+
+      saveUserConfig({
+        hokusai: {
+          enabled: true,
+          consentedAt: '2026-04-14T12:00:00.000Z',
+          consentVersion: '1.0',
+        },
+      }, configDir);
+
+      const status = getContributionConsentStatus({ configDir, repoDir });
+      assert.equal(status.submissionAllowed, true);
+      assert.deepEqual(status.blockers, []);
+    });
+
+    it('includes blocker when user hokusai.enabled is false', () => {
+      const configDir = makeTempDir('hokusai-consent-config-');
+      const repoDir = makeTempRepo({
+        hokusai: { contributions: { enabled: true } },
+      });
+
+      saveUserConfig({ hokusai: { enabled: false } }, configDir);
+
+      const status = getContributionConsentStatus({ configDir, repoDir });
+      assert.equal(status.submissionAllowed, false);
+      assert.equal(status.blockers.length, 1);
+      assert.equal(status.blockers[0]!.setting, 'hokusai.enabled');
+      assert.equal(status.blockers[0]!.value, 'false');
+    });
+
+    it('includes blocker when contributions.enabled is false', () => {
+      const configDir = makeTempDir('hokusai-consent-config-');
+      const repoDir = makeTempRepo({
+        hokusai: { contributions: { enabled: false } },
+      });
+
+      saveUserConfig({
+        hokusai: {
+          enabled: true,
+          consentedAt: '2026-04-14T12:00:00.000Z',
+          consentVersion: '1.0',
+        },
+      }, configDir);
+
+      const status = getContributionConsentStatus({ configDir, repoDir });
+      assert.equal(status.submissionAllowed, false);
+      assert.equal(status.blockers.length, 1);
+      assert.equal(status.blockers[0]!.setting, 'hokusai.contributions.enabled');
+      assert.equal(status.blockers[0]!.store, 'repo-config');
+    });
+  });
+
+  describe('conflict warnings', () => {
+    it('warns when repo config is on but user config is off', () => {
+      const configDir = makeTempDir('hokusai-consent-config-');
+      const repoDir = makeTempRepo({
+        hokusai: { dataSubmission: { enabled: true }, contributions: { enabled: true } },
+      });
+
+      saveUserConfig({ hokusai: { enabled: false } }, configDir);
+
+      const contrib = getContributionStatus({ configDir, repoDir });
+      assert(contrib.warning);
+      assert.match(contrib.warning, /Configuration conflict/);
+      assert.match(contrib.warning, /hokusai.dataSubmission.enabled=true/);
+    });
+
+    it('warns when consent is valid but submission trigger is off', () => {
+      const configDir = makeTempDir('hokusai-consent-config-');
+      const repoDir = makeTempRepo({
+        hokusai: { dataSubmission: { enabled: false }, contributions: { enabled: true } },
+      });
+
+      saveUserConfig({
+        hokusai: {
+          enabled: true,
+          consentedAt: '2026-04-14T12:00:00.000Z',
+          consentVersion: '1.0',
+        },
+      }, configDir);
+
+      const contrib = getContributionStatus({ configDir, repoDir });
+      assert(contrib.warning);
+      assert.match(contrib.warning, /Configuration conflict/);
+      assert.match(contrib.warning, /submission trigger is off/);
+    });
+  });
 });

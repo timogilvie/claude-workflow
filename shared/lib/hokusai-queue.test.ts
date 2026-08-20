@@ -412,4 +412,27 @@ describe('hokusai-queue', () => {
       assert.deepEqual(pending.batch?.entries.map((entry) => entry.row.task_id), ['dead']);
     });
   });
+
+  describe('enqueueContribution blockers', () => {
+    it('returns blockers when submission is disabled', async () => {
+      const repoDir = mkTempRepo({ hokusai: { contributions: { enabled: false } } });
+      const configDir = mkTempConfigDir();
+
+      saveUserConfig({
+        hokusai: {
+          enabled: true,
+          consentedAt: '2026-04-14T12:00:00.000Z',
+          consentVersion: '1.0',
+        },
+      }, configDir);
+
+      const row: ContributionRow = buildTestRow();
+      const result = await enqueueContribution(row, { repoDir, configDir });
+
+      assert.equal(result.status, 'disabled');
+      assert(result.blockers);
+      assert(result.blockers.length > 0);
+      assert.match(result.blockers[0]!.setting, /contributions\.enabled/);
+    });
+  });
 });

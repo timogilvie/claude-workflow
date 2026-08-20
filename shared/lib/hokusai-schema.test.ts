@@ -1138,5 +1138,37 @@ describe('hokusai-schema', () => {
         'constraints.max_cost_usd must be null or a non-negative number',
       ]);
     });
+
+    it('uses nonRewardReason.code when eligibilityErrors is empty', () => {
+      const record = createMinimalRecord();
+      record.trainingEligible = false;
+      record.eligibilityErrors = [];
+      record.nonRewardReason = { code: 'INVALID_CHALLENGE', message: 'Challenge is invalid' };
+
+      const result = toHokusaiSubmission(record);
+      assert.equal(result.ok, false);
+      assert.deepEqual(result.reasons, ['INVALID_CHALLENGE']);
+    });
+
+    it('uses ineligible_unspecified when both eligibilityErrors and nonRewardReason are absent', () => {
+      const record = createMinimalRecord();
+      record.trainingEligible = false;
+      record.eligibilityErrors = [];
+
+      const result = toHokusaiSubmission(record);
+      assert.equal(result.ok, false);
+      assert.deepEqual(result.reasons, ['ineligible_unspecified']);
+    });
+
+    it('prefers eligibilityErrors over nonRewardReason when both present', () => {
+      const record = createMinimalRecord();
+      record.trainingEligible = false;
+      record.eligibilityErrors = ['missing_routing'];
+      record.nonRewardReason = { code: 'IGNORED', message: 'Should be ignored' };
+
+      const result = toHokusaiSubmission(record);
+      assert.equal(result.ok, false);
+      assert.deepEqual(result.reasons, ['missing_routing']);
+    });
   });
 });

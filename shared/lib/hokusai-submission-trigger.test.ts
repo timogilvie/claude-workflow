@@ -471,4 +471,60 @@ describe('hokusai-submission-trigger', () => {
     assert.equal(proj.outcomeArtifactValid, false);
     assert.equal(proj.outcomeArtifactUsed, false);
   });
+
+  describe('reasons and conflict warnings', () => {
+    it('returns reason when repo config disables submission', async () => {
+      const { repoDir, configDir } = setupWithDefaults();
+      const config = JSON.parse(readFileSync(join(repoDir, '.wavemill-config.json'), 'utf-8'));
+      config.hokusai.dataSubmission.enabled = false;
+      writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify(config), 'utf-8');
+
+      const result = await triggerHokusaiSubmission(createGoodRecord(), {
+        repoDir,
+        configDir,
+      });
+
+      assert.equal(result.status, 'disabled');
+      assert.match(result.reason, /hokusai.dataSubmission.enabled=false/);
+      assert.match(result.reason, new RegExp(repoDir));
+    });
+
+    it('includes blockers when user config blocks submission', async () => {
+      const { repoDir, configDir } = setupWithDefaults();
+
+      saveUserConfig({ hokusai: { enabled: false } }, configDir);
+
+      const result = await triggerHokusaiSubmission(createGoodRecord(), {
+        repoDir,
+        configDir,
+      });
+
+      assert.equal(result.status, 'disabled');
+      assert.deepEqual(result.blockers?.map((b) => b.setting), ['hokusai.enabled']);
+    });
+
+    it('emits split-brain warning when repo on but user store blocks', async () => {
+      const { repoDir, configDir } = setupWithDefaults();
+
+      saveUserConfig({ hokusai: { enabled: false } }, configDir);
+
+      const warnings: string[] = [];
+      const originalWarn = console.warn;
+      console.warn = (msg?: unknown) => {
+        warnings.push(String(msg));
+      };
+
+      try {
+        await triggerHokusaiSubmission(createGoodRecord(), {
+          repoDir,
+          configDir,
+        });
+      } finally {
+        console.warn = originalWarn;
+      }
+
+      assert(warnings.some((w) => w.includes('CONFIG CONFLICT')));
+      assert(warnings.some((w) => w.includes('hokusai.dataSubmission.enabled=true')));
+    });
+  });
 });
