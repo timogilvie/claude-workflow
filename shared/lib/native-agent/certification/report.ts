@@ -100,6 +100,8 @@ export interface BuildModelCertificationReportOptions {
   model?: string;
   /** Optional status filter. */
   status?: ModelCertificationState;
+  /** Optional global certification store root. Defaults through the env/global storage resolver. */
+  certificationRoot?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -171,7 +173,9 @@ export function buildModelCertificationReport(
     // Try loading the on-disk artifact
     const loaded = opts.loadCertificationFn
       ? loadCertFn(repoDir, nativeCapability.nativeProvider, modelId, certMeta.certificationSuiteVersion)
-      : loadGlobalCertification(nativeCapability.nativeProvider, modelId, certMeta.certificationSuiteVersion);
+      : loadGlobalCertification(nativeCapability.nativeProvider, modelId, certMeta.certificationSuiteVersion, {
+        root: opts.certificationRoot,
+      });
 
     if (!loaded.ok) {
       rows.push({

@@ -67,6 +67,7 @@ export interface BuildLaunchabilityMatrixOptions {
   registry?: ModelRegistry;
   now?: Date;
   catalog?: readonly LaunchPriorityModel[];
+  certificationRoot?: string;
 }
 
 function inferBlocker(input: {
@@ -144,7 +145,10 @@ export function buildLaunchabilityMatrix(options: BuildLaunchabilityMatrixOption
       const providerAvailable = providerFilter.models.includes(entry.wavemillAlias)
         || (capabilities?.nativeCapability?.nativeProvider === 'openrouter' && providerHasKey);
       const nativeFilter = registryModelId
-        ? filterNativeModels([registryModelId], stage as RouterRole, registry, repoDir, now)
+        ? filterNativeModels([registryModelId], stage as RouterRole, registry, repoDir, {
+          now,
+          certificationRoot: options.certificationRoot,
+        })
         : { eligible: [], rejected: [] };
       const certificationRejection = nativeFilter.rejected[0] ?? null;
       const resolution = resolveModelAgent({
@@ -153,6 +157,7 @@ export function buildLaunchabilityMatrix(options: BuildLaunchabilityMatrixOption
         registry,
         repoDir,
         now,
+        certificationRoot: options.certificationRoot,
       });
       const blocker = inferBlocker({
         catalog: entry,

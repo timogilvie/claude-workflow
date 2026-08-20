@@ -29,6 +29,7 @@ export type {
 export {
   buildCertificationPath,
   buildGlobalCertificationPath,
+  buildLegacyRepoCertificationPath,
   checkCertificationEligibility,
   checkGlobalCertificationEligibility,
   checkSharedCertificationEligibility,
