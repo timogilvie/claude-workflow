@@ -23,8 +23,18 @@ const WATCHLIST_STAGE_MAP = {
   'devstral-medium': ['coder'],
   'grok-code-fast': ['coder'],
 } satisfies Record<string, LaunchabilityStage[]>;
-const RETIRED_MODELS = new Set(['deepseek-coder-v2', 'qwen-2.5-coder-32b', 'gemini-2.0-flash', 'grok-code-fast']);
-const CONTEXT_INELIGIBLE_BY_STAGE = new Set(['qwen-2.5-72b:coder']);
+const RETIRED_MODELS = new Set([
+  'deepseek-coder-v2',
+  'qwen-2.5-coder-32b',
+  'qwen-2.5-72b',
+  'gemini-2.0-flash',
+  'grok-code-fast',
+]);
+// Models rejected solely by the stage context-window floor. qwen-2.5-72b does
+// not belong here: its registry lifecycle is `blocked`, and
+// explainModelSupportExclusion() checks lifecycle before the context floor, so
+// it always reports `lifecycle-blocked`.
+const CONTEXT_INELIGIBLE_BY_STAGE = new Set<string>();
 
 const NOW = new Date('2026-07-30T12:00:00.000Z');
 const priorOpenRouterKey = process.env.OPENROUTER_API_KEY;

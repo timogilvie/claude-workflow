@@ -1,8 +1,26 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, join } from 'node:path';
-import type { SupportedModelStage } from './model-registry.ts';
+import { getEffectiveRegistry, getModel, type SupportedModelStage } from './model-registry.ts';
+import { resolveWavemillAliasFromOpenRouterId } from './openrouter-catalog.ts';
 
+/**
+ * Retained for callers that want to size a floor from a central estimate.
+ * `recommendedFloor` no longer applies it: the floor is derived from p95, and
+ * a tail percentile already carries the headroom a multiplier would add.
+ */
 export const CONTEXT_FLOOR_HEADROOM_MULTIPLIER = 1.10;
+/**
+ * Fraction of a model's own context window at or above which an observed
+ * prompt is treated as an overflow incident rather than a workload sample.
+ *
+ * A run whose prompt nearly filled (or exceeded) the model's window is the
+ * failure the floor exists to prevent. Feeding it back in as evidence would
+ * ratchet the floor upward after every incident until only the largest-context
+ * models remain eligible.
+ */
+export const CONTEXT_OVERFLOW_SAMPLE_RATIO = 0.95;
+/** Percentile the recommended floor is derived from. */
+export const CONTEXT_FLOOR_PERCENTILE = 0.95;
 export const CONTEXT_FLOOR_ROUNDING_TOKENS = 1024;
 export const MIN_MEASURED_STAGE_SAMPLES = 3;
 export const PROVISIONAL_CONTEXT_FLOOR_TOKENS = 65_536;
@@ -22,6 +40,8 @@ export interface StagePromptObservation {
 export interface StageContextFloorRecommendation {
   stage: SupportedModelStage;
   samples: number;
+  /** Observations dropped because the prompt filled the model's own window. */
+  discardedOverflowSamples: number;
   p50: number;
   p95: number;
   p99: number;
@@ -52,34 +72,64 @@ export function roundUpTo1024(tokens: number): number {
   return Math.ceil(tokens / CONTEXT_FLOOR_ROUNDING_TOKENS) * CONTEXT_FLOOR_ROUNDING_TOKENS;
 }
 
+/**
+ * Linear-interpolated percentile.
+ *
+ * The previous nearest-rank form returned the maximum for any p >= 1 - 1/n,
+ * which made p95 and p99 identical to max on the small samples this module
+ * actually sees (n = 13 for coding). Interpolating keeps the tail statistics
+ * meaningful at small n.
+ */
 export function percentile(values: readonly number[], p: number): number {
   if (values.length === 0) return 0;
   if (values.length === 1) return values[0] ?? 0;
   const sorted = [...values].sort((a, b) => a - b);
   const clamped = Math.min(1, Math.max(0, p));
-  const index = Math.ceil(clamped * sorted.length) - 1;
-  return sorted[Math.max(0, Math.min(sorted.length - 1, index))] ?? 0;
+  const rank = clamped * (sorted.length - 1);
+  const lowerIndex = Math.floor(rank);
+  const upperIndex = Math.ceil(rank);
+  const lower = sorted[lowerIndex] ?? 0;
+  const upper = sorted[upperIndex] ?? lower;
+  if (lowerIndex === upperIndex) return lower;
+  return lower + (upper - lower) * (rank - lowerIndex);
+}
+
+/**
+ * True when the observation's prompt filled the running model's own context
+ * window, i.e. the run was at or past the limit rather than exercising a
+ * workload the floor should be sized for.
+ */
+export function isContextOverflowObservation(observation: StagePromptObservation): boolean {
+  const window = observation.contextWindowTokens;
+  if (!isPositiveFinite(window)) return false;
+  return observation.peakRequestTokens >= window * CONTEXT_OVERFLOW_SAMPLE_RATIO;
 }
 
 export function computeStageContextFloorRecommendations(
   observations: readonly StagePromptObservation[],
 ): StageContextFloorRecommendation[] {
   return STAGES.map((stage) => {
-    const stageObservations = observations
+    const allStageObservations = observations
       .filter((observation) => observation.stage === stage && isPositiveFinite(observation.peakRequestTokens));
+    const stageObservations = allStageObservations.filter(
+      (observation) => !isContextOverflowObservation(observation),
+    );
+    const discardedOverflowSamples = allStageObservations.length - stageObservations.length;
     const values = stageObservations.map((observation) => observation.peakRequestTokens);
     const max = values.length > 0 ? Math.max(...values) : 0;
     const provisional = values.length < MIN_MEASURED_STAGE_SAMPLES;
+    const p95 = percentile(values, CONTEXT_FLOOR_PERCENTILE);
     return {
       stage,
       samples: values.length,
+      discardedOverflowSamples,
       p50: percentile(values, 0.50),
-      p95: percentile(values, 0.95),
+      p95,
       p99: percentile(values, 0.99),
       max,
       recommendedFloor: provisional
         ? PROVISIONAL_CONTEXT_FLOOR_TOKENS
-        : roundUpTo1024(max * CONTEXT_FLOOR_HEADROOM_MULTIPLIER),
+        : roundUpTo1024(p95),
       provisional,
       sources: [...new Set(stageObservations.map((observation) => observation.source))].sort(),
     };
@@ -134,13 +184,15 @@ export function scanNativeSessionTranscripts(rootDir: string): StagePromptObserv
 export function formatStageContextFloorReport(recommendations: readonly StageContextFloorRecommendation[]): string {
   const lines = [
     'Stage context window floor recommendations',
-    `Formula: floor = roundUpTo1024(maxPeakRequestTokens * ${CONTEXT_FLOOR_HEADROOM_MULTIPLIER.toFixed(2)}); n < ${MIN_MEASURED_STAGE_SAMPLES} => ${PROVISIONAL_CONTEXT_FLOOR_TOKENS}`,
+    `Formula: floor = roundUpTo1024(p95 of non-overflow peakRequestTokens); n < ${MIN_MEASURED_STAGE_SAMPLES} => ${PROVISIONAL_CONTEXT_FLOOR_TOKENS}`,
+    `Overflow samples (peak >= ${(CONTEXT_OVERFLOW_SAMPLE_RATIO * 100).toFixed(0)}% of the running model's own window) are excluded.`,
     '',
   ];
   for (const recommendation of recommendations) {
     lines.push([
       recommendation.stage,
       `n=${recommendation.samples}`,
+      `overflowDropped=${recommendation.discardedOverflowSamples}`,
       `p50=${recommendation.p50}`,
       `p95=${recommendation.p95}`,
       `p99=${recommendation.p99}`,
@@ -155,7 +207,7 @@ export function formatStageContextFloorReport(recommendations: readonly StageCon
     const sourceSummary = recommendation.sources.slice(0, 3).join('; ') || 'no measured samples';
     lines.push(`  ${recommendation.stage}: {`);
     lines.push(`    floorTokens: ${formatNumericLiteral(recommendation.recommendedFloor)},`);
-    lines.push(`    provenance: ${JSON.stringify(`n=${recommendation.samples}; p95=${recommendation.p95}; max=${recommendation.max}; formula=roundUpTo1024(max*1.10); sources=${sourceSummary}`)},`);
+    lines.push(`    provenance: ${JSON.stringify(`n=${recommendation.samples}; overflowDropped=${recommendation.discardedOverflowSamples}; p50=${recommendation.p50}; p95=${recommendation.p95}; max=${recommendation.max}; formula=roundUpTo1024(p95 of non-overflow samples); sources=${sourceSummary}`)},`);
     lines.push(`    provisional: ${recommendation.provisional},`);
     lines.push('  },');
   }
@@ -184,6 +236,8 @@ function observationFromTranscript(path: string): StagePromptObservation | undef
   let peakRequestTokens = 0;
   let totalInputTokens = 0;
   let turns = 0;
+  let providerModelId: string | undefined;
+  let provider: string | undefined;
   for (const line of readFileSync(path, 'utf-8').split(/\r?\n/)) {
     if (!line.trim()) continue;
     let parsed: unknown;
@@ -191,6 +245,15 @@ function observationFromTranscript(path: string): StagePromptObservation | undef
       parsed = JSON.parse(line);
     } catch {
       continue;
+    }
+    if (parsed && typeof parsed === 'object') {
+      const record = parsed as Record<string, unknown>;
+      if (!providerModelId && typeof record.model === 'string' && record.model.trim()) {
+        providerModelId = record.model;
+      }
+      if (!provider && typeof record.provider === 'string' && record.provider.trim()) {
+        provider = record.provider;
+      }
     }
     const usage = extractUsage(parsed);
     if (!usage) continue;
@@ -201,6 +264,12 @@ function observationFromTranscript(path: string): StagePromptObservation | undef
   }
   if (peakRequestTokens <= 0) return undefined;
   const stat = safeStat(path);
+  // Attribute the run to a registry model so overflow samples (prompts that
+  // filled the model's own window) can be excluded from floor derivation.
+  const alias = providerModelId ? resolveWavemillAliasFromOpenRouterId(providerModelId) : null;
+  const contextWindowTokens = alias
+    ? getModel(getEffectiveRegistry(), alias)?.contextWindowTokens
+    : undefined;
   return {
     stage,
     peakRequestTokens,
@@ -208,6 +277,9 @@ function observationFromTranscript(path: string): StagePromptObservation | undef
     turns,
     source: `native transcript ${path}`,
     ...(stat ? { ts: stat.mtime.toISOString() } : {}),
+    ...(alias ? { model: alias } : {}),
+    ...(provider ? { provider } : {}),
+    ...(isPositiveFinite(contextWindowTokens) ? { contextWindowTokens } : {}),
   };
 }
 

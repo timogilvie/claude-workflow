@@ -2079,7 +2079,12 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       qualityScores: scores(58, 72, 84, 78, 58),
       pricing: { inputCostPerMTok: 0.35, outputCostPerMTok: 1.05 },
       defaultLadderEligible: false,
-      contextWindowTokens: 262_144,
+      // The model card advertises 262,144, but OpenRouter enforces a 204,800
+      // input cap: a 199,951-token coding prompt was rejected with
+      // "Range of input length should be [1, 204800]" (HOK-2778, 2026-08-19).
+      // Record the enforced limit so eligibility and the pre-flight guard both
+      // reason about the window the provider will actually accept.
+      contextWindowTokens: 204_800,
       toolSupport: 'basic',
       multimodal: { text: true, image: false },
       latencyTier: 'standard',
