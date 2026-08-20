@@ -4,7 +4,7 @@ import {
   buildModelCertificationReport,
   type ModelCertificationReportRow,
 } from './native-agent/certification/report.ts';
-import { resolveGlobalCertificationRoot } from './native-agent/certification/storage.ts';
+import { resolveCertificationStorage } from './native-agent/certification/storage.ts';
 import { explainEffectiveModelAvailability } from './effective-models.ts';
 import type { SupportedModelStage } from './model-registry.ts';
 import { loadWavemillConfig } from './config.ts';
@@ -111,12 +111,17 @@ function catalogVersion(rows: ModelCertificationReportRow[]): string | undefined
 export function buildGlobalModelParityReport(opts: {
   repoDir?: string;
   now?: Date;
+  certificationRoot?: string;
 } = {}): GlobalModelParityReport {
   const repoDir = opts.repoDir ?? process.cwd();
   const now = opts.now ?? new Date();
   const forbiddenLocalConfig = scanForbiddenModelSettings(repoDir);
   const effectiveRepoDir = forbiddenLocalConfig.length > 0 ? process.cwd() : repoDir;
-  const rows = buildModelCertificationReport({ repoDir: effectiveRepoDir, now });
+  const rows = buildModelCertificationReport({
+    repoDir: effectiveRepoDir,
+    now,
+    certificationRoot: opts.certificationRoot,
+  });
   const certifiedModelCountByStage = {} as Record<SupportedModelStage, number>;
   const runtimeReadyCountByStage = {} as Record<SupportedModelStage, number>;
   const challengePairAvailability = {} as Record<SupportedModelStage, boolean>;
@@ -132,6 +137,7 @@ export function buildGlobalModelParityReport(opts: {
         requireRuntimeReady: true,
         apiKeyPresent: apiKeyIsSet(repoDir, providerApiKeyEnv(repoDir, row.provider)),
         apiKeyEnv: providerApiKeyEnv(repoDir, row.provider),
+        certificationRoot: opts.certificationRoot,
       }).available)
       .map((row) => row.model)
       .sort();
@@ -163,6 +169,7 @@ export function buildGlobalModelParityReport(opts: {
         requireRuntimeReady: true,
         apiKeyPresent: apiKeySet,
         apiKeyEnv,
+        certificationRoot: opts.certificationRoot,
       });
       if (availability.available) {
         ready += 1;
@@ -187,7 +194,7 @@ export function buildGlobalModelParityReport(opts: {
     schemaVersion: 1,
     generatedAt: now.toISOString(),
     repoDir,
-    globalRoot: resolveGlobalCertificationRoot(),
+    globalRoot: resolveCertificationStorage({ scope: 'global', root: opts.certificationRoot }).root,
     ...(catalogVersion(rows) ? { globalCatalogVersion: catalogVersion(rows) } : {}),
     certifiedModelCountByStage,
     runtimeReadyCountByStage,

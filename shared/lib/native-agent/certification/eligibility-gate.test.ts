@@ -90,8 +90,10 @@ function writeArtifact(
   modelId: string,
   suiteVersion: string,
   overrides: Partial<NativeCertificationArtifact> = {},
+  certificationRoot?: string,
 ): string {
-  const path = buildGlobalCertificationPath(provider, modelId, suiteVersion);
+  void repoDir;
+  const path = buildGlobalCertificationPath(provider, modelId, suiteVersion, { root: certificationRoot });
   mkdirSync(dirname(path), { recursive: true });
   const openRouterIdentity = provider === 'openrouter'
     ? (modelId.includes('/') ? modelId.split('/') : ['z-ai', modelId])
@@ -294,6 +296,24 @@ describe('evaluateNativeProviderGate', () => {
       assert.equal(decision.nativeProvider, 'openai');
       assert.equal(decision.storagePath, path);
       assert.equal(decision.artifact?.phase, 'patch');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('uses certificationRoot over the ambient global root', () => {
+    const { repoDir, cleanup } = makeRepo();
+    try {
+      const explicitRoot = mkdtempSync(join(tmpdir(), 'eligibility-gate-explicit-'));
+      const registry = makeRegistry('gpt-4o', 'openai');
+      const path = writeArtifact(repoDir, 'openai', 'gpt-4o', 'v1', { phase: 'patch' }, explicitRoot);
+
+      const decision = evaluateNativeProviderGate(taskInput(registry, 'gpt-4o', repoDir, {
+        certificationRoot: explicitRoot,
+      }));
+
+      assert.equal(decision.ok, true);
+      assert.equal(decision.storagePath, path);
     } finally {
       cleanup();
     }
