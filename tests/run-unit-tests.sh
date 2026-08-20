@@ -146,6 +146,7 @@ TESTS=(
   shared/lib/hokusai-local-config.test.ts
   shared/lib/hokusai-audit.test.ts
   shared/lib/hokusai-submission-trigger.test.ts
+  shared/lib/hokusai-trigger-log.test.ts
   shared/lib/hokusai-queue.test.ts
   shared/lib/hokusai-backfill.test.ts
   shared/lib/hokusai-queue-drain.test.ts

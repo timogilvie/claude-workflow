@@ -785,6 +785,40 @@ describe('hokusai-schema', () => {
       );
     });
 
+    it('preserves explicit training eligibility errors when trainingEligible is false', () => {
+      expectFailure(
+        toHokusaiSubmission(makeRecord({
+          trainingEligible: false,
+          eligibilityErrors: ['missing_routing', 'missing_routing', 'missing_cost'],
+        })),
+        ['missing_cost', 'missing_routing'],
+      );
+    });
+
+    it('falls back to nonRewardReason code for ineligible training records', () => {
+      expectFailure(
+        toHokusaiSubmission(makeRecord({
+          trainingEligible: false,
+          eligibilityErrors: [],
+          nonRewardReason: {
+            code: 'INVALID_CHALLENGE',
+            message: 'Challenge secondary records are not submitted.',
+          },
+        })),
+        ['INVALID_CHALLENGE'],
+      );
+    });
+
+    it('uses a stable unspecified reason for ineligible training records without diagnostics', () => {
+      expectFailure(
+        toHokusaiSubmission(makeRecord({
+          trainingEligible: false,
+          eligibilityErrors: [],
+        })),
+        ['training_ineligible_unspecified'],
+      );
+    });
+
     it('prefers EvalConstraints maxCostUsd over descriptor constraints', () => {
       const result = expectSuccess(toHokusaiSubmission(makeRecord({
         constraints: { maxCostUsd: 1.25 },
