@@ -17,4 +17,49 @@ describe('effective-models', () => {
       assert.equal(availability.reason, 'blocked-lifecycle');
     }
   });
+
+  it('excludes models with insufficient context window from coding availability', () => {
+    // Test kimi-k2 specifically
+    const availability = explainEffectiveModelAvailability('kimi-k2', 'coding');
+    assert.equal(availability.available, false);
+    assert.equal(availability.reason, 'context-window-insufficient');
+    
+    // But should be available for planning (no floor)
+    const planningAvailability = explainEffectiveModelAvailability('kimi-k2', 'planning');
+    assert.equal(planningAvailability.available, true);
+  });
+
+  it('listEffectiveModelsForStage excludes context-window-insufficient models', () => {
+    const { models } = listEffectiveModelsForStage('coding');
+
+    // Models actively selectable today whose declared window falls below the
+    // built-in coding floor. Their exclusion reason must be
+    // `context-window-insufficient`.
+    const contextWindowExcluded = [
+      'kimi-k2',
+      'mistral-large-2',
+      'llama-3.3-70b',
+    ];
+    for (const modelId of contextWindowExcluded) {
+      assert.equal(models.includes(modelId), false, `${modelId} should not be effective for coding`);
+      const availability = explainEffectiveModelAvailability(modelId, 'coding');
+      assert.equal(availability.available, false);
+      assert.equal(availability.reason, 'context-window-insufficient');
+    }
+
+    // Models retained for historical attribution but lifecycle-blocked by prior
+    // work (HOK-2773, and qwen-2.5-72b by HOK-2783's registry admission
+    // criteria). blocked-lifecycle wins over context-window-insufficient.
+    const lifecycleExcluded = ['deepseek-coder-v2', 'qwen-2.5-coder-32b', 'qwen-2.5-72b'];
+    for (const modelId of lifecycleExcluded) {
+      assert.equal(models.includes(modelId), false, `${modelId} should not be effective for coding`);
+      const availability = explainEffectiveModelAvailability(modelId, 'coding');
+      assert.equal(availability.available, false);
+      assert.equal(availability.reason, 'blocked-lifecycle');
+    }
+
+    // But they should still be available for planning
+    const { models: planningModels } = listEffectiveModelsForStage('planning');
+    assert.ok(planningModels.includes('kimi-k2'), 'kimi-k2 should be available for planning');
+  });
 });
