@@ -183,7 +183,8 @@ export function renderTrajectoryHtml(projection: TrajectoryProjection, opts: { t
     main { height: calc(100vh - 168px); overflow: auto; position: relative; }
     #spacer { position: relative; min-height: 100%; }
     #window { position: absolute; inset-inline: 0; top: 0; }
-    .row { position: absolute; left: 28px; right: 28px; min-height: 82px; padding: 12px 14px 12px 18px; background: var(--panel); border: 1px solid var(--line); border-left: 5px solid var(--accent); border-radius: 8px; box-shadow: var(--shadow); overflow: hidden; }
+    .row { position: absolute; left: 28px; right: 28px; height: 92px; padding: 12px 14px 12px 18px; background: var(--panel); border: 1px solid var(--line); border-left: 5px solid var(--accent); border-radius: 8px; box-shadow: var(--shadow); overflow: hidden; }
+    .row .events { max-height: 46px; overflow: hidden; }
     .row.error { border-left-color: var(--danger); }
     .row.flash { outline: 3px solid var(--accent-2); }
     .row-head { display: flex; gap: 8px; align-items: center; justify-content: space-between; margin-bottom: 8px; }
