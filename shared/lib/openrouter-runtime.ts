@@ -7,11 +7,16 @@ import type {
   NormalizedCatalogEntry,
   NormalizedPricing,
 } from './openrouter-catalog.ts';
+import {
+  assertOpenRouterBalanceSufficient,
+  capOpenRouterMaxTokensForBalance,
+} from './native-agent/openrouter-credits-guard.ts';
 
 export type BlockerCategory =
   | 'provider_unavailable'
   | 'unsupported_parameter'
   | 'auth_rate_limit'
+  | 'billing_exhausted'
   | 'model_response_error';
 
 export interface Message {
@@ -86,6 +91,14 @@ export function classifyOpenRouterError(input: {
   if (input.status === 401 || input.status === 403 || input.status === 429) {
     return {
       category: 'auth_rate_limit',
+      detail: extractErrorDetail(input.status, input.body),
+      raw,
+    };
+  }
+
+  if (input.status === 402) {
+    return {
+      category: 'billing_exhausted',
       detail: extractErrorDetail(input.status, input.body),
       raw,
     };
@@ -198,6 +211,7 @@ export async function dispatchOpenRouterRequest(
     baseUrl?: string;
     transport?: OpenRouterTransport;
     timeoutMs?: number;
+    repoDir?: string;
   },
 ): Promise<DispatchResult> {
   const modelId = entry.wavemillAlias;
@@ -215,6 +229,12 @@ export async function dispatchOpenRouterRequest(
     throw new Error('OpenRouter API key is required for direct dispatch.');
   }
 
+  assertOpenRouterBalanceSufficient({
+    repoDir: opts.repoDir,
+    model: modelId,
+    pricing: entry.pricing,
+  });
+
   const payload: Record<string, unknown> = {
     model: entry.openrouterId,
     messages: request.messages,
@@ -223,7 +243,12 @@ export async function dispatchOpenRouterRequest(
     payload.temperature = request.temperature;
   }
   if (typeof request.maxOutputTokens === 'number') {
-    payload.max_tokens = request.maxOutputTokens;
+    payload.max_tokens = capOpenRouterMaxTokensForBalance({
+      requestedMaxTokens: request.maxOutputTokens,
+      pricing: entry.pricing,
+      repoDir: opts.repoDir,
+      inputCostReserveUsd: estimateInputCostReserveUsd(request.estimatedTokens, entry.pricing),
+    });
   }
   if ((request.tools?.length ?? 0) > 0) {
     payload.tools = request.tools;
@@ -335,6 +360,23 @@ function buildChatCompletionsUrl(baseUrl?: string): string {
     return `${normalizedBase}/chat/completions`;
   }
   return `${normalizedBase}/v1/chat/completions`;
+}
+
+function estimateInputCostReserveUsd(
+  estimatedTokens: number | undefined,
+  pricing: NormalizedPricing,
+): number {
+  if (
+    typeof estimatedTokens !== 'number'
+    || !Number.isFinite(estimatedTokens)
+    || estimatedTokens <= 0
+    || typeof pricing.inputPerMTok !== 'number'
+    || !Number.isFinite(pricing.inputPerMTok)
+    || pricing.inputPerMTok <= 0
+  ) {
+    return 0;
+  }
+  return (estimatedTokens / 1_000_000) * pricing.inputPerMTok;
 }
 
 function createTimeoutSignal(
