@@ -122,6 +122,20 @@ describe('plan-queue CLI', () => {
     }
   });
 
+  it('fails clearly for empty stdin', () => {
+    const result = runPlanQueue(['--stdin', '--json'], '');
+    assert.notEqual(result.status, 0);
+    assert.equal(result.stdout, '');
+    assert.match(result.stderr, /Backlog input from stdin was empty/);
+  });
+
+  it('fails clearly for malformed (but not empty) stdin JSON', () => {
+    const result = runPlanQueue(['--stdin', '--json'], '[{"id":"HOK-1"');
+    assert.notEqual(result.status, 0);
+    assert.equal(result.stdout, '');
+    assert.match(result.stderr, /parse backlog JSON/);
+  });
+
   it('emits empty arrays and preview placeholders for an empty backlog', () => {
     const emptyJson = '[]';
     const jsonResult = parseJson(runPlanQueue(['--stdin', '--json'], emptyJson).stdout);

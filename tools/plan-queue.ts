@@ -94,6 +94,14 @@ async function loadBacklogFromLinear(projectName?: string): Promise<BacklogRecor
   }));
 }
 
+function readBacklogFromStdin(): BacklogRecord[] {
+  const content = readFileSync(0, 'utf8');
+  if (content.trim().length === 0) {
+    throw new Error('Backlog input from stdin was empty.');
+  }
+  return parseBacklogJson(content, 'stdin');
+}
+
 function readBacklogFile(path: string): BacklogRecord[] {
   try {
     return parseBacklogJson(readFileSync(path, 'utf8'), path);
@@ -177,7 +185,7 @@ runTool({
     const records = args['backlog-file']
       ? readBacklogFile(args['backlog-file'])
       : args.stdin
-      ? parseBacklogJson(readFileSync(0, 'utf8'), 'stdin')
+      ? readBacklogFromStdin()
       : await loadBacklogFromLinear(args.project);
     const fingerprintTasks = records.map(toCacheTask);
     let cacheBeforePrune: CacheFile | undefined = undefined;
