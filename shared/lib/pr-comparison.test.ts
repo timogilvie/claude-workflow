@@ -5,7 +5,9 @@ import {
   buildCappedComparisonPrompt,
   buildComparisonPrompt,
   formatRoutingSummary,
+  mapBlindVerdictToSides,
   prNumberFromValue,
+  resolvePresentationOrder,
   validateComparisonJson,
 } from './pr-comparison.ts';
 
@@ -17,10 +19,9 @@ test('prNumberFromValue extracts the PR number from URLs', () => {
 test('buildComparisonPrompt includes workflow context when routing metadata differs', () => {
   const prompt = buildComparisonPrompt({
     issuePrompt: 'Issue context',
-    primaryDiff: 'primary diff',
-    challengerDiff: 'challenger diff',
-    primaryEvalScore: 0.8,
-    challengerEvalScore: 0.7,
+    primaryDiff: 'alpha diff',
+    challengerDiff: 'beta diff',
+    presentationOrder: 'primary-first',
     primaryRouting: {
       planner: 'planner-a',
       coder: 'coder-a',
@@ -42,16 +43,19 @@ test('buildComparisonPrompt includes workflow context when routing metadata diff
   assert.match(prompt, /Workflow Context/);
   assert.match(prompt, /Variables that differed: planner/);
   assert.match(prompt, /intervention_impact/);
+  assert.match(prompt, /Candidate A side:/);
+  assert.match(prompt, /Candidate B side:/);
   assert.doesNotMatch(prompt, /scopeDiscipline/);
+  assert.doesNotMatch(prompt, /Primary/);
+  assert.doesNotMatch(prompt, /Challenger/);
 });
 
 test('buildComparisonPrompt includes direct stage evidence for planner challenges', () => {
   const prompt = buildComparisonPrompt({
     issuePrompt: 'Issue context',
-    primaryDiff: 'primary diff',
-    challengerDiff: 'challenger diff',
-    primaryEvalScore: 0.8,
-    challengerEvalScore: 0.7,
+    primaryDiff: 'alpha diff',
+    challengerDiff: 'beta diff',
+    presentationOrder: 'primary-first',
     challengeType: 'planner-only',
     primaryStageEval: {
       stage: 'plan',
@@ -72,17 +76,19 @@ test('buildComparisonPrompt includes direct stage evidence for planner challenge
   });
 
   assert.match(prompt, /Direct Stage Evidence/);
-  assert.match(prompt, /Primary plan evidence \(direct\)/);
+  assert.match(prompt, /Candidate A plan evidence \(direct\)/);
+  assert.match(prompt, /Candidate B plan evidence \(direct\)/);
   assert.match(prompt, /plan_text: Plan chooses a staged auth migration/);
+  assert.doesNotMatch(prompt, /Primary/);
+  assert.doesNotMatch(prompt, /Challenger/);
 });
 
 test('buildComparisonPrompt omits direct stage evidence when fallback inference is required', () => {
   const prompt = buildComparisonPrompt({
     issuePrompt: 'Issue context',
-    primaryDiff: 'primary diff',
-    challengerDiff: 'challenger diff',
-    primaryEvalScore: 0.8,
-    challengerEvalScore: 0.7,
+    primaryDiff: 'alpha diff',
+    challengerDiff: 'beta diff',
+    presentationOrder: 'primary-first',
     challengeType: 'reviewer-only',
     primaryStageEval: {
       stage: 'review',
@@ -111,66 +117,111 @@ test('buildCappedComparisonPrompt truncates oversized diff bodies', () => {
     issuePrompt: 'Issue context',
     primaryDiff: 'p'.repeat(4000),
     challengerDiff: 'c'.repeat(4000),
-    primaryEvalScore: 0.5,
-    challengerEvalScore: 0.75,
+    presentationOrder: 'challenger-first',
   }, 3000);
 
   assert.equal(result.truncated, true);
   assert.ok(result.finalBytes <= 3000);
-  assert.match(result.prompt, /TRUNCATED primary diff/);
-  assert.match(result.prompt, /TRUNCATED challenger diff/);
-  assert.match(result.prompt, /Primary eval score \(overall\): 0.5/);
-  assert.match(result.prompt, /Challenger eval score \(overall\): 0.75/);
+  assert.match(result.prompt, /TRUNCATED candidate A diff/);
+  assert.match(result.prompt, /TRUNCATED candidate B diff/);
+  assert.doesNotMatch(result.prompt, /TRUNCATED primary diff/);
+  assert.doesNotMatch(result.prompt, /TRUNCATED challenger diff/);
 });
 
 test('validateComparisonJson trims fields and rejects invalid score payloads', () => {
   const valid = validateComparisonJson({
-    winner: 'primary',
+    winner: 'A',
     rationale: ' better result ',
     workflowInsight: ' routing mattered ',
     dimensions: {
-      completeness: { primary: 8, challenger: 7 },
-      correctness: { primary: 8, challenger: 6 },
-      code_quality: { primary: 7, challenger: 6 },
-      intervention_impact: { primary: 9, challenger: 7 },
-      autonomy: { primary: 8, challenger: 7 },
+      completeness: { A: 8, B: 7 },
+      correctness: { A: 8, B: 6 },
+      code_quality: { A: 7, B: 6 },
+      intervention_impact: { A: 9, B: 7 },
+      autonomy: { A: 8, B: 7 },
     },
   });
 
   assert.equal(valid.rationale, 'better result');
   assert.equal(valid.workflowInsight, 'routing mattered');
+  assert.equal(valid.winner, 'A');
 
   assert.throws(
     () => validateComparisonJson({
-      winner: 'challenger',
+      winner: 'B',
       rationale: 'ok',
       dimensions: {
-        completeness: { primary: 8, challenger: 7 },
-        correctness: { primary: 11, challenger: 6 },
-        code_quality: { primary: 7, challenger: 6 },
-        intervention_impact: { primary: 9, challenger: 7 },
-        autonomy: { primary: 8, challenger: 7 },
+        completeness: { A: 8, B: 7 },
+        correctness: { A: 11, B: 6 },
+        code_quality: { A: 7, B: 6 },
+        intervention_impact: { A: 9, B: 7 },
+        autonomy: { A: 8, B: 7 },
       },
     }),
     /Expected integers from 1 to 10/
   );
 });
 
-test('validateComparisonJson rejects legacy keys', () => {
+test('validateComparisonJson rejects unblinded and legacy keys', () => {
   assert.throws(
     () => validateComparisonJson({
       winner: 'primary',
       rationale: 'ok',
       dimensions: {
-        completeness: { primary: 8, challenger: 7 },
-        correctness: { primary: 8, challenger: 7 },
-        code_quality: { primary: 8, challenger: 7 },
-        intervention_impact: { primary: 8, challenger: 7 },
-        autonomy: { primary: 8, challenger: 7 },
-        scopeDiscipline: { primary: 8, challenger: 7 },
+        completeness: { A: 8, B: 7 },
+        correctness: { A: 8, B: 7 },
+        code_quality: { A: 8, B: 7 },
+        intervention_impact: { A: 8, B: 7 },
+        autonomy: { A: 8, B: 7 },
+      },
+    }),
+    /Unblinded comparison winner keys/
+  );
+
+  assert.throws(
+    () => validateComparisonJson({
+      winner: 'A',
+      rationale: 'ok',
+      dimensions: {
+        completeness: { A: 8 },
+        correctness: { A: 8, B: 7 },
+        code_quality: { A: 8, B: 7 },
+        intervention_impact: { A: 8, B: 7 },
+        autonomy: { A: 8, B: 7 },
+      },
+    }),
+    /Invalid dimension payload for completeness/
+  );
+
+  assert.throws(
+    () => validateComparisonJson({
+      winner: 'A',
+      rationale: 'ok',
+      dimensions: {
+        completeness: { A: 8, B: 7 },
+        correctness: { A: 8, B: 7 },
+        code_quality: { A: 8, B: 7 },
+        intervention_impact: { A: 8, B: 7 },
+        autonomy: { A: 8, B: 7 },
+        scopeDiscipline: { A: 8, B: 7 },
       },
     }),
     /Legacy comparison keys/
+  );
+
+  assert.throws(
+    () => validateComparisonJson({
+      winner: 'A',
+      rationale: 'ok',
+      dimensions: {
+        completeness: { primary: 8, challenger: 7 },
+        correctness: { A: 8, B: 7 },
+        code_quality: { A: 8, B: 7 },
+        intervention_impact: { A: 8, B: 7 },
+        autonomy: { A: 8, B: 7 },
+      },
+    }),
+    /Unblinded comparison dimension keys/
   );
 });
 
@@ -308,54 +359,46 @@ test('formatRoutingSummary separates intended routing from executed provenance a
   assert.match(summary, /executed-model-mismatch intended=claude-opus-4-7 executed=kimi-k2\.7-code/);
 });
 
-test('buildComparisonPrompt uses stage-specific score label for reviewer-only', () => {
-  const prompt = buildComparisonPrompt({
-    issuePrompt: 'Issue context',
-    primaryDiff: 'primary diff',
-    challengerDiff: 'challenger diff',
-    primaryEvalScore: 0.64,
-    challengerEvalScore: 0.75,
-    primaryEvalScoreSource: 'stage.review',
-    challengerEvalScoreSource: 'stage.review',
-  });
-  assert.match(prompt, /Primary review-stage eval score: 0\.64/);
-  assert.match(prompt, /Challenger review-stage eval score: 0\.75/);
-  assert.doesNotMatch(prompt, /Primary eval score:/);
+test('buildComparisonPrompt blinds labels and eval scores in both presentation orders', () => {
+  for (const presentationOrder of ['primary-first', 'challenger-first'] as const) {
+    const prompt = buildComparisonPrompt({
+      issuePrompt: 'Issue context',
+      primaryDiff: 'alpha diff body',
+      challengerDiff: 'beta diff body',
+      presentationOrder,
+      primaryRouting: {
+        planner: 'planner-a',
+        coder: 'coder-a',
+        reviewer: 'reviewer-a',
+        planDepth: 'deep',
+        codeDepth: 'medium',
+        reviewMode: 'full',
+      },
+      challengerRouting: {
+        planner: 'planner-b',
+        coder: 'coder-b',
+        reviewer: 'reviewer-b',
+        planDepth: 'medium',
+        codeDepth: 'low',
+        reviewMode: 'lite',
+      },
+    });
+
+    assert.match(prompt, /Candidate A/);
+    assert.match(prompt, /Candidate B/);
+    assert.match(prompt, /"winner": "A" \| "B"/);
+    assert.doesNotMatch(prompt, /Primary/);
+    assert.doesNotMatch(prompt, /Challenger/);
+    assert.doesNotMatch(prompt, /0\.7|0\.8|0\.60|0\.75/);
+    assert.doesNotMatch(prompt, /eval score|Per-stage scores|review-stage eval/i);
+  }
 });
 
-test('buildComparisonPrompt uses overall label when source is overall', () => {
-  const prompt = buildComparisonPrompt({
+test('buildComparisonPrompt places routing, evidence, and diffs according to presentation order', () => {
+  const baseInput = {
     issuePrompt: 'Issue context',
-    primaryDiff: 'primary diff',
-    challengerDiff: 'challenger diff',
-    primaryEvalScore: 0.7,
-    challengerEvalScore: 0.8,
-    primaryEvalScoreSource: 'overall',
-    challengerEvalScoreSource: 'overall',
-  });
-  assert.match(prompt, /Primary eval score \(overall\): 0\.7/);
-  assert.match(prompt, /Challenger eval score \(overall\): 0\.8/);
-});
-
-test('buildComparisonPrompt uses overall label when source is absent', () => {
-  const prompt = buildComparisonPrompt({
-    issuePrompt: 'Issue context',
-    primaryDiff: 'primary diff',
-    challengerDiff: 'challenger diff',
-    primaryEvalScore: 0.5,
-    challengerEvalScore: 0.6,
-  });
-  assert.match(prompt, /Primary eval score \(overall\): 0\.5/);
-  assert.match(prompt, /Challenger eval score \(overall\): 0\.6/);
-});
-
-test('buildComparisonPrompt includes per-stage scores in workflow context for multi-variable', () => {
-  const prompt = buildComparisonPrompt({
-    issuePrompt: 'Issue context',
-    primaryDiff: 'primary diff',
-    challengerDiff: 'challenger diff',
-    primaryEvalScore: 0.7,
-    challengerEvalScore: 0.8,
+    primaryDiff: 'alpha diff body',
+    challengerDiff: 'beta diff body',
     primaryRouting: {
       planner: 'planner-a',
       coder: 'coder-a',
@@ -372,12 +415,121 @@ test('buildComparisonPrompt includes per-stage scores in workflow context for mu
       codeDepth: 'low',
       reviewMode: 'lite',
     },
-    primaryPerStageScores: { plan: 0.6, review: 0.7 },
-    challengerPerStageScores: { plan: 0.8, review: 0.75 },
+    challengeType: 'planner-only',
+    primaryStageEval: {
+      stage: 'plan' as const,
+      provenance: 'direct' as const,
+      summary: 'Alpha stage evidence.',
+      evidence: [{ label: 'plan_text', summary: 'Alpha plan summary.', source: 'alpha-plan' }],
+    },
+    challengerStageEval: {
+      stage: 'plan' as const,
+      provenance: 'direct' as const,
+      summary: 'Beta stage evidence.',
+      evidence: [{ label: 'plan_text', summary: 'Beta plan summary.', source: 'beta-plan' }],
+    },
+  };
+
+  const primaryFirst = buildComparisonPrompt({
+    ...baseInput,
+    presentationOrder: 'primary-first',
   });
-  assert.match(prompt, /Per-stage scores:/);
-  assert.match(prompt, /plan: primary=0\.60, challenger=0\.80/);
-  assert.match(prompt, /review: primary=0\.70, challenger=0\.75/);
+  assert.ok(primaryFirst.indexOf('Candidate A side:\n- Planner: planner-a') < primaryFirst.indexOf('Candidate B side:\n- Planner: planner-b'));
+  assert.ok(primaryFirst.indexOf('Candidate A plan evidence (direct): Alpha') < primaryFirst.indexOf('Candidate B plan evidence (direct): Beta'));
+  assert.ok(primaryFirst.indexOf('Candidate A diff:\nalpha diff body') < primaryFirst.indexOf('Candidate B diff:\nbeta diff body'));
+
+  const challengerFirst = buildComparisonPrompt({
+    ...baseInput,
+    presentationOrder: 'challenger-first',
+  });
+  assert.ok(challengerFirst.indexOf('Candidate A side:\n- Planner: planner-b') < challengerFirst.indexOf('Candidate B side:\n- Planner: planner-a'));
+  assert.ok(challengerFirst.indexOf('Candidate A plan evidence (direct): Beta') < challengerFirst.indexOf('Candidate B plan evidence (direct): Alpha'));
+  assert.ok(challengerFirst.indexOf('Candidate A diff:\nbeta diff body') < challengerFirst.indexOf('Candidate B diff:\nalpha diff body'));
+});
+
+test('mapBlindVerdictToSides attributes winners and dimensions under both orders', () => {
+  const blindVerdict = {
+    winner: 'A' as const,
+    rationale: 'Candidate A did better.',
+    workflowInsight: 'Routing mattered.',
+    dimensions: {
+      completeness: { A: 9, B: 6 },
+      correctness: { A: 8, B: 5 },
+      code_quality: { A: 7, B: 4 },
+      intervention_impact: { A: 6, B: 3 },
+      autonomy: { A: 5, B: 2 },
+    },
+  };
+
+  const primaryFirst = mapBlindVerdictToSides(blindVerdict, 'primary-first');
+  assert.equal(primaryFirst.winner, 'primary');
+  assert.deepEqual(primaryFirst.dimensions.completeness, { primary: 9, challenger: 6 });
+
+  const challengerFirst = mapBlindVerdictToSides(blindVerdict, 'challenger-first');
+  assert.equal(challengerFirst.winner, 'challenger');
+  assert.deepEqual(challengerFirst.dimensions.completeness, { primary: 6, challenger: 9 });
+
+  assert.equal(mapBlindVerdictToSides({ ...blindVerdict, winner: 'B' }, 'primary-first').winner, 'challenger');
+  assert.equal(mapBlindVerdictToSides({ ...blindVerdict, winner: 'B' }, 'challenger-first').winner, 'primary');
+});
+
+test('resolvePresentationOrder supports random, explicit override, and invalid values', () => {
+  assert.equal(resolvePresentationOrder(undefined, () => 0.1), 'primary-first');
+  assert.equal(resolvePresentationOrder('random', () => 0.9), 'challenger-first');
+  assert.equal(resolvePresentationOrder('challenger-first', () => 0.1), 'challenger-first');
+  assert.equal(resolvePresentationOrder('primary-first', () => 0.9), 'primary-first');
+  assert.throws(() => resolvePresentationOrder('primary'), /Invalid presentation order/);
+});
+
+test('existing comparison replay maps to the same stored winner and dimensions when order is fixed', () => {
+  const stored = {
+    winner: 'primary' as const,
+    dimensions: {
+      completeness: { primary: 8, challenger: 6 },
+      correctness: { primary: 9, challenger: 5 },
+      code_quality: { primary: 7, challenger: 6 },
+      intervention_impact: { primary: 8, challenger: 4 },
+      autonomy: { primary: 9, challenger: 5 },
+    },
+  };
+
+  const primaryFirstBlind = {
+    winner: 'A' as const,
+    rationale: 'Candidate A wins.',
+    dimensions: {
+      completeness: { A: 8, B: 6 },
+      correctness: { A: 9, B: 5 },
+      code_quality: { A: 7, B: 6 },
+      intervention_impact: { A: 8, B: 4 },
+      autonomy: { A: 9, B: 5 },
+    },
+  };
+  assert.deepEqual(
+    {
+      winner: mapBlindVerdictToSides(primaryFirstBlind, 'primary-first').winner,
+      dimensions: mapBlindVerdictToSides(primaryFirstBlind, 'primary-first').dimensions,
+    },
+    stored,
+  );
+
+  const challengerFirstBlind = {
+    winner: 'B' as const,
+    rationale: 'Candidate B wins.',
+    dimensions: {
+      completeness: { A: 6, B: 8 },
+      correctness: { A: 5, B: 9 },
+      code_quality: { A: 6, B: 7 },
+      intervention_impact: { A: 4, B: 8 },
+      autonomy: { A: 5, B: 9 },
+    },
+  };
+  assert.deepEqual(
+    {
+      winner: mapBlindVerdictToSides(challengerFirstBlind, 'challenger-first').winner,
+      dimensions: mapBlindVerdictToSides(challengerFirstBlind, 'challenger-first').dimensions,
+    },
+    stored,
+  );
 });
 
 test('buildChallengeCommentBody points each PR at the opposite PR', () => {
