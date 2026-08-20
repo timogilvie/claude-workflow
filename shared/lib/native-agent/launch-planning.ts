@@ -41,6 +41,7 @@ import {
   type PlanningFailureReason,
 } from './planning-guards.ts';
 import { computeModelCost, loadPricingTable } from '../workflow-cost.ts';
+import { appendStagePromptObservation } from '../stage-prompt-observations.ts';
 
 const DEFAULT_HELPER_TIMEOUT_MS = 12 * 60 * 1000;
 const HELPER_STDERR_TAIL_CHARS = 2000;
@@ -646,6 +647,16 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
         transcriptWriter.handleEvent(event);
       },
       budget: toLoopBudget(planningLimits),
+    });
+    appendStagePromptObservation({
+      repoDir: options.repoDir,
+      stage: 'planning',
+      model: model.name ?? model.id,
+      provider: model.provider,
+      peakRequestTokens: result.peakRequestTokens,
+      totalInputTokens: result.totalInputTokens,
+      turns: result.turnsCompleted,
+      source: 'native-planning-loop',
     });
     const planningOutcomeArtifacts = buildPlanningOutcomeArtifacts({
       repoDir: options.repoDir,

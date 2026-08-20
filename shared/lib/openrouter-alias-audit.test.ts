@@ -12,7 +12,7 @@ function makeModel(overrides: Partial<ModelRegistry['models'][string]> = {}): Mo
     weaknesses: ['test'],
     qualityScores: { routing: 0, planning: 0, coding: 80, review: 0, classify: 0 },
     defaultLadderEligible: false,
-    contextWindowTokens: 128_000,
+    contextWindowTokens: 400_000,
     toolSupport: 'basic',
     multimodal: { text: true, image: false },
     latencyTier: 'standard',

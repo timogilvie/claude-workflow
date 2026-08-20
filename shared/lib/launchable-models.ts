@@ -32,6 +32,7 @@ export type LaunchabilityBlocker =
   | 'credential'
   | 'certification'
   | 'role-ineligible'
+  | 'ineligible'
   | 'disabled-deprecated'
   | 'retired'
   | 'unsupported-launch-path';
@@ -85,6 +86,9 @@ function inferBlocker(input: {
   )) {
     return 'retired';
   }
+  if (input.resolution.ok === false && input.resolution.reason === 'context-window-insufficient') {
+    return 'ineligible';
+  }
   if (input.catalog.status === 'deprecated' || !input.enabled) return 'disabled-deprecated';
   if (!input.stageEligible) return 'role-ineligible';
   if (!input.providerAvailable) {
@@ -96,6 +100,7 @@ function inferBlocker(input: {
     if (input.resolution.reason === 'uncertified') return 'certification';
     if (input.resolution.reason === 'unknown-model') return 'missing-registry';
     if (input.resolution.reason === 'lifecycle-blocked' || input.resolution.reason === 'tool-support-insufficient') return 'retired';
+    if (input.resolution.reason === 'context-window-insufficient') return 'ineligible';
     return 'unsupported-launch-path';
   }
   return null;

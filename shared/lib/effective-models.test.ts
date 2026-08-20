@@ -4,6 +4,8 @@ import {
   explainEffectiveModelAvailability,
   listEffectiveModelsForStage,
 } from './effective-models.ts';
+import { DEFAULT_MODEL_REGISTRY } from './model-registry.ts';
+import { getStageContextFloor } from './stage-context-floors.ts';
 
 describe('effective-models', () => {
   it('excludes retired native-openrouter aliases from coding availability', () => {
@@ -15,6 +17,22 @@ describe('effective-models', () => {
       const availability = explainEffectiveModelAvailability(alias, 'coding');
       assert.equal(availability.available, false);
       assert.equal(availability.reason, 'blocked-lifecycle');
+    }
+  });
+
+  it('excludes context-ineligible models before they reach scheduling pools', () => {
+    const { models } = listEffectiveModelsForStage('coding');
+    assert.equal(models.includes('kimi-k2'), false);
+
+    const availability = explainEffectiveModelAvailability('kimi-k2', 'coding');
+    assert.equal(availability.available, false);
+    assert.equal(availability.reason, 'context-window-insufficient');
+
+    for (const model of models) {
+      assert.ok(
+        (DEFAULT_MODEL_REGISTRY.models[model]?.contextWindowTokens ?? 0) >= getStageContextFloor('coding'),
+        'the 2026-08-17 kimi-k2 context-window failure should be unreachable via coding selection',
+      );
     }
   });
 });

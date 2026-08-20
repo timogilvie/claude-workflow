@@ -531,7 +531,7 @@ describe('resolve-challenge-task CLI', () => {
         '--feature-dir', featureDir,
         '--file', join(featureDir, 'task-packet.md'),
         '--pinned-stage', 'implementation',
-        '--preserved-challenger-model', 'claude-haiku-4-5-20251001',
+        '--preserved-challenger-model', 'claude-sonnet-5',
       ]);
 
       assert.equal(result.mode, 'challenge');
@@ -539,7 +539,7 @@ describe('resolve-challenge-task CLI', () => {
       assert.equal(result.selectionReason, 'preserved');
       const entries = result.entries as Array<Record<string, unknown>>;
       const challenger = entries.find((entry) => entry.role === 'challenger');
-      assert.equal(challenger?.variedModel, 'claude-haiku-4-5-20251001');
+      assert.equal(challenger?.variedModel, 'claude-sonnet-5');
       const intent = result.challengeExecutionIntent as Record<string, unknown>;
       assert.equal(intent.selectionReason, 'preserved');
     } finally {

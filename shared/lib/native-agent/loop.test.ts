@@ -225,6 +225,31 @@ describe('loop — budget stops', () => {
     assert.equal(result.totalInputTokens, 600);
   });
 
+  it('reports the peak per-request prompt token count', async () => {
+    const tool = makeTool('noop', 'parallel', async () => 'done');
+    const api = uniqueApi('peak-request');
+    registerScriptedPiProvider({
+      api,
+      turns: [
+        {
+          content: [{ type: 'tool_call', id: 'peak-1', name: 'noop', arguments: {} }],
+          usage: { input: 100, output: 5, cacheRead: 20, cacheWrite: 3 },
+          stopReason: 'tool_calls',
+        },
+        {
+          content: [{ type: 'text', text: 'Second' }],
+          usage: { input: 90, output: 5, cacheRead: 200, cacheWrite: 10 },
+          stopReason: 'stop',
+        },
+      ],
+    });
+
+    const result = await runWavemillLoop(baseConfig(api, [tool]));
+
+    assert.equal(result.peakRequestTokens, 300);
+    assert.equal(result.totalInputTokens, 190);
+  });
+
   it('stops when maxOutputTokens is exceeded', async () => {
     const api = uniqueApi('budget-output-tokens');
     registerScriptedPiProvider({

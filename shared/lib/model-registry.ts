@@ -6,6 +6,7 @@ import {
   type CertificationPhase,
 } from './native-agent/certification/schema.ts';
 import { resolveWavemillAliasFromOpenRouterId } from './openrouter-catalog.ts';
+import { getStageContextFloor } from './stage-context-floors.ts';
 
 export type ModelClass = 'frontier' | 'strong_generalist' | 'fast_economy';
 export type RegistryTaskType = 'routing' | 'planning' | 'coding' | 'review' | 'classify';
@@ -26,6 +27,7 @@ export type ModelSupportExclusionReason =
   | 'disabled'
   | 'stage-incompatible'
   | 'tool-support-insufficient'
+  | 'context-window-insufficient'
   | 'routing-ineligible';
 export type AgentType =
   | 'claude'
@@ -2441,6 +2443,9 @@ export function explainModelSupportExclusion(
   }
   if (stageRequiresTools(normalized) && !hasSufficientToolSupport(capabilities, normalized)) {
     return 'tool-support-insufficient';
+  }
+  if (capabilities.contextWindowTokens < getStageContextFloor(normalized)) {
+    return 'context-window-insufficient';
   }
   if ((capabilities.supportedModel?.routingEligible ?? true) === false) {
     return 'routing-ineligible';

@@ -22,7 +22,7 @@ function makeModel(lifecycle: 'supported' | 'blocked' = 'supported'): ModelRegis
     strengths: ['test'],
     weaknesses: ['test'],
     qualityScores: { routing: 0, planning: 0, coding: 80, review: 0, classify: 0 },
-    contextWindowTokens: 128_000,
+    contextWindowTokens: 400_000,
     toolSupport: 'basic',
     multimodal: { text: true, image: false },
     latencyTier: 'standard',

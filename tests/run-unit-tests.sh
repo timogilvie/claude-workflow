@@ -127,6 +127,8 @@ TESTS=(
   shared/lib/launch-validation.test.ts
   shared/lib/merge-queue.test.ts
   shared/lib/model-registry.test.ts
+  shared/lib/stage-context-floor-derivation.test.ts
+  shared/lib/stage-prompt-observations.test.ts
   shared/lib/effective-models.test.ts
   shared/lib/model-agent-resolution.test.ts
   shared/lib/model-resolution.test.ts

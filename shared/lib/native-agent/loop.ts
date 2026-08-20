@@ -138,6 +138,7 @@ export interface LoopResult {
   stopReason: LoopStopReason;
   turnsCompleted: number;
   toolCallsExecuted: number;
+  peakRequestTokens: number;
   totalInputTokens: number;
   totalOutputTokens: number;
   totalCostUsd: number;
@@ -314,6 +315,7 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
       stopReason: 'aborted',
       turnsCompleted: 0,
       toolCallsExecuted: 0,
+      peakRequestTokens: 0,
       totalInputTokens: 0,
       totalOutputTokens: 0,
       totalCostUsd: 0,
@@ -323,6 +325,7 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
 
   let turnsCompleted = 0;
   let toolCallsExecuted = 0;
+  let peakRequestTokens = 0;
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
   let totalCostUsd = 0;
@@ -391,6 +394,7 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
         const output = usage.output ?? 0;
         const cacheWrite = usage.cacheWrite ?? 0;
         const cacheRead = usage.cacheRead ?? 0;
+        peakRequestTokens = Math.max(peakRequestTokens, input + cacheRead + cacheWrite);
         totalInputTokens += input;
         totalOutputTokens += output;
         if (modelPricing) {
@@ -659,6 +663,7 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
     stopReason,
     turnsCompleted,
     toolCallsExecuted,
+    peakRequestTokens,
     totalInputTokens,
     totalOutputTokens,
     totalCostUsd,

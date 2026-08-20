@@ -33,6 +33,7 @@ import {
 import { loadPromptResourceSync } from '../resource-retrieval.ts';
 import { createCleanupTracker, runCleanup, type CleanupReason } from './cleanup.ts';
 import { updateStageResult } from '../stage-result.ts';
+import { appendStagePromptObservation } from '../stage-prompt-observations.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const NATIVE_REVIEW_PHASE_PROMPT_PATH = resolve(
@@ -368,6 +369,16 @@ export async function runNativeReview(
     }
     throw error;
   }
+  appendStagePromptObservation({
+    repoDir,
+    stage: 'review',
+    model: provider.entry.modelId,
+    provider: provider.entry.providerName,
+    peakRequestTokens: loopResult.peakRequestTokens,
+    totalInputTokens: loopResult.totalInputTokens,
+    turns: loopResult.turnsCompleted,
+    source: 'native-review-loop',
+  });
 
   const cleanupReason = cleanupReasonForStopReason(loopResult.stopReason);
   if (cleanupReason) {

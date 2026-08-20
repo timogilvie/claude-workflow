@@ -12,7 +12,7 @@ function makeRegistry(modelId: string, model: ModelRegistry['models'][string]): 
         strengths: [],
         weaknesses: [],
         qualityScores: { routing: 70, planning: 70, coding: 70, review: 70, classify: 70 },
-        contextWindowTokens: 128_000,
+        contextWindowTokens: 400_000,
         toolSupport: 'basic',
         multimodal: { text: true, image: false },
         latencyTier: 'standard',
@@ -334,5 +334,40 @@ describe('resolveModelAgent', () => {
     if (result.ok) assert.fail('expected rejection');
     assert.equal(result.reason, 'tool-support-insufficient');
     assert.match(result.diagnostic, /certification=tool-support:none/);
+  });
+
+  it('rejects supported native-openrouter models below the coding context floor', () => {
+    const registry = makeRegistry('native-small-window', {
+      agent: 'native-openrouter',
+      contextWindowTokens: 131_072,
+      toolSupport: 'full',
+      nativeCapability: {
+        nativeProvider: 'openrouter',
+        piTransportKind: 'openai-completions',
+        readOnlyNative: 'certified',
+        compatFlags: { thinkingFormat: 'openrouter' },
+        certification: {
+          maxCertifiedPhase: 'workflow',
+          certifiedAt: '2099-01-01T00:00:00.000Z',
+          certificationSuiteVersion: 'v1',
+        },
+      },
+      supportedModel: {
+        lifecycle: 'supported',
+        stages: ['coding'],
+      },
+    });
+
+    const result = resolveModelAgent({
+      model: 'native-small-window',
+      phase: 'coding',
+      registry,
+      now: new Date('2098-01-01T00:00:00.000Z'),
+    });
+
+    assert.equal(result.ok, false);
+    if (result.ok) assert.fail('expected rejection');
+    assert.equal(result.reason, 'context-window-insufficient');
+    assert.match(result.diagnostic, /reason=context-window-insufficient/);
   });
 });

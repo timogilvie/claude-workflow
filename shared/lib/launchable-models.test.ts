@@ -24,6 +24,7 @@ const WATCHLIST_STAGE_MAP = {
   'grok-code-fast': ['coder'],
 } satisfies Record<string, LaunchabilityStage[]>;
 const RETIRED_MODELS = new Set(['deepseek-coder-v2', 'qwen-2.5-coder-32b', 'gemini-2.0-flash', 'grok-code-fast']);
+const CONTEXT_INELIGIBLE_BY_STAGE = new Set(['qwen-2.5-72b:coder']);
 
 const NOW = new Date('2026-07-30T12:00:00.000Z');
 const priorOpenRouterKey = process.env.OPENROUTER_API_KEY;
@@ -107,6 +108,12 @@ describe('launch-priority watchlist launchability', () => {
       for (const stage of LAUNCHABILITY_STAGES) {
         const phase = stage === 'planner' ? 'planning' : stage === 'coder' ? 'coding' : 'review';
         const result = resolveModelAgent({ model: modelId, phase, now: NOW });
+        if (CONTEXT_INELIGIBLE_BY_STAGE.has(`${modelId}:${stage}`)) {
+          assert.equal(result.ok, false, `${modelId}:${stage} should reject on context window`);
+          if (result.ok) assert.fail('expected context-window rejection');
+          assert.equal(result.reason, 'context-window-insufficient');
+          continue;
+        }
         if (RETIRED_MODELS.has(modelId)) {
           assert.equal(result.ok, false, `${modelId}:${stage} should reject as retired`);
           if (result.ok) assert.fail('expected retired rejection');
@@ -185,6 +192,10 @@ describe('launch-priority watchlist launchability', () => {
           assert.equal(cell.launchable, false);
           assert.equal(cell.blocker, 'retired');
           assert.match(cell.diagnostic ?? '', /reason=lifecycle-blocked/);
+        } else if (CONTEXT_INELIGIBLE_BY_STAGE.has(`${modelId}:${stage}`)) {
+          assert.equal(cell.launchable, false);
+          assert.equal(cell.blocker, 'ineligible');
+          assert.match(cell.diagnostic ?? '', /reason=context-window-insufficient/);
         } else if (!allowedStages.includes(stage)) {
           assert.equal(cell.launchable, false);
           assert.equal(cell.blocker, 'role-ineligible');

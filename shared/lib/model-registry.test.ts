@@ -42,6 +42,7 @@ import {
   validateNativeCapability,
   validateModelId,
 } from './model-registry.ts';
+import { getStageContextFloor } from './stage-context-floors.ts';
 import { resolveOpenRouterModelId } from './openrouter-provider.ts';
 import { clearConfigCache } from './config.ts';
 import { filterDisabledModels } from './disabled-models.ts';
@@ -98,7 +99,7 @@ function makeCapabilities(
     },
     pricing: overrides.pricing ? { ...overrides.pricing } : undefined,
     defaultLadderEligible: overrides.defaultLadderEligible ?? true,
-    contextWindowTokens: overrides.contextWindowTokens ?? 128_000,
+    contextWindowTokens: overrides.contextWindowTokens ?? 400_000,
     toolSupport: overrides.toolSupport ?? 'full',
     multimodal: overrides.multimodal ? { ...overrides.multimodal } : { text: true, image: false },
     latencyTier: overrides.latencyTier ?? 'standard',
@@ -2196,6 +2197,55 @@ describe('canonical supported-model helpers', () => {
     assert.equal(explainModelSupportExclusion('blocked-coder', 'coding', registry), 'blocked-lifecycle');
     assert.equal(explainModelSupportExclusion('planner-only', 'coding', registry), 'stage-incompatible');
     assert.equal(explainModelSupportExclusion('no-tools-coder', 'coding', registry), 'tool-support-insufficient');
+  });
+
+  it('excludes models whose context window is below the stage floor', () => {
+    assert.equal(explainModelSupportExclusion('kimi-k2', 'coding'), 'context-window-insufficient');
+    if (DEFAULT_MODEL_REGISTRY.models['kimi-k2'].contextWindowTokens >= getStageContextFloor('planning')) {
+      assert.equal(explainModelSupportExclusion('kimi-k2', 'planning'), undefined);
+    }
+
+    const floor = getStageContextFloor('coding');
+    const registry: ModelRegistry = {
+      models: {
+        exact: makeCapabilities({
+          contextWindowTokens: floor,
+          qualityScores: { coding: 90 },
+          supportedModel: { lifecycle: 'supported', stages: ['coding'] },
+        }),
+        under: makeCapabilities({
+          contextWindowTokens: floor - 1,
+          qualityScores: { coding: 90 },
+          supportedModel: { lifecycle: 'supported', stages: ['coding'] },
+        }),
+        fullToolsTinyWindow: makeCapabilities({
+          contextWindowTokens: 32_768,
+          toolSupport: 'full',
+          qualityScores: makeScores(90),
+          supportedModel: { lifecycle: 'supported', stages: ['expansion', 'planning', 'coding', 'review'] },
+        }),
+        noToolsTinyWindow: makeCapabilities({
+          contextWindowTokens: 32_768,
+          toolSupport: 'none',
+          qualityScores: { coding: 90 },
+          supportedModel: { lifecycle: 'supported', stages: ['coding'] },
+        }),
+      },
+      ladders: {},
+    };
+
+    assert.equal(explainModelSupportExclusion('exact', 'coding', registry), undefined);
+    assert.equal(explainModelSupportExclusion('under', 'coding', registry), 'context-window-insufficient');
+    for (const stage of ['expansion', 'planning', 'coding', 'review'] as const) {
+      assert.equal(
+        explainModelSupportExclusion('fullToolsTinyWindow', stage, registry),
+        'context-window-insufficient',
+      );
+    }
+    assert.equal(
+      explainModelSupportExclusion('noToolsTinyWindow', 'coding', registry),
+      'tool-support-insufficient',
+    );
   });
 
   it('retains retired native-openrouter aliases for attribution but excludes them from stages', () => {

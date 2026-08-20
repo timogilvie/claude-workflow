@@ -70,6 +70,7 @@ import type { ResourceRef } from '../resource-registry.ts';
 import {
   getBlockedCompletionPath,
 } from '../blocked-completion.ts';
+import { appendStagePromptObservation } from '../stage-prompt-observations.ts';
 
 const CODING_PROMPT_PATH = new URL('../../../tools/prompts/coding-phase.md', import.meta.url);
 const CODING_PROMPT_FILE = fileURLToPath(CODING_PROMPT_PATH);
@@ -880,6 +881,16 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
         throw new Error(`Native coding failed: ${recoveryProviderError}`);
       }
     }
+    appendStagePromptObservation({
+      repoDir: options.repoDir,
+      stage: 'coding',
+      model: modelName,
+      provider: model.provider,
+      peakRequestTokens: result.peakRequestTokens,
+      totalInputTokens: result.totalInputTokens,
+      turns: result.turnsCompleted,
+      source: 'native-coding-loop',
+    });
 
     let inspection = await inspectCompletion({
       featureDir,

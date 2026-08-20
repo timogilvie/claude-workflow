@@ -25,6 +25,7 @@ import { registerNativeRuntime } from './resource-adapters/native-runtime-adapte
 import { recordUse } from './resource-manifest.ts';
 import { nativeAgentTypeForProvider, type ModelRegistry } from './model-registry.ts';
 import { getMaxCostUsd } from './config.ts';
+import { appendStagePromptObservation } from './stage-prompt-observations.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const NATIVE_PHASE_PROMPT_PATH = resolve(__dirname, '../../tools/prompts/native-read-only-phase.md');
@@ -353,6 +354,17 @@ export async function runNativeExpansion(options: NativeExpansionOptions): Promi
       maxCostUsd: getMaxCostUsd(options.repoDir) ?? 5,
     },
     compatRegistry: options.registry,
+  });
+  appendStagePromptObservation({
+    repoDir: options.repoDir,
+    stage: 'expansion',
+    model: provider.modelId,
+    provider: provider.providerName,
+    peakRequestTokens: loopResult.peakRequestTokens,
+    totalInputTokens: loopResult.totalInputTokens,
+    turns: loopResult.turnsCompleted,
+    registry: options.registry,
+    source: 'native-expansion-loop',
   });
 
   if (loopResult.stopReason === 'error') {
