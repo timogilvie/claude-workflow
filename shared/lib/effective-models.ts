@@ -56,6 +56,7 @@ export interface EffectiveModelOptions {
   requireRuntimeReady?: boolean;
   apiKeyPresent?: boolean;
   apiKeyEnv?: string;
+  certificationRoot?: string;
 }
 
 const STAGE_TO_CERTIFICATION_PHASE: Record<SupportedModelStage, CertificationPhase> = {
@@ -147,6 +148,7 @@ export function explainEffectiveModelAvailability(
       apiKeyPresent: opts.apiKeyPresent ?? true,
       apiKeyEnv: opts.apiKeyEnv ?? 'RUNTIME_READINESS_UNSPECIFIED',
       now: opts.now,
+      certificationRoot: opts.certificationRoot,
     });
     if (!nativeGate.ok) {
       return {

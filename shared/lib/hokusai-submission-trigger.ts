@@ -1,9 +1,11 @@
-import { getHokusaiSubmissionConfig } from './config.ts';
+import { getHokusaiSubmissionConfig, getHokusaiSubmissionEnableSources } from './config.ts';
 import { buildSubmitDataContributionRow, type RedactedEvalContributionProjection } from './hokusai-contribution-builder.ts';
 import { drainContributionQueue } from './hokusai-queue-drain.ts';
 import { enqueueContribution } from './hokusai-queue.ts';
+import { formatSubmissionSwitches, getSubmissionSwitchReport } from './hokusai-consent.ts';
 import { redactHokusaiSubmission } from './hokusai-redaction.ts';
 import { toHokusaiSubmission, type HokusaiSubmission } from './hokusai-schema.ts';
+import { appendTriggerLogEntry } from './hokusai-trigger-log.ts';
 import { errorMessage } from './error-utils.ts';
 import type { EvalRecord } from './eval-schema.ts';
 
@@ -15,7 +17,7 @@ export interface TriggerHokusaiSubmissionOptions {
 }
 
 export type HokusaiSubmissionTriggerResult =
-  | { status: 'disabled' }
+  | { status: 'disabled'; source: 'repo_config' | 'consent'; detail: string }
   | { status: 'not_eligible'; reasons: string[] }
   | { status: 'enqueued'; entryId?: string; drainStarted: boolean }
   | { status: 'duplicate'; drainStarted: false }
@@ -24,7 +26,7 @@ export type HokusaiSubmissionTriggerResult =
 export function formatHokusaiSubmissionTriggerResult(result: HokusaiSubmissionTriggerResult): string {
   switch (result.status) {
     case 'disabled':
-      return 'disabled';
+      return `disabled (${result.source}: ${result.detail})`;
     case 'not_eligible':
       return `not eligible (${result.reasons.join(', ') || 'no reason provided'})`;
     case 'enqueued':
@@ -38,6 +40,9 @@ export function formatHokusaiSubmissionTriggerResult(result: HokusaiSubmissionTr
 
 export const hokusaiSubmissionTriggerDeps = {
   getHokusaiSubmissionConfig,
+  getHokusaiSubmissionEnableSources,
+  getSubmissionSwitchReport,
+  appendTriggerLogEntry,
   toHokusaiSubmission,
   redactHokusaiSubmission,
   buildSubmitDataContributionRow,
@@ -161,6 +166,48 @@ function warnHokusai(message: string, error: unknown): void {
   console.warn(`[hokusai] ${message}: ${errorMessage(error)}`);
 }
 
+function renderOptionalBool(value: boolean | undefined): string {
+  return value === undefined ? 'unset' : String(value);
+}
+
+function repoConfigDisabledDetail(repoDir: string): string {
+  const sources = hokusaiSubmissionTriggerDeps.getHokusaiSubmissionEnableSources(repoDir);
+  return `hokusai.dataSubmission.enabled resolved false for repoDir=${repoDir} (base=${renderOptionalBool(sources.baseEnabled)} local=${renderOptionalBool(sources.localEnabled)})`;
+}
+
+function consentDisabledDetail(options: TriggerHokusaiSubmissionOptions, blockers: string[]): string {
+  const report = hokusaiSubmissionTriggerDeps.getSubmissionSwitchReport(options);
+  return `user consent store ${report.userConfigPath} blocked submissions (${blockers.join(', ') || 'unknown blocker'}); ${formatSubmissionSwitches(report)}; run 'wavemill hokusai enable'`;
+}
+
+function triggerLogEntry(
+  record: EvalRecord,
+  result: HokusaiSubmissionTriggerResult,
+): Parameters<typeof appendTriggerLogEntry>[0] {
+  return {
+    at: new Date().toISOString(),
+    ...(record.id ? { evalId: record.id } : {}),
+    ...(record.issueId ? { issueId: record.issueId } : {}),
+    status: result.status,
+    ...(result.status === 'not_eligible' ? { reasons: result.reasons } : {}),
+    ...(result.status === 'disabled' ? { source: result.source, detail: result.detail } : {}),
+    ...(result.status === 'failed' ? { detail: result.error } : {}),
+  };
+}
+
+function recordTriggerResult(
+  record: EvalRecord,
+  repoDir: string,
+  result: HokusaiSubmissionTriggerResult,
+): HokusaiSubmissionTriggerResult {
+  try {
+    hokusaiSubmissionTriggerDeps.appendTriggerLogEntry(triggerLogEntry(record, result), repoDir);
+  } catch (error) {
+    warnHokusai('failed to append trigger log', error);
+  }
+  return result;
+}
+
 /**
  * Best-effort Hokusai submission trigger for completed eval records.
  *
@@ -175,12 +222,16 @@ export async function triggerHokusaiSubmission(
   try {
     const config = hokusaiSubmissionTriggerDeps.getHokusaiSubmissionConfig(options.repoDir);
     if (config.enabled !== true) {
-      return { status: 'disabled' };
+      return recordTriggerResult(record, options.repoDir, {
+        status: 'disabled',
+        source: 'repo_config',
+        detail: repoConfigDisabledDetail(options.repoDir),
+      });
     }
 
     const submissionResult = hokusaiSubmissionTriggerDeps.toHokusaiSubmission(record);
     if (!submissionResult.ok) {
-      return { status: 'not_eligible', reasons: submissionResult.reasons };
+      return recordTriggerResult(record, options.repoDir, { status: 'not_eligible', reasons: submissionResult.reasons });
     }
 
     const redactedSubmission = hokusaiSubmissionTriggerDeps.redactHokusaiSubmission(submissionResult.submission, {
@@ -200,8 +251,17 @@ export async function triggerHokusaiSubmission(
       configDir: options.configDir,
     });
 
-    if (enqueueResult.status !== 'enqueued') {
-      return { status: enqueueResult.status, drainStarted: false };
+    if (enqueueResult.status === 'disabled') {
+      const detail = consentDisabledDetail(options, enqueueResult.blockers);
+      console.warn(`[hokusai] submission disabled by consent gate: ${detail}`);
+      return recordTriggerResult(record, options.repoDir, {
+        status: 'disabled',
+        source: 'consent',
+        detail,
+      });
+    }
+    if (enqueueResult.status === 'duplicate') {
+      return recordTriggerResult(record, options.repoDir, { status: 'duplicate', drainStarted: false });
     }
 
     void hokusaiSubmissionTriggerDeps.drainContributionQueue({
@@ -210,13 +270,13 @@ export async function triggerHokusaiSubmission(
     }).catch((error) => {
       warnHokusai('opportunistic drain failed', error);
     });
-    return {
+    return recordTriggerResult(record, options.repoDir, {
       status: 'enqueued',
       entryId: enqueueResult.entry?.entryId,
       drainStarted: true,
-    };
+    });
   } catch (error) {
     warnHokusai('submission trigger failed', error);
-    return { status: 'failed', error: errorMessage(error) };
+    return recordTriggerResult(record, options.repoDir, { status: 'failed', error: errorMessage(error) });
   }
 }

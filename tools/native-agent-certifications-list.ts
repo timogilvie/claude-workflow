@@ -5,7 +5,7 @@ import { runTool } from '../shared/lib/tool-runner.ts';
 import {
   listGlobalCertifications,
   readCertification,
-  resolveGlobalCertificationRoot,
+  resolveCertificationStorage,
   type NativeCertificationArtifact,
 } from '../shared/lib/native-agent/certification/index.ts';
 
@@ -24,10 +24,11 @@ export function listGlobalCertificationArtifacts(opts: {
   provider?: string;
   model?: string;
   phase?: string;
+  root?: string;
 } = {}): ListedCertification[] {
-  const root = resolveGlobalCertificationRoot();
+  const root = resolveCertificationStorage({ scope: 'global', root: opts.root }).root;
   const rows: ListedCertification[] = [];
-  for (const artifactPath of listGlobalCertifications()) {
+  for (const artifactPath of listGlobalCertifications({ root: opts.root })) {
     const read = readCertification(artifactPath);
     if (!read.ok) continue;
     const artifact = read.artifact;
@@ -70,6 +71,7 @@ export function runListCommand(argv = process.argv.slice(2)): Promise<void> {
       provider: { type: 'string', description: 'Filter by canonical storage provider.' },
       model: { type: 'string', description: 'Filter by canonical storage model.' },
       phase: { type: 'string', description: 'Filter by phase.' },
+      root: { type: 'string', description: 'Override the global certification root.' },
     },
     examples: [
       'wavemill native-agent certifications list',
@@ -80,9 +82,13 @@ export function runListCommand(argv = process.argv.slice(2)): Promise<void> {
         provider: args.provider as string | undefined,
         model: args.model as string | undefined,
         phase: args.phase as string | undefined,
+        root: args.root as string | undefined,
       });
       if (args.json === true) {
-        console.log(JSON.stringify({ root: resolveGlobalCertificationRoot(), certifications: rows }, null, 2));
+        console.log(JSON.stringify({
+          root: resolveCertificationStorage({ scope: 'global', root: args.root as string | undefined }).root,
+          certifications: rows,
+        }, null, 2));
       } else {
         process.stdout.write(renderCertificationList(rows));
       }

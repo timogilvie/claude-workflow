@@ -9,6 +9,7 @@ import {
   getSiblingBranch,
   isUnresolvableReason,
   isSiblingLive,
+  loadWorkflowStateChallengeData,
   parseRemoteBranchOutput,
   UNRESOLVABLE_REASONS,
   type ChallengeBlockedCandidate,
@@ -43,6 +44,9 @@ describe('unresolvable reason helpers', () => {
       evalHardFailureRetryCount: overrides.retry ?? 0,
       comparisonState: null,
       challengeAborted: overrides.aborted ?? null,
+      challengeAbortedDetail: null,
+      challengeAbortedNextAction: null,
+      challengeAbortedStage: null,
     });
 
     assert.equal(classifyPairUnresolvableState({
@@ -53,6 +57,34 @@ describe('unresolvable reason helpers', () => {
       primary: task('primary', { aborted: 'terminal' }),
       challenger: task('challenger', { aborted: 'terminal' }),
     }, 2), 'both-challenge-aborted');
+  });
+});
+
+describe('workflow state challenge data', () => {
+  it('preserves challenge abort detail, next action, and stage', () => {
+    const { repoDir, cleanup } = setupRepoDir();
+    try {
+      writeWorkflowState(repoDir, {
+        HOK_1_c: {
+          challengePairId: 'HOK-1',
+          challengeRole: 'challenger',
+          challengeModel: 'qwen-2.5-coder-32b',
+          challengeAborted: 'terminal_stage_failure:tool-use-unsupported',
+          challengeAbortedDetail: '404 No endpoints found that support tool use',
+          challengeAbortedNextAction: 'route this stage to a tool-capable model',
+          challengeAbortedStage: 'coding',
+        },
+      });
+
+      const state = loadWorkflowStateChallengeData(repoDir);
+      const challenger = state.taskStateByPair.get('HOK-1')?.challenger;
+      assert.equal(challenger?.challengeAborted, 'terminal_stage_failure:tool-use-unsupported');
+      assert.equal(challenger?.challengeAbortedDetail, '404 No endpoints found that support tool use');
+      assert.equal(challenger?.challengeAbortedNextAction, 'route this stage to a tool-capable model');
+      assert.equal(challenger?.challengeAbortedStage, 'coding');
+    } finally {
+      cleanup();
+    }
   });
 });
 

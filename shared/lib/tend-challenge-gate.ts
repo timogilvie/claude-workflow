@@ -71,6 +71,9 @@ export interface TaskEvalState {
    * at `pair-unresolved:no-comparison` forever, blocking the merge lane.
    */
   challengeAborted: string | null;
+  challengeAbortedDetail: string | null;
+  challengeAbortedNextAction: string | null;
+  challengeAbortedStage: string | null;
 }
 
 export interface PairTaskState {
@@ -268,6 +271,15 @@ export function loadWorkflowStateChallengeData(repoDir: string): WorkflowStateCh
           comparisonState: typeof task.comparisonState === 'string' ? task.comparisonState : null,
           challengeAborted: typeof task.challengeAborted === 'string' && task.challengeAborted
             ? task.challengeAborted
+            : null,
+          challengeAbortedDetail: typeof task.challengeAbortedDetail === 'string' && task.challengeAbortedDetail
+            ? task.challengeAbortedDetail
+            : null,
+          challengeAbortedNextAction: typeof task.challengeAbortedNextAction === 'string' && task.challengeAbortedNextAction
+            ? task.challengeAbortedNextAction
+            : null,
+          challengeAbortedStage: typeof task.challengeAbortedStage === 'string' && task.challengeAbortedStage
+            ? task.challengeAbortedStage
             : null,
         };
         taskStateByPair.set(task.challengePairId, pairTaskState);

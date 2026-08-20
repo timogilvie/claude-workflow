@@ -308,7 +308,7 @@ export interface HokusaiSubmission {
 
 export type HokusaiSubmissionResult =
   | { ok: true; submission: HokusaiSubmission }
-  | { ok: false; reasons: EligibilityErrorCode[] };
+  | { ok: false; reasons: string[] };
 
 // ============================================================================
 // Input Schema Adapters
@@ -712,7 +712,7 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
-function uniqueSortedCodes(codes: EligibilityErrorCode[]): EligibilityErrorCode[] {
+function uniqueSortedCodes<T extends string>(codes: T[]): T[] {
   return [...new Set(codes)].sort();
 }
 
@@ -772,9 +772,12 @@ export function toHokusaiSubmission(
   record: EvalRecord,
 ): HokusaiSubmissionResult {
   if (record.trainingEligible === false) {
+    const reasons = uniqueSortedCodes(record.eligibilityErrors ?? []);
     return {
       ok: false,
-      reasons: uniqueSortedCodes(record.eligibilityErrors ?? []),
+      reasons: reasons.length > 0
+        ? reasons
+        : [record.nonRewardReason?.code ?? 'training_ineligible_unspecified'],
     };
   }
 

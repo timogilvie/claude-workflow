@@ -126,7 +126,7 @@
       "wavemillAlias": "qwen-2.5-72b",
       "openrouterId": "qwen/qwen-2.5-72b-instruct",
       "family": "qwen",
-      "status": "watchlist",
+      "status": "deprecated",
       "priorityTier": 3,
       "roleEligibility": ["coding"]
     },
