@@ -12,6 +12,7 @@ import {
 } from '@earendil-works/pi-agent-core';
 import type { AgentEvent } from '@earendil-works/pi-agent-core';
 import type { AssistantMessage, Model } from '@earendil-works/pi-ai';
+import { SessionStreamWriter, type SessionStreamWriterOptions } from './session-stream.ts';
 
 // Re-export the Pi agent context type through the loop seam so loop callers can
 // construct an AgentContext without importing Pi vendor packages directly.
@@ -86,6 +87,33 @@ export interface HeartbeatEvent {
 
 export const HEARTBEAT_AGENT = 'native-agent';
 
+/**
+ * Session event stream configuration.
+ * When provided, canonical provenance events are recorded for the session.
+ */
+export interface SessionStreamConfig {
+  /** Session identifier. */
+  sessionId: string;
+  /** Request trace ID. */
+  traceId: string;
+  /** Phase (planning, coding, review, etc.). */
+  phase: string;
+  /** Absolute path to the event stream file. */
+  eventStreamPath: string;
+  /** Repository directory for artifact storage. */
+  repoDir?: string;
+  /** Optional manifest ID for this session's resources. */
+  manifestId?: string;
+  /** Optional initial config digest. */
+  initialConfigDigest?: string;
+  /** Optional prompt resource references. */
+  promptRefs?: Array<{ resourceId: string; contentHash: string; version?: string }>;
+  /** Optional injected context references. */
+  injectedContextRefs?: Array<{ resourceId: string; contentHash: string; version?: string }>;
+  /** Optional policy config digest. */
+  policyConfigDigest?: string;
+}
+
 export interface WavemillLoopConfig {
   model: ProviderModelConfig;
   /** Pi agent context (systemPrompt, messages, tools) for this run. */
@@ -142,6 +170,9 @@ export interface WavemillLoopConfig {
   /** Per-turn output ceiling. Falls back to `model.maxTokens`, then
    *  DEFAULT_MAX_OUTPUT_TOKENS; it is never sent as undefined. */
   maxTokens?: number;
+  /** Optional session event stream configuration. When provided, session provenance
+   *  events are recorded alongside the transcript. */
+  sessionStreamConfig?: SessionStreamConfig;
 }
 
 export interface LoopResult {
@@ -312,6 +343,31 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
         maxNoNovelProgressCalls: budget.stagnation.maxNoNovelProgressCalls,
       })
       : undefined;
+
+  // Initialize optional session event stream writer
+  let sessionStreamWriter: SessionStreamWriter | undefined;
+  try {
+    if (config.sessionStreamConfig) {
+      const streamConfig = config.sessionStreamConfig;
+      sessionStreamWriter = new SessionStreamWriter(
+        {
+          sessionId: streamConfig.sessionId,
+          traceId: streamConfig.traceId,
+          phase: streamConfig.phase,
+          path: streamConfig.eventStreamPath,
+        },
+        streamConfig.repoDir,
+      );
+      // Write session_started event
+      sessionStreamWriter.writeSessionStarted({
+        initialConfigDigest: streamConfig.initialConfigDigest ?? computeArgsFingerprint(config.model),
+        manifestId: streamConfig.manifestId,
+      });
+    }
+  } catch (error) {
+    console.warn(`Failed to initialize session event stream: ${(error as Error).message}`);
+    sessionStreamWriter = undefined;
+  }
 
   // Build a name→metadata map for quick lookup inside afterToolCall.
   const toolMetadataByName = new Map<string, ToolMetadata>(
@@ -707,6 +763,20 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
     stopReason = composed.isWallClockExpiry() ? 'wall_clock_limit' : 'aborted';
   } else {
     stopReason = 'stop';
+  }
+
+  // Write session_ended event if session stream is enabled
+  try {
+    if (sessionStreamWriter) {
+      sessionStreamWriter.writeSessionEnded({
+        stopReason,
+        totalTurns: turnsCompleted,
+        totalToolCalls: toolCallsExecuted,
+        totalTokens: totalInputTokens + totalOutputTokens,
+      });
+    }
+  } catch (error) {
+    console.warn(`Failed to write session_ended event: ${(error as Error).message}`);
   }
 
   return {
