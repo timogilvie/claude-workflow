@@ -20,6 +20,8 @@ import {
   type ReadyNativeProviderEntry,
 } from './providers.ts';
 import { TranscriptWriter } from './transcript.ts';
+import { SessionStreamWriter, resolveSessionEventStreamPath } from './session-stream.ts';
+import type { SessionStreamConfig } from './loop.ts';
 import { createReadOnlyTools, READ_ONLY_PATH_FIELDS } from './tools/read-only.ts';
 import { createGitTools, gitAfterToolCall } from './tools/git.ts';
 import { createArtifactTools } from './tools/artifacts.ts';
@@ -593,6 +595,18 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
       path: transcriptPath,
     });
 
+    // Construct session stream configuration
+    const planningNativeSessionId = `${options.session}-planning-${options.issue}`;
+    const eventStreamPath = resolveSessionEventStreamPath(planningNativeSessionId, options.repoDir);
+    const sessionStreamConfig: SessionStreamConfig = {
+      sessionId: planningNativeSessionId,
+      traceId: options.session,
+      phase: 'planning',
+      eventStreamPath,
+      repoDir: options.repoDir,
+      initialConfigDigest: `model:${model.provider}:${model.name ?? model.id}`,
+    };
+
     registerAndRecordNativeProvenance({
       sessionId: options.session,
       phase: 'planning',
@@ -651,6 +665,7 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
       onEvent: (event) => {
         transcriptWriter.handleEvent(event);
       },
+      sessionStreamConfig,
       budget: toLoopBudget(planningLimits),
     });
     const planningOutcomeArtifacts = buildPlanningOutcomeArtifacts({

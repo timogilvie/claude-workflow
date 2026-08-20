@@ -20,6 +20,8 @@ import {
   type ReadyNativeProviderEntry,
 } from './providers.ts';
 import { TranscriptWriter } from './transcript.ts';
+import { SessionStreamWriter, resolveSessionEventStreamPath } from './session-stream.ts';
+import type { SessionStreamConfig } from './loop.ts';
 import { createReadOnlyTools, READ_ONLY_PATH_FIELDS } from './tools/read-only.ts';
 import {
   createGitCommitTools,
@@ -732,6 +734,18 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
       path: transcriptPath,
     });
 
+    // Construct session stream configuration
+    const codingNativeSessionId = `${options.session}-coding-${options.issue}`;
+    const eventStreamPath = resolveSessionEventStreamPath(codingNativeSessionId, options.repoDir);
+    const sessionStreamConfig: SessionStreamConfig = {
+      sessionId: codingNativeSessionId,
+      traceId: options.session,
+      phase: 'coding',
+      eventStreamPath,
+      repoDir: options.repoDir,
+      initialConfigDigest: `model:${model.provider}:${modelName}`,
+    };
+
     const { content: promptTemplate, promptRef } = loadCodingPrompt(options.repoDir);
     registerAndRecordNativeProvenance({
       sessionId: options.session,
@@ -796,6 +810,7 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
         session: options.session,
         issue: options.issue,
       } : undefined,
+      sessionStreamConfig,
       afterToolCall: async (toolContext, signal) => {
         await intendedFilesAfterToolCall(toolContext, tracker);
 
