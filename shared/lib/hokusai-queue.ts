@@ -7,7 +7,7 @@ import {
   validateContributionRow,
   type ContributionRow,
 } from './hokusai-contribution-schema.ts';
-import { getContributionConsentStatus } from './hokusai-consent.ts';
+import { getContributionConsentStatus, type ConsentBlocker } from './hokusai-consent.ts';
 import { errorMessage } from './error-utils.ts';
 import { resolveHokusaiQueuePaths } from './hokusai-queue-paths.ts';
 import { mutateJsonState, StateParseError } from './state-mutex.ts';
@@ -61,6 +61,7 @@ export interface QueueAccessOptions {
 export interface EnqueueResult {
   status: 'disabled' | 'enqueued' | 'duplicate';
   entry?: HokusaiQueueEnvelope;
+  blockers?: ConsentBlocker[];
 }
 
 export interface PendingBatch {
@@ -404,7 +405,7 @@ export async function enqueueContribution(
 ): Promise<EnqueueResult> {
   const consent = getContributionConsentStatus(opts);
   if (!consent.submissionAllowed) {
-    return { status: 'disabled' };
+    return { status: 'disabled', blockers: consent.blockers };
   }
 
   const validatedRow = validateContributionRow(row);

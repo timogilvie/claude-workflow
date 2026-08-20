@@ -28,6 +28,14 @@ Participating earns token rewards that offset Hokusai routing costs.
 You can disable data submission at any time with:
   wavemill hokusai disable`;
 
+export interface ConsentBlocker {
+  store: 'user-config' | 'repo-config';
+  path: string; // resolved file path, e.g. ~/.wavemill/config.json or <repo>/.wavemill-config.json
+  setting: string; // e.g. 'hokusai.enabled', 'hokusai.consentVersion', 'hokusai.contributions.enabled'
+  value: string; // observed value rendered as string, e.g. 'false', 'missing'
+  remedy: string; // e.g. 'run `wavemill hokusai enable`'
+}
+
 export interface HokusaiUserConfig {
   hokusai?: {
     enabled?: boolean;
@@ -56,6 +64,7 @@ export interface ContributionConsentStatus {
   consentValid: boolean;
   contributionsEnabled: boolean;
   submissionAllowed: boolean;
+  blockers: ConsentBlocker[];
 }
 
 export type ContributionMode = 'uploading' | 'export-only' | 'disabled';
@@ -84,7 +93,7 @@ function resolveConfigDir(configDir?: string): string {
   return configDir ?? join(homedir(), '.wavemill');
 }
 
-function resolveUserConfigPath(configDir?: string): string {
+export function resolveUserConfigPath(configDir?: string): string {
   return join(resolveConfigDir(configDir), 'config.json');
 }
 
@@ -245,13 +254,78 @@ export function getContributionConsentStatus(
   options: { configDir?: string; repoDir?: string } = {},
 ): ContributionConsentStatus {
   const status = getSubmissionStatus(options);
-  const contributionsEnabled = getHokusaiContributionsConfig(options.repoDir).enabled === true;
+  const contributionsConfig = getHokusaiContributionsConfig(options.repoDir);
+  const contributionsEnabled = contributionsConfig.enabled === true;
+
+  const submissionAllowed = status.submissionAllowed && contributionsEnabled;
+  if (submissionAllowed) {
+    return {
+      consentValid: status.consentValid,
+      contributionsEnabled,
+      submissionAllowed: true,
+      blockers: [],
+    };
+  }
+
+  const blockers: ConsentBlocker[] = [];
+  const userConfigPath = resolveUserConfigPath(options.configDir);
+  const userConfig = loadUserConfig(options.configDir);
+  const hokusaiUserConfig = userConfig.hokusai ?? {};
+
+  if (hokusaiUserConfig.enabled !== true) {
+    blockers.push({
+      store: 'user-config',
+      path: userConfigPath,
+      setting: 'hokusai.enabled',
+      value: hokusaiUserConfig.enabled === undefined ? 'missing' : String(hokusaiUserConfig.enabled),
+      remedy: 'run `wavemill hokusai enable`',
+    });
+  }
+
+  if (!status.consentValid) {
+    const value = status.consentedAt
+      ? `${status.consentVersion ?? 'none'} (current: ${status.currentVersion})`
+      : 'missing';
+    blockers.push({
+      store: 'user-config',
+      path: userConfigPath,
+      setting: 'hokusai.consentVersion',
+      value,
+      remedy: 'run `wavemill hokusai enable`',
+    });
+  }
+
+  if (!contributionsEnabled) {
+    const repoConfigPath = options.repoDir
+      ? join(options.repoDir, '.wavemill-config.json')
+      : '.wavemill-config.json';
+    blockers.push({
+      store: 'repo-config',
+      path: repoConfigPath,
+      setting: 'hokusai.contributions.enabled',
+      value:
+        contributionsConfig.enabled === undefined
+          ? 'missing'
+          : String(contributionsConfig.enabled),
+      remedy: 'set it in .wavemill-config.local.json or run `wavemill hokusai configure`',
+    });
+  }
 
   return {
     consentValid: status.consentValid,
     contributionsEnabled,
-    submissionAllowed: status.submissionAllowed && contributionsEnabled,
+    submissionAllowed: false,
+    blockers,
   };
+}
+
+export function formatConsentBlockers(blockers: ConsentBlocker[]): string {
+  if (!blockers.length) {
+    return '';
+  }
+  return blockers
+    .map((b) => `${b.setting}=${b.value} in ${b.path} (${b.remedy})`)
+    .join('; ');
 }
 
 export function isHokusaiContributionsEnabled(
