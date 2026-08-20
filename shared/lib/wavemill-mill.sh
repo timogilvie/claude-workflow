@@ -6836,6 +6836,8 @@ native_terminal_failure_kind() {
       printf 'openrouter-credits-exhausted\n'; return 0 ;;
     *"insufficient"*"credit"*|*"quota"*)
       printf 'provider-quota-exhausted\n'; return 0 ;;
+    *"empty-model-turn"*|*"reasoning-only"*"turn"*|*"internal reasoning only"*)
+      printf 'empty-model-turn\n'; return 0 ;;
   esac
   printf 'native-provider-error\n'
 }
@@ -6852,6 +6854,8 @@ native_terminal_failure_next_action() {
       printf 'top up OpenRouter credits or lower nativeAgent.providers.openrouter thresholds\n' ;;
     provider-quota-exhausted)
       printf 'add provider credit, then relaunch. The quota is exhausted\n' ;;
+    empty-model-turn)
+      printf 'relaunch native coding; the runtime exhausted bounded continuation after empty model turns\n' ;;
     tool-use-unsupported)
       printf 'inspect the native provider error, then relaunch the phase\n' ;;
     *)
@@ -9831,6 +9835,13 @@ maybe_run_challenge_eval() {
   local issue="$1" pr="$2" branch="$3" slug="$4"
   local eval_completed eval_failed eval_hard_retry_count eval_hard_retry_max
   local pair_id solution_model linear_issue eval_agent side challenge_stage job_id job_status job_dir log_path result_path pid eval_timeout
+  local task_status challenge_aborted
+  task_status=$(read_state_value "" --arg i "$issue" '.tasks[$i].status // empty')
+  challenge_aborted=$(read_state_value "" --arg i "$issue" '.tasks[$i].challengeAborted // empty')
+  if [[ "$task_status" == "aborted" || ( -n "$challenge_aborted" && -z "$pr" ) ]]; then
+    log "debug" "challenge eval skipped for $issue: aborted/no-PR arm"
+    return 0
+  fi
   eval_completed=$(read_state_value "false" --arg i "$issue" '.tasks[$i].evalCompleted // false')
   [[ "$eval_completed" == "true" ]] && return 0
 
@@ -9912,6 +9923,10 @@ launch_background_post_merge_eval() {
   local issue="$1" pr="$2" branch="$3" slug="$4" issue_ref="$5" reason="$6" preresolved_agent="${7:-}"
   local eval_agent eval_log eval_timeout rc result_path persisted
 
+  if should_skip_post_completion_eval "$issue" "$pr" "$branch" "$slug"; then
+    return 0
+  fi
+
   if [[ -n "$preresolved_agent" ]]; then
     eval_agent="$preresolved_agent"
   else
@@ -9967,6 +9982,53 @@ launch_background_post_merge_eval() {
   ) >/dev/null 2>&1 &
 
   log "debug" "  ↳ Eval running in background; log: $eval_log"
+}
+
+task_has_local_commit_evidence() {
+  local issue="$1" branch="$2" slug="$3"
+  local wt_dir="${WORKTREE_ROOT}/${slug}"
+  local ref="$branch"
+  [[ -z "$ref" ]] && ref=$(read_state_value "" --arg i "$issue" '.tasks[$i].branch // empty')
+
+  if [[ -n "$ref" ]] && git -C "$REPO_DIR" rev-parse --verify --quiet "$ref" >/dev/null 2>&1; then
+    local count
+    count=$(git -C "$REPO_DIR" rev-list --count "${BASE_BRANCH}..${ref}" 2>/dev/null || echo "0")
+    [[ "$count" =~ ^[0-9]+$ ]] && (( count > 0 )) && return 0
+  fi
+
+  if [[ -d "$wt_dir/.git" || -f "$wt_dir/.git" ]]; then
+    local wt_count
+    wt_count=$(git -C "$wt_dir" rev-list --count "${BASE_BRANCH}..HEAD" 2>/dev/null || echo "0")
+    [[ "$wt_count" =~ ^[0-9]+$ ]] && (( wt_count > 0 )) && return 0
+  fi
+
+  return 1
+}
+
+should_skip_post_completion_eval() {
+  local issue="$1" pr="$2" branch="$3" slug="$4"
+  local status challenge_aborted state_pr
+  status=$(read_state_value "" --arg i "$issue" '.tasks[$i].status // empty')
+  challenge_aborted=$(read_state_value "" --arg i "$issue" '.tasks[$i].challengeAborted // empty')
+  state_pr=$(read_state_value "" --arg i "$issue" '.tasks[$i].pr // empty')
+  [[ -z "$pr" ]] && pr="$state_pr"
+
+  if [[ "$status" == "aborted" ]]; then
+    log "debug" "Skipping $issue eval: task is aborted"
+    return 0
+  fi
+
+  if [[ -n "$challenge_aborted" && -z "$pr" ]]; then
+    log "debug" "Skipping $issue eval: challenge-aborted arm has no PR"
+    return 0
+  fi
+
+  if [[ -z "$pr" ]] && ! task_has_local_commit_evidence "$issue" "$branch" "$slug"; then
+    log "debug" "Skipping $issue eval: no PR or local commit evidence"
+    return 0
+  fi
+
+  return 1
 }
 
 maybe_run_challenge_comparison() {
@@ -10094,9 +10156,13 @@ maybe_resolve_unresolvable_challenge_pair() {
       resolve_reason=$(jq -r '.reason // "unknown"' <<<"$resolve_output" 2>/dev/null || echo "unknown")
       mark_challenge_compared "$pair_id" >/dev/null || true
       log_warn "challenge pair $pair_id resolved automatically via $resolve_reason"
+      if [[ "$resolve_reason" == "sibling-challenge-aborted" || "$resolve_reason" == "both-challenge-aborted" ]]; then
+        cleanup_pair_aborted_no_pr_arms "$pair_id" "$resolve_reason"
+      fi
       ;;
     already-resolved)
       mark_challenge_compared "$pair_id" >/dev/null || true
+      cleanup_pair_aborted_no_pr_arms "$pair_id" "challenge pair already resolved"
       ;;
   esac
 }
@@ -10202,6 +10268,55 @@ archive_stage_artifacts() {
       done
     done
 
+    # Challenge-abort and native failure handoff evidence must survive
+    # aborted-arm cleanup because the worktree is removed immediately after.
+    local evidence_file evidence_name
+    for evidence_name in ".challenge-aborted.json" ".coding-failure-handoff.json"; do
+      evidence_file="$feature_dir/$evidence_name"
+      if [[ -f "$evidence_file" ]]; then
+        if jq -e . "$evidence_file" >/dev/null 2>&1; then
+          cp "$evidence_file" "$archive_dir/$evidence_name" 2>/dev/null || true
+        else
+          log_warn "  Skipping invalid failure evidence archive: $evidence_file"
+        fi
+      fi
+    done
+
+    if [[ -d "$feature_dir/.stale-artifacts" ]]; then
+      local stale_file stale_rel stale_dest
+      while IFS= read -r stale_file; do
+        [[ -f "$stale_file" ]] || continue
+        stale_rel="${stale_file#$feature_dir/.stale-artifacts/}"
+        stale_dest="$archive_dir/stale-artifacts/$stale_rel"
+        mkdir -p "$(dirname "$stale_dest")" 2>/dev/null || true
+        cp "$stale_file" "$stale_dest" 2>/dev/null || true
+      done < <(find "$feature_dir/.stale-artifacts" -type f \( -name '.challenge-aborted.json' -o -name '.coding-failure-handoff.json' -o -name '*.jsonl' \) 2>/dev/null)
+    fi
+
+    # Copy native transcript/session JSONL files referenced from artifacts.
+    # Schemas vary by native provider, so discover string values ending in
+    # .jsonl rather than depending on one field name.
+    local json_file jsonl_ref jsonl_path jsonl_dest jsonl_base
+    while IFS= read -r json_file; do
+      [[ -f "$json_file" ]] || continue
+      while IFS= read -r jsonl_ref; do
+        [[ -n "$jsonl_ref" ]] || continue
+        jsonl_path=""
+        if [[ "$jsonl_ref" = /* && -f "$jsonl_ref" ]]; then
+          jsonl_path="$jsonl_ref"
+        elif [[ -f "$feature_dir/$jsonl_ref" ]]; then
+          jsonl_path="$feature_dir/$jsonl_ref"
+        elif [[ -f "$wt_dir/$jsonl_ref" ]]; then
+          jsonl_path="$wt_dir/$jsonl_ref"
+        fi
+        [[ -n "$jsonl_path" ]] || continue
+        jsonl_base="$(basename "$jsonl_path")"
+        mkdir -p "$archive_dir/native-sessions" 2>/dev/null || true
+        jsonl_dest="$archive_dir/native-sessions/$jsonl_base"
+        cp "$jsonl_path" "$jsonl_dest" 2>/dev/null || true
+      done < <(jq -r '.. | select(type == "string" and test("\\.jsonl$"))' "$json_file" 2>/dev/null || true)
+    done < <(find "$feature_dir" -maxdepth 3 -type f \( -name '*.json' -o -name '.*.json' \) 2>/dev/null)
+
     # Trace JSONL (HOK-2259)
     if [[ -f "$feature_dir/trace.jsonl" ]]; then
       cp "$feature_dir/trace.jsonl" "$archive_dir/trace.jsonl" 2>/dev/null || true
@@ -10228,6 +10343,117 @@ archive_stage_artifacts() {
   if [[ "$count" -gt 0 ]]; then
     log "debug" "Archived $count stage artifact(s) to .wavemill/evals/artifacts/$issue/"
   fi
+}
+
+mark_task_aborted_for_cleanup() {
+  local issue="$1" reason="${2:-challenge arm cleanup}"
+  if ! state_mutate "$STATE_FILE" '
+    if .tasks[$issue] == null then
+      .
+    else
+      .tasks[$issue].status = "aborted"
+      | .tasks[$issue].phase = "aborted"
+      | .tasks[$issue].abortedCleanupReason = $reason
+      | .tasks[$issue].abortedCleanupAt = (now | todateiso8601)
+      | .tasks[$issue].updated = (now | todateiso8601)
+    end
+  ' --arg issue "$issue" --arg reason "$reason" >/dev/null; then
+    log_warn "mark_task_aborted_for_cleanup: failed to terminalize $issue"
+    return 1
+  fi
+  return 0
+}
+
+cleanup_aborted_challenge_arm() {
+  local issue="$1" slug="${2:-}" reason="${3:-challenge aborted}"
+  local win target target_gone wt_dir task_branch state_branch pr
+
+  [[ -z "$slug" ]] && slug=$(read_state_value "" --arg i "$issue" '.tasks[$i].slug // empty')
+  [[ -n "$slug" ]] || {
+    log_warn "$issue aborted challenge cleanup skipped: missing slug"
+    return 1
+  }
+
+  win="$issue-$slug"
+  wt_dir=$(read_state_value "" --arg i "$issue" '.tasks[$i].worktree // empty')
+  [[ -z "$wt_dir" ]] && wt_dir="${WORKTREE_ROOT}/${slug}"
+  state_branch=$(read_state_value "" --arg i "$issue" '.tasks[$i].branch // empty')
+  task_branch="${state_branch:-task/${slug}}"
+  pr=$(read_state_value "" --arg i "$issue" '.tasks[$i].pr // empty')
+
+  archive_stage_artifacts "$issue" "$slug"
+
+  if ! mark_task_aborted_for_cleanup "$issue" "$reason"; then
+    return 1
+  fi
+
+  target_gone="false"
+  target="$(_tmux_task_window_target "$SESSION" "$issue" "$slug" "${STATE_FILE:-}" "$wt_dir" 2>/dev/null || true)"
+  if [[ -z "$target" ]] || ! command -v tmux >/dev/null 2>&1; then
+    target_gone="true"
+  else
+    tmux kill-window -t "$(_tmux_target_join "$SESSION" "$target")" 2>/dev/null || true
+    if ! _tmux_window_target_exists "$SESSION" "$target"; then
+      target_gone="true"
+    fi
+  fi
+
+  if [[ "$target_gone" != "true" ]]; then
+    set_window_attention_state "$win" "needs-user"
+	    log_warn "  $issue aborted challenge cleanup could not close tmux window, task is terminal and cleanup will retry"
+    return 1
+  fi
+
+  log "debug" "Closed window: $win"
+
+  if [[ -d "$wt_dir" ]]; then
+    git -C "$REPO_DIR" worktree remove "$wt_dir" --force >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null || true
+    log "debug" "Removed worktree: $wt_dir"
+  fi
+
+  case "$task_branch" in
+    task/*) ;;
+    *)
+      log "debug" "$issue: retaining non-task local branch $task_branch"
+      task_branch=""
+      ;;
+  esac
+
+  if [[ -n "$task_branch" ]]; then
+    if [[ "$task_branch" == "main" || "$task_branch" == "master" ]]; then
+      log_warn "  Refusing to delete protected branch: $task_branch"
+    elif git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$task_branch" 2>/dev/null; then
+      if git -C "$REPO_DIR" branch -D "$task_branch" >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null; then
+        log "debug" "Deleted local branch: $task_branch"
+      else
+        log_warn "  Local branch cleanup failed after worktree removal: $task_branch"
+      fi
+    fi
+  fi
+
+  if [[ -n "$pr" ]]; then
+    log "debug" "$issue: retaining remote branch ${state_branch:-task/${slug}} (aborted cleanup does not delete PR branches)"
+  fi
+
+  git -C "$REPO_DIR" worktree prune >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null || true
+  rm -f "/tmp/wavemill-${SESSION}-${issue}.hook" 2>/dev/null || true
+  reset_retry_count "$SESSION" "$issue" 2>/dev/null || true
+  CLEANED["$issue"]=1
+  log "$issue: Complete (aborted challenge cleanup)"
+}
+
+cleanup_pair_aborted_no_pr_arms() {
+  local pair_id="$1" reason="${2:-challenge pair resolved}"
+  local key slug pr challenge_aborted
+  for key in "$pair_id" "${pair_id}_c"; do
+    challenge_aborted=$(read_state_value "" --arg i "$key" '.tasks[$i].challengeAborted // empty')
+    [[ -n "$challenge_aborted" ]] || continue
+    pr=$(read_state_value "" --arg i "$key" '.tasks[$i].pr // empty')
+    [[ -z "$pr" ]] || continue
+    slug=$(read_state_value "" --arg i "$key" '.tasks[$i].slug // empty')
+    [[ -n "$slug" ]] || continue
+    cleanup_aborted_challenge_arm "$key" "$slug" "$reason" || true
+  done
 }
 
 cleanup_completed_task() {
@@ -13370,9 +13596,21 @@ monitor_issue_state() {
   # and mark the task for attention so committed or uncommitted work is not
   # silently lost.
 
-  # If already merged or completed-external (requireConfirm), wait for window close then cleanup
-  task_status=$(read_state_value "" --arg issue "$ISSUE" '.tasks[$issue].status // empty')
-  if [[ "$task_status" == "merged" || "$task_status" == "completed-external" ]]; then
+	  # If already merged or completed-external (requireConfirm), wait for window close then cleanup
+	  task_status=$(read_state_value "" --arg issue "$ISSUE" '.tasks[$issue].status // empty')
+	  local challenge_aborted pair_id_for_cleanup
+	  challenge_aborted=$(read_state_value "" --arg issue "$ISSUE" '.tasks[$issue].challengeAborted // empty')
+	  pair_id_for_cleanup=$(read_state_value "" --arg issue "$ISSUE" '.tasks[$issue].challengePairId // empty')
+	  if [[ "$task_status" == "aborted" && -n "$challenge_aborted" ]]; then
+	    cleanup_aborted_challenge_arm "$ISSUE" "$SLUG" "aborted challenge retry" || true
+	    return 0
+	  fi
+	  if [[ -n "$challenge_aborted" && -z "$PR" && -n "$pair_id_for_cleanup" ]] \
+	    && challenge_pair_record_exists "$pair_id_for_cleanup"; then
+	    cleanup_aborted_challenge_arm "$ISSUE" "$SLUG" "challenge pair resolved" || true
+	    return 0
+	  fi
+	  if [[ "$task_status" == "merged" || "$task_status" == "completed-external" ]]; then
     if [[ "$task_status" == "merged" ]]; then
       local merged_ready_dir merged_before_ready=false
       merged_ready_dir="$(ready_state_dir "$WT_DIR" "$SLUG")"
@@ -13512,10 +13750,15 @@ monitor_issue_state() {
       fi
       return 0
     else
-      # No PR in current repo - check Linear issue state for cross-repo completion
-      if should_update_linear_state "$ISSUE" && linear_is_completed "$(get_linear_issue_id "$ISSUE")"; then
-        log "status" "$ISSUE → Completed externally (cross-repo or manual)"
-        set_window_attention_state "$WIN" "clear"
+	      # No PR in current repo - check Linear issue state for cross-repo completion
+	      if should_update_linear_state "$ISSUE" && linear_is_completed "$(get_linear_issue_id "$ISSUE")"; then
+	        if [[ -n "$challenge_aborted" && -z "$PR" ]]; then
+	          log "debug" "$ISSUE: skipping completed-external reconciliation for challenge-aborted no-PR arm"
+	          active_count=$((active_count + 1))
+	          return 0
+	        fi
+	        log "status" "$ISSUE → Completed externally (cross-repo or manual)"
+	        set_window_attention_state "$WIN" "clear"
 
         # Post-completion eval (non-blocking: always exits 0)
         if [[ "$AUTO_EVAL" == "true" ]]; then
