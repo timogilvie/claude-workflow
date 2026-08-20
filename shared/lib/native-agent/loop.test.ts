@@ -893,6 +893,72 @@ describe('loop — blocked stops', () => {
 // ---------------------------------------------------------------------------
 
 describe('loop — continuation', () => {
+  it('continues after a reasoning-only stop and preserves thinking in the next request', async () => {
+    const api = uniqueApi('reasoning-only-continue');
+    const seen: ScriptedProviderContext[] = [];
+
+    registerScriptedPiProvider({
+      api,
+      turns: (ctx: ScriptedProviderContext) => {
+        seen.push(ctx);
+        if (seen.length === 1) {
+          return {
+            content: [{
+              type: 'thinking',
+              thinking: '**Implementing Blind Challenge Judge**...',
+              thinkingSignature: 'hok-2793-sig',
+            }],
+            usage: { input: 10871, output: 423 },
+            stopReason: 'stop',
+          };
+        }
+        return { content: [{ type: 'text', text: 'I will continue with the implementation.' }], stopReason: 'stop' };
+      },
+    });
+
+    const events: Array<{ type: string; messages?: unknown[] }> = [];
+    const result = await runWavemillLoop({
+      ...baseConfig(api),
+      onEvent: (event) => events.push(event as { type: string; messages?: unknown[] }),
+    });
+
+    assert.equal(result.stopReason, 'stop');
+    assert.equal(result.turnsCompleted, 2);
+    assert.equal(seen.length, 2);
+    const secondMessages = seen[1].messages as any[];
+    const assistant = secondMessages.find((message) => message.role === 'assistant');
+    assert.ok(assistant, 'reasoning-only assistant turn is replayed');
+    const thinking = assistant.content?.find((block: any) => block.type === 'thinking');
+    assert.ok(thinking, 'thinking block is preserved in continuation context');
+    assert.equal(thinking.thinkingSignature, 'hok-2793-sig');
+    const continuationPrompt = secondMessages.at(-1);
+    assert.equal(continuationPrompt.role, 'user');
+    assert.match(String(continuationPrompt.content), /internal reasoning only/);
+
+    const agentEndEvents = events.filter((event) => event.type === 'agent_end');
+    assert.equal(agentEndEvents.length, 1);
+    assert.notEqual(agentEndEvents[0].messages?.length, 1);
+  });
+
+  it('bounds repeated reasoning-only stops with an empty-model-turn diagnostic', async () => {
+    const api = uniqueApi('reasoning-only-exhausted');
+
+    registerScriptedPiProvider({
+      api,
+      turns: () => ({
+        content: [{ type: 'thinking', thinking: 'still planning' }],
+        stopReason: 'stop',
+      }),
+    });
+
+    const result = await runWavemillLoop(baseConfig(api));
+    const finalAssistant = result.messages.at(-1) as any;
+
+    assert.equal(result.stopReason, 'error');
+    assert.equal(result.turnsCompleted, 2);
+    assert.match(finalAssistant.errorMessage, /empty-model-turn/);
+  });
+
   it('preserves thinkingSignature and responseId across turns', async () => {
     const api = uniqueApi('continuation');
     let capturedMessages: unknown[] | undefined;

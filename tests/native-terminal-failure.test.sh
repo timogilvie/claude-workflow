@@ -106,6 +106,7 @@ preflight_ctx_detail="Native coding pre-flight rejected the launch: estimated pr
 bad_model_detail="Native coding failed: 400 qwen-2.5-coder-32b is not a valid model ID"
 tool_use_detail="Native coding failed: 404 No endpoints found that support tool use"
 credits_detail="Native coding failed: HTTP 402 Payment Required: This request requires more credits, or fewer max_tokens. You requested up to 32768 tokens, but can only afford 1123."
+empty_turn_detail="Native coding failed: empty-model-turn: model returned reasoning-only or otherwise empty assistant turns after a continuation prompt"
 
 if [[ "$(native_terminal_failure_kind "$ctx_detail")" == "context-window-exceeded" ]]; then
   pass "context overflow is classified"
@@ -137,6 +138,12 @@ else
   fail "OpenRouter credit exhaustion misclassified as $(native_terminal_failure_kind "$credits_detail")"
 fi
 
+if [[ "$(native_terminal_failure_kind "$empty_turn_detail")" == "empty-model-turn" ]]; then
+  pass "empty model turns are classified"
+else
+  fail "empty model turns misclassified as $(native_terminal_failure_kind "$empty_turn_detail")"
+fi
+
 if [[ "$(native_terminal_failure_kind "something else entirely")" == "native-provider-error" ]]; then
   pass "unrecognised provider errors fall back to a generic kind"
 else
@@ -153,6 +160,12 @@ if [[ "$(native_terminal_failure_next_action openrouter-credits-exhausted)" == *
   pass "OpenRouter credit exhaustion surfaces a billing recovery action"
 else
   fail "OpenRouter credit exhaustion recovery action missing"
+fi
+
+if [[ "$(native_terminal_failure_next_action empty-model-turn)" == *"bounded continuation"* ]]; then
+  pass "empty model turn surfaces a specific recovery action"
+else
+  fail "empty model turn recovery action missing"
 fi
 
 # ── Context overflow end-to-end ───────────────────────────────────────
@@ -332,6 +345,26 @@ if emit_challenge_stage_failure_quarantine "PAIR-1_c" "$fd" "coding" "win-7"; th
   fail "stage-failure quarantine re-fired on an already-quarantined arm"
 else
   pass "stage-failure quarantine is idempotent"
+fi
+
+# Empty/reasoning-only turn exhaustion must be attributable instead of becoming
+# an unknown native-provider-error fault.
+seed "PAIR-1_c"
+fd="$TMP_ROOT/f-empty-turn"
+rm -f "/tmp/wavemill-${SESSION}-PAIR-1_c.hook"
+write_stage_result "$fd" "coding" "failed" "native" "google/gemini-2.5-pro" "$empty_turn_detail"
+if emit_challenge_stage_failure_quarantine "PAIR-1_c" "$fd" "coding" "win-empty"; then
+  reliability_file="$WAVEMILL_RELIABILITY_REPO_DIR/.wavemill/evals/reliability-records.jsonl"
+  if [[ "$(jq -r '.tasks["PAIR-1_c"].challengeAborted' "$STATE_FILE")" == "terminal_stage_failure:empty-model-turn" ]] \
+    && [[ -f "$reliability_file" ]] \
+    && [[ "$(jq -r 'select(.abortReason == "terminal_stage_failure:empty-model-turn") | .failureKind' "$reliability_file" | tail -n 1)" == "empty-model-turn" ]] \
+    && [[ "$(jq -r 'select(.abortReason == "terminal_stage_failure:empty-model-turn") | .faultClass' "$reliability_file" | tail -n 1)" == "harness-fault" ]]; then
+    pass "empty turn exhaustion quarantines with named reliability fault"
+  else
+    fail "empty turn exhaustion side effects incomplete"
+  fi
+else
+  fail "empty turn stage-failure quarantine did not fire"
 fi
 
 # Non-challenge tasks must never gain challenge quarantine state.

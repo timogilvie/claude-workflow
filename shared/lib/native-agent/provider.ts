@@ -117,6 +117,7 @@ export interface ToolCallingProvider {
 export interface ScriptedPiProviderTurn {
   content: Array<
     | { type: 'text'; text: string }
+    | { type: 'thinking'; thinking: string; thinkingSignature?: string; redacted?: boolean }
     | { type: 'tool_call'; id: string; name: string; arguments?: Record<string, unknown> }
   >;
   usage?: Partial<Usage>;
@@ -307,6 +308,14 @@ function toPiAssistantMessage(
     content: turn.content.map((content) => {
       if (content.type === 'text') {
         return { type: 'text', text: content.text };
+      }
+      if (content.type === 'thinking') {
+        return {
+          type: 'thinking',
+          thinking: content.thinking,
+          ...(content.thinkingSignature !== undefined ? { thinkingSignature: content.thinkingSignature } : {}),
+          ...(content.redacted !== undefined ? { redacted: content.redacted } : {}),
+        };
       }
       return {
         type: 'toolCall',

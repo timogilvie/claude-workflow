@@ -402,6 +402,73 @@ describe('launchNativeCoding', () => {
     assert.match(transcript, /\\"version\\": 1/);
   });
 
+  it('recovers from a zero-tool normal stop without a completion artifact', async () => {
+    const { repoDir, featureDir, slug } = makeRepo();
+    const model = scriptedModel([
+      finalTurn('I have planned the edit but stopped before acting.'),
+      toolTurn('patch-1', 'apply_patch', {
+        patch: {
+          version: 1,
+          atomic: true,
+          operations: [{
+            op: 'edit',
+            path: 'src/app.ts',
+            oldText: "export const message = 'before';\n",
+            newText: "export const message = 'recovered';\n",
+          }],
+        },
+      }),
+      toolTurn('add-1', 'git_add', { paths: ['src/app.ts'] }),
+      toolTurn('commit-1', 'git_commit', { message: 'feat: recover zero-tool stop' }),
+      toolTurn('marker-1', 'create_marker', {
+        path: `features/${slug}/.coding-complete`,
+        content: '{"stage":"coding","confidence":"high","producer":"native-agent"}\n',
+      }),
+      finalTurn('Recovered and completed.'),
+    ], 'zero-tool-recover');
+
+    const result = await launchNativeCoding({
+      session: 'sess',
+      issue: 'HOK-2838',
+      slug,
+      wtDir: repoDir,
+      repoDir,
+      loopModelOverride: model,
+    });
+
+    assert.equal(result.completion, 'complete');
+    assert.equal(readFileSync(join(repoDir, 'src', 'app.ts'), 'utf-8'), "export const message = 'recovered';\n");
+    assert.equal(existsSync(getCodingFailureHandoffPath(featureDir)), false);
+  });
+
+  it('writes no-artifact handoff only after zero-tool recovery is exhausted', async () => {
+    const { repoDir, featureDir, slug } = makeRepo();
+    const model = scriptedModel([
+      finalTurn('I planned but did not act.'),
+      finalTurn('I still did not create the required marker.'),
+    ], 'zero-tool-handoff');
+
+    await assert.rejects(
+      () => launchNativeCoding({
+        session: 'sess',
+        issue: 'HOK-2838',
+        slug,
+        wtDir: repoDir,
+        repoDir,
+        loopModelOverride: model,
+      }),
+      /without \.coding-complete or \.coding-blocked-completion\.json/,
+    );
+
+    const handoff = await readCodingFailureHandoff(getCodingFailureHandoffPath(featureDir));
+    assert.equal(handoff.ok, true);
+    if (!handoff.ok) return;
+    assert.equal(handoff.value.reason, 'no_completion_artifact');
+    assert.equal(handoff.value.mutationFailures, 0);
+    assert.equal(handoff.value.lastToolError, null);
+    assert.equal(handoff.value.recoveryAttempted, true);
+  });
+
   it('retries after an invalid post-exit .coding-complete and preserves the malformed file', async () => {
     const { repoDir, featureDir, slug } = makeRepo();
     const model = scriptedModel([
