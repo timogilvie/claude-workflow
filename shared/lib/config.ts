@@ -356,6 +356,9 @@ export interface NativeAgentProviderConfig {
   apiKeyEnv?: string;
   baseUrl?: string;
   headers?: Record<string, string>;
+  minCreditsUsd?: number;
+  warnCreditsUsd?: number;
+  creditRefreshTtlSeconds?: number;
 }
 
 export interface NativeAgentProvidersConfig {
@@ -1735,6 +1738,10 @@ export function getProvidersConfig(repoDir?: string): ProvidersConfig {
 
 export function getNativeAgentConfig(repoDir?: string): NativeAgentConfig {
   return loadWavemillConfig(repoDir).nativeAgent || {};
+}
+
+export function getNativeOpenRouterProviderConfig(repoDir?: string): NativeAgentProviderConfig {
+  return getNativeAgentConfig(repoDir).providers?.openrouter || {};
 }
 
 export function getNativeExpansionConfig(repoDir?: string): NativeExpansionConfig {

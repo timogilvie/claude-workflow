@@ -32,6 +32,8 @@ eval "$(extract_function native_terminal_failure_kind)"
 eval "$(extract_function native_terminal_failure_next_action)"
 eval "$(extract_function emit_native_terminal_failure_attention)"
 eval "$(extract_function emit_challenge_stage_failure_quarantine)"
+eval "$(extract_function write_openrouter_warning_cache)"
+eval "$(extract_function record_openrouter_credits_challenge_abort)"
 eval "$(extract_function challenge_abort_pair)"
 
 TMP_ROOT="$(mktemp -d)"
@@ -41,6 +43,8 @@ SESSION="testsess"
 STATE_FILE="$TMP_ROOT/state.json"
 ATTENTION_FILE="$TMP_ROOT/attention.txt"
 WARN_FILE="$TMP_ROOT/warn.txt"
+WAVEMILL_STATE_DIR="$TMP_ROOT/wavemill-state"
+mkdir -p "$WAVEMILL_STATE_DIR"
 active_count=0
 export WAVEMILL_RELIABILITY_REPO_DIR="$TMP_ROOT/reliability-repo"
 
@@ -101,6 +105,7 @@ ctx_detail="Native coding failed: 400 This endpoint's maximum context length is 
 preflight_ctx_detail="Native coding pre-flight rejected the launch: estimated prompt is ~98414 input tokens plus 32768 reserved output tokens = 131182, which exceeds the 131072-token context window of moonshotai/kimi-k2 (openrouter, limit from registry). The provider would reject this request (context_length_exceeded)."
 bad_model_detail="Native coding failed: 400 qwen-2.5-coder-32b is not a valid model ID"
 tool_use_detail="Native coding failed: 404 No endpoints found that support tool use"
+credits_detail="Native coding failed: HTTP 402 Payment Required: This request requires more credits, or fewer max_tokens. You requested up to 32768 tokens, but can only afford 1123."
 
 if [[ "$(native_terminal_failure_kind "$ctx_detail")" == "context-window-exceeded" ]]; then
   pass "context overflow is classified"
@@ -126,6 +131,12 @@ else
   fail "unsupported tool use misclassified as $(native_terminal_failure_kind "$tool_use_detail")"
 fi
 
+if [[ "$(native_terminal_failure_kind "$credits_detail")" == "openrouter-credits-exhausted" ]]; then
+  pass "OpenRouter credit exhaustion is classified"
+else
+  fail "OpenRouter credit exhaustion misclassified as $(native_terminal_failure_kind "$credits_detail")"
+fi
+
 if [[ "$(native_terminal_failure_kind "something else entirely")" == "native-provider-error" ]]; then
   pass "unrecognised provider errors fall back to a generic kind"
 else
@@ -136,6 +147,12 @@ if [[ "$(native_terminal_failure_next_action context-window-exceeded)" == *"comp
   pass "context overflow surfaces a specific recovery action"
 else
   fail "context overflow recovery action missing"
+fi
+
+if [[ "$(native_terminal_failure_next_action openrouter-credits-exhausted)" == *"Top up OpenRouter credits"* || "$(native_terminal_failure_next_action openrouter-credits-exhausted)" == *"top up OpenRouter credits"* ]]; then
+  pass "OpenRouter credit exhaustion surfaces a billing recovery action"
+else
+  fail "OpenRouter credit exhaustion recovery action missing"
 fi
 
 # ── Context overflow end-to-end ───────────────────────────────────────
@@ -186,6 +203,27 @@ if emit_native_terminal_failure_attention "PAIR-1_c" "$fd" "coding" "win-tool" "
   fi
 else
   fail "unsupported tool use was not detected"
+fi
+
+# Credit failures across multiple challenge arms should surface aggregate loss
+# of challenge coverage in the OpenRouter warning cache.
+rm -f "/tmp/${SESSION}-openrouter-warning.txt" "$WAVEMILL_STATE_DIR/openrouter-credits-abort-count"
+seed "PAIR-1_c"
+fd="$TMP_ROOT/f-credits-1"
+challenge_abort_pair "PAIR-1_c" "$fd" "win-credits-1" "coding" "glm-5.2" "terminal_launch_failure:openrouter-credits-exhausted" "$credits_detail" "top up OpenRouter credits" || true
+if [[ ! -f "/tmp/${SESSION}-openrouter-warning.txt" ]]; then
+  pass "first OpenRouter credit abort increments without aggregate warning"
+else
+  fail "first OpenRouter credit abort wrote aggregate warning too early"
+fi
+
+seed "PAIR-1_c"
+fd="$TMP_ROOT/f-credits-2"
+challenge_abort_pair "PAIR-1_c" "$fd" "win-credits-2" "coding" "gemini-2.5-pro" "terminal_launch_failure:openrouter-credits-exhausted" "$credits_detail" "top up OpenRouter credits" || true
+if [[ "$(cat "/tmp/${SESSION}-openrouter-warning.txt" 2>/dev/null)" == *"challenge coverage disabled"* ]]; then
+  pass "repeated OpenRouter credit aborts write aggregate warning"
+else
+  fail "repeated OpenRouter credit aborts did not write aggregate warning"
 fi
 
 # ── Invalid model ID end-to-end ───────────────────────────────────────

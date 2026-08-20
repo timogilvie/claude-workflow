@@ -149,9 +149,46 @@ write_openrouter_warning_cache() {
   fi
 }
 
+startup_refresh_openrouter_credits() {
+  [[ -n "${REPO_DIR:-}" && -n "${TOOLS_DIR:-}" ]] || return 0
+
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 5 npx tsx "$TOOLS_DIR/refresh-openrouter-credits.ts" --repo-dir "$REPO_DIR" --timeout-ms 5000 >/dev/null 2>&1 \
+      || startup_log "WARN: OpenRouter credit refresh failed; continuing with cached balance"
+  else
+    npx tsx "$TOOLS_DIR/refresh-openrouter-credits.ts" --repo-dir "$REPO_DIR" --timeout-ms 5000 >/dev/null 2>&1 \
+      || startup_log "WARN: OpenRouter credit refresh failed; continuing with cached balance"
+  fi
+}
+
+startup_openrouter_credit_warning() {
+  [[ -n "${REPO_DIR:-}" ]] || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+
+  local quota_file="$REPO_DIR/.wavemill/quota-state.json"
+  [[ -f "$quota_file" ]] || return 1
+
+  local balance min_credits
+  balance="$(jq -r '.providers.openrouter.balanceUsd // empty' "$quota_file" 2>/dev/null || true)"
+  [[ -n "$balance" ]] || return 1
+  min_credits="$(jq -r '.nativeAgent.providers.openrouter.minCreditsUsd // 0.02' "$REPO_DIR/.wavemill-config.json" 2>/dev/null || echo "0.02")"
+  [[ -n "$min_credits" ]] || min_credits="0.02"
+
+  awk -v balance="$balance" -v min="$min_credits" 'BEGIN { exit !(balance < min) }' || return 1
+  printf 'OpenRouter credits exhausted - challenge coverage disabled, top up at https://openrouter.ai/credits\n'
+}
+
 startup_warn_openrouter_status() {
   [[ -n "${REPO_DIR:-}" && -n "${TOOLS_DIR:-}" ]] || return 0
   command -v jq >/dev/null 2>&1 || return 0
+
+  local credit_warning
+  credit_warning="$(startup_openrouter_credit_warning 2>/dev/null || true)"
+  if [[ -n "$credit_warning" ]]; then
+    write_openrouter_warning_cache "$credit_warning"
+    startup_log "WARN: $credit_warning"
+    return 0
+  fi
 
   local doctor_json doctor_rc warning_text status_line line
   doctor_json="$(npx tsx "$TOOLS_DIR/openrouter-doctor.ts" --json --repo-dir "$REPO_DIR" --lookback 20 2>/dev/null)" || doctor_rc=$?
@@ -1192,6 +1229,7 @@ main() {
 
   startup_log "═══ Wavemill Startup ═══"
   startup_log "Reading launch plan: $PLAN_FILE"
+  startup_refresh_openrouter_credits || true
   startup_warn_openrouter_status || true
 
   if [[ -n "$LAUNCH_QUEUE_PLAN" ]]; then
