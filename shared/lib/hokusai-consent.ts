@@ -6,6 +6,7 @@ import { getHokusaiContributionsConfig, getHokusaiSubmissionConfig } from './con
 import { errorMessage } from './error-utils.ts';
 import { isLegacyUnscopedContributionEndpoint } from './hokusai-local-config.ts';
 import { hokusaiQueueStatus } from './hokusai-queue.ts';
+import { readTriggerStats, summarizeTriggerStats } from './hokusai-trigger-stats.ts';
 
 export const CURRENT_CONSENT_VERSION = '1.0';
 
@@ -340,6 +341,8 @@ export function getContributionStatus(
   const submissionStatus = getSubmissionStatus(options);
   const contributionsConfig = getHokusaiContributionsConfig(options.repoDir);
   const queueStatus = hokusaiQueueStatus(options);
+  const consentStatus = getContributionConsentStatus(options);
+  const dataSubmissionConfig = getHokusaiSubmissionConfig(options.repoDir);
 
   const consent: 'enabled' | 'disabled' = submissionStatus.enabled && submissionStatus.consentValid
     ? 'enabled'
@@ -364,6 +367,19 @@ export function getContributionStatus(
   const endpointLooksUnscoped = endpoint !== undefined
     && isLegacyUnscopedContributionEndpoint(endpoint);
   const warnings: string[] = [];
+
+  if (dataSubmissionConfig.enabled === true && consentStatus.blockers.length > 0) {
+    warnings.push(
+      `Configuration conflict: hokusai.dataSubmission.enabled=true but submission is blocked by: ${formatConsentBlockers(consentStatus.blockers)}. Evals will silently skip submission until resolved.`,
+    );
+  }
+
+  if (!dataSubmissionConfig.enabled && submissionStatus.enabled && submissionStatus.consentValid && contributionsConfig.enabled) {
+    warnings.push(
+      `Configuration conflict: consent is granted but hokusai.dataSubmission.enabled is ${dataSubmissionConfig.enabled === undefined ? 'unset' : String(dataSubmissionConfig.enabled)} in repo config — the submission trigger is off.`,
+    );
+  }
+
   if (endpointLooksUnscoped) {
     warnings.push(
       `Contribution endpoint is the legacy unscoped path ${endpoint}.` +
@@ -404,6 +420,7 @@ export function getContributionStatus(
 export function getStatusDisplay(options: { configDir?: string; repoDir?: string } = {}): string {
   const status = getSubmissionStatus(options);
   const contrib = getContributionStatus(options);
+  const triggerStats = readTriggerStats(options);
   const lines = [
     `Hokusai data submission: ${status.enabled ? 'enabled' : 'disabled'}`,
     `Submission allowed: ${status.submissionAllowed ? 'yes' : 'no'}`,
@@ -417,6 +434,15 @@ export function getStatusDisplay(options: { configDir?: string; repoDir?: string
     `Upload endpoint: ${contrib.uploadEndpoint}`,
     `Mode: ${contrib.mode}`,
   ];
+
+  if (triggerStats) {
+    const summary = summarizeTriggerStats(triggerStats);
+    lines.push('');
+    lines.push(...summary.lines);
+    if (summary.warnings.length > 0) {
+      lines.push(...summary.warnings);
+    }
+  }
 
   if (contrib.warning) {
     lines.unshift(`Warning: ${contrib.warning}`, '');

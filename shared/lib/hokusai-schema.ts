@@ -308,7 +308,7 @@ export interface HokusaiSubmission {
 
 export type HokusaiSubmissionResult =
   | { ok: true; submission: HokusaiSubmission }
-  | { ok: false; reasons: EligibilityErrorCode[] };
+  | { ok: false; reasons: string[] };
 
 // ============================================================================
 // Input Schema Adapters
@@ -772,9 +772,16 @@ export function toHokusaiSubmission(
   record: EvalRecord,
 ): HokusaiSubmissionResult {
   if (record.trainingEligible === false) {
+    const reasons = uniqueSortedCodes(record.eligibilityErrors ?? []);
+    if (reasons.length === 0 && record.nonRewardReason?.code) {
+      return {
+        ok: false,
+        reasons: [record.nonRewardReason.code],
+      };
+    }
     return {
       ok: false,
-      reasons: uniqueSortedCodes(record.eligibilityErrors ?? []),
+      reasons: reasons.length > 0 ? reasons : ['ineligible_unspecified'],
     };
   }
 

@@ -11,6 +11,7 @@ export interface HokusaiQueuePaths {
   statePath: string;
   exportDir: string;
   ledgerPath: string;
+  triggerStatsPath: string;
 }
 
 export function resolveHokusaiQueuePaths(repoDir?: string): HokusaiQueuePaths {
@@ -23,6 +24,7 @@ export function resolveHokusaiQueuePaths(repoDir?: string): HokusaiQueuePaths {
     statePath: join(rootDir, 'state.json'),
     exportDir: join(rootDir, 'export'),
     ledgerPath: join(rootDir, 'ledger.jsonl'),
+    triggerStatsPath: join(rootDir, 'trigger-stats.json'),
   };
 }
 
