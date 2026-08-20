@@ -212,6 +212,7 @@ TESTS=(
   src/evaluation/scorers/wavemill/success-rate-under-budget.test.ts
   src/evaluation/adapters/wavemill-router-adapter.test.ts
   tools/add-pr-label.test.ts
+  tools/backfill-challenge-stage.test.ts
   tools/certify-patch-coding.test.ts
   tools/check-config-version.test.ts
   tools/check-pi-version.test.ts

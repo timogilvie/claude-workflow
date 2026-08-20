@@ -13,6 +13,7 @@ import {
   attachAgentType,
   attachAttemptedModel,
   attachBudgetMetadata,
+  attachChallengeExecutionMetadata,
   attachRouteCalibration,
   attachRoutePrediction,
   attachChallengeRouteContext,
@@ -40,6 +41,7 @@ import {
   enrichTrainingMetadata,
 } from './eval-record-builder.ts';
 import type { RubricEval } from './eval-schema.ts';
+import type { ChallengeExecutionIntent } from './challenge-execution-contract.ts';
 
 function expect(actual: unknown) {
   return {
@@ -1338,6 +1340,57 @@ describe('eval-record-builder', () => {
           reviewMode: 'llm',
         },
       });
+    });
+  });
+
+  describe('attachChallengeExecutionMetadata challengeStage', () => {
+    function challengeIntent(overrides: Partial<ChallengeExecutionIntent> = {}): ChallengeExecutionIntent {
+      return {
+        pairId: 'pair-stage',
+        primary: {
+          key: 'HOK-2797',
+          role: 'primary',
+          planner: { model: 'claude-opus-4-6' },
+          coder: { model: 'claude-opus-4-6' },
+          reviewer: { model: 'claude-opus-4-6' },
+        },
+        challenger: {
+          key: 'HOK-2797_c',
+          role: 'challenger',
+          planner: { model: 'gpt-5.4' },
+          coder: { model: 'claude-opus-4-6' },
+          reviewer: { model: 'claude-opus-4-6' },
+        },
+        ...overrides,
+      };
+    }
+
+    it('hoists selectedStage to top-level challengeStage', () => {
+      attachChallengeExecutionMetadata(baseRecord, {
+        side: 'challenger',
+        intent: challengeIntent({ selectedStage: 'plan' }),
+      });
+
+      expect(baseRecord.challengeStage).toBe('plan');
+    });
+
+    it('leaves challengeStage absent when the incoming intent has no explicit stage', () => {
+      attachChallengeExecutionMetadata(baseRecord, {
+        side: 'challenger',
+        intent: challengeIntent(),
+      });
+
+      expect(baseRecord.challengeIntent?.challengeStage).toBe('implementation');
+      expect(baseRecord.challengeStage).toBeUndefined();
+    });
+
+    it('hoists challengeStage when selectedStage is absent', () => {
+      attachChallengeExecutionMetadata(baseRecord, {
+        side: 'primary',
+        intent: challengeIntent({ challengeStage: 'review' }),
+      });
+
+      expect(baseRecord.challengeStage).toBe('review');
     });
   });
 
