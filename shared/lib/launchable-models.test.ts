@@ -195,4 +195,36 @@ describe('launch-priority watchlist launchability', () => {
       }
     }
   });
+
+  it('builds a matrix that excludes models with insufficient context window for coding', () => {
+    // Models with context windows below the coding floor (144,384) should be blocked
+    const repoDir = mkdtempSync(join(tmpdir(), 'wavemill-launchability-context-window-'));
+    writeMinimalConfig(repoDir);
+    
+    // Add certifications for models we want to test
+    writeCertification('kimi-k2');
+    writeCertification('mistral-large-2');
+    
+    const catalog = loadLaunchPriorityList()
+      .filter((entry) => ['kimi-k2', 'mistral-large-2'].includes(entry.wavemillAlias));
+    const matrix = buildLaunchabilityMatrix({ repoDir, catalog, now: NOW });
+
+    // Check kimi-k2 for coding - should be blocked due to context window
+    const kimiCodingCell = matrix.cells.find(cell => cell.modelId === 'kimi-k2' && cell.stage === 'coder');
+    assert.ok(kimiCodingCell, 'kimi-k2 coding cell should exist');
+    assert.equal(kimiCodingCell.launchable, false, 'kimi-k2 should not be launchable for coding');
+    assert.equal(kimiCodingCell.blocker, 'context-window', 'kimi-k2 should be blocked due to context window');
+    
+    // Check kimi-k2 for planning - should be launchable (no floor)
+    const kimiPlanningCell = matrix.cells.find(cell => cell.modelId === 'kimi-k2' && cell.stage === 'planner');
+    assert.ok(kimiPlanningCell, 'kimi-k2 planning cell should exist');
+    assert.equal(kimiPlanningCell.launchable, true, 'kimi-k2 should be launchable for planning');
+    assert.equal(kimiPlanningCell.agent, 'native-openrouter', 'kimi-k2 should resolve to native-openrouter');
+    
+    // Check mistral-large-2 for coding - should be blocked due to context window
+    const mistralCodingCell = matrix.cells.find(cell => cell.modelId === 'mistral-large-2' && cell.stage === 'coder');
+    assert.ok(mistralCodingCell, 'mistral-large-2 coding cell should exist');
+    assert.equal(mistralCodingCell.launchable, false, 'mistral-large-2 should not be launchable for coding');
+    assert.equal(mistralCodingCell.blocker, 'context-window', 'mistral-large-2 should be blocked due to context window');
+  });
 });

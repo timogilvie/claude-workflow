@@ -22,6 +22,9 @@ import {
   getEffectiveRegistry,
   getLadder,
   getModel,
+  hasSufficientContextWindow,
+  getStageContextWindowFloor,
+  STAGE_CONTEXT_WINDOW_FLOORS,
   getRequiredCertificationPhaseForStage,
   isKnownModelId,
   isReadOnlyNativeCapable,
@@ -2286,5 +2289,93 @@ describe('canonical supported-model helpers', () => {
         `${alias} declares ${declared} but the provider enforces ${limit}; overstating lets through prompts the provider rejects`,
       );
     }
+  });
+
+  it('coding stage has a context window floor', () => {
+    const floor = getStageContextWindowFloor('coding');
+    assert.ok(floor !== undefined, 'coding stage should have a context window floor');
+    assert.equal(floor, 144_384, 'coding stage should have a 144,384 token floor');
+  });
+
+  it('planning, review, and expansion stages have no context window floor initially', () => {
+    assert.equal(getStageContextWindowFloor('planning'), undefined, 'planning stage should have no floor');
+    assert.equal(getStageContextWindowFloor('review'), undefined, 'review stage should have no floor');
+    assert.equal(getStageContextWindowFloor('expansion'), undefined, 'expansion stage should have no floor');
+  });
+
+  it('hasSufficientContextWindow returns true when context window meets or exceeds floor', () => {
+    // Model with sufficient context window
+    const sufficientModel = { contextWindowTokens: 200_000 };
+    assert.ok(hasSufficientContextWindow(sufficientModel, 'coding'), 'model with 200k context window should be sufficient for coding');
+    
+    // Model exactly meeting the floor
+    const exactModel = { contextWindowTokens: 144_384 };
+    assert.ok(hasSufficientContextWindow(exactModel, 'coding'), 'model with exactly 144,384 context window should be sufficient');
+  });
+
+  it('hasSufficientContextWindow returns false when context window is below floor', () => {
+    const insufficientModel = { contextWindowTokens: 131_072 };
+    assert.ok(!hasSufficientContextWindow(insufficientModel, 'coding'), 'model with 131,072 context window should be insufficient for coding');
+  });
+
+  it('hasSufficientContextWindow returns true for stages without floors', () => {
+    const model = { contextWindowTokens: 32_768 };
+    assert.ok(hasSufficientContextWindow(model, 'planning'), 'model should be sufficient for planning (no floor)');
+    assert.ok(hasSufficientContextWindow(model, 'review'), 'model should be sufficient for review (no floor)');
+    assert.ok(hasSufficientContextWindow(model, 'expansion'), 'model should be sufficient for expansion (no floor)');
+  });
+
+  it('kimi-k2 is excluded from coding due to insufficient context window', () => {
+    const reason = explainModelSupportExclusion('kimi-k2', 'coding');
+    assert.equal(reason, 'context-window-insufficient', 'kimi-k2 should be excluded from coding due to context window');
+    
+    // But still eligible for planning (no floor)
+    const planningReason = explainModelSupportExclusion('kimi-k2', 'planning');
+    assert.notEqual(planningReason, 'context-window-insufficient', 'kimi-k2 should be eligible for planning');
+  });
+
+  it('mistral-large-2 is excluded from coding due to insufficient context window', () => {
+    const reason = explainModelSupportExclusion('mistral-large-2', 'coding');
+    assert.equal(reason, 'context-window-insufficient', 'mistral-large-2 should be excluded from coding due to context window');
+  });
+
+  it('llama-3.3-70b is excluded from coding due to insufficient context window', () => {
+    const reason = explainModelSupportExclusion('llama-3.3-70b', 'coding');
+    assert.equal(reason, 'context-window-insufficient', 'llama-3.3-70b should be excluded from coding due to context window');
+  });
+
+  it('deepseek-coder-v2 is excluded from coding due to insufficient context window', () => {
+    const reason = explainModelSupportExclusion('deepseek-coder-v2', 'coding');
+    assert.equal(reason, 'context-window-insufficient', 'deepseek-coder-v2 should be excluded from coding due to context window');
+  });
+
+  it('qwen-2.5-coder-32b is excluded from coding due to insufficient context window', () => {
+    const reason = explainModelSupportExclusion('qwen-2.5-coder-32b', 'coding');
+    assert.equal(reason, 'context-window-insufficient', 'qwen-2.5-coder-32b should be excluded from coding due to context window');
+  });
+
+  it('qwen-2.5-72b is excluded from coding due to insufficient context window', () => {
+    const reason = explainModelSupportExclusion('qwen-2.5-72b', 'coding');
+    assert.equal(reason, 'context-window-insufficient', 'qwen-2.5-72b should be excluded from coding due to context window');
+  });
+
+  it('models with sufficient context windows are not excluded', () => {
+    const reason = explainModelSupportExclusion('claude-sonnet-5', 'coding');
+    assert.notEqual(reason, 'context-window-insufficient', 'claude-sonnet-5 should not be excluded from coding');
+  });
+
+  it('listSupportedModelsForStage excludes context-window-insufficient models', () => {
+    const codingModels = listSupportedModelsForStage('coding');
+    assert.ok(!codingModels.includes('kimi-k2'), 'kimi-k2 should not be in coding models');
+    assert.ok(!codingModels.includes('mistral-large-2'), 'mistral-large-2 should not be in coding models');
+    assert.ok(!codingModels.includes('llama-3.3-70b'), 'llama-3.3-70b should not be in coding models');
+    assert.ok(!codingModels.includes('deepseek-coder-v2'), 'deepseek-coder-v2 should not be in coding models');
+    assert.ok(!codingModels.includes('qwen-2.5-coder-32b'), 'qwen-2.5-coder-32b should not be in coding models');
+    assert.ok(!codingModels.includes('qwen-2.5-72b'), 'qwen-2.5-72b should not be in coding models');
+    
+    // But they should still be eligible for planning
+    const planningModels = listSupportedModelsForStage('planning');
+    assert.ok(planningModels.includes('kimi-k2'), 'kimi-k2 should be in planning models');
+    assert.ok(planningModels.includes('mistral-large-2'), 'mistral-large-2 should be in planning models');
   });
 });

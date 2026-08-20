@@ -2,6 +2,7 @@ import {
   DEFAULT_MODEL_REGISTRY,
   evaluateRegistryPhaseEligibility,
   explainModelSupportExclusion,
+  getStageContextWindowFloor,
   getModel,
   isCodexChatgptLaunchEligible,
   type AgentType,
@@ -22,6 +23,7 @@ export type UnroutableReason =
   | 'native-unsupported'
   | 'lifecycle-blocked'
   | 'tool-support-insufficient'
+  | 'context-window-insufficient'
   | 'role-ineligible'
   | 'uncertified'
   | 'codex-chatgpt-ineligible';
@@ -160,14 +162,23 @@ function resolveRegistryBackedNativeAgent(input: {
     SUPPORTED_STAGE_BY_AGENT_PHASE[input.phase],
     input.registry,
   );
-  if (supportReason === 'blocked-lifecycle' || supportReason === 'tool-support-insufficient') {
-    const reason = supportReason === 'blocked-lifecycle' ? 'lifecycle-blocked' : 'tool-support-insufficient';
+  if (supportReason === 'blocked-lifecycle' || supportReason === 'tool-support-insufficient' || supportReason === 'context-window-insufficient') {
+    const reason = supportReason === 'blocked-lifecycle' 
+      ? 'lifecycle-blocked' 
+      : supportReason === 'tool-support-insufficient' 
+        ? 'tool-support-insufficient' 
+        : 'context-window-insufficient';
+    const certificationStatus = supportReason === 'blocked-lifecycle' 
+      ? 'retired' 
+      : supportReason === 'tool-support-insufficient' 
+        ? 'tool-support:none' 
+        : `context-window:${capabilities?.contextWindowTokens}<${getStageContextWindowFloor(SUPPORTED_STAGE_BY_AGENT_PHASE[input.phase])}`;
     const diagnostic = buildDiagnostic({
       modelId: input.modelId,
       phase: input.phase,
       provider,
       reason,
-      certificationStatus: supportReason === 'blocked-lifecycle' ? 'retired' : 'tool-support:none',
+      certificationStatus,
     });
     return { ok: false, reason, diagnostic };
   }
