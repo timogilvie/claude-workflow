@@ -3648,6 +3648,45 @@ challenge_stage_for_launch_env() {
   esac
 }
 
+write_openrouter_warning_cache() {
+  local warning_text="${1:-}"
+  local warning_file="/tmp/${SESSION}-openrouter-warning.txt"
+
+  if [[ -n "$warning_text" ]]; then
+    printf '%s\n' "$warning_text" > "$warning_file" 2>/dev/null || true
+  else
+    rm -f "$warning_file" 2>/dev/null || true
+  fi
+}
+
+record_openrouter_credits_challenge_abort() {
+  local state_dir count_file lock_dir count
+  state_dir="${WAVEMILL_STATE_DIR:-}"
+  if [[ -z "$state_dir" && -n "${STATE_FILE:-}" ]]; then
+    state_dir="$(dirname "$STATE_FILE")"
+  fi
+  [[ -n "$state_dir" ]] || state_dir="/tmp"
+  mkdir -p "$state_dir" 2>/dev/null || true
+
+  count_file="$state_dir/openrouter-credits-abort-count"
+  lock_dir="$state_dir/openrouter-credits-abort-count.lock"
+  local attempt=0
+  while ! mkdir "$lock_dir" 2>/dev/null; do
+    attempt=$((attempt + 1))
+    [[ "$attempt" -le 50 ]] || return 0
+    sleep 0.05
+  done
+  count="$(cat "$count_file" 2>/dev/null || echo 0)"
+  [[ "$count" =~ ^[0-9]+$ ]] || count=0
+  count=$((count + 1))
+  printf '%s\n' "$count" > "$count_file" 2>/dev/null || true
+  rm -rf "$lock_dir" 2>/dev/null || true
+
+  if [[ "$count" -ge 2 ]]; then
+    write_openrouter_warning_cache "OpenRouter credits exhausted - challenge coverage disabled, top up at https://openrouter.ai/credits"
+  fi
+}
+
 # Quarantine both arms of a challenge pair and record why.
 #
 # A challenge is only meaningful when both arms actually ran, so a terminal
@@ -3705,6 +3744,10 @@ challenge_abort_pair() {
     '{pairId:$pairId, stage:$stage, model:$model, reason:$reason, abortedAt:$abortedAt, detail:$detail}
      + (if $nextAction == "" then {} else {nextAction:$nextAction} end)' \
     > "$tmp" 2>/dev/null && mv "$tmp" "$artifact" || rm -f "$tmp"
+
+  if [[ "$reason" == *"openrouter-credits-exhausted"* ]]; then
+    record_openrouter_credits_challenge_abort || true
+  fi
 
   set_window_attention_state "$win" "needs-user"
   return 0
@@ -6770,6 +6813,8 @@ native_terminal_failure_kind() {
       printf 'invalid-model-id\n'; return 0 ;;
     *"rate limit"*|*"429"*)
       printf 'provider-rate-limited\n'; return 0 ;;
+    *"can only afford"*|*"requires more credits"*|*"http 402"*|*"402 payment required"*|*"openrouter-credits-exhausted"*)
+      printf 'openrouter-credits-exhausted\n'; return 0 ;;
     *"insufficient"*"credit"*|*"quota"*)
       printf 'provider-quota-exhausted\n'; return 0 ;;
   esac
@@ -6784,6 +6829,8 @@ native_terminal_failure_next_action() {
       printf 'check catalog alias resolution, then relaunch. The provider rejected the model ID\n' ;;
     provider-rate-limited)
       printf 'relaunch after the rate limit window\n' ;;
+    openrouter-credits-exhausted)
+      printf 'top up OpenRouter credits or lower nativeAgent.providers.openrouter thresholds\n' ;;
     provider-quota-exhausted)
       printf 'add provider credit, then relaunch. The quota is exhausted\n' ;;
     *)

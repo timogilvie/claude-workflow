@@ -1220,6 +1220,21 @@
                                     "additionalProperties": {
                                         "type": "string"
                                     }
+                                },
+                                "minCreditsUsd": {
+                                    "type": "number",
+                                    "exclusiveMinimum": 0,
+                                    "default": 0.02
+                                },
+                                "warnCreditsUsd": {
+                                    "type": "number",
+                                    "exclusiveMinimum": 0,
+                                    "default": 2
+                                },
+                                "creditRefreshTtlSeconds": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "default": 600
                                 }
                             },
                             "additionalProperties": false

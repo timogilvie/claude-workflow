@@ -24,9 +24,11 @@ import {
   markExhausted,
   recordNearLimit,
   recordRequest,
+  readOpenRouterCredits,
   readQuotaSnapshot,
   recordLimitError,
   recordSuccess,
+  writeOpenRouterCredits,
 } from './quota-state.ts';
 
 let tempRoot: string;
@@ -137,7 +139,58 @@ describe('quota-state', () => {
     const snapshot = readQuotaSnapshot(repoDir);
 
     assert.deepEqual(snapshot.models, {});
+    assert.equal(snapshot.providers, undefined);
     assert.match(snapshot.snapshotAt, /^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it('migrates v1 model-only state to v2 on read', () => {
+    mkdirSync(dirname(quotaStatePath(repoDir)), { recursive: true });
+    writeFileSync(quotaStatePath(repoDir), `${JSON.stringify({
+      version: 1,
+      updatedAt: '2026-04-17T12:00:00.000Z',
+      models: {
+        'glm-5.2': {
+          status: 'healthy',
+          remainingEstimate: null,
+          resetAt: null,
+          confidence: 1,
+          lastLimitErrorAt: null,
+          lastSuccessAt: null,
+          lastReason: null,
+          consecutiveLimitErrors: 0,
+          requestHistory: [],
+          consecutiveNearLimitSignals: 0,
+          lastNearLimitAt: null,
+          budgetSignal: null,
+        },
+      },
+    }, null, 2)}\n`, 'utf-8');
+
+    const snapshot = readQuotaSnapshot(repoDir);
+    assert.equal(snapshot.models['glm-5.2']?.status, 'healthy');
+    assert.equal(snapshot.providers, undefined);
+    recordSuccess({ modelId: 'kimi-k2' }, repoDir);
+    assert.equal(rawQuotaState(repoDir).version, 2);
+  });
+
+  it('round-trips OpenRouter provider credits through quota state', () => {
+    writeOpenRouterCredits(repoDir, {
+      totalCredits: 110,
+      totalUsage: 110.157967615,
+      balanceUsd: -0.157967615,
+      usageDaily: 10.05,
+      updatedAt: '2026-08-19T12:00:00.000Z',
+      lastFetchError: null,
+    });
+
+    const credits = readOpenRouterCredits(repoDir);
+    assert.equal(credits?.balanceUsd, -0.157967615);
+    assert.equal(readQuotaSnapshot(repoDir).providers?.openrouter?.totalCredits, 110);
+
+    writeOpenRouterCredits(repoDir, { error: 'network down' });
+    const failed = readOpenRouterCredits(repoDir);
+    assert.equal(failed?.balanceUsd, -0.157967615);
+    assert.equal(failed?.lastFetchError?.message, 'network down');
   });
 
   it('records limit errors, escalates to exhausted, and returns to healthy on success', () => {
