@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   runAgentLoopContinue,
   type AfterToolCallResult,
@@ -12,6 +12,7 @@ import {
 } from '@earendil-works/pi-agent-core';
 import type { AgentEvent } from '@earendil-works/pi-agent-core';
 import type { AssistantMessage, Model } from '@earendil-works/pi-ai';
+import { SessionStreamWriter, type SessionStreamWriterOptions, storeArtifact } from './session-stream.ts';
 
 // Re-export the Pi agent context type through the loop seam so loop callers can
 // construct an AgentContext without importing Pi vendor packages directly.
@@ -86,6 +87,37 @@ export interface HeartbeatEvent {
 
 export const HEARTBEAT_AGENT = 'native-agent';
 
+/**
+ * Session event stream configuration.
+ * When provided, canonical provenance events are recorded for the session.
+ */
+export interface SessionStreamConfig {
+  /** Session identifier. */
+  sessionId: string;
+  /** Request trace ID. */
+  traceId: string;
+  /** Phase (planning, coding, review, etc.). */
+  phase: string;
+  /** Absolute path to the event stream file. */
+  eventStreamPath: string;
+  /** Repository directory for artifact storage. */
+  repoDir?: string;
+  /** Optional manifest ID for this session's resources. */
+  manifestId?: string;
+  /** Optional initial config digest. */
+  initialConfigDigest?: string;
+  /** Optional prompt resource references. */
+  promptRefs?: Array<{ resourceId: string; contentHash: string; version?: string }>;
+  /** Optional injected context references. */
+  injectedContextRefs?: Array<{ resourceId: string; contentHash: string; version?: string }>;
+  /** Optional policy config digest. */
+  policyConfigDigest?: string;
+  /** When true, external code (launch-level) manages session start/end events. */
+  externalWriterManagesSessionBoundaries?: boolean;
+  /** Optional pre-created SessionStreamWriter instance to reuse (prevents duplicate seq counters). */
+  writerInstance?: SessionStreamWriter;
+}
+
 export interface WavemillLoopConfig {
   model: ProviderModelConfig;
   /** Pi agent context (systemPrompt, messages, tools) for this run. */
@@ -142,6 +174,9 @@ export interface WavemillLoopConfig {
   /** Per-turn output ceiling. Falls back to `model.maxTokens`, then
    *  DEFAULT_MAX_OUTPUT_TOKENS; it is never sent as undefined. */
   maxTokens?: number;
+  /** Optional session event stream configuration. When provided, session provenance
+   *  events are recorded alongside the transcript. */
+  sessionStreamConfig?: SessionStreamConfig;
 }
 
 export interface LoopResult {
@@ -313,6 +348,39 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
       })
       : undefined;
 
+  // Initialize optional session event stream writer
+  // Session boundary events (started/ended) are only written if not provided externally
+  let sessionStreamWriter: SessionStreamWriter | undefined;
+  let skipSessionBoundaryEvents = false;
+  try {
+    if (config.sessionStreamConfig) {
+      const streamConfig = config.sessionStreamConfig;
+      // Use provided writer instance if available to avoid duplicate seq counters
+      sessionStreamWriter = streamConfig.writerInstance ?? new SessionStreamWriter(
+        {
+          sessionId: streamConfig.sessionId,
+          traceId: streamConfig.traceId,
+          phase: streamConfig.phase,
+          path: streamConfig.eventStreamPath,
+        },
+        streamConfig.repoDir,
+      );
+      // Only write session_started if no external writer flag is set
+      // This allows launch-level code to control session boundaries for recovery/retry
+      if (!streamConfig.externalWriterManagesSessionBoundaries) {
+        sessionStreamWriter.writeSessionStarted({
+          initialConfigDigest: streamConfig.initialConfigDigest ?? computeArgsFingerprint(config.model),
+          manifestId: streamConfig.manifestId,
+        });
+      } else {
+        skipSessionBoundaryEvents = true;
+      }
+    }
+  } catch (error) {
+    console.warn(`Failed to initialize session event stream: ${(error as Error).message}`);
+    sessionStreamWriter = undefined;
+  }
+
   // Build a name→metadata map for quick lookup inside afterToolCall.
   const toolMetadataByName = new Map<string, ToolMetadata>(
     (config.toolPolicy?.registry ?? []).map((m) => [m.name, m]),
@@ -346,6 +414,9 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
   const batchFailed = new WeakMap<AssistantMessage, boolean>();
   // Tool call ids that were skipped by beforeToolCall (not real failures).
   const skippedCallIds = new Set<string>();
+  // Track current turn's model request event ID and callId for linking response
+  let currentTurnRequestEventId: string | undefined;
+  let currentTurnRequestCallId: string | undefined;
 
   const toolsForCompat = config.toolPolicy?.registry.length
     ? config.toolPolicy.registry
@@ -489,6 +560,19 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
             arguments: ctx.args as Record<string, unknown>,
           },
         });
+        // Log tool policy decision event
+        if (sessionStreamWriter) {
+          try {
+            sessionStreamWriter.writeToolPolicyDecision({
+              callId: ctx.toolCall.id,
+              toolName: ctx.toolCall.name,
+              decision: decision.kind === 'deny' ? 'deny' : 'allow',
+              denialReason: decision.kind === 'deny' ? decision.message : undefined,
+            });
+          } catch (error) {
+            console.warn(`Failed to log tool policy decision event: ${(error as Error).message}`);
+          }
+        }
         if (decision.kind === 'deny') {
           return { block: true, reason: decision.message };
         }
@@ -614,6 +698,49 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
       };
       (override as AfterToolCallResult & { metadata?: ToolResultMetadata }).metadata = metadata;
 
+      // Log tool result event
+      if (sessionStreamWriter) {
+        try {
+          const contentSummary = redactedContent
+            .filter((block) => block.type === 'text')
+            .map((block) => (block as { type: string; text: string }).text)
+            .join('\n');
+
+          // Store large or truncated results as artifacts
+          let artifactRef = undefined;
+          if (outputCap.capped || (contentSummary?.length ?? 0) > 10000) {
+            try {
+              artifactRef = storeArtifact(
+                contentSummary || JSON.stringify(enrichedDetails),
+                config.sessionStreamConfig?.repoDir,
+                outputCap.capped,
+                typeof enrichedDetails === 'string' ? enrichedDetails.length : undefined,
+              );
+            } catch (artifactError) {
+              console.warn(`Failed to store tool result artifact: ${(artifactError as Error).message}`);
+            }
+          }
+
+          sessionStreamWriter.writeToolResult({
+            callId: ctx.toolCall.id,
+            toolName: ctx.toolCall.name,
+            isError: override.isError ?? false,
+            contentSummary: contentSummary ? contentSummary.slice(0, 500) : undefined,
+            byteSize: contentSummary?.length,
+            artifactRef,
+            redaction: redaction.redacted
+              ? {
+                  redacted: true,
+                  matchCount: redaction.matchCount,
+                  categories: redaction.categories,
+                }
+              : undefined,
+          });
+        } catch (error) {
+          console.warn(`Failed to log tool result event: ${(error as Error).message}`);
+        }
+      }
+
       return override;
     },
   };
@@ -641,6 +768,28 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
     switch (event.type) {
       case 'turn_start':
         onHeartbeat?.({ state: 'working', event: 'turn_start', agent: HEARTBEAT_AGENT });
+        // Log model request event when turn starts
+        if (sessionStreamWriter) {
+          try {
+            currentTurnRequestCallId = randomUUID();
+            const modelRequestEvent = sessionStreamWriter.writeModelRequest({
+              callId: currentTurnRequestCallId,
+              turnIndex: turnsCompleted,
+              provider: config.model.provider,
+              modelId: toProviderRequestModelId(config.model),
+              config: {
+                temperature,
+                maxTokens,
+              },
+              contextDigest: computeArgsFingerprint(context),
+              promptRefs: config.sessionStreamConfig?.promptRefs ?? [],
+              injectedContextRefs: config.sessionStreamConfig?.injectedContextRefs,
+            });
+            currentTurnRequestEventId = modelRequestEvent.eventId;
+          } catch (error) {
+            console.warn(`Failed to log model request event: ${(error as Error).message}`);
+          }
+        }
         break;
       case 'message_update':
         onHeartbeat?.({ state: 'working', event: 'message_update', agent: HEARTBEAT_AGENT });
@@ -652,9 +801,36 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
           detail: event.toolName,
           agent: HEARTBEAT_AGENT,
         });
+        // Log tool call event when tool execution starts
+        if (sessionStreamWriter) {
+          try {
+            sessionStreamWriter.writeToolCall({
+              callId: event.callId ?? randomUUID(),
+              toolName: event.toolName,
+            });
+          } catch (error) {
+            console.warn(`Failed to log tool call event: ${(error as Error).message}`);
+          }
+        }
         break;
       case 'agent_end':
         finalMessages = event.messages;
+        // Log model response event when agent ends this turn
+        if (sessionStreamWriter && currentTurnRequestEventId) {
+          try {
+            const finalMsg = event.messages[event.messages.length - 1] as AssistantMessage;
+            if (finalMsg && finalMsg.role === 'assistant') {
+              sessionStreamWriter.writeModelResponse({
+                requestEventId: currentTurnRequestEventId,
+                callId: currentTurnRequestCallId ?? currentTurnRequestEventId,
+                stopReason: finalMsg.stopReason ?? 'unknown',
+                usage: finalMsg.usage as Record<string, unknown> | undefined,
+              });
+            }
+          } catch (error) {
+            console.warn(`Failed to log model response event: ${(error as Error).message}`);
+          }
+        }
         break;
       default:
         break;
@@ -707,6 +883,20 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
     stopReason = composed.isWallClockExpiry() ? 'wall_clock_limit' : 'aborted';
   } else {
     stopReason = 'stop';
+  }
+
+  // Write session_ended event if session stream is enabled and not externally managed
+  try {
+    if (sessionStreamWriter && !skipSessionBoundaryEvents) {
+      sessionStreamWriter.writeSessionEnded({
+        stopReason,
+        totalTurns: turnsCompleted,
+        totalToolCalls: toolCallsExecuted,
+        totalTokens: totalInputTokens + totalOutputTokens,
+      });
+    }
+  } catch (error) {
+    console.warn(`Failed to write session_ended event: ${(error as Error).message}`);
   }
 
   return {
