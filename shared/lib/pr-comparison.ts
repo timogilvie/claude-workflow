@@ -10,10 +10,29 @@ import {
   type ChallengeSideExecutionProvenance,
   type ChallengeProvenanceValidation,
 } from './challenge-comparison.ts';
-import { scoreSourceLabel } from './challenge-score-selector.ts';
 import type { ChallengeStageEval } from './eval-schema.ts';
 import { formatRubricForJudgePrompt } from './rubric.ts';
 import { errorMessage } from './error-utils.ts';
+
+export type PresentationOrder = 'primary-first' | 'challenger-first';
+
+type CandidateLabel = 'Candidate A' | 'Candidate B';
+type CandidateKey = 'A' | 'B';
+
+export interface BlindComparisonDimensions {
+  completeness: { A: number; B: number };
+  correctness: { A: number; B: number };
+  code_quality: { A: number; B: number };
+  intervention_impact: { A: number; B: number };
+  autonomy: { A: number; B: number };
+}
+
+export interface BlindComparisonResult {
+  winner: CandidateKey;
+  rationale: string;
+  workflowInsight?: string;
+  dimensions: BlindComparisonDimensions;
+}
 
 export type ValidatedComparisonResult = Omit<
   ChallengeComparison,
@@ -32,10 +51,24 @@ export type ValidatedComparisonResult = Omit<
   | 'challengeType'
   | 'variedStage'
   | 'stageEvidenceMode'
+  | 'presentationOrder'
 >;
 
+export function resolvePresentationOrder(
+  explicit?: string,
+  rng: () => number = Math.random,
+): PresentationOrder {
+  if (explicit === undefined || explicit === '' || explicit === 'random') {
+    return rng() < 0.5 ? 'primary-first' : 'challenger-first';
+  }
+  if (explicit === 'primary-first' || explicit === 'challenger-first') {
+    return explicit;
+  }
+  throw new Error(`Invalid presentation order: ${explicit}. Expected primary-first, challenger-first, or random.`);
+}
+
 function formatStageEvidenceBlock(
-  side: 'Primary' | 'Challenger',
+  side: CandidateLabel,
   evidence: ChallengeStageEval,
 ): string {
   const items = evidence.evidence
@@ -78,14 +111,9 @@ export function buildComparisonPrompt(input: {
   issuePrompt: string;
   primaryDiff: string;
   challengerDiff: string;
-  primaryEvalScore: number;
-  challengerEvalScore: number;
+  presentationOrder: PresentationOrder;
   primaryRouting?: ChallengeRoutingMeta;
   challengerRouting?: ChallengeRoutingMeta;
-  primaryEvalScoreSource?: string;
-  challengerEvalScoreSource?: string;
-  primaryPerStageScores?: Record<string, number>;
-  challengerPerStageScores?: Record<string, number>;
   challengeType?: string;
   primaryStageEval?: ChallengeStageEval;
   challengerStageEval?: ChallengeStageEval;
@@ -94,6 +122,8 @@ export function buildComparisonPrompt(input: {
 }): string {
   let workflowContext = '';
   let stageEvidenceContext = '';
+  const sideA = sideView(input.presentationOrder, 'A', input);
+  const sideB = sideView(input.presentationOrder, 'B', input);
 
   if (input.primaryRouting && input.challengerRouting) {
     const variedDimensions = detectVariedDimensions(input.primaryRouting, input.challengerRouting);
@@ -107,45 +137,29 @@ export function buildComparisonPrompt(input: {
       if (variedDimensions.reviewMode) variedFields.push('reviewMode');
     }
 
-    let perStageContext = '';
-    const primaryStages = input.primaryPerStageScores ?? {};
-    const challengerStages = input.challengerPerStageScores ?? {};
-    if (Object.keys({ ...primaryStages, ...challengerStages }).length > 0) {
-      const stageLines = Object.keys({ ...primaryStages, ...challengerStages }).sort().map((stage) => {
-        const p = primaryStages[stage] !== undefined ? primaryStages[stage].toFixed(2) : 'n/a';
-        const c = challengerStages[stage] !== undefined ? challengerStages[stage].toFixed(2) : 'n/a';
-        return `  ${stage}: primary=${p}, challenger=${c}`;
-      });
-      perStageContext = `\nPer-stage scores:\n${stageLines.join('\n')}\n`;
-    }
-
     workflowContext = `
 
 ## Workflow Context
 
 Intended routing:
-Primary side:
-- Planner: ${input.primaryRouting.planner} | Coder: ${input.primaryRouting.coder} | Reviewer: ${input.primaryRouting.reviewer}
-- Plan depth: ${input.primaryRouting.planDepth} | Code depth: ${input.primaryRouting.codeDepth} | Review mode: ${input.primaryRouting.reviewMode}
+Candidate A side:
+- Planner: ${sideA.routing?.planner} | Coder: ${sideA.routing?.coder} | Reviewer: ${sideA.routing?.reviewer}
+- Plan depth: ${sideA.routing?.planDepth} | Code depth: ${sideA.routing?.codeDepth} | Review mode: ${sideA.routing?.reviewMode}
 
-Challenger side:
-- Planner: ${input.challengerRouting.planner} | Coder: ${input.challengerRouting.coder} | Reviewer: ${input.challengerRouting.reviewer}
-- Plan depth: ${input.challengerRouting.planDepth} | Code depth: ${input.challengerRouting.codeDepth} | Review mode: ${input.challengerRouting.reviewMode}
+Candidate B side:
+- Planner: ${sideB.routing?.planner} | Coder: ${sideB.routing?.coder} | Reviewer: ${sideB.routing?.reviewer}
+- Plan depth: ${sideB.routing?.planDepth} | Code depth: ${sideB.routing?.codeDepth} | Review mode: ${sideB.routing?.reviewMode}
 
 Variables that differed: ${variedFields.join(', ') || 'none'}
-${formatExecutionPromptContext(input.primaryExecution, input.challengerExecution)}
-${perStageContext}
+${formatExecutionPromptContext(sideA.execution, sideB.execution)}
 Consider whether routing differences (not just code differences) may have influenced the outcome.
 `;
   }
 
-  const primaryScoreLabel = scoreSourceLabel(input.primaryEvalScoreSource || 'overall', 'Primary');
-  const challengerScoreLabel = scoreSourceLabel(input.challengerEvalScoreSource || 'overall', 'Challenger');
-
   if (
     (input.challengeType === 'planner-only' || input.challengeType === 'reviewer-only')
-    && input.primaryStageEval?.provenance === 'direct'
-    && input.challengerStageEval?.provenance === 'direct'
+    && sideA.stageEval?.provenance === 'direct'
+    && sideB.stageEval?.provenance === 'direct'
   ) {
     stageEvidenceContext = `
 
@@ -153,25 +167,25 @@ Consider whether routing differences (not just code differences) may have influe
 
 Use this evidence as the primary signal for the varied stage.
 
-${formatStageEvidenceBlock('Primary', input.primaryStageEval)}
+${formatStageEvidenceBlock('Candidate A', sideA.stageEval)}
 
-${formatStageEvidenceBlock('Challenger', input.challengerStageEval)}
+${formatStageEvidenceBlock('Candidate B', sideB.stageEval)}
 `;
   }
 
-  return `You are judging two pull requests for the same task.
+  return `You are judging two candidate pull requests (Candidate A and Candidate B) for the same task.
 
 Return JSON only with this exact structure:
 {
-  "winner": "primary" | "challenger",
+  "winner": "A" | "B",
   "rationale": "short explanation",
   "workflowInsight": "optional observation about how routing differences may have influenced the result",
   "dimensions": {
-    "completeness": { "primary": number, "challenger": number },
-    "correctness": { "primary": number, "challenger": number },
-    "code_quality": { "primary": number, "challenger": number },
-    "intervention_impact": { "primary": number, "challenger": number },
-    "autonomy": { "primary": number, "challenger": number }
+    "completeness": { "A": number, "B": number },
+    "correctness": { "A": number, "B": number },
+    "code_quality": { "A": number, "B": number },
+    "intervention_impact": { "A": number, "B": number },
+    "autonomy": { "A": number, "B": number }
   }
 }
 
@@ -187,14 +201,46 @@ ${stageEvidenceContext}
 Task context:
 ${input.issuePrompt}
 
-${primaryScoreLabel}: ${input.primaryEvalScore}
-${challengerScoreLabel}: ${input.challengerEvalScore}
+Candidate A diff:
+${sideA.diff}
 
-Primary diff:
-${input.primaryDiff}
+Candidate B diff:
+${sideB.diff}`;
+}
 
-Challenger diff:
-${input.challengerDiff}`;
+function sideView(
+  order: PresentationOrder,
+  candidate: CandidateKey,
+  input: {
+    primaryDiff: string;
+    challengerDiff: string;
+    primaryRouting?: ChallengeRoutingMeta;
+    challengerRouting?: ChallengeRoutingMeta;
+    primaryStageEval?: ChallengeStageEval;
+    challengerStageEval?: ChallengeStageEval;
+    primaryExecution?: ChallengeSideExecutionProvenance;
+    challengerExecution?: ChallengeSideExecutionProvenance;
+  },
+): {
+  diff: string;
+  routing?: ChallengeRoutingMeta;
+  stageEval?: ChallengeStageEval;
+  execution?: ChallengeSideExecutionProvenance;
+} {
+  const isPrimary = order === 'primary-first' ? candidate === 'A' : candidate === 'B';
+  return isPrimary
+    ? {
+        diff: input.primaryDiff,
+        routing: input.primaryRouting,
+        stageEval: input.primaryStageEval,
+        execution: input.primaryExecution,
+      }
+    : {
+        diff: input.challengerDiff,
+        routing: input.challengerRouting,
+        stageEval: input.challengerStageEval,
+        execution: input.challengerExecution,
+      };
 }
 
 function byteLength(value: string): number {
@@ -264,8 +310,16 @@ export function buildCappedComparisonPrompt(
 
   let prompt = buildComparisonPrompt({
     ...input,
-    primaryDiff: truncateDiffForPrompt(input.primaryDiff, 'primary', primaryBudget),
-    challengerDiff: truncateDiffForPrompt(input.challengerDiff, 'challenger', challengerBudget),
+    primaryDiff: truncateDiffForPrompt(
+      input.primaryDiff,
+      input.presentationOrder === 'primary-first' ? 'candidate A' : 'candidate B',
+      primaryBudget,
+    ),
+    challengerDiff: truncateDiffForPrompt(
+      input.challengerDiff,
+      input.presentationOrder === 'primary-first' ? 'candidate B' : 'candidate A',
+      challengerBudget,
+    ),
   });
 
   while (byteLength(prompt) > maxPromptBytes && availableDiffBytes > 0) {
@@ -276,8 +330,16 @@ export function buildCappedComparisonPrompt(
     const nextChallengerBudget = Math.max(0, availableDiffBytes - nextPrimaryBudget);
     prompt = buildComparisonPrompt({
       ...input,
-      primaryDiff: truncateDiffForPrompt(input.primaryDiff, 'primary', nextPrimaryBudget),
-      challengerDiff: truncateDiffForPrompt(input.challengerDiff, 'challenger', nextChallengerBudget),
+      primaryDiff: truncateDiffForPrompt(
+        input.primaryDiff,
+        input.presentationOrder === 'primary-first' ? 'candidate A' : 'candidate B',
+        nextPrimaryBudget,
+      ),
+      challengerDiff: truncateDiffForPrompt(
+        input.challengerDiff,
+        input.presentationOrder === 'primary-first' ? 'candidate B' : 'candidate A',
+        nextChallengerBudget,
+      ),
     });
   }
 
@@ -292,14 +354,17 @@ export function buildCappedComparisonPrompt(
 /**
  * Validate and normalize the LLM comparison response payload.
  */
-export function validateComparisonJson(parsed: any): ValidatedComparisonResult {
+export function validateComparisonJson(parsed: any): BlindComparisonResult {
   const winner = parsed?.winner;
   const rationale = parsed?.rationale;
   const dimensions = parsed?.dimensions;
   const workflowInsight = parsed?.workflowInsight;
 
-  if (winner !== 'primary' && winner !== 'challenger') {
-    throw new Error(`Invalid winner: ${winner}`);
+  if (winner === 'primary' || winner === 'challenger') {
+    throw new Error('Unblinded comparison winner keys are not allowed. Use A or B.');
+  }
+  if (winner !== 'A' && winner !== 'B') {
+    throw new Error(`Invalid blind winner: ${winner}`);
   }
   if (typeof rationale !== 'string' || rationale.trim().length === 0) {
     throw new Error('Comparison rationale must be a non-empty string');
@@ -316,19 +381,22 @@ export function validateComparisonJson(parsed: any): ValidatedComparisonResult {
   ];
   for (const key of requiredDimensionKeys) {
     const dimension = dimensions?.[key];
-    if (!dimension || typeof dimension.primary !== 'number' || typeof dimension.challenger !== 'number') {
+    if (dimension?.primary !== undefined || dimension?.challenger !== undefined) {
+      throw new Error(`Unblinded comparison dimension keys are not allowed for ${key}. Use A and B.`);
+    }
+    if (!dimension || typeof dimension.A !== 'number' || typeof dimension.B !== 'number') {
       throw new Error(`Invalid dimension payload for ${key}`);
     }
     if (
-      !Number.isInteger(dimension.primary) ||
-      !Number.isInteger(dimension.challenger) ||
-      dimension.primary < 1 ||
-      dimension.primary > 10 ||
-      dimension.challenger < 1 ||
-      dimension.challenger > 10
+      !Number.isInteger(dimension.A) ||
+      !Number.isInteger(dimension.B) ||
+      dimension.A < 1 ||
+      dimension.A > 10 ||
+      dimension.B < 1 ||
+      dimension.B > 10
     ) {
       throw new Error(
-        `Invalid ${key} scores: primary=${dimension.primary}, challenger=${dimension.challenger}. ` +
+        `Invalid ${key} scores: A=${dimension.A}, B=${dimension.B}. ` +
         'Expected integers from 1 to 10.'
       );
     }
@@ -338,13 +406,41 @@ export function validateComparisonJson(parsed: any): ValidatedComparisonResult {
     throw new Error('Legacy comparison keys are not allowed. Use canonical rubric keys only.');
   }
 
-  const result: ValidatedComparisonResult = {
+  const result: BlindComparisonResult = {
     winner,
     rationale: rationale.trim(),
-    dimensions: dimensions as ChallengeComparisonDimensions,
+    dimensions: dimensions as BlindComparisonDimensions,
   };
   if (workflowInsight && workflowInsight.trim().length > 0) {
     result.workflowInsight = workflowInsight.trim();
+  }
+  return result;
+}
+
+export function mapBlindVerdictToSides(
+  verdict: BlindComparisonResult,
+  order: PresentationOrder,
+): ValidatedComparisonResult {
+  const aSide = order === 'primary-first' ? 'primary' : 'challenger';
+  const bSide = order === 'primary-first' ? 'challenger' : 'primary';
+  const winner = verdict.winner === 'A' ? aSide : bSide;
+  const dimensions = Object.fromEntries(
+    Object.entries(verdict.dimensions).map(([key, scores]) => [
+      key,
+      {
+        primary: aSide === 'primary' ? scores.A : scores.B,
+        challenger: aSide === 'challenger' ? scores.A : scores.B,
+      },
+    ]),
+  ) as ChallengeComparisonDimensions;
+
+  const result: ValidatedComparisonResult = {
+    winner,
+    rationale: verdict.rationale,
+    dimensions,
+  };
+  if (verdict.workflowInsight) {
+    result.workflowInsight = verdict.workflowInsight;
   }
   return result;
 }
@@ -439,18 +535,18 @@ function formatExecutedStage(stage: ChallengeSideExecutionProvenance[keyof Chall
 }
 
 function formatExecutionPromptContext(
-  primaryExecution?: ChallengeSideExecutionProvenance,
-  challengerExecution?: ChallengeSideExecutionProvenance,
+  candidateAExecution?: ChallengeSideExecutionProvenance,
+  candidateBExecution?: ChallengeSideExecutionProvenance,
 ): string {
-  if (!primaryExecution || !challengerExecution) return '';
+  if (!candidateAExecution || !candidateBExecution) return '';
   return `
 Executed provenance:
-- Primary planner: ${formatExecutedStage(primaryExecution.planning)}
-- Primary coder: ${formatExecutedStage(primaryExecution.coding)}
-- Primary reviewer: ${formatExecutedStage(primaryExecution.review)}
-- Challenger planner: ${formatExecutedStage(challengerExecution.planning)}
-- Challenger coder: ${formatExecutedStage(challengerExecution.coding)}
-- Challenger reviewer: ${formatExecutedStage(challengerExecution.review)}
+- Candidate A planner: ${formatExecutedStage(candidateAExecution.planning)}
+- Candidate A coder: ${formatExecutedStage(candidateAExecution.coding)}
+- Candidate A reviewer: ${formatExecutedStage(candidateAExecution.review)}
+- Candidate B planner: ${formatExecutedStage(candidateBExecution.planning)}
+- Candidate B coder: ${formatExecutedStage(candidateBExecution.coding)}
+- Candidate B reviewer: ${formatExecutedStage(candidateBExecution.review)}
 `;
 }
 
