@@ -6836,6 +6836,8 @@ native_terminal_failure_kind() {
       printf 'openrouter-credits-exhausted\n'; return 0 ;;
     *"insufficient"*"credit"*|*"quota"*)
       printf 'provider-quota-exhausted\n'; return 0 ;;
+    *"empty-model-turn"*|*"reasoning-only"*"turn"*|*"internal reasoning only"*)
+      printf 'empty-model-turn\n'; return 0 ;;
   esac
   printf 'native-provider-error\n'
 }
@@ -6852,6 +6854,8 @@ native_terminal_failure_next_action() {
       printf 'top up OpenRouter credits or lower nativeAgent.providers.openrouter thresholds\n' ;;
     provider-quota-exhausted)
       printf 'add provider credit, then relaunch. The quota is exhausted\n' ;;
+    empty-model-turn)
+      printf 'relaunch native coding; the runtime exhausted bounded continuation after empty model turns\n' ;;
     tool-use-unsupported)
       printf 'inspect the native provider error, then relaunch the phase\n' ;;
     *)

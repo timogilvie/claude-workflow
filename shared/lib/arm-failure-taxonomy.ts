@@ -4,6 +4,7 @@ export type TerminalFailureKind =
   | 'provider-rate-limited'
   | 'provider-quota-exhausted'
   | 'tool-use-unsupported'
+  | 'empty-model-turn'
   | 'native-provider-error';
 
 export type ArmFaultClass =
@@ -40,6 +41,7 @@ export function classifyArmFault(input: { failureKind?: string | null; detail?: 
   switch (failureKind) {
     case 'context-window-exceeded':
     case 'invalid-model-id':
+    case 'empty-model-turn':
       return 'harness-fault';
     case 'tool-use-unsupported':
     case 'varied_model_unresolvable':
