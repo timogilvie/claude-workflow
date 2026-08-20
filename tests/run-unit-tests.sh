@@ -40,6 +40,7 @@ TESTS=(
   shared/lib/native-agent/pi-usage-cost.test.ts
   shared/lib/native-agent/provenance.test.ts
   shared/lib/native-agent/redaction.test.ts
+  shared/lib/native-agent/trajectory-viewer.test.ts
   shared/lib/native-agent/tool-compat-validator.test.ts
   shared/lib/native-agent/tool-compat-fixtures.test.ts
   shared/lib/native-agent/patch-contract.test.ts

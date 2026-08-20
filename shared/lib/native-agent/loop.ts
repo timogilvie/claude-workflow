@@ -414,8 +414,9 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
   const batchFailed = new WeakMap<AssistantMessage, boolean>();
   // Tool call ids that were skipped by beforeToolCall (not real failures).
   const skippedCallIds = new Set<string>();
-  // Track current turn's model request event ID for linking response
+  // Track current turn's model request event ID and callId for linking response
   let currentTurnRequestEventId: string | undefined;
+  let currentTurnRequestCallId: string | undefined;
 
   const toolsForCompat = config.toolPolicy?.registry.length
     ? config.toolPolicy.registry
@@ -770,8 +771,9 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
         // Log model request event when turn starts
         if (sessionStreamWriter) {
           try {
+            currentTurnRequestCallId = randomUUID();
             const modelRequestEvent = sessionStreamWriter.writeModelRequest({
-              callId: randomUUID(),
+              callId: currentTurnRequestCallId,
               turnIndex: turnsCompleted,
               provider: config.model.provider,
               modelId: toProviderRequestModelId(config.model),
@@ -820,7 +822,7 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
             if (finalMsg && finalMsg.role === 'assistant') {
               sessionStreamWriter.writeModelResponse({
                 requestEventId: currentTurnRequestEventId,
-                callId: randomUUID(),
+                callId: currentTurnRequestCallId ?? currentTurnRequestEventId,
                 stopReason: finalMsg.stopReason ?? 'unknown',
                 usage: finalMsg.usage as Record<string, unknown> | undefined,
               });
