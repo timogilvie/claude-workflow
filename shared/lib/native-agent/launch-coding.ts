@@ -906,15 +906,19 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
       && mutationFailureTracker.count > 0
     ) {
       recoveryAttempted = true;
-      // Log session_resume event for recovery attempt
+      // Log session_resume and approval events for recovery attempt
       try {
         if (persistentSessionStreamWriter) {
+          persistentSessionStreamWriter.writeApproval({
+            stage: 'ready',
+            notes: 'recovery: implicit approval to retry after mutation failure',
+          });
           persistentSessionStreamWriter.writeSessionResume({
             reason: 'recovery: no completion artifact after mutation failure',
           });
         }
       } catch (error) {
-        console.warn(`Failed to log session_resume event: ${(error as Error).message}`);
+        console.warn(`Failed to log recovery events: ${(error as Error).message}`);
       }
 
       writeHookStatus(hookPath, 'working', 'native_coding_recovery', 'no completion artifact after mutation failure', 'native');
@@ -949,9 +953,13 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
       const preservedPath = preserveInvalidArtifact(inspection.path, artifactRetryAttempt);
       quarantinedArtifacts.push(relative(options.wtDir, preservedPath));
 
-      // Log retry event for artifact validation failure
+      // Log approval and retry events for artifact validation failure
       try {
         if (persistentSessionStreamWriter) {
+          persistentSessionStreamWriter.writeApproval({
+            stage: 'ready',
+            notes: `artifact retry: implicit approval to retry after ${inspection.artifact} validation failed`,
+          });
           persistentSessionStreamWriter.writeRetry({
             failedEventId: randomUUID(),
             reason: `${inspection.artifact} validation failed: ${inspection.errors.map((e) => `${e.code}:${e.message}`).join('; ')}`,
@@ -959,7 +967,7 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
           });
         }
       } catch (error) {
-        console.warn(`Failed to log retry event: ${(error as Error).message}`);
+        console.warn(`Failed to log artifact retry events: ${(error as Error).message}`);
       }
 
       writeHookStatus(
