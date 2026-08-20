@@ -3718,6 +3718,7 @@ challenge_abort_pair() {
          if ($key != "" and .tasks[$key] != null)
          then .tasks[$key].challengeAborted = $reason
               | .tasks[$key].challengeAbortedDetail = $detail
+              | .tasks[$key].challengeAbortedStage = $stage
               | (if $nextAction != "" then .tasks[$key].challengeAbortedNextAction = $nextAction else . end)
               | .tasks[$key].updated = (now | todate)
          else .
@@ -3727,6 +3728,7 @@ challenge_abort_pair() {
       --arg peer "${peer:-}" \
       --arg reason "$reason" \
       --arg detail "$detail" \
+      --arg stage "$(challenge_stage_for_launch_env "$stage")" \
       --arg nextAction "$next_action" >/dev/null 2>&1 || true
   fi
 
@@ -3744,6 +3746,21 @@ challenge_abort_pair() {
     '{pairId:$pairId, stage:$stage, model:$model, reason:$reason, abortedAt:$abortedAt, detail:$detail}
      + (if $nextAction == "" then {} else {nextAction:$nextAction} end)' \
     > "$tmp" 2>/dev/null && mv "$tmp" "$artifact" || rm -f "$tmp"
+
+  if [[ -n "${REPO_DIR:-}" && -f "$REPO_DIR/tools/record-arm-failure.ts" && ( "$role" == "primary" || "$role" == "challenger" ) ]]; then
+    (
+      cd "$REPO_DIR" && npx tsx tools/record-arm-failure.ts \
+        --repo-dir "${WAVEMILL_RELIABILITY_REPO_DIR:-$REPO_DIR}" \
+        --issue "$issue" \
+        --pair-id "${pair_id:-$issue}" \
+        --role "$role" \
+        --stage "$(challenge_stage_for_launch_env "$stage")" \
+        --model "${model:-unknown}" \
+        --abort-reason "$reason" \
+        --detail "$detail" \
+        --next-action "$next_action"
+    ) >/dev/null 2> >(while IFS= read -r line; do log_warn "$line"; done) || true
+  fi
 
   if [[ "$reason" == *"openrouter-credits-exhausted"* ]]; then
     record_openrouter_credits_challenge_abort || true
@@ -6809,6 +6826,8 @@ native_terminal_failure_kind() {
   case "$lower" in
     *"maximum context length"*|*"context length is"*|*"reduce the length"*|*"context_length_exceeded"*|*"context window"*|*"context-window"*)
       printf 'context-window-exceeded\n'; return 0 ;;
+    *"no endpoints found"*"tool use"*|*"support tool use"*|*"supports tool use"*|*"tool use"*"not supported"*)
+      printf 'tool-use-unsupported\n'; return 0 ;;
     *"is not a valid model id"*|*"invalid model"*|*"unknown model"*|*"model_not_found"*)
       printf 'invalid-model-id\n'; return 0 ;;
     *"rate limit"*|*"429"*)
@@ -6833,6 +6852,8 @@ native_terminal_failure_next_action() {
       printf 'top up OpenRouter credits or lower nativeAgent.providers.openrouter thresholds\n' ;;
     provider-quota-exhausted)
       printf 'add provider credit, then relaunch. The quota is exhausted\n' ;;
+    tool-use-unsupported)
+      printf 'inspect the native provider error, then relaunch the phase\n' ;;
     *)
       printf 'inspect the native provider error, then relaunch the phase\n' ;;
   esac

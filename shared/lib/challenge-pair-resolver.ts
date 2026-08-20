@@ -17,6 +17,12 @@ import {
   type TaskEvalState,
   type UnresolvableReason,
 } from './tend-challenge-gate.ts';
+import {
+  classifyArmFault,
+  describeArmFailure,
+  parseAbortFailureKind,
+  type ChallengeArmFailure,
+} from './arm-failure-taxonomy.ts';
 
 const ORPHAN_PAIR_GRACE_MS = 60_000;
 const DEFAULT_HARD_FAILURE_RETRY_MAX = 2;
@@ -182,6 +188,8 @@ function buildResolutionRecord(input: {
         primaryPrUrl: getTaskPrUrl(primary),
         challengerPrUrl: getTaskPrUrl(challenger),
         rationale: 'Both sides exhausted challenge eval hard-failure retries before a comparison could be launched.',
+        primaryCompleted: primary?.evalCompleted === true,
+        challengerCompleted: challenger?.evalCompleted === true,
         terminalReason: 'both_eval_hard_failed',
         timestamp: input.timestamp,
       }),
@@ -202,6 +210,8 @@ function buildResolutionRecord(input: {
           challengerPrUrl: getTaskPrUrl(challenger),
           winner: 'challenger',
           rationale: 'Primary exhausted challenge eval hard-failure retries before persisting an eval record.',
+          primaryCompleted: false,
+          challengerCompleted: true,
           terminalReason: 'primary_eval_hard_failed',
           timestamp: input.timestamp,
         }),
@@ -218,6 +228,8 @@ function buildResolutionRecord(input: {
           challengerPrUrl: getTaskPrUrl(challenger),
           winner: 'primary',
           rationale: 'Challenger exhausted challenge eval hard-failure retries before persisting an eval record.',
+          primaryCompleted: true,
+          challengerCompleted: false,
           terminalReason: 'challenger_eval_hard_failed',
           timestamp: input.timestamp,
         }),
@@ -232,6 +244,7 @@ function buildResolutionRecord(input: {
     if (!aborted || !survivor?.evalCompleted) {
       return null;
     }
+    const armFailures = buildArmFailures(primary, challenger);
     return {
       outcome: 'forfeit',
       record: buildForfeitComparison({
@@ -241,7 +254,10 @@ function buildResolutionRecord(input: {
         primaryPrUrl: getTaskPrUrl(primary),
         challengerPrUrl: getTaskPrUrl(challenger),
         winner: survivor.role,
-        rationale: `${capitalizeRole(aborted.role)} arm hit a terminal launch failure (${aborted.challengeAborted}) and was quarantined; the surviving side wins by forfeit.`,
+        primaryCompleted: primary?.evalCompleted === true,
+        challengerCompleted: challenger?.evalCompleted === true,
+        armFailures,
+        rationale: `${describeTaskFailure(aborted)} The surviving ${survivor.role} side wins by forfeit.`,
         terminalReason: aborted.role === 'primary' ? 'primary_challenge_aborted' : 'challenger_challenge_aborted',
         timestamp: input.timestamp,
       }),
@@ -249,10 +265,10 @@ function buildResolutionRecord(input: {
   }
 
   if (input.reason === 'both-challenge-aborted') {
+    const armFailures = buildArmFailures(primary, challenger);
     const completed = [primary, challenger].filter((task): task is TaskEvalState => task?.evalCompleted === true);
     if (completed.length === 1) {
       const survivor = completed[0];
-      const aborted = survivor.role === 'primary' ? challenger : primary;
       return {
         outcome: 'forfeit',
         record: buildForfeitComparison({
@@ -262,7 +278,10 @@ function buildResolutionRecord(input: {
           primaryPrUrl: getTaskPrUrl(primary),
           challengerPrUrl: getTaskPrUrl(challenger),
           winner: survivor.role,
-          rationale: `Both arms carry a terminal launch quarantine mark; only the ${survivor.role} side produced a persisted eval, so it wins by forfeit. Quarantine: ${aborted?.challengeAborted ?? survivor.challengeAborted ?? 'unknown'}.`,
+          primaryCompleted: primary?.evalCompleted === true,
+          challengerCompleted: challenger?.evalCompleted === true,
+          armFailures,
+          rationale: `${armFailures.length > 0 ? armFailures.map(describeFailure).join(' ') : 'Both arms carry terminal quarantine marks.'} Only the ${survivor.role} side produced a persisted eval, so it wins by forfeit.`,
           terminalReason: survivor.role === 'primary' ? 'challenger_challenge_aborted' : 'primary_challenge_aborted',
           timestamp: input.timestamp,
         }),
@@ -282,7 +301,10 @@ function buildResolutionRecord(input: {
         challengerModel: getTaskModel(challenger),
         primaryPrUrl: getTaskPrUrl(primary),
         challengerPrUrl: getTaskPrUrl(challenger),
-        rationale: `Both arms were quarantined after terminal launch failures before a valid comparison could be produced. Primary: ${primary?.challengeAborted ?? 'unknown'}; challenger: ${challenger?.challengeAborted ?? 'unknown'}.`,
+        primaryCompleted: primary?.evalCompleted === true,
+        challengerCompleted: challenger?.evalCompleted === true,
+        armFailures,
+        rationale: `${armFailures.length > 0 ? armFailures.map(describeFailure).join(' ') : 'Both arms were quarantined.'} No valid comparison could be produced.`,
         terminalReason: 'both_challenge_aborted',
         timestamp: input.timestamp,
       }),
@@ -293,6 +315,7 @@ function buildResolutionRecord(input: {
   if (!loneSide) {
     return null;
   }
+  const armFailures = buildArmFailures(primary, challenger);
   if (!loneSide.evalCompleted) {
     return {
       outcome: 'double-forfeit',
@@ -302,7 +325,12 @@ function buildResolutionRecord(input: {
         challengerModel: getTaskModel(challenger),
         primaryPrUrl: getTaskPrUrl(primary),
         challengerPrUrl: getTaskPrUrl(challenger),
-        rationale: 'Challenge pair became orphaned before either side produced a persisted eval/comparison result.',
+        primaryCompleted: primary?.evalCompleted === true,
+        challengerCompleted: challenger?.evalCompleted === true,
+        armFailures,
+        rationale: armFailures.length > 0
+          ? `${armFailures.map(describeFailure).join(' ')} No valid comparison could be produced.`
+          : 'Challenge pair became orphaned before either side produced a persisted eval/comparison result.',
         terminalReason: 'orphan_pair',
         timestamp: input.timestamp,
       }),
@@ -318,15 +346,55 @@ function buildResolutionRecord(input: {
       primaryPrUrl: getTaskPrUrl(primary),
       challengerPrUrl: getTaskPrUrl(challenger),
       winner: loneSide.role,
-      rationale: 'Challenge pair became orphaned before a comparison could be launched; the surviving side wins by forfeit.',
+      primaryCompleted: primary?.evalCompleted === true,
+      challengerCompleted: challenger?.evalCompleted === true,
+      armFailures,
+      rationale: armFailures.length > 0
+        ? `${armFailures.map(describeFailure).join(' ')} The surviving ${loneSide.role} side wins by forfeit.`
+        : 'Challenge pair became orphaned before a comparison could be launched; the surviving side wins by forfeit.',
       terminalReason: 'orphan_pair',
       timestamp: input.timestamp,
     }),
   };
 }
 
-function capitalizeRole(role: 'primary' | 'challenger'): string {
-  return role === 'primary' ? 'Primary' : 'Challenger';
+function buildArmFailures(
+  primary: TaskEvalState | undefined,
+  challenger: TaskEvalState | undefined,
+): ChallengeArmFailure[] {
+  return [primary, challenger]
+    .filter((task): task is TaskEvalState => Boolean(task?.challengeAborted))
+    .map((task) => {
+      const failureKind = parseAbortFailureKind(task.challengeAborted);
+      const faultClass = classifyArmFault({ failureKind, detail: task.challengeAbortedDetail });
+      return {
+        side: task.role,
+        model: getTaskModel(task),
+        ...(task.challengeAbortedStage ? { stage: task.challengeAbortedStage } : {}),
+        ...(failureKind ? { failureKind } : {}),
+        faultClass,
+        ...(task.challengeAbortedDetail ? { detail: task.challengeAbortedDetail } : {}),
+      };
+    });
+}
+
+function describeTaskFailure(task: TaskEvalState): string {
+  const failure = buildArmFailures(
+    task.role === 'primary' ? task : undefined,
+    task.role === 'challenger' ? task : undefined,
+  )[0];
+  return failure ? describeFailure(failure) : `${task.role === 'primary' ? 'Primary' : 'Challenger'} arm (${getTaskModel(task)}) failed: ${task.challengeAborted ?? 'unknown'}.`;
+}
+
+function describeFailure(failure: ChallengeArmFailure): string {
+  return describeArmFailure({
+    role: failure.side,
+    model: failure.model,
+    stage: failure.stage,
+    failureKind: failure.failureKind,
+    faultClass: failure.faultClass,
+    detail: failure.detail,
+  });
 }
 
 function getTaskModel(task: TaskEvalState | undefined): string {
