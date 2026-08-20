@@ -271,7 +271,9 @@ test('resolver auto-detects both aborted arms and forfeits to completed survivor
         challengeRole: 'primary',
         challengeModel: 'gpt-5.5',
         evalCompleted: true,
-        challengeAborted: 'Native coding failed: quarantined peer',
+        challengeAborted: 'terminal_stage_failure:tool-use-unsupported',
+        challengeAbortedDetail: '404 No endpoints found that support tool use',
+        challengeAbortedStage: 'coding',
       },
       HOK_1_c: {
         branch: 'task/primary-challenger',
@@ -279,7 +281,9 @@ test('resolver auto-detects both aborted arms and forfeits to completed survivor
         challengePairId: 'pair-abort',
         challengeRole: 'challenger',
         challengeModel: 'qwen-2.5-coder-32b',
-        challengeAborted: 'Native coding failed: 404 No endpoints found that support tool use.',
+        challengeAborted: 'terminal_stage_failure:tool-use-unsupported',
+        challengeAbortedDetail: '404 No endpoints found that support tool use.',
+        challengeAbortedStage: 'coding',
       },
     });
 
@@ -290,6 +294,16 @@ test('resolver auto-detects both aborted arms and forfeits to completed survivor
     assert.equal(result.outcome, 'forfeit');
     assert.equal(result.record.winner, 'primary');
     assert.equal(result.record.terminalReason, 'challenger_challenge_aborted');
+    assert.equal(result.record.primaryEvalScore, null);
+    assert.equal(result.record.challengerEvalScore, null);
+    assert.equal(result.record.primaryCompleted, true);
+    assert.equal(result.record.challengerCompleted, false);
+    assert.equal(result.record.armFailures?.[1].model, 'qwen-2.5-coder-32b');
+    assert.equal(result.record.armFailures?.[1].failureKind, 'tool-use-unsupported');
+    assert.equal(result.record.armFailures?.[1].faultClass, 'selection-fault');
+    assert.match(result.record.rationale, /qwen-2\.5-coder-32b/);
+    assert.match(result.record.rationale, /tool-use-unsupported/);
+    assert.doesNotMatch(result.record.rationale, /orphaned/);
   } finally {
     cleanup();
   }
@@ -314,7 +328,9 @@ test('resolver skips aborted pair when lone surviving PR has not persisted eval'
         challengePairId: 'pair-abort',
         challengeRole: 'challenger',
         challengeModel: 'qwen-2.5-coder-32b',
-        challengeAborted: 'Native coding failed: no endpoints support tool use',
+        challengeAborted: 'terminal_stage_failure:tool-use-unsupported',
+        challengeAbortedDetail: '404 No endpoints found that support tool use',
+        challengeAbortedStage: 'coding',
       },
     });
 
@@ -348,7 +364,9 @@ test('resolver writes forfeit when a sibling challenge-aborted and survivor comp
         challengePairId: 'pair-abort',
         challengeRole: 'challenger',
         challengeModel: 'qwen-2.5-coder-32b',
-        challengeAborted: 'Native coding failed: no endpoints support tool use',
+        challengeAborted: 'terminal_stage_failure:tool-use-unsupported',
+        challengeAbortedDetail: '404 No endpoints found that support tool use',
+        challengeAbortedStage: 'coding',
       },
     });
 
@@ -359,6 +377,14 @@ test('resolver writes forfeit when a sibling challenge-aborted and survivor comp
     assert.equal(result.outcome, 'forfeit');
     assert.equal(result.record.winner, 'primary');
     assert.equal(result.record.terminalReason, 'challenger_challenge_aborted');
+    assert.equal(result.record.primaryEvalScore, null);
+    assert.equal(result.record.challengerEvalScore, null);
+    assert.equal(result.record.challengerCompleted, false);
+    assert.equal(result.record.armFailures?.[0].model, 'qwen-2.5-coder-32b');
+    assert.equal(result.record.armFailures?.[0].failureKind, 'tool-use-unsupported');
+    assert.equal(result.record.armFailures?.[0].faultClass, 'selection-fault');
+    assert.match(result.record.rationale, /qwen-2\.5-coder-32b/);
+    assert.match(result.record.rationale, /tool-use-unsupported/);
   } finally {
     cleanup();
   }

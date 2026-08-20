@@ -42,6 +42,7 @@ STATE_FILE="$TMP_ROOT/state.json"
 ATTENTION_FILE="$TMP_ROOT/attention.txt"
 WARN_FILE="$TMP_ROOT/warn.txt"
 active_count=0
+export WAVEMILL_RELIABILITY_REPO_DIR="$TMP_ROOT/reliability-repo"
 
 log_warn() { printf '%s\n' "$1" >> "$WARN_FILE"; }
 set_window_attention_state() { printf '%s=%s\n' "$1" "$2" >> "$ATTENTION_FILE"; }
@@ -99,6 +100,7 @@ echo "=== Native Terminal Failure Handling ==="
 ctx_detail="Native coding failed: 400 This endpoint's maximum context length is 131072 tokens. However, you requested about 131182 tokens"
 preflight_ctx_detail="Native coding pre-flight rejected the launch: estimated prompt is ~98414 input tokens plus 32768 reserved output tokens = 131182, which exceeds the 131072-token context window of moonshotai/kimi-k2 (openrouter, limit from registry). The provider would reject this request (context_length_exceeded)."
 bad_model_detail="Native coding failed: 400 qwen-2.5-coder-32b is not a valid model ID"
+tool_use_detail="Native coding failed: 404 No endpoints found that support tool use"
 
 if [[ "$(native_terminal_failure_kind "$ctx_detail")" == "context-window-exceeded" ]]; then
   pass "context overflow is classified"
@@ -116,6 +118,12 @@ if [[ "$(native_terminal_failure_kind "$bad_model_detail")" == "invalid-model-id
   pass "invalid model ID is classified"
 else
   fail "invalid model ID misclassified as $(native_terminal_failure_kind "$bad_model_detail")"
+fi
+
+if [[ "$(native_terminal_failure_kind "$tool_use_detail")" == "tool-use-unsupported" ]]; then
+  pass "unsupported tool use is classified"
+else
+  fail "unsupported tool use misclassified as $(native_terminal_failure_kind "$tool_use_detail")"
 fi
 
 if [[ "$(native_terminal_failure_kind "something else entirely")" == "native-provider-error" ]]; then
@@ -152,11 +160,32 @@ fi
 # Both arms of the pair must be quarantined: a dead arm invalidates the comparison.
 if [[ "$(jq -r '.tasks["PAIR-1_c"].challengeAborted' "$STATE_FILE")" == "terminal_launch_failure:context-window-exceeded" ]] \
   && [[ "$(jq -r '.tasks["PAIR-1"].challengeAborted' "$STATE_FILE")" == "terminal_launch_failure:context-window-exceeded" ]] \
+  && [[ "$(jq -r '.tasks["PAIR-1_c"].challengeAbortedStage' "$STATE_FILE")" == "coding" ]] \
   && [[ -f "$fd/.challenge-aborted.json" ]] \
   && [[ "$(jq -r '.nextAction' "$fd/.challenge-aborted.json")" == *"compressed context"* ]]; then
   pass "context overflow quarantines both challenge arms"
 else
   fail "challenge pair was not quarantined on context overflow"
+fi
+
+# ── Tool-use unsupported end-to-end ───────────────────────────────────
+seed "PAIR-1_c"
+fd="$TMP_ROOT/f-tool-use"
+write_stage_result "$fd" "coding" "running" "native" "qwen-2.5-coder-32b"
+write_hook "PAIR-1_c" "error" "$tool_use_detail"
+
+if emit_native_terminal_failure_attention "PAIR-1_c" "$fd" "coding" "win-tool" "%3" "native" "qwen-2.5-coder-32b"; then
+  reliability_file="$WAVEMILL_RELIABILITY_REPO_DIR/.wavemill/evals/reliability-records.jsonl"
+  if [[ "$(jq -r '.artifacts.failureKind' "$fd/.coding-result.json")" == "tool-use-unsupported" ]] \
+    && [[ "$(jq -r '.tasks["PAIR-1_c"].challengeAborted' "$STATE_FILE")" == "terminal_launch_failure:tool-use-unsupported" ]] \
+    && [[ -f "$reliability_file" ]] \
+    && [[ "$(jq -r 'select(.issueId == "PAIR-1_c") | .faultClass' "$reliability_file" | tail -n 1)" == "selection-fault" ]]; then
+    pass "unsupported tool use quarantines and records reliability"
+  else
+    fail "unsupported tool use side effects incomplete"
+  fi
+else
+  fail "unsupported tool use was not detected"
 fi
 
 # ── Invalid model ID end-to-end ───────────────────────────────────────
@@ -246,9 +275,12 @@ else
 fi
 
 if emit_challenge_stage_failure_quarantine "PAIR-1_c" "$fd" "coding" "win-7"; then
-  if [[ "$(jq -r '.tasks["PAIR-1_c"].challengeAborted' "$STATE_FILE")" == "terminal_stage_failure:native-provider-error" ]] \
-    && [[ "$(jq -r '.tasks["PAIR-1"].challengeAborted' "$STATE_FILE")" == "terminal_stage_failure:native-provider-error" ]] \
-    && [[ -f "$fd/.challenge-aborted.json" ]]; then
+  reliability_file="$WAVEMILL_RELIABILITY_REPO_DIR/.wavemill/evals/reliability-records.jsonl"
+  if [[ "$(jq -r '.tasks["PAIR-1_c"].challengeAborted' "$STATE_FILE")" == "terminal_stage_failure:tool-use-unsupported" ]] \
+    && [[ "$(jq -r '.tasks["PAIR-1"].challengeAborted' "$STATE_FILE")" == "terminal_stage_failure:tool-use-unsupported" ]] \
+    && [[ "$(jq -r '.tasks["PAIR-1_c"].challengeAbortedStage' "$STATE_FILE")" == "coding" ]] \
+    && [[ -f "$fd/.challenge-aborted.json" ]] \
+    && [[ "$(jq -r 'select(.abortReason == "terminal_stage_failure:tool-use-unsupported") | .faultClass' "$reliability_file" | tail -n 1)" == "selection-fault" ]]; then
     pass "launcher-reported stage failure quarantines both arms"
   else
     fail "stage-failure quarantine side effects incomplete"
