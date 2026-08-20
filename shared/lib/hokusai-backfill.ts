@@ -21,7 +21,7 @@ import {
   triggerHokusaiSubmission,
 } from './hokusai-submission-trigger.ts';
 import { toHokusaiSubmission } from './hokusai-schema.ts';
-import { getHokusaiSubmissionConfig } from './config.ts';
+import { getHokusaiSubmissionConfig, getHokusaiSubmissionEnableSources } from './config.ts';
 
 export interface HokusaiBackfillOptions {
   repoDir: string;
@@ -98,7 +98,8 @@ export async function backfillHokusaiSubmissions(
       // Run the same gates the live path applies, so the preview reports what
       // would really happen rather than assuming every selected record lands.
       if (getHokusaiSubmissionConfig(repoDir).enabled !== true) {
-        status = 'would-skip: submission disabled';
+        const sources = getHokusaiSubmissionEnableSources(repoDir);
+        status = `would-skip: submission disabled (repo_config: hokusai.dataSubmission.enabled resolved false for repoDir=${repoDir} (base=${sources.baseEnabled ?? 'unset'} local=${sources.localEnabled ?? 'unset'}))`;
       } else {
         const eligibility = toHokusaiSubmission(record);
         status = eligibility.ok

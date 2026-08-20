@@ -90,6 +90,7 @@ export interface ResolveNativeAgentProvidersOptions {
   allowPartial?: boolean;
   registry?: ModelRegistry;
   now?: Date;
+  certificationRoot?: string;
 }
 
 const DEFAULT_PROVIDER_ORDER: readonly NativeAgentProviderName[] = [
@@ -191,6 +192,7 @@ export function resolveNativeAgentProviders(
         apiKeyPresent: true,
         apiKeyEnv,
         now: options.now,
+        certificationRoot: options.certificationRoot,
       });
 
       if (!decision.ok) {

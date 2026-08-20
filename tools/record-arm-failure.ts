@@ -1,0 +1,64 @@
+#!/usr/bin/env node
+import { appendArmReliabilityRecord } from '../shared/lib/arm-reliability.ts';
+import type { ChallengeArmSide } from '../shared/lib/arm-failure-taxonomy.ts';
+
+function main(): void {
+  const args = parseArgs(process.argv.slice(2));
+  const issueId = requireArg(args, 'issue');
+  const challengePairId = requireArg(args, 'pair-id');
+  const challengeRole = requireArg(args, 'role') as ChallengeArmSide;
+  const stage = requireArg(args, 'stage');
+  const model = requireArg(args, 'model');
+  const abortReason = requireArg(args, 'abort-reason');
+  const repoDir = args['repo-dir'];
+
+  if (challengeRole !== 'primary' && challengeRole !== 'challenger') {
+    throw new Error(`Invalid challenge role: ${challengeRole}`);
+  }
+
+  appendArmReliabilityRecord({
+    issueId,
+    challengePairId,
+    challengeRole,
+    stage,
+    model,
+    abortReason,
+    detail: args.detail,
+    nextAction: args['next-action'],
+  }, repoDir);
+}
+
+function parseArgs(argv: string[]): Record<string, string> {
+  const parsed: Record<string, string> = {};
+  for (let index = 0; index < argv.length; index++) {
+    const token = argv[index]!;
+    if (!token.startsWith('--')) {
+      continue;
+    }
+    const key = token.slice(2);
+    const value = argv[index + 1];
+    if (value === undefined || value.startsWith('--')) {
+      parsed[key] = '';
+    } else {
+      parsed[key] = value;
+      index++;
+    }
+  }
+  return parsed;
+}
+
+function requireArg(args: Record<string, string>, name: string): string {
+  const value = args[name];
+  if (!value) {
+    throw new Error(`Missing required --${name}`);
+  }
+  return value;
+}
+
+try {
+  main();
+} catch (error) {
+  const message = error instanceof Error ? error.message : String(error);
+  console.warn(`[record-arm-failure] ${message}`);
+  process.exitCode = 0;
+}

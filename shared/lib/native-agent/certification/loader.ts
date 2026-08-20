@@ -40,13 +40,13 @@ export type CertificationEligibility =
 export const isValidPathSegment = isValidCertificationPathSegment;
 
 /**
- * Build the storage path for a certification artifact.
+ * Build the legacy repo-scoped storage path for a certification artifact.
  *
- * Path contract: `<global-root>/<provider>/<model>/<suiteVersion>.json`
+ * Path contract: `<repoDir>/.wavemill/native-agent-certifications/<provider>/<model>/<suiteVersion>.json`
  *
  * @throws {Error} if any segment fails the safety check
  */
-export function buildCertificationPath(
+export function buildLegacyRepoCertificationPath(
   repoDir: string,
   provider: string,
   model: string,
@@ -66,6 +66,29 @@ export function buildCertificationPath(
   return join(repoDir, CERTIFICATION_BASE_PATH, identity.provider, identity.model, `${suiteVersion}.json`);
 }
 
+/**
+ * @deprecated Use buildLegacyRepoCertificationPath for legacy repo-scoped artifacts,
+ * or buildScopedCertificationPath/buildGlobalCertificationPath with an explicit scope.
+ */
+export function buildCertificationPath(
+  repoDir: string,
+  provider: string,
+  model: string,
+  suiteVersion: string,
+): string {
+  return buildLegacyRepoCertificationPath(repoDir, provider, model, suiteVersion);
+}
+
+/**
+ * Build the storage path for a shared global certification artifact.
+ *
+ * This reads the caller's process-wide global store unless `root` is provided.
+ * Prefer passing `root` when correctness depends on the selected store.
+ *
+ * Path contract: `<global-root>/<provider>/<model>/<suiteVersion>.json`
+ *
+ * @throws {Error} if any segment fails the safety check
+ */
 export function buildGlobalCertificationPath(
   provider: string,
   model: string,
@@ -123,7 +146,7 @@ export function loadCertification(
 ): { ok: true; artifact: NativeCertificationArtifact } | { ok: false; reason: 'missing' | 'malformed' } {
   let path: string;
   try {
-    path = buildCertificationPath(repoDir, provider, model, suiteVersion);
+    path = buildLegacyRepoCertificationPath(repoDir, provider, model, suiteVersion);
   } catch {
     return { ok: false, reason: 'malformed' };
   }
@@ -290,8 +313,9 @@ export function checkSharedCertificationEligibility(
   suiteVersion: string,
   requiredPhase: CertificationPhase,
   now: Date = new Date(),
+  options: Omit<CertificationStorageOptions, 'scope' | 'repoDir'> = {},
 ): ScopedCertificationEligibility {
-  const loaded = loadSharedCertificationWithLegacyFallback(repoDir, provider, model, suiteVersion);
+  const loaded = loadSharedCertificationWithLegacyFallback(repoDir, provider, model, suiteVersion, options);
   if (!loaded.ok) {
     return {
       eligible: false,
@@ -313,8 +337,9 @@ export function checkGlobalCertificationEligibility(
   suiteVersion: string,
   requiredPhase: CertificationPhase,
   now: Date = new Date(),
+  options: Omit<CertificationStorageOptions, 'scope' | 'repoDir'> = {},
 ): ScopedCertificationEligibility {
-  const loaded = loadGlobalCertification(provider, model, suiteVersion);
+  const loaded = loadGlobalCertification(provider, model, suiteVersion, options);
   if (!loaded.ok) {
     return {
       eligible: false,

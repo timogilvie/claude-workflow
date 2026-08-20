@@ -18,6 +18,13 @@ export interface CertificationStorageOptions {
 
 export const GLOBAL_CERTIFICATION_ROOT_ENV = 'WAVEMILL_NATIVE_CERTIFICATION_ROOT';
 
+/**
+ * Resolve the process-wide default global certification root.
+ *
+ * This reads process environment (`WAVEMILL_NATIVE_CERTIFICATION_ROOT`);
+ * prefer accepting an explicit `certificationRoot` at API boundaries when
+ * correctness depends on the selected store.
+ */
 export function resolveGlobalCertificationRoot(): string {
   const override = process.env[GLOBAL_CERTIFICATION_ROOT_ENV]?.trim();
   if (override) {

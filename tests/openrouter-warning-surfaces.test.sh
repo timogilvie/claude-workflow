@@ -18,6 +18,8 @@ extract_function() {
 STARTUP_FUNCS="$(
   extract_function "$RUNNER" write_openrouter_warning_cache
   echo
+  extract_function "$RUNNER" startup_openrouter_credit_warning
+  echo
   extract_function "$RUNNER" startup_warn_openrouter_status
 )"
 
@@ -34,6 +36,8 @@ SESSION="openrouter-test"
 REPO_DIR_TEST="$TMP_DIR/repo"
 TOOLS_DIR="$REPO_DIR/tools"
 mkdir -p "$REPO_DIR_TEST"
+mkdir -p "$REPO_DIR_TEST/.wavemill"
+REPO_DIR="$REPO_DIR_TEST"
 STATUS_LOG_FILE="$TMP_DIR/status.log"
 OPENROUTER_WARNING_CACHE="/tmp/${SESSION}-openrouter-warning.txt"
 rm -f "$OPENROUTER_WARNING_CACHE"
@@ -72,6 +76,17 @@ if [[ ! -f "$OPENROUTER_WARNING_CACHE" ]]; then
   exit 1
 fi
 
+cat > "$REPO_DIR_TEST/.wavemill/quota-state.json" <<'EOF'
+{"version":2,"updatedAt":"2026-08-19T12:00:00.000Z","models":{},"providers":{"openrouter":{"totalCredits":110,"totalUsage":110.16,"balanceUsd":-0.16,"usageDaily":10.05,"updatedAt":"2026-08-19T12:00:00.000Z","lastFetchError":null}}}
+EOF
+: > "$STATUS_LOG_FILE"
+startup_warn_openrouter_status
+if [[ "$(cat "$OPENROUTER_WARNING_CACHE")" != *"credits exhausted"* ]]; then
+  echo "credit exhaustion warning did not take precedence" >&2
+  cat "$OPENROUTER_WARNING_CACHE" >&2
+  exit 1
+fi
+
 STATE_FILE="$TMP_DIR/state.json"
 cat > "$STATE_FILE" <<EOF
 {"freeSlots":1,"tasks":{}}
@@ -96,7 +111,7 @@ wavemill_pick_usage_tip() { printf 'tip\n'; }
 eval "$STATUS_FUNCS"
 render_dashboard
 
-if ! grep -q 'WARN: OpenRouter is configured, but the last 20 recent selections used no OpenRouter/native model.' "$FRAME"; then
+if ! grep -q 'WARN: OpenRouter credits exhausted - challenge coverage disabled' "$FRAME"; then
   echo "dashboard did not render cached OpenRouter warning" >&2
   cat "$FRAME" >&2
   exit 1

@@ -3,6 +3,7 @@ import { join, resolve, normalize } from 'node:path';
 import { homedir } from 'node:os';
 import { getOpenRouterProviderConfig } from './config.ts';
 import { readDotEnvFile } from './env-file.ts';
+import { assertOpenRouterBalanceSufficient } from './native-agent/openrouter-credits-guard.ts';
 import { OPENROUTER_BASE_URL, isOpenRouterModel, resolveOpenRouterModelId } from './openrouter-provider.ts';
 
 const DEFAULT_API_KEY_ENV = 'OPENROUTER_API_KEY';
@@ -121,6 +122,11 @@ export function buildOpenRouterLauncherEnv(
 
   const stateDir = resolveOpenRouterLauncherStateDir(repoDir, opts.session, opts.issue);
   const baseUrl = providerConfig.baseUrl?.trim() || OPENROUTER_BASE_URL;
+
+  assertOpenRouterBalanceSufficient({
+    repoDir,
+    model: wavemillModel,
+  });
 
   return {
     ANTHROPIC_BASE_URL: baseUrl,
