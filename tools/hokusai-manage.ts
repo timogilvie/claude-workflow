@@ -9,6 +9,7 @@ import {
   getContributionStatus,
   getStatusDisplay,
   getSubmissionStatus,
+  getSubmissionSwitchReport,
 } from '../shared/lib/hokusai-consent.ts';
 import { summarizeHokusaiLedger } from '../shared/lib/hokusai-ledger.ts';
 import {
@@ -18,6 +19,7 @@ import {
 } from '../shared/lib/hokusai-local-config.ts';
 import { hokusaiQueueStatus, requeueDeadLetterEntries, type RequeueReportEntry } from '../shared/lib/hokusai-queue.ts';
 import { drainContributionQueue } from '../shared/lib/hokusai-queue-drain.ts';
+import { summarizeTriggerLog } from '../shared/lib/hokusai-trigger-log.ts';
 
 function parseOptionalNumber(value: string | undefined, name: string): number | undefined {
   if (value === undefined) {
@@ -108,8 +110,10 @@ runTool({
         const status = getSubmissionStatus(options);
         const contributionConsent = getContributionConsentStatus(options);
         const contribStatus = getContributionStatus(options);
+        const switches = getSubmissionSwitchReport(options);
         const queue = hokusaiQueueStatus(options);
         const summary = summarizeHokusaiLedger(options);
+        const recentOutcomes = summarizeTriggerLog(options.repoDir);
         const historyReadOnly = !contributionConsent.submissionAllowed;
         const contributions = {
           consent: contribStatus.consent,
@@ -130,9 +134,22 @@ runTool({
           historyReadOnly,
         };
         if (args.json) {
-          console.log(JSON.stringify({ ...status, contributions }, null, 2));
+          console.log(JSON.stringify({ ...status, switches, contributions, recentOutcomes }, null, 2));
         } else {
           console.log(getStatusDisplay(options));
+          console.log('');
+          console.log('Recent submission outcomes (14d):');
+          if (!recentOutcomes) {
+            console.log('  no trigger history recorded yet');
+          } else {
+            console.log(`  enqueued=${recentOutcomes.counts.enqueued} duplicate=${recentOutcomes.counts.duplicate} disabled=${recentOutcomes.counts.disabled} failed=${recentOutcomes.counts.failed} not_eligible=${recentOutcomes.counts.not_eligible}`);
+            if (recentOutcomes.blocked > 0) {
+              const sources = recentOutcomes.disabledSources.length > 0
+                ? ` (${recentOutcomes.disabledSources.join(', ')})`
+                : '';
+              console.log(`Warning: ${recentOutcomes.blocked} eligible submission${recentOutcomes.blocked === 1 ? '' : 's'} were blocked since ${recentOutcomes.firstBlockedAt ?? 'unknown'}${sources}.`);
+            }
+          }
           console.log(`Pending queue: ${contributions.pendingQueueCount}`);
           console.log(`Dead-letter queue: ${contributions.deadLetterQueueCount}`);
           if (contributions.lastQueueError) {

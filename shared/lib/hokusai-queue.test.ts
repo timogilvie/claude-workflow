@@ -120,7 +120,23 @@ describe('hokusai-queue', () => {
     const result = await enqueueContribution(makeRow(), { repoDir, configDir });
 
     assert.equal(result.status, 'disabled');
+    assert.deepEqual(result.blockers, ['contributions_config_disabled']);
     assert.equal(existsSync(join(repoDir, '.wavemill', 'hokusai')), false);
+  });
+
+  it('reports user-store consent blockers when enqueue is disabled', async () => {
+    const { repoDir, configDir } = makeRepo(true);
+    saveUserConfig({
+      hokusai: {
+        enabled: false,
+        consentedAt: '2026-05-30T12:00:00.000Z',
+        consentVersion: 'old-version',
+      },
+    }, configDir);
+
+    const result = await enqueueContribution(makeRow(), { repoDir, configDir });
+    assert.equal(result.status, 'disabled');
+    assert.deepEqual(result.blockers, ['user_store_disabled', 'consent_invalid']);
   });
 
   it('appends one JSONL line for a valid row', async () => {

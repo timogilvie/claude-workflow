@@ -2,7 +2,12 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
-import { getHokusaiContributionsConfig, getHokusaiSubmissionConfig } from './config.ts';
+import {
+  getHokusaiContributionsConfig,
+  getHokusaiSubmissionConfig,
+  getHokusaiSubmissionEnableSources,
+  type HokusaiSubmissionEnableSources,
+} from './config.ts';
 import { errorMessage } from './error-utils.ts';
 import { isLegacyUnscopedContributionEndpoint } from './hokusai-local-config.ts';
 import { hokusaiQueueStatus } from './hokusai-queue.ts';
@@ -50,12 +55,25 @@ export interface SubmissionStatus extends ConsentState {
   endpoint: string | null;
   consentValid: boolean;
   submissionAllowed: boolean;
+  userConfigPath: string;
 }
 
 export interface ContributionConsentStatus {
   consentValid: boolean;
   contributionsEnabled: boolean;
   submissionAllowed: boolean;
+  userStoreEnabled: boolean;
+  userConfigPath: string;
+}
+
+export interface SubmissionSwitchReport {
+  sources: HokusaiSubmissionEnableSources;
+  userStoreEnabled: boolean;
+  userConfigPath: string;
+  consentValid: boolean;
+  contributionsEnabled: boolean;
+  submissionAllowed: boolean;
+  mismatch: string | null;
 }
 
 export type ContributionMode = 'uploading' | 'export-only' | 'disabled';
@@ -238,6 +256,7 @@ export function getSubmissionStatus(options: { configDir?: string; repoDir?: str
     endpoint,
     consentValid,
     submissionAllowed: state.enabled && consentValid,
+    userConfigPath: resolveUserConfigPath(options.configDir),
   };
 }
 
@@ -251,7 +270,56 @@ export function getContributionConsentStatus(
     consentValid: status.consentValid,
     contributionsEnabled,
     submissionAllowed: status.submissionAllowed && contributionsEnabled,
+    userStoreEnabled: status.enabled,
+    userConfigPath: status.userConfigPath,
   };
+}
+
+function renderBool(value: boolean | undefined): string {
+  return value === undefined ? 'unset' : String(value);
+}
+
+export function getSubmissionSwitchReport(
+  options: { configDir?: string; repoDir?: string } = {},
+): SubmissionSwitchReport {
+  const sources = getHokusaiSubmissionEnableSources(options.repoDir);
+  const consent = getContributionConsentStatus(options);
+  let mismatch: string | null = null;
+
+  if (sources.effectiveEnabled && !consent.submissionAllowed) {
+    const blockers = contributionConsentBlockers(consent).join(', ');
+    mismatch = `repo submission config is enabled but user-level contribution consent blocks submissions (${blockers || 'unknown blocker'}).`;
+  } else if (!sources.effectiveEnabled && consent.submissionAllowed) {
+    mismatch = 'user-level contribution consent allows submissions but repo submission config is disabled.';
+  }
+
+  return {
+    sources,
+    userStoreEnabled: consent.userStoreEnabled,
+    userConfigPath: consent.userConfigPath,
+    consentValid: consent.consentValid,
+    contributionsEnabled: consent.contributionsEnabled,
+    submissionAllowed: consent.submissionAllowed,
+    mismatch,
+  };
+}
+
+export function contributionConsentBlockers(status: ContributionConsentStatus): string[] {
+  const blockers: string[] = [];
+  if (!status.userStoreEnabled) {
+    blockers.push('user_store_disabled');
+  }
+  if (!status.consentValid) {
+    blockers.push('consent_invalid');
+  }
+  if (!status.contributionsEnabled) {
+    blockers.push('contributions_config_disabled');
+  }
+  return blockers;
+}
+
+export function formatSubmissionSwitches(report: SubmissionSwitchReport): string {
+  return `repo base=${renderBool(report.sources.baseEnabled)} local=${renderBool(report.sources.localEnabled)} effective=${report.sources.effectiveEnabled} | user store=${report.userStoreEnabled} consent=${report.consentValid ? 'valid' : 'invalid'} contributions=${report.contributionsEnabled}`;
 }
 
 export function isHokusaiContributionsEnabled(
@@ -330,6 +398,7 @@ export function getContributionStatus(
 export function getStatusDisplay(options: { configDir?: string; repoDir?: string } = {}): string {
   const status = getSubmissionStatus(options);
   const contrib = getContributionStatus(options);
+  const switchReport = getSubmissionSwitchReport(options);
   const lines = [
     `Hokusai data submission: ${status.enabled ? 'enabled' : 'disabled'}`,
     `Submission allowed: ${status.submissionAllowed ? 'yes' : 'no'}`,
@@ -337,6 +406,7 @@ export function getStatusDisplay(options: { configDir?: string; repoDir?: string
     `Consent version: ${status.consentVersion ?? 'none'} (current: ${status.currentVersion})`,
     `Consented at: ${status.consentedAt ?? 'never'}`,
     `Endpoint: ${status.endpoint ?? 'not configured'}`,
+    `Submission switches: ${formatSubmissionSwitches(switchReport)}`,
     '',
     `Consent: ${contrib.consent}`,
     `Contribution queue: ${contrib.queue}`,
@@ -346,6 +416,9 @@ export function getStatusDisplay(options: { configDir?: string; repoDir?: string
 
   if (contrib.warning) {
     lines.unshift(`Warning: ${contrib.warning}`, '');
+  }
+  if (switchReport.mismatch) {
+    lines.unshift(`Warning: ${switchReport.mismatch}`, '');
   }
 
   if (!status.submissionAllowed) {
