@@ -863,7 +863,7 @@ describe('launchNativePlanning', () => {
     try {
       registerScriptedPiProvider({
         api,
-        turns: [{ content: [], stopReason: 'stop' }],
+        turns: [{ content: [], stopReason: 'length' }],
       });
 
       await assert.rejects(
