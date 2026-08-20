@@ -94,7 +94,7 @@ describe('backfillChallengeStageFile', () => {
     const [record] = readJsonl(file);
 
     assert.equal(summary.unrecoverable, 1);
-    assert.equal(record.challengeStage, undefined);
+    assert.equal(record.challengeStage, 'unrecoverable');
     assert.deepEqual(record.eligibilityErrors, ['missing_challenge_stage']);
   });
 
@@ -113,7 +113,7 @@ describe('backfillChallengeStageFile', () => {
     assert.equal(summary.disagreements, 1);
     assert.deepEqual(summary.disagreementPairIds, ['pair-disagreement']);
     assert.equal(summary.unrecoverable, 1);
-    assert.equal(record.challengeStage, undefined);
+    assert.equal(record.challengeStage, 'unrecoverable');
     assert.deepEqual(record.eligibilityErrors, ['missing_challenge_stage']);
   });
 

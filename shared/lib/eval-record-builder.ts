@@ -189,7 +189,9 @@ function stageFromExplicitChallengeIntent(
   if (intent.selectedStage) return intent.selectedStage;
 
   const sideIntent = side === 'challenger' ? intent.challenger : intent.primary;
-  return sideIntent?.challengeStage;
+  return sideIntent?.challengeStage
+    ?? intent.primary?.challengeStage
+    ?? intent.challenger?.challengeStage;
 }
 
 export function attachChallengeExecutionMetadata(

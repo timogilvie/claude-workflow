@@ -1149,6 +1149,8 @@ export interface PlanCritique {
 
 export type ChallengeEvalStage = 'plan' | 'review';
 
+export type EvalRecordChallengeStage = ChallengeStage | 'unrecoverable';
+
 export type ChallengeStageEvalProvenance = 'direct' | 'inferred';
 
 export interface ChallengeStageEvidenceItem {
@@ -1712,14 +1714,13 @@ export interface EvalRecord {
 
   /**
    * Which workflow stage the challenge pair varied (plan | implementation |
-   * review). Written at pair creation from the challenge execution intent.
-   * Absent when the stage could not be established from evidence — never
-   * defaulted, so downstream readers can distinguish "unknown stage" from
-   * an actual `implementation` pair.
+   * review), or `unrecoverable` when historical backfill could not establish
+   * a stage from evidence. Written at pair creation from the challenge
+   * execution intent for new records.
    *
    * @since 1.39.0
    */
-  challengeStage?: ChallengeStage;
+  challengeStage?: EvalRecordChallengeStage;
 
   /** Pull request URL, if the task produced a PR */
   prUrl?: string;

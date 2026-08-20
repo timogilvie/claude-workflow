@@ -206,7 +206,7 @@
       "description": "Side within a challenge pair, used to bind intent to evidence."
     },
     "challengeStage": {
-      "$ref": "#/$defs/ChallengeStage"
+      "$ref": "#/$defs/EvalRecordChallengeStage"
     },
     "challengeIntent": {
       "$ref": "#/$defs/ChallengeExecutionIntent"
@@ -2536,6 +2536,15 @@
         "plan",
         "implementation",
         "review"
+      ]
+    },
+    "EvalRecordChallengeStage": {
+      "type": "string",
+      "enum": [
+        "plan",
+        "implementation",
+        "review",
+        "unrecoverable"
       ]
     },
     "ChallengeValidity": {

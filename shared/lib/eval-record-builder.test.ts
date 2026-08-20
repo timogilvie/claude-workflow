@@ -1392,6 +1392,24 @@ describe('eval-record-builder', () => {
 
       expect(baseRecord.challengeStage).toBe('review');
     });
+
+    it('falls back to the opposite side stage when the selected side lacks one', () => {
+      attachChallengeExecutionMetadata(baseRecord, {
+        side: 'primary',
+        intent: challengeIntent({
+          challenger: {
+            key: 'HOK-2797_c',
+            role: 'challenger',
+            challengeStage: 'review',
+            planner: { model: 'gpt-5.4' },
+            coder: { model: 'claude-opus-4-6' },
+            reviewer: { model: 'claude-opus-4-6' },
+          },
+        }),
+      });
+
+      expect(baseRecord.challengeStage).toBe('review');
+    });
   });
 
   describe('attachRouteProvenance (HOK-1517)', () => {

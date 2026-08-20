@@ -792,6 +792,15 @@ test('Record with top-level challengeStage validates', () => {
   assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
 });
 
+test('Record with unrecoverable top-level challengeStage validates', () => {
+  const record = {
+    ...scenarios[0].record,
+    challengeStage: 'unrecoverable',
+  } as unknown as Record<string, unknown>;
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
 test('Rejects invalid top-level challengeStage', () => {
   const record = {
     ...scenarios[0].record,

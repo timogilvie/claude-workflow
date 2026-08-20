@@ -5,10 +5,11 @@
  *
  * This tool only writes a stage when it can recover one from persisted intent
  * or challenge pair records. Unrecoverable challenge records are explicitly
- * marked with missing_challenge_stage and are never defaulted to implementation.
+ * marked with challengeStage='unrecoverable' plus missing_challenge_stage and
+ * are never defaulted to implementation.
  */
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { runTool } from '../shared/lib/tool-runner.ts';
 import type { ChallengeStage } from '../shared/lib/challenge-mode.ts';
@@ -21,7 +22,7 @@ type JsonRecord = Record<string, unknown>;
 
 interface EvalRecordForBackfill extends JsonRecord {
   challengePairId?: string;
-  challengeStage?: ChallengeStage;
+  challengeStage?: ChallengeStage | 'unrecoverable';
   challengeSide?: 'primary' | 'challenger';
   challengeIntent?: {
     challengeStage?: unknown;
@@ -139,10 +140,27 @@ function removeMissingStageMarker(record: EvalRecordForBackfill): boolean {
 }
 
 function markMissingStage(record: EvalRecordForBackfill): boolean {
+  const before = record.challengeStage;
+  record.challengeStage = 'unrecoverable';
   const current = Array.isArray(record.eligibilityErrors) ? record.eligibilityErrors : [];
-  if (current.includes(MISSING_STAGE_CODE)) return false;
+  if (current.includes(MISSING_STAGE_CODE)) return before !== 'unrecoverable';
   record.eligibilityErrors = [...current, MISSING_STAGE_CODE];
   return true;
+}
+
+function atomicWriteFile(file: string, content: string): void {
+  const tempFile = `${file}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    writeFileSync(tempFile, content, 'utf-8');
+    renameSync(tempFile, file);
+  } catch (error) {
+    try {
+      unlinkSync(tempFile);
+    } catch {
+      // Best effort cleanup; preserve the original write error.
+    }
+    throw error;
+  }
 }
 
 function cloneRecord(record: EvalRecordForBackfill): EvalRecordForBackfill {
@@ -239,7 +257,7 @@ export function backfillChallengeStageFile(
   summary.disagreements = summary.disagreementPairIds.length;
 
   if (!options.dryRun && summary.changed > 0) {
-    writeFileSync(file, `${output.join('\n')}${hasTrailingNewline ? '\n' : ''}`, 'utf-8');
+    atomicWriteFile(file, `${output.join('\n')}${hasTrailingNewline ? '\n' : ''}`);
   }
 
   return summary;
