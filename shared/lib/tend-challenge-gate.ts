@@ -539,7 +539,7 @@ export async function applyChallengePairGates<T extends ChallengeEligibleWorkIte
     comparisons = [];
   }
 
-  const autoMerge = getChallengeConfig(repoDir).autoMergeWinner ?? true;
+  const autoMerge = getChallengeConfig(repoDir).autoMergeWinner ?? false;
   const gateConfig = getChallengeGateConfig(repoDir);
   const coolOffSeconds = options.coolOffSeconds ?? gateConfig.coolOffSeconds;
   const nowMs = options.nowMs ?? (() => Date.now());
