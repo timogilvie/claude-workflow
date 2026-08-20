@@ -12,6 +12,29 @@ import { writeJobResultFile } from '../shared/lib/job-tracker.ts';
 import type { PostCompletionContext } from '../shared/lib/post-completion-hook.ts';
 import { runTool } from '../shared/lib/tool-runner.ts';
 import { runPostCompletionEval } from '../shared/lib/post-completion-hook.ts';
+import { existsSync, readFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+
+function shouldSkipAbortedTaskEval(repoDir: string | undefined, issue: string | undefined, pr: string | undefined): string | undefined {
+  if (!issue) return undefined;
+  const statePath = join(resolve(repoDir ?? process.cwd()), '.wavemill', 'workflow-state.json');
+  if (!existsSync(statePath)) return undefined;
+  try {
+    const state = JSON.parse(readFileSync(statePath, 'utf-8')) as {
+      tasks?: Record<string, { status?: unknown; challengeAborted?: unknown; pr?: unknown }>;
+    };
+    const task = state.tasks?.[issue];
+    if (!task) return undefined;
+    const statePr = typeof task.pr === 'string' ? task.pr : '';
+    if (task.status === 'aborted') return 'task_aborted';
+    if (typeof task.challengeAborted === 'string' && task.challengeAborted && !pr && !statePr) {
+      return 'challenge_aborted_no_pr';
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
 
 runTool({
   name: 'run-eval-hook',
@@ -125,8 +148,21 @@ runTool({
     process.once('SIGTERM', handleSigterm);
 
     try {
-      context.onPersisted = () => {
-        persisted = true;
+      const skipReason = shouldSkipAbortedTaskEval(args['repo-dir'], args.issue, args.pr);
+      if (skipReason) {
+        failureMessage = skipReason;
+        if (resultFile) {
+          writeJobResultFile(resultFile, {
+            ok: false,
+            persisted: false,
+            exitCode: 0,
+            reason: skipReason,
+          });
+        }
+        return;
+      }
+	      context.onPersisted = () => {
+	        persisted = true;
         writeResultFile(0);
       };
       persisted = await runPostCompletionEval(context);

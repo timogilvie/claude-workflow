@@ -48,6 +48,14 @@ import type {
   ToolResultMetadata,
 } from './tools/types.ts';
 
+const EMPTY_ASSISTANT_CONTINUATION_LIMIT = 1;
+const EMPTY_ASSISTANT_CONTINUATION_PROMPT = [
+  'Your previous response contained internal reasoning only and no actionable text or tool calls.',
+  'Continue from that reasoning now: use the available tools or provide the required user-facing result. Do not stop until you have taken the next concrete step.',
+].join('\n');
+const EMPTY_MODEL_TURN_ERROR_MESSAGE =
+  'empty-model-turn: model returned reasoning-only or otherwise empty assistant turns after a continuation prompt';
+
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
@@ -220,6 +228,50 @@ function finalAssistantStopReason(messages: AgentMessage[]): string | null {
     }
   }
   return null;
+}
+
+function finalAssistantMessage(messages: AgentMessage[]): AssistantMessage | undefined {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (message.role === 'assistant') {
+      return message as AssistantMessage;
+    }
+  }
+  return undefined;
+}
+
+function hasActionableAssistantContent(message: AssistantMessage | undefined): boolean {
+  if (!message) return false;
+  return message.content.some((block) => {
+    if (block.type === 'text') {
+      return block.text.trim().length > 0;
+    }
+    return block.type === 'toolCall';
+  });
+}
+
+function shouldContinueEmptyAssistantTurn(messages: AgentMessage[]): boolean {
+  const message = finalAssistantMessage(messages);
+  return Boolean(
+    message
+    && message.stopReason === 'stop'
+    && !hasActionableAssistantContent(message),
+  );
+}
+
+function buildEmptyAssistantContinuationMessage(): AgentMessage {
+  return {
+    role: 'user',
+    content: EMPTY_ASSISTANT_CONTINUATION_PROMPT,
+    timestamp: Date.now(),
+  } as AgentMessage;
+}
+
+function markEmptyModelTurnExhausted(messages: AgentMessage[]): void {
+  const message = finalAssistantMessage(messages);
+  if (!message) return;
+  message.stopReason = 'error' as AssistantMessage['stopReason'];
+  message.errorMessage = EMPTY_MODEL_TURN_ERROR_MESSAGE;
 }
 
 function deriveOutputCapMetadata(
@@ -763,8 +815,10 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
   let finalMessages: AgentMessage[] = [];
   let loopError: unknown;
 
-  const emit: AgentEventSink = (event) => {
-    config.onEvent?.(event);
+  const handleAgentEvent = (event: AgentEvent, exposeToCaller = true) => {
+    if (exposeToCaller) {
+      config.onEvent?.(event);
+    }
     switch (event.type) {
       case 'turn_start':
         onHeartbeat?.({ state: 'working', event: 'turn_start', agent: HEARTBEAT_AGENT });
@@ -838,7 +892,56 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
   };
 
   try {
-    finalMessages = await runAgentLoopContinue(context, piConfig, emit, composed.signal);
+    let loopContext = context;
+    let emptyAssistantContinuations = 0;
+    let continuationRunIndex = 0;
+
+    while (true) {
+      let bufferedAgentEnd: AgentEvent | undefined;
+      const emit: AgentEventSink = (event) => {
+        if (event.type === 'agent_end') {
+          bufferedAgentEnd = event;
+          return;
+        }
+        handleAgentEvent(event, !(continuationRunIndex > 0 && event.type === 'agent_start'));
+      };
+
+      const runMessages = await runAgentLoopContinue(loopContext, piConfig, emit, composed.signal);
+      finalMessages = continuationRunIndex > 0
+        ? [...loopContext.messages, ...runMessages]
+        : runMessages;
+      const emptyAssistantTurn =
+        !budgetStopReason
+        && !composed.signal.aborted
+        && shouldContinueEmptyAssistantTurn(finalMessages);
+
+      if (emptyAssistantTurn && emptyAssistantContinuations < EMPTY_ASSISTANT_CONTINUATION_LIMIT) {
+        if (bufferedAgentEnd) {
+          handleAgentEvent(bufferedAgentEnd, false);
+        }
+        emptyAssistantContinuations += 1;
+        continuationRunIndex += 1;
+        loopContext = {
+          ...context,
+          messages: [
+            ...finalMessages,
+            buildEmptyAssistantContinuationMessage(),
+          ],
+        };
+        continue;
+      }
+
+      if (emptyAssistantTurn) {
+        markEmptyModelTurnExhausted(finalMessages);
+      }
+      if (bufferedAgentEnd) {
+        const exposedAgentEnd = bufferedAgentEnd.type === 'agent_end'
+          ? { ...bufferedAgentEnd, messages: finalMessages }
+          : bufferedAgentEnd;
+        handleAgentEvent(exposedAgentEnd, true);
+      }
+      break;
+    }
   } catch (err) {
     loopError = err;
   } finally {
