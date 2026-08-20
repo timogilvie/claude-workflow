@@ -136,8 +136,6 @@ export interface ChallengeComparison {
   challengeType?: ChallengeType;
   variedStage?: 'plan' | 'implementation' | 'review';
   stageEvidenceMode?: StageEvidenceMode;
-  /** Which side was shown to the blind judge as Candidate A ('primary-first' = primary was A) */
-  presentationOrder?: 'primary-first' | 'challenger-first';
   workflowInsight?: string;
   comparisonOutcome?: ChallengeComparisonOutcome;
   skipReason?: 'identical-routing-dimensions';

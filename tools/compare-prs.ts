@@ -23,6 +23,7 @@ import {
 } from '../shared/lib/challenge-execution-contract.ts';
 import {
   selectChallengeEvalScore,
+  collectPerStageScores,
 } from '../shared/lib/challenge-score-selector.ts';
 import { loadWavemillConfig } from '../shared/lib/config.ts';
 import { resolveEvalsDir } from '../shared/lib/evals-paths.ts';
@@ -30,10 +31,8 @@ import {
   buildChallengeCommentBody,
   buildCappedComparisonPrompt,
   formatRoutingSummary,
-  mapBlindVerdictToSides,
   prNumberFromValue,
   prUrlFromNumber,
-  resolvePresentationOrder,
   tryGh,
   validateComparisonJson,
   withBodyFile,
@@ -68,7 +67,6 @@ runTool({
     comment: { type: 'boolean', description: 'Post recommendation comments on both PRs' },
     'auto-merge': { type: 'boolean', description: 'Merge winner and close loser after comparison' },
     'check-only': { type: 'boolean', description: 'Only verify required eval records exist' },
-    'presentation-order': { type: 'string', description: 'Judge presentation order: primary-first, challenger-first, or random' },
     'result-file': { type: 'string', description: 'Optional path for structured job results' },
   },
   async run({ args }) {
@@ -369,6 +367,11 @@ runTool({
         for (const w of dataQualityWarnings) console.warn(`  ${w}`);
       }
 
+      // For multi-variable/full-stack include per-stage scores in prompt context
+      const isMultiStage = !challengeType || challengeType === 'multi-variable' || challengeType === 'full-stack';
+      const primaryPerStageScores = isMultiStage ? collectPerStageScores(primaryEval) : undefined;
+      const challengerPerStageScores = isMultiStage ? collectPerStageScores(challengerEval) : undefined;
+
       const primaryStageEval = primaryEval.challengeStageEval;
       const challengerStageEval = challengerEval.challengeStageEval;
       const stageEvidenceMode = (
@@ -387,19 +390,19 @@ runTool({
         );
       }
 
-      const presentationOrder = resolvePresentationOrder(args['presentation-order'] as string | undefined);
-      console.log(
-        `[compare-prs] pair=${pairId} presentation_order=${presentationOrder} primary_pr=${primaryNumber} challenger_pr=${challengerNumber}`
-      );
-
       const promptLimit = Number.parseInt(process.env.CHALLENGE_COMPARISON_MAX_PROMPT_BYTES || '500000', 10);
       const cappedPrompt = buildCappedComparisonPrompt({
         issuePrompt,
         primaryDiff,
         challengerDiff,
-        presentationOrder,
+        primaryEvalScore: primarySelected.score,
+        challengerEvalScore: challengerSelected.score,
         primaryRouting,
         challengerRouting,
+        primaryEvalScoreSource: primarySelected.source,
+        challengerEvalScoreSource: challengerSelected.source,
+        primaryPerStageScores,
+        challengerPerStageScores,
         challengeType,
         primaryStageEval,
         challengerStageEval,
@@ -421,10 +424,7 @@ runTool({
       });
       let verdict: ValidatedComparisonResult;
       try {
-        verdict = mapBlindVerdictToSides(
-          validateComparisonJson(parseJsonFromLLM(response.text)),
-          presentationOrder,
-        );
+        verdict = validateComparisonJson(parseJsonFromLLM(response.text));
       } catch (error) {
         if (!(error instanceof Error) || !error.message.includes('JavaScript code instead of JSON')) {
           throw error;
@@ -446,10 +446,7 @@ Return a raw JSON object with no code fences, no comments, and no JavaScript syn
           timeout: 180_000,
           retry: false,
         });
-        verdict = mapBlindVerdictToSides(
-          validateComparisonJson(parseJsonFromLLM(response.text)),
-          presentationOrder,
-        );
+        verdict = validateComparisonJson(parseJsonFromLLM(response.text));
       }
 
       // Attribute the win to the varied stage's model. For planner/reviewer
@@ -484,7 +481,6 @@ Return a raw JSON object with no code fences, no comments, and no JavaScript syn
         challengeType,
         variedStage,
         stageEvidenceMode,
-        presentationOrder,
         workflowInsight: verdict.workflowInsight,
         primaryEvalScoreSource: primarySelected.source,
         challengerEvalScoreSource: challengerSelected.source,
