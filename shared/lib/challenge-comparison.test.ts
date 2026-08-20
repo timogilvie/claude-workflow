@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   appendChallengeComparison,
+  buildDoubleForfeitComparison,
+  buildForfeitComparison,
   buildInvalidChallengeComparison,
   buildSkippedIdenticalComparison,
   buildInvalidProvenanceComparison,
@@ -559,6 +561,46 @@ test('same intended routing with different execution is inconclusive', () => {
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
+});
+
+test('forfeit builders use null scores and explicit completion metadata', () => {
+  const forfeit = buildForfeitComparison({
+    challengePairId: 'HOK-2778',
+    primaryModel: 'gpt-5.5',
+    challengerModel: 'qwen-2.5-coder-32b',
+    primaryPrUrl: 'https://github.com/org/repo/pull/1',
+    challengerPrUrl: 'https://github.com/unknown/unknown/pull/0',
+    winner: 'primary',
+    rationale: 'Challenger failed.',
+    terminalReason: 'challenger_challenge_aborted',
+    challengerCompleted: false,
+    armFailures: [{
+      side: 'challenger',
+      model: 'qwen-2.5-coder-32b',
+      stage: 'coding',
+      failureKind: 'tool-use-unsupported',
+      faultClass: 'selection-fault',
+    }],
+  });
+  assert.equal(forfeit.primaryEvalScore, null);
+  assert.equal(forfeit.challengerEvalScore, null);
+  assert.equal(forfeit.primaryCompleted, true);
+  assert.equal(forfeit.challengerCompleted, false);
+  assert.equal(forfeit.armFailures?.[0].faultClass, 'selection-fault');
+
+  const doubleForfeit = buildDoubleForfeitComparison({
+    challengePairId: 'HOK-2778',
+    primaryModel: 'kimi-k2',
+    challengerModel: 'glm-5.2',
+    primaryPrUrl: 'https://github.com/unknown/unknown/pull/0',
+    challengerPrUrl: 'https://github.com/unknown/unknown/pull/0',
+    rationale: 'Both failed.',
+    terminalReason: 'both_challenge_aborted',
+  });
+  assert.equal(doubleForfeit.primaryEvalScore, null);
+  assert.equal(doubleForfeit.challengerEvalScore, null);
+  assert.equal(doubleForfeit.primaryCompleted, false);
+  assert.equal(doubleForfeit.challengerCompleted, false);
 });
 
 process.on('exit', () => {

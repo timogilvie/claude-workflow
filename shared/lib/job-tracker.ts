@@ -47,8 +47,8 @@ export interface JobResultFile {
     challengerModel?: string;
     primaryPrUrl?: string;
     challengerPrUrl?: string;
-    primaryEvalScore?: number;
-    challengerEvalScore?: number;
+    primaryEvalScore?: number | null;
+    challengerEvalScore?: number | null;
     dimensions?: Record<string, unknown>;
   };
   invalidChallenge?: boolean;

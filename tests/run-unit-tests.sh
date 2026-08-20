@@ -106,6 +106,8 @@ TESTS=(
   shared/lib/transient-retry.test.ts
   shared/lib/tend-loop.test.ts
   shared/lib/challenge-pair-resolver.test.ts
+  shared/lib/arm-failure-taxonomy.test.ts
+  shared/lib/arm-reliability.test.ts
   shared/lib/stale-task-branches.test.ts
   shared/lib/tend-controller.test.ts
   shared/lib/tend-status-renderer.test.ts
@@ -146,6 +148,7 @@ TESTS=(
   shared/lib/hokusai-local-config.test.ts
   shared/lib/hokusai-audit.test.ts
   shared/lib/hokusai-submission-trigger.test.ts
+  shared/lib/hokusai-trigger-log.test.ts
   shared/lib/hokusai-queue.test.ts
   shared/lib/hokusai-backfill.test.ts
   shared/lib/hokusai-queue-drain.test.ts

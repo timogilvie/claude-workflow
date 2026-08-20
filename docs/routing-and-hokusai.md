@@ -173,6 +173,42 @@ wavemill hokusai drain
 
 `drain` reports the outcome clearly: `uploaded N rows`, `exported N rows (export-only mode)`, `empty`, `waiting for retry backoff`, or `disabled`.
 
+### Eval-To-Submission Mapping
+
+A contribution queue row is created for each eval record that passes the real submission gates:
+
+- `trainingEligible` is not `false`
+- `id` and `issueId` are present
+- routing can be resolved by `toHokusaiSubmission`
+- repo submission config is enabled
+- user-level consent is enabled and valid
+- `hokusai.contributions.enabled` is true
+
+Raw `evals.jsonl` line counts are not the right denominator for monitoring submissions. Challenge secondary records, records with `INVALID_CHALLENGE`, model-fallback probe records that only contain `agentType`/`modelId`/`fallbackEvent`, records without an `issueId`, and records without routing are intentionally not submitted. Historically this can make raw eval counts look roughly four times larger than submitted contribution rows.
+
+Use the trigger log instead. Wavemill records each trigger decision in `.wavemill/hokusai/trigger-log.jsonl`, and `wavemill hokusai status` summarizes the recent outcomes as:
+
+- submitted or already submitted: `enqueued + duplicate`
+- blocked after reaching the trigger: `disabled + failed`
+- intentionally excluded: `not_eligible`
+
+The Aug 17-18, 2026 outage was recovered with `backfill-hokusai-submissions.ts`: 9 recoverable records existed, 4 were enqueued by the backfill, and 5 had already been handled by the resumed live path. No further historical backfill is needed; the earlier larger shortfall estimate came from comparing raw eval counts to queue rows.
+
+### Submission Switches
+
+Submission has two independent enable switches:
+
+- repo config: `.wavemill-config.json` plus `.wavemill-config.local.json`, read as `hokusai.dataSubmission.enabled`
+- user consent store: `~/.wavemill/config.json`, read as `hokusai.enabled` with a current consent version
+
+Both switches must allow submission, and `hokusai.contributions.enabled` must also be true before rows can be queued. `wavemill hokusai status` prints the resolved values in one line:
+
+```text
+Submission switches: repo base=<value> local=<value> effective=<value> | user store=<value> consent=<valid|invalid> contributions=<value>
+```
+
+If the repo config and user-level consent disagree, status emits a warning. Trigger logs also distinguish `disabled (repo_config: ...)` from `disabled (consent: ...)`, so an intentional repo opt-out is no longer indistinguishable from a user-store pause left in place.
+
 ### Recovering Dead-Lettered Contributions
 
 Dead-lettered rows are terminal for automatic retry, but they can still be valid data after an operator fixes the cause, such as a wrong endpoint or stale local overlay. Preview recoverable rows first:

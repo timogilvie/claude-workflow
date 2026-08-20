@@ -1336,6 +1336,27 @@ export function getEffectiveModelExclusions(repoDir?: string): EffectiveModelExc
   ];
 }
 
+export interface HokusaiSubmissionEnableSources {
+  baseEnabled: boolean | undefined;
+  localEnabled: boolean | undefined;
+  effectiveEnabled: boolean;
+}
+
+export function getHokusaiSubmissionEnableSources(repoDir?: string): HokusaiSubmissionEnableSources {
+  const absRepoDir = resolveRepoDir(repoDir);
+  const baseEnabled = loadWavemillBaseConfig(absRepoDir).hokusai?.dataSubmission?.enabled;
+  const localConfigPath = resolve(absRepoDir, '.wavemill-config.local.json');
+  const localEnabled = existsSync(localConfigPath)
+    ? (readAndParseConfig(localConfigPath) as WavemillConfig).hokusai?.dataSubmission?.enabled
+    : undefined;
+
+  return {
+    baseEnabled,
+    localEnabled,
+    effectiveEnabled: getHokusaiSubmissionConfig(absRepoDir).enabled === true,
+  };
+}
+
 export function isRouterCapabilityFilteringEnabled(repoDir?: string): boolean {
   return getRouterConfig(repoDir).capabilityFiltering?.enabled === true;
 }
