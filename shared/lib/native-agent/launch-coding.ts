@@ -71,6 +71,7 @@ import {
   capOpenRouterMaxTokensForBalance,
 } from './openrouter-credits-guard.ts';
 import { updateStageResult } from '../stage-result.ts';
+import { getNativeContextManagementConfig } from '../config.ts';
 import { equivalentOpenRouterModelIds, type NormalizedPricing } from '../openrouter-catalog.ts';
 import { logPromptUsage } from '../prompt-registry.ts';
 import type { ResourceRef } from '../resource-registry.ts';
@@ -913,6 +914,7 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
       model,
       context,
       maxTokens: effectiveMaxTokens,
+      contextManagement: getNativeContextManagementConfig(options.repoDir),
       convertToLlm: (messages) => messages as unknown as Message[],
       signal: options.signal,
       promptSizeLog: options.repoDir ? {

@@ -233,7 +233,12 @@ describe('launchNativeCoding', () => {
       name: `scripted:${api}`,
       api,
       provider: 'scripted',
-      contextWindow: 40_000,
+      // The packet above is 40k *characters*, which the estimator scores at
+      // ~10k tokens. The loop shrinks max_tokens to fit before asserting, so
+      // the guard only fires when the prompt cannot fit even at
+      // minOutputTokens (1024). A 40k-token window leaves ~28k of headroom and
+      // never trips it; 8k leaves none.
+      contextWindow: 8_000,
     };
     const hookPath = join(featureDir, 'native-coding.hook');
 
