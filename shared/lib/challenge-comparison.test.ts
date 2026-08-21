@@ -132,7 +132,7 @@ test('readDecisiveChallengeComparisons filters non-decisive and voided rows', ()
       reason: 'bad record',
       recordTimestamp: '2026-08-21T00:00:00.000Z',
     }, tmp);
-    appendChallengeComparison(makeRecord({ challengePairId: 'HOK-2', timestamp: '2026-08-21T00:02:00:000Z' }), tmp);
+    appendChallengeComparison(makeRecord({ challengePairId: 'HOK-2', timestamp: '2026-08-21T00:02:00.000Z' }), tmp);
 
     const records = readDecisiveChallengeComparisons(tmp);
     assert.deepEqual(records.map((record) => record.challengePairId), ['HOK-2']);
