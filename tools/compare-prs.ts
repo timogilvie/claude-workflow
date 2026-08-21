@@ -489,6 +489,7 @@ Return a raw JSON object with no code fences, no comments, and no JavaScript syn
         primaryEvalScoreSource: primarySelected.source,
         challengerEvalScoreSource: challengerSelected.source,
         ...(dataQualityWarnings.length > 0 ? { dataQualityWarnings } : {}),
+        comparisonOutcome: 'compared',
         // Fork descriptor fields with empty defaults (HOK-2794)
         forkStage: null,
         forkCommit: null,

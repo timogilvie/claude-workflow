@@ -342,6 +342,12 @@ function buildResolutionRecord(input: {
     };
   }
 
+  // Determine the reason: if the lone side is the primary and has no challengerLaunched marker,
+  // it's a phantom pair (challenger was never actually launched).
+  const noComparisonReason = (!primary && loneSide.role === 'challenger') || (primary?.challengerLaunched !== false)
+    ? 'orphan_pair'
+    : 'challenger_never_launched';
+
   return {
     outcome: 'forfeit',
     record: buildForfeitComparison({
@@ -358,6 +364,7 @@ function buildResolutionRecord(input: {
         ? `${armFailures.map(describeFailure).join(' ')} The surviving ${loneSide.role} side wins by forfeit.`
         : 'Challenge pair became orphaned before a comparison could be launched; the surviving side wins by forfeit.',
       terminalReason: 'orphan_pair',
+      noComparisonReason,
       timestamp: input.timestamp,
     }),
   };
