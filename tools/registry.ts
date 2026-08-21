@@ -2,15 +2,12 @@
 import { runTool } from '../shared/lib/tool-runner.ts';
 import { getManifest } from '../shared/lib/resource-manifest.ts';
 import { getResource, listResources } from '../shared/lib/resource-registry.ts';
-
-function diffRefs(left: { id: string; version: string }[], right: { id: string; version: string }[]) {
-  const leftSet = new Set(left.map((ref) => `${ref.id}@${ref.version}`));
-  const rightSet = new Set(right.map((ref) => `${ref.id}@${ref.version}`));
-  return {
-    onlyLeft: [...leftSet].filter((entry) => !rightSet.has(entry)).sort(),
-    onlyRight: [...rightSet].filter((entry) => !leftSet.has(entry)).sort(),
-  };
-}
+import {
+  diffHarnesses,
+  formatHarnessDiff,
+  formatHarnessResources,
+  resolveHarnessSelector,
+} from '../shared/lib/harness-diff.ts';
 
 runTool({
   name: 'registry',
@@ -61,14 +58,38 @@ runTool({
 
     if (subcommand === 'diff') {
       if (!first || !second) {
-        throw new Error('diff requires <session-a> <session-b>');
+        throw new Error('diff requires <session-or-harness-a> <session-or-harness-b>');
       }
-      const left = getManifest(first, repoDir);
-      const right = getManifest(second, repoDir);
-      if (!left || !right) {
-        throw new Error('Both manifests must exist');
+      const left = resolveHarnessSelector(first, repoDir);
+      const right = resolveHarnessSelector(second, repoDir);
+      const diff = diffHarnesses(left.resources, right.resources);
+      if (args.json) {
+        console.log(JSON.stringify({
+          left: { selector: first, harnessId: left.harnessId, sessions: left.sessions },
+          right: { selector: second, harnessId: right.harnessId, sessions: right.sessions },
+          ...diff,
+        }, null, 2));
+      } else {
+        console.log(formatHarnessDiff(left, right, diff));
       }
-      console.log(JSON.stringify(diffRefs(left.resources, right.resources), null, 2));
+      return;
+    }
+
+    if (subcommand === 'harness') {
+      if (!first) {
+        throw new Error('harness requires <harness-id-or-session>');
+      }
+      const resolved = resolveHarnessSelector(first, repoDir);
+      if (args.json) {
+        console.log(JSON.stringify({
+          selector: first,
+          harnessId: resolved.harnessId,
+          sessions: resolved.sessions,
+          resources: resolved.resources,
+        }, null, 2));
+      } else {
+        console.log(formatHarnessResources(resolved));
+      }
       return;
     }
 

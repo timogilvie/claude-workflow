@@ -152,6 +152,9 @@ export interface ChallengeComparison {
   challengerModel: string;
   primaryPrUrl: string;
   challengerPrUrl: string;
+  /** Harness IDs for each arm's eval record; arms may legitimately differ. */
+  primaryHarnessId?: string;
+  challengerHarnessId?: string;
   primaryEvalScore: number | null;
   challengerEvalScore: number | null;
   primaryCompleted?: boolean;
@@ -744,6 +747,8 @@ export function buildInvalidProvenanceComparison(input: {
   challengerPrUrl: string;
   primaryEvalScore: number;
   challengerEvalScore: number;
+  primaryHarnessId?: string;
+  challengerHarnessId?: string;
   primaryRouting?: ChallengeRoutingMeta;
   challengerRouting?: ChallengeRoutingMeta;
   primaryExecution: ChallengeSideExecutionProvenance;
@@ -770,6 +775,8 @@ export function buildInvalidProvenanceComparison(input: {
     challengerModel: input.challengerModel,
     primaryPrUrl: input.primaryPrUrl,
     challengerPrUrl: input.challengerPrUrl,
+    primaryHarnessId: input.primaryHarnessId,
+    challengerHarnessId: input.challengerHarnessId,
     primaryEvalScore: input.primaryEvalScore,
     challengerEvalScore: input.challengerEvalScore,
     rationale: `Challenge comparison ${outcome}: ${reason || 'execution provenance did not validate'}.`,
@@ -797,6 +804,8 @@ export function buildSkippedIdenticalComparison(input: {
   challengerPrUrl: string;
   primaryEvalScore: number;
   challengerEvalScore: number;
+  primaryHarnessId?: string;
+  challengerHarnessId?: string;
   primaryRouting?: ChallengeRoutingMeta;
   challengerRouting?: ChallengeRoutingMeta;
   timestamp?: string;
@@ -808,6 +817,8 @@ export function buildSkippedIdenticalComparison(input: {
     challengerModel: input.challengerModel,
     primaryPrUrl: input.primaryPrUrl,
     challengerPrUrl: input.challengerPrUrl,
+    primaryHarnessId: input.primaryHarnessId,
+    challengerHarnessId: input.challengerHarnessId,
     primaryEvalScore: input.primaryEvalScore,
     challengerEvalScore: input.challengerEvalScore,
     winner: 'primary',
@@ -834,6 +845,8 @@ export function buildInvalidChallengeComparison(input: {
   challengerPrUrl: string;
   primaryEvalScore: number;
   challengerEvalScore: number;
+  primaryHarnessId?: string;
+  challengerHarnessId?: string;
   reason: 'stage_override_lost' | 'native_launch_fallback' | 'identical_effective_route' | 'operator_reroute';
   details?: string;
   primaryRouting?: ChallengeRoutingMeta;
@@ -849,6 +862,8 @@ export function buildInvalidChallengeComparison(input: {
     challengerModel: input.challengerModel,
     primaryPrUrl: input.primaryPrUrl,
     challengerPrUrl: input.challengerPrUrl,
+    primaryHarnessId: input.primaryHarnessId,
+    challengerHarnessId: input.challengerHarnessId,
     primaryEvalScore: input.primaryEvalScore,
     challengerEvalScore: input.challengerEvalScore,
     rationale: input.details || `Invalid challenge: ${input.reason}`,
@@ -880,6 +895,8 @@ export function buildForfeitComparison(input: {
   armFailures?: ChallengeArmFailure[];
   rationale: string;
   terminalReason: ChallengeTerminalReason;
+  primaryHarnessId?: string;
+  challengerHarnessId?: string;
   timestamp?: string;
 }): ChallengeComparison {
   return {
@@ -888,6 +905,8 @@ export function buildForfeitComparison(input: {
     challengerModel: input.challengerModel,
     primaryPrUrl: input.primaryPrUrl,
     challengerPrUrl: input.challengerPrUrl,
+    primaryHarnessId: input.primaryHarnessId,
+    challengerHarnessId: input.challengerHarnessId,
     primaryEvalScore: null,
     challengerEvalScore: null,
     primaryCompleted: input.primaryCompleted ?? (input.winner === 'primary'),
@@ -919,6 +938,8 @@ export function buildDoubleForfeitComparison(input: {
   armFailures?: ChallengeArmFailure[];
   rationale: string;
   terminalReason: ChallengeTerminalReason;
+  primaryHarnessId?: string;
+  challengerHarnessId?: string;
   timestamp?: string;
 }): ChallengeComparison {
   return {
@@ -927,6 +948,8 @@ export function buildDoubleForfeitComparison(input: {
     challengerModel: input.challengerModel,
     primaryPrUrl: input.primaryPrUrl,
     challengerPrUrl: input.challengerPrUrl,
+    primaryHarnessId: input.primaryHarnessId,
+    challengerHarnessId: input.challengerHarnessId,
     primaryEvalScore: null,
     challengerEvalScore: null,
     primaryCompleted: input.primaryCompleted ?? false,

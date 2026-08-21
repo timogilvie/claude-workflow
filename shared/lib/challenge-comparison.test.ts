@@ -46,6 +46,8 @@ function makeRecord(overrides?: Partial<ChallengeComparison>): ChallengeComparis
     challengerModel: 'claude-opus-4-6',
     primaryPrUrl: 'https://github.com/org/repo/pull/1',
     challengerPrUrl: 'https://github.com/org/repo/pull/2',
+    primaryHarnessId: 'a'.repeat(64),
+    challengerHarnessId: 'b'.repeat(64),
     primaryEvalScore: 0.8,
     challengerEvalScore: 0.9,
     winner: 'challenger',
@@ -82,6 +84,8 @@ test('appendChallengeComparison writes a record that can be read back', () => {
     assert.equal(records.length, 1);
     assert.equal(records[0].challengePairId, 'HOK-970');
     assert.equal(records[0].winner, 'challenger');
+    assert.equal(records[0].primaryHarnessId, 'a'.repeat(64));
+    assert.equal(records[0].challengerHarnessId, 'b'.repeat(64));
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
@@ -483,6 +487,8 @@ test('buildInvalidChallengeComparison omits winner and cleanup policy', () => {
     challengerModel: 'glm-5.2',
     primaryPrUrl: 'https://github.com/org/repo/pull/1',
     challengerPrUrl: 'https://github.com/org/repo/pull/2',
+    primaryHarnessId: 'c'.repeat(64),
+    challengerHarnessId: 'd'.repeat(64),
     primaryEvalScore: 0.8,
     challengerEvalScore: 0.8,
     reason: 'stage_override_lost',
@@ -495,6 +501,8 @@ test('buildInvalidChallengeComparison omits winner and cleanup policy', () => {
   assert.equal(record.winner, undefined);
   assert.equal(record.winnerModel, undefined);
   assert.equal(record.cleanupPolicy, undefined);
+  assert.equal(record.primaryHarnessId, 'c'.repeat(64));
+  assert.equal(record.challengerHarnessId, 'd'.repeat(64));
 });
 
 console.log('\n--- Execution Provenance Tests ---\n');
@@ -636,6 +644,8 @@ test('forfeit builders use null scores and explicit completion metadata', () => 
     challengerModel: 'qwen-2.5-coder-32b',
     primaryPrUrl: 'https://github.com/org/repo/pull/1',
     challengerPrUrl: 'https://github.com/unknown/unknown/pull/0',
+    primaryHarnessId: 'e'.repeat(64),
+    challengerHarnessId: 'f'.repeat(64),
     winner: 'primary',
     rationale: 'Challenger failed.',
     terminalReason: 'challenger_challenge_aborted',
@@ -653,6 +663,8 @@ test('forfeit builders use null scores and explicit completion metadata', () => 
   assert.equal(forfeit.primaryCompleted, true);
   assert.equal(forfeit.challengerCompleted, false);
   assert.equal(forfeit.armFailures?.[0].faultClass, 'selection-fault');
+  assert.equal(forfeit.primaryHarnessId, 'e'.repeat(64));
+  assert.equal(forfeit.challengerHarnessId, 'f'.repeat(64));
 
   const doubleForfeit = buildDoubleForfeitComparison({
     challengePairId: 'HOK-2778',
@@ -660,6 +672,8 @@ test('forfeit builders use null scores and explicit completion metadata', () => 
     challengerModel: 'glm-5.2',
     primaryPrUrl: 'https://github.com/unknown/unknown/pull/0',
     challengerPrUrl: 'https://github.com/unknown/unknown/pull/0',
+    primaryHarnessId: '1'.repeat(64),
+    challengerHarnessId: '2'.repeat(64),
     rationale: 'Both failed.',
     terminalReason: 'both_challenge_aborted',
   });
@@ -667,6 +681,8 @@ test('forfeit builders use null scores and explicit completion metadata', () => 
   assert.equal(doubleForfeit.challengerEvalScore, null);
   assert.equal(doubleForfeit.primaryCompleted, false);
   assert.equal(doubleForfeit.challengerCompleted, false);
+  assert.equal(doubleForfeit.primaryHarnessId, '1'.repeat(64));
+  assert.equal(doubleForfeit.challengerHarnessId, '2'.repeat(64));
 });
 
 // ────────────────────────────────────────────────────────────────
