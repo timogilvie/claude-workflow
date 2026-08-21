@@ -105,6 +105,27 @@ function readBacklogFile(path: string): BacklogRecord[] {
   }
 }
 
+function plannerInputMissing(message: string): Error {
+  return new Error(`planner_input_missing: ${message}`);
+}
+
+function readBacklogStdin(): BacklogRecord[] {
+  let raw: string;
+  try {
+    raw = readFileSync(0, 'utf8');
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    const codeLabel = code ? ` (${code})` : '';
+    throw plannerInputMissing(`failed to read stdin${codeLabel}: ${(error as Error).message}`);
+  }
+
+  if (raw.trim() === '') {
+    throw plannerInputMissing('stdin was empty');
+  }
+
+  return parseBacklogJson(raw, 'stdin');
+}
+
 function toCacheTask(record: BacklogRecord): FingerprintableTask {
   return {
     id: record.id,
@@ -177,7 +198,7 @@ runTool({
     const records = args['backlog-file']
       ? readBacklogFile(args['backlog-file'])
       : args.stdin
-      ? parseBacklogJson(readFileSync(0, 'utf8'), 'stdin')
+      ? readBacklogStdin()
       : await loadBacklogFromLinear(args.project);
     const fingerprintTasks = records.map(toCacheTask);
     let cacheBeforePrune: CacheFile | undefined = undefined;

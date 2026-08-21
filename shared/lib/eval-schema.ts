@@ -133,6 +133,10 @@
  *   remediation, override, and lifecycle timing fields (HOK-2607).
  * - **1.38.0**: Added `recovery` intervention type for operator-recorded
  *   recovery interventions (HOK-2766).
+ * - **1.39.0**: Added optional top-level `challengeStage` on eval records
+ *   and `missing_challenge_stage` eligibility diagnostics so challenge pairs
+ *   can be stratified by evidenced stage without defaulting unknowns to
+ *   implementation (HOK-2797).
  *
  * @module eval-schema
  */
@@ -146,9 +150,10 @@ import type {
   InvalidChallengeReason,
 } from './challenge-execution-contract.ts';
 import type { ChallengeRoutingMeta } from './challenge-comparison.ts';
+import type { ChallengeStage } from './challenge-mode.ts';
 
 /** Current eval schema version for newly emitted records. */
-export const SCHEMA_VERSION = '1.38.0';
+export const SCHEMA_VERSION = '1.39.0';
 
 export type RoutingRole = 'planner' | 'coder' | 'reviewer';
 
@@ -521,6 +526,7 @@ export type InterventionSeverity = 'low' | 'med' | 'high';
  *
  * @since 1.14.0
  * @since 1.30.0 added missing_feature_outcome, invalid_feature_outcome, failed_feature_outcome
+ * @since 1.39.0 added missing_challenge_stage
  */
 export type EligibilityErrorCode =
   | 'missing_routing'
@@ -532,7 +538,8 @@ export type EligibilityErrorCode =
   | 'missing_model_identity'
   | 'missing_feature_outcome'
   | 'invalid_feature_outcome'
-  | 'failed_feature_outcome';
+  | 'failed_feature_outcome'
+  | 'missing_challenge_stage';
 
 // ────────────────────────────────────────────────────────────────
 // Feature Outcome Diagnostics (HOK-2262)
@@ -1142,6 +1149,8 @@ export interface PlanCritique {
 
 export type ChallengeEvalStage = 'plan' | 'review';
 
+export type EvalRecordChallengeStage = ChallengeStage | 'unrecoverable';
+
 export type ChallengeStageEvalProvenance = 'direct' | 'inferred';
 
 export interface ChallengeStageEvidenceItem {
@@ -1702,6 +1711,16 @@ export interface EvalRecord {
 
   /** Side within a challenge pair, used to bind intent to evidence. */
   challengeSide?: 'primary' | 'challenger';
+
+  /**
+   * Which workflow stage the challenge pair varied (plan | implementation |
+   * review), or `unrecoverable` when historical backfill could not establish
+   * a stage from evidence. Written at pair creation from the challenge
+   * execution intent for new records.
+   *
+   * @since 1.39.0
+   */
+  challengeStage?: EvalRecordChallengeStage;
 
   /** Pull request URL, if the task produced a PR */
   prUrl?: string;

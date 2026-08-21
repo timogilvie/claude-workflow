@@ -205,6 +205,9 @@
       ],
       "description": "Side within a challenge pair, used to bind intent to evidence."
     },
+    "challengeStage": {
+      "$ref": "#/$defs/EvalRecordChallengeStage"
+    },
     "challengeIntent": {
       "$ref": "#/$defs/ChallengeExecutionIntent"
     },
@@ -367,7 +370,8 @@
         "missing_model_identity",
         "missing_feature_outcome",
         "invalid_feature_outcome",
-        "failed_feature_outcome"
+        "failed_feature_outcome",
+        "missing_challenge_stage"
       ],
       "description": "Primary stable reason why the record is ineligible for budget-eval export."
     },
@@ -385,7 +389,8 @@
           "missing_model_identity",
           "missing_feature_outcome",
           "invalid_feature_outcome",
-          "failed_feature_outcome"
+          "failed_feature_outcome",
+          "missing_challenge_stage"
         ]
       },
       "description": "Stable machine-readable reasons why the record is ineligible for exports."
@@ -2531,6 +2536,15 @@
         "plan",
         "implementation",
         "review"
+      ]
+    },
+    "EvalRecordChallengeStage": {
+      "type": "string",
+      "enum": [
+        "plan",
+        "implementation",
+        "review",
+        "unrecoverable"
       ]
     },
     "ChallengeValidity": {

@@ -780,7 +780,44 @@ function validPromptSizeDiagnostic() {
 }
 
 test('SCHEMA_VERSION is bumped for eval schema updates', () => {
-  assert.equal(SCHEMA_VERSION, '1.38.0');
+  assert.equal(SCHEMA_VERSION, '1.39.0');
+});
+
+test('Record with top-level challengeStage validates', () => {
+  const record = {
+    ...scenarios[0].record,
+    challengeStage: 'plan',
+  } as unknown as Record<string, unknown>;
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
+test('Record with unrecoverable top-level challengeStage validates', () => {
+  const record = {
+    ...scenarios[0].record,
+    challengeStage: 'unrecoverable',
+  } as unknown as Record<string, unknown>;
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
+test('Rejects invalid top-level challengeStage', () => {
+  const record = {
+    ...scenarios[0].record,
+    challengeStage: 'coding',
+  } as unknown as Record<string, unknown>;
+  const result = validateAgainstSchema(record);
+  assert.ok(!result.valid, 'Should be invalid');
+  assert.ok(result.errors.some((error) => error.includes('challengeStage')));
+});
+
+test('missing_challenge_stage eligibility error validates', () => {
+  const record = {
+    ...scenarios[0].record,
+    eligibilityErrors: ['missing_challenge_stage'],
+  } as unknown as Record<string, unknown>;
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
 });
 
 test('Record with native workflow cost attribution validates', () => {
@@ -1659,6 +1696,7 @@ test('Eligibility fields validate and schema stays in parity', () => {
     'missing_feature_outcome',
     'invalid_feature_outcome',
     'failed_feature_outcome',
+    'missing_challenge_stage',
   ]);
   assert.equal(properties.enrichmentDiagnostics?.type, 'array');
   assert.equal(properties.enrichmentDiagnostics?.items?.type, 'string');
@@ -2091,8 +2129,8 @@ test('Wavemill router fields validate and schema stays in parity', () => {
   assert.equal(properties.wavemill_router_scoring?.$ref, '#/$defs/WavemillRouterScoringMetadata');
 });
 
-test('Schema version constant is 1.38.0', () => {
-  assert.equal(SCHEMA_VERSION, '1.38.0');
+test('Schema version constant is 1.39.0', () => {
+  assert.equal(SCHEMA_VERSION, '1.39.0');
 });
 
 test('Record with resolved-model routing validates', () => {

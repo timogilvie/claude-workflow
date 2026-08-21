@@ -219,7 +219,7 @@ test('resolver writes a double-forfeit when both sides exhausted eval hard-failu
 });
 
 test('resolver unblocks the surviving PR in applyChallengePairGates', async () => {
-  const { repoDir, cleanup } = setupRepoDir();
+  const { repoDir, cleanup } = setupRepoDir({ challenge: { autoMergeWinner: true } });
   try {
     writeWorkflowState(repoDir, {
       HOK_1: {
@@ -425,7 +425,7 @@ test('resolver writes double-forfeit when both aborted arms have no completed ev
 });
 
 test('resolver and gate agree on aborted pair reason and unblock after resolution', async () => {
-  const { repoDir, cleanup } = setupRepoDir();
+  const { repoDir, cleanup } = setupRepoDir({ challenge: { autoMergeWinner: true } });
   try {
     writeWorkflowState(repoDir, {
       HOK_1: {
@@ -473,7 +473,7 @@ test('resolver and gate agree on aborted pair reason and unblock after resolutio
   }
 });
 test('resolver treats a removed primary with stale refs as orphan-sibling', async () => {
-  const { repoDir, cleanup } = setupRepoDir();
+  const { repoDir, cleanup } = setupRepoDir({ challenge: { autoMergeWinner: true } });
   try {
     writeWorkflowState(repoDir, {
       HOK_1_c: {
@@ -512,7 +512,6 @@ test('resolver treats a removed primary with stale refs as orphan-sibling', asyn
           'task/challenge-intent-is-rewritten-challenger',
         ],
         coolOffSeconds: 0,
-        autoMergeWinner: true,
       },
     );
 

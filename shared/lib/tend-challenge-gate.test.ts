@@ -333,7 +333,7 @@ describe('branch sibling detection in applyChallengePairGates', () => {
   });
 
   it('does not let branch detection re-block a resolved winner', async () => {
-    const { repoDir, cleanup } = setupRepoDir();
+    const { repoDir, cleanup } = setupRepoDir({ challenge: { autoMergeWinner: true } });
     try {
       const items = [makeWorkItem({
         number: 101,
@@ -372,7 +372,7 @@ describe('branch sibling detection in applyChallengePairGates', () => {
   });
 
   it('does not re-block a resolved winner when workflow state stores PR numbers as strings', async () => {
-    const { repoDir, cleanup } = setupRepoDir();
+    const { repoDir, cleanup } = setupRepoDir({ challenge: { autoMergeWinner: true } });
     try {
       const items = [makeWorkItem({
         number: 579,
@@ -410,7 +410,7 @@ describe('branch sibling detection in applyChallengePairGates', () => {
   });
 
   it('allows the surviving side through when a terminal forfeit record exists', async () => {
-    const { repoDir, cleanup } = setupRepoDir();
+    const { repoDir, cleanup } = setupRepoDir({ challenge: { autoMergeWinner: true } });
     try {
       const items = [makeWorkItem({
         number: 102,

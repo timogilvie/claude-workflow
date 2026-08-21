@@ -78,6 +78,22 @@ The tool invokes Claude CLI with:
 
 Claude produces a comprehensive task packet following the 9-section structure.
 
+### Preserved Authored Links
+
+Expansion regenerates the Linear description as a task packet. Ordinary handwritten description text, headings, inline links, and notes are not retained unless the generated packet includes them.
+
+To preserve required program links or "read this first" context, put them in a trailing authored-links footer at the very end of the issue description:
+
+```markdown
+---
+## Program Links
+
+- [Program brief](https://example.com/brief)
+- [Plan of record](https://example.com/plan)
+```
+
+The footer must start with a horizontal rule (`---`) immediately followed by a level-two heading (`## ...`) whose text contains `links`, for example `## Program Links` or `## Links & Context`. Wavemill removes that footer before expansion, then copies it verbatim to the end of the generated packet. Malformed, non-trailing, or differently headed blocks are not preserved.
+
 ### 4) Quality Validation
 
 The expanded content goes through validation:

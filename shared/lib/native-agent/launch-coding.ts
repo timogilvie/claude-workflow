@@ -446,9 +446,12 @@ function buildNoCompletionRecoveryPrompt(tracker: MutationFailureTracker): strin
       last.diagnostics ? `Diagnostics: ${JSON.stringify(last.diagnostics, null, 2)}` : '',
     ].filter(Boolean).join('\n')
     : 'No structured last mutation-tool error was recorded.';
+  const incident = last
+    ? 'The previous coding turn stopped normally without writing .coding-complete or .coding-blocked-completion.json after a mutation tool failure.'
+    : 'The previous coding turn stopped normally without writing .coding-complete or .coding-blocked-completion.json. It may have produced no actionable tool calls or stopped before creating the required artifact.';
 
   return [
-    'The previous coding turn stopped normally without writing .coding-complete or .coding-blocked-completion.json after a mutation tool failure.',
+    incident,
     '',
     lastError,
     '',
@@ -903,7 +906,6 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
     if (
       result.stopReason === 'stop'
       && !hasCompletionArtifact(featureDir)
-      && mutationFailureTracker.count > 0
     ) {
       recoveryAttempted = true;
       // Log session_resume and approval events for recovery attempt
@@ -911,17 +913,21 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
         if (persistentSessionStreamWriter) {
           persistentSessionStreamWriter.writeApproval({
             stage: 'ready',
-            notes: 'recovery: implicit approval to retry after mutation failure',
+            notes: mutationFailureTracker.count > 0
+              ? 'recovery: implicit approval to retry after mutation failure'
+              : 'recovery: implicit approval to retry after no completion artifact',
           });
           persistentSessionStreamWriter.writeSessionResume({
-            reason: 'recovery: no completion artifact after mutation failure',
+            reason: mutationFailureTracker.count > 0
+              ? 'recovery: no completion artifact after mutation failure'
+              : 'recovery: no completion artifact after normal stop',
           });
         }
       } catch (error) {
         console.warn(`Failed to log recovery events: ${(error as Error).message}`);
       }
 
-      writeHookStatus(hookPath, 'working', 'native_coding_recovery', 'no completion artifact after mutation failure', 'native');
+      writeHookStatus(hookPath, 'working', 'native_coding_recovery', 'no completion artifact after normal stop', 'native');
       context.messages = [
         ...result.messages,
         {

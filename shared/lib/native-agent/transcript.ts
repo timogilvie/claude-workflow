@@ -10,8 +10,9 @@
  *
  * - `rawContent`: all content blocks (text, thinking, tool_call) with the
  *   provider-level `raw` payload stripped. Use for debugging and auditing.
- * - `replayContent`: thinking blocks removed; only text and tool_call blocks
- *   remain. Use for context reconstruction in future resume/compaction work.
+ * - `replayContent`: replay-safe text, thinking, and tool_call blocks with
+ *   provider raw payloads stripped. Use for context reconstruction in future
+ *   resume/compaction work.
  *
  * Later epics that compact sessions for replay should consume `replayContent`
  * directly rather than re-deriving it from `rawContent`.
@@ -79,6 +80,7 @@ export type TranscriptRawContentBlock =
 
 export type TranscriptReplayContentBlock =
   | { type: 'text'; text: string }
+  | { type: 'thinking'; thinking: string; thinkingSignature?: string; redacted?: boolean }
   | { type: 'tool_call'; id: string; name: string; arguments: Record<string, unknown> };
 
 export interface TranscriptUsage {
@@ -106,7 +108,7 @@ export interface TranscriptAssistantMessage extends TranscriptEventBase {
   usage?: TranscriptUsage;
   /** Raw history: all content blocks, provider payload stripped. */
   rawContent: TranscriptRawContentBlock[];
-  /** Replay history: thinking removed, compact for context reconstruction. */
+  /** Replay history: replay-safe content for context reconstruction. */
   replayContent: TranscriptReplayContentBlock[];
   redacted: boolean;
 }
@@ -216,6 +218,14 @@ function extractReplayContent(message: AssistantMessage): TranscriptReplayConten
   for (const block of message.content) {
     if (block.type === 'text') {
       blocks.push({ type: 'text', text: redactSecrets(block.text).text });
+    } else if (block.type === 'thinking') {
+      const tb: TranscriptReplayContentBlock & { type: 'thinking' } = {
+        type: 'thinking',
+        thinking: redactSecrets(block.thinking).text,
+      };
+      if (block.thinkingSignature !== undefined) tb.thinkingSignature = block.thinkingSignature;
+      if (block.redacted !== undefined) tb.redacted = block.redacted;
+      blocks.push(tb);
     } else if (block.type === 'toolCall') {
       blocks.push({
         type: 'tool_call',
@@ -224,7 +234,6 @@ function extractReplayContent(message: AssistantMessage): TranscriptReplayConten
         arguments: redactSecretsInValue(block.arguments as Record<string, unknown>).value as Record<string, unknown>,
       });
     }
-    // thinking blocks are intentionally omitted from replay content
   }
   return blocks;
 }

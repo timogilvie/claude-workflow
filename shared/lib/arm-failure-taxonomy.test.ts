@@ -21,6 +21,11 @@ test('classifies the incident failure kinds into the intended fault classes', ()
     failureKind: 'native-provider-error',
     detail: 'Stream ended without finish_reason',
   }), 'model-fault');
+
+  assert.equal(classifyArmFault({
+    failureKind: 'empty-model-turn',
+    detail: 'empty-model-turn: model returned reasoning-only turns',
+  }), 'harness-fault');
 });
 
 test('classifies provider and ambiguous failures conservatively', () => {
@@ -33,6 +38,7 @@ test('classifies provider and ambiguous failures conservatively', () => {
 
 test('parses abort failure kinds and quality eligibility', () => {
   assert.equal(parseAbortFailureKind('terminal_stage_failure:tool-use-unsupported'), 'tool-use-unsupported');
+  assert.equal(parseAbortFailureKind('terminal_stage_failure:empty-model-turn'), 'empty-model-turn');
   assert.equal(parseAbortFailureKind('terminal_launch_failure:context-window-exceeded'), 'context-window-exceeded');
   assert.equal(parseAbortFailureKind('varied_model_unresolvable'), 'varied_model_unresolvable');
   assert.equal(parseAbortFailureKind('other'), null);

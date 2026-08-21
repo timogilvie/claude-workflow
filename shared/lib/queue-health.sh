@@ -92,6 +92,11 @@ queue_health_classify_failure() {
     return 0
   fi
 
+  if [[ "$step" == "planner_input_missing" ]]; then
+    echo "planner_input_missing"
+    return 0
+  fi
+
   # Diagnostics setup failure
   if [[ "$step" == "diagnostics_setup_failed" ]]; then
     echo "diagnostics_setup_failed"
