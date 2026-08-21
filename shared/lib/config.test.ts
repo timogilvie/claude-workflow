@@ -45,6 +45,7 @@ import {
   getHokusaiContributionsConfig,
   getProvidersConfig,
   getNativeAgentConfig,
+  getNativeContextManagementConfig,
   getNativeExpansionConfig,
   getNativePatchCodingConfig,
   getReadyConfig,
@@ -2954,6 +2955,52 @@ test('native expansion config defaults to disabled and no fallback', () => {
       enabled: false,
       allowedForExpansion: false,
       fallbackOnUnavailable: false,
+    });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('native context management config defaults and validates overrides', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      nativeAgent: {
+        contextManagement: {
+          compactionThreshold: 0.75,
+          safetyMarginPct: 7,
+          minRetainedToolResults: 6,
+          minOutputTokens: 2048,
+          packetBudgetFraction: 0.4,
+        },
+      },
+    }));
+
+    assert.deepEqual(getNativeContextManagementConfig(tmp), {
+      compactionThreshold: 0.75,
+      safetyMarginPct: 7,
+      minRetainedToolResults: 6,
+      minOutputTokens: 2048,
+      packetBudgetFraction: 0.4,
+    });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('native context management config supplies defaults when omitted', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({}));
+
+    assert.deepEqual(getNativeContextManagementConfig(tmp), {
+      compactionThreshold: 0.80,
+      safetyMarginPct: 5,
+      minRetainedToolResults: 4,
+      minOutputTokens: 1024,
+      packetBudgetFraction: 0.5,
     });
   } finally {
     cleanUp(tmp);

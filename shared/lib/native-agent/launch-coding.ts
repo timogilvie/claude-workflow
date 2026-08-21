@@ -66,6 +66,7 @@ import {
   type CodingFailureValidationError,
 } from './coding-failure-handoff.ts';
 import { updateStageResult } from '../stage-result.ts';
+import { getNativeContextManagementConfig } from '../config.ts';
 import { equivalentOpenRouterModelIds } from '../openrouter-catalog.ts';
 import { logPromptUsage } from '../prompt-registry.ts';
 import type { ResourceRef } from '../resource-registry.ts';
@@ -825,6 +826,7 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
       model,
       context,
       maxTokens: CODING_MAX_OUTPUT_TOKENS,
+      contextManagement: getNativeContextManagementConfig(options.repoDir),
       convertToLlm: (messages) => messages as unknown as Message[],
       signal: options.signal,
       promptSizeLog: options.repoDir ? {

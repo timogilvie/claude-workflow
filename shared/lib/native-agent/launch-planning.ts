@@ -35,7 +35,7 @@ import { updateStageResult } from '../stage-result.ts';
 import {
   equivalentOpenRouterModelIds,
 } from '../openrouter-catalog.ts';
-import { getNativeAgentConfig } from '../config.ts';
+import { getNativeAgentConfig, getNativeContextManagementConfig } from '../config.ts';
 import {
   resolveNativePlanningLimits,
   toLoopBudget,
@@ -645,6 +645,7 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
     const result = await runWavemillLoop({
       model,
       context,
+      contextManagement: getNativeContextManagementConfig(options.repoDir),
       convertToLlm: (messages) => messages as unknown as Message[],
       afterToolCall: gitAfterToolCall,
       signal: options.signal,

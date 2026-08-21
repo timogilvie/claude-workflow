@@ -6,6 +6,7 @@ import type { ModelRegistry } from '../model-registry.ts';
 import { registerScriptedPiProvider, type ScriptedProviderContext } from './provider.ts';
 import { runWavemillLoop, HEARTBEAT_AGENT, type HeartbeatEvent, type WavemillLoopConfig } from './loop.ts';
 import {
+  ContextExhaustedError,
   ContextWindowExceededError,
   ContextWindowUnverifiableError,
 } from './context-window-guard.ts';
@@ -24,6 +25,10 @@ function uniqueApi(prefix = 'loop-test') {
 /** Minimal Pi-compatible user message for context. */
 function userMsg(text: string) {
   return { role: 'user' as const, content: text, timestamp: 0 };
+}
+
+function textForTokens(tokens: number): string {
+  return 'x'.repeat(tokens * 4);
 }
 
 /** Minimal AgentContext for tests. */
@@ -1090,6 +1095,118 @@ describe('loop — replay compaction', () => {
 
     const replayToolResult = secondTurnMessages!.find((m: any) => m.role === 'tool_result') as any;
     assert.equal(replayToolResult.content[0].content[0].text, rawToolOutput);
+  });
+});
+
+describe('loop — in-session context management', () => {
+  it('shrinks maxTokens for the initial request as input approaches the window', async () => {
+    const api = uniqueApi('dynamic-output');
+    const seen: ScriptedProviderContext[] = [];
+    registerScriptedPiProvider({
+      api,
+      turns: (ctx) => {
+        seen.push(ctx);
+        return { content: [{ type: 'text', text: 'Done' }], stopReason: 'stop' };
+      },
+    });
+
+    const result = await runWavemillLoop({
+      ...baseConfig(api),
+      model: { id: 'windowed', api, provider: 'test-provider', contextWindow: 100_000 },
+      context: {
+        systemPrompt: '',
+        messages: [userMsg(textForTokens(85_000))],
+        tools: [],
+      },
+      maxTokens: 32_768,
+      contextManagement: {
+        safetyMarginPct: 5,
+        minOutputTokens: 1_024,
+      },
+    });
+
+    assert.equal(result.stopReason, 'stop');
+    assert.equal(seen[0]?.options?.maxTokens, 9_996);
+  });
+
+  it('compacts accumulated tool results before the provider request and continues', async () => {
+    const rawToolOutput = 'raw-context-growth-'.repeat(500);
+    const tool = makeTool('read_file', 'parallel', async () => rawToolOutput);
+    const api = uniqueApi('context-compact-continues');
+    let secondTurnMessages: unknown[] | undefined;
+
+    registerScriptedPiProvider({
+      api,
+      turns: (ctx: ScriptedProviderContext) => {
+        if (ctx.sawToolResults) {
+          secondTurnMessages = ctx.messages as unknown[];
+          return { content: [{ type: 'text', text: 'Done' }], stopReason: 'stop' };
+        }
+        return {
+          content: [{ type: 'tool_call', id: 'read-big', name: 'read_file', arguments: {} }],
+          stopReason: 'tool_calls',
+        };
+      },
+    });
+
+    const result = await runWavemillLoop({
+      model: { id: 'windowed', api, provider: 'test-provider', contextWindow: 3_000 },
+      context: makeContext([tool]),
+      convertToLlm: piIdentity,
+      maxTokens: 256,
+      contextManagement: {
+        compactionThreshold: 0.8,
+        safetyMarginPct: 0,
+        minRetainedToolResults: 0,
+        minOutputTokens: 64,
+      },
+    });
+
+    assert.equal(result.stopReason, 'stop');
+    assert.ok(secondTurnMessages, 'second provider turn must receive compacted replay messages');
+    const replayToolResult = secondTurnMessages!.find((m: any) => m.role === 'tool_result') as any;
+    assert.match(replayToolResult.content[0].content[0].text, /^\[Compacted: read_file result dropped;/);
+    const canonicalToolResult = result.messages.find((m: any) => m.role === 'toolResult') as any;
+    assert.equal(canonicalToolResult.content[0].text, rawToolOutput);
+  });
+
+  it('throws ContextExhaustedError when retained context still cannot fit', async () => {
+    const tool = makeTool('read_file', 'parallel', async () => 'oversize-'.repeat(1_500));
+    const api = uniqueApi('context-exhausted');
+
+    registerScriptedPiProvider({
+      api,
+      turns: (ctx: ScriptedProviderContext) => {
+        if (ctx.sawToolResults) {
+          return { content: [{ type: 'text', text: 'unreachable' }], stopReason: 'stop' };
+        }
+        return {
+          content: [{ type: 'tool_call', id: 'read-retained', name: 'read_file', arguments: {} }],
+          stopReason: 'tool_calls',
+        };
+      },
+    });
+
+    await assert.rejects(
+      () => runWavemillLoop({
+        model: { id: 'windowed', api, provider: 'test-provider', contextWindow: 2_200 },
+        context: makeContext([tool]),
+        convertToLlm: piIdentity,
+        maxTokens: 256,
+        contextManagement: {
+          compactionThreshold: 0.8,
+          safetyMarginPct: 0,
+          minRetainedToolResults: 1,
+          minOutputTokens: 128,
+        },
+      }),
+      (error) => {
+        assert.ok(error instanceof ContextExhaustedError);
+        assert.equal(error.diagnostic.droppedCount, 0);
+        assert.equal(error.diagnostic.handoff.stopAfterTurn, 1);
+        return true;
+      },
+    );
   });
 });
 

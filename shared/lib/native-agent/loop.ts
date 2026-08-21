@@ -16,13 +16,16 @@ import { SessionStreamWriter, type SessionStreamWriterOptions, storeArtifact } f
 
 // Re-export the Pi agent context type through the loop seam so loop callers can
 // construct an AgentContext without importing Pi vendor packages directly.
-export type { AgentContext } from '@earendil-works/pi-agent-core';
+export type { AgentContext, AgentMessage } from '@earendil-works/pi-agent-core';
 import { computeModelCost, type ModelPricing } from '../workflow-cost.ts';
 import type { ModelRegistry } from '../model-registry.ts';
 import { appendPromptSizeSample, type PromptSizeSample } from './prompt-size-log.ts';
 import { assertToolCompat } from './tool-compat-validator.ts';
 import {
   assertPromptFitsContextWindow,
+  ContextExhaustedError,
+  evaluateContextWindow,
+  estimatePromptTokens,
   resolveContextWindowLimit,
   ContextWindowUnverifiableError,
   type ContextWindowLimit,
@@ -33,7 +36,8 @@ import {
   type ReplayCompactionOptions,
 } from './compaction.ts';
 import { buildTrustMetadata } from './provenance.ts';
-import { DEFAULT_MAX_OUTPUT_TOKENS } from './output-limits.ts';
+import { computeDynamicMaxTokens, DEFAULT_MAX_OUTPUT_TOKENS } from './output-limits.ts';
+import { compactTranscript } from './transcript-compactor.ts';
 import { toProviderRequestModelId, type ProviderModelConfig } from './provider.ts';
 import { evaluateBeforeToolCallPolicy, type ToolPolicyConfig } from './tools/policies.ts';
 import { redactSecrets, redactSecretsInValue } from './tools/redaction.ts';
@@ -174,6 +178,7 @@ export interface WavemillLoopConfig {
   compaction?: ReplayCompactionOptions;
   /** Receives metadata for replay compaction events emitted by transformContext. */
   onCompactionEvents?: (events: ReplayCompactionEvent[]) => void;
+  contextManagement?: NativeContextManagementConfig;
   /** Required when `budget.maxCostUsd` is set; used to compute turn cost. */
   modelPricing?: ModelPricing;
   /** Optional registry override for tool compatibility validation. */
@@ -185,6 +190,20 @@ export interface WavemillLoopConfig {
   /** Optional session event stream configuration. When provided, session provenance
    *  events are recorded alongside the transcript. */
   sessionStreamConfig?: SessionStreamConfig;
+}
+
+export interface NativeContextManagementConfig {
+  compactionThreshold?: number;
+  safetyMarginPct?: number;
+  minRetainedToolResults?: number;
+  minOutputTokens?: number;
+}
+
+interface ResolvedNativeContextManagementConfig {
+  compactionThreshold: number;
+  safetyMarginPct: number;
+  minRetainedToolResults: number;
+  minOutputTokens: number;
 }
 
 export interface LoopResult {
@@ -334,6 +353,17 @@ function toPiModel(config: ProviderModelConfig, maxTokens: number, contextWindow
   } as unknown as Model<string>;
 }
 
+function resolveContextManagementConfig(
+  config: NativeContextManagementConfig | undefined,
+): ResolvedNativeContextManagementConfig {
+  return {
+    compactionThreshold: config?.compactionThreshold ?? 0.80,
+    safetyMarginPct: config?.safetyMarginPct ?? 5,
+    minRetainedToolResults: config?.minRetainedToolResults ?? 4,
+    minOutputTokens: config?.minOutputTokens ?? 1_024,
+  };
+}
+
 interface ComposedSignal {
   signal: AbortSignal;
   cleanup: () => void;
@@ -387,7 +417,9 @@ function composeAbortSignal(
  */
 export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopResult> {
   const { context, convertToLlm, budget, signal: callerSignal, onHeartbeat, modelPricing, temperature } = config;
-  const maxTokens = resolveMaxOutputTokens(config);
+  const phaseMaxTokens = resolveMaxOutputTokens(config);
+  let currentMaxTokens = phaseMaxTokens;
+  const contextManagement = resolveContextManagementConfig(config.contextManagement);
 
   const startTime = Date.now();
   const composed = composeAbortSignal(callerSignal, budget?.maxWallClockMs);
@@ -495,15 +527,28 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
 
     contextWindowLimit = resolveContextWindowLimit(config.model, config.compatRegistry);
     if (contextWindowLimit) {
+      const preflightEstimate = estimatePromptTokens({
+        systemPrompt: context.systemPrompt,
+        messages: context.messages,
+        tools: context.tools,
+      });
+      currentMaxTokens = computeDynamicMaxTokens({
+        inputTokens: preflightEstimate.inputTokens,
+        contextWindowTokens: contextWindowLimit.limit,
+        phaseCeiling: phaseMaxTokens,
+        minOutputTokens: contextManagement.minOutputTokens,
+        safetyMarginPct: contextManagement.safetyMarginPct,
+      });
       // When replay compaction is configured, this checks the untransformed
       // history, so it is conservative relative to the provider request.
       const estimateResult = assertPromptFitsContextWindow({
         phase: config.toolPolicy?.phase,
         model: config.model,
         context,
-        reservedOutputTokens: maxTokens,
+        reservedOutputTokens: currentMaxTokens,
         registry: config.compatRegistry,
         limit: contextWindowLimit,
+        safetyMargin: contextManagement.safetyMarginPct / 100,
       });
       
       // Log the preflight estimate if prompt size logging is configured
@@ -533,10 +578,10 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
   }
 
   const piConfig: AgentLoopConfig = {
-    model: toPiModel(config.model, maxTokens, contextWindowLimit?.limit),
+    model: toPiModel(config.model, currentMaxTokens, contextWindowLimit?.limit),
     convertToLlm,
     temperature,
-    maxTokens,
+    maxTokens: currentMaxTokens,
 
     shouldStopAfterTurn: async (ctx: ShouldStopAfterTurnContext) => {
       const msg = ctx.message as AssistantMessage;
@@ -797,9 +842,94 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
     },
   };
 
-  if (config.compaction) {
-    piConfig.transformContext = async (messages: AgentMessage[]) => {
-      const result = transformContext(messages, config.compaction!);
+  if (contextWindowLimit) {
+    piConfig.prepareNextTurn = async (ctx) => {
+      const inputTokens = estimatePromptTokens({
+        systemPrompt: context.systemPrompt,
+        messages: ctx.context.messages,
+        tools: context.tools,
+      }).inputTokens;
+      const nextMaxTokens = computeDynamicMaxTokens({
+        inputTokens,
+        contextWindowTokens: contextWindowLimit!.limit,
+        phaseCeiling: phaseMaxTokens,
+        minOutputTokens: contextManagement.minOutputTokens,
+        safetyMarginPct: contextManagement.safetyMarginPct,
+      });
+      if (nextMaxTokens === currentMaxTokens) {
+        return undefined;
+      }
+      currentMaxTokens = nextMaxTokens;
+      piConfig.maxTokens = nextMaxTokens;
+      return {
+        model: toPiModel(config.model, nextMaxTokens, contextWindowLimit!.limit),
+      };
+    };
+  }
+
+  piConfig.transformContext = async (messages: AgentMessage[]) => {
+    let nextMessages = messages;
+    if (contextWindowLimit) {
+      const beforeEstimate = estimatePromptTokens({
+        systemPrompt: context.systemPrompt,
+        messages: nextMessages,
+        tools: context.tools,
+      });
+      const compactionTrigger = Math.floor(contextWindowLimit.limit * contextManagement.compactionThreshold);
+      if (beforeEstimate.inputTokens + currentMaxTokens > compactionTrigger) {
+        const result = compactTranscript(nextMessages, {
+          targetTokens: Math.max(0, compactionTrigger - currentMaxTokens),
+          minRetainedToolResults: contextManagement.minRetainedToolResults,
+          systemPrompt: context.systemPrompt,
+          tools: context.tools,
+        });
+        nextMessages = result.messages;
+        if (result.droppedCount > 0 && sessionStreamWriter) {
+          try {
+            sessionStreamWriter.writeCompaction({
+              strategy: result.strategy,
+              affectedEventCount: result.droppedCount,
+              beforeContextDigest: computeArgsFingerprint(messages),
+              afterContextDigest: computeArgsFingerprint(nextMessages),
+            });
+          } catch (error) {
+            console.warn(`Failed to log compaction event: ${(error as Error).message}`);
+          }
+        }
+
+        const afterEstimate = estimatePromptTokens({
+          systemPrompt: context.systemPrompt,
+          messages: nextMessages,
+          tools: context.tools,
+        });
+        const verdict = evaluateContextWindow({
+          phase: config.toolPolicy?.phase,
+          model: config.model,
+          limit: contextWindowLimit,
+          estimate: afterEstimate,
+          reservedOutputTokens: currentMaxTokens,
+          safetyMargin: contextManagement.safetyMarginPct / 100,
+        });
+        if (!verdict.ok) {
+          throw new ContextExhaustedError(
+            `context-exhausted: compacted native ${config.toolPolicy?.phase ?? 'session'} context to the floor and still exceeded the model context window`,
+            {
+              ...verdict.diagnostic,
+              droppedCount: result.droppedCount,
+              droppedTokensEstimate: result.droppedTokensEstimate,
+              handoff: {
+                transcriptPath: config.sessionStreamConfig?.eventStreamPath,
+                lastCompactionStrategy: result.strategy,
+                stopAfterTurn: turnsCompleted,
+              },
+            },
+          );
+        }
+      }
+    }
+
+    if (config.compaction) {
+      const result = transformContext(nextMessages, config.compaction);
       if (result.events.length > 0) {
         try {
           config.onCompactionEvents?.(result.events);
@@ -809,8 +939,9 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
         }
       }
       return result.messages;
-    };
-  }
+    }
+    return nextMessages;
+  };
 
   let finalMessages: AgentMessage[] = [];
   let loopError: unknown;
@@ -833,7 +964,7 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
               modelId: toProviderRequestModelId(config.model),
               config: {
                 temperature,
-                maxTokens,
+                maxTokens: currentMaxTokens,
               },
               contextDigest: computeArgsFingerprint(context),
               promptRefs: config.sessionStreamConfig?.promptRefs ?? [],
@@ -1000,6 +1131,10 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
     }
   } catch (error) {
     console.warn(`Failed to write session_ended event: ${(error as Error).message}`);
+  }
+
+  if (loopError instanceof ContextExhaustedError) {
+    throw loopError;
   }
 
   return {

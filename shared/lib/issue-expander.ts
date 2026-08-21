@@ -19,7 +19,12 @@ import { detectSubsystems } from './subsystem-detector.ts';
 import { detectDriftForIssue, formatDriftWarning } from './drift-detector.ts';
 import { errorMessage } from './error-utils.ts';
 import { buildScopeConstraintContext, type OperatingMode } from './scope-shrinker.ts';
-import { getNativeExpansionConfig } from './config.ts';
+import {
+  getContextWindowFloorsConfig,
+  getNativeContextManagementConfig,
+  getNativeExpansionConfig,
+} from './config.ts';
+import { estimatePromptTokens } from './native-agent/context-window-guard.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Public API
@@ -231,6 +236,22 @@ export interface ExpandIssueResult {
   native?: NativeExpansionMetadata;
 }
 
+export interface PacketBudgetOptions {
+  targetContextWindowTokens?: number;
+  maxPacketTokens?: number;
+  truncationMarker?: string;
+}
+
+export interface PacketBudgetResult {
+  markdown: string;
+  truncated: boolean;
+  originalTokens: number;
+  retainedTokens: number;
+}
+
+const DEFAULT_PACKET_TARGET_CONTEXT_WINDOW_TOKENS = 128_000;
+const DEFAULT_PACKET_TRUNCATION_MARKER = '\n\n[... truncated for context budget ...]';
+
 interface ExpansionDispatchDecision {
   kind: 'default' | 'native';
   fallbackOnUnavailable: boolean;
@@ -265,6 +286,34 @@ export function resolveExpansionDispatch(repoDir?: string): ExpansionDispatchDec
   return {
     kind: 'native',
     fallbackOnUnavailable: nativeExpansion.fallbackOnUnavailable,
+  };
+}
+
+export function enforcePacketBudget(
+  packetMarkdown: string,
+  options: PacketBudgetOptions = {},
+): PacketBudgetResult {
+  const originalTokens = estimateMarkdownTokens(packetMarkdown);
+  const maxPacketTokens = resolveMaxPacketTokens(options);
+  if (originalTokens <= maxPacketTokens) {
+    return {
+      markdown: packetMarkdown,
+      truncated: false,
+      originalTokens,
+      retainedTokens: originalTokens,
+    };
+  }
+
+  const marker = options.truncationMarker ?? DEFAULT_PACKET_TRUNCATION_MARKER;
+  const skeleton = buildRetainedPacketSkeleton(packetMarkdown);
+  const budgetForBody = Math.max(0, maxPacketTokens - estimateMarkdownTokens(marker));
+  const truncatedBody = truncateMarkdownToTokens(skeleton, budgetForBody);
+  const markdown = `${truncatedBody.trimEnd()}${marker}`;
+  return {
+    markdown,
+    truncated: true,
+    originalTokens,
+    retainedTokens: estimateMarkdownTokens(markdown),
   };
 }
 
@@ -325,7 +374,7 @@ export async function expandIssue(
 
     try {
       const runNativeExpansion = internals.runNativeExpansion ?? nativeModule.runNativeExpansion;
-      return await runNativeExpansion({
+      const result = await runNativeExpansion({
         promptTemplate: options.promptTemplate,
         issueContext: options.issueContext,
         codebaseContext,
@@ -334,6 +383,7 @@ export async function expandIssue(
         issueId: options.issueId,
         env: options.env,
       });
+      return applyPacketBudget(result, repoDir);
     } catch (error) {
       const NativeExpansionUnavailableError = nativeModule.NativeExpansionUnavailableError;
       if (error instanceof NativeExpansionUnavailableError) {
@@ -355,7 +405,83 @@ export async function expandIssue(
     options.claudeCmd,
     mode,
   );
-  return { text };
+  return applyPacketBudget({ text }, repoDir);
+}
+
+function applyPacketBudget(result: ExpandIssueResult, repoDir: string): ExpandIssueResult {
+  const floors = getContextWindowFloorsConfig(repoDir);
+  const contextManagement = getNativeContextManagementConfig(repoDir);
+  const budget = enforcePacketBudget(result.text, {
+    targetContextWindowTokens: floors.coding ?? DEFAULT_PACKET_TARGET_CONTEXT_WINDOW_TOKENS,
+    maxPacketTokens: floors.coding
+      ? Math.floor(floors.coding * contextManagement.packetBudgetFraction)
+      : undefined,
+  });
+  if (!budget.truncated) return result;
+  return { ...result, text: budget.markdown };
+}
+
+function resolveMaxPacketTokens(options: PacketBudgetOptions): number {
+  if (options.maxPacketTokens !== undefined) {
+    validatePositiveInteger(options.maxPacketTokens, 'maxPacketTokens');
+    return options.maxPacketTokens;
+  }
+  const targetContextWindowTokens = options.targetContextWindowTokens ?? DEFAULT_PACKET_TARGET_CONTEXT_WINDOW_TOKENS;
+  validatePositiveInteger(targetContextWindowTokens, 'targetContextWindowTokens');
+  return Math.floor(targetContextWindowTokens * 0.5);
+}
+
+function validatePositiveInteger(value: number, label: string): void {
+  if (!Number.isFinite(value) || !Number.isInteger(value) || value < 1) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+}
+
+function estimateMarkdownTokens(markdown: string): number {
+  return estimatePromptTokens({
+    messages: [{ role: 'user', content: markdown }],
+  }).inputTokens;
+}
+
+function buildRetainedPacketSkeleton(markdown: string): string {
+  const lines = markdown.split('\n');
+  const retained: string[] = [];
+  let coreSectionNumber = 0;
+  let keep = true;
+
+  for (const line of lines) {
+    const headingMatch = /^##\s+/.exec(line);
+    if (headingMatch) {
+      if (/detailed sections/i.test(line)) {
+        keep = true;
+      } else {
+        coreSectionNumber += 1;
+        keep = coreSectionNumber <= 4;
+      }
+    }
+    if (keep) {
+      retained.push(line);
+    }
+  }
+
+  return retained.join('\n').trimEnd();
+}
+
+function truncateMarkdownToTokens(markdown: string, maxTokens: number): string {
+  if (maxTokens <= 0) return '';
+  if (estimateMarkdownTokens(markdown) <= maxTokens) return markdown;
+
+  let low = 0;
+  let high = markdown.length;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if (estimateMarkdownTokens(markdown.slice(0, mid)) <= maxTokens) {
+      low = mid;
+    } else {
+      high = mid - 1;
+    }
+  }
+  return markdown.slice(0, low);
 }
 
 /**

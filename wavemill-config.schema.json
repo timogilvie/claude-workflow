@@ -1200,6 +1200,41 @@
                     },
                     "additionalProperties": false
                 },
+                "contextManagement": {
+                    "type": "object",
+                    "description": "In-session native-agent context tracking, compaction, and packet budgeting controls.",
+                    "properties": {
+                        "compactionThreshold": {
+                            "type": "number",
+                            "minimum": 0.5,
+                            "maximum": 0.95,
+                            "default": 0.8
+                        },
+                        "safetyMarginPct": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 20,
+                            "default": 5
+                        },
+                        "minRetainedToolResults": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "default": 4
+                        },
+                        "minOutputTokens": {
+                            "type": "integer",
+                            "minimum": 128,
+                            "default": 1024
+                        },
+                        "packetBudgetFraction": {
+                            "type": "number",
+                            "minimum": 0.1,
+                            "maximum": 0.9,
+                            "default": 0.5
+                        }
+                    },
+                    "additionalProperties": false
+                },
                 "providers": {
                     "type": "object",
                     "properties": {
