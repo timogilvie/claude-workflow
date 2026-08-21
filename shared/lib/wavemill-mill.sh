@@ -8927,9 +8927,89 @@ ready_failed_check_summary() {
   ' 2>/dev/null
 }
 
+review_result_passes_ready_gate() {
+  local feature_dir="$1"
+  local review_file="$feature_dir/.review-result.json"
+  [[ -f "$review_file" ]] || return 1
+
+  jq -e '
+    (.status == "completed") and (
+      .artifacts as $artifacts
+      | if ($artifacts.type // "") == "review" then
+          $artifacts
+        else
+          ($artifacts.review // {})
+        end
+      | (.exitCode == 0) and
+        (.verdict == "ready") and
+        (.iterations as $iterations | (($iterations | type) == "number" and $iterations >= 1)) and
+        (((.blockerCount // .blockingIssues // .blockingCount) // null) == 0)
+    )
+  ' "$review_file" >/dev/null 2>&1
+}
+
+review_result_summary() {
+  local feature_dir="$1"
+  local review_file="$feature_dir/.review-result.json"
+  if [[ ! -f "$review_file" ]]; then
+    printf '%s\n' "review result missing"
+    return 0
+  fi
+
+  jq -r '
+    . as $root
+    | (.artifacts // {}) as $artifacts
+    | (if ($artifacts.type // "") == "review" then $artifacts else ($artifacts.review // {}) end) as $review
+    | [
+        "status=" + ($root.status // "unknown"),
+        "exitCode=" + (($review.exitCode // "missing") | tostring),
+        "verdict=" + (($review.verdict // "missing") | tostring),
+        "iterations=" + (($review.iterations // "missing") | tostring),
+        "blockers=" + ((($review.blockerCount // $review.blockingIssues // $review.blockingCount // "missing")) | tostring),
+        (if ($review.reviewToolError // "") != "" then "error=" + ($review.reviewToolError | tostring) else empty end)
+      ]
+      | join(", ")
+  ' "$review_file" 2>/dev/null || printf '%s\n' "review result unreadable"
+}
+
+review_artifacts_with_pr_number() {
+  local feature_dir="$1" pr_number="$2"
+  local review_file="$feature_dir/.review-result.json"
+
+  if [[ -f "$review_file" ]]; then
+    jq -c --argjson pr_number "$pr_number" '
+      (.artifacts // {type:"review"}) as $artifacts
+      | if (($artifacts | type) != "object") then
+          {type:"review", prNumber:$pr_number}
+        elif (($artifacts.type // "") == "review") then
+          $artifacts + {type:"review", prNumber:$pr_number}
+        else
+          $artifacts + {review:(($artifacts.review // {}) + {prNumber:$pr_number})}
+        end
+    ' "$review_file" 2>/dev/null && return 0
+  fi
+
+  jq -cn --argjson pr_number "$pr_number" '{type:"review", prNumber:$pr_number}'
+}
+
+strip_ready_label_if_review_not_passed() {
+  local wt_dir="$1" pr_number="$2" feature_dir="$3"
+  review_result_passes_ready_gate "$feature_dir" && return 0
+
+  (cd "$wt_dir" && gh pr edit "$pr_number" --remove-label "wm:ready") >/dev/null 2>&1 || true
+  return 1
+}
+
 set_ready_pass_labels() {
   local wt_dir="$1"
   local pr_number="$2"
+  local feature_dir="${3:-}"
+
+  if [[ -z "$feature_dir" ]]; then
+    feature_dir="$wt_dir/features/$(basename "$wt_dir")"
+  fi
+
+  review_result_passes_ready_gate "$feature_dir" || return 1
 
   (cd "$wt_dir" && npx tsx "$TOOLS_DIR/set-pr-ready-label.ts" "$pr_number")
 }
@@ -9088,6 +9168,15 @@ launch_ready_phase() {
     pending_log_level="info"
   fi
 
+  if ! review_result_passes_ready_gate "$state_dir"; then
+    local review_summary
+    review_summary="$(review_result_summary "$state_dir")"
+    strip_ready_label_if_review_not_passed "$wt_dir" "$pr_number" "$state_dir" || true
+    write_ready_attention_file "$state_dir" "Review verdict does not pass readiness gate for PR #$pr_number ($review_summary)."
+    log_error "  $issue: refusing ready phase for PR #$pr_number; $review_summary"
+    return 1
+  fi
+
   log "$pending_log_level" "  $issue: Launching ready phase (PR #$pr_number)"
 
   if ! cross_pr_revert_gate_allows_merge "$issue" "$state_dir" "$wt_dir" "$pr_number" "$base_branch"; then
@@ -9219,7 +9308,7 @@ launch_ready_phase() {
   if [[ "$ready_rc" -eq 0 ]]; then
     local main_sha completed_artifacts_json label_failed_artifacts_json
     main_sha=$(get_main_head_sha "$wt_dir" "$base_branch")
-    if ! set_ready_pass_labels "$wt_dir" "$pr_number" >/dev/null 2>&1; then
+    if ! set_ready_pass_labels "$wt_dir" "$pr_number" "$state_dir" >/dev/null 2>&1; then
       label_failed_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" \
         "{\"type\":\"ready\",\"verdict\":\"${verdict:-unknown}\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"prNumber\":${pr_number},\"readyLabelsUpdated\":false,\"readyBaseSha\":\"${main_sha}\"}" \
         "candidate-progress")
@@ -13761,7 +13850,9 @@ monitor_issue_state() {
         inject_depends_on_pr_block "$ISSUE" "$PR" "$depends_on_pr_meta"
       fi
 
-      write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "" "PR #$PR" "{\"type\":\"review\",\"prNumber\":$PR}"
+      local review_artifacts_json
+      review_artifacts_json="$(review_artifacts_with_pr_number "$FEATURE_DIR" "$PR")"
+      write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "" "PR #$PR" "$review_artifacts_json"
       dispatch_queued_children_for_parent "$ISSUE" "$PR"
       set_task_phase "$ISSUE" "review"
 

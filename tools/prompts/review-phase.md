@@ -11,9 +11,10 @@ The implementation is complete. Your job is to review and create a PR.
    IMPORTANT: This tool calls the Claude API and takes 2-5 minutes. Configure your tool's built-in timeout (for Claude Code's Bash tool: `timeout: 600000` — 600000 ms = 10 minutes) so the call is not killed at the default cap. Do NOT prefix the command with the external `timeout` binary — it is not installed by default on macOS and will fail with `command not found: timeout`.
    npx tsx {{TOOLS_DIR}}/review-changes.ts {{BASE_BRANCH}} --json --operating-mode {{OPERATING_MODE}}
    {{REVIEWER_NOTE}}
+   Track `FINAL_REVIEW_EXIT_CODE`, `REVIEW_ITERATIONS`, final verdict, blocker count, warning count, and any review-tool stderr for the last run.
    - Exit code 0 = review passed → proceed to step 3
    - Exit code 1 = issues found → fix blockers and re-run (step 2)
-   - Exit code 2 = error → log comprehensive diagnostics and proceed to step 3
+   - Exit code 2 = error → log comprehensive diagnostics, record `verdict: "error"`, and proceed to PR creation in step 3 without readiness certification
    The output is structured JSON with verdict, codeReviewFindings, and optional uiFindings.
 
    When exit code 2 occurs, you MUST log the following diagnostics to help debug the failure:
@@ -30,7 +31,7 @@ The implementation is complete. Your job is to review and create a PR.
    - Base branch exists: $(git rev-parse --verify {{BASE_BRANCH}} 2>&1 || echo "NOT FOUND")
    - STDERR output: [paste the actual stderr from the failed command]
 
-   Proceeding to PR creation per instructions.
+   Proceeding to PR creation without `wm:ready` per instructions.
    ```
    This diagnostic information is CRITICAL for debugging recurring tool failures.
 
@@ -76,7 +77,29 @@ The implementation is complete. Your job is to review and create a PR.
    If the `wm:ready` label does not exist in this repository, note it in the PR body and proceed.
    Do NOT add `wm:ready` if:
    - The self-review found unresolved blockers (exit code 1)
+   - The final self-review run errored (exit code 2) or did not produce a trustworthy verdict
    - The workflow is in survival/constrained mode and confidence is low
+
+4. **Record final review evidence** in `{{FEATURE_DIR}}/.review-result.json` after PR creation.
+   Use `tools/stage-result-cli.ts` to update the review stage with explicit final self-review outcome fields. `status: "completed"` only means the review phase produced the PR artifact; it does not mean the review passed.
+   - If the final run exited 0 with verdict `ready` and zero blockers, record `exitCode: 0`, `verdict: "ready"`, `iterations: <count>`, `blockerCount: 0`, and `warningCount`.
+   - If the final run exited 1, record `exitCode: 1`, `verdict: "not_ready"`, `iterations`, `blockerCount`, and `warningCount`.
+   - If the final run exited 2, record `exitCode: 2`, `verdict: "error"`, `iterations`, `blockerCount: 0`, `warningCount: 0`, `reviewToolError`, and `diagnostics`.
+   Example:
+   ```bash
+   REVIEW_ARTIFACTS=$(jq -cn \
+     --argjson pr "$PR_NUMBER" \
+     --argjson exitCode "$FINAL_REVIEW_EXIT_CODE" \
+     --arg verdict "$FINAL_REVIEW_VERDICT" \
+     --argjson iterations "$REVIEW_ITERATIONS" \
+     --argjson blockers "$FINAL_BLOCKER_COUNT" \
+     --argjson warnings "$FINAL_WARNING_COUNT" \
+     '{type:"review",prNumber:$pr,exitCode:$exitCode,verdict:$verdict,iterations:$iterations,blockerCount:$blockers,warningCount:$warnings}')
+   npx tsx {{TOOLS_DIR}}/stage-result-cli.ts update "{{FEATURE_DIR}}" review \
+     --status completed \
+     --notes "PR #$PR_NUMBER created" \
+     --artifacts "$REVIEW_ARTIFACTS"
+   ```
 
 ### Authorship Attribution
 

@@ -75,7 +75,17 @@ function writeReviewResult(featureDir: string, overrides: Partial<StageResult> =
       agent: 'claude',
       model: 'claude-opus-4-6',
       notes: 'Review passed',
-      artifacts: { type: 'review', prNumber: 123, findingsCount: 2, blockingIssues: 0 },
+      artifacts: {
+        type: 'review',
+        prNumber: 123,
+        findingsCount: 2,
+        blockingIssues: 0,
+        exitCode: 0,
+        verdict: 'ready',
+        iterations: 1,
+        blockerCount: 0,
+        warningCount: 2,
+      },
       ...overrides,
     } satisfies StageResult),
     'utf-8',
@@ -664,6 +674,52 @@ test('full happy path produces done phase with readyPassed=true', async () => {
     // 300 + 1500 + 300 = 2100
     assert.ok(typeof state.outcome.durationSeconds === 'number');
     assert.equal(state.outcome.durationSeconds, 2100);
+  } finally {
+    cleanup([featureDir]);
+  }
+});
+
+test('review completion without explicit verdict does not count as reviewPassed', async () => {
+  const featureDir = makeTempDir();
+  try {
+    writeReviewResult(featureDir, {
+      artifacts: { type: 'review', prNumber: 123, findingsCount: 0, blockingIssues: 0 },
+    });
+
+    const state = await deriveFeatureState({ featureDir, issueId: 'HOK-11', slug: 'legacy-review' });
+    const verdict = state.evidence.find((item) => item.kind === 'review_verdict');
+
+    assert.equal(state.outcome.reviewPassed, false);
+    assert.equal(verdict?.status, 'fail');
+    assert.match(verdict?.detail ?? '', /exitCode=missing|review outcome missing/);
+  } finally {
+    cleanup([featureDir]);
+  }
+});
+
+test('review tool error is surfaced as failed review evidence', async () => {
+  const featureDir = makeTempDir();
+  try {
+    writeReviewResult(featureDir, {
+      artifacts: {
+        type: 'review',
+        prNumber: 123,
+        exitCode: 2,
+        verdict: 'error',
+        iterations: 2,
+        blockerCount: 0,
+        warningCount: 0,
+        reviewToolError: 'provider failed',
+      },
+    });
+
+    const state = await deriveFeatureState({ featureDir, issueId: 'HOK-12', slug: 'error-review' });
+    const verdict = state.evidence.find((item) => item.kind === 'review_verdict');
+
+    assert.equal(state.outcome.reviewPassed, false);
+    assert.equal(verdict?.status, 'fail');
+    assert.match(verdict?.detail ?? '', /exitCode=2/);
+    assert.match(verdict?.detail ?? '', /verdict=error/);
   } finally {
     cleanup([featureDir]);
   }

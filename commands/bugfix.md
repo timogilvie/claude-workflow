@@ -88,7 +88,7 @@ This is a REQUIRED step — do not skip it or substitute your own review.
    `npx tsx tools/review-changes.ts main --json`
    - Exit code 0 = review passed → proceed to step 3
    - Exit code 1 = issues found → fix blockers and re-run (step 2)
-   - Exit code 2 = error → log comprehensive diagnostics and proceed to step 3
+   - Exit code 2 = error → log comprehensive diagnostics, record the final verdict as `error`, and proceed to step 3 without readiness certification
    The output is structured JSON with `verdict`, `codeReviewFindings`, and `uiFindings`.
 
    When exit code 2 occurs, you MUST log the following diagnostics to help debug the failure:
@@ -105,7 +105,7 @@ This is a REQUIRED step — do not skip it or substitute your own review.
    - Base branch exists: $(git rev-parse --verify main 2>&1 || echo "NOT FOUND")
    - STDERR output: [paste the actual stderr from the failed command]
 
-   Proceeding to PR creation per instructions.
+   Proceeding to PR creation without `wm:ready` per instructions.
    ```
    This diagnostic information is CRITICAL for debugging recurring tool failures.
 

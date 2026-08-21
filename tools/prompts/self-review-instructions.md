@@ -10,7 +10,7 @@ IMPORTANT: This tool calls the Claude API and takes 2-5 minutes. Configure your 
 
 - Exit code 0 = review passed
 - Exit code 1 = issues found -> fix blockers and re-run
-- Exit code 2 = error -> log comprehensive diagnostics and {{ERROR_FOLLOWUP}}
+- Exit code 2 = error -> log comprehensive diagnostics, record the final verdict as `error`, and {{ERROR_FOLLOWUP}} without certifying readiness
 
 The output is structured JSON with `verdict`, `codeReviewFindings`, and `uiFindings`.
 Each finding in `codeReviewFindings` or `uiFindings` includes `severity`, `location`, `category`, and `description`.
@@ -29,7 +29,7 @@ Diagnostics:
 - Base branch exists: \$(git rev-parse --verify {{BASE_BRANCH}} 2>&1 || echo "NOT FOUND")
 - STDERR output: [paste the actual stderr from the failed command]
 
-Proceeding to {{ERROR_FOLLOWUP}} per instructions.
+Proceeding to {{ERROR_FOLLOWUP}} without readiness certification per instructions.
 ```
 This diagnostic information is CRITICAL for debugging recurring tool failures.
 

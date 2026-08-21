@@ -206,12 +206,22 @@ function networkDeniedResult<T extends ReviewChangesResult | RouteTaskResult>(in
     }),
     at: input.at,
   });
+  const reviewFailure = input.tool === 'review_changes'
+    ? {
+        exitCode: 2,
+        verdict: 'error' as const,
+        iterations: 1,
+        blockerCount: 0,
+        warningCount: 0,
+      }
+    : {};
   return {
     ok: false,
     tool: input.tool,
     error: 'policy_denied',
     message: `Network access denied for ${input.tool} in ${input.phase} phase: ${input.diagnostics.reason}`,
     diagnostics: input.diagnostics,
+    ...reviewFailure,
   } as T;
 }
 
@@ -303,6 +313,11 @@ export async function executeReviewChanges(
       tool: 'review_changes',
       error: 'policy_denied',
       message: policy.reason,
+      exitCode: 2,
+      verdict: 'error',
+      iterations: 1,
+      blockerCount: 0,
+      warningCount: 0,
       metadata: { trust: buildTrustMetadata({ sourceKind: 'wavemill_artifact', details: policy.reason }) },
     };
     deps.transcript.append({
@@ -358,6 +373,11 @@ export async function executeReviewChanges(
       findings,
       findingCount: counts.findingCount,
       blockingCount: counts.blockingCount,
+      exitCode: 0,
+      verdict: reviewResult.verdict,
+      iterations: 1,
+      blockerCount: counts.blockingCount,
+      warningCount: Math.max(0, counts.findingCount - counts.blockingCount),
       metadata: { trust: buildTrustMetadata({ sourceKind: 'wavemill_artifact', details: findings }) },
     };
     deps.transcript.append({
@@ -386,6 +406,12 @@ export async function executeReviewChanges(
       tool: 'review_changes',
       error: 'review_failed',
       message,
+      exitCode: 2,
+      verdict: 'error',
+      iterations: 1,
+      blockerCount: 0,
+      warningCount: 0,
+      diagnostics: { error: 'review_failed', message },
       metadata: { trust: buildTrustMetadata({ sourceKind: 'wavemill_artifact', details: message }) },
     };
     deps.transcript.append({

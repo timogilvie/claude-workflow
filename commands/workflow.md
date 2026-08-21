@@ -232,7 +232,7 @@ The review tool auto-detects `reviewBaseCommit` from `selected-task.json` (recor
 1. Run the review tool and capture `REVIEW_EXIT_CODE=${PIPESTATUS[0]}`.
 2. If the command times out (`124`), convert it to exit code `2`.
 3. If exit code is `0`, mark review passed and break.
-4. If exit code is `2`, log the required diagnostics from the canonical template, treat the review as non-blocking, and continue to validation.
+4. If exit code is `2`, log the required diagnostics from the canonical template, record the final verdict as `error`, treat PR/validation continuation as non-blocking, and do not certify readiness.
 5. If exit code is `1`, read the findings JSON, fix blocker findings and straightforward warnings, commit the fixes, then continue to the next iteration.
 
 #### 5. Check Iteration Limit
@@ -266,6 +266,8 @@ Remaining issues found:
 These issues will be surfaced in the validation phase.
 Proceeding to validation to document all findings...
 ```
+
+If the final review run is non-zero, any later PR creation must leave `wm:ready` off. `wm:ready` is valid only when the final self-review run exited 0 with verdict `ready`, at least one iteration recorded, and zero unresolved blockers.
 
 ### 4E. Context Handoff
 All review logs saved to:
