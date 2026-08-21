@@ -1,11 +1,12 @@
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   detectVariedDimensions,
   type ChallengeComparisonDimensions,
   type ChallengeComparison,
+  type ChallengeDiffIdentity,
   type ChallengeRoutingMeta,
   type ChallengeSideExecutionProvenance,
   type ChallengeProvenanceValidation,
@@ -18,6 +19,8 @@ export type PresentationOrder = 'primary-first' | 'challenger-first';
 
 type CandidateLabel = 'Candidate A' | 'Candidate B';
 type CandidateKey = 'A' | 'B';
+
+export const LOSER_PATCH_MAX_BYTES = 10 * 1024 * 1024;
 
 export interface BlindComparisonDimensions {
   completeness: { A: number; B: number };
@@ -116,6 +119,268 @@ export function prUrlFromNumber(pr: string, repoDir: string): string {
 export function prNumberFromValue(pr: string): string {
   const match = pr.match(/\/pull\/(\d+)$/);
   return match?.[1] || pr;
+}
+
+export interface PrIdentityMetadata {
+  url: string;
+  headRefName: string;
+  baseRefName: string;
+  head_sha: string;
+}
+
+export interface DiffIdentityDeps {
+  runGit?: (args: string[]) => string;
+  runGh?: (args: string[]) => string;
+}
+
+function defaultRunGit(repoDir: string, args: string[]): string {
+  try {
+    return execFileSync('git', args, {
+      cwd: repoDir,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+  } catch (error) {
+    throw new Error(`git ${args.join(' ')} failed: ${errorMessage(error)}`);
+  }
+}
+
+function defaultRunGh(repoDir: string, args: string[]): string {
+  try {
+    return execFileSync('gh', args, {
+      cwd: repoDir,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+  } catch (error) {
+    throw new Error(`gh ${args.join(' ')} failed: ${errorMessage(error)}`);
+  }
+}
+
+function gitRunner(repoDir: string, deps?: DiffIdentityDeps): (args: string[]) => string {
+  return deps?.runGit ?? ((args) => defaultRunGit(repoDir, args));
+}
+
+function ghRunner(repoDir: string, deps?: DiffIdentityDeps): (args: string[]) => string {
+  return deps?.runGh ?? ((args) => defaultRunGh(repoDir, args));
+}
+
+function parsePrIdentityMetadata(raw: string, pr: string): PrIdentityMetadata {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`Failed to parse PR metadata for ${pr}: ${errorMessage(error)}`);
+  }
+  const payload = parsed as Record<string, unknown>;
+  const url = typeof payload.url === 'string' ? payload.url.trim() : '';
+  const headRefName = typeof payload.headRefName === 'string' ? payload.headRefName.trim() : '';
+  const baseRefName = typeof payload.baseRefName === 'string' ? payload.baseRefName.trim() : '';
+  const headSha = typeof payload.headRefOid === 'string' ? payload.headRefOid.trim() : '';
+  if (!url || !headRefName || !baseRefName || !headSha) {
+    throw new Error(`Incomplete PR metadata for ${pr}; expected url, headRefName, baseRefName, and headRefOid`);
+  }
+  return {
+    url,
+    headRefName,
+    baseRefName,
+    head_sha: headSha,
+  };
+}
+
+export function resolvePrIdentityMetadata(
+  pr: string,
+  repoDir: string,
+  deps?: DiffIdentityDeps,
+): PrIdentityMetadata {
+  const prNumber = prNumberFromValue(pr);
+  const raw = ghRunner(repoDir, deps)([
+    'pr',
+    'view',
+    prNumber,
+    '--json',
+    'headRefOid,headRefName,baseRefName,url',
+  ]);
+  return parsePrIdentityMetadata(raw, pr);
+}
+
+function hasCommit(runGit: (args: string[]) => string, sha: string): boolean {
+  try {
+    runGit(['cat-file', '-e', `${sha}^{commit}`]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function ensureLocalComparisonObjects(input: {
+  prNumber: string;
+  metadata: PrIdentityMetadata;
+  forkCommit?: string | null;
+  runGit: (args: string[]) => string;
+}): void {
+  const baseRef = `refs/remotes/origin/${input.metadata.baseRefName}`;
+  input.runGit([
+    'fetch',
+    '--no-tags',
+    '--depth=1000',
+    'origin',
+    `+refs/heads/${input.metadata.baseRefName}:${baseRef}`,
+  ]);
+  if (!hasCommit(input.runGit, input.metadata.head_sha)) {
+    input.runGit([
+      'fetch',
+      '--no-tags',
+      '--depth=1000',
+      'origin',
+      `+refs/pull/${input.prNumber}/head:refs/remotes/origin/pr/${input.prNumber}`,
+    ]);
+  }
+  if (!hasCommit(input.runGit, input.metadata.head_sha)) {
+    throw new Error(`PR ${input.prNumber} head commit is not available locally: ${input.metadata.head_sha}`);
+  }
+  if (input.forkCommit && !hasCommit(input.runGit, input.forkCommit)) {
+    throw new Error(`Fork commit is not available locally for PR ${input.prNumber}: ${input.forkCommit}`);
+  }
+}
+
+function parseDiffFilePath(line: string): string | undefined {
+  if (line === '+++ /dev/null') return undefined;
+  if (!line.startsWith('+++ b/')) return undefined;
+  return line.slice('+++ b/'.length).replace(/\t.*$/, '');
+}
+
+export function parseUnifiedDiffLineRanges(diff: string): ChallengeDiffIdentity['line_ranges'] {
+  const ranges: ChallengeDiffIdentity['line_ranges'] = [];
+  let currentFile: string | undefined;
+  for (const line of diff.split(/\r?\n/)) {
+    if (line.startsWith('+++ ')) {
+      currentFile = parseDiffFilePath(line);
+      continue;
+    }
+    const hunk = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/);
+    if (!hunk || !currentFile) continue;
+    const start = Number.parseInt(hunk[1], 10);
+    const count = hunk[2] === undefined ? 1 : Number.parseInt(hunk[2], 10);
+    if (!Number.isFinite(start) || !Number.isFinite(count) || count <= 0) continue;
+    ranges.push({
+      file: currentFile,
+      start,
+      end: start + count - 1,
+    });
+  }
+  return ranges;
+}
+
+export function buildDiffIdentity(input: {
+  metadata: PrIdentityMetadata;
+  merge_sha: string;
+  nameOnlyDiff: string;
+  unifiedDiff: string;
+}): ChallengeDiffIdentity {
+  return {
+    head_sha: input.metadata.head_sha,
+    merge_sha: input.merge_sha,
+    files_touched: input.nameOnlyDiff.split(/\r?\n/).map((line) => line.trim()).filter(Boolean),
+    line_ranges: parseUnifiedDiffLineRanges(input.unifiedDiff),
+  };
+}
+
+export function resolvePrDiffIdentity(input: {
+  pr: string;
+  repoDir: string;
+  forkCommit?: string | null;
+  deps?: DiffIdentityDeps;
+}): ChallengeDiffIdentity {
+  const runGit = gitRunner(input.repoDir, input.deps);
+  const prNumber = prNumberFromValue(input.pr);
+  const metadata = resolvePrIdentityMetadata(input.pr, input.repoDir, input.deps);
+  ensureLocalComparisonObjects({
+    prNumber,
+    metadata,
+    forkCommit: input.forkCommit,
+    runGit,
+  });
+  const mergeSha = input.forkCommit
+    || runGit(['merge-base', `refs/remotes/origin/${metadata.baseRefName}`, metadata.head_sha]);
+  const nameOnlyDiff = runGit(['diff', '--name-only', mergeSha, metadata.head_sha]);
+  const unifiedDiff = runGit(['diff', '--unified=0', mergeSha, metadata.head_sha]);
+  return buildDiffIdentity({
+    metadata,
+    merge_sha: mergeSha,
+    nameOnlyDiff,
+    unifiedDiff,
+  });
+}
+
+export interface LoserPatchRetentionResult {
+  path: string;
+  written: boolean;
+  bytes: number;
+  skippedReason?: 'missing_identity' | 'too_large';
+}
+
+export interface LoserPatchRetentionDeps {
+  readPatch?: (args: string[], maxBytes: number) => Buffer | 'too_large';
+}
+
+function defaultReadPatch(repoDir: string, args: string[], maxBytes: number): Buffer | 'too_large' {
+  const result = spawnSync('git', args, {
+    cwd: repoDir,
+    encoding: 'buffer',
+    maxBuffer: maxBytes + 1,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  const spawnErrorCode = (result.error as NodeJS.ErrnoException | undefined)?.code;
+  if (result.error && (result.error.message.includes('maxBuffer') || spawnErrorCode === 'ENOBUFS')) {
+    return 'too_large';
+  }
+  if (result.error) {
+    throw new Error(`git ${args.join(' ')} failed: ${result.error.message}`);
+  }
+  if (result.status !== 0) {
+    const stderr = Buffer.isBuffer(result.stderr) ? result.stderr.toString('utf-8').trim() : '';
+    throw new Error(`git ${args.join(' ')} failed${stderr ? `: ${stderr}` : ''}`);
+  }
+  const stdout = Buffer.isBuffer(result.stdout) ? result.stdout : Buffer.from(result.stdout ?? '');
+  return stdout.length > maxBytes ? 'too_large' : stdout;
+}
+
+export function retainLoserPatch(input: {
+  challengePairId: string;
+  loserIdentity: ChallengeDiffIdentity;
+  evalsDir: string;
+  repoDir: string;
+  maxBytes?: number;
+  deps?: LoserPatchRetentionDeps;
+}): LoserPatchRetentionResult {
+  const artifactPath = join(input.evalsDir, 'artifacts', input.challengePairId, 'loser.patch');
+  if (!input.loserIdentity.merge_sha || !input.loserIdentity.head_sha) {
+    return {
+      path: artifactPath,
+      written: false,
+      bytes: 0,
+      skippedReason: 'missing_identity',
+    };
+  }
+  const maxBytes = input.maxBytes ?? LOSER_PATCH_MAX_BYTES;
+  const readPatch = input.deps?.readPatch ?? ((args, cap) => defaultReadPatch(input.repoDir, args, cap));
+  const patch = readPatch(['diff', input.loserIdentity.merge_sha, input.loserIdentity.head_sha], maxBytes);
+  if (patch === 'too_large') {
+    return {
+      path: artifactPath,
+      written: false,
+      bytes: maxBytes + 1,
+      skippedReason: 'too_large',
+    };
+  }
+  mkdirSync(join(input.evalsDir, 'artifacts', input.challengePairId), { recursive: true });
+  writeFileSync(artifactPath, patch);
+  return {
+    path: artifactPath,
+    written: true,
+    bytes: patch.length,
+  };
 }
 
 /**

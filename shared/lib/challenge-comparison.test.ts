@@ -19,6 +19,7 @@ import {
   resolveChallengeSideExecutionProvenance,
   validateChallengeExecutionProvenance,
   type ChallengeComparison,
+  type ChallengeDiffIdentity,
   type ChallengeRoutingMeta,
 } from './challenge-comparison.ts';
 import { appendChallengeRecordVoid } from './challenge-record-void.ts';
@@ -59,6 +60,15 @@ function makeRecord(overrides?: Partial<ChallengeComparison>): ChallengeComparis
     },
     timestamp: '2026-03-09T12:00:00Z',
     ...overrides,
+  };
+}
+
+function makeDiffIdentity(label: string): ChallengeDiffIdentity {
+  return {
+    head_sha: `${label}-head`,
+    merge_sha: `${label}-merge`,
+    files_touched: [`src/${label}.ts`],
+    line_ranges: [{ file: `src/${label}.ts`, start: 3, end: 5 }],
   };
 }
 
@@ -725,6 +735,51 @@ test('buildInvalidChallengeComparison emits fork descriptor fields with empty de
   assert.deepEqual(record.challengerInheritedStages, []);
 });
 
+test('comparison builders persist provided diff identities and fork descriptor', () => {
+  const primaryDiffIdentity = makeDiffIdentity('primary');
+  const challengerDiffIdentity = makeDiffIdentity('challenger');
+  const skipped = buildSkippedIdenticalComparison({
+    challengePairId: 'HOK-2795',
+    primaryModel: 'claude-opus-4-6',
+    challengerModel: 'claude-sonnet-4-5-20250929',
+    primaryPrUrl: 'https://github.com/org/repo/pull/1',
+    challengerPrUrl: 'https://github.com/org/repo/pull/2',
+    primaryEvalScore: 0.8,
+    challengerEvalScore: 0.8,
+    forkStage: 'implementation',
+    forkCommit: 'fork-sha',
+    sharedPrefix: true,
+    primaryInheritedStages: ['plan'],
+    challengerInheritedStages: ['plan'],
+    primaryDiffIdentity,
+    challengerDiffIdentity,
+  });
+
+  assert.equal(skipped.forkStage, 'implementation');
+  assert.equal(skipped.forkCommit, 'fork-sha');
+  assert.equal(skipped.sharedPrefix, true);
+  assert.deepEqual(skipped.primaryInheritedStages, ['plan']);
+  assert.deepEqual(skipped.challengerInheritedStages, ['plan']);
+  assert.deepEqual(skipped.primaryDiffIdentity, primaryDiffIdentity);
+  assert.deepEqual(skipped.challengerDiffIdentity, challengerDiffIdentity);
+
+  const invalid = buildInvalidChallengeComparison({
+    challengePairId: 'HOK-2795',
+    primaryModel: 'claude-opus-4-6',
+    challengerModel: 'claude-sonnet-4-5-20250929',
+    primaryPrUrl: 'https://github.com/org/repo/pull/1',
+    challengerPrUrl: 'https://github.com/org/repo/pull/2',
+    primaryEvalScore: 0.8,
+    challengerEvalScore: 0.8,
+    reason: 'identical_effective_route',
+    primaryDiffIdentity,
+    challengerDiffIdentity,
+  });
+
+  assert.deepEqual(invalid.primaryDiffIdentity, primaryDiffIdentity);
+  assert.deepEqual(invalid.challengerDiffIdentity, challengerDiffIdentity);
+});
+
 test('buildForfeitComparison emits fork descriptor fields with empty defaults', () => {
   const record = buildForfeitComparison({
     challengePairId: 'HOK-2794',
@@ -789,6 +844,8 @@ test('historical record without fork descriptor fields parses cleanly', () => {
   assert.equal(historicalRecord.sharedPrefix, undefined);
   assert.equal(historicalRecord.primaryInheritedStages, undefined);
   assert.equal(historicalRecord.challengerInheritedStages, undefined);
+  assert.equal(historicalRecord.primaryDiffIdentity, undefined);
+  assert.equal(historicalRecord.challengerDiffIdentity, undefined);
 });
 
 process.on('exit', () => {
