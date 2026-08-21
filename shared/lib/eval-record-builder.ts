@@ -52,6 +52,7 @@ import type {
 } from './pre-pr-verification-types.ts';
 import type { DifficultyAnalysis } from './difficulty-analyzer.ts';
 import type { ChallengeRouteContext } from './challenge-mode.ts';
+import type { ChallengeStage } from './challenge-mode.ts';
 import type {
   ChallengeExecutionAttestation,
   ChallengeExecutionIntent,
@@ -180,6 +181,19 @@ export function attachChallengePairId(record: EvalRecord, challengePairId?: stri
   }
 }
 
+function stageFromExplicitChallengeIntent(
+  intent: ChallengeExecutionIntent,
+  side?: 'primary' | 'challenger',
+): ChallengeStage | undefined {
+  if (intent.challengeStage) return intent.challengeStage;
+  if (intent.selectedStage) return intent.selectedStage;
+
+  const sideIntent = side === 'challenger' ? intent.challenger : intent.primary;
+  return sideIntent?.challengeStage
+    ?? intent.primary?.challengeStage
+    ?? intent.challenger?.challengeStage;
+}
+
 export function attachChallengeExecutionMetadata(
   record: EvalRecord,
   input?: {
@@ -192,11 +206,15 @@ export function attachChallengeExecutionMetadata(
     record.challengeSide = input.side;
   }
   if (input?.intent) {
+    const challengeStage = stageFromExplicitChallengeIntent(input.intent, input.side);
     const persistedIntent = projectChallengeIntentForPersistence(input.intent);
     if (persistedIntent) {
       record.challengeIntent = persistedIntent;
       const sideIntent = input.side === 'challenger' ? persistedIntent.challenger : persistedIntent.primary;
       record.challengeExecutionRoute = sideIntent.expectedRoute;
+      if (challengeStage) {
+        record.challengeStage = challengeStage;
+      }
     }
   }
   if (input?.evidence) {

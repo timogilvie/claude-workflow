@@ -4,8 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import {
+  appendAuthoredLinksFooter,
   buildIssueExpansionCallOptions,
   expandIssue,
+  extractAuthoredLinksFooter,
   parseIssueInput,
 } from './issue-expander.ts';
 import { NativeExpansionUnavailableError } from './native-expansion.ts';
@@ -62,6 +64,97 @@ describe('issue-expander', () => {
 
   it('parseIssueInput trims surrounding whitespace', () => {
     assert.equal(parseIssueInput(' HOK-1494 '), 'HOK-1494');
+  });
+
+  it('extracts a trailing authored links footer verbatim', () => {
+    const footer = [
+      '---',
+      '## Program Links',
+      '',
+      '- [Program brief](https://example.com/brief)',
+      '- [Plan of record](https://example.com/plan)',
+    ].join('\n');
+    const description = `Human-authored context\n\n${footer}`;
+
+    const result = extractAuthoredLinksFooter(description);
+
+    assert.equal(result.body, 'Human-authored context\n\n');
+    assert.equal(result.footer, footer);
+  });
+
+  it('appends an authored links footer exactly once at the end', () => {
+    const footer = '---\n## Links & Context\n\n- [Design doc](https://example.com/design)';
+    const generated = '# Task Packet\n\nGenerated details.\n';
+
+    const result = appendAuthoredLinksFooter(generated, footer);
+
+    assert.equal(
+      result,
+      '# Task Packet\n\nGenerated details.\n\n---\n## Links & Context\n\n- [Design doc](https://example.com/design)'
+    );
+    assert.equal(appendAuthoredLinksFooter(result, footer), result);
+  });
+
+  it('does not extract a footer when the links block convention is absent', () => {
+    const description = 'Human-authored context\n\n## Program Links\n\n- https://example.com';
+
+    const result = extractAuthoredLinksFooter(description);
+
+    assert.equal(result.body, description);
+    assert.equal(result.footer, null);
+  });
+
+  it('does not extract a delimiter that is not immediately followed by a links heading', () => {
+    const description = [
+      'Human-authored context',
+      '',
+      '---',
+      '',
+      '## Program Links',
+      '',
+      '- https://example.com',
+    ].join('\n');
+
+    const result = extractAuthoredLinksFooter(description);
+
+    assert.equal(result.body, description);
+    assert.equal(result.footer, null);
+  });
+
+  it('extracts only the applicable trailing footer when multiple separators exist', () => {
+    const description = [
+      'Human-authored context',
+      '',
+      '---',
+      '## Not Links',
+      '',
+      'Keep this in the LLM input.',
+      '',
+      '---',
+      '## Program Links',
+      '',
+      '- [Plan](https://example.com/plan)',
+    ].join('\n');
+
+    const result = extractAuthoredLinksFooter(description);
+
+    assert.equal(
+      result.body,
+      [
+        'Human-authored context',
+        '',
+        '---',
+        '## Not Links',
+        '',
+        'Keep this in the LLM input.',
+        '',
+        '',
+      ].join('\n')
+    );
+    assert.equal(
+      result.footer,
+      '---\n## Program Links\n\n- [Plan](https://example.com/plan)'
+    );
   });
 
   it('parseIssueInput accepts Linear issue URLs', () => {

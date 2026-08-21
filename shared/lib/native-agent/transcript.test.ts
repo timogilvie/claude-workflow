@@ -195,10 +195,11 @@ describe('deriveTranscriptEvents – event family derivation', () => {
     assert.equal(ev.rawContent[1].type, 'text');
     assert.equal(ev.rawContent[2].type, 'tool_call');
 
-    // replayContent strips thinking blocks
-    assert.equal(ev.replayContent.length, 2);
-    assert.equal(ev.replayContent[0].type, 'text');
-    assert.equal(ev.replayContent[1].type, 'tool_call');
+    // replayContent preserves thinking blocks without raw provider payloads
+    assert.equal(ev.replayContent.length, 3);
+    assert.equal(ev.replayContent[0].type, 'thinking');
+    assert.equal(ev.replayContent[1].type, 'text');
+    assert.equal(ev.replayContent[2].type, 'tool_call');
 
     // usage is captured
     assert.ok(ev.usage);
@@ -607,7 +608,7 @@ describe('parseTranscriptJsonl', () => {
 // ---------------------------------------------------------------------------
 
 describe('extractRawHistory / extractReplayHistory', () => {
-  it('extractReplayHistory returns only text and tool_call content, no thinking', () => {
+  it('extractReplayHistory preserves thinking, text, and tool_call content', () => {
     const msg = {
       role: 'assistant' as const,
       content: [
@@ -625,9 +626,34 @@ describe('extractRawHistory / extractReplayHistory', () => {
     const events = deriveTranscriptEvents([{ type: 'message_end', message: msg }], BASE_OPTS);
     const replay = extractReplayHistory(events);
     assert.equal(replay.length, 1);
-    assert.equal(replay[0].length, 2);
-    assert.equal(replay[0][0].type, 'text');
-    assert.equal(replay[0][1].type, 'tool_call');
+    assert.equal(replay[0].length, 3);
+    assert.equal(replay[0][0].type, 'thinking');
+    assert.equal(replay[0][1].type, 'text');
+    assert.equal(replay[0][2].type, 'tool_call');
+  });
+
+  it('keeps HOK-2793-shaped thinking-only assistant messages replayable', () => {
+    const msg = {
+      role: 'assistant' as const,
+      content: [
+        {
+          type: 'thinking' as const,
+          thinking: '**Implementing Blind Challenge Judge**...',
+          thinkingSignature: 'hok-2793-sig',
+        },
+      ],
+      api: 'openai-completions',
+      provider: 'openrouter',
+      model: 'google/gemini-2.5-pro',
+      usage: { input: 10871, output: 423, cacheRead: 0, cacheWrite: 0, totalTokens: 11294, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      stopReason: 'stop' as const,
+      timestamp: FIXED_TIME,
+    };
+    const events = deriveTranscriptEvents([{ type: 'message_end', message: msg }], BASE_OPTS);
+    const assistant = events[0] as TranscriptAssistantMessage;
+    assert.equal(assistant.replayContent.length, 1);
+    assert.equal(assistant.replayContent[0].type, 'thinking');
+    assert.equal((assistant.replayContent[0] as { type: 'thinking'; thinkingSignature?: string }).thinkingSignature, 'hok-2793-sig');
   });
 
   it('extractRawHistory returns full content including thinking blocks', () => {

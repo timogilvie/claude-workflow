@@ -906,7 +906,7 @@
                 "autoMergeWinner": {
                     "type": "boolean",
                     "default": false,
-                    "description": "Whether to automatically merge the recommended winner and close the loser."
+                    "description": "Whether tend automatically sends the recommended challenge winner into the merge path and closes the loser. Defaults to false, which holds the winner for manual action while loser cleanup may still run after a decisive comparison."
                 },
                 "gate": {
                     "type": "object",
