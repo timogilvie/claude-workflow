@@ -22,6 +22,7 @@
 
 import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { mutateJsonState } from './state-mutex.ts';
 
 export type ChallengeRecoveryVerdict = 'supersedable' | 'quarantine-upheld' | 'pair-not-found';
 
@@ -393,18 +394,20 @@ export function runChallengeRecovery(options: ChallengeRecoveryOptions): Challen
 
 /**
  * Void a challenge pair record by appending a voided-comparison record.
- * This marks the record as intentionally invalidated without removing the original.
+ * This marks the record as intentionally invalidated without removing the original,
+ * and resets the challengeCompared state so the comparison can be retried.
  */
-export function voidChallengePair(input: {
+export async function voidChallengePair(input: {
   repoDir: string;
   pairId: string;
   reason: string;
   now?: () => Date;
-}): void {
+}): Promise<void> {
   const evalsDir = join(input.repoDir, '.wavemill', 'evals');
   const recordsPath = join(evalsDir, 'challenge-records.jsonl');
   const auditPath = join(evalsDir, 'challenge-recovery-audit.jsonl');
-  
+  const stateFilePath = join(input.repoDir, '.wavemill', 'workflow-state.json');
+
   // Create voided-comparison record
   const voidedRecord = {
     challengePairId: input.pairId,
@@ -413,10 +416,10 @@ export function voidChallengePair(input: {
     rationale: input.reason,
     timestamp: (input.now ?? (() => new Date()))().toISOString(),
   };
-  
+
   // Append to records
   appendFileSync(recordsPath, `${JSON.stringify(voidedRecord)}\n`, 'utf8');
-  
+
   // Log audit entry
   const auditEntry = {
     challengePairId: input.pairId,
@@ -425,4 +428,26 @@ export function voidChallengePair(input: {
     timestamp: voidedRecord.timestamp,
   };
   appendFileSync(auditPath, `${JSON.stringify(auditEntry)}\n`, 'utf8');
+
+  // Reset challengeCompared state for both arms so comparison can be retried
+  if (existsSync(stateFilePath)) {
+    const primaryId = input.pairId;
+    const challengerId = `${input.pairId}_c`;
+
+    try {
+      await mutateJsonState(stateFilePath, (state: any) => {
+        if (state.tasks) {
+          if (state.tasks[primaryId]) {
+            state.tasks[primaryId].challengeCompared = false;
+          }
+          if (state.tasks[challengerId]) {
+            state.tasks[challengerId].challengeCompared = false;
+          }
+        }
+        return state;
+      });
+    } catch (error) {
+      console.warn(`Failed to reset challengeCompared state for pair ${input.pairId}: ${(error as Error).message}`);
+    }
+  }
 }
