@@ -9,6 +9,7 @@ import {
   buildInvalidChallengeComparison,
   buildSkippedIdenticalComparison,
   buildInvalidProvenanceComparison,
+  deriveChallengeHarnessIds,
   listVariedRoutingDimensions,
   readChallengeComparisons,
   detectVariedDimensions,
@@ -131,10 +132,60 @@ test('readDecisiveChallengeComparisons filters non-decisive and voided rows', ()
       reason: 'bad record',
       recordTimestamp: '2026-08-21T00:00:00.000Z',
     }, tmp);
-    appendChallengeComparison(makeRecord({ challengePairId: 'HOK-2', timestamp: '2026-08-21T00:02:00.000Z' }), tmp);
+    appendChallengeComparison(makeRecord({ challengePairId: 'HOK-2', timestamp: '2026-08-21T00:02:00:000Z' }), tmp);
 
     const records = readDecisiveChallengeComparisons(tmp);
     assert.deepEqual(records.map((record) => record.challengePairId), ['HOK-2']);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+console.log('\n--- Harness ID Tests ---\n');
+
+test('deriveChallengeHarnessIds truth table', () => {
+  const same = 'a'.repeat(64);
+  const diff = 'b'.repeat(64);
+
+  assert.deepEqual(deriveChallengeHarnessIds({ harnessId: same }, { harnessId: same }), {
+    primaryHarnessId: same,
+    challengerHarnessId: same,
+    harnessId: same,
+  });
+
+  assert.deepEqual(deriveChallengeHarnessIds({ harnessId: same }, { harnessId: diff }), {
+    primaryHarnessId: same,
+    challengerHarnessId: diff,
+    harnessId: undefined,
+  });
+
+  assert.deepEqual(deriveChallengeHarnessIds({ harnessId: same }, null), {
+    primaryHarnessId: same,
+    challengerHarnessId: undefined,
+    harnessId: undefined,
+  });
+
+  assert.deepEqual(deriveChallengeHarnessIds(null, null), {
+    primaryHarnessId: undefined,
+    challengerHarnessId: undefined,
+    harnessId: undefined,
+  });
+});
+
+test('challenge comparison with harness ids round-trips', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'challenge-comparison-harness-'));
+  try {
+    const record = makeRecord({
+      primaryHarnessId: 'c'.repeat(64),
+      challengerHarnessId: 'c'.repeat(64),
+      harnessId: 'c'.repeat(64),
+    });
+    appendChallengeComparison(record, tmp);
+    const records = readChallengeComparisons(tmp);
+    assert.equal(records.length, 1);
+    assert.equal(records[0].primaryHarnessId, 'c'.repeat(64));
+    assert.equal(records[0].challengerHarnessId, 'c'.repeat(64));
+    assert.equal(records[0].harnessId, 'c'.repeat(64));
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

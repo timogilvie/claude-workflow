@@ -215,6 +215,50 @@ export interface ChallengeComparison {
 
   // No-comparison accounting field (P0.6, HOK-2794)
   noComparisonReason?: NoComparisonReason;
+
+  /**
+   * Harness ID for the primary arm's eval record, if known.
+   *
+   * @since HOK-2843
+   */
+  primaryHarnessId?: string;
+
+  /**
+   * Harness ID for the challenger arm's eval record, if known.
+   *
+   * @since HOK-2843
+   */
+  challengerHarnessId?: string;
+
+  /**
+   * Consensus harness ID when both arms share the same harness.
+   *
+   * Only set when `primaryHarnessId` and `challengerHarnessId` are both
+   * present and equal; otherwise this field is left unset.
+   *
+   * @since HOK-2843
+   */
+  harnessId?: string;
+}
+
+/**
+ * Derive harness-id fields for a challenge comparison from the two arm evals.
+ *
+ * Per-arm IDs are always surfaced when available. A consensus `harnessId` is
+ * only set when both arms report the same value, matching D6.
+ */
+export function deriveChallengeHarnessIds(
+  primaryEval?: { harnessId?: string } | null,
+  challengerEval?: { harnessId?: string } | null,
+): {
+  primaryHarnessId?: string;
+  challengerHarnessId?: string;
+  harnessId?: string;
+} {
+  const primaryHarnessId = primaryEval?.harnessId;
+  const challengerHarnessId = challengerEval?.harnessId;
+  const harnessId = primaryHarnessId && primaryHarnessId === challengerHarnessId ? primaryHarnessId : undefined;
+  return { primaryHarnessId, challengerHarnessId, harnessId };
 }
 
 export interface ChallengeComparisonDimensions {

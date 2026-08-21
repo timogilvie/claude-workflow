@@ -9,6 +9,7 @@ import {
   buildInvalidChallengeComparison,
   buildInvalidProvenanceComparison,
   buildSkippedIdenticalComparison,
+  deriveChallengeHarnessIds,
   detectVariedDimensions,
   hasAnyVariedDimension,
   classifyChallengeType,
@@ -128,6 +129,7 @@ runTool({
       if (typeof primaryEval.score !== 'number' || typeof challengerEval.score !== 'number') {
         throw new Error(`Invalid eval scores for challenge pair ${pairId}`);
       }
+      const harnessIds = deriveChallengeHarnessIds(primaryEval, challengerEval);
 
     // Build routing metadata if provided
       const primaryRouting: ChallengeRoutingMeta | undefined = args['primary-planner'] ? {
@@ -179,6 +181,7 @@ runTool({
           primaryAttestation,
           challengerAttestation,
         });
+        const invalidRecord = { ...invalidRecordBase, ...harnessIds };
         recordForResult = invalidRecord;
         appendChallengeComparison(invalidRecord, evalsDir);
         console.log(JSON.stringify(invalidRecord, null, 2));
@@ -225,23 +228,26 @@ runTool({
       });
 
       if (!provenanceValidation.valid) {
-        const invalidRecord = buildInvalidProvenanceComparison({
-          challengePairId: pairId,
-          primaryModel,
-          challengerModel,
-          primaryPrUrl,
-          challengerPrUrl,
-          primaryEvalScore: primaryEval.score,
-          challengerEvalScore: challengerEval.score,
-          primaryRouting,
-          challengerRouting,
-          primaryExecution,
-          challengerExecution,
-          provenanceValidation,
-          variedDimensions,
-          challengeType,
-          variedStage,
-        });
+        const invalidRecord = {
+          ...buildInvalidProvenanceComparison({
+            challengePairId: pairId,
+            primaryModel,
+            challengerModel,
+            primaryPrUrl,
+            challengerPrUrl,
+            primaryEvalScore: primaryEval.score,
+            challengerEvalScore: challengerEval.score,
+            primaryRouting,
+            challengerRouting,
+            primaryExecution,
+            challengerExecution,
+            provenanceValidation,
+            variedDimensions,
+            challengeType,
+            variedStage,
+          }),
+          ...harnessIds,
+        };
         recordForResult = invalidRecord;
         appendChallengeComparison(invalidRecord, evalsDir);
 
@@ -289,17 +295,20 @@ runTool({
       }
 
       if (variedDimensions && !hasAnyVariedDimension(variedDimensions)) {
-        const skippedRecord = buildSkippedIdenticalComparison({
-          challengePairId: pairId,
-          primaryModel,
-          challengerModel,
-          primaryPrUrl,
-          challengerPrUrl,
-          primaryEvalScore: primaryEval.score,
-          challengerEvalScore: challengerEval.score,
-          primaryRouting,
-          challengerRouting,
-        });
+        const skippedRecord = {
+          ...buildSkippedIdenticalComparison({
+            challengePairId: pairId,
+            primaryModel,
+            challengerModel,
+            primaryPrUrl,
+            challengerPrUrl,
+            primaryEvalScore: primaryEval.score,
+            challengerEvalScore: challengerEval.score,
+            primaryRouting,
+            challengerRouting,
+          }),
+          ...harnessIds,
+        };
         skippedRecord.primaryExecution = primaryExecution;
         skippedRecord.challengerExecution = challengerExecution;
         skippedRecord.provenanceValidation = provenanceValidation;
@@ -489,6 +498,7 @@ Return a raw JSON object with no code fences, no comments, and no JavaScript syn
         primaryEvalScoreSource: primarySelected.source,
         challengerEvalScoreSource: challengerSelected.source,
         ...(dataQualityWarnings.length > 0 ? { dataQualityWarnings } : {}),
+        ...harnessIds,
         // Fork descriptor fields with empty defaults (HOK-2794)
         forkStage: null,
         forkCommit: null,
