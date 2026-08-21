@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import type { WorkflowType, SessionStatus } from './session.ts';
 import {
   canonicalJsonStringify,
+  hashContent,
   type ResourceRef,
   toResourceRef,
 } from './resource-registry.ts';
@@ -31,6 +32,8 @@ export interface ResourceManifest {
   status?: SessionStatus | string;
   phases: Record<string, ResourceRef[]>;
   resources: ResourceRef[];
+  /** Stable content hash of the participating resource tuple; see `computeHarnessId`. */
+  harnessId?: string;
   digest: string;
 }
 
@@ -43,7 +46,9 @@ type ValidatorFunction = ((data: unknown) => boolean) & {
   errors?: ValidationError[] | null;
 };
 
-const MANIFEST_SCHEMA_VERSION = '1.0.0';
+export const HARNESS_EXCLUDED_RESOURCE_TYPES = ['environment'] as const;
+
+const MANIFEST_SCHEMA_VERSION = '1.1.0';
 const MANIFEST_DIR = '.wavemill/manifests';
 const require = createRequire(import.meta.url);
 let validator: ValidatorFunction | null | undefined;
@@ -107,7 +112,27 @@ function dedupeRefs(refs: ResourceRef[]): ResourceRef[] {
   });
 }
 
+function harnessTupleKey(ref: ResourceRef): string {
+  return ref.id.endsWith(`@${ref.version}`) ? ref.id : `${ref.id}@${ref.version}`;
+}
+
+export function harnessRefParticipates(ref: ResourceRef): boolean {
+  return !HARNESS_EXCLUDED_RESOURCE_TYPES.some((type) => ref.id.startsWith(`${type}:`));
+}
+
+export function computeHarnessId(refs: ResourceRef[]): string {
+  const tuples = [
+    ...new Set(dedupeRefs(refs).filter(harnessRefParticipates).map(harnessTupleKey)),
+  ].sort();
+  return hashContent(tuples.join('\n'));
+}
+
+function withHarnessId(manifest: ResourceManifest): void {
+  manifest.harnessId = computeHarnessId(manifest.resources);
+}
+
 function writeManifest(path: string, manifest: ResourceManifest): void {
+  withHarnessId(manifest);
   validateResourceManifest(manifest);
   mkdirSync(dirname(path), { recursive: true });
   const tmpPath = resolve(dirname(path), `.manifest-tmp-${randomUUID()}.tmp`);
@@ -124,6 +149,7 @@ export function getManifest(sessionId: string, repoDir?: string): ResourceManife
 }
 
 export function computeManifestDigest(manifest: ResourceManifest): string {
+  withHarnessId(manifest);
   const digestInput = {
     ...manifest,
     digest: '',
@@ -168,6 +194,21 @@ export function openManifest(
   return manifest;
 }
 
+export function ensureManifest(
+  sessionId: string,
+  options: { workflowType?: WorkflowType | string; repoDir?: string } = {},
+): ResourceManifest {
+  const existing = getManifest(sessionId, options.repoDir);
+  if (existing) {
+    return existing;
+  }
+  const workflowType =
+    options.workflowType ??
+    (process.env.WAVEMILL_WORKFLOW_TYPE as WorkflowType | string | undefined) ??
+    'unknown';
+  return openManifest(sessionId, { workflowType, repoDir: options.repoDir });
+}
+
 export function recordUse(
   sessionId: string,
   phase: string,
@@ -178,6 +219,8 @@ export function recordUse(
   if (!ref) {
     return null;
   }
+
+  ensureManifest(sessionId, { repoDir });
 
   const existing = getManifest(sessionId, repoDir);
   if (!existing) {
@@ -231,4 +274,12 @@ export function getManifestRef(sessionId: string, repoDir?: string): ManifestRef
     manifestDigest: manifest.digest,
     path: resolveManifestPath(sessionId, repoDir),
   };
+}
+
+export function resolveHarnessId(sessionId: string, repoDir?: string): string | null {
+  const manifest = getManifest(sessionId, repoDir);
+  if (!manifest) {
+    return null;
+  }
+  return manifest.harnessId ?? computeHarnessId(manifest.resources);
 }

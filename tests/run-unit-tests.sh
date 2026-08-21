@@ -181,6 +181,8 @@ TESTS=(
   shared/lib/linear-dependency-resolver.test.ts
   shared/lib/dependency-classifier.test.ts
   shared/lib/queue-partial-refresh.test.ts
+  shared/lib/resource-manifest.test.ts
+  shared/lib/resource-registry.test.ts
   shared/lib/route-artifact.test.ts
   shared/lib/route-batch.test.ts
   shared/lib/model-router.test.ts
