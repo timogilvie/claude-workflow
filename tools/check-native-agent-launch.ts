@@ -13,6 +13,7 @@ import {
   equivalentOpenRouterModelIds,
   resolveLaunchPriorityModel,
 } from '../shared/lib/openrouter-catalog.ts';
+import { evaluateOpenRouterBalance } from '../shared/lib/native-agent/openrouter-credits-guard.ts';
 
 type NativeAgent = 'native-openai' | 'native-openrouter';
 type NativePhase = 'planning' | 'coding' | 'review';
@@ -170,6 +171,22 @@ export function checkNativeAgentLaunch(input: CheckNativeAgentLaunchInput): Chec
   if (launchPriorityModel && !launchPriorityModel.roleEligibility.includes(phase)) {
     const eligibleRoles = launchPriorityModel.roleEligibility.join(', ') || 'none';
     return reject(`native provider ${providerName}/${model} is not eligible for ${phase} (eligible roles: ${eligibleRoles})`);
+  }
+
+  // Pre-flight check: ensure OpenRouter credits are sufficient
+  if (providerName === 'openrouter') {
+    const balanceEval = evaluateOpenRouterBalance({ repoDir, model });
+    if (balanceEval.status === 'refuse') {
+      return reject(
+        `OpenRouter account credits are exhausted: current balance $${(balanceEval.balanceUsd ?? 0).toFixed(4)}, ` +
+        `minimum required $${balanceEval.minCreditsUsd.toFixed(4)}. Top up OpenRouter account credits to proceed.`,
+        {
+          code: 'openrouter-credits-exhausted',
+          surface: 'openrouter-account-settings',
+          remediation: 'Top up account balance at https://openrouter.ai/account/credits',
+        },
+      );
+    }
   }
 
   return {

@@ -83,11 +83,9 @@ export function parseAbortFailureKind(abortReason?: string | null): string | nul
 }
 
 export function isModelQualitySignal(faultClass: ArmFaultClass): boolean {
-  // Provider transient errors, config errors, and credit exhaustion are not model quality signals
-  if (faultClass === 'harness-fault') {
-    return false;
-  }
-  return faultClass === 'model-fault' || faultClass === 'provider-fault';
+  // Only model faults are model quality signals. Provider faults (rate limits, quota)
+  // may be orchestration issues. Selection and harness faults are infrastructure issues.
+  return faultClass === 'model-fault';
 }
 
 export function faultClassReason(faultClass: ArmFaultClass): string {

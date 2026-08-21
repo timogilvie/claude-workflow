@@ -902,6 +902,7 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
   try {
     let loopContext = context;
     let emptyAssistantContinuations = 0;
+    let providerErrorRetries = 0;
     let continuationRunIndex = 0;
 
     while (true) {
@@ -931,30 +932,27 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
 
       if (providerErrorTurn) {
         const retryLimit = config.providerErrorRetryLimit ?? PROVIDER_ERROR_RETRY_LIMIT;
-        
-        // Count previous provider error retries by looking at retry events in session stream
-        // TODO: Implement proper retry counting when session stream writer is available
-        const retryCount = 0; // Placeholder - would need to parse session stream for retry events
-        
-        if (retryCount < retryLimit) {
+
+        if (providerErrorRetries < retryLimit) {
           // Log retry event
           if (sessionStreamWriter) {
             try {
               sessionStreamWriter.writeRetry({
                 failedEventId: currentTurnRequestEventId || 'unknown',
                 reason: 'provider_error',
-                retryCount: retryCount + 1,
+                retryCount: providerErrorRetries + 1,
               });
             } catch (error) {
               console.warn(`Failed to log retry event: ${(error as Error).message}`);
             }
           }
-          
+
           // Apply exponential backoff
-          const delayMs = RETRY_BASE_DELAY_MS * Math.pow(RETRY_EXPONENTIAL_MULTIPLIER, retryCount);
+          const delayMs = RETRY_BASE_DELAY_MS * Math.pow(RETRY_EXPONENTIAL_MULTIPLIER, providerErrorRetries);
           await setTimeout(delayMs);
-          
+
           // Continue loop with same context (will retry the failed turn)
+          providerErrorRetries += 1;
           continuationRunIndex += 1;
           continue;
         }

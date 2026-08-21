@@ -718,24 +718,25 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
 
   mkdirSync(featureDir, { recursive: true });
   const archivedStaleArtifacts = archiveStaleCodingArtifacts(featureDir);
-  
+
   // Check for a resumable provider error handoff before starting a new session
   const handoffPath = getCodingFailureHandoffPath(featureDir);
+  let currentResumeAttempt = 0;
   if (existsSync(handoffPath)) {
     const handoffResult = await readCodingFailureHandoff(handoffPath);
-    if (handoffResult.ok && 
-        handoffResult.value.reason === 'provider_error' && 
+    if (handoffResult.ok &&
+        handoffResult.value.reason === 'provider_error' &&
         handoffResult.value.resumable === true &&
         handoffResult.value.transcriptPath &&
         existsSync(handoffResult.value.transcriptPath) &&
         (handoffResult.value.resumeAttempt ?? 0) < 1) {
-      
+
       // Try to resume from the transcript
       try {
         const transcriptContent = readFileSync(handoffResult.value.transcriptPath, 'utf-8');
         const transcriptEvents = parseTranscriptJsonl(transcriptContent);
         const replayHistory = extractReplayHistory(transcriptEvents);
-        
+
         // Build context from replay history
         const replayMessages: AgentMessage[] = [];
         for (const turn of replayHistory) {
@@ -745,16 +746,16 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
             timestamp: Date.now(),
           } as AgentMessage);
         }
-        
+
         // Add continuation prompt
         replayMessages.push({
           role: 'user',
           content: 'Continue from where you left off. Resume the coding task.',
           timestamp: Date.now(),
         } as AgentMessage);
-        
+
         context.messages = replayMessages;
-        // TODO: Implement actual resume logic with session stream writer
+        currentResumeAttempt = (handoffResult.value.resumeAttempt ?? 0) + 1;
       } catch (resumeError) {
         console.warn(`Failed to resume from provider error handoff: ${(resumeError as Error).message}`);
       }
@@ -838,6 +839,12 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
       persistentSessionStreamWriter.writeSessionStarted({
         initialConfigDigest: `model:${model.provider}:${modelName}`,
       });
+      // Log resume event if we're resuming from a provider error
+      if (currentResumeAttempt > 0) {
+        persistentSessionStreamWriter.writeSessionResume({
+          reason: 'recovery: resuming from provider error',
+        });
+      }
     } catch (error) {
       console.warn(`Failed to create persistent session stream writer: ${(error as Error).message}`);
       persistentSessionStreamWriter = undefined;
@@ -1001,7 +1008,7 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
         toolCallCount,
         recoveryAttempted,
         transcriptPath,
-        resumeAttempt: 0, // TODO: Increment this when we actually implement resume
+        resumeAttempt: currentResumeAttempt,
       });
     }
 
@@ -1057,7 +1064,7 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
           toolCallCount,
           recoveryAttempted: true,
           transcriptPath,
-          resumeAttempt: 0, // TODO: Increment this when we actually implement resume
+          resumeAttempt: currentResumeAttempt,
         });
       }
     }
