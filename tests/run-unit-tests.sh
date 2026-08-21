@@ -218,6 +218,7 @@ TESTS=(
   tools/add-pr-label.test.ts
   tools/backfill-challenge-stage.test.ts
   tools/certify-patch-coding.test.ts
+  tools/generate-skip-report.test.ts
   tools/check-config-version.test.ts
   tools/check-pi-version.test.ts
   tools/check-ci-command-map-drift.test.ts

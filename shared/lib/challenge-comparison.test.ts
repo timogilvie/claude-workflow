@@ -461,6 +461,7 @@ test('buildSkippedIdenticalComparison returns deterministic primary-wins metadat
   assert.equal(record.winner, 'primary');
   assert.equal(record.comparisonOutcome, 'skipped');
   assert.equal(record.skipReason, 'identical-routing-dimensions');
+  assert.equal(record.noComparisonReason, 'identical_routing_dimensions');
   assert.equal(record.cleanupPolicy, 'primary-wins-close-challenger');
   assert.equal(record.challengeType, undefined);
   assert.equal(record.workflowInsight, 'No LLM comparison was run because both workflows resolved to identical routing dimensions.');
@@ -482,6 +483,7 @@ test('buildInvalidChallengeComparison omits winner and cleanup policy', () => {
   assert.equal(record.comparisonOutcome, 'invalid_challenge');
   assert.equal(record.invalidChallenge, true);
   assert.equal(record.invalidChallengeReason, 'stage_override_lost');
+  assert.equal(record.noComparisonReason, 'stage_override_lost');
   assert.equal(record.winner, undefined);
   assert.equal(record.winnerModel, undefined);
   assert.equal(record.cleanupPolicy, undefined);
@@ -579,6 +581,7 @@ test('planner intent mismatch with native Kimi execution invalidates challenged 
       variedStage: 'plan',
     });
     assert.equal(record.comparisonOutcome, 'invalid');
+    assert.equal(record.noComparisonReason, 'provenance_invalid');
     assert.equal(record.winner, undefined);
     assert.equal(record.winnerModel, undefined);
     assert.equal(record.terminalReason, 'provenance_validation_failed');

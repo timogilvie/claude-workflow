@@ -11,36 +11,36 @@ runTool({
   description: 'Generate no-comparison rate report from challenge records',
   options: {
     file: {
-      help: 'Path to challenge-records.jsonl (default: repo/.wavemill/evals/challenge-records.jsonl)',
-      string: true,
+      description: 'Path to challenge-records.jsonl (default: repo/.wavemill/evals/challenge-records.jsonl)',
+      type: 'string',
     },
     evals: {
-      help: 'Path to evals.jsonl for unrecorded pair detection (default: sibling of records file)',
-      string: true,
+      description: 'Path to evals.jsonl for unrecorded pair detection (default: sibling of records file)',
+      type: 'string',
     },
     'no-evals': {
-      help: 'Skip unrecorded pair detection',
-      boolean: true,
+      description: 'Skip unrecorded pair detection',
+      type: 'boolean',
     },
     since: {
-      help: 'ISO date string (inclusive)',
-      string: true,
+      description: 'ISO date string (inclusive)',
+      type: 'string',
     },
     until: {
-      help: 'ISO date string (inclusive)',
-      string: true,
+      description: 'ISO date string (inclusive)',
+      type: 'string',
     },
     windows: {
-      help: 'Print fixed time windows (all-time, since 08-11, since 08-19, and --since value if provided)',
-      boolean: true,
+      description: 'Print fixed time windows (all-time, since 08-11, since 08-19, and --since value if provided)',
+      type: 'boolean',
     },
     json: {
-      help: 'Output JSON instead of text',
-      boolean: true,
+      description: 'Output JSON instead of text',
+      type: 'boolean',
     },
   },
-  async run({ args, positional, repoDir }) {
-    const evalsDir = resolve(repoDir ?? '.', '.wavemill', 'evals');
+  async run({ args }) {
+    const evalsDir = resolve(process.cwd(), '.wavemill', 'evals');
     const recordsFile = resolve((args.file as string) || join(evalsDir, 'challenge-records.jsonl'));
     const evalsFile = resolve((args.evals as string) || join(evalsDir, 'evals.jsonl'));
 

@@ -3,6 +3,27 @@ import { strict as assert } from 'node:assert';
 import { buildNoComparisonReport } from './no-comparison-report.ts';
 import type { StoredChallengeComparison } from './challenge-comparison.ts';
 
+function dimensions(): StoredChallengeComparison['dimensions'] {
+  return { completeness: { primary: 0, challenger: 0 }, correctness: { primary: 0, challenger: 0 }, code_quality: { primary: 0, challenger: 0 }, intervention_impact: { primary: 0, challenger: 0 }, autonomy: { primary: 0, challenger: 0 } };
+}
+
+function record(overrides: Partial<StoredChallengeComparison> & Pick<StoredChallengeComparison, 'challengePairId'>): StoredChallengeComparison {
+  return {
+    timestamp: '2026-08-10T00:00:00Z',
+    comparisonOutcome: 'compared',
+    winner: 'primary',
+    primaryModel: 'a',
+    challengerModel: 'b',
+    primaryPrUrl: 'url1',
+    challengerPrUrl: 'url2',
+    primaryEvalScore: 1,
+    challengerEvalScore: 1,
+    rationale: 'test',
+    dimensions: dimensions(),
+    ...overrides,
+  };
+}
+
 test('no-comparison-report', async (t) => {
   await t.test('dedupes by challengePairId, latest timestamp wins', () => {
     const comps: StoredChallengeComparison[] = [
@@ -130,6 +151,73 @@ test('no-comparison-report', async (t) => {
     assert.equal(report.launchedPairs, 3);
     assert.equal(report.comparedPairs, 1);
     assert.equal(report.noComparisonRate, 2 / 3);
+  });
+
+  await t.test('calculates skip rate from skipped, invalid_challenge, invalid, and inconclusive outcomes', () => {
+    const comps: StoredChallengeComparison[] = [
+      record({ challengePairId: 'compared' }),
+      record({
+        challengePairId: 'skipped',
+        comparisonOutcome: 'skipped',
+        winner: 'primary',
+        skipReason: 'identical-routing-dimensions',
+        noComparisonReason: 'identical_routing_dimensions',
+      }),
+      record({
+        challengePairId: 'invalid-challenge',
+        comparisonOutcome: 'invalid_challenge',
+        winner: undefined,
+        invalidChallenge: true,
+        invalidChallengeReason: 'identical_effective_route',
+        noComparisonReason: 'identical_effective_route',
+      }),
+      record({
+        challengePairId: 'invalid',
+        comparisonOutcome: 'invalid',
+        winner: undefined,
+        terminalReason: 'provenance_validation_failed',
+        provenanceValidation: { valid: false, outcome: 'invalid', issues: [] },
+      }),
+      record({
+        challengePairId: 'inconclusive',
+        comparisonOutcome: 'inconclusive',
+        winner: undefined,
+        terminalReason: 'provenance_validation_failed',
+        provenanceValidation: { valid: false, outcome: 'inconclusive', issues: [] },
+      }),
+      record({
+        challengePairId: 'forfeit',
+        comparisonOutcome: 'forfeit',
+        terminalReason: 'orphan_pair',
+        noComparisonReason: 'orphan_pair',
+      }),
+    ];
+
+    const report = buildNoComparisonReport({ comparisons: comps });
+    assert.equal(report.launchedPairs, 6);
+    assert.equal(report.comparedPairs, 1);
+    assert.equal(report.skipRate, 4 / 6);
+    assert.equal(report.noComparisonRate, 5 / 6);
+  });
+
+  await t.test('excludes explicit challenger_never_launched phantom pairs from launched denominator', () => {
+    const comps: StoredChallengeComparison[] = [
+      record({
+        challengePairId: 'phantom-explicit',
+        comparisonOutcome: 'forfeit',
+        terminalReason: 'orphan_pair',
+        noComparisonReason: 'challenger_never_launched',
+        challengerPrUrl: 'https://github.com/org/repo/pull/123',
+        challengerModel: 'claude-opus-4-8',
+      }),
+      record({ challengePairId: 'real-compared' }),
+    ];
+
+    const report = buildNoComparisonReport({ comparisons: comps });
+    assert.equal(report.phantomPairs, 1);
+    assert.equal(report.launchedPairs, 1);
+    assert.equal(report.comparedPairs, 1);
+    assert.equal(report.byReason.get('challenger_never_launched')?.count, 1);
   });
 
   await t.test('filters by date range', () => {

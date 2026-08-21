@@ -12637,6 +12637,10 @@ EOF
   if [[ "$challenge_enabled_for_launch" == "true" ]]; then
     save_task_state "$challenger_key" "$challenger_slug" "task/${challenger_slug}" "${WORKTREE_ROOT}/${challenger_slug}" "" "" "${challenger_planner_agent:-$challenger_agent}" "$linear_issue" "true" "$challenge_pair" "challenger" "$challenger_model" "$challenger_planner" "$challenger_model" "$challenger_reviewer" "$challenger_plan_depth" "$challenger_code_depth" "$challenger_review_mode" "$challenge_stage"
     state_mutate "$STATE_FILE" '.tasks[$issue].challengeStage = $stage' --arg issue "$challenger_key" --arg stage "$challenge_stage" || true
+    state_mutate "$STATE_FILE" \
+      '.tasks[$issue].challengerLaunched = true
+       | .tasks[$issue].updated = (now | todate)' \
+      --arg issue "$issue" >/dev/null 2>&1 || true
     # One writer, both arms, both surfaces.  The separate challengeIntent write
     # that used to live here persisted a second, independently-built schema
     # under a different key; resolve-challenge-task.ts now emits the canonical

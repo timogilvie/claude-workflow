@@ -344,7 +344,7 @@ function buildResolutionRecord(input: {
 
   // Determine the reason: if the lone side is the primary and has no challengerLaunched marker,
   // it's a phantom pair (challenger was never actually launched).
-  const noComparisonReason = (!primary && loneSide.role === 'challenger') || (primary?.challengerLaunched !== false)
+  const noComparisonReason = (!primary && loneSide.role === 'challenger') || primary?.challengerLaunched === true
     ? 'orphan_pair'
     : 'challenger_never_launched';
 

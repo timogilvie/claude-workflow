@@ -1,5 +1,5 @@
-import { NoComparisonReason, StoredChallengeComparison, deriveNoComparisonReason, NO_COMPARISON_REASONS } from './challenge-comparison.ts';
-import { readChallengeRecordVoids, isChallengeRecordVoided, type ChallengeRecordVoid } from './challenge-record-void.ts';
+import { deriveNoComparisonReason, type NoComparisonReason, type StoredChallengeComparison } from './challenge-comparison.ts';
+import { isChallengeRecordVoided, type ChallengeRecordVoid } from './challenge-record-void.ts';
 
 export interface NoComparisonReportReason {
   reason: NoComparisonReason;
@@ -71,14 +71,17 @@ export function buildNoComparisonReport(options: {
   let launchedPairs = 0;
   let comparedPairs = 0;
   let phantomPairs = 0;
+  let skipOutcomeCount = 0;
   const reasonCounts = new Map<NoComparisonReason, Array<string>>();
   let unknownCount = 0;
 
   for (const record of filteredRecords) {
-    // Phantom pair heuristic: orphan_pair with challengerPrUrl ending /pull/0 and challengerModel==='unknown'
-    const isPhantom = record.terminalReason === 'orphan_pair'
+    const reason = deriveNoComparisonReason(record) ?? 'unknown';
+    // Phantom pairs were never launched; count them separately from launched-pair waste.
+    const isPhantom = reason === 'challenger_never_launched'
+      || (record.terminalReason === 'orphan_pair'
       && record.challengerPrUrl?.endsWith('/pull/0')
-      && record.challengerModel === 'unknown';
+      && record.challengerModel === 'unknown');
 
     if (isPhantom) {
       phantomPairs += 1;
@@ -89,9 +92,12 @@ export function buildNoComparisonReport(options: {
     if (record.comparisonOutcome === 'compared') {
       comparedPairs += 1;
     } else {
-      const reason = deriveNoComparisonReason(record) ?? 'unknown';
       if (reason === 'unknown') {
         unknownCount += 1;
+      }
+
+      if (!isPhantom && isSkipOutcome(record.comparisonOutcome)) {
+        skipOutcomeCount += 1;
       }
 
       const reasonList = reasonCounts.get(reason) ?? [];
@@ -126,7 +132,7 @@ export function buildNoComparisonReport(options: {
     }
   }
 
-  const skipRate = launchedPairs > 0 ? ((reasonCounts.get('skipped')?.length ?? 0) + (reasonCounts.get('invalid_challenge')?.length ?? 0)) / launchedPairs : 0;
+  const skipRate = launchedPairs > 0 ? skipOutcomeCount / launchedPairs : 0;
   const noComparisonRate = launchedPairs > 0 ? (launchedPairs - comparedPairs) / launchedPairs : 0;
 
   return {
@@ -139,6 +145,13 @@ export function buildNoComparisonReport(options: {
     byReason,
     ...(unrecordedPairs ? { unrecordedPairs } : {}),
   };
+}
+
+function isSkipOutcome(outcome: StoredChallengeComparison['comparisonOutcome']): boolean {
+  return outcome === 'skipped'
+    || outcome === 'invalid_challenge'
+    || outcome === 'invalid'
+    || outcome === 'inconclusive';
 }
 
 export function formatNoComparisonReportText(report: NoComparisonReport): string {
