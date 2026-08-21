@@ -13,6 +13,12 @@ import { dirname, join, relative, resolve } from 'node:path';
 import type { AgentMessage, AgentTurn, Message } from './messages.ts';
 import type { AgentContext, WavemillLoopConfig } from './loop.ts';
 import { runWavemillLoop } from './loop.ts';
+import { classifyProviderError } from './provider-error-classifier.ts';
+import { DEFAULT_MAX_OUTPUT_TOKENS } from './output-limits.ts';
+import {
+  assertOpenRouterBalanceSufficient,
+  capOpenRouterMaxTokensForBalance,
+} from './openrouter-credits-guard.ts';
 import {
   buildNativeProviderResolutionFailureMessage,
   getNativeProviderApiKey,
@@ -34,6 +40,7 @@ import { createCleanupTracker, runCleanup, type CleanupReason } from './cleanup.
 import { updateStageResult } from '../stage-result.ts';
 import {
   equivalentOpenRouterModelIds,
+  type NormalizedPricing,
 } from '../openrouter-catalog.ts';
 import { getNativeAgentConfig } from '../config.ts';
 import {
@@ -369,6 +376,10 @@ function findFinalAssistantErrorMessage(messages: AgentMessage[]): string {
   return '';
 }
 
+function providerErrorPrefix(result: { providerError?: { kind: string } }, errorMessage: string): string {
+  return result.providerError?.kind ?? classifyProviderError(errorMessage).kind;
+}
+
 function atomicWriteText(path: string, content: string): void {
   mkdirSync(dirname(path), { recursive: true });
   const tmpPath = `${path}.${randomUUID()}.tmp`;
@@ -429,6 +440,17 @@ function formatReadyProviderList(providerEntries: readonly ReadyNativeProviderEn
   return providerEntries
     .map((entry) => `${entry.providerName}:${entry.modelId}`)
     .join(', ');
+}
+
+function normalizedPricingFromModel(model: WavemillLoopConfig['model']): NormalizedPricing {
+  const cost = (model as { cost?: { input?: unknown; output?: unknown } }).cost;
+  const inputPerMTok = typeof cost?.input === 'number' && Number.isFinite(cost.input) && cost.input > 0
+    ? cost.input
+    : null;
+  const outputPerMTok = typeof cost?.output === 'number' && Number.isFinite(cost.output) && cost.output > 0
+    ? cost.output
+    : null;
+  return { inputPerMTok, outputPerMTok };
 }
 
 function cleanupReasonForStopReason(stopReason: string): CleanupReason | null {
@@ -641,10 +663,27 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
       }],
       tools: toPiTools(descriptors),
     };
+    const pricing = normalizedPricingFromModel(model);
+    const effectiveMaxTokens = model.provider === 'openrouter' && !options.loopModelOverride
+      ? capOpenRouterMaxTokensForBalance({
+        requestedMaxTokens: DEFAULT_MAX_OUTPUT_TOKENS,
+        pricing,
+        repoDir: options.repoDir,
+      }) ?? DEFAULT_MAX_OUTPUT_TOKENS
+      : DEFAULT_MAX_OUTPUT_TOKENS;
+    if (model.provider === 'openrouter' && !options.loopModelOverride) {
+      assertOpenRouterBalanceSufficient({
+        repoDir: options.repoDir,
+        model: model.name ?? model.id,
+        pricing,
+        reservedOutputTokens: effectiveMaxTokens,
+      });
+    }
 
     const result = await runWavemillLoop({
       model,
       context,
+      maxTokens: effectiveMaxTokens,
       convertToLlm: (messages) => messages as unknown as Message[],
       afterToolCall: gitAfterToolCall,
       signal: options.signal,
@@ -692,6 +731,12 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
 
     const stopFailureReason = planningFailureReasonForStopReason(result.stopReason);
     if (stopFailureReason) {
+      const providerError = result.stopReason === 'error'
+        ? findFinalAssistantErrorMessage(result.messages)
+        : '';
+      const providerFailureReason = providerError
+        ? `${providerErrorPrefix(result, providerError)}: ${providerError}`
+        : '';
       clearRejectedPlanningArtifacts(planPath, approvalMarkerPath);
       await updateStageResult(featureDir, 'planning', {
         status: stopFailureReason === 'aborted' ? 'aborted' : 'failed',
@@ -707,10 +752,12 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
           planArtifactValid: false,
           approvalReady: false,
         },
-        failureReason: stopFailureReason,
+        failureReason: providerFailureReason || stopFailureReason,
         ...cleanupPatch,
       });
-      throw new Error(`Native planning rejected before approval: ${stopFailureReason}`);
+      throw new Error(providerFailureReason
+        ? `Native planning failed: ${providerFailureReason}`
+        : `Native planning rejected before approval: ${stopFailureReason}`);
     }
 
     const rawFinalText = findFinalAssistantText(result.messages);
@@ -736,7 +783,7 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
         failureReason: providerError ? 'error' : 'empty_final_plan',
       });
       throw new Error(providerError
-        ? `Native planning failed: ${providerError}`
+        ? `Native planning failed: ${providerErrorPrefix(result, providerError)}: ${providerError}`
         : `Native planning completed without a final plan (stopReason=${result.stopReason})`);
     }
     const validation = validateFinalPlanningArtifact(rawFinalText);

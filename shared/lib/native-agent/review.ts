@@ -9,6 +9,11 @@ import {
   ContextWindowUnverifiableError,
 } from './context-window-guard.ts';
 import { REVIEW_MAX_OUTPUT_TOKENS } from './output-limits.ts';
+import { classifyProviderError } from './provider-error-classifier.ts';
+import {
+  assertOpenRouterBalanceSufficient,
+  capOpenRouterMaxTokensForBalance,
+} from './openrouter-credits-guard.ts';
 import { TranscriptWriter, type TranscriptEvent, type TranscriptToolResult } from './transcript.ts';
 import {
   buildNativeProviderResolutionFailureMessage,
@@ -33,6 +38,7 @@ import {
 import { loadPromptResourceSync } from '../resource-retrieval.ts';
 import { createCleanupTracker, runCleanup, type CleanupReason } from './cleanup.ts';
 import { updateStageResult } from '../stage-result.ts';
+import type { NormalizedPricing } from '../openrouter-catalog.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const NATIVE_REVIEW_PHASE_PROMPT_PATH = resolve(
@@ -153,6 +159,17 @@ function registerNativeReviewRuntime(input: {
   }
 }
 
+function normalizedPricingFromModel(model: WavemillLoopConfig['model']): NormalizedPricing {
+  const cost = (model as { cost?: { input?: unknown; output?: unknown } }).cost;
+  const inputPerMTok = typeof cost?.input === 'number' && Number.isFinite(cost.input) && cost.input > 0
+    ? cost.input
+    : null;
+  const outputPerMTok = typeof cost?.output === 'number' && Number.isFinite(cost.output) && cost.output > 0
+    ? cost.output
+    : null;
+  return { inputPerMTok, outputPerMTok };
+}
+
 function selectReviewProvider(repoDir: string, env: NodeJS.ProcessEnv = process.env): SelectedProvider {
   const providers = resolveNativeAgentProviders(repoDir, { env, phase: 'review' });
   const readyEntry = providers.find(
@@ -180,6 +197,20 @@ function extractFinalAssistantText(messages: AgentMessage[]): string {
       ))
       .map((block) => block.text)
       .join('\n');
+  }
+  return '';
+}
+
+function extractFinalAssistantErrorMessage(messages: AgentMessage[]): string {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role !== 'assistant') {
+      continue;
+    }
+    const errorMessage = (message as { errorMessage?: string }).errorMessage?.trim();
+    if (errorMessage) {
+      return errorMessage;
+    }
   }
   return '';
 }
@@ -326,6 +357,22 @@ export async function runNativeReview(
     }],
     tools: phaseTools.map((tool) => toPiAgentTool(tool)),
   };
+  const pricing = normalizedPricingFromModel(modelConfig);
+  const effectiveMaxTokens = modelConfig.provider === 'openrouter'
+    ? capOpenRouterMaxTokensForBalance({
+      requestedMaxTokens: REVIEW_MAX_OUTPUT_TOKENS,
+      pricing,
+      repoDir,
+    }) ?? REVIEW_MAX_OUTPUT_TOKENS
+    : REVIEW_MAX_OUTPUT_TOKENS;
+  if (modelConfig.provider === 'openrouter') {
+    assertOpenRouterBalanceSufficient({
+      repoDir,
+      model: modelConfig.name ?? modelConfig.id,
+      pricing,
+      reservedOutputTokens: effectiveMaxTokens,
+    });
+  }
 
   const maxRetries = options.maxRetries ?? 1;
   const cleanupTracker = createCleanupTracker();
@@ -334,7 +381,7 @@ export async function runNativeReview(
     loopResult = await nativeReviewDeps.runWavemillLoop({
       model: modelConfig,
       context: loopContext,
-      maxTokens: REVIEW_MAX_OUTPUT_TOKENS,
+      maxTokens: effectiveMaxTokens,
       promptSizeLog: options.repoDir ? {
         repoDir: options.repoDir,
         stage: 'review',
@@ -399,10 +446,16 @@ export async function runNativeReview(
 
   const deniedTools = nativeReviewDeps.extractDeniedTools(transcriptEvents);
   if (loopResult.stopReason !== 'stop') {
+    const providerError = loopResult.stopReason === 'error'
+      ? extractFinalAssistantErrorMessage(loopResult.messages)
+      : '';
+    const providerDescription = providerError
+      ? `${loopResult.providerError?.kind ?? classifyProviderError(providerError).kind}: ${providerError}`
+      : '';
     return nativeReviewFailure(
       context,
       'native-review-failed',
-      stopReasonDescription(loopResult.stopReason),
+      providerDescription || stopReasonDescription(loopResult.stopReason),
       deniedTools,
     );
   }

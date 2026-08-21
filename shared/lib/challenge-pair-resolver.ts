@@ -4,7 +4,8 @@ import {
   appendChallengeComparison,
   buildDoubleForfeitComparison,
   buildForfeitComparison,
-  readChallengeComparisons,
+  isDecisiveChallengeComparison,
+  readDecisiveChallengeComparisons,
   type ChallengeComparison,
 } from './challenge-comparison.ts';
 import {
@@ -52,7 +53,7 @@ export type ResolveOutcome =
 
 export function resolveUnresolvablePair(input: UnresolvablePairInput): ResolveOutcome {
   const evalsDir = join(input.repoDir, '.wavemill', 'evals');
-  const existing = readChallengeComparisons(evalsDir).find((comparison) => comparison.challengePairId === input.pairId);
+  const existing = readDecisiveChallengeComparisons(evalsDir).find((comparison) => comparison.challengePairId === input.pairId);
   if (existing) {
     return { status: 'already-resolved', recordExists: true };
   }
@@ -96,6 +97,10 @@ export function resolveUnresolvablePair(input: UnresolvablePairInput): ResolveOu
       };
     }
     return { status: 'skipped', reason: `Pair ${input.pairId} requires manual repair before a terminal record can be written.` };
+  }
+
+  if (!isDecisiveChallengeComparison(resolution.record)) {
+    return { status: 'skipped', reason: 'non-decisive stall record suppressed; pair left open for retry' };
   }
 
   if (!input.dryRun) {

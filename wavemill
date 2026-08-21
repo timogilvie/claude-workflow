@@ -1432,6 +1432,34 @@ case "${1:-}" in
   mill)
     run_preflight_checks
     shift
+    if [[ "${1:-}" == "challenge" ]]; then
+      shift
+      case "${1:-}" in
+        repair)
+          shift
+          pair_id="${1:-}"
+          if [[ -z "$pair_id" ]]; then
+            echo -e "${RED}Error:${NC} wavemill mill challenge repair requires a pair id" >&2
+            exit 1
+          fi
+          exec npx tsx "$TOOLS_DIR/repair-challenge-pairing.ts" --pair-id "$pair_id" --repo-dir "$PWD"
+          ;;
+        void)
+          shift
+          pair_id="${1:-}"
+          if [[ -z "$pair_id" ]]; then
+            echo -e "${RED}Error:${NC} wavemill mill challenge void requires a pair id" >&2
+            exit 1
+          fi
+          shift || true
+          exec npx tsx "$TOOLS_DIR/void-challenge-record.ts" --pair-id "$pair_id" --repo-dir "$PWD" "$@"
+          ;;
+        *)
+          echo -e "${RED}Error:${NC} unknown mill challenge subcommand: ${1:-}" >&2
+          exit 1
+          ;;
+      esac
+    fi
     # Parse mill-specific flags before delegating
     mill_force_model=""
     mill_planner_model=""

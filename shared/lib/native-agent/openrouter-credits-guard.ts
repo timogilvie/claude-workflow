@@ -23,6 +23,8 @@ export interface OpenRouterBalanceEvaluation {
   updatedAt: string | null;
   minCreditsUsd: number;
   warnCreditsUsd: number;
+  reservedOutputTokens?: number;
+  reservationUsd?: number;
   stale: boolean;
   lastFetchError?: string;
 }
@@ -57,6 +59,7 @@ export function evaluateOpenRouterBalance(input: {
   config?: NativeAgentProviderConfig;
   model?: string;
   pricing?: NormalizedPricing;
+  reservedOutputTokens?: number;
 } = {}): OpenRouterBalanceEvaluation {
   const repoDir = input.repoDir;
   const config = input.config ?? getNativeOpenRouterProviderConfig(repoDir);
@@ -71,6 +74,7 @@ export function evaluateOpenRouterBalance(input: {
       updatedAt: null,
       minCreditsUsd: thresholds.minCreditsUsd,
       warnCreditsUsd: thresholds.warnCreditsUsd,
+      ...(input.reservedOutputTokens !== undefined ? { reservedOutputTokens: input.reservedOutputTokens } : {}),
       stale: false,
     };
   }
@@ -81,13 +85,14 @@ export function evaluateOpenRouterBalance(input: {
   }
 
   const priceFloor = priceFloorUsd(input.pricing);
+  const reservationUsd = reservationPriceUsd(input.pricing, input.reservedOutputTokens);
   const minCreditsUsd = Math.max(thresholds.minCreditsUsd, priceFloor);
   const balanceUsd = snapshot.balanceUsd;
   const status = balanceUsd == null
     ? 'ok'
     : balanceUsd < minCreditsUsd
       ? 'refuse'
-      : balanceUsd < thresholds.warnCreditsUsd
+      : balanceUsd < thresholds.warnCreditsUsd || (reservationUsd !== undefined && balanceUsd < reservationUsd)
         ? 'warn'
         : 'ok';
 
@@ -97,6 +102,8 @@ export function evaluateOpenRouterBalance(input: {
     updatedAt: snapshot.updatedAt,
     minCreditsUsd,
     warnCreditsUsd: thresholds.warnCreditsUsd,
+    ...(input.reservedOutputTokens !== undefined ? { reservedOutputTokens: input.reservedOutputTokens } : {}),
+    ...(reservationUsd !== undefined ? { reservationUsd } : {}),
     stale,
     lastFetchError: snapshot.lastFetchError?.message,
   };
@@ -107,6 +114,7 @@ export function assertOpenRouterBalanceSufficient(input: {
   config?: NativeAgentProviderConfig;
   model?: string;
   pricing?: NormalizedPricing;
+  reservedOutputTokens?: number;
 } = {}): OpenRouterBalanceEvaluation {
   const evaluation = evaluateOpenRouterBalance(input);
   if (evaluation.status === 'refuse') {
@@ -119,10 +127,18 @@ export function assertOpenRouterBalanceSufficient(input: {
   }
 
   if (evaluation.status === 'warn') {
-    console.warn(
-      `OpenRouter credit balance is low: $${(evaluation.balanceUsd ?? 0).toFixed(4)} `
-      + `(warning threshold $${evaluation.warnCreditsUsd.toFixed(2)}).`,
-    );
+    const balance = `$${(evaluation.balanceUsd ?? 0).toFixed(4)}`;
+    if (evaluation.reservationUsd !== undefined && evaluation.balanceUsd !== null && evaluation.balanceUsd < evaluation.reservationUsd) {
+      console.warn(
+        `OpenRouter credit balance is below this request's max_tokens reservation: ${balance} `
+        + `< $${evaluation.reservationUsd.toFixed(4)} for ${evaluation.reservedOutputTokens ?? 0} output tokens.`,
+      );
+    } else {
+      console.warn(
+        `OpenRouter credit balance is low: ${balance} `
+        + `(warning threshold $${evaluation.warnCreditsUsd.toFixed(2)}).`,
+      );
+    }
   }
   return evaluation;
 }
@@ -201,6 +217,13 @@ function priceFloorUsd(pricing?: NormalizedPricing): number {
     return 0;
   }
   return outputPricePerToken(pricing) * OPENROUTER_MIN_MEANINGFUL_OUTPUT_TOKENS;
+}
+
+function reservationPriceUsd(pricing: NormalizedPricing | undefined, reservedOutputTokens: number | undefined): number | undefined {
+  if (typeof reservedOutputTokens !== 'number' || !Number.isFinite(reservedOutputTokens) || reservedOutputTokens <= 0) {
+    return undefined;
+  }
+  return outputPricePerToken(pricing ?? { inputPerMTok: 0, outputPerMTok: DEFAULT_OPENROUTER_OUTPUT_PRICE_PER_MTOK }) * reservedOutputTokens;
 }
 
 function triggerBackgroundRefresh(repoDir: string | undefined, config: NativeAgentProviderConfig): void {

@@ -13,12 +13,15 @@ import {
   readChallengeComparisons,
   detectVariedDimensions,
   hasAnyVariedDimension,
+  isDecisiveChallengeComparison,
   classifyChallengeType,
+  readDecisiveChallengeComparisons,
   resolveChallengeSideExecutionProvenance,
   validateChallengeExecutionProvenance,
   type ChallengeComparison,
   type ChallengeRoutingMeta,
 } from './challenge-comparison.ts';
+import { appendChallengeRecordVoid } from './challenge-record-void.ts';
 
 let passed = 0;
 let failed = 0;
@@ -79,6 +82,59 @@ test('readChallengeComparisons returns empty array when file is missing', () => 
   try {
     const records = readChallengeComparisons(tmp);
     assert.deepEqual(records, []);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('isDecisiveChallengeComparison ignores HOK-2840-style stall rows', () => {
+  assert.equal(isDecisiveChallengeComparison(makeRecord({
+    challengePairId: 'HOK-2840',
+    comparisonOutcome: 'double-forfeit',
+    winner: 'primary',
+    winnerModel: 'unknown',
+    terminalReason: 'orphan_pair',
+    armFailures: [],
+    primaryCompleted: false,
+    challengerCompleted: false,
+    primaryPrUrl: 'https://github.com/unknown/unknown/pull/0',
+    challengerPrUrl: 'https://github.com/unknown/unknown/pull/1181',
+  })), false);
+  assert.equal(isDecisiveChallengeComparison(makeRecord({
+    comparisonOutcome: 'double-forfeit',
+    terminalReason: 'both_challenge_aborted',
+    primaryCompleted: false,
+    challengerCompleted: false,
+    armFailures: [{ side: 'primary', model: 'm', failureKind: 'provider-transient-error' }],
+  })), true);
+  const legacy = makeRecord({ comparisonOutcome: 'forfeit' }) as Partial<ChallengeComparison>;
+  delete legacy.primaryCompleted;
+  delete legacy.challengerCompleted;
+  assert.equal(isDecisiveChallengeComparison(legacy as ChallengeComparison), true);
+});
+
+test('readDecisiveChallengeComparisons filters non-decisive and voided rows', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'challenge-comparison-test-'));
+  try {
+    appendChallengeComparison(makeRecord({
+      challengePairId: 'HOK-2840',
+      comparisonOutcome: 'double-forfeit',
+      primaryCompleted: false,
+      challengerCompleted: false,
+      armFailures: [],
+      terminalReason: 'orphan_pair',
+    }), tmp);
+    appendChallengeComparison(makeRecord({ challengePairId: 'HOK-1', timestamp: '2026-08-21T00:00:00.000Z' }), tmp);
+    appendChallengeRecordVoid({
+      challengePairId: 'HOK-1',
+      voidedAt: '2026-08-21T00:01:00.000Z',
+      reason: 'bad record',
+      recordTimestamp: '2026-08-21T00:00:00.000Z',
+    }, tmp);
+    appendChallengeComparison(makeRecord({ challengePairId: 'HOK-2', timestamp: '2026-08-21T00:02:00.000Z' }), tmp);
+
+    const records = readDecisiveChallengeComparisons(tmp);
+    assert.deepEqual(records.map((record) => record.challengePairId), ['HOK-2']);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

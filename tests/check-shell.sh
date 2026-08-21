@@ -112,6 +112,7 @@ for f in \
   "$REPO_DIR"/tests/terminal-reconciler.test.sh \
   "$REPO_DIR"/tests/challenge-intent-roundtrip.test.sh \
   "$REPO_DIR"/tests/challenge-varied-model-abort.test.sh \
+  "$REPO_DIR"/tests/challenge-record-decisive.test.sh \
   "$REPO_DIR"/tests/native-terminal-failure.test.sh \
   "$REPO_DIR"/tests/archive-stage-artifacts.test.sh \
   "$REPO_DIR"/tests/completed-task-cleanup.test.sh \

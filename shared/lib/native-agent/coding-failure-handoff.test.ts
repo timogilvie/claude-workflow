@@ -74,6 +74,36 @@ describe('coding-failure-handoff', () => {
     assert.deepEqual(result.value, handoff);
   });
 
+  it('round-trips a provider-error handoff artifact', async () => {
+    const featureDir = makeFeatureDir();
+    const handoff: CodingFailureHandoff = {
+      stage: 'coding',
+      reason: 'provider_error',
+      stopReason: 'error',
+      mutationFailures: 0,
+      lastToolError: null,
+      recoveryAttempted: true,
+      suggestedAction: 'Rerun native coding.',
+      createdAt: '2026-08-10T00:00:00.000Z',
+      schemaVersion: '1.0',
+      providerError: {
+        kind: 'provider-transient-error',
+        errorMessage: 'Provider finish_reason: error',
+        turnsCompleted: 9,
+        toolCallsExecuted: 8,
+        attempts: 1,
+        transcriptPath: '/tmp/native-sessions/coding-HOK-2837_c.jsonl',
+      },
+    };
+
+    writeCodingFailureHandoff(featureDir, handoff);
+    const result = await readCodingFailureHandoff(getCodingFailureHandoffPath(featureDir));
+
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.deepEqual(result.value, handoff);
+  });
+
   it('rejects malformed JSON', async () => {
     const featureDir = makeFeatureDir();
     const filePath = getCodingFailureHandoffPath(featureDir);
@@ -120,6 +150,19 @@ describe('coding-failure-handoff', () => {
     if (result.ok) return;
     assert.equal(result.code, 'MISSING_REQUIRED_FIELD');
     assert.equal(result.field, 'validationErrors');
+  });
+
+  it('requires providerError details for provider-error handoffs', () => {
+    const result = validateCodingFailureHandoff({
+      ...validNoCompletionHandoff(),
+      reason: 'provider_error',
+      stopReason: 'error',
+    });
+
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.equal(result.code, 'MISSING_REQUIRED_FIELD');
+    assert.equal(result.field, 'providerError');
   });
 
   it('rejects malformed validationErrors fields', () => {
