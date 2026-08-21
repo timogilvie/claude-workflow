@@ -6,7 +6,7 @@ import path from 'node:path';
 export const CODING_FAILURE_HANDOFF_SCHEMA_VERSION = '1.0';
 export const CODING_FAILURE_HANDOFF_FILENAME = '.coding-failure-handoff.json';
 export const CODING_FAILURE_HANDOFF_STAGE = 'coding';
-export const CODING_FAILURE_HANDOFF_REASONS = ['no_completion_artifact', 'invalid_completion_artifact'] as const;
+export const CODING_FAILURE_HANDOFF_REASONS = ['no_completion_artifact', 'invalid_completion_artifact', 'provider_error'] as const;
 export type CodingFailureHandoffReason = (typeof CODING_FAILURE_HANDOFF_REASONS)[number];
 
 export interface CodingFailureToolError {
@@ -35,6 +35,14 @@ export interface CodingFailureHandoff {
   schemaVersion: typeof CODING_FAILURE_HANDOFF_SCHEMA_VERSION;
   validationErrors?: CodingFailureValidationError[];
   quarantinedArtifacts?: string[];
+  providerError?: {
+    kind: string;
+    errorMessage: string;
+    turnsCompleted: number;
+    toolCallsExecuted: number;
+    attempts: number;
+    transcriptPath?: string;
+  };
 }
 
 export type CodingFailureHandoffValidationResult =
@@ -128,6 +136,12 @@ export function validateCodingFailureHandoff(
   ) {
     return error('MISSING_REQUIRED_FIELD', 'Coding failure handoff validationErrors must be present for invalid_completion_artifact.', 'validationErrors');
   }
+  if (value.reason === 'provider_error') {
+    const providerError = validateProviderError(value.providerError);
+    if (!providerError.ok) {
+      return providerError;
+    }
+  }
 
   return { ok: true, value: value as CodingFailureHandoff };
 }
@@ -174,6 +188,30 @@ function validateValidationErrors(value: unknown): CodingFailureHandoffValidatio
     if (Object.prototype.hasOwnProperty.call(item, 'field') && item.field !== undefined && typeof item.field !== 'string') {
       return error('INVALID_FIELD_TYPE', `Coding failure handoff validationErrors.${index}.field must be a string when present.`, `validationErrors.${index}.field`);
     }
+  }
+  return { ok: true, value: undefined as unknown as CodingFailureHandoff };
+}
+
+function validateProviderError(value: unknown): CodingFailureHandoffValidationResult {
+  if (!isRecord(value)) {
+    return error('MISSING_REQUIRED_FIELD', 'Coding failure handoff providerError must be present for provider_error.', 'providerError');
+  }
+  for (const field of ['kind', 'errorMessage'] as const) {
+    if (typeof value[field] !== 'string' || value[field].length === 0) {
+      return error('INVALID_FIELD_TYPE', `Coding failure handoff providerError.${field} must be a non-empty string.`, `providerError.${field}`);
+    }
+  }
+  for (const field of ['turnsCompleted', 'toolCallsExecuted', 'attempts'] as const) {
+    if (typeof value[field] !== 'number' || !Number.isInteger(value[field]) || value[field] < 0) {
+      return error('INVALID_FIELD_TYPE', `Coding failure handoff providerError.${field} must be a non-negative integer.`, `providerError.${field}`);
+    }
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(value, 'transcriptPath')
+    && value.transcriptPath !== undefined
+    && typeof value.transcriptPath !== 'string'
+  ) {
+    return error('INVALID_FIELD_TYPE', 'Coding failure handoff providerError.transcriptPath must be a string when present.', 'providerError.transcriptPath');
   }
   return { ok: true, value: undefined as unknown as CodingFailureHandoff };
 }

@@ -52,6 +52,20 @@ export type ValidatedComparisonResult = Omit<
   | 'variedStage'
   | 'stageEvidenceMode'
   | 'presentationOrder'
+  // Schema-carrier fields (not populated by judge, HOK-2794)
+  | 'forkStage'
+  | 'forkCommit'
+  | 'sharedPrefix'
+  | 'primaryInheritedStages'
+  | 'challengerInheritedStages'
+  | 'primaryDiffIdentity'
+  | 'challengerDiffIdentity'
+  | 'judge_model'
+  | 'judge_prompt_hash'
+  | 'primary_cost_usd'
+  | 'challenger_cost_usd'
+  | 'criterionRationales'
+  | 'noComparisonReason'
 >;
 
 export function resolvePresentationOrder(

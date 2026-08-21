@@ -6,6 +6,7 @@ import type { ModelRegistry } from '../model-registry.ts';
 import { registerScriptedPiProvider, type ScriptedProviderContext } from './provider.ts';
 import { runWavemillLoop, HEARTBEAT_AGENT, type HeartbeatEvent, type WavemillLoopConfig } from './loop.ts';
 import {
+  ContextExhaustedError,
   ContextWindowExceededError,
   ContextWindowUnverifiableError,
 } from './context-window-guard.ts';
@@ -24,6 +25,10 @@ function uniqueApi(prefix = 'loop-test') {
 /** Minimal Pi-compatible user message for context. */
 function userMsg(text: string) {
   return { role: 'user' as const, content: text, timestamp: 0 };
+}
+
+function textForTokens(tokens: number): string {
+  return 'x'.repeat(tokens * 4);
 }
 
 /** Minimal AgentContext for tests. */
@@ -141,6 +146,7 @@ describe('loop — budget stops', () => {
           content: [],
           usage: { input: 0, output: 0 },
           stopReason: 'error',
+          errorMessage: 'HTTP 402 Payment Required: can only afford 100 tokens',
         },
       ],
     });
@@ -148,6 +154,96 @@ describe('loop — budget stops', () => {
     const result = await runWavemillLoop(baseConfig(api));
 
     assert.equal(result.stopReason, 'error');
+    assert.equal(result.providerError?.kind, 'provider-credit-exhausted');
+  });
+
+  it('retries a transient provider error and resumes with prior tool calls retained', async () => {
+    const tool = makeTool('noop', 'sequential', async () => 'done');
+    const api = uniqueApi('provider-retry');
+    const contexts: ScriptedProviderContext[] = [];
+    const sleeps: number[] = [];
+    let turnIndex = 0;
+    registerScriptedPiProvider({
+      api,
+      turns: (context) => {
+        contexts.push(context);
+        if (turnIndex < 8) {
+          turnIndex += 1;
+          return {
+            content: [{ type: 'tool_call', id: `tc-${turnIndex}`, name: 'noop', arguments: {} }],
+            usage: { input: 10, output: 1 },
+            stopReason: 'tool_calls',
+          };
+        }
+        if (turnIndex === 8) {
+          turnIndex += 1;
+          return {
+            content: [{ type: 'text', text: 'Now I will add the tests.' }],
+            usage: { input: 0, output: 0, totalTokens: 0 },
+            stopReason: 'error',
+            errorMessage: 'Provider finish_reason: error',
+          };
+        }
+        return {
+          content: [{ type: 'text', text: 'Recovered and completed.' }],
+          usage: { input: 10, output: 1 },
+          stopReason: 'stop',
+        };
+      },
+    });
+    const heartbeats: HeartbeatEvent[] = [];
+
+    const result = await runWavemillLoop({
+      ...baseConfig(api, [tool]),
+      providerErrorRetry: {
+        maxAttempts: 3,
+        backoffDelaysMs: [5],
+        sleep: async (ms) => {
+          sleeps.push(ms);
+        },
+      },
+      onHeartbeat: (event) => heartbeats.push(event),
+    });
+
+    assert.equal(result.stopReason, 'stop');
+    assert.equal(result.toolCallsExecuted, 8);
+    assert.equal(result.providerError, undefined);
+    assert.equal(sleeps.length, 1);
+    assert.equal(heartbeats.some((event) => event.event === 'provider_retry' && event.detail === 'provider-transient-error'), true);
+    const retriedContext = contexts.at(-1);
+    assert.ok(retriedContext);
+    assert.equal(JSON.stringify(retriedContext.messages).includes('Provider finish_reason: error'), false);
+    assert.equal(JSON.stringify(retriedContext.messages).includes('tc-8'), true);
+  });
+
+  it('reports providerError after retryable provider errors exhaust attempts', async () => {
+    const api = uniqueApi('provider-retry-exhausted');
+    registerScriptedPiProvider({
+      api,
+      turns: [{
+        content: [{ type: 'text', text: 'temporary upstream failure' }],
+        usage: { input: 0, output: 0, totalTokens: 0 },
+        stopReason: 'error',
+        errorMessage: 'Provider finish_reason: error',
+      }],
+    });
+    const sleeps: number[] = [];
+
+    const result = await runWavemillLoop({
+      ...baseConfig(api),
+      providerErrorRetry: {
+        maxAttempts: 1,
+        backoffDelaysMs: [1],
+        sleep: async (ms) => {
+          sleeps.push(ms);
+        },
+      },
+    });
+
+    assert.equal(result.stopReason, 'error');
+    assert.equal(result.providerError?.kind, 'provider-transient-error');
+    assert.equal(result.providerError?.attempts, 1);
+    assert.equal(sleeps.length, 1);
   });
 
   it('stops after maxTurns is reached', async () => {
@@ -1090,6 +1186,118 @@ describe('loop — replay compaction', () => {
 
     const replayToolResult = secondTurnMessages!.find((m: any) => m.role === 'tool_result') as any;
     assert.equal(replayToolResult.content[0].content[0].text, rawToolOutput);
+  });
+});
+
+describe('loop — in-session context management', () => {
+  it('shrinks maxTokens for the initial request as input approaches the window', async () => {
+    const api = uniqueApi('dynamic-output');
+    const seen: ScriptedProviderContext[] = [];
+    registerScriptedPiProvider({
+      api,
+      turns: (ctx) => {
+        seen.push(ctx);
+        return { content: [{ type: 'text', text: 'Done' }], stopReason: 'stop' };
+      },
+    });
+
+    const result = await runWavemillLoop({
+      ...baseConfig(api),
+      model: { id: 'windowed', api, provider: 'test-provider', contextWindow: 100_000 },
+      context: {
+        systemPrompt: '',
+        messages: [userMsg(textForTokens(85_000))],
+        tools: [],
+      },
+      maxTokens: 32_768,
+      contextManagement: {
+        safetyMarginPct: 5,
+        minOutputTokens: 1_024,
+      },
+    });
+
+    assert.equal(result.stopReason, 'stop');
+    assert.equal(seen[0]?.options?.maxTokens, 9_996);
+  });
+
+  it('compacts accumulated tool results before the provider request and continues', async () => {
+    const rawToolOutput = 'raw-context-growth-'.repeat(500);
+    const tool = makeTool('read_file', 'parallel', async () => rawToolOutput);
+    const api = uniqueApi('context-compact-continues');
+    let secondTurnMessages: unknown[] | undefined;
+
+    registerScriptedPiProvider({
+      api,
+      turns: (ctx: ScriptedProviderContext) => {
+        if (ctx.sawToolResults) {
+          secondTurnMessages = ctx.messages as unknown[];
+          return { content: [{ type: 'text', text: 'Done' }], stopReason: 'stop' };
+        }
+        return {
+          content: [{ type: 'tool_call', id: 'read-big', name: 'read_file', arguments: {} }],
+          stopReason: 'tool_calls',
+        };
+      },
+    });
+
+    const result = await runWavemillLoop({
+      model: { id: 'windowed', api, provider: 'test-provider', contextWindow: 3_000 },
+      context: makeContext([tool]),
+      convertToLlm: piIdentity,
+      maxTokens: 256,
+      contextManagement: {
+        compactionThreshold: 0.8,
+        safetyMarginPct: 0,
+        minRetainedToolResults: 0,
+        minOutputTokens: 64,
+      },
+    });
+
+    assert.equal(result.stopReason, 'stop');
+    assert.ok(secondTurnMessages, 'second provider turn must receive compacted replay messages');
+    const replayToolResult = secondTurnMessages!.find((m: any) => m.role === 'tool_result') as any;
+    assert.match(replayToolResult.content[0].content[0].text, /^\[Compacted: read_file result dropped;/);
+    const canonicalToolResult = result.messages.find((m: any) => m.role === 'toolResult') as any;
+    assert.equal(canonicalToolResult.content[0].text, rawToolOutput);
+  });
+
+  it('throws ContextExhaustedError when retained context still cannot fit', async () => {
+    const tool = makeTool('read_file', 'parallel', async () => 'oversize-'.repeat(1_500));
+    const api = uniqueApi('context-exhausted');
+
+    registerScriptedPiProvider({
+      api,
+      turns: (ctx: ScriptedProviderContext) => {
+        if (ctx.sawToolResults) {
+          return { content: [{ type: 'text', text: 'unreachable' }], stopReason: 'stop' };
+        }
+        return {
+          content: [{ type: 'tool_call', id: 'read-retained', name: 'read_file', arguments: {} }],
+          stopReason: 'tool_calls',
+        };
+      },
+    });
+
+    await assert.rejects(
+      () => runWavemillLoop({
+        model: { id: 'windowed', api, provider: 'test-provider', contextWindow: 2_200 },
+        context: makeContext([tool]),
+        convertToLlm: piIdentity,
+        maxTokens: 256,
+        contextManagement: {
+          compactionThreshold: 0.8,
+          safetyMarginPct: 0,
+          minRetainedToolResults: 1,
+          minOutputTokens: 128,
+        },
+      }),
+      (error) => {
+        assert.ok(error instanceof ContextExhaustedError);
+        assert.equal(error.diagnostic.droppedCount, 0);
+        assert.equal(error.diagnostic.handoff.stopAfterTurn, 1);
+        return true;
+      },
+    );
   });
 });
 

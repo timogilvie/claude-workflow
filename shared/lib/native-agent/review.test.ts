@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, it } from 'node:test';
 import { runNativeReview, nativeReviewTestUtils } from './review.ts';
-import { ContextWindowExceededError } from './context-window-guard.ts';
+import { ContextExhaustedError, ContextWindowExceededError } from './context-window-guard.ts';
 import type { ReviewContext } from '../review-context-gatherer.ts';
 import { parseTranscriptJsonl } from './transcript.ts';
 import type { ReadyNativeProviderEntry } from './providers.ts';
@@ -256,6 +256,47 @@ describe('native review', () => {
       assert.equal(result.codeReviewFindings[0].category, 'native-context-window-exceeded');
       assert.match(result.codeReviewFindings[0].description, /gpt-4o/);
       assert.match(result.codeReviewFindings[0].description, /100000-token context window/);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('maps in-session context exhaustion to a distinct review blocker', async () => {
+    const repoDir = makeTempRepo();
+    setReadyProvider();
+
+    nativeReviewTestUtils.setRunWavemillLoop(async () => {
+      throw new ContextExhaustedError(
+        'context-exhausted: compacted native review context to the floor and still exceeded the model context window',
+        {
+          phase: 'review',
+          model: 'gpt-4o',
+          provider: 'openai',
+          limit: 100_000,
+          limitSource: 'registry',
+          reservedOutputTokens: 1_024,
+          safetyMargin: 0.05,
+          estimate: {
+            systemPromptTokens: 1_000,
+            messageTokens: 120_000,
+            toolTokens: 0,
+            inputTokens: 121_000,
+          },
+          projectedInputTokens: 127_050,
+          projectedTotalTokens: 128_074,
+          headroomTokens: -28_074,
+          droppedCount: 10,
+          droppedTokensEstimate: 50_000,
+          handoff: { transcriptPath: '/tmp/native.jsonl', lastCompactionStrategy: 'drop-oldest-tool-results' },
+        },
+      );
+    });
+
+    try {
+      const result = await runNativeReview(makeReviewContext(), repoDir, {});
+      assert.equal(result.verdict, 'not_ready');
+      assert.equal(result.codeReviewFindings[0].category, 'native-context-exhausted');
+      assert.match(result.codeReviewFindings[0].description, /context-exhausted/);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }

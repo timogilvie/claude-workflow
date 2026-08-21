@@ -26,3 +26,42 @@ export const CODING_MAX_OUTPUT_TOKENS = 32_768;
 
 /** Review turns emit a concise JSON verdict and need far less headroom. */
 export const REVIEW_MAX_OUTPUT_TOKENS = 8_192;
+
+export interface DynamicOutputReservationInput {
+  inputTokens: number;
+  contextWindowTokens: number;
+  phaseCeiling: number;
+  minOutputTokens?: number;
+  safetyMarginPct?: number;
+}
+
+const DEFAULT_MIN_OUTPUT_TOKENS = 1_024;
+const DEFAULT_OUTPUT_SAFETY_MARGIN_PCT = 5;
+
+export function computeDynamicMaxTokens(input: DynamicOutputReservationInput): number {
+  const minOutputTokens = input.minOutputTokens ?? DEFAULT_MIN_OUTPUT_TOKENS;
+  const safetyMarginPct = input.safetyMarginPct ?? DEFAULT_OUTPUT_SAFETY_MARGIN_PCT;
+  validatePositiveInteger(input.inputTokens, 'inputTokens', { allowZero: true });
+  validatePositiveInteger(input.contextWindowTokens, 'contextWindowTokens');
+  validatePositiveInteger(input.phaseCeiling, 'phaseCeiling');
+  validatePositiveInteger(minOutputTokens, 'minOutputTokens');
+  if (!Number.isFinite(safetyMarginPct) || safetyMarginPct < 0 || safetyMarginPct > 100) {
+    throw new Error('safetyMarginPct must be between 0 and 100');
+  }
+
+  const usableWindow = Math.floor(input.contextWindowTokens * (1 - (safetyMarginPct / 100)));
+  const available = usableWindow - input.inputTokens;
+  const effectiveMinimum = Math.min(minOutputTokens, input.phaseCeiling);
+  return Math.max(effectiveMinimum, Math.min(input.phaseCeiling, available));
+}
+
+function validatePositiveInteger(
+  value: number,
+  label: string,
+  options: { allowZero?: boolean } = {},
+): void {
+  const minimum = options.allowZero === true ? 0 : 1;
+  if (!Number.isFinite(value) || !Number.isInteger(value) || value < minimum) {
+    throw new Error(`${label} must be ${minimum === 0 ? 'a non-negative' : 'a positive'} integer`);
+  }
+}

@@ -168,14 +168,27 @@ startup_openrouter_credit_warning() {
   local quota_file="$REPO_DIR/.wavemill/quota-state.json"
   [[ -f "$quota_file" ]] || return 1
 
-  local balance min_credits
+  local balance min_credits usage_daily runway_days
   balance="$(jq -r '.providers.openrouter.balanceUsd // empty' "$quota_file" 2>/dev/null || true)"
   [[ -n "$balance" ]] || return 1
+  usage_daily="$(jq -r '.providers.openrouter.usageDaily // empty' "$quota_file" 2>/dev/null || true)"
   min_credits="$(jq -r '.nativeAgent.providers.openrouter.minCreditsUsd // 0.02' "$REPO_DIR/.wavemill-config.json" 2>/dev/null || echo "0.02")"
   [[ -n "$min_credits" ]] || min_credits="0.02"
 
-  awk -v balance="$balance" -v min="$min_credits" 'BEGIN { exit !(balance < min) }' || return 1
-  printf 'OpenRouter credits exhausted - challenge coverage disabled, top up at https://openrouter.ai/credits\n'
+  if awk -v balance="$balance" -v min="$min_credits" 'BEGIN { exit !(balance < min) }'; then
+    printf 'OpenRouter credits exhausted - challenge coverage disabled, top up at https://openrouter.ai/credits\n'
+    return 0
+  fi
+
+  if [[ -n "$usage_daily" ]] && awk -v burn="$usage_daily" 'BEGIN { exit !(burn > 0) }'; then
+    runway_days="$(awk -v balance="$balance" -v burn="$usage_daily" 'BEGIN { printf "%.1f", balance / burn }')"
+    if awk -v days="$runway_days" 'BEGIN { exit !(days < 2) }'; then
+      printf 'OpenRouter runway low: $%.2f balance / $%.2f daily burn (~%s days)\n' "$balance" "$usage_daily" "$runway_days"
+      return 0
+    fi
+  fi
+
+  return 1
 }
 
 startup_warn_openrouter_status() {

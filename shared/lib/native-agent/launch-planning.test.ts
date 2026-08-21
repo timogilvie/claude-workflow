@@ -382,12 +382,12 @@ describe('launchNativePlanning', () => {
     }
   });
 
-  it('fails before the provider when the prompt plus reserved output exceeds the model context window', async () => {
+  it('fails before the provider when the prompt plus minimum reserved output exceeds the model context window', async () => {
     const { wtDir, featureDir, packetPath } = setupWorktree();
     const api = uniqueApi('context-window');
     const seen: ScriptedProviderContext[] = [];
     const hookPath = join(featureDir, 'native-planning.hook');
-    writeFileSync(packetPath, `# Task Packet\n\n${'x'.repeat(30_000)}\n`, 'utf-8');
+    writeFileSync(packetPath, `# Task Packet\n\n${'x'.repeat(50_000)}\n`, 'utf-8');
 
     try {
       registerScriptedPiProvider({
@@ -412,7 +412,7 @@ describe('launchNativePlanning', () => {
           hookPath,
           loopModelOverride: {
             ...scriptedModel(api),
-            contextWindow: 10_000,
+            contextWindow: 2_000,
           },
           runTsxCommand: stubRunTsxCommand(),
         }),
