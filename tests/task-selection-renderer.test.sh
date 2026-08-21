@@ -732,51 +732,62 @@ test_fetch_queue_plan_warning_stays_quiet_without_debug() {
   assert_no_queue_plan_temp_files "non-debug temp files cleaned" "$tmp_dir"
 }
 
+# Both planner tests below run the extracted function body in a subshell, matching
+# the pattern used by the other tests in this file. They must NOT `source
+# "$MILL_SCRIPT"`: that executes wavemill-mill.sh's top-level code, which refuses
+# to run inside a git worktree and otherwise hangs. run_queue_planner_with_policy
+# is already extracted into $FUNCTIONS_FILE above; the queue-health recorders it
+# calls are not, so they are stubbed here.
 test_planner_receives_stdin_via_backgrounded_wrapper() {
-  local tmp_dir planner_stub planner_output result
-  tmp_dir="$(mktemp -d)"
+  local output
+  output=$(FUNCTIONS_FILE="$FUNCTIONS_FILE" REPO_DIR="$REPO_DIR" bash -lc '
+    set -euo pipefail
+    # shellcheck source=/dev/null
+    source "$FUNCTIONS_FILE"
+    queue_health_record_failure() { :; }
+    queue_health_record_success() { :; }
 
-  planner_stub="$tmp_dir/stub-planner.sh"
-  cat > "$planner_stub" <<'EOF'
-#!/bin/bash
-set -e
-stdin_content=$(cat <&0)
-if [[ -z "$stdin_content" ]]; then
-  echo '{"error":"empty_stdin"}' >&2
+    tmp_dir="$(mktemp -d)"
+    trap "rm -rf \"$tmp_dir\"" EXIT
+    planner_stub="$tmp_dir/stub-planner.sh"
+    cat > "$planner_stub" <<STUB
+#!/usr/bin/env bash
+set -euo pipefail
+stdin_content=\$(cat)
+if [[ -z "\$stdin_content" ]]; then
+  echo "empty_stdin" >&2
   exit 1
 fi
-if ! echo "$stdin_content" | jq -e '.[0]' >/dev/null 2>&1; then
-  echo '{"error":"invalid_json"}' >&2
-  exit 1
-fi
-echo '{"availableNow":["task1"],"queuedAfterDependencies":[],"avoidRunningTogether":[],"needsTriage":[]}'
-EOF
-  chmod +x "$planner_stub"
+printf "%s" "\$stdin_content" | jq -e ".[0]" >/dev/null 2>&1 || { echo "invalid_json" >&2; exit 1; }
+echo "{\"availableNow\":[\"task1\"],\"queuedAfterDependencies\":[],\"avoidRunningTogether\":[],\"needsTriage\":[]}"
+STUB
+    chmod +x "$planner_stub"
 
-  # Test: planner receives stdin correctly
-  planner_output=$(printf '[{"id":"task1"}]' | \
-    run_queue_planner_with_policy "$planner_stub" 15 '{"taskCount":1}' 2>/dev/null)
+    printf "%s" "[{\"id\":\"task1\"}]" | run_queue_planner_with_policy "$planner_stub" 15 "[{\"id\":\"task1\"}]"
+  ' 2>/dev/null || true)
 
-  check_contains "backgrounded planner receives stdin" "$planner_output" '"availableNow"'
-  check_contains "backgrounded planner output is valid JSON" "$planner_output" 'queuedAfterDependencies'
-
-  rm -rf "$tmp_dir"
+  check_contains "backgrounded planner receives stdin" "$output" '"availableNow"'
+  check_contains "backgrounded planner output is valid JSON" "$output" 'queuedAfterDependencies'
 }
 
 test_planner_stdin_missing_error_handling() {
-  local tmp_dir stderr_text
-  tmp_dir="$(mktemp -d)"
+  local reason
+  reason=$(FUNCTIONS_FILE="$FUNCTIONS_FILE" REPO_DIR="$REPO_DIR" bash -lc '
+    set -euo pipefail
+    # shellcheck source=/dev/null
+    source "$FUNCTIONS_FILE"
+    # Capture the reason the wrapper reports instead of writing queue health.
+    # Written to a file because the call'"'"'s own stdout is discarded below.
+    reason_file="$(mktemp)"
+    queue_health_record_failure() { printf "%s" "$1" > "$reason_file"; }
+    queue_health_record_success() { :; }
 
-  # Source the mill script to get run_queue_planner_with_policy and diagnostics
-  source "$MILL_SCRIPT"
+    printf "" | run_queue_planner_with_policy "cat" 15 "" >/dev/null 2>&1 || true
+    cat "$reason_file"
+    rm -f "$reason_file"
+  ' 2>/dev/null || true)
 
-  # Test: empty stdin is handled as planner_input_missing
-  stderr_text=$({ printf '' | run_queue_planner_with_policy "cat" 15 '{}' 2>&1 >/dev/null; } 2>&1 || true)
-
-  check_contains "empty stdin triggers planner_input_missing" "$stderr_text" "planner_input_missing" || \
-    check_contains "empty stdin triggers error" "$stderr_text" "empty"
-
-  rm -rf "$tmp_dir"
+  check_contains "empty stdin reports planner_input_missing" "$reason" "planner_input_missing"
 }
 
 echo "=== Task Selection Renderer ==="
