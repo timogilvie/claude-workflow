@@ -254,6 +254,37 @@ const EMPTY_DIMENSIONS: ChallengeComparisonDimensions = {
   autonomy: { primary: 0, challenger: 0 },
 };
 
+type ComparisonRetentionInput = {
+  forkStage?: ChallengeStage | null;
+  forkCommit?: string | null;
+  sharedPrefix?: boolean;
+  primaryInheritedStages?: ChallengeStage[];
+  challengerInheritedStages?: ChallengeStage[];
+  primaryDiffIdentity?: ChallengeDiffIdentity;
+  challengerDiffIdentity?: ChallengeDiffIdentity;
+};
+
+function comparisonRetentionFields(input: ComparisonRetentionInput): Pick<
+  ChallengeComparison,
+  | 'forkStage'
+  | 'forkCommit'
+  | 'sharedPrefix'
+  | 'primaryInheritedStages'
+  | 'challengerInheritedStages'
+  | 'primaryDiffIdentity'
+  | 'challengerDiffIdentity'
+> {
+  return {
+    forkStage: input.forkStage ?? null,
+    forkCommit: input.forkCommit ?? null,
+    sharedPrefix: input.sharedPrefix ?? false,
+    primaryInheritedStages: input.primaryInheritedStages ?? [],
+    challengerInheritedStages: input.challengerInheritedStages ?? [],
+    ...(input.primaryDiffIdentity ? { primaryDiffIdentity: input.primaryDiffIdentity } : {}),
+    ...(input.challengerDiffIdentity ? { challengerDiffIdentity: input.challengerDiffIdentity } : {}),
+  };
+}
+
 type ChallengeEntryLike = {
   planner?: string;
   model?: string;
@@ -722,7 +753,7 @@ export function buildInvalidProvenanceComparison(input: {
   challengeType?: ChallengeType;
   variedStage?: 'plan' | 'implementation' | 'review';
   timestamp?: string;
-}): ChallengeComparison {
+} & ComparisonRetentionInput): ChallengeComparison {
   const reason = input.provenanceValidation.issues
     .map((issue) => {
       const side = issue.side === 'pair' ? 'pair' : `${issue.side} ${issue.role}`;
@@ -754,11 +785,7 @@ export function buildInvalidProvenanceComparison(input: {
     variedStage: input.variedStage,
     comparisonOutcome: outcome,
     terminalReason: 'provenance_validation_failed',
-    forkStage: null,
-    forkCommit: null,
-    sharedPrefix: false,
-    primaryInheritedStages: [],
-    challengerInheritedStages: [],
+    ...comparisonRetentionFields(input),
   };
 }
 
@@ -773,7 +800,7 @@ export function buildSkippedIdenticalComparison(input: {
   primaryRouting?: ChallengeRoutingMeta;
   challengerRouting?: ChallengeRoutingMeta;
   timestamp?: string;
-}): ChallengeComparison {
+} & ComparisonRetentionInput): ChallengeComparison {
   const variedDimensions = detectVariedDimensions(input.primaryRouting, input.challengerRouting);
   return {
     challengePairId: input.challengePairId,
@@ -795,11 +822,7 @@ export function buildSkippedIdenticalComparison(input: {
     comparisonOutcome: 'skipped',
     skipReason: 'identical-routing-dimensions',
     cleanupPolicy: 'primary-wins-close-challenger',
-    forkStage: null,
-    forkCommit: null,
-    sharedPrefix: false,
-    primaryInheritedStages: [],
-    challengerInheritedStages: [],
+    ...comparisonRetentionFields(input),
   };
 }
 
@@ -818,7 +841,7 @@ export function buildInvalidChallengeComparison(input: {
   primaryAttestation?: unknown;
   challengerAttestation?: unknown;
   timestamp?: string;
-}): ChallengeComparison {
+} & ComparisonRetentionInput): ChallengeComparison {
   const variedDimensions = detectVariedDimensions(input.primaryRouting, input.challengerRouting);
   return {
     challengePairId: input.challengePairId,
@@ -841,11 +864,7 @@ export function buildInvalidChallengeComparison(input: {
     ...(input.primaryAttestation ? { primaryAttestation: input.primaryAttestation } : {}),
     ...(input.challengerAttestation ? { challengerAttestation: input.challengerAttestation } : {}),
     workflowInsight: 'No LLM comparison was run because the selected challenge intent did not execute.',
-    forkStage: null,
-    forkCommit: null,
-    sharedPrefix: false,
-    primaryInheritedStages: [],
-    challengerInheritedStages: [],
+    ...comparisonRetentionFields(input),
   };
 }
 
