@@ -15,6 +15,7 @@ import {
   GLOBAL_CERTIFICATION_ROOT_ENV,
   buildGlobalCertificationPath,
 } from './native-agent/certification/index.ts';
+import { getHarnessId, openManifest } from './resource-manifest.ts';
 
 let passed = 0;
 let failed = 0;
@@ -309,6 +310,50 @@ await test('routes broad CLI workflow work to deep planning and medium-or-higher
     assert.ok(decision.expectedSuccess <= 0.97 && decision.expectedSuccess >= 0.35);
     assert.ok(decision.confidence >= 0.1 && decision.confidence <= 0.95);
   } finally {
+    cleanup();
+  }
+});
+
+await test('stamps route decisions with harnessId when a session manifest exists', () => {
+  const { repoDir, cleanup } = makeRepo();
+  const previousSession = process.env.WAVEMILL_SESSION;
+  try {
+    process.env.WAVEMILL_SESSION = 'route-harness-session';
+    openManifest('route-harness-session', { workflowType: 'feature', repoDir });
+
+    const decision = routeWorkflow('Implement a backend workflow feature with tests.', {
+      repoDir,
+      skipDifficultyClassification: true,
+    });
+
+    assert.equal(decision.harnessId, getHarnessId('route-harness-session', repoDir));
+  } finally {
+    if (previousSession === undefined) {
+      delete process.env.WAVEMILL_SESSION;
+    } else {
+      process.env.WAVEMILL_SESSION = previousSession;
+    }
+    cleanup();
+  }
+});
+
+await test('omits route harnessId when no session is active', () => {
+  const { repoDir, cleanup } = makeRepo();
+  const previousSession = process.env.WAVEMILL_SESSION;
+  try {
+    delete process.env.WAVEMILL_SESSION;
+    const decision = routeWorkflow('Implement a backend workflow feature with tests.', {
+      repoDir,
+      skipDifficultyClassification: true,
+    });
+
+    assert.equal(decision.harnessId, undefined);
+  } finally {
+    if (previousSession === undefined) {
+      delete process.env.WAVEMILL_SESSION;
+    } else {
+      process.env.WAVEMILL_SESSION = previousSession;
+    }
     cleanup();
   }
 });

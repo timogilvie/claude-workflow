@@ -37,7 +37,7 @@ import { getCurrentOperatingMode, type OperatingMode } from './operating-mode.ts
 import type { ModelClass } from './model-registry.ts';
 import { policyAdjustmentLog, routerLog } from './router-log.ts';
 import { registerAgentConfig } from './resource-adapters/agent-config-adapter.ts';
-import { recordUse } from './resource-manifest.ts';
+import { getHarnessId, recordUse } from './resource-manifest.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
 import type { RouteProvenance } from './route-artifact.ts';
 import { filterDisabledModels, isDisabledModel } from './disabled-models.ts';
@@ -97,6 +97,7 @@ export interface WorkflowRouteDecision {
   routingMode?: string;
   nativeCertificationRejections?: RouterCertificationRejection[];
   modelExclusions?: ModelExclusionDiagnostic[];
+  harnessId?: string;
 }
 
 export interface RouteWorkflowOptions {
@@ -1333,7 +1334,7 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
     finalReviewer = '';
   }
 
-  return {
+  const decision: WorkflowRouteDecision = {
     planner: finalPlanner,
     coder: finalCoder,
     reviewer: finalReviewer,
@@ -1365,6 +1366,8 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
     ...(nativeCertificationRejections.length > 0 ? { nativeCertificationRejections } : {}),
     ...(modelExclusions.length > 0 ? { modelExclusions } : {}),
   };
+  registerWorkflowDecisionResources(decision, repoDir);
+  return decision;
 }
 
 function routeWorkflowStageAwareInternal(
@@ -1589,6 +1592,11 @@ function registerWorkflowDecisionResources(
         'coding';
       recordUse(sessionId, resourcePhase, selection.resourceRef, repoDir);
     }
+  }
+
+  const harnessId = getHarnessId(sessionId, repoDir);
+  if (harnessId) {
+    decision.harnessId = harnessId;
   }
 }
 

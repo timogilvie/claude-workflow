@@ -59,7 +59,7 @@ import type {
 } from './challenge-execution-contract.ts';
 import { projectChallengeIntentForPersistence } from './challenge-execution-contract.ts';
 import type { WorkflowCostOutcome, WorkflowCostResult, WorkflowCostFailure } from './workflow-cost.ts';
-import { getManifest, getManifestRef } from './resource-manifest.ts';
+import { getHarnessId, getManifest, getManifestRef } from './resource-manifest.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
 import { getResource } from './resource-registry.ts';
 import {
@@ -1280,6 +1280,10 @@ export function attachManifestRef(
 ): void {
   if (!sessionId) {
     return;
+  }
+  const harnessId = getHarnessId(sessionId, repoDir);
+  if (harnessId) {
+    record.harnessId = harnessId;
   }
   const manifestRef = getManifestRef(sessionId, repoDir);
   if (manifestRef) {

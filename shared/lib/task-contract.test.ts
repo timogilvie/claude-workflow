@@ -629,6 +629,7 @@ describe('task-contract — route artifact routing hints', () => {
       codeDepth: 'medium',
       reviewer: 'claude-sonnet-4-6',
       reviewMode: 'static',
+      harnessId: 'a'.repeat(64),
       signals: { taskType: 'feature', riskScore: 0.2 },
     }));
     const { contract } = buildTaskContract({ featureDir: dir });
@@ -636,6 +637,7 @@ describe('task-contract — route artifact routing hints', () => {
     assert.ok(contract.routingHints.routeArtifacts!.postExpansion !== null);
     const pe = contract.routingHints.routeArtifacts!.postExpansion!;
     assert.equal((pe as { coder?: string }).coder, 'claude-sonnet-4-6');
+    assert.equal((pe as { harnessId?: string }).harnessId, 'a'.repeat(64));
     // Route artifacts should not contain absolute paths
     const serialized = serializeTaskContract(contract);
     assert.ok(!serialized.includes(dir));
