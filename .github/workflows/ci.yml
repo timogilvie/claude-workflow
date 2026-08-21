@@ -230,16 +230,40 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: check-paths
-    if: needs.check-paths.outputs.lifecycle == 'true' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    # This job must ALWAYS run. "Lifecycle Integration Tests" is a required status
+    # check on auto/integration, and a skipped job never satisfies a required check
+    # ("N of N required status checks are expected"). Gating the job itself on a
+    # path filter therefore made every PR touching no lifecycle path permanently
+    # unmergeable. The filter now gates the steps instead, so the check always
+    # reports a conclusion -- same shape as the "Shell and Unit Tests" aggregator
+    # above. Do not rename this job without updating branch protection.
+    if: always()
+    env:
+      RUN_LIFECYCLE: ${{ needs.check-paths.outputs.lifecycle == 'true' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
 
     steps:
+      # Never report green when change detection itself failed, or this job would
+      # mask a broken check-paths and wave every PR through.
+      - name: Fail if change detection did not succeed
+        if: needs.check-paths.result != 'success'
+        run: |
+          echo "::error::check-paths did not succeed (${{ needs.check-paths.result }}); cannot determine lifecycle relevance."
+          exit 1
+
+      - name: Report skip
+        if: env.RUN_LIFECYCLE != 'true'
+        run: echo "No lifecycle-relevant changes detected; suite not required for this PR."
+
       - name: Checkout
+        if: env.RUN_LIFECYCLE == 'true'
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Setup
+        if: env.RUN_LIFECYCLE == 'true'
         uses: ./.github/actions/setup
         with:
           packages: jq tmux
 
       - name: Run lifecycle integration tests
+        if: env.RUN_LIFECYCLE == 'true'
         run: bash tests/run-lifecycle-tests.sh
