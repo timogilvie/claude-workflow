@@ -21,6 +21,7 @@ import {
   attachDifficultyMetadata,
   attachExecutedPlanning,
   attachFallbackEvent,
+  attachHarnessId,
   attachPhaseDurations,
   attachRouteProvenance,
   attachRouterPolicyMetadata,
@@ -40,6 +41,7 @@ import {
   enrichEvalRecord,
   enrichTrainingMetadata,
 } from './eval-record-builder.ts';
+import { openManifest } from './resource-manifest.ts';
 import type { RubricEval } from './eval-schema.ts';
 import type { ChallengeExecutionIntent } from './challenge-execution-contract.ts';
 
@@ -1727,6 +1729,26 @@ describe('eval-record-builder', () => {
       enrichTrainingMetadata(baseRecord, { featureOutcomeDiagnostics: diag });
       assert.equal(baseRecord.featureOutcomeDiagnostics?.present, true);
       assert.equal(baseRecord.featureOutcomeDiagnostics?.sourceHash, 'c'.repeat(64));
+    });
+  });
+
+  describe('attachHarnessId', () => {
+    it('sets harnessId when a manifest exists for the session', () => {
+      const tempDir = mkdtempSync(join(tmpdir(), 'harness-'));
+      tempDirs.push(tempDir);
+      const sessionId = 'harness-eval-session';
+      openManifest(sessionId, { workflowType: 'feature', repoDir: tempDir });
+      const record = { ...baseRecord };
+      delete (record as Record<string, unknown>).harnessId;
+      attachHarnessId(record, sessionId, tempDir);
+      assert.match(record.harnessId ?? '', /^[a-f0-9]{64}$/);
+    });
+
+    it('leaves harnessId absent when no manifest exists', () => {
+      const record = { ...baseRecord };
+      delete (record as Record<string, unknown>).harnessId;
+      attachHarnessId(record, 'no-such-session');
+      assert.equal(record.harnessId, undefined);
     });
   });
 });

@@ -59,7 +59,7 @@ import type {
 } from './challenge-execution-contract.ts';
 import { projectChallengeIntentForPersistence } from './challenge-execution-contract.ts';
 import type { WorkflowCostOutcome, WorkflowCostResult, WorkflowCostFailure } from './workflow-cost.ts';
-import { getManifest, getManifestRef } from './resource-manifest.ts';
+import { getManifest, getManifestRef, resolveHarnessId } from './resource-manifest.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
 import { getResource } from './resource-registry.ts';
 import {
@@ -1287,6 +1287,20 @@ export function attachManifestRef(
   }
 }
 
+export function attachHarnessId(
+  record: EvalRecord,
+  sessionId?: string | null,
+  repoDir?: string,
+): void {
+  if (!sessionId) {
+    return;
+  }
+  const harnessId = resolveHarnessId(sessionId, repoDir);
+  if (harnessId) {
+    record.harnessId = harnessId;
+  }
+}
+
 export function attachResourceSelections(record: EvalRecord): void {
   const routingDecision = record.routingDecision as (RoutingDecision & { resourceSelections?: RuntimeResourceSelection[] }) | undefined;
   // Routing decision may carry router-surface entries; manifest carries planner/reviewer prompt entries.
@@ -1472,6 +1486,7 @@ export function enrichEvalRecord(record: EvalRecord, metadata: EvalRecordMetadat
     attachRubricEval(record, metadata.rubricEval);
   }
   attachManifestRef(record, process.env.WAVEMILL_SESSION, undefined);
+  attachHarnessId(record, process.env.WAVEMILL_SESSION, undefined);
   attachResourceSelections(record);
   attachEligibility(record);
   attachChallengeExecutionMetadata(record, {
@@ -1529,6 +1544,7 @@ export function enrichTrainingMetadata(
   }
   attachFeatureOutcomeDiagnostics(record, metadata.featureOutcomeDiagnostics ?? null);
   attachManifestRef(record, process.env.WAVEMILL_SESSION, undefined);
+  attachHarnessId(record, process.env.WAVEMILL_SESSION, undefined);
   attachResourceSelections(record);
   attachEnrichmentDiagnostics(record);
   attachEligibility(record);

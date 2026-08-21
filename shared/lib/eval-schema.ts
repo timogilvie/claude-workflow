@@ -145,6 +145,9 @@
  *   `criterionRationales`), and no-comparison accounting (`noComparisonReason`).
  *   Added `'inherited'` to `ChallengeProvenanceSource`. No behavior change;
  *   readers must tolerate absence on historical records.
+ * - **1.41.0**: Added optional `harnessId` (HOK-2843) — content hash of the
+ *   session manifest's non-environment resource tuple, so outcomes can be
+ *   attributed to a harness version; see `docs/resource-registry.md`.
  *
  * @module eval-schema
  */
@@ -161,7 +164,7 @@ import type { ChallengeRoutingMeta } from './challenge-comparison.ts';
 import type { ChallengeStage } from './challenge-mode.ts';
 
 /** Current eval schema version for newly emitted records. */
-export const SCHEMA_VERSION = '1.40.0';
+export const SCHEMA_VERSION = '1.41.0';
 
 export type RoutingRole = 'planner' | 'coder' | 'reviewer';
 
@@ -1855,6 +1858,17 @@ export interface EvalRecord {
   resourceSelections?: RuntimeResourceSelection[];
 
   manifestRef?: ManifestRef;
+
+  /**
+   * Stable content hash of the session manifest's participating resource tuple.
+   *
+   * Captured at write time so eval outcomes can be attributed to the harness
+   * version that generated them. Environment refs are excluded; see
+   * `computeHarnessId` in `shared/lib/resource-manifest.ts`.
+   *
+   * @since 1.41.0
+   */
+  harnessId?: string;
 
   /**
    * Per-stage quality attribution for GEPA training.

@@ -32,7 +32,7 @@ import { loadPricingTable } from './workflow-cost.ts';
 import { createPromptArtifact, type PromptArtifact } from './prompt-hash.ts';
 import { errorMessage } from './error-utils.ts';
 import { getLatestSession } from './session.ts';
-import { attachEligibility, attachManifestRef } from './eval-record-builder.ts';
+import { attachEligibility, attachHarnessId, attachManifestRef } from './eval-record-builder.ts';
 import { attachPromptSizeDiagnostic } from './eval-record-builder.ts';
 import { parseAndRepairJsonFromLlm } from './json-repair.ts';
 import {
@@ -840,6 +840,7 @@ export async function evaluateTask(
     };
     attachPromptSizeDiagnostic(record, enforcement.diagnostic);
     attachManifestRef(record, activeSessionId);
+    attachHarnessId(record, activeSessionId);
     attachEligibility(record);
     return record;
   }
@@ -921,6 +922,7 @@ export async function evaluateTask(
   };
   attachPromptSizeDiagnostic(record, enforcement.diagnostic);
   attachManifestRef(record, activeSessionId);
+  attachHarnessId(record, activeSessionId);
   attachEligibility(record);
   return record;
 }

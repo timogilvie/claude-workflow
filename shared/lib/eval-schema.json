@@ -1794,6 +1794,11 @@
       ],
       "additionalProperties": false
     },
+    "harnessId": {
+      "type": "string",
+      "description": "Stable content hash of the session manifest's participating resource tuple at write time.",
+      "pattern": "^[a-f0-9]{64}$"
+    },
     "resourceSelections": {
       "type": "array",
       "items": {
@@ -3114,6 +3119,11 @@
         "expectedMetrics": {
           "type": "object",
           "additionalProperties": true
+        },
+        "harnessId": {
+          "type": "string",
+          "description": "Stable content hash of the session manifest's participating resource tuple at route decision time.",
+          "pattern": "^[a-f0-9]{64}$"
         }
       },
       "required": [

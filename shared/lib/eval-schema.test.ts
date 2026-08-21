@@ -780,7 +780,7 @@ function validPromptSizeDiagnostic() {
 }
 
 test('SCHEMA_VERSION is bumped for eval schema updates', () => {
-  assert.equal(SCHEMA_VERSION, '1.40.0');
+  assert.equal(SCHEMA_VERSION, '1.41.0');
 });
 
 test('Record with top-level challengeStage validates', () => {
@@ -2129,8 +2129,26 @@ test('Wavemill router fields validate and schema stays in parity', () => {
   assert.equal(properties.wavemill_router_scoring?.$ref, '#/$defs/WavemillRouterScoringMetadata');
 });
 
-test('Schema version constant is 1.40.0', () => {
-  assert.equal(SCHEMA_VERSION, '1.40.0');
+test('Schema version constant is 1.41.0', () => {
+  assert.equal(SCHEMA_VERSION, '1.41.0');
+});
+
+test('Record with harnessId validates and legacy record without it validates', () => {
+  const withHarness: EvalRecord = {
+    ...scenarios[0].record,
+    schemaVersion: SCHEMA_VERSION,
+    harnessId: 'a'.repeat(64),
+  };
+  const withResult = validateAgainstSchema(withHarness as unknown as Record<string, unknown>);
+  assert.ok(withResult.valid, `with harnessId: ${withResult.errors.join('; ')}`);
+
+  const withoutHarness: EvalRecord = {
+    ...scenarios[0].record,
+    schemaVersion: '1.40.0',
+  };
+  delete (withoutHarness as Record<string, unknown>).harnessId;
+  const withoutResult = validateAgainstSchema(withoutHarness as unknown as Record<string, unknown>);
+  assert.ok(withoutResult.valid, `without harnessId: ${withoutResult.errors.join('; ')}`);
 });
 
 test('Record with resolved-model routing validates', () => {
