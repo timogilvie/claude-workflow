@@ -603,6 +603,135 @@ test('forfeit builders use null scores and explicit completion metadata', () => 
   assert.equal(doubleForfeit.challengerCompleted, false);
 });
 
+// ────────────────────────────────────────────────────────────────
+// P0.5 Phase 0 Fork Descriptor Fields Tests (HOK-2794)
+// ────────────────────────────────────────────────────────────────
+
+test('buildInvalidProvenanceComparison emits fork descriptor fields with empty defaults', () => {
+  const record = buildInvalidProvenanceComparison({
+    challengePairId: 'HOK-2794',
+    primaryModel: 'claude-opus-4-6',
+    challengerModel: 'claude-sonnet-4-5-20250929',
+    primaryPrUrl: 'https://github.com/org/repo/pull/1',
+    challengerPrUrl: 'https://github.com/org/repo/pull/2',
+    primaryEvalScore: 0.5,
+    challengerEvalScore: 0.5,
+    primaryExecution: resolveChallengeSideExecutionProvenance({ featureDir: undefined, repoDir: undefined }),
+    challengerExecution: resolveChallengeSideExecutionProvenance({ featureDir: undefined, repoDir: undefined }),
+    provenanceValidation: {
+      valid: false,
+      outcome: 'invalid',
+      issues: [],
+    },
+  });
+  assert.equal(record.forkStage, null);
+  assert.equal(record.forkCommit, null);
+  assert.equal(record.sharedPrefix, false);
+  assert.deepEqual(record.primaryInheritedStages, []);
+  assert.deepEqual(record.challengerInheritedStages, []);
+});
+
+test('buildSkippedIdenticalComparison emits fork descriptor fields with empty defaults', () => {
+  const record = buildSkippedIdenticalComparison({
+    challengePairId: 'HOK-2794',
+    primaryModel: 'claude-opus-4-6',
+    challengerModel: 'claude-sonnet-4-5-20250929',
+    primaryPrUrl: 'https://github.com/org/repo/pull/1',
+    challengerPrUrl: 'https://github.com/org/repo/pull/2',
+    primaryEvalScore: 0.8,
+    challengerEvalScore: 0.8,
+  });
+  assert.equal(record.forkStage, null);
+  assert.equal(record.forkCommit, null);
+  assert.equal(record.sharedPrefix, false);
+  assert.deepEqual(record.primaryInheritedStages, []);
+  assert.deepEqual(record.challengerInheritedStages, []);
+});
+
+test('buildInvalidChallengeComparison emits fork descriptor fields with empty defaults', () => {
+  const record = buildInvalidChallengeComparison({
+    challengePairId: 'HOK-2794',
+    primaryModel: 'claude-opus-4-6',
+    challengerModel: 'claude-sonnet-4-5-20250929',
+    primaryPrUrl: 'https://github.com/org/repo/pull/1',
+    challengerPrUrl: 'https://github.com/org/repo/pull/2',
+    primaryEvalScore: 0.8,
+    challengerEvalScore: 0.8,
+    reason: 'identical_effective_route',
+  });
+  assert.equal(record.forkStage, null);
+  assert.equal(record.forkCommit, null);
+  assert.equal(record.sharedPrefix, false);
+  assert.deepEqual(record.primaryInheritedStages, []);
+  assert.deepEqual(record.challengerInheritedStages, []);
+});
+
+test('buildForfeitComparison emits fork descriptor fields with empty defaults', () => {
+  const record = buildForfeitComparison({
+    challengePairId: 'HOK-2794',
+    primaryModel: 'claude-opus-4-6',
+    challengerModel: 'claude-sonnet-4-5-20250929',
+    primaryPrUrl: 'https://github.com/org/repo/pull/1',
+    challengerPrUrl: 'https://github.com/org/repo/pull/2',
+    winner: 'primary',
+    rationale: 'Challenger failed.',
+    terminalReason: 'challenger_challenge_aborted',
+  });
+  assert.equal(record.forkStage, null);
+  assert.equal(record.forkCommit, null);
+  assert.equal(record.sharedPrefix, false);
+  assert.deepEqual(record.primaryInheritedStages, []);
+  assert.deepEqual(record.challengerInheritedStages, []);
+});
+
+test('buildDoubleForfeitComparison emits fork descriptor fields with empty defaults', () => {
+  const record = buildDoubleForfeitComparison({
+    challengePairId: 'HOK-2794',
+    primaryModel: 'claude-opus-4-6',
+    challengerModel: 'claude-sonnet-4-5-20250929',
+    primaryPrUrl: 'https://github.com/org/repo/pull/1',
+    challengerPrUrl: 'https://github.com/org/repo/pull/2',
+    rationale: 'Both failed.',
+    terminalReason: 'both_challenge_aborted',
+  });
+  assert.equal(record.forkStage, null);
+  assert.equal(record.forkCommit, null);
+  assert.equal(record.sharedPrefix, false);
+  assert.deepEqual(record.primaryInheritedStages, []);
+  assert.deepEqual(record.challengerInheritedStages, []);
+});
+
+test('historical record without fork descriptor fields parses cleanly', () => {
+  const historicalRecord: ChallengeComparison = {
+    challengePairId: 'HOK-1234',
+    primaryModel: 'claude-opus-4-5-20250929',
+    challengerModel: 'claude-sonnet-4-5-20250929',
+    primaryPrUrl: 'https://github.com/org/repo/pull/100',
+    challengerPrUrl: 'https://github.com/org/repo/pull/101',
+    primaryEvalScore: 0.7,
+    challengerEvalScore: 0.8,
+    winner: 'challenger',
+    winnerModel: 'claude-sonnet-4-5-20250929',
+    rationale: 'Sonnet is better.',
+    dimensions: {
+      completeness: { primary: 0.7, challenger: 0.8 },
+      correctness: { primary: 0.7, challenger: 0.8 },
+      code_quality: { primary: 0.7, challenger: 0.8 },
+      intervention_impact: { primary: 0.7, challenger: 0.8 },
+      autonomy: { primary: 0.7, challenger: 0.8 },
+    },
+    timestamp: '2024-01-01T00:00:00Z',
+  };
+
+  // Should not throw and should parse cleanly
+  assert.ok(historicalRecord.challengePairId);
+  assert.equal(historicalRecord.forkStage, undefined);
+  assert.equal(historicalRecord.forkCommit, undefined);
+  assert.equal(historicalRecord.sharedPrefix, undefined);
+  assert.equal(historicalRecord.primaryInheritedStages, undefined);
+  assert.equal(historicalRecord.challengerInheritedStages, undefined);
+});
+
 process.on('exit', () => {
   console.log(`\nPassed: ${passed}`);
   console.log(`Failed: ${failed}`);

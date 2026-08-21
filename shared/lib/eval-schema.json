@@ -2622,6 +2622,13 @@
         },
         "expectedRoute": {
           "$ref": "#/$defs/ChallengeRoutingMeta"
+        },
+        "inheritedStages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ChallengeStage"
+          },
+          "description": "Stages this arm inherited from pre-fork execution (HOK-2794)."
         }
       },
       "required": [
@@ -2670,6 +2677,13 @@
         },
         "reviewer": {
           "$ref": "#/$defs/ChallengeRuntimeStageRoute"
+        },
+        "inheritedStages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ChallengeStage"
+          },
+          "description": "Stages this arm inherited from pre-fork execution (HOK-2794)."
         }
       },
       "required": [
@@ -2858,6 +2872,32 @@
               "$ref": "#/$defs/ChallengeRuntimeSideIntent"
             }
           ]
+        },
+        "forkStage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChallengeStage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The stage at which the pair forked, or null if launched independently (HOK-2794)."
+        },
+        "forkCommit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Git SHA both arms share, or null if the pair did not fork from a shared commit (HOK-2794)."
+        },
+        "sharedPrefix": {
+          "type": "boolean",
+          "description": "Whether the challenger inherited pre-fork execution artifacts. False until challenge.fork() ships (HOK-2794)."
         }
       },
       "required": [
