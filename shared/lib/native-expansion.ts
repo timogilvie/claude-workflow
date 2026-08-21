@@ -24,7 +24,7 @@ import { logPromptUsage } from './prompt-registry.ts';
 import { registerNativeRuntime } from './resource-adapters/native-runtime-adapter.ts';
 import { recordUse } from './resource-manifest.ts';
 import { nativeAgentTypeForProvider, type ModelRegistry } from './model-registry.ts';
-import { getMaxCostUsd } from './config.ts';
+import { getMaxCostUsd, getNativeContextManagementConfig } from './config.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const NATIVE_PHASE_PROMPT_PATH = resolve(__dirname, '../../tools/prompts/native-read-only-phase.md');
@@ -334,6 +334,7 @@ export async function runNativeExpansion(options: NativeExpansionOptions): Promi
   const loopResult = await runWavemillLoop({
     model,
     context,
+    contextManagement: getNativeContextManagementConfig(options.repoDir),
     convertToLlm: (messages) => messages as unknown as Message[],
     afterToolCall: gitAfterToolCall,
     promptSizeLog: options.repoDir ? {

@@ -107,6 +107,7 @@ bad_model_detail="Native coding failed: 400 qwen-2.5-coder-32b is not a valid mo
 tool_use_detail="Native coding failed: 404 No endpoints found that support tool use"
 credits_detail="Native coding failed: HTTP 402 Payment Required: This request requires more credits, or fewer max_tokens. You requested up to 32768 tokens, but can only afford 1123."
 empty_turn_detail="Native coding failed: empty-model-turn: model returned reasoning-only or otherwise empty assistant turns after a continuation prompt"
+context_exhausted_detail="Native coding failed: context-exhausted: compacted native coding context to the floor and still exceeded the model context window"
 
 if [[ "$(native_terminal_failure_kind "$ctx_detail")" == "context-window-exceeded" ]]; then
   pass "context overflow is classified"
@@ -118,6 +119,12 @@ if [[ "$(native_terminal_failure_kind "$preflight_ctx_detail")" == "context-wind
   pass "pre-flight context overflow is classified"
 else
   fail "pre-flight context overflow misclassified as $(native_terminal_failure_kind "$preflight_ctx_detail")"
+fi
+
+if [[ "$(native_terminal_failure_kind "$context_exhausted_detail")" == "context-exhausted" ]]; then
+  pass "context exhaustion is classified distinctly"
+else
+  fail "context exhaustion misclassified as $(native_terminal_failure_kind "$context_exhausted_detail")"
 fi
 
 if [[ "$(native_terminal_failure_kind "$bad_model_detail")" == "invalid-model-id" ]]; then
@@ -154,6 +161,12 @@ if [[ "$(native_terminal_failure_next_action context-window-exceeded)" == *"comp
   pass "context overflow surfaces a specific recovery action"
 else
   fail "context overflow recovery action missing"
+fi
+
+if [[ "$(native_terminal_failure_next_action context-exhausted)" == *"larger-context model"* ]]; then
+  pass "context exhaustion surfaces a resumable recovery action"
+else
+  fail "context exhaustion recovery action missing"
 fi
 
 if [[ "$(native_terminal_failure_next_action openrouter-credits-exhausted)" == *"Top up OpenRouter credits"* || "$(native_terminal_failure_next_action openrouter-credits-exhausted)" == *"top up OpenRouter credits"* ]]; then

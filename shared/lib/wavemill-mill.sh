@@ -6824,6 +6824,8 @@ native_terminal_failure_kind() {
   lower="$(printf '%s' "$detail" | tr '[:upper:]' '[:lower:]')"
 
   case "$lower" in
+    *"context-exhausted"*|*"contextexhaustederror"*)
+      printf 'context-exhausted\n'; return 0 ;;
     *"maximum context length"*|*"context length is"*|*"reduce the length"*|*"context_length_exceeded"*|*"context window"*|*"context-window"*)
       printf 'context-window-exceeded\n'; return 0 ;;
     *"no endpoints found"*"tool use"*|*"support tool use"*|*"supports tool use"*|*"tool use"*"not supported"*)
@@ -6844,6 +6846,8 @@ native_terminal_failure_kind() {
 
 native_terminal_failure_next_action() {
   case "${1:-}" in
+    context-exhausted)
+      printf 'session compacted to the floor and still overflowed; re-launch on a larger-context model or split the task\n' ;;
     context-window-exceeded)
       printf 'relaunch with compressed context or a larger-context model; the prompt exceeded the model context window\n' ;;
     invalid-model-id)

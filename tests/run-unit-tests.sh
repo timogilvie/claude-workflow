@@ -35,6 +35,7 @@ TESTS=(
   shared/lib/native-agent/providers.test.ts
   shared/lib/native-agent/messages.test.ts
   shared/lib/native-agent/compaction.test.ts
+  shared/lib/native-agent/transcript-compactor.test.ts
   shared/lib/native-agent/context-window-guard.test.ts
   shared/lib/native-agent/prompt-size-log.test.ts
   shared/lib/native-agent/pi-usage-cost.test.ts

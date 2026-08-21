@@ -5,6 +5,7 @@ import type { AgentMessage, Message } from './messages.ts';
 import type { AgentContext, LoopStopReason, WavemillLoopConfig } from './loop.ts';
 import { runWavemillLoop } from './loop.ts';
 import {
+  ContextExhaustedError,
   ContextWindowExceededError,
   ContextWindowUnverifiableError,
 } from './context-window-guard.ts';
@@ -33,6 +34,7 @@ import {
 import { loadPromptResourceSync } from '../resource-retrieval.ts';
 import { createCleanupTracker, runCleanup, type CleanupReason } from './cleanup.ts';
 import { updateStageResult } from '../stage-result.ts';
+import { getNativeContextManagementConfig } from '../config.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const NATIVE_REVIEW_PHASE_PROMPT_PATH = resolve(
@@ -335,6 +337,7 @@ export async function runNativeReview(
       model: modelConfig,
       context: loopContext,
       maxTokens: REVIEW_MAX_OUTPUT_TOKENS,
+      contextManagement: getNativeContextManagementConfig(options.repoDir),
       promptSizeLog: options.repoDir ? {
         repoDir: options.repoDir,
         stage: 'review',
@@ -369,6 +372,9 @@ export async function runNativeReview(
       },
     });
   } catch (error) {
+    if (error instanceof ContextExhaustedError) {
+      return nativeReviewFailure(context, 'native-context-exhausted', error.message);
+    }
     if (error instanceof ContextWindowExceededError || error instanceof ContextWindowUnverifiableError) {
       return nativeReviewFailure(context, 'native-context-window-exceeded', error.message);
     }

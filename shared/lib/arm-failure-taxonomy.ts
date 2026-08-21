@@ -1,4 +1,5 @@
 export type TerminalFailureKind =
+  | 'context-exhausted'
   | 'context-window-exceeded'
   | 'invalid-model-id'
   | 'provider-rate-limited'
@@ -39,6 +40,7 @@ export function classifyArmFault(input: { failureKind?: string | null; detail?: 
   const detail = (input.detail ?? '').toLowerCase();
 
   switch (failureKind) {
+    case 'context-exhausted':
     case 'context-window-exceeded':
     case 'invalid-model-id':
     case 'empty-model-turn':

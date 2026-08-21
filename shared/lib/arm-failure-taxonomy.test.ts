@@ -13,6 +13,11 @@ test('classifies the incident failure kinds into the intended fault classes', ()
   }), 'harness-fault');
 
   assert.equal(classifyArmFault({
+    failureKind: 'context-exhausted',
+    detail: 'context-exhausted: compacted native coding context to the floor',
+  }), 'harness-fault');
+
+  assert.equal(classifyArmFault({
     failureKind: 'tool-use-unsupported',
     detail: '404 No endpoints found that support tool use',
   }), 'selection-fault');
@@ -39,6 +44,7 @@ test('classifies provider and ambiguous failures conservatively', () => {
 test('parses abort failure kinds and quality eligibility', () => {
   assert.equal(parseAbortFailureKind('terminal_stage_failure:tool-use-unsupported'), 'tool-use-unsupported');
   assert.equal(parseAbortFailureKind('terminal_stage_failure:empty-model-turn'), 'empty-model-turn');
+  assert.equal(parseAbortFailureKind('terminal_stage_failure:context-exhausted'), 'context-exhausted');
   assert.equal(parseAbortFailureKind('terminal_launch_failure:context-window-exceeded'), 'context-window-exceeded');
   assert.equal(parseAbortFailureKind('varied_model_unresolvable'), 'varied_model_unresolvable');
   assert.equal(parseAbortFailureKind('other'), null);

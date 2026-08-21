@@ -45,6 +45,26 @@ export class ContextWindowExceededError extends Error {
   }
 }
 
+export interface ContextExhaustedDiagnostic extends ContextWindowDiagnostic {
+  droppedCount: number;
+  droppedTokensEstimate: number;
+  handoff: {
+    transcriptPath?: string;
+    lastCompactionStrategy?: string;
+    stopAfterTurn?: number;
+  };
+}
+
+export class ContextExhaustedError extends Error {
+  readonly diagnostic: ContextExhaustedDiagnostic;
+
+  constructor(message: string, diagnostic: ContextExhaustedDiagnostic) {
+    super(message);
+    this.name = 'ContextExhaustedError';
+    this.diagnostic = diagnostic;
+  }
+}
+
 export class ContextWindowUnverifiableError extends Error {
   constructor(phase: string, model: { id: string; name?: string; provider: string }) {
     super(
