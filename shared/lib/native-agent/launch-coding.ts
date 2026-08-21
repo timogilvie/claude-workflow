@@ -9,7 +9,7 @@ import {
 } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { AgentContext, WavemillLoopConfig } from './loop.ts';
+import type { AgentContext, LoopResult, WavemillLoopConfig } from './loop.ts';
 import { runWavemillLoop } from './loop.ts';
 import { CODING_MAX_OUTPUT_TOKENS } from './output-limits.ts';
 import type { AgentMessage, AgentTurn, Message } from './messages.ts';
@@ -65,8 +65,14 @@ import {
   type CodingFailureToolError,
   type CodingFailureValidationError,
 } from './coding-failure-handoff.ts';
+import { classifyProviderError } from './provider-error-classifier.ts';
+import {
+  assertOpenRouterBalanceSufficient,
+  capOpenRouterMaxTokensForBalance,
+} from './openrouter-credits-guard.ts';
 import { updateStageResult } from '../stage-result.ts';
-import { equivalentOpenRouterModelIds } from '../openrouter-catalog.ts';
+import { getNativeContextManagementConfig } from '../config.ts';
+import { equivalentOpenRouterModelIds, type NormalizedPricing } from '../openrouter-catalog.ts';
 import { logPromptUsage } from '../prompt-registry.ts';
 import type { ResourceRef } from '../resource-registry.ts';
 import {
@@ -217,6 +223,17 @@ function selectReadyProvider(
     }
     return [...requestedIds].some((id) => entryIds.has(id));
   });
+}
+
+function normalizedPricingFromModel(model: WavemillLoopConfig['model']): NormalizedPricing {
+  const cost = (model as { cost?: { input?: unknown; output?: unknown } }).cost;
+  const inputPerMTok = typeof cost?.input === 'number' && Number.isFinite(cost.input) && cost.input > 0
+    ? cost.input
+    : null;
+  const outputPerMTok = typeof cost?.output === 'number' && Number.isFinite(cost.output) && cost.output > 0
+    ? cost.output
+    : null;
+  return { inputPerMTok, outputPerMTok };
 }
 
 function formatReadyProviderList(providerEntries: readonly ReadyNativeProviderEntry[]): string {
@@ -492,6 +509,61 @@ function buildFailureHandoffInput(input: {
       }
       : {}),
   };
+}
+
+function buildProviderErrorSuggestedAction(kind: string): string {
+  switch (kind) {
+    case 'provider-credit-exhausted':
+      return 'Top up OpenRouter credits at https://openrouter.ai/credits, then rerun native coding.';
+    case 'provider-config-error':
+      return 'Fix native provider authentication/model configuration, then rerun native coding.';
+    case 'context-window-exceeded':
+      return 'Rerun with compressed context or a larger-context model.';
+    case 'provider-transient-error':
+    case 'provider-unknown-error':
+      return 'Rerun native coding; the transcript and completed tool-call counts are preserved in this handoff.';
+    default:
+      return 'Inspect the provider error and rerun native coding when the upstream condition is resolved.';
+  }
+}
+
+function throwProviderErrorWithHandoff(input: {
+  featureDir: string;
+  result: LoopResult;
+  errorMessage: string;
+  mutationFailureTracker: MutationFailureTracker;
+  recoveryAttempted: boolean;
+  transcriptPath: string;
+}): never {
+  const classified = input.result.providerError
+    ?? {
+      ...classifyProviderError(input.errorMessage),
+      attempts: 0,
+      errorMessage: input.errorMessage,
+      turnsAtFailure: input.result.turnsCompleted,
+    };
+  const recoveryAttempted = input.recoveryAttempted || classified.attempts > 0;
+  writeCodingFailureHandoff(input.featureDir, {
+    stage: 'coding',
+    reason: 'provider_error',
+    stopReason: input.result.stopReason,
+    mutationFailures: input.mutationFailureTracker.count,
+    lastToolError: input.mutationFailureTracker.last,
+    recoveryAttempted,
+    suggestedAction: buildProviderErrorSuggestedAction(classified.kind),
+    createdAt: new Date().toISOString(),
+    schemaVersion: CODING_FAILURE_HANDOFF_SCHEMA_VERSION,
+    providerError: {
+      kind: classified.kind,
+      errorMessage: input.errorMessage,
+      turnsCompleted: classified.turnsAtFailure,
+      toolCallsExecuted: input.result.toolCallsExecuted,
+      attempts: classified.attempts,
+      transcriptPath: input.transcriptPath,
+    },
+  });
+  const handoffRelativePath = relative(process.cwd(), getCodingFailureHandoffPath(input.featureDir));
+  throw new Error(`${classified.kind}: ${input.errorMessage}; structured handoff: ${handoffRelativePath}`);
 }
 
 function toHandoffValidationErrors(errors: readonly RetryGuidanceError[]): CodingFailureValidationError[] {
@@ -821,10 +893,28 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
 
     const mutationFailureTracker: MutationFailureTracker = { count: 0, last: null };
 
+    const pricing = normalizedPricingFromModel(model);
+    const effectiveMaxTokens = model.provider === 'openrouter' && !options.loopModelOverride
+      ? capOpenRouterMaxTokensForBalance({
+        requestedMaxTokens: CODING_MAX_OUTPUT_TOKENS,
+        pricing,
+        repoDir: options.repoDir,
+      }) ?? CODING_MAX_OUTPUT_TOKENS
+      : CODING_MAX_OUTPUT_TOKENS;
+    if (model.provider === 'openrouter' && !options.loopModelOverride) {
+      assertOpenRouterBalanceSufficient({
+        repoDir: options.repoDir,
+        model: modelName,
+        pricing,
+        reservedOutputTokens: effectiveMaxTokens,
+      });
+    }
+
     const runCodingLoop = () => runWavemillLoop({
       model,
       context,
-      maxTokens: CODING_MAX_OUTPUT_TOKENS,
+      maxTokens: effectiveMaxTokens,
+      contextManagement: getNativeContextManagementConfig(options.repoDir),
       convertToLlm: (messages) => messages as unknown as Message[],
       signal: options.signal,
       promptSizeLog: options.repoDir ? {
@@ -900,7 +990,14 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
 
     const providerError = findFinalAssistantErrorMessage(result.messages);
     if (providerError) {
-      throw new Error(`Native coding failed: ${providerError}`);
+      throwProviderErrorWithHandoff({
+        featureDir,
+        result,
+        errorMessage: providerError,
+        mutationFailureTracker,
+        recoveryAttempted,
+        transcriptPath,
+      });
     }
 
     if (
@@ -939,7 +1036,14 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
       result = await runCodingLoop();
       const recoveryProviderError = findFinalAssistantErrorMessage(result.messages);
       if (recoveryProviderError) {
-        throw new Error(`Native coding failed: ${recoveryProviderError}`);
+        throwProviderErrorWithHandoff({
+          featureDir,
+          result,
+          errorMessage: recoveryProviderError,
+          mutationFailureTracker,
+          recoveryAttempted,
+          transcriptPath,
+        });
       }
     }
 
@@ -994,7 +1098,14 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
       result = await runCodingLoop();
       const retryProviderError = findFinalAssistantErrorMessage(result.messages);
       if (retryProviderError) {
-        throw new Error(`Native coding failed: ${retryProviderError}`);
+        throwProviderErrorWithHandoff({
+          featureDir,
+          result,
+          errorMessage: retryProviderError,
+          mutationFailureTracker,
+          recoveryAttempted,
+          transcriptPath,
+        });
       }
       inspection = await inspectCompletion({
         featureDir,

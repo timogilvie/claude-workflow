@@ -120,6 +120,33 @@ describe('openrouter-credits-guard', () => {
     assert.ok(result.minCreditsUsd > 0.02);
   });
 
+  it('warns when balance is below the selected max_tokens reservation', () => {
+    writeConfig({
+      nativeAgent: {
+        providers: {
+          openrouter: { warnCreditsUsd: 0.02, minCreditsUsd: 0.02 },
+        },
+      },
+    });
+    writeCredits(0.20);
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (message?: unknown) => warnings.push(String(message));
+    try {
+      const result = assertOpenRouterBalanceSufficient({
+        repoDir,
+        pricing: { inputPerMTok: 1, outputPerMTok: 10 },
+        reservedOutputTokens: 32768,
+      });
+      assert.equal(result.status, 'warn');
+      assert.equal(result.reservedOutputTokens, 32768);
+      assert.equal(result.reservationUsd, 0.32768);
+    } finally {
+      console.warn = originalWarn;
+    }
+    assert.match(warnings.join('\n'), /max_tokens reservation/i);
+  });
+
   it('caps max tokens against affordable cached balance', () => {
     writeCredits(0.01);
     assert.equal(

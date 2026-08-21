@@ -370,6 +370,14 @@ export interface NativePatchCodingConfig {
   enabled?: boolean;
 }
 
+export interface NativeContextManagementConfig {
+  compactionThreshold?: number;
+  safetyMarginPct?: number;
+  minRetainedToolResults?: number;
+  minOutputTokens?: number;
+  packetBudgetFraction?: number;
+}
+
 export interface NativePlanningConfig {
   maxTurns?: number;
   maxToolCalls?: number;
@@ -388,6 +396,7 @@ export interface NativeAgentConfig {
   };
   planning?: NativePlanningConfig;
   patchCoding?: NativePatchCodingConfig;
+  contextManagement?: NativeContextManagementConfig;
   providers?: NativeAgentProvidersConfig;
 }
 
@@ -1777,6 +1786,17 @@ export function getProvidersConfig(repoDir?: string): ProvidersConfig {
 
 export function getNativeAgentConfig(repoDir?: string): NativeAgentConfig {
   return loadWavemillConfig(repoDir).nativeAgent || {};
+}
+
+export function getNativeContextManagementConfig(repoDir?: string): Required<NativeContextManagementConfig> {
+  const config = getNativeAgentConfig(repoDir).contextManagement || {};
+  return {
+    compactionThreshold: config.compactionThreshold ?? 0.80,
+    safetyMarginPct: config.safetyMarginPct ?? 5,
+    minRetainedToolResults: config.minRetainedToolResults ?? 4,
+    minOutputTokens: config.minOutputTokens ?? 1_024,
+    packetBudgetFraction: config.packetBudgetFraction ?? 0.5,
+  };
 }
 
 export function getNativeOpenRouterProviderConfig(repoDir?: string): NativeAgentProviderConfig {

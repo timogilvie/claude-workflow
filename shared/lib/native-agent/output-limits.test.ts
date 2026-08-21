@@ -5,6 +5,7 @@ import { registerScriptedPiProvider, type ScriptedProviderContext } from './prov
 import { runWavemillLoop, resolveMaxOutputTokens } from './loop.ts';
 import {
   CODING_MAX_OUTPUT_TOKENS,
+  computeDynamicMaxTokens,
   DEFAULT_MAX_OUTPUT_TOKENS,
   REVIEW_MAX_OUTPUT_TOKENS,
 } from './output-limits.ts';
@@ -89,5 +90,40 @@ describe('resolveMaxOutputTokens', () => {
   it('keeps phase ceilings ordered review <= default <= coding', () => {
     assert.ok(REVIEW_MAX_OUTPUT_TOKENS <= DEFAULT_MAX_OUTPUT_TOKENS);
     assert.ok(DEFAULT_MAX_OUTPUT_TOKENS <= CODING_MAX_OUTPUT_TOKENS);
+  });
+});
+
+describe('computeDynamicMaxTokens', () => {
+  it('keeps the phase ceiling while there is enough context headroom', () => {
+    assert.equal(
+      computeDynamicMaxTokens({
+        inputTokens: 10_000,
+        contextWindowTokens: 100_000,
+        phaseCeiling: CODING_MAX_OUTPUT_TOKENS,
+      }),
+      CODING_MAX_OUTPUT_TOKENS,
+    );
+  });
+
+  it('shrinks the reservation as input consumes the window', () => {
+    assert.equal(
+      computeDynamicMaxTokens({
+        inputTokens: 85_000,
+        contextWindowTokens: 100_000,
+        phaseCeiling: CODING_MAX_OUTPUT_TOKENS,
+      }),
+      10_000,
+    );
+  });
+
+  it('floors at the minimum output tokens when headroom is exhausted', () => {
+    assert.equal(
+      computeDynamicMaxTokens({
+        inputTokens: 99_000,
+        contextWindowTokens: 100_000,
+        phaseCeiling: CODING_MAX_OUTPUT_TOKENS,
+      }),
+      1_024,
+    );
   });
 });

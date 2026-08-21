@@ -6,6 +6,7 @@ import { describe, it } from 'node:test';
 import {
   appendAuthoredLinksFooter,
   buildIssueExpansionCallOptions,
+  enforcePacketBudget,
   expandIssue,
   extractAuthoredLinksFooter,
   parseIssueInput,
@@ -119,6 +120,50 @@ describe('issue-expander', () => {
 
     assert.equal(result.body, description);
     assert.equal(result.footer, null);
+  });
+
+  it('enforces packet budgets by preserving core sections and truncating the tail', () => {
+    const packet = [
+      '# Task Packet',
+      '',
+      '## Detailed Sections',
+      '| Section | Purpose |',
+      '| - | - |',
+      '| Objective | Keep |',
+      '',
+      '## Objective',
+      'Build the thing.',
+      '',
+      '## Technical Context',
+      'x'.repeat(1_000),
+      '',
+      '## Implementation Approach',
+      'y'.repeat(1_000),
+      '',
+      '## Success Criteria',
+      'z'.repeat(1_000),
+      '',
+      '## Extra Evidence',
+      'tail should be removed '.repeat(1_000),
+    ].join('\n');
+
+    const result = enforcePacketBudget(packet, { maxPacketTokens: 260 });
+
+    assert.equal(result.truncated, true);
+    assert.ok(result.originalTokens > result.retainedTokens);
+    assert.match(result.markdown, /## Objective/);
+    assert.match(result.markdown, /## Technical Context/);
+    assert.match(result.markdown, /\[\.\.\. truncated for context budget \.\.\.\]/);
+    assert.doesNotMatch(result.markdown, /Extra Evidence/);
+  });
+
+  it('leaves packets under budget unchanged', () => {
+    const packet = '# Task Packet\n\n## Objective\n\nSmall.';
+
+    const result = enforcePacketBudget(packet, { maxPacketTokens: 10_000 });
+
+    assert.equal(result.truncated, false);
+    assert.equal(result.markdown, packet);
   });
 
   it('extracts only the applicable trailing footer when multiple separators exist', () => {

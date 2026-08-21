@@ -107,6 +107,8 @@ bad_model_detail="Native coding failed: 400 qwen-2.5-coder-32b is not a valid mo
 tool_use_detail="Native coding failed: 404 No endpoints found that support tool use"
 credits_detail="Native coding failed: HTTP 402 Payment Required: This request requires more credits, or fewer max_tokens. You requested up to 32768 tokens, but can only afford 1123."
 empty_turn_detail="Native coding failed: empty-model-turn: model returned reasoning-only or otherwise empty assistant turns after a continuation prompt"
+context_exhausted_detail="Native coding failed: context-exhausted: compacted native coding context to the floor and still exceeded the model context window"
+transient_detail="Native coding failed: Provider finish_reason: error"
 
 if [[ "$(native_terminal_failure_kind "$ctx_detail")" == "context-window-exceeded" ]]; then
   pass "context overflow is classified"
@@ -120,7 +122,13 @@ else
   fail "pre-flight context overflow misclassified as $(native_terminal_failure_kind "$preflight_ctx_detail")"
 fi
 
-if [[ "$(native_terminal_failure_kind "$bad_model_detail")" == "invalid-model-id" ]]; then
+if [[ "$(native_terminal_failure_kind "$context_exhausted_detail")" == "context-exhausted" ]]; then
+  pass "context exhaustion is classified distinctly"
+else
+  fail "context exhaustion misclassified as $(native_terminal_failure_kind "$context_exhausted_detail")"
+fi
+
+if [[ "$(native_terminal_failure_kind "$bad_model_detail")" == "provider-config-error" ]]; then
   pass "invalid model ID is classified"
 else
   fail "invalid model ID misclassified as $(native_terminal_failure_kind "$bad_model_detail")"
@@ -132,10 +140,16 @@ else
   fail "unsupported tool use misclassified as $(native_terminal_failure_kind "$tool_use_detail")"
 fi
 
-if [[ "$(native_terminal_failure_kind "$credits_detail")" == "openrouter-credits-exhausted" ]]; then
+if [[ "$(native_terminal_failure_kind "$credits_detail")" == "provider-credit-exhausted" ]]; then
   pass "OpenRouter credit exhaustion is classified"
 else
   fail "OpenRouter credit exhaustion misclassified as $(native_terminal_failure_kind "$credits_detail")"
+fi
+
+if [[ "$(native_terminal_failure_kind "$transient_detail")" == "provider-transient-error" ]]; then
+  pass "transient provider errors are classified"
+else
+  fail "transient provider error misclassified as $(native_terminal_failure_kind "$transient_detail")"
 fi
 
 if [[ "$(native_terminal_failure_kind "$empty_turn_detail")" == "empty-model-turn" ]]; then
@@ -156,7 +170,13 @@ else
   fail "context overflow recovery action missing"
 fi
 
-if [[ "$(native_terminal_failure_next_action openrouter-credits-exhausted)" == *"Top up OpenRouter credits"* || "$(native_terminal_failure_next_action openrouter-credits-exhausted)" == *"top up OpenRouter credits"* ]]; then
+if [[ "$(native_terminal_failure_next_action context-exhausted)" == *"larger-context model"* ]]; then
+  pass "context exhaustion surfaces a resumable recovery action"
+else
+  fail "context exhaustion recovery action missing"
+fi
+
+if [[ "$(native_terminal_failure_next_action provider-credit-exhausted)" == *"Top up OpenRouter credits"* || "$(native_terminal_failure_next_action provider-credit-exhausted)" == *"top up OpenRouter credits"* ]]; then
   pass "OpenRouter credit exhaustion surfaces a billing recovery action"
 else
   fail "OpenRouter credit exhaustion recovery action missing"
@@ -246,8 +266,8 @@ write_stage_result "$fd" "coding" "running" "native" "qwen-2.5-coder-32b"
 write_hook "PAIR-1_c" "error" "$bad_model_detail"
 
 if emit_native_terminal_failure_attention "PAIR-1_c" "$fd" "coding" "win-2" "%2" "native" "qwen-2.5-coder-32b"; then
-  if [[ "$(jq -r '.artifacts.failureKind' "$fd/.coding-result.json")" == "invalid-model-id" ]] \
-    && [[ "$(jq -r '.tasks["PAIR-1"].challengeAborted' "$STATE_FILE")" == "terminal_launch_failure:invalid-model-id" ]]; then
+  if [[ "$(jq -r '.artifacts.failureKind' "$fd/.coding-result.json")" == "provider-config-error" ]] \
+    && [[ "$(jq -r '.tasks["PAIR-1"].challengeAborted' "$STATE_FILE")" == "terminal_launch_failure:provider-config-error" ]]; then
     pass "invalid model ID fails the stage and quarantines the pair"
   else
     fail "invalid model ID side effects incomplete"

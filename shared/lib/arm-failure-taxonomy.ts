@@ -1,8 +1,12 @@
 export type TerminalFailureKind =
+  | 'context-exhausted'
   | 'context-window-exceeded'
   | 'invalid-model-id'
   | 'provider-rate-limited'
   | 'provider-quota-exhausted'
+  | 'provider-transient-error'
+  | 'provider-credit-exhausted'
+  | 'provider-config-error'
   | 'tool-use-unsupported'
   | 'empty-model-turn'
   | 'native-provider-error';
@@ -39,15 +43,20 @@ export function classifyArmFault(input: { failureKind?: string | null; detail?: 
   const detail = (input.detail ?? '').toLowerCase();
 
   switch (failureKind) {
+    case 'context-exhausted':
     case 'context-window-exceeded':
     case 'invalid-model-id':
     case 'empty-model-turn':
+    case 'provider-credit-exhausted':
+    case 'provider-config-error':
+    case 'openrouter-credits-exhausted':
       return 'harness-fault';
     case 'tool-use-unsupported':
     case 'varied_model_unresolvable':
       return 'selection-fault';
     case 'provider-rate-limited':
     case 'provider-quota-exhausted':
+    case 'provider-transient-error':
       return 'provider-fault';
     case 'native-provider-error':
       if (/(finish_reason|malformed|truncated stream|stream ended without|invalid response|unusable result)/.test(detail)) {

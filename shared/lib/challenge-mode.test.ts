@@ -2969,6 +2969,26 @@ test('a runtime-only side is backfilled rather than persisted half-formed', () =
   assert.equal(intent.primary!.expectedStageModel, 'claude-fable-5');
 });
 
+// ────────────────────────────────────────────────────────────────
+// P0.5 Phase 0 Fork Descriptor Fields Tests (HOK-2794)
+// ────────────────────────────────────────────────────────────────
+
+test('buildChallengeExecutionIntent emits fork descriptor fields and per-side inheritedStages', () => {
+  const intent = buildChallengeExecutionIntent({
+    pairId: 'HOK-2794',
+    issueId: 'HOK-2794',
+    selectedStage: 'implementation',
+    primary: intentEntry('primary'),
+    challenger: intentEntry('challenger'),
+  });
+
+  assert.equal(intent.forkStage, null);
+  assert.equal(intent.forkCommit, null);
+  assert.equal(intent.sharedPrefix, false);
+  assert.deepEqual(intent.primary!.inheritedStages, []);
+  assert.deepEqual(intent.challenger!.inheritedStages, []);
+});
+
 process.on('exit', () => {
   console.log(`\nPassed: ${passed}`);
   console.log(`Failed: ${failed}`);

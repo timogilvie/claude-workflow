@@ -122,6 +122,7 @@ export interface ScriptedPiProviderTurn {
   >;
   usage?: Partial<Usage>;
   stopReason?: ProviderFinishReason | 'toolUse';
+  errorMessage?: string;
 }
 
 export interface ScriptedPiProviderDefinition {
@@ -329,6 +330,7 @@ function toPiAssistantMessage(
     model: model.id,
     usage: createPiUsage(turn.usage),
     stopReason,
+    ...(turn.errorMessage ? { errorMessage: turn.errorMessage } : {}),
     timestamp: Date.now(),
   };
 }

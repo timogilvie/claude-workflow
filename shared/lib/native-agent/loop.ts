@@ -16,13 +16,16 @@ import { SessionStreamWriter, type SessionStreamWriterOptions, storeArtifact } f
 
 // Re-export the Pi agent context type through the loop seam so loop callers can
 // construct an AgentContext without importing Pi vendor packages directly.
-export type { AgentContext } from '@earendil-works/pi-agent-core';
+export type { AgentContext, AgentMessage } from '@earendil-works/pi-agent-core';
 import { computeModelCost, type ModelPricing } from '../workflow-cost.ts';
 import type { ModelRegistry } from '../model-registry.ts';
 import { appendPromptSizeSample, type PromptSizeSample } from './prompt-size-log.ts';
 import { assertToolCompat } from './tool-compat-validator.ts';
 import {
   assertPromptFitsContextWindow,
+  ContextExhaustedError,
+  evaluateContextWindow,
+  estimatePromptTokens,
   resolveContextWindowLimit,
   ContextWindowUnverifiableError,
   type ContextWindowLimit,
@@ -33,8 +36,14 @@ import {
   type ReplayCompactionOptions,
 } from './compaction.ts';
 import { buildTrustMetadata } from './provenance.ts';
-import { DEFAULT_MAX_OUTPUT_TOKENS } from './output-limits.ts';
+import { computeDynamicMaxTokens, DEFAULT_MAX_OUTPUT_TOKENS } from './output-limits.ts';
+import { compactTranscript } from './transcript-compactor.ts';
 import { toProviderRequestModelId, type ProviderModelConfig } from './provider.ts';
+import {
+  classifyProviderError,
+  type ProviderErrorClassification,
+  type ProviderErrorKind,
+} from './provider-error-classifier.ts';
 import { evaluateBeforeToolCallPolicy, type ToolPolicyConfig } from './tools/policies.ts';
 import { redactSecrets, redactSecretsInValue } from './tools/redaction.ts';
 import { ToolStagnationTracker, type ToolStagnationPolicy } from './planning-guards.ts';
@@ -55,6 +64,7 @@ const EMPTY_ASSISTANT_CONTINUATION_PROMPT = [
 ].join('\n');
 const EMPTY_MODEL_TURN_ERROR_MESSAGE =
   'empty-model-turn: model returned reasoning-only or otherwise empty assistant turns after a continuation prompt';
+const DEFAULT_PROVIDER_ERROR_RETRY_DELAYS_MS = [1000, 4000, 16000] as const;
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -174,6 +184,7 @@ export interface WavemillLoopConfig {
   compaction?: ReplayCompactionOptions;
   /** Receives metadata for replay compaction events emitted by transformContext. */
   onCompactionEvents?: (events: ReplayCompactionEvent[]) => void;
+  contextManagement?: NativeContextManagementConfig;
   /** Required when `budget.maxCostUsd` is set; used to compute turn cost. */
   modelPricing?: ModelPricing;
   /** Optional registry override for tool compatibility validation. */
@@ -185,6 +196,25 @@ export interface WavemillLoopConfig {
   /** Optional session event stream configuration. When provided, session provenance
    *  events are recorded alongside the transcript. */
   sessionStreamConfig?: SessionStreamConfig;
+  providerErrorRetry?: {
+    maxAttempts?: number;
+    backoffDelaysMs?: number[];
+    sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  };
+}
+
+export interface NativeContextManagementConfig {
+  compactionThreshold?: number;
+  safetyMarginPct?: number;
+  minRetainedToolResults?: number;
+  minOutputTokens?: number;
+}
+
+interface ResolvedNativeContextManagementConfig {
+  compactionThreshold: number;
+  safetyMarginPct: number;
+  minRetainedToolResults: number;
+  minOutputTokens: number;
 }
 
 export interface LoopResult {
@@ -196,6 +226,13 @@ export interface LoopResult {
   totalOutputTokens: number;
   totalCostUsd: number;
   wallClockMs: number;
+  providerError?: {
+    kind: ProviderErrorKind;
+    retryable: boolean;
+    attempts: number;
+    errorMessage: string;
+    turnsAtFailure: number;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -240,6 +277,10 @@ function finalAssistantMessage(messages: AgentMessage[]): AssistantMessage | und
   return undefined;
 }
 
+function assistantMessageCount(messages: AgentMessage[]): number {
+  return messages.filter((message) => message.role === 'assistant').length;
+}
+
 function hasActionableAssistantContent(message: AssistantMessage | undefined): boolean {
   if (!message) return false;
   return message.content.some((block) => {
@@ -257,6 +298,58 @@ function shouldContinueEmptyAssistantTurn(messages: AgentMessage[]): boolean {
     && message.stopReason === 'stop'
     && !hasActionableAssistantContent(message),
   );
+}
+
+function finalAssistantProviderError(messages: AgentMessage[]): {
+  message: AssistantMessage;
+  errorMessage: string;
+  classification: ProviderErrorClassification;
+} | undefined {
+  const message = finalAssistantMessage(messages);
+  if (!message || message.stopReason !== 'error') {
+    return undefined;
+  }
+  const errorMessage = message.errorMessage?.trim() || 'Provider returned stopReason "error" without an errorMessage.';
+  return {
+    message,
+    errorMessage,
+    classification: classifyProviderError(errorMessage),
+  };
+}
+
+function stripTrailingAssistantErrorTurn(messages: AgentMessage[], errorMessage: AssistantMessage): AgentMessage[] {
+  const index = messages.lastIndexOf(errorMessage as AgentMessage);
+  if (index === -1) {
+    return messages.filter((message) => message !== (errorMessage as AgentMessage));
+  }
+  return [
+    ...messages.slice(0, index),
+    ...messages.slice(index + 1),
+  ];
+}
+
+function providerRetryDelayMs(delays: readonly number[], attemptIndex: number): number {
+  const raw = delays[Math.min(attemptIndex, Math.max(0, delays.length - 1))] ?? 0;
+  if (raw <= 0) {
+    return 0;
+  }
+  const jitter = 0.8 + Math.random() * 0.4;
+  return Math.round(raw * jitter);
+}
+
+function sleepAbortable(ms: number, signal?: AbortSignal): Promise<void> {
+  if (ms <= 0 || signal?.aborted) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    const timeout = setTimeout(cleanup, ms);
+    function cleanup() {
+      clearTimeout(timeout);
+      signal?.removeEventListener('abort', cleanup);
+      resolve();
+    }
+    signal?.addEventListener('abort', cleanup, { once: true });
+  });
 }
 
 function buildEmptyAssistantContinuationMessage(): AgentMessage {
@@ -334,6 +427,17 @@ function toPiModel(config: ProviderModelConfig, maxTokens: number, contextWindow
   } as unknown as Model<string>;
 }
 
+function resolveContextManagementConfig(
+  config: NativeContextManagementConfig | undefined,
+): ResolvedNativeContextManagementConfig {
+  return {
+    compactionThreshold: config?.compactionThreshold ?? 0.80,
+    safetyMarginPct: config?.safetyMarginPct ?? 5,
+    minRetainedToolResults: config?.minRetainedToolResults ?? 4,
+    minOutputTokens: config?.minOutputTokens ?? 1_024,
+  };
+}
+
 interface ComposedSignal {
   signal: AbortSignal;
   cleanup: () => void;
@@ -387,7 +491,9 @@ function composeAbortSignal(
  */
 export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopResult> {
   const { context, convertToLlm, budget, signal: callerSignal, onHeartbeat, modelPricing, temperature } = config;
-  const maxTokens = resolveMaxOutputTokens(config);
+  const phaseMaxTokens = resolveMaxOutputTokens(config);
+  let currentMaxTokens = phaseMaxTokens;
+  const contextManagement = resolveContextManagementConfig(config.contextManagement);
 
   const startTime = Date.now();
   const composed = composeAbortSignal(callerSignal, budget?.maxWallClockMs);
@@ -458,6 +564,11 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
   let totalOutputTokens = 0;
   let totalCostUsd = 0;
   let budgetStopReason: LoopStopReason | undefined;
+  let finalProviderError: LoopResult['providerError'] | undefined;
+  let providerErrorRetryAttempts = 0;
+  const providerErrorRetryMaxAttempts = config.providerErrorRetry?.maxAttempts ?? 3;
+  const providerErrorRetryDelays = config.providerErrorRetry?.backoffDelaysMs ?? DEFAULT_PROVIDER_ERROR_RETRY_DELAYS_MS;
+  const providerErrorSleep = config.providerErrorRetry?.sleep ?? sleepAbortable;
   // Track peak tokens for prompt size logging
   let peakInputTokens = 0;
 
@@ -495,15 +606,28 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
 
     contextWindowLimit = resolveContextWindowLimit(config.model, config.compatRegistry);
     if (contextWindowLimit) {
+      const preflightEstimate = estimatePromptTokens({
+        systemPrompt: context.systemPrompt,
+        messages: context.messages,
+        tools: context.tools,
+      });
+      currentMaxTokens = computeDynamicMaxTokens({
+        inputTokens: preflightEstimate.inputTokens,
+        contextWindowTokens: contextWindowLimit.limit,
+        phaseCeiling: phaseMaxTokens,
+        minOutputTokens: contextManagement.minOutputTokens,
+        safetyMarginPct: contextManagement.safetyMarginPct,
+      });
       // When replay compaction is configured, this checks the untransformed
       // history, so it is conservative relative to the provider request.
       const estimateResult = assertPromptFitsContextWindow({
         phase: config.toolPolicy?.phase,
         model: config.model,
         context,
-        reservedOutputTokens: maxTokens,
+        reservedOutputTokens: currentMaxTokens,
         registry: config.compatRegistry,
         limit: contextWindowLimit,
+        safetyMargin: contextManagement.safetyMarginPct / 100,
       });
       
       // Log the preflight estimate if prompt size logging is configured
@@ -533,10 +657,10 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
   }
 
   const piConfig: AgentLoopConfig = {
-    model: toPiModel(config.model, maxTokens, contextWindowLimit?.limit),
+    model: toPiModel(config.model, currentMaxTokens, contextWindowLimit?.limit),
     convertToLlm,
     temperature,
-    maxTokens,
+    maxTokens: currentMaxTokens,
 
     shouldStopAfterTurn: async (ctx: ShouldStopAfterTurnContext) => {
       const msg = ctx.message as AssistantMessage;
@@ -797,9 +921,94 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
     },
   };
 
-  if (config.compaction) {
-    piConfig.transformContext = async (messages: AgentMessage[]) => {
-      const result = transformContext(messages, config.compaction!);
+  if (contextWindowLimit) {
+    piConfig.prepareNextTurn = async (ctx) => {
+      const inputTokens = estimatePromptTokens({
+        systemPrompt: context.systemPrompt,
+        messages: ctx.context.messages,
+        tools: context.tools,
+      }).inputTokens;
+      const nextMaxTokens = computeDynamicMaxTokens({
+        inputTokens,
+        contextWindowTokens: contextWindowLimit!.limit,
+        phaseCeiling: phaseMaxTokens,
+        minOutputTokens: contextManagement.minOutputTokens,
+        safetyMarginPct: contextManagement.safetyMarginPct,
+      });
+      if (nextMaxTokens === currentMaxTokens) {
+        return undefined;
+      }
+      currentMaxTokens = nextMaxTokens;
+      piConfig.maxTokens = nextMaxTokens;
+      return {
+        model: toPiModel(config.model, nextMaxTokens, contextWindowLimit!.limit),
+      };
+    };
+  }
+
+  piConfig.transformContext = async (messages: AgentMessage[]) => {
+    let nextMessages = messages;
+    if (contextWindowLimit) {
+      const beforeEstimate = estimatePromptTokens({
+        systemPrompt: context.systemPrompt,
+        messages: nextMessages,
+        tools: context.tools,
+      });
+      const compactionTrigger = Math.floor(contextWindowLimit.limit * contextManagement.compactionThreshold);
+      if (beforeEstimate.inputTokens + currentMaxTokens > compactionTrigger) {
+        const result = compactTranscript(nextMessages, {
+          targetTokens: Math.max(0, compactionTrigger - currentMaxTokens),
+          minRetainedToolResults: contextManagement.minRetainedToolResults,
+          systemPrompt: context.systemPrompt,
+          tools: context.tools,
+        });
+        nextMessages = result.messages;
+        if (result.droppedCount > 0 && sessionStreamWriter) {
+          try {
+            sessionStreamWriter.writeCompaction({
+              strategy: result.strategy,
+              affectedEventCount: result.droppedCount,
+              beforeContextDigest: computeArgsFingerprint(messages),
+              afterContextDigest: computeArgsFingerprint(nextMessages),
+            });
+          } catch (error) {
+            console.warn(`Failed to log compaction event: ${(error as Error).message}`);
+          }
+        }
+
+        const afterEstimate = estimatePromptTokens({
+          systemPrompt: context.systemPrompt,
+          messages: nextMessages,
+          tools: context.tools,
+        });
+        const verdict = evaluateContextWindow({
+          phase: config.toolPolicy?.phase,
+          model: config.model,
+          limit: contextWindowLimit,
+          estimate: afterEstimate,
+          reservedOutputTokens: currentMaxTokens,
+          safetyMargin: contextManagement.safetyMarginPct / 100,
+        });
+        if (!verdict.ok) {
+          throw new ContextExhaustedError(
+            `context-exhausted: compacted native ${config.toolPolicy?.phase ?? 'session'} context to the floor and still exceeded the model context window`,
+            {
+              ...verdict.diagnostic,
+              droppedCount: result.droppedCount,
+              droppedTokensEstimate: result.droppedTokensEstimate,
+              handoff: {
+                transcriptPath: config.sessionStreamConfig?.eventStreamPath,
+                lastCompactionStrategy: result.strategy,
+                stopAfterTurn: turnsCompleted,
+              },
+            },
+          );
+        }
+      }
+    }
+
+    if (config.compaction) {
+      const result = transformContext(nextMessages, config.compaction);
       if (result.events.length > 0) {
         try {
           config.onCompactionEvents?.(result.events);
@@ -809,8 +1018,9 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
         }
       }
       return result.messages;
-    };
-  }
+    }
+    return nextMessages;
+  };
 
   let finalMessages: AgentMessage[] = [];
   let loopError: unknown;
@@ -833,7 +1043,7 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
               modelId: toProviderRequestModelId(config.model),
               config: {
                 temperature,
-                maxTokens,
+                maxTokens: currentMaxTokens,
               },
               contextDigest: computeArgsFingerprint(context),
               promptRefs: config.sessionStreamConfig?.promptRefs ?? [],
@@ -914,6 +1124,53 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
         !budgetStopReason
         && !composed.signal.aborted
         && shouldContinueEmptyAssistantTurn(finalMessages);
+      const providerError = !budgetStopReason && !composed.signal.aborted
+        ? finalAssistantProviderError(finalMessages)
+        : undefined;
+
+      if (
+        providerError
+        && providerError.classification.retryable
+        && providerErrorRetryAttempts < providerErrorRetryMaxAttempts
+      ) {
+        if (bufferedAgentEnd) {
+          handleAgentEvent(bufferedAgentEnd, false);
+        }
+        providerErrorRetryAttempts += 1;
+        const detail = providerError.classification.kind;
+        onHeartbeat?.({ state: 'working', event: 'provider_retry', detail, agent: HEARTBEAT_AGENT });
+        try {
+          sessionStreamWriter?.writeRetry({
+            failedEventId: currentTurnRequestEventId ?? currentTurnRequestCallId ?? randomUUID(),
+            reason: `${detail}: ${providerError.errorMessage}`,
+            retryCount: providerErrorRetryAttempts,
+          });
+        } catch (error) {
+          console.warn(`Failed to log provider retry event: ${(error as Error).message}`);
+        }
+        const retainedMessages = stripTrailingAssistantErrorTurn(finalMessages, providerError.message);
+        const delayMs = providerRetryDelayMs(providerErrorRetryDelays, providerErrorRetryAttempts - 1);
+        await providerErrorSleep(delayMs, composed.signal);
+        if (composed.signal.aborted) {
+          break;
+        }
+        continuationRunIndex += 1;
+        loopContext = {
+          ...context,
+          messages: retainedMessages,
+        };
+        continue;
+      }
+
+      if (providerError) {
+        finalProviderError = {
+          kind: providerError.classification.kind,
+          retryable: providerError.classification.retryable,
+          attempts: providerErrorRetryAttempts,
+          errorMessage: providerError.errorMessage,
+          turnsAtFailure: Math.max(turnsCompleted, assistantMessageCount(finalMessages)),
+        };
+      }
 
       if (emptyAssistantTurn && emptyAssistantContinuations < EMPTY_ASSISTANT_CONTINUATION_LIMIT) {
         if (bufferedAgentEnd) {
@@ -966,6 +1223,18 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
   }
 
   const wallClockMs = Date.now() - startTime;
+  if (!finalProviderError) {
+    const providerError = finalAssistantProviderError(finalMessages);
+    if (providerError) {
+      finalProviderError = {
+        kind: providerError.classification.kind,
+        retryable: providerError.classification.retryable,
+        attempts: providerErrorRetryAttempts,
+        errorMessage: providerError.errorMessage,
+        turnsAtFailure: Math.max(turnsCompleted, assistantMessageCount(finalMessages)),
+      };
+    }
+  }
 
   let stopReason: LoopStopReason;
   const finalStopReason = finalAssistantStopReason(finalMessages);
@@ -1002,6 +1271,10 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
     console.warn(`Failed to write session_ended event: ${(error as Error).message}`);
   }
 
+  if (loopError instanceof ContextExhaustedError) {
+    throw loopError;
+  }
+
   return {
     messages: finalMessages,
     stopReason,
@@ -1011,6 +1284,7 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
     totalOutputTokens,
     totalCostUsd,
     wallClockMs,
+    ...(finalProviderError ? { providerError: finalProviderError } : {}),
   };
 }
 
