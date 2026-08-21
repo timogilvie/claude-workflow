@@ -137,6 +137,14 @@
  *   and `missing_challenge_stage` eligibility diagnostics so challenge pairs
  *   can be stratified by evidenced stage without defaulting unknowns to
  *   implementation (HOK-2797).
+ * - **1.40.0**: Additive schema pass declaring fields for P0.2, P0.3, P0.6,
+ *   and eventual `challenge.fork()` (HOK-2794): fork descriptor fields
+ *   (`forkStage`, `forkCommit`, `sharedPrefix`, per-side `inheritedStages`),
+ *   diff identity (`primaryDiffIdentity`, `challengerDiffIdentity`), judge
+ *   provenance (`judge_model`, `judge_prompt_hash`, per-side `cost_usd`,
+ *   `criterionRationales`), and no-comparison accounting (`noComparisonReason`).
+ *   Added `'inherited'` to `ChallengeProvenanceSource`. No behavior change;
+ *   readers must tolerate absence on historical records.
  *
  * @module eval-schema
  */
@@ -153,7 +161,7 @@ import type { ChallengeRoutingMeta } from './challenge-comparison.ts';
 import type { ChallengeStage } from './challenge-mode.ts';
 
 /** Current eval schema version for newly emitted records. */
-export const SCHEMA_VERSION = '1.39.0';
+export const SCHEMA_VERSION = '1.40.0';
 
 export type RoutingRole = 'planner' | 'coder' | 'reviewer';
 

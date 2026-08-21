@@ -6,6 +6,7 @@ import { getEffectiveRegistry, resolveModelRegistryKey } from './model-registry.
 import { resolveWavemillAliasFromOpenRouterId } from './openrouter-catalog.ts';
 import type { StageName, StageResult, StageStatus } from './stage-result.ts';
 import type { ChallengeArmFailure } from './arm-failure-taxonomy.ts';
+import type { ChallengeStage } from './challenge-mode.ts';
 
 export interface ChallengeRoutingMeta {
   planner: string;
@@ -64,8 +65,41 @@ export type ChallengeProvenanceSource =
   | '.coding-result.json'
   | '.review-result.json'
   | 'eval.executedPlanning'
+  | 'inherited'
   | 'missing'
   | 'malformed-artifact';
+
+/**
+ * Diff identity for one side of a comparison (P0.2).
+ * Tracks the exact commit/merge SHA and file changes for the varied stage.
+ */
+export interface ChallengeDiffIdentity {
+  head_sha: string | null;
+  merge_sha: string | null;
+  files_touched: string[];
+  line_ranges: Array<{ file: string; start: number; end: number }>;
+}
+
+/**
+ * Per-criterion rationale from the judge (P0.3).
+ * Mirrors the rubric criteria and holds a rationale string for each.
+ */
+export interface ChallengeCriterionRationale {
+  rationale: string;
+}
+
+/** Type alias for per-criterion rationales indexed by dimension name */
+export type ChallengeCriterionRationales = {
+  [K in keyof ChallengeComparisonDimensions]?: ChallengeCriterionRationale;
+};
+
+/**
+ * Counted, named reason a launched challenge pair produced no LLM comparison (P0.6).
+ * The finite enum is defined by P0.6; declared here as a forward-compatible
+ * string so this schema pass ships behavior-neutral.
+ */
+export type NoComparisonReason = string;
+
 export type ChallengeProvenanceValidationReason =
   | 'missing-artifact'
   | 'malformed-artifact'
@@ -155,6 +189,32 @@ export interface ChallengeComparison {
   challengerEvalScoreSource?: string;
   /** Data-quality warnings emitted when a stage score was unavailable */
   dataQualityWarnings?: string[];
+
+  // Fork descriptor fields (P0.5 Phase 0, HOK-2794)
+  /** The stage at which the pair forked, or null if launched independently */
+  forkStage?: ChallengeStage | null;
+  /** Git SHA both arms share, or null if the pair did not fork from a shared commit */
+  forkCommit?: string | null;
+  /** Whether the challenger inherited pre-fork execution artifacts from the primary. False until challenge.fork() ships */
+  sharedPrefix?: boolean;
+  /** Stages the primary arm inherited from pre-fork execution rather than executing */
+  primaryInheritedStages?: ChallengeStage[];
+  /** Stages the challenger arm inherited from pre-fork execution rather than executing */
+  challengerInheritedStages?: ChallengeStage[];
+
+  // Diff identity fields (P0.2, HOK-2794)
+  primaryDiffIdentity?: ChallengeDiffIdentity;
+  challengerDiffIdentity?: ChallengeDiffIdentity;
+
+  // Judge provenance and cost fields (P0.3, HOK-2794)
+  judge_model?: string;
+  judge_prompt_hash?: string;
+  primary_cost_usd?: number | null;
+  challenger_cost_usd?: number | null;
+  criterionRationales?: ChallengeCriterionRationales;
+
+  // No-comparison accounting field (P0.6, HOK-2794)
+  noComparisonReason?: NoComparisonReason;
 }
 
 export interface ChallengeComparisonDimensions {
@@ -694,6 +754,11 @@ export function buildInvalidProvenanceComparison(input: {
     variedStage: input.variedStage,
     comparisonOutcome: outcome,
     terminalReason: 'provenance_validation_failed',
+    forkStage: null,
+    forkCommit: null,
+    sharedPrefix: false,
+    primaryInheritedStages: [],
+    challengerInheritedStages: [],
   };
 }
 
@@ -730,6 +795,11 @@ export function buildSkippedIdenticalComparison(input: {
     comparisonOutcome: 'skipped',
     skipReason: 'identical-routing-dimensions',
     cleanupPolicy: 'primary-wins-close-challenger',
+    forkStage: null,
+    forkCommit: null,
+    sharedPrefix: false,
+    primaryInheritedStages: [],
+    challengerInheritedStages: [],
   };
 }
 
@@ -771,6 +841,11 @@ export function buildInvalidChallengeComparison(input: {
     ...(input.primaryAttestation ? { primaryAttestation: input.primaryAttestation } : {}),
     ...(input.challengerAttestation ? { challengerAttestation: input.challengerAttestation } : {}),
     workflowInsight: 'No LLM comparison was run because the selected challenge intent did not execute.',
+    forkStage: null,
+    forkCommit: null,
+    sharedPrefix: false,
+    primaryInheritedStages: [],
+    challengerInheritedStages: [],
   };
 }
 
@@ -806,6 +881,11 @@ export function buildForfeitComparison(input: {
     timestamp: input.timestamp || new Date().toISOString(),
     comparisonOutcome: 'forfeit',
     terminalReason: input.terminalReason,
+    forkStage: null,
+    forkCommit: null,
+    sharedPrefix: false,
+    primaryInheritedStages: [],
+    challengerInheritedStages: [],
   };
 }
 
@@ -840,6 +920,11 @@ export function buildDoubleForfeitComparison(input: {
     timestamp: input.timestamp || new Date().toISOString(),
     comparisonOutcome: 'double-forfeit',
     terminalReason: input.terminalReason,
+    forkStage: null,
+    forkCommit: null,
+    sharedPrefix: false,
+    primaryInheritedStages: [],
+    challengerInheritedStages: [],
   };
 }
 
