@@ -5,7 +5,10 @@ export type TerminalFailureKind =
   | 'provider-quota-exhausted'
   | 'tool-use-unsupported'
   | 'empty-model-turn'
-  | 'native-provider-error';
+  | 'native-provider-error'
+  | 'provider-transient-error'
+  | 'provider-config-error'
+  | 'openrouter-credits-exhausted';
 
 export type ArmFaultClass =
   | 'harness-fault'
@@ -48,7 +51,12 @@ export function classifyArmFault(input: { failureKind?: string | null; detail?: 
       return 'selection-fault';
     case 'provider-rate-limited':
     case 'provider-quota-exhausted':
+    case 'provider-transient-error':
       return 'provider-fault';
+    case 'provider-config-error':
+      return 'selection-fault';
+    case 'openrouter-credits-exhausted':
+      return 'harness-fault';
     case 'native-provider-error':
       if (/(finish_reason|malformed|truncated stream|stream ended without|invalid response|unusable result)/.test(detail)) {
         return 'model-fault';
@@ -75,6 +83,10 @@ export function parseAbortFailureKind(abortReason?: string | null): string | nul
 }
 
 export function isModelQualitySignal(faultClass: ArmFaultClass): boolean {
+  // Provider transient errors, config errors, and credit exhaustion are not model quality signals
+  if (faultClass === 'harness-fault') {
+    return false;
+  }
   return faultClass === 'model-fault' || faultClass === 'provider-fault';
 }
 

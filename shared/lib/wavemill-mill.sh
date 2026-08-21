@@ -6838,6 +6838,10 @@ native_terminal_failure_kind() {
       printf 'provider-quota-exhausted\n'; return 0 ;;
     *"empty-model-turn"*|*"reasoning-only"*"turn"*|*"internal reasoning only"*)
       printf 'empty-model-turn\n'; return 0 ;;
+    *"provider-config-error"*|*"401"*|*"unauthorized"*|*"invalid model"*|*"unknown model"*|*"model_not_found"*|*"not a valid model id"*)
+      printf 'provider-config-error\n'; return 0 ;;
+    *"provider-transient-error"*|*"retries exhausted"*|*"finish_reason: error"*|*"network_error"*|*"stream ended without"*|*"idle timeout"*|*"upstream timeout"*|*"5"[0-9][0-9]*|*"server error"*|*"overloaded"*|*"bad gateway"*|*"unavailable"*|*"service unavailable"*|*"gateway timeout"*|*"429"*|*"rate limit"*)
+      printf 'provider-transient-error\n'; return 0 ;;
   esac
   printf 'native-provider-error\n'
 }
@@ -6858,6 +6862,10 @@ native_terminal_failure_next_action() {
       printf 'relaunch native coding; the runtime exhausted bounded continuation after empty model turns\n' ;;
     tool-use-unsupported)
       printf 'inspect the native provider error, then relaunch the phase\n' ;;
+    provider-config-error)
+      printf 'check authentication and model configuration, then relaunch\n' ;;
+    provider-transient-error)
+      printf 'retry the operation; transient errors may resolve on retry\n' ;;
     *)
       printf 'inspect the native provider error, then relaunch the phase\n' ;;
   esac

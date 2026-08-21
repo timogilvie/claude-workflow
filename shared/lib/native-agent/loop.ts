@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { setTimeout } from 'node:timers/promises';
 import {
   runAgentLoopContinue,
   type AfterToolCallResult,
@@ -13,6 +14,11 @@ import {
 import type { AgentEvent } from '@earendil-works/pi-agent-core';
 import type { AssistantMessage, Model } from '@earendil-works/pi-ai';
 import { SessionStreamWriter, type SessionStreamWriterOptions, storeArtifact } from './session-stream.ts';
+
+// Retry configuration for provider errors
+export const PROVIDER_ERROR_RETRY_LIMIT = 2;
+const RETRY_BASE_DELAY_MS = 2000;
+const RETRY_EXPONENTIAL_MULTIPLIER = 4;
 
 // Re-export the Pi agent context type through the loop seam so loop callers can
 // construct an AgentContext without importing Pi vendor packages directly.
@@ -174,6 +180,8 @@ export interface WavemillLoopConfig {
   compaction?: ReplayCompactionOptions;
   /** Receives metadata for replay compaction events emitted by transformContext. */
   onCompactionEvents?: (events: ReplayCompactionEvent[]) => void;
+  /** Maximum number of retries for provider errors. */
+  providerErrorRetryLimit?: number;
   /** Required when `budget.maxCostUsd` is set; used to compute turn cost. */
   modelPricing?: ModelPricing;
   /** Optional registry override for tool compatibility validation. */
@@ -914,6 +922,44 @@ export async function runWavemillLoop(config: WavemillLoopConfig): Promise<LoopR
         !budgetStopReason
         && !composed.signal.aborted
         && shouldContinueEmptyAssistantTurn(finalMessages);
+
+      // Handle provider error retries
+      const providerErrorTurn =
+        !budgetStopReason
+        && !composed.signal.aborted
+        && finalAssistantStopReason(finalMessages) === 'error';
+
+      if (providerErrorTurn) {
+        const retryLimit = config.providerErrorRetryLimit ?? PROVIDER_ERROR_RETRY_LIMIT;
+        
+        // Count previous provider error retries by looking at retry events in session stream
+        // TODO: Implement proper retry counting when session stream writer is available
+        const retryCount = 0; // Placeholder - would need to parse session stream for retry events
+        
+        if (retryCount < retryLimit) {
+          // Log retry event
+          if (sessionStreamWriter) {
+            try {
+              sessionStreamWriter.writeRetry({
+                failedEventId: currentTurnRequestEventId || 'unknown',
+                reason: 'provider_error',
+                retryCount: retryCount + 1,
+              });
+            } catch (error) {
+              console.warn(`Failed to log retry event: ${(error as Error).message}`);
+            }
+          }
+          
+          // Apply exponential backoff
+          const delayMs = RETRY_BASE_DELAY_MS * Math.pow(RETRY_EXPONENTIAL_MULTIPLIER, retryCount);
+          await setTimeout(delayMs);
+          
+          // Continue loop with same context (will retry the failed turn)
+          continuationRunIndex += 1;
+          continue;
+        }
+        // If we've exhausted retries, fall through to normal error handling
+      }
 
       if (emptyAssistantTurn && emptyAssistantContinuations < EMPTY_ASSISTANT_CONTINUATION_LIMIT) {
         if (bufferedAgentEnd) {

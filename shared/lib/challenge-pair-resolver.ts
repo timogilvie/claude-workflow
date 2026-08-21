@@ -317,6 +317,12 @@ function buildResolutionRecord(input: {
   }
   const armFailures = buildArmFailures(primary, challenger);
   if (!loneSide.evalCompleted) {
+    // Refuse to write stall records when neither side completed and there are no arm failures
+    // This prevents invalid "double-forfeit" records from blocking future evaluations
+    if (armFailures.length === 0) {
+      return null;
+    }
+    
     return {
       outcome: 'double-forfeit',
       record: buildDoubleForfeitComparison({

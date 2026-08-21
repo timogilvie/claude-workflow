@@ -390,3 +390,39 @@ export function runChallengeRecovery(options: ChallengeRecoveryOptions): Challen
     supersedingRecordsWritten,
   };
 }
+
+/**
+ * Void a challenge pair record by appending a voided-comparison record.
+ * This marks the record as intentionally invalidated without removing the original.
+ */
+export function voidChallengePair(input: {
+  repoDir: string;
+  pairId: string;
+  reason: string;
+  now?: () => Date;
+}): void {
+  const evalsDir = join(input.repoDir, '.wavemill', 'evals');
+  const recordsPath = join(evalsDir, 'challenge-records.jsonl');
+  const auditPath = join(evalsDir, 'challenge-recovery-audit.jsonl');
+  
+  // Create voided-comparison record
+  const voidedRecord = {
+    challengePairId: input.pairId,
+    recordKind: 'voided-comparison',
+    voids: input.pairId,
+    rationale: input.reason,
+    timestamp: (input.now ?? (() => new Date()))().toISOString(),
+  };
+  
+  // Append to records
+  appendFileSync(recordsPath, `${JSON.stringify(voidedRecord)}\n`, 'utf8');
+  
+  // Log audit entry
+  const auditEntry = {
+    challengePairId: input.pairId,
+    action: 'void',
+    reason: input.reason,
+    timestamp: voidedRecord.timestamp,
+  };
+  appendFileSync(auditPath, `${JSON.stringify(auditEntry)}\n`, 'utf8');
+}

@@ -12,6 +12,8 @@ import { fileURLToPath } from 'node:url';
 import type { AgentContext, WavemillLoopConfig } from './loop.ts';
 import { runWavemillLoop } from './loop.ts';
 import { CODING_MAX_OUTPUT_TOKENS } from './output-limits.ts';
+import { parseTranscriptJsonl, extractReplayHistory } from './transcript.ts';
+import { classifyProviderError } from './provider-error-classifier.ts';
 import type { AgentMessage, AgentTurn, Message } from './messages.ts';
 import {
   buildNativeProviderResolutionFailureMessage,
@@ -494,6 +496,46 @@ function buildFailureHandoffInput(input: {
   };
 }
 
+/**
+ * Write a coding failure handoff for provider errors with classification information.
+ */
+function failWithProviderError(input: {
+  featureDir: string;
+  stopReason: string;
+  errorMessage: string;
+  turnIndex: number;
+  toolCallCount: number;
+  recoveryAttempted: boolean;
+  transcriptPath?: string;
+  resumeAttempt?: number;
+}): never {
+  const classification = classifyProviderError(input.errorMessage);
+  
+  writeCodingFailureHandoff(input.featureDir, {
+    stage: 'coding',
+    reason: 'provider_error',
+    stopReason: input.stopReason,
+    mutationFailures: input.toolCallCount,
+    lastToolError: null,
+    recoveryAttempted: input.recoveryAttempted,
+    suggestedAction: classification.disposition === 'retryable' 
+      ? 'The operation may succeed on retry'
+      : 'Inspect the error and take corrective action',
+    createdAt: new Date().toISOString(),
+    schemaVersion: CODING_FAILURE_HANDOFF_SCHEMA_VERSION,
+    faultKind: classification.kind,
+    resumable: classification.disposition === 'retryable',
+    ...(input.transcriptPath ? { transcriptPath: input.transcriptPath } : {}),
+    ...(input.resumeAttempt !== undefined ? { resumeAttempt: input.resumeAttempt } : {}),
+  });
+  
+  const handoffRelativePath = relative(process.cwd(), getCodingFailureHandoffPath(input.featureDir));
+  throw new Error(
+    `Native coding failed with provider error: ${input.errorMessage}; ` +
+    `structured handoff: ${handoffRelativePath}`
+  );
+}
+
 function toHandoffValidationErrors(errors: readonly RetryGuidanceError[]): CodingFailureValidationError[] {
   return errors.map((error) => ({
     code: error.code,
@@ -676,6 +718,49 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
 
   mkdirSync(featureDir, { recursive: true });
   const archivedStaleArtifacts = archiveStaleCodingArtifacts(featureDir);
+  
+  // Check for a resumable provider error handoff before starting a new session
+  const handoffPath = getCodingFailureHandoffPath(featureDir);
+  if (existsSync(handoffPath)) {
+    const handoffResult = await readCodingFailureHandoff(handoffPath);
+    if (handoffResult.ok && 
+        handoffResult.value.reason === 'provider_error' && 
+        handoffResult.value.resumable === true &&
+        handoffResult.value.transcriptPath &&
+        existsSync(handoffResult.value.transcriptPath) &&
+        (handoffResult.value.resumeAttempt ?? 0) < 1) {
+      
+      // Try to resume from the transcript
+      try {
+        const transcriptContent = readFileSync(handoffResult.value.transcriptPath, 'utf-8');
+        const transcriptEvents = parseTranscriptJsonl(transcriptContent);
+        const replayHistory = extractReplayHistory(transcriptEvents);
+        
+        // Build context from replay history
+        const replayMessages: AgentMessage[] = [];
+        for (const turn of replayHistory) {
+          replayMessages.push({
+            role: 'assistant',
+            content: turn,
+            timestamp: Date.now(),
+          } as AgentMessage);
+        }
+        
+        // Add continuation prompt
+        replayMessages.push({
+          role: 'user',
+          content: 'Continue from where you left off. Resume the coding task.',
+          timestamp: Date.now(),
+        } as AgentMessage);
+        
+        context.messages = replayMessages;
+        // TODO: Implement actual resume logic with session stream writer
+      } catch (resumeError) {
+        console.warn(`Failed to resume from provider error handoff: ${(resumeError as Error).message}`);
+      }
+    }
+  }
+  
   writeHookStatus(hookPath, 'working', 'launch_native_coding', options.loopModelOverride?.name ?? 'native', 'native');
   writeTextStatus(options.session, options.issue, 'native coding starting');
   if (archivedStaleArtifacts.length > 0) {
@@ -900,7 +985,24 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
 
     const providerError = findFinalAssistantErrorMessage(result.messages);
     if (providerError) {
-      throw new Error(`Native coding failed: ${providerError}`);
+      // Count tool calls to include in the error report
+      const toolCallCount = result.messages.reduce((count, message) => {
+        if (message.role === 'assistant' && Array.isArray(message.content)) {
+          return count + message.content.filter(block => block.type === 'toolCall').length;
+        }
+        return count;
+      }, 0);
+      
+      failWithProviderError({
+        featureDir,
+        stopReason: result.stopReason,
+        errorMessage: providerError,
+        turnIndex: result.turnsCompleted,
+        toolCallCount,
+        recoveryAttempted,
+        transcriptPath,
+        resumeAttempt: 0, // TODO: Increment this when we actually implement resume
+      });
     }
 
     if (
@@ -939,7 +1041,24 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
       result = await runCodingLoop();
       const recoveryProviderError = findFinalAssistantErrorMessage(result.messages);
       if (recoveryProviderError) {
-        throw new Error(`Native coding failed: ${recoveryProviderError}`);
+        // Count tool calls to include in the error report
+        const toolCallCount = result.messages.reduce((count, message) => {
+          if (message.role === 'assistant' && Array.isArray(message.content)) {
+            return count + message.content.filter(block => block.type === 'toolCall').length;
+          }
+          return count;
+        }, 0);
+        
+        failWithProviderError({
+          featureDir,
+          stopReason: result.stopReason,
+          errorMessage: recoveryProviderError,
+          turnIndex: result.turnsCompleted,
+          toolCallCount,
+          recoveryAttempted: true,
+          transcriptPath,
+          resumeAttempt: 0, // TODO: Increment this when we actually implement resume
+        });
       }
     }
 
@@ -994,7 +1113,24 @@ export async function launchNativeCoding(options: LaunchNativeCodingOptions): Pr
       result = await runCodingLoop();
       const retryProviderError = findFinalAssistantErrorMessage(result.messages);
       if (retryProviderError) {
-        throw new Error(`Native coding failed: ${retryProviderError}`);
+        // Count tool calls to include in the error report
+        const toolCallCount = result.messages.reduce((count, message) => {
+          if (message.role === 'assistant' && Array.isArray(message.content)) {
+            return count + message.content.filter(block => block.type === 'toolCall').length;
+          }
+          return count;
+        }, 0);
+        
+        failWithProviderError({
+          featureDir,
+          stopReason: result.stopReason,
+          errorMessage: retryProviderError,
+          turnIndex: result.turnsCompleted,
+          toolCallCount,
+          recoveryAttempted: true,
+          transcriptPath,
+          resumeAttempt: artifactRetryAttempt, // Track retry attempts
+        });
       }
       inspection = await inspectCompletion({
         featureDir,

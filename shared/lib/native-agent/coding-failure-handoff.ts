@@ -6,7 +6,7 @@ import path from 'node:path';
 export const CODING_FAILURE_HANDOFF_SCHEMA_VERSION = '1.0';
 export const CODING_FAILURE_HANDOFF_FILENAME = '.coding-failure-handoff.json';
 export const CODING_FAILURE_HANDOFF_STAGE = 'coding';
-export const CODING_FAILURE_HANDOFF_REASONS = ['no_completion_artifact', 'invalid_completion_artifact'] as const;
+export const CODING_FAILURE_HANDOFF_REASONS = ['no_completion_artifact', 'invalid_completion_artifact', 'provider_error'] as const;
 export type CodingFailureHandoffReason = (typeof CODING_FAILURE_HANDOFF_REASONS)[number];
 
 export interface CodingFailureToolError {
@@ -35,6 +35,10 @@ export interface CodingFailureHandoff {
   schemaVersion: typeof CODING_FAILURE_HANDOFF_SCHEMA_VERSION;
   validationErrors?: CodingFailureValidationError[];
   quarantinedArtifacts?: string[];
+  faultKind?: string;
+  resumable?: boolean;
+  transcriptPath?: string;
+  resumeAttempt?: number;
 }
 
 export type CodingFailureHandoffValidationResult =
@@ -127,6 +131,20 @@ export function validateCodingFailureHandoff(
     && (!Array.isArray(value.validationErrors) || value.validationErrors.length === 0)
   ) {
     return error('MISSING_REQUIRED_FIELD', 'Coding failure handoff validationErrors must be present for invalid_completion_artifact.', 'validationErrors');
+  }
+
+  // Validate optional fields if present
+  if (Object.prototype.hasOwnProperty.call(value, 'faultKind') && value.faultKind !== undefined && typeof value.faultKind !== 'string') {
+    return error('INVALID_FIELD_TYPE', 'Coding failure handoff faultKind must be a string when present.', 'faultKind');
+  }
+  if (Object.prototype.hasOwnProperty.call(value, 'resumable') && value.resumable !== undefined && typeof value.resumable !== 'boolean') {
+    return error('INVALID_FIELD_TYPE', 'Coding failure handoff resumable must be a boolean when present.', 'resumable');
+  }
+  if (Object.prototype.hasOwnProperty.call(value, 'transcriptPath') && value.transcriptPath !== undefined && typeof value.transcriptPath !== 'string') {
+    return error('INVALID_FIELD_TYPE', 'Coding failure handoff transcriptPath must be a string when present.', 'transcriptPath');
+  }
+  if (Object.prototype.hasOwnProperty.call(value, 'resumeAttempt') && value.resumeAttempt !== undefined && (typeof value.resumeAttempt !== 'number' || !Number.isInteger(value.resumeAttempt) || value.resumeAttempt < 0)) {
+    return error('INVALID_FIELD_TYPE', 'Coding failure handoff resumeAttempt must be a non-negative integer when present.', 'resumeAttempt');
   }
 
   return { ok: true, value: value as CodingFailureHandoff };
