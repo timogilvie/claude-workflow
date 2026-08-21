@@ -106,7 +106,7 @@ test('resolver writes a forfeit for an orphaned pair with a completed survivor',
   }
 });
 
-test('resolver writes a double-forfeit when an orphaned pair has no completed survivor', () => {
+test('resolver suppresses a non-decisive orphan record when no side completed eval', () => {
   const { repoDir, cleanup } = setupRepoDir();
   try {
     writeWorkflowState(repoDir, {
@@ -127,10 +127,9 @@ test('resolver writes a double-forfeit when an orphaned pair has no completed su
       now: () => new Date('2026-07-17T12:00:00Z'),
     });
 
-    assert.equal(result.status, 'resolved');
-    assert.equal(result.outcome, 'double-forfeit');
-    assert.equal(result.record.comparisonOutcome, 'double-forfeit');
-    assert.equal(result.record.terminalReason, 'orphan_pair');
+    assert.equal(result.status, 'skipped');
+    assert.match(result.reason, /non-decisive stall record suppressed/);
+    assert.equal(readChallengeComparisons(join(repoDir, '.wavemill', 'evals')).length, 0);
   } finally {
     cleanup();
   }

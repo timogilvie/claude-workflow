@@ -27,6 +27,7 @@ TESTS=(
   apply-expanded-route.test.sh
   challenge-intent-roundtrip.test.sh
   challenge-varied-model-abort.test.sh
+  challenge-record-decisive.test.sh
   native-terminal-failure.test.sh
   native-agent-shell-operators.test.sh
   hook-write-context-guard.test.sh

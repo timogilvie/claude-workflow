@@ -260,6 +260,37 @@ describe('launchNativeCoding', () => {
     assert.match(String(hook.detail), /context_length_exceeded/);
   });
 
+  it('writes a provider-error failure handoff and throws a classified message', async () => {
+    const { repoDir, featureDir, slug } = makeRepo();
+    const model = scriptedModel([{
+      content: [{ type: 'text', text: 'I was about to continue.' }],
+      usage: { input: 0, output: 0, totalTokens: 0 },
+      stopReason: 'error',
+      errorMessage: 'HTTP 402 Payment Required: can only afford 200 tokens',
+    }], 'provider-error');
+
+    await assert.rejects(
+      () => launchNativeCoding({
+        session: 'sess',
+        issue: 'HOK-2841',
+        slug,
+        wtDir: repoDir,
+        repoDir,
+        loopModelOverride: model,
+      }),
+      /provider-credit-exhausted: HTTP 402 Payment Required/,
+    );
+
+    const handoff = await readCodingFailureHandoff(getCodingFailureHandoffPath(featureDir));
+    assert.equal(handoff.ok, true);
+    if (!handoff.ok) return;
+    assert.equal(handoff.value.reason, 'provider_error');
+    assert.equal(handoff.value.recoveryAttempted, false);
+    assert.equal(handoff.value.providerError?.kind, 'provider-credit-exhausted');
+    assert.equal(handoff.value.providerError?.errorMessage, 'HTTP 402 Payment Required: can only afford 200 tokens');
+    assert.equal(handoff.value.providerError?.turnsCompleted, 1);
+  });
+
   it('accepts a valid blocked-completion handoff without writing .coding-complete', async () => {
     const { repoDir, featureDir, slug } = makeRepo();
     const model = scriptedModel([

@@ -146,6 +146,7 @@ describe('loop — budget stops', () => {
           content: [],
           usage: { input: 0, output: 0 },
           stopReason: 'error',
+          errorMessage: 'HTTP 402 Payment Required: can only afford 100 tokens',
         },
       ],
     });
@@ -153,6 +154,96 @@ describe('loop — budget stops', () => {
     const result = await runWavemillLoop(baseConfig(api));
 
     assert.equal(result.stopReason, 'error');
+    assert.equal(result.providerError?.kind, 'provider-credit-exhausted');
+  });
+
+  it('retries a transient provider error and resumes with prior tool calls retained', async () => {
+    const tool = makeTool('noop', 'sequential', async () => 'done');
+    const api = uniqueApi('provider-retry');
+    const contexts: ScriptedProviderContext[] = [];
+    const sleeps: number[] = [];
+    let turnIndex = 0;
+    registerScriptedPiProvider({
+      api,
+      turns: (context) => {
+        contexts.push(context);
+        if (turnIndex < 8) {
+          turnIndex += 1;
+          return {
+            content: [{ type: 'tool_call', id: `tc-${turnIndex}`, name: 'noop', arguments: {} }],
+            usage: { input: 10, output: 1 },
+            stopReason: 'tool_calls',
+          };
+        }
+        if (turnIndex === 8) {
+          turnIndex += 1;
+          return {
+            content: [{ type: 'text', text: 'Now I will add the tests.' }],
+            usage: { input: 0, output: 0, totalTokens: 0 },
+            stopReason: 'error',
+            errorMessage: 'Provider finish_reason: error',
+          };
+        }
+        return {
+          content: [{ type: 'text', text: 'Recovered and completed.' }],
+          usage: { input: 10, output: 1 },
+          stopReason: 'stop',
+        };
+      },
+    });
+    const heartbeats: HeartbeatEvent[] = [];
+
+    const result = await runWavemillLoop({
+      ...baseConfig(api, [tool]),
+      providerErrorRetry: {
+        maxAttempts: 3,
+        backoffDelaysMs: [5],
+        sleep: async (ms) => {
+          sleeps.push(ms);
+        },
+      },
+      onHeartbeat: (event) => heartbeats.push(event),
+    });
+
+    assert.equal(result.stopReason, 'stop');
+    assert.equal(result.toolCallsExecuted, 8);
+    assert.equal(result.providerError, undefined);
+    assert.equal(sleeps.length, 1);
+    assert.equal(heartbeats.some((event) => event.event === 'provider_retry' && event.detail === 'provider-transient-error'), true);
+    const retriedContext = contexts.at(-1);
+    assert.ok(retriedContext);
+    assert.equal(JSON.stringify(retriedContext.messages).includes('Provider finish_reason: error'), false);
+    assert.equal(JSON.stringify(retriedContext.messages).includes('tc-8'), true);
+  });
+
+  it('reports providerError after retryable provider errors exhaust attempts', async () => {
+    const api = uniqueApi('provider-retry-exhausted');
+    registerScriptedPiProvider({
+      api,
+      turns: [{
+        content: [{ type: 'text', text: 'temporary upstream failure' }],
+        usage: { input: 0, output: 0, totalTokens: 0 },
+        stopReason: 'error',
+        errorMessage: 'Provider finish_reason: error',
+      }],
+    });
+    const sleeps: number[] = [];
+
+    const result = await runWavemillLoop({
+      ...baseConfig(api),
+      providerErrorRetry: {
+        maxAttempts: 1,
+        backoffDelaysMs: [1],
+        sleep: async (ms) => {
+          sleeps.push(ms);
+        },
+      },
+    });
+
+    assert.equal(result.stopReason, 'error');
+    assert.equal(result.providerError?.kind, 'provider-transient-error');
+    assert.equal(result.providerError?.attempts, 1);
+    assert.equal(sleeps.length, 1);
   });
 
   it('stops after maxTurns is reached', async () => {

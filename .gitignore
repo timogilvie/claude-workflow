@@ -50,6 +50,7 @@ weekly-competitive-review-prompt.md
 
 # Wavemill runtime state (per-repo, not committed)
 .wavemill/workflow-state.json
+.wavemill/native-status.json
 .wavemill/quota-state.json
 .wavemill/quota-state.lock
 .wavemill/project-context.md

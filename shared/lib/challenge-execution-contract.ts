@@ -26,6 +26,7 @@ export interface ChallengeSideIntent {
   expectedStageModel: string;
   expectedStageAgent?: string;
   expectedRoute: ChallengeRoutingMeta;
+  inheritedStages?: ChallengeStage[];
 }
 
 export type ChallengeDecisionSource = 'bootstrap' | 'expanded' | 'preserved';
@@ -42,6 +43,7 @@ export interface ChallengeRuntimeSideIntent {
   planner?: ChallengeRuntimeStageRoute;
   coder?: ChallengeRuntimeStageRoute;
   reviewer?: ChallengeRuntimeStageRoute;
+  inheritedStages?: ChallengeStage[];
 }
 
 export interface ChallengeNativeCertificationRejection {
@@ -88,6 +90,11 @@ export interface ChallengeExecutionIntent {
   noChallengeReason?: string;
   primary?: ChallengeSideIntent | ChallengeRuntimeSideIntent;
   challenger?: ChallengeSideIntent | ChallengeRuntimeSideIntent;
+
+  // Fork descriptor fields (P0.5 Phase 0, HOK-2794)
+  forkStage?: ChallengeStage | null;
+  forkCommit?: string | null;
+  sharedPrefix?: boolean;
 }
 
 export interface ChallengeExecutionIntentProjection {

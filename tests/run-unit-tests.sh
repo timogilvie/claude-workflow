@@ -32,6 +32,7 @@ TESTS=(
   shared/lib/stage-result.test.ts
   shared/lib/session-adapters.test.ts
   shared/lib/native-agent/provider.test.ts
+  shared/lib/native-agent/provider-error-classifier.test.ts
   shared/lib/native-agent/providers.test.ts
   shared/lib/native-agent/messages.test.ts
   shared/lib/native-agent/compaction.test.ts
@@ -108,6 +109,7 @@ TESTS=(
   shared/lib/tend-challenge-gate.test.ts
   shared/lib/transient-retry.test.ts
   shared/lib/tend-loop.test.ts
+  shared/lib/challenge-comparison.test.ts
   shared/lib/challenge-pair-resolver.test.ts
   shared/lib/arm-failure-taxonomy.test.ts
   shared/lib/arm-reliability.test.ts

@@ -963,10 +963,35 @@ challenge_pr_url_from_number() {
 
 challenge_pair_record_exists() {
   local pair_id="$1"
-  local records_file
+  local records_file voids_file
   records_file=$(challenge_pair_records_file)
   [[ -f "$records_file" ]] || return 1
-  jq -e --arg pair "$pair_id" 'select(.challengePairId == $pair)' "$records_file" >/dev/null 2>&1
+  voids_file="${records_file%/*}/challenge-record-voids.jsonl"
+  [[ -f "$voids_file" ]] || voids_file="/dev/null"
+  jq -e --arg pair "$pair_id" --slurpfile voids "$voids_file" '
+    select(.challengePairId == $pair)
+    | select(
+        if (if has("primaryCompleted") then false
+            elif has("challengerCompleted") then false
+            else true end) then true
+        elif .comparisonOutcome == "forfeit" then
+          if .primaryCompleted == true then true
+          elif .challengerCompleted == true then true
+          elif ((.armFailures // []) | length) > 0 then true
+          else false end
+        elif .comparisonOutcome == "double-forfeit" then
+          if .primaryCompleted == true then true
+          elif .challengerCompleted == true then true
+          elif ((.armFailures // []) | length) > 0 then true
+          else false end
+        else true end
+      ) as $record
+    | select([
+        $voids[]?
+        | select(.challengePairId == $record.challengePairId)
+        | select(.recordTimestamp >= ($record.timestamp // ""))
+      ] | length == 0)
+  ' "$records_file" >/dev/null 2>&1
 }
 
 resolve_challenge_pair_hard_failure() {
@@ -981,7 +1006,7 @@ resolve_challenge_pair_hard_failure() {
   [[ -n "$pair_id" ]] || return 1
 
   if challenge_pair_record_exists "$pair_id"; then
-    mark_challenge_compared "$pair_id"
+    mark_challenge_compared "$pair_id" "record"
     return 0
   fi
 
@@ -1002,7 +1027,7 @@ resolve_challenge_pair_hard_failure() {
       --repo-dir "$REPO_DIR" 2>/dev/null || true)
     resolve_status=$(jq -r '.status // empty' <<<"$resolve_output" 2>/dev/null || true)
     if [[ "$resolve_status" == "resolved" || "$resolve_status" == "already-resolved" ]]; then
-      mark_challenge_compared "$pair_id"
+      mark_challenge_compared "$pair_id" "record"
       if [[ "$resolve_status" == "resolved" ]]; then
         resolve_reason=$(jq -r '.reason // "orphan-sibling"' <<<"$resolve_output" 2>/dev/null || echo "orphan-sibling")
         log_warn "challenge pair $pair_id resolved via $resolve_reason"
@@ -4407,10 +4432,35 @@ challenge_pr_url_from_number() {
 
 challenge_pair_record_exists() {
   local pair_id="$1"
-  local records_file
+  local records_file voids_file
   records_file=$(challenge_pair_records_file)
   [[ -f "$records_file" ]] || return 1
-  jq -e --arg pair "$pair_id" 'select(.challengePairId == $pair)' "$records_file" >/dev/null 2>&1
+  voids_file="${records_file%/*}/challenge-record-voids.jsonl"
+  [[ -f "$voids_file" ]] || voids_file="/dev/null"
+  jq -e --arg pair "$pair_id" --slurpfile voids "$voids_file" '
+    select(.challengePairId == $pair)
+    | select(
+        if (if has("primaryCompleted") then false
+            elif has("challengerCompleted") then false
+            else true end) then true
+        elif .comparisonOutcome == "forfeit" then
+          if .primaryCompleted == true then true
+          elif .challengerCompleted == true then true
+          elif ((.armFailures // []) | length) > 0 then true
+          else false end
+        elif .comparisonOutcome == "double-forfeit" then
+          if .primaryCompleted == true then true
+          elif .challengerCompleted == true then true
+          elif ((.armFailures // []) | length) > 0 then true
+          else false end
+        else true end
+      ) as $record
+    | select([
+        $voids[]?
+        | select(.challengePairId == $record.challengePairId)
+        | select(.recordTimestamp >= ($record.timestamp // ""))
+      ] | length == 0)
+  ' "$records_file" >/dev/null 2>&1
 }
 
 resolve_challenge_pair_hard_failure() {
@@ -4425,7 +4475,7 @@ resolve_challenge_pair_hard_failure() {
   [[ -n "$pair_id" ]] || return 1
 
   if challenge_pair_record_exists "$pair_id"; then
-    mark_challenge_compared "$pair_id"
+    mark_challenge_compared "$pair_id" "record"
     return 0
   fi
 
@@ -4446,7 +4496,7 @@ resolve_challenge_pair_hard_failure() {
       --repo-dir "$REPO_DIR" 2>/dev/null || true)
     resolve_status=$(jq -r '.status // empty' <<<"$resolve_output" 2>/dev/null || true)
     if [[ "$resolve_status" == "resolved" || "$resolve_status" == "already-resolved" ]]; then
-      mark_challenge_compared "$pair_id"
+      mark_challenge_compared "$pair_id" "record"
       if [[ "$resolve_status" == "resolved" ]]; then
         resolve_reason=$(jq -r '.reason // "orphan-sibling"' <<<"$resolve_output" 2>/dev/null || echo "orphan-sibling")
         log_warn "challenge pair $pair_id resolved via $resolve_reason"
@@ -6830,16 +6880,20 @@ native_terminal_failure_kind() {
       printf 'context-window-exceeded\n'; return 0 ;;
     *"no endpoints found"*"tool use"*|*"support tool use"*|*"supports tool use"*|*"tool use"*"not supported"*)
       printf 'tool-use-unsupported\n'; return 0 ;;
-    *"is not a valid model id"*|*"invalid model"*|*"unknown model"*|*"model_not_found"*)
-      printf 'invalid-model-id\n'; return 0 ;;
+    *"401"*|*"unauthorized"*|*"unauthorised"*|*"invalid api key"*|*"authentication"*|*"forbidden"*)
+      printf 'provider-config-error\n'; return 0 ;;
+    *"is not a valid model id"*|*"invalid model"*|*"unknown model"*|*"model_not_found"*|*"invalid parameter"*|*"invalid param"*)
+      printf 'provider-config-error\n'; return 0 ;;
     *"rate limit"*|*"429"*)
-      printf 'provider-rate-limited\n'; return 0 ;;
+      printf 'provider-transient-error\n'; return 0 ;;
     *"can only afford"*|*"requires more credits"*|*"http 402"*|*"402 payment required"*|*"openrouter-credits-exhausted"*)
-      printf 'openrouter-credits-exhausted\n'; return 0 ;;
+      printf 'provider-credit-exhausted\n'; return 0 ;;
     *"insufficient"*"credit"*|*"quota"*)
-      printf 'provider-quota-exhausted\n'; return 0 ;;
+      printf 'provider-credit-exhausted\n'; return 0 ;;
     *"empty-model-turn"*|*"reasoning-only"*"turn"*|*"internal reasoning only"*)
       printf 'empty-model-turn\n'; return 0 ;;
+    *"finish_reason: error"*|*"finish reason"*"error"*|*"idle timeout"*|*"stream ended without"*|*"without finish_reason"*|*"truncated stream"*|*"server error"*|*"bad gateway"*|*"service unavailable"*|*"gateway timeout"*|*"overloaded"*|*"upstream"*)
+      printf 'provider-transient-error\n'; return 0 ;;
   esac
   printf 'native-provider-error\n'
 }
@@ -6850,14 +6904,14 @@ native_terminal_failure_next_action() {
       printf 'session compacted to the floor and still overflowed; re-launch on a larger-context model or split the task\n' ;;
     context-window-exceeded)
       printf 'relaunch with compressed context or a larger-context model; the prompt exceeded the model context window\n' ;;
-    invalid-model-id)
-      printf 'check catalog alias resolution, then relaunch. The provider rejected the model ID\n' ;;
+    invalid-model-id|provider-config-error)
+      printf 'check provider auth/model configuration, then rerun. The provider rejected the request\n' ;;
     provider-rate-limited)
       printf 'relaunch after the rate limit window\n' ;;
-    openrouter-credits-exhausted)
-      printf 'top up OpenRouter credits or lower nativeAgent.providers.openrouter thresholds\n' ;;
-    provider-quota-exhausted)
-      printf 'add provider credit, then relaunch. The quota is exhausted\n' ;;
+    provider-credit-exhausted|openrouter-credits-exhausted|provider-quota-exhausted)
+      printf 'top up OpenRouter credits at https://openrouter.ai/credits\n' ;;
+    provider-transient-error)
+      printf 'transient upstream failure. Start the phase again\n' ;;
     empty-model-turn)
       printf 'relaunch native coding; the runtime exhausted bounded continuation after empty model turns\n' ;;
     tool-use-unsupported)
@@ -6882,6 +6936,9 @@ emit_native_terminal_failure_attention() {
   detail="$(native_hook_terminal_failure_detail "$issue")" || return 1
   failure_kind="$(native_terminal_failure_kind "$detail")"
   next_action="$(native_terminal_failure_next_action "$failure_kind")"
+  if [[ "$failure_kind" == "provider-credit-exhausted" ]]; then
+    write_openrouter_warning_cache "OpenRouter credits exhausted: $next_action"
+  fi
 
   agent="$(stage_result_field "$feature_dir" "$stage" "agent")"
   model="$(stage_result_field "$feature_dir" "$stage" "model")"
@@ -9458,10 +9515,12 @@ check_challenge_sibling_merged() {
 
 mark_challenge_compared() {
   local pair_id="$1"
+  local source="${2:-comparison}"
   if ! state_mutate "$STATE_FILE" '
     .tasks |= with_entries(
       if (.value.challengePairId // "") == $pair then
         .value.challengeCompared = true |
+        .value.challengeComparedSource = $source |
         .value |= (
           del(
             .comparisonRunning,
@@ -9478,7 +9537,7 @@ mark_challenge_compared() {
       else
         .
       end
-    )' --arg pair "$pair_id"; then
+    )' --arg pair "$pair_id" --arg source "$source"; then
     log_warn "mark_challenge_compared: failed for $pair_id"
   fi
 }
@@ -9851,6 +9910,9 @@ maybe_run_challenge_eval() {
 
   pair_id=$(get_task_meta "$issue" "challengePairId")
   if [[ "$(read_state_value "false" --arg i "$issue" '.tasks[$i].challengeCompared // false')" == "true" ]]; then
+    if [[ "$(read_state_value "" --arg i "$issue" '.tasks[$i].challengeComparedSource // empty')" == "record" ]]; then
+      log "debug" "challenge eval suppressed for $issue by existing challenge record"
+    fi
     return 0
   fi
   eval_failed=$(read_state_value "false" --arg i "$issue" '.tasks[$i].evalFailed // false')
@@ -10146,7 +10208,7 @@ maybe_resolve_unresolvable_challenge_pair() {
   [[ -n "$pair_id" ]] || return 0
 
   if challenge_pair_record_exists "$pair_id"; then
-    mark_challenge_compared "$pair_id" >/dev/null || true
+    mark_challenge_compared "$pair_id" "record" >/dev/null || true
     return 0
   fi
 
