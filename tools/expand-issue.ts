@@ -15,6 +15,8 @@ import {
   formatIssueContext,
   expandIssue,
   checkSubsystemDrift,
+  extractAuthoredLinksFooter,
+  appendAuthoredLinksFooter,
 } from '../shared/lib/issue-expander.ts';
 import { autoLabelIssue } from '../shared/lib/issue-labeler.ts';
 import { gatherCodebaseContext } from '../shared/lib/codebase-context-gatherer.ts';
@@ -82,8 +84,14 @@ runTool({
     const promptPath = resolvePromptPath(import.meta.url, 'issue-writer.md');
     const promptTemplate = await loadPromptTemplate(promptPath);
 
-    // Format issue context
-    const issueContext = formatIssueContext(issue);
+    const issueDescription = issue.description || '';
+    const authoredLinksFooter = extractAuthoredLinksFooter(issueDescription);
+
+    // Format issue context without preserved authored links footer.
+    const issueContext = formatIssueContext({
+      ...issue,
+      description: authoredLinksFooter.body,
+    });
     const mode = getCurrentOperatingMode(repoPath);
 
     if (mode !== 'normal') {
@@ -94,11 +102,11 @@ runTool({
     const codebaseContext = await gatherCodebaseContext({
       repoPath,
       issueTitle: issue.title,
-      issueDescription: issue.description || '',
+      issueDescription: authoredLinksFooter.body,
     });
 
     // Check for subsystem drift before expansion
-    await checkSubsystemDrift(repoPath, issue.description || '');
+    await checkSubsystemDrift(repoPath, authoredLinksFooter.body);
 
     try {
       const lintResults = await lintSubsystemSpecs(repoPath, {
@@ -124,7 +132,10 @@ runTool({
       repoDir: repoPath,
       issueId: issue.identifier,
     });
-    const expandedDescription = expansionResult.text;
+    const expandedDescription = appendAuthoredLinksFooter(
+      expansionResult.text,
+      authoredLinksFooter.footer,
+    );
     console.log('─'.repeat(80));
     console.log('\n');
 
