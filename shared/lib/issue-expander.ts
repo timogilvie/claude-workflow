@@ -124,6 +124,58 @@ export function formatIssueContext(issue: any): string {
   return context;
 }
 
+export interface AuthoredLinksFooterParts {
+  body: string;
+  footer: string | null;
+}
+
+const HORIZONTAL_RULE_LINE_PATTERN = /(^|\n)[ \t]*---[ \t]*(?:\r?\n|$)/g;
+const LINKS_FOOTER_START_PATTERN = /^[ \t]*---[ \t]*\r?\n##[ \t]+[^\n]*links[^\n]*(?:\r?\n|$)/i;
+
+/**
+ * Split a preserved authored-links footer from a Linear issue description.
+ *
+ * A footer is only recognized when the final trailing block starts with a
+ * horizontal rule immediately followed by a level-two heading containing
+ * "links". The returned footer is the exact source text from the delimiter
+ * through EOF.
+ */
+export function extractAuthoredLinksFooter(description: string): AuthoredLinksFooterParts {
+  let footerStart: number | null = null;
+  for (const match of description.matchAll(HORIZONTAL_RULE_LINE_PATTERN)) {
+    footerStart = match.index + match[1].length;
+  }
+
+  if (footerStart === null) {
+    return { body: description, footer: null };
+  }
+
+  const possibleFooter = description.slice(footerStart);
+  if (!LINKS_FOOTER_START_PATTERN.test(possibleFooter)) {
+    return { body: description, footer: null };
+  }
+
+  return {
+    body: description.slice(0, footerStart),
+    footer: possibleFooter,
+  };
+}
+
+/**
+ * Append an extracted authored-links footer to generated task-packet content.
+ */
+export function appendAuthoredLinksFooter(content: string, footer: string | null): string {
+  if (!footer) {
+    return content;
+  }
+
+  const withoutTrailingDuplicate = content.endsWith(footer)
+    ? content.slice(0, -footer.length)
+    : content;
+
+  return `${withoutTrailingDuplicate.trimEnd()}\n\n${footer}`;
+}
+
 const ISSUE_EXPANDER_CLI_FLAGS = [
   '--tools',
   '',
