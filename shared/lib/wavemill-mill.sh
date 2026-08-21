@@ -966,7 +966,19 @@ challenge_pair_record_exists() {
   local records_file
   records_file=$(challenge_pair_records_file)
   [[ -f "$records_file" ]] || return 1
-  jq -e --arg pair "$pair_id" 'select(.challengePairId == $pair)' "$records_file" >/dev/null 2>&1
+  jq -e --arg pair "$pair_id" 'select(.challengePairId == $pair)' "$records_file" >/dev/null 2>&1 || return 1
+
+  # Ignore stall records (double-forfeit with no arm failures and no completed sides)
+  # Also ignore voided records
+  ! jq -e --arg pair "$pair_id" '
+    select(.challengePairId == $pair) |
+    select(
+      (.recordKind == "voided-comparison") or
+      (.comparisonOutcome == "double-forfeit" and 
+       .primaryCompleted != true and 
+       .challengerCompleted != true and 
+       (.armFailures | length) == 0)
+    )' "$records_file" >/dev/null 2>&1
 }
 
 resolve_challenge_pair_hard_failure() {
@@ -4410,7 +4422,19 @@ challenge_pair_record_exists() {
   local records_file
   records_file=$(challenge_pair_records_file)
   [[ -f "$records_file" ]] || return 1
-  jq -e --arg pair "$pair_id" 'select(.challengePairId == $pair)' "$records_file" >/dev/null 2>&1
+  jq -e --arg pair "$pair_id" 'select(.challengePairId == $pair)' "$records_file" >/dev/null 2>&1 || return 1
+
+  # Ignore stall records (double-forfeit with no arm failures and no completed sides)
+  # Also ignore voided records
+  ! jq -e --arg pair "$pair_id" '
+    select(.challengePairId == $pair) |
+    select(
+      (.recordKind == "voided-comparison") or
+      (.comparisonOutcome == "double-forfeit" and 
+       .primaryCompleted != true and 
+       .challengerCompleted != true and 
+       (.armFailures | length) == 0)
+    )' "$records_file" >/dev/null 2>&1
 }
 
 resolve_challenge_pair_hard_failure() {
