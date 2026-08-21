@@ -61,8 +61,24 @@ type StageResultShape = {
     approvalReady?: unknown;
     findingsCount?: unknown;
     blockingIssues?: unknown;
+    exitCode?: unknown;
+    verdict?: unknown;
+    iterations?: unknown;
+    blockerCount?: unknown;
+    warningCount?: unknown;
+    reviewToolError?: unknown;
     prNumber?: unknown;
     prUrl?: unknown;
+    review?: {
+      exitCode?: unknown;
+      verdict?: unknown;
+      iterations?: unknown;
+      blockerCount?: unknown;
+      blockingCount?: unknown;
+      warningCount?: unknown;
+      reviewToolError?: unknown;
+      findingCount?: unknown;
+    };
   };
 };
 
@@ -181,17 +197,56 @@ function summarizePlanningExecutionOutcome(result: StageResultShape | null | und
 
 function summarizeReviewResult(result: StageResultShape | null | undefined): string | undefined {
   if (!result) return undefined;
+  const review = result.artifacts?.review;
   const findings = typeof result.artifacts?.findingsCount === 'number'
     ? `findings=${result.artifacts.findingsCount}`
+    : typeof review?.findingCount === 'number'
+      ? `findings=${review.findingCount}`
+      : '';
+  const blockers = typeof result.artifacts?.blockerCount === 'number'
+    ? `blockers=${result.artifacts.blockerCount}`
+    : typeof result.artifacts?.blockingIssues === 'number'
+      ? `blockers=${result.artifacts.blockingIssues}`
+      : typeof review?.blockerCount === 'number'
+        ? `blockers=${review.blockerCount}`
+        : typeof review?.blockingCount === 'number'
+          ? `blockers=${review.blockingCount}`
+          : '';
+  const exitCode = typeof result.artifacts?.exitCode === 'number'
+    ? `exitCode=${result.artifacts.exitCode}`
+    : typeof review?.exitCode === 'number'
+      ? `exitCode=${review.exitCode}`
+      : '';
+  const verdict = typeof result.artifacts?.verdict === 'string'
+    ? `verdict=${result.artifacts.verdict}`
+    : typeof review?.verdict === 'string'
+      ? `verdict=${review.verdict}`
+      : '';
+  const iterations = typeof result.artifacts?.iterations === 'number'
+    ? `iterations=${result.artifacts.iterations}`
+    : typeof review?.iterations === 'number'
+      ? `iterations=${review.iterations}`
+      : '';
+  const warnings = typeof result.artifacts?.warningCount === 'number'
+    ? `warnings=${result.artifacts.warningCount}`
+    : typeof review?.warningCount === 'number'
+      ? `warnings=${review.warningCount}`
     : '';
-  const blockers = typeof result.artifacts?.blockingIssues === 'number'
-    ? `blocking=${result.artifacts.blockingIssues}`
+  const toolError = typeof result.artifacts?.reviewToolError === 'string'
+    ? `toolError=${truncate(result.artifacts.reviewToolError, 120)}`
+    : typeof review?.reviewToolError === 'string'
+      ? `toolError=${truncate(review.reviewToolError, 120)}`
     : '';
   const parts = [
     result.status ? `status=${result.status}` : '',
     result.model ? `model=${result.model}` : '',
+    exitCode,
+    verdict,
+    iterations,
     findings,
     blockers,
+    warnings,
+    toolError,
     truncate(result.notes, 120) ? `notes=${truncate(result.notes, 120)}` : '',
   ].filter(Boolean);
   return parts.join(', ');
