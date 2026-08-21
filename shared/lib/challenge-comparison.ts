@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { appendJsonlRecord, readJsonlFile } from './jsonl-utils.ts';
+import { isChallengeRecordVoided, readChallengeRecordVoids } from './challenge-record-void.ts';
 import { getEffectiveRegistry, resolveModelRegistryKey } from './model-registry.ts';
 import { resolveWavemillAliasFromOpenRouterId } from './openrouter-catalog.ts';
 import type { StageName, StageResult, StageStatus } from './stage-result.ts';
@@ -406,6 +407,33 @@ export function classifyChallengeType(varied: VariedDimensions): ChallengeType {
 
 export function appendChallengeComparison(record: ChallengeComparison, dir?: string): void {
   appendJsonlRecord(resolveRecordsFile(dir), record);
+}
+
+export function isDecisiveChallengeComparison(record: Pick<ChallengeComparison, 'comparisonOutcome' | 'primaryCompleted' | 'challengerCompleted' | 'armFailures' | 'terminalReason'>): boolean {
+  const outcome = record.comparisonOutcome;
+  if (
+    record.terminalReason === 'eval_hard_failed'
+    || record.terminalReason === 'primary_eval_hard_failed'
+    || record.terminalReason === 'challenger_eval_hard_failed'
+    || record.terminalReason === 'both_eval_hard_failed'
+  ) {
+    return true;
+  }
+  const completionFieldsPresent =
+    Object.prototype.hasOwnProperty.call(record, 'primaryCompleted')
+    || Object.prototype.hasOwnProperty.call(record, 'challengerCompleted');
+  if (!completionFieldsPresent) {
+    return true;
+  }
+  if (
+    (outcome === 'forfeit' || outcome === 'double-forfeit')
+    && record.primaryCompleted !== true
+    && record.challengerCompleted !== true
+    && (record.armFailures?.length ?? 0) === 0
+  ) {
+    return false;
+  }
+  return true;
 }
 
 function stageResultFileName(stage: StageName): ChallengeProvenanceSource {
@@ -907,4 +935,16 @@ export function readChallengeComparisons(dir?: string): StoredChallengeCompariso
   }
 
   return readJsonlFile<StoredChallengeComparison>(filePath);
+}
+
+export function readDecisiveChallengeComparisons(dir?: string): StoredChallengeComparison[] {
+  const evalsDir = resolve(dir || DEFAULT_EVALS_DIR);
+  const voids = readChallengeRecordVoids(evalsDir);
+  return readChallengeComparisons(evalsDir)
+    .filter((record) => isDecisiveChallengeComparison(record))
+    .filter((record) => !isChallengeRecordVoided({
+      challengePairId: record.challengePairId,
+      recordTimestamp: record.timestamp,
+      voids,
+    }));
 }

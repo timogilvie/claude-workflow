@@ -31,6 +31,10 @@ test('classifies the incident failure kinds into the intended fault classes', ()
 test('classifies provider and ambiguous failures conservatively', () => {
   assert.equal(classifyArmFault({ failureKind: 'provider-rate-limited' }), 'provider-fault');
   assert.equal(classifyArmFault({ failureKind: 'provider-quota-exhausted' }), 'provider-fault');
+  assert.equal(classifyArmFault({ failureKind: 'provider-transient-error' }), 'provider-fault');
+  assert.equal(classifyArmFault({ failureKind: 'provider-credit-exhausted' }), 'harness-fault');
+  assert.equal(classifyArmFault({ failureKind: 'provider-config-error' }), 'harness-fault');
+  assert.equal(classifyArmFault({ failureKind: 'openrouter-credits-exhausted' }), 'harness-fault');
   assert.equal(classifyArmFault({ failureKind: 'native-provider-error', detail: '502 Bad Gateway' }), 'provider-fault');
   assert.equal(classifyArmFault({ failureKind: 'native-provider-error', detail: 'something else' }), 'unknown-fault');
   assert.equal(classifyArmFault({ failureKind: 'invalid-model-id' }), 'harness-fault');
