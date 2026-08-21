@@ -1,5 +1,5 @@
 import { NoComparisonReason, StoredChallengeComparison, deriveNoComparisonReason, NO_COMPARISON_REASONS } from './challenge-comparison.ts';
-import { readChallengeRecordVoids, isChallengeRecordVoided } from './challenge-record-void.ts';
+import { readChallengeRecordVoids, isChallengeRecordVoided, type ChallengeRecordVoid } from './challenge-record-void.ts';
 
 export interface NoComparisonReportReason {
   reason: NoComparisonReason;
@@ -26,7 +26,13 @@ export function buildNoComparisonReport(options: {
   since?: Date;
   until?: Date;
 }): NoComparisonReport {
-  const { comparisons, voids = new Map(), evals, since, until } = options;
+  const { comparisons, voids, evals, since, until } = options;
+
+  // Convert voids Map to array format expected by isChallengeRecordVoided
+  const voidsArray: ChallengeRecordVoid[] = voids ? Array.from(voids.entries()).map(([_key, timestamp]) => ({
+    challengePairId: _key,
+    recordTimestamp: timestamp,
+  })) : [];
 
   // Dedupe per challengePairId (latest timestamp, skip voided, honour supersedes)
   const pairsMap = new Map<string, StoredChallengeComparison>();
@@ -35,7 +41,7 @@ export function buildNoComparisonReport(options: {
     if (isChallengeRecordVoided({
       challengePairId: record.challengePairId,
       recordTimestamp: record.timestamp,
-      voids: voids,
+      voids: voidsArray,
     })) {
       continue;
     }
@@ -82,17 +88,16 @@ export function buildNoComparisonReport(options: {
 
     if (record.comparisonOutcome === 'compared') {
       comparedPairs += 1;
-      continue;
-    }
+    } else {
+      const reason = deriveNoComparisonReason(record) ?? 'unknown';
+      if (reason === 'unknown') {
+        unknownCount += 1;
+      }
 
-    const reason = deriveNoComparisonReason(record) ?? 'unknown';
-    if (reason === 'unknown') {
-      unknownCount += 1;
+      const reasonList = reasonCounts.get(reason) ?? [];
+      reasonList.push(record.challengePairId);
+      reasonCounts.set(reason, reasonList);
     }
-
-    const reasonList = reasonCounts.get(reason) ?? [];
-    reasonList.push(record.challengePairId);
-    reasonCounts.set(reason, reasonList);
   }
 
   // Build reason report

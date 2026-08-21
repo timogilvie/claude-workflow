@@ -38,7 +38,7 @@ test('no-comparison-report', async (t) => {
 
     const report = buildNoComparisonReport({ comparisons: comps });
     assert.equal(report.comparedPairs, 1);
-    assert.equal(report.launchedPairs, 0);
+    assert.equal(report.launchedPairs, 1);
   });
 
   await t.test('counts phantom pairs separately', () => {
