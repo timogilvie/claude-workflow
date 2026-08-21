@@ -11165,7 +11165,7 @@ fetch_candidates() {
 # Exit: 0 = success, 1 = failure
 run_queue_planner_with_policy() {
   local planner_cmd="$1" timeout_secs="$2" input_snapshot="${3:-}"
-  local tmp_stderr tmp_stdout exit_code signal_num pid pgid
+  local tmp_stderr tmp_stdout tmp_stdin exit_code signal_num pid pgid
   # step stays set: the timeout path never assigns it, and the monitor runs
   # under `set -u`, where reading it unset would abort the diagnostics write.
   local started_at ended_at duration_ms cancellation_owner reason step=""
@@ -11183,6 +11183,22 @@ run_queue_planner_with_policy() {
     return 1
   }
 
+  tmp_stdin="$(mktemp -t wavemill-planner-stdin.XXXXXX)" || {
+    rm -f "$tmp_stderr" "$tmp_stdout"
+    queue_health_record_failure "diagnostics_setup_failed" "diagnostics_setup_failed" \
+      "unknown" "unknown" "unknown" 1 "" "unknown" "" "stdin setup failed" "" 2>/dev/null || true
+    return 1
+  }
+
+  if ! cat > "$tmp_stdin"; then
+    record_fetch_queue_plan_failure "planner_input_missing" "failed to capture planner stdin" 1
+    queue_health_record_failure "planner_input_missing" "planner_input_missing" \
+      "unknown" "unknown" "$timeout_secs" 1 "" "unknown" \
+      "" "failed to capture planner stdin" "$input_snapshot" 2>/dev/null || true
+    rm -f "$tmp_stderr" "$tmp_stdout" "$tmp_stdin"
+    return 1
+  fi
+
   # BSD date has no %3N and emits a literal "N" with exit 0, so validate the
   # result is numeric instead of relying on a command-failure fallback.
   started_at="$(date +%s%3N 2>/dev/null || true)"
@@ -11193,12 +11209,12 @@ run_queue_planner_with_policy() {
   local cmd_array
   if command -v setsid &>/dev/null; then
     # Use setsid to create new session; child processes inherit PGID
-    eval "$planner_cmd" > "$tmp_stdout" 2> "$tmp_stderr" &
+    eval "$planner_cmd" < "$tmp_stdin" > "$tmp_stdout" 2> "$tmp_stderr" &
     pid=$!
     pgid=$(ps -o pgid= -p $pid 2>/dev/null | tr -d ' ' || echo "$pid")
   else
     # macOS fallback: background and use PID as PGID (less reliable)
-    eval "$planner_cmd" > "$tmp_stdout" 2> "$tmp_stderr" &
+    eval "$planner_cmd" < "$tmp_stdin" > "$tmp_stdout" 2> "$tmp_stderr" &
     pid=$!
     pgid=$pid
   fi
@@ -11207,7 +11223,7 @@ run_queue_planner_with_policy() {
   local watchdog_pipe watchdog_pid
   watchdog_pipe=$(mktemp -t wavemill-watchdog-XXXXXX) || {
     kill $pid 2>/dev/null || true
-    rm -f "$tmp_stderr" "$tmp_stdout"
+    rm -f "$tmp_stderr" "$tmp_stdout" "$tmp_stdin"
     queue_health_record_failure "diagnostics_setup_failed" "diagnostics_setup_failed" \
       "$pid" "$pgid" "$timeout_secs" 1 "" "unknown" "" "watchdog setup failed" "" 2>/dev/null || true
     return 1
@@ -11270,6 +11286,9 @@ run_queue_planner_with_policy() {
     if [[ "$stderr_text" == *"cycle"* || "$stderr_text" == *"Cycle"* ]]; then
       reason="malformed_graph"
       step="validation_failed"
+    elif [[ "$stderr_text" == *"planner_input_missing"* ]]; then
+      reason="planner_input_missing"
+      step="planner_input_missing"
     else
       reason="planner_error"
       step="plan_queue_failed"
@@ -11290,7 +11309,7 @@ run_queue_planner_with_policy() {
       queue_health_record_failure "malformed_graph" "empty_queue" \
         "$pid" "$pgid" "$timeout_secs" 0 "" "unknown" \
         "" "empty queue plan" "$input_snapshot" 2>/dev/null || true
-      rm -f "$tmp_stderr" "$tmp_stdout" "$watchdog_pipe"
+      rm -f "$tmp_stderr" "$tmp_stdout" "$tmp_stdin" "$watchdog_pipe"
       return 1
     fi
 
@@ -11300,13 +11319,13 @@ run_queue_planner_with_policy() {
       queue_health_record_failure "malformed_graph" "validation_failed" \
         "$pid" "$pgid" "$timeout_secs" 0 "" "unknown" \
         "" "invalid queue plan JSON" "$input_snapshot" 2>/dev/null || true
-      rm -f "$tmp_stderr" "$tmp_stdout" "$watchdog_pipe"
+      rm -f "$tmp_stderr" "$tmp_stdout" "$tmp_stdin" "$watchdog_pipe"
       return 1
     fi
 
     queue_health_record_success "$pid" "$pgid" "$duration_ms" "$planner_cmd" 2>/dev/null || true
     cat "$tmp_stdout"
-    rm -f "$tmp_stderr" "$tmp_stdout" "$watchdog_pipe"
+    rm -f "$tmp_stderr" "$tmp_stdout" "$tmp_stdin" "$watchdog_pipe"
     return 0
   fi
 
@@ -11328,7 +11347,7 @@ run_queue_planner_with_policy() {
     "$pid" "$pgid" "$timeout_secs" "$exit_code" "" "$cancellation_owner" \
     "$stdout_excerpt" "$stderr_excerpt" "$input_snapshot" 2>/dev/null || true
 
-  rm -f "$tmp_stderr" "$tmp_stdout" "$watchdog_pipe"
+  rm -f "$tmp_stderr" "$tmp_stdout" "$tmp_stdin" "$watchdog_pipe"
   return 1
 }
 
@@ -11385,6 +11404,7 @@ classify_queue_failure_reason() {
   case "$step" in
     cache_empty|empty_queue)   echo "empty_queue" ;;
     jq_massage_failed)         echo "invalid_input" ;;
+    planner_input_missing)     echo "planner_input_missing" ;;
     plan_queue_failed)
       lowered="$(printf '%s' "$details" | tr '[:upper:]' '[:lower:]')"
       if [[ "$lowered" == *cache* || "$lowered" == *refresh* ]]; then

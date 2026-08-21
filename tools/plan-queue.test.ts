@@ -98,6 +98,38 @@ describe('plan-queue CLI', () => {
     assert.deepEqual(stdinMode, fileMode);
   });
 
+  it('fails clearly for empty or whitespace-only stdin', () => {
+    for (const input of ['', '   \n\t']) {
+      const result = runPlanQueue(['--stdin', '--json'], input);
+
+      assert.notEqual(result.status, 0);
+      assert.equal(result.stdout, '');
+      assert.match(result.stderr, /planner_input_missing: stdin was empty/);
+      assert.doesNotMatch(result.stderr, /parse backlog JSON/);
+    }
+  });
+
+  it('fails clearly when stdin cannot be read', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'plan-queue-unreadable-stdin-test-'));
+    try {
+      const result = spawnSync(
+        'bash',
+        ['-c', 'exec 0< "$1"; npx tsx "$2" --stdin --json', 'bash', tempDir, planQueueTool],
+        {
+          cwd: repoDir,
+          encoding: 'utf-8',
+          env: { ...process.env },
+        },
+      );
+
+      assert.notEqual(result.status, 0);
+      assert.equal(result.stdout, '');
+      assert.match(result.stderr, /planner_input_missing: failed to read stdin/);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it('fails clearly for a missing backlog file', () => {
     const result = runPlanQueue(['--backlog-file', '/nonexistent/plan-queue.json', '--json']);
 
