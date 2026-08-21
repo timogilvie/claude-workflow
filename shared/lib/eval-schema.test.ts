@@ -780,7 +780,7 @@ function validPromptSizeDiagnostic() {
 }
 
 test('SCHEMA_VERSION is bumped for eval schema updates', () => {
-  assert.equal(SCHEMA_VERSION, '1.39.0');
+  assert.equal(SCHEMA_VERSION, '1.40.0');
 });
 
 test('Record with top-level challengeStage validates', () => {
@@ -2129,8 +2129,8 @@ test('Wavemill router fields validate and schema stays in parity', () => {
   assert.equal(properties.wavemill_router_scoring?.$ref, '#/$defs/WavemillRouterScoringMetadata');
 });
 
-test('Schema version constant is 1.39.0', () => {
-  assert.equal(SCHEMA_VERSION, '1.39.0');
+test('Schema version constant is 1.40.0', () => {
+  assert.equal(SCHEMA_VERSION, '1.40.0');
 });
 
 test('Record with resolved-model routing validates', () => {
@@ -2283,6 +2283,94 @@ test('featureOutcomeDiagnostics: new eligibility error codes validate', () => {
 
   const result = validateAgainstSchema(record as unknown as Record<string, unknown>);
   assert.ok(result.valid, `New eligibility codes should validate: ${result.errors.join('; ')}`);
+});
+
+// ────────────────────────────────────────────────────────────────
+// P0.5 Phase 0 Fork Descriptor Fields Tests (HOK-2794)
+// ────────────────────────────────────────────────────────────────
+
+test('challengeIntent with fork descriptor fields validates', () => {
+  const record = {
+    ...scenarios[0].record,
+    challengeIntent: {
+      pairId: 'HOK-2794',
+      primary: {
+        pairId: 'HOK-2794',
+        side: 'primary',
+        challengeStage: 'implementation',
+        expectedStageModel: 'claude-opus-4-6',
+        expectedRoute: { planner: '', coder: 'claude-opus-4-6', reviewer: '', planDepth: 'medium', codeDepth: 'medium', reviewMode: 'default' },
+      },
+      challenger: {
+        pairId: 'HOK-2794',
+        side: 'challenger',
+        challengeStage: 'implementation',
+        expectedStageModel: 'claude-sonnet-4-5-20250929',
+        expectedRoute: { planner: '', coder: 'claude-sonnet-4-5-20250929', reviewer: '', planDepth: 'medium', codeDepth: 'medium', reviewMode: 'default' },
+      },
+      forkStage: null,
+      forkCommit: null,
+      sharedPrefix: false,
+    },
+  } as unknown as Record<string, unknown>;
+
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `challengeIntent with fork fields should validate: ${result.errors.join('; ')}`);
+});
+
+test('challengeIntent without fork descriptor fields still validates', () => {
+  const record = {
+    ...scenarios[0].record,
+    challengeIntent: {
+      pairId: 'HOK-2794',
+      primary: {
+        pairId: 'HOK-2794',
+        side: 'primary',
+        challengeStage: 'implementation',
+        expectedStageModel: 'claude-opus-4-6',
+        expectedRoute: { planner: '', coder: 'claude-opus-4-6', reviewer: '', planDepth: 'medium', codeDepth: 'medium', reviewMode: 'default' },
+      },
+      challenger: {
+        pairId: 'HOK-2794',
+        side: 'challenger',
+        challengeStage: 'implementation',
+        expectedStageModel: 'claude-sonnet-4-5-20250929',
+        expectedRoute: { planner: '', coder: 'claude-sonnet-4-5-20250929', reviewer: '', planDepth: 'medium', codeDepth: 'medium', reviewMode: 'default' },
+      },
+      // fork fields intentionally omitted (backward compatibility)
+    },
+  } as unknown as Record<string, unknown>;
+
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `challengeIntent without fork fields should still validate: ${result.errors.join('; ')}`);
+});
+
+test('challengeIntent side with inheritedStages validates', () => {
+  const record = {
+    ...scenarios[0].record,
+    challengeIntent: {
+      pairId: 'HOK-2794',
+      primary: {
+        pairId: 'HOK-2794',
+        side: 'primary',
+        challengeStage: 'implementation',
+        expectedStageModel: 'claude-opus-4-6',
+        expectedRoute: { planner: '', coder: 'claude-opus-4-6', reviewer: '', planDepth: 'medium', codeDepth: 'medium', reviewMode: 'default' },
+        inheritedStages: ['plan'],
+      },
+      challenger: {
+        pairId: 'HOK-2794',
+        side: 'challenger',
+        challengeStage: 'implementation',
+        expectedStageModel: 'claude-sonnet-4-5-20250929',
+        expectedRoute: { planner: '', coder: 'claude-sonnet-4-5-20250929', reviewer: '', planDepth: 'medium', codeDepth: 'medium', reviewMode: 'default' },
+        inheritedStages: [],
+      },
+    },
+  } as unknown as Record<string, unknown>;
+
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `challengeIntent with inheritedStages should validate: ${result.errors.join('; ')}`);
 });
 
 // ────────────────────────────────────────────────────────────────

@@ -132,6 +132,8 @@ export interface ChallengeExecutionIntentSide {
   expectedStageModel?: string;
   expectedStageAgent?: string;
   expectedRoute?: ChallengeRoutingMeta;
+  /** Stages this arm inherited from pre-fork execution rather than executing */
+  inheritedStages?: ChallengeStage[];
 }
 
 export interface ChallengeExecutionIntent {
@@ -154,6 +156,14 @@ export interface ChallengeExecutionIntent {
   modelExclusions?: ModelExclusionDiagnostic[];
   fallbackReason?: string;
   noChallengeReason?: string;
+
+  // Fork descriptor fields (P0.5 Phase 0, HOK-2794)
+  /** The stage at which the pair forked, or null if launched independently */
+  forkStage?: ChallengeStage | null;
+  /** Git SHA both arms share, or null if the pair did not fork from a shared commit */
+  forkCommit?: string | null;
+  /** Whether the challenger inherited pre-fork execution artifacts. False until challenge.fork() ships */
+  sharedPrefix?: boolean;
 }
 
 function intentSideFromEntry(
@@ -182,6 +192,7 @@ function intentSideFromEntry(
       agent: entry.reviewerAgent || '',
     },
     ...projection,
+    inheritedStages: [],
   };
 }
 
@@ -197,7 +208,7 @@ function withSideProjection(
   context: { pairId: string; stage: ChallengeStage },
 ): ChallengeExecutionIntentSide {
   if (side.expectedRoute && side.side) {
-    return side;
+    return { ...side, inheritedStages: side.inheritedStages ?? [] };
   }
   const projection = projectEntryToSideIntent({
     pairId: context.pairId,
@@ -212,7 +223,7 @@ function withSideProjection(
       reviewerAgent: side.reviewer?.agent,
     },
   });
-  return { ...side, ...projection };
+  return { ...side, ...projection, inheritedStages: side.inheritedStages ?? [] };
 }
 
 export function buildChallengeExecutionIntent(input: {
@@ -265,6 +276,9 @@ export function buildChallengeExecutionIntent(input: {
     ...(input.modelExclusions?.length ? { modelExclusions: input.modelExclusions } : {}),
     ...(input.fallbackReason ? { fallbackReason: input.fallbackReason } : {}),
     ...(input.noChallengeReason ? { noChallengeReason: input.noChallengeReason } : {}),
+    forkStage: null,
+    forkCommit: null,
+    sharedPrefix: false,
   };
 }
 
