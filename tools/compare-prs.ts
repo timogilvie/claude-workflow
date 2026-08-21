@@ -33,13 +33,97 @@ import {
   mapBlindVerdictToSides,
   prNumberFromValue,
   prUrlFromNumber,
+  resolvePrDiffIdentity,
   resolvePresentationOrder,
+  retainLoserPatch,
   tryGh,
   validateComparisonJson,
   withBodyFile,
   type ValidatedComparisonResult,
 } from '../shared/lib/pr-comparison.ts';
 import { writeJobResultFile } from '../shared/lib/job-tracker.ts';
+import type { ChallengeStage } from '../shared/lib/challenge-mode.ts';
+
+type ComparisonForkDescriptor = Pick<
+  ChallengeComparison,
+  | 'forkStage'
+  | 'forkCommit'
+  | 'sharedPrefix'
+  | 'primaryInheritedStages'
+  | 'challengerInheritedStages'
+>;
+
+type ChallengeIntentForkShape = {
+  forkStage?: unknown;
+  forkCommit?: unknown;
+  sharedPrefix?: unknown;
+  primary?: { inheritedStages?: unknown };
+  challenger?: { inheritedStages?: unknown };
+};
+
+const CHALLENGE_STAGES = new Set<ChallengeStage>(['plan', 'implementation', 'review']);
+
+function isChallengeStage(value: unknown): value is ChallengeStage {
+  return typeof value === 'string' && CHALLENGE_STAGES.has(value as ChallengeStage);
+}
+
+function intentObject(value: unknown): ChallengeIntentForkShape | undefined {
+  return value && typeof value === 'object' ? value as ChallengeIntentForkShape : undefined;
+}
+
+function inheritedStages(value: unknown): ChallengeStage[] {
+  return Array.isArray(value) ? value.filter(isChallengeStage) : [];
+}
+
+function resolveComparisonForkDescriptor(
+  primaryIntent: unknown,
+  challengerIntent: unknown,
+): ComparisonForkDescriptor {
+  const primary = intentObject(primaryIntent);
+  const challenger = intentObject(challengerIntent);
+  const forkStage = isChallengeStage(primary?.forkStage)
+    ? primary.forkStage
+    : isChallengeStage(challenger?.forkStage)
+      ? challenger.forkStage
+      : null;
+  const forkCommit = typeof primary?.forkCommit === 'string' && primary.forkCommit.trim()
+    ? primary.forkCommit.trim()
+    : typeof challenger?.forkCommit === 'string' && challenger.forkCommit.trim()
+      ? challenger.forkCommit.trim()
+      : null;
+  return {
+    forkStage,
+    forkCommit,
+    sharedPrefix: primary?.sharedPrefix === true || challenger?.sharedPrefix === true,
+    primaryInheritedStages: inheritedStages(primary?.primary?.inheritedStages ?? challenger?.primary?.inheritedStages),
+    challengerInheritedStages: inheritedStages(challenger?.challenger?.inheritedStages ?? primary?.challenger?.inheritedStages),
+  };
+}
+
+function retainComparedLoserPatch(input: {
+  record: Pick<ChallengeComparison, 'winner' | 'primaryDiffIdentity' | 'challengerDiffIdentity'>;
+  pairId: string;
+  evalsDir: string;
+  repoDir: string;
+}): void {
+  const loserIdentity = input.record.winner === 'primary'
+    ? input.record.challengerDiffIdentity
+    : input.record.winner === 'challenger'
+      ? input.record.primaryDiffIdentity
+      : undefined;
+  if (!loserIdentity) return;
+  const result = retainLoserPatch({
+    challengePairId: input.pairId,
+    loserIdentity,
+    evalsDir: input.evalsDir,
+    repoDir: input.repoDir,
+  });
+  if (result.skippedReason === 'too_large') {
+    console.warn(`[compare-prs] Loser patch exceeded 10 MiB cap; skipped ${result.path}`);
+  } else if (result.skippedReason) {
+    console.warn(`[compare-prs] Loser patch retention skipped (${result.skippedReason}) for ${result.path}`);
+  }
+}
 
 runTool({
   name: 'compare-prs',
@@ -129,6 +213,21 @@ runTool({
         throw new Error(`Invalid eval scores for challenge pair ${pairId}`);
       }
 
+      const forkDescriptor = resolveComparisonForkDescriptor(
+        primaryEval.challengeIntent,
+        challengerEval.challengeIntent,
+      );
+      const primaryDiffIdentity = resolvePrDiffIdentity({
+        pr: primaryNumber,
+        repoDir,
+        forkCommit: forkDescriptor.forkCommit,
+      });
+      const challengerDiffIdentity = resolvePrDiffIdentity({
+        pr: challengerNumber,
+        repoDir,
+        forkCommit: forkDescriptor.forkCommit,
+      });
+
     // Build routing metadata if provided
       const primaryRouting: ChallengeRoutingMeta | undefined = args['primary-planner'] ? {
         planner: (args['primary-planner'] as string) || '',
@@ -178,6 +277,9 @@ runTool({
           challengerRouting,
           primaryAttestation,
           challengerAttestation,
+          ...forkDescriptor,
+          primaryDiffIdentity,
+          challengerDiffIdentity,
         });
         recordForResult = invalidRecord;
         appendChallengeComparison(invalidRecord, evalsDir);
@@ -241,6 +343,9 @@ runTool({
           variedDimensions,
           challengeType,
           variedStage,
+          ...forkDescriptor,
+          primaryDiffIdentity,
+          challengerDiffIdentity,
         });
         recordForResult = invalidRecord;
         appendChallengeComparison(invalidRecord, evalsDir);
@@ -299,12 +404,21 @@ runTool({
           challengerEvalScore: challengerEval.score,
           primaryRouting,
           challengerRouting,
+          ...forkDescriptor,
+          primaryDiffIdentity,
+          challengerDiffIdentity,
         });
         skippedRecord.primaryExecution = primaryExecution;
         skippedRecord.challengerExecution = challengerExecution;
         skippedRecord.provenanceValidation = provenanceValidation;
         recordForResult = skippedRecord;
         appendChallengeComparison(skippedRecord, evalsDir);
+        retainComparedLoserPatch({
+          record: skippedRecord,
+          pairId,
+          evalsDir,
+          repoDir,
+        });
 
         const routingSummary = formatRoutingSummary(
           primaryRouting,
@@ -489,16 +603,19 @@ Return a raw JSON object with no code fences, no comments, and no JavaScript syn
         primaryEvalScoreSource: primarySelected.source,
         challengerEvalScoreSource: challengerSelected.source,
         ...(dataQualityWarnings.length > 0 ? { dataQualityWarnings } : {}),
-        // Fork descriptor fields with empty defaults (HOK-2794)
-        forkStage: null,
-        forkCommit: null,
-        sharedPrefix: false,
-        primaryInheritedStages: [],
-        challengerInheritedStages: [],
+        ...forkDescriptor,
+        primaryDiffIdentity,
+        challengerDiffIdentity,
       };
       recordForResult = record;
 
       appendChallengeComparison(record, evalsDir);
+      retainComparedLoserPatch({
+        record,
+        pairId,
+        evalsDir,
+        repoDir,
+      });
 
       const routingSummary = formatRoutingSummary(
         primaryRouting,
