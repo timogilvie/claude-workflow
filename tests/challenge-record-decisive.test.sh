@@ -56,6 +56,24 @@ else
   pass "voided comparison row is ignored"
 fi
 
+# Ensure the two identical copies of challenge_pair_record_exists do not drift
+FIRST_LINE=$(awk '/^challenge_pair_record_exists\(\) \{/ {print NR; exit}' "$MILL_SCRIPT")
+SECOND_LINE=$(awk '/^challenge_pair_record_exists\(\) \{/ {if(found) {print NR; exit} found=1}' "$MILL_SCRIPT")
+if [ -n "$FIRST_LINE" ] && [ -n "$SECOND_LINE" ] && [ "$FIRST_LINE" != "$SECOND_LINE" ]; then
+  # Find the end of each function
+  FIRST_END=$(awk -v start="$FIRST_LINE" 'NR > start && /^}/ {print NR; exit}' "$MILL_SCRIPT")
+  SECOND_END=$(awk -v start="$SECOND_LINE" 'NR > start && /^}/ {print NR; exit}' "$MILL_SCRIPT")
+  FIRST_BODY=$(sed -n "${FIRST_LINE},${FIRST_END}p" "$MILL_SCRIPT")
+  SECOND_BODY=$(sed -n "${SECOND_LINE},${SECOND_END}p" "$MILL_SCRIPT")
+  if [ "$FIRST_BODY" = "$SECOND_BODY" ]; then
+    pass "duplicate challenge_pair_record_exists functions are identical"
+  else
+    fail "duplicate challenge_pair_record_exists functions have drifted"
+  fi
+else
+  fail "could not locate both copies of challenge_pair_record_exists"
+fi
+
 if (( FAIL > 0 )); then
   echo "Failed: $FAIL"
   exit 1
