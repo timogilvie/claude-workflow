@@ -194,6 +194,11 @@ export function openManifest(
   return manifest;
 }
 
+export function saveManifest(manifest: ResourceManifest, repoDir?: string): void {
+  const path = resolveManifestPath(manifest.sessionId, repoDir);
+  writeManifest(path, manifest);
+}
+
 export function ensureManifest(
   sessionId: string,
   options: { workflowType?: WorkflowType | string; repoDir?: string } = {},
