@@ -37,7 +37,7 @@ import { getCurrentOperatingMode, type OperatingMode } from './operating-mode.ts
 import type { ModelClass } from './model-registry.ts';
 import { policyAdjustmentLog, routerLog } from './router-log.ts';
 import { registerAgentConfig } from './resource-adapters/agent-config-adapter.ts';
-import { recordUse } from './resource-manifest.ts';
+import { recordUse, resolveHarnessId } from './resource-manifest.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
 import type { RouteProvenance } from './route-artifact.ts';
 import { filterDisabledModels, isDisabledModel } from './disabled-models.ts';
@@ -97,6 +97,13 @@ export interface WorkflowRouteDecision {
   routingMode?: string;
   nativeCertificationRejections?: RouterCertificationRejection[];
   modelExclusions?: ModelExclusionDiagnostic[];
+  /**
+   * Stable content hash of the session manifest's participating resource tuple
+   * at the time the route decision was made.
+   *
+   * @since HOK-2843
+   */
+  harnessId?: string;
 }
 
 export interface RouteWorkflowOptions {
@@ -1590,6 +1597,8 @@ function registerWorkflowDecisionResources(
       recordUse(sessionId, resourcePhase, selection.resourceRef, repoDir);
     }
   }
+
+  decision.harnessId = resolveHarnessId(sessionId, repoDir) ?? undefined;
 }
 
 function routeWorkflowDegradedInternal(

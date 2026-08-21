@@ -225,6 +225,7 @@ export interface NormalizedExpandedRouteArtifact {
 export interface RouteArtifactSnapshot extends NormalizedExpandedRouteArtifact {
   planDepth?: string;
   planner?: string;
+  harnessId?: string;
   cache_hit?: boolean;
   route_source?: 'batch' | 'single' | 'cache';
   packet_hash?: string;

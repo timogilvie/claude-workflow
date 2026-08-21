@@ -159,6 +159,14 @@ test('validateExpandedRouteArtifact accepts execution fields', () => {
   });
 });
 
+test('validateExpandedRouteArtifact accepts harnessId addition', () => {
+  const decision = minimalDecision({ harnessId: 'a'.repeat(64) });
+  const result = validateExpandedRouteArtifact(decision);
+  assert.equal(result.valid, true);
+  assert.deepEqual(result.missing, []);
+  assert.deepEqual(result.invalid, []);
+});
+
 test('validateExpandedRouteArtifact falls back from reviewRecommended', () => {
   const result = validateExpandedRouteArtifact({
     coder: 'gpt-5.4',

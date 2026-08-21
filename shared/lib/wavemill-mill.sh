@@ -2474,7 +2474,7 @@ elif [[ "${ROUTER_ENABLED:-true}" == "true" ]]; then
         if [[ -f "$PACKET_FILE" ]]; then
           ROUTE_STDERR="/tmp/${SESSION}-${ISSUE}-route.stderr"
           rm -f "$ROUTE_STDERR"
-          ROUTE_JSON=$(npx tsx "$ROUTE_TOOL" --json --file "$PACKET_FILE" --repo-dir "$REPO_DIR" "${ROUTE_MAX_COST_ARGS[@]}" 2>"$ROUTE_STDERR" || echo "")
+          ROUTE_JSON=$(WAVEMILL_SESSION="$SESSION" npx tsx "$ROUTE_TOOL" --json --file "$PACKET_FILE" --repo-dir "$REPO_DIR" "${ROUTE_MAX_COST_ARGS[@]}" 2>"$ROUTE_STDERR" || echo "")
           replay_route_transparency_logs "$ROUTE_STDERR"
           rm -f "$ROUTE_STDERR"
           if [[ -n "$ROUTE_JSON" ]] && echo "$ROUTE_JSON" | jq -e '.planner' >/dev/null 2>&1; then
@@ -12138,13 +12138,13 @@ launch_task() {
           printf '\n[attempt %d] live route\n' "$route_attempt" >> "$routing_log_file"
           rm -f "$route_stderr_file"
           if [[ "$route_debug_enabled" == "true" ]]; then
-            if route_json=$(_with_timeout "$API_TIMEOUT" npx tsx "$route_tool" --json --file "$route_input_file" --repo-dir "$REPO_DIR" --source live --input-kind task-packet "${route_max_cost_args[@]}" "${route_mode_args[@]}" 2>"$route_stderr_file"); then
+            if route_json=$(WAVEMILL_SESSION="$SESSION" _with_timeout "$API_TIMEOUT" npx tsx "$route_tool" --json --file "$route_input_file" --repo-dir "$REPO_DIR" --source live --input-kind task-packet "${route_max_cost_args[@]}" "${route_mode_args[@]}" 2>"$route_stderr_file"); then
               route_rc=0
             else
               route_rc=$?
             fi
           else
-            if route_json=$(_with_timeout "$API_TIMEOUT" npx tsx "$route_tool" --json --file "$route_input_file" --repo-dir "$REPO_DIR" --source live --input-kind task-packet "${route_max_cost_args[@]}" "${route_mode_args[@]}" 2>"$route_stderr_file"); then
+            if route_json=$(WAVEMILL_SESSION="$SESSION" _with_timeout "$API_TIMEOUT" npx tsx "$route_tool" --json --file "$route_input_file" --repo-dir "$REPO_DIR" --source live --input-kind task-packet "${route_max_cost_args[@]}" "${route_mode_args[@]}" 2>"$route_stderr_file"); then
               route_rc=0
             else
               route_rc=$?
