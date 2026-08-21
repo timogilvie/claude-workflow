@@ -106,6 +106,24 @@ Compatibility and aggregation notes:
 - Fallback records use the same top-level `EvalRecord` shape and `schemaVersion = 1.6.0`.
 - Aggregation remains schema-version agnostic; dedup still keys on existing top-level fields.
 
+## Harness Attribution (1.41.0)
+
+`EvalRecord.harnessId` is an optional top-level field added in schema v1.41.0
+(HOK-2843). It is the `computeHarnessId` value of the session resource manifest at
+eval write time, recalculated from `manifestRef.sessionId` by
+`resolveHarnessId()` when needed. It lets outcomes be attributed to a
+harness version (prompts, tools, agent-configs, runtimes, optimizer-artifacts), while
+`environment:*` refs are deliberately excluded because they churn on CLI
+upgrades without changing harness behaviour.
+
+Challenge comparisons also carry `primaryHarnessId`, `challengerHarnessId`, and
+(optionally) a consensus `harnessId` when both arms match. Route decision
+artifacts carry `harnessId` when routed inside a `WAVEMILL_SESSION`. Historical
+records remain valid without the field.
+
+Backfill via `npx tsx tools/backfill-harness-ids.ts [--dry-run]` is idempotent;
+records that cannot be joined to a manifest keep the field unset.
+
 ## Known Failure Modes
 
 | Symptom | Root Cause | Fix |
