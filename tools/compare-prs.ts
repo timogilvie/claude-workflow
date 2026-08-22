@@ -6,9 +6,12 @@ import { fetchIssueData, formatIssueAsPrompt, fetchPrContext } from '../shared/l
 import { hasChallengeEvalRecordPair, readEvalRecords } from '../shared/lib/eval-persistence.ts';
 import {
   appendChallengeComparison,
+  buildDiffUnavailableComparison,
   buildInvalidChallengeComparison,
   buildInvalidProvenanceComparison,
   buildSkippedIdenticalComparison,
+  buildUnscoredEvalComparison,
+  detectJudgeDisagreement,
   detectVariedDimensions,
   hasAnyVariedDimension,
   classifyChallengeType,
@@ -184,8 +187,8 @@ runTool({
       // The comparison prompt needs each implementation diff.  Keep this
       // retrieval next to the PR normalization so a failed or retried
       // comparison never reaches the judge with undefined diff variables.
-      const primaryDiff = fetchPrContext(primaryNumber, repoDir).diff;
-      const challengerDiff = fetchPrContext(challengerNumber, repoDir).diff;
+      const primaryPrContext = fetchPrContext(primaryNumber, repoDir);
+      const challengerPrContext = fetchPrContext(challengerNumber, repoDir);
       const evalsDir = resolveEvalsDir(undefined, repoDir).dir;
       const hasRequiredEvalRecords = hasChallengeEvalRecordPair(
         pairId,
@@ -481,6 +484,113 @@ runTool({
         }
         return;
       }
+
+      const diffAvailability = {
+        primary: primaryPrContext.availability.available
+          ? {
+              available: true as const,
+              source: primaryPrContext.availability.source,
+              bytes: primaryPrContext.availability.bytes,
+            }
+          : {
+              available: false as const,
+              reason: primaryPrContext.availability.reason,
+              detail: primaryPrContext.availability.detail,
+            },
+        challenger: challengerPrContext.availability.available
+          ? {
+              available: true as const,
+              source: challengerPrContext.availability.source,
+              bytes: challengerPrContext.availability.bytes,
+            }
+          : {
+              available: false as const,
+              reason: challengerPrContext.availability.reason,
+              detail: challengerPrContext.availability.detail,
+            },
+      };
+
+      if (!primaryPrContext.availability.available || !challengerPrContext.availability.available) {
+        const record = buildDiffUnavailableComparison({
+          challengePairId: pairId,
+          primaryModel,
+          challengerModel,
+          primaryPrUrl,
+          challengerPrUrl,
+          primaryHarnessId: primaryEval.harnessId,
+          challengerHarnessId: challengerEval.harnessId,
+          primaryEvalScore: primaryEval.score,
+          challengerEvalScore: challengerEval.score,
+          primaryRouting,
+          challengerRouting,
+          primaryExecution,
+          challengerExecution,
+          provenanceValidation,
+          variedDimensions,
+          challengeType,
+          variedStage,
+          diffAvailability,
+          ...forkDescriptor,
+          primaryDiffIdentity,
+          challengerDiffIdentity,
+        });
+        recordForResult = record;
+        appendChallengeComparison(record, evalsDir);
+        console.log(JSON.stringify(record, null, 2));
+        if (resultFile) {
+          writeJobResultFile(resultFile, {
+            ok: true,
+            exitCode,
+            comparison: record,
+          });
+        }
+        return;
+      }
+
+      if (primaryEval.failureReason || challengerEval.failureReason) {
+        const unscoredSides = [
+          primaryEval.failureReason ? `primary eval (${primaryEval.failureReason})` : '',
+          challengerEval.failureReason ? `challenger eval (${challengerEval.failureReason})` : '',
+        ].filter(Boolean);
+        const record = buildUnscoredEvalComparison({
+          challengePairId: pairId,
+          primaryModel,
+          challengerModel,
+          primaryPrUrl,
+          challengerPrUrl,
+          primaryHarnessId: primaryEval.harnessId,
+          challengerHarnessId: challengerEval.harnessId,
+          primaryEvalScore: primaryEval.score,
+          challengerEvalScore: challengerEval.score,
+          primaryRouting,
+          challengerRouting,
+          primaryExecution,
+          challengerExecution,
+          provenanceValidation,
+          variedDimensions,
+          challengeType,
+          variedStage,
+          diffAvailability,
+          unscoredSides,
+          ...forkDescriptor,
+          primaryDiffIdentity,
+          challengerDiffIdentity,
+        });
+        recordForResult = record;
+        appendChallengeComparison(record, evalsDir);
+        console.log(JSON.stringify(record, null, 2));
+        if (resultFile) {
+          writeJobResultFile(resultFile, {
+            ok: true,
+            exitCode,
+            comparison: record,
+          });
+        }
+        return;
+      }
+
+      const primaryDiff = primaryPrContext.diff;
+      const challengerDiff = challengerPrContext.diff;
       const primarySelected = selectChallengeEvalScore(primaryEval, challengeType);
       const challengerSelected = selectChallengeEvalScore(challengerEval, challengeType);
 
@@ -551,7 +661,25 @@ runTool({
         ? (winnerRouting?.planner || winnerSolutionModel)
         : challengeType === 'reviewer-only'
           ? (winnerRouting?.reviewer || winnerSolutionModel)
-          : winnerSolutionModel;
+        : winnerSolutionModel;
+      const primaryDisagreement = detectJudgeDisagreement({
+        side: 'primary',
+        evalScore: primarySelected.score,
+        dimensions: verdict.dimensions,
+      });
+      const challengerDisagreement = detectJudgeDisagreement({
+        side: 'challenger',
+        evalScore: challengerSelected.score,
+        dimensions: verdict.dimensions,
+      });
+      if (primaryDisagreement) dataQualityWarnings.push(primaryDisagreement);
+      if (challengerDisagreement) dataQualityWarnings.push(challengerDisagreement);
+      if (primaryDisagreement || challengerDisagreement) {
+        console.warn(`[compare-prs] Judge disagreement warnings for ${pairId}:`);
+        for (const warning of [primaryDisagreement, challengerDisagreement].filter(Boolean)) {
+          console.warn(`  ${warning}`);
+        }
+      }
 
       const record: ChallengeComparison = {
         challengePairId: pairId,
@@ -587,6 +715,7 @@ runTool({
         primaryEvalScoreSource: primarySelected.source,
         challengerEvalScoreSource: challengerSelected.source,
         ...(dataQualityWarnings.length > 0 ? { dataQualityWarnings } : {}),
+        diffAvailability,
         comparisonOutcome: 'compared',
         ...forkDescriptor,
         primaryDiffIdentity,

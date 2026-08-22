@@ -17,6 +17,7 @@ import { dirname } from 'node:path';
 import path from 'node:path';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
+import { fetchPrDiff, type PrDiffUnavailableReason } from './pr-diff-provider.ts';
 import { loadMetrics } from './review-metrics.ts';
 import type {
   EvalExecutedPlanning,
@@ -49,6 +50,8 @@ export interface EvalContext {
   prDiff: string;
   /** PR URL */
   prUrl: string;
+  /** Whether the PR diff was retrieved or why it was unavailable. */
+  prDiffAvailability: PrDiffAvailability;
   /** Raw issue data from Linear (null if fetch failed) */
   issueData: any | null;
   /** Expanded task packet content (if available) */
@@ -60,6 +63,10 @@ export interface EvalContext {
   /** Routing decision loaded from .routing-complete (if available) */
   routingDecision?: RoutingDecision;
 }
+
+export type PrDiffAvailability =
+  | { available: true; source: 'gh-pr-diff' | 'local-git'; bytes: number; attempts: string[] }
+  | { available: false; reason: PrDiffUnavailableReason; detail: string; attempts: string[] };
 
 /** Input parameters for gathering context. */
 export interface GatherContextParams {
@@ -109,9 +116,8 @@ export function formatIssueAsPrompt(issue: any | null, issueId: string): string 
 /**
  * Fetch PR diff and URL from GitHub.
  */
-export function fetchPrContext(prNumber: string, repoDir: string): { diff: string; url: string } {
+export function fetchPrContext(prNumber: string, repoDir: string): { diff: string; url: string; availability: PrDiffAvailability } {
   let url = '';
-  let diff = '';
 
   try {
     url = execShellCommand(`gh pr view ${escapeShellArg(prNumber)} --json url --jq .url 2>/dev/null`, {
@@ -119,15 +125,30 @@ export function fetchPrContext(prNumber: string, repoDir: string): { diff: strin
     }).trim();
   } catch { /* best-effort */ }
 
-  try {
-    diff = execShellCommand(`gh pr diff ${escapeShellArg(prNumber)}`, {
-      encoding: 'utf-8', cwd: repoDir, maxBuffer: 10 * 1024 * 1024,
-    });
-  } catch {
-    diff = '(PR diff unavailable)';
+  const diffResult = fetchPrDiff(prNumber, repoDir);
+  if (diffResult.kind === 'diff') {
+    return {
+      diff: diffResult.text,
+      url,
+      availability: {
+        available: true,
+        source: diffResult.source,
+        bytes: diffResult.bytes,
+        attempts: diffResult.attempts,
+      },
+    };
   }
 
-  return { diff, url };
+  return {
+    diff: '',
+    url,
+    availability: {
+      available: false,
+      reason: diffResult.reason,
+      detail: diffResult.detail,
+      attempts: diffResult.attempts,
+    },
+  };
 }
 
 /**
@@ -201,16 +222,24 @@ export function gatherEvalContext(params: GatherContextParams): EvalContext {
   // Fetch PR data
   let prDiff = '';
   let finalPrUrl = prUrl || '';
+  let prDiffAvailability: PrDiffAvailability = {
+    available: false,
+    reason: 'pr_metadata_missing',
+    detail: 'no PR number',
+    attempts: [],
+  };
   if (prNumber) {
     const prCtx = fetchPrContext(prNumber, repoDir);
     prDiff = prCtx.diff;
     if (!finalPrUrl) finalPrUrl = prCtx.url;
+    prDiffAvailability = prCtx.availability;
   }
 
   return {
     taskPrompt,
     prDiff,
     prUrl: finalPrUrl,
+    prDiffAvailability,
     issueData,
   };
 }
