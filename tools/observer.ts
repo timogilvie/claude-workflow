@@ -870,7 +870,8 @@ function hashText(text: string): string {
 }
 
 function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const specialChars = /[.*+?^${}()|[\]\\]/g;
+  return value.replace(specialChars, (match) => `\\${match}`);
 }
 
 function truncate(value: string, maxLength: number): string {
