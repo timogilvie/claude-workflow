@@ -48,6 +48,7 @@ extract_function "$MILL_SCRIPT" "ready_conflict_pr_is_clean" >> "$MONITOR_FUNC_F
 extract_function "$MILL_SCRIPT" "write_ready_conflict_recheck_at" >> "$MONITOR_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "clear_transient_mergeability_state" >> "$MONITOR_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "ready_queue_field" >> "$MONITOR_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "review_artifacts_with_pr_number" >> "$MONITOR_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "monitor_issue_state" >> "$MONITOR_FUNC_FILE"
 
 if [[ ! -s "$MONITOR_FUNC_FILE" ]]; then

@@ -86,12 +86,38 @@ export interface PlanningArtifacts {
 }
 
 /** Artifacts produced during the review stage. */
+export type ReviewOutcomeVerdict = 'ready' | 'not_ready' | 'error';
+
 export interface ReviewArtifacts {
   type: 'review';
   prNumber?: number;
   prUrl?: string;
   findingsCount?: number;
   blockingIssues?: number;
+  /** Final self-review tool process exit code. */
+  exitCode?: number;
+  /** Final self-review outcome. Missing verdicts do not pass readiness. */
+  verdict?: ReviewOutcomeVerdict;
+  /** Number of self-review tool iterations attempted. */
+  iterations?: number;
+  /** Final blocker count reported by self-review. */
+  blockerCount?: number;
+  /** Final warning count reported by self-review. */
+  warningCount?: number;
+  /** Review tool failure summary when the final run errored. */
+  reviewToolError?: string;
+  /** Structured diagnostics captured for review tool failures. */
+  diagnostics?: Record<string, unknown>;
+}
+
+export interface ReviewOutcome {
+  exitCode?: number;
+  verdict?: ReviewOutcomeVerdict;
+  iterations?: number;
+  blockerCount?: number;
+  warningCount?: number;
+  reviewToolError?: string;
+  diagnostics?: Record<string, unknown>;
 }
 
 /** Artifacts produced during the ready stage. */
@@ -278,6 +304,81 @@ export async function readAllStageResults(featureDir: string): Promise<StageResu
   }
 
   return results;
+}
+
+// ────────────────────────────────────────────────────────────────
+// Review Outcome Helpers
+// ────────────────────────────────────────────────────────────────
+
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function reviewVerdict(value: unknown): ReviewOutcomeVerdict | undefined {
+  return value === 'ready' || value === 'not_ready' || value === 'error'
+    ? value
+    : undefined;
+}
+
+function objectRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+/**
+ * Extract explicit final self-review evidence from either review artifact shape:
+ * the shell path writes top-level `{type:"review", ...}` artifacts, while the
+ * native path historically wrote nested `{review:{...}}` artifacts.
+ */
+export function extractReviewOutcome(result: StageResult | null | undefined): ReviewOutcome | null {
+  const artifacts = objectRecord(result?.artifacts);
+  if (!artifacts) return null;
+
+  if (artifacts.type === 'review') {
+    const blockerCount = finiteNumber(artifacts.blockerCount) ?? finiteNumber(artifacts.blockingIssues);
+    const warningCount = finiteNumber(artifacts.warningCount);
+    return {
+      exitCode: finiteNumber(artifacts.exitCode),
+      verdict: reviewVerdict(artifacts.verdict),
+      iterations: finiteNumber(artifacts.iterations),
+      blockerCount,
+      warningCount,
+      reviewToolError: typeof artifacts.reviewToolError === 'string' ? artifacts.reviewToolError : undefined,
+      diagnostics: objectRecord(artifacts.diagnostics),
+    };
+  }
+
+  const nested = objectRecord(artifacts.review);
+  if (nested) {
+    const blockerCount = finiteNumber(nested.blockerCount) ?? finiteNumber(nested.blockingCount);
+    const warningCount = finiteNumber(nested.warningCount);
+    return {
+      exitCode: finiteNumber(nested.exitCode),
+      verdict: reviewVerdict(nested.verdict),
+      iterations: finiteNumber(nested.iterations),
+      blockerCount,
+      warningCount,
+      reviewToolError: typeof nested.reviewToolError === 'string' ? nested.reviewToolError : undefined,
+      diagnostics: objectRecord(nested.diagnostics),
+    };
+  }
+
+  return null;
+}
+
+/**
+ * Strict readiness predicate. A completed review stage is not enough; readiness
+ * requires a recorded successful final self-review run with zero blockers.
+ */
+export function reviewResultPassed(result: StageResult | null | undefined): boolean {
+  if (result?.status !== 'completed') return false;
+  const outcome = extractReviewOutcome(result);
+  return outcome?.exitCode === 0
+    && outcome.verdict === 'ready'
+    && typeof outcome.iterations === 'number'
+    && outcome.iterations >= 1
+    && outcome.blockerCount === 0;
 }
 
 // ────────────────────────────────────────────────────────────────

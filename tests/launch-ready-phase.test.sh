@@ -74,6 +74,10 @@ extract_function "$MILL_SCRIPT" "log_ready_failure_result" >> "$LAUNCH_FUNC_FILE
 extract_function "$MILL_SCRIPT" "log_ready_unparseable_result" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "ready_failure_is_actionable_for_remediation" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "ready_failed_check_summary" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "review_result_passes_ready_gate" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "review_result_summary" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "review_artifacts_with_pr_number" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "strip_ready_label_if_review_not_passed" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "set_ready_pass_labels" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "_launch_ready_remediation_attempt" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "launch_ready_watchdog_remediation" >> "$LAUNCH_FUNC_FILE"
@@ -103,6 +107,9 @@ run_launch_case() {
     STATE_DIR="$CASE_DIR/feature/ready"
     WT_DIR="$CASE_DIR/worktree"
     mkdir -p "$STATE_DIR" "$WT_DIR"
+    cat > "$STATE_DIR/.review-result.json" <<EOF
+{"stage":"review","status":"completed","artifacts":{"type":"review","prNumber":304,"exitCode":0,"verdict":"ready","iterations":1,"blockerCount":0,"warningCount":0}}
+EOF
     DEBUG_FILE="$(ready_debug_log_file)"
     rm -f "$DEBUG_FILE"
     trap '\''rm -f "$DEBUG_FILE"'\'' EXIT
@@ -123,6 +130,11 @@ run_launch_case() {
         printf "%s\n" "stale transient attention" > "$STATE_DIR/.needs-attention"
         : > "$STATE_DIR/.needs-attention-transient"
         printf "%s\n" "3" > "$STATE_DIR/.transient-mergeability-count"
+        ;;
+      review_tool_error_gate)
+        cat > "$STATE_DIR/.review-result.json" <<EOF
+{"stage":"review","status":"completed","artifacts":{"type":"review","prNumber":304,"exitCode":2,"verdict":"error","iterations":2,"blockerCount":0,"warningCount":0,"reviewToolError":"provider failed"}}
+EOF
         ;;
     esac
 
@@ -700,6 +712,12 @@ check_contains "pass after remediation clears needs attention" "$output" "needs_
 check_contains "pass after remediation demotes restored labels to debug" "$output" "debug   HOK-1300: Restored ready labels for PR #304"
 check_contains "pass after remediation demotes ready completion to debug" "$output" "debug   HOK-1300: Ready checks completed (verdict: pass)"
 check_not_contains "pass after remediation no longer emits restored labels at status" "$output" "status   HOK-1300: Restored ready labels for PR #304"
+
+output="$(run_launch_case review_tool_error_gate)"
+check_contains "review tool error gate returns failure" "$output" "rc=1"
+check_contains "review tool error gate does not run ready tool" "$output" "ready_label_calls=0"
+check_contains "review tool error gate writes attention" "$output" "Review verdict does not pass readiness gate for PR #304"
+check_contains "review tool error gate surfaces exit code" "$output" "exitCode=2"
 
 output="$(run_launch_case ready_label_failure)"
 check_contains "ready label failure returns failure" "$output" "rc=1"
