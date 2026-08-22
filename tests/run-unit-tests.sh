@@ -99,6 +99,7 @@ TESTS=(
   shared/lib/review-progress.test.ts
   shared/lib/review-formatter.test.ts
   shared/lib/pr-comparison.test.ts
+  shared/lib/swap-test/swap-test.test.ts
   shared/lib/pr-metadata.test.ts
   shared/lib/pr-ci-status.test.ts
   shared/lib/ready-engine.test.ts
