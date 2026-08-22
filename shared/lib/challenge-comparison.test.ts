@@ -91,6 +91,41 @@ test('appendChallengeComparison writes a record that can be read back', () => {
   }
 });
 
+test('appendChallengeComparison round-trips judge provenance, cost, and criterion rationales', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'challenge-comparison-test-'));
+  try {
+    appendChallengeComparison(makeRecord({
+      judge_model: 'claude-opus-4-7',
+      judge_prompt_hash: 'c'.repeat(64),
+      primary_cost_usd: 0,
+      challenger_cost_usd: 1.25,
+      criterionRationales: {
+        completeness: { rationale: 'Challenger finished more of the task.' },
+        correctness: { rationale: 'Challenger has fewer behavioral bugs.' },
+        code_quality: { rationale: 'Challenger keeps the implementation simpler.' },
+        intervention_impact: { rationale: 'Both required similar intervention.' },
+        autonomy: { rationale: 'Challenger needed less follow-up.' },
+      },
+    }), tmp);
+
+    const [record] = readChallengeComparisons(tmp);
+    assert.equal(record.judge_model, 'claude-opus-4-7');
+    assert.equal(record.judge_prompt_hash, 'c'.repeat(64));
+    assert.equal(record.primary_cost_usd, 0);
+    assert.equal(record.challenger_cost_usd, 1.25);
+    assert.deepEqual(Object.keys(record.criterionRationales ?? {}).sort(), [
+      'autonomy',
+      'code_quality',
+      'completeness',
+      'correctness',
+      'intervention_impact',
+    ]);
+    assert.equal(record.criterionRationales?.correctness?.rationale, 'Challenger has fewer behavioral bugs.');
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test('readChallengeComparisons returns empty array when file is missing', () => {
   const tmp = mkdtempSync(join(tmpdir(), 'challenge-comparison-test-'));
   try {
