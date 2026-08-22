@@ -3,7 +3,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, auto/integration]
   workflow_dispatch:
   schedule:
     - cron: '0 6 * * *'
@@ -121,6 +121,35 @@ jobs:
 
       - name: Run native launch certification
         run: npm run test:native-launch-certification
+
+  harness-retention-shadow:
+    name: Harness Retention Shadow
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    if: github.event_name == 'push' && github.ref == 'refs/heads/auto/integration' && vars.WAVEMILL_HARNESS_RETENTION_SHADOW == 'true'
+    continue-on-error: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup
+        uses: ./.github/actions/setup
+
+      - name: Run harness retention replay in shadow
+        run: |
+          npx tsx tools/run-harness-replay.ts \
+            --mode shadow \
+            --baseline-harness-id "${WAVEMILL_BASELINE_HARNESS_ID:-deployed-unknown}" \
+            --candidate-harness-id "${WAVEMILL_CANDIDATE_HARNESS_ID:-${GITHUB_SHA}}"
+
+      - name: Upload harness retention report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: harness-retention-shadow
+          path: .wavemill/harness-replay/reports/*.json
+          if-no-files-found: warn
 
   openrouter-alias-audit:
     name: OpenRouter Alias Audit
