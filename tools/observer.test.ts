@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -205,9 +205,89 @@ test('service mode rejects Linear filing', () => {
   }
 });
 
+test('duplicate observer panes produce one high-severity operational finding', () => {
+  const findings = buildFindings({
+    timestamp: '2026-08-22T12:00:00.000Z',
+    sessions: ['wavemill'],
+    panes: [
+      { session: 'wavemill', windowIndex: '1', paneIndex: '1', windowName: 'backstage', active: false, pid: 101, command: 'npm', title: 'Wavemill Observer' },
+      { session: 'wavemill', windowIndex: '1', paneIndex: '2', windowName: 'backstage', active: false, pid: 201, command: 'npm', title: 'Wavemill Observer' },
+      { session: 'wavemill', windowIndex: '1', paneIndex: '3', windowName: 'backstage', active: false, pid: 301, command: 'npm', title: 'Wavemill Observer' },
+    ],
+    processes: [
+      { pid: 101, ppid: 1, stat: 'S', elapsedSeconds: 10, command: 'npm exec tsx tools/observer.ts --loop --session wavemill' },
+      { pid: 102, ppid: 101, stat: 'S', elapsedSeconds: 10, command: 'node tools/observer.ts --loop --session wavemill' },
+      { pid: 201, ppid: 1, stat: 'S', elapsedSeconds: 10, command: 'npm exec tsx tools/observer.ts --loop --session wavemill' },
+      { pid: 301, ppid: 1, stat: 'S', elapsedSeconds: 10, command: 'npm exec tsx tools/observer.ts --loop --session wavemill' },
+    ],
+    repos: [{ session: 'wavemill', repoDir: '/tmp/repo', tasks: [] }],
+  }, defaultObserverOptions());
+
+  const duplicate = findings.find((finding) => finding.id === 'duplicate-observer-wavemill');
+  assert.ok(duplicate);
+  assert.equal(duplicate.severity, 'high');
+  assert.equal(duplicate.category, 'operational');
+  assert.equal(duplicate.confidence, 'high');
+  assert.match(duplicate.title, /3 Observer loops are running/);
+  assert.ok(duplicate.evidence.some((line) => line.includes('1.1') && line.includes('1.3')));
+  assert.ok(duplicate.evidence.some((line) => line.includes('101') && line.includes('301')));
+});
+
+test('single observer pane does not produce duplicate finding', () => {
+  const findings = buildFindings({
+    timestamp: '2026-08-22T12:00:00.000Z',
+    sessions: ['wavemill'],
+    panes: [
+      { session: 'wavemill', windowIndex: '1', paneIndex: '1', windowName: 'backstage', active: false, pid: 101, command: 'npm', title: 'Wavemill Observer' },
+    ],
+    processes: [
+      { pid: 101, ppid: 1, stat: 'S', elapsedSeconds: 10, command: 'npm exec tsx tools/observer.ts --loop --session wavemill' },
+      { pid: 102, ppid: 101, stat: 'S', elapsedSeconds: 10, command: 'node tools/observer.ts --loop --session wavemill' },
+    ],
+    repos: [{ session: 'wavemill', repoDir: '/tmp/repo', tasks: [] }],
+  }, defaultObserverOptions());
+
+  assert.equal(findings.some((finding) => finding.id === 'duplicate-observer-wavemill'), false);
+});
+
+test('duplicate observer finding respects pane title override', () => {
+  const previous = process.env.WAVEMILL_BACKSTAGE_OBSERVER_PANE_TITLE;
+  process.env.WAVEMILL_BACKSTAGE_OBSERVER_PANE_TITLE = 'Custom Observer';
+  try {
+    const findings = buildFindings({
+      timestamp: '2026-08-22T12:00:00.000Z',
+      sessions: ['wavemill'],
+      panes: [
+        { session: 'wavemill', windowIndex: '1', paneIndex: '1', windowName: 'backstage', active: false, pid: 101, command: 'npm', title: 'Custom Observer' },
+        { session: 'wavemill', windowIndex: '1', paneIndex: '2', windowName: 'backstage', active: false, pid: 201, command: 'npm', title: 'Custom Observer' },
+      ],
+      processes: [],
+      repos: [{ session: 'wavemill', repoDir: '/tmp/repo', tasks: [] }],
+    }, defaultObserverOptions());
+
+    assert.ok(findings.some((finding) => finding.id === 'duplicate-observer-wavemill'));
+  } finally {
+    if (previous === undefined) {
+      delete process.env.WAVEMILL_BACKSTAGE_OBSERVER_PANE_TITLE;
+    } else {
+      process.env.WAVEMILL_BACKSTAGE_OBSERVER_PANE_TITLE = previous;
+    }
+  }
+});
+
 test('service heartbeat is parseable and stores redacted finding counts only', async () => {
   const repoDir = mkdtempSync(join(tmpdir(), 'observer-heartbeat-'));
   try {
+    mkdirSync(join(repoDir, '.wavemill'), { recursive: true });
+    writeFileSync(join(repoDir, '.wavemill', 'backstage-health.json'), JSON.stringify({
+      services: {
+        observer: {
+          status: 'healthy',
+          instanceCount: 1,
+        },
+      },
+    }));
+
     await writeServiceHeartbeat({
       timestamp: '2026-08-03T12:00:00.000Z',
       sessions: ['wavemill-test'],
@@ -247,6 +327,7 @@ test('service heartbeat is parseable and stores redacted finding counts only', a
     assert.equal(parsed.services.observer.status, 'healthy');
     assert.equal(parsed.services.observer.heartbeatAt, '2026-08-03T12:00:00.000Z');
     assert.equal(parsed.services.observer.findingCounts.high, 1);
+    assert.equal(parsed.services.observer.instanceCount, 1);
     assert.doesNotMatch(raw, /sk-secret|hidden task/);
   } finally {
     rmSync(repoDir, { recursive: true, force: true });
