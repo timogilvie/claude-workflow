@@ -349,6 +349,30 @@
                             "minimum": 1,
                             "default": 5
                         },
+                        "maxIncidentsPerPass": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "default": 10,
+                            "description": "Maximum canonical incidents to sync to Linear in one live observer pass."
+                        },
+                        "maxRetryEntriesPerPass": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "default": 5,
+                            "description": "Maximum queued incident retries to drain before new live sync work."
+                        },
+                        "requestDelayMs": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "default": 250,
+                            "description": "Optional delay before each Linear API request made by incident sync."
+                        },
+                        "rateLimitBackoffMs": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "default": 1000,
+                            "description": "Optional bounded wait after a Linear 429 before deferring retryable incident sync work."
+                        },
                         "policies": {
                             "type": "object",
                             "properties": {
@@ -1380,6 +1404,11 @@
                     },
                     "default": [],
                     "description": "Checks that must pass for merge approval (subset of checks). Required checks that skip are non-blocking warnings."
+                },
+                "requireCiChecks": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Require at least one reported CI check before ready can pass. Set false only for repositories with no CI."
                 },
                 "migrationKind": {
                     "type": "string",

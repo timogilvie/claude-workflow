@@ -106,6 +106,7 @@ for f in \
   "$REPO_DIR"/tests/wavemill-background-jobs-cleanup.test.sh \
   "$REPO_DIR"/tests/global-model-parity.test.sh \
   "$REPO_DIR"/tests/queue-health.test.sh \
+  "$REPO_DIR"/tests/merge-queue-live-ci.test.sh \
   "$REPO_DIR"/tests/notification-waiting.test.sh \
   "$REPO_DIR"/tests/hook-osc-emit.test.sh \
   "$REPO_DIR"/tests/hook-write-context-guard.test.sh \
@@ -1656,6 +1657,15 @@ if grep -q 'wm:ready' "$PROMPT_RENDER_DIR/review-claude.txt" \
   pass "review prompt instructs adding wm:ready label after review passes"
 else
   fail "review prompt is missing wm:ready label instruction"
+fi
+
+if grep -q 'final self-review run errored (exit code 2)' "$PROMPT_RENDER_DIR/review-claude.txt" \
+  && grep -q 'final self-review run errored (exit code 2)' "$PROMPT_RENDER_DIR/review-codex.txt" \
+  && grep -q 'without readiness certification' "$PROMPT_RENDER_DIR/review-claude.txt" \
+  && grep -q 'without readiness certification' "$PROMPT_RENDER_DIR/review-codex.txt"; then
+  pass "review prompt forbids wm:ready after non-zero final review"
+else
+  fail "review prompt does not clearly forbid wm:ready after non-zero final review"
 fi
 
 if grep -q 'wm:merging' "$PROMPT_RENDER_DIR/review-claude.txt" \

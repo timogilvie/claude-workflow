@@ -42,6 +42,25 @@ Current implementation details:
 - merge conflict state is surfaced in a dedicated `mergeConflict` field
 - the readiness verdict still reflects the configured `checks` array
 
+## CI Check Evaluation
+
+Ready uses the shared PR CI evaluator in `shared/lib/pr-ci-status.ts`. A ready pass is allowed only when the observed GitHub check rollup is complete enough to prove that required CI is green.
+
+Required contexts are resolved in this order:
+
+- GitHub branch protection for the PR base branch
+- `integration.requiredChecks` from wavemill config
+- no explicit required contexts, in which case every observed check still has to be complete and passing
+
+CI verdicts are fail-closed:
+
+- any failing, errored, cancelled, timed-out, or unknown check yields `fail`
+- any missing required context, pending check, or empty check set yields `pending`
+- an empty check set yields `skip` only when `ready.requireCiChecks` is explicitly `false`
+- skipped and neutral GitHub checks count as passing once required contexts are present
+
+Policy-mode ready checks (`integration.readyPolicy.enabled`) also include a real `ci-status` check. A stored ready result records `readyHeadSha`, `ciConclusion`, `requiredContexts`, and `requiredSource` so later monitor ticks can compare the stored verdict with live GitHub state.
+
 ## CLI Usage
 
 ### Syntax
@@ -125,6 +144,8 @@ The shared result schema is:
 | `verdict` | `"pass" | "fail" | "warn"` | Overall merge-readiness verdict |
 | `checks` | `ReadyCheck[]` | Individual check results |
 | `mergeConflict` | `MergeConflictResult \| undefined` | GitHub mergeability state for the PR |
+| `headSha` | `string \| undefined` | PR head SHA whose CI was evaluated |
+| `ciConclusion` | `string \| undefined` | Shared CI evaluator conclusion |
 | `timestamp` | `string` | ISO 8601 UTC timestamp |
 | `summary` | `string` | Human-readable overall summary |
 
@@ -145,6 +166,14 @@ Each item in `checks` has:
 | `1` | Ready verdict is `fail` |
 
 Operational note: `mergeConflict.status` is independent from the main verdict. A PR can have clean readiness checks but still be blocked because GitHub reports merge conflicts.
+
+## Merge Queue Live-CI Gate
+
+The mill merge-queue selector receives live CI state for every ready PR. A PR is selectable only when `ci.conclusion` is `pass` and GitHub `mergeStateStatus` is not `BLOCKED`, `DIRTY`, or `UNSTABLE`.
+
+Stored ready passes are invalidated when a later tick observes live CI `fail` for that PR. The ready result is rewritten as `failed` with `ciInvalidatedAt`, `ciInvalidationReason`, `ciFailingChecks`, and `lastCi*` artifact fields. Pending or unreadable live CI is not promoted; it remains waiting until a later tick can prove green.
+
+Queue logs no longer claim `clean/green` from stored state. Promotion logs now cite the live CI observation, for example `live CI pass: 15/15 checks @abc1234`.
 
 ### Example Pass Output
 

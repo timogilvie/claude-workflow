@@ -3769,6 +3769,10 @@ test('observer linear config defaults disabled with safe policy defaults', () =>
     const config = getObserverLinearConfig(tmp);
     assert.equal(config.enabled, false);
     assert.equal(config.retryQueuePath, '.wavemill/registry/linear-incident-queue.jsonl');
+    assert.equal(config.maxIncidentsPerPass, 10);
+    assert.equal(config.maxRetryEntriesPerPass, 5);
+    assert.equal(config.requestDelayMs, 250);
+    assert.equal(config.rateLimitBackoffMs, 1000);
     assert.equal(config.policies.product_defect.strategy, 'create');
     assert.equal(config.policies.model_task_harness_outcome.strategy, 'no_create');
     assert.deepEqual(config.policies.model_task_harness_outcome.correlateIssueIds, ['HOK-2593']);

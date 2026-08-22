@@ -476,6 +476,10 @@ export interface ObserverLinearConfig {
   label?: string;
   retryQueuePath: string;
   updateCooldownMinutes: number;
+  maxIncidentsPerPass: number;
+  maxRetryEntriesPerPass: number;
+  requestDelayMs: number;
+  rateLimitBackoffMs: number;
   policies: {
     product_defect: ObserverLinearPolicyConfig;
     model_task_harness_outcome: ObserverLinearPolicyConfig;
@@ -560,6 +564,7 @@ export interface QuotaConfig {
 export interface ReadyConfig {
   checks?: string[];
   requiredChecks?: string[];
+  requireCiChecks?: boolean;
   migrationKind?: 'alembic' | 'sql' | 'none';
   migrationPatterns?: string[];
   migrationChecks?: ReadyMigrationChecksConfig;
@@ -816,6 +821,10 @@ export const OBSERVER_LINEAR_DEFAULTS: ObserverLinearConfig = {
   detectionOnly: false,
   retryQueuePath: '.wavemill/registry/linear-incident-queue.jsonl',
   updateCooldownMinutes: 5,
+  maxIncidentsPerPass: 10,
+  maxRetryEntriesPerPass: 5,
+  requestDelayMs: 250,
+  rateLimitBackoffMs: 1000,
   policies: {
     product_defect: { strategy: 'create' },
     model_task_harness_outcome: { strategy: 'no_create', correlateIssueIds: ['HOK-2593'] },
@@ -1503,6 +1512,7 @@ export function getReadyConfig(repoDir?: string): ReadyConfig {
   return {
     checks: config.ready?.checks ?? [],
     requiredChecks: config.ready?.requiredChecks ?? [],
+    requireCiChecks: config.ready?.requireCiChecks ?? true,
     migrationKind: config.ready?.migrationKind,
     migrationPatterns: config.ready?.migrationPatterns ?? [...DEFAULT_READY_MIGRATION_PATTERNS],
     migrationChecks: getMigrationChecksConfig(repoDir),

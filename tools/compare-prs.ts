@@ -1,5 +1,6 @@
 #!/usr/bin/env -S npx tsx
 
+import { join } from 'node:path';
 import { runTool } from '../shared/lib/tool-runner.ts';
 import { callClaude, parseJsonFromLLM } from '../shared/lib/llm-cli.ts';
 import { fetchIssueData, formatIssueAsPrompt, fetchPrContext } from '../shared/lib/eval-context-gatherer.ts';
@@ -27,6 +28,7 @@ import {
 import { loadWavemillConfig } from '../shared/lib/config.ts';
 import { resolveEvalsDir } from '../shared/lib/evals-paths.ts';
 import {
+  ARBITER_JUDGE_PROMPT_TEMPLATE_PATH,
   buildChallengeCommentBody,
   buildCappedComparisonPrompt,
   formatRoutingSummary,
@@ -43,6 +45,8 @@ import {
 } from '../shared/lib/pr-comparison.ts';
 import { writeJobResultFile } from '../shared/lib/job-tracker.ts';
 import type { ChallengeStage } from '../shared/lib/challenge-mode.ts';
+import { loadPromptTemplate } from '../shared/lib/prompt-utils.ts';
+import { hashString } from '../shared/lib/prompt-hash.ts';
 
 type ComparisonForkDescriptor = Pick<
   ChallengeComparison,
@@ -123,6 +127,10 @@ function retainComparedLoserPatch(input: {
   } else if (result.skippedReason) {
     console.warn(`[compare-prs] Loser patch retention skipped (${result.skippedReason}) for ${result.path}`);
   }
+}
+
+function costUsdFromWorkflowCost(workflowCost: unknown): number | null {
+  return typeof workflowCost === 'number' && Number.isFinite(workflowCost) ? workflowCost : null;
 }
 
 runTool({
@@ -513,11 +521,13 @@ runTool({
       );
 
       const promptLimit = Number.parseInt(process.env.CHALLENGE_COMPARISON_MAX_PROMPT_BYTES || '500000', 10);
+      const judgePromptTemplate = await loadPromptTemplate(join(repoDir, ARBITER_JUDGE_PROMPT_TEMPLATE_PATH), { dir: evalsDir });
       const cappedPrompt = buildCappedComparisonPrompt({
         issuePrompt,
         primaryDiff,
         challengerDiff,
         presentationOrder,
+        promptTemplate: judgePromptTemplate,
         primaryRouting,
         challengerRouting,
         challengeType,
@@ -532,6 +542,7 @@ runTool({
         );
       }
       const prompt = cappedPrompt.prompt;
+      let successfulJudgePrompt = prompt;
       let response = await callClaude(prompt, {
         mode: 'sync',
         model: comparisonModel,
@@ -566,6 +577,7 @@ Return a raw JSON object with no code fences, no comments, and no JavaScript syn
           timeout: 180_000,
           retry: false,
         });
+        successfulJudgePrompt = stricterPrompt;
         verdict = mapBlindVerdictToSides(
           validateComparisonJson(parseJsonFromLLM(response.text)),
           presentationOrder,
@@ -608,6 +620,11 @@ Return a raw JSON object with no code fences, no comments, and no JavaScript syn
         stageEvidenceMode,
         presentationOrder,
         workflowInsight: verdict.workflowInsight,
+        judge_model: comparisonModel,
+        judge_prompt_hash: hashString(successfulJudgePrompt),
+        primary_cost_usd: costUsdFromWorkflowCost(primaryEval.workflowCost),
+        challenger_cost_usd: costUsdFromWorkflowCost(challengerEval.workflowCost),
+        criterionRationales: verdict.criterionRationales,
         primaryEvalScoreSource: primarySelected.source,
         challengerEvalScoreSource: challengerSelected.source,
         ...(dataQualityWarnings.length > 0 ? { dataQualityWarnings } : {}),

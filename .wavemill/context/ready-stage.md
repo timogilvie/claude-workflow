@@ -32,6 +32,16 @@ All repeated `reported` findings (same classification, action, and stable finger
 
 State entries track four `lastLogged*` fields (`lastLoggedAt`, `lastLoggedFingerprint`, `lastLoggedClassification`, `lastLoggedAction`) to distinguish "current dashboard state" from "last emitted event." Existing state files without these fields are treated as never logged and emit once on the next tick.
 
+## CI Truth Rules
+
+- DO require a complete required check set before recording `verdict: pass`.
+- DO treat `checksRun: 0` or `checksRun: 1` against multiple required contexts as `pending`.
+- DO pass live CI state into merge-queue selection.
+- DO invalidate a stored ready pass when live CI fails for the same PR.
+- DON'T promote or log a PR as merge-ready from a stored verdict alone.
+
+Failure mode: ready pass with `checksRun: 1` usually means the policy path evaluated only non-CI guards or GitHub returned a partial check set. The shared CI evaluator fixes this by requiring branch-protection or configured contexts before pass.
+
 ## Migration Checks
 
 When a repo has `alembic/versions/` and no explicit `ready.checks`, ready auto-enables:
