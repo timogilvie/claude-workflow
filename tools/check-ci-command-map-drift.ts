@@ -11,6 +11,8 @@ const defaultRepoRoot = join(__dirname, '..');
 const NO_LOCAL_RECIPE = new Set([
   'Shell and Unit Tests',
   'Check Lifecycle Paths',
+  'OpenRouter Alias Audit',
+  'Harness Retention Shadow',
 ]);
 
 export interface CiCommandMapDriftResult {

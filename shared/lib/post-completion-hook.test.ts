@@ -285,6 +285,7 @@ async function withMockedPostCompletionDeps(fn: () => Promise<void> | void): Pro
     postCompletionHookDeps.getEvalContextUpdatesConfig = defaultPostCompletionHookDeps.getEvalContextUpdatesConfig;
     postCompletionHookDeps.getCurrentOperatingMode = defaultPostCompletionHookDeps.getCurrentOperatingMode;
     postCompletionHookDeps.triggerHokusaiSubmission = defaultPostCompletionHookDeps.triggerHokusaiSubmission;
+    postCompletionHookDeps.runHarnessRetentionReplay = defaultPostCompletionHookDeps.runHarnessRetentionReplay;
     postCompletionHookDeps.runContextUpdateWork = defaultPostCompletionHookDeps.runContextUpdateWork;
     postCompletionHookDeps.appendContextUpdateWarning = defaultPostCompletionHookDeps.appendContextUpdateWarning;
   }
@@ -1411,6 +1412,69 @@ await test('runPostCompletionEval enqueues Hokusai after persistence before cont
     assert.ok(logs.some((line) => line.includes('Post-completion eval: Hokusai submission enqueued entry=entry-1 drain=started')));
   } finally {
     console.log = originalLog;
+    clearConfigCache(repoDir);
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+await test('runPostCompletionEval skips context updates when enforced harness retention fails', async () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-harness-retention-'));
+  makeContextUpdateRepo(repoDir, 'harness-retention', 'HOK-2844');
+  clearConfigCache(repoDir);
+  const calls: string[] = [];
+
+  try {
+    await withMockedPostCompletionDeps(async () => {
+      stubBaseEvalDeps();
+      postCompletionHookDeps.appendEvalRecord = (record, options) => {
+        calls.push('persist');
+        defaultPostCompletionHookDeps.appendEvalRecord(record, options);
+      };
+      postCompletionHookDeps.triggerHokusaiSubmission = async () => {
+        calls.push('hokusai');
+        return { status: 'skipped', reason: 'disabled' };
+      };
+      postCompletionHookDeps.runHarnessRetentionReplay = async () => ({
+        schemaVersion: 1,
+        reportId: 'retention-report',
+        suiteVersion: 'harness-retention-v1',
+        generatedAt: '2026-08-21T00:00:00.000Z',
+        mode: 'enforce',
+        tolerance: 1,
+        verdict: 'fail',
+        baselineHarnessId: 'baseline',
+        candidateHarnessId: 'candidate',
+        D: 2,
+        totals: { cases: 2, excluded: 0, malformed: 0, errors: 0 },
+        perSurface: {
+          routing: { cases: 2, D: 2, baselineFailures: 0, candidateFailures: 2 },
+          review: { cases: 0, D: 0, baselineFailures: 0, candidateFailures: 0 },
+          eval_judging: { cases: 0, D: 0, baselineFailures: 0, candidateFailures: 0 },
+          issue_expansion: { cases: 0, D: 0, baselineFailures: 0, candidateFailures: 0 },
+        },
+        exclusions: [],
+        cases: [],
+        reportPath: join(repoDir, '.wavemill/harness-replay/reports/report.json'),
+      });
+      postCompletionHookDeps.runContextUpdateWork = async () => {
+        calls.push('context');
+      };
+
+      const persisted = await runPostCompletionEval({
+        issueId: 'HOK-2844',
+        prNumber: '2844',
+        workflowType: 'mill',
+        repoDir,
+        branchName: 'task/harness-retention',
+        worktreePath: repoDir,
+        agentType: 'codex',
+      });
+
+      assert.equal(persisted, true);
+    });
+
+    assert.deepEqual(calls, ['persist', 'hokusai']);
+  } finally {
     clearConfigCache(repoDir);
     rmSync(repoDir, { recursive: true, force: true });
   }

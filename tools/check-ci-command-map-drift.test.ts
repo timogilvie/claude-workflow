@@ -82,12 +82,22 @@ jobs:
   check-paths:
     name: Check Lifecycle Paths
     runs-on: ubuntu-latest
+  openrouter:
+    name: OpenRouter Alias Audit
+    runs-on: ubuntu-latest
+  harness-retention:
+    name: Harness Retention Shadow
+    runs-on: ubuntu-latest
 `, {}, (repoDir) => {
     const result = checkCiCommandMapDrift(repoDir);
 
     assert.equal(result.ok, true);
     assert.deepEqual(result.checkedJobs, []);
-    assert.deepEqual(result.skippedJobs, ['Check Lifecycle Paths']);
+    assert.deepEqual(result.skippedJobs, [
+      'Check Lifecycle Paths',
+      'OpenRouter Alias Audit',
+      'Harness Retention Shadow',
+    ]);
   });
 });
 

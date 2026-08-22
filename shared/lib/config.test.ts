@@ -26,6 +26,7 @@ import {
   getChallengeSchedulerConfig,
   getRouterConfig,
   getEvalConfig,
+  getHarnessRetentionConfig,
   getIntegrationConfig,
   getPromotionConfig,
   getReviewMergeConfig,
@@ -471,6 +472,58 @@ test('evalContextUpdates accessor returns explicit config values', () => {
       enabled: false,
       timeoutSeconds: 90,
       maxRetries: 2,
+    });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('harness retention accessor defaults to shadow tolerance one', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({}));
+
+    assert.deepEqual(getHarnessRetentionConfig(tmp), {
+      enabled: false,
+      mode: 'shadow',
+      tolerance: 1,
+      suitePath: 'shared/fixtures/harness-replay/harness-retention-v1/manifest.json',
+      reportDir: '.wavemill/harness-replay/reports',
+      baselineHarnessId: '',
+      candidateHarnessId: '',
+    });
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('harness retention accessor returns explicit config values', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      harness: {
+        retention: {
+          enabled: true,
+          mode: 'enforce',
+          tolerance: 2,
+          suitePath: 'fixtures/replay.json',
+          reportDir: '.wavemill/custom-reports',
+          baselineHarnessId: 'baseline',
+          candidateHarnessId: 'candidate',
+        },
+      },
+    }));
+
+    assert.deepEqual(getHarnessRetentionConfig(tmp), {
+      enabled: true,
+      mode: 'enforce',
+      tolerance: 2,
+      suitePath: 'fixtures/replay.json',
+      reportDir: '.wavemill/custom-reports',
+      baselineHarnessId: 'baseline',
+      candidateHarnessId: 'candidate',
     });
   } finally {
     cleanUp(tmp);
