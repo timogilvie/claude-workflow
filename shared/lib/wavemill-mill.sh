@@ -1118,7 +1118,8 @@ resolve_challenge_pair_hard_failure() {
       },
       timestamp: $timestamp,
       comparisonOutcome: $comparisonOutcome,
-      terminalReason: $terminalReason
+      terminalReason: $terminalReason,
+      noComparisonReason: $terminalReason
     }')
   if ! challenge_pair_record_exists "$pair_id"; then
     printf '%s\n' "$record_json" >> "$(challenge_pair_records_file)"
@@ -4030,6 +4031,45 @@ finalize_challenge_execution_intent_before_coding() {
     return 0
   fi
 
+  # Finalization must not manufacture phantom pairs (a pair where no challenger arm was launched).
+  # This happens when finalization re-ran resolve-challenge-task after a single-model launch
+  # and got mode=challenge, but the ${issue}_c task doesn't exist.
+  # Check: (1) challenger already exists in state, OR (2) challenge was already selected at launch.
+  local challenger_exists was_challenge_at_launch
+  challenger_exists="false"
+  was_challenge_at_launch="false"
+
+  local existing_challenger_slug existing_challenger_branch existing_challenger_worktree
+  existing_challenger_slug=$(read_state_value "" --arg i "$new_challenger_key" '.tasks[$i].slug // ""' 2>/dev/null || true)
+  existing_challenger_branch=$(read_state_value "" --arg i "$new_challenger_key" '.tasks[$i].branch // ""' 2>/dev/null || true)
+  existing_challenger_worktree=$(read_state_value "" --arg i "$new_challenger_key" '.tasks[$i].worktree // ""' 2>/dev/null || true)
+  [[ -n "$existing_challenger_slug" && -n "$existing_challenger_branch" && -n "$existing_challenger_worktree" ]] && challenger_exists="true"
+
+  local existing_challenge_flag existing_pair_id
+  existing_challenge_flag=$(get_task_meta "$issue" challenge 2>/dev/null || true)
+  existing_pair_id=$(get_task_meta "$issue" challengePairId 2>/dev/null || true)
+  [[ "$existing_challenge_flag" == "true" || -n "$existing_pair_id" ]] && was_challenge_at_launch="true"
+
+  if [[ "$challenger_exists" != "true" && "$was_challenge_at_launch" != "true" ]]; then
+    # Finalization may refine an existing pair; it must never create one.
+    local no_challenge_intent
+    no_challenge_intent=$(echo "$intent_json" | jq -c \
+      'del(.challenger) | .noChallengeReason = "challenger_never_launched" | .challengeCollapseReason = "challenger_never_launched"' 2>/dev/null || echo "$intent_json")
+    persist_challenge_execution_intent "$issue" "" "$feature_dir" "$no_challenge_intent"
+    state_mutate "$STATE_FILE" \
+      '.tasks[$issue].challengeCollapseReason = "challenger_never_launched"
+       | .tasks[$issue].challengeCollapseDetail = "Finalization selected a pair but no challenger arm was launched; staying single-model"
+       | .tasks[$issue].challenge = false
+       | .tasks[$issue] |= del(.challengePairId, .role)
+       | .tasks[$issue].updated = (now | todate)' \
+      --arg issue "$issue" >/dev/null 2>&1 || true
+    log_route_lifecycle "challenge_not_formed" "issue=$issue" "stage=$new_challenge_stage" "model=$new_primary" "reason=challenger_never_launched"
+    log_warn "$issue → challenge finalization selected a pair but no challenger arm exists; staying single-model"
+    FINALIZED_CHALLENGE_CODER=""
+    FINALIZED_CHALLENGE_STAGE=""
+    return 0
+  fi
+
   # Compare the varied-stage models, not the coders. Plan/review challenges
   # intentionally share the coder on both sides.
   local new_primary_varied new_challenger_varied
@@ -4077,6 +4117,11 @@ finalize_challenge_execution_intent_before_coding() {
   if [[ -n "$challenger_slug" && -n "$challenger_branch" && -n "$challenger_worktree" ]]; then
     save_task_state "$new_challenger_key" "$challenger_slug" "$challenger_branch" "$challenger_worktree" "$challenger_pr" "$challenger_status" "$challenger_agent" "$challenger_linear_issue" \
       "true" "$issue" "challenger" "$new_challenger_model" "$new_challenger_planner" "$new_challenger_model" "$new_challenger_reviewer" "$new_challenger_plan_depth" "$new_challenger_code_depth" "$new_challenger_review_mode" "$new_challenge_stage"
+    # Mark that the challenger was successfully launched (P0.6, HOK-2798)
+    state_mutate "$STATE_FILE" \
+      '.tasks[$issue].challengerLaunched = true
+       | .tasks[$issue].updated = (now | todate)' \
+      --arg issue "$issue" >/dev/null 2>&1 || true
   fi
 
   persist_challenge_execution_intent "$issue" "$new_challenger_key" "$feature_dir" "$intent_json"
@@ -4587,7 +4632,8 @@ resolve_challenge_pair_hard_failure() {
       },
       timestamp: $timestamp,
       comparisonOutcome: $comparisonOutcome,
-      terminalReason: $terminalReason
+      terminalReason: $terminalReason,
+      noComparisonReason: $terminalReason
     }')
   if ! challenge_pair_record_exists "$pair_id"; then
     printf '%s\n' "$record_json" >> "$(challenge_pair_records_file)"
@@ -12874,6 +12920,10 @@ EOF
   if [[ "$challenge_enabled_for_launch" == "true" ]]; then
     save_task_state "$challenger_key" "$challenger_slug" "task/${challenger_slug}" "${WORKTREE_ROOT}/${challenger_slug}" "" "" "${challenger_planner_agent:-$challenger_agent}" "$linear_issue" "true" "$challenge_pair" "challenger" "$challenger_model" "$challenger_planner" "$challenger_model" "$challenger_reviewer" "$challenger_plan_depth" "$challenger_code_depth" "$challenger_review_mode" "$challenge_stage"
     state_mutate "$STATE_FILE" '.tasks[$issue].challengeStage = $stage' --arg issue "$challenger_key" --arg stage "$challenge_stage" || true
+    state_mutate "$STATE_FILE" \
+      '.tasks[$issue].challengerLaunched = true
+       | .tasks[$issue].updated = (now | todate)' \
+      --arg issue "$issue" >/dev/null 2>&1 || true
     # One writer, both arms, both surfaces.  The separate challengeIntent write
     # that used to live here persisted a second, independently-built schema
     # under a different key; resolve-challenge-task.ts now emits the canonical

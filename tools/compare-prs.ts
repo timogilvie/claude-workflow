@@ -628,6 +628,7 @@ Return a raw JSON object with no code fences, no comments, and no JavaScript syn
         primaryEvalScoreSource: primarySelected.source,
         challengerEvalScoreSource: challengerSelected.source,
         ...(dataQualityWarnings.length > 0 ? { dataQualityWarnings } : {}),
+        comparisonOutcome: 'compared',
         ...forkDescriptor,
         primaryDiffIdentity,
         challengerDiffIdentity,

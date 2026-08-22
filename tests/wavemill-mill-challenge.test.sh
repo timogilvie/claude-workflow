@@ -91,6 +91,7 @@ RUNTIME_SAVE_BLOCK="$(awk '
 if [[ -n "$RUNTIME_SAVE_BLOCK" ]]; then
   check_contains "runtime primary state saves planner agent for planning phase" "$RUNTIME_SAVE_BLOCK" '"${planner_agent:-$task_agent_cmd}"'
   check_contains "runtime challenger state saves planner agent for planning phase" "$RUNTIME_SAVE_BLOCK" '"${challenger_planner_agent:-$challenger_agent}"'
+  check_contains "startup challenge marks challenger launch evidence" "$RUNTIME_SAVE_BLOCK" '.tasks[$issue].challengerLaunched = true'
 else
   fail "could not extract runtime state save block"
 fi
@@ -141,6 +142,7 @@ if [[ -n "$FINALIZATION_HELPER" ]]; then
   check_contains "finalizer saves primary planner" "$FINALIZATION_HELPER" 'new_primary_planner'
   check_contains "finalizer saves challenger planner" "$FINALIZATION_HELPER" 'new_challenger_planner'
   check_contains "finalizer persists paired intent" "$FINALIZATION_HELPER" 'persist_challenge_execution_intent "$issue" "$new_challenger_key" "$feature_dir" "$intent_json"'
+  check_contains "finalizer marks challenger launch evidence" "$FINALIZATION_HELPER" '.tasks[$issue].challengerLaunched = true'
   check_contains "finalizer cancels collapsed identical challenger" "$FINALIZATION_HELPER" 'challenge_cancel_challenger_arm "$issue" "$slug" "$new_challenger_key"'
   check_contains "finalizer exposes in-memory coder" "$FINALIZATION_HELPER" 'FINALIZED_CHALLENGE_CODER="$new_primary"'
   # Printing the coders made every plan/review pair look degenerate in the log

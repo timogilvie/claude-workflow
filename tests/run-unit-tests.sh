@@ -111,6 +111,7 @@ TESTS=(
   shared/lib/transient-retry.test.ts
   shared/lib/tend-loop.test.ts
   shared/lib/challenge-comparison.test.ts
+  shared/lib/no-comparison-report.test.ts
   shared/lib/challenge-pair-resolver.test.ts
   shared/lib/arm-failure-taxonomy.test.ts
   shared/lib/arm-reliability.test.ts
@@ -222,6 +223,7 @@ TESTS=(
   tools/add-pr-label.test.ts
   tools/backfill-challenge-stage.test.ts
   tools/certify-patch-coding.test.ts
+  tools/generate-skip-report.test.ts
   tools/check-config-version.test.ts
   tools/check-pi-version.test.ts
   tools/check-ci-command-map-drift.test.ts
