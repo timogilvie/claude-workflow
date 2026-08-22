@@ -126,6 +126,10 @@ const MERGE_RETRY_MAX_ATTEMPTS = 8;
 const MERGE_RETRY_BACKOFF_MS = 30_000;
 const MERGE_RETRY_WINDOW_MS = 5 * 60 * 1000;
 const GH_COMMAND_TIMEOUT_MS = 120_000;
+const GIT_COMMAND_TIMEOUT_MS = 180_000;
+const GIT_MUTATION_TIMEOUT_MS = 300_000;
+const MERGE_COMMAND_TIMEOUT_MS = 180_000;
+const DEFAULT_EXTERNAL_COMMAND_TIMEOUT_MS = 120_000;
 
 interface PrMergeDiagnostics {
   mergeStateStatus?: string;
@@ -277,7 +281,7 @@ function resolveRefSha(ref: string, repoDir: string): string | null {
   try {
     const sha = String(execShellCommand(
       `git rev-parse ${escapeShellArg(ref)} 2>/dev/null`,
-      { encoding: 'utf-8', cwd: repoDir },
+      { encoding: 'utf-8', cwd: repoDir, timeout: GIT_COMMAND_TIMEOUT_MS },
     )).trim();
     return sha ? sha : null;
   } catch {
@@ -358,13 +362,30 @@ export async function selectNextCandidate(options: SelectNextCandidateOptions): 
 
 export function formatStatusLine(
   decision: TendDecision,
-  opts: { action?: string; lastPR?: number | null } = {},
+  opts: {
+    action?: string;
+    lastPR?: number | null;
+    iteration?: number;
+    pollStartedAt?: string;
+    pollCompletedAt?: string | null;
+  } = {},
 ): string {
   const health = decision.integrationHealth.state === 'healthy' ? 'ok' : 'degraded';
   const last = typeof opts.lastPR === 'number' ? `#${opts.lastPR}` : 'none';
   const action = opts.action ?? 'idle';
 
-  return `eligible=${decision.eligible.length} blocked=${decision.blocked.length} health=${health} last=${last} action=${action}`;
+  const parts = [
+    typeof opts.iteration === 'number' ? `iter=${opts.iteration}` : null,
+    opts.pollStartedAt ? `poll_started=${opts.pollStartedAt}` : null,
+    opts.pollCompletedAt ? `poll_completed=${opts.pollCompletedAt}` : null,
+    `eligible=${decision.eligible.length}`,
+    `blocked=${decision.blocked.length}`,
+    `health=${health}`,
+    `last=${last}`,
+    `action=${action}`,
+  ];
+
+  return parts.filter((part): part is string => part !== null).join(' ');
 }
 
 export async function executeMerge(
@@ -477,7 +498,7 @@ export async function executeMerge(
           try {
             deps.shellRunner(
               `git push origin --delete ${escapeShellArg(candidate.headBranch)}`,
-              { encoding: 'utf-8', cwd: options.repoDir },
+              { encoding: 'utf-8', cwd: options.repoDir, timeout: GIT_MUTATION_TIMEOUT_MS },
             );
           } catch (error) {
             console.warn(
@@ -570,6 +591,7 @@ async function withScratchWorktree<T>(
   const commonGitDir = String(shellRunner('git rev-parse --git-common-dir', {
     encoding: 'utf-8',
     cwd: repoDir,
+    timeout: GIT_COMMAND_TIMEOUT_MS,
   })).trim();
   const worktreePath = join(commonGitDir, 'wavemill-tend', String(prNumber));
 
@@ -578,7 +600,7 @@ async function withScratchWorktree<T>(
   // possibly-stale local ref.
   shellRunner(
     `git fetch origin ${escapeShellArg(prBranch)} 2>&1`,
-    { encoding: 'utf-8', cwd: repoDir },
+    { encoding: 'utf-8', cwd: repoDir, timeout: GIT_MUTATION_TIMEOUT_MS },
   );
 
   // Use --detach so this worktree gets a detached HEAD at the PR's remote
@@ -589,7 +611,7 @@ async function withScratchWorktree<T>(
   // push back to origin's <prBranch> ref by name (see rebaseAndPush).
   shellRunner(
     `git worktree add --detach ${escapeShellArg(worktreePath)} ${escapeShellArg(`origin/${prBranch}`)}`,
-    { encoding: 'utf-8', cwd: repoDir },
+    { encoding: 'utf-8', cwd: repoDir, timeout: GIT_MUTATION_TIMEOUT_MS },
   );
 
   try {
@@ -598,7 +620,7 @@ async function withScratchWorktree<T>(
     try {
       shellRunner(
         `git worktree remove --force ${escapeShellArg(worktreePath)}`,
-        { encoding: 'utf-8', cwd: repoDir },
+        { encoding: 'utf-8', cwd: repoDir, timeout: GIT_MUTATION_TIMEOUT_MS },
       );
     } catch {
       // A cleanup failure should not change the PR's merge outcome.
@@ -638,7 +660,7 @@ function rebaseAndPush(
 
   output.push(String(shellRunner(
     `git fetch origin ${escapeShellArg(integrationBranch)} 2>&1`,
-    { encoding: 'utf-8', cwd: worktreePath },
+    { encoding: 'utf-8', cwd: worktreePath, timeout: GIT_MUTATION_TIMEOUT_MS },
   )));
 
   // Capture the PR branch SHA before rebase for SHA-keyed force-with-lease
@@ -646,6 +668,7 @@ function rebaseAndPush(
   const prBranchSha = String(shellRunner(`git rev-parse ${escapeShellArg(prRemoteRef)}`, {
     encoding: 'utf-8',
     cwd: worktreePath,
+    timeout: GIT_COMMAND_TIMEOUT_MS,
   })).trim();
 
   const integrationRemoteRef = `origin/${integrationBranch}`;
@@ -657,12 +680,16 @@ function rebaseAndPush(
   try {
     output.push(String(shellRunner(
       `git rebase ${escapeShellArg(integrationRemoteRef)} 2>&1`,
-      { encoding: 'utf-8', cwd: worktreePath },
+      { encoding: 'utf-8', cwd: worktreePath, timeout: GIT_MUTATION_TIMEOUT_MS },
     )));
   } catch (error) {
     // Explicitly abort rebase on failure
     try {
-      shellRunner('git rebase --abort 2>&1', { encoding: 'utf-8', cwd: worktreePath });
+      shellRunner('git rebase --abort 2>&1', {
+        encoding: 'utf-8',
+        cwd: worktreePath,
+        timeout: GIT_COMMAND_TIMEOUT_MS,
+      });
     } catch {
       // Rebase abort failure is best-effort
     }
@@ -676,7 +703,7 @@ function rebaseAndPush(
   // depend on local branch ownership.
   output.push(String(shellRunner(
     `git push --force-with-lease=${escapeShellArg(prBranch)}:${escapeShellArg(prBranchSha)} origin HEAD:${escapeShellArg(prBranch)} 2>&1`,
-    { encoding: 'utf-8', cwd: worktreePath },
+    { encoding: 'utf-8', cwd: worktreePath, timeout: GIT_MUTATION_TIMEOUT_MS },
   )));
 
   return output.join('\n');
@@ -691,7 +718,7 @@ function isRemoteIntegrationAncestorOfPrHead(
   try {
     shellRunner(
       `git merge-base --is-ancestor ${escapeShellArg(integrationRemoteRef)} ${escapeShellArg(prBranchSha)}`,
-      { encoding: 'utf-8', cwd: worktreePath },
+      { encoding: 'utf-8', cwd: worktreePath, timeout: GIT_COMMAND_TIMEOUT_MS },
     );
     return true;
   } catch (error) {
@@ -839,7 +866,7 @@ function postFailureComment(
 ): void {
   shellRunner(
     `gh pr comment ${prNumber} --body ${escapeShellArg(body)}`,
-    { encoding: 'utf-8', cwd: repoDir },
+    { encoding: 'utf-8', cwd: repoDir, timeout: GH_COMMAND_TIMEOUT_MS },
   );
 }
 
@@ -860,7 +887,7 @@ async function mergeWithTransientRetry(
   try {
     for (let attempt = 1; attempt <= MERGE_RETRY_MAX_ATTEMPTS; attempt += 1) {
       try {
-        deps.shellRunner(command, { encoding: 'utf-8', cwd: repoDir });
+        deps.shellRunner(command, { encoding: 'utf-8', cwd: repoDir, timeout: MERGE_COMMAND_TIMEOUT_MS });
         return;
       } catch (error) {
         const output = outputFromError(error);
@@ -1014,7 +1041,10 @@ function stringField(value: Record<string, unknown>, key: string): string | null
 
 function mergeExecutionDeps(deps: Partial<MergeExecutionDeps> | undefined): MergeExecutionDeps {
   return {
-    shellRunner: (cmd, opts) => String(execShellCommand(cmd, opts)),
+    shellRunner: (cmd, opts) => String(execShellCommand(cmd, {
+      ...opts,
+      timeout: opts?.timeout ?? DEFAULT_EXTERNAL_COMMAND_TIMEOUT_MS,
+    })),
     readyChecker: defaultRunReadyCheck,
     healthChecker: defaultHealthChecker,
     acquireMerging: (prNumber) => {
@@ -1118,7 +1148,7 @@ function defaultLoserCleanup(candidate: ChallengeLoserCleanupCandidate, repoDir:
       `gh pr close ${candidate.loserPr} --comment ${escapeShellArg(
         `Closed: lost challenge comparison.\nWinner: #${candidate.winnerPr}\nEvidence: ${candidate.evidenceId}`,
       )}`,
-      { encoding: 'utf-8', cwd: repoDir },
+      { encoding: 'utf-8', cwd: repoDir, timeout: GH_COMMAND_TIMEOUT_MS },
     );
   } catch (error) {
     console.warn(
@@ -1388,6 +1418,7 @@ function resolveOwnerRepoFromRemote(repoDir: string): string | null {
   const remoteUrl = String(execShellCommand('git remote get-url origin', {
     encoding: 'utf-8',
     cwd: repoDir,
+    timeout: GIT_COMMAND_TIMEOUT_MS,
   })).trim();
   const match = remoteUrl.match(/github\.com[:/]([^/]+\/[^/.]+?)(?:\.git)?$/);
 
