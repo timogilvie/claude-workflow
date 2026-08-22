@@ -7,6 +7,7 @@ import {
   classifyTendLoopError,
   runTendLoop,
   tendLoopBackoffMs,
+  writeTendFailureState,
   writeTendHeartbeat,
   type TendLoopDeps,
 } from './tend-loop.ts';
@@ -34,7 +35,8 @@ function deps(overrides: Partial<TendLoopDeps> = {}): Partial<TendLoopDeps> & { 
     heartbeats,
     selectNextCandidate: async () => idleDecision(),
     executeMerge: async () => ({ status: 'merged', prNumber: 1, haltLoop: false }),
-    writeHeartbeat: async (_repoDir, health) => { heartbeats.push(health); },
+    writePollHeartbeat: async (_repoDir, health) => { heartbeats.push({ kind: 'success', ...health }); },
+    writeFailureState: async (_repoDir, health) => { heartbeats.push({ kind: 'failure', ...health }); },
     sleep: async (ms) => {
       sleeps.push(ms);
       if (ms === 60_000) {
@@ -67,6 +69,44 @@ describe('tendLoopBackoffMs', () => {
 });
 
 describe('runTendLoop', () => {
+  it('does not write a heartbeat before selectNextCandidate succeeds', async () => {
+    const d = deps({
+      selectNextCandidate: async () => {
+        throw new TypeError('stop before poll completion');
+      },
+    });
+
+    await assert.rejects(
+      runTendLoop({ repoDir: '/tmp/repo', renderer: renderer(), deps: d }),
+      TypeError,
+    );
+
+    assert.equal(d.heartbeats.length, 1);
+    assert.equal((d.heartbeats[0] as { kind: string }).kind, 'failure');
+    assert.equal((d.heartbeats[0] as { status: string }).status, 'unhealthy');
+    assert.equal((d.heartbeats[0] as { pollCompletedAt: string | null }).pollCompletedAt, null);
+  });
+
+  it('successful poll heartbeat includes iteration and poll timestamps', async () => {
+    const r = renderer();
+    const d = deps();
+
+    await assert.rejects(
+      runTendLoop({ repoDir: '/tmp/repo', renderer: r, deps: d }),
+      TypeError,
+    );
+
+    const heartbeat = d.heartbeats.find((entry) => (entry as { kind?: string }).kind === 'success') as {
+      iteration: number;
+      pollStartedAt: string;
+      pollCompletedAt: string;
+    };
+    assert.equal(heartbeat.iteration, 1);
+    assert.equal(heartbeat.pollStartedAt, '2026-08-18T12:00:00.000Z');
+    assert.equal(heartbeat.pollCompletedAt, '2026-08-18T12:00:00.000Z');
+    assert.match(r.lines[0], /^iter=1 poll_started=2026-08-18T12:00:00.000Z poll_completed=2026-08-18T12:00:00.000Z /);
+  });
+
   it('continues after a transient selection error and clears failure heartbeat on success', async () => {
     const r = renderer();
     let calls = 0;
@@ -85,8 +125,12 @@ describe('runTendLoop', () => {
 
     assert.deepEqual(d.sleeps, [30_000, 60_000]);
     assert.equal(r.lines.some((line) => line.includes('error=transient')), true);
-    assert.equal((d.heartbeats[1] as { failureCount: number }).failureCount, 1);
-    assert.equal((d.heartbeats.at(-1) as { failureCount: number }).failureCount, 0);
+    assert.equal((d.heartbeats[0] as { kind: string }).kind, 'failure');
+    assert.equal((d.heartbeats[0] as { failureCount: number }).failureCount, 1);
+    const successHeartbeat = d.heartbeats.find((entry) => (entry as { kind?: string }).kind === 'success') as {
+      failureCount: number;
+    };
+    assert.equal(successHeartbeat.failureCount, 0);
   });
 
   it('rejects terminal errors immediately', async () => {
@@ -143,16 +187,57 @@ describe('writeTendHeartbeat', () => {
         failureCount: 2,
         lastError: 'transient: HTTP 503',
         lastErrorAt: '2026-08-18T12:00:00Z',
+        iteration: 7,
+        pollStartedAt: '2026-08-18T11:59:59Z',
+        pollCompletedAt: '2026-08-18T12:00:00Z',
       });
       await writeTendHeartbeat(repoDir, '2026-08-18T12:01:00Z', {
         failureCount: 0,
         lastError: null,
         lastErrorAt: null,
+        iteration: 8,
+        pollStartedAt: '2026-08-18T12:00:59Z',
+        pollCompletedAt: '2026-08-18T12:01:00Z',
       });
       const parsed = JSON.parse(readFileSync(join(repoDir, '.wavemill', 'backstage-health.json'), 'utf-8'));
       assert.equal(parsed.services.tend.status, 'healthy');
       assert.equal(parsed.services.tend.failureCount, 0);
       assert.equal(parsed.services.tend.lastError, null);
+      assert.equal(parsed.services.tend.iteration, 8);
+      assert.equal(parsed.services.tend.lastSuccessfulPollAt, '2026-08-18T12:01:00Z');
+      assert.equal(parsed.restartAttemptCount, undefined);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('failure state preserves the last successful heartbeat', async () => {
+    const repoDir = mkdtempSync(join(tmpdir(), 'wavemill-tend-loop-'));
+    try {
+      mkdirSync(join(repoDir, '.wavemill'), { recursive: true });
+      await writeTendHeartbeat(repoDir, '2026-08-18T12:00:00Z', {
+        failureCount: 0,
+        lastError: null,
+        lastErrorAt: null,
+        iteration: 1,
+        pollStartedAt: '2026-08-18T11:59:59Z',
+        pollCompletedAt: '2026-08-18T12:00:00Z',
+      });
+      await writeTendFailureState(repoDir, '2026-08-18T12:02:00Z', {
+        status: 'degraded',
+        detail: 'backstage tend loop poll failed (transient)',
+        failureCount: 1,
+        lastError: 'transient: timeout',
+        lastErrorAt: '2026-08-18T12:02:00Z',
+        iteration: 2,
+        pollStartedAt: '2026-08-18T12:01:59Z',
+        pollCompletedAt: null,
+      });
+      const parsed = JSON.parse(readFileSync(join(repoDir, '.wavemill', 'backstage-health.json'), 'utf-8'));
+      assert.equal(parsed.services.tend.status, 'degraded');
+      assert.equal(parsed.services.tend.heartbeatAt, '2026-08-18T12:00:00Z');
+      assert.equal(parsed.services.tend.iteration, 2);
+      assert.equal(parsed.services.tend.pollCompletedAt, null);
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }

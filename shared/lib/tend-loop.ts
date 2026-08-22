@@ -21,7 +21,8 @@ export interface TendLoopExit {
 export interface TendLoopDeps {
   selectNextCandidate: typeof selectNextCandidate;
   executeMerge: typeof executeMerge;
-  writeHeartbeat: typeof writeTendHeartbeatBestEffort;
+  writePollHeartbeat: typeof writeTendPollHeartbeatBestEffort;
+  writeFailureState: typeof writeTendFailureStateBestEffort;
   sleep: (ms: number) => Promise<void>;
   now: () => Date;
   log: (line: string) => void;
@@ -56,6 +57,12 @@ const TERMINAL_ERROR_PATTERNS = [
   /was not found in eligible candidates/i,
 ];
 
+interface TendPollMetadata {
+  iteration: number;
+  pollStartedAt: string;
+  pollCompletedAt: string | null;
+}
+
 export function statusActionForResult(status: MergeExecutionResult['status'], prNumber: number): string {
   return status === 'merged' ? `merged-#${prNumber}` : `${status}-#${prNumber}`;
 }
@@ -69,28 +76,34 @@ export async function runTendLoop(options: TendLoopOptions): Promise<TendLoopExi
   let consecutiveUnknown = 0;
   let lastError: string | null = null;
   let lastErrorAt: string | null = null;
+  let iteration = 0;
 
   while (true) {
-    await deps.writeHeartbeat(options.repoDir, {
-      failureCount: consecutiveFailures,
-      lastError,
-      lastErrorAt,
-      timestamp: deps.now().toISOString(),
-    });
+    iteration += 1;
+    const pollStartedAt = deps.now().toISOString();
+    let pollCompletedAt: string | null = null;
 
     try {
       const decision = await deps.selectNextCandidate({ repoDir: options.repoDir });
+      pollCompletedAt = deps.now().toISOString();
+      const pollMetadata = { iteration, pollStartedAt, pollCompletedAt };
+
       if (decision.nextPR === null) {
-        options.renderer.write(formatStatusLine(decision, { action: 'idle', lastPR: lastMergedPR }));
+        options.renderer.write(formatStatusLine(decision, {
+          action: 'idle',
+          lastPR: lastMergedPR,
+          ...pollMetadata,
+        }));
         consecutiveFailures = 0;
         consecutiveUnknown = 0;
         lastError = null;
         lastErrorAt = null;
-        await deps.writeHeartbeat(options.repoDir, {
+        await deps.writePollHeartbeat(options.repoDir, {
           failureCount: consecutiveFailures,
           lastError,
           lastErrorAt,
-          timestamp: deps.now().toISOString(),
+          timestamp: pollCompletedAt,
+          ...pollMetadata,
         });
         await deps.sleep(intervalMs);
         continue;
@@ -104,7 +117,19 @@ export async function runTendLoop(options: TendLoopOptions): Promise<TendLoopExi
       options.renderer.write(formatStatusLine(decision, {
         action: `merging-#${candidate.number}`,
         lastPR: lastMergedPR,
+        ...pollMetadata,
       }));
+      consecutiveFailures = 0;
+      consecutiveUnknown = 0;
+      lastError = null;
+      lastErrorAt = null;
+      await deps.writePollHeartbeat(options.repoDir, {
+        failureCount: consecutiveFailures,
+        lastError,
+        lastErrorAt,
+        timestamp: pollCompletedAt,
+        ...pollMetadata,
+      });
 
       const result = await deps.executeMerge(candidate, { repoDir: options.repoDir });
       if (result.status === 'merged') {
@@ -114,18 +139,8 @@ export async function runTendLoop(options: TendLoopOptions): Promise<TendLoopExi
       options.renderer.write(formatStatusLine(decision, {
         action: statusActionForResult(result.status, result.prNumber),
         lastPR: lastMergedPR,
+        ...pollMetadata,
       }));
-
-      consecutiveFailures = 0;
-      consecutiveUnknown = 0;
-      lastError = null;
-      lastErrorAt = null;
-      await deps.writeHeartbeat(options.repoDir, {
-        failureCount: consecutiveFailures,
-        lastError,
-        lastErrorAt,
-        timestamp: deps.now().toISOString(),
-      });
 
       if (result.haltLoop) {
         options.renderer.finalize();
@@ -136,6 +151,17 @@ export async function runTendLoop(options: TendLoopOptions): Promise<TendLoopExi
     } catch (error) {
       const classification = classifyTendLoopError(error);
       if (classification === 'terminal') {
+        await deps.writeFailureState(options.repoDir, {
+          failureCount: consecutiveFailures + 1,
+          lastError: `terminal: ${truncateOneLine(errorMessage(error), 200)}`,
+          lastErrorAt: deps.now().toISOString(),
+          timestamp: deps.now().toISOString(),
+          iteration,
+          pollStartedAt,
+          pollCompletedAt,
+          status: 'unhealthy',
+          detail: 'backstage tend loop hit a terminal error',
+        });
         throw error;
       }
 
@@ -153,6 +179,9 @@ export async function runTendLoop(options: TendLoopOptions): Promise<TendLoopExi
           retryInMs: 0,
           lastPR: lastMergedPR,
           message: errorMessage(error),
+          iteration,
+          pollStartedAt,
+          pollCompletedAt,
         }));
         throw error;
       }
@@ -170,15 +199,23 @@ export async function runTendLoop(options: TendLoopOptions): Promise<TendLoopExi
         retryInMs,
         lastPR: lastMergedPR,
         message: errorMessage(error),
+        iteration,
+        pollStartedAt,
+        pollCompletedAt,
       }));
       if (classification === 'unknown') {
         deps.log(`tend: unknown loop error: ${errorStack(error)}`);
       }
-      await deps.writeHeartbeat(options.repoDir, {
+      await deps.writeFailureState(options.repoDir, {
         failureCount: consecutiveFailures,
         lastError,
         lastErrorAt,
         timestamp: deps.now().toISOString(),
+        iteration,
+        pollStartedAt,
+        pollCompletedAt,
+        status: classification === 'transient' ? 'degraded' : 'unhealthy',
+        detail: `backstage tend loop poll failed (${classification})`,
       });
       await deps.sleep(retryInMs);
     }
@@ -216,22 +253,36 @@ export function formatLoopErrorLine(options: {
   retryInMs: number;
   lastPR: number | null;
   message: string;
+  iteration?: number;
+  pollStartedAt?: string;
+  pollCompletedAt?: string | null;
 }): string {
   const retrySeconds = Math.ceil(options.retryInMs / 1000);
   const last = typeof options.lastPR === 'number' ? `#${options.lastPR}` : 'none';
-  return [
+  const parts = [
+    typeof options.iteration === 'number' ? `iter=${options.iteration}` : null,
+    options.pollStartedAt ? `poll_started=${options.pollStartedAt}` : null,
+    options.pollCompletedAt ? `poll_completed=${options.pollCompletedAt}` : null,
     `error=${options.classification}`,
     `consecutive=${options.consecutiveFailures}`,
     `retry_in=${retrySeconds}s`,
     `last=${last}`,
     `detail=${truncateOneLine(options.message, 200)}`,
-  ].join(' ');
+  ];
+  return parts.filter((part): part is string => part !== null).join(' ');
 }
 
 export async function writeTendHeartbeat(
   repoDir: string,
   timestamp: string,
-  health: { failureCount: number; lastError: string | null; lastErrorAt: string | null },
+  health: {
+    failureCount: number;
+    lastError: string | null;
+    lastErrorAt: string | null;
+    iteration?: number;
+    pollStartedAt?: string;
+    pollCompletedAt?: string | null;
+  },
 ): Promise<void> {
   const healthPath = join(repoDir, '.wavemill', 'backstage-health.json');
   await mutateJsonState<BackstageHealthFile>(
@@ -245,19 +296,19 @@ export async function writeTendHeartbeat(
         status: 'healthy',
         detail: 'backstage tend loop is running',
         heartbeatAt: timestamp,
+        lastSuccessfulPollAt: timestamp,
         updatedAt: timestamp,
-        restartAttemptCount: 0,
-        lastRestartAttemptAt: null,
         repoDir,
         failureCount: health.failureCount,
         lastError: health.lastError,
         lastErrorAt: health.lastErrorAt,
+        iteration: health.iteration,
+        pollStartedAt: health.pollStartedAt,
+        pollCompletedAt: health.pollCompletedAt ?? timestamp,
       };
       next.updatedAt = timestamp;
       next.status = 'healthy';
       next.detail = 'backstage tend loop is running';
-      next.restartAttemptCount = 0;
-      next.lastRestartAttemptAt = null;
       next.services = services;
       return next;
     },
@@ -265,13 +316,60 @@ export async function writeTendHeartbeat(
   );
 }
 
-export async function writeTendHeartbeatBestEffort(
+export async function writeTendFailureState(
+  repoDir: string,
+  timestamp: string,
+  health: {
+    status: 'degraded' | 'unhealthy';
+    detail: string;
+    failureCount: number;
+    lastError: string | null;
+    lastErrorAt: string | null;
+    iteration?: number;
+    pollStartedAt?: string;
+    pollCompletedAt?: string | null;
+  },
+): Promise<void> {
+  const healthPath = join(repoDir, '.wavemill', 'backstage-health.json');
+  await mutateJsonState<BackstageHealthFile>(
+    healthPath,
+    (current) => {
+      const next = { ...(current ?? {}) };
+      const services = { ...(next.services ?? {}) };
+      const existing = { ...(services.tend ?? {}) };
+      services.tend = {
+        ...existing,
+        status: health.status,
+        detail: health.detail,
+        updatedAt: timestamp,
+        repoDir,
+        failureCount: health.failureCount,
+        lastError: health.lastError,
+        lastErrorAt: health.lastErrorAt,
+        iteration: health.iteration,
+        pollStartedAt: health.pollStartedAt,
+        pollCompletedAt: health.pollCompletedAt ?? null,
+      };
+      next.updatedAt = timestamp;
+      next.status = health.status;
+      next.detail = health.detail;
+      next.services = services;
+      return next;
+    },
+    { createIfMissing: true, initial: {} },
+  );
+}
+
+export async function writeTendPollHeartbeatBestEffort(
   repoDir: string,
   options: {
     failureCount?: number;
     lastError?: string | null;
     lastErrorAt?: string | null;
     timestamp?: string;
+    iteration?: number;
+    pollStartedAt?: string;
+    pollCompletedAt?: string | null;
   } = {},
 ): Promise<void> {
   try {
@@ -282,6 +380,9 @@ export async function writeTendHeartbeatBestEffort(
         failureCount: options.failureCount ?? 0,
         lastError: options.lastError ?? null,
         lastErrorAt: options.lastErrorAt ?? null,
+        iteration: options.iteration,
+        pollStartedAt: options.pollStartedAt,
+        pollCompletedAt: options.pollCompletedAt,
       },
     );
   } catch (error) {
@@ -289,11 +390,46 @@ export async function writeTendHeartbeatBestEffort(
   }
 }
 
+export async function writeTendFailureStateBestEffort(
+  repoDir: string,
+  options: {
+    status?: 'degraded' | 'unhealthy';
+    detail?: string;
+    failureCount?: number;
+    lastError?: string | null;
+    lastErrorAt?: string | null;
+    timestamp?: string;
+    iteration?: number;
+    pollStartedAt?: string;
+    pollCompletedAt?: string | null;
+  } = {},
+): Promise<void> {
+  try {
+    await writeTendFailureState(
+      repoDir,
+      options.timestamp ?? new Date().toISOString(),
+      {
+        status: options.status ?? 'unhealthy',
+        detail: options.detail ?? 'backstage tend loop poll failed',
+        failureCount: options.failureCount ?? 0,
+        lastError: options.lastError ?? null,
+        lastErrorAt: options.lastErrorAt ?? null,
+        iteration: options.iteration,
+        pollStartedAt: options.pollStartedAt,
+        pollCompletedAt: options.pollCompletedAt,
+      },
+    );
+  } catch (error) {
+    console.error(`tend: failed to write failure state: ${errorMessage(error)}`);
+  }
+}
+
 function tendLoopDeps(overrides: Partial<TendLoopDeps> | undefined): TendLoopDeps {
   return {
     selectNextCandidate,
     executeMerge,
-    writeHeartbeat: writeTendHeartbeatBestEffort,
+    writePollHeartbeat: writeTendPollHeartbeatBestEffort,
+    writeFailureState: writeTendFailureStateBestEffort,
     sleep,
     now: () => new Date(),
     log: (line) => console.error(line),
