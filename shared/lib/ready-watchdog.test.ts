@@ -241,6 +241,31 @@ test('a long-idle merge candidate reports missing tend loop when backstage execu
   assert.doesNotMatch(classification.detail, /merge lane appears stalled/i);
 });
 
+test('a long-idle merge candidate reports stalled tend heartbeat', () => {
+  const classification = classifyReadyTask(
+    makeSnapshot({
+      idleMinutes: 35,
+      readyArtifacts: { type: 'ready', verdict: 'pass', queueState: 'merge-candidate' },
+      backstageHealth: {
+        updatedAt: '2026-05-05T12:20:00.000Z',
+        status: 'stalled',
+        detail: 'tend heartbeat is stale (420s old)',
+        restartAttemptCount: 1,
+        lastRestartAttemptAt: '2026-05-05T12:19:00.000Z',
+        executorPaneId: '%9',
+      },
+    }),
+    makeTruth(),
+    new Date('2026-05-05T12:30:00.000Z'),
+    WATCHDOG_CONFIG,
+  );
+
+  assert.equal(classification.kind, 'needs-user');
+  assert.match(classification.detail, /stalled tend loop/i);
+  assert.match(classification.detail, /heartbeat is stale/i);
+  assert.doesNotMatch(classification.detail, /merge lane appears stalled/i);
+});
+
 test('a completed-ready PR (queueState=ready) with clean green classifies as waiting-on-merge-lane', () => {
   const classification = classifyReadyTask(
     makeSnapshot({
@@ -2355,6 +2380,49 @@ test('tick reports missing tend loop instead of generic merge-lane stall', async
     assert.equal(result.findings.length, 1);
     assert.equal(result.findings[0].classification, 'needs-user');
     assert.match(result.findings[0].detail, /missing tend loop/i);
+    assert.doesNotMatch(result.findings[0].detail, /merge lane appears stalled/i);
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('tick reports stalled tend heartbeat instead of generic merge-lane stall', async () => {
+  const { repoDir, stateFile, featureDir } = setupReadyTask('HOK-2856', 1191);
+  writeFileSync(path.join(featureDir, '.ready-result.json'), JSON.stringify({
+    stage: 'ready',
+    status: 'completed',
+    startedAt: '2030-06-23T10:00:00.000Z',
+    finishedAt: '2030-06-23T11:00:00.000Z',
+    agent: 'claude',
+    model: 'claude-sonnet-4-6',
+    notes: null,
+    artifacts: { type: 'ready', verdict: 'pass', prNumber: 1191, queueState: 'merge-candidate' },
+  }, null, 2));
+  writeFileSync(path.join(repoDir, '.wavemill', 'backstage-health.json'), JSON.stringify({
+    updatedAt: '2030-06-23T12:22:00.000Z',
+    status: 'stalled',
+    detail: 'tend heartbeat is stale (420s old)',
+    restartAttemptCount: 1,
+    lastRestartAttemptAt: '2030-06-23T12:22:00.000Z',
+    executorPaneId: '%9',
+  }, null, 2));
+
+  const baseDeps = {
+    fetchGitHubTruth: async () => makeTruth({ mergeStateStatus: 'CLEAN' }),
+    getCurrentHead: async () => 'head-1',
+    getWorktreeMergeState: async () => ({
+      mergeHead: null, unmergedPaths: [], stagedPaths: [], unstagedPaths: [], untrackedPaths: [], rawStatus: [],
+    }),
+    isTaskPaneActive: async () => null,
+    now: () => new Date('2030-06-23T12:23:00.000Z'),
+  };
+
+  try {
+    const result = await tickReadyWatchdog({ repoDir, stateFile, config: WATCHDOG_CONFIG, deps: baseDeps });
+    assert.equal(result.findings.length, 1);
+    assert.equal(result.findings[0].classification, 'needs-user');
+    assert.match(result.findings[0].detail, /stalled tend loop/i);
+    assert.match(result.findings[0].detail, /heartbeat is stale/i);
     assert.doesNotMatch(result.findings[0].detail, /merge lane appears stalled/i);
   } finally {
     await rm(repoDir, { recursive: true, force: true });

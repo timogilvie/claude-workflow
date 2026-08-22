@@ -1142,11 +1142,20 @@ export function classifyReadyTask(
       const escalateMinutes = normalizedConfig.thresholdMinutes * MERGE_LANE_STALL_ESCALATE_MULTIPLIER;
       if (snapshot.idleMinutes >= escalateMinutes) {
         const backstageHealth = snapshot.backstageHealth;
-        if (backstageHealth?.status === 'missing-tend-loop' || backstageHealth?.status === 'needs-user') {
-          const backstageDetail = backstageHealth.detail ?? 'Backstage tend loop executor is missing.';
+        if (
+          backstageHealth?.status === 'missing-tend-loop'
+          || backstageHealth?.status === 'stalled'
+          || backstageHealth?.status === 'needs-user'
+        ) {
+          const stalled = backstageHealth.status === 'stalled';
+          const backstageDetail = backstageHealth.detail ?? (
+            stalled
+              ? 'Backstage tend loop heartbeat is stale.'
+              : 'Backstage tend loop executor is missing.'
+          );
           return {
             kind: 'needs-user',
-            detail: `Missing tend loop: ${backstageDetail} PR #${snapshot.prNumber} has waited ${snapshot.idleMinutes}m for its merge turn without an active merge executor.`,
+            detail: `${stalled ? 'Stalled tend loop' : 'Missing tend loop'}: ${backstageDetail} PR #${snapshot.prNumber} has waited ${snapshot.idleMinutes}m for its merge turn without an active merge executor.`,
           };
         }
         return {
