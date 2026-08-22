@@ -108,6 +108,10 @@ export interface ReadyArtifacts {
   remediationFailures?: string[];
   /** Main branch HEAD SHA at the time readiness passed; used to detect staleness. */
   readyBaseSha?: string;
+  readyHeadSha?: string;
+  ciConclusion?: string;
+  requiredContexts?: string[];
+  requiredSource?: string;
   queueState?: 'ready' | 'ready-stale' | 'merge-candidate';
   staleAt?: string;
   staleBaseSha?: string;
@@ -117,6 +121,13 @@ export interface ReadyArtifacts {
   mergeRetryInProgressUntil?: string;
   candidateSkippedAt?: string;
   candidateSkipReason?: string;
+  lastCiConclusion?: string;
+  lastCiHeadSha?: string;
+  lastCiObservedAt?: string;
+  lastCiSummary?: string;
+  ciInvalidatedAt?: string;
+  ciInvalidationReason?: string;
+  ciFailingChecks?: string[];
   changedFiles?: string[];
   unblocksCount?: number;
   transientMergeabilityAttempts?: number;

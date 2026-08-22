@@ -1,4 +1,15 @@
 export type MergeQueueState = 'ready' | 'ready-stale' | 'merge-candidate';
+export type MergeQueueCiConclusion = 'pass' | 'fail' | 'pending' | 'unknown' | 'none';
+
+export interface MergeQueueCiState {
+  conclusion: MergeQueueCiConclusion;
+  headSha?: string;
+  mergeStateStatus?: string;
+  observedAt?: string;
+  failing?: string[];
+  observed?: number;
+  required?: number;
+}
 
 export interface MergeQueuePr {
   issue: string;
@@ -16,6 +27,7 @@ export interface MergeQueuePr {
   candidateSkippedAt?: string;
   workflowStatus?: string;
   prState?: string;
+  ci?: MergeQueueCiState;
 }
 
 export const TERMINAL_WORKFLOW_STATUSES = new Set(['merged', 'completed-external', 'aborted']);
@@ -36,6 +48,12 @@ export function isSelectableMergeQueuePr(pr: Pick<MergeQueuePr, 'workflowStatus'
   return true;
 }
 
+export function isCiGreen(pr: Pick<MergeQueuePr, 'ci'>): boolean {
+  if (pr.ci?.conclusion !== 'pass') return false;
+  const mergeStateStatus = pr.ci.mergeStateStatus ?? '';
+  return !['BLOCKED', 'DIRTY', 'UNSTABLE'].includes(mergeStateStatus);
+}
+
 export interface MergeQueueConfigResolved {
   enabled: boolean;
   maxConcurrentCandidates: number;
@@ -47,6 +65,7 @@ export interface MergeQueueConfigResolved {
 export interface MergeQueueTickPlan {
   stuckIssues: string[];
   selectedIssues: string[];
+  ciBlockedIssues: string[];
 }
 
 function timestampMs(value?: string): number {
@@ -139,11 +158,16 @@ export function selectMergeCandidates(options: {
   config: MergeQueueConfigResolved;
 }): MergeQueuePr[] {
   const { readyPrs, activeCandidates, now, config } = options;
-  const selected = activeCandidates.filter(isSelectableMergeQueuePr).sort(comparePriority).slice(0, config.maxConcurrentCandidates);
+  const selected = activeCandidates
+    .filter(isSelectableMergeQueuePr)
+    .filter(isCiGreen)
+    .sort(comparePriority)
+    .slice(0, config.maxConcurrentCandidates);
   const selectedIssues = new Set(selected.map((pr) => pr.issue));
 
   const eligible = readyPrs
     .filter(isSelectableMergeQueuePr)
+    .filter(isCiGreen)
     .filter((pr) => !selectedIssues.has(pr.issue))
     .filter((pr) => !coolingDown(pr, now, config))
     .sort(comparePriority);
@@ -208,13 +232,19 @@ export function planMergeQueueTick(options: {
 }): MergeQueueTickPlan {
   const { readyPrs, now, config } = options;
   const selectablePrs = readyPrs.filter(isSelectableMergeQueuePr);
+  const ciBlockedIssues = selectablePrs
+    .filter((pr) => pr.queueState === 'merge-candidate')
+    .filter((pr) => pr.ci?.conclusion === 'fail')
+    .map((pr) => pr.issue);
   const stuckIssues = selectablePrs
     .filter((pr) => pr.queueState === 'merge-candidate')
+    .filter((pr) => !ciBlockedIssues.includes(pr.issue))
     .filter((pr) => isCandidateStuck(pr, now, config))
     .map((pr) => pr.issue);
 
   const activeCandidates = selectablePrs
     .filter((pr) => pr.queueState === 'merge-candidate')
+    .filter((pr) => !ciBlockedIssues.includes(pr.issue))
     .filter((pr) => !stuckIssues.includes(pr.issue));
   const eligibleReadyPrs = selectablePrs.filter((pr) => !stuckIssues.includes(pr.issue));
 
@@ -225,5 +255,5 @@ export function planMergeQueueTick(options: {
     config,
   }).map((pr) => pr.issue);
 
-  return { stuckIssues, selectedIssues };
+  return { stuckIssues, selectedIssues, ciBlockedIssues };
 }

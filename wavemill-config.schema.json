@@ -1351,6 +1351,11 @@
                     "default": [],
                     "description": "Checks that must pass for merge approval (subset of checks). Required checks that skip are non-blocking warnings."
                 },
+                "requireCiChecks": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Require at least one reported CI check before ready can pass. Set false only for repositories with no CI."
+                },
                 "migrationKind": {
                     "type": "string",
                     "enum": [

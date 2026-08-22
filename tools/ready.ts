@@ -3,11 +3,12 @@
 import { getIntegrationReadyPolicy } from '../shared/lib/config.ts';
 import { getPullRequest } from '../shared/lib/github.ts';
 import { getIssueCompletionState } from '../shared/lib/linear.ts';
-import { evaluateReady, type ReadyVerdict } from '../shared/lib/ready-engine.ts';
+import { evaluateReady, type CheckReadResult, type ReadyVerdict } from '../shared/lib/ready-engine.ts';
 import { runTool } from '../shared/lib/tool-runner.ts';
-import { checkMergeConflicts, runReadyStage, type ReadyCheck, type ReadyResult } from '../shared/lib/ready-stage.ts';
+import { checkMergeConflicts, ciStatusToReadyCheck, runReadyStage, type ReadyCheck, type ReadyResult } from '../shared/lib/ready-stage.ts';
 import { readChallengeComparisons } from '../shared/lib/challenge-comparison.ts';
 import { writePreflightDiagnostic } from '../shared/lib/ready-diagnostics.ts';
+import { fetchPrCiStatus, type PrCiStatus } from '../shared/lib/pr-ci-status.ts';
 import path from 'node:path';
 
 async function maybeWriteReadyDiagnostic(repoDir: string, diagnostic: {
@@ -74,9 +75,25 @@ runTool({
     const readyPolicy = getIntegrationReadyPolicy(repoDir);
     let verdict: ReadyVerdict;
     let output: ReadyResult;
+    let ciStatus: PrCiStatus | undefined;
 
     if (readyPolicy.enabled) {
       const pr = getPullRequest(prNumber);
+      ciStatus = await fetchPrCiStatus(prNumber, repoDir, {}, {
+        baseBranch: pr.baseRefName,
+      });
+      const requiredCheckRead: CheckReadResult = ciStatus.conclusion === 'unknown'
+        ? {
+            ok: false,
+            reason: ciStatus.readError?.reason ?? 'GitHub check status unavailable',
+            errorType: ciStatus.readError?.errorType ?? 'unknown',
+          }
+        : {
+            ok: true,
+            checks: ciStatus.checks,
+            requiredContexts: ciStatus.requiredContexts,
+            requiredSource: ciStatus.requiredSource,
+          };
       try {
         verdict = await evaluateReady({
           pr: {
@@ -115,6 +132,7 @@ runTool({
             }
           },
           readChallengeComparisons,
+          requiredCheckRead,
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -132,10 +150,13 @@ runTool({
       output = {
         prNumber,
         verdict: verdict.status,
-        checks: buildPolicyChecks(verdict),
+        checks: [ciStatusToReadyCheck(ciStatus), ...buildPolicyChecks(verdict)],
         summary: verdict.reasons[0] ?? summarizeVerdict(verdict.status),
         timestamp: new Date().toISOString(),
         mergeConflict: await checkMergeConflicts(prNumber, repoDir),
+        headSha: ciStatus.headSha,
+        ciConclusion: ciStatus.conclusion,
+        mergeStateStatus: ciStatus.mergeStateStatus,
       };
     } else {
       try {

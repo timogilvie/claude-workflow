@@ -550,6 +550,7 @@ export interface QuotaConfig {
 export interface ReadyConfig {
   checks?: string[];
   requiredChecks?: string[];
+  requireCiChecks?: boolean;
   migrationKind?: 'alembic' | 'sql' | 'none';
   migrationPatterns?: string[];
   migrationChecks?: ReadyMigrationChecksConfig;
@@ -1483,6 +1484,7 @@ export function getReadyConfig(repoDir?: string): ReadyConfig {
   return {
     checks: config.ready?.checks ?? [],
     requiredChecks: config.ready?.requiredChecks ?? [],
+    requireCiChecks: config.ready?.requireCiChecks ?? true,
     migrationKind: config.ready?.migrationKind,
     migrationPatterns: config.ready?.migrationPatterns ?? [...DEFAULT_READY_MIGRATION_PATTERNS],
     migrationChecks: getMigrationChecksConfig(repoDir),
