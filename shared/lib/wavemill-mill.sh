@@ -16047,7 +16047,7 @@ classify_backstage_observer_health() {
   local pane_id pane_title pane_dead _pane_cmd _start_cmd
 
   if [[ -z "$pane_details" ]]; then
-    printf 'backstage-missing\tbackstage window is unavailable\t0\t\t0\n'
+    printf 'backstage-missing\tbackstage window is unavailable\t0\t\t\t0\n'
     return 0
   fi
 
@@ -16061,7 +16061,7 @@ classify_backstage_observer_health() {
   done <<< "$pane_details"
 
   if (( observer_count == 0 )); then
-    printf 'missing-observer-loop\tbackstage window is missing the %s pane\t%s\t\t0\n' "$WAVEMILL_BACKSTAGE_OBSERVER_PANE_TITLE" "$pane_count"
+    printf 'missing-observer-loop\tbackstage window is missing the %s pane\t%s\t\t\t0\n' "$WAVEMILL_BACKSTAGE_OBSERVER_PANE_TITLE" "$pane_count"
     return 0
   fi
 
