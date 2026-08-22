@@ -2016,7 +2016,9 @@
             "cosmetic_only",
             "functional_bug",
             "multiple_bugs",
-            "heavy_intervention"
+            "heavy_intervention",
+              "unverified_prediction",
+              "vacuous_safety_gate"
           ],
           "description": "Which scoring boundary was the binding constraint on the final score."
         }

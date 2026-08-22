@@ -1253,6 +1253,24 @@ describe('eval-record-builder', () => {
       expect(baseRecord.rubric_provenance).toBe('judge');
     });
 
+    it('drops a non-string determinative_boundary before persistence (HOK-2844)', () => {
+      // A judge emitting `null` (or any non-string) used to slip past the
+      // string-only guard and fail write-time schema validation, discarding
+      // the entire eval record.
+      for (const invalid of [null, 42, ['a'], { x: 1 }]) {
+        const record = { ...baseRecord } as EvalRecord;
+        attachRubricEval(record, {
+          ...validRubricEval,
+          determinative_boundary: invalid as unknown as RubricEval['determinative_boundary'],
+        });
+        assert.equal(record.rubricEval?.determinative_boundary, undefined);
+        assert.equal(
+          Object.prototype.hasOwnProperty.call(record.rubricEval ?? {}, 'determinative_boundary'),
+          false,
+        );
+      }
+    });
+
     it('drops an invalid optional determinative_boundary before persistence', () => {
       attachRubricEval(baseRecord, {
         ...validRubricEval,
