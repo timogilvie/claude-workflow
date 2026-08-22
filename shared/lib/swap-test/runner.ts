@@ -192,12 +192,14 @@ export async function runSwapTest(options: SwapTestRunOptions): Promise<SwapTest
   const concurrency = Math.max(1, Math.min(8, options.concurrency ?? 2));
 
   async function worker(): Promise<void> {
-    while (cursor < tasks.length) {
+    while (true) {
       if (options.maxCostUsd !== undefined && costUsd >= options.maxCostUsd) {
         stoppedForCost = true;
         return;
       }
-      const task = tasks[cursor++];
+      const index = cursor++;
+      if (index >= tasks.length) break;
+      const task = tasks[index];
       const pair = readCorpusPair(options.evalsDir, task.pairId);
       const started = Date.now();
       let row: SwapTestResultRow;
