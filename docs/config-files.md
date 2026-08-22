@@ -72,6 +72,35 @@ The dedicated Backstage Observer pane is opt-in and only runs when both
   current service writes only redacted heartbeat and finding counts to
   `.wavemill/backstage-health.json`.
 
+### Harness Retention Replay
+
+`harness.retention` controls the fixed held-out replay suite used to detect
+harness regressions. The tolerance default is `1`, so a candidate may introduce
+at most one baseline-pass to candidate-fail regression before enforce mode
+blocks.
+
+```json
+{
+  "harness": {
+    "retention": {
+      "enabled": true,
+      "mode": "shadow",
+      "tolerance": 1,
+      "suitePath": "shared/fixtures/harness-replay/harness-retention-v1/manifest.json",
+      "reportDir": ".wavemill/harness-replay/reports"
+    }
+  }
+}
+```
+
+Use `shadow` for the mandatory two-week rollout on `auto/integration`; it
+retains reports and blocks nothing. Use `enforce` only after publishing the
+shadow rejection rate. Enforce mode fails closed when `D` exceeds tolerance or
+when the suite/baseline evidence is invalid.
+
+See `docs/harness-retention-replay.md` for suite ownership, hold-out rules,
+probe requirements, and refresh policy.
+
 ### Challenge Winner Handling
 
 `challenge.autoMergeWinner` controls what tend does after a decisive challenge

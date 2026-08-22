@@ -196,6 +196,20 @@ export interface EvalContextUpdatesConfig {
   maxRetries?: number;
 }
 
+export interface HarnessRetentionConfig {
+  enabled?: boolean;
+  mode?: 'shadow' | 'enforce';
+  tolerance?: number;
+  suitePath?: string;
+  reportDir?: string;
+  baselineHarnessId?: string;
+  candidateHarnessId?: string;
+}
+
+export interface HarnessConfig {
+  retention?: HarnessRetentionConfig;
+}
+
 export interface DifficultyClassifierConfig {
   enabled?: boolean;
   classifierModel?: string;
@@ -745,6 +759,7 @@ export interface WavemillConfig {
   projectContext?: ProjectContextConfig;
   eval?: EvalConfig;
   evalContextUpdates?: EvalContextUpdatesConfig;
+  harness?: HarnessConfig;
   autoEval?: boolean;
   hokusai?: HokusaiConfig;
   router?: RouterConfig;
@@ -1459,6 +1474,19 @@ export function getEvalContextUpdatesConfig(repoDir?: string): Required<EvalCont
     enabled: config.enabled ?? true,
     timeoutSeconds: config.timeoutSeconds ?? 60,
     maxRetries: config.maxRetries ?? 0,
+  };
+}
+
+export function getHarnessRetentionConfig(repoDir?: string): Required<HarnessRetentionConfig> {
+  const config = loadWavemillConfig(repoDir).harness?.retention ?? {};
+  return {
+    enabled: config.enabled ?? false,
+    mode: config.mode ?? 'shadow',
+    tolerance: config.tolerance ?? 1,
+    suitePath: config.suitePath ?? 'shared/fixtures/harness-replay/harness-retention-v1/manifest.json',
+    reportDir: config.reportDir ?? '.wavemill/harness-replay/reports',
+    baselineHarnessId: config.baselineHarnessId ?? process.env.WAVEMILL_BASELINE_HARNESS_ID ?? '',
+    candidateHarnessId: config.candidateHarnessId ?? process.env.WAVEMILL_CANDIDATE_HARNESS_ID ?? process.env.WAVEMILL_HARNESS_ID ?? '',
   };
 }
 

@@ -726,6 +726,60 @@
                 }
             }
         },
+        "harness": {
+            "type": "object",
+            "description": "Harness regression replay settings.",
+            "properties": {
+                "retention": {
+                    "type": "object",
+                    "description": "Fixed held-out replay gate for detecting harness regressions before memory rewrites or CI enforcement.",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "When true, run the fixed harness replay suite. Defaults off until shadow rollout is explicitly enabled."
+                        },
+                        "mode": {
+                            "type": "string",
+                            "enum": [
+                                "shadow",
+                                "enforce"
+                            ],
+                            "default": "shadow",
+                            "description": "shadow reports D without blocking; enforce fails closed when D exceeds tolerance or replay evidence is invalid."
+                        },
+                        "tolerance": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "default": 1,
+                            "description": "Maximum allowed D, where D is baseline-passing cases that fail under the candidate harness. Defaults to 1."
+                        },
+                        "suitePath": {
+                            "type": "string",
+                            "default": "shared/fixtures/harness-replay/harness-retention-v1/manifest.json",
+                            "description": "Path to the committed held-out replay suite manifest, relative to the repo root unless absolute."
+                        },
+                        "reportDir": {
+                            "type": "string",
+                            "default": ".wavemill/harness-replay/reports",
+                            "description": "Directory for retained harness replay reports, relative to the repo root unless absolute."
+                        },
+                        "baselineHarnessId": {
+                            "type": "string",
+                            "default": "",
+                            "description": "Deployed baseline harness ID. May also be supplied by WAVEMILL_BASELINE_HARNESS_ID."
+                        },
+                        "candidateHarnessId": {
+                            "type": "string",
+                            "default": "",
+                            "description": "Candidate harness ID. May also be supplied by WAVEMILL_CANDIDATE_HARNESS_ID or WAVEMILL_HARNESS_ID."
+                        }
+                    },
+                    "additionalProperties": false
+                }
+            },
+            "additionalProperties": false
+        },
         "evalContextUpdates": {
             "type": "object",
             "description": "Best-effort post-eval project context and subsystem update settings.",

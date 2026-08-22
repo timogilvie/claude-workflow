@@ -190,6 +190,15 @@
       "selfReviewBlocker": 0.2
     }
   },
+  "harness": {
+    "retention": {
+      "enabled": false,
+      "mode": "shadow",
+      "tolerance": 1,
+      "suitePath": "shared/fixtures/harness-replay/harness-retention-v1/manifest.json",
+      "reportDir": ".wavemill/harness-replay/reports"
+    }
+  },
   "autoEval": true,
   "hokusai": {
     "dataSubmission": {
@@ -491,7 +500,8 @@
       "Shell and Unit Tests",
       "Check Lifecycle Paths",
       "Lifecycle Integration Tests",
-      "OpenRouter Alias Audit"
+      "OpenRouter Alias Audit",
+      "Harness Retention Shadow"
     ]
   },
   "promotion": {
