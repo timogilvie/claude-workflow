@@ -19,6 +19,7 @@ import {
   resolveChallengeSideExecutionProvenance,
   validateChallengeExecutionProvenance,
   type ChallengeComparison,
+  type ChallengeDiffIdentity,
   type ChallengeRoutingMeta,
 } from './challenge-comparison.ts';
 import { appendChallengeRecordVoid } from './challenge-record-void.ts';
@@ -45,6 +46,8 @@ function makeRecord(overrides?: Partial<ChallengeComparison>): ChallengeComparis
     challengerModel: 'claude-opus-4-6',
     primaryPrUrl: 'https://github.com/org/repo/pull/1',
     challengerPrUrl: 'https://github.com/org/repo/pull/2',
+    primaryHarnessId: 'a'.repeat(64),
+    challengerHarnessId: 'b'.repeat(64),
     primaryEvalScore: 0.8,
     challengerEvalScore: 0.9,
     winner: 'challenger',
@@ -62,6 +65,15 @@ function makeRecord(overrides?: Partial<ChallengeComparison>): ChallengeComparis
   };
 }
 
+function makeDiffIdentity(label: string): ChallengeDiffIdentity {
+  return {
+    head_sha: `${label}-head`,
+    merge_sha: `${label}-merge`,
+    files_touched: [`src/${label}.ts`],
+    line_ranges: [{ file: `src/${label}.ts`, start: 3, end: 5 }],
+  };
+}
+
 console.log('\n--- Challenge Comparison Persistence Tests ---\n');
 
 test('appendChallengeComparison writes a record that can be read back', () => {
@@ -72,6 +84,43 @@ test('appendChallengeComparison writes a record that can be read back', () => {
     assert.equal(records.length, 1);
     assert.equal(records[0].challengePairId, 'HOK-970');
     assert.equal(records[0].winner, 'challenger');
+    assert.equal(records[0].primaryHarnessId, 'a'.repeat(64));
+    assert.equal(records[0].challengerHarnessId, 'b'.repeat(64));
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('appendChallengeComparison round-trips judge provenance, cost, and criterion rationales', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'challenge-comparison-test-'));
+  try {
+    appendChallengeComparison(makeRecord({
+      judge_model: 'claude-opus-4-7',
+      judge_prompt_hash: 'c'.repeat(64),
+      primary_cost_usd: 0,
+      challenger_cost_usd: 1.25,
+      criterionRationales: {
+        completeness: { rationale: 'Challenger finished more of the task.' },
+        correctness: { rationale: 'Challenger has fewer behavioral bugs.' },
+        code_quality: { rationale: 'Challenger keeps the implementation simpler.' },
+        intervention_impact: { rationale: 'Both required similar intervention.' },
+        autonomy: { rationale: 'Challenger needed less follow-up.' },
+      },
+    }), tmp);
+
+    const [record] = readChallengeComparisons(tmp);
+    assert.equal(record.judge_model, 'claude-opus-4-7');
+    assert.equal(record.judge_prompt_hash, 'c'.repeat(64));
+    assert.equal(record.primary_cost_usd, 0);
+    assert.equal(record.challenger_cost_usd, 1.25);
+    assert.deepEqual(Object.keys(record.criterionRationales ?? {}).sort(), [
+      'autonomy',
+      'code_quality',
+      'completeness',
+      'correctness',
+      'intervention_impact',
+    ]);
+    assert.equal(record.criterionRationales?.correctness?.rationale, 'Challenger has fewer behavioral bugs.');
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
@@ -473,6 +522,8 @@ test('buildInvalidChallengeComparison omits winner and cleanup policy', () => {
     challengerModel: 'glm-5.2',
     primaryPrUrl: 'https://github.com/org/repo/pull/1',
     challengerPrUrl: 'https://github.com/org/repo/pull/2',
+    primaryHarnessId: 'c'.repeat(64),
+    challengerHarnessId: 'd'.repeat(64),
     primaryEvalScore: 0.8,
     challengerEvalScore: 0.8,
     reason: 'stage_override_lost',
@@ -485,6 +536,8 @@ test('buildInvalidChallengeComparison omits winner and cleanup policy', () => {
   assert.equal(record.winner, undefined);
   assert.equal(record.winnerModel, undefined);
   assert.equal(record.cleanupPolicy, undefined);
+  assert.equal(record.primaryHarnessId, 'c'.repeat(64));
+  assert.equal(record.challengerHarnessId, 'd'.repeat(64));
 });
 
 console.log('\n--- Execution Provenance Tests ---\n');
@@ -626,6 +679,8 @@ test('forfeit builders use null scores and explicit completion metadata', () => 
     challengerModel: 'qwen-2.5-coder-32b',
     primaryPrUrl: 'https://github.com/org/repo/pull/1',
     challengerPrUrl: 'https://github.com/unknown/unknown/pull/0',
+    primaryHarnessId: 'e'.repeat(64),
+    challengerHarnessId: 'f'.repeat(64),
     winner: 'primary',
     rationale: 'Challenger failed.',
     terminalReason: 'challenger_challenge_aborted',
@@ -643,6 +698,8 @@ test('forfeit builders use null scores and explicit completion metadata', () => 
   assert.equal(forfeit.primaryCompleted, true);
   assert.equal(forfeit.challengerCompleted, false);
   assert.equal(forfeit.armFailures?.[0].faultClass, 'selection-fault');
+  assert.equal(forfeit.primaryHarnessId, 'e'.repeat(64));
+  assert.equal(forfeit.challengerHarnessId, 'f'.repeat(64));
 
   const doubleForfeit = buildDoubleForfeitComparison({
     challengePairId: 'HOK-2778',
@@ -650,6 +707,8 @@ test('forfeit builders use null scores and explicit completion metadata', () => 
     challengerModel: 'glm-5.2',
     primaryPrUrl: 'https://github.com/unknown/unknown/pull/0',
     challengerPrUrl: 'https://github.com/unknown/unknown/pull/0',
+    primaryHarnessId: '1'.repeat(64),
+    challengerHarnessId: '2'.repeat(64),
     rationale: 'Both failed.',
     terminalReason: 'both_challenge_aborted',
   });
@@ -657,6 +716,8 @@ test('forfeit builders use null scores and explicit completion metadata', () => 
   assert.equal(doubleForfeit.challengerEvalScore, null);
   assert.equal(doubleForfeit.primaryCompleted, false);
   assert.equal(doubleForfeit.challengerCompleted, false);
+  assert.equal(doubleForfeit.primaryHarnessId, '1'.repeat(64));
+  assert.equal(doubleForfeit.challengerHarnessId, '2'.repeat(64));
 });
 
 // ────────────────────────────────────────────────────────────────
@@ -720,6 +781,51 @@ test('buildInvalidChallengeComparison emits fork descriptor fields with empty de
   assert.equal(record.sharedPrefix, false);
   assert.deepEqual(record.primaryInheritedStages, []);
   assert.deepEqual(record.challengerInheritedStages, []);
+});
+
+test('comparison builders persist provided diff identities and fork descriptor', () => {
+  const primaryDiffIdentity = makeDiffIdentity('primary');
+  const challengerDiffIdentity = makeDiffIdentity('challenger');
+  const skipped = buildSkippedIdenticalComparison({
+    challengePairId: 'HOK-2795',
+    primaryModel: 'claude-opus-4-6',
+    challengerModel: 'claude-sonnet-4-5-20250929',
+    primaryPrUrl: 'https://github.com/org/repo/pull/1',
+    challengerPrUrl: 'https://github.com/org/repo/pull/2',
+    primaryEvalScore: 0.8,
+    challengerEvalScore: 0.8,
+    forkStage: 'implementation',
+    forkCommit: 'fork-sha',
+    sharedPrefix: true,
+    primaryInheritedStages: ['plan'],
+    challengerInheritedStages: ['plan'],
+    primaryDiffIdentity,
+    challengerDiffIdentity,
+  });
+
+  assert.equal(skipped.forkStage, 'implementation');
+  assert.equal(skipped.forkCommit, 'fork-sha');
+  assert.equal(skipped.sharedPrefix, true);
+  assert.deepEqual(skipped.primaryInheritedStages, ['plan']);
+  assert.deepEqual(skipped.challengerInheritedStages, ['plan']);
+  assert.deepEqual(skipped.primaryDiffIdentity, primaryDiffIdentity);
+  assert.deepEqual(skipped.challengerDiffIdentity, challengerDiffIdentity);
+
+  const invalid = buildInvalidChallengeComparison({
+    challengePairId: 'HOK-2795',
+    primaryModel: 'claude-opus-4-6',
+    challengerModel: 'claude-sonnet-4-5-20250929',
+    primaryPrUrl: 'https://github.com/org/repo/pull/1',
+    challengerPrUrl: 'https://github.com/org/repo/pull/2',
+    primaryEvalScore: 0.8,
+    challengerEvalScore: 0.8,
+    reason: 'identical_effective_route',
+    primaryDiffIdentity,
+    challengerDiffIdentity,
+  });
+
+  assert.deepEqual(invalid.primaryDiffIdentity, primaryDiffIdentity);
+  assert.deepEqual(invalid.challengerDiffIdentity, challengerDiffIdentity);
 });
 
 test('buildForfeitComparison emits fork descriptor fields with empty defaults', () => {
@@ -786,6 +892,8 @@ test('historical record without fork descriptor fields parses cleanly', () => {
   assert.equal(historicalRecord.sharedPrefix, undefined);
   assert.equal(historicalRecord.primaryInheritedStages, undefined);
   assert.equal(historicalRecord.challengerInheritedStages, undefined);
+  assert.equal(historicalRecord.primaryDiffIdentity, undefined);
+  assert.equal(historicalRecord.challengerDiffIdentity, undefined);
 });
 
 process.on('exit', () => {

@@ -84,7 +84,10 @@
       "description": "The rubric band label derived from the score."
     },
     "timeSeconds": {
-      "type": ["number", "null"],
+      "type": [
+        "number",
+        "null"
+      ],
       "minimum": 0,
       "description": "Wall-clock time in seconds for task completion."
     },
@@ -273,16 +276,33 @@
     "workflowCostAttribution": {
       "type": "object",
       "description": "Native workflow-cost attribution and coverage metadata.",
-      "required": ["source", "coverage", "sessions", "turns", "pricedSessions", "unpricedSessions", "models"],
+      "required": [
+        "source",
+        "coverage",
+        "sessions",
+        "turns",
+        "pricedSessions",
+        "unpricedSessions",
+        "models"
+      ],
       "additionalProperties": false,
       "properties": {
         "source": {
           "type": "string",
-          "enum": ["native", "codex", "claude"]
+          "enum": [
+            "native",
+            "codex",
+            "claude"
+          ]
         },
         "coverage": {
           "type": "string",
-          "enum": ["complete", "partial", "unavailable", "known_zero"]
+          "enum": [
+            "complete",
+            "partial",
+            "unavailable",
+            "known_zero"
+          ]
         },
         "reason": {
           "type": "string",
@@ -316,23 +336,58 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["provider", "modelId", "priced"],
+            "required": [
+              "provider",
+              "modelId",
+              "priced"
+            ],
             "additionalProperties": false,
             "properties": {
-              "provider": { "type": "string" },
-              "modelId": { "type": "string" },
-              "inputTokens": { "type": "integer", "minimum": 0 },
-              "outputTokens": { "type": "integer", "minimum": 0 },
-              "cacheReadTokens": { "type": "integer", "minimum": 0 },
-              "cacheCreationTokens": { "type": "integer", "minimum": 0 },
-              "totalTokens": { "type": "integer", "minimum": 0 },
-              "costUsd": { "type": "number", "minimum": 0 },
-              "providerReportedCostUsd": { "type": "number", "minimum": 0 },
+              "provider": {
+                "type": "string"
+              },
+              "modelId": {
+                "type": "string"
+              },
+              "inputTokens": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "outputTokens": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "cacheReadTokens": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "cacheCreationTokens": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "totalTokens": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "costUsd": {
+                "type": "number",
+                "minimum": 0
+              },
+              "providerReportedCostUsd": {
+                "type": "number",
+                "minimum": 0
+              },
               "pricingSource": {
                 "type": "string",
-                "enum": ["openrouter_api", "local_estimate", "mixed"]
+                "enum": [
+                  "openrouter_api",
+                  "local_estimate",
+                  "mixed"
+                ]
               },
-              "priced": { "type": "boolean" },
+              "priced": {
+                "type": "boolean"
+              },
               "reason": {
                 "type": "string",
                 "enum": [
@@ -418,13 +473,21 @@
     },
     "failureReason": {
       "type": "string",
-      "enum": ["eval_prompt_too_large"],
+      "enum": [
+        "eval_prompt_too_large"
+      ],
       "description": "Stable machine-readable eval failure reason for fast-fail records."
     },
     "promptSizeDiagnostic": {
       "type": "object",
       "description": "Byte-size diagnostic for the eval prompt submitted or rejected.",
-      "required": ["totalBytes", "limitBytes", "perComponentBytes", "policy", "action"],
+      "required": [
+        "totalBytes",
+        "limitBytes",
+        "perComponentBytes",
+        "policy",
+        "action"
+      ],
       "additionalProperties": false,
       "properties": {
         "totalBytes": {
@@ -448,28 +511,61 @@
           ],
           "additionalProperties": false,
           "properties": {
-            "taskPrompt": { "type": "integer", "minimum": 0 },
-            "prReviewOutput": { "type": "integer", "minimum": 0 },
-            "interventionMetadata": { "type": "integer", "minimum": 0 },
-            "taskPacket": { "type": "integer", "minimum": 0 },
-            "planContent": { "type": "integer", "minimum": 0 },
-            "selfReviewSummary": { "type": "integer", "minimum": 0 },
-            "templateScaffold": { "type": "integer", "minimum": 0 }
+            "taskPrompt": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "prReviewOutput": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "interventionMetadata": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "taskPacket": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "planContent": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "selfReviewSummary": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "templateScaffold": {
+              "type": "integer",
+              "minimum": 0
+            }
           }
         },
         "policy": {
           "type": "string",
-          "enum": ["fail", "truncate"]
+          "enum": [
+            "fail",
+            "truncate"
+          ]
         },
         "action": {
           "type": "string",
-          "enum": ["pass", "truncated", "rejected"]
+          "enum": [
+            "pass",
+            "truncated",
+            "rejected"
+          ]
         },
         "truncatedComponents": {
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["name", "originalBytes", "finalBytes", "removedBytes"],
+            "required": [
+              "name",
+              "originalBytes",
+              "finalBytes",
+              "removedBytes"
+            ],
             "additionalProperties": false,
             "properties": {
               "name": {
@@ -484,9 +580,18 @@
                   "templateScaffold"
                 ]
               },
-              "originalBytes": { "type": "integer", "minimum": 0 },
-              "finalBytes": { "type": "integer", "minimum": 0 },
-              "removedBytes": { "type": "integer", "minimum": 0 }
+              "originalBytes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "finalBytes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "removedBytes": {
+                "type": "integer",
+                "minimum": 0
+              }
             }
           }
         }
@@ -2054,18 +2159,27 @@
       "properties": {
         "schema_version": {
           "type": "string",
-          "enum": ["1.0"],
+          "enum": [
+            "1.0"
+          ],
           "description": "Schema version for forward compatibility."
         },
         "contract": {
           "type": "object",
           "description": "Verification contract source and version.",
-          "required": ["source", "version"],
+          "required": [
+            "source",
+            "version"
+          ],
           "additionalProperties": false,
           "properties": {
             "source": {
               "type": "string",
-              "enum": ["github-enforced", "explicit", "default"],
+              "enum": [
+                "github-enforced",
+                "explicit",
+                "default"
+              ],
               "description": "How the verification contract was sourced."
             },
             "version": {
@@ -2077,7 +2191,10 @@
         "checked_shas": {
           "type": "object",
           "description": "Git SHAs checked during verification.",
-          "required": ["head", "base"],
+          "required": [
+            "head",
+            "base"
+          ],
           "additionalProperties": false,
           "properties": {
             "head": {
@@ -2093,7 +2210,10 @@
         "local_verification": {
           "type": "object",
           "description": "Local pre-PR verification execution results.",
-          "required": ["ran", "passed"],
+          "required": [
+            "ran",
+            "passed"
+          ],
           "additionalProperties": false,
           "properties": {
             "ran": {
@@ -2120,7 +2240,14 @@
             },
             "first_failure_category": {
               "type": "string",
-              "enum": ["lint", "test", "build", "type", "custom", "unknown"],
+              "enum": [
+                "lint",
+                "test",
+                "build",
+                "type",
+                "custom",
+                "unknown"
+              ],
               "description": "Automated category of the first local failure."
             },
             "total_duration_ms": {
@@ -2170,7 +2297,15 @@
             },
             "first_failure_category": {
               "type": "string",
-              "enum": ["lint", "test", "build", "type", "deploy", "custom", "unknown"],
+              "enum": [
+                "lint",
+                "test",
+                "build",
+                "type",
+                "deploy",
+                "custom",
+                "unknown"
+              ],
               "description": "Automated category of the first remote failure."
             },
             "first_failure_fingerprint": {
@@ -2195,7 +2330,12 @@
             },
             "local_remediation_outcome": {
               "type": "string",
-              "enum": ["fixed", "abandoned", "override", "none"],
+              "enum": [
+                "fixed",
+                "abandoned",
+                "override",
+                "none"
+              ],
               "description": "Result of local remediation attempts."
             },
             "remote_fix_required": {
@@ -2209,7 +2349,11 @@
             },
             "remote_fix_outcome": {
               "type": "string",
-              "enum": ["fixed", "reverted", "abandoned"],
+              "enum": [
+                "fixed",
+                "reverted",
+                "abandoned"
+              ],
               "description": "Result of remote fixes."
             }
           }
@@ -2298,7 +2442,11 @@
       "type": "object",
       "description": "Diagnostics for the feature-outcome artifact consumption path (HOK-2262).",
       "additionalProperties": false,
-      "required": ["present", "valid", "used"],
+      "required": [
+        "present",
+        "valid",
+        "used"
+      ],
       "properties": {
         "present": {
           "type": "boolean",
@@ -2341,27 +2489,83 @@
           "description": "Normalized outcome fields from the artifact.",
           "additionalProperties": false,
           "properties": {
-            "completed": { "type": "boolean" },
-            "merged": { "type": ["boolean", "null"] },
-            "ciPassed": { "type": ["boolean", "null"] },
-            "reviewPassed": { "type": ["boolean", "null"] },
-            "readyPassed": { "type": ["boolean", "null"] },
-            "manualIntervention": { "type": ["boolean", "null"] },
-            "interventionCount": { "type": ["number", "null"] },
-            "reverted": { "type": ["boolean", "null"] },
-            "evalScore": { "type": ["number", "null"] },
-            "costUsd": { "type": ["number", "null"] },
-            "durationSeconds": { "type": ["number", "null"] }
+            "completed": {
+              "type": "boolean"
+            },
+            "merged": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "ciPassed": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "reviewPassed": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "readyPassed": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "manualIntervention": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "interventionCount": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "reverted": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "evalScore": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "costUsd": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "durationSeconds": {
+              "type": [
+                "number",
+                "null"
+              ]
+            }
           }
         },
         "missingFields": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "description": "Keys that were absent from the artifact outcome object."
         },
         "invalidFields": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "description": "Keys that were present but had unexpected types."
         },
         "eligibilityDiagnostic": {
@@ -2380,7 +2584,9 @@
         },
         "conflictingFields": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "description": "Names of fields that differ between artifact and reconstruction."
         }
       }
@@ -2405,6 +2611,11 @@
           "$ref": "#/$defs/ResolvedModelRoutingDecision"
         }
       }
+    },
+    "harnessId": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$",
+      "description": "Stable harness content hash for the behavior-relevant manifest resources."
     }
   },
   "$defs": {
@@ -3046,6 +3257,11 @@
         "expectedMetrics": {
           "type": "object",
           "additionalProperties": true
+        },
+        "harnessId": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "Stable harness content hash for the behavior-relevant manifest resources."
         }
       },
       "required": [
@@ -3114,6 +3330,11 @@
         "expectedMetrics": {
           "type": "object",
           "additionalProperties": true
+        },
+        "harnessId": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "Stable harness content hash for the behavior-relevant manifest resources."
         }
       },
       "required": [

@@ -2,6 +2,11 @@ import type { ChallengeComparison } from './challenge-comparison.ts';
 import { parsePrMetadata, extractMetadataBlock, type PrMetadata } from './pr-metadata.ts';
 import { WM_LABELS } from './pr-state-labels.ts';
 import type { IntegrationReadyPolicyConfig } from './config.ts';
+import {
+  evaluateCiChecks,
+  type NormalizedCheckSummary,
+  type RequiredContextsSource,
+} from './pr-ci-status.ts';
 
 export interface GuardResult {
   status: 'pass' | 'warn' | 'pending' | 'fail';
@@ -18,8 +23,14 @@ export interface ReadyVerdict {
 
 export type CheckReadErrorType = 'command-failed' | 'timeout' | 'malformed-json' | 'network' | 'unknown';
 
-export type CheckReadResult<TCheck = unknown> =
-  | { ok: true; checks: TCheck[] }
+export type CheckReadResult =
+  | {
+      ok: true;
+      checks: NormalizedCheckSummary[];
+      requiredContexts: string[];
+      requiredSource: RequiredContextsSource;
+      requireChecks?: boolean;
+    }
   | { ok: false; reason: string; errorType: CheckReadErrorType };
 
 export interface ReadyEngineContext {
@@ -302,9 +313,46 @@ export async function checkChallengePairs(ctx: ReadyEngineContext): Promise<Guar
   }
 }
 
-export function readRequiredChecks<TCheck>(result: CheckReadResult<TCheck>): GuardResult {
+function formatList(values: string[], limit = 5): string {
+  if (values.length <= limit) return values.join(', ');
+  return `${values.slice(0, limit).join(', ')}, ...`;
+}
+
+export function readRequiredChecks(result: CheckReadResult): GuardResult {
   if (result.ok) {
-    return { status: 'pass' };
+    const evaluated = evaluateCiChecks(result.checks, result.requiredContexts, {
+      requireChecks: result.requireChecks,
+      requiredSource: result.requiredSource,
+    });
+    if (evaluated.conclusion === 'pass' || evaluated.conclusion === 'none') {
+      return { status: 'pass' };
+    }
+    if (evaluated.conclusion === 'fail') {
+      const reason = evaluated.failing.length === 1
+        ? `Required GitHub check "${evaluated.failing[0]}" is failing.`
+        : `Required GitHub checks are failing: ${formatList(evaluated.failing)}.`;
+      return {
+        status: 'fail',
+        reason,
+        commentFragment: toFragment('Required Checks Failing', [reason]),
+      };
+    }
+
+    const blockers = [
+      ...evaluated.missingRequired.map((name) => `missing ${name}`),
+      ...evaluated.pending.map((name) => `pending ${name}`),
+    ];
+    const observedOfRequired = evaluated.requiredContexts.length > 0
+      ? `observed ${evaluated.observed} of ${evaluated.requiredContexts.length}`
+      : `observed ${evaluated.observed}`;
+    const reason = blockers.length > 0
+      ? `Waiting on ${blockers.length} required/pending check(s) (${observedOfRequired}): ${formatList(blockers)}.`
+      : `Waiting for GitHub checks to report (${observedOfRequired}).`;
+    return {
+      status: 'pending',
+      reason,
+      commentFragment: toFragment('Required Checks Pending', [reason]),
+    };
   }
 
   const reason = `Required GitHub check status could not be read (${result.errorType}): ${result.reason}`;

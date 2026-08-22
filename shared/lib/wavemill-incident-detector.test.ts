@@ -77,6 +77,29 @@ test('job detector distinguishes missing eval records for failed comparison', ()
   }
 });
 
+test('job detector attributes comparison failures from job subject instead of active task', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'incident-jobs-subject-'));
+  try {
+    mkdirSync(join(repo, '.wavemill', 'jobs'), { recursive: true });
+    writeFileSync(join(repo, '.wavemill', 'jobs', 'comparison.json'), JSON.stringify({
+      id: 'comparison-HOK-2607-1046-1048',
+      kind: 'comparison',
+      status: 'failed',
+      issueId: 'HOK-2841',
+      reason: 'missing eval records',
+      finishedAt: now.toISOString(),
+    }));
+
+    const activeTaskIncidents = new JobFailureDetector().detect(repo, 'HOK-2841', { repoDir: repo, now });
+    const repoIncidents = new JobFailureDetector().detect(repo, null, { repoDir: repo, now });
+    assert.equal(activeTaskIncidents.length, 0);
+    assert.equal(repoIncidents.length, 1);
+    assert.equal(repoIncidents[0].taskId, 'HOK-2607');
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
 test('dependency detector preserves structured queue fallback reason', () => {
   const repo = mkdtempSync(join(tmpdir(), 'incident-deps-'));
   try {
@@ -91,6 +114,7 @@ test('dependency detector preserves structured queue fallback reason', () => {
 
     const incidents = new DependencyHealthDetector({ thresholdConsecutiveFailures: 3 }).detect(repo, 'HOK-1_c', { repoDir: repo, now });
     assert.equal(incidents.length, 1);
+    assert.equal(incidents[0].taskId, null);
     assert.equal(incidents[0].category, 'external_transient_dependency');
     assert.equal(incidents[0].severity, 'medium');
     assert.match(incidents[0].evidence[0].redactedData, /github_ssh_probe_failed/);

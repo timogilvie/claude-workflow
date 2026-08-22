@@ -47,6 +47,8 @@ extract_function "$MILL_SCRIPT" "ready_conflict_recheck_due" >> "$MONITOR_FUNC_F
 extract_function "$MILL_SCRIPT" "ready_conflict_pr_is_clean" >> "$MONITOR_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "write_ready_conflict_recheck_at" >> "$MONITOR_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "clear_transient_mergeability_state" >> "$MONITOR_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "ready_queue_field" >> "$MONITOR_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "review_artifacts_with_pr_number" >> "$MONITOR_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "monitor_issue_state" >> "$MONITOR_FUNC_FILE"
 
 if [[ ! -s "$MONITOR_FUNC_FILE" ]]; then
@@ -259,7 +261,7 @@ JSON
 JSON
         ;;
       ready_merge_candidate_current_base)
-        # HOK-2267: clean/green merge-candidate with current base should NOT re-run
+        # HOK-2267: merge-candidate with current base should NOT re-run
         # ready checks — the PR is waiting in the merge lane for its turn to merge.
         CURRENT_PHASE="ready"
         READY_STATUS="completed"
@@ -512,12 +514,12 @@ ready_main_sha_fetch_fails_output="$(run_monitor_case ready_main_sha_fetch_fails
 check_contains "main SHA fetch failure skips re-check" "$ready_main_sha_fetch_fails_output" "ready_launches=0"
 check_contains "main SHA fetch failure keeps task active" "$ready_main_sha_fetch_fails_output" "active_count=1"
 
-# HOK-2267: clean/green merge-candidate with current base must not re-run checks
+# HOK-2267: merge-candidate with current base must not re-run checks
 ready_merge_candidate_current_base_output="$(run_monitor_case ready_merge_candidate_current_base)"
 check_contains "merge-candidate current-base does not re-run ready" "$ready_merge_candidate_current_base_output" "ready_launches=0"
 check_contains "merge-candidate current-base keeps task active" "$ready_merge_candidate_current_base_output" "active_count=1"
 check_contains "merge-candidate current-base clears attention" "$ready_merge_candidate_current_base_output" "attention=clear"
-check_contains "merge-candidate current-base logs clean/green status" "$ready_merge_candidate_current_base_output" "clean/green merge candidate"
+check_contains "merge-candidate current-base logs saved-verdict status" "$ready_merge_candidate_current_base_output" "live CI unverified, saved verdict only"
 
 ready_merge_candidate_main_advanced_not_selected_output="$(run_monitor_case ready_merge_candidate_main_advanced_not_selected)"
 check_contains "merge-candidate main-advanced not-selected does not re-run ready" "$ready_merge_candidate_main_advanced_not_selected_output" "ready_launches=0"

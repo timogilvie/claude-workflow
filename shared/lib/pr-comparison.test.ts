@@ -1,19 +1,226 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import test from 'node:test';
 import {
+  ARBITER_JUDGE_PROMPT_TEMPLATE_PATH,
+  buildDiffIdentity,
   buildChallengeCommentBody,
   buildCappedComparisonPrompt,
   buildComparisonPrompt,
   formatRoutingSummary,
   mapBlindVerdictToSides,
+  parseUnifiedDiffLineRanges,
   prNumberFromValue,
+  resolvePrDiffIdentity,
   resolvePresentationOrder,
+  retainLoserPatch,
   validateComparisonJson,
 } from './pr-comparison.ts';
+import { loadPromptTemplate } from './prompt-utils.ts';
+import { hashString } from './prompt-hash.ts';
+
+function criterionRationales(prefix = 'because') {
+  return {
+    completeness: { rationale: `${prefix} completeness differs` },
+    correctness: { rationale: `${prefix} correctness differs` },
+    code_quality: { rationale: `${prefix} code_quality differs` },
+    intervention_impact: { rationale: `${prefix} intervention_impact differs` },
+    autonomy: { rationale: `${prefix} autonomy differs` },
+  };
+}
 
 test('prNumberFromValue extracts the PR number from URLs', () => {
   assert.equal(prNumberFromValue('https://github.com/acme/repo/pull/123'), '123');
   assert.equal(prNumberFromValue('456'), '456');
+});
+
+test('parseUnifiedDiffLineRanges extracts added-side hunks across files', () => {
+  const ranges = parseUnifiedDiffLineRanges(`diff --git a/src/a.ts b/src/a.ts
+--- a/src/a.ts
++++ b/src/a.ts
+@@ -10,2 +10,3 @@
++added
+@@ -20 +22 @@
++single
+diff --git a/src/deleted.ts b/src/deleted.ts
+--- a/src/deleted.ts
++++ /dev/null
+@@ -1,2 +0,0 @@
+-gone
+diff --git a/src/renamed.ts b/src/renamed.ts
+--- a/src/old.ts
++++ b/src/renamed.ts
+@@ -0,0 +5,2 @@
++new
+diff --git a/src/empty.ts b/src/empty.ts
+--- a/src/empty.ts
++++ b/src/empty.ts
+@@ -3 +3,0 @@
+-only deletion`);
+
+  assert.deepEqual(ranges, [
+    { file: 'src/a.ts', start: 10, end: 12 },
+    { file: 'src/a.ts', start: 22, end: 22 },
+    { file: 'src/renamed.ts', start: 5, end: 6 },
+  ]);
+});
+
+test('buildDiffIdentity keeps file-level identity when no hunks parse', () => {
+  const identity = buildDiffIdentity({
+    metadata: {
+      url: 'https://github.com/acme/repo/pull/12',
+      headRefName: 'feature',
+      baseRefName: 'main',
+      head_sha: 'head-sha',
+    },
+    merge_sha: 'base-sha',
+    nameOnlyDiff: 'bin/image.png\nsrc/no-new-lines.ts\n',
+    unifiedDiff: '',
+  });
+
+  assert.deepEqual(identity, {
+    head_sha: 'head-sha',
+    merge_sha: 'base-sha',
+    files_touched: ['bin/image.png', 'src/no-new-lines.ts'],
+    line_ranges: [],
+  });
+});
+
+test('resolvePrDiffIdentity resolves metadata and derives identity from local git', () => {
+  const commands: string[][] = [];
+  const identity = resolvePrDiffIdentity({
+    pr: 'https://github.com/acme/repo/pull/12',
+    repoDir: '/repo',
+    forkCommit: null,
+    deps: {
+      runGh(args) {
+        commands.push(['gh', ...args]);
+        return JSON.stringify({
+          url: 'https://github.com/acme/repo/pull/12',
+          headRefName: 'feature',
+          baseRefName: 'main',
+          headRefOid: 'head-sha',
+        });
+      },
+      runGit(args) {
+        commands.push(['git', ...args]);
+        if (args[0] === 'merge-base') return 'merge-sha';
+        if (args[0] === 'diff' && args[1] === '--name-only') return 'src/a.ts\nsrc/b.ts\n';
+        if (args[0] === 'diff' && args[1] === '--unified=0') {
+          return `diff --git a/src/a.ts b/src/a.ts
+--- a/src/a.ts
++++ b/src/a.ts
+@@ -1 +1,2 @@
++added`;
+        }
+        return '';
+      },
+    },
+  });
+
+  assert.deepEqual(identity, {
+    head_sha: 'head-sha',
+    merge_sha: 'merge-sha',
+    files_touched: ['src/a.ts', 'src/b.ts'],
+    line_ranges: [{ file: 'src/a.ts', start: 1, end: 2 }],
+  });
+  assert.deepEqual(commands[0], [
+    'gh',
+    'pr',
+    'view',
+    '12',
+    '--json',
+    'headRefOid,headRefName,baseRefName,url',
+  ]);
+  assert.ok(commands.some((command) => command.join(' ') === 'git merge-base refs/remotes/origin/main head-sha'));
+});
+
+test('resolvePrDiffIdentity uses forkCommit as diff base when present', () => {
+  const gitCommands: string[][] = [];
+  const identity = resolvePrDiffIdentity({
+    pr: '12',
+    repoDir: '/repo',
+    forkCommit: 'fork-sha',
+    deps: {
+      runGh() {
+        return JSON.stringify({
+          url: 'https://github.com/acme/repo/pull/12',
+          headRefName: 'feature',
+          baseRefName: 'main',
+          headRefOid: 'head-sha',
+        });
+      },
+      runGit(args) {
+        gitCommands.push(args);
+        if (args[0] === 'diff' && args[1] === '--name-only') return 'src/a.ts';
+        if (args[0] === 'diff' && args[1] === '--unified=0') return '';
+        return '';
+      },
+    },
+  });
+
+  assert.equal(identity.merge_sha, 'fork-sha');
+  assert.equal(gitCommands.some((args) => args[0] === 'merge-base'), false);
+});
+
+test('retainLoserPatch writes deterministic local artifact under the byte cap', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'loser-patch-test-'));
+  try {
+    const result = retainLoserPatch({
+      challengePairId: 'pair-1',
+      evalsDir: tmp,
+      repoDir: '/repo',
+      loserIdentity: {
+        head_sha: 'head-sha',
+        merge_sha: 'merge-sha',
+        files_touched: ['src/a.ts'],
+        line_ranges: [],
+      },
+      deps: {
+        readPatch(args) {
+          assert.deepEqual(args, ['diff', 'merge-sha', 'head-sha']);
+          return Buffer.from('patch body\n');
+        },
+      },
+    });
+
+    assert.equal(result.written, true);
+    assert.equal(result.bytes, 'patch body\n'.length);
+    assert.equal(result.path, join(tmp, 'artifacts', 'pair-1', 'loser.patch'));
+    assert.equal(readFileSync(result.path, 'utf-8'), 'patch body\n');
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('retainLoserPatch skips artifacts over the retention cap', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'loser-patch-test-'));
+  try {
+    const result = retainLoserPatch({
+      challengePairId: 'pair-1',
+      evalsDir: tmp,
+      repoDir: '/repo',
+      maxBytes: 4,
+      loserIdentity: {
+        head_sha: 'head-sha',
+        merge_sha: 'merge-sha',
+        files_touched: ['src/a.ts'],
+        line_ranges: [],
+      },
+      deps: {
+        readPatch() {
+          return 'too_large';
+        },
+      },
+    });
+
+    assert.equal(result.written, false);
+    assert.equal(result.skippedReason, 'too_large');
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 test('buildComparisonPrompt includes workflow context when routing metadata differs', () => {
@@ -43,6 +250,8 @@ test('buildComparisonPrompt includes workflow context when routing metadata diff
   assert.match(prompt, /Workflow Context/);
   assert.match(prompt, /Variables that differed: planner/);
   assert.match(prompt, /intervention_impact/);
+  assert.match(prompt, /criterionRationales/);
+  assert.match(prompt, /"completeness": \{ "rationale"/);
   assert.match(prompt, /Candidate A side:/);
   assert.match(prompt, /Candidate B side:/);
   assert.doesNotMatch(prompt, /scopeDiscipline/);
@@ -128,6 +337,43 @@ test('buildCappedComparisonPrompt truncates oversized diff bodies', () => {
   assert.doesNotMatch(result.prompt, /TRUNCATED challenger diff/);
 });
 
+test('rendered judge prompt hash changes when the registered template changes', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'arbiter-judge-template-test-'));
+  try {
+    const templatePath = join(tmp, 'arbiter-judge.md');
+    const registryDir = join(tmp, 'evals');
+    const baseTemplate = readFileSync(ARBITER_JUDGE_PROMPT_TEMPLATE_PATH, 'utf-8');
+    writeFileSync(templatePath, baseTemplate, 'utf-8');
+
+    const firstTemplate = await loadPromptTemplate(templatePath, { dir: registryDir });
+    const firstPrompt = buildComparisonPrompt({
+      issuePrompt: 'Issue context',
+      primaryDiff: 'alpha diff',
+      challengerDiff: 'beta diff',
+      presentationOrder: 'primary-first',
+      promptTemplate: firstTemplate,
+    });
+    const firstHash = hashString(firstPrompt);
+
+    writeFileSync(templatePath, `${baseTemplate}\n\nAdditional judging instruction.\n`, 'utf-8');
+    const secondTemplate = await loadPromptTemplate(templatePath, { dir: registryDir });
+    const secondPrompt = buildComparisonPrompt({
+      issuePrompt: 'Issue context',
+      primaryDiff: 'alpha diff',
+      challengerDiff: 'beta diff',
+      presentationOrder: 'primary-first',
+      promptTemplate: secondTemplate,
+    });
+    const secondHash = hashString(secondPrompt);
+
+    assert.notEqual(firstHash, secondHash);
+    const registry = readFileSync(join(registryDir, 'prompt-registry.jsonl'), 'utf-8');
+    assert.match(registry, /arbiter-judge/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test('validateComparisonJson trims fields and rejects invalid score payloads', () => {
   const valid = validateComparisonJson({
     winner: 'A',
@@ -140,11 +386,13 @@ test('validateComparisonJson trims fields and rejects invalid score payloads', (
       intervention_impact: { A: 9, B: 7 },
       autonomy: { A: 8, B: 7 },
     },
+    criterionRationales: criterionRationales(' judge says '),
   });
 
   assert.equal(valid.rationale, 'better result');
   assert.equal(valid.workflowInsight, 'routing mattered');
   assert.equal(valid.winner, 'A');
+  assert.equal(valid.criterionRationales.completeness.rationale, 'judge says  completeness differs');
 
   assert.throws(
     () => validateComparisonJson({
@@ -157,8 +405,61 @@ test('validateComparisonJson trims fields and rejects invalid score payloads', (
         intervention_impact: { A: 9, B: 7 },
         autonomy: { A: 8, B: 7 },
       },
+      criterionRationales: criterionRationales(),
     }),
     /Expected integers from 1 to 10/
+  );
+});
+
+test('validateComparisonJson rejects missing, blank, legacy, and unblinded criterion rationales', () => {
+  const basePayload = {
+    winner: 'A',
+    rationale: 'ok',
+    dimensions: {
+      completeness: { A: 8, B: 7 },
+      correctness: { A: 8, B: 7 },
+      code_quality: { A: 8, B: 7 },
+      intervention_impact: { A: 8, B: 7 },
+      autonomy: { A: 8, B: 7 },
+    },
+  };
+
+  assert.throws(
+    () => validateComparisonJson(basePayload),
+    /criterionRationales must be an object/
+  );
+
+  assert.throws(
+    () => validateComparisonJson({
+      ...basePayload,
+      criterionRationales: {
+        ...criterionRationales(),
+        autonomy: { rationale: ' ' },
+      },
+    }),
+    /criterionRationales\.autonomy\.rationale must be a non-empty string/
+  );
+
+  assert.throws(
+    () => validateComparisonJson({
+      ...basePayload,
+      criterionRationales: {
+        ...criterionRationales(),
+        scopeDiscipline: { rationale: 'legacy' },
+      },
+    }),
+    /Legacy criterionRationales keys/
+  );
+
+  assert.throws(
+    () => validateComparisonJson({
+      ...basePayload,
+      criterionRationales: {
+        ...criterionRationales(),
+        correctness: { primary: 'primary was better', rationale: 'ok' },
+      },
+    }),
+    /Unblinded or side-level criterionRationales keys/
   );
 });
 
@@ -174,6 +475,7 @@ test('validateComparisonJson rejects unblinded and legacy keys', () => {
         intervention_impact: { A: 8, B: 7 },
         autonomy: { A: 8, B: 7 },
       },
+      criterionRationales: criterionRationales(),
     }),
     /Unblinded comparison winner keys/
   );
@@ -189,6 +491,7 @@ test('validateComparisonJson rejects unblinded and legacy keys', () => {
         intervention_impact: { A: 8, B: 7 },
         autonomy: { A: 8, B: 7 },
       },
+      criterionRationales: criterionRationales(),
     }),
     /Invalid dimension payload for completeness/
   );
@@ -205,6 +508,7 @@ test('validateComparisonJson rejects unblinded and legacy keys', () => {
         autonomy: { A: 8, B: 7 },
         scopeDiscipline: { A: 8, B: 7 },
       },
+      criterionRationales: criterionRationales(),
     }),
     /Legacy comparison keys/
   );
@@ -220,6 +524,7 @@ test('validateComparisonJson rejects unblinded and legacy keys', () => {
         intervention_impact: { A: 8, B: 7 },
         autonomy: { A: 8, B: 7 },
       },
+      criterionRationales: criterionRationales(),
     }),
     /Unblinded comparison dimension keys/
   );
@@ -459,15 +764,18 @@ test('mapBlindVerdictToSides attributes winners and dimensions under both orders
       intervention_impact: { A: 6, B: 3 },
       autonomy: { A: 5, B: 2 },
     },
+    criterionRationales: criterionRationales('A beats B on'),
   };
 
   const primaryFirst = mapBlindVerdictToSides(blindVerdict, 'primary-first');
   assert.equal(primaryFirst.winner, 'primary');
   assert.deepEqual(primaryFirst.dimensions.completeness, { primary: 9, challenger: 6 });
+  assert.deepEqual(primaryFirst.criterionRationales?.correctness, { rationale: 'A beats B on correctness differs' });
 
   const challengerFirst = mapBlindVerdictToSides(blindVerdict, 'challenger-first');
   assert.equal(challengerFirst.winner, 'challenger');
   assert.deepEqual(challengerFirst.dimensions.completeness, { primary: 6, challenger: 9 });
+  assert.deepEqual(challengerFirst.criterionRationales?.correctness, { rationale: 'A beats B on correctness differs' });
 
   assert.equal(mapBlindVerdictToSides({ ...blindVerdict, winner: 'B' }, 'primary-first').winner, 'challenger');
   assert.equal(mapBlindVerdictToSides({ ...blindVerdict, winner: 'B' }, 'challenger-first').winner, 'primary');
@@ -503,6 +811,7 @@ test('existing comparison replay maps to the same stored winner and dimensions w
       intervention_impact: { A: 8, B: 4 },
       autonomy: { A: 9, B: 5 },
     },
+    criterionRationales: criterionRationales(),
   };
   assert.deepEqual(
     {
@@ -522,6 +831,7 @@ test('existing comparison replay maps to the same stored winner and dimensions w
       intervention_impact: { A: 4, B: 8 },
       autonomy: { A: 5, B: 9 },
     },
+    criterionRationales: criterionRationales(),
   };
   assert.deepEqual(
     {

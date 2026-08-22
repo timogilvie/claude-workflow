@@ -100,6 +100,7 @@ TESTS=(
   shared/lib/review-formatter.test.ts
   shared/lib/pr-comparison.test.ts
   shared/lib/pr-metadata.test.ts
+  shared/lib/pr-ci-status.test.ts
   shared/lib/ready-engine.test.ts
   shared/lib/ready-stage.test.ts
   shared/lib/ci-failure-classifier.test.ts
@@ -162,6 +163,9 @@ TESTS=(
   shared/lib/redaction-profiles.test.ts
   shared/lib/shell-utils.test.ts
   shared/lib/jsonl-utils.test.ts
+  shared/lib/resource-manifest.test.ts
+  shared/lib/harness-id-backfill.test.ts
+  shared/lib/harness-diff.test.ts
   shared/lib/quota-state.test.ts
   shared/lib/wavemill-incident-artifact-diagnostics.test.ts
   shared/lib/wavemill-incident-detector.test.ts

@@ -23,6 +23,8 @@ function config(overrides: Partial<ObserverLinearConfig> = {}): ObserverLinearCo
     enabled: true,
     team: 'HOK',
     project: 'Wavemill',
+    requestDelayMs: 0,
+    rateLimitBackoffMs: 0,
     ...overrides,
     policies: {
       ...DEFAULT_INCIDENT_LINEAR_CONFIG.policies,
@@ -290,23 +292,78 @@ test('repeated external transient can create one incident issue', async () => {
   assert.equal(result.status, 'created');
 });
 
-test('dry-run returns planned create without Linear writes', async () => {
-  let createCalls = 0;
+test('dry-run returns offline unknown plan without Linear API calls', async () => {
+  let linearCalls = 0;
   const result = await syncIncident({
     incident: incident(),
     config: config(),
     dryRun: true,
     client: mockClient({
+      getTeams: async () => {
+        linearCalls += 1;
+        throw new Error('dry-run must not call Linear');
+      },
+      getProjects: async () => {
+        linearCalls += 1;
+        throw new Error('dry-run must not call Linear');
+      },
+      searchIssues: async () => {
+        linearCalls += 1;
+        throw new Error('dry-run must not call Linear');
+      },
+      getIssue: async () => {
+        linearCalls += 1;
+        throw new Error('dry-run must not call Linear');
+      },
       createIssue: async (params) => {
-        createCalls += 1;
+        linearCalls += 1;
         return mockClient().createIssue(params);
+      },
+      createComment: async () => {
+        linearCalls += 1;
+        throw new Error('dry-run must not call Linear');
+      },
+      getOrCreateLabel: async () => {
+        linearCalls += 1;
+        throw new Error('dry-run must not call Linear');
+      },
+      addLabelsToIssue: async () => {
+        linearCalls += 1;
+        throw new Error('dry-run must not call Linear');
       },
     }),
   });
-  assert.equal(result.action, 'create');
+  assert.equal(result.action, 'unknown_needs_lookup');
   assert.equal(result.status, 'skipped');
-  assert.equal(createCalls, 0);
+  assert.equal(linearCalls, 0);
   assert.match(result.plannedTitle ?? '', /Observer crashed/);
+});
+
+test('detectionOnly returns local update plan without Linear API calls', async () => {
+  let linearCalls = 0;
+  const result = await syncIncident({
+    incident: incident({
+      metadata: {
+        linkedLinearId: 'HOK-104',
+        linkedLinearUrl: 'https://linear.app/hokusai/issue/HOK-104/test',
+        lastSyncedEvidenceRevision: 'old',
+      },
+    }),
+    config: config({ detectionOnly: true }),
+    client: mockClient({
+      getIssue: async () => {
+        linearCalls += 1;
+        throw new Error('detectionOnly must not call Linear');
+      },
+      createComment: async () => {
+        linearCalls += 1;
+        throw new Error('detectionOnly must not call Linear');
+      },
+    }),
+  });
+  assert.equal(result.action, 'update_comment');
+  assert.equal(result.issueId, 'HOK-104');
+  assert.equal(linearCalls, 0);
 });
 
 test('disabled config performs no Linear writes without dry-run consent', async () => {

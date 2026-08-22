@@ -6,7 +6,7 @@ import { getEffectiveRegistry, getModel } from './model-registry.ts';
 import type { RoutePrediction } from './eval-schema.ts';
 import type { WorkflowRouteDecision } from './workflow-router.ts';
 
-export const ROUTE_ARTIFACT_SCHEMA_VERSION = '1.0';
+export const ROUTE_ARTIFACT_SCHEMA_VERSION = '1.1';
 export const POLICY_RESOLVER_VERSION = '1.0.0';
 
 export type RouteSource =
@@ -223,6 +223,7 @@ export interface NormalizedExpandedRouteArtifact {
 }
 
 export interface RouteArtifactSnapshot extends NormalizedExpandedRouteArtifact {
+  harnessId?: string;
   planDepth?: string;
   planner?: string;
   cache_hit?: boolean;
@@ -243,6 +244,7 @@ export interface RouteArtifactView {
   codeDepth: string;
   reviewer: string;
   reviewMode: string;
+  harnessId?: string;
   planner?: string;
   planDepth?: string;
   artifactPath?: string;
@@ -352,6 +354,13 @@ export function validateExpandedRouteArtifact(value: unknown): ExpandedRouteVali
     && (typeof artifact.packet_hash !== 'string' || !/^[a-f0-9]{64}$/.test(artifact.packet_hash))
   ) {
     invalid.push('packet_hash');
+  }
+
+  if (
+    typeof artifact.harnessId !== 'undefined'
+    && (typeof artifact.harnessId !== 'string' || !/^[a-f0-9]{64}$/.test(artifact.harnessId))
+  ) {
+    invalid.push('harnessId');
   }
 
   if (invalid.length > 0) {
@@ -541,6 +550,7 @@ function parseBootstrapRouteArtifact(
     codeDepth,
     reviewer,
     reviewMode,
+    harnessId: readString(artifact.harnessId),
     planDepth: readString(artifact.planDepth),
     planner: readString(artifact.planner),
     cache_hit: typeof artifact.cache_hit === 'boolean' ? artifact.cache_hit : undefined,
@@ -592,6 +602,7 @@ function parseExpandedRouteArtifact(
   const artifact = value as Record<string, unknown>;
   return {
     ...validation.normalized,
+    harnessId: readString(artifact.harnessId),
     planDepth: readString(artifact.planDepth),
     planner: readString(artifact.planner),
     cache_hit: typeof artifact.cache_hit === 'boolean' ? artifact.cache_hit : undefined,
@@ -708,6 +719,7 @@ export function toRouteArtifactView(route: RouteArtifactSnapshot): RouteArtifact
     codeDepth: route.codeDepth,
     reviewer: route.reviewer,
     reviewMode: route.reviewMode,
+    ...(route.harnessId ? { harnessId: route.harnessId } : {}),
     ...(route.planner ? { planner: route.planner } : {}),
     ...(route.planDepth ? { planDepth: route.planDepth } : {}),
     ...(route.artifactPath ? { artifactPath: route.artifactPath } : {}),

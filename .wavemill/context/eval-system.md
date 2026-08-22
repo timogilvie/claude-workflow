@@ -1,6 +1,6 @@
 # Subsystem: eval-system
 
-**Last updated:** 2026-07-13
+**Last updated:** 2026-08-21
 **Files touched:** 12
 
 ## Purpose
@@ -11,11 +11,13 @@ It now also captures quota-driven cross-model fallback events through the same e
 
 Historical and aggregated eval datasets now also carry explicit rubric provenance so training consumers can distinguish judge-emitted rubric metadata from legacy records that were later marked as missing rubric.
 
+Eval records now also carry optional `harnessId` attribution when a resource manifest is available, allowing downstream analysis to group outcomes by the behavior-relevant prompt, memory, runtime, and agent-config resources used by the run.
+
 ## Key Files
 
 | File | Role | Notes |
 |------|------|-------|
-| `shared/lib/eval-schema.ts` | Canonical TypeScript schema and changelog | Schema `1.32.0` adds optional `attempted_model` and `model_alias` for HOK-2234. |
+| `shared/lib/eval-schema.ts` | Canonical TypeScript schema and changelog | Schema `1.41.0` adds optional `harnessId` attribution for HOK-2843. |
 | `shared/lib/eval-schema.json` | JSON Schema mirror for validator-style tests | Must stay in sync with `eval-schema.ts`, including additive optional fields. |
 | `shared/lib/eval.ts` | Builds judge-backed eval records | Owns the top-level `SCHEMA_VERSION`. |
 | `shared/lib/eval-record-builder.ts` | Pure metadata attachment helpers | `attachAttemptedModel()` follows the same null-safe no-op pattern as the other field helpers. |
