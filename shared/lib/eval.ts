@@ -13,6 +13,7 @@ import { dirname, join } from "node:path";
 import {
   SCHEMA_VERSION,
   getScoreBand,
+  type EvalFailureReason,
   type EvalRecord,
   type InterventionRecord,
   type Outcomes,
@@ -215,6 +216,77 @@ export interface EvaluateTaskOptions {
   _callFn?: (prompt: string, model: string) => Promise<LLMCallResult>;
   /** Override prompt size guard config (testing) */
   _promptSizeConfig?: { maxPromptBytes?: number; oversizePolicy?: EvalOversizePolicy };
+}
+
+export async function buildUnscoredEvalRecord(
+  input: EvalInput,
+  opts: {
+    failureReason: EvalFailureReason;
+    rationale: string;
+    diagnostic?: Record<string, unknown>;
+    promptArtifacts?: PromptArtifact[];
+    nonRewardReason?: { code: string; message: string };
+  },
+  outcomes: Outcomes | undefined = undefined,
+): Promise<EvalRecord> {
+  const {
+    taskPrompt,
+    interventions = [],
+    interventionRecords,
+    issueId,
+    prUrl,
+    timeSeconds,
+    routingDecision,
+    metadata = {},
+  } = input;
+  const normalizedTimeSeconds = normalizeTimeSeconds(timeSeconds);
+  const hasStructuredInterventions = interventionRecords && interventionRecords.length > 0;
+  const interventionCount = hasStructuredInterventions
+    ? interventionRecords.length
+    : interventions.length;
+  const judgeConfig = loadJudgeConfig();
+  const model = process.env.EVAL_MODEL || judgeConfig.model;
+  const provider = judgeConfig.provider;
+  const activeSessionId = process.env.WAVEMILL_SESSION || (await getLatestSession())?.sessionId;
+  const record: EvalRecord = {
+    id: randomUUID(),
+    schemaVersion: SCHEMA_VERSION,
+    originalPrompt: taskPrompt,
+    modelId: model,
+    modelVersion: model,
+    judgeModel: model,
+    judgeProvider: provider,
+    score: 0,
+    scoreBand: 'Failure',
+    timeSeconds: normalizedTimeSeconds,
+    timestamp: new Date().toISOString(),
+    interventionRequired: interventionCount > 0,
+    interventionCount,
+    interventionDetails: hasStructuredInterventions
+      ? interventionRecords.map((i) => i.note)
+      : interventions.map((i) => i.description),
+    ...(hasStructuredInterventions && { interventions: interventionRecords }),
+    rationale: opts.rationale,
+    failureReason: opts.failureReason,
+    ...(issueId && { issueId }),
+    ...(prUrl && { prUrl }),
+    ...(outcomes && { outcomes }),
+    ...(routingDecision && { routingDecision }),
+    ...(opts.promptArtifacts && opts.promptArtifacts.length > 0 && { promptArtifacts: opts.promptArtifacts }),
+    metadata: {
+      ...metadata,
+      ...(opts.diagnostic ? { diagnostic: opts.diagnostic } : {}),
+      interventionFlags: [],
+    },
+  };
+  attachManifestRef(record, activeSessionId);
+  attachEligibility(record);
+  record.trainingEligible = false;
+  record.nonRewardReason = opts.nonRewardReason ?? {
+    code: opts.failureReason,
+    message: opts.rationale,
+  };
+  return record;
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -805,44 +877,23 @@ export async function evaluateTask(
     console.warn(`[eval] Failed to capture prompt artifact: ${errorMessage(err)}`);
   }
 
-  const activeSessionId = process.env.WAVEMILL_SESSION || (await getLatestSession())?.sessionId;
-
   if (enforcement.action === 'rejected') {
-    const record: EvalRecord = {
-      id: randomUUID(),
-      schemaVersion: SCHEMA_VERSION,
-      originalPrompt: taskPrompt,
-      modelId: model,
-      modelVersion: model,
-      judgeModel: model,
-      judgeProvider: provider,
-      score: 0,
-      scoreBand: 'Failure',
-      timeSeconds: normalizedTimeSeconds,
-      timestamp: new Date().toISOString(),
-      interventionRequired: interventionCount > 0,
-      interventionCount,
-      interventionDetails: hasStructuredInterventions
-        ? interventionRecords.map((i) => i.note)
-        : interventions.map((i) => i.description),
-      ...(hasStructuredInterventions && { interventions: interventionRecords }),
-      rationale: `Eval prompt exceeded configured byte limit before judge invocation (${enforcement.diagnostic.totalBytes} > ${limitBytes}).`,
-      failureReason: 'eval_prompt_too_large',
-      ...(issueId && { issueId }),
-      ...(prUrl && { prUrl }),
-      ...(outcomes && { outcomes }),
-      ...(routingDecision && { routingDecision }),
-      ...(promptArtifacts.length > 0 && { promptArtifacts }),
-      metadata: {
-        ...metadata,
-        interventionFlags: [],
+    const record = await buildUnscoredEvalRecord(
+      input,
+      {
+        failureReason: 'eval_prompt_too_large',
+        rationale: `Eval prompt exceeded configured byte limit before judge invocation (${enforcement.diagnostic.totalBytes} > ${limitBytes}).`,
+        promptArtifacts,
       },
-    };
+      outcomes,
+    );
     attachPromptSizeDiagnostic(record, enforcement.diagnostic);
-    attachManifestRef(record, activeSessionId);
     attachEligibility(record);
+    record.trainingEligible = false;
     return record;
   }
+
+  const activeSessionId = process.env.WAVEMILL_SESSION || (await getLatestSession())?.sessionId;
 
   const callFn = _callFn || callJudgeLLM;
 
