@@ -262,7 +262,7 @@ export function resolvePrIdentityMetadata(
   return parsePrIdentityMetadata(raw, pr);
 }
 
-function hasCommit(runGit: (args: string[]) => string, sha: string): boolean {
+export function hasCommit(runGit: (args: string[]) => string, sha: string): boolean {
   try {
     runGit(['cat-file', '-e', `${sha}^{commit}`]);
     return true;
@@ -271,7 +271,7 @@ function hasCommit(runGit: (args: string[]) => string, sha: string): boolean {
   }
 }
 
-function ensureLocalComparisonObjects(input: {
+export function ensureLocalComparisonObjects(input: {
   prNumber: string;
   metadata: PrIdentityMetadata;
   forkCommit?: string | null;

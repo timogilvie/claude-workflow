@@ -275,6 +275,7 @@ async function withMockedPostCompletionDeps(fn: () => Promise<void> | void): Pro
     postCompletionHookDeps.detectAndFormatInterventions = interventionDetector.detectAndFormatInterventions;
     postCompletionHookDeps.runEvalAnalysis = evalAnalysis.runEvalAnalysis;
     postCompletionHookDeps.evaluateTask = evalModule.evaluateTask;
+    postCompletionHookDeps.buildUnscoredEvalRecord = evalModule.buildUnscoredEvalRecord;
     postCompletionHookDeps.appendEvalRecord = evalPersistence.appendEvalRecord;
     postCompletionHookDeps.collectCiOutcome = outcomeCollectors.collectCiOutcome;
     postCompletionHookDeps.collectTestsOutcome = outcomeCollectors.collectTestsOutcome;
@@ -533,6 +534,59 @@ await test('runPostCompletionEval passes and persists phase durations', async ()
       total: 660,
     });
     assert.equal(persistedRecord?.timeSeconds, 660);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+await test('runPostCompletionEval persists unscored record when PR diff is unavailable', async () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'post-completion-hook-diff-'));
+  let persistedRecord: EvalRecord | undefined;
+  let judgeCalled = false;
+
+  try {
+    await withMockedPostCompletionDeps(async () => {
+      stubBaseEvalDeps();
+      postCompletionHookDeps.gatherEvalContext = () => ({
+        taskPrompt: 'Persist outcomes in post-completion evals',
+        prDiff: '',
+        prUrl: 'https://example.test/pr/1550',
+        prDiffAvailability: {
+          available: false,
+          reason: 'gh_too_large',
+          detail: 'HTTP 406: diff exceeded maximum number of files',
+          attempts: ['gh pr diff: HTTP 406', 'local-git: fetch failed'],
+        },
+        issueData: null,
+      });
+      postCompletionHookDeps.evaluateTask = async () => {
+        judgeCalled = true;
+        return makeRecord();
+      };
+      postCompletionHookDeps.appendEvalRecord = (record) => {
+        persistedRecord = record;
+      };
+      postCompletionHookDeps.runContextUpdateWork = async () => {};
+
+      const ok = await runPostCompletionEval({
+        issueId: 'HOK-1550',
+        prNumber: '1550',
+        prUrl: 'https://example.test/pr/1550',
+        workflowType: 'mill',
+        repoDir,
+        branchName: 'task/diff-unavailable',
+        worktreePath: repoDir,
+        agentType: 'codex',
+      });
+
+      assert.equal(ok, true);
+    });
+
+    assert.equal(judgeCalled, false);
+    assert.equal(persistedRecord?.failureReason, 'pr_diff_unavailable');
+    assert.equal(persistedRecord?.score, 0);
+    assert.equal(persistedRecord?.trainingEligible, false);
+    assert.equal((persistedRecord?.metadata?.prDiffUnavailable as { reason?: string } | undefined)?.reason, 'gh_too_large');
   } finally {
     rmSync(repoDir, { recursive: true, force: true });
   }

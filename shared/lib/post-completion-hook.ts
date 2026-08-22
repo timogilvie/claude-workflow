@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
-import { evaluateTask, isJudgeResponseRecoveryError } from './eval.ts';
+import { buildUnscoredEvalRecord, evaluateTask, isJudgeResponseRecoveryError } from './eval.ts';
 import { appendEvalRecord } from './eval-persistence.ts';
 import { resolveEvalsDir, resolveRouteArtifactArchiveDir } from './evals-paths.ts';
 import { execShellCommand } from './shell-utils.ts';
@@ -244,6 +244,7 @@ export const postCompletionHookDeps = {
   detectAndFormatInterventions,
   runEvalAnalysis,
   evaluateTask,
+  buildUnscoredEvalRecord,
   appendEvalRecord,
   collectCiOutcome,
   collectTestsOutcome,
@@ -676,24 +677,45 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
 
     // 4. Run eval judge
     console.log('Post-completion eval: invoking LLM judge...');
-    const record = await postCompletionHookDeps.evaluateTask(
-      {
-        taskPrompt: evalContext.taskPrompt,
-        prReviewOutput: evalContext.prDiff,
-        interventions: interventionData.meta,
-        interventionRecords: interventionData.records,
-        interventionText: interventionData.text,
-        issueId: ctx.issueId || undefined,
-        prUrl: evalContext.prUrl || undefined,
-        timeSeconds,
-        metadata: { workflowType: ctx.workflowType, hookTriggered: true, interventionSummary: interventionData.summary },
-        taskPacket: stageArtifacts.taskPacket,
-        planContent: stageArtifacts.planContent,
-        selfReviewSummary: stageArtifacts.selfReviewSummary,
-        routingDecision: stageArtifacts.routingDecision,
-      },
-      outcomes,
-    );
+    const evalInput = {
+      taskPrompt: evalContext.taskPrompt,
+      prReviewOutput: evalContext.prDiff,
+      interventions: interventionData.meta,
+      interventionRecords: interventionData.records,
+      interventionText: interventionData.text,
+      issueId: ctx.issueId || undefined,
+      prUrl: evalContext.prUrl || undefined,
+      timeSeconds,
+      metadata: { workflowType: ctx.workflowType, hookTriggered: true, interventionSummary: interventionData.summary },
+      taskPacket: stageArtifacts.taskPacket,
+      planContent: stageArtifacts.planContent,
+      selfReviewSummary: stageArtifacts.selfReviewSummary,
+      routingDecision: stageArtifacts.routingDecision,
+    };
+    const record = ctx.prNumber && evalContext.prDiffAvailability?.available === false
+      ? await postCompletionHookDeps.buildUnscoredEvalRecord(
+          {
+            ...evalInput,
+            metadata: {
+              ...evalInput.metadata,
+              prDiffUnavailable: {
+                reason: evalContext.prDiffAvailability.reason,
+                detail: evalContext.prDiffAvailability.detail,
+                attempts: evalContext.prDiffAvailability.attempts,
+              },
+            },
+          },
+          {
+            failureReason: 'pr_diff_unavailable',
+            rationale: `PR diff could not be retrieved (${evalContext.prDiffAvailability.reason}): ${evalContext.prDiffAvailability.detail}. Judge not invoked.`,
+            nonRewardReason: {
+              code: 'pr_diff_unavailable',
+              message: `PR diff could not be retrieved: ${evalContext.prDiffAvailability.reason}`,
+            },
+          },
+          outcomes,
+        )
+      : await postCompletionHookDeps.evaluateTask(evalInput, outcomes);
 
     const executionModel = ctx.solutionModel || stageArtifacts.executionModel;
     if (executionModel) {

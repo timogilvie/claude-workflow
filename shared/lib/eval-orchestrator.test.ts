@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { runEvaluation, evalOrchestratorDeps } from './eval-orchestrator.ts';
 import { enrichPostCompletionRecord } from './post-completion-hook.ts';
 import type { EvalRecord, InterventionRecord, RoutingDecision } from './eval-schema.ts';
+import type { EvalContext } from './eval-context-gatherer.ts';
 import type { WorkflowCostOutcome } from './workflow-cost.ts';
 
 function makeJudgeRecord(): EvalRecord {
@@ -69,6 +70,7 @@ describe('eval-orchestrator', () => {
   let costOutcome: WorkflowCostOutcome;
   let evaluateTaskInput: Record<string, unknown> | undefined;
   let detectAllInput: Record<string, unknown> | undefined;
+  let gatherEvalContextOverride: EvalContext | undefined;
 
   beforeEach(() => {
     mock.restoreAll();
@@ -106,15 +108,26 @@ describe('eval-orchestrator', () => {
       turnCount: 4,
       pricingUsed: {},
     };
+    gatherEvalContextOverride = undefined;
+    evaluateTaskInput = undefined;
+    detectAllInput = undefined;
 
     writeRouteArtifacts(repoDir, 'unified-eval', 'HOK-1495');
 
-    mock.method(evalOrchestratorDeps, 'gatherEvalContext', () => ({
-      taskPrompt: 'Implement unified eval enrichment',
-      prDiff: '+++ shared/lib/eval-orchestrator.ts\n+++ shared/lib/eval-record-builder.ts',
-      prUrl: 'https://example.test/pr/1495',
-      issueData: null,
-    }));
+    mock.method(evalOrchestratorDeps, 'gatherEvalContext', () => (
+      gatherEvalContextOverride ?? {
+        taskPrompt: 'Implement unified eval enrichment',
+        prDiff: '+++ shared/lib/eval-orchestrator.ts\n+++ shared/lib/eval-record-builder.ts',
+        prUrl: 'https://example.test/pr/1495',
+        prDiffAvailability: {
+          available: true,
+          source: 'gh-pr-diff',
+          bytes: 80,
+          attempts: ['gh pr diff: ok 80 bytes'],
+        },
+        issueData: null,
+      }
+    ));
     mock.method(evalOrchestratorDeps, 'gatherStageArtifacts', () => ({
       taskPacket: undefined,
       planContent: undefined,
@@ -309,6 +322,37 @@ describe('eval-orchestrator', () => {
 
     assert.equal(evaluateTaskInput?.timeSeconds, null);
     assert.equal(record.timeSeconds, null);
+  });
+
+  it('persists an unscored record without invoking the judge when PR diff is unavailable', async () => {
+    gatherEvalContextOverride = {
+      taskPrompt: 'Implement unified eval enrichment',
+      prDiff: '',
+      prUrl: 'https://example.test/pr/1495',
+      prDiffAvailability: {
+        available: false,
+        reason: 'gh_too_large',
+        detail: 'HTTP 406: diff exceeded maximum number of files',
+        attempts: ['gh pr diff: HTTP 406', 'local-git: fetch failed'],
+      },
+      issueData: null,
+    };
+
+    const record = await runEvaluation({
+      issueId: 'HOK-1495',
+      prNumber: '1495',
+      repoDir,
+      worktreePath: repoDir,
+      agentType: 'codex',
+    });
+
+    assert.equal(evaluateTaskInput, undefined);
+    assert.equal(record.score, 0);
+    assert.equal(record.scoreBand, 'Failure');
+    assert.equal(record.failureReason, 'pr_diff_unavailable');
+    assert.equal(record.trainingEligible, false);
+    assert.equal((record.metadata?.prDiffUnavailable as { reason?: string } | undefined)?.reason, 'gh_too_large');
+    assert.match(record.rationale, /Judge not invoked/);
   });
 
   it('preserves null duration when no branch is available', async () => {

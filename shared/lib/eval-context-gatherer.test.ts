@@ -134,7 +134,8 @@ describe('eval-context-gatherer', () => {
       const result = fetchPrContext('123', '/repo');
 
       expect(result.url).toBe('https://github.com/user/repo/pull/123');
-      expect(result.diff).toBe('(PR diff unavailable)');
+      expect(result.diff).toBe('');
+      expect(result.availability.available).toBe(false);
     });
 
     it('should handle both fetch failures gracefully', () => {
@@ -145,7 +146,8 @@ describe('eval-context-gatherer', () => {
       const result = fetchPrContext('123', '/repo');
 
       expect(result.url).toBe('');
-      expect(result.diff).toBe('(PR diff unavailable)');
+      expect(result.diff).toBe('');
+      expect(result.availability.available).toBe(false);
     });
   });
 
@@ -233,7 +235,8 @@ describe('eval-context-gatherer', () => {
       });
 
       expect(result.taskPrompt).toContain('details unavailable');
-      expect(result.prDiff).toBe('(PR diff unavailable)');
+      expect(result.prDiff).toBe('');
+      expect(result.prDiffAvailability.available).toBe(false);
       expect(result.prUrl).toBe('');
       expect(result.issueData).toBeNull();
     });
