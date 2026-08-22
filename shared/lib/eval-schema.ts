@@ -153,7 +153,7 @@
  */
 
 import type { ModelPricing } from './workflow-cost.ts';
-import type { ModelSelector, RegistryTaskType } from './model-registry.ts';
+import type { ModelEvidencePolicy, ModelIdentityStatus, ModelSelector, RegistryTaskType } from './model-registry.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
 import type {
   ChallengeExecutionAttestation,
@@ -164,9 +164,33 @@ import type { ChallengeRoutingMeta } from './challenge-comparison.ts';
 import type { ChallengeStage } from './challenge-mode.ts';
 
 /** Current eval schema version for newly emitted records. */
-export const SCHEMA_VERSION = '1.41.0';
+export const SCHEMA_VERSION = '1.42.0';
 
 export type RoutingRole = 'planner' | 'coder' | 'reviewer';
+
+export interface ModelIdentityObservation {
+  alias: string;
+  providerId?: string;
+  identityStatus: ModelIdentityStatus;
+  identityRevision: number;
+  fingerprint: string;
+  evidencePolicy: ModelEvidencePolicy;
+}
+
+export interface ModelIdentityAttribution {
+  observedAt: string;
+  roles: Partial<Record<RoutingRole, ModelIdentityObservation>>;
+  provisionalRoles: RoutingRole[];
+  candidateOnlyProvisional: string[];
+  finalization?: {
+    promotedAt: string;
+    manifestId: string;
+    fromRevision: number;
+    toRevision: number;
+    observedAlias: string;
+    finalAlias: string;
+  };
+}
 
 export interface ResolvedModelRoutingDecision {
   role: RoutingRole;
@@ -538,6 +562,7 @@ export type InterventionSeverity = 'low' | 'med' | 'high';
  * @since 1.14.0
  * @since 1.30.0 added missing_feature_outcome, invalid_feature_outcome, failed_feature_outcome
  * @since 1.39.0 added missing_challenge_stage
+ * @since 1.42.0 added provisional_model_identity
  */
 export type EligibilityErrorCode =
   | 'missing_routing'
@@ -550,7 +575,8 @@ export type EligibilityErrorCode =
   | 'missing_feature_outcome'
   | 'invalid_feature_outcome'
   | 'failed_feature_outcome'
-  | 'missing_challenge_stage';
+  | 'missing_challenge_stage'
+  | 'provisional_model_identity';
 
 // ────────────────────────────────────────────────────────────────
 // Feature Outcome Diagnostics (HOK-2262)
@@ -1811,6 +1837,18 @@ export interface EvalRecord {
 
   /** Snapshot of the pricing table used for workflowCost calculation (HOK-858) */
   pricingSnapshot?: Record<string, ModelPricing>;
+
+  /** Observation-time model identity snapshot for executed and candidate model references. */
+  modelIdentityAttribution?: ModelIdentityAttribution;
+
+  /** Promotion-time normalized cost computed from final explicit pricing without mutating observed cost. */
+  normalizedEvaluationCost?: {
+    costUsd: number | null;
+    basis: 'explicit_pricing' | 'incomplete';
+    coverage: 'complete' | 'missing_cache_usage' | 'missing_cache_pricing';
+    pricingRevision?: string;
+    computedAt: string;
+  };
 
   /** Difficulty band classification (e.g. "easy", "medium", "hard") */
   difficultyBand?: DifficultyBand;

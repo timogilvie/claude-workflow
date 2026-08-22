@@ -45,7 +45,14 @@ import type {
   FeatureOutcomeDiagnostics,
   VerificationTelemetry,
   VerificationTelemetryLocalExecution,
+  RoutingRole,
 } from './eval-schema.ts';
+import {
+  getEffectiveRegistry,
+  resolveModelIdentity,
+  resolveProviderNativeModelId,
+  type ModelRegistry,
+} from './model-registry.ts';
 import type {
   PrePrVerificationArtifact,
   PrePrVerificationConfig,
@@ -83,6 +90,8 @@ import { redactText, redactVerificationTelemetry } from './text-redaction.ts';
 
 /** All metadata to attach to an eval record. */
 export interface EvalRecordMetadata {
+  /** Registry snapshot used for model identity attribution. */
+  registry?: ModelRegistry;
   /** Agent type that ran the workflow */
   agentType?: string;
   /** Execution provider metadata */
@@ -954,6 +963,7 @@ const TRAINING_ELIGIBILITY_CODES: readonly EligibilityErrorCode[] = [
   'missing_outcome',
   'missing_routing',
   'missing_task_descriptor',
+  'provisional_model_identity',
 ];
 
 const BUDGET_EVAL_ELIGIBILITY_CODES: readonly EligibilityErrorCode[] = [
@@ -961,6 +971,7 @@ const BUDGET_EVAL_ELIGIBILITY_CODES: readonly EligibilityErrorCode[] = [
   'missing_budget_snapshot',
   'missing_cost',
   'missing_routing',
+  'provisional_model_identity',
 ];
 
 function isNonEmptyString(value: unknown): value is string {
@@ -986,6 +997,113 @@ function hasObjectValues(value: Record<string, unknown>): boolean {
 function hasBudgetSnapshot(record: EvalRecord): boolean {
   return isFiniteNonNegativeBudget(record.constraints?.maxCostUsd)
     || isFiniteNonNegativeBudget(record.taskDescriptor?.constraints?.max_cost_usd);
+}
+
+function roleFromDescriptorStage(stage: string): RoutingRole | null {
+  const normalized = stage.toLowerCase();
+  if (normalized === 'planner' || normalized === 'planning' || normalized === 'expansion') return 'planner';
+  if (normalized === 'coder' || normalized === 'coding' || normalized === 'implementation') return 'coder';
+  if (normalized === 'reviewer' || normalized === 'review') return 'reviewer';
+  return null;
+}
+
+function collectExecutedModelRefs(record: EvalRecord): Array<{ role: RoutingRole; modelId: string }> {
+  const refs: Array<{ role: RoutingRole; modelId: string }> = [];
+  const add = (role: RoutingRole, modelId: unknown): void => {
+    if (typeof modelId !== 'string' || modelId.trim().length === 0) return;
+    refs.push({ role, modelId: modelId.trim() });
+  };
+
+  for (const role of ['planner', 'coder', 'reviewer'] as const) {
+    add(role, record.routing?.[role]?.resolvedModelId);
+  }
+  add('planner', record.executedPlanning?.model);
+  add('planner', record.planningExecutionOutcome?.model);
+  add('coder', record.attempted_model);
+
+  for (const [stage, descriptor] of Object.entries(record.taskDescriptor?.stages ?? {})) {
+    const role = roleFromDescriptorStage(stage);
+    if (role) {
+      add(role, descriptor.model);
+    }
+  }
+
+  return refs;
+}
+
+function collectCandidateModelRefs(record: EvalRecord): string[] {
+  const models = new Set<string>();
+  for (const candidate of record.routingDecision?.candidates ?? []) {
+    if (typeof candidate.modelId === 'string' && candidate.modelId.trim().length > 0) {
+      models.add(candidate.modelId.trim());
+    }
+  }
+  for (const modelId of record.taskDescriptor?.constraints?.models_available ?? []) {
+    if (typeof modelId === 'string' && modelId.trim().length > 0) {
+      models.add(modelId.trim());
+    }
+  }
+  return [...models];
+}
+
+export function computeModelIdentityAttribution(
+  record: EvalRecord,
+  registry: ModelRegistry = getEffectiveRegistry(),
+  observedAt: string = new Date().toISOString(),
+): EvalRecord['modelIdentityAttribution'] {
+  const roles: EvalRecord['modelIdentityAttribution']['roles'] = {};
+  const provisionalRoles = new Set<RoutingRole>();
+  const executedModels = new Set<string>();
+
+  for (const ref of collectExecutedModelRefs(record)) {
+    executedModels.add(ref.modelId);
+    const resolved = resolveProviderNativeModelId(ref.modelId, registry);
+    const identity = resolveModelIdentity(registry, ref.modelId);
+    roles[ref.role] = {
+      alias: resolved?.wavemillAlias ?? ref.modelId,
+      providerId: resolved?.providerNativeId,
+      identityStatus: identity.status,
+      identityRevision: identity.revision,
+      fingerprint: identity.fingerprint,
+      evidencePolicy: identity.evidencePolicy,
+    };
+    if (identity.status === 'provisional' || identity.evidencePolicy === 'held') {
+      provisionalRoles.add(ref.role);
+    }
+  }
+
+  const candidateOnlyProvisional = collectCandidateModelRefs(record)
+    .filter((modelId) => !executedModels.has(modelId))
+    .filter((modelId) => {
+      const identity = resolveModelIdentity(registry, modelId);
+      return identity.status === 'provisional' || identity.evidencePolicy === 'held';
+    })
+    .sort();
+
+  if (Object.keys(roles).length === 0 && candidateOnlyProvisional.length === 0) {
+    return undefined;
+  }
+
+  return {
+    observedAt,
+    roles,
+    provisionalRoles: [...provisionalRoles].sort(),
+    candidateOnlyProvisional,
+  };
+}
+
+export function attachModelIdentityAttribution(
+  record: EvalRecord | null | undefined,
+  registry: ModelRegistry = getEffectiveRegistry(),
+  observedAt?: string,
+): void {
+  if (!record) return;
+  const attribution = computeModelIdentityAttribution(record, registry, observedAt);
+  if (attribution) {
+    record.modelIdentityAttribution = attribution;
+  } else {
+    delete record.modelIdentityAttribution;
+  }
 }
 
 /**
@@ -1021,6 +1139,10 @@ export function computeEligibility(record: EvalRecord): {
   if (!hasBudgetSnapshot(record)) {
     errors.add(BUDGET_MISSING);
     errors.add('missing_budget_snapshot');
+  }
+
+  if ((record.modelIdentityAttribution?.provisionalRoles.length ?? 0) > 0) {
+    errors.add('provisional_model_identity');
   }
 
   const eligibilityErrors = [...errors].sort();
@@ -1486,6 +1608,7 @@ export function enrichEvalRecord(record: EvalRecord, metadata: EvalRecordMetadat
   }
   attachManifestRef(record, process.env.WAVEMILL_SESSION, undefined);
   attachResourceSelections(record);
+  attachModelIdentityAttribution(record, metadata.registry ?? getEffectiveRegistry());
   attachEligibility(record);
   attachChallengeExecutionMetadata(record, {
     side: metadata.challengeSide,
@@ -1544,6 +1667,7 @@ export function enrichTrainingMetadata(
   attachManifestRef(record, process.env.WAVEMILL_SESSION, undefined);
   attachResourceSelections(record);
   attachEnrichmentDiagnostics(record);
+  attachModelIdentityAttribution(record, metadata.registry ?? getEffectiveRegistry());
   attachEligibility(record);
   attachChallengeExecutionMetadata(record, {
     side: metadata.challengeSide,

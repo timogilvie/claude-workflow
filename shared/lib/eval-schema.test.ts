@@ -780,7 +780,7 @@ function validPromptSizeDiagnostic() {
 }
 
 test('SCHEMA_VERSION is bumped for eval schema updates', () => {
-  assert.equal(SCHEMA_VERSION, '1.41.0');
+  assert.equal(SCHEMA_VERSION, '1.42.0');
 });
 
 test('Record with harnessId validates and legacy records without it still validate', () => {
@@ -1718,6 +1718,7 @@ test('Eligibility fields validate and schema stays in parity', () => {
     'invalid_feature_outcome',
     'failed_feature_outcome',
     'missing_challenge_stage',
+    'provisional_model_identity',
   ]);
   assert.equal(properties.enrichmentDiagnostics?.type, 'array');
   assert.equal(properties.enrichmentDiagnostics?.items?.type, 'string');
@@ -2152,8 +2153,8 @@ test('Wavemill router fields validate and schema stays in parity', () => {
   assert.equal(properties.wavemill_router_scoring?.$ref, '#/$defs/WavemillRouterScoringMetadata');
 });
 
-test('Schema version constant is 1.41.0', () => {
-  assert.equal(SCHEMA_VERSION, '1.41.0');
+test('Schema version constant is 1.42.0', () => {
+  assert.equal(SCHEMA_VERSION, '1.42.0');
 });
 
 test('Record with resolved-model routing validates', () => {
