@@ -45,6 +45,10 @@ export interface ObserverLinearConfig {
   label?: string;
   retryQueuePath: string;
   updateCooldownMinutes: number;
+  maxIncidentsPerPass: number;
+  maxRetryEntriesPerPass: number;
+  requestDelayMs: number;
+  rateLimitBackoffMs: number;
   policies: Record<IncidentCategory, IncidentClassPolicy>;
   redaction: IncidentLinearRedactionConfig;
 }
@@ -55,6 +59,7 @@ export type SyncAction =
   | 'correlate'
   | 'skip'
   | 'no_op'
+  | 'unknown_needs_lookup'
   | 'queued'
   | 'failed';
 
@@ -123,6 +128,10 @@ export const DEFAULT_INCIDENT_LINEAR_CONFIG: ObserverLinearConfig = {
   detectionOnly: false,
   retryQueuePath: '.wavemill/registry/linear-incident-queue.jsonl',
   updateCooldownMinutes: 5,
+  maxIncidentsPerPass: 10,
+  maxRetryEntriesPerPass: 5,
+  requestDelayMs: 250,
+  rateLimitBackoffMs: 1000,
   policies: {
     product_defect: { strategy: 'create' },
     model_task_harness_outcome: {
@@ -429,7 +438,6 @@ async function addIncidentLabels(issue: LinearIssueSummary | LinearIssue, incide
 }
 
 export async function syncIncident(options: SyncIncidentOptions): Promise<SyncResult> {
-  const client = options.client ?? DEFAULT_CLIENT;
   const now = options.now ?? new Date();
   const config = options.config;
   const evidenceRevision = options.store?.computeEvidenceRevision(options.incident) ?? new IncidentStore('').computeEvidenceRevision(options.incident);
@@ -438,9 +446,15 @@ export async function syncIncident(options: SyncIncidentOptions): Promise<SyncRe
   const audit = options.audit ?? (() => {});
   const baseResult = { fingerprint: incident.fingerprint, evidenceRevision, dryRun };
 
+  if (dryRun) {
+    return planOfflineSync(incident, config, evidenceRevision, now, options.replay === true);
+  }
+
   if (!config.enabled && !dryRun) {
     return { ...baseResult, action: 'skip', status: 'skipped', reason: 'observer.linear.enabled is false' };
   }
+
+  const client = withRequestPacing(options.client ?? DEFAULT_CLIENT, config);
 
   try {
     const existing = incident.metadata?.linkedLinearId
@@ -516,6 +530,9 @@ export async function syncIncident(options: SyncIncidentOptions): Promise<SyncRe
     const action = incident.metadata?.linkedLinearId ? 'update_comment' : 'create';
     let retryQueued = false;
     let nextRetryAt: string | undefined;
+    if (classified.category === 'rate_limit' && config.rateLimitBackoffMs > 0) {
+      await sleep(config.rateLimitBackoffMs);
+    }
     if (classified.isRetryable && options.retryQueue && !dryRun) {
       const queued = await options.retryQueue.enqueueIncidentSync({
         incidentFingerprint: incident.fingerprint,
@@ -539,4 +556,102 @@ export async function syncIncident(options: SyncIncidentOptions): Promise<SyncRe
     }
     return { ...baseResult, action: 'failed', status: 'failed', reason: classified.message };
   }
+}
+
+function planOfflineSync(
+  incident: IncidentRecord,
+  config: ObserverLinearConfig,
+  evidenceRevision: string,
+  now: Date,
+  replay: boolean,
+): SyncResult {
+  const baseResult = { fingerprint: incident.fingerprint, evidenceRevision, dryRun: true, plannedTitle: generateIssueTitle(incident) };
+  if (incident.metadata?.linkedLinearId) {
+    const update = shouldUpdateIncident(incident, evidenceRevision, now, replay);
+    if (!update.allowed) {
+      return {
+        ...baseResult,
+        action: 'no_op',
+        status: 'skipped',
+        issueId: incident.metadata.linkedLinearId,
+        issueUrl: incident.metadata.linkedLinearUrl,
+        reason: update.reason,
+      };
+    }
+    return {
+      ...baseResult,
+      action: 'update_comment',
+      status: 'skipped',
+      issueId: incident.metadata.linkedLinearId,
+      issueUrl: incident.metadata.linkedLinearUrl,
+      reason: 'dry-run planned evidence update from local linked issue metadata',
+    };
+  }
+
+  const related = relatedIssues(incident, config.policies[incident.category]);
+  if (related.length > 0) {
+    return {
+      ...baseResult,
+      action: 'unknown_needs_lookup',
+      status: 'skipped',
+      reason: `dry-run needs Linear lookup to resolve related issue(s): ${related.join(', ')}`,
+    };
+  }
+
+  const createPolicy = policyAllowsCreate(incident, config);
+  if (!createPolicy.allowed) {
+    return { ...baseResult, action: 'skip', status: 'skipped', reason: createPolicy.reason };
+  }
+
+  return {
+    ...baseResult,
+    action: 'unknown_needs_lookup',
+    status: 'skipped',
+    reason: 'dry-run needs Linear lookup to determine create versus update',
+  };
+}
+
+function withRequestPacing(client: IncidentLinearClient, config: ObserverLinearConfig): IncidentLinearClient {
+  const delayMs = Math.max(0, config.requestDelayMs);
+  if (delayMs === 0) return client;
+  const pace = async () => sleep(delayMs);
+  return {
+    getTeams: async (...args) => {
+      await pace();
+      return client.getTeams(...args);
+    },
+    getProjects: async (...args) => {
+      await pace();
+      return client.getProjects(...args);
+    },
+    searchIssues: async (...args) => {
+      await pace();
+      return client.searchIssues(...args);
+    },
+    getIssue: async (...args) => {
+      await pace();
+      return client.getIssue(...args);
+    },
+    createIssue: async (...args) => {
+      await pace();
+      return client.createIssue(...args);
+    },
+    createComment: async (...args) => {
+      await pace();
+      return client.createComment(...args);
+    },
+    getOrCreateLabel: async (...args) => {
+      await pace();
+      return client.getOrCreateLabel(...args);
+    },
+    addLabelsToIssue: async (...args) => {
+      await pace();
+      return client.addLabelsToIssue(...args);
+    },
+  };
+}
+
+function sleep(ms: number): Promise<void> {
+  if (ms <= 0) return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

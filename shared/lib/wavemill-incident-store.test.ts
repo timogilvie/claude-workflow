@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -74,6 +74,56 @@ test('incident store handles concurrent upserts without duplicate records', asyn
 
     const evidence = await store.getEvidenceForIncident(incidents[0].fingerprint);
     assert.equal(evidence.length, 10);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('incident store consolidates legacy fanned-out records under canonical attribution', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'incident-legacy-fanout-'));
+  try {
+    const store = new IncidentStore(dir, { escalationThreshold: 3 });
+    const first = await store.upsert(incident({
+      taskId: 'HOK-2841',
+      category: 'external_transient_dependency',
+      rootCauseClass: 'remote_timeout',
+      summary: 'Queue planner fallback is active: timeout.',
+      evidence: [{
+        type: 'backstage_health',
+        source: '.wavemill/queue-health.json',
+        timestamp: '2026-08-03T12:00:00.000Z',
+        redactedData: 'reason=timeout',
+        key: 'queue_planner_fallback',
+      }],
+    }));
+    await store.recordLinearSync(first.fingerprint, {
+      linearIssueId: 'HOK-3000',
+      evidenceRevision: 'old-revision',
+      syncedAt: '2026-08-03T12:01:00.000Z',
+    });
+    await store.upsert(incident({
+      taskId: 'HOK-2842',
+      category: 'external_transient_dependency',
+      rootCauseClass: 'remote_timeout',
+      summary: 'Queue planner fallback is active: timeout.',
+      evidence: first.evidence,
+    }));
+
+    const canonical = await store.upsert(incident({
+      taskId: null,
+      category: 'external_transient_dependency',
+      rootCauseClass: 'remote_timeout',
+      summary: 'Queue planner fallback is active: timeout.',
+      evidence: first.evidence,
+    }));
+    const incidents = await store.getIncidents();
+    const index = JSON.parse(readFileSync(join(dir, 'index.json'), 'utf-8')) as Record<string, IncidentRecord>;
+
+    assert.equal(incidents.length, 1);
+    assert.equal(canonical.taskId, null);
+    assert.equal(canonical.occurrenceCount, 3);
+    assert.equal(canonical.metadata.linkedLinearId, 'HOK-3000');
+    assert.deepEqual(Object.keys(index), [canonical.fingerprint]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

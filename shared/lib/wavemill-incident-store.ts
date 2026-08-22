@@ -76,7 +76,14 @@ export class IncidentStore {
     let stored: IncidentRecord | undefined;
 
     const updatedIndex = await this.mutateIndex(indexPath, (index) => {
-      const existing = index[fingerprint];
+      const legacyEntries = Object.entries(index)
+        .filter(([key, record]) => key !== fingerprint && this.sameCanonicalIncident(record, incident));
+      for (const [key] of legacyEntries) delete index[key];
+
+      const existing = this.mergeStoredRecords([
+        index[fingerprint],
+        ...legacyEntries.map(([, record]) => record),
+      ].filter((record): record is IncidentRecord => Boolean(record)));
       const redactedEvidence = incident.evidence.slice(-this.maxEvidencePerRecord);
       if (existing) {
         const occurrenceCount = (existing.occurrenceCount || 0) + 1;
@@ -89,6 +96,11 @@ export class IncidentStore {
         stored = {
           ...existing,
           schemaVersion: WAVEMILL_INCIDENT_SCHEMA_VERSION,
+          fingerprint,
+          taskId: incident.taskId ?? null,
+          session: incident.session ?? existing.session ?? null,
+          category: incident.category,
+          rootCauseClass: incident.rootCauseClass,
           severity: this.maxSeverity(existing.severity, incident.severity),
           confidence: this.maxConfidence(existing.confidence, incident.confidence),
           lifecycle,
@@ -301,4 +313,90 @@ export class IncidentStore {
     const order: IncidentRecord['confidence'][] = ['low', 'medium', 'high', 'definite'];
     return order.indexOf(b) > order.indexOf(a) ? b : a;
   }
+
+  private sameCanonicalIncident(
+    stored: Pick<IncidentRecord, 'category' | 'rootCauseClass' | 'evidence'>,
+    candidate: Pick<IncidentRecord, 'category' | 'rootCauseClass' | 'evidence'>,
+  ): boolean {
+    return stored.category === candidate.category
+      && stored.rootCauseClass === candidate.rootCauseClass
+      && this.evidenceIdentity(stored.evidence) === this.evidenceIdentity(candidate.evidence);
+  }
+
+  private evidenceIdentity(evidence: IncidentEvidence[]): string {
+    return [...new Set(evidence
+      .map((item) => `${item.type}:${item.source}:${item.key ?? ''}`)
+      .sort())]
+      .join('|');
+  }
+
+  private mergeStoredRecords(records: IncidentRecord[]): IncidentRecord | undefined {
+    if (records.length === 0) return undefined;
+    const [first, ...rest] = records;
+    return rest.reduce((merged, record) => ({
+      ...merged,
+      schemaVersion: WAVEMILL_INCIDENT_SCHEMA_VERSION,
+      severity: this.maxSeverity(merged.severity, record.severity),
+      confidence: this.maxConfidence(merged.confidence, record.confidence),
+      lifecycle: this.maxLifecycle(merged.lifecycle, record.lifecycle),
+      createdAt: earlierIso(merged.createdAt, record.createdAt),
+      lastObservedAt: laterIso(merged.lastObservedAt, record.lastObservedAt),
+      occurrenceCount: (merged.occurrenceCount || 0) + (record.occurrenceCount || 0),
+      evidence: this.dedupeEvidence([...merged.evidence, ...record.evidence]).slice(-this.maxEvidencePerRecord),
+      metadata: this.mergeMetadata(merged.metadata, record.metadata),
+    }), first);
+  }
+
+  private dedupeEvidence(evidence: IncidentEvidence[]): IncidentEvidence[] {
+    const byKey = new Map<string, IncidentEvidence>();
+    for (const item of evidence) {
+      byKey.set(`${item.type}:${item.source}:${item.key ?? ''}:${item.timestamp}:${item.redactedData}`, item);
+    }
+    return [...byKey.values()];
+  }
+
+  private mergeMetadata(a: IncidentRecord['metadata'], b: IncidentRecord['metadata']): IncidentRecord['metadata'] {
+    const linkedIds = [a.linkedLinearId, b.linkedLinearId].filter((value): value is string => typeof value === 'string' && value.length > 0);
+    const distinctLinks = [...new Set(linkedIds)];
+    const syncErrors = [
+      ...(Array.isArray(a.syncErrors) ? a.syncErrors : []),
+      ...(Array.isArray(b.syncErrors) ? b.syncErrors : []),
+    ].slice(-5);
+    return {
+      ...a,
+      ...b,
+      linkedLinearId: distinctLinks[0],
+      linkedLinearUrl: a.linkedLinearId ? a.linkedLinearUrl : b.linkedLinearUrl ?? a.linkedLinearUrl,
+      lastSyncedAt: laterIso(a.lastSyncedAt, b.lastSyncedAt),
+      lastSyncedEvidenceRevision: a.lastSyncedAt && laterIso(a.lastSyncedAt, b.lastSyncedAt) === a.lastSyncedAt
+        ? a.lastSyncedEvidenceRevision
+        : b.lastSyncedEvidenceRevision ?? a.lastSyncedEvidenceRevision,
+      syncCooldownUntil: laterIso(a.syncCooldownUntil, b.syncCooldownUntil),
+      updateCount: Number(a.updateCount ?? 0) + Number(b.updateCount ?? 0),
+      syncErrors,
+      thresholdTriggered: a.thresholdTriggered === true || b.thresholdTriggered === true,
+      ...(distinctLinks.length > 1 ? { linearSyncConflict: { linkedLinearIds: distinctLinks } } : {}),
+    };
+  }
+
+  private maxLifecycle(a: IncidentLifecycle, b: IncidentLifecycle): IncidentLifecycle {
+    const order: IncidentLifecycle[] = ['observed', 'active', 'resolved', 'archived'];
+    return order.indexOf(b) > order.indexOf(a) ? b : a;
+  }
+}
+
+function earlierIso(a: unknown, b: unknown): string {
+  const aString = typeof a === 'string' ? a : '';
+  const bString = typeof b === 'string' ? b : '';
+  if (!aString) return bString;
+  if (!bString) return aString;
+  return Date.parse(aString) <= Date.parse(bString) ? aString : bString;
+}
+
+function laterIso(a: unknown, b: unknown): string | undefined {
+  const aString = typeof a === 'string' ? a : '';
+  const bString = typeof b === 'string' ? b : '';
+  if (!aString) return bString || undefined;
+  if (!bString) return aString || undefined;
+  return Date.parse(aString) >= Date.parse(bString) ? aString : bString;
 }

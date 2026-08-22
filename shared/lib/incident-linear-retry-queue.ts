@@ -135,12 +135,19 @@ export function enqueueIncidentSync(input: EnqueueIncidentSyncInput): PendingInc
   const repoDir = input.repoDir ?? process.cwd();
   const path = resolveQueuePath(repoDir, input.queuePath);
   const now = input.now ?? new Date();
-  const attempts = input.attempts ?? 1;
+  const existing = [...latestById(parseQueue(path)).values()]
+    .find((record): record is PendingIncidentRetryRecord =>
+      record.recordType === 'pending'
+      && record.incidentFingerprint === input.incidentFingerprint
+      && record.linearAction === input.linearAction
+      && (record.linearIssueId ?? '') === (input.linearIssueId ?? ''),
+    );
+  const attempts = input.attempts ?? existing?.attempts ?? 1;
   const record: PendingIncidentRetryRecord = {
     schemaVersion: SCHEMA_VERSION,
     recordType: 'pending',
-    id: randomUUID(),
-    enqueuedAt: toIso(now),
+    id: existing?.id ?? randomUUID(),
+    enqueuedAt: existing?.enqueuedAt ?? toIso(now),
     incidentFingerprint: input.incidentFingerprint,
     linearAction: input.linearAction,
     linearIssueId: input.linearIssueId,
@@ -186,10 +193,26 @@ export async function drainIncidentQueue(options: DrainIncidentQueueOptions): Pr
         replay: true,
         now,
         client: options.client,
+        retryQueue: {
+          enqueueIncidentSync: (input) => enqueueIncidentSync({
+            repoDir,
+            queuePath: options.queuePath ?? options.config.retryQueuePath,
+            incidentFingerprint: input.incidentFingerprint,
+            linearAction: input.linearAction,
+            linearIssueId: input.linearIssueId,
+            attempts: record.attempts + 1,
+            lastError: input.lastError,
+            now: input.now,
+          }),
+        },
       });
       if (syncResult.status === 'created' || syncResult.status === 'updated' || syncResult.action === 'no_op') {
         appendRecord(path, { schemaVersion: SCHEMA_VERSION, recordType: 'tombstone', id: record.id, settledAt: toIso(now) });
         result.succeeded += 1;
+        continue;
+      }
+      if (syncResult.status === 'queued') {
+        result.failed += 1;
         continue;
       }
       throw new Error(syncResult.reason ?? 'incident retry did not complete');

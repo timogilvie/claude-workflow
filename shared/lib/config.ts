@@ -462,6 +462,10 @@ export interface ObserverLinearConfig {
   label?: string;
   retryQueuePath: string;
   updateCooldownMinutes: number;
+  maxIncidentsPerPass: number;
+  maxRetryEntriesPerPass: number;
+  requestDelayMs: number;
+  rateLimitBackoffMs: number;
   policies: {
     product_defect: ObserverLinearPolicyConfig;
     model_task_harness_outcome: ObserverLinearPolicyConfig;
@@ -801,6 +805,10 @@ export const OBSERVER_LINEAR_DEFAULTS: ObserverLinearConfig = {
   detectionOnly: false,
   retryQueuePath: '.wavemill/registry/linear-incident-queue.jsonl',
   updateCooldownMinutes: 5,
+  maxIncidentsPerPass: 10,
+  maxRetryEntriesPerPass: 5,
+  requestDelayMs: 250,
+  rateLimitBackoffMs: 1000,
   policies: {
     product_defect: { strategy: 'create' },
     model_task_harness_outcome: { strategy: 'no_create', correlateIssueIds: ['HOK-2593'] },
