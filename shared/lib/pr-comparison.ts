@@ -6,6 +6,7 @@ import {
   detectVariedDimensions,
   type ChallengeComparisonDimensions,
   type ChallengeComparison,
+  type ChallengeCriterionRationales,
   type ChallengeDiffIdentity,
   type ChallengeRoutingMeta,
   type ChallengeSideExecutionProvenance,
@@ -14,6 +15,7 @@ import {
 import type { ChallengeStageEval } from './eval-schema.ts';
 import { formatRubricForJudgePrompt } from './rubric.ts';
 import { errorMessage } from './error-utils.ts';
+import { fillPromptTemplate } from './prompt-utils.ts';
 
 export type PresentationOrder = 'primary-first' | 'challenger-first';
 
@@ -30,12 +32,69 @@ export interface BlindComparisonDimensions {
   autonomy: { A: number; B: number };
 }
 
+export type BlindComparisonCriterionRationales = {
+  [K in keyof ChallengeComparisonDimensions]: { rationale: string };
+};
+
 export interface BlindComparisonResult {
   winner: CandidateKey;
   rationale: string;
   workflowInsight?: string;
   dimensions: BlindComparisonDimensions;
+  criterionRationales: BlindComparisonCriterionRationales;
 }
+
+export const ARBITER_JUDGE_PROMPT_TEMPLATE_PATH = 'tools/prompts/arbiter-judge.md';
+
+export const DEFAULT_ARBITER_JUDGE_PROMPT_TEMPLATE = `You are judging two candidate pull requests (Candidate A and Candidate B) for the same task.
+
+Return JSON only with this exact structure:
+{
+  "winner": "A" | "B",
+  "rationale": "short explanation",
+  "workflowInsight": "optional observation about how routing differences may have influenced the result",
+  "dimensions": {
+    "completeness": { "A": number, "B": number },
+    "correctness": { "A": number, "B": number },
+    "code_quality": { "A": number, "B": number },
+    "intervention_impact": { "A": number, "B": number },
+    "autonomy": { "A": number, "B": number }
+  },
+  "criterionRationales": {
+    "completeness": { "rationale": "why the completeness scores differ or tie" },
+    "correctness": { "rationale": "why the correctness scores differ or tie" },
+    "code_quality": { "rationale": "why the code_quality scores differ or tie" },
+    "intervention_impact": { "rationale": "why the intervention_impact scores differ or tie" },
+    "autonomy": { "rationale": "why the autonomy scores differ or tie" }
+  }
+}
+
+Scores must be integers from 1 to 10.
+Every criterionRationales entry is required and its rationale must be a non-empty string.
+
+Use these criterion definitions exactly:
+{{RUBRIC}}
+
+{{WORKFLOW_CONTEXT}}
+
+{{STAGE_EVIDENCE_CONTEXT}}
+
+Task context:
+{{ISSUE_PROMPT}}
+
+Candidate A diff:
+{{CANDIDATE_A_DIFF}}
+
+Candidate B diff:
+{{CANDIDATE_B_DIFF}}`;
+
+const REQUIRED_DIMENSION_KEYS: Array<keyof ChallengeComparisonDimensions> = [
+  'completeness',
+  'correctness',
+  'code_quality',
+  'intervention_impact',
+  'autonomy',
+];
 
 export type ValidatedComparisonResult = Omit<
   ChallengeComparison,
@@ -55,7 +114,7 @@ export type ValidatedComparisonResult = Omit<
   | 'variedStage'
   | 'stageEvidenceMode'
   | 'presentationOrder'
-  // Schema-carrier fields (not populated by judge, HOK-2794)
+  // Schema-carrier fields populated outside the judge verdict (HOK-2794)
   | 'forkStage'
   | 'forkCommit'
   | 'sharedPrefix'
@@ -67,7 +126,6 @@ export type ValidatedComparisonResult = Omit<
   | 'judge_prompt_hash'
   | 'primary_cost_usd'
   | 'challenger_cost_usd'
-  | 'criterionRationales'
   | 'noComparisonReason'
 >;
 
@@ -391,6 +449,7 @@ export function buildComparisonPrompt(input: {
   primaryDiff: string;
   challengerDiff: string;
   presentationOrder: PresentationOrder;
+  promptTemplate?: string;
   primaryRouting?: ChallengeRoutingMeta;
   challengerRouting?: ChallengeRoutingMeta;
   challengeType?: string;
@@ -452,39 +511,14 @@ ${formatStageEvidenceBlock('Candidate B', sideB.stageEval)}
 `;
   }
 
-  return `You are judging two candidate pull requests (Candidate A and Candidate B) for the same task.
-
-Return JSON only with this exact structure:
-{
-  "winner": "A" | "B",
-  "rationale": "short explanation",
-  "workflowInsight": "optional observation about how routing differences may have influenced the result",
-  "dimensions": {
-    "completeness": { "A": number, "B": number },
-    "correctness": { "A": number, "B": number },
-    "code_quality": { "A": number, "B": number },
-    "intervention_impact": { "A": number, "B": number },
-    "autonomy": { "A": number, "B": number }
-  }
-}
-
-Scores must be integers from 1 to 10.
-
-Use these criterion definitions exactly:
-${formatRubricForJudgePrompt()}
-
-${workflowContext}
-
-${stageEvidenceContext}
-
-Task context:
-${input.issuePrompt}
-
-Candidate A diff:
-${sideA.diff}
-
-Candidate B diff:
-${sideB.diff}`;
+  return fillPromptTemplate(input.promptTemplate ?? DEFAULT_ARBITER_JUDGE_PROMPT_TEMPLATE, {
+    RUBRIC: formatRubricForJudgePrompt(),
+    WORKFLOW_CONTEXT: workflowContext,
+    STAGE_EVIDENCE_CONTEXT: stageEvidenceContext,
+    ISSUE_PROMPT: input.issuePrompt,
+    CANDIDATE_A_DIFF: sideA.diff,
+    CANDIDATE_B_DIFF: sideB.diff,
+  });
 }
 
 function sideView(
@@ -638,6 +672,7 @@ export function validateComparisonJson(parsed: any): BlindComparisonResult {
   const rationale = parsed?.rationale;
   const dimensions = parsed?.dimensions;
   const workflowInsight = parsed?.workflowInsight;
+  const criterionRationales = parsed?.criterionRationales;
 
   if (winner === 'primary' || winner === 'challenger') {
     throw new Error('Unblinded comparison winner keys are not allowed. Use A or B.');
@@ -651,14 +686,7 @@ export function validateComparisonJson(parsed: any): BlindComparisonResult {
   if (workflowInsight !== undefined && typeof workflowInsight !== 'string') {
     throw new Error('workflowInsight must be a string if provided');
   }
-  const requiredDimensionKeys: Array<keyof ChallengeComparisonDimensions> = [
-    'completeness',
-    'correctness',
-    'code_quality',
-    'intervention_impact',
-    'autonomy',
-  ];
-  for (const key of requiredDimensionKeys) {
+  for (const key of REQUIRED_DIMENSION_KEYS) {
     const dimension = dimensions?.[key];
     if (dimension?.primary !== undefined || dimension?.challenger !== undefined) {
       throw new Error(`Unblinded comparison dimension keys are not allowed for ${key}. Use A and B.`);
@@ -684,11 +712,41 @@ export function validateComparisonJson(parsed: any): BlindComparisonResult {
   if (dimensions?.scopeDiscipline !== undefined || dimensions?.codeQuality !== undefined) {
     throw new Error('Legacy comparison keys are not allowed. Use canonical rubric keys only.');
   }
+  if (!criterionRationales || typeof criterionRationales !== 'object' || Array.isArray(criterionRationales)) {
+    throw new Error('criterionRationales must be an object keyed by canonical rubric criterion');
+  }
+  if (
+    criterionRationales.primary !== undefined ||
+    criterionRationales.challenger !== undefined ||
+    criterionRationales.A !== undefined ||
+    criterionRationales.B !== undefined
+  ) {
+    throw new Error('Unblinded or side-level criterionRationales keys are not allowed. Use criterion keys only.');
+  }
+  if (criterionRationales.scopeDiscipline !== undefined || criterionRationales.codeQuality !== undefined) {
+    throw new Error('Legacy criterionRationales keys are not allowed. Use canonical rubric keys only.');
+  }
+
+  const normalizedCriterionRationales = {} as BlindComparisonCriterionRationales;
+  for (const key of REQUIRED_DIMENSION_KEYS) {
+    const entry = criterionRationales[key];
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw new Error(`Invalid criterionRationales payload for ${key}`);
+    }
+    if (entry.primary !== undefined || entry.challenger !== undefined || entry.A !== undefined || entry.B !== undefined) {
+      throw new Error(`Unblinded or side-level criterionRationales keys are not allowed for ${key}. Use rationale only.`);
+    }
+    if (typeof entry.rationale !== 'string' || entry.rationale.trim().length === 0) {
+      throw new Error(`criterionRationales.${key}.rationale must be a non-empty string`);
+    }
+    normalizedCriterionRationales[key] = { rationale: entry.rationale.trim() };
+  }
 
   const result: BlindComparisonResult = {
     winner,
     rationale: rationale.trim(),
     dimensions: dimensions as BlindComparisonDimensions,
+    criterionRationales: normalizedCriterionRationales,
   };
   if (workflowInsight && workflowInsight.trim().length > 0) {
     result.workflowInsight = workflowInsight.trim();
@@ -712,11 +770,18 @@ export function mapBlindVerdictToSides(
       },
     ]),
   ) as ChallengeComparisonDimensions;
+  const criterionRationales = Object.fromEntries(
+    Object.entries(verdict.criterionRationales).map(([key, entry]) => [
+      key,
+      { rationale: entry.rationale },
+    ]),
+  ) as ChallengeCriterionRationales;
 
   const result: ValidatedComparisonResult = {
     winner,
     rationale: verdict.rationale,
     dimensions,
+    criterionRationales,
   };
   if (verdict.workflowInsight) {
     result.workflowInsight = verdict.workflowInsight;
