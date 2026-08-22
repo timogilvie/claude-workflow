@@ -490,6 +490,11 @@ harness_run_tick() {
     WARN_OUTPUT=""
     ATTENTION_STATE=""
     MERGE_QUEUE_SELECTION_FILE="$REPO_UNDER_TEST/.wavemill/merge-queue-selection.json"
+    MERGE_QUEUE_ENABLED="true"
+    MERGE_QUEUE_MAX_CONCURRENT=2
+    MERGE_QUEUE_STUCK_TIMEOUT_SECONDS=900
+    MERGE_QUEUE_CONFLICT_GROUPING_ENABLED="true"
+    MERGE_QUEUE_SKIP_COOLDOWN_SECONDS=60
 
     active_count=0
     BRANCH_BY_ISSUE["$ISSUE"]="$BRANCH"
@@ -566,6 +571,9 @@ harness_run_tick() {
     merge_queue_enabled() { return 1; }
     ready_queue_state() { printf "\n"; }
     ready_queue_field() { printf "\n"; }
+    ready_live_ci_json() { printf "%s\n" "{\"conclusion\":\"pass\",\"headSha\":\"head\",\"mergeStateStatus\":\"CLEAN\",\"observed\":1,\"requiredContexts\":[],\"checks\":[]}"; }
+    ci_summary_from_json() { printf "unknown"; }
+    write_ready_queue_artifacts() { :; }
     ready_changed_files_json() { printf "[]\n"; }
     mark_ready_stale() { :; }
     promote_merge_candidate() { :; }

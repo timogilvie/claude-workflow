@@ -20,7 +20,9 @@ import fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
+  extractReviewOutcome,
   readAllStageResults,
+  reviewResultPassed,
   type StageName,
   type StageResult,
   type StageResultMap,
@@ -558,14 +560,25 @@ function deriveEvidence(
     }
 
     // Review verdict evidence
-    if (stage === 'review' && result.artifacts?.type === 'review') {
-      const artifacts = result.artifacts as { type: 'review'; blockingIssues?: number; findingsCount?: number };
-      const passed = result.status === 'completed' && (!artifacts.blockingIssues || artifacts.blockingIssues === 0);
+    if (stage === 'review') {
+      const outcome = extractReviewOutcome(result);
+      const passed = reviewResultPassed(result);
+      const failed = result.status === 'completed' && !passed;
+      const detail = outcome
+        ? [
+            `exitCode=${typeof outcome.exitCode === 'number' ? outcome.exitCode : 'missing'}`,
+            `verdict=${outcome.verdict ?? 'missing'}`,
+            `iterations=${typeof outcome.iterations === 'number' ? outcome.iterations : 'missing'}`,
+            typeof outcome.blockerCount === 'number' ? `blockers=${outcome.blockerCount}` : '',
+            typeof outcome.warningCount === 'number' ? `warnings=${outcome.warningCount}` : '',
+            outcome.reviewToolError ? `error=${outcome.reviewToolError}` : '',
+          ].filter(Boolean).join(', ')
+        : 'review outcome missing';
       evidence.push({
         kind: 'review_verdict',
         label: 'review_verdict',
-        status: passed ? 'pass' : result.status === 'completed' ? 'fail' : 'unknown',
-        ...(typeof artifacts.blockingIssues === 'number' ? { detail: `blockingIssues=${artifacts.blockingIssues}` } : {}),
+        status: passed ? 'pass' : failed || result.status === 'failed' ? 'fail' : 'unknown',
+        detail,
         timestamp: result.finishedAt ?? undefined,
       });
     }
@@ -649,15 +662,12 @@ function deriveOutcome(
     }
   }
 
-  // reviewPassed: review stage completed without blocking issues
+  // reviewPassed: explicit final review outcome passed the strict readiness gate
   let reviewPassed: boolean | null = null;
   const reviewResult = stages.review;
   if (reviewResult) {
-    if (reviewResult.status === 'completed' && reviewResult.artifacts?.type === 'review') {
-      const artifacts = reviewResult.artifacts as { type: 'review'; blockingIssues?: number };
-      reviewPassed = !artifacts.blockingIssues || artifacts.blockingIssues === 0;
-    } else if (reviewResult.status === 'completed') {
-      reviewPassed = true;
+    if (reviewResult.status === 'completed') {
+      reviewPassed = reviewResultPassed(reviewResult);
     } else if (reviewResult.status === 'failed') {
       reviewPassed = false;
     }

@@ -31,6 +31,7 @@ function pr(overrides: Partial<MergeQueuePr>): MergeQueuePr {
     readyAt: '2026-05-06T12:00:00.000Z',
     unblocksCount: 0,
     changedFiles: ['a.ts'],
+    ci: { conclusion: 'pass' },
     ...overrides,
   };
 }
@@ -151,6 +152,7 @@ test('tick planner demotes stuck candidate and promotes disjoint replacement', (
   });
   assert.deepEqual(plan.stuckIssues, ['HOK-1']);
   assert.deepEqual(plan.selectedIssues, ['HOK-2']);
+  assert.deepEqual(plan.ciBlockedIssues, []);
 });
 
 test('active transient merge retry candidates are not demoted as stuck', () => {
@@ -177,6 +179,7 @@ test('active transient merge retry candidates are not demoted as stuck', () => {
   });
   assert.deepEqual(plan.stuckIssues, []);
   assert.deepEqual(plan.selectedIssues, ['HOK-1', 'HOK-2']);
+  assert.deepEqual(plan.ciBlockedIssues, []);
 });
 
 test('expired transient merge retry candidates can still be demoted as stuck', () => {
@@ -196,6 +199,7 @@ test('expired transient merge retry candidates can still be demoted as stuck', (
   });
   assert.deepEqual(plan.stuckIssues, ['HOK-1']);
   assert.deepEqual(plan.selectedIssues, []);
+  assert.deepEqual(plan.ciBlockedIssues, []);
 });
 
 // --- Terminal workflow status predicate tests ---
@@ -311,6 +315,7 @@ test('planMergeQueueTick excludes terminal candidates from selectedIssues', () =
   });
   assert.deepEqual(plan.selectedIssues, ['HOK-3']);
   assert.deepEqual(plan.stuckIssues, []);
+  assert.deepEqual(plan.ciBlockedIssues, []);
 });
 
 test('terminal stale active candidates do not appear in stuckIssues', () => {
@@ -329,6 +334,7 @@ test('terminal stale active candidates do not appear in stuckIssues', () => {
   });
   assert.deepEqual(plan.stuckIssues, []);
   assert.deepEqual(plan.selectedIssues, []);
+  assert.deepEqual(plan.ciBlockedIssues, []);
 });
 
 test('closed unmerged active candidates are excluded from selectedIssues and stuckIssues', () => {
@@ -348,6 +354,7 @@ test('closed unmerged active candidates are excluded from selectedIssues and stu
   });
   assert.deepEqual(plan.stuckIssues, []);
   assert.deepEqual(plan.selectedIssues, []);
+  assert.deepEqual(plan.ciBlockedIssues, []);
 });
 
 test('closed unmerged candidate does not block open clean ready PR selection', () => {
@@ -375,6 +382,7 @@ test('closed unmerged candidate does not block open clean ready PR selection', (
   });
   assert.deepEqual(plan.stuckIssues, []);
   assert.deepEqual(plan.selectedIssues, ['HOK-OPEN']);
+  assert.deepEqual(plan.ciBlockedIssues, []);
 });
 
 test('closed prState is excluded case-insensitively', () => {
@@ -402,4 +410,70 @@ test('closed prState is excluded case-insensitively', () => {
   });
   assert.deepEqual(plan.stuckIssues, []);
   assert.deepEqual(plan.selectedIssues, ['HOK-OPEN']);
+  assert.deepEqual(plan.ciBlockedIssues, []);
+});
+
+test('HOK-2850: partial live CI is not selected', () => {
+  const selected = selectMergeCandidates({
+    readyPrs: [
+      pr({
+        issue: 'HOK-2850',
+        ci: { conclusion: 'pending', observed: 1, required: 15 },
+      }),
+    ],
+    activeCandidates: [],
+    now: '2026-05-06T12:30:00.000Z',
+    config,
+  });
+  assert.deepEqual(selected.map((item) => item.issue), []);
+});
+
+test('missing live CI is not selected', () => {
+  const selected = selectMergeCandidates({
+    readyPrs: [pr({ issue: 'HOK-NOCI', ci: undefined })],
+    activeCandidates: [],
+    now: '2026-05-06T12:30:00.000Z',
+    config,
+  });
+  assert.deepEqual(selected.map((item) => item.issue), []);
+});
+
+test('failing active candidate is ciBlocked and green replacement can be selected', () => {
+  const plan = planMergeQueueTick({
+    readyPrs: [
+      pr({
+        issue: 'HOK-RED',
+        queueState: 'merge-candidate',
+        changedFiles: ['a.ts'],
+        ci: { conclusion: 'fail', failing: ['Shell and Unit Tests'] },
+      }),
+      pr({
+        issue: 'HOK-GREEN',
+        prNumber: 2,
+        branch: 'task/green',
+        changedFiles: ['b.ts'],
+        ci: { conclusion: 'pass' },
+      }),
+    ],
+    now: '2026-05-06T12:30:00.000Z',
+    config: { ...config, maxConcurrentCandidates: 1 },
+  });
+  assert.deepEqual(plan.ciBlockedIssues, ['HOK-RED']);
+  assert.deepEqual(plan.selectedIssues, ['HOK-GREEN']);
+  assert.deepEqual(plan.stuckIssues, []);
+});
+
+test('blocked merge state is not green even with passing checks', () => {
+  const selected = selectMergeCandidates({
+    readyPrs: [
+      pr({
+        issue: 'HOK-BLOCKED',
+        ci: { conclusion: 'pass', mergeStateStatus: 'BLOCKED' },
+      }),
+    ],
+    activeCandidates: [],
+    now: '2026-05-06T12:30:00.000Z',
+    config,
+  });
+  assert.deepEqual(selected.map((item) => item.issue), []);
 });

@@ -59,7 +59,7 @@ import type {
 } from './challenge-execution-contract.ts';
 import { projectChallengeIntentForPersistence } from './challenge-execution-contract.ts';
 import type { WorkflowCostOutcome, WorkflowCostResult, WorkflowCostFailure } from './workflow-cost.ts';
-import { getManifest, getManifestRef } from './resource-manifest.ts';
+import { getHarnessId, getManifest, getManifestRef } from './resource-manifest.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
 import { getResource } from './resource-registry.ts';
 import {
@@ -1281,6 +1281,10 @@ export function attachManifestRef(
   if (!sessionId) {
     return;
   }
+  const harnessId = getHarnessId(sessionId, repoDir);
+  if (harnessId) {
+    record.harnessId = harnessId;
+  }
   const manifestRef = getManifestRef(sessionId, repoDir);
   if (manifestRef) {
     record.manifestRef = manifestRef as ManifestRef;
@@ -1378,9 +1382,18 @@ export function attachResourceSelections(record: EvalRecord): void {
 export function attachRubricEval(record: EvalRecord, rubricEval?: RubricEval): void {
   if (!rubricEval) return;
   const normalizedRubricEval = { ...rubricEval };
+  // Drop anything that is not one of the allowed enum strings. The previous
+  // `typeof === 'string'` precondition meant only invalid *strings* were
+  // dropped, so a non-string the judge emitted -- `null` above all -- survived
+  // here and then failed write-time validation against the schema's
+  // `"type": "string"`, discarding the whole eval record
+  // (SCHEMA_VIOLATION(rubricEval.determinative_boundary), HOK-2844).
   if (
-    typeof normalizedRubricEval.determinative_boundary === 'string'
-    && !RUBRIC_DETERMINATIVE_BOUNDARY_SET.has(normalizedRubricEval.determinative_boundary)
+    'determinative_boundary' in normalizedRubricEval
+    && !(
+      typeof normalizedRubricEval.determinative_boundary === 'string'
+      && RUBRIC_DETERMINATIVE_BOUNDARY_SET.has(normalizedRubricEval.determinative_boundary)
+    )
   ) {
     delete normalizedRubricEval.determinative_boundary;
   }

@@ -6,7 +6,7 @@ import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mutateJsonState } from '../shared/lib/state-mutex.ts';
 import { getIncidentConfig, getObserverLinearConfig, type ObserverLinearConfig } from '../shared/lib/config.ts';
-import { detectIncidentsForTask } from '../shared/lib/wavemill-incident-detector.ts';
+import { detectIncidentsForRepo, detectIncidentsForTask } from '../shared/lib/wavemill-incident-detector.ts';
 import { IncidentStore } from '../shared/lib/wavemill-incident-store.ts';
 import type { IncidentRecord } from '../shared/lib/wavemill-incident-model.ts';
 import { syncIncident, type SyncResult } from '../shared/lib/incident-to-linear-synchronizer.ts';
@@ -876,6 +876,7 @@ async function reconcileIncidents(snapshot: ObserverSnapshot, options: ObserverO
       },
     );
 
+    const candidates: IncidentRecord[] = [];
     for (const task of repo.tasks) {
       if (!task.issue || terminalStatus(task.status)) continue;
       const taskPath = resolveTaskArtifactDir(repo.repoDir, task);
@@ -886,24 +887,32 @@ async function reconcileIncidents(snapshot: ObserverSnapshot, options: ObserverO
         { repoDir: repo.repoDir, session: repo.session, now: new Date(snapshot.timestamp) },
         options.dependencyThreshold ?? incidentConfig.detection?.dependencyThreshold ?? 3,
       );
-      for (const incident of detected) {
-        try {
-          const stored = await store.upsert(incident);
-          incidents.push(stored);
-        } catch (error) {
-          snapshot.findings.push({
-            id: `incident-store-error-${repo.session}-${hashText(repo.repoDir)}`,
-            severity: 'high',
-            category: 'operational',
-            confidence: 'high',
-            session: repo.session,
-            repoDir: repo.repoDir,
-            issue: task.issue,
-            title: 'Observer could not persist Wavemill incident state',
-            evidence: [`error=${error instanceof Error ? error.message : String(error)}`],
-            recommendation: 'Inspect .wavemill/incidents permissions and malformed state files; incident detection is read-only but persistence is required for deduplication.',
-          });
-        }
+      candidates.push(...detected);
+    }
+
+    candidates.push(...detectIncidentsForRepo(
+      repo.repoDir,
+      { repoDir: repo.repoDir, session: repo.session, now: new Date(snapshot.timestamp) },
+      options.dependencyThreshold ?? incidentConfig.detection?.dependencyThreshold ?? 3,
+    ));
+
+    for (const incident of dedupeIncidentCandidates(candidates, store)) {
+      try {
+        const stored = await store.upsert(incident);
+        incidents.push(stored);
+      } catch (error) {
+        snapshot.findings.push({
+          id: `incident-store-error-${repo.session}-${hashText(repo.repoDir)}`,
+          severity: 'high',
+          category: 'operational',
+          confidence: 'high',
+          session: repo.session,
+          repoDir: repo.repoDir,
+          issue: incident.taskId ?? undefined,
+          title: 'Observer could not persist Wavemill incident state',
+          evidence: [`error=${error instanceof Error ? error.message : String(error)}`],
+          recommendation: 'Inspect .wavemill/incidents permissions and malformed state files; incident detection is read-only but persistence is required for deduplication.',
+        });
       }
     }
   }
@@ -971,6 +980,55 @@ function dedupeIncidents(incidents: IncidentRecord[]): IncidentRecord[] {
     byFingerprint.set(incident.fingerprint, incident);
   }
   return [...byFingerprint.values()].sort((a, b) => Date.parse(b.lastObservedAt) - Date.parse(a.lastObservedAt));
+}
+
+function dedupeIncidentCandidates(candidates: IncidentRecord[], store: IncidentStore): IncidentRecord[] {
+  const byFingerprint = new Map<string, IncidentRecord>();
+  for (const candidate of candidates) {
+    const normalized = {
+      ...candidate,
+      taskId: candidate.taskId ?? null,
+      evidence: candidate.evidence,
+      metadata: candidate.metadata ?? {},
+    };
+    const fingerprint = store.computeFingerprint(normalized);
+    const existing = byFingerprint.get(fingerprint);
+    if (!existing) {
+      byFingerprint.set(fingerprint, normalized);
+      continue;
+    }
+    byFingerprint.set(fingerprint, {
+      ...existing,
+      severity: maxIncidentSeverity(existing.severity, normalized.severity),
+      confidence: maxIncidentConfidence(existing.confidence, normalized.confidence),
+      summary: normalized.summary,
+      operatorAction: normalized.operatorAction,
+      evidence: dedupeIncidentEvidence([...existing.evidence, ...normalized.evidence]),
+      metadata: {
+        ...existing.metadata,
+        ...normalized.metadata,
+      },
+    });
+  }
+  return [...byFingerprint.values()];
+}
+
+function dedupeIncidentEvidence(evidence: IncidentRecord['evidence']): IncidentRecord['evidence'] {
+  const byKey = new Map<string, IncidentRecord['evidence'][number]>();
+  for (const item of evidence) {
+    byKey.set(`${item.type}:${item.source}:${item.key ?? ''}:${item.timestamp}:${item.redactedData}`, item);
+  }
+  return [...byKey.values()];
+}
+
+function maxIncidentSeverity(a: IncidentRecord['severity'], b: IncidentRecord['severity']): IncidentRecord['severity'] {
+  const order: IncidentRecord['severity'][] = ['info', 'low', 'medium', 'high', 'critical'];
+  return order.indexOf(b) > order.indexOf(a) ? b : a;
+}
+
+function maxIncidentConfidence(a: IncidentRecord['confidence'], b: IncidentRecord['confidence']): IncidentRecord['confidence'] {
+  const order: IncidentRecord['confidence'][] = ['low', 'medium', 'high', 'definite'];
+  return order.indexOf(b) > order.indexOf(a) ? b : a;
 }
 
 function mergeObserverLinearConfig(config: ObserverLinearConfig, options: ObserverOptions): ObserverLinearConfig {
@@ -1057,6 +1115,7 @@ export async function syncIncidentsToLinear(snapshot: ObserverSnapshot, options:
           queuePath: config.retryQueuePath,
           store,
           config,
+          maxEntries: config.maxRetryEntriesPerPass,
           now: new Date(snapshot.timestamp),
           log: console,
         });
@@ -1075,7 +1134,13 @@ export async function syncIncidentsToLinear(snapshot: ObserverSnapshot, options:
     const incidents = options.incidentsReplay
       ? [await store.getIncident(options.incidentsReplay)].filter((incident): incident is IncidentRecord => incident !== null)
       : await store.getIncidents();
-    for (const incident of incidents) {
+    const incidentsForPass = config.detectionOnly || options.incidentsReplay
+      ? incidents
+      : incidents.slice(0, config.maxIncidentsPerPass);
+    if (!config.detectionOnly && !options.incidentsReplay && incidentsForPass.length < incidents.length) {
+      summary.skipped += incidents.length - incidentsForPass.length;
+    }
+    for (const incident of incidentsForPass) {
       const result = await syncIncident({
         incident,
         store,

@@ -349,6 +349,30 @@
                             "minimum": 1,
                             "default": 5
                         },
+                        "maxIncidentsPerPass": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "default": 10,
+                            "description": "Maximum canonical incidents to sync to Linear in one live observer pass."
+                        },
+                        "maxRetryEntriesPerPass": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "default": 5,
+                            "description": "Maximum queued incident retries to drain before new live sync work."
+                        },
+                        "requestDelayMs": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "default": 250,
+                            "description": "Optional delay before each Linear API request made by incident sync."
+                        },
+                        "rateLimitBackoffMs": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "default": 1000,
+                            "description": "Optional bounded wait after a Linear 429 before deferring retryable incident sync work."
+                        },
                         "policies": {
                             "type": "object",
                             "properties": {
@@ -725,6 +749,60 @@
                     "additionalProperties": false
                 }
             }
+        },
+        "harness": {
+            "type": "object",
+            "description": "Harness regression replay settings.",
+            "properties": {
+                "retention": {
+                    "type": "object",
+                    "description": "Fixed held-out replay gate for detecting harness regressions before memory rewrites or CI enforcement.",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "When true, run the fixed harness replay suite. Defaults off until shadow rollout is explicitly enabled."
+                        },
+                        "mode": {
+                            "type": "string",
+                            "enum": [
+                                "shadow",
+                                "enforce"
+                            ],
+                            "default": "shadow",
+                            "description": "shadow reports D without blocking; enforce fails closed when D exceeds tolerance or replay evidence is invalid."
+                        },
+                        "tolerance": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "default": 1,
+                            "description": "Maximum allowed D, where D is baseline-passing cases that fail under the candidate harness. Defaults to 1."
+                        },
+                        "suitePath": {
+                            "type": "string",
+                            "default": "shared/fixtures/harness-replay/harness-retention-v1/manifest.json",
+                            "description": "Path to the committed held-out replay suite manifest, relative to the repo root unless absolute."
+                        },
+                        "reportDir": {
+                            "type": "string",
+                            "default": ".wavemill/harness-replay/reports",
+                            "description": "Directory for retained harness replay reports, relative to the repo root unless absolute."
+                        },
+                        "baselineHarnessId": {
+                            "type": "string",
+                            "default": "",
+                            "description": "Deployed baseline harness ID. May also be supplied by WAVEMILL_BASELINE_HARNESS_ID."
+                        },
+                        "candidateHarnessId": {
+                            "type": "string",
+                            "default": "",
+                            "description": "Candidate harness ID. May also be supplied by WAVEMILL_CANDIDATE_HARNESS_ID or WAVEMILL_HARNESS_ID."
+                        }
+                    },
+                    "additionalProperties": false
+                }
+            },
+            "additionalProperties": false
         },
         "evalContextUpdates": {
             "type": "object",
@@ -1326,6 +1404,11 @@
                     },
                     "default": [],
                     "description": "Checks that must pass for merge approval (subset of checks). Required checks that skip are non-blocking warnings."
+                },
+                "requireCiChecks": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Require at least one reported CI check before ready can pass. Set false only for repositories with no CI."
                 },
                 "migrationKind": {
                     "type": "string",

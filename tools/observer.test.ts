@@ -5,6 +5,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { buildFindings, parseArgs, redactObserverText, syncIncidentsToLinear, writeServiceHeartbeat } from './observer.ts';
+import { IncidentStore } from '../shared/lib/wavemill-incident-store.ts';
+import { createIncidentDraft } from '../shared/lib/wavemill-incident-model.ts';
 
 function defaultObserverOptions() {
   return {
@@ -297,4 +299,48 @@ test('incident sync snapshot is omitted when incident filing is disabled', async
     incidentDetector: true,
   });
   assert.equal(snapshot.incidentSync, undefined);
+});
+
+test('incident sync caps live incident processing per pass', async () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'observer-incident-cap-'));
+  try {
+    const store = new IncidentStore(join(repoDir, '.wavemill', 'incidents'));
+    for (let i = 0; i < 40; i += 1) {
+      await store.upsert(createIncidentDraft({
+        taskId: `HOK-${1000 + i}`,
+        category: 'product_defect',
+        severity: 'high',
+        confidence: 'definite',
+        lifecycle: 'active',
+        rootCauseClass: 'observer_crash',
+        summary: `Observer crashed ${i}.`,
+        operatorAction: 'Fix parser.',
+        evidence: [{
+          type: 'log_excerpt',
+          source: `mill-${i}.log`,
+          timestamp: '2026-08-04T12:00:00.000Z',
+          redactedData: `ERROR ${i}`,
+          key: `error-${i}`,
+        }],
+        metadata: { thresholdTriggered: true },
+      }));
+    }
+
+    const snapshot = await syncIncidentsToLinear({
+      timestamp: '2026-08-04T12:00:00.000Z',
+      sessions: ['wavemill'],
+      panes: [],
+      processes: [],
+      repos: [{ session: 'wavemill', repoDir, tasks: [] }],
+      findings: [],
+    }, {
+      ...defaultObserverOptions(),
+      fileIncidents: true,
+    });
+
+    assert.equal(snapshot.incidentSync?.totalProcessed, 10);
+    assert.equal(snapshot.incidentSync?.skipped, 40);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
 });

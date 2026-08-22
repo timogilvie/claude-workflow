@@ -1,0 +1,5806 @@
+{
+  "schemaVersion": 1,
+  "suiteVersion": "harness-retention-v1",
+  "sampling": {
+    "previouslyPassing": 170,
+    "previouslyFailing": 56,
+    "incidentCases": 26,
+    "rule": "Fixed 3:1 previously-passing to previously-failing ratio, plus 26 incident-derived placeholders while source incident state is unavailable in this worktree."
+  },
+  "holdOut": {
+    "promptIsolation": "Manifest lives under shared/fixtures/harness-replay, outside .wavemill/evals and outside runtime prompt/resource discovery paths. Cases are consumed only by tools/run-harness-replay.ts or direct replay tests.",
+    "refreshPolicy": "Refresh every six months; retire cases with no regression signal for six months only after replacing them with newer stable cases at the same pass/fail ratio."
+  },
+  "probes": {
+    "stability": {
+      "repetitions": 3,
+      "excludedCaseIds": [],
+      "result": "passed",
+      "evidence": "Synthetic sanitized seed is deterministic under injected adapters. Historic stability probe must be rerun when real artifacts are restored."
+    },
+    "coverage": {
+      "requiredCaught": 2,
+      "escalation": "cheap_replay_sufficient",
+      "incidents": [
+        {
+          "id": "incident-ready-watchdog-merge-lane",
+          "incident": "ready_watchdog_merge_lane",
+          "caught": true,
+          "evidence": "Routing/review replay captures unexpected check reruns against parked merge-lane PR evidence."
+        },
+        {
+          "id": "incident-challenge-pairing-id-drift",
+          "incident": "challenge_pairing_id_drift",
+          "caught": true,
+          "evidence": "Eval judging replay includes stored challenge identity fields and fails when candidate output drifts."
+        },
+        {
+          "id": "incident-monitor-bundle-main-regen",
+          "incident": "monitor_bundle_main_regen",
+          "caught": false,
+          "evidence": "Cheap decision replay does not execute integration-only monitor bundle regeneration; retain as workflow-replay gap."
+        }
+      ]
+    }
+  },
+  "cases": [
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-001",
+      "surface": "routing",
+      "source": {
+        "kind": "incident",
+        "incident": "incident-01",
+        "note": "Sanitized incident replay placeholder; source incident state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R1",
+        "prompt": "Sanitized routing replay case 1: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "gpt-5.3-codex",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-002",
+      "surface": "review",
+      "source": {
+        "kind": "incident",
+        "incident": "incident-02",
+        "note": "Sanitized incident replay placeholder; source incident state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-2.ts b/file-2.ts\n+export const value2 = 2;",
+        "plan": "Sanitized plan for replay case 2.",
+        "taskPacket": "Sanitized task packet for replay case 2.",
+        "branch": "task/replay-2",
+        "files": [
+          "file-2.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-003",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "incident",
+        "incident": "incident-03",
+        "note": "Sanitized incident replay placeholder; source incident state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 3.",
+        "prReviewOutput": "Sanitized diff summary 3.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-004",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "incident",
+        "incident": "incident-04",
+        "note": "Sanitized incident replay placeholder; source incident state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E4: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "5c84c6ae29211a25dd2ee3bb5c51df447213e93a1c42be09ed6a7d290f6e1385",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-005",
+      "surface": "routing",
+      "source": {
+        "kind": "incident",
+        "incident": "incident-05",
+        "note": "Sanitized incident replay placeholder; source incident state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R5",
+        "prompt": "Sanitized routing replay case 5: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "gpt-5.3-codex",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-006",
+      "surface": "review",
+      "source": {
+        "kind": "incident",
+        "incident": "incident-06",
+        "note": "Sanitized incident replay placeholder; source incident state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-6.ts b/file-6.ts\n+export const value6 = 6;",
+        "plan": "Sanitized plan for replay case 6.",
+        "taskPacket": "Sanitized task packet for replay case 6.",
+        "branch": "task/replay-6",
+        "files": [
+          "file-6.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-007",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "incident",
+        "incident": "incident-07",
+        "note": "Sanitized incident replay placeholder; source incident state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 7.",
+        "prReviewOutput": "Sanitized diff summary 7.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-008",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "incident",
+        "incident": "incident-08",
+        "note": "Sanitized incident replay placeholder; source incident state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E8: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "2b453cc003a96919ec7207fa9371e1db56b111402a9eb43b419c5c0a2cb8ebeb",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-009",
+      "surface": "routing",
+      "source": {
+        "kind": "incident",
+        "incident": "incident-09",
+        "note": "Sanitized incident replay placeholder; source incident state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R9",
+        "prompt": "Sanitized routing replay case 9: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "qwen-3-coder",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-010",
+      "surface": "review",
+      "source": {
+        "kind": "incident",
+        "incident": "incident-10",
+        "note": "Sanitized incident replay placeholder; source incident state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-10.ts b/file-10.ts\n+export const value10 = 10;",
+        "plan": "Sanitized plan for replay case 10.",
+        "taskPacket": "Sanitized task packet for replay case 10.",
+        "branch": "task/replay-10",
+        "files": [
+          "file-10.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-011",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "incident",
+        "incident": "incident-11",
+        "note": "Sanitized incident replay placeholder; source incident state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 11.",
+        "prReviewOutput": "Sanitized diff summary 11.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-012",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "incident",
+        "incident": "incident-12",
+        "note": "Sanitized incident replay placeholder; source incident state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E12: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "8a0de112175e0aeef0b3c7d5a936a9bf04870e8f908b6ca72e51828c45c4efe6",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-013",
+      "surface": "routing",
+      "source": {
+        "kind": "incident",
+        "incident": "incident-13",
+        "note": "Sanitized incident replay placeholder; source incident state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R13",
+        "prompt": "Sanitized routing replay case 13: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "gpt-5.3-codex",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-014",
+      "surface": "review",
+      "source": {
+        "kind": "incident",
+        "incident": "incident-14",
+        "note": "Sanitized incident replay placeholder; source incident state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-14.ts b/file-14.ts\n+export const value14 = 14;",
+        "plan": "Sanitized plan for replay case 14.",
+        "taskPacket": "Sanitized task packet for replay case 14.",
+        "branch": "task/replay-14",
+        "files": [
+          "file-14.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-015",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "incident",
+        "incident": "incident-15",
+        "note": "Sanitized incident replay placeholder; source incident state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 15.",
+        "prReviewOutput": "Sanitized diff summary 15.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-016",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "incident",
+        "incident": "incident-16",
+        "note": "Sanitized incident replay placeholder; source incident state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E16: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "1b379c1a42a05002b3434afa9dcc5d80510f4456a21c9042b73e4d195094aae3",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-017",
+      "surface": "routing",
+      "source": {
+        "kind": "incident",
+        "incident": "incident-17",
+        "note": "Sanitized incident replay placeholder; source incident state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R17",
+        "prompt": "Sanitized routing replay case 17: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "gpt-5.3-codex",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-018",
+      "surface": "review",
+      "source": {
+        "kind": "incident",
+        "incident": "incident-18",
+        "note": "Sanitized incident replay placeholder; source incident state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-18.ts b/file-18.ts\n+export const value18 = 18;",
+        "plan": "Sanitized plan for replay case 18.",
+        "taskPacket": "Sanitized task packet for replay case 18.",
+        "branch": "task/replay-18",
+        "files": [
+          "file-18.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-019",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "incident",
+        "incident": "incident-19",
+        "note": "Sanitized incident replay placeholder; source incident state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 19.",
+        "prReviewOutput": "Sanitized diff summary 19.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-020",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "incident",
+        "incident": "incident-20",
+        "note": "Sanitized incident replay placeholder; source incident state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E20: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "c019dd4cbcf1e4857abc30c0717b94040ad15af6b5e06133a8c222a0373af307",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-021",
+      "surface": "routing",
+      "source": {
+        "kind": "incident",
+        "incident": "incident-21",
+        "note": "Sanitized incident replay placeholder; source incident state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R21",
+        "prompt": "Sanitized routing replay case 21: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "qwen-3-coder",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-022",
+      "surface": "review",
+      "source": {
+        "kind": "incident",
+        "incident": "incident-22",
+        "note": "Sanitized incident replay placeholder; source incident state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-22.ts b/file-22.ts\n+export const value22 = 22;",
+        "plan": "Sanitized plan for replay case 22.",
+        "taskPacket": "Sanitized task packet for replay case 22.",
+        "branch": "task/replay-22",
+        "files": [
+          "file-22.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-023",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "incident",
+        "incident": "incident-23",
+        "note": "Sanitized incident replay placeholder; source incident state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 23.",
+        "prReviewOutput": "Sanitized diff summary 23.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-024",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "incident",
+        "incident": "incident-24",
+        "note": "Sanitized incident replay placeholder; source incident state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E24: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "b5dd31c94db03bc0a71f5d7346a529ade4dcf6dabe2725b9c136083cda1ed096",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-025",
+      "surface": "routing",
+      "source": {
+        "kind": "incident",
+        "incident": "incident-25",
+        "note": "Sanitized incident replay placeholder; source incident state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R25",
+        "prompt": "Sanitized routing replay case 25: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "gpt-5.3-codex",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-026",
+      "surface": "review",
+      "source": {
+        "kind": "incident",
+        "incident": "incident-26",
+        "note": "Sanitized incident replay placeholder; source incident state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-26.ts b/file-26.ts\n+export const value26 = 26;",
+        "plan": "Sanitized plan for replay case 26.",
+        "taskPacket": "Sanitized task packet for replay case 26.",
+        "branch": "task/replay-26",
+        "files": [
+          "file-26.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-027",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-027",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 27.",
+        "prReviewOutput": "Sanitized diff summary 27.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-028",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-028",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E28: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "5a131c2e3fa5cade4137b5151f99bdcfecdde15640f6514bb9b3a1cf1bbb62b3",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-029",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-029",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R29",
+        "prompt": "Sanitized routing replay case 29: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "gpt-5.3-codex",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-030",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-030",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-30.ts b/file-30.ts\n+export const value30 = 30;",
+        "plan": "Sanitized plan for replay case 30.",
+        "taskPacket": "Sanitized task packet for replay case 30.",
+        "branch": "task/replay-30",
+        "files": [
+          "file-30.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-031",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-031",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 31.",
+        "prReviewOutput": "Sanitized diff summary 31.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-032",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-032",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E32: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "0e0dcbff7706324f8e481c849a9f0ba4e3a702fca7d146db9027c2f5ee26c039",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-033",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-033",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R33",
+        "prompt": "Sanitized routing replay case 33: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "qwen-3-coder",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-034",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-034",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-34.ts b/file-34.ts\n+export const value34 = 34;",
+        "plan": "Sanitized plan for replay case 34.",
+        "taskPacket": "Sanitized task packet for replay case 34.",
+        "branch": "task/replay-34",
+        "files": [
+          "file-34.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-035",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-035",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 35.",
+        "prReviewOutput": "Sanitized diff summary 35.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-036",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-036",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E36: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "a9c5371c172944c57339ac2af80bb4ad663292931a59533e4e76a5e02698afeb",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-037",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-037",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R37",
+        "prompt": "Sanitized routing replay case 37: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "gpt-5.3-codex",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-038",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-038",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-38.ts b/file-38.ts\n+export const value38 = 38;",
+        "plan": "Sanitized plan for replay case 38.",
+        "taskPacket": "Sanitized task packet for replay case 38.",
+        "branch": "task/replay-38",
+        "files": [
+          "file-38.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-039",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-039",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 39.",
+        "prReviewOutput": "Sanitized diff summary 39.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-040",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-040",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E40: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "2a4abfb4935da43d5cf064d6d7b4d62359c99557f27104e59202a35594f40e7c",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-041",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-041",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R41",
+        "prompt": "Sanitized routing replay case 41: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "gpt-5.3-codex",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-042",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-042",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-42.ts b/file-42.ts\n+export const value42 = 42;",
+        "plan": "Sanitized plan for replay case 42.",
+        "taskPacket": "Sanitized task packet for replay case 42.",
+        "branch": "task/replay-42",
+        "files": [
+          "file-42.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-043",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-043",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 43.",
+        "prReviewOutput": "Sanitized diff summary 43.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-044",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-044",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E44: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "cf22980802f1279277f450a1f9fc234f65c21e1943f6379cadc47c4461eabfc1",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-045",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-045",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R45",
+        "prompt": "Sanitized routing replay case 45: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "qwen-3-coder",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-046",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-046",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-46.ts b/file-46.ts\n+export const value46 = 46;",
+        "plan": "Sanitized plan for replay case 46.",
+        "taskPacket": "Sanitized task packet for replay case 46.",
+        "branch": "task/replay-46",
+        "files": [
+          "file-46.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-047",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-047",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 47.",
+        "prReviewOutput": "Sanitized diff summary 47.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-048",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-048",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E48: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "2cbc7ef315e2edab1ced4cbf5fd6982878bf36a2e32a3468e243dbd3bcc5249b",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-049",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-049",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R49",
+        "prompt": "Sanitized routing replay case 49: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "gpt-5.3-codex",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-050",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-050",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-50.ts b/file-50.ts\n+export const value50 = 50;",
+        "plan": "Sanitized plan for replay case 50.",
+        "taskPacket": "Sanitized task packet for replay case 50.",
+        "branch": "task/replay-50",
+        "files": [
+          "file-50.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-051",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-051",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 51.",
+        "prReviewOutput": "Sanitized diff summary 51.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-052",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-052",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E52: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "2032e209e0b0f0f4e67e748bc3a33da6f0fa7043278c9aa709274e9efc454511",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-053",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-053",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R53",
+        "prompt": "Sanitized routing replay case 53: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "gpt-5.3-codex",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-054",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-054",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-54.ts b/file-54.ts\n+export const value54 = 54;",
+        "plan": "Sanitized plan for replay case 54.",
+        "taskPacket": "Sanitized task packet for replay case 54.",
+        "branch": "task/replay-54",
+        "files": [
+          "file-54.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-055",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-055",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 55.",
+        "prReviewOutput": "Sanitized diff summary 55.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-056",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-056",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E56: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "5ed21e2f33b60f6c35b29fe0bcb796ab93f8ea9ce3c5c01fc407d698395066de",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-057",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-057",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R57",
+        "prompt": "Sanitized routing replay case 57: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "qwen-3-coder",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-058",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-058",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-58.ts b/file-58.ts\n+export const value58 = 58;",
+        "plan": "Sanitized plan for replay case 58.",
+        "taskPacket": "Sanitized task packet for replay case 58.",
+        "branch": "task/replay-58",
+        "files": [
+          "file-58.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-059",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-059",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 59.",
+        "prReviewOutput": "Sanitized diff summary 59.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-060",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-060",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E60: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "df0f8be17a2f94303c2a9321f285748684b4af012dcbff0e115e13038ac431fe",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-061",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-061",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R61",
+        "prompt": "Sanitized routing replay case 61: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "gpt-5.3-codex",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-062",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-062",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-62.ts b/file-62.ts\n+export const value62 = 62;",
+        "plan": "Sanitized plan for replay case 62.",
+        "taskPacket": "Sanitized task packet for replay case 62.",
+        "branch": "task/replay-62",
+        "files": [
+          "file-62.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-063",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-063",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 63.",
+        "prReviewOutput": "Sanitized diff summary 63.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-064",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-064",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E64: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "dcfdafb4f2094fc439885325b20743da49be9afa8c613c24cd7a25b9ed5ae261",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-065",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-065",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R65",
+        "prompt": "Sanitized routing replay case 65: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "gpt-5.3-codex",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-066",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-066",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-66.ts b/file-66.ts\n+export const value66 = 66;",
+        "plan": "Sanitized plan for replay case 66.",
+        "taskPacket": "Sanitized task packet for replay case 66.",
+        "branch": "task/replay-66",
+        "files": [
+          "file-66.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-067",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-067",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 67.",
+        "prReviewOutput": "Sanitized diff summary 67.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-068",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-068",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E68: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "6b90aaa4cc0f01f4f31c5f8a07f78283e144707b0237d0af718ddd3632fd446d",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-069",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-069",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R69",
+        "prompt": "Sanitized routing replay case 69: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "qwen-3-coder",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-070",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-070",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-70.ts b/file-70.ts\n+export const value70 = 70;",
+        "plan": "Sanitized plan for replay case 70.",
+        "taskPacket": "Sanitized task packet for replay case 70.",
+        "branch": "task/replay-70",
+        "files": [
+          "file-70.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-071",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-071",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 71.",
+        "prReviewOutput": "Sanitized diff summary 71.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-072",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-072",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E72: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "1f1abb6c6d1025dd4f24dcbb9ddc4c01596644cc6ef160caecd29dc27c1de210",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-073",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-073",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R73",
+        "prompt": "Sanitized routing replay case 73: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "gpt-5.3-codex",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-074",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-074",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-74.ts b/file-74.ts\n+export const value74 = 74;",
+        "plan": "Sanitized plan for replay case 74.",
+        "taskPacket": "Sanitized task packet for replay case 74.",
+        "branch": "task/replay-74",
+        "files": [
+          "file-74.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-075",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-075",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 75.",
+        "prReviewOutput": "Sanitized diff summary 75.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-076",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-076",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E76: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "c66ea16ee1c88a9734d79ded253f2c2c5e392924d81a81229a435c810f602523",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-077",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-077",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R77",
+        "prompt": "Sanitized routing replay case 77: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "gpt-5.3-codex",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-078",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-078",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-78.ts b/file-78.ts\n+export const value78 = 78;",
+        "plan": "Sanitized plan for replay case 78.",
+        "taskPacket": "Sanitized task packet for replay case 78.",
+        "branch": "task/replay-78",
+        "files": [
+          "file-78.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-079",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-079",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 79.",
+        "prReviewOutput": "Sanitized diff summary 79.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-080",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-080",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E80: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "964e4b72e3db58b26121927b657b28e7f03a20af7adf1d3f4925727b53335d0c",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-081",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-081",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R81",
+        "prompt": "Sanitized routing replay case 81: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "qwen-3-coder",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-082",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-082",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-82.ts b/file-82.ts\n+export const value82 = 82;",
+        "plan": "Sanitized plan for replay case 82.",
+        "taskPacket": "Sanitized task packet for replay case 82.",
+        "branch": "task/replay-82",
+        "files": [
+          "file-82.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-083",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-083",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 83.",
+        "prReviewOutput": "Sanitized diff summary 83.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-084",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-084",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E84: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "6972e7931bcd60d5953f1535ab8962db7aa706d3b5f96e220b8d7f43e0cdc28a",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-085",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-085",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R85",
+        "prompt": "Sanitized routing replay case 85: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "gpt-5.3-codex",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-086",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-086",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-86.ts b/file-86.ts\n+export const value86 = 86;",
+        "plan": "Sanitized plan for replay case 86.",
+        "taskPacket": "Sanitized task packet for replay case 86.",
+        "branch": "task/replay-86",
+        "files": [
+          "file-86.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-087",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-087",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 87.",
+        "prReviewOutput": "Sanitized diff summary 87.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-088",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-088",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E88: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "fd7d9a9d33600215d7dd7d683d32aa11d156d3651ce2a8f2ac63f2c147f0d22b",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-089",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-089",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R89",
+        "prompt": "Sanitized routing replay case 89: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "gpt-5.3-codex",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-090",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-090",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-90.ts b/file-90.ts\n+export const value90 = 90;",
+        "plan": "Sanitized plan for replay case 90.",
+        "taskPacket": "Sanitized task packet for replay case 90.",
+        "branch": "task/replay-90",
+        "files": [
+          "file-90.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-091",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-091",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 91.",
+        "prReviewOutput": "Sanitized diff summary 91.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-092",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-092",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E92: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "f62e35037435be6839c674b2937f9e0ac84d3ef1780f218efe46bca4388d1142",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-093",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-093",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R93",
+        "prompt": "Sanitized routing replay case 93: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "qwen-3-coder",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-094",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-094",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-94.ts b/file-94.ts\n+export const value94 = 94;",
+        "plan": "Sanitized plan for replay case 94.",
+        "taskPacket": "Sanitized task packet for replay case 94.",
+        "branch": "task/replay-94",
+        "files": [
+          "file-94.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-095",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-095",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 95.",
+        "prReviewOutput": "Sanitized diff summary 95.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-096",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-096",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E96: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "1aebb41ebcdc4b53d8b912949874997a6db32edd628cc92f1dd98994e480bb2a",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-097",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-097",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R97",
+        "prompt": "Sanitized routing replay case 97: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "gpt-5.3-codex",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-098",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-098",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-98.ts b/file-98.ts\n+export const value98 = 98;",
+        "plan": "Sanitized plan for replay case 98.",
+        "taskPacket": "Sanitized task packet for replay case 98.",
+        "branch": "task/replay-98",
+        "files": [
+          "file-98.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-099",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-099",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 99.",
+        "prReviewOutput": "Sanitized diff summary 99.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-100",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-100",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E100: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "0b53728ca7ac070e6ff832ac4109cdeda32a8bead95962623c38cdbf1d6fb6da",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-101",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-101",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R101",
+        "prompt": "Sanitized routing replay case 101: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "gpt-5.3-codex",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-102",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-102",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-102.ts b/file-102.ts\n+export const value102 = 102;",
+        "plan": "Sanitized plan for replay case 102.",
+        "taskPacket": "Sanitized task packet for replay case 102.",
+        "branch": "task/replay-102",
+        "files": [
+          "file-102.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-103",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-103",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 103.",
+        "prReviewOutput": "Sanitized diff summary 103.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-104",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-104",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E104: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "dea70400a3fc1c98fe2aef4eaf02d9c8c0f5f6500fc3574f8fa9dff3faa39e60",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-105",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-105",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R105",
+        "prompt": "Sanitized routing replay case 105: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "qwen-3-coder",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-106",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-106",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-106.ts b/file-106.ts\n+export const value106 = 106;",
+        "plan": "Sanitized plan for replay case 106.",
+        "taskPacket": "Sanitized task packet for replay case 106.",
+        "branch": "task/replay-106",
+        "files": [
+          "file-106.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-107",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-107",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 107.",
+        "prReviewOutput": "Sanitized diff summary 107.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-108",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-108",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E108: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "facfebd38ed91e4d14a5d9d4f7f1024186bb253ab5f892fc8851825ef96e4f07",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-109",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-109",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R109",
+        "prompt": "Sanitized routing replay case 109: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "gpt-5.3-codex",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-110",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-110",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-110.ts b/file-110.ts\n+export const value110 = 110;",
+        "plan": "Sanitized plan for replay case 110.",
+        "taskPacket": "Sanitized task packet for replay case 110.",
+        "branch": "task/replay-110",
+        "files": [
+          "file-110.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-111",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-111",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 111.",
+        "prReviewOutput": "Sanitized diff summary 111.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-112",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-112",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E112: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "99698729433b5c72ef81da1c6176e65d09ab2233466863930574815706313cc6",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-113",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-113",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R113",
+        "prompt": "Sanitized routing replay case 113: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "gpt-5.3-codex",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-114",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-114",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-114.ts b/file-114.ts\n+export const value114 = 114;",
+        "plan": "Sanitized plan for replay case 114.",
+        "taskPacket": "Sanitized task packet for replay case 114.",
+        "branch": "task/replay-114",
+        "files": [
+          "file-114.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-115",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-115",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 115.",
+        "prReviewOutput": "Sanitized diff summary 115.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-116",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-116",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E116: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "a43406f9b364dbf247467caad84b0048279092641fc36e0eb1cdaddb5b0c97a4",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-117",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-117",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R117",
+        "prompt": "Sanitized routing replay case 117: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "qwen-3-coder",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-118",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-118",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-118.ts b/file-118.ts\n+export const value118 = 118;",
+        "plan": "Sanitized plan for replay case 118.",
+        "taskPacket": "Sanitized task packet for replay case 118.",
+        "branch": "task/replay-118",
+        "files": [
+          "file-118.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-119",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-119",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 119.",
+        "prReviewOutput": "Sanitized diff summary 119.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-120",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-120",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E120: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "73bb112fc5644c7f354d8398c963fb96b13a76b41065b41ed123b6c2fd8e60b6",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-121",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-121",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R121",
+        "prompt": "Sanitized routing replay case 121: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "gpt-5.3-codex",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-122",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-122",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-122.ts b/file-122.ts\n+export const value122 = 122;",
+        "plan": "Sanitized plan for replay case 122.",
+        "taskPacket": "Sanitized task packet for replay case 122.",
+        "branch": "task/replay-122",
+        "files": [
+          "file-122.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-123",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-123",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 123.",
+        "prReviewOutput": "Sanitized diff summary 123.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-124",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-124",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E124: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "f63e1d59cfe3d5b9f71ec26d3701521e1e08efcb10ef5b59864535f15c8ae1f6",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-125",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-125",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R125",
+        "prompt": "Sanitized routing replay case 125: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "gpt-5.3-codex",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-126",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-126",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-126.ts b/file-126.ts\n+export const value126 = 126;",
+        "plan": "Sanitized plan for replay case 126.",
+        "taskPacket": "Sanitized task packet for replay case 126.",
+        "branch": "task/replay-126",
+        "files": [
+          "file-126.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-127",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-127",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 127.",
+        "prReviewOutput": "Sanitized diff summary 127.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-128",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-128",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E128: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "da87e1f09b4ea05875fa929a2339ab355c1b3ea1ee16b930419b43cc5efed6b0",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-129",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-129",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R129",
+        "prompt": "Sanitized routing replay case 129: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "qwen-3-coder",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-130",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-130",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-130.ts b/file-130.ts\n+export const value130 = 130;",
+        "plan": "Sanitized plan for replay case 130.",
+        "taskPacket": "Sanitized task packet for replay case 130.",
+        "branch": "task/replay-130",
+        "files": [
+          "file-130.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-131",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-131",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 131.",
+        "prReviewOutput": "Sanitized diff summary 131.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-132",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-132",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E132: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "fd6f639a0e59f5ab2ea318e3daa3ef77538135436f6798522e91c59fad75d9f8",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-133",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-133",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R133",
+        "prompt": "Sanitized routing replay case 133: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "gpt-5.3-codex",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-134",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-134",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-134.ts b/file-134.ts\n+export const value134 = 134;",
+        "plan": "Sanitized plan for replay case 134.",
+        "taskPacket": "Sanitized task packet for replay case 134.",
+        "branch": "task/replay-134",
+        "files": [
+          "file-134.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-135",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-135",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 135.",
+        "prReviewOutput": "Sanitized diff summary 135.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-136",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-136",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E136: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "34544339b854fdbce7a258a9ccd4f3f571b6282bdd265e578aa29245769cde8a",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-137",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-137",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R137",
+        "prompt": "Sanitized routing replay case 137: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "gpt-5.3-codex",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-138",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-138",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-138.ts b/file-138.ts\n+export const value138 = 138;",
+        "plan": "Sanitized plan for replay case 138.",
+        "taskPacket": "Sanitized task packet for replay case 138.",
+        "branch": "task/replay-138",
+        "files": [
+          "file-138.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-139",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-139",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 139.",
+        "prReviewOutput": "Sanitized diff summary 139.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-140",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-140",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E140: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "e5676f4f18d505a1bace22090f6c4c4a60037770e0e32be74eaff4439b23b09c",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-141",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-141",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R141",
+        "prompt": "Sanitized routing replay case 141: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "qwen-3-coder",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-142",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-142",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-142.ts b/file-142.ts\n+export const value142 = 142;",
+        "plan": "Sanitized plan for replay case 142.",
+        "taskPacket": "Sanitized task packet for replay case 142.",
+        "branch": "task/replay-142",
+        "files": [
+          "file-142.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-143",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-143",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 143.",
+        "prReviewOutput": "Sanitized diff summary 143.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-144",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-144",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E144: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "04af0221ab23b900f464e43c31c3a133c95ef7aaea74a49da694ac0a7bad762c",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-145",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-145",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R145",
+        "prompt": "Sanitized routing replay case 145: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "gpt-5.3-codex",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-146",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-146",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-146.ts b/file-146.ts\n+export const value146 = 146;",
+        "plan": "Sanitized plan for replay case 146.",
+        "taskPacket": "Sanitized task packet for replay case 146.",
+        "branch": "task/replay-146",
+        "files": [
+          "file-146.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-147",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-147",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 147.",
+        "prReviewOutput": "Sanitized diff summary 147.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-148",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-148",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E148: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "7d9b7efd0dfd7850aa697d0e2a57eea0e91bec69f78b32419892e97270c6e876",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-149",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-149",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R149",
+        "prompt": "Sanitized routing replay case 149: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "gpt-5.3-codex",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-150",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-150",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-150.ts b/file-150.ts\n+export const value150 = 150;",
+        "plan": "Sanitized plan for replay case 150.",
+        "taskPacket": "Sanitized task packet for replay case 150.",
+        "branch": "task/replay-150",
+        "files": [
+          "file-150.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-151",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-151",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 151.",
+        "prReviewOutput": "Sanitized diff summary 151.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-152",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-152",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E152: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "fb649c74a838d503a342ddbc46929442f8f8089be47d48c2613ed40217de893b",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-153",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-153",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R153",
+        "prompt": "Sanitized routing replay case 153: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "qwen-3-coder",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-154",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-154",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-154.ts b/file-154.ts\n+export const value154 = 154;",
+        "plan": "Sanitized plan for replay case 154.",
+        "taskPacket": "Sanitized task packet for replay case 154.",
+        "branch": "task/replay-154",
+        "files": [
+          "file-154.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-155",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-155",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 155.",
+        "prReviewOutput": "Sanitized diff summary 155.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-156",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-156",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E156: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "4b378bef79e2f8330e9450a67073218e9d5880ae08480b6794167553cb450d96",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-157",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-157",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R157",
+        "prompt": "Sanitized routing replay case 157: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "gpt-5.3-codex",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-158",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-158",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-158.ts b/file-158.ts\n+export const value158 = 158;",
+        "plan": "Sanitized plan for replay case 158.",
+        "taskPacket": "Sanitized task packet for replay case 158.",
+        "branch": "task/replay-158",
+        "files": [
+          "file-158.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-159",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-159",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 159.",
+        "prReviewOutput": "Sanitized diff summary 159.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-160",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-160",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E160: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "ce48c5ae22dc6b0a5d22a63f4f49bdf38d551f175e9ea34f2a865bf7eff7a4e8",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-161",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-161",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R161",
+        "prompt": "Sanitized routing replay case 161: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "gpt-5.3-codex",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-162",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-162",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-162.ts b/file-162.ts\n+export const value162 = 162;",
+        "plan": "Sanitized plan for replay case 162.",
+        "taskPacket": "Sanitized task packet for replay case 162.",
+        "branch": "task/replay-162",
+        "files": [
+          "file-162.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-163",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-163",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 163.",
+        "prReviewOutput": "Sanitized diff summary 163.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-164",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-164",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E164: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "33bf5f04a8985ecc6100aff2560bf26781882ff188474830ef214321c6bfe624",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-165",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-165",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R165",
+        "prompt": "Sanitized routing replay case 165: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "qwen-3-coder",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-166",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-166",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-166.ts b/file-166.ts\n+export const value166 = 166;",
+        "plan": "Sanitized plan for replay case 166.",
+        "taskPacket": "Sanitized task packet for replay case 166.",
+        "branch": "task/replay-166",
+        "files": [
+          "file-166.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-167",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-167",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 167.",
+        "prReviewOutput": "Sanitized diff summary 167.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-168",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-168",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E168: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "f9988aa620e242b82059e5e6ab8b7c5533f8456757c53d7d485136d9ebb567fa",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-169",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-169",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R169",
+        "prompt": "Sanitized routing replay case 169: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "gpt-5.3-codex",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-170",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-170",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-170.ts b/file-170.ts\n+export const value170 = 170;",
+        "plan": "Sanitized plan for replay case 170.",
+        "taskPacket": "Sanitized task packet for replay case 170.",
+        "branch": "task/replay-170",
+        "files": [
+          "file-170.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-171",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-171",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 171.",
+        "prReviewOutput": "Sanitized diff summary 171.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-172",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-172",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E172: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "3a657d3600760f376930d0da050aef925c5202871746005687f346193798df94",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-173",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-173",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R173",
+        "prompt": "Sanitized routing replay case 173: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "gpt-5.3-codex",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-174",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-174",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-174.ts b/file-174.ts\n+export const value174 = 174;",
+        "plan": "Sanitized plan for replay case 174.",
+        "taskPacket": "Sanitized task packet for replay case 174.",
+        "branch": "task/replay-174",
+        "files": [
+          "file-174.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-175",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-175",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 175.",
+        "prReviewOutput": "Sanitized diff summary 175.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-176",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-176",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E176: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "68680651f858ab09fc2369721cb040fe2e721a729b10afae294be7086a039f70",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-177",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-177",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R177",
+        "prompt": "Sanitized routing replay case 177: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "qwen-3-coder",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-178",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-178",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-178.ts b/file-178.ts\n+export const value178 = 178;",
+        "plan": "Sanitized plan for replay case 178.",
+        "taskPacket": "Sanitized task packet for replay case 178.",
+        "branch": "task/replay-178",
+        "files": [
+          "file-178.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-179",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-179",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 179.",
+        "prReviewOutput": "Sanitized diff summary 179.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-180",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-180",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E180: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "62d48bdd068a941707b65c7546233ab51b102a48e7c59f895bbdcd54fb9d0125",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-181",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-181",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R181",
+        "prompt": "Sanitized routing replay case 181: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "gpt-5.3-codex",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-182",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-182",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-182.ts b/file-182.ts\n+export const value182 = 182;",
+        "plan": "Sanitized plan for replay case 182.",
+        "taskPacket": "Sanitized task packet for replay case 182.",
+        "branch": "task/replay-182",
+        "files": [
+          "file-182.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-183",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-183",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 183.",
+        "prReviewOutput": "Sanitized diff summary 183.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-184",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-184",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E184: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "ee1efd32a9446e749a7aa3417b0e12daacd379136d9cb28c7c09c020958bdd3f",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-185",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-185",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R185",
+        "prompt": "Sanitized routing replay case 185: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "gpt-5.3-codex",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-186",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-186",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-186.ts b/file-186.ts\n+export const value186 = 186;",
+        "plan": "Sanitized plan for replay case 186.",
+        "taskPacket": "Sanitized task packet for replay case 186.",
+        "branch": "task/replay-186",
+        "files": [
+          "file-186.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-187",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-187",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 187.",
+        "prReviewOutput": "Sanitized diff summary 187.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-188",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-188",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E188: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "676e9814adf91532c5a0028ca1e6d608a4f442fe1c2bf1c13fad1cdf732befe6",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-189",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-189",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R189",
+        "prompt": "Sanitized routing replay case 189: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "qwen-3-coder",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-190",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-190",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-190.ts b/file-190.ts\n+export const value190 = 190;",
+        "plan": "Sanitized plan for replay case 190.",
+        "taskPacket": "Sanitized task packet for replay case 190.",
+        "branch": "task/replay-190",
+        "files": [
+          "file-190.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-191",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-191",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 191.",
+        "prReviewOutput": "Sanitized diff summary 191.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-192",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-192",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E192: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "4dc7d510cc9bd20ef02290f3ba57b39216836581a4d2b4fb34cf2c3500600bf8",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-193",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-193",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R193",
+        "prompt": "Sanitized routing replay case 193: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "gpt-5.3-codex",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-194",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-194",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-194.ts b/file-194.ts\n+export const value194 = 194;",
+        "plan": "Sanitized plan for replay case 194.",
+        "taskPacket": "Sanitized task packet for replay case 194.",
+        "branch": "task/replay-194",
+        "files": [
+          "file-194.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-195",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-195",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 195.",
+        "prReviewOutput": "Sanitized diff summary 195.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-196",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-196",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E196: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "55634d95e645854133d9878e990aea80d0260f0312ce9b5e8727c0001e475bd4",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-197",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-197",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R197",
+        "prompt": "Sanitized routing replay case 197: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "gpt-5.3-codex",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-198",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-198",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-198.ts b/file-198.ts\n+export const value198 = 198;",
+        "plan": "Sanitized plan for replay case 198.",
+        "taskPacket": "Sanitized task packet for replay case 198.",
+        "branch": "task/replay-198",
+        "files": [
+          "file-198.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-199",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-199",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 199.",
+        "prReviewOutput": "Sanitized diff summary 199.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-200",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-200",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E200: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "a5e952f50bc2885714124bef2d76fcf22f129d9bd08bf40160f4fde4292a8a85",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-201",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-201",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R201",
+        "prompt": "Sanitized routing replay case 201: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "qwen-3-coder",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-202",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-202",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-202.ts b/file-202.ts\n+export const value202 = 202;",
+        "plan": "Sanitized plan for replay case 202.",
+        "taskPacket": "Sanitized task packet for replay case 202.",
+        "branch": "task/replay-202",
+        "files": [
+          "file-202.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-203",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-203",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 203.",
+        "prReviewOutput": "Sanitized diff summary 203.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-204",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-204",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E204: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "49099610fcc84606c3582c808ab4cfd7556dead48c423ec0837cd9a7c349e72b",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-205",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-205",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R205",
+        "prompt": "Sanitized routing replay case 205: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "gpt-5.3-codex",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-206",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-206",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-206.ts b/file-206.ts\n+export const value206 = 206;",
+        "plan": "Sanitized plan for replay case 206.",
+        "taskPacket": "Sanitized task packet for replay case 206.",
+        "branch": "task/replay-206",
+        "files": [
+          "file-206.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-207",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-207",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 207.",
+        "prReviewOutput": "Sanitized diff summary 207.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-208",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-208",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E208: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "dcf565726359122f28e28f6d00f111c549e5610f9bb031d5ad110453a62b2c18",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-209",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-209",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R209",
+        "prompt": "Sanitized routing replay case 209: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "gpt-5.3-codex",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-210",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-210",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-210.ts b/file-210.ts\n+export const value210 = 210;",
+        "plan": "Sanitized plan for replay case 210.",
+        "taskPacket": "Sanitized task packet for replay case 210.",
+        "branch": "task/replay-210",
+        "files": [
+          "file-210.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-211",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-211",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 211.",
+        "prReviewOutput": "Sanitized diff summary 211.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-212",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-212",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E212: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "15c084347897c44c023d5dcba6d6ede9d4a771920ca2858bae680efd190b3977",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-213",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-213",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R213",
+        "prompt": "Sanitized routing replay case 213: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "qwen-3-coder",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-214",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-214",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-214.ts b/file-214.ts\n+export const value214 = 214;",
+        "plan": "Sanitized plan for replay case 214.",
+        "taskPacket": "Sanitized task packet for replay case 214.",
+        "branch": "task/replay-214",
+        "files": [
+          "file-214.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-215",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-215",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 215.",
+        "prReviewOutput": "Sanitized diff summary 215.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-216",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-216",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E216: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "ef16f339de7cfb0121b8dcfcfcb40d6db655c40b2ab83f98acbffb588e0a8726",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-217",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-217",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R217",
+        "prompt": "Sanitized routing replay case 217: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "gpt-5.3-codex",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-218",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-218",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-218.ts b/file-218.ts\n+export const value218 = 218;",
+        "plan": "Sanitized plan for replay case 218.",
+        "taskPacket": "Sanitized task packet for replay case 218.",
+        "branch": "task/replay-218",
+        "files": [
+          "file-218.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-219",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-219",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 219.",
+        "prReviewOutput": "Sanitized diff summary 219.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-220",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-220",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E220: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "f5ee5aa9727f121c7166ef2ee819161d17e5bfca21e22fcdf2789f803e5337bf",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-221",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-221",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R221",
+        "prompt": "Sanitized routing replay case 221: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "gpt-5.3-codex",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-222",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-222",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-222.ts b/file-222.ts\n+export const value222 = 222;",
+        "plan": "Sanitized plan for replay case 222.",
+        "taskPacket": "Sanitized task packet for replay case 222.",
+        "branch": "task/replay-222",
+        "files": [
+          "file-222.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "eval-judging-223",
+      "surface": "eval_judging",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-223",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "taskPrompt": "Sanitized eval judging artifact 223.",
+        "prReviewOutput": "Sanitized diff summary 223.",
+        "outcomes": {
+          "success": true,
+          "review": {
+            "humanReviewRequired": false,
+            "rounds": 0,
+            "approvals": 1,
+            "changeRequests": 0
+          },
+          "rework": {
+            "agentIterations": 0
+          },
+          "delivery": {
+            "prCreated": true,
+            "merged": true
+          }
+        },
+        "expectedSuccess": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "issue-expansion-224",
+      "surface": "issue_expansion",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-224",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "fail",
+      "stable": true,
+      "input": {
+        "promptTemplate": "# Expand\n\n{{ISSUE_CONTEXT}}\n\n{{CODEBASE_CONTEXT}}",
+        "issueContext": "HOK-E224: sanitized issue expansion replay case",
+        "codebaseContext": "Sanitized codebase context held out from prompts except direct replay.",
+        "expectedTextSha256": "7a1aa59fa8ceabd681241033a41a30201568af74acf8307221dde7d4626f4f44",
+        "expectedIncludes": [
+          "Task Packet"
+        ]
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "routing-225",
+      "surface": "routing",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-225",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "issueId": "HOK-R225",
+        "prompt": "Sanitized routing replay case 225: choose the stable route for a harness-only change.",
+        "expectedDecision": {
+          "planner": "claude-opus-4-7",
+          "coder": "qwen-3-coder",
+          "reviewer": "claude-sonnet-5"
+        }
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "suiteVersion": "harness-retention-v1",
+      "id": "review-226",
+      "surface": "review",
+      "source": {
+        "kind": "artifact",
+        "path": ".wavemill/evals/artifacts/redacted-226",
+        "note": "Sanitized artifact replay placeholder; source artifact state absent from this worktree."
+      },
+      "baselineStatus": "pass",
+      "stable": true,
+      "input": {
+        "diff": "diff --git a/file-226.ts b/file-226.ts\n+export const value226 = 226;",
+        "plan": "Sanitized plan for replay case 226.",
+        "taskPacket": "Sanitized task packet for replay case 226.",
+        "branch": "task/replay-226",
+        "files": [
+          "file-226.ts"
+        ],
+        "hasUiChanges": false,
+        "expectedVerdict": "ready"
+      }
+    }
+  ]
+}

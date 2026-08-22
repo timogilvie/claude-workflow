@@ -16,6 +16,11 @@ import {
 import { classifyCiFailure, type CiFailureCategory } from './ci-failure-classifier.ts';
 import { enrichFailingChecks as enrichFailingChecksDefault } from './ci-log-fetcher.ts';
 import { errorMessage } from './error-utils.ts';
+import {
+  classifyCheckReadError,
+  normalizeStatusCheckRollup,
+  type NormalizedCheckSummary,
+} from './pr-ci-status.ts';
 import { normalizeJobs, type MillJob, type WorkflowStateLike } from './job-tracker.ts';
 import { updateBranchWithBase, type BranchBaseUpdateResult } from './promotion-controller.ts';
 import { escapeShellArg } from './shell-utils.ts';
@@ -109,16 +114,7 @@ export interface WorktreeMergeState {
   inspectError?: string;
 }
 
-export interface NormalizedCheckSummary {
-  name: string;
-  status: 'success' | 'pending' | 'failure' | 'neutral' | 'skipped' | 'unknown';
-  rawStatus: string;
-  text?: string;
-  annotations?: string[];
-  detailsUrl?: string;
-  databaseId?: number;
-  details?: unknown;
-}
+export { normalizeStatusCheckRollup, type NormalizedCheckSummary } from './pr-ci-status.ts';
 
 export interface GitHubPRTruth {
   state: string;
@@ -534,58 +530,6 @@ async function inspectWorktreeMergeState(worktree: string): Promise<WorktreeMerg
   }
 
   return state;
-}
-
-export function normalizeStatusCheckRollup(raw: unknown): NormalizedCheckSummary[] {
-  if (!Array.isArray(raw)) {
-    return [];
-  }
-
-  return raw.map((item, index) => {
-    const entry = typeof item === 'object' && item !== null ? item as Record<string, unknown> : {};
-    const rawStatus = String(entry.conclusion ?? entry.state ?? '').toUpperCase();
-    const name = String(entry.name ?? entry.context ?? `check-${index + 1}`);
-    const text = [
-      typeof entry.title === 'string' ? entry.title : '',
-      typeof entry.summary === 'string' ? entry.summary : '',
-      typeof entry.text === 'string' ? entry.text : '',
-      typeof entry.detailsUrl === 'string' ? entry.detailsUrl : '',
-    ].filter(Boolean).join('\n');
-    const detailsUrl = typeof entry.detailsUrl === 'string' ? entry.detailsUrl : undefined;
-    const databaseId = typeof entry.databaseId === 'number' ? entry.databaseId : undefined;
-    let status: NormalizedCheckSummary['status'] = 'unknown';
-
-    if (rawStatus === 'SUCCESS') status = 'success';
-    else if (rawStatus === 'NEUTRAL') status = 'neutral';
-    else if (rawStatus === 'SKIPPED') status = 'skipped';
-    else if (['PENDING', 'QUEUED', 'IN_PROGRESS', 'EXPECTED', 'WAITING', 'ACTION_REQUIRED'].includes(rawStatus)) {
-      status = 'pending';
-    } else if (['FAILURE', 'ERROR', 'TIMED_OUT', 'CANCELLED'].includes(rawStatus)) {
-      status = 'failure';
-    }
-
-    return { name, status, rawStatus, text: text || undefined, detailsUrl, databaseId, details: entry };
-  });
-}
-
-function classifyCheckReadError(error: unknown): GitHubPRTruth['checkReadError'] {
-  const message = errorMessage(error);
-  const lower = message.toLowerCase();
-  if (lower.includes('timeout') || lower.includes('timed out')) {
-    return { errorType: 'timeout', reason: message };
-  }
-  if (
-    lower.includes('could not resolve host') ||
-    lower.includes('network') ||
-    lower.includes('econnreset') ||
-    lower.includes('etimedout')
-  ) {
-    return { errorType: 'network', reason: message };
-  }
-  if (lower.includes('spawn') || lower.includes('exit') || lower.includes('command failed')) {
-    return { errorType: 'command-failed', reason: message };
-  }
-  return { errorType: 'unknown', reason: message };
 }
 
 function summarizeChecks(checks: NormalizedCheckSummary[]): {

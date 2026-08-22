@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 import { mutateJsonState } from './state-mutex.ts';
 import { errorMessage } from './error-utils.ts';
+import type { NoComparisonReason } from './challenge-comparison.ts';
 
 export type MillJobKind = 'eval' | 'comparison';
 export type MillJobStatus = 'running' | 'succeeded' | 'failed' | 'timeout';
@@ -42,6 +43,7 @@ export interface JobResultFile {
     invalidChallenge?: boolean;
     invalidChallengeReason?: string;
     invalidChallengeDetails?: string;
+    noComparisonReason?: NoComparisonReason;
     cleanupPolicy?: 'primary-wins-close-challenger';
     primaryModel?: string;
     challengerModel?: string;

@@ -7,6 +7,7 @@ import { resolveWavemillAliasFromOpenRouterId } from './openrouter-catalog.ts';
 import type { StageName, StageResult, StageStatus } from './stage-result.ts';
 import type { ChallengeArmFailure } from './arm-failure-taxonomy.ts';
 import type { ChallengeStage } from './challenge-mode.ts';
+import type { InvalidChallengeReason } from './challenge-execution-contract.ts';
 
 export interface ChallengeRoutingMeta {
   planner: string;
@@ -95,10 +96,60 @@ export type ChallengeCriterionRationales = {
 
 /**
  * Counted, named reason a launched challenge pair produced no LLM comparison (P0.6).
- * The finite enum is defined by P0.6; declared here as a forward-compatible
- * string so this schema pass ships behavior-neutral.
+ * Mirrors InvalidChallengeReason (invalid-challenge family), ChallengeTerminalReason (forfeit family),
+ * provenance validation outcomes, and legacy reasons (identical_routing_dimensions).
  */
-export type NoComparisonReason = string;
+export type NoComparisonReason =
+  // invalid-challenge family
+  | 'identical_effective_route'
+  | 'stage_override_lost'
+  | 'native_launch_fallback'
+  | 'operator_reroute'
+  | 'state_vs_derived_side_mismatch'
+  | 'missing_challenge_intent'
+  // legacy skip reason
+  | 'identical_routing_dimensions'
+  // provenance validation outcomes
+  | 'provenance_invalid'
+  | 'provenance_inconclusive'
+  // forfeit family
+  | 'primary_eval_hard_failed'
+  | 'challenger_eval_hard_failed'
+  | 'both_eval_hard_failed'
+  | 'eval_hard_failed'
+  | 'primary_challenge_aborted'
+  | 'challenger_challenge_aborted'
+  | 'both_challenge_aborted'
+  | 'orphan_pair'
+  // mitigation reasons
+  | 'challenger_never_launched'
+  | 'challenger_eval_not_persisted'
+  | 'recovery_tie'
+  | 'unknown';
+
+export const NO_COMPARISON_REASONS = [
+  'identical_effective_route',
+  'stage_override_lost',
+  'native_launch_fallback',
+  'operator_reroute',
+  'state_vs_derived_side_mismatch',
+  'missing_challenge_intent',
+  'identical_routing_dimensions',
+  'provenance_invalid',
+  'provenance_inconclusive',
+  'primary_eval_hard_failed',
+  'challenger_eval_hard_failed',
+  'both_eval_hard_failed',
+  'eval_hard_failed',
+  'primary_challenge_aborted',
+  'challenger_challenge_aborted',
+  'both_challenge_aborted',
+  'orphan_pair',
+  'challenger_never_launched',
+  'challenger_eval_not_persisted',
+  'recovery_tie',
+  'unknown',
+] as const;
 
 export type ChallengeProvenanceValidationReason =
   | 'missing-artifact'
@@ -152,6 +203,9 @@ export interface ChallengeComparison {
   challengerModel: string;
   primaryPrUrl: string;
   challengerPrUrl: string;
+  /** Harness IDs for each arm's eval record; arms may legitimately differ. */
+  primaryHarnessId?: string;
+  challengerHarnessId?: string;
   primaryEvalScore: number | null;
   challengerEvalScore: number | null;
   primaryCompleted?: boolean;
@@ -176,7 +230,7 @@ export interface ChallengeComparison {
   workflowInsight?: string;
   comparisonOutcome?: ChallengeComparisonOutcome;
   skipReason?: 'identical-routing-dimensions';
-  invalidChallengeReason?: 'stage_override_lost' | 'native_launch_fallback' | 'identical_effective_route' | 'operator_reroute';
+  invalidChallengeReason?: InvalidChallengeReason;
   invalidChallengeDetails?: string;
   invalidChallenge?: boolean;
   primaryAttestation?: unknown;
@@ -253,6 +307,37 @@ const EMPTY_DIMENSIONS: ChallengeComparisonDimensions = {
   intervention_impact: { primary: 0, challenger: 0 },
   autonomy: { primary: 0, challenger: 0 },
 };
+
+type ComparisonRetentionInput = {
+  forkStage?: ChallengeStage | null;
+  forkCommit?: string | null;
+  sharedPrefix?: boolean;
+  primaryInheritedStages?: ChallengeStage[];
+  challengerInheritedStages?: ChallengeStage[];
+  primaryDiffIdentity?: ChallengeDiffIdentity;
+  challengerDiffIdentity?: ChallengeDiffIdentity;
+};
+
+function comparisonRetentionFields(input: ComparisonRetentionInput): Pick<
+  ChallengeComparison,
+  | 'forkStage'
+  | 'forkCommit'
+  | 'sharedPrefix'
+  | 'primaryInheritedStages'
+  | 'challengerInheritedStages'
+  | 'primaryDiffIdentity'
+  | 'challengerDiffIdentity'
+> {
+  return {
+    forkStage: input.forkStage ?? null,
+    forkCommit: input.forkCommit ?? null,
+    sharedPrefix: input.sharedPrefix ?? false,
+    primaryInheritedStages: input.primaryInheritedStages ?? [],
+    challengerInheritedStages: input.challengerInheritedStages ?? [],
+    ...(input.primaryDiffIdentity ? { primaryDiffIdentity: input.primaryDiffIdentity } : {}),
+    ...(input.challengerDiffIdentity ? { challengerDiffIdentity: input.challengerDiffIdentity } : {}),
+  };
+}
 
 type ChallengeEntryLike = {
   planner?: string;
@@ -405,8 +490,87 @@ export function classifyChallengeType(varied: VariedDimensions): ChallengeType {
   return 'multi-variable';
 }
 
+/**
+ * Derive noComparisonReason from a record's legacy fields.
+ * Returns undefined for compared/manual-with-winner records.
+ * Returns the explicit field if present and valid, otherwise derives from legacy fields.
+ */
+export function deriveNoComparisonReason(
+  record: Pick<StoredChallengeComparison, 'comparisonOutcome' | 'skipReason' | 'invalidChallengeReason' | 'terminalReason' | 'provenanceValidation' | 'recordKind' | 'winner' | 'noComparisonReason'>
+): NoComparisonReason | undefined {
+  // Compared and manual-with-winner records have no reason.
+  if (record.comparisonOutcome === 'compared' || (record.comparisonOutcome === 'manual' && record.winner)) {
+    return undefined;
+  }
+
+  // If explicit field is set and valid, use it.
+  if (record.noComparisonReason) {
+    const valid = NO_COMPARISON_REASONS.includes(record.noComparisonReason as NoComparisonReason);
+    if (valid) return record.noComparisonReason as NoComparisonReason;
+  }
+
+  // Derive from legacy fields.
+  if (record.invalidChallengeReason) {
+    return record.invalidChallengeReason as NoComparisonReason;
+  }
+
+  if (record.skipReason === 'identical-routing-dimensions') {
+    return 'identical_routing_dimensions';
+  }
+
+  if (record.skipReason === 'challenger-eval-not-persisted') {
+    return 'challenger_eval_not_persisted';
+  }
+
+  if (record.comparisonOutcome === 'invalid') {
+    // Check if it's from provenance validation
+    if (record.provenanceValidation?.outcome === 'invalid') {
+      return 'provenance_invalid';
+    }
+    if (record.provenanceValidation?.outcome === 'inconclusive') {
+      return 'provenance_inconclusive';
+    }
+    return 'provenance_invalid';
+  }
+
+  if (record.comparisonOutcome === 'inconclusive') {
+    // Superseding record with equal scores → recovery_tie
+    if (record.recordKind === 'superseding-comparison') {
+      return 'recovery_tie';
+    }
+    return 'provenance_inconclusive';
+  }
+
+  // Forfeit and double-forfeit use terminalReason
+  if (record.terminalReason) {
+    return record.terminalReason as NoComparisonReason;
+  }
+
+  // Fallback for records with neither comparisonOutcome nor winner
+  return 'unknown';
+}
+
 export function appendChallengeComparison(record: ChallengeComparison, dir?: string): void {
-  appendJsonlRecord(resolveRecordsFile(dir), record);
+  const recordToAppend = { ...record };
+
+  // If record is non-compared and noComparisonReason is missing, fill it with derived value.
+  if (recordToAppend.comparisonOutcome !== 'compared' && !recordToAppend.noComparisonReason) {
+    const derived = deriveNoComparisonReason(recordToAppend);
+    if (derived) {
+      recordToAppend.noComparisonReason = derived;
+    } else if (derived === 'unknown') {
+      recordToAppend.noComparisonReason = 'unknown';
+      console.warn(`[HOK-2798] Challenge record has unknown no-comparison reason: ${recordToAppend.challengePairId}`);
+    }
+  }
+
+  // Warn once per session if reason is unknown
+  if (recordToAppend.noComparisonReason === 'unknown' && !global.wavemill_unknown_reason_warned) {
+    console.warn('[HOK-2798] Appending record with unknown no-comparison reason');
+    (global as any).wavemill_unknown_reason_warned = true;
+  }
+
+  appendJsonlRecord(resolveRecordsFile(dir), recordToAppend);
 }
 
 export function isDecisiveChallengeComparison(record: Pick<ChallengeComparison, 'comparisonOutcome' | 'primaryCompleted' | 'challengerCompleted' | 'armFailures' | 'terminalReason'>): boolean {
@@ -713,6 +877,8 @@ export function buildInvalidProvenanceComparison(input: {
   challengerPrUrl: string;
   primaryEvalScore: number;
   challengerEvalScore: number;
+  primaryHarnessId?: string;
+  challengerHarnessId?: string;
   primaryRouting?: ChallengeRoutingMeta;
   challengerRouting?: ChallengeRoutingMeta;
   primaryExecution: ChallengeSideExecutionProvenance;
@@ -722,7 +888,7 @@ export function buildInvalidProvenanceComparison(input: {
   challengeType?: ChallengeType;
   variedStage?: 'plan' | 'implementation' | 'review';
   timestamp?: string;
-}): ChallengeComparison {
+} & ComparisonRetentionInput): ChallengeComparison {
   const reason = input.provenanceValidation.issues
     .map((issue) => {
       const side = issue.side === 'pair' ? 'pair' : `${issue.side} ${issue.role}`;
@@ -733,12 +899,15 @@ export function buildInvalidProvenanceComparison(input: {
     })
     .join('; ');
   const outcome = input.provenanceValidation.outcome ?? 'invalid';
+  const noComparisonReason = outcome === 'invalid' ? 'provenance_invalid' : 'provenance_inconclusive';
   return {
     challengePairId: input.challengePairId,
     primaryModel: input.primaryModel,
     challengerModel: input.challengerModel,
     primaryPrUrl: input.primaryPrUrl,
     challengerPrUrl: input.challengerPrUrl,
+    primaryHarnessId: input.primaryHarnessId,
+    challengerHarnessId: input.challengerHarnessId,
     primaryEvalScore: input.primaryEvalScore,
     challengerEvalScore: input.challengerEvalScore,
     rationale: `Challenge comparison ${outcome}: ${reason || 'execution provenance did not validate'}.`,
@@ -754,11 +923,8 @@ export function buildInvalidProvenanceComparison(input: {
     variedStage: input.variedStage,
     comparisonOutcome: outcome,
     terminalReason: 'provenance_validation_failed',
-    forkStage: null,
-    forkCommit: null,
-    sharedPrefix: false,
-    primaryInheritedStages: [],
-    challengerInheritedStages: [],
+    noComparisonReason,
+    ...comparisonRetentionFields(input),
   };
 }
 
@@ -770,10 +936,12 @@ export function buildSkippedIdenticalComparison(input: {
   challengerPrUrl: string;
   primaryEvalScore: number;
   challengerEvalScore: number;
+  primaryHarnessId?: string;
+  challengerHarnessId?: string;
   primaryRouting?: ChallengeRoutingMeta;
   challengerRouting?: ChallengeRoutingMeta;
   timestamp?: string;
-}): ChallengeComparison {
+} & ComparisonRetentionInput): ChallengeComparison {
   const variedDimensions = detectVariedDimensions(input.primaryRouting, input.challengerRouting);
   return {
     challengePairId: input.challengePairId,
@@ -781,6 +949,8 @@ export function buildSkippedIdenticalComparison(input: {
     challengerModel: input.challengerModel,
     primaryPrUrl: input.primaryPrUrl,
     challengerPrUrl: input.challengerPrUrl,
+    primaryHarnessId: input.primaryHarnessId,
+    challengerHarnessId: input.challengerHarnessId,
     primaryEvalScore: input.primaryEvalScore,
     challengerEvalScore: input.challengerEvalScore,
     winner: 'primary',
@@ -794,12 +964,9 @@ export function buildSkippedIdenticalComparison(input: {
     workflowInsight: 'No LLM comparison was run because both workflows resolved to identical routing dimensions.',
     comparisonOutcome: 'skipped',
     skipReason: 'identical-routing-dimensions',
+    noComparisonReason: 'identical_routing_dimensions',
     cleanupPolicy: 'primary-wins-close-challenger',
-    forkStage: null,
-    forkCommit: null,
-    sharedPrefix: false,
-    primaryInheritedStages: [],
-    challengerInheritedStages: [],
+    ...comparisonRetentionFields(input),
   };
 }
 
@@ -811,14 +978,16 @@ export function buildInvalidChallengeComparison(input: {
   challengerPrUrl: string;
   primaryEvalScore: number;
   challengerEvalScore: number;
-  reason: 'stage_override_lost' | 'native_launch_fallback' | 'identical_effective_route' | 'operator_reroute';
+  primaryHarnessId?: string;
+  challengerHarnessId?: string;
+  reason: 'stage_override_lost' | 'native_launch_fallback' | 'identical_effective_route' | 'operator_reroute' | 'state_vs_derived_side_mismatch' | 'missing_challenge_intent';
   details?: string;
   primaryRouting?: ChallengeRoutingMeta;
   challengerRouting?: ChallengeRoutingMeta;
   primaryAttestation?: unknown;
   challengerAttestation?: unknown;
   timestamp?: string;
-}): ChallengeComparison {
+} & ComparisonRetentionInput): ChallengeComparison {
   const variedDimensions = detectVariedDimensions(input.primaryRouting, input.challengerRouting);
   return {
     challengePairId: input.challengePairId,
@@ -826,6 +995,8 @@ export function buildInvalidChallengeComparison(input: {
     challengerModel: input.challengerModel,
     primaryPrUrl: input.primaryPrUrl,
     challengerPrUrl: input.challengerPrUrl,
+    primaryHarnessId: input.primaryHarnessId,
+    challengerHarnessId: input.challengerHarnessId,
     primaryEvalScore: input.primaryEvalScore,
     challengerEvalScore: input.challengerEvalScore,
     rationale: input.details || `Invalid challenge: ${input.reason}`,
@@ -837,15 +1008,12 @@ export function buildInvalidChallengeComparison(input: {
     comparisonOutcome: 'invalid_challenge',
     invalidChallenge: true,
     invalidChallengeReason: input.reason,
+    noComparisonReason: input.reason as NoComparisonReason,
     ...(input.details ? { invalidChallengeDetails: input.details } : {}),
     ...(input.primaryAttestation ? { primaryAttestation: input.primaryAttestation } : {}),
     ...(input.challengerAttestation ? { challengerAttestation: input.challengerAttestation } : {}),
     workflowInsight: 'No LLM comparison was run because the selected challenge intent did not execute.',
-    forkStage: null,
-    forkCommit: null,
-    sharedPrefix: false,
-    primaryInheritedStages: [],
-    challengerInheritedStages: [],
+    ...comparisonRetentionFields(input),
   };
 }
 
@@ -861,7 +1029,10 @@ export function buildForfeitComparison(input: {
   armFailures?: ChallengeArmFailure[];
   rationale: string;
   terminalReason: ChallengeTerminalReason;
+  primaryHarnessId?: string;
+  challengerHarnessId?: string;
   timestamp?: string;
+  noComparisonReason?: NoComparisonReason;
 }): ChallengeComparison {
   return {
     challengePairId: input.challengePairId,
@@ -869,6 +1040,8 @@ export function buildForfeitComparison(input: {
     challengerModel: input.challengerModel,
     primaryPrUrl: input.primaryPrUrl,
     challengerPrUrl: input.challengerPrUrl,
+    primaryHarnessId: input.primaryHarnessId,
+    challengerHarnessId: input.challengerHarnessId,
     primaryEvalScore: null,
     challengerEvalScore: null,
     primaryCompleted: input.primaryCompleted ?? (input.winner === 'primary'),
@@ -881,6 +1054,7 @@ export function buildForfeitComparison(input: {
     timestamp: input.timestamp || new Date().toISOString(),
     comparisonOutcome: 'forfeit',
     terminalReason: input.terminalReason,
+    noComparisonReason: input.noComparisonReason || (input.terminalReason as NoComparisonReason),
     forkStage: null,
     forkCommit: null,
     sharedPrefix: false,
@@ -900,7 +1074,10 @@ export function buildDoubleForfeitComparison(input: {
   armFailures?: ChallengeArmFailure[];
   rationale: string;
   terminalReason: ChallengeTerminalReason;
+  primaryHarnessId?: string;
+  challengerHarnessId?: string;
   timestamp?: string;
+  noComparisonReason?: NoComparisonReason;
 }): ChallengeComparison {
   return {
     challengePairId: input.challengePairId,
@@ -908,6 +1085,8 @@ export function buildDoubleForfeitComparison(input: {
     challengerModel: input.challengerModel,
     primaryPrUrl: input.primaryPrUrl,
     challengerPrUrl: input.challengerPrUrl,
+    primaryHarnessId: input.primaryHarnessId,
+    challengerHarnessId: input.challengerHarnessId,
     primaryEvalScore: null,
     challengerEvalScore: null,
     primaryCompleted: input.primaryCompleted ?? false,
@@ -920,6 +1099,7 @@ export function buildDoubleForfeitComparison(input: {
     timestamp: input.timestamp || new Date().toISOString(),
     comparisonOutcome: 'double-forfeit',
     terminalReason: input.terminalReason,
+    noComparisonReason: input.noComparisonReason || (input.terminalReason as NoComparisonReason),
     forkStage: null,
     forkCommit: null,
     sharedPrefix: false,

@@ -36,6 +36,7 @@ import {
 import { buildChallengeStageEval } from './stage-eval-evidence.ts';
 import { buildTaskDescriptor } from './task-descriptor-builder.ts';
 import { getEvalContextUpdatesConfig, getMaxCostUsd } from './config.ts';
+import { runConfiguredHarnessRetentionReplay } from './harness-replay.ts';
 import { formatHokusaiSubmissionTriggerResult, triggerHokusaiSubmission } from './hokusai-submission-trigger.ts';
 import { readAndValidateArtifact } from './pre-pr-verification.ts';
 import { getPrePrVerificationConfig } from './config.ts';
@@ -253,6 +254,7 @@ export const postCompletionHookDeps = {
   getEvalContextUpdatesConfig,
   getCurrentOperatingMode,
   triggerHokusaiSubmission,
+  runHarnessRetentionReplay: runConfiguredHarnessRetentionReplay,
   runContextUpdateWork: updateProjectContext,
   appendContextUpdateWarning,
 };
@@ -817,10 +819,27 @@ export async function runPostCompletionEval(ctx: PostCompletionContext): Promise
     // 8. Enqueue Hokusai contribution before optional post-eval work.
     await triggerHokusaiSubmissionAfterPersistence(record, repoDir);
 
-    // 9. Run bounded best-effort project context and subsystem updates
+    // 9. Run retention replay before mutating project context/subsystem memory.
+    const retentionReport = await postCompletionHookDeps.runHarnessRetentionReplay(repoDir);
+    if (retentionReport) {
+      console.log(
+        `Post-completion eval: harness retention ${retentionReport.verdict} ` +
+        `(D=${retentionReport.D}, tolerance=${retentionReport.tolerance}, mode=${retentionReport.mode})`
+      );
+      if (retentionReport.reportPath) {
+        console.log(`Post-completion eval: harness retention report ${retentionReport.reportPath}`);
+      }
+      if (retentionReport.mode === 'enforce' && retentionReport.verdict !== 'pass') {
+        console.warn('Post-completion eval: context updates skipped because harness retention replay failed');
+        printEvalSummary(record);
+        return true;
+      }
+    }
+
+    // 10. Run bounded best-effort project context and subsystem updates
     await runPostEvalContextUpdates(ctx, record, evalContext.prDiff, evalContext.taskPrompt);
 
-    // 10. Print summary
+    // 11. Print summary
     printEvalSummary(record);
     return true;
   } catch (error: unknown) {

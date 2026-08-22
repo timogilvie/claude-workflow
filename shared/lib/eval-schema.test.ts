@@ -780,7 +780,28 @@ function validPromptSizeDiagnostic() {
 }
 
 test('SCHEMA_VERSION is bumped for eval schema updates', () => {
-  assert.equal(SCHEMA_VERSION, '1.40.0');
+  assert.equal(SCHEMA_VERSION, '1.41.0');
+});
+
+test('Record with harnessId validates and legacy records without it still validate', () => {
+  const legacyResult = validateAgainstSchema(scenarios[0].record as unknown as Record<string, unknown>);
+  assert.ok(legacyResult.valid, `Legacy record should validate: ${legacyResult.errors.join('; ')}`);
+
+  const record = {
+    ...scenarios[0].record,
+    harnessId: 'a'.repeat(64),
+  } as unknown as Record<string, unknown>;
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
+test('Rejects malformed harnessId', () => {
+  const record = {
+    ...scenarios[0].record,
+    harnessId: 'not-a-hash',
+  } as unknown as Record<string, unknown>;
+  const result = validateAgainstSchema(record);
+  assert.ok(!result.valid, 'Should be invalid');
 });
 
 test('Record with top-level challengeStage validates', () => {
@@ -1719,6 +1740,7 @@ test('challengeRouteContext validates when present', () => {
         codeDepth: 'medium',
         reviewer: 'claude-opus-4-6',
         reviewMode: 'llm',
+        harnessId: 'a'.repeat(64),
       },
       expandedRoute: {
         coder: 'gpt-5.4',
@@ -1792,6 +1814,7 @@ test('routeProvenance with full route artifact fields validates', () => {
         codeDepth: 'medium',
         reviewer: 'claude-opus-4-6',
         reviewMode: 'llm',
+        harnessId: 'b'.repeat(64),
         planner: 'claude-sonnet-5',
         planDepth: 'deep',
         artifactPath: 'features/HOK-2071/.initial-route.json',
@@ -2129,8 +2152,8 @@ test('Wavemill router fields validate and schema stays in parity', () => {
   assert.equal(properties.wavemill_router_scoring?.$ref, '#/$defs/WavemillRouterScoringMetadata');
 });
 
-test('Schema version constant is 1.40.0', () => {
-  assert.equal(SCHEMA_VERSION, '1.40.0');
+test('Schema version constant is 1.41.0', () => {
+  assert.equal(SCHEMA_VERSION, '1.41.0');
 });
 
 test('Record with resolved-model routing validates', () => {
