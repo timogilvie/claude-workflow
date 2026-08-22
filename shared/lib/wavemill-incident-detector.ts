@@ -108,7 +108,7 @@ export class WorkflowStateDetector {
 }
 
 export class JobFailureDetector {
-  detect(repoDir: string, taskId: string, context: DetectorContext): IncidentRecord[] {
+  detect(repoDir: string, taskId: string | null, context: DetectorContext): IncidentRecord[] {
     const incidents: IncidentRecord[] = [];
     const seen = new Set<string>();
     const timestamp = context.now?.toISOString() ?? new Date().toISOString();
@@ -118,13 +118,14 @@ export class JobFailureDetector {
       if (seen.has(key)) continue;
       seen.add(key);
       if (job.status !== 'failed' && job.status !== 'timeout') continue;
-      if (job.issueId && job.issueId !== taskId && !job.pairId?.includes(taskId)) continue;
+      const subjectTaskId = jobSubjectTaskId(job);
+      if (taskId && subjectTaskId !== taskId) continue;
 
       const missingResult = job.resultPath ? !existsSync(job.resultPath) : /no_result|missing/i.test(job.reason ?? '');
       const missingEvalEvidence = job.kind === 'comparison' && /eval|record|no_result|missing/i.test(`${job.reason ?? ''} ${job.error ?? ''}`);
       const rootCauseClass = missingEvalEvidence ? 'missing_eval_records_for_comparison' : missingResult ? 'failed_job_no_result' : 'failed_background_job';
       incidents.push(createIncidentDraft({
-        taskId: job.issueId ?? taskId,
+        taskId: subjectTaskId,
         session: context.session ?? null,
         category: rootCauseClass === 'failed_background_job' ? 'product_defect' : 'stale_orphaned_state',
         severity: 'medium',
@@ -162,6 +163,13 @@ export class DependencyHealthDetector {
   }
 
   detect(repoDir: string, taskId: string, context: DetectorContext): IncidentRecord[] {
+    return [
+      ...this.detectTask(repoDir, taskId, context),
+      ...this.detectRepo(repoDir, context),
+    ];
+  }
+
+  detectTask(repoDir: string, taskId: string, context: DetectorContext): IncidentRecord[] {
     const incidents: IncidentRecord[] = [];
     const timestamp = context.now?.toISOString() ?? new Date().toISOString();
     const threshold = this.options.thresholdConsecutiveFailures ?? 3;
@@ -192,6 +200,14 @@ export class DependencyHealthDetector {
       }));
     }
 
+    return incidents;
+  }
+
+  detectRepo(repoDir: string, context: DetectorContext): IncidentRecord[] {
+    const incidents: IncidentRecord[] = [];
+    const timestamp = context.now?.toISOString() ?? new Date().toISOString();
+    const threshold = this.options.thresholdConsecutiveFailures ?? 3;
+
     const queueHealthPath = join(repoDir, '.wavemill', 'queue-health.json');
     const queueHealth = readObjectFile(queueHealthPath);
     if (queueHealth?.status === 'degraded') {
@@ -199,7 +215,7 @@ export class DependencyHealthDetector {
       const diagnostic = diagnosticReason(queueHealth) ?? reason;
       const failureCount = numberField(queueHealth.failureCount) ?? 1;
       incidents.push(createIncidentDraft({
-        taskId,
+        taskId: null,
         session: context.session ?? null,
         category: /config|credential|permission/i.test(diagnostic) ? 'configuration_operator_condition' : 'external_transient_dependency',
         severity: failureCount >= threshold ? 'medium' : 'low',
@@ -228,7 +244,7 @@ export class DependencyHealthDetector {
         const failureCount = numberField(service.failureCount) ?? numberField(service.restartAttemptCount) ?? 0;
         if (failureCount < threshold || !/\b(remote|ssh|github|dependency|probe)\b/i.test(detail)) continue;
         incidents.push(createIncidentDraft({
-          taskId,
+          taskId: null,
           session: context.session ?? null,
           category: 'external_transient_dependency',
           severity: 'medium',
@@ -257,8 +273,14 @@ export function detectIncidentsForTask(taskPath: string, taskId: string, context
   return [
     ...new PlanningFailureDetector().detect(taskPath, taskId, context),
     ...new WorkflowStateDetector().detect(taskPath, taskId, context),
-    ...new JobFailureDetector().detect(context.repoDir, taskId, context),
-    ...new DependencyHealthDetector({ thresholdConsecutiveFailures: dependencyThreshold }).detect(context.repoDir, taskId, context),
+    ...new DependencyHealthDetector({ thresholdConsecutiveFailures: dependencyThreshold }).detectTask(context.repoDir, taskId, context),
+  ];
+}
+
+export function detectIncidentsForRepo(repoDir: string, context: DetectorContext, dependencyThreshold = 3): IncidentRecord[] {
+  return [
+    ...new JobFailureDetector().detect(repoDir, null, context),
+    ...new DependencyHealthDetector({ thresholdConsecutiveFailures: dependencyThreshold }).detectRepo(repoDir, context),
   ];
 }
 
@@ -296,6 +318,22 @@ function taskEntry(workflowState: Record<string, unknown>, taskId: string): Reco
 }
 
 type JobStateWithSource = JobStateDiagnostic & { source: string };
+
+function jobSubjectTaskId(job: JobStateWithSource): string | null {
+  const candidates = job.kind === 'comparison'
+    ? [job.pairId, job.id, job.issueId, job.resultPath, job.logPath, job.source]
+    : [job.issueId, job.id, job.pairId, job.resultPath, job.logPath, job.source];
+  for (const candidate of candidates) {
+    const issueId = extractIssueId(candidate);
+    if (issueId) return issueId;
+  }
+  return null;
+}
+
+function extractIssueId(value: string | undefined): string | null {
+  const match = value?.match(/\b[A-Z]+-\d+(?:_c)?\b/);
+  return match?.[0] ?? null;
+}
 
 function readJobs(repoDir: string): JobStateWithSource[] {
   const jobs: JobStateWithSource[] = [];

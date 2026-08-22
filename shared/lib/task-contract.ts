@@ -585,7 +585,7 @@ function parseRouteJson(text: string): Record<string, unknown> | null {
 /** Extract only non-path, stable fields from a route artifact for the summary. */
 function sanitizeRouteArtifact(obj: Record<string, unknown>): Record<string, unknown> | null {
   const safe: Record<string, unknown> = {};
-  const safeKeys = ['coder', 'codeDepth', 'reviewer', 'reviewMode', 'planDepth', 'planner', 'routingMode'] as const;
+  const safeKeys = ['coder', 'codeDepth', 'reviewer', 'reviewMode', 'planDepth', 'planner', 'routingMode', 'harnessId'] as const;
   for (const key of safeKeys) {
     if (typeof obj[key] === 'string' && obj[key]) safe[key] = obj[key];
   }

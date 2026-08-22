@@ -98,6 +98,53 @@ describe('checkMetadata', () => {
   });
 });
 
+describe('readRequiredChecks', () => {
+  it('fails when an observed required check is failing', () => {
+    const result = readRequiredChecks({
+      ok: true,
+      requiredContexts: ['Shell and Unit Tests'],
+      requiredSource: 'config',
+      checks: [{ name: 'Shell and Unit Tests', status: 'failure', rawStatus: 'FAILURE' }],
+    });
+
+    assert.equal(result.status, 'fail');
+    assert.match(result.reason ?? '', /Shell and Unit Tests/);
+  });
+
+  it('returns pending when required checks are missing from the observed set', () => {
+    const result = readRequiredChecks({
+      ok: true,
+      requiredContexts: ['Shell and Unit Tests', 'Native Launch Certification'],
+      requiredSource: 'config',
+      checks: [{ name: 'Shell and Unit Tests', status: 'success', rawStatus: 'SUCCESS' }],
+    });
+
+    assert.equal(result.status, 'pending');
+    assert.match(result.reason ?? '', /observed 1 of 2/);
+  });
+
+  it('passes when the required check set is complete and green', () => {
+    const result = readRequiredChecks({
+      ok: true,
+      requiredContexts: ['Shell and Unit Tests'],
+      requiredSource: 'config',
+      checks: [{ name: 'Shell and Unit Tests', status: 'success', rawStatus: 'SUCCESS' }],
+    });
+
+    assert.equal(result.status, 'pass');
+  });
+
+  it('preserves read errors as pending', () => {
+    const result = readRequiredChecks({
+      ok: false,
+      errorType: 'network',
+      reason: 'network unavailable',
+    });
+
+    assert.equal(result.status, 'pending');
+  });
+});
+
 describe('checkDependencies', () => {
   it('returns pending for open PR dependencies', async () => {
     const result = await checkDependencies(buildContext({
@@ -345,7 +392,12 @@ describe('evaluateReady', () => {
 
 describe('readRequiredChecks', () => {
   it('passes through successful check reads', () => {
-    assert.deepEqual(readRequiredChecks({ ok: true, checks: [] }), { status: 'pass' });
+    assert.deepEqual(readRequiredChecks({
+      ok: true,
+      requiredContexts: ['Shell and Unit Tests'],
+      requiredSource: 'config',
+      checks: [{ name: 'Shell and Unit Tests', status: 'success', rawStatus: 'SUCCESS' }],
+    }), { status: 'pass' });
   });
 
   it('returns a fail-closed pending result for malformed check data', () => {

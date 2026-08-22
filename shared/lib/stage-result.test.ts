@@ -18,9 +18,11 @@ import {
   readStageResult,
   readAllStageResults,
   updateStageResult,
+  extractReviewOutcome,
   getResultFilePath,
   isValidStage,
   isValidStatus,
+  reviewResultPassed,
 } from './stage-result.ts';
 import type {
   StageResult,
@@ -483,7 +485,18 @@ describe('artifacts round-trip', () => {
   });
 
   it('round-trips ReviewArtifacts', async () => {
-    const artifacts: ReviewArtifacts = { type: 'review', prNumber: 42, prUrl: 'https://github.com/org/repo/pull/42', findingsCount: 3, blockingIssues: 1 };
+    const artifacts: ReviewArtifacts = {
+      type: 'review',
+      prNumber: 42,
+      prUrl: 'https://github.com/org/repo/pull/42',
+      findingsCount: 3,
+      blockingIssues: 1,
+      exitCode: 1,
+      verdict: 'not_ready',
+      iterations: 2,
+      blockerCount: 1,
+      warningCount: 2,
+    };
     await writeStageResult(testDir, makeResult({ stage: 'review', artifacts }));
 
     const read = await readStageResult(testDir, 'review');
@@ -510,6 +523,81 @@ describe('artifacts round-trip', () => {
     const read = await readStageResult(testDir, 'planning');
     assert.equal(read?.artifacts, undefined);
     assert.equal(read?.status, 'running');
+  });
+});
+
+// ────────────────────────────────────────────────────────────────
+// review outcome helpers
+// ────────────────────────────────────────────────────────────────
+
+describe('review outcome helpers', () => {
+  it('passes only with explicit final successful self-review evidence', () => {
+    const result = makeResult({
+      stage: 'review',
+      status: 'completed',
+      artifacts: {
+        type: 'review',
+        prNumber: 42,
+        exitCode: 0,
+        verdict: 'ready',
+        iterations: 1,
+        blockerCount: 0,
+        warningCount: 1,
+      },
+    });
+
+    assert.equal(reviewResultPassed(result), true);
+    assert.deepEqual(extractReviewOutcome(result), {
+      exitCode: 0,
+      verdict: 'ready',
+      iterations: 1,
+      blockerCount: 0,
+      warningCount: 1,
+      reviewToolError: undefined,
+      diagnostics: undefined,
+    });
+  });
+
+  it('fails closed when review evidence is missing or non-passing', () => {
+    const cases: StageResult[] = [
+      makeResult({ stage: 'review', status: 'completed' }),
+      makeResult({ stage: 'review', status: 'completed', artifacts: { type: 'review', blockerCount: 0 } }),
+      makeResult({ stage: 'review', status: 'completed', artifacts: { type: 'review', exitCode: 1, verdict: 'not_ready', iterations: 1, blockerCount: 0 } }),
+      makeResult({ stage: 'review', status: 'completed', artifacts: { type: 'review', exitCode: 2, verdict: 'error', iterations: 1, blockerCount: 0 } }),
+      makeResult({ stage: 'review', status: 'completed', artifacts: { type: 'review', exitCode: 0, verdict: 'ready', iterations: 1, blockerCount: 1 } }),
+      makeResult({ stage: 'review', status: 'completed', artifacts: { type: 'review', exitCode: 0, verdict: 'ready', blockerCount: 0 } }),
+    ];
+
+    for (const testCase of cases) {
+      assert.equal(reviewResultPassed(testCase), false);
+    }
+  });
+
+  it('extracts nested native review artifacts during transition', () => {
+    const result = makeResult({
+      stage: 'review',
+      status: 'completed',
+      artifacts: {
+        review: {
+          exitCode: 0,
+          verdict: 'ready',
+          iterations: 2,
+          blockingCount: 0,
+          warningCount: 3,
+        },
+      } as StageResult['artifacts'],
+    });
+
+    assert.equal(reviewResultPassed(result), true);
+    assert.deepEqual(extractReviewOutcome(result), {
+      exitCode: 0,
+      verdict: 'ready',
+      iterations: 2,
+      blockerCount: 0,
+      warningCount: 3,
+      reviewToolError: undefined,
+      diagnostics: undefined,
+    });
   });
 });
 

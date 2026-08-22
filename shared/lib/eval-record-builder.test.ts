@@ -24,6 +24,7 @@ import {
   attachPhaseDurations,
   attachRouteProvenance,
   attachRouterPolicyMetadata,
+  attachManifestRef,
   attachProviderMetadata,
   attachNonRewardReason,
   attachRubricEval,
@@ -42,6 +43,8 @@ import {
 } from './eval-record-builder.ts';
 import type { RubricEval } from './eval-schema.ts';
 import type { ChallengeExecutionIntent } from './challenge-execution-contract.ts';
+import { closeManifest, getHarnessId, openManifest, recordUse } from './resource-manifest.ts';
+import { registerResource, toResourceRef } from './resource-registry.ts';
 
 function expect(actual: unknown) {
   return {
@@ -116,6 +119,32 @@ describe('eval-record-builder', () => {
     it('should default to "claude" when empty string', () => {
       attachAgentType(baseRecord, '');
       expect(baseRecord.agentType).toBe('claude');
+    });
+  });
+
+  describe('attachManifestRef', () => {
+    it('sets harnessId before close and manifestRef only after close', () => {
+      const repoDir = mkdtempSync(join(tmpdir(), 'eval-manifest-'));
+      tempDirs.push(repoDir);
+      openManifest('eval-session', { workflowType: 'feature', repoDir });
+      const resource = registerResource({
+        type: 'prompt',
+        name: 'eval-harness',
+        content: 'prompt body',
+      }, { repoDir });
+      const ref = toResourceRef(resource);
+      assert.ok(ref);
+      recordUse('eval-session', 'eval', ref, repoDir);
+
+      attachManifestRef(baseRecord, 'eval-session', repoDir);
+      expect(baseRecord.harnessId).toBe(getHarnessId('eval-session', repoDir));
+      expect(baseRecord.manifestRef).toBeUndefined();
+
+      closeManifest('eval-session', { status: 'completed', repoDir });
+      attachManifestRef(baseRecord, 'eval-session', repoDir);
+      expect(baseRecord.harnessId).toBe(getHarnessId('eval-session', repoDir));
+      assert.equal(baseRecord.manifestRef?.sessionId, 'eval-session');
+      assert.ok(baseRecord.manifestRef?.manifestDigest);
     });
   });
 
@@ -495,7 +524,7 @@ describe('eval-record-builder', () => {
         candidates: [{ agentType: 'codex', modelId: 'gpt-5.4' }],
         chosen: 0,
         decisionPolicyVersion: 'stage-aware',
-        routeArtifactSchemaVersion: '1.0',
+        routeArtifactSchemaVersion: '1.1',
         policyResolverVersion: '1.0.0',
         routeMode: 'stage-aware',
         operatingModeDependency: 'normal',
@@ -1224,6 +1253,24 @@ describe('eval-record-builder', () => {
       expect(baseRecord.rubric_provenance).toBe('judge');
     });
 
+    it('drops a non-string determinative_boundary before persistence (HOK-2844)', () => {
+      // A judge emitting `null` (or any non-string) used to slip past the
+      // string-only guard and fail write-time schema validation, discarding
+      // the entire eval record.
+      for (const invalid of [null, 42, ['a'], { x: 1 }]) {
+        const record = { ...baseRecord } as EvalRecord;
+        attachRubricEval(record, {
+          ...validRubricEval,
+          determinative_boundary: invalid as unknown as RubricEval['determinative_boundary'],
+        });
+        assert.equal(record.rubricEval?.determinative_boundary, undefined);
+        assert.equal(
+          Object.prototype.hasOwnProperty.call(record.rubricEval ?? {}, 'determinative_boundary'),
+          false,
+        );
+      }
+    });
+
     it('drops an invalid optional determinative_boundary before persistence', () => {
       attachRubricEval(baseRecord, {
         ...validRubricEval,
@@ -1477,7 +1524,7 @@ describe('eval-record-builder', () => {
         candidates: [{ agentType: 'codex', modelId: 'gpt-5.4' }],
         chosen: 0,
         decisionPolicyVersion: 'stage-aware',
-        routeArtifactSchemaVersion: '1.0',
+        routeArtifactSchemaVersion: '1.1',
         policyResolverVersion: '1.0.0',
         routeMode: 'stage-aware',
         operatingModeDependency: 'survival',

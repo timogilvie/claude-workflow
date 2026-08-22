@@ -3,11 +3,11 @@
   "$id": "wavemill/workflow-tool-contracts",
   "title": "Workflow Tool Contracts",
   "description": "Input/output schemas for the eight native workflow tools (HOK-2355).",
-  "x-schema-version": "1.1.0",
+  "x-schema-version": "1.2.0",
   "$defs": {
     "schemaVersion": {
       "type": "string",
-      "const": "1.1.0"
+      "const": "1.2.0"
     },
     "workflowToolName": {
       "type": "string",
@@ -304,7 +304,12 @@
         "tool":         { "type": "string", "const": "review_changes" },
         "findings":     { "type": "string" },
         "findingCount": { "type": "integer" },
-        "blockingCount":{ "type": "integer" }
+        "blockingCount":{ "type": "integer" },
+        "exitCode":     { "type": "integer" },
+        "verdict":      { "type": "string", "enum": ["ready", "not_ready"] },
+        "iterations":   { "type": "integer", "minimum": 1 },
+        "blockerCount": { "type": "integer", "minimum": 0 },
+        "warningCount": { "type": "integer", "minimum": 0 }
       },
       "required": ["ok", "tool", "findings"],
       "additionalProperties": false
@@ -315,7 +320,13 @@
         "ok":      { "type": "boolean", "const": false },
         "tool":    { "type": "string", "const": "review_changes" },
         "error":   { "$ref": "#/$defs/workflowToolErrorCode" },
-        "message": { "type": "string" }
+        "message": { "type": "string" },
+        "exitCode":     { "type": "integer" },
+        "verdict":      { "type": "string", "const": "error" },
+        "iterations":   { "type": "integer", "minimum": 1 },
+        "blockerCount": { "type": "integer", "minimum": 0 },
+        "warningCount": { "type": "integer", "minimum": 0 },
+        "diagnostics":  { "type": "object", "additionalProperties": true }
       },
       "required": ["ok", "tool", "error", "message"],
       "additionalProperties": false

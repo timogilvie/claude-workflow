@@ -196,6 +196,20 @@ export interface EvalContextUpdatesConfig {
   maxRetries?: number;
 }
 
+export interface HarnessRetentionConfig {
+  enabled?: boolean;
+  mode?: 'shadow' | 'enforce';
+  tolerance?: number;
+  suitePath?: string;
+  reportDir?: string;
+  baselineHarnessId?: string;
+  candidateHarnessId?: string;
+}
+
+export interface HarnessConfig {
+  retention?: HarnessRetentionConfig;
+}
+
 export interface DifficultyClassifierConfig {
   enabled?: boolean;
   classifierModel?: string;
@@ -462,6 +476,10 @@ export interface ObserverLinearConfig {
   label?: string;
   retryQueuePath: string;
   updateCooldownMinutes: number;
+  maxIncidentsPerPass: number;
+  maxRetryEntriesPerPass: number;
+  requestDelayMs: number;
+  rateLimitBackoffMs: number;
   policies: {
     product_defect: ObserverLinearPolicyConfig;
     model_task_harness_outcome: ObserverLinearPolicyConfig;
@@ -546,6 +564,7 @@ export interface QuotaConfig {
 export interface ReadyConfig {
   checks?: string[];
   requiredChecks?: string[];
+  requireCiChecks?: boolean;
   migrationKind?: 'alembic' | 'sql' | 'none';
   migrationPatterns?: string[];
   migrationChecks?: ReadyMigrationChecksConfig;
@@ -745,6 +764,7 @@ export interface WavemillConfig {
   projectContext?: ProjectContextConfig;
   eval?: EvalConfig;
   evalContextUpdates?: EvalContextUpdatesConfig;
+  harness?: HarnessConfig;
   autoEval?: boolean;
   hokusai?: HokusaiConfig;
   router?: RouterConfig;
@@ -801,6 +821,10 @@ export const OBSERVER_LINEAR_DEFAULTS: ObserverLinearConfig = {
   detectionOnly: false,
   retryQueuePath: '.wavemill/registry/linear-incident-queue.jsonl',
   updateCooldownMinutes: 5,
+  maxIncidentsPerPass: 10,
+  maxRetryEntriesPerPass: 5,
+  requestDelayMs: 250,
+  rateLimitBackoffMs: 1000,
   policies: {
     product_defect: { strategy: 'create' },
     model_task_harness_outcome: { strategy: 'no_create', correlateIssueIds: ['HOK-2593'] },
@@ -1462,6 +1486,19 @@ export function getEvalContextUpdatesConfig(repoDir?: string): Required<EvalCont
   };
 }
 
+export function getHarnessRetentionConfig(repoDir?: string): Required<HarnessRetentionConfig> {
+  const config = loadWavemillConfig(repoDir).harness?.retention ?? {};
+  return {
+    enabled: config.enabled ?? false,
+    mode: config.mode ?? 'shadow',
+    tolerance: config.tolerance ?? 1,
+    suitePath: config.suitePath ?? 'shared/fixtures/harness-replay/harness-retention-v1/manifest.json',
+    reportDir: config.reportDir ?? '.wavemill/harness-replay/reports',
+    baselineHarnessId: config.baselineHarnessId ?? process.env.WAVEMILL_BASELINE_HARNESS_ID ?? '',
+    candidateHarnessId: config.candidateHarnessId ?? process.env.WAVEMILL_CANDIDATE_HARNESS_ID ?? process.env.WAVEMILL_HARNESS_ID ?? '',
+  };
+}
+
 export function getMintEligibilityConfig(repoDir?: string): MintEligibilityConfig | undefined {
   return getEvalConfig(repoDir).mintEligibility;
 }
@@ -1475,6 +1512,7 @@ export function getReadyConfig(repoDir?: string): ReadyConfig {
   return {
     checks: config.ready?.checks ?? [],
     requiredChecks: config.ready?.requiredChecks ?? [],
+    requireCiChecks: config.ready?.requireCiChecks ?? true,
     migrationKind: config.ready?.migrationKind,
     migrationPatterns: config.ready?.migrationPatterns ?? [...DEFAULT_READY_MIGRATION_PATTERNS],
     migrationChecks: getMigrationChecksConfig(repoDir),
