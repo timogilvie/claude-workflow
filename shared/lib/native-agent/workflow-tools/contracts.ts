@@ -20,7 +20,7 @@ import type { ToolResultMetadata } from '../tools/types.ts';
 // Schema version
 // ---------------------------------------------------------------------------
 
-export const WORKFLOW_TOOL_SCHEMA_VERSION = '1.1.0' as const;
+export const WORKFLOW_TOOL_SCHEMA_VERSION = '1.2.0' as const;
 
 // ---------------------------------------------------------------------------
 // Tool names
@@ -427,6 +427,15 @@ export interface ReviewChangesSuccess extends WorkflowToolResultBase {
   findings: string;
   findingCount?: number;
   blockingCount?: number;
+  /** Process-equivalent final review tool exit code. Success is always 0. */
+  exitCode?: number;
+  /** Parsed final review verdict. */
+  verdict?: 'ready' | 'not_ready';
+  /** Number of review tool iterations represented by this result. */
+  iterations?: number;
+  /** Alias used by stage-result readiness predicates. */
+  blockerCount?: number;
+  warningCount?: number;
 }
 
 export interface ReviewChangesError extends WorkflowToolResultBase {
@@ -434,6 +443,12 @@ export interface ReviewChangesError extends WorkflowToolResultBase {
   tool: 'review_changes';
   error: CommonErrorCode | 'review_failed';
   message: string;
+  /** Process-equivalent final review tool exit code. Tool errors are 2. */
+  exitCode?: number;
+  verdict?: 'error';
+  iterations?: number;
+  blockerCount?: number;
+  warningCount?: number;
   diagnostics?: Record<string, unknown>;
 }
 

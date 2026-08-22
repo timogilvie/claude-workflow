@@ -101,6 +101,40 @@ test('resolver writes a forfeit for an orphaned pair with a completed survivor',
     assert.equal(result.outcome, 'forfeit');
     assert.equal(result.record.winner, 'primary');
     assert.equal(result.record.terminalReason, 'orphan_pair');
+    assert.equal(result.record.noComparisonReason, 'challenger_never_launched');
+  } finally {
+    cleanup();
+  }
+});
+
+test('resolver marks lone primary with launched challenger marker as orphan_pair', () => {
+  const { repoDir, cleanup } = setupRepoDir();
+  try {
+    writeWorkflowState(repoDir, {
+      HOK_1: {
+        pr: 101,
+        branch: 'task/orphaned',
+        updated: '2026-07-01T00:00:00Z',
+        challengePairId: 'pair-1',
+        challengeRole: 'primary',
+        challengeModel: 'gpt-5.5',
+        evalCompleted: true,
+        challengerLaunched: true,
+      },
+    });
+
+    const result = resolveUnresolvablePair({
+      pairId: 'pair-1',
+      repoDir,
+      reason: 'orphan-sibling',
+      now: () => new Date('2026-07-17T12:00:00Z'),
+    });
+
+    assert.equal(result.status, 'resolved');
+    assert.equal(result.outcome, 'forfeit');
+    assert.equal(result.record.winner, 'primary');
+    assert.equal(result.record.terminalReason, 'orphan_pair');
+    assert.equal(result.record.noComparisonReason, 'orphan_pair');
   } finally {
     cleanup();
   }

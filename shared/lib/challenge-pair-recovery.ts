@@ -318,6 +318,7 @@ function buildSupersedingRecord(
     // than as a comparison the gate would act on.
     comparisonOutcome: winner ? 'compared' : 'inconclusive',
     ...(winner ? { winner } : {}),
+    ...(winner ? {} : { noComparisonReason: 'recovery_tie' }),
     invalidChallenge: false,
     rationale: winner
       ? `Recovered comparison from execution evidence: ${winner} wins (${primaryArm.stageModel} ${primaryScore} vs ${challengerArm.stageModel} ${challengerScore}).`

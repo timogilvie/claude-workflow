@@ -107,7 +107,7 @@ test('routedAt is iso-8601 utc by default', () => {
 });
 
 test('route artifact metadata constants are stable', () => {
-  assert.equal(ROUTE_ARTIFACT_SCHEMA_VERSION, '1.0');
+  assert.equal(ROUTE_ARTIFACT_SCHEMA_VERSION, '1.1');
   assert.equal(POLICY_RESOLVER_VERSION, '1.0.0');
 });
 
@@ -142,6 +142,7 @@ test('validateExpandedRouteArtifact accepts execution fields', () => {
     codeDepth: 'deep',
     reviewer: 'claude-sonnet-5',
     reviewMode: 'static+llm',
+    harnessId: 'a'.repeat(64),
     cache_hit: true,
     route_source: 'batch',
     packet_hash: 'a'.repeat(64),
@@ -209,12 +210,13 @@ test('validateExpandedRouteArtifact rejects malformed optional metadata', () => 
     reviewer: 'claude-sonnet-5',
     reviewMode: 'static+llm',
     cache_hit: 'yes',
+    harnessId: 'abc',
     route_source: 'live',
     packet_hash: 'abc123',
   });
 
   assert.equal(result.valid, false);
-  assert.deepEqual(result.invalid.sort(), ['cache_hit', 'packet_hash', 'route_source']);
+  assert.deepEqual(result.invalid.sort(), ['cache_hit', 'harnessId', 'packet_hash', 'route_source']);
 });
 
 test('buildRoutePrediction extracts compact prediction contract', () => {

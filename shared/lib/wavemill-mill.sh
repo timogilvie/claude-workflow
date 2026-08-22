@@ -1118,7 +1118,8 @@ resolve_challenge_pair_hard_failure() {
       },
       timestamp: $timestamp,
       comparisonOutcome: $comparisonOutcome,
-      terminalReason: $terminalReason
+      terminalReason: $terminalReason,
+      noComparisonReason: $terminalReason
     }')
   if ! challenge_pair_record_exists "$pair_id"; then
     printf '%s\n' "$record_json" >> "$(challenge_pair_records_file)"
@@ -4030,6 +4031,45 @@ finalize_challenge_execution_intent_before_coding() {
     return 0
   fi
 
+  # Finalization must not manufacture phantom pairs (a pair where no challenger arm was launched).
+  # This happens when finalization re-ran resolve-challenge-task after a single-model launch
+  # and got mode=challenge, but the ${issue}_c task doesn't exist.
+  # Check: (1) challenger already exists in state, OR (2) challenge was already selected at launch.
+  local challenger_exists was_challenge_at_launch
+  challenger_exists="false"
+  was_challenge_at_launch="false"
+
+  local existing_challenger_slug existing_challenger_branch existing_challenger_worktree
+  existing_challenger_slug=$(read_state_value "" --arg i "$new_challenger_key" '.tasks[$i].slug // ""' 2>/dev/null || true)
+  existing_challenger_branch=$(read_state_value "" --arg i "$new_challenger_key" '.tasks[$i].branch // ""' 2>/dev/null || true)
+  existing_challenger_worktree=$(read_state_value "" --arg i "$new_challenger_key" '.tasks[$i].worktree // ""' 2>/dev/null || true)
+  [[ -n "$existing_challenger_slug" && -n "$existing_challenger_branch" && -n "$existing_challenger_worktree" ]] && challenger_exists="true"
+
+  local existing_challenge_flag existing_pair_id
+  existing_challenge_flag=$(get_task_meta "$issue" challenge 2>/dev/null || true)
+  existing_pair_id=$(get_task_meta "$issue" challengePairId 2>/dev/null || true)
+  [[ "$existing_challenge_flag" == "true" || -n "$existing_pair_id" ]] && was_challenge_at_launch="true"
+
+  if [[ "$challenger_exists" != "true" && "$was_challenge_at_launch" != "true" ]]; then
+    # Finalization may refine an existing pair; it must never create one.
+    local no_challenge_intent
+    no_challenge_intent=$(echo "$intent_json" | jq -c \
+      'del(.challenger) | .noChallengeReason = "challenger_never_launched" | .challengeCollapseReason = "challenger_never_launched"' 2>/dev/null || echo "$intent_json")
+    persist_challenge_execution_intent "$issue" "" "$feature_dir" "$no_challenge_intent"
+    state_mutate "$STATE_FILE" \
+      '.tasks[$issue].challengeCollapseReason = "challenger_never_launched"
+       | .tasks[$issue].challengeCollapseDetail = "Finalization selected a pair but no challenger arm was launched; staying single-model"
+       | .tasks[$issue].challenge = false
+       | .tasks[$issue] |= del(.challengePairId, .role)
+       | .tasks[$issue].updated = (now | todate)' \
+      --arg issue "$issue" >/dev/null 2>&1 || true
+    log_route_lifecycle "challenge_not_formed" "issue=$issue" "stage=$new_challenge_stage" "model=$new_primary" "reason=challenger_never_launched"
+    log_warn "$issue → challenge finalization selected a pair but no challenger arm exists; staying single-model"
+    FINALIZED_CHALLENGE_CODER=""
+    FINALIZED_CHALLENGE_STAGE=""
+    return 0
+  fi
+
   # Compare the varied-stage models, not the coders. Plan/review challenges
   # intentionally share the coder on both sides.
   local new_primary_varied new_challenger_varied
@@ -4077,6 +4117,11 @@ finalize_challenge_execution_intent_before_coding() {
   if [[ -n "$challenger_slug" && -n "$challenger_branch" && -n "$challenger_worktree" ]]; then
     save_task_state "$new_challenger_key" "$challenger_slug" "$challenger_branch" "$challenger_worktree" "$challenger_pr" "$challenger_status" "$challenger_agent" "$challenger_linear_issue" \
       "true" "$issue" "challenger" "$new_challenger_model" "$new_challenger_planner" "$new_challenger_model" "$new_challenger_reviewer" "$new_challenger_plan_depth" "$new_challenger_code_depth" "$new_challenger_review_mode" "$new_challenge_stage"
+    # Mark that the challenger was successfully launched (P0.6, HOK-2798)
+    state_mutate "$STATE_FILE" \
+      '.tasks[$issue].challengerLaunched = true
+       | .tasks[$issue].updated = (now | todate)' \
+      --arg issue "$issue" >/dev/null 2>&1 || true
   fi
 
   persist_challenge_execution_intent "$issue" "$new_challenger_key" "$feature_dir" "$intent_json"
@@ -4587,7 +4632,8 @@ resolve_challenge_pair_hard_failure() {
       },
       timestamp: $timestamp,
       comparisonOutcome: $comparisonOutcome,
-      terminalReason: $terminalReason
+      terminalReason: $terminalReason,
+      noComparisonReason: $terminalReason
     }')
   if ! challenge_pair_record_exists "$pair_id"; then
     printf '%s\n' "$record_json" >> "$(challenge_pair_records_file)"
@@ -8329,6 +8375,20 @@ wavemill_run_tsx_tool() {
   fi
 }
 
+ready_live_ci_json() {
+  local wt_dir="$1" pr_number="$2" base_branch="$3"
+  local output rc=0
+
+  output=$(_with_timeout "$API_TIMEOUT" wavemill_run_tsx_tool "$TOOLS_DIR/pr-ci-status.ts" "$pr_number" --repo-dir "$wt_dir" --base "$base_branch" 2>/dev/null) || rc=$?
+  if (( rc != 0 )) || [[ -z "$output" ]] || ! printf '%s' "$output" | jq -e . >/dev/null 2>&1; then
+    jq -cn \
+      --arg reason "pr-ci-status failed for PR #$pr_number" \
+      '{conclusion:"unknown", observed:0, passing:0, failing:[], pending:[], missingRequired:[], requiredContexts:[], requiredSource:"none", readError:{errorType:"command-failed", reason:$reason}}'
+    return 0
+  fi
+  printf '%s\n' "$output"
+}
+
 write_ready_queue_artifacts() {
   local state_dir="$1" patch_json="$2"
   local result_file="$state_dir/.ready-result.json"
@@ -8414,6 +8474,80 @@ demote_merge_candidate() {
   write_ready_queue_artifacts "$state_dir" "$patch_json"
 }
 
+mark_ready_stale_head() {
+  local issue="$1" state_dir="$2" old_head="$3" new_head="$4"
+  local now patch_json
+  now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  patch_json=$(jq -cn \
+    --arg old_head "$old_head" \
+    --arg new_head "$new_head" \
+    --arg now "$now" '
+      {
+        queueState: "ready-stale",
+        staleAt: $now,
+        staleHeadSha: $old_head,
+        targetHeadSha: $new_head,
+        candidatePromotedAt: null,
+        candidateLastProgressAt: null
+      }
+    ')
+  write_ready_queue_artifacts "$state_dir" "$patch_json"
+}
+
+ci_summary_from_json() {
+  local ci_json="$1"
+  printf '%s' "$ci_json" | jq -r '
+    (.conclusion // "unknown") as $conclusion
+    | (.observed // 0) as $observed
+    | ((.requiredContexts // []) | length) as $required
+    | if $conclusion == "pass" then
+        "pass: \($observed)/\(if $required > 0 then $required else $observed end) checks"
+      elif $conclusion == "fail" then
+        "fail: " + (((.failing // []) | join(", ")) // "checks failing")
+      elif $conclusion == "pending" then
+        "pending: \($observed)/\(if $required > 0 then $required else $observed end) checks"
+      else
+        $conclusion
+      end
+  ' 2>/dev/null || echo "unknown"
+}
+
+invalidate_ready_for_ci() {
+  local issue="$1" state_dir="$2" ci_json="$3"
+  local now failing_names reason existing_artifacts artifacts_json pr_number
+  now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  failing_names=$(printf '%s' "$ci_json" | jq -r '(.failing // []) | join(", ")' 2>/dev/null || echo "")
+  [[ -n "$failing_names" ]] || failing_names="required CI checks"
+  reason="CI regressed after ready pass: $failing_names"
+  pr_number=$(jq -r '.artifacts.prNumber // empty' "$state_dir/.ready-result.json" 2>/dev/null || echo "")
+  existing_artifacts=$(jq -c '.artifacts // {"type":"ready"}' "$state_dir/.ready-result.json" 2>/dev/null || echo '{"type":"ready"}')
+  artifacts_json=$(jq -cn \
+    --argjson existing "$existing_artifacts" \
+    --argjson ci "$ci_json" \
+    --arg now "$now" \
+    --arg reason "$reason" '
+      $existing
+      + {
+          type: "ready",
+          verdict: "fail",
+          queueState: null,
+          candidatePromotedAt: null,
+          candidateLastProgressAt: null,
+          mergeRetryInProgressUntil: null,
+          ciInvalidatedAt: $now,
+          ciInvalidationReason: $reason,
+          ciFailingChecks: ($ci.failing // []),
+          lastCiConclusion: ($ci.conclusion // "unknown"),
+          lastCiHeadSha: ($ci.headSha // ""),
+          lastCiObservedAt: $now,
+          lastCiSummary: ($reason)
+        }
+      | with_entries(select(.value != null))
+    ')
+  write_stage_result "$state_dir" "ready" "failed" "" "" "$reason" "$artifacts_json"
+  log "status" "✗ $issue → PR ${pr_number:+#$pr_number }live CI failing ($failing_names); ready verdict invalidated"
+}
+
 ready_candidate_selected() {
   local issue="$1"
   [[ -f "$MERGE_QUEUE_SELECTION_FILE" ]] || return 1
@@ -8484,11 +8618,12 @@ merge_queue_enrich_ready_artifacts() {
 refresh_ready_merge_queue_tick() {
   local now input_file output_file input_json output_json config_json
   local issue phase slug pr state_dir ready_status ready_verdict stored_base current_main queue_state wt_dir workflow_status pr_state_val
+  local ci_json ci_conclusion ci_head ci_summary stored_head
   local ready_prs='[]'
 
   : > "$MERGE_QUEUE_SELECTION_FILE"
   if ! merge_queue_enabled; then
-    printf '{"selectedIssues":[],"stuckIssues":[]}\n' > "$MERGE_QUEUE_SELECTION_FILE"
+    printf '{"selectedIssues":[],"stuckIssues":[],"ciBlockedIssues":[]}\n' > "$MERGE_QUEUE_SELECTION_FILE"
     return 0
   fi
 
@@ -8516,10 +8651,37 @@ refresh_ready_merge_queue_tick() {
       continue
     fi
 
-    pr_state_val="$(pr_state "$pr")"
+    ci_json="$(ready_live_ci_json "$wt_dir" "$pr" "$BASE_BRANCH")"
+    ci_conclusion=$(printf '%s' "$ci_json" | jq -r '.conclusion // "unknown"' 2>/dev/null || echo "unknown")
+    ci_head=$(printf '%s' "$ci_json" | jq -r '.headSha // empty' 2>/dev/null || echo "")
+    ci_summary="$(ci_summary_from_json "$ci_json")"
+    pr_state_val=$(printf '%s' "$ci_json" | jq -r '.state // empty' 2>/dev/null || echo "")
+    [[ -n "$pr_state_val" ]] || pr_state_val="$(pr_state "$pr")"
+
+    write_ready_queue_artifacts "$state_dir" "$(jq -cn \
+      --arg conclusion "$ci_conclusion" \
+      --arg head "$ci_head" \
+      --arg now "$now" \
+      --arg summary "$ci_summary" \
+      '{
+        lastCiConclusion: $conclusion,
+        lastCiHeadSha: $head,
+        lastCiObservedAt: $now,
+        lastCiSummary: $summary
+      }')"
 
     if [[ "$ready_status" == "completed" && ( "$ready_verdict" == "pass" || "$ready_verdict" == "warn" ) && -n "$current_main" && "$stored_base" != "$current_main" && "$queue_state" != "merge-candidate" ]]; then
       mark_ready_stale "$issue" "$state_dir" "$stored_base" "$current_main"
+      queue_state="ready-stale"
+    fi
+
+    stored_head=$(ready_queue_field "$state_dir" "readyHeadSha")
+    if [[ "$ready_status" == "completed" && ( "$ready_verdict" == "pass" || "$ready_verdict" == "warn" ) && "$ci_conclusion" == "fail" ]]; then
+      invalidate_ready_for_ci "$issue" "$state_dir" "$ci_json"
+      continue
+    fi
+    if [[ "$ready_status" == "completed" && ( "$ready_verdict" == "pass" || "$ready_verdict" == "warn" ) && -n "$stored_head" && -n "$ci_head" && "$stored_head" != "$ci_head" && "$queue_state" != "merge-candidate" ]]; then
+      mark_ready_stale_head "$issue" "$state_dir" "$stored_head" "$ci_head"
       queue_state="ready-stale"
     fi
 
@@ -8534,6 +8696,8 @@ refresh_ready_merge_queue_tick() {
         --arg queue_state "$queue_state" \
         --arg workflow_status "$workflow_status" \
         --arg pr_state "$pr_state_val" \
+        --argjson ci "$ci_json" \
+        --arg now "$now" \
         --arg ready_at "$(jq -r '.finishedAt // .startedAt // empty' "$state_dir/.ready-result.json" 2>/dev/null || echo "")" \
         --arg candidate_promoted_at "$(ready_queue_field "$state_dir" candidatePromotedAt)" \
         --arg candidate_last_progress_at "$(ready_queue_field "$state_dir" candidateLastProgressAt)" \
@@ -8555,7 +8719,16 @@ refresh_ready_merge_queue_tick() {
             mergeRetryInProgressUntil: (if $merge_retry_in_progress_until == "" then null else $merge_retry_in_progress_until end),
             candidateSkippedAt: (if $candidate_skipped_at == "" then null else $candidate_skipped_at end),
             workflowStatus: (if $workflow_status == "" then null else $workflow_status end),
-            prState: (if $pr_state == "" then null else $pr_state end)
+            prState: (if $pr_state == "" then null else $pr_state end),
+            ci: {
+              conclusion: ($ci.conclusion // "unknown"),
+              headSha: ($ci.headSha // null),
+              mergeStateStatus: ($ci.mergeStateStatus // null),
+              observedAt: $now,
+              failing: ($ci.failing // []),
+              observed: ($ci.observed // 0),
+              required: (($ci.requiredContexts // []) | length)
+            }
           }]
         ')
     fi
@@ -8581,11 +8754,22 @@ refresh_ready_merge_queue_tick() {
   jq -cn --arg now "$now" --argjson prs "$ready_prs" --argjson config "$config_json" '{readyPrs:$prs, now:$now, config:$config}' > "$input_file"
   if ! wavemill_run_tsx_tool "$TOOLS_DIR/merge-queue-select.ts" --input "$input_file" > "$output_file" 2>/dev/null; then
     rm -f "$input_file" "$output_file"
-    printf '{"selectedIssues":[],"stuckIssues":[]}\n' > "$MERGE_QUEUE_SELECTION_FILE"
+    printf '{"selectedIssues":[],"stuckIssues":[],"ciBlockedIssues":[]}\n' > "$MERGE_QUEUE_SELECTION_FILE"
     return 0
   fi
   mv "$output_file" "$MERGE_QUEUE_SELECTION_FILE"
   rm -f "$input_file"
+
+  jq -r '.ciBlockedIssues[]?' "$MERGE_QUEUE_SELECTION_FILE" 2>/dev/null | while IFS= read -r issue; do
+    [[ -n "$issue" ]] || continue
+    slug="${SLUG_BY_ISSUE[$issue]}"
+    wt_dir="${WORKTREE_ROOT}/${slug}"
+    state_dir="$(ready_state_dir "$wt_dir" "$slug")"
+    pr="${PR_BY_ISSUE[$issue]:-}"
+    ci_json="$(ready_live_ci_json "$wt_dir" "$pr" "$BASE_BRANCH")"
+    demote_merge_candidate "$issue" "$state_dir" "live CI failing"
+    invalidate_ready_for_ci "$issue" "$state_dir" "$ci_json"
+  done
 
   jq -r '.stuckIssues[]?' "$MERGE_QUEUE_SELECTION_FILE" 2>/dev/null | while IFS= read -r issue; do
     [[ -n "$issue" ]] || continue
@@ -8606,7 +8790,10 @@ refresh_ready_merge_queue_tick() {
       promote_merge_candidate "$issue" "$state_dir" "$current_main"
       local pr_for_log
       pr_for_log="${PR_BY_ISSUE[$issue]:-}"
-      log "status" "✓ $issue → PR ${pr_for_log:+#$pr_for_log }promoted to merge candidate (clean/green, base current)"
+      ci_head=$(ready_queue_field "$state_dir" "lastCiHeadSha")
+      ci_summary=$(ready_queue_field "$state_dir" "lastCiSummary")
+      [[ -n "$ci_summary" ]] || ci_summary="pass"
+      log "status" "✓ $issue → PR ${pr_for_log:+#$pr_for_log }promoted to merge candidate (live CI $ci_summary${ci_head:+ @${ci_head:0:7}}, base current)"
     fi
   done
 }
@@ -8927,9 +9114,89 @@ ready_failed_check_summary() {
   ' 2>/dev/null
 }
 
+review_result_passes_ready_gate() {
+  local feature_dir="$1"
+  local review_file="$feature_dir/.review-result.json"
+  [[ -f "$review_file" ]] || return 1
+
+  jq -e '
+    (.status == "completed") and (
+      .artifacts as $artifacts
+      | if ($artifacts.type // "") == "review" then
+          $artifacts
+        else
+          ($artifacts.review // {})
+        end
+      | (.exitCode == 0) and
+        (.verdict == "ready") and
+        (.iterations as $iterations | (($iterations | type) == "number" and $iterations >= 1)) and
+        (((.blockerCount // .blockingIssues // .blockingCount) // null) == 0)
+    )
+  ' "$review_file" >/dev/null 2>&1
+}
+
+review_result_summary() {
+  local feature_dir="$1"
+  local review_file="$feature_dir/.review-result.json"
+  if [[ ! -f "$review_file" ]]; then
+    printf '%s\n' "review result missing"
+    return 0
+  fi
+
+  jq -r '
+    . as $root
+    | (.artifacts // {}) as $artifacts
+    | (if ($artifacts.type // "") == "review" then $artifacts else ($artifacts.review // {}) end) as $review
+    | [
+        "status=" + ($root.status // "unknown"),
+        "exitCode=" + (($review.exitCode // "missing") | tostring),
+        "verdict=" + (($review.verdict // "missing") | tostring),
+        "iterations=" + (($review.iterations // "missing") | tostring),
+        "blockers=" + ((($review.blockerCount // $review.blockingIssues // $review.blockingCount // "missing")) | tostring),
+        (if ($review.reviewToolError // "") != "" then "error=" + ($review.reviewToolError | tostring) else empty end)
+      ]
+      | join(", ")
+  ' "$review_file" 2>/dev/null || printf '%s\n' "review result unreadable"
+}
+
+review_artifacts_with_pr_number() {
+  local feature_dir="$1" pr_number="$2"
+  local review_file="$feature_dir/.review-result.json"
+
+  if [[ -f "$review_file" ]]; then
+    jq -c --argjson pr_number "$pr_number" '
+      (.artifacts // {type:"review"}) as $artifacts
+      | if (($artifacts | type) != "object") then
+          {type:"review", prNumber:$pr_number}
+        elif (($artifacts.type // "") == "review") then
+          $artifacts + {type:"review", prNumber:$pr_number}
+        else
+          $artifacts + {review:(($artifacts.review // {}) + {prNumber:$pr_number})}
+        end
+    ' "$review_file" 2>/dev/null && return 0
+  fi
+
+  jq -cn --argjson pr_number "$pr_number" '{type:"review", prNumber:$pr_number}'
+}
+
+strip_ready_label_if_review_not_passed() {
+  local wt_dir="$1" pr_number="$2" feature_dir="$3"
+  review_result_passes_ready_gate "$feature_dir" && return 0
+
+  (cd "$wt_dir" && gh pr edit "$pr_number" --remove-label "wm:ready") >/dev/null 2>&1 || true
+  return 1
+}
+
 set_ready_pass_labels() {
   local wt_dir="$1"
   local pr_number="$2"
+  local feature_dir="${3:-}"
+
+  if [[ -z "$feature_dir" ]]; then
+    feature_dir="$wt_dir/features/$(basename "$wt_dir")"
+  fi
+
+  review_result_passes_ready_gate "$feature_dir" || return 1
 
   (cd "$wt_dir" && npx tsx "$TOOLS_DIR/set-pr-ready-label.ts" "$pr_number")
 }
@@ -9068,6 +9335,7 @@ launch_ready_phase() {
   local win
   local state_dir status_file result ready_rc merge_status verdict
   local current_agent current_model prompt_file launch_rc launch_head checks_run checks_passed
+  local ready_head_sha ci_conclusion required_source required_contexts_json
   local remediation_attempts remediation_launch_head remediation_enabled remediation_max_attempts
   local remediation_agent failed_check_names failed_check_summary current_head ready_status
   local remediation_artifacts_json failed_check_names_json ready_result_file ready_stderr_file
@@ -9086,6 +9354,15 @@ launch_ready_phase() {
     pending_log_level="debug"
   else
     pending_log_level="info"
+  fi
+
+  if ! review_result_passes_ready_gate "$state_dir"; then
+    local review_summary
+    review_summary="$(review_result_summary "$state_dir")"
+    strip_ready_label_if_review_not_passed "$wt_dir" "$pr_number" "$state_dir" || true
+    write_ready_attention_file "$state_dir" "Review verdict does not pass readiness gate for PR #$pr_number ($review_summary)."
+    log_error "  $issue: refusing ready phase for PR #$pr_number; $review_summary"
+    return 1
   fi
 
   log "$pending_log_level" "  $issue: Launching ready phase (PR #$pr_number)"
@@ -9126,6 +9403,10 @@ launch_ready_phase() {
   verdict=$(printf '%s' "$result" | jq -r '.verdict // empty' 2>/dev/null || echo "")
   checks_run=$(printf '%s' "$result" | jq -r '.checks | if type == "array" then length else 0 end' 2>/dev/null || echo "0")
   checks_passed=$(printf '%s' "$result" | jq -r '[.checks[]? | select(.status == "pass")] | length' 2>/dev/null || echo "0")
+  ready_head_sha=$(printf '%s' "$result" | jq -r '.headSha // empty' 2>/dev/null || echo "")
+  ci_conclusion=$(printf '%s' "$result" | jq -r '.ciConclusion // empty' 2>/dev/null || echo "")
+  required_source=$(printf '%s' "$result" | jq -r '.checks[]? | select(.name == "ci-status") | .details.requiredSource // empty' 2>/dev/null | head -n 1 || echo "")
+  required_contexts_json=$(printf '%s' "$result" | jq -c '[.checks[]? | select(.name == "ci-status") | .details.requiredContexts[]?] | unique' 2>/dev/null || echo '[]')
   remediation_attempts=$(ready_remediation_attempts "$state_dir")
   remediation_launch_head=$(ready_remediation_launch_head "$state_dir")
   ready_status=$(read_stage_status "$state_dir" "ready")
@@ -9219,10 +9500,34 @@ launch_ready_phase() {
   if [[ "$ready_rc" -eq 0 ]]; then
     local main_sha completed_artifacts_json label_failed_artifacts_json
     main_sha=$(get_main_head_sha "$wt_dir" "$base_branch")
-    if ! set_ready_pass_labels "$wt_dir" "$pr_number" >/dev/null 2>&1; then
-      label_failed_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" \
-        "{\"type\":\"ready\",\"verdict\":\"${verdict:-unknown}\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"prNumber\":${pr_number},\"readyLabelsUpdated\":false,\"readyBaseSha\":\"${main_sha}\"}" \
-        "candidate-progress")
+    if ! set_ready_pass_labels "$wt_dir" "$pr_number" "$state_dir" >/dev/null 2>&1; then
+      label_failed_artifacts_json=$(jq -cn \
+        --arg verdict "${verdict:-unknown}" \
+        --arg merge_status "${merge_status:-UNKNOWN}" \
+        --argjson checks_run "${checks_run:-0}" \
+        --argjson checks_passed "${checks_passed:-0}" \
+        --argjson pr_number "${pr_number}" \
+        --arg ready_base_sha "$main_sha" \
+        --arg ready_head_sha "$ready_head_sha" \
+        --arg ci_conclusion "$ci_conclusion" \
+        --arg required_source "$required_source" \
+        --argjson required_contexts "$required_contexts_json" '
+          {
+            type:"ready",
+            verdict:$verdict,
+            checksRun:$checks_run,
+            checksPassed:$checks_passed,
+            mergeConflict:$merge_status,
+            prNumber:$pr_number,
+            readyLabelsUpdated:false,
+            readyBaseSha:$ready_base_sha,
+            readyHeadSha:$ready_head_sha,
+            ciConclusion:$ci_conclusion,
+            requiredSource:$required_source,
+            requiredContexts:$required_contexts
+          } | with_entries(select(.value != ""))
+        ')
+      label_failed_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" "$label_failed_artifacts_json" "candidate-progress")
       write_stage_result "$state_dir" "ready" "failed" "$current_agent" "$current_model" \
         "Ready passed but failed to restore PR labels" \
         "$label_failed_artifacts_json"
@@ -9231,9 +9536,33 @@ launch_ready_phase() {
       return 1
     fi
 
-    completed_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" \
-      "{\"type\":\"ready\",\"verdict\":\"${verdict:-unknown}\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"prNumber\":${pr_number},\"readyLabelsUpdated\":true,\"readyBaseSha\":\"${main_sha}\"}" \
-      "completed")
+    completed_artifacts_json=$(jq -cn \
+      --arg verdict "${verdict:-unknown}" \
+      --arg merge_status "${merge_status:-UNKNOWN}" \
+      --argjson checks_run "${checks_run:-0}" \
+      --argjson checks_passed "${checks_passed:-0}" \
+      --argjson pr_number "${pr_number}" \
+      --arg ready_base_sha "$main_sha" \
+      --arg ready_head_sha "$ready_head_sha" \
+      --arg ci_conclusion "$ci_conclusion" \
+      --arg required_source "$required_source" \
+      --argjson required_contexts "$required_contexts_json" '
+        {
+          type:"ready",
+          verdict:$verdict,
+          checksRun:$checks_run,
+          checksPassed:$checks_passed,
+          mergeConflict:$merge_status,
+          prNumber:$pr_number,
+          readyLabelsUpdated:true,
+          readyBaseSha:$ready_base_sha,
+          readyHeadSha:$ready_head_sha,
+          ciConclusion:$ci_conclusion,
+          requiredSource:$required_source,
+          requiredContexts:$required_contexts
+        } | with_entries(select(.value != ""))
+      ')
+    completed_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" "$completed_artifacts_json" "completed")
     write_stage_result "$state_dir" "ready" "completed" "$current_agent" "$current_model" \
       "verdict: ${verdict:-unknown}" \
       "$completed_artifacts_json"
@@ -12591,6 +12920,10 @@ EOF
   if [[ "$challenge_enabled_for_launch" == "true" ]]; then
     save_task_state "$challenger_key" "$challenger_slug" "task/${challenger_slug}" "${WORKTREE_ROOT}/${challenger_slug}" "" "" "${challenger_planner_agent:-$challenger_agent}" "$linear_issue" "true" "$challenge_pair" "challenger" "$challenger_model" "$challenger_planner" "$challenger_model" "$challenger_reviewer" "$challenger_plan_depth" "$challenger_code_depth" "$challenger_review_mode" "$challenge_stage"
     state_mutate "$STATE_FILE" '.tasks[$issue].challengeStage = $stage' --arg issue "$challenger_key" --arg stage "$challenge_stage" || true
+    state_mutate "$STATE_FILE" \
+      '.tasks[$issue].challengerLaunched = true
+       | .tasks[$issue].updated = (now | todate)' \
+      --arg issue "$issue" >/dev/null 2>&1 || true
     # One writer, both arms, both surfaces.  The separate challengeIntent write
     # that used to live here persisted a second, independently-built schema
     # under a different key; resolve-challenge-task.ts now emits the canonical
@@ -13761,7 +14094,9 @@ monitor_issue_state() {
         inject_depends_on_pr_block "$ISSUE" "$PR" "$depends_on_pr_meta"
       fi
 
-      write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "" "PR #$PR" "{\"type\":\"review\",\"prNumber\":$PR}"
+      local review_artifacts_json
+      review_artifacts_json="$(review_artifacts_with_pr_number "$FEATURE_DIR" "$PR")"
+      write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "" "PR #$PR" "$review_artifacts_json"
       dispatch_queued_children_for_parent "$ISSUE" "$PR"
       set_task_phase "$ISSUE" "review"
 
@@ -15170,7 +15505,14 @@ monitor_issue_state() {
       fi
 
       if merge_queue_enabled && [[ "$queue_state" == "merge-candidate" ]]; then
-        log "debug" "✓ $ISSUE → PR #$PR is a clean/green merge candidate (waiting in merge lane)"
+        last_ci_conclusion=$(ready_queue_field "$ready_state_dir_path" "lastCiConclusion")
+        last_ci_summary=$(ready_queue_field "$ready_state_dir_path" "lastCiSummary")
+        last_ci_head=$(ready_queue_field "$ready_state_dir_path" "lastCiHeadSha")
+        if [[ -n "$last_ci_conclusion" ]]; then
+          log "debug" "✓ $ISSUE → PR #$PR is a merge candidate (live CI ${last_ci_summary:-$last_ci_conclusion}${last_ci_head:+ @${last_ci_head:0:7}}; waiting in merge lane)"
+        else
+          log "debug" "✓ $ISSUE → PR #$PR is a merge candidate (live CI unverified, saved verdict only)"
+        fi
       fi
       set_window_attention_state "$WIN" "clear"
       active_count=$((active_count + 1))

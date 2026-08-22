@@ -1,6 +1,6 @@
 # Native Workflow Tool Contracts
 
-**HOK-2355** · Schema version: `1.1.0`
+**HOK-2355** · Schema version: `1.2.0`
 
 Implementation reference for the eight native workflow tools. Contracts are defined in:
 
@@ -637,7 +637,7 @@ fromStaleBaseCheck(affectedFiles: string[], source?: string): ReadyRemediationCl
 
 ## Schema Versioning
 
-The schema version is `1.1.0`, exposed as:
+The schema version is `1.2.0`, exposed as:
 - TypeScript: `WORKFLOW_TOOL_SCHEMA_VERSION` in `contracts.ts`
 - JSON Schema: `x-schema-version` in `contracts.json`
 

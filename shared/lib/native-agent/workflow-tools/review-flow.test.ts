@@ -451,9 +451,119 @@ describe('runReviewFlow', () => {
       artifacts: { review: { verdict: string; findingCount: number; blockingCount: number } };
     };
     assert.equal(stored.artifacts.review.verdict, 'ready');
+    assert.equal(stored.artifacts.review.exitCode, 0);
+    assert.equal(stored.artifacts.review.iterations, 1);
     assert.equal(stored.artifacts.review.findingCount, 0);
     assert.equal(stored.artifacts.review.blockingCount, 0);
+    assert.equal(stored.artifacts.exitCode, 0);
+    assert.equal(stored.artifacts.verdict, 'ready');
+    assert.equal(stored.artifacts.iterations, 1);
+    assert.equal(stored.artifacts.blockerCount, 0);
     assertNoMergeOperations(recorder.transcriptEvents, recorder.stageArtifactEntries);
+  });
+
+  it('filters wm:ready when final review verdict is not passing', async () => {
+    const featureDir = mkdtempSync(path.join(os.tmpdir(), 'review-flow-'));
+    tempDirs.push(featureDir);
+    const state: FixtureState = {
+      pullRequests: [],
+      labelsByTarget: new Map(),
+      linearComments: [],
+      calls: {
+        linearCreateComment: 0,
+        linearUpdateComment: 0,
+        listOpenPullRequests: 0,
+        createPullRequest: 0,
+        updatePullRequest: 0,
+        getLabels: 0,
+        addLabel: 0,
+      },
+    };
+    const recorder = makeRecorder();
+
+    const result = await runReviewFlow({
+      issueId: 'HOK-2849',
+      featureDir,
+      repo: 'acme/widgets',
+      base: 'auto/integration',
+      head: 'task/review-flow',
+      headSha: 'abc123',
+      title: 'Implement review gate',
+      body: 'Implements review gate.',
+      labels: ['wm:ready', 'wavemill'],
+      sessionId: 'sess-1',
+      registry: createInMemoryDedupeRegistry({ clock: () => 1_000 }),
+      transcript: recorder.transcript,
+      stageArtifact: recorder.stageArtifact,
+      clock: () => 1_000,
+      linearClient: createLinearClient(state),
+      githubDeps: createGitHubDeps(state),
+      networkPolicy: ALLOW_REVIEW_FLOW_NETWORK_POLICY,
+      reviewChangesImpl: async () => makeReview(),
+    });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.labels.map((label) => label.ok && label.idempotency.ref?.id), ['acme/widgets#1:wavemill']);
+    assert.deepEqual([...state.labelsByTarget.values()][0]?.labels, ['wavemill']);
+    assert.equal(state.calls.addLabel, 1);
+  });
+
+  it('records exit code 2 and error verdict when review tool fails', async () => {
+    const featureDir = mkdtempSync(path.join(os.tmpdir(), 'review-flow-'));
+    tempDirs.push(featureDir);
+    const state: FixtureState = {
+      pullRequests: [],
+      labelsByTarget: new Map(),
+      linearComments: [],
+      calls: {
+        linearCreateComment: 0,
+        linearUpdateComment: 0,
+        listOpenPullRequests: 0,
+        createPullRequest: 0,
+        updatePullRequest: 0,
+        getLabels: 0,
+        addLabel: 0,
+      },
+    };
+    const recorder = makeRecorder();
+
+    const result = await runReviewFlow({
+      issueId: 'HOK-2849',
+      featureDir,
+      repo: 'acme/widgets',
+      base: 'auto/integration',
+      head: 'task/review-flow',
+      headSha: 'abc123',
+      title: 'Implement review gate',
+      body: 'Implements review gate.',
+      labels: ['wm:ready'],
+      sessionId: 'sess-1',
+      registry: createInMemoryDedupeRegistry({ clock: () => 1_000 }),
+      transcript: recorder.transcript,
+      stageArtifact: recorder.stageArtifact,
+      clock: () => 1_000,
+      linearClient: createLinearClient(state),
+      githubDeps: createGitHubDeps(state),
+      networkPolicy: ALLOW_REVIEW_FLOW_NETWORK_POLICY,
+      reviewChangesImpl: async () => {
+        throw new Error('review provider failed');
+      },
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.pullRequest, undefined);
+    assert.equal(state.calls.addLabel, 0);
+
+    const stored = JSON.parse(readFileSync(path.join(featureDir, '.review-result.json'), 'utf8')) as {
+      status: string;
+      artifacts: { type: string; exitCode: number; verdict: string; iterations: number; reviewToolError: string };
+    };
+    assert.equal(stored.status, 'failed');
+    assert.equal(stored.artifacts.type, 'review');
+    assert.equal(stored.artifacts.exitCode, 2);
+    assert.equal(stored.artifacts.verdict, 'error');
+    assert.equal(stored.artifacts.iterations, 1);
+    assert.match(stored.artifacts.reviewToolError, /review provider failed/);
   });
 
   it('short-circuits PR mutation when a stronger reviewer is needed', async () => {

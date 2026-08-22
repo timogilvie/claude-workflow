@@ -64,9 +64,9 @@ describe('workflow-tools: tool registry', () => {
     assert.equal(schema['x-schema-version'], WORKFLOW_TOOL_SCHEMA_VERSION);
   });
 
-  it('schema version is 1.1.0 (additive bump for optional idempotency field on expandIssueSuccess)', () => {
-    assert.equal(WORKFLOW_TOOL_SCHEMA_VERSION, '1.1.0');
-    assert.equal(schema['x-schema-version'], '1.1.0');
+  it('schema version is 1.2.0 (additive bump for review outcome fields)', () => {
+    assert.equal(WORKFLOW_TOOL_SCHEMA_VERSION, '1.2.0');
+    assert.equal(schema['x-schema-version'], '1.2.0');
   });
 
   it('schema phase enum matches TypeScript WORKFLOW_PHASES', () => {

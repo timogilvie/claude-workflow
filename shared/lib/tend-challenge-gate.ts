@@ -74,6 +74,8 @@ export interface TaskEvalState {
   challengeAbortedDetail: string | null;
   challengeAbortedNextAction: string | null;
   challengeAbortedStage: string | null;
+  /** Set to true when the challenger arm is actually launched (P0.6, HOK-2798). */
+  challengerLaunched?: boolean;
 }
 
 export interface PairTaskState {
@@ -100,6 +102,7 @@ interface WorkflowStateTask {
   evalHardFailureRetryCount?: unknown;
   comparisonState?: unknown;
   challengeAborted?: unknown;
+  challengerLaunched?: unknown;
 }
 
 type WorkflowStateFile = WorkflowStateLike & {
@@ -281,6 +284,7 @@ export function loadWorkflowStateChallengeData(repoDir: string): WorkflowStateCh
           challengeAbortedStage: typeof task.challengeAbortedStage === 'string' && task.challengeAbortedStage
             ? task.challengeAbortedStage
             : null,
+          challengerLaunched: task.challengerLaunched === true,
         };
         taskStateByPair.set(task.challengePairId, pairTaskState);
       }

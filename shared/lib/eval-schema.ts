@@ -145,6 +145,9 @@
  *   `criterionRationales`), and no-comparison accounting (`noComparisonReason`).
  *   Added `'inherited'` to `ChallengeProvenanceSource`. No behavior change;
  *   readers must tolerate absence on historical records.
+ * - **1.41.0**: Added optional `harnessId` attribution to eval records and
+ *   route artifacts (HOK-2843), computed from behavior-relevant manifest
+ *   resources while excluding environment/tool version churn.
  *
  * @module eval-schema
  */
@@ -161,7 +164,7 @@ import type { ChallengeRoutingMeta } from './challenge-comparison.ts';
 import type { ChallengeStage } from './challenge-mode.ts';
 
 /** Current eval schema version for newly emitted records. */
-export const SCHEMA_VERSION = '1.40.0';
+export const SCHEMA_VERSION = '1.41.0';
 
 export type RoutingRole = 'planner' | 'coder' | 'reviewer';
 
@@ -1571,6 +1574,7 @@ export interface EvalRouteArtifact {
   codeDepth: string;
   reviewer: string;
   reviewMode: string;
+  harnessId?: string;
   planner?: string;
   planDepth?: string;
   artifactPath?: string;
@@ -1853,6 +1857,9 @@ export interface EvalRecord {
 
   /** Runtime-governed resource variants used by this run. */
   resourceSelections?: RuntimeResourceSelection[];
+
+  /** Stable harness content hash for the behavior-relevant manifest resources. */
+  harnessId?: string;
 
   manifestRef?: ManifestRef;
 

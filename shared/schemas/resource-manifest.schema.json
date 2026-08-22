@@ -55,6 +55,10 @@
       "type": "array",
       "items": { "$ref": "#/$defs/resourceRef" }
     },
+    "harnessId": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
     "digest": {
       "type": "string"
     }

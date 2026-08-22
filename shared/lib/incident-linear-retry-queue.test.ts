@@ -41,6 +41,48 @@ test('enqueueIncidentSync writes retryable incident action with short exponentia
   }
 });
 
+test('enqueueIncidentSync deduplicates pending incident actions', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'incident-queue-dedupe-'));
+  const originalRandom = Math.random;
+  Math.random = () => 0;
+  try {
+    const first = enqueueIncidentSync({
+      repoDir,
+      incidentFingerprint: 'abc',
+      linearAction: 'create',
+      lastError: {
+        category: 'rate_limit',
+        httpStatus: 429,
+        graphqlErrors: [],
+        isRetryable: true,
+        message: 'rate limited',
+      },
+      now: new Date('2026-08-04T12:00:00.000Z'),
+    });
+    const second = enqueueIncidentSync({
+      repoDir,
+      incidentFingerprint: 'abc',
+      linearAction: 'create',
+      attempts: 2,
+      lastError: {
+        category: 'rate_limit',
+        httpStatus: 429,
+        graphqlErrors: [],
+        isRetryable: true,
+        message: 'still rate limited',
+      },
+      now: new Date('2026-08-04T12:01:00.000Z'),
+    });
+    const rows = readFileSync(queuePath(repoDir), 'utf-8').trim().split('\n').map((line) => JSON.parse(line));
+    assert.equal(first.id, second.id);
+    assert.equal(new Set(rows.map((row) => row.id)).size, 1);
+    assert.equal(rows.at(-1).attempts, 2);
+  } finally {
+    Math.random = originalRandom;
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
 test('drainIncidentQueue replays queued incident and tombstones success', async () => {
   const repoDir = mkdtempSync(join(tmpdir(), 'incident-queue-drain-'));
   const originalRandom = Math.random;
@@ -86,6 +128,8 @@ test('drainIncidentQueue replays queued incident and tombstones success', async 
         enabled: true,
         team: 'HOK',
         project: 'Wavemill',
+        requestDelayMs: 0,
+        rateLimitBackoffMs: 0,
       },
       now: new Date('2026-08-04T12:01:00.000Z'),
       client: successClient(),
@@ -144,6 +188,8 @@ test('drainIncidentQueue marks nonretryable replay failure permanent', async () 
         enabled: true,
         team: 'HOK',
         project: 'Wavemill',
+        requestDelayMs: 0,
+        rateLimitBackoffMs: 0,
       },
       now: new Date('2026-08-04T12:01:00.000Z'),
       client: successClient({
@@ -156,6 +202,72 @@ test('drainIncidentQueue marks nonretryable replay failure permanent', async () 
     const rows = readFileSync(queuePath(repoDir), 'utf-8').trim().split('\n').map((line) => JSON.parse(line));
     assert.equal(result.permanentFailures, 1);
     assert.equal(rows.at(-1).recordType, 'permanently_failed');
+  } finally {
+    Math.random = originalRandom;
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('drainIncidentQueue keeps replayed 429 pending with incremented attempt', async () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'incident-queue-429-'));
+  const originalRandom = Math.random;
+  Math.random = () => 0;
+  try {
+    const store = new IncidentStore(join(repoDir, '.wavemill', 'incidents'));
+    const stored = await store.upsert(createIncidentDraft({
+      taskId: 'HOK-1',
+      category: 'product_defect',
+      severity: 'high',
+      confidence: 'definite',
+      lifecycle: 'active',
+      rootCauseClass: 'observer_crash',
+      summary: 'Observer crashed.',
+      operatorAction: 'Fix parser.',
+      evidence: [{
+        type: 'log_excerpt',
+        source: 'mill.log',
+        timestamp: '2026-08-04T12:00:00.000Z',
+        redactedData: 'ERROR',
+        key: 'error',
+      }],
+      metadata: { thresholdTriggered: true },
+    }));
+    enqueueIncidentSync({
+      repoDir,
+      incidentFingerprint: stored.fingerprint,
+      linearAction: 'create',
+      lastError: {
+        category: 'rate_limit',
+        httpStatus: 429,
+        graphqlErrors: [],
+        isRetryable: true,
+        message: 'rate limited',
+      },
+      now: new Date('2026-08-04T12:00:00.000Z'),
+    });
+    const result = await drainIncidentQueue({
+      repoDir,
+      store,
+      config: {
+        ...DEFAULT_INCIDENT_LINEAR_CONFIG,
+        enabled: true,
+        team: 'HOK',
+        project: 'Wavemill',
+        requestDelayMs: 0,
+        rateLimitBackoffMs: 0,
+      },
+      now: new Date('2026-08-04T12:01:00.000Z'),
+      client: successClient({
+        getTeams: async () => {
+          throw new LinearApiError('rate limited', { httpStatus: 429 });
+        },
+      }),
+    });
+    const rows = readFileSync(queuePath(repoDir), 'utf-8').trim().split('\n').map((line) => JSON.parse(line));
+    assert.equal(result.failed, 1);
+    assert.equal(result.permanentFailures, 0);
+    assert.equal(rows.at(-1).recordType, 'pending');
+    assert.equal(rows.at(-1).attempts, 2);
   } finally {
     Math.random = originalRandom;
     rmSync(repoDir, { recursive: true, force: true });

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
 import type { ReviewFinding, ReviewResult } from '../../review-engine.ts';
-import type { StageStatus } from '../../stage-result.ts';
+import type { ReviewOutcomeVerdict, StageStatus } from '../../stage-result.ts';
 import {
   executeReviewChanges,
   executeWriteStageResult,
@@ -90,10 +90,14 @@ export interface ReviewFlowOptions {
 
 export interface ReviewFlowReviewSummary {
   status: 'completed' | 'failed';
-  verdict?: ReviewResult['verdict'];
+  verdict?: ReviewOutcomeVerdict;
+  exitCode?: number;
+  iterations?: number;
   findings: string;
   findingCount: number;
   blockingCount: number;
+  warningCount: number;
+  reviewToolError?: string;
   needsStrongerReviewer: boolean;
 }
 
@@ -231,17 +235,32 @@ function buildStageArtifacts(input: {
   labels: GitHubAddLabelResult[];
   warnings: string[];
 }): Record<string, unknown> {
+  const pullRequestSummary = summarizeMutation(input.pullRequest);
+  const prNumber = input.pullRequest?.ok ? input.pullRequest.idempotency.ref?.number : undefined;
   return {
+    type: 'review',
+    ...(typeof prNumber === 'number' ? { prNumber } : {}),
+    exitCode: input.review.exitCode,
+    verdict: input.review.verdict,
+    iterations: input.review.iterations,
+    blockerCount: input.review.blockingCount,
+    warningCount: input.review.warningCount,
+    ...(input.review.reviewToolError ? { reviewToolError: input.review.reviewToolError } : {}),
     review: {
       status: input.review.status,
       verdict: input.review.verdict,
+      exitCode: input.review.exitCode,
+      iterations: input.review.iterations,
       findingCount: input.review.findingCount,
       blockingCount: input.review.blockingCount,
+      blockerCount: input.review.blockingCount,
+      warningCount: input.review.warningCount,
+      reviewToolError: input.review.reviewToolError,
       needsStrongerReviewer: input.review.needsStrongerReviewer,
     },
     fixes: input.fixes,
     linearComment: summarizeMutation(input.linearComment),
-    pullRequest: summarizeMutation(input.pullRequest),
+    pullRequest: pullRequestSummary,
     labels: input.labels.map((label) => summarizeMutation(label)),
     haltedBeforeMerge: true,
     merged: false,
@@ -392,9 +411,14 @@ export async function runReviewFlow(options: ReviewFlowOptions): Promise<ReviewF
 
   const initialReview: ReviewFlowReviewSummary = {
     status: reviewCall.ok ? 'completed' : 'failed',
+    verdict: reviewCall.ok ? reviewCall.verdict : 'error',
+    exitCode: reviewCall.exitCode ?? (reviewCall.ok ? 0 : 2),
+    iterations: reviewCall.iterations ?? 1,
     findings: reviewCall.ok ? reviewCall.findings : '',
     findingCount: reviewCall.ok ? reviewCall.findingCount ?? 0 : 0,
     blockingCount: reviewCall.ok ? reviewCall.blockingCount ?? 0 : 0,
+    warningCount: reviewCall.ok ? reviewCall.warningCount ?? Math.max(0, (reviewCall.findingCount ?? 0) - (reviewCall.blockingCount ?? 0)) : 0,
+    reviewToolError: reviewCall.ok ? undefined : reviewCall.message,
     needsStrongerReviewer: false,
   };
   const emptyFixes = makeFixSummary();
@@ -429,6 +453,8 @@ export async function runReviewFlow(options: ReviewFlowOptions): Promise<ReviewF
     const failedReview: ReviewFlowReviewSummary = {
       ...initialReview,
       status: 'failed',
+      verdict: 'error',
+      reviewToolError: message,
     };
     const warnings = [message];
     const stageResult = await writeTerminalStageResult(options, deps, {
@@ -454,6 +480,8 @@ export async function runReviewFlow(options: ReviewFlowOptions): Promise<ReviewF
   const review: ReviewFlowReviewSummary = {
     ...initialReview,
     verdict: parsedReview.verdict,
+    exitCode: reviewCall.exitCode ?? 0,
+    iterations: reviewCall.iterations ?? 1,
     needsStrongerReviewer: parsedReview.needsStrongerReviewer === true,
   };
 
@@ -640,7 +668,12 @@ export async function runReviewFlow(options: ReviewFlowOptions): Promise<ReviewF
     };
   }
 
-  const dedupedLabels = [...new Set((options.labels ?? []).map((label) => label.trim()).filter(Boolean))];
+  const reviewPassedReadyGate = review.exitCode === 0
+    && review.verdict === 'ready'
+    && (review.iterations ?? 0) >= 1
+    && review.blockingCount === 0;
+  const dedupedLabels = [...new Set((options.labels ?? []).map((label) => label.trim()).filter(Boolean))]
+    .filter((label) => label !== 'wm:ready' || reviewPassedReadyGate);
   for (const label of dedupedLabels) {
     const labelResult = await githubAddLabel({
       repo: options.repo,
