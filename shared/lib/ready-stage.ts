@@ -36,6 +36,11 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { refreshBaseForMigration } from './ready-migration-base.ts';
+import {
+  evaluateCiChecks,
+  normalizeStatusCheckRollup,
+  type PrCiStatus,
+} from './pr-ci-status.ts';
 
 /**
  * Status of an individual ready check.
@@ -100,6 +105,15 @@ export interface ReadyResult {
 
   /** GitHub mergeability state, reported separately from readiness verdict */
   mergeConflict?: MergeConflictResult;
+
+  /** Head SHA evaluated for CI, when available from GitHub. */
+  headSha?: string;
+
+  /** Live CI conclusion from the shared evaluator. */
+  ciConclusion?: string;
+
+  /** GitHub merge-state status observed with CI. */
+  mergeStateStatus?: string;
 }
 
 /**
@@ -122,6 +136,7 @@ export interface ReadyStageConfig {
    * Other checks can warn but won't fail the verdict.
    */
   requiredChecks?: string[];
+  requireCiChecks?: boolean;
   migrationKind?: 'alembic' | 'sql' | 'none';
 
   /**
@@ -213,6 +228,41 @@ export async function sleep(ms: number): Promise<void> {
 export const readyStageDeps = {
   execShellCommand,
   sleep,
+  async fetchPrCiStatus(prNumber: number, repoDir: string): Promise<PrCiStatus> {
+    try {
+      const checksJson = readyStageDeps.execShellCommand(
+        `gh pr checks ${escapeShellArg(String(prNumber))} --json state,name 2>/dev/null`,
+        { encoding: 'utf-8', cwd: repoDir }
+      );
+      const checks = normalizeStatusCheckRollup(JSON.parse(checksJson.toString()));
+      const readyConfig = getReadyConfig(repoDir);
+      const evaluation = evaluateCiChecks(checks, readyConfig.requiredChecks ?? [], {
+        requireChecks: readyConfig.requireCiChecks,
+        requiredSource: readyConfig.requiredChecks && readyConfig.requiredChecks.length > 0 ? 'config' : 'none',
+      });
+      return {
+        ...evaluation,
+        checks,
+        requiredSource: evaluation.requiredSource ?? 'none',
+      };
+    } catch (error) {
+      return {
+        conclusion: 'unknown',
+        observed: 0,
+        passing: 0,
+        failing: [],
+        pending: [],
+        missingRequired: [],
+        requiredContexts: [],
+        checks: [],
+        requiredSource: 'none',
+        readError: {
+          errorType: 'unknown',
+          reason: error instanceof Error ? error.message : String(error),
+        },
+      };
+    }
+  },
   spawnPython(
     scriptPath: string,
     filePaths: string[],
@@ -2022,80 +2072,81 @@ export async function checkMigrationReversibility(
  * @param repoDir - Repository directory
  * @returns Check result
  */
-export function checkCIStatus(prNumber: number, repoDir: string): ReadyCheck {
-  try {
-    const checksJson = readyStageDeps.execShellCommand(
-      `gh pr checks ${escapeShellArg(String(prNumber))} --json state,name 2>/dev/null`,
-      { encoding: 'utf-8', cwd: repoDir }
-    );
-    const checks = JSON.parse(checksJson.toString());
-
-    if (checks.length === 0) {
-      return {
-        name: 'ci-status',
-        status: 'skip',
-        message: 'No CI checks configured',
-        details: {},
-      };
-    }
-
-    const passedStates = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED']);
-    const pendingStates = new Set(['QUEUED', 'IN_PROGRESS', 'PENDING', 'REQUESTED', 'WAITING', 'STARTUP_FAILURE']);
-    const failedChecks = checks.filter((check: any) => !passedStates.has(check.state));
-    const blockingFailures = failedChecks.filter((check: any) => !pendingStates.has(check.state));
-    const pendingChecks = failedChecks.filter((check: any) => pendingStates.has(check.state));
-    const unknownStateFailures = blockingFailures.filter(
-      (check: any) => typeof check.state === 'string' && check.state !== 'FAILURE'
-    );
-
-    if (blockingFailures.length > 0) {
-      const message = unknownStateFailures.length > 0
-        ? `Unknown CI state for PR #${prNumber}: ${unknownStateFailures.map((check: any) => `${check.name}=${check.state}`).join(', ')}`
-        : `${blockingFailures.length} CI check(s) failing`;
-
-      return {
-        name: 'ci-status',
-        status: 'fail',
-        message,
-        details: {
-          failedChecks: blockingFailures.map((c: any) => ({ name: c.name, state: c.state })),
-          pendingChecks: pendingChecks.map((c: any) => ({ name: c.name, state: c.state })),
-          totalChecks: checks.length,
-        },
-      };
-    }
-
-    if (pendingChecks.length > 0) {
-      return {
-        name: 'ci-status',
-        status: 'pending',
-        message: `${pendingChecks.length} CI check(s) still running`,
-        details: {
-          pendingChecks: pendingChecks.map((c: any) => ({ name: c.name, state: c.state })),
-          totalChecks: checks.length,
-        },
-      };
-    }
-
+export async function checkCIStatus(prNumber: number, repoDir: string): Promise<ReadyCheck> {
+  const ci = await readyStageDeps.fetchPrCiStatus(prNumber, repoDir);
+  if (ci.conclusion === 'unknown') {
     return {
       name: 'ci-status',
-      status: 'pass',
-      message: 'All CI checks passing',
-      details: {
-        totalChecks: checks.length,
-      },
-    };
-  } catch (error) {
-    // If gh pr checks fails, return warn instead of fail
-    return {
-      name: 'ci-status',
-      status: 'warn',
+      status: 'pending',
       message: 'Unable to fetch CI status',
       details: {
-        error: error instanceof Error ? error.message : String(error),
+        error: ci.readError?.reason,
+        errorType: ci.readError?.errorType,
       },
     };
   }
+
+  return ciStatusToReadyCheck(ci);
+}
+
+export function ciStatusToReadyCheck(ci: PrCiStatus): ReadyCheck {
+  const details = {
+    conclusion: ci.conclusion,
+    headSha: ci.headSha,
+    mergeStateStatus: ci.mergeStateStatus,
+    observed: ci.observed,
+    passing: ci.passing,
+    requiredContexts: ci.requiredContexts,
+    requiredSource: ci.requiredSource,
+    failingChecks: ci.failing,
+    pendingChecks: ci.pending,
+    missingRequired: ci.missingRequired,
+    readError: ci.readError,
+  };
+
+  if (ci.conclusion === 'none') {
+    return {
+      name: 'ci-status',
+      status: 'skip',
+      message: 'No CI checks configured',
+      details,
+    };
+  }
+  if (ci.conclusion === 'fail') {
+    return {
+      name: 'ci-status',
+      status: 'fail',
+      message: `${ci.failing.length} CI check(s) failing`,
+      details,
+    };
+  }
+  if (ci.conclusion === 'pending') {
+    const missing = ci.missingRequired.length;
+    const pending = ci.pending.length;
+    return {
+      name: 'ci-status',
+      status: 'pending',
+      message: missing > 0
+        ? `Waiting on ${missing} required CI check(s) to report`
+        : `${pending || ci.requiredContexts.length || 1} CI check(s) still running`,
+      details,
+    };
+  }
+  if (ci.conclusion === 'unknown') {
+    return {
+      name: 'ci-status',
+      status: 'pending',
+      message: 'Unable to fetch CI status',
+      details,
+    };
+  }
+
+  return {
+    name: 'ci-status',
+    status: 'pass',
+    message: 'All required CI checks passing',
+    details,
+  };
 }
 
 /**
@@ -2314,6 +2365,7 @@ export async function runReadyStage(options: {
     ? loadDeployConfig(repoDir)
     : {};
   let mergeConflict: MergeConflictResult | undefined;
+  let ciStatus: PrCiStatus | undefined;
   let migrationBaseRefreshCheck: ReadyCheck | null = null;
   if (policy.checks.includes('merge-conflict')) {
     mergeConflict = await checkMergeConflicts(prNumber, repoDir);
@@ -2342,7 +2394,22 @@ export async function runReadyStage(options: {
       checks.push(migrationBaseRefreshCheck);
     }
     if (checkName === 'ci-status') {
-      checks.push(checkCIStatus(prNumber, repoDir));
+      const ciCheck = await checkCIStatus(prNumber, repoDir);
+      checks.push(ciCheck);
+      const details = ciCheck.details ?? {};
+      ciStatus = {
+        conclusion: String(details.conclusion ?? 'unknown') as PrCiStatus['conclusion'],
+        observed: Number(details.observed ?? 0),
+        passing: Number(details.passing ?? 0),
+        failing: Array.isArray(details.failingChecks) ? details.failingChecks.filter((item): item is string => typeof item === 'string') : [],
+        pending: Array.isArray(details.pendingChecks) ? details.pendingChecks.filter((item): item is string => typeof item === 'string') : [],
+        missingRequired: Array.isArray(details.missingRequired) ? details.missingRequired.filter((item): item is string => typeof item === 'string') : [],
+        requiredContexts: Array.isArray(details.requiredContexts) ? details.requiredContexts.filter((item): item is string => typeof item === 'string') : [],
+        checks: [],
+        requiredSource: String(details.requiredSource ?? 'none') as PrCiStatus['requiredSource'],
+        headSha: typeof details.headSha === 'string' ? details.headSha : undefined,
+        mergeStateStatus: typeof details.mergeStateStatus === 'string' ? details.mergeStateStatus : undefined,
+      };
       continue;
     }
     if (checkName === 'schema-migrations') {
@@ -2431,6 +2498,9 @@ export async function runReadyStage(options: {
     timestamp: new Date().toISOString(),
     summary,
     mergeConflict,
+    headSha: ciStatus?.headSha,
+    ciConclusion: ciStatus?.conclusion,
+    mergeStateStatus: ciStatus?.mergeStateStatus,
   };
 }
 

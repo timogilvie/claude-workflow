@@ -1667,7 +1667,7 @@ describe('ready-stage', () => {
   });
 
   describe('checkCIStatus', () => {
-    it('suppresses gh stderr when fetching checks', () => {
+    it('suppresses gh stderr when fetching checks', async () => {
       let receivedCommand = '';
       const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', (cmd: string) => {
         receivedCommand = cmd;
@@ -1675,68 +1675,61 @@ describe('ready-stage', () => {
       });
 
       try {
-        checkCIStatus(42, '/tmp/test');
+        await checkCIStatus(42, '/tmp/test');
         assert.match(receivedCommand, /gh pr checks '?42'? --json state,name 2>\/dev\/null$/);
       } finally {
         execMock.mock.restore();
       }
     });
 
-    it('returns pending for queued checks', () => {
+    it('returns pending for queued checks', async () => {
       const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', () =>
         JSON.stringify([{ name: 'Shell and Unit Tests', state: 'QUEUED' }])
       );
 
       try {
-        const result = checkCIStatus(42, '/tmp/test');
+        const result = await checkCIStatus(42, '/tmp/test');
         assert.equal(result.status, 'pending');
         assert.match(result.message, /still running/);
-        assert.deepEqual(result.details, {
-          pendingChecks: [{ name: 'Shell and Unit Tests', state: 'QUEUED' }],
-          totalChecks: 1,
-        });
+        assert.deepEqual(result.details?.pendingChecks, ['Shell and Unit Tests']);
+        assert.equal(result.details?.observed, 1);
       } finally {
         execMock.mock.restore();
       }
     });
 
-    it('returns pending for in-progress checks', () => {
+    it('returns pending for in-progress checks', async () => {
       const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', () =>
         JSON.stringify([{ name: 'Check Lifecycle Paths', state: 'IN_PROGRESS' }])
       );
 
       try {
-        const result = checkCIStatus(42, '/tmp/test');
+        const result = await checkCIStatus(42, '/tmp/test');
         assert.equal(result.status, 'pending');
-        assert.deepEqual(result.details, {
-          pendingChecks: [{ name: 'Check Lifecycle Paths', state: 'IN_PROGRESS' }],
-          totalChecks: 1,
-        });
+        assert.deepEqual(result.details?.pendingChecks, ['Check Lifecycle Paths']);
+        assert.equal(result.details?.observed, 1);
       } finally {
         execMock.mock.restore();
       }
     });
 
-    it('returns fail for failed checks', () => {
+    it('returns fail for failed checks', async () => {
       const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', () =>
         JSON.stringify([{ name: 'Shell and Unit Tests', state: 'FAILURE' }])
       );
 
       try {
-        const result = checkCIStatus(42, '/tmp/test');
+        const result = await checkCIStatus(42, '/tmp/test');
         assert.equal(result.status, 'fail');
         assert.match(result.message, /failing/);
-        assert.deepEqual(result.details, {
-          failedChecks: [{ name: 'Shell and Unit Tests', state: 'FAILURE' }],
-          pendingChecks: [],
-          totalChecks: 1,
-        });
+        assert.deepEqual(result.details?.failingChecks, ['Shell and Unit Tests']);
+        assert.equal(result.details?.observed, 1);
       } finally {
         execMock.mock.restore();
       }
     });
 
-    it('returns fail when failed and queued checks are mixed', () => {
+    it('returns fail when failed and queued checks are mixed', async () => {
       const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', () =>
         JSON.stringify([
           { name: 'Shell and Unit Tests', state: 'FAILURE' },
@@ -1745,19 +1738,17 @@ describe('ready-stage', () => {
       );
 
       try {
-        const result = checkCIStatus(42, '/tmp/test');
+        const result = await checkCIStatus(42, '/tmp/test');
         assert.equal(result.status, 'fail');
-        assert.deepEqual(result.details, {
-          failedChecks: [{ name: 'Shell and Unit Tests', state: 'FAILURE' }],
-          pendingChecks: [{ name: 'Check Lifecycle Paths', state: 'QUEUED' }],
-          totalChecks: 2,
-        });
+        assert.deepEqual(result.details?.failingChecks, ['Shell and Unit Tests']);
+        assert.deepEqual(result.details?.pendingChecks, ['Check Lifecycle Paths']);
+        assert.equal(result.details?.observed, 2);
       } finally {
         execMock.mock.restore();
       }
     });
 
-    it('returns pass for success and skipped checks', () => {
+    it('returns pass for success and skipped checks', async () => {
       const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', () =>
         JSON.stringify([
           { name: 'Shell and Unit Tests', state: 'SUCCESS' },
@@ -1766,32 +1757,36 @@ describe('ready-stage', () => {
       );
 
       try {
-        const result = checkCIStatus(42, '/tmp/test');
+        const result = await checkCIStatus(42, '/tmp/test');
         assert.equal(result.status, 'pass');
-        assert.equal(result.message, 'All CI checks passing');
-        assert.deepEqual(result.details, {
-          totalChecks: 2,
-        });
+        assert.equal(result.message, 'All required CI checks passing');
+        assert.equal(result.details?.observed, 2);
+        assert.equal(result.details?.passing, 2);
       } finally {
         execMock.mock.restore();
       }
     });
 
-    it('includes the offending unknown CI state in the failure message', () => {
+    it('includes cancelled CI as a failing check', async () => {
       const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', () =>
         JSON.stringify([{ name: 'Lifecycle Tests', state: 'CANCELLED' }])
       );
 
       try {
-        const result = checkCIStatus(42, '/tmp/test');
+        const result = await checkCIStatus(42, '/tmp/test');
         assert.equal(result.status, 'fail');
-        assert.match(result.message, /Unknown CI state for PR #42/);
-        assert.match(result.message, /Lifecycle Tests=CANCELLED/);
-        assert.deepEqual(result.details, {
-          failedChecks: [{ name: 'Lifecycle Tests', state: 'CANCELLED' }],
-          pendingChecks: [],
-          totalChecks: 1,
-        });
+        assert.deepEqual(result.details?.failingChecks, ['Lifecycle Tests']);
+      } finally {
+        execMock.mock.restore();
+      }
+    });
+
+    it('returns pending when no checks are reported by default', async () => {
+      const execMock = mock.method(readyStage.readyStageDeps, 'execShellCommand', () => JSON.stringify([]));
+
+      try {
+        const result = await checkCIStatus(42, '/tmp/test');
+        assert.equal(result.status, 'pending');
       } finally {
         execMock.mock.restore();
       }
