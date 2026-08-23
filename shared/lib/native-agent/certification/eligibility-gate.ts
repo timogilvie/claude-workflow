@@ -1,11 +1,10 @@
 import type { NativeProviderName } from '../../config.ts';
 import { getModel, type ModelRegistry, type ReadOnlyNativeCapability } from '../../model-registry.ts';
-import { checkIdentity } from './validator.ts';
 import {
   buildGlobalCertificationPath,
   checkGlobalCertificationEligibility,
 } from './loader.ts';
-import { resolveCertificationStorageIdentity } from './identity.ts';
+import { resolveCertificationSubject } from './identity.ts';
 import type {
   CertificationPhase,
   NativeCertificationArtifact,
@@ -18,6 +17,7 @@ export type NativeGateRejectReason =
   | 'malformed_artifact'
   | 'stale_artifact'
   | 'wrong_suite'
+  | 'identity_reidentified'
   | 'insufficient_phase';
 
 export type NativeGateMode = 'task' | 'certification';
@@ -57,6 +57,7 @@ export interface NativeGateReject {
   certifiedAt?: string;
   artifactPath?: string;
   artifactScope?: 'global' | 'legacy-repo';
+  subject?: unknown;
 }
 
 export type NativeGateDecision = NativeGateReady | NativeGateReject;
@@ -104,20 +105,25 @@ export function evaluateNativeProviderGate(input: NativeGateInput): NativeGateDe
     });
   }
 
-  const storageIdentity = resolveCertificationStorageIdentity(nativeProvider, input.modelId);
+  const subject = resolveCertificationSubject({
+    provider: nativeProvider,
+    model: input.modelId,
+    registry: input.registry,
+  });
   const artifactPath = buildGlobalCertificationPath(
-    nativeProvider,
-    input.modelId,
+    subject.storageIdentity.provider,
+    subject.storageIdentity.model,
     requiredSuiteVersion,
     { root: input.certificationRoot },
   );
   const eligibility = checkGlobalCertificationEligibility(
-    nativeProvider,
-    input.modelId,
+    subject.storageIdentity.provider,
+    subject.storageIdentity.model,
     requiredSuiteVersion,
     input.requiredPhase,
     input.now,
     { root: input.certificationRoot },
+    subject.subject,
   );
 
   if (!eligibility.eligible) {
@@ -133,26 +139,7 @@ export function evaluateNativeProviderGate(input: NativeGateInput): NativeGateDe
       certifiedAt: artifact?.certifiedAt,
       artifactPath: eligibility.artifactPath ?? artifactPath,
       artifactScope: eligibility.storageScope,
-    });
-  }
-
-  const identityError = checkIdentity(
-    eligibility.artifact,
-    storageIdentity.provider,
-    storageIdentity.model,
-  );
-  if (identityError) {
-    return rejectDecision({
-      modelId: input.modelId,
-      reason: 'missing_artifact',
-      nativeCapability: capability,
-      requiredPhase: input.requiredPhase,
-      foundPhase: eligibility.artifact.phase,
-      requiredSuiteVersion,
-      foundSuiteVersion: eligibility.artifact.suiteVersion,
-      certifiedAt: eligibility.artifact.certifiedAt,
-      artifactPath: eligibility.artifactPath ?? artifactPath,
-      artifactScope: eligibility.storageScope,
+      subject: eligibility.reason === 'identity-reidentified' ? subject.subject : undefined,
     });
   }
 
@@ -166,7 +153,7 @@ export function evaluateNativeProviderGate(input: NativeGateInput): NativeGateDe
   };
 }
 
-function mapEligibilityReason(reason: 'missing' | 'malformed' | 'wrong-version' | 'stale' | 'phase-insufficient' | 'scenario-failure'): NativeGateRejectReason {
+function mapEligibilityReason(reason: 'missing' | 'malformed' | 'identity-reidentified' | 'wrong-version' | 'stale' | 'phase-insufficient' | 'scenario-failure'): NativeGateRejectReason {
   switch (reason) {
     case 'missing':
       return 'missing_artifact';
@@ -174,6 +161,8 @@ function mapEligibilityReason(reason: 'missing' | 'malformed' | 'wrong-version' 
       return 'malformed_artifact';
     case 'wrong-version':
       return 'wrong_suite';
+    case 'identity-reidentified':
+      return 'identity_reidentified';
     case 'stale':
       return 'stale_artifact';
     case 'phase-insufficient':
@@ -205,6 +194,7 @@ function formatRejectMessage(input: Omit<NativeGateReject, 'ok' | 'message'>): s
   if (input.certifiedAt) parts.push(`certifiedAt=${input.certifiedAt}`);
   if (input.artifactPath) parts.push(`artifactPath=${input.artifactPath}`);
   if (input.artifactScope) parts.push(`artifactScope=${input.artifactScope}`);
+  if (input.subject) parts.push('subject=current-registry');
 
   return parts.join('; ');
 }

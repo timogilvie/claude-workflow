@@ -56,6 +56,7 @@ export const ROUTER_ROLE_LAUNCH_PHASE: Record<RouterRole, RoleEligibility> = {
  * - `stale`             — TTL or explicit expiresAt exceeded
  * - `insufficient-phase`— certified phase does not satisfy the required phase,
  *                         or a required scenario failed
+ * - `identity-reidentified` — artifact subject does not match current registry identity
  * - `role-ineligible`   — launch-priority metadata excludes this router role
  * - `phase-not-allowed` — nativeAgent.allowedPhases excludes this launch phase
  */
@@ -67,6 +68,7 @@ export type RouterCertificationRejectionReason =
   | 'wrong-suite'
   | 'stale'
   | 'insufficient-phase'
+  | 'identity-reidentified'
   | 'role-ineligible'
   | 'phase-not-allowed';
 
@@ -124,6 +126,8 @@ function mapGateReason(reason: NativeGateRejectReason): RouterCertificationRejec
       return 'no-native-capability';
     case 'wrong_suite':
       return 'wrong-suite';
+    case 'identity_reidentified':
+      return 'identity-reidentified';
     case 'stale_artifact':
       return 'stale';
     case 'insufficient_phase':

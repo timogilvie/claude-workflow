@@ -12,9 +12,12 @@ import { applyDifficultyFloor, readTaskPromptFromFile, routeWorkflow, routeWorkf
 import type { RouterCertificationRejection } from './workflow-router.ts';
 import { CERTIFICATION_SCHEMA_VERSION } from './native-agent/certification/schema.ts';
 import {
+  DEFAULT_CERTIFICATION_SUITE_VERSION,
   GLOBAL_CERTIFICATION_ROOT_ENV,
   buildGlobalCertificationPath,
+  resolveCertificationSubject,
 } from './native-agent/certification/index.ts';
+import { DEFAULT_MODEL_REGISTRY } from './model-registry.ts';
 import { getHarnessId, openManifest } from './resource-manifest.ts';
 
 let passed = 0;
@@ -249,17 +252,35 @@ function writeNativeCertificationArtifact(
   phase: 'read-only' | 'patch' | 'workflow',
   certifiedAt = FRESH_CERTIFIED_AT,
 ): void {
-  const path = buildGlobalCertificationPath(provider, model, suiteVersion);
+  const identity = resolveWorkflowTestSubject(provider, model);
+  const path = buildGlobalCertificationPath(
+    identity.storageIdentity.provider,
+    identity.storageIdentity.model,
+    suiteVersion,
+  );
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify({
     schemaVersion: CERTIFICATION_SCHEMA_VERSION,
-    provider,
-    model,
+    subject: identity.subject,
+    provider: identity.storageIdentity.provider,
+    model: identity.storageIdentity.model,
     phase,
     suiteVersion,
     certifiedAt,
     scenarios: [{ scenarioId: 's1', passed: true }],
   }, null, 2), 'utf-8');
+}
+
+function resolveWorkflowTestSubject(provider: string, model: string) {
+  const nativeProvider = provider === 'openai' ? 'openai' : 'openrouter';
+  const subjectModel = provider === 'openai' || provider === 'openrouter'
+    ? model
+    : `${provider}/${model}`;
+  return resolveCertificationSubject({
+    provider: nativeProvider,
+    model: subjectModel,
+    registry: DEFAULT_MODEL_REGISTRY,
+  });
 }
 
 async function captureStderr<T>(fn: () => T | Promise<T>): Promise<{ result: T; stderr: string }> {
@@ -748,7 +769,7 @@ await test('OpenRouter aliases in repo-local stage pools do not force selection'
     assert.notEqual(decision.reviewer, 'glm-5.2');
     assert.ok((decision.nativeCertificationRejections ?? []).some((entry) =>
       entry.nativeProvider === 'openrouter'
-      && entry.requiredSuiteVersion === 'v2'
+      && entry.requiredSuiteVersion === DEFAULT_CERTIFICATION_SUITE_VERSION
       && entry.reason === 'missing-artifact'
     ));
   } finally {
@@ -1690,12 +1711,18 @@ function writeCertArtifact(
   suiteVersion: string,
   overrides: Record<string, unknown> = {},
 ): void {
-  const path = buildGlobalCertificationPath(provider, model, suiteVersion);
+  const identity = resolveWorkflowTestSubject(provider, model);
+  const path = buildGlobalCertificationPath(
+    identity.storageIdentity.provider,
+    identity.storageIdentity.model,
+    suiteVersion,
+  );
   mkdirSync(dirname(path), { recursive: true });
   const artifact = {
     schemaVersion: CERTIFICATION_SCHEMA_VERSION,
-    provider,
-    model,
+    subject: identity.subject,
+    provider: identity.storageIdentity.provider,
+    model: identity.storageIdentity.model,
     phase: 'patch',
     suiteVersion,
     certifiedAt: FRESH_CERTIFIED_AT,
@@ -1716,7 +1743,7 @@ await test('STAGE_PHASE_REQUIREMENT maps reviewer→read-only, coder→patch, pl
 await test('valid read-only cert accepted for reviewer role', () => {
   const { repoDir, cleanup } = makeOpenRouterReadyRepo();
   try {
-    writeCertArtifact(repoDir, 'qwen', 'qwen3-coder', 'v2', { phase: 'read-only' });
+    writeCertArtifact(repoDir, 'qwen', 'qwen3-coder', DEFAULT_CERTIFICATION_SUITE_VERSION, { phase: 'read-only' });
 
     const decision = routeWorkflow('Fix a small bug in the router.', {
       repoDir,
@@ -1737,7 +1764,7 @@ await test('valid read-only cert accepted for reviewer role', () => {
 await test('valid patch cert accepted for coder and reviewer roles', () => {
   const { repoDir, cleanup } = makeOpenRouterReadyRepo();
   try {
-    writeCertArtifact(repoDir, 'qwen', 'qwen3-coder', 'v2', { phase: 'patch' });
+    writeCertArtifact(repoDir, 'qwen', 'qwen3-coder', DEFAULT_CERTIFICATION_SUITE_VERSION, { phase: 'patch' });
 
     const decision = routeWorkflow('Implement a feature with tests.', {
       repoDir,
@@ -1761,7 +1788,7 @@ await test('valid patch cert accepted for coder and reviewer roles', () => {
 await test('patch cert rejects planner role which requires workflow certification', () => {
   const { repoDir, cleanup } = makeOpenRouterReadyRepo();
   try {
-    writeCertArtifact(repoDir, 'z-ai', 'glm-5.2', 'v2', { phase: 'patch' });
+    writeCertArtifact(repoDir, 'z-ai', 'glm-5.2', DEFAULT_CERTIFICATION_SUITE_VERSION, { phase: 'patch' });
 
     const decision = routeWorkflow('Plan and implement a new auth workflow.', {
       repoDir,
@@ -1813,7 +1840,7 @@ await test('launch-priority roleEligibility removes coding-only Qwen from planne
     },
   });
   try {
-    writeCertArtifact(repoDir, 'qwen', 'qwen-2.5-coder-32b-instruct', 'v2', { phase: 'workflow' });
+    writeCertArtifact(repoDir, 'qwen', 'qwen-2.5-coder-32b-instruct', DEFAULT_CERTIFICATION_SUITE_VERSION, { phase: 'workflow' });
 
     const decision = routeWorkflow('Plan a new multi-stage workflow.', {
       repoDir,
@@ -1879,7 +1906,7 @@ await test('stale artifact rejects native model', () => {
   const { repoDir, cleanup } = makeOpenRouterReadyRepo();
   try {
     // Cert older than 60 days from now (2026-06-30)
-    writeCertArtifact(repoDir, 'qwen', 'qwen3-coder', 'v2', {
+    writeCertArtifact(repoDir, 'qwen', 'qwen3-coder', DEFAULT_CERTIFICATION_SUITE_VERSION, {
       phase: 'patch',
       certifiedAt: '2020-01-01T00:00:00.000Z',
     });
@@ -1904,7 +1931,7 @@ await test('stale artifact rejects native model', () => {
 await test('wrong suite version rejects native model', () => {
   const { repoDir, cleanup } = makeOpenRouterReadyRepo();
   try {
-    writeCertArtifact(repoDir, 'qwen', 'qwen3-coder', 'v2', {
+    writeCertArtifact(repoDir, 'qwen', 'qwen3-coder', DEFAULT_CERTIFICATION_SUITE_VERSION, {
       phase: 'patch',
       suiteVersion: 'v1',
     });
@@ -1929,7 +1956,7 @@ await test('wrong suite version rejects native model', () => {
 await test('malformed artifact rejects native model', () => {
   const { repoDir, cleanup } = makeOpenRouterReadyRepo();
   try {
-    const certPath = buildGlobalCertificationPath('qwen', 'qwen3-coder', 'v2');
+    const certPath = buildGlobalCertificationPath('qwen', 'qwen3-coder', DEFAULT_CERTIFICATION_SUITE_VERSION);
     mkdirSync(dirname(certPath), { recursive: true });
     // Write an incomplete / structurally invalid artifact
     writeFileSync(certPath, JSON.stringify({ schemaVersion: 1, provider: 'openai' }));
@@ -2054,7 +2081,7 @@ await test('diagnostics contain modelId, role, requestedPhase, nativeCapability,
     assert.equal(typeof rejection?.reason, 'string');
 
     assert.equal(rejection?.nativeCapability, 'certified');
-    assert.equal(rejection?.requiredSuiteVersion, 'v2');
+    assert.equal(rejection?.requiredSuiteVersion, DEFAULT_CERTIFICATION_SUITE_VERSION);
   } finally {
     cleanup();
   }

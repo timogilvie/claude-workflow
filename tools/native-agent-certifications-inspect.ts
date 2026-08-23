@@ -5,8 +5,10 @@ import {
   CERTIFICATION_TTL_DAYS,
   evaluateEligibility,
   loadGlobalCertification,
+  resolveCertificationSubject,
   type CertificationPhase,
 } from '../shared/lib/native-agent/certification/index.ts';
+import { getEffectiveRegistry, type ModelRegistry } from '../shared/lib/model-registry.ts';
 
 export interface CertificationInspection {
   provider: string;
@@ -21,6 +23,7 @@ export interface CertificationInspection {
   expiresAt?: string;
   scenarios: Array<{ scenarioId: string; passed: boolean; failureMessage?: string }>;
   knownLimitations: string[];
+  subject?: unknown;
 }
 
 export function inspectGlobalCertification(opts: {
@@ -29,12 +32,24 @@ export function inspectGlobalCertification(opts: {
   suiteVersion: string;
   requiredPhase: CertificationPhase;
   now?: Date;
+  registry?: ModelRegistry;
+  repoDir?: string;
 }): CertificationInspection {
-  const loaded = loadGlobalCertification(opts.provider, opts.model, opts.suiteVersion);
+  const registry = opts.registry ?? getEffectiveRegistry(opts.repoDir);
+  const resolved = resolveCertificationSubject({
+    provider: opts.provider,
+    model: opts.model,
+    registry,
+  });
+  const loaded = loadGlobalCertification(
+    resolved.storageIdentity.provider,
+    resolved.storageIdentity.model,
+    opts.suiteVersion,
+  );
   if (!loaded.ok) {
     return {
-      provider: opts.provider,
-      model: opts.model,
+      provider: resolved.storageIdentity.provider,
+      model: resolved.storageIdentity.model,
       suiteVersion: opts.suiteVersion,
       artifactPath: loaded.path,
       found: false,
@@ -45,7 +60,13 @@ export function inspectGlobalCertification(opts: {
     };
   }
 
-  const eligibility = evaluateEligibility(loaded.artifact, opts.suiteVersion, opts.requiredPhase, opts.now);
+  const eligibility = evaluateEligibility(
+    loaded.artifact,
+    opts.suiteVersion,
+    opts.requiredPhase,
+    opts.now,
+    resolved.subject,
+  );
   const expiresAt = loaded.artifact.expiresAt
     ?? new Date(Date.parse(loaded.artifact.certifiedAt) + CERTIFICATION_TTL_DAYS * 24 * 60 * 60 * 1000).toISOString();
   return {
@@ -65,6 +86,7 @@ export function inspectGlobalCertification(opts: {
       ...(s.failureMessage ? { failureMessage: s.failureMessage } : {}),
     })),
     knownLimitations: loaded.artifact.knownLimitations ?? [],
+    subject: 'subject' in loaded.artifact ? loaded.artifact.subject : undefined,
   };
 }
 

@@ -21,6 +21,7 @@ import {
   CERTIFICATION_SCHEMA_VERSION,
   CERTIFICATION_TTL_DAYS,
 } from './schema.ts';
+import { resolveCertificationSubject } from './identity.ts';
 import { buildGlobalCertificationPath } from './loader.ts';
 import { GLOBAL_CERTIFICATION_ROOT_ENV } from './storage.ts';
 import type { ModelRegistry } from '../../model-registry.ts';
@@ -111,12 +112,27 @@ function writeCertArtifact(
   suiteVersion: string,
   overrides: Record<string, unknown> = {},
 ): void {
-  const path = buildGlobalCertificationPath(provider, model, suiteVersion);
+  const phase = (overrides.phase ?? 'patch') as 'read-only' | 'patch' | 'workflow';
+  const openrouterIdentity = resolveOpenRouterModelIdentity(`${provider}/${model}`);
+  const registry = openrouterIdentity?.nativeOpenRouter
+    ? makeOpenRouterRegistry(openrouterIdentity.wavemillAlias, phase, suiteVersion)
+    : makeRegistry(model, phase, suiteVersion);
+  const identity = resolveCertificationSubject({
+    provider: openrouterIdentity?.nativeOpenRouter ? 'openrouter' : provider,
+    model: openrouterIdentity?.wavemillAlias ?? model,
+    registry,
+  });
+  const path = buildGlobalCertificationPath(
+    identity.storageIdentity.provider,
+    identity.storageIdentity.model,
+    suiteVersion,
+  );
   mkdirSync(dirname(path), { recursive: true });
   const artifact = {
     schemaVersion: CERTIFICATION_SCHEMA_VERSION,
-    provider,
-    model,
+    subject: identity.subject,
+    provider: identity.storageIdentity.provider,
+    model: identity.storageIdentity.model,
     phase: 'patch',
     suiteVersion,
     // 1 day ago — fresh
@@ -181,10 +197,12 @@ function makeOpenRouterRegistry(
 ): ModelRegistry {
   const identity = resolveOpenRouterModelIdentity(modelId);
   assert.ok(identity, `expected launch-priority identity for ${modelId}`);
+  const [artifactProvider, artifactModel] = identity.openrouterId.split('/');
+  assert.ok(artifactProvider && artifactModel);
 
   return {
     models: {
-      [modelId]: {
+      [identity.wavemillAlias]: {
         vendor: identity.family,
         class: identity.family === 'glm' ? 'frontier' : 'strong_generalist',
         strengths: [],
@@ -197,6 +215,21 @@ function makeOpenRouterRegistry(
         reasoningTier: identity.family === 'qwen' ? 'standard' : 'advanced',
         costPerMillionInputTokensUsd: 1,
         costPerMillionOutputTokensUsd: 3,
+        supportedModel: {
+          wavemillAlias: identity.wavemillAlias,
+          providerNativeId: identity.openrouterId,
+          provider: 'openrouter',
+          transport: 'openai-completions',
+          stages: ['planning', 'coding', 'review'],
+          canonicalArtifactIdentity: {
+            provider: artifactProvider,
+            model: artifactModel,
+            suiteVersion,
+          },
+          lifecycle: 'supported',
+          launchEligible: true,
+          routingEligible: true,
+        },
         nativeCapability: {
           nativeProvider: 'openrouter',
           piTransportKind: 'openai-completions',
@@ -387,36 +420,7 @@ await test('openrouter aliases load certifications from mapped provider/model st
   const { repoDir, cleanup } = makeRepo();
   try {
     writeCertArtifact(repoDir, 'qwen', 'qwen3-coder', 'v1', { phase: 'workflow' });
-    const registry: ModelRegistry = {
-      models: {
-        'qwen-3-coder': {
-          vendor: 'qwen',
-          class: 'strong_generalist',
-          strengths: [],
-          weaknesses: [],
-          qualityScores: { routing: 58, planning: 72, coding: 84, review: 78, classify: 58 },
-          contextWindowTokens: 131_072,
-          toolSupport: 'basic',
-          multimodal: { text: true, image: false },
-          latencyTier: 'standard',
-          reasoningTier: 'standard',
-          costPerMillionInputTokensUsd: 0.35,
-          costPerMillionOutputTokensUsd: 1.05,
-          nativeCapability: {
-            nativeProvider: 'openrouter',
-            piTransportKind: 'openai-completions',
-            readOnlyNative: 'certified',
-            compatFlags: { thinkingFormat: 'openrouter' },
-            certification: {
-              maxCertifiedPhase: 'workflow',
-              certifiedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
-              certificationSuiteVersion: 'v1',
-            },
-          },
-        },
-      },
-      ladders: {},
-    };
+    const registry = makeOpenRouterRegistry('qwen-3-coder', 'workflow', 'v1');
 
     const result = filterNativeModels(['qwen-3-coder'], 'reviewer', registry, repoDir);
     assert.deepEqual(result.eligible, ['qwen-3-coder']);
@@ -649,36 +653,7 @@ for (const testCase of OPENROUTER_PATCH_CASES) {
     const { repoDir, cleanup } = makeRepo();
     try {
       writeCertArtifact(repoDir, testCase.providerPath, testCase.modelPath, 'v1', { phase: 'patch' });
-      const registry: ModelRegistry = {
-        models: {
-          [testCase.modelId]: {
-            vendor: testCase.vendor,
-            class: testCase.modelClass,
-            strengths: [],
-            weaknesses: [],
-            qualityScores: testCase.qualityScores,
-            contextWindowTokens: testCase.contextWindowTokens,
-            toolSupport: 'full',
-            multimodal: testCase.multimodal,
-            latencyTier: 'standard',
-            reasoningTier: testCase.reasoningTier,
-            costPerMillionInputTokensUsd: testCase.inputCost,
-            costPerMillionOutputTokensUsd: testCase.outputCost,
-            nativeCapability: {
-              nativeProvider: 'openrouter',
-              piTransportKind: 'openai-completions',
-              readOnlyNative: 'certified',
-              compatFlags: { thinkingFormat: 'openrouter' },
-              certification: {
-                maxCertifiedPhase: 'patch',
-                certifiedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
-                certificationSuiteVersion: 'v1',
-              },
-            },
-          },
-        },
-        ladders: {},
-      };
+      const registry = makeOpenRouterRegistry(testCase.modelId, 'patch', 'v1');
 
       const result = filterNativeModels([testCase.modelId], 'coder', registry, repoDir);
       assert.deepEqual(result.eligible, [testCase.modelId]);
@@ -909,16 +884,7 @@ await test('negative patch-path diagnostics stay pairwise distinct across all re
     });
     reasons.set('stale', checkReason());
 
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, JSON.stringify({
-      schemaVersion: CERTIFICATION_SCHEMA_VERSION,
-      provider: 'openai',
-      model: 'native-distinct',
-      phase: 'read-only',
-      suiteVersion: 'v2',
-      certifiedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
-      scenarios: [{ scenarioId: 's1', passed: true }],
-    }));
+    writeCertArtifact(repoDir, 'openai', 'native-distinct', 'v2', { phase: 'read-only' });
     reasons.set('read-only-only', checkReason());
 
     writeCertArtifact(repoDir, 'openai', 'native-distinct', 'v2', {

@@ -6,10 +6,13 @@ import { join, resolve, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import {
+  CERTIFICATION_SCHEMA_VERSION,
+  DEFAULT_CERTIFICATION_SUITE_VERSION,
   GLOBAL_CERTIFICATION_ROOT_ENV,
   buildGlobalCertificationPath,
+  resolveCertificationSubject,
 } from '../shared/lib/native-agent/certification/index.ts';
-import { resolveCertificationStorageIdentity } from '../shared/lib/native-agent/certification/identity.ts';
+import { DEFAULT_MODEL_REGISTRY } from '../shared/lib/model-registry.ts';
 import {
   PATCH_CODING_CERTIFICATION_SCHEMA_VERSION,
   getPatchCodingCertificationPath,
@@ -36,15 +39,29 @@ function writeCertArtifact(
   suiteVersion: string,
   phase: string = 'workflow',
 ) {
-  const certPath = buildGlobalCertificationPath(provider, model, suiteVersion, {
-    root: join(repoDir, 'global-certifications'),
+  const nativeProvider = provider === 'openai' ? 'openai' : 'openrouter';
+  const subjectModel = provider === 'openrouter' || provider === 'openai'
+    ? model
+    : `${provider}/${model}`;
+  const identity = resolveCertificationSubject({
+    provider: nativeProvider,
+    model: subjectModel,
+    registry: DEFAULT_MODEL_REGISTRY,
   });
-  const identity = resolveCertificationStorageIdentity(provider, model);
+  const certPath = buildGlobalCertificationPath(
+    identity.storageIdentity.provider,
+    identity.storageIdentity.model,
+    suiteVersion,
+    {
+    root: join(repoDir, 'global-certifications'),
+    },
+  );
   mkdirSync(dirname(certPath), { recursive: true });
   writeFileSync(certPath, JSON.stringify({
-    schemaVersion: 2,
-    provider: identity.provider,
-    model: identity.model,
+    schemaVersion: CERTIFICATION_SCHEMA_VERSION,
+    subject: identity.subject,
+    provider: identity.storageIdentity.provider,
+    model: identity.storageIdentity.model,
     phase,
     suiteVersion,
     certifiedAt: CERT_DATE_FRESH,
@@ -211,12 +228,12 @@ describe('resolve-challenge-task CLI', () => {
     }
   });
 
-  it('returns challenge mode for HOK-2569 v2 native patch OpenRouter challengers', () => {
+  it('returns challenge mode for HOK-2569 v3 native patch OpenRouter challengers', () => {
     const aliases = ['qwen-3-coder', 'glm-5.2', 'kimi-k2.7-code'];
     const repoDir = makeRepo([], {
       aliases,
       patchCodingEnabled: true,
-      suiteVersion: 'v2',
+      suiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
       certificationPhase: 'patch',
     });
     try {
@@ -329,7 +346,7 @@ describe('resolve-challenge-task CLI', () => {
       aliases: ['glm-5.2'],
       primaryModels: ['gpt-5.5'],
       patchCodingEnabled: true,
-      suiteVersion: 'v2',
+      suiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
       certificationPhase: 'patch',
     });
     const featureDir = join(repoDir, 'features', 'hok-2570-timing');

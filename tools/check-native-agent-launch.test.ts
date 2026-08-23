@@ -12,8 +12,12 @@ import {
 } from '../shared/lib/native-agent/coding-certification.ts';
 import {
   GLOBAL_CERTIFICATION_ROOT_ENV,
+  CERTIFICATION_SCHEMA_VERSION,
+  DEFAULT_CERTIFICATION_SUITE_VERSION,
   buildGlobalCertificationPath,
+  resolveCertificationSubject,
 } from '../shared/lib/native-agent/certification/index.ts';
+import { DEFAULT_MODEL_REGISTRY } from '../shared/lib/model-registry.ts';
 import { PATCH_CODING_SMOKE_SUITE_REVISION } from '../shared/lib/native-agent/smoke.ts';
 import { checkNativeAgentLaunch } from './check-native-agent-launch.ts';
 
@@ -30,14 +34,25 @@ function makeRepo(config: Record<string, unknown>): string {
 }
 
 function writeOpenRouterCert(repoDir: string, provider: string, model: string, phase = 'workflow'): void {
-  const path = buildGlobalCertificationPath(provider, model, 'v2');
+  const providerNativeId = `${provider}/${model}`;
+  const identity = resolveCertificationSubject({
+    provider: 'openrouter',
+    model: providerNativeId,
+    registry: DEFAULT_MODEL_REGISTRY,
+  });
+  const path = buildGlobalCertificationPath(
+    identity.storageIdentity.provider,
+    identity.storageIdentity.model,
+    DEFAULT_CERTIFICATION_SUITE_VERSION,
+  );
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify({
-    schemaVersion: 2,
-    provider,
-    model,
+    schemaVersion: CERTIFICATION_SCHEMA_VERSION,
+    subject: identity.subject,
+    provider: identity.storageIdentity.provider,
+    model: identity.storageIdentity.model,
     phase,
-    suiteVersion: 'v2',
+    suiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
     certifiedAt: '2099-01-01T00:00:00.000Z',
     scenarios: [{ scenarioId: 's1', passed: true }],
   }, null, 2), 'utf-8');

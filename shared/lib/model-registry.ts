@@ -303,7 +303,7 @@ const UNSAFE_CERTIFICATION_SEGMENT = /[/\\.\0]/;
 const OPENROUTER_CERTIFICATION_SEED = Object.freeze({
   maxCertifiedPhase: 'workflow' as const,
   certifiedAt: '2026-07-15T00:00:00.000Z',
-  certificationSuiteVersion: 'v2',
+  certificationSuiteVersion: 'v3',
 });
 
 const OPENROUTER_NATIVE_CAPABILITY: NativeCapability = Object.freeze({

@@ -8,6 +8,7 @@ import {
 import { checkCertificationEligibility } from './loader.ts';
 import { writeCertification } from './store.ts';
 import { CERTIFICATION_SCHEMA_VERSION, type NativeCertificationArtifact } from './schema.ts';
+import { computeIdentityFingerprint } from '../../model-registry.ts';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -177,6 +178,21 @@ describe('workflow certification scenarios', () => {
     try {
       const artifact: NativeCertificationArtifact = {
         schemaVersion: CERTIFICATION_SCHEMA_VERSION,
+        subject: {
+          registryKey: 'gpt-test',
+          nativeProvider: 'openai',
+          providerId: 'openai',
+          providerModelId: 'gpt-test',
+          providerNativeId: 'gpt-test',
+          identityRevision: 1,
+          identityFingerprint: computeIdentityFingerprint({
+            alias: 'gpt-test',
+            providerNativeId: 'gpt-test',
+            provider: 'openai',
+            revision: 1,
+          }),
+          catalogHash: 'registry',
+        },
         provider: 'openai',
         model: 'gpt-test',
         phase: 'read-only',

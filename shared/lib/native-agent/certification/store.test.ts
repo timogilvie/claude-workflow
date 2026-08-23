@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import {
   CERTIFICATION_SCHEMA_VERSION,
+  type CertificationSubject,
   type NativeCertificationArtifact,
 } from './schema.ts';
 import {
@@ -19,21 +20,45 @@ import {
 import { GLOBAL_CERTIFICATION_ROOT_ENV, buildScopedCertificationPath } from './storage.ts';
 
 const FIXTURE_DIR = new URL('./fixtures', import.meta.url).pathname;
+const VALID_SUBJECT: CertificationSubject = {
+  registryKey: 'claude-sonnet-4-6',
+  nativeProvider: 'anthropic',
+  providerId: 'anthropic',
+  providerModelId: 'claude-sonnet-4-6',
+  providerNativeId: 'claude-sonnet-4-6',
+  identityRevision: 1,
+  identityFingerprint: 'test-fingerprint',
+  catalogHash: 'registry',
+};
 
 function loadFixture(name: string): unknown {
   return JSON.parse(readFileSync(join(FIXTURE_DIR, name), 'utf-8'));
 }
 
 function makeValidArtifact(overrides: Partial<NativeCertificationArtifact> = {}): NativeCertificationArtifact {
+  const provider = overrides.provider ?? 'anthropic';
+  const model = overrides.model ?? 'claude-sonnet-4-6';
   return {
     schemaVersion: CERTIFICATION_SCHEMA_VERSION,
-    provider: 'anthropic',
-    model: 'claude-sonnet-4-6',
+    subject: overrides.subject ?? subjectFor(provider, model),
+    provider,
+    model,
     phase: 'read-only',
     suiteVersion: 'v1',
     certifiedAt: '2026-06-01T00:00:00.000Z',
     scenarios: [{ scenarioId: 'list-files', passed: true }],
     ...overrides,
+  };
+}
+
+function subjectFor(provider: string, model: string): CertificationSubject {
+  return {
+    ...VALID_SUBJECT,
+    registryKey: model,
+    nativeProvider: provider,
+    providerId: provider,
+    providerModelId: model,
+    providerNativeId: model,
   };
 }
 
