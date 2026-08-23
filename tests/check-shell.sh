@@ -102,6 +102,7 @@ for f in \
   "$REPO_DIR"/tests/wavemill-mill-config-preflight.test.sh \
   "$REPO_DIR"/tests/wavemill-mill-router-fallback.test.sh \
   "$REPO_DIR"/tests/backstage-tend-watchdog.test.sh \
+  "$REPO_DIR"/tests/backstage-observer-watchdog.test.sh \
   "$REPO_DIR"/tests/model-inheritance-chain.test.sh \
   "$REPO_DIR"/tests/wavemill-background-jobs-cleanup.test.sh \
   "$REPO_DIR"/tests/global-model-parity.test.sh \
@@ -3152,6 +3153,7 @@ for fixture in \
   "$REPO_DIR/tests/fixtures/lifecycle/integration_window_disabled.sh" \
   "$REPO_DIR/tests/fixtures/lifecycle/integration_window_recovers_missing_tend.sh" \
   "$REPO_DIR/tests/fixtures/lifecycle/integration_window_recovers_missing_observer.sh" \
+  "$REPO_DIR/tests/fixtures/lifecycle/integration_window_idempotent_setup.sh" \
 ; do
   if [[ ! -f "$fixture" ]]; then
     fail "Missing lifecycle fixture $(basename "$fixture")"

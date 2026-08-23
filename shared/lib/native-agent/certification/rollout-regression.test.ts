@@ -8,6 +8,7 @@ import {
   assertRegistryConsistency,
   evaluateRegistryPhaseEligibility,
   ModelValidationError,
+  computeIdentityFingerprint,
   validateNativeCapability,
   type ModelCapabilities,
   type ModelRegistry,
@@ -155,6 +156,7 @@ function writeCertArtifact(
   mkdirSync(dirname(artifactPath), { recursive: true });
   const artifact: NativeCertificationArtifact = {
     schemaVersion: CERTIFICATION_SCHEMA_VERSION,
+    subject: testSubject(provider, model),
     provider,
     model,
     phase: 'patch',
@@ -165,6 +167,24 @@ function writeCertArtifact(
   };
   writeFileSync(artifactPath, JSON.stringify(artifact));
   return artifactPath;
+}
+
+function testSubject(provider: string, model: string): NativeCertificationArtifact['subject'] {
+  return {
+    registryKey: model,
+    nativeProvider: provider,
+    providerId: provider,
+    providerModelId: model,
+    providerNativeId: model,
+    identityRevision: 1,
+    identityFingerprint: computeIdentityFingerprint({
+      alias: model,
+      providerNativeId: model,
+      provider,
+      revision: 1,
+    }),
+    catalogHash: 'registry',
+  };
 }
 
 function writeMalformedArtifact(
@@ -195,7 +215,12 @@ function scenario(
 }
 
 function fixture(name: string): NativeCertificationArtifact {
-  return JSON.parse(readFileSync(join(FIXTURE_DIR, name), 'utf-8')) as NativeCertificationArtifact;
+  const raw = JSON.parse(readFileSync(join(FIXTURE_DIR, name), 'utf-8')) as NativeCertificationArtifact;
+  return {
+    ...raw,
+    schemaVersion: CERTIFICATION_SCHEMA_VERSION,
+    subject: testSubject(raw.provider, raw.model),
+  };
 }
 
 function assertModelValidationMessage(fn: () => void, pattern: RegExp): void {

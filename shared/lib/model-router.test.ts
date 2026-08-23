@@ -9,7 +9,9 @@ import {
   DEFAULT_CERTIFICATION_SUITE_VERSION,
   buildGlobalCertificationPath,
   resolveCertificationStorageIdentity,
+  resolveCertificationSubject,
 } from './native-agent/certification/index.ts';
+import { computeIdentityFingerprint, DEFAULT_MODEL_REGISTRY } from './model-registry.ts';
 
 function writeRepoConfig(repoDir: string, config: unknown): void {
   writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify(config), 'utf-8');
@@ -21,13 +23,46 @@ function useGlobalCertificationRoot(repoDir: string): void {
 
 function writeGlobalCertification(repoDir: string, provider: string, model: string): void {
   useGlobalCertificationRoot(repoDir);
-  const path = buildGlobalCertificationPath(provider, model, DEFAULT_CERTIFICATION_SUITE_VERSION);
+  const identity = (() => {
+    try {
+      return resolveCertificationSubject({
+        provider,
+        model,
+        registry: DEFAULT_MODEL_REGISTRY,
+      });
+    } catch {
+      const storageIdentity = resolveCertificationStorageIdentity(provider, model);
+      return {
+        storageIdentity,
+        subject: {
+          registryKey: model,
+          nativeProvider: provider,
+          providerId: storageIdentity.provider,
+          providerModelId: storageIdentity.model,
+          providerNativeId: model,
+          identityRevision: 1,
+          identityFingerprint: computeIdentityFingerprint({
+            alias: model,
+            providerNativeId: model,
+            provider,
+            revision: 1,
+          }),
+          catalogHash: 'registry',
+        },
+      };
+    }
+  })();
+  const path = buildGlobalCertificationPath(
+    identity.storageIdentity.provider,
+    identity.storageIdentity.model,
+    DEFAULT_CERTIFICATION_SUITE_VERSION,
+  );
   mkdirSync(dirname(path), { recursive: true });
-  const identity = resolveCertificationStorageIdentity(provider, model);
   writeFileSync(path, JSON.stringify({
     schemaVersion: CERTIFICATION_SCHEMA_VERSION,
-    provider: identity.provider,
-    model: identity.model,
+    subject: identity.subject,
+    provider: identity.storageIdentity.provider,
+    model: identity.storageIdentity.model,
     phase: 'workflow',
     suiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
     certifiedAt: '2026-07-10T00:00:00.000Z',

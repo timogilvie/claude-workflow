@@ -12,7 +12,7 @@ import {
   type NativeCertificationArtifact,
 } from './native-agent/certification/index.ts';
 import { runNativeExpansion, NativeExpansionUnavailableError } from './native-expansion.ts';
-import type { ModelRegistry } from './model-registry.ts';
+import { computeIdentityFingerprint, type ModelRegistry } from './model-registry.ts';
 import { createToolRegistry } from './native-agent/tools/registry.ts';
 import { createReadOnlyTools } from './native-agent/tools/read-only.ts';
 import { createGitTools } from './native-agent/tools/git.ts';
@@ -82,6 +82,21 @@ function writeCertification(
   mkdirSync(dirname(path), { recursive: true });
   const artifact: NativeCertificationArtifact = {
     schemaVersion: CERTIFICATION_SCHEMA_VERSION,
+    subject: {
+      registryKey: modelId,
+      nativeProvider: provider,
+      providerId: provider,
+      providerModelId: modelId,
+      providerNativeId: modelId,
+      identityRevision: 1,
+      identityFingerprint: computeIdentityFingerprint({
+        alias: modelId,
+        providerNativeId: modelId,
+        provider,
+        revision: 1,
+      }),
+      catalogHash: 'registry',
+    },
     provider,
     model: modelId,
     phase: 'workflow',

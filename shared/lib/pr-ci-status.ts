@@ -107,7 +107,8 @@ export function normalizeStatusCheckRollup(raw: unknown): NormalizedCheckSummary
 
   raw.forEach((item, index) => {
     const entry = typeof item === 'object' && item !== null ? item as Record<string, unknown> : {};
-    const rawValue = entry.conclusion ?? entry.state ?? entry.status ?? entry.bucket ?? '';
+    const rawValue = [entry.conclusion, entry.state, entry.status, entry.bucket]
+      .find((value) => value != null && String(value).trim() !== '') ?? '';
     const rawStatus = String(rawValue).toUpperCase();
     const name = String(entry.name ?? entry.context ?? `check-${index + 1}`);
     const text = [
@@ -127,6 +128,9 @@ export function normalizeStatusCheckRollup(raw: unknown): NormalizedCheckSummary
       status = 'pending';
     } else if (['FAILURE', 'ERROR', 'TIMED_OUT', 'CANCELLED', 'STARTUP_FAILURE', 'FAIL'].includes(rawStatus)) {
       status = 'failure';
+    }
+    if (status === 'unknown') {
+      console.warn(`[pr-ci-status] Unknown CI check state for "${name}": "${rawStatus}"`);
     }
 
     const check = { name, status, rawStatus, text: text || undefined, detailsUrl, databaseId, details: entry };
@@ -167,8 +171,8 @@ export function evaluateCiChecks(
   const requireChecks = options.requireChecks ?? true;
   const required = uniqueOrdered(requiredContexts);
   const checkNames = new Set(checks.map((check) => check.name));
-  const failing = checks.filter((check) => check.status === 'failure' || check.status === 'unknown').map((check) => check.name);
-  const pending = checks.filter((check) => check.status === 'pending').map((check) => check.name);
+  const failing = checks.filter((check) => check.status === 'failure').map((check) => check.name);
+  const pending = checks.filter((check) => check.status === 'pending' || check.status === 'unknown').map((check) => check.name);
   const passing = checks.filter((check) => ['success', 'neutral', 'skipped'].includes(check.status)).length;
   const missingRequired = required.filter((name) => !checkNames.has(name));
 

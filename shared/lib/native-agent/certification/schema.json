@@ -3,74 +3,211 @@
   "$id": "native-certification-artifact",
   "title": "NativeCertificationArtifact",
   "description": "Native agent certification artifact stored under .wavemill/native-agent-certifications/<provider>/<model>/<suite-version>.json",
-  "type": "object",
-  "required": [
-    "schemaVersion",
-    "provider",
-    "model",
-    "phase",
-    "suiteVersion",
-    "certifiedAt",
-    "scenarios"
-  ],
-  "additionalProperties": false,
-  "properties": {
-    "schemaVersion": {
-      "type": "integer",
-      "const": 2,
-      "description": "Schema version for forward compatibility"
+  "oneOf": [
+    {
+      "$ref": "#/$defs/CurrentArtifact"
     },
-    "provider": {
-      "type": "string",
-      "minLength": 1,
-      "description": "Provider identifier (e.g. anthropic, openai, openrouter)"
-    },
-    "model": {
-      "type": "string",
-      "minLength": 1,
-      "description": "Model identifier (e.g. claude-sonnet-4-6)"
-    },
-    "phase": {
-      "type": "string",
-      "enum": ["read-only", "patch", "workflow"],
-      "description": "The certified phase level; ordering is read-only < patch < workflow"
-    },
-    "suiteVersion": {
-      "type": "string",
-      "minLength": 1,
-      "description": "Suite version string matching the storage path segment"
-    },
-    "certifiedAt": {
-      "type": "string",
-      "format": "date-time",
-      "description": "ISO 8601 datetime when certification was completed"
-    },
-    "expiresAt": {
-      "type": "string",
-      "format": "date-time",
-      "description": "Optional explicit expiry datetime; takes precedence over derived TTL"
-    },
-    "scenarios": {
-      "type": "array",
-      "description": "Per-scenario results from the certification run",
-      "items": {
-        "$ref": "#/$defs/ScenarioResult"
-      }
-    },
-    "knownLimitations": {
-      "type": "array",
-      "description": "Optional known limitations or caveats for this certification",
-      "items": {
-        "type": "string"
-      }
-    },
-    "totalRetryCount": {
-      "type": "integer",
-      "minimum": 0,
-      "description": "Total retry count across all scenarios"
+    {
+      "$ref": "#/$defs/HistoricalV2Artifact"
     }
-  },
+  ],
   "$defs": {
+    "CurrentArtifact": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "subject",
+        "provider",
+        "model",
+        "phase",
+        "suiteVersion",
+        "certifiedAt",
+        "scenarios"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": {
+          "type": "integer",
+          "const": 3
+        },
+        "subject": {
+          "$ref": "#/$defs/CertificationSubject"
+        },
+        "provider": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "phase": {
+          "type": "string",
+          "enum": ["read-only", "patch", "workflow"]
+        },
+        "suiteVersion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "certifiedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "scenarios": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ScenarioResult"
+          }
+        },
+        "knownLimitations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "totalRetryCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "liveSmokeEvidence": {
+          "$ref": "#/$defs/LiveSmokeEvidence"
+        }
+      }
+    },
+    "HistoricalV2Artifact": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "provider",
+        "model",
+        "phase",
+        "suiteVersion",
+        "certifiedAt",
+        "scenarios"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": {
+          "type": "integer",
+          "const": 2
+        },
+        "provider": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "phase": {
+          "type": "string",
+          "enum": ["read-only", "patch", "workflow"]
+        },
+        "suiteVersion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "certifiedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "scenarios": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ScenarioResult"
+          }
+        },
+        "knownLimitations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "totalRetryCount": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "CertificationSubject": {
+      "type": "object",
+      "required": [
+        "registryKey",
+        "nativeProvider",
+        "providerId",
+        "providerModelId",
+        "providerNativeId",
+        "identityRevision",
+        "identityFingerprint",
+        "catalogHash"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "registryKey": {
+          "type": "string",
+          "minLength": 1
+        },
+        "nativeProvider": {
+          "type": "string",
+          "minLength": 1
+        },
+        "providerId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "providerModelId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "providerNativeId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "identityRevision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "identityFingerprint": {
+          "type": "string",
+          "minLength": 1
+        },
+        "catalogHash": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "LiveSmokeEvidence": {
+      "type": "object",
+      "required": ["requestedWireId", "catalogHash", "succeededAt"],
+      "additionalProperties": false,
+      "properties": {
+        "requestedWireId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "providerReturnedModel": {
+          "type": "string",
+          "minLength": 1
+        },
+        "catalogHash": {
+          "type": "string",
+          "minLength": 1
+        },
+        "succeededAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
     "ScenarioResult": {
       "type": "object",
       "required": ["scenarioId", "passed"],
@@ -78,36 +215,29 @@
       "properties": {
         "scenarioId": {
           "type": "string",
-          "minLength": 1,
-          "description": "Stable scenario identifier within the suite"
+          "minLength": 1
         },
         "passed": {
-          "type": "boolean",
-          "description": "Whether this scenario passed"
+          "type": "boolean"
         },
         "failureMessage": {
-          "type": "string",
-          "description": "Optional human-readable failure message"
+          "type": "string"
         },
         "retryCount": {
           "type": "integer",
-          "minimum": 0,
-          "description": "Number of attempts made before final result"
+          "minimum": 0
         },
         "attempts": {
           "type": "integer",
-          "minimum": 1,
-          "description": "Total attempts executed, including the initial attempt"
+          "minimum": 1
         },
         "finalAttemptStatus": {
           "type": "string",
-          "enum": ["pass", "fail", "unsupported", "provider-flake"],
-          "description": "Final outcome kind from the last attempt"
+          "enum": ["pass", "fail", "unsupported", "provider-flake"]
         },
         "failureClass": {
           "type": "string",
-          "enum": ["deterministic_failure", "provider_flake", "unsupported_capability"],
-          "description": "Failure classification for non-passing scenarios"
+          "enum": ["deterministic_failure", "provider_flake", "unsupported_capability"]
         }
       }
     }

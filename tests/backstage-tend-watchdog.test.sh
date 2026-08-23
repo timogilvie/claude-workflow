@@ -189,5 +189,9 @@ state_mutate "$HEALTH_FILE" '.services.tend.failureCount = 2 | .services.tend.la
 wavemill_write_backstage_service_health "$HEALTH_FILE" "tend" "healthy" "ok" 0 "" "%9" "$(old_iso 1)"
 assert_eq "merged failure count" "2" "$(jq -r '.services.tend.failureCount' "$HEALTH_FILE")"
 assert_eq "merged last error" "transient: github 503" "$(jq -r '.services.tend.lastError' "$HEALTH_FILE")"
+assert_eq "omitted instance count is null" "null" "$(jq -r '.services.tend.instanceCount' "$HEALTH_FILE")"
+
+wavemill_write_backstage_service_health "$HEALTH_FILE" "tend" "healthy" "ok" 0 "" "%9" "$(old_iso 1)" 1
+assert_eq "explicit instance count is written" "1" "$(jq -r '.services.tend.instanceCount' "$HEALTH_FILE")"
 
 echo "backstage tend watchdog tests passed"

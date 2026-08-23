@@ -8,6 +8,7 @@
  */
 
 import type { EvalRecord } from './eval-schema.ts';
+import { evaluateEvidenceEligibility, partitionEvidence } from './model-evidence-policy.ts';
 import { redactText } from './text-redaction.ts';
 export { redactText } from './text-redaction.ts';
 
@@ -29,6 +30,8 @@ export interface ExportRow {
   // Model
   model_id: string;
   model_version: string;
+  model_identity_status: string;
+  evidence_hold_reasons: string;
 
   // Outcome (target variable)
   score: number;
@@ -133,6 +136,8 @@ const COLUMNS: (keyof ExportRow)[] = [
   'prompt_line_count',
   'model_id',
   'model_version',
+  'model_identity_status',
+  'evidence_hold_reasons',
   'score',
   'score_band',
   'time_seconds',
@@ -271,6 +276,10 @@ export function flattenRecord(
 
     model_id: record.modelId,
     model_version: record.modelVersion,
+    model_identity_status: record.modelIdentityAttribution
+      ? [...new Set(Object.values(record.modelIdentityAttribution.roles).map((role) => role?.identityStatus).filter(Boolean))].join(',')
+      : '',
+    evidence_hold_reasons: JSON.stringify(evaluateEvidenceEligibility(record, 'training_export').reasons),
 
     score: record.score,
     score_band: record.scoreBand,
@@ -402,6 +411,7 @@ export interface ExportOptions {
   format: ExportFormat;
   records: EvalRecord[];
   redact?: boolean;
+  includeHeld?: boolean;
 }
 
 /**
@@ -410,7 +420,10 @@ export interface ExportOptions {
  * @returns Serialized string in the requested format
  */
 export function exportEvalDataset(options: ExportOptions): string {
-  const rows = options.records.map((r) =>
+  const records = options.includeHeld
+    ? options.records
+    : partitionEvidence(options.records, 'training_export').eligible;
+  const rows = records.map((r) =>
     flattenRecord(r, { redact: options.redact }),
   );
 

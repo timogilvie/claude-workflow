@@ -10,6 +10,7 @@ import {
   CERTIFICATION_SCHEMA_VERSION,
   DEFAULT_CERTIFICATION_SUITE_VERSION,
   GLOBAL_CERTIFICATION_ROOT_ENV,
+  resolveCertificationSubject,
   type CertificationPhase,
   type NativeCertificationArtifact,
 } from '../shared/lib/native-agent/certification/index.ts';
@@ -146,7 +147,7 @@ function runFixtureCase(
   const registry = makeRegistry(fixture.provider, fixture.modelId, now);
 
   if (fixture.artifact) {
-    writeArtifact(repoDir, fixture.provider, fixture.modelId, now, fixture.artifact);
+    writeArtifact(repoDir, fixture.provider, fixture.modelId, registry, now, fixture.artifact);
   }
 
   const reportRow = buildModelCertificationReport({ repoDir, registry, now })
@@ -254,15 +255,22 @@ function writeArtifact(
   _repoDir: string,
   provider: NativeProviderName,
   modelId: string,
+  registry: ModelRegistry,
   now: Date,
   overrides: Partial<NativeCertificationArtifact>,
 ): void {
-  const path = buildGlobalCertificationPath(provider, modelId, DEFAULT_CERTIFICATION_SUITE_VERSION);
+  const identity = resolveCertificationSubject({ provider, model: modelId, registry });
+  const path = buildGlobalCertificationPath(
+    identity.storageIdentity.provider,
+    identity.storageIdentity.model,
+    DEFAULT_CERTIFICATION_SUITE_VERSION,
+  );
   mkdirSync(dirname(path), { recursive: true });
   const artifact: NativeCertificationArtifact = {
     schemaVersion: CERTIFICATION_SCHEMA_VERSION,
-    provider,
-    model: modelId,
+    subject: identity.subject,
+    provider: identity.storageIdentity.provider,
+    model: identity.storageIdentity.model,
     phase: 'workflow',
     suiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
     certifiedAt: new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString(),

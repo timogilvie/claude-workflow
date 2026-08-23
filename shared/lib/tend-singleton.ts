@@ -10,14 +10,21 @@ export type TendLockResult = {
   release: () => void;
 };
 
+export type ServiceLockResult = TendLockResult;
+
 type AcquireTendLockOptions = {
   repoDir: string;
   session?: string;
   logger?: (message: string) => void;
 };
 
+type AcquireServiceLockOptions = AcquireTendLockOptions & {
+  service: string;
+};
+
 const DEFAULT_SESSION = 'default';
 const SESSION_PATTERN = /^[A-Za-z0-9_.-]+$/;
+const SERVICE_PATTERN = /^[a-z][a-z0-9-]*$/;
 
 function noop(): void {}
 
@@ -28,16 +35,23 @@ export function computeLockKey(repoDir: string, session?: string): string {
   return `${repoHash}-${sessionKey}`;
 }
 
-export function getLockPath(repoDir: string, lockKey: string): string {
-  return path.join(repoDir, '.wavemill', 'locks', `tend-${lockKey}.lock`);
+export function getServiceLockPath(repoDir: string, service: string, lockKey: string): string {
+  return path.join(repoDir, '.wavemill', 'locks', `${service}-${lockKey}.lock`);
 }
 
-function validateOptions(repoDir: string, session?: string): void {
+export function getLockPath(repoDir: string, lockKey: string): string {
+  return getServiceLockPath(repoDir, 'tend', lockKey);
+}
+
+function validateOptions(service: string, repoDir: string, session?: string): void {
+  if (!SERVICE_PATTERN.test(service)) {
+    throw new Error(`${service || 'service'}-singleton: invalid service "${service}"`);
+  }
   if (!repoDir || !repoDir.trim()) {
-    throw new Error('tend-singleton: repoDir is required');
+    throw new Error(`${service}-singleton: repoDir is required`);
   }
   if (session !== undefined && !SESSION_PATTERN.test(session)) {
-    throw new Error(`tend-singleton: invalid session "${session}"`);
+    throw new Error(`${service}-singleton: invalid session "${session}"`);
   }
 }
 
@@ -111,6 +125,7 @@ function registerCleanup(lockPath: string, ownerPid: number): () => void {
 
 function logOutcome(
   logger: (message: string) => void,
+  service: string,
   repoDir: string,
   session: string,
   outcome: TendLockOutcome,
@@ -120,7 +135,7 @@ function logOutcome(
   if (holderPid !== undefined) {
     details.push(`pid=${holderPid}`);
   }
-  logger(`[tend-singleton] ${outcome} ${details.join(' ')}`);
+  logger(`[${service}-singleton] ${outcome} ${details.join(' ')}`);
 }
 
 function tryCreateLock(lockPath: string, ownerPid: number): (() => void) | null {
@@ -141,31 +156,37 @@ function tryCreateLock(lockPath: string, ownerPid: number): (() => void) | null 
   }
 }
 
-export function acquireTendLock({ repoDir, session, logger = console.error }: AcquireTendLockOptions): TendLockResult {
-  if (process.env.WAVEMILL_TEND_SINGLETON_DISABLE === '1') {
+/**
+ * Acquires a singleton lock scoped by service, repository, and tmux session.
+ * The session remains part of the key so separate mill sessions for one repo do
+ * not starve each other, while duplicate loops in the same session are refused.
+ */
+export function acquireServiceLock({ service, repoDir, session, logger = console.error }: AcquireServiceLockOptions): ServiceLockResult {
+  validateOptions(service, repoDir, session);
+
+  const envName = `WAVEMILL_${service.toUpperCase().replace(/-/g, '_')}_SINGLETON_DISABLE`;
+  if (process.env[envName] === '1') {
     return { outcome: 'started', release: noop };
   }
-
-  validateOptions(repoDir, session);
 
   const resolvedRepoDir = path.resolve(repoDir);
   const sessionKey = session ?? DEFAULT_SESSION;
   const lockKey = computeLockKey(resolvedRepoDir, sessionKey);
-  const lockPath = getLockPath(resolvedRepoDir, lockKey);
+  const lockPath = getServiceLockPath(resolvedRepoDir, service, lockKey);
   mkdirSync(path.dirname(lockPath), { recursive: true });
 
   const release = tryCreateLock(lockPath, process.pid);
   if (release) {
-    logOutcome(logger, resolvedRepoDir, sessionKey, 'started', process.pid);
+    logOutcome(logger, service, resolvedRepoDir, sessionKey, 'started', process.pid);
     return { outcome: 'started', release };
   }
 
-  const skip = (holderPid?: number): TendLockResult => {
-    logOutcome(logger, resolvedRepoDir, sessionKey, 'skipped', holderPid);
+  const skip = (holderPid?: number): ServiceLockResult => {
+    logOutcome(logger, service, resolvedRepoDir, sessionKey, 'skipped', holderPid);
     return { outcome: 'skipped', holderPid, release: noop };
   };
 
-  const recover = (holderPid?: number): TendLockResult => {
+  const recover = (holderPid?: number): ServiceLockResult => {
     try {
       unlinkSync(lockPath);
     } catch (error) {
@@ -180,7 +201,7 @@ export function acquireTendLock({ repoDir, session, logger = console.error }: Ac
       return skip(holderPid);
     }
 
-    logOutcome(logger, resolvedRepoDir, sessionKey, 'recovered-stale', holderPid);
+    logOutcome(logger, service, resolvedRepoDir, sessionKey, 'recovered-stale', holderPid);
     return {
       outcome: 'recovered-stale',
       holderPid,
@@ -196,7 +217,7 @@ export function acquireTendLock({ repoDir, session, logger = console.error }: Ac
     if (code === 'ENOENT') {
       const retriedRelease = tryCreateLock(lockPath, process.pid);
       if (retriedRelease) {
-        logOutcome(logger, resolvedRepoDir, sessionKey, 'started', process.pid);
+        logOutcome(logger, service, resolvedRepoDir, sessionKey, 'started', process.pid);
         return { outcome: 'started', release: retriedRelease };
       }
       return skip();
@@ -213,4 +234,12 @@ export function acquireTendLock({ repoDir, session, logger = console.error }: Ac
   }
 
   return skip(holderPid);
+}
+
+export function acquireTendLock(options: AcquireTendLockOptions): TendLockResult {
+  return acquireServiceLock({ service: 'tend', ...options });
+}
+
+export function acquireObserverLock(options: AcquireTendLockOptions): ServiceLockResult {
+  return acquireServiceLock({ service: 'observer', ...options });
 }

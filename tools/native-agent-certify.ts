@@ -17,7 +17,9 @@ import { runTool } from '../shared/lib/tool-runner.ts';
 import {
   PHASE_ORDER,
   CERTIFICATION_SCHEMA_VERSION,
+  type CertificationSubject,
   type CertificationPhase,
+  type LiveSmokeEvidence,
   type NativeCertificationArtifact,
 } from '../shared/lib/native-agent/certification/schema.ts';
 import {
@@ -29,10 +31,11 @@ import {
   toArtifactScenario,
   type RunScenariosOptions,
 } from '../shared/lib/native-agent/certification/scenario-runner.ts';
-import { resolveCertificationStorageIdentity } from '../shared/lib/native-agent/certification/identity.ts';
+import { resolveCertificationSubject } from '../shared/lib/native-agent/certification/identity.ts';
 import { writeGlobalCertification } from '../shared/lib/native-agent/certification/store.ts';
 import { getEffectiveRegistry, type ModelRegistry, type NativeProviderName } from '../shared/lib/model-registry.ts';
 import { resolveWavemillAliasFromOpenRouterId } from '../shared/lib/openrouter-catalog.ts';
+import { runOpenRouterSmoke, type SmokeReport } from '../shared/lib/openrouter-smoke.ts';
 
 const NATIVE_PROVIDERS: NativeProviderName[] = ['openai', 'openrouter'];
 
@@ -44,8 +47,10 @@ export interface CertifyOptions {
   dryRun?: boolean;
   registry?: ModelRegistry;
   runScenariosFn?: typeof runScenarios;
+  runOpenRouterSmokeFn?: typeof runOpenRouterSmoke;
   writeCertificationFn?: typeof writeGlobalCertification | ((repoDir: string, record: NativeCertificationArtifact) => string);
   now?: () => Date;
+  env?: NodeJS.ProcessEnv;
 }
 
 export interface CertifyResult {
@@ -58,14 +63,18 @@ export interface CertifyResult {
   liveCertifiable: boolean;
   artifactPath?: string;
   artifactScope?: 'global';
+  subject?: CertificationSubject;
+  liveSmokeEvidence?: LiveSmokeEvidence;
   scenarios: Array<{ scenarioId: string; status: string; detail?: string }>;
   knownLimitations: string[];
 }
 
 export async function certifyNativeAgent(opts: CertifyOptions): Promise<CertifyResult> {
   const runScenariosFn = opts.runScenariosFn ?? runScenarios;
+  const runOpenRouterSmokeFn = opts.runOpenRouterSmokeFn ?? runOpenRouterSmoke;
   const writeCertificationFn = opts.writeCertificationFn ?? writeGlobalCertification;
   const now = opts.now ?? (() => new Date());
+  const env = opts.env ?? process.env;
   const dryRun = opts.dryRun ?? false;
 
   const baseRegistry = opts.registry ?? getEffectiveRegistry(opts.repoDir);
@@ -100,6 +109,11 @@ export async function certifyNativeAgent(opts: CertifyOptions): Promise<CertifyR
 
   const transport = nativeCapability.piTransportKind;
   const suiteVersion = DEFAULT_CERTIFICATION_SUITE_VERSION;
+  const resolvedSubject = resolveCertificationSubject({
+    provider: opts.provider,
+    model: registryModelId,
+    registry: baseRegistry,
+  });
 
   // Filter scenarios to those whose phase is satisfied by the requested phase
   const allScenarios = getDefaultScenarios();
@@ -125,13 +139,24 @@ export async function certifyNativeAgent(opts: CertifyOptions): Promise<CertifyR
   const liveCertifiable = report.liveCertifiable && hasRequestedPhaseScenario;
 
   let artifactPath: string | undefined;
+  let liveSmokeEvidence: LiveSmokeEvidence | undefined;
 
   if (liveCertifiable && !dryRun) {
-    const storageIdentity = resolveCertificationStorageIdentity(opts.provider, opts.model);
+    if (opts.provider === 'openrouter' && modelEntry?.identity?.status === 'provisional') {
+      liveSmokeEvidence = await requireFreshOpenRouterSmokeEvidence({
+        subject: resolvedSubject.subject,
+        registryKey: registryModelId,
+        registry,
+        env,
+        now,
+        runOpenRouterSmokeFn,
+      });
+    }
     const artifact: NativeCertificationArtifact = {
       schemaVersion: CERTIFICATION_SCHEMA_VERSION,
-      provider: storageIdentity.provider,
-      model: storageIdentity.model,
+      subject: resolvedSubject.subject,
+      provider: resolvedSubject.storageIdentity.provider,
+      model: resolvedSubject.storageIdentity.model,
       phase: opts.phase,
       suiteVersion,
       certifiedAt: now().toISOString(),
@@ -139,6 +164,7 @@ export async function certifyNativeAgent(opts: CertifyOptions): Promise<CertifyR
         .filter((result) => result.status !== 'not-run')
         .map(toArtifactScenario),
       ...(knownLimitations.length > 0 ? { knownLimitations } : {}),
+      ...(liveSmokeEvidence ? { liveSmokeEvidence } : {}),
     };
     artifactPath = writeCertificationFn.length >= 2
       ? (writeCertificationFn as (repoDir: string, record: NativeCertificationArtifact) => string)(opts.repoDir, artifact)
@@ -155,6 +181,8 @@ export async function certifyNativeAgent(opts: CertifyOptions): Promise<CertifyR
     liveCertifiable,
     artifactPath,
     ...(artifactPath ? { artifactScope: 'global' as const } : {}),
+    subject: resolvedSubject.subject,
+    ...(liveSmokeEvidence ? { liveSmokeEvidence } : {}),
     scenarios: report.results.map(r => ({
       scenarioId: r.scenarioId,
       status: r.status,
@@ -162,6 +190,79 @@ export async function certifyNativeAgent(opts: CertifyOptions): Promise<CertifyR
     })),
     knownLimitations,
   };
+}
+
+async function requireFreshOpenRouterSmokeEvidence(input: {
+  subject: CertificationSubject;
+  registryKey: string;
+  registry: ModelRegistry;
+  env: NodeJS.ProcessEnv;
+  now: () => Date;
+  runOpenRouterSmokeFn: typeof runOpenRouterSmoke;
+}): Promise<LiveSmokeEvidence> {
+  const consent = input.env.OPENROUTER_LIVE_SMOKE?.trim().toLowerCase();
+  if (consent !== '1' && consent !== 'true') {
+    throw Object.assign(
+      new Error('OPENROUTER_LIVE_SMOKE=1 is required before publishing a provisional OpenRouter certification.'),
+      { exitCode: 1 },
+    );
+  }
+  const apiKey = input.env.OPENROUTER_API_KEY?.trim();
+  if (!apiKey) {
+    throw Object.assign(
+      new Error('OPENROUTER_API_KEY is required before publishing a provisional OpenRouter certification.'),
+      { exitCode: 1 },
+    );
+  }
+
+  const model = input.registry.models[input.registryKey];
+  const supported = model?.supportedModel;
+  const report = await input.runOpenRouterSmokeFn({
+    entries: [{
+      wavemillAlias: supported?.wavemillAlias ?? input.registryKey,
+      openrouterId: input.subject.providerNativeId,
+      family: model?.identity?.family === 'unknown' ? 'unknown' : model?.identity?.family ?? 'unknown',
+      contextTokens: model?.contextWindowTokens ?? null,
+      pricing: {
+        inputPerMTok: model?.pricing?.inputCostPerMTok ?? null,
+        outputPerMTok: model?.pricing?.outputCostPerMTok ?? null,
+        cacheReadPerMTok: model?.pricing?.cacheReadCostPerMTok ?? null,
+        cacheWritePerMTok: model?.pricing?.cacheWriteCostPerMTok ?? null,
+      },
+      roleEligibility: supported?.stages?.filter((stage): stage is 'planning' | 'coding' | 'review' =>
+        stage === 'planning' || stage === 'coding' || stage === 'review') ?? [],
+      status: model?.identity?.status === 'provisional' ? 'provisional' : 'active',
+      priorityTier: 0,
+      resolvedAt: input.now().toISOString(),
+    }],
+    apiKey,
+    now: input.now,
+    catalogHash: input.subject.catalogHash,
+  });
+  const smoke = report[0];
+  if (!smoke || smoke.status !== 'ok') {
+    throw Object.assign(
+      new Error(`OpenRouter live smoke failed for ${input.subject.providerNativeId}: ${formatSmokeFailure(smoke)}`),
+      { exitCode: 1 },
+    );
+  }
+  if (smoke.requestedWireId !== input.subject.providerNativeId || smoke.catalogHash !== input.subject.catalogHash) {
+    throw Object.assign(
+      new Error('OpenRouter live smoke evidence did not match the current certification subject.'),
+      { exitCode: 1 },
+    );
+  }
+  return {
+    requestedWireId: smoke.requestedWireId,
+    ...(smoke.providerReturnedModel ? { providerReturnedModel: smoke.providerReturnedModel } : {}),
+    catalogHash: smoke.catalogHash,
+    succeededAt: smoke.checkedAt,
+  };
+}
+
+function formatSmokeFailure(smoke: SmokeReport | undefined): string {
+  if (!smoke) return 'no smoke result';
+  return smoke.detail ? `${smoke.category ?? 'blocker'}: ${smoke.detail}` : smoke.category ?? 'blocker';
 }
 
 function resolveRegistryModelId(

@@ -47,6 +47,7 @@ TESTS=(
   wavemill-guards.test.sh
   wavemill-status.test.sh
   backstage-tend-watchdog.test.sh
+  backstage-observer-watchdog.test.sh
   control-layout.test.sh
   challenge-comparison-state.test.sh
   challenge-running-state.test.sh

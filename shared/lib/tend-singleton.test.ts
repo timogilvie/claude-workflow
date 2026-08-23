@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, it } from 'node:test';
-import { acquireTendLock, computeLockKey, getLockPath } from './tend-singleton.ts';
+import { acquireObserverLock, acquireTendLock, computeLockKey, getLockPath, getServiceLockPath } from './tend-singleton.ts';
 
 const tempDirs: string[] = [];
 
@@ -25,6 +25,7 @@ function captureLogs(): { logs: string[]; logger: (message: string) => void } {
 
 afterEach(() => {
   delete process.env.WAVEMILL_TEND_SINGLETON_DISABLE;
+  delete process.env.WAVEMILL_OBSERVER_SINGLETON_DISABLE;
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -138,6 +139,37 @@ describe('tend-singleton', () => {
     const repoDir = createRepoDir();
 
     const result = acquireTendLock({ repoDir, session: 'session-a', logger: () => {} });
+    assert.equal(result.outcome, 'started');
+    assert.equal(result.release(), undefined);
+  });
+
+  it('uses separate lock files for tend and observer in the same repo/session', () => {
+    const repoDir = createRepoDir();
+    const lockKey = computeLockKey(repoDir, 'session-a');
+
+    assert.equal(getLockPath(repoDir, lockKey), getServiceLockPath(repoDir, 'tend', lockKey));
+    assert.notEqual(getServiceLockPath(repoDir, 'tend', lockKey), getServiceLockPath(repoDir, 'observer', lockKey));
+  });
+
+  it('observer duplicate acquisition skips when the recorded holder pid is alive', () => {
+    const repoDir = createRepoDir();
+    const { logs, logger } = captureLogs();
+    const lockPath = getServiceLockPath(repoDir, 'observer', computeLockKey(repoDir, 'session-a'));
+
+    mkdirSync(path.dirname(lockPath), { recursive: true });
+    writeFileSync(lockPath, `${process.pid}\n`, 'utf-8');
+
+    const result = acquireObserverLock({ repoDir, session: 'session-a', logger });
+    assert.equal(result.outcome, 'skipped');
+    assert.equal(result.holderPid, process.pid);
+    assert.match(logs[0], /\[observer-singleton\] skipped /);
+  });
+
+  it('disables observer singleton behavior when the observer escape hatch is set', () => {
+    process.env.WAVEMILL_OBSERVER_SINGLETON_DISABLE = '1';
+    const repoDir = createRepoDir();
+
+    const result = acquireObserverLock({ repoDir, session: 'session-a', logger: () => {} });
     assert.equal(result.outcome, 'started');
     assert.equal(result.release(), undefined);
   });

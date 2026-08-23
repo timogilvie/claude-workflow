@@ -12,6 +12,7 @@ import {
   loadLaunchPriorityFixture,
   loadLaunchPriorityList,
   normalizeCatalog,
+  validatePromotionPricing,
   OPENROUTER_MODELS_URL,
   resolveOpenRouterModelIdentity,
   resolveWavemillAliasFromOpenRouterId,
@@ -396,6 +397,91 @@ describe('normalizeCatalog', () => {
     assert.equal(entries.length, 1);
     assert.equal(entries[0]?.pricing.inputPerMTok, null);
     assert.equal(entries[0]?.pricing.outputPerMTok, null);
+    assert.equal(entries[0]?.pricing.cacheReadPerMTok, null);
+    assert.equal(entries[0]?.pricing.cacheWritePerMTok, null);
+  });
+
+  it('normalizes all advertised pricing dimensions and preserves explicit zero', () => {
+    const list = [
+      lp({
+        wavemillAlias: 'priced-model',
+        openrouterId: 'vendor/priced',
+      }),
+    ];
+    const map = buildOpenRouterMap([
+      {
+        id: 'vendor/priced',
+        pricing: {
+          prompt: '0.000001',
+          completion: '0.000002',
+          input_cache_read: '0',
+          input_cache_write: 0,
+        },
+      },
+    ]);
+    const { entries, blockers } = normalizeCatalog(list, map, { resolvedAt: FIXED_RESOLVED_AT });
+
+    assert.equal(blockers.length, 0);
+    assert.deepEqual(entries[0]?.pricing, {
+      inputPerMTok: 1,
+      outputPerMTok: 2,
+      cacheReadPerMTok: 0,
+      cacheWritePerMTok: 0,
+    });
+  });
+
+  it('preserves absent cache prices separately from advertised zero', () => {
+    const list = [
+      lp({
+        wavemillAlias: 'base-priced-model',
+        openrouterId: 'vendor/base-priced',
+      }),
+    ];
+    const map = buildOpenRouterMap([
+      {
+        id: 'vendor/base-priced',
+        pricing: {
+          prompt: '0.000001',
+          completion: '0.000002',
+        },
+      },
+    ]);
+    const { entries, blockers } = normalizeCatalog(list, map, { resolvedAt: FIXED_RESOLVED_AT });
+
+    assert.equal(blockers.length, 0);
+    assert.deepEqual(entries[0]?.pricing, {
+      inputPerMTok: 1,
+      outputPerMTok: 2,
+      cacheReadPerMTok: null,
+      cacheWritePerMTok: null,
+    });
+  });
+
+  it('blocks malformed, non-finite, and negative advertised pricing', () => {
+    const cases: Array<[string, OpenRouterModel['pricing']]> = [
+      ['negative', { prompt: '-0.000001', completion: '0.000002' }],
+      ['nan', { prompt: 'NaN', completion: '0.000002' }],
+      ['infinite', { prompt: Infinity, completion: '0.000002' }],
+      ['malformed', { prompt: 'abc', completion: '0.000002' }],
+      ['empty', { prompt: '', completion: '0.000002' }],
+      ['wrong-type', { prompt: true as unknown as number, completion: '0.000002' }],
+    ];
+
+    for (const [name, pricing] of cases) {
+      const list = [
+        lp({
+          wavemillAlias: `bad-${name}`,
+          openrouterId: `vendor/bad-${name}`,
+        }),
+      ];
+      const map = buildOpenRouterMap([{ id: `vendor/bad-${name}`, pricing }]);
+      const { entries, blockers } = normalizeCatalog(list, map, { resolvedAt: FIXED_RESOLVED_AT });
+
+      assert.equal(entries.length, 0, name);
+      assert.equal(blockers.length, 1, name);
+      assert.equal(blockers[0]?.reason, 'invalid_pricing', name);
+      assert.match(blockers[0]?.detail ?? '', /pricing\.inputPerMTok/, name);
+    }
   });
 
   it('falls back to top_provider.context_length when context_length is absent', () => {
@@ -462,7 +548,7 @@ describe('buildCatalogSnapshot', () => {
           openrouterId: 'v/m',
           family: 'qwen',
           contextTokens: 1024,
-          pricing: { inputPerMTok: 1, outputPerMTok: 2 },
+          pricing: { inputPerMTok: 1, outputPerMTok: 2, cacheReadPerMTok: null, cacheWritePerMTok: null },
           roleEligibility: ['coding'],
           status: 'active',
           priorityTier: 1,
@@ -477,6 +563,95 @@ describe('buildCatalogSnapshot', () => {
     const second = serializeSnapshot(snapshotA);
     assert.equal(first, second);
     assert.match(first, /"schemaVersion": "1"/);
+  });
+});
+
+describe('validatePromotionPricing', () => {
+  it('accepts finite matching prices for advertised provider dimensions', () => {
+    const result = validatePromotionPricing(
+      {
+        inputPerMTok: 1,
+        outputPerMTok: 2,
+        cacheReadPerMTok: null,
+        cacheWritePerMTok: null,
+      },
+      {
+        pricing: {
+          inputPerMTok: 1,
+          outputPerMTok: 2,
+          cacheReadPerMTok: null,
+          cacheWritePerMTok: null,
+        },
+      },
+    );
+
+    assert.deepEqual(result, { ok: true, errors: [] });
+  });
+
+  it('requires advertised cache prices to be present and exact', () => {
+    const result = validatePromotionPricing(
+      {
+        inputPerMTok: 1,
+        outputPerMTok: 2,
+        cacheReadPerMTok: null,
+        cacheWritePerMTok: 1.25,
+      },
+      {
+        pricing: {
+          inputPerMTok: 1,
+          outputPerMTok: 2,
+          cacheReadPerMTok: 0.1,
+          cacheWritePerMTok: 1.25,
+        },
+      },
+    );
+
+    assert.equal(result.ok, false);
+    assert.deepEqual(result.errors, ['cacheReadPerMTok must be provided for promotion']);
+  });
+
+  it('rejects missing catalog input or output pricing for promotion', () => {
+    const result = validatePromotionPricing(
+      {
+        inputPerMTok: 0,
+        outputPerMTok: 2,
+        cacheReadPerMTok: null,
+        cacheWritePerMTok: null,
+      },
+      {
+        pricing: {
+          inputPerMTok: null,
+          outputPerMTok: 2,
+          cacheReadPerMTok: null,
+          cacheWritePerMTok: null,
+        },
+      },
+    );
+
+    assert.equal(result.ok, false);
+    assert.deepEqual(result.errors, ['inputPerMTok must be advertised by the catalog for promotion']);
+  });
+
+  it('rejects fallback-derived cache prices when the provider omits cache pricing', () => {
+    const result = validatePromotionPricing(
+      {
+        inputPerMTok: 1,
+        outputPerMTok: 2,
+        cacheReadPerMTok: 0.1,
+        cacheWritePerMTok: null,
+      },
+      {
+        pricing: {
+          inputPerMTok: 1,
+          outputPerMTok: 2,
+          cacheReadPerMTok: null,
+          cacheWritePerMTok: null,
+        },
+      },
+    );
+
+    assert.equal(result.ok, false);
+    assert.deepEqual(result.errors, ['cacheReadPerMTok mismatch: spec=0.1 catalog=null']);
   });
 });
 
