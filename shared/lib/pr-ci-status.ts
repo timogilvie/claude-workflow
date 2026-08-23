@@ -129,6 +129,9 @@ export function normalizeStatusCheckRollup(raw: unknown): NormalizedCheckSummary
     } else if (['FAILURE', 'ERROR', 'TIMED_OUT', 'CANCELLED', 'STARTUP_FAILURE', 'FAIL'].includes(rawStatus)) {
       status = 'failure';
     }
+    if (status === 'unknown') {
+      console.warn(`[pr-ci-status] Unknown CI check state for "${name}": "${rawStatus}"`);
+    }
 
     const check = { name, status, rawStatus, text: text || undefined, detailsUrl, databaseId, details: entry };
     const existing = byName.get(name);
@@ -168,8 +171,8 @@ export function evaluateCiChecks(
   const requireChecks = options.requireChecks ?? true;
   const required = uniqueOrdered(requiredContexts);
   const checkNames = new Set(checks.map((check) => check.name));
-  const failing = checks.filter((check) => check.status === 'failure' || check.status === 'unknown').map((check) => check.name);
-  const pending = checks.filter((check) => check.status === 'pending').map((check) => check.name);
+  const failing = checks.filter((check) => check.status === 'failure').map((check) => check.name);
+  const pending = checks.filter((check) => check.status === 'pending' || check.status === 'unknown').map((check) => check.name);
   const passing = checks.filter((check) => ['success', 'neutral', 'skipped'].includes(check.status)).length;
   const missingRequired = required.filter((name) => !checkNames.has(name));
 

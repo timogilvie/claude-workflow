@@ -35,6 +35,46 @@ test('optional failing check fails even when required checks pass', () => {
   assert.deepEqual(result.failing, ['Optional Smoke']);
 });
 
+test('failure-set states fail CI evaluation', () => {
+  const result = evaluateCiChecks(
+    checks([
+      { name: 'Shell and Unit Tests', conclusion: 'SUCCESS' },
+      { name: 'Flaky Integration', conclusion: 'TIMED_OUT' },
+    ]),
+    ['Shell and Unit Tests'],
+  );
+
+  assert.equal(result.conclusion, 'fail');
+  assert.deepEqual(result.failing, ['Flaky Integration']);
+  assert.deepEqual(result.pending, []);
+});
+
+test('unrecognized check state waits instead of failing', () => {
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (message?: unknown) => {
+    warnings.push(String(message));
+  };
+
+  try {
+    const normalized = checks([
+      { name: 'Shell and Unit Tests', conclusion: 'SUCCESS' },
+      { name: 'Preflight Checks', status: 'CREATED' },
+    ]);
+    const result = evaluateCiChecks(normalized, ['Shell and Unit Tests']);
+
+    assert.equal(normalized[1].status, 'unknown');
+    assert.equal(normalized[1].rawStatus, 'CREATED');
+    assert.equal(result.conclusion, 'pending');
+    assert.deepEqual(result.failing, []);
+    assert.deepEqual(result.pending, ['Preflight Checks']);
+    assert.match(warnings.join('\n'), /Preflight Checks/);
+    assert.match(warnings.join('\n'), /CREATED/);
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
 test('optional skipped and neutral checks are passing', () => {
   const result = evaluateCiChecks(
     checks([
@@ -59,11 +99,14 @@ test('unknown required contexts pass only when all observed checks are complete'
   assert.equal(evaluateCiChecks(checks([{ name: 'Lint', status: 'IN_PROGRESS' }]), []).conclusion, 'pending');
 });
 
-test('empty GitHub conclusion falls back to in-progress status', () => {
-  const result = checks([{ name: 'Lint', conclusion: '', status: 'IN_PROGRESS' }]);
+test('empty GitHub conclusion falls back to queued status', () => {
+  const normalized = checks([{ name: 'Lint', conclusion: '', status: 'QUEUED' }]);
+  const result = evaluateCiChecks(normalized, ['Lint']);
 
-  assert.equal(result[0].status, 'pending');
-  assert.equal(result[0].rawStatus, 'IN_PROGRESS');
+  assert.equal(normalized[0].status, 'pending');
+  assert.equal(normalized[0].rawStatus, 'QUEUED');
+  assert.equal(result.conclusion, 'pending');
+  assert.deepEqual(result.pending, ['Lint']);
 });
 
 test('normalizer maps gh pr checks bucket values and dedupes newer reruns', () => {
