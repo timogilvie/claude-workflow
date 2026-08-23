@@ -20,6 +20,7 @@ import {
   getConfiguredModelsForDescriptor,
   getConfiguredModelsForDescriptorStage,
   configuredDeepSeekModelIds,
+  computeIdentityFingerprint,
   DEFAULT_MODEL_REGISTRY,
   getEffectiveRegistry,
   getLadder,
@@ -39,6 +40,7 @@ import {
   rankCandidates,
   REVIEWER_ALIAS_MAP,
   resolveModelIdentity,
+  resolveModelSuccessor,
   resolveProviderNativeModelId,
   resolveSelector,
   listSupportedModelsForStage,
@@ -49,6 +51,13 @@ import {
   validateNativeCapability,
   validateModelId,
 } from './model-registry.ts';
+import {
+  hashModelRegistryProjection,
+  loadModelRegistryCatalog,
+  projectModelRegistryCatalog,
+  serializeModelRegistryProjection,
+  type ModelRegistryCatalog,
+} from './model-registry-loader.ts';
 import { resolveOpenRouterModelId } from './openrouter-provider.ts';
 import { clearConfigCache } from './config.ts';
 import { filterDisabledModels } from './disabled-models.ts';
@@ -148,6 +157,21 @@ function makeCapabilities(
         limitations: overrides.supportedModel.limitations ? [...overrides.supportedModel.limitations] : undefined,
       }
       : undefined,
+    identity: overrides.identity
+      ? {
+        ...overrides.identity,
+        verification: overrides.identity.verification ? { ...overrides.identity.verification } : undefined,
+        lineage: overrides.identity.lineage
+          ? {
+            predecessors: overrides.identity.lineage.predecessors ? [...overrides.identity.lineage.predecessors] : undefined,
+            successor: overrides.identity.lineage.successor,
+            formerIds: overrides.identity.lineage.formerIds ? [...overrides.identity.lineage.formerIds] : undefined,
+            disclosedAt: overrides.identity.lineage.disclosedAt,
+            disclosureSource: overrides.identity.lineage.disclosureSource,
+          }
+          : undefined,
+      }
+      : undefined,
   };
 }
 
@@ -171,6 +195,38 @@ function makeQuotaSnapshot(
       ]),
     ),
     snapshotAt: new Date().toISOString(),
+  };
+}
+
+function cloneJson<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function identityFor(
+  alias: string,
+  overrides: Partial<NonNullable<ModelRegistry['models'][string]['identity']>> = {},
+): NonNullable<ModelRegistry['models'][string]['identity']> {
+  const revision = overrides.revision ?? 1;
+  return {
+    status: overrides.status ?? 'verified',
+    revision,
+    fingerprint: overrides.fingerprint ?? computeIdentityFingerprint({ alias, providerNativeId: alias, revision }),
+    displayName: overrides.displayName ?? alias,
+    family: overrides.family ?? 'gpt',
+    evidencePolicy: overrides.evidencePolicy ?? 'eligible',
+    verification: overrides.verification,
+    lineage: overrides.lineage,
+  };
+}
+
+function catalogWith(models: Record<string, ModelRegistry['models'][string]>): ModelRegistryCatalog {
+  return {
+    schemaVersion: '1',
+    models: Object.entries(models).map(([id, capabilities]) => ({
+      id,
+      capabilities: cloneJson(capabilities),
+    })),
+    ladders: {},
   };
 }
 
@@ -258,6 +314,88 @@ describe('model-registry', () => {
         assert.equal(typeof model.qualityScores[taskType], 'number');
       }
     }
+  });
+
+  it('projects the declarative catalog deterministically with default registry parity', () => {
+    const catalog = loadModelRegistryCatalog();
+    const first = projectModelRegistryCatalog(catalog);
+    const second = projectModelRegistryCatalog(loadModelRegistryCatalog());
+
+    assert.deepEqual(first, DEFAULT_MODEL_REGISTRY);
+    assert.deepEqual(second, DEFAULT_MODEL_REGISTRY);
+    assert.equal(serializeModelRegistryProjection(first), serializeModelRegistryProjection(second));
+    assert.equal(hashModelRegistryProjection(first), hashModelRegistryProjection(second));
+  });
+
+  it('validates generic lineage successor invariants in catalog projection', () => {
+    const source = makeCapabilities({
+      supportedModel: { wavemillAlias: 'source', lifecycle: 'blocked' },
+      identity: identityFor('source', { lineage: { successor: 'target' } }),
+    });
+    const target = makeCapabilities({
+      supportedModel: { wavemillAlias: 'target' },
+      identity: identityFor('target', { lineage: { predecessors: ['source'] } }),
+    });
+
+    assert.deepEqual(Object.keys(projectModelRegistryCatalog(catalogWith({ source, target })).models), ['source', 'target']);
+  });
+
+  it('rejects invalid catalog lineage and duplicate identities deterministically', () => {
+    assert.throws(
+      () => projectModelRegistryCatalog(catalogWith({
+        source: makeCapabilities({ identity: identityFor('source', { lineage: { successor: 'missing' } }) }),
+      })),
+      /successor "missing" does not exist/,
+    );
+    assert.throws(
+      () => projectModelRegistryCatalog(catalogWith({
+        source: makeCapabilities({ identity: identityFor('source', { lineage: { successor: 'target' } }) }),
+        target: makeCapabilities({ identity: identityFor('target', { lineage: { successor: 'source' } }) }),
+      })),
+      /lineage contains a cycle/,
+    );
+    assert.throws(
+      () => projectModelRegistryCatalog(catalogWith({
+        source: makeCapabilities({ identity: identityFor('source', { lineage: { successor: 'target' } }) }),
+        target: makeCapabilities({
+          supportedModel: { wavemillAlias: 'target', routingEligible: false },
+          defaultLadderEligible: false,
+          qualityScores: makeScores(0),
+          identity: identityFor('target', { status: 'provisional', evidencePolicy: 'held' }),
+        }),
+      })),
+      /successor "target" must not be provisional/,
+    );
+    assert.throws(
+      () => projectModelRegistryCatalog(catalogWith({
+        one: makeCapabilities({ supportedModel: { wavemillAlias: 'dup' }, identity: identityFor('dup') }),
+        two: makeCapabilities({ supportedModel: { wavemillAlias: 'dup' }, identity: identityFor('dup') }),
+      })),
+      /duplicate wavemill alias "dup"/,
+    );
+    assert.throws(
+      () => projectModelRegistryCatalog(catalogWith({
+        one: makeCapabilities({
+          supportedModel: { wavemillAlias: 'one', providerNativeId: 'provider/dup' },
+          identity: identityFor('one', {
+            fingerprint: computeIdentityFingerprint({ alias: 'one', providerNativeId: 'provider/dup', revision: 1 }),
+          }),
+        }),
+        two: makeCapabilities({
+          supportedModel: { wavemillAlias: 'two', providerNativeId: 'provider/dup' },
+          identity: identityFor('two', {
+            fingerprint: computeIdentityFingerprint({ alias: 'two', providerNativeId: 'provider/dup', revision: 1 }),
+          }),
+        }),
+      })),
+      /duplicate providerNativeId "provider\/dup"/,
+    );
+  });
+
+  it('resolves generic successors from declared lineage', () => {
+    assert.equal(resolveModelSuccessor('gpt-5.4', DEFAULT_MODEL_REGISTRY, { stage: 'planning' }), 'gpt-5.6-terra');
+    assert.equal(resolveModelSuccessor('gpt-5-mini', DEFAULT_MODEL_REGISTRY, { stage: 'review' }), 'gpt-5.5');
+    assert.equal(resolveModelSuccessor('gpt-5.5', DEFAULT_MODEL_REGISTRY, { stage: 'coding' }), null);
   });
 
   describe('registry admission criteria', () => {
