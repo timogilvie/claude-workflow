@@ -11,10 +11,12 @@ import { IncidentStore } from '../shared/lib/wavemill-incident-store.ts';
 import type { IncidentRecord } from '../shared/lib/wavemill-incident-model.ts';
 import { syncIncident, type SyncResult } from '../shared/lib/incident-to-linear-synchronizer.ts';
 import { drainIncidentQueue, enqueueIncidentSync } from '../shared/lib/incident-linear-retry-queue.ts';
+import { acquireObserverLock } from '../shared/lib/tend-singleton.ts';
 
 type Severity = 'urgent' | 'high' | 'medium' | 'low';
 type Category = 'stuck' | 'crash' | 'warning' | 'ux' | 'operational';
 type Confidence = 'high' | 'medium' | 'low';
+const DEFAULT_OBSERVER_PANE_TITLE = 'Wavemill Observer';
 
 interface ObserverOptions {
   loop: boolean;
@@ -443,7 +445,7 @@ function filterRelevantProcesses(rows: ProcessRow[], panes: Pane[]): ProcessRow[
 }
 
 function isWavemillProcess(command: string): boolean {
-  return /wavemill|\/tmp\/wavemill-monitor|tend\.ts|plan-queue\.ts|ready-watchdog|tmux attach -t wavemill/.test(command);
+  return /wavemill|\/tmp\/wavemill-monitor|tend\.ts|observer\.ts|plan-queue\.ts|ready-watchdog|tmux attach -t wavemill/.test(command);
 }
 
 function readWorkflowTasks(stateFile: string): TaskState[] {
@@ -565,13 +567,54 @@ export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, opti
   const findings: Finding[] = [];
   const now = Date.now();
   const processByParent = new Map<number, ProcessRow[]>();
+  const processByPid = new Map<number, ProcessRow>();
   for (const row of snapshot.processes) {
+    processByPid.set(row.pid, row);
     const list = processByParent.get(row.ppid) ?? [];
     list.push(row);
     processByParent.set(row.ppid, list);
   }
+  const observerPaneTitle = process.env.WAVEMILL_BACKSTAGE_OBSERVER_PANE_TITLE ?? DEFAULT_OBSERVER_PANE_TITLE;
 
   for (const repo of snapshot.repos) {
+    const observerPanes = snapshot.panes.filter((pane) => pane.session === repo.session && pane.title === observerPaneTitle);
+    const observerPanePids = new Set(observerPanes.map((pane) => pane.pid).filter((pid) => pid > 0));
+    const observerLoopRows = snapshot.processes.filter((row) => {
+      if (!/observer\.ts/.test(row.command) || !/--loop/.test(row.command)) {
+        return false;
+      }
+      if (new RegExp(`--session\\s+${escapeRegExp(repo.session)}\\b`).test(row.command) || row.command.includes(`session=${repo.session}`)) {
+        return true;
+      }
+      let cursor: ProcessRow | undefined = row;
+      for (let depth = 0; cursor && depth < 20; depth += 1) {
+        if (observerPanePids.has(cursor.pid)) {
+          return true;
+        }
+        cursor = processByPid.get(cursor.ppid);
+      }
+      return false;
+    });
+    const observerLoopPidSet = new Set(observerLoopRows.map((row) => row.pid));
+    const observerLoopRoots = observerLoopRows.filter((row) => !observerLoopPidSet.has(row.ppid));
+    const observerInstanceCount = Math.max(observerPanes.length, observerLoopRoots.length);
+    if (observerInstanceCount > 1) {
+      findings.push({
+        id: `duplicate-observer-${repo.session}`,
+        severity: 'high',
+        category: 'operational',
+        confidence: 'high',
+        session: repo.session,
+        repoDir: repo.repoDir,
+        title: `${observerInstanceCount} Observer loops are running for session ${repo.session} (expected 1)`,
+        evidence: [
+          `panes=${observerPanes.map((pane) => `${pane.windowIndex}.${pane.paneIndex}`).join(', ') || 'none'}`,
+          `rootPids=${observerLoopRoots.map((row) => row.pid).join(', ') || 'none'}`,
+        ],
+        recommendation: 'Kill all but one Observer pane; the backstage watchdog reconciles duplicates on its next pass and observer --loop now refuses to start beside a live lock holder.',
+      });
+    }
+
     const monitorProcesses = snapshot.processes.filter((row) =>
       row.command.includes('wavemill-monitor.sh')
       || (row.command.includes('/tmp/wavemill-monitor.sh') && row.command.includes(repo.repoDir) === false)
@@ -824,6 +867,11 @@ function hashText(text: string): string {
     hash = ((hash << 5) - hash + text.charCodeAt(i)) | 0;
   }
   return Math.abs(hash).toString(36);
+}
+
+function escapeRegExp(value: string): string {
+  const specialChars = /[.*+?^${}()|[\]\\]/g;
+  return value.replace(specialChars, (match) => `\\${match}`);
 }
 
 function truncate(value: string, maxLength: number): string {
@@ -1445,19 +1493,35 @@ async function main(): Promise<void> {
     return;
   }
 
-  do {
-    const observed = await syncIncidentsToLinear(await reconcileIncidents(observe(options), options), options);
-    const snapshot = options.serviceMode ? redactSnapshot(observed) : observed;
-    await writeServiceHeartbeat(snapshot, options);
-    await fileLinearIssues(snapshot, options);
-    if (options.json) {
-      process.stdout.write(`${JSON.stringify(snapshot, null, 2)}\n`);
-    } else {
-      process.stdout.write(renderSummary(snapshot));
-    }
-    if (!options.loop) break;
-    await sleep(options.intervalSeconds * 1000);
-  } while (true);
+  const lock = options.loop
+    ? acquireObserverLock({
+        repoDir: options.repoDir ?? process.cwd(),
+        session: options.session,
+      })
+    : undefined;
+
+  if (lock?.outcome === 'skipped') {
+    process.stderr.write(`observer: another loop already holds the lock${lock.holderPid ? ` (pid ${lock.holderPid})` : ''}; exiting\n`);
+    return;
+  }
+
+  try {
+    do {
+      const observed = await syncIncidentsToLinear(await reconcileIncidents(observe(options), options), options);
+      const snapshot = options.serviceMode ? redactSnapshot(observed) : observed;
+      await writeServiceHeartbeat(snapshot, options);
+      await fileLinearIssues(snapshot, options);
+      if (options.json) {
+        process.stdout.write(`${JSON.stringify(snapshot, null, 2)}\n`);
+      } else {
+        process.stdout.write(renderSummary(snapshot));
+      }
+      if (!options.loop) break;
+      await sleep(options.intervalSeconds * 1000);
+    } while (true);
+  } finally {
+    lock?.release();
+  }
 }
 
 const isMain = process.argv[1] ? import.meta.url === pathToFileURL(process.argv[1]).href : false;
