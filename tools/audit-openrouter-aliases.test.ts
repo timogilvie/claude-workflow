@@ -31,6 +31,7 @@ function makeModel(lifecycle: 'supported' | 'blocked' = 'supported'): ModelRegis
     reasoningTier: 'standard',
     costPerMillionInputTokensUsd: 1,
     costPerMillionOutputTokensUsd: 2,
+    pricing: { inputCostPerMTok: 1, outputCostPerMTok: 2 },
     agent: 'native-openrouter',
     supportedModel: { lifecycle, stages: ['coding'], providerNativeId: 'qwen/qwen3-coder' },
   };
@@ -105,6 +106,39 @@ describe('audit-openrouter-aliases command', () => {
     });
 
     assert.equal(code, 1);
+  });
+
+  it('returns one and reports details when selectable pricing drifts', async () => {
+    const repoDir = makeTempRepo();
+    const output = captureOutput();
+    try {
+      const code = await runOpenRouterAliasAuditCommand({
+        'catalog-json': undefined,
+        fixture: false,
+        output: undefined,
+        'repo-dir': repoDir,
+        json: true,
+        'no-write': true,
+      }, {
+        fetchCatalog: async () => new Map<string, OpenRouterModel>([
+          ['qwen/qwen3-coder', {
+            id: 'qwen/qwen3-coder',
+            context_length: 200_000,
+            supported_parameters: ['tools'],
+            pricing: { prompt: '0.000001', completion: '0.000003' },
+          }],
+        ]),
+        registry: { models: { 'qwen-3-coder': makeModel('supported') }, ladders: {} },
+        now: () => new Date('2026-08-18T00:00:00.000Z'),
+      });
+
+      assert.equal(code, 1);
+      assert.match(output.stdout.join('\n'), /pricing-drift/);
+      assert.match(output.stdout.join('\n'), /outputPerMTok drift/);
+      assert.match(output.stdout.join('\n'), /expected provider 3, actual registry 2/);
+    } finally {
+      output.restore();
+    }
   });
 
   it('loads a raw catalog JSON file', async () => {

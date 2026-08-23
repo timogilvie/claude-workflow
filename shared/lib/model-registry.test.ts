@@ -1123,6 +1123,44 @@ describe('model-registry', () => {
       }));
     });
 
+    it('asserts exact agreement between duplicated input price fields', () => {
+      assert.throws(
+        () => assertRegistryConsistency({
+          models: {
+            bad: makeCapabilities({
+              costPerMillionInputTokensUsd: 1,
+              costPerMillionOutputTokensUsd: 2,
+              pricing: {
+                inputCostPerMTok: 1.0000000001,
+                outputCostPerMTok: 2,
+              },
+            }),
+          },
+          ladders: {},
+        }),
+        /pricing\.inputCostPerMTok must equal costPerMillionInputTokensUsd/,
+      );
+    });
+
+    it('asserts exact agreement between duplicated output price fields', () => {
+      assert.throws(
+        () => assertRegistryConsistency({
+          models: {
+            bad: makeCapabilities({
+              costPerMillionInputTokensUsd: 1,
+              costPerMillionOutputTokensUsd: 2,
+              pricing: {
+                inputCostPerMTok: 1,
+                outputCostPerMTok: 2.0000000001,
+              },
+            }),
+          },
+          ladders: {},
+        }),
+        /pricing\.outputCostPerMTok must equal costPerMillionOutputTokensUsd/,
+      );
+    });
+
     it('accepts a valid native certification block', () => {
       assert.doesNotThrow(() => validateNativeCapability('m', {
         nativeCapability: {

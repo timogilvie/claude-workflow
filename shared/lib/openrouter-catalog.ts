@@ -347,8 +347,14 @@ function parsePricingValue(value: unknown): ParsedPricingValue {
   if (value === undefined || value === null) {
     return { kind: 'absent' };
   }
+  if (typeof value === 'string' && value.trim().length === 0) {
+    return { kind: 'invalid', raw: value };
+  }
+  if (typeof value !== 'number' && typeof value !== 'string') {
+    return { kind: 'invalid', raw: value };
+  }
   const asNumber = typeof value === 'number' ? value : Number(value);
-  if (!Number.isFinite(asNumber)) {
+  if (!Number.isFinite(asNumber) || asNumber < 0) {
     return { kind: 'invalid', raw: value };
   }
   return { kind: 'value', perMTok: asNumber * TOKENS_PER_MILLION };
@@ -367,6 +373,39 @@ function resolveContextTokens(model: OpenRouterModel): number | null {
     return fromProvider;
   }
   return null;
+}
+
+export interface NormalizedOpenRouterPricingResult {
+  pricing: NormalizedPricing;
+  invalid: Array<{ dimension: keyof NormalizedPricing; raw: unknown }>;
+}
+
+export function normalizeOpenRouterPricing(
+  pricing: OpenRouterModel['pricing'] | undefined,
+): NormalizedOpenRouterPricingResult {
+  const parsedPricing = {
+    inputPerMTok: parsePricingValue(pricing?.prompt),
+    outputPerMTok: parsePricingValue(pricing?.completion),
+    cacheReadPerMTok: parsePricingValue(pricing?.input_cache_read),
+    cacheWritePerMTok: parsePricingValue(pricing?.input_cache_write),
+  } satisfies Record<keyof NormalizedPricing, ParsedPricingValue>;
+
+  const invalid = (Object.entries(parsedPricing) as Array<[keyof NormalizedPricing, ParsedPricingValue]>)
+    .filter(([, parsed]) => parsed.kind === 'invalid')
+    .map(([dimension, parsed]) => ({
+      dimension,
+      raw: (parsed as Extract<ParsedPricingValue, { kind: 'invalid' }>).raw,
+    }));
+
+  return {
+    pricing: {
+      inputPerMTok: pricingValueOrNull(parsedPricing.inputPerMTok),
+      outputPerMTok: pricingValueOrNull(parsedPricing.outputPerMTok),
+      cacheReadPerMTok: pricingValueOrNull(parsedPricing.cacheReadPerMTok),
+      cacheWritePerMTok: pricingValueOrNull(parsedPricing.cacheWritePerMTok),
+    },
+    invalid,
+  };
 }
 
 export interface NormalizeOptions {
@@ -426,16 +465,9 @@ export function normalizeCatalog(
       continue;
     }
 
-    const parsedPricing = {
-      inputPerMTok: parsePricingValue(orModel.pricing?.prompt),
-      outputPerMTok: parsePricingValue(orModel.pricing?.completion),
-      cacheReadPerMTok: parsePricingValue(orModel.pricing?.input_cache_read),
-      cacheWritePerMTok: parsePricingValue(orModel.pricing?.input_cache_write),
-    };
-    const invalidPricing = Object.entries(parsedPricing)
-      .find(([, parsed]) => parsed.kind === 'invalid');
+    const normalizedPricing = normalizeOpenRouterPricing(orModel.pricing);
+    const invalidPricing = normalizedPricing.invalid[0];
     if (invalidPricing) {
-      const [dimension, parsed] = invalidPricing as [string, Extract<ParsedPricingValue, { kind: 'invalid' }>];
       blockers.push({
         wavemillAlias: lp.wavemillAlias,
         openrouterId: lp.openrouterId,
@@ -443,7 +475,7 @@ export function normalizeCatalog(
         status: lp.status,
         priorityTier: lp.priorityTier,
         reason: 'invalid_pricing',
-        detail: `OpenRouter id "${lp.openrouterId}" has invalid pricing.${dimension}: ${String(parsed.raw)}`,
+        detail: `OpenRouter id "${lp.openrouterId}" has invalid pricing.${invalidPricing.dimension}: ${String(invalidPricing.raw)}`,
       });
       continue;
     }
@@ -454,12 +486,7 @@ export function normalizeCatalog(
       openrouterId: lp.openrouterId,
       family: lp.family,
       contextTokens,
-      pricing: {
-        inputPerMTok: pricingValueOrNull(parsedPricing.inputPerMTok),
-        outputPerMTok: pricingValueOrNull(parsedPricing.outputPerMTok),
-        cacheReadPerMTok: pricingValueOrNull(parsedPricing.cacheReadPerMTok),
-        cacheWritePerMTok: pricingValueOrNull(parsedPricing.cacheWritePerMTok),
-      },
+      pricing: normalizedPricing.pricing,
       capabilities: getFamilyCapabilities(lp.family),
       roleEligibility: [...lp.roleEligibility],
       status: lp.status,
@@ -506,6 +533,10 @@ function samePrice(left: number | null, right: number | null): boolean {
   return left === right;
 }
 
+function isFiniteNonNegativePrice(value: number): boolean {
+  return Number.isFinite(value) && value >= 0;
+}
+
 export function validatePromotionPricing(
   spec: PromotionPricingSpec,
   catalogEntry: Pick<NormalizedCatalogEntry, 'pricing'>,
@@ -520,7 +551,16 @@ export function validatePromotionPricing(
   ];
 
   for (const [dimension, actual, expected] of checks) {
-    if (typeof actual === 'number' && (!Number.isFinite(actual) || actual < 0)) {
+    const required = dimension === 'inputPerMTok' || dimension === 'outputPerMTok' || expected !== null;
+    if (required && expected === null) {
+      errors.push(`${dimension} must be advertised by the catalog for promotion`);
+      continue;
+    }
+    if (required && actual === null) {
+      errors.push(`${dimension} must be provided for promotion`);
+      continue;
+    }
+    if (typeof actual === 'number' && !isFiniteNonNegativePrice(actual)) {
       errors.push(`${dimension} must be finite and non-negative`);
       continue;
     }
