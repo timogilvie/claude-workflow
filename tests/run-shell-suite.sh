@@ -20,6 +20,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Note: tests/check-shell.sh is deliberately absent. It is a lint/syntax pass
 # over every shell script, not a per-shard test, and runs once via `npm run lint`.
 TESTS=(
+  aborted-challenge-cleanup.test.sh
+  agent-resolve-from-model.test.sh
   terminal-reconciler.test.sh
   monitor-env-completeness.test.sh
   wavemill-expand-direct.test.sh
@@ -30,6 +32,7 @@ TESTS=(
   challenge-record-decisive.test.sh
   native-terminal-failure.test.sh
   native-agent-shell-operators.test.sh
+  native-coding-commit.test.sh
   hook-write-context-guard.test.sh
   expansion-handshake.test.sh
   config-version-prompt.test.sh
@@ -70,6 +73,8 @@ TESTS=(
   openrouter-warning-surfaces.test.sh
   hokusai-test-registration.test.sh
   global-model-parity.test.sh
+  stage-state.test.sh
+  startup-handoff.test.sh
 )
 
 SHARD_INDEX=1
