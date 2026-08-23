@@ -191,6 +191,21 @@ test('Computes cost with explicit cache rates', () => {
   assert.ok(Math.abs(cost - 34.875) < 0.001, `Expected 34.875, got ${cost}`);
 });
 
+test('Uses explicit zero cache rates without falling back to multipliers', () => {
+  const pricing: ModelPricing = {
+    inputCostPerMTok: 10,
+    outputCostPerMTok: 50,
+    cacheWriteCostPerMTok: 0,
+    cacheReadCostPerMTok: 0,
+  };
+  const cost = computeModelCost(
+    { inputTokens: 1_000_000, cacheCreationTokens: 1_000_000, cacheReadTokens: 1_000_000, outputTokens: 1_000_000 },
+    pricing,
+  );
+
+  assert.equal(cost, 60);
+});
+
 test('Derives cache rates from input rate when not configured', () => {
   const pricing: ModelPricing = {
     inputCostPerMTok: 10,

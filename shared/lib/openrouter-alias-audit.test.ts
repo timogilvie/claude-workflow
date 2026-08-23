@@ -195,6 +195,125 @@ describe('openrouter alias audit', () => {
     ]);
   });
 
+  it('reports per-field provider pricing drift with expected and actual values', () => {
+    const registry: ModelRegistry = {
+      models: {
+        'qwen-3-coder': makeModel({
+          costPerMillionInputTokensUsd: 0.5,
+          costPerMillionOutputTokensUsd: 3,
+          pricing: {
+            inputCostPerMTok: 1.5,
+            outputCostPerMTok: 2,
+            cacheReadCostPerMTok: 0.2,
+          },
+          supportedModel: { lifecycle: 'supported', stages: ['coding'], providerNativeId: 'qwen/qwen3-coder' },
+        }),
+      },
+      ladders: {},
+    };
+
+    const report = auditOpenRouterAliases({
+      registry,
+      openRouterModels: new Map<string, OpenRouterModel>([
+        ['qwen/qwen3-coder', {
+          id: 'qwen/qwen3-coder',
+          context_length: 200_000,
+          supported_parameters: ['tools'],
+          pricing: {
+            prompt: '0.000001',
+            completion: '0.000002',
+            input_cache_read: '0.000000125',
+            input_cache_write: '0.00000125',
+          },
+        }],
+      ]),
+      now: new Date('2026-08-18T00:00:00.000Z'),
+      catalogSource: 'file',
+    });
+
+    assert.deepEqual(report.findings.map((finding) => finding.reason), [
+      'pricing-drift',
+      'pricing-drift',
+      'pricing-drift',
+      'pricing-drift',
+      'pricing-drift',
+    ]);
+    assert.deepEqual(report.findings.map((finding) => finding.detail), [
+      'inputPerMTok drift for pricing.inputCostPerMTok: expected provider 1, actual registry 1.5.',
+      'inputPerMTok drift for costPerMillionInputTokensUsd: expected provider 1, actual registry 0.5.',
+      'outputPerMTok drift for costPerMillionOutputTokensUsd: expected provider 2, actual registry 3.',
+      'cacheReadPerMTok drift for pricing.cacheReadCostPerMTok: expected provider 0.125, actual registry 0.2.',
+      'cacheWritePerMTok drift for pricing.cacheWriteCostPerMTok: expected provider 1.25, actual registry null.',
+    ]);
+    assert.equal(report.selectableFindings, 5);
+  });
+
+  it('does not report cache drift when provider cache prices are absent', () => {
+    const registry: ModelRegistry = {
+      models: {
+        'qwen-3-coder': makeModel({
+          pricing: {
+            inputCostPerMTok: 1,
+            outputCostPerMTok: 2,
+            cacheReadCostPerMTok: 0.1,
+            cacheWriteCostPerMTok: 1.25,
+          },
+          supportedModel: { lifecycle: 'supported', stages: ['coding'], providerNativeId: 'qwen/qwen3-coder' },
+        }),
+      },
+      ladders: {},
+    };
+
+    const report = auditOpenRouterAliases({
+      registry,
+      openRouterModels: new Map<string, OpenRouterModel>([
+        ['qwen/qwen3-coder', {
+          id: 'qwen/qwen3-coder',
+          context_length: 200_000,
+          supported_parameters: ['tools'],
+          pricing: { prompt: '0.000001', completion: '0.000002' },
+        }],
+      ]),
+      now: new Date('2026-08-18T00:00:00.000Z'),
+      catalogSource: 'file',
+    });
+
+    assert.deepEqual(report.findings, []);
+  });
+
+  it('reports malformed provider pricing as invalid instead of comparing fallback values', () => {
+    const registry: ModelRegistry = {
+      models: {
+        'qwen-3-coder': makeModel({
+          pricing: {
+            inputCostPerMTok: 1,
+            outputCostPerMTok: 2,
+          },
+          supportedModel: { lifecycle: 'supported', stages: ['coding'], providerNativeId: 'qwen/qwen3-coder' },
+        }),
+      },
+      ladders: {},
+    };
+
+    const report = auditOpenRouterAliases({
+      registry,
+      openRouterModels: new Map<string, OpenRouterModel>([
+        ['qwen/qwen3-coder', {
+          id: 'qwen/qwen3-coder',
+          context_length: 200_000,
+          supported_parameters: ['tools'],
+          pricing: { prompt: '-0.000001', completion: '0.000002' },
+        }],
+      ]),
+      now: new Date('2026-08-18T00:00:00.000Z'),
+      catalogSource: 'file',
+    });
+
+    assert.equal(report.findings.length, 1);
+    assert.equal(report.findings[0]?.reason, 'invalid-pricing');
+    assert.equal(report.findings[0]?.detail, 'OpenRouter pricing.inputPerMTok is invalid: -0.000001.');
+  });
+
   it('reports blocked provider drift as non-selectable', () => {
     const registry: ModelRegistry = {
       models: {

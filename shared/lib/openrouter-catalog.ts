@@ -325,9 +325,15 @@ function parsePricingValue(value: unknown): number | null {
   if (value === undefined || value === null) {
     return null;
   }
+  if (typeof value === 'string' && value.trim().length === 0) {
+    return { kind: 'invalid', raw: value };
+  }
+  if (typeof value !== 'number' && typeof value !== 'string') {
+    return { kind: 'invalid', raw: value };
+  }
   const asNumber = typeof value === 'number' ? value : Number(value);
-  if (!Number.isFinite(asNumber)) {
-    return null;
+  if (!Number.isFinite(asNumber) || asNumber < 0) {
+    return { kind: 'invalid', raw: value };
   }
   return asNumber * TOKENS_PER_MILLION;
 }
@@ -341,6 +347,39 @@ function resolveContextTokens(model: OpenRouterModel): number | null {
     return fromProvider;
   }
   return null;
+}
+
+export interface NormalizedOpenRouterPricingResult {
+  pricing: NormalizedPricing;
+  invalid: Array<{ dimension: keyof NormalizedPricing; raw: unknown }>;
+}
+
+export function normalizeOpenRouterPricing(
+  pricing: OpenRouterModel['pricing'] | undefined,
+): NormalizedOpenRouterPricingResult {
+  const parsedPricing = {
+    inputPerMTok: parsePricingValue(pricing?.prompt),
+    outputPerMTok: parsePricingValue(pricing?.completion),
+    cacheReadPerMTok: parsePricingValue(pricing?.input_cache_read),
+    cacheWritePerMTok: parsePricingValue(pricing?.input_cache_write),
+  } satisfies Record<keyof NormalizedPricing, ParsedPricingValue>;
+
+  const invalid = (Object.entries(parsedPricing) as Array<[keyof NormalizedPricing, ParsedPricingValue]>)
+    .filter(([, parsed]) => parsed.kind === 'invalid')
+    .map(([dimension, parsed]) => ({
+      dimension,
+      raw: (parsed as Extract<ParsedPricingValue, { kind: 'invalid' }>).raw,
+    }));
+
+  return {
+    pricing: {
+      inputPerMTok: pricingValueOrNull(parsedPricing.inputPerMTok),
+      outputPerMTok: pricingValueOrNull(parsedPricing.outputPerMTok),
+      cacheReadPerMTok: pricingValueOrNull(parsedPricing.cacheReadPerMTok),
+      cacheWritePerMTok: pricingValueOrNull(parsedPricing.cacheWritePerMTok),
+    },
+    invalid,
+  };
 }
 
 export interface NormalizeOptions {
@@ -400,8 +439,20 @@ export function normalizeCatalog(
       continue;
     }
 
-    const inputPerMTok = parsePricingValue(orModel.pricing?.prompt);
-    const outputPerMTok = parsePricingValue(orModel.pricing?.completion);
+    const normalizedPricing = normalizeOpenRouterPricing(orModel.pricing);
+    const invalidPricing = normalizedPricing.invalid[0];
+    if (invalidPricing) {
+      blockers.push({
+        wavemillAlias: lp.wavemillAlias,
+        openrouterId: lp.openrouterId,
+        family: lp.family,
+        status: lp.status,
+        priorityTier: lp.priorityTier,
+        reason: 'invalid_pricing',
+        detail: `OpenRouter id "${lp.openrouterId}" has invalid pricing.${invalidPricing.dimension}: ${String(invalidPricing.raw)}`,
+      });
+      continue;
+    }
     const contextTokens = resolveContextTokens(orModel);
 
     entries.push({
@@ -409,7 +460,7 @@ export function normalizeCatalog(
       openrouterId: lp.openrouterId,
       family: lp.family,
       contextTokens,
-      pricing: { inputPerMTok, outputPerMTok },
+      pricing: normalizedPricing.pricing,
       capabilities: getFamilyCapabilities(lp.family),
       roleEligibility: [...lp.roleEligibility],
       status: lp.status,
@@ -450,6 +501,49 @@ export function buildCatalogSnapshot(
     entries: sortedEntries,
     blockers: sortedBlockers,
   };
+}
+
+function samePrice(left: number | null, right: number | null): boolean {
+  return left === right;
+}
+
+function isFiniteNonNegativePrice(value: number): boolean {
+  return Number.isFinite(value) && value >= 0;
+}
+
+export function validatePromotionPricing(
+  spec: PromotionPricingSpec,
+  catalogEntry: Pick<NormalizedCatalogEntry, 'pricing'>,
+): PromotionPricingValidationResult {
+  const errors: string[] = [];
+  const pricing = catalogEntry.pricing;
+  const checks: Array<[keyof PromotionPricingSpec, number | null, number | null]> = [
+    ['inputPerMTok', spec.inputPerMTok, pricing.inputPerMTok],
+    ['outputPerMTok', spec.outputPerMTok, pricing.outputPerMTok],
+    ['cacheReadPerMTok', spec.cacheReadPerMTok, pricing.cacheReadPerMTok],
+    ['cacheWritePerMTok', spec.cacheWritePerMTok, pricing.cacheWritePerMTok],
+  ];
+
+  for (const [dimension, actual, expected] of checks) {
+    const required = dimension === 'inputPerMTok' || dimension === 'outputPerMTok' || expected !== null;
+    if (required && expected === null) {
+      errors.push(`${dimension} must be advertised by the catalog for promotion`);
+      continue;
+    }
+    if (required && actual === null) {
+      errors.push(`${dimension} must be provided for promotion`);
+      continue;
+    }
+    if (typeof actual === 'number' && !isFiniteNonNegativePrice(actual)) {
+      errors.push(`${dimension} must be finite and non-negative`);
+      continue;
+    }
+    if (!samePrice(actual, expected)) {
+      errors.push(`${dimension} mismatch: spec=${String(actual)} catalog=${String(expected)}`);
+    }
+  }
+
+  return { ok: errors.length === 0, errors };
 }
 
 function compareByTierAndAlias(
