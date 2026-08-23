@@ -780,7 +780,7 @@ function validPromptSizeDiagnostic() {
 }
 
 test('SCHEMA_VERSION is bumped for eval schema updates', () => {
-  assert.equal(SCHEMA_VERSION, '1.43.0');
+  assert.equal(SCHEMA_VERSION, '1.44.0');
 });
 
 test('Record with harnessId validates and legacy records without it still validate', () => {
@@ -2163,8 +2163,8 @@ test('Wavemill router fields validate and schema stays in parity', () => {
   assert.equal(properties.wavemill_router_scoring?.$ref, '#/$defs/WavemillRouterScoringMetadata');
 });
 
-test('Schema version constant is 1.43.0', () => {
-  assert.equal(SCHEMA_VERSION, '1.43.0');
+test('Schema version constant is 1.44.0', () => {
+  assert.equal(SCHEMA_VERSION, '1.44.0');
 });
 
 test('Record with resolved-model routing validates', () => {
@@ -2405,6 +2405,53 @@ test('challengeIntent side with inheritedStages validates', () => {
 
   const result = validateAgainstSchema(record);
   assert.ok(result.valid, `challengeIntent with inheritedStages should validate: ${result.errors.join('; ')}`);
+});
+
+// ────────────────────────────────────────────────────────────────
+// Task Scorer Result Tests (HOK-2845)
+// ────────────────────────────────────────────────────────────────
+
+test('record with taskScorerResult validates', () => {
+  const record = {
+    ...scenarios[0].record,
+    taskScorerResult: {
+      decision: 'run',
+      confidence: 0.85,
+      explanation: 'Packet structure looks solid; ready to execute.',
+      interventionProbability: 0.15,
+      scorerId: 'hokusai.scorers.wavemill.task_packet_readiness:v1',
+      modelVersion: 'v1-heuristic',
+      topFeatures: ['complete_sections', 'clear_specs'],
+      scoredAt: '2026-08-23T12:00:00Z',
+    },
+  } as unknown as Record<string, unknown>;
+
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Record with taskScorerResult should validate: ${result.errors.join('; ')}`);
+});
+
+test('legacy record without taskScorerResult validates', () => {
+  const record = scenarios[0].record as unknown as Record<string, unknown>;
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Legacy record without taskScorerResult should validate: ${result.errors.join('; ')}`);
+});
+
+test('invalid taskScorerResult decision enum rejected', () => {
+  const record = {
+    ...scenarios[0].record,
+    taskScorerResult: {
+      decision: 'invalid_decision',
+      confidence: 0.5,
+      explanation: 'Test',
+      interventionProbability: 0.5,
+      scorerId: 'test',
+      modelVersion: 'v1',
+      scoredAt: '2026-08-23T12:00:00Z',
+    },
+  } as unknown as Record<string, unknown>;
+
+  const result = validateAgainstSchema(record);
+  assert.ok(!result.valid, 'Invalid decision enum should be rejected');
 });
 
 // ────────────────────────────────────────────────────────────────

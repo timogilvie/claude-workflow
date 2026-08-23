@@ -97,6 +97,11 @@
  *   that executed a provisional-identity model are held out of training and
  *   budget evaluation. Additive; legacy rows without attribution still
  *   validate. (HOK-2858)
+ * - **1.44.0**: Added optional `taskScorerResult` field (HOK-2845) to capture
+ *   task packet quality predictions and readiness scoring in shadow mode,
+ *   including decision, confidence, and intervention probability for preemptive
+ *   flagging of problematic packets before dispatch. Additive; legacy records
+ *   without scorer results still validate.
  * - **1.28.0**: Added optional `quarantine_reason` and write-time eval corpus
  *   validation for `taskDescriptor`, non-empty `models_available`, and
  *   canonical reviewer/stage model IDs (HOK-2072); expanded
@@ -172,7 +177,7 @@ import type { ChallengeRoutingMeta } from './challenge-comparison.ts';
 import type { ChallengeStage } from './challenge-mode.ts';
 
 /** Current eval schema version for newly emitted records. */
-export const SCHEMA_VERSION = '1.43.0';
+export const SCHEMA_VERSION = '1.44.0';
 
 export type RoutingRole = 'planner' | 'coder' | 'reviewer';
 
@@ -1650,6 +1655,25 @@ export interface RoutePrediction {
   rationaleSummary?: string;
 }
 
+export interface TaskScorerResult {
+  /** Decision outcome: run/expand/split/return */
+  decision: 'run' | 'expand' | 'split' | 'return';
+  /** Confidence in decision (0-1) */
+  confidence: number;
+  /** Human-readable explanation */
+  explanation: string;
+  /** Predicted probability of intervention (0-1) */
+  interventionProbability: number;
+  /** Scorer identifier */
+  scorerId: string;
+  /** Model version tag */
+  modelVersion: string;
+  /** Top contributing features */
+  topFeatures?: string[];
+  /** When the score was computed (ISO 8601) */
+  scoredAt: string;
+}
+
 export interface RouteCalibration {
   costErrorUsd?: number;
   successDelta?: number;
@@ -2037,6 +2061,9 @@ export interface EvalRecord {
 
   /** Compact, falsifiable router prediction metadata for this route decision. */
   routePrediction?: RoutePrediction;
+
+  /** Task packet quality prediction and readiness scoring result (HOK-2845). */
+  taskScorerResult?: TaskScorerResult;
 
   /** Comparison of router predictions against actual workflow outcomes. */
   routeCalibration?: RouteCalibration;

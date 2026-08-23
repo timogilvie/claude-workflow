@@ -2493,6 +2493,9 @@
     "routePrediction": {
       "$ref": "#/$defs/RoutePrediction"
     },
+    "taskScorerResult": {
+      "$ref": "#/$defs/TaskScorerResult"
+    },
     "routeCalibration": {
       "$ref": "#/$defs/RouteCalibration"
     },
@@ -3467,6 +3470,55 @@
           "maxLength": 280
         }
       },
+      "additionalProperties": false
+    },
+    "TaskScorerResult": {
+      "type": "object",
+      "properties": {
+        "decision": {
+          "type": "string",
+          "enum": ["run", "expand", "split", "return"],
+          "description": "Predicted decision outcome"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Confidence in the decision"
+        },
+        "explanation": {
+          "type": "string",
+          "description": "Human-readable explanation of the decision"
+        },
+        "interventionProbability": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Predicted probability of human intervention"
+        },
+        "scorerId": {
+          "type": "string",
+          "description": "Scorer identifier"
+        },
+        "modelVersion": {
+          "type": "string",
+          "description": "Model version tag"
+        },
+        "topFeatures": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 5,
+          "description": "Top contributing features"
+        },
+        "scoredAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 timestamp when scored"
+        }
+      },
+      "required": ["decision", "confidence", "explanation", "interventionProbability", "scorerId", "modelVersion", "scoredAt"],
       "additionalProperties": false
     },
     "RouteCalibration": {
