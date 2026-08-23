@@ -19,6 +19,7 @@ import type {
   TaskDescriptor,
 } from './eval-schema.ts';
 import { isEvalSuccess } from './eval-success-policy.ts';
+import { evaluateEvidenceEligibility } from './model-evidence-policy.ts';
 
 // ============================================================================
 // Input Schema Types
@@ -771,6 +772,11 @@ function extractRouteCalibration(record: EvalRecord): RouteCalibration | undefin
 export function toHokusaiSubmission(
   record: EvalRecord,
 ): HokusaiSubmissionResult {
+  const evidence = evaluateEvidenceEligibility(record, 'hokusai_contribution', { strict: true });
+  if (!evidence.eligible) {
+    return { ok: false, reasons: evidence.reasons as EligibilityErrorCode[] };
+  }
+
   if (record.trainingEligible === false) {
     const reasons = uniqueSortedCodes(record.eligibilityErrors ?? []);
     return {

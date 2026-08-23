@@ -3,11 +3,12 @@
 import { runCertifyCommand } from './native-agent-certify.ts';
 import { runImportCommand } from './native-agent-certifications-import.ts';
 import { runInspectCommand } from './native-agent-certifications-inspect.ts';
+import { runInvalidateCommand, runReidentifyCommand } from './native-agent-certifications-identity.ts';
 import { runListCommand } from './native-agent-certifications-list.ts';
 import { runVerifyCommand } from './native-agent-certifications-verify.ts';
 import { runModelsReportCommand } from './native-agent-models-report.ts';
 
-const SUBCOMMANDS = ['list', 'inspect', 'verify', 'report', 'certify', 're-certify', 'migrate'] as const;
+const SUBCOMMANDS = ['list', 'inspect', 'verify', 'report', 'certify', 're-certify', 'reidentify', 'invalidate', 'migrate'] as const;
 
 export async function runCertificationsCommand(argv = process.argv.slice(2)): Promise<void> {
   const [subcommand, ...rest] = argv;
@@ -33,6 +34,12 @@ export async function runCertificationsCommand(argv = process.argv.slice(2)): Pr
     case 're-certify':
       await runCertifyCommand(rest);
       return;
+    case 'reidentify':
+      await runReidentifyCommand(rest);
+      return;
+    case 'invalidate':
+      await runInvalidateCommand(rest);
+      return;
     case 'migrate':
       await runImportCommand(rest);
       return;
@@ -56,6 +63,8 @@ Subcommands:
   report       Report registry models as not-certified, certified-unavailable, stale, or ready-for-challenge.
   certify      Run the live certification suite and publish a global artifact.
   re-certify   Alias for certify.
+  reidentify   Dry-run identity change impact; --execute writes only an audit artifact.
+  invalidate   Dry-run invalidation impact; --execute writes only an audit artifact.
   migrate      Inspect legacy repo-local artifacts; import only reusable current artifacts.
 
 Examples:

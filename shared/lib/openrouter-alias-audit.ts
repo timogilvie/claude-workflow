@@ -4,7 +4,11 @@ import {
   type ModelLifecycleStatus,
   type ModelRegistry,
 } from './model-registry.ts';
-import type { OpenRouterModel } from './openrouter-catalog.ts';
+import {
+  normalizeOpenRouterPricing,
+  type NormalizedPricing,
+  type OpenRouterModel,
+} from './openrouter-catalog.ts';
 import { resolveOpenRouterModelId } from './openrouter-provider.ts';
 
 export type AliasAuditReason =
@@ -12,7 +16,9 @@ export type AliasAuditReason =
   | 'not-found-in-openrouter'
   | 'provider-native-id-mismatch'
   | 'context-window-overstated'
-  | 'tool-support-mismatch';
+  | 'tool-support-mismatch'
+  | 'invalid-pricing'
+  | 'pricing-drift';
 
 export interface AliasAuditFinding {
   alias: string;
@@ -42,6 +48,49 @@ function resolveCatalogContextTokens(model: OpenRouterModel): number | null {
     return fromProvider;
   }
   return null;
+}
+
+type RegistryPriceField = {
+  dimension: keyof NormalizedPricing;
+  registryField: string;
+  actual: number | null;
+};
+
+function registryPriceFields(
+  capabilities: ModelRegistry['models'][string],
+): RegistryPriceField[] {
+  return [
+    {
+      dimension: 'inputPerMTok',
+      registryField: 'pricing.inputCostPerMTok',
+      actual: capabilities.pricing?.inputCostPerMTok ?? null,
+    },
+    {
+      dimension: 'inputPerMTok',
+      registryField: 'costPerMillionInputTokensUsd',
+      actual: capabilities.costPerMillionInputTokensUsd,
+    },
+    {
+      dimension: 'outputPerMTok',
+      registryField: 'pricing.outputCostPerMTok',
+      actual: capabilities.pricing?.outputCostPerMTok ?? null,
+    },
+    {
+      dimension: 'outputPerMTok',
+      registryField: 'costPerMillionOutputTokensUsd',
+      actual: capabilities.costPerMillionOutputTokensUsd,
+    },
+    {
+      dimension: 'cacheReadPerMTok',
+      registryField: 'pricing.cacheReadCostPerMTok',
+      actual: capabilities.pricing?.cacheReadCostPerMTok ?? null,
+    },
+    {
+      dimension: 'cacheWritePerMTok',
+      registryField: 'pricing.cacheWriteCostPerMTok',
+      actual: capabilities.pricing?.cacheWriteCostPerMTok ?? null,
+    },
+  ];
 }
 
 export function auditOpenRouterAliases(input: {
@@ -133,6 +182,40 @@ export function auditOpenRouterAliases(input: {
         selectable,
         detail: `Registry toolSupport ${capabilities.toolSupport} declares tool use, but OpenRouter supported_parameters omits tools.`,
       });
+    }
+
+    const normalizedPricing = normalizeOpenRouterPricing(catalogModel.pricing);
+    for (const invalid of normalizedPricing.invalid) {
+      findings.push({
+        alias,
+        providerNativeId,
+        wireModelId,
+        reason: 'invalid-pricing',
+        lifecycle,
+        selectable,
+        detail: `OpenRouter pricing.${invalid.dimension} is invalid: ${String(invalid.raw)}.`,
+      });
+    }
+    if (normalizedPricing.invalid.length > 0) {
+      continue;
+    }
+
+    for (const field of registryPriceFields(capabilities)) {
+      const expected = normalizedPricing.pricing[field.dimension];
+      if (expected === null) {
+        continue;
+      }
+      if (field.actual !== expected) {
+        findings.push({
+          alias,
+          providerNativeId,
+          wireModelId,
+          reason: 'pricing-drift',
+          lifecycle,
+          selectable,
+          detail: `${field.dimension} drift for ${field.registryField}: expected provider ${expected}, actual registry ${String(field.actual)}.`,
+        });
+      }
     }
   }
 

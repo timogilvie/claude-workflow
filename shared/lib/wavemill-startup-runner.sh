@@ -542,6 +542,8 @@ spawn_integration_window() {
   [[ "${DRY_RUN:-false}" == "true" ]] && return 0
   local merged enabled use_mill_session observer_enabled observer_interval observer_max_log_lines
   local integration_cmd observer_cmd status_script jobs_cmd queue_cmd tend_pane right_top_pane right_bottom_pane observer_pane backstage_health_file
+  local backstage_exists=false tend_result jobs_result queue_result observer_result tend_action jobs_action queue_action observer_action
+  local tend_killed=0 jobs_killed=0 queue_killed=0 observer_killed=0 created_layout=false observer_instance_count=0
 
   merged="$(wavemill_load_config "$REPO_DIR")"
   enabled="$(printf '%s' "$merged" | jq -r '.integration.enabled // false' 2>/dev/null || echo false)"
@@ -565,38 +567,76 @@ spawn_integration_window() {
   fi
   WORKTREE_ROOT="${WORKTREE_ROOT:-$REPO_DIR}"
   integration_cmd="$(wavemill_build_tend_loop_command "$SESSION" "$REPO_DIR" "$TOOLS_DIR" "integration")"
-  tmux new-window -d -t "$SESSION" -n "$WAVEMILL_WINDOW_BACKSTAGE" -c "$REPO_DIR" "$integration_cmd" >/dev/null
-  tend_pane="$(tmux display-message -p -t "$SESSION:$WAVEMILL_WINDOW_BACKSTAGE.0" '#{pane_id}' 2>/dev/null || true)"
+  if tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | grep -Fxq "$WAVEMILL_WINDOW_BACKSTAGE"; then
+    backstage_exists=true
+    startup_log "Backstage window already exists; reconciling panes"
+  fi
+
+  if [[ "$backstage_exists" == "true" ]]; then
+    tend_result="$(wavemill_reconcile_backstage_service_pane "$SESSION" "$WAVEMILL_WINDOW_BACKSTAGE" "$WAVEMILL_BACKSTAGE_TEND_PANE_TITLE" "$integration_cmd" "reuse" "$SESSION:$WAVEMILL_WINDOW_BACKSTAGE.0" -h -b -p 60 -c "$REPO_DIR" || true)"
+    IFS=$'\t' read -r tend_pane tend_action tend_killed <<< "$tend_result"
+  else
+    tmux new-window -d -t "$SESSION" -n "$WAVEMILL_WINDOW_BACKSTAGE" -c "$REPO_DIR" "$integration_cmd" >/dev/null
+    tend_pane="$(tmux display-message -p -t "$SESSION:$WAVEMILL_WINDOW_BACKSTAGE.0" '#{pane_id}' 2>/dev/null || true)"
+    tend_action="created"
+  fi
+
   if [[ -n "$tend_pane" ]]; then
     wavemill_set_tmux_pane_title "$tend_pane" "$WAVEMILL_BACKSTAGE_TEND_PANE_TITLE"
-    wavemill_capture_tend_pane_output "$tend_pane" "$SESSION" "$REPO_DIR"
+    if [[ "$tend_action" == "created" || "$tend_action" == "respawned" ]]; then
+      wavemill_capture_tend_pane_output "$tend_pane" "$SESSION" "$REPO_DIR"
+    fi
   fi
-  right_top_pane="$(tmux split-window -t "$SESSION:$WAVEMILL_WINDOW_BACKSTAGE.0" -h -p 40 -P -F '#{pane_id}')"
-  right_bottom_pane="$(tmux split-window -t "$right_top_pane" -v -p 50 -P -F '#{pane_id}')"
 
   status_script="${LIB_DIR:-$REPO_DIR/shared/lib}/wavemill-status.sh"
   printf -v jobs_cmd "'%s' --pane=jobs '%s' '%s' '%s'" "$status_script" "$SESSION" "$WORKTREE_ROOT" "$STATE_FILE"
   printf -v queue_cmd "'%s' --pane=queued-pending '%s' '%s' '%s'" "$status_script" "$SESSION" "$WORKTREE_ROOT" "$STATE_FILE"
-  tmux respawn-pane -k -t "$right_top_pane" "$jobs_cmd"
-  tmux respawn-pane -k -t "$right_bottom_pane" "$queue_cmd"
-  wavemill_set_tmux_pane_title "$right_top_pane" "$WAVEMILL_BACKSTAGE_JOBS_PANE_TITLE"
-  wavemill_set_tmux_pane_title "$right_bottom_pane" "$WAVEMILL_BACKSTAGE_QUEUE_PANE_TITLE"
+
+  jobs_result="$(wavemill_reconcile_backstage_service_pane "$SESSION" "$WAVEMILL_WINDOW_BACKSTAGE" "$WAVEMILL_BACKSTAGE_JOBS_PANE_TITLE" "$jobs_cmd" "restart" "${tend_pane:-$SESSION:$WAVEMILL_WINDOW_BACKSTAGE.0}" -h -p 40 || true)"
+  IFS=$'\t' read -r right_top_pane jobs_action jobs_killed <<< "$jobs_result"
+  [[ "$jobs_action" == "created" ]] && created_layout=true
+
+  queue_result="$(wavemill_reconcile_backstage_service_pane "$SESSION" "$WAVEMILL_WINDOW_BACKSTAGE" "$WAVEMILL_BACKSTAGE_QUEUE_PANE_TITLE" "$queue_cmd" "restart" "${right_top_pane:-$tend_pane}" -v -p 50 || true)"
+  IFS=$'\t' read -r right_bottom_pane queue_action queue_killed <<< "$queue_result"
+  [[ "$queue_action" == "created" ]] && created_layout=true
 
   if [[ "$observer_enabled" == "true" ]]; then
     observer_max_log_lines="$(wavemill_observer_max_log_lines "$merged")"
     observer_cmd="$(wavemill_build_observer_loop_command "$SESSION" "$REPO_DIR" "$TOOLS_DIR" "$observer_interval" "$observer_max_log_lines")"
-    observer_pane="$(tmux split-window -t "$right_bottom_pane" -v -p 50 -c "$REPO_DIR" -P -F '#{pane_id}' "$observer_cmd")"
-    wavemill_set_tmux_pane_title "$observer_pane" "$WAVEMILL_BACKSTAGE_OBSERVER_PANE_TITLE"
+    local observer_split_target="${right_bottom_pane:-${right_top_pane:-$tend_pane}}"
+    observer_result="$(wavemill_reconcile_backstage_service_pane "$SESSION" "$WAVEMILL_WINDOW_BACKSTAGE" "$WAVEMILL_BACKSTAGE_OBSERVER_PANE_TITLE" "$observer_cmd" "reuse" "$observer_split_target" -v -p 50 -c "$REPO_DIR" || true)"
+    IFS=$'\t' read -r observer_pane observer_action observer_killed <<< "$observer_result"
+    [[ "$observer_killed" =~ ^[0-9]+$ ]] || observer_killed=0
+    [[ "$observer_action" == "created" ]] && created_layout=true
+    observer_instance_count="$(wavemill_list_backstage_panes_by_title "$SESSION" "$WAVEMILL_WINDOW_BACKSTAGE" "$WAVEMILL_BACKSTAGE_OBSERVER_PANE_TITLE" 2>/dev/null | wc -l | tr -d ' ' || true)"
+    [[ "$observer_instance_count" =~ ^[0-9]+$ ]] || observer_instance_count=0
+    if (( observer_killed > 0 )); then
+      startup_log "Warning: reconciled ${observer_killed} duplicate Observer pane(s)"
+    fi
+  else
+    while IFS=$'\t' read -r observer_pane _dead; do
+      [[ -n "$observer_pane" ]] || continue
+      tmux kill-pane -t "$observer_pane" >/dev/null 2>&1 || true
+    done < <(wavemill_list_backstage_panes_by_title "$SESSION" "$WAVEMILL_WINDOW_BACKSTAGE" "$WAVEMILL_BACKSTAGE_OBSERVER_PANE_TITLE" 2>/dev/null || true)
   fi
 
   tmux set-window-option -u -t "$SESSION:$WAVEMILL_WINDOW_BACKSTAGE" window-status-style >/dev/null 2>&1 || true
   tmux set-window-option -u -t "$SESSION:$WAVEMILL_WINDOW_BACKSTAGE" window-status-current-style >/dev/null 2>&1 || true
   tmux set-option -t "$SESSION:$WAVEMILL_WINDOW_BACKSTAGE" remain-on-exit off >/dev/null 2>&1 || true
+  if [[ "$backstage_exists" == "true" && "$created_layout" == "true" ]]; then
+    tmux select-layout -t "$SESSION:$WAVEMILL_WINDOW_BACKSTAGE" tiled >/dev/null 2>&1 || true
+  fi
   backstage_health_file="$(wavemill_backstage_health_file "$STATE_DIR" 2>/dev/null || true)"
   if [[ -n "$backstage_health_file" ]]; then
-    wavemill_write_backstage_health "$backstage_health_file" "healthy" "backstage tend loop is running" 0 "" "$tend_pane"
+    wavemill_write_backstage_health "$backstage_health_file" "healthy" "backstage tend loop is running" 0 "" "$tend_pane" 1
     if [[ "$observer_enabled" == "true" && -n "${observer_pane:-}" ]]; then
-      wavemill_write_backstage_service_health "$backstage_health_file" "observer" "healthy" "backstage observer loop is running" 0 "" "$observer_pane"
+      local observer_detail="backstage observer loop is running"
+      if (( observer_killed > 0 )); then
+        observer_detail="backstage observer loop is running (reconciled ${observer_killed} duplicate pane(s))"
+      fi
+      wavemill_write_backstage_service_health "$backstage_health_file" "observer" "healthy" "$observer_detail" 0 "" "$observer_pane" "" "$observer_instance_count"
+    elif [[ "$observer_enabled" != "true" && -f "$backstage_health_file" ]] && jq -e '.services.observer? != null' "$backstage_health_file" >/dev/null 2>&1; then
+      wavemill_write_backstage_service_health "$backstage_health_file" "observer" "disabled" "observer is disabled by config" 0 "" "" "" 0
     fi
   fi
   startup_log "✓ Backstage window running."

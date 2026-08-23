@@ -10,8 +10,9 @@ import {
   CERTIFICATION_SCHEMA_VERSION,
   DEFAULT_CERTIFICATION_SUITE_VERSION,
   buildGlobalCertificationPath,
-  resolveCertificationStorageIdentity,
+  resolveCertificationSubject,
 } from './native-agent/certification/index.ts';
+import { DEFAULT_MODEL_REGISTRY } from './model-registry.ts';
 
 function makeRepoDir(): string {
   return mkdtempSync(join(tmpdir(), 'openrouter-zero-traffic-'));
@@ -47,14 +48,23 @@ function writeConfig(repoDir: string): void {
 }
 
 function writeOpenRouterCert(repoDir: string): void {
-  const path = buildGlobalCertificationPath('openrouter', 'z-ai/glm-5.2', DEFAULT_CERTIFICATION_SUITE_VERSION);
+  const identity = resolveCertificationSubject({
+    provider: 'openrouter',
+    model: 'z-ai/glm-5.2',
+    registry: DEFAULT_MODEL_REGISTRY,
+  });
+  const path = buildGlobalCertificationPath(
+    identity.storageIdentity.provider,
+    identity.storageIdentity.model,
+    DEFAULT_CERTIFICATION_SUITE_VERSION,
+  );
   mkdirSync(join(repoDir, '.wavemill', 'evals'), { recursive: true });
   mkdirSync(dirname(path), { recursive: true });
-  const identity = resolveCertificationStorageIdentity('openrouter', 'z-ai/glm-5.2');
   writeFileSync(path, JSON.stringify({
     schemaVersion: CERTIFICATION_SCHEMA_VERSION,
-    provider: identity.provider,
-    model: identity.model,
+    subject: identity.subject,
+    provider: identity.storageIdentity.provider,
+    model: identity.storageIdentity.model,
     phase: 'workflow',
     suiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
     certifiedAt: '2026-07-10T00:00:00.000Z',

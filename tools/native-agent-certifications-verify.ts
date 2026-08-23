@@ -3,10 +3,10 @@
 import { runTool } from '../shared/lib/tool-runner.ts';
 import {
   checkGlobalCertificationEligibility,
-  resolveCertificationStorageIdentity,
+  resolveCertificationSubject,
   type CertificationPhase,
 } from '../shared/lib/native-agent/certification/index.ts';
-import { checkIdentity } from '../shared/lib/native-agent/certification/validator.ts';
+import { getEffectiveRegistry, type ModelRegistry } from '../shared/lib/model-registry.ts';
 
 export interface CertificationVerification {
   ok: boolean;
@@ -24,20 +24,29 @@ export function verifyGlobalCertification(opts: {
   suiteVersion: string;
   requiredPhase: CertificationPhase;
   now?: Date;
+  registry?: ModelRegistry;
+  repoDir?: string;
 }): CertificationVerification {
-  const identity = resolveCertificationStorageIdentity(opts.provider, opts.model);
+  const registry = opts.registry ?? getEffectiveRegistry(opts.repoDir);
+  const resolved = resolveCertificationSubject({
+    provider: opts.provider,
+    model: opts.model,
+    registry,
+  });
   const eligibility = checkGlobalCertificationEligibility(
-    opts.provider,
-    opts.model,
+    resolved.storageIdentity.provider,
+    resolved.storageIdentity.model,
     opts.suiteVersion,
     opts.requiredPhase,
     opts.now,
+    {},
+    resolved.subject,
   );
   if (!eligibility.eligible) {
     return {
       ok: false,
-      provider: identity.provider,
-      model: identity.model,
+      provider: resolved.storageIdentity.provider,
+      model: resolved.storageIdentity.model,
       suiteVersion: opts.suiteVersion,
       requiredPhase: opts.requiredPhase,
       reason: eligibility.reason,
@@ -45,23 +54,10 @@ export function verifyGlobalCertification(opts: {
     };
   }
 
-  const identityError = checkIdentity(eligibility.artifact, identity.provider, identity.model);
-  if (identityError) {
-    return {
-      ok: false,
-      provider: identity.provider,
-      model: identity.model,
-      suiteVersion: opts.suiteVersion,
-      requiredPhase: opts.requiredPhase,
-      reason: `identity-${identityError}`,
-      artifactPath: eligibility.artifactPath,
-    };
-  }
-
   return {
     ok: true,
-    provider: identity.provider,
-    model: identity.model,
+    provider: resolved.storageIdentity.provider,
+    model: resolved.storageIdentity.model,
     suiteVersion: opts.suiteVersion,
     requiredPhase: opts.requiredPhase,
     artifactPath: eligibility.artifactPath,

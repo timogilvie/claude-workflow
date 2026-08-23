@@ -1,6 +1,9 @@
 export type {
   CertificationPhase,
+  CertificationSubject,
+  LiveSmokeEvidence,
   NativeCertificationArtifact,
+  AnyNativeCertificationArtifact,
   ScenarioResult,
 } from './schema.ts';
 
@@ -15,7 +18,7 @@ export {
 } from './schema.ts';
 
 export type { CertificationEligibility, IneligibilityReason, ScopedCertificationEligibility } from './loader.ts';
-export type { CertificationStorageIdentity } from './identity.ts';
+export type { CertificationStorageIdentity, ResolvedCertificationSubject } from './identity.ts';
 export type { CertificationStorageOptions, CertificationStorageScope } from './storage.ts';
 export type {
   NativeGateDecision,
@@ -51,6 +54,8 @@ export {
 export {
   isValidCertificationPathSegment,
   resolveCertificationStorageIdentity,
+  resolveCertificationSubject,
+  subjectsEqual,
 } from './identity.ts';
 export { evaluateNativeProviderGate } from './eligibility-gate.ts';
 
@@ -82,6 +87,7 @@ export {
   checkPhaseSatisfies,
   checkScenarios,
   checkSchemaVersion,
+  checkSubject,
   checkSuiteVersion,
   validateCertification,
 } from './validator.ts';

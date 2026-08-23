@@ -6,6 +6,7 @@ import { describe, it } from 'node:test';
 import { importLegacyCertifications } from './native-agent-certifications-import.ts';
 import {
   CERTIFICATION_SCHEMA_VERSION,
+  DEFAULT_CERTIFICATION_SUITE_VERSION,
   readCertification,
   writeCertification,
   type NativeCertificationArtifact,
@@ -20,12 +21,24 @@ function cleanup(dir: string): void {
 }
 
 function makeArtifact(overrides: Partial<NativeCertificationArtifact> = {}): NativeCertificationArtifact {
+  const provider = overrides.provider ?? 'openai';
+  const model = overrides.model ?? 'gpt-4o';
   return {
     schemaVersion: CERTIFICATION_SCHEMA_VERSION,
-    provider: 'openai',
-    model: 'gpt-4o',
+    subject: overrides.subject ?? {
+      registryKey: model,
+      nativeProvider: provider === 'qwen' ? 'openrouter' : provider,
+      providerId: provider,
+      providerModelId: model,
+      providerNativeId: provider === 'qwen' ? `${provider}/${model}` : model,
+      identityRevision: 1,
+      identityFingerprint: `test-${provider}-${model}`,
+      catalogHash: provider === 'qwen' ? 'test-catalog' : 'registry',
+    },
+    provider,
+    model,
     phase: 'read-only',
-    suiteVersion: 'v2',
+    suiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
     certifiedAt: '2026-07-01T00:00:00.000Z',
     scenarios: [{ scenarioId: 'read', passed: true }],
     ...overrides,
@@ -135,7 +148,7 @@ describe('importLegacyCertifications', () => {
       assert.equal(summary.scanned, 1);
       assert.equal(summary.imported.length, 1);
       assert.equal(summary.skipped.length, 0);
-      assert.match(summary.imported[0].artifactPath, /qwen\/qwen3-coder\/v2\.json$/);
+      assert.match(summary.imported[0].artifactPath, /qwen\/qwen3-coder\/v3\.json$/);
     } finally {
       if (previousRoot === undefined) {
         delete process.env.WAVEMILL_NATIVE_CERTIFICATION_ROOT;

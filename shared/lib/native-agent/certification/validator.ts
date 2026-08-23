@@ -2,11 +2,15 @@ import {
   CERTIFICATION_SCHEMA_VERSION,
   CERTIFICATION_TTL_DAYS,
   allScenariosPassed,
+  artifactHasSubject,
   isCertificationFresh,
   phaseSatisfies,
+  type AnyNativeCertificationArtifact,
+  type CertificationSubject,
   type CertificationPhase,
   type NativeCertificationArtifact,
 } from './schema.ts';
+import { subjectsEqual } from './identity.ts';
 
 export type ValidationErrorCode =
   | 'schema-version-mismatch'
@@ -15,6 +19,7 @@ export type ValidationErrorCode =
   | 'phase-insufficient'
   | 'limitation-conflict'
   | 'identity-mismatch'
+  | 'identity-reidentified'
   | 'scenario-failure';
 
 export interface ValidationError {
@@ -26,6 +31,7 @@ export interface ValidationError {
 export interface CertificationExpectations {
   expectedProvider: string;
   expectedModel: string;
+  expectedSubject?: CertificationSubject;
   expectedSuiteVersion: string;
   requiredPhase: CertificationPhase;
   /** Conflict-checked against knownLimitations */
@@ -66,6 +72,11 @@ export function validateCertification(
   const identityErr = checkIdentity(record, expectations.expectedProvider, expectations.expectedModel);
   if (identityErr) errors.push(identityErr);
 
+  const subjectErr = expectations.expectedSubject
+    ? checkSubject(record, expectations.expectedSubject)
+    : null;
+  if (subjectErr) errors.push(subjectErr);
+
   const limErr = checkLimitations(record, expectations.requiredCapabilities);
   if (limErr) errors.push(limErr);
 
@@ -85,6 +96,22 @@ export function checkSchemaVersion(record: NativeCertificationArtifact): Validat
     code: 'schema-version-mismatch',
     message: `schema version mismatch: artifact=${record.schemaVersion} expected=${CERTIFICATION_SCHEMA_VERSION}`,
     detail: { actual: record.schemaVersion, expected: CERTIFICATION_SCHEMA_VERSION },
+  };
+}
+
+export function checkSubject(
+  record: AnyNativeCertificationArtifact,
+  expected: CertificationSubject,
+): ValidationError | null {
+  if (artifactHasSubject(record) && subjectsEqual(record.subject, expected)) return null;
+
+  return {
+    code: 'identity-reidentified',
+    message: 'certification subject does not match current registry identity',
+    detail: {
+      actual: artifactHasSubject(record) ? record.subject : null,
+      expected,
+    },
   };
 }
 

@@ -10,6 +10,7 @@ import {
 } from './report.ts';
 import { CERTIFICATION_SCHEMA_VERSION, CERTIFICATION_TTL_DAYS } from './schema.ts';
 import { GLOBAL_CERTIFICATION_ROOT_ENV } from './storage.ts';
+import { resolveCertificationSubject } from './identity.ts';
 import type { ModelRegistry } from '../../model-registry.ts';
 import type { NativeCertificationArtifact } from './schema.ts';
 
@@ -373,16 +374,6 @@ describe('buildModelCertificationReport', () => {
       mkdirSync(certDir, { recursive: true });
       const previousRoot = process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
       process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = repoDir;
-      writeFileSync(join(certDir, 'v1.json'), JSON.stringify({
-        schemaVersion: CERTIFICATION_SCHEMA_VERSION,
-        provider: 'qwen',
-        model: 'qwen3-coder',
-        phase: 'workflow',
-        suiteVersion: 'v1',
-        certifiedAt: FRESH_DATE,
-        scenarios: [{ scenarioId: 's1', passed: true }],
-      }));
-
       const registry = makeRegistry({
         'qwen-3-coder': {
           vendor: 'qwen',
@@ -410,6 +401,21 @@ describe('buildModelCertificationReport', () => {
           },
         },
       });
+      const subject = resolveCertificationSubject({
+        provider: 'openrouter',
+        model: 'qwen-3-coder',
+        registry,
+      });
+      writeFileSync(join(certDir, 'v1.json'), JSON.stringify({
+        schemaVersion: CERTIFICATION_SCHEMA_VERSION,
+        subject: subject.subject,
+        provider: 'qwen',
+        model: 'qwen3-coder',
+        phase: 'workflow',
+        suiteVersion: 'v1',
+        certifiedAt: FRESH_DATE,
+        scenarios: [{ scenarioId: 's1', passed: true }],
+      }));
 
       const rows = buildModelCertificationReport({ registry, repoDir, now: NOW });
       const row = rows.find(r => r.model === 'qwen-3-coder');

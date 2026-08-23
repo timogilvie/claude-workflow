@@ -4,14 +4,18 @@ import {
   CERTIFICATION_BASE_PATH,
   CERTIFICATION_SCHEMA_VERSION,
   allScenariosPassed,
+  artifactHasSubject,
   isCertificationFresh,
   phaseSatisfies,
+  type AnyNativeCertificationArtifact,
+  type CertificationSubject,
   type CertificationPhase,
   type NativeCertificationArtifact,
 } from './schema.ts';
 import {
   isValidCertificationPathSegment,
   resolveCertificationStorageIdentity,
+  subjectsEqual,
 } from './identity.ts';
 import {
   buildScopedCertificationPath,
@@ -28,14 +32,15 @@ import {
 export type IneligibilityReason =
   | 'missing'
   | 'malformed'
+  | 'identity-reidentified'
   | 'wrong-version'
   | 'stale'
   | 'phase-insufficient'
   | 'scenario-failure';
 
 export type CertificationEligibility =
-  | { eligible: true; artifact: NativeCertificationArtifact }
-  | { eligible: false; reason: IneligibilityReason; artifact?: NativeCertificationArtifact };
+  | { eligible: true; artifact: AnyNativeCertificationArtifact }
+  | { eligible: false; reason: IneligibilityReason; artifact?: AnyNativeCertificationArtifact };
 
 export const isValidPathSegment = isValidCertificationPathSegment;
 
@@ -143,7 +148,7 @@ export function loadCertification(
   provider: string,
   model: string,
   suiteVersion: string,
-): { ok: true; artifact: NativeCertificationArtifact } | { ok: false; reason: 'missing' | 'malformed' } {
+): { ok: true; artifact: AnyNativeCertificationArtifact } | { ok: false; reason: 'missing' | 'malformed' } {
   let path: string;
   try {
     path = buildLegacyRepoCertificationPath(repoDir, provider, model, suiteVersion);
@@ -179,7 +184,7 @@ export function loadCertification(
 
 export function loadCertificationFromPath(
   path: string,
-): { ok: true; artifact: NativeCertificationArtifact } | { ok: false; reason: 'missing' | 'malformed' } {
+): { ok: true; artifact: AnyNativeCertificationArtifact } | { ok: false; reason: 'missing' | 'malformed' } {
   if (!existsSync(path)) {
     return { ok: false, reason: 'missing' };
   }
@@ -207,7 +212,7 @@ export function loadCertificationFromPath(
 }
 
 export type ScopedLoadCertificationResult =
-  | { ok: true; artifact: NativeCertificationArtifact; path: string; scope: CertificationStorageScope }
+  | { ok: true; artifact: AnyNativeCertificationArtifact; path: string; scope: CertificationStorageScope }
   | { ok: false; reason: 'missing' | 'malformed'; path?: string; scope: CertificationStorageScope };
 
 export function loadGlobalCertification(
@@ -252,11 +257,21 @@ export function loadSharedCertificationWithLegacyFallback(
  * Pass `now` to make TTL evaluation deterministic in tests.
  */
 export function evaluateEligibility(
-  artifact: NativeCertificationArtifact,
+  artifact: AnyNativeCertificationArtifact,
   requiredSuiteVersion: string,
   requiredPhase: CertificationPhase,
   now: Date = new Date(),
+  expectedSubject?: CertificationSubject,
 ): CertificationEligibility {
+  if (expectedSubject) {
+    if (!artifactHasSubject(artifact) || !subjectsEqual(artifact.subject, expectedSubject)) {
+      return { eligible: false, reason: 'identity-reidentified', artifact };
+    }
+    if (artifact.provider !== expectedSubject.providerId || artifact.model !== expectedSubject.providerModelId) {
+      return { eligible: false, reason: 'identity-reidentified', artifact };
+    }
+  }
+
   if (artifact.schemaVersion !== CERTIFICATION_SCHEMA_VERSION) {
     return { eligible: false, reason: 'wrong-version', artifact };
   }
@@ -293,12 +308,13 @@ export function checkCertificationEligibility(
   suiteVersion: string,
   requiredPhase: CertificationPhase,
   now: Date = new Date(),
+  expectedSubject?: CertificationSubject,
 ): CertificationEligibility {
   const loaded = loadCertification(repoDir, provider, model, suiteVersion);
   if (!loaded.ok) {
     return { eligible: false, reason: loaded.reason };
   }
-  return evaluateEligibility(loaded.artifact, suiteVersion, requiredPhase, now);
+  return evaluateEligibility(loaded.artifact, suiteVersion, requiredPhase, now, expectedSubject);
 }
 
 export type ScopedCertificationEligibility = CertificationEligibility & {
@@ -314,6 +330,7 @@ export function checkSharedCertificationEligibility(
   requiredPhase: CertificationPhase,
   now: Date = new Date(),
   options: Omit<CertificationStorageOptions, 'scope' | 'repoDir'> = {},
+  expectedSubject?: CertificationSubject,
 ): ScopedCertificationEligibility {
   const loaded = loadSharedCertificationWithLegacyFallback(repoDir, provider, model, suiteVersion, options);
   if (!loaded.ok) {
@@ -325,7 +342,7 @@ export function checkSharedCertificationEligibility(
     };
   }
   return {
-    ...evaluateEligibility(loaded.artifact, suiteVersion, requiredPhase, now),
+    ...evaluateEligibility(loaded.artifact, suiteVersion, requiredPhase, now, expectedSubject),
     artifactPath: loaded.path,
     storageScope: loaded.scope,
   };
@@ -338,6 +355,7 @@ export function checkGlobalCertificationEligibility(
   requiredPhase: CertificationPhase,
   now: Date = new Date(),
   options: Omit<CertificationStorageOptions, 'scope' | 'repoDir'> = {},
+  expectedSubject?: CertificationSubject,
 ): ScopedCertificationEligibility {
   const loaded = loadGlobalCertification(provider, model, suiteVersion, options);
   if (!loaded.ok) {
@@ -349,13 +367,13 @@ export function checkGlobalCertificationEligibility(
     };
   }
   return {
-    ...evaluateEligibility(loaded.artifact, suiteVersion, requiredPhase, now),
+    ...evaluateEligibility(loaded.artifact, suiteVersion, requiredPhase, now, expectedSubject),
     artifactPath: loaded.path,
     storageScope: 'global',
   };
 }
 
-function parseArtifact(input: unknown): NativeCertificationArtifact | undefined {
+function parseArtifact(input: unknown): AnyNativeCertificationArtifact | undefined {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
     return undefined;
   }
@@ -364,7 +382,13 @@ function parseArtifact(input: unknown): NativeCertificationArtifact | undefined 
 
   if (
     c.schemaVersion !== CERTIFICATION_SCHEMA_VERSION
-    || typeof c.provider !== 'string'
+    && c.schemaVersion !== 2
+  ) {
+    return undefined;
+  }
+
+  if (
+    typeof c.provider !== 'string'
     || typeof c.model !== 'string'
     || typeof c.phase !== 'string'
     || !(['read-only', 'patch', 'workflow'] as string[]).includes(c.phase)
@@ -392,8 +416,7 @@ function parseArtifact(input: unknown): NativeCertificationArtifact | undefined 
   const scenarios = parseScenarios(c.scenarios);
   if (!scenarios) return undefined;
 
-  const artifact: NativeCertificationArtifact = {
-    schemaVersion: CERTIFICATION_SCHEMA_VERSION,
+  const common = {
     provider: c.provider,
     model: c.model,
     phase: c.phase as CertificationPhase,
@@ -402,11 +425,80 @@ function parseArtifact(input: unknown): NativeCertificationArtifact | undefined 
     scenarios,
   };
 
+  const artifact: AnyNativeCertificationArtifact = c.schemaVersion === CERTIFICATION_SCHEMA_VERSION
+    ? {
+      schemaVersion: CERTIFICATION_SCHEMA_VERSION,
+      subject: parseSubject(c.subject),
+      ...common,
+    }
+    : {
+      schemaVersion: 2,
+      ...common,
+    };
+
+  if (artifact.schemaVersion === CERTIFICATION_SCHEMA_VERSION && !artifact.subject) {
+    return undefined;
+  }
+
   if (typeof c.expiresAt === 'string') artifact.expiresAt = c.expiresAt;
   if (Array.isArray(c.knownLimitations)) artifact.knownLimitations = c.knownLimitations as string[];
   if (typeof c.totalRetryCount === 'number') artifact.totalRetryCount = c.totalRetryCount;
+  if (artifact.schemaVersion === CERTIFICATION_SCHEMA_VERSION) {
+    const liveSmokeEvidence = parseLiveSmokeEvidence(c.liveSmokeEvidence);
+    if (c.liveSmokeEvidence !== undefined && !liveSmokeEvidence) return undefined;
+    if (liveSmokeEvidence) artifact.liveSmokeEvidence = liveSmokeEvidence;
+  }
 
   return artifact;
+}
+
+function parseSubject(raw: unknown): NativeCertificationArtifact['subject'] | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const s = raw as Record<string, unknown>;
+  if (
+    typeof s.registryKey !== 'string'
+    || typeof s.nativeProvider !== 'string'
+    || typeof s.providerId !== 'string'
+    || typeof s.providerModelId !== 'string'
+    || typeof s.providerNativeId !== 'string'
+    || typeof s.identityRevision !== 'number'
+    || typeof s.identityFingerprint !== 'string'
+    || typeof s.catalogHash !== 'string'
+  ) {
+    return undefined;
+  }
+  return {
+    registryKey: s.registryKey,
+    nativeProvider: s.nativeProvider,
+    providerId: s.providerId,
+    providerModelId: s.providerModelId,
+    providerNativeId: s.providerNativeId,
+    identityRevision: s.identityRevision,
+    identityFingerprint: s.identityFingerprint,
+    catalogHash: s.catalogHash,
+  };
+}
+
+function parseLiveSmokeEvidence(raw: unknown): NativeCertificationArtifact['liveSmokeEvidence'] | undefined {
+  if (raw === undefined) return undefined;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const e = raw as Record<string, unknown>;
+  if (
+    typeof e.requestedWireId !== 'string'
+    || typeof e.catalogHash !== 'string'
+    || typeof e.succeededAt !== 'string'
+  ) {
+    return undefined;
+  }
+  if (e.providerReturnedModel !== undefined && typeof e.providerReturnedModel !== 'string') {
+    return undefined;
+  }
+  return {
+    requestedWireId: e.requestedWireId,
+    ...(typeof e.providerReturnedModel === 'string' ? { providerReturnedModel: e.providerReturnedModel } : {}),
+    catalogHash: e.catalogHash,
+    succeededAt: e.succeededAt,
+  };
 }
 
 function parseScenarios(

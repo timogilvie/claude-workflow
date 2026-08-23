@@ -34,7 +34,7 @@ describe('parity-report CLI', () => {
       const repoDir = fixture.consumers[0].repoDir;
       cleanConfig(repoDir);
       const report = JSON.parse(runTool(repoDir, fixture.global.root, ['--strict-challenge'])) as Record<string, unknown>;
-      assert.equal(report.globalCatalogVersion, 'v2');
+      assert.equal(report.globalCatalogVersion, 'v3');
       assert.deepEqual(report.forbiddenLocalConfig, []);
       assert.equal((report.challengePairAvailability as Record<string, unknown>).coding, true);
     } finally {

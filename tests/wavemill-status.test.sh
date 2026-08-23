@@ -2488,6 +2488,30 @@ cat > "$TMP_DIR/backstage-health.json" <<JSON
   "services": {
     "tend": {
       "status": "healthy",
+      "heartbeatAt": "$(iso_at_offset -10)"
+    },
+    "observer": {
+      "status": "healthy",
+      "heartbeatAt": "$(iso_at_offset -20)",
+      "instanceCount": 3
+    }
+  }
+}
+JSON
+run_render "$backstage_state" "$WORKTREES_DIR" "$backstage_behavior" "$backstage_output"
+backstage_multi_observer_render="$(cat "$backstage_output")"
+if [[ "$backstage_multi_observer_render" == *"Observer: healthy x3"* ]]; then
+  pass "backstage health renders duplicate observer instance count"
+else
+  fail "backstage health did not render observer instance count"
+fi
+
+cat > "$TMP_DIR/backstage-health.json" <<JSON
+{
+  "status": "healthy",
+  "services": {
+    "tend": {
+      "status": "healthy",
       "heartbeatAt": "$(iso_at_offset -10)",
       "failureCount": 2
     }

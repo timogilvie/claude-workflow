@@ -28,13 +28,16 @@ import { listVariedRoutingDimensions, routingMetaFromChallengeEntry } from './ch
 import { projectChallengeIntentForPersistence } from './challenge-execution-contract.ts';
 import { resolveOpenRouterModelId } from './openrouter-provider.ts';
 import type { RouteArtifactSnapshot } from './route-artifact.ts';
-import { CERTIFICATION_SCHEMA_VERSION } from './native-agent/certification/schema.ts';
+import { CERTIFICATION_SCHEMA_VERSION, type CertificationSubject } from './native-agent/certification/schema.ts';
 import {
+  DEFAULT_CERTIFICATION_SUITE_VERSION,
   GLOBAL_CERTIFICATION_ROOT_ENV,
   buildGlobalCertificationPath,
+  resolveCertificationStorageIdentity,
+  resolveCertificationSubject,
 } from './native-agent/certification/index.ts';
 import { clearConfigCache } from './config.ts';
-import { getEffectiveRegistry } from './model-registry.ts';
+import { computeIdentityFingerprint, getEffectiveRegistry } from './model-registry.ts';
 import {
   PATCH_CODING_CERTIFICATION_SCHEMA_VERSION,
   getPatchCodingCertificationPath,
@@ -292,16 +295,7 @@ function writeNativeChallengeRepo(options: {
 }): string {
   const repoDir = mkdtempSync(join(tmpdir(), 'challenge-native-'));
   process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = join(repoDir, 'global-certifications');
-  const suiteVersion = options.suiteVersion ?? 'v2';
-  const storageIdentity = options.provider === 'openrouter'
-    ? (() => {
-        const openrouterId = resolveOpenRouterModelId(options.model) ?? options.model;
-        const [provider, model] = openrouterId.split('/');
-        return provider && model ? { provider, model } : { provider: options.provider, model: options.model };
-      })()
-    : { provider: options.provider, model: options.model };
-  const certPath = buildGlobalCertificationPath(storageIdentity.provider, storageIdentity.model, suiteVersion);
-  mkdirSync(dirname(certPath), { recursive: true });
+  const suiteVersion = options.suiteVersion ?? DEFAULT_CERTIFICATION_SUITE_VERSION;
   writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
     nativeAgent: {
       enabled: true,
@@ -320,12 +314,21 @@ function writeNativeChallengeRepo(options: {
       },
     },
   }));
+  clearConfigCache(repoDir);
+  const identity = resolveTestCertificationIdentity(repoDir, options.provider, options.model);
+  const certPath = buildGlobalCertificationPath(
+    identity.storageIdentity.provider,
+    identity.storageIdentity.model,
+    suiteVersion,
+  );
+  mkdirSync(dirname(certPath), { recursive: true });
   writeFileSync(
     certPath,
     JSON.stringify({
       schemaVersion: CERTIFICATION_SCHEMA_VERSION,
-      provider: storageIdentity.provider,
-      model: storageIdentity.model,
+      subject: identity.subject,
+      provider: identity.storageIdentity.provider,
+      model: identity.storageIdentity.model,
       phase: options.phase,
       suiteVersion,
       certifiedAt: RUNTIME_FRESH_CERTIFIED_AT,
@@ -1949,14 +1952,18 @@ function writeCertArtifact(
   suiteVersion: string,
   overrides: Record<string, unknown> = {},
 ): void {
-  const openrouterId = provider === 'openrouter' ? resolveOpenRouterModelId(model) : null;
-  const [storageProvider, storageModel] = openrouterId?.split('/') ?? [provider, model];
-  const path = buildGlobalCertificationPath(storageProvider!, storageModel!, suiteVersion);
+  const identity = resolveTestCertificationIdentity(repoDir, provider, model);
+  const path = buildGlobalCertificationPath(
+    identity.storageIdentity.provider,
+    identity.storageIdentity.model,
+    suiteVersion,
+  );
   mkdirSync(dirname(path), { recursive: true });
   const artifact = {
     schemaVersion: CERTIFICATION_SCHEMA_VERSION,
-    provider: storageProvider,
-    model: storageModel,
+    subject: identity.subject,
+    provider: identity.storageIdentity.provider,
+    model: identity.storageIdentity.model,
     phase: 'patch',
     suiteVersion,
     certifiedAt: CERT_DATE_FRESH,
@@ -1967,9 +1974,49 @@ function writeCertArtifact(
 }
 
 function certArtifactPath(repoDir: string, provider: string, model: string, suiteVersion: string): string {
-  const openrouterId = provider === 'openrouter' ? resolveOpenRouterModelId(model) : null;
-  const [storageProvider, storageModel] = openrouterId?.split('/') ?? [provider, model];
-  return buildGlobalCertificationPath(storageProvider!, storageModel!, suiteVersion);
+  const identity = resolveTestCertificationIdentity(repoDir, provider, model);
+  return buildGlobalCertificationPath(
+    identity.storageIdentity.provider,
+    identity.storageIdentity.model,
+    suiteVersion,
+  );
+}
+
+function resolveTestCertificationIdentity(repoDir: string, provider: string, model: string): {
+  subject: CertificationSubject;
+  storageIdentity: { provider: string; model: string };
+} {
+  const nativeProvider = provider === 'openai' ? 'openai' : 'openrouter';
+  const providerNativeId = nativeProvider === 'openrouter'
+    ? resolveOpenRouterModelId(model) ?? (provider === 'openrouter' ? model : `${provider}/${model}`)
+    : model;
+  try {
+    return resolveCertificationSubject({
+      provider: nativeProvider,
+      model,
+      registry: getEffectiveRegistry(repoDir),
+    });
+  } catch {
+    const storageIdentity = resolveCertificationStorageIdentity(nativeProvider, providerNativeId);
+    return {
+      storageIdentity,
+      subject: {
+        registryKey: model,
+        nativeProvider,
+        providerId: storageIdentity.provider,
+        providerModelId: storageIdentity.model,
+        providerNativeId,
+        identityRevision: 1,
+        identityFingerprint: computeIdentityFingerprint({
+          alias: model,
+          providerNativeId,
+          provider: nativeProvider,
+          revision: 1,
+        }),
+        catalogHash: nativeProvider === 'openrouter' ? 'test-catalog' : 'registry',
+      },
+    };
+  }
 }
 
 /** Build a minimal native model registry entry */
@@ -2015,7 +2062,7 @@ function makeHok2569Repo(
 ) {
   return makeNativeTestRepo(
     {
-      [alias]: openRouterNativeModelEntry('patch', 'v2'),
+      [alias]: openRouterNativeModelEntry('patch', DEFAULT_CERTIFICATION_SUITE_VERSION),
     },
     {
       patchCodingEnabled: opts.patchCodingEnabled,
@@ -2036,11 +2083,11 @@ function makeHok2569Repo(
 
 console.log('\n--- Native Certification Guardrail Tests ---\n');
 
-test('HOK-2569 OpenRouter v2 patch aliases pass canonical gate and challenge filtering', () => {
+test('HOK-2569 OpenRouter v3 patch aliases pass canonical gate and challenge filtering', () => {
   for (const alias of HOK_2569_OPENROUTER_ALIASES) {
     const { repoDir, cleanup } = makeHok2569Repo(alias);
     try {
-      writeCertArtifact(repoDir, 'openrouter', alias, 'v2', { phase: 'patch' });
+      writeCertArtifact(repoDir, 'openrouter', alias, DEFAULT_CERTIFICATION_SUITE_VERSION, { phase: 'patch' });
 
       const gate = evaluateNativeProviderGate({
         modelId: alias,
@@ -2081,7 +2128,7 @@ test('HOK-2569 OpenRouter v2 patch aliases pass canonical gate and challenge fil
   }
 });
 
-test('HOK-2569 OpenRouter v2 patch aliases fail closed consistently for degraded artifacts', () => {
+test('HOK-2569 OpenRouter v3 patch aliases fail closed consistently for degraded artifacts', () => {
   const cases: Array<{
     name: string;
     configure: (repoDir: string, alias: typeof HOK_2569_OPENROUTER_ALIASES[number]) => void;
@@ -2096,7 +2143,7 @@ test('HOK-2569 OpenRouter v2 patch aliases fail closed consistently for degraded
     },
     {
       name: 'stale',
-      configure: (repoDir, alias) => writeCertArtifact(repoDir, 'openrouter', alias, 'v2', {
+      configure: (repoDir, alias) => writeCertArtifact(repoDir, 'openrouter', alias, DEFAULT_CERTIFICATION_SUITE_VERSION, {
         phase: 'patch',
         certifiedAt: CERT_DATE_STALE,
       }),
@@ -2105,7 +2152,7 @@ test('HOK-2569 OpenRouter v2 patch aliases fail closed consistently for degraded
     },
     {
       name: 'wrong-suite',
-      configure: (repoDir, alias) => writeCertArtifact(repoDir, 'openrouter', alias, 'v2', {
+      configure: (repoDir, alias) => writeCertArtifact(repoDir, 'openrouter', alias, DEFAULT_CERTIFICATION_SUITE_VERSION, {
         phase: 'patch',
         suiteVersion: 'v1',
       }),
@@ -2115,7 +2162,7 @@ test('HOK-2569 OpenRouter v2 patch aliases fail closed consistently for degraded
     {
       name: 'malformed',
       configure: (repoDir, alias) => {
-        const artifactPath = certArtifactPath(repoDir, 'openrouter', alias, 'v2');
+        const artifactPath = certArtifactPath(repoDir, 'openrouter', alias, DEFAULT_CERTIFICATION_SUITE_VERSION);
         mkdirSync(dirname(artifactPath), { recursive: true });
         writeFileSync(artifactPath, '{');
       },
@@ -2124,7 +2171,7 @@ test('HOK-2569 OpenRouter v2 patch aliases fail closed consistently for degraded
     },
     {
       name: 'phase-insufficient',
-      configure: (repoDir, alias) => writeCertArtifact(repoDir, 'openrouter', alias, 'v2', {
+      configure: (repoDir, alias) => writeCertArtifact(repoDir, 'openrouter', alias, DEFAULT_CERTIFICATION_SUITE_VERSION, {
         phase: 'read-only',
       }),
       gateReason: 'insufficient_phase',
@@ -2178,7 +2225,7 @@ test('HOK-2569 OpenRouter implementation aliases reject when repo patch-coding o
   const alias = 'qwen-3-coder';
   const { repoDir, cleanup } = makeHok2569Repo(alias, { patchCodingEnabled: false });
   try {
-    writeCertArtifact(repoDir, 'openrouter', alias, 'v2', { phase: 'patch' });
+    writeCertArtifact(repoDir, 'openrouter', alias, DEFAULT_CERTIFICATION_SUITE_VERSION, { phase: 'patch' });
 
     const result = pickChallengeModelsWithReason(
       ['claude-opus-4-6', alias],
@@ -2771,7 +2818,7 @@ test('workflow-certified OpenRouter aliases remain challenge-eligible for review
     },
   );
   try {
-    writeCertArtifact(repoDir, 'openrouter', 'glm-5.2', 'v2', { phase: 'workflow' });
+    writeCertArtifact(repoDir, 'openrouter', 'glm-5.2', DEFAULT_CERTIFICATION_SUITE_VERSION, { phase: 'workflow' });
 
     const result = pickChallengeWorkflowsWithReason(
       ['claude-opus-4-6', 'glm-5.2'],

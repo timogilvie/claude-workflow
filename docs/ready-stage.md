@@ -54,8 +54,8 @@ Required contexts are resolved in this order:
 
 CI verdicts are fail-closed:
 
-- any failing, errored, cancelled, timed-out, or unknown check yields `fail`
-- any missing required context, pending check, or empty check set yields `pending`
+- any recognized failing, errored, cancelled, or timed-out check yields `fail`
+- any missing required context, pending check, empty check set, empty check-run conclusion, or unrecognized check state yields `pending`
 - an empty check set yields `skip` only when `ready.requireCiChecks` is explicitly `false`
 - skipped and neutral GitHub checks count as passing once required contexts are present
 

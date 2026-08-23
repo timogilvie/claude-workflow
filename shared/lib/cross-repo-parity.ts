@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { buildGlobalCertificationPath } from './native-agent/certification/loader.ts';
-import { resolveCertificationStorageIdentity } from './native-agent/certification/identity.ts';
+import { resolveCertificationSubject } from './native-agent/certification/identity.ts';
 import {
   CERTIFICATION_BASE_PATH,
   CERTIFICATION_SCHEMA_VERSION,
@@ -13,6 +13,7 @@ import {
   getPatchCodingCertificationPath,
 } from './native-agent/coding-certification.ts';
 import { PATCH_CODING_SMOKE_SUITE_REVISION } from './native-agent/smoke.ts';
+import { DEFAULT_MODEL_REGISTRY } from './model-registry.ts';
 
 export type ConsumerRepoName = 'wavemill' | 'gtm-backend' | 'gtm-frontend';
 export type ParityArtifactMode = 'valid' | 'missing' | 'wrong-suite' | 'stale' | 'partial';
@@ -51,14 +52,24 @@ function writeGlobalArtifact(
   phase: CertificationPhase,
   opts: { suiteVersion?: string; certifiedAt?: string; scenarioPassed?: boolean } = {},
 ): string {
-  const suiteVersion = opts.suiteVersion ?? 'v2';
-  const path = buildGlobalCertificationPath(provider, model, suiteVersion, { root });
-  const identity = resolveCertificationStorageIdentity(provider, model);
+  const suiteVersion = opts.suiteVersion ?? 'v3';
+  const identity = resolveCertificationSubject({
+    provider,
+    model,
+    registry: DEFAULT_MODEL_REGISTRY,
+  });
+  const path = buildGlobalCertificationPath(
+    identity.storageIdentity.provider,
+    identity.storageIdentity.model,
+    suiteVersion,
+    { root },
+  );
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify({
     schemaVersion: CERTIFICATION_SCHEMA_VERSION,
-    provider: identity.provider,
-    model: identity.model,
+    subject: identity.subject,
+    provider: identity.storageIdentity.provider,
+    model: identity.storageIdentity.model,
     phase,
     suiteVersion,
     certifiedAt: opts.certifiedAt ?? CERTIFIED_AT,
@@ -158,10 +169,10 @@ export function buildParityFixture(opts: {
       : CERTIFIED_MODELS;
     for (const entry of models) {
       const path = writeGlobalArtifact(globalRoot, entry.provider, entry.model, entry.phase, {
-        suiteVersion: opts.globalArtifacts === 'wrong-suite' ? 'v1' : 'v2',
+        suiteVersion: opts.globalArtifacts === 'wrong-suite' ? 'v1' : 'v3',
         certifiedAt: opts.globalArtifacts === 'stale' ? STALE_CERTIFIED_AT : CERTIFIED_AT,
       });
-      artifacts.push({ ...entry, suiteVersion: opts.globalArtifacts === 'wrong-suite' ? 'v1' : 'v2', path });
+      artifacts.push({ ...entry, suiteVersion: opts.globalArtifacts === 'wrong-suite' ? 'v1' : 'v3', path });
     }
   }
 

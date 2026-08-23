@@ -72,7 +72,9 @@ import {
 } from '../workflow-tools/contracts.ts';
 import { isMutationAllowed } from '../workflow-tools/mutation-policy.ts';
 import type { ModelRegistry, NativeProviderName, PiTransportKind } from '../../model-registry.ts';
+import { computeIdentityFingerprint } from '../../model-registry.ts';
 import { resolveOpenRouterModelIdentity, type RoleEligibility } from '../../openrouter-catalog.ts';
+import { resolveCertificationSubject } from './identity.ts';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -242,6 +244,34 @@ function makeOpenRouterMatrixRegistry(
       },
     },
     ladders: {},
+  };
+}
+
+function makeScenarioSubject(input: {
+  provider: string;
+  model: string;
+  registryKey?: string;
+  providerNativeId?: string;
+}): NativeCertificationArtifact['subject'] {
+  const providerNativeId = input.providerNativeId ?? input.model;
+  const split = providerNativeId.includes('/')
+    ? providerNativeId.split('/')
+    : [input.provider, input.model];
+  const registryKey = input.registryKey ?? input.model;
+  return {
+    registryKey,
+    nativeProvider: input.provider,
+    providerId: split[0]!,
+    providerModelId: split[1]!,
+    providerNativeId,
+    identityRevision: 1,
+    identityFingerprint: computeIdentityFingerprint({
+      alias: registryKey,
+      providerNativeId,
+      provider: input.provider,
+      revision: 1,
+    }),
+    catalogHash: 'scenario',
   };
 }
 
@@ -441,6 +471,7 @@ async function assertPhasePersistenceRoundtrip(ctx: ScenarioContext): Promise<Sc
 
     const artifact: NativeCertificationArtifact = {
       schemaVersion: CERTIFICATION_SCHEMA_VERSION,
+      subject: makeScenarioSubject({ provider, model }),
       provider,
       model,
       phase: 'read-only',
@@ -482,6 +513,11 @@ async function assertWorkflowArtifactUnlocksPlanner(ctx: ScenarioContext): Promi
 
     const artifact: NativeCertificationArtifact = {
       schemaVersion: CERTIFICATION_SCHEMA_VERSION,
+      subject: makeScenarioSubject({
+        provider,
+        model,
+        providerNativeId: ctx.provider === 'openrouter' ? 'qwen/qwen3-coder' : model,
+      }),
       provider,
       model,
       phase: 'workflow',
@@ -874,6 +910,7 @@ async function assertWorkflowPhasePersistenceRoundtrip(ctx: ScenarioContext): Pr
   try {
     const artifact: NativeCertificationArtifact = {
       schemaVersion: CERTIFICATION_SCHEMA_VERSION,
+      subject: makeScenarioSubject({ provider: ctx.provider, model: 'test-model' }),
       provider: ctx.provider,
       model: 'test-model',
       phase: 'workflow',
@@ -939,8 +976,18 @@ async function assertWorkflowNativeOpenRouterLaunchMatrix(_ctx: ScenarioContext)
         return { kind: 'fail', detail: `Missing launch-priority identity for ${modelId}` };
       }
 
+      const registry = makeOpenRouterMatrixRegistry(modelId, 'workflow', DEFAULT_CERTIFICATION_SUITE_VERSION);
+      if ('error' in registry) {
+        return { kind: 'fail', detail: registry.error };
+      }
+      const subject = resolveCertificationSubject({
+        provider: 'openrouter',
+        model: modelId,
+        registry,
+      });
       const artifact: NativeCertificationArtifact = {
         schemaVersion: CERTIFICATION_SCHEMA_VERSION,
+        subject: subject.subject,
         provider: identity.provider,
         model: identity.providerModel,
         phase: 'workflow',
@@ -949,11 +996,6 @@ async function assertWorkflowNativeOpenRouterLaunchMatrix(_ctx: ScenarioContext)
         scenarios: [{ scenarioId: 'workflow.phase.native-openrouter-launch-matrix', passed: true }],
       };
       writeGlobalCertification(artifact);
-
-      const registry = makeOpenRouterMatrixRegistry(modelId, 'workflow', DEFAULT_CERTIFICATION_SUITE_VERSION);
-      if ('error' in registry) {
-        return { kind: 'fail', detail: registry.error };
-      }
 
       for (const role of ['planner', 'coder', 'reviewer'] as const) {
         const result = filterNativeModels([modelId], role, registry, tmpDir);
@@ -1619,7 +1661,7 @@ export { PHASE_ORDER };
  * is stored in every certification artifact and must match the registry
  * metadata for the artifact to be considered valid by the router.
  */
-export const DEFAULT_CERTIFICATION_SUITE_VERSION = 'v2' as const;
+export const DEFAULT_CERTIFICATION_SUITE_VERSION = 'v3' as const;
 
 /**
  * Return the default certification scenario catalog.
