@@ -16245,15 +16245,6 @@ check_backstage_health() {
       LAST_BACKSTAGE_HEALTH_STATUS="healthy"
       return 0
       ;;
-    stalled)
-      heartbeat_at="$(read_backstage_service_health_field "tend" '.heartbeatAt' || true)"
-      [[ -n "$health_file" ]] && wavemill_write_backstage_service_health "$health_file" "tend" "stalled" "$detail" 0 "" "$executor_pane_id" "$heartbeat_at" "$tend_count"
-      if [[ "$LAST_BACKSTAGE_HEALTH_STATUS" != "stalled" ]]; then
-        log_warn "Backstage tend loop is stalled: $detail"
-      fi
-      LAST_BACKSTAGE_HEALTH_STATUS="stalled"
-      return 0
-      ;;
     'backstage-missing')
       [[ -n "$health_file" ]] && wavemill_write_backstage_health "$health_file" "backstage-missing" "$detail" 0 "" "" 0
       if [[ "$LAST_BACKSTAGE_HEALTH_STATUS" != "backstage-missing" ]]; then
