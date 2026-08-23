@@ -35,6 +35,7 @@ import {
   attachFeatureOutcomeDiagnostics,
   attachPlanningExecutionOutcome,
   attachVerificationTelemetry,
+  attachModelIdentityAttribution,
   buildVerificationTelemetryFromArtifact,
   computeRouteCalibration,
   computeEligibility,
@@ -671,6 +672,36 @@ describe('eval-record-builder', () => {
         budgetEvalEligible: true,
         eligibilityErrors: [],
       });
+    });
+
+    it('holds records that executed a provisional model identity', () => {
+      const record = makeEligibleRecord();
+      record.taskDescriptor!.stages!.coder = { model: 'ox-alpha' };
+
+      attachModelIdentityAttribution(record, undefined, '2026-08-22T16:00:00.000Z');
+      attachEligibility(record);
+
+      assert.equal(record.modelIdentityAttribution?.roles.coder?.alias, 'ox-alpha');
+      assert.equal(record.modelIdentityAttribution?.roles.coder?.identityStatus, 'provisional');
+      assert.deepEqual(record.modelIdentityAttribution?.provisionalRoles, ['coder']);
+      expect(record.trainingEligible).toBe(false);
+      expect(record.budgetEvalEligible).toBe(false);
+      expect(record.eligibilityErrors).toContain('provisional_model_identity');
+    });
+
+    it('snapshots candidate-only provisional models without changing eligibility', () => {
+      const record = makeEligibleRecord();
+      record.routingDecision!.candidates!.push({ agentType: 'codex', modelId: 'ox-alpha' });
+      record.taskDescriptor!.constraints!.models_available!.push('ox-alpha');
+
+      attachModelIdentityAttribution(record, undefined, '2026-08-22T16:00:00.000Z');
+      attachEligibility(record);
+
+      assert.deepEqual(record.modelIdentityAttribution?.provisionalRoles, []);
+      assert.deepEqual(record.modelIdentityAttribution?.candidateOnlyProvisional, ['ox-alpha']);
+      expect(record.trainingEligible).toBe(true);
+      expect(record.budgetEvalEligible).toBe(true);
+      expect(record.eligibilityErrors).toEqual([]);
     });
 
     it('marks missing routing as a shared ineligibility reason', () => {

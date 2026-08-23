@@ -237,6 +237,7 @@ Configuration (`.wavemill-config.json`):
 - `mill.1` dashboard
 - `mill.2` status log
 - When `observer.enabled` is true and integration mill-session monitoring is active, the Backstage window also includes a dedicated `Wavemill Observer` pane running detection-only `wavemill observer --loop`.
+- On startup and watchdog passes, the Backstage window is reconciled by pane title: tend, jobs, queue, and Observer each keep one pane; duplicate panes are killed; dead panes are respawned in place. `backstage-health.json` records `services.<name>.instanceCount` so a green service status still shows unexpected duplicates.
 - Input is decoupled from the monitor loop internally and written as session-scoped command events at `/tmp/wavemill-${SESSION}-commands`.
 - Seam artifact formats and validation timing are documented in [Seam Artifacts](seam-artifacts.md).
 - When coding writes a valid `features/<slug>/.coding-blocked-completion.json` that recommends review advancement and passes mill guardrails, mill auto-advances the task to review and records `features/<slug>/.coding-auto-advance.json`.
@@ -285,6 +286,8 @@ The four pipeline stages are:
 When `integration.enabled` and `integration.useMillSession` are both `true`, mill starts a dedicated `backstage` tmux window inside the existing mill session and runs the tend loop there with the normal session lifecycle. For tests and manual debugging, `wavemill tend --once --repo-dir <repo>` still runs a single pass without starting mill mode.
 
 The backstage tend loop is resilient to transient GitHub/network failures: it retries `gh` calls, backs off failed loop iterations while publishing `failureCount`/`lastError`, and the mill watchdog keeps restarting a dead tend loop on a 60s-to-15m backoff even after showing `needs-user`.
+
+The Observer loop holds `.wavemill/locks/observer-<repo>-<session>.lock` and exits immediately if another live Observer loop already owns that repo/session lock. This covers manual launches outside tmux; if a manual holder blocks the Backstage pane from staying alive, the watchdog will escalate through its normal missing-service path and the Observer duplicate detector reports the competing loop.
 
 ### Dependent Task Auto-Dispatch
 

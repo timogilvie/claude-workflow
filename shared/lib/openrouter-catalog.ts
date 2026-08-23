@@ -37,9 +37,10 @@ export type ModelFamily =
   | 'gemini'
   | 'llama'
   | 'mistral'
-  | 'grok';
+  | 'grok'
+  | 'unknown';
 
-export type ModelStatus = 'active' | 'watchlist' | 'deprecated';
+export type ModelStatus = 'active' | 'watchlist' | 'deprecated' | 'provisional';
 export type RoleEligibility = 'planning' | 'coding' | 'review';
 
 export interface LaunchPriorityModel {
@@ -85,6 +86,8 @@ export interface OpenRouterModel {
   pricing?: {
     prompt?: string | number;
     completion?: string | number;
+    input_cache_read?: string | number;
+    input_cache_write?: string | number;
   };
   top_provider?: {
     context_length?: number;
@@ -94,6 +97,8 @@ export interface OpenRouterModel {
 export interface NormalizedPricing {
   inputPerMTok: number | null;
   outputPerMTok: number | null;
+  cacheReadPerMTok: number | null;
+  cacheWritePerMTok: number | null;
 }
 
 export interface NormalizedCatalogEntry {
@@ -130,6 +135,18 @@ export interface NormalizedCatalog {
   sourceHash: string;
   entries: NormalizedCatalogEntry[];
   blockers: CatalogBlocker[];
+}
+
+export interface PromotionPricingSpec {
+  inputPerMTok: number;
+  outputPerMTok: number;
+  cacheReadPerMTok: number | null;
+  cacheWritePerMTok: number | null;
+}
+
+export interface PromotionPricingValidationResult {
+  ok: boolean;
+  errors: string[];
 }
 
 // ── Fixture loading ──────────────────────────────────────────────────────────
@@ -321,9 +338,14 @@ export async function fetchOpenRouterModels(
 
 const TOKENS_PER_MILLION = 1_000_000;
 
-function parsePricingValue(value: unknown): number | null {
+type ParsedPricingValue =
+  | { kind: 'absent' }
+  | { kind: 'value'; perMTok: number }
+  | { kind: 'invalid'; raw: unknown };
+
+function parsePricingValue(value: unknown): ParsedPricingValue {
   if (value === undefined || value === null) {
-    return null;
+    return { kind: 'absent' };
   }
   if (typeof value === 'string' && value.trim().length === 0) {
     return { kind: 'invalid', raw: value };
@@ -335,7 +357,11 @@ function parsePricingValue(value: unknown): number | null {
   if (!Number.isFinite(asNumber) || asNumber < 0) {
     return { kind: 'invalid', raw: value };
   }
-  return asNumber * TOKENS_PER_MILLION;
+  return { kind: 'value', perMTok: asNumber * TOKENS_PER_MILLION };
+}
+
+function pricingValueOrNull(value: ParsedPricingValue): number | null {
+  return value.kind === 'value' ? value.perMTok : null;
 }
 
 function resolveContextTokens(model: OpenRouterModel): number | null {

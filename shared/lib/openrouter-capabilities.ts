@@ -25,6 +25,11 @@ const FAMILY_CAPABILITIES: Record<ModelFamily, FamilyCapabilities> = {
   llama: DEFAULT_CAPABILITIES,
   mistral: DEFAULT_CAPABILITIES,
   grok: DEFAULT_CAPABILITIES,
+  unknown: {
+    supportsTools: false,
+    supportsStreaming: true,
+    supportsTemperature: false,
+  },
 };
 
 export function getFamilyCapabilities(family: ModelFamily): FamilyCapabilities {

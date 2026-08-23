@@ -38,6 +38,7 @@ import {
   parseModelSelector,
   rankCandidates,
   REVIEWER_ALIAS_MAP,
+  resolveModelIdentity,
   resolveProviderNativeModelId,
   resolveSelector,
   listSupportedModelsForStage,
@@ -236,6 +237,7 @@ describe('model-registry', () => {
       'llama-4-scout',
       'mistral-large-2',
       'mistral-medium-3',
+      'ox-alpha',
       'qwen-2.5-coder-32b',
       'qwen-2.5-72b',
       'qwen-3-235b',
@@ -2374,6 +2376,20 @@ describe('canonical supported-model helpers', () => {
       assert.equal(listSupportedModelsForStage('coding').includes(alias), false);
     }
     assert.equal(DEFAULT_MODEL_REGISTRY.models['qwen-2.5-coder-32b'].toolSupport, 'none');
+  });
+
+  it('keeps provisional Ox Alpha pinnable metadata out of automatic stage lists', () => {
+    const identity = resolveModelIdentity(DEFAULT_MODEL_REGISTRY, 'ox-alpha');
+
+    assert.equal(identity.status, 'provisional');
+    assert.equal(identity.revision, 1);
+    assert.equal(identity.evidencePolicy, 'held');
+    assert.equal(identity.family, 'unknown');
+    assert.equal(identity.displayName, 'Ox Alpha');
+    assert.equal(explainModelSupportExclusion('ox-alpha', 'coding'), 'provisional-identity');
+    assert.equal(listSupportedModelsForStage('planning').includes('ox-alpha'), false);
+    assert.equal(listSupportedModelsForStage('coding').includes('ox-alpha'), false);
+    assert.equal(listSupportedModelsForStage('review').includes('ox-alpha'), false);
   });
 
   it('requires tool support for every supported Wavemill stage', () => {
