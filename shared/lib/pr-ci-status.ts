@@ -107,7 +107,8 @@ export function normalizeStatusCheckRollup(raw: unknown): NormalizedCheckSummary
 
   raw.forEach((item, index) => {
     const entry = typeof item === 'object' && item !== null ? item as Record<string, unknown> : {};
-    const rawValue = entry.conclusion ?? entry.state ?? entry.status ?? entry.bucket ?? '';
+    const rawValue = [entry.conclusion, entry.state, entry.status, entry.bucket]
+      .find((value) => value != null && String(value).trim() !== '') ?? '';
     const rawStatus = String(rawValue).toUpperCase();
     const name = String(entry.name ?? entry.context ?? `check-${index + 1}`);
     const text = [

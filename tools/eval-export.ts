@@ -4,6 +4,7 @@ import { writeFileSync } from 'node:fs';
 import { readEvalRecords } from '../shared/lib/eval-persistence.ts';
 import { exportEvalDataset } from '../shared/lib/eval-export.ts';
 import type { ExportFormat } from '../shared/lib/eval-export.ts';
+import { formatEvidenceExclusionSummary, partitionEvidence } from '../shared/lib/model-evidence-policy.ts';
 
 runTool({
   name: 'eval-export',
@@ -15,6 +16,7 @@ runTool({
     from: { type: 'string', description: 'Include records from this date (YYYY-MM-DD)' },
     to: { type: 'string', description: 'Include records up to this date (YYYY-MM-DD)' },
     model: { type: 'string', description: 'Filter to a specific model identifier' },
+    'include-held': { type: 'boolean', description: 'Include operationally held provisional evidence rows' },
     'min-score': { type: 'string', description: 'Include only records with score >= N' },
     'max-score': { type: 'string', description: 'Include only records with score <= N' },
     dir: { type: 'string', description: 'Override evals directory' },
@@ -59,15 +61,24 @@ Load into pandas:
       format,
       records,
       redact: !!args.redact,
+      includeHeld: !!args['include-held'],
     });
+    const partition = partitionEvidence(records, 'training_export');
+    const exclusionSummary = formatEvidenceExclusionSummary(partition.reasonCounts);
 
     if (args.output) {
       writeFileSync(args.output as string, output, 'utf-8');
       console.error(`Exported ${records.length} record(s) to ${args.output} (${format})`);
+      if (!args['include-held'] && partition.excluded.length > 0) {
+        console.error(`Excluded ${partition.excluded.length} held record(s): ${exclusionSummary}`);
+      }
     } else {
       process.stdout.write(output);
       if (process.stderr.isTTY) {
         console.error(`\nExported ${records.length} record(s) as ${format}`);
+        if (!args['include-held'] && partition.excluded.length > 0) {
+          console.error(`Excluded ${partition.excluded.length} held record(s): ${exclusionSummary}`);
+        }
       }
     }
   },

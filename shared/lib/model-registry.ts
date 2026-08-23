@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { getContextWindowFloorsConfig } from './config.ts';
 import { filterDisabledModels } from './disabled-models.ts';
 import {
@@ -6,7 +7,7 @@ import {
   phaseSatisfies,
   type CertificationPhase,
 } from './native-agent/certification/schema.ts';
-import { resolveWavemillAliasFromOpenRouterId } from './openrouter-catalog.ts';
+import { resolveWavemillAliasFromOpenRouterId, type ModelFamily } from './openrouter-catalog.ts';
 
 export type ModelClass = 'frontier' | 'strong_generalist' | 'fast_economy';
 export type RegistryTaskType = 'routing' | 'planning' | 'coding' | 'review' | 'classify';
@@ -21,9 +22,12 @@ export type PiTransportKind = 'openai-responses' | 'openai-completions';
 export type ReadOnlyNativeCapability = 'certified' | 'unsupported' | 'partial';
 export type ModelLifecycleStatus = 'supported' | 'deprecated' | 'blocked';
 export type SupportedModelStage = 'expansion' | 'planning' | 'coding' | 'review';
+export type ModelIdentityStatus = 'provisional' | 'verified';
+export type ModelEvidencePolicy = 'held' | 'eligible';
 export type ModelSupportExclusionReason =
   | 'unknown-model'
   | 'blocked-lifecycle'
+  | 'provisional-identity'
   | 'disabled'
   | 'stage-incompatible'
   | 'tool-support-insufficient'
@@ -114,6 +118,27 @@ export interface CodexChatgptCapability {
   reason?: string;
 }
 
+export interface ModelIdentityMetadata {
+  status: ModelIdentityStatus;
+  revision: number;
+  fingerprint: string;
+  displayName: string;
+  family: ModelFamily | 'unknown';
+  evidencePolicy: ModelEvidencePolicy;
+  verification?: {
+    source: string;
+    observedAt: string;
+    catalogHash: string;
+  };
+  lineage?: {
+    predecessors?: string[];
+    successor?: string;
+    formerIds?: string[];
+    disclosedAt?: string;
+    disclosureSource?: string;
+  };
+}
+
 export interface ModelCapabilities {
   vendor: string;
   class: ModelClass;
@@ -139,6 +164,7 @@ export interface ModelCapabilities {
   codexChatgptCapability?: CodexChatgptCapability;
   nativeCapability?: NativeCapability;
   supportedModel?: SupportedModelMetadata;
+  identity?: ModelIdentityMetadata;
   /**
    * ISO date the model became generally available. Drives the recency-aware
    * exploration boost (router.exploration.newModelBoost) and challenge
@@ -288,6 +314,13 @@ const OPENROUTER_NATIVE_CAPABILITY: NativeCapability = Object.freeze({
   certification: OPENROUTER_CERTIFICATION_SEED,
 });
 
+const PROVISIONAL_OPENROUTER_NATIVE_CAPABILITY: NativeCapability = Object.freeze({
+  nativeProvider: 'openrouter',
+  piTransportKind: 'openai-completions',
+  readOnlyNative: 'certified',
+  compatFlags: Object.freeze({ thinkingFormat: 'openrouter' }),
+});
+
 interface CodexChatgptCapabilityOverride {
   supported?: boolean;
   reason?: string;
@@ -322,6 +355,7 @@ interface ModelCapabilitiesOverride {
   codexChatgptCapability?: CodexChatgptCapabilityOverride;
   nativeCapability?: NativeCapabilityOverride;
   supportedModel?: Partial<SupportedModelMetadata>;
+  identity?: ModelIdentityMetadata;
   releasedAt?: string;
 }
 
@@ -330,6 +364,7 @@ function openRouterSupportedModel(input: {
   providerNativeId: string;
   stages: SupportedModelStage[];
   lifecycle?: ModelLifecycleStatus;
+  routingEligible?: boolean;
 }): SupportedModelMetadata {
   const [provider, model] = input.providerNativeId.split('/');
   return {
@@ -351,7 +386,7 @@ function openRouterSupportedModel(input: {
     lifecycle: input.lifecycle ?? 'supported',
     compatibilityFlags: { thinkingFormat: 'openrouter' },
     launchEligible: true,
-    routingEligible: true,
+    routingEligible: input.routingEligible ?? true,
   };
 }
 
@@ -470,7 +505,29 @@ function cloneCapabilities(capabilities: ModelCapabilities): ModelCapabilities {
     codexChatgptCapability: cloneCodexChatgptCapability(capabilities.codexChatgptCapability),
     nativeCapability: cloneNativeCapability(capabilities.nativeCapability),
     supportedModel: cloneSupportedModelMetadata(capabilities.supportedModel),
+    identity: capabilities.identity ? cloneIdentityMetadata(capabilities.identity) : undefined,
     releasedAt: capabilities.releasedAt,
+  };
+}
+
+function cloneIdentityMetadata(identity: ModelIdentityMetadata): ModelIdentityMetadata {
+  return {
+    status: identity.status,
+    revision: identity.revision,
+    fingerprint: identity.fingerprint,
+    displayName: identity.displayName,
+    family: identity.family,
+    evidencePolicy: identity.evidencePolicy,
+    verification: identity.verification ? { ...identity.verification } : undefined,
+    lineage: identity.lineage
+      ? {
+        predecessors: identity.lineage.predecessors ? [...identity.lineage.predecessors] : undefined,
+        successor: identity.lineage.successor,
+        formerIds: identity.lineage.formerIds ? [...identity.lineage.formerIds] : undefined,
+        disclosedAt: identity.lineage.disclosedAt,
+        disclosureSource: identity.lineage.disclosureSource,
+      }
+      : undefined,
   };
 }
 
@@ -642,6 +699,15 @@ function mergeCapabilities(
   override: ModelCapabilitiesOverride,
 ): ModelCapabilities {
   const seed = base ? cloneCapabilities(base) : makeDefaultCapabilities(override);
+  const mergedPricing = override.pricing
+    ? { ...override.pricing }
+    : seed.pricing
+    ? {
+      ...seed.pricing,
+      inputCostPerMTok: override.costPerMillionInputTokensUsd ?? seed.pricing.inputCostPerMTok,
+      outputCostPerMTok: override.costPerMillionOutputTokensUsd ?? seed.pricing.outputCostPerMTok,
+    }
+    : undefined;
 
   return {
     vendor: override.vendor ?? seed.vendor,
@@ -653,15 +719,21 @@ function mergeCapabilities(
       ...seed.qualityScores,
       ...override.qualityScores,
     },
-    pricing: override.pricing ? { ...override.pricing } : seed.pricing ? { ...seed.pricing } : undefined,
+    pricing: mergedPricing,
     defaultLadderEligible: override.defaultLadderEligible ?? seed.defaultLadderEligible ?? true,
     contextWindowTokens: override.contextWindowTokens ?? seed.contextWindowTokens,
     toolSupport: override.toolSupport ?? seed.toolSupport,
     multimodal: override.multimodal ? { ...override.multimodal } : { ...seed.multimodal },
     latencyTier: override.latencyTier ?? seed.latencyTier,
     reasoningTier: override.reasoningTier ?? seed.reasoningTier,
-    costPerMillionInputTokensUsd: override.costPerMillionInputTokensUsd ?? seed.costPerMillionInputTokensUsd,
-    costPerMillionOutputTokensUsd: override.costPerMillionOutputTokensUsd ?? seed.costPerMillionOutputTokensUsd,
+    costPerMillionInputTokensUsd:
+      override.costPerMillionInputTokensUsd
+      ?? override.pricing?.inputCostPerMTok
+      ?? seed.costPerMillionInputTokensUsd,
+    costPerMillionOutputTokensUsd:
+      override.costPerMillionOutputTokensUsd
+      ?? override.pricing?.outputCostPerMTok
+      ?? seed.costPerMillionOutputTokensUsd,
     agent: override.agent ?? seed.agent,
     codexChatgptCapability: mergeCodexChatgptCapability(seed.codexChatgptCapability, override.codexChatgptCapability),
     nativeCapability: override.nativeCapability
@@ -698,6 +770,7 @@ function mergeCapabilities(
           : undefined,
       }
       : cloneSupportedModelMetadata(seed.supportedModel),
+    identity: override.identity ? cloneIdentityMetadata(override.identity) : seed.identity ? cloneIdentityMetadata(seed.identity) : undefined,
     releasedAt: override.releasedAt ?? seed.releasedAt,
   };
 }
@@ -784,6 +857,76 @@ export class ModelValidationError extends Error {
     this.name = 'ModelValidationError';
     this.modelId = modelId;
   }
+}
+
+function canonicalIdentityPayload(input: {
+  alias: string;
+  providerNativeId: string;
+  provider?: string;
+  revision: number;
+}): string {
+  return JSON.stringify({
+    alias: input.alias,
+    providerNativeId: input.providerNativeId,
+    provider: input.provider ?? null,
+    revision: input.revision,
+  });
+}
+
+export function computeIdentityFingerprint(input: {
+  alias: string;
+  providerNativeId: string;
+  provider?: string;
+  revision: number;
+}): string {
+  return createHash('sha256').update(canonicalIdentityPayload(input)).digest('hex');
+}
+
+function inferLegacyIdentityFamily(capabilities: Partial<ModelCapabilities>): ModelFamily | 'unknown' {
+  const vendor = capabilities.vendor?.toLowerCase() ?? '';
+  if (vendor.includes('anthropic')) return 'claude';
+  if (vendor.includes('openai')) return 'gpt';
+  if (vendor.includes('deepseek')) return 'deepseek';
+  if (vendor.includes('qwen')) return 'qwen';
+  if (vendor.includes('moonshot') || vendor.includes('kimi')) return 'kimi';
+  if (vendor.includes('google') || vendor.includes('gemini')) return 'gemini';
+  if (vendor.includes('meta') || vendor.includes('llama')) return 'llama';
+  if (vendor.includes('mistral')) return 'mistral';
+  if (vendor.includes('x-ai') || vendor.includes('grok')) return 'grok';
+  return 'unknown';
+}
+
+export function resolveModelIdentity(
+  registry: ModelRegistry,
+  modelId: string,
+): ModelIdentityMetadata {
+  const registryKey = resolveModelRegistryKey(registry, modelId);
+  const capabilities = registry.models[registryKey];
+  if (!capabilities) {
+    const alias = modelId;
+    return {
+      status: 'verified',
+      revision: 1,
+      fingerprint: computeIdentityFingerprint({ alias, providerNativeId: alias, revision: 1 }),
+      displayName: alias,
+      family: 'unknown',
+      evidencePolicy: 'eligible',
+    };
+  }
+  if (capabilities.identity) {
+    return cloneIdentityMetadata(capabilities.identity);
+  }
+  const alias = capabilities.supportedModel?.wavemillAlias ?? registryKey;
+  const providerNativeId = capabilities.supportedModel?.providerNativeId ?? registryKey;
+  const provider = capabilities.supportedModel?.provider ?? capabilities.nativeCapability?.nativeProvider;
+  return {
+    status: 'verified',
+    revision: 1,
+    fingerprint: computeIdentityFingerprint({ alias, providerNativeId, provider, revision: 1 }),
+    displayName: alias,
+    family: inferLegacyIdentityFamily(capabilities),
+    evidencePolicy: 'eligible',
+  };
 }
 
 const MODEL_ID_PATTERN = /^[a-z0-9]+(?:[.-][a-z0-9]+)*(?:\[[a-z0-9]+\])?$/;
@@ -1284,11 +1427,145 @@ export function validateSupportedModelMetadata(
   }
 }
 
+function assertPricingConsistency(modelId: string, capabilities: ModelCapabilities): void {
+  if (!capabilities.pricing) {
+    return;
+  }
+  if (capabilities.pricing.inputCostPerMTok !== capabilities.costPerMillionInputTokensUsd) {
+    throw new ModelValidationError(
+      modelId,
+      `model ${modelId}: pricing.inputCostPerMTok must equal costPerMillionInputTokensUsd`,
+    );
+  }
+  if (capabilities.pricing.outputCostPerMTok !== capabilities.costPerMillionOutputTokensUsd) {
+    throw new ModelValidationError(
+      modelId,
+      `model ${modelId}: pricing.outputCostPerMTok must equal costPerMillionOutputTokensUsd`,
+    );
+  }
+}
+
+function assertIdentityInvariants(registry: ModelRegistry): void {
+  const providerNativeIds = new Map<string, string>();
+  const aliases = new Map<string, string>();
+
+  for (const [modelId, capabilities] of Object.entries(registry.models)) {
+    const alias = capabilities.supportedModel?.wavemillAlias ?? modelId;
+    const providerNativeId = capabilities.supportedModel?.providerNativeId;
+    const provider = capabilities.supportedModel?.provider ?? capabilities.nativeCapability?.nativeProvider;
+    const identity = capabilities.identity;
+
+    const previousAlias = aliases.get(alias);
+    if (previousAlias && previousAlias !== modelId) {
+      throw new ModelValidationError(modelId, `model ${modelId}: duplicate wavemill alias ${alias} also used by ${previousAlias}`);
+    }
+    aliases.set(alias, modelId);
+
+    if (providerNativeId && capabilities.identity) {
+      const previousProviderId = providerNativeIds.get(providerNativeId);
+      if (previousProviderId && previousProviderId !== modelId) {
+        throw new ModelValidationError(
+          modelId,
+          `model ${modelId}: duplicate providerNativeId ${providerNativeId} also used by ${previousProviderId}`,
+        );
+      }
+      providerNativeIds.set(providerNativeId, modelId);
+    }
+
+    if (!identity) {
+      continue;
+    }
+
+    if (identity.status !== 'provisional' && identity.status !== 'verified') {
+      throw new ModelValidationError(modelId, `model ${modelId}: identity.status must be provisional or verified`);
+    }
+    if (identity.evidencePolicy !== 'held' && identity.evidencePolicy !== 'eligible') {
+      throw new ModelValidationError(modelId, `model ${modelId}: identity.evidencePolicy must be held or eligible`);
+    }
+    if (!Number.isInteger(identity.revision) || identity.revision < 1) {
+      throw new ModelValidationError(modelId, `model ${modelId}: identity.revision must be an integer >= 1`);
+    }
+    if (typeof identity.displayName !== 'string' || identity.displayName.trim().length === 0) {
+      throw new ModelValidationError(modelId, `model ${modelId}: identity.displayName must be non-empty`);
+    }
+    const expectedFingerprint = computeIdentityFingerprint({
+      alias,
+      providerNativeId: providerNativeId ?? alias,
+      provider,
+      revision: identity.revision,
+    });
+    if (identity.fingerprint !== expectedFingerprint) {
+      throw new ModelValidationError(modelId, `model ${modelId}: identity.fingerprint does not match alias/provider/revision`);
+    }
+
+    if (identity.status === 'provisional') {
+      if ((capabilities.supportedModel?.routingEligible ?? true) !== false) {
+        throw new ModelValidationError(modelId, `model ${modelId}: provisional identity must set supportedModel.routingEligible=false`);
+      }
+      if (capabilities.defaultLadderEligible !== false) {
+        throw new ModelValidationError(modelId, `model ${modelId}: provisional identity must set defaultLadderEligible=false`);
+      }
+      if (!Object.values(capabilities.qualityScores).every((score) => score === 0)) {
+        throw new ModelValidationError(modelId, `model ${modelId}: provisional identity must keep qualityScores at 0`);
+      }
+      if (identity.evidencePolicy !== 'held') {
+        throw new ModelValidationError(modelId, `model ${modelId}: provisional identity must set evidencePolicy=held`);
+      }
+      if (identity.family !== 'unknown' && !identity.verification) {
+        throw new ModelValidationError(modelId, `model ${modelId}: provisional identity family must remain unknown without verification`);
+      }
+      if (identity.lineage?.successor) {
+        throw new ModelValidationError(modelId, `model ${modelId}: provisional identity cannot declare a successor before promotion`);
+      }
+      for (const [taskType, ladder] of Object.entries(registry.ladders)) {
+        if (ladder?.includes(modelId)) {
+          throw new ModelValidationError(modelId, `model ${modelId}: provisional identity cannot appear in ${taskType} ladder`);
+        }
+      }
+    }
+
+    if (identity.status === 'verified') {
+      if (identity.family === 'unknown') {
+        throw new ModelValidationError(modelId, `model ${modelId}: verified identity cannot use unknown family`);
+      }
+      if (capabilities.nativeCapability && !providerNativeId) {
+        throw new ModelValidationError(modelId, `model ${modelId}: verified native identity must declare providerNativeId`);
+      }
+    }
+  }
+
+  for (const [modelId, capabilities] of Object.entries(registry.models)) {
+    const successor = capabilities.identity?.lineage?.successor;
+    if (!successor) {
+      continue;
+    }
+    const successorCapabilities = registry.models[successor];
+    if (!successorCapabilities) {
+      throw new ModelValidationError(modelId, `model ${modelId}: identity.lineage.successor ${successor} does not exist`);
+    }
+    const successorIdentity = resolveModelIdentity(registry, successor);
+    if (successorIdentity.status !== 'verified') {
+      throw new ModelValidationError(modelId, `model ${modelId}: identity.lineage.successor ${successor} must be verified`);
+    }
+    const seen = new Set<string>([modelId]);
+    let cursor: string | undefined = successor;
+    while (cursor) {
+      if (seen.has(cursor)) {
+        throw new ModelValidationError(modelId, `model ${modelId}: identity.lineage contains a cycle through ${cursor}`);
+      }
+      seen.add(cursor);
+      cursor = registry.models[cursor]?.identity?.lineage?.successor;
+    }
+  }
+}
+
 export function assertRegistryConsistency(registry: ModelRegistry): void {
   for (const [modelId, capabilities] of Object.entries(registry.models)) {
     validateNativeCapability(modelId, capabilities);
     validateSupportedModelMetadata(modelId, capabilities);
+    assertPricingConsistency(modelId, capabilities);
   }
+  assertIdentityInvariants(registry);
   assertRegistryAdmissionCriteria(registry);
 }
 
@@ -1899,7 +2176,7 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       strengths: ['planning', 'cost efficiency', 'broad availability'],
       weaknesses: ['less reliable than top frontier models', 'opt-in only'],
       qualityScores: scores(56, 78, 80, 74, 54),
-      pricing: { inputCostPerMTok: 0.2, outputCostPerMTok: 0.8 },
+      pricing: { inputCostPerMTok: 0.4, outputCostPerMTok: 1.6 },
       defaultLadderEligible: false,
       contextWindowTokens: 1_048_576,
       toolSupport: 'basic',
@@ -2420,6 +2697,51 @@ export const DEFAULT_MODEL_REGISTRY: ModelRegistry = {
       costPerMillionOutputTokensUsd: 0.87,
       agent: 'claude',
     },
+    'ox-alpha': {
+      vendor: 'unknown',
+      class: 'strong_generalist',
+      strengths: ['verified catalog: long context', 'verified catalog: tools', 'verified catalog: multimodal'],
+      weaknesses: ['provisional stealth identity', 'quality priors intentionally held', 'pricing pending disclosure'],
+      qualityScores: scores(0, 0, 0, 0, 0),
+      pricing: {
+        inputCostPerMTok: 0,
+        outputCostPerMTok: 0,
+      },
+      defaultLadderEligible: false,
+      contextWindowTokens: 1_048_576,
+      toolSupport: 'basic',
+      multimodal: { text: true, image: true, video: true },
+      latencyTier: 'standard',
+      reasoningTier: 'advanced',
+      costPerMillionInputTokensUsd: 0,
+      costPerMillionOutputTokensUsd: 0,
+      agent: 'native-openrouter',
+      nativeCapability: PROVISIONAL_OPENROUTER_NATIVE_CAPABILITY,
+      supportedModel: openRouterSupportedModel({
+        alias: 'ox-alpha',
+        providerNativeId: 'stealth/ox-alpha',
+        stages: ['planning', 'coding', 'review'],
+        routingEligible: false,
+      }),
+      identity: {
+        status: 'provisional',
+        revision: 1,
+        fingerprint: computeIdentityFingerprint({
+          alias: 'ox-alpha',
+          providerNativeId: 'stealth/ox-alpha',
+          provider: 'openrouter',
+          revision: 1,
+        }),
+        displayName: 'Ox Alpha',
+        family: 'unknown',
+        evidencePolicy: 'held',
+        verification: {
+          source: 'https://openrouter.ai/api/v1/models',
+          observedAt: '2026-08-22T15:22:39.700Z',
+          catalogHash: '45721528172e6489ce50462c3c5d6ff750c5cbc0dba8f315d23f81b84298579f',
+        },
+      },
+    },
     'grok-code-fast': {
       vendor: 'x-ai',
       class: 'fast_economy',
@@ -2593,6 +2915,7 @@ export function explainModelSupportExclusion(
   }
   const lifecycle = capabilities.supportedModel?.lifecycle ?? 'supported';
   if (lifecycle === 'blocked') return 'blocked-lifecycle';
+  if (resolveModelIdentity(registry, modelId).status === 'provisional') return 'provisional-identity';
   if (capabilities.disabled === true) return 'disabled';
   const normalized = normalizeSupportedModelStage(stage);
   const configuredStages = capabilities.supportedModel?.stages;

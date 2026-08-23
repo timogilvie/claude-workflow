@@ -427,7 +427,8 @@
         "invalid_feature_outcome",
         "failed_feature_outcome",
         "missing_challenge_stage",
-        "eval_fast_failed"
+        "eval_fast_failed",
+        "provisional_model_identity"
       ],
       "description": "Primary stable reason why the record is ineligible for budget-eval export."
     },
@@ -447,7 +448,8 @@
           "invalid_feature_outcome",
           "failed_feature_outcome",
           "missing_challenge_stage",
-          "eval_fast_failed"
+          "eval_fast_failed",
+          "provisional_model_identity"
         ]
       },
       "description": "Stable machine-readable reasons why the record is ineligible for exports."
@@ -740,6 +742,69 @@
         ],
         "additionalProperties": false
       }
+    },
+    "modelIdentityAttribution": {
+      "type": "object",
+      "description": "Observation-time model identity snapshot for executed and candidate model references.",
+      "properties": {
+        "observedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "roles": {
+          "type": "object",
+          "properties": {
+            "planner": { "$ref": "#/$defs/modelIdentityObservation" },
+            "coder": { "$ref": "#/$defs/modelIdentityObservation" },
+            "reviewer": { "$ref": "#/$defs/modelIdentityObservation" }
+          },
+          "additionalProperties": false
+        },
+        "provisionalRoles": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["planner", "coder", "reviewer"]
+          },
+          "uniqueItems": true
+        },
+        "candidateOnlyProvisional": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true
+        },
+        "finalization": {
+          "type": "object",
+          "properties": {
+            "promotedAt": { "type": "string", "format": "date-time" },
+            "manifestId": { "type": "string" },
+            "fromRevision": { "type": "integer", "minimum": 1 },
+            "toRevision": { "type": "integer", "minimum": 1 },
+            "observedAlias": { "type": "string" },
+            "finalAlias": { "type": "string" }
+          },
+          "required": ["promotedAt", "manifestId", "fromRevision", "toRevision", "observedAlias", "finalAlias"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["observedAt", "roles", "provisionalRoles", "candidateOnlyProvisional"],
+      "additionalProperties": false
+    },
+    "normalizedEvaluationCost": {
+      "type": "object",
+      "description": "Promotion-time normalized cost computed from final explicit pricing without mutating observed cost.",
+      "properties": {
+        "costUsd": { "type": ["number", "null"], "minimum": 0 },
+        "basis": { "type": "string", "enum": ["explicit_pricing", "incomplete"] },
+        "coverage": {
+          "type": "string",
+          "enum": ["complete", "missing_cache_usage", "missing_cache_pricing"]
+        },
+        "pricingRevision": { "type": "string" },
+        "computedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["costUsd", "basis", "coverage", "computedAt"],
+      "additionalProperties": false
     },
     "difficultyBand": {
       "type": "string",
@@ -2624,6 +2689,19 @@
     }
   },
   "$defs": {
+    "modelIdentityObservation": {
+      "type": "object",
+      "properties": {
+        "alias": { "type": "string" },
+        "providerId": { "type": "string" },
+        "identityStatus": { "type": "string", "enum": ["provisional", "verified"] },
+        "identityRevision": { "type": "integer", "minimum": 1 },
+        "fingerprint": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "evidencePolicy": { "type": "string", "enum": ["held", "eligible"] }
+      },
+      "required": ["alias", "identityStatus", "identityRevision", "fingerprint", "evidencePolicy"],
+      "additionalProperties": false
+    },
     "PlanningExecutionBounds": {
       "type": "object",
       "properties": {

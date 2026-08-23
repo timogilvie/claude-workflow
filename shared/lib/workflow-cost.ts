@@ -261,6 +261,67 @@ export function computeModelCost(
   return inputCost + cacheWriteCost + cacheReadCost + outputCost;
 }
 
+export interface NormalizedEvaluationCost {
+  costUsd: number | null;
+  basis: 'explicit_pricing' | 'incomplete';
+  coverage: 'complete' | 'missing_cache_usage' | 'missing_cache_pricing';
+  pricingRevision?: string;
+}
+
+export function computeNormalizedEvaluationCost(
+  usage: Partial<Omit<ModelTokenUsage, 'costUsd'>>,
+  pricing: ModelPricing,
+  options: { requireExplicitCache?: boolean; pricingRevision?: string } = {},
+): NormalizedEvaluationCost {
+  const hasCacheUsage = typeof usage.cacheCreationTokens === 'number'
+    && typeof usage.cacheReadTokens === 'number';
+  if (!hasCacheUsage) {
+    return {
+      costUsd: null,
+      basis: 'incomplete',
+      coverage: 'missing_cache_usage',
+      pricingRevision: options.pricingRevision,
+    };
+  }
+  if (
+    options.requireExplicitCache === true
+    && (pricing.cacheWriteCostPerMTok === undefined || pricing.cacheReadCostPerMTok === undefined)
+  ) {
+    return {
+      costUsd: null,
+      basis: 'incomplete',
+      coverage: 'missing_cache_pricing',
+      pricingRevision: options.pricingRevision,
+    };
+  }
+  const inputTokens = usage.inputTokens ?? 0;
+  const outputTokens = usage.outputTokens ?? 0;
+  if (
+    !isFiniteNonNegative(inputTokens)
+    || !isFiniteNonNegative(outputTokens)
+    || !isFiniteNonNegative(usage.cacheCreationTokens)
+    || !isFiniteNonNegative(usage.cacheReadTokens)
+  ) {
+    return {
+      costUsd: null,
+      basis: 'incomplete',
+      coverage: 'missing_cache_usage',
+      pricingRevision: options.pricingRevision,
+    };
+  }
+  return {
+    costUsd: computeModelCost({
+      inputTokens,
+      outputTokens,
+      cacheCreationTokens: usage.cacheCreationTokens,
+      cacheReadTokens: usage.cacheReadTokens,
+    }, pricing),
+    basis: 'explicit_pricing',
+    coverage: 'complete',
+    pricingRevision: options.pricingRevision,
+  };
+}
+
 function isExplicitZeroPricing(pricing: ModelPricing): boolean {
   return pricing.inputCostPerMTok === 0
     && pricing.outputCostPerMTok === 0

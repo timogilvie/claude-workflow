@@ -37,9 +37,10 @@ export type ModelFamily =
   | 'gemini'
   | 'llama'
   | 'mistral'
-  | 'grok';
+  | 'grok'
+  | 'unknown';
 
-export type ModelStatus = 'active' | 'watchlist' | 'deprecated';
+export type ModelStatus = 'active' | 'watchlist' | 'deprecated' | 'provisional';
 export type RoleEligibility = 'planning' | 'coding' | 'review';
 
 export interface LaunchPriorityModel {
@@ -85,6 +86,8 @@ export interface OpenRouterModel {
   pricing?: {
     prompt?: string | number;
     completion?: string | number;
+    input_cache_read?: string | number;
+    input_cache_write?: string | number;
   };
   top_provider?: {
     context_length?: number;
@@ -94,6 +97,8 @@ export interface OpenRouterModel {
 export interface NormalizedPricing {
   inputPerMTok: number | null;
   outputPerMTok: number | null;
+  cacheReadPerMTok: number | null;
+  cacheWritePerMTok: number | null;
 }
 
 export interface NormalizedCatalogEntry {
@@ -130,6 +135,18 @@ export interface NormalizedCatalog {
   sourceHash: string;
   entries: NormalizedCatalogEntry[];
   blockers: CatalogBlocker[];
+}
+
+export interface PromotionPricingSpec {
+  inputPerMTok: number;
+  outputPerMTok: number;
+  cacheReadPerMTok: number | null;
+  cacheWritePerMTok: number | null;
+}
+
+export interface PromotionPricingValidationResult {
+  ok: boolean;
+  errors: string[];
 }
 
 // ── Fixture loading ──────────────────────────────────────────────────────────
@@ -321,15 +338,24 @@ export async function fetchOpenRouterModels(
 
 const TOKENS_PER_MILLION = 1_000_000;
 
-function parsePricingValue(value: unknown): number | null {
+type ParsedPricingValue =
+  | { kind: 'absent' }
+  | { kind: 'value'; perMTok: number }
+  | { kind: 'invalid'; raw: unknown };
+
+function parsePricingValue(value: unknown): ParsedPricingValue {
   if (value === undefined || value === null) {
-    return null;
+    return { kind: 'absent' };
   }
   const asNumber = typeof value === 'number' ? value : Number(value);
   if (!Number.isFinite(asNumber)) {
-    return null;
+    return { kind: 'invalid', raw: value };
   }
-  return asNumber * TOKENS_PER_MILLION;
+  return { kind: 'value', perMTok: asNumber * TOKENS_PER_MILLION };
+}
+
+function pricingValueOrNull(value: ParsedPricingValue): number | null {
+  return value.kind === 'value' ? value.perMTok : null;
 }
 
 function resolveContextTokens(model: OpenRouterModel): number | null {
@@ -400,8 +426,27 @@ export function normalizeCatalog(
       continue;
     }
 
-    const inputPerMTok = parsePricingValue(orModel.pricing?.prompt);
-    const outputPerMTok = parsePricingValue(orModel.pricing?.completion);
+    const parsedPricing = {
+      inputPerMTok: parsePricingValue(orModel.pricing?.prompt),
+      outputPerMTok: parsePricingValue(orModel.pricing?.completion),
+      cacheReadPerMTok: parsePricingValue(orModel.pricing?.input_cache_read),
+      cacheWritePerMTok: parsePricingValue(orModel.pricing?.input_cache_write),
+    };
+    const invalidPricing = Object.entries(parsedPricing)
+      .find(([, parsed]) => parsed.kind === 'invalid');
+    if (invalidPricing) {
+      const [dimension, parsed] = invalidPricing as [string, Extract<ParsedPricingValue, { kind: 'invalid' }>];
+      blockers.push({
+        wavemillAlias: lp.wavemillAlias,
+        openrouterId: lp.openrouterId,
+        family: lp.family,
+        status: lp.status,
+        priorityTier: lp.priorityTier,
+        reason: 'invalid_pricing',
+        detail: `OpenRouter id "${lp.openrouterId}" has invalid pricing.${dimension}: ${String(parsed.raw)}`,
+      });
+      continue;
+    }
     const contextTokens = resolveContextTokens(orModel);
 
     entries.push({
@@ -409,7 +454,12 @@ export function normalizeCatalog(
       openrouterId: lp.openrouterId,
       family: lp.family,
       contextTokens,
-      pricing: { inputPerMTok, outputPerMTok },
+      pricing: {
+        inputPerMTok: pricingValueOrNull(parsedPricing.inputPerMTok),
+        outputPerMTok: pricingValueOrNull(parsedPricing.outputPerMTok),
+        cacheReadPerMTok: pricingValueOrNull(parsedPricing.cacheReadPerMTok),
+        cacheWritePerMTok: pricingValueOrNull(parsedPricing.cacheWritePerMTok),
+      },
       capabilities: getFamilyCapabilities(lp.family),
       roleEligibility: [...lp.roleEligibility],
       status: lp.status,
@@ -450,6 +500,36 @@ export function buildCatalogSnapshot(
     entries: sortedEntries,
     blockers: sortedBlockers,
   };
+}
+
+function samePrice(left: number | null, right: number | null): boolean {
+  return left === right;
+}
+
+export function validatePromotionPricing(
+  spec: PromotionPricingSpec,
+  catalogEntry: Pick<NormalizedCatalogEntry, 'pricing'>,
+): PromotionPricingValidationResult {
+  const errors: string[] = [];
+  const pricing = catalogEntry.pricing;
+  const checks: Array<[keyof PromotionPricingSpec, number | null, number | null]> = [
+    ['inputPerMTok', spec.inputPerMTok, pricing.inputPerMTok],
+    ['outputPerMTok', spec.outputPerMTok, pricing.outputPerMTok],
+    ['cacheReadPerMTok', spec.cacheReadPerMTok, pricing.cacheReadPerMTok],
+    ['cacheWritePerMTok', spec.cacheWritePerMTok, pricing.cacheWritePerMTok],
+  ];
+
+  for (const [dimension, actual, expected] of checks) {
+    if (typeof actual === 'number' && (!Number.isFinite(actual) || actual < 0)) {
+      errors.push(`${dimension} must be finite and non-negative`);
+      continue;
+    }
+    if (!samePrice(actual, expected)) {
+      errors.push(`${dimension} mismatch: spec=${String(actual)} catalog=${String(expected)}`);
+    }
+  }
+
+  return { ok: errors.length === 0, errors };
 }
 
 function compareByTierAndAlias(

@@ -22,6 +22,7 @@ import { resolveFromMainRepo } from './git-utils.ts';
 import { errorMessage } from './error-utils.ts';
 import { resolveEvalsDir, resolveGlobalAggregatedEvalsPath } from './evals-paths.ts';
 import { resolveModelAgent, type AgentResolution, type AgentResolutionPhase } from './model-agent-resolution.ts';
+import { isProvisionalModelId, partitionEvidence } from './model-evidence-policy.ts';
 import {
   configuredDeepSeekModelIds,
   DEFAULT_MODEL_REGISTRY,
@@ -174,8 +175,9 @@ export function aggregateEvalHistory(
   records: EvalRecord[],
   taskType: TaskType,
 ): ModelStats[] {
+  const eligibleRecords = partitionEvidence(records, 'router_history').eligible;
   const byModel = new Map<string, EvalRecord[]>();
-  for (const r of records) {
+  for (const r of eligibleRecords) {
     const list = byModel.get(r.modelId) || [];
     list.push(r);
     byModel.set(r.modelId, list);
@@ -579,7 +581,8 @@ function recommendModelHeuristic(
 
   // Filter to candidate models if configured
   if (opts.models && opts.models.length > 0) {
-    modelStats = modelStats.filter((s) => opts.models!.includes(s.modelId));
+    const allowedModels = new Set(opts.models.filter((modelId) => !isProvisionalModelId(modelId)));
+    modelStats = modelStats.filter((s) => allowedModels.has(s.modelId));
   }
 
   if (modelStats.length === 0) {
