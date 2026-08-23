@@ -73,14 +73,76 @@ wavemill_build_observer_loop_command() {
   local max_log_lines="${5:-240}"
   local command
 
-  printf -v command 'exec env WAVEMILL_SESSION=%q WAVEMILL_OBSERVER_SERVICE=1 npx tsx %q --loop --json --dry-run --repo-dir %q --session %q --interval %q --max-log-lines %q' \
-    "$session_name" "$tools_dir/observer.ts" "$repo_dir" "$session_name" "$interval_seconds" "$max_log_lines"
+  printf -v command 'exec env WAVEMILL_SESSION=%q WAVEMILL_BACKSTAGE_OBSERVER_PANE_TITLE=%q WAVEMILL_OBSERVER_SERVICE=1 npx tsx %q --loop --json --dry-run --repo-dir %q --session %q --interval %q --max-log-lines %q' \
+    "$session_name" "$WAVEMILL_BACKSTAGE_OBSERVER_PANE_TITLE" "$tools_dir/observer.ts" "$repo_dir" "$session_name" "$interval_seconds" "$max_log_lines"
   printf '%s\n' "$command"
 }
 
 wavemill_set_tmux_pane_title() {
   local target="${1:?target required}" title="${2:?title required}"
   tmux select-pane -t "$target" -T "$title" >/dev/null 2>&1
+}
+
+wavemill_list_backstage_panes_by_title() {
+  local session_name="${1:?session required}" window_name="${2:?window required}" title="${3:?title required}"
+  tmux list-panes -t "$session_name:$window_name" -F '#{pane_id}	#{pane_dead}	#{pane_title}' 2>/dev/null \
+    | awk -F '\t' -v title="$title" '$3 == title { print $1 "\t" $2; found = 1 } END { exit found ? 0 : 1 }'
+}
+
+wavemill_reconcile_backstage_service_pane() {
+  local session_name="${1:?session required}" window_name="${2:?window required}" title="${3:?title required}" command="${4:?command required}" mode="${5:?mode required}" split_target="${6:?split target required}"
+  shift 6
+  local -a split_args=("$@")
+  local panes pane_id pane_dead keeper="" keeper_dead="" first_pane="" first_dead="" action="" killed_count=0
+  local -a pane_ids=() pane_dead_values=()
+
+  [[ "$mode" == "reuse" || "$mode" == "restart" ]] || return 2
+  tmux list-panes -t "$session_name:$window_name" -F '#{pane_id}' >/dev/null 2>&1 || return 1
+
+  panes="$(wavemill_list_backstage_panes_by_title "$session_name" "$window_name" "$title" 2>/dev/null || true)"
+  while IFS=$'\t' read -r pane_id pane_dead; do
+    [[ -n "$pane_id" ]] || continue
+    pane_ids+=("$pane_id")
+    pane_dead_values+=("$pane_dead")
+    if [[ -z "$first_pane" ]]; then
+      first_pane="$pane_id"
+      first_dead="$pane_dead"
+    fi
+    if [[ -z "$keeper" && "$pane_dead" != "1" ]]; then
+      keeper="$pane_id"
+      keeper_dead="$pane_dead"
+    fi
+  done <<< "$panes"
+
+  if [[ -z "$keeper" ]]; then
+    keeper="$first_pane"
+    keeper_dead="$first_dead"
+  fi
+
+  if [[ -n "$keeper" ]]; then
+    local i
+    for (( i = 0; i < ${#pane_ids[@]}; i++ )); do
+      pane_id="${pane_ids[$i]}"
+      [[ "$pane_id" != "$keeper" ]] || continue
+      tmux kill-pane -t "$pane_id" >/dev/null 2>&1 || true
+      killed_count=$((killed_count + 1))
+    done
+
+    if [[ "$mode" == "restart" || "$keeper_dead" == "1" ]]; then
+      tmux respawn-pane -k -t "$keeper" "$command" >/dev/null 2>&1 || return 1
+      action="respawned"
+    else
+      action="reused"
+    fi
+    wavemill_set_tmux_pane_title "$keeper" "$title"
+    printf '%s\t%s\t%s\n' "$keeper" "$action" "$killed_count"
+    return 0
+  fi
+
+  keeper="$(tmux split-window -t "$split_target" "${split_args[@]}" -P -F '#{pane_id}' "$command" 2>/dev/null || true)"
+  [[ -n "$keeper" ]] || return 1
+  wavemill_set_tmux_pane_title "$keeper" "$title"
+  printf '%s\tcreated\t0\n' "$keeper"
 }
 
 wavemill_init_backstage_health_file() {
@@ -90,12 +152,16 @@ wavemill_init_backstage_health_file() {
 }
 
 wavemill_write_backstage_health() {
-  local path="${1:?path required}" status="${2:?status required}" detail="${3:-}" attempt_count="${4:-0}" last_attempt_at="${5:-}" executor_pane_id="${6:-}"
-  wavemill_write_backstage_service_health "$path" "tend" "$status" "$detail" "$attempt_count" "$last_attempt_at" "$executor_pane_id"
+  local path="${1:?path required}" status="${2:?status required}" detail="${3:-}" attempt_count="${4:-0}" last_attempt_at="${5:-}" executor_pane_id="${6:-}" instance_count="${7:-}"
+  wavemill_write_backstage_service_health "$path" "tend" "$status" "$detail" "$attempt_count" "$last_attempt_at" "$executor_pane_id" "" "$instance_count"
 }
 
 wavemill_write_backstage_service_health() {
-  local path="${1:?path required}" service="${2:?service required}" status="${3:?status required}" detail="${4:-}" attempt_count="${5:-0}" last_attempt_at="${6:-}" pane_id="${7:-}" heartbeat_at="${8:-}"
+  local path="${1:?path required}" service="${2:?service required}" status="${3:?status required}" detail="${4:-}" attempt_count="${5:-0}" last_attempt_at="${6:-}" pane_id="${7:-}" heartbeat_at="${8:-}" instance_count="${9:-}"
+  local instance_count_json="null"
+  if [[ "$instance_count" =~ ^[0-9]+$ ]]; then
+    instance_count_json="$instance_count"
+  fi
   wavemill_init_backstage_health_file "$path"
   state_mutate "$path" '
     .updatedAt = $updatedAt
@@ -107,7 +173,8 @@ wavemill_write_backstage_service_health() {
         restartAttemptCount: $attemptCount,
         lastRestartAttemptAt: (if $lastAttemptAt == "" then null else $lastAttemptAt end),
         paneId: (if $paneId == "" then null else $paneId end),
-        heartbeatAt: (if $heartbeatAt == "" then null else $heartbeatAt end)
+        heartbeatAt: (if $heartbeatAt == "" then null else $heartbeatAt end),
+        instanceCount: $instanceCount
       })
     | if $service == "tend" then
         .status = $status
@@ -115,6 +182,7 @@ wavemill_write_backstage_service_health() {
         | .restartAttemptCount = $attemptCount
         | .lastRestartAttemptAt = (if $lastAttemptAt == "" then null else $lastAttemptAt end)
         | .executorPaneId = (if $paneId == "" then null else $paneId end)
+        | .instanceCount = $instanceCount
       else . end
   ' \
     --arg updatedAt "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
@@ -124,7 +192,8 @@ wavemill_write_backstage_service_health() {
     --argjson attemptCount "${attempt_count:-0}" \
     --arg lastAttemptAt "$last_attempt_at" \
     --arg paneId "$pane_id" \
-    --arg heartbeatAt "$heartbeat_at"
+    --arg heartbeatAt "$heartbeat_at" \
+    --argjson instanceCount "$instance_count_json"
 }
 
 wavemill_iso8601_to_epoch() {
