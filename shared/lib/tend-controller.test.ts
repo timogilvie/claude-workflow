@@ -1173,6 +1173,24 @@ describe('formatStatusLine', () => {
       'eligible=0 blocked=0 health=degraded last=#42 action=merged-#42',
     );
   });
+
+  it('includes loop iteration metadata when provided', () => {
+    assert.equal(
+      formatStatusLine({
+        integrationHealth: { state: 'healthy' },
+        eligible: [candidate()],
+        blocked: [],
+        nextPR: 42,
+      }, {
+        action: 'merging-#42',
+        lastPR: null,
+        iteration: 3,
+        pollStartedAt: '2026-08-22T14:00:00.000Z',
+        pollCompletedAt: '2026-08-22T14:00:02.000Z',
+      }),
+      'iter=3 poll_started=2026-08-22T14:00:00.000Z poll_completed=2026-08-22T14:00:02.000Z eligible=1 blocked=0 health=ok last=none action=merging-#42',
+    );
+  });
 });
 
 describe('createPrFetcher', () => {
@@ -1253,6 +1271,30 @@ describe('executeMerge', () => {
       assert.ok(hasCall(options.calls, /git push origin --delete 'task\/merge-me'/));
       assert.ok(hasCall(options.calls, /git worktree remove --force/));
       assert.deepEqual(options.labels, ['merging:42', 'merged:42']);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('passes finite timeouts to external shell calls in the merge path', async () => {
+    const options = buildMergeTestOptions();
+    const callsWithoutTimeout: string[] = [];
+    const shellRunner: MergeExecutionDeps['shellRunner'] = (cmd, opts) => {
+      if (typeof opts?.timeout !== 'number' || opts.timeout <= 0) {
+        callsWithoutTimeout.push(cmd);
+      }
+      const defaultRunner = options.deps.shellRunner as MergeExecutionDeps['shellRunner'];
+      return defaultRunner(cmd, opts);
+    };
+
+    try {
+      const result = await executeMerge(candidate(), {
+        repoDir: options.repoDir,
+        deps: { ...options.deps, shellRunner },
+      });
+
+      assert.equal(result.status, 'merged');
+      assert.deepEqual(callsWithoutTimeout, []);
     } finally {
       options.cleanup();
     }

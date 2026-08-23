@@ -16,6 +16,8 @@ import type { ChallengeStageEval } from './eval-schema.ts';
 import { formatRubricForJudgePrompt } from './rubric.ts';
 import { errorMessage } from './error-utils.ts';
 import { fillPromptTemplate } from './prompt-utils.ts';
+import { callClaude, parseJsonFromLLM, type LLMCallOptions, type LLMCallResult } from './llm-cli.ts';
+import { hashString } from './prompt-hash.ts';
 
 export type PresentationOrder = 'primary-first' | 'challenger-first';
 
@@ -262,7 +264,7 @@ export function resolvePrIdentityMetadata(
   return parsePrIdentityMetadata(raw, pr);
 }
 
-function hasCommit(runGit: (args: string[]) => string, sha: string): boolean {
+export function hasCommit(runGit: (args: string[]) => string, sha: string): boolean {
   try {
     runGit(['cat-file', '-e', `${sha}^{commit}`]);
     return true;
@@ -271,7 +273,7 @@ function hasCommit(runGit: (args: string[]) => string, sha: string): boolean {
   }
 }
 
-function ensureLocalComparisonObjects(input: {
+export function ensureLocalComparisonObjects(input: {
   prNumber: string;
   metadata: PrIdentityMetadata;
   forkCommit?: string | null;
@@ -661,6 +663,108 @@ export function buildCappedComparisonPrompt(
     truncated: true,
     originalBytes,
     finalBytes: byteLength(prompt),
+  };
+}
+
+export type ComparisonPromptInput = Parameters<typeof buildComparisonPrompt>[0];
+
+export type BlindJudgeCall = (
+  prompt: string,
+  options?: LLMCallOptions,
+) => Promise<LLMCallResult>;
+
+export interface BlindJudgeInput extends ComparisonPromptInput {
+  promptTemplate: string;
+  model: string;
+  maxPromptBytes: number;
+  deps?: {
+    callLlm?: BlindJudgeCall;
+  };
+}
+
+export interface BlindJudgeOutcome {
+  verdict: ValidatedComparisonResult;
+  judgePrompt: string;
+  judgePromptHash: string;
+  judgeModel: string;
+  costUsd: number | null;
+  usage?: LLMCallResult['usage'];
+  truncated: boolean;
+  promptBytes: {
+    original: number;
+    final: number;
+  };
+  retriedStricterJson: boolean;
+}
+
+export const STRICTER_JSON_RETRY_SUFFIX = `IMPORTANT: Return ONLY valid JSON. Do NOT use:
+- JavaScript shorthand properties (use "key": value, not key)
+- Spread syntax (...rest)
+- Unquoted property names
+- Code comments or explanations
+
+Return a raw JSON object with no code fences, no comments, and no JavaScript syntax.`;
+
+/**
+ * Run the production blind PR comparison judge.
+ *
+ * This is extracted from tools/compare-prs.ts so replay harnesses measure the
+ * same prompt, cap, model call, validation, side mapping, and stricter-JSON
+ * retry path as the production adjudicator.
+ */
+export async function runBlindJudge(input: BlindJudgeInput): Promise<BlindJudgeOutcome> {
+  const cappedPrompt = buildCappedComparisonPrompt(input, input.maxPromptBytes);
+  const callLlm = input.deps?.callLlm ?? callClaude;
+  let successfulJudgePrompt = cappedPrompt.prompt;
+  let retriedStricterJson = false;
+
+  let response = await callLlm(cappedPrompt.prompt, {
+    mode: 'sync',
+    model: input.model,
+    timeout: 180_000,
+    retry: true,
+    maxRetries: 2,
+  });
+
+  let verdict: ValidatedComparisonResult;
+  try {
+    verdict = mapBlindVerdictToSides(
+      validateComparisonJson(parseJsonFromLLM(response.text)),
+      input.presentationOrder,
+    );
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.includes('JavaScript code instead of JSON')) {
+      throw error;
+    }
+
+    retriedStricterJson = true;
+    const stricterPrompt = `${cappedPrompt.prompt}\n\n${STRICTER_JSON_RETRY_SUFFIX}`;
+    response = await callLlm(stricterPrompt, {
+      mode: 'sync',
+      model: input.model,
+      timeout: 180_000,
+      retry: false,
+    });
+    successfulJudgePrompt = stricterPrompt;
+    verdict = mapBlindVerdictToSides(
+      validateComparisonJson(parseJsonFromLLM(response.text)),
+      input.presentationOrder,
+    );
+  }
+
+  return {
+    verdict,
+    judgePrompt: successfulJudgePrompt,
+    judgePromptHash: hashString(successfulJudgePrompt),
+    judgeModel: input.model,
+    costUsd: response.costUsd ?? null,
+    usage: response.usage,
+    truncated: cappedPrompt.truncated,
+    promptBytes: {
+      original: cappedPrompt.originalBytes,
+      final: cappedPrompt.finalBytes,
+    },
+    retriedStricterJson,
   };
 }
 

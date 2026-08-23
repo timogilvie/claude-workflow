@@ -177,6 +177,14 @@ check_backstage_health
 assert_eq "new heartbeat status" "healthy" "$(jq -r '.status' "$HEALTH_FILE")"
 assert_eq "new heartbeat count" "0" "$(jq -r '.restartAttemptCount' "$HEALTH_FILE")"
 
+write_health "healthy" "ok" 0 "" "%9" "$(old_iso 300)"
+PANE_PROBE=$'%9\tWavemill Tend Loop\t0\tnode\tnpx tsx tools/tend.ts'
+check_backstage_health
+assert_eq "stale heartbeat restarts" "5" "$(wc -l < "$RESTART_LOG" | tr -d ' ')"
+assert_eq "stale heartbeat status" "stalled" "$(jq -r '.status' "$HEALTH_FILE")"
+assert_eq "stale heartbeat count" "1" "$(jq -r '.restartAttemptCount' "$HEALTH_FILE")"
+assert_contains "stale heartbeat detail" "$(jq -r '.detail' "$HEALTH_FILE")" "fresh heartbeat"
+
 state_mutate "$HEALTH_FILE" '.services.tend.failureCount = 2 | .services.tend.lastError = "transient: github 503"'
 wavemill_write_backstage_service_health "$HEALTH_FILE" "tend" "healthy" "ok" 0 "" "%9" "$(old_iso 1)"
 assert_eq "merged failure count" "2" "$(jq -r '.services.tend.failureCount' "$HEALTH_FILE")"

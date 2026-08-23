@@ -4,11 +4,13 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   appendChallengeComparison,
+  buildDiffUnavailableComparison,
   buildDoubleForfeitComparison,
   buildForfeitComparison,
   buildInvalidChallengeComparison,
   buildSkippedIdenticalComparison,
   buildInvalidProvenanceComparison,
+  detectJudgeDisagreement,
   listVariedRoutingDimensions,
   readChallengeComparisons,
   detectVariedDimensions,
@@ -540,6 +542,87 @@ test('buildInvalidChallengeComparison omits winner and cleanup policy', () => {
   assert.equal(record.cleanupPolicy, undefined);
   assert.equal(record.primaryHarnessId, 'c'.repeat(64));
   assert.equal(record.challengerHarnessId, 'd'.repeat(64));
+});
+
+test('buildDiffUnavailableComparison yields inconclusive no-comparison metadata', () => {
+  const record = buildDiffUnavailableComparison({
+    challengePairId: 'HOK-2853',
+    primaryModel: 'gpt-5.4',
+    challengerModel: 'qwen-3-235b',
+    primaryPrUrl: 'https://github.com/org/repo/pull/1200',
+    challengerPrUrl: 'https://github.com/org/repo/pull/1197',
+    primaryEvalScore: 0.47,
+    challengerEvalScore: 0.75,
+    diffAvailability: {
+      primary: { available: true, source: 'gh-pr-diff', bytes: 1200 },
+      challenger: {
+        available: false,
+        reason: 'gh_too_large',
+        detail: 'HTTP 406: diff exceeded maximum number of files',
+      },
+    },
+  });
+
+  assert.equal(record.comparisonOutcome, 'inconclusive');
+  assert.equal(record.noComparisonReason, 'diff_unavailable');
+  assert.equal(record.winner, undefined);
+  assert.deepEqual(record.dimensions, {
+    completeness: { primary: 0, challenger: 0 },
+    correctness: { primary: 0, challenger: 0 },
+    code_quality: { primary: 0, challenger: 0 },
+    intervention_impact: { primary: 0, challenger: 0 },
+    autonomy: { primary: 0, challenger: 0 },
+  });
+  assert.match(record.rationale, /Judge not invoked/);
+});
+
+test('appendChallengeComparison accepts diff_unavailable without unknown warning', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'challenge-comparison-test-'));
+  const warn = console.warn;
+  const warnings: string[] = [];
+  console.warn = (message?: unknown) => {
+    warnings.push(String(message));
+  };
+  try {
+    appendChallengeComparison(buildDiffUnavailableComparison({
+      challengePairId: 'HOK-2853',
+      primaryModel: 'gpt-5.4',
+      challengerModel: 'qwen-3-235b',
+      primaryPrUrl: 'https://github.com/org/repo/pull/1200',
+      challengerPrUrl: 'https://github.com/org/repo/pull/1197',
+      primaryEvalScore: 0.47,
+      challengerEvalScore: 0.75,
+      diffAvailability: {
+        primary: { available: true, source: 'local-git' },
+        challenger: { available: false, reason: 'gh_too_large', detail: 'HTTP 406' },
+      },
+    }), tmp);
+    const [record] = readChallengeComparisons(tmp);
+    assert.equal(record.noComparisonReason, 'diff_unavailable');
+    assert.deepEqual(warnings, []);
+  } finally {
+    console.warn = warn;
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('detectJudgeDisagreement flags large eval/comparison gaps only', () => {
+  const dimensions = {
+    completeness: { primary: 1, challenger: 8 },
+    correctness: { primary: 1, challenger: 8 },
+    code_quality: { primary: 1, challenger: 8 },
+    intervention_impact: { primary: 1, challenger: 8 },
+    autonomy: { primary: 1, challenger: 8 },
+  };
+
+  assert.match(
+    detectJudgeDisagreement({ side: 'primary', evalScore: 0.75, dimensions }) || '',
+    /judges disagree/,
+  );
+  assert.equal(
+    detectJudgeDisagreement({ side: 'challenger', evalScore: 0.47, dimensions }),
+    undefined,
+  );
 });
 
 console.log('\n--- Execution Provenance Tests ---\n');

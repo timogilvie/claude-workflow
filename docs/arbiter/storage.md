@@ -40,3 +40,33 @@ gitignored. They are not uploaded, included in PR comments, sent to Linear or
 Hokusai export, or otherwise moved across the repository privacy boundary by
 comparison storage. No database migration, external egress path, or config file
 is required for this retention policy.
+
+## Swap-test corpus and runs
+
+The presentation-order swap test retains its replay corpus and raw run outputs
+under the same local eval artifact root:
+
+```text
+.wavemill/evals/artifacts/<challengePairId>/primary.diff
+.wavemill/evals/artifacts/<challengePairId>/challenger.diff
+.wavemill/evals/artifacts/<challengePairId>/swap-test-context.json
+.wavemill/evals/swap-test/runs/<runId>/manifest.json
+.wavemill/evals/swap-test/runs/<runId>/results.jsonl
+.wavemill/evals/swap-test/runs/<runId>/summary.json
+.wavemill/evals/swap-test/runs/<runId>/summary.md
+```
+
+Hydration is one-time and idempotent. Existing `primary.diff`,
+`challenger.diff`, and retained `loser.patch` files are reused; missing side
+diffs are fetched by full PR URL and then replayed locally. The runner never
+fetches GitHub state.
+
+`swap-test-context.json` records prompt provenance, challenge type and
+difficulty strata, head identity, original verdict metadata, and degenerate
+flags such as empty diffs or tied original dimensions. Raw result rows include
+judge model, prompt hash, template hash, usage, cost, truncation state, and
+duration for each pair/order call.
+
+These files are runtime artifacts and remain gitignored. The committed
+write-up material is limited to aggregate Markdown summaries, with no diffs,
+prompts, or per-pair judge rationales.
