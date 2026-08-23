@@ -97,6 +97,8 @@
  *   that executed a provisional-identity model are held out of training and
  *   budget evaluation. Additive; legacy rows without attribution still
  *   validate. (HOK-2858)
+ * - **1.44.0**: Added optional shadow-mode `task_scorer_result` readiness
+ *   prediction metadata (HOK-2845). Legacy rows remain valid.
  * - **1.28.0**: Added optional `quarantine_reason` and write-time eval corpus
  *   validation for `taskDescriptor`, non-empty `models_available`, and
  *   canonical reviewer/stage model IDs (HOK-2072); expanded
@@ -172,7 +174,7 @@ import type { ChallengeRoutingMeta } from './challenge-comparison.ts';
 import type { ChallengeStage } from './challenge-mode.ts';
 
 /** Current eval schema version for newly emitted records. */
-export const SCHEMA_VERSION = '1.43.0';
+export const SCHEMA_VERSION = '1.44.0';
 
 export type RoutingRole = 'planner' | 'coder' | 'reviewer';
 
@@ -1661,6 +1663,19 @@ export interface RouteCalibration {
   durationMs?: number;
 }
 
+/** Shadow-mode readiness prediction made before a coding arm is dispatched. */
+export interface TaskScorerResult {
+  decision: 'run' | 'expand' | 'split' | 'return';
+  confidence: number;
+  explanation: string;
+  scorer_id: string;
+  scored_at: string;
+  probability_intervention?: number;
+  feature_contributions?: Array<{ feature: string; contribution: number }>;
+  difficulty?: number;
+  features_version?: string;
+}
+
 // ────────────────────────────────────────────────────────────────
 // Eval Record
 // ────────────────────────────────────────────────────────────────
@@ -2040,6 +2055,9 @@ export interface EvalRecord {
 
   /** Comparison of router predictions against actual workflow outcomes. */
   routeCalibration?: RouteCalibration;
+
+  /** Passive task-packet readiness prediction captured before coding dispatch. */
+  task_scorer_result?: TaskScorerResult;
 
   /**
    * Cross-model fallback telemetry for quota-aware training attribution.

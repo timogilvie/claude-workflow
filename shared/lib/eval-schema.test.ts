@@ -780,7 +780,7 @@ function validPromptSizeDiagnostic() {
 }
 
 test('SCHEMA_VERSION is bumped for eval schema updates', () => {
-  assert.equal(SCHEMA_VERSION, '1.43.0');
+  assert.equal(SCHEMA_VERSION, '1.44.0');
 });
 
 test('Record with harnessId validates and legacy records without it still validate', () => {
@@ -2163,8 +2163,22 @@ test('Wavemill router fields validate and schema stays in parity', () => {
   assert.equal(properties.wavemill_router_scoring?.$ref, '#/$defs/WavemillRouterScoringMetadata');
 });
 
-test('Schema version constant is 1.43.0', () => {
-  assert.equal(SCHEMA_VERSION, '1.43.0');
+test('Schema version constant is 1.44.0', () => {
+  assert.equal(SCHEMA_VERSION, '1.44.0');
+});
+
+test('Task scorer result is optional and validates when complete', () => {
+  const record = {
+    ...scenarios[0].record,
+    task_scorer_result: {
+      decision: 'split', confidence: 0.71, explanation: 'Scope is broad.',
+      scorer_id: 'hokusai.scorers.wavemill.task_packet_readiness:v1',
+      scored_at: '2026-08-23T00:00:00.000Z', probability_intervention: 0.71,
+    },
+  };
+  assert.ok(validateAgainstSchema(record as unknown as Record<string, unknown>).valid);
+  record.task_scorer_result.decision = 'bad';
+  assert.equal(validateAgainstSchema(record as unknown as Record<string, unknown>).valid, false);
 });
 
 test('Record with resolved-model routing validates', () => {

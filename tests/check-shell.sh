@@ -106,6 +106,7 @@ for f in \
   "$REPO_DIR"/tests/model-inheritance-chain.test.sh \
   "$REPO_DIR"/tests/wavemill-background-jobs-cleanup.test.sh \
   "$REPO_DIR"/tests/global-model-parity.test.sh \
+  "$REPO_DIR"/tests/task-scorer-shadow-hook.test.sh \
   "$REPO_DIR"/tests/queue-health.test.sh \
   "$REPO_DIR"/tests/merge-queue-live-ci.test.sh \
   "$REPO_DIR"/tests/notification-waiting.test.sh \

@@ -144,7 +144,8 @@ function escapeRegex(value: string): string {
 /**
  * Extract a markdown section by heading
  */
-function extractSection(markdown: string, heading: string): string | null {
+/** Extract a named markdown section without invoking either validation layer. */
+export function extractSection(markdown: string, heading: string): string | null {
   // Match ## Heading or ### Heading with optional numeric prefix (e.g. "## 6. Heading")
   const escapedHeading = escapeRegex(heading);
   const headingRegex = new RegExp(`^#{2,3}\\s*(?:\\d+\\.\\s*)?${escapedHeading}\\s*$`, 'im');
@@ -174,7 +175,7 @@ function extractSection(markdown: string, heading: string): string | null {
   return markdown.substring(startIndex, endIndex).trim();
 }
 
-interface KeyFileEntry {
+export interface KeyFileEntry {
   path: string;
   planned: boolean;
 }
@@ -199,7 +200,8 @@ function extractPathFromLine(line: string): { path: string; endIndex: number } |
   return null;
 }
 
-function parseKeyFileEntries(markdown: string): KeyFileEntry[] {
+/** Parse unique file entries from a Key Files-style markdown list. */
+export function parseKeyFileEntries(markdown: string): KeyFileEntry[] {
   const entriesByPath = new Map<string, KeyFileEntry>();
   const lines = markdown.split('\n');
 
@@ -237,7 +239,8 @@ function isPathWithinRepo(repoPath: string, fullPath: string): boolean {
 /**
  * Count bullet points in a markdown section
  */
-function countBulletPoints(markdown: string): number {
+/** Count markdown list items in a section. */
+export function countBulletPoints(markdown: string): number {
   const bullets = markdown.match(/^[-*]\s+/gm);
   return bullets ? bullets.length : 0;
 }
@@ -245,7 +248,8 @@ function countBulletPoints(markdown: string): number {
 /**
  * Count checkboxes in a markdown section
  */
-function countCheckboxes(markdown: string): number {
+/** Count markdown checkbox list items in a section. */
+export function countCheckboxes(markdown: string): number {
   const checkboxes = markdown.match(/^[-*]\s+\[\s*[xX ]?\s*\]/gm);
   return checkboxes ? checkboxes.length : 0;
 }
@@ -253,7 +257,8 @@ function countCheckboxes(markdown: string): number {
 /**
  * Check if validation steps are just boilerplate
  */
-function isBoilerplateValidation(validationSteps: string): boolean {
+/** Return whether validation contains no task-specific executable command. */
+export function isBoilerplateValidation(validationSteps: string): boolean {
   // Extract commands from code blocks
   const codeBlockMatch = validationSteps.match(/```(?:bash|sh)?\s*\n([\s\S]*?)```/);
   if (!codeBlockMatch) {

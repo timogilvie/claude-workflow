@@ -2496,6 +2496,9 @@
     "routeCalibration": {
       "$ref": "#/$defs/RouteCalibration"
     },
+    "task_scorer_result": {
+      "$ref": "#/$defs/TaskScorerResult"
+    },
     "workflow_success_rate_under_budget": {
       "type": "number",
       "minimum": 0,
@@ -3503,6 +3506,31 @@
           "minimum": 0
         }
       },
+      "additionalProperties": false
+    },
+    "TaskScorerResult": {
+      "type": "object",
+      "properties": {
+        "decision": { "type": "string", "enum": ["run", "expand", "split", "return"] },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "explanation": { "type": "string" },
+        "scorer_id": { "type": "string" },
+        "scored_at": { "type": "string", "format": "date-time" },
+        "probability_intervention": { "type": "number", "minimum": 0, "maximum": 1 },
+        "feature_contributions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": { "feature": { "type": "string" }, "contribution": { "type": "number" } },
+            "required": ["feature", "contribution"],
+            "additionalProperties": false
+          },
+          "maxItems": 5
+        },
+        "difficulty": { "type": "number", "minimum": 0, "maximum": 3 },
+        "features_version": { "type": "string" }
+      },
+      "required": ["decision", "confidence", "explanation", "scorer_id", "scored_at"],
       "additionalProperties": false
     },
     "WavemillRouterDiagnostics": {

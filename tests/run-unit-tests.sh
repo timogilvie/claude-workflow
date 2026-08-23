@@ -198,6 +198,7 @@ TESTS=(
   shared/lib/eval-orchestrator.test.ts
   shared/lib/stage-eval-evidence.test.ts
   shared/lib/eval-schema.test.ts
+  src/evaluation/scorers/task-packet-scorer.test.ts
   shared/lib/trace-event.test.ts
   shared/lib/eval-success-policy.test.ts
   shared/lib/eval-validator.test.ts

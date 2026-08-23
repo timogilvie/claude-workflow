@@ -697,6 +697,7 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
     planningExecutionOutcome: stageArtifacts.planningExecutionOutcome,
     phaseDurations,
     routePrediction: stageArtifacts.routePrediction,
+    taskScorerResult: stageArtifacts.taskScorerResult,
     routing: stageArtifacts.routing,
     difficulty: difficultyData,
     taskContext: taskContextData,

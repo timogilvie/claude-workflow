@@ -27,6 +27,7 @@ import type {
   RoutePrediction,
   RoutingDecision,
   RoutingCandidate,
+  TaskScorerResult,
 } from './eval-schema.ts';
 import {
   POLICY_RESOLVER_VERSION,
@@ -923,6 +924,31 @@ function loadFromArchive(repoDir: string, issueId: string, filename: string): st
   return undefined;
 }
 
+function parseTaskScorerResult(raw: string | undefined): TaskScorerResult | null {
+  if (!raw) return null;
+  try {
+    const value = JSON.parse(raw) as Partial<TaskScorerResult>;
+    if (!value || !['run', 'expand', 'split', 'return'].includes(value.decision ?? '')
+      || typeof value.confidence !== 'number' || !Number.isFinite(value.confidence)
+      || value.confidence < 0 || value.confidence > 1
+      || typeof value.explanation !== 'string' || typeof value.scorer_id !== 'string'
+      || typeof value.scored_at !== 'string') return null;
+    return value as TaskScorerResult;
+  } catch { return null; }
+}
+
+/** Load a task-scorer sidecar, preferring the live feature directory. */
+export function loadTaskScorerResult(repoDir: string, slug: string, worktreePath: string | undefined, issueId: string): TaskScorerResult | null {
+  for (const root of [worktreePath, repoDir].filter((entry): entry is string => Boolean(entry))) {
+    for (const area of ['features', 'bugs']) {
+      const file = path.join(root, area, slug, '.task-scorer-result.json');
+      if (!existsSync(file)) continue;
+      try { const parsed = parseTaskScorerResult(readFileSync(file, 'utf8')); if (parsed) return parsed; } catch { /* fall back */ }
+    }
+  }
+  return parseTaskScorerResult(loadFromArchive(repoDir, issueId, 'task-scorer-result.json'));
+}
+
 function parseIsoTimestamp(value: unknown): number | null {
   if (typeof value !== 'string' || value.trim().length === 0) {
     return null;
@@ -1010,6 +1036,7 @@ export function gatherStageArtifacts(
   routingDecision?: RoutingDecision;
   routing?: EvalRouting;
   routePrediction?: RoutePrediction;
+  taskScorerResult?: TaskScorerResult | null;
   executedPlanning?: EvalExecutedPlanning;
   planningExecutionOutcome?: PlanningExecutionOutcome;
   phaseDurations?: EvalPhaseDurations;
@@ -1026,6 +1053,7 @@ export function gatherStageArtifacts(
       routingDecision: undefined,
       routing: loadResolvedModelRouting(repoDir, issueId),
       routePrediction: buildRoutePrediction(loadRoutingCompleteRawFromArchive(repoDir, issueId) ?? undefined),
+      taskScorerResult: parseTaskScorerResult(loadFromArchive(repoDir, issueId, 'task-scorer-result.json')),
       executedPlanning: undefined,
       planningExecutionOutcome: loadPlanningExecutionOutcomeFromArchive(repoDir, issueId),
       phaseDurations: undefined,
@@ -1054,6 +1082,7 @@ export function gatherStageArtifacts(
     routingDecision,
     routing,
     routePrediction: buildRoutePrediction(routingCompleteRaw),
+    taskScorerResult: loadTaskScorerResult(repoDir, slug, worktreePath, issueId),
     executedPlanning: loadExecutedPlanning(repoDir, slug, issueId, worktreePath),
     planningExecutionOutcome: loadPlanningExecutionOutcome(repoDir, slug, issueId, worktreePath),
     phaseDurations: computePhaseDurations(repoDir, slug, worktreePath),

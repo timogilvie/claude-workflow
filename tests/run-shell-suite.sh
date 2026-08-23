@@ -70,6 +70,7 @@ TESTS=(
   openrouter-warning-surfaces.test.sh
   hokusai-test-registration.test.sh
   global-model-parity.test.sh
+  task-scorer-shadow-hook.test.sh
 )
 
 SHARD_INDEX=1

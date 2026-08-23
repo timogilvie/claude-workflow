@@ -46,6 +46,7 @@ import type {
   VerificationTelemetry,
   VerificationTelemetryLocalExecution,
   RoutingRole,
+  TaskScorerResult,
 } from './eval-schema.ts';
 import {
   getEffectiveRegistry,
@@ -117,6 +118,8 @@ export interface EvalRecordMetadata {
   phaseDurations?: EvalPhaseDurations | null;
   /** Compact router prediction metadata for calibration. */
   routePrediction?: RoutePrediction | null;
+  /** Shadow-mode readiness score captured before coding dispatch. */
+  taskScorerResult?: TaskScorerResult | null;
   /** Difficulty analysis results */
   difficulty?: DifficultyAnalysis | null;
   /** Task context analysis results */
@@ -826,6 +829,17 @@ export function attachRoutePrediction(
   if (hasObjectValues(normalized as Record<string, unknown>)) {
     record.routePrediction = normalized;
   }
+}
+
+export function attachTaskScorerResult(
+  record: EvalRecord,
+  result: TaskScorerResult | null | undefined,
+): void {
+  if (!result || !['run', 'expand', 'split', 'return'].includes(result.decision)
+    || !isFiniteNumber(result.confidence) || result.confidence < 0 || result.confidence > 1
+    || !isNonEmptyString(result.explanation) || !isNonEmptyString(result.scorer_id)
+    || !isNonEmptyString(result.scored_at)) return;
+  record.task_scorer_result = result;
 }
 
 export function attachRoutingDecisions(
@@ -1598,6 +1612,7 @@ export function enrichEvalRecord(record: EvalRecord, metadata: EvalRecordMetadat
   attachPhaseDurations(record, metadata.phaseDurations);
   attachRouterPolicyMetadata(record, metadata.routeProvenance);
   attachRoutePrediction(record, metadata.routePrediction);
+  attachTaskScorerResult(record, metadata.taskScorerResult);
   attachDifficultyMetadata(record, metadata.difficulty || null);
   attachTaskContextMetadata(record, metadata.taskContext || null);
   attachRepoContextMetadata(record, metadata.repoContext || null);
@@ -1656,6 +1671,7 @@ export function enrichTrainingMetadata(
   attachVerificationTelemetry(record, metadata.verificationTelemetry);
   attachRouterPolicyMetadata(record, metadata.routeProvenance);
   attachRoutePrediction(record, metadata.routePrediction);
+  attachTaskScorerResult(record, metadata.taskScorerResult);
   attachDifficultyMetadata(record, metadata.difficulty || null);
   attachTaskContextMetadata(record, metadata.taskContext || null);
   attachRepoContextMetadata(record, metadata.repoContext || null);

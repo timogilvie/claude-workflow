@@ -44,6 +44,8 @@ export interface ClassifyTaskOptions {
   repoDir?: string;
   model?: string;
   skipLlm?: boolean;
+  /** Avoid cache reads/writes for latency-sensitive pure scoring paths. */
+  skipCache?: boolean;
   cacheTtlDays?: number;
 }
 
@@ -300,7 +302,7 @@ function parseLLMClassification(
  * @returns Classification result with difficulty, rationale, and source
  */
 export function classifyTaskDifficulty(opts: ClassifyTaskOptions): TaskDifficultyResult {
-  const { title = '', description = '', packetContent = '', repoDir, skipLlm = false } = opts;
+  const { title = '', description = '', packetContent = '', repoDir, skipLlm = false, skipCache = false } = opts;
   const model = opts.model || DEFAULT_CLASSIFIER_MODEL;
   const ttlDays = opts.cacheTtlDays ?? DEFAULT_CACHE_TTL_DAYS;
 
@@ -309,7 +311,7 @@ export function classifyTaskDifficulty(opts: ClassifyTaskOptions): TaskDifficult
   const hash = createHash('sha256').update(hashInput).digest('hex');
 
   // 2. Check cache
-  const cached = readCacheEntry(hash, repoDir, ttlDays);
+  const cached = skipCache ? null : readCacheEntry(hash, repoDir, ttlDays);
   if (cached) {
     return cached;
   }
@@ -317,7 +319,7 @@ export function classifyTaskDifficulty(opts: ClassifyTaskOptions): TaskDifficult
   // 3. Heuristic fallback when LLM is skipped
   if (skipLlm) {
     const result = classifyByHeuristic(title, description);
-    writeCacheEntry(hash, result, repoDir);
+    if (!skipCache) writeCacheEntry(hash, result, repoDir);
     return result;
   }
 
@@ -329,7 +331,7 @@ export function classifyTaskDifficulty(opts: ClassifyTaskOptions): TaskDifficult
     if (rawResponse) {
       const llmResult = parseLLMClassification(rawResponse, title, description);
       if (llmResult) {
-        writeCacheEntry(hash, llmResult, repoDir);
+        if (!skipCache) writeCacheEntry(hash, llmResult, repoDir);
         return llmResult;
       }
     }
@@ -340,7 +342,7 @@ export function classifyTaskDifficulty(opts: ClassifyTaskOptions): TaskDifficult
   // 5. Heuristic fallback on LLM failure
   console.warn('[task-difficulty-classifier] Falling back to heuristic classification');
   const fallback = classifyByHeuristic(title, description);
-  writeCacheEntry(hash, fallback, repoDir);
+  if (!skipCache) writeCacheEntry(hash, fallback, repoDir);
   return fallback;
 }
 

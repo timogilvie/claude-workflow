@@ -10609,6 +10609,15 @@ archive_stage_artifacts() {
       fi
     fi
 
+    # Shadow-mode scorer output is retained for eval enrichment.
+    if [[ -f "$feature_dir/.task-scorer-result.json" ]]; then
+      if jq -e . "$feature_dir/.task-scorer-result.json" >/dev/null 2>&1; then
+        cp "$feature_dir/.task-scorer-result.json" "$archive_dir/task-scorer-result.json" 2>/dev/null || true
+      else
+        log_warn "  Skipping invalid task scorer artifact archive: $feature_dir/.task-scorer-result.json"
+      fi
+    fi
+
     if [[ -f "$feature_dir/.initial-route.json" ]]; then
       if jq -e . "$feature_dir/.initial-route.json" >/dev/null 2>&1; then
         cp "$feature_dir/.initial-route.json" "$archive_dir/initial-route.json" 2>/dev/null || true
@@ -11364,6 +11373,27 @@ reroute_expanded_packets_for_coding_handoff() {
 
   replay_route_transparency_logs "$stderr_file"
   rm -f "$input_file" "$output_file" "$stderr_file"
+  return 0
+}
+
+# HOK-2845: advisory-only readiness scoring. A failed or disabled scorer must
+# never change the planning-to-coding transition.
+run_task_scorer_shadow() {
+  local issue="$1" feature_dir="$2" wt_dir="$3"
+  local out="$feature_dir/.task-scorer-result.json"
+  local stderr_file="$feature_dir/.task-scorer.stderr"
+
+  [[ "${WAVEMILL_TASK_SCORER_SHADOW:-1}" == "0" ]] && return 0
+  [[ -f "$feature_dir/task-packet.md" || -f "$feature_dir/task-packet-header.md" ]] || return 0
+
+  rm -f "$out"
+  if _with_timeout 5 npx tsx "$TOOLS_DIR/score-task-packet.ts" "$feature_dir" \
+    --repo-dir "$wt_dir" --quiet 2>"$stderr_file" | write_json_artifact "$out"; then
+    log "status" "$issue → Task scorer (shadow): $(jq -r '\"\(.decision) (\(.confidence))\"' "$out" 2>/dev/null || echo unknown)"
+  else
+    rm -f "$out"
+    log_warn "$issue → task scorer failed (shadow mode, continuing)"
+  fi
   return 0
 }
 
@@ -14441,6 +14471,8 @@ monitor_issue_state() {
               active_count=$((active_count + 1))
               return 0
             fi
+
+            run_task_scorer_shadow "$ISSUE" "$FEATURE_DIR" "$WT_DIR"
 
             # FORCE_MODEL takes priority, then challenge, then state, then default
             if [[ -n "${FORCE_MODEL:-}" ]]; then
