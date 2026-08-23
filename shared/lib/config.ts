@@ -275,6 +275,7 @@ export interface ChallengeConfig {
   recommendationRate?: number;
   allowDeepseek?: boolean;
   autoMergeWinner?: boolean;
+  comparisonModel?: string;
   gate?: ChallengeGateConfig;
   stageWeights?: {
     plan?: number;

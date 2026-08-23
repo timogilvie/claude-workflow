@@ -212,7 +212,7 @@ wavemill_reconcile_terminal_linear() {
 
 wavemill_reconcile_terminal() {
   local session="$1" issue="$2" reason="$3" pr_number="${4:-}" pr_json="" effective_reason key marker_json linear_rc
-  local feature_dir stage stage_status agent model notes artifacts
+  local feature_dir stage stage_status agent model notes artifacts existing_artifacts
 
   wavemill_terminal_reason_valid "$reason" || return 2
   if [[ -n "$pr_number" ]]; then
@@ -237,8 +237,16 @@ wavemill_reconcile_terminal() {
     model=""
     declare -F resolve_stage_result_model >/dev/null 2>&1 && model="$(resolve_stage_result_model "$feature_dir" "$stage" "" 2>/dev/null || true)"
     notes="$(wavemill_terminal_detail "$effective_reason" "$pr_number")"
-    artifacts="$(jq -cn --arg type "$stage" --arg reason "$effective_reason" --arg pr "$pr_number" \
-      '{type:$type, terminalReason:$reason} + (if $pr == "" then {} else {prNumber:($pr|tonumber)} end)' 2>/dev/null || true)"
+    # Preserve any artifacts the stage agent already recorded (verdict, exitCode,
+    # iterations, blockerCount). write_stage_result replaces the file wholesale, so
+    # a thin terminal blob here would destroy the evidence the ready gate reads.
+    existing_artifacts="{}"
+    if [[ -f "$feature_dir/.${stage}-result.json" ]]; then
+      existing_artifacts="$(jq -c 'if (.artifacts | type) == "object" then .artifacts else {} end' "$feature_dir/.${stage}-result.json" 2>/dev/null || printf '{}')"
+    fi
+    [[ -n "$existing_artifacts" ]] || existing_artifacts="{}"
+    artifacts="$(jq -cn --argjson existing "$existing_artifacts" --arg type "$stage" --arg reason "$effective_reason" --arg pr "$pr_number" \
+      '$existing + {type:$type, terminalReason:$reason} + (if $pr == "" then {} else {prNumber:($pr|tonumber)} end)' 2>/dev/null || true)"
     write_stage_result "$feature_dir" "$stage" "$stage_status" "$agent" "$model" "$notes" "$artifacts" || true
     wavemill_terminal_mark_field "$issue" "$key" "stageApplied" true
   fi

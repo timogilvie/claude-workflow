@@ -780,7 +780,7 @@ function validPromptSizeDiagnostic() {
 }
 
 test('SCHEMA_VERSION is bumped for eval schema updates', () => {
-  assert.equal(SCHEMA_VERSION, '1.41.0');
+  assert.equal(SCHEMA_VERSION, '1.42.0');
 });
 
 test('Record with harnessId validates and legacy records without it still validate', () => {
@@ -970,6 +970,15 @@ test('Record with eval_prompt_too_large failureReason validates', () => {
   const record = {
     ...scenarios[0].record,
     failureReason: 'eval_prompt_too_large',
+  } as unknown as Record<string, unknown>;
+  const result = validateAgainstSchema(record);
+  assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
+});
+
+test('Record with pr_diff_unavailable failureReason validates', () => {
+  const record = {
+    ...scenarios[0].record,
+    failureReason: 'pr_diff_unavailable',
   } as unknown as Record<string, unknown>;
   const result = validateAgainstSchema(record);
   assert.ok(result.valid, `Should validate: ${result.errors.join('; ')}`);
@@ -1718,6 +1727,7 @@ test('Eligibility fields validate and schema stays in parity', () => {
     'invalid_feature_outcome',
     'failed_feature_outcome',
     'missing_challenge_stage',
+    'eval_fast_failed',
   ]);
   assert.equal(properties.enrichmentDiagnostics?.type, 'array');
   assert.equal(properties.enrichmentDiagnostics?.items?.type, 'string');
@@ -2152,8 +2162,8 @@ test('Wavemill router fields validate and schema stays in parity', () => {
   assert.equal(properties.wavemill_router_scoring?.$ref, '#/$defs/WavemillRouterScoringMetadata');
 });
 
-test('Schema version constant is 1.41.0', () => {
-  assert.equal(SCHEMA_VERSION, '1.41.0');
+test('Schema version constant is 1.42.0', () => {
+  assert.equal(SCHEMA_VERSION, '1.42.0');
 });
 
 test('Record with resolved-model routing validates', () => {

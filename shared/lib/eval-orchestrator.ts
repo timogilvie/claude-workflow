@@ -46,7 +46,7 @@ import {
   collectReworkOutcome,
   collectDeliveryOutcome,
 } from './outcome-collectors.ts';
-import { evaluateTask } from './eval.ts';
+import { buildUnscoredEvalRecord, evaluateTask } from './eval.ts';
 import {
   attachChallengeExecutionMetadata,
   attachPhaseDurations,
@@ -98,6 +98,7 @@ export const evalOrchestratorDeps = {
   collectReworkOutcome,
   collectDeliveryOutcome,
   evaluateTask,
+  buildUnscoredEvalRecord,
   buildTaskDescriptor,
   appendEvalRecord,
   triggerHokusaiSubmission,
@@ -430,24 +431,45 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
   // Use explicitly provided routing decision, or fall back to auto-loaded one
   const effectiveRoutingDecision = routingDecision ?? stageArtifacts.routingDecision;
 
-  const record = await evalOrchestratorDeps.evaluateTask(
-    {
-      taskPrompt: evalContext.taskPrompt,
-      prReviewOutput: evalContext.prDiff,
-      interventions: interventionMeta,
-      interventionRecords,
-      interventionText,
-      issueId: issueId || undefined,
-      prUrl: prUrl || undefined,
-      timeSeconds: wallClockSeconds,
-      routingDecision: effectiveRoutingDecision,
-      taskPacket: stageArtifacts.taskPacket,
-      planContent: stageArtifacts.planContent,
-      selfReviewSummary: stageArtifacts.selfReviewSummary,
-      metadata: { interventionSummary },
-    },
-    outcomes
-  );
+  const evalInput = {
+    taskPrompt: evalContext.taskPrompt,
+    prReviewOutput: evalContext.prDiff,
+    interventions: interventionMeta,
+    interventionRecords,
+    interventionText,
+    issueId: issueId || undefined,
+    prUrl: prUrl || undefined,
+    timeSeconds: wallClockSeconds,
+    routingDecision: effectiveRoutingDecision,
+    taskPacket: stageArtifacts.taskPacket,
+    planContent: stageArtifacts.planContent,
+    selfReviewSummary: stageArtifacts.selfReviewSummary,
+    metadata: { interventionSummary },
+  };
+  const record = prNumber && evalContext.prDiffAvailability?.available === false
+    ? await evalOrchestratorDeps.buildUnscoredEvalRecord(
+        {
+          ...evalInput,
+          metadata: {
+            ...evalInput.metadata,
+            prDiffUnavailable: {
+              reason: evalContext.prDiffAvailability.reason,
+              detail: evalContext.prDiffAvailability.detail,
+              attempts: evalContext.prDiffAvailability.attempts,
+            },
+          },
+        },
+        {
+          failureReason: 'pr_diff_unavailable',
+          rationale: `PR diff could not be retrieved (${evalContext.prDiffAvailability.reason}): ${evalContext.prDiffAvailability.detail}. Judge not invoked.`,
+          nonRewardReason: {
+            code: 'pr_diff_unavailable',
+            message: `PR diff could not be retrieved: ${evalContext.prDiffAvailability.reason}`,
+          },
+        },
+        outcomes,
+      )
+    : await evalOrchestratorDeps.evaluateTask(evalInput, outcomes);
 
   // 9. Set success flag based on score threshold
   if (record.outcomes) {
