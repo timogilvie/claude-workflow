@@ -160,7 +160,7 @@ Options:
   --linear-project <id>  Optional Linear project id/name for filed issues
   --linear-label <name>  Optional Linear label name to attach
   --dry-run              Do not create Linear issues
-  --stale-minutes <n>    State/log stale threshold (default: ${DEFAULT_STALE_MINUTES})
+  --stale-minutes <n>    State/log stale threshold and phase-marker grace period (default: ${DEFAULT_STALE_MINUTES})
   --hung-minutes <n>     Child process hung threshold (default: ${DEFAULT_HUNG_MINUTES})
   --max-log-lines <n>    Recent mill log lines to inspect (default: 240)
   --repo-dir <path>      Limit service observation to one repository
@@ -663,41 +663,69 @@ export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, opti
     for (const task of repo.tasks) {
       if (!task.worktree || !task.slug || terminalStatus(task.status)) continue;
       const featureDir = join(task.worktree, 'features', task.slug);
-      if (task.phase === 'coding' && existsSync(join(featureDir, '.coding-complete'))) {
-        findings.push({
-          id: `coding-marker-ignored-${task.issue}`,
-          severity: 'urgent',
-          category: 'stuck',
-          confidence: 'high',
-          session: repo.session,
-          repoDir: repo.repoDir,
-          issue: task.issue,
-          title: `${task.issue} is still in coding even though .coding-complete exists`,
-          evidence: [
-            `statePhase=${task.phase}`,
-            `marker=${join(featureDir, '.coding-complete')}`,
-            `worktree=${task.worktree}`,
-          ],
-          recommendation: 'The monitor should advance this to review. Check for a hung monitor child process before restarting the session.',
-        });
+      if (task.phase === 'coding') {
+        const marker = join(featureDir, '.coding-complete');
+        const markerAssessment = assessIgnoredMarker(marker, repo, now, options);
+        if (markerAssessment?.stalled) {
+          const markerAgeMinutes = markerAssessment.markerAgeSeconds / 60;
+          findings.push({
+            id: `coding-marker-ignored-${task.issue}`,
+            severity: 'urgent',
+            category: 'stuck',
+            confidence: 'high',
+            session: repo.session,
+            repoDir: repo.repoDir,
+            issue: task.issue,
+            title: `${task.issue} is still in coding ${Math.round(markerAgeMinutes)} minutes after .coding-complete was written`,
+            evidence: [
+              `statePhase=${task.phase}`,
+              `marker=${marker}`,
+              `markerMtime=${new Date(markerAssessment.markerMtimeMs).toISOString()}`,
+              `markerAgeSeconds=${markerAssessment.markerAgeSeconds}`,
+              `stateMtime=${repo.stateMtime ?? 'unknown'}`,
+              `thresholdMinutes=${options.staleMinutes}`,
+              `worktree=${task.worktree}`,
+            ],
+            recommendation: markerStallRecommendation(
+              markerAgeMinutes,
+              options.staleMinutes,
+              'The monitor should have advanced this to review by now. Verify the monitor loop is still polling (check mill log for this issue) before intervening.',
+              'The monitor should advance this to review. Check for a hung monitor child process before restarting the session.',
+            ),
+          });
+        }
       }
-      if (task.phase === 'planning' && existsSync(join(featureDir, '.plan-approved'))) {
-        findings.push({
-          id: `plan-marker-ignored-${task.issue}`,
-          severity: 'urgent',
-          category: 'stuck',
-          confidence: 'high',
-          session: repo.session,
-          repoDir: repo.repoDir,
-          issue: task.issue,
-          title: `${task.issue} is still in planning even though .plan-approved exists`,
-          evidence: [
-            `statePhase=${task.phase}`,
-            `marker=${join(featureDir, '.plan-approved')}`,
-            `worktree=${task.worktree}`,
-          ],
-          recommendation: 'The monitor should launch coding. Inspect the monitor loop for a blocking external command.',
-        });
+      if (task.phase === 'planning') {
+        const marker = join(featureDir, '.plan-approved');
+        const markerAssessment = assessIgnoredMarker(marker, repo, now, options);
+        if (markerAssessment?.stalled) {
+          const markerAgeMinutes = markerAssessment.markerAgeSeconds / 60;
+          findings.push({
+            id: `plan-marker-ignored-${task.issue}`,
+            severity: 'urgent',
+            category: 'stuck',
+            confidence: 'high',
+            session: repo.session,
+            repoDir: repo.repoDir,
+            issue: task.issue,
+            title: `${task.issue} is still in planning ${Math.round(markerAgeMinutes)} minutes after .plan-approved was written`,
+            evidence: [
+              `statePhase=${task.phase}`,
+              `marker=${marker}`,
+              `markerMtime=${new Date(markerAssessment.markerMtimeMs).toISOString()}`,
+              `markerAgeSeconds=${markerAssessment.markerAgeSeconds}`,
+              `stateMtime=${repo.stateMtime ?? 'unknown'}`,
+              `thresholdMinutes=${options.staleMinutes}`,
+              `worktree=${task.worktree}`,
+            ],
+            recommendation: markerStallRecommendation(
+              markerAgeMinutes,
+              options.staleMinutes,
+              'The monitor should have launched coding by now. Verify the monitor loop is still polling before intervening.',
+              'The monitor should launch coding. Inspect the monitor loop for a blocking external command.',
+            ),
+          });
+        }
       }
     }
 
@@ -859,6 +887,36 @@ function parseReadyWatchdogLine(line: string): ReadyWatchdogLogEntry | null {
 
 function terminalStatus(status?: string): boolean {
   return status === 'merged' || status === 'complete' || status === 'closed' || status === 'done';
+}
+
+interface MarkerStallAssessment {
+  markerMtimeMs: number;
+  markerAgeSeconds: number;
+  stalled: boolean;
+}
+
+function assessIgnoredMarker(markerPath: string, repo: RepoSnapshot, now: number, options: ObserverOptions): MarkerStallAssessment | null {
+  if (!existsSync(markerPath)) return null;
+  let markerMtimeMs: number;
+  try {
+    markerMtimeMs = statSync(markerPath).mtimeMs;
+  } catch {
+    return null;
+  }
+
+  const markerAgeMs = now - markerMtimeMs;
+  const markerAgeSeconds = Math.max(0, Math.floor(markerAgeMs / 1000));
+  const thresholdMs = options.staleMinutes * 60_000;
+  const stateMtimeMs = repo.stateMtime ? Date.parse(repo.stateMtime) : NaN;
+  const hasStateMtime = Number.isFinite(stateMtimeMs);
+  const stateFresh = hasStateMtime && now - stateMtimeMs <= thresholdMs;
+  const stateNewerThanMarker = hasStateMtime && stateMtimeMs >= markerMtimeMs;
+  const stalled = markerAgeMs > thresholdMs && !(stateFresh && stateNewerThanMarker);
+  return { markerMtimeMs, markerAgeSeconds, stalled };
+}
+
+function markerStallRecommendation(ageMinutes: number, staleMinutes: number, softText: string, hardText: string): string {
+  return ageMinutes <= staleMinutes * 3 ? softText : hardText;
 }
 
 function hashText(text: string): string {

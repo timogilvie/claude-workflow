@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -25,6 +25,165 @@ function defaultObserverOptions() {
     incidentDetector: true,
   };
 }
+
+function markerFixture(
+  markerName: '.coding-complete' | '.plan-approved',
+  ageSeconds: number,
+  stateAgeSeconds?: number,
+  phase: 'coding' | 'planning' = markerName === '.coding-complete' ? 'coding' : 'planning',
+  status = 'running',
+) {
+  const repoDir = mkdtempSync(join(tmpdir(), 'observer-marker-repo-'));
+  const worktree = mkdtempSync(join(tmpdir(), 'observer-marker-worktree-'));
+  const slug = 'marker-fixture';
+  const featureDir = join(worktree, 'features', slug);
+  const marker = join(featureDir, markerName);
+  const now = Date.now();
+  mkdirSync(featureDir, { recursive: true });
+  writeFileSync(marker, '');
+  const markerTime = new Date(now - ageSeconds * 1000);
+  utimesSync(marker, markerTime, markerTime);
+
+  return {
+    repoDir,
+    worktree,
+    marker,
+    snapshot: {
+      timestamp: new Date(now).toISOString(),
+      sessions: ['wavemill'],
+      panes: [],
+      processes: [],
+      repos: [{
+        session: 'wavemill',
+        repoDir,
+        stateMtime: stateAgeSeconds === undefined ? undefined : new Date(now - stateAgeSeconds * 1000).toISOString(),
+        tasks: [{
+          issue: 'HOK-2794',
+          slug,
+          phase,
+          status,
+          worktree,
+        }],
+      }],
+    },
+    cleanup() {
+      rmSync(repoDir, { recursive: true, force: true });
+      rmSync(worktree, { recursive: true, force: true });
+    },
+  };
+}
+
+test('fresh coding marker within grace period does not produce ignored-marker finding', () => {
+  const fixture = markerFixture('.coding-complete', 30, 5);
+  try {
+    const findings = buildFindings(fixture.snapshot, defaultObserverOptions());
+
+    assert.equal(findings.some((finding) => finding.id === 'coding-marker-ignored-HOK-2794'), false);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('fresh coding marker with unknown state mtime is suppressed by age threshold', () => {
+  const fixture = markerFixture('.coding-complete', 30);
+  try {
+    const findings = buildFindings(fixture.snapshot, defaultObserverOptions());
+
+    assert.equal(findings.some((finding) => finding.id === 'coding-marker-ignored-HOK-2794'), false);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('old coding marker with stale state produces urgent ignored-marker finding with age evidence', () => {
+  const fixture = markerFixture('.coding-complete', 15 * 60, 15 * 60);
+  try {
+    const findings = buildFindings(fixture.snapshot, defaultObserverOptions());
+    const finding = findings.find((candidate) => candidate.id === 'coding-marker-ignored-HOK-2794');
+
+    assert.ok(finding);
+    assert.equal(finding.severity, 'urgent');
+    assert.equal(finding.confidence, 'high');
+    assert.match(finding.title, /15 minutes/);
+    assert.match(finding.recommendation, /still polling/);
+    assert.ok(finding.evidence.includes('statePhase=coding'));
+    assert.ok(finding.evidence.includes(`marker=${fixture.marker}`));
+    assert.ok(finding.evidence.some((line) => line.startsWith('markerMtime=')));
+    assert.ok(finding.evidence.some((line) => line.startsWith('stateMtime=')));
+    assert.ok(finding.evidence.includes('thresholdMinutes=10'));
+    const markerAgeLine = finding.evidence.find((line) => line.startsWith('markerAgeSeconds='));
+    assert.ok(markerAgeLine);
+    const markerAgeSeconds = Number(markerAgeLine.slice('markerAgeSeconds='.length));
+    assert.ok(markerAgeSeconds >= 890);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('old coding marker is suppressed while workflow state is freshly newer than marker', () => {
+  const fixture = markerFixture('.coding-complete', 15 * 60, 60);
+  try {
+    const findings = buildFindings(fixture.snapshot, defaultObserverOptions());
+
+    assert.equal(findings.some((finding) => finding.id === 'coding-marker-ignored-HOK-2794'), false);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('old coding marker with newer but stale state still produces hard stalled recommendation', () => {
+  const fixture = markerFixture('.coding-complete', 40 * 60, 20 * 60);
+  try {
+    const findings = buildFindings(fixture.snapshot, defaultObserverOptions());
+    const finding = findings.find((candidate) => candidate.id === 'coding-marker-ignored-HOK-2794');
+
+    assert.ok(finding);
+    assert.equal(finding.severity, 'urgent');
+    assert.equal(finding.confidence, 'high');
+    assert.match(finding.title, /40 minutes/);
+    assert.match(finding.recommendation, /hung monitor child/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('planning marker uses same grace period and stale threshold evidence', () => {
+  const freshFixture = markerFixture('.plan-approved', 30, 5);
+  try {
+    const findings = buildFindings(freshFixture.snapshot, defaultObserverOptions());
+
+    assert.equal(findings.some((finding) => finding.id === 'plan-marker-ignored-HOK-2794'), false);
+  } finally {
+    freshFixture.cleanup();
+  }
+
+  const oldFixture = markerFixture('.plan-approved', 15 * 60, 15 * 60);
+  try {
+    const findings = buildFindings(oldFixture.snapshot, defaultObserverOptions());
+    const finding = findings.find((candidate) => candidate.id === 'plan-marker-ignored-HOK-2794');
+
+    assert.ok(finding);
+    assert.equal(finding.severity, 'urgent');
+    assert.equal(finding.confidence, 'high');
+    assert.match(finding.title, /15 minutes/);
+    assert.ok(finding.evidence.includes('statePhase=planning'));
+    assert.ok(finding.evidence.some((line) => line.startsWith('markerAgeSeconds=')));
+    assert.ok(finding.evidence.some((line) => line.startsWith('stateMtime=')));
+  } finally {
+    oldFixture.cleanup();
+  }
+});
+
+test('terminal task status suppresses ignored marker finding', () => {
+  const fixture = markerFixture('.coding-complete', 40 * 60, 40 * 60, 'coding', 'merged');
+  try {
+    const findings = buildFindings(fixture.snapshot, defaultObserverOptions());
+
+    assert.equal(findings.some((finding) => finding.id === 'coding-marker-ignored-HOK-2794'), false);
+  } finally {
+    fixture.cleanup();
+  }
+});
 
 test('repeated ready watchdog auto-recoveries escalate to actionable stuck finding', () => {
   const repoDir = mkdtempSync(join(tmpdir(), 'observer-ready-watchdog-'));
