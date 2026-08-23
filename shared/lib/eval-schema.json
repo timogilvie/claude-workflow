@@ -427,6 +427,7 @@
         "invalid_feature_outcome",
         "failed_feature_outcome",
         "missing_challenge_stage",
+        "eval_fast_failed",
         "provisional_model_identity"
       ],
       "description": "Primary stable reason why the record is ineligible for budget-eval export."
@@ -447,6 +448,7 @@
           "invalid_feature_outcome",
           "failed_feature_outcome",
           "missing_challenge_stage",
+          "eval_fast_failed",
           "provisional_model_identity"
         ]
       },
@@ -476,7 +478,8 @@
     "failureReason": {
       "type": "string",
       "enum": [
-        "eval_prompt_too_large"
+        "eval_prompt_too_large",
+        "pr_diff_unavailable"
       ],
       "description": "Stable machine-readable eval failure reason for fast-fail records."
     },

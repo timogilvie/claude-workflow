@@ -14844,7 +14844,7 @@ monitor_issue_state() {
               if [[ -n "$depends_on_pr_meta" ]]; then
                 inject_depends_on_pr_block "$ISSUE" "$pr_number" "$depends_on_pr_meta"
               fi
-              write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "review" "claude-sonnet-5")" "PR #$pr_number" "{\"type\":\"review\",\"prNumber\":$pr_number}"
+              write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "review" "claude-sonnet-5")" "PR #$pr_number" "$(review_artifacts_with_pr_number "$FEATURE_DIR" "$pr_number")"
               dispatch_queued_children_for_parent "$ISSUE" "$pr_number"
               if [[ "${WAVEMILL_TERMINAL_RECONCILER_LOADED:-0}" == "1" ]]; then
                 wavemill_reconcile_terminal "$SESSION" "$ISSUE" "review_complete" "$pr_number" || true
@@ -14886,7 +14886,7 @@ monitor_issue_state() {
             if [[ -n "$depends_on_pr_meta" ]]; then
               inject_depends_on_pr_block "$ISSUE" "$pr_number" "$depends_on_pr_meta"
             fi
-            write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "review" "claude-sonnet-5")" "PR #$pr_number" "{\"type\":\"review\",\"prNumber\":$pr_number}"
+            write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "review" "claude-sonnet-5")" "PR #$pr_number" "$(review_artifacts_with_pr_number "$FEATURE_DIR" "$pr_number")"
             dispatch_queued_children_for_parent "$ISSUE" "$pr_number"
 
             # Transition to ready phase
@@ -15270,7 +15270,7 @@ monitor_issue_state() {
         if [[ -n "$depends_on_pr_meta" ]]; then
           inject_depends_on_pr_block "$ISSUE" "$PR" "$depends_on_pr_meta"
         fi
-        write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "" "PR #$PR" "{\"type\":\"review\",\"prNumber\":$PR}"
+        write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "" "PR #$PR" "$(review_artifacts_with_pr_number "$FEATURE_DIR" "$PR")"
         dispatch_queued_children_for_parent "$ISSUE" "$PR"
         set_task_phase "$ISSUE" "ready"
         if [[ "${WAVEMILL_TERMINAL_RECONCILER_LOADED:-0}" == "1" ]]; then

@@ -963,6 +963,7 @@ const TRAINING_ELIGIBILITY_CODES: readonly EligibilityErrorCode[] = [
   'missing_outcome',
   'missing_routing',
   'missing_task_descriptor',
+  'eval_fast_failed',
   'provisional_model_identity',
 ];
 
@@ -971,6 +972,7 @@ const BUDGET_EVAL_ELIGIBILITY_CODES: readonly EligibilityErrorCode[] = [
   'missing_budget_snapshot',
   'missing_cost',
   'missing_routing',
+  'eval_fast_failed',
   'provisional_model_identity',
 ];
 
@@ -1118,6 +1120,10 @@ export function computeEligibility(record: EvalRecord): {
 
   if (!record.routingDecision) {
     errors.add('missing_routing');
+  }
+
+  if (record.failureReason) {
+    errors.add('eval_fast_failed');
   }
 
   if (!record.taskDescriptor) {

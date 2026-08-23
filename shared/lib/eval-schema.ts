@@ -88,7 +88,15 @@
  *   per-phase wall-clock durations computed from workflow result artifacts.
  * - **1.27.0**: `timeSeconds` now accepts `null` so eval records can preserve
  *   indeterminate wall-clock duration instead of coercing unknown time to `0`
+ * - **1.42.0**: Added `pr_diff_unavailable` fast-fail records and
+ *   `eval_fast_failed` eligibility diagnostics so unseen PR diffs are not
+ *   scored or exported as reward data.
  *   (HOK-1926)
+ * - **1.43.0**: Added the optional `modelIdentityAttribution` observation
+ *   snapshot and the `provisional_model_identity` eligibility reason so evals
+ *   that executed a provisional-identity model are held out of training and
+ *   budget evaluation. Additive; legacy rows without attribution still
+ *   validate. (HOK-2858)
  * - **1.28.0**: Added optional `quarantine_reason` and write-time eval corpus
  *   validation for `taskDescriptor`, non-empty `models_available`, and
  *   canonical reviewer/stage model IDs (HOK-2072); expanded
@@ -164,7 +172,7 @@ import type { ChallengeRoutingMeta } from './challenge-comparison.ts';
 import type { ChallengeStage } from './challenge-mode.ts';
 
 /** Current eval schema version for newly emitted records. */
-export const SCHEMA_VERSION = '1.42.0';
+export const SCHEMA_VERSION = '1.43.0';
 
 export type RoutingRole = 'planner' | 'coder' | 'reviewer';
 
@@ -562,7 +570,8 @@ export type InterventionSeverity = 'low' | 'med' | 'high';
  * @since 1.14.0
  * @since 1.30.0 added missing_feature_outcome, invalid_feature_outcome, failed_feature_outcome
  * @since 1.39.0 added missing_challenge_stage
- * @since 1.42.0 added provisional_model_identity
+ * @since 1.42.0 added eval_fast_failed
+ * @since 1.43.0 added provisional_model_identity
  */
 export type EligibilityErrorCode =
   | 'missing_routing'
@@ -576,6 +585,7 @@ export type EligibilityErrorCode =
   | 'invalid_feature_outcome'
   | 'failed_feature_outcome'
   | 'missing_challenge_stage'
+  | 'eval_fast_failed'
   | 'provisional_model_identity';
 
 // ────────────────────────────────────────────────────────────────
@@ -665,7 +675,7 @@ export interface FeatureOutcomeDiagnostics {
   conflictingFields?: string[];
 }
 
-export type EvalFailureReason = 'eval_prompt_too_large';
+export type EvalFailureReason = 'eval_prompt_too_large' | 'pr_diff_unavailable';
 
 export type EvalPromptComponentName =
   | 'taskPrompt'

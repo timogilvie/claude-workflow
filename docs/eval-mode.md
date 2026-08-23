@@ -42,7 +42,7 @@ The tool resolves workflow context in priority order:
 
 It then fetches:
 - Linear issue details (identifier, title, description)
-- PR diff via `gh pr diff`
+- PR diff via `gh pr diff`, falling back to a local `git diff` when GitHub refuses an oversized PR diff
 - Review comments from GitHub API
 
 ### 2) Intervention Detection
@@ -130,6 +130,10 @@ Context is sent to the LLM judge (default: `claude-sonnet-5`):
 - Score band (Excellent / Good / Acceptable / Poor / Failed)
 - Rationale (why this score)
 - Intervention flags (additional issues detected)
+
+If a PR number is present but the PR diff cannot be retrieved, Wavemill does not invoke the judge. It emits an unscored fast-fail eval record with `failureReason: "pr_diff_unavailable"`, `score: 0`, `scoreBand: "Failure"`, and `trainingEligible: false`. Challenge comparisons also refuse to judge a pair when either side has an unavailable diff or an unscored eval; they persist `comparisonOutcome: "inconclusive"` with `noComparisonReason: "diff_unavailable"` or `"eval_unscored"`.
+
+The PR diff byte cap defaults to 64 MiB. Override it with `WAVEMILL_PR_DIFF_MAX_BYTES` when operating on unusually large repositories.
 
 ### 6) Scoring Formula
 

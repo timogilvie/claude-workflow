@@ -16,6 +16,7 @@ import {
   resolvePrDiffIdentity,
   resolvePresentationOrder,
   retainLoserPatch,
+  runBlindJudge,
   validateComparisonJson,
 } from './pr-comparison.ts';
 import { loadPromptTemplate } from './prompt-utils.ts';
@@ -29,6 +30,21 @@ function criterionRationales(prefix = 'because') {
     intervention_impact: { rationale: `${prefix} intervention_impact differs` },
     autonomy: { rationale: `${prefix} autonomy differs` },
   };
+}
+
+function blindVerdictJson(winner: 'A' | 'B') {
+  return JSON.stringify({
+    winner,
+    rationale: 'Candidate wins',
+    dimensions: {
+      completeness: { A: 8, B: 7 },
+      correctness: { A: 8, B: 7 },
+      code_quality: { A: 8, B: 7 },
+      intervention_impact: { A: 8, B: 7 },
+      autonomy: { A: 8, B: 7 },
+    },
+    criterionRationales: criterionRationales(),
+  });
 }
 
 test('prNumberFromValue extracts the PR number from URLs', () => {
@@ -787,6 +803,79 @@ test('resolvePresentationOrder supports random, explicit override, and invalid v
   assert.equal(resolvePresentationOrder('challenger-first', () => 0.1), 'challenger-first');
   assert.equal(resolvePresentationOrder('primary-first', () => 0.9), 'primary-first');
   assert.throws(() => resolvePresentationOrder('primary'), /Invalid presentation order/);
+});
+
+test('runBlindJudge maps blind verdicts, hashes the successful prompt, and passes through cost', async () => {
+  const outcome = await runBlindJudge({
+    issuePrompt: 'Issue',
+    primaryDiff: 'primary diff',
+    challengerDiff: 'challenger diff',
+    presentationOrder: 'challenger-first',
+    promptTemplate: '{{ISSUE_PROMPT}}\n{{CANDIDATE_A_DIFF}}\n{{CANDIDATE_B_DIFF}}\n{{RUBRIC}}\n{{WORKFLOW_CONTEXT}}\n{{STAGE_EVIDENCE_CONTEXT}}',
+    model: 'judge-model',
+    maxPromptBytes: 100000,
+    deps: {
+      async callLlm(prompt, options) {
+        assert.equal(options?.model, 'judge-model');
+        assert.match(prompt, /challenger diff/);
+        return {
+          text: blindVerdictJson('A'),
+          rawOutput: blindVerdictJson('A'),
+          provider: 'claude',
+          model: 'judge-model',
+          costUsd: 1.23,
+          usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+        };
+      },
+    },
+  });
+
+  assert.equal(outcome.verdict.winner, 'challenger');
+  assert.equal(outcome.costUsd, 1.23);
+  assert.deepEqual(outcome.usage, { inputTokens: 10, outputTokens: 5, totalTokens: 15 });
+  assert.equal(outcome.judgePromptHash, hashString(outcome.judgePrompt));
+  assert.equal(outcome.retriedStricterJson, false);
+});
+
+test('runBlindJudge retries JavaScript-syntax responses once with stricter JSON instructions', async () => {
+  const prompts: string[] = [];
+  const outcome = await runBlindJudge({
+    issuePrompt: 'Issue',
+    primaryDiff: 'primary diff',
+    challengerDiff: 'challenger diff',
+    presentationOrder: 'primary-first',
+    promptTemplate: '{{ISSUE_PROMPT}}\n{{CANDIDATE_A_DIFF}}\n{{CANDIDATE_B_DIFF}}\n{{RUBRIC}}\n{{WORKFLOW_CONTEXT}}\n{{STAGE_EVIDENCE_CONTEXT}}',
+    model: 'judge-model',
+    maxPromptBytes: 100000,
+    deps: {
+      async callLlm(prompt, options) {
+        prompts.push(prompt);
+        if (prompts.length === 1) {
+          assert.equal(options?.retry, true);
+          return {
+            text: '{ winner: "A", ...rest }',
+            rawOutput: '{ winner: "A", ...rest }',
+            provider: 'claude',
+            model: 'judge-model',
+          };
+        }
+        assert.equal(options?.retry, false);
+        return {
+          text: blindVerdictJson('B'),
+          rawOutput: blindVerdictJson('B'),
+          provider: 'claude',
+          model: 'judge-model',
+          costUsd: 0.5,
+        };
+      },
+    },
+  });
+
+  assert.equal(prompts.length, 2);
+  assert.match(prompts[1], /Return ONLY valid JSON/);
+  assert.equal(outcome.verdict.winner, 'challenger');
+  assert.equal(outcome.retriedStricterJson, true);
+  assert.equal(outcome.judgePromptHash, hashString(prompts[1]));
 });
 
 test('existing comparison replay maps to the same stored winner and dimensions when order is fixed', () => {

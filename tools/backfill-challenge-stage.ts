@@ -13,9 +13,12 @@ import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 
 import { dirname, join, resolve } from 'node:path';
 import { runTool } from '../shared/lib/tool-runner.ts';
 import type { ChallengeStage } from '../shared/lib/challenge-mode.ts';
+import {
+  isChallengeStage,
+  recoverStageFromIntent,
+  stageFromChallengeType,
+} from '../shared/lib/challenge-stage-recovery.ts';
 
-const VALID_STAGES: readonly ChallengeStage[] = ['plan', 'implementation', 'review'];
-const VALID_STAGE_SET = new Set<string>(VALID_STAGES);
 const MISSING_STAGE_CODE = 'missing_challenge_stage';
 
 type JsonRecord = Record<string, unknown>;
@@ -62,30 +65,6 @@ const DEFAULT_TARGETS = [
   '/Users/timothyogilvie/Dropbox/wavemill/.wavemill/evals/evals.jsonl',
   '/Users/timothyogilvie/Dropbox/Hokusai/hokusai-infrastructure/.wavemill/evals/evals.jsonl',
 ];
-
-function isChallengeStage(value: unknown): value is ChallengeStage {
-  return typeof value === 'string' && VALID_STAGE_SET.has(value);
-}
-
-function stageFromChallengeType(value: unknown): ChallengeStage | undefined {
-  if (value === 'planner-only') return 'plan';
-  if (value === 'coder-only') return 'implementation';
-  if (value === 'reviewer-only') return 'review';
-  return undefined;
-}
-
-function recoverStageFromIntent(record: EvalRecordForBackfill): ChallengeStage | undefined {
-  const intent = record.challengeIntent;
-  if (!intent) return undefined;
-  if (isChallengeStage(intent.challengeStage)) return intent.challengeStage;
-  if (isChallengeStage(intent.selectedStage)) return intent.selectedStage;
-
-  const sideIntent = record.challengeSide === 'challenger' ? intent.challenger : intent.primary;
-  if (isChallengeStage(sideIntent?.challengeStage)) return sideIntent.challengeStage;
-  if (isChallengeStage(intent.primary?.challengeStage)) return intent.primary.challengeStage;
-  if (isChallengeStage(intent.challenger?.challengeStage)) return intent.challenger.challengeStage;
-  return undefined;
-}
 
 function recoverStageFromPairRecord(record: ChallengePairRecord): ChallengeStage | undefined {
   if (isChallengeStage(record.variedStage)) return record.variedStage;

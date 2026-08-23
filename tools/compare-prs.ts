@@ -2,14 +2,16 @@
 
 import { join } from 'node:path';
 import { runTool } from '../shared/lib/tool-runner.ts';
-import { callClaude, parseJsonFromLLM } from '../shared/lib/llm-cli.ts';
 import { fetchIssueData, formatIssueAsPrompt, fetchPrContext } from '../shared/lib/eval-context-gatherer.ts';
 import { hasChallengeEvalRecordPair, readEvalRecords } from '../shared/lib/eval-persistence.ts';
 import {
   appendChallengeComparison,
+  buildDiffUnavailableComparison,
   buildInvalidChallengeComparison,
   buildInvalidProvenanceComparison,
   buildSkippedIdenticalComparison,
+  buildUnscoredEvalComparison,
+  detectJudgeDisagreement,
   detectVariedDimensions,
   hasAnyVariedDimension,
   classifyChallengeType,
@@ -30,23 +32,19 @@ import { resolveEvalsDir } from '../shared/lib/evals-paths.ts';
 import {
   ARBITER_JUDGE_PROMPT_TEMPLATE_PATH,
   buildChallengeCommentBody,
-  buildCappedComparisonPrompt,
   formatRoutingSummary,
-  mapBlindVerdictToSides,
   prNumberFromValue,
   prUrlFromNumber,
   resolvePrDiffIdentity,
   resolvePresentationOrder,
   retainLoserPatch,
+  runBlindJudge,
   tryGh,
-  validateComparisonJson,
   withBodyFile,
-  type ValidatedComparisonResult,
 } from '../shared/lib/pr-comparison.ts';
 import { writeJobResultFile } from '../shared/lib/job-tracker.ts';
 import type { ChallengeStage } from '../shared/lib/challenge-mode.ts';
 import { loadPromptTemplate } from '../shared/lib/prompt-utils.ts';
-import { hashString } from '../shared/lib/prompt-hash.ts';
 
 type ComparisonForkDescriptor = Pick<
   ChallengeComparison,
@@ -189,8 +187,8 @@ runTool({
       // The comparison prompt needs each implementation diff.  Keep this
       // retrieval next to the PR normalization so a failed or retried
       // comparison never reaches the judge with undefined diff variables.
-      const primaryDiff = fetchPrContext(primaryNumber, repoDir).diff;
-      const challengerDiff = fetchPrContext(challengerNumber, repoDir).diff;
+      const primaryPrContext = fetchPrContext(primaryNumber, repoDir);
+      const challengerPrContext = fetchPrContext(challengerNumber, repoDir);
       const evalsDir = resolveEvalsDir(undefined, repoDir).dir;
       const hasRequiredEvalRecords = hasChallengeEvalRecordPair(
         pairId,
@@ -486,6 +484,113 @@ runTool({
         }
         return;
       }
+
+      const diffAvailability = {
+        primary: primaryPrContext.availability.available
+          ? {
+              available: true as const,
+              source: primaryPrContext.availability.source,
+              bytes: primaryPrContext.availability.bytes,
+            }
+          : {
+              available: false as const,
+              reason: primaryPrContext.availability.reason,
+              detail: primaryPrContext.availability.detail,
+            },
+        challenger: challengerPrContext.availability.available
+          ? {
+              available: true as const,
+              source: challengerPrContext.availability.source,
+              bytes: challengerPrContext.availability.bytes,
+            }
+          : {
+              available: false as const,
+              reason: challengerPrContext.availability.reason,
+              detail: challengerPrContext.availability.detail,
+            },
+      };
+
+      if (!primaryPrContext.availability.available || !challengerPrContext.availability.available) {
+        const record = buildDiffUnavailableComparison({
+          challengePairId: pairId,
+          primaryModel,
+          challengerModel,
+          primaryPrUrl,
+          challengerPrUrl,
+          primaryHarnessId: primaryEval.harnessId,
+          challengerHarnessId: challengerEval.harnessId,
+          primaryEvalScore: primaryEval.score,
+          challengerEvalScore: challengerEval.score,
+          primaryRouting,
+          challengerRouting,
+          primaryExecution,
+          challengerExecution,
+          provenanceValidation,
+          variedDimensions,
+          challengeType,
+          variedStage,
+          diffAvailability,
+          ...forkDescriptor,
+          primaryDiffIdentity,
+          challengerDiffIdentity,
+        });
+        recordForResult = record;
+        appendChallengeComparison(record, evalsDir);
+        console.log(JSON.stringify(record, null, 2));
+        if (resultFile) {
+          writeJobResultFile(resultFile, {
+            ok: true,
+            exitCode,
+            comparison: record,
+          });
+        }
+        return;
+      }
+
+      if (primaryEval.failureReason || challengerEval.failureReason) {
+        const unscoredSides = [
+          primaryEval.failureReason ? `primary eval (${primaryEval.failureReason})` : '',
+          challengerEval.failureReason ? `challenger eval (${challengerEval.failureReason})` : '',
+        ].filter(Boolean);
+        const record = buildUnscoredEvalComparison({
+          challengePairId: pairId,
+          primaryModel,
+          challengerModel,
+          primaryPrUrl,
+          challengerPrUrl,
+          primaryHarnessId: primaryEval.harnessId,
+          challengerHarnessId: challengerEval.harnessId,
+          primaryEvalScore: primaryEval.score,
+          challengerEvalScore: challengerEval.score,
+          primaryRouting,
+          challengerRouting,
+          primaryExecution,
+          challengerExecution,
+          provenanceValidation,
+          variedDimensions,
+          challengeType,
+          variedStage,
+          diffAvailability,
+          unscoredSides,
+          ...forkDescriptor,
+          primaryDiffIdentity,
+          challengerDiffIdentity,
+        });
+        recordForResult = record;
+        appendChallengeComparison(record, evalsDir);
+        console.log(JSON.stringify(record, null, 2));
+        if (resultFile) {
+          writeJobResultFile(resultFile, {
+            ok: true,
+            exitCode,
+            comparison: record,
+          });
+        }
+        return;
+      }
+
+      const primaryDiff = primaryPrContext.diff;
+      const challengerDiff = challengerPrContext.diff;
       const primarySelected = selectChallengeEvalScore(primaryEval, challengeType);
       const challengerSelected = selectChallengeEvalScore(challengerEval, challengeType);
 
@@ -522,12 +627,14 @@ runTool({
 
       const promptLimit = Number.parseInt(process.env.CHALLENGE_COMPARISON_MAX_PROMPT_BYTES || '500000', 10);
       const judgePromptTemplate = await loadPromptTemplate(join(repoDir, ARBITER_JUDGE_PROMPT_TEMPLATE_PATH), { dir: evalsDir });
-      const cappedPrompt = buildCappedComparisonPrompt({
+      const judgeOutcome = await runBlindJudge({
         issuePrompt,
         primaryDiff,
         challengerDiff,
         presentationOrder,
         promptTemplate: judgePromptTemplate,
+        model: comparisonModel,
+        maxPromptBytes: Number.isFinite(promptLimit) ? promptLimit : 500000,
         primaryRouting,
         challengerRouting,
         challengeType,
@@ -535,54 +642,16 @@ runTool({
         challengerStageEval,
         primaryExecution,
         challengerExecution,
-      }, Number.isFinite(promptLimit) ? promptLimit : 500000);
-      if (cappedPrompt.truncated) {
-        console.warn(
-          `Comparison prompt truncated from ${cappedPrompt.originalBytes} to ${cappedPrompt.finalBytes} bytes`,
-        );
-      }
-      const prompt = cappedPrompt.prompt;
-      let successfulJudgePrompt = prompt;
-      let response = await callClaude(prompt, {
-        mode: 'sync',
-        model: comparisonModel,
-        timeout: 180_000,
-        retry: true,
-        maxRetries: 2,
       });
-      let verdict: ValidatedComparisonResult;
-      try {
-        verdict = mapBlindVerdictToSides(
-          validateComparisonJson(parseJsonFromLLM(response.text)),
-          presentationOrder,
-        );
-      } catch (error) {
-        if (!(error instanceof Error) || !error.message.includes('JavaScript code instead of JSON')) {
-          throw error;
-        }
-
-        console.warn('LLM returned JavaScript syntax. Retrying with stricter JSON instructions...');
-        const stricterPrompt = `${prompt}
-
-IMPORTANT: Return ONLY valid JSON. Do NOT use:
-- JavaScript shorthand properties (use "key": value, not key)
-- Spread syntax (...rest)
-- Unquoted property names
-- Code comments or explanations
-
-Return a raw JSON object with no code fences, no comments, and no JavaScript syntax.`;
-        response = await callClaude(stricterPrompt, {
-          mode: 'sync',
-          model: comparisonModel,
-          timeout: 180_000,
-          retry: false,
-        });
-        successfulJudgePrompt = stricterPrompt;
-        verdict = mapBlindVerdictToSides(
-          validateComparisonJson(parseJsonFromLLM(response.text)),
-          presentationOrder,
+      if (judgeOutcome.truncated) {
+        console.warn(
+          `Comparison prompt truncated from ${judgeOutcome.promptBytes.original} to ${judgeOutcome.promptBytes.final} bytes`,
         );
       }
+      if (judgeOutcome.retriedStricterJson) {
+        console.warn('LLM returned JavaScript syntax. Retrying with stricter JSON instructions...');
+      }
+      const verdict = judgeOutcome.verdict;
 
       // Attribute the win to the varied stage's model. For planner/reviewer
       // challenges the coder is shared, so crediting it would be meaningless.
@@ -592,7 +661,25 @@ Return a raw JSON object with no code fences, no comments, and no JavaScript syn
         ? (winnerRouting?.planner || winnerSolutionModel)
         : challengeType === 'reviewer-only'
           ? (winnerRouting?.reviewer || winnerSolutionModel)
-          : winnerSolutionModel;
+        : winnerSolutionModel;
+      const primaryDisagreement = detectJudgeDisagreement({
+        side: 'primary',
+        evalScore: primarySelected.score,
+        dimensions: verdict.dimensions,
+      });
+      const challengerDisagreement = detectJudgeDisagreement({
+        side: 'challenger',
+        evalScore: challengerSelected.score,
+        dimensions: verdict.dimensions,
+      });
+      if (primaryDisagreement) dataQualityWarnings.push(primaryDisagreement);
+      if (challengerDisagreement) dataQualityWarnings.push(challengerDisagreement);
+      if (primaryDisagreement || challengerDisagreement) {
+        console.warn(`[compare-prs] Judge disagreement warnings for ${pairId}:`);
+        for (const warning of [primaryDisagreement, challengerDisagreement].filter(Boolean)) {
+          console.warn(`  ${warning}`);
+        }
+      }
 
       const record: ChallengeComparison = {
         challengePairId: pairId,
@@ -620,14 +707,15 @@ Return a raw JSON object with no code fences, no comments, and no JavaScript syn
         stageEvidenceMode,
         presentationOrder,
         workflowInsight: verdict.workflowInsight,
-        judge_model: comparisonModel,
-        judge_prompt_hash: hashString(successfulJudgePrompt),
+        judge_model: judgeOutcome.judgeModel,
+        judge_prompt_hash: judgeOutcome.judgePromptHash,
         primary_cost_usd: costUsdFromWorkflowCost(primaryEval.workflowCost),
         challenger_cost_usd: costUsdFromWorkflowCost(challengerEval.workflowCost),
         criterionRationales: verdict.criterionRationales,
         primaryEvalScoreSource: primarySelected.source,
         challengerEvalScoreSource: challengerSelected.source,
         ...(dataQualityWarnings.length > 0 ? { dataQualityWarnings } : {}),
+        diffAvailability,
         comparisonOutcome: 'compared',
         ...forkDescriptor,
         primaryDiffIdentity,

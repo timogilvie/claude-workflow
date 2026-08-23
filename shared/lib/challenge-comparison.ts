@@ -8,6 +8,7 @@ import type { StageName, StageResult, StageStatus } from './stage-result.ts';
 import type { ChallengeArmFailure } from './arm-failure-taxonomy.ts';
 import type { ChallengeStage } from './challenge-mode.ts';
 import type { InvalidChallengeReason } from './challenge-execution-contract.ts';
+import type { PrDiffUnavailableReason } from './pr-diff-provider.ts';
 
 export interface ChallengeRoutingMeta {
   planner: string;
@@ -81,6 +82,10 @@ export interface ChallengeDiffIdentity {
   line_ranges: Array<{ file: string; start: number; end: number }>;
 }
 
+export type DiffAvailabilitySummary =
+  | { available: true; source: 'gh-pr-diff' | 'local-git'; bytes?: number }
+  | { available: false; reason: PrDiffUnavailableReason; detail: string };
+
 /**
  * Per-criterion rationale from the judge (P0.3).
  * Mirrors the rubric criteria and holds a rationale string for each.
@@ -124,6 +129,8 @@ export type NoComparisonReason =
   // mitigation reasons
   | 'challenger_never_launched'
   | 'challenger_eval_not_persisted'
+  | 'diff_unavailable'
+  | 'eval_unscored'
   | 'recovery_tie'
   | 'unknown';
 
@@ -147,6 +154,8 @@ export const NO_COMPARISON_REASONS = [
   'orphan_pair',
   'challenger_never_launched',
   'challenger_eval_not_persisted',
+  'diff_unavailable',
+  'eval_unscored',
   'recovery_tie',
   'unknown',
 ] as const;
@@ -243,6 +252,11 @@ export interface ChallengeComparison {
   challengerEvalScoreSource?: string;
   /** Data-quality warnings emitted when a stage score was unavailable */
   dataQualityWarnings?: string[];
+  /** Whether each PR diff was available to the comparison judge. */
+  diffAvailability?: {
+    primary: DiffAvailabilitySummary;
+    challenger: DiffAvailabilitySummary;
+  };
 
   // Fork descriptor fields (P0.5 Phase 0, HOK-2794)
   /** The stage at which the pair forked, or null if launched independently */
@@ -307,6 +321,7 @@ const EMPTY_DIMENSIONS: ChallengeComparisonDimensions = {
   intervention_impact: { primary: 0, challenger: 0 },
   autonomy: { primary: 0, challenger: 0 },
 };
+export const JUDGE_DISAGREEMENT_THRESHOLD = 0.5;
 
 type ComparisonRetentionInput = {
   forkStage?: ChallengeStage | null;
@@ -1017,6 +1032,89 @@ export function buildInvalidChallengeComparison(input: {
   };
 }
 
+type InconclusiveComparisonInput = {
+  challengePairId: string;
+  primaryModel: string;
+  challengerModel: string;
+  primaryPrUrl: string;
+  challengerPrUrl: string;
+  primaryEvalScore: number | null;
+  challengerEvalScore: number | null;
+  primaryHarnessId?: string;
+  challengerHarnessId?: string;
+  primaryRouting?: ChallengeRoutingMeta;
+  challengerRouting?: ChallengeRoutingMeta;
+  primaryExecution?: ChallengeSideExecutionProvenance;
+  challengerExecution?: ChallengeSideExecutionProvenance;
+  provenanceValidation?: ChallengeProvenanceValidation;
+  variedDimensions?: VariedDimensions;
+  challengeType?: ChallengeType;
+  variedStage?: 'plan' | 'implementation' | 'review';
+  stageEvidenceMode?: StageEvidenceMode;
+  timestamp?: string;
+  diffAvailability?: ChallengeComparison['diffAvailability'];
+  rationale: string;
+  noComparisonReason: 'diff_unavailable' | 'eval_unscored';
+} & ComparisonRetentionInput;
+
+function buildInconclusiveComparison(input: InconclusiveComparisonInput): ChallengeComparison {
+  return {
+    challengePairId: input.challengePairId,
+    primaryModel: input.primaryModel,
+    challengerModel: input.challengerModel,
+    primaryPrUrl: input.primaryPrUrl,
+    challengerPrUrl: input.challengerPrUrl,
+    primaryHarnessId: input.primaryHarnessId,
+    challengerHarnessId: input.challengerHarnessId,
+    primaryEvalScore: input.primaryEvalScore,
+    challengerEvalScore: input.challengerEvalScore,
+    rationale: input.rationale,
+    dimensions: EMPTY_DIMENSIONS,
+    timestamp: input.timestamp || new Date().toISOString(),
+    primaryRouting: input.primaryRouting,
+    challengerRouting: input.challengerRouting,
+    primaryExecution: input.primaryExecution,
+    challengerExecution: input.challengerExecution,
+    provenanceValidation: input.provenanceValidation,
+    variedDimensions: input.variedDimensions,
+    challengeType: input.challengeType,
+    variedStage: input.variedStage,
+    stageEvidenceMode: input.stageEvidenceMode,
+    comparisonOutcome: 'inconclusive',
+    noComparisonReason: input.noComparisonReason,
+    ...(input.diffAvailability ? { diffAvailability: input.diffAvailability } : {}),
+    workflowInsight: 'No LLM comparison was run because required evaluation evidence was unavailable.',
+    ...comparisonRetentionFields(input),
+  };
+}
+
+export function buildDiffUnavailableComparison(
+  input: Omit<InconclusiveComparisonInput, 'noComparisonReason' | 'rationale'> & { rationale?: string },
+): ChallengeComparison {
+  const unavailable: string[] = [];
+  if (input.diffAvailability?.primary.available === false) {
+    unavailable.push(`primary diff unavailable (${input.diffAvailability.primary.reason}): ${input.diffAvailability.primary.detail}`);
+  }
+  if (input.diffAvailability?.challenger.available === false) {
+    unavailable.push(`challenger diff unavailable (${input.diffAvailability.challenger.reason}): ${input.diffAvailability.challenger.detail}`);
+  }
+  return buildInconclusiveComparison({
+    ...input,
+    noComparisonReason: 'diff_unavailable',
+    rationale: input.rationale || `Comparison skipped because ${unavailable.join('; ') || 'a PR diff was unavailable'}. Judge not invoked.`,
+  });
+}
+
+export function buildUnscoredEvalComparison(
+  input: Omit<InconclusiveComparisonInput, 'noComparisonReason' | 'rationale'> & { rationale?: string; unscoredSides?: string[] },
+): ChallengeComparison {
+  return buildInconclusiveComparison({
+    ...input,
+    noComparisonReason: 'eval_unscored',
+    rationale: input.rationale || `Comparison skipped because ${input.unscoredSides?.join(' and ') || 'one or more eval records'} were unscored fast-fail records. Judge not invoked.`,
+  });
+}
+
 export function buildForfeitComparison(input: {
   challengePairId: string;
   primaryModel: string;
@@ -1106,6 +1204,36 @@ export function buildDoubleForfeitComparison(input: {
     primaryInheritedStages: [],
     challengerInheritedStages: [],
   };
+}
+
+function meanSideDimensionScore(
+  dimensions: ChallengeComparisonDimensions,
+  side: 'primary' | 'challenger',
+): number {
+  const scores = [
+    dimensions.completeness[side],
+    dimensions.correctness[side],
+    dimensions.code_quality[side],
+    dimensions.intervention_impact[side],
+    dimensions.autonomy[side],
+  ];
+  return scores.reduce((sum, value) => sum + value, 0) / scores.length / 10;
+}
+
+export function detectJudgeDisagreement(input: {
+  side: 'primary' | 'challenger';
+  evalScore: number | null;
+  dimensions: ChallengeComparisonDimensions;
+}, threshold = JUDGE_DISAGREEMENT_THRESHOLD): string | undefined {
+  if (typeof input.evalScore !== 'number' || !Number.isFinite(input.evalScore)) {
+    return undefined;
+  }
+  const comparisonMean = meanSideDimensionScore(input.dimensions, input.side);
+  const delta = Math.abs(input.evalScore - comparisonMean);
+  if (delta < threshold) {
+    return undefined;
+  }
+  return `${input.side}: eval score ${input.evalScore.toFixed(2)} vs comparison mean ${comparisonMean.toFixed(2)} (delta ${delta.toFixed(2)}) - judges disagree`;
 }
 
 export function readChallengeComparisons(dir?: string): StoredChallengeComparison[] {

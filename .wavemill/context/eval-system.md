@@ -1,7 +1,7 @@
 # Subsystem: eval-system
 
-**Last updated:** 2026-08-21
-**Files touched:** 12
+**Last updated:** 2026-08-22
+**Files touched:** 18
 
 ## Purpose
 
@@ -17,7 +17,7 @@ Eval records now also carry optional `harnessId` attribution when a resource man
 
 | File | Role | Notes |
 |------|------|-------|
-| `shared/lib/eval-schema.ts` | Canonical TypeScript schema and changelog | Schema `1.41.0` adds optional `harnessId` attribution for HOK-2843. |
+| `shared/lib/eval-schema.ts` | Canonical TypeScript schema and changelog | Schema `1.42.0` adds `pr_diff_unavailable` fast-fail records and `eval_fast_failed` eligibility diagnostics for HOK-2853. |
 | `shared/lib/eval-schema.json` | JSON Schema mirror for validator-style tests | Must stay in sync with `eval-schema.ts`, including additive optional fields. |
 | `shared/lib/eval.ts` | Builds judge-backed eval records | Owns the top-level `SCHEMA_VERSION`. |
 | `shared/lib/eval-record-builder.ts` | Pure metadata attachment helpers | `attachAttemptedModel()` follows the same null-safe no-op pattern as the other field helpers. |
@@ -117,6 +117,7 @@ Compatibility and aggregation notes:
 | Fallback occurred but no eval row was written | `logFallbackEvents` was disabled or persistence failed | Check `LLMCallOptions.logFallbackEvents`, then inspect `console.warn` output from `llm-cli`. |
 | Older eval readers reject records | A new field was made required or parsing assumed presence | Restore optional semantics and add backward-compat coverage. |
 | Fallback logging changes request behavior | Telemetry exception leaked out of the emitter | Keep `appendEvalRecord()` calls wrapped in local `try/catch`. |
+| Large PRs are scored as empty work | GitHub refuses `gh pr diff` above its file limit or local diff output exceeds the byte cap | Use `fetchPrDiff()` local fallback; if no diff can be obtained, emit `pr_diff_unavailable` / `diff_unavailable` instead of judging placeholder content. |
 
 ## Testing Patterns
 
@@ -140,6 +141,7 @@ Compatibility and aggregation notes:
 
 ## Recent Changes
 
+- 2026-08-22: Added structured PR diff availability and local diff fallback for HOK-2853. Eval records now fast-fail with `failureReason: pr_diff_unavailable` when a PR diff cannot be read, and challenge comparisons persist inconclusive `diff_unavailable` / `eval_unscored` records instead of sending placeholders to judges.
 - 2026-04-28: Aligned challenge PR comparison judging with the canonical 5-criterion rubric used by per-PR evals (HOK-1450), replacing legacy comparison dimensions and surfacing the same rubric in planning/coding prompts before implementation.
 - 2026-07-13: Added optional `attempted_model` and `model_alias` to eval schema version `1.32.0` plus `attachAttemptedModel()` in `eval-record-builder.ts` (HOK-2234); launch-priority audits can now preserve the model actually attempted before fallback without invalidating older rows.
 - 2026-04-27: Added `rubric_provenance` to eval schema version `1.12.0` and `backfill-rubric-eval-records.ts` (HOK-1408); aggregated and historical datasets now preserve rubric provenance explicitly, and dedup prefers rubric-richer duplicates.
