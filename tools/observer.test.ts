@@ -125,7 +125,7 @@ test('old coding marker produces urgent marker-ignored finding with age evidence
   }
 });
 
-test('old coding marker remains urgent when workflow state is newer', () => {
+test('old coding marker is ignored when workflow state is newer', () => {
   const markerMtime = new Date(Date.now() - 30 * 60_000);
   const stateMtime = new Date(markerMtime.getTime() + 60_000).toISOString();
   const fixture = createMarkerFixture('.coding-complete', markerMtime);
@@ -138,13 +138,7 @@ test('old coding marker remains urgent when workflow state is newer', () => {
       stateMtime,
     }), defaultObserverOptions());
 
-    const finding = findings.find((candidate) => candidate.id === 'coding-marker-ignored-HOK-2848');
-    assert.ok(finding);
-    assert.equal(finding.severity, 'urgent');
-    assert.equal(finding.confidence, 'high');
-    assert.ok(finding.evidence.includes(`stateMtime=${stateMtime}`));
-    assert.match(finding.recommendation, /still writing workflow state/);
-    assert.doesNotMatch(finding.recommendation, /hung monitor child/);
+    assert.equal(findings.some((finding) => finding.id === 'coding-marker-ignored-HOK-2848'), false);
   } finally {
     rmSync(fixture.repoDir, { recursive: true, force: true });
   }

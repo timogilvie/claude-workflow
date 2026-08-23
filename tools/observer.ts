@@ -569,7 +569,6 @@ interface MarkerIgnoredConfig {
   idPrefix: 'coding-marker-ignored' | 'plan-marker-ignored';
   titlePhase: string;
   staleRecommendation: string;
-  liveStateRecommendation: string;
 }
 
 function statMarker(path: string, now: number): { mtimeMs: number; ageMs: number; mtimeIso: string } | undefined {
@@ -605,6 +604,8 @@ function buildMarkerIgnoredFinding(
 
   const stateMtimeMs = repo.stateMtime ? Date.parse(repo.stateMtime) : NaN;
   const stateNewerThanMarker = Number.isFinite(stateMtimeMs) && stateMtimeMs > marker.mtimeMs;
+  if (stateNewerThanMarker) return null;
+
   const markerAgeSeconds = Math.floor(marker.ageMs / 1000);
   const markerAgeTitleMinutes = Math.round(markerAgeMinutes);
 
@@ -625,7 +626,7 @@ function buildMarkerIgnoredFinding(
       `stateMtime=${repo.stateMtime ?? 'unknown'}`,
       `worktree=${task.worktree}`,
     ],
-    recommendation: stateNewerThanMarker ? config.liveStateRecommendation : config.staleRecommendation,
+    recommendation: config.staleRecommendation,
   };
 }
 
@@ -785,7 +786,6 @@ export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, opti
           idPrefix: 'coding-marker-ignored',
           titlePhase: 'coding',
           staleRecommendation: 'The monitor should advance this to review. Check for a hung monitor child process before restarting the session.',
-          liveStateRecommendation: 'The monitor is still writing workflow state but has not advanced this task to review; inspect the task-specific poll branch and marker handling before restarting anything.',
         }),
         buildMarkerIgnoredFinding(repo, task, featureDir, now, options, {
           phase: 'planning',
@@ -793,7 +793,6 @@ export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, opti
           idPrefix: 'plan-marker-ignored',
           titlePhase: 'planning',
           staleRecommendation: 'The monitor should launch coding. Check for a hung monitor child process or blocking external command before restarting the session.',
-          liveStateRecommendation: 'The monitor is still writing workflow state but has not launched coding for this task; inspect the task-specific poll branch and marker handling before restarting anything.',
         }),
       ];
       for (const finding of markerFindings) {
