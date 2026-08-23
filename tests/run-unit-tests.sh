@@ -404,15 +404,15 @@ for i in "${!TESTS[@]}"; do
   fi
 done
 
-if (( LIST_ONLY == 1 )); then
-  printf '%s\n' "${SELECTED[@]}"
-  exit 0
-fi
-
 # A shard with no work is a configuration error, not a silent pass.
 if (( ${#SELECTED[@]} == 0 )); then
   echo "run-unit-tests.sh: shard ${SHARD_INDEX}/${SHARD_TOTAL} selected no tests" >&2
   exit 2
+fi
+
+if (( LIST_ONLY == 1 )); then
+  printf '%s\n' "${SELECTED[@]}"
+  exit 0
 fi
 
 # node --test already exits non-zero on a missing path, so this is a
