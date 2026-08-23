@@ -121,6 +121,14 @@ old_iso() {
   perl -MPOSIX=strftime -e 'my $offset = shift @ARGV; print strftime("%Y-%m-%dT%H:%M:%SZ", gmtime(time() - $offset)), "\n"' -- "$1"
 }
 
+missing_hold_detail="$(classify_ready_watchdog_hold_health 1000 60 || true)"
+assert_eq "missing watchdog state is silent" "" "$missing_hold_detail"
+
+printf '{"updatedAt":"2026-08-23T12:00:00.000Z","tasks":{}}\n' > "$STATE_DIR/ready-watchdog-state.json"
+empty_hold_detail="$(classify_ready_watchdog_hold_health 1000 60 || true)"
+assert_eq "empty watchdog state is silent" "" "$empty_hold_detail"
+rm -f "$STATE_DIR/ready-watchdog-state.json"
+
 assert_eq "backoff 0" "0" "$(backstage_restart_backoff_seconds 0)"
 assert_eq "backoff 1" "60" "$(backstage_restart_backoff_seconds 1)"
 assert_eq "backoff 2" "120" "$(backstage_restart_backoff_seconds 2)"
