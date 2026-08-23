@@ -357,6 +357,8 @@ TESTS=(
   tools/certify-launch-priority-model.test.ts
   tools/check-native-agent-launch.test.ts
   tools/check-review-setup.test.ts
+  tests/cli-smoke.test.ts
+  tests/model-settings-migration.test.ts
   tools/check-test-registration.test.ts
   tools/hok2425-verify-native-workflow-certification.test.ts
   tools/launch-native-review.test.ts

@@ -32,10 +32,10 @@ const shellMock = {
   reset() {
     this.calls = [];
     this.queuedImplementations = [];
-    this.implementation = () => '';
+    this.implementation = (_command: string, _options: ShellCall[1]) => '';
   },
   mockReturnValue(value: string) {
-    this.implementation = () => value;
+    this.implementation = (_command: string, _options: ShellCall[1]) => value;
     return this;
   },
   mockImplementation(implementation: (command: string, options: ShellCall[1]) => string) {
@@ -97,6 +97,7 @@ describe('eval-context-gatherer', () => {
       const result = fetchIssueData('HOK-870', '/repo');
 
       expect(result).toEqual(mockIssue);
+      expect(shellMock.calls.length).toBeGreaterThan(0);
       expect(shellMock.calls[0][0]).toContain('HOK-870');
       expect(shellMock.calls[0][1]).toEqual({ encoding: 'utf-8', cwd: '/repo' });
     });

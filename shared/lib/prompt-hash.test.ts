@@ -4,7 +4,7 @@
 
 import { after as afterAll, before as beforeAll, describe, test as it } from 'node:test';
 import { expect } from './test-assertions.ts';
-import { writeFileSync, unlinkSync, mkdtempSync } from 'node:fs';
+import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { hashString, hashFile, createPromptArtifact } from './prompt-hash.ts';
@@ -20,11 +20,11 @@ describe('prompt-hash', () => {
   });
 
   afterAll(() => {
-    // Clean up temporary files
+    // Clean up temporary directory and files
     try {
-      unlinkSync(tempFilePath);
+      rmSync(tempDir, { recursive: true, force: true });
     } catch {
-      // Ignore if file doesn't exist
+      // Ignore if directory doesn't exist
     }
   });
 

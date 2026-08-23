@@ -63,7 +63,7 @@ export type BlockedCompletionValidationResult =
   | { ok: false; errors: SeamValidationError[] };
 
 export function hasVerificationEvidence(value: BlockedCompletion): boolean {
-  return value.implementationComplete === true || value.passingChecks.length > 0;
+  return value.implementationComplete !== true || value.passingChecks.length > 0;
 }
 
 export function coerceUnverifiedCompletionClaim(
