@@ -5,9 +5,13 @@ import { dirname, join } from 'node:path';
 import { afterEach, describe, it } from 'node:test';
 import { clearConfigCache } from '../config.ts';
 import {
+  CERTIFICATION_SCHEMA_VERSION,
+  DEFAULT_CERTIFICATION_SUITE_VERSION,
   buildGlobalCertificationPath,
   GLOBAL_CERTIFICATION_ROOT_ENV,
+  resolveCertificationSubject,
 } from './certification/index.ts';
+import { DEFAULT_MODEL_REGISTRY } from '../model-registry.ts';
 import { buildPlanningGateAgreement, type PlanningCanaryPreflightResult } from './planning-canary.ts';
 
 const repos: string[] = [];
@@ -39,14 +43,24 @@ function makeRepo(): string {
 }
 
 function writeQwenArtifact(phase: 'patch' | 'workflow'): void {
-  const path = buildGlobalCertificationPath('qwen', 'qwen3-coder', 'v2');
+  const identity = resolveCertificationSubject({
+    provider: 'openrouter',
+    model: 'qwen-3-coder',
+    registry: DEFAULT_MODEL_REGISTRY,
+  });
+  const path = buildGlobalCertificationPath(
+    identity.storageIdentity.provider,
+    identity.storageIdentity.model,
+    DEFAULT_CERTIFICATION_SUITE_VERSION,
+  );
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify({
-    schemaVersion: 2,
-    provider: 'qwen',
-    model: 'qwen3-coder',
+    schemaVersion: CERTIFICATION_SCHEMA_VERSION,
+    subject: identity.subject,
+    provider: identity.storageIdentity.provider,
+    model: identity.storageIdentity.model,
     phase,
-    suiteVersion: 'v2',
+    suiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
     certifiedAt: '2099-01-01T00:00:00.000Z',
     scenarios: [{ scenarioId: 's1', passed: true }],
   }, null, 2));

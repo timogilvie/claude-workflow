@@ -39,7 +39,7 @@ describe('buildGlobalModelParityReport', () => {
         now: new Date('2026-08-01T00:00:00.000Z'),
       }));
 
-      assert.equal(report.globalCatalogVersion, 'v2');
+      assert.equal(report.globalCatalogVersion, 'v3');
       assert.ok(report.certifiedModelCountByStage.coding >= 3);
       assert.ok(report.runtimeReadyCountByStage.coding >= 3);
       assert.equal(report.challengePairAvailability.coding, true);

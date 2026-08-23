@@ -8,6 +8,8 @@ import { buildLaunchabilityMatrix, LAUNCHABILITY_STAGES, type LaunchabilityStage
 import { resolveModelAgent } from './model-agent-resolution.ts';
 import { DEFAULT_MODEL_REGISTRY } from './model-registry.ts';
 import { buildGlobalCertificationPath } from './native-agent/certification/loader.ts';
+import { resolveCertificationSubject } from './native-agent/certification/identity.ts';
+import { CERTIFICATION_SCHEMA_VERSION } from './native-agent/certification/schema.ts';
 import { GLOBAL_CERTIFICATION_ROOT_ENV } from './native-agent/certification/storage.ts';
 import { loadLaunchPriorityList } from './openrouter-catalog.ts';
 
@@ -95,12 +97,23 @@ function writeCertification(modelId: string, certificationRoot?: string): void {
   // Write to the global scope, which is what the launchability matrix reads.
   // The repo-scoped legacy path is never consulted here, so writing there left
   // these assertions depending on the developer's real ~/.wavemill store.
-  const path = buildGlobalCertificationPath(provider, modelId, suiteVersion, { root: certificationRoot });
+  const identity = resolveCertificationSubject({
+    provider,
+    model: modelId,
+    registry: DEFAULT_MODEL_REGISTRY,
+  });
+  const path = buildGlobalCertificationPath(
+    identity.storageIdentity.provider,
+    identity.storageIdentity.model,
+    suiteVersion,
+    { root: certificationRoot },
+  );
   mkdirSync(dirname(path), { recursive: true });
   const artifact = {
-    schemaVersion: 2,
-    provider: capabilities.supportedModel?.canonicalArtifactIdentity?.provider,
-    model: capabilities.supportedModel?.canonicalArtifactIdentity?.model,
+    schemaVersion: CERTIFICATION_SCHEMA_VERSION,
+    subject: identity.subject,
+    provider: identity.storageIdentity.provider,
+    model: identity.storageIdentity.model,
     phase: 'workflow',
     suiteVersion,
     certifiedAt: '2026-07-15T00:00:00.000Z',
@@ -211,6 +224,13 @@ describe('launch-priority watchlist launchability', () => {
         } else if (!allowedStages.includes(stage)) {
           assert.equal(cell.launchable, false);
           assert.equal(cell.blocker, 'role-ineligible');
+        } else if (cell.certificationRejection?.reason === 'identity-reidentified') {
+          // The launch catalog currently maps both mistral-medium-3 and
+          // devstral-medium to one provider wire ID. Revision-aware subjects
+          // must fail closed instead of letting the later artifact silently
+          // certify the other registry identity.
+          assert.equal(cell.launchable, false);
+          assert.equal(cell.blocker, 'certification');
         } else if (contextWindowInsufficientForStage(modelId, stage)) {
           assert.equal(cell.launchable, false, `${modelId}:${stage} should not be launchable (context window)`);
           assert.equal(cell.blocker, 'context-window');
