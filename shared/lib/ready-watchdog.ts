@@ -1815,6 +1815,7 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
         : 1
       : 0;
     if (classification.kind === 'fresh') {
+      delete nextTasks[issueId];
       continue;
     }
 

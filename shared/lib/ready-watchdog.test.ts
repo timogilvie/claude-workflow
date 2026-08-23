@@ -2061,7 +2061,7 @@ test('tick retries push failures, defaults missing attempts to zero, and exhaust
   }
 });
 
-test('tick retains prior actionable findings across fresh ticks and suppresses repeat spam', async () => {
+test('tick suppresses repeat actionable findings while the condition persists', async () => {
   const { repoDir, stateFile } = setupReadyTask('HOK-1716', 716);
 
   try {
@@ -2096,7 +2096,7 @@ test('tick retains prior actionable findings across fresh ticks and suppresses r
       deps: {
         fetchGitHubTruth: async () => blockingTruth,
         getCurrentHead: async () => 'head',
-        now: () => new Date('2026-05-05T12:04:00.000Z'),
+        now: () => new Date('2030-05-05T12:35:00.000Z'),
       },
     });
     assert.equal(second.findings.length, 0);
@@ -2117,6 +2117,77 @@ test('tick retains prior actionable findings across fresh ticks and suppresses r
       },
     });
     assert.equal(third.findings.length, 0);
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('tick removes a resolved merge-conflict classification', async () => {
+  const { repoDir, stateDir, stateFile, worktree } = setupReadyTask('HOK-2869', 2869);
+  const watchdogStatePath = path.join(stateDir, 'ready-watchdog-state.json');
+  const baseDeps = {
+    getCurrentHead: async () => 'head',
+    now: () => new Date('2030-05-05T12:30:00.000Z'),
+  };
+
+  try {
+    const classified = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: {
+        enabled: true,
+        thresholdMinutes: 10,
+        autoRecover: false,
+        timeoutSeconds: 30,
+      },
+      deps: {
+        ...baseDeps,
+        fetchGitHubTruth: async () => makeTruth({
+          mergeable: 'CONFLICTING',
+          mergeStateStatus: 'DIRTY',
+        }),
+      },
+    });
+    assert.equal(classified.findings.length, 1);
+    assert.equal(classified.findings[0].classification, 'needs-user');
+
+    // A controller update is authoritative local evidence that this task has
+    // progressed, so its next tick is fresh after GitHub reports it clean.
+    writeFileSync(stateFile, JSON.stringify({
+      tasks: {
+        'HOK-2869': {
+          slug: 'ready-watchdog-task',
+          branch: 'task/ready-watchdog-task',
+          worktree,
+          pr: 2869,
+          phase: 'ready',
+          updated: '2030-05-05T12:29:00.000Z',
+          agent: 'codex',
+          model: 'gpt-5.5',
+        },
+      },
+      jobs: {},
+    }, null, 2));
+
+    const resolved = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: {
+        enabled: true,
+        thresholdMinutes: 10,
+        autoRecover: false,
+        timeoutSeconds: 30,
+      },
+      deps: {
+        ...baseDeps,
+        fetchGitHubTruth: async () => makeTruth(),
+      },
+    });
+    assert.equal(resolved.findings.length, 0);
+    const watchdogState = JSON.parse(readFileSync(watchdogStatePath, 'utf-8')) as {
+      tasks: Record<string, unknown>;
+    };
+    assert.equal(watchdogState.tasks['HOK-2869'], undefined);
   } finally {
     await rm(repoDir, { recursive: true, force: true });
   }
