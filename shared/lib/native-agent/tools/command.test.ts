@@ -67,7 +67,7 @@ describe('native-agent command tool registry and substrate facade', () => {
         runScopedCommand({
           tool: 'run_format',
           kind: 'format',
-          command: `node -e setTimeout(()=>{},90000)`,
+          command: `node -e "setTimeout(function(){},90000)"`,
           worktreePath: repo,
           defaultTimeoutMs: 60_000,
           timeoutMs: 200,
@@ -114,7 +114,7 @@ describe('native-agent command tool registry and substrate facade', () => {
     const result = await Promise.race([
       runTests.execute(
         'call-tests-abort',
-        { command: `node -e setTimeout(()=>{},5000)` },
+        { command: `node -e "setTimeout(function(){},5000)"` },
         controller.signal,
       ),
       new Promise<never>((_, reject) => {

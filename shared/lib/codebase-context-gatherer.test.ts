@@ -5,7 +5,8 @@
  * Full integration testing (git, fs operations) is done via tool-level tests.
  */
 
-import { describe, test, expect } from 'vitest';
+import { describe, test } from 'node:test';
+import { expect } from './test-assertions.ts';
 import {
   getDirectoryTree,
   getRecentGitActivity,

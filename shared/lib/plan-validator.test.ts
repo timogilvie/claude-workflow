@@ -2,7 +2,8 @@
  * Tests for plan-validator.ts
  */
 
-import { describe, test, expect } from 'vitest';
+import { describe, test } from 'node:test';
+import { expect } from './test-assertions.ts';
 import {
   validatePlanOutput,
   priorityToNumber,

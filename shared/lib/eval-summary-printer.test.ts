@@ -2,7 +2,8 @@
  * Tests for eval-summary-printer module.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, test as it } from 'node:test';
+import { expect } from './test-assertions.ts';
 import type { EvalRecord } from './eval-schema.ts';
 import {
   formatScoreDisplay,
@@ -137,14 +138,17 @@ describe('eval-summary-printer', () => {
   });
 
   describe('printEvalSummary', () => {
-    let consoleLogSpy: ReturnType<typeof vi.spyOn>;
+    let consoleLogs: unknown[][];
+    let originalConsoleLog: typeof console.log;
 
     beforeEach(() => {
-      consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      consoleLogs = [];
+      originalConsoleLog = console.log;
+      console.log = (...args: unknown[]) => { consoleLogs.push(args); };
     });
 
     afterEach(() => {
-      consoleLogSpy.mockRestore();
+      console.log = originalConsoleLog;
     });
 
     it('should print summary with cost', () => {
@@ -162,9 +166,9 @@ describe('eval-summary-printer', () => {
 
       printEvalSummary(record);
 
-      expect(consoleLogSpy).toHaveBeenCalledWith(
-        'Post-completion eval: excellent (0.95), workflow cost: $0.1234 — saved to eval store'
-      );
+      expect(consoleLogs).toEqual([[
+        'Post-completion eval: excellent (0.95), workflow cost: $0.1234 — saved to eval store',
+      ]]);
     });
 
     it('should print summary with route provenance', () => {
@@ -191,9 +195,9 @@ describe('eval-summary-printer', () => {
 
       printEvalSummary(record);
 
-      expect(consoleLogSpy).toHaveBeenCalledWith(
-        'Post-completion eval: excellent (0.95), route: expanded gpt-5.4/deep/claude-sonnet-5/static changed=true — saved to eval store'
-      );
+      expect(consoleLogs).toEqual([[
+        'Post-completion eval: excellent (0.95), route: expanded gpt-5.4/deep/claude-sonnet-5/static changed=true — saved to eval store',
+      ]]);
     });
 
     it('should print summary without cost', () => {
@@ -210,9 +214,7 @@ describe('eval-summary-printer', () => {
 
       printEvalSummary(record);
 
-      expect(consoleLogSpy).toHaveBeenCalledWith(
-        'Post-completion eval: good (0.85) — saved to eval store'
-      );
+      expect(consoleLogs).toEqual([['Post-completion eval: good (0.85) — saved to eval store']]);
     });
 
     it('should use custom prefix', () => {
@@ -229,9 +231,7 @@ describe('eval-summary-printer', () => {
 
       printEvalSummary(record, 'Custom prefix');
 
-      expect(consoleLogSpy).toHaveBeenCalledWith(
-        'Custom prefix: fair (0.75) — saved to eval store'
-      );
+      expect(consoleLogs).toEqual([['Custom prefix: fair (0.75) — saved to eval store']]);
     });
   });
 });

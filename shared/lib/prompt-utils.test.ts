@@ -2,7 +2,8 @@
  * Tests for prompt-utils.ts
  */
 
-import { describe, test, expect } from 'vitest';
+import { describe, test } from 'node:test';
+import { expect } from './test-assertions.ts';
 import { fillPromptTemplate, fillPromptTemplatePositional } from './prompt-utils.ts';
 
 describe('fillPromptTemplate', () => {

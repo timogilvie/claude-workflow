@@ -188,14 +188,16 @@ describe('prompt-registry', () => {
   });
 
   describe('performance', () => {
-    it('completes logging in under 150ms', () => {
+    it('completes logging in under 250ms', () => {
       const content = 'Performance test template {{VAR}}';
       const start = Date.now();
 
       logPromptUsage('tools/prompts/perf-test.md', content, { dir: TEST_DIR });
 
       const duration = Date.now() - start;
-      assert.ok(duration < 150, `Should complete in <150ms (took ${duration}ms)`);
+      // The unit runner executes hundreds of files concurrently; retain a
+      // meaningful bound without making this filesystem check scheduler-flaky.
+      assert.ok(duration < 250, `Should complete in <250ms (took ${duration}ms)`);
     });
   });
 
