@@ -13,7 +13,11 @@ import {
 import { randomBytes } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import Ajv from 'ajv';
-import type { NativeCertificationArtifact } from './schema.ts';
+import {
+  CERTIFICATION_SCHEMA_VERSION,
+  type AnyNativeCertificationArtifact,
+  type NativeCertificationArtifact,
+} from './schema.ts';
 import { buildLegacyRepoCertificationPath } from './loader.ts';
 import { resolveCertificationStorageIdentity } from './identity.ts';
 import {
@@ -42,7 +46,7 @@ export interface StoreError {
 }
 
 export type ReadResult =
-  | { ok: true; artifact: NativeCertificationArtifact }
+  | { ok: true; artifact: AnyNativeCertificationArtifact }
   | { ok: false; error: StoreError };
 
 /**
@@ -134,7 +138,7 @@ export function readCertification(filePath: string): ReadResult {
     };
   }
 
-  return { ok: true, artifact: parsed as NativeCertificationArtifact };
+  return { ok: true, artifact: parsed as AnyNativeCertificationArtifact };
 }
 
 /**
@@ -279,7 +283,7 @@ export function writeGlobalCertification(
 /**
  * Validate write-side invariants before any filesystem mutation.
  *
- * Atomic write contract: callers provide an already canonical v2 artifact.
+ * Atomic write contract: callers provide an already canonical current artifact.
  * The store serializes stable JSON to a sibling temporary file, fsyncs it,
  * renames over the final path, then best-effort fsyncs the parent directory.
  * Artifacts containing secrets, local paths, non-canonical identity, or
@@ -297,10 +301,19 @@ export function validateCertificationForWrite(
     throw new Error(`${label}: record fails schema validation: ${summary}`);
   }
 
+  if (record.schemaVersion !== CERTIFICATION_SCHEMA_VERSION) {
+    throw new Error(`${label}: only schemaVersion ${CERTIFICATION_SCHEMA_VERSION} artifacts may be written`);
+  }
+
   const storageIdentity = resolveCertificationStorageIdentity(record.provider, record.model);
   if (record.provider !== storageIdentity.provider || record.model !== storageIdentity.model) {
     throw new Error(
       `${label}: artifact identity must be canonical storage identity ${storageIdentity.provider}/${storageIdentity.model}`,
+    );
+  }
+  if (record.provider !== record.subject.providerId || record.model !== record.subject.providerModelId) {
+    throw new Error(
+      `${label}: artifact storage identity must match subject provider/model ${record.subject.providerId}/${record.subject.providerModelId}`,
     );
   }
 

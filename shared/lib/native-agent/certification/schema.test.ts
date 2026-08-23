@@ -12,6 +12,7 @@ import {
   allScenariosPassed,
   isCertificationFresh,
   phaseSatisfies,
+  type CertificationSubject,
   type NativeCertificationArtifact,
 } from './schema.ts';
 import {
@@ -28,6 +29,16 @@ const CERTIFICATION_JSON_SCHEMA = JSON.parse(readFileSync(new URL('./schema.json
 const validateCertificationSchema = new Ajv({ allErrors: true, strict: false, validateFormats: false }).compile(
   CERTIFICATION_JSON_SCHEMA,
 );
+const VALID_SUBJECT: CertificationSubject = {
+  registryKey: 'claude-sonnet-4-6',
+  nativeProvider: 'anthropic',
+  providerId: 'anthropic',
+  providerModelId: 'claude-sonnet-4-6',
+  providerNativeId: 'claude-sonnet-4-6',
+  identityRevision: 1,
+  identityFingerprint: 'test-fingerprint',
+  catalogHash: 'registry',
+};
 
 function loadFixture(name: string): unknown {
   return JSON.parse(readFileSync(join(FIXTURE_DIR, name), 'utf-8'));
@@ -36,6 +47,7 @@ function loadFixture(name: string): unknown {
 function makeValidArtifact(overrides: Partial<NativeCertificationArtifact> = {}): NativeCertificationArtifact {
   return {
     schemaVersion: CERTIFICATION_SCHEMA_VERSION,
+    subject: VALID_SUBJECT,
     provider: 'anthropic',
     model: 'claude-sonnet-4-6',
     phase: 'read-only',
@@ -64,8 +76,8 @@ function writeArtifact(repoDir: string, provider: string, model: string, suiteVe
 // ─── Schema constants ──────────────────────────────────────────────────────
 
 describe('schema constants', () => {
-  it('exports CERTIFICATION_SCHEMA_VERSION as 2', () => {
-    assert.equal(CERTIFICATION_SCHEMA_VERSION, 2);
+  it('exports CERTIFICATION_SCHEMA_VERSION as 3', () => {
+    assert.equal(CERTIFICATION_SCHEMA_VERSION, 3);
   });
 
   it('exports TTL as 60 days', () => {
@@ -151,7 +163,7 @@ describe('schema.json', () => {
     assert.equal(validateCertificationSchema(loadFixture('valid-read-only.json')), true, JSON.stringify(validateCertificationSchema.errors));
   });
 
-  for (const field of CERTIFICATION_JSON_SCHEMA.required as string[]) {
+  for (const field of CERTIFICATION_JSON_SCHEMA.$defs.CurrentArtifact.required as string[]) {
     it(`rejects an artifact missing required field ${field}`, () => {
       const artifact = { ...makeValidArtifact() } as Record<string, unknown>;
       delete artifact[field];
@@ -492,6 +504,17 @@ describe('evaluateEligibility', () => {
     if (!result.eligible) assert.equal(result.reason, 'scenario-failure');
   });
 
+  it('returns identity-reidentified before schema-version mismatch when a subject is expected', () => {
+    const artifact = {
+      ...makeValidArtifact(),
+      schemaVersion: 2,
+    } as unknown as NativeCertificationArtifact;
+    delete (artifact as Record<string, unknown>).subject;
+    const result = evaluateEligibility(artifact, 'v1', 'read-only', new Date(), VALID_SUBJECT);
+    assert.equal(result.eligible, false);
+    if (!result.eligible) assert.equal(result.reason, 'identity-reidentified');
+  });
+
   it('patch certification satisfies read-only requirement', () => {
     const artifact = makeValidArtifact({ phase: 'patch' });
     const result = evaluateEligibility(artifact, 'v1', 'read-only');
@@ -558,7 +581,7 @@ describe('checkCertificationEligibility', () => {
 // ─── Fixture-based validation ─────────────────────────────────────────────
 
 describe('fixtures', () => {
-  it('valid-read-only.json loads and evaluates eligible', () => {
+  it('valid-read-only.json remains readable but ineligible as historical v2', () => {
     const repoDir = makeTempRepo();
     try {
       const raw = loadFixture('valid-read-only.json') as NativeCertificationArtifact;
@@ -567,14 +590,15 @@ describe('fixtures', () => {
       assert.ok(loaded.ok);
       if (loaded.ok) {
         const result = evaluateEligibility(loaded.artifact, 'v1', 'read-only', new Date('2026-06-30T00:00:00Z'));
-        assert.ok(result.eligible);
+        assert.equal(result.eligible, false);
+        if (!result.eligible) assert.equal(result.reason, 'wrong-version');
       }
     } finally {
       cleanupRepo(repoDir);
     }
   });
 
-  it('valid-patch.json satisfies read-only requirement', () => {
+  it('valid-patch.json remains readable but ineligible as historical v2', () => {
     const repoDir = makeTempRepo();
     try {
       const raw = loadFixture('valid-patch.json') as NativeCertificationArtifact;
@@ -583,14 +607,15 @@ describe('fixtures', () => {
       assert.ok(loaded.ok);
       if (loaded.ok) {
         const result = evaluateEligibility(loaded.artifact, 'v1', 'read-only', new Date('2026-06-30T00:00:00Z'));
-        assert.ok(result.eligible);
+        assert.equal(result.eligible, false);
+        if (!result.eligible) assert.equal(result.reason, 'wrong-version');
       }
     } finally {
       cleanupRepo(repoDir);
     }
   });
 
-  it('valid-expires-at.json is fresh due to far-future expiresAt', () => {
+  it('valid-expires-at.json remains readable but ineligible as historical v2', () => {
     const repoDir = makeTempRepo();
     try {
       const raw = loadFixture('valid-expires-at.json') as NativeCertificationArtifact;
@@ -599,14 +624,15 @@ describe('fixtures', () => {
       assert.ok(loaded.ok);
       if (loaded.ok) {
         const result = evaluateEligibility(loaded.artifact, 'v1', 'read-only', new Date('2026-06-30T00:00:00Z'));
-        assert.ok(result.eligible);
+        assert.equal(result.eligible, false);
+        if (!result.eligible) assert.equal(result.reason, 'wrong-version');
       }
     } finally {
       cleanupRepo(repoDir);
     }
   });
 
-  it('stale-artifact.json returns stale', () => {
+  it('stale-artifact.json remains readable but ineligible as historical v2', () => {
     const repoDir = makeTempRepo();
     try {
       const raw = loadFixture('stale-artifact.json') as NativeCertificationArtifact;
@@ -616,14 +642,14 @@ describe('fixtures', () => {
       if (loaded.ok) {
         const result = evaluateEligibility(loaded.artifact, 'v1', 'read-only', new Date('2026-06-30T00:00:00Z'));
         assert.equal(result.eligible, false);
-        if (!result.eligible) assert.equal(result.reason, 'stale');
+        if (!result.eligible) assert.equal(result.reason, 'wrong-version');
       }
     } finally {
       cleanupRepo(repoDir);
     }
   });
 
-  it('stale-expires-at.json returns stale due to past expiresAt', () => {
+  it('stale-expires-at.json remains readable but ineligible as historical v2', () => {
     const repoDir = makeTempRepo();
     try {
       const raw = loadFixture('stale-expires-at.json') as NativeCertificationArtifact;
@@ -633,7 +659,7 @@ describe('fixtures', () => {
       if (loaded.ok) {
         const result = evaluateEligibility(loaded.artifact, 'v1', 'read-only', new Date('2026-06-30T00:00:00Z'));
         assert.equal(result.eligible, false);
-        if (!result.eligible) assert.equal(result.reason, 'stale');
+        if (!result.eligible) assert.equal(result.reason, 'wrong-version');
       }
     } finally {
       cleanupRepo(repoDir);
@@ -657,7 +683,7 @@ describe('fixtures', () => {
     }
   });
 
-  it('phase-insufficient.json returns phase-insufficient when patch is required', () => {
+  it('phase-insufficient.json remains readable but ineligible as historical v2', () => {
     const repoDir = makeTempRepo();
     try {
       const raw = loadFixture('phase-insufficient.json') as NativeCertificationArtifact;
@@ -667,14 +693,14 @@ describe('fixtures', () => {
       if (loaded.ok) {
         const result = evaluateEligibility(loaded.artifact, 'v1', 'patch', new Date('2026-06-30T00:00:00Z'));
         assert.equal(result.eligible, false);
-        if (!result.eligible) assert.equal(result.reason, 'phase-insufficient');
+        if (!result.eligible) assert.equal(result.reason, 'wrong-version');
       }
     } finally {
       cleanupRepo(repoDir);
     }
   });
 
-  it('scenario-failure.json returns scenario-failure', () => {
+  it('scenario-failure.json remains readable but ineligible as historical v2', () => {
     const repoDir = makeTempRepo();
     try {
       const raw = loadFixture('scenario-failure.json') as NativeCertificationArtifact;
@@ -684,7 +710,7 @@ describe('fixtures', () => {
       if (loaded.ok) {
         const result = evaluateEligibility(loaded.artifact, 'v1', 'read-only', new Date('2026-06-30T00:00:00Z'));
         assert.equal(result.eligible, false);
-        if (!result.eligible) assert.equal(result.reason, 'scenario-failure');
+        if (!result.eligible) assert.equal(result.reason, 'wrong-version');
       }
     } finally {
       cleanupRepo(repoDir);

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import {
   CERTIFICATION_SCHEMA_VERSION,
+  type CertificationSubject,
   type NativeCertificationArtifact,
 } from './schema.ts';
 import {
@@ -19,9 +20,24 @@ import {
 } from './validator.ts';
 
 const FIXTURE_DIR = new URL('./fixtures', import.meta.url).pathname;
+const VALID_SUBJECT: CertificationSubject = {
+  registryKey: 'claude-sonnet-4-6',
+  nativeProvider: 'anthropic',
+  providerId: 'anthropic',
+  providerModelId: 'claude-sonnet-4-6',
+  providerNativeId: 'claude-sonnet-4-6',
+  identityRevision: 1,
+  identityFingerprint: 'test-fingerprint',
+  catalogHash: 'registry',
+};
 
 function loadFixture(name: string): NativeCertificationArtifact {
-  return JSON.parse(readFileSync(join(FIXTURE_DIR, name), 'utf-8')) as NativeCertificationArtifact;
+  const raw = JSON.parse(readFileSync(join(FIXTURE_DIR, name), 'utf-8')) as NativeCertificationArtifact;
+  return {
+    ...raw,
+    schemaVersion: CERTIFICATION_SCHEMA_VERSION,
+    subject: subjectFor(raw.provider, raw.model),
+  };
 }
 
 const NOW = new Date('2026-06-30T00:00:00.000Z');
@@ -33,6 +49,17 @@ function defaultExpectations(record: NativeCertificationArtifact): Certification
     expectedSuiteVersion: record.suiteVersion,
     requiredPhase: 'read-only',
     now: NOW,
+  };
+}
+
+function subjectFor(provider: string, model: string): CertificationSubject {
+  return {
+    ...VALID_SUBJECT,
+    registryKey: model,
+    nativeProvider: provider,
+    providerId: provider,
+    providerModelId: model,
+    providerNativeId: model,
   };
 }
 

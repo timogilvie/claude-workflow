@@ -8,8 +8,10 @@ import {
   buildGlobalCertificationPath,
   CERTIFICATION_SCHEMA_VERSION,
   GLOBAL_CERTIFICATION_ROOT_ENV,
+  resolveCertificationSubject,
   type NativeCertificationArtifact,
 } from './certification/index.ts';
+import { resolveOpenRouterModelIdentity } from '../openrouter-catalog.ts';
 import {
   buildOpenAiResponsesModel,
   buildOpenRouterModel,
@@ -43,6 +45,9 @@ function makeCertifiedRegistry(
   provider: 'openai' | 'openrouter',
   suiteVersion = 'v1',
 ): ModelRegistry {
+  const providerNativeId = provider === 'openrouter'
+    ? (resolveOpenRouterModelIdentity(modelId)?.openrouterId ?? modelId)
+    : modelId;
   return {
     models: {
       [modelId]: {
@@ -59,6 +64,10 @@ function makeCertifiedRegistry(
         costPerMillionInputTokensUsd: 1,
         costPerMillionOutputTokensUsd: 2,
         supportedModel: {
+          wavemillAlias: modelId,
+          providerNativeId,
+          provider,
+          transport: provider === 'openai' ? 'openai-responses' : 'openai-completions',
           stages: ['planning', 'coding', 'review'],
           lifecycle: 'supported',
           launchEligible: true,
@@ -118,13 +127,16 @@ function writeArtifact(
 ): string {
   const path = buildGlobalCertificationPath(provider, modelId, suiteVersion);
   mkdirSync(dirname(path), { recursive: true });
-  const openRouterIdentity = provider === 'openrouter'
-    ? (modelId.includes('/') ? modelId.split('/') : ['z-ai', modelId])
-    : null;
+  const resolved = resolveCertificationSubject({
+    provider,
+    model: modelId,
+    registry: makeCertifiedRegistry(modelId, provider, suiteVersion),
+  });
   const artifact: NativeCertificationArtifact = {
     schemaVersion: CERTIFICATION_SCHEMA_VERSION,
-    provider: openRouterIdentity ? openRouterIdentity[0]! : provider,
-    model: openRouterIdentity ? openRouterIdentity[1]! : modelId,
+    subject: resolved.subject,
+    provider: resolved.storageIdentity.provider,
+    model: resolved.storageIdentity.model,
     phase: 'workflow',
     suiteVersion,
     certifiedAt: new Date(FIXED_NOW.getTime() - 24 * 60 * 60 * 1000).toISOString(),
@@ -807,7 +819,7 @@ describe('native provider certification artifacts', () => {
       );
 
       assert.equal(entry.status, 'uncertified');
-      assert.equal(entry.rejectionReason, 'missing_artifact');
+      assert.equal(entry.rejectionReason, 'identity_reidentified');
     } finally {
       cleanup();
     }
@@ -831,7 +843,7 @@ describe('native provider certification artifacts', () => {
       );
 
       assert.equal(entry.status, 'uncertified');
-      assert.equal(entry.rejectionReason, 'missing_artifact');
+      assert.equal(entry.rejectionReason, 'identity_reidentified');
     } finally {
       cleanup();
     }
@@ -880,7 +892,7 @@ describe('native provider certification artifacts', () => {
   it('resolves openrouter aliases and raw IDs to the same artifact path', () => {
     const { repoDir, cleanup } = makeRepo();
     try {
-      const path = writeArtifact(repoDir, 'openrouter', 'z-ai/glm-5.2', 'v1');
+      const path = writeArtifact(repoDir, 'openrouter', 'glm-5.2', 'v1');
 
       const [aliasEntry] = resolveNativeAgentProviders(
         makeProviderConfig('openrouter', 'glm-5.2'),

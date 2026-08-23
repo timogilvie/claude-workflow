@@ -3,7 +3,8 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
-import type { ModelRegistry } from '../../model-registry.ts';
+import { computeIdentityFingerprint, type ModelRegistry } from '../../model-registry.ts';
+import { hashLaunchPriorityFixture, resolveOpenRouterModelIdentity } from '../../openrouter-catalog.ts';
 import {
   buildGlobalCertificationPath,
   CERTIFICATION_SCHEMA_VERSION,
@@ -17,6 +18,9 @@ import { GLOBAL_CERTIFICATION_ROOT_ENV } from './storage.ts';
 const FIXED_NOW = new Date('2026-07-12T12:00:00.000Z');
 
 function makeRegistry(modelId: string, provider: 'openai' | 'openrouter', suiteVersion = 'v1'): ModelRegistry {
+  const providerNativeId = provider === 'openrouter'
+    ? (resolveOpenRouterModelIdentity(modelId)?.openrouterId ?? modelId)
+    : modelId;
   return {
     models: {
       [modelId]: {
@@ -41,6 +45,14 @@ function makeRegistry(modelId: string, provider: 'openai' | 'openrouter', suiteV
             certifiedAt: FIXED_NOW.toISOString(),
             certificationSuiteVersion: suiteVersion,
           },
+        },
+        supportedModel: {
+          wavemillAlias: modelId,
+          providerNativeId,
+          provider,
+          transport: provider === 'openai' ? 'openai-responses' : 'openai-completions',
+          stages: ['planning', 'coding', 'review'],
+          certificationSuiteVersion: suiteVersion,
         },
       },
     },
@@ -96,10 +108,26 @@ function writeArtifact(
   const path = buildGlobalCertificationPath(provider, modelId, suiteVersion, { root: certificationRoot });
   mkdirSync(dirname(path), { recursive: true });
   const openRouterIdentity = provider === 'openrouter'
-    ? (modelId.includes('/') ? modelId.split('/') : ['z-ai', modelId])
+    ? (resolveOpenRouterModelIdentity(modelId)?.openrouterId ?? modelId).split('/')
     : null;
+  const providerNativeId = openRouterIdentity ? `${openRouterIdentity[0]!}/${openRouterIdentity[1]!}` : modelId;
   const artifact: NativeCertificationArtifact = {
     schemaVersion: CERTIFICATION_SCHEMA_VERSION,
+    subject: {
+      registryKey: modelId,
+      nativeProvider: provider,
+      providerId: openRouterIdentity ? openRouterIdentity[0]! : provider,
+      providerModelId: openRouterIdentity ? openRouterIdentity[1]! : modelId,
+      providerNativeId,
+      identityRevision: 1,
+      identityFingerprint: computeIdentityFingerprint({
+        alias: modelId,
+        providerNativeId,
+        provider,
+        revision: 1,
+      }),
+      catalogHash: provider === 'openrouter' ? hashLaunchPriorityFixture() : 'registry',
+    },
     provider: openRouterIdentity ? openRouterIdentity[0]! : provider,
     model: openRouterIdentity ? openRouterIdentity[1]! : modelId,
     phase: 'workflow',
@@ -323,8 +351,8 @@ describe('evaluateNativeProviderGate', () => {
     const { repoDir, cleanup } = makeRepo();
     try {
       const aliasRegistry = makeRegistry('glm-5.2', 'openrouter');
-      const rawRegistry = makeRegistry('z-ai/glm-5.2', 'openrouter');
-      const path = writeArtifact(repoDir, 'openrouter', 'z-ai/glm-5.2', 'v1');
+      const rawRegistry = aliasRegistry;
+      const path = writeArtifact(repoDir, 'openrouter', 'glm-5.2', 'v1');
 
       const aliasDecision = evaluateNativeProviderGate(taskInput(aliasRegistry, 'glm-5.2', repoDir));
       const rawDecision = evaluateNativeProviderGate(taskInput(rawRegistry, 'z-ai/glm-5.2', repoDir));
@@ -350,7 +378,7 @@ describe('evaluateNativeProviderGate', () => {
       const decision = evaluateNativeProviderGate(taskInput(registry, 'glm-5.2', repoDir));
 
       assert.equal(decision.ok, false);
-      assert.equal(decision.reason, 'missing_artifact');
+      assert.equal(decision.reason, 'identity_reidentified');
     } finally {
       cleanup();
     }

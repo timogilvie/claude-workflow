@@ -16,6 +16,8 @@ export interface ListedCertification {
   suiteVersion: string;
   certifiedAt: string;
   expiresAt?: string;
+  schemaVersion: number;
+  subject?: unknown;
   artifactPath: string;
   valid: boolean;
 }
@@ -108,6 +110,8 @@ function toListedCertification(
     suiteVersion: artifact.suiteVersion,
     certifiedAt: artifact.certifiedAt,
     ...(artifact.expiresAt ? { expiresAt: artifact.expiresAt } : {}),
+    schemaVersion: artifact.schemaVersion,
+    subject: 'subject' in artifact ? artifact.subject : undefined,
     artifactPath: relative(root, artifactPath) || artifactPath,
     valid: true,
   };

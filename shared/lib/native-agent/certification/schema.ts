@@ -23,7 +23,8 @@
 
 import type { FailureClass } from './scenarios.ts';
 
-export const CERTIFICATION_SCHEMA_VERSION = 2 as const;
+export const CERTIFICATION_SCHEMA_VERSION = 3 as const;
+export const HISTORICAL_CERTIFICATION_SCHEMA_VERSION = 2 as const;
 
 /** Path prefix relative to repo root */
 export const CERTIFICATION_BASE_PATH = '.wavemill/native-agent-certifications' as const;
@@ -62,6 +63,45 @@ export interface ScenarioResult {
   failureClass?: FailureClass;
 }
 
+export interface CertificationSubject {
+  /** Stable registry key that owns this certification */
+  registryKey: string;
+  /** Native provider used by the Pi/native transport */
+  nativeProvider: string;
+  /** Provider namespace in the wire model ID, e.g. "qwen" for OpenRouter */
+  providerId: string;
+  /** Provider model segment in the wire model ID */
+  providerModelId: string;
+  /** Canonical provider-native wire model ID */
+  providerNativeId: string;
+  /** Immutable registry identity revision */
+  identityRevision: number;
+  /** Immutable registry identity fingerprint for this revision */
+  identityFingerprint: string;
+  /** Catalog hash that corroborated the provider-native identity */
+  catalogHash: string;
+}
+
+export interface LiveSmokeEvidence {
+  requestedWireId: string;
+  providerReturnedModel?: string;
+  catalogHash: string;
+  succeededAt: string;
+}
+
+export interface HistoricalNativeCertificationArtifact {
+  schemaVersion: typeof HISTORICAL_CERTIFICATION_SCHEMA_VERSION;
+  provider: string;
+  model: string;
+  phase: CertificationPhase;
+  suiteVersion: string;
+  certifiedAt: string;
+  expiresAt?: string;
+  scenarios: ScenarioResult[];
+  knownLimitations?: string[];
+  totalRetryCount?: number;
+}
+
 /**
  * A native agent certification artifact.
  *
@@ -72,6 +112,8 @@ export interface ScenarioResult {
 export interface NativeCertificationArtifact {
   /** Schema version for forward compatibility */
   schemaVersion: typeof CERTIFICATION_SCHEMA_VERSION;
+  /** Revision-aware immutable certification subject */
+  subject: CertificationSubject;
   /** Provider identifier (e.g. "anthropic", "openai", "openrouter") */
   provider: string;
   /** Model identifier (e.g. "claude-sonnet-4-6") */
@@ -93,6 +135,24 @@ export interface NativeCertificationArtifact {
   knownLimitations?: string[];
   /** Total retry count across all scenarios */
   totalRetryCount?: number;
+  /** Live provider evidence required for provisional OpenRouter publication */
+  liveSmokeEvidence?: LiveSmokeEvidence;
+}
+
+export type AnyNativeCertificationArtifact =
+  | HistoricalNativeCertificationArtifact
+  | NativeCertificationArtifact;
+
+export function isRevisionAwareArtifact(
+  artifact: AnyNativeCertificationArtifact,
+): artifact is NativeCertificationArtifact {
+  return artifact.schemaVersion === CERTIFICATION_SCHEMA_VERSION && artifactHasSubject(artifact);
+}
+
+export function artifactHasSubject(
+  artifact: AnyNativeCertificationArtifact,
+): artifact is NativeCertificationArtifact {
+  return 'subject' in artifact && typeof artifact.subject === 'object' && artifact.subject !== null;
 }
 
 /**
@@ -111,7 +171,7 @@ export function phaseSatisfies(actual: CertificationPhase, required: Certificati
  * If `expiresAt` is present, staleness is `now >= expiresAt`.
  * Otherwise staleness is derived from `certifiedAt + CERTIFICATION_TTL_DAYS`.
  */
-export function isCertificationFresh(artifact: NativeCertificationArtifact, now: Date): boolean {
+export function isCertificationFresh(artifact: AnyNativeCertificationArtifact, now: Date): boolean {
   if (artifact.expiresAt) {
     return now < new Date(artifact.expiresAt);
   }
@@ -126,7 +186,7 @@ export function isCertificationFresh(artifact: NativeCertificationArtifact, now:
  * A scenario is required when it exists in the results — any failed scenario
  * blocks eligibility. Suites with no scenarios are treated as not certified.
  */
-export function allScenariosPassed(artifact: NativeCertificationArtifact): boolean {
+export function allScenariosPassed(artifact: AnyNativeCertificationArtifact): boolean {
   if (artifact.scenarios.length === 0) {
     return false;
   }

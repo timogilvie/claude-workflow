@@ -1,8 +1,24 @@
-import { resolveOpenRouterModelIdentity } from '../../openrouter-catalog.ts';
+import {
+  hashLaunchPriorityFixture,
+  resolveOpenRouterModelIdentity,
+} from '../../openrouter-catalog.ts';
+import {
+  getModel,
+  resolveModelIdentity,
+  resolveModelRegistryKey,
+  type ModelRegistry,
+  type NativeProviderName,
+} from '../../model-registry.ts';
+import type { CertificationSubject } from './schema.ts';
 
 export interface CertificationStorageIdentity {
   provider: string;
   model: string;
+}
+
+export interface ResolvedCertificationSubject {
+  subject: CertificationSubject;
+  storageIdentity: CertificationStorageIdentity;
 }
 
 const UNSAFE_SEGMENT = /[/\\\0]/;
@@ -55,6 +71,92 @@ export function resolveCertificationStorageIdentity(
   }
 
   return { provider: normalizedProvider, model: normalizedModel };
+}
+
+export function resolveCertificationSubject(input: {
+  provider: NativeProviderName | string;
+  model: string;
+  registry: ModelRegistry;
+  launchPriorityFixturePath?: string;
+}): ResolvedCertificationSubject {
+  const nativeProvider = normalizeStorageSegment(input.provider);
+  const registryKey = resolveModelRegistryKey(input.registry, input.model);
+  const capabilities = getModel(input.registry, registryKey);
+  if (!capabilities) {
+    throw new Error(`No registry entry found for native certification model "${input.model}"`);
+  }
+
+  const registeredProvider = capabilities.nativeCapability?.nativeProvider
+    ?? capabilities.supportedModel?.provider;
+  if (registeredProvider !== nativeProvider) {
+    throw new Error(
+      `Model "${input.model}" is registered with native provider "${registeredProvider ?? 'unknown'}", not "${nativeProvider}".`,
+    );
+  }
+
+  const identity = resolveModelIdentity(input.registry, registryKey);
+  const catalogIdentity = nativeProvider === 'openrouter'
+    ? resolveOpenRouterModelIdentity(input.model, input.launchPriorityFixturePath)
+      ?? resolveOpenRouterModelIdentity(registryKey, input.launchPriorityFixturePath)
+    : null;
+  const registryProviderNativeId = capabilities.supportedModel?.providerNativeId;
+  const providerNativeId = registryProviderNativeId
+    ?? catalogIdentity?.openrouterId
+    ?? registryKey;
+  const split = splitProviderNativeId(providerNativeId, nativeProvider);
+
+  if (nativeProvider === 'openrouter' && registryProviderNativeId) {
+    const corroboratingCatalogIdentity = catalogIdentity
+      ?? resolveOpenRouterModelIdentity(providerNativeId, input.launchPriorityFixturePath);
+    if (corroboratingCatalogIdentity && corroboratingCatalogIdentity.openrouterId !== providerNativeId) {
+      throw new Error(
+        `OpenRouter catalog disagreement for "${input.model}": catalog=${corroboratingCatalogIdentity.openrouterId} registry=${providerNativeId}`,
+      );
+    }
+  }
+
+  const catalogHash = identity.verification?.catalogHash
+    ?? (nativeProvider === 'openrouter' ? hashLaunchPriorityFixture(input.launchPriorityFixturePath) : 'registry');
+  const storageIdentity = resolveCertificationStorageIdentity(nativeProvider, providerNativeId);
+
+  return {
+    storageIdentity,
+    subject: {
+      registryKey,
+      nativeProvider,
+      providerId: split.providerId,
+      providerModelId: split.providerModelId,
+      providerNativeId,
+      identityRevision: identity.revision,
+      identityFingerprint: identity.fingerprint,
+      catalogHash,
+    },
+  };
+}
+
+export function subjectsEqual(a: CertificationSubject, b: CertificationSubject): boolean {
+  return a.registryKey === b.registryKey
+    && a.nativeProvider === b.nativeProvider
+    && a.providerId === b.providerId
+    && a.providerModelId === b.providerModelId
+    && a.providerNativeId === b.providerNativeId
+    && a.identityRevision === b.identityRevision
+    && a.identityFingerprint === b.identityFingerprint
+    && a.catalogHash === b.catalogHash;
+}
+
+function splitProviderNativeId(
+  providerNativeId: string,
+  nativeProvider: string,
+): { providerId: string; providerModelId: string } {
+  const parts = providerNativeId.split('/');
+  if (parts.length === 2 && parts[0] && parts[1]) {
+    return { providerId: canonicalProviderSegment(parts[0].toLowerCase()), providerModelId: parts[1].toLowerCase() };
+  }
+  return {
+    providerId: canonicalProviderSegment(nativeProvider),
+    providerModelId: providerNativeId.trim().toLowerCase(),
+  };
 }
 
 function normalizeStorageSegment(value: string): string {

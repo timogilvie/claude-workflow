@@ -4,7 +4,7 @@ import { certifyNativeAgent } from './native-agent-certify.ts';
 import type { HarnessReport, HarnessScenarioResult } from '../shared/lib/native-agent/certification/scenario-runner.ts';
 import type { NativeCertificationArtifact } from '../shared/lib/native-agent/certification/schema.ts';
 import { DEFAULT_CERTIFICATION_SUITE_VERSION } from '../shared/lib/native-agent/certification/scenarios.ts';
-import type { ModelRegistry } from '../shared/lib/model-registry.ts';
+import { computeIdentityFingerprint, type ModelRegistry } from '../shared/lib/model-registry.ts';
 
 const OPENROUTER_STORAGE_CASES = [
   {
@@ -97,6 +97,67 @@ const STUB_REGISTRY: ModelRegistry = {
           maxCertifiedPhase: 'workflow',
           certifiedAt: new Date().toISOString(),
           certificationSuiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
+        },
+      },
+    },
+    'ox-alpha': {
+      vendor: 'unknown',
+      class: 'strong_generalist',
+      strengths: [],
+      weaknesses: ['provisional stealth identity'],
+      qualityScores: { routing: 0, planning: 0, coding: 0, review: 0, classify: 0 },
+      contextWindowTokens: 1_048_576,
+      toolSupport: 'basic',
+      multimodal: { text: true, image: true },
+      latencyTier: 'standard',
+      reasoningTier: 'advanced',
+      costPerMillionInputTokensUsd: 0,
+      costPerMillionOutputTokensUsd: 0,
+      nativeCapability: {
+        nativeProvider: 'openrouter',
+        piTransportKind: 'openai-completions',
+        readOnlyNative: 'certified',
+        compatFlags: { thinkingFormat: 'openrouter' },
+      },
+      supportedModel: {
+        wavemillAlias: 'ox-alpha',
+        providerNativeId: 'stealth/ox-alpha',
+        provider: 'openrouter',
+        transport: 'openai-completions',
+        stages: ['planning', 'coding', 'review'],
+        requiredCertificationPhaseByStage: {
+          planning: 'workflow',
+          coding: 'patch',
+          review: 'read-only',
+        },
+        certificationSuiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
+        certificationFreshnessDays: 60,
+        canonicalArtifactIdentity: {
+          provider: 'stealth',
+          model: 'ox-alpha',
+          suiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
+        },
+        lifecycle: 'supported',
+        compatibilityFlags: { thinkingFormat: 'openrouter' },
+        launchEligible: true,
+        routingEligible: false,
+      },
+      identity: {
+        status: 'provisional',
+        revision: 1,
+        fingerprint: computeIdentityFingerprint({
+          alias: 'ox-alpha',
+          providerNativeId: 'stealth/ox-alpha',
+          provider: 'openrouter',
+          revision: 1,
+        }),
+        displayName: 'Ox Alpha',
+        family: 'unknown',
+        evidencePolicy: 'held',
+        verification: {
+          source: 'test',
+          observedAt: '2026-08-22T15:22:39.700Z',
+          catalogHash: 'test-catalog-hash',
         },
       },
     },
@@ -242,6 +303,111 @@ describe('certifyNativeAgent', () => {
     assert.equal(written.certifiedAt, FIXED_NOW.toISOString());
     assert.equal(result.harnessPassed, true);
     assert.equal(result.liveCertifiable, true);
+  });
+
+  it('requires live smoke before publishing a provisional OpenRouter artifact', async () => {
+    let writeCalls = 0;
+    let smokeCalls = 0;
+
+    await assert.rejects(
+      () => certifyNativeAgent({
+        provider: 'openrouter',
+        model: 'ox-alpha',
+        phase: 'workflow',
+        repoDir: '/repo',
+        registry: STUB_REGISTRY,
+        runScenariosFn: async () => ({
+          ...PASSING_REPORT,
+          provider: 'openrouter',
+          model: 'ox-alpha',
+          transport: 'openai-completions',
+          results: [
+            {
+              scenarioId: 'workflow.phase.workflow-persistence-roundtrip',
+              category: 'phase',
+              classification: 'deterministic',
+              phase: 'workflow',
+              status: 'pass',
+              durationMs: 1,
+            } as HarnessScenarioResult,
+          ],
+          countsByCategory: { tool: 0, usage: 0, transcript: 0, phase: 1 },
+        }),
+        runOpenRouterSmokeFn: async () => {
+          smokeCalls++;
+          return [];
+        },
+        writeCertificationFn: () => {
+          writeCalls++;
+          return '/repo/cert.json';
+        },
+        env: {},
+      }),
+      /OPENROUTER_LIVE_SMOKE=1/,
+    );
+
+    assert.equal(smokeCalls, 0, 'smoke must not run without explicit consent');
+    assert.equal(writeCalls, 0, 'artifact must not be written without live smoke evidence');
+  });
+
+  it('writes live smoke evidence for provisional OpenRouter artifacts', async () => {
+    let written: NativeCertificationArtifact | undefined;
+    const FIXED_NOW = new Date('2026-08-23T12:00:00.000Z');
+
+    const result = await certifyNativeAgent({
+      provider: 'openrouter',
+      model: 'ox-alpha',
+      phase: 'workflow',
+      repoDir: '/repo',
+      registry: STUB_REGISTRY,
+      runScenariosFn: async () => ({
+        ...PASSING_REPORT,
+        provider: 'openrouter',
+        model: 'ox-alpha',
+        transport: 'openai-completions',
+        results: [
+          {
+            scenarioId: 'workflow.phase.workflow-persistence-roundtrip',
+            category: 'phase',
+            classification: 'deterministic',
+            phase: 'workflow',
+            status: 'pass',
+            durationMs: 1,
+          } as HarnessScenarioResult,
+        ],
+        countsByCategory: { tool: 0, usage: 0, transcript: 0, phase: 1 },
+      }),
+      runOpenRouterSmokeFn: async (opts) => [{
+        modelId: 'ox-alpha',
+        family: 'unknown',
+        status: 'ok',
+        requestedWireId: opts.entries[0]!.openrouterId,
+        providerReturnedModel: 'stealth/ox-alpha',
+        catalogHash: opts.catalogHash ?? 'missing-catalog-hash',
+        checkedAt: '2026-08-23T12:00:00.000Z',
+        costUsd: null,
+      }],
+      writeCertificationFn: (_repoDir, artifact) => {
+        written = artifact;
+        return `/repo/.wavemill/native-agent-certifications/stealth/ox-alpha/${DEFAULT_CERTIFICATION_SUITE_VERSION}.json`;
+      },
+      env: {
+        OPENROUTER_LIVE_SMOKE: '1',
+        OPENROUTER_API_KEY: 'sk-test',
+      },
+      now: () => FIXED_NOW,
+    });
+
+    assert.ok(written, 'artifact should have been written');
+    assert.deepEqual(written.liveSmokeEvidence, {
+      requestedWireId: 'stealth/ox-alpha',
+      providerReturnedModel: 'stealth/ox-alpha',
+      catalogHash: 'test-catalog-hash',
+      succeededAt: '2026-08-23T12:00:00.000Z',
+    });
+    assert.equal(written.subject.providerNativeId, 'stealth/ox-alpha');
+    assert.equal(result.liveSmokeEvidence?.catalogHash, 'test-catalog-hash');
+    assert.equal(result.artifactPath, `/repo/.wavemill/native-agent-certifications/stealth/ox-alpha/${DEFAULT_CERTIFICATION_SUITE_VERSION}.json`);
   });
 
   it('harness failure does not write artifact', async () => {
