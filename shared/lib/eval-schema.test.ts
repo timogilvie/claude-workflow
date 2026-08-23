@@ -2163,7 +2163,7 @@ test('Wavemill router fields validate and schema stays in parity', () => {
   assert.equal(properties.wavemill_router_scoring?.$ref, '#/$defs/WavemillRouterScoringMetadata');
 });
 
-test('Schema version constant is 1.42.0', () => {
+test('Schema version constant is 1.43.0', () => {
   assert.equal(SCHEMA_VERSION, '1.43.0');
 });
 
