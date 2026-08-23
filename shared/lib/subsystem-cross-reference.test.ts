@@ -2,7 +2,8 @@
  * Unit tests for subsystem cross-reference detection.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
 import { detectSubsystemRelationships } from './subsystem-cross-reference.ts';
 import type { Subsystem } from './subsystem-detector.ts';
 
@@ -34,10 +35,10 @@ describe('subsystem-cross-reference', () => {
 
       const relationships = detectSubsystemRelationships(subsystems);
 
-      expect(relationships.get('router')).toHaveLength(1);
-      expect(relationships.get('eval-system')).toHaveLength(1);
-      expect(relationships.get('router')?.[0].id).toBe('eval-system');
-      expect(relationships.get('eval-system')?.[0].id).toBe('router');
+      assert.equal(relationships.get('router').length, 1);
+      assert.equal(relationships.get('eval-system').length, 1);
+      assert.equal(relationships.get('router')?.[0].id, 'eval-system');
+      assert.equal(relationships.get('eval-system')?.[0].id, 'router');
     });
 
     it('should generate appropriate reasons for single shared file', () => {
@@ -66,7 +67,7 @@ describe('subsystem-cross-reference', () => {
 
       const relationships = detectSubsystemRelationships(subsystems);
 
-      expect(relationships.get('a')?.[0].reason).toBe('shares `config.ts`');
+      assert.equal(relationships.get('a')?.[0].reason, 'shares `config.ts`');
     });
 
     it('should generate appropriate reasons for 2-3 shared files in same directory', () => {
@@ -95,7 +96,7 @@ describe('subsystem-cross-reference', () => {
 
       const relationships = detectSubsystemRelationships(subsystems);
 
-      expect(relationships.get('a')?.[0].reason).toBe('shares files in `lib`');
+      assert.equal(relationships.get('a')?.[0].reason, 'shares files in `lib`');
     });
 
     it('should generate appropriate reasons for 4+ shared files', () => {
@@ -134,7 +135,7 @@ describe('subsystem-cross-reference', () => {
 
       const relationships = detectSubsystemRelationships(subsystems);
 
-      expect(relationships.get('a')?.[0].reason).toBe('closely coupled via `lib` modules');
+      assert.equal(relationships.get('a')?.[0].reason, 'closely coupled via `lib` modules');
     });
 
     it('should return bidirectional relationships', () => {
@@ -163,9 +164,9 @@ describe('subsystem-cross-reference', () => {
 
       const relationships = detectSubsystemRelationships(subsystems);
 
-      expect(relationships.get('a')?.[0].id).toBe('b');
-      expect(relationships.get('b')?.[0].id).toBe('a');
-      expect(relationships.get('a')?.[0].reason).toBe(relationships.get('b')?.[0].reason);
+      assert.equal(relationships.get('a')?.[0].id, 'b');
+      assert.equal(relationships.get('b')?.[0].id, 'a');
+      assert.equal(relationships.get('a')?.[0].reason, relationships.get('b')?.[0].reason);
     });
 
     it('should limit to top N relationships per subsystem', () => {
@@ -198,7 +199,7 @@ describe('subsystem-cross-reference', () => {
 
       const relationships = detectSubsystemRelationships(subsystems, 7);
 
-      expect(relationships.get('hub')?.length).toBeLessThanOrEqual(7);
+      assert.ok(relationships.get('hub')?.length <= 7);
     });
 
     it('should handle subsystems with no shared files', () => {
@@ -227,8 +228,8 @@ describe('subsystem-cross-reference', () => {
 
       const relationships = detectSubsystemRelationships(subsystems);
 
-      expect(relationships.get('a')).toHaveLength(0);
-      expect(relationships.get('b')).toHaveLength(0);
+      assert.equal(relationships.get('a').length, 0);
+      assert.equal(relationships.get('b').length, 0);
     });
 
     it('should normalize file paths correctly', () => {
@@ -257,8 +258,8 @@ describe('subsystem-cross-reference', () => {
 
       const relationships = detectSubsystemRelationships(subsystems);
 
-      expect(relationships.get('a')).toHaveLength(1);
-      expect(relationships.get('b')).toHaveLength(1);
+      assert.equal(relationships.get('a').length, 1);
+      assert.equal(relationships.get('b').length, 1);
     });
 
     it('should sort relationships by shared file count', () => {
@@ -298,9 +299,9 @@ describe('subsystem-cross-reference', () => {
       const relationships = detectSubsystemRelationships(subsystems);
       const aRelated = relationships.get('a')!;
 
-      expect(aRelated).toHaveLength(2);
-      expect(aRelated[0].id).toBe('c'); // 2 shared files
-      expect(aRelated[1].id).toBe('b'); // 1 shared file
+      assert.equal(aRelated.length, 2);
+      assert.equal(aRelated[0].id, 'c'); // 2 shared files
+      assert.equal(aRelated[1].id, 'b'); // 1 shared file
     });
   });
 });

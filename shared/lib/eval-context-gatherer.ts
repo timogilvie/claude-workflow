@@ -16,9 +16,15 @@ import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 import path from 'node:path';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { escapeShellArg, execShellCommand } from './shell-utils.ts';
-import { fetchPrDiff, type PrDiffUnavailableReason } from './pr-diff-provider.ts';
-import { loadMetrics } from './review-metrics.ts';
+import {
+  escapeShellArg as defaultEscapeShellArg,
+  execShellCommand as defaultExecShellCommand,
+} from './shell-utils.ts';
+import {
+  fetchPrDiff as defaultFetchPrDiff,
+  type PrDiffUnavailableReason,
+} from './pr-diff-provider.ts';
+import { loadMetrics as defaultLoadMetrics } from './review-metrics.ts';
 import type {
   EvalExecutedPlanning,
   EvalPhaseDurations,
@@ -37,6 +43,13 @@ import {
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+
+export const evalContextGathererDeps = {
+  escapeShellArg: defaultEscapeShellArg,
+  execShellCommand: defaultExecShellCommand,
+  fetchPrDiff: defaultFetchPrDiff,
+  loadMetrics: defaultLoadMetrics,
+};
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -91,8 +104,8 @@ export interface GatherContextParams {
 export function fetchIssueData(issueId: string, repoDir: string): any | null {
   const toolPath = resolve(__dirname, '../../tools/get-issue.ts');
   try {
-    const raw = execShellCommand(
-      `npx tsx ${escapeShellArg(toolPath)} ${escapeShellArg(issueId)} --json 2>/dev/null | sed '/^\\[dotenv/d'`,
+    const raw = evalContextGathererDeps.execShellCommand(
+      `npx tsx ${evalContextGathererDeps.escapeShellArg(toolPath)} ${evalContextGathererDeps.escapeShellArg(issueId)} --json 2>/dev/null | sed '/^\\[dotenv/d'`,
       { encoding: 'utf-8', cwd: repoDir }
     ).trim();
     return JSON.parse(raw);
@@ -120,12 +133,12 @@ export function fetchPrContext(prNumber: string, repoDir: string): { diff: strin
   let url = '';
 
   try {
-    url = execShellCommand(`gh pr view ${escapeShellArg(prNumber)} --json url --jq .url 2>/dev/null`, {
+    url = evalContextGathererDeps.execShellCommand(`gh pr view ${evalContextGathererDeps.escapeShellArg(prNumber)} --json url --jq .url 2>/dev/null`, {
       encoding: 'utf-8', cwd: repoDir,
     }).trim();
   } catch { /* best-effort */ }
 
-  const diffResult = fetchPrDiff(prNumber, repoDir);
+  const diffResult = evalContextGathererDeps.fetchPrDiff(prNumber, repoDir);
   if (diffResult.kind === 'diff') {
     return {
       diff: diffResult.text,
@@ -169,8 +182,8 @@ export function computeWallClockSeconds(
   baseBranch = 'main',
 ): number | null {
   try {
-    const raw = execShellCommand(
-      `git log ${escapeShellArg(baseBranch)}..${escapeShellArg(branch)} --format="%ct" --reverse`,
+    const raw = evalContextGathererDeps.execShellCommand(
+      `git log ${evalContextGathererDeps.escapeShellArg(baseBranch)}..${evalContextGathererDeps.escapeShellArg(branch)} --format="%ct" --reverse`,
       { encoding: 'utf-8', cwd: repoDir }
     ).trim();
 
@@ -298,8 +311,8 @@ export function resolveContextGaps(input: {
 
   if (input.prNumber && (!out.prUrl || !out.branch)) {
     try {
-      const prJson = execShellCommand(
-        `gh pr view ${escapeShellArg(input.prNumber)} --json url,headRefName 2>/dev/null || echo "{}"`,
+      const prJson = evalContextGathererDeps.execShellCommand(
+        `gh pr view ${evalContextGathererDeps.escapeShellArg(input.prNumber)} --json url,headRefName 2>/dev/null || echo "{}"`,
         { encoding: 'utf-8', cwd: input.repoDir }
       ).trim();
       const prData = JSON.parse(prJson);
@@ -355,12 +368,12 @@ export function autoDetectContext(repoDir: string): {
   // Try current branch PR
   if (!prNumber) {
     try {
-      branch = execShellCommand('git branch --show-current', {
+      branch = evalContextGathererDeps.execShellCommand('git branch --show-current', {
         encoding: 'utf-8',
         cwd: repoDir,
       }).trim();
 
-      const prJson = execShellCommand(
+      const prJson = evalContextGathererDeps.execShellCommand(
         'gh pr view --json number,url 2>/dev/null || echo "{}"',
         {
           encoding: 'utf-8',
@@ -832,7 +845,7 @@ function loadSelfReviewSummary(
 
     for (const root of searchRoots) {
       try {
-        const metrics = loadMetrics(root);
+        const metrics = evalContextGathererDeps.loadMetrics(root);
         if (metrics && metrics.length > 0) {
           // Deduplicate by metric ID
           for (const metric of metrics) {

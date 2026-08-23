@@ -5,7 +5,8 @@
  * Full integration testing (git, fs operations) is done via tool-level tests.
  */
 
-import { describe, test, expect } from 'vitest';
+import { describe, test } from 'node:test';
+import assert from 'node:assert/strict';
 import {
   getDirectoryTree,
   getRecentGitActivity,
@@ -17,16 +18,16 @@ describe('getDirectoryTree', () => {
     const tree = await getDirectoryTree(process.cwd(), 2);
 
     // Should return something (not empty error message)
-    expect(tree).not.toBe('(Directory tree unavailable)');
-    expect(tree).not.toBe('(No directories found)');
+    assert.notEqual(tree, '(Directory tree unavailable)');
+    assert.notEqual(tree, '(No directories found)');
 
     // Should include root directory
-    expect(tree).toContain('.');
+    assert.ok(tree.includes('.'));
   });
 
   test('handles invalid path gracefully', async () => {
     const tree = await getDirectoryTree('/nonexistent/path/that/does/not/exist', 2);
-    expect(tree).toBe('(Directory tree unavailable)');
+    assert.equal(tree, '(Directory tree unavailable)');
   });
 
   test('respects depth limit', async () => {
@@ -37,7 +38,7 @@ describe('getDirectoryTree', () => {
     const deepPaths = lines.filter((line) => (line.match(/\//g) || []).length > 1);
 
     // At depth 1, we might have ./subdir but not ./subdir/nested
-    expect(deepPaths.length).toBeLessThanOrEqual(lines.length);
+    assert.ok(deepPaths.length <= lines.length);
   });
 });
 
@@ -46,16 +47,16 @@ describe('getRecentGitActivity', () => {
     const activity = getRecentGitActivity(process.cwd(), 5);
 
     // Should return something (not empty error message)
-    expect(activity).not.toBe('(Git history unavailable)');
-    expect(activity).not.toBe('(No recent commits found)');
+    assert.notEqual(activity, '(Git history unavailable)');
+    assert.notEqual(activity, '(No recent commits found)');
 
     // Should have multiple lines (commits and files)
-    expect(activity.split('\n').length).toBeGreaterThan(0);
+    assert.ok(activity.split('\n').length > 0);
   });
 
   test('handles invalid path gracefully', () => {
     const activity = getRecentGitActivity('/nonexistent/path', 5);
-    expect(activity).toBe('(Git history unavailable)');
+    assert.equal(activity, '(Git history unavailable)');
   });
 
   test('respects commit limit', () => {
@@ -63,7 +64,7 @@ describe('getRecentGitActivity', () => {
 
     // With limit=1, should have fewer lines than limit=10
     const lines = activity.split('\n');
-    expect(lines.length).toBeLessThan(100); // Sanity check
+    assert.ok(lines.length < 100); // Sanity check
   });
 });
 
@@ -73,15 +74,15 @@ describe('findRelevantFiles', () => {
     const files = await findRelevantFiles(process.cwd(), 'linear issue tool workflow');
 
     // Should return a string (either results or a message)
-    expect(typeof files).toBe('string');
+    assert.equal(typeof files, 'string');
 
     // Should not return an empty string
-    expect(files.length).toBeGreaterThan(0);
+    assert.ok(files.length > 0);
   });
 
   test('handles issue title with no meaningful keywords', async () => {
     const files = await findRelevantFiles(process.cwd(), 'a the an to');
-    expect(files).toBe('(No relevant keywords found)');
+    assert.equal(files, '(No relevant keywords found)');
   });
 
   test('handles invalid path gracefully', async () => {
@@ -91,7 +92,7 @@ describe('findRelevantFiles', () => {
     );
 
     // Should handle gracefully (either no results or error message)
-    expect(typeof files).toBe('string');
+    assert.equal(typeof files, 'string');
   });
 
   test('filters stop words from search', async () => {
@@ -99,7 +100,7 @@ describe('findRelevantFiles', () => {
     const files = await findRelevantFiles(process.cwd(), 'add update fix the');
 
     // All words are stop words or too short, should return no keywords message
-    expect(files).toBe('(No relevant keywords found)');
+    assert.equal(files, '(No relevant keywords found)');
   });
 
   test('limits to top 3 keywords', async () => {
@@ -111,7 +112,7 @@ describe('findRelevantFiles', () => {
     if (!files.includes('(No relevant keywords found)')) {
       // Count keyword headers
       const keywordMatches = files.match(/Keyword: "/g) || [];
-      expect(keywordMatches.length).toBeLessThanOrEqual(3);
+      assert.ok(keywordMatches.length <= 3);
     }
   });
 });

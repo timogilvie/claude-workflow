@@ -5,7 +5,8 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, test, expect } from 'vitest';
+import { describe, test } from 'node:test';
+import assert from 'node:assert/strict';
 import {
   getTaskPacketArtifactPaths,
   splitTaskPacket,
@@ -33,12 +34,12 @@ Context details here`;
 
     const result = splitTaskPacket(taskPacket);
 
-    expect(result.header).toContain('# Task Packet Header');
-    expect(result.header).toContain('## Objective');
-    expect(result.header).not.toContain('SPLIT:');
-    expect(result.details).toContain('## 1. Complete Objective');
-    expect(result.details).toContain('## 2. Technical Context');
-    expect(result.fullContent).toContain('---');
+    assert.ok(result.header.includes('# Task Packet Header'));
+    assert.ok(result.header.includes('## Objective'));
+    assert.equal(result.header.includes('SPLIT:'), false);
+    assert.ok(result.details.includes('## 1. Complete Objective'));
+    assert.ok(result.details.includes('## 2. Technical Context'));
+    assert.ok(result.fullContent.includes('---'));
   });
 
   test('handles legacy format without marker', () => {
@@ -55,11 +56,11 @@ Details here`;
 
     const result = splitTaskPacket(taskPacket);
 
-    expect(result.header).toContain('# Task Packet');
-    expect(result.header).toContain('## 1. Objective');
-    expect(result.header).toContain('### Key Files');
-    expect(result.details).toBe(taskPacket);
-    expect(result.fullContent).toBe(taskPacket);
+    assert.ok(result.header.includes('# Task Packet'));
+    assert.ok(result.header.includes('## 1. Objective'));
+    assert.ok(result.header.includes('### Key Files'));
+    assert.equal(result.details, taskPacket);
+    assert.equal(result.fullContent, taskPacket);
   });
 
   test('generates header when objective section exists', () => {
@@ -72,8 +73,8 @@ Details`;
 
     const result = splitTaskPacket(taskPacket);
 
-    expect(result.header).toContain('## 1. Objective');
-    expect(result.header).toContain('Build authentication');
+    assert.ok(result.header.includes('## 1. Objective'));
+    assert.ok(result.header.includes('Build authentication'));
   });
 
   test('handles missing objective section gracefully', () => {
@@ -83,7 +84,7 @@ Content here`;
 
     const result = splitTaskPacket(taskPacket);
 
-    expect(result.header).toContain('See details below');
+    assert.ok(result.header.includes('See details below'));
   });
 
   test('preserves whitespace in header/details', () => {
@@ -95,107 +96,107 @@ Details with spaces`;
 
     const result = splitTaskPacket(taskPacket);
 
-    expect(result.header).toBe('Header with spaces');
-    expect(result.details).toBe('Details with spaces');
+    assert.equal(result.header, 'Header with spaces');
+    assert.equal(result.details, 'Details with spaces');
   });
 });
 
 describe('isValidTaskPacket', () => {
   test('validates task packet with numbered section', () => {
     const text = '## 1. Objective\n\nImplement feature';
-    expect(isValidTaskPacket(text)).toBe(true);
+    assert.equal(isValidTaskPacket(text), true);
   });
 
   test('validates task packet with Objective header', () => {
     const text = '## Objective\n\nImplement feature';
-    expect(isValidTaskPacket(text)).toBe(true);
+    assert.equal(isValidTaskPacket(text), true);
   });
 
   test('validates task packet with Technical Context', () => {
     const text = '## Technical Context\n\nDetails';
-    expect(isValidTaskPacket(text)).toBe(true);
+    assert.equal(isValidTaskPacket(text), true);
   });
 
   test('validates task packet with Success Criteria', () => {
     const text = '## Success Criteria\n\n- Criterion 1';
-    expect(isValidTaskPacket(text)).toBe(true);
+    assert.equal(isValidTaskPacket(text), true);
   });
 
   test('validates task packet with Implementation', () => {
     const text = '## Implementation\n\nSteps';
-    expect(isValidTaskPacket(text)).toBe(true);
+    assert.equal(isValidTaskPacket(text), true);
   });
 
   test('rejects conversational text', () => {
     const text = 'Sure, I can help you with that. Let me explain...';
-    expect(isValidTaskPacket(text)).toBe(false);
+    assert.equal(isValidTaskPacket(text), false);
   });
 
   test('rejects empty string', () => {
-    expect(isValidTaskPacket('')).toBe(false);
+    assert.equal(isValidTaskPacket(''), false);
   });
 
   test('is case-insensitive', () => {
     const text = '## objective\n\nImplement feature';
-    expect(isValidTaskPacket(text)).toBe(true);
+    assert.equal(isValidTaskPacket(text), true);
   });
 
   test('accepts "What" as valid section (alternative phrasing)', () => {
     const text = '## What\n\nBuild feature X';
-    expect(isValidTaskPacket(text)).toBe(true);
+    assert.equal(isValidTaskPacket(text), true);
   });
 });
 
 describe('isTaskPacketFile', () => {
   test('recognizes task-packet.md', () => {
-    expect(isTaskPacketFile('features/foo/task-packet.md')).toBe(true);
+    assert.equal(isTaskPacketFile('features/foo/task-packet.md'), true);
   });
 
   test('recognizes task-packet-header.md', () => {
-    expect(isTaskPacketFile('features/foo/task-packet-header.md')).toBe(true);
+    assert.equal(isTaskPacketFile('features/foo/task-packet-header.md'), true);
   });
 
   test('recognizes task-packet-details.md', () => {
-    expect(isTaskPacketFile('features/foo/task-packet-details.md')).toBe(true);
+    assert.equal(isTaskPacketFile('features/foo/task-packet-details.md'), true);
   });
 
   test('rejects README.md', () => {
-    expect(isTaskPacketFile('features/foo/README.md')).toBe(false);
+    assert.equal(isTaskPacketFile('features/foo/README.md'), false);
   });
 
   test('rejects plan.md', () => {
-    expect(isTaskPacketFile('features/foo/plan.md')).toBe(false);
+    assert.equal(isTaskPacketFile('features/foo/plan.md'), false);
   });
 
   test('rejects non-markdown files', () => {
-    expect(isTaskPacketFile('task-packet.txt')).toBe(false);
+    assert.equal(isTaskPacketFile('task-packet.txt'), false);
   });
 
   test('handles paths without directory', () => {
-    expect(isTaskPacketFile('task-packet.md')).toBe(true);
+    assert.equal(isTaskPacketFile('task-packet.md'), true);
   });
 });
 
 describe('isTaskPacketContent', () => {
   test('recognizes legacy section formats', () => {
-    expect(isTaskPacketContent('## 1. Objective\n\nBuild feature')).toBe(true);
-    expect(isTaskPacketContent('## Technical Context\n\nNotes')).toBe(true);
+    assert.equal(isTaskPacketContent('## 1. Objective\n\nBuild feature'), true);
+    assert.equal(isTaskPacketContent('## Technical Context\n\nNotes'), true);
   });
 
   test('recognizes progressive-disclosure markers', () => {
-    expect(isTaskPacketContent('Quick Reference\n\n- Item')).toBe(true);
-    expect(isTaskPacketContent('## Detailed Sections\n\n## 1. Objective')).toBe(true);
+    assert.equal(isTaskPacketContent('Quick Reference\n\n- Item'), true);
+    assert.equal(isTaskPacketContent('## Detailed Sections\n\n## 1. Objective'), true);
   });
 
   test('returns false for raw issue text', () => {
-    expect(isTaskPacketContent('Fix failing webhook retries in staging')).toBe(false);
+    assert.equal(isTaskPacketContent('Fix failing webhook retries in staging'), false);
   });
 });
 
 describe('task packet artifact persistence', () => {
   test('derives conventional artifact paths from the full packet path', () => {
     const paths = getTaskPacketArtifactPaths('features/foo/task-packet.md');
-    expect(paths).toEqual({
+    assert.deepEqual(paths, {
       full: 'features/foo/task-packet.md',
       header: 'features/foo/task-packet-header.md',
       details: 'features/foo/task-packet-details.md',
@@ -212,9 +213,9 @@ describe('task packet artifact persistence', () => {
       fullContent: '# Header\n\n---\n\n## 1. Objective\n\nDetails',
     });
 
-    await expect(fs.readFile(artifactPaths.header, 'utf-8')).resolves.toBe('# Header');
-    await expect(fs.readFile(artifactPaths.details, 'utf-8')).resolves.toBe('## 1. Objective\n\nDetails');
-    await expect(fs.readFile(artifactPaths.full, 'utf-8')).resolves.toBe('# Header\n\n---\n\n## 1. Objective\n\nDetails');
+    assert.equal(await fs.readFile(artifactPaths.header, 'utf-8'), '# Header');
+    assert.equal(await fs.readFile(artifactPaths.details, 'utf-8'), '## 1. Objective\n\nDetails');
+    assert.equal(await fs.readFile(artifactPaths.full, 'utf-8'), '# Header\n\n---\n\n## 1. Objective\n\nDetails');
     await fs.rm(root, { recursive: true, force: true });
   });
 });
@@ -237,7 +238,7 @@ More content`;
 
     const result = extractReleaseReadiness(markdown);
 
-    expect(result).toEqual({
+    assert.deepEqual(result, {
       databaseChangeRisk: 'required',
       envChanges: ['NEW_API_KEY', 'FEATURE_FLAG_X'],
       configChanges: ['config/production.json'],
@@ -254,7 +255,7 @@ Build something
 
 Details`;
 
-    expect(extractReleaseReadiness(markdown)).toBeNull();
+    assert.equal(extractReleaseReadiness(markdown), null);
   });
 
   test('returns null for partial heading match', () => {
@@ -262,11 +263,11 @@ Details`;
 
 Some content`;
 
-    expect(extractReleaseReadiness(markdown)).toBeNull();
+    assert.equal(extractReleaseReadiness(markdown), null);
   });
 
   test('returns null for empty string', () => {
-    expect(extractReleaseReadiness('')).toBeNull();
+    assert.equal(extractReleaseReadiness(''), null);
   });
 
   test('maps "none" list values to empty arrays', () => {
@@ -278,7 +279,7 @@ Some content`;
 
     const result = extractReleaseReadiness(markdown);
 
-    expect(result).toEqual({
+    assert.deepEqual(result, {
       databaseChangeRisk: 'none',
       envChanges: [],
       configChanges: [],
@@ -295,7 +296,7 @@ Some content`;
 
     const result = extractReleaseReadiness(markdown);
 
-    expect(result).toEqual({
+    assert.deepEqual(result, {
       databaseChangeRisk: 'possible',
       envChanges: ['API_KEY'],
       configChanges: [],
@@ -312,8 +313,8 @@ Some content`;
 
     const result = extractReleaseReadiness(markdown);
 
-    expect(result).not.toBeNull();
-    expect(result!.databaseChangeRisk).toBe('none');
+    assert.notEqual(result, null);
+    assert.equal(result!.databaseChangeRisk, 'none');
   });
 
   test('trims whitespace from list items', () => {
@@ -325,7 +326,7 @@ Some content`;
 
     const result = extractReleaseReadiness(markdown);
 
-    expect(result!.envChanges).toEqual(['FOO', 'BAR', 'BAZ']);
+    assert.deepEqual(result!.envChanges, ['FOO', 'BAR', 'BAZ']);
   });
 
   test('handles section at end of document', () => {
@@ -341,7 +342,7 @@ Build something
 
     const result = extractReleaseReadiness(markdown);
 
-    expect(result).not.toBeNull();
-    expect(result!.databaseChangeRisk).toBe('required');
+    assert.notEqual(result, null);
+    assert.equal(result!.databaseChangeRisk, 'required');
   });
 });

@@ -2,7 +2,8 @@
  * Tests for prompt-utils.ts
  */
 
-import { describe, test, expect } from 'vitest';
+import { describe, test } from 'node:test';
+import assert from 'node:assert/strict';
 import { fillPromptTemplate, fillPromptTemplatePositional } from './prompt-utils.ts';
 
 describe('fillPromptTemplate', () => {
@@ -11,7 +12,7 @@ describe('fillPromptTemplate', () => {
     const result = fillPromptTemplate(template, {
       ISSUE_CONTEXT: 'HOK-123: Fix login bug',
     });
-    expect(result).toBe('Issue: HOK-123: Fix login bug');
+    assert.equal(result, 'Issue: HOK-123: Fix login bug');
   });
 
   test('replaces multiple variables', () => {
@@ -20,7 +21,7 @@ describe('fillPromptTemplate', () => {
       ISSUE_CONTEXT: 'HOK-123: Fix bug',
       CODEBASE_CONTEXT: 'Uses React',
     });
-    expect(result).toBe('Issue: HOK-123: Fix bug\n\nCodebase: Uses React');
+    assert.equal(result, 'Issue: HOK-123: Fix bug\n\nCodebase: Uses React');
   });
 
   test('ignores undefined variables', () => {
@@ -28,7 +29,7 @@ describe('fillPromptTemplate', () => {
     const result = fillPromptTemplate(template, {
       ISSUE_CONTEXT: 'HOK-123',
     });
-    expect(result).toBe('Issue: HOK-123\n\nCodebase: {{CODEBASE_CONTEXT}}');
+    assert.equal(result, 'Issue: HOK-123\n\nCodebase: {{CODEBASE_CONTEXT}}');
   });
 
   test('handles empty string values', () => {
@@ -36,7 +37,7 @@ describe('fillPromptTemplate', () => {
     const result = fillPromptTemplate(template, {
       ISSUE_CONTEXT: '',
     });
-    expect(result).toBe('Issue: ');
+    assert.equal(result, 'Issue: ');
   });
 
   test('is case-sensitive', () => {
@@ -44,7 +45,7 @@ describe('fillPromptTemplate', () => {
     const result = fillPromptTemplate(template, {
       ISSUE_CONTEXT: 'HOK-123',
     });
-    expect(result).toBe('Issue: {{issue_context}}'); // Not replaced
+    assert.equal(result, 'Issue: {{issue_context}}'); // Not replaced
   });
 
   test('handles custom variable names', () => {
@@ -52,7 +53,7 @@ describe('fillPromptTemplate', () => {
     const result = fillPromptTemplate(template, {
       CUSTOM_VAR: 'custom value',
     });
-    expect(result).toBe('Custom: custom value');
+    assert.equal(result, 'Custom: custom value');
   });
 
   test('replaces multiple occurrences of same variable', () => {
@@ -60,7 +61,7 @@ describe('fillPromptTemplate', () => {
     const result = fillPromptTemplate(template, {
       ISSUE_CONTEXT: 'HOK-123',
     });
-    expect(result).toBe('HOK-123 and HOK-123');
+    assert.equal(result, 'HOK-123 and HOK-123');
   });
 });
 
@@ -68,24 +69,24 @@ describe('fillPromptTemplatePositional', () => {
   test('maps to ISSUE_CONTEXT by default', () => {
     const template = 'Issue: {{ISSUE_CONTEXT}}';
     const result = fillPromptTemplatePositional(template, 'HOK-123', '');
-    expect(result).toBe('Issue: HOK-123');
+    assert.equal(result, 'Issue: HOK-123');
   });
 
   test('maps to INITIATIVE_CONTEXT when template uses it', () => {
     const template = 'Initiative: {{INITIATIVE_CONTEXT}}';
     const result = fillPromptTemplatePositional(template, 'Epic-456', '');
-    expect(result).toBe('Initiative: Epic-456');
+    assert.equal(result, 'Initiative: Epic-456');
   });
 
   test('fills both issue and codebase context', () => {
     const template = 'Issue: {{ISSUE_CONTEXT}}\n\nCodebase: {{CODEBASE_CONTEXT}}';
     const result = fillPromptTemplatePositional(template, 'HOK-123', 'Uses React');
-    expect(result).toBe('Issue: HOK-123\n\nCodebase: Uses React');
+    assert.equal(result, 'Issue: HOK-123\n\nCodebase: Uses React');
   });
 
   test('handles missing codebase context (defaults to empty)', () => {
     const template = 'Issue: {{ISSUE_CONTEXT}}';
     const result = fillPromptTemplatePositional(template, 'HOK-123');
-    expect(result).toBe('Issue: HOK-123');
+    assert.equal(result, 'Issue: HOK-123');
   });
 });

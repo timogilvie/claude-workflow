@@ -2,7 +2,8 @@
  * Tests for prompt-hash utilities.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { after, before, describe, it } from 'node:test';
+import assert from 'node:assert/strict';
 import { writeFileSync, unlinkSync, mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -12,13 +13,13 @@ describe('prompt-hash', () => {
   let tempDir: string;
   let tempFilePath: string;
 
-  beforeAll(() => {
+  before(() => {
     // Create a temporary directory for test files
     tempDir = mkdtempSync(join(tmpdir(), 'prompt-hash-test-'));
     tempFilePath = join(tempDir, 'test-template.md');
   });
 
-  afterAll(() => {
+  after(() => {
     // Clean up temporary files
     try {
       unlinkSync(tempFilePath);
@@ -33,15 +34,15 @@ describe('prompt-hash', () => {
       const hash1 = hashString(input);
       const hash2 = hashString(input);
 
-      expect(hash1).toBe(hash2);
-      expect(hash1).toHaveLength(64); // SHA-256 produces 64-char hex string
+      assert.equal(hash1, hash2);
+      assert.equal(hash1.length, 64); // SHA-256 produces 64-char hex string
     });
 
     it('should return different hashes for different inputs', () => {
       const hash1 = hashString('Hello, world!');
       const hash2 = hashString('Goodbye, world!');
 
-      expect(hash1).not.toBe(hash2);
+      assert.notEqual(hash1, hash2);
     });
 
     it('should return known SHA-256 hash for test string', () => {
@@ -49,22 +50,22 @@ describe('prompt-hash', () => {
       const expected = '315f5bdb76d078c43b8ac0064e4a0164612b1fce77c869345bfc94c75894edd3';
       const actual = hashString('Hello, world!');
 
-      expect(actual).toBe(expected);
+      assert.equal(actual, expected);
     });
 
     it('should handle empty string', () => {
       const hash = hashString('');
-      expect(hash).toHaveLength(64);
+      assert.equal(hash.length, 64);
       // Known SHA-256 hash of empty string
-      expect(hash).toBe('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855');
+      assert.equal(hash, 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855');
     });
 
     it('should handle multi-line strings', () => {
       const input = 'Line 1\nLine 2\nLine 3';
       const hash = hashString(input);
 
-      expect(hash).toHaveLength(64);
-      expect(hash).toBe(hashString(input)); // Deterministic
+      assert.equal(hash.length, 64);
+      assert.equal(hash, hashString(input)); // Deterministic
     });
   });
 
@@ -76,8 +77,8 @@ describe('prompt-hash', () => {
       const hash1 = hashFile(tempFilePath);
       const hash2 = hashFile(tempFilePath);
 
-      expect(hash1).toBe(hash2);
-      expect(hash1).toHaveLength(64);
+      assert.equal(hash1, hash2);
+      assert.equal(hash1.length, 64);
     });
 
     it('should return same hash as hashString for same content', () => {
@@ -87,7 +88,7 @@ describe('prompt-hash', () => {
       const fileHash = hashFile(tempFilePath);
       const stringHash = hashString(content);
 
-      expect(fileHash).toBe(stringHash);
+      assert.equal(fileHash, stringHash);
     });
 
     it('should return different hash when file content changes', () => {
@@ -97,11 +98,11 @@ describe('prompt-hash', () => {
       writeFileSync(tempFilePath, 'Modified content', 'utf-8');
       const hash2 = hashFile(tempFilePath);
 
-      expect(hash1).not.toBe(hash2);
+      assert.notEqual(hash1, hash2);
     });
 
     it('should throw error for non-existent file', () => {
-      expect(() => hashFile('/non/existent/file.txt')).toThrow();
+      assert.throws(() => hashFile('/non/existent/file.txt'));
     });
   });
 
@@ -112,7 +113,7 @@ describe('prompt-hash', () => {
 
       const artifact = createPromptArtifact(tempFilePath, 'Filled prompt');
 
-      expect(artifact.templateName).toBe('test-template');
+      assert.equal(artifact.templateName, 'test-template');
     });
 
     it('should extract template name from .txt file', () => {
@@ -121,7 +122,7 @@ describe('prompt-hash', () => {
 
       const artifact = createPromptArtifact(txtPath, 'Filled prompt');
 
-      expect(artifact.templateName).toBe('test-template');
+      assert.equal(artifact.templateName, 'test-template');
 
       // Clean up
       unlinkSync(txtPath);
@@ -133,8 +134,8 @@ describe('prompt-hash', () => {
 
       const artifact = createPromptArtifact(tempFilePath, 'Filled prompt');
 
-      expect(artifact.templateHash).toBe(hashString(templateContent));
-      expect(artifact.templateHash).toHaveLength(64);
+      assert.equal(artifact.templateHash, hashString(templateContent));
+      assert.equal(artifact.templateHash.length, 64);
     });
 
     it('should compute filled prompt hash', () => {
@@ -144,8 +145,8 @@ describe('prompt-hash', () => {
 
       const artifact = createPromptArtifact(tempFilePath, filledPrompt);
 
-      expect(artifact.filledPromptHash).toBe(hashString(filledPrompt));
-      expect(artifact.filledPromptHash).toHaveLength(64);
+      assert.equal(artifact.filledPromptHash, hashString(filledPrompt));
+      assert.equal(artifact.filledPromptHash.length, 64);
     });
 
     it('should create complete artifact with all fields', () => {
@@ -155,13 +156,13 @@ describe('prompt-hash', () => {
 
       const artifact = createPromptArtifact(tempFilePath, filledPrompt);
 
-      expect(artifact).toHaveProperty('templateName');
-      expect(artifact).toHaveProperty('templateHash');
-      expect(artifact).toHaveProperty('filledPromptHash');
-      expect(artifact.templateName).toBe('test-template');
-      expect(artifact.templateHash).toHaveLength(64);
-      expect(artifact.filledPromptHash).toHaveLength(64);
-      expect(artifact.templateHash).not.toBe(artifact.filledPromptHash);
+      assert.ok(Object.hasOwn(artifact, 'templateName'));
+      assert.ok(Object.hasOwn(artifact, 'templateHash'));
+      assert.ok(Object.hasOwn(artifact, 'filledPromptHash'));
+      assert.equal(artifact.templateName, 'test-template');
+      assert.equal(artifact.templateHash.length, 64);
+      assert.equal(artifact.filledPromptHash.length, 64);
+      assert.notEqual(artifact.templateHash, artifact.filledPromptHash);
     });
 
     it('should handle eval-judge.md template name correctly', () => {
@@ -170,7 +171,7 @@ describe('prompt-hash', () => {
 
       const artifact = createPromptArtifact(evalJudgePath, 'Filled');
 
-      expect(artifact.templateName).toBe('eval-judge');
+      assert.equal(artifact.templateName, 'eval-judge');
 
       // Clean up
       unlinkSync(evalJudgePath);
@@ -187,8 +188,8 @@ describe('prompt-hash', () => {
       writeFileSync(tempFilePath, version2, 'utf-8');
       const artifact2 = createPromptArtifact(tempFilePath, filledPrompt);
 
-      expect(artifact1.templateHash).not.toBe(artifact2.templateHash);
-      expect(artifact1.filledPromptHash).toBe(artifact2.filledPromptHash); // Same filled prompt
+      assert.notEqual(artifact1.templateHash, artifact2.templateHash);
+      assert.equal(artifact1.filledPromptHash, artifact2.filledPromptHash); // Same filled prompt
     });
   });
 });

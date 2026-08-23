@@ -24,10 +24,18 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 TESTS=(
   shared/lib/session.test.js
   shared/lib/session-timer.test.js
+  shared/lib/codebase-context-gatherer.test.ts
+  shared/lib/eval-context-gatherer.test.ts
   shared/lib/eval-prompt-size.test.ts
+  shared/lib/eval-summary-printer.test.ts
   shared/lib/eval.test.js
   shared/lib/json-repair.test.ts
   shared/lib/operator-intervention.test.ts
+  shared/lib/plan-validator.test.ts
+  shared/lib/prompt-hash.test.ts
+  shared/lib/prompt-utils.test.ts
+  shared/lib/subsystem-cross-reference.test.ts
+  shared/lib/task-packet-utils.test.ts
   shared/lib/intervention-detector.test.ts
   shared/lib/stage-result.test.ts
   shared/lib/session-adapters.test.ts

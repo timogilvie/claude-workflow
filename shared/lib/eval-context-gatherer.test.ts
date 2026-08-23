@@ -2,14 +2,17 @@
  * Tests for eval-context-gatherer module.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, it } from 'node:test';
+import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as nodePath from 'node:path';
-import * as shellUtils from './shell-utils.ts';
+import type { ExecSyncOptions } from 'node:child_process';
+import type { PrDiffResult } from './pr-diff-provider.ts';
 import {
   computePhaseDurations,
   computeWallClockSeconds,
+  evalContextGathererDeps,
   fetchIssueData,
   formatIssueAsPrompt,
   fetchPrContext,
@@ -20,15 +23,56 @@ import {
   fetchRoutingCompleteRawWithArchive,
 } from './eval-context-gatherer.ts';
 
-// Mock shell-utils
-vi.mock('./shell-utils.ts', () => ({
-  escapeShellArg: (arg: string) => `'${arg}'`,
-  execShellCommand: vi.fn(),
-}));
+const defaultDeps = { ...evalContextGathererDeps };
+type ExecCall = { command: string; options?: ExecSyncOptions };
+type ExecHandler = (command: string, options?: ExecSyncOptions) => string;
+
+let execCalls: ExecCall[] = [];
+
+function diffResult(text: string): PrDiffResult {
+  return {
+    kind: 'diff',
+    text,
+    source: 'gh-pr-diff',
+    bytes: Buffer.byteLength(text),
+    attempts: ['test'],
+  };
+}
+
+function unavailableDiffResult(): PrDiffResult {
+  return {
+    kind: 'unavailable',
+    reason: 'gh_error',
+    detail: 'failed',
+    attempts: ['test'],
+  };
+}
+
+function setExecMock(handler: ExecHandler): void {
+  evalContextGathererDeps.execShellCommand = (command, options) => {
+    execCalls.push({ command, options });
+    return handler(command, options);
+  };
+}
+
+function mockExecSequence(...values: Array<string | Error>): void {
+  let index = 0;
+  setExecMock(() => {
+    const value = values[index++] ?? '';
+    if (value instanceof Error) throw value;
+    return value;
+  });
+}
 
 describe('eval-context-gatherer', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    execCalls = [];
+    Object.assign(evalContextGathererDeps, defaultDeps);
+    evalContextGathererDeps.fetchPrDiff = () => unavailableDiffResult();
+  });
+
+  afterEach(() => {
+    Object.assign(evalContextGathererDeps, defaultDeps);
   });
 
   describe('fetchIssueData', () => {
@@ -39,35 +83,29 @@ describe('eval-context-gatherer', () => {
         description: 'Test description',
       };
 
-      vi.mocked(shellUtils.execShellCommand).mockReturnValue(
-        JSON.stringify(mockIssue)
-      );
+      mockExecSequence(JSON.stringify(mockIssue));
 
       const result = fetchIssueData('HOK-870', '/repo');
 
-      expect(result).toEqual(mockIssue);
-      expect(shellUtils.execShellCommand).toHaveBeenCalledWith(
-        expect.stringContaining('HOK-870'),
-        expect.objectContaining({ cwd: '/repo' })
-      );
+      assert.deepEqual(result, mockIssue);
+      assert.ok(execCalls[0].command.includes('HOK-870'));
+      assert.equal(execCalls[0].options?.cwd, '/repo');
     });
 
     it('should return null on fetch failure', () => {
-      vi.mocked(shellUtils.execShellCommand).mockImplementation(() => {
-        throw new Error('fetch failed');
-      });
+      mockExecSequence(new Error('fetch failed'));
 
       const result = fetchIssueData('HOK-870', '/repo');
 
-      expect(result).toBeNull();
+      assert.equal(result, null);
     });
 
     it('should return null on JSON parse failure', () => {
-      vi.mocked(shellUtils.execShellCommand).mockReturnValue('invalid json');
+      mockExecSequence('invalid json');
 
       const result = fetchIssueData('HOK-870', '/repo');
 
-      expect(result).toBeNull();
+      assert.equal(result, null);
     });
   });
 
@@ -81,8 +119,8 @@ describe('eval-context-gatherer', () => {
 
       const result = formatIssueAsPrompt(issue, 'HOK-870');
 
-      expect(result).toContain('HOK-870: Test Issue');
-      expect(result).toContain('Test description');
+      assert.ok(result.includes('HOK-870: Test Issue'));
+      assert.ok(result.includes('Test description'));
     });
 
     it('should handle missing description', () => {
@@ -93,61 +131,56 @@ describe('eval-context-gatherer', () => {
 
       const result = formatIssueAsPrompt(issue, 'HOK-870');
 
-      expect(result).toContain('HOK-870: Test Issue');
+      assert.ok(result.includes('HOK-870: Test Issue'));
     });
 
     it('should handle null issue', () => {
       const result = formatIssueAsPrompt(null, 'HOK-870');
 
-      expect(result).toBe('Issue: HOK-870 (details unavailable)');
+      assert.equal(result, 'Issue: HOK-870 (details unavailable)');
     });
   });
 
   describe('fetchPrContext', () => {
     it('should fetch PR URL and diff', () => {
-      vi.mocked(shellUtils.execShellCommand)
-        .mockReturnValueOnce('https://github.com/user/repo/pull/123')
-        .mockReturnValueOnce('diff --git a/file.ts b/file.ts\n...');
+      mockExecSequence('https://github.com/user/repo/pull/123');
+      evalContextGathererDeps.fetchPrDiff = () => diffResult('diff --git a/file.ts b/file.ts\n...');
 
       const result = fetchPrContext('123', '/repo');
 
-      expect(result.url).toBe('https://github.com/user/repo/pull/123');
-      expect(result.diff).toContain('diff --git');
+      assert.equal(result.url, 'https://github.com/user/repo/pull/123');
+      assert.ok(result.diff.includes('diff --git'));
     });
 
     it('should handle URL fetch failure gracefully', () => {
-      vi.mocked(shellUtils.execShellCommand)
-        .mockImplementationOnce(() => { throw new Error('failed'); })
-        .mockReturnValueOnce('diff content');
+      mockExecSequence(new Error('failed'));
+      evalContextGathererDeps.fetchPrDiff = () => diffResult('diff content');
 
       const result = fetchPrContext('123', '/repo');
 
-      expect(result.url).toBe('');
-      expect(result.diff).toBe('diff content');
+      assert.equal(result.url, '');
+      assert.equal(result.diff, 'diff content');
     });
 
     it('should handle diff fetch failure gracefully', () => {
-      vi.mocked(shellUtils.execShellCommand)
-        .mockReturnValueOnce('https://github.com/user/repo/pull/123')
-        .mockImplementationOnce(() => { throw new Error('failed'); });
+      mockExecSequence('https://github.com/user/repo/pull/123');
+      evalContextGathererDeps.fetchPrDiff = () => unavailableDiffResult();
 
       const result = fetchPrContext('123', '/repo');
 
-      expect(result.url).toBe('https://github.com/user/repo/pull/123');
-      expect(result.diff).toBe('');
-      expect(result.availability.available).toBe(false);
+      assert.equal(result.url, 'https://github.com/user/repo/pull/123');
+      assert.equal(result.diff, '');
+      assert.equal(result.availability.available, false);
     });
 
     it('should handle both fetch failures gracefully', () => {
-      vi.mocked(shellUtils.execShellCommand).mockImplementation(() => {
-        throw new Error('failed');
-      });
+      mockExecSequence(new Error('failed'));
 
       const result = fetchPrContext('123', '/repo');
 
-      expect(result.url).toBe('');
-      expect(result.diff).toBe('');
-      expect(result.availability.available).toBe(false);
+      assert.equal(result.url, '');
+      assert.equal(result.diff, '');
+      assert.equal(result.availability.available, false);
     });
   });
 
@@ -159,10 +192,11 @@ describe('eval-context-gatherer', () => {
         description: 'Test description',
       };
 
-      vi.mocked(shellUtils.execShellCommand)
-        .mockReturnValueOnce(JSON.stringify(mockIssue)) // issue fetch
-        .mockReturnValueOnce('https://github.com/user/repo/pull/123') // PR URL
-        .mockReturnValueOnce('diff content'); // PR diff
+      mockExecSequence(
+        JSON.stringify(mockIssue),
+        'https://github.com/user/repo/pull/123',
+      );
+      evalContextGathererDeps.fetchPrDiff = () => diffResult('diff content');
 
       const result = gatherEvalContext({
         issueId: 'HOK-870',
@@ -170,16 +204,15 @@ describe('eval-context-gatherer', () => {
         repoDir: '/repo',
       });
 
-      expect(result.taskPrompt).toContain('HOK-870: Test Issue');
-      expect(result.prDiff).toBe('diff content');
-      expect(result.prUrl).toBe('https://github.com/user/repo/pull/123');
-      expect(result.issueData).toEqual(mockIssue);
+      assert.ok(result.taskPrompt.includes('HOK-870: Test Issue'));
+      assert.equal(result.prDiff, 'diff content');
+      assert.equal(result.prUrl, 'https://github.com/user/repo/pull/123');
+      assert.deepEqual(result.issueData, mockIssue);
     });
 
     it('should use provided prUrl if given', () => {
-      vi.mocked(shellUtils.execShellCommand)
-        .mockReturnValueOnce('https://github.com/user/repo/pull/123') // PR URL (ignored)
-        .mockReturnValueOnce('diff content'); // PR diff
+      mockExecSequence('https://github.com/user/repo/pull/123');
+      evalContextGathererDeps.fetchPrDiff = () => diffResult('diff content');
 
       const result = gatherEvalContext({
         prNumber: '123',
@@ -187,21 +220,20 @@ describe('eval-context-gatherer', () => {
         repoDir: '/repo',
       });
 
-      expect(result.prUrl).toBe('https://custom.url');
+      assert.equal(result.prUrl, 'https://custom.url');
     });
 
     it('should handle missing issueId', () => {
-      vi.mocked(shellUtils.execShellCommand)
-        .mockReturnValueOnce('https://github.com/user/repo/pull/123')
-        .mockReturnValueOnce('diff content');
+      mockExecSequence('https://github.com/user/repo/pull/123');
+      evalContextGathererDeps.fetchPrDiff = () => diffResult('diff content');
 
       const result = gatherEvalContext({
         prNumber: '123',
         repoDir: '/repo',
       });
 
-      expect(result.taskPrompt).toBe('Issue:  (details unavailable)');
-      expect(result.issueData).toBeNull();
+      assert.equal(result.taskPrompt, 'Issue:  (details unavailable)');
+      assert.equal(result.issueData, null);
     });
 
     it('should handle missing prNumber', () => {
@@ -211,20 +243,19 @@ describe('eval-context-gatherer', () => {
         description: 'Test description',
       };
 
-      vi.mocked(shellUtils.execShellCommand)
-        .mockReturnValueOnce(JSON.stringify(mockIssue));
+      mockExecSequence(JSON.stringify(mockIssue));
 
       const result = gatherEvalContext({
         issueId: 'HOK-870',
         repoDir: '/repo',
       });
 
-      expect(result.prDiff).toBe('');
-      expect(result.prUrl).toBe('');
+      assert.equal(result.prDiff, '');
+      assert.equal(result.prUrl, '');
     });
 
     it('should handle all fetch failures gracefully', () => {
-      vi.mocked(shellUtils.execShellCommand).mockImplementation(() => {
+      setExecMock(() => {
         throw new Error('failed');
       });
 
@@ -234,63 +265,57 @@ describe('eval-context-gatherer', () => {
         repoDir: '/repo',
       });
 
-      expect(result.taskPrompt).toContain('details unavailable');
-      expect(result.prDiff).toBe('');
-      expect(result.prDiffAvailability.available).toBe(false);
-      expect(result.prUrl).toBe('');
-      expect(result.issueData).toBeNull();
+      assert.ok(result.taskPrompt.includes('details unavailable'));
+      assert.equal(result.prDiff, '');
+      assert.equal(result.prDiffAvailability.available, false);
+      assert.equal(result.prUrl, '');
+      assert.equal(result.issueData, null);
     });
   });
 
   describe('computeWallClockSeconds', () => {
     it('should return null when git log is empty', () => {
-      vi.mocked(shellUtils.execShellCommand).mockReturnValue('');
+      mockExecSequence('');
 
       const result = computeWallClockSeconds('/repo', 'task/test');
 
-      expect(result).toBeNull();
-      expect(shellUtils.execShellCommand).toHaveBeenCalledWith(
-        expect.stringContaining("git log 'main'..'task/test' --format=\"%ct\" --reverse"),
-        expect.objectContaining({ cwd: '/repo' })
-      );
+      assert.equal(result, null);
+      assert.ok(execCalls[0].command.includes("git log 'main'..'task/test' --format=\"%ct\" --reverse"));
+      assert.equal(execCalls[0].options?.cwd, '/repo');
     });
 
     it('should return null for a single commit timestamp', () => {
-      vi.mocked(shellUtils.execShellCommand).mockReturnValue('1710000000');
+      mockExecSequence('1710000000');
 
       const result = computeWallClockSeconds('/repo', 'task/test');
 
-      expect(result).toBeNull();
+      assert.equal(result, null);
     });
 
     it('should return the elapsed seconds for multiple commits', () => {
-      vi.mocked(shellUtils.execShellCommand).mockReturnValue(
-        '1710000000\n1710000015\n1710000120'
-      );
+      mockExecSequence('1710000000\n1710000015\n1710000120');
 
       const result = computeWallClockSeconds('/repo', 'task/test');
 
-      expect(result).toBe(120);
+      assert.equal(result, 120);
     });
 
     it('should ignore malformed timestamps when valid endpoints remain', () => {
-      vi.mocked(shellUtils.execShellCommand).mockReturnValue(
-        '1710000000\nnot-a-number\n1710000060\n0'
-      );
+      mockExecSequence('1710000000\nnot-a-number\n1710000060\n0');
 
       const result = computeWallClockSeconds('/repo', 'task/test');
 
-      expect(result).toBe(60);
+      assert.equal(result, 60);
     });
 
     it('should return null on git errors', () => {
-      vi.mocked(shellUtils.execShellCommand).mockImplementation(() => {
+      setExecMock(() => {
         throw new Error('git failed');
       });
 
       const result = computeWallClockSeconds('/repo', 'missing-branch');
 
-      expect(result).toBeNull();
+      assert.equal(result, null);
     });
   });
 
@@ -326,7 +351,7 @@ describe('eval-context-gatherer', () => {
       );
 
       try {
-        expect(computePhaseDurations(repoDir, 'accurate-wall-clock')).toEqual({
+        assert.deepEqual(computePhaseDurations(repoDir, 'accurate-wall-clock'), {
           planning: 330,
           coding: 900,
           review: 195,
@@ -350,7 +375,7 @@ describe('eval-context-gatherer', () => {
       );
 
       try {
-        expect(computePhaseDurations(repoDir, 'accurate-wall-clock')).toEqual({
+        assert.deepEqual(computePhaseDurations(repoDir, 'accurate-wall-clock'), {
           coding: 900,
           total: 900,
         });
@@ -371,7 +396,7 @@ describe('eval-context-gatherer', () => {
       );
 
       try {
-        expect(computePhaseDurations(repoDir, 'accurate-wall-clock')).toBeUndefined();
+        assert.equal(computePhaseDurations(repoDir, 'accurate-wall-clock'), undefined);
       } finally {
         fs.rmSync(repoDir, { recursive: true, force: true });
       }
@@ -386,8 +411,8 @@ describe('eval-context-gatherer', () => {
         reviewer: 'claude-haiku-4-5-20251001',
       });
 
-      expect(result.candidates).toHaveLength(3);
-      expect(result.candidates.map((c) => c.modelId)).toEqual([
+      assert.equal(result.candidates.length, 3);
+      assert.deepEqual(result.candidates.map((c) => c.modelId), [
         'claude-sonnet-4-5-20250929',
         'claude-opus-4-6',
         'claude-haiku-4-5-20251001',
@@ -401,8 +426,8 @@ describe('eval-context-gatherer', () => {
         reviewer: 'claude-haiku-4-5-20251001',
       });
 
-      expect(result.candidates).toHaveLength(2);
-      expect(result.candidates.map((c) => c.modelId)).toEqual([
+      assert.equal(result.candidates.length, 2);
+      assert.deepEqual(result.candidates.map((c) => c.modelId), [
         'claude-sonnet-4-5-20250929',
         'claude-haiku-4-5-20251001',
       ]);
@@ -415,7 +440,7 @@ describe('eval-context-gatherer', () => {
         reviewer: 'claude-haiku-4-5-20251001',
       });
 
-      expect(result.chosen).toEqual({
+      assert.deepEqual(result.chosen, {
         agentType: 'claude',
         modelId: 'claude-opus-4-6',
       });
@@ -428,9 +453,9 @@ describe('eval-context-gatherer', () => {
         reviewer: 'model-c',
       });
 
-      expect(result.decisionPolicyVersion).toBe('baseline');
-      expect(result.routeArtifactSchemaVersion).toBe('1.0');
-      expect(result.policyResolverVersion).toBe('1.0.0');
+      assert.equal(result.decisionPolicyVersion, 'baseline');
+      assert.equal(result.routeArtifactSchemaVersion, '1.1');
+      assert.equal(result.policyResolverVersion, '1.0.0');
     });
 
     it('maps stage-aware routing metadata into structured policy fields', () => {
@@ -446,9 +471,9 @@ describe('eval-context-gatherer', () => {
         },
       });
 
-      expect(result.decisionPolicyVersion).toBe('stage-aware');
-      expect(result.routeMode).toBe('stage-aware');
-      expect(result.operatingModeDependency).toBe('normal');
+      assert.equal(result.decisionPolicyVersion, 'stage-aware');
+      assert.equal(result.routeMode, 'stage-aware');
+      assert.equal(result.operatingModeDependency, 'normal');
     });
 
     it('maps hokusai routing metadata into structured policy fields', () => {
@@ -464,8 +489,8 @@ describe('eval-context-gatherer', () => {
         },
       });
 
-      expect(result.decisionPolicyVersion).toBe('hokusai');
-      expect(result.routeMode).toBe('hokusai');
+      assert.equal(result.decisionPolicyVersion, 'hokusai');
+      assert.equal(result.routeMode, 'hokusai');
     });
 
     it('preserves operating mode separately from policy source', () => {
@@ -481,8 +506,8 @@ describe('eval-context-gatherer', () => {
         },
       });
 
-      expect(result.decisionPolicyVersion).toBe('stage-aware');
-      expect(result.operatingModeDependency).toBe('survival');
+      assert.equal(result.decisionPolicyVersion, 'stage-aware');
+      assert.equal(result.operatingModeDependency, 'survival');
     });
 
     it('should include depth and mode in rationale', () => {
@@ -495,9 +520,9 @@ describe('eval-context-gatherer', () => {
         reviewMode: 'static',
       });
 
-      expect(result.decisionRationale).toContain('planDepth=light');
-      expect(result.decisionRationale).toContain('codeDepth=medium');
-      expect(result.decisionRationale).toContain('reviewMode=static');
+      assert.ok(result.decisionRationale.includes('planDepth=light'));
+      assert.ok(result.decisionRationale.includes('codeDepth=medium'));
+      assert.ok(result.decisionRationale.includes('reviewMode=static'));
     });
 
     it('should handle missing depth/mode fields', () => {
@@ -507,8 +532,8 @@ describe('eval-context-gatherer', () => {
         reviewer: 'model-c',
       });
 
-      expect(result.decisionRationale).toContain('planner=model-a');
-      expect(result.decisionRationale).not.toContain('planDepth');
+      assert.ok(result.decisionRationale.includes('planner=model-a'));
+      assert.equal(result.decisionRationale.includes('planDepth'), false);
     });
   });
 
@@ -535,11 +560,11 @@ describe('eval-context-gatherer', () => {
 
       const result = fetchRoutingDecision(tmpDir, 'my-feature');
 
-      expect(result).not.toBeNull();
-      expect(result!.candidates).toHaveLength(3);
-      expect(result!.decisionPolicyVersion).toBe('baseline');
-      expect(result!.routeArtifactSchemaVersion).toBe('1.0');
-      expect(result!.policyResolverVersion).toBe('1.0.0');
+      assert.notEqual(result, null);
+      assert.equal(result!.candidates.length, 3);
+      assert.equal(result!.decisionPolicyVersion, 'baseline');
+      assert.equal(result!.routeArtifactSchemaVersion, '1.1');
+      assert.equal(result!.policyResolverVersion, '1.0.0');
       fs.rmSync(tmpDir, { recursive: true });
     });
 
@@ -564,10 +589,10 @@ describe('eval-context-gatherer', () => {
 
       const result = fetchRoutingDecision(tmpDir, 'my-feature');
 
-      expect(result).not.toBeNull();
-      expect(result!.decisionPolicyVersion).toBe('stage-aware');
-      expect(result!.routeMode).toBe('stage-aware');
-      expect(result!.operatingModeDependency).toBe('survival');
+      assert.notEqual(result, null);
+      assert.equal(result!.decisionPolicyVersion, 'stage-aware');
+      assert.equal(result!.routeMode, 'stage-aware');
+      assert.equal(result!.operatingModeDependency, 'survival');
       fs.rmSync(tmpDir, { recursive: true });
     });
 
@@ -577,7 +602,7 @@ describe('eval-context-gatherer', () => {
 
       const result = fetchRoutingDecision(tmpDir, 'my-feature');
 
-      expect(result).toBeNull();
+      assert.equal(result, null);
       fs.rmSync(tmpDir, { recursive: true });
     });
 
@@ -589,7 +614,7 @@ describe('eval-context-gatherer', () => {
 
       const result = fetchRoutingDecision(tmpDir, 'my-feature');
 
-      expect(result).toBeNull();
+      assert.equal(result, null);
       fs.rmSync(tmpDir, { recursive: true });
     });
 
@@ -604,7 +629,7 @@ describe('eval-context-gatherer', () => {
 
       const result = fetchRoutingDecision(tmpDir, 'my-feature');
 
-      expect(result).toBeNull();
+      assert.equal(result, null);
       fs.rmSync(tmpDir, { recursive: true });
     });
   });
@@ -631,7 +656,7 @@ describe('eval-context-gatherer', () => {
       );
 
       try {
-        expect(fetchRoutingCompleteRawWithArchive(repoDir, slug, issueId, worktreeDir)).toEqual({
+        assert.deepEqual(fetchRoutingCompleteRawWithArchive(repoDir, slug, issueId, worktreeDir), {
           planner: 'model-a',
           coder: 'model-b',
           reviewer: 'model-c',
@@ -657,7 +682,7 @@ describe('eval-context-gatherer', () => {
       );
 
       try {
-        expect(fetchRoutingCompleteRawWithArchive(repoDir, slug, issueId)).toEqual({
+        assert.deepEqual(fetchRoutingCompleteRawWithArchive(repoDir, slug, issueId), {
           planner: 'model-a',
           coder: 'model-b',
           reviewer: 'model-c',
@@ -675,7 +700,7 @@ describe('eval-context-gatherer', () => {
       fs.writeFileSync(nodePath.join(archiveDir, 'routing-complete.json'), '{"planner":true}');
 
       try {
-        expect(fetchRoutingCompleteRawWithArchive(repoDir, 'my-feature', issueId)).toBeNull();
+        assert.equal(fetchRoutingCompleteRawWithArchive(repoDir, 'my-feature', issueId), null);
       } finally {
         fs.rmSync(repoDir, { recursive: true, force: true });
       }
@@ -697,7 +722,7 @@ describe('eval-context-gatherer', () => {
       );
 
       try {
-        expect(fetchRoutingCompleteRawWithArchive(repoDir, 'my-feature', issueId)).toEqual({
+        assert.deepEqual(fetchRoutingCompleteRawWithArchive(repoDir, 'my-feature', issueId), {
           planner: 'model-a',
           coder: 'model-b',
           reviewer: 'model-c',
@@ -755,7 +780,7 @@ describe('eval-context-gatherer', () => {
 
       try {
         const result = gatherStageArtifacts(repoDir, issueId, branch);
-        expect(result.routingDecision).toEqual({
+        assert.deepEqual(result.routingDecision, {
           candidates: [
             { agentType: 'claude', modelId: 'model-a' },
             { agentType: 'claude', modelId: 'model-b' },
@@ -765,10 +790,10 @@ describe('eval-context-gatherer', () => {
           decisionPolicyVersion: 'baseline',
           decisionRationale:
             'Routing: planner=model-a, coder=model-b, reviewer=model-c; codeDepth=deep, reviewMode=static+llm',
-          routeArtifactSchemaVersion: '1.0',
+          routeArtifactSchemaVersion: '1.1',
           policyResolverVersion: '1.0.0',
         });
-        expect(result.routePrediction).toEqual({
+        assert.deepEqual(result.routePrediction, {
           expectedSuccess: 0.8,
           expectedCostUsd: 2.5,
           confidence: 0.7,
@@ -778,19 +803,19 @@ describe('eval-context-gatherer', () => {
           topFeatures: ['repo risk', 'balanced route', 'taskType=feature', 'taskDifficulty=medium', 'riskScore=0.4'],
           rationaleSummary: 'repo risk balanced route',
         });
-        expect(result.executedPlanning).toEqual({
+        assert.deepEqual(result.executedPlanning, {
           agent: 'codex',
           model: 'claude-sonnet-4-6',
           status: 'completed',
           source: '.planning-result.json',
         });
-        expect(result.planningExecutionOutcome).toEqual({
+        assert.deepEqual(result.planningExecutionOutcome, {
           agent: 'codex',
           model: 'claude-sonnet-4-6',
           status: 'completed',
           source: '.planning-result.json',
         });
-        expect(result.phaseDurations).toEqual({
+        assert.deepEqual(result.phaseDurations, {
           planning: 120,
           total: 120,
         });
@@ -809,8 +834,8 @@ describe('eval-context-gatherer', () => {
 
       try {
         const result = gatherStageArtifacts(repoDir, issueId, branch);
-        expect(result.routingDecision).toBeUndefined();
-        expect(result.routePrediction).toBeUndefined();
+        assert.equal(result.routingDecision, undefined);
+        assert.equal(result.routePrediction, undefined);
       } finally {
         fs.rmSync(repoDir, { recursive: true, force: true });
       }
@@ -849,8 +874,8 @@ describe('eval-context-gatherer', () => {
 
       try {
         const result = gatherStageArtifacts(repoDir, issueId, branch);
-        expect(result.routing?.planner?.resolvedModelId).toBe('gpt-5.4');
-        expect(result.routing?.reviewer?.resolvedModelId).toBe('claude-sonnet-4-6');
+        assert.equal(result.routing?.planner?.resolvedModelId, 'gpt-5.4');
+        assert.equal(result.routing?.reviewer?.resolvedModelId, 'claude-sonnet-4-6');
       } finally {
         fs.rmSync(repoDir, { recursive: true, force: true });
       }
@@ -866,8 +891,8 @@ describe('eval-context-gatherer', () => {
 
       try {
         const result = gatherStageArtifacts(repoDir, issueId, branch);
-        expect(result.executedPlanning).toBeUndefined();
-        expect(result.planningExecutionOutcome).toBeUndefined();
+        assert.equal(result.executedPlanning, undefined);
+        assert.equal(result.planningExecutionOutcome, undefined);
       } finally {
         fs.rmSync(repoDir, { recursive: true, force: true });
       }
@@ -914,7 +939,7 @@ describe('eval-context-gatherer', () => {
 
       try {
         const result = gatherStageArtifacts(repoDir, issueId, branch);
-        expect(result.planningExecutionOutcome).toEqual({
+        assert.deepEqual(result.planningExecutionOutcome, {
           agent: 'native',
           model: 'claude-sonnet-5',
           status: 'awaiting_user',
@@ -971,7 +996,7 @@ describe('eval-context-gatherer', () => {
 
       try {
         const result = gatherStageArtifacts(repoDir, issueId, branch);
-        expect(result.planningExecutionOutcome).toEqual({
+        assert.deepEqual(result.planningExecutionOutcome, {
           agent: 'native',
           model: 'moonshotai/kimi-k2.7-code',
           status: 'failed',
