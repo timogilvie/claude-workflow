@@ -13,13 +13,20 @@ import type { EvalRecord } from './eval-schema.ts';
 import { resolveEvalsDir } from './evals-paths.ts';
 import { appendJsonlRecord, readJsonlFile } from './jsonl-utils.ts';
 import { validateEvalRecord, type ValidationIssue } from './eval-validator.ts';
+import { getEvalConfig } from './config.ts';
+import {
+  extractValueAtPath,
+  formatIssueValue,
+  normalizeRejectedEvalRetention,
+  quarantineRejectedEvalRecord,
+} from './eval-rejected-store.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Constants
 // ────────────────────────────────────────────────────────────────
 
 const EVALS_FILENAME = 'evals.jsonl';
-const WRITE_BLOCKING_CODES = new Set([
+const WRITE_BLOCKING_CODES: ReadonlySet<ValidationIssue['code']> = new Set([
   'MISSING_REQUIRED_FIELD',
   'SCHEMA_VIOLATION',
   'EVAL_MISSING_TASK_DESCRIPTOR',
@@ -30,14 +37,22 @@ const WRITE_BLOCKING_CODES = new Set([
 
 export class EvalValidationError extends Error {
   readonly issues: ValidationIssue[];
+  readonly quarantinePath?: string | null;
 
-  constructor(issues: ValidationIssue[]) {
+  constructor(issues: ValidationIssue[], quarantinePath?: string | null) {
     super(
-      `Eval record failed write-time validation: ${issues.map((issue) => `${issue.code}${issue.detail ? `(${issue.detail})` : ''}`).join(', ')}`,
+      `Eval record failed write-time validation: ${issues.map(formatIssueSummary).join(', ')}${quarantinePath ? `; quarantined=${quarantinePath}` : ''}`,
     );
     this.name = 'EvalValidationError';
     this.issues = issues;
+    this.quarantinePath = quarantinePath;
   }
+}
+
+function formatIssueSummary(issue: ValidationIssue): string {
+  const detail = issue.detail ? `(${issue.detail})` : '';
+  const value = issue.value !== undefined ? `=${issue.value}` : '';
+  return `${issue.code}${detail}${value}`;
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -121,7 +136,21 @@ export function appendEvalRecord(
       repoDir: options?.repoDir,
     }).filter((issue) => WRITE_BLOCKING_CODES.has(issue.code));
     if (issues.length > 0) {
-      throw new EvalValidationError(issues);
+      const enrichedIssues = issues.map((issue) => ({
+        ...issue,
+        value: formatIssueValue(extractValueAtPath(record, issue.detail), options?.repoDir),
+      }));
+      const retention = normalizeRejectedEvalRetention(
+        getEvalConfig(options?.repoDir).rejectedRetention,
+      );
+      const quarantinePath = quarantineRejectedEvalRecord({
+        record,
+        issues: enrichedIssues,
+        repoDir: options?.repoDir,
+        dir: options?.dir,
+        retention,
+      });
+      throw new EvalValidationError(enrichedIssues, quarantinePath);
     }
   }
 

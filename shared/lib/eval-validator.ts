@@ -46,6 +46,7 @@ const TRAINING_REQUIRED_FIELDS = ['modelId', 'modelVersion', 'timestamp'] as con
 export interface ValidationIssue {
   code: EvalErrorCode;
   detail?: string;
+  value?: string;
   file: string;
   line: number;
   recordId?: string;
