@@ -166,6 +166,7 @@ TESTS=(
   shared/lib/text-redaction.test.ts
   shared/lib/redaction-profiles.test.ts
   shared/lib/shell-utils.test.ts
+  shared/lib/stats-utils.test.ts
   shared/lib/jsonl-utils.test.ts
   shared/lib/resource-manifest.test.ts
   shared/lib/harness-id-backfill.test.ts
@@ -221,6 +222,8 @@ TESTS=(
   shared/lib/openrouter-zero-traffic.test.ts
   shared/lib/parity-report.test.ts
   src/evaluation/scorers/wavemill/success-rate-under-budget.test.ts
+  src/evaluation/scorers/wavemill/task-packet-feature-extractor.test.ts
+  src/evaluation/scorers/wavemill/task-packet-scorer.test.ts
   src/evaluation/adapters/wavemill-router-adapter.test.ts
   tools/add-pr-label.test.ts
   tools/backfill-challenge-stage.test.ts
