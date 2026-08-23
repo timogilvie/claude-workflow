@@ -59,6 +59,13 @@ test('unknown required contexts pass only when all observed checks are complete'
   assert.equal(evaluateCiChecks(checks([{ name: 'Lint', status: 'IN_PROGRESS' }]), []).conclusion, 'pending');
 });
 
+test('empty GitHub conclusion falls back to in-progress status', () => {
+  const result = checks([{ name: 'Lint', conclusion: '', status: 'IN_PROGRESS' }]);
+
+  assert.equal(result[0].status, 'pending');
+  assert.equal(result[0].rawStatus, 'IN_PROGRESS');
+});
+
 test('normalizer maps gh pr checks bucket values and dedupes newer reruns', () => {
   const result = normalizeStatusCheckRollup([
     { name: 'Lint', bucket: 'fail', completedAt: '2026-08-21T19:00:00Z' },
