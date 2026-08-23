@@ -661,6 +661,55 @@ export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, opti
     }
 
     for (const task of repo.tasks) {
+      if (terminalStatus(task.status)) continue;
+
+      const ageMinutes = task.updated ? (now - Date.parse(task.updated)) / 60000 : stateAgeMinutes;
+      const watchedPhase = task.phase === 'planning' || task.phase === 'coding' || task.phase === 'review' || task.phase === 'ready';
+      if (watchedPhase && ageMinutes !== undefined && Number.isFinite(ageMinutes) && ageMinutes > options.staleMinutes) {
+        const expectedWindow = task.slug ? `${task.issue}-${task.slug}` : task.issue;
+        const liveEvidence = taskHasLiveExecutionEvidence(repo, task, snapshot.panes, snapshot.processes);
+        if (task.worktree && !existsSync(task.worktree)) {
+          findings.push({
+            id: `stale-active-task-missing-worktree-${repo.session}-${task.issue}`,
+            severity: 'high',
+            category: 'stuck',
+            confidence: 'high',
+            session: repo.session,
+            repoDir: repo.repoDir,
+            issue: task.issue,
+            title: `${task.issue} is non-terminal in ${task.phase} but its worktree is missing`,
+            evidence: [
+              `status=${task.status ?? 'unknown'}`,
+              `phase=${task.phase ?? 'unknown'}`,
+              `updated=${task.updated ?? repo.stateMtime ?? 'unknown'}`,
+              `ageMinutes=${Math.round(ageMinutes)}`,
+              `worktree=${task.worktree}`,
+            ],
+            recommendation: 'Treat this as orphaned active state: terminalize or remove the workflow-state entry after confirming no cleanup resources remain.',
+          });
+        } else if (!liveEvidence) {
+          findings.push({
+            id: `stale-active-task-no-live-process-${repo.session}-${task.issue}`,
+            severity: 'high',
+            category: 'stuck',
+            confidence: 'high',
+            session: repo.session,
+            repoDir: repo.repoDir,
+            issue: task.issue,
+            title: `${task.issue} is stale in ${task.phase} with no live pane or process evidence`,
+            evidence: [
+              `status=${task.status ?? 'unknown'}`,
+              `phase=${task.phase ?? 'unknown'}`,
+              `updated=${task.updated ?? repo.stateMtime ?? 'unknown'}`,
+              `ageMinutes=${Math.round(ageMinutes)}`,
+              `expectedWindow=${expectedWindow}`,
+              `worktree=${task.worktree ?? 'unknown'}`,
+            ],
+            recommendation: 'Inspect the task state and quarantine/cleanup path; if the process is gone, terminalize and clean the task instead of leaving it active.',
+          });
+        }
+      }
+
       if (!task.worktree || !task.slug || terminalStatus(task.status)) continue;
       const featureDir = join(task.worktree, 'features', task.slug);
       if (task.phase === 'coding' && existsSync(join(featureDir, '.coding-complete'))) {
@@ -858,7 +907,36 @@ function parseReadyWatchdogLine(line: string): ReadyWatchdogLogEntry | null {
 }
 
 function terminalStatus(status?: string): boolean {
-  return status === 'merged' || status === 'complete' || status === 'closed' || status === 'done';
+  return status === 'merged'
+    || status === 'complete'
+    || status === 'completed'
+    || status === 'completed-external'
+    || status === 'closed'
+    || status === 'done'
+    || status === 'aborted';
+}
+
+function taskHasLiveExecutionEvidence(repo: RepoSnapshot, task: TaskState, panes: Pane[], processes: ProcessRow[]): boolean {
+  const expectedWindow = task.slug ? `${task.issue}-${task.slug}` : task.issue;
+  const matchingPanes = panes.filter((pane) => {
+    if (pane.session !== repo.session) return false;
+    return pane.windowName === expectedWindow
+      || pane.windowName === task.issue
+      || (task.slug ? pane.windowName === task.slug : false)
+      || pane.title.includes(task.issue)
+      || (task.worktree ? pane.title.includes(task.worktree) : false);
+  });
+
+  if (matchingPanes.some((pane) => !/dead|exited/i.test(`${pane.command} ${pane.title}`))) {
+    return true;
+  }
+
+  return processes.some((row) => {
+    const command = row.command;
+    return command.includes(task.issue)
+      || (task.slug ? command.includes(task.slug) : false)
+      || (task.worktree ? command.includes(task.worktree) : false);
+  });
 }
 
 function hashText(text: string): string {
