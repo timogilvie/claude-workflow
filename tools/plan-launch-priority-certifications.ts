@@ -6,6 +6,8 @@ import { listEffectiveModelsForStage } from '../shared/lib/effective-models.ts';
 import { auditLaunchPriorityCoverage, type LaunchPriorityAudit, type LaunchPriorityRole, type ModelRoleEvidence } from '../shared/lib/launch-priority-audit.ts';
 import { loadLaunchPriorityList, type LaunchPriorityModel, type ModelFamily } from '../shared/lib/openrouter-catalog.ts';
 import { runTool, resolveRepoDir, type ParsedArgs } from '../shared/lib/tool-runner.ts';
+import { evaluateEvidenceEligibility } from '../shared/lib/model-evidence-policy.ts';
+import type { EvalRecord } from '../shared/lib/eval-schema.ts';
 
 const FAMILY_ISSUES: Partial<Record<ModelFamily, string>> = {
   deepseek: 'HOK-2527',
@@ -104,11 +106,72 @@ function rolePlan(row: ModelRoleEvidence, target: number): CertificationPlanRole
   };
 }
 
-function aliasCommands(alias: string, issue: string | null, target: number): CertificationPlanAlias['commands'] {
+function launchPriorityPersistenceProbe(modelId: string): EvalRecord {
+  return {
+    id: `launch-priority-persistence:${modelId}`,
+    schemaVersion: '1.43.0',
+    originalPrompt: `Launch-priority persistence probe for ${modelId}`,
+    modelId,
+    modelVersion: modelId,
+    attempted_model: modelId,
+    score: 1,
+    scoreBand: 'Strong',
+    timeSeconds: 0,
+    timestamp: new Date(0).toISOString(),
+    interventionRequired: false,
+    interventionCount: 0,
+    interventionDetails: [],
+    rationale: 'persistence eligibility probe',
+    taskDescriptor: {
+      schema_version: '1.0',
+      signals: {
+        heuristic: {
+          task_type: 'feature',
+          languages: [],
+          framework_tags: [],
+          files_touched: 0,
+          repo_size_loc: 0,
+          description_tokens: 0,
+          is_greenfield: false,
+          has_migration: false,
+          has_ui: false,
+          has_tests: false,
+          cross_service: false,
+        },
+        learned: {
+          complexity: 1,
+          domain: 'devtools',
+          risk_flags: [],
+        },
+      },
+      constraints: {
+        models_available: [modelId],
+        objective: 'balanced',
+      },
+      stages: {
+        planner: { model: modelId },
+        coder: { model: modelId },
+        reviewer: { model: modelId },
+      },
+    },
+  } as EvalRecord;
+}
+
+function persistenceBlockers(alias: string): string[] {
+  const decision = evaluateEvidenceEligibility(
+    launchPriorityPersistenceProbe(alias),
+    'launch_priority_persistence',
+    { strict: true },
+  );
+  return decision.eligible ? [] : decision.reasons;
+}
+
+function aliasCommands(alias: string, issue: string | null, target: number, persistAllowed: boolean): CertificationPlanAlias['commands'] {
   const issueArg = issue ? ` --issue ${issue}` : '';
+  const persistArg = persistAllowed ? ' --persist' : '';
   return {
     drySmoke: `npx tsx tools/openrouter-smoke.ts --models ${alias} --json`,
-    certify: `OPENROUTER_LIVE_SMOKE=1 npx tsx tools/certify-launch-priority-model.ts --model ${alias} --target ${target} --live --persist${issueArg} --json`,
+    certify: `OPENROUTER_LIVE_SMOKE=1 npx tsx tools/certify-launch-priority-model.ts --model ${alias} --target ${target} --live${persistArg}${issueArg} --json`,
   };
 }
 
@@ -146,7 +209,11 @@ export function buildCertificationPlan(input: {
       }
       const roles = rows.map((row) => rolePlan(row, input.target));
       const issue = FAMILY_ISSUES[model.family] ?? null;
-      const preflightBlockers = input.preflightBlockers?.get(model.wavemillAlias) ?? [];
+      const policyBlockers = persistenceBlockers(model.wavemillAlias);
+      const preflightBlockers = [
+        ...(input.preflightBlockers?.get(model.wavemillAlias) ?? []),
+        ...policyBlockers,
+      ];
       return {
         wavemillAlias: model.wavemillAlias,
         openrouterId: model.openrouterId,
@@ -157,7 +224,7 @@ export function buildCertificationPlan(input: {
         roles,
         preflightBlockers,
         runsNeeded: roles.reduce((max, role) => Math.max(max, role.gap), 0),
-        commands: aliasCommands(model.wavemillAlias, issue, input.target),
+        commands: aliasCommands(model.wavemillAlias, issue, input.target, policyBlockers.length === 0),
       };
     })
     .sort((left, right) =>

@@ -20,6 +20,7 @@ import { loadConfiguredPricingTable } from './workflow-cost.ts';
 import type { StageAwareDecision } from './stage-aware-router.ts';
 import type { WorkflowRouteDecision } from './workflow-router.ts';
 import { filterDisabledModels } from './disabled-models.ts';
+import { partitionEvidence } from './model-evidence-policy.ts';
 
 export type ChallengeReason = 'low-confidence' | 'new-model' | 'low-data-stage' | 'disabled';
 export type ChallengeStage = 'plan' | 'implementation' | 'review';
@@ -43,6 +44,8 @@ export interface ChallengeSchedulerConfig {
 
 export interface EvalSummary {
   totalRecords: number;
+  excludedRecords?: number;
+  exclusionReasonCounts?: Record<string, number>;
   recordsByModel: Record<string, number>;
   recordsByStage: Record<string, number>;
   /**
@@ -574,6 +577,8 @@ export function buildEvalSummary(repoDir?: string): EvalSummary {
 
   const summary: EvalSummary = {
     totalRecords: 0,
+    excludedRecords: 0,
+    exclusionReasonCounts: {},
     recordsByModel: {},
     recordsByStage: {
       plan: 0,
@@ -584,6 +589,7 @@ export function buildEvalSummary(repoDir?: string): EvalSummary {
   };
 
   const seenRecordIds = new Set<string>();
+  const records: EvalRecord[] = [];
   for (const filePath of getEvalFiles(cacheKey)) {
     for (const record of readJsonlFile<EvalRecord>(filePath)) {
       const recordKey = record.id || `${record.modelId}:${record.timestamp || ''}:${record.originalPrompt || ''}`;
@@ -591,6 +597,15 @@ export function buildEvalSummary(repoDir?: string): EvalSummary {
         continue;
       }
       seenRecordIds.add(recordKey);
+      records.push(record);
+    }
+  }
+
+  const partition = partitionEvidence(records, 'challenge_coverage');
+  summary.excludedRecords = partition.excluded.length;
+  summary.exclusionReasonCounts = partition.reasonCounts;
+
+  for (const record of partition.eligible) {
       summary.totalRecords += 1;
 
       for (const modelId of recordModelIds(record)) {
@@ -609,7 +624,6 @@ export function buildEvalSummary(repoDir?: string): EvalSummary {
           summary.recordsByModelStage![stageModel] = cells;
         }
       }
-    }
   }
 
   evalSummaryCache.set(cacheKey, summary);

@@ -22,7 +22,7 @@ import { resolveFromMainRepo } from './git-utils.ts';
 import { errorMessage } from './error-utils.ts';
 import { resolveEvalsDir, resolveGlobalAggregatedEvalsPath } from './evals-paths.ts';
 import { resolveModelAgent, type AgentResolution, type AgentResolutionPhase } from './model-agent-resolution.ts';
-import { isProvisionalModelId, partitionEvidence } from './model-evidence-policy.ts';
+import { formatEvidenceExclusionSummary, isProvisionalModelId, partitionEvidence } from './model-evidence-policy.ts';
 import {
   configuredDeepSeekModelIds,
   DEFAULT_MODEL_REGISTRY,
@@ -547,15 +547,21 @@ function recommendModelHeuristic(
   const taskType = characteristics.taskType;
 
   // Load eval records (per-repo + aggregated cross-repo data)
-  const records = loadMergedEvalRecords(opts);
+  const loadedRecords = loadMergedEvalRecords(opts);
+  const evidencePartition = partitionEvidence(loadedRecords, 'router_history');
+  const records = evidencePartition.eligible;
 
   // Count distinct models
   const distinctModels = new Set(records.map((r) => r.modelId));
+  const exclusionSummary = formatEvidenceExclusionSummary(evidencePartition.reasonCounts);
 
   // Log data sufficiency check details
   console.error(
     `Router data check: ${records.length} records (need ${opts.minRecords}), ` +
-    `${distinctModels.size} model(s) (need ${opts.minModels})`
+    `${distinctModels.size} model(s) (need ${opts.minModels})` +
+    (evidencePartition.excluded.length > 0
+      ? `; excluded ${evidencePartition.excluded.length} held record(s): ${exclusionSummary}`
+      : '')
   );
 
   // Check data sufficiency
@@ -567,7 +573,10 @@ function recommendModelHeuristic(
       reasoning:
         `Insufficient eval data for routing (${records.length} records, ` +
         `${distinctModels.size} model(s)). Need at least ${opts.minRecords} records ` +
-        `across ${opts.minModels}+ models. Using default model.`,
+        `across ${opts.minModels}+ models. Using default model.` +
+        (evidencePartition.excluded.length > 0
+          ? ` Excluded held evidence: ${exclusionSummary}.`
+          : ''),
       taskType,
       promptCharacteristics: characteristics,
       candidates: [],

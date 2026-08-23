@@ -186,6 +186,49 @@ describe('model-router resolveAgent', () => {
     assert.equal(stats[0]?.successRate, 0.5);
   });
 
+  it('excludes held records from aggregate router history stats', () => {
+    const stats = aggregateEvalHistory([
+      {
+        id: 'verified',
+        schemaVersion: '1.43.0',
+        originalPrompt: 'Fix a bug in routing',
+        modelId: 'gpt-5.4',
+        modelVersion: 'gpt-5.4',
+        score: 0.8,
+        scoreBand: 'Minor Feedback',
+        timeSeconds: 10,
+        timestamp: '2026-05-01T00:00:00.000Z',
+        interventionRequired: false,
+        interventionCount: 0,
+        interventionDetails: [],
+        rationale: 'good',
+      },
+      {
+        id: 'held',
+        schemaVersion: '1.43.0',
+        originalPrompt: 'Fix a bug in routing',
+        modelId: 'ox-alpha',
+        modelVersion: 'ox-alpha',
+        score: 1,
+        scoreBand: 'Strong',
+        timeSeconds: 1,
+        timestamp: '2026-05-01T00:01:00.000Z',
+        interventionRequired: false,
+        interventionCount: 0,
+        interventionDetails: [],
+        rationale: 'held',
+        modelIdentityAttribution: {
+          observedAt: '2026-08-01T00:00:00.000Z',
+          roles: {},
+          provisionalRoles: ['coder'],
+          candidateOnlyProvisional: [],
+        },
+      },
+    ], 'bugfix');
+
+    assert.deepEqual(stats.map((entry) => entry.modelId), ['gpt-5.4']);
+  });
+
   it('loads global aggregated evals when per-repo aggregated file is missing', () => {
     const repoDir = mkdtempSync(join(tmpdir(), 'model-router-global-fallback-'));
     const globalAggregatedPath = join(repoDir, 'global-aggregated.jsonl');

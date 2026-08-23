@@ -13,6 +13,7 @@ import {
   type EvalSummary,
 } from './challenge-scheduler.ts';
 import { clearConfigCache } from './config.ts';
+import type { EvalRecord } from './eval-schema.ts';
 import type { WorkflowRouteDecision } from './workflow-router.ts';
 
 let passed = 0;
@@ -92,6 +93,50 @@ function makeDecision(overrides: Partial<WorkflowRouteDecision> = {}): WorkflowR
     },
     ...overrides,
   };
+}
+
+function makeEvalRecord(id: string, modelId: string, overrides: Partial<EvalRecord> = {}): EvalRecord {
+  return {
+    id,
+    schemaVersion: '1.43.0',
+    originalPrompt: 'Implement a feature',
+    modelId,
+    modelVersion: modelId,
+    score: 0.8,
+    scoreBand: 'Minor Feedback',
+    timeSeconds: 10,
+    timestamp: '2026-08-01T00:00:00.000Z',
+    interventionRequired: false,
+    interventionCount: 0,
+    interventionDetails: [],
+    rationale: 'ok',
+    taskDescriptor: {
+      schema_version: '1.0',
+      signals: {
+        heuristic: {
+          task_type: 'feature',
+          languages: ['ts'],
+          framework_tags: [],
+          files_touched: 1,
+          repo_size_loc: 1000,
+          description_tokens: 50,
+          is_greenfield: false,
+          has_migration: false,
+          has_ui: false,
+          has_tests: true,
+          cross_service: false,
+        },
+        learned: { complexity: 3, domain: 'backend', risk_flags: [] },
+      },
+      constraints: { models_available: [modelId], objective: 'balanced' },
+      stages: {
+        planner: { model: modelId },
+        coder: { model: modelId },
+        reviewer: { model: modelId },
+      },
+    },
+    ...overrides,
+  } as EvalRecord;
 }
 
 function makeDenseSummary(overrides: Partial<EvalSummary> = {}): EvalSummary {
@@ -614,6 +659,38 @@ test('exploration recommendations skip stages a model cannot serve', () => {
 
     assert.equal(result.challengerModel, 'devstral-medium');
     assert.notEqual(result.stage, 'plan');
+  } finally {
+    cleanup();
+  }
+});
+
+test('buildEvalSummary excludes held records before coverage counters', () => {
+  const { repoDir, cleanup } = makeRepo();
+  try {
+    writeFileSync(
+      join(repoDir, '.wavemill', 'evals', 'evals.jsonl'),
+      [
+        makeEvalRecord('verified', 'gpt-5.4'),
+        makeEvalRecord('held', 'ox-alpha', {
+          modelIdentityAttribution: {
+            observedAt: '2026-08-01T00:00:00.000Z',
+            roles: {},
+            provisionalRoles: ['coder'],
+            candidateOnlyProvisional: [],
+          },
+        }),
+      ].map((record) => JSON.stringify(record)).join('\n') + '\n',
+      'utf-8',
+    );
+    clearChallengeSchedulerCache(repoDir);
+
+    const summary = buildEvalSummary(repoDir);
+
+    assert.equal(summary.totalRecords, 1);
+    assert.equal(summary.excludedRecords, 1);
+    assert.deepEqual(summary.exclusionReasonCounts, { provisional_model_identity: 1 });
+    assert.equal(summary.recordsByModel['gpt-5.4'], 1);
+    assert.equal(summary.recordsByModel['ox-alpha'], undefined);
   } finally {
     cleanup();
   }

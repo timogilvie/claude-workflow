@@ -12,6 +12,7 @@ import {
   cosineSimilarity,
   findKNearest,
   loadStageAwareEvalRecords,
+  loadStageAwareRouterContext,
   rankModelsPerStage,
   routeStageAware,
   vectorizeDescriptor,
@@ -318,6 +319,26 @@ test('findKNearest sorts records by descriptor similarity', () => {
   const neighbors = findKNearest(query, [different, exact], 2);
   assert.equal(neighbors[0].record.id, '1');
   assert.ok(neighbors[0].similarity >= neighbors[1].similarity);
+});
+
+test('loadStageAwareRouterContext excludes held router history before routing', () => {
+  const verified = makeEvalRecord('verified', 'gpt-5.4', { plan: 0.8, implementation: 0.8, review: 0.8 });
+  const held = makeEvalRecord('held', 'ox-alpha', { plan: 0.99, implementation: 0.99, review: 0.99 }, {
+    modelIdentityAttribution: {
+      observedAt: '2026-08-01T00:00:00.000Z',
+      roles: {},
+      provisionalRoles: ['planner', 'coder', 'reviewer'],
+      candidateOnlyProvisional: [],
+    },
+  });
+  const { repoDir, cleanup } = makeRepoWithStageAwareData({ local: [verified, held], backfilled: [], aggregated: [] });
+
+  try {
+    const context = loadStageAwareRouterContext({ repoDir });
+    assert.deepEqual(context.records.map((record) => record.id), ['verified']);
+  } finally {
+    cleanup();
+  }
 });
 
 test('rankModelsPerStage picks the best model combination under constraints', () => {
