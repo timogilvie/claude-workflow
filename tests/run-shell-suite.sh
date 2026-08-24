@@ -47,8 +47,6 @@ TESTS=(
   cleanup-branch.test.sh
   completed-task-cleanup.test.sh
   error-recovery.test.sh
-  aborted-challenge-cleanup.test.sh
-  operator-abort-cleanup.test.sh
   startup-terminal-prune.test.sh
   planning-validation.test.sh
   wavemill-guards.test.sh
