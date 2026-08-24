@@ -7,6 +7,7 @@ import os from 'node:os';
 import {
   classifyReadyTask,
   normalizeStatusCheckRollup,
+  setReadyWatchdogUnconfirmedEntryTtlMsForTest,
   tickReadyWatchdog,
   type GitHubPRTruth,
   type ReadyTaskSnapshot,
@@ -947,9 +948,28 @@ test('tick does not launch remediation while checks are still pending', async ()
   }
 });
 
-test('tick treats check read failures as non-remediable waiting-on-ci', async () => {
-  const { repoDir, stateFile } = setupReadyTask('HOK-2604', 2604);
+test('tick preserves recent prior state when GitHub truth is unreadable', async () => {
+  const { repoDir, stateDir, stateFile } = setupReadyTask('HOK-2604', 2604);
   let launchCalled = false;
+  writeFileSync(path.join(stateDir, 'ready-watchdog-state.json'), JSON.stringify({
+    updatedAt: '2030-05-05T12:00:00.000Z',
+    tasks: {
+      'HOK-2604': {
+        issueId: 'HOK-2604',
+        slug: 'ready-watchdog-task',
+        prNumber: 2604,
+        classification: 'needs-user',
+        displayLabel: 'Needs user',
+        detail: 'PR #2604 has real merge conflicts on GitHub.',
+        action: 'needs-user',
+        updatedAt: '2030-05-05T12:00:00.000Z',
+        classificationSince: '2030-05-05T12:00:00.000Z',
+        lastConfirmedAt: '2030-05-05T12:00:00.000Z',
+        idleMinutes: 30,
+        lastProgressAt: '2030-05-05T11:30:00.000Z',
+      },
+    },
+  }, null, 2));
 
   try {
     const result = await tickReadyWatchdog({
@@ -969,16 +989,75 @@ test('tick treats check read failures as non-remediable waiting-on-ci', async ()
           launchCalled = true;
           return { status: 'failed', detail: 'unexpected', attemptNumber: 1 };
         },
-        now: () => new Date('2030-05-05T12:30:00.000Z'),
+        now: () => new Date('2030-05-05T12:10:00.000Z'),
       },
     });
 
-    assert.equal(result.findings.length, 1);
-    assert.equal(result.findings[0].classification, 'waiting-on-ci');
-    assert.equal(result.findings[0].action, 'reported');
-    assert.match(result.findings[0].detail, /Required GitHub check status could not be read/);
+    assert.equal(result.findings.length, 0);
+    assert.equal(result.reaped.length, 0);
     assert.equal(launchCalled, false);
+    const stateAfter = JSON.parse(readFileSync(path.join(stateDir, 'ready-watchdog-state.json'), 'utf-8')) as {
+      tasks: Record<string, { updatedAt?: string; classificationSince?: string; lastConfirmedAt?: string }>;
+    };
+    assert.equal(stateAfter.tasks['HOK-2604'].updatedAt, '2030-05-05T12:00:00.000Z');
+    assert.equal(stateAfter.tasks['HOK-2604'].classificationSince, '2030-05-05T12:00:00.000Z');
+    assert.equal(stateAfter.tasks['HOK-2604'].lastConfirmedAt, '2030-05-05T12:00:00.000Z');
   } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('tick expires old unconfirmed prior state using legacy timestamps', async () => {
+  const { repoDir, stateDir, stateFile } = setupReadyTask('HOK-2605', 2605);
+  const watchdogStatePath = path.join(stateDir, 'ready-watchdog-state.json');
+  writeFileSync(watchdogStatePath, JSON.stringify({
+    updatedAt: '2030-05-05T12:00:00.000Z',
+    tasks: {
+      'HOK-2605': {
+        issueId: 'HOK-2605',
+        slug: 'ready-watchdog-task',
+        prNumber: 2605,
+        classification: 'stuck',
+        displayLabel: 'Stuck',
+        detail: 'old stuck state',
+        action: 'reported',
+        updatedAt: '2030-05-05T12:00:00.000Z',
+        classificationSince: '2030-05-05T12:00:00.000Z',
+        idleMinutes: 30,
+        lastProgressAt: '2030-05-05T11:30:00.000Z',
+      },
+    },
+  }, null, 2));
+
+  setReadyWatchdogUnconfirmedEntryTtlMsForTest(5 * 60 * 1000);
+  try {
+    const result = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: WATCHDOG_CONFIG,
+      deps: {
+        fetchGitHubTruth: async () => makeTruth({
+          state: '',
+          mergeable: 'UNKNOWN',
+          mergeStateStatus: 'UNKNOWN',
+          checks: [],
+          checkReadError: { errorType: 'timeout', reason: 'gh timed out' },
+        }),
+        getCurrentHead: async () => 'head-1',
+        now: () => new Date('2030-05-05T12:10:01.000Z'),
+      },
+    });
+
+    assert.equal(result.findings.length, 0);
+    assert.equal(result.reaped.length, 1);
+    assert.equal(result.reaped[0].issueId, 'HOK-2605');
+    assert.equal(result.reaped[0].reason, 'unconfirmed-expired');
+    const stateAfter = JSON.parse(readFileSync(watchdogStatePath, 'utf-8')) as {
+      tasks: Record<string, unknown>;
+    };
+    assert.equal(stateAfter.tasks['HOK-2605'], undefined);
+  } finally {
+    setReadyWatchdogUnconfirmedEntryTtlMsForTest(null);
     await rm(repoDir, { recursive: true, force: true });
   }
 });
@@ -2061,12 +2140,10 @@ test('tick retries push failures, defaults missing attempts to zero, and exhaust
   }
 });
 
-test('tick retains prior actionable findings across fresh ticks and suppresses repeat spam', async () => {
-  const { repoDir, stateFile } = setupReadyTask('HOK-1716', 716);
+test('tick reaps prior actionable finding when task evaluates fresh', async () => {
+  const { repoDir, stateDir, stateFile } = setupReadyTask('HOK-2857', 1206);
 
   try {
-    const blockingTruth = makeTruth({ state: 'MERGED' });
-
     const first = await tickReadyWatchdog({
       repoDir,
       stateFile,
@@ -2077,12 +2154,21 @@ test('tick retains prior actionable findings across fresh ticks and suppresses r
         timeoutSeconds: 30,
       },
       deps: {
-        fetchGitHubTruth: async () => blockingTruth,
+        fetchGitHubTruth: async () => makeTruth({ mergeable: 'CONFLICTING', mergeStateStatus: 'DIRTY' }),
         getCurrentHead: async () => 'head',
         now: () => new Date('2030-05-05T12:30:00.000Z'),
       },
     });
     assert.equal(first.findings.length, 1);
+    assert.equal(first.findings[0].classification, 'needs-user');
+    assert.match(first.findings[0].detail, /real merge conflicts/);
+
+    const workflowState = JSON.parse(readFileSync(stateFile, 'utf-8')) as {
+      tasks: Record<string, { updated?: string }>;
+      jobs: Record<string, unknown>;
+    };
+    workflowState.tasks['HOK-2857'].updated = '2030-05-05T12:31:00.000Z';
+    writeFileSync(stateFile, JSON.stringify(workflowState, null, 2));
 
     const second = await tickReadyWatchdog({
       repoDir,
@@ -2094,29 +2180,20 @@ test('tick retains prior actionable findings across fresh ticks and suppresses r
         timeoutSeconds: 30,
       },
       deps: {
-        fetchGitHubTruth: async () => blockingTruth,
+        fetchGitHubTruth: async () => makeTruth({ mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN' }),
         getCurrentHead: async () => 'head',
-        now: () => new Date('2026-05-05T12:04:00.000Z'),
+        now: () => new Date('2030-05-05T12:35:00.000Z'),
       },
     });
     assert.equal(second.findings.length, 0);
+    assert.equal(second.reaped.length, 1);
+    assert.equal(second.reaped[0].issueId, 'HOK-2857');
+    assert.equal(second.reaped[0].reason, 'resolved');
 
-    const third = await tickReadyWatchdog({
-      repoDir,
-      stateFile,
-      config: {
-        enabled: true,
-        thresholdMinutes: 10,
-        autoRecover: false,
-        timeoutSeconds: 30,
-      },
-      deps: {
-        fetchGitHubTruth: async () => blockingTruth,
-        getCurrentHead: async () => 'head',
-        now: () => new Date('2030-05-05T12:40:00.000Z'),
-      },
-    });
-    assert.equal(third.findings.length, 0);
+    const watchdogState = JSON.parse(readFileSync(path.join(stateDir, 'ready-watchdog-state.json'), 'utf-8')) as {
+      tasks: Record<string, unknown>;
+    };
+    assert.equal(watchdogState.tasks['HOK-2857'], undefined);
   } finally {
     await rm(repoDir, { recursive: true, force: true });
   }
@@ -2170,15 +2247,110 @@ test('tick prunes retained watchdog state when a task leaves ready', async () =>
       deps: {
         fetchGitHubTruth: async () => makeTruth(),
         getCurrentHead: async () => 'head',
-        now: () => new Date('2030-05-05T12:30:00.000Z'),
+        now: () => new Date('2026-05-05T12:04:00.000Z'),
       },
     });
 
     assert.equal(result.findings.length, 0);
+    assert.equal(result.reaped.length, 1);
+    assert.equal(result.reaped[0].reason, 'non-ready');
     const watchdogState = JSON.parse(readFileSync(watchdogStatePath, 'utf-8')) as {
       tasks: Record<string, unknown>;
     };
     assert.equal(watchdogState.tasks['HOK-1716'], undefined);
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('tick prunes retained watchdog state when issue is absent from workflow state', async () => {
+  const { repoDir, stateDir, stateFile } = setupReadyTask('HOK-1716', 716);
+  const watchdogStatePath = path.join(stateDir, 'ready-watchdog-state.json');
+  writeFileSync(watchdogStatePath, JSON.stringify({
+    updatedAt: '2030-05-05T12:00:00.000Z',
+    tasks: {
+      'HOK-9999': {
+        issueId: 'HOK-9999',
+        slug: 'gone-task',
+        prNumber: 9999,
+        classification: 'stuck',
+        displayLabel: 'Stuck',
+        detail: 'persisted finding',
+        action: 'reported',
+        updatedAt: '2030-05-05T12:00:00.000Z',
+        classificationSince: '2030-05-05T12:00:00.000Z',
+        idleMinutes: 30,
+        lastProgressAt: '2030-05-05T11:30:00.000Z',
+      },
+    },
+  }, null, 2));
+
+  try {
+    const result = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: WATCHDOG_CONFIG,
+      deps: {
+        fetchGitHubTruth: async () => makeTruth(),
+        getCurrentHead: async () => 'head',
+        now: () => new Date('2026-05-05T12:04:00.000Z'),
+      },
+    });
+
+    assert.equal(result.findings.length, 0);
+    assert.equal(result.reaped.length, 1);
+    assert.equal(result.reaped[0].issueId, 'HOK-9999');
+    assert.equal(result.reaped[0].reason, 'absent-from-workflow');
+    const watchdogState = JSON.parse(readFileSync(watchdogStatePath, 'utf-8')) as {
+      tasks: Record<string, unknown>;
+    };
+    assert.equal(watchdogState.tasks['HOK-9999'], undefined);
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('issue-filtered tick preserves unrelated retained watchdog state', async () => {
+  const { repoDir, stateDir, stateFile } = setupReadyTask('HOK-1716', 716);
+  const watchdogStatePath = path.join(stateDir, 'ready-watchdog-state.json');
+  writeFileSync(watchdogStatePath, JSON.stringify({
+    updatedAt: '2030-05-05T12:00:00.000Z',
+    tasks: {
+      'HOK-9999': {
+        issueId: 'HOK-9999',
+        slug: 'unrelated-task',
+        prNumber: 9999,
+        classification: 'needs-user',
+        displayLabel: 'Needs user',
+        detail: 'unrelated retained finding',
+        action: 'reported',
+        updatedAt: '2030-05-05T12:00:00.000Z',
+        classificationSince: '2030-05-05T12:00:00.000Z',
+        idleMinutes: 30,
+        lastProgressAt: '2030-05-05T11:30:00.000Z',
+      },
+    },
+  }, null, 2));
+
+  try {
+    const result = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      issueFilter: 'HOK-1716',
+      config: WATCHDOG_CONFIG,
+      deps: {
+        fetchGitHubTruth: async () => makeTruth(),
+        getCurrentHead: async () => 'head',
+        now: () => new Date('2026-05-05T12:04:00.000Z'),
+      },
+    });
+
+    assert.equal(result.findings.length, 0);
+    assert.equal(result.reaped.length, 0);
+    const watchdogState = JSON.parse(readFileSync(watchdogStatePath, 'utf-8')) as {
+      tasks: Record<string, unknown>;
+    };
+    assert.notEqual(watchdogState.tasks['HOK-9999'], undefined);
   } finally {
     await rm(repoDir, { recursive: true, force: true });
   }
@@ -2290,7 +2462,7 @@ test('tick suppresses repeated merge-lane stall needs-user when only waited minu
   }
 });
 
-test('tick resets classificationSince when classification fingerprint changes', async () => {
+test('tick preserves classificationSince when only detail fingerprint changes', async () => {
   const { repoDir, stateFile, featureDir } = setupReadyTask('HOK-2677', 2677);
   writeFileSync(path.join(featureDir, '.ready-result.json'), JSON.stringify({
     stage: 'ready',
@@ -2338,7 +2510,62 @@ test('tick resets classificationSince when classification fingerprint changes', 
     const stateAfter = JSON.parse(readFileSync(path.join(repoDir, '.wavemill', 'ready-watchdog-state.json'), 'utf-8')) as {
       tasks: Record<string, { classificationSince?: string }>;
     };
-    assert.equal(stateAfter.tasks['HOK-2677'].classificationSince, '2030-06-23T12:23:00.000Z');
+    assert.equal(stateAfter.tasks['HOK-2677'].classificationSince, '2030-06-23T12:00:00.000Z');
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('tick resets classificationSince when classification changes', async () => {
+  const { repoDir, stateFile, featureDir } = setupReadyTask('HOK-2678', 2678);
+  writeFileSync(path.join(featureDir, '.ready-result.json'), JSON.stringify({
+    stage: 'ready',
+    status: 'completed',
+    startedAt: '2030-06-23T10:00:00.000Z',
+    finishedAt: '2030-06-23T11:00:00.000Z',
+    agent: 'claude',
+    model: 'claude-sonnet-4-6',
+    notes: null,
+    artifacts: { type: 'ready', verdict: 'pass', prNumber: 2678, queueState: 'merge-candidate' },
+  }, null, 2));
+  writeFileSync(path.join(repoDir, '.wavemill', 'ready-watchdog-state.json'), JSON.stringify({
+    updatedAt: '2030-06-23T12:00:00.000Z',
+    tasks: {
+      'HOK-2678': {
+        issueId: 'HOK-2678',
+        slug: 'ready-watchdog-task',
+        prNumber: 2678,
+        classification: 'waiting-on-ci',
+        displayLabel: 'Waiting on CI',
+        detail: 'old detail',
+        action: 'reported',
+        updatedAt: '2030-06-23T12:00:00.000Z',
+        classificationSince: '2030-06-23T12:00:00.000Z',
+        idleMinutes: 83,
+        lastProgressAt: null,
+        detailFingerprint: 'old-fingerprint',
+        lastReportedAction: 'reported',
+      },
+    },
+  }, null, 2));
+
+  const deps = {
+    fetchGitHubTruth: async () => makeTruth({ mergeStateStatus: 'CLEAN' }),
+    getCurrentHead: async () => 'head-1',
+    getWorktreeMergeState: async () => ({
+      mergeHead: null, unmergedPaths: [], stagedPaths: [], unstagedPaths: [], untrackedPaths: [], rawStatus: [],
+    }),
+    isTaskPaneActive: async () => null,
+    now: () => new Date('2030-06-23T12:23:00.000Z'),
+  };
+
+  try {
+    await tickReadyWatchdog({ repoDir, stateFile, config: { ...WATCHDOG_CONFIG, thresholdMinutes: 10 }, deps });
+    const stateAfter = JSON.parse(readFileSync(path.join(repoDir, '.wavemill', 'ready-watchdog-state.json'), 'utf-8')) as {
+      tasks: Record<string, { classification?: string; classificationSince?: string }>;
+    };
+    assert.equal(stateAfter.tasks['HOK-2678'].classification, 'needs-user');
+    assert.equal(stateAfter.tasks['HOK-2678'].classificationSince, '2030-06-23T12:23:00.000Z');
   } finally {
     await rm(repoDir, { recursive: true, force: true });
   }

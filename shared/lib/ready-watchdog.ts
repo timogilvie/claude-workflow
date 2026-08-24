@@ -44,6 +44,8 @@ const DEFAULT_CHALLENGE_HARD_FAILURE_RETRY_MAX = 2;
 const WAVEMILL_TOOLS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'tools');
 const READY_WATCHDOG_TOOL_PATH = path.join(WAVEMILL_TOOLS_DIR, 'ready-watchdog.ts');
 const CHALLENGE_PAIR_RESOLVER_TOOL_PATH = path.join(WAVEMILL_TOOLS_DIR, 'resolve-orphan-challenge-pair.ts');
+const READY_WATCHDOG_UNCONFIRMED_ENTRY_TTL_MS = 48 * 60 * 60 * 1000;
+let readyWatchdogUnconfirmedEntryTtlMsForTest: number | null = null;
 
 export type ReadyWatchdogClassificationKind =
   | 'fresh'
@@ -55,6 +57,10 @@ export type ReadyWatchdogClassificationKind =
   | 'waiting-on-eval-comparison'
   | 'waiting-on-merge-lane'
   | 'needs-user';
+
+export function setReadyWatchdogUnconfirmedEntryTtlMsForTest(ttlMs: number | null): void {
+  readyWatchdogUnconfirmedEntryTtlMsForTest = ttlMs;
+}
 
 /**
  * A PR in the merge lane (queueState 'ready-stale', 'merge-candidate', or
@@ -176,6 +182,7 @@ export interface ReadyWatchdogStateEntry {
   prStateKey?: string;
   detailFingerprint?: string;
   classificationSince?: string;
+  lastConfirmedAt?: string;
   autoUpdateAttempts?: number;
   lastAutoUpdateError?: string;
   lastReportedAction?: string;
@@ -204,9 +211,27 @@ export interface ReadyWatchdogStateFile {
   tasks: Record<string, ReadyWatchdogStateEntry>;
 }
 
+export type ReadyWatchdogReapReason =
+  | 'resolved'
+  | 'absent-from-workflow'
+  | 'non-ready'
+  | 'terminal'
+  | 'invalid-task'
+  | 'unconfirmed-expired';
+
+export interface ReadyWatchdogReapedEntry {
+  issueId: string;
+  classification: Exclude<ReadyWatchdogClassificationKind, 'fresh'>;
+  reason: ReadyWatchdogReapReason;
+  classificationSince?: string;
+  lastConfirmedAt?: string;
+  updatedAt?: string;
+}
+
 export interface TickReadyWatchdogResult {
   updatedAt: string;
   findings: ReadyWatchdogStateEntry[];
+  reaped: ReadyWatchdogReapedEntry[];
 }
 
 export interface ReadyWatchdogDeps {
@@ -631,6 +656,43 @@ function parseIsoDate(value: string | null | undefined): Date | null {
   }
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function isUnconfirmedGitHubTruth(githubTruth: GitHubPRTruth | null): boolean {
+  return githubTruth === null
+    || Boolean(githubTruth.checkReadError)
+    || !String(githubTruth.state || '').trim()
+    || githubTruth.mergeable === 'UNKNOWN'
+    || githubTruth.mergeStateStatus === 'UNKNOWN';
+}
+
+function lastConfirmationDate(entry: ReadyWatchdogStateEntry): Date | null {
+  return parseIsoDate(entry.lastConfirmedAt)
+    ?? parseIsoDate(entry.classificationSince)
+    ?? parseIsoDate(entry.updatedAt);
+}
+
+function unconfirmedEntryExpired(entry: ReadyWatchdogStateEntry, now: Date): boolean {
+  const confirmedAt = lastConfirmationDate(entry);
+  if (!confirmedAt) {
+    return false;
+  }
+  const ttlMs = readyWatchdogUnconfirmedEntryTtlMsForTest ?? READY_WATCHDOG_UNCONFIRMED_ENTRY_TTL_MS;
+  return now.getTime() - confirmedAt.getTime() >= ttlMs;
+}
+
+function buildReapedEntry(
+  entry: ReadyWatchdogStateEntry,
+  reason: ReadyWatchdogReapReason,
+): ReadyWatchdogReapedEntry {
+  return {
+    issueId: entry.issueId,
+    classification: entry.classification,
+    reason,
+    classificationSince: entry.classificationSince,
+    lastConfirmedAt: entry.lastConfirmedAt,
+    updatedAt: entry.updatedAt,
+  };
 }
 
 function fileMtimeIso(file: string): string | null {
@@ -1505,13 +1567,13 @@ function withClassificationSince(
 ): ReadyWatchdogStateEntry {
   const unchanged = prior
     && prior.classification === entry.classification
-    && prior.detailFingerprint === entry.detailFingerprint
     && typeof prior.classificationSince === 'string'
     && prior.classificationSince.length > 0;
 
   return {
     ...entry,
     classificationSince: unchanged ? prior.classificationSince : now.toISOString(),
+    lastConfirmedAt: now.toISOString(),
   };
 }
 
@@ -1618,10 +1680,11 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
     ...(options.config ?? {}),
   };
   const newFindings: ReadyWatchdogStateEntry[] = [];
+  const reaped: ReadyWatchdogReapedEntry[] = [];
 
   if (!config.enabled && !options.forceRecover) {
     await writeStateFile(options.repoDir, [], now);
-    return { updatedAt: now.toISOString(), findings: newFindings };
+    return { updatedAt: now.toISOString(), findings: newFindings, reaped };
   }
 
   const priorState = await loadPriorWatchdogState(options.repoDir);
@@ -1635,6 +1698,14 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
   const tasks = workflowState.tasks ?? {};
   const jobs = normalizeJobs(workflowState);
   const activeReadyIssueIds = new Set<string>();
+  const inactiveReasons = new Map<string, ReadyWatchdogReapReason>();
+  const reapTask = (issueId: string, reason: ReadyWatchdogReapReason): void => {
+    const priorEntry = nextTasks[issueId];
+    if (priorEntry) {
+      reaped.push(buildReapedEntry(priorEntry, reason));
+      delete nextTasks[issueId];
+    }
+  };
 
   // Load challenge gate data once per tick so classifyReadyTask can detect
   // challenge PRs that tend would block even when GitHub shows them as clean/green.
@@ -1669,13 +1740,15 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
     const task = rawTask as WorkflowTaskRecord;
     if (task.phase !== 'ready') {
       if (!options.issueFilter) {
-        delete nextTasks[issueId];
+        inactiveReasons.set(issueId, 'non-ready');
+        reapTask(issueId, 'non-ready');
       }
       continue;
     }
     if (task.status === 'merged' || task.status === 'completed-external') {
       if (!options.issueFilter) {
-        delete nextTasks[issueId];
+        inactiveReasons.set(issueId, 'terminal');
+        reapTask(issueId, 'terminal');
       }
       continue;
     }
@@ -1687,13 +1760,12 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
 
     const snapshot = await buildSnapshot(issueId, task, jobs, now, options.repoDir, deps);
     if (!snapshot) {
-      delete nextTasks[issueId];
+      reapTask(issueId, 'invalid-task');
       continue;
     }
 
     let githubTruth: GitHubPRTruth | null = null;
-    let classification: ReadyWatchdogClassification;
-    let fetchError: string | undefined;
+    let classification: ReadyWatchdogClassification | null = null;
     const prior = priorTasks[issueId];
 
     if (verificationConfig.gatingEnabled) {
@@ -1788,6 +1860,12 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
           // the statusCheckRollup fields GitHub already returned.
         }
       }
+      if (isUnconfirmedGitHubTruth(githubTruth)) {
+        if (prior && unconfirmedEntryExpired(prior, now)) {
+          reapTask(issueId, 'unconfirmed-expired');
+        }
+        continue;
+      }
       classification = classifyReadyTask(
         snapshot,
         githubTruth,
@@ -1800,12 +1878,15 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
         prior,
         challengeGate,
       );
-    } catch (error) {
-      fetchError = errorMessage(error);
-      classification = {
-        kind: 'needs-user',
-        detail: `Ready watchdog failed to query GitHub for PR #${snapshot.prNumber}: ${fetchError}`,
-      };
+    } catch {
+      if (prior && unconfirmedEntryExpired(prior, now)) {
+        reapTask(issueId, 'unconfirmed-expired');
+      }
+      continue;
+    }
+
+    if (!classification) {
+      continue;
     }
 
     const failingChecksFingerprint = buildFailingChecksFingerprint(githubTruth?.checks ?? []);
@@ -1815,6 +1896,7 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
         : 1
       : 0;
     if (classification.kind === 'fresh') {
+      reapTask(issueId, 'resolved');
       continue;
     }
 
@@ -1843,7 +1925,7 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
             deps,
             'Ready watchdog updated the PR branch with the latest base and queued a re-check.',
           );
-          delete nextTasks[issueId];
+          reapTask(issueId, 'resolved');
           continue;
         }
 
@@ -2076,7 +2158,6 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
         action: entry.action,
         detail: entry.detail,
         recoveryCommand: entry.recoveryCommand,
-        error: fetchError,
       });
 
       // Emit trace events for emitted findings (HOK-2259) — best-effort
@@ -2117,7 +2198,7 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
   if (!options.issueFilter) {
     for (const issueId of Object.keys(nextTasks)) {
       if (!activeReadyIssueIds.has(issueId)) {
-        delete nextTasks[issueId];
+        reapTask(issueId, inactiveReasons.get(issueId) ?? 'absent-from-workflow');
       }
     }
   }
@@ -2126,5 +2207,6 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
   return {
     updatedAt: now.toISOString(),
     findings: newFindings,
+    reaped,
   };
 }
