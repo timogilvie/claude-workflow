@@ -253,24 +253,31 @@ export function classifyTaskPacket(input: string): TaskPacketClassification {
   if (phaseCount > 0) evidence.matchedSignals.push(`phases=${phaseCount}`);
   if (explicitEstimateCount > 0) evidence.matchedSignals.push(`estimate=${explicitEstimateCount}`);
 
-  const complexity = Math.max(1, Math.min(5, rawComplexity));
+  const complexity = Math.min(5, rawComplexity);
   const riskFlags = riskFlagsFor(text, evidence, complexity);
   const riskScore = Math.max(
     complexity,
     Math.min(12, complexity + riskFlags.length + Math.floor(declaredFileCount / 4) + Math.floor(phaseCount / 2)),
   );
-  const suspiciousZero = false;
 
-  return {
+  const classification = {
     taskType: chooseTaskType(taskTypeScores),
     complexity,
     complexityScore: complexity,
     complexityBand: complexityBand(complexity),
     riskFlags,
     riskScore,
-    suspiciousZero,
+    suspiciousZero: false,
     evidence,
-  };
+  } as TaskPacketClassification;
+
+  const suspiciousZeroCheck = isSuspiciousZeroClassification(classification);
+  if (suspiciousZeroCheck.suspicious) {
+    classification.suspiciousZero = true;
+    classification.suspiciousZeroReason = suspiciousZeroCheck.reason;
+  }
+
+  return classification;
 }
 
 export function isSuspiciousZeroClassification(classification: Pick<TaskPacketClassification, 'complexityScore' | 'evidence' | 'riskFlags'>): { suspicious: boolean; reason?: string } {
