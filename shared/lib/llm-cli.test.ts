@@ -124,6 +124,14 @@ process.stdin.on('end', () => {
     process.exit(0);
   }
 
+  if (action.type === 'sleep') {
+    setTimeout(() => {
+      process.stderr.write(String(action.message ?? 'slept'));
+      process.exit(Number(action.code ?? 1));
+    }, Number(action.ms ?? 1000));
+    return;
+  }
+
   process.stderr.write(String(action.message ?? 'error'));
   process.exit(Number(action.code ?? 1));
 });
@@ -609,6 +617,99 @@ describe('quota fallback', () => {
 
     assert.equal(result.model, 'model-b');
     assert.deepEqual(readFallbackRecords(), []);
+  });
+
+  it('stops the classifier ladder when its absolute deadline is spent', async () => {
+    const { cliPath, logPath } = createMockCli('deadline-stop', {
+      'model-a': { type: 'sleep', ms: 2_000, message: 'too slow', code: 1 },
+      'model-b': { type: 'success', text: 'should not run' },
+    });
+
+    const { error } = await captureStderrError(() => callLLM('deadline prompt', {
+      provider: 'claude',
+      mode: 'stream',
+      cliCmd: cliPath,
+      repoDir,
+      taskType: 'classify',
+      fallbackModels: ['model-a', 'model-b'],
+      fallbackDeadlineMs: Date.now() + 1_300,
+      fallbackPerAttemptTimeoutMs: 900,
+      fallbackDeadlineGraceMs: 100,
+      logFallbackEvents: false,
+    }));
+
+    assert.match((error as Error).message, /LLM fallback deadline exhausted before model-[ab]/);
+    assert.ok(!readInvocations(logPath).map((entry) => entry.model).includes('model-b'));
+  });
+
+  it('skips classifier candidates whose provider credential is missing', async () => {
+    const originalAnthropic = process.env.ANTHROPIC_API_KEY;
+    const originalDeepSeek = process.env.DEEPSEEK_API_KEY;
+    try {
+      delete process.env.ANTHROPIC_API_KEY;
+      process.env.DEEPSEEK_API_KEY = 'test-deepseek-key';
+
+      const { cliPath, logPath } = createMockCli('credential-skip', {
+        'claude-haiku-4-5-20251001': { type: 'success', text: 'should not run' },
+        'deepseek-v4-flash': { type: 'success', text: 'deepseek ok' },
+      });
+
+      const { result, stderr } = await captureStderr(() => callLLM('credential prompt', {
+        provider: 'claude',
+        mode: 'stream',
+        cliCmd: cliPath,
+        repoDir,
+        taskType: 'classify',
+        fallbackModels: ['claude-haiku-4-5-20251001', 'deepseek-v4-flash'],
+        fallbackDeadlineMs: Date.now() + 15_000,
+        fallbackPerAttemptTimeoutMs: 10_000,
+        logFallbackEvents: false,
+      }));
+
+      assert.match(stderr, /\[classifier] claude-haiku-4-5-20251001 skipped \(missing ANTHROPIC_API_KEY\)/);
+      assert.equal(result.model, 'deepseek-v4-flash');
+      assert.deepEqual(readInvocations(logPath).map((entry) => entry.model), ['deepseek-v4-flash']);
+    } finally {
+      if (originalAnthropic === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = originalAnthropic;
+      if (originalDeepSeek === undefined) delete process.env.DEEPSEEK_API_KEY;
+      else process.env.DEEPSEEK_API_KEY = originalDeepSeek;
+    }
+  });
+
+  it('does not fall through to an unbudgeted classifier call when every credential is missing', async () => {
+    const originalAnthropic = process.env.ANTHROPIC_API_KEY;
+    const originalDeepSeek = process.env.DEEPSEEK_API_KEY;
+    try {
+      delete process.env.ANTHROPIC_API_KEY;
+      delete process.env.DEEPSEEK_API_KEY;
+
+      const { cliPath, logPath } = createMockCli('credential-skip-empty', {
+        default: { type: 'success', text: 'should not run' },
+      });
+
+      await assert.rejects(
+        () => callLLM('credential prompt', {
+          provider: 'claude',
+          mode: 'stream',
+          cliCmd: cliPath,
+          repoDir,
+          taskType: 'classify',
+          fallbackModels: ['claude-haiku-4-5-20251001', 'deepseek-v4-flash'],
+          fallbackDeadlineMs: Date.now() + 5_000,
+          fallbackPerAttemptTimeoutMs: 1_000,
+          logFallbackEvents: false,
+        }),
+        /No eligible classify fallback candidates/,
+      );
+
+      assert.deepEqual(readInvocations(logPath), []);
+    } finally {
+      if (originalAnthropic === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = originalAnthropic;
+      if (originalDeepSeek === undefined) delete process.env.DEEPSEEK_API_KEY;
+      else process.env.DEEPSEEK_API_KEY = originalDeepSeek;
+    }
   });
 
   it('bypasses exponential backoff for quota fallbacks', async () => {

@@ -149,11 +149,14 @@ test('no-comparison-report', async (t) => {
 
     const report = buildNoComparisonReport({ comparisons: comps });
     assert.equal(report.launchedPairs, 3);
+    assert.equal(report.totalPairs, 3);
     assert.equal(report.comparedPairs, 1);
+    assert.equal(report.forfeitPairs, 1);
+    assert.equal(report.yieldRate, 1 / 3);
     assert.equal(report.noComparisonRate, 2 / 3);
   });
 
-  await t.test('calculates skip rate from skipped, invalid_challenge, invalid, and inconclusive outcomes', () => {
+  await t.test('calculates skip rate from skipped, invalid, inconclusive, and forfeit outcomes', () => {
     const comps: StoredChallengeComparison[] = [
       record({ challengePairId: 'compared' }),
       record({
@@ -191,13 +194,24 @@ test('no-comparison-report', async (t) => {
         terminalReason: 'orphan_pair',
         noComparisonReason: 'orphan_pair',
       }),
+      record({
+        challengePairId: 'double-forfeit',
+        comparisonOutcome: 'double-forfeit',
+        winner: undefined,
+        terminalReason: 'both_eval_hard_failed',
+        noComparisonReason: 'both_eval_hard_failed',
+      }),
     ];
 
     const report = buildNoComparisonReport({ comparisons: comps });
-    assert.equal(report.launchedPairs, 6);
+    assert.equal(report.launchedPairs, 7);
+    assert.equal(report.totalPairs, 7);
     assert.equal(report.comparedPairs, 1);
-    assert.equal(report.skipRate, 4 / 6);
-    assert.equal(report.noComparisonRate, 5 / 6);
+    assert.equal(report.forfeitPairs, 1);
+    assert.equal(report.doubleForfeitPairs, 1);
+    assert.equal(report.skipRate, 6 / 7);
+    assert.equal(report.yieldRate, 1 / 7);
+    assert.equal(report.noComparisonRate, 6 / 7);
   });
 
   await t.test('excludes explicit challenger_never_launched phantom pairs from launched denominator', () => {
@@ -216,7 +230,9 @@ test('no-comparison-report', async (t) => {
     const report = buildNoComparisonReport({ comparisons: comps });
     assert.equal(report.phantomPairs, 1);
     assert.equal(report.launchedPairs, 1);
+    assert.equal(report.totalPairs, 2);
     assert.equal(report.comparedPairs, 1);
+    assert.equal(report.yieldRate, 1 / 2);
     assert.equal(report.byReason.get('challenger_never_launched')?.count, 1);
   });
 

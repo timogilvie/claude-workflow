@@ -2,6 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { mutateJsonState } from './state-mutex.ts';
 import { resolveEvalsDir } from './evals-paths.ts';
+import { challengeTaskKeyVariants, type EffectiveChallengeRole } from './challenge-role-utils.ts';
 
 /**
  * Self-healing repair for drifted challenge pairing metadata.
@@ -33,7 +34,7 @@ export interface RepairChallengePairingOptions {
 export interface RepairChallengePairingResult {
   pairId: string;
   challengerKey: string;
-  /** True if the challenger task's challengePairId/challengeRole were corrected. */
+  /** True if either task's challengePairId/challengeRole were corrected. */
   taskRepaired: boolean;
   /** Number of eval records relabeled from `<pairId>_c` to `<pairId>`. */
   recordsRelabeled: number;
@@ -48,28 +49,52 @@ function resolveEvalsFilePath(opts: RepairChallengePairingOptions): string {
   return join(dir, 'evals.jsonl');
 }
 
+function deriveRoleFromPairKey(issueId: string, pairId: string): EffectiveChallengeRole | null {
+  if (challengeTaskKeyVariants(pairId, 'primary').includes(issueId)) {
+    return 'primary';
+  }
+  if (challengeTaskKeyVariants(pairId, 'challenger').includes(issueId) || issueId.endsWith('-challenger')) {
+    return 'challenger';
+  }
+  return null;
+}
+
 /**
- * Re-anchor a drifted challenger task entry to its canonical pair id/role.
+ * Re-anchor drifted task entries to their canonical pair id/role.
  * Returns whether any field was changed.
  */
-async function repairChallengerTask(
+function repairTaskStateObject(state: any, pairId: string): boolean {
+  const tasks = state?.tasks;
+  if (!tasks || typeof tasks !== 'object') return false;
+  let changed = false;
+
+  for (const [issueId, task] of Object.entries(tasks)) {
+    if (!task || typeof task !== 'object') continue;
+    const record = task as Record<string, unknown>;
+    const role = deriveRoleFromPairKey(issueId, pairId);
+    if (!role) continue;
+
+    if (record.challengePairId !== pairId) {
+      record.challengePairId = pairId;
+      changed = true;
+    }
+    if (record.challengeRole !== role) {
+      record.challengeRole = role;
+      changed = true;
+    }
+  }
+
+  return changed;
+}
+
+async function repairPairTasks(
   statePath: string,
   pairId: string,
-  challengerKey: string,
 ): Promise<boolean> {
   if (!existsSync(statePath)) return false;
   let changed = false;
   await mutateJsonState<any>(statePath, (state) => {
-    const task = state?.tasks?.[challengerKey];
-    if (!task) return state;
-    if (task.challengePairId !== pairId) {
-      task.challengePairId = pairId;
-      changed = true;
-    }
-    if (task.challengeRole !== 'challenger') {
-      task.challengeRole = 'challenger';
-      changed = true;
-    }
+    changed = repairTaskStateObject(state, pairId);
     return state;
   });
   return changed;
@@ -110,11 +135,35 @@ export async function repairChallengePairing(
 ): Promise<RepairChallengePairingResult> {
   const { pairId } = opts;
   const challengerKey = `${pairId}_c`;
-  const taskRepaired = await repairChallengerTask(
+  const taskRepaired = await repairPairTasks(
     resolveStatePath(opts),
     pairId,
-    challengerKey,
   );
+  const recordsRelabeled = relabelEvalRecords(resolveEvalsFilePath(opts), pairId);
+  return { pairId, challengerKey, taskRepaired, recordsRelabeled };
+}
+
+export async function repairChallengePairingSync(
+  opts: RepairChallengePairingOptions,
+): Promise<RepairChallengePairingResult> {
+  const { pairId } = opts;
+  const challengerKey = `${pairId}_c`;
+  const statePath = resolveStatePath(opts);
+  let taskRepaired = false;
+  if (existsSync(statePath)) {
+    try {
+      await mutateJsonState<Record<string, unknown>>(
+        statePath,
+        (state) => {
+          taskRepaired = repairTaskStateObject(state as Record<string, unknown>, pairId);
+          return state;
+        },
+        { timeoutMs: 5000 },
+      );
+    } catch {
+      // If mutation fails (e.g., lock timeout), continue with repair attempt
+    }
+  }
   const recordsRelabeled = relabelEvalRecords(resolveEvalsFilePath(opts), pairId);
   return { pairId, challengerKey, taskRepaired, recordsRelabeled };
 }

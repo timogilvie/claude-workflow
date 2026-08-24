@@ -789,6 +789,10 @@ save_task_state() {
   local linear_issue="${8:-$issue}" challenge="${9:-}" challenge_pair="${10:-}" challenge_role="${11:-}" challenge_model="${12:-}"
   local planner_model="${13:-}" coder_model="${14:-}" reviewer_model="${15:-}" plan_depth="${16:-}" code_depth="${17:-}" review_mode="${18:-}"
   local challenge_stage="${19:-}"
+  if [[ "$challenge" == "true" && -z "$challenge_role" ]]; then
+    echo "Error: challengeRole cannot be empty for challenge task $issue" >&2
+    return 1
+  fi
   if ! state_mutate "$STATE_FILE" \
      '.tasks[$issue] = (.tasks[$issue] // {}) + {slug: $slug, branch: $branch, worktree: $worktree, pr: $pr, status: $status, linearIssueId: $linearIssue, updated: (now | todate)}
       | if $agent != "" then .tasks[$issue].agent = $agent else . end
@@ -996,6 +1000,56 @@ challenge_pair_record_exists() {
   ' "$records_file" >/dev/null 2>&1
 }
 
+challenge_pr_number_from_url() {
+  local url="${1:-}"
+  if [[ "$url" =~ /pull/([0-9]+)$ ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+  else
+    printf '0\n'
+  fi
+}
+
+cleanup_forfeit_loser_from_resolution() {
+  local resolve_output="$1"
+  local outcome pair_id winner primary_pr_url challenger_pr_url primary_pr challenger_pr
+  local loser_key winner_pr loser_pr loser_slug evidence_id
+  outcome=$(jq -r '.outcome // .record.comparisonOutcome // empty' <<<"$resolve_output" 2>/dev/null || true)
+  [[ "$outcome" == "forfeit" ]] || return 0
+  pair_id=$(jq -r '.record.challengePairId // empty' <<<"$resolve_output" 2>/dev/null || true)
+  winner=$(jq -r '.record.winner // empty' <<<"$resolve_output" 2>/dev/null || true)
+  evidence_id=$(jq -r '.record.timestamp // empty' <<<"$resolve_output" 2>/dev/null || true)
+  [[ -n "$pair_id" && -n "$winner" && -n "$evidence_id" ]] || return 0
+
+  primary_pr_url=$(jq -r '.record.primaryPrUrl // empty' <<<"$resolve_output" 2>/dev/null || true)
+  challenger_pr_url=$(jq -r '.record.challengerPrUrl // empty' <<<"$resolve_output" 2>/dev/null || true)
+  primary_pr=$(challenge_pr_number_from_url "$primary_pr_url")
+  challenger_pr=$(challenge_pr_number_from_url "$challenger_pr_url")
+  if [[ "$winner" == "primary" ]]; then
+    winner_pr="$primary_pr"
+    loser_pr="$challenger_pr"
+    loser_key="${pair_id}_c"
+  elif [[ "$winner" == "challenger" ]]; then
+    winner_pr="$challenger_pr"
+    loser_pr="$primary_pr"
+    loser_key="$pair_id"
+  else
+    return 0
+  fi
+
+  [[ "$winner_pr" =~ ^[0-9]+$ && "$loser_pr" =~ ^[0-9]+$ ]] || return 0
+  [[ "$winner_pr" -gt 0 && "$loser_pr" -gt 0 && "$winner_pr" != "$loser_pr" ]] || return 0
+
+  if [[ "$(pr_state "$loser_pr")" == "OPEN" ]]; then
+    gh pr close "$loser_pr" \
+      --comment "Closing losing arm of pair $pair_id (forfeit resolution)." 2>/dev/null || true
+    log "status" "Closed losing forfeit PR #$loser_pr"
+  fi
+  loser_slug=$(get_task_meta "$loser_key" "slug")
+  if [[ -n "$loser_slug" ]]; then
+    cleanup_completed_task "$loser_key" "$loser_slug" "challenge forfeit loser"
+  fi
+}
+
 resolve_challenge_pair_hard_failure() {
   local pair_id="$1"
   local primary_key="$pair_id" challenger_key="${pair_id}_c"
@@ -1033,6 +1087,7 @@ resolve_challenge_pair_hard_failure() {
       if [[ "$resolve_status" == "resolved" ]]; then
         resolve_reason=$(jq -r '.reason // "orphan-sibling"' <<<"$resolve_output" 2>/dev/null || echo "orphan-sibling")
         log_warn "challenge pair $pair_id resolved via $resolve_reason"
+        cleanup_forfeit_loser_from_resolution "$resolve_output"
       fi
       return 0
     fi
@@ -3450,6 +3505,10 @@ save_task_state() {
   local linear_issue="${8:-$issue}" challenge="${9:-}" challenge_pair="${10:-}" challenge_role="${11:-}" challenge_model="${12:-}"
   local planner_model="${13:-}" coder_model="${14:-}" reviewer_model="${15:-}" plan_depth="${16:-}" code_depth="${17:-}" review_mode="${18:-}"
   local challenge_stage="${19:-}"
+  if [[ "$challenge" == "true" && -z "$challenge_role" ]]; then
+    echo "Error: challengeRole cannot be empty for challenge task $issue" >&2
+    return 1
+  fi
 
   # Resolve traceId from feature directory (HOK-2259) — best-effort, never fails
   local _trace_id_for_state=""
@@ -4607,6 +4666,7 @@ challenge_pair_record_exists() {
       ] | length == 0)
   ' "$records_file" >/dev/null 2>&1
 }
+
 
 resolve_challenge_pair_hard_failure() {
   local pair_id="$1"
@@ -11963,7 +12023,7 @@ run_queue_planner_with_policy() {
   # diagnostics file rather than shell variables; without the real stderr and
   # exit code the reason classifier degrades every planner failure to a
   # generic dependency_planning_failed.
-  record_fetch_queue_plan_failure "$step" "$stderr_excerpt" "$exit_code"
+  record_fetch_queue_plan_failure "$step" "$stderr_excerpt" "$exit_code" "$cancellation_owner"
 
   queue_health_record_failure "$reason" "$step" \
     "$pid" "$pgid" "$timeout_secs" "$exit_code" "" "$cancellation_owner" \
@@ -11996,7 +12056,7 @@ fetch_queue_plan() {
 
 # fetch_queue_plan runs in command substitution, so diagnostics use a caller-owned file.
 record_fetch_queue_plan_failure() {
-  local step="$1" stderr_text="${2-}" exit_code="${3:-1}" diagnostics_file="${FETCH_QUEUE_PLAN_DIAGNOSTICS_FILE:-}"
+  local step="$1" stderr_text="${2-}" exit_code="${3:-1}" cancellation_owner="${4:-}" diagnostics_file="${FETCH_QUEUE_PLAN_DIAGNOSTICS_FILE:-}"
   [[ -n "$diagnostics_file" ]] || return 0
 
   local bounded
@@ -12007,7 +12067,11 @@ record_fetch_queue_plan_failure() {
     bounded="(no stderr captured)"
   fi
 
-  printf 'step=%s exit=%s stderr=%s\n' "$step" "$exit_code" "$bounded" > "$diagnostics_file" 2>/dev/null || true
+  if [[ -n "$cancellation_owner" ]]; then
+    printf 'step=%s exit=%s cancellationOwner=%s stderr=%s\n' "$step" "$exit_code" "$cancellation_owner" "$bounded" > "$diagnostics_file" 2>/dev/null || true
+  else
+    printf 'step=%s exit=%s stderr=%s\n' "$step" "$exit_code" "$bounded" > "$diagnostics_file" 2>/dev/null || true
+  fi
 }
 
 log_fetch_queue_plan_failure() {
@@ -12022,7 +12086,19 @@ log_fetch_queue_plan_failure() {
 }
 
 classify_queue_failure_reason() {
-  local step="$1" details="${2:-}" lowered
+  local step="$1" details="${2:-}" lowered exit_code cancellation_owner
+  exit_code="$(printf '%s' "$details" | sed -n 's/.*exit=\([0-9][0-9]*\).*/\1/p')"
+  cancellation_owner="$(printf '%s' "$details" | sed -n 's/.*cancellationOwner=\([^ ]*\).*/\1/p')"
+
+  if [[ "$cancellation_owner" == "queue_plan_timeout" ]]; then
+    echo "timeout"
+    return 0
+  fi
+  if [[ "$exit_code" == "143" || "$exit_code" == "137" ]]; then
+    echo "external_cancellation"
+    return 0
+  fi
+
   case "$step" in
     cache_empty|empty_queue)   echo "empty_queue" ;;
     jq_massage_failed)         echo "invalid_input" ;;
@@ -12109,7 +12185,11 @@ build_queue_plan_once() {
   # Determine timeout and build planner command
   if [[ -n "${PROJECT_NAME:-}" ]]; then
     timeout_secs=60
-    planner_cmd="npx tsx \"$TOOLS_DIR/plan-queue.ts\" --stdin --json --cache-key \"$cache_key\" --refresh-missing-cache"
+    local now_ms classifier_deadline_ms classifier_grace_secs=8
+    now_ms="$(date +%s%3N 2>/dev/null || true)"
+    [[ "$now_ms" =~ ^[0-9]+$ ]] || now_ms="$(date +%s)000"
+    classifier_deadline_ms=$(( now_ms + ((timeout_secs - classifier_grace_secs) * 1000) ))
+    planner_cmd="npx tsx \"$TOOLS_DIR/plan-queue.ts\" --stdin --json --cache-key \"$cache_key\" --refresh-missing-cache --queue-classifier-deadline-ms \"$classifier_deadline_ms\""
   else
     timeout_secs=15
     planner_cmd="npx tsx \"$TOOLS_DIR/plan-queue.ts\" --stdin --json"

@@ -90,6 +90,33 @@ describe('repairChallengePairing', () => {
     assert.equal(result.recordsRelabeled, 0);
   });
 
+  it('repairs a blank primary role and is idempotent', async () => {
+    writeState({
+      tasks: {
+        'HOK-2870': { pr: '1226', challengePairId: 'HOK-2870', challengeRole: '' },
+        'HOK-2870_c': { pr: '1225', challengePairId: 'HOK-2870', challengeRole: 'challenger' },
+      },
+    });
+    writeEvals([]);
+
+    const first = await repairChallengePairing({
+      pairId: 'HOK-2870',
+      repoDir: tempRoot,
+      statePath,
+      evalsDir,
+    });
+    const second = await repairChallengePairing({
+      pairId: 'HOK-2870',
+      repoDir: tempRoot,
+      statePath,
+      evalsDir,
+    });
+
+    assert.equal(first.taskRepaired, true);
+    assert.equal(second.taskRepaired, false);
+    assert.equal(readState().tasks['HOK-2870'].challengeRole, 'primary');
+  });
+
   it('preserves malformed eval lines untouched', async () => {
     writeState({ tasks: {} });
     writeEvals([
